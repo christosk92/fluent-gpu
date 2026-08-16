@@ -6,6 +6,7 @@ using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Localization;
 using FluentGpu.Signals;
+using Wavee.Core;
 
 namespace Wavee;
 
@@ -74,18 +75,28 @@ public static class RichText
     }
 
     /// <summary>A Spotify uri → the app's route key (matches ContentHost): playlist → "pl:…", album → "album:…",
-    /// prerelease → "prerelease:…", artist → "artist:…", saved-tracks → "liked". Null when it's not a navigable uri.</summary>
+    /// prerelease → "prerelease:…", artist → "artist:…", show → "show:…", saved-tracks → "liked". Null when it's not a
+    /// navigable uri.</summary>
     public static string? RouteForUri(string? uri)
     {
         if (string.IsNullOrEmpty(uri)) return null;
         if (uri == "spotify:collection:tracks") return "liked";
-        if (uri.Contains(":playlist:", StringComparison.Ordinal)) return "pl:" + uri;
-        // Before :album: — a prerelease uri contains neither, but the intent is that the MORE SPECIFIC scheme wins.
-        // The route resolves to the album's own DetailPage; the resolution is kind 138 and happens inside the load.
-        if (uri.Contains(":prerelease:", StringComparison.Ordinal)) return "prerelease:" + uri;
-        if (uri.Contains(":album:", StringComparison.Ordinal)) return "album:" + uri;
-        if (uri.Contains(":artist:", StringComparison.Ordinal)) return "artist:" + uri;
-        return null;
+        // The route TABLE is unchanged; only the discrimination moved to the ONE parser (hydration-facade-design.md §1.1).
+        // A prerelease is its own kind, so "the more specific scheme wins" is structural rather than an ordering rule; the
+        // prerelease route still resolves to the album's own DetailPage (kind 138, inside the load).
+        // A SHOW routes ("show:" → the shared detail surface with Episodes on the right), because an episode row in a
+        // playlist carries its show in the album slot (EpisodeAsTrack, design §1.5) and that subtitle has to be a live
+        // link to the podcast. An EPISODE still routes NOWHERE: there is no episode page in ContentHost, so a link to
+        // one would navigate to a route nothing renders — it stays styled-but-inert until such a page exists.
+        return EntityUri.KindOf(uri) switch
+        {
+            EntityKind.Playlist => "pl:" + uri,
+            EntityKind.Prerelease => "prerelease:" + uri,
+            EntityKind.Album => "album:" + uri,
+            EntityKind.Artist => "artist:" + uri,
+            EntityKind.Show => "show:" + uri,
+            _ => null,
+        };
     }
 
     static List<TextSpan> Parse(string s, ColorF linkColor, Action<string>? onNavUri)

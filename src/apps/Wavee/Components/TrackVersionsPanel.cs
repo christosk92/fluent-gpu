@@ -226,7 +226,7 @@ sealed class TrackVersionsPanel : Component
                 },
                 Waveform(waveform),
                 // The button hands back the version it belongs to, so "play" carries which FORM was clicked.
-                Embed.Comp(() => new FormatSplitButton(v.Uri, v.Title, _ => model.OnPlay(v)))
+                Embed.Comp(() => new FormatSplitButton(v.Uri, _ => model.OnPlay(v)))
                     with { Key = "fmt:" + v.Uri },
             ],
         }.Interactive(Interaction.Subtle);

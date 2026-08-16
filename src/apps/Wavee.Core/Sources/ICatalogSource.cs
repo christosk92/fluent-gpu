@@ -3,7 +3,7 @@ namespace Wavee.Core;
 /// <summary>A connected source of music (a Spotify account, a local-files library, the synthetic fallback). It owns a
 /// URI namespace and declares which facets it supports. Facets are SEGREGATED into narrow ports (this file is the
 /// Catalog facet; see SeamPorts.cs for the playback/remote/session/lyrics ports) so a source implements only what it
-/// can — no god-interface (docs/architecture.md §4).</summary>
+/// can — no god-interface (docs/plans/wavee/architecture.md §4).</summary>
 public interface ISource
 {
     /// <summary>Stable id, e.g. "spotify", "local", "fake".</summary>
@@ -22,10 +22,19 @@ public interface ISource
 /// source has nothing to contribute (so the aggregate's concat-merge yields clean, non-duplicated lists).</summary>
 public interface ICatalogSource : ISource
 {
+    /// <summary>How this source UPGRADES an entity it owns (the hydration façade — design §1.3). Default: a
+    /// complete-at-construction source (export / local / fake / user playlists / every test fake) has nothing to
+    /// fetch, so every rung is already reached. Only a networked source overrides it — which is also why this is a
+    /// default interface member rather than a new required member every fake would have to implement.</summary>
+    IEntityHydrator Hydrator => CompleteEntityHydrator.Instance;
+
     // ── single-item reads (the owning source answers; null = not mine / no data) ──
-    Task<Playlist?> GetPlaylistAsync(string uri, CancellationToken ct = default);
-    Task<Album?> GetAlbumAsync(string uri, CancellationToken ct = default);
-    Task<Artist?> GetArtistAsync(string uri, CancellationToken ct = default);
+    // `level` is the HYDRATION RUNG the caller needs before it can paint (design §1.2 / §3): the source ensures it
+    // through its own Hydrator and only then reads. Defaulted to Open — "this surface paints its primary content" —
+    // so every existing caller keeps its meaning; a page that wants the second-transport facets asks for Rich/Full.
+    Task<Playlist?> GetPlaylistAsync(string uri, HydrationLevel level = HydrationLevel.Open, CancellationToken ct = default);
+    Task<Album?> GetAlbumAsync(string uri, HydrationLevel level = HydrationLevel.Open, CancellationToken ct = default);
+    Task<Artist?> GetArtistAsync(string uri, HydrationLevel level = HydrationLevel.Open, CancellationToken ct = default);
 
     /// <summary>Stream a context's tracks in pages (skeleton-then-stream). Yields nothing for a context it doesn't own.</summary>
     IAsyncEnumerable<TrackPage> StreamTracksAsync(string contextUri, CancellationToken ct = default);
@@ -36,7 +45,7 @@ public interface ICatalogSource : ISource
     /// The live source (StoreLibrarySource) overrides this to page the real facet.</summary>
     async Task<DiscographyPage> GetDiscographyAsync(string artistUri, DiscographyKind kind, int offset, int limit, CancellationToken ct = default)
     {
-        var artist = await GetArtistAsync(artistUri, ct).ConfigureAwait(false);
+        var artist = await GetArtistAsync(artistUri, HydrationLevel.Open, ct).ConfigureAwait(false);
         var all = artist?.TopAlbums ?? System.Array.Empty<Album>();
         var filtered = new List<Album>();
         foreach (var a in all) if (AggregateCatalog.KindMatches(a.Kind, kind)) filtered.Add(a);

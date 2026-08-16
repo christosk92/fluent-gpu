@@ -61,6 +61,20 @@ public class RootlistTreeBuilderTests
         Assert.Equal(Pl("p3"), Leaf(tree[1]).Playlist.Uri);
     }
 
+    // Desktop encodes a folder name with SPACE AS `+` (captured a164 "New+Folder", b037 "named+folder+update", b128
+    // "root+folder+updated+name"); a literal + travels as %2B. The label must show spaces, never the pluses.
+    [Theory]
+    [InlineData("New+Folder", "New Folder")]
+    [InlineData("root+folder+updated+name", "root folder updated name")]
+    [InlineData("A%2BB+C", "A+B C")]
+    [InlineData("caf%C3%A9+mix", "café mix")]
+    [InlineData("has%3Acolon+too", "has:colon too")]
+    public void FolderName_DecodesPlusAsSpace_AndPercentEscapes(string wire, string expected)
+    {
+        var entries = RootlistTreeBuilder.EntriesFromUris(new[] { Start("g1", wire), End("g1") });
+        Assert.Equal(expected, entries[0].Name);
+    }
+
     [Fact]
     public void NestedFolder_IsAFolderInsideAFolder()
     {
@@ -293,6 +307,29 @@ public class RootlistTreeBuilderTests
         Assert.Equal(Folder(a[0]).Name, Folder(b[0]).Name);
         Assert.Equal(Leaf(a[1]).Playlist.Uri, Leaf(b[1]).Playlist.Uri);
     }
+
+    // ── P3: the marker rows carry their ADD timestamp ────────────────────────────────────────────────────────────────
+    // A folder RENAME has to resend the marker's ORIGINAL create timestamp (golden b037), so the value has to survive
+    // the one parse every rootlist path shares. Positional against the uris; a row without one stays at 0 ("not
+    // captured"), which is the state the rename path bootstraps rather than papers over.
+    [Fact]
+    public void EntriesFromUris_CarryTheAddTimestamps_PositionallyAndSafely()
+    {
+        string[] uris = [Start("g1", "F"), Pl("p1"), End("g1"), Pl("p2")];
+        var entries = RootlistTreeBuilder.EntriesFromUris(uris, new long[] { 11, 22, 33 });   // deliberately short
+
+        Assert.Equal(11L, entries[0].AddedAtMs);
+        Assert.Equal(22L, entries[1].AddedAtMs);
+        Assert.Equal(33L, entries[2].AddedAtMs);
+        Assert.Equal(0L, entries[3].AddedAtMs);                       // beyond the supplied stamps → "not captured"
+        Assert.Equal(0L, RootlistTreeBuilder.EntriesFromUris(uris)[0].AddedAtMs);   // the 1-arg overload stays at 0
+
+        // the rest of the parse is unchanged by the extra column
+        Assert.Equal([1, 0, 2, 0], System.Linq.Enumerable.ToArray(System.Linq.Enumerable.Select(entries, e => e.Kind)));
+        Assert.Equal([0, 1, 0, 0], System.Linq.Enumerable.ToArray(System.Linq.Enumerable.Select(entries, e => e.Depth)));
+        Assert.Equal("F", entries[0].GroupName);
+    }
+
 
     // ── the migration guard ───────────────────────────────────────────────────────────────────────────────────────────
     // PlaylistFolder.Items changing from IReadOnlyList<PlaylistSummary> to IReadOnlyList<PlaylistNode> is a BREAKING

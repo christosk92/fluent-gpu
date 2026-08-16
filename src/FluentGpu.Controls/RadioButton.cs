@@ -42,6 +42,16 @@ public static partial class RadioButton
 
     public sealed record Style
     {
+        /// <summary>Mount the ring + dot glyph column at all. False ⇒ the CONTENT is the entire control — a
+        /// preview-card radio, where selection already reads from the card's own border and accent tint.
+        ///
+        /// <para>A DELIBERATE WinUI divergence: WinUI's RadioButtons items always carry the glyph, and a card picker
+        /// that also drew one would state the selection twice. It is a STYLE flag rather than a
+        /// <see cref="TemplateParts"/> modifier because <see cref="Build"/> re-asserts the ring's <c>Children</c> after
+        /// the <see cref="PartRing"/> modifier runs — a zeroed ring would keep the dot mounted and overflowing, so
+        /// suppression has to happen where the subtree is built.</para></summary>
+        public bool ShowGlyph { get; init; } = true;
+
         public float RingSize { get; init; } = 20f;        // OuterEllipse Width/Height (template:371/373)
         public float DotSize { get; init; } = 12f;         // RadioButtonCheckGlyphSize (template:179)
         public float DotHoverSize { get; init; } = 14f;    // RadioButtonCheckGlyphPointerOverSize (template:180)
@@ -114,89 +124,93 @@ public static partial class RadioButton
                                 bool focusable, Action<KeyEventArgs>? onKeyDown, Action<NodeHandle>? onRealized,
                                 TemplateParts? parts = null)
     {
-        float hoverScale = s.DotSize > 0f ? s.DotHoverSize / s.DotSize : 1f;
-        float pressScale = s.DotSize > 0f ? s.DotPressedSize / s.DotSize : 1f;
-        float pressedDotScale = s.PressedDotSize > 0f ? s.DotPressedSize / s.PressedDotSize : 1f;
-        // Disabled is a resting swap for the RING (no hover/press progress reaches a disabled node), but the GLYPH gets
-        // an animated resize 12→14 over ControlFastAnimationDuration on Disabled entry (template:338-343).
-        ColorF ringFill = !isEnabled ? (selected ? s.OnRingDisabled : s.OffFillDisabled) : (selected ? s.OnRing : s.OffFill);
-        ColorF ringBorder = !isEnabled ? (selected ? s.OnRingDisabled : s.OffBorderDisabled) : (selected ? s.OnBorder : s.OffBorder);
-        float dotSize = isEnabled ? s.DotSize : s.DotDisabledSize;
-        // Disabled entry animates the resize 12→14 over 167ms FastOutSlowIn (template:338-343); the spec is attached
-        // only on the disabled render, so re-enabling reverts instantly (no Normal-state keyframes).
-        LayoutTransition? dotResize = isEnabled
-            ? null
-            : new LayoutTransition(TransitionChannels.Bounds,
-                                   TransitionDynamics.Tween(RadioButtonMotion.ControlFastMs, Easing.FluentPopOpen),
-                                   SizeMode.ScaleCorrect);
-        Element[] ringKids;
-        if (selected)
+        // WinUI keeps RadioButtonForeground == PointerOver == Pressed (TextPrimary), so only the disabled ramp differs.
+        Element face = content ?? parts.Apply(PartLabel,
+            new TextEl(label ?? "") { Size = s.FontSize, Color = s.Foreground, DisabledColor = s.DisabledForeground });
+
+        // The ring + dot column, in a local function so a glyph-less style (Style.ShowGlyph — a preview-card radio,
+        // where the card's own border states the selection) builds NONE of it. Zeroing the ring through PartRing would
+        // not do: its Children are re-asserted below, so the dot would stay mounted inside the collapsed ellipse.
+        BoxEl Glyph()
         {
-            var dot = new BoxEl
+            float hoverScale = s.DotSize > 0f ? s.DotHoverSize / s.DotSize : 1f;
+            float pressScale = s.DotSize > 0f ? s.DotPressedSize / s.DotSize : 1f;
+            float pressedDotScale = s.PressedDotSize > 0f ? s.DotPressedSize / s.PressedDotSize : 1f;
+            // Disabled is a resting swap for the RING (no hover/press progress reaches a disabled node), but the GLYPH gets
+            // an animated resize 12→14 over ControlFastAnimationDuration on Disabled entry (template:338-343).
+            ColorF ringFill = !isEnabled ? (selected ? s.OnRingDisabled : s.OffFillDisabled) : (selected ? s.OnRing : s.OffFill);
+            ColorF ringBorder = !isEnabled ? (selected ? s.OnRingDisabled : s.OffBorderDisabled) : (selected ? s.OnBorder : s.OffBorder);
+            float dotSize = isEnabled ? s.DotSize : s.DotDisabledSize;
+            // Disabled entry animates the resize 12→14 over 167ms FastOutSlowIn (template:338-343); the spec is attached
+            // only on the disabled render, so re-enabling reverts instantly (no Normal-state keyframes).
+            LayoutTransition? dotResize = isEnabled
+                ? null
+                : new LayoutTransition(TransitionChannels.Bounds,
+                                       TransitionDynamics.Tween(RadioButtonMotion.ControlFastMs, Easing.FluentPopOpen),
+                                       SizeMode.ScaleCorrect);
+            Element[] ringKids;
+            if (selected)
             {
-                Key = "CheckGlyph",
-                Width = dotSize, Height = dotSize,
-                Corners = Radii.Circle(dotSize),
-                Fill = !isEnabled ? s.DotDisabled : s.Dot,
-                BorderBrush = !isEnabled ? s.DotBorderDisabled : s.DotBorder,   // StrokeChecked / StrokeCheckedDisabled (template:42/45)
-                BorderWidth = (isEnabled ? s.DotBorder : s.DotBorderDisabled) is null ? 0f : 1f,   // Ellipse default StrokeThickness = 1
-                HoverScale = isEnabled ? hoverScale : 1f,
-                PressScale = isEnabled ? pressScale : 1f,
-                HoverDurationMs = RadioButtonMotion.ControlNormalMs,   // 250ms (template:255-260)
-                PressDurationMs = RadioButtonMotion.ControlNormalMs,   // 250ms (template:292-297)
-                HoverEasing = RadioButtonMotion.FastOutSlowIn,
-                PressEasing = RadioButtonMotion.FastOutSlowIn,
-                Animate = dotResize,
-            };
-            // Parts: restyle the dot (fill, size, the grow/shrink ramp); identity + the disabled resize spec win.
-            ringKids = [parts.Apply(PartDot, dot) with { Key = "CheckGlyph", Animate = dotResize }];
-        }
-        else
-        {
-            var pressedDot = new BoxEl
+                var dot = new BoxEl
+                {
+                    Key = "CheckGlyph",
+                    Width = dotSize, Height = dotSize,
+                    Corners = Radii.Circle(dotSize),
+                    Fill = !isEnabled ? s.DotDisabled : s.Dot,
+                    BorderBrush = !isEnabled ? s.DotBorderDisabled : s.DotBorder,   // StrokeChecked / StrokeCheckedDisabled (template:42/45)
+                    BorderWidth = (isEnabled ? s.DotBorder : s.DotBorderDisabled) is null ? 0f : 1f,   // Ellipse default StrokeThickness = 1
+                    HoverScale = isEnabled ? hoverScale : 1f,
+                    PressScale = isEnabled ? pressScale : 1f,
+                    HoverDurationMs = RadioButtonMotion.ControlNormalMs,   // 250ms (template:255-260)
+                    PressDurationMs = RadioButtonMotion.ControlNormalMs,   // 250ms (template:292-297)
+                    HoverEasing = RadioButtonMotion.FastOutSlowIn,
+                    PressEasing = RadioButtonMotion.FastOutSlowIn,
+                    Animate = dotResize,
+                };
+                // Parts: restyle the dot (fill, size, the grow/shrink ramp); identity + the disabled resize spec win.
+                ringKids = [parts.Apply(PartDot, dot) with { Key = "CheckGlyph", Animate = dotResize }];
+            }
+            else
             {
-                Key = "PressedCheckGlyph",
-                Width = s.PressedDotSize, Height = s.PressedDotSize,
-                Corners = Radii.Circle(s.PressedDotSize),
-                Fill = !isEnabled ? s.DotDisabled : s.Dot,             // PressedCheckGlyph Background = RadioButtonCheckGlyphFill (template:376)
-                BorderBrush = s.PressedDotBorder,                      // BorderBrush = RadioButtonCheckGlyphStroke → CircleElevation (template:38/376)
-                BorderWidth = s.PressedDotBorder is null ? 0f : 1f,
-                Opacity = 0f,
-                PressedOpacity = 1f,                                   // Opacity → 1 at KeyTime 0 (template:298-300)
-                PressScale = pressedDotScale,                          // 4 → 10 (template:301-306)
-                PressDurationMs = RadioButtonMotion.ControlFastMs,     // 167ms
-                PressEasing = RadioButtonMotion.FastOutSlowIn,
+                var pressedDot = new BoxEl
+                {
+                    Key = "PressedCheckGlyph",
+                    Width = s.PressedDotSize, Height = s.PressedDotSize,
+                    Corners = Radii.Circle(s.PressedDotSize),
+                    Fill = !isEnabled ? s.DotDisabled : s.Dot,             // PressedCheckGlyph Background = RadioButtonCheckGlyphFill (template:376)
+                    BorderBrush = s.PressedDotBorder,                      // BorderBrush = RadioButtonCheckGlyphStroke → CircleElevation (template:38/376)
+                    BorderWidth = s.PressedDotBorder is null ? 0f : 1f,
+                    Opacity = 0f,
+                    PressedOpacity = 1f,                                   // Opacity → 1 at KeyTime 0 (template:298-300)
+                    PressScale = pressedDotScale,                          // 4 → 10 (template:301-306)
+                    PressDurationMs = RadioButtonMotion.ControlFastMs,     // 167ms
+                    PressEasing = RadioButtonMotion.FastOutSlowIn,
+                };
+                ringKids = [parts.Apply(PartPressedDot, pressedDot) with { Key = "PressedCheckGlyph" }];
+            }
+
+            var ring = new BoxEl
+            {
+                Width = s.RingSize, Height = s.RingSize,
+                AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                Corners = Radii.Circle(s.RingSize),
+                BorderWidth = 1f,                              // RadioButtonBorderThemeThickness (template:5/121)
+                BorderColor = ringBorder,
+                // The stroke is stateful too: unchecked hover KEEPS ControlStrongDefault / pressed dims to StrongDisabled
+                // (template:18-20/134-136); checked hover/pressed recolor to AccentSecondary/Tertiary (template:26-28/142-144).
+                // Explicit values defeat the recorder's A==0 auto-lighten fallback (Element.cs:27-28).
+                HoverBorderColor = selected ? s.OnHover : s.OffBorder,
+                PressedBorderColor = selected ? s.OnPressed : s.OffBorderPressed,
+                Fill = ringFill,
+                HoverFill = selected ? s.OnHover : s.OffHover,
+                PressedFill = selected ? s.OnPressed : s.OffPressed,
+                Children = ringKids,
             };
-            ringKids = [parts.Apply(PartPressedDot, pressedDot) with { Key = "PressedCheckGlyph" }];
+            // Parts: restyle the ellipse (the per-state ramps above sit BEFORE the modifier); the dot mount always wins.
+            return parts.Apply(PartRing, ring) with { Children = ringKids };
         }
 
-        var ring = new BoxEl
-        {
-            Width = s.RingSize, Height = s.RingSize,
-            AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-            Corners = Radii.Circle(s.RingSize),
-            BorderWidth = 1f,                              // RadioButtonBorderThemeThickness (template:5/121)
-            BorderColor = ringBorder,
-            // The stroke is stateful too: unchecked hover KEEPS ControlStrongDefault / pressed dims to StrongDisabled
-            // (template:18-20/134-136); checked hover/pressed recolor to AccentSecondary/Tertiary (template:26-28/142-144).
-            // Explicit values defeat the recorder's A==0 auto-lighten fallback (Element.cs:27-28).
-            HoverBorderColor = selected ? s.OnHover : s.OffBorder,
-            PressedBorderColor = selected ? s.OnPressed : s.OffBorderPressed,
-            Fill = ringFill,
-            HoverFill = selected ? s.OnHover : s.OffHover,
-            PressedFill = selected ? s.OnPressed : s.OffPressed,
-            Children = ringKids,
-        };
-        // Parts: restyle the ellipse (the per-state ramps above sit BEFORE the modifier); the dot mount always wins.
-        ring = parts.Apply(PartRing, ring) with { Children = ringKids };
-
-        Element[] children =
-        [
-            ring,
-            // WinUI keeps RadioButtonForeground == PointerOver == Pressed (TextPrimary), so only the disabled ramp differs.
-            content ?? parts.Apply(PartLabel,
-                new TextEl(label ?? "") { Size = s.FontSize, Color = s.Foreground, DisabledColor = s.DisabledForeground }),
-        ];
+        Element[] children = s.ShowGlyph ? [Glyph(), face] : [face];
 
         var root = new BoxEl
         {

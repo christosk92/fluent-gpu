@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Hooks;
@@ -99,7 +101,7 @@ public static class TrackActions
     {
         Id = ActionId.GoToAlbum, IconKey = ActionIcons.Album,
         Label = static c => Loc.Get(Strings.Menu.GoToAlbum),
-        IsEnabled = static c => c.S.Go is not null && c.Target.Single is { Album.Uri.Length: > 0 },
+        IsEnabled = static c => c.S.Go is not null && ActionRules.CanGoToAlbum(in c.Target),
         Execute = static c =>
         {
             if (c.Target.Single is not { Album: { Uri.Length: > 0 } album }) return;
@@ -205,7 +207,7 @@ public static class TrackActions
         IsEnabled = static c => c.S.Library is not null && ActionRules.CanRemoveFromPlaylist(c.Target.Host),
         Execute = static c =>
         {
-            if (c.S.Library is not { } lib || c.Target.Host is not { } h || h.Rows.Count == 0) return;
+            if (c.S.Library is null || c.Target.Host is not { } h || h.Rows.Count == 0) return;
             // Undo payload (uri/name/uid per removed track) so the notification-center undo can re-add them.
             var refs = new ActivityTrackRef[c.Target.Count];
             for (int i = 0; i < refs.Length; i++)
@@ -213,9 +215,33 @@ public static class TrackActions
                 var t = c.Target.Tracks[i];
                 refs[i] = new ActivityTrackRef(t.Uri, t.Title, t.ContextUid);
             }
-            _ = lib.RemovePlaylistRowsAsync(h.PlaylistUri, h.Rows, refs);
+            RemoveRows(c.S, h.PlaylistUri, h.Rows, refs);
         },
     };
+
+    /// <summary>The ONE remove-from-playlist commit — the <c>Menus.AddTo</c> shape, for the same reason. This used to be
+    /// <c>_ = lib.RemovePlaylistRowsAsync(…)</c>: a remove that was refused (offline, revoked permissions, a rejected
+    /// revision) rolled the rows silently back and said nothing, and a remove that SUCCEEDED offered no way back except
+    /// hunting down the notification panel. Now it awaits, confirms with Undo, and maps the failure to a sentence.</summary>
+    internal static void RemoveRows(ActionServices s, string playlistUri, IReadOnlyList<PlaylistRowRef> rows,
+                                    IReadOnlyList<ActivityTrackRef> removed)
+    {
+        if (s.Library is not { } lib || rows.Count == 0) return;
+        var post = s.Post;
+        _ = Run();
+        async Task Run()
+        {
+            try
+            {
+                long id = await lib.RemovePlaylistRowsTrackedAsync(playlistUri, rows, removed).ConfigureAwait(false);
+                ContainerActions.Post(post, () => Menus.ToastRemoved(s, removed.Count, id));
+            }
+            catch (Exception ex)
+            {
+                ContainerActions.Post(post, () => PlaylistEditErrors.Toast(ex, PlaylistEditVerb.Remove));
+            }
+        }
+    }
 
     /// <summary>Queue-panel remove: Execute rides the panel's own remove closure (player call + optimistic
     /// display-list update) via <see cref="ActionTarget.RemoveFromDisplay"/> — never a second removal path.</summary>

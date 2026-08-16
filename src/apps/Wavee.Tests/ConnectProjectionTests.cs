@@ -22,7 +22,7 @@ public class ConnectProjectionTests
     public void OnCluster_ViewerMode_FoldsTrackPlayStateContext_AndAnchorsPosition()
     {
         long now = 1000;
-        var p = new NowPlayingProjection("us", () => now);
+        var p = new NowPlayingProjection("us", NotOwnedEntityHydrator.Instance, new InMemoryStore(), () => now);
         int changes = 0;
         using var s = p.Changes.Subscribe(ConnectHarness.Obs<IPlaybackState>(_ => changes++));
 
@@ -44,7 +44,7 @@ public class ConnectProjectionTests
     public void OnCluster_AgesSnapshotByServerSideDelta()
     {
         long now = 0;
-        var p = new NowPlayingProjection("us", () => now);
+        var p = new NowPlayingProjection("us", NotOwnedEntityHydrator.Instance, new InMemoryStore(), () => now);
         // position 5000 sampled at ts=1000, cluster emitted at serverTs=3000 → 2000ms stale at fold (no clock sync needed).
         p.OnCluster(Cluster("other", playing: true, Trk("spotify:track:t1", "Song", 200000), pos: 5000, tsMs: 1000, serverTsMs: 3000));
         Assert.Equal(7000, p.PositionMs);   // 5000 + serverSideAge(2000); no monotonic elapse yet
@@ -54,7 +54,7 @@ public class ConnectProjectionTests
     public void OnCluster_SyncedServerClock_AddsNetworkTransit()
     {
         long now = 0, serverNow = 0;
-        var p = new NowPlayingProjection("us", () => now, () => serverNow);
+        var p = new NowPlayingProjection("us", NotOwnedEntityHydrator.Instance, new InMemoryStore(), () => now, () => serverNow);
         serverNow = 3500;   // synced clock says server-now is 500ms past the cluster's emit time → +500 transit
         p.OnCluster(Cluster("other", playing: true, Trk("spotify:track:t", "T", 200000), pos: 5000, tsMs: 1000, serverTsMs: 3000));
         Assert.Equal(7500, p.PositionMs);   // 5000 + serverSideAge(2000) + networkAge(500)
@@ -64,7 +64,7 @@ public class ConnectProjectionTests
     public void OnCluster_NewTrackNearZero_IgnoresStaleTimestamp()
     {
         long now = 0;
-        var p = new NowPlayingProjection("us", () => now);
+        var p = new NowPlayingProjection("us", NotOwnedEntityHydrator.Instance, new InMemoryStore(), () => now);
         p.OnCluster(Cluster("other", playing: true, Trk("spotify:track:a", "A", 200000), pos: 120000, tsMs: 1000, serverTsMs: 2000));
         // New track starts at ~0 but its Timestamp lags badly → must anchor at the snapshot, not jump forward by the Δ.
         p.OnCluster(Cluster("other", playing: true, Trk("spotify:track:b", "B", 200000), pos: 300, tsMs: 1000, serverTsMs: 60000));
@@ -75,7 +75,7 @@ public class ConnectProjectionTests
     public void Pos_AppliesPlaybackSpeed()
     {
         long now = 1000;
-        var p = new NowPlayingProjection("us", () => now);
+        var p = new NowPlayingProjection("us", NotOwnedEntityHydrator.Instance, new InMemoryStore(), () => now);
         p.OnCluster(Cluster("other", playing: true, Trk("spotify:track:t", "T", 600000), pos: 10000, speed: 2.0));
         now = 3000;   // 2000ms monotonic elapse at 2× → +4000
         Assert.Equal(14000, p.PositionMs);
@@ -85,7 +85,7 @@ public class ConnectProjectionTests
     public void Pos_ClampsToDuration()
     {
         long now = 0;
-        var p = new NowPlayingProjection("us", () => now);
+        var p = new NowPlayingProjection("us", NotOwnedEntityHydrator.Instance, new InMemoryStore(), () => now);
         p.OnCluster(Cluster("other", playing: true, Trk("spotify:track:t", "T", 5000), pos: 4000));
         now = 10000;   // would be 14000 but duration is 5000
         Assert.Equal(5000, p.PositionMs);
@@ -95,7 +95,7 @@ public class ConnectProjectionTests
     public void Pos_Paused_ReturnsFrozenSnapshot_NoAging()
     {
         long now = 0;
-        var p = new NowPlayingProjection("us", () => now);
+        var p = new NowPlayingProjection("us", NotOwnedEntityHydrator.Instance, new InMemoryStore(), () => now);
         // Paused remote, with a large server-side Δ: must NOT age (frozen) and must not interpolate.
         p.OnCluster(Cluster("other", playing: false, Trk("spotify:track:t", "T", 200000), pos: 8000, tsMs: 1000, serverTsMs: 5000));
         now = 100000;
@@ -105,7 +105,7 @@ public class ConnectProjectionTests
     [Fact]
     public void OnCluster_NoActiveDevice_ClampsToPaused()
     {
-        var p = new NowPlayingProjection("us");
+        var p = new NowPlayingProjection("us", NotOwnedEntityHydrator.Instance, new InMemoryStore());
         p.OnCluster(Cluster("", playing: true, Trk("spotify:track:x", "X", 1000)));
         Assert.False(p.IsPlaying);   // nobody active → we are not playing
     }
@@ -114,7 +114,7 @@ public class ConnectProjectionTests
     public void Reconciliation_StaleClusterDoesNotRevertOptimisticLocalCommand()
     {
         long now = 0;
-        var p = new NowPlayingProjection("us", () => now);
+        var p = new NowPlayingProjection("us", NotOwnedEntityHydrator.Instance, new InMemoryStore(), () => now);
         p.OnCluster(Cluster("us", playing: true, Trk("spotify:track:t", "T", 100000)));
         Assert.True(p.IsPlaying);
 
@@ -154,7 +154,7 @@ public class ConnectProjectionTests
     [Fact]
     public void LocalEvent_DrivesSlab_AndFiresChanges()
     {
-        var p = new NowPlayingProjection("us", () => 0);
+        var p = new NowPlayingProjection("us", NotOwnedEntityHydrator.Instance, new InMemoryStore(), () => 0);
         var track = new Track("t", "spotify:track:t", "Local",
             new[] { new ArtistRef("a", "spotify:artist:a", "A") }, new AlbumRef("al", "spotify:album:al", "Al"),
             60000, false, null);
@@ -169,7 +169,7 @@ public class ConnectProjectionTests
     [Fact]
     public void LocalEvent_FoldsTrackDuration()
     {
-        var p = new NowPlayingProjection("us", () => 0);
+        var p = new NowPlayingProjection("us", NotOwnedEntityHydrator.Instance, new InMemoryStore(), () => 0);
         var track = new Track("t", "spotify:track:t", "Local",
             new[] { new ArtistRef("a", "spotify:artist:a", "A") }, new AlbumRef("al", "spotify:album:al", "Al"),
             151000, false, null);
@@ -180,7 +180,7 @@ public class ConnectProjectionTests
     [Fact]
     public void LocalTrackChange_ReplacesStaleDuration_FromPriorClusterTrack()
     {
-        var p = new NowPlayingProjection("us", () => 0);
+        var p = new NowPlayingProjection("us", NotOwnedEntityHydrator.Instance, new InMemoryStore(), () => 0);
         // remote plays a 3:34 track…
         p.OnCluster(Cluster("us", playing: true, Trk("spotify:track:old", "Old", 214000)));
         Assert.Equal(214000, p.DurationMs);
@@ -197,7 +197,7 @@ public class ConnectProjectionTests
     [Fact]
     public void OnCluster_Restrictions_GateSkipAndSeek_AndVolumeFollowsActiveDevice()
     {
-        var p = new NowPlayingProjection("us", () => 0);
+        var p = new NowPlayingProjection("us", NotOwnedEntityHydrator.Instance, new InMemoryStore(), () => 0);
         p.OnCluster(new ClusterDelta("other", true, Trk("spotify:ad:x", "Ad", 30000), "ctx",
             true, false, false, 0, 0, 0, 30000, false, RepeatMode.Off,
             Array.Empty<ConnectDeviceRow>(), Array.Empty<RemoteTrack>(),
@@ -211,7 +211,7 @@ public class ConnectProjectionTests
     [Fact]
     public void OnCluster_ViewerQueue_SplitsProviders_AndDropsDelimiters()
     {
-        var p = new NowPlayingProjection("us", () => 0);
+        var p = new NowPlayingProjection("us", NotOwnedEntityHydrator.Instance, new InMemoryStore(), () => 0);
         p.OnCluster(Cluster("other", playing: true, Trk("spotify:track:now", "Now", 1000)) with
         {
             NextTracks = new[]
@@ -247,7 +247,7 @@ public class ConnectProjectionTests
     [Fact]
     public void OnCluster_WeAreStaleActive_FillsQueueFromCluster()
     {
-        var p = new NowPlayingProjection("us", () => 0);
+        var p = new NowPlayingProjection("us", NotOwnedEntityHydrator.Instance, new InMemoryStore(), () => 0);
         p.OnCluster(new ClusterDelta(
             "us", true, Trk("spotify:track:now", "Now", 200000), "spotify:playlist:ctx",
             false, true, false, 1000, 0, 0, 200000, Shuffle: true, RepeatMode.Context,

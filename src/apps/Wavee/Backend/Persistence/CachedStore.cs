@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -8,6 +8,7 @@ using Wavee.Backend;
 using Wavee.Backend.Metadata;
 using Wavee.Backend.Playlists;
 using Wavee.Core;
+using EntityKind = Wavee.Backend.Metadata.EntityKind;   // disambiguate: Wavee.Core.EntityKind is the ROUTING vocabulary; the PERSISTED column is the transport one
 
 namespace Wavee.Backend.Persistence;
 
@@ -249,6 +250,7 @@ public sealed class CachedStore : IStore, ILibraryCandidateStore, IDisposable
                 case EntityKind.Playlist: { var v = JsonSerializer.Deserialize(e.Payload, EntityJson.Default.Playlist); if (v != null) _hot.UpsertPlaylist(v); break; }
                 case EntityKind.Show: { var v = JsonSerializer.Deserialize(e.Payload, EntityJson.Default.Show); if (v != null) _hot.UpsertShow(v); break; }
                 case EntityKind.Episode: { var v = JsonSerializer.Deserialize(e.Payload, EntityJson.Default.Episode); if (v != null) _hot.UpsertEpisode(v); break; }
+                case EntityKind.User: { var v = JsonSerializer.Deserialize(e.Payload, EntityJson.Default.Owner); if (v != null) _hot.UpsertOwner(v); break; }
             }
         }
         catch (JsonException) { /* skip a corrupt row — it's re-fetchable */ }
@@ -271,6 +273,16 @@ public sealed class CachedStore : IStore, ILibraryCandidateStore, IDisposable
     public Playlist? GetPlaylist(string uri) { var v = _hot.GetPlaylist(uri); if (v is not null) { Touch(uri); return v; } return ColdFallback<Playlist>(uri, EntityKind.Playlist, EntityJson.Default.Playlist, static (h, x) => h.UpsertPlaylist(x)); }
     public Show? GetShow(string uri) { var v = _hot.GetShow(uri); if (v is not null) { Touch(uri); return v; } return ColdFallback<Show>(uri, EntityKind.Show, EntityJson.Default.Show, static (h, x) => h.UpsertShow(x)); }
     public Episode? GetEpisode(string uri) { var v = _hot.GetEpisode(uri); if (v is not null) { Touch(uri); return v; } return ColdFallback<Episode>(uri, EntityKind.Episode, EntityJson.Default.Episode, static (h, x) => h.UpsertEpisode(x)); }
+    // Owners key on the CANONICAL user uri on both tiers (UserProfileIds.Normalize), so the hot dictionary key IS the
+    // cold `entity.uri` — a bare id and its `spotify:user:` spelling can never become two rows.
+    public Owner? GetOwner(string userUriOrId)
+    {
+        var v = _hot.GetOwner(userUriOrId);
+        if (v is not null) { if (UserProfileIds.Normalize(userUriOrId) is { } k) Touch(k); return v; }
+        return UserProfileIds.Normalize(userUriOrId) is { } key
+            ? ColdFallback<Owner>(key, EntityKind.User, EntityJson.Default.Owner, static (h, x) => h.UpsertOwner(x))
+            : null;
+    }
     public VideoAssociation? GetVideoAssociation(string uri) => _hot.GetVideoAssociation(uri);
     public VideoOverride? GetVideoOverride(string uri) => _hot.GetVideoOverride(uri);
     public IReadOnlyList<VideoOverride> VideoOverrides() => _hot.VideoOverrides();
@@ -432,13 +444,13 @@ public sealed class CachedStore : IStore, ILibraryCandidateStore, IDisposable
     static IReadOnlyList<ColdRootlistEntry> ToColdRoot(IReadOnlyList<RootlistEntry> e)
     {
         var list = new List<ColdRootlistEntry>(e.Count);
-        for (int i = 0; i < e.Count; i++) { var r = e[i]; list.Add(new ColdRootlistEntry(r.Position, r.Kind, r.Uri, r.GroupName, r.Depth)); }
+        for (int i = 0; i < e.Count; i++) { var r = e[i]; list.Add(new ColdRootlistEntry(r.Position, r.Kind, r.Uri, r.GroupName, r.Depth, r.AddedAtMs)); }
         return list;
     }
     static IReadOnlyList<RootlistEntry> FromColdRoot(IReadOnlyList<ColdRootlistEntry> e)
     {
         var list = new List<RootlistEntry>(e.Count);
-        for (int i = 0; i < e.Count; i++) { var r = e[i]; list.Add(new RootlistEntry(r.Position, r.Kind, r.Uri, r.GroupName, r.Depth)); }
+        for (int i = 0; i < e.Count; i++) { var r = e[i]; list.Add(new RootlistEntry(r.Position, r.Kind, r.Uri, r.GroupName, r.Depth, r.AddedAtMs)); }
         return list;
     }
 
@@ -489,6 +501,20 @@ public sealed class CachedStore : IStore, ILibraryCandidateStore, IDisposable
         _hot.UpsertEpisode(e);
         var merged = _hot.GetEpisode(e.Uri) ?? e;
         if (PinnedShowOrEpisode(e.Uri)) PersistEpisode(merged);
+    }
+    // OWNERS ARE ALWAYS PERSISTED — the one entity kind that bypasses the pin-reachability gate (decision, P4-C).
+    // Three reasons: an owner row is ~150 B (the whole resolvable set for a real library is well under a megabyte, i.e.
+    // noise against the entity budget); the pin question is unanswerable cheaply, because an owner is reachable through
+    // any playlist HEADER or any membership row's `added_by` and neither mirror is keyed by user; and an owner that is
+    // NOT on disk makes the library grid and every playlist byline render a raw base62 id on the next offline launch —
+    // the exact regression the read-model cache used to hide behind a session-lifetime dictionary. They still age out
+    // through the ordinary unpinned 30-day entity TTL (EntityCacheGc §C.3), and re-resolve for free from kind 15.
+    public void UpsertOwner(Owner o)
+    {
+        _hot.UpsertOwner(o);
+        if (UserProfileIds.Normalize(o?.Id) is not { } key) return;
+        var merged = _hot.GetOwner(key) ?? o!;
+        PersistEntity(key, EntityKind.User, JsonSerializer.SerializeToUtf8Bytes(merged, EntityJson.Default.Owner));
     }
     public void UpsertVideoAssociation(VideoAssociation a) { _hot.UpsertVideoAssociation(a); _cold.UpsertVideoAssociation(a.Uri, JsonSerializer.SerializeToUtf8Bytes(a, EntityJson.Default.VideoAssociation)); }
     // The user's video curation: typed columns, not a JSON blob (the roster UI queries them by field), so no serializer
@@ -584,6 +610,15 @@ public sealed class CachedStore : IStore, ILibraryCandidateStore, IDisposable
     //  2. The persisted Hydration is capped at `Tracks`: `Full` is the flag SpotifyAlbumEnrichmentService reads to decide
     //     the below-the-fold getAlbum upgrade is unnecessary, and a Full row with no facets would suppress the very
     //     refetch that rebuilds them. Capping is safe because the merge keeps the HIGHER of the two levels.
+    //
+    // THE KNOWN COST, stated plainly (finding 15; the mirror of this note is on HydrationLevels.Of(Album)). `Tracks` is
+    // stripped too, and the tracklist IS the Open predicate — so a RESTORED album reads back at Identity. Online that is
+    // cheap and invisible: the first open re-runs the ladder and the extended-metadata cache answers the AlbumV4
+    // conditionally. OFFLINE it is a real hole: an album the user saved, whose track rows are all individually on disk,
+    // can never reach Open after a restart, so the page paints a header with an empty tracklist. This is deliberate for
+    // now (the fix belongs to persistence, not to the rung predicate, and it is not free): the ESCAPE HATCH when we take
+    // it is to persist the track URIS — not the whole Track records, which is what the strip exists to avoid — for
+    // PINNED albums only, or to re-join the persisted track rows into `Album.Tracks` at restore time. Plan §4 risk 3.
     void PersistAlbum(Album a)
     {
         for (int i = 0; i < a.Artists.Count; i++) NoteRefs(a.Artists[i].Uri);
@@ -697,6 +732,11 @@ public sealed class CachedStore : IStore, ILibraryCandidateStore, IDisposable
         if (_hot.GetPlaylist(uri) is { } p) { PersistPlaylist(p); return; }
         if (_hot.GetShow(uri) is { } sh) { PersistShow(sh); return; }
         if (_hot.GetEpisode(uri) is { } ep) { PersistEpisode(ep); return; }
+        if (_hot.GetOwner(uri) is { } ow)
+        {
+            PersistEntity(uri, EntityKind.User, JsonSerializer.SerializeToUtf8Bytes(ow, EntityJson.Default.Owner));
+            return;
+        }
         // Not resident: nothing to flush. Either it is already cold (a later ColdFallback marks presence) or it will be
         // written by the hydration that follows the pin — the gate now sees the pin, so that write lands.
     }
@@ -964,6 +1004,7 @@ public sealed class CachedStore : IStore, ILibraryCandidateStore, IDisposable
 [JsonSerializable(typeof(Playlist))]
 [JsonSerializable(typeof(Show))]
 [JsonSerializable(typeof(Episode))]
+[JsonSerializable(typeof(Owner))]
 [JsonSerializable(typeof(VideoAssociation))]
 [JsonSerializable(typeof(ArtistOverviewDoc))]
 internal partial class EntityJson : JsonSerializerContext { }

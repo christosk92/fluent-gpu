@@ -100,10 +100,13 @@ struct SidebarRowSpec
         MenuOverlay = null;
         Menu = null;
         Drag = null;
+        DropCue = null;
         DropTarget = null;
         Animate = null;
         Caption = null;
         Focusable = false;
+        OnRename = null;
+        OnMove = null;
     }
 
     // ── identity ─────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -208,9 +211,17 @@ struct SidebarRowSpec
     /// <summary>Optional resource destination (playlist deposit and/or pinned-band insertion).</summary>
     public DropTargetSpec? DropTarget;
 
-    /// <summary>Cold compatibility cue for a live resource drag. The row keeps its normal fill ramp and gains only an
-    /// accent outline, so before/after/inside targeting never masquerades as selection.</summary>
+    /// <summary>Cold compatibility cue for a live resource drag, for the surfaces whose only outcome is "this row takes
+    /// it" (the create affordance, a rail tile). A tree row uses <see cref="DropCue"/> instead — it has three outcomes
+    /// and one boolean cannot tell them apart.</summary>
     public Func<bool>? DropActive;
+
+    /// <summary>The PUBLISHED drop slot for this row (<c>SidebarPane.DropSlotFor</c>), as a probe.
+    /// <para>THE PLATE MEANS EXACTLY ONE THING: <c>Into</c> — a deposit, into this folder or this playlist. An ordering
+    /// (Before/After/EndOfList) draws the row-owned insertion LINE instead and leaves the plate off. That split is the
+    /// whole of D1: the three outcomes used to be pixel-identical, so the surface could not say which one a drop meant.
+    /// Set this OR <see cref="DropActive"/>, never both.</para></summary>
+    public Func<SidebarDropSlot>? DropCue;
 
     /// <summary>The row's layout transition. Leave null when a <c>Reorderable</c> wraps the row — <c>Reorderable.Item</c>
     /// applies <c>LayoutTransition.Slide</c> FLIP itself, and an authored offset hint plus a position track is a
@@ -223,6 +234,23 @@ struct SidebarRowSpec
     /// <summary>Make the row itself a focus stop. Leave false when a <c>Reorderable</c> wraps it — its wrapper is the
     /// focus stop and the keyboard-lift key handler, and two stops per row would double the tab order.</summary>
     public bool Focusable;
+
+    /// <summary><b>F2</b> on this row. Supplying it also makes the row a focus stop — a key handler on a node nothing
+    /// can focus is dead code, and <c>InputDispatcher</c> routes keys from the focused node upward, never into children.
+    /// Set it only where the verb is REAL (a playlist whose metadata this user may edit, a rootlist folder); a row that
+    /// cannot be renamed stays exactly as unfocusable as it was, so the tab order grows only by rows that earned it.
+    /// Leave null when a <c>Reorderable</c> wraps the row: that wrapper owns both the focus stop and the key handler.</summary>
+    public Action? OnRename;
+
+    /// <summary><b>Alt+↑ / Alt+↓</b> on this row: move it one position within its own list (<c>-1</c> up, <c>+1</c>
+    /// down). Supplying it also makes the row a focus stop, for the same reason <see cref="OnRename"/> does.
+    ///
+    /// <para>ALT, not a bare arrow: bare arrows are the pane's roving navigation, and the detail track list already took
+    /// Alt+↑/↓ for exactly this gesture (<c>DetailTracks</c>) — one chord, one meaning, across the app. Set it only for
+    /// a ROOTLIST TREE row, and never for a <c>Reorderable</c>-wrapped one: that wrapper owns the focus stop and the
+    /// keyboard-lift handler, and two of each per row is a documented stomp. The command itself decides the ends of the
+    /// run, so a move that cannot happen is a silent no-op rather than a wrap-around.</para></summary>
+    public Action<int>? OnMove;
 }
 
 static class SidebarEntityRow
@@ -234,6 +262,23 @@ static class SidebarEntityRow
     /// <inheritdoc cref="SidebarRowMetrics.HeightFor"/>
     public static float HeightFor(SidebarDensity density, bool hasSubtitle)
         => SidebarRowMetrics.HeightFor(density, hasSubtitle);
+
+    /// <summary>The row's keyboard verbs: <b>F2</b> = rename, <b>Alt+↑/↓</b> = move one position. Built outside
+    /// <see cref="Create"/>'s object initializer because an <c>in</c> parameter cannot be captured by a lambda.</summary>
+    static Action<KeyEventArgs> KeyHandler(Action? rename, Action<int>? move) => e =>
+    {
+        if (rename is not null && e.KeyCode == Keys.F2 && e.Mods == KeyModifiers.None)
+        {
+            e.Handled = true;
+            rename();
+            return;
+        }
+        // Exactly Alt — Alt+Shift+↑ belongs to whatever claims it next, and swallowing it here would make this row the
+        // reason that chord does nothing.
+        if (move is null || e.Mods != KeyModifiers.Alt) return;
+        if (e.KeyCode == Keys.Up) { e.Handled = true; move(-1); }
+        else if (e.KeyCode == Keys.Down) { e.Handled = true; move(1); }
+    };
 
     /// <summary>The height <paramref name="spec"/> will render at — for a virtualizing host that must size the slot
     /// before (or without) building the row.</summary>
@@ -254,7 +299,13 @@ static class SidebarEntityRow
         float art = float.IsNaN(spec.ArtSize) ? SidebarRowMetrics.ArtFor(spec.Density) : spec.ArtSize;
         bool bareGlyph = spec.Leading is null && spec.Glyph is { Length: > 0 };
         float gap = float.IsNaN(spec.Gap) ? (bareGlyph ? 12f : 10f) : spec.Gap;
-        var dropActive = spec.DropActive; // copy: an `in` parameter cannot be captured by the bound paint thunk
+        // Copies: an `in` parameter cannot be captured by the bound paint thunk. The PLATE has exactly one meaning now —
+        // `Into` — so a tree row's cue is folded down to that single question here, once, and both the fill and the
+        // border read the same answer.
+        var dropCue = spec.DropCue;
+        var dropActive = dropCue is not null
+            ? () => SidebarDropCue.DrawsPlate(dropCue().Kind)
+            : spec.DropActive;
 
         // ── leading column ──────────────────────────────────────────────────────────────────────────────────────────
         Element leading;
@@ -325,7 +376,13 @@ static class SidebarEntityRow
             Opacity = enabled ? 1f : 0.55f,
             IsEnabled = enabled,
             OnClick = enabled ? spec.OnClick : null,
-            Focusable = spec.Focusable,
+            Focusable = spec.Focusable || (enabled && (spec.OnRename is not null || spec.OnMove is not null)),
+            // F2 renames, Alt+↑/↓ reorders — ONE handler, because InputDispatcher routes keys from the focused node
+            // upward and a row can only have one. Both arms are no-ops when their command is absent, so a row that can
+            // only be renamed keeps exactly the behaviour it had.
+            OnKeyDown = enabled && (spec.OnRename is not null || spec.OnMove is not null)
+                ? KeyHandler(spec.OnRename, spec.OnMove)
+                : null,
             // Stationary lift at the standard 0.4 source dim. This is the RESOURCE drag only: a row inside a
             // reorderable band carries no Drag payload at all (Reorderable.Item installs its own source and position
             // track — a second one is a documented stomp), so the vacated-slot case never reaches this line.

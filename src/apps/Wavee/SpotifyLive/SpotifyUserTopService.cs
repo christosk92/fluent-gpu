@@ -11,13 +11,12 @@ namespace Wavee.SpotifyLive;
 // Affinity over a 4-week window, feeding Home's top-artist row. Two caches, deliberately layered rather than merged:
 //   • the TRANSPORT cache (PathfinderResource.UseQueryAsync + TtlFor = 30 min) answers a re-navigation to Home without a
 //     request, and revalidates in the background — the row is warm for the whole session after the first open;
-//   • the STORE write below is not a cache of this list at all. It hydrates the shared artist rows so that clicking
-//     through to an artist page already has a name and an avatar, exactly as SpotifyArtistStatsService hydrates the
-//     track rows it happens to see.
+//   * the service is RETURN-ONLY: it writes nothing into the store. The card renders from this document, and clicking
+//     through opens via the facade, whose artist ladder hydrates the row properly (hydration-facade-plan.md 1.6).
 // The ranking itself is never PERSISTED — this is a ME query whose answer is an ordering, not a record — so a cold start
 // simply asks again. What the service does hold is the in-memory snapshot below, on two windows: the full affinity TTL
 // for a real answer, and a short negative TTL for a degraded one (see FailureTtl).
-sealed class SpotifyUserTopService(PathfinderResource pf, IStore store, WaveeLogger log = default,
+sealed class SpotifyUserTopService(PathfinderResource pf, WaveeLogger log = default,
     Func<DateTimeOffset>? clock = null) : IUserTopService
 {
     const int TopArtists = 10;   // the row shows a ranked strip, not a directory; 10 is what the desktop client asks for
@@ -108,16 +107,10 @@ sealed class SpotifyUserTopService(PathfinderResource pf, IStore store, WaveeLog
 
             var artists = SpotifyExportMapper.TopArtistsFromUserTop(doc.RootElement);
             var tracks = SpotifyExportMapper.TopTracksFromUserTop(doc.RootElement);
-            // Thin hydration: uri + name + avatar only. StoreEntityMerge is Has()/NonEmpty-guarded, so this can add the
-            // identity for an artist the store has never seen without ever clobbering a richer writer's fields.
-            for (int i = 0; i < artists.Count; i++)
-            {
-                var a = artists[i];
-                if (a.Uri.Length == 0) continue;
-                store.UpsertArtist(new Artist(a.Id, a.Uri, a.Name, a.Image));
-            }
-            for (int i = 0; i < tracks.Count; i++)
-                if (tracks[i].Uri.Length > 0) store.UpsertTrack(tracks[i]);
+            // RETURN-ONLY (design 3): the thin UpsertArtist/UpsertTrack pass that used to run here is gone. A Home
+            // card carries its own name and avatar from THIS document, and clicking it opens through the facade,
+            // whose ladder hydrates the real row. Seeding thin entities only taught the store rows that no rung
+            // owned - and every presence gate (HydrationLevels.Of) then had to distrust them.
             // Say so on SUCCESS too, not only on failure: "did the top-artist row get data, or does this account have no
             // affinity yet?" is otherwise unanswerable from a log, and an empty row looks identical either way.
             log.Event(WaveeLogLevel.Info, "usertop.ok", "top artists landed", fields:

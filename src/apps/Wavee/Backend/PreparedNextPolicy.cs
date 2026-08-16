@@ -49,7 +49,7 @@ public static class PreparedNextPolicy
     /// <summary>Music (crossfade/gapless-eligible) vs spoken content: episodes/podcasts prepare but never overlap.</summary>
     public static bool IsMusic(Track track)
     {
-        if (track.Uri.StartsWith("spotify:episode:", StringComparison.OrdinalIgnoreCase)
+        if (EntityUri.KindOf(track.Uri) == EntityKind.Episode
             || track.Uri.Contains(":episode:", StringComparison.OrdinalIgnoreCase)
             || track.Uri.Contains(":podcast:", StringComparison.OrdinalIgnoreCase)) return false;
         return track.Source?.Contains("podcast", StringComparison.OrdinalIgnoreCase) != true;

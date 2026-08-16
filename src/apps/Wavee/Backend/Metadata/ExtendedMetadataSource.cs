@@ -15,11 +15,16 @@ using Lean = Wavee.Protocol.Lean;
 namespace Wavee.Backend.Metadata;
 
 // ── STEP 3 — the REAL extended-metadata source ───────────────────────────────────────────────────────────────────────
-// Builds one BatchedEntityRequest per body-size chunk (gzipped), POSTs to spclient, parses the BatchedExtensionResponse,
-// and projects each entity proto (Track/Album/Artist) into the Store. The Bearer + client-token are attached by the
-// HttpExchange pipeline; country/catalogue come from the SessionContext. The opaque Any payload is read as raw proto bytes
-// (type_url ignored), parsed by the array's ExtensionKind — exactly the real client's contract.
-public sealed class ExtendedMetadataSource : IMetadataSource
+// The TRANSPORT only: builds a gzipped BatchedEntityRequest for an explicit (uri, kind[, etag]) list, POSTs it to
+// spclient, and hands back the parsed extension payloads — plus the static ProjectResponse that turns a response into
+// Store writes. The Bearer + client-token are attached by the HttpExchange pipeline; country/catalogue come from the
+// SessionContext. The opaque Any payload is read as raw proto bytes (type_url ignored), parsed by the array's
+// ExtensionKind — exactly the real client's contract.
+//
+// It no longer decides WHAT to fetch: the unconditional bulk arm (FetchAsync/GzipRequest over EntityRef) died with
+// MetadataService. Every catalogue read now goes ExtensionEtagCache → XmCatalogFetch → here, so nothing re-downloads a
+// payload that is already on disk (hydration-facade-plan.md §1.6).
+public sealed class ExtendedMetadataSource
 {
     // Lean parsers that DISCARD unknown fields → the many unused Track/Album/Artist repeated fields (file[], restriction[],
     // availability[], alternative[]…) are skipped on the wire, not allocated as messages.
@@ -29,46 +34,11 @@ public sealed class ExtendedMetadataSource : IMetadataSource
     // Show episode[] is NOW parsed (LeanShow.episode = 70); DiscardUnknownFields still skips unused show fields.
     static readonly MessageParser<Lean.LeanShow> ShowParser = Lean.LeanShow.Parser.WithDiscardUnknownFields(true);
     static readonly MessageParser<Lean.LeanEpisode> EpisodeParser = Lean.LeanEpisode.Parser.WithDiscardUnknownFields(true);
-    // A playlist has no V4 catalogue kind: its header rides LIST_METADATA_V2 (205). Without this arm every playlist uri
-    // handed to the chokepoint resolved to UnknownExtension and was DROPPED before the request was even built (see
-    // GzipRequest's `continue`), which is why a surface made of playlist pointers had no way to learn a single name.
+    // A playlist has no V4 catalogue kind: its header rides LIST_METADATA_V2 (205) — see XmKinds.CatalogKindOf, the one
+    // routing-kind → catalogue-kind map. Without this parser a playlist pointer had no way to learn a single name.
     static readonly MessageParser<Xm.ListMetadataV2> ListParser = Xm.ListMetadataV2.Parser.WithDiscardUnknownFields(true);
 
     const string Path = "/extended-metadata/v0/extended-metadata";
-
-    // ── the desktop client's HEADER-TRAIT bundle (opt-in; OFF for every pre-existing caller) ──────────────────────────
-    // A census of all 73 extended-metadata calls in the capture says the `client-feature-id` DECIDES the kind set, and
-    // for `mdata_esperanto` — the scroll-driven recents viewport hydrator Wavee imitates — the requested kinds are
-    // exactly these three:
-    //     178 IDENTITY_TRAIT · 179 VISUAL_IDENTITY_TRAIT · 220 ENTITY_TYPE_TRAIT
-    // Kind 220 was requested by `mdata_esperanto` and by NO other caller, over 176 entities (80 playlist, 53 album,
-    // 42 artist, 1 collection). Kinds 182/212/249 belong to `list_metadata_prefetcher` — a DIFFERENT caller (the
-    // upfront bulk prefetch) — and are deliberately NOT sent from the viewport hydrator. Calling {178,179,182,212,249}
-    // "the canonical bundle" conflates the two callers; it is not one bundle, it is two per-feature kind sets.
-    //
-    // THESE PAYLOADS ARE MOSTLY DISCARDED ON PURPOSE — this is NOT dead code to delete:
-    //   · 179 is the only one with a verified schema in this repo (SpotifyLive/Protos/visual_identity_trait.proto,
-    //     decoded by SpotifyTrackAdornmentService). It is available as a cover/colour FALLBACK for a catalogue kind
-    //     that yields none; this path does not wire that up yet (see the note in MetadataService.SyncAllConditionalAsync).
-    //   · 178 and 220 have NO schema here. Their field numbers are unknown, and guessing them would be an invention.
-    //     They are requested for WIRE FIDELITY and their payloads fall through ProjectParsed's `default: continue`.
-    //     The REQUEST is the point; "nothing reads the response" is not a reason to stop sending it.
-    //
-    // DELIBERATE DIVERGENCE from the real client: we still ask for the catalogue kind (ALBUM_V4 / ARTIST_V4 / SHOW_V4 /
-    // EPISODE_V4 / TRACK_V4 / LIST_METADATA_V2). The real client never requests 205 at all — it reads a playlist's name
-    // straight out of 178, which we cannot decode. Matching it exactly would leave every recents row nameless, so Wavee
-    // asks for BOTH: the traits for wire shape, the catalogue kind for facts it can actually read.
-    internal static readonly Xm.ExtensionKind[] HeaderTraitKinds =
-    [
-        Xm.ExtensionKind.IdentityTrait,         // 178
-        Xm.ExtensionKind.VisualIdentityTrait,   // 179
-        Xm.ExtensionKind.EntityTypeTrait,       // 220
-    ];
-
-    /// <summary>Upper-bound wire cost of the trait bundle under ONE uri: per query a field tag + length byte + the
-    /// kind's field tag + a 2-byte varint (178/179/220 all exceed 127). Feeds MetadataChunking so a trait-bearing
-    /// request is not under-estimated into an over-large body.</summary>
-    internal const int HeaderTraitBytesPerEntity = 3 * 6;
 
     readonly IHttpExchange _http;
     readonly Func<string> _baseUrl;
@@ -79,69 +49,6 @@ public sealed class ExtendedMetadataSource : IMetadataSource
         _http = http;
         _baseUrl = baseUrl;
         _ctx = ctx;
-    }
-
-    public async Task<IReadOnlyCollection<string>> FetchAsync(IReadOnlyList<EntityRef> entities, IStore store, CancellationToken ct,
-                                                              string? clientFeatureId = null, bool headerTraits = false)
-    {
-        var session = _ctx();
-        var proj = new ProjCtx();   // memoizes repeated album/artist refs across the whole sync
-        var landed = new HashSet<string>(StringComparer.Ordinal);
-        var bulk = entities.Count > 1 ? store.BeginBulk() : null;   // coalesce the per-entity change signals into one
-        try
-        {
-            foreach (var (start, count) in MetadataChunking.Ranges(entities,
-                         extraBytesPerEntity: headerTraits ? HeaderTraitBytesPerEntity : 0))
-            {
-                var gz = GzipRequest(entities, start, count, session, headerTraits);
-                if (gz is null) continue;   // the chunk had no supported entities
-                using var resp = await SendAsync(gz, ct, clientFeatureId).ConfigureAwait(false);
-                if (resp.Status != 200) throw new InvalidOperationException($"extended-metadata fetch failed ({resp.Status})");
-                ProjectResponse(resp.Body, store, proj, landed);   // resp.Body is the response stream → parsed without an LOH byte[]
-            }
-        }
-        finally { bulk?.Dispose(); }
-        return landed;
-    }
-
-    // Serialize the BatchedEntityRequest STRAIGHT into gzip, REUSING one EntityRequest + ExtensionQuery across all entities
-    // (10k entities → 3 request objects, not 20k), and no intermediate uncompressed array. Returns null for a chunk with no
-    // supported entities. internal so a round-trip test can verify the hand-written framing against the generated parser.
-    internal static byte[]? GzipRequest(IReadOnlyList<EntityRef> entities, int start, int count, SessionContext ctx,
-                                        bool headerTraits = false)
-    {
-        Span<byte> taskId = stackalloc byte[16];
-        RandomNumberGenerator.Fill(taskId);
-        var header = new Xm.BatchedEntityRequestHeader { Country = ctx.Market, Catalogue = ctx.Catalogue, TaskId = ByteString.CopyFrom(taskId) };
-        var eq = new Xm.ExtensionQuery();
-        var er = new Xm.EntityRequest();
-        er.Query.Add(eq);   // reused for every entity (the per-entity catalogue kind)
-        // The trait bundle is CONSTANT per entity, so its queries are built ONCE and ride the same reused EntityRequest
-        // — the envelope simply carries 1 + 3 kinds under each uri group ("multiple kinds under a uri group as before"),
-        // and the per-entity allocation stays at zero. Only `eq` varies as the loop walks the chunk.
-        if (headerTraits)
-            foreach (var trait in HeaderTraitKinds) er.Query.Add(new Xm.ExtensionQuery { ExtensionKind = trait });
-
-        using var ms = new MemoryStream();
-        using (var gz = new GZipStream(ms, CompressionLevel.Fastest, leaveOpen: true))
-        {
-            using var o = new CodedOutputStream(gz, leaveOpen: true);
-            o.WriteRawTag(0x0A);    // field 1 (header), length-delimited
-            o.WriteMessage(header);
-            bool any = false;
-            for (int i = start; i < start + count; i++)
-            {
-                var kind = KindFor(entities[i].Kind);
-                if (kind == Xm.ExtensionKind.UnknownExtension) continue;
-                er.EntityUri = entities[i].Uri;
-                eq.ExtensionKind = kind;
-                o.WriteRawTag(0x12);   // field 2 (entity_request, repeated), length-delimited
-                o.WriteMessage(er);    // length-prefixed; er/eq reused → no per-entity allocation
-                any = true;
-            }
-            if (!any) return null;
-        }   // o flushes, then gz finalizes the gzip into ms
-        return ms.ToArray();
     }
 
     // ── Arbitrary-kind reads (feature payloads beyond bulk Track/Album/Artist hydration) ──────────────────────────────
@@ -189,7 +96,7 @@ public sealed class ExtendedMetadataSource : IMetadataSource
         if (requests.Count == 0) return NoResults;
         var session = _ctx();
         var result = new Dictionary<(string, Xm.ExtensionKind), ExtensionResult>(requests.Count);
-        foreach (var (start, count) in ExtensionRanges(requests))
+        foreach (var (start, count) in MetadataChunking.ExtensionRanges(requests))
         {
             using var resp = await SendAsync(GzipExtensionRequest(requests, start, count, session), ct, clientFeatureId).ConfigureAwait(false);
             if (resp.Status != 200) throw new InvalidOperationException($"extended-metadata fetch failed ({resp.Status})");
@@ -209,22 +116,6 @@ public sealed class ExtendedMetadataSource : IMetadataSource
             }
         }
         return result;
-    }
-
-    // Body-size chunking for the conditional path (the plain GzipExtensionRequest builds one POST; here a 10k-entity
-    // detect must not be a single unbounded body). Estimate ≈ uri + etag + tags; never split below one request.
-    static IEnumerable<(int Start, int Count)> ExtensionRanges(
-        IReadOnlyList<(string Uri, Xm.ExtensionKind Kind, string? Etag)> reqs,
-        int maxBodyBytes = MetadataChunking.DefaultMaxBodyBytes, int headerBytes = 64)
-    {
-        int start = 0, size = headerBytes;
-        for (int i = 0; i < reqs.Count; i++)
-        {
-            int cost = reqs[i].Uri.Length + (reqs[i].Etag?.Length ?? 0) + 16;
-            if (i > start && size + cost > maxBodyBytes) { yield return (start, i - start); start = i; size = headerBytes; }
-            size += cost;
-        }
-        if (reqs.Count > start) yield return (start, reqs.Count - start);
     }
 
     // The conditional sibling of GzipExtensionRequest(requests, ctx): builds one chunk [start, start+count) and sets
@@ -258,8 +149,8 @@ public sealed class ExtendedMetadataSource : IMetadataSource
         return ms.ToArray();
     }
 
-    // One EntityRequest per uri (its kinds grouped under it), serialized straight into gzip — the same envelope
-    // GzipRequest builds, but keyed by an explicit (uri, kind) list instead of the EntityRef→KindFor mapping.
+    // One EntityRequest per uri (its kinds grouped under it), serialized straight into gzip. Keyed by an explicit
+    // (uri, kind) list — the only request shape left now that the raw bulk arm is gone.
     static byte[] GzipExtensionRequest(IReadOnlyList<(string Uri, Xm.ExtensionKind Kind)> requests, SessionContext ctx)
     {
         Span<byte> taskId = stackalloc byte[16];
@@ -301,19 +192,6 @@ public sealed class ExtendedMetadataSource : IMetadataSource
         return await _http.SendAsync(new HttpReq("POST", _baseUrl() + Path, headers, gzippedBody), ct).ConfigureAwait(false);
     }
 
-    static Xm.ExtensionKind KindFor(EntityKind k) => k switch
-    {
-        EntityKind.Track => Xm.ExtensionKind.TrackV4,
-        EntityKind.Album => Xm.ExtensionKind.AlbumV4,
-        EntityKind.Artist => Xm.ExtensionKind.ArtistV4,
-        EntityKind.Show => Xm.ExtensionKind.ShowV4,
-        EntityKind.Episode => Xm.ExtensionKind.EpisodeV4,
-        // A playlist's header is LIST_METADATA_V2, not a V4 — see ProjectPlaylist. Mirrored in MetadataService.KindFor,
-        // which builds the conditional (etag) request list from the same mapping.
-        EntityKind.Playlist => Xm.ExtensionKind.ListMetadataV2,
-        _ => Xm.ExtensionKind.UnknownExtension,
-    };
-
     /// <summary>Parse a BatchedExtensionResponse and project each entity proto into the Store. Returns the EntityUris
     /// that successfully projected — callers seal freshness on this set only (outcome seeding). Pure — the unit test
     /// feeds crafted protobuf here, so the whole parse→project path is covered without a network.</summary>
@@ -323,9 +201,6 @@ public sealed class ExtendedMetadataSource : IMetadataSource
         ProjectParsed(Xm.BatchedExtensionResponse.Parser.ParseFrom(responseBytes), store, new ProjCtx(), landed);
         return landed;
     }
-
-    static void ProjectResponse(Stream responseStream, IStore store, ProjCtx proj, HashSet<string> landed)
-        => ProjectParsed(Xm.BatchedExtensionResponse.Parser.ParseFrom(responseStream), store, proj, landed);   // streamed, no LOH byte[]
 
     static void ProjectParsed(Xm.BatchedExtensionResponse resp, IStore store, ProjCtx proj, HashSet<string> landed)
     {
@@ -375,8 +250,19 @@ public sealed class ExtendedMetadataSource : IMetadataSource
             CanonicalUri: CanonicalUriOf(t, id)));
     }
 
+    /// <summary>THE canonical decoder over a raw TrackV4 payload — the shape the video projector's alias recovery
+    /// reads (it holds a <see cref="CachedExtension"/>, not a projected row). Same rule, same parser: there is exactly
+    /// one place that decides what <c>canonical_uri</c> means, so a relink verdict cannot differ between the catalogue
+    /// projection and the recovery pass. Null for no payload / no canonical / a canonical that names self.</summary>
+    internal static string? CanonicalUriOf(ByteString? payload, string selfUri)
+    {
+        if (payload is null || payload.IsEmpty) return null;
+        try { return CanonicalUriOf(TrackParser.ParseFrom(payload), Core.EntityUri.IdOf(selfUri)); }
+        catch (InvalidProtocolBufferException) { return null; }
+    }
+
     /// <summary>LeanTrack.canonical_uri when it names a different playable than self; null = unknown-or-self.</summary>
-    static string? CanonicalUriOf(Lean.LeanTrack t, string selfId)
+    internal static string? CanonicalUriOf(Lean.LeanTrack t, string selfId)
     {
         if (!t.HasCanonicalUri || t.CanonicalUri.Length == 0) return null;
         string c = t.CanonicalUri.StartsWith("spotify:", StringComparison.Ordinal) ? t.CanonicalUri
@@ -522,9 +408,18 @@ public sealed class ExtendedMetadataSource : IMetadataSource
     static void ProjectEpisode(Lean.LeanEpisode ep, IStore store)
     {
         string id = Base62.Encode(ep.Gid.Span);
-        string showName = ep.Show is { } s ? s.Name : "";   // the embedded show ref (gid+name); full show hydrates separately
+        // The embedded show ref carries BOTH halves (gid + name); the full show hydrates separately. Taking only the
+        // name is what left every episode row's subtitle unlinkable — EpisodeAsTrack puts the show in the album slot,
+        // and an album slot without a uri is plain text everywhere in the app.
+        string showName = "", showUri = "";
+        if (ep.Show is { } s)
+        {
+            showName = s.Name;
+            if (s.Gid.Length > 0) showUri = "spotify:show:" + Base62.Encode(s.Gid.Span);
+        }
         store.UpsertEpisode(new Episode(id, "spotify:episode:" + id, ep.Name, showName, PickImage(ep.CoverImage),
-            ep.Duration, PublishedAt(ep.PublishTime), Description: NullIfEmpty(ep.Description)));
+            ep.Duration, PublishedAt(ep.PublishTime), Description: NullIfEmpty(ep.Description),
+            ShowUri: NullIfEmpty(showUri)));
     }
 
     /// <summary>LIST_METADATA_V2 (205) → a playlist HEADER. Returns true when something was written.
@@ -538,7 +433,7 @@ public sealed class ExtendedMetadataSource : IMetadataSource
     /// So the merge is done HERE, on the way in: every field this payload does not know is carried through from the
     /// resident row, which makes the authoritative merge a no-op on exactly those fields. Membership
     /// (<c>SetMembership</c>) is a separate plane and is not touched at all. The rule is the same "thin write must not
-    /// downgrade a rich row" discipline <see cref="ProjectArtist"/>'s stub-fold and <c>StoreEntityGaps</c> already
+    /// downgrade a rich row" discipline <see cref="ProjectArtist"/>'s stub-fold and <c>HydrationLevels</c> already
     /// apply to albums and tracks.</summary>
     static bool ProjectPlaylist(Xm.ListMetadataV2 meta, string uri, IStore store)
     {
@@ -552,7 +447,7 @@ public sealed class ExtendedMetadataSource : IMetadataSource
         if (name.Length == 0 && cover is null && owner.Length == 0) return false;
 
         store.UpsertPlaylist(new Playlist(
-            Id: current?.Id ?? IdOf(uri),
+            Id: current?.Id ?? Wavee.Core.EntityUri.IdOf(uri),
             Uri: uri,
             Name: name,
             Description: NullIfEmpty(meta.Description) ?? current?.Description,
@@ -594,12 +489,6 @@ public sealed class ExtendedMetadataSource : IMetadataSource
         return pick is null ? null : new Image(pick);
     }
 
-    /// <summary>The trailing id of a <c>spotify:kind:id</c> uri — a playlist header has no gid to base62-encode.</summary>
-    static string IdOf(string uri)
-    {
-        int i = uri.LastIndexOf(':');
-        return i >= 0 && i + 1 < uri.Length ? uri[(i + 1)..] : uri;
-    }
 
     static string? NullIfEmpty(string? s) => string.IsNullOrEmpty(s) ? null : s;
 

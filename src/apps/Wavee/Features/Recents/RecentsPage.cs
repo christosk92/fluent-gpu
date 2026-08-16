@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -29,7 +29,7 @@ namespace Wavee;
 //   2. it HYDRATES the entities the user actually realized, and only those (OnVisibleRange);
 //   3. it re-renders exactly the realized slots when hydration lands, never rebuilding a 1,708-row list.
 //
-// HYDRATION GOES THROUGH THE CHOKEPOINT. `Services.Metadata.SyncAllAsync` is the app's ONE extended-metadata entry
+// HYDRATION GOES THROUGH THE FAÇADE. `Services.Hydrator` is the app's ONE metadata entry
 // point: SWR cache, in-flight dedup, partial-cache skip (a fresh uri never hits the network), ETag/304 conditional
 // reads, and — the part that matters most here — PROJECTION INTO THE STORE, which is how every other surface shares the
 // same facts and how they survive a restart via CachedStore. The rows therefore hold NO copied strings: a row renders by
@@ -62,9 +62,6 @@ sealed class RecentsPage : Component
     /// <para>The value now lives in <see cref="WaveeMotion.MastheadStaggerMs"/>, shared with the app's other drill-in
     /// masthead (HomeSectionPage) so the two surfaces cannot drift apart by a number.</para></summary>
     const float HeroStaggerMs = WaveeMotion.MastheadStaggerMs;
-    /// <summary>The desktop client's attribution tag for recents hydration traffic (`client-feature-id`). Threaded
-    /// through SyncAllAsync → IMetadataSource.FetchAsync → the transport, so it survives the chokepoint.</summary>
-    const string FeatureId = "mdata_esperanto";
     /// <summary>W2.9: the implicit brush-transition budget every dynamic-accent consumer on this page shares — a
     /// section crossing glides rather than snaps. <c>Motion.ReducedMotion</c> is a VALUE at the call site (the
     /// house idiom — see <see cref="WaveeMotion.MastheadStaggerMs"/>'s remarks), never a hook branch.</summary>
@@ -176,12 +173,12 @@ sealed class RecentsPage : Component
 
     // ── hydration bookkeeping. UI-THREAD ONLY: every mutation happens in Render, in Pump, or in a posted continuation. ─
     // NOTE this is NOT a metadata cache — that is the chokepoint's job. It only stops the SAME uri being handed to
-    // SyncAllAsync twice while one call is still in flight; freshness, dedup and skipping belong to MetadataService.
+    // the facade twice while one call is still in flight; freshness, dedup and skipping belong to the hydration ledger.
     readonly HashSet<string> _inflight = new(StringComparer.Ordinal);
     readonly List<string> _batch = new(RecentsView.BatchCap);
     /// <summary>W2.8: reused across pumps like <see cref="_batch"/> — the realized window's unresolved playlist owner
-    /// ids, handed to <see cref="Services.UserProfiles"/> each pump. A different subsystem from the metadata
-    /// chokepoint <see cref="_batch"/> feeds, so it gets its own scratch list rather than sharing one.</summary>
+    /// uris, asked through the façade's User ladder each pump. A different LADDER from the entity uris
+    /// <see cref="_batch"/> feeds, so it gets its own scratch list rather than sharing one.</summary>
     readonly List<string> _ownerBatch = new(16);
     int _rangeFirst, _rangeEnd;
     bool _pumpArmed;
@@ -198,7 +195,7 @@ sealed class RecentsPage : Component
     // Services + callbacks, refreshed at the top of every render so a bound slot never holds a mount-time instance.
     Services? _svc;
     IStore? _store;
-    Wavee.Backend.Metadata.MetadataService? _metadata;
+    IEntityHydrator? _hydrator;
     Action<Action> _post = static a => a();
     Action<string, string?> _go = static (_, _) => { };
     NavPreviewStore? _preview;
@@ -252,7 +249,7 @@ sealed class RecentsPage : Component
         _preview = preview;
         _svc = svc;
         _store = svc?.RealStore;
-        _metadata = svc?.Metadata;
+        _hydrator = svc?.Hydrator;
         _culture = CultureInfo.CurrentCulture;
         _now = DateTimeOffset.Now;
         if (svc is null) return new BoxEl { Grow = 1f };
@@ -297,14 +294,8 @@ sealed class RecentsPage : Component
             return (Action?)(() => sub.Dispose());
         }, DepKey.FromRef(store));
 
-        // W2.8: an owner profile resolving is exactly as much a "the row is now readable" event as a store write —
-        // same coalesced-dirty idiom, so a burst of Prefetch results costs one epoch bump, not one per id.
-        var userProfiles = svc.UserProfiles;
-        UseEffect(() =>
-        {
-            var sub = userProfiles.Changed.Subscribe(Observers.From<string>(_ => MarkStoreDirty()));
-            return (Action?)(() => sub.Dispose());
-        }, DepKey.FromRef(userProfiles));
+        // (W2.8's second subscription is gone: an owner profile resolving IS a store write now — UserHydration
+        //  upserts the Owner — so the one subscription above already marks the window dirty for it.)
 
         int epoch = _epoch.Value;          // subscribe: hydration re-renders the chrome (summary + wash) too
         int shapeEpoch = _shapeEpoch.Value;
@@ -1605,13 +1596,13 @@ sealed class RecentsPage : Component
 
     /// <summary>W2.8 (C1): never a raw base62 owner id. Resolves the SAME way <see cref="StoreLibrarySource.OverlayOwner"/>
     /// already does for the Library surface — <c>Owner.Id</c> first, the store's own <c>OwnerName</c> as the raw-id
-    /// fallback — then hands the store's own name, the raw id, and whatever <see cref="Services.UserProfiles"/> has
+    /// fallback — then hands the store's own name, the raw id, and whatever <c>IStore.GetOwner</c> has
     /// already resolved to <see cref="RecentsView.OwnerSubtitle"/>, which owns the actual decision (resolved name wins;
     /// the store name shows only when it is more than the id parroted back; otherwise null, never the bare id).</summary>
     string? OwnerSubtitleFor(Playlist p)
     {
         string? rawOwnerId = p.Owner?.Id is { Length: > 0 } id ? id : NullIfEmpty(p.OwnerName);
-        string? resolvedName = rawOwnerId is { Length: > 0 } raw ? _svc?.UserProfiles.Get(raw)?.Name : null;
+        string? resolvedName = rawOwnerId is { Length: > 0 } raw ? _store?.GetOwner(raw)?.Name : null;
         return RecentsView.OwnerSubtitle(NullIfEmpty(p.OwnerName), rawOwnerId, resolvedName);
     }
 
@@ -2233,11 +2224,11 @@ sealed class RecentsPage : Component
         _pumpArmed = false;
         if (_storeDirty) { _storeDirty = false; _epoch.Value++; }
         var s = _shape;
-        // W2.8: owner resolution is a DIFFERENT subsystem from the metadata chokepoint below (Services.UserProfiles,
-        // not Services.Metadata), so it runs on every pump regardless of whether there is anything left to hydrate
-        // through _metadata.
+        // W2.8: owner resolution is a different LADDER from the entity hydration below (User vs Track/Album/…), and it
+        // reads its own residency (IStore.GetOwner), so it runs on every pump regardless of whether there is anything
+        // left for the entity batch.
         CollectUnresolvedOwners(s.Sections.FlatToRow, s.Rows, _rangeFirst, _rangeEnd);
-        if (_metadata is not { } metadata || _cts is not { } cts) return;
+        if (_hydrator is not { } hydrator || _cts is not { } cts) return;
         _batch.Clear();
         RecentsView.CollectRange(s.Rows, s.Sections.FlatToRow, _rangeFirst, _rangeEnd, Pending, _batch);
         int hi = Math.Min(_rangeEnd, s.Sections.FlatToRow.Length);
@@ -2251,17 +2242,18 @@ sealed class RecentsPage : Component
         if (_batch.Count == 0) return;
         var uris = _batch.ToArray();
         for (int i = 0; i < uris.Length; i++) _inflight.Add(uris[i]);
-        _ = HydrateAsync(metadata, uris, cts.Token);
+        _ = HydrateAsync(hydrator, uris, cts.Token);
     }
 
-    /// <summary>W2.8: the realized window's playlist rows whose owner <see cref="Services.UserProfiles"/> has not
-    /// resolved yet. Mirrors <see cref="StoreLibrarySource.OverlayOwner"/>'s raw-id derivation (<c>Owner.Id</c> first,
-    /// the store's own <c>OwnerName</c> as the fallback) so the id handed to <c>Prefetch</c> is the exact one
-    /// <see cref="OwnerSubtitleFor"/> will later look up with. Reuses <see cref="_ownerBatch"/> across pumps —
+    /// <summary>W2.8: the realized window's playlist rows whose owner has no resident <c>Owner</c> row yet, asked
+    /// through the SAME façade every other hydration goes through (the User ladder, background mode — a byline never
+    /// blocks a pump). Mirrors <see cref="StoreLibrarySource.OverlayOwner"/>'s raw-id derivation (<c>Owner.Id</c>
+    /// first, the store's own <c>OwnerName</c> as the fallback) and canonicalizes it, so the uri asked for is the exact
+    /// one <see cref="OwnerSubtitleFor"/> will later look up with. Reuses <see cref="_ownerBatch"/> across pumps —
     /// bounded to the realized range, never the whole snapshot.</summary>
     void CollectUnresolvedOwners(int[] flatToRow, RecentsRow[] rows, int first, int end)
     {
-        if (_svc is not { } svc || _store is not { } store) return;
+        if (_store is not { } store || _hydrator is not { } hydrator || _cts is not { } cts) return;
         _ownerBatch.Clear();
         int hi = Math.Min(end, flatToRow.Length);
         for (int i = Math.Max(0, first); i < hi; i++)
@@ -2272,25 +2264,28 @@ sealed class RecentsPage : Component
                 || RecentsList.EntityKindOf(uri) != RecentsEntityKind.Playlist) continue;
             if (store.GetPlaylist(uri) is not { } p) continue;
             string? raw = p.Owner?.Id is { Length: > 0 } id ? id : NullIfEmpty(p.OwnerName);
-            if (raw is null || svc.UserProfiles.Get(raw) is not null) continue;
-            _ownerBatch.Add(raw);
+            if (raw is null || UserProfileIds.Normalize(raw) is not { } canonical) continue;
+            if (store.GetOwner(canonical) is not null) continue;
+            _ownerBatch.Add(canonical);
         }
-        if (_ownerBatch.Count > 0) svc.UserProfiles.Prefetch(_ownerBatch);
+        if (_ownerBatch.Count > 0)
+            _ = hydrator.EnsureManyAsync(_ownerBatch.ToArray(), HydrationLevel.Identity,
+                new HydrationOptions(HydrationMode.Background, Surface: TraitSurface.UserProfiles), cts.Token);
     }
 
     void HydrateChildren(RecentsRow row, int cap)
     {
-        if (_metadata is not { } metadata || _cts is not { } cts || cap <= 0) return;
+        if (_hydrator is not { } hydrator || _cts is not { } cts || cap <= 0) return;
         var pending = new List<string>(Math.Min(cap, RecentsView.BatchCap));
         RecentsView.CollectChildUris(row, Pending, pending, Math.Min(cap, RecentsView.BatchCap));
         if (pending.Count == 0) return;
         var uris = pending.ToArray();
         for (int i = 0; i < uris.Length; i++) _inflight.Add(uris[i]);
-        _ = HydrateAsync(metadata, uris, cts.Token);
+        _ = HydrateAsync(hydrator, uris, cts.Token);
     }
 
-    /// <summary>Which URIs this window still owes the chokepoint. Freshness/dedup/skip belong to MetadataService — this
-    /// only avoids handing the same uri to two overlapping SyncAllAsync calls, and skips the kinds that resolve
+    /// <summary>Which URIs this window still owes the chokepoint. Freshness/dedup/skip belong to the hydration ledger —
+    /// this only avoids handing the same uri to two overlapping facade calls, and skips the kinds that resolve
     /// LOCALLY: Liked Songs ships with the app, and an uri whose kind the catalogue cannot address would be dropped by
     /// KindFor anyway.</summary>
     bool Pending(string uri)
@@ -2301,21 +2296,19 @@ sealed class RecentsPage : Component
             or RecentsEntityKind.Playlist;
     }
 
-    async Task HydrateAsync(Wavee.Backend.Metadata.MetadataService metadata, string[] uris, CancellationToken ct)
+    async Task HydrateAsync(IEntityHydrator hydrator, string[] uris, CancellationToken ct)
     {
         try
         {
-            // closeRefs:false — the track-ref closure walks TRACK rows looking for blank album refs, and a recents
-            // window is entity pointers, not a tracklist. FeatureId keeps the desktop client's per-surface attribution
-            // on whatever this actually has to fetch (a cache/304 hit sends nothing at all).
-            //
-            // headerTraits:true — and ONLY here. The census ties the 178/179/220 bundle to `mdata_esperanto`
-            // specifically; the other bulk callers on this same chokepoint (the 500-uri discography prefetch, the
-            // 300-uri tracklist loaders) carry different client-feature-ids and must keep asking for one kind each.
-            // A viewport batch is at most RecentsView.BatchCap uris, so the extra kinds cost a bounded handful of
-            // bytes on a request the surface was making anyway.
-            await metadata.SyncAllAsync(uris, ct, closeRefs: false, clientFeatureId: FeatureId, headerTraits: true)
-                .ConfigureAwait(false);
+            // TWO asks, concurrently, because they are two different things (design §1.5):
+            //   • IDENTITY for the entity pointers themselves — a recents window is pointers, not a tracklist, so this
+            //     is the catalogue rung and nothing more (no ref-closure, no second transport).
+            //   • the Recents TRAIT surface — 178/220 for wire fidelity plus 179, the tint that lets a card paint in
+            //     its own colour before an image byte arrives. TraitSurfaces.ClientFeatureId maps this surface (and
+            //     only this surface) to `mdata_esperanto`, which is the attribution the census tied that bundle to.
+            await Task.WhenAll(
+                hydrator.EnsureManyAsync(uris, HydrationLevel.Identity, new HydrationOptions(Surface: TraitSurface.Recents), ct),
+                hydrator.EnsureTraitsAsync(uris, TraitSurface.Recents, ct)).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException) { /* best-effort: rows keep their skeleton */ }
         if (ct.IsCancellationRequested) return;

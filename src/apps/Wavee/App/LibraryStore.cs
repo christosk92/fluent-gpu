@@ -10,7 +10,7 @@ using Wavee.Core;
 namespace Wavee;
 
 /// <summary>
-/// The root-level library cache (docs/architecture.md §3 cache-first instant paint; §6 "a LibraryBridge" for delta
+/// The root-level library cache (docs/plans/wavee/architecture.md §3 cache-first instant paint; §6 "a LibraryBridge" for delta
 /// streams). A sibling of <see cref="LibraryBridge"/>: built in <see cref="Services"/>, <see cref="Activate"/>-d once at
 /// the app root (which never unmounts). It holds the cached collections as engine <see cref="Loadable{T}"/> signals so
 /// every page READS already-loaded data — ZERO refetch on navigation, instant paint — and it processes source deltas

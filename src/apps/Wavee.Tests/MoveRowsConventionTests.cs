@@ -16,7 +16,8 @@ namespace Wavee.Tests;
 /// The question: rows [1,2] moved to index 5 of a 10-row list — is 5 read BEFORE the rows are lifted out ("insert
 /// before the row currently at index 5") or AFTER ("land at final position 5")? Both implementations answer
 /// PRE-removal, and each discounts the lifted rows above the target internally, so a caller that subtracted
-/// removedBefore itself would move the block two rows too far up.
+/// removedBefore itself would move the block two rows too far up. The wire shape changed in P2 (one item-keyed MOV
+/// with an anchor instead of a run of positional MOVs); the seam convention this file pins did not.
 /// </summary>
 public class MoveRowsConventionTests
 {
@@ -26,7 +27,8 @@ public class MoveRowsConventionTests
     {
         var list = new List<PlaylistMember>(count);
         for (int i = 0; i < count; i++) list.Add(new PlaylistMember($"id{i}", $"spotify:track:{i}", null, 0));
-        PlaylistDiffApplier.Apply(list, PlaylistMutationSource.BuildMoveOps(selected.Select(Row).ToArray(), toIndex));
+        var op = PlaylistMutationSource.BuildKeyedMove(list, selected.Select(Row).ToArray(), toIndex);
+        if (op is not null) PlaylistDiffApplier.Apply(list, new[] { op });   // null = the drop changes nothing
         return list.Select(m => m.ItemId).ToList();
     }
 

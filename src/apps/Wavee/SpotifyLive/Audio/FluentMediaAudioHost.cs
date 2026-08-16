@@ -330,7 +330,6 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
     bool _playIntent;
     double _volume = 1.0;
     bool _muted;
-    string? _outputDeviceId;
     bool _crossfadeEnabled;
     int _crossfadeMs;
 
@@ -581,7 +580,6 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
     {
         // v1: the engine WASAPI leaf follows the default endpoint (auto device-loss rebuild). Per-endpoint selection is a
         // follow-up (the WasapiAudioDevice leaf must accept a device id). Store the intent so the picker round-trips.
-        _outputDeviceId = string.IsNullOrEmpty(deviceId) ? null : deviceId;
     }
 
     public void SetOutputMuted(bool muted)

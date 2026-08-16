@@ -66,17 +66,16 @@ sealed class SpotifyPlaylistPopcountService : IPlaylistPopcountService
         return await task.WaitAsync(ct).ConfigureAwait(false);
     }
 
-    /// <summary>The base-62 id of a <c>spotify:playlist:{id}</c> uri, or null for anything else (local/synthetic
-    /// playlists, folders, collection pseudo-uris) — none of which this endpoint serves.</summary>
+    /// <summary>The base-62 id of a Spotify PLAYLIST uri, or null for anything else (local/synthetic playlists,
+    /// folders, collection pseudo-uris) — none of which this endpoint serves. Provider AND kind both have to match:
+    /// a <c>wavee:playlist:*</c> is a playlist too, and popcount would 404 on it.</summary>
     internal static string? IdOf(string? playlistUri)
     {
-        const string Prefix = "spotify:playlist:";
-        if (playlistUri is null || !playlistUri.StartsWith(Prefix, StringComparison.Ordinal)) return null;
-        var id = playlistUri.AsSpan(Prefix.Length);
-        if (id.Length == 0) return null;
+        if (playlistUri is null ||
+            EntityUri.Parse(playlistUri) is not { IsSpotify: true, Kind: EntityKind.Playlist, Id: { Length: > 0 } id }) return null;
         foreach (var c in id)
             if (!char.IsAsciiLetterOrDigit(c)) return null;   // keeps a hostile uri out of the request path
-        return id.ToString();
+        return id;
     }
 
     async Task<long?> LoadAsync(string id)
@@ -129,7 +128,7 @@ sealed class SpotifyPlaylistPopcountService : IPlaylistPopcountService
 }
 
 /// <summary>Stable wrapper so the composition root can hand out one instance before login and swap the live provider
-/// in on go-live (mirrors SwitchableArtistPopularTracksService). Offline the inner is the null service.</summary>
+/// in on go-live (the standard switchable-seam shape). Offline the inner is the null service.</summary>
 public sealed class SwitchablePlaylistPopcountService : IPlaylistPopcountService
 {
     volatile IPlaylistPopcountService _inner;

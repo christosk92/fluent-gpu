@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Wavee.Backend;
+using Wavee.Backend.Hydration;
 using Wavee.Backend.Lyrics;
 using Wavee.Backend.Lyrics.Sources;
 using Wavee.Backend.Metadata;
@@ -318,8 +319,12 @@ public class BulkMetadataEtagTests
 {
     static SessionContext Ctx => new("me", "US", "premium", "en", Tier.Premium, false);
 
+    // The guardrail is unchanged; only the caller moved. MetadataService is gone (hydration-facade-plan.md 1.6) and
+    // XmCatalogFetch is THE catalogue arm, so this pins the same intent on it: a catalogue hydrate goes through the
+    // ETag cache, a re-hydrate of a stale row sends the stored etag, and a 304 keeps the resident payload. Request
+    // count stays 2 - one full body, one conditional revalidation.
     [Fact]
-    public async Task SyncAll_UsesConditionalExtensionCache_ForCatalogHydration()
+    public async Task CatalogFetch_UsesConditionalExtensionCache_ForCatalogHydration()
     {
         const string uri = "spotify:track:x";
         string? secondEtag = null;
@@ -335,11 +340,11 @@ public class BulkMetadataEtagTests
         var store = new InMemoryStore();
         var source = new ExtendedMetadataSource(http, () => "https://spclient.test", () => Ctx);
         var cache = new ExtensionEtagCache(source, () => Ctx);
-        var metadata = new MetadataService(source, store, () => Ctx, ttl: TimeSpan.Zero, extensionCache: cache);
+        var fetch = new XmCatalogFetch(cache, store);
 
-        await metadata.SyncAllAsync([uri], TestContext.Current.CancellationToken);
+        await fetch.FetchAsync([EntityUri.Parse(uri)], null, TraitSurface.None, TestContext.Current.CancellationToken);
         cache.MarkStale(uri, Xm.ExtensionKind.TrackV4);
-        await metadata.SyncAllAsync([uri], TestContext.Current.CancellationToken);
+        await fetch.FetchAsync([EntityUri.Parse(uri)], null, TraitSurface.None, TestContext.Current.CancellationToken);
 
         Assert.Equal("track-etag", secondEtag);
         Assert.Equal(2, http.Calls);

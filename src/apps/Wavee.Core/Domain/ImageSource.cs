@@ -91,8 +91,65 @@ public static class ImageSource
     static long Area(Image image) =>
         image.Width is int w && w > 0 && image.Height is int h && h > 0 ? (long)w * h : 0L;
 
+    // ── Spotify image ids ───────────────────────────────────────────────────────────────────────────────────────
+    // A Spotify image id is 40 hex chars whose FIRST 16 are a size/kind marker and whose last 24 identify the ARTWORK:
+    //   ab67616d00004851<hash>  64px album      ab67616d00001e02<hash>  300px      ab67616d0000b273<hash>  640px
+    //   ab6761610000f178<hash>  artist          ab67706c00006c11<hash>  playlist
+    // (verified across 349 kind-179 payloads; CoverColorPlane keys its colour cache on the same tail). So two urls of the
+    // same cover at different sizes are the SAME ART — a card payload's 300px hash and the detail payload's 640px hash —
+    // and anything that latches "the cover already on screen" must compare this identity, not the url: comparing urls
+    // is exactly what made the detail hero re-decode and fade the same picture back in when the full model landed.
+    const int SpotifyImageIdLength = 40;
+    const int SpotifyImageSizePrefixLength = 16;
+    const string SpotifyImageUriPrefix = "spotify:image:";
+    const string SpotifyImageCdnSegment = "/image/";
+
+    /// <summary>The full image id of a cover reference — the segment after <c>/image/</c> of a CDN url, or the token
+    /// after <c>spotify:image:</c> — as a SLICE of the input (no allocation; safe on a render path). Any other url shape
+    /// yields its last path segment; empty in ⇒ empty out.</summary>
+    public static ReadOnlySpan<char> ImageIdSpan(ReadOnlySpan<char> url)
+    {
+        url = url.Trim();
+        if (url.IsEmpty) return default;
+        int q = url.IndexOf('?');
+        if (q >= 0) url = url[..q];
+        if (url.StartsWith(SpotifyImageUriPrefix, StringComparison.OrdinalIgnoreCase))
+            return url[SpotifyImageUriPrefix.Length..].Trim();
+        int img = url.LastIndexOf(SpotifyImageCdnSegment, StringComparison.OrdinalIgnoreCase);
+        if (img >= 0) return url[(img + SpotifyImageCdnSegment.Length)..];
+        int slash = url.LastIndexOf('/');
+        return slash >= 0 && slash + 1 < url.Length ? url[(slash + 1)..] : url;
+    }
+
+    /// <summary>The size-independent ARTWORK identity of an image id: the 24-char tail of a 40-char Spotify id; ids of
+    /// any other shape key on themselves.</summary>
+    public static ReadOnlySpan<char> ArtIdentityOf(ReadOnlySpan<char> imageId)
+        => imageId.Length == SpotifyImageIdLength ? imageId[SpotifyImageSizePrefixLength..] : imageId;
+
+    /// <summary>The artwork identity of a cover url (see <see cref="ArtIdentityOf"/>): every pre-sized rendition of one
+    /// cover shares it. Empty for a null/blank url.</summary>
+    public static ReadOnlySpan<char> ArtIdentity(string? url) => ArtIdentityOf(ImageIdSpan(url));
+
+    /// <summary>True when both images show the SAME ARTWORK — <see cref="SameSource"/>, or two Spotify image ids that
+    /// differ only in their size marker (a card-size and a hero-size rendition of one cover). Null/empty pairs are not
+    /// the same art. This is the identity a "keep what is already on screen" latch must use.</summary>
+    public static bool SameArt(Image? a, Image? b)
+    {
+        if (a is null || b is null) return false;
+        if (SameSource(a, b)) return true;
+        var ua = Normalize(a.Url) ?? "";
+        var ub = Normalize(b.Url) ?? "";
+        if (ua.Length == 0 || ub.Length == 0) return false;
+        var ia = ImageIdSpan(ua);
+        var ib = ImageIdSpan(ub);
+        // Only a full 40-char id carries a size prefix; anything else was already settled by SameSource above.
+        if (ia.Length != SpotifyImageIdLength || ib.Length != SpotifyImageIdLength) return false;
+        return ArtIdentityOf(ia).Equals(ArtIdentityOf(ib), StringComparison.OrdinalIgnoreCase);
+    }
+
     /// <summary>True when both images resolve to the same cover identity (normalized URL, or matching mosaic tiles
-    /// when neither has a URL). Null/empty pairs are not "the same source".</summary>
+    /// when neither has a URL). Null/empty pairs are not "the same source". Size-agnostic identity is
+    /// <see cref="SameArt"/>.</summary>
     public static bool SameSource(Image? a, Image? b)
     {
         if (a is null || b is null) return false;
@@ -104,26 +161,24 @@ public static class ImageSource
         return MosaicEquals(a.MosaicTiles, b.MosaicTiles);
     }
 
-    /// <summary>Detail-page handoff: keep the already-visible cover when the loaded model brings a different usable CDN
-    /// URL (typical: card-sized hash → largest-size hash for the same art). Swapping would blank the hero (new
-    /// <c>ImageCache</c> key → Pending → 220ms crossfade over the placeholder). Prefer <paramref name="incoming"/> only
-    /// when nothing usable is on screen yet, or when both share the same source (then merge richer metadata onto the
-    /// visible identity). Intentional cover changes after load must not pass the mount-time preview as
-    /// <paramref name="visible"/> — latch the chosen cover per route instead.</summary>
+    /// <summary>The cover-handoff latch: <paramref name="visible"/> is the cover already on screen, <paramref name="incoming"/>
+    /// the one a fresher payload just brought.
+    /// <list type="bullet">
+    /// <item>SAME ART (any size — <see cref="SameArt"/>): keep <paramref name="visible"/> so the hero never re-decodes and
+    /// re-fades the picture it is already showing (a new url is a new <c>ImageCache</c> key ⇒ Pending ⇒ placeholder ⇒
+    /// crossfade); merge the richer metadata (blurhash, dimensions, the largest rendition) onto it.</item>
+    /// <item>DIFFERENT ART: <paramref name="incoming"/> wins — a playlist whose cover was just edited, or a daylist that
+    /// rolled over, must show its new cover.</item>
+    /// <item>Only one side usable: that side.</item>
+    /// </list>
+    /// Pure and order-safe, so it can run at every point a model is published (initial load AND live refresh).</summary>
     public static Image? PreferVisible(Image? incoming, Image? visible)
     {
         bool inOk = IsUsable(incoming);
         bool visOk = IsUsable(visible);
         if (!inOk) return visOk ? visible : incoming ?? visible;
         if (!visOk) return incoming;
-        if (SameSource(incoming, visible)) return EnrichVisible(visible!, incoming!);
-        // Preview and detail payloads commonly use different CDN hashes for the same cover size ladder. Keep the already
-        // visible lightweight URL (no blank/redecode during navigation), but retain the loaded payload's largest source
-        // so an immersive hero can explicitly upgrade without forcing every row/card to download it.
-        string? largest = incoming!.LargestUrl ?? incoming.Url;
-        return string.Equals(visible!.LargestUrl, largest, StringComparison.OrdinalIgnoreCase)
-            ? visible
-            : visible with { LargestUrl = largest };
+        return SameArt(incoming, visible) ? EnrichVisible(visible!, incoming!) : incoming;
     }
 
     /// <summary>Resolve the normal or largest known source for a rendering context.</summary>

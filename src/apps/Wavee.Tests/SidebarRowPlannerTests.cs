@@ -99,9 +99,11 @@ public sealed class SidebarRowPlannerTests
                 items: [Route("i1", "liked"), Route("i2", "albums")]),
             [SidebarRowKind.SectionHeader, SidebarRowKind.IconRow, SidebarRowKind.IconRow]);
 
+        // TreeEnd is the tree's closing gutter — the "top level, at the end" drop slot — and it is planned BEFORE the
+        // create row, which is the row that used to occupy that spot and duplicate a dragged playlist into a new one.
         Check(Sec("s", SidebarSectionKind.PlaylistTree),
             [SidebarRowKind.SectionHeader, SidebarRowKind.FolderHeader, SidebarRowKind.EntityRow,
-             SidebarRowKind.EntityRow, SidebarRowKind.CreateAction]);
+             SidebarRowKind.EntityRow, SidebarRowKind.TreeEnd, SidebarRowKind.CreateAction]);
 
         Check(Sec("s", SidebarSectionKind.EntityList, query: SidebarEntityQuery.Default),
             [SidebarRowKind.SectionHeader, SidebarRowKind.EntityRow, SidebarRowKind.EntityRow,
@@ -427,9 +429,13 @@ public sealed class SidebarRowPlannerTests
 
         Assert.Equal(new[] {SidebarRowKind.SectionHeader, SidebarRowKind.FolderHeader, SidebarRowKind.EntityRow,
             SidebarRowKind.FolderHeader, SidebarRowKind.EntityRow, SidebarRowKind.EntityRow,
-            SidebarRowKind.CreateAction}, KindsOf(plan));
+            SidebarRowKind.TreeEnd, SidebarRowKind.CreateAction}, KindsOf(plan));
 
-        Assert.Equal(new byte[] { 0, 0, 1, 1, 2, 0, 0 }, DepthsOf(plan));
+        Assert.Equal(new byte[] { 0, 0, 1, 1, 2, 0, 0, 0 }, DepthsOf(plan));
+        // The closing gutter sits between the last tree row and the create affordance, in that order — it owns the
+        // end-of-list drop slot and the create row must no longer accept a rootlist payload at all.
+        Assert.Equal(SidebarRowKind.TreeEnd, plan.Rows[^2].Kind);
+        Assert.Equal(-1, plan.Rows[^2].EntryIndex);
         Assert.Equal(SidebarRowKind.CreateAction, plan.Rows[^1].Kind);
         Assert.Equal("folder:f1", plan.Rows[1].Key);
     }
@@ -455,7 +461,7 @@ public sealed class SidebarRowPlannerTests
         var plan = SidebarRowPlanner.Build(Doc(Sec("t", SidebarSectionKind.PlaylistTree)), input);
 
         Assert.Equal(new[] {SidebarRowKind.SectionHeader, SidebarRowKind.FolderHeader, SidebarRowKind.EntityRow,
-            SidebarRowKind.CreateAction}, KindsOf(plan));
+            SidebarRowKind.TreeEnd, SidebarRowKind.CreateAction}, KindsOf(plan));
         Assert.Equal("folder:f1", plan.Rows[1].Key);
         Assert.Equal("pl:spotify:playlist:c", plan.Rows[2].Key);
     }
@@ -560,7 +566,7 @@ public sealed class SidebarRowPlannerTests
         Assert.Equal(new[]
         {
             SidebarRowKind.SectionHeader, SidebarRowKind.GridStrip,
-            SidebarRowKind.GridStrip, SidebarRowKind.CreateAction,
+            SidebarRowKind.GridStrip, SidebarRowKind.TreeEnd, SidebarRowKind.CreateAction,
         }, KindsOf(source));
         Assert.Equal(2, source.Rows[1].ItemCount);
         Assert.Equal(1, source.Rows[2].ItemCount);
@@ -600,8 +606,8 @@ public sealed class SidebarRowPlannerTests
 
         // The tree flattens while searching: matching leaves only, no folder chrome.
         var tree = SidebarRowPlanner.Build(Doc(Sec("t", SidebarSectionKind.PlaylistTree)), input);
-        Assert.Equal(new[] {SidebarRowKind.SectionHeader, SidebarRowKind.EntityRow, SidebarRowKind.CreateAction},
-            KindsOf(tree));
+        Assert.Equal(new[] {SidebarRowKind.SectionHeader, SidebarRowKind.EntityRow, SidebarRowKind.TreeEnd,
+            SidebarRowKind.CreateAction}, KindsOf(tree));
         Assert.Equal(0, tree.Rows[1].Depth);
 
         // Shortcuts and links are app destinations, not library rows — search never filters them.
@@ -895,7 +901,82 @@ public sealed class SidebarRowPlannerTests
             SidebarRowKind.IconRow, SidebarRowKind.IconRow,
             SidebarRowKind.Divider,
             SidebarRowKind.SectionHeader, SidebarRowKind.FolderHeader, SidebarRowKind.EntityRow,
-            SidebarRowKind.EntityRow, SidebarRowKind.CreateAction,
+            SidebarRowKind.EntityRow, SidebarRowKind.TreeEnd, SidebarRowKind.CreateAction,
         }, KindsOf(plan));
+    }
+
+    // ── the FOLDER DISCLOSURE contract (the expand/collapse flicker) ──────────────────────────────────────────────────
+
+    static readonly SidebarLibraryEntry[] DisclosureTree =
+    [
+        Folder("f1", "Chill", depth: 0, order: 0),
+        Playlist("a", "Inner A", order: 1, depth: 1),
+        Playlist("b", "Inner B", order: 2, depth: 1),
+        Playlist("c", "Top level", order: 3, depth: 0),
+    ];
+
+    static SidebarRowPlan TreePlan(params string[] expanded)
+        => SidebarRowPlanner.Build(Doc(Sec("t", SidebarSectionKind.PlaylistTree)),
+            new SidebarProjectionInput
+            {
+                PlaylistTree = DisclosureTree,
+                ExpandedFolders = new HashSet<string>(expanded, StringComparer.Ordinal),
+            });
+
+    [Fact]
+    public void FolderDescendantRange_ResolvesOnTheFirstPlanAfterTheToggle()
+    {
+        // The whole disclosure choreography hangs off this: the pane must be able to arm the opening band from the
+        // FIRST plan built after the toggle, or the expansion needs a second publish (and a second frame) to start.
+        var collapsed = TreePlan();
+        Assert.False(SidebarRowGeometry.TryFolderDescendantRange(
+            collapsed.Rows, collapsed.Entries, "f1", out _, out _));
+
+        var expanded = TreePlan("f1");
+        Assert.True(SidebarRowGeometry.TryFolderDescendantRange(
+            expanded.Rows, expanded.Entries, "f1", out int first, out int count));
+        // header(0) folder(1) [a(2) b(3)] c(4) treeEnd(5) create(6)
+        Assert.Equal(1, SidebarRowGeometry.FolderHeaderIndexOf(expanded.Rows, expanded.Entries, "f1"));
+        Assert.Equal(2, first);
+        Assert.Equal(2, count);
+        Assert.Equal(SidebarRowKind.EntityRow, expanded.Rows[first].Kind);
+        Assert.Equal(SidebarRowKind.EntityRow, expanded.Rows[first + count - 1].Kind);
+    }
+
+    [Fact]
+    public void FolderToggle_ReplansTheTailWithoutReKeyingIt()
+    {
+        var collapsed = TreePlan();
+        var expanded = TreePlan("f1");
+        Assert.True(SidebarRowGeometry.TryFolderDescendantRange(
+            expanded.Rows, expanded.Entries, "f1", out int first, out int count));
+
+        // The rows below the folder are RE-PLANNED, never re-keyed: every tail key survives the toggle, merely shifted
+        // down by the inserted band. That is what lets the reconciler move them instead of remounting them.
+        for (int i = first; i < collapsed.Rows.Count; i++)
+            Assert.Equal(collapsed.Rows[i].Key, expanded.Rows[i + count].Key);
+        Assert.Equal(collapsed.Rows.Count + count, expanded.Rows.Count);
+
+        // The folder HEADER's record is byte-identical across the toggle — its chevron state is not in the plan at all.
+        // That is precisely why a disclosure edge must bump the header's row epoch explicitly (SidebarPane
+        // .BumpDisclosureEpochs) instead of leaning on the plan diff, which cannot see it.
+        Assert.Equal(collapsed.Rows[1], expanded.Rows[1]);
+        var changed = new bool[expanded.Rows.Count];
+        SidebarRowDiff.Diff(collapsed.Rows, collapsed.Entries, expanded.Rows, expanded.Entries, changed);
+        Assert.False(changed[0]);          // the section header is untouched
+        Assert.False(changed[1]);          // …and so is the folder header
+        // Nothing ABOVE the insertion point changed; the insertion point and everything after it did (an index-keyed
+        // diff cannot express "the tail merely shifted" — the epoch bump the pane does instead is scoped to the band).
+        for (int i = first; i < expanded.Rows.Count; i++) Assert.True(changed[i]);
+    }
+
+    [Fact]
+    public void FolderToggle_IsSymmetric()
+    {
+        var collapsed = TreePlan();
+        var reCollapsed = TreePlan();
+        Assert.Equal(KindsOf(collapsed), KindsOf(reCollapsed));
+        for (int i = 0; i < collapsed.Rows.Count; i++)
+            Assert.Equal(collapsed.Rows[i], reCollapsed.Rows[i]);
     }
 }

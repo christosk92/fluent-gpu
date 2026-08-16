@@ -22,16 +22,14 @@ namespace Wavee;
 sealed class FormatSplitButton : Component
 {
     readonly string _uri;
-    readonly string _label;
     readonly Action<string> _onPlay;
 
     Ref<NodeHandle> _anchor = null!;
     Ref<OverlayHandle?> _handle = null!;
 
-    public FormatSplitButton(string uri, string label, Action<string> onPlay)
+    public FormatSplitButton(string uri, Action<string> onPlay)
     {
         _uri = uri;
-        _label = label;
         _onPlay = onPlay;
     }
 

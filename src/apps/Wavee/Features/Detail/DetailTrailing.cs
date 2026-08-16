@@ -16,6 +16,11 @@ namespace Wavee;
 // Album / single trailing sections, appended below the eager track rows in the outer scroller.
 // The enrichment loads behind one route-keyed async boundary so the trailing area shows one coherent skeleton and then
 // fades in as a whole. Individual enrichment calls still fail soft inside the aggregate and simply omit their section.
+//
+// RESERVE FROM MOUNT (one swap per album). This block used to arrive in three jolts: a ZERO-height box while the album
+// model was still Pending, then a several-hundred-DIP skeleton INSERTED the moment the tracks landed (page extent +
+// scrollbar jump), then a snap-resize to the real sections. There is exactly ONE region now, shimmering from the first
+// frame and easing (SmoothResize) into whatever it resolves to — real sections, or the collapsed empty box.
 sealed class AlbumTrailing : Component
 {
     readonly Loadable<DetailModel> _full;   // read reactively → loaders re-fire when the full album lands / the route swaps
@@ -46,6 +51,12 @@ sealed class AlbumTrailing : Component
         var m = _full.Value.Value;                 // subscribe → re-render preview→full (the loaders re-key on `ready`)
         var tracks = m.Tracks;
         bool ready = tracks.Count > 0;             // the album fetch completed (hero + tracks are in) → seed the loaders
+        // The album fetch's OWN state, subscribed: the TERMINATOR for the reserve window below. Without it an album that
+        // resolves with zero tracks (`ready` can then never flip) would shimmer here forever.
+        bool albumSettled = _full.State.Value != (byte)LoadState.Pending;
+        // Hold the region in its Pending (shimmer) branch while the album itself is still in flight — the enrichment
+        // resource cannot even be seeded yet, and a zero-height box here is what made the skeleton INSERT itself later.
+        bool reserving = !ready && !albumSettled;
         string albumUri = m.ContextUri ?? "";
         string leadArtistUri = m.Artists.Count > 0 ? m.Artists[0].Uri : "";
         string leadTrackUri = ready ? tracks[0].Uri : "";
@@ -59,8 +70,6 @@ sealed class AlbumTrailing : Component
             ct => LoadTrailingAsync(svc, ready, shortRelease, leadArtistUri, leadTrackUri, albumUri, seedTrackUri, ct),
             AlbumTrailingData.Empty, (string)key).Loadable;
 
-        if (!ready) return new BoxEl { Direction = 1, Grow = 1f, AlignSelf = FlexAlign.Stretch };
-
         return new BoxEl
         {
             Direction = 1,
@@ -68,16 +77,30 @@ sealed class AlbumTrailing : Component
             AlignSelf = FlexAlign.Stretch,
             Children =
             [
-                Skel.Region(
-                    trailing,
-                    TrailingSkeleton,
-                    data => TrailingSections(m, data, shortRelease, _h, acts),
-                    reveal: SkelReveal.FadeOnly,
-                    onFailed: () => new BoxEl(),
-                    isEmpty: data => !HasTrailingSections(m, data, shortRelease),
-                    onEmpty: () => new BoxEl(),
-                    group: key,
-                    smoothResize: false),
+                // Constructed directly rather than through Skel.Region because the Pending predicate has to fold in
+                // `reserving` — the region must shimmer from mount, ACROSS the `:p`→`:r` re-key (which reseeds the
+                // resource to Pending), and swap exactly once. `reserving` short-circuits the State read on purpose: in
+                // that window nothing the resource does may change the branch, and the window can only be left by a
+                // parent re-render (both `ready` and `albumSettled` come from `_full`), which force-reruns this effect.
+                new SkelRegionEl(
+                    Pending: () => reserving || trailing.State.Value == (byte)LoadState.Pending,
+                    Failed: () => !reserving && trailing.State.Value == (byte)LoadState.Failed,
+                    Content: () =>
+                    {
+                        var data = trailing.Value.Value;
+                        return HasTrailingSections(m, data, shortRelease)
+                            ? TrailingSections(m, data, shortRelease, _h, acts)
+                            : new BoxEl();   // nothing to show → collapse (the region EASES down to zero)
+                    },
+                    ShimmerSource: TrailingSkeleton,
+                    OnFailed: () => new BoxEl(),
+                    Reveal: SkelReveal.FadeOnly,
+                    Style: SkeletonStyle.Default,
+                    Group: key,
+                    // Ease skeleton height → real height (or → the collapsed empty box) instead of snapping the page
+                    // extent and the scrollbar. Read at MOUNT (MountSkeletonRegion), which is why the region is now
+                    // mounted from the first frame rather than replacing a zero-height box later.
+                    SmoothResize: true),
             ],
         };
     }
@@ -138,6 +161,12 @@ sealed class AlbumTrailing : Component
             : Task.FromResult<Artist?>(null);
         var fans = Safe(ct2 => FansAsync(svc, ready, shortRelease, leadArtistUri, seedTrackUri, ct2),
             (IReadOnlyList<Artist>)Array.Empty<Artist>(), ct);
+        // The album FULL rung (getAlbum: label / ©℗ / OtherVersions / MoreBy / detailed artists) is what powers
+        // "About this release" — and this pane is the only thing that needs it, so it is asked for HERE, in the
+        // background, off the interactive open path. The enrichment service no longer back-calls LiveSessionHost for it.
+        if (albumUri.Length > 0)
+            _ = svc.Hydrator.EnsureAsync(albumUri, HydrationLevel.Full,
+                new HydrationOptions(HydrationMode.Background, Surface: TraitSurface.AlbumOpen), ct);
         var featured = albumUri.Length > 0
             ? Safe(ct2 => svc.AlbumEnrichment.GetRecommendedPlaylistsAsync(albumUri, ct2),
                 (IReadOnlyList<PlaylistSummary>)Array.Empty<PlaylistSummary>(), ct)
@@ -177,6 +206,12 @@ sealed class AlbumTrailing : Component
 
         var tiles = AlbumFactTiles(m);
         var notes = ReleaseNotes(m);
+        // The facts ARRIVE IN WAVES — Songs/Length with the tracks, Released with the full model, Label/©/℗/other
+        // versions with the publishing hydration a moment later — so every piece here is keyed and carries its own
+        // entrance: a new tile fades up (staggered left→right), its siblings FLIP into place, a re-labelled value
+        // cross-swaps (see CompactStatTile), a note fades in. Reduced motion is a VALUE (the stagger reads it; the
+        // fades ride the engine's KeepFade policy), never a branch that changes what is authored.
+        float stagger = Motion.ReducedMotion ? 0f : WaveeMotion.MastheadStaggerMs;
         if (tiles.Length > 0 || notes.Length > 0)
         {
             var body = new List<Element>(3)
@@ -185,14 +220,18 @@ sealed class AlbumTrailing : Component
             };
             // The bento: a wrap row of compact fact tiles. Wrap-grow (FlexLayout.ArrangeWrap) fills each line edge-to-edge,
             // so the tiles flow 2×2 in a narrow rail and a single row when wide — no ragged gaps.
-            if (tiles.Length > 0) body.Add(new BoxEl { Direction = 0, Gap = Spacing.S, Wrap = true, Children = tiles });
-            if (notes.Length > 0) body.Add(new BoxEl { Direction = 1, Gap = 3f, Children = notes });
-            children.Add(new BoxEl { Direction = 1, Gap = Spacing.M, Children = body.ToArray() });
+            if (tiles.Length > 0) body.Add(new BoxEl { Key = "release-facts", Direction = 0, Gap = Spacing.S, Wrap = true, Stagger = stagger, Children = tiles });
+            if (notes.Length > 0) body.Add(new BoxEl { Key = "release-notes", Direction = 1, Gap = 3f, Stagger = stagger, Children = notes });
+            children.Add(new BoxEl { Key = "release-about", Direction = 1, Gap = Spacing.M, Layout = DetailRail.Shove, Children = body.ToArray() });
         }
 
         if (children.Count == 0) return new BoxEl();
+        // The panel owns its ENTRANCE in every arm that mounts it (rail, compact header, the vertical arm's trailing
+        // body): one fade-up as it appears, then it FLIPs when siblings shove it. Callers must not wrap it in a second
+        // entrance (DetailRail uses Row(...), not LateRow(...), for exactly this reason).
         return new BoxEl
         {
+            Key = "release-panel", Enter = DetailRail.FadeUp, Layout = DetailRail.Shove,
             Direction = 1, Gap = Spacing.M,
             Padding = outerPadding ? new Edges4(Spacing.L, Spacing.XL, Spacing.L, Spacing.L) : Edges4.All(0f),
             Children = children.ToArray(),
@@ -204,7 +243,7 @@ sealed class AlbumTrailing : Component
     // TODO(loc): the neighbouring literals are hardcoded English throughout this file.
     static Element[] AlbumFactTiles(DetailModel m)
     {
-        var stats = new List<(string Value, string Label)>(4);
+        var stats = new List<(string Value, string Label, string Key)>(4);
         if (m.Tracks.Count > 0)
         {
             // On a PARTLY released album the plain count and the summed length both lie: the count includes tracks that
@@ -220,8 +259,8 @@ sealed class AlbumTrailing : Component
             }
             stats.Add((outNow == m.Tracks.Count
                 ? m.Tracks.Count.ToString()
-                : outNow + " of " + m.Tracks.Count, "Songs"));
-            if (ms > 0) stats.Add((DetailFormat.TotalTime(ms), "Length"));
+                : outNow + " of " + m.Tracks.Count, "Songs", "songs"));
+            if (ms > 0) stats.Add((DetailFormat.TotalTime(ms), "Length", "length"));
         }
         string? released = m.ReleaseDate is { Length: > 0 } rd ? rd : m.Year;
         // The tense comes from the FACT, not from the countdown: a partly-released album has a release date in the past
@@ -229,10 +268,10 @@ sealed class AlbumTrailing : Component
         // an album that is already partly out as one that has not happened.
         bool future = m.ReleaseInstant is { } ri && ri > DateTimeOffset.UtcNow;
         if (released is { Length: > 0 })
-            stats.Add((released, Loc.Get(future ? Strings.Detail.FactReleases : Strings.Detail.FactReleased)));
-        if (m.Label is { Length: > 0 } lb) stats.Add((lb, "Label"));
+            stats.Add((released, Loc.Get(future ? Strings.Detail.FactReleases : Strings.Detail.FactReleased), "released"));
+        if (m.Label is { Length: > 0 } lb) stats.Add((lb, "Label", "label"));
         var tiles = new Element[stats.Count];
-        for (int i = 0; i < stats.Count; i++) tiles[i] = CompactStatTile(stats[i].Value, stats[i].Label);
+        for (int i = 0; i < stats.Count; i++) tiles[i] = CompactStatTile(stats[i].Value, stats[i].Label, stats[i].Key);
         return tiles;
     }
 
@@ -242,25 +281,49 @@ sealed class AlbumTrailing : Component
     static Element[] ReleaseNotes(DetailModel m)
     {
         var notes = new List<Element>(2);
-        if (m.CourtesyLine is { Length: > 0 } courtesy) notes.Add(NoteText(courtesy));
-        if (m.Copyright is { Length: > 0 } cp) notes.Add(NoteText(cp));
+        if (m.CourtesyLine is { Length: > 0 } courtesy) notes.Add(NoteText("note:courtesy", courtesy));
+        if (m.Copyright is { Length: > 0 } cp) notes.Add(NoteText("note:copyright", cp));
         return notes.ToArray();
     }
 
-    static Element NoteText(string value) => new TextEl(value)
-        { Size = 11f, Color = Tok.TextTertiary, Wrap = TextWrap.Wrap, MaxLines = 4, Trim = TextTrim.CharacterEllipsis };
+    // Keyed + boxed (Enter/Layout bake on BoxEl only): a note that lands with the publishing hydration fades in under the
+    // tiles instead of popping, and the notes column's Stagger offsets © from ℗.
+    static Element NoteText(string key, string value) => new BoxEl
+    {
+        Key = key, Direction = 1, Enter = DetailRail.FadeUp, Layout = DetailRail.Shove,
+        Children =
+        [
+            new TextEl(value) { Size = 11f, Color = Tok.TextTertiary, Wrap = TextWrap.Wrap, MaxLines = 4, Trim = TextTrim.CharacterEllipsis },
+        ],
+    };
 
     // A compact fact tile (denser than the artist Profile-facts tile: 18px value, tighter padding). Content-width base +
     // Grow=1 so the wrap-grow row fills; a long Label keeps its own width (base = content) and never clips short tiles.
-    static Element CompactStatTile(string value, string label) => new BoxEl
+    // Arrival motion: the tile is KEYED by its fact (Songs/Length/Released/Label), fades up when it first appears (the
+    // parent row staggers siblings), and takes a Position+Size FLIP so a tile landing later reflows the wrap-grow row
+    // smoothly instead of snapping the others narrower. The VALUE line is the house text-swap (PlaylistInlineEdit's
+    // status pill): the value text sits in a value-keyed box inside a ZStack, so "2025" → "May 2, 2025" rises and blurs
+    // out while the new value enters from below — never an in-place relabel.
+    static readonly LayoutTransition TileReflow = new(
+        TransitionChannels.Position | TransitionChannels.Size,
+        TransitionDynamics.Tween(Expressive.Fast, Easing.SmoothOut),
+        SizeMode.Reveal);
+
+    static Element CompactStatTile(string value, string label, string key) => new BoxEl
     {
+        Key = "fact:" + key, Enter = DetailRail.FadeUp, Layout = TileReflow,
         Direction = 1, Gap = 1f, Grow = 1f, Basis = 0f, MinWidth = 0f,
         Padding = new Edges4(Spacing.M, Spacing.S, Spacing.M, Spacing.S),
         Corners = CornerRadius4.All(Radii.Control), Fill = Tok.FillCardSecondary,
         BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
         Children =
         [
-            new TextEl(value) { Size = 18f, Weight = 800, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+            ZStack(new BoxEl
+            {
+                Key = "v:" + value,
+                Animate = MotionRecipes.TextSwap,
+                Children = [new TextEl(value) { Size = 18f, Weight = 800, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis }],
+            }),
             new TextEl(label) { Size = 11f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
         ],
     };
@@ -276,6 +339,8 @@ sealed class AlbumTrailing : Component
         }
         return new BoxEl
         {
+            // Lands with the publishing hydration, after the tiles: keyed + fades up like the rest of the panel.
+            Key = "release-versions", Enter = DetailRail.FadeUp, Layout = DetailRail.Shove,
             Direction = 0, Padding = new Edges4(0f, 2f, 0f, 2f),
             Children = [new BoxEl { Grow = 1f, Children = [DropDownButton.Create("Other versions", items, Icons.MusicNote)] }],
         };
@@ -293,33 +358,6 @@ sealed class AlbumTrailing : Component
             _ => Loc.Get(Strings.Detail.Badge.Album),
         });
         return string.Join(" · ", parts);
-    }
-
-    // Multi-line facts (Copyright joins several legal notices with '\n'; Courtesy can carry raw '\r\n' from Spotify) render
-    // LINE-BY-LINE as separate single-line runs: a raw newline reaching the shaper paints as a [] tofu glyph, so we split
-    // on it here rather than feed it through. Single-line values are unchanged (just trimmed).
-    static readonly char[] NewlineChars = { '\r', '\n' };
-    static Element AboutRow(string label, string value)
-    {
-        var lines = value.Split(NewlineChars, StringSplitOptions.RemoveEmptyEntries);
-        Element valueCol = lines.Length <= 1
-            ? new TextEl(lines.Length == 1 ? lines[0].Trim() : value)
-                { Size = 13f, Color = Tok.TextPrimary, Grow = 1f, Basis = 0f, Wrap = TextWrap.Wrap, MaxLines = 4, Trim = TextTrim.CharacterEllipsis }
-            : new BoxEl
-            {
-                Direction = 1, Grow = 1f, Basis = 0f, Gap = 2f,
-                Children = lines.Select(l => (Element)new TextEl(l.Trim())
-                    { Size = 13f, Color = Tok.TextPrimary, Wrap = TextWrap.Wrap, MaxLines = 2, Trim = TextTrim.CharacterEllipsis }).ToArray(),
-            };
-        return new BoxEl
-        {
-            Direction = 0, Gap = Spacing.L, AlignItems = FlexAlign.Start,
-            Children =
-            [
-                new TextEl(label) { Size = 13f, Color = Tok.TextSecondary, Width = 84f, Shrink = 0f },
-                valueCol,
-            ],
-        };
     }
 
     // "Fans also like": one loadable regardless of release type. A short release reads the LEAD TRACK's related artists

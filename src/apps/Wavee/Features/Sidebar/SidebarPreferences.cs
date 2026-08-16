@@ -385,6 +385,18 @@ public sealed class SidebarPreferences
         bool changed = expanded ? _expandedFolders.Add(folderId) : _expandedFolders.Remove(folderId);
         if (!changed) return;
         _folderVersion.Value = _folderVersion.Peek() + 1;
+        // COALESCED, not synchronous. A folder toggle used to snapshot + serialize the whole layout document inside the
+        // click — on the very frame the expansion has to plan, publish, realize and arm on. The renderer drains this on
+        // the next frame (SidebarPane.SchedulePrefsCommit); the store already coalesces the file write itself.
+        _commitPending = true;
+    }
+
+    bool _commitPending;
+
+    /// <summary>Issue a write a coalescing mutator deferred. Idempotent, and a no-op when nothing is pending.</summary>
+    public void FlushPendingCommit()
+    {
+        if (!_commitPending) return;
         Commit();
     }
 
@@ -746,6 +758,7 @@ public sealed class SidebarPreferences
     void Commit()
     {
         if (!_loaded || Fault != SidebarLoadFault.None) return;
+        _commitPending = false;   // any commit absorbs a coalesced one
         _pinNamesDirty = false;
         _store.Commit(BuildSnapshot());
     }
@@ -755,7 +768,7 @@ public sealed class SidebarPreferences
     /// never commits on its own.</summary>
     public void Flush()
     {
-        if (!_pinNamesDirty) return;
+        if (!_pinNamesDirty && !_commitPending) return;
         Commit();
     }
 

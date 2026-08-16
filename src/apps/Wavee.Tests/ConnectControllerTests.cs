@@ -109,7 +109,7 @@ public class ConnectControllerTests
         ITransferStateDecoder? transferDecoder = null)
     {
         host = new RecordingAudioHost();
-        proj = new NowPlayingProjection("us", clock ?? (() => 0));
+        proj = new NowPlayingProjection("us", NotOwnedEntityHydrator.Instance, new InMemoryStore(), clock ?? (() => 0));
         outbound = new RecordingOutbound();
         return new PlaybackController(host, new StubTrackResolver(), proj,
             ctx ?? Ctx("spotify:track:a", "spotify:track:b"), "us", outbound, extra,
@@ -536,7 +536,7 @@ public class ConnectControllerTests
     {
         var audio = new RecordingAudioHost();
         var video = new RecordingAudioHost();
-        var projection = new NowPlayingProjection("us", () => 0);
+        var projection = new NowPlayingProjection("us", NotOwnedEntityHydrator.Instance, new InMemoryStore(), () => 0);
         int videoLoads = 0;
         using var controller = new PlaybackController(
             audio, new StubTrackResolver(), projection, Ctx("spotify:track:a"), "us", videoHost: video);
@@ -572,7 +572,7 @@ public class ConnectControllerTests
     {
         var audio = new RecordingAudioHost();
         var video = new RecordingAudioHost();
-        var projection = new NowPlayingProjection("us", () => 0);
+        var projection = new NowPlayingProjection("us", NotOwnedEntityHydrator.Instance, new InMemoryStore(), () => 0);
         int videoLoads = 0;
         using var controller = new PlaybackController(
             audio, new StubTrackResolver(), projection, Ctx("spotify:track:a"), "us", videoHost: video);
@@ -859,7 +859,7 @@ public class ConnectControllerTests
     [Fact]
     public void Cluster_ActiveDeviceVolume_DrivesSlider_AndRemoteChangeReacts()
     {
-        var proj = new NowPlayingProjection("us", () => 1_000_000);   // clock far ahead → outside any local-command window
+        var proj = new NowPlayingProjection("us", NotOwnedEntityHydrator.Instance, new InMemoryStore(), () => 1_000_000);   // clock far ahead → outside any local-command window
         proj.OnCluster(Cluster("other-device") with { ActiveVolume0_65535 = 32768 });
         Assert.Equal(0.5, proj.Volume, 2);   // the active device's volume drives the slider
         proj.OnCluster(Cluster("other-device") with { ActiveVolume0_65535 = 13107 });   // a remote controller turned it down

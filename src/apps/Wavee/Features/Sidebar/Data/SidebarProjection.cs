@@ -151,6 +151,7 @@ public static class SidebarProjection
                         SourceOrder: order++, Depth: depth, Circular: false, Flavor: flavor)
                     {
                         FolderId = folderId, FolderName = folderName,
+                        ParentFolderId = folderId, ParentFolderName = folderName,
                         IsOwner = p.IsOwner, CanEdit = p.CanEdit, FirstArtistName = "",
                     });
                     break;
@@ -167,7 +168,13 @@ public static class SidebarProjection
                             SortStamp: 0,                                  // structural: never a member of a sorted band
                             LastVisitedTicksUtc: 0,                        // a folder never navigates, so it is never visited
                             SourceOrder: order++, Depth: depth, Circular: false, Flavor: SidebarPlaylistFlavor.None)
-                        { FolderId = f.Id, FolderName = f.Name ?? "", FirstArtistName = "" });
+                        {
+                            FolderId = f.Id, FolderName = f.Name ?? "",
+                            // A folder's OWN id is FolderId; the containing folder is the walk's current level, which is
+                            // the only thing "Move out of {folder}" can be built from.
+                            ParentFolderId = folderId, ParentFolderName = folderName,
+                            FirstArtistName = "",
+                        });
                     }
 
                     bool descend = includeFolderChildren || !wantFolders || (isFolderExpanded?.Invoke(f.Id) ?? false);

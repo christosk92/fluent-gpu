@@ -45,6 +45,76 @@ public sealed class ExtentTable
         Total = (double)n * estimate;
     }
 
+    /// <summary>Grow/shrink to <paramref name="n"/> items KEEPING every surviving index's corrected extent; only the
+    /// indices past the old count seed at <paramref name="estimate"/>. This is the count-change path
+    /// <see cref="Reset"/> must not be used for: a mixed-extent list (16/24/28/32/40/44/48/56/72/88-DIP rows) that
+    /// re-seeds every row to one estimate on a single insert discards every measured extent at once, so the content
+    /// extent jumps by hundreds of DIP, the scroll anchor re-pins against the wrong offset and the rows above AND
+    /// below the edit visibly shuffle while they re-measure. Rebuilds the Fenwick partial sums in O(n); allocates only
+    /// to GROW the backing arrays (the same policy <see cref="Reset"/> already uses).</summary>
+    public void Resize(int n, float estimate)
+    {
+        if (n < 0) n = 0;
+        if (n == _n) { _estimate = estimate; return; }
+        int keep = System.Math.Min(_n, n);
+        EnsureCapacity(n);
+        for (int i = keep; i < n; i++) _extent[i] = estimate;
+        _n = n; _estimate = estimate;
+        Rebuild();
+    }
+
+    /// <summary>Structural edit at a KNOWN range — the disclosure/insertion path, which knows exactly which contiguous
+    /// band appeared or disappeared. Removes <paramref name="removed"/> items at <paramref name="at"/> and inserts
+    /// <paramref name="inserted"/> fresh ones seeded at <paramref name="estimate"/>; every surviving item — including
+    /// the whole TAIL below the edit, which <see cref="Resize"/> would leave index-shifted — carries its corrected
+    /// extent across. Rebuilds the partial sums in O(n), allocation-free unless the table has to grow.</summary>
+    public void Splice(int at, int removed, int inserted, float estimate)
+    {
+        if (at < 0) at = 0;
+        if (at > _n) at = _n;
+        if (removed < 0) removed = 0;
+        if (removed > _n - at) removed = _n - at;
+        if (inserted < 0) inserted = 0;
+        if (removed == 0 && inserted == 0) return;
+        int n = _n - removed + inserted;
+        int tail = _n - at - removed;
+        EnsureCapacity(n);
+        if (tail > 0) System.Array.Copy(_extent, at + removed, _extent, at + inserted, tail);
+        for (int i = at; i < at + inserted; i++) _extent[i] = estimate;
+        _n = n;
+        Rebuild();
+    }
+
+    /// <summary>Grow the backing arrays to hold <paramref name="n"/> items, PRESERVING the extents already stored
+    /// (<c>_bit</c> is rebuilt wholesale, so it is never copied).</summary>
+    private void EnsureCapacity(int n)
+    {
+        if (_bit.Length < n + 1) _bit = new double[n + 1];
+        if (_extent.Length < n)
+        {
+            var grown = new float[n];
+            System.Array.Copy(_extent, grown, _extent.Length);
+            _extent = grown;
+        }
+    }
+
+    /// <summary>Rebuild the Fenwick partial sums (and <see cref="Total"/>) from the current per-item extents — O(n),
+    /// allocation-free.</summary>
+    private void Rebuild()
+    {
+        int n = _n;
+        System.Array.Clear(_bit, 0, n + 1);
+        double total = 0;
+        for (int i = 1; i <= n; i++)
+        {
+            _bit[i] += _extent[i - 1];
+            total += _extent[i - 1];
+            int j = i + (i & -i);
+            if (j <= n) _bit[j] += _bit[i];
+        }
+        Total = total;
+    }
+
     /// <summary>Prefix sum of extents for items [0, index) — the content-space offset of item <paramref name="index"/>.</summary>
     public float OffsetOf(int index)
     {

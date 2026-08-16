@@ -453,6 +453,19 @@ Gates: `gate.ctl.bind.{toggle,check,tristate,radio,naming}`.
 - **Name/role:** each radio's label is its `Name`; the group's `Name` is its heading/`LabeledBy`. `PositionInSet`/
   `SizeOfSet` set from the radio's index/count in the group (input-a11y §11.7) so Narrator says "2 of 4".
 - **Invalid-props:** duplicate `TValue` in a group is a DEBUG assert (no silent dedup).
+- **Arbitrary item content:** the group also accepts an item FACTORY (`itemContent(i)`) in place of a label string —
+  WinUI's arbitrary-content RadioButtons item. Two knobs exist so a strip of *preview cards* can be that content, both
+  **deliberate WinUI divergences** and both default-off:
+  - `Style.ShowGlyph = false` does not build the ring/dot column at all, so the CONTENT is the whole control. WinUI's
+    items always carry the glyph; a card whose own border and accent tint already state the selection would state it
+    twice. It is a style flag rather than a `PartRing` modifier because the ring's `Children` are re-asserted after the
+    modifier runs (§3.6 parts contract) — a zeroed ring would keep the dot mounted inside it.
+  - `PartGrid`/`PartColumn` expose the column-major items grid, so a caller can wrap it
+    (`[PartGrid] = g => g with { Wrap = true }`). WinUI's `ColumnMajorUniformToLargestGridLayout` has no wrap state; a
+    strip of fixed-width cards must drop to fewer columns on a narrow window rather than overflow.
+  The group contract is unchanged in both cases — one tab-stop in, arrow roving, selection follows focus — which is the
+  point: a hand-rolled card picker has none of it. Gates: `cp3.i` (no ring node mounted, still a radio) and `cp3.j`
+  (wrap reflows to two rows, roving still advances selection) in `ControlsSuite`.
 
 ### 5.4 Switch / ToggleSwitch
 

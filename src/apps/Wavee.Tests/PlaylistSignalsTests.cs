@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -18,6 +18,9 @@ namespace Wavee.Tests;
 
 public sealed class PlaylistSignalsTests
 {
+
+    // The facade every StoreLibrarySource read goes through. Offline = store-only, never networks (design §1.3).
+    static SwitchableEntityHydrator Offline(IStore store) => new(new Wavee.Backend.Hydration.OfflineEntityHydrator(store));
     const string Uri = "spotify:playlist:mix";
     const string ChoiceA = "session_control_display$mix$more_discovery";
     const string ChoiceB = "session_control_display$mix$soft_pop:nl_genre";
@@ -142,9 +145,9 @@ public sealed class PlaylistSignalsTests
                 new[] { new PlaylistTuningOption(ChoiceA, "More discovery tracks", PlaylistTuningOptionKind.Choice) },
                 null)));
         store.SetMembership(Uri, new[] { new PlaylistMember("a", "spotify:track:a", null, 0) }, Rev(2));
-        using var source = new StoreLibrarySource(store);
+        using var source = new StoreLibrarySource(store, Offline(store), OfflineOnlineCatalog.Instance);
 
-        var playlist = await source.GetPlaylistAsync(Uri, TestContext.Current.CancellationToken);
+        var playlist = await source.GetPlaylistAsync(Uri, ct: TestContext.Current.CancellationToken);
 
         Assert.NotNull(playlist);
         Assert.Null(playlist!.Tuning);
@@ -188,14 +191,14 @@ public sealed class PlaylistSignalsTests
             new IMutationStrategy[]
             {
                 new SetReplayStrategy(echo),
-                new OpRebaseStrategy(store, () => "https://x"),
-                new RootlistFollowStrategy(store),
+                new OpRebaseStrategy(store, () => "https://x", new PlaylistResyncQueue()),
+                new RootlistFollowStrategy(store, new RootlistLane()),
             });
         using var cts = new CancellationTokenSource();
         var transport = new StubTransport();
         var client = new PlaylistSignalsClient(http, () => "https://x", () => "en");
         await using var sync = new LibrarySync(
-            store, fetcher, collections, mutations, transport,
+            store, fetcher, collections, mutations, new PlaylistResyncQueue(), transport,
             () => new SessionContext("bob", "US", "premium", "en", Tier.Premium, false),
             () => "bob", default, cts.Token, echo, client);
 

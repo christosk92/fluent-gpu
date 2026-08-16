@@ -1,4 +1,7 @@
+﻿using System;
 using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
 using Wavee.Backend.Residency;
 using Xunit;
 
@@ -37,5 +40,33 @@ public class MemoryGovernorTests
 
         gov.Trim(MemoryPressure.Normal);                               // routine self-trim — priority 1 only
         Assert.Equal(new[] { "art" }, order);
+    }
+
+    // The registry is written by GO-LIVE and LOGOUT (the live audio body-disk arena registers on one and unregisters on
+    // the other, from whatever thread the bootstrap / LiveWiring.Uninstall is on) and READ by the app's periodic trim
+    // timer. A plain List<> mutated under an in-flight foreach throws "collection was modified" and takes the poll down
+    // with it. Copy-on-write makes that impossible; this is the gate.
+    [Fact]
+    public async Task RegisterUnregisterAndTrim_AreSafeConcurrently()
+    {
+        var gov = new MemoryGovernor();
+        gov.Register(1, "pinned", static () => 1);     // one permanent arena so Trim always has work to walk
+        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        Exception? failure = null;
+
+        void Run(Action body) { try { while (!stop.IsCancellationRequested) body(); } catch (Exception ex) { Interlocked.CompareExchange(ref failure, ex, null); } }
+
+        var churn = Task.Run(() => Run(() =>
+        {
+            for (int i = 0; i < 32; i++) gov.Register(i % 4 + 1, "session-" + i, static () => 2);
+            for (int i = 0; i < 32; i++) gov.Unregister("session-" + i);
+        }));
+        var trims = Task.Run(() => Run(() => gov.Trim(MemoryPressure.Critical)));
+
+        await Task.WhenAll(churn, trims);
+
+        Assert.Null(failure);
+        // …and the registry is intact afterwards: only the permanent arena, sheddable exactly once.
+        Assert.Equal(1, gov.Trim(MemoryPressure.Critical));
     }
 }

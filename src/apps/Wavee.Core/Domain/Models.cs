@@ -1,4 +1,4 @@
-namespace Wavee.Core;
+﻿namespace Wavee.Core;
 
 // Core domain records. A deliberately small, clean projection of the WaveeMusic domain
 // (which today is UI DTOs over proto-backed *CacheEntry storage + a polymorphic ITrackItem).
@@ -70,7 +70,7 @@ public sealed record AlbumRef(string Id, string Uri, string Name);
 public sealed record Artist(
     string Id, string Uri, string Name, Image? Image,
     IReadOnlyList<Album>? TopAlbums = null,
-    // Artist-detail facets (docs/architecture.md §2 "Album & artist"): monthly listeners, follower count, a short bio,
+    // Artist-detail facets (docs/plans/wavee/architecture.md §2 "Album & artist"): monthly listeners, follower count, a short bio,
     // and the verified flag. All defaulted/additive — synthesized by the fake source, mapped where a real source has them.
     long MonthlyListeners = 0, long Followers = 0, string? Bio = null, bool Verified = false,
     // The "magazine" facets (the WinUI Spotify-style artist page). All additive/nullable: null/0/empty ⇒ the section
@@ -91,7 +91,22 @@ public sealed record Artist(
     // treated as stale and re-fetched on next open (which heals records persisted by an earlier build, whose deserialized
     // FetchedAt is default). Set ONLY by a full-overview write; the store merge keeps the newer value so a thin
     // extended-metadata / NPV / album-derived write never resets the clock.
-    DateTimeOffset FetchedAt = default);
+    DateTimeOffset FetchedAt = default,
+    // The OVERVIEW's own stamp (design §2.3: "Age: Rich/Full fresh iff now - OverviewFetchedAt ≤ ArtistRichTtl").
+    // FetchedAt is a max-of across every writer, so it answers "when did anything touch this artist?" — which is NOT the
+    // question the Rich age gate asks, and NOT the question `MergeExtras`' authoritative-absence discriminator asks.
+    // Both need "when did queryArtistOverview last speak?", and only the overview write stamps this field. Optional and
+    // last ⇒ documents persisted before it existed deserialize with default (= never) and simply re-fetch once.
+    DateTimeOffset OverviewFetchedAt = default,
+    // The extended CHART's own stamp — when artist-top-tracks-extensions last answered for this artist, whatever it
+    // answered. It exists because PRESENCE cannot express "the chart step ran": HydrationLevels.Of(Artist) calls an
+    // artist Full only when TopTracks.Count > ArtistPopularTracks.OverviewSeedCap, so a niche artist whose real chart
+    // is 6 tracks long can never reach Full — and ArtistHydration's "already extended AND fresh" gate, keyed on the
+    // rung, therefore re-fired the spclient GET on every ask past ExhaustedPlayableTtl (10 min), forever. A chart that
+    // legitimately has ≤ the seed cap of rows counts as REACHED once it has been fetched, and this is the fact that
+    // says so. Only EnsureChartAsync stamps it (never a V4/overview/merge write), so it answers exactly "when did the
+    // chart transport last speak?". Optional and last ⇒ older persisted documents deserialize with default = never.
+    DateTimeOffset ChartFetchedAt = default);
 
 /// <summary>Per-facet discography helpers on <see cref="Artist"/> (kept next to the model; the facet split itself is
 /// <see cref="DiscographyKind"/> in Library.cs).</summary>
@@ -303,7 +318,7 @@ public sealed record Track(
     // still drifted out of step with the association a detect pass had just stored — a row saying "no video" while its
     // own expand drawer listed one.
     long PlayCount = 0,       // stream count (album pages show a Plays column; the top-played track gets a star)
-    // Source-agnostic seam (see docs/architecture.md §5): which provider this track came from, how it plays, and
+    // Source-agnostic seam (see docs/plans/wavee/architecture.md §5): which provider this track came from, how it plays, and
     // whether it is playable in this context. Default = a streamed, playable, source-unspecified track.
     TrackOrigin Origin = TrackOrigin.Streamed,
     // NULLABLE on purpose: null = "nobody has told us", which is NOT the same as "playable". Only getAlbum/getTrack
@@ -347,6 +362,12 @@ public sealed record TrackCanvas(string? FileId, string? Type, string? EntityUri
 /// <summary>The track half of the NPV payload. The raw response is TTL-cached by PathfinderResource; this is not persisted.</summary>
 public sealed record TrackNpvInfo(string TrackUri, IReadOnlyList<TrackCredit> Credits,
     IReadOnlyList<string> CreditSources, TrackCanvas? Canvas, IReadOnlyList<MerchItem> Merch);
+
+/// <summary>The uncapped credits drawer for one track. Same rows as <see cref="TrackNpvInfo.Credits"/>, but complete:
+/// the NPV path caps contributors at 10, this one carries the whole liner note in the server's own grouping and order.
+/// <paramref name="Sources"/> is the attribution line (the record label) — the same shape as
+/// <see cref="TrackNpvInfo.CreditSources"/>, so both feed the one renderer. Not persisted.</summary>
+public sealed record TrackCredits(IReadOnlyList<TrackCredit> Credits, IReadOnlyList<string> Sources);
 
 /// <summary>Everything the Now Playing rail needs for one track: a merged artist plus track-scoped extras.</summary>
 public sealed record NowPlayingInfo(Artist? About, TrackNpvInfo? Track);
@@ -413,7 +434,7 @@ public sealed record PlaylistTuning(
 public sealed record Playlist(
     string Id, string Uri, string Name, string? Description, string OwnerName,
     Image? Cover, int TrackCount, IReadOnlyList<Track>? Tracks = null,
-    // Source-agnostic seam (see docs/architecture.md §5): the real owner, the user's capabilities (drives the
+    // Source-agnostic seam (see docs/plans/wavee/architecture.md §5): the real owner, the user's capabilities (drives the
     // read-only vs editable UI), the recommender format (daily-mix/editorial/…), and which provider this came from.
     Owner? Owner = null, PlaylistCapabilities Capabilities = default, string? Format = null, string? Source = null,
     // Playlist-context user overlay, projected at read time from owner + added_by values. The store wire rows keep raw ids.
@@ -423,7 +444,10 @@ public sealed record Playlist(
     // Server-driven automatic-playlist controls. Exposed only while this revision matches membership.
     PlaylistTuning? Tuning = null,
     // Daylist rollover window (format_attributes `expires`/`created`, unix ms). 0 = unknown / not a daylist.
-    long DaylistExpiresAtMs = 0, long DaylistCreatedAtMs = 0);
+    long DaylistExpiresAtMs = 0, long DaylistCreatedAtMs = 0,
+    // TOMBSTONE (P1): the owner deleted this playlist remotely (playlist4 `ListAttributes.deleted_by_owner`). Latching:
+    // the store merge is `incoming || current`, so once a delete is observed no later header write can un-delete it.
+    bool DeletedByOwner = false);
 
 public enum QueueBucket { NowPlaying, UserQueue, NextUp, History }
 
@@ -468,14 +492,30 @@ public sealed record QueueEntry(
     string Uid = "",
     System.Collections.Generic.IReadOnlyDictionary<string, string>? Metadata = null);
 
-// ── Podcasts (docs/architecture.md §2 "Podcasts / shows / episodes") ──────────────────────────────────────────────────
+// ── Podcasts (docs/plans/wavee/architecture.md §2 "Podcasts / shows / episodes") ──────────────────────────────────────────────────
 /// <summary>A podcast episode. <paramref name="ProgressMs"/> is the resume position (0 = unplayed); a real source also
-/// carries paywall/preview, transcripts and chapters — modelled as additive fields when they arrive.</summary>
+/// carries paywall/preview, transcripts and chapters — modelled as additive fields when they arrive.
+/// <para><paramref name="ShowUri"/> is the owning show's uri when the catalogue told us (EpisodeV4 embeds a show ref:
+/// gid + name). It is what makes an episode row's subtitle a LINK — <see cref="EpisodeAsTrack"/> puts it in the album
+/// slot, where every list surface already resolves "go to the container". Null = the writer did not know; persisted
+/// blobs written before the field existed deserialize to null, which is exactly the old uri-less behaviour.</para></summary>
 public sealed record Episode(
     string Id, string Uri, string Title, string ShowName, Image? Image,
-    long DurationMs, DateTimeOffset PublishedAt, string? Description = null, long ProgressMs = 0);
+    long DurationMs, DateTimeOffset PublishedAt, string? Description = null, long ProgressMs = 0,
+    string? ShowUri = null);
 
 /// <summary>A podcast show. Episodes hydrate on the detail read (like an album's tracks).</summary>
+/// <param name="Episodes">The RESIDENT episodes, joined at read from the show's ordered membership — the first
+/// <c>HydrationLevels.ShowOpenPage</c> after an Open, more after each load-more page (design §2.3).</param>
+/// <param name="TotalEpisodes">How many episodes the show's membership baseline actually has, whether or not they are
+/// resident yet. 0 = unknown (no baseline / a fake source). It is what tells the episode list there IS a next page —
+/// a READ-MODEL field stamped by <c>StoreLibrarySource.GetShowAsync</c>, never written into the stored entity.</param>
+/// <param name="PagedThrough">THE paging cursor: how far into the membership list the source has already ASKED, as an
+/// offset (so <c>PagedThrough == TotalEpisodes</c> means "nothing left to ask for"). Also a READ-MODEL field stamped by
+/// <c>StoreLibrarySource</c>, never stored. It replaces comparing the RESIDENT count to the membership count as the
+/// load-more gate: members that cannot hydrate at all (a region-locked or withdrawn episode) leave the resident count
+/// permanently short of the total, which pinned the "Load more" pill on screen forever and made every tap re-ask the
+/// same unanswerable page. A cursor advances whether or not the page produced rows.</param>
 public sealed record Show(
     string Id, string Uri, string Name, string Publisher, Image? Cover, string? Description = null,
-    IReadOnlyList<Episode>? Episodes = null);
+    IReadOnlyList<Episode>? Episodes = null, int TotalEpisodes = 0, int PagedThrough = 0);

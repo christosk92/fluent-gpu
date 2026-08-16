@@ -705,6 +705,8 @@ public sealed class ConnectedAnimation
         {
             if (_flights[i].Key != key) continue;
             var f = _flights[i];
+            if (Diag.CompiledIn && Diag.Enabled)
+                Diag.Event("morph", $"retire key={key} reason=renav img={f.ImageId} age={f.Age}");
             _images.Unpin(new ImageHandle(f.ImageId));
             FreeFlight(in f);
             _flights.RemoveAt(i);
@@ -734,6 +736,10 @@ public sealed class ConnectedAnimation
                 {
                     if (RectDiffers(in cur, in f.DestRect, BigJumpPx))
                     {
+                        if (Diag.CompiledIn && Diag.Enabled)
+                            Diag.Event("morph", $"retire key={f.Key} reason=big-jump img={f.ImageId} age={f.Age} " +
+                                $"was={f.DestRect.X:0}x{f.DestRect.Y:0}+{f.DestRect.W:0}x{f.DestRect.H:0} " +
+                                $"now={cur.X:0}x{cur.Y:0}+{cur.W:0}x{cur.H:0}");
                         SetTaggedVisible(f.Key, true); SetTaggedOpacity(f.Key, 1f, fade: false);
                         _images.Unpin(new ImageHandle(f.ImageId));
                         FreeFlight(in f);
@@ -780,10 +786,21 @@ public sealed class ConnectedAnimation
             }
             // LANDED — but HOLD the overlay (which carries the already-decoded source art) over the dest until the dest's
             // OWN image has decoded + revealed, so the hand-off is seamless (no music-note placeholder flash on reveal).
-            if (!overlayDead && !wedged && !DestReady(f.Dest)) { _flights[i] = f; continue; }
+            if (!overlayDead && !wedged && !DestReady(f.Dest))
+            {
+                // Diagnostic only: the landed overlay is HOLDING because the real dest's own image is not revealed yet.
+                // Sampled (first frame + every 30th) so a long hold cannot flood the trace.
+                if (Diag.CompiledIn && Diag.Enabled && (f.Age <= 1 || f.Age % 30 == 0))
+                    Diag.Event("morph", $"hold key={f.Key} reason=dest-not-ready age={f.Age} destImg={DestImageId(f.Dest)}");
+                _flights[i] = f; continue;
+            }
             // Restore visibility + SNAP the real dest to opaque (no fade): it is the SAME cover at the SAME rect as the
             // landed overlay, so an instant reveal is seamless — whereas a fade sets opacity=1 then (since _anim.Tick
             // already ran this frame, before Settle) restarts it from 0 next frame, the 1-2 frame full→dim→up flicker.
+            if (Diag.CompiledIn && Diag.Enabled)
+                Diag.Event("morph", $"retire key={f.Key} " +
+                    $"reason={(overlayDead ? "overlay-dead" : wedged ? "wedged" : "landed")} " +
+                    $"img={f.ImageId} age={f.Age} destImg={DestImageId(f.Dest)}");
             SetTaggedVisible(f.Key, true); SetTaggedOpacity(f.Key, 1f, fade: false);
             _images.Unpin(new ImageHandle(f.ImageId));
             FreeFlight(in f);
@@ -833,6 +850,10 @@ public sealed class ConnectedAnimation
     // The dest's own cover image has decoded AND its placeholder→image cross-fade has fully revealed — so revealing it
     // under the retiring overlay shows the finished art, never the music-note placeholder. A bare placeholder dest
     // (skeleton box, no image) is "ready" immediately.
+    /// <summary>Diagnostics only (the <c>morph</c> trace): the dest node's image handle id, or 0 / -1 when it has none /
+    /// is dead — so a hold or a retire line can be joined to the matching <c>img</c> events by id.</summary>
+    private int DestImageId(NodeHandle dest) => _scene.IsLive(dest) ? _scene.Paint(dest).ImageId : -1;
+
     private bool DestReady(NodeHandle dest)
     {
         if (!_scene.IsLive(dest)) return true;
@@ -960,6 +981,7 @@ public sealed class ConnectedAnimation
     // progress are unaffected (none gate on Visible), so the fly target rect + the seamless hand-off are unchanged.
     private void SetTaggedVisible(string key, bool visible)
     {
+        int flipped = 0;
         foreach (var kv in _tagged)
         {
             if (kv.Value.Key != key || !_scene.IsLive(kv.Key)) continue;
@@ -968,6 +990,12 @@ public sealed class ConnectedAnimation
             if (visible) _scene.Flags(kv.Key) |= NodeFlags.Visible;
             else _scene.Flags(kv.Key) &= ~NodeFlags.Visible;
             _scene.Mark(kv.Key, NodeFlags.PaintDirty);
+            flipped++;
         }
+        // Diagnostic only, EDGE-triggered (this is re-applied to every in-flight key every frame, so logging
+        // unconditionally would bury the trace). H5: a cover that "flashes out then back in" while a fly is around is a
+        // culled tagged dest — visible=0 then visible=1 on the same key is exactly that, with no image work involved.
+        if (Diag.CompiledIn && Diag.Enabled && flipped > 0)
+            Diag.Event("morph", $"tagged-visible key={key} visible={(visible ? 1 : 0)} nodes={flipped} flights={_flights.Count}");
     }
 }

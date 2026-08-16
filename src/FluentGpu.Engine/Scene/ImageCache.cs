@@ -194,6 +194,38 @@ public sealed class ImageCache
     private const int BlurW = 32, BlurH = 32;
     private readonly byte[] _blurScratch = new byte[BlurW * BlurH * 4];   // reused (UI thread only) for LQIP decode
 
+    // ── image-pipeline trace (DIAGNOSTIC ONLY) ───────────────────────────────────────────────────────────────────
+    // Turn on with FG_DIAG=1 (Diag.Enabled); narrow with FG_IMG_TRACE=<substring of the source url>. Answers the
+    // questions you cannot answer from pixels: did the SOURCE change (same art, different CDN size hash), did the
+    // requested DECODE size change, was the entry resident when a node re-pinned it, or did it restart/evict.
+    // Every helper here is called ONLY from inside a `Diag.CompiledIn && Diag.Enabled` guard, so a Release build (the
+    // whole Diag.Event call site is [Conditional]-erased) AND a Debug diag-off run both allocate nothing — the
+    // VerticalSlice zero-alloc gates run Debug with FG_DIAG unset.
+    private static readonly string? DiagTraceFilter = ReadTraceFilter();
+
+    static string? ReadTraceFilter()
+    {
+        // Const-folded away in Release; the read happens once, at ImageCache type init (host setup, never a frame phase).
+        string? v = Diag.CompiledIn ? System.Environment.GetEnvironmentVariable("FG_IMG_TRACE") : null;
+        return string.IsNullOrWhiteSpace(v) ? null : v;
+    }
+
+    /// <summary>FG_IMG_TRACE gate: unset ⇒ trace everything; set ⇒ only sources CONTAINING it (case-insensitive).</summary>
+    public static bool DiagTraced(string? source)
+        => DiagTraceFilter is null
+        || (source is not null && source.Contains(DiagTraceFilter, System.StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>The short, greppable identity of an image source: the last 24 chars of its final path segment (for a
+    /// 40-hex Spotify image id that is exactly the size-independent art identity — the first 16 are the size/kind
+    /// marker). "-" for an empty source, the whole tail when it is shorter than 24.</summary>
+    public static string DiagSourceTail(string? source)
+    {
+        if (string.IsNullOrEmpty(source)) return "-";
+        int slash = source.LastIndexOf('/');
+        string seg = slash >= 0 && slash + 1 < source.Length ? source[(slash + 1)..] : source;
+        return seg.Length > 24 ? seg[^24..] : seg;
+    }
+
     /// <summary>Raised (UI thread, during <see cref="Pump"/>) when an image reaches a terminal state — Ready or Failed.
     /// Apps subscribe for a broken-art fallback, a retry/offline toast, or telemetry. See also <see cref="FailureOf"/>.</summary>
     public event ImageStatusHandler? ImageStatusChanged;
@@ -271,7 +303,12 @@ public sealed class ImageCache
             hit.LastUsed = _clock++;
             // Evicted entries keep their key as a tombstone so a retained ImageEl node can re-pin the same handle and
             // recover without needing its original URL. Capacity rejection is likewise retryable after all owners release.
-            if (ShouldRestart(hit, priority))
+            bool restart = ShouldRestart(hit, priority);
+            if (Diag.CompiledIn && Diag.Enabled && DiagTraced(source))
+                Diag.Event("img", $"request {(restart ? "restart" : "hit")} id={id} src={DiagSourceTail(source)} " +
+                    $"decode={targetW}x{targetH} prio={priority} state={hit.State} fail={hit.Failure} " +
+                    $"refs={hit.Refs} tex={(float.IsNaN(hit.TextureMs) ? 0 : 1)}");
+            if (restart)
                 RestartDecode(id, hit, priority);
             // A visible node arriving over a prefetch entry promotes the in-flight decode to the front of the queue.
             if (priority < ImagePriority.Prefetch) _decoder.Prioritize(id, priority);
@@ -285,6 +322,9 @@ public sealed class ImageCache
         _pendingCount++;   // a miss always creates a Pending entry; OnDecodeComplete decrements when it resolves
         _totalRequested++;
         Diag.Set("media", "requested", _totalRequested);
+        if (Diag.CompiledIn && Diag.Enabled && DiagTraced(source))
+            Diag.Event("img", $"request miss id={id} src={DiagSourceTail(source)} decode={targetW}x{targetH} " +
+                $"prio={priority} blurhash={(string.IsNullOrEmpty(blurHash) ? 0 : 1)}");
         // NB: the decode keeps the requested size; the GPU backend buckets INTERNALLY (pool/atlas) and samples the
         // image's sub-rect of its bucket texture via the inset UV — so residency accounting stays on the real pixels.
 
@@ -295,7 +335,7 @@ public sealed class ImageCache
         {
             if (UploadPixels(id, _blurScratch.AsSpan(0, BlurW * BlurH * 4), BlurW, BlurH) == ImageUploadResult.Accepted)
             {
-                BeginReveal(entry);
+                BeginReveal(entry, id, "blurhash");
                 Diag.Count("media", "blurhash");
             }
         }
@@ -397,7 +437,12 @@ public sealed class ImageCache
     /// <summary>Cancel an in-flight decode (row recycled / unmounted) — frees worker + network effort under fast scroll.</summary>
     public void Cancel(ImageHandle h)
     {
-        if (_byId.TryGetValue(h.Id, out var e) && !e.Derived) _decoder.Cancel(h.Id);
+        if (_byId.TryGetValue(h.Id, out var e) && !e.Derived)
+        {
+            if (Diag.CompiledIn && Diag.Enabled && DiagTraced(e.Key.Source))
+                Diag.Event("img", $"cancel id={h.Id} src={DiagSourceTail(e.Key.Source)} state={e.State} refs={e.Refs}");
+            _decoder.Cancel(h.Id);
+        }
     }
 
     /// <summary>Round a display size up to a decode bucket (64/128/256/512) — the texture-pool / atlas granularity.</summary>
@@ -449,8 +494,16 @@ public sealed class ImageCache
         return Easings.Ease((Easing)fadeEasing, t);
     }
 
-    void BeginReveal(Entry e)
+    // `id` + `cause` are carried for the trace only (a reveal is exactly the "flashed back in" the user sees, so which
+    // texture started it — the blurhash LQIP, the full decode, a baked derivative — is the whole question).
+    void BeginReveal(Entry e, int id, string cause)
     {
+        if (Diag.CompiledIn && Diag.Enabled && DiagTraced(e.Key.Source))
+            Diag.Event("img", $"reveal id={id} src={DiagSourceTail(e.Key.Source)} cause={cause} " +
+                $"enabled={(e.Transition.Enabled ? 1 : 0)} revealMs={e.Transition.DurationMs:0.#} " +
+                $"sinceRequestMs={(float.IsInfinity(e.RequestedMs) ? -1f : _clockMs - e.RequestedMs):0.#} " +
+                $"suppress={(SuppressReveals ? 1 : 0)} " +
+                $"size={e.W}x{e.H} derived={(e.Derived ? 1 : 0)}");
         if (!e.Transition.Enabled)
         {
             e.TextureMs = float.NaN;
@@ -514,6 +567,11 @@ public sealed class ImageCache
         if (!_byId.TryGetValue(h.Id, out var e)) return;
         e.Refs++;
         e.LastUsed = _clock++;
+        // H3: "the node remounted and its cache entry was NOT resident" is exactly `state=None` (evicted tombstone) or
+        // `state=Failed` here — a re-pin that has to re-decode is a blank cover for at least one frame.
+        if (Diag.CompiledIn && Diag.Enabled && DiagTraced(e.Key.Source))
+            Diag.Event("img", $"pin id={h.Id} src={DiagSourceTail(e.Key.Source)} refs={e.Refs} state={e.State} " +
+                $"fail={e.Failure} tex={(float.IsNaN(e.TextureMs) ? 0 : 1)} derived={(e.Derived ? 1 : 0)}");
         if (e.Derived)
         {
             if (e.State is ImageState.None or ImageState.Failed) RestartDerived(h.Id, e);
@@ -527,6 +585,8 @@ public sealed class ImageCache
     {
         if (!_byId.TryGetValue(h.Id, out var e) || e.Refs <= 0) return;
         if (--e.Refs == 0 && e.Derived) e.BakeUpgradeAttempts = 0;
+        if (Diag.CompiledIn && Diag.Enabled && DiagTraced(e.Key.Source))
+            Diag.Event("img", $"unpin id={h.Id} src={DiagSourceTail(e.Key.Source)} refs={e.Refs} state={e.State}");
     }
 
     /// <summary>Whether a cache entry should (re)start decoding at <paramref name="priority"/>.</summary>
@@ -659,10 +719,23 @@ public sealed class ImageCache
 
     private void RestartDecode(int id, Entry e, ImagePriority priority)
     {
-        if (e.State == ImageState.Pending) { _decoder.Prioritize(id, priority); return; }
+        bool trace = Diag.CompiledIn && Diag.Enabled && DiagTraced(e.Key.Source);
+        if (e.State == ImageState.Pending)
+        {
+            if (trace)
+                Diag.Event("img", $"restart id={id} src={DiagSourceTail(e.Key.Source)} verdict=prioritize prio={priority}");
+            _decoder.Prioritize(id, priority); return;
+        }
         if (e.State == ImageState.Failed && (IsTransientFailure(e.Failure) || e.Failure == ImageFailureKind.Decode)
             && _clockMs - e.LastRestartMs < RestartBackoffMs)
+        {
+            if (trace)
+                Diag.Event("img", $"restart id={id} src={DiagSourceTail(e.Key.Source)} verdict=backoff fail={e.Failure}");
             return;
+        }
+        if (trace)
+            Diag.Event("img", $"restart id={id} src={DiagSourceTail(e.Key.Source)} verdict=begin " +
+                $"decode={e.Key.W}x{e.Key.H} prio={priority} from={e.State} fail={e.Failure} refs={e.Refs}");
         e.LastRestartMs = _clockMs;
         e.RequestedMs = _clockMs;
         e.State = ImageState.Pending;
@@ -758,7 +831,7 @@ public sealed class ImageCache
                 e.BakeQuality = result.Quality;
                 UsedBytes += e.Bytes;
                 DerivedUsedBytes += e.Bytes;
-                BeginReveal(e);
+                BeginReveal(e, result.Id, "derived");
                 _totalBakeReady++;
             }
             else { e.Bytes = 0; _totalBakeFailed++; }
@@ -846,7 +919,7 @@ public sealed class ImageCache
         e.State = ok ? ImageState.Ready : ImageState.Failed;
         e.Failure = ok ? ImageFailureKind.None : failure;
         e.Attempts = attempts;
-        if (ok && float.IsNaN(e.TextureMs)) BeginReveal(e);
+        if (ok && float.IsNaN(e.TextureMs)) BeginReveal(e, id, "decode");
         e.W = w; e.H = h;
         e.Bytes = ok ? (long)w * h * 4 : 0;
         UsedBytes += e.Bytes;
@@ -909,6 +982,10 @@ public sealed class ImageCache
                 RecomputeCrossfadeDeadline();
             _totalEvicted++;
             Diag.Set("media", "evicted", _totalEvicted);
+            if (Diag.CompiledIn && Diag.Enabled && DiagTraced(e2.Key.Source))
+                Diag.Event("img", $"evict id={victim} src={DiagSourceTail(e2.Key.Source)} " +
+                    $"decode={e2.Key.W}x{e2.Key.H} derived={(e2.Derived ? 1 : 0)} " +
+                    $"usedMB={UsedBytes / (1024.0 * 1024.0):0.0} budgetMB={_budgetBytes / (1024.0 * 1024.0):0.0}");
             NotifyStatus(e2);
             _evictSink(victim);   // free the GPU texture (the device defers the release behind the frame fence)
         }

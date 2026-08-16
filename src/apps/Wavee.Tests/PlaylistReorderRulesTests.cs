@@ -1,3 +1,6 @@
+﻿using System;
+using System.Collections.Generic;
+using Wavee.Core;
 using Xunit;
 
 namespace Wavee.Tests;
@@ -152,5 +155,87 @@ public class PlaylistReorderRulesTests
         Assert.Equal(PlaylistDropVerb.AddContainer, PlaylistReorderRules.VerbFor(false, 0, 0));
         // "Same list" with no rows to move is not a move at all; nothing truthful is left to say.
         Assert.Equal(PlaylistDropVerb.None, PlaylistReorderRules.VerbFor(true, 0, 5));
+    }
+
+    // ── the KEYED-reorder gate (P2) ────────────────────────────────────────────────────────────────
+    // The wire reorder is ONE item-keyed MOV: every moved row is named by its membership item_id, and the landing
+    // position is named by ONE anchor row's item_id. There is no positional fallback, so both halves have to be
+    // answerable BEFORE the gesture commits — otherwise the move is sent, refused, and rolled back under the user.
+
+    /// <summary>Membership rows whose item ids are given by <paramref name="ids"/> ("" = an id that has not landed).</summary>
+    static IReadOnlyList<Track> Rows(params string[] ids)
+    {
+        var list = new List<Track>(ids.Length);
+        for (int i = 0; i < ids.Length; i++)
+            list.Add(new Track("t" + i, "spotify:track:t" + i, "Track " + i,
+                Array.Empty<ArtistRef>(), new AlbumRef("", "", ""), 0, false, null)
+            { ContextUid = ids[i] });
+        return list;
+    }
+
+    static IReadOnlyList<PlaylistRowRef> Moved(params int[] originalIndices)
+    {
+        var rows = new List<PlaylistRowRef>(originalIndices.Length);
+        foreach (int i in originalIndices) rows.Add(new PlaylistRowRef(i, "spotify:track:t" + i, "id" + i));
+        return rows;
+    }
+
+    [Fact]
+    public void RowsAreKeyed_RequiresAnItemIdOnEveryMovedRow()
+    {
+        Assert.True(PlaylistReorderRules.RowsAreKeyed(Moved(0, 2, 5)));
+        // One row still waiting for its id disqualifies the whole batch: the MOV carries all of them or none.
+        Assert.False(PlaylistReorderRules.RowsAreKeyed(new[]
+        {
+            new PlaylistRowRef(0, "spotify:track:a", "id0"),
+            new PlaylistRowRef(1, "spotify:track:b", ""),
+        }));
+        // Nothing to move is not a keyed move either.
+        Assert.False(PlaylistReorderRules.RowsAreKeyed(Array.Empty<PlaylistRowRef>()));
+    }
+
+    [Fact]
+    public void AnchorRowIsKeyed_TheTwoEndsNeedNoAnchorAtAll()
+    {
+        // add_first / add_last name no row, so an unkeyed neighbour at either end is irrelevant.
+        var tracks = Rows("", "b", "c", "");
+        Assert.True(PlaylistReorderRules.AnchorRowIsKeyedAt(tracks, Moved(2), 0));
+        Assert.True(PlaylistReorderRules.AnchorRowIsKeyedAt(tracks, Moved(0), tracks.Count));
+    }
+
+    [Fact]
+    public void AnchorRowIsKeyed_TakesThePredecessorInTheMiddle()
+    {
+        var tracks = Rows("a", "b", "c", "d");
+        Assert.True(PlaylistReorderRules.AnchorRowIsKeyedAt(tracks, Moved(3), 2));    // lands after "b"
+        // …and refuses when that predecessor is the row whose id has not landed yet.
+        Assert.False(PlaylistReorderRules.AnchorRowIsKeyedAt(Rows("a", "", "c", "d"), Moved(3), 2));
+    }
+
+    [Fact]
+    public void AnchorRowIsKeyed_WalksBackOverTheRowsThatAreThemselvesMoving()
+    {
+        // A GAPPED selection lands as one contiguous run, so the anchor is the nearest UNSELECTED row above the slot:
+        // rows 1 and 2 are moving, so the anchor for slot 3 is row 0 — not row 2.
+        var tracks = Rows("a", "b", "c", "d");
+        Assert.True(PlaylistReorderRules.AnchorRowIsKeyedAt(tracks, Moved(1, 2), 3));
+        // The verdict follows THAT row: an unkeyed row 0 refuses even though the skipped rows are keyed.
+        Assert.False(PlaylistReorderRules.AnchorRowIsKeyedAt(Rows("", "b", "c", "d"), Moved(1, 2), 3));
+        // Everything above the slot is moving → nothing is left to anchor to, which is add_first.
+        Assert.True(PlaylistReorderRules.AnchorRowIsKeyedAt(Rows("", "b", "c"), Moved(0, 1), 2));
+    }
+
+    [Fact]
+    public void AnchorRowIsKeyed_ReadsDisplaySlotsThroughTheViewMap()
+    {
+        // The drop hands a DISPLAY slot; the anchor lives in MEMBERSHIP. In natural order the map is the identity…
+        int[] natural = [0, 1, 2, 3];
+        Assert.False(PlaylistReorderRules.AnchorRowIsKeyed(natural, Rows("a", "", "c", "d"), Moved(3), 2));
+        // …and the two edges resolve to first/end without consulting a row at all.
+        Assert.Equal(0, PlaylistReorderRules.OriginalInsertionIndex(natural, 4, 0));
+        Assert.Equal(4, PlaylistReorderRules.OriginalInsertionIndex(natural, 4, 4));
+        Assert.Equal(2, PlaylistReorderRules.OriginalInsertionIndex(natural, 4, 2));
+        // An empty view still names the END of membership for any slot past it, and the head otherwise.
+        Assert.Equal(0, PlaylistReorderRules.OriginalInsertionIndex(Array.Empty<int>(), 0, 0));
     }
 }

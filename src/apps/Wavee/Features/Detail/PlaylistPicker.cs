@@ -11,52 +11,13 @@ using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
 
-// The "Copy to playlist" / "Add to playlist" affordance: a standard button that opens an anchored, light-dismissable
-// flyout with a search box + cover thumbnails, listing the user's EDITABLE Spotify playlists (owned + collaborator) plus a
-// "New playlist" entry that creates a REAL playlist over the wire. Modelled on WaveeSidebar.SidebarCreateButton (the
-// anchored Overlay.Service flyout) + FlyoutButton's standard-button chrome.
-
-/// <summary>The anchored trigger button. Opens <see cref="PlaylistPickerPanel"/> below-left via the shared overlay
-/// service; re-click / Escape / click-outside dismiss. Remount per context (a <c>Key</c> at the call site) so
-/// <see cref="GetTracks"/> freezes fresh — never a stale frozen closure (component-props-freeze rule).</summary>
-public sealed class PlaylistPickerButton : Component
-{
-    public string Label = "";
-    public Func<IReadOnlyList<Track>> GetTracks = () => Array.Empty<Track>();
-
-    public override Element Render()
-    {
-        var anchor = UseRef<NodeHandle>(default);
-        var handle = UseRef<OverlayHandle?>(null);
-        var svc = UseContext(Overlay.Service);
-        var getTracks = GetTracks;
-
-        void Toggle() => PlaylistPickerLauncher.OpenFlyout(svc, () => anchor.Value, getTracks, handle);
-
-        return new BoxEl
-        {
-            Direction = 0,
-            AlignItems = FlexAlign.Center,
-            MinHeight = 32f,
-            Padding = new Edges4(11, 5, 11, 6),
-            Corners = Radii.ControlAll,
-            BorderWidth = 1f,
-            BorderBrush = Tok.ControlElevationBorder,
-            Fill = Tok.FillControlDefault,
-            HoverFill = Tok.FillControlSecondary,
-            PressedFill = Tok.FillControlTertiary,
-            ClipToBounds = true,
-            Role = AutomationRole.Button,
-            OnRealized = h => anchor.Value = h,
-            OnClick = Toggle,
-            Children = [new TextEl(Label) { Size = 14f, Color = Tok.TextPrimary }],
-        };
-    }
-}
+// The "Copy to playlist" / "Add to playlist" affordance: an anchored, light-dismissable flyout with a search box +
+// cover thumbnails, listing the user's EDITABLE Spotify playlists (owned + collaborator) plus a "New playlist" entry that
+// creates a REAL playlist over the wire. Modelled on WaveeSidebar.SidebarCreateButton (the anchored Overlay.Service flyout).
 
 /// <summary>Shared launcher for the anchored playlist-picker flyout: opens (or toggles) <see cref="PlaylistPickerPanel"/>
-/// below <paramref name="anchor"/> through the overlay service. Used by the rail's <see cref="PlaylistPickerButton"/>
-/// and the vertical hero's More menu — one open path so both stay behavior-identical.</summary>
+/// below <paramref name="anchor"/> through the overlay service — one open path for every call site (the rail, the
+/// vertical hero's More menu), so they stay behavior-identical.</summary>
 internal static class PlaylistPickerLauncher
 {
     public static void OpenFlyout(IOverlayService svc, Func<NodeHandle> anchor, Func<IReadOnlyList<Track>> getTracks,
@@ -127,23 +88,23 @@ public sealed class PlaylistPickerPanel : Component
 
         void CreateAndAdd()
         {
-            if (lib is null) return;
-            // The next unused "My Playlist #N" rather than another playlist literally called "New playlist".
-            string name = acts is not null
-                ? Menus.NextPlaylistName(acts)
-                : PlaylistDepositTargets.NextDefaultName(pls, Loc.Get(Strings.Sidebar.NewPlaylist));
+            // The ONE create path (PlaylistCreateFlow): the numbered "My Playlist #N" name, the optimistic row in the
+            // store before it returns, and the CreateFailed toast/notice observed off-thread. It needs the action bag,
+            // so a host that provides none simply has no inline create rather than a second, divergent copy of it.
+            if (lib is null || acts is null) return;
+            if (PlaylistCreateFlow.Create(acts, default, navigate: false, out string name) is not { } created) return;
+            string uri = created.Uri;
             _ = Run();
             async System.Threading.Tasks.Task Run()
             {
                 try
                 {
-                    string uri = await lib.CreatePlaylistAsync(name).ConfigureAwait(false);
                     if (deposit is not null) { post(() => { deposit(uri, name); close(); }); return; }
                     await lib.AddTracksAsync(uri, getTracks()).ConfigureAwait(false);
                     post(() =>
                     {
                         close();
-                        if (acts is not null) Menus.RememberDeposit(acts, uri);
+                        Menus.RememberDeposit(acts, uri);
                         // Open, not Undo: a freshly created playlist needs a name, and inline rename lives on its page.
                         Toast.Show(Strings.Detail.AddedToPlaylist(name), new ToastOptions
                         {

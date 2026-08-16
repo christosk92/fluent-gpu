@@ -48,11 +48,11 @@ static class SidebarPaneMetrics
 
     /// <summary>R3.1.3 — the vertical air above a section header that is not the pane's first row. Section rhythm used to
     /// be ZERO (the planner emits contiguous rows), so five sections read as one undifferentiated column.</summary>
-    public const float SectionGap = Spacing.S;
+    public const float SectionGap = SidebarRowGeometry.SectionGap;
 
     /// <summary>R3.1.3 — the gap between a header and its first body row, matching <c>SidebarSectionHeader.Section</c>'s
     /// own internal gap so a virtualized header and a hand-built one are the same shape.</summary>
-    public const float HeaderBodyGap = 2f;
+    public const float HeaderBodyGap = SidebarRowGeometry.HeaderBodyGap;
 
     /// <summary>PHASE 2 / Decision B — THE ONE EDIT-CARD HEIGHT. Every section's card in the customize canvas is exactly
     /// this tall, whatever its kind, its density or how many rows it holds: the card band is a <c>Reorderable</c> whose
@@ -66,7 +66,7 @@ static class SidebarPaneMetrics
 
     /// <summary>R3.1.6 — the quiet empty hint's band height (was 40 with a 12f caption; a section that resolved to nothing
     /// must not occupy a full row's worth of pane).</summary>
-    public const float EmptyHintHeight = 32f;
+    public const float EmptyHintHeight = SidebarRowGeometry.EmptyHintHeight;
 
     /// <summary>Artwork grids stay media-card sized at the 460-DIP pane maximum instead of stretching into billboards.</summary>
     public const float GridCellMax = 160f;
@@ -83,12 +83,7 @@ static class SidebarPaneMetrics
         => SidebarRowMetrics.ArtFor(section.Opts.Density);
 
     /// <summary>The EntityEmbed hero card's height ladder (§C1.8.2): Compact 56 / Cozy 72 / Comfortable 88.</summary>
-    public static float CardHeight(SidebarSectionSpec section) => section.Opts.Density switch
-    {
-        SidebarDensity.Compact => 56f,
-        SidebarDensity.Comfortable => 88f,
-        _ => 72f,
-    };
+    public static float CardHeight(SidebarSectionSpec section) => SidebarRowGeometry.CardHeightFor(section.Opts.Density);
 
     /// <summary>The card's cover edge — the card height less its 8-DIP padding on both sides.</summary>
     public static float CardCover(SidebarSectionSpec section) => CardHeight(section) - 16f;

@@ -29,7 +29,7 @@ sealed class CuratedSidebar : Component
     readonly bool _inDrawer;
 
     SidebarPreferences? _prefs;
-    LibraryBridge? _lib;
+    ActionServices? _acts;
 
     // PHASE 1 — the RENDER-PATH materialization of the shortcut band, cached on the document it was derived from.
     //
@@ -57,13 +57,13 @@ sealed class CuratedSidebar : Component
         // Refreshed each render, read by the config's delegates (the landed `WaveeSidebar._acts` pattern): a service
         // instance is reference-stable, so this never churns and the frozen config always sees the live one.
         _prefs = UseContext(SidebarPreferences.Slot);
-        _lib = UseContext(LibraryBridge.Slot);
 
         // PHASE 2 / Decision B — attach the shared edit session's SERVICES here, in Curated's composition root, because
         // this is the one place that has both the session (through the preferences service) and the app services its
         // options popover needs. They are plain fields on a reference-stable object, refreshed every render exactly like
-        // `_prefs`/`_lib` above — never a signal write from Render.
+        // `_prefs` above — never a signal write from Render.
         var acts = UseContext(ActionServices.Slot);
+        _acts = acts;
         var registry = UseContext(WaveeExtensionRegistry.Slot) ?? acts?.Extensions;
         var overlay = UseContext(Overlay.Service);
         if (_prefs is { } prefsForEdit)
@@ -151,26 +151,12 @@ sealed class CuratedSidebar : Component
         _go(SidebarLayoutMenu.CustomizeRoute, null);
     }
 
-    /// <summary>The PlaylistTree section's create affordance (§C5.1's <c>CreateAction</c> row). POST a real empty playlist,
-    /// then navigate to it — the landed Classic behaviour, verbatim.</summary>
+    /// <summary>The PlaylistTree section's create affordance (§C5.1's <c>CreateAction</c> row) — the ONE create path
+    /// (<see cref="PlaylistCreateFlow"/>), so Classic, V3 and Curated cannot drift on what "+" does or on what it names
+    /// the playlist.</summary>
     void CreatePlaylist()
     {
-        if (_lib is not { } lib) return;
-        _ = Run();
-        async System.Threading.Tasks.Task Run()
-        {
-            try
-            {
-                string uri = await lib.CreatePlaylistAsync(Loc.Get(Strings.Sidebar.NewPlaylist)).ConfigureAwait(false);
-                _go("pl:" + uri, null);
-            }
-            catch (Exception ex)
-            {
-                WaveeLog.Instance.Error("sidebar", "sidebar.action.failed", "Could not create playlist", ex,
-                    WaveeLogField.Of("action", "createPlaylist"),
-                    WaveeLogField.Of("design", "curated"));
-                Toast.Show(Loc.Get(Strings.Common.ErrorTitle), new ToastOptions { Severity = InfoBarSeverity.Error });
-            }
-        }
+        if (_acts is not { } acts) return;
+        PlaylistCreateFlow.Create(acts, default, navigate: true);
     }
 }

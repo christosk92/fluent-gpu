@@ -77,6 +77,7 @@ sealed class SidebarPaneSlot : Component
                 heightOverride: SidebarPaneMetrics.RowHeight(section),
                 artOverride: SidebarPaneMetrics.ArtSize(section)),
             SidebarRowKind.CreateAction => CreateRow(section),
+            SidebarRowKind.TreeEnd => TreeEndRow(section, row, index),
             SidebarRowKind.EntityCard => Card(section, row, sel, index),
             SidebarRowKind.PromptRow => Prompt(section),
             // PHASE 2 / Decision B — the customize canvas. Only `SidebarRowPlanner.BuildEdit` emits this kind, so the
@@ -339,8 +340,15 @@ sealed class SidebarPaneSlot : Component
         else if (route is { Length: > 0 } r) click = () => _o.Navigate(r, snapshot.Name);
 
         Func<ContextMenuModel?>? menu = null;
+        Action? rename = null;
         if (_o.Acts is { } acts)
+        {
             menu = () => Menus.SidebarEntry(acts, in snapshot, layoutExtras: NavExtras(section, index, item, rowKey));
+            // F2 — the keyboard path to the row menu's Rename. Only a row that can actually be renamed takes it (and
+            // therefore becomes a focus stop); a Reorderable-wrapped row never does, because that wrapper owns the
+            // focus stop and the key handler and two of each per row is a documented stomp.
+            if (!reordering) rename = Menus.SidebarRenameAction(acts, in snapshot);
+        }
 
         // A Reorderable installs its OWN drag source and position track; a second one is a documented stomp. A TRACK is
         // never a pin drag source at all (locked decision 4 is enforced by the KIND, not per surface).
@@ -350,6 +358,13 @@ sealed class SidebarPaneSlot : Component
         // lets that row be filed into a folder; keying the flag off the section (as this used to) meant the identical
         // playlist was file-able from one list and inert from another.
         bool rootlistItem = !reordering && snapshot.Kind is SidebarEntryKind.Playlist or SidebarEntryKind.Folder;
+        // Alt+↑/↓ — the KEYBOARD half of D12, the same sibling move the row menu's Move up / Move down offer. TREE rows
+        // only: a pinned or recently-played row is a rootlist MEMBER but not a rootlist ordering slot, so an Alt+arrow
+        // there would silently reorder a list the user is not looking at. Never on a Reorderable-wrapped row (treeRow
+        // already excludes those) — that wrapper owns the focus stop and the key handler.
+        Action<int>? move = treeRow && rootlistItem && _o.Acts is { } moveActs
+            ? d => FolderActions.Move(moveActs, snapshot.Id, d)
+            : null;
         // The DESTINATION half stays tree-only: a pinned row is a rootlist member but not a rootlist ORDERING slot.
         WaveeResourceDragPayload? resource = treeRow
             ? WaveeResourceDragPayload.FromEntry(snapshot, _o.Acts?.Svc, rootlistItem: true)
@@ -365,7 +380,10 @@ sealed class SidebarPaneSlot : Component
         DropTargetSpec? drop = playlistRow || resource is not null
             ? _o.ResourceDropSpec(row.SectionId, PinSlot(row.SectionId, index),
                 playlistRow && snapshot.CanEdit ? snapshot.Uri : null,
-                snapshot.Name, resource, index, isPlaylistRow: playlistRow)
+                snapshot.Name, resource, index, isPlaylistRow: playlistRow,
+                // The row's STRUCTURAL facts. The payload-dependent half (self / ancestor / whether the centre takes
+                // this payload's tracks) is folded in at hover, where the payload first exists.
+                rootFacts: TreeRowFacts(index, in snapshot))
             : PinSpec(section, row.SectionId, index);
 
         var spec = new SidebarRowSpec
@@ -393,14 +411,18 @@ sealed class SidebarPaneSlot : Component
             OnClick = click,
             MenuOverlay = _o.MenuOverlay,
             Menu = menu,
+            OnRename = rename,
+            OnMove = move,
             Drag = drag,
-            DropActive = drop is null ? null : () => _o.IsResourceDropActive(index),
+            // A PROBE, not a value: the cue is one bound read of the pane's published slot, so an armed line or plate is
+            // a compositor-only prop update rather than a re-render of the realized window.
+            DropCue = drop is null ? null : () => _o.DropSlotFor(index),
             DropTarget = drop,
         };
         Element built = SidebarEntityRow.Create(spec);
         if (track) built = SidebarEntityRow.WithPlayTrackHint(built);
         // Tree connectors own their depth lanes; the selection indicator stays in the row's base gutter.
-        return Indicator(built, selected, baseDepth, height, route, row.SectionId);
+        return Indicator(built, selected, baseDepth, height, route, row.SectionId, index);
     }
 
     /// <summary>A rootlist FOLDER: the entity-row geometry with a disclosure chevron and the folder mark. A folder never
@@ -431,7 +453,14 @@ sealed class SidebarPaneSlot : Component
                 layoutExtras: NavExtras(section, index, SidebarPaneText.ItemOf(section, rowKey), rowKey));
 
         bool reordering = _o.TryBandOf(index, out _);
+        // F2 — the same Rename verb the folder menu carries, reached from the keyboard (see EntityRow).
+        Action? rename = _o.Acts is { } renameActs && !reordering ? Menus.SidebarRenameAction(renameActs, in snapshot) : null;
         bool rootlistItem = section.Kind == SidebarSectionKind.PlaylistTree && !reordering;
+        // Alt+↑/↓ moves a FOLDER among its siblings exactly as it moves a playlist — the whole subtree travels with it,
+        // because the move addresses the folder's own rootlist span (see EntityRow for the rest of the reasoning).
+        Action<int>? move = rootlistItem && _o.Acts is { } moveActs
+            ? d => FolderActions.Move(moveActs, snapshot.Id, d)
+            : null;
         var resource = WaveeResourceDragPayload.FromEntry(snapshot, _o.Acts?.Svc, rootlistItem);
         // Spring-load: hold a drag over a CLOSED folder and it opens, so its children become reachable mid-gesture.
         // Re-checked inside the callback rather than trusted from `expanded` — the row is re-rendered on every folder
@@ -441,7 +470,8 @@ sealed class SidebarPaneSlot : Component
             if (_o.Prefs is { } p && !p.IsFolderExpanded(folderId)) _o.ActivateFolder(folderId, snapshot.Name, index);
         };
         DropTargetSpec? drop = rootlistItem
-            ? _o.ResourceDropSpec(row.SectionId, -1, null, null, resource, index, springLoad)
+            ? _o.ResourceDropSpec(row.SectionId, -1, null, null, resource, index, springLoad,
+                                  rootFacts: TreeRowFacts(index, in snapshot))
             : PinSpec(section, row.SectionId, index, springLoad);
 
         var spec = new SidebarRowSpec
@@ -469,11 +499,15 @@ sealed class SidebarPaneSlot : Component
             Overflow = _o.Acts is not null && _o.MenuOverlay is not null,
             MenuOverlay = _o.MenuOverlay,
             Menu = menu,
+            OnRename = rename,
+            OnMove = move,
             Drag = reordering ? null : resource,
-            DropActive = drop is null ? null : () => _o.IsResourceDropActive(index),
+            DropCue = drop is null ? null : () => _o.DropSlotFor(index),
             DropTarget = drop,
         };
-        return SidebarEntityRow.Create(spec);
+        // A folder row carries no selection pill (it has no route), but it still needs the insertion line: the bottom
+        // band of an expanded header IS the "first child" slot, and the whole D2 outdent gesture happens on folder rows.
+        return DropCueOverlay(SidebarEntityRow.Create(spec), index, height);
     }
 
     /// <summary>Which connector columns continue below a realized tree row. The plan is preorder, so the first later
@@ -542,10 +576,10 @@ sealed class SidebarPaneSlot : Component
             MenuOverlay = _o.MenuOverlay,
             Menu = RouteMenu(section, item, index),
             Drag = drag,
-            DropActive = drop is null ? null : () => _o.IsResourceDropActive(index),
+            DropCue = drop is null ? null : () => _o.DropSlotFor(index),
             DropTarget = drop,
         };
-        return Indicator(SidebarEntityRow.Create(spec), selected, 0, height, key, section.Id);
+        return Indicator(SidebarEntityRow.Create(spec), selected, 0, height, key, section.Id, index);
     }
 
     Func<ContextMenuModel?>? RouteMenu(SidebarSectionSpec section, SidebarItemSpec item, int index)
@@ -1007,7 +1041,7 @@ sealed class SidebarPaneSlot : Component
         {
             Key = section.Id,
             Direction = 0,
-            Height = reason is { Length: > 0 } ? 56f : 48f,
+            Height = SidebarRowGeometry.PromptHeight(reason is { Length: > 0 }),
             AlignItems = FlexAlign.Center,
             Gap = Spacing.S,
             // R3.1.2: vertical only — the pane owns the horizontal inset (see the card).
@@ -1046,21 +1080,42 @@ sealed class SidebarPaneSlot : Component
     }
 
     /// <summary>The PlaylistTree section's own create affordance, as a full row at the end of the section (§C5.1). It is
-    /// authored chrome, not data, so it survives a pending source. Folder creation is deliberately absent — Spotify folder
-    /// CRUD is deferred (locked decision 9) and a disabled "New folder" would promise a command we do not have.</summary>
+    /// authored chrome, not data, so it survives a pending source.
+    ///
+    /// <para>CLICK still creates a PLAYLIST — that is what the row has always done and what its label says. Folder
+    /// creation joins it as a MENU (right-click / the "…" affordance) rather than a second row: the old "locked
+    /// decision 9" that kept folder CRUD out of the UI is <b>LIFTED</b> now that the rootlist create/rename/delete wire
+    /// exists, but a second always-visible row at the end of a 10k-playlist tree buys one command at the cost of the
+    /// section's rhythm. The rootlist is still written through the resource-drop seam and <c>FolderActions</c> only.</para></summary>
     Element CreateRow(SidebarSectionSpec section)
     {
         Action? click = null;
         if (_o.Config.OnCreatePlaylist is not null) click = _o.CreatePlaylist;
+
+        // [New playlist · New folder] — the same two verbs the folder rows carry, at the tree ROOT (placement = top
+        // level). Built at OPEN time like every other row menu, never at render time.
+        Func<ContextMenuModel?>? menu = null;
+        var acts = _o.Acts;
+        if (acts is not null && _o.MenuOverlay is not null && click is not null)
+            menu = () => new ContextMenuModel(new List<MenuFlyoutItem>(2)
+            {
+                new(Loc.Get(Strings.Detail.NewPlaylist), ActionIcons.Resolve(ActionIcons.Add), true, click),
+                new(Loc.Get(Strings.Sidebar.CreateFolder), ActionIcons.Resolve(ActionIcons.Folder),
+                    acts.Library is not null && acts.Overlay is not null, () => FolderActions.NewFolder(acts, null)),
+            });
         // …and it is a DROP DESTINATION: drop a song (or a whole album) here to create a playlist FROM it. See
         // SidebarPane.CreatePlaylistFromDrag for why this row rather than a drag-only one — it is already present and
         // already labelled, so the labelled create target costs no mid-gesture reflow and no new chrome.
         var drop = click is null ? null : Drop.Target<WaveeResourceDragPayload>(
             WaveeDragKinds.Resource,
-            accepts: static p => p.CanCopyTracks,
+            // D3 — a ROOTLIST payload is excluded outright. This row sits exactly where "top level, at the end" belongs,
+            // so dragging a playlist past the bottom of the tree landed here and created a DUPLICATE playlist holding
+            // that playlist's songs. The `TreeEnd` row above it now owns that slot; this row is back to what it says it
+            // is, a create affordance for a track set.
+            accepts: static p => p.CanCopyTracks && !p.RootlistItem,
             // Transparent for anything that is not a track set: a pin, a rootlist filing and a folder move are all just
             // crossing this row on their way to a band that wants them, and a refusal there would be an accusation.
-            transparent: static p => !p.CanCopyTracks,
+            transparent: static p => !p.CanCopyTracks || p.RootlistItem,
             caption: static _ => Loc.Get(Strings.Drag.NewPlaylistFromThis),
             onEnter: (_, _) => _createDropActive.Value = true,
             onOver: (_, _) => _createDropActive.Value = true,
@@ -1075,6 +1130,9 @@ sealed class SidebarPaneSlot : Component
             Height = SidebarPaneMetrics.RowHeight(section),
             Glyph = Icons.Add,
             OnClick = click,
+            Overflow = menu is not null,
+            MenuOverlay = _o.MenuOverlay,
+            Menu = menu,
             DropTarget = drop,
             // The row's own lit-plate cue, bound (this runs while a drag is live) — SidebarEntityRow reads it per frame.
             DropActive = drop is null ? null : () => _createDropActive.Value,
@@ -1132,7 +1190,7 @@ sealed class SidebarPaneSlot : Component
 
     /// <summary>Attach the item-owned SelectionIndicator. Keeping it shape-stable is load-bearing for recycling: a slot
     /// never inherits an animated transform from the route it represented one window earlier.</summary>
-    Element Indicator(Element row, bool selected, int depth, float height, string? route, string sectionId)
+    Element Indicator(Element row, bool selected, int depth, float height, string? route, string sectionId, int index)
     {
         if (!float.IsFinite(height) || height <= 0f) height = SidebarRowMetrics.ClassicHeight;
         _pillState = new SidebarPillState(
@@ -1140,7 +1198,120 @@ sealed class SidebarPaneSlot : Component
             Selected: selected,
             Indent: SidebarRowMetrics.IndentFor(depth),
             Top: MathF.Max(0f, (height - SidebarSelectionPill.PillH) * 0.5f));
-        return ZStack(row, Embed.Comp(() => new SidebarSelectionPill(_o, _pillProbe ??= PillState)));
+        return ZStack(row, Embed.Comp(() => new SidebarSelectionPill(_o, _pillProbe ??= PillState)),
+                      InsertionLine(index, height));
+    }
+
+    /// <summary>A row that has no selection pill but still owns an insertion line (a folder header).</summary>
+    Element DropCueOverlay(Element row, int index, float height)
+        => ZStack(row, InsertionLine(index, height));
+
+    /// <summary>
+    /// THE INSERTION LINE. Mounted once per row, ALWAYS — never conditionally — and every prop bound off ONE read of the
+    /// pane's published slot (<c>SidebarSelectionPill</c>'s discipline). Conditional mounting would need a re-render per
+    /// pointer move, which is precisely what a cue that must track the pointer cannot afford.
+    ///
+    /// <para><b>Why a line at all.</b> Before/Inside/After were three outcomes behind one pixel-identical accent plate
+    /// (D1), so the surface could not say which of them a drop meant. The plate now means exactly ONE thing — Into, a
+    /// deposit — and the line means exactly one thing — an ORDERING, at the depth it is drawn at. The terminal dot at
+    /// the left cap is what makes a 2-DIP hairline read as an insertion caret rather than as a divider.</para>
+    /// </summary>
+    Element InsertionLine(int index, float height)
+    {
+        if (!float.IsFinite(height) || height <= 0f) height = SidebarRowMetrics.ClassicHeight;
+        float rowHeight = height;
+        var owner = _o;
+        Func<SidebarDropSlot> cue = () => owner.DropSlotFor(index);
+        return new BoxEl
+        {
+            Key = "drop-line",
+            Height = SidebarDropCue.LineThickness,
+            Width = Prop.Of(() => SidebarDropCue.LineWidth(owner.ContentWidth, cue().Depth)),
+            Corners = CornerRadius4.All(SidebarDropCue.LineCorner),
+            Fill = Tok.AccentDefault,
+            Opacity = Prop.Of(() => SidebarDropCue.DrawsLine(cue().Kind) ? 1f : 0f),
+            Transform = Prop.Of(() =>
+            {
+                var slot = cue();
+                return Affine2D.Translation(SidebarRowGeometry.IndentFor(slot.Depth),
+                                            SidebarDropCue.LineY(slot.Kind, rowHeight));
+            }),
+            HitTestVisible = false,
+            Children =
+            [
+                // The terminal dot sits at the caret's left cap, centred on the hairline.
+                new BoxEl
+                {
+                    Width = SidebarDropCue.DotSize, Height = SidebarDropCue.DotSize,
+                    Corners = CornerRadius4.All(SidebarDropCue.DotSize * 0.5f),
+                    Margin = new Edges4(0f, (SidebarDropCue.LineThickness - SidebarDropCue.DotSize) * 0.5f, 0f, 0f),
+                    Fill = Tok.AccentDefault,
+                    HitTestVisible = false,
+                },
+            ],
+        };
+    }
+
+    /// <summary>The row's structural drop facts, straight off the published plan. Everything the resolver needs that the
+    /// PAYLOAD does not decide.
+    /// <para><c>NextVisibleDepth</c> is the whole depth-ambiguity story: it is the depth of the next visible tree row, or
+    /// 0 when this is the last one, and a slot is ambiguous exactly when it is SHALLOWER than this row — i.e. "after the
+    /// last visible child of a (possibly nested) folder", the one gesture D2 got silently wrong.</para></summary>
+    SidebarRowFacts TreeRowFacts(int index, in SidebarLibraryEntry entry)
+    {
+        var rows = _o.Plan.Rows;
+        var entries = _o.Plan.Entries;
+        int nextDepth = 0;
+        bool hasChild = false;
+        if ((uint)index < (uint)rows.Count && index + 1 < rows.Count)
+        {
+            var next = rows[index + 1];
+            if (next.Kind is SidebarRowKind.EntityRow or SidebarRowKind.FolderHeader
+                && string.Equals(next.SectionId, rows[index].SectionId, StringComparison.Ordinal)
+                && (uint)next.EntryIndex < (uint)entries.Count)
+            {
+                nextDepth = entries[next.EntryIndex].Depth;
+                hasChild = nextDepth > entry.Depth;
+            }
+        }
+        return new SidebarRowFacts(
+            IsFolder: entry.IsFolder,
+            FolderExpanded: entry.IsFolder && (_o.Prefs?.IsFolderExpanded(entry.FolderId) ?? true),
+            FolderHasChildren: hasChild,
+            Depth: entry.Depth,
+            NextVisibleDepth: nextDepth,
+            // Completed at hover: only the payload knows whether this row's centre has anything to take.
+            CenterAccepts: entry.IsFolder,
+            SourceIsSelf: false,
+            SourceIsAncestorOfRow: false,
+            SortedNonCustom: _o.TreeSortedNonCustom,
+            RootlistLoaded: true);
+    }
+
+    /// <summary>The tree's closing gutter: 24 DIP of nothing that owns ONE slot — "top level, at the end". It exists
+    /// because that slot had no target at all and the create row below it happily accepted rootlist payloads, turning a
+    /// drag past the end of the list into a duplicated playlist (D3).</summary>
+    Element TreeEndRow(SidebarSectionSpec section, in SidebarRow row, int index)
+    {
+        var facts = new SidebarRowFacts(
+            IsFolder: false, FolderExpanded: false, FolderHasChildren: false,
+            Depth: 0, NextVisibleDepth: 0, CenterAccepts: false,
+            SourceIsSelf: false, SourceIsAncestorOfRow: false,
+            SortedNonCustom: _o.TreeSortedNonCustom, RootlistLoaded: true) { IsListEnd = true };
+        // A synthetic destination: the slot is expressed against the last TOP-LEVEL entry at commit time, so the row
+        // itself stands for no entity and carries no name of its own.
+        var target = new WaveeResourceDragPayload(WaveeResourceKind.Route, row.SectionId, "", "", RootlistItem: true);
+        var drop = _o.ResourceDropSpec(row.SectionId, -1, null, null, target, index, rootFacts: facts);
+        var owner = _o;
+        return ZStack(
+            new BoxEl
+            {
+                Key = "tree-end",
+                Height = SidebarRowGeometry.TreeEndHeight,
+                Width = Prop.Of(() => owner.ContentWidth),
+                DropTarget = drop,
+            },
+            InsertionLine(index, SidebarRowGeometry.TreeEndHeight));
     }
 
     SidebarPillState PillState()
@@ -1183,13 +1354,20 @@ sealed class SidebarPaneSlot : Component
         return () => Menus.WithLayoutExtras(null, NavExtras(section, index, item, key));
     }
 
-    /// <summary>Move up / Move down / Remove for this row, or null when none apply. Built at menu-open time from the
-    /// live plan index (the slot recycles) so a pin mutation between render and right-click cannot offer a dead move.
+    /// <summary>Move up / Move down / Move to folder… / Remove for this row, or null when none apply. Built at menu-open
+    /// time from the live plan index (the slot recycles) so a pin mutation between render and right-click cannot offer a
+    /// dead move.
     ///
     /// <para>Pinned rows do not get a Remove extra: Unpin already lives in the pin-state slot of the entity menu, and
     /// duplicating it as a trailing destructive would show the same verb twice. Authored items (StaticLinks /
     /// CustomGroup / Shortcuts) get Remove through <see cref="SidebarItemCommands"/>, which is also how a missing-entity
-    /// row already drops itself.</para></summary>
+    /// row already drops itself.</para>
+    ///
+    /// <para>A ROOTLIST TREE row gets the same two labels over a different list (<see cref="TreeMoves"/>) plus
+    /// "Move to folder…". Reordering the rootlist used to be a drag and nothing else (D12); these are the menu half of
+    /// the fix, and <c>SidebarRowSpec.OnMove</c> (Alt+↑/↓) is the keyboard half. "Move out of {parent}" is NOT added
+    /// here — it already lives in the entity menu itself, on every surface that shows the row, and a second copy in the
+    /// extras would show the verb twice on a tree row.</para></summary>
     IReadOnlyList<MenuFlyoutItem>? NavExtras(SidebarSectionSpec section, int planIndex, SidebarItemSpec? item, string key)
     {
         int at = -1, count = 0;
@@ -1213,9 +1391,10 @@ sealed class SidebarPaneSlot : Component
             && SidebarSectionKinds.AcceptsItems(section.Kind);
 
         var layout = SidebarNavLayout.Decide(at, count, removable);
-        if (layout.IsEmpty) return null;
+        var (tree, entryId) = TreeMoves(section, planIndex);
+        if (layout.IsEmpty && tree.IsEmpty) return null;
 
-        var rows = new List<MenuFlyoutItem>(3);
+        var rows = new List<MenuFlyoutItem>(4);
         string sectionId = section.Id;
         if (layout.MoveUp)
             rows.Add(new MenuFlyoutItem(Loc.Get(Strings.Menu.MoveUp),
@@ -1225,6 +1404,25 @@ sealed class SidebarPaneSlot : Component
             rows.Add(new MenuFlyoutItem(Loc.Get(Strings.Menu.MoveDown),
                 new IconRef { Glyph = Icons.ChevronDown, Font = Theme.IconFont }, true,
                 () => _o.MoveRowByKey(sectionId, key, 1)));
+        if (_o.Acts is { } treeActs)
+        {
+            // The ROOTLIST verbs. Same two labels as the layout ones above, a different list underneath: these move the
+            // real rootlist through `FolderActions`, not a document's item order. They are mutually exclusive with the
+            // band arm by construction (a Reorderable-wrapped row is excluded in TreeMoves), so the menu never shows
+            // "Move up" twice.
+            if (tree.MoveUp)
+                rows.Add(new MenuFlyoutItem(Loc.Get(Strings.Menu.MoveUp),
+                    new IconRef { Glyph = Icons.ChevronUp, Font = Theme.IconFont }, true,
+                    () => FolderActions.MoveUp(treeActs, entryId)));
+            if (tree.MoveDown)
+                rows.Add(new MenuFlyoutItem(Loc.Get(Strings.Menu.MoveDown),
+                    new IconRef { Glyph = Icons.ChevronDown, Font = Theme.IconFont }, true,
+                    () => FolderActions.MoveDown(treeActs, entryId)));
+            if (tree.MoveToFolder)
+                rows.Add(new MenuFlyoutItem(Loc.Get(Strings.Menu.MoveToFolder),
+                    ActionIcons.Resolve(ActionIcons.Folder), true,
+                    () => FolderActions.MoveTo(treeActs, entryId)));
+        }
         if (layout.Remove)
         {
             string itemId = item!.Id;
@@ -1233,6 +1431,36 @@ sealed class SidebarPaneSlot : Component
                 () => _o.Dispatch(SidebarItemCommands.Remove(sectionId, itemId))));
         }
         return rows;
+    }
+
+    /// <summary>Which ROOTLIST move verbs this plan row offers, and the projection entry id they address.
+    ///
+    /// <para>Decided against the published tree (<c>SidebarProjectionInput.PlaylistTree</c>), not against the plan: the
+    /// plan is expansion-filtered, and "my previous sibling" must be the real one even when the row above it on screen
+    /// belongs to a collapsed folder. Positions come from the SIBLING RUN — the entries sharing this one's parent — so
+    /// the verb disappears at the run's ends instead of moving the row into a neighbouring folder.</para>
+    ///
+    /// <para>Empty for anything that is not a rootlist playlist/folder, and for a row inside a REORDER BAND: a
+    /// <c>Reorderable</c> owns that row's ordering (and supplies its own Move up/down through
+    /// <see cref="SidebarNavLayout"/>), so offering the rootlist verbs there would put two different orderings behind
+    /// one label.</para></summary>
+    (SidebarTreeNavLayout Layout, string EntryId) TreeMoves(SidebarSectionSpec section, int planIndex)
+    {
+        if (section.Kind != SidebarSectionKind.PlaylistTree || _o.Acts is null) return (default, "");
+        if (_o.TryBandOf(planIndex, out _)) return (default, "");
+        var rows = _o.Plan.Rows;
+        var entries = _o.Plan.Entries;
+        if ((uint)planIndex >= (uint)rows.Count) return (default, "");
+        var row = rows[planIndex];
+        if (row.Kind is not (SidebarRowKind.EntityRow or SidebarRowKind.FolderHeader)) return (default, "");
+        if ((uint)row.EntryIndex >= (uint)entries.Count) return (default, "");
+        var entry = entries[row.EntryIndex];
+        if (entry.Kind is not (SidebarEntryKind.Playlist or SidebarEntryKind.Folder) || entry.Id.Length == 0)
+            return (default, "");
+
+        var tree = _o.Prefs?.Binder?.CurrentInput.PlaylistTree;
+        var run = RootlistTreeNav.Siblings(tree, entry.Id);
+        return (SidebarTreeNavLayout.Decide(in run, RootlistTreeNav.HasDestinations(tree, entry.Id)), entry.Id);
     }
 
 }

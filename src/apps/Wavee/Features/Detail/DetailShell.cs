@@ -36,7 +36,45 @@ readonly record struct DetailHandlers(
     // Play late-binds through it (null until the list mounts → falls back to Play(0)). Optional so other constructions
     // (LibraryPage) compile unchanged.
     Action?[]? PlayAllOverride = null,
-    IReadSignal<bool>? MultiSelect = null, Action<bool>? SetMultiSelect = null);
+    IReadSignal<bool>? MultiSelect = null, Action<bool>? SetMultiSelect = null,
+    // Plays (stream-count) column opt-in — the same app-wide/persisted shape as TempoColumn, but only offered by
+    // surfaces whose profile does NOT already carry a Plays lane (playlist / Liked; see DetailConfig.PlaysColumnOptIn).
+    // Turning it on also authorises the whole-list kind-185 fill for the open page. Optional so the embedded library
+    // list — which has no overflow menu to toggle it — constructs unchanged and simply never shows the column.
+    IReadSignal<bool>? PlaysColumn = null, Action<bool>? SetPlaysColumn = null);
+
+// ── DIAGNOSTIC ONLY: the detail cover trace ───────────────────────────────────────────────────────────────────────
+//
+// "The hero cover flashes out then back in, same picture, right after opening — only in the narrow/Hero arm." Pixels
+// can't tell us WHY, so every app-side decision point that can change what the hero asks the ImageCache for logs its
+// verdict here, and the engine logs the pipeline's side (`[img]` / `[morph]` events via Diag.Sink → WaveeLog).
+// SETTLED (2026-08-16, from a live trace): it was the SOURCE url — the live refresh re-mapped the same art under its
+// 640px hash (`…0000b273…`) after the page had painted the 300px one (`…00001e02…`), and the vertical hero read the raw
+// model. The latch now lives in DetailPage (ImageSource.PreferVisible on every publish, keyed on ImageSource.SameArt), so
+// `hero-build`/`editable-cover` lines for one route must show ONE cover id from first paint on. The trace stays: it is
+// how the next cover regression gets settled in minutes instead of by bisecting.
+//
+// The three candidate causes and what to look for:
+//   • the SOURCE url changed → two `cover` lines whose `id=` share the last 24 chars but differ in the first 16 (a
+//     Spotify image id is 40 hex: 16 size/kind marker + 24 art identity) ⇒ same art, new cache key ⇒ new decode.
+//   • the requested DECODE size changed → `decodePx=` differs between two lines for the same route (also a new key).
+//   • the node remounted → an engine `[img] unmount` then `[img] pin ... state=None`.
+//
+// Cost: every call site is guarded by `DetailCoverTrace.On` (WaveeLog's own level gate), so at the default Info level
+// nothing is formatted and nothing is allocated. Run with WAVEE_LOG_LEVEL=Debug (+ FG_DIAG=1 for the engine half).
+static class DetailCoverTrace
+{
+    public static bool On => WaveeLog.Instance.IsEnabled(WaveeLogLevel.Debug);
+
+    /// <summary>The FULL Spotify image id of a cover url (the segment after <c>/image/</c>) — deliberately not just the
+    /// identity tail, because "same art, different size hash" is precisely the hypothesis this trace has to settle.
+    /// "-" when there is no url at all.</summary>
+    public static string Id(string? url)
+        => string.IsNullOrEmpty(url) ? "-" : SpotifyLive.CoverColorPlane.IdSpan(url).ToString();
+
+    public static string Id(Image? image, bool preferLargest = false)
+        => image is null ? "null" : Id(ImageSource.UrlFor(image, preferLargest));
+}
 
 // The two-column detail scaffold (mounted only once data is Ready, so its lifecycle = the loaded page's lifecycle).
 // Owns: the art-derived backdrop wash + accent, the page-scoped shell material tint (set/cleared through the activation
@@ -50,7 +88,6 @@ sealed class DetailShell : Component
     readonly Signal<Route> _route;        // read reactively → ONE shell serves successive detail routes (kind/cfg/morphKey re-derived)
     readonly Loadable<DetailModel> _model;
     readonly Signal<DetailHandlers?> _liveHandlers = new(null);   // reactive parent→TrackList props; never freeze accent/actions
-    readonly Image? _fallbackCover;       // mount-time nav-preview cover; seeds the per-route stable-cover latch
     string? _ctxUri;                      // the loaded context uri — the per-context sort key; refreshed each render
     DetailConfig _cfg = DetailConfig.Album;   // derived from route kind + loaded ReleaseKind each render (a re-derive per route, see below)
     readonly object _tintOwner = new();   // identity for race-free last-writer-wins on ShellMaterial (see ShellMaterialState)
@@ -70,6 +107,7 @@ sealed class DetailShell : Component
     readonly Signal<TrackFilterState> _filters = new(TrackFilterState.Default);   // local advanced filters (transient)
     readonly Signal<int> _density = new(1);                      // row density 0..3 (app-wide, persisted)
     readonly Signal<bool> _tempoColumn = new(false);             // BPM·Key column opt-in (app-wide, persisted)
+    readonly Signal<bool> _playsColumn = new(false);             // Plays column opt-in on playlist/Liked (app-wide, persisted)
     readonly Signal<bool> _multiSelect = new(false);             // ephemeral multi-select mode (clears on navigation)
     readonly IAppSettings? _settings;
     readonly Signal<float> _albumRailW;
@@ -82,9 +120,9 @@ sealed class DetailShell : Component
     readonly Signal<float> _railFade = new(1f);
     ActionServices? _actsRef;             // resolved per render; read by the hero cover's drag payload inside RowChildren
 
-    public DetailShell(Signal<Route> route, Loadable<DetailModel> model, Image? fallbackCover = null, IAppSettings? settings = null)
+    public DetailShell(Signal<Route> route, Loadable<DetailModel> model, IAppSettings? settings = null)
     {
-        _route = route; _model = model; _fallbackCover = fallbackCover; _settings = settings;
+        _route = route; _model = model; _settings = settings;
         // CLAMP the loaded widths to the live grip bounds (the sidebar's seed rule, WaveeShell): the floor moved 220→180
         // with the collapse detent, and a value written by another build — or a hand-edited store — must never seed raw.
         _albumRailW = new(Math.Clamp(settings?.Get(WaveeSettings.DetailAlbumRailWidth)
@@ -157,15 +195,12 @@ sealed class DetailShell : Component
         var route = _route.Value;
         var (kind, id) = DetailPage.ParseDetail(route);
         var raw = _model.Value.Value;                  // subscribe → re-render preview→full (header updates in place)
-        bool modelReady = _model.State.Value == (byte)LoadState.Ready;         // subscribe → latch cover on Pending→Ready
         _cfg = DetailPage.ResolveConfig(kind, raw);    // release-kind-dependent (album→single) → re-derived as the model loads
         _ctxUri = raw.ContextUri;                      // the per-context sort key, refreshed as the model loads
         _defaultSort = kind == DetailKind.Liked ? new TrackSort(SortColumn.DateAdded, Descending: true) : TrackSort.Default;
-        // Cover handoff: keep the already-visible (preview) art across SetReady when the API returns a different CDN
-        // size URL for the same cover — swapping blanks the hero (new ImageCache key + crossfade). Latch per route so
-        // a later intentional cover change (playlist edit / live sync) still wins; the mount-time fallback only seeds
-        // the first paint when the loadable value has no cover yet.
-        var coverLatch = UseRef(new CoverLatch());
+        // The cover is latched where the model is PUBLISHED (DetailPage: PreferVisible on the initial merge and on every
+        // live refresh — same art at another CDN size keeps the rendition already on screen), so raw.Cover here is
+        // already the stable one and every arm (rail, vertical hero, editable cover, tone plane) reads the same url.
         // MorphKey stays NULL, and it is not vestigial — investigated 2026-08-12, left deliberately:
         //
         //   1. It was introduced by 3b80bbcf8 ("…ship engine and shell polish", 2026-07-10), the SAME commit that
@@ -188,7 +223,7 @@ sealed class DetailShell : Component
         // OpenPlaylist, threaded from HomeCardNav and RecentsPage, plus UseContext(SharedTransition.Begin) here) AND
         // deciding how the fly composes with the page slide — not flipping this null. The source half is already
         // minted through MorphKeys.For (see RecentsPage), so the convention survives for whoever does that work.
-        var m = raw with { MorphKey = null, Cover = ResolveStableCover(coverLatch, route.Name, raw.Cover, modelReady) };
+        var m = raw with { MorphKey = null };
 
         // ContentHost exclusively owns route-level entrance motion. Keep this shell free of a second full-page reveal so
         // cold mounts and cached KeepAlive revisits use the same duration and easing.
@@ -294,6 +329,7 @@ sealed class DetailShell : Component
             _sort.Value = col < 0 ? _defaultSort : new TrackSort((SortColumn)col, settings.Get(SortDescKey()));
             _density.Value = settings.Get(WaveeSettings.RowDensity);
             _tempoColumn.Value = settings.Get(WaveeSettings.TempoColumn);
+            _playsColumn.Value = settings.Get(WaveeSettings.PlaysColumn);
         }, _ctxUri ?? "");
         void SetSort(TrackSort s)
         {
@@ -303,6 +339,19 @@ sealed class DetailShell : Component
         }
         void SetDensity(int d) { _density.Value = d; settings?.Set(WaveeSettings.RowDensity, d); }   // app-wide
         void SetTempoColumn(bool on) { _tempoColumn.Value = on; settings?.Set(WaveeSettings.TempoColumn, on); }   // app-wide
+        // Turning the Plays column ON is also the authorisation to FILL it: playlist/Liked rows carry no play count
+        // until kind 185 is asked for them, and the on-open hook (LiveSessionHost) only fires for a list that is opened
+        // while the setting is already on. Without this the first toggle would paint a lane of dashes until a reopen.
+        // Fire-and-forget and best-effort by contract — the hydrator skips resident counts, so a re-toggle is free.
+        void SetPlaysColumn(bool on)
+        {
+            _playsColumn.Value = on;
+            settings?.Set(WaveeSettings.PlaysColumn, on);   // app-wide
+            if (!on || svc is null || m.Tracks.Count == 0) return;
+            var uris = new List<string>(m.Tracks.Count);
+            foreach (var t in m.Tracks) uris.Add(t.Uri);
+            _ = svc.Hydrator.EnsureTraitsAsync(uris, TraitSurface.PlaysToggle);
+        }
 
         // SetSort / SetDensity are hoisted local functions; the rail + chrome toolbars read all list-view controls off here.
         // The record below is the LIVE one — its closures see THIS render's svc / model / settings — but nothing
@@ -328,7 +377,8 @@ sealed class DetailShell : Component
             a => DetailNav.OpenAlbum(navPreview, go, a),
             p => DetailNav.OpenPlaylist(navPreview, go, p),
             playAllOverride,
-            MultiSelect: _multiSelect, SetMultiSelect: v => _multiSelect.Value = v);
+            MultiSelect: _multiSelect, SetMultiSelect: v => _multiSelect.Value = v,
+            PlaysColumn: _playsColumn, SetPlaysColumn: SetPlaysColumn);
         // Fields that are ALREADY mount-stable (the view-control signals, the override cell, and the two setters that
         // only poke this shell's own signals) pass straight through; everything that closes over per-render state goes
         // through the box.
@@ -350,7 +400,9 @@ sealed class DetailShell : Component
             a => live.Current.OpenAlbum(a),
             p => live.Current.OpenPlaylist(p),
             playAllOverride,
-            MultiSelect: _multiSelect, SetMultiSelect: v => _multiSelect.Value = v), accentKey);
+            MultiSelect: _multiSelect, SetMultiSelect: v => _multiSelect.Value = v,
+            // Trampolined: SetPlaysColumn closes over THIS render's svc + model (it fires the fill for the open list).
+            PlaysColumn: _playsColumn, SetPlaysColumn: on => live.Current.SetPlaysColumn?.Invoke(on)), accentKey);
         // TrackList is retained across preview→palette hydration and route reuse. Publish AFTER render (never write a
         // signal from Render) so its accent and context-closing actions arrive through the supported signal path
         // instead of frozen constructor arguments. Keyed on the accent — the only thing that can change the published
@@ -410,7 +462,7 @@ sealed class DetailShell : Component
             ? new BoxEl
             {
                 Key = "right:eps", Grow = 1f, Shrink = 1f, MinWidth = rightMinWidth, Direction = 1,
-                Children = [Embed.Comp(() => new EpisodeList(_route, _model, bridge, handlers, showToolbar))
+                Children = [Embed.Comp(() => new EpisodeList(_model, handlers, showToolbar))
                     with { Key = "episodes:" + route.Name, DeriveRenderedOutput = true }],
             }
             : new BoxEl
@@ -476,7 +528,9 @@ sealed class DetailShell : Component
             {
                 Key = "detail:vertical",
                 Direction = 1, Grow = 1f, ClipToBounds = true,
-                Children = [verticalBody],
+                // The notice strip sits between the header and the list — it is about the PAGE, so it must be read
+                // before the content it is qualifying, and it must not scroll away with the rows.
+                Children = [PlaylistNoticeBar.For(_model), verticalBody],
             };
             return new BoxEl
             {
@@ -484,6 +538,7 @@ sealed class DetailShell : Component
                 Children =
                 [
                     tintBinder,
+                    DeferWatcher(),
                     tonePlane,
                     verticalPage,
                 ],
@@ -533,9 +588,20 @@ sealed class DetailShell : Component
         var twoColumnPage = new BoxEl
         {
             Key = "detail:two-column",
-            Direction = 0, Grow = 1f, Shrink = 1f, MinHeight = 0f, Justify = FlexJustify.Center,
+            Direction = 1, Grow = 1f, Shrink = 1f, MinHeight = 0f,
             ClipToBounds = true,
-            Children = [row],
+            // Column, not row: the notice strip spans the full page ABOVE the [rail | right] pair, because it qualifies
+            // both halves (the rail's edit affordances are gone too). The centering the row used to get from this node
+            // moved onto the row itself.
+            Children =
+            [
+                PlaylistNoticeBar.For(_model),
+                new BoxEl
+                {
+                    Direction = 0, Grow = 1f, Shrink = 1f, MinHeight = 0f, Justify = FlexJustify.Center,
+                    Children = [row],
+                },
+            ],
         };
         return new BoxEl
         {
@@ -544,11 +610,18 @@ sealed class DetailShell : Component
             Children =
             [
                 tintBinder,
+                DeferWatcher(),
                 tonePlane,
                 twoColumnPage,
             ],
         };
     }
+
+    /// <summary>The zero-size drag watcher that publishes a model deferred by a live same-list reorder
+    /// (<see cref="PlaylistReorderDefer"/>). Mounted next to <c>tintBinder</c> — the shell's existing home for
+    /// render-nothing subscribers — so nothing in the page's layout chain can see it.</summary>
+    Element DeferWatcher()
+        => Embed.Comp(() => new PlaylistReorderDeferWatcher(_model)) with { Key = "detail:reorder-defer" };
 
     /// <summary>The page-BODY drop destination: "anywhere on this playlist page" → APPEND.
     /// <para>The track list owns insertion at a precise slot, and the engine always picks the NEAREST accepting target,
@@ -564,7 +637,7 @@ sealed class DetailShell : Component
         if (_cfg.Content != DetailContent.Tracks || acts is null) return null;
         if (m.ContextUri is not { Length: > 0 } uri) return null;
         string name = m.Title;
-        bool editable = m.Capabilities.CanEditItems && acts.Library is not null;
+        bool editable = PlaylistInlineEdit.Editable(m) && acts.Library is not null;
         // An ALBUM or SHOW page is not a playlist and never will be. Its body target has nothing to offer a resource
         // drag, and "Can't edit this playlist" is not an explanation there — it is an accusation about a thing the
         // user is not even looking at. Stay out of that gesture entirely (B2's latent cousin).
@@ -582,7 +655,7 @@ sealed class DetailShell : Component
             => p.SourceRows is { Count: > 0 } && string.Equals(p.SourcePlaylistUri, uri, StringComparison.Ordinal);
         PlaylistDropRefusal Verdict(WaveeResourceDragPayload p)
             => PlaylistDropRefusalRules.Evaluate(editable, loading: false, p.CanCopyTracks,
-                                                 sameList: false, naturalOrder: true, filtered: false);
+                                                 sameList: false, naturalOrder: true, filtered: false, rowsKeyed: true);
 
         return Drop.Target<WaveeResourceDragPayload>(WaveeDragKinds.Resource,
             accepts: p => !SameList(p) && Verdict(p) == PlaylistDropRefusal.None,
@@ -678,16 +751,6 @@ sealed class DetailShell : Component
     /// stays put. Plain field, written during Render: it is not a signal, so nothing re-renders off it.</summary>
     sealed class LiveHandlersRef { public DetailHandlers Current; }
 
-    /// <summary>Per-route cover latch: prefer the painted preview URL through the first Ready, then adopt only real
-    /// model cover identity changes (edit / live sync).</summary>
-    sealed class CoverLatch
-    {
-        public string? Route;
-        public bool ReadyLatched;
-        public Image? Shown;
-        public Image? LastRaw;
-    }
-
     static string? FirstGradeableTrackCover(IReadOnlyList<Track> tracks)
     {
         for (int i = 0; i < tracks.Count; i++)
@@ -696,39 +759,5 @@ sealed class DetailShell : Component
             if (SpotifyLive.CoverColorPlane.CanGrade(url)) return url;
         }
         return null;
-    }
-
-    Image? ResolveStableCover(Ref<CoverLatch> latchRef, string routeKey, Image? rawCover, bool modelReady)
-    {
-        var latch = latchRef.Value;
-        if (latch.Route != routeKey)
-        {
-            latch.Route = routeKey;
-            latch.ReadyLatched = false;
-            latch.Shown = ImageSource.PreferVisible(rawCover, _fallbackCover);
-            latch.LastRaw = rawCover;
-            if (modelReady) latch.ReadyLatched = true;
-            return latch.Shown;
-        }
-
-        if (!latch.ReadyLatched)
-        {
-            latch.Shown = ImageSource.PreferVisible(rawCover, latch.Shown ?? _fallbackCover);
-            latch.LastRaw = rawCover;
-            if (modelReady) latch.ReadyLatched = true;
-            return latch.Shown;
-        }
-
-        bool same = (rawCover is null && latch.LastRaw is null)
-            || ImageSource.SameSource(rawCover, latch.LastRaw);
-        if (!same)
-        {
-            // Intentional post-load cover change — trust the model when it has usable art; never blank a painted cover.
-            latch.Shown = ImageSource.IsUsable(rawCover) ? rawCover
-                : ImageSource.IsUsable(latch.Shown) ? latch.Shown
-                : rawCover;
-        }
-        latch.LastRaw = rawCover;
-        return latch.Shown;
     }
 }

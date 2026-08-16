@@ -68,6 +68,46 @@ public class ArtistOverviewDocTests
     }
 
     [Fact]
+    public void TheOverviewStamp_RidesTheCore_AndALegacyBlobBindsToNever()
+    {
+        // OverviewFetchedAt lives on the Artist CORE (ArtistSplit.Core nulls the fat facets and nothing else), so the
+        // cold tier carries it for free — and an artist blob written before the field existed must bind to default,
+        // which reads as "never" and simply re-fetches the overview once. That is the whole migration.
+        var stamped = new Artist("ar1", "spotify:artist:ar1", "Ar1", null,
+            TopAlbums: [new Album("al1", "spotify:album:al1", "Al1", null, Array.Empty<ArtistRef>(), 2020, 0)],
+            FetchedAt: new DateTimeOffset(2026, 8, 1, 0, 0, 0, TimeSpan.Zero),
+            OverviewFetchedAt: new DateTimeOffset(2026, 8, 2, 0, 0, 0, TimeSpan.Zero));
+
+        var core = ArtistSplit.Core(stamped);
+        Assert.Null(core.TopAlbums);                                  // the split still strips the fat facets…
+        Assert.Equal(stamped.OverviewFetchedAt, core.OverviewFetchedAt);   // …and keeps both clocks
+
+        var round = JsonSerializer.Deserialize<Artist>(
+            JsonSerializer.Serialize(core, EntityJson.Default.Artist), EntityJson.Default.Artist)!;
+        Assert.Equal(stamped.OverviewFetchedAt, round.OverviewFetchedAt);
+        Assert.Equal(stamped.FetchedAt, round.FetchedAt);
+
+        var legacy = JsonSerializer.Deserialize<Artist>(
+            """{"Id":"ar1","Uri":"spotify:artist:ar1","Name":"Ar1","Image":null,"FetchedAt":"2026-08-01T00:00:00+00:00"}""",
+            EntityJson.Default.Artist)!;
+        Assert.Equal(default, legacy.OverviewFetchedAt);
+        Assert.Equal(new DateTimeOffset(2026, 8, 1, 0, 0, 0, TimeSpan.Zero), legacy.FetchedAt);
+    }
+
+    [Fact]
+    public void ARefattenedArtist_KeepsTheCoresOverviewStamp()
+    {
+        var core = new Artist("ar1", "spotify:artist:ar1", "Ar1", null,
+            OverviewFetchedAt: new DateTimeOffset(2026, 8, 2, 0, 0, 0, TimeSpan.Zero));
+        var doc = new ArtistOverviewDoc(TopAlbums: [new ArtistAlbumStub("spotify:album:al1", 0, "Al1", 2020, null)]);
+
+        var fat = ArtistSplit.Refatten(core, doc, _ => null);
+
+        Assert.Equal(core.OverviewFetchedAt, fat.OverviewFetchedAt);
+        Assert.Single(fat.TopAlbums!);
+    }
+
+    [Fact]
     public void AWidenedPin_SurvivesTheRoundTrip()
     {
         var due = new DateTimeOffset(2026, 9, 4, 7, 0, 0, TimeSpan.Zero);

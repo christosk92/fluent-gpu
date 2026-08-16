@@ -29,6 +29,19 @@ static class HomeBaselinePreviews
 
     public static void Install(PathfinderResource pf) { lock (Gate) _pf = pf; }
 
+    /// <summary>Drop the session's Pathfinder resource (and the previews it fetched). Called from the go-live wiring's
+    /// teardown: the resource carries the live session's auth, so a Prime() after logout would fault against a dead
+    /// pipeline, and the cached previews belong to that account.</summary>
+    public static void Uninstall()
+    {
+        lock (Gate)
+        {
+            _pf = null;
+            Cache.Clear();
+            Pending.Clear();
+        }
+    }
+
     public static IReadOnlyList<HomePreviewTrack>? For(string uri)
     {
         lock (Gate) return Cache.TryGetValue(uri, out var t) ? t : null;

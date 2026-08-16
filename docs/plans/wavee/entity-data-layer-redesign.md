@@ -5,6 +5,30 @@ Status: SHIPPING (supersedes `entity-completeness-healing-design.md`). Produced 
 REMOVED, then adversarially verified — verdict SHIP-WITH-AMENDMENTS; all amendments are folded in below and marked
 [AMENDED]. Every claim was verified against the tree; file:line citations live in the competition record.
 
+---
+
+## Status 2026-08-16 — superseded at the surface edge by the hydration façade
+
+This design's **store-side** rules (protective merges per kind, outcome-not-membership freshness seeding, the
+ETag-on-`Missing` rule, `CanonicalUri` as an adornment) still hold and still live where they landed. What has
+changed is everything above them: the *surface edge* — "who decides to fetch, and how much" — is now implemented
+by the hydration façade (`hydration-facade-design.md` / `hydration-facade-plan.md`), and several artifacts this
+doc argued about no longer exist. Read this file for the merge/freshness reasoning; read the façade docs for the
+fetch path.
+
+| This doc said | Where it stands now |
+|---|---|
+| "the whether-to-refetch predicates die (call `SyncAllAsync`; freshness dedups)" | **Done, and further.** `HydrationLevels.Of(entity)` is now THE predicate — one pure, per-kind, store-free function that subsumes `IsAlbumOpenReady`, the four-clause artist gate, `HasMembership`, both `NowPlayingReady` copies, `ArtistStatsCache.IsFresh` and LibrarySync's "unnamed ⇒ cold". Presence is the rung; **age** is the separate `HydrationLedger` seal keyed `(locale, uri, level)`. |
+| "the which-rows pickers collapse onto one ~15-line `StoreEntityGaps` static" | **`StoreEntityGaps` is deleted.** Its bodies moved into `HydrationLevels` (`TitleMissing` / `TrackUnnamed` / `RefNeedsName`) and `StoreEntityMerge.TitleMissing` delegates there, so the merge discipline and the fetch gate now share one notion of "thin" by construction rather than by convention. |
+| "`IsAlbumComplete` stays, documented as envelope semantics" | **Gone.** It is `HydrationLevels.Of(Album) == Full` — the getAlbum envelope — with `Rich` (©/℗ from kind 183) and `Open` (a named tracklist) as the rungs below it. `CachedStore`'s thin restore reads back as `Rich`, which is what makes the below-the-fold envelope re-fetch inside its 10-minute cache. |
+| "[AMENDED C5] the now-playing site KEEPS one `StoreEntityGaps` gate" | **Moot.** `NowPlayingProjection` now asks the façade for `Open` and the ledger's **Exhausted** seal is what stops a re-ask — one `getTrack` per thin row instead of one per cluster heartbeat. No bespoke gate, no `TrackResolver` Func. |
+| "rule 3: the hydrate chokepoint closes references one level" | **Kept, moved.** The ref-closure is a ladder step that recurses through the façade (so every recursive ask goes through the same ledger, which is what bounds it) and lands its follow-up work on the bounded `HydrationPump` instead of an ad-hoc `Task.Run`. |
+| "rule 4: every surface touches the chokepoint on open" | **Kept, made a table.** `OpenPolicy.For(kind)` is the one place that says which rung a page open blocks on and which it enqueues — instead of ~14 call sites each deciding. |
+| "warts: permanently-omitted entities re-request once per hydrate touch" | Now bounded by the shared session `NegativeMemo` (capped at 65,536 `(uri, kind)` pairs, refuses to grow rather than evicting) plus the extension cache's durable 24h negative. |
+
+Pointers: `hydration-facade-design.md` (the shapes), `hydration-facade-plan.md` (phases + status),
+`docs/plans/wavee/architecture.md` §4.2/§6/§9 (the seam view), `.claude/skills/wavee/hydration.md` (how-to).
+
 ## Philosophy
 
 The store is not broken and does not need a new shape. `StoreEntityMerge` is a carefully reasoned accretion

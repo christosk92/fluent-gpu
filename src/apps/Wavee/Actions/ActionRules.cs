@@ -26,6 +26,20 @@ public static class ActionRules
     public static bool CanViewCredits(in ActionTarget target)
         => target.Single is { Uri.Length: > 0, Artists: { Count: > 0 } artists } && artists[0].Uri.Length > 0;
 
+    /// <summary>Go-to-album gate: a single row whose album ref names a real RELEASE. An EPISODE rides the same
+    /// <c>Track</c> read-model but carries its SHOW in that slot (<c>EpisodeAsTrack</c>, design §1.5), so an unguarded
+    /// "Go to album" offered a podcast episode a route into the album page of a show — a page that does not exist. That
+    /// row gets "Go to podcast" instead (<c>Menus.TrackRows</c>). Only a SHOW ref is excluded — a uri the parser cannot
+    /// classify keeps the row it has always had, so this narrows one wrong destination rather than becoming an
+    /// allow-list.</summary>
+    public static bool CanGoToAlbum(in ActionTarget target)
+        => target.Single is { Album.Uri.Length: > 0 } t && EntityUri.KindOf(t.Album.Uri) != EntityKind.Show;
+
+    /// <summary>Go-to-podcast gate: the same single row, when the ref in the album slot IS a show. A name-only show
+    /// (no uri) has nowhere to go, so the row is absent rather than dead — the <c>GoToArtistItem</c> rule.</summary>
+    public static bool CanGoToPodcast(in ActionTarget target)
+        => target.Single is { Album.Uri.Length: > 0 } t && EntityUri.KindOf(t.Album.Uri) == EntityKind.Show;
+
     /// <summary>Go-to-artist gate: a single track whose PRIMARY artist carries a uri. A name-only artist (a projected
     /// sidebar row, a search row without an artist link) is not navigable — offering the row anyway would navigate to
     /// an empty <c>artist:</c> route, i.e. a dead page.</summary>
@@ -35,12 +49,12 @@ public static class ActionRules
     /// <summary>Song-radio gate: exactly one track carrying a <c>spotify:track:</c> uri (a player-present check rides at
     /// the action). Radio seeds a single track — a multi-select or non-track uri is disabled.</summary>
     public static bool CanStartTrackRadio(in ActionTarget target)
-        => target.Single is { Uri.Length: > 0 } t && t.Uri.StartsWith("spotify:track:", StringComparison.Ordinal);
+        => target.Single is { Uri.Length: > 0 } t && EntityUri.Parse(t.Uri) is { IsSpotify: true, Kind: EntityKind.Track };
 
     /// <summary>Artist-radio gate: an Artist container target carrying a <c>spotify:artist:</c> uri.</summary>
     public static bool CanStartArtistRadio(in ActionTarget target)
         => target.Kind == TargetKind.Artist && target.Uri is { Length: > 0 } uri
-           && uri.StartsWith("spotify:artist:", StringComparison.Ordinal);
+           && EntityUri.Parse(uri) is { IsSpotify: true, Kind: EntityKind.Artist };
 
     /// <summary>Remove-from-this-playlist gate: an editable host with resolved rows.</summary>
     public static bool CanRemoveFromPlaylist(PlaylistHost? host) =>

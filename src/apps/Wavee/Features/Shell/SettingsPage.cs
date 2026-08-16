@@ -177,14 +177,36 @@ sealed partial class SettingsPage : Component
         Children = children,
     };
 
-    static Element SettingsSectionHeader(string title, string? icon = null) => new BoxEl
+    /// <summary>A group eyebrow: icon + bold title, and optionally a one-line caption saying what the group holds.
+    /// Title and caption share a COLUMN beside the icon, so the caption aligns under the title without anyone
+    /// hand-computing a glyph-width indent.</summary>
+    static Element SettingsSectionHeader(string title, string? icon = null, string? subtitle = null)
     {
-        Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S,
-        Margin = SettingsSectionHeaderMargin,
-        Children = icon is null
-            ? [BodyStrong(title)]
-            : [Icon(icon, 16f, Tok.TextSecondary), BodyStrong(title)],
-    };
+        Element text = subtitle is { Length: > 0 } sub
+            ? new BoxEl
+            {
+                Direction = 1, Gap = Spacing.XXS, Grow = 1f, Basis = 0f, MinWidth = 0f,
+                Children =
+                [
+                    BodyStrong(title),
+                    Caption(sub) with { Color = Tok.TextSecondary, MinWidth = 0f, Wrap = TextWrap.Wrap, MaxLines = 2 },
+                ],
+            }
+            : BodyStrong(title);
+
+        return new BoxEl
+        {
+            Direction = 0, Gap = Spacing.S,
+            // A one-line header centres on its icon; a two-line block hangs from the top, so the glyph sits beside the
+            // TITLE rather than floating between the two lines.
+            AlignItems = subtitle is { Length: > 0 } ? FlexAlign.Start : FlexAlign.Center,
+            Margin = SettingsSectionHeaderMargin,
+            AlignSelf = FlexAlign.Stretch,
+            Children = icon is null
+                ? [text]
+                : [Icon(icon, 16f, Tok.TextSecondary) with { Margin = new Edges4(0f, 2f, 0f, 0f) }, text],
+        };
+    }
 
     static Element Header() => new BoxEl
     {
@@ -219,15 +241,23 @@ sealed partial class SettingsPage : Component
                                 string? icon = null)
         => SettingsExpander.Item(label, sub, control, align, isEnabled, isClickEnabled, onClick, icon);
 
-    static Element StatPill(string value, string label) => new BoxEl
+    /// <summary>What a COLLAPSED group is currently set to, for a <see cref="SettingsExpander"/>'s header content slot.
+    /// A group whose body is a picker has to answer its own question from the outside, or the user has to open every
+    /// one of them to find out what the page says.</summary>
+    static Element SettingsValueTag(string value) => new TextEl(value)
     {
-        Direction = 0, Gap = 4f, AlignItems = FlexAlign.Center,
-        Padding = new Edges4(Spacing.S, Spacing.XS, Spacing.S, Spacing.XS), Corners = Radii.FullAll,
-        Fill = Tok.FillSubtleSecondary,
-        Children =
-        [
-            new TextEl(value) { Size = 12f, Weight = 600, Color = Tok.TextPrimary },
-            new TextEl(label) { Size = 12f, Color = Tok.TextSecondary },
-        ],
+        Size = 14f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
+    };
+
+    /// <summary>Wide content (a wireframe card strip) inside a <see cref="SettingsExpander"/> body, for its
+    /// <c>ItemsHeader</c> slot. The items panel carries no padding of its own, and a card strip is not a settings ROW —
+    /// an empty-header <c>SettingsCard</c> would reserve a phantom label column beside it. Deliberately NO
+    /// fill/border/corners: the expander body already paints the group chrome, and a second card around the first
+    /// doubles the stroke.</summary>
+    static Element SettingsExpanderPanel(Element content) => new BoxEl
+    {
+        Direction = 1, AlignSelf = FlexAlign.Stretch, MinWidth = 0f,
+        Padding = new Edges4(Spacing.L, Spacing.M, Spacing.L, Spacing.M),
+        Children = [content],
     };
 }

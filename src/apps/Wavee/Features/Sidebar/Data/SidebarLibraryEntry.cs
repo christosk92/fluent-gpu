@@ -127,6 +127,8 @@ public readonly record struct SidebarLibraryEntry(
     // display strings a row concatenates without a null check.
     readonly string? _folderId;
     readonly string? _folderName;
+    readonly string? _parentFolderId;
+    readonly string? _parentFolderName;
     readonly string? _firstArtistName;
 
     /// <summary>The rootlist group id of the folder CONTAINING this row ("" at top level). For a folder row itself this
@@ -135,6 +137,14 @@ public readonly record struct SidebarLibraryEntry(
 
     /// <summary>Display name of the folder containing this row ("" at top level; a folder row carries its own name).</summary>
     public string FolderName { get => _folderName ?? ""; init => _folderName = value; }
+
+    /// <summary>The group id of the folder this row SITS IN ("" at top level) — for a folder row that is its PARENT,
+    /// which <see cref="FolderId"/> cannot express (a folder's <see cref="FolderId"/> is its own id). It is what the
+    /// "Move out of {folder}" verb needs, and the only reason a row can tell nested from top-level at all.</summary>
+    public string ParentFolderId { get => _parentFolderId ?? ""; init => _parentFolderId = value; }
+
+    /// <summary>Display name of <see cref="ParentFolderId"/> ("" at top level) — the {folder} in "Move out of".</summary>
+    public string ParentFolderName { get => _parentFolderName ?? ""; init => _parentFolderName = value; }
 
     /// <summary>Playlist ownership (from <c>PlaylistSummary.IsOwner</c>) — gates the owner-only menu block.</summary>
     public bool IsOwner { get; init; }

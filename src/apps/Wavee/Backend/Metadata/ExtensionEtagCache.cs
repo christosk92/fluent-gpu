@@ -151,9 +151,12 @@ public sealed class ExtensionEtagCache
     public void MarkStale(string uri, Xm.ExtensionKind kind)
         => _resource.MarkStale(new ExtensionKey(_locale, uri, kind));
 
-    public async Task<ByteString?> GetPayloadAsync(string uri, Xm.ExtensionKind kind, CancellationToken ct = default)
+    /// <param name="clientFeatureId">The per-surface <c>client-feature-id</c> attribution, forwarded to the fetch (the
+    /// display-only <c>ExtensionReader</c> stamps it on EVERY arm, so the single-key read needs it too).</param>
+    public async Task<ByteString?> GetPayloadAsync(string uri, Xm.ExtensionKind kind, CancellationToken ct = default,
+        string? clientFeatureId = null)
     {
-        var values = await GetAsync(new[] { (uri, kind) }, ct).ConfigureAwait(false);
+        var values = await GetAsync(new[] { (uri, kind) }, ct, clientFeatureId).ConfigureAwait(false);
         return values.TryGetValue((uri, kind), out var cached) && !cached.Missing ? cached.Payload : null;
     }
 

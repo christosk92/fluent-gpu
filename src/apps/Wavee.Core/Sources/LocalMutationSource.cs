@@ -1,6 +1,6 @@
 namespace Wavee.Core;
 
-/// <summary>The in-process Mutations source (docs/architecture.md §4.2): owns the user's saved / liked / followed set as
+/// <summary>The in-process Mutations source (docs/plans/wavee/architecture.md §4.2): owns the user's saved / liked / followed set as
 /// an optimistic in-memory set, persisted through an injected <c>persist</c> sink (the outbox analog — a real source
 /// would reconcile with the server + revision conflicts). Saved-state is cross-cutting, so it owns no uri namespace
 /// (<see cref="Owns"/> is false); the federation routes to it by the <see cref="SourceCapabilities.Mutations"/> flag.</summary>

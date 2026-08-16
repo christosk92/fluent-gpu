@@ -32,7 +32,7 @@ public readonly record struct ColdSaved(string SetId, string Uri, SyncState Sync
 /// the referenced entity <paramref name="ItemUri"/>, and the per-membership add facts.</summary>
 public readonly record struct ColdPlaylistItem(string ItemId, string ItemUri, string? AddedBy, long AddedAt);
 /// <summary>One rootlist row: a playlist uri or a start/end-group marker. <paramref name="Kind"/> 0=item, 1=start-group, 2=end-group.</summary>
-public readonly record struct ColdRootlistEntry(int Position, int Kind, string Uri, string? GroupName, int Depth);
+public readonly record struct ColdRootlistEntry(int Position, int Kind, string Uri, string? GroupName, int Depth, long AddedAtMs = 0);
 
 /// <summary>One recently-opened detail surface (schema v5, `recent_surfaces`). A pin REASON: the newest 50 opened
 /// surfaces are exempt from the cache-tier TTL/budget so a restart repaints them offline.</summary>

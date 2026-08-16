@@ -11,7 +11,8 @@ using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
 
-// The Mutations-facet affordances (docs/architecture.md §8.3 "capability-driven affordances"). Both read the live
+// The Mutations-facet affordances (docs/plans/wavee/architecture.md §8 item 3, "UI affordances are capability-driven").
+// Both read the live
 // saved-set off LibraryBridge so they re-skin the instant the state flips (optimistic) and survive a restart (persisted).
 // They render NOTHING when no Mutations source is connected — the affordance is GATED on the declared capability, not
 // hardcoded. Used by the detail rail, the track rows' player bar, the artist page and the about-artist card.

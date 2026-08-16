@@ -29,7 +29,7 @@ namespace Wavee;
 static class SidebarSectionHeader
 {
     /// <summary>The header band height.</summary>
-    public const float Height = 28f;
+    public const float Height = SidebarRowGeometry.HeaderHeight;
 
     /// <summary>Section open/close reveal. Revision 2's motion table assigns section expansion
     /// <c>MotionTok.ContentResize</c>, so the token — not a hand-typed duration — is the single source of the dynamics
@@ -55,7 +55,7 @@ static class SidebarSectionHeader
     public static Element ExplicitDivider() => new BoxEl
     {
         Direction = 0,
-        Height = Spacing.L,
+        Height = SidebarRowGeometry.DividerHeight,
         Shrink = 0f,
         AlignItems = FlexAlign.Center,
         Padding = SidebarPaneMetrics.RowInset,

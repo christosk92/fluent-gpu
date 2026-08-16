@@ -108,7 +108,7 @@ public class PlaybackControllerHostSwapTests
         {
             Audio = new FakeAudioHost(Log);
             Video = injectVideoHost ? new FakeVideoHost(Log) : null;
-            Projection = new NowPlayingProjection("us", () => 0);
+            Projection = new NowPlayingProjection("us", NotOwnedEntityHydrator.Instance, new InMemoryStore(), () => 0);
             Controller = new PlaybackController(Audio, new StubTrackResolver(), Projection,
                 new FakeContextResolver("spotify:track:a", "spotify:track:b"), "us", videoHost: Video);
             if (!wireHooks) return;

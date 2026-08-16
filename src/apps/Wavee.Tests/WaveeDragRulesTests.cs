@@ -85,8 +85,9 @@ public class WaveeDragRulesTests
 
     // ── playlist drop refusals ──────────────────────────────────────────────────────────────────────────────────
     static PlaylistDropRefusal Verdict(bool editable = true, bool loading = false, bool hasTracks = true,
-                                       bool sameList = false, bool naturalOrder = true, bool filtered = false)
-        => PlaylistDropRefusalRules.Evaluate(editable, loading, hasTracks, sameList, naturalOrder, filtered);
+                                       bool sameList = false, bool naturalOrder = true, bool filtered = false,
+                                       bool rowsKeyed = true)
+        => PlaylistDropRefusalRules.Evaluate(editable, loading, hasTracks, sameList, naturalOrder, filtered, rowsKeyed);
 
     [Fact]
     public void AForeignCopyIntoAnEditablePlaylist_IsAllowed()
@@ -129,6 +130,26 @@ public class WaveeDragRulesTests
     }
 
     [Fact]
+    public void ASameListMove_NeedsEveryDraggedRowToCarryItsItemId()
+    {
+        // The wire reorder is one ITEM-KEYED move: rows are named by their membership item_id, never by index, and
+        // there is no positional fallback to fall back to. A row whose id has not landed yet (our own add is still in
+        // flight) therefore cannot be moved at all — and saying so beats sending indices that would land elsewhere.
+        Assert.Equal(PlaylistDropRefusal.Syncing, Verdict(sameList: true, rowsKeyed: false));
+        // It is the LAST of the same-list arms: sorting and filtering are states the user can fix, so they are named
+        // first; "still syncing" is a wait, and reporting a wait would hide a remedy.
+        Assert.Equal(PlaylistDropRefusal.Sorted, Verdict(sameList: true, naturalOrder: false, rowsKeyed: false));
+        Assert.Equal(PlaylistDropRefusal.Filtered, Verdict(sameList: true, filtered: true, rowsKeyed: false));
+    }
+
+    [Fact]
+    public void AForeignCopy_IsUnaffectedByPendingItemIds()
+    {
+        // A COPY inserts by position and names no existing membership row, so ids it does not use cannot block it.
+        Assert.Equal(PlaylistDropRefusal.None, Verdict(rowsKeyed: false));
+    }
+
+    [Fact]
     public void AForeignCopy_IsUnaffectedByTheHostsSortOrFilter()
     {
         // A copy inserts by DISPLAY position and never has to name an existing membership row, so the ambiguity that
@@ -143,12 +164,13 @@ public class WaveeDragRulesTests
     {
         // The point of the pair: the target's CanAccept and its refusal caption read one verdict. If these two ever
         // disagreed, a drop could be refused with no reason — or cued with a reason while still succeeding.
-        for (int bits = 0; bits < 64; bits++)
+        for (int bits = 0; bits < 128; bits++)
         {
             bool editable = (bits & 1) != 0, loading = (bits & 2) != 0, hasTracks = (bits & 4) != 0;
             bool sameList = (bits & 8) != 0, natural = (bits & 16) != 0, filtered = (bits & 32) != 0;
-            var verdict = PlaylistDropRefusalRules.Evaluate(editable, loading, hasTracks, sameList, natural, filtered);
-            bool accepts = PlaylistDropRefusalRules.Accepts(editable, loading, hasTracks, sameList, natural, filtered);
+            bool keyed = (bits & 64) != 0;
+            var verdict = PlaylistDropRefusalRules.Evaluate(editable, loading, hasTracks, sameList, natural, filtered, keyed);
+            bool accepts = PlaylistDropRefusalRules.Accepts(editable, loading, hasTracks, sameList, natural, filtered, keyed);
             Assert.Equal(verdict == PlaylistDropRefusal.None, accepts);
         }
     }
@@ -196,5 +218,33 @@ public class WaveeDragRulesTests
         // ever treated as a SILENT no-op.
         Assert.False(Tab(payloadUri: "spotify:playlist:p1"));
         Assert.True(Tab(payloadUri: "spotify:playlist:p2"));
+    }
+
+    // ── the SIDEBAR's own filing arm ────────────────────────────────────────────────────────────────────────────
+    // A rootlist FILING (a playlist or a folder being re-ordered in the tree) is a different question from a track
+    // deposit, and the two are told apart by the payload's KIND. A mislabelled kind silently loses the capability
+    // three layers away: a playlist that says "album" cannot be filed at all, and a folder that says "route" cannot
+    // even be picked up.
+
+    [Fact]
+    public void OnlyPlaylistsAndFoldersAreRootlistFilings()
+    {
+        // These two, and exactly these two, are what the sidebar's slot resolver arms for.
+        Assert.Equal(WaveeResourceKind.Playlist, WaveeDragKindMap.Of(SidebarEntryKind.Playlist));
+        Assert.Equal(WaveeResourceKind.Folder, WaveeDragKindMap.Of(SidebarEntryKind.Folder));
+        // Everything else in the tree projects to a kind the filing arm ignores, so an album row dragged out of a
+        // pinned band can never address a rootlist ordering slot.
+        foreach (var kind in new[] { SidebarEntryKind.Album, SidebarEntryKind.Artist, SidebarEntryKind.Show,
+                                     SidebarEntryKind.Track, SidebarEntryKind.AppRoute })
+            Assert.DoesNotContain(WaveeDragKindMap.Of(kind),
+                new[] { WaveeResourceKind.Playlist, WaveeResourceKind.Folder });
+    }
+
+    [Fact]
+    public void AFolderCarriesNoTracks_SoItIsNeverATrackDeposit()
+    {
+        // D16's premise: a folder passing over a playlist tile (in the rail or in the tree) has nothing it could add.
+        // The tile must sit that gesture out rather than accuse it with "Nothing to add".
+        Assert.Equal(PlaylistDropRefusal.NoTracks, Verdict(hasTracks: false));
     }
 }

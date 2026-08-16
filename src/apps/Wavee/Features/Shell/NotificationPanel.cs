@@ -65,8 +65,36 @@ sealed class NotificationPanel : Component
         return new BoxEl
         {
             Direction = 1, Width = Width, MinWidth = Width, MaxHeight = 520f,
-            Children = [ Header(nc, filter), FilterPills(nc, filter), body ],
+            Children = [ Header(nc, filter), FilterPills(nc, filter), PendingSyncLine(), body ],
         };
+    }
+
+    /// <summary>One line: how many playlist edits this session has made that the server has not acked yet.
+    /// <para>It lives HERE because this is where the user comes to ask "did that actually happen?" — the per-page
+    /// chip answers it for one playlist, and nothing answered it for the app. A Component so it reads
+    /// <c>LibraryBridge.PendingEditsTotal</c> directly and appears/disappears without re-rendering the feed.
+    /// Renders nothing at 0, which is nearly always.</para></summary>
+    static Element PendingSyncLine() => Embed.Comp(() => new PendingSyncRow()) with { Key = "nc-pending-sync" };
+
+    sealed class PendingSyncRow : Component
+    {
+        public override Element Render()
+        {
+            var lib = UseContext(LibraryBridge.Slot);
+            if (lib is null) return new BoxEl { Height = 0f, HitTestVisible = false };
+            int pending = lib.PendingEditsTotal.Value;   // subscribe → the line tracks the outbox draining
+            if (pending <= 0) return new BoxEl { Height = 0f, HitTestVisible = false };
+            return new BoxEl
+            {
+                Direction = 0, AlignItems = FlexAlign.Center, Gap = 8f,
+                Padding = new Edges4(14f, 4f, 14f, 8f),
+                Children =
+                [
+                    Icon(Icons.Refresh, 12f, Tok.TextTertiary),
+                    new TextEl(Strings.Notifications.PendingSync(pending)) { Size = 12f, Color = Tok.TextSecondary, Grow = 1f },
+                ],
+            };
+        }
     }
 
     // ── header ───────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -427,9 +455,12 @@ sealed class NotificationPanel : Component
         if (e.TargetName is not { Length: > 0 } name)
             return Loc.Get(saved ? Strings.Notifications.Activity.Save : Strings.Notifications.Activity.Unsave);
         string uri = e.TargetUri;
-        if (uri.Contains(":track:", StringComparison.Ordinal) || uri.StartsWith("spotify:local:", StringComparison.Ordinal))
+        // Kind via the ONE parser (hydration-facade-design.md §1.1). `spotify:local:*` — Spotify's own local-file uri —
+        // has no EntityKind (nothing hydrates it), so that one scheme stays an explicit test rather than a made-up kind.
+        var kind = EntityUri.KindOf(uri);
+        if (kind == EntityKind.Track || uri.StartsWith("spotify:local:", StringComparison.Ordinal))
             return saved ? Strings.Notifications.Activity.SaveTrack(name) : Strings.Notifications.Activity.UnsaveTrack(name);
-        if (uri.Contains(":album:", StringComparison.Ordinal))
+        if (kind == EntityKind.Album)
             return saved ? Strings.Notifications.Activity.SaveAlbum(name) : Strings.Notifications.Activity.UnsaveAlbum(name);
         // artists, playlists, shows — the save verb is follow
         return saved ? Strings.Notifications.Activity.Follow(name) : Strings.Notifications.Activity.Unfollow(name);

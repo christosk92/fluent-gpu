@@ -6,6 +6,7 @@ using Wavee.Backend.Metadata;
 using Wavee.Backend.Persistence;
 using Wavee.Backend.Spotify;
 using Wavee.Core;
+using EntityKind = Wavee.Backend.Metadata.EntityKind;   // the PERSISTED transport vocabulary (Wavee.Core.EntityKind is the routing one)
 using Wavee.SpotifyLive;
 using Xunit;
 

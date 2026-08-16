@@ -85,6 +85,7 @@ sealed class LibraryV3Sidebar : Component
         _session = session;
         session.Prefs = _prefs;
         session.Library = lib;
+        session.Acts = UseContext(ActionServices.Slot);
 
         // The projection's INPUTS. The binder reads LibraryStore's cells but does not warm them, and V3 shows every kind in
         // one list, so all five warmers plus the tree and the added-at side-channel are armed here. Each Ensure is
@@ -147,6 +148,8 @@ sealed class LibraryV3Sidebar : Component
             RailLayoutMenu = true,
             RailFooter = BuildRailFooter,
             IsReorderableSection = IsSectionReorderable,
+            TreeSortedNonCustom = TreeSortedNonCustom,
+            ClampReorderSlot = ClampReorderSlot,
             CommitReorder = CommitPaneReorder,
             ActivateFolder = session.ActivateFolder,
             DisclosesFoldersInline = session.DisclosesFoldersInline,
@@ -269,6 +272,25 @@ sealed class LibraryV3Sidebar : Component
         if (session.DrillActive) return false;
         if (LibraryV3Metrics.HasQuery(prefs.V3Search.Peek())) return false;
         return LibraryV3Metrics.IsList(LibraryV3Metrics.NormalizeView(prefs.V3View.Peek()));
+    }
+
+    /// <summary>D10 — is the playlist tree showing a NON-CUSTOM order right now? The exact complement of
+    /// <see cref="CanReorderCustom"/>: V3's rows are in the rootlist's own order ONLY under the Playlists lens with the
+    /// Custom sort, no search, a list view and no drill level. Under anything else the rows are a SORTED view, a
+    /// positional insert cannot be shown where it would land, and the resolver refuses Before/After/EndOfList with the
+    /// existing "clear sorting to reorder" sentence — while Into a folder or a playlist stays legal, because a deposit
+    /// needs no position at all.
+    /// <para>Classic and Curated never supply this probe (null ⇒ false): they always render rootlist order.</para>
+    /// <para>Read from inside a live drag's hover, so it stays the same peeked, allocation-free test as its
+    /// complement.</para></summary>
+    bool TreeSortedNonCustom() => !CanReorderCustom();
+
+    /// <summary>D11 — the sibling-run clamp, applied DURING the gesture. Only the library band clamps: the shared PIN
+    /// band is one flat list with no folders in it, and a section that is not reorderable never lifts at all.</summary>
+    int ClampReorderSlot(SidebarSectionKind kind, int from, int to)
+    {
+        if (kind != SidebarSectionKind.PlaylistTree || _session is not { } session) return to;
+        return CanReorderCustom() ? session.View.ClampToSiblingRun(from, to) : to;
     }
 
     /// <summary>Commit a same-band reorder.

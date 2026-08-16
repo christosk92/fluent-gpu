@@ -412,7 +412,7 @@ sealed class LibraryPage : Component
     static Task<Artist> LoadArtist(Services svc, string routeKey, CancellationToken ct)
     {
         string uri = Strip(routeKey, "artist:");
-        return uri.Length == 0 ? Task.FromResult(EmptyArtist("")) : svc.Library.GetArtistAsync(uri, ct);
+        return uri.Length == 0 ? Task.FromResult(EmptyArtist("")) : svc.Library.GetArtistAsync(uri, ct: ct);
     }
 
     // ── left navigator ──

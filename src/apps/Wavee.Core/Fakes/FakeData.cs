@@ -21,14 +21,6 @@ public static class FakeData
         ("Weird Fishes", "Radiohead"),
     ];
 
-    // ARGB palette (one per seed) for the now-playing recolor; deep, saturated, art-derived feel.
-    static readonly uint[] Accents =
-    [
-        0xFF2E6CE0, 0xFFB5532A, 0xFF1F1147, 0xFF24506B, 0xFF1E5F4F, 0xFF6A2D6A,
-        0xFF7A5A2E, 0xFFB23A48, 0xFF2A6F5A, 0xFF8A6A2A, 0xFF5A2A7A, 0xFF2A7A6A,
-        0xFF3A5A8A, 0xFF6A3A5A, 0xFF2A2A3A, 0xFF3A6A4A,
-    ];
-
     public static Image Cover(int i, int px = 640)
     {
         int n = Wrap(i, CoverCount);   // deterministic, handles any seed sign
@@ -322,7 +314,7 @@ public static class FakeData
     /// <summary>The big list (Liked Songs) — generated on demand so 50k stays cheap.</summary>
     public static Track[] LikedSongs(int count = 5000) => Tracks(count, 1000);
 
-    // ── local files (the peer source: docs/architecture.md "Local files") ────────────────────────────────────────────
+    // ── local files (the peer source: docs/plans/wavee/architecture.md "Local files") ────────────────────────────────────────────
     // Synthetic "imported" tracks — distinct names from the streamed catalog, TrackOrigin.Local, Source="local", and
     // wavee:local:* uris. The LocalSource serves these; ContextTracks resolves a local context so they actually play.
     static readonly (string Title, string Artist)[] LocalSeed =
@@ -354,7 +346,7 @@ public static class FakeData
         return _localCache = list;
     }
 
-    // ── podcasts (the Podcasts facet: synthesized, since the export has none — docs/architecture.md §9) ──────────────
+    // ── podcasts (the Podcasts facet: synthesized, since the export has none — docs/plans/wavee/architecture.md §9) ──────────────
     static readonly (string Name, string Publisher)[] ShowSeed =
     [
         ("Signals & Noise", "Wavee Studios"), ("The Long Take", "Reel Talk Media"), ("Night Coding", "Indie Dev FM"),

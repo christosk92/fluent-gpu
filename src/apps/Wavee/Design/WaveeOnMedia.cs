@@ -85,6 +85,26 @@ public static class WaveeOnMedia
     /// <summary>Pressed — one rung on, at 16%. The ratio the subtle ladder keeps between its hover and pressed rungs.</summary>
     public static ColorF GlassPressed => Tok.OnMediaPrimary with { A = 0.16f };
 
+    // ── the INK PLATE: a resting ground made of ink rather than of scrim ─────────────────────────────────────────
+    // For the one control that must be findable without hunting — the immersive stage's way out.
+    //
+    // The scrim ladder is the wrong tool THERE, and the reason is arithmetic rather than taste. ScrimRest is black at
+    // 0.55, which reads beautifully on MediaCard's UNDIMMED artwork. The stage's top band is not that: its scrim is
+    // already deepened to 0.76 black on every cover, so a 55%-black plate on a 76%-black ground has no edge at all —
+    // only the hairline ring and the glyph survive, which is precisely the "I cannot find the way out" report. On a
+    // ground that is already dark, separation has to come from LIGHT.
+    //
+    // Derived from the on-media ink for the same reason the glass ramp and the light-button ramp are: whatever the ink
+    // becomes, this plate follows it, so the shape stays legible if the surface ever inverts.
+
+    /// <summary>The resting ground of an ink-plated on-media control. Deliberately above <see cref="GlassHover"/> —
+    /// this is a REST state, not a hover breath, and it has to hold its own edge before the pointer arrives.</summary>
+    public static ColorF GlassPlate => Tok.OnMediaPrimary with { A = 0.14f };
+    /// <inheritdoc cref="GlassPlate"/>
+    public static ColorF GlassPlateHover => Tok.OnMediaPrimary with { A = 0.22f };
+    /// <inheritdoc cref="GlassPlate"/>
+    public static ColorF GlassPlatePressed => Tok.OnMediaPrimary with { A = 0.28f };
+
     // ── Backdrop treatments ────────────────────────────────────────────────────────────────────────────────────
 
     /// <summary>The dim laid over a BAKED-BLUR derivative so it reads as a backdrop rather than as a stretched square

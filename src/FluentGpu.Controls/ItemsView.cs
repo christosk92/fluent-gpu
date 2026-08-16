@@ -43,6 +43,14 @@ public sealed class ItemsViewController
     internal Action<ItemDisclosureDiagnostic>? DisclosureDiagnostic;
     private long _nextDisclosureOperationId;
 
+    /// <summary>The band a disclosure is about to insert, is animating, or just committed away — the STRUCTURAL shape of
+    /// the item-count change the view is about to observe. <see cref="ItemsView"/> hands it to an
+    /// <see cref="ISplicingVirtualLayout"/> so the surviving rows keep their measured extents across that count change
+    /// instead of the whole extent table re-seeding to one estimate (which jumps the content extent and re-pins the
+    /// scroll anchor against a stale offset — the visible expander flicker).</summary>
+    internal ItemDisclosureRange? DisclosureSpliceRange
+        => (PendingDisclosure ?? ActiveDisclosure ?? CompletedDisclosure)?.Range;
+
     internal delegate bool TryGetItemIndexDelegate(float horizontalViewportRatio, float verticalViewportRatio,
                                                    out int index);
     internal delegate bool CorrectMeasuredExtentDelegate(IMeasuredVirtualLayout layout, int index, float mainExtent);
@@ -850,6 +858,24 @@ public sealed class ItemsView : Component
             },
             DepKey.From(HashCode.Combine((int)spec.Kind, spec.Extent, spec.Gap, spec.Columns, spec.MinCellWidth, spec.Estimate, spec.Horizontal, spec.CustomLayout)));
         bool horizontal = spec.Horizontal;
+
+        // ── the disclosure's STRUCTURAL count change, applied to the extent table before layout sees it ───────────────
+        // A measured layout resolves a bare count change index-by-index, which is right for an append and wrong for the
+        // middle: an expanded folder's children push the whole tail down one band, so every row below the edit would be
+        // matched against a DIFFERENT row's extent (or, before ISplicingVirtualLayout existed, the whole table re-seeded
+        // to one estimate). Splicing the known band here — in the render that first observes the new count, ahead of the
+        // layout pass that consumes it — keeps every surviving row's measured extent, which is also what makes the
+        // reconciler's disclosure travel distance (ItemRect over the disclosed band) a real number instead of an
+        // estimate. Idempotent: after the splice the layout's count matches and the guard stops firing.
+        if (layout is ISplicingVirtualLayout splicing && Controller?.DisclosureSpliceRange is { Count: > 0 } band)
+        {
+            int have = splicing.ItemCount;
+            if (have >= 0 && have != count && band.FirstIndex >= 0)
+            {
+                if (count - have == band.Count) splicing.Splice(band.FirstIndex, 0, band.Count);
+                else if (have - count == band.Count) splicing.Splice(band.FirstIndex, band.Count, 0);
+            }
+        }
 
         var sceneRef = Context.Scene;
         ScrollGeometryObserverMux? geometryMux = UseMemo(

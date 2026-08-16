@@ -174,26 +174,20 @@ public static class RecentsList
     /// <summary>Derive the entity kind from a spotify uri scheme (empty → <see cref="RecentsEntityKind.Unknown"/>). The
     /// <c>…:collection</c> tail (e.g. <c>spotify:user:{id}:collection</c>) resolves to <see cref="RecentsEntityKind.Collection"/>.</summary>
     public static RecentsEntityKind EntityKindOf(string uri)
-    {
-        if (string.IsNullOrEmpty(uri)) return RecentsEntityKind.Unknown;
-        var s = uri.AsSpan();
-        if (s.EndsWith(":collection")) return RecentsEntityKind.Collection;
-        if (!s.StartsWith("spotify:")) return RecentsEntityKind.Unknown;
-        var rest = s[8..];
-        int colon = rest.IndexOf(':');
-        var type = colon >= 0 ? rest[..colon] : rest;
-        return type switch
+        // The scheme walk is THE parser now (hydration-facade-design.md §1.1) — it already folds BOTH collection shapes
+        // (`spotify:collection:*` and `spotify:user:{id}:collection`), which is what the hand-rolled `EndsWith(":collection")`
+        // pre-check existed for. Kinds Recents has no row for (User, Prerelease, Concert) read as Unknown, exactly as before.
+        => EntityUri.KindOf(uri) switch
         {
-            "track" => RecentsEntityKind.Track,
-            "playlist" => RecentsEntityKind.Playlist,
-            "album" => RecentsEntityKind.Album,
-            "artist" => RecentsEntityKind.Artist,
-            "show" => RecentsEntityKind.Show,
-            "episode" => RecentsEntityKind.Episode,
-            "collection" => RecentsEntityKind.Collection,
+            EntityKind.Track => RecentsEntityKind.Track,
+            EntityKind.Playlist => RecentsEntityKind.Playlist,
+            EntityKind.Album => RecentsEntityKind.Album,
+            EntityKind.Artist => RecentsEntityKind.Artist,
+            EntityKind.Show => RecentsEntityKind.Show,
+            EntityKind.Episode => RecentsEntityKind.Episode,
+            EntityKind.Collection => RecentsEntityKind.Collection,
             _ => RecentsEntityKind.Unknown,
         };
-    }
 
     static RecentsRow HeaderRow(RecentsItem item)
     {

@@ -68,6 +68,16 @@ public static class SpotifyHeaders
         return headers;
     }
 
+    // ── the CREATE flavour of the mutation header set ────────────────────────────────────────────────────────────────
+    // Desktop creates a playlist by POSTing a /changes body to the CLIENT-MINTED id (there is no create endpoint any
+    // more), and the only header that differs from an ordinary edit is the sync reason: CAw= (12) instead of CAk= (9).
+    public static Dictionary<string, string> PlaylistV2Create(string language, string? spclientBaseUrl = null)
+    {
+        var headers = PlaylistV2Mutation(language, spclientBaseUrl);
+        headers["spotify-playlist-sync-reason"] = "CAw=";
+        return headers;
+    }
+
     /// <summary>Captured desktop header tuple for POST <c>/playlist/v2/playlist/{id}/signals</c>.</summary>
     public static Dictionary<string, string> PlaylistSignals(string language, string? spclientBaseUrl = null)
     {

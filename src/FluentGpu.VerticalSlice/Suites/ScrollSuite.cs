@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
@@ -3142,6 +3142,50 @@ static class ScrollSuite
                 $"monotonic={monotonic} tracksExact={tracksExact} stepEven={stepEven} pinnedEver={pinnedEver} pinContinuous={pinContinuous} {pinLog}");
         }
 
+        // gate.scroll.text-motion-softness (§8.10b): the text-motion softness curve is the ONLY thing standing between
+        // "crisp but quantized" and "smooth but smeared", so both of its ends are locked here.
+        //
+        // Background: the glyph atlas bakes SubPixelPhases vertical variants, and the recorder relaxes the snap onto that
+        // phase grid in proportion to the enclosing viewport's live scroll speed. At rest and at reading speed the run
+        // must land EXACTLY on its phase (crisp); at fling speed the correction must vanish entirely so the run sits at
+        // its natural fractional device Y and the LINEAR/CLAMP atlas sampler softens it — the WinUI look, which WinUI
+        // gets for free by resampling a composited surface at fractional offsets (ScrollPresenter never rounds its
+        // offset; its layout-round factor feeds measure/arrange only).
+        //
+        // A regression at either end is silent and awful: soften the crisp end and all static text goes blurry; harden
+        // the soft end and the deliberate motion blur disappears with nothing in the logs to say so.
+        {
+            bool restCrisp = SceneRecorder.TextMotionSoftness(0f) == 0f;
+            bool nudgeCrisp = SceneRecorder.TextMotionSoftness(SceneRecorder.MotionSoftStartDip) == 0f
+                              && SceneRecorder.TextMotionSoftness(SceneRecorder.MotionSoftStartDip * 0.5f) == 0f;
+            bool flingFull = SceneRecorder.TextMotionSoftness(SceneRecorder.MotionSoftFullDip) == 1f
+                             && SceneRecorder.TextMotionSoftness(SceneRecorder.MotionSoftFullDip * 4f) == 1f;
+            // Monotonic and continuous across the ramp — a non-monotonic curve would make text sharpen as you speed up.
+            bool monotonic = true, inRange = true;
+            float prev = -1f;
+            for (int i = 0; i <= 64; i++)
+            {
+                float sp = SceneRecorder.MotionSoftStartDip
+                         + (SceneRecorder.MotionSoftFullDip - SceneRecorder.MotionSoftStartDip) * (i / 64f);
+                float v = SceneRecorder.TextMotionSoftness(sp);
+                if (v < -1e-6f || v > 1f + 1e-6f) inRange = false;
+                if (v + 1e-6f < prev) monotonic = false;
+                prev = v;
+            }
+            // The ramp must actually ramp (a curve that jumps 0→1 at the midpoint would pass every check above).
+            float mid = SceneRecorder.TextMotionSoftness(
+                (SceneRecorder.MotionSoftStartDip + SceneRecorder.MotionSoftFullDip) * 0.5f);
+            bool blends = mid > 0.2f && mid < 0.8f;
+            // NaN must read as CRISP, never as "fully soft": a bad speed sample must not blur the whole page.
+            bool nanCrisp = SceneRecorder.TextMotionSoftness(float.NaN) == 0f;
+            // The payload slot is an int; quantization must preserve both ends exactly.
+            bool quantEnds = DrawList.QuantizeMotionSoft(0f) == 0 && DrawList.QuantizeMotionSoft(1f) == 255
+                             && DrawList.QuantizeMotionSoft(float.NaN) == 0;
+            Check("gate.scroll.text-motion-softness text stays EXACTLY on the glyph sub-pixel phase grid at rest and at reading speed, relaxes fully off it at fling speed, and ramps monotonically and continuously in between (NaN reads crisp; the payload quantization preserves both ends)",
+                restCrisp && nudgeCrisp && flingFull && monotonic && inRange && blends && nanCrisp && quantEnds,
+                $"restCrisp={restCrisp} nudgeCrisp={nudgeCrisp} flingFull={flingFull} monotonic={monotonic} inRange={inRange} mid={mid:0.###} blends={blends} nanCrisp={nanCrisp} quantEnds={quantEnds}");
+        }
+
         // gate.scroll.transition-matrix (§8.11, structural guard for R1): drive the feel-critical legal transitions and
         // assert each resulting Phase; a wheel NEVER produces a band (WheelAnimating→Overscroll is undefined — the §2.2 extent
         // asymmetry), which is asserted as a hard negative.
@@ -3878,6 +3922,110 @@ static class ScrollSuite
             bool clamped = sc2.LastRealized == MeasuredSeamProbe.N && Near(sc2.OffsetY, sc2.ContentH - sc2.ViewportH, 2f);
             Check("e11virt.2 measured seam anchoring: offset pinned inside the anchor band mid-list; end-fling clamps to corrected content",
                 anchored && clamped, $"anchor={anchor} off={sc1.OffsetY:0} band=[{band0:0},{band1:0}) end={sc2.OffsetY:0}/{sc2.ContentH - sc2.ViewportH:0}");
+        }
+
+        // e11virt.2b — THE COUNT-CHANGE CONTRACT. A measured layout whose rows are NOT all the same height must not
+        // throw away what it already measured when the item count moves: re-seeding every row to one estimate makes the
+        // content extent jump by the whole (measured − estimate) sum at once, so the scroll anchor re-pins against a
+        // stale offset and every row above AND below the edit visibly shuffles while it re-measures. That is the sidebar
+        // folder expand/collapse flicker, and it is a LAYOUT bug, not an app bug — one toggle discarded a 16/24/28/32/40/
+        // 44/48/56/72/88-DIP ladder. The seam answers it in two shapes: a bare count change RESIZES (survivors keep
+        // their extents, the appended tail seeds), and a disclosure — which knows its band — SPLICES, so the TAIL below
+        // the edit survives at its shifted indices too. The analytic seed removes the guess entirely for a host whose
+        // heights are a pure function of its model.
+        {
+            const float cross = 300f;
+            float[] ladder = [16f, 24f, 28f, 32f, 40f, 44f, 48f, 56f, 72f, 88f, 36f, 20f];
+            const float Est = 44f;
+            const int At = 5, Ins = 3;
+
+            static MeasuredStackVirtualLayout Mixed(float[] ladder, float cross)
+            {
+                var l = new MeasuredStackVirtualLayout(Est);
+                _ = l.ContentExtent(ladder.Length, cross);
+                for (int i = 0; i < ladder.Length; i++) l.SetMeasured(i, ladder[i], cross);
+                return l;
+            }
+
+            var resized = Mixed(ladder, cross);
+            float measuredTotal = resized.ContentExtent(ladder.Length, cross);
+            var before = new RectF[ladder.Length];
+            for (int i = 0; i < ladder.Length; i++) before[i] = resized.ItemRect(i, cross);
+
+            // (a) a bare count change (three rows appended): every surviving row keeps its measured extent, and the
+            //     published content grows by exactly the three estimates — not by (n × estimate − measuredTotal).
+            _ = resized.ContentExtent(ladder.Length + Ins, cross);
+            bool kept = true;
+            for (int i = 0; i < ladder.Length; i++)
+            {
+                var r = resized.ItemRect(i, cross);
+                kept &= Near(r.H, before[i].H) && Near(r.Y, before[i].Y);
+            }
+            bool grewByEstimate = Near(resized.ContentExtent(ladder.Length + Ins, cross), measuredTotal + Ins * Est, 0.05f);
+
+            // (b) the DISCLOSURE shape — three rows inserted in the MIDDLE. Nothing above the edit moves at all; the
+            //     inserted band seeds; the whole tail keeps its extent and slides down by exactly the band.
+            var spliced = Mixed(ladder, cross);
+            spliced.Splice(At, 0, Ins);
+            _ = spliced.ContentExtent(ladder.Length + Ins, cross);
+            bool above = true, band = true, tail = true;
+            for (int i = 0; i < At; i++)
+            {
+                var r = spliced.ItemRect(i, cross);
+                above &= Near(r.H, before[i].H) && Near(r.Y, before[i].Y);
+            }
+            for (int i = At; i < At + Ins; i++) band &= Near(spliced.ItemRect(i, cross).H, Est);
+            for (int i = At; i < ladder.Length; i++)
+            {
+                var r = spliced.ItemRect(i + Ins, cross);
+                tail &= Near(r.H, before[i].H) && Near(r.Y, before[i].Y + Ins * Est);
+            }
+            // …and the collapse mirror: splicing the band back out restores the original geometry exactly.
+            spliced.Splice(At, Ins, 0);
+            _ = spliced.ContentExtent(ladder.Length, cross);
+            bool restored = Near(spliced.ContentExtent(ladder.Length, cross), measuredTotal, 0.05f);
+            for (int i = 0; i < ladder.Length; i++)
+            {
+                var r = spliced.ItemRect(i, cross);
+                restored &= Near(r.H, before[i].H) && Near(r.Y, before[i].Y);
+            }
+
+            // (c) the ANALYTIC seed (RepeatLayout.Extents): an unmeasured row starts at its REAL height, so an insert
+            //     needs no measure pass at all to land the rows below it correctly.
+            var analytic = new MeasuredStackVirtualLayout(Est, false, i => ladder[i % ladder.Length]);
+            _ = analytic.ContentExtent(ladder.Length, cross);
+            bool seeded = Near(analytic.ContentExtent(ladder.Length, cross), measuredTotal, 0.05f);
+            for (int i = 0; i < ladder.Length; i++) seeded &= Near(analytic.ItemRect(i, cross).H, ladder[i]);
+            analytic.Splice(4, 0, 2);
+            _ = analytic.ContentExtent(ladder.Length + 2, cross);
+            bool seededBand = Near(analytic.ItemRect(4, cross).H, ladder[4])
+                && Near(analytic.ItemRect(5, cross).H, ladder[5])
+                && Near(analytic.ItemRect(6, cross).H, ladder[4]);
+
+            // (d) the alloc tripwire: once the backing arrays are warm, a splice + re-query round trip allocates NOTHING.
+            var hot = Mixed(ladder, cross);
+            _ = hot.ContentExtent(ladder.Length + Ins, cross);
+            hot.Splice(At, 0, Ins); _ = hot.ContentExtent(ladder.Length + Ins, cross);
+            hot.Splice(At, Ins, 0); _ = hot.ContentExtent(ladder.Length, cross);
+            long a0 = GC.GetAllocatedBytesForCurrentThread();
+            float sink = 0f;
+            for (int k = 0; k < 16; k++)
+            {
+                hot.Splice(At, 0, Ins);
+                sink += hot.ContentExtent(ladder.Length + Ins, cross);
+                sink += hot.ItemRect(ladder.Length, cross).Y;
+                sink += hot.OffsetOf(9, cross) + hot.IndexAt(320f, cross);
+                hot.Splice(At, Ins, 0);
+                sink += hot.ContentExtent(ladder.Length, cross);
+            }
+            long spliceBytes = GC.GetAllocatedBytesForCurrentThread() - a0;
+
+            Check("e11virt.2b measured count change PRESERVES measured extents: a bare resize keeps every survivor (content grows by the estimates, not by a whole re-seed), a mid-list splice moves the tail by exactly the inserted band and moves nothing above it, the collapse mirror restores the original geometry, an analytic seed needs no measure pass, and a warm splice round trip is 0-alloc",
+                kept && grewByEstimate && above && band && tail && restored && seeded && seededBand
+                && spliceBytes == 0 && sink != 0f,
+                $"kept={kept} grew={grewByEstimate} above={above} band={band} tail={tail} restored={restored} "
+                + $"seeded={seeded} seededBand={seededBand} spliceBytes={spliceBytes} "
+                + $"measuredTotal={measuredTotal:0.##} resized={resized.ContentExtent(ladder.Length + Ins, cross):0.##}");
         }
 
         // e11virt.3 — LinedFlowLayout (the WinUI ItemsView photo-wall): uniform-height lines, width = aspect × lineHeight

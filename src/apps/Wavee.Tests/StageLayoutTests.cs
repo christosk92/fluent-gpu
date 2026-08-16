@@ -1,8 +1,10 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
+using FluentGpu.Dsl;
+using FluentGpu.Foundation;
 using Xunit;
 
 namespace Wavee.Tests;
@@ -21,6 +23,17 @@ public class StageLayoutTests
 {
     const float SweepMax = 2600f;
 
+    /// <summary>A column height at which the HEIGHT ladder is inert — nothing folds and the art sits at its cap — so
+    /// the width tests below keep testing exactly the width ladder and nothing else. DERIVED from the ladder rather
+    /// than authored, so it cannot drift away from the thing it is meant to neutralise.</summary>
+    static readonly float TallH =
+        StageLayout.ColumnChromeH(StageControl.None, StageLayout.WidePlayBoxW) + StageLayout.WideArtW;
+
+    /// <inheritdoc cref="TallH"/>
+    static StageLayout SeedTall(float w) => StageLayout.Seed(w, TallH);
+    /// <inheritdoc cref="TallH"/>
+    static StageLayout StepTall(float w, StageLayout prev) => StageLayout.Resolve(w, TallH, prev);
+
     // ── the width ladder ─────────────────────────────────────────────────────────────────────────────────────────────
 
     /// <summary>The one threshold, derived: the narrowest width the seed resolution calls WIDE is exactly
@@ -30,8 +43,8 @@ public class StageLayoutTests
     {
         float first = FirstWidthWhere(l => l.Wide);
         Assert.Equal(StageLayout.WideEnterW, first);
-        Assert.False(StageLayout.FromWidth(first - 1f).Wide);
-        Assert.True(StageLayout.FromWidth(first).Wide);
+        Assert.False(SeedTall(first - 1f).Wide);
+        Assert.True(SeedTall(first).Wide);
     }
 
     /// <summary>A degenerate / not-yet-measured viewport resolves COMPACT, never a 352-DIP column inside a 0-DIP
@@ -40,7 +53,7 @@ public class StageLayoutTests
     [InlineData(0f)]
     [InlineData(-100f)]
     [InlineData(1f)]
-    public void ADegenerateWidth_IsCompact(float w) => Assert.False(StageLayout.FromWidth(w).Wide);
+    public void ADegenerateWidth_IsCompact(float w) => Assert.False(SeedTall(w).Wide);
 
     /// <summary>Sweeping the width up 1 DIP at a time — threading the previous layout, exactly as the surface's
     /// viewport effect does — flips the stage EXACTLY ONCE. A second flip anywhere in the sweep is the thrash the
@@ -49,11 +62,11 @@ public class StageLayoutTests
     [Fact]
     public void AnUpwardSweep_FlipsExactlyOnce()
     {
-        var cur = StageLayout.FromWidth(0f);
+        var cur = SeedTall(0f);
         int flips = 0;
         for (float w = 0f; w <= SweepMax; w += 1f)
         {
-            var next = StageLayout.Resolve(w, cur);
+            var next = StepTall(w, cur);
             if (next.Wide != cur.Wide) flips++;
             cur = next;
         }
@@ -65,11 +78,11 @@ public class StageLayoutTests
     [Fact]
     public void ADownwardSweep_FlipsExactlyOnce()
     {
-        var cur = StageLayout.FromWidth(SweepMax);
+        var cur = SeedTall(SweepMax);
         int flips = 0;
         for (float w = SweepMax; w >= 0f; w -= 1f)
         {
-            var next = StageLayout.Resolve(w, cur);
+            var next = StepTall(w, cur);
             if (next.Wide != cur.Wide) flips++;
             cur = next;
         }
@@ -86,14 +99,13 @@ public class StageLayoutTests
         float inBand = StageLayout.WideEnterW + StageLayout.PromotionHysteresisW * 0.5f;
 
         // Coming UP through the band from compact: still compact.
-        Assert.False(StageLayout.Resolve(inBand, StageLayout.CompactStage).Wide);
+        Assert.False(StepTall(inBand, StageLayout.CompactStage).Wide);
         // Coming DOWN through the band from wide: still wide.
-        Assert.True(StageLayout.Resolve(inBand, StageLayout.WideStage).Wide);
+        Assert.True(StepTall(inBand, StageLayout.WideStage).Wide);
         // Past the reserve: promoted.
-        Assert.True(StageLayout.Resolve(StageLayout.WideEnterW + StageLayout.PromotionHysteresisW,
-            StageLayout.CompactStage).Wide);
+        Assert.True(StepTall(StageLayout.WideEnterW + StageLayout.PromotionHysteresisW, StageLayout.CompactStage).Wide);
         // Below the threshold: demoted on the spot, no reserve.
-        Assert.False(StageLayout.Resolve(StageLayout.WideEnterW - 1f, StageLayout.WideStage).Wide);
+        Assert.False(StepTall(StageLayout.WideEnterW - 1f, StageLayout.WideStage).Wide);
     }
 
     /// <summary>Narrowing never ADDS. The stage is a two-stage ladder, so its richness score is monotone by
@@ -104,11 +116,162 @@ public class StageLayoutTests
         int prev = int.MinValue;
         for (float w = 0f; w <= SweepMax; w += 1f)
         {
-            int r = StageLayout.FromWidth(w).Richness;
+            int r = SeedTall(w).Richness;
             Assert.True(r >= prev, $"richness went DOWN as the window widened, at {w}");
             prev = r;
         }
     }
+
+    // ── the height ladder ────────────────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>The app's OWN DEFAULT WINDOW must carry the whole column. This is the reported defect, pinned: at
+    /// 1180 x 760 the column had no height ladder at all, so its fixed 620-DIP stack overflowed the 552 it was given,
+    /// <c>FlexJustify.Center</c> clamped the leftover at 0 and the surplus fell off the BOTTOM — the output-device line
+    /// was simply clipped away. The ladder spends the surplus on the COVER instead, so every control survives.</summary>
+    [Fact]
+    public void AtTheDefaultWindow_NoControlIsLost()
+    {
+        var l = StageLayout.Seed(1180f, DefaultColumnAvailH);
+        Assert.True(l.Wide);
+        Assert.True(l.ShowDeviceLine, "the output-device line was the control this defect ate");
+        Assert.True(l.ShowVolume);
+        Assert.True(l.ShowSatellites);
+        // …and it fits, which is the whole point: chrome + art is exactly what the band offers, never more.
+        Assert.True(StageLayout.ColumnChromeH(l.Folded, l.PlayBox) + l.ArtSize <= DefaultColumnAvailH);
+        Assert.True(l.ArtSize < StageLayout.WideArtW, "the cover is what absorbed the shortfall");
+        Assert.True(l.ArtSize >= StageLayout.MinArtW);
+    }
+
+    /// <summary>The column NEVER asks for more height than it was given — at any height, folded or not. This is the
+    /// invariant the clipped device line violated, stated once for the whole sweep.</summary>
+    [Fact]
+    public void TheColumn_NeverExceedsItsBand()
+    {
+        for (float h = 0f; h <= 1400f; h += 1f)
+        {
+            var l = StageLayout.Seed(1180f, h);
+            if (!l.Wide) continue;   // compact is a header row, not this column
+            Assert.True(StageLayout.ColumnChromeH(l.Folded, l.PlayBox) + l.ArtSize <= h + 0.001f,
+                $"the wide column wants more than the {h} DIP it was given");
+        }
+    }
+
+    /// <summary>LOSSY IN THE ART, NEVER IN A CONTROL: shrinking the band shrinks the COVER first, and a control folds
+    /// only when KEEPING it would push the cover below <see cref="StageLayout.MinArtW"/>. A control that folds while
+    /// the cover could still have absorbed the shortfall is the ladder spending the wrong currency.
+    /// <para>Note the fold HANDS ITS HEIGHT BACK to the cover, so the art after a fold sits above the floor rather than
+    /// on it — the fold buys the cover room, which is the whole point.</para></summary>
+    [Fact]
+    public void AControlOnlyFolds_WhenKeepingItWouldBreakTheCoverFloor()
+    {
+        const float box = StageLayout.WidePlayBoxW;
+        for (float h = 0f; h <= 1400f; h += 1f)
+        {
+            var l = StageLayout.Seed(1180f, h);
+            if (!l.Wide) continue;
+            Assert.True(l.ArtSize >= StageLayout.MinArtW);
+
+            if (!l.ShowDeviceLine)
+                Assert.True(h - StageLayout.ColumnChromeH(StageControl.None, box) < StageLayout.MinArtW,
+                    $"the device line folded at h={h} while the cover could still have absorbed it");
+            if (!l.ShowVolume)
+                Assert.True(h - StageLayout.ColumnChromeH(StageControl.OutputDevice, box) < StageLayout.MinArtW,
+                    $"the volume row folded at h={h} while the cover could still have absorbed it");
+        }
+    }
+
+    /// <summary>The cover is quantised to the 4-DIP grid. NOT cosmetic: the surface's reflow signal is
+    /// <c>!next.Equals(prev)</c>, so an unquantised residual would re-render the surface — and its mounted
+    /// <c>LyricsView</c> — on every vertical resize PIXEL.</summary>
+    [Fact]
+    public void TheCoverIsQuantised_SoAResizePixelIsNotARerender()
+    {
+        var seen = new HashSet<StageLayout>();
+        for (float h = 0f; h <= 1400f; h += 1f)
+        {
+            var l = StageLayout.Seed(1180f, h);
+            if (l.Wide) Assert.Equal(0f, l.ArtSize % StageLayout.ArtQuantum);
+            seen.Add(l);
+        }
+        // A 1400-DIP sweep must not produce a distinct layout per DIP — that is what "coarse band signal" means.
+        Assert.True(seen.Count <= 1400f / StageLayout.ArtQuantum + 8f,
+            $"the height ladder produced {seen.Count} distinct layouts across a 1400 DIP sweep");
+    }
+
+    /// <summary>A vertical sweep folds each rung EXACTLY ONCE. Folding is immediate, unfolding costs
+    /// <see cref="StageLayout.FoldHysteresisH"/> — the height twin of the width ladder's asymmetry, and the reason a
+    /// window edge parked on a fold boundary does not strobe a mounted LyricsView.</summary>
+    [Fact]
+    public void AVerticalSweep_FoldsEachRungExactlyOnce()
+    {
+        foreach (var rung in new[] { StageControl.OutputDevice, StageControl.Volume })
+        {
+            var cur = StageLayout.Seed(1180f, 1400f);
+            int flips = 0;
+            for (float h = 1400f; h >= 0f; h -= 1f)
+            {
+                var next = StageLayout.Resolve(1180f, h, cur);
+                if (next.Wide && cur.Wide && next.Shows(rung) != cur.Shows(rung)) flips++;
+                cur = next;
+            }
+            Assert.True(flips <= 1, $"{rung} folded/unfolded {flips} times on one downward sweep");
+        }
+    }
+
+    /// <summary>Richness is monotone in BOTH axes — the 2-D form of "narrowing never adds". Growing the window may
+    /// never take something away, whichever edge was dragged.</summary>
+    [Fact]
+    public void GrowingEitherAxis_NeverTakesSomethingAway()
+    {
+        for (float h = 120f; h <= 1200f; h += 20f)
+        {
+            int prev = int.MinValue;
+            for (float w = 0f; w <= SweepMax; w += 20f)
+            {
+                int r = StageLayout.Seed(w, h).Richness;
+                Assert.True(r >= prev, $"richness dropped as the window WIDENED at w={w}, h={h}");
+                prev = r;
+            }
+        }
+        for (float w = 620f; w <= SweepMax; w += 40f)
+        {
+            int prev = int.MinValue;
+            for (float h = 0f; h <= 1200f; h += 20f)
+            {
+                int r = StageLayout.Seed(w, h).Richness;
+                Assert.True(r >= prev, $"richness dropped as the window grew TALLER at w={w}, h={h}");
+                prev = r;
+            }
+        }
+    }
+
+    /// <summary>The height threshold is DERIVED from the ladder it describes, never authored beside it — the same rule
+    /// <see cref="StageLayout.ColumnContentW"/> follows, and the reason a retune cannot leave the two disagreeing.</summary>
+    [Fact]
+    public void TheHeightThreshold_IsDerivedFromTheLadder()
+    {
+        Assert.Equal(StageLayout.ColumnChromeH(StageLayout.HeightFoldable, StageLayout.WidePlayBoxW)
+                     + StageLayout.MinArtW, StageLayout.WideEnterH);
+        // Below it, the wide column cannot keep a legible cover even fully folded ⇒ the shape demotes.
+        Assert.False(StageLayout.Seed(1180f, StageLayout.WideEnterH - 1f).Wide);
+        Assert.True(StageLayout.Seed(1180f, StageLayout.WideEnterH).Wide);
+    }
+
+    /// <summary>The satellites are deliberately NOT a height rung — shuffle/repeat sit INSIDE the transport row, so
+    /// folding them saves exactly zero vertical space. Pinning it stops a future "make it fold more" pass from adding
+    /// a rung that costs a control and buys nothing.</summary>
+    [Fact]
+    public void TheSatellites_AreNotAHeightRung()
+    {
+        Assert.Equal(StageControl.None, StageLayout.HeightFoldable & StageControl.Shuffle);
+        Assert.Equal(StageControl.None, StageLayout.HeightFoldable & StageControl.Repeat);
+        Assert.Equal(StageLayout.ColumnChromeH(StageControl.None, StageLayout.WidePlayBoxW),
+                     StageLayout.ColumnChromeH(StageControl.Shuffle | StageControl.Repeat, StageLayout.WidePlayBoxW));
+    }
+
+    /// <summary>The column height the surface actually hands the allocator at the app's default window — viewport less
+    /// the caption band (48), the docked player bar (72) and the stage's own top band (88).</summary>
+    const float DefaultColumnAvailH = 760f - 48f - 72f - 88f;
 
     // ── the sizes ────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -144,20 +307,24 @@ public class StageLayoutTests
         Assert.True(c.PlayBox > c.StepBox);
     }
 
-    /// <summary>The column BOX is the designed column plus its veil falloff, and the veil's hold stop is exactly where
-    /// the designed column ends inside it — so the gradient never starts fading under the type. The compact stage has
-    /// no column at all, so it claims no layout width.</summary>
+    /// <summary>The column BOX ***is*** the designed column — the box and the design agree, and the air beside it is
+    /// <see cref="StageLayout.RegionGapW"/>, spent by the BAND as a real <c>Gap</c>.
+    /// <para>It used to be the column plus a 120-DIP "falloff" that the renderer then padded straight back out, i.e.
+    /// 120 DIP of dead padding INSIDE the column rather than air between the two regions. Together with a centred
+    /// reading column that put the first lyric glyph ~390 DIP from the artwork with nothing in between. Deleting the
+    /// falloff is what closed that void, and it moved nothing inside the column: <see cref="StageLayout.ColumnContentW"/>
+    /// is still 304.</para>
+    /// <para>The compact stage has no column at all, so it claims no layout width.</para></summary>
     [Fact]
-    public void TheColumnBox_CarriesTheVeilFalloff()
+    public void TheColumnBox_IsTheDesignedColumn_AndTheGapIsTheBands()
     {
         var w = StageLayout.WideStage;
-        Assert.Equal(w.ColumnWidth + w.ColumnFalloff, w.LayoutWidth);
-        Assert.True(w.ColumnFalloff > 0f);
-        Assert.Equal(w.ColumnWidth / w.LayoutWidth, w.VeilHoldStop, 4);
+        Assert.Equal(w.ColumnWidth, w.LayoutWidth);
+        Assert.Equal(StageLayout.WideColumnW, w.LayoutWidth);
+        Assert.Equal(StageLayout.WideColumnW - 2f * StageLayout.ColumnPadX, StageLayout.ColumnContentW);
+        Assert.True(StageLayout.RegionGapW > 0f, "the two regions need air between them");
 
-        var c = StageLayout.CompactStage;
-        Assert.Equal(0f, c.LayoutWidth);
-        Assert.Equal(0f, c.VeilHoldStop);
+        Assert.Equal(0f, StageLayout.CompactStage.LayoutWidth);
     }
 
     // ── the fold ─────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -206,7 +373,7 @@ public class StageLayoutTests
     public void TheLadderHasExactlyTwoShapes()
     {
         var seen = new HashSet<StageLayout>();
-        for (float w = 0f; w <= SweepMax; w += 1f) seen.Add(StageLayout.FromWidth(w));
+        for (float w = 0f; w <= SweepMax; w += 1f) seen.Add(SeedTall(w));
         Assert.Equal(2, seen.Count);
         Assert.Contains(StageLayout.WideStage, seen);
         Assert.Contains(StageLayout.CompactStage, seen);
@@ -245,7 +412,9 @@ public class StageLayoutTests
         Assert.Equal(StageLayout.WideColumnW + StageLayout.ColumnShadeFalloffW, StageLayout.ColumnShadeW);
         Assert.True(StageLayout.ColumnShadeW > StageLayout.WideStage.LayoutWidth,
             "the shade must overhang the column BOX — a shade that stops at the box edge IS the edge");
-        Assert.True(StageLayout.ColumnShadeFalloffW >= 2f * StageLayout.WideColumnFalloffW);
+        // …and it reaches well past the air between the regions, so the ramp is still resolving inside the PANE rather
+        // than ending on the gap's far edge (which would put a locatable seam exactly where the lyrics begin).
+        Assert.True(StageLayout.ColumnShadeFalloffW >= 2f * StageLayout.RegionGapW);
         Assert.True(StageLayout.ColumnShadeFalloffW >= 240f, "a short ramp to zero still reads as a smear");
 
         // The hold stop is exactly where the DESIGNED column ends inside the shade, so the type never sits on a moving
@@ -367,14 +536,16 @@ public class StageLayoutTests
 
         string chrome = File.ReadAllText(StagePath(root, "StageChrome.cs"));
         Assert.Contains("public static BoxEl Play(", chrome);
-        Assert.Contains("WaveeOnMedia.LightButton", chrome);
-        Assert.Contains("WaveeOnMedia.LightButtonInk", chrome);
+        // Named ButtonFill, not "LightButton": on a LIGHT stage the one filled control is a DARK disc, so the old
+        // name would be a lie in half the product.
+        Assert.Contains("StageInk.ButtonFill", chrome);
+        Assert.Contains("StageInk.ButtonInk", chrome);
 
         foreach (string name in StageInkFiles)
         {
             if (name == "StageChrome.cs") continue;
             string text = File.ReadAllText(StagePath(root, name));
-            Assert.DoesNotContain("WaveeOnMedia.LightButton", text);
+            Assert.DoesNotContain("StageInk.ButtonFill", text);
         }
     }
 
@@ -422,6 +593,227 @@ public class StageLayoutTests
         // And the fence holds — the stage is NOT a text-action call site.
         foreach (string name in StageInkFiles)
             Assert.DoesNotContain("WaveeCta.TextAction(", File.ReadAllText(StagePath(root, name)));
+    }
+
+    // ── the ink seam ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>EVERY stage surface reaches its colour through <c>StageInk</c>, and none of them names the
+    /// theme-invariant <c>WaveeOnMedia</c> ladder directly. This is the guard that makes ~96 call sites un-drift-able:
+    /// one file knows the stage's polarity, and a renderer that reaches around it silently loses the light arm for
+    /// whatever it painted.
+    /// <para><c>WaveeOnMedia</c> itself is deliberately untouched and must STAY theme-invariant — it is the ladder for
+    /// everything that paints on top of real artwork (MediaCard covers, row FABs, the bar), where white-on-scrim is
+    /// right in both themes. The stage is the one surface that also owns its own scrim, which is why it — and only
+    /// it — gets a polarity.</para></summary>
+    [Fact]
+    public void EveryStageSurface_ReadsTheInkSeam()
+    {
+        string root = AppSourceRoot();
+        if (root is null) { Assert.Skip("app sources not present (binary-only run)"); return; }
+
+        var offenders = new List<string>();
+        foreach (string name in StageInkFiles)
+        {
+            string[] lines = File.ReadAllLines(StagePath(root, name));
+            for (int i = 0; i < lines.Length; i++)
+                if (Code(lines[i]).Contains("WaveeOnMedia.", StringComparison.Ordinal))
+                    offenders.Add($"{name}:{i + 1}: {lines[i].Trim()}");
+        }
+        Assert.True(offenders.Count == 0,
+            "a stage renderer reached PAST the ink seam — that colour will not follow the theme:\n  "
+            + string.Join("\n  ", offenders));
+
+        // …and they really do use it (a file that painted nothing would pass the scan above vacuously).
+        foreach (string name in new[] { "StageChrome.cs", "StageIdentity.cs", "StagePanes.cs" })
+            Assert.Contains("StageInk.", File.ReadAllText(StagePath(root, name)));
+    }
+
+    /// <summary>THE DARK ARM IS <c>WaveeOnMedia</c> VERBATIM. "Dark theme is byte-identical to what shipped" is a claim
+    /// worth executing rather than promising — it is what makes the light arm a pure addition instead of a retune of
+    /// the surface everyone already uses.</summary>
+    [Fact]
+    public void TheStageInkDarkArm_IsWaveeOnMediaVerbatim()
+    {
+        var d = StageArm.For(ThemeKind.Dark);
+        Assert.Equal(Tok.MediaStage, d.Veil);
+        Assert.Equal(Tok.MediaStage, d.Floor);
+        Assert.Equal(WaveeOnMedia.Ink, d.Ink);
+        Assert.Equal(WaveeOnMedia.InkSecondary, d.InkSecondary);
+        Assert.Equal(WaveeOnMedia.InkTertiary, d.InkTertiary);
+        Assert.Equal(WaveeOnMedia.GlassRest, d.GlassRest);
+        Assert.Equal(WaveeOnMedia.GlassHover, d.GlassHover);
+        Assert.Equal(WaveeOnMedia.GlassPressed, d.GlassPressed);
+        Assert.Equal(WaveeOnMedia.GlassPlate, d.GlassPlate);
+        Assert.Equal(WaveeOnMedia.GlassPlateHover, d.GlassPlateHover);
+        Assert.Equal(WaveeOnMedia.GlassPlatePressed, d.GlassPlatePressed);
+        Assert.Equal(WaveeOnMedia.ScrimRest, d.ScrimRest);
+        Assert.Equal(WaveeOnMedia.ScrimHover, d.ScrimHover);
+        Assert.Equal(WaveeOnMedia.ScrimPressed, d.ScrimPressed);
+        Assert.Equal(WaveeOnMedia.Stroke, d.Stroke);
+        Assert.Equal(WaveeOnMedia.LightButton, d.ButtonFill);
+        Assert.Equal(WaveeOnMedia.LightButtonHover, d.ButtonFillHover);
+        Assert.Equal(WaveeOnMedia.LightButtonPressed, d.ButtonFillPressed);
+        Assert.Equal(WaveeOnMedia.LightButtonInk, d.ButtonInk);
+    }
+
+    /// <summary>The light arm MIRRORS the dark one rather than being a second, independently-tuned ladder: the same
+    /// alphas applied to an inverted ground. Two ladders is how the two arms drift apart.</summary>
+    [Fact]
+    public void TheStageInkLightArm_MirrorsTheDarkOne()
+    {
+        var d = StageArm.For(ThemeKind.Dark);
+        var l = StageArm.For(ThemeKind.Light);
+
+        // Inverted polarity: a light ground under dark ink.
+        Assert.True(l.Veil.R > 0.9f, "the light stage's ground must actually be light");
+        Assert.True(l.Ink.R < 0.1f, "the light stage's ink must actually be dark");
+        Assert.Equal(1f, l.Ink.A);   // opaque, like the dark arm's white — not the theme text rung's 0.894
+
+        // ONE alpha ladder, two grounds.
+        Assert.Equal(d.InkSecondary.A, l.InkSecondary.A, 4);
+        Assert.Equal(d.InkTertiary.A, l.InkTertiary.A, 4);
+        Assert.Equal(d.GlassHover.A, l.GlassHover.A, 4);
+        Assert.Equal(d.GlassPressed.A, l.GlassPressed.A, 4);
+        Assert.Equal(d.GlassPlate.A, l.GlassPlate.A, 4);
+        Assert.Equal(d.ScrimRest.A, l.ScrimRest.A, 4);
+        Assert.Equal(d.Stroke.A, l.Stroke.A, 4);
+
+        // The ramps keep their ORDER in both arms (rest < hover < pressed), which is what makes them read as one control.
+        Assert.True(l.GlassHover.A < l.GlassPressed.A);
+        Assert.True(l.GlassPlate.A < l.GlassPlateHover.A && l.GlassPlateHover.A < l.GlassPlatePressed.A);
+
+        // The one filled control inverts WHOLE — a dark disc carrying the light ground as its glyph.
+        Assert.Equal(l.Ink, l.ButtonFill);
+        Assert.Equal(l.Veil, l.ButtonInk);
+        Assert.True(ColorContrast.Ratio(l.ButtonInk, l.ButtonFill) > 10f, "the play glyph must read on its own disc");
+
+        // Every plate stays ACHROMATIC — the stage tints with artwork, never with a minted hue.
+        foreach (var c in new[] { l.Veil, l.Ink, l.ScrimRest, l.GlassPlate })
+            Assert.True(MathF.Abs(c.R - c.G) < 0.02f && MathF.Abs(c.G - c.B) < 0.02f, "a stage rung invented a hue");
+    }
+
+    /// <summary>The light arm is NO WORSE than the dark arm already shipping — at each arm's own WORST cover.
+    ///
+    /// <para>This is the load-bearing claim behind leaving <see cref="StageLayout"/>'s scrim alphas alone. The two
+    /// failure cases are mirror images (a near-white cover under a dark veil; a near-black cover under a light one),
+    /// and the sRGB transfer curve is not symmetric: mixing toward BLACK at a partial alpha destroys far more
+    /// perceptual luminance than mixing toward white. So the light arm's alpha'd ink clears a HIGHER ratio than the
+    /// dark arm's — one set of alphas is correct for both.</para></summary>
+    [Fact]
+    public void TheLightArm_IsNoWorseThanTheShippedDarkOne()
+    {
+        var d = StageArm.For(ThemeKind.Dark);
+        var l = StageArm.For(ThemeKind.Light);
+        var white = new ColorF(1f, 1f, 1f, 1f);
+        var black = new ColorF(0f, 0f, 0f, 1f);
+
+        // Each arm's worst case: the cover whose luminance fights its own veil hardest.
+        var darkGround = ColorContrast.Over(d.Veil with { A = StageLayout.ScrimBaseA }, white);
+        var lightGround = ColorContrast.Over(l.Veil with { A = StageLayout.ScrimBaseA }, black);
+
+        foreach (var (dc, lc, name) in new[]
+        {
+            (d.Ink, l.Ink, "primary"),
+            (d.InkSecondary, l.InkSecondary, "secondary"),
+            (d.InkTertiary, l.InkTertiary, "tertiary"),
+        })
+        {
+            float dark = ColorContrast.Ratio(ColorContrast.Over(dc, darkGround), darkGround);
+            float light = ColorContrast.Ratio(ColorContrast.Over(lc, lightGround), lightGround);
+            Assert.True(light >= dark,
+                $"the light arm's {name} ink ({light:0.00}:1) is worse than the dark arm already ships ({dark:0.00}:1)");
+        }
+    }
+
+    /// <summary>The stage's interaction glass is at least as audible as the app's own LIGHT ROW hover, and it is BLACK
+    /// ink — the rule <c>LightModeOverhaulTests</c> establishes for every light row in the product. A stage that used a
+    /// quieter or inverted ramp would be a second, contradictory answer to "what does hover feel like in light".</summary>
+    [Fact]
+    public void TheStageGlass_IsAtLeastAsAudibleAsTheAppsLightRowHover()
+    {
+        var l = StageArm.For(ThemeKind.Light);
+        Assert.True(l.GlassHover.R < 0.5f, "light-theme glass must be BLACK ink, not white");
+        Assert.True(l.GlassHover.A >= 0.045f, "below the app's audible floor for a light row hover");
+    }
+
+    /// <summary>The lyrics depth-of-field is SHALLOWER on the stage than on the rail, and it is OFF when there is no
+    /// focus at all.
+    /// <para>Two separate problems fed the "nearly illegible" report. The ladder was GLOBAL, so the stage — a reading
+    /// surface showing ~20 lines at 36 DIP — inherited the narrow rail's far rungs (up to 6.5σ) and everything outside
+    /// the focal band dissolved into fog. And <c>DofSigmaFor</c> returned the ladder's MAXIMUM when
+    /// <c>active &lt; 0</c>, which blurred the ENTIRE document at full σ before the first line landed and forever on
+    /// any document whose clock never resolved.</para>
+    /// <para>Source-scanned rather than called: <c>LyricsFx</c> is engine-bound and is deliberately not source-included
+    /// here, so this pins the SHAPE of the ladder and the no-focus arm as written.</para></summary>
+    [Fact]
+    public void TheLyricsDof_IsShallowerOnTheStage_AndOffWithNoFocus()
+    {
+        string root = AppSourceRoot();
+        if (root is null) { Assert.Skip("app sources not present (binary-only run)"); return; }
+
+        string view = File.ReadAllText(StagePath(root, "LyricsView.cs"));
+
+        // Two ladders, chosen per surface — not one global ramp.
+        Assert.Contains("static float DofSigma(int dist, bool large) => large ? StageSigma(dist) : RailSigma(dist);", view);
+        // The RAIL keeps the measured Apple Music reference verbatim.
+        Assert.Matches(new Regex(@"RailSigma\(int dist\)[\s\S]{0,320}?_ => 6\.5f"), view);
+        // The STAGE settles far shallower — recessed, not dissolved.
+        Assert.Matches(new Regex(@"StageSigma\(int dist\)[\s\S]{0,320}?_ => 3\.0f"), view);
+        // Both keep 0 ON the focus.
+        Assert.Equal(2, Regex.Matches(view, @"<= 0 => 0f,").Count);
+
+        // NO ACTIVE LINE ⇒ NO BLUR. The literal that used to blur the whole sheet is gone by name.
+        Assert.Matches(new Regex(@"if \(active < 0\) return 0f;"), view);
+        Assert.DoesNotContain("if (active < 0) return LyricsFx.DofSigma(6)", view);
+    }
+
+    /// <summary>The quality badge names the PLAYING STREAM, or says nothing at all.
+    /// <para>Three refusals, each pinned, because each is a different way to make the badge a plausible lie: it must
+    /// gate on a published FORMAT (not a bitrate it could invent), it must render nothing while another Connect device
+    /// is active (that stream is resolved elsewhere and this machine cannot describe it), and it must never reach for
+    /// the user's quality PREFERENCE or a track's available format LADDER — what was asked for and what exists are not
+    /// what is decoding.</para></summary>
+    [Fact]
+    public void TheQualityBadge_NamesOnlyThePlayingStream()
+    {
+        string root = AppSourceRoot();
+        if (root is null) { Assert.Skip("app sources not present (binary-only run)"); return; }
+
+        string identity = File.ReadAllText(StagePath(root, "StageIdentity.cs"));
+        Assert.Contains("sealed class StageQualityBadge", identity);
+        // Gated on BOTH: a published format AND local playback. Either alone would let it lie.
+        Assert.Matches(new Regex(@"StreamFormat[\s\S]{0,400}?ActiveDeviceId"), identity);
+        Assert.Matches(new Regex(@"fmt is not \{ Length: > 0 \}[\s\S]{0,80}?remote is \{ Length: > 0 \}"), identity);
+        // The two things it must never reach for.
+        Assert.DoesNotContain("AudioQualityPreference", identity);
+        Assert.DoesNotContain("ITrackExpansionService", identity);
+
+        // …and the projection CLEARS it when the stream stops being ours — the half that makes the gate above true.
+        string proj = File.ReadAllText(Path.Combine(root, "Backend", "PlaybackProjection.cs"));
+        Assert.Contains("ClearStreamIdentityLocked()", proj);
+        Assert.Matches(new Regex(@"ActiveDeviceId != _ourDeviceId\) ClearStreamIdentityLocked\(\)"), proj);
+    }
+
+    /// <summary>The wire-meta label is derived from the FORMAT, and every format arm is named. Both halves used to be
+    /// wrong in the same direction — they described lossless as lossy Vorbis: <c>Flac24</c> had no bitrate arm so it
+    /// fell through to 160, and the label was built as "Vorbis {kbps} kbps" for everything that was not MP3, so a FLAC
+    /// stream announced itself as "Vorbis 1411 kbps". Nothing surfaced the string, so nothing caught it; the badge is
+    /// its first user-facing consumer.</summary>
+    [Fact]
+    public void TheWireMetaLabel_DoesNotCallFlacVorbis()
+    {
+        string root = AppSourceRoot();
+        if (root is null) { Assert.Skip("app sources not present (binary-only run)"); return; }
+
+        string path = Path.Combine(root, "SpotifyLive", "SpotifyMediaProvider.cs");
+        string provider = File.ReadAllText(path);
+        // CODE-only: the prose above the switch quotes the old expression verbatim, which is exactly the drift the
+        // Code() scan exists for elsewhere in this file.
+        foreach (string line in File.ReadAllLines(path))
+            Assert.DoesNotContain("$\"Vorbis {kbps} kbps\"", Code(line));
+        Assert.Matches(new Regex(@"AudioFormat\.Flac => \(1411, ""FLAC""\)"), provider);
+        Assert.Matches(new Regex(@"AudioFormat\.Flac24 => \(2116, ""FLAC 24-bit""\)"), provider);
+        Assert.Matches(new Regex(@"AudioFormat\.Mp3 => \(160, ""MP3""\)"), provider);
     }
 
     /// <summary>The pane switch is OPACITY ONLY. Both panes stay mounted (their keys are unconditional), each carries
@@ -488,11 +880,16 @@ public class StageLayoutTests
 
     // ── the scrim's material rules, as source scans ──────────────────────────────────────────────────────────────────
 
-    /// <summary>THE decision, in code: the stage is single-theme art-dark, so NOTHING on it branches on the theme. The
-    /// deleted arm is the white light-theme base scrim — it is what forced every chrome region to bring its own boxed
-    /// dark veil, and what left the theme-invariant white title sitting on a near-white ground.</summary>
+    /// <summary>THE decision, in code: the stage has TWO ARMS and EXACTLY ONE SEAM knows which is live. No RENDERER may
+    /// branch on the theme — that is precisely how the surface became a two-world collage the FIRST time it had a light
+    /// arm: a base scrim that flipped under ink that did not, so every chrome region needed its own boxed dark veil and
+    /// the white title vanished on the pale ground. One branch, in one place, is the whole difference between
+    /// "theme-aware" and "patchwork".
+    /// <para>Both halves are asserted. Zero theme reads across the four renderers — AND a positive one in the seam,
+    /// because a stage that branched NOWHERE would pass the scan below while being silently stuck in one polarity,
+    /// which is the state this wave just left.</para></summary>
     [Fact]
-    public void NoStageFile_BranchesOnTheTheme()
+    public void OnlyTheInkSeam_BranchesOnTheTheme()
     {
         string root = AppSourceRoot();
         if (root is null) { Assert.Skip("app sources not present (binary-only run)"); return; }
@@ -508,11 +905,17 @@ public class StageLayoutTests
             }
         }
         Assert.True(offenders.Count == 0,
-            "the stage is ALWAYS art-dark — a theme branch here is the two-world collage coming back:\n  "
+            "a stage RENDERER branched on the theme — that is the two-world collage coming back:\n  "
             + string.Join("\n  ", offenders));
+
+        // …and the seam really does carry the branch: the pure arm decides every rung from its polarity, and the live
+        // static is the ONE place that reads the active theme to pick an arm.
+        Assert.Contains("ThemeKind", File.ReadAllText(Path.Combine(root, "Design", "StageArm.cs")));
+        Assert.Contains("Tok.Theme", File.ReadAllText(Path.Combine(root, "Design", "StageInk.cs")));
     }
 
-    static readonly Regex ThemeBranch = new(@"Tok\.Theme|ThemeKind\.", RegexOptions.Compiled);
+    // `Theme.Dark` is a THIRD spelling of the same read (FluentGpu.Dsl.Theme) that the original regex missed.
+    static readonly Regex ThemeBranch = new(@"Tok\.Theme|ThemeKind\.|Theme\.Dark", RegexOptions.Compiled);
 
     /// <summary>ONE scrim system, not a patchwork. The chrome regions' boxed veils are GONE by name, and what replaced
     /// them is two full-bleed layers authored in <c>StageChrome</c> and mounted once by the surface.</summary>
@@ -577,7 +980,7 @@ public class StageLayoutTests
         // stretches the whitespace instead of placing the cluster).
         Assert.Matches(new Regex(@"Grow = 1f, MinHeight = 0f,\s*Direction = 1, Justify = FlexJustify\.Center,"), identity);
         // …and the vertical gutter is ONE constant, spent at both ends.
-        Assert.Matches(new Regex(@"Padding = new Edges4\(ColumnPadX, ColumnPadY, L\.ColumnFalloff \+ ColumnPadX, ColumnPadY\)"),
+        Assert.Matches(new Regex(@"Padding = new Edges4\(ColumnPadX, ColumnPadY, ColumnPadX, ColumnPadY\)"),
             identity);
         Assert.DoesNotContain("ColumnPadBottom", identity);
     }
@@ -598,8 +1001,10 @@ public class StageLayoutTests
         if (root is null) { Assert.Skip("app sources not present (binary-only run)"); return; }
 
         string surface = File.ReadAllText(StagePath(root, "ImmersiveLyricsSurface.cs"));
+        // Tolerant of interleaved diagnostics (the FG_STAGE_RECTS probe sits on this element): what must hold is that
+        // the wrapper claims NO horizontal participation of its own.
         Assert.Matches(new Regex(
-                @"Key = ""stage:identity"",\s*Direction = 1, MinHeight = 0f, MinWidth = 0f,\s*Grow = 0f, Shrink = 0f,"),
+                @"Key = ""stage:identity"",[\s\S]{0,200}?Direction = 1, MinHeight = 0f, MinWidth = 0f,\s*Grow = 0f, Shrink = 0f,"),
             surface);
         // The width is the ladder's, and it is NOT authored in the compact shape (which claims no column at all).
         Assert.Contains("Width = L.Wide ? L.LayoutWidth : float.NaN", surface);
@@ -620,7 +1025,14 @@ public class StageLayoutTests
 
         string panes = File.ReadAllText(StagePath(root, "StagePanes.cs"));
         Assert.Contains("MaxWidth = ImmersiveLyricsSurface.ColumnMaxW", panes);
-        Assert.Contains("ImmersiveLyricsSurface.ColumnGutter * 0.5f", panes);
+        // The gutter is the column's TRAILING air only now — the leading air is the band's RegionGapW, so a
+        // half-gutter here would double-count it, and a CENTRED column is what turned an over-wide pane into text
+        // pushed off-screen rather than into harmless empty space.
+        Assert.Contains("ImmersiveLyricsSurface.ColumnGutter, StageChrome.PivotBandH", panes);
+        // …scoped to the READING COLUMN — StageQueuePane legitimately centres its own "show more" pill, so a
+        // file-wide scan would pin the wrong thing.
+        Assert.Matches(new Regex(@"Element LyricsColumn\(ShellUi\? ui\)[\s\S]{0,900}?Justify = FlexJustify\.Start"), panes);
+        Assert.DoesNotMatch(new Regex(@"Element LyricsColumn\(ShellUi\? ui\)[\s\S]{0,900}?Justify = FlexJustify\.Center"), panes);
         // The formula is GONE, and so is the viewport signal it needed: no CODE in this file predicts a width. (The
         // prose still names what it replaced — hence the Code() scan, exactly like the ink rules above.)
         var predictors = new List<string>();
@@ -653,22 +1065,44 @@ public class StageLayoutTests
 
         string chrome = File.ReadAllText(StagePath(root, "StageChrome.cs"));
         Assert.Contains("public static BoxEl ScrimFab(", chrome);
-        Assert.Matches(new Regex(@"ScrimFab\([\s\S]{0,900}?Fill = WaveeOnMedia\.ScrimRest"), chrome);
-        Assert.Matches(new Regex(@"ScrimFab\([\s\S]{0,900}?BorderColor = WaveeOnMedia\.Stroke"), chrome);
+        Assert.Matches(new Regex(@"ScrimFab\([\s\S]{0,900}?Fill = StageInk\.ScrimRest"), chrome);
+        Assert.Matches(new Regex(@"ScrimFab\([\s\S]{0,900}?BorderColor = StageInk\.Stroke"), chrome);
         Assert.Matches(new Regex(@"ScrimFab\([\s\S]{0,900}?Corners = Radii\.Circle\(box\)"), chrome);
         // 40 DIP: the on-media FAB rung, comfortably past the 32 icon-button minimum because this one has to be found
         // over arbitrary artwork rather than merely clicked.
         Assert.Contains("public const float FabBox = 40f;", chrome);
 
-        // The surface's top band uses it for BOTH of its buttons, and no longer reaches for the plateless glyph.
-        // (Code-only: the prose above the call site names the shape it replaced.)
+        // ── THE EXIT is its own shape, and it OUTRANKS the toggle beside it ──────────────────────────────────────
+        // Matching the secondary control is what made it unfindable: the scrim's own top deepening is already
+        // ScrimTopA (76% black) on every cover, so a 55%-black scrim plate on top of it has no edge at all.
+        Assert.Contains("public const float ExitBox = 44f;", chrome);
+        Assert.True(StageChromeExitBox > StageChromeFabBox, "the way out must outrank the secondary control");
+        Assert.Matches(new Regex(@"ExitFab\([\s\S]{0,900}?Fill = StageInk\.GlassPlate"), chrome);
+        Assert.Matches(new Regex(@"ExitFab\([\s\S]{0,900}?BorderColor = StageInk\.Stroke"), chrome);
+        // The SHADOW is load-bearing: it is the one separation channel that survives an inverted ink ladder (a light
+        // disc on dark art AND a dark disc on a light one). Pinned so it is not "cleaned up" as decoration.
+        Assert.Matches(new Regex(@"ExitFab\([\s\S]{0,900}?Shadow = Elevation\.Card"), chrome);
+        // …and its ink is PRIMARY, not the secondary rung — the way out is not a secondary control.
+        Assert.Matches(new Regex(@"ExitFab\([\s\S]{0,1400}?Color = StageInk\.Ink,"), chrome);
+
+        // The surface uses BOTH shapes — ExitFab for the way out, ScrimFab for the secondary toggle — and no longer
+        // reaches for the plateless glyph. (Code-only: the prose above the call site names the shape it replaced.)
         string surface = File.ReadAllText(StagePath(root, "ImmersiveLyricsSurface.cs"));
+        Assert.Contains("StageChrome.ExitFab(", surface);
         Assert.Contains("StageChrome.ScrimFab(", surface);
         foreach (string line in File.ReadAllLines(StagePath(root, "ImmersiveLyricsSurface.cs")))
             Assert.DoesNotContain("StageChrome.Glyph(", Code(line));
-        // Escape stays the keyboard half of the same affordance.
+        // Escape stays the keyboard half of the same affordance — on the surface AND at the shell, because the surface
+        // deliberately leaves the caption strip and the player bar live and a click on either moves focus out of it.
         Assert.Contains("Keys.Escape", surface);
+        string shell = File.ReadAllText(Path.Combine(root, "Features", "Shell", "WaveeShell.cs"));
+        Assert.Matches(new Regex(@"OnShellEscape[\s\S]{0,1600}?ImmersiveLyrics"), shell);
+        // …and the tooltip is the only place in the product that TEACHES the keyboard half.
+        Assert.Contains("CloseLyricsHint", surface);
     }
+
+    static float StageChromeExitBox => 44f;
+    static float StageChromeFabBox => 40f;
 
     /// <summary>Every full-width row in the column is wrapped in a COLUMN, never the BoxEl default row. A row wrapper
     /// hands its single child the child's INTRINSIC main-axis size — which is what made the seek bar a stub, the volume
@@ -760,7 +1194,7 @@ public class StageLayoutTests
 
         string ink = File.ReadAllText(StagePath(root, "LyricsInk.cs"));
         Assert.Contains("readonly record struct LyricsInk", ink);
-        Assert.Contains("WaveeOnMedia.Ink", ink);
+        Assert.Contains("StageInk.Ink", ink);      // the stage arm resolves through the stage's own polarity
         Assert.Contains("Tok.TextPrimary", ink);   // the theme arm still exists — the rail is not on media
 
         Assert.Contains("new LyricsView(large: true, onMedia: true", File.ReadAllText(StagePath(root, "StagePanes.cs")));
@@ -829,7 +1263,7 @@ public class StageLayoutTests
     static float FirstWidthWhere(Func<StageLayout, bool> predicate)
     {
         for (float w = 0f; w <= 4000f; w += 1f)
-            if (predicate(StageLayout.FromWidth(w))) return w;
+            if (predicate(SeedTall(w))) return w;
         return -1f;
     }
 

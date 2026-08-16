@@ -16,7 +16,7 @@ public enum DiffOutcome { Applied, UpToDate, FellBackToFull }
 
 // ── The live membership fetch (SpotifyLive boundary, but Backend so the orchestration is unit-tested) ─────────────────
 // GETs /playlist/v2/{path}?decorate=... → SelectedListContent, projects a THIN playlist header + the ordered membership
-// into the Store, and hands the membership uris to a hydrator (MetadataService.SyncAllAsync) to fill the shared entities.
+// into the Store, and hands the membership uris to a hydrate delegate (the facade at Identity) to fill the shared entities.
 // The same path serves a playlist and the rootlist (the rootlist is just a playlist of playlist-uri + group markers).
 public sealed class PlaylistFetcher
 {
@@ -75,10 +75,26 @@ public sealed class PlaylistFetcher
     {
         var slc = await GetAsync(rootlistUri, ct).ConfigureAwait(false);
         var uris = new List<string>();
+        var timestamps = new List<long>();
         if (slc.Contents is { } contents)
-            foreach (var item in contents.Items) uris.Add(item.Uri);
+            foreach (var item in contents.Items)
+            {
+                uris.Add(item.Uri);
+                // The ADD timestamp is what a folder rename has to resend verbatim (golden b037) — capture it here or
+                // the rename has nothing but "now" to send.
+                timestamps.Add(item.Attributes is { HasTimestamp: true } a ? a.Timestamp : 0);
+            }
         // the flat-marker parse lives once in RootlistTreeBuilder (shared with LibrarySync + RootlistFollowStrategy).
-        _store.SetRootlist(RootlistTreeBuilder.EntriesFromUris(uris), slc.HasRevision ? slc.Revision.ToByteArray() : null);   // stop discarding the rootlist revision (§2.6)
+        var entries = RootlistTreeBuilder.EntriesFromUris(uris, timestamps);
+        var rev = slc.HasRevision ? slc.Revision.ToByteArray() : null;
+        // I1 — the rootlist revision is stored ONLY when it is the 24-byte head (§2.6); anything else keeps the value we
+        // already trust (the 1-arg overload) so a malformed head can never become the base of the next write.
+        if (PlaylistRevisions.IsWellFormed(rev)) _store.SetRootlist(entries, rev);
+        else
+        {
+            if (rev is not null) PlaylistMutationDiagnostics.RootlistBadRevision(rev.Length, "rootlist-fetch");
+            _store.SetRootlist(entries);
+        }
     }
 
     /// <summary>Revision-gated revalidation via GET <c>/playlist/v2/{path}/diff</c> (§2.6, fixes RC5): a resident,
@@ -127,17 +143,24 @@ public sealed class PlaylistFetcher
 
         if (slc.Diff is { } diff)
         {
-            var mappedOps = PlaylistWireMapper.MapOps(diff.Ops);
             var list = new List<PlaylistMember>(baseline);
             var before = new HashSet<string>(StringComparer.Ordinal);
             for (int i = 0; i < baseline.Count; i++) before.Add(baseline[i].ItemUri);
-            try { PlaylistDiffApplier.Apply(list, mappedOps); }
-            catch (ArgumentOutOfRangeException)   // torn apply — the resident baseline drifted → full re-fetch converges
+            IReadOnlyList<PlaylistOp> mappedOps;
+            // Torn apply — the resident baseline drifted, or the diff carries an op shape this client cannot express.
+            // Either way a full re-fetch converges.
+            try
+            {
+                mappedOps = PlaylistWireMapper.MapOps(diff.Ops);
+                PlaylistDiffApplier.Apply(list, mappedOps);
+            }
+            catch (ArgumentOutOfRangeException)
             {
                 await FetchPlaylistAsync(playlistUri, ct).ConfigureAwait(false);
                 return DiffOutcome.FellBackToFull;
             }
-            _store.SetMembership(playlistUri, list, diff.HasToRevision ? diff.ToRevision.ToByteArray() : rev);
+            _store.SetMembership(playlistUri, list,
+                StorableRevision(playlistUri, diff.HasToRevision ? diff.ToRevision.ToByteArray() : rev, "diff"));
             var added = new List<string>();
             for (int i = 0; i < list.Count; i++) { var u = list[i].ItemUri; if (!before.Contains(u)) added.Add(u); }
             if (added.Count > 0) { await HydrateUrisAsync(added, ct).ConfigureAwait(false); _store.Bump(playlistUri); }
@@ -174,7 +197,7 @@ public sealed class PlaylistFetcher
         for (int i = 0; i < uris.Count; i++)
         {
             var u = uris[i];
-            if (u.StartsWith("spotify:track:", StringComparison.Ordinal) || u.StartsWith("spotify:episode:", StringComparison.Ordinal)) filtered.Add(u);
+            if (EntityUri.KindOf(u) is EntityKind.Track or EntityKind.Episode) filtered.Add(u);
         }
         if (filtered.Count > 0) await _hydrate(filtered, ct).ConfigureAwait(false);
     }
@@ -190,10 +213,20 @@ public sealed class PlaylistFetcher
         using (_store.BeginBulk())
         {
             if (slc.Attributes is { } attr) _store.UpsertPlaylist(HeaderOf(playlistUri, attr, slc));
-            _store.SetMembership(playlistUri, members, revision ?? fallbackRevision);
+            _store.SetMembership(playlistUri, members, StorableRevision(playlistUri, revision ?? fallbackRevision, "full-get"));
             _store.Bump(playlistUri);
         }
         return members;
+    }
+
+    /// <summary>I1 — the gate every membership-revision write passes through. A candidate that is not the 24-byte
+    /// playlist4 head is refused (with a logged reason) and the revision we already trust is kept: adopting a malformed
+    /// head would make it the base of the next /changes POST and of every echo-suppression comparison.</summary>
+    byte[]? StorableRevision(string playlistUri, byte[]? candidate, string source)
+    {
+        if (PlaylistRevisions.IsWellFormed(candidate)) return candidate;
+        if (candidate is not null) PlaylistMutationDiagnostics.RootlistBadRevision(candidate.Length, source);
+        return _store.PlaylistRevision(playlistUri);
     }
 
     /// <summary>Hydrates the current authoritative membership; safe to retry after another snapshot has landed.</summary>
@@ -215,7 +248,7 @@ public sealed class PlaylistFetcher
         for (int i = 0; i < members.Count; i++)
         {
             var u = members[i].ItemUri;
-            if (u.StartsWith("spotify:track:", StringComparison.Ordinal) || u.StartsWith("spotify:episode:", StringComparison.Ordinal)) uris.Add(u);
+            if (EntityUri.KindOf(u) is EntityKind.Track or EntityKind.Episode) uris.Add(u);
         }
         if (uris.Count > 0) await _hydrate(uris, ct).ConfigureAwait(false);
     }
@@ -243,14 +276,17 @@ public sealed class PlaylistFetcher
         // seed to the resolved display name + avatar; the null-avatar seed only fills the gap until the profile lands.
         Owner? ownerChip = owner.Length > 0 ? new Owner(owner, owner, null) : null;
         var daylist = DaylistWindowOf(attr);
-        return new Playlist(IdOf(uri), uri, name, desc, owner, CoverOf(attr), len,
+        return new Playlist(EntityUri.IdOf(uri), uri, name, desc, owner, CoverOf(attr), len,
             Owner: ownerChip,
             Capabilities: CapabilitiesOf(attr, slc, owner),
             Format: attr.HasFormat ? attr.Format : null,
             Source: "spotify",
             Tuning: TuningOf(attr, slc),
             DaylistExpiresAtMs: daylist.ExpiresAtMs,
-            DaylistCreatedAtMs: daylist.CreatedAtMs);
+            DaylistCreatedAtMs: daylist.CreatedAtMs,
+            // A full GET / diff of a playlist the owner deleted still answers 200 — with deleted_by_owner set. The sync
+            // loop turns a header carrying this into the same eviction the dealer tombstone push takes.
+            DeletedByOwner: attr.HasDeletedByOwner && attr.DeletedByOwner);
     }
 
     /// <summary>The daylist rollover window from the header's format_attributes — (expires, created) as unix ms,
@@ -344,5 +380,4 @@ public sealed class PlaylistFetcher
         return null;
     }
 
-    static string IdOf(string uri) { int i = uri.LastIndexOf(':'); return i >= 0 ? uri.Substring(i + 1) : uri; }
 }

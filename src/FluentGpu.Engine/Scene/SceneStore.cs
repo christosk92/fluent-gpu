@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using FluentGpu.Foundation;
 
@@ -41,10 +41,25 @@ public sealed class SceneStore : ISceneBackend
     // settles, then reclaimed. They are detached from topology (so reconcile + layout/input skip them) but indexed by
     // their former VISUAL parent so the recorder can replay them inside that parent's transform/clip/layer context.
     // Bounded by MaxOrphans (overflow instant-frees the oldest).
-    private struct OrphanEntry { public NodeHandle Node, VisualParent; public float Px, Py; public long EnqueuedTicks; }
+    // MaxAgeMs: this orphan's OWN reclaim deadline, measured on the ANIMATION clock (0 = it has none and only the
+    // host's global wall-clock settle-timeout applies). EnqueuedAnimMs is its stamp on that clock. POD, stored inline
+    // with the wall stamp — no per-orphan object, so the frame stays alloc-free.
+    private struct OrphanEntry
+    {
+        public NodeHandle Node, VisualParent; public float Px, Py;
+        public long EnqueuedTicks; public double EnqueuedAnimMs; public float MaxAgeMs;
+    }
     private readonly List<OrphanEntry> _orphans = new();
     private readonly Dictionary<NodeHandle, List<NodeHandle>> _orphansByParent = new();
     private const int MaxOrphans = 64;
+
+    /// <summary>The ANIMATION timebase in ms (monotonic sum of the per-frame deltas the host feeds the animator),
+    /// published here by the host each frame so orphan bookkeeping can measure a deadline on the SAME clock the exit
+    /// tracks integrate on. It is deliberately not the wall clock: the frame delta is clamped (≤40ms), so on a hitchy
+    /// run wall time outruns animation time and a wall-measured deadline would force-reclaim HEALTHY exits mid-fade.
+    /// Never reset (monotonic); 0 in a store no host drives, which simply means every orphan's own deadline is inert
+    /// and the host's global wall backstop is the only guard.</summary>
+    public double AnimClockMs;
 
     // Connected-animation overlays: standalone flying shared-element (Hero) nodes that are NOT in the logical tree but
     // draw in an UNCLIPPED top band ABOVE the drag ghost (so a card art flying into a clipped rail escapes every
@@ -529,8 +544,11 @@ public sealed class SceneStore : ISceneBackend
     /// <summary>Remove a node from the logical tree but keep it LIVE and drawing: detach from its parent (so reconcile +
     /// layout no longer see it), retain its former visual parent, and flag it Exiting. The recorder replays it inside that
     /// parent's active transform/clip/layer/popup context; <see cref="ReclaimOrphan"/> frees it on settle. The frozen origin
-    /// remains only as a defensive fallback for an already-rootless orphan.</summary>
-    public void Orphan(NodeHandle node)
+    /// remains only as a defensive fallback for an already-rootless orphan.
+    /// <paramref name="maxAgeMs"/> is this orphan's OWN hard deadline on the <see cref="AnimClockMs"/> timebase (see
+    /// <see cref="OrphanMaxAgeMs"/>): the host force-reclaims it past that age even while tracks remain. 0 ⇒ only the
+    /// host's global settle-timeout applies.</summary>
+    public void Orphan(NodeHandle node, float maxAgeMs = 0f)
     {
         if (!IsLive(node)) return;
         if (_orphans.Count >= MaxOrphans) DropOrphanAt(0);   // budget: instant-free oldest
@@ -540,7 +558,12 @@ public sealed class SceneStore : ISceneBackend
         float px = abs.X - _bounds[idx].X, py = abs.Y - _bounds[idx].Y;   // frozen parent-world origin
         DetachFromParent(idx);
         _flags[idx] |= NodeFlags.Exiting;
-        _orphans.Add(new OrphanEntry { Node = node, VisualParent = visualParent, Px = px, Py = py, EnqueuedTicks = Stopwatch.GetTimestamp() });
+        _orphans.Add(new OrphanEntry
+        {
+            Node = node, VisualParent = visualParent, Px = px, Py = py,
+            EnqueuedTicks = Stopwatch.GetTimestamp(), EnqueuedAnimMs = AnimClockMs,
+            MaxAgeMs = maxAgeMs > 0f ? maxAgeMs : 0f,
+        });
         if (!visualParent.IsNull)
         {
             if (!_orphansByParent.TryGetValue(visualParent, out var children))
@@ -619,6 +642,17 @@ public sealed class SceneStore : ISceneBackend
     /// backstop force-reclaims an orphan whose exit track wedged (a never-settling animation) so it can't pin the wake
     /// loop forever.</summary>
     public long OrphanEnqueuedTicks(int i) => _orphans[i].EnqueuedTicks;
+
+    /// <summary>The i-th orphan's own hard reclaim deadline in ms (what <see cref="Orphan"/> was given), or 0 when it has
+    /// none and only the host's global settle-timeout applies. A caller that knows its exit's nominal duration (the
+    /// reconciler, from the <c>LayoutTransition</c>) sets this so a WEDGED exit is dropped in ~one exit duration instead
+    /// of painting a half-faded layer over live content until the global backstop expires.</summary>
+    public float OrphanMaxAgeMs(int i) => _orphans[i].MaxAgeMs;
+
+    /// <summary>How much ANIMATION time (<see cref="AnimClockMs"/>) has passed since the i-th orphan was enqueued — the
+    /// age its <see cref="OrphanMaxAgeMs"/> deadline is measured against. Same timebase as the exit tracks, so a healthy
+    /// exit always settles inside its own deadline no matter how badly the wall clock hitches.</summary>
+    public double OrphanAnimAgeMs(int i) => AnimClockMs - _orphans[i].EnqueuedAnimMs;
 
     // ── connected-animation overlays (flying shared-element heroes) ───────────────────────────────
     /// <summary>Register a node as a connected-animation overlay: it draws in an UNCLIPPED top band ABOVE the drag
@@ -1330,7 +1364,9 @@ public sealed class SceneStore : ISceneBackend
     {
         int idx = (int)h.Raw.Index;
         if (!_extents.TryGetValue(idx, out var t)) { t = new ExtentTable(itemCount, estimate); _extents[idx] = t; }
-        else if (t.Count != itemCount) t.Reset(itemCount, estimate);
+        // RESIZE, never Reset: re-seeding every row to one estimate on a count change discards every measured extent
+        // (ExtentTable.Resize carries the reasoning — it is the sidebar disclosure flicker).
+        else if (t.Count != itemCount) t.Resize(itemCount, estimate);
         return t;
     }
     public bool TryGetExtents(NodeHandle h, out ExtentTable? t) => _extents.TryGetValue((int)h.Raw.Index, out t);

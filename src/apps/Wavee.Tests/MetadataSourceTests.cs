@@ -111,160 +111,17 @@ public class ExtendedMetadataSourceTests
         Assert.Equal("The Artist", store.GetArtist("spotify:artist:" + Base62.Encode(Bytes(0x03)))!.Name);
     }
 
-    [Fact]
-    public async Task FetchAsync_BuildsBatchedPost_AndProjects()
-    {
-        var store = new InMemoryStore();
-        var respBytes = CraftTrackResponse("Fetched Track", 1000, false);
-        HttpReq? captured = null;
-        var http = new FakeExchange((req, _) => { captured = req; return new HttpResp(200, new Dictionary<string, string>(), respBytes); });
-        var src = new ExtendedMetadataSource(http, () => "https://spclient.test", () => Ctx);
+    // FetchAsync_BuildsBatchedPost_AndProjects and GzipRequest_RoundTripsAValidBatchedRequest are DELETED with the
+    // unconditional bulk arm (FetchAsync/GzipRequest/EntityRef, hydration-facade-plan.md 1.6). Replacements:
+    //   the POST shape + transport headers -> XmCatalogFetchTests.Post_CarriesTheTransportHeaders_AndProjects
+    //   the routing-kind -> catalogue-kind mapping (incl. playlist=205, collection skipped)
+    //     -> XmCatalogFetchTests.MixedKinds_RideOnePost + .UrisWithNoCatalogueKind_AreNeverSent
 
-        await src.FetchAsync([EntityRef.Parse("spotify:track:x")], store, TestContext.Current.CancellationToken);
-
-        Assert.NotNull(captured);
-        Assert.Equal("POST", captured!.Method);
-        Assert.EndsWith("/extended-metadata/v0/extended-metadata", captured.Url);
-        Assert.Equal("gzip", captured.Headers["Content-Encoding"]);       // request body gzipped
-        Assert.Equal("application/protobuf", captured.Headers["Content-Type"]);
-        Assert.Equal("en", captured.Headers["Accept-Language"]);
-        Assert.NotNull(captured.Body);
-        Assert.Equal("Fetched Track", Assert.Single(store.QueryTracks()).Title);
-    }
-
-    [Fact]
-    public void GzipRequest_RoundTripsAValidBatchedRequest()
-    {
-        var entities = new[]
-        {
-            EntityRef.Parse("spotify:track:a"),
-            EntityRef.Parse("spotify:album:b"),
-            EntityRef.Parse("spotify:episode:c"),       // now a supported extended-metadata kind (EPISODE_V4)
-            // A playlist HEADER rides LIST_METADATA_V2 (205) on this same endpoint. It used to be skipped here on the
-            // premise that "playlists use playlist4, not extended-metadata" — true of a playlist's MEMBERSHIP, not of
-            // its header, and the skip is what left a surface built out of playlist pointers unable to learn a name.
-            EntityRef.Parse("spotify:playlist:d"),
-            EntityRef.Parse("spotify:collection:tracks"),   // genuinely unsupported → still skipped
-        };
-        var gz = ExtendedMetadataSource.GzipRequest(entities, 0, entities.Length, Ctx);
-        Assert.NotNull(gz);
-
-        var req = Xm.BatchedEntityRequest.Parser.ParseFrom(HttpCompression.Gunzip(gz!));   // hand-framing → generated parser
-        Assert.Equal("US", req.Header.Country);
-        Assert.Equal("premium", req.Header.Catalogue);
-        Assert.Equal(16, req.Header.TaskId.Length);
-        Assert.Equal(4, req.EntityRequest.Count);
-        Assert.Equal("spotify:track:a", req.EntityRequest[0].EntityUri);
-        Assert.Equal(Xm.ExtensionKind.TrackV4, req.EntityRequest[0].Query[0].ExtensionKind);
-        Assert.Equal("spotify:album:b", req.EntityRequest[1].EntityUri);
-        Assert.Equal(Xm.ExtensionKind.AlbumV4, req.EntityRequest[1].Query[0].ExtensionKind);
-        Assert.Equal("spotify:episode:c", req.EntityRequest[2].EntityUri);
-        Assert.Equal(Xm.ExtensionKind.EpisodeV4, req.EntityRequest[2].Query[0].ExtensionKind);
-        Assert.Equal("spotify:playlist:d", req.EntityRequest[3].EntityUri);
-        Assert.Equal(Xm.ExtensionKind.ListMetadataV2, req.EntityRequest[3].Query[0].ExtensionKind);
-    }
-
-    // ── the header-trait bundle (opt-in) ──────────────────────────────────────────────────────────────────────────────
-    // The census of the capture's 73 extended-metadata calls: `mdata_esperanto` (the recents viewport hydrator) asks for
-    // 178 IDENTITY_TRAIT + 179 VISUAL_IDENTITY_TRAIT + 220 ENTITY_TYPE_TRAIT. 182/212/249 belong to a DIFFERENT caller
-    // (`list_metadata_prefetcher`) and must never appear here.
-    static readonly Xm.ExtensionKind[] TraitKinds =
-        [Xm.ExtensionKind.IdentityTrait, Xm.ExtensionKind.VisualIdentityTrait, Xm.ExtensionKind.EntityTypeTrait];
-
-    [Fact]
-    public void GzipRequest_HeaderTraits_AddsTheTraitBundleUnderEachUri_BesideTheCatalogueKind()
-    {
-        var entities = new[]
-        {
-            EntityRef.Parse("spotify:playlist:p"),
-            EntityRef.Parse("spotify:album:b"),
-            EntityRef.Parse("spotify:artist:r"),
-        };
-        var gz = ExtendedMetadataSource.GzipRequest(entities, 0, entities.Length, Ctx, headerTraits: true);
-        var req = Xm.BatchedEntityRequest.Parser.ParseFrom(HttpCompression.Gunzip(Assert.IsType<byte[]>(gz)));
-
-        Assert.Equal(3, req.EntityRequest.Count);
-        var catalogue = new[] { Xm.ExtensionKind.ListMetadataV2, Xm.ExtensionKind.AlbumV4, Xm.ExtensionKind.ArtistV4 };
-        for (int i = 0; i < req.EntityRequest.Count; i++)
-        {
-            var kinds = req.EntityRequest[i].Query.Select(q => q.ExtensionKind).ToArray();
-            Assert.Equal(4, kinds.Length);
-            Assert.Equal(catalogue[i], kinds[0]);            // the catalogue kind stays FIRST (deliberate divergence:
-                                                             // the real client reads names out of 178, we cannot)
-            Assert.Equal(TraitKinds, kinds[1..]);            // …then 178 / 179 / 220, in that order
-            // The prefetcher's kinds belong to another client-feature-id and must not leak into the viewport hydrator.
-            Assert.DoesNotContain((Xm.ExtensionKind)182, kinds);
-            Assert.DoesNotContain((Xm.ExtensionKind)212, kinds);
-            Assert.DoesNotContain((Xm.ExtensionKind)249, kinds);
-        }
-    }
-
-    [Fact]
-    public void GzipRequest_WithoutHeaderTraits_StillEmitsExactlyOneKindPerEntity()
-    {
-        var entities = new[]
-        {
-            EntityRef.Parse("spotify:playlist:p"),
-            EntityRef.Parse("spotify:track:t"),
-        };
-        var gz = ExtendedMetadataSource.GzipRequest(entities, 0, entities.Length, Ctx);   // default = OFF
-        var req = Xm.BatchedEntityRequest.Parser.ParseFrom(HttpCompression.Gunzip(Assert.IsType<byte[]>(gz)));
-
-        Assert.Equal(2, req.EntityRequest.Count);
-        Assert.Equal(Xm.ExtensionKind.ListMetadataV2, Assert.Single(req.EntityRequest[0].Query).ExtensionKind);
-        Assert.Equal(Xm.ExtensionKind.TrackV4, Assert.Single(req.EntityRequest[1].Query).ExtensionKind);
-    }
-
-    // The chokepoint end-to-end, over the CONDITIONAL (ExtensionEtagCache) arm — the one a live session actually takes,
-    // and the second of the two mirrored KindFor copies. Pins that a Recents-flavoured hydrate reaches the wire with the
-    // bundle AND the attribution header, and that a plain hydrate does not.
-    static (FakeExchange Http, Func<Xm.BatchedEntityRequest?> LastRequest, Func<string?> LastFeatureId) CapturingExchange()
-    {
-        Xm.BatchedEntityRequest? last = null;
-        string? featureId = null;
-        var http = new FakeExchange((req, _) =>
-        {
-            last = Xm.BatchedEntityRequest.Parser.ParseFrom(HttpCompression.Gunzip(req.Body!));
-            featureId = req.Headers.TryGetValue("client-feature-id", out var v) ? v : null;
-            return new HttpResp(200, new Dictionary<string, string>(), new Xm.BatchedExtensionResponse().ToByteArray());
-        });
-        return (http, () => last, () => featureId);
-    }
-
-    [Fact]
-    public async Task SyncAll_RecentsFlavoured_SendsTraitBundleAndFeatureId_OnTheConditionalPath()
-    {
-        var (http, lastRequest, lastFeatureId) = CapturingExchange();
-        var source = new ExtendedMetadataSource(http, () => "https://spclient.test", () => Ctx);
-        var metadata = new MetadataService(source, new InMemoryStore(), () => Ctx, ttl: TimeSpan.Zero,
-            extensionCache: new ExtensionEtagCache(source, () => Ctx));
-
-        await metadata.SyncAllAsync(["spotify:playlist:p"], TestContext.Current.CancellationToken,
-            closeRefs: false, clientFeatureId: "mdata_esperanto", headerTraits: true);
-
-        Assert.Equal("mdata_esperanto", lastFeatureId());
-        var entity = Assert.Single(lastRequest()!.EntityRequest);
-        Assert.Equal("spotify:playlist:p", entity.EntityUri);
-        var kinds = entity.Query.Select(q => q.ExtensionKind).ToArray();
-        Assert.Equal(4, kinds.Length);
-        Assert.Contains(Xm.ExtensionKind.ListMetadataV2, kinds);
-        foreach (var trait in TraitKinds) Assert.Contains(trait, kinds);
-    }
-
-    [Fact]
-    public async Task SyncAll_Ordinary_SendsOneKindPerEntity_OnTheConditionalPath()
-    {
-        var (http, lastRequest, lastFeatureId) = CapturingExchange();
-        var source = new ExtendedMetadataSource(http, () => "https://spclient.test", () => Ctx);
-        var metadata = new MetadataService(source, new InMemoryStore(), () => Ctx, ttl: TimeSpan.Zero,
-            extensionCache: new ExtensionEtagCache(source, () => Ctx));
-
-        await metadata.SyncAllAsync(["spotify:album:b"], TestContext.Current.CancellationToken, closeRefs: false);
-
-        Assert.Null(lastFeatureId());
-        var entity = Assert.Single(lastRequest()!.EntityRequest);
-        Assert.Equal(Xm.ExtensionKind.AlbumV4, Assert.Single(entity.Query).ExtensionKind);
-    }
+    // The HEADER-TRAIT bundle (178/179/220) and its four GzipRequest/SyncAll cases are DELETED: `headerTraits` was a
+    // parameter of the bulk arm, and fusing extra kinds under a uri is now the catalogue arm's ordinary shape.
+    // Replacements: XmCatalogFetchTests.ExtraKinds_AreFusedUnderTheSameEntityRequest (extra kinds ride the SAME
+    // EntityRequest as the catalogue kind, one POST) and .ClientFeatureId_ComesFromTheSurface (the per-surface
+    // attribution header, including the Recents `mdata_esperanto` flavour and the unattributed no-header case).
 
     [Fact]
     public void ProjectResponse_DedupesRepeatedArtistRef_AcrossTracks()

@@ -73,6 +73,8 @@ static class ControlsSuite
         D5EditableComboBoxChecks(strings);
         D67SplitButtonFlyoutChecks(strings);
         ExpanderSettingsChecks(strings);
+        SettingsExpanderWideContentChecks(strings);
+        CardPickerRadioGroupChecks(strings);
         PipsPagerOutputChecks(strings);
         AutoFitTextChecks(strings);
         FontFamilyChecks(strings);
@@ -1521,6 +1523,193 @@ static class ControlsSuite
         Check("W1-P3.a Expander animates chevron rotation + content slide (mid-flight)",
             Near(m11Collapsed, 1f, 0.05f) && rotating && settled && contentSlidIn && hasContent,
             $"m11→{m11Done:0.00} peakSinθ={peakSin:0.00} minShift={minShift:0.0} content {!noContent}→{hasContent}");
+    }
+
+    // ── SettingsExpander: wide header content, and the ItemsHeader slot ───────────────────────────────────────────────
+    // THE REGRESSION THESE PIN. A SettingsExpander built its header card without an Alignment, so wide Content landed in
+    // SettingsCard's right-hand Auto grid track (BuildRightRow). Once that track is wider than the card, FlexLayout's
+    // ResolveColumns overflow guard drives the header's Star track toward zero and ArrangeGrid places both cells at the
+    // SAME x — and a text run whose budget collapses neither wraps nor clips (TextLayoutEngine disables wrapping at
+    // maxWidth <= 1 and reports Width 0), so the header painted straight across its own content. Wavee's Settings →
+    // General sidebar group shipped that way for one release.
+    static void SettingsExpanderWideContentChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("settings-expander-wide", new Size2(900, 520), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+
+        // 600 DIP of un-shrinkable content — wider than the header card can spare beside a header at this window width.
+        static Element WideContent(string label) => new BoxEl
+        {
+            Width = 600f, Height = 40f, Shrink = 0f,
+            Children = [new TextEl(label) { Size = 14f }],
+        };
+
+        var root = new W0fStaticProbe
+        {
+            Build = () => new BoxEl
+            {
+                Direction = 1, Gap = 8f, Padding = Edges4.All(16f),
+                Children =
+                [
+                    SettingsExpander.Create(new SettingsExpander.Options
+                    {
+                        Header = "WideHeader",
+                        Description = "WideDescription",
+                        Content = WideContent("WideSlot"),
+                        // The fix: wide content stacks UNDER the header text instead of racing it for the same row.
+                        Alignment = SettingsCard.ContentAlignment.Vertical,
+                    }),
+                    SettingsExpander.Create(new SettingsExpander.Options
+                    {
+                        Header = "PanelHost",
+                        InitiallyExpanded = true,
+                        ItemsHeader = new BoxEl { Padding = Edges4.All(8f), Children = [new TextEl("PanelSlot") { Size = 14f }] },
+                        Items = [SettingsExpander.Item("ItemRow", null)],
+                    }),
+                ],
+            },
+        };
+        using var host = new AppHost(app, window, device, fonts, strings, root);
+        // The body mounts a frame after the reveal is declared, and the 333ms reflow crops it until it settles — an
+        // un-settled clip culls the body's glyphs entirely, so let the expansion finish before reading them.
+        for (int i = 0; i < 24; i++) host.RunFrame();
+
+        // Glyph runs carry their placement, so "did the header paint over its content?" is answerable directly rather
+        // than by walking the card's internal template. Bounds is the run's LOCAL box; Transform.Dx/Dy place it.
+        RectF Run(string text)
+        {
+            foreach (var g in device.LastGlyphs)
+                if (strings.Resolve(g.Text) == text)
+                    return new RectF(g.Transform.Dx + g.Bounds.X, g.Transform.Dy + g.Bounds.Y, g.Bounds.W, g.Bounds.H);
+            return default;
+        }
+
+        var hdr = Run("WideHeader");
+        var dsc = Run("WideDescription");
+        var slot = Run("WideSlot");
+        // Stacked, not overlapped: the content starts at or below the description's baseline row.
+        bool stacked = hdr.H > 0f && slot.H > 0f && slot.Y >= dsc.Y + dsc.H - 0.5f;
+        // …and the header text kept a real width. The defect starved it to a 0-DIP cell while the glyphs still painted.
+        bool headerNotStarved = hdr.W > 40f && dsc.W > 40f;
+        Check("cp3.g SettingsExpander(Alignment=Vertical): 600-DIP header content STACKS under the header text — neither overlaps nor starves it",
+            stacked && headerNotStarved,
+            $"hdr=({hdr.X:0},{hdr.Y:0}) {hdr.W:0}x{hdr.H:0} dsc.bottom={dsc.Y + dsc.H:0} slot.y={slot.Y:0}");
+
+        var panel = Run("PanelSlot");
+        var itemRow = Run("ItemRow");
+        Check("cp3.h SettingsExpander.ItemsHeader renders ABOVE the first Items row inside the revealed body",
+            panel.H > 0f && itemRow.H > 0f && panel.Y + panel.H <= itemRow.Y + 0.5f,
+            $"panel.bottom={panel.Y + panel.H:0} item.y={itemRow.Y:0}");
+    }
+
+    // ── RadioButtons as a preview-card picker ────────────────────────────────────────────────────────────────────────
+    // The two additions that let the WinUI RadioButtons container host a strip of preview CARDS (Wavee's row-density /
+    // page-layout / palette / sidebar-design pickers, which were four hand-rolled bags of independent tab stops):
+    // Style.ShowGlyph = false drops the ring column so the card itself states the selection, and PartGrid/PartColumn
+    // expose the items grid so a fixed-width strip wraps instead of overflowing. Both are deliberate WinUI divergences.
+    static void CardPickerRadioGroupChecks(StringTable strings)
+    {
+        var fonts = new HeadlessFontSystem(strings);
+        var bare = RadioButton.DefaultStyle with { ShowGlyph = false, MinWidth = 0f, MinHeight = 0f, ContentGap = 0f };
+
+        static void CollectRadios(SceneStore s, NodeHandle n, List<NodeHandle> into)
+        {
+            if (n.IsNull) return;
+            if (s.Interaction(n).Role == AutomationRole.RadioButton) into.Add(n);
+            for (var c = s.FirstChild(n); !c.IsNull; c = s.NextSibling(c)) CollectRadios(s, c, into);
+        }
+
+        // cp3.i — the glyph column is not merely hidden, it is NOT BUILT. Zeroing the ring through PartRing could not
+        // achieve this: RadioButton.Build re-asserts the ring's Children after the modifier, so the dot would stay
+        // mounted inside a collapsed ellipse.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("radio-bare", new Size2(480, 320), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var root = new W0fStaticProbe
+            {
+                Build = () => new BoxEl
+                {
+                    Direction = 1, Gap = 16f,
+                    Children =
+                    [
+                        RadioButtons.Create(2, i => new TextEl("bare" + i) { Size = 14f },
+                            new Signal<int>(0), maxColumns: 2, style: bare),
+                        RadioButtons.Create(2, i => new TextEl("ringed" + i) { Size = 14f },
+                            new Signal<int>(0), maxColumns: 2),
+                    ],
+                },
+            };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+
+            var radios = new List<NodeHandle>();
+            CollectRadios(host.Scene, host.Scene.Root, radios);
+            // First two are the bare strip's items, last two the default-styled strip's.
+            bool enough = radios.Count == 4;
+            bool bareHasContentOnly = enough && host.Scene.ChildCount(radios[0]) == 1 && host.Scene.ChildCount(radios[1]) == 1;
+            bool ringedHasGlyph = enough && host.Scene.ChildCount(radios[2]) == 2 && host.Scene.ChildCount(radios[3]) == 2;
+            bool stillARadio = enough && host.Scene.Interaction(radios[0]).Role == AutomationRole.RadioButton;
+            Check("cp3.i RadioButton(ShowGlyph=false): the ring/dot column is not built — the item mounts CONTENT ONLY, and stays a radio",
+                bareHasContentOnly && ringedHasGlyph && stillARadio,
+                $"items={radios.Count} bare kids={(enough ? host.Scene.ChildCount(radios[0]) : -1)} ringed kids={(enough ? host.Scene.ChildCount(radios[2]) : -1)}");
+        }
+
+        // cp3.j — PartGrid wrap: four 200-DIP cards in a window that fits two per line reflow to TWO rows, and the
+        // container keyboard contract survives the wrap (one tab stop in, Right/Right roves two items forward with
+        // selection following focus).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("radio-wrap", new Size2(500, 400), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var sel = new Signal<int>(0);
+            var parts = new TemplateParts
+            {
+                [RadioButtons.PartGrid] = g => g with { Wrap = true, Gap = 12f },
+                [RadioButtons.PartColumn] = c => c with { Shrink = 0f },
+            };
+            var root = new W0fStaticProbe
+            {
+                Build = () => new BoxEl
+                {
+                    Direction = 1, Padding = Edges4.All(16f),
+                    Children =
+                    [
+                        RadioButtons.Create(4,
+                            i => new BoxEl { Width = 200f, Height = 60f, Shrink = 0f, Children = [new TextEl("card" + i) { Size = 12f }] },
+                            sel, maxColumns: 4, style: bare, parts: parts),
+                    ],
+                },
+            };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+
+            var radios = new List<NodeHandle>();
+            CollectRadios(host.Scene, host.Scene.Root, radios);
+            bool four = radios.Count == 4;
+            var r0 = four ? host.Scene.AbsoluteRect(radios[0]) : default;
+            var r1 = four ? host.Scene.AbsoluteRect(radios[1]) : default;
+            var r2 = four ? host.Scene.AbsoluteRect(radios[2]) : default;
+            bool wrapped = four && Near(r0.Y, r1.Y, 1f) && r2.Y > r0.Y + r0.H - 1f && r2.X < r1.X;
+
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Tab));
+            host.RunFrame();
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Right));
+            host.RunFrame();
+            int afterOne = sel.Peek();
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Right));
+            host.RunFrame();
+            int afterTwo = sel.Peek();
+
+            Check("cp3.j RadioButtons(PartGrid wrap): a 4x200 card strip reflows to two rows and keeps the roving arrow contract (selection follows focus)",
+                wrapped && afterOne == 1 && afterTwo == 2,
+                $"rows y={r0.Y:0}/{r1.Y:0}/{r2.Y:0} sel 0->{afterOne}->{afterTwo}");
+        }
     }
 
     static void InputVocabularyChecks(StringTable strings)

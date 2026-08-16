@@ -21,6 +21,9 @@ public class DealerArchiveTests
         Assert.True(DealerArchive.IsHandled(DealerFrameType.Message, "hm://connect-state/v1/cluster", null));
         Assert.True(DealerArchive.IsHandled(DealerFrameType.Message, "hm://connect-state/v1/connect/volume", null));
         Assert.True(DealerArchive.IsHandled(DealerFrameType.Message, "hm://playlist/v2/playlist/xyz", null));
+        // P1: the permission arm is live (DealerRouter.OnPermission), so its frames are HANDLED, not "seen but dropped".
+        Assert.True(DealerArchive.IsHandled(DealerFrameType.Message,
+            "hm://playlist-permission/v1/playlist/xyz/permission/state", null));
         Assert.True(DealerArchive.IsHandled(DealerFrameType.Message, "hm://collection/tracks/user", null));
         Assert.True(DealerArchive.IsHandled(DealerFrameType.Message, "hm://presence2/user/123", null));
         Assert.True(DealerArchive.IsHandled(DealerFrameType.Request, null, "hm://connect-state/v1/player/command"));

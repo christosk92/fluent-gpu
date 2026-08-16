@@ -43,6 +43,12 @@ public enum SidebarRowKind : byte
     // would silently re-pool every existing row. `ItemCount` carries the card's honest count (-1 = none — see
     // SidebarEditPlan.CardCount); `EntryIndex` stays -1, like every other chrome row.
     SectionCard   = 13,
+    // The PlaylistTree's closing gutter (24 DIP), planned directly after the last tree row and BEFORE the create row.
+    // It exists for exactly one reason: "top level, at the end" had no target at all. The create row occupied that spot
+    // and ACCEPTED rootlist payloads, so dragging a playlist below everything duplicated it into a new playlist instead
+    // of moving it (D3). This row owns that slot as a whole-row `EndOfList`, and the create row is now transparent to
+    // rootlist payloads. APPENDED, never inserted: the kind is the ItemsView's ContentType (one recycle pool per kind).
+    TreeEnd       = 14,
 }
 
 /// <summary>POD. No strings are allocated during planning: labels resolve at render time from the referenced
@@ -521,7 +527,20 @@ public static class SidebarRowPlanner
         else
             PlanQueriedPlaylistTree(s, depth, tree, s.Query, in input, ref st);
 
+        // The closing gutter, and only where there is a tree to close: an empty section's placeholder is not something
+        // you can drop AFTER, and a skeleton has no order yet. Placed before the create row so "below everything" is the
+        // tree's own slot rather than the create affordance's (D3).
+        if (EmittedTreeRows(in st)) Add(ref st, Chrome(SidebarRowKind.TreeEnd, s, depth));
         if (!input.SuppressTreeCreateRow) Add(ref st, Chrome(SidebarRowKind.CreateAction, s, depth));
+    }
+
+    /// <summary>Did the tree body just emit a real, orderable row? A trailing Empty/Skeleton means it did not.</summary>
+    static bool EmittedTreeRows(in PlanState st)
+    {
+        var rows = st.Rows;
+        if (rows.Count == 0) return false;
+        return rows[rows.Count - 1].Kind is SidebarRowKind.EntityRow or SidebarRowKind.FolderHeader
+                                          or SidebarRowKind.GridStrip;
     }
 
     static void PlanSourcePlaylistTree(SidebarSectionSpec s, byte depth,

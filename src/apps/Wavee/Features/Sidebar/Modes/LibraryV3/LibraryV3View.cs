@@ -122,10 +122,45 @@ sealed class LibraryV3View
     public string ParentOf(int index)
         => (uint)index < (uint)_rows.Count ? ParentKey(_rows[index]) : "";
 
-    /// <summary>Whether two built rows are siblings. A drop aimed across a folder boundary must not commit: a LOCAL overlay
-    /// that moved items between folders would misrepresent a tree it cannot write (locked decision 9).</summary>
+    /// <summary>Whether two built rows are siblings. A drop aimed across a folder boundary must not commit HERE: this
+    /// overlay is V3's LOCAL custom order, and moving an item between folders is a rootlist write. The rootlist is
+    /// written only through the resource-drop seam and <c>FolderActions</c>, never through the V3 overlay — so a
+    /// cross-boundary drop that this accepted would show a tree the server never agreed to. (Folder CRUD itself is no
+    /// longer locked; the old "locked decision 9" is lifted. What stays locked is the WRITER.)</summary>
     public bool SameParent(int a, int b)
         => string.Equals(ParentOf(a), ParentOf(b), StringComparison.Ordinal);
+
+    /// <summary>D11 — the same boundary, applied DURING the gesture: the slot a drag from <paramref name="from"/> may
+    /// actually reach when the pointer asks for <paramref name="to"/>.
+    ///
+    /// <para>A drop the overlay cannot honour used to animate all the way across a folder boundary and then silently not
+    /// commit (<see cref="SameParent"/> bailing at the end). Snapping the REQUESTED slot to the nearest one inside the
+    /// source's sibling run means the gap never opens across a boundary in the first place, so what the user sees is
+    /// what commits, and the commit-time bail becomes the invariant rather than the feedback.</para>
+    ///
+    /// <para>The run is the SET of same-parent rows, not a contiguous span: an expanded folder's children sit between
+    /// two top-level siblings, so a top-level drag has to be able to travel PAST them (nearest legal slot on either
+    /// side) while a child drag stays boxed inside its folder (there is no legal slot outside it). Ties go to the lower
+    /// slot — either is equally legal and the choice only has to be deterministic.</para></summary>
+    public int ClampToSiblingRun(int from, int to)
+    {
+        int n = _rows.Count;
+        if (n == 0 || (uint)from >= (uint)n) return to;
+        if (to < 0) to = 0;
+        else if (to >= n) to = n - 1;
+        if (SameParent(from, to)) return to;
+
+        string parent = ParentKey(_rows[from]);
+        int below = -1, above = -1;
+        for (int i = to - 1; i >= 0; i--)
+            if (string.Equals(ParentKey(_rows[i]), parent, StringComparison.Ordinal)) { below = i; break; }
+        for (int i = to + 1; i < n; i++)
+            if (string.Equals(ParentKey(_rows[i]), parent, StringComparison.Ordinal)) { above = i; break; }
+        // `from` is itself in the run, so at least one side always resolves; the fallback is a no-move.
+        if (below < 0) return above < 0 ? from : above;
+        if (above < 0) return below;
+        return to - below <= above - to ? below : above;
+    }
 
     /// <summary>The stable key (entry id) at a built index — what the pane's reorder band reports per slot, so a caller can
     /// verify that band slot n really is view row n before committing.</summary>

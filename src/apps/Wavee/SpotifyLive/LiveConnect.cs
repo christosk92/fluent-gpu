@@ -73,11 +73,20 @@ public sealed class LiveConnect : IDisposable
     readonly ResumePointProjection? _resume;
     readonly GaboBatcher? _gaboBatcher;
 
+    /// <param name="hydrator">THE hydration façade the now-playing projection upgrades a thin cluster row through
+    /// (design §1.5) — REQUIRED and POSITIONAL, never an optional tail parameter. The `?? NotOwnedEntityHydrator.Instance`
+    /// coalesce this used to carry is the exact shape wiring-discipline forbids: a composition-root miss became a session
+    /// where every now-playing upgrade silently answered "Unsupported".</param>
+    /// <param name="store">The store the upgraded row is read back from — REQUIRED for the same reason. The one caller
+    /// with genuinely no backend (SpotifyLibrarySync's CLI sync demo) passes the named stand-ins itself.</param>
     public LiveConnect(ITransport transport, string deviceId, ApConnection? apChannel,
+        IEntityHydrator hydrator, IStore store,
         IContextResolver? contexts = null, WaveeLogger log = default,
         AudioPlaybackStack? audio = null, double initialVolume01 = 0.7,
         Func<CancellationToken, Task<string>>? refreshTokens = null, IAppSettings? settings = null)
     {
+        ArgumentNullException.ThrowIfNull(hydrator);
+        ArgumentNullException.ThrowIfNull(store);
         _apChannel = apChannel;
         _audio = audio;
         var playbackLog = log.With("playback");
@@ -87,7 +96,10 @@ public sealed class LiveConnect : IDisposable
         // Server-clock estimator: probes GET /melody/v1/time over the authenticated spclient pipeline; its corrected
         // "server now" feeds the projection's remote-position aging (the offset-dependent transit term).
         _clock = new SpotifyServerClock(ct => FetchServerTimeMs(transport, ct), log);
-        Projection = new NowPlayingProjection(deviceId, serverNowUnixMs: _clock.ServerNowUnixMs, initialVolume01: initialVolume01);
+        // The projection upgrades a thin now-playing row through THE façade and re-reads the store (design §1.5). Both
+        // seams arrive REQUIRED (see the ctor params) — no coalesce, no null seam anywhere on this path.
+        Projection = new NowPlayingProjection(deviceId, hydrator, store,
+            serverNowUnixMs: _clock.ServerNowUnixMs, initialVolume01: initialVolume01);
         Devices = new LiveConnectDevices();
         _ingest = new ClusterIngest(transport, Projection, Devices, deviceId, log, _clock.ObservePassive);
 
@@ -144,7 +156,7 @@ public sealed class LiveConnect : IDisposable
         var gaboSeq = settings.Get(WaveeSettings.GaboGlobalSequence);
         _gaboBatcher = new GaboBatcher(transport, gaboCtx, initialSequenceNumber: gaboSeq, refreshTokens: refreshTokens,
             persistSequence: seq => settings.Set(WaveeSettings.GaboGlobalSequence, seq), log: telemetryLog);
-        _gabo = new RawCoreStreamProjection(_gaboBatcher, () => Projection.ContextUri, () => true, log: telemetryLog);
+        _gabo = new RawCoreStreamProjection(_gaboBatcher, () => Projection.ContextUri, () => true);
         var herodotus = new HerodotusClient(transport, telemetryLog);
         _resume = new ResumePointProjection(herodotus, () => Projection.IsPrivateSession, telemetryLog);
         Controller = new PlaybackController(_host, media ?? resolver, Projection,

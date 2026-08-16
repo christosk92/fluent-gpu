@@ -1,98 +1,62 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
-using System.Threading;
-using System.Threading.Tasks;
-using Wavee.Backend;
+using Xm = Wavee.Protocol.ExtendedMetadata;
 
 namespace Wavee.Backend.Metadata;
 
-// ── STEP 3 — the native metadata layer ───────────────────────────────────────────────────────────────────────────────
-// Metadata is a GENERAL system (every entity type + facet), not a track fetch. The design (see chat analysis): a swappable
-// IMetadataSource fetched THROUGH the Resource engine (SWR + dedup + FreshnessPolicy) and PROJECTED into the Store — i.e.
-// we reuse the cache we already built (Resource + Store + FreshnessPolicy) instead of a new EntityStore/cache stack.
+// ── The transport's shared vocabulary ────────────────────────────────────────────────────────────────────────────────
+// What survives here after the hydration façade landed: the PERSISTED kind enum (the cold store's entity.kind column)
+// and the request chunker. The old IMetadataSource seam + EntityRef lived only to serve MetadataService's unconditional
+// bulk arm; both died with it — routing speaks Wavee.Core.EntityUri/EntityKind, and the one transport-kind map is
+// XmKinds.CatalogKindOf (hydration-facade-plan.md §1.6).
 
-public enum EntityKind { Unknown, Track, Album, Artist, Playlist, Show, Episode }
+/// <summary>The TRANSPORT's kind vocabulary — the six entity types extended-metadata can fetch, plus Unknown.
+/// <para>DELIBERATELY NOT an alias of <see cref="Wavee.Core.EntityKind"/> (which is the routing/ladder vocabulary and
+/// carries User/Collection/Prerelease/Concert too): these numbers are PERSISTED — they are the <c>entity.kind</c>
+/// column of the cold store — so re-basing them onto Core's ordering would silently make every cached Album read back
+/// as an Episode. Nothing ROUTES on this enum; it exists to name a persisted row.</para></summary>
+// NOTE: these numbers are PERSISTED (`entity.kind`). Append ONLY — renumbering makes every cached Album read back as
+// something else. `User` (P4-C) is the newest trailing value: the owner rows `IStore.UpsertOwner` persists.
+public enum EntityKind { Unknown, Track, Album, Artist, Playlist, Show, Episode, User }
 
-/// <summary>Generic addressing for ANY entity. extended-metadata addresses by the FULL uri, so we keep just (uri, kind) —
-/// no id substring. Parse is ALLOCATION-FREE (span scan + constant-span switch, no String.Split) because it runs per
-/// entity at 10k+ scale, where Split's per-call array + substrings would be real GC pressure.</summary>
-public readonly record struct EntityRef(string Uri, EntityKind Kind)
-{
-    public static EntityRef Parse(string uri)
-    {
-        var s = uri.AsSpan();
-        if (s.StartsWith("spotify:"))
-        {
-            var rest = s[8..];                                   // after "spotify:"
-            int colon = rest.IndexOf(':');
-            return new EntityRef(uri, KindOf(colon >= 0 ? rest[..colon] : rest));
-        }
-        return new EntityRef(uri, EntityKind.Unknown);
-    }
-
-    static EntityKind KindOf(ReadOnlySpan<char> type) => type switch   // constant-span patterns — no allocation
-    {
-        "track" => EntityKind.Track,
-        "album" => EntityKind.Album,
-        "artist" => EntityKind.Artist,
-        "playlist" => EntityKind.Playlist,
-        "show" => EntityKind.Show,
-        "episode" => EntityKind.Episode,
-        _ => EntityKind.Unknown,
-    };
-}
-
-/// <summary>The metadata fetch seam: BATCH fetch + project N entities into the Store in one shot. The real impl is
-/// spclient extended-metadata (a single protobuf request addresses many entities × facets, capped at 500 — so a 10k-track
-/// playlist is ~20 requests, never 10k). The public Web API is NOT used (it can't batch and the desktop client avoids it);
-/// Pathfinder is the sibling source for presentation/relations. The UI never calls this — it reads the Store while
-/// <see cref="MetadataService"/> coordinates freshness, dedup, and batching.</summary>
-public interface IMetadataSource
-{
-    /// <summary>Fetch and project into the store. Returns the uris that actually landed (projection wrote an entity) —
-    /// not merely requested. Omitted / failed entities stay out so <see cref="MetadataService"/> seals freshness on
-    /// outcome only.</summary>
-    /// <param name="clientFeatureId">Optional <c>client-feature-id</c> attribution header for the traffic this batch
-    /// generates — the desktop client stamps one per SURFACE. Null (every pre-existing caller) omits the header, so the
-    /// wire is byte-identical to the pre-seam behaviour.</param>
-    /// <param name="headerTraits">Opt-in: also request the desktop client's HEADER-TRAIT bundle
-    /// (<see cref="ExtendedMetadataSource.HeaderTraitKinds"/> — 178/179/220) alongside each entity's catalogue kind.
-    /// FALSE for every pre-existing caller, and deliberately so: this is the shared bulk path, and three extra kinds
-    /// per entity on a 500-uri discography prefetch or a 300-uri tracklist load is pure inflation. Only the surface
-    /// whose <paramref name="clientFeatureId"/> the census actually attributes the bundle to opts in.</param>
-    Task<IReadOnlyCollection<string>> FetchAsync(IReadOnlyList<EntityRef> entities, IStore store, CancellationToken ct,
-                                                 string? clientFeatureId = null, bool headerTraits = false);
-}
-
-/// <summary>Packs entities into request chunks by serialized BODY SIZE (not a fixed count), so each POST is pushed as
-/// large as the server allows — a 10k-track playlist becomes ~1 request, not 20. Memory-efficient: yields index ranges,
-/// never sub-lists. The real extended-metadata source iterates these ranges, serializing + gzipping each chunk's body.</summary>
+/// <summary>Packs extension queries into request chunks by serialized BODY SIZE and by distinct-uri count, so each POST
+/// is pushed as large as the server allows — a 10k-track playlist becomes ~34 requests, not 10k. Memory-efficient:
+/// yields index ranges, never sub-lists. <c>XmCatalogFetch</c> and <c>ExtensionEtagCache</c> iterate these ranges,
+/// serializing + gzipping each chunk's body.</summary>
 public static class MetadataChunking
 {
     public const int DefaultMaxBodyBytes = 4 * 1024 * 1024;   // tune toward the real spclient POST-body ceiling (confirm live)
 
-    /// <summary>Estimated wire cost of one EntityRequest: entity_uri bytes + proto field tags + one ExtensionQuery.</summary>
-    public static int EstimateBytes(in EntityRef e) => e.Uri.Length + 12;
+    /// <summary>THE per-POST entity ceiling — the measured server-side limit, and the ONE copy of it. Seven services
+    /// each carried their own "300" (adornments, play counts, video detect, expansion, the closure, the paged hydrate,
+    /// show episodes); they all point here now, so the wire shape is one edit away from changing.
+    /// <para>Body size is the OTHER bound: a chunk flushes on whichever limit it hits first.</para></summary>
+    public const int MaxEntitiesPerRequest = 300;
 
-    /// <summary>Yields (start, count) index ranges, each whose estimated body stays under maxBodyBytes (always ≥1 entity).</summary>
-    /// <param name="extraBytesPerEntity">Wire cost of any ADDITIONAL <c>ExtensionQuery</c> entries the caller packs under
-    /// each uri (the header-trait bundle). Keeps the estimate honest instead of under-counting a request that carries
-    /// four kinds per entity rather than one.</param>
-    public static IEnumerable<(int Start, int Count)> Ranges(IReadOnlyList<EntityRef> entities,
-        int maxBodyBytes = DefaultMaxBodyBytes, int headerBytes = 64, int extraBytesPerEntity = 0)
+    /// <summary>THE chunker: its unit is a (uri, kind, etag) query rather than a whole entity, bounded by body size AND
+    /// by <paramref name="maxEntities"/> DISTINCT uris.
+    /// <para>A uri's kinds never split across chunks — a chunk only ever flushes on a uri boundary. Splitting them
+    /// would send the same entity in two POSTs, so the server answers two partial entity groups and the projector sees
+    /// the uri twice. (Callers list a uri's kinds contiguously, which is what makes the boundary test sufficient.)</para></summary>
+    public static IEnumerable<(int Start, int Count)> ExtensionRanges(
+        IReadOnlyList<(string Uri, Xm.ExtensionKind Kind, string? Etag)> reqs,
+        int maxBodyBytes = DefaultMaxBodyBytes, int headerBytes = 64, int maxEntities = MaxEntitiesPerRequest)
     {
-        int start = 0, size = headerBytes;
-        for (int i = 0; i < entities.Count; i++)
+        int start = 0, size = headerBytes, entities = 0;
+        for (int i = 0; i < reqs.Count; i++)
         {
-            int cost = EstimateBytes(entities[i]) + extraBytesPerEntity;
-            if (i > start && size + cost > maxBodyBytes)   // flush the current range (never split below 1 entity)
+            bool newUri = i == 0 || !string.Equals(reqs[i].Uri, reqs[i - 1].Uri, StringComparison.Ordinal);
+            int cost = reqs[i].Uri.Length + (reqs[i].Etag?.Length ?? 0) + 16;   // uri + etag + tags
+            if (newUri && i > start && (size + cost > maxBodyBytes || entities >= maxEntities))
             {
                 yield return (start, i - start);
                 start = i;
                 size = headerBytes;
+                entities = 0;
             }
+            if (newUri) entities++;
             size += cost;
         }
-        if (entities.Count > start) yield return (start, entities.Count - start);
+        if (reqs.Count > start) yield return (start, reqs.Count - start);
     }
 }

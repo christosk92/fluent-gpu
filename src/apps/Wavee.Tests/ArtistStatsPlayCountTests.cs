@@ -1,99 +1,38 @@
 using System;
-using System.Collections.Generic;
-using System.Text;
 using System.Text.Json;
-using System.Threading.Tasks;
 using Wavee.Backend;
 using Wavee.Backend.Persistence;
-using Wavee.Backend.Spotify;
 using Wavee.Core;
-using Wavee.SpotifyLive;
 using Xunit;
 
 namespace Wavee.Tests;
 
-// queryArtistOverview is the ONLY source of track play counts. These cover the two properties that make them stick,
-// both of which were missing and produced the same visible symptom — an artist chart that shows "3:11" but no plays,
-// permanently, for exactly the artists the sign-in prefetch had touched.
-public class ArtistStatsPlayCountTests
+// SpotifyArtistStatsService is DELETED (hydration-facade-plan.md 1.6) and with it this file's WIRE cases:
+//   Overview_LandsPlayCountsOnTheSharedTrackRow_NotOnlyInTheArtistProjection
+//     -> ArtistHydrationTests.Rich_OneOverviewCall_WrittenStatsOnly (asserts the count on BOTH the projection and the
+//        shared track row, plus the stats-only-write rule the raw upsert used to break)
+//   WarmArtistWithPlayCounts_IsServedFromTheStore
+//     -> ArtistHydrationTests.Rich_FreshStamp_SkipsTheOverviewEntirely (+ .Rich_StaleStamp_RefetchesEvenThoughTheArtistIsAlreadyRich,
+//        which the old presence-only gate could not express)
+// What did NOT have a home elsewhere is the STORE-MERGE half below: it is a property of StoreEntityMerge.Track, not of
+// whatever service happened to write the count, so it is pinned directly on the store.
+public class TrackPlayCountMergeTests
 {
-    const string ArtistUri = "spotify:artist:a1";
     const string TrackUri = "spotify:track:t1";
 
-    static SessionContext Ctx => new("me", "US", "premium", "en", Tier.Premium, false);
-
-    // The artistUnion shape the mapper reads: discography.topTracks.items[].track.{uri,name,playcount,…} plus the
-    // release facets the freshness gate also requires.
-    static string Overview(long playcount) => $$"""
-    { "data": { "artistUnion": {
-        "uri": "{{ArtistUri}}",
-        "profile": { "name": "A1" },
-        "stats": { "monthlyListeners": 1000, "followers": 10, "worldRank": 0 },
-        "discography": {
-          "topTracks": { "items": [ { "track": {
-              "uri": "{{TrackUri}}", "name": "T1", "playcount": "{{playcount}}",
-              "duration": { "totalMilliseconds": 200000 },
-              "albumOfTrack": { "uri": "spotify:album:al1" }
-          } } ] },
-          "latest": { "uri": "spotify:album:al1", "name": "Latest", "type": "SINGLE",
-                      "date": { "isoString": "2026-01-01T00:00:00Z" } }
-        }
-    } } }
-    """;
-
-    static (SpotifyArtistStatsService Svc, InMemoryStore Store, FakeExchange Http) Build(long playcount = 20491)
+    [Fact]
+    public void PlayCount_SurvivesALaterThinTrackWrite()
     {
         var store = new InMemoryStore();
-        int calls = 0;
-        var http = new FakeExchange((req, n) =>
-        {
-            calls++;
-            return new HttpResp(200, new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
-                Encoding.UTF8.GetBytes(Overview(playcount)));
-        });
-        var pf = new PathfinderResource(new PathfinderClient(http), () => Ctx);
-        return (new SpotifyArtistStatsService(pf, store), store, http);
-    }
+        store.UpsertTrack(new Track("t1", TrackUri, "T1", [], new AlbumRef("al1", "spotify:album:al1", "Al"),
+            200000, false, null, PlayCount: 20491));
 
-    [Fact]
-    public async Task Overview_LandsPlayCountsOnTheSharedTrackRow_NotOnlyInTheArtistProjection()
-    {
-        var (svc, store, _) = Build();
-
-        var artist = await svc.EnsureStatsAsync(ArtistUri);
-
-        Assert.NotNull(artist);
-        Assert.Equal(20491, artist!.TopTracks![0].PlayCount);
-        // The point of the fix: the count is ALSO on the track plane, which is what every later merge, the cold
-        // persist and ArtistSplit.Refatten all read. Without this the projection was the only copy and a thin V4
-        // write re-persisted a zero over it.
-        Assert.Equal(20491, store.GetTrack(TrackUri)?.PlayCount);
-    }
-
-    [Fact]
-    public async Task PlayCount_SurvivesALaterThinTrackWrite()
-    {
-        var (svc, store, _) = Build();
-        await svc.EnsureStatsAsync(ArtistUri);
-
-        // What the sign-in discography prefetch does moments later: a TrackV4 row that knows nothing about plays.
+        // What a catalogue hydrate does moments later: a TrackV4 row that knows nothing about plays. Without the
+        // merge guard the zero re-persists over the count and the chart shows a duration but no plays, permanently.
         store.UpsertTrack(new Track("t1", TrackUri, "T1", [], new AlbumRef("al1", "spotify:album:al1", ""),
             200000, false, null));
 
         Assert.Equal(20491, store.GetTrack(TrackUri)?.PlayCount);
-    }
-
-    [Fact]
-    public async Task WarmArtistWithPlayCounts_IsServedFromTheStore()
-    {
-        var (svc, store, http) = Build();
-        await svc.EnsureStatsAsync(ArtistUri);
-        int afterFirst = http.Calls;
-
-        var again = await svc.EnsureStatsAsync(ArtistUri);
-
-        Assert.Equal(afterFirst, http.Calls);                          // no second request — the gate held
-        Assert.Equal(20491, again?.TopTracks?[0].PlayCount);
     }
 }
 

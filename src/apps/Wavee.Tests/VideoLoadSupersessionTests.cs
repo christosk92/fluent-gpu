@@ -325,7 +325,7 @@ public class VideoLoadSupersessionTests
     {
         var audio = new FakeAudioHost();
         var video = new FakeVideoHost();
-        var projection = new NowPlayingProjection("us", () => 0);
+        var projection = new NowPlayingProjection("us", NotOwnedEntityHydrator.Instance, new InMemoryStore(), () => 0);
         var errors = new List<PlaybackErrorInfo>();
         using var controller = new PlaybackController(audio, new StubTrackResolver(), projection,
             new FakeContextResolver("spotify:track:a", "spotify:track:b"), "us", videoHost: video);
@@ -353,7 +353,7 @@ public class VideoLoadSupersessionTests
     {
         var audio = new FakeAudioHost();
         var video = new FakeVideoHost();
-        var projection = new NowPlayingProjection("us", () => 0);
+        var projection = new NowPlayingProjection("us", NotOwnedEntityHydrator.Instance, new InMemoryStore(), () => 0);
         var errors = new List<PlaybackErrorInfo>();
         using var controller = new PlaybackController(audio, new StubTrackResolver(), projection,
             new FakeContextResolver("spotify:track:a", "spotify:track:b"), "us", videoHost: video);
@@ -383,7 +383,7 @@ public class VideoLoadSupersessionTests
     {
         var audio = new FakeAudioHost();
         var video = new FakeVideoHost();
-        var projection = new NowPlayingProjection("us", () => 0);
+        var projection = new NowPlayingProjection("us", NotOwnedEntityHydrator.Instance, new InMemoryStore(), () => 0);
         var errors = new List<PlaybackErrorInfo>();
         int loads = 0;
         using var controller = new PlaybackController(audio, new StubTrackResolver(), projection,

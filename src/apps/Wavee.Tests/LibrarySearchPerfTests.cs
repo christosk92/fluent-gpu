@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading;
@@ -9,6 +9,7 @@ using Wavee.Backend.Metadata;
 using Wavee.Backend.Persistence;
 using Wavee.Backend.Playlists;
 using Wavee.Core;
+using EntityKind = Wavee.Backend.Metadata.EntityKind;   // the PERSISTED transport vocabulary (Wavee.Core.EntityKind is the routing one)
 using Xunit;
 
 namespace Wavee.Tests;
@@ -23,6 +24,9 @@ namespace Wavee.Tests;
 //       (but NOT by the search's own hot-tier promotions, which would otherwise re-invalidate it every keystroke).
 public class LibrarySearchPerfTests
 {
+
+    // The facade every StoreLibrarySource read goes through. Offline = store-only, never networks (design 1.3).
+    static SwitchableEntityHydrator Offline(IStore store) => new(new Wavee.Backend.Hydration.OfflineEntityHydrator(store));
     static string TempDb() => Path.Combine(Path.GetTempPath(), "wavee-searchperf-" + Guid.NewGuid().ToString("N") + ".db");
     static void TryDelete(string p) { foreach (var f in new[] { p, p + "-wal", p + "-shm" }) { try { File.Delete(f); } catch { } } }
 
@@ -86,7 +90,7 @@ public class LibrarySearchPerfTests
     {
         var inner = new InMemoryStore();
         SeedThree(inner);
-        using var src = new StoreLibrarySource(inner);
+        using var src = new StoreLibrarySource(inner, Offline(inner), OfflineOnlineCatalog.Instance);
         using var cts = new CancellationTokenSource();
         cts.Cancel();
 
@@ -168,7 +172,7 @@ public class LibrarySearchPerfTests
         var inner = new InMemoryStore();
         SeedThree(inner);
         var store = new CountingStore(inner) { Candidates = FakeCorpus() };
-        using var src = new StoreLibrarySource(store);
+        using var src = new StoreLibrarySource(store, Offline(store), OfflineOnlineCatalog.Instance);
 
         await src.SearchLibraryAsync("mic", LibrarySearchScope.Artists);
         await src.SearchLibraryAsync("mich", LibrarySearchScope.Artists);
@@ -196,7 +200,7 @@ public class LibrarySearchPerfTests
             using var cold = new CachedStore(new SqliteColdStore(path));
             await cold.WarmComplete;   // the warm pass ends with a Bulk change — settle it BEFORE the source subscribes
             var store = new CountingStore(cold);
-            using var src = new StoreLibrarySource(store);
+            using var src = new StoreLibrarySource(store, Offline(store), OfflineOnlineCatalog.Instance);
 
             // This query hydrates: the albums are cold-only, so each survivor is promoted into the hot tier, and every
             // promotion raises a StoreChange. Without the thread-scoped suppression that would invalidate the corpus the
@@ -251,6 +255,8 @@ public sealed class CountingStore : IStore, ILibraryCandidateStore
     public Show? GetShow(string uri) => _inner.GetShow(uri);
     public void UpsertEpisode(Episode e) => _inner.UpsertEpisode(e);
     public Episode? GetEpisode(string uri) => _inner.GetEpisode(uri);
+    public void UpsertOwner(Owner o) => _inner.UpsertOwner(o);
+    public Owner? GetOwner(string userUriOrId) => _inner.GetOwner(userUriOrId);
     public void UpsertVideoAssociation(VideoAssociation a) => _inner.UpsertVideoAssociation(a);
     public VideoAssociation? GetVideoAssociation(string uri) => _inner.GetVideoAssociation(uri);
     public void UpsertVideoOverride(VideoOverride o) => _inner.UpsertVideoOverride(o);

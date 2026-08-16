@@ -12,6 +12,8 @@ using Wavee.Backend.Spotify;
 using Wavee.Core;
 using Wavee.Protocol.Playback;
 using Pl = Wavee.Protocol.Playlist;
+// EntityKind: the ONE uri vocabulary (Wavee.Core), not the transport's thin Backend.Metadata projection of it.
+using EntityKind = Wavee.Core.EntityKind;
 
 namespace Wavee.SpotifyLive;
 
@@ -19,10 +21,10 @@ namespace Wavee.SpotifyLive;
 // Maps an opaque context uri → ordered, hydrated tracks via ONE unified server call: GET /context-resolve/v1/{uri}. The
 // FG mapping of WaveeMusic's 700-line ContextResolver:
 //   • its 3 bespoke caches + retry/cooldown dict   → none here: the GET is cheap; the cost is the metadata, and that is
-//                                                     already cached by MetadataService (SWR over the Resource engine).
+//                                                     already deduped + sealed by the hydration ledger (design 2.1).
 //   • its protobuf JsonParser.Parse<Context>       → a streaming Utf8JsonReader (proto-free, no full-doc alloc), the same
 //                                                     choice DealerFrameParser makes.
-//   • its bespoke batched-metadata client          → MetadataService.SyncAllAsync (partial-cache-aware, batched, gzipped).
+//   • its bespoke batched-metadata client          → IEntityHydrator.EnsureManyAsync (ledger-deduped, batched, gzipped).
 // The server decides order + sorting; we preserve it and apply skip_to (uid→uri→index) on top. Collections are URI-only
 // on the wire — their sort/filter rides on context.url's query, which we forward verbatim.
 public sealed class LiveContextResolver : IContextResolver
@@ -33,17 +35,22 @@ public sealed class LiveContextResolver : IContextResolver
     const int MaxEagerPages = 8;
 
     readonly ITransport _transport;
-    readonly MetadataService _metadata;
+    readonly IEntityHydrator _hydrator;
     readonly IStore _store;
     readonly WaveeLogger _log;
     readonly Resource<string, ArtistContextWire> _artistCache;
 
-    public LiveContextResolver(ITransport transport, MetadataService metadata, IStore store,
+    /// <param name="hydrator">THE façade — REQUIRED. The resolved order is raised to Identity through it (one catalogue
+    /// POST per 300, deduped session-wide by the ledger) instead of this file owning its own metadata client.</param>
+    /// <param name="store">REQUIRED too (design §3): <c>HydrateAsync</c> reads every resolved row back out of it, so a
+    /// null here is an NRE inside a queue resolve rather than a composition-root failure — the exact asymmetry
+    /// wiring-discipline exists to remove.</param>
+    public LiveContextResolver(ITransport transport, IEntityHydrator hydrator, IStore store,
         Func<SessionContext> ctx, WaveeLogger log = default)
     {
         _transport = transport;
-        _metadata = metadata;
-        _store = store;
+        _hydrator = hydrator ?? throw new ArgumentNullException(nameof(hydrator));
+        _store = store ?? throw new ArgumentNullException(nameof(store));
         _log = log;
         _artistCache = new Resource<string, ArtistContextWire>(FetchArtistWireAsync,
             new FreshnessPolicy.Etag(TimeSpan.FromMinutes(15)), ctx, maxEntries: 16, name: "connect.context.artist",
@@ -117,9 +124,19 @@ public sealed class LiveContextResolver : IContextResolver
         if (string.IsNullOrWhiteSpace(contextUri)) return ResolvedContext.Empty;
         try
         {
-            return contextUri.StartsWith("spotify:track:", StringComparison.Ordinal)
-                ? await ResolveRadioApolloAsync(contextUri, recentTrackUris, ct).ConfigureAwait(false)
-                : await ResolveContextAutoplayAsync(contextUri, recentTrackUris, ct).ConfigureAwait(false);
+            // Three wires, one per SEED SHAPE — this fork is deliberately NOT `IsPlayable`.
+            //   Track   → radio-apollo. Its route is `spotify:station:track:<id>`: a MUSIC-radio seed. An episode has
+            //             no station of that shape, so widening this arm would send podcasts at a music endpoint.
+            //   Episode → /context-resolve/v1/autopodcast. The episode-shaped tail, same AutoplayContextRequest body.
+            //             Before P4 an episode fell through to the music `autoplay` route and a finished podcast
+            //             simply stopped.
+            //   anything else (a playlist, an album, a show, a station) → the generic /context-resolve/v1/autoplay.
+            return EntityUri.KindOf(contextUri) switch
+            {
+                EntityKind.Track => await ResolveRadioApolloAsync(contextUri, recentTrackUris, ct).ConfigureAwait(false),
+                EntityKind.Episode => await ResolveAutopodcastAsync(contextUri, recentTrackUris, ct).ConfigureAwait(false),
+                _ => await ResolveContextAutoplayAsync(contextUri, recentTrackUris, ct).ConfigureAwait(false),
+            };
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
@@ -188,11 +205,11 @@ public sealed class LiveContextResolver : IContextResolver
 
     async Task<ResolvedContext> ResolveRadioApolloAsync(string seedTrackUri, IReadOnlyList<string> recentTrackUris, CancellationToken ct)
     {
-        string seedId = StripTrackPrefix(seedTrackUri);
+        string seedId = EntityUri.IdOf(seedTrackUri);
         var prev = new List<string>(recentTrackUris.Count);
         for (int i = 0; i < recentTrackUris.Count; i++)
         {
-            var id = StripTrackPrefix(recentTrackUris[i]);
+            var id = EntityUri.IdOf(recentTrackUris[i]);
             if (!string.IsNullOrEmpty(id)) prev.Add(Uri.EscapeDataString(id));
         }
 
@@ -280,7 +297,7 @@ public sealed class LiveContextResolver : IContextResolver
         return null;
     }
 
-    static bool IsArtistUri(string uri) => uri.StartsWith("spotify:artist:", StringComparison.Ordinal);
+    static bool IsArtistUri(string uri) => EntityUri.KindOf(uri) == EntityKind.Artist;
 
     static bool TryArtistIdFromListUri(string uri, out string artistId)
     {
@@ -300,7 +317,7 @@ public sealed class LiveContextResolver : IContextResolver
     // the caller falls back to spec.Uri (resolved.ContextUri ?? spec.Uri), never relabeling to this list uri.
     async Task<ResolvedContext> ResolveArtistAsync(ContextSpec spec, CancellationToken ct)
     {
-        string id = spec.Uri["spotify:artist:".Length..];
+        string id = EntityUri.IdOf(spec.Uri);
         var loaded = await _artistCache.GetAsync(id, ct).ConfigureAwait(false);
         if (!loaded.IsReady)
         {
@@ -344,14 +361,14 @@ public sealed class LiveContextResolver : IContextResolver
         return new ArtistContextWire(refs, metadata);
     }
 
-    // Pull display + duration metadata for the resolved order (cache-aware, batched, gzipped). The expensive work lives
-    // here and MetadataService caches it, so re-resolving the same context is near-free. Misses become uri-only
-    // placeholders (preserving indices so skip_to-by-index stays valid).
+    // Pull display + duration metadata for the resolved order — through THE façade, at Identity (a queue row needs a
+    // title, a duration and an image; it is not a page open). The ledger dedupes across surfaces, so re-resolving the
+    // same context is near-free. Misses become uri-only placeholders (preserving indices so skip_to-by-index stays valid).
     public async Task<IReadOnlyList<QueuedTrack>> HydrateAsync(IReadOnlyList<QueuedRef> refs, CancellationToken ct = default)
     {
         var uris = new string[refs.Count];
         for (int i = 0; i < refs.Count; i++) uris[i] = refs[i].Uri;
-        try { await _metadata.SyncAllAsync(uris, ct).ConfigureAwait(false); }
+        try { await _hydrator.EnsureManyAsync(uris, HydrationLevel.Identity, new HydrationOptions(Surface: TraitSurface.Context), ct).ConfigureAwait(false); }
         catch (Exception ex) { _log.Warn("context hydrate: " + ex.Message, ex); }   // best-effort: placeholders below
 
         var tracks = new QueuedTrack[refs.Count];
@@ -359,15 +376,17 @@ public sealed class LiveContextResolver : IContextResolver
         {
             var uri = refs[i].Uri;
             string provider = string.IsNullOrEmpty(refs[i].Provider) ? "context" : refs[i].Provider;
-            tracks[i] = new QueuedTrack(_store.GetTrack(uri) ?? Placeholder(uri), refs[i].Uid, provider, refs[i].Metadata, RowKindOf(uri));
+            // An EPISODE is a playable: a podcast context used to fall through to the uri-only placeholder because the
+            // join asked for GetTrack alone (design §1.5 / plan §1.5).
+            var row = _store.GetTrack(uri) ?? EpisodeAsTrack.From(_store.GetEpisode(uri)) ?? Placeholder(uri);
+            tracks[i] = new QueuedTrack(row, refs[i].Uid, provider, refs[i].Metadata, RowKindOf(uri));
         }
         return tracks;
     }
 
     static Track Placeholder(string uri)
     {
-        int i = uri.LastIndexOf(':');
-        string id = i >= 0 && i + 1 < uri.Length ? uri[(i + 1)..] : uri;
+        string id = EntityUri.IdOf(uri);
         return new Track(id, uri, uri, Array.Empty<ArtistRef>(), new AlbumRef("", "", ""), 0, false, null);
     }
 
@@ -379,9 +398,6 @@ public sealed class LiveContextResolver : IContextResolver
         for (int i = 0; i < tracks.Count; i++) tagged[i] = tracks[i] with { Provider = provider };
         return tagged;
     }
-
-    static string StripTrackPrefix(string uri) =>
-        uri.StartsWith("spotify:track:", StringComparison.Ordinal) ? uri["spotify:track:".Length..] : uri;
 
     static QueueRowKind RowKindOf(string uri)
     {

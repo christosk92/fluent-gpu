@@ -20,7 +20,7 @@ public class DeviceStateRepublishTests
     sealed class Harness
     {
         public readonly StubTransport Transport = new();
-        public readonly NowPlayingProjection Proj = new("us", () => 0);
+        public readonly NowPlayingProjection Proj = new("us", NotOwnedEntityHydrator.Instance, new InMemoryStore(), () => 0);
         public readonly SimpleSubject<string?> ConnId = new(null);
         public readonly List<PutStateReasonKind> Reasons = new();
         public readonly DeviceStatePublisher Publisher;

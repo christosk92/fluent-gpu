@@ -11,25 +11,32 @@ using Xm = Wavee.Protocol.ExtendedMetadata;
 
 namespace Wavee.SpotifyLive;
 
-/// <summary>Spotify's below-the-fold album reads. Every method is best-effort and independently consumable by the UI;
-/// no failure here can invalidate the already-loaded album or track list. The Pathfinder ops carry the rich JSON
-/// (about-artist / merch / similar albums); the recommended-playlist hydration rides the SHARED
-/// <see cref="ExtendedMetadataSource"/> (kinds 151 → 205) rather than a second metadata transport.</summary>
+/// <summary>Spotify's below-the-fold album reads. Every method is best-effort and independently consumable by the
+/// UI; no failure here can invalidate the already-loaded album or track list. RETURN-ONLY for CARDS (design 3):
+/// similar albums and recommended playlists are display rows, so this service no longer mints thin store entities
+/// for them - anything that needs a real ENTITY (the artist behind "fans also like", a recommended playlist's
+/// header) asks <c>IEntityHydrator</c> for a rung and reads the store back, which is also what killed this file's
+/// second 205 projector and its second queryArtistOverview caller. The Pathfinder ops carry the rich JSON
+/// (about-artist / merch / similar albums); the NPV about-artist stays an authoritative artist projection.</summary>
 sealed class SpotifyAlbumEnrichmentService : IAlbumEnrichmentService
 {
     readonly PathfinderResource _pathfinder;
     readonly ExtendedMetadataSource _metadata;
     readonly ExtensionEtagCache? _extensions;
     readonly IStore _store;
+    readonly IEntityHydrator _hydrator;
     readonly WaveeLogger _log;
 
+    /// <param name="hydrator">REQUIRED. The one façade — "fans also like" asks for the artist's Rich rung through it
+    /// instead of issuing its own queryArtistOverview (design §1.5).</param>
     public SpotifyAlbumEnrichmentService(PathfinderResource pathfinder, ExtendedMetadataSource metadata, IStore store,
-        WaveeLogger log = default, ExtensionEtagCache? extensions = null)
+        IEntityHydrator hydrator, WaveeLogger log = default, ExtensionEtagCache? extensions = null)
     {
         _pathfinder = pathfinder;
         _metadata = metadata;
         _extensions = extensions;
         _store = store;
+        _hydrator = hydrator ?? throw new ArgumentNullException(nameof(hydrator));
         _log = log;
     }
 
@@ -64,26 +71,13 @@ sealed class SpotifyAlbumEnrichmentService : IAlbumEnrichmentService
     public async Task<IReadOnlyList<Artist>> GetRelatedArtistsAsync(string artistUri, CancellationToken ct = default)
     {
         if (artistUri.Length == 0) return Array.Empty<Artist>();
-        if (_store.GetArtist(artistUri)?.Extras?.Related is { Count: > 0 } cached)
-            return Artists(cached);
-
-        using var doc = await _pathfinder.QueryAsync(PathfinderOps.QueryArtistOverview, PathfinderOps.QueryArtistOverviewHash,
-            // Wire-exact: locale "" + preReleaseV2 true (same pairing as SpotifyArtistStatsService).
-            w => { w.WriteString("uri", artistUri); w.WriteString("locale", ""); w.WriteBoolean("preReleaseV2", true); },
-            PathfinderClient.Platform.WebPlayer, ct).ConfigureAwait(false);   // web-player bundle — see stats service
-        if (doc is null) return Array.Empty<Artist>();
-        var artist = SpotifyExportMapper.ArtistFromOverview(doc.RootElement);
-        if (artist is null) return Array.Empty<Artist>();
-        // STATS-ONLY write (mirrors SpotifyArtistStatsService): the overview carries only the FIRST ~10 releases per
-        // facet, and MergeAlbumCards treats a non-null incoming list as the authoritative set — a raw upsert here
-        // clobbered a full ArtistV4 discography down to that first page (the "every artist caps at 10 albums" bug).
-        _store.UpsertArtist(artist with
-        {
-            TopAlbums = null, AppearsOn = null,
-            AlbumsTotal = 0, SinglesTotal = 0, CompilationsTotal = 0,
-            FetchedAt = DateTimeOffset.UtcNow,
-        });
-        return artist.Extras?.Related is { Count: > 0 } related ? Artists(related) : Array.Empty<Artist>();
+        // "Fans also like" is the artist overview's Related list — the SAME queryArtistOverview the artist ladder's
+        // Rich rung already owns. This used to be the SECOND caller of that operation, with its own copy of the
+        // stats-only-write rule; now it asks for the rung and reads the store, so an album page opened right after its
+        // artist page costs zero extra requests (design §2.3, ArtistHydration).
+        await _hydrator.EnsureAsync(artistUri, HydrationLevel.Rich, HydrationOptions.Default, ct).ConfigureAwait(false);
+        return _store.GetArtist(artistUri)?.Extras?.Related is { Count: > 0 } related
+            ? Artists(related) : Array.Empty<Artist>();
     }
 
     public async Task<AlbumTrackContext?> GetTrackContextAsync(string trackUri, CancellationToken ct = default)
@@ -110,25 +104,23 @@ sealed class SpotifyAlbumEnrichmentService : IAlbumEnrichmentService
             w => { w.WriteString("uri", seedTrackUri); w.WriteNumber("limit", limit); w.WriteBoolean("albumsOnly", true); },
             PathfinderClient.Platform.Desktop, ct).ConfigureAwait(false);
         if (doc is null) return Array.Empty<Album>();
+        // RETURN-ONLY (design 3): the cards are display rows, not entities. Minting thin albums here made the
+        // store hold rows no ladder had hydrated, and a click already opens through GetAlbumAsync -> the album
+        // ladder, which fetches the real thing. Writing them twice bought nothing but a stale hero.
         var albums = SpotifyExportMapper.SimilarAlbumsFromTrack(doc.RootElement);
-        foreach (var a in albums) _store.UpsertAlbum(a);   // project for navigation reuse (a click opens with a hero)
         return albums;
     }
 
-    // The recommended-playlist shelf is a TWO-STAGE extended-metadata read over the shared source: kind 151
-    // (RECOMMENDED_PLAYLISTS) yields the ordered playlist refs for the album; kind 205 (LIST_METADATA_V2) hydrates each
-    // ref's hero (name/cover/owner) in one batch. Both ride ExtendedMetadataSource — no bespoke transport.
+    // The recommended-playlist shelf: kind 151 (RECOMMENDED_PLAYLISTS) yields the ordered playlist refs for the
+    // album; the refs are then hydrated at Identity THROUGH THE FACADE, which is the one place a 205 is read and
+    // projected. This service reads the resulting headers back out of the store and returns cards.
     public async Task<IReadOnlyList<PlaylistSummary>> GetRecommendedPlaylistsAsync(string albumUri, CancellationToken ct = default)
     {
         if (albumUri.Length == 0) return Array.Empty<PlaylistSummary>();
 
-        // Below-the-fold Full upgrade: the interactive album open is now V4-first (tracklist only), so the getAlbum
-        // envelope (label / copyright / OtherVersions / precision) that powers "About this release" lands here, off the
-        // critical open path. Best-effort — a failure leaves the Tracks-level album standing.
-        if (_store.GetAlbum(albumUri) is { Hydration: < AlbumHydrationLevel.Full })
-            try { await LiveSessionHost.FetchAlbumAsync(_pathfinder, _store, albumUri, ct).ConfigureAwait(false); }
-            catch (Exception ex) when (ex is not OperationCanceledException) { _log.Info("album Full upgrade: " + ex.Message); }
-
+        // The getAlbum Full upgrade used to be triggered from here by calling back into LiveSessionHost. It is now
+        // the album ladder's Full rung, asked for by DetailTrailing (the pane that needs it) through the façade — this
+        // service is return-only again: it reads, it never fetches an entity into the store (design §3).
         ByteString? refsPayload;
         try
         {
@@ -147,46 +139,19 @@ sealed class SpotifyAlbumEnrichmentService : IAlbumEnrichmentService
             .Distinct(StringComparer.Ordinal).Take(12).ToArray();
         if (uris.Length == 0) return Array.Empty<PlaylistSummary>();
 
-        IReadOnlyDictionary<(string Uri, Xm.ExtensionKind Kind), ByteString> payloads;
-        try
-        {
-            var requests = Array.ConvertAll(uris, u => (u, Xm.ExtensionKind.ListMetadataV2));
-            payloads = _extensions is not null
-                ? await _extensions.GetPayloadsAsync(requests, ct).ConfigureAwait(false)
-                : await _metadata.GetExtensionsAsync(requests, ct).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException) { _log.Info("LIST_METADATA_V2 fetch: " + ex.Message); return Array.Empty<PlaylistSummary>(); }
+        // The refs are playlist POINTERS. Hydrating them is the facade's job at IDENTITY (step 0 is the same 205 read,
+        // through the etag cache and the ONE ProjectPlaylist projector) - this service used to carry a SECOND 205
+        // projector with its own cover picker, owner title-caser and header-minting write, which is exactly the kind of
+        // duplicate the facade exists to delete (hydration-facade-plan.md 1.6).
+        try { await _hydrator.EnsureManyAsync(uris, HydrationLevel.Identity, new HydrationOptions(Surface: TraitSurface.None), ct).ConfigureAwait(false); }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex) { _log.Info("recommended-playlist hydrate: " + ex.Message); }
 
         var result = new List<PlaylistSummary>(uris.Length);
         foreach (var uri in uris)   // preserve the recommended order
         {
-            if (!payloads.TryGetValue((uri, Xm.ExtensionKind.ListMetadataV2), out var payload)) continue;
-            try
-            {
-                var meta = Xm.ListMetadataV2.Parser.ParseFrom(payload);
-                if (meta.Name.Length == 0) continue;   // a metadata-less ref is not a renderable card
-                Image? cover = Cover(meta);
-                string owner = meta.Source.Length > 0 ? TitleCase(meta.Source) : "Spotify";
-                result.Add(new PlaylistSummary(uri, meta.Name, owner, 0, cover));
-                // Project a partial playlist so clicking the card opens with an immediate hero (tracks hydrate on open).
-                // Never clobber a resident header's capabilities/owner/membership — home cards only refresh display fields.
-                string? desc = SpotifyExportMapper.HtmlText(meta.Description) is { Length: > 0 } d ? d : null;
-                var existing = _store.GetPlaylist(uri);
-                if (existing is { } ex)
-                {
-                    _store.UpsertPlaylist(ex with
-                    {
-                        Name = meta.Name,
-                        Description = desc ?? ex.Description,
-                        Cover = cover ?? ex.Cover,
-                    });
-                }
-                else
-                {
-                    _store.UpsertPlaylist(new Playlist(Id(uri), uri, meta.Name, desc, owner, cover, 0, Source: "spotify"));
-                }
-            }
-            catch (InvalidProtocolBufferException ex) { _log.Info("LIST_METADATA_V2 parse: " + ex.Message); }
+            if (_store.GetPlaylist(uri) is not { Name.Length: > 0 } p) continue;   // a nameless ref is not a renderable card
+            result.Add(new PlaylistSummary(uri, p.Name, p.OwnerName.Length > 0 ? p.OwnerName : "Spotify", p.TrackCount, p.Cover));
         }
         return result;
     }
@@ -199,32 +164,4 @@ sealed class SpotifyAlbumEnrichmentService : IAlbumEnrichmentService
         return result;
     }
 
-    static Image? Cover(Xm.ListMetadataV2 meta)
-    {
-        var variants = meta.Images?.Variant;
-        if (variants is null || variants.Count == 0) return null;
-        var value = variants.FirstOrDefault(x => x.Format == "default")
-            ?? variants.FirstOrDefault(x => x.Format == "large")
-            ?? variants.FirstOrDefault(x => x.Url.Length > 0);
-        return value is null || value.Url.Length == 0 ? null : new Image(value.Url);
-    }
-
-    static string Id(string uri)
-    {
-        int i = uri.LastIndexOf(':');
-        return i >= 0 && i + 1 < uri.Length ? uri[(i + 1)..] : uri;
-    }
-
-    static string TitleCase(string value)
-        => value.Length == 0 ? value : char.ToUpperInvariant(value[0]) + value[1..];
-
-    // NPV biographies can be paragraphs; the About card shows a short excerpt (sentence-boundary-aware, ~200 chars).
-    static string? Excerpt(string? bio)
-    {
-        if (string.IsNullOrWhiteSpace(bio)) return null;
-        var text = bio.Trim();
-        if (text.Length <= 200) return text;
-        int period = text.LastIndexOf('.', Math.Min(219, text.Length - 1), Math.Min(220, text.Length));
-        return period > 80 ? text[..(period + 1)] : text[..200] + "…";
-    }
 }

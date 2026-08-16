@@ -55,8 +55,9 @@ sealed class HomeSectionPreviewStore
 /// that PLAYS instead of navigating, and that is the only service this decision needs.</para></summary>
 static class HomeCardNav
 {
-    /// <summary>The trailing id of a <c>scheme:kind:id</c> URI (the whole string when it carries no separator).</summary>
-    public static string Id(string uri) { int i = uri.LastIndexOf(':'); return i >= 0 ? uri[(i + 1)..] : uri; }
+    /// <summary>The trailing id of a <c>scheme:kind:id</c> URI (the whole string when it carries no separator) —
+    /// THE <see cref="EntityUri.IdOf"/>, not a private copy of it (hydration-facade-design.md §1.1).</summary>
+    public static string Id(string uri) => EntityUri.IdOf(uri);
 
     /// <summary>Open a card: play it (Track/Episode), or navigate to its destination — stashing the partial detail
     /// model the card already carries, so the detail page reconciles its header in place instead of flashing a

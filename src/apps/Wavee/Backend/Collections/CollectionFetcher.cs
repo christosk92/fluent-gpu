@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Google.Protobuf;
 using Wavee.Backend.Spotify;
+using Wavee.Core;
 using Col = Wavee.Protocol.Collection;
 
 namespace Wavee.Backend.Collections;
@@ -137,7 +138,7 @@ public sealed class CollectionFetcher
         for (int i = 0; i < d.Items.Count; i++)
         {
             var it = d.Items[i];
-            if (!it.Removed && it.Uri.StartsWith("spotify:", StringComparison.Ordinal)) uris.Add(it.Uri);
+            if (!it.Removed && EntityUri.Parse(it.Uri).Provider == EntityProviders.Spotify) uris.Add(it.Uri);
         }
         if (uris.Count > 0) await _hydrate(uris, ct).ConfigureAwait(false);
     }

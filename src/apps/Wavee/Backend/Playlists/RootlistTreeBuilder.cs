@@ -59,7 +59,7 @@ public static class RootlistTreeBuilder
                     break;
 
                 default:  // a playlist (or any item) uri
-                    if (e.Uri.StartsWith("spotify:playlist:", StringComparison.Ordinal))
+                    if (EntityUri.KindOf(e.Uri) == EntityKind.Playlist)
                     {
                         var leaf = new PlaylistLeaf(resolve(e.Uri));
                         (open.Count > 0 ? open.Peek().Items : top).Add(leaf);
@@ -93,18 +93,33 @@ public static class RootlistTreeBuilder
     // the same ordered rows from a bare uri sequence — so the marker parsing lives here once (kind 0=item, 1=start, 2=end;
     // depth tracks nesting; Position is the flat item index, which the rootlist-changes REM op indexes against).
     public static IReadOnlyList<RootlistEntry> EntriesFromUris(IEnumerable<string> uris)
+        => EntriesFromUris(uris, null);
+
+    /// <summary>The same parse, carrying each row's server ADD timestamp (playlist4 <c>ItemAttributes.timestamp</c>).
+    /// <paramref name="timestamps"/> is positional against <paramref name="uris"/>; a shorter/absent list leaves the
+    /// remaining rows at 0 ("not captured"), which the folder-rename path bootstraps rather than guesses.</summary>
+    public static IReadOnlyList<RootlistEntry> EntriesFromUris(IEnumerable<string> uris, IReadOnlyList<long>? timestamps)
     {
         var entries = new List<RootlistEntry>();
         int pos = 0, depth = 0;
         foreach (var uri in uris)
         {
-            if (uri.StartsWith("spotify:start-group:", StringComparison.Ordinal)) { entries.Add(new RootlistEntry(pos++, 1, uri, GroupNameOf(uri), depth)); depth++; }
-            else if (uri.StartsWith("spotify:end-group:", StringComparison.Ordinal)) { depth = Math.Max(0, depth - 1); entries.Add(new RootlistEntry(pos++, 2, uri, null, depth)); }
-            else entries.Add(new RootlistEntry(pos++, 0, uri, null, depth));
+            long ts = timestamps is not null && pos < timestamps.Count ? timestamps[pos] : 0;
+            if (uri.StartsWith("spotify:start-group:", StringComparison.Ordinal)) { entries.Add(new RootlistEntry(pos++, 1, uri, GroupNameOf(uri), depth, ts)); depth++; }
+            else if (uri.StartsWith("spotify:end-group:", StringComparison.Ordinal)) { depth = Math.Max(0, depth - 1); entries.Add(new RootlistEntry(pos++, 2, uri, null, depth, ts)); }
+            else entries.Add(new RootlistEntry(pos++, 0, uri, null, depth, ts));
         }
         return entries;
     }
 
-    // "spotify:start-group:{id}:{name}" → the (url-decoded) {name} segment.
-    static string? GroupNameOf(string uri) { var p = uri.Split(':'); return p.Length >= 4 ? Uri.UnescapeDataString(p[3]) : null; }
+    // "spotify:start-group:{id}:{name}" → the decoded {name} segment. Desktop encodes a folder name with SPACE AS `+`
+    // (a164 "New+Folder", b037 "named+folder+update"; a literal + is %2B), so `+` is a space here — Uri.UnescapeDataString
+    // alone would leave the pluses in the label. A name may itself contain `:` — take everything after the third colon.
+    static string? GroupNameOf(string uri)
+    {
+        int a = uri.IndexOf(':', "spotify:".Length);                       // after "start-group"
+        int b = a < 0 ? -1 : uri.IndexOf(':', a + 1);                      // after {id}
+        if (b < 0) return null;
+        return Uri.UnescapeDataString(uri.AsSpan(b + 1).ToString().Replace('+', ' '));
+    }
 }

@@ -23,8 +23,11 @@ public static class Surfaces
 {
     // Artwork is opaque content. Theme card brushes are intentionally translucent, so placeholders use explicit opaque
     // neutrals instead of allowing the surface below to wash through the image slot.
+    internal static readonly ColorF ArtworkPlaceholderDark = ColorF.FromRgba(0x2A, 0x2A, 0x2A);
+    internal static readonly ColorF ArtworkPlaceholderLight = ColorF.FromRgba(0xF2, 0xF2, 0xF2);
+
     internal static ColorF ArtworkPlaceholder =>
-        Tok.Theme == ThemeKind.Dark ? ColorF.FromRgba(0x2A, 0x2A, 0x2A) : ColorF.FromRgba(0xF2, 0xF2, 0xF2);
+        Tok.Theme == ThemeKind.Dark ? ArtworkPlaceholderDark : ArtworkPlaceholderLight;
 
     // How far a cover's own colour pulls the placeholder away from the neutral tile. Full strength would make a long
     // list read as a wall of saturated blocks; this keeps the slot legible as "art loading" while still being that
@@ -41,13 +44,20 @@ public static class Surfaces
     /// (a cover's colour is a property of the cover), and a miss enqueues that image for grading — rendering the art
     /// IS the request. Light theme only accepts a light grading; a dark-only entry (all kind 179 ever ships) keeps the
     /// neutral tile rather than dropping a dark slab onto a pale page.</summary>
-    internal static ColorF PlaceholderFor(string? url)
+    internal static ColorF PlaceholderFor(string? url) => PlaceholderFor(url, Tok.Theme == ThemeKind.Light);
+
+    /// <summary>The same resolver with the polarity supplied rather than read. A surface whose ground does NOT follow
+    /// the page — the immersive stage, which owns its own veil — needs the tile graded for ITS polarity, not the
+    /// page's, or a still-decoding cover flashes the wrong end of the ramp under its scrim. The tint still comes from
+    /// the same image-keyed plane and a miss still enqueues that image for grading, so nothing about the caching
+    /// contract changes; only which neutral the tint is blended toward.</summary>
+    internal static ColorF PlaceholderFor(string? url, bool light)
     {
-        if (string.IsNullOrEmpty(url)) return ArtworkPlaceholder;
-        bool light = Tok.Theme == ThemeKind.Light;
+        ColorF neutral = light ? ArtworkPlaceholderLight : ArtworkPlaceholderDark;
+        if (string.IsNullOrEmpty(url)) return neutral;
         return SpotifyLive.CoverColorPlane.Current.TryGetTint(url, light, out uint argb)
-            ? ColorF.Lerp(ArtworkPlaceholder, WaveePalette.ToColor(argb), TintStrength)
-            : ArtworkPlaceholder;
+            ? ColorF.Lerp(neutral, WaveePalette.ToColor(argb), TintStrength)
+            : neutral;
     }
 
     // ── THE TWO GRADING HALVES, AND WHICH JOB TAKES WHICH ────────────────────────────────────────────────────────────

@@ -584,24 +584,6 @@ sealed class HomePage : Component
     }
 
 
-    // The group's chrome accent, in three tiers of decreasing truth:
-    //   1. the first card's GRADED cover colour, from CoverColorPlane — the full five-role grading, theme-correct, and
-    //      the authority for every art colour in the app. Arrives with the plane's epoch once the cover decodes.
-    //   2. the SERVER's own extractedColors.colorDark for that card (HomeCardMeta.Accent) — available before a single
-    //      image byte lands, so a cold feed is already in its own colours instead of one hardcoded blue for the whole
-    //      page. Lifted, because colorDark is a near-black tone that would vanish on a dark card and bruise a light one.
-    //   3. the app accent.
-    // Note tier 2 is NOT written back into the plane: a partial entry would make TryGetTint/TryGetScheme HIT, and
-    // enqueue-for-grading only happens on a MISS — seeding would permanently starve the real grading for every home cover.
-    static ColorF GroupAccent(HomeGroup g)
-    {
-        for (int i = 0; i < g.Cards.Count; i++)
-            if (Surfaces.ChromeSchemeFor(g.Cards[i].Image?.Url) is { } s) return WaveePalette.ChromeAccent(s);
-        for (int i = 0; i < g.Cards.Count; i++)
-            if (g.Cards[i].Meta is { Accent: not 0u } m) return WaveePalette.Lift(WaveePalette.ToColor(m.Accent));
-        return Tok.AccentDefault;
-    }
-
     // Greeting + the home facet chip row. The chips come from the SAME home response the shelves do, so they cost no
     // extra request; selecting one writes Services.HomeFacet and asks for a refresh, which re-issues home with the
     // `facet` variable populated (it was always in the request, hardcoded to "").

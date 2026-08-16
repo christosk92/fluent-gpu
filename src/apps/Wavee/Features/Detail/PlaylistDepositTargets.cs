@@ -32,7 +32,9 @@ static class PlaylistDepositTargets
     /// (Liked Songs, a daylist route, a local <c>wavee:playlist:</c> from the offline source) — a deposit against those
     /// has nowhere to land.</summary>
     public static bool IsDepositable(string? uri)
-        => uri is { Length: > 0 } && uri.StartsWith("spotify:playlist:", StringComparison.Ordinal);
+        // Kind + provider through the ONE parser (hydration-facade-design.md §1.1): a Spotify PLAYLIST, which excludes
+        // Liked (Collection), a route key (Unknown) and the offline `wavee:playlist:*` source (EntityProviders.User).
+        => uri is { Length: > 0 } && EntityUri.Parse(uri) is { IsSpotify: true, Kind: EntityKind.Playlist };
 
     /// <summary>Can the user write items into <paramref name="p"/>? Owned or collaborative — <c>CanEdit</c> already folds
     /// <c>CanEditItems || IsOwner</c> at the projection (StoreLibrarySource), so a followed editorial playlist is out.</summary>

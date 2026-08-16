@@ -64,6 +64,17 @@ team maintained, not by the running app.
 > pass-through in `AppHost.Paint`; `Quarantine` logically 0). The `ThreadGuard`, quarantine-derivation (§5.1), publisher
 > ordering (§2.2), 3-slot rule (§2.3) and arena-ring rationale (§6) apply to both cuts unchanged.
 
+> **The UI thread is a dedicated 32 MB thread (2026-08-16).** `FluentApp.RunCore` runs the whole UI/frame loop —
+> DPI awareness, window, device, pump — on a thread it creates with a **32 MB stack reserve** (`FluentApp.UiThreadStackBytes`),
+> STA, joined by `Main`; it is *not* the process main thread. Reason: record stays on the UI thread (Cut A above) and
+> `SceneRecorder.Walk` is recursive with a large frame (~21.5 KB optimized, several times that under the Debug JIT);
+> on the apphost's default 1.5 MB main-thread reserve the recorder's stack-headroom guard tripped at ~68 levels in Release
+> and at track-row depth in Debug, degrading by **not painting the deepest subtree** — silently. The reserve is committed
+> on demand (no cost); the guard remains as the last-resort net and its trips are now counted
+> (`SceneRecordStats.DepthAborts` → `FrameStats.DepthAborts`, `[record] depth-abort` Diag, one `Console.Error` line) and
+> pinned by `gate.record.depth-abort-counts` / `gate.record.depth-budget-ui-stack`. `ThreadGuard` roles bind per thread
+> at runtime, so nothing here assumes the process main thread; the render thread is unchanged.
+
 > **Modal move/size (butter-smooth resize v2).** Today **`WndProc == the presenting thread`**: keep-alive modal paints
 > (`WM_TIMER` / throttled `WM_SIZE`) call `AppHost.Paint` inline on that thread, including `Present()` and any
 > one-shot `HintSettlePresent`/`DwmFlush` on settle. The WndProc budget invariant therefore applies directly — modal

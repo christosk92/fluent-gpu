@@ -12,11 +12,11 @@ public sealed class LocalPlaylistMutationSource : IPlaylistMutationSource
 
     public LocalPlaylistMutationSource(UserPlaylistSource local) => _local = local;
 
-    public Task<string> CreatePlaylistAsync(string name, CancellationToken ct = default)
-    {
-        string uri = _local.CreatePlaylist(name);
-        return Task.FromResult(uri);
-    }
+    /// <summary>The local flavour of the create seam: a <c>wavee:playlist:*</c> list exists the moment it is minted, so
+    /// there is no outbox to observe and <see cref="PlaylistCreated.Completion"/> is already complete. Folder placement
+    /// has no meaning here (local playlists live outside the Spotify rootlist) and is deliberately ignored.</summary>
+    public PlaylistCreated CreatePlaylist(string name, RootlistPlacement placement)
+        => new(_local.CreatePlaylist(name), Task.CompletedTask);
 
     public Task AddTracksAsync(string playlistUri, IReadOnlyList<Track> tracks, CancellationToken ct = default)
     {
@@ -58,18 +58,6 @@ public sealed class LocalPlaylistMutationSource : IPlaylistMutationSource
         throw NotImplementedLocally("cover editing", playlistUri);
     }
 
-    public Task ClearCoverAsync(string playlistUri, CancellationToken ct = default)
-    {
-        RequireLocal(playlistUri);
-        throw NotImplementedLocally("cover editing", playlistUri);
-    }
-
-    public Task SetBasePermissionAsync(string playlistUri, PlaylistPermissionLevel level, CancellationToken ct = default)
-        => throw SpotifyOnly(playlistUri);
-
-    public Task<PlaylistBasePermission?> GetBasePermissionAsync(string playlistUri, CancellationToken ct = default)
-        => Task.FromResult<PlaylistBasePermission?>(null);
-
     public Task SetPlaylistVisibilityAsync(string playlistUri, bool isPublic, CancellationToken ct = default)
         => throw SpotifyOnly(playlistUri);
 
@@ -83,9 +71,25 @@ public sealed class LocalPlaylistMutationSource : IPlaylistMutationSource
                                       RootlistDropPlacement placement, CancellationToken ct = default)
         => Task.CompletedTask;
 
+    // Folder CRUD is a Spotify ROOTLIST operation: local playlists are not in the rootlist at all, so there is no
+    // honest local behaviour to fall back to. Named throws (wiring discipline) — never a silent no-op.
+    public Task<string> CreateFolderAsync(string name, RootlistPlacement placement, CancellationToken ct = default)
+        => throw FoldersAreSpotifyOnly("create");
+
+    public Task RenameFolderAsync(string groupId, string name, CancellationToken ct = default)
+        => throw FoldersAreSpotifyOnly("rename");
+
+    public Task DeleteFolderAsync(string groupId, CancellationToken ct = default)
+        => throw FoldersAreSpotifyOnly("delete");
+
+    static NotSupportedException FoldersAreSpotifyOnly(string verb) =>
+        new($"Rootlist folder {verb} is a Spotify-account operation with no local equivalent. Sign in with the real backend.");
+
     static void RequireLocal(string uri)
     {
-        if (!uri.StartsWith("wavee:playlist:", StringComparison.Ordinal))
+        // Ownership is a provider question, asked through the ONE parser (hydration-facade-design.md §1.1):
+        // `wavee:playlist:*` IS EntityProviders.User, the session-local source this type mutates.
+        if (EntityUri.Parse(uri).Provider != EntityProviders.User)
             throw SpotifyOnly(uri);
     }
 

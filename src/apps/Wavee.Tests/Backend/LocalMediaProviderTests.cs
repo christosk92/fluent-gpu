@@ -409,7 +409,7 @@ public class LocalMediaProviderTests
         var registry = ThreeProviderRegistry(out _);
         string localUri = PlayableUri.ForLocalFile(@"C:\Music\next.mp3");
         var host = new RecordingAudioHost();
-        var projection = new NowPlayingProjection("dev");
+        var projection = new NowPlayingProjection("dev", NotOwnedEntityHydrator.Instance, new InMemoryStore());
         using var controller = new PlaybackController(host, registry, projection,
             new FakeContextResolver("spotify:track:a", localUri), "dev", fast: registry);
         controller.CanPrepareNext = t => registry.SupportsPreparedNext(t.Uri);
@@ -433,7 +433,7 @@ public class LocalMediaProviderTests
         files.Add(second);
 
         var host = new RecordingAudioHost();
-        var projection = new NowPlayingProjection("dev");
+        var projection = new NowPlayingProjection("dev", NotOwnedEntityHydrator.Instance, new InMemoryStore());
         using var controller = new PlaybackController(host, registry, projection,
             new FakeContextResolver(), "dev", fast: registry);
 
@@ -466,7 +466,7 @@ public class LocalMediaProviderTests
     {
         var registry = ThreeProviderRegistry(out _);   // the fake disk knows no files
         var host = new RecordingAudioHost();
-        var projection = new NowPlayingProjection("dev");
+        var projection = new NowPlayingProjection("dev", NotOwnedEntityHydrator.Instance, new InMemoryStore());
         using var controller = new PlaybackController(host, registry, projection, new FakeContextResolver(), "dev", fast: registry);
         AudioKeyFailureReason? reported = null;
         controller.OnPlaybackError = info => reported = info.Reason;
@@ -613,7 +613,7 @@ public class LocalMediaProviderTests
     sealed class MaskHarness
     {
         public readonly StubTransport Transport = new();
-        public readonly NowPlayingProjection Proj = new("us", () => 0);
+        public readonly NowPlayingProjection Proj = new("us", NotOwnedEntityHydrator.Instance, new InMemoryStore(), () => 0);
         public readonly SimpleSubject<string?> ConnId = new(null);
         public string? CurrentConnId;
         public LocalPlaybackSnapshot? LastSnapshot;

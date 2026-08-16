@@ -2,12 +2,14 @@ using System.Collections.Generic;
 using System.Linq;
 using Wavee.Backend;
 using Wavee.Backend.Collections;
+using Wavee.Backend.Hydration;
 using Wavee.Backend.Metadata;
 using Wavee.Backend.Persistence;
 using Wavee.Backend.Playlists;
 using Wavee.Backend.Realtime;
 using Wavee.Backend.Spotify;
 using Wavee.Backend.Sync;
+using Wavee.Core;
 
 namespace Wavee.SpotifyLive;
 
@@ -32,10 +34,20 @@ public static class SpotifyLibrarySync
         using var cold = new SqliteColdStore(dbPath, SqliteColdStore.DefaultAccount, language);
         using var store = new CachedStore(cold);
 
-        var metadata = new MetadataService(new ExtendedMetadataSource(live.Pipeline, () => live.BaseUrl, () => live.Session), store, () => live.Session);
-        Task Hydrate(IReadOnlyList<string> uris, CancellationToken c) => metadata.SyncAllAsync(uris, c);
+        // The fetchers' hydrate delegate is THE catalogue arm the app's go-live path uses (one mixed-kind
+        // extended-metadata POST per 300 uris, etag-conditional) — no divergent probe-only transport.
+        var source = new ExtendedMetadataSource(live.Pipeline, () => live.BaseUrl, () => live.Session);
+        var catalog = new XmCatalogFetch(new ExtensionEtagCache(source, () => live.Session, log, persistent: cold), store, log);
+        async Task Hydrate(IReadOnlyList<string> uris, CancellationToken c)
+        {
+            var refs = new List<Wavee.Core.EntityUri>(uris.Count);
+            for (int i = 0; i < uris.Count; i++) refs.Add(Wavee.Core.EntityUri.Parse(uris[i]));
+            await catalog.FetchAsync(refs, null, Wavee.Core.TraitSurface.None, c).ConfigureAwait(false);
+        }
 
-        var mutEngine = new MutationEngine(store, new IMutationStrategy[] { new SetReplayStrategy(), new OpRebaseStrategy(store, () => live.BaseUrl), new RootlistFollowStrategy(store) }, cold);
+        var rootlistLane = new RootlistLane();   // I2 — one lane for every rootlist write in this process
+        var resyncQueue = new PlaylistResyncQueue();   // I4 — one queue, shared by the replay strategy and the sync loop
+        var mutEngine = new MutationEngine(store, new IMutationStrategy[] { new SetReplayStrategy(), new OpRebaseStrategy(store, () => live.BaseUrl, resyncQueue), new CreatePlaylistStrategy(store, () => live.BaseUrl, resyncQueue), new RootlistFollowStrategy(store, rootlistLane) }, cold);
         var sessionHost = new SessionContextHost(new SessionContext(live.Username, "US", "premium", language, Tier.Premium, false));
         var playlistFetcher = new PlaylistFetcher(live.Pipeline, () => live.BaseUrl, store, Hydrate, () => live.Username);
         var collectionFetcher = new CollectionFetcher(live.Pipeline, () => live.BaseUrl, () => live.Username, store,
@@ -51,7 +63,7 @@ public static class SpotifyLibrarySync
 
         // 1) InitialHydrate through the real orchestrator: drain → rootlist + "playlists" fold → every set (token-gated
         //    delta, else full paging + mark-and-sweep), per-set failures isolated — exactly the app's go-live pass.
-        await using var sync = new LibrarySync(store, playlistFetcher, collectionFetcher, mutEngine, transport,
+        await using var sync = new LibrarySync(store, playlistFetcher, collectionFetcher, mutEngine, resyncQueue, transport,
             () => sessionHost.Current, () => live.Username, log, ct);
         using var router = new DealerRouter(transport, sync);
 
@@ -74,7 +86,11 @@ public static class SpotifyLibrarySync
         // Stages 0+B+C+D+E+F+H — the full live Connect+playback composition: device announce, cluster projection, inbound
         // command routing -> controller, outbound forwarding, the silent local host, and the persistent AP key channel.
         // The persistent AP channel is the LOGIN socket (retained above), reused for audio keys — no second handshake.
-        using var liveConnect = new LiveConnect(transport, live.DeviceId, live.ApChannel, log: log);
+        // No catalog backend in the CLI sync demo: the projection's two seams are REQUIRED, so the named do-nothing
+        // stand-ins are passed HERE, explicitly, instead of being defaulted inside LiveConnect where the degrade
+        // would be invisible to every other caller (wiring-discipline).
+        using var liveConnect = new LiveConnect(transport, live.DeviceId, live.ApChannel,
+            NotOwnedEntityHydrator.Instance, new InMemoryStore(), log: log);
         using var npSub = liveConnect.Projection.Changes.Subscribe(Observers.From<Wavee.Core.IPlaybackState>(s =>
         {
             if (s.CurrentTrack is { } tk)

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Wavee.Backend.Playlists;
+using Wavee.Core;
 using Xunit;
 
 namespace Wavee.Tests;
@@ -159,6 +160,103 @@ public class PlaylistDiffApplierTests
             new PlaylistOp(PlaylistOpKind.Move, FromIndex: 7, Length: 2, ToIndex: 4),
         });
         Assert.Equal(new[] { "Y2", "Y1", "Y3", "Y5", "t1", "t3", "Y4", "X3", "t2", "t4" }, Ids(l));
+    }
+
+    // ── keyed ops (P2): rows are addressed by item_id, never by position ─────────────────────────────────────────────
+
+    static PlaylistOp KeyedMove(PlaylistMoveAnchor anchor, params PlaylistMember[] items)
+        => new(PlaylistOpKind.Move, ItemsAsKey: true, Items: items, Anchor: anchor);
+
+    // Two membership rows for the SAME track are different rows. The keyed MOV must move the one whose item_id it
+    // names — resolving by uri would move whichever came first and silently reorder the wrong copy.
+    [Fact]
+    public void ApplyMove_Keyed_ByItemId_PrefersIdOverUri_Duplicates()
+    {
+        var l = new List<PlaylistMember>
+        {
+            new("row1", "spotify:track:dup", null, 0),
+            new("row2", "spotify:track:other", null, 0),
+            new("row3", "spotify:track:dup", null, 0),
+            new("row4", "spotify:track:tail", null, 0),
+        };
+
+        // Move the SECOND copy of :dup (row3) to the head.
+        PlaylistDiffApplier.Apply(l, new[]
+        {
+            KeyedMove(new PlaylistMoveAnchor(PlaylistMoveAnchorKind.First),
+                new PlaylistMember("row3", "spotify:track:dup", null, 0)),
+        });
+        Assert.Equal(new[] { "row3", "row1", "row2", "row4" }, l.Select(m => m.ItemId).ToArray());
+
+        // …and a gapped pair lands as one contiguous run immediately after the anchor, in the op order.
+        PlaylistDiffApplier.Apply(l, new[]
+        {
+            KeyedMove(new PlaylistMoveAnchor(PlaylistMoveAnchorKind.AfterItem, "row2"),
+                new PlaylistMember("row3", "spotify:track:dup", null, 0),
+                new PlaylistMember("row4", "spotify:track:tail", null, 0)),
+        });
+        Assert.Equal(new[] { "row1", "row2", "row3", "row4" }, l.Select(m => m.ItemId).ToArray());
+    }
+
+    // The anchor is a row identity. If somebody else removed it between build and apply, the op no longer describes a
+    // reachable destination: that is TORN, and the caller refetches rather than dropping the rows at a guess.
+    [Fact]
+    public void ApplyMove_Keyed_AnchorMissing_Throws()
+    {
+        var l = List("a", "b", "c");
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            PlaylistDiffApplier.Apply(l, new[]
+            {
+                KeyedMove(new PlaylistMoveAnchor(PlaylistMoveAnchorKind.AfterItem, "gone"), M("a")),
+            }));
+
+        // …and so is a moved ROW that is no longer there.
+        var l2 = List("a", "b");
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            PlaylistDiffApplier.Apply(l2, new[]
+            {
+                KeyedMove(new PlaylistMoveAnchor(PlaylistMoveAnchorKind.First), M("zzz")),
+            }));
+    }
+
+    [Fact]
+    public void ApplyRemove_Keyed_ItemId_Duplicates()
+    {
+        var l = new List<PlaylistMember>
+        {
+            new("row1", "spotify:track:dup", null, 0),
+            new("row2", "spotify:track:dup", null, 0),
+            new("row3", "spotify:track:dup", null, 0),
+        };
+
+        PlaylistDiffApplier.Apply(l, new[]
+        {
+            new PlaylistOp(PlaylistOpKind.Remove, ItemsAsKey: true,
+                Items: new[] { new PlaylistMember("row2", "spotify:track:dup", null, 0) }),
+        });
+        Assert.Equal(new[] { "row1", "row3" }, l.Select(m => m.ItemId).ToArray());
+
+        // A keyed REM naming an id that is not in the list is torn — our baseline drifted.
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            PlaylistDiffApplier.Apply(l, new[]
+            {
+                new PlaylistOp(PlaylistOpKind.Remove, ItemsAsKey: true,
+                    Items: new[] { new PlaylistMember("row2", "spotify:track:dup", null, 0) }),
+            }));
+    }
+
+    // The rootlist unfollow keys on the uri alone (rootlist entries carry no row ids) and must stay no-op-on-absent:
+    // the optimistic edit already removed the row locally, so local absence proves nothing about the server.
+    [Fact]
+    public void ApplyRemove_KeyedWithoutItemId_IsNoOpOnAbsent()
+    {
+        var l = new List<PlaylistMember> { new("", "spotify:playlist:a", null, 0) };
+        PlaylistDiffApplier.Apply(l, new[]
+        {
+            new PlaylistOp(PlaylistOpKind.Remove, ItemsAsKey: true,
+                Items: new[] { new PlaylistMember("", "spotify:playlist:gone", null, 0) }),
+        });
+        Assert.Single(l);
     }
 
     [Theory]

@@ -376,7 +376,7 @@ public class VideoOverrideTests
     [Fact]
     public void DurationOverride_OutranksTheCatalogLength_AndSurvivesAQueueRepublish()
     {
-        var p = new NowPlayingProjection("us", () => 0);
+        var p = new NowPlayingProjection("us", NotOwnedEntityHydrator.Instance, new InMemoryStore(), () => 0);
         var track = T("spotify:track:a") with { DurationMs = 200_000 };
         p.OnEvent(new PlaybackEvent(EvKind.Started, track, 0));
         Assert.Equal(200_000, p.DurationMs);
@@ -396,7 +396,7 @@ public class VideoOverrideTests
     [Fact]
     public void DurationOverride_IsDroppedWhenTheTrackChanges()
     {
-        var p = new NowPlayingProjection("us", () => 0);
+        var p = new NowPlayingProjection("us", NotOwnedEntityHydrator.Instance, new InMemoryStore(), () => 0);
         var a = T("spotify:track:a") with { DurationMs = 200_000 };
         var b = T("spotify:track:b") with { DurationMs = 180_000 };
         p.OnEvent(new PlaybackEvent(EvKind.Started, a, 0));
@@ -411,7 +411,7 @@ public class VideoOverrideTests
     [Fact]
     public void DurationOverride_ForAnotherPlayable_NeverAppliesToTheCurrentOne()
     {
-        var p = new NowPlayingProjection("us", () => 0);
+        var p = new NowPlayingProjection("us", NotOwnedEntityHydrator.Instance, new InMemoryStore(), () => 0);
         var a = T("spotify:track:a") with { DurationMs = 200_000 };
         p.OnEvent(new PlaybackEvent(EvKind.Started, a, 0));
 
@@ -460,7 +460,7 @@ public class VideoOverrideTests
     [Fact]
     public void DurationOverride_NonPositiveOrEmpty_ClearsIt()
     {
-        var p = new NowPlayingProjection("us", () => 0);
+        var p = new NowPlayingProjection("us", NotOwnedEntityHydrator.Instance, new InMemoryStore(), () => 0);
         var a = T("spotify:track:a") with { DurationMs = 200_000 };
         p.OnEvent(new PlaybackEvent(EvKind.Started, a, 0));
         p.SetDurationOverride("spotify:track:a", 247_500);
@@ -550,7 +550,7 @@ public class VideoOverrideTests
         {
             Audio = new FakeAudioHost(Log);
             Video = new FakeVideoHost(Log);
-            Projection = new NowPlayingProjection("us", () => 0);
+            Projection = new NowPlayingProjection("us", NotOwnedEntityHydrator.Instance, new InMemoryStore(), () => 0);
             Controller = new PlaybackController(Audio, new StubTrackResolver(), Projection,
                 new FakeContextResolver("spotify:track:a", "spotify:track:b"), "us", videoHost: Video);
             Controller.ShouldPlayAsVideo = _ => VideoIntent;

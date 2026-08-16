@@ -6,6 +6,7 @@ using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentGpu.Signals;
+using Wavee.Core;
 
 namespace Wavee;
 
@@ -182,14 +183,17 @@ public sealed class PlayLogStore
     public static PlayContextKind ClassifyContext(string? contextUri)
     {
         if (string.IsNullOrEmpty(contextUri)) return PlayContextKind.None;
-        if (contextUri!.StartsWith("spotify:album:", StringComparison.Ordinal)) return PlayContextKind.Album;
-        if (contextUri.StartsWith("spotify:playlist:", StringComparison.Ordinal)) return PlayContextKind.Playlist;
-        if (contextUri.StartsWith("spotify:user:", StringComparison.Ordinal) && contextUri.Contains(":playlist:", StringComparison.Ordinal))
-            return PlayContextKind.Playlist;
-        if (contextUri.StartsWith("spotify:artist:", StringComparison.Ordinal)) return PlayContextKind.Artist;
-        if (contextUri.StartsWith("spotify:show:", StringComparison.Ordinal)) return PlayContextKind.Show;
-        if (contextUri.StartsWith("spotify:collection", StringComparison.Ordinal)) return PlayContextKind.Collection;
-        return PlayContextKind.Other;
+        // EntityUri already multiplexes the user-namespaced forms (spotify:user:<u>:playlist:<id> → Playlist,
+        // spotify:user:<u>:collection → Collection), which the four hand-rolled prefix tests here used to half-cover.
+        return EntityUri.KindOf(contextUri) switch
+        {
+            EntityKind.Album => PlayContextKind.Album,
+            EntityKind.Playlist => PlayContextKind.Playlist,
+            EntityKind.Artist => PlayContextKind.Artist,
+            EntityKind.Show => PlayContextKind.Show,
+            EntityKind.Collection => PlayContextKind.Collection,
+            _ => PlayContextKind.Other,
+        };
     }
 
     void TrimToCap()

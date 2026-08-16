@@ -31,7 +31,7 @@ sealed class SidebarPinDropZone : Component
 {
     /// <summary>The resting card height. Read by a virtualizing host that must size the slot before building the row
     /// (the pane's plan extent); the 56↔72 growth is a measured reflow on top of it.</summary>
-    public const float RestHeight = 56f;
+    public const float RestHeight = SidebarRowGeometry.PinDropZoneRestHeight;
 
     /// <summary>The height while a compatible drag is live.</summary>
     public const float ActiveHeight = 72f;

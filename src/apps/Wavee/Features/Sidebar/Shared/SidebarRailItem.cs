@@ -28,7 +28,11 @@ static class SidebarRailItem
     /// <summary>A GLYPH tile — a library shortcut, an app route, a folder pin. Carries the same 4-state
     /// selection-aware ramp as <see cref="SidebarEntityRow"/> (rest/selected × hover × pressed), so a selected rail tile
     /// darkens on hover instead of flattening.</summary>
-    public static Element Icon(string key, string glyph, bool selected, Action? onClick, string? tooltip = null)
+    /// <param name="drop">Optional deposit destination (a FOLDER tile takes a rootlist filing — Into, and only Into).</param>
+    /// <param name="dropActive">Its cue, BOUND: the rail subtree is memoized, so a cue that needed a render would never
+    /// appear. An armed folder tile takes the accent plate the selection ladder already owns.</param>
+    public static Element Icon(string key, string glyph, bool selected, Action? onClick, string? tooltip = null,
+                               DropTargetSpec? drop = null, Func<bool>? dropActive = null)
     {
         var tile = new BoxEl
         {
@@ -36,11 +40,15 @@ static class SidebarRailItem
             Width = Box, Height = Box, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
             Corners = CornerRadius4.All(6f),
             // The selection ladder (WaveeColors.SelectedRest): accent plate at rest, states only ever go UP.
-            Fill = selected ? WaveeColors.SelectedRest : ColorF.Transparent,
+            Fill = dropActive is null
+                ? (selected ? WaveeColors.SelectedRest : ColorF.Transparent)
+                : Prop.Of(() => dropActive() ? Tok.AccentDefault with { A = 0.35f }
+                              : selected ? WaveeColors.SelectedRest : ColorF.Transparent),
             HoverFill = selected ? WaveeColors.SelectedHover : Tok.FillSubtleSecondary,
             PressedFill = selected ? WaveeColors.SelectedPressed : Tok.FillSubtleTertiary,
             Role = onClick is null ? AutomationRole.None : AutomationRole.Button,
             OnClick = onClick,
+            DropTarget = drop,
             Children = [Ui.Icon(glyph, 16f, selected ? Tok.TextPrimary : Tok.TextSecondary)],
         };
         return Tip(tile, tooltip);

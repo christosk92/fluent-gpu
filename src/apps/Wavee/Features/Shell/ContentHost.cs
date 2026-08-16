@@ -10,15 +10,12 @@ using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
 
-enum NavTransitionKind : byte { Forward, Back, Neutral }
-
 // The content-card body opts routes into FluentGpu keep-alive caching. Route changes swap inside the boundary, scoped
-// by the active browser tab, so same-route tabs never share page state.
+// by the active browser tab, so same-route tabs never share page state. Slot identity + the direction→recipe map live in
+// PageNavMotion (PageSlot / SlotKey / RecipeFor).
 sealed class ContentHost : Component
 {
     internal const string LegacyRecentsRoute = "home-section:spotify:list:recents:main";
-
-    readonly record struct PageSlot(int TabId, Route Route, NavTransitionKind Motion);
 
     readonly Signal<Route> _route;
     readonly Signal<NavTransitionKind> _motion;
@@ -41,9 +38,11 @@ sealed class ContentHost : Component
             Padding = new Edges4(0f, 0f, 0f, reserve),
             Children =
             [
+                // The token reads the tab + the route ONLY. `_motion` is read untracked inside PageTransition (Peek), so
+                // a direction write can never re-run this thunk and re-activate the page that is already active.
                 Flow.KeepAlive(
-                    () => new PageSlot(_activeTabId(), _route.Value, _motion.Value),
-                    SlotKey,
+                    () => new PageSlot(_activeTabId(), _route.Value),
+                    PageNavMotion.SlotKey,
                     s => PageFor(s.Route),
                     new KeepAliveOptions(
                         MaxEntries: 8,
@@ -53,30 +52,14 @@ sealed class ContentHost : Component
         };
     }
 
-    // Every destination page gets its own slot inside the active tab, so ALL forward/back navigation uses the same
-    // page-slide language (Fluent Frame SlideNavigationTransitionInfo / Zune panorama: the page moves, the content
-    // does not then cascade). Search remains one live workspace because its query changes in place as the omnibar
-    // is edited.
-    static string SlotKey(PageSlot s)
-    {
-        if (s.Route.Name == "search") return s.TabId + "\u001Fsearch";
-        return s.TabId + "\u001F" + s.Route.Name + "\u001F" + (s.Route.Arg ?? "");
-    }
-
-    static LayoutTransition? PageTransition(object oldToken, object newToken)
-    {
-        if (newToken is not PageSlot next) return null;
-        var enter = next.Motion switch
-            {
-                NavTransitionKind.Back => MotionRecipes.PageSlideBack,
-                NavTransitionKind.Neutral => MotionRecipes.PageFade,
-                _ => MotionRecipes.PageSlideForward,
-            };
-        // KeepAlive pages are stateful, independently responsive layout roots. Overlapping the outgoing root makes both
-        // participate in measurement during a window resize and destabilizes grids/scrollers. Park it immediately and
-        // animate only the incoming page from the correct direction inside the already-bounded content card.
-        return enter with { Exit = default };
-    }
+    // The whole recipe — Enter AND Exit. The two pages OVERLAP on the boundary's ZStack for the length of the swap: the
+    // reconciler keeps the outgoing root drawing (hit-test invisible) and parks it the moment its tracks settle, so the
+    // card cross-fades/slides between two real pages instead of cutting to empty and then fading only the new one in.
+    // Direction comes from the motion signal by PEEK: the shell writes it before the route in the same flush, so at
+    // reconcile time it already IS the direction of the route being activated — and an untracked read keeps a
+    // motion-only write from re-running the keep-alive thunk.
+    LayoutTransition? PageTransition(object oldToken, object newToken)
+        => newToken is PageSlot ? PageNavMotion.RecipeFor(_motion.Peek()) : null;
 
     // Detail/artist pages still use their existing signal-based internals, but each route owns its signal and cached
     // subtree. Returning via Back reactivates that destination's preserved page; opening another entity activates a new

@@ -78,6 +78,7 @@ public sealed class DealerArchive : IDisposable
                     || uri.StartsWith("hm://connect-state/v1/cluster", StringComparison.Ordinal)
                     || uri.StartsWith("hm://connect-state/v1/connect/volume", StringComparison.Ordinal)
                     || uri.StartsWith("hm://playlist/", StringComparison.Ordinal)
+                    || uri.StartsWith("hm://playlist-permission/", StringComparison.Ordinal)
                     || uri.StartsWith("hm://collection/", StringComparison.Ordinal)
                     || uri.StartsWith("hm://presence2/user/", StringComparison.Ordinal);
             case DealerFrameType.Request:

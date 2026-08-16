@@ -4,7 +4,7 @@ using static Wavee.Core.SpotifyExportMapper;
 
 namespace Wavee.Core;
 
-/// <summary>The Spotify catalog adapter (docs/architecture.md §4.4, §9): owns <c>spotify:*</c> URIs and serves real
+/// <summary>The Spotify catalog adapter (docs/plans/wavee/architecture.md §4.4, §9): owns <c>spotify:*</c> URIs and serves real
 /// data from the bundled export — the 22 library playlists, the grouped home feed, the Iced Americano playlist with its
 /// 15 real tracks, and real CDN cover art. Where the export has only a header/card (every other playlist/album/artist),
 /// it SYNTHESIZES tracks deterministically (seeded by the URI hash) via <see cref="FakeData"/> so the page is still
@@ -15,24 +15,26 @@ public sealed class SpotifyExportSource : ICatalogSource
     public SpotifyExportSource(SpotifyExport export) => _x = export;
 
     public string Id => "spotify";
-    public bool Owns(string uri) => uri.StartsWith("spotify:", StringComparison.Ordinal);
+    // Routing asks the ONE parser who the provider is (hydration-facade-design.md §1.1) — adding a namespace is a
+    // one-line change in EntityProviders, not a sweep of hand-rolled prefix tests.
+    public bool Owns(string uri) => EntityUri.Parse(uri).Provider == EntityProviders.Spotify;
     public SourceCapabilities Capabilities => SourceCapabilities.Catalog | SourceCapabilities.Home | SourceCapabilities.Search;
 
     static Task<T?> Ok<T>(T value) => Task.FromResult<T?>(value);
 
     // ── playlists ──────────────────────────────────────────────────────────────────────────────────────────
-    public Task<Playlist?> GetPlaylistAsync(string uri, CancellationToken ct = default)
+    public Task<Playlist?> GetPlaylistAsync(string uri, HydrationLevel level = HydrationLevel.Open, CancellationToken ct = default)
     {
         if (_x.TryGetFullPlaylist(uri, out var full)) return Ok(full);   // Iced Americano — real tracks
         Playlist header =
             _x.TryGetHeader(uri, out var h) ? h
             : _x.TryGetCard(uri, out var card) && card.Kind == HomeCardKind.Playlist
-                ? new Playlist(IdFromUri(uri), uri, card.Title, card.Subtitle, card.Subtitle ?? "Spotify", card.Image, SynthCount(uri), System.Array.Empty<Track>(), null, default, null, "spotify")
-                : new Playlist(IdFromUri(uri), uri, "Playlist", null, "Spotify", null, SynthCount(uri), System.Array.Empty<Track>(), null, default, null, "spotify");
+                ? new Playlist(EntityUri.IdOf(uri), uri, card.Title, card.Subtitle, card.Subtitle ?? "Spotify", card.Image, SynthCount(uri), System.Array.Empty<Track>(), null, default, null, "spotify")
+                : new Playlist(EntityUri.IdOf(uri), uri, "Playlist", null, "Spotify", null, SynthCount(uri), System.Array.Empty<Track>(), null, default, null, "spotify");
         return Ok(header with { Tracks = SynthPlaylistTracks(uri, header.TrackCount) });
     }
 
-    public Task<Album?> GetAlbumAsync(string uri, CancellationToken ct = default)
+    public Task<Album?> GetAlbumAsync(string uri, HydrationLevel level = HydrationLevel.Open, CancellationToken ct = default)
     {
         // A home card → real name/cover + themed synth tracks. No card → FakeData's own album (consistent with the
         // synthetic "Your Albums" collection the Fake source contributes), keyed by the URI so it's deterministic.
@@ -41,14 +43,14 @@ public sealed class SpotifyExportSource : ICatalogSource
         {
             string artistName = card.Subtitle ?? "Various Artists";
             var tracks = SynthAlbumTracks(uri, card.Title, artistName, card.Image);
-            return Ok(new Album(IdFromUri(uri), uri, card.Title, card.Image, new[] { ArtistRefFor(artistName) },
+            return Ok(new Album(EntityUri.IdOf(uri), uri, card.Title, card.Image, new[] { ArtistRefFor(artistName) },
                 2014 + Hash(uri) % 11, tracks.Count, tracks, AlbumKind.Album));
         }
-        return Ok(new Album(IdFromUri(uri), uri, fake.Name, fake.Cover, fake.Artists, fake.Year,
+        return Ok(new Album(EntityUri.IdOf(uri), uri, fake.Name, fake.Cover, fake.Artists, fake.Year,
             fake.TrackCount, fake.Tracks ?? System.Array.Empty<Track>(), fake.Kind));
     }
 
-    public Task<Artist?> GetArtistAsync(string uri, CancellationToken ct = default)
+    public Task<Artist?> GetArtistAsync(string uri, HydrationLevel level = HydrationLevel.Open, CancellationToken ct = default)
     {
         var fake = FakeData.Artist(FakeData.IndexFromUri(uri));
         // A real artist export (artist-*.json) → the full magazine page. The overview query lacks stats / top cities /
@@ -129,7 +131,7 @@ public sealed class SpotifyExportSource : ICatalogSource
         if (q.Length == 0) return Task.FromResult(SearchResults.Empty);
         var matches = _x.LibraryPlaylists
             .Where(p => p.Name.Contains(q, StringComparison.OrdinalIgnoreCase))
-            .Select(p => new Playlist(IdFromUri(p.Uri), p.Uri, p.Name, null, p.OwnerName, p.Cover, p.TrackCount))
+            .Select(p => new Playlist(EntityUri.IdOf(p.Uri), p.Uri, p.Name, null, p.OwnerName, p.Cover, p.TrackCount))
             .ToList();
         var fd = FakeData.Search(q);
         // Surface real exported artists (e.g. Maroon 5) by name so they're reachable from search.
@@ -150,7 +152,7 @@ public sealed class SpotifyExportSource : ICatalogSource
     static IReadOnlyList<Track> SynthAlbumTracks(string uri, string albumName, string artistName, Image? cover)
     {
         int n = 6 + Hash(uri) % 8;
-        var albumRef = new AlbumRef(IdFromUri(uri), uri, albumName);
+        var albumRef = new AlbumRef(EntityUri.IdOf(uri), uri, albumName);
         var artist = ArtistRefFor(artistName);
         int seed = Hash(uri);
         var list = new List<Track>(n);
@@ -165,6 +167,6 @@ public sealed class SpotifyExportSource : ICatalogSource
     static ArtistRef ArtistRefFor(string name)
     {
         string uri = "spotify:artist:" + Hash(name);
-        return new ArtistRef(IdFromUri(uri), uri, name);
+        return new ArtistRef(EntityUri.IdOf(uri), uri, name);
     }
 }

@@ -20,8 +20,18 @@ public class PlaylistDiffFetchTests
     const string Uri = "spotify:playlist:x";
     static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    // a wire revision: 4-byte big-endian counter + hash bytes.
+    // A STORABLE wire revision (I1): the 24-byte playlist4 head — 4-byte big-endian counter + a 20-byte hash whose
+    // LEADING bytes are the ones a test names (the rest stay zero, so the "counter,hexprefix" assertions still hold).
     static byte[] Rev(int counter, params byte[] hash)
+    {
+        var b = new byte[24];
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(b, counter);
+        hash.CopyTo(b, 4);
+        return b;
+    }
+
+    // The unpadded shape, for the pure FormatRevision string test (it asserts the WHOLE string, not a prefix).
+    static byte[] RawRev(int counter, params byte[] hash)
     {
         var b = new byte[4 + hash.Length];
         System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(b, counter);
@@ -85,8 +95,8 @@ public class PlaylistDiffFetchTests
     [Fact]
     public void FormatRevision_CounterCommaLowerHex()
     {
-        Assert.Equal("123,ab12cd", PlaylistFetcher.FormatRevision(Rev(123, 0xAB, 0x12, 0xCD)));
-        Assert.Contains("%2C", System.Uri.EscapeDataString(PlaylistFetcher.FormatRevision(Rev(1, 0xFF))));
+        Assert.Equal("123,ab12cd", PlaylistFetcher.FormatRevision(RawRev(123, 0xAB, 0x12, 0xCD)));
+        Assert.Contains("%2C", System.Uri.EscapeDataString(PlaylistFetcher.FormatRevision(RawRev(1, 0xFF))));
     }
 
     // ── 200 + diff → ops applied in place, revision advances, ONLY added uris hydrate ─────────────────────────────────

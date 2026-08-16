@@ -93,7 +93,7 @@ public sealed class LiveTrackResolver : ITrackResolver
 
     async Task<TrackMeta> FetchMetaAsync(Track track)
     {
-        if (track.Uri.StartsWith("spotify:episode:", StringComparison.Ordinal))
+        if (EntityUri.KindOf(track.Uri) == EntityKind.Episode)
             return await FetchEpisodeMetaAsync(track).ConfigureAwait(false);
 
         var trackPayload = await _fetchTrackV4(track.Uri, CancellationToken.None).ConfigureAwait(false);

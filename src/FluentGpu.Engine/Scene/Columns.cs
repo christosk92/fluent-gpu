@@ -215,6 +215,10 @@ public struct ScrollState
     public float ContentW, ContentH;      // Layout-published full content extent (DIP)
     public float ViewportW, ViewportH;    // Layout-published viewport inner size (for clamp + window math)
     public byte  Orientation;             // 0 = vertical scroll (Y), 1 = horizontal scroll (X)
+    // Live CONTENT speed (DIP/s, unsigned) of the composed -(offset + band) transform, written every ScrollIntegrator.Tick
+    // from the advance that tick actually committed — see the write site for why FlingVelocity cannot serve. Read by
+    // SceneRecorder to soften text in proportion to how fast the list is really moving (see TextMotionSoftness).
+    public float LiveSpeedDip;
     public float FlingVelocity;           // seed/live coast velocity along Orientation (px/s, signed in offset space); REUSED by
                                           // Fling (friction coast) AND WheelAnimating (the velocity-preserving chase carries it).
     // ── §2.4 intent columns (scroll-feel-rework-v2). The dispatcher/scrollbar/programmatic callers RECORD these + arm the

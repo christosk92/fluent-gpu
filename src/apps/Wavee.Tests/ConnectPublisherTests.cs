@@ -29,7 +29,7 @@ public class ConnectPublisherTests
     sealed class Harness
     {
         public readonly StubTransport Transport = new();
-        public readonly NowPlayingProjection Proj = new("us", () => 0);
+        public readonly NowPlayingProjection Proj = new("us", NotOwnedEntityHydrator.Instance, new InMemoryStore(), () => 0);
         public readonly SimpleSubject<string?> ConnId = new(null);
         public string? CurrentConnId;
         public readonly List<string> Built = new();
@@ -136,7 +136,7 @@ public class ConnectPublisherTests
     public async Task Publishes_AreSerialized_InMessageOrder()
     {
         var transport = new BlockingTransport();
-        var projection = new NowPlayingProjection("us", () => 0);
+        var projection = new NowPlayingProjection("us", NotOwnedEntityHydrator.Instance, new InMemoryStore(), () => 0);
         var connection = new SimpleSubject<string?>(null);
         string? currentConnection = null;
         using var publisher = new DeviceStatePublisher(

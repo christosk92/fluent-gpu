@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using Wavee.Backend;
@@ -19,6 +19,9 @@ namespace Wavee.Tests;
 // that if a live 400 forces a revision, exactly one place changes and exactly these fail.
 public class PreSaveWriteTests
 {
+
+    // The facade every StoreLibrarySource read goes through. Offline = store-only, never networks (design §1.3).
+    static SwitchableEntityHydrator Offline(IStore store) => new(new Wavee.Backend.Hydration.OfflineEntityHydrator(store));
     const string PreUri = "spotify:prerelease:0iqKCCqFwlqzSnJgV22Nmh";
     static SessionContext Ctx => new("bob", "US", "premium", "en", Tier.Premium, false);
 
@@ -242,7 +245,7 @@ public class PreSaveWriteTests
         // StoreLibrarySource.KindOfUri deliberately returns null for spotify:prerelease: — no library page lists
         // pre-saves, so there is no collection to invalidate. The heart re-skins through LibraryBridge's per-URI signal.
         var store = new InMemoryStore();
-        using var lib = new StoreLibrarySource(store);
+        using var lib = new StoreLibrarySource(store, Offline(store), OfflineOnlineCatalog.Instance);
         var woken = new List<CollectionKind>();
         using var sub = lib.CollectionsChanged.Subscribe(Observers.From<CollectionKind>(woken.Add));
 

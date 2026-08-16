@@ -17,7 +17,7 @@ public class PreparedTransitionTests
     public async Task NaturalHandoff_AdvancesExactPreparedItem_Once_WithoutReload()
     {
         var host = new PreparedHost();
-        var projection = new NowPlayingProjection("dev");
+        var projection = new NowPlayingProjection("dev", NotOwnedEntityHydrator.Instance, new InMemoryStore());
         using var controller = new PlaybackController(host, new StubTrackResolver(), projection,
             new FakeContextResolver("spotify:track:a", "spotify:track:b", "spotify:track:c"), "dev");
 
@@ -43,7 +43,7 @@ public class PreparedTransitionTests
     public async Task QueueEdit_CancelsOldIdentity_AndOnlyNewTokenCanAdvance()
     {
         var host = new PreparedHost();
-        var projection = new NowPlayingProjection("dev");
+        var projection = new NowPlayingProjection("dev", NotOwnedEntityHydrator.Instance, new InMemoryStore());
         using var controller = new PlaybackController(host, new StubTrackResolver(), projection,
             new FakeContextResolver("spotify:track:a", "spotify:track:b"), "dev");
 
@@ -72,7 +72,7 @@ public class PreparedTransitionTests
     public async Task EpisodesPrepareGaplessButNeverRequestOverlap_AndManualNextReloads()
     {
         var host = new PreparedHost();
-        var projection = new NowPlayingProjection("dev");
+        var projection = new NowPlayingProjection("dev", NotOwnedEntityHydrator.Instance, new InMemoryStore());
         using var controller = new PlaybackController(host, new StubTrackResolver(), projection,
             new FakeContextResolver("spotify:episode:a", "spotify:episode:b"), "dev");
 
@@ -91,7 +91,7 @@ public class PreparedTransitionTests
         // join with EffectiveFadeMs = 0 and the session must advance off the PREPARED audio. A reload here is the audible
         // gap: it means the WASAPI session was torn down and reopened between two tracks.
         var host = new PreparedHost();
-        var projection = new NowPlayingProjection("dev");
+        var projection = new NowPlayingProjection("dev", NotOwnedEntityHydrator.Instance, new InMemoryStore());
         using var controller = new PlaybackController(host, new StubTrackResolver(), projection,
             new FakeContextResolver("spotify:track:a", "spotify:track:b"), "dev");
 

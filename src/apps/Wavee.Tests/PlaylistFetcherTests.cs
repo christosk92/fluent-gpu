@@ -16,12 +16,15 @@ namespace Wavee.Tests;
 public class PlaylistFetcherTests
 {
     static HttpResp Ok(byte[] body) => new(200, new Dictionary<string, string>(), body);
+    /// <summary>I1 — the only storable revision shape: 4-byte big-endian counter + 20-byte hash.</summary>
+    static byte[] Rev24(byte tag) { var r = new byte[24]; r[3] = tag; r[23] = tag; return r; }
 
     [Fact]
     public async Task FetchPlaylist_HitsTheRightUrl_StoresThinHeaderAndMembership_AndHydrates()
     {
         var store = new InMemoryStore();
-        var slc = new Pl.SelectedListContent { Revision = ByteString.CopyFrom(7), Length = 2, OwnerUsername = "bob" };
+        var rev24 = Rev24(7);   // I1 — only the 24-byte head is storable
+        var slc = new Pl.SelectedListContent { Revision = ByteString.CopyFrom(rev24), Length = 2, OwnerUsername = "bob" };
         slc.Attributes = new Pl.ListAttributes { Name = "My Mix", Description = "d", Collaborative = true };
         slc.Capabilities = new Pl.Capabilities { CanView = true, CanEditItems = true, CanEditMetadata = true };
         var contents = new Pl.ListItems { Pos = 0, Truncated = false };
@@ -45,7 +48,7 @@ public class PlaylistFetcherTests
         Assert.Equal(2, m.Count);
         Assert.Equal("spotify:track:a", m[0].ItemUri);
         Assert.Equal("me", m[0].AddedBy);
-        Assert.Equal(new byte[] { 7 }, store.PlaylistRevision("spotify:playlist:p"));
+        Assert.Equal(rev24, store.PlaylistRevision("spotify:playlist:p"));
 
         var header = store.GetPlaylist("spotify:playlist:p");
         Assert.NotNull(header);

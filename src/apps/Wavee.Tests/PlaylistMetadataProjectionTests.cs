@@ -13,9 +13,9 @@ namespace Wavee.Tests;
 
 /// <summary>LIST_METADATA_V2 (kind 205) — the playlist arm of the extended-metadata chokepoint.
 ///
-/// A playlist has no V4 catalogue kind, so before this arm existed every playlist uri handed to
-/// <c>MetadataService.SyncAllAsync</c> resolved to <c>UnknownExtension</c> and was dropped before the request was even
-/// built. That is why a surface made of playlist POINTERS (recents) had no way to learn a single name.
+/// A playlist has no V4 catalogue kind, so before this arm existed every playlist uri handed to the metadata
+/// chokepoint resolved to <c>UnknownExtension</c> and was dropped before the request was even built. That is why a
+/// surface made of playlist POINTERS (recents) had no way to learn a single name.
 ///
 /// The second half of the contract is the one that can actually lose user data: this is a HYDRATION write, not the
 /// header WRITER. <c>StoreEntityMerge.Playlist</c> deliberately treats Name/Description/Cover/Capabilities as
@@ -50,12 +50,15 @@ public class PlaylistMetadataProjectionTests
     [Fact]
     public void PlaylistUris_ResolveToListMetadataV2_RatherThanBeingDroppedAsUnknown()
     {
-        // The gap this arm closes: EntityRef already classified a playlist correctly, but the kind map did not.
-        Assert.Equal(EntityKind.Playlist, EntityRef.Parse(Uri).Kind);
-        // GzipRequest skips any entity whose kind maps to UnknownExtension, so a non-null body IS the proof that a
-        // playlist now survives request construction.
-        var ctx = new SessionContext("me", "US", "premium", "en", Tier.Premium, false);
-        Assert.NotNull(ExtendedMetadataSource.GzipRequest([EntityRef.Parse(Uri)], 0, 1, ctx));
+        // The gap this arm closes, re-pinned on the ONE routing-kind -> catalogue-kind map now that EntityRef and the
+        // unconditional GzipRequest are gone (hydration-facade-plan.md 1.6): a playlist uri classifies as a Playlist and
+        // maps to 205 rather than UnknownExtension, which is what the request builders skip on.
+        Assert.Equal(Wavee.Core.EntityKind.Playlist, EntityUri.KindOf(Uri));
+        Assert.Equal(Xm.ExtensionKind.ListMetadataV2, XmKinds.CatalogKindOf(EntityUri.KindOf(Uri)));
+        // …and it IS a projectable catalogue kind, so a 205 payload reaches ProjectResponse rather than being cached
+        // and dropped as a trait. (The end-to-end "it survives request construction" half is
+        // XmCatalogFetchTests.MixedKinds_RideOnePost.)
+        Assert.True(XmKinds.IsCatalogKind(Xm.ExtensionKind.ListMetadataV2));
     }
 
     [Fact]

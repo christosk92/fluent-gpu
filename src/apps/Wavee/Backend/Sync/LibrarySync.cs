@@ -28,7 +28,7 @@ namespace Wavee.Backend.Sync;
 public enum SyncKind : byte
 {
     InitialHydrate, RootlistPush, PlaylistPush, CollectionPush, OpenPlaylist, PlaylistRevalidate, DrainWrites, ReconnectResync,
-    ApplyPlaylistSignal, HydratePlaylist,
+    ApplyPlaylistSignal, HydratePlaylist, PermissionPush, SeedPermission,
 }
 
 /// <summary>A queued command for the sync loop. A readonly record struct through the unbounded channel (no boxing).
@@ -42,7 +42,8 @@ public readonly record struct SyncCommand(
     byte[]? Payload = null,                           // raw collection-push payload (§2.3 — passed through, unused in Phase 1)
     TaskCompletionSource? Done = null,
     string? OptionIdentifier = null,
-    int Attempt = 0);
+    int Attempt = 0,
+    PlaylistPermissionPush? Permission = null);   // SyncKind.PermissionPush payload (hm://playlist-permission/…/state)
 
 public sealed class LibrarySync : IPlaylistTuningSource, IAsyncDisposable
 {
@@ -56,6 +57,12 @@ public sealed class LibrarySync : IPlaylistTuningSource, IAsyncDisposable
     readonly CollectionFetcher _collections;
     readonly MutationEngine _mutations;
     readonly ITransport _mutationTransport;
+    // I4 — the uris a /changes response could not fold in place. Shared instance with OpRebaseStrategy; drained (and
+    // revalidated) right after every outbox drain. Required, never optional: an unwired queue silently loses convergence.
+    readonly PlaylistResyncQueue _resync;
+    // The permission read for the on-open owner seed (§P1.3). Built from the SAME transport the drain uses, so it is
+    // never null and never "optional" — a session without a live transport simply gets the stub's answer.
+    readonly PlaylistPermissionClient _permissions;
     readonly CollectionEchoRing? _echoRing;   // §7.1 — drop our own accepted-write echoes before any store work
     readonly PlaylistSignalsClient? _signals;
     readonly Func<SessionContext> _ctx;
@@ -67,13 +74,13 @@ public sealed class LibrarySync : IPlaylistTuningSource, IAsyncDisposable
 
     readonly object _gate = new();
     readonly HashSet<string> _dirtyPlaylists = new(StringComparer.Ordinal);            // pushed-while-cold → revalidate on open
-    readonly HashSet<string> _fullRefreshPlaylists = new(StringComparer.Ordinal);
     readonly HashSet<string> _attrHealForced = new(StringComparer.Ordinal);           // uris force-refetched once for attr-less rows (loop guard)
     readonly Dictionary<string, DateTime> _lastRevalidatedAt = new(StringComparer.Ordinal);
     readonly Dictionary<string, TaskCompletionSource> _openInFlight = new(StringComparer.Ordinal);  // per-uri open dedup
     readonly HashSet<string> _pendingSets = new(StringComparer.Ordinal);              // collection-push settle coalescing
     readonly HashSet<string> _loggedUnknownSets = new(StringComparer.Ordinal);        // unknown wire sets logged at most once
     string? _openUri;                                                                 // the on-screen playlist (SetOpenContext)
+    bool _openPermissionSeeded;                                                       // P1.3 — one permission GET per open context
     int _consecutiveDrainFailures;
     bool _drainReenqueueScheduled;
     DateTime _lastResyncAt = DateTime.MinValue;                                       // §6.2 rate limit (one pass per window)
@@ -82,13 +89,23 @@ public sealed class LibrarySync : IPlaylistTuningSource, IAsyncDisposable
     public TimeSpan ResyncWindow = TimeSpan.FromSeconds(30);
 
     // Counters (§11) — test + probe visibility. Interlocked-bumped.
-    public int PushApplied, PushMarkedDirty, PushDirectApplied, EchoDropped, RevalidateRuns, RootlistApplied, RootlistFullFetch, HydrateRuns, SetFetches;
+    public int PushApplied, PushMarkedDirty, PushDirectApplied, EchoDropped, RootlistApplied, SetFetches;
     public int DiffApplied, DiffUpToDate, DiffFellBack;   // §2.6 revalidation outcomes (Applied / 304-or-up-to-date / full-fetch fallback)
     public int ReconnectResyncs, ReconnectResyncsRateLimited;                         // §6.2
-
-    public int SignalApplies, SignalReconciles, SignalPushes, SignalHydrateRetries;
+    /// <summary>I6 — rootlist heads dropped because the stored revision already IS that head (our own write's echo).</summary>
+    public int RootlistEchoDropped;
+    /// <summary>I1 — a persisted rootlist revision that was not 24 bytes and had to be cleared at start.</summary>
+    public int RootlistRevisionsHealed;
+    /// <summary>P1 — permission pushes folded into a resident header / dropped because the header was cold.</summary>
+    public int PermissionPushesApplied, PermissionPushesIgnored, PermissionSeeds;
+    /// <summary>P1 — remote deletes (deleted_by_owner) applied.</summary>
+    public int Tombstones;
+    /// <summary>I3(a) — pushes that only marked dirty because a local intent for that uri was still pending.</summary>
+    public int PushDeferredPending;
+    public int SignalApplies;
 
     public LibrarySync(IStore store, PlaylistFetcher playlists, CollectionFetcher collections, MutationEngine mutations,
+        PlaylistResyncQueue resync,
         ITransport mutationTransport, Func<SessionContext> ctx, Func<string> username, WaveeLogger log, CancellationToken ct,
         CollectionEchoRing? echoRing = null, PlaylistSignalsClient? signals = null)
     {
@@ -96,7 +113,9 @@ public sealed class LibrarySync : IPlaylistTuningSource, IAsyncDisposable
         _playlists = playlists;
         _collections = collections;
         _mutations = mutations;
+        _resync = resync;
         _mutationTransport = mutationTransport;
+        _permissions = new PlaylistPermissionClient(mutationTransport);
         _echoRing = echoRing;
         _signals = signals;
         _ctx = ctx;
@@ -144,8 +163,49 @@ public sealed class LibrarySync : IPlaylistTuningSource, IAsyncDisposable
         });
     }
 
-    /// <summary>The DetailPage mount effect sets the on-screen playlist so a push for it revalidates eagerly (§2.2 gate 3).</summary>
-    public void SetOpenContext(string? uri) { lock (_gate) _openUri = uri; }
+    /// <summary>The DetailPage mount effect sets the on-screen playlist so a push for it revalidates eagerly (§2.2 gate 3).
+    /// <para>Opening an OWNED playlist also seeds its base permission into the store header (P1.3): the page reads
+    /// <c>IsPublic</c>/<c>BasePermissionRevision</c>/<c>Capabilities.IsCollaborative</c> from the store and never issues
+    /// its own permission GET, and a later <c>permission/state</c> dealer push converges the same fields with no GET.</para></summary>
+    public void SetOpenContext(string? uri)
+    {
+        lock (_gate) { _openUri = uri; _openPermissionSeeded = false; }
+        TrySeedPermissionForOpen(uri);
+    }
+
+    /// <summary>Seed the open playlist's base permission ONCE per open context, as soon as an owned header exists.
+    ///
+    /// <para>The gate cannot live in <see cref="SetOpenContext"/> alone. <see cref="IsOwned"/> reads the STORE header,
+    /// and on a cold deep link (a shared link, a restart onto a playlist page) the page's mount effect calls
+    /// SetOpenContext before the header has landed — the open fetch is still in flight — so the owner check said "not
+    /// mine", nothing was enqueued, and nothing ever re-asked. The visible symptom was a private playlist the user owns
+    /// rendering with no Private eyebrow until they navigated away and back. So the header-landing paths on this loop
+    /// (<see cref="AfterNetworkSnapshot"/>, and the header heal in <see cref="OpenPlaylistCoreAsync"/>) re-evaluate it.</para>
+    ///
+    /// <para>ONCE per open context, tracked by <c>_openPermissionSeeded</c>: every revalidate of the open playlist runs
+    /// through AfterNetworkSnapshot, and a permission GET per /diff is exactly the herd the on-open seed was designed to
+    /// replace. A dealer <c>permission/state</c> push converges the fields afterwards for free.</para></summary>
+    void TrySeedPermissionForOpen(string? uri)
+    {
+        if (uri is not { Length: > 0 }) return;
+        // Cheap pre-check first, so the common case (already seeded; every later revalidate of the open playlist comes
+        // through here) costs one lock and no store read at all.
+        lock (_gate) if (_openUri != uri || _openPermissionSeeded) return;
+        // The store read stays OUTSIDE the lock — this runs both from the UI thread (SetOpenContext) and from the sync
+        // loop, and holding _gate across another component's lock is how ordering bugs are grown.
+        if (!IsOwned(uri)) return;   // not ours (or no header yet) — a later header landing re-asks this question
+        lock (_gate)
+        {
+            if (_openUri != uri || _openPermissionSeeded) return;   // re-check: the other caller may have won meanwhile
+            _openPermissionSeeded = true;
+        }
+        Enqueue(new SyncCommand(SyncKind.SeedPermission, uri));
+    }
+
+    // Owner-only: the permission endpoints 403 for everyone else, and a non-owner's public/private state is not editable.
+    bool IsOwned(string uri)
+        => _store.GetPlaylist(uri) is { } header
+           && (header.Capabilities.IsOwner || header.Capabilities.CanAdministratePermissions);
 
     /// <summary>Optional UI progress hook: is a full set fetch currently settling/running.</summary>
     public bool IsSetSyncing(string setId) { lock (_gate) return _pendingSets.Contains(setId); }
@@ -234,12 +294,18 @@ public sealed class LibrarySync : IPlaylistTuningSource, IAsyncDisposable
         SyncKind.ReconnectResync => ReconnectResyncAsync(),
         SyncKind.ApplyPlaylistSignal => ApplyPlaylistSignalAsync(cmd),
         SyncKind.HydratePlaylist => HydratePlaylistAsync(cmd.Uri, cmd.Attempt),
+        SyncKind.PermissionPush => PermissionPushAsync(cmd.Permission),
+        SyncKind.SeedPermission => SeedPermissionAsync(cmd.Uri),
         _ => Task.CompletedTask,
     };
 
     // ── handlers ────────────────────────────────────────────────────────────────────────────────────────────────────
     async Task InitialHydrateAsync()
     {
+        // (0) I1 — heal a malformed persisted rootlist revision BEFORE anything reads it (the drain's rootlist ops
+        // would otherwise POST against it, and the fold below would compare against it).
+        HealRootlistRevision();
+
         // (1) drain the outbox first — local intent wins (§6.3).
         await DrainWritesAsync().ConfigureAwait(false);
 
@@ -274,13 +340,30 @@ public sealed class LibrarySync : IPlaylistTuningSource, IAsyncDisposable
             + (failed.Count > 0 ? " (failed: " + string.Join(",", failed) + ", retry in 30s)" : ""));
     }
 
+    // The rootlist push gate tree (I1/I6). Ordered, total, and never able to store a non-24-byte head:
+    //   (1) malformed head        → full GET (defensive: the router already drops these before they reach the loop)
+    //   (2) stored == head        → the echo of our own write → drop
+    //   (3) parent matches + ops  → apply in place, adopt the head
+    //   (4) otherwise             → full GET (this is where every head-only push lands)
+    // An empty-ops push NEVER calls SetRootlist: adopting a head we did not apply ops for would make the next real
+    // ops-carrying push parent-match against rows that were never updated.
     async Task RootlistPushAsync(byte[]? parentRev, byte[]? newRev, IReadOnlyList<PlaylistOp>? ops)
     {
         var stored = _store.RootlistRevision();
-        if (stored is not null && parentRev is not null && ops is not null && BytesEqual(stored, parentRev))
+
+        if (!PlaylistRevisions.IsWellFormed(newRev))
+        {
+            PlaylistMutationDiagnostics.RootlistBadRevision(newRev?.Length ?? 0, "rootlist-push");
+            await FullRootlistFetchAsync("bad-revision").ConfigureAwait(false);
+            return;
+        }
+
+        if (PlaylistRevisions.Equal(stored, newRev)) { Interlocked.Increment(ref RootlistEchoDropped); return; }
+
+        if (ops is { Count: > 0 } && PlaylistRevisions.Equal(stored, parentRev))
         {
             var members = new List<PlaylistMember>();
-            foreach (var e in _store.Rootlist()) members.Add(new PlaylistMember("", e.Uri, null, 0));
+            foreach (var e in _store.Rootlist()) members.Add(new PlaylistMember("", e.Uri, null, e.AddedAtMs));
             bool torn = false;
             try { PlaylistDiffApplier.Apply(members, ops); }
             catch (ArgumentOutOfRangeException) { torn = true; }   // torn apply → full fetch
@@ -288,21 +371,43 @@ public sealed class LibrarySync : IPlaylistTuningSource, IAsyncDisposable
             {
                 using (_store.BeginBulk())
                 {
-                    _store.SetRootlist(RootlistTreeBuilder.EntriesFromUris(members.Select(m => m.ItemUri)), newRev);
+                    _store.SetRootlist(RootlistTreeBuilder.EntriesFromUris(
+                        members.Select(m => m.ItemUri), members.Select(m => m.AddedAt).ToArray()), newRev);
                     FoldRootlistIntoSavedSet();
                 }
                 Interlocked.Increment(ref RootlistApplied);
+                PlaylistMutationDiagnostics.RootlistPushApplied(ops.Count);
                 return;
             }
+            await FullRootlistFetchAsync("torn-apply").ConfigureAwait(false);
+            return;
         }
 
-        // full fetch fallback (rootlists are small; a full GET always converges).
+        await FullRootlistFetchAsync(ops is { Count: > 0 } ? "parent-mismatch" : "head-only").ConfigureAwait(false);
+    }
+
+    // full fetch fallback (rootlists are small; a full GET always converges).
+    async Task FullRootlistFetchAsync(string reason)
+    {
+        PlaylistMutationDiagnostics.RootlistPushGet(reason);
         using (_store.BeginBulk())
         {
             await _playlists.FetchRootlistAsync(RootlistUri(), _ct).ConfigureAwait(false);
             FoldRootlistIntoSavedSet();
         }
-        Interlocked.Increment(ref RootlistFullFetch);
+    }
+
+    // I1 self-heal. A rootlist revision persisted by an older build could be the URI bytes of a misparsed dealer push;
+    // it is in SQLite meta, so it survives restarts and would keep failing every equality gate forever. Clear it before
+    // anything reads it (before the drain, so a queued rootlist op cannot POST against it) — the hydrate's full GET
+    // rewrites the meta row with the real head.
+    void HealRootlistRevision()
+    {
+        var stored = _store.RootlistRevision();
+        if (stored is null || PlaylistRevisions.IsWellFormed(stored)) return;
+        _store.SetRootlist(_store.Rootlist(), null);
+        Interlocked.Increment(ref RootlistRevisionsHealed);
+        PlaylistMutationDiagnostics.RootlistRevisionHealed(stored.Length);
     }
 
     const string ResetSignalIdentifier = "session-control-reset";
@@ -318,10 +423,10 @@ public sealed class LibrarySync : IPlaylistTuningSource, IAsyncDisposable
                 throw new ArgumentException("A playlist and tuning option are required.");
 
             var revision = _store.PlaylistRevision(cmd.Uri);
-            if (revision is null || revision.Length != 24)
+            if (!PlaylistRevisions.IsWellFormed(revision))
                 throw new InvalidOperationException("The playlist tuning revision is stale.");
             var tuning = _store.GetPlaylist(cmd.Uri)?.Tuning;
-            if (tuning is null || !BytesEqual(tuning.Revision, revision))
+            if (tuning is null || !PlaylistRevisions.Equal(tuning.Revision, revision))
                 throw new InvalidOperationException("The playlist tuning roster is stale.");
 
             PlaylistTuningOption? requested = null;
@@ -343,7 +448,8 @@ public sealed class LibrarySync : IPlaylistTuningSource, IAsyncDisposable
             sent = true;
             var snapshot = await _signals.ApplyAsync(cmd.Uri, revision, requested.Identifier, _ct).ConfigureAwait(false);
             _playlists.AdoptSnapshot(cmd.Uri, snapshot);
-            ClearFullRefresh(cmd.Uri);
+            AfterNetworkSnapshot(cmd.Uri);
+            ClearDirty(cmd.Uri);
             MarkRevalidated(cmd.Uri);
             try
             {
@@ -374,7 +480,6 @@ public sealed class LibrarySync : IPlaylistTuningSource, IAsyncDisposable
         {
             if (sent && await ReconcilePlaylistSignalAsync(cmd.Uri, cmd.OptionIdentifier!).ConfigureAwait(false))
             {
-                Interlocked.Increment(ref SignalReconciles);
                 _log.Event(WaveeLogLevel.Info, "playlist.signal.apply.reconciled",
                     "Playlist tuning signal reconciled after an ambiguous response",
                     elapsedMs: Environment.TickCount64 - started,
@@ -406,7 +511,7 @@ public sealed class LibrarySync : IPlaylistTuningSource, IAsyncDisposable
 
         var tuning = _store.GetPlaylist(uri)?.Tuning;
         var revision = _store.PlaylistRevision(uri);
-        if (tuning is null || revision is null || !BytesEqual(tuning.Revision, revision)) return false;
+        if (tuning is null || !PlaylistRevisions.Equal(tuning.Revision, revision)) return false;
         return string.Equals(optionIdentifier, ResetSignalIdentifier, StringComparison.Ordinal)
             ? tuning.SelectedIdentifier is null
             : string.Equals(tuning.SelectedIdentifier, optionIdentifier, StringComparison.Ordinal);
@@ -431,7 +536,6 @@ public sealed class LibrarySync : IPlaylistTuningSource, IAsyncDisposable
     void ScheduleHydrationRetry(string uri, int attempt)
     {
         int seconds = attempt switch { 0 => 2, 1 => 10, _ => 30 };
-        Interlocked.Increment(ref SignalHydrateRetries);
         _ = Task.Run(async () =>
         {
             try { await Task.Delay(TimeSpan.FromSeconds(seconds), _ct).ConfigureAwait(false); }
@@ -446,28 +550,40 @@ public sealed class LibrarySync : IPlaylistTuningSource, IAsyncDisposable
         var stored = _store.PlaylistRevision(uri);
 
         // gate 1 — echo of our own write (we advanced the revision from the /changes response): stored == newRev → drop.
-        if (stored is not null && newRev is not null && BytesEqual(stored, newRev)) { Interlocked.Increment(ref EchoDropped); return; }
+        if (PlaylistRevisions.Equal(stored, newRev)) { Interlocked.Increment(ref EchoDropped); return; }
 
-        // Signal regenerations announce only a new head: no parent and no ops. A /diff does not reliably carry the next
-        // signal roster/format attributes, so this shape always converges through a full snapshot.
-        if (newRev is { Length: 24 } && (parentRev is null || parentRev.Length == 0) && (ops is null || ops.Count == 0))
+        // gate 2 — TOMBSTONE (a remote delete arrives as UPDATE_LIST new{deleted_by_owner=1}). Terminal and idempotent,
+        // so it deliberately runs BEFORE the pending gate below: a playlist that no longer exists cannot be converged by
+        // draining local intent — those ops dead-letter with Deleted on their next replay.
+        if (CarriesTombstone(ops)) { ApplyTombstone(uri, "push"); return; }
+
+        // gate 3 (I3a) — a LOCAL INTENT for this uri is still in flight. Never apply a push in place while our own ops
+        // are unacked (the push describes a list that does not include them) and never spend a round-trip revalidating
+        // into a state the drain is about to change: mark dirty, converge after the ack.
+        if (_mutations.PendingFor(uri) > 0)
         {
-            MarkFullRefresh(uri);
-            Interlocked.Increment(ref SignalPushes);
-            if (IsOpen(uri))
-            {
-                await _playlists.FetchPlaylistAsync(uri, _ct).ConfigureAwait(false);
-                MarkRevalidated(uri);
-                ClearFullRefresh(uri);
-            }
-            else Interlocked.Increment(ref PushMarkedDirty);
+            MarkDirty(uri);
+            Interlocked.Increment(ref PushDeferredPending);
+            Interlocked.Increment(ref PushMarkedDirty);
+            return;
+        }
+
+        // gate 4 — NEW HEAD. A well-formed head with no usable parent and no ops ("the list rolled over, here is where
+        // it is now"): the create echo (8-byte parent), an editorial/signal regeneration, and a foreign write whose ops
+        // the dealer did not carry all take this shape. It is NOT a signal-regeneration marker — the open page just
+        // revalidates (revision-gated /diff, which falls back to a full GET inside the fetcher) and a cold list goes
+        // dirty so it revalidates lazily on open (anti-herd).
+        if (PlaylistRevisions.IsWellFormed(newRev) && !PlaylistRevisions.IsWellFormed(parentRev) && (ops is null || ops.Count == 0))
+        {
+            if (IsOpen(uri)) await PlaylistRevalidateAsync(uri).ConfigureAwait(false);
+            else { MarkDirty(uri); Interlocked.Increment(ref PushMarkedDirty); }
             return;
         }
 
         var membership = _store.Membership(uri);
 
-        // gate 2 — resident + parent-rev match → apply ops in place (zero network), hydrate ONLY the added uris.
-        if (membership.Count > 0 && stored is not null && parentRev is not null && ops is not null && BytesEqual(stored, parentRev))
+        // gate 5 — resident + parent-rev match → apply ops in place (zero network), hydrate ONLY the added uris.
+        if (membership.Count > 0 && ops is not null && PlaylistRevisions.Equal(stored, parentRev))
         {
             var list = new List<PlaylistMember>(membership);
             var before = new HashSet<string>(StringComparer.Ordinal);
@@ -477,12 +593,16 @@ public sealed class LibrarySync : IPlaylistTuningSource, IAsyncDisposable
             catch (ArgumentOutOfRangeException) { torn = true; }
             if (!torn)
             {
-                _store.SetMembership(uri, list, newRev ?? stored);
+                // I1 — adopt the head only when it is storable; otherwise keep the baseline we already trust.
+                byte[]? adopted = stored;
+                if (PlaylistRevisions.IsWellFormed(newRev)) adopted = newRev;
+                else if (newRev is not null) PlaylistMutationDiagnostics.RootlistBadRevision(newRev.Length, "playlist-push");
+                _store.SetMembership(uri, list, adopted);
                 var added = new List<string>();
                 for (int i = 0; i < list.Count; i++) { var u = list[i].ItemUri; if (!before.Contains(u)) added.Add(u); }
                 if (added.Count > 0)
                 {
-                    try { await _playlists.HydrateUrisAsync(added, _ct).ConfigureAwait(false); Interlocked.Increment(ref HydrateRuns); _store.Bump(uri); }
+                    try { await _playlists.HydrateUrisAsync(added, _ct).ConfigureAwait(false); _store.Bump(uri); }
                     catch (OperationCanceledException) when (_ct.IsCancellationRequested) { throw; }
                     catch (Exception ex) { _log.Info("sync: hydrate added uris failed: " + ex.Message); }
                 }
@@ -498,9 +618,93 @@ public sealed class LibrarySync : IPlaylistTuningSource, IAsyncDisposable
             }
         }
 
-        // gate 3 — open playlist revalidates eagerly; everything else marks dirty (anti-herd).
+        // gate 6 — open playlist revalidates eagerly; everything else marks dirty (anti-herd).
         if (IsOpen(uri)) await PlaylistRevalidateAsync(uri).ConfigureAwait(false);
         else { MarkDirty(uri); Interlocked.Increment(ref PushMarkedDirty); }
+    }
+
+    /// <summary>True when an op batch carries the remote-delete marker (<c>UPDATE_LIST new{deleted_by_owner=1}</c>).</summary>
+    static bool CarriesTombstone(IReadOnlyList<PlaylistOp>? ops)
+    {
+        if (ops is null) return false;
+        for (int i = 0; i < ops.Count; i++)
+            if (ops[i].Kind == PlaylistOpKind.UpdateList && ops[i].ListPatch is { DeletedByOwner: true }) return true;
+        return false;
+    }
+
+    /// <summary>The owner deleted this playlist elsewhere. ONE bulk write evicts every trace of it from the library
+    /// projections — rootlist row, saved pill, membership — and latches <c>DeletedByOwner</c> on the header so an open
+    /// page can render its "this playlist was deleted" notice instead of an empty skeleton. Idempotent: the dealer sends
+    /// the tombstone on the playlist topic AND (via a rootlist head) as a rootlist change, and a full GET/diff whose
+    /// header carries the flag lands here too.
+    /// <para>The rootlist edit is revision-PRESERVING (the 1-arg <c>SetRootlist</c>): the delete's own rootlist head
+    /// arrives separately, and adopting a head we did not apply ops for would break the next parent-match.</para></summary>
+    public void ApplyTombstone(string uri, string source)
+    {
+        if (uri.Length == 0) return;
+        using (_store.BeginBulk())
+        {
+            if (RootlistOps.RemovePlaylistEntry(_store.Rootlist(), uri) is { } trimmed) _store.SetRootlist(trimmed);
+            _store.SetSaved("playlists", uri, false, SyncState.Confirmed);
+            _store.SetMembership(uri, Array.Empty<PlaylistMember>(), null);
+            if (_store.GetPlaylist(uri) is { } header) _store.UpsertPlaylist(header with { DeletedByOwner = true });
+            _store.Bump(uri);
+            _store.Bump("rootlist", CollectionKind.Playlists);
+        }
+        ClearDirty(uri);
+        MarkRevalidated(uri);
+        Interlocked.Increment(ref Tombstones);
+        PlaylistMutationDiagnostics.PlaylistTombstoned(uri, source);
+    }
+
+    // hm://playlist-permission/…/permission/state — the authoritative public/private/collaborative state, applied with
+    // ZERO network. A COLD header is deliberately ignored rather than fetched: the state is seeded on open (SeedPermission)
+    // and a permission GET per push for a playlist nobody is looking at is pure herd.
+    Task PermissionPushAsync(PlaylistPermissionPush? push)
+    {
+        if (push is null) return Task.CompletedTask;
+        if (_store.GetPlaylist(push.Uri) is not { } header)
+        {
+            Interlocked.Increment(ref PermissionPushesIgnored);
+            PlaylistMutationDiagnostics.PermissionPushIgnored(push.Uri, "cold-header");
+            return Task.CompletedTask;
+        }
+        _store.UpsertPlaylist(header with
+        {
+            IsPublic = push.Level != PlaylistPermissionLevel.Blocked,
+            BasePermissionRevision = push.RevisionHex,
+            Capabilities = header.Capabilities with { IsCollaborative = push.IsCollaborative },
+        });
+        _store.Bump(push.Uri);
+        Interlocked.Increment(ref PermissionPushesApplied);
+        PlaylistMutationDiagnostics.PermissionPushApplied(push.Uri, push.Level, push.IsCollaborative);
+        return Task.CompletedTask;
+    }
+
+    // On-open owner seed (P1.3): the ONE place a permission GET happens. The detail page reads the answer off the store
+    // header, so it never issues its own GET and a later permission/state push converges the same fields for free.
+    async Task SeedPermissionAsync(string uri)
+    {
+        if (uri.Length == 0 || !IsOwned(uri)) return;
+        PlaylistBasePermission? perm;
+        try { perm = await _permissions.GetBasePermissionAsync(uri, _ct).ConfigureAwait(false); }
+        catch (OperationCanceledException) when (_ct.IsCancellationRequested) { throw; }
+        catch (Exception ex) { _log.Info("sync: permission seed failed for " + uri + ": " + ex.Message); return; }
+        if (perm is not { } p) return;
+        if (_store.GetPlaylist(uri) is not { } header) return;
+        _store.UpsertPlaylist(header with { IsPublic = p.IsPublic, BasePermissionRevision = p.Revision });
+        _store.Bump(uri);
+        Interlocked.Increment(ref PermissionSeeds);
+    }
+
+    /// <summary>I3(b)/I4 — the SINGLE membership-replace chokepoint on the sync loop. A network snapshot (full GET,
+    /// <c>/diff</c> contents, a folded <c>sync_result</c>) lands here, the revision is I1-gated on the way in, and the
+    /// still-pending local ops are re-applied on top so an unacked edit never visibly reverts mid-drain.</summary>
+    public void AdoptSnapshot(string uri, IReadOnlyList<PlaylistMember> members, byte[]? revision)
+    {
+        if (uri.Length == 0) return;
+        _mutations.AdoptSnapshot(uri, members, revision);
+        _store.Bump(uri);
     }
 
     // CollectionPush handler. `wireSet` is the WIRE set as it comes off the dealer topic ("collection"/"artist"/…). A
@@ -548,7 +752,7 @@ public sealed class LibrarySync : IPlaylistTuningSource, IAsyncDisposable
                 if (logical is null) continue;                          // not attributable to a known logical set
                 if (_mutations.HasPending(logical, it.Uri)) continue;   // §7.2 — a local intent shields this (set, uri)
                 _store.SetSaved(logical, it.Uri, !it.IsRemoved, SyncState.Confirmed);
-                if (!it.IsRemoved && it.Uri.StartsWith("spotify:", StringComparison.Ordinal))
+                if (!it.IsRemoved && EntityUri.Parse(it.Uri).Provider == EntityProviders.Spotify)
                 {
                     added.Add(it.Uri);
                     if (!firstAddedBySet.ContainsKey(logical)) firstAddedBySet[logical] = it.Uri;
@@ -560,7 +764,7 @@ public sealed class LibrarySync : IPlaylistTuningSource, IAsyncDisposable
             try
             {
                 await _playlists.HydrateUrisAsync(added, _ct).ConfigureAwait(false);
-                Interlocked.Increment(ref HydrateRuns);
+               
                 foreach (var kv in firstAddedBySet)
                     if (KindForLogicalSet(kv.Key) is { } kind) _store.Bump(kv.Value, kind);
             }
@@ -610,44 +814,31 @@ public sealed class LibrarySync : IPlaylistTuningSource, IAsyncDisposable
         if (first) _log.Info("sync: ignoring collection push for unknown wire set '" + wireSet + "'");
     }
 
-    /// <summary>Set at go-live: fired with the playlist uri once an open has hydrated/revalidated its tracklist. An
-    /// opaque hook on purpose — the sync loop stays agnostic of what consumes it (today: music-video detection).</summary>
-    public Action<string>? OnPlaylistHydrated { get; set; }
-
     async Task OpenPlaylistHandlerAsync(string uri)
     {
         try
         {
             if (uri.Length == 0) return;
             await OpenPlaylistCoreAsync(uri).ConfigureAwait(false);
-            // The membership is resident now. This is the ONLY path a live playlist open takes (StoreLibrarySource
-            // returns before OnDemandFetch when the sync loop is attached), so it is where detection must hang off.
-            try { OnPlaylistHydrated?.Invoke(uri); } catch { }
         }
         finally { lock (_gate) _openInFlight.Remove(uri); }
     }
 
     async Task OpenPlaylistCoreAsync(string uri)
     {
-        if (NeedsFullRefresh(uri))
-        {
-            await _playlists.FetchPlaylistAsync(uri, _ct).ConfigureAwait(false);
-            MarkRevalidated(uri);
-            ClearFullRefresh(uri);
-            return;
-        }
         var members = _store.Membership(uri);
         if (members.Count == 0)
         {
             await _playlists.FetchPlaylistAsync(uri, _ct).ConfigureAwait(false);   // first open — the skeleton path
             MarkRevalidated(uri); ClearDirty(uri);
+            AfterNetworkSnapshot(uri);
             return;
         }
         // Attribute-aware heal gate. Membership can be resident yet attribute-less — every row has no added_at and no
         // added_by, so the Date-added / Added-by columns render blank forever: the /diff revalidate path (the only path
         // a NON-empty baseline takes) never re-reads item attributes for existing rows, so once a playlist was cached
         // without Item.attributes it stays that way. Treat that as still-cold and run the full, attribute-bearing
-        // FetchPlaylistAsync instead — the same spirit as StoreLibrarySource.IsAlbumComplete ("unnamed track ⇒ cold").
+        // FetchPlaylistAsync instead — the same spirit as HydrationLevels.Of(Album) ("an unnamed track ⇒ not Open yet").
         // ALSO heals historically-poisoned caches written before this gate existed (recovery is lazy, per-open — no
         // SQLite migration). Force at most ONCE per session (_attrHealForced): a playlist whose server data genuinely
         // carries no attributes stays attribute-less after the fetch, and this guard stops it re-forcing a full GET on
@@ -656,6 +847,7 @@ public sealed class LibrarySync : IPlaylistTuningSource, IAsyncDisposable
         {
             await _playlists.FetchPlaylistAsync(uri, _ct).ConfigureAwait(false);
             MarkRevalidated(uri); ClearDirty(uri);
+            AfterNetworkSnapshot(uri);
             return;
         }
         // Heal headers stripped or capability-stale after a partial LIST_METADATA_V2 upsert (membership stayed resident).
@@ -666,6 +858,7 @@ public sealed class LibrarySync : IPlaylistTuningSource, IAsyncDisposable
             try { await _playlists.FetchPlaylistHeaderAsync(uri, _ct).ConfigureAwait(false); }
             catch (OperationCanceledException) when (_ct.IsCancellationRequested) { throw; }
             catch { }
+            TrySeedPermissionForOpen(uri);   // the heal is a header LANDING too (P1.3, cold deep link)
         }
         bool dirty = IsDirty(uri);
         bool stale = !TryGetLastRevalidated(uri, out var last) || (DateTime.UtcNow - last) > OpenRevalidateWindow;
@@ -686,13 +879,40 @@ public sealed class LibrarySync : IPlaylistTuningSource, IAsyncDisposable
             default: Interlocked.Increment(ref DiffFellBack); break;
         }
         MarkRevalidated(uri); ClearDirty(uri);
-        Interlocked.Increment(ref RevalidateRuns);
+        AfterNetworkSnapshot(uri);
+    }
+
+    // Runs after EVERY network membership replace on the loop. Two jobs: (a) a header that came back carrying
+    // deleted_by_owner is a tombstone, whatever path delivered it; (b) I3(b) — pending local ops are re-applied on top of
+    // the fresh snapshot, so "add offline → reconnect → someone else edited → drain" never visibly reverts the add.
+    void AfterNetworkSnapshot(string uri)
+    {
+        if (uri.Length == 0) return;
+        if (_store.GetPlaylist(uri) is { DeletedByOwner: true }) { ApplyTombstone(uri, "header"); return; }
+        int n = _mutations.ReapplyPending(uri);
+        if (n > 0) PlaylistMutationDiagnostics.ReapplyPending(uri, n);
+        // (c) P1.3 — a header just landed. If this is the OPEN playlist and it turns out to be ours, this is the first
+        // moment the owner check can succeed on a cold deep link (see TrySeedPermissionForOpen). No-op otherwise, and
+        // at most once per open context.
+        TrySeedPermissionForOpen(uri);
     }
 
     async Task DrainWritesAsync()
     {
         lock (_gate) _drainReenqueueScheduled = false;   // this run consumes any scheduled re-enqueue
         await _mutations.Drain(_mutationTransport, _ctx(), _ct).ConfigureAwait(false);
+
+        // I4 — a /changes response that reported multiple_heads / changes_require_resync / a torn sync_result did NOT
+        // advance the stored revision; it dropped the uri here instead. Converge it now, on the single writer, with a
+        // revision-gated /diff (which falls back to a full GET inside the fetcher).
+        foreach (var uri in _resync.TakeAll())
+        {
+            MarkDirty(uri);
+            try { await PlaylistRevalidateAsync(uri).ConfigureAwait(false); }
+            catch (OperationCanceledException) when (_ct.IsCancellationRequested) { throw; }
+            catch (Exception ex) { _log.Info("sync: post-drain resync of '" + uri + "' failed: " + ex.Message); }
+        }
+
         if (_mutations.Pending > 0)
         {
             int fails;
@@ -749,16 +969,7 @@ public sealed class LibrarySync : IPlaylistTuningSource, IAsyncDisposable
         {
             _ct.ThrowIfCancellationRequested();
             if (_store.Membership(uri).Count == 0) continue;   // cold stays lazy (revalidates on open)
-            try
-            {
-                if (NeedsFullRefresh(uri))
-                {
-                    await _playlists.FetchPlaylistAsync(uri, _ct).ConfigureAwait(false);
-                    MarkRevalidated(uri);
-                    ClearFullRefresh(uri);
-                }
-                else await PlaylistRevalidateAsync(uri).ConfigureAwait(false);
-            }
+            try { await PlaylistRevalidateAsync(uri).ConfigureAwait(false); }
             catch (OperationCanceledException) when (_ct.IsCancellationRequested) { throw; }
             catch (Exception ex) { _log.Info("sync: reconnect playlist '" + uri + "' failed: " + ex.Message); }
         }
@@ -778,7 +989,7 @@ public sealed class LibrarySync : IPlaylistTuningSource, IAsyncDisposable
     {
         var next = new HashSet<string>(StringComparer.Ordinal);
         foreach (var e in _store.Rootlist())
-            if (e.Kind == 0 && e.Uri.StartsWith("spotify:playlist:", StringComparison.Ordinal)) next.Add(e.Uri);
+            if (e.Kind == 0 && EntityUri.KindOf(e.Uri) == EntityKind.Playlist) next.Add(e.Uri);
 
         foreach (var uri in next)
             if (!_store.IsSaved("playlists", uri) && !_mutations.HasPending("playlists", uri))
@@ -836,18 +1047,8 @@ public sealed class LibrarySync : IPlaylistTuningSource, IAsyncDisposable
     void MarkDirty(string uri) { lock (_gate) _dirtyPlaylists.Add(uri); }
     void ClearDirty(string uri) { lock (_gate) _dirtyPlaylists.Remove(uri); }
     bool IsDirty(string uri) { lock (_gate) return _dirtyPlaylists.Contains(uri); }
-    void MarkFullRefresh(string uri) { lock (_gate) { _fullRefreshPlaylists.Add(uri); _dirtyPlaylists.Add(uri); } }
-    bool NeedsFullRefresh(string uri) { lock (_gate) return _fullRefreshPlaylists.Contains(uri); }
-    void ClearFullRefresh(string uri) { lock (_gate) { _fullRefreshPlaylists.Remove(uri); _dirtyPlaylists.Remove(uri); } }
     void MarkRevalidated(string uri) { lock (_gate) _lastRevalidatedAt[uri] = DateTime.UtcNow; }
     bool TryGetLastRevalidated(string uri, out DateTime t) { lock (_gate) return _lastRevalidatedAt.TryGetValue(uri, out t); }
-
-    static bool BytesEqual(byte[] a, byte[] b)
-    {
-        if (a.Length != b.Length) return false;
-        for (int i = 0; i < a.Length; i++) if (a[i] != b[i]) return false;
-        return true;
-    }
 
     public async ValueTask DisposeAsync()
     {

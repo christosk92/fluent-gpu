@@ -2,22 +2,27 @@ using System.Runtime.CompilerServices;
 
 namespace Wavee.Core;
 
-/// <summary>The synthetic fallback catalog source (docs/architecture.md §9). The Spotify source owns every
+/// <summary>The synthetic fallback catalog source (docs/plans/wavee/architecture.md §9). The Spotify source owns every
 /// <c>spotify:*</c> URI (and synthesizes when it lacks real data), so this source's job is to CONTRIBUTE the
 /// collections the export has no data for — the synthetic "Your Albums" / "Your Artists" lists — plus serve as the
-/// owner of any non-Spotify URI a future source hasn't claimed. Wraps <see cref="FakeData"/>.</summary>
+/// demo backend's <see cref="SourceCapabilities.Fallback"/>: the LAST RESORT for a single-item read no source owns.
+/// Wraps <see cref="FakeData"/>.</summary>
 public sealed class FakeSource : ICatalogSource
 {
     public string Id => "fake";
-    // spotify:* is owned by SpotifyExportSource; this owns anything else (none today — it's a safety net + collection contributor).
-    public bool Owns(string uri) => !uri.StartsWith("spotify:", StringComparison.Ordinal);
-    public SourceCapabilities Capabilities => SourceCapabilities.Catalog;
+    // P4: this OWNS exactly its own namespace — `fake:*` and the bare legacy ids FakeData mints (EntityProviders.Fake).
+    // The old catch-all ("anything that isn't spotify:") made this source the routing owner of every peer namespace —
+    // local files, user playlists, podcasts — which the hydration router would then have sent HERE instead of to the
+    // source that actually holds the data. Being the last resort is a CAPABILITY (SourceCapabilities.Fallback), which
+    // AggregateCatalog consults as an explicit final step, not an ownership claim.
+    public bool Owns(string uri) => EntityUri.Parse(uri).Provider == EntityProviders.Fake;
+    public SourceCapabilities Capabilities => SourceCapabilities.Catalog | SourceCapabilities.Fallback;
 
-    public Task<Playlist?> GetPlaylistAsync(string uri, CancellationToken ct = default)
+    public Task<Playlist?> GetPlaylistAsync(string uri, HydrationLevel level = HydrationLevel.Open, CancellationToken ct = default)
         => Task.FromResult<Playlist?>(FakeData.Playlist(FakeData.IndexFromUri(uri)));
-    public Task<Album?> GetAlbumAsync(string uri, CancellationToken ct = default)
+    public Task<Album?> GetAlbumAsync(string uri, HydrationLevel level = HydrationLevel.Open, CancellationToken ct = default)
         => Task.FromResult<Album?>(FakeData.Album(FakeData.IndexFromUri(uri)));
-    public Task<Artist?> GetArtistAsync(string uri, CancellationToken ct = default)
+    public Task<Artist?> GetArtistAsync(string uri, HydrationLevel level = HydrationLevel.Open, CancellationToken ct = default)
         => Task.FromResult<Artist?>(FakeData.Artist(FakeData.IndexFromUri(uri)));
 
     public async IAsyncEnumerable<TrackPage> StreamTracksAsync(string contextUri, [EnumeratorCancellation] CancellationToken ct = default)

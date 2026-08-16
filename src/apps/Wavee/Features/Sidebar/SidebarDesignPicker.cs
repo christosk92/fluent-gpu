@@ -115,27 +115,19 @@ sealed class SidebarDesignPicker : Component
         var content = PreviewContent.Gather(prefs, store);
         var m = Metrics.For(_compact);
 
-        return new BoxEl
-        {
-            Direction = 0, Gap = 12f, Wrap = true, AlignItems = FlexAlign.Start,
-            Children =
-            [
-                Card(SidebarDesign.Classic, sel, in m, in content),
-                Card(SidebarDesign.LibraryV3, sel, in m, in content),
-                Card(SidebarDesign.Curated, sel, in m, in content),
-            ],
-        };
+        // ONE radio group, not three independent tab stops — which is what §C6.1's "group semantics are an engine
+        // follow-up" note was waiting for. WaveePicker.Strip delegates to FluentGpu.Controls.RadioButtons: a single tab
+        // stop that lands on the active design, arrow-key roving between the cards, selection following focus, and the
+        // wrap the row needs when three cards do not fit. The apply path is unchanged — Strip's onChange is _onChange,
+        // so every selection still goes through SwitchDesign.
+        return WaveePicker.Strip(3, sel, (i, on) => Card(SidebarDesignGating.FromIndex(i), on, in m, in content), _onChange);
     }
 
-    Element Card(SidebarDesign design, int selected, in Metrics m, in PreviewContent content)
+    Element Card(SidebarDesign design, bool on, in Metrics m, in PreviewContent content)
     {
-        int value = SidebarDesignGating.IndexOf(design);
-        bool on = selected == value;
-
-        // The block/faint pair is PageLayoutCards' exactly: the selected card tints its whole wireframe with the accent,
-        // so the choice reads from across the page and not only from the border.
-        ColorF block = on ? Tok.AccentDefault : Tok.FillSubtleTertiary;
-        ColorF faint = on ? Tok.AccentDefault with { A = 0.45f } : Tok.FillSubtleTertiary with { A = 0.7f };
+        // WaveePicker owns the card shell, the accent ink pair and the selected-label treatment — the same three things
+        // the Settings density/page-layout/palette pickers were each carrying their own copy of.
+        var ink = WaveePicker.Ink.For(on);
 
         Element preview = new BoxEl
         {
@@ -146,60 +138,31 @@ sealed class SidebarDesignPicker : Component
             Fill = on ? Tok.AccentDefault with { A = 0.08f } : Tok.FillSubtleTertiary with { A = 0.45f },
             Children = design switch
             {
-                SidebarDesign.LibraryV3 => LibraryPreview(in m, in content, block, faint),
-                SidebarDesign.Curated => CuratedPreview(in m, in content, block, faint),
-                _ => ClassicPreview(in m, in content, block, faint),
+                SidebarDesign.LibraryV3 => LibraryPreview(in m, in content, ink.Block, ink.Faint),
+                SidebarDesign.Curated => CuratedPreview(in m, in content, ink.Block, ink.Faint),
+                _ => ClassicPreview(in m, in content, ink.Block, ink.Faint),
             },
         };
 
+        var title = WaveePicker.Label(Loc.Get(SidebarDesignGating.TitleKey(design)), on, m.TitleSize);
         Element titleRow = new BoxEl
         {
             Direction = 0, Gap = 6f, AlignItems = FlexAlign.Center, AlignSelf = FlexAlign.Stretch,
-            Children = on
-                ? [Title(design, m, on) with { Shrink = 1f }, ActiveTag(m)]
-                : [Title(design, m, on)],
+            // A11y honesty (§C6.1): the selected card is distinguishable by the "Active" tag as well as by colour, so
+            // the choice survives a colour-blind read.
+            Children = on ? [title with { Shrink = 1f }, ActiveTag(m)] : [title],
         };
 
-        return new BoxEl
-        {
-            Key = SidebarDesignInfo.Slug(design),
-            Width = m.CardW, Shrink = 0f,
-            Direction = 1, Gap = 7f,
-            // 10→9 when selected so the 1→2 border growth draws INWARD and the miniature does not shift by a pixel.
-            Padding = Edges4.All(on ? 9f : 10f),
-            Corners = CornerRadius4.All(Radii.Card),
-            Fill = Tok.FillSubtleSecondary,
-            BorderWidth = on ? 2f : 1f,
-            BorderColor = on ? Tok.AccentDefault : Tok.StrokeControlDefault,
-            HoverScale = WaveeMotion.ScaleSubtle.Hover, PressScale = WaveeMotion.ScaleSubtle.Press,
-            // A11y honesty (§C6.1): Element has no radio-GROUP role and no arrow-key group traversal, so each card is a
-            // tab stop with visible text as its accessible name, activated by Enter/Space through Focusable + OnClick,
-            // and the selected one is distinguishable by the "Active" tag as well as by colour. Group semantics are an
-            // engine follow-up, not a claim made here.
-            Role = AutomationRole.RadioButton, Focusable = true, Cursor = CursorId.Hand,
-            FocusVisualMargin = Edges4.All(2f),
-            OnClick = () => _onChange(value),
-            Children =
-            [
-                preview,
-                titleRow,
-                new TextEl(Loc.Get(SidebarDesignGating.SubtitleKey(design)))
-                {
-                    Size = m.SubSize, Color = Tok.TextTertiary,
-                    Wrap = TextWrap.Wrap, MaxLines = 2, Trim = TextTrim.WordEllipsis,
-                    AlignSelf = FlexAlign.Stretch,
-                },
-            ],
-        };
+        return WaveePicker.Card(on, m.Shell,
+            preview,
+            titleRow,
+            new TextEl(Loc.Get(SidebarDesignGating.SubtitleKey(design)))
+            {
+                Size = m.SubSize, Color = Tok.TextTertiary,
+                Wrap = TextWrap.Wrap, MaxLines = 2, Trim = TextTrim.WordEllipsis,
+                AlignSelf = FlexAlign.Stretch,
+            }) with { Key = SidebarDesignInfo.Slug(design) };
     }
-
-    static TextEl Title(SidebarDesign design, in Metrics m, bool on) =>
-        new(Loc.Get(SidebarDesignGating.TitleKey(design)))
-        {
-            Size = m.TitleSize, Weight = (ushort)(on ? 600 : 400),
-            Color = on ? Tok.TextPrimary : Tok.TextSecondary,
-            MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
-        };
 
     /// <summary>The selected card's persistent "Active" pill. It rides the TITLE row rather than the preview's top-right
     /// corner (the spec's sketch): the engine has no absolute positioning, and reserving an overlay row inside the
@@ -330,12 +293,15 @@ sealed class SidebarDesignPicker : Component
 
     // ── metrics + real content ────────────────────────────────────────────────────────────────────────────────────────
 
-    readonly record struct Metrics(bool Compact, float CardW, float PreviewH, float Gap, float RowH,
+    /// <summary>What this picker owns: the MINIATURE's proportions and its type ramp. The card's own footprint (width,
+    /// resting inset, child gap) is <see cref="WaveePicker.Shell"/>'s — shared with the Settings wireframe pickers, so a
+    /// change to the selected-border mechanic lands in one place.</summary>
+    readonly record struct Metrics(bool Compact, WaveePicker.Shell Shell, float PreviewH, float Gap, float RowH,
                                    float TitleSize, float SubSize, float MicroSize, float TagSize)
     {
         public static Metrics For(bool compact) => compact
-            ? new Metrics(true, 200f, 96f, 3f, 10f, 12f, 10.5f, 6.5f, 9f)
-            : new Metrics(false, 224f, 116f, 3f, 11f, 13f, 11f, 7f, 9.5f);
+            ? new Metrics(true, WaveePicker.PaneCompact, 96f, 3f, 10f, 12f, 10.5f, 6.5f, 9f)
+            : new Metrics(false, WaveePicker.Pane, 116f, 3f, 11f, 13f, 11f, 7f, 9.5f);
     }
 
     /// <summary>The real cached content the miniatures fill their name slots from, resolved ONCE per render. Preference
@@ -423,10 +389,12 @@ sealed class SidebarChooserCard : Component
         var viewport = UseContextSignal(Viewport.Size);
         float vw = viewport.Value.Width;
 
-        // Three full 224-DIP cards + their gaps + the plate padding. When the window cannot hold that, fall back to the
-        // compact card; the row wraps below that again, so the dialog degrades to two columns and then one.
-        bool compact = vw > 0f && vw < 3f * 224f + 2f * 12f + 2f * Pad + 32f;
-        float want = (compact ? 3f * 200f + 2f * 12f : 3f * 224f + 2f * 12f) + 2f * Pad;
+        // Three full-size cards + their gaps + the plate padding, sized OFF the shared shells rather than off restated
+        // literals — a card that grows must move this plate with it. When the window cannot hold three full cards, fall
+        // back to the compact card; the row wraps below that again, so the dialog degrades to two columns and then one.
+        static float RowWidth(in WaveePicker.Shell s) => 3f * s.Width + 2f * CardGap;
+        bool compact = vw > 0f && vw < RowWidth(WaveePicker.Pane) + 2f * Pad + 32f;
+        float want = RowWidth(compact ? WaveePicker.PaneCompact : WaveePicker.Pane) + 2f * Pad;
         float plateW = vw > 0f ? Math.Clamp(want, 300f, Math.Max(300f, vw - 32f)) : want;
 
         bool follow = _followUp.Value;

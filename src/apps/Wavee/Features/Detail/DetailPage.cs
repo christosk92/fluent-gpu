@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -24,6 +24,40 @@ sealed class DetailPage : Component
     readonly Signal<Route> _route;   // the (per-pane) navigation route, read reactively so ONE instance serves successive detail pages
     public DetailPage(Signal<Route> route) { _route = route; }
 
+    // ── the open page's owner identities (the store-change predicate's User arm) ──────────────────────────────────────
+    // A profile landing after the page mapped IS a "the model is stale" event — a byline or an Added-by cell renders an
+    // Owner ROW (P4-C). But keying the reload on the KIND alone matched EVERY spotify:user: bump in the process: the
+    // sidebar's profile prefetch, a Liked-Episodes sweep's added-by closure, any other page's owners. On a library with
+    // many collaborative playlists that is a full re-map + re-project of the open page per resolved stranger.
+    // So the ids the page actually renders are captured WHEN THE MODEL IS MAPPED and published as an immutable snapshot;
+    // the predicate then compares against them. Immutable + a single volatile publish = safe to read from the store's
+    // change thread without a lock, and never a torn set.
+    sealed record OwnerScope(string? Pid, System.Collections.Generic.HashSet<string> Ids);
+    static readonly OwnerScope NoOwners = new(null, new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase));
+    volatile OwnerScope _owners = NoOwners;
+
+    /// <summary>The page's owner identities (<see cref="DetailOwnerIds"/>), scoped to the page id they were read from
+    /// so a stale snapshot cannot answer for the next route.</summary>
+    static OwnerScope OwnersOf(string? pid, DetailModel m)
+        => new(pid, DetailOwnerIds.From(m.OwnerName, m.Collaborators, m.UserProfilesById, m.Tracks));
+
+    /// <summary>Publish the snapshot for a freshly-mapped model and hand the model straight back, so a mapping site is
+    /// one wrapped expression rather than two statements that can drift apart.</summary>
+    DetailModel WithOwners(DetailKind kind, string? pid, DetailModel m)
+    {
+        // Only the playlist arm consults it — an album/show/liked page never re-maps on a User bump — so the walk is
+        // not paid for those at all.
+        _owners = kind == DetailKind.Playlist ? OwnersOf(pid, m) : NoOwners;
+        return m;
+    }
+
+    /// <summary>Does a <c>spotify:user:</c> bump belong to the page currently mapped? Reads ONE volatile reference.</summary>
+    bool RendersOwner(string pid, string userUri)
+    {
+        var scope = _owners;
+        return scope.Pid == pid && DetailOwnerIds.Matches(scope.Ids, userUri);
+    }
+
     // Route → (kind, id): album:/pl: carry the uri after the prefix; "liked" is the saved-tracks collection.
     internal static (DetailKind Kind, string? Id) ParseDetail(Route r) =>
         r.Name.StartsWith("album:", StringComparison.Ordinal) ? (DetailKind.Album, r.Name["album:".Length..])
@@ -39,6 +73,9 @@ sealed class DetailPage : Component
         var svc = UseContext(Services.Slot);
         if (svc is null) return new BoxEl { Grow = 1f };
         var navPreview = UseContext(NavPreviewStore.Slot);
+        // The create lifecycle, for the notice rule below: an optimistic create that is still riding the outbox must not
+        // be reported as a deletion, and one the server REJECTED must be reported as exactly that.
+        var lib = UseContext(LibraryBridge.Slot);
 
         // Subscribe the RAW route → re-render when navigation swaps the detail route in place. A nav to ANOTHER page
         // class (artist:/home) also writes this signal, but the reconciler's structural-effect ordering guarantees the
@@ -68,7 +105,29 @@ sealed class DetailPage : Component
                 loaded = loaded with { ExpiresAtMs = preview.ExpiresAtMs, CreatedAtMs = preview.CreatedAtMs };
             if (loaded.Accent == 0 && preview is { Accent: not 0u })
                 loaded = loaded with { Accent = preview.Accent };
-            return loaded;
+            // THE cover latch, at the point the model is published — not in one arm of one renderer. The card preview
+            // painted a 300px CDN rendition; the detail payload names the same art by its 640px hash. A different url
+            // is a different ImageCache key ⇒ Pending ⇒ placeholder ⇒ a 220ms fade of the picture already on screen —
+            // the "cover flashes out and back in" report. PreferVisible keeps the visible rendition for the SAME ART
+            // (ImageSource.SameArt: the size-independent id tail) and takes the incoming cover for different art, so
+            // every consumer of this loadable — the two-column rail, the vertical hero, the editable playlist cover, the
+            // tone plane — reads ONE stable cover. (The old per-shell latch covered only the rail; the vertical hero and
+            // EditableCover read the raw model and re-decoded on every hash change.)
+            loaded = loaded with { Cover = ImageSource.PreferVisible(loaded.Cover, preview?.Cover) };
+            // DIAGNOSTIC ONLY (see DetailCoverTrace): the handoff the whole "flash" question turns on — the nav-preview
+            // cover the page opened with vs the cover the full load brought. `same=false` with two ids that share their
+            // last 24 chars is H1 exactly: identical art, a different CDN size hash, hence a different ImageCache key.
+            if (DetailCoverTrace.On)
+                WaveeLog.Instance.Debug("detail", "cover", "loaded",
+                    WaveeLogField.Of("route", route.Name),
+                    WaveeLogField.Of("kind", kind.ToString()),
+                    WaveeLogField.Of("preview", DetailCoverTrace.Id(preview?.Cover)),
+                    WaveeLogField.Of("loaded", DetailCoverTrace.Id(loaded.Cover)),
+                    WaveeLogField.Of("same", ImageSource.SameSource(preview?.Cover, loaded.Cover)),
+                    WaveeLogField.Of("sameArt", ImageSource.SameArt(preview?.Cover, loaded.Cover)),
+                    WaveeLogField.Of("previewLargest", DetailCoverTrace.Id(preview?.Cover, preferLargest: true)),
+                    WaveeLogField.Of("loadedLargest", DetailCoverTrace.Id(loaded.Cover, preferLargest: true)));
+            return WithOwners(kind, id, loaded);   // the page's owner identities, for the store-change predicate below
         }, preview ?? PendingSeed(kind), route.Name).Loadable;
 
         // §4.1 — open-playlist LIVE in-place refresh (kills the skeleton flash). Subscribe the REAL store; when a push lands
@@ -93,7 +152,14 @@ sealed class DetailPage : Component
                 // the row) — both also on a Bulk (hydrate/delta bursts coalesce into one).
                 bool relevant = k switch
                 {
-                    DetailKind.Playlist when pid is not null => c.IsBulk || c.Uri == pid,
+                    // ...plus a USER-kind change for an owner THIS page renders: a playlist byline / added-by cell is
+                    // an Owner ROW now (P4-C), so a profile landing after the page mapped is exactly the "the model is
+                    // stale" edge this reload exists for. Matched against the page's own owner-id snapshot (see
+                    // OwnerScope) rather than on the KIND alone — every resolved stranger in the process used to re-map
+                    // and re-project the open page.
+                    DetailKind.Playlist when pid is not null =>
+                        c.IsBulk || c.Uri == pid
+                        || RendersOwner(pid, c.Uri),
                     DetailKind.Liked => c.IsBulk || c.Kind == Wavee.Core.CollectionKind.Liked,
                     // An open ALBUM refreshes on a Bulk only: the async music-video detection folds its per-track
                     // HasVideo flips into one bulk change, which would otherwise stay invisible until re-navigation.
@@ -121,7 +187,25 @@ sealed class DetailPage : Component
                             // it still points at THIS page — otherwise the old model flashes into the new page.
                             var (k2, pid2) = ParseDetail(_route.Peek());
                             if (k2 != k || pid2 != pid) return;
-                            model.SetReady(fresh);
+                            // Re-publish the owner snapshot on the UI thread, from the model that is about to be
+                            // committed: a collaborator added while the page was open widens the set this page reacts to.
+                            var next = WithOwners(k, pid, WithNotice(k, model, fresh, lib, pid));
+                            // Same latch on the live path: a bulk refresh (music-video detection, hydration) re-maps the
+                            // model and can name the cover by a different size hash again; a genuine cover change (an
+                            // edit, a daylist rollover) is DIFFERENT art and still wins.
+                            next = next with { Cover = ImageSource.PreferVisible(next.Cover, model.Value.Peek().Cover) };
+                            // Reorder-in-flight (§P1.11): while a SAME-LIST drag session is live over THIS playlist the
+                            // rows under the pointer are the ones being aimed with. Committing a re-projection now
+                            // yanks the insertion geometry out from under the gesture (the list re-keys, the gap moves,
+                            // the drop lands somewhere else), so the model is HELD and applied the moment the session
+                            // ends. A foreign session (a drag from another list, a file drag) is not deferred — it has
+                            // no stake in this list's order.
+                            if (k == DetailKind.Playlist && WaveeResourceDrag.LiveSameListReorder(pid))
+                            {
+                                PlaylistReorderDefer.Hold(model, next);
+                                return;
+                            }
+                            model.SetReady(next);
                         });
                     }
                     catch (OperationCanceledException) { }
@@ -139,7 +223,7 @@ sealed class DetailPage : Component
         // Pre-loaded: render the shell straight away from the preview (header live), tracks stream in via Skel.Region.
         // Thread the preview's cover as the fallback so a loaded null cover never drops the flown-in art to a placeholder.
         if (preview is not null)
-            return Embed.Comp(() => new DetailShell(_route, model, preview.Cover, svc.Settings));
+            return Embed.Comp(() => new DetailShell(_route, model, svc.Settings));
 
         // No data at click (deep link): Skel.Region derives the full-page shimmer from the real responsive shell rendered
         // against PendingSeed(kind). The plain Grow=1 wrapper gives the boundary synchronous layout participation.
@@ -167,6 +251,36 @@ sealed class DetailPage : Component
                     smoothResize: false),
             ],
         };
+    }
+
+    /// <summary>Fold the live-refresh verdict into the model that is about to be published. Playlist-only: nothing else
+    /// can be deleted or revoked under the reader.
+    /// <para>The CONTENT is deliberately kept when the verdict is <see cref="DetailNotice.Deleted"/>: the reload that
+    /// found nothing is exactly the moment the user is looking at the rows, and replacing them with an empty page (or a
+    /// skeleton) both loses their place and says less than the notice strip does.</para></summary>
+    static DetailModel WithNotice(DetailKind kind, Loadable<DetailModel> model, DetailModel fresh,
+                                 LibraryBridge? lib, string? uri)
+    {
+        if (kind != DetailKind.Playlist) return fresh;
+        var cur = model.Value.Peek();
+        bool freshIsNull = string.IsNullOrEmpty(fresh.ContextUri);
+        // A create the server REJECTED is terminal and wins outright: the optimistic row has already been rolled back,
+        // so every later reload finds nothing, and letting the ordinary rule speak would relabel "couldn't be created"
+        // as "was deleted" — a different, and wrong, story about a playlist that never existed.
+        if (uri is { Length: > 0 } created && lib is not null && lib.IsCreateFailed(created))
+            return (freshIsNull && cur.ContextUri is { Length: > 0 } ? cur : fresh) with { Notice = DetailNotice.CreateFailed };
+        var notice = PlaylistPageNoticeRules.Next(
+            cur.Notice, freshIsNull, fresh.DeletedByOwner,
+            canView: freshIsNull || fresh.Capabilities.CanView,
+            isOwner: freshIsNull || fresh.Capabilities.IsOwner,
+            // While the create is still riding the outbox the server has genuinely never heard of this playlist, so
+            // "it is not there" is the EXPECTED state and must not be reported as a deletion.
+            isCreatePending: uri is { Length: > 0 } pending && lib is not null && lib.IsCreatePending(pending));
+        if (notice == DetailNotice.Deleted
+            && (LoadState)model.State.Peek() == LoadState.Ready
+            && cur.ContextUri is { Length: > 0 })
+            return cur with { Notice = notice, DeletedByOwner = true };
+        return fresh with { Notice = notice };
     }
 
     // Album cfg is release-kind-dependent (single = one-track layout, compilation = various-artists rows); playlist/liked fixed.
@@ -224,7 +338,7 @@ sealed class DetailPage : Component
     {
         DetailKind.Playlist => await LoadPlaylistWithSaveCountAsync(svc, id ?? "", ct),
         DetailKind.Liked => MapLiked(await svc.Library.GetLikedSongsAsync(ct)),
-        DetailKind.Show => MapShow(await svc.Library.GetShowAsync(id ?? "", ct)),
+        DetailKind.Show => MapShow(await svc.Library.GetShowAsync(id ?? "", ct: ct)),
         _ => await LoadAlbumDetailAsync(svc, id ?? "", ct),
     };
 
@@ -244,26 +358,21 @@ sealed class DetailPage : Component
             if (link is null) return DetailModel.Empty;   // unresolvable (offline / 404 / dead entity) → the existing empty state
             albumUri = link.AlbumUri;
         }
-        var album = await svc.Library.GetAlbumAsync(albumUri, ct).ConfigureAwait(false);
+        // Rich, not Open: the ©/℗ line and the Plays star ride the SAME catalogue POST as the tracklist (kind 183
+        // fused + one trait POST), so awaiting them here costs nothing extra and stops them popping in after paint.
+        var album = await svc.Library.GetAlbumAsync(albumUri, HydrationLevel.Rich, ct).ConfigureAwait(false);
         if (link is null
             && (album.IsPreRelease || PreReleaseDerivation.UpcomingAt(album, DateTimeOffset.UtcNow) is not null))
             link = await svc.PreRelease.ResolveAsync(albumUri, ct).ConfigureAwait(false);
         return MapAlbum(album, link);
     }
 
+    /// <summary>The playlist read. The owner-only permission GET that used to hang off this call is GONE: the store
+    /// header is now the canonical permission state (<c>LibrarySync.SetOpenContext</c> seeds <c>IsPublic</c> /
+    /// <c>BasePermissionRevision</c> / <c>Capabilities.IsCollaborative</c> on open, and a dealer permission push
+    /// updates it and bumps the uri), so the page reads it instead of paying a request per open and racing the push.</summary>
     static async Task<Playlist?> LoadPlaylistAsync(Services svc, string uri, CancellationToken ct)
-    {
-        var p = await svc.Library.GetPlaylistAsync(uri, ct).ConfigureAwait(false);
-        if (p is null || !p.Capabilities.IsOwner || svc.RealPlaylistMutations is null) return p;
-        try
-        {
-            var perm = await svc.RealPlaylistMutations.GetBasePermissionAsync(p.Uri, ct).ConfigureAwait(false);
-            if (perm is { } bp)
-                return p with { IsPublic = bp.IsPublic, BasePermissionRevision = bp.Revision };
-        }
-        catch { /* offline / transient — keep default visibility */ }
-        return p;
-    }
+        => await svc.Library.GetPlaylistAsync(uri, ct: ct).ConfigureAwait(false);
 
     internal static async Task<DetailModel?> ReloadPlaylistDetailAsync(Services svc, string uri, CancellationToken ct = default)
     {
@@ -277,13 +386,21 @@ sealed class DetailPage : Component
     {
         if (s is null) return DetailModel.Empty;
         var eps = s.Episodes ?? Array.Empty<Episode>();
-        string meta = s.Publisher + " · " + Strings.Podcast.EpisodeCount(eps.Count);
+        // The header counts what the show HAS, not what has been paged in — a 700-episode show that opened with 300
+        // resident rows still says 700 episodes.
+        int total = s.TotalEpisodes > eps.Count ? s.TotalEpisodes : eps.Count;
+        string meta = s.Publisher + " · " + Strings.Podcast.EpisodeCount(total);
         return new DetailModel(
             Title: s.Name, Cover: s.Cover, ContextUri: s.Uri,
             BadgeType: Loc.Get(Strings.Podcast.Show), Year: null, OwnerName: null, OwnerImage: null,
             Artists: Array.Empty<ArtistRef>(), Description: s.Description, MetaLine: meta,
             Tracks: Array.Empty<Track>(), AboutArtist: null,
-            Episodes: eps, Publisher: s.Publisher);
+            Episodes: eps, Publisher: s.Publisher, TotalEpisodes: total)
+        {
+            // Carried through verbatim: the load-more gate is the CURSOR, not `total > eps.Count` (an episode that
+            // cannot hydrate would otherwise pin the pill on screen forever). See Show.PagedThrough.
+            PagedThrough = Math.Max(s.PagedThrough, eps.Count),
+        };
     }
 
     /// <summary>How long the header will wait on the save count before rendering without it. The popcount body is
@@ -309,28 +426,36 @@ sealed class DetailPage : Component
     /// <summary>The playlist route id as a uri. Ids arrive bare from the route but a full uri also flows through some
     /// call paths, so accept both rather than producing `spotify:playlist:spotify:playlist:…`.</summary>
     static string PlaylistUri(string id)
-        => id.StartsWith("spotify:", StringComparison.Ordinal) ? id : "spotify:playlist:" + id;
+        => EntityUri.Parse(id).IsSpotify ? id : "spotify:playlist:" + id;   // "is it already a uri?" via the ONE parser
 
     static DetailModel MapPlaylist(Playlist p, long? saveCount = null)
     {
         var tracks = p.Tracks ?? Array.Empty<Track>();
-        // "50 songs · 12,345 saves · 2 hr 59 min" when the count is known, else the existing two-segment line. A
-        // playlist genuinely at 0 saves (a brand-new private one) also omits the segment rather than reading "0 saves".
-        string songs = Strings.Detail.SongCount(p.TrackCount);
-        string total = DetailFormat.TotalTime(DetailFormat.TotalMs(tracks));
-        string meta = saveCount is > 0 and var n
-            ? Strings.Detail.MetaLineSaved(songs, Strings.Detail.SaveCount(n), total)
-            : Strings.Detail.MetaLine(songs, total);
         // Data-drive the optional columns: show Date-added if any track has one, and Added-by only when the playlist is
         // collaborative (≥2 distinct contributors) — matching the reference app's "hide unless it carries signal" rule.
         bool hasDate = false, hasVideo = false;
+        int episodes = 0;
         var contributors = new HashSet<string>();
         for (int i = 0; i < tracks.Count; i++)
         {
             if (tracks[i].AddedAt is not null) hasDate = true;
             if (VideoPresence.HasVideo(tracks[i])) hasVideo = true;   // a user-attached mp4 also earns the Video column
             if (tracks[i].AddedBy is { } by) contributors.Add(by);
+            // A playlist's membership is a set of PLAYABLES, and an episode is one (EpisodeAsTrack, design §1.5). The
+            // header counts what is actually in there instead of calling every row a song.
+            if (EntityUri.KindOf(tracks[i].Uri) == EntityKind.Episode) episodes++;
         }
+        // "50 songs · 12,345 saves · 2 hr 59 min" when the count is known, else the existing two-segment line. A
+        // playlist genuinely at 0 saves (a brand-new private one) also omits the segment rather than reading "0 saves".
+        // MIXED content states both kinds ("48 songs · 3 episodes"): the header count is the SERVER's item total, so
+        // the songs half is that total minus the episodes we joined — a songs-only playlist is byte-identical to before.
+        string songs = episodes > 0
+            ? Strings.Detail.SongCount(Math.Max(0, p.TrackCount - episodes)) + " · " + Strings.Podcast.EpisodeCount(episodes)
+            : Strings.Detail.SongCount(p.TrackCount);
+        string total = DetailFormat.TotalTime(DetailFormat.TotalMs(tracks));
+        string meta = saveCount is > 0 and var n
+            ? Strings.Detail.MetaLineSaved(songs, Strings.Detail.SaveCount(n), total)
+            : Strings.Detail.MetaLine(songs, total);
         LogVideoSweep("playlist", p.Uri, tracks);
         return new DetailModel(
             Title: p.Name, Cover: p.Cover, ContextUri: p.Uri,
@@ -345,7 +470,14 @@ sealed class DetailPage : Component
             BasePermissionRevision: p.BasePermissionRevision,
             Tuning: p.Tuning,
             ShareUrl: SpotifyPlaylistWebUrl(p.Uri),
-            ExpiresAtMs: p.DaylistExpiresAtMs, CreatedAtMs: p.DaylistCreatedAtMs);
+            ExpiresAtMs: p.DaylistExpiresAtMs, CreatedAtMs: p.DaylistCreatedAtMs)
+        {
+            // A cold open of a tombstoned / revoked uri renders the SHELL with a notice, never the error state: the
+            // header and (evicted) membership are still the truest thing we can show, and "this playlist was deleted"
+            // is a better answer than a generic failure page.
+            DeletedByOwner = p.DeletedByOwner,
+            Notice = PlaylistPageNoticeRules.Cold(p.DeletedByOwner, p.Capabilities.CanView, p.Capabilities.IsOwner),
+        };
     }
 
     // ── the per-page-open association sweep (video.assoc.page) ────────────────────────────────────────────────────────
@@ -358,7 +490,7 @@ sealed class DetailPage : Component
     // The uri SAMPLE is the load-bearing field: the reported symptom ("the playlist says no, searching the same song says
     // yes") is only decidable by comparing the uri a playlist row carries against the uri the search response carried, and
     // relinked/alternative track uris are the expected way for those to differ. The app persists no alias→canonical map
-    // (only SpotifyVideoService.RecoverCanonicalAsync derives one, transiently), so an "an alternate uri HAS a video"
+    // (only the VideoProjector's canonical recovery derives one, transiently), so an "an alternate uri HAS a video"
     // count cannot be computed here without inventing a resolver — read `video.assoc.recover*` for that half instead.
     static void LogVideoSweep(string kind, string contextUri, IReadOnlyList<Track> tracks)
     {
@@ -374,10 +506,10 @@ sealed class DetailPage : Component
             if (assoc is { HasVideo: true }) { withVideo++; continue; }
             if (VideoPresence.HasOverride(uri)) { overrideOnly++; continue; }
             if (assoc is null) noRow++; else negative++;
-            if (sampled < 6 && uri.StartsWith("spotify:track:", StringComparison.Ordinal))
+            if (sampled < 6 && EntityUri.Parse(uri) is { IsSpotify: true, Kind: EntityKind.Track })
             {
                 if (sampled > 0) missSample.Append(',');
-                missSample.Append(uri["spotify:track:".Length..]);
+                missSample.Append(EntityUri.IdOf(uri));
                 sampled++;
             }
         }

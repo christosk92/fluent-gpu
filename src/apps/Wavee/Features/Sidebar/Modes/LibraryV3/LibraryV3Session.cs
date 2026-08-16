@@ -37,6 +37,8 @@ sealed class LibraryV3Session
     // ── services, refreshed by the mode root each render (never captured at mount) ─────────────────────────────────────
     public SidebarPreferences? Prefs;
     public LibraryBridge? Library;
+    /// <summary>The ambient action bag — the ONE create path (<c>PlaylistCreateFlow</c>) and the folder verbs read it.</summary>
+    public ActionServices? Acts;
 
     /// <summary>The built content ORDER (re-grouped / drilled). Owned here because both the mode root (which builds it while
     /// shaping the planner input) and the chrome (which asks whether it is empty) need the same instance.</summary>
@@ -193,28 +195,12 @@ sealed class LibraryV3Session
     /// <summary>Expand the pane from the rail (the rail's "Your Library" tile).</summary>
     public void Expand() => Prefs?.SetCollapsed(false);
 
-    /// <summary>Create-playlist — the Classic flow verbatim (POST a real empty playlist, then navigate to it), so the
-    /// designs cannot drift on what "+" does.</summary>
+    /// <summary>Create-playlist — the ONE create path (<see cref="PlaylistCreateFlow"/>), so the three designs cannot
+    /// drift on what "+" does, on the numbered name it gets, or on how a rejected create is reported.</summary>
     public void CreatePlaylist()
     {
-        if (Library is not { } lib) return;
-        _ = Run();
-        async System.Threading.Tasks.Task Run()
-        {
-            try
-            {
-                string uri = await lib.CreatePlaylistAsync(Loc.Get(Strings.Sidebar.NewPlaylist)).ConfigureAwait(false);
-                Go("pl:" + uri, null);
-            }
-            catch (Exception ex)
-            {
-                WaveeLog.Instance.Error("sidebar", "sidebar.action.failed", "Could not create playlist", ex,
-                    WaveeLogField.Of("action", "createPlaylist"),
-                    WaveeLogField.Of("design", "libraryV3"));
-                Toast.Show(Loc.Get(Strings.Common.ErrorTitle),
-                    new ToastOptions { Severity = InfoBarSeverity.Error });
-            }
-        }
+        if (Acts is not { } acts) return;
+        PlaylistCreateFlow.Create(acts, default, navigate: true);
     }
 
     /// <summary>Clear filter + qualifier + search in one gesture (the overflow menu's "Clear filters").</summary>

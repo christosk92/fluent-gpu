@@ -5,6 +5,8 @@ using System.Threading.Tasks;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
+using FluentGpu.Hooks;
+using FluentGpu.Input;
 using FluentGpu.Localization;
 using Wavee.Core;
 
@@ -94,8 +96,16 @@ sealed record WaveeResourceDragPayload(
     /// deposit it. A track payload without this list resolves nothing (<c>CanCopyTracks</c> false) and is inert on the
     /// exact surfaces a song drag exists for.</summary>
     public static WaveeResourceDragPayload ForTrack(Track track)
-        => new(WaveeResourceKind.Track, track.Id is { Length: > 0 } id ? id : track.Uri, track.Uri, track.Title,
+        => new(PlayableKind(track.Uri), track.Id is { Length: > 0 } id ? id : track.Uri, track.Uri, track.Title,
                new[] { track });
+
+    /// <summary>The drag kind of one PLAYABLE row. An episode rides the same <c>Track</c> read-model as a song
+    /// (<c>EpisodeAsTrack</c>, design §1.5) but it is not one, and the chip's glyph and the drop captions read the KIND
+    /// — so the row states which it is. Anything else (a song, a local import whose uri is its encoded file path, an
+    /// unclassifiable uri) stays <see cref="WaveeResourceKind.Track"/>: it is a playable with a track snapshot behind
+    /// it, which is exactly what every destination acts on.</summary>
+    public static WaveeResourceKind PlayableKind(string uri)
+        => EntityUri.KindOf(uri) == EntityKind.Episode ? WaveeResourceKind.Episode : WaveeResourceKind.Track;
 
     /// <summary>A track SELECTION from a list that is not an editable playlist (search results, an album drawer, the
     /// top-tracks chart, a recommendation strip). No <c>SourcePlaylistUri</c>/<c>SourceRows</c>: with no membership
@@ -124,10 +134,10 @@ sealed record WaveeResourceDragPayload(
     {
         if (svc is null || uri.Length == 0) return null;
         if (kind == WaveeResourceKind.Playlist)
-            return async ct => (await svc.Library.GetPlaylistAsync(uri, ct).ConfigureAwait(false))?.Tracks
+            return async ct => (await svc.Library.GetPlaylistAsync(uri, ct: ct).ConfigureAwait(false))?.Tracks
                 ?? Array.Empty<Track>();
         if (kind == WaveeResourceKind.Album)
-            return async ct => (await svc.Library.GetAlbumAsync(uri, ct).ConfigureAwait(false))?.Tracks
+            return async ct => (await svc.Library.GetAlbumAsync(uri, ct: ct).ConfigureAwait(false))?.Tracks
                 ?? Array.Empty<Track>();
         // Deliberately NOT resolved:
         //  • ARTIST — locked product decision: an artist has no single obvious track set, so an artist dropped on a
@@ -192,6 +202,34 @@ static class WaveeResourceDrag
         _ => null,
     };
 
+    /// <summary>Is a SAME-LIST reorder of <paramref name="playlistUri"/> live right now?
+    /// <para>The one question a page has to answer before it publishes a re-projection of its own rows: while the user
+    /// is aiming a drag at those very rows, a fresh membership snapshot re-keys the list under the pointer and the drop
+    /// lands somewhere they did not aim (<c>PlaylistReorderDefer</c>). A FOREIGN session — a drag from another list, an
+    /// OS file drag — has no stake in this list's order and is deliberately not reported.</para>
+    /// <para>Reads the live <c>DragDropContext</c> session through the host's drag-state seam, so it is a plain
+    /// synchronous read with no subscription: the caller is an event/refresh path, not a render.</para></summary>
+    public static bool LiveSameListReorder(string? playlistUri)
+    {
+        if (string.IsNullOrEmpty(playlistUri)) return false;
+        var state = InputHooks.Current.Default.GetDragState?.Invoke() ?? default;
+        if (!state.Active) return false;
+        return Unwrap(state.Payload) is { SourceRows.Count: > 0 } resource
+               && string.Equals(resource.SourcePlaylistUri, playlistUri, StringComparison.Ordinal);
+    }
+
+    /// <summary>Is a ROOTLIST organisation drag (a playlist or folder being re-filed in the sidebar tree) live right
+    /// now? The sibling of <see cref="LiveSameListReorder"/>, and it exists for the same reason: while the user is
+    /// aiming at the tree's rows, a fresh projection re-keys those rows under the pointer and the drop lands somewhere
+    /// they did not aim. Same seam, same plain synchronous read, no subscription.</summary>
+    public static bool LiveRootlistDrag()
+    {
+        var state = InputHooks.Current.Default.GetDragState?.Invoke() ?? default;
+        if (!state.Active) return false;
+        return Unwrap(state.Payload) is { RootlistItem: true } resource
+               && resource.Kind is WaveeResourceKind.Playlist or WaveeResourceKind.Folder;
+    }
+
     /// <summary>The app's chip DATA for a live drag — Wavee's whole contribution to the drag visual. The framework
     /// renders it (opaque compact card, art + title + subtitle, corner count badge and stacked backdrop for a
     /// multi-select, tilt, caption, not-allowed cue, cursor offset, window clamp); this decides only what it says.
@@ -222,7 +260,14 @@ static class WaveeResourceDrag
             // gesture gave no evidence it was even armed for a playlist. A live target's caption supersedes it the moment
             // one accepts, and a refusal reason supersedes it when one refuses. Loc.Get is a table lookup of an interned
             // string — no interpolation, so this stays safe inside the 0-alloc frame region.
-            RestingCaption: payload.CanCopyTracks ? Loc.Get(Strings.Drag.DragOntoPlaylist) : null);
+            //
+            // A ROOTLIST payload gets its OWN verb (D14): "Drag onto a playlist to add" is the wrong sentence for a
+            // gesture that is organising the sidebar — the user is not adding anything, and a folder drag (which can add
+            // nothing at all) used to travel with no caption whatsoever.
+            RestingCaption: payload.RootlistItem
+                    && payload.Kind is WaveeResourceKind.Playlist or WaveeResourceKind.Folder
+                ? Loc.Get(Strings.Drag.OrganizeHint)
+                : payload.CanCopyTracks ? Loc.Get(Strings.Drag.DragOntoPlaylist) : null);
     }
 
     /// <summary>The one preview mounted at the shell root (<c>DragPreviewLayer.Of</c>).</summary>
@@ -265,20 +310,62 @@ static class WaveeResourceDrop
     public static bool CanDepositTracks(object? payload)
         => WaveeResourceDrag.Unwrap(payload) is { CanCopyTracks: true };
 
-    public static void MoveRootlist(ActionServices acts, object? payload,
-                                    WaveeResourceDragPayload target, RootlistDropPlacement placement)
+    /// <summary>File one rootlist item at a RESOLVED destination.
+    ///
+    /// <para>Fire-and-forget with an error-only toast is what this used to be (D13): a successful move — the whole point
+    /// of the gesture — produced no confirmation, no announcement and no way back. It now says where the item landed,
+    /// announces it for a screen reader (the same discipline as <c>FolderActions</c> and the bridge's announced-edit
+    /// chokepoint), and offers the INVERSE move as Undo. The inverse rides the very same seam, so there is no second
+    /// mutation path to keep in sync — <paramref name="undoAnchor"/> is simply where the item was before.</para></summary>
+    /// <param name="destinationName">The folder the item landed in; empty = the top level ("Your Library").</param>
+    public static void MoveRootlist(ActionServices acts, object? payload, RootlistItemRef target,
+                                    RootlistDropPlacement placement, string? destinationName,
+                                    RootlistItemRef? undoAnchor = null,
+                                    RootlistDropPlacement undoPlacement = RootlistDropPlacement.After)
     {
         if (acts.Library is not { } lib || WaveeResourceDrag.Unwrap(payload) is not { RootlistItem: true } source) return;
         var sourceRef = RootRef(source);
-        var targetRef = RootRef(target);
-        if (sourceRef.Key.Length == 0 || targetRef.Key.Length == 0) return;
+        if (sourceRef.Key.Length == 0 || target.Key.Length == 0) return;
         _ = Run();
 
         async Task Run()
         {
-            try { await lib.MoveRootlistItemAsync(sourceRef, targetRef, placement).ConfigureAwait(false); }
-            catch (Exception ex) { acts.Post?.Invoke(() => PlaylistEditErrors.Toast(ex)); }
+            try { await lib.MoveRootlistItemAsync(sourceRef, target, placement).ConfigureAwait(false); }
+            // Mapped by VERB: this is an ORDERING that did not stick, not an add and not a remove — never the raw
+            // exception text.
+            catch (Exception ex)
+            {
+                acts.Post?.Invoke(() => PlaylistEditErrors.Toast(ex, PlaylistEditVerb.Reorder));
+                return;
+            }
+            acts.Post?.Invoke(() => Confirm(acts, lib, sourceRef, destinationName, undoAnchor, undoPlacement));
         }
+    }
+
+    static void Confirm(ActionServices acts, LibraryBridge lib, RootlistItemRef source, string? destinationName,
+                        RootlistItemRef? undoAnchor, RootlistDropPlacement undoPlacement)
+    {
+        string where = destinationName is { Length: > 0 } name
+            ? Strings.Drag.MovedTo(name)
+            : Loc.Get(Strings.Drag.MovedToLibrary);
+        // A rootlist move is a SILENT structural change to a list the user may not be looking at — announced for the
+        // same reason a folder create is (FolderActions.Announce): one call at the one chokepoint.
+        if (Announcer.IsAvailable) Announcer.SayThrottled(where);
+        var options = new ToastOptions { Severity = InfoBarSeverity.Success };
+        if (undoAnchor is { } anchor && anchor.Key.Length > 0)
+            options = options with
+            {
+                ActionLabel = Loc.Get(Strings.Sidebar.Pin.Undo),
+                OnAction = () => _ = UndoAsync(acts, lib, source, anchor, undoPlacement),
+            };
+        Toast.Show(where, options);
+    }
+
+    static async Task UndoAsync(ActionServices acts, LibraryBridge lib, RootlistItemRef source,
+                                RootlistItemRef anchor, RootlistDropPlacement placement)
+    {
+        try { await lib.MoveRootlistItemAsync(source, anchor, placement).ConfigureAwait(false); }
+        catch (Exception ex) { acts.Post?.Invoke(() => PlaylistEditErrors.Toast(ex, PlaylistEditVerb.Reorder)); }
     }
 
     static RootlistItemRef RootRef(WaveeResourceDragPayload payload)
@@ -330,9 +417,9 @@ static class WaveeResourceDrop
                 if (sameList && insertionIndex is { } at && resource.SourceRows is { } rows)
                 {
                     // `at` is the PRE-move insertion index ("insert before the row currently at this index") — the
-                    // convention PlaylistMutationSource.BuildMoveOps / UserPlaylistSource.MoveRows both implement by
+                    // convention PlaylistMutationSource.BuildKeyedMove / UserPlaylistSource.MoveRows both implement by
                     // discounting the rows removed above it. Pinned by MoveRowsConventionTests; do NOT pre-correct here.
-                    await lib.MovePlaylistRowsAsync(targetUri, rows, at).ConfigureAwait(false);
+                    await lib.MovePlaylistRowsTrackedAsync(targetUri, rows, at).ConfigureAwait(false);
                     moved = true;
                 }
                 else
@@ -350,9 +437,12 @@ static class WaveeResourceDrop
                         new ToastOptions { Severity = InfoBarSeverity.Success }));
                 return true;
             }
+            // Mapped by VERB: a refused reorder and a refused copy are different sentences, and a same-list drop is
+            // always the former. The rows have already snapped back (the store rolled the optimistic move back) — this
+            // is the only thing that says why.
             catch (Exception ex)
             {
-                acts.Post?.Invoke(() => PlaylistEditErrors.Toast(ex));
+                acts.Post?.Invoke(() => PlaylistEditErrors.Toast(ex, sameList ? PlaylistEditVerb.Reorder : PlaylistEditVerb.Add));
                 return false;
             }
         }

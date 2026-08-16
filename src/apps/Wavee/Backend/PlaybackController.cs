@@ -1947,7 +1947,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
 
     async Task MaybeSeekEpisodeResumeAsync(Track track, CancellationToken ct)
     {
-        if (!track.Uri.StartsWith("spotify:episode:", StringComparison.Ordinal) || EpisodeResumeMicros is not { } fn)
+        if (EntityUri.KindOf(track.Uri) != EntityKind.Episode || EpisodeResumeMicros is not { } fn)
             return;
         try
         {
@@ -2903,16 +2903,6 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         return false;
     }
 
-    async Task ForwardTransferAsync(string target, CancellationToken ct)
-    {
-        if (_outbound is null) { _log.Info($"transfer → {target} ignored — no outbound control"); return; }
-        var json = OutboundEnvelope.Command(_ourDeviceId, "transfer", Array.Empty<(string, object)>(), NewId(), NewId(), Now(), NewId());
-        var r = await _outbound.SendAsync(target, json, ct).ConfigureAwait(false);
-        if (r.Ok) { _log.Info($"outbound transfer → {target}: ok (ack {r.AckId})"); return; }
-        _log.Info($"outbound transfer → {target}: failed ({r.Status})");   // parity with the other forwards (was silent)
-        OnRemoteCommandFailed?.Invoke();
-    }
-
     static string NewId() => Guid.NewGuid().ToString("N");
     static long Now() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
     // The queue_revision to echo on an outbound set_queue — the last revision the cluster reported (held by the projection;
@@ -3111,16 +3101,9 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         return result;
     }
 
-    static int IndexOfUri(IReadOnlyList<QueuedTrack> tracks, string uri)
-    {
-        for (int i = 0; i < tracks.Count; i++) if (tracks[i].Uri == uri) return i;
-        return -1;
-    }
-
     static Track SyntheticTrack(string uri)
     {
-        string id = uri.LastIndexOf(':') is var i && i >= 0 && i + 1 < uri.Length ? uri[(i + 1)..] : uri;
-        return new Track(id, uri, uri, Array.Empty<ArtistRef>(), new AlbumRef("", "", ""), 0, false, null);
+        return new Track(EntityUri.IdOf(uri), uri, uri, Array.Empty<ArtistRef>(), new AlbumRef("", "", ""), 0, false, null);
     }
 
     public void Dispose()

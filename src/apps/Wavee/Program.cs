@@ -288,7 +288,10 @@ static class Program
         // Single-instance + wavee:// protocol — normal windowed path only. Probes already returned above;
         // --screenshot / --frames (harness) skip the gate so a visual-diff loop can spawn freely.
         SingleInstanceGate? instanceGate = null;
-        if (screenshot is null && frames < 0)
+        // WaveeNavProbe.Requested skips it too: a diagnostic probe drives its OWN window and must never be handed to a
+        // Wavee the user already has open. Without this the probe process exits 0 having done nothing — which reads
+        // exactly like "the probe ran and found nothing", the worst possible failure mode for a measurement tool.
+        if (screenshot is null && frames < 0 && !WaveeNavProbe.Requested)
         {
             instanceGate = new SingleInstanceGate();
             var activation = ActivationArgs.FromCurrentProcess("wavee");

@@ -74,7 +74,7 @@ public class PlaybackAttributionTests
         IContextResolver? ctx = null, IOutboundControl? outbound = null, IMediaHost? video = null)
     {
         var host = new RecordingHost();
-        var proj = new NowPlayingProjection("us", () => 0);
+        var proj = new NowPlayingProjection("us", NotOwnedEntityHydrator.Instance, new InMemoryStore(), () => 0);
         var log = new CapturingWaveeLog();
         var c = new PlaybackController(host, new StubTrackResolver(), proj,
             ctx ?? new FakeContextResolver(new[] { "spotify:track:a", "spotify:track:b", "spotify:track:c" }),

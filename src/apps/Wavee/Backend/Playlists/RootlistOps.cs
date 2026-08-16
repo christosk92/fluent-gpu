@@ -18,6 +18,30 @@ namespace Wavee.Backend.Playlists;
 
 
 
+/// <summary>What a rootlist <c>/changes</c> POST left behind. The distinction that matters: a 409 means our INDICES are
+/// stale and the op must be rebuilt against the freshly bootstrapped marker stream, while a 5xx/network fault means the
+/// op is still perfectly valid and only the wire failed — replaying it verbatim is correct, and a queued op must NOT be
+/// dead-lettered for it (that is what would leave a created playlist without its rootlist row).</summary>
+public enum RootlistPostOutcome : byte { Applied, Rebased, Retry }
+
+/// <summary>Why <see cref="RootlistOps.TryBuildMove(System.Collections.Generic.IReadOnlyList{RootlistEntry}, RootlistItemRef, RootlistItemRef, RootlistDropPlacement, out PlaylistOp?, out RootlistMoveCheck)"/>
+/// built an op — or did not. Each value is a distinct SENTENCE upstream, which is the whole point: these were all one
+/// silent <c>false</c>, and "the drag did nothing" was the only symptom the user ever saw.</summary>
+public enum RootlistMoveCheck : byte
+{
+    Ok = 0,
+    /// <summary>The source or the target is no longer in the rootlist.</summary>
+    Missing = 1,
+    /// <summary>Source and target are the same row.</summary>
+    SameItem = 2,
+    /// <summary>The placement cannot be expressed (Inside something that is not a folder).</summary>
+    Invalid = 3,
+    /// <summary>The destination is where the item already sits.</summary>
+    NoOp = 4,
+    /// <summary>A folder filed into its own subtree.</summary>
+    Cycle = 5,
+}
+
 /// <summary>Rootlist index lookup + POST /rootlist/changes helpers (visibility, delete, follow).</summary>
 
 public static class RootlistOps
@@ -66,52 +90,55 @@ public static class RootlistOps
 
 
 
+    /// <summary>Fold a rootlist /changes or bootstrap GET response into the store and return the base revision the next
+    /// write must use. I1: a revision that is not the 24-byte head is NEVER stored and NEVER returned — the caller would
+    /// otherwise POST its next ListChanges against a malformed base. Rows still land (the 1-arg overload preserves the
+    /// revision we already trust); an unparseable body is a LOGGED drop, not a silent one.</summary>
     public static byte[]? ApplyRootlistResponse(IStore store, byte[] body)
-
     {
-
         var bytes = SpotifyZstd.MaybeDecompressZstd(body);
-
         if (bytes.Length == 0) return store.RootlistRevision();
-
         Pl.SelectedListContent slc;
-
         try { slc = Pl.SelectedListContent.Parser.ParseFrom(bytes); }
-
-        catch { return store.RootlistRevision(); }
-
+        catch
+        {
+            PlaylistMutationDiagnostics.DealerDrop("rootlist/changes", "unparseable", bytes.Length);
+            return store.RootlistRevision();
+        }
         var rev = PlaylistWireMapper.ResultingRevision(slc);
+        bool storable = PlaylistRevisions.IsWellFormed(rev);
+        if (!storable && rev is not null)
+            PlaylistMutationDiagnostics.RootlistBadRevision(rev.Length, "rootlist-response");
 
         if (slc.Contents is { } contents && contents.Items.Count > 0)
-
         {
-
             var uris = new List<string>(contents.Items.Count);
-
-            foreach (var it in contents.Items) uris.Add(it.Uri);
-
-            store.SetRootlist(RootlistTreeBuilder.EntriesFromUris(uris), rev);
-
+            var timestamps = new List<long>(contents.Items.Count);
+            foreach (var it in contents.Items)
+            {
+                uris.Add(it.Uri);
+                timestamps.Add(it.Attributes is { HasTimestamp: true } a ? a.Timestamp : 0);
+            }
+            var entries = RootlistTreeBuilder.EntriesFromUris(uris, timestamps);
+            if (storable) store.SetRootlist(entries, rev);
+            else store.SetRootlist(entries);           // 1-arg: rows adopted, the stored revision preserved
         }
-
-        else if (rev is not null)
-
+        else if (storable)
             store.SetRootlist(store.Rootlist(), rev);
 
-        return rev ?? store.RootlistRevision();
-
+        return storable ? rev : store.RootlistRevision();
     }
 
 
 
     /// <summary>POST rootlist ops; returns false on 409 after rebasing (caller may retry).</summary>
 
-    public static async Task<bool> TryPostRootlistOpsAsync(
+    public static async Task<RootlistPostOutcome> TryPostRootlistOpsAsync(
         IStore store, ITransport transport, SessionContext ctx,
         IReadOnlyList<PlaylistOp> ops, string? logUri, CancellationToken ct)
         => await TryPostRootlistOpsAsync(store, transport, () => "", ctx, ops, logUri, ct).ConfigureAwait(false);
 
-    public static async Task<bool> TryPostRootlistOpsAsync(
+    public static async Task<RootlistPostOutcome> TryPostRootlistOpsAsync(
 
         IStore store, ITransport transport, Func<string> spclientBaseUrl, SessionContext ctx,
 
@@ -133,7 +160,7 @@ public static class RootlistOps
 
             headers: SpotifyHeaders.PlaylistV2Mutation(ctx.Locale, spclientBaseUrl())).ConfigureAwait(false);
 
-        if (r.Ok) { ApplyRootlistResponse(store, r.Body); return true; }
+        if (r.Ok) { ApplyRootlistResponse(store, r.Body); return RootlistPostOutcome.Applied; }
 
         if (r.Status == 409)
 
@@ -143,13 +170,29 @@ public static class RootlistOps
 
             if (logUri is not null) PlaylistMutationDiagnostics.RootlistConflict(logUri);
 
-            return false;
+            return RootlistPostOutcome.Rebased;
 
+        }
+
+        // 5xx / no status at all (a transport-level fault) leaves the op VALID: retry it verbatim. Throwing here is
+        // what used to dead-letter a queued rootlist ADD on a transient server hiccup.
+        if (r.Status is 0 or >= 500)
+        {
+            if (logUri is not null) PlaylistMutationDiagnostics.RootlistPostFailed(logUri, r.Status, ops[0].Kind.ToString());
+            return RootlistPostOutcome.Retry;
         }
 
         if (logUri is not null) PlaylistMutationDiagnostics.RootlistPostFailed(logUri, r.Status, ops[0].Kind.ToString());
 
-        throw new InvalidOperationException($"rootlist changes failed ({r.Status})");
+        throw r.Status switch
+        {
+            403 => new PlaylistMutationException(PlaylistMutationFailure.Forbidden,
+                "You no longer have permission to change that."),
+            404 or 410 => new PlaylistMutationException(PlaylistMutationFailure.Deleted,
+                "That playlist no longer exists."),
+            _ => new PlaylistMutationException(PlaylistMutationFailure.Unknown,
+                $"The rootlist change was rejected ({r.Status})."),
+        };
 
     }
 
@@ -163,9 +206,13 @@ public static class RootlistOps
 
     {
 
-        if (!await TryPostRootlistOpsAsync(store, transport, spclientBaseUrl, ctx, ops, logUri, ct).ConfigureAwait(false))
-
-            throw new InvalidOperationException("rootlist revision conflict (retry)");
+        var outcome = await TryPostRootlistOpsAsync(store, transport, spclientBaseUrl, ctx, ops, logUri, ct).ConfigureAwait(false);
+        if (outcome == RootlistPostOutcome.Rebased)
+            throw new PlaylistMutationException(PlaylistMutationFailure.Conflict,
+                "Your library changed while that was saving — try again.");
+        if (outcome == RootlistPostOutcome.Retry)
+            throw new PlaylistMutationException(PlaylistMutationFailure.Unknown,
+                "Spotify could not be reached — that change was not saved.");
 
     }
 
@@ -193,11 +240,25 @@ public static class RootlistOps
     /// against the pre-removal marker stream, exactly like <see cref="PlaylistDiffApplier"/>.</summary>
     public static bool TryBuildMove(IReadOnlyList<RootlistEntry> entries, RootlistItemRef source,
                                     RootlistItemRef target, RootlistDropPlacement placement, out PlaylistOp? op)
+        => TryBuildMove(entries, source, target, placement, out op, out _);
+
+    /// <summary>The same builder, WITH the reason it refused.
+    ///
+    /// <para>Every one of these refusals used to reach the user as a bare <c>false</c> — nothing happened, no toast, no
+    /// cue (D2/D8). The rule itself is unchanged and still lives here, where the index math is; naming the reason is what
+    /// lets a caller refuse BEFORE the drop instead of discovering it three layers down.</para></summary>
+    public static bool TryBuildMove(IReadOnlyList<RootlistEntry> entries, RootlistItemRef source,
+                                    RootlistItemRef target, RootlistDropPlacement placement,
+                                    out PlaylistOp? op, out RootlistMoveCheck reason)
     {
         op = null;
         if (!TryRange(entries, source, out int from, out int end)
-            || !TryRange(entries, target, out int targetFrom, out int targetEnd)) return false;
-        if (from == targetFrom) return false;
+            || !TryRange(entries, target, out int targetFrom, out int targetEnd))
+        {
+            reason = RootlistMoveCheck.Missing;
+            return false;
+        }
+        if (from == targetFrom) { reason = RootlistMoveCheck.SameItem; return false; }
         int to = placement switch
         {
             RootlistDropPlacement.Before => targetFrom,
@@ -205,11 +266,155 @@ public static class RootlistOps
             RootlistDropPlacement.Inside when target.IsFolder => Math.Max(targetFrom + 1, targetEnd - 1),
             _ => -1,
         };
-        if (to < 0 || (to >= from && to <= end)) return false; // includes folder-into-itself / its descendants
+        // Inside a NON-folder is not a placement this stream can express at all.
+        if (to < 0) { reason = RootlistMoveCheck.Invalid; return false; }
+        // Landing on either edge of the span it already occupies is a no-op; STRICTLY inside it is a folder being filed
+        // into its own subtree.
+        if (to == from || to == end) { reason = RootlistMoveCheck.NoOp; return false; }
+        if (to > from && to < end) { reason = RootlistMoveCheck.Cycle; return false; }
         op = new PlaylistOp(PlaylistOpKind.Move, FromIndex: from, Length: end - from, ToIndex: to);
+        reason = RootlistMoveCheck.Ok;
         return true;
     }
 
+    /// <summary>Would this move be accepted, and if not why? Pure pre-validation over the CURRENT marker stream, so a UI
+    /// can refuse a no-op or a cycle without duplicating the index math this file owns.</summary>
+    public static RootlistMoveCheck CheckMove(IReadOnlyList<RootlistEntry> entries, RootlistItemRef source,
+                                              RootlistItemRef target, RootlistDropPlacement placement)
+    {
+        TryBuildMove(entries, source, target, placement, out _, out var reason);
+        return reason;
+    }
+
+    // ── folder CRUD (the pure builders; every one of them is byte-exact against a desktop capture) ────────────────────
+    // A folder is a BALANCED MARKER PAIR inside the flat rootlist item stream:
+    //     spotify:start-group:{groupId}:{urlencoded name}   …children…   spotify:end-group:{groupId}
+    // so every folder operation is an ordinary index ADD/REM on that stream. All three builders are pure: they take the
+    // CURRENT entries, return the ops, and never touch the store — which is what makes them testable against the wire
+    // goldens and re-runnable after a 409 rebase.
+
+    /// <summary>The start marker uri for a folder. The name is url-encoded with SPACE AS <c>+</c> — desktop's exact
+    /// encoding (a164 "New+Folder", b037 "named+folder+update").</summary>
+    public static string StartGroupUri(string groupId, string name)
+        => "spotify:start-group:" + groupId + ":" + EncodeFolderName(name);
+
+    public static string EndGroupUri(string groupId) => "spotify:end-group:" + groupId;
+
+    static string EncodeFolderName(string name) => Uri.EscapeDataString(name).Replace("%20", "+", StringComparison.Ordinal);
+
+    /// <summary>Where a new playlist/folder goes for a placement: index 0 at the top level, or immediately AFTER the
+    /// parent folder's start-group marker (so it becomes that folder's first child). -1 = the parent folder is not in
+    /// the rootlist any more.</summary>
+    public static int PlacementIndex(IReadOnlyList<RootlistEntry> entries, RootlistPlacement placement)
+    {
+        if (placement.ParentFolderId is not { Length: > 0 } parent) return 0;
+        int start = FindFolderStart(entries, parent);
+        return start < 0 ? -1 : start + 1;
+    }
+
+    /// <summary>Index of a folder's start-group marker, or -1.</summary>
+    public static int FindFolderStart(IReadOnlyList<RootlistEntry> entries, string groupId)
+    {
+        for (int i = 0; i < entries.Count; i++)
+            if (entries[i].Kind == 1 && string.Equals(GroupId(entries[i].Uri), groupId, StringComparison.Ordinal)) return i;
+        return -1;
+    }
+
+    /// <summary>Create a folder: ONE delta, TWO index ADDs — the start marker at <paramref name="insertAt"/> and the end
+    /// marker directly after it, both stamped with the same create timestamp (golden a164). The pair is created empty;
+    /// items are moved in afterwards.</summary>
+    public static IReadOnlyList<PlaylistOp> BuildCreateFolder(
+        IReadOnlyList<RootlistEntry> entries, string groupId, string name, int insertAt, long nowMs)
+    {
+        int at = insertAt < 0 ? 0 : insertAt > entries.Count ? entries.Count : insertAt;
+        return new[]
+        {
+            new PlaylistOp(PlaylistOpKind.Add, FromIndex: at,
+                Items: new[] { new PlaylistMember("", StartGroupUri(groupId, name), null, nowMs) }),
+            new PlaylistOp(PlaylistOpKind.Add, FromIndex: at + 1,
+                Items: new[] { new PlaylistMember("", EndGroupUri(groupId), null, nowMs) }),
+        };
+    }
+
+    /// <summary>Rename a folder: ONE delta, REM{from,len=1} carrying NO items, then ADD re-inserting the start marker at
+    /// the same index with the new name and — the load-bearing part — the marker's ORIGINAL create timestamp (goldens
+    /// b037 inner / b128 root-level). The end marker is never touched, so the children stay exactly where they are.
+    /// <para>Returns null when the folder is no longer in <paramref name="entries"/>. When the stored row carries no
+    /// timestamp (a rootlist adopted before schema v8, or a marker the server sent without attributes) the caller is
+    /// expected to have bootstrapped already; <paramref name="nowMs"/> is the last-resort stamp, and it is logged.</para></summary>
+    public static IReadOnlyList<PlaylistOp>? BuildRenameFolder(
+        IReadOnlyList<RootlistEntry> entries, string groupId, string name, long nowMs)
+    {
+        int start = FindFolderStart(entries, groupId);
+        if (start < 0) return null;
+        long ts = entries[start].AddedAtMs;
+        if (ts <= 0)
+        {
+            PlaylistMutationDiagnostics.RootlistTimestampMissing(groupId);
+            ts = nowMs;
+        }
+        return new[]
+        {
+            new PlaylistOp(PlaylistOpKind.Remove, FromIndex: start, Length: 1),
+            new PlaylistOp(PlaylistOpKind.Add, FromIndex: start,
+                Items: new[] { new PlaylistMember("", StartGroupUri(groupId, name), null, ts) }),
+        };
+    }
+
+    /// <summary>Delete a folder: remove the END marker first, then the START one — removing the start first would shift
+    /// the end marker's index by one. The children between them are NOT removed; with the pair gone they simply belong
+    /// to the enclosing level, which is the "playlists inside move up a level" behaviour.
+    /// <para>REFERENCE-INFERRED, not desktop-captured: no folder delete appears in either capture. The shape is taken
+    /// from the WaveeMusic RootlistService (remove both markers, children stay) and is the exact inverse of the
+    /// captured create.</para>
+    /// <para>Returns null when the folder is no longer in <paramref name="entries"/> or its markers are unbalanced.</para></summary>
+    public static IReadOnlyList<PlaylistOp>? BuildDeleteFolder(IReadOnlyList<RootlistEntry> entries, string groupId)
+    {
+        if (!TryRange(entries, new RootlistItemRef(groupId, IsFolder: true), out int start, out int end)) return null;
+        int endMarker = end - 1;                       // TryRange's end is exclusive; the last row IS the end marker
+        if (endMarker <= start || entries[endMarker].Kind != 2) return null;   // unbalanced: refuse rather than guess
+        return new[]
+        {
+            new PlaylistOp(PlaylistOpKind.Remove, FromIndex: endMarker, Length: 1),
+            new PlaylistOp(PlaylistOpKind.Remove, FromIndex: start, Length: 1),
+        };
+    }
+
+    /// <summary>Apply index ADD/REM rootlist ops to the marker stream LOCALLY, producing the rows the server will now
+    /// hold. The rootlist <c>/changes</c> reply for a folder op carries revision bookkeeping only (golden
+    /// a164-folder-create-response has no contents), so the optimistic tree has to be computed here rather than read out
+    /// of the response. Ops apply in order, each against the state left by the preceding ones.</summary>
+    public static IReadOnlyList<RootlistEntry> ApplyLocally(IReadOnlyList<RootlistEntry> entries, IReadOnlyList<PlaylistOp> ops)
+    {
+        var uris = new List<string>(entries.Count + ops.Count);
+        var stamps = new List<long>(entries.Count + ops.Count);
+        for (int i = 0; i < entries.Count; i++) { uris.Add(entries[i].Uri); stamps.Add(entries[i].AddedAtMs); }
+        for (int o = 0; o < ops.Count; o++)
+        {
+            var op = ops[o];
+            switch (op.Kind)
+            {
+                case PlaylistOpKind.Add when op.Items is { Count: > 0 } items:
+                    int at = op.AddLast ? uris.Count : op.AddFirst ? 0 : op.FromIndex;
+                    if (at < 0 || at > uris.Count) throw new ArgumentOutOfRangeException(nameof(ops), "rootlist ADD index out of range");
+                    for (int i = 0; i < items.Count; i++)
+                    {
+                        uris.Insert(at + i, items[i].ItemUri);
+                        stamps.Insert(at + i, items[i].AddedAt);
+                    }
+                    break;
+                case PlaylistOpKind.Remove when !op.ItemsAsKey:
+                    if (op.FromIndex < 0 || op.Length <= 0 || op.FromIndex + op.Length > uris.Count)
+                        throw new ArgumentOutOfRangeException(nameof(ops), "rootlist REM range out of range");
+                    uris.RemoveRange(op.FromIndex, op.Length);
+                    stamps.RemoveRange(op.FromIndex, op.Length);
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(ops), "only index ADD/REM rootlist ops can be applied locally");
+            }
+        }
+        return RootlistTreeBuilder.EntriesFromUris(uris, stamps);
+    }
     static bool TryRange(IReadOnlyList<RootlistEntry> entries, RootlistItemRef item, out int start, out int end)
     {
         start = -1; end = -1;

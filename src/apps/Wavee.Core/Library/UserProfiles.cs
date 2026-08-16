@@ -1,29 +1,24 @@
 namespace Wavee.Core;
 
-/// <summary>Session-scoped user profile lookup for Spotify user ids surfaced by playlist owner / added-by fields.</summary>
-public interface IUserProfileService
-{
-    /// <summary>Returns the cached profile for a bare id or <c>spotify:user:</c> uri, or null when unresolved/missing.</summary>
-    Owner? Get(string userUriOrId);
-
-    /// <summary>Starts best-effort resolution for any ids not already cached. Must never throw into callers.</summary>
-    void Prefetch(IEnumerable<string> userUriOrIds);
-
-    /// <summary>Emits the canonical <c>spotify:user:{id}</c> uri when a profile cache entry changes.</summary>
-    IObservable<string> Changed { get; }
-}
-
+// ── User-id spelling, and nothing else ───────────────────────────────────────────────────────────────────────────────
+// P4-C deleted `IUserProfileService` (+ its Switchable/Null wrappers, its private Owner cache and its `Changed` event):
+// a resolved owner is now a STORE ENTITY (`IStore.UpsertOwner`/`GetOwner`, hydrated by `UserHydration`), so it reaches
+// the UI through the ordinary store change stream like every other entity. What survives is the id vocabulary — the
+// wire spells an owner three ways (`bare`, `spotify:user:bare`, mixed case) and every reader has to agree on one.
 public static class UserProfileIds
 {
     public const string Prefix = "spotify:user:";
 
+    /// <summary>The CANONICAL owner uri (<c>spotify:user:&lt;lowercased id&gt;</c>) for a bare id or a user uri, or
+    /// null when the input is not a legal user id. This is the store key (hot dictionary AND cold <c>entity.uri</c>)
+    /// and the uri <c>UserHydration</c> is asked with, so a bare id and its uri can never become two rows.</summary>
     public static string? Normalize(string? input)
     {
         if (string.IsNullOrWhiteSpace(input)) return null;
         var trimmed = input.Trim();
         if (trimmed.Length == 0) return null;
 
-        if (trimmed.StartsWith(Prefix, StringComparison.Ordinal))
+        if (trimmed.StartsWith(Prefix, System.StringComparison.Ordinal))
         {
             var id = trimmed[Prefix.Length..];
             return IsBareId(id) ? Prefix + id.ToLowerInvariant() : null;
@@ -33,7 +28,7 @@ public static class UserProfileIds
     }
 
     public static string BareId(string userUriOrId)
-        => userUriOrId.StartsWith(Prefix, StringComparison.Ordinal)
+        => userUriOrId.StartsWith(Prefix, System.StringComparison.Ordinal)
             ? userUriOrId[Prefix.Length..]
             : userUriOrId;
 
@@ -47,64 +42,4 @@ public static class UserProfileIds
         }
         return true;
     }
-}
-
-/// <summary>A stable service identity whose live provider can be installed after login without rebuilding consumers.</summary>
-public sealed class SwitchableUserProfileService : IUserProfileService, IDisposable
-{
-    readonly SimpleEvent<string> _changed = new();
-    readonly object _gate = new();
-    IUserProfileService _inner;
-    IDisposable? _sub;
-
-    public SwitchableUserProfileService(IUserProfileService inner)
-    {
-        _inner = inner;
-        Wire(inner);
-    }
-
-    public void SetInner(IUserProfileService inner)
-    {
-        ArgumentNullException.ThrowIfNull(inner);
-        lock (_gate)
-        {
-            _sub?.Dispose();
-            _inner = inner;
-            Wire(inner);
-        }
-    }
-
-    public Owner? Get(string userUriOrId) => Current.Get(userUriOrId);
-    public void Prefetch(IEnumerable<string> userUriOrIds) => Current.Prefetch(userUriOrIds);
-    public IObservable<string> Changed => _changed;
-
-    IUserProfileService Current => System.Threading.Volatile.Read(ref _inner);
-
-    void Wire(IUserProfileService inner)
-        => _sub = inner.Changed.Subscribe(new ProfileObserver(uri => _changed.OnNext(uri)));
-
-    public void Dispose()
-    {
-        lock (_gate)
-        {
-            _sub?.Dispose();
-            _sub = null;
-        }
-    }
-
-    sealed class ProfileObserver(Action<string> onNext) : IObserver<string>
-    {
-        public void OnNext(string value) => onNext(value);
-        public void OnError(Exception error) { }
-        public void OnCompleted() { }
-    }
-}
-
-/// <summary>Offline/fake fallback: no live transport, so lookups are empty and prefetches are ignored.</summary>
-public sealed class NullUserProfileService : IUserProfileService
-{
-    readonly SimpleEvent<string> _changed = new();
-    public Owner? Get(string userUriOrId) => null;
-    public void Prefetch(IEnumerable<string> userUriOrIds) { }
-    public IObservable<string> Changed => _changed;
 }

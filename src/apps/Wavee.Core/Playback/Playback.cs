@@ -100,6 +100,17 @@ public interface IPlaybackState : System.ComponentModel.INotifyPropertyChanged
     /// <summary>The Connect device currently active (null/empty = this device / nobody) — drives the "playing on X" label.</summary>
     string? ActiveDeviceId => null;
 
+    /// <summary>The bitrate of the stream ACTUALLY PLAYING, or 0 when it is not known. 0 is the honest default and the
+    /// only correct answer for a provider that does not resolve wire metadata — it is not "assume 160".</summary>
+    int StreamBitrateKbps => 0;
+
+    /// <summary>A display name for the format actually playing ("FLAC", "Vorbis 320 kbps"), or null when unknown.
+    /// <para>Both of these describe THE PLAYING STREAM and nothing else. They are deliberately not the user's quality
+    /// PREFERENCE (which says what was asked for, not what arrived) and not a track's available format ladder (which
+    /// says what exists, not what is decoding). A surface that showed either of those in their place would be stating
+    /// something it cannot know.</para></summary>
+    string? StreamFormat => null;
+
     /// <summary>Coarse "something changed" signal (track / play-state / queue / palette).</summary>
     IObservable<IPlaybackState> Changes { get; }
 

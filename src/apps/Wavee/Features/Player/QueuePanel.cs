@@ -643,7 +643,9 @@ sealed class QueuePanel : Component
     static string? ImmediateContextName(string uri)
     {
         if (uri.Length == 0) return null;
-        if (uri.Contains(":collection", StringComparison.Ordinal)) return Loc.Get(Strings.Player.LikedSongs);
+        // Both collection shapes (`spotify:collection:*` and `spotify:user:{id}:collection`) are ONE kind to the parser
+        // (hydration-facade-design.md §1.1), which is what the `Contains(":collection")` probe was approximating.
+        if (EntityUri.KindOf(uri) == EntityKind.Collection) return Loc.Get(Strings.Player.LikedSongs);
         return null;
     }
 
@@ -652,10 +654,13 @@ sealed class QueuePanel : Component
         if (svc is null || uri.Length == 0) return null;
         try
         {
-            if (uri.Contains(":collection", StringComparison.Ordinal)) return Loc.Get(Strings.Player.LikedSongs);
-            if (uri.Contains(":playlist:", StringComparison.Ordinal)) return (await svc.Library.GetPlaylistAsync(uri, ct).ConfigureAwait(false))?.Name;
-            if (uri.Contains(":album:", StringComparison.Ordinal)) return (await svc.Library.GetAlbumAsync(uri, ct).ConfigureAwait(false))?.Name;
-            if (uri.Contains(":artist:", StringComparison.Ordinal)) return (await svc.Library.GetArtistAsync(uri, ct).ConfigureAwait(false))?.Name;
+            switch (EntityUri.KindOf(uri))   // the ONE parser decides which read answers the context name
+            {
+                case EntityKind.Collection: return Loc.Get(Strings.Player.LikedSongs);
+                case EntityKind.Playlist: return (await svc.Library.GetPlaylistAsync(uri, HydrationLevel.Identity, ct).ConfigureAwait(false))?.Name;
+                case EntityKind.Album: return (await svc.Library.GetAlbumAsync(uri, HydrationLevel.Identity, ct).ConfigureAwait(false))?.Name;
+                case EntityKind.Artist: return (await svc.Library.GetArtistAsync(uri, HydrationLevel.Identity, ct).ConfigureAwait(false))?.Name;
+            }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch { }

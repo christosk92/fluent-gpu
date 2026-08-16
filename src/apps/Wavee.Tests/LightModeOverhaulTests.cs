@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.CompilerServices;
+using System.Text.RegularExpressions;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using Xunit;
@@ -276,11 +277,18 @@ public class LightModeOverhaulTests
         Assert.DoesNotContain("\"neutral\" =>", text);
 
         // The picker's own id list is the other half of the contract: every swatch it offers must be an id the engine
-        // knows. A swatch for an id the resolver cannot answer is the whole defect.
+        // knows. A swatch for an id the resolver cannot answer is the whole defect. The picker declares that list ONCE
+        // (s_paletteIds — the swatch that shows an id and the writer that persists it both index it), so this reads the
+        // declaration and FAILS when it goes missing, rather than quietly passing because a per-swatch literal it used
+        // to grep for was refactored away.
         string settings = File.ReadAllText(Path.Combine(root, "Features", "Shell", "SettingsPage.General.cs"));
-        foreach (string id in new[] { "warm", "slate", "neutral", "accent" })
-            if (settings.Contains($"Swatch(\"{id}\"", StringComparison.Ordinal))
-                Assert.NotNull(Tok.PaletteById(id));
+        var declared = Regex.Match(settings, @"s_paletteIds\s*=\s*\[(?<ids>[^\]]*)\]");
+        Assert.True(declared.Success,
+            "SettingsPage.General.cs no longer declares s_paletteIds — the palette-picker id gate cannot see what the picker offers.");
+        var offered = Regex.Matches(declared.Groups["ids"].Value, "\"(?<id>[^\"]+)\"");
+        Assert.NotEmpty(offered);
+        foreach (Match m in offered)
+            Assert.NotNull(Tok.PaletteById(m.Groups["id"].Value));
     }
 
     /// <summary>Warm really is a distinct answer — the tests above would pass just as well if the engine had quietly

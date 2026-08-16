@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Google.Protobuf;
 using Wavee.Backend;
+using Wavee.Backend.Hydration;
 using Wavee.Backend.Metadata;
 using Wavee.Core;
 using Wavee.SpotifyLive;
@@ -38,8 +39,10 @@ public class LiveContextResolverTests
             return new Resp(true, ArtistListBody(), 200);
         });
         var store = new InMemoryStore();
-        var metadata = new MetadataService(new NullMetadataSource(), store, () => SessionContext.LoggedOut);
-        var resolver = new LiveContextResolver(transport, metadata, store, () => SessionContext.LoggedOut);
+        // The resolver hydrates the resolved order through THE façade now (Identity, surface Context) instead of
+        // owning a metadata client. These tests exercise the WIRE + ordering, so the store-only hydrator is exactly
+        // right: it never fetches, and every row falls through to the uri-only placeholder as before.
+        var resolver = new LiveContextResolver(transport, new OfflineEntityHydrator(store), store, () => SessionContext.LoggedOut);
 
         var r1 = await resolver.ResolveAsync(ContextSpec.ForUri("spotify:artist:abc", 0));
         var r2 = await resolver.ResolveAsync(ContextSpec.ForUri("spotify:artist:abc", 2));
@@ -69,8 +72,7 @@ public class LiveContextResolverTests
     static LiveContextResolver MakeResolver(ITransport transport)
     {
         var store = new InMemoryStore();
-        var metadata = new MetadataService(new NullMetadataSource(), store, () => SessionContext.LoggedOut);
-        return new LiveContextResolver(transport, metadata, store, () => SessionContext.LoggedOut);
+        return new LiveContextResolver(transport, new OfflineEntityHydrator(store), store, () => SessionContext.LoggedOut);
     }
 
     [Fact]
@@ -104,12 +106,6 @@ public class LiveContextResolverTests
         var resolver = MakeResolver(new RouteTransport((_, _) =>
             new Resp(true, System.Text.Encoding.UTF8.GetBytes("{\"total\":0,\"mediaItems\":[]}"), 200)));
         Assert.Null(await resolver.ResolveRadioSeedAsync("spotify:artist:seed2"));
-    }
-
-    sealed class NullMetadataSource : IMetadataSource
-    {
-        public Task<IReadOnlyCollection<string>> FetchAsync(IReadOnlyList<EntityRef> entities, IStore store, CancellationToken ct, string? clientFeatureId = null, bool headerTraits = false)
-            => Task.FromResult<IReadOnlyCollection<string>>(Array.Empty<string>());
     }
 
     sealed class RouteTransport(Func<string, string, Resp> respond) : ITransport

@@ -15,7 +15,7 @@ using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
 
-// The artist page (docs/architecture.md §2 "Album & artist") — WaveeMusic's full magazine surface.
+// The artist page (docs/plans/wavee/architecture.md §2 "Album & artist") — WaveeMusic's full magazine surface.
 // This partial owns route-reactive loading and composes the hero with the magazine sections.
 sealed partial class ArtistPage : Component
 {
@@ -77,14 +77,12 @@ sealed partial class ArtistPage : Component
 
         // ContentHost keeps one ArtistPage alive for artist→artist hops. The data is cached per artist, while the
         // scroll/skeleton subtree below is keyed by route so pending/ready branches and child components remount cleanly.
-        // One complete read: the V4 artist (identity + discography) then the lazy stats overlay (header stats only). The
-        // stats call is standalone-page-scoped (IArtistStatsService) — the Library artist pane never fires it. Offline /
-        // no stats provider → EnsureStatsAsync returns null and the V4 artist stands.
-        var artist = store.ArtistDetail(uri, async ct =>
-        {
-            var a = await svc.Library.GetArtistAsync(uri, ct);
-            return await svc.ArtistStats.EnsureStatsAsync(uri, ct) ?? a;
-        }, PendingArtist(uri));
+        // ONE read at the RICH rung: identity + assembled discography (Open) plus the queryArtistOverview facets the
+        // header shows — monthly listeners, followers, world rank, related. Two calls and two services collapsed into
+        // one ask because the rung IS the contract (design §1.2); offline the ladder simply cannot reach Rich and the
+        // resident V4 artist stands, exactly as the old null-stats fallback did.
+        var artist = store.ArtistDetail(uri, ct => svc.Library.GetArtistAsync(uri, HydrationLevel.Rich, ct)!,
+            PendingArtist(uri));
         store.EnsureArtists();
         var fansList = store.Artists.Value.Value;
 

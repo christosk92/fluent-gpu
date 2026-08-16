@@ -58,7 +58,8 @@ follows the pointer through a **bound** transform over `UseDragPosition()` — c
 `UseDragState()`'s epoch is **edge-triggered** (begin/end, target, effect, refusal, caption, settle), so the chip
 re-renders only when its *content* could differ. `DragChip.Resolve(state => spec)` turns chip DATA into that layer's
 element. `ItemsView` + `InsertionOptions` owns every list coordinate; `SortableMath` is the pure geometry behind it;
-`Reorderable`/`ReorderList` is the older lift-and-project list (still the sidebar/queue path).
+`Reorderable`/`ReorderList` is the older lift-and-project list (the queue, and the sidebar's pin / authored-item
+bands — the sidebar's rootlist TREE is neither, see recipe 6).
 
 ---
 
@@ -158,7 +159,34 @@ Unset policy seams ⇒ byte-identical to the pre-policy list. Set `DragStyle` **
 gesture (a lifted ghost row *and* a chip). A multi-selection moves as one unit through
 `ReorderList.BlockLength` / `BeginBlock` — that is also what the keyboard Alt+Arrow path uses.
 
-### 6. OS file drop
+### 6. Sidebar tree rows — an app-owned insertion cue (Wavee)
+
+Wavee's rootlist rows are **not** an `InsertionOptions` list and **not** a `Reorderable`: `ItemsView`'s insertion hit
+region is armed for the whole list, so it cannot express "this row's bottom band, at depth *d*". They are ordinary
+per-row `Drop.Target`s over an app-owned resolver, and the shape is worth knowing because it is what you copy for any
+*tree* until the engine grows a depth channel.
+
+- **One pure resolver, one published slot.** `RootlistSlotResolver.Resolve(planIndex, t, xInRow, rowHeight, facts,
+  previous)` → `SidebarDropSlot(PlanIndex, Kind ∈ {Before, After, Into, EndOfList}, Depth, Refusal)`, published once
+  per hover into `SidebarPane._dropSlot`. **The drop consumes that slot; it never recomputes a placement** — a cue and
+  a mutation computed twice are a cue and a mutation that can disagree.
+- **Line ⟺ ordering, plate ⟺ Into, never both.** The 2-DIP insertion line lives on the **row** (`SidebarPaneSlot
+  .InsertionLine`), mounted unconditionally with every prop bound off ONE slot read — a conditional mount would need a
+  re-render per pointer move, which is exactly what rule 4 forbids. The accent plate on `SidebarEntityRow` is gated on
+  `Into` alone.
+- **Refusals are drawn, not swallowed.** A refused slot carries `Kind = None`, so it draws neither cue and the chip's
+  `refusalCaption` is the only thing that speaks (rule 5).
+- **`spotlightWhen: s => Unwrap(s.Payload) is not { RootlistItem: true }`** — rule 6, applied to a surface rather than
+  a list: an organisation drag must not dim the app it is happening inside.
+- **The freeze.** A projection published mid-gesture would re-key the rows under the pointer, so `SidebarPane
+  .TryPublishStage` parks it (`SidebarStageHold`, last-writer-wins) and `SidebarDragPeekWatcher` flushes it from a
+  layout effect on session end — drop, cancel and Escape alike. Same defect and same fix as
+  `Features/Detail/PlaylistReorderDefer` for the track list.
+
+Full contract — geometry constants, the refusal table, slot → mutation, the non-mouse verbs, the deferred engine
+path: `.claude/skills/wavee-sidebar/architecture.md` § *Rootlist drag & drop*.
+
+### 7. OS file drop
 
 `DropTarget = new DropTargetSpec([DropKinds.Files], …)` — the Windows backend's `Win32DropTarget` opens a normal
 session (`ExternalBegin`), so hover Enter/Over/Leave work and the file list is read once at drop
@@ -227,7 +255,7 @@ defect at HEAD before fixing it, and that is what makes the gate worth keeping.
   detached, so `FreeSubtree` cannot reach them). A registry/memory leak only — the reachability walk stops them
   advertising anything.
 - No keyboard drag simulation, by design: the a11y answer is an ordinary command reaching the same mutation seam
-  (Alt+Up/Alt+Down, "Move to playlist…").
+  (Alt+↑/Alt+↓, "Move to playlist…", "Move to folder…").
 
 ## Deeper docs
 

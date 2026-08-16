@@ -33,10 +33,10 @@ public class PlaylistMutationConsistencyTests
         store.UpsertPlaylist(new Playlist("p", PlaylistUri, "New playlist", null, "alice", null, 0));
         store.SetMembership(PlaylistUri, Array.Empty<PlaylistMember>(), new byte[] { 1 });
         var mutations = new MutationEngine(store,
-            new IMutationStrategy[] { new OpRebaseStrategy(store, () => "https://spclient.wg.spotify.com") });
+            new IMutationStrategy[] { new OpRebaseStrategy(store, () => "https://spclient.wg.spotify.com", new PlaylistResyncQueue()) });
         var http = new FakeExchange((_, _) => new HttpResp(500, new Dictionary<string, string>(), Array.Empty<byte>()));
         var source = new PlaylistMutationSource(mutations, transport, http, () => Ctx,
-            () => "https://spclient.wg.spotify.com", new UserPlaylistSource(), store);
+            () => "https://spclient.wg.spotify.com", new UserPlaylistSource(), new RootlistLane(), store);
         return (store, mutations, source);
     }
 
@@ -79,10 +79,12 @@ public class PlaylistMutationConsistencyTests
     public async Task FailedServerAttempt_DoesNotReportConfirmedSuccess()
     {
         var (_, mutations, source) = Create(new FailingTransport());
-        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+        // P1: the ONE failure type the seam surfaces. A write that is still queued after its drain is Pending — never a
+        // bare InvalidOperationException whose message the UI would have to sniff.
+        var error = await Assert.ThrowsAsync<PlaylistMutationException>(() =>
             source.UpdateDetailsAsync(PlaylistUri, "Renamed", null, null, TestContext.Current.CancellationToken));
 
-        Assert.Contains("could not be confirmed", error.Message);
+        Assert.Equal(PlaylistMutationFailure.Pending, error.Kind);
         Assert.Equal(1, mutations.Pending); // durable retry remains queued
     }
 }

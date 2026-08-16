@@ -8,6 +8,7 @@ using FluentGpu.WindowsApi.Shell;
 using Wavee.Backend.Metadata;
 using Wavee.Backend.Persistence;
 using Wavee.Core;
+using EntityKind = Wavee.Backend.Metadata.EntityKind;   // disambiguate: Wavee.Core.EntityKind is the ROUTING vocabulary; the PERSISTED column is the transport one
 
 namespace Wavee;
 

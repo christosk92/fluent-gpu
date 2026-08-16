@@ -24,7 +24,8 @@ public sealed record ArtistAlbumStub(string Uri, int Kind, string Name, int Year
 /// <summary>One row of the artist's Popular chart: the track uri plus ITS PLAY COUNT.
 ///
 /// The count is stored HERE, with the chart, and not read back off the shared track row — that is the whole point of
-/// the type. queryArtistOverview is the only source of play counts, but a track row belongs to every surface: the
+/// the type. queryArtistOverview (the head) and extended-metadata kind 185 (the extension tail) are the sources of play
+/// counts, but a track row belongs to every surface: the
 /// TrackV4 discography prefetch, a cluster projection and a library write all rewrite it knowing nothing about plays,
 /// and the store's `PlayCount > 0 ? incoming : current` guard cannot help once the resident row is already 0. Rows
 /// re-fattened from those rows lost their counts one at a time, which is what made a chart read "1,848,329,755 plays"

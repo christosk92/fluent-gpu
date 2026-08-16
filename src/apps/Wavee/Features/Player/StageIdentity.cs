@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
@@ -26,14 +26,12 @@ namespace Wavee;
 /// <c>PlayerBarContent.RemoteDevice</c>/<c>LocalOutputs</c> pair <c>RemoteDeviceLine</c> does and opens the same
 /// <c>DevicePickerMenu</c>, and every transport intent is the bridge command the bar already calls.</para>
 ///
-/// <para><b>The quality badge is absent, deliberately.</b> The stage's times row was specified with a centre badge
-/// naming the playing stream ("LOSSLESS" / "320"). The pipeline computes exactly that — <c>PlaybackEvent</c> carries
-/// <c>SelectedBitrateKbps</c> + <c>AudioFormatName</c> — but nothing PUBLISHES it: the only subscriber is Spotify
-/// telemetry (<c>RawCoreStreamProjection</c>), and neither <c>IPlaybackState</c> nor <c>PlaybackBridge</c> carries a
-/// format/bitrate signal. The alternatives reachable from here are the user's quality PREFERENCE (not what is playing)
-/// and <c>ITrackExpansionService</c>'s per-track format LADDER (what the track HAS, async, and its
-/// <c>SetFormatOverride</c> is dead-ended). Both would be a badge that says something other than what it claims, so the
-/// slot mounts NOTHING rather than a plausible lie.</para>
+/// <para><b>The quality badge names the PLAYING STREAM</b> — see <see cref="StageQualityBadge"/>. It was absent for a
+/// long time on the grounds that nothing published the value; the pipeline always computed it (<c>PlaybackEvent</c>
+/// carries <c>SelectedBitrateKbps</c> + <c>AudioFormatName</c>) but only Spotify telemetry subscribed. It is published
+/// now, through <c>NowPlayingProjection</c> to <c>PlaybackBridge.StreamFormat</c>, with a clear-on-remote rule — so the
+/// badge can be filled without claiming anything it cannot know. What it still refuses to be is unchanged: not the
+/// user's quality PREFERENCE, and not the track's available format LADDER.</para>
 /// </summary>
 sealed class StageIdentity : Component
 {
@@ -235,7 +233,11 @@ sealed class StageIdentity : Component
             // above it on a tall one; the padding is symmetric (ColumnPadY both ends) so Center is a real centre.
             Grow = 1f, MinHeight = 0f,
             Direction = 1, Justify = FlexJustify.Center,
-            Padding = new Edges4(ColumnPadX, ColumnPadY, L.ColumnFalloff + ColumnPadX, ColumnPadY),
+            // SYMMETRIC on both axes now. The right side used to carry `L.ColumnFalloff + ColumnPadX` — 120 DIP of
+            // padding whose only job was to cancel a 120-DIP falloff the box added to itself. Both are gone; the air
+            // beside the column is StageLayout.RegionGapW, spent by the band as a real Gap. ColumnContentW is still
+            // 304, so nothing inside the column moves.
+            Padding = new Edges4(ColumnPadX, ColumnPadY, ColumnPadX, ColumnPadY),
             Children = kids.ToArray(),
         };
     }
@@ -310,7 +312,7 @@ sealed class StageIdentity : Component
                     Size = wide ? TitleSize : CompactTitleSize,
                     LineHeight = wide ? TitleLine : CompactTitleLine,
                     Weight = TitleWeight, FontFamily = DisplayFace,
-                    Color = WaveeOnMedia.Ink,
+                    Color = StageInk.Ink,
                     Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
                 },
                 Embed.Comp(() => new StageMetaLink(go)),
@@ -324,13 +326,13 @@ sealed class StageIdentity : Component
                 Width = WaveeCta.IconButtonSize, Height = WaveeCta.IconButtonSize, Shrink = 0f,
                 Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
                 Corners = Radii.ControlAll,
-                Fill = WaveeOnMedia.GlassRest, HoverFill = WaveeOnMedia.GlassHover, PressedFill = WaveeOnMedia.GlassPressed,
+                Fill = StageInk.GlassRest, HoverFill = StageInk.GlassHover, PressedFill = StageInk.GlassPressed,
                 BrushTransitionMs = WaveeMotion.Faster,
                 Role = AutomationRole.Button, Cursor = CursorId.Hand, Focusable = true, AllowFocusOnInteraction = false,
                 // The engine's declarative re-entry into the context funnel: the ancestor's WithContextMenu opens
                 // byte-identically to a right-click (no node capture, no second menu model).
                 ClickRequestsContext = true,
-                Children = [new TextEl(Icons.More) { Size = 16f, FontFamily = Theme.IconFont, Color = WaveeOnMedia.InkSecondary, HoverColor = WaveeOnMedia.Ink }],
+                Children = [new TextEl(Icons.More) { Size = 16f, FontFamily = Theme.IconFont, Color = StageInk.InkSecondary, HoverColor = StageInk.Ink }],
             });
 
         return new BoxEl
@@ -341,8 +343,7 @@ sealed class StageIdentity : Component
         };
     }
 
-    // ── the seek block: the bar's own SeekBar + the elapsed/remaining pair, in on-media ink ───────────────────────────
-    // The times row's CENTRE is empty by design — see the class header on the quality badge.
+    // ── the seek block: the bar's own SeekBar + the elapsed / QUALITY / remaining row, in on-media ink ────────────────
 
     static Element SeekBlock(PlaybackBridge b) => new BoxEl
     {
@@ -355,9 +356,11 @@ sealed class StageIdentity : Component
                 Direction = 0, AlignItems = FlexAlign.Center, MinWidth = 0f,
                 Children =
                 [
-                    Embed.Comp(() => new TimeText(b, remaining: false, ink: WaveeOnMedia.InkTertiary)),
+                    Embed.Comp(() => new TimeText(b, remaining: false, ink: StageInk.InkTertiary)),
                     new BoxEl { Grow = 1f, MinWidth = 0f, HitTestVisible = false },
-                    Embed.Comp(() => new TimeText(b, remaining: true, ink: WaveeOnMedia.InkTertiary)),
+                    Embed.Comp(() => new StageQualityBadge(b)),
+                    new BoxEl { Grow = 1f, MinWidth = 0f, HitTestVisible = false },
+                    Embed.Comp(() => new TimeText(b, remaining: true, ink: StageInk.InkTertiary)),
                 ],
             },
         ],
@@ -430,7 +433,7 @@ sealed class StageIdentity : Component
     static Slider.Style OnMediaSlider()
     {
         var s = Slider.DefaultStyle;
-        ColorF ink = WaveeOnMedia.Ink;
+        ColorF ink = StageInk.Ink;
         return s with
         {
             RailFill = ink with { A = 0.26f },
@@ -444,7 +447,7 @@ sealed class StageIdentity : Component
             ThumbFillPointerOver = ink with { A = 0.90f },
             ThumbFillPressed = ink with { A = 0.80f },
             ThumbFillDisabled = ink with { A = 0.32f },
-            ThumbBorder = GradientSpec.Solid(WaveeOnMedia.Stroke),
+            ThumbBorder = GradientSpec.Solid(StageInk.Stroke),
         };
     }
 
@@ -512,11 +515,50 @@ sealed class StageIdentity : Component
                     new TextEl(line)
                     {
                         Size = 14f, LineHeight = 20f, Weight = 400,
-                        Color = enabled && hover.Value ? WaveeOnMedia.Ink : WaveeOnMedia.InkSecondary,
+                        Color = enabled && hover.Value ? StageInk.Ink : StageInk.InkSecondary,
                         Underline = enabled && hover.Value,
                         Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
                     },
                 ],
+            };
+        }
+    }
+
+    /// <summary>The times row's centre slot: what the PLAYING STREAM actually is ("FLAC", "Vorbis 320 kbps").
+    ///
+    /// <para><b>This slot was empty for a reason, and the reason is now gone.</b> The pipeline always computed the
+    /// value — <c>PlaybackController</c> resolves bitrate + format at the load chokepoint and folds both into
+    /// <c>PlaybackEvent</c> — but nothing PUBLISHED it, so the only honest thing to mount was nothing. It is published
+    /// now (<c>NowPlayingProjection</c> → <see cref="PlaybackBridge.StreamFormat"/>), so the slot can be filled without
+    /// the badge saying anything it cannot know.</para>
+    ///
+    /// <para><b>The two things it still refuses to be.</b> Not the user's quality PREFERENCE (that is what was asked
+    /// for, not what arrived) and not the track's available format LADDER (that is what exists, not what is decoding).
+    /// Either would be a plausible lie, which is worse than an empty slot.</para>
+    ///
+    /// <para><b>It renders NOTHING rather than guessing.</b> No format published, or another Connect device is active
+    /// ⇒ no badge. Remote playback is resolved on that device and this machine cannot describe its stream; the
+    /// projection clears the value on the same fold that sets the active device, and this is the second half of that
+    /// rule. Silence is the correct answer, not a fallback.</para></summary>
+    sealed class StageQualityBadge : Component
+    {
+        readonly PlaybackBridge _b;
+        public StageQualityBadge(PlaybackBridge b) => _b = b;
+
+        public override Element Render()
+        {
+            string? fmt = _b.StreamFormat.Value;
+            string? remote = _b.ActiveDeviceId.Value;
+            if (fmt is not { Length: > 0 } || remote is { Length: > 0 }) return new BoxEl { HitTestVisible = false };
+
+            return new TextEl(fmt)
+            {
+                Size = 11.5f, LineHeight = 16f, Weight = 600,
+                Color = StageInk.InkTertiary,
+                // The stage has no caps ROLE — the case is authored in the loc catalogue / the provider's own label,
+                // never produced by a transform here (NoStageFile_CapsTransformsItsText).
+                Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, Shrink = 0f,
+                Margin = new Edges4(Spacing.S, 0f, Spacing.S, 0f),
             };
         }
     }
@@ -577,7 +619,7 @@ sealed class StageIdentity : Component
                 Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S, MinHeight = 24f, MinWidth = 0f,
                 Padding = new Edges4(Spacing.XS, 0f, Spacing.S, 0f),
                 Corners = Radii.ControlAll,
-                Fill = WaveeOnMedia.GlassRest, HoverFill = WaveeOnMedia.GlassHover, PressedFill = WaveeOnMedia.GlassPressed,
+                Fill = StageInk.GlassRest, HoverFill = StageInk.GlassHover, PressedFill = StageInk.GlassPressed,
                 BrushTransitionMs = WaveeMotion.Faster,
                 ClipToBounds = true,
                 Role = AutomationRole.Button, Focusable = true, AllowFocusOnInteraction = false,
@@ -587,14 +629,14 @@ sealed class StageIdentity : Component
                     new TextEl(glyph)
                     {
                         Size = 12f, FontFamily = Theme.IconFont,
-                        Color = remote is null ? WaveeOnMedia.InkTertiary : WaveeOnMedia.InkSecondary,
-                        HoverColor = WaveeOnMedia.Ink,
+                        Color = remote is null ? StageInk.InkTertiary : StageInk.InkSecondary,
+                        HoverColor = StageInk.Ink,
                     },
                     new TextEl(name)
                     {
                         Size = 12f, LineHeight = 16f, Weight = 400,
-                        Color = remote is null ? WaveeOnMedia.InkTertiary : WaveeOnMedia.InkSecondary,
-                        HoverColor = WaveeOnMedia.Ink,
+                        Color = remote is null ? StageInk.InkTertiary : StageInk.InkSecondary,
+                        HoverColor = StageInk.Ink,
                         MaxLines = 1, Wrap = TextWrap.NoWrap, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f, Shrink = 1f,
                     },
                 ],

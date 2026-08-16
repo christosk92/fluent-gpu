@@ -1,4 +1,5 @@
 using System;
+using Wavee.Core;
 
 namespace Wavee;
 
@@ -108,11 +109,12 @@ public static class SidebarPinId
     {
         null or "" => null,
         LikedSongsUri => "liked",                                                       // a ROUTE pin
-        var u when u.StartsWith("spotify:playlist:", StringComparison.Ordinal)
-                || u.StartsWith("wavee:playlist:", StringComparison.Ordinal) => PlaylistPrefix + u,
-        var u when u.StartsWith("spotify:album:", StringComparison.Ordinal) => AlbumPrefix + u,
-        var u when u.StartsWith("spotify:artist:", StringComparison.Ordinal) => ArtistPrefix + u,
-        var u when u.StartsWith("spotify:show:", StringComparison.Ordinal) => ShowPrefix + u,
+        // Kind comes from the ONE parser (hydration-facade-design.md §1.1). Playlists are pinnable from either provider
+        // (spotify AND the session-local `wavee:playlist:*`); album/artist/show stay Spotify-only, as the schemes were.
+        var u when EntityUri.KindOf(u) == EntityKind.Playlist => PlaylistPrefix + u,
+        var u when EntityUri.Parse(u) is { IsSpotify: true, Kind: EntityKind.Album } => AlbumPrefix + u,
+        var u when EntityUri.Parse(u) is { IsSpotify: true, Kind: EntityKind.Artist } => ArtistPrefix + u,
+        var u when EntityUri.Parse(u) is { IsSpotify: true, Kind: EntityKind.Show } => ShowPrefix + u,
         _ => null,                                                                      // tracks, episodes, everything else
     };
 

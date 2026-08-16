@@ -69,15 +69,14 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
     // ── the slab (mutated in place under _gate; coarse Changes fired outside) ─────────────────────────────────────────
     Track? _track;
     // Live enrichment: the cluster's player_state metadata is often THIN (title + album only, no artist name, no album
-    // art). When set by the live bootstrap, this resolves the full track by uri (transport metadata) and folds artist +
-    // album + art into the now-playing track. Null offline -> the cluster snapshot is shown as-is.
-    Func<string, CancellationToken, Task<Track?>>? _trackResolver;
-    public Func<string, CancellationToken, Task<Track?>>? TrackResolver
-    {
-        get => _trackResolver;
-        set { _trackResolver = value; if (value is not null) MaybeEnrichCurrent(); }
-    }
+    // art). It is raised to the playable's Open rung through THE façade and re-read from the store — the same call any
+    // page open makes, so a track the user just opened is already there and this costs nothing. The bespoke
+    // TrackResolver Func (and its own divergent "is it thin?" predicate) are gone: HydrationLevels.Of IS the predicate,
+    // and the ledger's Exhausted seal is what stops a genuinely thin row re-firing every heartbeat (design §1.5).
+    readonly IEntityHydrator _hydrator;
+    readonly IStore _store;
     string? _resolvingUri;   // de-dupe: at most one in-flight resolve per uri (guarded by _gate)
+    string? _warmedUri;      // de-dupe: the NowPlaying trait warm fires once per uri (guarded by _gate)
     string? _contextUri;
     long _localRevision;     // the session's monotonic revision (from the last ApplyLocalSnapshot) — for diagnostics / UI keying
     // Viewer-row ids live in a DISJOINT high range (ViewerIdBase+seq) so they can NEVER collide with the local session's
@@ -89,6 +88,12 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
     bool _hasLocalContext;
     IReadOnlyDictionary<string, string> _contextMetadata = new Dictionary<string, string>();
     string _activeDeviceId = "";
+    // ── the PLAYING stream's identity ────────────────────────────────────────────────────────────────────────────────
+    // What is actually decoding right now, not what was asked for and not what the track HAS. Folded from the load
+    // chokepoint's own resolve (PlaybackController -> PlaybackEvent) and CLEARED the moment that stops being true —
+    // see ClearStreamIdentityLocked. 0/null is the honest unknown.
+    int _streamBitrateKbps;
+    string? _streamFormat;
     ClusterDelta? _lastCluster;   // the last folded cluster (raw next/prev with uid+provider+metadata) — the source the controller replays through PlaybackSession.ReplaceFromCluster on ghost-resume (§8)
     string _queueRevision = "";
     bool _isPlaying, _isBuffering, _isPrebuffering, _shuffle;
@@ -98,6 +103,7 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
     bool _lastPubPlaying, _lastPubBuffering;
     PlaybackRecoveryKind _recoveryKind;
     public bool IsPrivateSession { get; set; }
+
     RepeatMode _repeat;
     double _volume = 0.7;
     long _posMs, _posAnchorWall, _durMs;
@@ -117,9 +123,18 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
     long _lastLocalCmdWall = long.MinValue;
     int _inFlightSeq;
 
-    public NowPlayingProjection(string ourDeviceId, Func<long>? clock = null, Func<long>? serverNowUnixMs = null,
-        double initialVolume01 = 0.7)
+    /// <param name="hydrator">THE metadata façade. REQUIRED and positional (wiring-discipline: no nullable seams, no
+    /// defaulted ones either). A default was worse than a null check: "no backend" is a real, nameable configuration —
+    /// <see cref="NotOwnedEntityHydrator.Instance"/> — and defaulting to it meant a half-wired composition root that
+    /// simply forgot to pass the live façade compiled, ran, and silently never upgraded a thin now-playing row. Passing
+    /// it is now the only way to build one, so "nothing to upgrade" is always something a call site CHOSE.</param>
+    /// <param name="store">Where the upgraded row is READ BACK from (the hydrator writes the store, never returns rows).
+    /// Same rule: a no-backend caller passes <c>new InMemoryStore()</c> and says so.</param>
+    public NowPlayingProjection(string ourDeviceId, IEntityHydrator hydrator, IStore store,
+        Func<long>? clock = null, Func<long>? serverNowUnixMs = null, double initialVolume01 = 0.7)
     {
+        _hydrator = hydrator ?? throw new ArgumentNullException(nameof(hydrator));
+        _store = store ?? throw new ArgumentNullException(nameof(store));
         _ourDeviceId = ourDeviceId;
         _volume = Math.Clamp(initialVolume01, 0, 1);   // the announce + local host reconcile follow this (remember-volume seed)
         _now = clock ?? (() => Environment.TickCount64);
@@ -134,6 +149,15 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
     /// <summary>True when the cluster's active device is us (the controller's local-vs-remote branch keys on this).</summary>
     public bool WeAreActive { get { lock (_gate) return _activeDeviceId == _ourDeviceId; } }
     public string ActiveDeviceId { get { lock (_gate) return _activeDeviceId; } }
+
+    /// <inheritdoc cref="IPlaybackState.StreamBitrateKbps"/>
+    public int StreamBitrateKbps { get { lock (_gate) return _streamBitrateKbps; } }
+    /// <inheritdoc cref="IPlaybackState.StreamFormat"/>
+    public string? StreamFormat { get { lock (_gate) return _streamFormat; } }
+
+    /// <summary>Forget what is decoding. Called when playback ENDS and when another Connect device becomes active —
+    /// the two ways "the stream this machine resolved" stops being what the user is hearing.</summary>
+    void ClearStreamIdentityLocked() { _streamBitrateKbps = 0; _streamFormat = null; }
     /// <summary>The last-seen Connect queue revision (echoed on an outbound set_queue). "" until the first cluster.</summary>
     public string QueueRevision { get { lock (_gate) return _queueRevision; } }
     /// <summary>The active device's queue from the last cluster (uid+provider preserved) — what a forwarded set_queue
@@ -378,6 +402,11 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
         lock (_gate)
         {
             _lastCluster = c;
+            // ANOTHER DEVICE TOOK OVER ⇒ we know nothing about what is decoding. This clear is the load-bearing half of
+            // the whole feature: without it, transferring playback to a phone leaves the last LOCAL stream's badge on
+            // screen describing a stream this machine is no longer playing — precisely the "plausible lie" that kept
+            // this surface empty for so long. Silence is the correct answer for a remote stream.
+            if (!string.IsNullOrEmpty(c.ActiveDeviceId) && c.ActiveDeviceId != _ourDeviceId) ClearStreamIdentityLocked();
             _activeDeviceId = c.ActiveDeviceId;
             _queueRevision = c.QueueRevision ?? "";
             _clusterPrev = c.PrevTracks ?? Array.Empty<RemoteTrack>();
@@ -456,32 +485,58 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
         MaybeEnrichCurrent();   // the cluster track may be thin (no artist/art) → resolve + fold in the full metadata
     }
 
-    // Resolve full metadata for a cluster track whose player_state was thin (no artist name / no album art). At most one
-    // resolve per uri is in flight; the result is applied only if that uri is STILL current (the user didn't skip on).
+    /// <summary>The now-playing row's own hydration: a cluster <c>player_state</c> is routinely THIN (no artist name,
+    /// no album art, sometimes an album uri with no name), and the bar cannot paint from it. ONE predicate decides —
+    /// <c>HydrationLevels.Of(track) &lt; Open</c>, the same rung every other surface uses — and at most one ask per uri
+    /// is in flight; the answer is applied only if that uri is STILL current (the user didn't skip on).</summary>
     void MaybeEnrichCurrent()
     {
-        if (TrackResolver is not { } resolve) return;
         string uri;
+        string? warm = null;
         lock (_gate)
         {
             if (_track is not { } t) return;
-            // Album identity is UI-critical too: Connect can provide usable art + artist while omitting Album.Uri.
-            // Without this term the player-bar title looks complete but can never become an album hyperlink.
-            // The NAME is the other half of that identity and needs its own term: a cluster/thin row can carry the album
-            // URI with an empty name, which satisfied every test here — so the enrichment never ran and the album stayed
-            // nameless for the whole track, even though the resolver's getTrack upgrade
-            // (LiveSessionHost.ResolveNowPlayingTrackAsync) is exactly what supplies it.
-            bool thin = !StoreEntityGaps.NowPlayingReady(t) || string.IsNullOrEmpty(t.Album.Uri);
-            if (!thin || t.Uri.Length == 0 || _resolvingUri == t.Uri) return;
-            _resolvingUri = uri = t.Uri;
+            // The now-playing VIDEO warm (design §3): the badge + the switch-to-video affordance need the kind-99
+            // association for the row that is playing, and that is true whether or not the row is thin — a fully
+            // hydrated track still has to be asked about its video exactly once. Separate from the ladder ask below,
+            // which returns early for anything already at Open.
+            if (t.Uri.Length > 0 && _warmedUri != t.Uri) { _warmedUri = warm = t.Uri; }
+            // Album identity is part of Open (Album.Name != ""), so the old extra "empty Album.Uri" term is subsumed
+            // EXCEPT for the uri itself, which Of() cannot see — a cluster row can carry a named album with no uri, and
+            // without it the player-bar title can never become an album hyperlink.
+            //
+            // An EPISODE is measured against the EPISODE rung, not the track one. Of(Track) demands named artists and an
+            // album URI; a podcast row has neither by construction (a podcast has a show, not artists, and the show uri
+            // is only there when the catalogue answered), so read through the track predicate a podcast is thin
+            // FOREVER. Every cluster push, local snapshot and playback event calls this, so "resolve once" became
+            // "resolve, and re-publish Changes, on every heartbeat" for the whole episode. These three terms are
+            // HydrationLevels.Of(Episode) spelled against the slab row, with the show name in the album slot — minus
+            // its duration term, deliberately: the fold below never writes DurationMs (the cluster's own length wins,
+            // and a user-attached media override outranks both), so a term the resolve cannot move would only put the
+            // loop back for a row the wire happened to send without one.
+            bool thin = EntityUri.KindOf(t.Uri) == EntityKind.Episode
+                ? HydrationLevels.TitleMissing(t.Title, t.Uri) || t.Album.Name.Length == 0
+                  || !ImageSource.IsUsable(t.Image)
+                : HydrationLevels.Of(t) < HydrationLevel.Open || string.IsNullOrEmpty(t.Album.Uri);
+            uri = !thin || t.Uri.Length == 0 || _resolvingUri == t.Uri ? "" : (_resolvingUri = t.Uri);
         }
-        _ = ResolveAsync(resolve, uri);
+        // Outside the lock: both of these start work synchronously up to their first await.
+        if (warm is not null) _ = _hydrator.EnsureTraitsAsync([warm], TraitSurface.NowPlaying);
+        if (uri.Length > 0) _ = ResolveAsync(uri);
     }
 
-    async Task ResolveAsync(Func<string, CancellationToken, Task<Track?>> resolve, string uri)
+    async Task ResolveAsync(string uri)
     {
         Track? enriched = null;
-        try { enriched = await resolve(uri, default).ConfigureAwait(false); } catch { /* best-effort */ }
+        try
+        {
+            // Priority 1: the user is LOOKING at this row, so it outranks every prefetch on the pump. The video warm
+            // that used to be a separate fire-and-forget service call is the NowPlaying trait surface now.
+            await _hydrator.EnsureAsync(uri, HydrationLevel.Open,
+                new HydrationOptions(Surface: TraitSurface.NowPlaying, Priority: 1)).ConfigureAwait(false);
+            enriched = _store.GetTrack(uri) ?? EpisodeAsTrack.From(_store.GetEpisode(uri));
+        }
+        catch { /* best-effort: the bar keeps the cluster snapshot */ }
         bool changed = false;
         lock (_gate)
         {
@@ -489,15 +544,24 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
             if (enriched is { } e && _track is { } cur && cur.Uri == uri)
             {
                 // Keep the cluster's title (+ duration/position state); fill artist + album + art from the resolved track.
-                _track = cur with
+                var next = cur with
                 {
                     Title = StoreEntityMerge.TitleMissing(cur.Title, cur.Uri) ? e.Title : cur.Title,
                     Artists = e.Artists.Count > 0 ? e.Artists : cur.Artists,
-                    Album = e.Album,
+                    // NEVER trade a linked album ref for an unlinked one. The episode projection carries the show NAME
+                    // and, whenever the catalogue write did not carry the show's gid, no show uri — so taking it
+                    // wholesale erased the album/show link the cluster row already had, and the player-bar subtitle
+                    // stopped being clickable.
+                    Album = e.Album.Uri.Length == 0 && cur.Album.Uri.Length > 0
+                        ? e.Album with { Id = cur.Album.Id, Uri = cur.Album.Uri }
+                        : e.Album,
                     Image = ImageSource.ChooseBetter(e.Image, cur.Image),
                     Isrc = e.Isrc ?? cur.Isrc,   // carry the resolved ISRC onto the now-playing track (cluster track has none)
                 };
-                changed = true;
+                // Publish only a REAL change. A row the ladder cannot lift (an episode, a track the catalogue has no
+                // better answer for) resolves to exactly what is already on the slab, and firing Changes for it woke
+                // every player-bar/queue consumer on every cluster push for as long as it played.
+                if (next != cur) { _track = next; changed = true; }
             }
         }
         if (changed) FireChanges();
@@ -521,15 +585,24 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
             switch (e.Kind)
             {
                 case EvKind.Started:
-                case EvKind.Resumed:
                 case EvKind.TrackChanged:
+                    // The event that RESOLVED the stream carries its identity. Resumed does not re-resolve, so it
+                    // deliberately falls through to the shared play-state arm below without touching it.
+                    _streamBitrateKbps = e.SelectedBitrateKbps;
+                    _streamFormat = string.IsNullOrEmpty(e.AudioFormatName) ? null : e.AudioFormatName;
+                    goto case EvKind.Resumed;
+                case EvKind.Resumed:
                     _isPlaying = true; _isBuffering = false;
                     _canSkipNext = _canSkipPrev = _canSeek = true;   // local playback → full local control
                     _speed = 1.0; _posMs = e.AtMs; _posAnchorWall = _now();
                     break;
-                case EvKind.Paused:
                 case EvKind.Ended:
                 case EvKind.BecameInactive:
+                    // Nothing is decoding any more — the badge must go with it. (Paused does NOT clear: the stream is
+                    // still the stream, it is simply not advancing.)
+                    ClearStreamIdentityLocked();
+                    goto case EvKind.Paused;
+                case EvKind.Paused:
                     _isPlaying = false; _speed = 1.0; _posMs = e.AtMs; _posAnchorWall = _now();
                     break;
                 case EvKind.Seeked:
@@ -621,10 +694,10 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
 
     static Track MapTrack(in RemoteTrack r)
     {
-        var artists = new ArtistRef[] { new(IdFromUri(r.ArtistUri), r.ArtistUri, r.ArtistName) };
-        var album = new AlbumRef(IdFromUri(r.AlbumUri), r.AlbumUri, r.AlbumName);
+        var artists = new ArtistRef[] { new(EntityUri.IdOf(r.ArtistUri), r.ArtistUri, r.ArtistName) };
+        var album = new AlbumRef(EntityUri.IdOf(r.AlbumUri), r.AlbumUri, r.AlbumName);
         Image? img = string.IsNullOrEmpty(r.ImageUrl) ? null : new Image(r.ImageUrl!);
-        return new Track(IdFromUri(r.Uri), r.Uri, r.Title, artists, album, r.DurationMs, HasVideoMetadata(r), img);
+        return new Track(EntityUri.IdOf(r.Uri), r.Uri, r.Title, artists, album, r.DurationMs, HasVideoMetadata(r), img);
     }
 
     // Viewer-mode queue: the active device's next_tracks split by provider, PRECEDED by its prev_tracks as a History tail
@@ -678,12 +751,6 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
         return metadata.ContainsKey("media.manifest_id") || metadata.ContainsKey("save_track.uri");
     }
 
-    static string IdFromUri(string uri)
-    {
-        if (string.IsNullOrEmpty(uri)) return "";
-        int i = uri.LastIndexOf(':');
-        return i >= 0 && i + 1 < uri.Length ? uri[(i + 1)..] : uri;
-    }
 
     public void Dispose() { _disposed = true; _ticker?.Dispose(); _ticker = null; }
 }

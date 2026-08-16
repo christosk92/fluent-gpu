@@ -108,6 +108,10 @@ credentials / onboarding marker) silently stay on **Classic** and never see it.
 | `SidebarSearch.cs` | Normalization + diacritics folding. `InvariantGlobalization=true` ⇒ collator probe + a Latin-1 fold fallback (folding is limited to Latin Extended-A in invariant mode — a stated limitation). |
 | `SidebarRecency.cs`, `SidebarFirstSeen.cs`, `SidebarPinId.cs` | Visit recency; the first-projection stamp used as the playlist added-at proxy; the pin-id ⇄ kind/uri scheme. |
 | `SidebarRowPlanner.cs` | **The planner.** `SidebarRowKind` (13 kinds), `SidebarRow` (POD — no string is allocated during planning), `SidebarProjectionInput`, `SidebarSourceState`, `SidebarSectionSlice`/`ISidebarSectionSlices`, `SidebarPlanBuffers`, `Build(doc, input, buffers)` and `BuildRail(…)` (`RailTileCap = 40`). |
+| `RootlistSlotResolver.cs` | **The drop-slot resolver** — `SidebarDropKind`/`SidebarDropRefusal`/`SidebarRowFacts`/`SidebarDropSlot`, `Resolve`/`DepthRange`/`EdgeFor`, the cue geometry (`SidebarDropCue`), the legality table (`RootlistTreeMoves.Check`/`TryRange`) and the pre-move undo anchor (`RootlistUndoAnchors.TryResolve`). See *Rootlist drag & drop* in §5. |
+| `RootlistTreeNav.cs` | The non-mouse half: `RootlistSiblingRun`, `SidebarTreeNavLayout.Decide`, `RootlistFolderChoice`, `PickerDestinations`/`HasDestinations`/`TryTopLevelAnchor`/`TryEntry`/`TryFolder`/`RefOf`. |
+| `SidebarStageHold.cs` | The mid-drag parking bay (`TryHold`/`TryFlush`/`Discard`) — generic and state-only, so the freeze's state machine is testable without a pane. |
+| `SidebarReorderClamp.cs` | `Offset(slot, from, to, extent)` — the displacement hint for a **clamped** reorder destination. |
 | `SidebarDataSource.cs` | The contribution contracts: `ISidebarDataSource`, `SidebarDataSourceBase`, `ISidebarContributionHost`, `SidebarContributions`, `SidebarConfigSchema`/`SidebarConfigField`/`SidebarConfigFieldKind`, `SidebarSourceConfig` (never-throwing typed readers over opaque JSON), `SidebarSourceRequest`, `SidebarContributionAvailability`, and the declared-capability enums (`SidebarSourceItemType`/`Filters`/`Sorts`/`Paging`). |
 | `SidebarSourceMap.cs` | The pure mappers every adapter is built out of: domain record → `SidebarLibraryEntry`, plus service-health → `SidebarSourceState`. Everything that can be *wrong* lives here so the tests reach it. |
 | `SidebarBinderPipeline.cs` | The pure half of the binder: `SidebarBinderTriggers` (12 lanes + `Fold()`), the filter/qualifier/search compaction, the sort + pins-first shaping, contribution resolution (missing/disabled/incompatible verdicts), `SidebarContributionCache` (the last-good snapshot replay — M3's stale-badge seam), `SidebarExtensionSlices`, `SidebarSourceIndex`. |
@@ -162,7 +166,7 @@ source that raises `Changed` mid-rebuild only marks the binder dirty.
 
 | File | Owns |
 |---|---|
-| `SidebarPane.cs` | The component. Subscribes the epochs, plans in a `UseMemo` keyed on `PlanDep`, publishes the plan as a **plain field** to the bound slots, drives the count signal from a layout effect, owns reorder bands + drop-to-pin + the collapse/expand choreography, and hosts the rail. |
+| `SidebarPane.cs` | The component. Subscribes the epochs, plans in a `UseMemo` keyed on `PlanDep`, publishes the plan as a **plain field** to the bound slots, drives the count signal from a layout effect, owns reorder bands + drop-to-pin + **the published rootlist drop slot** (`_dropSlot`, `ResourceDropSpec`, `RootlistSlotFor`, `TryMapSlot`, the mid-drag freeze) + the collapse/expand choreography, and hosts the rail. |
 | `SidebarPaneSlot.cs` | One bound slot and the whole 13-kind row vocabulary. A Component per slot, because `ItemsView.CreateBound` builds a slot once and recycles it by writing `scope.Index` — a render that reads `Index.Value` re-renders exactly on a recycle. |
 | `SidebarPaneRail.cs` | The 56-DIP rail. Content is *data* (`ShowInRail` sections, per `BuildRail`), not code, so Classic's rail and Curated's rail cannot drift. Not virtualized — the planner caps it at 40 tiles. |
 | `SidebarPaneText.cs` | The pure display rules: `TitleOf`, per-kind `SubtitleOf`, item lookup, icon fallbacks, the "never render a blank row" degradations. |
@@ -202,7 +206,9 @@ source that raises `Changed` mid-rebuild only marks the binder dirty.
 | `RailLayoutMenu` | `bool` (default true) | Put it at the bottom of the rail too. |
 | `RailFooter` | `Func<Element?>?` | An extra rail affordance after the planned tiles (Classic's create-playlist "+"). |
 | `ActivateFolder` | `Action<string,string>?` | What activating a folder disclosure row does. Null ⇒ toggle the shared folder-expansion state. Replaces both the row's click **and** the expand/collapse verb in its context menu, so the two can never disagree. |
-| `IsReorderableSection` | `Func<SidebarSectionKind,bool>?` | Default: `Pinned`/`StaticLinks`/`CustomGroup`. The rootlist is never written (locked decision 9). |
+| `IsReorderableSection` | `Func<SidebarSectionKind,bool>?` | Default: `Pinned`/`StaticLinks`/`CustomGroup` — never `PlaylistTree` (V3's local custom order opts in). Folder CRUD is no longer locked (the old "locked decision 9" is **lifted**: see `FolderActions`), but the rootlist is written only through `WaveeResourceDrop.MoveRootlist` and `FolderActions`, never through a reorder band. |
+| `TreeSortedNonCustom` | `Func<bool>?` | Null ⇒ false (Classic/Curated always show rootlist order). True ⇒ the drop resolver refuses `Before`/`After`/`EndOfList` with `drag.clearSortingToReorder` while `Into` stays legal. A live probe, never a value. See *Rootlist drag & drop* below. |
+| `ClampReorderSlot` | `Func<SidebarSectionKind,int,int,int>?` | Constrain a LIVE reorder gesture's reachable slots. Null ⇒ every band slot is reachable. V3 supplies `LibraryV3View.ClampToSiblingRun` so the gap never opens across a folder boundary. Called from the displacement path — must stay allocation-free. |
 | `CommitReorder` | `Action<SidebarPaneReorder>?` | Null ⇒ `SidebarPaneReorderCommit.Default` (Pinned → the shared pin store; every other reorderable kind → the undoable `MoveItem`). |
 | `OnCustomize` | `Action?` | Null ⇒ those surfaces render without their action rather than with a dead one. |
 | `OnCreatePlaylist` | `Action?` | Null ⇒ the create row is still planned but inert. |
@@ -249,6 +255,226 @@ pending — `InfoBadge.Count` is gone) · `SidebarChevron` · `SidebarCover` (`S
 `ForPin`, `Art`, `Glyph`, and the bucketed decode ladder) · `SidebarSectionHeader` · `SidebarPinDropZone`
 (`RestHeight 56` / `ActiveHeight 72`) · `SidebarRailItem` (`Box 40`, `ArtEdge 36`) · `SidebarSkeletons` ·
 `SidebarSelectionPill` (see the deletion candidates in [pitfalls.md](pitfalls.md)).
+
+### Rootlist drag & drop — one resolver, one published slot, one commit
+
+The sidebar tree's organisation gesture (re-ordering playlists and folders, filing them into folders, un-nesting
+them). Reworked 2026-08-16; the **old zone model is gone** — `SidebarPane.RootlistPlacementFor` (a hidden 25/50/25
+or 50/50 vertical hit-test), the boolean `IsResourceDropActive` and the `Signal<int> _resourceDropRow` were deleted
+outright, along with the "before/after needs no caption" rationale they carried. Three outcomes used to share ONE
+pixel-identical accent plate; pointer X was never read; the cycle/no-op guards lived three layers down in
+`RootlistOps` where they could only fail silently.
+
+**The shape now.** ONE pure function turns *(row facts, t, xInRow)* into a slot; ONE signal publishes it; the row
+draws a **line** or a **plate**; the drop **consumes** the published slot instead of recomputing one.
+
+```
+pointer ──► SidebarPane.RootlistSlotFor        (viewport/scroll math → t, xInRow)
+              └► RootlistSlotResolver.Resolve  (PURE: geometry + the refusal table)
+                   └► RootlistTreeMoves.Check  (PURE: legality vs the flattened tree)
+                        └► Signal<SidebarDropSlot> _dropSlot      ONE write per hover
+                             ├► SidebarPaneSlot.InsertionLine     (line, bound props)
+                             ├► SidebarEntityRow plate            (Into only)
+                             ├► ResourceDropSpec.CaptionFor       (the chip sentence)
+                             └► CommitDrop → TryMapSlot → WaveeResourceDrop.MoveRootlist
+```
+
+#### The resolver (`Features/Sidebar/Data/RootlistSlotResolver.cs` — engine-free, source-included by `Wavee.Tests`)
+
+`SidebarDropKind {None, Before, After, Into, EndOfList}` ·
+`SidebarDropRefusal {None, Self, IntoItself, IntoDescendant, NoOp, SortedList, NotLoaded, Unavailable}` ·
+`SidebarRowFacts(IsFolder, FolderExpanded, FolderHasChildren, Depth, NextVisibleDepth, CenterAccepts, SourceIsSelf,
+SourceIsAncestorOfRow, SortedNonCustom, RootlistLoaded)` + `{ IsListEnd }` ·
+`SidebarDropSlot(PlanIndex, Kind, Depth, Refusal)` with `IsArmed` / `DrawsLine` / `DrawsPlate`.
+
+**Invariant: a refused slot carries `Kind = None`**, so a refusal draws neither cue and the caption is the only
+thing that speaks. `SidebarRowFacts` is built structurally by `SidebarPaneSlot.TreeRowFacts` (from `Plan.Rows` +
+`Plan.Entries` + folder expansion) and completed **at hover** with the ones the payload decides (`SourceIsSelf`,
+`SourceIsAncestorOfRow`, and `CenterAccepts` for a track-bearing payload) — hover is the first moment a payload
+exists, and it is a ten-field struct copy, so it costs nothing inside the 0-alloc frame region.
+
+**Geometry** (`Resolve(planIndex, t, xInRow, rowHeight, in facts, in previous)`):
+
+| row | bands |
+|---|---|
+| any | `edge = EdgeFor(h) = clamp(0.30·h, 10, 16)`, further capped at `h/2`; `top = edge/h`, `bottom = 1 − top` |
+| **folder** (any state) | `t < top` ⇒ `Before(folder)` · `t > bottom` ⇒ expanded-with-children ? `Before` at `Depth+1` (the precise "first child" slot) : `After` at the picked depth · else **`Into`** (append as last child) |
+| **`CenterAccepts` playlist** (editable ∧ payload has tracks) | 30/40/30: `Before` / **`Into` = deposit tracks** / `After`. The retained copy gesture — the plate is what distinguishes it from the two edge lines. |
+| anything else | 50/50 `Before` / `After` — no dead centre a row cannot honour |
+| **`IsListEnd`** (the `TreeEnd` chrome row, `SidebarRowGeometry.TreeEndHeight` = 24 DIP) | the whole row is one `EndOfList` at depth 0; no bands |
+| degenerate (`planIndex < 0`, non-finite `t`/`h`, dead viewport/scene) | `Kind = None, Refusal = Unavailable` — refuse with a reason, never guess |
+
+**Depth** matters only for `After`/`EndOfList`. `DepthRange(facts) = (Min: NextVisibleDepth, Max: Depth)` clamped so
+`Min ≤ Max`; a slot is ambiguous iff `Min < Max`, which is exactly "after the last visible child of a (possibly
+nested) folder". The depth pick (private, reached through `Resolve`) reads x:
+`round((xInRow − SidebarRowGeometry.RowInsetLeft) / IndentStep)` clamped to the range, with **4-DIP hysteresis**
+(`DepthHysteresis`) around each boundary against the previous slot. **The default is `Max`** — the pointer over the
+label sits far past the indent ladder, so a drag that never moves left stays at the row's own depth; travelling
+LEFT outdents one step per `IndentStep` (12).
+
+**Refusal table**, evaluated after the zone (two arms depend on which zone you are in) and in this order:
+
+| condition | refusal | caption (`SidebarPane.RefusalSentence`) |
+|---|---|---|
+| `!RootlistLoaded` | `NotLoaded` | `drag.stillLoading` |
+| `SourceIsSelf` ∧ `Into` | `IntoItself` | `drag.cantMoveIntoItself` |
+| `SourceIsSelf` | `Self` | `drag.cantMoveHere` |
+| `SourceIsAncestorOfRow` | `IntoDescendant` | `drag.cantMoveIntoItself` |
+| `SortedNonCustom` ∧ kind ∈ {Before, After, EndOfList} | `SortedList` | `drag.clearSortingToReorder` (Into stays legal — a deposit needs no position) |
+| the resolved destination is where the item already is | `NoOp` | `drag.alreadyThere` |
+| degenerate geometry | `Unavailable` | `drag.cantMoveHere` |
+
+The `NoOp` / `IntoDescendant` arms come from `RootlistTreeMoves.Check(tree, sourceId, targetId, placement)` — the
+legality half, decided over the **depth-first flattened tree** (`SidebarProjectionInput.PlaylistTree`, the full
+tree, not the expansion-filtered plan). `RootlistSlotFor` runs it on the *mapped* destination at hover, so "already
+there" and "into your own subtree" refuse **where the cue is drawn** instead of returning a silent `false` inside
+`RootlistOps`. Its `TryRange` — "a folder is itself plus every following entry deeper than it" — is the same span
+the balanced marker pair encloses, which is why the two agree by construction (see
+[wavee-playlist-mutations](../wavee/wavee-playlist-mutations/SKILL.md) §7 for the `Check` ⇄ `CheckMove` split).
+
+#### The cue vocabulary
+
+**Line ⟺ Before/After/EndOfList. Plate ⟺ Into. Never both, never neither-while-armed.** Pinned by
+`SidebarDropCueTests`; `SidebarDropCue` owns the predicates (`DrawsLine`/`DrawsPlate` — `SidebarDropSlot`'s
+properties delegate to them, so there is one rule) and the pure geometry.
+
+- **Insertion line** — `SidebarPaneSlot.InsertionLine(index, height)`, mounted **once per row, always** (never
+  conditionally) as a third ZStack child beside the selection pill, `HitTestVisible = false`, every prop bound off
+  ONE `owner.DropSlotFor(index)` read (the `SidebarSelectionPill` discipline — a conditional mount would need a
+  re-render per pointer move). 2-DIP `Tok.AccentDefault`, corner 1, a 6-DIP terminal dot at the left cap (what
+  makes a hairline read as an insertion caret rather than as a divider); `LineWidth = ContentWidth −
+  IndentFor(depth) − RowInsetRight`; `LineY` = 0 for Before/EndOfList, `h − LineThickness` for After. **The line's
+  indent IS the resolved depth** — that is the whole depth cue.
+- **Plate** — the existing accent fill + 1-DIP border on `SidebarEntityRow`, gated on
+  `SidebarDropCue.DrawsPlate(cue().Kind)` and nothing else. Whole-row destinations (the create row, rail tiles, the
+  pin band) still use the boolean `SidebarRowSpec.DropActive`; a tree row uses `SidebarRowSpec.DropCue`.
+- **Captions** — Before/After **at the row's own depth say nothing** (the line already answers "where"); the two
+  slots the line alone cannot disambiguate carry a sentence.
+
+| slot | caption |
+|---|---|
+| `Into` folder | `drag.moveInto` "{name}" |
+| `Into` playlist (the deposit) | `drag.addTo` "{name}" |
+| `Before` / `After` at the row's own depth | *(none)* |
+| `After` at a reduced depth | `drag.moveOutOf` "{parent}", or Your Library at top level |
+| `EndOfList` | `drag.moveToEnd` |
+| any refusal | the refusal table above |
+
+- **Chip resting caption** — a rootlist payload gets `drag.organizeHint` ("Drop between playlists or onto a
+  folder"); track-bearing non-rootlist payloads keep `drag.dragOntoPlaylist` (`WaveeResourceDrag.Chip`).
+- **No scrim for rootlist payloads** — `spotlightWhen: s => Unwrap(s.Payload) is not { RootlistItem: true }` on
+  both the row spec and the rail folder spec. An organisation drag must not dim the app it is happening inside; the
+  detail page's insertion list took the same exemption for same-list drops first.
+
+#### Slot → mutation (`SidebarPane.TryMapSlot`, the ONE owner — called at hover for legality and at drop to commit)
+
+| slot | target `RootlistItemRef` | placement |
+|---|---|---|
+| `Before(i)` | entry *i* | `Before` |
+| `Before(i)` with `Depth > entry.Depth` (an expanded header's bottom band) | the **next plan row** = the folder's first child | `Before` |
+| `After(i)`, `Depth == entry.Depth` | entry *i* | `After` |
+| `After(i)`, `Depth < entry.Depth` | the ancestor folder `entry.Depth − Depth` levels up (`TryAncestorFolder` walks `ParentFolderId`) | `After` — the outdent, identical in shape to `FolderActions.MoveOut` |
+| `Into` folder | the folder | `Inside` (append last) |
+| `Into` editable playlist | — | `WaveeResourceDrop.DepositTracks` (`RootlistSlotTarget.Deposit` — not a rootlist move at all) |
+| `EndOfList` | the **last top-level entry** (`TryLastTopLevelEntry`) | `After` — `TryRange`'s exclusive end lands after a trailing folder's whole subtree |
+
+`CommitDrop`'s order is load-bearing: the **same-owner `ReorderPayload` guard is hoisted to the top** (it used to
+sit below the track-deposit arm, so a pin-band or V3 custom-order reorder passing over an editable playlist copied
+that playlist's songs on the way past). It then consumes `_dropSlot.Peek()` — a refused or unarmed slot commits
+**nothing**, and there is no fallback placement, because guessing is what made "after the last child" land inside
+the folder.
+
+#### The mid-drag freeze
+
+`SidebarPane.TryPublishStage` parks the newest plan stage in a `SidebarStageHold<PlanStage>` (last-writer-wins)
+while `WaveeResourceDrag.LiveRootlistDrag()` is true — a re-projection arriving mid-gesture (a dealer push from
+another device, our own optimistic ack, a background revalidate) would re-key the rows the drag is aiming at. It is
+the sidebar's copy of `Features/Detail/PlaylistReorderDefer`. `SidebarDragPeekWatcher` (the pane's one
+`UseDragState()` owner) flushes it from a **layout effect on the active edge**, so drop, cancel and Escape each
+flush exactly once; `DiscardDeferredStage` covers an unmount mid-gesture, and any publish empties the bay. Two
+publish-through exemptions:
+
+1. **A live disclosure** (`_activeDisclosureKey is not null`) — spring-loading a collapsed folder mid-drag exists
+   precisely to reveal its children, so that expansion has to reach the plan.
+2. **`_publishThroughFreeze`**, a one-shot latch set by the pane's own reorder `Commit` — that stage is this
+   gesture's own result, not a foreign projection, and holding it would snap the dropped row home for the whole
+   settle window. A session end retires the latch whether or not the commit it was set for produced a stage.
+
+Non-rootlist drags are never frozen: they aim at a row's *identity*, not at its position.
+
+#### Library V3
+
+- **Sorted, non-custom** (`SidebarPaneConfig.TreeSortedNonCustom`, supplied only by V3 as `!CanReorderCustom()`):
+  the `SortedNonCustom` fact refuses Before/After/EndOfList with `drag.clearSortingToReorder`; `Into` stays legal.
+- **Custom order** (`SidebarPaneConfig.ClampReorderSlot` → `LibraryV3View.ClampToSiblingRun`): V3's local overlay
+  cannot move an item between folders, so the reachable slot is snapped to the nearest one in the source's sibling
+  run **during the gesture** — the gap never opens across a folder boundary, and `CommitPaneReorder`'s `SameParent`
+  bail becomes the invariant behind it rather than the user's only feedback. The run is a *set*, not a span (a
+  top-level drag travels past an expanded folder's children; a child drag stays boxed inside its folder).
+  `SidebarReorderClamp.Offset(slot, from, to, extent)` reproduces the displacement hint for the clamped
+  destination, because the engine's `ReorderList.OffsetFor` computes it from the target it holds internally, which
+  the app cannot set.
+
+#### The rail (56 DIP)
+
+Folder tiles are real destinations (`SidebarPane.RailFolderDropSpec`): **Into and only Into** — a 56-DIP strip has
+nothing above or below a tile to be "before" or "after" — with the same `RootlistTreeMoves.Check` legality, the same
+pre-move undo anchor and the same commit. Playlist tiles go **transparent** for a folder drag through
+`SidebarRailDropRules.TileTransparent(isRootlistItem, canCopyTracks)`: a folder has nothing it could add to a
+playlist, and the landed answer "Nothing to add" was an accusation aimed at a drag that was only passing through.
+The rail's cue is keyed by uri (`_railDropUri`), not by plan index — a rail tile has no row in the expanded plan.
+
+#### The non-mouse verbs (a drag must never be the only way)
+
+Pure answers in `Features/Sidebar/Data/RootlistTreeNav.cs` (engine-free, source-included), over the same flattened
+tree: `RootlistSiblingRun` (position/count + the two neighbours; `CanMoveUp`/`CanMoveDown`),
+`SidebarTreeNavLayout.Decide` (which verbs the menu offers — **absent at the run's ends, never disabled**),
+`RootlistFolderChoice` + `PickerDestinations` / `HasDestinations` / `TryTopLevelAnchor`, `TryEntry` / `TryFolder`,
+and `RefOf` (the ONE entry → `RootlistItemRef` rule; `RootlistUndoAnchors` delegates to it). Siblings are the
+entries sharing a `ParentFolderId`, **not** "the entries at the same depth" — that would fuse two folders' children
+into one run.
+
+- **Row menu** — `SidebarPaneSlot.NavExtras`' PlaylistTree branch (additive `layoutExtras`, so `MenuGrammarTests`
+  stays green) adds **Move up** / **Move down** / **Move to folder…**. Mutually exclusive with the reorder-band arm
+  by construction (`TreeMoves` returns empty for a `Reorderable`-wrapped row), so "Move up" never appears twice.
+  **Move out of {parent}** is *not* added here — it already lives in the entity menu on every surface that shows
+  the row.
+- **Alt+↑ / Alt+↓** — `SidebarRowSpec.OnMove` on a focused tree row, next to F2 in `SidebarEntityRow`'s one
+  `OnKeyDown` handler; exactly `KeyModifiers.Alt` (Alt+Shift belongs to whoever claims it next). Same sibling
+  moves, same announce, never on a `Reorderable`-wrapped row.
+- **`RootlistFolderPicker`** — hosted in a `ContentDialog`, not an anchored flyout: it opens from a context menu
+  that is already gone by invoke time, so there is no anchor node left to place against (the same reason
+  `Menus.OpenPicker` hosts the playlist picker that way). It reuses the playlist picker's shell + search field.
+  **Top level** is pinned first and is never filtered away by the search box (it is the anchor row, and hiding it
+  would strand a user who typed a folder name and changed their mind); folders follow in tree order, indented by
+  depth. The source's own subtree is excluded because the list is built from `RootlistTreeMoves.Check` — the picker
+  cannot offer a destination a drag would refuse. The destination list is a **snapshot taken at open** (props
+  freeze at mount, and the projection is not a signal the panel can subscribe to); the **commit re-reads the live
+  tree**, so a mid-flight desktop rootlist change resolves to nothing rather than to the wrong folder. Top level
+  commits against `TryTopLevelAnchor` (last top-level entry, `After`), a folder against `(folderId, Inside)`.
+
+#### One commit chokepoint
+
+Every path — drop, rail drop, menu verb, Alt+arrow, picker — ends at **`WaveeResourceDrop.MoveRootlist` →
+`LibraryBridge.MoveRootlistItemAsync`**; the four non-mouse verbs funnel through **`FolderActions.Commit`**, which
+resolves `(target, placement)` from `RootlistTreeNav` and captures the undo anchor before handing over. That is why
+every move awaits, maps a failure by **verb** (`PlaylistEditVerb.Reorder` — never raw `ex.Message`), announces
+through `Announcer`, and shows a `drag.movedTo` / `drag.movedToLibrary` success toast whose **Undo** is the inverse
+move.
+
+The undo anchor is captured **before** the mutation (`RootlistUndoAnchors.TryResolve`, because once the rootlist
+has moved, where the item used to be is unknowable): the previous sibling (`After`), else the next sibling
+(`Before`), else the parent folder (`Inside`) — and `false` when the item is the tree's only top-level member, in
+which case the toast appears **without** an Undo rather than with one that would land somewhere else. The inverse
+rides the very same `MoveRootlistItemAsync` seam, so there is no second mutation path to keep in sync.
+
+#### Deferred: the engine-level insertion path
+
+The right end state is the engine's own tree insertion — `InsertionOptions` with a depth channel and a real
+**displacement gap** — which would delete the row-owned line entirely. It is **blocked on `ItemsView`'s whole-list
+insertion hit region**: insertion is armed for the list, not per row, so it cannot express "this row's bottom band,
+at depth *d*". The resolver is deliberately shaped to survive that migration unchanged — it consumes
+*(row facts, t, xInRow)* and emits a slot, and neither mentions how the cue is drawn.
 
 ---
 

@@ -77,8 +77,13 @@ public static class Menus
         // Navigation. A multi-selection has no single album/artist to go to, so these are single-target rows.
         if (ctx.Target.Single is { } single)
         {
-            if (showGoToAlbum && single.Album is { Uri.Length: > 0 })
+            // ONE navigation row for the container this playable belongs to, routed by what that container IS: a song
+            // goes to its album, an EPISODE goes to its podcast (an episode carries its SHOW in the album slot —
+            // EpisodeAsTrack, design §1.5 — so "Go to album" would have opened the album page of a show).
+            if (showGoToAlbum && ActionRules.CanGoToAlbum(in ctx.Target))
                 rows.Add(TrackActions.GoToAlbum.ToMenuItem(ctx));
+            else if (showGoToAlbum && GoToPodcastItem(ctx.S, in ctx.Target) is { } podcast)
+                rows.Add(podcast);
             var nav = NavigableArtists(single.Artists);
             if (nav is { Count: 1 } one)
                 // The action navigates to the PRIMARY artist; when the only navigable one is a secondary (the primary
@@ -162,7 +167,7 @@ public static class Menus
         if ((which & VideoMenuItems.Replace) != 0) items.Add(VideoActions.ReplaceVideo.ToMenuItem(ctx));
         if ((which & VideoMenuItems.Locate) != 0) items.Add(VideoActions.LocateVideo.ToMenuItem(ctx));
         if ((which & VideoMenuItems.ShowInExplorer) != 0) items.Add(VideoActions.ShowVideoInExplorer.ToMenuItem(ctx));
-        // Destructive last, behind a separator (the SidebarPlaylist Delete convention). No confirm dialog — detaching is
+        // Destructive last, behind a separator (the sidebar playlist Delete convention). No confirm dialog — detaching is
         // metadata-only, never touches the file, and the toast carries Undo.
         if ((which & VideoMenuItems.Remove) != 0)
         {
@@ -184,6 +189,17 @@ public static class Menus
             items[i] = new MenuFlyoutItem(a.Name, null, s.Go is not null, () => s.Go?.Invoke("artist:" + a.Uri, a.Name));
         }
         return MenuFlyoutItem.SubMenu(Loc.Get(Strings.Menu.GoToArtists), items, ActionIcons.Resolve(ActionIcons.Artist));
+    }
+
+    /// <summary>"Go to podcast" — the navigation row an EPISODE row gets where a song row gets "Go to album". It opens
+    /// the SHOW page ("show:" — the shared detail surface rendering Episodes), reading the show ref an episode carries
+    /// in its album slot. Null when the target is not one of those rows, so the verb never appears on a song.</summary>
+    static MenuFlyoutItem? GoToPodcastItem(ActionServices s, in ActionTarget target)
+    {
+        if (!ActionRules.CanGoToPodcast(in target) || target.Single is not { } t) return null;
+        string uri = t.Album.Uri, name = t.Album.Name;   // captured by value — no Track held by the closure
+        return new MenuFlyoutItem(Loc.Get(Strings.Menu.GoToPodcast), Icons.RadioTower,
+                                  s.Go is not null, () => s.Go?.Invoke("show:" + uri, name));
     }
 
     /// <summary>"Go to artist" for ONE named artist that is not the target's primary (so the action singleton, which
@@ -289,25 +305,28 @@ public static class Menus
         });
     }
 
+    /// <summary>The confirmation for a completed REMOVE. Same reasoning as <see cref="ToastDeposited"/>, and the same
+    /// action slot: a remove is the edit most often made by accident, so Undo is the only thing worth offering — and
+    /// until now the only way back was the notification panel, which nobody opens in the second they realise.</summary>
+    internal static void ToastRemoved(ActionServices s, int count, long activityId)
+    {
+        var nc = s.Svc?.Notifications;
+        Toast.Show(Strings.Detail.Edit.RemovedFromPlaylist(count), new ToastOptions
+        {
+            Severity = InfoBarSeverity.Success,
+            ActionLabel = nc is not null && activityId >= 0 ? Loc.Get(Strings.Notifications.Undo) : null,
+            OnAction = nc is not null && activityId >= 0 ? () => _ = nc.UndoByIdAsync(activityId) : null,
+        });
+    }
+
     /// <summary>"New playlist" for a deposit whose payload is not in hand (a container): create, then run the same
     /// deposit the named rows run. The track path keeps <see cref="CreateAndAdd"/>, which can add inside one flow.</summary>
     static void CreateAndDeposit(ActionServices s, Action<string, string> deposit)
     {
-        if (s.Library is not { } lib) return;
-        string name = NextPlaylistName(s);
-        var post = s.Post;
-        _ = Run();
-        async Task Run()
-        {
-            string uri;
-            try { uri = await lib.CreatePlaylistAsync(name).ConfigureAwait(false); }
-            catch (Exception ex)
-            {
-                ContainerActions.Post(post, () => PlaylistEditErrors.Toast(ex));
-                return;
-            }
-            ContainerActions.Post(post, () => deposit(uri, name));
-        }
+        // SYNCHRONOUS create (PlaylistCreateFlow): the optimistic row is in the store the instant this returns, so the
+        // deposit runs in the same gesture instead of waiting on a round trip that may never come back.
+        if (PlaylistCreateFlow.Create(s, default, navigate: false, out string name) is not { } created) return;
+        deposit(created.Uri, name);
     }
 
     // ── Move to playlist ▸ (same picker, MOVE semantics: deposit into the target, then drop the source rows) ────────
@@ -363,18 +382,9 @@ public static class Menus
 
     static void CreateAndMove(ActionServices s, IReadOnlyList<Track> tracks, PlaylistHost host)
     {
-        if (s.Library is not { } lib || tracks.Count == 0) return;
-        string name = NextPlaylistName(s);
-        _ = Run();
-        async Task Run()
-        {
-            try
-            {
-                string uri = await lib.CreatePlaylistAsync(name).ConfigureAwait(false);
-                MoveTo(s, uri, name, tracks, host);
-            }
-            catch (Exception ex) { PlaylistEditErrors.Toast(ex); }
-        }
+        if (s.Library is null || tracks.Count == 0) return;
+        if (PlaylistCreateFlow.Create(s, default, navigate: false, out string name) is not { } created) return;
+        MoveTo(s, created.Uri, name, tracks, host);
     }
 
     /// <summary>Add to an existing playlist. AWAITED, then confirmed — the old shape fired the write and toasted
@@ -409,14 +419,14 @@ public static class Menus
     static void CreateAndAdd(ActionServices s, IReadOnlyList<Track> tracks)
     {
         if (s.Library is not { } lib || tracks.Count == 0) return;
-        string name = NextPlaylistName(s);
+        if (PlaylistCreateFlow.Create(s, default, navigate: false, out string name) is not { } created) return;
+        string uri = created.Uri;
         var post = s.Post;
         _ = Run();
         async Task Run()
         {
             try
             {
-                string uri = await lib.CreatePlaylistAsync(name).ConfigureAwait(false);
                 await lib.AddTracksAsync(uri, tracks).ConfigureAwait(false);
                 ContainerActions.Post(post, () =>
                 {
@@ -476,14 +486,17 @@ public static class Menus
         Image? image = null, string? subtitle = null, bool circular = false)
     {
         if (uri is not { Length: > 0 }) return null;
-        if (uri.Contains(":track:", StringComparison.Ordinal)) return TrackUriCard(s, uri, name, image, subtitle);
-        if (uri.Contains(":show:", StringComparison.Ordinal)) return ShowCard(s, uri, name, image, subtitle);
+        // The card's grammar follows its KIND, read by the ONE parser (hydration-facade-design.md §1.1) rather than by
+        // substring probes. Episode and every unrecognised scheme still fall through to "no menu", as documented above.
+        var kind = EntityUri.KindOf(uri);
+        if (kind == EntityKind.Track) return TrackUriCard(s, uri, name, image, subtitle);
+        if (kind == EntityKind.Show) return ShowCard(s, uri, name, image, subtitle);
 
         bool liked = uri == "spotify:collection:tracks";
         ActionTarget target =
-            uri.Contains(":album:", StringComparison.Ordinal) ? ActionTarget.ForAlbum(uri, name)
-            : uri.Contains(":artist:", StringComparison.Ordinal) ? ActionTarget.ForArtist(uri, name)
-            : uri.Contains(":playlist:", StringComparison.Ordinal) || liked ? ActionTarget.ForPlaylist(uri, name)
+            kind == EntityKind.Album ? ActionTarget.ForAlbum(uri, name)
+            : kind == EntityKind.Artist ? ActionTarget.ForArtist(uri, name)
+            : kind == EntityKind.Playlist || liked ? ActionTarget.ForPlaylist(uri, name)
             : default;
         if (target.Kind == TargetKind.None) return null;
 
@@ -599,27 +612,51 @@ public static class Menus
         => s is null ? null : new MenuAttach(overlay, () => TrackContextMenu.BuildSingle(s, track));
 
     // ── Sidebar playlist row (rows-only vertical menu) ───────────────────────────────────────────────────────────────
-    /// <summary>Play · Open · — · <b>Pin to sidebar / Unpin from sidebar</b> · Rename (owner) · Visibility ▸ (owner, live) ·
-    /// Invite collaborators (owner, live) · Share ▸ · — · Delete playlist (owner).
+    /// <summary>The playlist row list — Play · Open · — · <b>Pin to sidebar / Unpin from sidebar</b> · Rename (owner) ·
+    /// Visibility ▸ (owner, live) · Invite collaborators (owner, live) · Share ▸ · — · Delete playlist (owner) — used by
+    /// <see cref="SidebarEntry"/>'s playlist arm, so the V3/Curated row menu and the Classic sidebar row menu can never drift.
     ///
     /// <para>The pin row sits IMMEDIATELY AFTER the first separator, before any owner-gated management verb (F.5.3):
     /// pinning is available to every playlist regardless of ownership, so placing it inside the owner block would make it
     /// look like part of it. It is gated on nothing but the pin store's presence.</para></summary>
-    public static ContextMenuModel SidebarPlaylist(ActionServices s, PlaylistSummary p)
-        => new(SidebarPlaylistRows(s, p.Uri, p.Name, p.IsOwner, p.CanEdit),
-            header: Header(p.Cover, p.Uri, p.Name, p.OwnerName is { Length: > 0 } ? p.OwnerName : "Playlist"));
-
-    /// <summary>The playlist row list itself, shared by <see cref="SidebarPlaylist"/> and <see cref="SidebarEntry"/>'s
-    /// playlist arm — one builder, so the V3/Curated row menu and the Classic sidebar row menu can never drift.</summary>
-    static List<MenuFlyoutItem> SidebarPlaylistRows(ActionServices s, string uri, string name, bool isOwner, bool canEdit)
+    /// <summary>The action context a SIDEBAR playlist row acts through. Sidebar summaries carry only CanEdit/IsOwner, so
+    /// this is the one place that maps them onto the capabilities shape the actions gate on — the row menu and the row's
+    /// F2 accelerator share it, which is what stops the keyboard verb and the menu verb from disagreeing about who may
+    /// rename what.</summary>
+    static ActionContext SidebarPlaylistCtx(ActionServices s, string uri, string name, bool isOwner, bool canEdit)
     {
-        // Sidebar summaries carry only CanEdit/IsOwner — mapped onto the capabilities shape the actions gate on.
         var caps = new PlaylistCapabilities(
             CanView: true, CanEditItems: canEdit, CanEditMetadata: isOwner,
             IsCollaborative: canEdit && !isOwner, IsOwner: isOwner,
             CanAdministratePermissions: isOwner);
         var host = new PlaylistHost(uri, caps, Array.Empty<PlaylistRowRef>());
-        var ctx = new ActionContext(ActionTarget.ForPlaylist(uri, name, host), s);
+        return new ActionContext(ActionTarget.ForPlaylist(uri, name, host), s);
+    }
+
+    /// <summary><b>F2</b> on a sidebar row, or null when the row has nothing to rename. The KEYBOARD path to the same
+    /// verb the row menu offers — built from the same context and the same commands, never a second implementation.
+    /// A folder renames through <see cref="FolderActions"/>; a playlist through <see cref="ContainerActions.RenamePlaylist"/>
+    /// (owner-only, which its own enablement decides — not a second copy of the rule here).</summary>
+    public static Action? SidebarRenameAction(ActionServices s, in SidebarLibraryEntry e)
+    {
+        if (s.Library is null || s.Overlay is null) return null;
+        if (e.Kind == SidebarEntryKind.Folder)
+        {
+            if (e.FolderId.Length == 0) return null;
+            string folderId = e.FolderId, folderName = e.Name;
+            return () => FolderActions.Rename(s, folderId, folderName);
+        }
+        if (e.Kind != SidebarEntryKind.Playlist || e.Uri.Length == 0) return null;
+        var ctx = SidebarPlaylistCtx(s, e.Uri, e.Name, e.IsOwner, e.CanEdit);
+        if (!ContainerActions.RenamePlaylist.EnabledFor(in ctx)) return null;
+        return () => ContainerActions.RenamePlaylist.Execute(ctx);
+    }
+
+    static List<MenuFlyoutItem> SidebarPlaylistRows(ActionServices s, string uri, string name, bool isOwner, bool canEdit,
+                                                   string parentFolderId = "", string parentFolderName = "",
+                                                   string entryId = "")
+    {
+        var ctx = SidebarPlaylistCtx(s, uri, name, isOwner, canEdit);
 
         bool live = PlaylistInlineEdit.SpotifyEditsLive(s.Svc);
         // Rows-only surface → the transport verbs are ROWS (the container grammar's core set: Play · Play next ·
@@ -643,6 +680,14 @@ public static class Menus
             rows.Add(pinRow);
         if (isOwner)
             rows.Add(ContainerActions.RenamePlaylist.ToMenuItem(ctx));
+        // "Move out of {folder}" — nested rows only. A drag can already do this; the command exists so a drag is never
+        // the only way (and so a keyboard-only user has the verb at all). Absent, never disabled, at top level: there is
+        // nothing to move out of. The command addresses the row by its projection ENTRY ID and re-reads the tree at
+        // invoke time, so it lands one level up from where the row IS, not from where the menu was built.
+        if (parentFolderId.Length > 0)
+            rows.Add(new MenuFlyoutItem(Strings.Menu.MoveOutOf(parentFolderName),
+                ActionIcons.Resolve(ActionIcons.Folder), s.Library is not null,
+                () => FolderActions.MoveOut(s, entryId.Length > 0 ? entryId : SidebarPinId.Canonical(uri) ?? uri)));
         if (isOwner && live)
         {
             rows.Add(VisibilityItem(s, uri));
@@ -663,16 +708,18 @@ public static class Menus
     /// where an Explorer-style labeled strip belongs), destructive-last, with the pin row in the same place every arm.
     ///
     /// <list type="bullet">
-    /// <item><b>Playlist</b> — the full <see cref="SidebarPlaylist"/> row list (Play · Open · — · Pin · owner block ·
+    /// <item><b>Playlist</b> — the full <see cref="SidebarPlaylistRows"/> row list (Play · Open · — · Pin · owner block ·
     /// Share ▸ · — · Delete), so the two surfaces cannot drift.</item>
     /// <item><b>Album / Artist</b> — the container card model's rows: Play · Save/Follow (artist also gets its radio) ·
     /// Open · Pin · Share ▸.</item>
     /// <item><b>Show / podcast</b> — Play · Open · Pin · — · Copy link, built from explicit rows rather than a new
     /// <c>TargetKind.Show</c>. <b>Explicit non-goal</b> (§3.2.11): adding <c>TargetKind.Show</c> /
     /// <c>ActionTarget.ForShow</c>; if that lands later this arm migrates onto it.</item>
-    /// <item><b>Folder</b> — Expand/Collapse (label switches) · Pin. Spotify folder create/rename/move/delete is deferred
-    /// (locked decision 9) and must not appear, not even disabled. Navbar Move up/down (a pin-list or authored-list
-    /// reorder, not folder CRUD) arrive through <paramref name="layoutExtras"/>. A folder has no uri, so there is
+    /// <item><b>Folder</b> — the full folder verb set (<see cref="SidebarFolderRows"/>): Expand/Collapse · New playlist
+    /// in this folder · New folder inside · — · Pin · Rename folder · Move out of {parent} · — · Delete folder. The old
+    /// "locked decision 9" (no folder CRUD in the UI) is <b>LIFTED</b>: the rootlist create/rename/delete wire exists, so
+    /// the verbs are real commands through <c>FolderActions</c>. Navbar Move up/down (a pin-list or authored-list
+    /// reorder, not folder CRUD) still arrive through <paramref name="layoutExtras"/>. A folder has no uri, so there is
     /// nothing to play and nothing to share.</item>
     /// <item><b>App route</b> — Open · Pin.</item>
     /// </list>
@@ -690,7 +737,8 @@ public static class Menus
     {
         ContextMenuModel? menu = e.Kind switch
         {
-            SidebarEntryKind.Playlist => new ContextMenuModel(SidebarPlaylistRows(s, e.Uri, e.Name, e.IsOwner, e.CanEdit),
+            SidebarEntryKind.Playlist => new ContextMenuModel(
+                SidebarPlaylistRows(s, e.Uri, e.Name, e.IsOwner, e.CanEdit, e.ParentFolderId, e.ParentFolderName, e.Id),
                 header: Header(e.Cover, e.Uri, e.Name,
                     e.OwnerName is { Length: > 0 } owner ? owner : Loc.Get(Strings.Sidebar.V3.Kind.Playlist))),
 
@@ -784,19 +832,60 @@ public static class Menus
             e.Publisher is { Length: > 0 } publisher ? publisher : Loc.Get(Strings.Sidebar.V3.Kind.Show)));
     }
 
-    /// <summary>Playlist-folder rows: expand/collapse + pin. NO folder CRUD (locked decision 9).</summary>
-    static ContextMenuModel SidebarFolderMenu(ActionServices s, in SidebarLibraryEntry e, Action? toggle, bool expanded)
+    /// <summary>Playlist-folder rows, shared by every design through <see cref="SidebarEntry"/> so Classic, Library V3
+    /// and Wavee Curated get the same folder verbs from one builder.
+    ///
+    /// <para>ORDER (the container grammar, applied to a thing that holds things): the disclosure and creation verbs the
+    /// row is mostly used for lead — Expand/Collapse · New playlist in this folder · New folder inside — then a
+    /// separator, then the management block (Pin · Rename folder · Move out of {parent}), then a separator and
+    /// <b>Delete folder</b>, destructive-last exactly as a playlist's Delete is.</para>
+    ///
+    /// <para>The old "locked decision 9" — folder create/rename/delete deferred, and not to appear even disabled — is
+    /// <b>LIFTED</b>. The rootlist wire for all three landed with P3, so these are real commands
+    /// (<see cref="FolderActions"/>), not promises. What has NOT changed is where the writes go: the rootlist is written
+    /// through the resource-drop seam and <c>FolderActions</c>, and through nothing else.</para>
+    ///
+    /// <para>"Move out of {parent}" is present only on a NESTED folder (<c>ParentFolderId</c> non-empty) — a top-level
+    /// folder has nothing to move out of, so the row is absent rather than disabled.</para></summary>
+    static List<MenuFlyoutItem> SidebarFolderRows(ActionServices s, in SidebarLibraryEntry e, Action? toggle, bool expanded)
     {
-        var rows = new List<MenuFlyoutItem>(2);
+        // A folder row's FolderId IS its own group id (the projection's contract) — never strip the pin prefix off Id.
+        string folderId = e.FolderId;
+        string entryId = e.Id;
+        string name = e.Name;
+        int childCount = e.ChildCount;
+        string parentId = e.ParentFolderId;
+        string parentName = e.ParentFolderName;
+        bool live = s.Library is not null;
+        var rows = new List<MenuFlyoutItem>(9);
         if (toggle is not null)
             rows.Add(new MenuFlyoutItem(
                 Loc.Get(expanded ? Strings.Sidebar.Item.CollapseFolder : Strings.Sidebar.Item.ExpandFolder),
                 new IconRef { Glyph = expanded ? Icons.ChevronUp : Icons.ChevronDown, Font = Theme.IconFont },
                 true, toggle));
+        rows.Add(new MenuFlyoutItem(Loc.Get(Strings.Sidebar.NewPlaylistHere), ActionIcons.Resolve(ActionIcons.Add),
+            live && folderId.Length > 0, () => FolderActions.NewPlaylistIn(s, folderId)));
+        rows.Add(new MenuFlyoutItem(Loc.Get(Strings.Sidebar.NewFolderInside), ActionIcons.Resolve(ActionIcons.Folder),
+            live && s.Overlay is not null && folderId.Length > 0, () => FolderActions.NewFolder(s, folderId)));
+        rows.Add(MenuFlyoutItem.Separator);
         if (PinActions.RowForEntry(s, in e) is { } pinRow) rows.Add(pinRow);
-        return new ContextMenuModel(rows, Header(null, e.Id, e.Name,
-            Strings.Sidebar.V3.ItemCount(e.ChildCount)));
+        rows.Add(new MenuFlyoutItem(Loc.Get(Strings.Sidebar.RenameFolder), ActionIcons.Resolve(ActionIcons.Rename),
+            live && s.Overlay is not null && folderId.Length > 0, () => FolderActions.Rename(s, folderId, name)));
+        if (parentId.Length > 0)
+            rows.Add(new MenuFlyoutItem(Strings.Menu.MoveOutOf(parentName),
+                ActionIcons.Resolve(ActionIcons.Folder), live,
+                () => FolderActions.MoveOut(s, entryId)));
+        rows.Add(MenuFlyoutItem.Separator);
+        // Overlay required: FolderActions.Delete confirms first, and a null overlay would delete without asking.
+        rows.Add(new MenuFlyoutItem(Loc.Get(Strings.Sidebar.DeleteFolder), ActionIcons.Resolve(ActionIcons.Delete),
+            live && s.Overlay is not null && folderId.Length > 0,
+            () => FolderActions.Delete(s, folderId, name, childCount)));
+        return rows;
     }
+
+    static ContextMenuModel SidebarFolderMenu(ActionServices s, in SidebarLibraryEntry e, Action? toggle, bool expanded)
+        => new(SidebarFolderRows(s, in e, toggle, expanded),
+            header: Header(null, e.Id, e.Name, Strings.Sidebar.V3.ItemCount(e.ChildCount)));
 
     /// <summary>Pinned/static app-route rows: Open · Pin.</summary>
     static ContextMenuModel SidebarRouteMenu(ActionServices s, in SidebarLibraryEntry e)
@@ -815,14 +904,26 @@ public static class Menus
     // (The local clipboard helper the show / sidebar-track arms used for their bare "Copy link" row is gone: both arms
     // now carry the app-wide Share ▸ submenu, which runs the TrackActions.CopyLink path — one clipboard behaviour.)
 
-    // Explicit absolute-state rows (not a toggle): the sidebar summary carries no live IsPublic, and a mis-checked
-    // toggle would invert the user's intent. Each row SETS the named state.
+    /// <summary>Visibility ▸ — Public · Private (a radio pair) + a Collaborative toggle.
+    /// <para>The rows are still ABSOLUTE states (each one SETS what it names), but they are now CHECKED against the
+    /// live store header, read at menu-open. That header is the canonical permission state — seeded when the playlist
+    /// opens and flipped in place by a dealer permission push — so the check mark agrees with the detail page's access
+    /// flyout without either surface issuing a request. The sidebar summary that fed this menu carries no visibility at
+    /// all, which is why these rows used to render unchecked; a backend with no real store still gets exactly that
+    /// (unchecked absolute rows), because inventing a checked state would invert the user's intent.</para></summary>
     static MenuFlyoutItem VisibilityItem(ActionServices s, string uri)
     {
+        var header = s.Svc?.RealStore?.GetPlaylist(uri);
+        bool known = header is not null;
+        bool isPublic = header?.IsPublic ?? false;
+        bool collaborative = header?.Capabilities.IsCollaborative ?? false;
         var items = new[]
         {
-            new MenuFlyoutItem(Loc.Get(Strings.Menu.MakePublic), null, true, () => ContainerActions.SetVisibility(s, uri, true)),
-            new MenuFlyoutItem(Loc.Get(Strings.Menu.MakePrivate), null, true, () => ContainerActions.SetVisibility(s, uri, false)),
+            MenuFlyoutItem.RadioItem(Loc.Get(Strings.Menu.MakePublic), known && isPublic, () => ContainerActions.SetVisibility(s, uri, true)),
+            MenuFlyoutItem.RadioItem(Loc.Get(Strings.Menu.MakePrivate), known && !isPublic, () => ContainerActions.SetVisibility(s, uri, false)),
+            MenuFlyoutItem.Separator,
+            MenuFlyoutItem.Toggle(Loc.Get(Strings.Detail.Edit.Collaborative), collaborative,
+                () => ContainerActions.SetCollaborative(s, uri, !collaborative)),
         };
         return MenuFlyoutItem.SubMenu(Loc.Get(Strings.Menu.Visibility), items, ActionIcons.Resolve(ActionIcons.Globe));
     }

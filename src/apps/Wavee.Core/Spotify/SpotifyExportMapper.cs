@@ -3,7 +3,7 @@ using System.Text.Json;
 
 namespace Wavee.Core;
 
-/// <summary>The Anti-Corruption Layer for the Spotify GraphQL export (docs/architecture.md §4.4): translates the raw
+/// <summary>The Anti-Corruption Layer for the Spotify GraphQL export (docs/plans/wavee/architecture.md §4.4): translates the raw
 /// JSON shapes (playlistV2 / libraryV3 / home) into clean domain records. No JsonElement / GraphQL shape escapes this
 /// file. All navigation is null-safe so a missing field degrades gracefully rather than throwing.</summary>
 public static class SpotifyExportMapper
@@ -32,7 +32,7 @@ public static class SpotifyExportMapper
                      || BoolAt(au, false, "onPlatformReputationTrait", "verification", "isRegistered")
                      || BoolAt(au, false, "profile", "verified");
         return new Artist(
-            IdFromUri(uri), uri, name,
+            EntityUri.IdOf(uri), uri, name,
             PickImage(Dig(au, "visuals", "avatarImage", "sources")),
             MonthlyListeners: Long(au, "stats", "monthlyListeners"),
             Followers: Long(au, "stats", "followers"),
@@ -64,7 +64,7 @@ public static class SpotifyExportMapper
             "SINGLE" => AlbumKind.Single, "EP" => AlbumKind.EP, "COMPILATION" => AlbumKind.Compilation, _ => AlbumKind.Album,
         };
         var albumArtists = MapUnionArtists(Dig(au, "artists", "items"));
-        var albumRef = new AlbumRef(IdFromUri(uri), uri, name);
+        var albumRef = new AlbumRef(EntityUri.IdOf(uri), uri, name);
 
         var tracks = new List<Track>();
         var items = Dig(au, "tracksV2", "items");
@@ -81,7 +81,7 @@ public static class SpotifyExportMapper
                 // `associationsV3.videoAssociations` is deliberately NOT read onto the row: has-video is answered by
                 // the VideoAssociation plane (kind 99), which every surface already triggers. A second, weaker source
                 // of the same fact on the row is what let a list and its own expand drawer disagree.
-                tracks.Add(new Track(IdFromUri(turi), turi, Str(t, "name") ?? "",
+                tracks.Add(new Track(EntityUri.IdOf(turi), turi, Str(t, "name") ?? "",
                     tArtists.Count > 0 ? tArtists : albumArtists, albumRef,
                     Long(t, "duration", "totalMilliseconds"), explicitFlag, cover,
                     PlayCount: Long(t, "playcount"),
@@ -118,7 +118,7 @@ public static class SpotifyExportMapper
             foreach (var rel in releaseItems.EnumerateArray())
                 if (MapRelease(rel) is { } v && seenVersions.Add(v.Uri)) otherVersions.Add(v);
 
-        return new Album(IdFromUri(uri), uri, name, cover, albumArtists, year, tracks.Count, tracks, kind,
+        return new Album(EntityUri.IdOf(uri), uri, name, cover, albumArtists, year, tracks.Count, tracks, kind,
             moreBy.Count > 0 ? moreBy : null, label, copyright, releaseDate,
             artistsDetailed.Count > 0 ? artistsDetailed : null,
             otherVersions.Count > 0 ? otherVersions : null,
@@ -137,7 +137,7 @@ public static class SpotifyExportMapper
             var u = Str(a, "uri");
             var n = Str(a, "profile", "name");
             if (u is null || n is null) continue;
-            list.Add(new Artist(IdFromUri(u), u, n, PickImage(Dig(a, "visuals", "avatarImage", "sources"))));
+            list.Add(new Artist(EntityUri.IdOf(u), u, n, PickImage(Dig(a, "visuals", "avatarImage", "sources"))));
         }
         return list;
     }
@@ -146,13 +146,31 @@ public static class SpotifyExportMapper
     static string? JoinCopyright(JsonElement items)
     {
         if (items.ValueKind != JsonValueKind.Array) return null;
-        var seen = new System.Collections.Generic.HashSet<string>();
-        var sb = new System.Text.StringBuilder();
+        var lines = new System.Collections.Generic.List<string>();
         foreach (var it in items.EnumerateArray())
         {
             var text = Str(it, "text");
             if (string.IsNullOrWhiteSpace(text)) continue;
-            string line = NormalizeCopyrightLine(text!, Str(it, "type"));
+            // The SYMBOL is decided here, where the line's `type` ("C"/"P") is still in hand; the join below only
+            // normalizes (idempotent) and de-duplicates.
+            lines.Add(NormalizeCopyrightLine(text!, Str(it, "type")));
+        }
+        return JoinCopyrightLines(lines);
+    }
+
+    /// <summary>The "About this release" copyright block for lines that ALREADY carry their ©/℗ symbol — extension kind
+    /// 183's repeated <c>copyright</c> field is exactly that shape. Shares the getAlbum path's normalize + de-duplicate +
+    /// newline-join so the tile reads identically whichever source filled <c>Album.Copyright</c>; null when nothing
+    /// usable is left. Symbol-less lines are passed through unprefixed — this overload has no <c>type</c> to infer from,
+    /// and inventing a © on a line that never had one would be worse than printing it bare.</summary>
+    public static string? JoinCopyrightLines(System.Collections.Generic.IEnumerable<string?> lines)
+    {
+        var seen = new System.Collections.Generic.HashSet<string>();
+        var sb = new System.Text.StringBuilder();
+        foreach (var text in lines)
+        {
+            if (string.IsNullOrWhiteSpace(text)) continue;
+            string line = NormalizeCopyrightLine(text!, null);
             if (!seen.Add(line)) continue;
             if (sb.Length > 0) sb.Append('\n');
             sb.Append(line);
@@ -189,7 +207,7 @@ public static class SpotifyExportMapper
             {
                 "SINGLE" => AlbumKind.Single, "EP" => AlbumKind.EP, "COMPILATION" => AlbumKind.Compilation, _ => AlbumKind.Album,
             };
-            result.Add(new Album(IdFromUri(uri), uri, Str(data, "name") ?? "", CoverArt(data),
+            result.Add(new Album(EntityUri.IdOf(uri), uri, Str(data, "name") ?? "", CoverArt(data),
                 MapUnionArtists(Dig(data, "artists", "items")), (int)Long(data, "date", "year"), 0, null, kind));
         }
         return result;
@@ -264,7 +282,7 @@ public static class SpotifyExportMapper
 
         var album = Dig(data, "albumOfTrack");
         var albumUri = Str(album, "uri") ?? "";
-        var albumRef = new AlbumRef(IdFromUri(albumUri), albumUri, Str(album, "name") ?? "");
+        var albumRef = new AlbumRef(EntityUri.IdOf(albumUri), albumUri, Str(album, "name") ?? "");
         var image = CoverArt(album) ?? CoverArt(data);
 
         long dur = LongAt(data, "trackDuration", "totalMilliseconds");
@@ -274,7 +292,7 @@ public static class SpotifyExportMapper
         var playable = PlayabilityOf(data);
 
         return new Track(
-            IdFromUri(uri), uri, Str(data, "name") ?? "", artists, albumRef,
+            EntityUri.IdOf(uri), uri, Str(data, "name") ?? "", artists, albumRef,
             dur, explicitFlag, image, PlayCount: plays,
             Origin: TrackOrigin.Streamed,
             Availability: playable,
@@ -301,7 +319,7 @@ public static class SpotifyExportMapper
                     var uri = Str(item, "uri");
                     var name = Str(item, "profile", "name");
                     if (uri is null || name is null) continue;
-                    related.Add(new Artist(IdFromUri(uri), uri, name, PickImage(Dig(item, "visuals", "avatarImage", "sources"))));
+                    related.Add(new Artist(EntityUri.IdOf(uri), uri, name, PickImage(Dig(item, "visuals", "avatarImage", "sources"))));
                 }
         }
         return new AlbumTrackContext(hasVideo, related);
@@ -315,7 +333,7 @@ public static class SpotifyExportMapper
         {
             var u = Str(a, "uri");
             var n = Str(a, "profile", "name");
-            if (u is not null && n is not null) list.Add(new ArtistRef(IdFromUri(u), u, n));
+            if (u is not null && n is not null) list.Add(new ArtistRef(EntityUri.IdOf(u), u, n));
         }
         return list;
     }
@@ -335,9 +353,9 @@ public static class SpotifyExportMapper
             var d = it.TryGetProperty("item", out var item) ? Dig(item, "data") : Dig(it, "data");
             if (Str(d, "uri") is not { } uri) continue;
             var alb = Dig(d, "albumOfTrack");
-            tracks.Add(new Track(IdFromUri(uri), uri, Str(d, "name") ?? "",
+            tracks.Add(new Track(EntityUri.IdOf(uri), uri, Str(d, "name") ?? "",
                 MapUnionArtists(Dig(d, "artists", "items")),
-                new AlbumRef(IdFromUri(Str(alb, "uri") ?? ""), Str(alb, "uri") ?? "", Str(alb, "name") ?? ""),
+                new AlbumRef(EntityUri.IdOf(Str(alb, "uri") ?? ""), Str(alb, "uri") ?? "", Str(alb, "name") ?? ""),
                 Long(d, "duration", "totalMilliseconds"), Str(d, "contentRating", "label") == "EXPLICIT",
                 PickImage(Dig(alb, "coverArt", "sources"))));
         }
@@ -347,7 +365,7 @@ public static class SpotifyExportMapper
         {
             var d = Dig(it, "data");
             if (Str(d, "uri") is not { } uri) continue;
-            albums.Add(new Album(IdFromUri(uri), uri, Str(d, "name") ?? "", PickImage(Dig(d, "coverArt", "sources")),
+            albums.Add(new Album(EntityUri.IdOf(uri), uri, Str(d, "name") ?? "", PickImage(Dig(d, "coverArt", "sources")),
                 MapUnionArtists(Dig(d, "artists", "items")), (int)Long(d, "date", "year"), 0));
         }
 
@@ -356,7 +374,7 @@ public static class SpotifyExportMapper
         {
             var d = Dig(it, "data");
             if (Str(d, "uri") is not { } uri) continue;
-            artists.Add(new Artist(IdFromUri(uri), uri, Str(d, "profile", "name") ?? "",
+            artists.Add(new Artist(EntityUri.IdOf(uri), uri, Str(d, "profile", "name") ?? "",
                 PickImage(Dig(d, "visuals", "avatarImage", "sources"))));
         }
 
@@ -367,7 +385,7 @@ public static class SpotifyExportMapper
             if (Str(d, "uri") is not { } uri) continue;
             var imgs = Dig(d, "images", "items");
             Image? cover = imgs.ValueKind == JsonValueKind.Array && imgs.GetArrayLength() > 0 ? PickImage(Dig(imgs[0], "sources")) : null;
-            playlists.Add(new Playlist(IdFromUri(uri), uri, Str(d, "name") ?? "", HtmlText(Str(d, "description")),
+            playlists.Add(new Playlist(EntityUri.IdOf(uri), uri, Str(d, "name") ?? "", HtmlText(Str(d, "description")),
                 Str(d, "ownerV2", "data", "name") ?? "", cover, 0));
         }
 
@@ -379,7 +397,7 @@ public static class SpotifyExportMapper
         {
             var d = Dig(it, "data");
             if (Str(d, "uri") is not { } uri || IsNotFound(d)) continue;
-            (shows ??= new List<Show>()).Add(new Show(IdFromUri(uri), uri, Str(d, "name") ?? "",
+            (shows ??= new List<Show>()).Add(new Show(EntityUri.IdOf(uri), uri, Str(d, "name") ?? "",
                 Str(d, "publisher", "name") ?? "", PickImage(Dig(d, "coverArt", "sources"))));
         }
 
@@ -390,7 +408,7 @@ public static class SpotifyExportMapper
             if (Str(d, "uri") is not { } uri || IsNotFound(d)) continue;
             // The episode's own art is the SHOW's cover — the episode node itself carries none.
             var showData = Dig(d, "podcastV2", "data");
-            (episodes ??= new List<Episode>()).Add(new Episode(IdFromUri(uri), uri, Str(d, "name") ?? "",
+            (episodes ??= new List<Episode>()).Add(new Episode(EntityUri.IdOf(uri), uri, Str(d, "name") ?? "",
                 Str(showData, "name") ?? "", PickImage(Dig(showData, "coverArt", "sources")),
                 DurationMs: 0, PublishedAt: default, Description: HtmlText(Str(d, "description"))));
         }
@@ -501,13 +519,19 @@ public static class SpotifyExportMapper
         if (type.Length > 0) return type;
         if (uri is not null)
         {
-            if (uri.StartsWith("spotify:track:", StringComparison.Ordinal)) return "Track";
-            if (uri.StartsWith("spotify:artist:", StringComparison.Ordinal)) return "Artist";
-            if (uri.StartsWith("spotify:album:", StringComparison.Ordinal)) return "Album";
-            if (uri.StartsWith("spotify:playlist:", StringComparison.Ordinal)) return "Playlist";
+            // The uri is discriminated by EntityUri.KindOf — the ONE parser (hydration-facade-design.md §1.1) — instead
+            // of seven hand-rolled StartsWith gates. Audiobooks are the one scheme with no EntityKind (nothing in the
+            // hydration ladder fetches them), so that single test stays explicit rather than being invented in the enum.
+            switch (EntityUri.KindOf(uri))
+            {
+                case EntityKind.Track: return "Track";
+                case EntityKind.Artist: return "Artist";
+                case EntityKind.Album: return "Album";
+                case EntityKind.Playlist: return "Playlist";
+                case EntityKind.Show: return "Podcast";
+                case EntityKind.Episode: return "Episode";
+            }
             if (uri.StartsWith("spotify:audiobook:", StringComparison.Ordinal)) return "Audiobook";
-            if (uri.StartsWith("spotify:show:", StringComparison.Ordinal)) return "Podcast";
-            if (uri.StartsWith("spotify:episode:", StringComparison.Ordinal)) return "Episode";
         }
         return "";
     }
@@ -867,8 +891,8 @@ public static class SpotifyExportMapper
     static bool IsTagNameStart(char c)
         => (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '/' || c == '!';
 
-    /// <summary>The trailing id of a `spotify:kind:id` uri (base-62; never parse "trailing digits").</summary>
-    public static string IdFromUri(string uri) { int i = uri.LastIndexOf(':'); return i >= 0 ? uri[(i + 1)..] : uri; }
+    // The trailing-id helper that used to live here is THE one parser now: EntityUri.IdOf
+    // (docs/plans/wavee/hydration-facade-design.md §1.1 — "the six IdOf copies die").
 
     /// <summary>A stable non-negative hash of a uri — seeds deterministic synthesized tracks for real-but-trackless items.</summary>
     public static int Hash(string s) { unchecked { int h = 17; foreach (char c in s) h = h * 31 + c; return h & 0x7fffffff; } }
@@ -931,12 +955,12 @@ public static class SpotifyExportMapper
             {
                 var auri = StrAt(a, "uri") ?? "";
                 var name = StrAt(a, "profile", "name") ?? "";
-                if (name.Length > 0) artists.Add(new ArtistRef(IdFromUri(auri), auri, name));
+                if (name.Length > 0) artists.Add(new ArtistRef(EntityUri.IdOf(auri), auri, name));
             }
 
         var album = Dig(data, "albumOfTrack");
         var albumUri = StrAt(album, "uri") ?? "";
-        var albumRef = new AlbumRef(IdFromUri(albumUri), albumUri, StrAt(album, "name") ?? "");
+        var albumRef = new AlbumRef(EntityUri.IdOf(albumUri), albumUri, StrAt(album, "name") ?? "");
         var image = CoverArt(album);
 
         long dur = LongAt(data, "trackDuration", "totalMilliseconds");
@@ -950,7 +974,7 @@ public static class SpotifyExportMapper
         var addedBy = StrAt(item, "addedBy", "data", "name");
 
         return new Track(
-            IdFromUri(uri), uri, StrAt(data, "name") ?? "", artists, albumRef,
+            EntityUri.IdOf(uri), uri, StrAt(data, "name") ?? "", artists, albumRef,
             dur, explicitFlag, image, addedAt, addedBy, PlayCount: plays,
             Origin: TrackOrigin.Streamed,
             Availability: playable,
@@ -966,7 +990,7 @@ public static class SpotifyExportMapper
         var ownerName = StrAt(data, "ownerV2", "data", "name") ?? "Spotify";
         var ownerUri = StrAt(data, "ownerV2", "data", "uri") ?? "";
         Image? ownerAvatar = PickImage(Dig(data, "ownerV2", "data", "avatar", "sources"));
-        var owner = new Owner(IdFromUri(ownerUri), ownerName, ownerAvatar);
+        var owner = new Owner(EntityUri.IdOf(ownerUri), ownerName, ownerAvatar);
 
         bool canEdit = BoolAt(data, false, "currentUserCapabilities", "canEditItems");
         bool canView = BoolAt(data, true, "currentUserCapabilities", "canView");
@@ -978,7 +1002,7 @@ public static class SpotifyExportMapper
         // source of truth. The home path's pre-decode accent goes through HomeCardMeta.Accent (see AccentArgb) because
         // a home card is rendered before any cover has decoded; a detail page has already resolved its own.
         return new Playlist(
-            IdFromUri(uri), uri, StrAt(data, "name") ?? "", HtmlText(StrAt(data, "description")), ownerName,
+            EntityUri.IdOf(uri), uri, StrAt(data, "name") ?? "", HtmlText(StrAt(data, "description")), ownerName,
             ImagesCover(data), trackCount, tracks ?? System.Array.Empty<Track>(),
             owner, caps, StrAt(data, "format"), Source: "spotify");
     }
@@ -1315,19 +1339,19 @@ public static class SpotifyExportMapper
         var contributors = RecentContributors(identity);
         var image = RecentImage(data);
 
-        if (entityType == "ENTITY_TYPE_TRACK" || uri.StartsWith("spotify:track:", StringComparison.Ordinal))
+        if (entityType == "ENTITY_TYPE_TRACK" || EntityUri.KindOf(uri) == EntityKind.Track)
             return new HomeCard(uri, title, JoinNames("Song", contributors), image, HomeCardKind.Track);
 
-        if (entityType == "ENTITY_TYPE_ARTIST" || uri.StartsWith("spotify:artist:", StringComparison.Ordinal))
+        if (entityType == "ENTITY_TYPE_ARTIST" || EntityUri.KindOf(uri) == EntityKind.Artist)
             return new HomeCard(uri, title, "Artist", image, HomeCardKind.Artist);
 
-        if (entityType == "ENTITY_TYPE_ALBUM" || uri.StartsWith("spotify:album:", StringComparison.Ordinal))
+        if (entityType == "ENTITY_TYPE_ALBUM" || EntityUri.KindOf(uri) == EntityKind.Album)
         {
             var type = TitleCase((StrAt(identity, "type") ?? "Album").Replace('_', ' '));
             return new HomeCard(uri, title, JoinNames(type, contributors), image, HomeCardKind.Album);
         }
 
-        if (entityType == "ENTITY_TYPE_PLAYLIST" || uri.StartsWith("spotify:playlist:", StringComparison.Ordinal))
+        if (entityType == "ENTITY_TYPE_PLAYLIST" || EntityUri.KindOf(uri) == EntityKind.Playlist)
             return new HomeCard(uri, title, contributors.Count > 0 ? contributors[0].Name : "Playlist", image, HomeCardKind.Playlist);
 
         return null;
@@ -1343,7 +1367,7 @@ public static class SpotifyExportMapper
             var name = StrAt(item, "name") ?? "";
             if (name.Length == 0) continue;
             var uri = StrAt(item, "uri") ?? "";
-            result.Add(new ArtistRef(IdFromUri(uri), uri, name));
+            result.Add(new ArtistRef(EntityUri.IdOf(uri), uri, name));
         }
         return result;
     }
@@ -1466,7 +1490,7 @@ public static class SpotifyExportMapper
             WatchFeed: MapWatchFeed(Dig(au, "watchFeedEntrypoint")),
             PreRelease: MapPreRelease(Dig(au, "preReleaseV2", "data")));
 
-        return new Artist(IdFromUri(uri), uri, name, avatar, topAlbums,
+        return new Artist(EntityUri.IdOf(uri), uri, name, avatar, topAlbums,
             MonthlyListeners: Long(au, "stats", "monthlyListeners"), Followers: Long(au, "stats", "followers"), Bio: bio, Verified: verified,
             WorldRank: (int)Long(au, "stats", "worldRank"), HeaderImage: header, TopTracks: topTracks,
             AppearsOn: appearsOn.Count > 0 ? appearsOn : null, Pinned: pinned, Extras: extras,
@@ -1609,7 +1633,7 @@ public static class SpotifyExportMapper
             "COMPILATION" => AlbumKind.Compilation,
             _ => AlbumKind.Album,
         };
-        return new Album(IdFromUri(uri), uri, Str(r, "name") ?? "", CoverArt(r) ?? EntityImage(r),
+        return new Album(EntityUri.IdOf(uri), uri, Str(r, "name") ?? "", CoverArt(r) ?? EntityImage(r),
             System.Array.Empty<ArtistRef>(), year, tracks, null, kind,
             ReleaseDate: releaseDate, ReleaseDatePrecision: releasePrecision);
     }
@@ -1636,7 +1660,7 @@ public static class SpotifyExportMapper
     // the AlbumRef below is deliberately name-LESS (identity + cover, no title). It is not a bug to "fix" here and it is
     // not inferred from anything: inventing a title from the request context would put a fabricated fact on a shared
     // store row, and the row's own uri is all the wire gave us. The gap is closed downstream by the writers that DO know
-    // the title — MetadataService.SyncAllAsync's blank-AlbumRef closure (batches those album uris through AlbumV4, whose
+    // the title — the playable ladder's blank-AlbumRef ref-closure (batches those album uris through AlbumV4, whose
     // projection rewrites the tracklist with the full albumRef) and the ordinary album hydration on open — and the empty
     // name can never overwrite a known one, because StoreEntityMerge.MergeAlbumRef is NonEmpty-guarded per field. Until it
     // heals, the Album column renders the shared em-dash rather than a blank lane (TrackRow.AlbumLink).
@@ -1652,13 +1676,13 @@ public static class SpotifyExportMapper
             {
                 var auri = Str(a, "uri") ?? "";
                 var nm = Str(a, "profile", "name") ?? "";
-                if (nm.Length > 0) artists.Add(new ArtistRef(IdFromUri(auri), auri, nm));
+                if (nm.Length > 0) artists.Add(new ArtistRef(EntityUri.IdOf(auri), auri, nm));
             }
         var album = Dig(t, "albumOfTrack");
         var albumUri = Str(album, "uri") ?? "";
         bool explicitFlag = (Str(t, "contentRating", "label") ?? "NONE") != "NONE";
-        return new Track(IdFromUri(uri), uri, Str(t, "name") ?? "", artists,
-            new AlbumRef(IdFromUri(albumUri), albumUri, ""),
+        return new Track(EntityUri.IdOf(uri), uri, Str(t, "name") ?? "", artists,
+            new AlbumRef(EntityUri.IdOf(albumUri), albumUri, ""),
             Long(t, "duration", "totalMilliseconds"), explicitFlag, CoverArt(album),
             PlayCount: Long(t, "playcount"), Source: "spotify");
     }
@@ -1784,7 +1808,7 @@ public static class SpotifyExportMapper
         {
             var uri = Str(it, "uri");
             if (uri is null) continue;
-            list.Add(new RelatedArtist(IdFromUri(uri), uri, Str(it, "profile", "name") ?? "",
+            list.Add(new RelatedArtist(EntityUri.IdOf(uri), uri, Str(it, "profile", "name") ?? "",
                 PickImage(Dig(it, "visuals", "avatarImage", "sources"))));
         }
         return list.Count > 0 ? list : null;
@@ -1815,7 +1839,7 @@ public static class SpotifyExportMapper
             if (uri is null || !seen.Add(uri)) continue;
             var name = StrAt(d, "profile", "name") ?? StrAt(d, "name") ?? "";
             if (name.Length == 0) continue;
-            list.Add(new RelatedArtist(IdFromUri(uri), uri, name, ArtistAvatar(d) ?? EntityImage(d)));
+            list.Add(new RelatedArtist(EntityUri.IdOf(uri), uri, name, ArtistAvatar(d) ?? EntityImage(d)));
         }
         return list;
     }

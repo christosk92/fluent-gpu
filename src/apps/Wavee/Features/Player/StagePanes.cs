@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -25,9 +25,10 @@ namespace Wavee;
 /// <c>LyricsView</c>'s measured document (and the queue's reorder lane) on every flip, and would change the hook shape
 /// of this component between renders, which is the reconciler crash the animation canon exists to prevent.</para>
 ///
-/// <para><b>The pivot band carries no veil.</b> It used to: the surface's base scrim was white in light theme, so every
-/// region of on-media ink brought its own dark box. The stage is now single-theme art-dark and the scrim's own bottom
-/// deepening resolves under this band across a feather hundreds of DIP long — so the pivot row is just a row. The one
+/// <para><b>The pivot band carries no veil.</b> It used to, back when the scrim flipped with the theme but the ink did
+/// not, so every region of on-media ink needed its own dark box. Scrim and ink now flip together (<c>StageInk</c>) and
+/// the scrim's own bottom deepening resolves under this band across a feather hundreds of DIP long — so the pivot row
+/// is just a row. The one
 /// local shade left on this side is the QUEUE pane's (<c>StageChrome.PaneShade</c>), which is genuinely local: it is
 /// mounted and cross-faded with the pane whose hover glass needs a floor, and it comes up out of ZERO on its left edge.</para>
 /// </summary>
@@ -80,10 +81,9 @@ sealed class StagePanes : Component
     // ── the lyrics pane: the SAME LyricsView the rail mounts, on the stage's INK ─────────────────────────────────────
     // Its behaviour is untouched — the blur-distance treatment, the wipe, click-to-seek, all of it. Two things are
     // passed in: the visibility gate (which parks the 16 ms ticker while the QUEUE pane is up — two panes are mounted,
-    // and exactly one of them may be ticking), and `onMedia`, which swaps the view's whole ink ladder from the theme
-    // rungs onto WaveeOnMedia's theme-invariant whites. That flag is the reason the stage's scrim can be one dark thing
-    // in both themes: the lyrics were the ONLY thing on the surface that painted theme ink. The rail keeps the default
-    // (theme-following) — it is on a panel, not on media.
+    // and exactly one of them may be ticking), and `onMedia`, which swaps the view's whole ink ladder from the PAGE's
+    // theme rungs onto the STAGE's (StageInk, via LyricsInk). Both follow the theme; what differs is which ground they
+    // are solved against, because the stage owns its own veil. The rail keeps the default — it is on a panel.
     // THE READING COLUMN IS MEASURED, NEVER PREDICTED. It used to author its own Width from a viewport FORMULA —
     // `viewportW − StageLayout.LayoutWidth − ColumnGutter`, clamped to ColumnMaxW — which is a second, private copy of
     // the band's arithmetic. Any disagreement between that copy and the real layout lands as a column authored WIDER
@@ -96,16 +96,21 @@ sealed class StagePanes : Component
     Element LyricsColumn(ShellUi? ui) => new BoxEl
     {
         Direction = 0, Grow = 1f, Shrink = 1f, MinHeight = 0f, MinWidth = 0f,
-        Justify = FlexJustify.Center, AlignItems = FlexAlign.Stretch,
-        // The gutter, as PADDING rather than as a term subtracted from a predicted width — and the pivot band's own
-        // height reserved at the bottom, so the last lyric line clears the "Lyrics · Queue" row exactly the way the
-        // queue pane reserves it (see StageQueuePane's body padding).
-        Padding = new Edges4(ImmersiveLyricsSurface.ColumnGutter * 0.5f, 0f,
-                             ImmersiveLyricsSurface.ColumnGutter * 0.5f, StageChrome.PivotBandH),
+        // LEFT-ANCHORED, not centred. Centring is what converted a pane region wider than its slot into text pushed
+        // OFF-SCREEN — the column sat at x=181 in a 1062-wide pane and ran past the window edge. Left-anchored, the
+        // worst an over-wide pane can do is leave empty air on the right: visually wrong, never unreadable. It is also
+        // the reference composition — the reading column begins a fixed distance after the identity column rather than
+        // floating in the middle of whatever room is left.
+        Justify = FlexJustify.Start, AlignItems = FlexAlign.Stretch,
+        // The gutter is now the column's TRAILING air only — the leading air is the band's RegionGapW, so a
+        // half-gutter here would double-count it. The pivot band's own height stays reserved at the bottom so the last
+        // lyric line clears the "Lyrics · Queue" row exactly the way the queue pane reserves it.
+        Padding = new Edges4(0f, 0f, ImmersiveLyricsSurface.ColumnGutter, StageChrome.PivotBandH),
         Children =
         [
             new BoxEl
             {
+                OnBoundsChanged = ImmersiveLyricsSurface.RectProbe("lyricscolumn"),
                 Direction = 1, Grow = 1f, Shrink = 1f, MinHeight = 0f, MinWidth = 0f,
                 MaxWidth = ImmersiveLyricsSurface.ColumnMaxW,
                 Children =
@@ -121,6 +126,7 @@ sealed class StagePanes : Component
 
     static Element Pivot(bool lyrics, ColorF accent) => new BoxEl
     {
+        OnBoundsChanged = ImmersiveLyricsSurface.RectProbe("pivot"),
         Direction = 0, Height = StageChrome.PivotBandH, Shrink = 0f,
         AlignItems = FlexAlign.End, Justify = FlexJustify.End, Gap = ContextBandLayout.PivotGap,
         Padding = new Edges4(Spacing.XXL, 0f, Spacing.XXL, Spacing.L),
@@ -246,7 +252,7 @@ sealed class StageQueuePane : Component
                 Padding = new Edges4(0f, Spacing.XXL, 0f, 0f),
                 Children = [new TextEl(Loc.Get(Strings.Player.QueueEmpty))
                 {
-                    Size = 14f, LineHeight = 20f, Color = WaveeOnMedia.InkTertiary,
+                    Size = 14f, LineHeight = 20f, Color = StageInk.InkTertiary,
                 }],
             });
 
@@ -295,12 +301,12 @@ sealed class StageQueuePane : Component
                     [
                         new TextEl(Loc.Get(Strings.Player.PlayingNext))
                         {
-                            Size = 20f, LineHeight = 28f, Weight = 600, Color = WaveeOnMedia.Ink,
+                            Size = 20f, LineHeight = 28f, Weight = 600, Color = StageInk.Ink,
                             Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, Shrink = 0f,
                         },
                         new TextEl(Strings.Player.FromContext(source))
                         {
-                            Size = 12f, LineHeight = 16f, Color = WaveeOnMedia.InkTertiary,
+                            Size = 12f, LineHeight = 16f, Color = StageInk.InkTertiary,
                             Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
                             MinWidth = 0f, Shrink = 1f,
                         },
@@ -309,7 +315,7 @@ sealed class StageQueuePane : Component
                     [
                         new TextEl(Loc.Get(Strings.Player.PlayingNext))
                         {
-                            Size = 20f, LineHeight = 28f, Weight = 600, Color = WaveeOnMedia.Ink,
+                            Size = 20f, LineHeight = 28f, Weight = 600, Color = StageInk.Ink,
                             Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, Shrink = 0f,
                         },
                     ],
@@ -326,7 +332,7 @@ sealed class StageQueuePane : Component
         Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M, MinHeight = 48f,
         Padding = new Edges4(Spacing.S, 0f, Spacing.S, 0f),
         Corners = Radii.ControlAll,
-        Fill = WaveeOnMedia.GlassRest, HoverFill = WaveeOnMedia.GlassHover, PressedFill = WaveeOnMedia.GlassPressed,
+        Fill = StageInk.GlassRest, HoverFill = StageInk.GlassHover, PressedFill = StageInk.GlassPressed,
         BrushTransitionMs = WaveeMotion.Faster,
         Role = AutomationRole.CheckBox, Focusable = true, Cursor = CursorId.Hand, OnClick = toggle,
         Children =
@@ -334,7 +340,7 @@ sealed class StageQueuePane : Component
             new TextEl("∞")
             {
                 Size = 17f, LineHeight = 22f, Weight = 600,
-                Color = on ? accent : WaveeOnMedia.InkTertiary,
+                Color = on ? accent : StageInk.InkTertiary,
                 Width = 22f,
             },
             new BoxEl
@@ -345,11 +351,11 @@ sealed class StageQueuePane : Component
                     new TextEl(Loc.Get(Strings.Player.Autoplay))
                     {
                         Size = 13f, LineHeight = 18f, Weight = 600,
-                        Color = on ? WaveeOnMedia.Ink : WaveeOnMedia.InkSecondary,
+                        Color = on ? StageInk.Ink : StageInk.InkSecondary,
                     },
                     new TextEl(Loc.Get(Strings.Player.AutoplayHint))
                     {
-                        Size = 12f, LineHeight = 16f, Color = WaveeOnMedia.InkTertiary,
+                        Size = 12f, LineHeight = 16f, Color = StageInk.InkTertiary,
                         Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
                     },
                 ],
@@ -410,9 +416,9 @@ sealed class StageQueuePane : Component
             Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M, MinHeight = RowH,
             Padding = new Edges4(Spacing.S, 0f, Spacing.S, 0f),
             Corners = Radii.ControlAll,
-            Fill = WaveeOnMedia.GlassRest,
-            HoverFill = WaveeOnMedia.GlassHover,
-            PressedFill = WaveeOnMedia.GlassPressed,
+            Fill = StageInk.GlassRest,
+            HoverFill = StageInk.GlassHover,
+            PressedFill = StageInk.GlassPressed,
             BrushTransitionMs = WaveeMotion.Faster,
             PressScale = WaveeMotion.ScaleSubtle.Press,
             Opacity = dim ? 0.68f : 1f,
@@ -429,7 +435,7 @@ sealed class StageQueuePane : Component
                 {
                     Width = GripW, Shrink = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
                     Opacity = 0f, HoverOpacity = gripped ? 1f : 0f, HitTestVisible = false,
-                    Children = [new TextEl(Icons.GripperBar) { Size = 14f, FontFamily = Theme.IconFont, Color = WaveeOnMedia.InkTertiary }],
+                    Children = [new TextEl(Icons.GripperBar) { Size = 14f, FontFamily = Theme.IconFont, Color = StageInk.InkTertiary }],
                 },
                 new BoxEl
                 {
@@ -451,12 +457,12 @@ sealed class StageQueuePane : Component
                         // fractional 13.5 the token convergence removed.
                         new TextEl(t.Title)
                         {
-                            Size = 14f, LineHeight = 20f, Weight = 600, Color = WaveeOnMedia.Ink,
+                            Size = 14f, LineHeight = 20f, Weight = 600, Color = StageInk.Ink,
                             Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
                         },
                         new TextEl(DetailFormat.ArtistNames(t.Artists))
                         {
-                            Size = 12f, LineHeight = 16f, Color = WaveeOnMedia.InkSecondary,
+                            Size = 12f, LineHeight = 16f, Color = StageInk.InkSecondary,
                             Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
                         },
                     ],
@@ -468,7 +474,7 @@ sealed class StageQueuePane : Component
                     Width = TimeW, Shrink = 0f, Direction = 0, Justify = FlexJustify.End, AlignItems = FlexAlign.Center,
                     Children = [new TextEl(PlayerBarContent.Fmt(t.DurationMs))
                     {
-                        Size = 12f, LineHeight = 16f, Color = WaveeOnMedia.InkTertiary, Wrap = TextWrap.NoWrap,
+                        Size = 12f, LineHeight = 16f, Color = StageInk.InkTertiary, Wrap = TextWrap.NoWrap,
                     }],
                 },
                 removable && !entry.ItemId.IsNone
@@ -500,13 +506,13 @@ sealed class StageQueuePane : Component
         Direction = 0, MinHeight = 40f, Gap = Spacing.S, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
         Margin = new Edges4(0f, Spacing.XS, 0f, Spacing.XXS),
         Corners = Radii.ControlAll,
-        Fill = WaveeOnMedia.GlassRest, HoverFill = WaveeOnMedia.GlassHover, PressedFill = WaveeOnMedia.GlassPressed,
+        Fill = StageInk.GlassRest, HoverFill = StageInk.GlassHover, PressedFill = StageInk.GlassPressed,
         Role = AutomationRole.Button, Cursor = CursorId.Hand, Focusable = true, OnClick = more,
         Layout = LayoutTransition.Slide,
         Children =
         [
-            new TextEl(Icons.ChevronDown) { Size = 12f, FontFamily = Theme.IconFont, Color = WaveeOnMedia.InkSecondary },
-            new TextEl($"·  {remaining}") { Size = 12f, LineHeight = 16f, Color = WaveeOnMedia.InkTertiary },
+            new TextEl(Icons.ChevronDown) { Size = 12f, FontFamily = Theme.IconFont, Color = StageInk.InkSecondary },
+            new TextEl($"·  {remaining}") { Size = 12f, LineHeight = 16f, Color = StageInk.InkTertiary },
         ],
     };
 
@@ -577,7 +583,9 @@ sealed class StageQueuePane : Component
     }
 
     static string? ImmediateContextName(string uri)
-        => uri.Length > 0 && uri.Contains(":collection", StringComparison.Ordinal)
+        // Both collection shapes (`spotify:collection:*` and `spotify:user:{id}:collection`) are ONE kind to the parser
+        // (hydration-facade-design.md §1.1), which is what the `Contains(":collection")` probe was approximating.
+        => uri.Length > 0 && EntityUri.KindOf(uri) == EntityKind.Collection
             ? Loc.Get(Strings.Player.LikedSongs)
             : null;
 
@@ -586,10 +594,13 @@ sealed class StageQueuePane : Component
         if (svc is null || uri.Length == 0) return null;
         try
         {
-            if (uri.Contains(":collection", StringComparison.Ordinal)) return Loc.Get(Strings.Player.LikedSongs);
-            if (uri.Contains(":playlist:", StringComparison.Ordinal)) return (await svc.Library.GetPlaylistAsync(uri, ct).ConfigureAwait(false))?.Name;
-            if (uri.Contains(":album:", StringComparison.Ordinal)) return (await svc.Library.GetAlbumAsync(uri, ct).ConfigureAwait(false))?.Name;
-            if (uri.Contains(":artist:", StringComparison.Ordinal)) return (await svc.Library.GetArtistAsync(uri, ct).ConfigureAwait(false))?.Name;
+            switch (EntityUri.KindOf(uri))   // the ONE parser decides which read answers the context name
+            {
+                case EntityKind.Collection: return Loc.Get(Strings.Player.LikedSongs);
+                case EntityKind.Playlist: return (await svc.Library.GetPlaylistAsync(uri, HydrationLevel.Identity, ct).ConfigureAwait(false))?.Name;
+                case EntityKind.Album: return (await svc.Library.GetAlbumAsync(uri, HydrationLevel.Identity, ct).ConfigureAwait(false))?.Name;
+                case EntityKind.Artist: return (await svc.Library.GetArtistAsync(uri, HydrationLevel.Identity, ct).ConfigureAwait(false))?.Name;
+            }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch { }

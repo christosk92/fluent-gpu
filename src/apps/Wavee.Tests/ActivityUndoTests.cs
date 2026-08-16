@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -127,6 +127,53 @@ public class ActivityUndoTests
     }
 
     [Fact]
+    public async Task Move_Undo_PutsTheBlockBackAfterTheRowItUsedToFollow()
+    {
+        // [a,b,c,d] with d moved to the top is now [d,a,b,c]. The recorded FromIndex is 3, but replaying THAT index
+        // against the current list means "insert before c" — one short of home. What survives a move is the order of
+        // the rows that did NOT move, so d belongs after the 3rd of them (c), i.e. at the end.
+        var lib = new FakeLibrary
+        {
+            Playlist = MakePlaylist("spotify:playlist:p",
+                ("spotify:track:d", "uid-d"), ("spotify:track:a", "uid-a"),
+                ("spotify:track:b", "uid-b"), ("spotify:track:c", "uid-c")),
+        };
+        var log = NewLog();
+        var target = new FakeUndoTarget(log);
+        var exec = new ActivityUndoExecutor(target, lib, log);
+        log.Record(ActivityKind.PlaylistMoveTracks, "spotify:playlist:p", null,
+            new ActivityPayload(Tracks: new[] { new ActivityTrackRef("spotify:track:d", null, "uid-d") }, FromIndex: 3, ToIndex: 0));
+
+        Assert.True(await exec.UndoAsync(log.Snapshot[0]));
+        Assert.Equal(4, Assert.Single(target.Moves).toIndex);
+    }
+
+    /// <summary>The index arithmetic itself, without the executor around it — the backend re-derives its keyed anchor
+    /// by walking back over the moved rows from this index, so it has to name the right one in every direction.</summary>
+    [Fact]
+    public void UndoMoveTarget_NamesTheRowTheBlockUsedToFollow()
+    {
+        var current = MakePlaylist("spotify:playlist:p",
+            ("spotify:track:a", "uid-a"), ("spotify:track:d", "uid-d"),
+            ("spotify:track:e", "uid-e"), ("spotify:track:b", "uid-b"),
+            ("spotify:track:c", "uid-c"), ("spotify:track:f", "uid-f")).Tracks!;
+
+        // b,c moved DOWN out of positions 1,2: their home is right after a, the 1st unmoved row.
+        var block = new[]
+        {
+            new PlaylistRowRef(3, "spotify:track:b", "uid-b"),
+            new PlaylistRowRef(4, "spotify:track:c", "uid-c"),
+        };
+        Assert.Equal(1, ActivityUndoExecutor.UndoMoveTarget(current, block, 1));
+
+        // A block that started at the very front goes back to add_first, with no row to name at all.
+        Assert.Equal(0, ActivityUndoExecutor.UndoMoveTarget(current, block, 0));
+
+        // More unmoved rows asked for than the list still has (edited elsewhere) → the end, not an out-of-range index.
+        Assert.Equal(current.Count, ActivityUndoExecutor.UndoMoveTarget(current, block, 99));
+    }
+
+    [Fact]
     public async Task Move_Undo_ItemIdMissing_Fails()
     {
         var log = NewLog();
@@ -200,11 +247,11 @@ public class ActivityUndoTests
     sealed class FakeLibrary : IMusicLibrary
     {
         public Playlist Playlist { get; set; } = new("p", "spotify:playlist:p", "P", null, "me", null, 0, new List<Track>());
-        public Task<Playlist> GetPlaylistAsync(string id, CancellationToken ct = default) => Task.FromResult(Playlist);
+        public Task<Playlist> GetPlaylistAsync(string id, HydrationLevel level = HydrationLevel.Open, CancellationToken ct = default) => Task.FromResult(Playlist);
 
         // Unused by the undo path.
-        public Task<Album> GetAlbumAsync(string id, CancellationToken ct = default) => throw new NotSupportedException();
-        public Task<Artist> GetArtistAsync(string id, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<Album> GetAlbumAsync(string id, HydrationLevel level = HydrationLevel.Open, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<Artist> GetArtistAsync(string id, HydrationLevel level = HydrationLevel.Open, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<DiscographyPage> GetDiscographyAsync(string artistUri, DiscographyKind kind, int offset, int limit, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<IReadOnlyList<LibraryItem>> GetLibraryAsync(CancellationToken ct = default) => throw new NotSupportedException();
         public Task<SearchResults> SearchAsync(string query, CancellationToken ct = default) => throw new NotSupportedException();
@@ -219,6 +266,7 @@ public class ActivityUndoTests
         public IAsyncEnumerable<TrackPage> StreamTracksAsync(string contextUri, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<HomeFeed> GetHomeAsync(CancellationToken ct = default) => throw new NotSupportedException();
         public Task<IReadOnlyList<Show>> GetShowsAsync(CancellationToken ct = default) => throw new NotSupportedException();
-        public Task<Show?> GetShowAsync(string uri, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<Show?> GetShowAsync(string uri, HydrationLevel level = HydrationLevel.Open, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<int> LoadMoreEpisodesAsync(string showUri, int from, CancellationToken ct = default) => throw new NotSupportedException();
     }
 }

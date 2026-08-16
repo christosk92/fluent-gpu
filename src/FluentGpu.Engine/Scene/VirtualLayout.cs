@@ -50,6 +50,26 @@ public interface IMeasuredVirtualLayout : IVirtualLayout
 }
 
 /// <summary>
+/// The STRUCTURAL-EDIT seam over a measured layout — the counterpart to <see cref="IMeasuredVirtualLayout.SetMeasured"/>
+/// for a count change whose shape is KNOWN. A plain count change can only be resolved index-by-index (everything past
+/// the old count is new), which is right for an append and wrong for an insert/removal in the MIDDLE: the tail's rows
+/// survive at shifted indices, and re-seeding them to an estimate is what makes a mixed-extent list jump its content
+/// extent and re-pin its scroll anchor against a stale offset (the disclosure/expander flicker). A composing control
+/// that knows the disclosed band calls <see cref="Splice"/> BEFORE the new count reaches layout, so every surviving row
+/// keeps its measured extent and the disclosure's travel distance is computed from real geometry.
+/// Built-ins: <see cref="MeasuredStackVirtualLayout"/>, <see cref="GroupedListVirtualLayout"/>.
+/// </summary>
+public interface ISplicingVirtualLayout : IMeasuredVirtualLayout
+{
+    /// <summary>Items the layout currently holds extents for; −1 before its first geometry call.</summary>
+    int ItemCount { get; }
+
+    /// <summary>Remove <paramref name="removed"/> items at <paramref name="at"/> and insert <paramref name="inserted"/>
+    /// fresh ones there, carrying every surviving item's corrected extent across. Allocation-free unless the table grows.</summary>
+    void Splice(int at, int removed, int inserted);
+}
+
+/// <summary>
 /// The viewport-aware virtualization seam — folds "size each item to the SCROLL-AXIS (main) viewport" behind the SAME
 /// pluggable seam as the fixed-geometry layouts. The core <see cref="IVirtualLayout"/> methods only receive the CROSS
 /// size (height for a horizontal viewport), so a "fill the width with N equal cards" layout cannot be expressed; this
@@ -515,20 +535,69 @@ public sealed class FillRowVirtualLayout : IViewportVirtualLayout
 /// contract. STATEFUL (owns an <see cref="ExtentTable"/>) — create ONCE and reuse across renders (hoist in a
 /// <c>UseMemo</c>); the table self-rebuilds only on item-count change.
 /// </summary>
-public sealed class MeasuredStackVirtualLayout : IMeasuredVirtualLayout
+public sealed class MeasuredStackVirtualLayout : IMeasuredVirtualLayout, ISplicingVirtualLayout
 {
     public readonly float Estimate;
     public readonly bool Horizontal;
+    /// <summary>Optional ANALYTIC seed: a host whose row heights are a pure function of its model (a planned sidebar,
+    /// a fixed ladder of row kinds) supplies the height per index here, so an unmeasured row starts at its REAL extent
+    /// instead of one global estimate. Purely a seed — measure feedback still corrects it, so a row the function cannot
+    /// predict exactly (a wrapped text band, a photo strip) degrades to the estimate-then-correct path it has today.
+    /// Called only on a seed/resize/splice, never per frame.</summary>
+    private readonly Func<int, float>? _extentOf;
     private ExtentTable? _table;
 
-    public MeasuredStackVirtualLayout(float estimatedExtent, bool horizontal = false)
-    { Estimate = estimatedExtent <= 0 ? 1f : estimatedExtent; Horizontal = horizontal; }
+    public MeasuredStackVirtualLayout(float estimatedExtent, bool horizontal = false, Func<int, float>? extentOf = null)
+    { Estimate = estimatedExtent <= 0 ? 1f : estimatedExtent; Horizontal = horizontal; _extentOf = extentOf; }
+
+    /// <inheritdoc/>
+    public int ItemCount => _table?.Count ?? -1;
+
+    private float SeedAt(int index)
+    {
+        if (_extentOf is null) return Estimate;
+        float e = _extentOf(index);
+        return float.IsFinite(e) && e >= 0f ? e : Estimate;   // 0 is a real answer (a row the host draws as nothing)
+    }
+
+    private void SeedRange(ExtentTable t, int first, int count)
+    {
+        if (_extentOf is null) return;                       // Resize/Splice already seeded the flat estimate
+        int end = System.Math.Min(t.Count, first + count);
+        for (int i = System.Math.Max(0, first); i < end; i++) t.SetExtent(i, SeedAt(i));
+    }
 
     private ExtentTable Ensure(int n)
     {
-        if (_table is null) _table = new ExtentTable(n, Estimate);
-        else if (_table.Count != n) _table.Reset(n, Estimate);
-        return _table;
+        var t = _table;
+        if (t is null) { _table = t = new ExtentTable(n, Estimate); SeedRange(t, 0, n); }
+        else if (t.Count != n)
+        {
+            // RESIZE, never Reset: a count change must not discard the extents every surviving row already measured
+            // (ExtentTable.Resize carries the reasoning). Only the appended tail seeds.
+            int old = t.Count;
+            t.Resize(n, Estimate);
+            if (n > old) SeedRange(t, old, n - old);
+        }
+        return t;
+    }
+
+    /// <inheritdoc/>
+    public void Splice(int at, int removed, int inserted)
+    {
+        var t = _table;
+        if (t is null) return;
+        t.Splice(at, removed, inserted, Estimate);
+        SeedRange(t, at, inserted);
+    }
+
+    /// <summary>Re-seed EVERY extent from the analytic provider (or the flat estimate when there is none) for a
+    /// wholesale model change — a new document, a new query — where index-preserving carry-over would be stale.</summary>
+    public void Reseed(int n)
+    {
+        var t = Ensure(n);
+        if (_extentOf is null) t.Reset(n, Estimate);
+        else SeedRange(t, 0, n);
     }
 
     public float ContentExtent(int n, float cross) => (float)Ensure(n).Total;
@@ -562,7 +631,7 @@ public sealed class MeasuredStackVirtualLayout : IMeasuredVirtualLayout
 /// consumers (ItemsView / a custom list) translate that header's realized node by the pin delta at phase 7
 /// (<c>NodeFlags.StickyPinned</c>). Vertical scroll. STATEFUL — create once and reuse (see MeasuredStackVirtualLayout).
 /// </summary>
-public sealed class GroupedListVirtualLayout : IMeasuredVirtualLayout
+public sealed class GroupedListVirtualLayout : IMeasuredVirtualLayout, ISplicingVirtualLayout
 {
     public readonly float HeaderEstimate, ItemEstimate;
     private readonly int[] _headers;   // sorted flat indices of group headers
@@ -603,15 +672,41 @@ public sealed class GroupedListVirtualLayout : IMeasuredVirtualLayout
         return best;
     }
 
+    /// <inheritdoc/>
+    public int ItemCount => _table?.Count ?? -1;
+
+    private void SeedHeaders(ExtentTable t, int from, int toExclusive)
+    {
+        for (int h = 0; h < _headers.Length; h++)
+        {
+            int i = _headers[h];
+            if (i >= from && i < toExclusive) t.SetExtent(i, HeaderEstimate);
+        }
+    }
+
     private ExtentTable Ensure(int n)
     {
-        if (_table is null || _table.Count != n)
+        var t = _table;
+        if (t is null) { _table = t = new ExtentTable(n, ItemEstimate); SeedHeaders(t, 0, n); }
+        else if (t.Count != n)
         {
-            (_table ??= new ExtentTable(n, ItemEstimate)).Reset(n, ItemEstimate);
-            for (int h = 0; h < _headers.Length; h++)
-                if ((uint)_headers[h] < (uint)n) _table.SetExtent(_headers[h], HeaderEstimate);
+            // RESIZE, never Reset (see MeasuredStackVirtualLayout.Ensure / ExtentTable.Resize): the surviving rows keep
+            // their measured extents and only the appended tail seeds — headers included, since the header index list
+            // is fixed at construction and therefore never re-classifies a surviving index.
+            int old = t.Count;
+            t.Resize(n, ItemEstimate);
+            if (n > old) SeedHeaders(t, old, n);
         }
-        return _table;
+        return t;
+    }
+
+    /// <inheritdoc/>
+    public void Splice(int at, int removed, int inserted)
+    {
+        var t = _table;
+        if (t is null) return;
+        t.Splice(at, removed, inserted, ItemEstimate);
+        SeedHeaders(t, at, at + inserted);
     }
 
     public float ContentExtent(int n, float cross) => (float)Ensure(n).Total;

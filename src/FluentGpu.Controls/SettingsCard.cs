@@ -75,6 +75,11 @@ public static partial class SettingsCard
         public string? Header { get; init; }
         public string? Description { get; init; }
         public string? HeaderIcon { get; init; }
+        /// <summary>The card's one content slot. Under the default <see cref="ContentAlignment.Right"/> this lands in
+        /// an <c>Auto</c> grid track beside the header's <c>Star</c> track (see <c>BuildRightRow</c>), so
+        /// content wider than the card starves the header text toward zero width — and a zero-width run neither wraps
+        /// nor clips, so the header paints over the content. Anything wide (a picker strip, a chart, a wireframe row)
+        /// wants <see cref="ContentAlignment.Vertical"/>.</summary>
         public Element? Content { get; init; }
         public ContentAlignment Alignment { get; init; } = ContentAlignment.Right;
         public bool IsClickEnabled { get; init; }

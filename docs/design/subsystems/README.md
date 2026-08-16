@@ -1,4 +1,4 @@
-﻿# FluentGpu Subsystem Design Docs — Index
+# FluentGpu Subsystem Design Docs — Index
 
 This directory holds the per-subsystem design docs for **FluentGpu** (from-scratch C#/.NET 10, NativeAOT, GPU UI
 engine: Reactor model — Element records + Component + hooks + keyed reconciler — over a retained SoA RenderNode tree,
@@ -136,7 +136,7 @@ The per-glyph color field of GlyphInstance: **text.md**.)
 | UseState / UseReducer / UseMemo / UseCallback / UseEffect / UseLayoutEffect / UseContext / UseRef | reconciler-hooks.md |
 | UseIsActive / UseActivation (component activation lifecycle: parked-by-KeepAlive OR window-minimized; the `Activation.IsActive` ambient + the `SetSubtreeParked` engine auto-quiesce of parked anim/scroll tickers) | reconciler-hooks.md §0bis (window-visibility source: pal-rhi.md; as-built: src\FluentGpu.Engine\Hooks\RenderContext.cs + Reconciler.cs + Hosting\AppHost.cs) |
 | UseVirtual / UseInfiniteCollection / UseVisibleRange | virtualization.md (DepKey/cell semantics: reconciler-hooks.md) |
-| IVirtualLayout / IMeasuredVirtualLayout / IViewportVirtualLayout (E11-L0 seam) + built-in layouts (Stack/Grid/HorizontalGrid/FillRow/LinedFlow/SpanningGrid/MeasuredStack/GroupedList) | virtualization.md (as-built: src\FluentGpu.Engine\Scene\VirtualLayout.cs) |
+| IVirtualLayout / IMeasuredVirtualLayout / IViewportVirtualLayout / ISplicingVirtualLayout (E11-L0 seam) + built-in layouts (Stack/Grid/HorizontalGrid/FillRow/LinedFlow/SpanningGrid/MeasuredStack/GroupedList) | virtualization.md (as-built: src\FluentGpu.Engine\Scene\VirtualLayout.cs) |
 | VirtualListEl realize lifecycle (OnItemPrepared/Clearing/IndexChanged/OnVisibleRange/OnRealized) | virtualization.md (as-built: src\FluentGpu.Engine\Reconciler\VirtualListEl.cs + Reconciler RealizeWindow) |
 | SelectionModel / ItemContainer / ItemsView (E11-L3) | controls.md (selection semantics cite WinUI controls\dev\ItemsView selectors; as-built: src\FluentGpu.Controls) |
 | **Drag/drop contract** — `DragLift`, `DragVisualStyle`, `DragSource`, `DragSession`/`DragState`, `DropTargetSpec` (incl. `SpotlightWhen`/`RefusalCaption`/`SpringLoad*`), `DragSettlePhase`, `DragVisualTok`, `InteractionInfo.BlocksDragArmBit` | input-a11y.md §12 |

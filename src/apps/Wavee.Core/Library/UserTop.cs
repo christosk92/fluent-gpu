@@ -3,12 +3,12 @@ namespace Wavee.Core;
 /// <summary>The signed-in user's OWN top artists (Spotify <c>userTopContent</c>, affinity over a 4-week window) — the
 /// data behind Home's top-artist row.
 ///
-/// Deliberately its own service rather than a facet of <see cref="IArtistStatsService"/>, for the same reason
-/// <c>IArtistPopularTracksService</c> is separate: this is a ME query with no artist argument and a different cache
-/// lifetime, and folding it in would give every artist-page open a reason to touch the user's affinity data.
-/// <para>The row's EXPANDER pane needs no second service: selecting an artist reads
-/// <see cref="IArtistStatsService.EnsureStatsAsync"/>, which already serves related artists, top tracks with play
-/// counts, monthly listeners and world rank behind a 12 h store-backed TTL.</para></summary>
+/// Deliberately its own service rather than a rung of the artist hydration ladder: this is a ME query with no artist
+/// argument and a different cache lifetime, and folding it in would give every artist-page open a reason to touch the
+/// user's affinity data.
+/// <para>The row's EXPANDER pane needs no second service: selecting an artist asks the façade for
+/// <c>HydrationLevel.Rich</c>, which already serves related artists, top tracks with play counts, monthly listeners
+/// and world rank behind the ledger's TTL.</para></summary>
 public interface IUserTopService
 {
     /// <summary>The user's top artists in affinity order (highest first), or empty offline / on failure. Never null, so

@@ -20,6 +20,15 @@ public sealed class FlexLayout
     // regression guard for the measure-call explosion this memo cures: a healthy pass keeps measure≈O(nodes); a runaway
     // measure≫arrange flags a redundant-measure blow-up. Gated to a single bool check (zero work/alloc) when off.
     private static readonly bool s_layoutDiag = Diag.EnvFlag("FG_LAYOUT_DIAG");
+
+    // FG_LAYOUT_OVERFLOW=1: report any node ARRANGED WIDER than its parent's content box. That is the silent failure
+    // mode this engine has no other signal for — a measure OVERESTIMATE (a ZStack reporting a bounded layer's explicit
+    // width as its own size, MeasureZStack) meeting the Yoga-style FlexShrink=0 default (Columns.cs), which together
+    // turn one over-wide layer into a permanent arrange-time overflow that a ClipToBounds ancestor then hides. Nothing
+    // throws, nothing logs, and the only symptom is content silently off-screen.
+    // A scroll VIEWPORT's content is supposed to overflow, so those are skipped. ClipToBounds parents are deliberately
+    // NOT skipped: an intentional clip is exactly what conceals this class of bug.
+    private static readonly bool s_layoutOverflow = Diag.EnvFlag("FG_LAYOUT_OVERFLOW");
     // These are per-FRAME accumulators now (not per-Run): the standalone Run() print below snapshots deltas so its
     // per-call semantics are unchanged, while the host resets them once per frame (ResetFrameDiagCounters) and reads
     // them into FrameStats — so a probe sees the whole frame's measure/arrange/text-reshape cost across the full layout
@@ -37,7 +46,7 @@ public sealed class FlexLayout
 
     /// <summary>Host-driven per-frame reset: zero the diag counters at the top of a frame so DiagMeasure/Arrange/TextMiss
     /// read that frame's total after all layout (full + scoped + phase-7 reflow) has run. Cheap; no-op meaning when off.</summary>
-    public void ResetFrameDiagCounters() { _dMeasure = _dTextHit = _dTextMiss = _dArrange = _dMeasureMemoHit = 0; }
+    public void ResetFrameDiagCounters() { _dMeasure = _dTextHit = _dTextMiss = _dArrange = _dMeasureMemoHit = _dOverflow = 0; }
 
     // Within-pass Measure memo. Measure(node, availW) is a PURE function of the node's subtree content + availW within
     // ONE layout solve (it has no external mutable input; its only side effect is writing the node's Bounds W/H). But the
@@ -224,8 +233,31 @@ public sealed class FlexLayout
         return w;
     }
 
+    /// <summary>Per-frame count of nodes arranged wider than their parent's content box (valid only when
+    /// FG_LAYOUT_OVERFLOW=1; else 0). Surfaced into FrameStats so a probe/test can assert ZERO rather than eyeball a log.</summary>
+    public int DiagLayoutOverflows => _dOverflow;
+    private int _dOverflow;
+
+    // Split out of SetArrangedBounds so the hot path is one folded static-readonly branch and this never inlines.
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private void ReportOverflow(NodeHandle node, in RectF next)
+    {
+        var p = _scene.Parent(node);
+        if (p.IsNull) return;
+        if (_scene.HasScroll(p)) return;   // a viewport's content is SUPPOSED to overflow — that is what scrolling is
+        float padH = _scene.Layout(p).Padding.Horizontal;
+        float parentW = _scene.Bounds(p).W;
+        float inner = parentW - padH;
+        if (next.W <= inner + 0.5f) return;
+        _dOverflow++;
+        Console.Error.WriteLine(
+            $"[fg-layout-overflow] n#{node.Raw.Index} w={next.W:0.##} exceeds parent n#{p.Raw.Index} " +
+            $"content={inner:0.##} (box={parentW:0.##}, pad={padH:0.##}) by {next.W - inner:0.##}");
+    }
+
     private void SetArrangedBounds(NodeHandle node, in RectF next)
     {
+        if (s_layoutOverflow) ReportOverflow(node, in next);
         ref RectF b = ref _scene.Bounds(node);
         b = next;
         var handler = _scene.GetBoundsChangedHandler(node);   // element author's Element.OnBoundsChanged

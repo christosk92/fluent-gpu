@@ -12,8 +12,10 @@ public static class SpotifyLink
 {
     /// <summary><c>spotify:{type}:{id}</c> → <c>https://open.spotify.com/{type}/{id}</c>. Null for non-spotify uris
     /// (<c>wavee:local:*</c>, <c>wavee:playlist:*</c>, empty).</summary>
+    // "Is this a Spotify uri?" is a PROVIDER question — asked through the ONE parser (hydration-facade-design.md §1.1)
+    // rather than a scheme StartsWith. The slice that follows is the url TRANSFORM, not a second scheme test.
     public static string? WebUrl(string? uri) =>
-        uri is { Length: > 0 } && uri.StartsWith("spotify:", StringComparison.Ordinal)
+        uri is { Length: > 0 } && EntityUri.Parse(uri).IsSpotify
             ? "https://open.spotify.com/" + uri["spotify:".Length..].Replace(':', '/')
             : null;
 
@@ -24,8 +26,8 @@ public static class SpotifyLink
     {
         var tracks = target.Tracks;
         if (tracks is { Count: > 0 })
-            return tracks.Count == 1 && tracks[0].Uri.StartsWith("spotify:", StringComparison.Ordinal) ? tracks[0].Uri : null;
-        return target.Uri is { Length: > 0 } u && u.StartsWith("spotify:", StringComparison.Ordinal) ? u : null;
+            return tracks.Count == 1 && EntityUri.Parse(tracks[0].Uri).IsSpotify ? tracks[0].Uri : null;
+        return target.Uri is { Length: > 0 } u && EntityUri.Parse(u).IsSpotify ? u : null;
     }
 
     /// <summary>Does the target resolve to at least one shareable web link? (Tracks: any spotify track uri;

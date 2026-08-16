@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
@@ -25,19 +25,20 @@ static class StagePane
 /// <summary>
 /// The stage's shared chrome: its scrim, its ink and its four button shapes.
 ///
-/// <para><b>THE STAGE IS SINGLE-THEME: always art-dark.</b> In both themes. The room is lit by the playing track, the
-/// way every art-forward player lights it, and the whole surface — chrome AND lyrics — paints the theme-INVARIANT
-/// <see cref="WaveeOnMedia"/> ink on top of it. There is no light arm anywhere in this file.</para>
+/// <para><b>THE STAGE HAS TWO ARMS, and exactly one file knows which is live.</b> Every colour here is mixed from
+/// <see cref="StageInk.Veil"/> and inked from <see cref="StageInk.Ink"/>, so this file names no theme and needs no
+/// branch — a test pins that. The stage used to be single-theme (always art-dark, in both themes) on the argument that
+/// the room is lit by the playing track; that is a defensible design but not the one this product wants, because in
+/// light theme it read as a black slab bolted under light chrome.</para>
 ///
-/// <para><b>What this replaced, and why.</b> The surface shipped with a theme-FLIPPING base scrim (black @ 0.45 dark,
-/// white @ 0.62 light) because <c>LyricsView</c> painted <c>Tok.TextPrimary</c>. The chrome could not sit on a white
-/// ground, so every chrome region brought its own always-dark BOXED veil — a caption strip, the identity column, the
-/// pivot band. In light theme that read as a two-world collage: dark patches with locatable edges (a band across the
-/// top, a vertical smear at the column's falloff) over a white ground, with the theme-invariant white title landing on
-/// the near-white part and disappearing outright. The lyrics now take an on-media ink (<c>LyricsInk</c>), which is what
-/// lets the scrim be ONE continuous thing.</para>
+/// <para><b>Why this is not the collage it replaced.</b> The surface ONCE had a light arm and it was a mess: a
+/// theme-FLIPPING base scrim under ink that stayed theme-invariant white, so the chrome could not sit on the pale
+/// ground and every region brought its own always-dark BOXED veil — a caption strip, the identity column, the pivot
+/// band — which in light theme read as dark patches with locatable edges over a white ground, with the white title
+/// landing on the near-white part and disappearing. The difference now is that the scrim and the INK flip TOGETHER,
+/// from one source. That is the whole property, and it is why the scrim can still be one continuous thing.</para>
 ///
-/// <para><b>The stack, bottom to top:</b> the opaque <see cref="Tok.MediaStage"/> floor → the σ80 baked-blur artwork →
+/// <para><b>The stack, bottom to top:</b> the opaque <see cref="StageInk.Floor"/> → the σ80 baked-blur artwork →
 /// <see cref="Scrim"/> (one full-bleed, continuous vertical gradient: deepened at the top and the bottom, flat through
 /// the middle) → <see cref="ColumnShade"/> (one full-bleed, left-anchored layer that deepens the ground under the
 /// identity column and feathers to EXACTLY zero over 260 DIP) → content. Two paint layers, no patchwork. Only the
@@ -47,19 +48,31 @@ static class StagePane
 /// <para><b>Edge-invisibility is a rule, not a taste call.</b> Every shade either reaches its own boundary at alpha 0
 /// after a long feather, or ends at a WINDOW edge where there is no outside to contrast with. The numbers live in
 /// <see cref="StageLayout"/> (the pure allocator) and <c>StageLayoutTests</c> asserts them in DIP; this file owns only
-/// the spelling. Every colour is derived from <see cref="Tok.MediaStage"/> rather than hand-mixed, for the same reason
-/// <see cref="WaveeOnMedia"/>'s light-button ramp is derived from the on-media ink: one token moves them all.</para>
+/// the spelling. The ALPHAS need no light arm — see the contrast argument on <see cref="StageArm"/>: the sRGB transfer
+/// curve is asymmetric, so the light arm's alpha'd ink clears a HIGHER ratio than the dark arm already ships. Every
+/// colour is derived from <see cref="StageInk.Veil"/> rather than hand-mixed, so one token moves them all.</para>
 /// </summary>
 static class StageChrome
 {
     // ── the scrim system ─────────────────────────────────────────────────────────────────────────────────────────────
 
-    /// <summary>The near-black the whole system is mixed from, at an authored alpha.</summary>
-    static ColorF Shade(float a) => Tok.MediaStage with { A = a };
+    /// <summary>The colour the whole scrim system is mixed from, at an authored alpha. ONE line, and it is what flips
+    /// all three gradients below with the theme: every stop goes through here, and <see cref="StageInk.Veil"/> is the
+    /// stage's ground. <c>Shade(0f)</c> still spells "this shade terminates at nothing", which is the edge-invisibility
+    /// rule the tests assert on.</summary>
+    static ColorF Shade(float a) => StageInk.Veil with { A = a };
 
-    /// <summary>The caption band's height. It carries the close cluster; it no longer carries a veil of its own — the
-    /// scrim's own top deepening does that job, across a feather many times this tall.</summary>
+    /// <summary>The caption band's height on the WIDE stage. It carries the close cluster; it no longer carries a veil
+    /// of its own — the scrim's own top deepening does that job, across a feather many times this tall.
+    /// <para>The COMPACT stage takes <see cref="CompactTopBandH"/> instead: 88 DIP of empty band above a 64-DIP art row
+    /// is a quarter of a short window spent on nothing, and the band's only job there is to hold one 44-DIP disc.</para></summary>
     public const float TopBandH = 88f;
+
+    /// <inheritdoc cref="TopBandH"/>
+    public const float CompactTopBandH = 56f;
+
+    /// <inheritdoc cref="TopBandH"/>
+    public static float TopBandFor(bool wide) => wide ? TopBandH : CompactTopBandH;
 
     /// <summary>The pivot band's height. Same story: the row is a row, the darkening under it is the scrim's.</summary>
     public const float PivotBandH = 72f;
@@ -96,12 +109,12 @@ static class StageChrome
 
     // ── the accent ───────────────────────────────────────────────────────────────────────────────────────────────────
 
-    /// <summary>The art-derived chrome accent of the PLAYING cover — the same derivation the queue panel and the player
-    /// bar's media CTAs use (the lifted, saturation-floored role; the raw grading role can be deliberately dark). The
-    /// stage spends it on exactly four jobs: a latched satellite, the saved heart, the pivot underline + the section
-    /// rule, and the ∞ when autoplay is on.</summary>
-    public static ColorF AccentFor(Track? track) =>
-        Surfaces.ChromeSchemeFor(track?.Image?.Url) is { } p ? WaveePalette.ChromeAccent(p) : Tok.AccentDefault;
+    /// <summary>The art-derived chrome accent of the PLAYING cover. The stage spends it on exactly four jobs: a latched
+    /// satellite, the saved heart, the pivot underline + the section rule, and the ∞ when autoplay is on.
+    /// <para>The derivation itself lives on <see cref="StageInk"/> because it is one of the things that has to know the
+    /// stage's polarity — a lifted accent is right as a lit mark on a dark ground and reads as a highlighter on a pale
+    /// one. The name stays here so the four call sites do not move.</para></summary>
+    public static ColorF AccentFor(Track? track) => StageInk.Accent(track);
 
     // ── the four button shapes ───────────────────────────────────────────────────────────────────────────────────────
 
@@ -112,9 +125,9 @@ static class StageChrome
     {
         Width = box, Height = box, Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
         Corners = Radii.ControlAll,
-        Fill = WaveeOnMedia.GlassRest,
-        HoverFill = enabled ? WaveeOnMedia.GlassHover : WaveeOnMedia.GlassRest,
-        PressedFill = enabled ? WaveeOnMedia.GlassPressed : WaveeOnMedia.GlassRest,
+        Fill = StageInk.GlassRest,
+        HoverFill = enabled ? StageInk.GlassHover : StageInk.GlassRest,
+        PressedFill = enabled ? StageInk.GlassPressed : StageInk.GlassRest,
         BrushTransitionMs = WaveeMotion.Faster,
         HoverScale = WaveeMotion.ScaleEmphatic.HoverIf(enabled), PressScale = WaveeMotion.ScaleEmphatic.PressIf(enabled),
         Role = AutomationRole.Button, Focusable = true, AllowFocusOnInteraction = false,
@@ -126,8 +139,8 @@ static class StageChrome
             new TextEl(glyph)
             {
                 Size = glyphSize, FontFamily = font ?? Theme.IconFont,
-                Color = enabled ? WaveeOnMedia.InkSecondary : WaveeOnMedia.InkTertiary,
-                HoverColor = enabled ? WaveeOnMedia.Ink : WaveeOnMedia.InkTertiary,
+                Color = enabled ? StageInk.InkSecondary : StageInk.InkTertiary,
+                HoverColor = enabled ? StageInk.Ink : StageInk.InkTertiary,
             },
         ],
     };
@@ -135,7 +148,7 @@ static class StageChrome
     /// <summary>The on-media SCRIM FAB — the shape for a control that sits directly on ARTWORK rather than on the
     /// scrim's ground: a 40-DIP circle carrying the on-media scrim plate AT REST, the hairline on-media ring, and the
     /// ink ladder's secondary→primary glyph. It is the <c>MediaCard</c> cover-FAB recipe verbatim
-    /// (<c>ScrimRest/ScrimHover/ScrimPressed</c> + <see cref="WaveeOnMedia.Stroke"/>), and circles are the sanctioned
+    /// (<c>ScrimRest/ScrimHover/ScrimPressed</c> + <see cref="StageInk.Stroke"/>), and circles are the sanctioned
     /// on-media shape.
     /// <para>WHY IT EXISTS. <see cref="Glyph"/> is plateless — <c>GlassRest</c> is alpha ZERO — which is correct for a
     /// control standing on the scrim's own deepening (the transport, the column). The surface's TOP band is not that:
@@ -150,10 +163,10 @@ static class StageChrome
         Width = box, Height = box, Shrink = 0f,
         Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
         Corners = Radii.Circle(box),
-        Fill = WaveeOnMedia.ScrimRest,
-        HoverFill = WaveeOnMedia.ScrimHover,
-        PressedFill = WaveeOnMedia.ScrimPressed,
-        BorderWidth = 1f, BorderColor = WaveeOnMedia.Stroke,
+        Fill = StageInk.ScrimRest,
+        HoverFill = StageInk.ScrimHover,
+        PressedFill = StageInk.ScrimPressed,
+        BorderWidth = 1f, BorderColor = StageInk.Stroke,
         BrushTransitionMs = WaveeMotion.Faster,
         HoverScale = WaveeMotion.ScaleEmphatic.Hover, PressScale = WaveeMotion.ScaleEmphatic.Press,
         Role = AutomationRole.Button, Focusable = true, AllowFocusOnInteraction = false,
@@ -163,8 +176,51 @@ static class StageChrome
             new TextEl(glyph)
             {
                 Size = glyphSize, FontFamily = Theme.IconFont,
-                Color = latched ? accent : WaveeOnMedia.InkSecondary,
-                HoverColor = latched ? accent : WaveeOnMedia.Ink,
+                Color = latched ? accent : StageInk.InkSecondary,
+                HoverColor = latched ? accent : StageInk.Ink,
+            },
+        ],
+    };
+
+    /// <summary>THE WAY OUT — the one control on the surface a user must be able to find without hunting, so it is the
+    /// one control that outranks the rest of the chrome instead of matching it.
+    ///
+    /// <para><b>Why it is not <see cref="ScrimFab"/>.</b> That shape's rest plate is the on-media SCRIM (black @ 0.55),
+    /// which is right on <c>MediaCard</c>'s undimmed artwork. This band is not that: the scrim's own top deepening is
+    /// already <see cref="StageLayout.ScrimTopA"/> — 76% black on EVERY cover — so a darker plate has nothing to
+    /// separate from and the disc simply has no edge. Separation has to come from LIGHT here, which is what
+    /// <see cref="StageInk.GlassPlate"/> is: a resting ground made of INK.</para>
+    ///
+    /// <para><b>The shadow is load-bearing, not decoration.</b> It is the one separation channel that works in BOTH
+    /// directions — a light disc on dark art and a dark disc on a light one — which is what keeps this shape correct
+    /// when the surface's ink ladder inverts. Do not "clean it up".</para>
+    ///
+    /// <para>44 DIP: one rung ABOVE <see cref="FabBox"/>. The secondary-line toggle beside it stays a 40-DIP
+    /// <see cref="ScrimFab"/>, so the two are deliberately NOT a matched pair — the exit is meant to win.</para></summary>
+    public const float ExitBox = 44f;
+
+    /// <inheritdoc cref="ExitBox"/>
+    public static BoxEl ExitFab(string glyph, Action onClick) => new()
+    {
+        Width = ExitBox, Height = ExitBox, Shrink = 0f,
+        Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+        Corners = Radii.Circle(ExitBox),
+        Fill = StageInk.GlassPlate,
+        HoverFill = StageInk.GlassPlateHover,
+        PressedFill = StageInk.GlassPlatePressed,
+        BorderWidth = 1f, BorderColor = StageInk.Stroke,
+        Shadow = Elevation.Card,
+        BrushTransitionMs = WaveeMotion.Faster,
+        HoverScale = WaveeMotion.ScaleEmphatic.Hover, PressScale = WaveeMotion.ScaleEmphatic.Press,
+        Role = AutomationRole.Button, Focusable = true, AllowFocusOnInteraction = false,
+        OnClick = onClick, Cursor = CursorId.Hand,
+        Children =
+        [
+            // PRIMARY ink, not secondary: the way out is not a secondary control.
+            new TextEl(glyph)
+            {
+                Size = 18f, FontFamily = Theme.IconFont,
+                Color = StageInk.Ink, HoverColor = StageInk.Ink,
             },
         ],
     };
@@ -177,9 +233,9 @@ static class StageChrome
     {
         Width = box, Height = box, Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
         Corners = Radii.ControlAll,
-        Fill = latched && enabled ? WaveeOnMedia.GlassHover : WaveeOnMedia.GlassRest,
-        HoverFill = latched && enabled ? WaveeOnMedia.GlassPressed : enabled ? WaveeOnMedia.GlassHover : WaveeOnMedia.GlassRest,
-        PressedFill = enabled ? WaveeOnMedia.GlassPressed : WaveeOnMedia.GlassRest,
+        Fill = latched && enabled ? StageInk.GlassHover : StageInk.GlassRest,
+        HoverFill = latched && enabled ? StageInk.GlassPressed : enabled ? StageInk.GlassHover : StageInk.GlassRest,
+        PressedFill = enabled ? StageInk.GlassPressed : StageInk.GlassRest,
         BrushTransitionMs = WaveeMotion.Faster,
         HoverScale = WaveeMotion.ScaleEmphatic.HoverIf(enabled), PressScale = WaveeMotion.ScaleEmphatic.PressIf(enabled),
         Role = AutomationRole.Button, Focusable = true, AllowFocusOnInteraction = false,
@@ -189,8 +245,8 @@ static class StageChrome
             new TextEl(glyph)
             {
                 Size = glyphSize, FontFamily = Theme.IconFont,
-                Color = !enabled ? WaveeOnMedia.InkTertiary : latched ? accent : WaveeOnMedia.InkSecondary,
-                HoverColor = !enabled ? WaveeOnMedia.InkTertiary : latched ? accent : WaveeOnMedia.Ink,
+                Color = !enabled ? StageInk.InkTertiary : latched ? accent : StageInk.InkSecondary,
+                HoverColor = !enabled ? StageInk.InkTertiary : latched ? accent : StageInk.Ink,
             },
         ],
     };
@@ -204,9 +260,9 @@ static class StageChrome
         Width = box, Height = box, Shrink = 0f,
         Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
         Corners = Radii.Circle(box),
-        Fill = enabled ? WaveeOnMedia.LightButton : WaveeOnMedia.ScrimRest,
-        HoverFill = enabled ? WaveeOnMedia.LightButtonHover : WaveeOnMedia.ScrimRest,
-        PressedFill = enabled ? WaveeOnMedia.LightButtonPressed : WaveeOnMedia.ScrimRest,
+        Fill = enabled ? StageInk.ButtonFill : StageInk.ScrimRest,
+        HoverFill = enabled ? StageInk.ButtonFillHover : StageInk.ScrimRest,
+        PressedFill = enabled ? StageInk.ButtonFillPressed : StageInk.ScrimRest,
         BrushTransitionMs = WaveeMotion.Faster,
         HoverScale = WaveeMotion.ScaleEmphatic.HoverIf(enabled), PressScale = WaveeMotion.ScaleEmphatic.PressIf(enabled),
         Role = AutomationRole.Button, Focusable = true, AllowFocusOnInteraction = false,
@@ -216,7 +272,7 @@ static class StageChrome
             new TextEl(glyph)
             {
                 Size = glyphSize, FontFamily = Theme.IconFont,
-                Color = enabled ? WaveeOnMedia.LightButtonInk : WaveeOnMedia.InkTertiary,
+                Color = enabled ? StageInk.ButtonInk : StageInk.InkTertiary,
             },
         ],
     };
@@ -228,9 +284,9 @@ static class StageChrome
         Width = box, Height = box, Shrink = 0f,
         Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
         Corners = Radii.ControlAll,
-        Fill = WaveeOnMedia.GlassRest,
-        HoverFill = onLike is null ? WaveeOnMedia.GlassRest : WaveeOnMedia.GlassHover,
-        PressedFill = onLike is null ? WaveeOnMedia.GlassRest : WaveeOnMedia.GlassPressed,
+        Fill = StageInk.GlassRest,
+        HoverFill = onLike is null ? StageInk.GlassRest : StageInk.GlassHover,
+        PressedFill = onLike is null ? StageInk.GlassRest : StageInk.GlassPressed,
         BrushTransitionMs = WaveeMotion.Faster,
         HoverScale = WaveeMotion.ScaleEmphatic.HoverIf(onLike is not null),
         PressScale = WaveeMotion.ScaleEmphatic.PressIf(onLike is not null),
@@ -247,8 +303,8 @@ static class StageChrome
                     new TextEl(saved ? Icons.HeartFill : Icons.Heart)
                     {
                         Size = 16f, FontFamily = Theme.IconFont,
-                        Color = saved ? accent : WaveeOnMedia.InkSecondary,
-                        HoverColor = saved ? accent : WaveeOnMedia.Ink,
+                        Color = saved ? accent : StageInk.InkSecondary,
+                        HoverColor = saved ? accent : StageInk.Ink,
                     },
                 ],
             },
@@ -280,8 +336,8 @@ static class StageChrome
             {
                 Size = WaveeCta.TextActionSize, LineHeight = WaveeCta.TextActionLineHeight,
                 Weight = WaveeCta.TextActionWeight,
-                Color = active ? WaveeOnMedia.Ink : WaveeOnMedia.InkTertiary,
-                HoverColor = WaveeOnMedia.Ink,
+                Color = active ? StageInk.Ink : StageInk.InkTertiary,
+                HoverColor = StageInk.Ink,
                 MaxLines = 1, Wrap = TextWrap.NoWrap, Trim = TextTrim.CharacterEllipsis,
             },
             new BoxEl

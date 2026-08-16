@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Google.Protobuf;
 using Wavee.Backend.Spotify;
+using Wavee.Core;
 using Pl = Wavee.Protocol.Playlist;
 
 namespace Wavee.Backend.Playlists;
@@ -40,7 +41,7 @@ public sealed class PlaylistSignalsClient
         request.Signals.Add(signal);
 
         string baseUrl = _baseUrl().TrimEnd('/');
-        string url = baseUrl + "/playlist/v2/playlist/" + Uri.EscapeDataString(IdOf(playlistUri)) + "/signals";
+        string url = baseUrl + "/playlist/v2/playlist/" + Uri.EscapeDataString(EntityUri.IdOf(playlistUri)) + "/signals";
         var headers = SpotifyHeaders.PlaylistSignals(_language(), baseUrl);
         byte[] body = request.ToByteArray();
 
@@ -67,9 +68,4 @@ public sealed class PlaylistSignalsClient
         return snapshot;
     }
 
-    static string IdOf(string uri)
-    {
-        int i = uri.LastIndexOf(':');
-        return i >= 0 ? uri[(i + 1)..] : uri;
-    }
 }

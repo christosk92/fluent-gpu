@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Wavee.Backend;
+using Wavee.Backend.Hydration;
 using Wavee.Backend.Metadata;
 using Wavee.Backend.Spotify;
 using Wavee.Core;
@@ -86,9 +87,15 @@ public class PreReleaseWireTests
             if (array.ExtensionData.Count > 0) resp.ExtendedMetadata.Add(array);
             return new HttpResp(200, new Dictionary<string, string>(), resp.ToByteArray());
         });
-        var em = new ExtendedMetadataSource(http, () => "https://spclient.test", () => Ctx);
-        return (new SpotifyPreReleaseService(em), log);
+        return (new SpotifyPreReleaseService(Reader(http)), log);
     }
+
+    /// <summary>The service is THIN over this reader (design §2.5): the answers-including-negatives table, the
+    /// coalescing slot and the etag cache all live below it now, so these tests drive the REAL read path — only the
+    /// three-key seed and the half-link rejection are still this file's own code.</summary>
+    static ExtensionReader Reader(IHttpExchange http)
+        => new(new ExtensionEtagCache(new ExtendedMetadataSource(http, () => "https://spclient.test", () => Ctx), () => Ctx),
+               new NegativeMemo());
 
     // Answers under BOTH keys, which is what the real wire does.
     static Func<string, Pb.Prerelease?> Both(Pb.Prerelease msg) =>
@@ -236,7 +243,7 @@ public class PreReleaseWireTests
     {
         // Best-effort by contract: a network blip must never break an album open or an artist page.
         var http = new FakeExchange((_, _) => throw new InvalidOperationException("socket"));
-        var svc = new SpotifyPreReleaseService(new ExtendedMetadataSource(http, () => "https://spclient.test", () => Ctx));
+        var svc = new SpotifyPreReleaseService(Reader(http));
 
         Assert.Null(await svc.ResolveAsync(AlbumUri, CT));
     }
@@ -257,7 +264,7 @@ public class PreReleaseWireTests
             resp.ExtendedMetadata.Add(array);
             return new HttpResp(200, new Dictionary<string, string>(), resp.ToByteArray());
         });
-        var svc = new SpotifyPreReleaseService(new ExtendedMetadataSource(http, () => "https://spclient.test", () => Ctx));
+        var svc = new SpotifyPreReleaseService(Reader(http));
 
         Assert.Null(await svc.ResolveAsync(AlbumUri, CT));
     }

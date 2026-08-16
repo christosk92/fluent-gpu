@@ -10,8 +10,11 @@ namespace Wavee.Tests;
 // value is right. A pre-release is a temporary state that ENDS, and the server signals the end by dropping preReleaseV2
 // from the overview — with a plain `?? current` the album ships and the artist page says "Coming soon" forever.
 //
-// The discriminator is FetchedAt: a full-overview write carries UtcNow, a thin write carries default. These drive the
-// real merge (the same entry point InMemoryStore.UpsertArtist calls) from both sides of that gate.
+// The discriminator is Artist.OverviewFetchedAt — the OVERVIEW's own stamp, which only the queryArtistOverview write
+// sets. It used to be FetchedAt, and that was wrong in a way no test caught: FetchedAt is a max-of clock any writer may
+// raise, so a write that merely bumped it (the chart step, a V4 upsert carrying one) claimed authority over absences it
+// knew nothing about and silently cleared the "Coming soon" card. These drive the real merge (the same entry point
+// InMemoryStore.UpsertArtist calls) from both sides of that gate.
 public class PreReleaseMergeTests
 {
     static readonly DateTimeOffset T0 = new(2026, 7, 1, 12, 0, 0, TimeSpan.Zero);
@@ -28,7 +31,7 @@ public class PreReleaseMergeTests
         new("a1", "spotify:artist:a1", "A1", null,
             Pinned: pin,
             Extras: extras ? new ArtistExtras(WatchFeed: watch, PreRelease: pre) : null,
-            FetchedAt: fetchedAt);
+            FetchedAt: fetchedAt, OverviewFetchedAt: fetchedAt);
 
     // ── PreRelease: the null-back rule, both polarities ───────────────────────────────────────────────────────────────
 
@@ -92,6 +95,24 @@ public class PreReleaseMergeTests
 
         Assert.Null(merged.Extras!.PreRelease);                   // the exception…
         Assert.NotNull(merged.Extras.WatchFeed);                  // …and everything else still additive
+    }
+
+    [Fact]
+    public void AThinWriteThatBumpsFetchedAt_IsStillNotAuthoritative()
+    {
+        // The regression the OverviewFetchedAt split exists for. FetchedAt is a max-of stamp — the chart step and any
+        // writer that happens to carry one can move it — so gating authority on it let a NON-overview write clear a
+        // live pre-release. Only the overview's own stamp may claim "I know what this artist no longer has".
+        var current = Rec(Announcement(), null, T0);
+        var incoming = new Artist("a1", "spotify:artist:a1", "A1", null,
+            Extras: new ArtistExtras(PreRelease: null),
+            FetchedAt: T1, OverviewFetchedAt: default);       // newer, but NOT an overview
+
+        var merged = StoreEntityMerge.Artist(current, incoming);
+
+        Assert.NotNull(merged.Extras!.PreRelease);
+        Assert.Equal(T1, merged.FetchedAt);                    // the max-of clock still moved…
+        Assert.Equal(T0, merged.OverviewFetchedAt);            // …and the overview clock did not
     }
 
     // ── Pinned: deliberately NOT null-backed ──────────────────────────────────────────────────────────────────────────

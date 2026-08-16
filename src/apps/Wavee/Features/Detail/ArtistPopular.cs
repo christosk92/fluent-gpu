@@ -93,13 +93,16 @@ sealed class ArtistPopular : Component
         var acts = UseContext(ActionServices.Slot);
         var menuOverlay = UseContext(Overlay.Service);
 
-        // Step two of the chart, owned here rather than by the page: the overview seed paints immediately, and the
-        // extended list (up to 50, play counts preserved on the head) revalidates into the SAME component — so the chart
-        // simply grows instead of the whole band re-mounting. Offline / failure returns the seed, so this never blanks.
-        var extended = UseResource(ct => _svc.ArtistPopularTracks.EnsureExtendedAsync(_ctx, _tracks, ct), _tracks, _ctx);
+        // The extended chart IS the artist's FULL rung (design §1.2): overview seed ∪ artist-top-tracks-extensions,
+        // merged, with kind-185 counts on the tail. Asking for the rung revalidates into the SAME component — the chart
+        // grows instead of the band re-mounting — and offline the ladder cannot reach Full, so the seed stands.
+        var extended = UseResource(async ct =>
+            (await _svc.Library.GetArtistAsync(_ctx, HydrationLevel.Full, ct).ConfigureAwait(false))?.TopTracks ?? _tracks,
+            _tracks, _ctx);
         _live = extended.Loadable.Value.Value is { Count: > 0 } merged ? merged : _tracks;
 
         int total = Math.Min(_live.Count, MaxTracks);
+        int counted = CountedRows(_live, total);
         // The back-channel the shelf's frozen closures read (see the field docs) — written BEFORE the shelf builds.
         _total = total; _go = go; _lib = lib; _acts = acts; _overlay = menuOverlay;
         ColorF accent = _accent();
@@ -149,12 +152,23 @@ sealed class ArtistPopular : Component
                     maxColumns: maxCols,
                     snap: ShelfSnap.Page)
                     // PagedShelf freezes its ctor props at mount (component-props contract), so every input that can
-                    // still change belongs in this key: the count (the extended list revalidates 10 → ≤50 in place) and
-                    // the header element (the cover palette lands after first paint). Each changes at most once per
-                    // visit, while the chart is still resting on page one, so the remount costs nothing anyone can see.
-                    with { Key = "chart:" + total + ":" + accent.GetHashCode() },
+                    // still change belongs in this key: the count (the extended list revalidates 10 → ≤50 in place), the
+                    // number of rows carrying a play count (a stored extended list can be topped up with kind-185 counts
+                    // WITHOUT its length changing — the rows read _live only on remount, see ChartRow), and the header
+                    // element (the cover palette lands after first paint). Each changes at most once per visit, while
+                    // the chart is still resting on page one, so the remount costs nothing anyone can see.
+                    with { Key = "chart:" + total + ":" + counted + ":" + accent.GetHashCode() },
             ],
         };
+    }
+
+    /// <summary>How many of the charted rows carry a play count — the key input that lets a same-length list that just
+    /// gained its kind-185 counts remount the rows.</summary>
+    static int CountedRows(IReadOnlyList<Track> list, int total)
+    {
+        int n = 0;
+        for (int i = 0; i < total; i++) if (list[i].PlayCount > 0) n++;
+        return n;
     }
 
     // ── one chart row, at the fitted column width ───────────────────────────────────────────────────────────
@@ -436,8 +450,9 @@ sealed class ArtistPopular : Component
         {
             // CONSTRAINT: _o._live is a plain FIELD, not a signal — reading it inside this UseComputed subscribes to
             // nothing, so a row can only pick up a longer list when it re-renders for some other reason. That is sound
-            // ONLY because the count-keyed wrapper remount (see Render's `Key = "chart:" + total + …`) rebuilds this
-            // whole shelf whenever _live's charted length changes. Anything that weakens that key must turn _live into a
+            // ONLY because the count-keyed wrapper remount (see Render's `Key = "chart:" + total + ":" + counted + …`)
+            // rebuilds this whole shelf whenever _live's charted length OR its number of play-counted rows changes.
+            // Anything that weakens that key must turn _live into a
             // Signal here first, or these rows will keep charting the seed list.
             var presentation = UseComputed(() =>
             {

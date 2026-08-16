@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -48,8 +48,30 @@ internal static class WaveeNavProbe
         ("albums", null), ("artists", null), ("podcasts", null), ("local", null), ("search", null),
     ];
 
+    /// <summary>Every env flag that hands this probe the run loop. ONE list, read by both <see cref="TryRun"/> and the
+    /// single-instance gate in <c>Program</c> — a probe must never contend with the user's own running Wavee (the gate
+    /// would silently exit the probe process with code 0, which reads exactly like "the probe ran and found nothing").</summary>
+    static readonly string[] ProbeFlags =
+    [
+        "WAVEE_NAV_PROBE", "WAVEE_CONN_STRESS", "WAVEE_TRACKLIST_SHOT", "WAVEE_HERO_SHOT", "WAVEE_SHELF_SHOT",
+        "WAVEE_RAIL_SHOT", "WAVEE_RAIL_PROBE", "WAVEE_HOME_SCROLL_PROBE", "WAVEE_LYRICS_PROBE",
+        "WAVEE_LIVE_LYRICS_SCROLL_PROBE", "WAVEE_LYRICS_ADVANCE_PROBE", "WAVEE_SIDEBAR_MODE_SHOT",
+        "WAVEE_SIDEBAR_V3_SHOT", "WAVEE_SIDEBAR_VISUAL_SHOT",
+    ];
+
+    /// <inheritdoc cref="ProbeFlags"/>
+    internal static bool Requested
+    {
+        get
+        {
+            foreach (string f in ProbeFlags) if (Diag.EnvFlag(f)) return true;
+            return false;
+        }
+    }
+
     public static bool TryRun(AppHost host, IPlatformWindow window, IGpuDevice device)
     {
+        if (!Requested) return false;
         bool connStress = Diag.EnvFlag("WAVEE_CONN_STRESS");
         bool trackShot = Diag.EnvFlag("WAVEE_TRACKLIST_SHOT");
         bool heroShot = Diag.EnvFlag("WAVEE_HERO_SHOT");
@@ -63,7 +85,6 @@ internal static class WaveeNavProbe
         bool sidebarModeShot = Diag.EnvFlag("WAVEE_SIDEBAR_MODE_SHOT");
         bool sidebarV3Shot = Diag.EnvFlag("WAVEE_SIDEBAR_V3_SHOT");
         bool sidebarVisualShot = Diag.EnvFlag("WAVEE_SIDEBAR_VISUAL_SHOT");
-        if (!Diag.EnvFlag("WAVEE_NAV_PROBE") && !connStress && !trackShot && !heroShot && !shelfShot && !railShot && !railProbe && !homeScroll && !lyricsProbe && !liveLyricsScroll && !advanceProbe && !sidebarModeShot && !sidebarV3Shot && !sidebarVisualShot) return false;
         WaveeLog.Instance.SetEcho(Console.Error.WriteLine);   // env-gated run only: mirror probe progress to the terminal
         if (window is not Win32Window w || device is not D3D12Device gpu)
         {
@@ -1236,7 +1257,7 @@ internal static class WaveeNavProbe
         bool baseline = Diag.EnvFlag("WAVEE_RAIL_BASELINE");
         bool keepVsync = Diag.EnvFlag("WAVEE_PROBE_VSYNC");
         var csv = new StringBuilder(1 << 16);
-        csv.AppendLine("phase,frame,label,frameMs,flushMs,layoutMs,animMs,recordMs,submitMs,measure,arrange,textMiss,spansReused,spansRebased,spansRerec,gen0,comps,nodes,draws,overBudget");
+        csv.AppendLine("phase,frame,label,frameMs,flushMs,layoutMs,animMs,recordMs,submitMs,measure,arrange,textMiss,spansReused,spansRebased,spansRerec,depthAborts,gen0,comps,nodes,draws,overBudget");
 
         window.SetClientSize(1700, 950);   // wide → the rail DOCKS (RailFits) — inline reserved width, the reported mode
 
@@ -1259,6 +1280,7 @@ internal static class WaveeNavProbe
                    .Append(F(s.RecordMs)).Append(',').Append(F(s.SubmitMs)).Append(',')
                    .Append(s.MeasureCount).Append(',').Append(s.ArrangeCount).Append(',').Append(s.TextShapeMisses).Append(',')
                    .Append(s.SpansReused).Append(',').Append(s.SpansRebased).Append(',').Append(s.SpansReRecorded).Append(',')
+                   .Append(s.DepthAborts).Append(',')   // must stay 0: a nonzero frame painted an incomplete page (recorder out of stack)
                    .Append(dg0).Append(',').Append(s.ComponentsRendered).Append(',').Append(s.NodesVisited).Append(',').Append(s.DrawCommandCount).Append(',')
                    .Append(over ? '1' : '0').AppendLine();
             }
@@ -2034,7 +2056,7 @@ internal static class WaveeNavProbe
             prevLyMode = s.LyricsScrollMode;
         }
 
-        // ── P4: BUG2 — voice-transition REMOUNT + wipe/glow integrity ─────────────────────────────────────────────
+        // ── Probe phase 4 — BUG2 — voice-transition REMOUNT + wipe/glow integrity ─────────────────────────────────────────────
         // Step the clock finely across interior line boundaries so VOICE crosses li-1→li while ACTIVE (the lead) stays
         // ~stationary near li — this is the exact frame the row just above active leaves the voice slot. On the fixed
         // (stable two-child) tree its node identity must NOT change (no remount → no re-bake flicker), and the karaoke

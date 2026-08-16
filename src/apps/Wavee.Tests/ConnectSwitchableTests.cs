@@ -18,7 +18,7 @@ public class ConnectSwitchableTests
     [Fact]
     public void SwitchableState_Delegates_ReEmitsOnSwap_AndForwardsInnerChanges()
     {
-        var a = new NowPlayingProjection("us", () => 0);
+        var a = new NowPlayingProjection("us", NotOwnedEntityHydrator.Instance, new InMemoryStore(), () => 0);
         a.OnCluster(C("spotify:track:a"));
         var sw = new SwitchableState(a);
 
@@ -26,7 +26,7 @@ public class ConnectSwitchableTests
         using var sub = sw.Changes.Subscribe(ConnectHarness.Obs<IPlaybackState>(_ => changes++));
         Assert.Equal("spotify:track:a", sw.CurrentTrack!.Uri);   // delegates to the initial inner
 
-        var b = new NowPlayingProjection("us", () => 0);
+        var b = new NowPlayingProjection("us", NotOwnedEntityHydrator.Instance, new InMemoryStore(), () => 0);
         b.OnCluster(C("spotify:track:b"));
         sw.SetInner(b);
         Assert.True(changes >= 1);                                // re-emitted on swap

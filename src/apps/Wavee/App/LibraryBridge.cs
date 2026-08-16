@@ -4,13 +4,14 @@ using System.Threading;
 using System.Threading.Tasks;
 using FluentGpu.Hooks;
 using FluentGpu.Input;
+using FluentGpu.Localization;
 using FluentGpu.Signals;
 using Wavee.Core;
 
 namespace Wavee;
 
 /// <summary>
-/// The Core→engine bridge for the Mutations facet (docs/architecture.md §6 "a LibraryBridge") — the saved / liked /
+/// The Core→engine bridge for the Mutations facet (docs/plans/wavee/architecture.md §6 "a LibraryBridge") — the saved / liked /
 /// followed set as a reactive <see cref="Signal{T}"/>. Subscribes the source's change stream, marshalling each callback
 /// onto the UI thread via the post delegate. Toggles write OPTIMISTICALLY (the heart flips this frame) and the source
 /// reconciles + re-emits the confirmed set. The heart / follow affordances read <see cref="Saved"/> (so they re-skin on
@@ -27,12 +28,23 @@ public sealed class LibraryBridge : IUndoTarget
     readonly ActivityLog _activity;
     readonly List<IDisposable> _subs = [];
     readonly Dictionary<string, Signal<bool>> _savedByUri = new(StringComparer.Ordinal);
+    // The per-playlist pending-edit counters (the _savedByUri pattern) + the set of playlists this bridge has ever
+    // issued an edit for. The SET is what keeps "pending changes" honest: the outbox also carries saves and follows,
+    // which are library changes rather than playlist edits, and counting those under "playlist changes still syncing"
+    // would be a lie in the one place the user goes to find out what is happening.
+    readonly Dictionary<string, Signal<int>> _pendingByUri = new(StringComparer.Ordinal);
+    readonly HashSet<string> _editedUris = new(StringComparer.Ordinal);
+    Wavee.Backend.MutationEngine? _mutations;
+    Action<Action> _post = static a => a();
     bool _active;
 
     /// <summary>The saved-set — read by the heart / follow affordances (which subscribe → re-skin on any change).</summary>
     public Signal<IReadOnlySet<string>> Saved { get; }
-    /// <summary>Bumps whenever a user playlist is created / added-to — the sidebar keys its playlist read on it to refresh.</summary>
-    public Signal<int> PlaylistsVersion { get; } = new(0);
+
+    /// <summary>How many playlist edits this session has issued that the server has not acked yet. Read by the
+    /// notification center's one "still syncing" line; 0 whenever everything has landed (and always 0 on a build with
+    /// no real mutation engine, which genuinely has nothing queued).</summary>
+    public Signal<int> PendingEditsTotal { get; } = new(0);
 
     public LibraryBridge(IMutationSource mut, UserPlaylistSource playlists, IPlaylistMutationSource playlistEdits, ActivityLog activity)
     {
@@ -48,17 +60,114 @@ public sealed class LibraryBridge : IUndoTarget
     {
         if (_active) return;
         _active = true;
+        _post = post;
         _subs.Add(_mut.SavedChanged.Subscribe(s => post(() => PublishSaved(s))));
-        _subs.Add(_playlists.PlaylistsChanged.Subscribe(v => post(() => PlaylistsVersion.Value = v)));
+        SubscribePending();
+    }
+
+    // ── pending playlist edits (the outbox, as a signal) ───────────────────────────────────────────────────────────
+    /// <summary>Attach the real durable-outbox engine. Called by the composition root right after it builds the engine
+    /// (the bridge itself is constructed earlier, before the store/outbox exist). A build with no real backend simply
+    /// never calls this and reports 0 pending — which is the truth, not a swallowed dependency.</summary>
+    public void AttachMutations(Wavee.Backend.MutationEngine engine)
+    {
+        _mutations = engine;
+        if (_active) SubscribePending();
+    }
+
+    void SubscribePending()
+    {
+        if (_mutations is not { } engine) return;
+        var post = _post;
+        _subs.Add(engine.PendingChanged.Subscribe(Wavee.Backend.Observers.From<string>(uri => post(() => PublishPending(uri)))));
+    }
+
+    /// <summary>The live pending-edit count for ONE playlist — the header chip's source. Reading it subscribes the
+    /// caller to that uri only, so a drain elsewhere in the library never re-renders this page's header.</summary>
+    public IReadSignal<int> PendingEdits(string playlistUri)
+    {
+        var state = PendingSignal(playlistUri);
+        _editedUris.Add(playlistUri);       // an OPEN playlist counts toward the total even if we did not edit it here
+        return state;
+    }
+
+    Signal<int> PendingSignal(string playlistUri)
+    {
+        if (!_pendingByUri.TryGetValue(playlistUri, out var state))
+        {
+            state = new Signal<int>(_mutations?.PendingFor(playlistUri) ?? 0);
+            _pendingByUri.Add(playlistUri, state);
+        }
+        return state;
+    }
+
+    void PublishPending(string entityKey)
+    {
+        if (_mutations is not { } engine) return;
+        if (_pendingByUri.TryGetValue(entityKey, out var state)) state.Value = engine.PendingFor(entityKey);
+        int total = 0;
+        foreach (var uri in _editedUris) total += engine.PendingFor(uri);
+        PendingEditsTotal.Value = total;
+    }
+
+    /// <summary>Record a playlist as one this session edits, so its pending count is part of <see cref="PendingEditsTotal"/>.</summary>
+    void TrackEdited(string playlistUri)
+    {
+        if (playlistUri.Length == 0) return;
+        _editedUris.Add(playlistUri);
+        PublishPending(playlistUri);
     }
 
     // ── playlist edits (create + add) ──────────────────────────────────────────────────────────────────────
-    public async Task<string> CreatePlaylistAsync(string name, CancellationToken ct = default)
+    /// <summary>Create a Spotify playlist through the P3 seam. SYNCHRONOUS by contract: the optimistic header, the empty
+    /// membership and the rootlist row are in the store when this returns, so the ONE create path
+    /// (<c>PlaylistCreateFlow</c>) can navigate on the very next frame — a real, 0-track owner page instead of a
+    /// skeleton that waits for an ack. <see cref="PlaylistCreated.Completion"/> is what says whether it became real;
+    /// the flow observes it and calls <see cref="SettleCreate"/>, which is what <see cref="IsCreatePending"/> /
+    /// <see cref="IsCreateFailed"/> (the playlist page's notice rule) read.</summary>
+    public PlaylistCreated CreatePlaylist(string name, RootlistPlacement placement)
     {
-        var uri = await _playlistEdits.CreatePlaylistAsync(name, ct).ConfigureAwait(false);
-        if (!_activity.IsSuppressed) _activity.Record(ActivityKind.PlaylistCreate, uri, name);   // log-only (no Undo)
-        return uri;
+        var created = _playlistEdits.CreatePlaylist(name, placement);
+        _createFailed.Remove(created.Uri);
+        _createPending.Add(created.Uri);
+        if (!_activity.IsSuppressed) _activity.Record(ActivityKind.PlaylistCreate, created.Uri, name);   // log-only (no Undo)
+        return created;
     }
+
+    // The create lifecycle, as two URI sets rather than a signal: the ONE reader is the playlist page's notice rule,
+    // which re-decides on every reload anyway, and a per-uri signal here would outlive the handful of frames a create
+    // is actually in flight. Written only from the flow's UI-thread post, read only on the UI thread.
+    readonly HashSet<string> _createPending = new(StringComparer.Ordinal);
+    readonly HashSet<string> _createFailed = new(StringComparer.Ordinal);
+
+    /// <summary>The create for <paramref name="uri"/> reached its verdict. Called by <c>PlaylistCreateFlow</c> — the one
+    /// create path — so the toast, the notice strip and the announcement can never tell different stories.</summary>
+    internal void SettleCreate(string uri, bool ok)
+    {
+        if (uri.Length == 0) return;
+        _createPending.Remove(uri);
+        if (ok) _createFailed.Remove(uri); else _createFailed.Add(uri);
+    }
+
+    /// <summary>An optimistic create for this uri is still riding the outbox — "the server has never heard of it" is the
+    /// EXPECTED state, not a deletion.</summary>
+    public bool IsCreatePending(string uri) => _createPending.Contains(uri);
+
+    /// <summary>The create for this uri was rejected: the page is showing a playlist that will never exist.</summary>
+    public bool IsCreateFailed(string uri) => _createFailed.Contains(uri);
+
+    // ── rootlist folder CRUD (P3) ──────────────────────────────────────────────────────────────────────────
+    /// <summary>Create a folder; returns the client-minted groupId (expansion state and pins key off it, so they survive
+    /// every later rename). Online-only by seam contract — an offline call fails fast with <c>Offline</c>.</summary>
+    public Task<string> CreateFolderAsync(string name, RootlistPlacement placement, CancellationToken ct = default)
+        => _playlistEdits.CreateFolderAsync(name, placement, ct);
+
+    public Task RenameFolderAsync(string groupId, string name, CancellationToken ct = default)
+        => _playlistEdits.RenameFolderAsync(groupId, name, ct);
+
+    /// <summary>Delete a folder's marker pair. Its children are NOT deleted — they move up one level.</summary>
+    public Task DeleteFolderAsync(string groupId, CancellationToken ct = default)
+        => _playlistEdits.DeleteFolderAsync(groupId, ct);
 
     public string CreatePlaylist(string name)
     {
@@ -87,6 +196,7 @@ public sealed class LibraryBridge : IUndoTarget
     public async Task<long> AddTracksTrackedAsync(string playlistUri, IReadOnlyList<Track> tracks, CancellationToken ct = default)
     {
         long id = _activity.IsSuppressed ? -1 : _activity.Record(ActivityKind.PlaylistAddTracks, playlistUri, null, PayloadFor(tracks));
+        TrackEdited(playlistUri);
         await WithFailure(_playlistEdits.AddTracksAsync(playlistUri, tracks, ct), id).ConfigureAwait(false);
         return id;
     }
@@ -96,6 +206,7 @@ public sealed class LibraryBridge : IUndoTarget
     public Task InsertTracksAsync(string playlistUri, IReadOnlyList<Track> tracks, int toIndex, CancellationToken ct = default)
     {
         long id = _activity.IsSuppressed ? -1 : _activity.Record(ActivityKind.PlaylistAddTracks, playlistUri, null, PayloadFor(tracks));
+        TrackEdited(playlistUri);
         return WithFailure(_playlistEdits.InsertTracksAsync(playlistUri, tracks, toIndex, ct), id);
     }
 
@@ -180,7 +291,9 @@ public sealed class LibraryBridge : IUndoTarget
         long id = -1;
         if (!_activity.IsSuppressed && name is { } newName && previousName is { } prev && !string.Equals(prev, newName, StringComparison.Ordinal))
             id = _activity.Record(ActivityKind.PlaylistRename, playlistUri, newName, new ActivityPayload(OldName: prev, NewName: newName));
-        return WithFailure(_playlistEdits.UpdateDetailsAsync(playlistUri, name, description, collaborative, ct), id);
+        TrackEdited(playlistUri);
+        return AnnounceEditAsync(_playlistEdits.UpdateDetailsAsync(playlistUri, name, description, collaborative, ct), id,
+            PlaylistEditVerb.Rename, count: 1);
     }
 
     public Task SetPlaylistCoverJpegAsync(string playlistUri, byte[] jpeg, CancellationToken ct = default)
@@ -189,22 +302,34 @@ public sealed class LibraryBridge : IUndoTarget
         return WithFailure(_playlistEdits.SetCoverJpegAsync(playlistUri, jpeg, ct), id);
     }
 
-    public Task ClearPlaylistCoverAsync(string playlistUri, CancellationToken ct = default)
-    {
-        long id = _activity.IsSuppressed ? -1 : _activity.Record(ActivityKind.PlaylistCoverClear, playlistUri);   // log-only
-        return WithFailure(_playlistEdits.ClearCoverAsync(playlistUri, ct), id);
-    }
-
     /// <summary><paramref name="removedTracks"/> (optional) captures the removed rows' uri/name so the remove can be undone
     /// by re-adding them; a null list still records the remove (log-only, undo fails cleanly).</summary>
     public Task RemovePlaylistRowsAsync(string playlistUri, IReadOnlyList<PlaylistRowRef> rows,
         IReadOnlyList<ActivityTrackRef>? removedTracks = null, CancellationToken ct = default)
+        => RemovePlaylistRowsTrackedAsync(playlistUri, rows, removedTracks, ct);
+
+    /// <summary>Remove membership rows, returning the ACTIVITY ID of the entry it recorded (-1 when recording is
+    /// suppressed) so the caller can offer Undo on its OWN confirmation toast — the <see cref="AddTracksTrackedAsync"/>
+    /// shape. Remove is the edit most often made by accident (a mis-aimed context menu on a 10 000-row playlist), and
+    /// until now it was fire-and-forget: a failure reported nothing and a success offered no way back.</summary>
+    public async Task<long> RemovePlaylistRowsTrackedAsync(string playlistUri, IReadOnlyList<PlaylistRowRef> rows,
+        IReadOnlyList<ActivityTrackRef>? removedTracks = null, CancellationToken ct = default)
     {
         long id = _activity.IsSuppressed ? -1 : _activity.Record(ActivityKind.PlaylistRemoveTracks, playlistUri, null, new ActivityPayload(Tracks: removedTracks));
-        return WithFailure(_playlistEdits.RemoveRowsAsync(playlistUri, rows, ct), id);
+        TrackEdited(playlistUri);
+        await AnnounceEditAsync(_playlistEdits.RemoveRowsAsync(playlistUri, rows, ct), id,
+            PlaylistEditVerb.Remove, rows.Count).ConfigureAwait(false);
+        return id;
     }
 
     public Task MovePlaylistRowsAsync(string playlistUri, IReadOnlyList<PlaylistRowRef> rows, int toIndex, CancellationToken ct = default)
+        => MovePlaylistRowsTrackedAsync(playlistUri, rows, toIndex, ct);
+
+    /// <summary>Reorder membership rows, returning the activity id (the remove/add shape). Every reorder call site
+    /// AWAITS this now: a rejected reorder rolls the store back, and a caller that never looked at the task showed the
+    /// rows snapping home with no explanation at all.</summary>
+    public async Task<long> MovePlaylistRowsTrackedAsync(string playlistUri, IReadOnlyList<PlaylistRowRef> rows, int toIndex,
+                                                        CancellationToken ct = default)
     {
         long id = -1;
         if (!_activity.IsSuppressed && rows.Count > 0)
@@ -214,7 +339,10 @@ public sealed class LibraryBridge : IUndoTarget
             id = _activity.Record(ActivityKind.PlaylistMoveTracks, playlistUri, null,
                 new ActivityPayload(Tracks: refs, FromIndex: rows[0].Index, ToIndex: toIndex));
         }
-        return WithFailure(_playlistEdits.MoveRowsAsync(playlistUri, rows, toIndex, ct), id);
+        TrackEdited(playlistUri);
+        await AnnounceEditAsync(_playlistEdits.MoveRowsAsync(playlistUri, rows, toIndex, ct), id,
+            PlaylistEditVerb.Reorder, rows.Count).ConfigureAwait(false);
+        return id;
     }
 
     /// <summary>Move one playlist or balanced folder subtree in Spotify's rootlist. The source serializes this revisioned
@@ -229,8 +357,10 @@ public sealed class LibraryBridge : IUndoTarget
         return WithFailure(_playlistEdits.CreateContributorInviteAsync(playlistUri, ct), id);
     }
 
-    public Task<PlaylistBasePermission?> GetPlaylistBasePermissionAsync(string playlistUri, CancellationToken ct = default)
-        => _playlistEdits.GetBasePermissionAsync(playlistUri, ct);
+    // NO permission GET here. The base permission is read exactly once per playlist, by the SYNC loop when the page
+    // opens (and re-read by nothing: a dealer permission push flips the same header in place), so the store header is
+    // the one permission state every surface reads. The bridge passthrough this replaced existed only for the detail
+    // page's own owner-only GET, which P1 deleted — keeping it would be a second, racing way to learn the same fact.
 
     public Task SetPlaylistVisibilityAsync(string playlistUri, bool isPublic, CancellationToken ct = default)
     {
@@ -243,6 +373,32 @@ public sealed class LibraryBridge : IUndoTarget
         long id = _activity.IsSuppressed ? -1 : _activity.Record(ActivityKind.PlaylistDelete, playlistUri);   // log-only, destructive
         return WithFailure(_playlistEdits.DeletePlaylistAsync(playlistUri, ct), id);
     }
+
+    // ── the announced-edit chokepoint ──────────────────────────────────────────────────────────────────────
+    // Reorder / remove / rename are SILENT visual changes: rows slide, a title swaps. A screen-reader user gets no
+    // confirmation that the thing they pressed happened, and — worse — no notice when it was refused and rolled back.
+    // Announced HERE for the same reason AnnounceSaved is: every menu, drag, keyboard command and picker routes through
+    // these methods, so one call covers them all and none can drift. The FAILURE announcement is assertive (it
+    // interrupts: the edit did not survive and the list the user is reading just changed back) and reuses the very copy
+    // the toast shows, so the two channels can never tell different stories.
+    async Task AnnounceEditAsync(Task work, long id, PlaylistEditVerb verb, int count)
+    {
+        try { await WithFailure(work, id).ConfigureAwait(false); }
+        catch (Exception ex)
+        {
+            var kind = PlaylistEditErrorKinds.KindOf(ex);
+            _post(() => Announcer.Say(Loc.Get(PlaylistEditErrorKinds.KeyFor(kind, verb)), assertive: true));
+            throw;
+        }
+        if (count > 0) _post(() => Announcer.Say(EditDone(verb, count)));
+    }
+
+    static string EditDone(PlaylistEditVerb verb, int count) => verb switch
+    {
+        PlaylistEditVerb.Remove => Strings.Detail.Edit.RemovedFromPlaylist(count),
+        PlaylistEditVerb.Reorder => Strings.Detail.Edit.MovedRows(count),
+        _ => Loc.Get(Strings.Detail.Edit.Saved),
+    };
 
     // ── activity plumbing ──────────────────────────────────────────────────────────────────────────────────
     // Optimistic Done; an IMMEDIATE Task fault flips the entry to Failed. Eventual outbox dead-letter failures are NOT

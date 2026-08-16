@@ -66,8 +66,64 @@ static class SidebarRowGeometry
         return HeightFor(o.Density, o.Subtitles);
     }
 
-    /// <summary>Left padding for a nesting depth: <see cref="RowInsetLeft"/> base + 12 per level, clamped at 4 levels.</summary>
-    public static float IndentFor(int depth) => RowInsetLeft + (depth < 0 ? 0 : depth > 4 ? 4 : depth) * 12f;
+    /// <summary>ONE nesting level of indent (12). Named because the drop resolver reads the ladder BACKWARDS — it turns
+    /// a pointer X into a depth — and a second literal there would let the cue's indent and the row's disagree.</summary>
+    public const float IndentStep = 12f;
+
+    /// <summary>The deepest level the indent ladder honours; beyond it rows stop marching right.</summary>
+    public const int MaxIndentDepth = 4;
+
+    /// <summary>Left padding for a nesting depth: <see cref="RowInsetLeft"/> base + <see cref="IndentStep"/> per level,
+    /// clamped at <see cref="MaxIndentDepth"/> levels.</summary>
+    public static float IndentFor(int depth)
+        => RowInsetLeft + (depth < 0 ? 0 : depth > MaxIndentDepth ? MaxIndentDepth : depth) * IndentStep;
+
+    /// <summary>The section header band's own height (28) — <c>SidebarSectionHeader.Height</c> delegates here so the
+    /// analytic row ladder and the rendered header cannot drift.</summary>
+    public const float HeaderHeight = 28f;
+
+    /// <summary>R3.1.3 — the vertical air above a section header that is not the pane's first row, and the gap between a
+    /// header and its first body row. <c>SidebarPaneMetrics.SectionGap</c>/<c>HeaderBodyGap</c> delegate here.</summary>
+    public const float SectionGap = 8f;
+    /// <inheritdoc cref="SectionGap"/>
+    public const float HeaderBodyGap = 2f;
+
+    /// <summary>An explicit <c>Divider</c> section's band height (16) — the hairline centred 8 DIP below the previous row.</summary>
+    public const float DividerHeight = 16f;
+
+    /// <summary>The quiet empty hint's band height (32). <c>SidebarPaneMetrics.EmptyHintHeight</c> delegates here.</summary>
+    public const float EmptyHintHeight = 32f;
+
+    /// <summary>The Pinned section's empty state IS its drop zone, and it rests at 56 (it grows to 72 only while a
+    /// compatible drag is live — a transient the measured layout corrects on its own).</summary>
+    public const float PinDropZoneRestHeight = 56f;
+
+    /// <summary>The inline filter-chip strip a header carries when an editable <c>EntityList</c> asks for it: a 26-DIP
+    /// pill row + its 2-DIP bottom padding, joined to the header by a 4-DIP gap. It WRAPS at a narrow pane, so this is
+    /// the one term of the ladder that is an honest approximation rather than an identity — the measured seam corrects
+    /// it on realize (which is exactly what the analytic ladder is a SEED for).</summary>
+    public const float ChipHeight = 26f;
+    /// <inheritdoc cref="ChipHeight"/>
+    public const float ChipStripHeight = ChipHeight + 2f;
+    /// <inheritdoc cref="ChipStripHeight"/>
+    public const float ChipStripGap = 4f;
+
+    /// <summary>The EntityEmbed hero card's height ladder (Compact 56 / Cozy 72 / Comfortable 88) plus the 2+2 DIP of
+    /// vertical breathing room the card carries as a margin. <c>SidebarPaneMetrics.CardHeight</c> owns the ladder's
+    /// unmargined half.</summary>
+    public static float CardHeightFor(SidebarDensity density) => density switch
+    {
+        SidebarDensity.Compact => 56f,
+        SidebarDensity.Comfortable => 88f,
+        _ => 72f,
+    };
+
+    /// <summary>The actionable degraded state's band (48, or 56 when it carries a reason line).</summary>
+    public static float PromptHeight(bool hasReason) => hasReason ? 56f : 48f;
+
+    /// <summary>The <c>TreeEnd</c> chrome row's extent (24): the "top level, at the end" target the tree never had, and
+    /// small enough that it reads as the tree's closing gutter rather than as an item.</summary>
+    public const float TreeEndHeight = 24f;
 
     /// <summary>Subtitles are never rendered at Compact density.</summary>
     public static bool SubtitleVisible(SidebarDensity density, string? subtitle)
@@ -120,6 +176,50 @@ static class SidebarRowGeometry
     {
         if (fromIndex < 0 || toIndex < 0 || fromIndex == toIndex) return 0;
         return toIndex > fromIndex ? 1 : -1;
+    }
+
+    /// <summary>The plan index of a <c>PlaylistTree</c> folder's header row, or −1. The folder is addressed by its OWN
+    /// group id (<c>entry.FolderId</c>), never by the row key, so a renamed/re-keyed folder still resolves.</summary>
+    public static int FolderHeaderIndexOf(IReadOnlyList<SidebarRow> rows, IReadOnlyList<SidebarLibraryEntry> entries,
+                                          string folderId)
+    {
+        ArgumentNullException.ThrowIfNull(rows);
+        ArgumentNullException.ThrowIfNull(entries);
+        if (string.IsNullOrEmpty(folderId)) return -1;
+        for (int i = 0; i < rows.Count; i++)
+        {
+            var row = rows[i];
+            if (row.Kind != SidebarRowKind.FolderHeader || (uint)row.EntryIndex >= (uint)entries.Count) continue;
+            if (string.Equals(entries[row.EntryIndex].FolderId, folderId, StringComparison.Ordinal)) return i;
+        }
+        return -1;
+    }
+
+    /// <summary>Resolve the contiguous PREORDER BAND a planned folder header owns — every row after it, in the same
+    /// section, that is DEEPER than the folder. That band is exactly what a disclosure inserts on expand and removes on
+    /// collapse, so the pane's choreography and the tests share this one resolver.</summary>
+    public static bool TryFolderDescendantRange(IReadOnlyList<SidebarRow> rows,
+                                                IReadOnlyList<SidebarLibraryEntry> entries,
+                                                string folderId, out int firstIndex, out int count)
+    {
+        firstIndex = count = 0;
+        int folderIndex = FolderHeaderIndexOf(rows, entries, folderId);
+        if (folderIndex < 0) return false;
+        var folder = rows[folderIndex];
+        if ((uint)folder.EntryIndex >= (uint)entries.Count) return false;
+        int depth = entries[folder.EntryIndex].Depth;
+        int end = folderIndex + 1;
+        while (end < rows.Count)
+        {
+            var row = rows[end];
+            if (!string.Equals(row.SectionId, folder.SectionId, StringComparison.Ordinal)
+                || (uint)row.EntryIndex >= (uint)entries.Count
+                || entries[row.EntryIndex].Depth <= depth) break;
+            end++;
+        }
+        firstIndex = folderIndex + 1;
+        count = end - firstIndex;
+        return count > 0;
     }
 
     /// <summary>Resolve the contiguous BODY owned by one planned section header. A different section at the same or a

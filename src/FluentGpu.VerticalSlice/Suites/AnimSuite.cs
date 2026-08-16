@@ -62,6 +62,7 @@ static class AnimSuite
         CleanSpanReuseChecks();
         SpanReuseScopingChecks();
         SpanTranslateRebaseChecks(strings);
+        RecordDepthBudgetChecks(strings);
         AnimEngineChecks(strings);
         AnimHookChecks(strings);
         MarqueeChecks(strings);
@@ -845,6 +846,26 @@ static class AnimSuite
         ],
     };
 
+    // AppHost.ReclaimSettledOrphans is private; this mirrors it exactly (settled arm + the per-orphan animation-clock
+    // deadline arm) so SK.b3 can drive the wedge guard headlessly. The global WALL backstop arm is not reachable here —
+    // it is the outer guard for a host that stops painting, not the per-orphan deadline under test.
+    static void RunHostOrphanReclaim(SceneStore scene, AnimEngine engine)
+    {
+        for (int i = scene.OrphanCount - 1; i >= 0;)
+        {
+            if (i >= scene.OrphanCount) { i = scene.OrphanCount - 1; continue; }
+            var o = scene.OrphanAt(i, out _, out _);
+            float own = scene.OrphanMaxAgeMs(i);
+            if (!engine.HasTracks(o) || (own > 0f && scene.OrphanAnimAgeMs(i) >= own))
+            {
+                scene.ReclaimOrphan(o);
+                i = Math.Min(i - 1, scene.OrphanCount - 1);
+                continue;
+            }
+            i--;
+        }
+    }
+
     static void SkeletonChecks(StringTable strings)
     {
         var fonts = new HeadlessFontSystem(strings);
@@ -877,15 +898,71 @@ static class AnimSuite
             recon.Runtime.Flush();
             new FlexLayout(scene, fonts).Run(scene.Root);
             bool realText = CountText(scene, region) > 0;
+            // The shimmer is NOT gone on the swap frame: it exit-orphans (detached from topology, still LIVE and drawing
+            // UNDER the live children) so it cross-dissolves with the revealing content instead of dipping to empty.
+            bool shimmerOrphaned = scene.IsOrphan(shimmer) && scene.IsLive(shimmer) && scene.OrphanCount == 1;
             engine.Tick(0f);
             var realRow0 = Child(scene, Child(scene, region, 0), 0);
             bool revealSeeded = engine.TryGetTrackValue(realRow0, AnimChannel.Opacity, out var op0) && op0 < 0.2f;
             Check("SK.b Pending→Ready swaps shimmer→real (text appears) and blur-reveals the rows",
                 realText && revealSeeded, $"realText={realText} revealOp0={op0:0.00}");
 
-            for (int i = 0; i < 80 && engine.HasActive; i++) engine.Tick(16f);
-            Check("SK.c the looping skeleton pulse is cancelled on swap (no loop pins the orphan — wake-loop fix)",
-                engine.LoopTrackCount == 0, $"loops={engine.LoopTrackCount} active={engine.HasActive}");
+            // SK.b2 — the CROSS-DISSOLVE contract (the shimmer→blank→content dip this gate exists to forbid): on the swap
+            // frame the shimmer root is an exit orphan carrying an Opacity track heading to 0, while the real root's
+            // reveal fades UP over it. Ticking settles both; the orphan then reclaims and no loop track survives.
+            bool shimmerTrack = engine.TryGetTrackValue(shimmer, AnimChannel.Opacity, out var sop0);
+            engine.Tick(16f); engine.Tick(16f);
+            bool shimmerFadingOut = engine.TryGetTrackValue(shimmer, AnimChannel.Opacity, out var sop1) && sop1 < sop0 - 0.001f;
+            bool contentFadingUp = engine.TryGetTrackValue(realRow0, AnimChannel.Opacity, out var op1) && op1 > op0;
+            Check("SK.b2 the swap frame CROSS-DISSOLVES: the shimmer root is a live exit orphan fading to 0 while the real root fades up (no empty frame)",
+                shimmerOrphaned && shimmerTrack && shimmerFadingOut && contentFadingUp,
+                $"orphan={shimmerOrphaned} track={shimmerTrack} shimmer {sop0:0.00}→{sop1:0.00} content {op0:0.00}→{op1:0.00}");
+
+            int settledAt = -1;
+            for (int i = 0; i < 120 && settledAt < 0; i++)
+            {
+                engine.Tick(16f);
+                for (int k = scene.OrphanCount - 1; k >= 0; k--)        // host's ReclaimSettledOrphans (settled arm)
+                { var o = scene.OrphanAt(k, out _, out _); if (!engine.HasTracks(o)) scene.ReclaimOrphan(o); }
+                if (scene.OrphanCount == 0 && !engine.HasActive) settledAt = i;
+            }
+            Check("SK.c the looping skeleton pulse is cancelled on swap and the shimmer orphan reclaims (nothing pins the wake loop)",
+                engine.LoopTrackCount == 0 && scene.OrphanCount == 0 && !scene.IsLive(shimmer) && settledAt >= 0,
+                $"loops={engine.LoopTrackCount} active={engine.HasActive} orphans={scene.OrphanCount} shimmerLive={scene.IsLive(shimmer)} settled@{settledAt}");
+        }
+
+        // SK.b3 — per-orphan hard deadline (the wedge guard that makes the cross-dissolve safe): an exit orphan whose
+        // track NEVER settles is force-reclaimed once its OWN SceneStore.OrphanMaxAgeMs passes, so a wedged page-sized
+        // shimmer can't paint half-faded over live content (the historical "half resolved page"). An orphan enqueued
+        // WITHOUT a deadline still waits for the host's global 2s backstop. Mirrors AppHost.ReclaimSettledOrphans (private).
+        {
+            var scene = new SceneStore();
+            var engine = new AnimEngine(scene);
+            var root = scene.CreateNode(1); scene.Root = root;
+            scene.Bounds(root) = new RectF(0, 0, 200, 100);
+            var wedged = scene.CreateNode(1); scene.AppendChild(root, wedged); scene.Bounds(wedged) = new RectF(0, 0, 100, 40);
+            var patient = scene.CreateNode(1); scene.AppendChild(root, patient); scene.Bounds(patient) = new RectF(0, 40, 100, 40);
+            engine.SkeletonPulse(wedged);    // a LOOPING track = one that never settles (the wedge this gate simulates)
+            engine.SkeletonPulse(patient);
+            scene.AnimClockMs = 1_000d;             // the host publishes the animation timebase; the stamp is taken from it
+            scene.Orphan(wedged, maxAgeMs: 350f);   // its own deadline (the reconciler passes duration + delay + slack)
+            scene.Orphan(patient);                  // 0 ⇒ only the host's global wall backstop governs it
+            bool setUp = scene.OrphanCount == 2 && engine.HasTracks(wedged) && engine.HasTracks(patient)
+                && scene.OrphanMaxAgeMs(0) > 0f && scene.OrphanMaxAgeMs(1) == 0f
+                && scene.OrphanAnimAgeMs(0) == 0d;
+
+            // 340ms of ANIMATION time: still inside the 350ms deadline, so a mid-fade orphan is NOT dropped. (Deliberately
+            // the anim clock and not the wall clock — a wall-measured deadline would fire here on any slow frame.)
+            scene.AnimClockMs += 340d;
+            RunHostOrphanReclaim(scene, engine);
+            bool heldMidFade = scene.OrphanCount == 2;
+
+            scene.AnimClockMs += 20d;   // 360ms > 350ms ⇒ the wedged one's own deadline has passed
+            RunHostOrphanReclaim(scene, engine);
+
+            Check("SK.b3 a wedged exit orphan is force-reclaimed once its OWN maxAge of ANIMATION time passes (not before); one without a deadline still waits for the global wall backstop",
+                setUp && heldMidFade && !scene.IsLive(wedged) && scene.IsLive(patient) && scene.IsOrphan(patient) && scene.OrphanCount == 1,
+                $"setUp={setUp} heldMidFade={heldMidFade} wedgedLive={scene.IsLive(wedged)} patientOrphan={scene.IsOrphan(patient)} orphans={scene.OrphanCount}");
         }
 
         // SK.d partial-known: a pre-Ready region renders real immediately (no shimmer).
@@ -3979,6 +4056,92 @@ static class AnimSuite
     // byte-level contract (what moved, and the InMotion flags that make moving text ride sub-pixel), the ACRYLIC veto —
     // the one position-DEPENDENT payload, which must roll the whole copy back — and the stationary-neighbour exact-copy
     // that dropping `!scrollInMotion` from the exact-copy branch buys.
+    // ── The record walk's DEPTH BUDGET ─────────────────────────────────────────────────────────────────────────────
+    // SceneRecorder.Walk is recursive with a large frame. Its stack-headroom guard (HasWalkStackHeadroom) degrades by NOT
+    // painting the deepest subtree instead of overflowing — a Debug build once painted every detail page's row skins with
+    // no row content for a whole session, silently, because the guard tripped at row-content depth on the apphost's
+    // 1.5 MB main-thread stack and nothing counted it. Two contracts are pinned here:
+    //   · the DEGRADE contract — on a thread whose stack really is too small, the walk survives, the shallow ancestors'
+    //     draws are still emitted, the deepest glyph is NOT, and SceneRecordStats.DepthAborts says so (never silent);
+    //   · the BUDGET contract — on a thread with the reserve FluentApp.RunCore gives the UI thread (32 MB), a tree far
+    //     deeper than any real page (200 levels) records COMPLETELY: DepthAborts == 0 and the deepest glyph is present —
+    //     in Debug AND Release, whatever the JIT makes of WalkCore's frame.
+    static void RecordDepthBudgetChecks(StringTable strings)
+    {
+        const int Depth = 200;
+        const int UiThreadStackBytes = 32 * 1024 * 1024;   // == FluentApp.UiThreadStackBytes (FluentGpu.Windows; not referenced from the TerraFX-free slice)
+        const int TinyStackBytes = 256 * 1024;
+
+        // A Box → Box → … → Text chain, Depth levels deep, every level a real visual so the shallow draws are countable.
+        static (SceneStore scene, NodeHandle root, NodeHandle leaf) BuildChain(StringTable strings, int depth)
+        {
+            var scene = new SceneStore();
+            var root = scene.CreateNode(1);
+            scene.Root = root;
+            scene.Bounds(root) = new RectF(0f, 0f, 400f, 400f);
+            ref var rp = ref scene.Paint(root); rp = NodePaint.Default; rp.VisualKind = VisualKind.Box; rp.Fill = ColorF.FromRgba(0x20, 0x20, 0x20);
+            var parent = root;
+            for (int i = 1; i < depth; i++)
+            {
+                var n = scene.CreateNode(1);
+                scene.AppendChild(parent, n);
+                scene.Bounds(n) = new RectF(0.5f, 0.5f, 400f - i, 400f - i);
+                ref var p = ref scene.Paint(n); p = NodePaint.Default; p.VisualKind = VisualKind.Box; p.Fill = ColorF.FromRgba((byte)(i & 0xFF), 0x40, 0x40);
+                parent = n;
+            }
+            var leaf = scene.CreateNode(1);
+            scene.AppendChild(parent, leaf);
+            scene.Bounds(leaf) = new RectF(0f, 0f, 120f, 20f);
+            ref var lp = ref scene.Paint(leaf); lp = NodePaint.Default; lp.VisualKind = VisualKind.Text; lp.Text = strings.Intern("deepest");
+            return (scene, root, leaf);
+        }
+
+        static bool HasGlyph(ReadOnlySpan<byte> bytes)
+        {
+            int pos = 0;
+            while (pos + sizeof(int) <= bytes.Length)
+            {
+                var op = (DrawOp)MemoryMarshal.Read<int>(bytes.Slice(pos, sizeof(int)));
+                pos += sizeof(int);
+                if (op == DrawOp.DrawGlyphRun) return true;
+                pos += DrawPayloadSize(op);
+            }
+            return false;
+        }
+
+        // Record on a thread of a given stack size and hand back what the walk produced. The recorder is thread-agnostic
+        // (a DrawList is bytes; the store is read-only during Record), so the same call on two stack sizes isolates the
+        // ONE variable under test.
+        static (SceneRecordStats stats, bool glyph, int cmds, Exception? error) RecordOn(int stackBytes, StringTable strings)
+        {
+            SceneRecordStats stats = default; bool glyph = false; int cmds = 0; Exception? error = null;
+            var t = new Thread(() =>
+            {
+                try
+                {
+                    var (scene, _, _) = BuildChain(strings, Depth);
+                    var dl = new DrawList();
+                    stats = SceneRecorder.Record(scene, dl);
+                    glyph = HasGlyph(dl.Bytes);
+                    cmds = dl.CommandCount;
+                }
+                catch (Exception ex) { error = ex; }
+            }, stackBytes) { IsBackground = true, Name = "gate-record-depth" };
+            t.Start(); t.Join();
+            return (stats, glyph, cmds, error);
+        }
+
+        var tiny = RecordOn(TinyStackBytes, strings);
+        Check("gate.record.depth-abort-counts a 200-deep chain on a 256 KB stack SURVIVES, still emits the shallow ancestors' draws, drops the deepest glyph, and COUNTS it in SceneRecordStats.DepthAborts (the degrade contract — never a silent blank)",
+            tiny.error is null && tiny.stats.DepthAborts > 0 && !tiny.glyph && tiny.cmds > 0,
+            $"error={tiny.error?.GetType().Name} depthAborts={tiny.stats.DepthAborts} glyph={tiny.glyph} cmds={tiny.cmds}");
+
+        var ui = RecordOn(UiThreadStackBytes, strings);
+        Check("gate.record.depth-budget-ui-stack the same 200-deep chain on the UI thread's 32 MB reserve records COMPLETELY: DepthAborts == 0 and the deepest glyph is emitted (Debug and Release alike)",
+            ui.error is null && ui.stats.DepthAborts == 0 && ui.glyph,
+            $"error={ui.error?.GetType().Name} depthAborts={ui.stats.DepthAborts} glyph={ui.glyph} cmds={ui.cmds}");
+    }
+
     static void SpanTranslateRebaseChecks(StringTable strings)
     {
         const float Shift = -20f;

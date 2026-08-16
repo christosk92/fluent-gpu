@@ -81,7 +81,7 @@ public sealed class PlaylistExtenderClient
         string id = GetStr(e, "id");
         string uri = GetStr(e, "originalId");
         if (uri.Length == 0 && id.Length > 0) uri = "spotify:track:" + id;
-        if (id.Length == 0) id = LastSegment(uri);
+        if (id.Length == 0) id = EntityUri.IdOf(uri);
         if (id.Length == 0 && uri.Length == 0) return null;
         string name = GetStr(e, "name");
 
@@ -119,5 +119,4 @@ public sealed class PlaylistExtenderClient
     static string GetStr(JsonElement e, string prop) =>
         e.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : "";
 
-    static string LastSegment(string uri) { int i = uri.LastIndexOf(':'); return i >= 0 ? uri[(i + 1)..] : uri; }
 }

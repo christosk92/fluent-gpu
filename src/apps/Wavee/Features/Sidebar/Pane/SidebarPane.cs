@@ -130,12 +130,27 @@ sealed class SidebarPane : Component
     bool _activeDisclosureOpen;
     string? _pendingExpandSection;
     string? _pendingExpandFolder;
+    /// <summary>The band the ACTIVE disclosure discloses, once it has resolved — the rows a disclosure edge re-skins
+    /// (with the header) instead of the whole realized window.</summary>
+    ItemDisclosureRange? _activeDisclosureBand;
+    /// <summary>Next-frame dispatch, captured in <c>Render</c> (<c>UsePost</c> consumes no hook cell). Used to keep the
+    /// coalesced preference write off the click frame.</summary>
+    Action<Action>? _post;
+    Action? _flushPrefsCommit;
     Action? _queuedDisclosure;
 
     /// <summary>The virtualized list's public handle. Rootlist drop placement reads its viewport/offset, and selection
     /// motion uses the realized window to mirror WinUI's "both indicators exist" animation guard.</summary>
     readonly ItemsViewController _listController = new();
-    readonly Signal<int> _resourceDropRow = new(-1);
+
+    /// <summary>THE ONE published drop slot: which plan row is armed, what a drop there MEANS, at what depth, or why it
+    /// is refused. Written exactly once per hover (<c>ResourceDropSpec.Hover</c>) and consumed by three readers — the
+    /// row's insertion line, the row's Into plate, and <c>CommitDrop</c>, which takes the published slot rather than
+    /// recomputing one (a cue and a mutation computed twice are a cue and a mutation that can disagree).
+    /// <para>It replaced a bare <c>Signal&lt;int&gt;</c> row index: the index alone said "something is armed here" and
+    /// nothing about WHICH of the three outcomes it was, which is why Before, Inside and After all drew the same
+    /// accent plate.</para></summary>
+    readonly Signal<SidebarDropSlot> _dropSlot = new(SidebarDropSlot.None);
 
     /// <summary>DRAG PEEK: a TRANSIENT expansion of a collapsed pane, held only for the duration of one drag.
     /// <para>The reported bug (2026-08-10) is that dragging a song with the sidebar collapsed dims the whole app to 55%
@@ -151,7 +166,7 @@ sealed class SidebarPane : Component
     readonly Signal<bool> _dragPeek = new(false);
 
     /// <summary>The rail TILE currently armed as a drop destination, by playlist uri (null = none). Separate from
-    /// <see cref="_resourceDropRow"/> because a rail tile has no row in the expanded plan. Read through a BOUND prop
+    /// <see cref="_dropSlot"/> because a rail tile has no row in the expanded plan. Read through a BOUND prop
     /// (<c>SidebarRailItem.Art</c>) — the rail subtree is memoized, so a cue that needed a render would never appear.</summary>
     readonly Signal<string?> _railDropUri = new(null);
 
@@ -236,6 +251,16 @@ sealed class SidebarPane : Component
     sealed record PlanStage(SidebarCustomLayout Document, SidebarRowPlan Pane, SidebarRowPlan Rail,
                             string EffectiveSearch, bool UsesA, int Epoch, SidebarEditState? Edit);
 
+    /// <summary>THE MID-DRAG FREEZE. While a rootlist filing is live, a re-projection is parked here instead of
+    /// published — the rows a drag is aiming at must not move under the pointer (<see cref="SidebarStageHold{TStage}"/>
+    /// carries the reasoning). <see cref="SidebarDragPeekWatcher"/> flushes it on session end.</summary>
+    readonly SidebarStageHold<PlanStage> _deferredStage = new();
+
+    /// <summary>One-shot: let the NEXT stage through the freeze. A reorder the pane itself just committed is not a
+    /// foreign projection — it is the direct result of the gesture that is still settling, and holding it would snap the
+    /// dropped row home for the whole ~250 ms settle window before it jumped to where it was released.</summary>
+    bool _publishThroughFreeze;
+
     // ── selection travel (R3.0.2 follow-up) ──────────────────────────────────────────────────────────────────────────
     // Centralized NavigationView transaction. Realized item-owned pills register their exact retained nodes here; the
     // pane force-completes an interrupted pair before starting the next previous/current flight.
@@ -248,8 +273,15 @@ sealed class SidebarPane : Component
     readonly Dictionary<int, string> _selectionRouteByNode = new();
 
     /// <summary>The variable-extent layout object. STATEFUL (a Fenwick estimate-then-correct table + scroll anchoring), so
-    /// it is created ONCE per pane instance and never per render.</summary>
-    readonly RepeatLayout _rowLayout = RepeatLayout.VariableList(estimatedExtent: 44f);
+    /// it is created ONCE per pane instance and never per render.
+    ///
+    /// <para>ANALYTIC, not a flat estimate. Every planned row's height is already a pure function of (kind × section
+    /// display options × previous row kind) — <see cref="SidebarRowExtents"/> — so the host seeds each row at its REAL
+    /// extent instead of claiming 44 DIP for all thirteen kinds. That is what makes a folder expansion still: the
+    /// inserted band and the rows below it land at their final geometry BEFORE anything realizes, so the content extent
+    /// does not jump as they measure and the scroll anchor never re-pins against a stale offset. Measurement still
+    /// corrects the two kinds the ladder cannot predict exactly (a GridStrip, a wrapping chip strip).</para></summary>
+    readonly RepeatLayout _rowLayout;
 
     /// <summary>A reorderable row's placement transition: Revision 2 assigns reordering <c>MotionTok.ItemPlacement</c>.
     /// A <c>Reorderable.Item</c>-wrapped row must not ALSO carry an authored offset hint (one position owner per node).</summary>
@@ -260,11 +292,15 @@ sealed class SidebarPane : Component
                        Signal<float> expandedWidth, bool inDrawer = false)
     {
         Config = config; _route = route; _go = go; _compact = compact; ExpandedWidth = expandedWidth; _inDrawer = inDrawer;
+        // Built here (not as a field initializer) because the seed reads THIS pane's published plan. The delegate is
+        // allocated once per pane and is part of the layout object's identity — never rebuilt per render.
+        _rowLayout = RepeatLayout.Extents(RowExtentSeed, estimatedExtent: SidebarRowGeometry.ClassicHeight);
     }
 
     public override Element Render()
     {
         Prefs = UseContext(SidebarPreferences.Slot);
+        _post = UsePost();                       // consumes no hook cell — safe beside the context reads
         Acts = UseContext(ActionServices.Slot);
         MenuOverlay = UseContext(Overlay.Service);
         Playback = UseContext(PlaybackBridge.Slot);
@@ -625,11 +661,42 @@ sealed class SidebarPane : Component
             && (_pendingExpandSection is not null || _pendingExpandFolder is not null);
         if (_activeDisclosureKey is not null && !preparedExpansion) return;
         if (_planPublished && stage.UsesA == _presentedUsesA && ReferenceEquals(stage.Pane.Rows, Plan.Rows)) return;
+        // ── THE MID-DRAG FREEZE ──────────────────────────────────────────────────────────────────────────────────────
+        // A rootlist filing is aiming at these very rows; a projection published now re-keys them under the pointer and
+        // the drop lands somewhere the user did not aim. Park the newest stage and apply it on session end.
+        //
+        // A DISCLOSURE in flight is deliberately exempt: spring-loading a collapsed folder mid-drag exists precisely to
+        // reveal its children, and that expansion has to reach the plan. `_activeDisclosureKey is null` is therefore the
+        // gate — the two arms above have already let a prepared expansion through.
+        //
+        // Non-rootlist drags (a track set looking for a playlist) are not frozen: they aim at a row's IDENTITY, not at
+        // its position, so a re-projection under them changes nothing about where the deposit lands.
+        if (_publishThroughFreeze) _publishThroughFreeze = false;
+        else if (_activeDisclosureKey is null && _deferredStage.TryHold(WaveeResourceDrag.LiveRootlistDrag(), stage))
+            return;
         PublishStage(stage, notify: true);
     }
 
+    /// <summary>Publish whatever the freeze parked, exactly once. Called from <see cref="SidebarDragPeekWatcher"/>'s
+    /// LAYOUT EFFECT on session end — drop, cancel and Escape alike, so no path strands a deferred projection.</summary>
+    internal void FlushDeferredStage()
+    {
+        // The latch is a same-gesture affordance; a session end retires it whether or not the commit it was set for ever
+        // produced a stage, so it can never carry into the next drag.
+        _publishThroughFreeze = false;
+        if (_deferredStage.TryFlush(out var stage) && stage is not null) PublishStage(stage, notify: true);
+    }
+
+    /// <summary>Drop a parked stage without publishing it — the pane is unmounting mid-gesture, so nobody will ever
+    /// flush it (the <c>PlaylistReorderDefer.Discard</c> discipline).</summary>
+    internal void DiscardDeferredStage() => _deferredStage.Discard();
+
     void PublishStage(PlanStage stage, bool notify)
     {
+        // Any publish — the first one, a disclosure's, the flush's own — makes a parked stage stale: it was built into a
+        // buffer set this publish is about to swap. Emptying the bay here is what keeps "flushed exactly once" true
+        // however the publish was reached.
+        _deferredStage.Discard();
         // Captured BEFORE the swap: the outgoing plan is what the realized rows are still drawing. The A/B plan buffers
         // are what make holding these safe, since the incoming plan was built into the other buffer set and cannot have
         // overwritten them underneath the diff.
@@ -655,6 +722,9 @@ sealed class SidebarPane : Component
         RebuildIndex(Plan);
         ConfigureReorder();
         EnsureRowSlots(Plan.Rows.Count);
+        // The seeds read the plan, so a wholesale change (which invalidates the index→row mapping outright) re-derives
+        // them all. An incremental publish deliberately does NOT: its surviving rows keep the extents they measured.
+        if (wholesale) ReseedRowExtents();
         if (!notify) return;
 
         void PublishSignals()
@@ -859,17 +929,7 @@ sealed class SidebarPane : Component
     /// descendants enter with the standard add rise/fade; on collapse the generic ItemsView removal seam keeps the
     /// departing realized rows alive while every survivor below FLIPs upward by their old extent.</summary>
     static int FolderIndexOf(SidebarRowPlan plan, string folderId)
-    {
-        var rows = plan.Rows;
-        var entries = plan.Entries;
-        for (int i = 0; i < rows.Count; i++)
-        {
-            var row = rows[i];
-            if (row.Kind != SidebarRowKind.FolderHeader || (uint)row.EntryIndex >= (uint)entries.Count) continue;
-            if (string.Equals(entries[row.EntryIndex].FolderId, folderId, StringComparison.Ordinal)) return i;
-        }
-        return -1;
-    }
+        => SidebarRowGeometry.FolderHeaderIndexOf(plan.Rows, plan.Entries, folderId);
 
     ItemDisclosureRange? PendingExpandRange()
     {
@@ -883,6 +943,9 @@ sealed class SidebarPane : Component
     void OnExpandStarted(ItemDisclosureRange range)
     {
         if (!string.Equals(_activeDisclosureKey, range.Key, StringComparison.Ordinal)) return;
+        // Record the band the host actually armed, so the settle edge re-skins exactly those rows (and the header)
+        // rather than the whole realized window.
+        _activeDisclosureBand = range;
         _pendingExpandSection = null;
         _pendingExpandFolder = null;
     }
@@ -910,35 +973,14 @@ sealed class SidebarPane : Component
 
     bool TryFolderDescendantRange(string folderId, out ItemDisclosureRange range)
     {
-        int folderIndex = FolderIndexOf(Plan, folderId);
-        if (folderIndex < 0)
+        // ONE resolver, in the pure layer, so the disclosure's band and the tests that pin it cannot drift.
+        if (!SidebarRowGeometry.TryFolderDescendantRange(Plan.Rows, Plan.Entries, folderId, out int first, out int count))
         {
             range = default;
             return false;
         }
-        var rows = Plan.Rows;
-        var entries = Plan.Entries;
-        var folder = rows[folderIndex];
-        if ((uint)folder.EntryIndex >= (uint)entries.Count)
-        {
-            range = default;
-            return false;
-        }
-        int depth = entries[folder.EntryIndex].Depth;
-        int end = folderIndex + 1;
-        while (end < rows.Count)
-        {
-            var row = rows[end];
-            if (!string.Equals(row.SectionId, folder.SectionId, StringComparison.Ordinal)
-                || (uint)row.EntryIndex >= (uint)entries.Count
-                || entries[row.EntryIndex].Depth <= depth) break;
-            end++;
-        }
-        int count = end - folderIndex - 1;
-        range = count > 0
-            ? new ItemDisclosureRange("folder:" + folderId, folderIndex + 1, count)
-            : default;
-        return count > 0;
+        range = new ItemDisclosureRange("folder:" + folderId, first, count);
+        return true;
     }
 
     void StartDisclosure(string key, string id, bool folder, bool open, Action commit)
@@ -971,37 +1013,96 @@ sealed class SidebarPane : Component
         {
             if (folder) _pendingExpandFolder = id; else _pendingExpandSection = id;
             commit();
+            SchedulePrefsCommit();
+            // PUBLISH ON THE CLICK FRAME. The expanded model must reach the plan before `ItemsView` can resolve and arm
+            // the opening band, and the pane's ordinary publish rides a LAYOUT EFFECT — a whole frame later, which is
+            // why the chevron used to rotate about two frames before any row moved. This runs in the INPUT phase, so
+            // the signals it writes are read by the flush that follows: a forward write, not a backwards one.
+            RepublishNow();
+            _activeDisclosureBand = PendingExpandRange();
             _disclosureVersion.Value = _disclosureVersion.Peek() + 1;
-            BumpAllRowEpochs();   // a disclosure edge re-skins the chevron plus the whole revealed/hidden range
+            BumpDisclosureEpochs(id, folder, _activeDisclosureBand);
             return;
         }
         if (!hasRange)
         {
             commit();
+            SchedulePrefsCommit();
             DisclosureSettled(key);
             return;
         }
 
         _pendingExpandSection = null;
         _pendingExpandFolder = null;
+        _activeDisclosureBand = range;
         _listController.BeginDisclosure(range,
             open ? ItemDisclosureDirection.Expand : ItemDisclosureDirection.Collapse,
-            collapseCommit: open ? null : commit,
+            collapseCommit: open ? null : WithPrefsCommit(commit),
             settled: () => DisclosureSettled(key));
         _disclosureVersion.Value = _disclosureVersion.Peek() + 1;
-        BumpAllRowEpochs();
+        BumpDisclosureEpochs(id, folder, range);
     }
 
     void DisclosureSettled(string key)
     {
         if (!string.Equals(_activeDisclosureKey, key, StringComparison.Ordinal)) return;
+        string? id = _activeDisclosureId;
+        bool folder = _activeDisclosureIsFolder;
+        var band = _activeDisclosureBand;
         _activeDisclosureKey = null;
         _activeDisclosureId = null;
+        _activeDisclosureBand = null;
         _pendingExpandSection = null;
         _pendingExpandFolder = null;
         _disclosureVersion.Value = _disclosureVersion.Peek() + 1;
-        BumpAllRowEpochs();
+        if (id is not null) BumpDisclosureEpochs(id, folder, band);
     }
+
+    /// <summary>The plan rows a disclosure edge actually re-skins: the folder/section HEADER (its chevron reads the
+    /// disclosure state) plus the disclosed BAND (whose rows fade/rise in or out). Every other row in the pane draws
+    /// exactly the same thing before and after, so bumping them all — three times per toggle, which is what this
+    /// replaced — re-rendered the whole realized window for nothing.</summary>
+    void BumpDisclosureEpochs(string id, bool folder, ItemDisclosureRange? band)
+    {
+        int header = folder ? FolderIndexOf(Plan, id) : SectionHeaderIndexOf(Plan, id);
+        if (header >= 0) BumpRowEpoch(header);
+        if (band is not { Count: > 0 } b) return;
+        int end = Math.Min(b.FirstIndex + b.Count, Plan.Rows.Count);
+        for (int i = Math.Max(0, b.FirstIndex); i < end; i++) BumpRowEpoch(i);
+    }
+
+    static int SectionHeaderIndexOf(SidebarRowPlan plan, string sectionId)
+    {
+        var rows = plan.Rows;
+        for (int i = 0; i < rows.Count; i++)
+            if (rows[i].Kind == SidebarRowKind.SectionHeader
+                && string.Equals(rows[i].SectionId, sectionId, StringComparison.Ordinal)) return i;
+        return -1;
+    }
+
+    /// <summary>Rebuild and publish the plan from an INPUT handler (never from render — that would be a backwards
+    /// write). Used by the disclosure's prepared-expansion arm so the inserted rows exist on the click frame; every
+    /// other path keeps the layout-effect publish.</summary>
+    void RepublishNow()
+    {
+        if (!_planPublished) return;
+        TryPublishStage(BuildStage(Config.Document(), _search.Peek(), Config.Edit?.Invoke()));
+    }
+
+    /// <summary>Wrap a commit so the coalesced preference write is drained after it (a collapse commits at settle).</summary>
+    Action WithPrefsCommit(Action commit) => () => { commit(); SchedulePrefsCommit(); };
+
+    /// <summary>Drain <c>SidebarPreferences</c>' coalesced document write on the NEXT frame. Toggling a folder used to
+    /// serialize the whole layout document synchronously inside the click, which is pure latency on the very frame the
+    /// expansion has to plan, publish, realize and arm on.</summary>
+    void SchedulePrefsCommit()
+    {
+        if (Prefs is null) return;
+        if (_post is { } post) post(_flushPrefsCommit ??= FlushPrefsCommit);
+        else FlushPrefsCommit();
+    }
+
+    void FlushPrefsCommit() => Prefs?.FlushPendingCommit();
 
     static void TraceDisclosure(ItemDisclosureDiagnostic d)
     {
@@ -1315,6 +1416,27 @@ sealed class SidebarPane : Component
         return false;
     }
 
+    /// <summary>The ANALYTIC extent the virtualizing host seeds row <paramref name="index"/> at, straight from the
+    /// published plan (<see cref="SidebarRowExtents.HeightOf"/>). Called only when the host seeds/resizes/splices its
+    /// extent table — never per frame — and allocation-free. <c>NaN</c> means "not analytic" (a GridStrip), which the
+    /// host reads as "use the estimate and correct on measure".</summary>
+    float RowExtentSeed(int index)
+    {
+        if (!_planPublished) return SidebarRowGeometry.ClassicHeight;
+        var rows = Plan.Rows;
+        if ((uint)index >= (uint)rows.Count) return SidebarRowGeometry.ClassicHeight;
+        return SidebarRowExtents.HeightOf(rows, index, SectionOf(rows[index].SectionId), !Config.ReadOnly);
+    }
+
+    /// <summary>Re-derive EVERY seeded extent from the plan just published. Only for a WHOLESALE change (a new document,
+    /// a new effective query, an edit-session edge) — the incremental publishes carry their extents across, and a
+    /// disclosure's insert/remove is spliced by the host at its known band.</summary>
+    void ReseedRowExtents()
+    {
+        if (_rowLayout.CustomLayout is MeasuredStackVirtualLayout measured)
+            measured.Reseed(Plan.Rows.Count);
+    }
+
     float RowExtentOf(int index)
     {
         float cross = MathF.Max(1f, ExpandedWidth.Peek() - SidebarPaneMetrics.PaneInsetH);
@@ -1480,7 +1602,22 @@ sealed class SidebarPane : Component
         if (!TryBandOf(planIndex, out var band)) return (0f, 0f);
         var ro = ReorderFor(band.SectionId);
         if (!ro.IsLifted) return (0f, 0f);
-        return (0f, ro.OffsetFor(planIndex - band.Start));
+        int slot = planIndex - band.Start;
+        int from = ro.Core.DraggedIndex;
+        int shown = ro.TargetIndex;
+        int reachable = ClampReorderSlot(band.SectionId, from, shown);
+        // The unclamped case is the whole of Classic, Curated and every pin band: pass the engine's own hint through.
+        if (reachable == shown) return (0f, ro.OffsetFor(slot));
+        return (0f, SidebarReorderClamp.Offset(slot, from, reachable, band.Extent));
+    }
+
+    /// <summary>The slot a live gesture may actually reach — the mode's clamp, or the requested slot when it has none.
+    /// One chokepoint for BOTH consumers (the displacement gap and the commit), so the gap can never open where the
+    /// drop will not land.</summary>
+    int ClampReorderSlot(string sectionId, int from, int to)
+    {
+        if (Config.ClampReorderSlot is not { } clamp || from < 0 || to < 0) return to;
+        return SectionOf(sectionId) is { } section ? clamp(section.Kind, from, to) : to;
     }
 
     object? PayloadAt(string sectionId, int slot)
@@ -1550,7 +1687,15 @@ sealed class SidebarPane : Component
     void Commit(string sectionId, int from, int to)
     {
         var section = SectionOf(sectionId);
-        if (section is null || from == to) return;
+        if (section is null) return;
+        // The SAME clamp the gap was drawn with (`ClampReorderSlot`): the release point is `ReorderList`'s latest pending
+        // slot, which is raw pointer geometry and can sit outside the reachable run even though the shown gap never did.
+        // Committing the clamped slot is what makes the drop land where the user was looking.
+        to = ClampReorderSlot(sectionId, from, to);
+        if (from == to) return;
+        // The re-plan this commit is about to trigger must NOT be frozen: it is this gesture's own result (see the
+        // latch's remarks), and the drag session stays live across the settle window that follows.
+        _publishThroughFreeze = true;
         var band = BandFor(sectionId);
         var ctx = new SidebarPaneReorder(section, from, to, band.Count, slot => KeyAt(sectionId, slot));
         if (Config.CommitReorder is { } commit) commit(ctx);
@@ -1597,71 +1742,111 @@ sealed class SidebarPane : Component
     }
 
     /// <summary>One resource target can be both a playlist deposit and a pinned-band insertion. Tracks/albums/playlists
-    /// route to the playlist mutation seam; pinnable resources route to the shared pin store.</summary>
+    /// route to the playlist mutation seam; pinnable resources route to the shared pin store.
+    ///
+    /// <para><b>The rootlist arm publishes a SLOT, not a boolean.</b> <paramref name="rootFacts"/> carries the row's
+    /// structural facts (depth, folder state, the next visible row's depth, whether the centre deposits); the
+    /// payload-dependent ones (self, ancestor) are folded in at HOVER, because that is the first moment the payload
+    /// exists. <see cref="RootlistSlotResolver"/> turns those plus the pointer into one <see cref="SidebarDropSlot"/>,
+    /// this publishes it to <see cref="_dropSlot"/>, and the row's line/plate and <c>CommitDrop</c> both CONSUME it.</para></summary>
     internal DropTargetSpec ResourceDropSpec(string sectionId, int slot, string? playlistUri, string? playlistName,
                                              WaveeResourceDragPayload? rootTarget = null,
                                              int rootPlanIndex = -1,
                                              Action? onSpringLoad = null,
                                              string? railCueUri = null,
-                                             bool isPlaylistRow = false)
+                                             bool isPlaylistRow = false,
+                                             SidebarRowFacts rootFacts = default)
     {
         // "Is this row a playlist AT ALL" — deliberately separate from `playlistUri`, which the callers set only for an
         // EDITABLE one. The distinction is the whole refusal-vs-transparent split below: a playlist you cannot write to
         // owes the user a reason, an album owes them silence.
         bool IsPlaylistRow = isPlaylistRow || playlistUri is { Length: > 0 };
+        bool canDepositHere = playlistUri is { Length: > 0 };
+
+        // Is this payload a rootlist FILING (a playlist or folder of the user's own being re-ordered), as opposed to a
+        // track set looking for a playlist? The whole slot machinery below is for the first question only.
+        bool Filing(WaveeResourceDragPayload source)
+            => rootTarget is not null && source.RootlistItem
+               && source.Kind is WaveeResourceKind.Playlist or WaveeResourceKind.Folder;
+
+        // The payload-only half of the refusal table — the arms that do not depend on WHERE in the row the pointer is,
+        // and therefore the ones that can drive `accepts` (and so the engine's not-allowed cue) rather than a caption.
+        SidebarDropRefusal PayloadRefusal(WaveeResourceDragPayload source)
+        {
+            if (rootTarget is not { } root || !Filing(source)) return SidebarDropRefusal.None;
+            if (!RootlistLoaded) return SidebarDropRefusal.NotLoaded;
+            // Identity is checked on BOTH keys: rootlist payloads also arrive from outside the sidebar (a tab, a card, a
+            // detail hero), where the Id is the entity's uri rather than a sidebar pin id — the Id compare alone would
+            // let a playlist be filed relative to its own row.
+            if (string.Equals(source.Id, root.Id, StringComparison.Ordinal)
+                || (source.Uri.Length > 0 && string.Equals(source.Uri, root.Uri, StringComparison.Ordinal)))
+                return root.Kind == WaveeResourceKind.Folder
+                    ? SidebarDropRefusal.IntoItself
+                    : SidebarDropRefusal.Self;
+            if (SourceContainsRow(source, rootPlanIndex)) return SidebarDropRefusal.IntoDescendant;
+            return SidebarDropRefusal.None;
+        }
+
         bool Compatible(WaveeResourceDragPayload source)
         {
-            if (rootTarget is not null && source.RootlistItem
-                && source.Kind is WaveeResourceKind.Playlist or WaveeResourceKind.Folder)
-                // Identity is checked on BOTH keys now that rootlist payloads also arrive from outside the sidebar
-                // (a tab, a card, a detail hero), where the Id is the entity's uri rather than a sidebar pin id — the
-                // Id compare alone would let a playlist be filed relative to its own row.
-                return !string.Equals(source.Id, rootTarget.Id, StringComparison.Ordinal)
-                       && !(source.Uri.Length > 0
-                            && string.Equals(source.Uri, rootTarget.Uri, StringComparison.Ordinal));
-            if (playlistUri is { Length: > 0 } && source.CanCopyTracks) return true;
+            if (Filing(source)) return PayloadRefusal(source) == SidebarDropRefusal.None;
+            if (canDepositHere && source.CanCopyTracks) return true;
             return slot >= 0 && source.CanPin;
         }
 
-        // The CAPTION is written here rather than through the facade's caption hook because this row's outcome depends
-        // on WHERE in it the pointer is (an editable playlist's centre deposits tracks; its edges file it in the
-        // rootlist), and only the session carries that. Hover runs on both Enter and Over, which is exactly the refresh
-        // cadence a pointer-dependent caption needs.
-        void Hover(WaveeResourceDragPayload p, DragSession s)
+        // The row's structural facts, completed with the two the payload decides. Built per hover because the payload is
+        // not knowable earlier; it is a struct copy of ten fields, so it costs nothing inside the 0-alloc frame region.
+        SidebarRowFacts FactsFor(WaveeResourceDragPayload source) => rootFacts with
         {
-            bool ok = Compatible(p);
-            _resourceDropRow.Value = ok ? rootPlanIndex : -1;
-            // The rail's cue is keyed by URI, not by plan index: a rail TILE has no row in the expanded plan.
-            if (railCueUri is { Length: > 0 }) _railDropUri.Value = ok ? railCueUri : null;
-            s.Caption = CaptionFor(p, s);
+            CenterAccepts = rootFacts.IsFolder || (canDepositHere && source.CanCopyTracks),
+            SourceIsSelf = PayloadRefusal(source) is SidebarDropRefusal.Self or SidebarDropRefusal.IntoItself,
+            SourceIsAncestorOfRow = PayloadRefusal(source) == SidebarDropRefusal.IntoDescendant,
+            RootlistLoaded = RootlistLoaded,
+        };
+
+        // WHAT this row would do with this payload, at this pointer position. ONE answer, published once, consumed by
+        // the line, the plate, the caption and the commit.
+        SidebarDropSlot SlotFor(WaveeResourceDragPayload p, DragSession s)
+        {
+            if (!Compatible(p)) return SidebarDropSlot.None;
+            if (rootTarget is { } root && Filing(p) && rootPlanIndex >= 0)
+                return RootlistSlotFor(rootPlanIndex, FactsFor(p), root, p, s.Position);
+            // Every other accepted destination — a pin-band insertion, a track deposit, a rail tile — is a whole-row
+            // INTO, which is exactly the accent plate this surface has always drawn for them.
+            return rootPlanIndex >= 0
+                ? new SidebarDropSlot(rootPlanIndex, SidebarDropKind.Into, 0, SidebarDropRefusal.None)
+                : SidebarDropSlot.None;
         }
 
-        string? CaptionFor(WaveeResourceDragPayload p, DragSession s)
+        // The CAPTION is written here rather than through the facade's caption hook because this row's outcome depends
+        // on WHERE in it the pointer is, and only the session carries that. Hover runs on both Enter and Over, which is
+        // exactly the refresh cadence a pointer-dependent cue needs.
+        void Hover(WaveeResourceDragPayload p, DragSession s)
+        {
+            var cue = SlotFor(p, s);
+            _dropSlot.SetIfChanged(cue);
+            // The rail's cue is keyed by URI, not by plan index: a rail TILE has no row in the expanded plan.
+            if (railCueUri is { Length: > 0 }) _railDropUri.Value = Compatible(p) ? railCueUri : null;
+            s.Caption = CaptionFor(p, s, in cue);
+        }
+
+        string? CaptionFor(WaveeResourceDragPayload p, DragSession s, in SidebarDropSlot cue)
         {
             // A same-band reorder is this section's own gesture: its feedback is the displacement, and naming it "Pin X"
             // would claim a pin that already exists (Reorderable's own rule, applied to the row-level target too).
             if (s.Payload is ReorderPayload own && ReferenceEquals(own.Owner, ReorderFor(sectionId))) return null;
-            if (rootTarget is { } root && p.RootlistItem
-                && p.Kind is WaveeResourceKind.Playlist or WaveeResourceKind.Folder)
-            {
-                bool canDeposit = root.Kind == WaveeResourceKind.Playlist
-                    && playlistUri is { Length: > 0 } && p.CanCopyTracks;
-                var placement = RootlistPlacementFor(rootPlanIndex,
-                    root.Kind == WaveeResourceKind.Folder, canDeposit, s.Position);
-                if (placement != RootlistDropPlacement.Inside || !canDeposit)
-                    // Only "inside a folder" is worth a sentence. A before/after filing is an ORDERING, and the row it
-                    // lands next to is already under the pointer — captioning it would narrate what the user can see.
-                    return root.Kind == WaveeResourceKind.Folder && placement == RootlistDropPlacement.Inside
-                        ? Strings.Drag.MoveInto(root.Name)
-                        : null;
-            }
-            if (playlistUri is { Length: > 0 } && p.CanCopyTracks) return Strings.Drag.AddTo(playlistName ?? "");
+            if (cue.Refusal != SidebarDropRefusal.None) return RefusalSentence(cue.Refusal);
+            if (rootTarget is { } root && Filing(p))
+                return RootlistCaption(in cue, root, playlistName);
+            if (canDepositHere && p.CanCopyTracks) return Strings.Drag.AddTo(playlistName ?? "");
             if (slot >= 0 && p.CanPin) return Strings.Drag.Pin(p.Name);
             return null;
         }
+
         void Leave(DragSession _)
         {
-            if (_resourceDropRow.Peek() == rootPlanIndex) _resourceDropRow.Value = -1;
+            if (rootPlanIndex >= 0 && _dropSlot.Peek().PlanIndex == rootPlanIndex)
+                _dropSlot.Value = SidebarDropSlot.None;
             if (railCueUri is { Length: > 0 }
                 && string.Equals(_railDropUri.Peek(), railCueUri, StringComparison.Ordinal))
                 _railDropUri.Value = null;
@@ -1669,22 +1854,21 @@ sealed class SidebarPane : Component
 
         void CommitDrop(WaveeResourceDragPayload source, DragSession s)
         {
+            var cue = _dropSlot.Peek();
             Leave(s);
-            if (rootTarget is { } root && Acts is { } rootActs
-                && source is { RootlistItem: true,
-                    Kind: WaveeResourceKind.Playlist or WaveeResourceKind.Folder })
+            // D9 — HOISTED TO THE TOP. A SAME-LIST reorder arrives as a ReorderPayload owned by this section's
+            // Reorderable, and its own gesture completion commits it. This used to sit BELOW the track-deposit arm, so a
+            // pin-band reorder (or a V3 custom-order drag) passing over an editable playlist copied that playlist's
+            // songs into it on the way past — a bulk mutation nobody asked for, from a gesture that was a reorder.
+            if (slot >= 0 && s.Payload is ReorderPayload rp && ReferenceEquals(rp.Owner, ReorderFor(sectionId))) return;
+
+            if (rootTarget is { } root && Acts is { } rootActs && Filing(source)
+                && rootPlanIndex >= 0 && cue.PlanIndex == rootPlanIndex)
             {
-                bool canDepositIntoPlaylist = root.Kind == WaveeResourceKind.Playlist
-                    && playlistUri is { Length: > 0 } && source.CanCopyTracks;
-                var placement = RootlistPlacementFor(rootPlanIndex,
-                    root.Kind == WaveeResourceKind.Folder, canDepositIntoPlaylist, s.Position);
-                // The centre of an editable playlist is an entity destination; its edge bands remain rootlist
-                // before/after targets. This preserves both "playlist into playlist" and durable organization.
-                if (placement != RootlistDropPlacement.Inside || !canDepositIntoPlaylist)
-                {
-                    WaveeResourceDrop.MoveRootlist(rootActs, s.Payload, root, placement);
-                    return;
-                }
+                // A refused or unarmed slot commits NOTHING — the reason was already on the chip. Never a fallback
+                // placement: guessing is what made "after the last child" land inside the folder.
+                CommitRootlistSlot(rootActs, source, root, in cue, playlistUri, playlistName, s.Payload);
+                return;
             }
             if (playlistUri is { Length: > 0 } target && Acts is { } acts
                 && WaveeResourceDrop.CanDepositTracks(s.Payload))
@@ -1692,9 +1876,6 @@ sealed class SidebarPane : Component
                 WaveeResourceDrop.DepositTracks(acts, target, playlistName ?? "", s.Payload, insertionIndex: null);
                 return;
             }
-            // A SAME-LIST reorder arrives as a ReorderPayload owned by this section's Reorderable — its own gesture
-            // completion commits that, so this target must ignore it (double-applying would duplicate the move).
-            if (slot >= 0 && s.Payload is ReorderPayload rp && ReferenceEquals(rp.Owner, ReorderFor(sectionId))) return;
             if (slot >= 0) AcceptForeign(sectionId, s.Payload, slot);
         }
 
@@ -1702,31 +1883,34 @@ sealed class SidebarPane : Component
         //
         // TRANSPARENT = "none of my business". A row that was never a track destination — an album, an artist, a show, an
         // app route — must sit the gesture out entirely: the drag is merely CROSSING it on the way somewhere, and a
-        // not-allowed cue there is an accusation. This row passed no `transparent` at all, unlike its two siblings
-        // (DetailShell's page body and DetailTracks' insertion list), so every incompatible row on the way to the target
-        // flickered a refusal.
+        // not-allowed cue there is an accusation.
         //
         // REFUSED = "you aimed here, and here is why not". A playlist row the user cannot write to — someone else's, an
         // editorial one — deserves a sentence, because they aimed at a playlist and a playlist is exactly the thing that
-        // normally accepts. Before this it refused SILENTLY: WhyRefused was gated on `playlistUri` being set, which is
-        // only true for an EDITABLE playlist, so a non-editable one produced the not-allowed glyph with no reason at all —
-        // precisely the failure mode the refusal-caption contract exists to prevent, on the one playlist surface that did
-        // not consult the shared PlaylistDropRefusalRules.
+        // normally accepts. So does every rootlist filing the tree itself forbids (into yourself, into your own
+        // descendant, into a list that has not loaded) — those used to be silent `return false`s in RootlistOps.
         bool Transparent(WaveeResourceDragPayload source)
         {
+            // D16 — THE RAIL. A folder drag crossing the collapsed rail's playlist tiles has nothing it could add and
+            // nothing it could file there, so the tile sits the gesture out. It used to answer "Nothing to add", which
+            // is an accusation aimed at a drag that was only passing through.
+            if (railCueUri is { Length: > 0 }
+                && SidebarRailDropRules.TileTransparent(source.RootlistItem, source.CanCopyTracks)) return true;
             // A pin-band insertion or a rootlist filing is this row's own business, so it is never transparent.
             if (slot >= 0 && source.CanPin) return false;
-            if (rootTarget is not null && source.RootlistItem) return false;
+            if (Filing(source)) return false;
             // A track-bearing payload over a row that is not a playlist at all: not a destination, not a refusal.
             return source.CanCopyTracks && !IsPlaylistRow;
         }
 
         string? WhyRefused(WaveeResourceDragPayload source)
         {
+            var refusal = PayloadRefusal(source);
+            if (refusal != SidebarDropRefusal.None) return RefusalSentence(refusal);
             // Not writable, but it IS a playlist — the refusal that was silent.
-            if (IsPlaylistRow && playlistUri is not { Length: > 0 } && source.CanCopyTracks)
+            if (IsPlaylistRow && !canDepositHere && source.CanCopyTracks)
                 return Loc.Get(Strings.Drag.CantEditPlaylist);
-            return playlistUri is { Length: > 0 } && !source.CanCopyTracks
+            return canDepositHere && !source.CanCopyTracks
                 // Locked decision: an artist has no single obvious track set, so we refuse rather than guess. Future
                 // work is a picker that lets the USER choose what to deposit (top tracks / a release).
                 ? Loc.Get(source.Kind == WaveeResourceKind.Artist
@@ -1740,6 +1924,10 @@ sealed class SidebarPane : Component
             transparent: Transparent,
             visualPolicy: DropTargetVisualPolicy.Spotlight,
             refusalCaption: WhyRefused,
+            // D15 — an intra-sidebar organisation drag must NOT dim the app it is happening inside. The scrim's promise
+            // is "these cutouts are your options", and for a reorder the options are the rows the user is already
+            // looking at. The detail page's insertion list took this exemption for same-list drops first.
+            spotlightWhen: static s => WaveeResourceDrag.Unwrap(s.Payload) is not { RootlistItem: true },
             // Spring-load (a COLLAPSED folder row supplies the callback): dwelling opens the container so the user can
             // keep travelling into it. It is armed even when this row REFUSES the payload — opening a folder is
             // navigation, not a deposit, and the folder whose contents you are aiming at is often not itself a target.
@@ -1747,8 +1935,313 @@ sealed class SidebarPane : Component
             onSpringLoad: onSpringLoad is null ? null : (_, _) => onSpringLoad());
     }
 
-    internal bool IsResourceDropActive(int planIndex)
-        => planIndex >= 0 && _resourceDropRow.Value == planIndex;
+    /// <summary>The collapsed rail's FOLDER tile: <b>Into, and only Into</b>. A 56-DIP strip has no room for edge bands
+    /// and nothing above or below a tile to be "before" or "after" — so this is deliberately NOT the banded row spec.
+    /// It exists because a rail folder tile was completely inert (D16): with the pane collapsed there was no way to file
+    /// anything at all, and the pane's peek dwell was the only route back to a destination.</summary>
+    internal DropTargetSpec RailFolderDropSpec(SidebarLibraryEntry folder, WaveeResourceDragPayload target)
+    {
+        string folderId = folder.FolderId;
+        string cueKey = folder.Id;
+        string name = folder.Name;
+
+        bool Accepts(WaveeResourceDragPayload source)
+            => source.RootlistItem
+               && source.Kind is WaveeResourceKind.Playlist or WaveeResourceKind.Folder
+               && RootlistLoaded
+               && folderId.Length > 0
+               && !string.Equals(source.Id, target.Id, StringComparison.Ordinal)
+               && (source.Uri.Length == 0 || !string.Equals(source.Uri, target.Uri, StringComparison.Ordinal))
+               && RootlistTreeMoves.Check(RootlistTree, source.Id, folder.Id, RootlistDropPlacement.Inside)
+                  == SidebarDropRefusal.None;
+
+        string? Why(WaveeResourceDragPayload source)
+        {
+            if (!source.RootlistItem || source.Kind is not (WaveeResourceKind.Playlist or WaveeResourceKind.Folder))
+                return null;   // handled as TRANSPARENT below — a track drag is merely crossing this tile
+            if (!RootlistLoaded) return Loc.Get(Strings.Drag.StillLoading);
+            if (string.Equals(source.Id, target.Id, StringComparison.Ordinal))
+                return Loc.Get(Strings.Drag.CantMoveIntoItself);
+            return RefusalSentence(RootlistTreeMoves.Check(RootlistTree, source.Id, folder.Id,
+                                                           RootlistDropPlacement.Inside));
+        }
+
+        void Commit(WaveeResourceDragPayload source, DragSession s)
+        {
+            _railDropUri.Value = null;
+            if (Acts is not { } acts || !Accepts(source)) return;
+            RootlistItemRef? undoAnchor = null;
+            var undoPlacement = RootlistDropPlacement.After;
+            if (RootlistUndoAnchors.TryResolve(RootlistTree, source.Id, out var anchor, out var placement))
+            {
+                undoAnchor = anchor;
+                undoPlacement = placement;
+            }
+            WaveeResourceDrop.MoveRootlist(acts, s.Payload, new RootlistItemRef(folderId, IsFolder: true),
+                                           RootlistDropPlacement.Inside, name, undoAnchor, undoPlacement);
+        }
+
+        return Drop.Target<WaveeResourceDragPayload>(WaveeDragKinds.Resource,
+            accepts: Accepts,
+            transparent: static p => !p.RootlistItem,
+            caption: _ => Strings.Drag.MoveInto(name),
+            refusalCaption: Why,
+            onEnter: (p, _) => _railDropUri.Value = Accepts(p) ? cueKey : null,
+            onOver: (p, _) => _railDropUri.Value = Accepts(p) ? cueKey : null,
+            onLeave: _ => { if (string.Equals(_railDropUri.Peek(), cueKey, StringComparison.Ordinal)) _railDropUri.Value = null; },
+            onDrop: Commit,
+            visualPolicy: DropTargetVisualPolicy.Spotlight,
+            spotlightWhen: static s => WaveeResourceDrag.Unwrap(s.Payload) is not { RootlistItem: true });
+    }
+
+    /// <summary>The slot this row publishes for a live drag, or <see cref="SidebarDropSlot.None"/>. A BOUND probe: the
+    /// row's insertion line and its Into plate are both single reads of this, so a cue change is a compositor-only
+    /// update of two props rather than a re-render of the realized window (the <c>SidebarSelectionPill</c> discipline).
+    /// <para>Peek-safe by construction — it reads ONE signal and compares two ints.</para></summary>
+    internal SidebarDropSlot DropSlotFor(int planIndex)
+    {
+        var cue = _dropSlot.Value;
+        return planIndex >= 0 && cue.PlanIndex == planIndex ? cue : SidebarDropSlot.None;
+    }
+
+    /// <summary>A row's content width: the pane's open width less the padding applied once around the virtualized list.
+    /// Read from inside a BOUND prop (the insertion line's width), so it stays a plain signal read.</summary>
+    internal float ContentWidth => MathF.Max(0f, ExpandedWidth.Value - SidebarPaneMetrics.PaneInsetH);
+
+    /// <summary>Is the tree showing a non-custom SORT right now? See <see cref="SidebarPaneConfig.TreeSortedNonCustom"/>.</summary>
+    internal bool TreeSortedNonCustom => Config.TreeSortedNonCustom?.Invoke() ?? false;
+
+    /// <summary>Has the rootlist actually arrived? "Not known to be loaded" must never present as "is": a filing written
+    /// against an empty tree would land at an index that means nothing.</summary>
+    bool RootlistLoaded
+        => Prefs?.Binder?.CurrentInput is { TreeState: SidebarSourceState.Ready, PlaylistTree.Count: > 0 };
+
+    /// <summary>The DEPTH-FIRST FLATTENED rootlist tree the projection is currently publishing — the full one, not the
+    /// expansion-filtered plan. Legality and the undo anchor are both decided against real sibling order, never against
+    /// whichever rows happen to be visible.</summary>
+    IReadOnlyList<SidebarLibraryEntry>? RootlistTree => Prefs?.Binder?.CurrentInput.PlaylistTree;
+
+    /// <summary>One localized sentence per refusal — the ONE table, shared by the accept-time <c>WhyRefused</c> and the
+    /// position-dependent caption, so a refusal can never be explained with a reason the test did not use.</summary>
+    static string? RefusalSentence(SidebarDropRefusal refusal) => refusal switch
+    {
+        SidebarDropRefusal.Self => Loc.Get(Strings.Drag.CantMoveHere),
+        SidebarDropRefusal.IntoItself or SidebarDropRefusal.IntoDescendant => Loc.Get(Strings.Drag.CantMoveIntoItself),
+        SidebarDropRefusal.NoOp => Loc.Get(Strings.Drag.AlreadyThere),
+        SidebarDropRefusal.SortedList => Loc.Get(Strings.Drag.ClearSortingToReorder),
+        SidebarDropRefusal.NotLoaded => Loc.Get(Strings.Drag.StillLoading),
+        SidebarDropRefusal.Unavailable => Loc.Get(Strings.Drag.CantMoveHere),
+        _ => null,
+    };
+
+    /// <summary>What an ARMED rootlist slot says. Before/After AT THE ROW'S OWN DEPTH say nothing — the line is already
+    /// under the pointer and naming an ordering would narrate what the user can see. The two that DO carry a sentence
+    /// are the ones the line alone cannot disambiguate: an outdent, and the end of the list.</summary>
+    string? RootlistCaption(in SidebarDropSlot cue, WaveeResourceDragPayload root, string? playlistName)
+    {
+        switch (cue.Kind)
+        {
+            case SidebarDropKind.Into:
+                return root.Kind == WaveeResourceKind.Folder
+                    ? Strings.Drag.MoveInto(root.Name)
+                    : Strings.Drag.AddTo(playlistName ?? root.Name);
+            case SidebarDropKind.EndOfList:
+                return Loc.Get(Strings.Drag.MoveToEnd);
+            case SidebarDropKind.After when TryRowEntry(cue.PlanIndex, out var entry) && cue.Depth < entry.Depth:
+                return Strings.Drag.MoveOutOf(entry.ParentFolderName.Length > 0
+                    ? entry.ParentFolderName
+                    : Loc.Get(Strings.Sidebar.YourLibrary));
+            default:
+                return null;
+        }
+    }
+
+    /// <summary>Pointer + row facts → the published slot. Keeps the viewport/scroll math that resolved a row-relative
+    /// <c>t</c>, ADDS the x channel the old placement never read (D5), delegates the geometry to the pure resolver, and
+    /// finally checks the resolved destination against real sibling order so "already there" and "into your own
+    /// subtree" refuse WHERE THE CUE IS instead of silently failing three layers down.</summary>
+    SidebarDropSlot RootlistSlotFor(int planIndex, SidebarRowFacts facts, WaveeResourceDragPayload root,
+                                    WaveeResourceDragPayload source, Point2 pointer)
+    {
+        var viewport = _listController.Viewport;
+        var scene = Context.Scene;
+        if (planIndex < 0 || scene is null || viewport.IsNull || !scene.IsLive(viewport))
+            // DEGENERATE (D17): no plan row, no viewport, no scene. Refuse with a reason — the old code guessed
+            // Before/Inside here, which is a placement the user never aimed at.
+            return new SidebarDropSlot(planIndex, SidebarDropKind.None, 0, SidebarDropRefusal.Unavailable);
+
+        var rect = scene.AbsoluteRect(viewport);
+        float contentY = pointer.Y - rect.Y + _listController.ScrollOffset;
+        float top = SidebarRowGeometry.ContentYOf(planIndex, Plan.Rows.Count, RowExtentOf);
+        float extent = MathF.Max(1f, RowExtentOf(planIndex));
+        float t = Math.Clamp((contentY - top) / extent, 0f, 1f);
+        // The list is the padded box's only child, so the viewport's left edge IS the row's left edge.
+        float xInRow = pointer.X - rect.X;
+
+        var cue = RootlistSlotResolver.Resolve(planIndex, t, xInRow, extent, in facts, _dropSlot.Peek());
+        if (!cue.IsArmed) return cue;
+        if (!TryMapSlot(in cue, root, out var target)) return cue;
+        if (target.Deposit) return cue;                     // a track copy is not a rootlist ORDERING at all
+        var refusal = RootlistTreeMoves.Check(RootlistTree, source.Id, target.EntryId, target.Placement);
+        return refusal == SidebarDropRefusal.None
+            ? cue
+            : new SidebarDropSlot(planIndex, SidebarDropKind.None, cue.Depth, refusal);
+    }
+
+    /// <summary>A resolved rootlist destination: the tree entry it is expressed against, the seam ref + placement, and
+    /// the folder the item will end up in (for the confirmation toast). <see cref="Deposit"/> marks the one slot that is
+    /// not a rootlist move at all — the retained "drop a playlist on a playlist's centre = copy its songs" gesture.</summary>
+    readonly record struct RootlistSlotTarget(string EntryId, RootlistItemRef Ref, RootlistDropPlacement Placement,
+                                              string ParentName, bool Deposit);
+
+    /// <summary>THE slot → mutation map (design §"Slot → mutation"). ONE owner, called at hover for legality and at drop
+    /// for the commit, so the cue and the mutation cannot describe different destinations.</summary>
+    bool TryMapSlot(in SidebarDropSlot cue, WaveeResourceDragPayload root, out RootlistSlotTarget target)
+    {
+        target = default;
+        // The tree's end marker is CHROME: it stands for no entity, so it is resolved before the row lookup. Its anchor
+        // is the last TOP-LEVEL entry, whose exclusive range end lands after a trailing folder's whole subtree — which
+        // is exactly what makes "below everything" reachable at all.
+        if (cue.Kind == SidebarDropKind.EndOfList)
+        {
+            if (!TryLastTopLevelEntry(out var last)) return false;
+            target = new RootlistSlotTarget(last.Id, RefOf(in last), RootlistDropPlacement.After, "", false);
+            return true;
+        }
+        if (!TryRowEntry(cue.PlanIndex, out var entry)) return false;
+        switch (cue.Kind)
+        {
+            case SidebarDropKind.Into:
+                if (root.Kind != WaveeResourceKind.Folder)
+                {
+                    target = new RootlistSlotTarget(entry.Id, default, RootlistDropPlacement.Inside, entry.Name, true);
+                    return true;
+                }
+                target = new RootlistSlotTarget(entry.Id, RefOf(in entry), RootlistDropPlacement.Inside, entry.Name, false);
+                return true;
+
+            case SidebarDropKind.Before when cue.Depth > entry.Depth:
+                // The bottom band of an EXPANDED folder header: the precise "first child" slot. The next plan row IS
+                // that first child, so the filing is expressed against it.
+                if (!TryRowEntry(cue.PlanIndex + 1, out var firstChild)) return false;
+                target = new RootlistSlotTarget(firstChild.Id, RefOf(in firstChild), RootlistDropPlacement.Before,
+                                                entry.Name, false);
+                return true;
+
+            case SidebarDropKind.Before:
+                target = new RootlistSlotTarget(entry.Id, RefOf(in entry), RootlistDropPlacement.Before,
+                                                entry.ParentFolderName, false);
+                return true;
+
+            case SidebarDropKind.After when cue.Depth < entry.Depth:
+                // THE D2 FIX. "After the last child of a folder", aimed left, means AFTER THE FOLDER — the same shape
+                // FolderActions.MoveOut builds. The old code expressed it against the child and landed back inside.
+                if (!TryAncestorFolder(in entry, entry.Depth - cue.Depth, out var ancestor)) return false;
+                target = new RootlistSlotTarget(ancestor.Id, RefOf(in ancestor), RootlistDropPlacement.After,
+                                                ancestor.ParentFolderName, false);
+                return true;
+
+            case SidebarDropKind.After:
+                target = new RootlistSlotTarget(entry.Id, RefOf(in entry), RootlistDropPlacement.After,
+                                                entry.ParentFolderName, false);
+                return true;
+
+            default:
+                return false;
+        }
+    }
+
+    /// <summary>Commit the PUBLISHED slot. Never recomputes one: the cue the user was shown is the mutation that is
+    /// issued, which is the whole point of publishing it.</summary>
+    void CommitRootlistSlot(ActionServices acts, WaveeResourceDragPayload source, WaveeResourceDragPayload root,
+                            in SidebarDropSlot cue, string? playlistUri, string? playlistName, object? payload)
+    {
+        if (!cue.IsArmed || !TryMapSlot(in cue, root, out var target)) return;
+        if (target.Deposit)
+        {
+            // The retained centre gesture. It still needs a WRITABLE playlist under the pointer; the row only offers the
+            // centre when it has one, so this is the belt to that braces.
+            if (playlistUri is { Length: > 0 } uri) WaveeResourceDrop.DepositTracks(acts, uri, playlistName ?? "", payload, null);
+            return;
+        }
+        // Captured BEFORE the mutation: once the rootlist has moved, where the item used to be is unknowable.
+        RootlistItemRef? undoAnchor = null;
+        var undoPlacement = RootlistDropPlacement.After;
+        if (RootlistUndoAnchors.TryResolve(RootlistTree, source.Id, out var anchor, out var placement))
+        {
+            undoAnchor = anchor;
+            undoPlacement = placement;
+        }
+        WaveeResourceDrop.MoveRootlist(acts, payload, target.Ref, target.Placement, target.ParentName,
+                                       undoAnchor, undoPlacement);
+    }
+
+    static RootlistItemRef RefOf(in SidebarLibraryEntry entry) => RootlistTreeNav.RefOf(in entry);
+
+    /// <summary>The entry behind one plan row, or false for a chrome row.</summary>
+    bool TryRowEntry(int planIndex, out SidebarLibraryEntry entry)
+    {
+        entry = default;
+        var rows = Plan.Rows;
+        var entries = Plan.Entries;
+        if ((uint)planIndex >= (uint)rows.Count) return false;
+        int at = rows[planIndex].EntryIndex;
+        if ((uint)at >= (uint)entries.Count) return false;
+        entry = entries[at];
+        return true;
+    }
+
+    /// <summary>Walk <paramref name="levels"/> containing folders up from <paramref name="entry"/>.</summary>
+    bool TryAncestorFolder(in SidebarLibraryEntry entry, int levels, out SidebarLibraryEntry folder)
+    {
+        folder = entry;
+        for (int i = 0; i < levels; i++)
+        {
+            if (folder.ParentFolderId is not { Length: > 0 } parent || !TryFolderEntry(parent, out folder)) return false;
+        }
+        return levels > 0 && folder.IsFolder;
+    }
+
+    bool TryFolderEntry(string folderId, out SidebarLibraryEntry folder)
+    {
+        var entries = Plan.Entries;
+        for (int i = 0; i < entries.Count; i++)
+        {
+            var e = entries[i];
+            if (e.IsFolder && string.Equals(e.FolderId, folderId, StringComparison.Ordinal)) { folder = e; return true; }
+        }
+        folder = default;
+        return false;
+    }
+
+    /// <summary>The last TOP-LEVEL tree entry — the anchor "move to the end" files against. Its exclusive range end
+    /// lands after a trailing folder's whole subtree, which is precisely what makes the end of the list reachable.</summary>
+    bool TryLastTopLevelEntry(out SidebarLibraryEntry entry)
+    {
+        var tree = RootlistTree;
+        entry = default;
+        if (tree is null) return false;
+        for (int i = tree.Count - 1; i >= 0; i--)
+            if (tree[i].Depth == 0) { entry = tree[i]; return true; }
+        return false;
+    }
+
+    /// <summary>Does the dragged FOLDER contain the row at <paramref name="planIndex"/>? Walks the row's
+    /// <c>ParentFolderId</c> chain — the cycle guard, lifted from three layers down in <c>RootlistOps</c> (where it could
+    /// only fail silently) to where the cue is drawn.</summary>
+    bool SourceContainsRow(WaveeResourceDragPayload source, int planIndex)
+    {
+        if (source.Kind != WaveeResourceKind.Folder) return false;
+        string folderId = SidebarPinId.FolderIdOf(source.Id);
+        if (folderId.Length == 0 || !TryRowEntry(planIndex, out var entry)) return false;
+        for (int guard = 0; guard < 32; guard++)
+        {
+            if (entry.ParentFolderId is not { Length: > 0 } parent) return false;
+            if (string.Equals(parent, folderId, StringComparison.Ordinal)) return true;
+            if (!TryFolderEntry(parent, out entry)) return false;
+        }
+        return false;
+    }
 
     // ── drag peek ────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -1775,38 +2268,40 @@ sealed class SidebarPane : Component
         if (_dragPeek.Peek() != on) _dragPeek.Value = on;
     }
 
-    /// <summary>Owns the ONE <c>UseDragState()</c> subscription that ends a <see cref="_dragPeek"/>. Renders nothing.
-    /// <para>The peek is cleared on SESSION END, never on leave: once the pane is open the pointer travels off the rail
-    /// and onto the rows, and collapsing there would yank every target out from under it mid-gesture. Session end covers
-    /// drop, cancel and Escape alike, so there is no path that leaves the pane stuck open.</para></summary>
+    /// <summary>Disarm every row's cue. Called on SESSION END — a drop that lands outside the pane never reaches a row's
+    /// <c>OnLeave</c>, and a line left painted after the gesture is over reads as a pending action that is not pending.</summary>
+    internal void ClearDropSlot()
+    {
+        if (_dropSlot.Peek().PlanIndex >= 0) _dropSlot.Value = SidebarDropSlot.None;
+    }
+
+    /// <summary>Owns the ONE <c>UseDragState()</c> subscription that ends a <see cref="_dragPeek"/>, disarms the drop
+    /// cue and flushes the mid-drag freeze. Renders nothing.
+    /// <para>All three happen on SESSION END, never on leave: once the pane is open the pointer travels off the rail and
+    /// onto the rows, and collapsing there would yank every target out from under it mid-gesture. Session end covers
+    /// drop, cancel and Escape alike, so there is no path that leaves the pane stuck open or a projection stranded.</para></summary>
     sealed class SidebarDragPeekWatcher(SidebarPane owner) : Component
     {
         public override Element Render()
         {
             // Active stays true across the ~250ms settle window a Stationary lift publishes, so the pane holds its peek
             // until the chip has finished animating home rather than snapping shut under it.
-            if (!UseDragState().Active) owner.SetDragPeek(false);
+            bool active = UseDragState().Active;
+            // A LAYOUT EFFECT, not the render body: every one of these writes a signal (the peek, the cue, the plan the
+            // flush publishes), and a signal written during render is the one thing the reactive core will not tolerate.
+            // The dep is the ACTIVE EDGE, so the effect — and therefore the flush — runs exactly once per session end.
+            UseLayoutEffect(() =>
+            {
+                if (active) return;
+                owner.SetDragPeek(false);
+                owner.ClearDropSlot();
+                owner.FlushDeferredStage();
+            }, active ? 1 : 0);
+            // A session that never ends within the pane's lifetime (the shell swaps designs mid-drag) would otherwise
+            // leave a stage parked in a bay nobody will ever flush.
+            UseEffect(() => (Action?)(() => owner.DiscardDeferredStage()), DepKey.Empty);
             return new BoxEl { Width = 0f, Height = 0f, HitTestVisible = false };
         }
-    }
-
-    RootlistDropPlacement RootlistPlacementFor(int planIndex, bool folder, bool allowInsidePlaylist, Point2 pointer)
-    {
-        if (planIndex < 0) return folder ? RootlistDropPlacement.Inside : RootlistDropPlacement.Before;
-        var viewport = _listController.Viewport;
-        var scene = Context.Scene;
-        if (scene is null || viewport.IsNull || !scene.IsLive(viewport))
-            return folder ? RootlistDropPlacement.Inside : RootlistDropPlacement.Before;
-        var rect = scene.AbsoluteRect(viewport);
-        float contentY = pointer.Y - rect.Y + _listController.ScrollOffset;
-        float top = SidebarRowGeometry.ContentYOf(planIndex, Plan.Rows.Count, RowExtentOf);
-        float extent = MathF.Max(1f, RowExtentOf(planIndex));
-        float t = Math.Clamp((contentY - top) / extent, 0f, 1f);
-        if (!folder && !allowInsidePlaylist)
-            return t < 0.5f ? RootlistDropPlacement.Before : RootlistDropPlacement.After;
-        if (t < 0.25f) return RootlistDropPlacement.Before;
-        if (t > 0.75f) return RootlistDropPlacement.After;
-        return RootlistDropPlacement.Inside;
     }
 
     // ── commands + navigation the rows raise ──────────────────────────────────────────────────────────────────────────
@@ -1943,24 +2438,23 @@ sealed class SidebarPane : Component
     /// anywhere. The destination is the PlaylistTree section's existing "Create playlist" row: it is ALWAYS present and
     /// already labelled, so unlike a drag-only row materialising in the list it costs no reflow mid-gesture and no new
     /// chrome. On a collapsed pane the drag peek opens the pane within 250ms, which is what puts this row in reach.</para>
-    /// <para>Create-then-add is two awaited calls (Spotify exposes no atomic "create with items"), so a failed add can
+    /// <para>Create-then-add is still two operations (Spotify exposes no atomic "create with items"), so a failed add can
     /// leave an empty playlist behind — pre-existing, and surfaced through <c>PlaylistEditErrors</c> rather than hidden.
+    /// The create half is no longer awaited: it is the synchronous seam, so the deposit starts in the same gesture.
     /// The confirmation spends its action on OPEN, not Undo: a brand-new playlist needs a name, and inline rename lives on
     /// its page.</para></summary>
     internal void CreatePlaylistFromDrag(object? payload)
     {
-        if (Acts is not { } acts || acts.Library is not { } lib) return;
+        if (Acts is not { } acts || acts.Library is null) return;
         if (WaveeResourceDrag.Unwrap(payload) is not { CanCopyTracks: true }) return;
-        string name = Menus.NextPlaylistName(acts);
+        // The ONE create path: numbered name, optimistic row in the store before this returns, CreateFailed observed.
+        if (PlaylistCreateFlow.Create(acts, default, navigate: false, out string name) is not { } created) return;
+        string uri = created.Uri;
         var post = acts.Post;
         _ = Run();
 
         async Task Run()
         {
-            string uri;
-            try { uri = await lib.CreatePlaylistAsync(name).ConfigureAwait(false); }
-            catch (Exception ex) { Post(post, () => PlaylistEditErrors.Toast(ex)); return; }
-
             // Silent deposit: this caller owns the confirmation, and two toasts for one gesture reads as a bug.
             bool ok = await WaveeResourceDrop.DepositTracksSilentAsync(acts, uri, payload, insertionIndex: null)
                                              .ConfigureAwait(false);

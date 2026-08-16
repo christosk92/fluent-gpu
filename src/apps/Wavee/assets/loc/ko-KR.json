@@ -4,7 +4,6 @@
 
   "detail": {
     "play": "재생",
-    "pause": "일시 정지",
     "likedSongs": "좋아요 표시한 곡",
     "filter": {
       "find": "찾기",
@@ -23,8 +22,6 @@
     "greeting": "{name}님, {part}",
     "onRotation": "최근 자주 들은 음악이에요.",
     "madeForYou": "나를 위한 추천",
-    "recentlyPlayed": "최근 재생한 항목",
-    "quickPicks": "빠른 선택",
     "topArtists": "내 인기 아티스트",
     "dailyMix": "DAILY MIX",
     "video": "동영상",
@@ -45,7 +42,6 @@
     "topTracks": "인기 트랙",
     "showAll": "모두 보기",
     "showAllCount": "{count}개 모두 보기",
-    "showMore": "{count}개 더 보기",
     "seen": "확인함",
     "newBadge": "신규",
     "resume": "이어 듣기",
@@ -64,25 +60,17 @@
     "topArtistsSub": "최근 4주 · {count}명 집계 · 선택하세요",
     "relatedCount": "{count} · 팬들이 좋아하는 아티스트",
     "mostOpenedOf": "가장 많이 열어본 {total}개 중 {shown}개",
-    "monthlyRank": "월간 청취자 {listeners}명 · 세계 #{rank}",
-    "fansAlsoLike": "{total}명 중 {shown}명 · 팬들이 좋아하는 아티스트",
     "songsBy": "{count} · {owner}",
-    "caughtUp": "모두 확인했어요 — 지금 홈에 있는 건 이게 전부예요.",
     "yourPlaylists": "내 플레이리스트",
     "yourAlbums": "내 앨범",
     "yourArtists": "내 아티스트",
     "madeFor": "{name}님을 위해 만들었어요",
     "you": "회원님",
     "newReleases": "새 앨범 및 싱글",
-    "popularArtists": "인기 아티스트",
     "artist": "아티스트",
-    "featuredAlbum": "추천 앨범",
     "play": "재생",
     "pause": "일시 정지",
-    "single": "싱글",
-    "ep": "EP",
-    "album": "앨범",
-    "compilation": "컴필레이션"
+    "album": "앨범"
   },
 
   "recents": {
@@ -113,10 +101,23 @@
     "title": "설정",
     "sidebar": {
       "title": "사이드바",
+      "subtitle": "왼쪽 탐색 영역",
       "design": "사이드바 디자인",
+      "designShort": "디자인",
       "designSub": "왼쪽 탐색 방식을 선택합니다. 즉시 적용됩니다.",
       "customize": "사이드바 사용자 지정",
       "customizeSub": "Custom의 섹션을 추가, 재정렬 및 구성합니다"
+    },
+    "layout": {
+      "title": "레이아웃 및 밀도",
+      "subtitle": "트랙 목록과 세부 정보 페이지의 배치 방식"
+    },
+    "lyrics": {
+      "title": "가사",
+      "subtitle": "동기화된 가사를 읽는 화면"
+    },
+    "links": {
+      "subtitle": "다른 앱에서 Wavee가 여는 항목"
     },
     "tabs": {
       "general": "일반",
@@ -127,6 +128,7 @@
     },
     "language": {
       "title": "언어 및 지역",
+      "subtitle": "Wavee 자체 인터페이스에 사용하는 언어",
       "label": "앱 언어",
       "restartSub": "변경 사항은 Wavee를 다시 시작할 때 적용됩니다.",
       "system": "시스템 기본값",
@@ -136,7 +138,11 @@
     },
     "appearance": {
       "title": "모양",
-      "subtitle": "테마, 색상 팔레트 및 목록 밀도",
+      "subtitle": "테마, 색상 팔레트 및 셸 효과",
+      "effectsTitle": "시각 효과",
+      "effectsSub": "흐르는 텍스트와 앨범 아트 색상 워시",
+      "effectsAllOn": "모두 켜짐",
+      "effectsDisabled": "{count}개 꺼짐",
       "theme": "테마",
       "themeSub": "시스템은 Windows 설정을 자동으로 따릅니다",
       "palette": "팔레트",
@@ -243,21 +249,13 @@
   "sidebar": {
     "pinned": "고정됨",
     "yourLibrary": "내 라이브러리",
-    "albums": "앨범",
-    "artists": "아티스트",
-    "likedSongs": "좋아요 표시한 곡",
-    "podcasts": "팟캐스트",
     "playlists": "플레이리스트",
-    "localFiles": "로컬 파일",
-    "soon": "곧 공개",
     "dropToPin": "고정하려면 여기에 놓으세요",
     "songCount": "{count, plural, other {#곡}}",
     "createPlaylistTooltip": "플레이리스트 만들기",
     "newPlaylist": "내 플레이리스트",
-    "undo": "실행 취소",
     "pinnedToast": "“{name}”을(를) 고정했습니다",
     "unpinnedToast": "“{name}”의 고정을 해제했습니다",
-    "pinsEmpty": "플레이리스트, 앨범, 아티스트 또는 팟캐스트를 마우스 오른쪽 버튼으로 클릭하면 여기에 고정할 수 있습니다.",
     "design": {
       "classic": "Spotify Classic",
       "classicSub": "내 라이브러리 바로가기와 단순한 플레이리스트 목록 — 지금의 Wavee 사이드바입니다.",
@@ -276,11 +274,7 @@
       "later": "나중에"
     },
     "menu": {
-      "layout": "사이드바 레이아웃",
       "customize": "사이드바 사용자 지정…",
-      "customizeSwitchHint": "Custom으로 전환됩니다",
-      "collapse": "사이드바 접기",
-      "expand": "사이드바 펼치기",
       "resetWidth": "너비 초기화"
     },
     "layout": {
@@ -288,20 +282,12 @@
       "menuTitle": "사이드바 레이아웃",
       "tooltip": "사이드바 레이아웃 변경",
       "classic": "Spotify Classic",
-      "classicDesc": "내 라이브러리 바로가기와 단순한 플레이리스트 목록 — 지금의 Wavee 사이드바입니다.",
       "library": "라이브러리",
       "libraryV3": "LibraryV3",
-      "libraryV3Desc": "필터, 정렬, 그리드 보기를 갖춘 하나의 통합 라이브러리 목록입니다.",
       "curated": "Custom",
-      "curatedDesc": "원하는 섹션으로 나만의 사이드바를 구성합니다.",
-      "customize": "사이드바 사용자 지정…",
-      "chooserTitle": "사이드바 선택",
-      "chooserSubtitle": "나에게 맞는 왼쪽 탐색 방식을 선택하세요. 설정 → 일반에서 언제든지 변경할 수 있습니다.",
-      "chooserConfirm": "이 레이아웃 사용"
+      "customize": "사이드바 사용자 지정…"
     },
     "layoutFault": {
-      "title": "저장된 사이드바 레이아웃을 읽을 수 없습니다",
-      "body": "읽을 수 없는 파일은 그대로 보관하고 대신 Wavee Curated를 불러왔습니다. 다음 변경 시 파일이 교체됩니다.",
       "discard": "새로 시작"
     },
     "pin": {
@@ -311,8 +297,7 @@
       "unpinned": "고정됨에서 제거했습니다",
       "undo": "실행 취소",
       "emptyHint": "또는 라이브러리 항목의 고정 동작을 사용하세요.",
-      "position": "{count}개 중 {index}번째",
-      "reorderHint": "스페이스바를 눌러 순서 변경"
+      "position": "{count}개 중 {index}번째"
     },
     "section": {
       "pinned": "고정됨",
@@ -355,7 +340,6 @@
     "palette": {
       "destinations": "페이지",
       "dynamic": "동적",
-      "spotlight": "스포트라이트",
       "navigation": "탐색",
       "library": "라이브러리",
       "playback": "재생",
@@ -384,7 +368,6 @@
       "emptyHide": "빈 콘텐츠 숨기기",
       "emptyCompact": "간단한 안내 표시",
       "emptyAction": "작업 카드 표시",
-      "include": "포함",
       "sort": "정렬",
       "sortRecents": "최근 항목",
       "sortRecentlyAdded": "최근 추가됨",
@@ -613,8 +596,6 @@
         "folder": "폴더"
       },
       "itemCount": "{count, plural, other {항목 #개}}",
-      "pinnedBadge": "고정됨",
-      "reorderOnlyCustom": "플레이리스트 순서를 변경하려면 사용자 지정 순서로 전환하세요.",
       "empty": {
         "library": "내 라이브러리가 아직 비어 있어요",
         "librarySub": "앨범을 저장하거나 아티스트를 팔로우하거나 플레이리스트를 만들면 여기에 표시됩니다.",
@@ -624,7 +605,6 @@
       }
     },
     "a11y": {
-      "current": "현재 페이지",
       "filterGroup": "내 라이브러리 필터",
       "sortView": "정렬 및 보기 옵션"
     }
@@ -635,7 +615,6 @@
     "more": "더 보기",
     "retry": "다시 시도",
     "dismiss": "닫기",
-    "undo": "실행 취소",
     "offline": "오프라인 상태입니다. 저장된 콘텐츠를 표시합니다.",
     "emptyTitle": "아직 아무것도 없어요",
     "emptySubtitle": "사용 가능한 항목이 생기면 여기에 표시됩니다.",

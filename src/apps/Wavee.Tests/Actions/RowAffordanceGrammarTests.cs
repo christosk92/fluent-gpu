@@ -75,6 +75,36 @@ public class RowAffordanceGrammarTests
         Assert.Contains("BlocksDragArm = true", body, StringComparison.Ordinal);
     }
 
+    // ── Rule 3: a row only offers affordances its KIND can honour ───────────────────────────────
+
+    /// <summary>The expand chevron opens the VERSIONS drawer (alternate versions + per-item audio format), and that
+    /// content is track-only by decision. An EPISODE is a playable that rides the same row (<c>EpisodeAsTrack</c>,
+    /// design §1.5), so an ungated chevron promised it a drawer that can only ever be empty — the lane is absent for
+    /// it instead. Gated at the CELL, not in <c>SetFor</c>: the column set is per-TIER (both arms stay symmetric), the
+    /// chevron is per-ROW.</summary>
+    [Fact]
+    public void TheExpandChevron_IsATrackAffordance()
+    {
+        string rowGrid = Body(DetailTracks(), "Element RowGrid(");
+        Assert.Contains("EntityUri.KindOf(t.Uri) == EntityKind.Track", rowGrid, StringComparison.Ordinal);
+    }
+
+    /// <summary>The episode row's own grammar in the shared cell: the show in the subtitle (routed by the ref's KIND,
+    /// so it opens the podcast page) and exactly ONE type token, in the lane the explicit badge owns.</summary>
+    [Fact]
+    public void AnEpisodeRow_StatesItsShowAndItsKind()
+    {
+        string meta = Body(TrackRow(), "static Element MetadataLine(");
+        Assert.Contains("EntityUri.KindOf(t.Uri) == EntityKind.Episode", meta, StringComparison.Ordinal);
+        Assert.Contains("(showAlbum || episode)", meta, StringComparison.Ordinal);          // the show is never dropped
+        Assert.Contains("RichText.RouteForUri(album.Uri)", meta, StringComparison.Ordinal); // …and routes by kind
+        Assert.Equal(1, Count(meta, "Strings.Detail.Badge.Episode"));                       // ONE token, not a lane
+
+        // The Album LANE reads the same one route table, so the cell can never disagree with the subtitle.
+        string album = Body(TrackRow(), "internal static Element AlbumLink(");
+        Assert.Contains("RichText.RouteForUri(album.Uri)", album, StringComparison.Ordinal);
+    }
+
     // ── source-scan machinery (the MenuGrammarTests shape) ───────────────────────────────────────────────────────────
 
     static string TrackRow() => File.ReadAllText(Path.Combine(AppRoot(), "Components", "TrackRow.cs"));

@@ -52,7 +52,10 @@ public static class LocalPlayables
             catch { durationMs = 0; }
         }
         return new Track(
-            Id: IdOf(uri),
+            // Row identity comparisons (TrackRow.Invoke's "is this already playing?") compare ids, so the id must be 1:1
+            // with the uri — the encoded payload EntityUri.IdOf returns is exactly that, and it never collides with a
+            // Spotify base-62 id.
+            Id: EntityUri.IdOf(uri),
             Uri: uri,
             Title: TitleOf(pathOrUrl),
             Artists: Array.Empty<ArtistRef>(),
@@ -87,15 +90,6 @@ public static class LocalPlayables
             return name is { Length: > 0 } ? name : pathOrUrl;
         }
         catch { return pathOrUrl; }
-    }
-
-    /// <summary>The Track id. Row identity comparisons (<c>TrackRow.Invoke</c>'s "is this already playing?") compare
-    /// ids, so it must be 1:1 with the uri — the encoded payload is exactly that, and it never collides with a Spotify
-    /// base-62 id.</summary>
-    static string IdOf(string uri)
-    {
-        int last = uri.LastIndexOf(':');
-        return last >= 0 && last + 1 < uri.Length ? uri[(last + 1)..] : uri;
     }
 
     // ── drop classification ──────────────────────────────────────────────────────────────────────────────────────────

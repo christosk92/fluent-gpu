@@ -43,7 +43,7 @@ sealed class WaveeSidebar : Component
     readonly Signal<float> _expandedWidth;
 
     SidebarPreferences? _prefs;
-    LibraryBridge? _lib;
+    ActionServices? _acts;
 
     // The document cache. `Document` is invoked on EVERY pane render, and a freshly-minted document per call defeats
     // SidebarPane.PublishStage's wholesale `!ReferenceEquals(stage.Document, Doc)` test — so every publish re-skinned the
@@ -61,7 +61,7 @@ sealed class WaveeSidebar : Component
     {
         // Refreshed each render; the frozen config's delegates read these fields, so they always see the live services.
         _prefs = UseContext(SidebarPreferences.Slot);
-        _lib = UseContext(LibraryBridge.Slot);
+        _acts = UseContext(ActionServices.Slot);
 
         var config = UseMemo(() => new SidebarPaneConfig
         {
@@ -129,25 +129,14 @@ sealed class WaveeSidebar : Component
         _prefs?.SetClassicSection(section, !collapsed);
     }
 
-    /// <summary>Create-affordance handler — POST a real empty playlist, then navigate to it.</summary>
+    /// <summary>Create-affordance handler — the ONE create path (<see cref="PlaylistCreateFlow"/>): the numbered
+    /// "{base} #N" name, the optimistic row already in the store, immediate navigation to a real 0-track owner page, and
+    /// the CreateFailed toast/notice observed off-thread. It used to create an unnumbered "New playlist" here and awaited
+    /// the round trip before navigating, so three of them in a sidebar were indistinguishable and each one felt like a
+    /// network operation.</summary>
     void CreatePlaylist()
     {
-        if (_lib is not { } lib) return;
-        _ = Run();
-        async System.Threading.Tasks.Task Run()
-        {
-            try
-            {
-                string uri = await lib.CreatePlaylistAsync(Loc.Get(Strings.Sidebar.NewPlaylist)).ConfigureAwait(false);
-                _go("pl:" + uri, null);
-            }
-            catch (Exception ex)
-            {
-                WaveeLog.Instance.Error("sidebar", "sidebar.action.failed", "Could not create playlist", ex,
-                    WaveeLogField.Of("action", "createPlaylist"),
-                    WaveeLogField.Of("design", "classic"));
-                Toast.Show(Loc.Get(Strings.Common.ErrorTitle), new ToastOptions { Severity = InfoBarSeverity.Error });
-            }
-        }
+        if (_acts is not { } acts) return;
+        PlaylistCreateFlow.Create(acts, default, navigate: true);
     }
 }

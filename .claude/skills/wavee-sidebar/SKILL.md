@@ -88,7 +88,14 @@ section/scroll state), cross-faded on `MotionTok.ControlFast`. It is mounted twi
    extension refs must round-trip untouched (`SidebarWireCarry`). Preserve, don't destroy.
 9. **A missing entity or unresolvable binding renders visible-but-disabled with a reason.** Never auto-remove a
    user's row; only an explicit `RemoveItem` deletes.
-10. **The engine is off-limits from sidebar work.** No `src/FluentGpu.*` edits — if the sidebar needs an engine
+10. **Rootlist drag & drop goes through ONE resolver and ONE commit.** `RootlistSlotResolver.Resolve` decides
+    *(kind, depth, refusal)*; `SidebarPane._dropSlot` publishes it once per hover; the row draws a **line**
+    (Before/After/EndOfList, indented to the resolved depth) **or** a **plate** (Into) — never both; every drop
+    *consumes* the published slot instead of recomputing one; and every move — drop, rail drop, menu verb,
+    Alt+↑/↓, the "Move to folder…" picker — funnels into `WaveeResourceDrop.MoveRootlist`. Never add a second
+    placement computation or a second mutation path. Full contract:
+    [architecture.md § Rootlist drag & drop](architecture.md#rootlist-drag--drop--one-resolver-one-published-slot-one-commit).
+11. **The engine is off-limits from sidebar work.** No `src/FluentGpu.*` edits — if the sidebar needs an engine
     change, hand it off. (Sidebar-only changes therefore owe **no** VerticalSlice gate run.)
 
 ## Verify
@@ -99,7 +106,9 @@ You do **not** run builds or tests — Christos does. Report a verify checklist 
 ## Deeper docs
 
 - [architecture.md](architecture.md) — the full pipeline with real type names; `SidebarPaneConfig` member by
-  member; the extension-ready layer (registries, contracts, the wire, budgets, forward-compat guardrails).
+  member; **the rootlist drag & drop contract** (resolver, cue vocabulary, slot → mutation, the mid-drag freeze,
+  the non-mouse verbs, the deferred engine path); the extension-ready layer (registries, contracts, the wire,
+  budgets, forward-compat guardrails).
 - [where-to-change-what.md](where-to-change-what.md) — task → files map, with the test file and the change's
   blast radius for each.
 - [pitfalls.md](pitfalls.md) — the traps that actually cost this build time (loc generator quirks, struct-default

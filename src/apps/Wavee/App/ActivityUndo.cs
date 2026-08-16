@@ -88,7 +88,7 @@ public sealed class ActivityUndoExecutor
         if (removed is null || removed.Count == 0) return false;
         var tracks = new List<Track>(removed.Count);
         foreach (var r in removed)
-            tracks.Add(new Track(BareId(r.Uri), r.Uri, r.Name ?? "",
+            tracks.Add(new Track(EntityUri.IdOf(r.Uri), r.Uri, r.Name ?? "",
                 Array.Empty<ArtistRef>(), new AlbumRef("", "", ""), 0, false, null));
         await _lib.AddTracksAsync(e.TargetUri, tracks).ConfigureAwait(false);
         return true;
@@ -113,13 +113,32 @@ public sealed class ActivityUndoExecutor
             if (r.ItemId is { Length: > 0 } id && byItemId.TryGetValue(id, out var row)) rows.Add(row);
             else return false;   // ItemId missing → fail
         }
-        await _lib.MovePlaylistRowsAsync(e.TargetUri, rows, from).ConfigureAwait(false);
+        await _lib.MovePlaylistRowsAsync(e.TargetUri, rows, UndoMoveTarget(list, rows, from)).ConfigureAwait(false);
         return true;
     }
 
-    static string BareId(string uri)
+    /// <summary>The pre-move insertion index that puts the block back where it started.
+    /// <para>Replaying the recorded <c>FromIndex</c> raw was only right for a move DOWN. The convention is "insert
+    /// before the row currently at this index" in the list AS IT IS NOW — and in that list the block sits somewhere
+    /// else, so the index that once named its home now names whatever slid into it. Undoing "move the last song to the
+    /// top" replayed as "put it back one from the end".</para>
+    /// <para>What actually survives a move is the RELATIVE order of the rows that did not move: the block belongs
+    /// immediately after the <paramref name="from"/>-th of them (and at the very front when <paramref name="from"/> is
+    /// 0). That is the same row the backend derives its keyed anchor from, so this hands it the index it will resolve
+    /// to that row — walking back over the moved rows themselves, exactly as it does. Fewer unmoved rows than expected
+    /// (the playlist was edited elsewhere meanwhile) → the end, the closest surviving reading of "after all of them".</para></summary>
+    internal static int UndoMoveTarget(IReadOnlyList<Track> current, IReadOnlyList<PlaylistRowRef> rows, int from)
     {
-        int i = uri.LastIndexOf(':');
-        return i >= 0 && i < uri.Length - 1 ? uri[(i + 1)..] : uri;
+        if (from <= 0) return 0;
+        var movedIds = new HashSet<string>(StringComparer.Ordinal);
+        for (int i = 0; i < rows.Count; i++) movedIds.Add(rows[i].ItemId);
+        int unmoved = 0;
+        for (int i = 0; i < current.Count; i++)
+        {
+            if (current[i].ContextUid is { Length: > 0 } id && movedIds.Contains(id)) continue;
+            if (++unmoved == from) return i + 1;
+        }
+        return current.Count;
     }
+
 }

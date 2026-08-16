@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Wavee.Backend;
+using Wavee.Core;
 using Wavee.Protocol.Resumption;
 
 namespace Wavee.SpotifyLive;
@@ -259,8 +260,7 @@ public sealed class ResumePointProjection : IPlaybackProjection
         if (ex is not null) _log.Warn("herodotus flush error: " + ex.Message, ex);
     }
 
-    static bool IsEpisode(string? uri) =>
-        uri is not null && uri.StartsWith("spotify:episode:", StringComparison.Ordinal);
+    static bool IsEpisode(string? uri) => uri is not null && Wavee.Core.EntityUri.KindOf(uri) == EntityKind.Episode;
 
     public void Dispose() => _flushTimer?.Dispose();
 }

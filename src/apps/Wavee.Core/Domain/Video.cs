@@ -52,8 +52,8 @@ public sealed record VideoAssociation(
     /// <summary>Whether this record can still be served without going to the network.</summary>
     public bool IsFresh(System.DateTimeOffset now) => now - FetchedAt < (HasVideo ? PositiveWindow : NegativeWindow);
 
-    /// <summary>The conditional to send when revalidating. A NEGATIVE deliberately sends none: there is no payload for
-    /// a 304 to save, and the only thing a conditional can achieve is to have the server confirm the miss we are
-    /// trying to re-test — which is exactly how a wrong "no video" used to pin itself in place.</summary>
-    public string? RevalidationEtag => HasVideo ? Etag : null;
+    // RevalidationEtag (HasVideo ? Etag : null) is GONE with the video service that owned the conditional: the trait
+    // pipeline reaches the wire only through ExtensionEtagCache, which owns every etag decision for every kind in one
+    // place. Persisted blobs written with the old computed property still deserialize — System.Text.Json ignores
+    // members it has no target for, and it was never a constructor parameter.
 }

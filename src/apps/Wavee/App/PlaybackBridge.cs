@@ -1,4 +1,4 @@
-using FluentGpu;
+﻿using FluentGpu;
 using FluentGpu.Controls;
 using FluentGpu.Hooks;
 using FluentGpu.Localization;
@@ -139,6 +139,16 @@ public sealed class PlaybackBridge
     public Signal<bool> CanSkipPrev { get; } = new(true);
     public Signal<bool> CanSeek { get; } = new(true);
     public Signal<string?> ActiveDeviceId { get; } = new(null);
+    /// <summary>The bitrate of the stream ACTUALLY PLAYING (0 = unknown / not this device). See
+    /// <see cref="StreamFormat"/> for the truthfulness envelope both of these live inside.</summary>
+    public Signal<int> StreamBitrateKbps { get; } = new(0);
+    /// <summary>A display name for the format actually playing ("FLAC", "Vorbis 320 kbps"), or null.
+    /// <para><b>Envelope:</b> it is populated only for LOCAL playback through a provider that resolves wire metadata
+    /// (today: Spotify). Local files and any provider without <c>MediaProviderCaps.WireMeta</c> publish nothing, and
+    /// the projection clears both the moment playback ends or another Connect device becomes active. A surface reading
+    /// these must therefore treat null/0 as "say nothing" rather than as a value to fall back from — the absence IS
+    /// the honest answer, and it is why this is safe to show at all.</para></summary>
+    public Signal<string?> StreamFormat { get; } = new(null);
     public Signal<bool> IsShuffle { get; } = new(false);
     public Signal<RepeatMode> Repeat { get; } = new(RepeatMode.Off);
     public FloatSignal PositionFrac { get; } = new(0f);
@@ -388,7 +398,7 @@ public sealed class PlaybackBridge
     public Signal<Wavee.SpotifyLive.PopOutVideoSource?> PopOutVideoSource { get; } = new(null);
 
     /// <summary>The video-resolution delegate (track uri → a playable <c>PopOutVideoSource</c>), wired by the live
-    /// bootstrap to <c>SpotifyVideoService.ResolvePlayableAsync</c>; null on the fake/offline backend. Off the UI thread.</summary>
+    /// bootstrap to <c>SpotifyVideoManifestResolver.ResolvePlayableAsync</c>; null on the fake/offline backend. Off the UI thread.</summary>
     public System.Func<string, System.Threading.CancellationToken, System.Threading.Tasks.Task<Wavee.SpotifyLive.PopOutVideoSource?>>? ResolveVideoSource;
 
     // ── M0: the ONE player, owned by the backend host and PRESENTED by the surfaces ─────────────────────────────────
@@ -538,7 +548,7 @@ public sealed class PlaybackBridge
     public Signal<bool> OutputMuted { get; } = new(false);
 
     /// <summary>Attach the local-output picker service (live bootstrap only; null on fake backends).</summary>
-    public void AttachLocalOutputs(LocalAudioDeviceService service) => LocalOutputs = service;
+    public void AttachLocalOutputs(LocalAudioDeviceService? service) => LocalOutputs = service;
 
     /// <summary>A device-topology notice (loss / fallback / auto-return / output-failed) → a caution toast whose action
     /// opens the device picker. Marshalled to the UI thread; no-op before <see cref="Activate"/>.</summary>
@@ -1029,6 +1039,8 @@ public sealed class PlaybackBridge
         CanSkipPrev.Value = s.CanSkipPrev;
         CanSeek.Value = s.CanSeek && s.RecoveryKind == PlaybackRecoveryKind.None;
         ActiveDeviceId.Value = s.ActiveDeviceId;
+        StreamBitrateKbps.Value = s.StreamBitrateKbps;
+        StreamFormat.Value = s.StreamFormat;
         PushPosition(s.PositionMs);
         _smtc?.OnStateChanged();   // metadata / play-status / prev-next availability → OS media surface
         _taskbar?.OnStateChanged();
@@ -1066,20 +1078,24 @@ public sealed class PlaybackBridge
         _queueContentFold = fold;
         QueueRevision.Value = ++_queueRev;
         // The queue is the one surface whose rows come from the player, not from a container read, so nothing else ever
-        // detects them. Firing off the content-CHANGED branch (PushState calls this on every push) is the dedupe.
-        if (DetectVideos is { } detect && queue.Count > 0)
+        // asks for its traits. Firing off the content-CHANGED branch (PushState calls this on every push) is the
+        // dedupe; the façade's own ledger + marks make the repeat asks free.
+        if (queue.Count > 0)
         {
             var uris = new List<string>(queue.Count);
             for (int i = 0; i < queue.Count; i++)
                 if (queue[i].Track?.Uri is { Length: > 0 } u) uris.Add(u);
-            if (uris.Count > 0) { try { _ = detect(uris); } catch { } }
+            if (uris.Count > 0) { try { _ = _hydrator.EnsureTraitsAsync(uris, TraitSurface.Queue); } catch { } }
         }
         return true;
     }
 
-    /// <summary>Set at go-live: batch music-video detection for the queue's tracks, fired when the queue's CONTENT fold
-    /// changes. Fire-and-forget (it runs on the UI push path); null on the fake backend → no detection.</summary>
-    public Func<IReadOnlyList<string>, Task>? DetectVideos;
+    /// <summary>THE hydration façade — never null (the fake backend gets <see cref="CompleteEntityHydrator"/>, the real
+    /// one its switchable). Attached by the composition root because the bridge is built in the Services ctor, before
+    /// the store and the hydrator exist — the same reason <c>AttachMutations</c>/<c>AttachStore</c> exist.</summary>
+    IEntityHydrator _hydrator = NotOwnedEntityHydrator.Instance;
+
+    public void AttachHydrator(IEntityHydrator hydrator) => _hydrator = hydrator ?? NotOwnedEntityHydrator.Instance;
 
     // ── playback session snapshot: reader wiring + the debounced writer (playback-restore fix §8) ───────────────────────
 

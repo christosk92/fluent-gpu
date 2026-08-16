@@ -494,6 +494,18 @@ topmost visible item's `ItemKey`**:
 > scroll intents move with it rather than fighting the correction; see `docs/plans/scroll-feel-rework-v2-design.md`
 > §2.5 (anchor re-pin as a coordinate shift the integrator consumes).
 
+> **Count changes RESIZE, never re-seed (owned here).** An item-count change must not discard the extents the table
+> already corrected. Re-seeding every item to one estimate moves the content extent by the whole
+> (measured − estimate) sum in a single frame, so the anchor above re-pins against a stale offset and every row on
+> both sides of the edit visibly shuffles as it re-measures — the more so the more the list MIXES extents. The table
+> therefore exposes `Resize(n, estimate)` (survivors keep their extents; only the appended tail seeds) and, for a
+> host that knows the shape of the change, `Splice(at, removed, inserted, estimate)` (the tail below the edit
+> survives at its shifted indices too). A disclosure/expander — which knows exactly the band it inserts or removes —
+> hands that band over through `ISplicingVirtualLayout.Splice` BEFORE layout observes the new count, which is also
+> what makes the disclosure's own travel distance real geometry rather than an estimate. A layout whose extents are a
+> pure function of the host's model can skip the guess entirely and supply an ANALYTIC per-index seed
+> (`RepeatLayout.Extents`); measurement still corrects whatever the function cannot predict exactly.
+
 ### 6.3 The decode→measure feedback-loop break (owned here, the critical anti-loop)
 
 `UseImage` returns a `NaturalSize` (media-pipeline §6) **only for app-level aspect math** — the dev MUST bind

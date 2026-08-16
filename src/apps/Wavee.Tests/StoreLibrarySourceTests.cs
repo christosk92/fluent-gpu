@@ -1,8 +1,9 @@
-using System.Linq;
+﻿using System.Linq;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Wavee.Backend;
+using Wavee.Backend.Hydration;
 using Wavee.Backend.Library;
 using Wavee.Backend.Playlists;
 using Wavee.Core;
@@ -15,6 +16,12 @@ public class StoreLibrarySourceTests
 {
     static Track Trk(string id) => new(id, "spotify:track:" + id, "T" + id, [], new AlbumRef("", "", ""), 1000, false, null);
 
+    // Every read on this source now goes through THE hydration facade (design 3): it ensures a rung, then reads the
+    // store. A unit test's backend is genuinely offline, so the default inner is the real OfflineEntityHydrator --
+    // store-only, never networks, never throws. A test that cares about WHAT was asked for passes a RecordingHydrator.
+    static SwitchableEntityHydrator Offline(IStore store) => new(new Wavee.Backend.Hydration.OfflineEntityHydrator(store));
+    static SwitchableEntityHydrator Recording(RecordingHydrator rec) => new(rec);
+
     [Fact]
     public async Task GetAlbums_JoinsSavedSetWithStore_SkippingUnhydrated()
     {
@@ -22,7 +29,7 @@ public class StoreLibrarySourceTests
         store.UpsertAlbum(new Album("a1", "spotify:album:a1", "Album1", null, [], 2020, 1));
         store.SetSaved("albums", "spotify:album:a1", true, SyncState.Confirmed);
         store.SetSaved("albums", "spotify:album:missing", true, SyncState.Confirmed);   // not hydrated → skipped
-        var src = new StoreLibrarySource(store);
+        var src = new StoreLibrarySource(store, Offline(store), OfflineOnlineCatalog.Instance);
         Assert.Equal("Album1", Assert.Single(await src.GetAlbumsAsync()).Name);
     }
 
@@ -32,40 +39,43 @@ public class StoreLibrarySourceTests
         var store = new InMemoryStore();
         store.UpsertTrack(Trk("t1"));
         store.SetSaved("liked", "spotify:track:t1", true, SyncState.Confirmed);
-        var src = new StoreLibrarySource(store);
+        var src = new StoreLibrarySource(store, Offline(store), OfflineOnlineCatalog.Instance);
         Assert.Equal("Tt1", Assert.Single(await src.GetLikedSongsAsync()).Title);
     }
 
-    // Liked Songs never routes through OnDemandFetch (EnsureFetchedAsync gates playlist/album/artist only), so the read
-    // itself is the only place music-video detection can hang off — pin that the hook fires with the joined uris.
+    // Replaces GetLikedSongs_FiresTheVideoDetectHook_WithTheJoinedUris + _EmptyCollection_DoesNotFireTheDetectHook.
+    // Liked is a COLLECTION, so the ask is addressed by its uri, not derived from whatever the join happened to
+    // resolve: one background Open on spotify:collection:tracks replaces the two fire-and-forget hooks (paged member
+    // hydrate + video/adornment detect) this read used to fan out. CollectionHydration pages the members and asks for
+    // the LikedSongs trait bundle itself (design 2.3).
     [Fact]
-    public async Task GetLikedSongs_FiresTheVideoDetectHook_WithTheJoinedUris()
+    public async Task GetLikedSongs_AsksTheFacadeForTheCollectionRung_InTheBackground()
     {
         var store = new InMemoryStore();
         store.UpsertTrack(Trk("t1"));
-        store.UpsertTrack(Trk("t2"));
         store.SetSaved("liked", "spotify:track:t1", true, SyncState.Confirmed);
-        store.SetSaved("liked", "spotify:track:t2", true, SyncState.Confirmed);
-        store.SetSaved("liked", "spotify:track:missing", true, SyncState.Confirmed);   // unhydrated → not detected
+        var rec = new RecordingHydrator(store);
+        var src = new StoreLibrarySource(store, Recording(rec), OfflineOnlineCatalog.Instance);
 
-        List<string>? detected = null;
-        var src = new StoreLibrarySource(store) { DetectVideos = u => { detected = new List<string>(u); return Task.CompletedTask; } };
-        await src.GetLikedSongsAsync();
+        Assert.Single(await src.GetLikedSongsAsync());
 
-        Assert.NotNull(detected);
-        Assert.Equal(2, detected!.Count);
-        Assert.Contains("spotify:track:t1", detected);
-        Assert.Contains("spotify:track:t2", detected);
+        var (uris, level, surface) = Assert.Single(rec.Batches);
+        Assert.Equal("spotify:collection:tracks", Assert.Single(uris));
+        Assert.Equal(HydrationLevel.Open, level);
+        Assert.Equal(TraitSurface.LikedSongs, surface);
+        Assert.Equal(HydrationMode.Background, Assert.Single(rec.Options).Mode);   // a read never blocks on its members
     }
 
+    // The regression this addresses-by-uri shape fixes: an EMPTY cache used to hydrate nothing, because the old hooks
+    // were fed the joined (i.e. already-resident) rows. The collection ask does not depend on the join at all.
     [Fact]
-    public async Task GetLikedSongs_EmptyCollection_DoesNotFireTheDetectHook()
+    public async Task GetLikedSongs_EmptyCollection_StillAsksForTheCollectionRung()
     {
         var store = new InMemoryStore();
-        bool fired = false;
-        var src = new StoreLibrarySource(store) { DetectVideos = _ => { fired = true; return Task.CompletedTask; } };
+        var rec = new RecordingHydrator(store);
+        var src = new StoreLibrarySource(store, Recording(rec), OfflineOnlineCatalog.Instance);
         Assert.Empty(await src.GetLikedSongsAsync());
-        Assert.False(fired);
+        Assert.Equal("spotify:collection:tracks", Assert.Single(Assert.Single(rec.Batches).Uris));
     }
 
     [Fact]
@@ -74,7 +84,7 @@ public class StoreLibrarySourceTests
         var store = new InMemoryStore();
         store.UpsertShow(new Show("s1", "spotify:show:s1", "Show1", "Pub", null));
         store.SetSaved("shows", "spotify:show:s1", true, SyncState.Confirmed);
-        var src = new StoreLibrarySource(store);
+        var src = new StoreLibrarySource(store, Offline(store), OfflineOnlineCatalog.Instance);
         Assert.Equal("Show1", Assert.Single(await src.GetShowsAsync()).Name);
     }
 
@@ -90,7 +100,7 @@ public class StoreLibrarySourceTests
             new PlaylistMember("i1", "spotify:track:t1", "alice", 1_700_000_000_000),
             new PlaylistMember("i2", "spotify:track:t2", null, 0),
         }, null);
-        var src = new StoreLibrarySource(store);
+        var src = new StoreLibrarySource(store, Offline(store), OfflineOnlineCatalog.Instance);
         var pl = await src.GetPlaylistAsync("spotify:playlist:p");
 
         Assert.NotNull(pl);
@@ -102,24 +112,61 @@ public class StoreLibrarySourceTests
         Assert.Equal(2, pl.TrackCount);
     }
 
+    // A KNOWN baseline (including a valid EMPTY one, a freshly-created playlist) must not read as "missing" and pull a
+    // blocking first fetch over the top of optimistic local edits. OpenPolicy is where that lives now: baseline =>
+    // background revalidate; no baseline => blocking Open.
     [Fact]
-    public async Task GetPlaylist_KnownEmptyBaseline_DoesNotRefetchAsMissing()
+    public async Task GetPlaylist_KnownEmptyBaseline_RevalidatesInTheBackground_NeverBlocking()
     {
         const string uri = "spotify:playlist:empty";
         var store = new InMemoryStore();
         store.UpsertPlaylist(new Playlist("empty", uri, "New playlist", null, "Me", null, 0));
         store.SetMembership(uri, Array.Empty<PlaylistMember>(), null);
-        int fetches = 0;
-        var src = new StoreLibrarySource(store)
-        {
-            OnDemandFetch = (_, _) => { fetches++; return Task.CompletedTask; },
-        };
+        var rec = new RecordingHydrator(store);
+        var src = new StoreLibrarySource(store, Recording(rec), OfflineOnlineCatalog.Instance);
 
         var playlist = await src.GetPlaylistAsync(uri);
 
         Assert.NotNull(playlist);
         Assert.Empty(playlist!.Tracks!);
-        Assert.Equal(0, fetches);
+        // Index the PLAYLIST ask: the same read also asks the User ladder for the header's owner (P4-C), which is a
+        // different ladder on a different uri and says nothing about the playlist's open plan.
+        int i = PlaylistAsk(rec, uri);
+        Assert.Equal(HydrationMode.Background, rec.Options[i].Mode);
+        Assert.True(rec.Options[i].Revalidate);
+        Assert.Equal(HydrationLevel.Open, rec.Batches[i].Level);
+    }
+
+    /// <summary>The index of the batch that asked for <paramref name="uri"/> — exactly one, and it is not the owner
+    /// ask that rides along with every playlist read.</summary>
+    static int PlaylistAsk(RecordingHydrator rec, string uri)
+    {
+        int found = -1;
+        for (int i = 0; i < rec.Batches.Count; i++)
+            if (rec.Batches[i].Uris.Count == 1 && rec.Batches[i].Uris[0] == uri)
+            {
+                Assert.Equal(-1, found);   // one ask per open, never two
+                found = i;
+            }
+        Assert.True(found >= 0, "the playlist itself was never asked for");
+        return found;
+    }
+
+    // …and the inverse: with NO membership baseline there is nothing to paint, so the open blocks on Open.
+    [Fact]
+    public async Task GetPlaylist_NoBaseline_BlocksOnOpen()
+    {
+        const string uri = "spotify:playlist:cold";
+        var store = new InMemoryStore();
+        store.UpsertPlaylist(new Playlist("cold", uri, "Cold", null, "Me", null, 0));
+        var rec = new RecordingHydrator(store);
+        var src = new StoreLibrarySource(store, Recording(rec), OfflineOnlineCatalog.Instance);
+
+        _ = await src.GetPlaylistAsync(uri);
+
+        int i = PlaylistAsk(rec, uri);
+        Assert.Equal(HydrationMode.Blocking, rec.Options[i].Mode);
+        Assert.Equal(HydrationLevel.Open, rec.Batches[i].Level);
     }
 
     [Fact]
@@ -129,17 +176,14 @@ public class StoreLibrarySourceTests
         var store = new InMemoryStore();
         store.UpsertPlaylist(new Playlist("warm", uri, "Warm mix", null, "Spotify", new Image("https://img/cover"), 0));
         store.SetMembership(uri, System.Array.Empty<PlaylistMember>(), null);
-        var src = new StoreLibrarySource(store)
-        {
-            OnDemandFetch = (_, _) => throw new Xunit.Sdk.XunitException("warm membership must not refetch"),
-        };
+        var src = new StoreLibrarySource(store, Offline(store), OfflineOnlineCatalog.Instance);
 
         using var read = new CancellationTokenSource();
         read.Cancel();
         // Even with an ALREADY-CANCELLED read token, a warm playlist is served from the store and never refetched.
         // (The old palette-hydration hook this test also covered is gone: cover colours are image-keyed in
         // CoverColorPlane and resolved by the art slot itself, so a playlist read no longer schedules colour work.)
-        Assert.NotNull(await src.GetPlaylistAsync(uri, read.Token));
+        Assert.NotNull(await src.GetPlaylistAsync(uri, ct: read.Token));
     }
 
     [Fact]
@@ -149,7 +193,7 @@ public class StoreLibrarySourceTests
         store.UpsertTrack(Trk("t1"));
         store.UpsertPlaylist(new Playlist("p", "spotify:playlist:p", "My Mix", null, "Me", null, 0));
         store.SetMembership("spotify:playlist:p", new[] { new PlaylistMember("rowuid-1", "spotify:track:t1", null, 0) }, null);
-        var src = new StoreLibrarySource(store);
+        var src = new StoreLibrarySource(store, Offline(store), OfflineOnlineCatalog.Instance);
         var pl = await src.GetPlaylistAsync("spotify:playlist:p");
 
         Assert.Equal("rowuid-1", pl!.Tracks![0].ContextUid);          // per-row uid stamped from PlaylistMember.ItemId
@@ -171,10 +215,9 @@ public class StoreLibrarySourceTests
             new PlaylistMember("i2", "spotify:track:t2", "friend_raw", 2),
             new PlaylistMember("i3", "spotify:track:t3", "friend_raw", 3),
         }, null);
-        var profiles = new FakeUserProfiles(
-            new Owner("owner_raw", "Owner Display", new Image("https://img/owner")),
-            new Owner("friend_raw", "Friend Display", new Image("https://img/friend")));
-        var src = new StoreLibrarySource(store) { UserProfiles = profiles };
+        store.UpsertOwner(new Owner("owner_raw", "Owner Display", new Image("https://img/owner")));
+        store.UpsertOwner(new Owner("friend_raw", "Friend Display", new Image("https://img/friend")));
+        var src = new StoreLibrarySource(store, Offline(store), OfflineOnlineCatalog.Instance);
 
         var pl = await src.GetPlaylistAsync("spotify:playlist:p");
 
@@ -186,8 +229,43 @@ public class StoreLibrarySourceTests
         Assert.Equal(new[] { "owner_raw", "friend_raw" }, pl.Collaborators.Select(o => o.Id).ToArray());
         Assert.Equal("owner_raw", pl.Tracks![0].AddedBy);
         Assert.Equal("friend_raw", pl.Tracks[1].AddedBy);
-        Assert.Contains("spotify:user:owner_raw", profiles.Prefetched);
-        Assert.Contains("spotify:user:friend_raw", profiles.Prefetched);
+    }
+
+    // The ASK half of the same contract: an owner with no resident row is requested through THE façade (the User
+    // ladder, Identity, background), and an owner that is already resident costs no request at all. This is what
+    // replaced IUserProfileService.Prefetch — one door, one ledger, no service-private in-flight map.
+    [Fact]
+    public async Task GetPlaylist_AsksTheFacadeForUnresolvedOwners_AndNotForResidentOnes()
+    {
+        const string uri = "spotify:playlist:owners";
+        var store = new InMemoryStore();
+        store.UpsertTrack(Trk("t1"));
+        store.UpsertTrack(Trk("t2"));
+        store.UpsertPlaylist(new Playlist("p", uri, "My Mix", null, "owner_raw", null, 0));
+        store.SetMembership(uri, new[]
+        {
+            new PlaylistMember("i1", "spotify:track:t1", "owner_raw", 1),
+            new PlaylistMember("i2", "spotify:track:t2", "friend_raw", 2),
+        }, null);
+        store.UpsertOwner(new Owner("friend_raw", "Friend Display", null));   // already resident → never asked for
+        var rec = new RecordingHydrator(store);
+        var src = new StoreLibrarySource(store, Recording(rec), OfflineOnlineCatalog.Instance);
+
+        _ = await src.GetPlaylistAsync(uri);
+
+        var userAsks = rec.Batches
+            .Where(b => b.Uris.Count > 0 && b.Uris[0].StartsWith("spotify:user:", System.StringComparison.Ordinal))
+            .ToList();
+        Assert.NotEmpty(userAsks);
+        Assert.All(userAsks, b => Assert.Equal(HydrationLevel.Identity, b.Level));
+        Assert.All(userAsks, b => Assert.Equal(TraitSurface.UserProfiles, b.Surface));
+        var askedUris = userAsks.SelectMany(b => b.Uris).ToHashSet();
+        Assert.Contains("spotify:user:owner_raw", askedUris);
+        Assert.DoesNotContain("spotify:user:friend_raw", askedUris);
+        // …and never blocking: a byline is not worth holding a page open for.
+        Assert.All(rec.Options.Where((_, i) => rec.Batches[i].Uris.Count > 0
+                                               && rec.Batches[i].Uris[0].StartsWith("spotify:user:", System.StringComparison.Ordinal)),
+                   o => Assert.Equal(HydrationMode.Background, o.Mode));
     }
 
     // The HeaderOf owner seed (Owner id+name = username, avatar null) renders the name immediately, and the resolved
@@ -201,7 +279,8 @@ public class StoreLibrarySourceTests
         store.UpsertPlaylist(new Playlist("p", uri, "My Mix", null, "owner_raw", null, 0,
             Owner: new Owner("owner_raw", "owner_raw", null)));   // exactly what HeaderOf now seeds
         store.SetMembership(uri, new[] { new PlaylistMember("i1", "spotify:track:t1", "owner_raw", 1) }, null);
-        var src = new StoreLibrarySource(store);
+        // The overlay is the STORE now: an Owner row landing (UserHydration's write) is what upgrades the byline.
+        var src = new StoreLibrarySource(store, Offline(store), OfflineOnlineCatalog.Instance);
 
         // before any profile resolves: the seed renders its name; avatar still null.
         var seeded = await src.GetPlaylistAsync(uri);
@@ -210,7 +289,7 @@ public class StoreLibrarySourceTests
         Assert.Null(seeded.Owner.Avatar);
 
         // once the profile resolves, the overlay WINS — the seed does not clobber the resolved display name + avatar.
-        src.UserProfiles = new FakeUserProfiles(new Owner("owner_raw", "Owner Display", new Image("https://img/owner")));
+        store.UpsertOwner(new Owner("owner_raw", "Owner Display", new Image("https://img/owner")));
         var resolved = await src.GetPlaylistAsync(uri);
         Assert.Equal("Owner Display", resolved!.Owner!.Name);
         Assert.Equal("https://img/owner", resolved.Owner.Avatar!.Url);
@@ -223,18 +302,21 @@ public class StoreLibrarySourceTests
         var store = new InMemoryStore();
         store.UpsertPlaylist(new Playlist("p1", "spotify:playlist:p1", "One", null, "owner_raw", null, 0));
         store.SetRootlist(new[] { new RootlistEntry(0, 0, "spotify:playlist:p1", null, 0) });
-        var src = new StoreLibrarySource(store)
-        {
-            UserProfiles = new FakeUserProfiles(new Owner("owner_raw", "Owner Display", null)),
-        };
+        store.UpsertOwner(new Owner("owner_raw", "Owner Display", null));
+        var src = new StoreLibrarySource(store, Offline(store), OfflineOnlineCatalog.Instance);
 
         var pls = await src.GetPlaylistsAsync();
 
         Assert.Equal("Owner Display", Assert.Single(pls).OwnerName);
     }
 
+    // A landed owner reaches the UI through the ORDINARY store change — and the read source writes NOTHING to make that
+    // happen. The deleted shape was: subscribe to IUserProfileService.Changed, look the user up in a user→playlists
+    // dependency map, and store.Bump() every playlist that referenced it — a read path writing to the store to fake a
+    // change notification for data the store did not hold. What is asserted now is both halves: the owner's own uri is
+    // the change, it invalidates the playlist collection, and NO playlist uri is bumped by this source.
     [Fact]
-    public async Task ProfileChangeInvalidatesOpenPlaylistAndPlaylistCollection()
+    public async Task ResolvedOwner_InvalidatesThePlaylistCollection_AndTheSourceBumpsNoPlaylist()
     {
         var store = new InMemoryStore();
         const string uri = "spotify:playlist:p";
@@ -242,61 +324,122 @@ public class StoreLibrarySourceTests
         store.UpsertPlaylist(new Playlist("p", uri, "My Mix", null, "owner_raw", null, 0));
         store.SetMembership(uri, new[] { new PlaylistMember("i1", "spotify:track:t1", "friend_raw", 1) }, null);
         store.SetRootlist(new[] { new RootlistEntry(0, 0, uri, null, 0) });
-        var profiles = new FakeUserProfiles(new Owner("owner_raw", "Owner Display", null));
-        var src = new StoreLibrarySource(store) { UserProfiles = profiles };
+        var src = new StoreLibrarySource(store, Offline(store), OfflineOnlineCatalog.Instance);
         _ = await src.GetPlaylistAsync(uri);
         _ = await src.GetPlaylistsAsync();
 
         int playlistBumps = 0;
+        var ownerBumps = new List<string>();
         CollectionKind? collection = null;
-        using var storeSub = store.Changes.Subscribe(new StoreObs(c => { if (c.Uri == uri) playlistBumps++; }));
+        using var storeSub = store.Changes.Subscribe(new StoreObs(c =>
+        {
+            if (c.Uri == uri) playlistBumps++;
+            if (c.Uri.StartsWith("spotify:user:", System.StringComparison.Ordinal)) ownerBumps.Add(c.Uri);
+        }));
         using var collectionSub = src.CollectionsChanged.Subscribe(new Obs(k => collection = k));
 
-        profiles.Publish("friend_raw");
-        profiles.Publish("owner_raw");
+        store.UpsertOwner(new Owner("friend_raw", "Friend Display", null));
+        store.UpsertOwner(new Owner("owner_raw", "Owner Display", null));
 
-        Assert.True(playlistBumps >= 1);
-        Assert.Equal(CollectionKind.Playlists, collection);
+        Assert.Equal(new[] { "spotify:user:friend_raw", "spotify:user:owner_raw" }, ownerBumps.ToArray());
+        Assert.Equal(0, playlistBumps);                          // the read source is not a writer
+        Assert.Equal(CollectionKind.Playlists, collection);      // …but the grid still learns to re-read
+        // …and the re-read now sees the resolved name.
+        Assert.Equal("Owner Display", (await src.GetPlaylistAsync(uri))!.OwnerName);
     }
 
+    // Replaces GetArtist_MissingOrStubDiscography_Fetches_HydratedDoesNot. The "is this artist cold?" gate this source
+    // used to own (no TopAlbums / stub names / facet totals > held) is now HydrationLevels.Of(Artist) -- pinned by
+    // HydrationLevelsTests -- and the "don't re-run when fresh" half is the ledger's, pinned by HydrationLedgerTests.
+    // What is left HERE, and all this source still owes, is: ask for the rung the caller named, THEN read the store.
     [Fact]
-    public async Task GetArtist_MissingOrStubDiscography_Fetches_HydratedDoesNot()
+    public async Task GetArtist_AsksForTheCallersRung_ThenReadsTheStore()
     {
+        const string uri = "spotify:artist:ar";
         var store = new InMemoryStore();
-        // The V4 gate walks three states: no discography → fetch; stub (name-less) discography → fetch again
-        // (the ArtistV4 stubs haven't been upgraded to resident AlbumV4 cards yet); hydrated cards → no fetch
-        // (freshness beyond residency is MetadataService's SWR/etag concern, not this gate's).
-        var resident = new Artist("ar", "spotify:artist:ar", "Billie", null);
-        store.UpsertArtist(resident);
-        var src = new StoreLibrarySource(store);
-
-        Album Card(string name) => new("al", "spotify:album:al", name, null, Array.Empty<ArtistRef>(), 2024, 10);
-
-        int fetches = 0;
-        src.OnDemandFetch = (uri, ct) =>
+        var rec = new RecordingHydrator(store)
         {
-            fetches++;
-            // 1st fetch lands the ArtistV4 stub; the 2nd lands the assembled (hydrated) card over it.
-            store.UpsertArtist(resident with { TopAlbums = new[] { Card(fetches == 1 ? "" : "HIT ME HARD AND SOFT") } });
-            return Task.CompletedTask;
+            OnEnsureMany = _ => store.UpsertArtist(new Artist("ar", uri, "Billie", null,
+                new[] { new Album("al", "spotify:album:al", "HIT ME HARD AND SOFT", null, Array.Empty<ArtistRef>(), 2024, 10) })),
         };
+        var src = new StoreLibrarySource(store, Recording(rec), OfflineOnlineCatalog.Instance);
 
-        _ = await src.GetArtistAsync("spotify:artist:ar");
-        Assert.Equal(1, fetches);                 // no TopAlbums → the V4 ensure ran
+        var rich = await src.GetArtistAsync(uri, HydrationLevel.Rich);
 
-        var a2 = await src.GetArtistAsync("spotify:artist:ar");
-        Assert.Equal(2, fetches);                 // stub (empty Name) → still cold → ran again
-        Assert.Equal("HIT ME HARD AND SOFT", a2!.TopAlbums![0].Name);   // hydrated write upgraded the stub (MergeAlbumCards)
+        Assert.Equal("HIT ME HARD AND SOFT", rich!.TopAlbums![0].Name);
+        var (uris, level, surface) = Assert.Single(rec.Batches);
+        Assert.Equal(uri, Assert.Single(uris));
+        Assert.Equal(HydrationLevel.Rich, level);
+        Assert.Equal(TraitSurface.None, surface);   // an artist's traits ride its chart step, not its page open
+    }
 
-        var a3 = await src.GetArtistAsync("spotify:artist:ar");
-        Assert.Equal(2, fetches);                 // hydrated cards resident → NOT re-fetched
-        Assert.Equal("HIT ME HARD AND SOFT", a3!.TopAlbums![0].Name);
+    // The album read carries the AlbumOpen surface -- that tag is what picks the trait bundle the album rung awaits
+    // (RowBundle | PlayCount | Publishing), so it is part of the contract, not a log field.
+    [Fact]
+    public async Task GetAlbum_AsksForTheCallersRung_WithTheAlbumOpenSurface()
+    {
+        const string uri = "spotify:album:a1";
+        var store = new InMemoryStore();
+        var rec = new RecordingHydrator(store);
+        var src = new StoreLibrarySource(store, Recording(rec), OfflineOnlineCatalog.Instance);
+
+        _ = await src.GetAlbumAsync(uri, HydrationLevel.Full);
+
+        var (uris, level, surface) = Assert.Single(rec.Batches);
+        Assert.Equal(uri, Assert.Single(uris));
+        Assert.Equal(HydrationLevel.Full, level);
+        Assert.Equal(TraitSurface.AlbumOpen, surface);
+    }
+
+    // The PLAY path never waits on Rich: an ordered, named tracklist is Open, and that is all a context needs.
+    [Fact]
+    public async Task StreamTracks_AsksOnlyForOpen()
+    {
+        const string uri = "spotify:playlist:p";
+        var store = new InMemoryStore();
+        store.UpsertTrack(Trk("t1"));
+        store.SetMembership(uri, new[] { new PlaylistMember("i1", "spotify:track:t1", null, 0) }, null);
+        var rec = new RecordingHydrator(store);
+        var src = new StoreLibrarySource(store, Recording(rec), OfflineOnlineCatalog.Instance);
+
+        await foreach (var _ in src.StreamTracksAsync(uri)) { }
+
+        Assert.Equal(HydrationLevel.Open, Assert.Single(rec.Batches).Level);
+    }
+
+    // An EPISODE is a playable: a playlist holding one used to drop the row entirely (the join asked GetTrack alone),
+    // which broke its count, its mosaic and its play context. EpisodeAsTrack is the projection (design 1.5).
+    [Fact]
+    public async Task GetPlaylist_JoinsEpisodeMembers_AsPlayableRows()
+    {
+        const string uri = "spotify:playlist:mixed";
+        var store = new InMemoryStore();
+        store.UpsertTrack(Trk("t1"));
+        store.UpsertEpisode(new Episode("e1", "spotify:episode:e1", "Ep One", "The Show",
+            new Image("https://img/ep"), 1_800_000, System.DateTimeOffset.UnixEpoch));
+        store.UpsertPlaylist(new Playlist("mixed", uri, "Mixed", null, "Me", null, 0));
+        store.SetMembership(uri, new[]
+        {
+            new PlaylistMember("i1", "spotify:track:t1", null, 0),
+            new PlaylistMember("i2", "spotify:episode:e1", "alice", 1_700_000_000_000),
+        }, null);
+        var src = new StoreLibrarySource(store, Offline(store), OfflineOnlineCatalog.Instance);
+
+        var pl = await src.GetPlaylistAsync(uri);
+
+        Assert.Equal(2, pl!.Tracks!.Count);
+        Assert.Equal("Ep One", pl.Tracks[1].Title);
+        Assert.Equal("The Show", pl.Tracks[1].Album.Name);
+        Assert.Equal("alice", pl.Tracks[1].AddedBy);    // membership facts are stamped on the projection too
+        Assert.Equal("i2", pl.Tracks[1].ContextUid);
+        Assert.Equal(2, pl.TrackCount);
     }
 
     [Fact]
     public async Task GetPlaylist_ReturnsNull_ForUnknown()
     {
-        var src = new StoreLibrarySource(new InMemoryStore());
+        var store = new InMemoryStore();
+        var src = new StoreLibrarySource(store, Offline(store), OfflineOnlineCatalog.Instance);
         Assert.Null(await src.GetPlaylistAsync("spotify:playlist:nope"));
     }
 
@@ -311,7 +454,7 @@ public class StoreLibrarySourceTests
             new RootlistEntry(1, 0, "spotify:playlist:p1", null, 1),
         });
         store.SetMembership("spotify:playlist:p1", new[] { new PlaylistMember("i", "spotify:track:x", null, 0) }, null);
-        var src = new StoreLibrarySource(store);
+        var src = new StoreLibrarySource(store, Offline(store), OfflineOnlineCatalog.Instance);
         var pls = await src.GetPlaylistsAsync();
         Assert.Equal("One", Assert.Single(pls).Name);
         Assert.Equal(1, pls[0].TrackCount);
@@ -325,7 +468,7 @@ public class StoreLibrarySourceTests
         store.SetSaved("artists", "spotify:artist:b", true, SyncState.Confirmed);
         store.SetSaved("liked", "spotify:track:c", true, SyncState.Confirmed);
         store.SetSaved("shows", "spotify:show:d", true, SyncState.Confirmed);
-        var src = new StoreLibrarySource(store);
+        var src = new StoreLibrarySource(store, Offline(store), OfflineOnlineCatalog.Instance);
         var st = await src.GetStatsAsync();
         Assert.Equal(1, st.Albums);
         Assert.Equal(1, st.Artists);
@@ -337,82 +480,11 @@ public class StoreLibrarySourceTests
     public void CollectionsChanged_FiresForTheSetKind_OnStoreBump()
     {
         var store = new InMemoryStore();
-        var src = new StoreLibrarySource(store);
+        var src = new StoreLibrarySource(store, Offline(store), OfflineOnlineCatalog.Instance);
         CollectionKind? seen = null;
         using var sub = src.CollectionsChanged.Subscribe(new Obs(k => seen = k));
         store.SetSaved("albums", "spotify:album:a", true, SyncState.Confirmed);   // bumps spotify:album:a
         Assert.Equal(CollectionKind.Albums, seen);
-    }
-
-    // ── Home: the degraded-session library tail ───────────────────────────────────────────────────────────────
-    // Offline (LiveHomeFetch null) or on a live fetch that fails, Home has nothing but the nine quick-pick tiles unless
-    // the synced library re-contributes its three shelves. Online they must NOT be appended — that second library tail
-    // is what the section-owned Home replaced.
-    static InMemoryStore LibraryStore()
-    {
-        var store = new InMemoryStore();
-        store.UpsertPlaylist(new Playlist("p1", "spotify:playlist:p1", "One", null, "Me", null, 0));
-        store.SetRootlist(new[] { new RootlistEntry(0, 0, "spotify:playlist:p1", null, 0) });
-        store.UpsertAlbum(new Album("a1", "spotify:album:a1", "Album1", null, [], 2020, 1));
-        store.SetSaved("albums", "spotify:album:a1", true, SyncState.Confirmed);
-        store.UpsertArtist(new Artist("ar1", "spotify:artist:ar1", "Artist1", null));
-        store.SetSaved("artists", "spotify:artist:ar1", true, SyncState.Confirmed);
-        return store;
-    }
-
-    static HomeGroup[] Shelves(HomeContribution home)
-        => home.Groups.Where(g => g.Kind == HomeGroupKind.Shelf).ToArray();
-
-    [Fact]
-    public async Task GetHome_Offline_ContributesTheThreeLibraryShelves()
-    {
-        var src = new StoreLibrarySource(LibraryStore());          // LiveHomeFetch left null → offline
-        var home = await src.GetHomeAsync();
-
-        Assert.Contains(home.Groups, g => g.Kind == HomeGroupKind.QuickGrid);
-        var shelves = Shelves(home);
-        Assert.Equal(3, shelves.Length);
-        Assert.Equal(
-            new[]
-            {
-                FluentGpu.Localization.Loc.Get(Strings.Home.YourPlaylists),
-                FluentGpu.Localization.Loc.Get(Strings.Home.YourAlbums),
-                FluentGpu.Localization.Loc.Get(Strings.Home.YourArtists),
-            },
-            shelves.Select(s => s.Title!).ToArray());
-        Assert.Equal("spotify:playlist:p1", Assert.Single(shelves[0].Cards).Uri);
-        Assert.Equal(HomeCardKind.Playlist, shelves[0].Cards[0].Kind);
-        Assert.Equal("spotify:album:a1", Assert.Single(shelves[1].Cards).Uri);
-        Assert.Equal(HomeCardKind.Album, shelves[1].Cards[0].Kind);
-        Assert.Equal("spotify:artist:ar1", Assert.Single(shelves[2].Cards).Uri);
-        Assert.Equal(HomeCardKind.Artist, shelves[2].Cards[0].Kind);
-    }
-
-    [Fact]
-    public async Task GetHome_LiveFetchThrows_StillContributesTheLibraryShelves()
-    {
-        var src = new StoreLibrarySource(LibraryStore())
-        {
-            LiveHomeFetch = _ => throw new System.InvalidOperationException("pathfinder is down"),
-        };
-
-        Assert.Equal(3, Shelves(await src.GetHomeAsync()).Length);
-    }
-
-    [Fact]
-    public async Task GetHome_LiveModulesLanded_DoesNotAppendASecondLibraryTail()
-    {
-        var live = new HomeGroup(HomeGroupKind.MixBand, "Made for you",
-            new[] { new HomeCard("spotify:playlist:mix", "Daily Mix 1", null, null, HomeCardKind.Playlist) });
-        var src = new StoreLibrarySource(LibraryStore())
-        {
-            LiveHomeFetch = _ => Task.FromResult(new LiveHomeResult(new[] { live }, null)),
-        };
-
-        var home = await src.GetHomeAsync();
-
-        Assert.Empty(Shelves(home));
-        Assert.Contains(home.Groups, g => g.Kind == HomeGroupKind.MixBand);
     }
 
     sealed class Obs(System.Action<CollectionKind> onNext) : System.IObserver<CollectionKind>
@@ -429,41 +501,6 @@ public class StoreLibrarySourceTests
         public void OnError(System.Exception e) { }
     }
 
-    sealed class FakeUserProfiles : IUserProfileService
-    {
-        readonly Dictionary<string, Owner> _profiles = new(System.StringComparer.Ordinal);
-        readonly SimpleEvent<string> _changed = new();
-
-        public FakeUserProfiles(params Owner[] profiles)
-        {
-            for (int i = 0; i < profiles.Length; i++)
-            {
-                var canonical = UserProfileIds.Normalize(profiles[i].Id);
-                if (canonical is not null) _profiles[canonical] = profiles[i];
-            }
-        }
-
-        public List<string> Prefetched { get; } = new();
-        public System.IObservable<string> Changed => _changed;
-
-        public Owner? Get(string userUriOrId)
-        {
-            var canonical = UserProfileIds.Normalize(userUriOrId);
-            return canonical is not null && _profiles.TryGetValue(canonical, out var profile) ? profile : null;
-        }
-
-        public void Prefetch(IEnumerable<string> userUriOrIds)
-        {
-            foreach (var id in userUriOrIds)
-                if (UserProfileIds.Normalize(id) is { } canonical) Prefetched.Add(canonical);
-        }
-
-        public void Publish(string userUriOrId)
-        {
-            if (UserProfileIds.Normalize(userUriOrId) is { } canonical) _changed.OnNext(canonical);
-        }
-    }
-
     // ── the collections default order: added-date DESC (newest first), the add time stamped on the read-model row ─────
     [Fact]
     public async Task GetLikedSongs_OrdersByAddedDesc_AndStampsAddedAt()
@@ -474,7 +511,7 @@ public class StoreLibrarySourceTests
         store.SetSaved("liked", "spotify:track:b", true, SyncState.Confirmed, 3_000_000);   // newest
         store.SetSaved("liked", "spotify:track:c", true, SyncState.Confirmed, 2_000_000);
         store.SetSaved("liked", "spotify:track:z", true, SyncState.Confirmed);              // no timestamp → sinks last
-        var src = new StoreLibrarySource(store);
+        var src = new StoreLibrarySource(store, Offline(store), OfflineOnlineCatalog.Instance);
 
         var liked = await src.GetLikedSongsAsync();
         Assert.Equal(new[] { "spotify:track:b", "spotify:track:c", "spotify:track:a", "spotify:track:z" },

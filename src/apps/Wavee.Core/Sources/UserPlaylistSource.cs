@@ -5,7 +5,7 @@ using System.Runtime.CompilerServices;
 
 namespace Wavee.Core;
 
-/// <summary>User-created playlists — the Mutations facet's playlist edits (docs/architecture.md §2 "Playlists, mutations
+/// <summary>User-created playlists — the Mutations facet's playlist edits (docs/plans/wavee/architecture.md §2 "Playlists, mutations
 /// &amp; folders"). An in-process catalog source owning <c>wavee:playlist:*</c> that holds the session's created
 /// playlists + their tracks (snapshots), so a created / added-to playlist appears in the sidebar list and opens through
 /// the shared detail surface; <see cref="ResolveContext"/> lets the player play it. Every membership gets its own stable
@@ -19,7 +19,8 @@ public sealed class UserPlaylistSource : ICatalogSource
     long _itemSeq;
 
     public string Id => "user-playlists";
-    public bool Owns(string uri) => uri.StartsWith("wavee:playlist:", System.StringComparison.Ordinal);
+    // `wavee:playlist:*` is exactly EntityProviders.User (hydration-facade-design.md §1.1).
+    public bool Owns(string uri) => EntityUri.Parse(uri).Provider == EntityProviders.User;
     public SourceCapabilities Capabilities => SourceCapabilities.Catalog | SourceCapabilities.Mutations;
 
     /// <summary>When false, <see cref="GetPlaylistsAsync"/> returns empty — the real backend lists only synced
@@ -109,7 +110,7 @@ public sealed class UserPlaylistSource : ICatalogSource
     void Bump() { _version++; _changed.OnNext(_version); }
 
     // ── ICatalogSource: only the playlist reads are non-empty ──
-    public Task<Playlist?> GetPlaylistAsync(string uri, CancellationToken ct = default)
+    public Task<Playlist?> GetPlaylistAsync(string uri, HydrationLevel level = HydrationLevel.Open, CancellationToken ct = default)
     {
         if (!_playlists.TryGetValue(uri, out var e)) return Task.FromResult<Playlist?>(null);
         return Task.FromResult<Playlist?>(new Playlist("up", uri, e.Name, "Created on this device", "You", null,
@@ -132,8 +133,8 @@ public sealed class UserPlaylistSource : ICatalogSource
         yield return new TrackPage(t, t.Length, t.Length);
     }
 
-    public Task<Album?> GetAlbumAsync(string uri, CancellationToken ct = default) => Task.FromResult<Album?>(null);
-    public Task<Artist?> GetArtistAsync(string uri, CancellationToken ct = default) => Task.FromResult<Artist?>(null);
+    public Task<Album?> GetAlbumAsync(string uri, HydrationLevel level = HydrationLevel.Open, CancellationToken ct = default) => Task.FromResult<Album?>(null);
+    public Task<Artist?> GetArtistAsync(string uri, HydrationLevel level = HydrationLevel.Open, CancellationToken ct = default) => Task.FromResult<Artist?>(null);
     public Task<IReadOnlyList<LibraryItem>> GetLibraryAsync(CancellationToken ct = default) => Task.FromResult<IReadOnlyList<LibraryItem>>(System.Array.Empty<LibraryItem>());
     public Task<IReadOnlyList<Album>> GetAlbumsAsync(CancellationToken ct = default) => Task.FromResult<IReadOnlyList<Album>>(System.Array.Empty<Album>());
     public Task<IReadOnlyList<Artist>> GetArtistsAsync(CancellationToken ct = default) => Task.FromResult<IReadOnlyList<Artist>>(System.Array.Empty<Artist>());

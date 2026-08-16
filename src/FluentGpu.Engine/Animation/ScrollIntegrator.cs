@@ -368,6 +368,9 @@ public sealed class ScrollIntegrator
             }
             bool horizontal = sc.Orientation == 1;
             float off = horizontal ? sc.OffsetX : sc.OffsetY;
+            // Captured alongside `off` so the live-speed measurement below covers the whole VISIBLE advance: the content
+            // transform is -(offset + band), so a rubber-band release moves pixels even while the clamped offset is pinned.
+            float bandAtTickStart = sc.OverscrollPx;
             byte phase = sc.Phase;
             // Highest-wins across the frame's active nodes (an inertial outer scroller under a settling inner one reads
             // as inertia, which is what the gesture felt like).
@@ -684,6 +687,17 @@ public sealed class ScrollIntegrator
             // frame (TouchpadTracking / Fling incl. OsOwned / WheelAnimating / SnapBack), NOT a Programmatic bring-into-view.
             sc.UserScrollActive = movingNow && !beganProgrammatic && (sc.PhaseFlags & ScrollState.PhaseProgrammatic) == 0;
             if (sc.UserScrollActive) AnyUserScrollActiveThisFrame = true;
+            // Live scroll SPEED (DIP/s) of the CONTENT, measured from what this tick actually committed rather than from
+            // any one phase's intent. The integrator is the sole Offset writer (§2.1), so this is the only place that sees
+            // every phase's advance identically — touchpad drag, fling coast, wheel chase, snap-back and band release all
+            // land here. FlingVelocity cannot serve: it is the coast seed and reads 0 through a live drag, which is
+            // precisely the case that must stay crisp. Measured against the composed transform -(offset + band), so a
+            // rubber-band release counts as motion even while the clamped offset is pinned at the extent.
+            {
+                float offNow = horizontal ? sc.OffsetX : sc.OffsetY;
+                float visualDelta = MathF.Abs((offNow + sc.OverscrollPx) - (off + bandAtTickStart));
+                sc.LiveSpeedDip = dtMs > 0.001f ? visualDelta * (1000f / dtMs) : 0f;
+            }
             if (moved || syncMoved) AnyOffsetWroteThisFrame = true;   // §5.4: a real offset advance (tick chase OR synchronous ScrollMoved pulse) — the stationary-hover re-resolve gate
             bool over = sc.PointerOver;
 

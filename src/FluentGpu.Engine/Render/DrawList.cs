@@ -176,9 +176,12 @@ public readonly record struct FillRoundRectCmd(RectF Rect, CornerRadius4 Radii, 
 // SpanRunId (0 = plain) keys the SpanRunTable.Shared inline-run overlay (rtb-01): the renderer shapes the SAME single
 // flow with per-range weight/size/family and tints per-span colors; ForceColor != 0 makes Color override the span
 // colors too (the selected-text recolor re-emit — WinUI repaints selected glyphs uniformly).
-// InMotion (1 = the run's world transform was written THIS frame — scroll/fling/drag/FLIP): the renderer skips the
-// device-grid baseline snap so moving text rides sub-pixel WITH its plate (no 1px shear at half-pixel crossings),
-// then re-snaps crisp on the settle frame the host queues after the last transform write.
+// InMotion is a QUANTIZED 0..255 text-motion SOFTNESS (see DrawList.QuantizeMotionSoft), not the boolean the name
+// implies — kept as the same field/slot so the payload size and every rebase path stay unchanged. 0 = snap the run
+// onto the glyph atlas's sub-pixel phase grid (crisp); 255 = apply no correction, letting the run sit at its natural
+// fractional device Y so the LINEAR/CLAMP atlas sampler softens it. The recorder derives it from the enclosing
+// viewport's live scroll SPEED (SceneRecorder.TextMotionSoftness), so a slow reading nudge stays sharp while a fling
+// softens — the WinUI look, which gets it for free by resampling a composited surface at fractional offsets.
 public readonly record struct DrawGlyphRunCmd(RectF Bounds, ColorF Color, StringId Text, StringId Family, float FontSize, int Weight, int Wrap, int Trim, int MaxLines,
     float CharSpacing, float LineHeight, int LineStacking, int LineBounds, Affine2D Transform, float Opacity,
     int SpanRunId = 0, int ForceColor = 0, int InMotion = 0);
@@ -365,7 +368,7 @@ public sealed class DrawList
 
     public bool CopySpanFromPriorTranslated(int byteStart, int byteLength, int sortStart, int sortCount,
                                             int commandCount, in DrawListOpcodeStats opcodeStats,
-                                            float dx, float dy)
+                                            float dx, float dy, float motionSoft = 0f)
     {
         // No opcode PRE-check: the per-payload walk in TranslateCopiedSpan is the sole authority on what can be rebased
         // (it is the thing that actually has to patch every command), and its `default: return false` fails safe for any
@@ -393,7 +396,7 @@ public sealed class DrawList
             _sortLen += sortCount;
         }
 
-        if (!TranslateCopiedSpan(byteDst, byteLength, dx, dy))
+        if (!TranslateCopiedSpan(byteDst, byteLength, dx, dy, QuantizeMotionSoft(motionSoft)))
         {
             _len = byteDst;
             _sortLen = sortDst;
@@ -424,13 +427,19 @@ public sealed class DrawList
         PushSort(sortKey);
     }
 
+    /// <summary>Pack 0..1 text-motion softness into the payload's existing int slot as 0..255. The slot used to carry a
+    /// bare in-motion BOOL; a scalar fits the same 4 bytes and is what lets the softness track scroll SPEED instead of
+    /// being all-or-nothing. 0 = crisp (snap to the glyph atlas sub-pixel phase grid), 255 = full smear.</summary>
+    internal static int QuantizeMotionSoft(float soft)
+        => soft > 0f ? (soft >= 1f ? 255 : (int)(soft * 255f + 0.5f)) : 0;   // NaN ⇒ 0 (crisp)
+
     public void DrawGlyphRun(in RectF bounds, in ColorF color, StringId text, StringId family, float fontSize, int weight, int wrap, int trim, int maxLines,
         float charSpacing, float lineHeight, int lineStacking, int lineBounds, in Affine2D transform, float opacity, ulong sortKey = 0,
-        int spanRunId = 0, bool forceColor = false, bool inMotion = false)
+        int spanRunId = 0, bool forceColor = false, float motionSoft = 0f)
     {
         WriteOp(DrawOp.DrawGlyphRun);
         WritePayload(new DrawGlyphRunCmd(bounds, color, text, family, fontSize, weight, wrap, trim, maxLines,
-            charSpacing, lineHeight, lineStacking, lineBounds, transform, opacity, spanRunId, forceColor ? 1 : 0, inMotion ? 1 : 0));
+            charSpacing, lineHeight, lineStacking, lineBounds, transform, opacity, spanRunId, forceColor ? 1 : 0, QuantizeMotionSoft(motionSoft)));
         PushSort(sortKey);
     }
 
@@ -441,11 +450,11 @@ public sealed class DrawList
     /// just-passed glyph up. Reuses the glyph pipeline (per-instance color/offset computed at replay) — no new shader.</summary>
     public void DrawGlyphRunGradient(in RectF bounds, StringId text, StringId family, float fontSize, int weight, int wrap, int trim, int maxLines,
         float charSpacing, float lineHeight, int lineStacking, int lineBounds, in Affine2D transform, float opacity,
-        in ColorF before, in ColorF after, float split, float softness, float lift, ulong sortKey = 0, int spanRunId = 0, bool inMotion = false)
+        in ColorF before, in ColorF after, float split, float softness, float lift, ulong sortKey = 0, int spanRunId = 0, float motionSoft = 0f)
     {
         WriteOp(DrawOp.DrawGlyphRunGradient);
         WritePayload(new DrawGlyphRunGradientCmd(bounds, text, family, fontSize, weight, wrap, trim, maxLines,
-            charSpacing, lineHeight, lineStacking, lineBounds, transform, opacity, before, after, split, softness, lift, spanRunId, inMotion ? 1 : 0));
+            charSpacing, lineHeight, lineStacking, lineBounds, transform, opacity, before, after, split, softness, lift, spanRunId, QuantizeMotionSoft(motionSoft)));
         PushSort(sortKey);
     }
 
@@ -720,7 +729,7 @@ public sealed class DrawList
         _buf = nb;
     }
 
-    private bool TranslateCopiedSpan(int start, int length, float dx, float dy)
+    private bool TranslateCopiedSpan(int start, int length, float dx, float dy, int motionSoft)
     {
         if (dx == 0f && dy == 0f) return true;
         int p = start;
@@ -772,17 +781,17 @@ public sealed class DrawList
                     if (!TranslatePayload<EraseRoundRectCmd>(ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
                     break;
                 case DrawOp.DrawGlyphRun:
-                    // Patch the world transform AND raise InMotion, which is exactly what a FRESH record during the same
-                    // motion emits (the recorder's inMotion is set for any subtree whose transform was written this
-                    // frame): the renderer then skips the device-grid baseline snap so the run rides sub-pixel WITH its
-                    // plate instead of shearing 1px at half-pixel crossings (see DrawGlyphRunCmd's InMotion note).
-                    // Re-snapping crisp on settle is automatic and needs no bookkeeping here — the recorder mixes its
-                    // inMotion into the span INPUT signature, so the first at-rest frame misses exact-copy once and
-                    // re-records the run with InMotion = 0.
-                    if (!TranslatePayload<DrawGlyphRunCmd>(ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y), InMotion = 1 })) return false;
+                    // Patch the world transform AND stamp THIS frame's text-motion softness, which is exactly what a
+                    // FRESH record during the same motion emits: the renderer then relaxes the glyph atlas sub-pixel
+                    // phase snap by that amount, so a fast-moving run softens with its plate (see DrawGlyphRunCmd's
+                    // InMotion note). Previously a hard-coded 1 — correct while the field was a bool, wrong now that it
+                    // is a scalar, because a rebased span would have been pinned at maximum softness regardless of speed.
+                    // Re-snapping crisp on settle is automatic and needs no bookkeeping here — the recorder mixes the
+                    // softness into the span INPUT signature, so a change misses exact-copy once and re-records.
+                    if (!TranslatePayloadMotion<DrawGlyphRunCmd>(ref p, end, dx, dy, motionSoft, static (c, x, y, soft) => c with { Transform = Translate(c.Transform, x, y), InMotion = soft })) return false;
                     break;
                 case DrawOp.DrawGlyphRunGradient:
-                    if (!TranslatePayload<DrawGlyphRunGradientCmd>(ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y), InMotion = 1 })) return false;
+                    if (!TranslatePayloadMotion<DrawGlyphRunGradientCmd>(ref p, end, dx, dy, motionSoft, static (c, x, y, soft) => c with { Transform = Translate(c.Transform, x, y), InMotion = soft })) return false;
                     break;
                 case DrawOp.PushClip:
                     // Both clip rects are DEVICE space, so a translation is an exact offset. Soundness rests on the
@@ -842,6 +851,23 @@ public sealed class DrawList
     }
 
     private delegate T TranslatePayloadFunc<T>(T value, float dx, float dy) where T : unmanaged;
+
+    /// <summary>Variant carrying the frame's text-motion softness, so a rebased glyph run is patched with the softness
+    /// the CURRENT frame is drawing at rather than a hard-coded flag. Separate delegate type (not a capture) so the
+    /// lambdas stay <c>static</c> and the record path keeps allocating nothing.</summary>
+    private delegate T TranslatePayloadMotionFunc<T>(T value, float dx, float dy, int soft) where T : unmanaged;
+
+    private bool TranslatePayloadMotion<T>(ref int p, int end, float dx, float dy, int soft, TranslatePayloadMotionFunc<T> translate) where T : unmanaged
+    {
+        int size = Unsafe.SizeOf<T>();
+        if (p + size > end) return false;
+        var span = _buf.AsSpan(p, size);
+        T cmd = MemoryMarshal.Read<T>(span);
+        cmd = translate(cmd, dx, dy, soft);
+        MemoryMarshal.Write(span, in cmd);
+        p += size;
+        return true;
+    }
 
     private bool TranslatePayload<T>(ref int p, int end, float dx, float dy, TranslatePayloadFunc<T> translate) where T : unmanaged
     {

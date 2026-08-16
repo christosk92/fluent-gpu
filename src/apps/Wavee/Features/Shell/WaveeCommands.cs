@@ -17,9 +17,12 @@ static class WaveeCommands
 {
     public const int MaxResults = 8;
 
-    public enum Kind : byte { Navigate, Playback, Settings, Registry, CatalogSearch }
+    public enum Kind : byte { Navigate, Playback, Settings, Registry, CatalogSearch, Library }
     public enum PlaybackVerb : byte { PlayPause, Next, Previous, Shuffle, Repeat }
     public enum SettingsVerb : byte { ToggleTheme, ToggleCrossfade }
+    /// <summary>Library-structure verbs. "New folder" lives here because the only other way to reach it is a right-click
+    /// on a sidebar row — and on a pane with no folders yet there is no such row to right-click.</summary>
+    public enum LibraryVerb : byte { NewPlaylist, NewFolder }
 
     public sealed class Entry
     {
@@ -31,6 +34,7 @@ static class WaveeCommands
         public string? RouteKey;
         public PlaybackVerb Playback;
         public SettingsVerb Settings;
+        public LibraryVerb Library;
         public string? RegistryProvider;
         public string? RegistryAction;
         public SidebarActionTargetMode RegistryTarget;
@@ -46,7 +50,7 @@ static class WaveeCommands
     }
 
     /// <summary>Builtin table size (nav + playback + settings). Registry rows are appended by <see cref="BuildIndex"/>.</summary>
-    public const int BuiltinCount = 12;
+    public const int BuiltinCount = 14;
 
     /// <summary>Allocate a fresh index for one palette-open. Labels are localized at this edge (not per keystroke).</summary>
     public static Entry[] BuildIndex(WaveeExtensionRegistry? registry)
@@ -163,6 +167,15 @@ static class WaveeCommands
                 var binding = new SidebarActionBinding(p, a, cmd.RegistryTarget, null, null);
                 registry.Execute(host.Actions, in binding);
                 break;
+            case Kind.Library:
+                switch (cmd.Library)
+                {
+                    // Both ride the ONE create path / the ONE folder command set, so the palette can never disagree with
+                    // the sidebar row menu about what these two verbs do.
+                    case LibraryVerb.NewPlaylist: PlaylistCreateFlow.Create(host.Actions, default, navigate: true); break;
+                    case LibraryVerb.NewFolder: FolderActions.NewFolder(host.Actions, null); break;
+                }
+                break;
             case Kind.CatalogSearch:
                 host.Go("search", cmd.CatalogQuery ?? "");
                 break;
@@ -183,6 +196,8 @@ static class WaveeCommands
         Play("playback.repeat", Loc.Get(Strings.Player.Repeat), Icons.RepeatAll, PlaybackVerb.Repeat),
         Set("settings.theme", Loc.Get(Strings.Settings.Appearance.Theme), Icons.Brush, SettingsVerb.ToggleTheme),
         Set("settings.crossfade", Loc.Get(Strings.Settings.Sound.Crossfade), Icons.MusicNote, SettingsVerb.ToggleCrossfade),
+        Lib("library.newPlaylist", Loc.Get(Strings.Detail.NewPlaylist), Icons.Add, LibraryVerb.NewPlaylist),
+        Lib("library.newFolder", Loc.Get(Strings.Sidebar.CreateFolder), Icons.Folder, LibraryVerb.NewFolder),
     ];
 
     static Entry Nav(string id, string label, string glyph, string route) => new()
@@ -201,6 +216,12 @@ static class WaveeCommands
     {
         Id = id, Label = label, LabelLower = label.ToLowerInvariant(), Glyph = glyph,
         Kind = Kind.Settings, Settings = verb,
+    };
+
+    static Entry Lib(string id, string label, string glyph, LibraryVerb verb) => new()
+    {
+        Id = id, Label = label, LabelLower = label.ToLowerInvariant(), Glyph = glyph,
+        Kind = Kind.Library, Library = verb,
     };
 
     static bool PaletteTargetOf(WaveeActionDescriptor d, out SidebarActionTargetMode target)

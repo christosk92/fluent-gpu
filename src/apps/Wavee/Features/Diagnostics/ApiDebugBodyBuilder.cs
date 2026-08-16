@@ -49,20 +49,11 @@ static class ApiDebugBodyBuilder
         return (lines, null);
     }
 
+    // THE routing-kind → catalogue-kind map, the same one every ladder uses. A playlist infers LIST_METADATA_V2 here
+    // too, which the old EntityRef-based copy could not express.
     static Xm.ExtensionKind InferKind(string uri)
     {
-        try
-        {
-            return EntityRef.Parse(uri).Kind switch
-            {
-                EntityKind.Track => Xm.ExtensionKind.TrackV4,
-                EntityKind.Album => Xm.ExtensionKind.AlbumV4,
-                EntityKind.Artist => Xm.ExtensionKind.ArtistV4,
-                EntityKind.Show => Xm.ExtensionKind.ShowV4,
-                EntityKind.Episode => Xm.ExtensionKind.EpisodeV4,
-                _ => Xm.ExtensionKind.UnknownExtension,
-            };
-        }
+        try { return XmKinds.CatalogKindOf(EntityUri.KindOf(uri)); }
         catch { return Xm.ExtensionKind.UnknownExtension; }
     }
 
@@ -99,20 +90,24 @@ static class ApiDebugBodyBuilder
         return (ms.ToArray(), request, null);
     }
 
-    /// <summary>Bulk-hydration batch: one entity per line, kinds inferred from URI (TrackV4/AlbumV4/…).</summary>
+    /// <summary>Bulk-hydration batch: one entity per line, kinds inferred from URI (TrackV4/AlbumV4/...). Built through
+    /// the SAME envelope writer as the explicit-kind mode - the hand-rolled EntityRef/GzipRequest copy died with the
+    /// unconditional bulk arm (hydration-facade-plan.md 1.6), so the console can no longer send a shape the app cannot.</summary>
     public static (byte[]? Gzipped, string? Error) BuildBulkHydration(string text, SessionContext session)
     {
-        var refs = new List<EntityRef>();
+        var lines = new List<EntityLine>();
         foreach (var raw in text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
             if (raw.Length == 0 || raw.StartsWith('#')) continue;
             string uri = raw.Split('|', 2)[0].Trim();
-            try { refs.Add(EntityRef.Parse(uri)); }
-            catch (Exception ex) { return (null, $"Bad URI '{uri}': {ex.Message}"); }
+            if (uri.Length == 0) continue;
+            var kind = InferKind(uri);
+            if (kind == Xm.ExtensionKind.UnknownExtension) continue;   // no catalogue facts exist for this kind
+            lines.Add(new EntityLine(uri, kind, null));
         }
-        if (refs.Count == 0) return (null, "Add at least one URI.");
-        var gz = ExtendedMetadataSource.GzipRequest(refs, 0, refs.Count, session);
-        return gz is null ? (null, "No supported entity kinds in list.") : (gz, null);
+        if (lines.Count == 0) return (null, "No supported entity kinds in list.");
+        var (gz, _, err) = BuildExtendedMetadata(lines, session);
+        return err is not null ? (null, err) : (gz, null);
     }
 
     public static Dictionary<string, string> ParseHeaders(string text)

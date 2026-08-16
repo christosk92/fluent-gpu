@@ -1,0 +1,431 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Wavee — height reflow inside the existing shells</title>
+  <style>
+    :root {
+      --ink: #1a1a1a;
+      --muted: #5c5c5c;
+      --quiet: #8a8a8a;
+      --paper: #fff;
+      --line: #e6e6e6;
+      --accent: #0078d4;
+      --radio: #f2c94c;
+      --bg: #ececec;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; }
+    body {
+      display: grid;
+      grid-template-columns: minmax(300px, 380px) 1fr;
+      background: var(--bg);
+      color: var(--ink);
+      font: 14px/1.45 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+    }
+    .studio { padding: 24px 24px 48px; border-right: 1px solid #ddd; background: #f7f7f7; overflow: auto; }
+    h1 { margin: 0 0 8px; font: 600 26px/1.15 "Segoe UI Variable Display", "Segoe UI", sans-serif; letter-spacing: -0.03em; }
+    .lede { color: var(--muted); margin: 0 0 18px; }
+    h2 { margin: 20px 0 8px; font: 600 11px/1.2 "Segoe UI", sans-serif; letter-spacing: .1em; text-transform: uppercase; color: var(--quiet); }
+    p, li { color: #333; }
+    ul { padding-left: 18px; margin: 0 0 8px; }
+    li { margin: 0 0 7px; }
+    .cite { font-size: 12px; color: var(--quiet); }
+
+    .chip {
+      display: inline-block; font: 600 11px/1 "Segoe UI", sans-serif;
+      padding: 4px 8px; border-radius: 4px; background: #fff; border: 1px solid #ddd; margin: 0 4px 4px 0;
+    }
+    .chip.on { background: var(--ink); color: #fff; border-color: var(--ink); }
+    .chip.warn { background: #fff3cd; border-color: #e6d089; }
+
+    label { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin: 10px 0 4px; }
+    input[type=range] { width: 100%; }
+    .presets { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 4px; }
+    .presets button {
+      border: 1px solid #ccc; background: #fff; padding: 7px 10px; border-radius: 4px;
+      font: 600 12px/1 "Segoe UI", sans-serif; cursor: pointer;
+    }
+
+    .readout {
+      font-variant-numeric: tabular-nums;
+      font-size: 12px;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 10px 12px;
+      margin-top: 12px;
+    }
+    .readout b { font-weight: 600; }
+    .arrow { color: var(--quiet); }
+
+    .stage {
+      display: grid;
+      place-items: center;
+      padding: 20px;
+      overflow: auto;
+    }
+    .phone {
+      background: var(--paper);
+      border-radius: 10px;
+      box-shadow: 0 18px 60px rgba(0,0,0,.16);
+      overflow: hidden;
+      display: grid;
+      grid-template-rows: 40px 1fr 56px;
+      transition: width 180ms ease, height 180ms ease;
+    }
+    .top { display: flex; align-items: center; gap: 8px; padding: 0 10px; border-bottom: 1px solid var(--line); font-size: 11px; }
+    .search { flex: 1; background: #f3f3f3; border-radius: 14px; padding: 5px 10px; color: var(--muted); }
+    .body { display: grid; min-height: 0; }
+    .rail-icons {
+      border-right: 1px solid var(--line); background: #fafafa;
+      display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 8px 0;
+    }
+    .dot { width: 26px; height: 26px; border-radius: 50%; background: #ddd; }
+    .dot.on { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+    .hero { border-right: 1px solid var(--line); padding: 12px; overflow: hidden; min-width: 0; }
+    .cover { background:
+      radial-gradient(circle at 30% 40%, #fff 0 18%, transparent 19%),
+      radial-gradient(circle at 70% 35%, #1a1a1a 0 16%, transparent 17%),
+      radial-gradient(circle at 55% 70%, #c0392b 0 20%, transparent 21%),
+      var(--radio);
+      border-radius: 4px;
+    }
+    .hero h3 { margin: 8px 0 2px; }
+    .meta { color: var(--muted); }
+    .play { margin-top: 8px; background: var(--accent); color: #fff; border: 0; border-radius: 16px; padding: 6px 14px; font-weight: 600; }
+
+    .center { min-width: 0; display: flex; flex-direction: column; }
+    .tools { padding: 6px 10px; font-size: 11px; color: var(--muted); border-bottom: 1px solid var(--line); }
+    .list { overflow: hidden; flex: 1; min-height: 0; padding: 4px 0; }
+    .row {
+      display: grid;
+      grid-template-columns: 28px 36px minmax(0,1fr) auto auto;
+      gap: 8px; align-items: center;
+      padding: 0 10px;
+      min-width: 0;
+    }
+    .row .n { color: var(--quiet); font-variant-numeric: tabular-nums; font-size: 12px; }
+    .row .name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .row .artist { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .row .album, .row .bpm { color: var(--quiet); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .row.np .name, .row.np .n { color: var(--accent); }
+    .thumb { border-radius: 3px; }
+    .eq { display: inline-flex; gap: 1px; height: 10px; align-items: flex-end; }
+    .eq i { width: 2px; background: var(--accent); display: block; animation: eq .8s infinite ease-in-out; }
+    .eq i:nth-child(2) { height: 10px; }
+    .eq i:nth-child(1) { height: 4px; }
+    .eq i:nth-child(3) { height: 6px; }
+    @keyframes eq { 50% { transform: scaleY(.35); } }
+
+    .lyrics {
+      border-left: 1px solid var(--line);
+      padding: 12px 14px;
+      color: #c8c8c8;
+      overflow: hidden;
+      min-width: 0;
+    }
+    .lyrics h4 { margin: 0 0 12px; color: var(--ink); font-size: 12px; }
+    .lyrics .now { color: var(--ink); font-weight: 700; margin: 8px 0; }
+
+    .player {
+      border-top: 1px solid var(--line);
+      display: grid; grid-template-columns: 1fr 1.2fr 1fr;
+      align-items: center; padding: 0 10px; font-size: 11px; gap: 8px;
+    }
+    .now-mini { display: flex; align-items: center; gap: 8px; min-width: 0; }
+    .now-mini .art { width: 36px; height: 36px; border-radius: 3px; background: #222; }
+    .bar { height: 3px; background: #ddd; border-radius: 2px; margin-top: 4px; }
+    .bar i { display: block; width: 61%; height: 100%; background: var(--accent); }
+
+    /* vertical hero (existing mode 3) */
+    .vhero {
+      display: none;
+      grid-template-columns: var(--art) minmax(0,1fr);
+      gap: 14px; padding: 16px 18px 10px;
+      align-items: end;
+      background: linear-gradient(180deg, #fff6d6 0%, #fff 80%);
+      border-bottom: 1px solid var(--line);
+    }
+    .phone.vertical .vhero { display: grid; }
+    .phone.vertical .hero { display: none; }
+    .phone.stacked .vhero { grid-template-columns: 1fr; }
+    .vtitle { margin: 0; letter-spacing: -0.04em; font-weight: 700; }
+
+    .sheet {
+      display: none; position: absolute; inset: 40px 0 56px 44px;
+      background: #0d0d0d; color: #fff; padding: 28px 32px;
+    }
+    .phone.lyrics-sheet { position: relative; }
+    .phone.lyrics-sheet .sheet { display: block; }
+    .phone.lyrics-sheet .lyrics { display: none; }
+    .sheet .loud { font: 700 36px/1.1 "Segoe UI Variable Display", "Segoe UI", sans-serif; margin: 12px 0; }
+
+    .beacon {
+      display: none;
+      margin: 8px 10px 6px;
+      padding: 10px 12px;
+      border-radius: 8px;
+      background: #111; color: #fff;
+      grid-template-columns: 44px 1fr; gap: 10px; align-items: center;
+    }
+    .phone.show-beacon .beacon { display: grid; }
+    .beacon .k { font-size: 9px; letter-spacing: .14em; text-transform: uppercase; color: #9ad; }
+    .beacon .s { font-weight: 700; }
+
+    @media (max-width: 980px) {
+      body { grid-template-columns: 1fr; }
+      .studio { border-right: 0; border-bottom: 1px solid #ddd; max-height: 46vh; }
+    }
+  </style>
+</head>
+<body>
+  <aside class="studio">
+    <h1>Same shells. Height was the missing axis.</h1>
+    <p class="lede">The laptop look you like is already the two-column detail shell. Tall mode never left it — it just kept packing 48px rows. Don’t invent a fourth page. Reflow inside the one that’s already up.</p>
+
+    <div class="presets">
+      <button data-w="980" data-h="640">Laptop</button>
+      <button data-w="720" data-h="900">Your screenshot</button>
+      <button data-w="520" data-h="820">Narrow (existing hero)</button>
+    </div>
+
+    <label>Page width <span id="wlab">720</span></label>
+    <input id="width" type="range" min="420" max="1100" value="720">
+    <label>Page height <span id="hlab">900</span></label>
+    <input id="height" type="range" min="520" max="1100" value="900">
+
+    <div class="readout" id="readout"></div>
+
+    <h2>What already exists</h2>
+    <p>DetailShell is a <b>page system</b> on width, with hysteresis, then a <b>reflow</b> inside whichever arm is up:</p>
+    <ul>
+      <li><b>Mode 0 / 1 / 2</b> — two-column. Same TrackList stays mounted. Rail is the thing that gives: full width → 224 → 188. Drag-collapse on mode 0. This is the laptop page.</li>
+      <li><b>Mode 3 Vertical</b> — the only structural remount. Rail becomes the unified hero above the list. Enter 540 / exit 580. Hero itself is already “one composition, not three variants” (<code>DetailVerticalHero</code>).</li>
+      <li><b>Column tiers 0–6</b> — drop album / BPM / date as the <i>list</i> gets skinny. BPM is already first to go.</li>
+      <li><b>Height today</b> — almost unused. Title is a rung (<code>winH ≥ 900 → 40 else 28</code>) because a fluid title size was tried and rejected. Description lines 3 vs 6 at 760. That’s it. Row height is a user setting (40 / 48 / 56 / 64), not a viewport.</li>
+    </ul>
+
+    <h2>Why laptop looks fine and tall doesn’t</h2>
+    <p>Your screenshot is still <b>mode 0/1</b>. Width never crossed 540, so the hero system never came on. Height grew, so the same 48px rows just… multiplied. The rail’s leftover column became empty air. Lyrics (a shell pane, not the detail rail) kept stealing width. Uniform density → texture.</p>
+
+    <h2>The transition — not a new shell</h2>
+    <ul>
+      <li><b>Keep two-column</b> whenever width says so. Tall + wide is not vertical. Vertical is for narrow.</li>
+      <li><b>Row height reflows with list viewport height</b> between the density rungs you already ship (48→64), so visible rows stay ~10–12 instead of 24. User density remains a floor. Continuous, not a mode.</li>
+      <li><b>Now-playing presence</b> grows on the same curve (extra padding, then the compact beacon once surplus is large). Still a TrackRow, not a different page.</li>
+      <li><b>Lyrics dock, don’t spawn a column</b> once the remaining list would fall under the two-column min (~300, already in <code>ContentMinWidthForMode</code>). Overlay sheet uses the surplus height. Hysteresis, same shape as 540/580.</li>
+      <li><b>Title stays a rung.</b> Don’t revive the fluid 24.05px hero. Geometry interpolates; type steps.</li>
+      <li>The <b>one discrete jump</b> stays the one you already have: two-column ↔ vertical at 540/580, with the 280ms reflow motion already on the hero.</li>
+    </ul>
+    <p class="cite">Drag the sliders. Laptop should still look like today. The screenshot size should stay two-column, just with bigger rows and lyrics as a sheet if the list is starved. Narrow still becomes the existing hero.</p>
+  </aside>
+
+  <div class="stage">
+    <div class="phone" id="phone">
+      <header class="top">
+        <span>‹ ›</span>
+        <div class="search">one ok rock</div>
+        <span>Christos</span>
+      </header>
+      <div class="body" id="body">
+        <nav class="rail-icons"><div class="dot on"></div><div class="dot"></div><div class="dot"></div><div class="dot"></div></nav>
+        <aside class="hero" id="hero">
+          <div class="cover" id="cover"></div>
+          <h3 id="heroTitle">The Beginning Radio</h3>
+          <div class="meta" id="heroMeta">50 songs · 3 hr 25 min</div>
+          <button class="play">Play</button>
+        </aside>
+        <section class="center">
+          <div class="vhero" id="vhero">
+            <div class="cover" id="vcov"></div>
+            <div>
+              <div class="meta" id="veye">Radio · 50 songs</div>
+              <h2 class="vtitle" id="vtitle">The Beginning</h2>
+              <button class="play">Play</button>
+            </div>
+          </div>
+          <div class="beacon" id="beacon">
+            <div class="thumb" style="width:44px;height:44px;background:#2c2c54"></div>
+            <div>
+              <div class="k">Now playing</div>
+              <div class="s">シルエット</div>
+              <div style="opacity:.7;font-size:12px">あの日の悲しみは</div>
+            </div>
+          </div>
+          <div class="tools">Custom order · Shuffle · Filter</div>
+          <div class="list" id="list"></div>
+        </section>
+        <aside class="lyrics" id="lyrics">
+          <h4>Lyrics</h4>
+          <p>忘れない 君の声が</p>
+          <p class="now" id="lyricNow">あの日の悲しみは</p>
+          <p>夜を越えて朝になる</p>
+        </aside>
+      </div>
+      <div class="sheet">
+        <div style="opacity:.5;font-size:12px">Lyrics · sheet (uses height)</div>
+        <p style="opacity:.45">忘れない 君の声が</p>
+        <p class="loud">あの日の悲しみは</p>
+        <p style="opacity:.45">夜を越えて朝になる</p>
+      </div>
+      <footer class="player">
+        <div class="now-mini"><div class="art"></div><div><b>シルエット</b><div style="color:#888">KANA-BOON</div></div></div>
+        <div>◁ ▶ ▷<div class="bar"><i></i></div></div>
+        <div style="text-align:right;color:#888">lyrics · vol</div>
+      </footer>
+    </div>
+  </div>
+
+  <script>
+    const tracks = [
+      [1,"The Beginning","ONE OK ROCK","Zankyo Reference","182","4:55","#1a1a1a"],
+      [2,"完全感覚Dreamer","ONE OK ROCK","Niche Syndrome","176","4:02","#c0392b"],
+      [3,"アンサイズニア","04 Limited Sazabys","SOIL","168","3:41","#2c3e50"],
+      [4,"ライラック","Mrs. GREEN APPLE","Variety","132","4:50","#8e44ad"],
+      [5,"ミックスナッツ","Official髭男dism","Subtitle","150","3:32","#e67e22"],
+      [6,"Pretender","Official髭男dism","Traveler","92","5:26","#2980b9"],
+      [7,"インフェルノ","Mrs. GREEN APPLE","Attitude","148","3:36","#16a085"],
+      [8,"ピースサイン","Kenshi Yonezu","BOOTLEG","160","4:01","#2d3436"],
+      [9,"Lemon","Kenshi Yonezu","STRAY SHEEP","87","4:16","#dfe6e9"],
+      [10,"夜に駆ける","YOASOBI","THE BOOK","130","4:21","#6c5ce7"],
+      [11,"群青","YOASOBI","THE BOOK","135","4:08","#0984e3"],
+      [12,"アイドル","YOASOBI","Hero","166","3:33","#e84393"],
+      [13,"Chekkera!","WANIMA","Everybody!!","190","3:28","#27ae60"],
+      [14,"ray","BUMP OF CHICKEN","ray","96","4:48","#2d3436"],
+      [15,"Takarabako","BUMP OF CHICKEN","Butterflies","118","5:12","#00b894"],
+      [16,"ノーダウト","Official髭男dism","Escaparade","135","3:18","#fdcb6e"],
+      [17,"The Beginning","ONE OK ROCK","Zankyo Reference","182","4:55","#1a1a1a"],
+      [18,"完全感覚Dreamer","ONE OK ROCK","Niche Syndrome","176","4:02","#c0392b"],
+      [19,"アンサイズニア","04 Limited Sazabys","SOIL","168","3:41","#2c3e50"],
+      [20,"ライラック","Mrs. GREEN APPLE","Variety","132","4:50","#8e44ad"],
+      [21,"ミックスナッツ","Official髭男dism","Subtitle","150","3:32","#e67e22"],
+      [22,"シルエット","KANA-BOON","Time","185","4:00","#2c2c54"],
+      [23,"ないものねだり","KANA-BOON","doppel","178","4:11","#474787"],
+      [24,"生きてゆく","KANA-BOON","NAMiDA","162","3:52","#aaa69d"]
+    ];
+
+    const lerp = (a,b,t) => a + (b-a)*t;
+    const clamp = (v,a,b) => Math.max(a, Math.min(b, v));
+    const remap = (v,a,b,c,d) => lerp(c,d, clamp((v-a)/(b-a),0,1));
+
+    // Mirror DetailLayoutBreakpoints.NominalModeFor (simplified, no hysteresis in the mock).
+    function modeFor(w) {
+      if (w >= 820) return 0;
+      if (w >= 660) return 1;
+      if (w >= 560) return 2;
+      return 3;
+    }
+    function railW(mode) { return mode === 0 ? 220 : mode === 1 ? 224 : 188; }
+    function titleSize(h) { return h >= 900 ? 40 : 28; } // existing rung
+    function descLines(h) { return h < 760 ? 3 : 6; }
+
+    // NEW height reflow — between existing density rungs, not a new enum.
+    function rowHeight(listH) { return remap(listH, 360, 780, 48, 64); }
+    function npBoost(listH) { return remap(listH, 420, 820, 0, 22); }
+    function showBeacon(listH, vertical) { return !vertical && listH > 620; }
+
+    const phone = document.getElementById("phone");
+    const body = document.getElementById("body");
+    const list = document.getElementById("list");
+    const wIn = document.getElementById("width");
+    const hIn = document.getElementById("height");
+
+    function layout() {
+      const W = +wIn.value, H = +hIn.value;
+      document.getElementById("wlab").textContent = W;
+      document.getElementById("hlab").textContent = H;
+      phone.style.width = W + "px";
+      phone.style.height = H + "px";
+
+      const mode = modeFor(W);
+      const vertical = mode === 3;
+      const icons = 44;
+      const rw = vertical ? 0 : railW(mode);
+      const listMin = 300;
+      const lyricsCol = 168;
+      const leftover = W - icons - rw - 8;
+      const lyricsAsSheet = !vertical && leftover - lyricsCol < listMin;
+      const listW = leftover - (lyricsAsSheet || vertical ? 0 : lyricsCol);
+
+      phone.classList.toggle("vertical", vertical);
+      phone.classList.toggle("stacked", vertical && listW < 540);
+      phone.classList.toggle("lyrics-sheet", lyricsAsSheet);
+      const chrome = 40 + 56 + (vertical ? 0 : 0);
+      const vheroH = vertical ? (listW < 540 ? 220 : 160) : 0;
+      const listH = H - chrome - vheroH - 28;
+      const rowH = rowHeight(listH);
+      const boost = npBoost(listH);
+      const beacon = showBeacon(listH, vertical);
+      phone.classList.toggle("show-beacon", beacon);
+
+      body.style.gridTemplateColumns = vertical
+        ? `${icons}px minmax(0,1fr)`
+        : lyricsAsSheet
+          ? `${icons}px ${rw}px minmax(0,1fr)`
+          : `${icons}px ${rw}px minmax(0,1fr) ${lyricsCol}px`;
+
+      const ts = titleSize(H);
+      document.getElementById("heroTitle").style.fontSize = ts + "px";
+      document.getElementById("heroTitle").style.lineHeight = (ts >= 40 ? 44 : 32) + "px";
+      document.getElementById("cover").style.width = "100%";
+      document.getElementById("cover").style.aspectRatio = "1";
+      const art = vertical ? clamp(listW * 0.34, 96, 240) : rw - 24;
+      document.getElementById("vcov").style.width = document.getElementById("vcov").style.height = art + "px";
+      document.getElementById("vtitle").style.fontSize = (listW >= 640 ? 40 : listW >= 360 ? 28 : 20) + "px";
+      document.getElementById("vhero").style.setProperty("--art", art + "px");
+
+      const showAlbum = listW >= 560;
+      const showBpm = listW >= 720;
+      const visible = Math.max(6, Math.floor((listH - (beacon ? 72 : 0)) / rowH));
+
+      list.innerHTML = tracks.slice(0, visible).map(t => {
+        const np = t[0] === 22;
+        const h = np ? rowH + boost : rowH;
+        return `<div class="row ${np?"np":""}" style="height:${h}px">
+          <div class="n">${np ? '<span class="eq"><i></i><i></i><i></i></span>' : t[0]}</div>
+          <div class="thumb" style="width:${Math.min(40,h-8)}px;height:${Math.min(40,h-8)}px;background:${t[6]}"></div>
+          <div style="min-width:0">
+            <div class="name" style="font-size:${np ? 15 : 13}px">${t[1]}</div>
+            <div class="artist">${t[2]}</div>
+          </div>
+          <div class="album" style="display:${showAlbum?"block":"none"};max-width:120px">${t[3]}</div>
+          <div class="bpm" style="display:${showBpm?"block":"none"}">${t[4]}</div>
+        </div>`;
+      }).join("");
+
+      const names = ["0 Wide rail","1 Mid rail 224","2 Narrow rail 188","3 Vertical hero"];
+      document.getElementById("readout").innerHTML = `
+        <div><span class="chip on">${names[mode]}</span>
+          ${vertical ? "" : `<span class="chip">two-column</span>`}
+          ${lyricsAsSheet ? `<span class="chip warn">lyrics → sheet</span>` : (vertical ? "" : `<span class="chip">lyrics column</span>`)}
+          ${beacon ? `<span class="chip">NP beacon</span>` : ""}
+        </div>
+        <div style="margin-top:8px">
+          rail <b>${vertical ? "hero" : rw+"px"}</b>
+          <span class="arrow">→</span> list <b>${Math.round(listW)}px</b>
+          · row <b>${Math.round(rowH)}px</b> <span class="arrow">(48–64 density rungs)</span>
+          · title <b>${ts}px</b> rung
+          · ~<b>${visible}</b> rows
+        </div>
+        <div style="margin-top:4px;color:#888">
+          ${vertical
+            ? "Width crossed 540 — the existing vertical remount. Hero reflow (stacked vs row) is already continuous."
+            : lyricsAsSheet
+              ? "Still two-column. List would drop under 300 with a lyrics column, so lyrics use height."
+              : H < 700
+                ? "Laptop band: default 48px rows, no beacon. This is today’s page."
+                : "Same shell as laptop. Height is buying row presence, not more identical rows."}
+        </div>`;
+    }
+
+    wIn.oninput = hIn.oninput = layout;
+    document.querySelectorAll(".presets button").forEach(b => b.onclick = () => {
+      wIn.value = b.dataset.w; hIn.value = b.dataset.h; layout();
+    });
+    layout();
+  </script>
+</body>
+</html>

@@ -1,38 +1,19 @@
-using System;
 using System.Collections.Generic;
-using System.Threading;
-using System.Threading.Tasks;
 using Wavee.Core;
 
 namespace Wavee.Backend.Metadata;
 
-// ── Artist discography: V4 ensure + assemble ─────────────────────────────────────────────────────────────────────────
-// The single writer of hydrated discography cards, shared by the on-open path (LiveSessionHost.OnDemandFetch) and the
-// sign-in prefetch (DiscographyPrefetcher). ArtistV4 carries the whole discography as gid-only stubs (facet totals =
-// group counts); AlbumV4 upgrades each stub to a resident card; assembly folds the resident cards back onto the Artist
-// row (DATE_DESC, tracklists stripped). Uses only MetadataService + IStore — no Pathfinder, no GraphQL.
+// ── Artist discography: assemble ─────────────────────────────────────────────────────────────────────────────────────
+// The fold that turns resident AlbumV4 cards back into the Artist row's shelves. The FETCH half (the old EnsureAsync +
+// DiscographyPrefetcher) is gone: ArtistHydration (Backend/Hydration) is the one place that decides which stubs to
+// hydrate and at which rung (hydration-facade-plan.md §1.6). Store-only — no transport, no Pathfinder, no GraphQL.
 public static class ArtistDiscography
 {
-    const int AppearsOnHydrateCap = 20;   // the on-open shelf slice; the full appears-on set is never bulk-hydrated
+    /// <summary>The on-open shelf slice; the full appears-on set is never bulk-hydrated. Public because the artist
+    /// LADDER (Backend/Hydration/ArtistHydration.cs) caps its Rich stub batch by the same number — one constant,
+    /// not two that can drift.</summary>
+    public const int AppearsOnHydrateCap = 20;
 
-    /// <summary>V4 ensure: ArtistV4 (stubs + totals) → AlbumV4 for un-hydrated own-discography stubs → assemble.
-    /// Cheap when fresh — MetadataService SWR/etag skips resident entities, so calling on every open is fine.</summary>
-    public static async Task EnsureAsync(MetadataService md, IStore store, string artistUri, CancellationToken ct,
-        bool hydrateAppearsOn = false)
-    {
-        await md.SyncAllAsync(new[] { artistUri }, ct).ConfigureAwait(false);
-        var artist = store.GetArtist(artistUri);
-        if (artist?.TopAlbums is not { Count: > 0 } stubs) return;
-
-        var need = new List<string>();
-        foreach (var s in stubs)
-            if (s.Name.Length == 0 || store.GetAlbum(s.Uri) is null) need.Add(s.Uri);
-        if (hydrateAppearsOn && artist.AppearsOn is { } appears)
-            for (int i = 0; i < appears.Count && i < AppearsOnHydrateCap; i++)
-                if (appears[i].Name.Length == 0) need.Add(appears[i].Uri);
-        if (need.Count > 0) await md.SyncAllAsync(need, ct).ConfigureAwait(false);
-        Assemble(store, artistUri);
-    }
 
     /// <summary>Upgrade stub cards to resident AlbumV4 cards, sorted DATE_DESC, tracklists STRIPPED (an Artist row must
     /// not embed hundreds of tracklists into its persisted JSON). Idempotent; the store merge (MergeAlbumCards) makes it

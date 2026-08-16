@@ -221,18 +221,50 @@ enum ExtensionKind {
 	ARTIST_MUSIC_VIDEOS_UNMAPPED = 213;
 	ENTITY_CONNECTIONS = 214;
 	USER_PROFILE_V2 = 215;
-	// ── Resolved from live 2026 captures ────────────────────────────────────────────────────────────────────────────
-	// Past the end of the enum Wavee was built against. Each NAME is derived from the payload's google.protobuf.Any
-	// type_url on a 200 response: the number→message binding is wire-verified, the identifier is our spelling.
-	// Kind 225 was previously believed unresolvable (it is 304 in most captures) — omg.saz caught it with a 200.
-	MIX_BEATS = 217;                    // playlistmixing.extensions.mixbeats.Beats — per-beat grid
-	MIX_VOCAL_ACTIVITY = 218;           // playlistmixing.extensions.mixvocalactivity.VocalActivity
-	MIXABILITY = 219;                   // playlistmixing.extensions.mixability.Mixability
-	ENTITY_TYPE_TRAIT = 220;            // contentagnostic.v2.EntityTypeTrait
-	AUDIO_ATTRIBUTES_V2 = 222;          // playlistmixing…audio_attributes.v2.AudioAttributes — tempo + musical key
-	MIX_STATE = 225;                    // playlistmixing.extensions.mixstate.MixState
-	MIX_THREE_BAND_WAVEFORMS = 237;     // playlistmixing…mixthreebandwaveforms.ThreeBandWaveforms — the waveform
-	CONTENT_CAPABILITY_TRAIT = 239;     // contentagnostic.v2.ContentCapabilityTrait — states music-video-disabled
-	CURATION_EXPERIENCE_TRAIT = 246;    // contentagnostic.v2.CurationExperienceTrait
-	CONTENT_EXPERIENCE_TRAIT = 249;     // contentagnostic.v2.ContentExperienceTrait
+	// Official identifiers from Spotify desktop 1.2.95.453 xpui (4764.js ExtensionKind table).
+	// 104 is still unused. Capture-era spellings MIX_BEATS / MIX_VOCAL_ACTIVITY / MIX_THREE_BAND_WAVEFORMS
+	// were type_url-derived; the client names are BEATS / VOCAL_ACTIVITY / THREEBAND_WAVEFORMS.
+	VIDEO_RELATIONS = 216;
+	BEATS = 217;
+	VOCAL_ACTIVITY = 218;
+	MIXABILITY = 219;
+	ENTITY_TYPE_TRAIT = 220;
+	CHAT_SHARE_PREVIEW = 221;
+	AUDIO_ATTRIBUTES_V2 = 222;
+	WATCH_FEED_CATEGORIES_TRAIT = 223;
+	VENUE_ARTISTS_PREVIEW = 224;
+	MIX_STATE = 225;
+	WATCH_FEED_SEED_ITEM_TRAIT = 226;
+	SONG_DNA_ELIGIBILITY = 227;
+	LEARNING_MATERIAL = 228;
+	BANNER_WITH_ANIMATIONS = 229;
+	VENUE_LOCATION = 230;
+	TRANSCRIPT_SEARCH = 231;
+	SONGDNA_CREDITS = 232;
+	AUDIOBOOK_TO_PHYSICAL_BOOK_MAPPING = 233;
+	ARTIST_WRAPPED_2025_VIDEO = 234;
+	MIXABILITY_TRAIT = 235;
+	SONGDNA_ARTIST_FACTS = 236;
+	THREEBAND_WAVEFORMS = 237;
+	AUDIOBOOK_PARTNER_SALES = 238;
+	CONTENT_CAPABILITY_TRAIT = 239;
+	CONCERT_CAMPAIGN = 240;
+	CONCERT_CAMPAIGN_USER_STATE = 241;
+	CONCERT_CAMPAIGN_STRINGS = 242;
+	CONCERT_CAMPAIGN_ROUTINGS = 243;
+	TRANSITION_DATA = 244;
+	CHAT_RICH_MEDIA = 245;
+	CURATION_EXPERIENCE_TRAIT = 246;
+	COMMON_TRANSITION_POINT = 247;
+	PLAY_LINK_CARD_TRAIT = 248;
+	CONTENT_EXPERIENCE_TRAIT = 249;
+	TRACK_ALTERNATIVE_VERSIONS = 250;
+	LICENSING_IDENTIFIERS_TRAIT = 251;
+	SPONSORSHIP = 252;
+	AUDIOBOOK_DIRECT_SALES = 253;
+	ALBUM_MUSIC_VIDEOS = 254;
+	CREATOR_ARTIST_FACTS = 255;
+	PLAYBACK_EXPERIENCE_TRAIT = 256;
+	SPEEDABILITY = 257;
+	CONTENT_MARKERS = 258;
 }

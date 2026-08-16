@@ -67,6 +67,17 @@ public readonly struct RepeatLayout
     /// Stateful — hoist when the owner re-renders (see the struct remarks).</summary>
     public static RepeatLayout VariableList(float estimatedExtent, bool horizontal = false)
         => new(RepeatKind.Custom, 0, 0, 0, horizontal, new MeasuredStackVirtualLayout(estimatedExtent, horizontal));
+    /// <summary>ANALYTIC variable-extent list: <paramref name="extentOf"/> reports a row's height straight from the
+    /// host's own model, so an unmeasured row seeds at its REAL extent instead of one global estimate — which is what
+    /// keeps the content extent and the scroll anchor still when the model inserts or removes rows in the MIDDLE of a
+    /// list whose rows are not all the same height. It is a SEED, not a substitute for measurement: measure feedback
+    /// still corrects any row the function cannot predict exactly, and <paramref name="estimatedExtent"/> is the
+    /// fallback for a non-finite/non-positive answer. Called only on a seed/resize/splice — never per frame — so keep
+    /// it allocation-free and cache the delegate (it is part of the layout's identity). Stateful — hoist when the owner
+    /// re-renders (see the struct remarks).</summary>
+    public static RepeatLayout Extents(Func<int, float> extentOf, float estimatedExtent, bool horizontal = false)
+        => new(RepeatKind.Custom, 0, 0, 0, horizontal,
+               new MeasuredStackVirtualLayout(estimatedExtent, horizontal, extentOf));
     /// <summary>Grouped flat list with measured rows + a sticky-header hook: <paramref name="headerIndices"/> (sorted
     /// ascending) are group-header flat indices — a header is just a measured item KIND. For <c>StickyHeaderIndexAt</c>
     /// keep your own <c>GroupedListVirtualLayout</c> and pass it via <see cref="Measured"/> instead. Stateful — hoist when

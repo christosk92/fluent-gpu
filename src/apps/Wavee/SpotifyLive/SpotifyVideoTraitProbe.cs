@@ -7,8 +7,11 @@ using Google.Protobuf;
 using Wavee.Backend;
 using Wavee.Backend.Metadata;
 using Wavee.Backend.Spotify;
+using Wavee.Core;
 using M = Wavee.Protocol.Metadata;
 using Xm = Wavee.Protocol.ExtendedMetadata;
+// EntityKind: the ONE uri vocabulary (Wavee.Core), not the transport's thin Backend.Metadata projection of it.
+using EntityKind = Wavee.Core.EntityKind;
 
 namespace Wavee.SpotifyLive;
 
@@ -396,7 +399,7 @@ public static class SpotifyVideoTraitProbe
         if (b.Length is < 9 or > 128) return null;
         for (int i = 0; i < b.Length; i++) { byte c = b.Span[i]; if (c < 0x20 || c > 0x7e) return null; }
         string s = Encoding.ASCII.GetString(b.Span);
-        return s.StartsWith("spotify:", StringComparison.Ordinal) ? s : null;
+        return EntityUri.Parse(s).Provider == EntityProviders.Spotify ? s : null;
     }
 
     // TrackV4 parsed with the FULL Wavee.Protocol.Metadata.Track — LeanTrack drops canonical_uri(36)/alternative(13),
@@ -428,7 +431,7 @@ public static class SpotifyVideoTraitProbe
     }
 
     static string NormalizeTrackUriOrRaw(string raw)
-        => raw.StartsWith("spotify:", StringComparison.Ordinal) ? raw
+        => EntityUri.Parse(raw).Provider == EntityProviders.Spotify ? raw
          : raw.Length == 22 ? "spotify:track:" + raw
          : raw;
 
@@ -505,7 +508,8 @@ public static class SpotifyVideoTraitProbe
                 end++;
             }
             string s = Encoding.ASCII.GetString(payload[i..end]);
-            if ((s.StartsWith("spotify:track:", StringComparison.Ordinal) || s.StartsWith("spotify:video:", StringComparison.Ordinal)
+            // video/canvas have no EntityKind (they are not addressable entities), so those two stay prefix tests.
+            if ((EntityUri.KindOf(s) == EntityKind.Track || s.StartsWith("spotify:video:", StringComparison.Ordinal)
                  || s.StartsWith("spotify:canvas:", StringComparison.Ordinal))
                 && found.Add(s))
             {
@@ -519,7 +523,7 @@ public static class SpotifyVideoTraitProbe
     static string NormalizeTrackUri(string raw)
     {
         raw = raw.Trim();
-        if (raw.StartsWith("spotify:track:", StringComparison.Ordinal)) return raw;
+        if (EntityUri.KindOf(raw) == EntityKind.Track) return raw;
         if (raw.Length == 22) return "spotify:track:" + raw;
         return "";
     }
@@ -529,8 +533,7 @@ public static class SpotifyVideoTraitProbe
     static string ShortId(string? uri)
     {
         if (string.IsNullOrEmpty(uri)) return "-";
-        int i = uri!.LastIndexOf(':');
-        return i >= 0 && i + 1 < uri.Length ? uri[(i + 1)..] : uri;
+        return EntityUri.IdOf(uri!);
     }
 
     readonly record struct ExtensionView(int Status, string? Etag, long OfflineTtl, ByteString? Payload);

@@ -9,12 +9,11 @@ namespace Wavee.SpotifyLive;
 
 /// <summary>The Spotify media source: pure delegation onto the SAME <see cref="LiveTrackResolver"/> + fast-start
 /// instances the session already owns, so routing playback through <see cref="MediaProviderRegistry"/> costs exactly one
-/// prefix test and changes no resolve semantics. Owns the whole <c>spotify:</c> namespace — tracks AND episodes ride the
-/// same seams (the episode branches live inside the resolver, where per-scheme knowledge belongs).</summary>
+/// <see cref="EntityUri"/> provider test and changes no resolve semantics. Owns the whole <c>spotify:</c> namespace —
+/// tracks AND episodes ride the same seams (the episode branches live inside the resolver, where per-scheme knowledge
+/// belongs).</summary>
 public sealed class SpotifyMediaProvider : IPlayableMediaProvider
 {
-    public const string UriPrefix = "spotify:";
-
     readonly LiveTrackResolver _resolver;
     readonly IFastTrackResolver _fast;
     readonly IFastTrackWarmer? _warmer;
@@ -31,7 +30,7 @@ public sealed class SpotifyMediaProvider : IPlayableMediaProvider
     public MediaProviderCaps Caps =>
         MediaProviderCaps.PreparedNext | MediaProviderCaps.ConnectPublish | MediaProviderCaps.WireMeta;
 
-    public bool Owns(string playableUri) => playableUri.StartsWith(UriPrefix, StringComparison.Ordinal);
+    public bool Owns(string playableUri) => EntityUri.Parse(playableUri).Provider == EntityProviders.Spotify;
 
     public Task<FastStartPlan> ResolveFastAsync(Track track, CancellationToken ct = default)
         => _fast.ResolveFastAsync(track, ct);
@@ -44,16 +43,24 @@ public sealed class SpotifyMediaProvider : IPlayableMediaProvider
     public async Task<PlaybackTrackMeta?> ResolveWireMetaAsync(Track track, CancellationToken ct = default)
     {
         var m = await _resolver.ResolveMetaAsync(track, ct).ConfigureAwait(false);
-        int kbps = m.Fmt switch
+        // EVERY arm is named, and the label is derived from the FORMAT rather than from the bitrate.
+        //
+        // Both halves used to be wrong in the same direction — they described lossless as lossy Vorbis. `Flac24` had no
+        // kbps arm at all, so 24-bit lossless fell through `_ => 160`; and the label was
+        // `m.Fmt == Mp3 ? "MP3" : $"Vorbis {kbps} kbps"`, which called a FLAC stream "Vorbis 1411 kbps" and a Flac24
+        // stream "Vorbis 160 kbps". Nothing surfaced it, so nothing caught it — the stage's quality badge is the first
+        // consumer that shows this string to a user, and a badge that misnames the stream is worse than no badge.
+        (int kbps, string fmtLabel) = m.Fmt switch
         {
-            AudioFormat.OggVorbis96 => 96,
-            AudioFormat.OggVorbis160 => 160,
-            AudioFormat.OggVorbis320 => 320,
-            AudioFormat.Flac => 1411,
-            AudioFormat.Mp3 => 160,
-            _ => 160,
+            AudioFormat.OggVorbis96 => (96, "Vorbis 96 kbps"),
+            AudioFormat.OggVorbis160 => (160, "Vorbis 160 kbps"),
+            AudioFormat.OggVorbis320 => (320, "Vorbis 320 kbps"),
+            // 16-bit/44.1 stereo = 1411 kbps; 24-bit at the same rate is 2116.
+            AudioFormat.Flac => (1411, "FLAC"),
+            AudioFormat.Flac24 => (2116, "FLAC 24-bit"),
+            AudioFormat.Mp3 => (160, "MP3"),
+            _ => (160, "160 kbps"),
         };
-        string fmtLabel = m.Fmt == AudioFormat.Mp3 ? "MP3" : $"Vorbis {kbps} kbps";
         return new PlaybackTrackMeta(m.FileGid, m.FileId, kbps, fmtLabel, m.DurMs);
     }
 }

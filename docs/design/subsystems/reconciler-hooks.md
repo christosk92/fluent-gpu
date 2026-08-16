@@ -162,11 +162,20 @@ contracts owned elsewhere:
   spine) and mounts one of three branches: a shimmer DERIVED from the author's ONE real subtree by `SkeletonDeriver`
   (`Hooks/SkeletonDeriver.cs` — a pure recursive Element→shimmer-bar walk, reading declared statics via `Prop.ValueOr`),
   the real content, or the `onFailed` UI. The Pending→Ready edge reconciles shimmer→real (the proven `Flow.Show` swap —
-  NO new scene column), orphan-exits the shimmer with an opacity+blur fade (`EnterExit.Blur`, owned by
-  `backdrop-effects-animation.md`) while the real rows blur-reveal in (the `SoftReveal` recipes), and cancels the
-  looping `SkeletonPulse` on the exit so HasTracks drops (the idle wake-stop is not defeated). `.Pending(field)` lowers
+  NO new scene column) as a **cross-dissolve, never a dip to empty**: the shimmer branch carries an `EnterExit`
+  Opacity→0 exit terminal, so `Remove` orphans it and it keeps drawing (exit orphans record UNDER live children) while
+  the real rows reveal OVER it (the `SoftReveal` recipes). Opacity ONLY — no `EnterExit.Blur` on the shimmer, because a
+  page-sized blur group is the effect-layer perf cliff (`backdrop-effects-animation.md`). `SkeletonStyle.ExitMs`
+  (default `Expressive.Fast`) is the shimmer half of the dissolve, floored at `Expressive.Slow` for
+  `SkelReveal.None` (content owns its entrance, so the shimmer must linger across it); no exit is stamped under
+  `Motion.ReducedMotion`. The looping `SkeletonPulse` is cancelled on the exit so HasTracks drops (the idle wake-stop is
+  not defeated), and the orphan is enqueued with its OWN hard deadline (`SceneStore.OrphanMaxAgeMs` = duration + delay +
+  slack, measured on `SceneStore.AnimClockMs` — the animation timebase, not the wall clock, so a slow frame cannot
+  force-reclaim a healthy exit) on top of the host's global settle-timeout: a wedged exit track is dropped in ~one exit
+  duration instead of leaving a half-faded page. `.Pending(field)` lowers
   to a leaf-grain region for incremental per-field arrival. Per-node `SkeletonMode.Off`/`SkeletonOverride` (on the base
-  `Element`, owned by `dsl-aot.md`) tune derivation (checks SK.a–g). `UseResource` (RenderContext; renames the former
+  `Element`, owned by `dsl-aot.md`) tune derivation (checks SK.a–g, with SK.b2/SK.b3 pinning the cross-dissolve and the
+  wedge deadline). `UseResource` (RenderContext; renames the former
   `UseAsyncResource`, G2) is the fetch lifecycle (UsePost marshal + CTS-cancel-on-unmount), modelled on `UseImage`.
 - **Context = signals.** A `ContextProviderEl` stores a `Signal<object?>` per provider node; `UseContext` resolves
   the nearest provider by walking ancestors (`SceneStore.Parent`) and subscribes — so a value change re-renders

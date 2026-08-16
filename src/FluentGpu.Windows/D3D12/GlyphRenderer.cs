@@ -665,7 +665,7 @@ float4 PSMain(VSOutG i) : SV_Target
     /// the layout engine, so the GPU path lays out exactly like the measure path.</summary>
     public void LayoutRun(StringId textId, StringId familyId, string text, string family, float size, int weight, float originX, float topY, float maxWidth, int wrap, int trim, int maxLines,
         float charSpacing, float lineHeight, int lineStacking, int lineBounds, ColorF color, float dpiScale, Affine2D world, float opacity, List<GlyphInstance> outList,
-        int spanRunId = 0, bool forceColor = false, bool inMotion = false)
+        int spanRunId = 0, bool forceColor = false, float motionSoft = 0f)
     {
         var key = MakeRunKey(textId, familyId, size, weight, maxWidth, wrap, trim, maxLines, originX, topY, dpiScale, charSpacing, lineHeight, lineStacking, lineBounds, spanRunId);
 
@@ -678,7 +678,7 @@ float4 PSMain(VSOutG i) : SV_Target
             if (VerifyCache) VerifyAgainstReshape(in hit, text, family, size, weight, originX, topY, maxWidth, wrap, trim, maxLines, charSpacing, lineHeight, lineStacking, lineBounds, dpiScale, spanRunId);
 #endif
             var quads = hit.Glyphs.AsSpan(0, hit.Count);
-            float snap = SnapDy(quads, world, dpiScale, out int ph);
+            float snap = SnapDy(quads, world, dpiScale, motionSoft, out int ph);
             Replay(quads, hit.Colors, forceColor, color, world, opacity, snap, ph, outList);
             return;
         }
@@ -707,7 +707,7 @@ float4 PSMain(VSOutG i) : SV_Target
         _runCache[key] = new ShapedRun { Glyphs = arr, Colors = colors, Count = n, LastUsedFrame = _frame };
         _runsShaped++;
         var baked = arr.AsSpan(0, n);
-        float bsnap = SnapDy(baked, world, dpiScale, out int bph);
+        float bsnap = SnapDy(baked, world, dpiScale, motionSoft, out int bph);
         Replay(baked, colors, forceColor, color, world, opacity, bsnap, bph, outList);
     }
 
@@ -738,7 +738,7 @@ float4 PSMain(VSOutG i) : SV_Target
     public void LayoutRunGradient(StringId textId, StringId familyId, string text, string family, float size, int weight, float originX, float topY, float maxWidth, int wrap, int trim, int maxLines,
         float charSpacing, float lineHeight, int lineStacking, int lineBounds, ColorF before, ColorF after, float split, float softness, float lift, float dpiScale, Affine2D world, float opacity,
         List<GradGlyphInstance> outList, List<GlyphInstance> plainList,
-        int spanRunId = 0, bool inMotion = false)
+        int spanRunId = 0, float motionSoft = 0f)
     {
         var key = MakeRunKey(textId, familyId, size, weight, maxWidth, wrap, trim, maxLines, originX, topY, dpiScale, charSpacing, lineHeight, lineStacking, lineBounds, spanRunId);
 
@@ -788,7 +788,7 @@ float4 PSMain(VSOutG i) : SV_Target
             bool sung = split >= 1f;
             ColorF settled = sung ? before : after;
             if (settled.A * opacity <= SettledAlphaEpsilon) return;   // invisible (e.g. the glow layer's unsung pass)
-            float settledSnap = SnapDy(quads, world, dpiScale, out int settledPhase);
+            float settledSnap = SnapDy(quads, world, dpiScale, motionSoft, out int settledPhase);
             if (sung)
             {
                 Replay(quads, null, forceColor: true, settled, world, opacity, settledSnap, settledPhase, plainList);
@@ -863,7 +863,7 @@ float4 PSMain(VSOutG i) : SV_Target
             float a = Math.Clamp((splitShader - gtc) / fade + 0.5f, 0f, 1f);
             _gradDy[i] = lift * (1f - a);   // unsung sunk by `lift`, rising to the baseline (0) as it is swept (settles to 0 at split==1)
         }
-        float gsnap = SnapDy(quads, world, dpiScale, out int gph);
+        float gsnap = SnapDy(quads, world, dpiScale, motionSoft, out int gph);
         ReplayGradient(quads, world, opacity, gsnap, gph, before, after, splitShader, fade, total,
             _gradRo0.AsSpan(0, count), _gradRo1.AsSpan(0, count), _gradDy.AsSpan(0, count), outList);
     }
@@ -919,7 +919,7 @@ float4 PSMain(VSOutG i) : SV_Target
     /// replays correctly at any other. One scalar for the whole run: multi-line leading stays uniform (lines snap as a
     /// group from the first baseline). Y only — X keeps DirectWrite's sub-pixel advances. Skewed/rotated/flipped worlds
     /// (M12 ≠ 0 or M22 ≤ 0) draw unsnapped at phase 0 — there is no meaningful pixel grid for them.</para></summary>
-    private static float SnapDy(ReadOnlySpan<ShapedGlyph> glyphs, in Affine2D world, float dpiScale, out int phase)
+    private static float SnapDy(ReadOnlySpan<ShapedGlyph> glyphs, in Affine2D world, float dpiScale, float motionSoft, out int phase)
     {
         phase = 0;
         if (glyphs.Length == 0 || world.M12 != 0f || world.M22 <= 0f) return 0f;
@@ -928,7 +928,12 @@ float4 PSMain(VSOutG i) : SV_Target
         float rowF = MathF.Floor(m / SubPixelPhases);          // the integer device row the quad is positioned on
         phase = (int)(m - rowF * SubPixelPhases);              // floor remainder ⇒ always 0..N-1, incl. negative devY
         if (phase < 0) phase = 0; else if (phase >= SubPixelPhases) phase = SubPixelPhases - 1;
-        return (rowF - devY) / (world.M22 * dpiScale);
+        // Relax the snap in proportion to how fast the content is moving. At 0 the run lands exactly on its 1/N phase
+        // (crisp); at 1 no correction is applied at all, the glyph sits at its natural fractional device Y, and the
+        // LINEAR/CLAMP atlas sampler reproduces the soft look WinUI gets for free by resampling a composited surface.
+        // In between the run drifts partway off the phase grid, which is a real blend rather than a switch.
+        float relax = motionSoft > 0f ? (motionSoft >= 1f ? 0f : 1f - motionSoft) : 1f;   // NaN ⇒ crisp
+        return (rowF - devY) / (world.M22 * dpiScale) * relax;
     }
 
     /// <summary>Emit cached local-space quads into <paramref name="outList"/>, applying the per-frame color/transform/opacity

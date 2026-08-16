@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.CompilerServices;
@@ -60,12 +60,12 @@ public class DiscographyRoutingTests
         public bool Owns(string uri) => uri == ownedUri;
         public SourceCapabilities Capabilities => SourceCapabilities.Catalog;
 
-        public Task<Artist?> GetArtistAsync(string uri, CancellationToken ct = default)
+        public Task<Artist?> GetArtistAsync(string uri, HydrationLevel level = HydrationLevel.Open, CancellationToken ct = default)
             => Task.FromResult<Artist?>(uri == ownedUri ? artist : null);
 
         // Unused by discography routing / DIM probe — deliberately unsupported so a stray call is loud.
-        public Task<Playlist?> GetPlaylistAsync(string uri, CancellationToken ct = default) => throw new NotSupportedException();
-        public Task<Album?> GetAlbumAsync(string uri, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<Playlist?> GetPlaylistAsync(string uri, HydrationLevel level = HydrationLevel.Open, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<Album?> GetAlbumAsync(string uri, HydrationLevel level = HydrationLevel.Open, CancellationToken ct = default) => throw new NotSupportedException();
         public IAsyncEnumerable<TrackPage> StreamTracksAsync(string contextUri, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<IReadOnlyList<LibraryItem>> GetLibraryAsync(CancellationToken ct = default) => throw new NotSupportedException();
         public Task<IReadOnlyList<PlaylistSummary>> GetPlaylistsAsync(CancellationToken ct = default) => throw new NotSupportedException();
@@ -157,12 +157,16 @@ public class StoreLibraryDiscographyTests
     static Track Trk(string id) => new(id, "spotify:track:" + id, "T" + id, Array.Empty<ArtistRef>(),
         new AlbumRef("", "", ""), 1000, false, null);
 
+    // The facade every StoreLibrarySource read goes through. Offline = store-only, never networks (design 1.3).
+    static SwitchableEntityHydrator Offline(IStore store) => new(new Wavee.Backend.Hydration.OfflineEntityHydrator(store));
+
+
     // Seed an artist into an InMemoryStore whose TopAlbums IS the whole discography (V4 groups → resident cards).
     static (StoreLibrarySource Src, InMemoryStore Store) SourceWith(params Album[] topAlbums)
     {
         var store = new InMemoryStore();
         store.UpsertArtist(new Artist("ar", ArtistUri, "Ar", null, topAlbums));
-        return (new StoreLibrarySource(store), store);
+        return (new StoreLibrarySource(store, Offline(store), OfflineOnlineCatalog.Instance), store);
     }
 
     // ── Probe (limit <= 0) → (empty window, in-memory filtered count). No network; TopAlbums holds the whole facet. ──
@@ -209,51 +213,12 @@ public class StoreLibraryDiscographyTests
         Assert.DoesNotContain("spotify:album:album", uris);
     }
 
-    // ── The album on-open gate (EnsureFetchedAsync): a missing, tracklist-less OR unnamed-track album still triggers the
-    // fetcher (the V4-empty-disc case falls back to getAlbum; the gid-only AlbumV4 case — how the prefetch's Wave 2 lands
-    // tracklists before Wave 3 names them — needs TrackV4 enrichment). A NAMED Tracks-level list also fetches because V4
-    // has no play counts; only a Full album is ready. EnsureAlbumAsync itself needs live metadata/Pathfinder resources. ──
-    [Fact]
-    public async Task AlbumGate_RequiresFullHydrationForPlayCounts()
-    {
-        const string albumUri = "spotify:album:g";
-        var store = new InMemoryStore();
-        var src = new StoreLibrarySource(store);
-        int fetches = 0;
-        src.OnDemandFetch = (uri, ct) => { fetches++; return Task.CompletedTask; };
-
-        await src.GetAlbumAsync(albumUri);          // no album resident → need=true
-        Assert.Equal(1, fetches);
-
-        store.UpsertAlbum(new Album("g", albumUri, "G", null, Array.Empty<ArtistRef>(), 2020, 0, Array.Empty<Track>()));
-        await src.GetAlbumAsync(albumUri);          // tracklist-less → still need=true
-        Assert.Equal(2, fetches);
-
-        var unnamed = new Track("t2", "spotify:track:t2", "", Array.Empty<ArtistRef>(), new AlbumRef("g", albumUri, "G"), 0, false, null);
-        store.UpsertAlbum(new Album("g", albumUri, "G", null, Array.Empty<ArtistRef>(), 2020, 1, new[] { unnamed }));
-        await src.GetAlbumAsync(albumUri);          // gid-only tracklist (empty titles) → still cold → need=true
-        Assert.Equal(3, fetches);
-
-        store.UpsertAlbum(new Album("g", albumUri, "G", null, Array.Empty<ArtistRef>(), 2020, 1, new[] { Trk("t") }));
-        await src.GetAlbumAsync(albumUri);          // named V4 tracklist still lacks play counts → need=true
-        Assert.Equal(4, fetches);
-
-        // A COMPLETE getAlbum envelope carries the copyright/label block (and usually play counts). Full alone has
-        // never been proof — a partial response can stamp Full with named tracks and nothing else — so the gate wants
-        // one of those facets as evidence. (It used to read the inline cover palette for this; colours moved to
-        // CoverColorPlane, keyed by image, and say nothing about how hydrated an album is.)
-        store.UpsertAlbum(new Album("g", albumUri, "G", null, Array.Empty<ArtistRef>(), 2020, 1, new[] { Trk("t") },
-            Label: "Some Label", Hydration: AlbumHydrationLevel.Full));
-        await src.GetAlbumAsync(albumUri);          // complete cached envelope → no fetch
-        Assert.Equal(4, fetches);
-
-        // Regression: a partial Pathfinder response used to stamp an empty album Full. The source requested a repair,
-        // but EnsureAlbumAsync trusted Full alone and immediately returned, permanently leaving "Nothing here yet".
-        var poisoned = new Album("bad", "spotify:album:bad", "Bad", null, Array.Empty<ArtistRef>(), 2024, 0,
-            Array.Empty<Track>(), Hydration: AlbumHydrationLevel.Full);
-        Assert.False(StoreLibrarySource.IsAlbumComplete(poisoned));
-        Assert.True(StoreLibrarySource.IsAlbumComplete(store.GetAlbum(albumUri)));
-    }
+    // The album on-open gate (AlbumGate_OpensOnNamedV4Tracks_FullUpgradeIsBelowTheFold) and its two predicates
+    // (IsAlbumOpenReady_NamedTracklistIsEnough_UnnamedAndEmptyAreNot / IsAlbumComplete) lived here because this source
+    // owned them. They are now ONE thing in ONE place: HydrationLevels.Of(Album) -- Identity = named header,
+    // Open = a named Tracks-level list (the old IsAlbumOpenReady), Rich = + publishing, Full = the getAlbum envelope.
+    // Replaced by HydrationLevelsTests.Album_* (the predicate, every state) and AlbumHydrationTests.Open_*/Rich_*/Full_*
+    // (what the ladder actually does at each rung, including the V4-empty getAlbum fallback these pinned indirectly).
 }
 
 // ── 8. VirtualCollection<T> provisional-seed reconciliation (the Phase-2 regression, both directions) ──

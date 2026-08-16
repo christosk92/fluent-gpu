@@ -6,7 +6,7 @@ namespace Wavee.Core;
 
 /// <summary>Loads the bundled Spotify GraphQL exports once and holds them as clean domain data (the JSON documents are
 /// parsed and discarded — no JsonElement is retained). Backs <see cref="SpotifyExportSource"/>. Missing/!valid files
-/// degrade to empty so the app still runs (docs/architecture.md §4.4).</summary>
+/// degrade to empty so the app still runs (docs/plans/wavee/architecture.md §4.4).</summary>
 public sealed class SpotifyExport
 {
     readonly List<PlaylistSummary> _summaries = new();

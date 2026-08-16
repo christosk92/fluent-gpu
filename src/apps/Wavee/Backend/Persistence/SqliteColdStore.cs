@@ -29,8 +29,10 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
     /// fmt-framed payloads, thin columns, cache accounting; legacy `entities`/`localized_entities` dropped. v6 = the
     /// `playlists.adopted_at` stamp the membership GC dates its victims by — critique #6. v7 = `localized_extension_cache.last_access`
     /// + its LRU index, which is what finally makes the extension tier EVICTABLE: before it, `cache_bytes` counted those
-    /// payloads but no sweep could delete them, so the byte budget had an unbounded floor it could never get under).</summary>
-    public const int CurrentSchemaVersion = 7;
+    /// payloads but no sweep could delete them, so the byte budget had an unbounded floor it could never get under.
+    /// v8 = `rootlist.added_at` (a folder rename resends the marker's ORIGINAL create timestamp) + `outbox.parent_folder`
+    /// (a queued rootlist ADD remembers its folder, because the INDEX moves while the op waits)).</summary>
+    public const int CurrentSchemaVersion = 8;
 
     /// <summary>Cap for the bulk <see cref="LoadAllExtensions"/> read. NOT used by the live path any more — the cache is
     /// point-read per miss — so this only bounds tests and offline tooling.</summary>
@@ -105,9 +107,12 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
         Exec("CREATE TABLE IF NOT EXISTS playlists(uri TEXT PRIMARY KEY, base_rev BLOB, adopted_at INTEGER NOT NULL DEFAULT 0);");
         Exec("CREATE TABLE IF NOT EXISTS playlist_items(playlist_uri TEXT NOT NULL, position INTEGER NOT NULL, item_id TEXT, " +
              "item_uri TEXT NOT NULL, added_by TEXT, added_at INTEGER, PRIMARY KEY(playlist_uri, position));");
-        Exec("CREATE TABLE IF NOT EXISTS rootlist(account TEXT NOT NULL, position INTEGER NOT NULL, kind INTEGER, uri TEXT, group_name TEXT, depth INTEGER, PRIMARY KEY(account, position));");
+        // `added_at` (v8) is the row's playlist4 ADD timestamp: a folder RENAME has to resend the marker's ORIGINAL
+        // create timestamp, so it must survive a restart. A fresh db gets the column here; an existing file gets it
+        // through the guarded ALTER in MigrateToV8().
+        Exec("CREATE TABLE IF NOT EXISTS rootlist(account TEXT NOT NULL, position INTEGER NOT NULL, kind INTEGER, uri TEXT, group_name TEXT, depth INTEGER, added_at INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(account, position));");
         // Durable mutation outbox: pending intents survive a restart. `op` holds the wire ListChanges body for oprebase edits.
-        Exec("CREATE TABLE IF NOT EXISTS outbox(id INTEGER PRIMARY KEY, type TEXT NOT NULL, entity_key TEXT NOT NULL, set_id TEXT, target_saved INTEGER, op BLOB, base_rev BLOB, attempts INTEGER NOT NULL DEFAULT 0);");
+        Exec("CREATE TABLE IF NOT EXISTS outbox(id INTEGER PRIMARY KEY, type TEXT NOT NULL, entity_key TEXT NOT NULL, set_id TEXT, target_saved INTEGER, op BLOB, base_rev BLOB, attempts INTEGER NOT NULL DEFAULT 0, parent_folder TEXT);");
         Exec("CREATE TABLE IF NOT EXISTS dead_letter(id INTEGER PRIMARY KEY, type TEXT, entity_key TEXT, reason TEXT, created_at INTEGER);");
         Migrate();
         // NO open-time extension sweep. It used to run here — one unbatched DELETE of every expired row, in a single
@@ -275,8 +280,28 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
             if (ver == "4") { MigrateToV5(); ver = "5"; }
             if (ver == "5") { MigrateToV6(); ver = "6"; }
             if (ver == "6") { MigrateToV7(); ver = "7"; }
+            if (ver == "7") { MigrateToV8(); ver = "8"; }
         }
     }
+
+    // ── v7 → v8: rootlist ADD timestamps + the queued create's rootlist placement ─────────────────────────────────────
+    // Purely ADDITIVE (two guarded ALTERs, no row rewritten):
+    //   rootlist.added_at   — the marker's playlist4 ItemAttributes.timestamp. A folder rename resends the ORIGINAL
+    //                         create timestamp (golden b037), so it has to outlive a restart. Backfilled to 0 =
+    //                         "not captured": the rename path bootstraps the rootlist rather than inventing one.
+    //   outbox.parent_folder — the folder a queued create/follow rootlist ADD belongs in. The INDEX it resolves to
+    //                         moves while the op waits, so the durable row remembers the folder id, not the index.
+    void MigrateToV8()
+    {
+        using var tx = _conn.BeginTransaction();
+        if (!ColumnExistsLocked("rootlist", "added_at", tx))
+            ExecLocked("ALTER TABLE rootlist ADD COLUMN added_at INTEGER NOT NULL DEFAULT 0;", tx);
+        if (!ColumnExistsLocked("outbox", "parent_folder", tx))
+            ExecLocked("ALTER TABLE outbox ADD COLUMN parent_folder TEXT;", tx);
+        ExecLocked("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','8');", tx);
+        tx.Commit();
+    }
+
 
     // ── v6 → v7: make the extension tier evictable ───────────────────────────────────────────────────────────────────
     // `cache_bytes` has always counted localized_extension_cache payloads, but GcEnforceBudget only ever deleted from
@@ -998,13 +1023,14 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
         lock (_readLock)
         {
             using var c = _read.CreateCommand();
-            c.CommandText = "SELECT position, kind, uri, group_name, depth FROM rootlist WHERE account=$a ORDER BY position;";
+            c.CommandText = "SELECT position, kind, uri, group_name, depth, added_at FROM rootlist WHERE account=$a ORDER BY position;";
             c.Parameters.AddWithValue("$a", _account);
             using var r = c.ExecuteReader();
             while (r.Read())
                 list.Add(new ColdRootlistEntry(
                     r.GetInt32(0), r.IsDBNull(1) ? 0 : r.GetInt32(1), r.IsDBNull(2) ? "" : r.GetString(2),
-                    r.IsDBNull(3) ? null : r.GetString(3), r.IsDBNull(4) ? 0 : r.GetInt32(4)));
+                    r.IsDBNull(3) ? null : r.GetString(3), r.IsDBNull(4) ? 0 : r.GetInt32(4),
+                    r.IsDBNull(5) ? 0L : r.GetInt64(5)));
         }
         return list;
     }
@@ -1018,13 +1044,14 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
             using (var ins = _conn.CreateCommand())
             {
                 ins.Transaction = tx;
-                ins.CommandText = "INSERT INTO rootlist(account,position,kind,uri,group_name,depth) VALUES($a,$pos,$k,$u,$g,$d);";
+                ins.CommandText = "INSERT INTO rootlist(account,position,kind,uri,group_name,depth,added_at) VALUES($a,$pos,$k,$u,$g,$d,$t);";
                 var pa = ins.Parameters.Add("$a", SqliteType.Text); pa.Value = _account;
                 var ppos = ins.Parameters.Add("$pos", SqliteType.Integer);
                 var pk = ins.Parameters.Add("$k", SqliteType.Integer);
                 var pu = ins.Parameters.Add("$u", SqliteType.Text);
                 var pg = ins.Parameters.Add("$g", SqliteType.Text);
                 var pd = ins.Parameters.Add("$d", SqliteType.Integer);
+                var pt = ins.Parameters.Add("$t", SqliteType.Integer);
                 for (int i = 0; i < entries.Count; i++)
                 {
                     var e = entries[i];
@@ -1033,6 +1060,7 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
                     pu.Value = e.Uri;
                     pg.Value = (object?)e.GroupName ?? DBNull.Value;
                     pd.Value = e.Depth;
+                    pt.Value = e.AddedAtMs;
                     ins.ExecuteNonQuery();
                 }
             }
@@ -1314,7 +1342,7 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
         lock (_readLock)
         {
             using var c = _read.CreateCommand();
-            c.CommandText = "SELECT id, type, entity_key, set_id, target_saved, op, base_rev, attempts FROM outbox ORDER BY id;";
+            c.CommandText = "SELECT id, type, entity_key, set_id, target_saved, op, base_rev, attempts, parent_folder FROM outbox ORDER BY id;";
             using var r = c.ExecuteReader();
             while (r.Read())
             {
@@ -1326,14 +1354,18 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
                 byte[]? opBlob = r.IsDBNull(5) ? null : r.GetFieldValue<byte[]>(5);
                 byte[]? baseRev = r.IsDBNull(6) ? null : r.GetFieldValue<byte[]>(6);
                 int attempts = r.IsDBNull(7) ? 0 : r.GetInt32(7);
+                string? parentFolder = r.IsDBNull(8) ? null : r.GetString(8);
                 IReadOnlyList<PlaylistOp>? ops = null;
-                if (type == "oprebase" && opBlob is not null)
+                // Both op-carrying types re-hydrate their ordered ops from the blob: "oprebase" (playlist edits) and
+                // "create" (the queued create's UPDATE_LIST{name}).
+                if ((type == "oprebase" || type == "create") && opBlob is not null)
                 {
-                    var parsed = PlaylistWireMapper.ParseChanges(opBlob);
+                    var parsed = PlaylistWireMapper.ParseOutboxBlob(opBlob);
                     ops = parsed.Ops;
                     baseRev ??= parsed.BaseRev;
                 }
-                list.Add(new OutboxOp(id, type, entityKey, setId, targetSaved, id, attempts, ops, baseRev));
+                list.Add(new OutboxOp(id, type, entityKey, setId, targetSaved, id, attempts, ops, baseRev, parentFolder));
+
             }
         }
         return list;
@@ -1341,12 +1373,12 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
 
     public void Save(OutboxOp op)
     {
-        byte[]? opBlob = op.Type == "oprebase" && op.Ops is not null ? PlaylistWireMapper.BuildChanges(op.BaseRev, op.Ops) : null;
+        byte[]? opBlob = (op.Type == "oprebase" || op.Type == "create") && op.Ops is not null ? PlaylistWireMapper.BuildOutboxBlob(op.BaseRev, op.Ops) : null;
         lock (_connLock)
         {
             using var c = _conn.CreateCommand();
-            c.CommandText = "INSERT INTO outbox(id,type,entity_key,set_id,target_saved,op,base_rev,attempts) VALUES($i,$t,$e,$s,$ts,$op,$br,$a) " +
-                            "ON CONFLICT(id) DO UPDATE SET attempts=excluded.attempts, target_saved=excluded.target_saved, op=excluded.op, base_rev=excluded.base_rev;";
+            c.CommandText = "INSERT INTO outbox(id,type,entity_key,set_id,target_saved,op,base_rev,attempts,parent_folder) VALUES($i,$t,$e,$s,$ts,$op,$br,$a,$pf) " +
+                            "ON CONFLICT(id) DO UPDATE SET attempts=excluded.attempts, target_saved=excluded.target_saved, op=excluded.op, base_rev=excluded.base_rev, parent_folder=excluded.parent_folder;";
             c.Parameters.AddWithValue("$i", op.Id);
             c.Parameters.AddWithValue("$t", op.Type);
             c.Parameters.AddWithValue("$e", op.EntityKey);
@@ -1355,6 +1387,7 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
             c.Parameters.AddWithValue("$op", (object?)opBlob ?? DBNull.Value);
             c.Parameters.AddWithValue("$br", (object?)op.BaseRev ?? DBNull.Value);
             c.Parameters.AddWithValue("$a", op.Attempts);
+            c.Parameters.AddWithValue("$pf", (object?)op.ParentFolderId ?? DBNull.Value);
             c.ExecuteNonQuery();
         }
     }

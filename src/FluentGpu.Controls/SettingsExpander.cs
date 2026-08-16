@@ -62,7 +62,17 @@ public static partial class SettingsExpander
         public string? Header { get; init; }
         public string? Description { get; init; }
         public string? HeaderIcon { get; init; }
+        /// <summary>The header card's one content slot. Content wider than ~150 DIP MUST set
+        /// <see cref="Alignment"/> to <see cref="SettingsCard.ContentAlignment.Vertical"/> — or move into
+        /// <see cref="ItemsHeader"/> instead.</summary>
         public Element? Content { get; init; }
+        /// <summary>How the header card lays its <see cref="Content"/> out. The default right-aligned path puts the
+        /// content in an <c>Auto</c> grid track that, once it is wider than the card, starves the header's <c>Star</c>
+        /// track toward zero — and a zero-width text run neither wraps nor clips, so the header paints straight over
+        /// the content. (SettingsCard <c>BuildRightRow</c> → FlexLayout <c>ResolveColumns</c> → the text engine
+        /// disables wrapping at <c>maxWidth &lt;= 1</c>.) Wide content therefore wants
+        /// <see cref="SettingsCard.ContentAlignment.Vertical"/> or <see cref="ItemsHeader"/>.</summary>
+        public SettingsCard.ContentAlignment Alignment { get; init; } = SettingsCard.ContentAlignment.Right;
         public IReadOnlyList<Element> Items { get; init; } = [];
         public Element? ItemsHeader { get; init; }
         public Element? ItemsFooter { get; init; }
@@ -112,6 +122,7 @@ sealed class SettingsExpanderCore : Component
             Description = o.Description,
             HeaderIcon = o.HeaderIcon,
             Content = o.Content,
+            Alignment = o.Alignment,
             IsActionIconVisible = false,
             Style = s.HeaderCardStyle,
             Parts = o.Parts,

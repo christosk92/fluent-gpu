@@ -9,6 +9,14 @@
 > playback happens only on a live Connect device after login and the device roster comes from the live cluster. Per-facet
 > **federation** (`Federated*`) stays the documented `registry.OfCapability` hook, deferred until a 2nd real source (§4.3).
 > Keep this file honest: when a capability moves, update the matrix (§9).
+>
+> **Two pointer notes.** (1) This file — `docs/plans/wavee/architecture.md` — is the **seam canon**, and the one the
+> `wavee` skill points at. Production comments across `Wavee.Core/Sources/**`, `App/**` and `Features/**` cite a
+> `docs/architecture.md` that does not exist; they mean this file, and the §-numbers still line up.
+> `docs/plans/wavee-native-backend-architecture.md` is a *different* doc (the live Spotify backend: transport,
+> dealer, audio) and does not supersede this one. (2) The playback sentence above is stale and kept only for
+> context: local in-process audio **is** implemented for a live session (§9) — `UnsupportedPlaybackPlayer` is the
+> pre-login stub, not the shipping answer.
 
 This design is grounded in a 14-domain, 292-capability functional inventory of the production **WaveeMusic**
 client (full report archived alongside the planning session) and in industry best practice:
@@ -169,6 +177,41 @@ see the research report's §XV; treat as future.)
   `Task<IReadOnlyList<Album>> GetAlbumsAsync()`, `Task<IReadOnlyList<Artist>> GetArtistsAsync()`,
   `Task<IReadOnlyList<Track>> GetLikedSongsAsync()`, `Task<SearchResults> SearchAsync(query)`,
   `Task<HomeContribution> GetHomeAsync()`, `Task<LibraryStats> GetStatsAsync()`.
+  The three single-item reads take a **hydration rung**: `GetXAsync(uri, HydrationLevel level = Open, ct)` — the
+  source ensures that rung through its own `Hydrator` and only then reads (`IMusicLibrary` carries the same
+  parameter, plus `GetShowAsync`).
+- `ICatalogSource.Hydrator` (**DIM**, implemented now) — `IEntityHydrator Hydrator => CompleteEntityHydrator.Instance;`.
+  A *default interface member* on purpose: a complete-at-construction source (export, local files, the fake,
+  user playlists, every test fake) has nothing to fetch, so every rung is already reached and it implements
+  nothing. Only a networked source overrides it. **There is no nullable hydrator anywhere.**
+
+**The hydration façade (`Wavee.Core/Hydration/`) — implemented now.** ONE entry point for every catalog
+metadata fetch/enrich in the app; the UI asks the catalog, playback asks the façade directly, and both land in the
+same provider hydrator → per-kind ladder → store. Design: `hydration-facade-design.md`; phases:
+`hydration-facade-plan.md`; how-to: `.claude/skills/wavee/hydration.md`.
+
+- `interface IEntityHydrator` — `HydrationLevel LevelOf(uri)` (presence-only, synchronous, store-backed),
+  `Task<HydrationOutcome> EnsureAsync(uri, level, opts, ct)`,
+  `Task<HydrationBatchOutcome> EnsureManyAsync(uris, level, opts, ct)`,
+  `Task EnsureTraitsAsync(uris, TraitSurface|TraitSet, …)`, `void Invalidate(uri)`.
+  A transport failure is an **outcome** (`HydrationStatus.{Reached,Partial,Failed,Cancelled,Unsupported}`), never
+  an exception out of the façade; traits are polish and swallow failures entirely. `HydrationOptions` carries
+  `Mode` (Blocking/Background), `Revalidate`, `Surface`, `Priority`.
+- `enum HydrationLevel { None, Identity, Open, Rich, Full }` + `static HydrationLevels.Of(entity)` — the per-kind
+  rung predicates, **pure** (no store, no clock, no I/O). This is the ONE "is it cold?" predicate: it subsumes
+  `IsAlbumOpenReady`, `IsAlbumComplete`, the four-clause artist gate, `HasMembership`, both `NowPlayingReady`
+  copies, `ArtistStatsCache.IsFresh` and LibrarySync's "unnamed ⇒ cold" (§6, §9).
+- `TraitSet` (flags) + `TraitSurface` (which screen asked) — a **trait** is a per-entity extended-metadata facet
+  that decorates a row already in the store, never a row's identity. One POST carries every wanted kind for a uri
+  set; `TraitPolicy` is the surface → bundle table, `TraitSurfaces.ClientFeatureId` the surface → attribution one.
+- The three portable implementations (`Hydrators.cs`): `CompleteEntityHydrator` (nothing to fetch),
+  `NotOwnedEntityHydrator` (no source owns this uri — `Unsupported`, not an error, so a mixed batch still
+  completes), `SwitchableEntityHydrator` (the go-live/offline seam: one stable reference whose volatile inner
+  flips between `SpotifyProviderHydrator` and `OfflineEntityHydrator`).
+- `interface IOnlineCatalog` (`Wavee.Core/Library/OnlineCatalog.cs`; impl `SpotifyLive/Hydration/SpotifyOnlineCatalog.cs`)
+  — the **online-read** half that is not hydration: search / suggest / home. It exists because those are
+  return-only reads that never write the store, so they must not ride the hydration ladder. `StoreLibrarySource`
+  takes it as a constructor dependency (it replaced four mutable hooks).
 - **Seam ports (defined now, not implemented this pass)** — the contracts Connect/playback land on:
   - `interface IPlaybackSource : ISource` — `Task PlayAsync(contextUri, startIndex, ct)`,
     transport (pause/resume/next/prev/seek), `SetShuffle/SetRepeat/SetVolume`, `IPlaybackState State`,
@@ -187,9 +230,23 @@ see the research report's §XV; treat as future.)
 ### 4.3 The aggregate / federation
 
 - `SourceRegistry` — ordered `ISource[]`; lookups `OwnerOf(uri)` and `OfCapability(cap)`.
+- **Hydration router (P4-A, landed).** `Services.Hydrator` is a `HydrationRouter : IEntityHydrator`
+  (`Wavee.Core/Hydration/HydrationRouter.cs`) in BOTH `CreateReal` and `CreateFake`: it groups a batch by
+  `SourceRegistry.OwnerOf(uri)` and forwards each group to that source's `ICatalogSource.Hydrator` — the same
+  ownership answer routing already uses for single-item reads, so there is no second notion of "who owns this
+  uri". Groups are forwarded in REGISTRY order, uris keep their first-seen order inside a group, and the merged
+  `HydrationBatchOutcome` is (Reached ∪, Missing ∪, worst status). A uri no source owns gets
+  `NotOwnedEntityHydrator` (`Unsupported`), which is why a mixed batch (a Spotify playlist holding a local import)
+  completes instead of throwing. `StoreLibrarySource.Hydrator` is the very `SwitchableEntityHydrator` its own reads
+  use, so a `spotify:` uri still lands in the offline→live seam; `SpotifyProviderHydrator` keeps enforcing the
+  boundary itself as a second line of defence.
 - `AggregateCatalog : IMusicLibrary` (the UI-facing façade, **implemented now**): single-item reads → owning
   source; collection reads → **merge** across capable sources (Library = union; Home = merge `HomeContribution`s
-  by priority then cap; Search = merge per chip; Stats = sum). Unknown URI → fallback source (Fake).
+  by priority then cap; Search = merge per chip; Stats = sum). Unknown URI (or an owner with no data) → an EXPLICIT
+  final step: the first source declaring `SourceCapabilities.Fallback` (the demo backend's `FakeSource`; the real
+  backend registers none, so a real account never invents an entity). Being the last resort is a capability, not an
+  ownership claim — `FakeSource.Owns` is `fake:`/legacy ids only, so routing and hydration reach the peer source
+  that actually holds a `local:` / `wavee:playlist:` uri.
 - `FederatedPlayback` / `FederatedRemote` / `FederatedSession` (**future**): route `play(contextUri)` to the
   owning source's `IPlaybackSource`; expose a **unified active state** to `PlaybackBridge`; merge devices; route
   transfer to the active source. With one real source today there is nothing to federate yet — these are the
@@ -233,6 +290,20 @@ provider, so geo/tier/region checks are baked in rather than re-derived in the U
   edge — no hand-built skeletons, no `StatefulRegion` wrapper (see AGENTS.md "Async loading & skeletons").
 - **Streamed tracks**: detail header renders immediately; the track list is a `Loadable<Track[]>` filled
   page-by-page from `ICatalogSource.StreamTracksAsync` (skeleton-then-stream).
+- **`HydrationLevel` is not `Loadable`, and the two never overlap.** `Loadable<T>` is the state of ONE UI read
+  (Pending / Ready / Failed) — a fact about a component's await. `HydrationLevel` is how complete the *entity in
+  the store* is (`None → Identity → Open → Rich → Full`) — a fact about the data, shared by every surface showing
+  it, and **presence-only**: age lives in the hydration ledger's per-`(kind, level)` TTL, never as a field on the
+  enum. So a page is `Ready` with an `Identity`-rung album (name only, rows still landing) and later repaints at
+  `Rich` off `IStore.Changes` without its `Loadable` ever leaving `Ready`. Rule of thumb: **`Loadable` decides
+  shimmer-vs-content; the rung decides how much content there is.** A surface picks its rung when it asks
+  (`GetAlbumAsync(uri, Rich)`); `OpenPolicy.For(kind)` is the one table saying which rung a page open *blocks* on
+  and which it merely enqueues on the background pump.
+- **Repaint on store change, not on the await.** `EnsureAsync(..., Background)` returns the rung resident at the
+  caller's instant and enqueues the work; the caller re-reads through `IStore.Changes`. Everything a page does not
+  block on (show episode pages past the first, below-the-fold album envelopes, prefetch waves, trait fills) goes
+  on the one bounded, priority-ordered `HydrationPump` — negative priority = prefetch, and the queue sheds
+  lowest-priority-first at its cap rather than growing.
 - **Core → engine bridge**: framework-neutral sources expose `IObservable<T>`; `PlaybackBridge` subscribes and
   marshals each callback onto the UI thread via the `post` delegate, writing engine `Signal`s. This is the one
   boundary; replicate it for future remote/library delta streams (a `LibraryBridge`, a `RemoteBridge`).
@@ -278,12 +349,23 @@ provider, so geo/tier/region checks are baked in rather than re-derived in the U
 | Playlist permissions | `PlaylistCapabilities` | **Implemented** | from `currentUserCapabilities`; gates UI edit affordances |
 | Per-track availability/origin | `Availability`/`TrackOrigin` | **Implemented** | from `playability`; local tracks carry `TrackOrigin.Local` |
 | Real cover art | image pipeline | **Implemented** | real `i.scdn.co` URLs; HTTP/2 fetch + disk cache |
-| Search | `ICatalogSource.SearchAsync` | **Implemented** | federated `SearchAsync` + a per-facet results page (`SearchPage`), live as-you-type from the omnibar |
+| Search | `ICatalogSource.SearchAsync` / `IOnlineCatalog` | **Implemented** | federated `SearchAsync` + a per-facet results page (`SearchPage`), live as-you-type from the omnibar; online search/suggest is a Pathfinder read behind `IOnlineCatalog` (P3), offline falls back to the store's full-text index |
+| Browse (genre/mood directory) | `SpotifyBrowseService` | **Implemented** | `Features/Browse/*` — the browse directory + taxonomy pages over the Pathfinder browse queries |
+| Pathfinder / GraphQL transport | `PathfinderClient` + `PathfinderResource` | **Implemented** | the layer `wavee-data-gaps.md` called "genuinely absent": `getAlbum`, `getTrack`, `queryArtistOverview`, browse, concerts. Reached only through the hydration ladders' `IEnvelopeFetch` (never called ad hoc) |
+| **Hydration façade (levels / ladders / ledger / pump)** | `IEntityHydrator` | **Implemented** | `Wavee.Core/Hydration` ports + `Backend/Hydration` engine: `SpotifyProviderHydrator` over 7 kind ladders, `HydrationLedger` (`(locale, uri, level)` seals: Reached vs Exhausted; `Claim` shares one pass between overlapping callers), the bounded priority `HydrationPump`, `OpenPolicy`/`HydrationPolicy`. `MetadataService`/`IMetadataSource`/`EntityRef`/`StoreEntityGaps`/`DiscographyPrefetcher` and every per-service fetch helper are deleted |
+| **Trait pipeline (one POST per surface, projectors)** | `ITraitProjector` / `TraitPolicy` | **Implemented** | `TraitPipeline` plans → ONE conditional POST per 300 uris → one lazy bulk window; 7 projectors (video 99/182, audio attributes 222, descriptors 6, visual identity 179, play counts 185, publishing 183, identity 178/220) + a shared `NegativeMemo`. Replaces the four trait services, their 7 caps, 7 etag-or-raw forks and 6 memos |
+| **Extension reader (credits / prerelease / expansion / profiles)** | `IExtensionReader` | **Implemented** | the display-only XM read path (186 / 138 / 99+98+5+237 / 15): parsed answers cached *including null*, concurrent opens share one load, a nav-away detaches only that caller. Shares the negative memo with the trait pipeline |
+| **Online catalog seam** | `IOnlineCatalog` | **Implemented (P3)** | search / suggest / home lifted out of `LiveSessionHost` statics and off `StoreLibrarySource`'s mutable hooks into a constructor dependency (`SpotifyOnlineCatalog`) |
+| Video (music videos / canvas / PiP) | `VideoProjector` + `CompositeVideoResolver` | **Implemented** | detection is a trait (99 + 182, TRACK_V4/212 canonical recovery on the reader's shared load); playback surfaces are `Features/Video/*` (in-window PiP + pop-out) plus user `VideoOverrideService` overrides that work with no Spotify session |
+| Row adornments (tempo / key / tags / cover tint) | `TraitSet.RowBundle` | **Implemented** | was `SpotifyTrackAdornmentService`; now four projectors on the shared trait POST — no separate service, cap or memo |
+| **LiveWiring symmetric install/uninstall** | `Backend/Wiring/LiveWiring.cs` | **P3 (in progress)** | every go-live install registers its teardown; `GoOffline` = `Uninstall()` in reverse order, `AssertCovers(Services.LiveSeams)` names any seam that was installed without one |
+| **Multi-source hydration router** | `HydrationRouter` over `SourceRegistry` | **P4 (pending)** | group a batch by `OwnerOf(uri)` → that source's `ICatalogSource.Hydrator`; unowned = `NotOwnedEntityHydrator`. Today `Services.Hydrator` is the Spotify `SwitchableEntityHydrator` directly (§4.3) |
+| **Episodes as playables in playlists** | `EpisodeAsTrack` + `JoinMembership` | **P4 / P5 (pending)** | data join + show paging + owners in the store (P4), episode rows rendering and playing in playlist lists (P5). The `spotify:track:`-only gating that dropped episodes is already gone — the hydration ladders treat Track and Episode as one kind pair |
 | Library collection pages (albums / artists / podcasts) | collection reads | **Implemented** | `LibraryGridPage` over `GetAlbums/Artists/ShowsAsync` (these routes were "Coming soon") |
 | Mutations: save / like / follow | `IMutationSource` | **Implemented** | `LocalMutationSource` (optimistic + persisted outbox) + `LibraryBridge`; hearts/follow wired everywhere, capability-gated |
 | Local files as a source | `LocalSource` | **Implemented** | owns `local:` / `wavee:local:*`; `TrackOrigin.Local`; opens via the sidebar Local row through the shared detail surface |
-| Podcasts / shows / episodes | `IPodcastSource` | **Implemented (synthetic)** | `FakePodcastSource`; podcasts grid + `ShowPage` (episodes, date/duration, resume-progress); playable |
-| Playback (transport, resolve, gapless, DSP) | `IPlaybackPlayer` | **Remote-only** | local audio unsupported: `UnsupportedPlaybackPlayer` rejects play intents (→ "choose a remote device" toast); the live `PlaybackController` forwards playback to the active Connect device after login (no in-process `IPlaybackSource`) |
+| Podcasts / shows / episodes | `IPodcastSource` | **Implemented (real)** | live: `StoreLibrarySource` declares Podcasts and serves real shows — ShowV4's `episode[]` lands as header + ordered membership, `ShowHydration` pages the first 300 episodes to Open and the rest on the pump. `FakePodcastSource` survives only in the pre-login fake registry (`wavee:show:*` / `wavee:episode:*`) |
+| Playback (transport, resolve, gapless, DSP) | `IPlaybackPlayer` | **Implemented (live session)** | in-process local audio after login: `AudioPlaybackStack` (`FluentMediaAudioHost`, key/head-file resolve, gapless butt-join + crossfade, body disk cache). Pre-login `UnsupportedPlaybackPlayer` still toasts "choose a remote device"; Connect transfer to another device remains available |
 | Spotify Connect / remote / devices | `IConnectDevices` | **Live-only** | pre-login `NoConnectDevices` (empty roster); the device picker + roster come from the live Connect cluster (`LiveConnectDevices`); no in-process `IRemoteSource` |
 | Session / auth / account tier / market | `ISessionSource` | **Seam port live** | `FakeSpotifySession` implements `ISessionSource` + registered (Session) |
 | Lyrics | `ILyricsProvider` | **Live-only** | pre-login `NoLyricsProvider`; the live `AggregatingLyricsProvider` swaps in on login (no in-process `ILyricsSource`) |
@@ -304,6 +386,33 @@ provider, so geo/tier/region checks are baked in rather than re-derived in the U
   `Sources/LocalMutationSource.cs` (Mutations); `Sources/UserPlaylistSource.cs` (user playlists); `Sources/LocalSource.cs`
   (local files); `Sources/FakePodcastSource.cs` (podcasts); `Sources/ProviderMappings.cs` (`ProviderRef`/`ProviderPolicy`/
   `PlayableTrack`); `Sources/CollectionEvents.cs` (the `ICollectionEvents` off-page library-delta seam, §3/§6).
+- **Hydration ports (Wavee.Core/Hydration):** `EntityUri.cs` (THE uri vocabulary — `EntityKind`, `IdOf`, `Provider`,
+  `IsPlayable`; no other file parses a uri); `HydrationLevel.cs` (`HydrationLevel` + the pure per-kind
+  `HydrationLevels.Of` predicates + the row-gap primitives `TitleMissing`/`TrackUnnamed`/`RefNeedsName`);
+  `IEntityHydrator.cs` (`HydrationMode`/`HydrationOptions`/`HydrationStatus`/`HydrationOutcome`/`HydrationBatchOutcome`);
+  `Traits.cs` (`TraitSet` + `TraitSurface`); `Hydrators.cs` (`CompleteEntityHydrator` / `NotOwnedEntityHydrator` /
+  `SwitchableEntityHydrator`). Also `Library/OnlineCatalog.cs` (`IOnlineCatalog`).
+- **Hydration engine (`src/apps/Wavee/Backend/Hydration` — engine-free, `IStore`-level, compiled into `Wavee.Tests`
+  by the `Backend\**` glob):** `Ports.cs` (the transport seams `ICatalogFetch`/`IEnvelopeFetch`/`IArtistChartFetch`/
+  `IPlaylistOpener`/`IUserProfileFetch`/`ITraitPipeline`/`IKindHydration`, plus `HydrationContext` and the
+  `HydrationRunScope` failure channel); `SpotifyProviderHydrator.cs`; `HydrationLedger.cs` (seals + `Claim`/
+  `HydrationClaims`); `HydrationPump.cs`; `OpenPolicy.cs` (`OpenPlan` + the `HydrationPolicy` TTL table); the ladders
+  `{Album,Artist,Playable,Playlist,Show,Collection}Hydration.cs` (`PlayableHydration` is registered twice — Track and
+  Episode — which is why episodes are no longer dropped); `OfflineEntityHydrator.cs`; `TraitPipeline.cs` +
+  `ITraitProjector.cs` (+ `TraitBatch`/`TraitPayloads`/`TraitApplicability`) + `TraitPolicy.cs` (+
+  `TraitSurfaces.ClientFeatureId`) + `TraitProjectors.cs` (the registry) + `Projectors/*.cs`; `NegativeMemo.cs`;
+  `ExtensionReader.cs`. Siblings: `Backend/Metadata/XmCatalogFetch.cs`, `Backend/Metadata/ExtensionEtagCache.cs`,
+  `Backend/Wiring/LiveWiring.cs` (P3).
+- **Spotify hydration adapters (`src/apps/Wavee/SpotifyLive/Hydration` — engine-free, its own test glob):**
+  `PathfinderEnvelopeFetch.cs`, `SpclientArtistChartFetch.cs`, `LibrarySyncPlaylistOpener.cs`,
+  `VisualIdentityProjector.cs` (lives here, not in `Backend`, because its target plane is the Spotify
+  `CoverColorPlane`), `SpotifyOnlineCatalog.cs` (P3). `SpotifyVideoManifestResolver.cs` stays in `SpotifyLive/`
+  proper — it returns FluentGpu media types, so it cannot live under an engine-free glob.
+- **Hydration tests (Wavee.Tests):** `HydrationLevelsTests`, `HydrationLedgerTests`, `HydrationPumpTests`,
+  `HydrationSharedRunTests`, `HydrationTransientFailureTests`, the per-ladder `*HydrationTests`,
+  `Hydration/{TraitPipelineTests,ExtensionReaderTests}`, and the request-count pins in
+  `ApiWaste/HydrationWasteTests` (which run the real stack down to a fake exchange and decode the gzipped
+  `BatchedEntityRequest`).
 - **Spotify adapter (Wavee.Core/Spotify):** `SpotifyExport.cs` (parse), `SpotifyExportMapper.cs` (ACL),
   `SpotifyHomeComposer.cs` (grouping), `SpotifyExportSource.cs`.
 - **Fake adapter:** `Wavee.Core/Fakes/FakeSource.cs` (wraps `FakeData`); `FakeSpotifySession` = Session (the one
@@ -325,6 +434,12 @@ provider, so geo/tier/region checks are baked in rather than re-derived in the U
 ---
 
 ## 11. References
+
+- **Hydration:** `hydration-facade-design.md` (contracts + engine + ladders + traits — the shapes),
+  `hydration-facade-plan.md` (phases, ownership, gates, status), `metadata-entry-points-inventory.md` (the ~110
+  entry points this replaced), `.claude/skills/wavee/hydration.md` (how to hydrate an entity / add a trait / add a
+  ladder), `.claude/skills/wavee/wiring-discipline.md` (no nullable seams, symmetric go-live/offline),
+  `xm-kind-probe-overview.md` + `xm-playcount-handoff.md` (which extension kind carries what).
 
 - WaveeMusic functional inventory (292 capabilities, 14 domains) — workflow research report (archived in the
   planning session transcript; sections XVI "Implications for a source-agnostic seam" and XVII "What to do

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
@@ -7,6 +7,7 @@ using Wavee.Backend;
 using Wavee.Backend.Metadata;
 using Wavee.Backend.Persistence;
 using Wavee.Core;
+using EntityKind = Wavee.Backend.Metadata.EntityKind;   // the PERSISTED transport vocabulary (Wavee.Core.EntityKind is the routing one)
 using Xunit;
 
 namespace Wavee.Tests;
@@ -14,7 +15,10 @@ namespace Wavee.Tests;
 // CachedStore dual-write + reload logic, tested against a memory cold tier (no SQLite, fully deterministic).
 public class CachedStoreTests
 {
-    sealed class MemCold : IColdStore
+    // INTERNAL, not private: the show-paging suite drives a REAL CachedStore over this same double to prove the
+    // recent-surface pin actually reaches the cold tier (the IStore member is a no-op DEFAULT, so an in-memory store
+    // proves nothing about it).
+    internal sealed class MemCold : IColdStore
     {
         public readonly Dictionary<string, (EntityKind Kind, byte[] Payload)> Entities = new();
         public readonly Dictionary<(string, string), SyncState> Saved = new();
@@ -55,6 +59,68 @@ public class CachedStoreTests
 
     static Track Trk(string id) => new(id, "spotify:track:" + id, "Title " + id,
         [new ArtistRef("a", "spotify:artist:a", "Artist")], new AlbumRef("al", "spotify:album:al", "Album"), 1000, false, null);
+
+    // ── owners (P4-C) ───────────────────────────────────────────────────────────────────────────────────────────────
+    // An owner is the ONE entity kind that bypasses the pin-reachability gate: a row is ~150 B, the pin question is
+    // unanswerable cheaply (an owner is reachable through any playlist header or any membership row's added_by, and
+    // neither mirror is keyed by user), and an owner that is NOT on disk makes every byline render a raw base62 id on
+    // the next offline launch. They age out through the ordinary unpinned 30-day entity TTL instead.
+    [Fact]
+    public void UpsertOwner_PersistsWithoutAPin_AndReadsBackAfterARestart()
+    {
+        var cold = new MemCold();
+        var store = new CachedStore(cold);
+        store.UpsertOwner(new Owner("alice", "Alice", new Image("https://img/alice")));
+
+        // No pin of any kind was established, and it is on disk anyway — under the CANONICAL user uri, which is what
+        // makes the hot key and the cold key the same string.
+        Assert.True(cold.Entities.ContainsKey("spotify:user:alice"));
+        Assert.Equal(EntityKind.User, cold.Entities["spotify:user:alice"].Kind);
+
+        // A fresh store (the deferred ctor loads no entities at all) still answers the read — through the cold
+        // fallback, under EITHER spelling.
+        var restarted = new CachedStore(cold);
+        Assert.Equal("Alice", restarted.GetOwner("spotify:user:alice")!.Name);
+        Assert.Equal("https://img/alice", restarted.GetOwner("alice")!.Avatar!.Url);
+    }
+
+    [Fact]
+    public void UpsertOwner_MergeKeepsANameAndAnAvatarAThinWriterDoesNotCarry()
+    {
+        var cold = new MemCold();
+        var store = new CachedStore(cold);
+        store.UpsertOwner(new Owner("alice", "Alice", new Image("https://img/alice")));
+        // The REST arm answers some accounts with no image, and a display name can be absent entirely — neither may
+        // blank what kind 15 already gave us (StoreEntityMerge.Owner: Name NonEmpty, Avatar null-coalesce).
+        store.UpsertOwner(new Owner("alice", "", null));
+
+        var owner = store.GetOwner("spotify:user:alice")!;
+        Assert.Equal("Alice", owner.Name);
+        Assert.Equal("https://img/alice", owner.Avatar!.Url);
+    }
+
+    [Fact]
+    public void UpsertOwner_IsElided_WhenTheBytesAreUnchanged()
+    {
+        var cold = new MemCold();
+        var store = new CachedStore(cold);
+        store.UpsertOwner(new Owner("alice", "Alice", null));
+        int writes = cold.EntityWrites;
+        store.UpsertOwner(new Owner("alice", "Alice", null));
+
+        Assert.Equal(writes, cold.EntityWrites);   // the payload-hash elision covers owners like every other kind
+    }
+
+    [Fact]
+    public void UpsertOwner_IgnoresAnUnusableId()
+    {
+        var cold = new MemCold();
+        var store = new CachedStore(cold);
+        store.UpsertOwner(new Owner("", "Nobody", null));
+
+        Assert.Empty(cold.Entities);
+        Assert.Null(store.GetOwner(""));
+    }
 
     [Fact]
     public void Write_DualWrites_MemoryAndCold()

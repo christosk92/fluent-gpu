@@ -78,7 +78,7 @@ public class ReconnectResyncTests
             var cf = new CollectionFetcher(http, () => "https://x", () => "bob", Store,
                 s => revs.TryGetValue(s, out var r) ? r : null, (s, r) => revs[s] = r, Hydrate);
             Mut = new MutationEngine(Store, new IMutationStrategy[] { new SetReplayStrategy() });
-            Sync = new LibrarySync(Store, pf, cf, Mut, new SeqTransport(Seq),
+            Sync = new LibrarySync(Store, pf, cf, Mut, new PlaylistResyncQueue(), new SeqTransport(Seq),
                 () => Ctx, () => "bob", default, _cts.Token);
         }
 

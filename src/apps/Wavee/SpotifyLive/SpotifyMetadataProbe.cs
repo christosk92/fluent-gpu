@@ -1,8 +1,10 @@
 using System.Linq;
 using Wavee.Backend;
+using Wavee.Backend.Hydration;
 using Wavee.Backend.Metadata;
 using Wavee.Backend.Spotify;
 using Wavee.Core;
+using EntityKind = Wavee.Core.EntityKind;   // disambiguate: Wavee.Backend.Metadata has its own PERSISTED kind enum; this file speaks the ROUTING one
 
 namespace Wavee.SpotifyLive;
 
@@ -18,11 +20,13 @@ public static class SpotifyMetadataProbe
 
         // wire the metadata chain (a one-shot InMemoryStore — no persistence needed for the probe).
         var store = new InMemoryStore();
+        // The catalogue arm the façade itself uses (XmCatalogFetch over the REQUIRED etag cache) — the probe proves the
+        // production path, not a probe-only transport (hydration-facade-design.md §2.2).
         var source = new ExtendedMetadataSource(live.Pipeline, () => live.BaseUrl, () => live.Session);
-        var metadata = new MetadataService(source, store, () => live.Session);
+        var catalog = new XmCatalogFetch(new ExtensionEtagCache(source, () => live.Session, log), store, log);
 
         log.Info("Fetching extended-metadata for " + uri + " ...");
-        try { await metadata.EnsureAsync(uri).ConfigureAwait(false); }
+        try { await catalog.FetchAsync([EntityUri.Parse(uri)], null, TraitSurface.None, ct).ConfigureAwait(false); }
         catch (Exception ex) { log.Info("extended-metadata fetch failed: " + ex.Message); return 1; }
         PrintEntity(uri, store, log);
         return 0;
@@ -30,7 +34,7 @@ public static class SpotifyMetadataProbe
 
     static void PrintEntity(string uri, IStore store, WaveeLogger log)
     {
-        switch (EntityRef.Parse(uri).Kind)
+        switch (EntityUri.KindOf(uri))
         {
             case EntityKind.Track when store.GetTrack(uri) is { } t:
                 log.Info("  TRACK: " + t.Title + " - " + string.Join(", ", t.Artists.Select(a => a.Name)) + " [" + t.Album.Name + "] " + t.DurationMs + "ms");

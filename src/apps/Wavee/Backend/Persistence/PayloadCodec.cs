@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
@@ -151,6 +151,11 @@ public static class EntityThinExtractor
                     thin = new EntityThin(
                         NullIfEmpty(Str(root, "Title")), NullIfEmpty(Str(root, "ShowName")), ImageUrl(root, "Image"),
                         Num(root, "DurationMs"), 0, null, null);
+                    return true;
+                // An owner row: the display name is the title column, the avatar the image. It owns no outgoing refs —
+                // an Owner points at nothing, which is exactly why it needs no pin closure of its own.
+                case EntityKind.User:
+                    thin = new EntityThin(NullIfEmpty(Str(root, "Name")), null, ImageUrl(root, "Avatar"), null, 0, null, null);
                     return true;
                 default:
                     return false;

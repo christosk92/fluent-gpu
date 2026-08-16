@@ -11,9 +11,6 @@ namespace Wavee.SpotifyLive;
 /// optional branches are ignored; a malformed required root produces null or an empty collection.</summary>
 public static class ConcertPathfinderMapper
 {
-    const string ConcertPrefix = "spotify:concert:";
-    const string ArtistPrefix = "spotify:artist:";
-
     public static ArtistConcertSchedule? MapArtistSchedule(JsonElement root)
     {
         if (!TryData(root, out var data) || !TryProperty(data, "artistUnion", out var artistUnion))
@@ -21,10 +18,10 @@ public static class ConcertPathfinderMapper
 
         string? uri = String(artistUnion, "uri");
         string? name = NestedString(artistUnion, "profile", "name");
-        if (!HasPrefix(uri, ArtistPrefix) || name is null)
+        if (!IsKind(uri, EntityKind.Artist) || name is null)
             return null;
 
-        var artist = new ArtistRef(IdFromUri(uri!), uri!, name);
+        var artist = new ArtistRef(EntityUri.IdOf(uri!), uri!, name);
         var header = TryProperty(artistUnion, "headerImage", out var headerImage)
             ? MapImage(headerImage, preferLastUnmeasured: true)
             : null;
@@ -210,13 +207,13 @@ public static class ConcertPathfinderMapper
                 if (!TryProperty(wrapper, "data", out var item))
                     continue;
                 string? uri = String(item, "uri");
-                if (HasPrefix(uri, ConcertPrefix))
+                if (IsKind(uri, EntityKind.Concert))
                 {
                     var concert = MapConcert(item, kind == ConcertFeedSectionKind.Nearby);
                     if (concert is not null && seenConcerts.Add(concert.Uri))
                         concerts.Add(concert);
                 }
-                else if (HasPrefix(uri, "spotify:playlist:"))
+                else if (IsKind(uri, EntityKind.Playlist))
                 {
                     var promotion = MapPlaylist(item);
                     if (promotion is not null && seenPromotions.Add(promotion.Uri))
@@ -235,7 +232,7 @@ public static class ConcertPathfinderMapper
     {
         string? uri = String(source, "uri");
         string? name = String(source, "name");
-        if (!HasPrefix(uri, "spotify:playlist:") || name is null)
+        if (!IsKind(uri, EntityKind.Playlist) || name is null)
             return null;
         Image? cover = null;
         if (TryPath(source, out var imageItems, "images", "items") && imageItems.ValueKind == JsonValueKind.Array)
@@ -256,7 +253,7 @@ public static class ConcertPathfinderMapper
             source = nested;
         string? uri = String(source, "uri");
         var date = Date(source, "startDateIsoString");
-        if (!HasPrefix(uri, ConcertPrefix) || date is null)
+        if (!IsKind(uri, EntityKind.Concert) || date is null)
             return null;
 
         JsonElement location = default;
@@ -551,12 +548,7 @@ public static class ConcertPathfinderMapper
             : null;
     }
 
-    static bool HasPrefix(string? value, string prefix) =>
-        value is not null && value.StartsWith(prefix, StringComparison.Ordinal) && value.Length > prefix.Length;
-
-    static string IdFromUri(string uri)
-    {
-        int colon = uri.LastIndexOf(':');
-        return colon >= 0 && colon + 1 < uri.Length ? uri[(colon + 1)..] : uri;
-    }
+    // The uri must BE that kind and carry a non-empty id (the old prefix test's `Length > prefix.Length` half).
+    static bool IsKind(string? value, EntityKind kind) =>
+        value is not null && EntityUri.Parse(value) is { Id.Length: > 0 } e && e.Kind == kind;
 }

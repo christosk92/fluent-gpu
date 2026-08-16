@@ -9,6 +9,7 @@ using Wavee.Backend.Metadata;
 using Wavee.Backend.Persistence;
 using Wavee.Backend.Playlists;
 using Wavee.Core;
+using EntityKind = Wavee.Backend.Metadata.EntityKind;   // the PERSISTED transport vocabulary (Wavee.Core.EntityKind is the routing one)
 using Xunit;
 
 namespace Wavee.Tests;

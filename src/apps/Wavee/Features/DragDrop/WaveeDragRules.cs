@@ -53,14 +53,18 @@ static class WaveeDragKindMap
     {
         if (string.IsNullOrEmpty(uri)) return WaveeResourceKind.Route;
         if (uri == "spotify:collection:tracks") return WaveeResourceKind.Playlist;   // Liked Songs reads as a playlist
-        if (uri.Contains(":playlist:", System.StringComparison.Ordinal)) return WaveeResourceKind.Playlist;
-        if (uri.Contains(":prerelease:", System.StringComparison.Ordinal)) return WaveeResourceKind.Album;
-        if (uri.Contains(":album:", System.StringComparison.Ordinal)) return WaveeResourceKind.Album;
-        if (uri.Contains(":artist:", System.StringComparison.Ordinal)) return WaveeResourceKind.Artist;
-        if (uri.Contains(":show:", System.StringComparison.Ordinal)) return WaveeResourceKind.Show;
-        if (uri.Contains(":episode:", System.StringComparison.Ordinal)) return WaveeResourceKind.Episode;
-        if (uri.Contains(":track:", System.StringComparison.Ordinal)) return WaveeResourceKind.Track;
-        return WaveeResourceKind.Route;
+        // Kind comes from the ONE parser (hydration-facade-design.md §1.1) instead of seven substring probes, so the
+        // "more specific scheme wins" ordering is structural: a prerelease IS its own kind and still drags as an Album.
+        return EntityUri.KindOf(uri) switch
+        {
+            EntityKind.Playlist => WaveeResourceKind.Playlist,
+            EntityKind.Prerelease or EntityKind.Album => WaveeResourceKind.Album,
+            EntityKind.Artist => WaveeResourceKind.Artist,
+            EntityKind.Show => WaveeResourceKind.Show,
+            EntityKind.Episode => WaveeResourceKind.Episode,
+            EntityKind.Track => WaveeResourceKind.Track,
+            _ => WaveeResourceKind.Route,
+        };
     }
 
     /// <summary>Sidebar projection kind → drag kind (the one the sidebar's own payload factory uses).</summary>
@@ -94,6 +98,10 @@ enum PlaylistDropRefusal : byte
     Sorted,
     /// <summary>A same-list reorder under a search/filter: the display is a SUBSET, so a slot is ambiguous.</summary>
     Filtered,
+    /// <summary>A same-list reorder whose rows (or whose landing anchor) have no membership <c>item_id</c> yet: our own
+    /// add is still in flight, so the rows the server knows about are not the rows on screen. Transient by nature — the
+    /// ids land with the ack — which is why it says "try again in a moment" rather than naming something to fix.</summary>
+    Syncing,
 }
 
 /// <summary>The single decision table behind <c>DetailTracks</c>'s insertion <c>CanAccept</c> and its refusal caption:
@@ -112,8 +120,11 @@ static class PlaylistDropRefusalRules
     /// <param name="sameList">The payload's rows came from THIS playlist — a MOVE, not a copy.</param>
     /// <param name="naturalOrder">The display order IS the membership order (sort = Index, ascending).</param>
     /// <param name="filtered">A search query or a filter chip is narrowing the display.</param>
+    /// <param name="rowsKeyed">Every dragged row carries its membership <c>item_id</c> (<c>PlaylistReorderRules.RowsAreKeyed</c>).
+    /// Reported LAST of the same-list arms on purpose: sorting and filtering are states the user can act on and fix,
+    /// while "still syncing" is a wait — naming a wait first would hide the two refusals that have a remedy.</param>
     public static PlaylistDropRefusal Evaluate(bool editable, bool loading, bool payloadHasTracks,
-                                               bool sameList, bool naturalOrder, bool filtered)
+                                               bool sameList, bool naturalOrder, bool filtered, bool rowsKeyed)
     {
         if (!editable) return PlaylistDropRefusal.NotEditable;
         if (loading) return PlaylistDropRefusal.Loading;
@@ -121,13 +132,14 @@ static class PlaylistDropRefusalRules
         if (!sameList) return PlaylistDropRefusal.None;
         if (!naturalOrder) return PlaylistDropRefusal.Sorted;
         if (filtered) return PlaylistDropRefusal.Filtered;
+        if (!rowsKeyed) return PlaylistDropRefusal.Syncing;
         return PlaylistDropRefusal.None;
     }
 
     /// <summary>The accept test, expressed against the same table so the two can never disagree.</summary>
     public static bool Accepts(bool editable, bool loading, bool payloadHasTracks,
-                               bool sameList, bool naturalOrder, bool filtered)
-        => Evaluate(editable, loading, payloadHasTracks, sameList, naturalOrder, filtered) == PlaylistDropRefusal.None;
+                               bool sameList, bool naturalOrder, bool filtered, bool rowsKeyed)
+        => Evaluate(editable, loading, payloadHasTracks, sameList, naturalOrder, filtered, rowsKeyed) == PlaylistDropRefusal.None;
 }
 
 /// <summary>Whether a TAB in the strip is a deposit destination for a resource drag, and whether the payload may land
@@ -160,4 +172,24 @@ static class TabDropRules
         if (string.Equals(payloadSourcePlaylistUri, targetUri, System.StringComparison.Ordinal)) return false;
         return !string.Equals(payloadUri, targetUri, System.StringComparison.Ordinal);
     }
+}
+
+/// <summary>D16 — the COLLAPSED RAIL's transparency rule. A 56-DIP strip of covers is a corridor as much as a set of
+/// destinations, and the question a tile has to answer while a drag crosses it is which of the two "no"s it owes.
+/// <para>Engine-free like its siblings above, so <c>WaveeDragRulesTests</c> drives the real decision rather than a copy
+/// of it (the rail's own <c>DropTargetSpec</c> lives in <c>SidebarPane.ResourceDropSpec</c>).</para></summary>
+static class SidebarRailDropRules
+{
+    /// <summary>Should a rail PLAYLIST tile sit this gesture out entirely?
+    ///
+    /// <para>TRUE for a rootlist payload that carries no tracks — a FOLDER being re-filed. It has nothing it could add
+    /// to a playlist and nothing it could file into one, and it is on its way to a folder tile or to the peeked pane, so
+    /// the tile is merely on the route. The landed behaviour was a refusal reading "Nothing to add", which is an
+    /// accusation aimed at a drag that was only passing through.</para>
+    ///
+    /// <para>FALSE for everything else, which keeps both other answers intact: a track-bearing payload over an editable
+    /// playlist tile is a real deposit, and a track-bearing payload the tile cannot take still owes the user a
+    /// reason.</para></summary>
+    public static bool TileTransparent(bool payloadIsRootlistItem, bool payloadCanCopyTracks)
+        => payloadIsRootlistItem && !payloadCanCopyTracks;
 }

@@ -197,6 +197,87 @@ public class SidebarProjectionTests
         Assert.Equal("night", rows[4].FolderId);
     }
 
+    /// <summary>Every row carries the folder it SITS IN, folders included — which <c>FolderId</c> cannot say for a
+    /// folder row (there it is the row's OWN group id). It is what "Move out of {folder}" is built from, and the only
+    /// way a row can tell nested from top-level at all.</summary>
+    [Fact]
+    public void NestedEntries_CarryTheirParentFolder()
+    {
+        var (rows, _) = Build(SidebarEntryKindMask.PlaylistTree, NestedTree(), flatten: true);
+        // Top, Cafe & chill, Inner one, Late night, Deep
+
+        Assert.Equal("", rows[0].ParentFolderId);                   // a top-level playlist has nothing to move out of
+        Assert.Equal("", rows[1].ParentFolderId);                   // …and neither has a top-level FOLDER
+        Assert.Equal("cafe", rows[1].FolderId);                     // whose own id still lives in FolderId
+
+        Assert.Equal("cafe", rows[2].ParentFolderId);               // Inner one
+        Assert.Equal("Cafe & chill", rows[2].ParentFolderName);
+
+        var night = rows[3];                                        // a NESTED folder: parent ≠ own id
+        Assert.True(night.IsFolder);
+        Assert.Equal("night", night.FolderId);
+        Assert.Equal("cafe", night.ParentFolderId);
+        Assert.Equal("Cafe & chill", night.ParentFolderName);
+
+        Assert.Equal("night", rows[4].ParentFolderId);              // Deep
+        Assert.Equal("Late night", rows[4].ParentFolderName);
+    }
+
+    /// <summary>A RENAME is a name change and nothing else: the entry id and the group id are the client-minted
+    /// rootlist groupId, which is exactly why folder expansion state and folder pins survive a rename with no
+    /// migration at all.</summary>
+    [Fact]
+    public void RenamedFolder_KeepsItsEntryIdAndGroupId()
+    {
+        var before = Build(SidebarEntryKindMask.PlaylistTree, NestedTree(), flatten: true).Rows[1];
+
+        var renamed = new PlaylistNode[]
+        {
+            new PlaylistLeaf(Pl("top", "Top")),
+            new PlaylistFolder("cafe", "Mornings", new PlaylistNode[]
+            {
+                new PlaylistLeaf(Pl("in1", "Inner one")),
+                new PlaylistFolder("night", "Late night", new PlaylistNode[] { new PlaylistLeaf(Pl("deep", "Deep")) }),
+            }),
+        };
+        var after = Build(SidebarEntryKindMask.PlaylistTree, renamed, flatten: true).Rows[1];
+
+        Assert.Equal("Cafe & chill", before.Name);
+        Assert.Equal("Mornings", after.Name);
+        Assert.Equal(before.Id, after.Id);                          // "folder:cafe" — the pin key
+        Assert.Equal(before.FolderId, after.FolderId);              // "cafe" — the expansion key
+    }
+
+    /// <summary>A folder DELETE removes the marker pair and nothing else — the playlists inside move up one level. At
+    /// the projection that is: the folder row is gone, and each child re-parents onto the deleted folder's parent, one
+    /// depth shallower. (The wire half is <c>RootlistFolderOpsTests</c>; this pins what the sidebar then shows.)</summary>
+    [Fact]
+    public void DeletedFolder_ReparentsItsChildrenAtTheParentDepth()
+    {
+        var deep = Build(SidebarEntryKindMask.PlaylistTree, NestedTree(), flatten: true).Rows[4];
+        Assert.Equal(2, deep.Depth);
+        Assert.Equal("night", deep.FolderId);
+
+        // "Late night" deleted: its one playlist stays, now a direct child of "Cafe & chill".
+        var afterDelete = new PlaylistNode[]
+        {
+            new PlaylistLeaf(Pl("top", "Top")),
+            new PlaylistFolder("cafe", "Cafe & chill", new PlaylistNode[]
+            {
+                new PlaylistLeaf(Pl("in1", "Inner one")),
+                new PlaylistLeaf(Pl("deep", "Deep")),
+            }),
+        };
+        var (rows, _) = Build(SidebarEntryKindMask.PlaylistTree, afterDelete, flatten: true);
+
+        Assert.Equal(new[] { "Top", "Cafe & chill", "Inner one", "Deep" }, Names(rows));
+        var moved = rows[3];
+        Assert.Equal(1, moved.Depth);                               // one level up
+        Assert.Equal("cafe", moved.FolderId);
+        Assert.Equal("cafe", moved.ParentFolderId);
+        Assert.Equal("Cafe & chill", moved.ParentFolderName);
+    }
+
     [Fact]
     public void CollapsedFolder_IsOpaque_AndAnExpandedOneRevealsItsChildren()
     {

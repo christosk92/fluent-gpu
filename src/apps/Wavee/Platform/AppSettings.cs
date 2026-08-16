@@ -55,6 +55,12 @@ static class WaveeSettings
     // a permanent column costs width on every row. It is always available inside a row's expander, so this setting only
     // promotes it to a column for the users who do want to scan it (DJ-adjacent use). App-wide, like RowDensity.
     public static readonly SettingKey<bool> TempoColumn = new("detail.tempoColumn", false);
+    // Stream counts as their own track-list COLUMN on the surfaces that do not already have one (playlists, Liked).
+    // Off by default for the same reason as TempoColumn: it is enrichment most listeners never scan for, it costs width
+    // on every row, and — unlike the album page, whose profile always shows the lane — a playlist's counts are not part
+    // of what the page is FOR. Turning it on is also what authorises the whole-list kind-185 fill for those surfaces,
+    // so an off column costs no network at all. App-wide, like RowDensity and TempoColumn.
+    public static readonly SettingKey<bool> PlaysColumn = new("detail.playsColumn", false);
     // Track-detail page layout: 0 Automatic (metadata rail on wide windows, the hero on narrow) · 1 Hero (the hero
     // composition at every width — the rail is never composed for track pages; podcasts keep the automatic layout).
     public static readonly SettingKey<int> DetailPageLayout = new("detail.page.layout", 0);

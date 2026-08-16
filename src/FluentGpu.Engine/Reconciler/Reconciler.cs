@@ -1123,16 +1123,23 @@ public sealed class TreeReconciler
 
         Element? desired = branch switch
         {
-            // Reduced motion ⇒ no exit-fade stamp (the swap snaps); the pulse + reveal already no-op under it.
+            // CONTRACT (shimmer→real is a CROSS-DISSOLVE, never a dip to empty): the shimmer branch carries its own
+            // Opacity EXIT terminal, so Remove() below orphans it and fades it to 0 while the freshly mounted real tree
+            // reveals UP over it. Orphans draw UNDER live children (SceneRecorder), so the two layers dissolve in the
+            // same slot instead of the shimmer vanishing on the swap frame and leaving a blank page.
+            // Opacity ONLY — no EnterExit.Blur: a page-sized shimmer tree is exactly the blur-group perf cliff called
+            // out above MotionRecipes.PageSlideForward, and the fade alone reads as the dissolve.
+            // Bounded, not trusted: Remove() gives the orphan its OWN hard deadline (duration + delay + slack), so the
+            // "half resolved page" a wedged/never-settling exit track once produced is now reclaimed in ~one exit
+            // duration instead of waiting out the host's global 2s backstop.
+            // Reduced motion ⇒ no exit stamp at all (the swap snaps); the pulse + reveal already no-op under it.
             // Content-owned reveal (SkelReveal.None): the shimmer must LINGER across the content's own per-row
             // entrance (it draws behind the live tree, so a too-fast exit leaves an empty gap before the rows fade
             // up). Floor the exit at the standard content-reveal duration so apps get the cross-dissolve for free —
             // no hand-tuned ExitMs to match the list's row-add timing.
-            // The pending tree is removed immediately on Ready. Keeping it as an exiting orphan over the newly
-            // mounted real tree produced a visibly "half resolved" page when an exit track was delayed/wedged.
-            // The real branch still owns the configured reveal below, so the swap remains animated without two
-            // complete page trees painting simultaneously.
-            1 => SkeletonDeriver.Derive((se.ShimmerSource ?? se.Content)(), se.Style),
+            1 => StampShimmerExit(
+                    SkeletonDeriver.Derive((se.ShimmerSource ?? se.Content)(), se.Style),
+                    se.Reveal == SkelReveal.None ? MathF.Max(se.Style.ExitMs, Expressive.Slow) : se.Style.ExitMs),
             3 => se.OnFailed?.Invoke(),
             _ => se.Content(),
         };
@@ -1183,6 +1190,22 @@ public sealed class TreeReconciler
 
         MirrorParticipation(node, _scene.FirstChild(node));
     }
+
+    // Stamp the derived shimmer ROOT with an Opacity EXIT terminal so Remove() cross-dissolves it out (as an orphan
+    // drawn UNDER the live tree) while the real content reveals in — the same slot, no empty frame. Opacity only: a
+    // page-sized blur group is a known perf cliff. Under reduced motion the stamp is skipped and the swap snaps.
+    // Only a BoxEl root can carry Animate; SkeletonDeriver returns a BoxEl for every container/leaf shape it derives,
+    // and the residual non-BoxEl case (a bespoke SkeletonOverride of another element type) simply snaps as before.
+    private static Element StampShimmerExit(Element shimmerRoot, float exitMs)
+        => Motion.ReducedMotion || shimmerRoot is not BoxEl b
+            ? shimmerRoot
+            : b with
+            {
+                Animate = new LayoutTransition(
+                    TransitionChannels.Opacity,
+                    TransitionDynamics.Tween(exitMs, Easing.SmoothOut),
+                    Exit: new EnterExit(Opacity: 0f, Active: true)),
+            };
 
     private void MountFor(NodeHandle node, ForElBase fe)
     {
@@ -3166,12 +3189,34 @@ public sealed class TreeReconciler
             // remain: an orphan is reclaimed when HasTracks(node)→false, and a forever-looping pulse would pin it and
             // defeat the engine's idle wake-stop (a battery/never-quiesce regression). Then seed the finite exit.
             anim.CancelAll(node);
-            _scene.Orphan(node);
+            // Hand the orphan its OWN hard deadline (see ExitMaxAgeMs) on top of the host's global 2s backstop: a wedged
+            // exit track on a page-sized subtree (the skeleton shimmer) must not keep painting over the live content for
+            // two seconds.
+            _scene.Orphan(node, ExitMaxAgeMs(spec));
             anim.SeedExit(node, spec.Exit, spec);
             return;
         }
         UnmountSubtree(node);
         _scene.FreeSubtree(node);
+    }
+
+    // A spring has no nominal duration — cap the deadline instead of leaving it unbounded.
+    private const float SpringExitCapMs = 1200f;
+    // Slack over the nominal duration. The deadline is measured on SceneStore.AnimClockMs — the same clamped timebase
+    // the exit track integrates on — so this only has to cover the seed-to-first-advance gap plus one clock quantum
+    // (AnimClock clamps a frame to <=40ms). It does NOT have to absorb wall-clock jank: a wall-measured deadline would
+    // force-reclaim HEALTHY exits mid-fade on any slow frame, which is why the timebase is the animation clock.
+    private const float ExitReclaimSlackMs = 100f;
+
+    /// <summary>The exit orphan's own reclaim deadline (animation-clock ms): the animated leg's nominal duration + its
+    /// start delay + slack. Passed to <see cref="SceneStore.Orphan"/>; <c>AppHost.ReclaimSettledOrphans</c> force-reclaims
+    /// past it even while tracks remain, so a never-settling exit can't pin a half-faded layer over live content.</summary>
+    private static float ExitMaxAgeMs(in LayoutTransition spec)
+    {
+        var dyn = spec.ExitDynamics ?? spec.Dynamics;
+        float dur = dyn.Kind == DynamicsKind.Tween && dyn.DurationMs > 0f ? dyn.DurationMs : SpringExitCapMs;
+        float delay = MathF.Max(0f, spec.ExitDelayMs ?? spec.DelayMs);
+        return dur + delay + ExitReclaimSlackMs;
     }
 
     private void UnmountSubtree(NodeHandle node)
@@ -3201,6 +3246,12 @@ public sealed class TreeReconciler
         if (Images is not null)
         {
             ref NodePaint paint = ref _scene.Paint(node);
+            // Diagnostic only: the third way a cover reloads is the node going away and coming back (H3). Paired with
+            // the ImageCache `pin`/`unpin` events, an `unmount` followed by a `pin ... state=None` is that exact story.
+            if (Diag.CompiledIn && Diag.Enabled && paint.VisualKind == VisualKind.Image && paint.ImageId != 0
+                && ImageCache.DiagTraced(Images.SourceOf(new ImageHandle(paint.ImageId))))
+                Diag.Event("img", $"unmount node={node.Raw.Index} id={paint.ImageId} " +
+                    $"src={ImageCache.DiagSourceTail(Images.SourceOf(new ImageHandle(paint.ImageId)))}");
             if (paint.VisualKind == VisualKind.Image && paint.ImageId != 0) UnpinImageNode(node, paint.ImageId);
             if (paint.VisualKind == VisualKind.Image && _scene.TryGetImageEffects(node, out var effects)
                 && effects.DerivedImageId != 0) UnpinImageNode(node, effects.DerivedImageId);
@@ -4304,6 +4355,32 @@ public sealed class TreeReconciler
                 // Decode-target size: explicit Width/Height when set; otherwise the DecodePx hint (a fluid/aspect image's
                 // real box size isn't known until layout), deriving the cross dimension from AspectRatio when possible.
                 (int decodeW, int decodeH) = ImageDecodeTarget(in im);
+
+                // ── image-pipeline trace (DIAGNOSTIC ONLY, FG_DIAG=1 + optional FG_IMG_TRACE=<substring>) ──────────
+                // Distinguishes the three ways a cover can visibly re-load: it MOUNTED fresh, its SOURCE url changed
+                // (same art at a different CDN size hash ⇒ a new cache key ⇒ Pending ⇒ placeholder), or only its
+                // requested DECODE size changed (the width measure landing after the first render — also a new key).
+                if (Diag.CompiledIn && Diag.Enabled && !im.Source.IsBound
+                    && ImageCache.DiagTraced(im.Source.Value))
+                {
+                    if (isMount)
+                        Diag.Event("img", $"mount node={node.Raw.Index} src={ImageCache.DiagSourceTail(im.Source.Value)} " +
+                            $"decode={decodeW}x{decodeH}");
+                    else if (old is ImageEl oldIm && !oldIm.Source.IsBound)
+                    {
+                        (int oldW, int oldH) = ImageDecodeTarget(in oldIm);
+                        bool srcChanged = !string.Equals(oldIm.Source.Value, im.Source.Value, StringComparison.Ordinal);
+                        if (srcChanged)
+                            Diag.Event("img", $"src-change node={node.Raw.Index} " +
+                                $"from={ImageCache.DiagSourceTail(oldIm.Source.Value)} " +
+                                $"to={ImageCache.DiagSourceTail(im.Source.Value)} " +
+                                $"decode={decodeW}x{decodeH} wasDecode={oldW}x{oldH}");
+                        else if (oldW != decodeW || oldH != decodeH)
+                            Diag.Event("img", $"decode-change node={node.Raw.Index} " +
+                                $"src={ImageCache.DiagSourceTail(im.Source.Value)} " +
+                                $"from={oldW}x{oldH} to={decodeW}x{decodeH}");
+                    }
+                }
 
                 int oldId = paint.ImageId;
                 if (!im.Source.IsBound)   // bound rows request via the binding (the effect owns pin/unpin)

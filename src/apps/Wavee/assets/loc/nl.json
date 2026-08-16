@@ -4,7 +4,6 @@
 
   "detail": {
     "play": "Afspelen",
-    "pause": "Pauzeren",
     "likedSongs": "Nummers die je leuk vindt",
     "filter": {
       "find": "Zoeken",
@@ -23,8 +22,6 @@
     "greeting": "{part}, {name}",
     "onRotation": "Dit heb je de laatste tijd geluisterd.",
     "madeForYou": "Voor jou gemaakt",
-    "recentlyPlayed": "Onlangs afgespeeld",
-    "quickPicks": "Snelle keuzes",
     "topArtists": "Jouw topartiesten",
     "dailyMix": "DAILY MIX",
     "video": "Video",
@@ -45,7 +42,6 @@
     "topTracks": "Populairste nummers",
     "showAll": "Alles tonen",
     "showAllCount": "Alle {count} tonen",
-    "showMore": "Nog {count} tonen",
     "seen": "Gezien",
     "newBadge": "Nieuw",
     "resume": "hervatten",
@@ -64,25 +60,17 @@
     "topArtistsSub": "Laatste 4 weken · {count} gevolgd · kies er een",
     "relatedCount": "{count} · fans houden ook van",
     "mostOpenedOf": "Jouw {shown} meest geopend van {total}",
-    "monthlyRank": "{listeners} maandelijkse luisteraars · #{rank} wereldwijd",
-    "fansAlsoLike": "{shown} van {total} · fans houden ook van",
     "songsBy": "{count} · van {owner}",
-    "caughtUp": "Je bent helemaal bij — dit is alles wat home nu voor je heeft.",
     "yourPlaylists": "Jouw playlists",
     "yourAlbums": "Jouw albums",
     "yourArtists": "Jouw artiesten",
     "madeFor": "Gemaakt voor {name}",
     "you": "jou",
     "newReleases": "Nieuwe releases",
-    "popularArtists": "Populaire artiesten",
     "artist": "Artiest",
-    "featuredAlbum": "UITGELICHT ALBUM",
     "play": "Afspelen",
     "pause": "Pauzeren",
-    "single": "Single",
-    "ep": "EP",
-    "album": "Album",
-    "compilation": "Compilatie"
+    "album": "Album"
   },
 
   "recents": {
@@ -113,10 +101,23 @@
     "title": "Instellingen",
     "sidebar": {
       "title": "Zijbalk",
+      "subtitle": "De navigatie aan de linkerkant",
       "design": "Ontwerp van de zijbalk",
+      "designShort": "Ontwerp",
       "designSub": "Kies de navigatie aan de linkerkant. Wordt direct toegepast.",
       "customize": "Zijbalk aanpassen",
       "customizeSub": "Secties in Custom toevoegen, herschikken en instellen"
+    },
+    "layout": {
+      "title": "Indeling en dichtheid",
+      "subtitle": "Hoe nummerlijsten en detailpagina's worden ingedeeld"
+    },
+    "lyrics": {
+      "title": "Songtekst",
+      "subtitle": "Het leesoppervlak voor gesynchroniseerde songteksten"
+    },
+    "links": {
+      "subtitle": "Wat Wavee opent vanuit andere apps"
     },
     "tabs": {
       "general": "Algemeen",
@@ -127,6 +128,7 @@
     },
     "language": {
       "title": "Taal en regio",
+      "subtitle": "De taal van de interface van Wavee zelf",
       "label": "App-taal",
       "restartSub": "Wijzigingen worden toegepast wanneer Wavee opnieuw wordt gestart.",
       "system": "Systeemstandaard",
@@ -136,7 +138,11 @@
     },
     "appearance": {
       "title": "Weergave",
-      "subtitle": "Thema, kleurenpalet en lijstdichtheid",
+      "subtitle": "Thema, kleurenpalet en effecten van de shell",
+      "effectsTitle": "Visuele effecten",
+      "effectsSub": "Lopende tekst en kleurvlakken uit albumhoezen",
+      "effectsAllOn": "Alles aan",
+      "effectsDisabled": "{count} uitgeschakeld",
       "theme": "Thema",
       "themeSub": "Systeem volgt de Windows-instelling automatisch",
       "palette": "Palet",
@@ -243,21 +249,13 @@
   "sidebar": {
     "pinned": "Vastgemaakt",
     "yourLibrary": "Jouw bibliotheek",
-    "albums": "Albums",
-    "artists": "Artiesten",
-    "likedSongs": "Nummers die je leuk vindt",
-    "podcasts": "Podcasts",
     "playlists": "Playlists",
-    "localFiles": "Lokale bestanden",
-    "soon": "Binnenkort",
     "dropToPin": "Sleep items hierheen om ze vast te maken",
     "songCount": "{count, plural, one {# nummer} other {# nummers}}",
     "createPlaylistTooltip": "Playlist maken",
     "newPlaylist": "Mijn playlist",
-    "undo": "Ongedaan maken",
     "pinnedToast": "“{name}” vastgemaakt",
     "unpinnedToast": "“{name}” losgemaakt",
-    "pinsEmpty": "Klik met de rechtermuisknop op een playlist, album, artiest of podcast om die hier vast te maken.",
     "design": {
       "classic": "Spotify Classic",
       "classicSub": "Snelkoppelingen naar Jouw bibliotheek en een platte playlistlijst — de huidige Wavee-zijbalk.",
@@ -276,11 +274,7 @@
       "later": "Misschien later"
     },
     "menu": {
-      "layout": "Indeling van zijbalk",
       "customize": "Zijbalk aanpassen…",
-      "customizeSwitchHint": "Schakelt over naar Custom",
-      "collapse": "Zijbalk samenvouwen",
-      "expand": "Zijbalk uitvouwen",
       "resetWidth": "Breedte herstellen"
     },
     "layout": {
@@ -288,20 +282,12 @@
       "menuTitle": "Indeling van zijbalk",
       "tooltip": "Indeling van zijbalk wijzigen",
       "classic": "Spotify Classic",
-      "classicDesc": "Snelkoppelingen naar Jouw bibliotheek en een platte playlistlijst — de huidige Wavee-zijbalk.",
       "library": "Bibliotheek",
       "libraryV3": "LibraryV3",
-      "libraryV3Desc": "Eén samengevoegde bibliotheeklijst met filters, sortering en rasterweergaven.",
       "curated": "Custom",
-      "curatedDesc": "Stel je eigen zijbalk samen uit de secties die je wilt.",
-      "customize": "Zijbalk aanpassen…",
-      "chooserTitle": "Kies je zijbalk",
-      "chooserSubtitle": "Kies de navigatie aan de linkerkant die bij je past. Je kunt dit altijd wijzigen via Instellingen → Algemeen.",
-      "chooserConfirm": "Deze indeling gebruiken"
+      "customize": "Zijbalk aanpassen…"
     },
     "layoutFault": {
-      "title": "Je opgeslagen zijbalkindeling kon niet worden gelezen",
-      "body": "We hebben het onleesbare bestand bewaard en in plaats daarvan Wavee Curated geladen. Je volgende wijziging vervangt het.",
       "discard": "Opnieuw beginnen"
     },
     "pin": {
@@ -311,8 +297,7 @@
       "unpinned": "Verwijderd uit Vastgemaakt",
       "undo": "Ongedaan maken",
       "emptyHint": "Of gebruik de pin-actie op elk bibliotheekitem.",
-      "position": "{index} van {count}",
-      "reorderHint": "Druk op Spatie om de volgorde te wijzigen"
+      "position": "{index} van {count}"
     },
     "section": {
       "pinned": "Vastgemaakt",
@@ -355,7 +340,6 @@
     "palette": {
       "destinations": "Pagina’s",
       "dynamic": "Dynamisch",
-      "spotlight": "Uitgelicht",
       "navigation": "Navigatie",
       "library": "Bibliotheek",
       "playback": "Afspelen",
@@ -384,7 +368,6 @@
       "emptyHide": "Lege inhoud verbergen",
       "emptyCompact": "Een compacte hint tonen",
       "emptyAction": "Een actiekaart tonen",
-      "include": "Opnemen",
       "sort": "Sorteren",
       "sortRecents": "Recent",
       "sortRecentlyAdded": "Recent toegevoegd",
@@ -613,8 +596,6 @@
         "folder": "Map"
       },
       "itemCount": "{count, plural, one {# item} other {# items}}",
-      "pinnedBadge": "Vastgemaakt",
-      "reorderOnlyCustom": "Schakel naar Eigen volgorde om playlists te herschikken.",
       "empty": {
         "library": "Nog niets in Jouw bibliotheek",
         "librarySub": "Bewaar een album, volg een artiest of maak een playlist en het verschijnt hier.",
@@ -624,7 +605,6 @@
       }
     },
     "a11y": {
-      "current": "huidige pagina",
       "filterGroup": "Jouw bibliotheek filteren",
       "sortView": "Sorteer- en weergaveopties"
     }
@@ -635,7 +615,6 @@
     "more": "Meer",
     "retry": "Opnieuw proberen",
     "dismiss": "Sluiten",
-    "undo": "Ongedaan maken",
     "offline": "Je bent offline — opgeslagen inhoud wordt getoond.",
     "emptyTitle": "Hier is nog niets",
     "emptySubtitle": "Zodra er iets beschikbaar is, verschijnt het hier.",

@@ -22,9 +22,19 @@ namespace Wavee;
 // campaign, 2026-08-03 — edge energy 27 / 3.7 / ~0 across the first three rings: ring 1 is only mildly soft, ring 3 is
 // already dissolved), NOT the old linear `5 * min(dist/5, 1)` ramp, which held ring 1 far too crisp and stopped short at
 // the far end. 0 ⇒ no blur layer is emitted at all (SceneRecorder drops sigma ≤ 0.01).
+// PER SURFACE, because the two surfaces are doing different jobs with the same ladder. The RAIL is a narrow panel
+// beside a page: it shows a handful of lines and the reference treatment is right there. The STAGE is a READING
+// surface — it shows ~20 lines at 36 DIP, and at the rail's far rungs (4 → 5.5 → 6.5 σ) everything outside the focal
+// band dissolves into fog, which is what "the lyrics are nearly illegible" was describing. The stage keeps the same
+// SHAPE — monotone, 0 on the focus, ring 1 barely soft — and flattens the tail so the verse around the line stays
+// readable as shape rather than resolving to nothing.
 static class LyricsFx
 {
-    public static float DofSigma(int dist) => dist switch
+    public static float DofSigma(int dist, bool large) => large ? StageSigma(dist) : RailSigma(dist);
+
+    /// <summary>The RAIL's ladder: the Apple Music reference capture, measured (lyrics-parity campaign 2026-08-03 —
+    /// edge energy 27 / 3.7 / ~0 across the first three rings). Unchanged.</summary>
+    static float RailSigma(int dist) => dist switch
     {
         <= 0 => 0f,
         1 => 1.25f,
@@ -32,6 +42,17 @@ static class LyricsFx
         3 => 4f,
         4 => 5.5f,
         _ => 6.5f,
+    };
+
+    /// <summary>The STAGE's ladder: same shape, flatter tail. Ring 1 is within a rounding step of the rail's (and of
+    /// the design reference's 1.2), and the far end settles at 3 instead of 6.5 — recessed, not dissolved.</summary>
+    static float StageSigma(int dist) => dist switch
+    {
+        <= 0 => 0f,
+        1 => 1.2f,
+        2 => 2.0f,
+        3 => 2.6f,
+        _ => 3.0f,
     };
 }
 
@@ -751,13 +772,13 @@ sealed class LyricsView : Component
 
             return Skel.Region<LyricsDocument?>(
                 docL,
-                shimmerSource: () => LyricsShimmer(owner._large),
+                shimmerSource: () => LyricsShimmer(owner._large, owner._ink),
                 content: d => d is { Lines.Count: > 0 } readyDoc ? owner.LyricsContent(readyDoc) : owner.Message("No lyrics available"),
                 reveal: SkelReveal.FadeOnly,
                 onFailed: () => owner.Message("No lyrics available"),
                 isEmpty: d => d?.Lines is null || d.Lines.Count == 0,
                 onEmpty: () => owner.Message("No lyrics available"),
-                style: new SkeletonStyle(Tok.FillSubtleSecondary, RowGap: owner._large ? 18f : 14f, BarRadius: 6f, TextRatio: 0.86f),
+                style: new SkeletonStyle(owner._ink.Skeleton, RowGap: owner._large ? 18f : 14f, BarRadius: 6f, TextRatio: 0.86f),
                 smoothResize: false);
         }
     }
@@ -1313,7 +1334,9 @@ sealed class LyricsView : Component
         };
     }
 
-    static Element LyricsShimmer(bool large)
+    // The shimmer takes the surface's INK seam, not a theme fill: the stage's ground is its own, so a theme fill
+    // here is a light bar on a dark surface (and, once the stage flips, the wrong polarity outright).
+    static Element LyricsShimmer(bool large, LyricsInk ink)
     {
         float padX = large ? 64f : 22f;   // matches RowSidePad so the bars sit exactly where the first lines will land
         float padTop = large ? 150f : 110f;
@@ -1329,7 +1352,7 @@ sealed class LyricsView : Component
                 Width = large ? 520f * widths[i] : 255f * widths[i],
                 Height = rowH,
                 Corners = CornerRadius4.All(6f),
-                Fill = Tok.FillSubtleSecondary,
+                Fill = ink.Skeleton,
                 AlignSelf = FlexAlign.Start,   // both surfaces are left-aligned now (the centered fullscreen was refuted)
             };
         }
@@ -1452,14 +1475,18 @@ sealed class LyricsView : Component
 
     static bool SuppressesDof(LyricsFollowMode mode) => mode != LyricsFollowMode.Following;
 
-    float DofForLine(int index) => DofSigmaFor(index, _activeLine.Peek());
+    float DofForLine(int index) => DofSigmaFor(index, _activeLine.Peek(), _large);
 
     // The σ ladder rung for one line against a given active line. Split out so the per-frame ramp can hoist the signal
     // Peek out of its whole-document loop without forking the ladder into a second definition.
-    static float DofSigmaFor(int index, int active)
+    static float DofSigmaFor(int index, int active, bool large)
     {
-        if (active < 0) return LyricsFx.DofSigma(6);
-        return LyricsFx.DofSigma(Math.Min(Math.Abs(index - active), 6));
+        // NO ACTIVE LINE ⇒ NO BLUR. This used to return DofSigma(6) — the ladder's MAXIMUM — which blurred the ENTIRE
+        // document at full σ before the first line landed, and for the whole life of any document whose clock never
+        // resolves. "There is no focus yet" is not "every line is six rings from the focus"; an unfocused document
+        // should be crisp, which is also what SuppressesDof already does for every non-Following mode.
+        if (active < 0) return 0f;
+        return LyricsFx.DofSigma(Math.Min(Math.Abs(index - active), 6), large);
     }
 
     // Suppression is a TARGET move, not a write of its own: DriveDofRamp owns every σ the nodes ever see, so engaging
@@ -1496,7 +1523,7 @@ sealed class LyricsView : Component
         bool moving = false;
         for (int i = 0; i < cur.Length; i++)
         {
-            float target = suppress ? 0f : DofSigmaFor(i, active);
+            float target = suppress ? 0f : DofSigmaFor(i, active, _large);
             float c = cur[i];
             bool landed = true;
             if (float.IsNaN(c) || target >= c)
@@ -2474,7 +2501,16 @@ sealed class LyricLineView : Component
     // The halo wrapper's opacity: BOUND to the per-line fade signal so a row re-render re-asserts the live fade value
     // (the reconciler skips bound Opacity) — a static value here would snap the halo at exactly the re-render moments
     // (active/voice flips) the fade exists to smooth.
-    Prop<float> GlowOpacity() => _glowFade is { } s ? (Prop<float>)s : 0f;
+    // The glow's VISIBILITY, damped by the ink seam's bloom weight. A near-white halo on a near-white ground cannot
+    // carry what a white halo carries on black, so the light stage damps it rather than pretending the effect
+    // transfers. The dark arm's scale is exactly 1, and it takes the original un-wrapped binding — so nothing about the
+    // shipped path changes shape.
+    Prop<float> GlowOpacity()
+    {
+        if (_glowFade is not { } s) return 0f;
+        float k = _ink.BloomScale;
+        return k >= 1f ? (Prop<float>)s : Prop.Of(() => s.Value * k);
+    }
 
     public override Element Render()
     {
@@ -2575,13 +2611,17 @@ sealed class LyricLineView : Component
             // Softness AND Lift match the main layer exactly: the halo is the same glyphs at the same geometry, so any
             // disagreement would let the bloom float out from under the crisp text at the boundary.
             bool near = dist <= 2;
+            // The halo paints the BLOOM colour rather than the sung ink. On a dark stage the two are the same white,
+            // so this is byte-identical to what shipped; on a LIGHT stage blurred near-black glyphs under near-black
+            // glyphs would subtract luminance — a smudge, not a halo — so the light arm blooms in the veil instead.
+            var bloom = _ink.Bloom;
             Element glowText = (near
-                ? LineText(_line.Text, sung) with
+                ? LineText(_line.Text, bloom) with
                   {
-                      Wipe = new GlyphWipe(Before: sung, After: sung with { A = 0f },
+                      Wipe = new GlyphWipe(Before: bloom, After: bloom with { A = 0f },
                           Split: split, Softness: softness, Lift: WipeLiftFor(_large)),
                   }
-                : LineText("", sung)) with { OnRealized = h => _reportGlow(_index, h) };
+                : LineText("", bloom)) with { OnRealized = h => _reportGlow(_index, h) };
             // The wrapper's bound opacity is the per-line glow-fade signal: OnFrame ramps it in over ~240 ms as this line
             // becomes the voice and out as it leaves — the halo never appears/vanishes in one frame (the old handoff pop).
             Element glow = new BoxEl { Opacity = GlowOpacity(), HitTestVisible = false, Children = [glowText] };
@@ -2616,7 +2656,7 @@ sealed class LyricLineView : Component
                 BlurCachePolicy = BlurCachePolicy.HoldIfCached,
                 Opacity = GlowOpacity(),
                 HitTestVisible = false,
-                Children = [LineText(near ? _line.Text : "", _ink.Primary with { A = 0.4f })],
+                Children = [LineText(near ? _line.Text : "", _ink.Bloom with { A = 0.4f })],
             };
             Element main = LineText(_line.Text, lit ? _ink.Primary : _ink.Secondary) with
             {

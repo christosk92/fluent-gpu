@@ -320,6 +320,28 @@ public class SidebarPinStoreTests
         Assert.Equal(pl, SidebarPinId.RouteOf(pl));
     }
 
+    /// <summary>Folder CRUD is live now, so a pinned folder can genuinely VANISH under its pin. The store keeps it: the
+    /// sidebar's standing rule is that a missing entity renders visible-but-disabled with a reason, and only an explicit
+    /// unpin removes a user's row. Auto-removing here would silently delete a pin the user would have re-created — and
+    /// would do it on a transient cold boot where the tree simply has not loaded yet.</summary>
+    [Fact]
+    public void PinToAVanishedFolder_IsKept()
+    {
+        var s = new SidebarPinStore();
+        string id = SidebarPinId.ForFolder("6a1f2c");
+        Assert.True(s.Pin(Pin(id, SidebarPinKind.Folder, "", "Late night")));
+
+        // The folder is deleted on another device: nothing in the store is told, and nothing in the store reacts.
+        Assert.True(s.IsPinned(id));
+        Assert.Equal(0, s.IndexOf(id));
+        Assert.Equal("Late night", s[0].Name);                       // the offline display cache still names the row
+
+        // …and a RENAME does not disturb it either: the pin is keyed by the client-minted groupId.
+        s.Touch(id, "Very late night");
+        Assert.True(s.IsPinned(id));
+        Assert.Equal(id, SidebarPinId.ForFolder("6a1f2c"));
+    }
+
     [Fact]
     public void IsPinned_UsesTheStableId_SoARenameCannotUnpin()
     {

@@ -1,10 +1,11 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentGpu.Localization;
 using Wavee.Backend;
+using Wavee.Backend.Hydration;
 using Wavee.Backend.Playlists;
 using Wavee.Core;
 
@@ -23,81 +24,64 @@ using DiscographyPage = Wavee.Core.DiscographyPage;
 public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISourceCollectionEvents, IDisposable
 {
     readonly IStore _store;
+    readonly SwitchableEntityHydrator _hydration;
+    readonly IOnlineCatalog _online;
+
+    /// <summary>Liked Songs' canonical collection uri — the entity the Liked surface's rung is measured on.</summary>
+    const string LikedCollectionUri = "spotify:collection:tracks";
     readonly SimpleSubject<CollectionKind> _collections = new();
     readonly IDisposable _sub;
-    readonly object _profileGate = new();
-    readonly Dictionary<string, HashSet<string>> _profilePlaylistDeps = new(StringComparer.Ordinal);
-    readonly HashSet<string> _profilePlaylistCollectionDeps = new(StringComparer.Ordinal);
-    IUserProfileService? _userProfiles;
-    IDisposable? _profileSub;
-
-    /// <summary>Set by the live bootstrap: fetch a playlist's membership+tracks / an album's tracks on FIRST open (the
-    /// rootlist + collection sync stores headers only). Null offline/in tests → reads stay pure store lookups.</summary>
-    public Func<string, CancellationToken, Task>? OnDemandFetch { get; set; }
-
-    /// <summary>Set by the live bootstrap: batch music-video detection for a track list this source just served. Liked
-    /// Songs is the caller that needs it — it never routes through <see cref="OnDemandFetch"/> (<c>EnsureFetchedAsync</c>
-    /// gates playlist/album/artist only), so nothing else would ever detect its rows. Fire-and-forget; null in tests.</summary>
-    public Func<IReadOnlyList<string>, Task>? DetectVideos { get; set; }
-
-    /// <summary>Paged member hydrate on liked-open (S2). Same fire-and-forget shape as <see cref="DetectVideos"/> —
-    /// pages at 300 through MetadataService.SyncAllAsync so thin album names / tracks close via the chokepoint without
-    /// one giant SyncAll over 10k members. Null in tests.</summary>
-    public Func<IReadOnlyList<string>, Task>? HydrateMembers { get; set; }
-
-    /// <summary>Set by the go-live block: the single library-sync loop. When present, playlist opens route through it (SWR —
-    /// blocking first fetch / background revalidate); null offline/in tests → the OnDemandFetch path (album/artist unchanged).</summary>
-    public Wavee.Backend.Sync.LibrarySync? Sync { get; set; }
-
-    /// <summary>Set by the live bootstrap: the editorial/personalized Pathfinder home groups, inserted after the pinned
-    /// quick-pick matrix. Null offline leaves the store-derived quick picks.</summary>
-    public Func<CancellationToken, Task<LiveHomeResult>>? LiveHomeFetch { get; set; }
 
     /// <summary>The most recent non-empty <c>homeChips</c> set. A faceted home response does not reliably repeat the
     /// chip row, so it is remembered rather than re-read from every response — see the pin in <c>GetHomeAsync</c>.</summary>
     IReadOnlyList<HomeChip>? _lastHomeChips;
 
-    /// <summary>Set by the live bootstrap: full-catalog online search (Pathfinder). Primary when present; the offline
-    /// store track search is the fallback. Returns null on failure → caller degrades to offline.</summary>
-    public Func<string, SearchFacet, int, int, CancellationToken, Task<SearchResults?>>? LiveSearch { get; set; }
-
-    /// <summary>Set by the live bootstrap: as-you-type search suggestions (Pathfinder searchSuggestions). Empty offline.</summary>
-    public Func<string, CancellationToken, Task<IReadOnlyList<string>>>? LiveSuggest { get; set; }
-    public Func<string, CancellationToken, Task<SearchSuggestions>>? LiveSuggestRich { get; set; }
-
-    /// <summary>Optional live user profile overlay for playlist owners / added-by contributors. Null offline/in tests.</summary>
-    public IUserProfileService? UserProfiles
-    {
-        get => _userProfiles;
-        set
-        {
-            if (ReferenceEquals(_userProfiles, value)) return;
-            _profileSub?.Dispose();
-            _userProfiles = value;
-            lock (_profileGate)
-            {
-                _profilePlaylistDeps.Clear();
-                _profilePlaylistCollectionDeps.Clear();
-            }
-            _profileSub = value?.Changed.Subscribe(Wavee.Backend.Observers.From<string>(OnProfileChanged));
-        }
-    }
-
-    public StoreLibrarySource(IStore store)
+    /// <param name="hydration">THE hydration façade for this source (design §1.4/§3) — REQUIRED, never null. It is
+    /// the <see cref="SwitchableEntityHydrator"/> the composition root owns: <c>OfflineEntityHydrator</c> until go-live,
+    /// the <c>SpotifyProviderHydrator</c> after it, and back again on logout. Every read below asks it for the rung it
+    /// needs and THEN reads the store — which is why this source has no fetch hooks and no "is it cold?" predicates
+    /// left; both are the façade's job now.</param>
+    /// <param name="online">THE online-read seam (design §2.7) — REQUIRED, never null. Search / suggest / home are the
+    /// reads this source cannot answer from the Store; the composition root owns a <see cref="SwitchableOnlineCatalog"/>
+    /// whose inner is <see cref="OfflineOnlineCatalog"/> until go-live and again after logout, so the four
+    /// "is the live session up?" probes that used to live on this class are gone.</param>
+    /// <remarks>P4-C: there is no user-profile seam here any more. A playlist owner / added-by contributor is a STORE
+    /// ENTITY (<c>IStore.GetOwner</c>, hydrated by <c>UserHydration</c> through the same façade every other read uses),
+    /// so this class no longer holds a service, a dependency map from user to playlists, or a subscription whose
+    /// callback <c>store.Bump</c>ed those playlists — a READ source writing to the store to fake a change notification
+    /// for data the store did not hold. A profile that lands late now repaints through <c>IStore.Changes</c>.</remarks>
+    public StoreLibrarySource(IStore store, SwitchableEntityHydrator hydration, IOnlineCatalog online)
     {
         _store = store;
+        _hydration = hydration ?? throw new ArgumentNullException(nameof(hydration));
+        _online = online ?? throw new ArgumentNullException(nameof(online));
         _sub = _store.Changes.Subscribe(new ChangeObserver(this));
     }
 
     public string Id => "spotify-store";
-    public bool Owns(string uri) => uri.StartsWith("spotify:", StringComparison.Ordinal);
+    public bool Owns(string uri) => EntityUri.Parse(uri).Provider == EntityProviders.Spotify;
     public SourceCapabilities Capabilities => SourceCapabilities.Catalog | SourceCapabilities.Podcasts;
+
+    /// <summary>P4: how the ROUTER reaches this source's ladder. It is the very same switchable every read below asks
+    /// (offline store hydrator → <c>SpotifyProviderHydrator</c> at go-live → back on logout), never a second seam — so
+    /// <c>Services.Hydrator</c> routing a <c>spotify:</c> uri here lands in exactly the implementation the source is
+    /// already using. Overrides the <see cref="ICatalogSource.Hydrator"/> default (a complete-at-construction source).</summary>
+    public IEntityHydrator Hydrator => _hydration;
     public IObservable<CollectionKind> CollectionsChanged => _collections;
 
     // ── single-item reads ──
-    public async Task<Playlist?> GetPlaylistAsync(string uri, CancellationToken ct = default)
+    public async Task<Playlist?> GetPlaylistAsync(string uri, HydrationLevel level = HydrationLevel.Open, CancellationToken ct = default)
     {
-        await EnsureFetchedAsync(uri, ct).ConfigureAwait(false);
+        // The playlist plane is LibrarySync's, so the open plan is the one place that knows a baseline changes the
+        // shape of the ask: no membership ⇒ nothing to paint ⇒ block on Open; a baseline ⇒ paint the cache now and let
+        // the loop's own 5-minute/dirty gates decide whether it revalidates (OpenPolicy — design §2.1).
+        var plan = OpenPolicy.For(EntityKind.Playlist, hasBaseline: _store.HasMembership(uri));
+        if (plan.Blocking != HydrationLevel.None)
+            await _hydration.EnsureAsync(uri, Max(plan.Blocking, level),
+                new HydrationOptions(Surface: TraitSurface.PlaylistOpen), ct).ConfigureAwait(false);
+        if (plan.Background != HydrationLevel.None)
+            _ = _hydration.EnsureAsync(uri, Max(plan.Background, level),
+                new HydrationOptions(HydrationMode.Background, plan.Revalidate, TraitSurface.PlaylistOpen), ct);
         var header = _store.GetPlaylist(uri);
         if (header is null) return null;
         var revision = _store.PlaylistRevision(uri);
@@ -140,15 +124,18 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
         return urls.Count > 0 ? urls : null;
     }
 
-    public async Task<Album?> GetAlbumAsync(string uri, CancellationToken ct = default)
+    public async Task<Album?> GetAlbumAsync(string uri, HydrationLevel level = HydrationLevel.Open, CancellationToken ct = default)
     {
-        await EnsureFetchedAsync(uri, ct).ConfigureAwait(false);
+        // Ensure THEN read: the ladder writes the store, the store is the single read model. The surface tag is what
+        // picks the trait bundle the album rung awaits (RowBundle|PlayCount|Publishing) — see TraitPolicy.
+        await _hydration.EnsureAsync(uri, level, new HydrationOptions(Surface: TraitSurface.AlbumOpen), ct).ConfigureAwait(false);
         return _store.GetAlbum(uri);
     }
 
-    public async Task<Artist?> GetArtistAsync(string uri, CancellationToken ct = default)
+    public async Task<Artist?> GetArtistAsync(string uri, HydrationLevel level = HydrationLevel.Open, CancellationToken ct = default)
     {
-        await EnsureFetchedAsync(uri, ct).ConfigureAwait(false);
+        // No trait surface: an artist rung's own traits ride the chart step inside ArtistHydration (ArtistPopular).
+        await _hydration.EnsureAsync(uri, level, HydrationOptions.Default, ct).ConfigureAwait(false);
         return _store.GetArtist(uri);
     }
 
@@ -157,7 +144,7 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
     // V4 ensure GetArtistAsync already triggers. The facet total is simply the filtered count (what we actually hold).
     public async Task<DiscographyPage> GetDiscographyAsync(string uri, DiscographyKind kind, int offset, int limit, CancellationToken ct = default)
     {
-        var artist = await GetArtistAsync(uri, ct).ConfigureAwait(false);   // triggers the V4 ensure when cold
+        var artist = await GetArtistAsync(uri, HydrationLevel.Open, ct).ConfigureAwait(false);   // Open = the assembled discography
         var all = artist?.TopAlbums ?? Array.Empty<Album>();
         var filtered = new List<Album>();
         foreach (var a in all) if (AggregateCatalog.KindMatches(a.Kind, kind)) filtered.Add(a);   // shared kind filter (Singles ⇒ Single/EP)
@@ -173,112 +160,23 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
             if (a.TrackCount == 0 && _store.GetAlbum(a.Uri) is { TrackCount: > 0 } row) a = a with { TrackCount = row.TrackCount };
             window.Add(a);
         }
-        // The same fire-and-forget hook the track reads use — here it resolves each card's cover tint (kind 179), so a
-        // page of albums paints its placeholders in their own colours instead of as a grid of identical grey squares.
-        // Self-filtering and negatively cached, so re-paging over albums already resolved costs nothing.
-        if (DetectVideos is { } detect && window.Count > 0)
-        {
-            var uris = new List<string>(window.Count);
-            for (int i = 0; i < window.Count; i++) uris.Add(window[i].Uri);
-            try { _ = detect(uris); } catch { }
-        }
+        // The per-card cover tint used to ride a fire-and-forget detect hook fired with ALBUM uris (which the video
+        // detector dropped outright — only the adornment pass consumed them). It is now the trait pipeline's job,
+        // addressed by uri and asked for by the surface that actually opens these albums; paging is a pure slice.
         return new DiscographyPage(window, filtered.Count);
     }
 
-    // First open fetches the detail envelope over the V4 pipeline (ArtistDiscography for artists, EnsureAlbumAsync for
-    // albums). The gates below decide when a read is cold enough to fetch. Album rows expose play counts, which are not
-    // present in AlbumV4/TrackV4, so an album read is complete only after the Pathfinder Full envelope has landed.
-    async Task EnsureFetchedAsync(string uri, CancellationToken ct)
-    {
-        // Playlist on-open routing through the sync loop (SWR, §2.6): a MISSING membership baseline → blocking first
-        // fetch; a KNOWN baseline (including a valid empty, newly-created playlist) → fire-and-forget revalidate and
-        // serve cache now. Count==0 cannot distinguish those states and used to let an early fetch overwrite optimistic
-        // title/description/cover edits on new empty playlists.
-        if (Sync is { } sync && uri.StartsWith("spotify:playlist:", StringComparison.Ordinal))
-        {
-            if (!_store.HasMembership(uri)) await sync.OpenPlaylistAsync(uri, ct).ConfigureAwait(false);
-            else sync.Enqueue(new Wavee.Backend.Sync.SyncCommand(Wavee.Backend.Sync.SyncKind.OpenPlaylist, uri));
-            return;
-        }
-
-        var fetch = OnDemandFetch;
-        if (fetch is null) return;
-        bool need = false;
-        if (uri.StartsWith("spotify:playlist:", StringComparison.Ordinal))
-            need = !_store.HasMembership(uri);
-        else if (uri.StartsWith("spotify:album:", StringComparison.Ordinal))
-        {
-            // V4 supplies the fast tracklist, but not play counts. Require Full hydration so EnsureAlbumAsync also lands
-            // the getAlbum envelope before the detail model is published. A cached Full album remains a zero-network read.
-            // A tracklist with UNNAMED rows is still cold: AlbumV4 disc tracks are frequently gid-only on the wire (the
-            // prefetch's Wave 2 lands them like that before Wave 3 enriches), so "has tracks" alone is not hydrated —
-            // without this clause the open path never runs the TrackV4 enrichment and the page renders empty titles.
-            need = !IsAlbumComplete(_store.GetAlbum(uri));
-        }
-        else if (uri.StartsWith("spotify:artist:", StringComparison.Ordinal))
-        {
-            // V4 ensure is SWR-cheap (etag/resident-skip), so no TTL clause — re-run whenever the discography is missing or
-            // still a bare stub. TopAlbums[0].Name empty ⇒ the ArtistV4 stubs haven't been upgraded to resident cards yet.
-            var a = _store.GetArtist(uri);
-            need = a is null || a.TopAlbums is null or { Count: 0 } || a.TopAlbums[0].Name.Length == 0
-                // Self-heal a TRUNCATED discography (persisted stores clobbered by the pre-fix overview write, which
-                // replaced the full V4 stub list with the overview's first ~10/facet while the totals kept the real
-                // counts): held cards < the facet totals ⇒ re-ensure. Redundant fires are fine — the V4 ensure is
-                // SWR/etag-cheap and resident-skipping by design.
-                || a.AlbumsTotal + a.SinglesTotal + a.CompilationsTotal > a.TopAlbums.Count;
-        }
-        else if (uri.StartsWith("spotify:show:", StringComparison.Ordinal))
-        {
-            // ShowV4 lands the header + episode membership; without either the page reads "0 episodes" forever.
-            need = _store.GetShow(uri) is null || !_store.HasMembership(uri);
-        }
-        if (need) { try { await fetch(uri, ct).ConfigureAwait(false); } catch { } }
-
-        // Show-open: hydrate the first episode page through the chokepoint (paged HydrateMembers / SyncAllAsync).
-        if (uri.StartsWith("spotify:show:", StringComparison.Ordinal) && HydrateMembers is { } hydrateEps)
-        {
-            var members = _store.Membership(uri);
-            if (members.Count > 0)
-            {
-                int n = Math.Min(members.Count, 300);
-                var eps = new List<string>(n);
-                for (int i = 0; i < n; i++) eps.Add(members[i].ItemUri);
-                try { _ = hydrateEps(eps); } catch { }
-            }
-        }
-    }
-
-    // Shared with the live EnsureAlbumAsync callback. `Full` describes the detail envelope that was mapped; it does not
-    // prove that a usable track list landed. A transient/partial Pathfinder response can otherwise seal an empty album as
-    // Full forever: StoreLibrarySource asks for repair, while the callback returns before doing the repair.
-    internal static bool IsAlbumComplete(Album? album)
-        => album is { Hydration: AlbumHydrationLevel.Full, Tracks: { Count: > 0 } tracks }
-           && !HasUnnamedTrack(tracks)
-           // The Full flag alone is not proof: a partial/transient getAlbum response can carry named tracks but none of
-           // the envelope's own facets, and marking that Full sealed the album "Full forever" (0 plays + stub artist —
-           // every later open early-returned here). A COMPLETE envelope always delivers the copyright/label block
-           // and/or play counts, so require at least one; a payload-less "Full" is treated as cold and re-fetched.
-           // (Play counts are legitimately 0 on brand-new releases, hence OR.) This used to test the inline cover
-           // palette; colours now live in CoverColorPlane, keyed by image, and say nothing about album hydration.
-           && (album.Label is { Length: > 0 } || album.Copyright is { Length: > 0 } || HasAnyPlayCount(tracks));
-
-    static bool HasUnnamedTrack(IReadOnlyList<Track> tracks)
-    {
-        for (int i = 0; i < tracks.Count; i++) if (StoreEntityGaps.TrackUnnamed(tracks[i])) return true;
-        return false;
-    }
-
-    static bool HasAnyPlayCount(IReadOnlyList<Track> tracks)
-    {
-        for (int i = 0; i < tracks.Count; i++) if (tracks[i].PlayCount > 0) return true;
-        return false;
-    }
+    /// <summary>The larger of two rungs — a caller may ask for MORE than the kind's open plan (the album page asks
+    /// Rich, the below-the-fold panel Full); it may never ask for less than what the surface needs to paint.</summary>
+    static HydrationLevel Max(HydrationLevel a, HydrationLevel b) => a >= b ? a : b;
 
     public async IAsyncEnumerable<TrackPage> StreamTracksAsync(string contextUri, [EnumeratorCancellation] CancellationToken ct = default)
     {
-        await EnsureFetchedAsync(contextUri, ct).ConfigureAwait(false);
+        // The PLAY path never waits on Rich: Open is "this context has a usable, named tracklist", which is exactly
+        // what the order below needs. (A page open asking for Rich runs concurrently and the ledger dedupes.)
+        await _hydration.EnsureAsync(contextUri, HydrationLevel.Open, HydrationOptions.Default, ct).ConfigureAwait(false);
         IReadOnlyList<Track> tracks =
-            contextUri.StartsWith("spotify:playlist:", StringComparison.Ordinal) ? JoinMembership(contextUri)
+            EntityUri.KindOf(contextUri) == EntityKind.Playlist ? JoinMembership(contextUri)
             : _store.GetAlbum(contextUri)?.Tracks ?? Array.Empty<Track>();
         if (tracks.Count > 0) yield return new TrackPage(tracks, tracks.Count, tracks.Count);
     }
@@ -291,7 +189,7 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
     {
         var list = new List<PlaylistSummary>();
         foreach (var e in _store.Rootlist())
-            if (e.Kind == 0 && e.Uri.StartsWith("spotify:playlist:", StringComparison.Ordinal))
+            if (e.Kind == 0 && EntityUri.KindOf(e.Uri) == EntityKind.Playlist)
                 list.Add(SummaryOf(e.Uri));
         return Task.FromResult<IReadOnlyList<PlaylistSummary>>(list);
     }
@@ -340,18 +238,11 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
             if (t is null) continue;   // offline-first inner join: a not-yet-hydrated member has no row until it lands
             list.Add(items[i].AddedAtMs > 0 ? t with { AddedAt = DateTimeOffset.FromUnixTimeMilliseconds(items[i].AddedAtMs) } : t);
         }
-        if (DetectVideos is { } detect && list.Count > 0)
-        {
-            var uris = new List<string>(list.Count);
-            for (int i = 0; i < list.Count; i++) uris.Add(list[i].Uri);
-            try { _ = detect(uris); } catch { }   // fire-and-forget: the read never waits on (or fails from) detection
-        }
-        if (HydrateMembers is { } hydrate && items.Count > 0)
-        {
-            var uris = new List<string>(items.Count);
-            for (int i = 0; i < items.Count; i++) uris.Add(items[i].Uri);
-            try { _ = hydrate(uris); } catch { }   // fire-and-forget paged SyncAll — closes thin album/track refs
-        }
+        // Liked is a COLLECTION: its rung is about its members, so one background ask replaces the two fire-and-forget
+        // hooks this used to fan out (paged member hydrate + video/adornment detect). CollectionHydration pages the
+        // saved set at 300 and asks for the LikedSongs trait bundle itself — see design §2.3.
+        _ = _hydration.EnsureAsync(LikedCollectionUri, HydrationLevel.Open,
+            new HydrationOptions(HydrationMode.Background, Surface: TraitSurface.LikedSongs), ct);
         return Task.FromResult<IReadOnlyList<Track>>(list);
     }
 
@@ -364,11 +255,9 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
         if (q.Length == 0) return SearchResults.Empty;
         // Online catalog search (Pathfinder) is primary — the WHOLE Spotify catalog (tracks/albums/artists/playlists).
         // The Store's offline track index (the cached library) is the fallback when the live session isn't up.
-        if (LiveSearch is { } live)
-        {
-            var online = await live(q, facet, offset, limit, ct).ConfigureAwait(false);
-            return online ?? throw new InvalidOperationException("Spotify search returned no response.");
-        }
+        // The seam returns null for "no online catalog" and THROWS when a live catalog fails, so a broken session stays
+        // loud instead of silently degrading to the (much smaller) offline index.
+        if (await _online.SearchAsync(q, facet, offset, limit, ct).ConfigureAwait(false) is { } online) return online;
         // Offline: the resident scan PLUS the cold library (liked ∪ playlist membership) — a saved track that is on disk
         // but not resident must still be findable (Addendum A4). Facet gating and the 200-row cap are unchanged.
         var tracks = facet is SearchFacet.All or SearchFacet.Tracks ? LibraryTrackSearch.Search(_store, q) : Array.Empty<Track>();
@@ -439,28 +328,23 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
         return built;
     }
 
+    // Both suggest shapes are best-effort chrome on a keystroke: a failure degrades to "no suggestions" rather than
+    // surfacing an error under the omnibar, and offline the seam answers empty. Cancellation still propagates — a
+    // superseded keystroke is not a failure.
     public async Task<IReadOnlyList<string>> SuggestAsync(string query, CancellationToken ct = default)
     {
-        var s = await SuggestRichAsync(query, ct).ConfigureAwait(false);
-        return s.Queries;
+        var q = query.Trim();
+        if (q.Length == 0) return Array.Empty<string>();
+        try { return await _online.SuggestAsync(q, ct).ConfigureAwait(false); }
+        catch (OperationCanceledException) { throw; }
+        catch { return Array.Empty<string>(); }
     }
 
     public async Task<SearchSuggestions> SuggestRichAsync(string query, CancellationToken ct = default)
     {
         var q = query.Trim();
         if (q.Length == 0) return SearchSuggestions.Empty;
-        if (LiveSuggestRich is { } rich)
-        {
-            try { return await rich(q, ct).ConfigureAwait(false); }
-            catch (OperationCanceledException) { throw; }
-            catch { return SearchSuggestions.Empty; }
-        }
-        if (LiveSuggest is not { } live) return SearchSuggestions.Empty;
-        try
-        {
-            var queries = await live(q, ct).ConfigureAwait(false);
-            return new SearchSuggestions(queries, Array.Empty<SearchSuggestionItem>());
-        }
+        try { return await _online.SuggestRichAsync(q, ct).ConfigureAwait(false); }
         catch (OperationCanceledException) { throw; }
         catch { return SearchSuggestions.Empty; }
     }
@@ -492,29 +376,29 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
         string greeting = "";
         IReadOnlyList<HomeSection>? liveSections = null;
         var liveGroups = new List<HomeGroup>();
-        if (LiveHomeFetch is { } liveFetch)
+        // A null answer is "no live Home" (logged out / no online catalog): the chip row is NOT pinned or carried in
+        // that case — an offline feed has no facets to filter — which is exactly what the absent hook used to mean.
+        LiveHomeResult? live = null;
+        try { live = await _online.GetHomeAsync(ct).ConfigureAwait(false); }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
         {
-            try
-            {
-                var live = await liveFetch(ct).ConfigureAwait(false);
-                liveGroups.AddRange(live.Groups);
-                // Pin the last non-empty set. A FACETED home response does not always repeat homeChips, and taking it
-                // verbatim meant selecting a facet could drop the row that produced the selection: the chips vanished,
-                // the greeting collapsed back to a bare hero, and the feed stayed filtered with no way to see or undo
-                // it. The chip set is a near-static piece of account chrome, so the previous one is always a better
-                // answer than none. A response that DOES carry chips still replaces it wholesale.
-                chips = live.Chips is { Count: > 0 } fresh ? _lastHomeChips = fresh : _lastHomeChips;
-                greeting = live.Greeting;
-                liveSections = live.Sections;
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-            catch (Exception ex)
-            {
-                // Editorial Home is best-effort, but never SILENT: swallowed, this is indistinguishable from an account
-                // the server has no modules for, and the only visible symptom is a Home that quietly lost its shelves.
-                WaveeLog.Instance.Warn("library", "home.live.failed",
-                    "live home fetch failed; falling back to the library shelves: " + ex.Message);
-            }
+            // Editorial Home is best-effort, but never SILENT: swallowed, this is indistinguishable from an account
+            // the server has no modules for, and the only visible symptom is a Home that quietly lost its shelves.
+            WaveeLog.Instance.Warn("library", "home.live.failed",
+                "live home fetch failed; falling back to the library shelves: " + ex.Message);
+        }
+        if (live is { } feed)
+        {
+            liveGroups.AddRange(feed.Groups);
+            // Pin the last non-empty set. A FACETED home response does not always repeat homeChips, and taking it
+            // verbatim meant selecting a facet could drop the row that produced the selection: the chips vanished,
+            // the greeting collapsed back to a bare hero, and the feed stayed filtered with no way to see or undo
+            // it. The chip set is a near-static piece of account chrome, so the previous one is always a better
+            // answer than none. A response that DOES carry chips still replaces it wholesale.
+            chips = feed.Chips is { Count: > 0 } fresh ? _lastHomeChips = fresh : _lastHomeChips;
+            greeting = feed.Greeting;
+            liveSections = feed.Sections;
         }
 
         if (quick.Count > 0)
@@ -579,18 +463,81 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
 
     // ── IPodcastSource ──
     public Task<IReadOnlyList<Show>> GetShowsAsync(CancellationToken ct = default) => Task.FromResult(JoinSet("shows", _store.GetShow));
-    public async Task<Show?> GetShowAsync(string uri, CancellationToken ct = default)
+    public async Task<Show?> GetShowAsync(string uri, HydrationLevel level = HydrationLevel.Open, CancellationToken ct = default)
     {
-        await EnsureFetchedAsync(uri, ct).ConfigureAwait(false);
+        // THE open plan, from the ONE table (OpenPolicy — design §2.1), exactly like GetPlaylistAsync above. A show is
+        // (Open, Full): Open = header + membership + the FIRST page of episodes at Episode.Open, awaited because it is
+        // the page the user is looking at; Full = the remaining pages, enqueued on the pump and repainted in place as
+        // they land through IStore.Changes. The background arm used to be dropped on the floor here — the policy said
+        // Full, this method asked for `level` and nothing else — so a 700-episode show stayed at 300 resident rows
+        // unless the user tapped "Load more" twice, and OpenPolicy.For(Show).Background was dead code.
+        var plan = OpenPolicy.For(EntityKind.Show);
+        if (plan.Blocking != HydrationLevel.None)
+            await _hydration.EnsureAsync(uri, Max(plan.Blocking, level),
+                new HydrationOptions(Surface: TraitSurface.ShowOpen), ct).ConfigureAwait(false);
+        if (plan.Background != HydrationLevel.None)
+            _ = _hydration.EnsureAsync(uri, Max(plan.Background, level),
+                new HydrationOptions(HydrationMode.Background, plan.Revalidate, TraitSurface.ShowOpen, Priority: -1), ct);
         var show = _store.GetShow(uri);
         if (show is null) return null;
         var members = _store.Membership(uri);
         if (members.Count == 0) return show;
         var eps = new List<Episode>(members.Count);
+        // The paging cursor's DERIVED floor: one past the last member that actually has a row. Derived rather than
+        // remembered because it survives a restart and reflects every writer (the ladder's own background paging, a
+        // Liked-Episodes sweep, a playlist carrying this show's episodes), not just this source's foreground asks.
+        int resolvedThrough = 0;
         for (int i = 0; i < members.Count; i++)
-            if (_store.GetEpisode(members[i].ItemUri) is { } e) eps.Add(e);
-        return show with { Episodes = eps.Count > 0 ? eps : show.Episodes };
+            if (_store.GetEpisode(members[i].ItemUri) is { } e) { eps.Add(e); resolvedThrough = i + 1; }
+        // TotalEpisodes is the MEMBERSHIP count, not the resident one: a 700-episode show opens with 300 rows joined
+        // and the episode list has to know the other 400 exist before it can offer to page them in.
+        // PagedThrough is the max of what LANDED and what was ASKED — "asked" matters on its own, because a page of
+        // members that cannot hydrate (withdrawn / region-locked) lands nothing and must still advance the cursor.
+        return show with
+        {
+            Episodes = eps.Count > 0 ? eps : show.Episodes,
+            TotalEpisodes = members.Count,
+            PagedThrough = Math.Min(members.Count, Math.Max(resolvedThrough, AskedThrough(uri))),
+        };
     }
+
+    /// <summary>The explicit next page of a show's episodes — one EpisodeV4 POST for members [from, from+300).
+    /// The ladder itself pages the whole tail onto the pump at <c>HydrationLevel.Full</c>; this is the FOREGROUND ask
+    /// for exactly the page the user scrolled to, so a long show fills on demand instead of waiting on a background
+    /// queue that a nav-away could out-live.
+    /// <para>Returns the NEW cursor (<c>Show.PagedThrough</c>): the membership offset now asked for, or
+    /// <paramref name="from"/> unchanged when there was nothing left to ask. It advances even when the page produced no
+    /// rows at all, which is the point — the old bool, read against a resident-vs-total count, pinned the load-more
+    /// pill on screen forever and re-asked the same unanswerable members on every tap as soon as a show had one
+    /// episode that could not hydrate.</para></summary>
+    public async Task<int> LoadMoreEpisodesAsync(string showUri, int from, CancellationToken ct = default)
+    {
+        if (from < 0) from = 0;
+        var members = _store.Membership(showUri);
+        if (from >= members.Count) return from;
+        int end = Math.Min(members.Count, from + HydrationLevels.ShowOpenPage);
+        var page = new List<string>(end - from);
+        for (int i = from; i < end; i++)
+            if (members[i].ItemUri is { Length: > 0 } u) page.Add(u);
+        // A page of uri-less membership rows is still a page WALKED: advance the cursor, or the caller re-asks it forever.
+        MarkAskedThrough(showUri, end);
+        if (page.Count == 0) return end;
+        await _hydration.EnsureManyAsync(page, HydrationLevel.Open,
+            new HydrationOptions(Surface: TraitSurface.ShowOpen), ct).ConfigureAwait(false);
+        return end;
+    }
+
+    // ── the show paging cursor (design §2.3) ─────────────────────────────────────────────────────────────────────────
+    // Session state, one int per show the user actually paged, because "we asked for these members" is not a fact the
+    // store can hold: a member that answers with nothing is indistinguishable from a member nobody asked about. The
+    // DERIVED floor in GetShowAsync (one past the last resident member) does the heavy lifting and survives restarts;
+    // this covers only the gap it cannot see — a foreground page whose rows never arrived.
+    readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> _askedThrough = new(StringComparer.Ordinal);
+
+    int AskedThrough(string showUri) => _askedThrough.TryGetValue(showUri, out int n) ? n : 0;
+
+    void MarkAskedThrough(string showUri, int through)
+        => _askedThrough.AddOrUpdate(showUri, through, (_, current) => current > through ? current : through);
 
     // ── joins ──
     // Every library set reads in ADD order, newest first (the Spotify collection default); unknown timestamps (0) sink
@@ -618,7 +565,9 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
         for (int i = 0; i < members.Count; i++)
         {
             var m = members[i];
-            var t = _store.GetTrack(m.ItemUri);
+            // An EPISODE is a playable too: a playlist holding one used to lose the row entirely (GetTrack only), which
+            // broke its count, its mosaic and its play context. EpisodeAsTrack is the projection (design §1.5).
+            var t = _store.GetTrack(m.ItemUri) ?? EpisodeAsTrack.From(_store.GetEpisode(m.ItemUri));
             if (t is null) continue;   // offline-first inner join: a not-yet-hydrated member has no row until it lands
             DateTimeOffset? at = m.AddedAt > 0 ? DateTimeOffset.FromUnixTimeMilliseconds(m.AddedAt) : null;
             list.Add(t with { AddedAt = at, AddedBy = m.AddedBy, ContextUid = m.ItemId });   // stamp membership facts (+ per-row uid) onto the read-model copy
@@ -649,13 +598,16 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
         return owner?.Name ?? header.Owner?.Name ?? header.OwnerName;
     }
 
+    /// <summary>The resolved owner for a playlist header: the store's own <c>Owner</c> row when one has landed, the
+    /// header's embedded (usually id-only) owner otherwise — and an ASK for the row when it has not, in the background
+    /// mode so nothing on screen waits for a byline. The ledger dedupes the repeat asks a re-render produces.</summary>
     Owner? OverlayOwner(string playlistUri, Playlist header, bool collectionDependency)
     {
         var raw = RawOwnerId(header);
         if (raw.Length == 0) return header.Owner;
-        RegisterProfileDependency(raw, playlistUri, collectionDependency);
-        _userProfiles?.Prefetch(new[] { raw });
-        return _userProfiles?.Get(raw) ?? header.Owner;
+        if (_store.GetOwner(raw) is { } resolved) return resolved;
+        EnsureOwners(new[] { raw });
+        return header.Owner;
     }
 
     static string RawOwnerId(Playlist header)
@@ -663,23 +615,35 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
 
     void PrefetchPlaylistUsers(string playlistUri, Playlist header, IReadOnlyList<PlaylistMember> members)
     {
-        if (_userProfiles is null) return;
         var ids = new List<string>(1 + members.Count);
         var owner = RawOwnerId(header);
-        if (owner.Length > 0)
-        {
-            ids.Add(owner);
-            RegisterProfileDependency(owner, playlistUri, collectionDependency: false);
-        }
+        if (owner.Length > 0) ids.Add(owner);
         var seen = new HashSet<string>(StringComparer.Ordinal);
         for (int i = 0; i < members.Count; i++)
         {
             var id = members[i].AddedBy;
             if (string.IsNullOrWhiteSpace(id) || !seen.Add(id)) continue;
             ids.Add(id);
-            RegisterProfileDependency(id, playlistUri, collectionDependency: false);
         }
-        if (ids.Count > 0) _userProfiles.Prefetch(ids);
+        EnsureOwners(ids);
+    }
+
+    /// <summary>THE one door for owner identities (design 2.3, UserHydration): canonicalize, drop what is already
+    /// resident, and ask the façade in the background. Fire-and-forget by contract — a byline is never worth blocking a
+    /// page on, and the resolved rows arrive as an ordinary store change.</summary>
+    void EnsureOwners(IReadOnlyList<string> rawIds)
+    {
+        if (rawIds.Count == 0) return;
+        List<string>? uris = null;
+        for (int i = 0; i < rawIds.Count; i++)
+        {
+            if (UserProfileIds.Normalize(rawIds[i]) is not { } canonical) continue;
+            if (_store.GetOwner(canonical) is not null) continue;
+            (uris ??= new List<string>(rawIds.Count)).Add(canonical);
+        }
+        if (uris is null) return;
+        _ = _hydration.EnsureManyAsync(uris, HydrationLevel.Identity,
+            new HydrationOptions(HydrationMode.Background, Surface: TraitSurface.UserProfiles));
     }
 
     IReadOnlyList<Owner>? BuildCollaborators(Playlist header, Owner? resolvedOwner, IReadOnlyList<PlaylistMember> members)
@@ -695,7 +659,7 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
         {
             var raw = members[i].AddedBy;
             if (string.IsNullOrWhiteSpace(raw)) continue;
-            var profile = _userProfiles?.Get(raw);
+            var profile = _store.GetOwner(raw);
             Add(new Owner(profile?.Id ?? ProfileId(raw), profile?.Name ?? raw, profile?.Avatar));
         }
 
@@ -711,33 +675,6 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
 
     static string ProfileId(string raw)
         => UserProfileIds.BareId(UserProfileIds.Normalize(raw) ?? raw);
-
-    void RegisterProfileDependency(string rawUserId, string playlistUri, bool collectionDependency)
-    {
-        var canonical = UserProfileIds.Normalize(rawUserId);
-        if (canonical is null) return;
-        lock (_profileGate)
-        {
-            if (!_profilePlaylistDeps.TryGetValue(canonical, out var playlists))
-                _profilePlaylistDeps[canonical] = playlists = new HashSet<string>(StringComparer.Ordinal);
-            playlists.Add(playlistUri);
-            if (collectionDependency) _profilePlaylistCollectionDeps.Add(canonical);
-        }
-    }
-
-    void OnProfileChanged(string userUri)
-    {
-        List<string>? playlists = null;
-        bool collection;
-        lock (_profileGate)
-        {
-            if (_profilePlaylistDeps.TryGetValue(userUri, out var deps)) playlists = new List<string>(deps);
-            collection = _profilePlaylistCollectionDeps.Contains(userUri);
-        }
-        if (playlists is not null)
-            for (int i = 0; i < playlists.Count; i++) _store.Bump(playlists[i]);
-        if (collection) _collections.OnNext(CollectionKind.Playlists);
-    }
 
     internal IReadOnlyList<string>? MosaicTilesOf(string uri)
     {
@@ -769,15 +706,21 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
     static readonly CollectionKind[] AllKinds =
         { CollectionKind.Albums, CollectionKind.Artists, CollectionKind.Liked, CollectionKind.Shows, CollectionKind.Playlists };
 
-    static CollectionKind? KindOfUri(string uri) =>
-        uri.StartsWith("spotify:album:", StringComparison.Ordinal) ? CollectionKind.Albums :
-        uri.StartsWith("spotify:artist:", StringComparison.Ordinal) ? CollectionKind.Artists :
-        uri.StartsWith("spotify:show:", StringComparison.Ordinal) || uri.StartsWith("spotify:episode:", StringComparison.Ordinal) ? CollectionKind.Shows :
-        uri.StartsWith("spotify:playlist:", StringComparison.Ordinal) || uri == "rootlist" ? CollectionKind.Playlists :
+    static CollectionKind? KindOfUri(string uri) => EntityUri.KindOf(uri) switch
+    {
+        EntityKind.Album => CollectionKind.Albums,
+        EntityKind.Artist => CollectionKind.Artists,
+        EntityKind.Show or EntityKind.Episode => CollectionKind.Shows,
+        EntityKind.Playlist => CollectionKind.Playlists,
+        // An OWNER landing changes what a playlist row says (the byline, the avatar) and nothing else, so it
+        // invalidates the playlist collection. This is what replaced OnProfileChanged's user-to-playlists dependency
+        // map plus its store.Bump: the row simply re-reads GetOwner when the grid re-renders.
+        EntityKind.User => CollectionKind.Playlists,
         // A PRE-SAVE (spotify:prerelease:) deliberately falls through to null: no library page lists pre-saves, so there
         // is no collection to invalidate and no fan-out worth waking. The heart re-skins through LibraryBridge's
         // per-URI signal, which the optimistic toggle drives directly.
-        null;
+        _ => uri == "rootlist" ? CollectionKind.Playlists : null,
+    };
 
     static bool BytesEqual(byte[] a, byte[] b)
     {
@@ -793,9 +736,5 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
         public void OnError(Exception e) { }
     }
 
-    public void Dispose()
-    {
-        _profileSub?.Dispose();
-        _sub.Dispose();
-    }
+    public void Dispose() => _sub.Dispose();
 }

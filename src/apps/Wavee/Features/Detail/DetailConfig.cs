@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using FluentGpu.Controls;
@@ -76,8 +76,17 @@ public sealed record DetailModel(
     // Daylist rollover window (unix ms): from playlist4 format_attributes when the wire carries them, else the Home
     // card's Pathfinder attributes carried in on the nav preview (DetailPreview.FromPlaylist / the DetailPage merge).
     // 0 = not a daylist / unknown. Drives the FlipCountdown row on the rail and the vertical hero.
-    long ExpiresAtMs = 0, long CreatedAtMs = 0)
+    long ExpiresAtMs = 0, long CreatedAtMs = 0,
+    // Podcast show: how many episodes the show HAS (its membership baseline), against Episodes.Count = how many are
+    // resident. A 700-episode show opens with 300 rows, so the difference is the episode list's load-more affordance.
+    int TotalEpisodes = 0)
 {
+    /// <summary>Podcast show: how far into the show's membership the library has already ASKED (Show.PagedThrough).
+    /// The episode list's load-more gate — <c>PagedThrough &lt; TotalEpisodes</c> — and the offset its next page starts
+    /// at. Init-only rather than positional for the reason the two below give: exactly one decision point writes it
+    /// (MapShow), and every existing `with` expression and DetailModel.Empty would otherwise have to be rewritten.</summary>
+    public int PagedThrough { get; init; }
+
     /// <summary>Shared-element (connected-animation) key for the cover art — set by <c>DetailPage</c> from the route
     /// ("album:"+uri / "pl:"+uri) so the cover flies to/from the like-tagged Home card. Null = no Hero.</summary>
     public string? MorphKey { get; init; }
@@ -85,6 +94,19 @@ public sealed record DetailModel(
     /// <summary>Home-card <c>extractedColors.colorDark</c> as opaque ARGB (0 = none). Rides the nav preview so the
     /// detail hero Play / countdown / heart agree with the Home daylist card before CoverColorPlane grades the art.</summary>
     public uint Accent { get; init; }
+
+    // ── the page's own bad news (playlist path) ──────────────────────────────────────────────────────────────────────
+    // Init-only, deliberately NOT positional: DetailModel.Empty and every `with` expression in the mappers would have to
+    // be rewritten for a new positional parameter, and these two are written by exactly one decision point each.
+
+    /// <summary>The playlist header's tombstone flag (<c>Playlist.DeletedByOwner</c>) — the INPUT the notice rule reads.
+    /// Kept separate from <see cref="Notice"/> so the rule stays pure and the fact stays a fact.</summary>
+    public bool DeletedByOwner { get; init; }
+
+    /// <summary>Why the page is showing a notice strip instead of its edit affordances (<see cref="PlaylistPageNoticeRules"/>).
+    /// <see cref="DetailNotice.None"/> for every ordinary page — and the ONE gate every playlist edit affordance is
+    /// routed through (<c>PlaylistInlineEdit.Editable</c>).</summary>
+    public DetailNotice Notice { get; init; }
 
     // ── Upcoming release (album path) ────────────────────────────────────────────────────────────────────────────────
     // Init-only, deliberately NOT positional: every `with` expression and DetailModel.Empty above would have to be
@@ -137,11 +159,18 @@ public readonly record struct DetailConfig(
     bool ShowTempo = false,
     // The expand chevron + versions drawer (alternate recordings, music videos, per-item audio format). On wherever
     // a listener is choosing what to play from a long list; off on podcast/episode surfaces, which have no versions.
-    bool ShowVersions = false)
+    bool ShowVersions = false,
+    // Whether this surface may OFFER the Plays column as a user opt-in (the More flyout's toggle + the column itself,
+    // gated on WaveeSettings.PlaysColumn). True on playlist / Liked, whose rows carry no count until kind 185 is asked
+    // for them. Deliberately NOT the same knob as ShowPlays: ShowPlays is "this profile always has a Plays lane", and
+    // it is also what makes the top-track star and DetailTrailing.SeedTrack album-only — an opt-in column must not drag
+    // those album semantics onto a playlist.
+    bool PlaysColumnOptIn = false)
 {
     // Column track sets. Two shared instances → the header and rows are reference-equal (the alignment invariant).
     // playlist/liked: [ #, TITLE(+thumb+artist), ALBUM, ♥, DUR ]   album/single: [ #, TITLE(+artist), ♥, DUR ]
-    // (No "Plays" column: the domain Track carries no play count — a data-driven deviation from the spec's column list.)
+    // (The Plays lane is not in either track set: it is inserted by the tier-driven ColumnSet, always on album surfaces
+    // and on playlist/Liked while the PlaysColumnOptIn setting is on.)
     internal static readonly TrackSize[] ListColumns =
         [TrackSize.Px(36), TrackSize.Star(), TrackSize.Px(200), TrackSize.Px(40), TrackSize.Px(52)];
     internal static readonly TrackSize[] AlbumColumns =
@@ -151,7 +180,7 @@ public readonly record struct DetailConfig(
         TwoColumn: true, RailWidth: WaveeSize.RailPlaylist, Badges: BadgeStyle.OwnerRow,
         ShowArtThumb: true, ShowAlbumColumn: true, Columns: ListColumns, CapTitle: true,
         Selection: ItemsSelectionMode.Extended, HasTrailing: false, Heart: HeartMode.Follow, ShowTrackArtist: true,
-        Recommendations: true, ShowTempo: true, ShowVersions: true);
+        Recommendations: true, ShowTempo: true, ShowVersions: true, PlaysColumnOptIn: true);
 
     public static DetailConfig Album => new(
         TwoColumn: true, RailWidth: WaveeSize.RailAlbum, Badges: BadgeStyle.TypeYear,
@@ -169,7 +198,7 @@ public readonly record struct DetailConfig(
         TwoColumn: true, RailWidth: WaveeSize.RailPlaylist, Badges: BadgeStyle.None,
         ShowArtThumb: true, ShowAlbumColumn: true, Columns: ListColumns, CapTitle: true,
         Selection: ItemsSelectionMode.Extended, HasTrailing: false, Heart: HeartMode.None, ShowTrackArtist: true,
-        ShowTempo: true, ShowVersions: true);
+        ShowTempo: true, ShowVersions: true, PlaysColumnOptIn: true);
 
     // A podcast show: the album-style two-column rail (cover · PODCAST pill · title · publisher/episode-count meta ·
     // Play + Follow), with the right column rendering EPISODES (EpisodeList) instead of a track table.

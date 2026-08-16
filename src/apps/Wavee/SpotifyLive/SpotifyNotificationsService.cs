@@ -29,7 +29,6 @@ sealed class SpotifyNotificationsService : ISpotifyNotificationsService, IDispos
     SocialNotification[] _snapshot = Array.Empty<SocialNotification>();
     NotificationFeedState _state = NotificationFeedState.Idle;
     long _lastFetchMs;
-    string? _latestCursor;   // captured but unused in v1
     CancellationTokenSource? _cts;
     bool _disposed;
     int _rev;
@@ -102,7 +101,6 @@ sealed class SpotifyNotificationsService : ISpotifyNotificationsService, IDispos
         lock (_gate)
         {
             _snapshot = list.ToArray();
-            _latestCursor = cursor;
             _state = list.Count == 0 ? NotificationFeedState.Empty : NotificationFeedState.Populated;
         }
         Fire();

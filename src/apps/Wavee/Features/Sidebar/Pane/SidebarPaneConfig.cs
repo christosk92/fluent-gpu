@@ -115,6 +115,24 @@ sealed record SidebarPaneConfig
     /// uses generic resource-drop destinations unless a mode explicitly opts into a local view-order overlay.</summary>
     public Func<SidebarSectionKind, bool>? IsReorderableSection { get; init; }
 
+    /// <summary>Is the playlist tree currently showing a NON-CUSTOM sort? Null ⇒ false (Classic and Curated always show
+    /// rootlist order). A sorted view cannot honour a positional insert — the rows are not in the order the mutation
+    /// writes — so the drop resolver refuses Before/After/EndOfList there with the existing "clear sorting to reorder"
+    /// sentence, while INTO a folder or a playlist stays legal (it needs no position at all).
+    /// <para>A live probe, never a value: the pane's config freezes at mount and V3's sort changes under it.</para></summary>
+    public Func<bool>? TreeSortedNonCustom { get; init; }
+
+    /// <summary>Constrain a LIVE reorder gesture's reachable slots: <c>(section kind, from slot, requested slot)</c> ⇒
+    /// the slot the gesture may actually reach. Null ⇒ every slot in the band is reachable (Classic, Curated, and V3's
+    /// pin band).
+    /// <para>It exists because a commit-time bail is not a cue: V3's local custom order cannot move an item between
+    /// folders (that is a rootlist write), and the landed behaviour was a drag that animated all the way across a folder
+    /// boundary and then silently did nothing. Clamping DURING the gesture means the gap never opens where the drop
+    /// cannot land, so what the user sees is what commits — <c>LibraryV3Sidebar.CommitPaneReorder</c>'s same-parent bail
+    /// stays as the invariant behind it rather than as the user's only feedback.</para>
+    /// <para>Called from the displacement path while a drag is live, so it must stay allocation-free.</para></summary>
+    public Func<SidebarSectionKind, int, int, int>? ClampReorderSlot { get; init; }
+
     /// <summary>Commit a same-list reorder. Null ⇒ <see cref="SidebarPaneReorderCommit.Default"/> (Pinned through the
     /// SHARED pin store, every other reorderable kind through the undoable <c>MoveItem</c> command). V3's local custom
     /// order supplies its own.</summary>

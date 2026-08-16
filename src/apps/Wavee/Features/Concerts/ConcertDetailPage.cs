@@ -279,7 +279,7 @@ sealed class ConcertDetailPage : Component
     {
         string name = string.IsNullOrWhiteSpace(artist.Name) ? Loc.Get(Strings.Concerts.Detail.ArtistFallback) : artist.Name;
         // Only a canonical spotify:artist: URI navigates; billing-text-only names stay plain rows (no dead affordance).
-        string? artistUri = artist.Uri is { } uri && uri.StartsWith("spotify:artist:", StringComparison.Ordinal)
+        string? artistUri = artist.Uri is { } uri && EntityUri.Parse(uri) is { IsSpotify: true, Kind: EntityKind.Artist }
             ? uri : null;
 
         var kids = new List<Element>(3)

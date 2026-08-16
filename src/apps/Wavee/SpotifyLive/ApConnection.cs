@@ -28,7 +28,6 @@ public sealed class ApConnection : IDisposable
     readonly WaveeLogger _log;
     readonly SemaphoreSlim _sendLock = new(1, 1);
     readonly CancellationTokenSource _cts = new();
-    Task? _pump;
 
     ApConnection(IDuplexStream stream, ApCodec codec, WaveeLogger log)
     {
@@ -42,7 +41,7 @@ public sealed class ApConnection : IDisposable
     public static ApConnection Adopt(IDuplexStream stream, ApCodec codec, WaveeLogger log)
     {
         var c = new ApConnection(stream, codec, log);
-        c._pump = Task.Run(() => c.PumpAsync(c._cts.Token));
+        _ = Task.Run(() => c.PumpAsync(c._cts.Token));
         log.Info("AP channel adopted (login socket reused) — audio-key path ready");
         return c;
     }

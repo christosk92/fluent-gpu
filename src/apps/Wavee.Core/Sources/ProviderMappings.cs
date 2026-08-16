@@ -1,6 +1,6 @@
 namespace Wavee.Core;
 
-// Provider-mappings / dedup / fallback (docs/architecture.md §5, §7; Music Assistant's two-axis provider model). One
+// Provider-mappings / dedup / fallback (docs/plans/wavee/architecture.md §5, §7; Music Assistant's two-axis provider model). One
 // logical item (a track/album) may exist in several sources; keyed by a stable cross-source identity (ISRC / MusicBrainz
 // MBID), a ProviderMapping records WHERE it lives and ProviderPolicy picks the preferred provider with a fallback chain.
 // Trivial with one real source today — these types are the groundwork the dedup/merge + availability resolution attach
@@ -34,6 +34,6 @@ public sealed class ProviderPolicy
 }
 
 /// <summary>A track resolved for the queue/playback layer: the domain track + the chosen provider, so geo/tier/region
-/// availability is baked in at queue time rather than re-checked in the UI (docs/architecture.md §5). The future
+/// availability is baked in at queue time rather than re-checked in the UI (docs/plans/wavee/architecture.md §5). The future
 /// queue/playback federation operates on this instead of a bare <see cref="Track"/>.</summary>
 public sealed record PlayableTrack(Track Track, ProviderRef Provider);

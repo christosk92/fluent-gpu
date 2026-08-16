@@ -1,34 +1,7 @@
-namespace Wavee.Core;
+﻿namespace Wavee.Core;
 
-// Seam-only facet ports (docs/architecture.md §4.2, §9). These are DEFINED now so the federation has stable contracts,
-// but are NOT implemented in the first pass — playback/remote/session/lyrics stay served by the existing in-process
-// fakes wired through Services. When a real Spotify account source or a local-files source lands, it implements the
-// facets it supports and declares them via SourceCapabilities; the UI and the aggregate do not change shape.
-
-/// <summary>The Playback facet: a source that owns a player for the contexts it owns (routes play(contextUri) by URI).
-/// Mirrors <see cref="IPlaybackPlayer"/> scoped to one source; a future FederatedPlayback surfaces a unified state.</summary>
-public interface IPlaybackSource : ISource
-{
-    IPlaybackState State { get; }
-    Task PlayAsync(string contextUri, int startIndex = 0, CancellationToken ct = default);
-    Task PauseAsync(CancellationToken ct = default);
-    Task ResumeAsync(CancellationToken ct = default);
-    Task NextAsync(CancellationToken ct = default);
-    Task PreviousAsync(CancellationToken ct = default);
-    Task SeekAsync(long positionMs, CancellationToken ct = default);
-    Task SetShuffleAsync(bool on, CancellationToken ct = default);
-    Task SetRepeatAsync(RepeatMode mode, CancellationToken ct = default);
-    Task SetVolumeAsync(double volume01, CancellationToken ct = default);
-}
-
-/// <summary>The Remote/Connect facet: device list + transfer + the live remote state stream. A future FederatedRemote
-/// merges device lists across sources and routes transfer to the active one.</summary>
-public interface IRemoteSource : ISource
-{
-    IReadOnlyList<PlaybackDevice> Devices { get; }
-    IObservable<IReadOnlyList<PlaybackDevice>> DevicesChanged { get; }
-    Task TransferAsync(string deviceId, CancellationToken ct = default);
-}
+// Seam-only facet ports (docs/plans/wavee/architecture.md §4.2, §9). A source implements the facets it supports and declares them
+// via SourceCapabilities; the UI and the aggregate do not change shape.
 
 /// <summary>The Session/account facet: auth + current user + the gating context (tier / market / locale) a real
 /// source carries. Availability checks at queue time consult this.</summary>
@@ -39,25 +12,31 @@ public interface ISessionSource : ISource
     IObservable<AuthStatus> StatusChanged { get; }
 }
 
-/// <summary>The Lyrics facet.</summary>
-public interface ILyricsSource : ISource
-{
-    Task<LyricsDocument?> GetLyricsAsync(string trackId, CancellationToken ct = default);
-}
-
-/// <summary>The Podcasts facet: shows + their episodes (docs/architecture.md §2). A capability-segregated read port kept
+/// <summary>The Podcasts facet: shows + their episodes (docs/plans/wavee/architecture.md §2). A capability-segregated read port kept
 /// OFF <see cref="ICatalogSource"/> so music-only sources don't carry empty podcast reads; the aggregate routes to it via
 /// <c>OfCapability(Podcasts)</c>. (The export has no podcast data, so the in-process source synthesizes it.)</summary>
 public interface IPodcastSource : ISource
 {
     Task<IReadOnlyList<Show>> GetShowsAsync(CancellationToken ct = default);
-    Task<Show?> GetShowAsync(string uri, CancellationToken ct = default);
+    Task<Show?> GetShowAsync(string uri, HydrationLevel level = HydrationLevel.Open, CancellationToken ct = default);
+
+    /// <summary>Page the NEXT block of episodes of an already-open show into residency, starting at membership index
+    /// <paramref name="from"/> (design 2.3: the show ladder brings the first <c>HydrationLevels.ShowOpenPage</c> up on
+    /// open and pages the rest; this is the explicit "the user scrolled to the end" ask for the next one).
+    /// <para>Returns the NEW paging cursor — the membership offset that has now been asked for (<c>Show.PagedThrough</c>).
+    /// It comes back unchanged (<c>== from</c>) when there was nothing left to ask for, which is what lets the episode
+    /// list drop its load-more affordance. A cursor rather than a bool because a page can legitimately land ZERO rows
+    /// (withdrawn / region-locked episodes): the caller must still advance, or the same unanswerable page is re-asked on
+    /// every tap and the pill never goes away.</para>
+    /// <para>A DEFAULT member returning <paramref name="from"/>: a synthetic source hands back its whole show in one
+    /// read and has no second page to fetch, so it should not be forced to write a stub.</para></summary>
+    Task<int> LoadMoreEpisodesAsync(string showUri, int from, CancellationToken ct = default) => Task.FromResult(from);
 }
 
 /// <summary>The Mutations facet: save / like / follow (saved-state) — optimistic local writes the UI gates on
 /// <see cref="SourceCapabilities.Mutations"/> (and, for playlist item edits, the playlist's <see cref="PlaylistCapabilities"/>).
 /// The set spans tracks (like), albums (save) and artists + playlists (follow); a real source reconciles via an outbox +
-/// revision conflicts (docs/architecture.md §3). Playlist item edits + folders are the next Mutations increment (§9 seam).</summary>
+/// revision conflicts (docs/plans/wavee/architecture.md §3). Playlist item edits + folders are the next Mutations increment (§9 seam).</summary>
 public interface IMutationSource : ISource
 {
     /// <summary>Snapshot of the currently saved / liked / followed uris.</summary>
@@ -73,7 +52,11 @@ public interface IMutationSource : ISource
 /// Local <c>wavee:playlist:*</c> playlists are handled by <see cref="UserPlaylistSource"/> instead.</summary>
 public interface IPlaylistMutationSource
 {
-    Task<string> CreatePlaylistAsync(string name, CancellationToken ct = default);
+    /// <summary>Create a playlist SYNCHRONOUSLY: the optimistic row (header + empty membership + rootlist entry at
+    /// <paramref name="placement"/> + the saved pill) is already in the store when this returns, so the caller can
+    /// navigate to <see cref="PlaylistCreated.Uri"/> on the very next frame. The network rides the durable outbox as
+    /// ORDERED ops (create → rootlist ADD → any seed tracks), so an offline create simply queues.</summary>
+    PlaylistCreated CreatePlaylist(string name, RootlistPlacement placement);
     Task AddTracksAsync(string playlistUri, IReadOnlyList<Track> tracks, CancellationToken ct = default);
     /// <summary>Insert an ordered batch before <paramref name="toIndex"/>. Duplicates are membership rows, not entities,
     /// and therefore remain present and independently movable.</summary>
@@ -82,14 +65,21 @@ public interface IPlaylistMutationSource
     Task MoveRowsAsync(string playlistUri, IReadOnlyList<PlaylistRowRef> rows, int toIndex, CancellationToken ct = default);
     Task UpdateDetailsAsync(string playlistUri, string? name, string? description, bool? collaborative, CancellationToken ct = default);
     Task SetCoverJpegAsync(string playlistUri, byte[] jpeg, CancellationToken ct = default);
-    Task ClearCoverAsync(string playlistUri, CancellationToken ct = default);
-    Task SetBasePermissionAsync(string playlistUri, PlaylistPermissionLevel level, CancellationToken ct = default);
-    Task<PlaylistBasePermission?> GetBasePermissionAsync(string playlistUri, CancellationToken ct = default);
     Task SetPlaylistVisibilityAsync(string playlistUri, bool isPublic, CancellationToken ct = default);
     Task DeletePlaylistAsync(string playlistUri, CancellationToken ct = default);
     Task<string> CreateContributorInviteAsync(string playlistUri, CancellationToken ct = default);
     Task MoveRootlistItemAsync(RootlistItemRef source, RootlistItemRef target,
                                RootlistDropPlacement placement, CancellationToken ct = default);
+
+    // ── rootlist folder CRUD (online-only, invariant I5: rootlist structural ops are index ops by nature) ─────────────
+    /// <summary>Create a folder at <paramref name="placement"/>; returns the CLIENT-MINTED groupId (expansion state and
+    /// pins are keyed by it, so they survive every later rename).</summary>
+    Task<string> CreateFolderAsync(string name, RootlistPlacement placement, CancellationToken ct = default);
+    /// <summary>Rename a folder in place. The wire shape re-sends the folder's ORIGINAL create timestamp, so the
+    /// rootlist keeps its ordering facts.</summary>
+    Task RenameFolderAsync(string groupId, string name, CancellationToken ct = default);
+    /// <summary>Delete a folder's marker pair. Its children are NOT deleted — they move up one level.</summary>
+    Task DeleteFolderAsync(string groupId, CancellationToken ct = default);
 }
 
 public readonly record struct RootlistItemRef(string Key, bool IsFolder);
@@ -100,3 +90,35 @@ public interface IPlaylistTuningSource
 {
     Task ApplyAsync(string playlistUri, string optionIdentifier, CancellationToken ct = default);
 }
+
+// ── Playlist mutation failure vocabulary (P1) ─────────────────────────────────────────────────────────────────────────
+// EVERY playlist mutation failure that reaches the UI is a PlaylistMutationException carrying one of these kinds. The UI
+// maps the KIND to copy — it never sniffs an exception message and never shows ex.Message. Backend code that used to
+// throw InvalidOperationException("rootlist revision conflict …") / NotSupportedException now throws the typed form.
+
+/// <summary>Why a playlist mutation could not be completed. <see cref="Unknown"/> is the catch-all the UI renders as the
+/// generic "couldn't save your change" copy — it is never a message passthrough.</summary>
+public enum PlaylistMutationFailure : byte { Unknown = 0, Conflict, Forbidden, Deleted, Offline, Pending, NotSupported }
+
+/// <summary>The ONLY failure type a playlist mutation surfaces to the UI (docs plan P1 "Shared contracts").</summary>
+public sealed class PlaylistMutationException : Exception
+{
+    public PlaylistMutationException(PlaylistMutationFailure kind, string message, Exception? inner = null)
+        : base(message, inner) => Kind = kind;
+
+    public PlaylistMutationFailure Kind { get; }
+}
+
+/// <summary>Where a keyed move lands: at the head, at the tail, or immediately after one existing row.</summary>
+public enum PlaylistMoveAnchorKind : byte { First, Last, AfterItem }
+
+/// <summary>The destination of a keyed playlist move. <see cref="AfterItemId"/> is the membership row's stable
+/// <c>item_id</c> and is required exactly when <see cref="Kind"/> is <see cref="PlaylistMoveAnchorKind.AfterItem"/>.</summary>
+public readonly record struct PlaylistMoveAnchor(PlaylistMoveAnchorKind Kind, string? AfterItemId = null);
+
+/// <summary>Where a new playlist/folder is inserted in the rootlist. <c>null</c> = top level (index 0).</summary>
+public readonly record struct RootlistPlacement(string? ParentFolderId);
+
+/// <summary>The result of a synchronous create: the optimistic row is ALREADY in the store when this returns, and
+/// <see cref="Completion"/> observes the durable outbox drain that makes it real on the server.</summary>
+public readonly record struct PlaylistCreated(string Uri, Task Completion);

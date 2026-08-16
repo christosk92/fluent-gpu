@@ -25,6 +25,51 @@ static class DetailRail
     // cold connected-animation spike). Displayed larger (the ~300px rail cover) is a slight, imperceptible upscale.
     const int HeroCoverDecodePx = 256;
 
+    // ── THE PREVIEW → FULL MODEL SWAP: stable row identity, then calm motion ──────────────────────────────────────
+    //
+    // A detail page renders TWICE per open. The nav hand-off supplies a PARTIAL preview model (cover · title · artist)
+    // so the page can paint on the click frame; the full model lands a moment later. The rows below are CONDITIONAL —
+    // the eyebrow, the owner block, the artist face pile, the meta line, the daylist strip and the description exist
+    // only once the full model is in — so the second render INSERTS rows into the middle of the column.
+    //
+    // The reconciler matches UNKEYED siblings by POSITION + TYPE (Reconciler.ReconcileChildrenCore). Unkeyed, that
+    // insert used to UPDATE the title's TextEl into the newly-first eyebrow run and mount a second TextEl below it for
+    // the title: the hero visibly relabelled itself for a frame and every row under it jumped. So every structural row
+    // carries a STABLE key — constant across preview→full, and deliberately free of model text (the `save:` /
+    // `daylist:` / `prerelease:` keys elsewhere in this file are the opposite case: they encode identity BECAUSE those
+    // components must remount when it changes).
+    //
+    // Keys alone fix the relabel; the two specs below calm the shove that is left. The engine bakes Enter/Exit/Layout
+    // for BoxEl ONLY (Reconciler, `case BoxEl`) — on a bare TextEl/ComponentEl they are silently dropped — which is
+    // why the non-box rows go through the wrapper helpers rather than carrying the fields themselves.
+    //
+    // Reduced motion is NOT branched here (the canon rule, see WaveeMotion.cs): the structural seed consults
+    // ReducedMotionPolicy.KeepFade centrally — the fade survives, the travel snaps.
+
+    /// <summary>A row that arrives with the FULL model fades up from nothing instead of blinking into place. Folded
+    /// into <see cref="Shove"/> by the reconciler (SynthesizeDeclarative merges Element.Enter into Element.Layout), so
+    /// the entrance and the FLIP share one set of dynamics and cannot drift apart.</summary>
+    internal static readonly EnterExit FadeUp = new(Opacity: 0f, Active: true);
+
+    /// <summary>Position-only FLIP: a row pushed down by a late-arriving sibling travels from its old origin instead of
+    /// teleporting. Position only — the rows own their sizes, and animating those would re-wrap live text.</summary>
+    internal static readonly LayoutTransition Shove = new(
+        TransitionChannels.Position, TransitionDynamics.Tween(Expressive.Fast, Easing.SmoothOut));
+
+    /// <summary>A keyed rail row that exists in BOTH models: it only ever gets pushed, so it takes the FLIP alone.
+    /// The wrapper is a plain <c>Direction = 1</c> box, whose default <c>AlignItems = Stretch</c> hands the child the
+    /// same content width it had as a direct child of the rail column — geometry is unchanged.</summary>
+    static Element Row(string key, Element child) => new BoxEl
+    {
+        Key = key, Direction = 1, Layout = Shove, Children = [child],
+    };
+
+    /// <summary>A keyed rail row that can arrive LATE (full-model-only): fades up on insert, FLIPs on later shoves.</summary>
+    static Element LateRow(string key, Element child) => new BoxEl
+    {
+        Key = key, Direction = 1, Layout = Shove, Enter = FadeUp, Children = [child],
+    };
+
     public static float CoverEdge(float railW) => MathF.Max(80f, railW - SidePadL - SidePadR);
 
     internal static Element HeroArtwork(DetailModel m, float size, float radius = Radii.Card, bool connected = true,
@@ -45,9 +90,26 @@ static class DetailRail
         var kids = new List<Element>(10);
 
         // Cover — click-to-change when metadata is editable; static art otherwise.
-        bool editable = m.Capabilities.CanEditMetadata && m.ContextUri is { Length: > 0 };
+        bool editable = PlaylistInlineEdit.EditableMetadata(m) && m.ContextUri is { Length: > 0 };
+        // DIAGNOSTIC ONLY (see DetailCoverTrace): the WIDE two-column arm — the one that does NOT flash. Its lines are
+        // the control group for the vertical hero's; the decodePx here is the HeroArtwork default (HeroCoverDecodePx).
+        if (DetailCoverTrace.On)
+            WaveeLog.Instance.Debug("detail", "cover", "rail-build",
+                WaveeLogField.Of("arm", "rail"),
+                WaveeLogField.Of("ctx", m.ContextUri),
+                WaveeLogField.Of("editable", editable),
+                WaveeLogField.Of("railW", railW),
+                WaveeLogField.Of("coverEdge", cover),
+                WaveeLogField.Of("decodePx", HeroCoverDecodePx),
+                WaveeLogField.Of("saturation", 1.18),
+                WaveeLogField.Of("cover", DetailCoverTrace.Id(m.Cover)),
+                WaveeLogField.Of("state", ((LoadState)modelSource.State.Peek()).ToString()),
+                WaveeLogField.Of("morphKey", m.MorphKey));
+        // No motion on the cover: it is the column's ANCHOR (row 0), so nothing can ever push it and an entrance on the
+        // page's largest object is exactly the flash this pass removes. Key only.
         kids.Add(new BoxEl
         {
+            Key = "rail:cover",
             Width = cover, Height = cover, Corners = CornerRadius4.All(Radii.Card),
             Shadow = Elevation.Card, ClipToBounds = true,
             // The cover drags the whole entity. On the FRAMING box, not on the editable cover inside it, so the
@@ -62,11 +124,11 @@ static class DetailRail
         if (cfg.Badges == BadgeStyle.TypeYear)
         {
             if (EyebrowText(m, cfg) is { Length: > 0 } eyebrow)
-                kids.Add(EyebrowRun(eyebrow) with { Width = cover });
+                kids.Add(LateRow("rail:eyebrow", EyebrowRun(eyebrow) with { Width = cover }));
         }
         else if (cfg.Badges == BadgeStyle.OwnerRow && m.OwnerName is { Length: > 0 })
         {
-            kids.Add(PlaylistOwnerBlock(m, cover, modelSource));
+            kids.Add(LateRow("rail:owner", PlaylistOwnerBlock(m, cover, modelSource)));
         }
 
         // Hero title — the page's Title/TitleLarge rung, AUTO-FITTING to the cover width in ≤3 LINES down to 18px. The
@@ -74,32 +136,37 @@ static class DetailRail
         // in with it; `float.NaN` here used to mean "whatever the font's natural box is", which is exactly the metric the
         // ramp exists to pin. Weight is the ramp's 600, not the old 900 — PageHero IS Ui.Title, and a 900 override made
         // this the only 900 in the app.
-        kids.Add(editable
+        // The title exists in BOTH models — it is the run that must never be rewritten, only moved.
+        kids.Add(Row("rail:title", editable
             ? PlaylistInlineEdit.Title(modelSource, cover, titleSize, lineHeight: titleLineHeight)
             : WaveeType.PageHero(m.Title) with
             {
                 Size = titleSize, MinSize = 18f, Weight = 600, Width = cover, LineHeight = titleLineHeight,
                 Wrap = TextWrap.WrapWholeWords, MaxLines = 3, Trim = TextTrim.CharacterEllipsis,
-            });
+            }));
 
         // Billed-artist row (album/single): a STACKED artist face-pile (overlapping avatars + "+N" of the distinct album
         // artists + the billed name) when the album carries artist avatars; else the plain clickable artist names.
         if (cfg.Badges == BadgeStyle.TypeYear && m.Artists.Count > 0)
-            kids.Add(Embed.Comp(() => new ArtistFacePile(m, cover, h)));
+            kids.Add(LateRow("rail:artists", Embed.Comp(() => new ArtistFacePile(m, cover, h))));
 
         // Meta line — albums surface Songs/Length/Released as the bento facts panel below, so an inline line would just
         // duplicate it; only non-album surfaces (playlists / liked) show it here.
         if (cfg.Badges != BadgeStyle.TypeYear && m.MetaLine is { Length: > 0 })
-            kids.Add(WaveeType.TrackMeta(m.MetaLine) with { Width = cover, MaxLines = 2, Trim = TextTrim.CharacterEllipsis });
+            kids.Add(LateRow("rail:meta", WaveeType.TrackMeta(m.MetaLine) with { Width = cover, MaxLines = 2, Trim = TextTrim.CharacterEllipsis }));
 
-        // Daylist rollover countdown — the same flip strip the Home hero mounts, at rail scale.
-        if (DaylistCard(m, h, compact: true) is { } daylist) kids.Add(daylist);
+        // Daylist rollover countdown — the same flip strip the Home hero mounts, at rail scale. The card keeps its own
+        // remount-on-rollover key INSIDE this row's stable slot: the two keys answer different questions.
+        if (DaylistCard(m, h, compact: true) is { } daylist) kids.Add(LateRow("rail:daylist", daylist));
 
         // CTA cluster: Play pill + a GROUP of shuffle/heart/share FABs. Wrap=true → at a wide rail they're one line; at a
         // narrow rail the FAB group wraps to the next line AS A UNIT (Play above, the three FABs together below) instead
         // of orphaning a single FAB on its own line.
         kids.Add(new BoxEl
         {
+            // Already a box, so it carries the key + the FLIP itself rather than gaining a wrapper. It exists in both
+            // models and is pushed by every late row above it.
+            Key = "rail:cta", Layout = Shove,
             Direction = 0, Wrap = true, Gap = Spacing.M, AlignItems = FlexAlign.Center,
             Margin = new Edges4(0f, Spacing.XS, 0f, 0f),
             Children =
@@ -125,18 +192,18 @@ static class DetailRail
             ],
         });
 
-        if (PreReleaseCard(m, h) is { } countdown) kids.Add(countdown);
+        if (PreReleaseCard(m, h) is { } countdown) kids.Add(LateRow("rail:prerelease", countdown));
 
         if (cfg.Badges == BadgeStyle.TypeYear && AlbumTrailing.HasReleasePanel(m))
-            kids.Add(AlbumTrailing.ReleasePanel(m, h, outerPadding: false));
+            kids.Add(Row("rail:release", AlbumTrailing.ReleasePanel(m, h, outerPadding: false)));
 
         // Description / release blurb — an HTML fragment (links to artists/playlists, bold): parse → rich spans (links
         // accent + clickable via h.Go, bold rendered, entities decoded). Trimmed to descMaxLines (shell lowers it when short).
         if (descMaxLines > 0 && (editable || m.Description is { Length: > 0 }))
-            kids.Add(editable
+            kids.Add(LateRow("rail:desc", editable
                 ? PlaylistInlineEdit.Description(modelSource, cover, descMaxLines, h)
                 : RichText.Of(m.Description!, 12f, Tok.TextSecondary, h.Accent, cover, descMaxLines,
-                    u => { if (RichText.RouteForUri(u) is { } k) h.Go(k, null); }));
+                    u => { if (RichText.RouteForUri(u) is { } k) h.Go(k, null); })));
 
         var rail = new BoxEl
         {
@@ -169,20 +236,26 @@ static class DetailRail
     {
         const float pad = Spacing.S;   // 8 — tighter than the full rail; cover still fills the strip
         float cover = MathF.Max(48f, stripW - pad - pad);
+        // The compact strip carries NO conditional row — cover + title + spacer + chevron, always, and both facts live
+        // in the preview model — so it needs no late-arrival motion. It is keyed anyway so a future conditional row
+        // cannot reintroduce the position-matching rewrite this file's keying note describes.
         Element coverHit = new BoxEl
         {
+            Key = "compact:cover",
             Width = cover, Height = cover, Corners = CornerRadius4.All(Radii.Card),
             Shadow = Elevation.Card, ClipToBounds = true, Shrink = 0f, OnClick = expand,
             Children = [HeroArtwork(m, cover, saturation: 1.18f)],
         };
         Element title = new TextEl(m.Title)
         {
+            Key = "compact:title",
             Size = 12f, Weight = 600, Color = Tok.TextPrimary,
             Width = cover, MinWidth = 0f, MaxLines = 2, Trim = TextTrim.CharacterEllipsis,
             Wrap = TextWrap.WrapWholeWords,
         };
         Element expandHit = new BoxEl
         {
+            Key = "compact:expand",
             Width = cover, Height = 28f, Shrink = 0f,
             AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
             Corners = CornerRadius4.All(Radii.Control),
@@ -199,7 +272,7 @@ static class DetailRail
             [
                 coverHit,
                 title,
-                new BoxEl { Grow = 1f, MinHeight = 0f },   // push the chevron to the foot
+                new BoxEl { Key = "compact:spacer", Grow = 1f, MinHeight = 0f },   // push the chevron to the foot
                 expandHit,
             ],
         };
@@ -216,31 +289,48 @@ static class DetailRail
         const float coverSz = 140f;
         var info = new List<Element>(4);
 
+        // Same preview→full insert hazard as the two-column rail (see the keying note at the top of this file): the
+        // eyebrow / owner / face pile / meta rows are full-model-only, so every info row is keyed and the wrappers
+        // stretch to the info column exactly as the bare runs did.
         if (cfg.Badges == BadgeStyle.TypeYear)
         {
             // The info column already clamps (Grow/Basis 0) — the run's MaxLines/ellipsis carries the rest, so it needs
             // no explicit Width here (unlike the fixed-cover-edge rail above).
-            if (EyebrowText(m, cfg) is { Length: > 0 } eyebrow) info.Add(EyebrowRun(eyebrow));
+            if (EyebrowText(m, cfg) is { Length: > 0 } eyebrow) info.Add(LateRow("hdr:eyebrow", EyebrowRun(eyebrow)));
         }
         else if (cfg.Badges == BadgeStyle.OwnerRow && m.OwnerName is { Length: > 0 })
         {
-            info.Add(PlaylistOwnerBlock(m, 600f, modelSource));
+            info.Add(LateRow("hdr:owner", PlaylistOwnerBlock(m, 600f, modelSource)));
         }
 
-        bool editable = m.Capabilities.CanEditMetadata && m.ContextUri is { Length: > 0 };
+        bool editable = PlaylistInlineEdit.EditableMetadata(m) && m.ContextUri is { Length: > 0 };
+        // DIAGNOSTIC ONLY (see DetailCoverTrace): the OTHER narrow arm (the fixed 140-DIP header above the track list),
+        // whose cover size is a constant — so a decodePx that never moves here while the hero's does is H2.
+        if (DetailCoverTrace.On)
+            WaveeLog.Instance.Debug("detail", "cover", "header-build",
+                WaveeLogField.Of("arm", "header"),
+                WaveeLogField.Of("ctx", m.ContextUri),
+                WaveeLogField.Of("editable", editable),
+                WaveeLogField.Of("coverEdge", coverSz),
+                WaveeLogField.Of("decodePx", HeroCoverDecodePx),
+                WaveeLogField.Of("saturation", 1.0),
+                WaveeLogField.Of("cover", DetailCoverTrace.Id(m.Cover)),
+                WaveeLogField.Of("state", ((LoadState)modelSource.State.Peek()).ToString()),
+                WaveeLogField.Of("morphKey", m.MorphKey));
 
         // Title cross-stretches to the info column's (Grow) width → wraps to it; ≤3 lines avoids truncation.
-        info.Add(editable
+        info.Add(Row("hdr:title", editable
             // Title (28/36/600) — the same rung and weight as the side rail's hero above. Was a 900 override.
             ? PlaylistInlineEdit.Title(modelSource, 600f, 28f, lineHeight: 36f)
-            : WaveeType.PageHero(m.Title) with { Size = 28f, LineHeight = 36f, Weight = 600, Wrap = TextWrap.WrapWholeWords, MaxLines = 3, Trim = TextTrim.CharacterEllipsis });
+            : WaveeType.PageHero(m.Title) with { Size = 28f, LineHeight = 36f, Weight = 600, Wrap = TextWrap.WrapWholeWords, MaxLines = 3, Trim = TextTrim.CharacterEllipsis }));
         if (cfg.Badges == BadgeStyle.TypeYear && m.Artists.Count > 0)
-            info.Add(Embed.Comp(() => new ArtistFacePile(m, 600f, h)));
+            info.Add(LateRow("hdr:artists", Embed.Comp(() => new ArtistFacePile(m, 600f, h))));
         if (cfg.Badges != BadgeStyle.TypeYear && m.MetaLine is { Length: > 0 })
-            info.Add(WaveeType.TrackMeta(m.MetaLine) with { MaxLines = 1, Trim = TextTrim.CharacterEllipsis });
+            info.Add(LateRow("hdr:meta", WaveeType.TrackMeta(m.MetaLine) with { MaxLines = 1, Trim = TextTrim.CharacterEllipsis }));
 
         var coverRow = new BoxEl
         {
+            Key = "hdr:cover",   // the anchor row: keyed for stable identity, never animated (see the note above)
             Direction = 0, Gap = Spacing.L, AlignItems = FlexAlign.Center,   // center → balanced (no big wedge)
             Children =
             [
@@ -255,10 +345,11 @@ static class DetailRail
             ],
         };
 
-        var headerKids = new List<Element>(4) { coverRow, PlayRow(h, m) };
-        if (PreReleaseCard(m, h) is { } countdown) headerKids.Add(countdown);
+        // PlayRow is already a box, so it takes the key + FLIP directly; the two trailing cards are full-model-only.
+        var headerKids = new List<Element>(4) { coverRow, PlayRow(h, m) with { Key = "hdr:play", Layout = Shove } };
+        if (PreReleaseCard(m, h) is { } countdown) headerKids.Add(LateRow("hdr:prerelease", countdown));
         if (includeReleasePanel && cfg.Badges == BadgeStyle.TypeYear && AlbumTrailing.HasReleasePanel(m))
-            headerKids.Add(AlbumTrailing.ReleasePanel(m, h, outerPadding: false));
+            headerKids.Add(Row("hdr:release", AlbumTrailing.ReleasePanel(m, h, outerPadding: false)));
 
         return new BoxEl
         {
@@ -390,7 +481,14 @@ static class DetailRail
             BadgeStyle.TypeYear => m.BadgeType is { Length: > 0 } type && m.Year is { Length: > 0 } year
                 ? type + " · " + year
                 : m.BadgeType ?? m.Year ?? "",
-            BadgeStyle.OwnerRow => Loc.Get(Strings.Nav.Playlist),
+            // A playlist's eyebrow carries its ACCESS when there is something to carry. Both facts come from the store
+            // header (seeded on open, flipped in place by a dealer permission push), so the line agrees with the access
+            // flyout without either of them asking the server. Collaborative wins the single slot when both are true:
+            // a collaborative playlist is private by default, so "Private" there is the less informative half.
+            // A playlist that is public AND solo says nothing extra — that is the unremarkable default.
+            BadgeStyle.OwnerRow => m.Capabilities.IsCollaborative ? Loc.Get(Strings.Nav.PlaylistCollaborative)
+                : !m.IsPublic ? Loc.Get(Strings.Nav.PlaylistPrivate)
+                : Loc.Get(Strings.Nav.Playlist),
             _ => Loc.Get(Strings.Nav.YourLibrary),
         };
 

@@ -28,7 +28,7 @@ public class DeviceStatePublisherVolumeTests
 
         public Harness(int windowMs = 400)
         {
-            Proj = new NowPlayingProjection("us", () => Clock);
+            Proj = new NowPlayingProjection("us", NotOwnedEntityHydrator.Instance, new InMemoryStore(), () => Clock);
             Publisher = new DeviceStatePublisher(Transport, "us", Proj, ConnId, () => CurrentConnId,
                 (reason, snap, _, _) =>
                 {

@@ -14,12 +14,10 @@ public sealed class RawCoreStreamProjection : IPlaybackProjection, IAsyncDisposa
     const long CoreVersion = 6_004_800_000_000_000L;
     const string PlaybackStack = "boombox";
     const string OrchestrationStack = "context-player";
-    const string PlayHistoryListUri = "spotify:list:play-history:v1";
 
     readonly GaboBatcher _batcher;
     readonly Func<string?> _contextUri;
     readonly Func<bool> _isPremium;
-    readonly WaveeLogger _log;
 
     PlaybackIds? _ids;
     string _contentUri = "";
@@ -41,12 +39,11 @@ public sealed class RawCoreStreamProjection : IPlaybackProjection, IAsyncDisposa
     long _durationMs;
 
     public RawCoreStreamProjection(GaboBatcher batcher, Func<string?>? contextUri = null,
-        Func<bool>? isPremium = null, WaveeLogger log = default)
+        Func<bool>? isPremium = null)
     {
         _batcher = batcher;
         _contextUri = contextUri ?? (() => null);
         _isPremium = isPremium ?? (() => true);
-        _log = log;
     }
 
     public void OnEvent(in PlaybackEvent e)

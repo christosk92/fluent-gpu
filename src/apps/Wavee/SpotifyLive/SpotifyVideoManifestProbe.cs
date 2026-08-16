@@ -16,7 +16,7 @@ namespace Wavee.SpotifyLive;
 // evidence is inspectable afterwards.
 //
 // The chain is the app's own, not a re-implementation: SpotifyLiveSpclient.ConnectAsync (stored credential) →
-// SpotifyVideoService.ResolveManifestIdAsync (TrackV4 OriginalVideo[0].Gid, else the VIDEO_ASSOCIATIONS counterpart) →
+// SpotifyVideoManifestResolver.ResolveManifestIdAsync (TrackV4 OriginalVideo[0].Gid, else the VIDEO_ASSOCIATIONS counterpart) →
 // SpotifyVideoResolver.ResolveManifestJsonAsync (the one route + xpui Origin/Referer definition). Needs creds + network,
 // so the USER runs it: `--spotify-video-manifest [spotify:track:...]`.
 public static class SpotifyVideoManifestProbe
@@ -47,7 +47,7 @@ public static class SpotifyVideoManifestProbe
         var source = new ExtendedMetadataSource(live.Pipeline, () => live.BaseUrl, () => live.Session);
         using var transport = new LiveDealerTransport(Array.Empty<string>(), live.TokenProvider, live.Pipeline,
             () => live.BaseUrl, log, forceRefreshToken: live.ForceTokenProvider);
-        var video = new SpotifyVideoService(source, store, log);
+        var video = new SpotifyVideoManifestResolver(source, store, log);
 
         log.Info("Resolving the music-video manifest id for " + uri + " ...");
         var (manifestId, idSource) = await video.ResolveManifestIdAsync(uri, ct).ConfigureAwait(false);

@@ -684,8 +684,6 @@ sealed class PlayerBarContent : Component
         };
     }
 
-    static string ArtistsOf(Track? t) => t is null ? "" : string.Join(", ", t.Artists.Select(a => a.Name));
-
     static int SeedOf(Track? t) => t is null ? 11 : Math.Abs((t.Uri ?? t.Id).Length * 7 + t.Title.Length);
 
     internal static PlaybackDevice? RemoteDevice(PlaybackBridge b)

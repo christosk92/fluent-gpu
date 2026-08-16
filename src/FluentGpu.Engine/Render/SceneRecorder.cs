@@ -43,6 +43,11 @@ public readonly record struct SceneRecordStats(int NodesVisited, int DrawnNodeCo
     /// <summary>Glyph runs emitted with <c>InMotion=1</c> this frame (transform-dirty subtree skipped device-grid snap).
     /// The host queues a settle re-record only when this is nonzero — rect-only motion (EQ/seek) must not pay it.</summary>
     public int UnsnappedGlyphSpans { get; init; }
+    /// <summary>Subtrees the record walk REFUSED to descend into because the recording thread's stack was about to run
+    /// out (<c>SceneRecorder.HasWalkStackHeadroom</c>): each one is a node whose own visual was emitted but whose whole
+    /// subtree was NOT painted. Nonzero means the frame is visibly incomplete — a page rendering "empty" content. The
+    /// host publishes it in FrameStats/wakediag so this can never again be a silent blank.</summary>
+    public int DepthAborts { get; init; }
     /// <summary>The frame's REPAINT set (gpu-renderer.md §13.1) — every region whose pixels may differ from the last
     /// presented frame. A SECOND accumulator, deliberately independent of <see cref="Damage"/>: that one is the acrylic
     /// blur-cache union (transform-moved nodes only, scroll content and paint-only writes excluded by design). Never
@@ -224,6 +229,7 @@ public static class SceneRecorder
         public int SpanBytesCopied;
         public int ScopedBlocks;
         public int UnsnappedGlyphSpans;
+        public int DepthAborts;    // subtrees dropped by the stack-headroom guard (see HasWalkStackHeadroom) — never silent
         public SpanReuseDisabledReason SpanReuseDisabledReasons;
         public RectF Damage;       // union of this frame's changed-node device bounds → the acrylic backdrop-cache damage region
         public bool HasDamage;
@@ -278,6 +284,7 @@ public static class SceneRecorder
             SpanBytesCopied = this.SpanBytesCopied,
             ScopedBlocks = this.ScopedBlocks,
             UnsnappedGlyphSpans = this.UnsnappedGlyphSpans,
+            DepthAborts = this.DepthAborts,
             SpanReuseDisabledReasons = this.SpanReuseDisabledReasons,
         };
     }
@@ -319,6 +326,31 @@ public static class SceneRecorder
         }
     }
 
+    /// <summary>Text-motion softness: how far a scrolled run is allowed to drift off the glyph atlas's sub-pixel phase
+    /// grid, as a function of how fast the content is actually moving. 0 = snap fully (crisp), 1 = draw at the natural
+    /// fractional device Y (the LINEAR/CLAMP atlas sampler then smears the run across two rows).
+    ///
+    /// <para>This is the WinUI look, made deliberate. WinUI never rounds its scroll offset — <c>ScrollPresenter</c>'s
+    /// layout-round factor feeds measure/arrange only — so its content rides a composition Visual at fractional offsets
+    /// and the compositor's bilinear resample softens moving text, snapping crisp at rest. We reproduce that, but tied
+    /// to SPEED rather than to whatever fractional phase a glyph happened to land on: the previous behaviour was an
+    /// all-or-nothing gate that blurred a 1-DIP nudge exactly as hard as a fling, which is the wrong end to spend
+    /// sharpness on — slow reading-scroll is where text legibility matters most.</para>
+    ///
+    /// <para>Below <see cref="MotionSoftStartDip"/> nothing softens; above <see cref="MotionSoftFullDip"/> it is the
+    /// full old smear; between, it is smoothstepped so the crossover has no visible edge. Both are DIP/s of content
+    /// travel, so they are resolution-independent and mean the same thing on any panel.</para></summary>
+    public const float MotionSoftStartDip = 220f;   // ~a deliberate reading nudge — stays crisp
+    public const float MotionSoftFullDip = 1400f;   // ~a committed fling — fully soft
+
+    public static float TextMotionSoftness(float speedDip)
+    {
+        if (!(speedDip > MotionSoftStartDip)) return 0f;              // NaN-safe: unordered ⇒ crisp
+        if (speedDip >= MotionSoftFullDip) return 1f;
+        float t = (speedDip - MotionSoftStartDip) / (MotionSoftFullDip - MotionSoftStartDip);
+        return t * t * (3f - 2f * t);                                  // smoothstep — no edge at either end
+    }
+
     private readonly struct InheritedState
     {
         public readonly float HoverT;
@@ -329,8 +361,12 @@ public static class SceneRecorder
         // A HoverElevateClipRoot ancestor is above this subtree: the sibling deferral PARKS the hover-elevated child
         // in the accumulator for that root to hoist after its clip/fade scope closes, instead of emitting in place.
         public readonly byte UnderElevateRoot;
+        /// <summary>0..1 text-motion softness inherited from the nearest scrolling ancestor — see
+        /// <see cref="TextMotionSoftness"/>. Rides here rather than as another Walk parameter because it inherits
+        /// exactly like the rest of this struct: a viewport sets it, everything beneath it draws with it.</summary>
+        public readonly float MotionSoft;
 
-        public InheritedState(float hoverT, float pressT, NodeFlags interactiveFlags, byte hasProgress, byte disabled, byte underElevateRoot = 0)
+        public InheritedState(float hoverT, float pressT, NodeFlags interactiveFlags, byte hasProgress, byte disabled, byte underElevateRoot = 0, float motionSoft = 0f)
         {
             HoverT = hoverT;
             PressT = pressT;
@@ -338,26 +374,31 @@ public static class SceneRecorder
             HasProgress = hasProgress;
             Disabled = disabled;
             UnderElevateRoot = underElevateRoot;
+            MotionSoft = motionSoft;
         }
+
+        /// <summary>The state a scrolling viewport hands its subtree: everything under it softens by the same amount.</summary>
+        public readonly InheritedState WithMotionSoft(float motionSoft)
+            => new(HoverT, PressT, InteractiveFlags, HasProgress, Disabled, UnderElevateRoot, motionSoft);
 
         public readonly InheritedState ForChild(NodeFlags flags, bool nodeInteractive, bool hasLocalProgress, float localHoverT, float localPressT)
         {
             NodeFlags interactiveFlags = nodeInteractive ? flags : InteractiveFlags;
             byte disabled = Disabled != 0 || (flags & NodeFlags.Disabled) != 0 ? (byte)1 : (byte)0;
             if (nodeInteractive && hasLocalProgress)
-                return new InheritedState(localHoverT, localPressT, interactiveFlags, 1, disabled, UnderElevateRoot);
-            return new InheritedState(HoverT, PressT, interactiveFlags, HasProgress, disabled, UnderElevateRoot);
+                return new InheritedState(localHoverT, localPressT, interactiveFlags, 1, disabled, UnderElevateRoot, MotionSoft);
+            return new InheritedState(HoverT, PressT, interactiveFlags, HasProgress, disabled, UnderElevateRoot, MotionSoft);
         }
 
         /// <summary>The state a HoverElevateClipRoot hands its children — descendant deferrals park, not emit.</summary>
         public readonly InheritedState WithUnderElevateRoot()
-            => new(HoverT, PressT, InteractiveFlags, HasProgress, Disabled, 1);
+            => new(HoverT, PressT, InteractiveFlags, HasProgress, Disabled, 1, MotionSoft);
 
         /// <summary>The state the HOISTED subtree records under: it is already outside the root, so any flagged child
         /// INSIDE it (the card wrapper within the hoisted cell) defers in place — a re-park would have no consumer
         /// left (the root's consume already ran) and the subtree would silently vanish.</summary>
         public readonly InheritedState WithoutUnderElevateRoot()
-            => new(HoverT, PressT, InteractiveFlags, HasProgress, Disabled, 0);
+            => new(HoverT, PressT, InteractiveFlags, HasProgress, Disabled, 0, MotionSoft);
     }
 
     /// <param name="skipRoots">Subtree roots EXCLUDED from this record pass — out-of-bounds popup wrappers that render
@@ -762,12 +803,31 @@ public static class SceneRecorder
 
     /// <summary>True while there is stack headroom for another <see cref="WalkCore"/> frame. On the false edge the
     /// caller must stop descending: the deepest subtree goes unpainted, which is visible but survivable — a stack
-    /// overflow is neither catchable nor survivable.</summary>
-    private static bool HasWalkStackHeadroom()
+    /// overflow is neither catchable nor survivable.
+    /// <para>NEVER SILENT. The first trip used to go only to <c>Trace</c> (OutputDebugString — invisible without a
+    /// debugger) and nothing counted it, which is how a Debug build painted every detail page's row skins but no row
+    /// content for a whole session with no clue: the Debug JIT frame of <see cref="WalkCore"/> is far larger than the
+    /// measured 21.5 KB Release frame, so the very same 1.5 MB stack tripped this at the depth of a track row's content.
+    /// Now every refused subtree is counted into <see cref="SceneRecordStats.DepthAborts"/> (surfaced by the host in
+    /// FrameStats / wakediag), the first one is written to <c>Console.Error</c> as well, and Diag counts each one. The
+    /// depth budget itself is owned by the host: <c>FluentApp.RunCore</c> runs the UI/frame loop on a dedicated 32 MB
+    /// thread precisely so this guard is a last-resort net, not a page-blanking cliff.</para></summary>
+    private static bool HasWalkStackHeadroom(ref RecordAccumulator stats)
     {
         if (System.Runtime.CompilerServices.RuntimeHelpers.TryEnsureSufficientExecutionStack()) return true;
+        stats.DepthAborts++;
+        if (Diag.CompiledIn && Diag.Enabled)
+        {
+            Diag.Count("record", "depth-abort");
+            Diag.Event("record", $"depth-abort path-depth={t_walkPathLen} — subtree not painted (recording thread out of stack)");
+        }
         if (Interlocked.Exchange(ref s_depthAbortLogged, 1) == 0)
-            Trace.WriteLine($"SceneRecorder.Walk out of stack at path depth {t_walkPathLen} — deepest subtree not painted.");
+        {
+            string msg = $"SceneRecorder.Walk out of stack at path depth {t_walkPathLen} — deepest subtree not painted. "
+                       + "The recording thread's stack is too small for this scene (see SceneRecordStats.DepthAborts / FluentApp.RunCore).";
+            Trace.WriteLine(msg);
+            Console.Error.WriteLine("[record] " + msg);
+        }
         return false;
     }
 
@@ -872,7 +932,7 @@ public static class SceneRecorder
         if (!skipRoots.IsEmpty && ContainsNode(skipRoots, node)) return default;   // subtree renders in its own popup window
         if ((scene.Flags(node) & NodeFlags.Visible) == 0) return default;
         if (!PushWalkPath(node)) return default;
-        if (!HasWalkStackHeadroom()) { PopWalkPath(); return default; }
+        if (!HasWalkStackHeadroom(ref stats)) { PopWalkPath(); return default; }
         try
         {
             return WalkCore(scene, dl, images, node, parentWorld, parentOpacity, depth, clip, in focus, in textEdit,
@@ -947,6 +1007,10 @@ public static class SceneRecorder
         {
             ref var scrollState = ref scene.ScrollRef(node);
             userScrollActive |= scrollState.UserScrollActive;
+            // Soften text under THIS viewport in proportion to its own live speed. Nested scrollers: the innermost
+            // moving one wins (max), because a row sliding fast inside a still page is what the eye is tracking.
+            float soft = TextMotionSoftness(scrollState.LiveSpeedDip);
+            if (soft > inherited.MotionSoft) inherited = inherited.WithMotionSoft(soft);
             if (!scrollInMotion)
             {
                 var scrollContent = scrollState.ContentNode;
@@ -1556,12 +1620,12 @@ public static class SceneRecorder
                         dl.DrawGlyphRunGradient(local, p.Text, li.TextStyle.FontFamily, effSize, li.TextStyle.Weight,
                             (int)li.TextStyle.Wrap, (int)li.TextStyle.Trim, li.TextStyle.MaxLines,
                             li.TextStyle.CharSpacing, li.TextStyle.LineHeight, (int)li.TextStyle.Stacking, (int)li.TextStyle.LineBounds,
-                            world, opacity, wipe.Before, wipe.After, wipe.Split, wipe.Softness, wipe.Lift, key, spanRunId, inMotion);
+                            world, opacity, wipe.Before, wipe.After, wipe.Split, wipe.Softness, wipe.Lift, key, spanRunId, inherited.MotionSoft);
                     else
                         dl.DrawGlyphRun(local, textColor, p.Text, li.TextStyle.FontFamily, effSize, li.TextStyle.Weight,
                             (int)li.TextStyle.Wrap, (int)li.TextStyle.Trim, li.TextStyle.MaxLines,
                             li.TextStyle.CharSpacing, li.TextStyle.LineHeight, (int)li.TextStyle.Stacking, (int)li.TextStyle.LineBounds,
-                            world, opacity, key, spanRunId, inMotion: inMotion);
+                            world, opacity, key, spanRunId, motionSoft: inherited.MotionSoft);
                 }
 
                 // (b1) span-run decoration bars (per-LINE, per span — the rich-text refinement of (b2) below): the
@@ -1621,7 +1685,7 @@ public static class SceneRecorder
                         dl.DrawGlyphRun(local, textEdit.SelectedText, p.Text, li.TextStyle.FontFamily, effSize, li.TextStyle.Weight,
                             (int)li.TextStyle.Wrap, (int)li.TextStyle.Trim, li.TextStyle.MaxLines,
                             li.TextStyle.CharSpacing, li.TextStyle.LineHeight, (int)li.TextStyle.Stacking, (int)li.TextStyle.LineBounds,
-                            world, opacity, key | 0x1, spanRunId, forceColor: true, inMotion: inMotion);
+                            world, opacity, key | 0x1, spanRunId, forceColor: true, motionSoft: inherited.MotionSoft);
                         dl.PopClip(key | 0x1);
                     }
 
@@ -2150,6 +2214,12 @@ public static class SceneRecorder
         Mix(ref h, (uint)inherited.InteractiveFlags);
         Mix(ref h, inherited.HasProgress);
         Mix(ref h, inherited.Disabled);
+        // Text-motion softness REACHES EMITTED BYTES (DrawGlyphRunCmd.InMotion), so it must key EXACT reuse or a
+        // decelerating fling would replay glyph runs stamped with the softness of a faster frame. Mixed in its
+        // QUANTIZED form — the same 0..255 the payload carries — so reuse survives imperceptible speed wobble instead
+        // of re-recording every frame of a coast. Deliberately NOT in the MOVE signature below: a rebased span is
+        // patched with the current frame's softness by TranslateCopiedSpan, exactly as inMotion was before it.
+        Mix(ref h, (uint)DrawList.QuantizeMotionSoft(inherited.MotionSoft));
         MixColor(ref h, focus.Outer);
         MixColor(ref h, focus.Inner);
         MixFloat(ref h, focus.Thickness);

@@ -26,6 +26,19 @@ namespace FluentGpu.Controls;
 /// </summary>
 public static partial class RadioButtons
 {
+    // Container template parts (the TemplateParts door — the same `parts` bag that carries the per-item
+    // RadioButton.Part* keys; the key strings are disjoint and Apply is a no-op for absent keys). Each part's doc
+    // lists the props the control OWNS, re-asserted after any modifier.
+    /// <summary>The column-major items grid. Owned: Children (the columns). Restyle it to reflow a wide item strip —
+    /// <c>[PartGrid] = g =&gt; g with { Wrap = true, Gap = 12f }</c> — which the WinUI layout never does
+    /// (ColumnMajorUniformToLargestGridLayout has no wrap state); a DELIBERATE divergence, because a strip of
+    /// preview-card items has to drop to fewer columns on a narrow window rather than overflow.</summary>
+    public const string PartGrid = "Grid";
+    /// <summary>One items column. Owned: Children (its items). Pair with <see cref="PartGrid"/>'s wrap —
+    /// <c>[PartColumn] = c =&gt; c with { Shrink = 0f }</c> keeps fixed-width items at their measured width instead of
+    /// letting the wrap line squeeze them.</summary>
+    public const string PartColumn = "Column";
+
     public const float ColumnSpacing = 7f;   // RadioButtonsColumnSpacing (RadioButtons_themeresources.xaml:18)
     public const float RowSpacing = 8f;      // RadioButtonsRowSpacing (RadioButtons_themeresources.xaml:19)
     public const float HeaderGap = 8f;       // RadioButtonsTopHeaderMargin 0,0,0,8 (RadioButtons_themeresources.xaml:20)
@@ -154,15 +167,18 @@ internal sealed class RadioButtonsCore : Component
             int size = ColSize(c);
             var kids = new Element[size];
             for (int r = 0; r < size; r++) kids[r] = Item(next++);
-            columns[c] = new BoxEl { Direction = 1, Gap = RadioButtons.RowSpacing, Children = kids };
+            // Parts: restyle the column (shrink, min width…); its items always win.
+            columns[c] = p.Parts.Apply(RadioButtons.PartColumn,
+                new BoxEl { Direction = 1, Gap = RadioButtons.RowSpacing, Children = kids }) with { Children = kids };
         }
-        var grid = new BoxEl
+        // Parts: restyle the grid (wrap, gap, alignment…); the columns always win.
+        Element grid = p.Parts.Apply(RadioButtons.PartGrid, new BoxEl
         {
             Direction = 0,
             Gap = RadioButtons.ColumnSpacing,
             AlignItems = FlexAlign.Start,
             Children = columns,
-        };
+        }) with { Children = columns };
 
         if (p.Header is { Length: > 0 })
             return new BoxEl

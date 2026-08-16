@@ -1,7 +1,7 @@
 namespace Wavee.Core;
 
 /// <summary>Which library collection changed — emitted by <see cref="ICollectionEvents"/> so a UI cache (the app's
-/// LibraryStore) can refresh JUST that collection, even off-page (docs/architecture.md §6 "library delta streams").</summary>
+/// LibraryStore) can refresh JUST that collection, even off-page (docs/plans/wavee/architecture.md §6 "library delta streams").</summary>
 public enum CollectionKind { Albums, Artists, Shows, Playlists, Liked }
 
 /// <summary>The aggregate library-delta stream the UI cache subscribes to ONCE at the root, so collection changes are

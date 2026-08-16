@@ -181,7 +181,8 @@ public class DetailSkeletonGeometryTests
 
     /// <summary>The row shimmer is the REAL row: the same <c>RowGrid</c> the list builds, at
     /// <c>TrackRow.RowHeightFor(density)</c>, on the tier's own column set — so a loaded row replaces its placeholder
-    /// in place. The reveal-ramp's cheap placeholder row shares the tier-scaled inset for the same reason.</summary>
+    /// in place. The reveal-ramp's placeholder is a BLANK grid of the same column tracks and row height (nothing
+    /// painted — the crossing fades the real row in), so it needs no inset of its own.</summary>
     [Fact]
     public void TheRowShimmer_IsTheRealRowGeometry()
     {
@@ -191,8 +192,8 @@ public class DetailSkeletonGeometryTests
 
         Assert.Contains("rows[i] = RowGrid(EmptyTrack", tracks);          // the shimmer IS the real row builder
         Assert.Contains("float rowH = TrackRow.RowHeightFor(density);", tracks);   // …at the real density height
-        Assert.Contains("TrackRow.PadXFor(set.Tier) - RowInset", tracks);          // …on the tier's own column origin
         Assert.Contains("TrackRow.ColGapFor(set.Tier)", tracks);
+        Assert.Contains("Columns = tracks, RowHeight = rowH, Grow = 1f,", tracks);   // the ramp placeholder: same tracks, same height, blank
     }
 
     /// <summary>The vertical arm's shimmer leads with the hero band and the REAL chrome element, in the same order the

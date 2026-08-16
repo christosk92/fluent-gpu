@@ -2,6 +2,20 @@
 
 *Ultracode audit (8 dimensions, verified against source 2026-06-27; full run: workflow `wavee-data-gap-audit`).*
 
+> **Status note 2026-08-16 — the hook mechanism this plan introduced is gone.** `OnDemandFetch` (Stage 1's
+> "inject a fetch hook into `StoreLibrarySource`") had grown to **nine** mutable hooks on that class by the time it
+> was audited (`metadata-entry-points-inventory.md`), each with its own freshness rule, its own 300-cap and its own
+> silent no-op when go-live never wired it. All nine are **deleted**, along with `MetadataService`, `IMetadataSource`,
+> `EntityRef`, `StoreEntityGaps` and `DiscographyPrefetcher`. They are replaced by ONE constructor dependency:
+> `IEntityHydrator` (`Wavee.Core/Hydration`), with the engine in `src/apps/Wavee/Backend/Hydration` and the Spotify
+> transports in `SpotifyLive/Hydration`. `StoreLibrarySource.GetXAsync(uri, HydrationLevel)` now *awaits a rung* and
+> then reads the store; the online-read hooks (search / suggest / home) became the separate `IOnlineCatalog`
+> constructor dependency. Class B (Pathfinder) is also no longer absent — `PathfinderClient`/`PathfinderResource`
+> ship, reached only through the ladders' `IEnvelopeFetch`.
+> See `docs/plans/wavee/hydration-facade-design.md`, `hydration-facade-plan.md`, `docs/plans/wavee/architecture.md`
+> §4.2/§9 and `.claude/skills/wavee/hydration.md`. The gap *table* below is still a useful record of what was broken;
+> read the fix column as historical.
+
 ## Core verdict
 Two distinct failure classes were conflated:
 

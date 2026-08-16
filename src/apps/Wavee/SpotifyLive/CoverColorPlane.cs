@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentGpu.Signals;
+using Wavee.Core;
 
 namespace Wavee.SpotifyLive;
 
@@ -130,49 +131,25 @@ public sealed class CoverColorPlane
     }
 
     // ── keys ────────────────────────────────────────────────────────────────────────────────────────────────────
-    // A Spotify image id is 40 hex chars whose FIRST 16 are a size/kind marker and whose last 24 identify the artwork:
-    //   ab67616d00004851<hash>  64px album      ab67616d00001e02<hash>  300px      ab67616d0000b273<hash>  640px
-    //   ab6761610000f178<hash>  artist          ab67706c00006c11<hash>  playlist
-    // (verified across 349 kind-179 payloads in tmp/saz-analysis/research/03-XM-PAYLOADS.md). So the COLOUR identity is
-    // the 24-char tail — one entry serves the row thumbnail and the hero — while a FETCH needs the full id, because
-    // getDynamicColorsByUris takes `spotify:image:<full id>`. Hence two accessors over the same URL.
-    const int ImageIdLength = 40;
-    const int SizePrefixLength = 16;
-    /// <summary>The provider-token form of an image reference: what <c>getDynamicColorsByUris</c> takes, and also what an
-    /// un-normalized <c>Image.Url</c> still carries before <c>ImageSource.Normalize</c> rewrites it to the CDN url.</summary>
-    const string ImageUriPrefix = "spotify:image:";
+    // The image-id / artwork-identity rules (40-hex Spotify id = 16-char size marker + 24-char art tail) are OWNED by
+    // Wavee.Core's ImageSource (ImageIdSpan / ArtIdentityOf) — the same rule the detail hero's cover latch compares on —
+    // so the colour cache and the cover latch can never disagree about "same art". These accessors delegate; the
+    // COLOUR identity is the size-independent tail (one entry serves the row thumbnail and the hero), while a FETCH needs
+    // the full id, because getDynamicColorsByUris takes `spotify:image:<full id>`.
 
-    /// <summary>The full image id (the segment after <c>/image/</c>), which is what the filler asks about.
-    /// Returned as a SLICE of the input — the hot read path must not mint a string per art slot per render.
-    /// Accepts BOTH url shapes a caller may hold (the CDN url and the raw <c>spotify:image:</c> token), so this is the
-    /// one place the app has to normalize a cover reference.</summary>
-    public static ReadOnlySpan<char> IdSpan(ReadOnlySpan<char> url)
-    {
-        url = url.Trim();
-        if (url.IsEmpty) return default;
-        int q = url.IndexOf('?');
-        if (q >= 0) url = url[..q];
-        // The provider-token form has no "/image/" segment — in fact no '/' at all — so without this arm the WHOLE token
-        // became the id. Two consequences, both silent: it keyed a DIFFERENT entry from the same cover's CDN url (so page
-        // chrome asking `SchemeFor(Image.Url)` never met the grading the art tile had already stored under the real
-        // identity, and its Watch signal never fired), and the fetch went out as `spotify:image:spotify:image:<id>`.
-        // Normalizing HERE rather than at each call site covers every path at once — TryGetTint, TryGetScheme, Watch,
-        // SetDark — and stays allocation-free, which ImageSource.Normalize (a string) could not be on the render path.
-        if (url.StartsWith(ImageUriPrefix, StringComparison.OrdinalIgnoreCase))
-            return url[ImageUriPrefix.Length..].Trim();
-        int img = url.LastIndexOf("/image/", StringComparison.OrdinalIgnoreCase);
-        if (img >= 0) return url[(img + "/image/".Length)..];
-        int slash = url.LastIndexOf('/');
-        return slash >= 0 && slash + 1 < url.Length ? url[(slash + 1)..] : url;
-    }
+    const int ImageIdLength = 40;                       // the provider's full id, the shape CanGrade accepts (== ImageSource's)
+    const string ImageUriPrefix = "spotify:image:";      // the getDynamicColorsByUris token form
+
+    /// <summary>The full image id (the segment after <c>/image/</c>, or the token after <c>spotify:image:</c>) — what
+    /// the filler asks about. A SLICE of the input (the hot read path must not mint a string per art slot per render).</summary>
+    public static ReadOnlySpan<char> IdSpan(ReadOnlySpan<char> url) => ImageSource.ImageIdSpan(url);
 
     /// <summary>The colour identity of a cover URL: the size-independent tail of its image id, so every pre-sized URL
     /// of one artwork shares a single entry. Ids that are not Spotify's 40-char form key on themselves.</summary>
-    public static ReadOnlySpan<char> KeySpan(ReadOnlySpan<char> url) => IdentityOf(IdSpan(url));
+    public static ReadOnlySpan<char> KeySpan(ReadOnlySpan<char> url) => ImageSource.ArtIdentityOf(IdSpan(url));
 
     /// <summary>The size-independent part of an image id (see <see cref="KeySpan"/>).</summary>
-    public static ReadOnlySpan<char> IdentityOf(ReadOnlySpan<char> imageId)
-        => imageId.Length == ImageIdLength ? imageId[SizePrefixLength..] : imageId;
+    public static ReadOnlySpan<char> IdentityOf(ReadOnlySpan<char> imageId) => ImageSource.ArtIdentityOf(imageId);
 
     public static string KeyForUrl(string? url) => string.IsNullOrEmpty(url) ? "" : KeySpan(url).ToString();
 
@@ -255,6 +232,28 @@ public sealed class CoverColorPlane
             }
             EnqueueLocked(key, id);
             return null;
+        }
+    }
+
+    /// <summary>Does this cover already carry a fresh DARK grading? A pure probe — unlike <see cref="TryGetTint"/> and
+    /// <see cref="TryGetScheme"/> it never enqueues the image for the filler, because its caller is not rendering
+    /// anything: it is the kind-179 trait projector asking "has this entity been through here?" before a request is
+    /// planned. Enqueuing from a planning question would turn every warm page into a getDynamicColorsByUris batch.
+    ///
+    /// <para>Dark specifically: kind 179 only ever ships dark treatments, so a dark entry (however it was graded) is
+    /// exactly what a 179 answer would produce, and a negative is NOT one — a cover the colour server declined can
+    /// still get a 179 payload.</para></summary>
+    public bool HasFreshDark(string? url)
+    {
+        if (string.IsNullOrEmpty(url)) return false;
+        lock (_gate)
+        {
+            EnsureLoadedLocked();
+            var key = KeySpan(url);
+            if (key.IsEmpty) return false;
+            var lookup = _map.GetAlternateLookup<ReadOnlySpan<char>>();
+            return lookup.TryGetValue(key, out var e) && !e.Negative && !e.Dark.IsEmpty
+                && _nowUnix() - e.Ts <= (long)HitTtl.TotalSeconds;
         }
     }
 

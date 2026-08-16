@@ -26,8 +26,6 @@ public readonly record struct Loaded<T>(LoadState State, T? Value, bool IsStale,
 public abstract record FreshnessPolicy
 {
     public sealed record Etag(TimeSpan Ttl) : FreshnessPolicy;                       // extended-metadata
-    public sealed record RevisionDelta : FreshnessPolicy;                            // library sets
-    public sealed record SnapshotRevision(bool ParentRevGate = true) : FreshnessPolicy; // playlists
     public sealed record PollWhole(TimeSpan Ttl, bool SuspendInPlayback) : FreshnessPolicy; // home/browse
     public sealed record Immutable : FreshnessPolicy;                                // gids, audio bytes
 }
@@ -221,9 +219,8 @@ public sealed class Resource<TKey, TValue> where TKey : notnull
         }
     }
 
-    /// <summary>Mark a key dirty — the dealer route calls this on a push. For the revision policies (RevisionDelta /
-    /// SnapshotRevision) the next <see cref="Use"/> serves the resident value stale and revalidates exactly once; keys
-    /// the dealer never touches stay fresh and never eager-refetch (the anti-herd).</summary>
+    /// <summary>Mark a key dirty so the next <see cref="Use"/> serves the resident value stale and revalidates
+    /// exactly once; keys nobody marks stay fresh and never eager-refetch (the anti-herd).</summary>
     public void MarkStale(TKey key)
     {
         lock (_gate)
@@ -301,10 +298,6 @@ public sealed class Resource<TKey, TValue> where TKey : notnull
             FreshnessPolicy.Etag et => e.NeedsRevalidate || DateTime.UtcNow - e.FetchedAt > et.Ttl,
             FreshnessPolicy.PollWhole pw => e.NeedsRevalidate || DateTime.UtcNow - e.FetchedAt > pw.Ttl,
             FreshnessPolicy.Immutable => false,
-            // Revision-gated: stale ONLY when the dealer route marked the key dirty (or it was never fetched). A resident,
-            // un-pushed entry is served without a re-fetch — this is the bounded-work / anti-herd contract.
-            FreshnessPolicy.RevisionDelta => e.NeedsRevalidate,
-            FreshnessPolicy.SnapshotRevision => e.NeedsRevalidate,
             _ => true,
         };
     }

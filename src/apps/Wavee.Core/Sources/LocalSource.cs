@@ -3,7 +3,7 @@ using System.Runtime.CompilerServices;
 
 namespace Wavee.Core;
 
-/// <summary>The local-files peer source (docs/architecture.md §1, §2 "Local files", §7). Owns the <c>local:</c> /
+/// <summary>The local-files peer source (docs/plans/wavee/architecture.md §1, §2 "Local files", §7). Owns the <c>local:</c> /
 /// <c>wavee:local:*</c> uri namespace and serves a synthetic imported library — tracks with <see cref="TrackOrigin.Local"/>
 /// + <c>Source="local"</c> (direct-decode, no CDN/decrypt), surfaced as a single "Local Files" collection. It is the
 /// concrete proof of the seam's two-axis model: a SECOND catalog source the aggregate merges and routes to by uri,
@@ -11,8 +11,9 @@ namespace Wavee.Core;
 public sealed class LocalSource : ICatalogSource
 {
     public string Id => "local";
-    public bool Owns(string uri) =>
-        uri.StartsWith("local:", System.StringComparison.Ordinal) || uri.StartsWith("wavee:local:", System.StringComparison.Ordinal);
+    // `local:*` AND `wavee:local:*` both parse to EntityProviders.Local — one parser, one routing question
+    // (hydration-facade-design.md §1.1).
+    public bool Owns(string uri) => EntityUri.Parse(uri).Provider == EntityProviders.Local;
     public SourceCapabilities Capabilities =>
         SourceCapabilities.Catalog | SourceCapabilities.Search | SourceCapabilities.LocalDecode;
 
@@ -20,7 +21,7 @@ public sealed class LocalSource : ICatalogSource
 
     // The whole local library presented as one "Local Files" playlist (the sidebar's Local row opens it). User-owned +
     // editable in principle (a real local source can rename/reorder its own lists); the cover is a generated gradient.
-    public Task<Playlist?> GetPlaylistAsync(string uri, CancellationToken ct = default)
+    public Task<Playlist?> GetPlaylistAsync(string uri, HydrationLevel level = HydrationLevel.Open, CancellationToken ct = default)
     {
         var tracks = FakeData.LocalTracks();
         return Ok(new Playlist("local-all", uri, "Local Files", "Music imported from this computer.", "On this device",
@@ -30,7 +31,7 @@ public sealed class LocalSource : ICatalogSource
             Source: "local"));
     }
 
-    public Task<Album?> GetAlbumAsync(string uri, CancellationToken ct = default)
+    public Task<Album?> GetAlbumAsync(string uri, HydrationLevel level = HydrationLevel.Open, CancellationToken ct = default)
     {
         var tracks = FakeData.LocalTracks().Where(t => t.Album.Uri == uri).ToArray();
         string name = tracks.Length > 0 ? tracks[0].Album.Name : "Local Album";
@@ -40,7 +41,7 @@ public sealed class LocalSource : ICatalogSource
         return Ok(new Album("localal", uri, name, null, artists, 0, tracks.Length, tracks, AlbumKind.Album));
     }
 
-    public Task<Artist?> GetArtistAsync(string uri, CancellationToken ct = default)
+    public Task<Artist?> GetArtistAsync(string uri, HydrationLevel level = HydrationLevel.Open, CancellationToken ct = default)
     {
         var tracks = FakeData.LocalTracks().Where(t => t.Artists.Any(a => a.Uri == uri)).ToArray();
         string name = tracks.Length > 0 ? tracks[0].Artists.First(a => a.Uri == uri).Name : "Local Artist";

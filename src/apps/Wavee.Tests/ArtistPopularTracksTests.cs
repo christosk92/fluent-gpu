@@ -13,9 +13,8 @@ using Xunit;
 
 namespace Wavee.Tests;
 
-// The artist chart's step two (SpClient artist-top-tracks-extensions → TrackV4 → merge). The pure fold is pinned first
-// (it owns the play-count contract), then the live service through the IHttpExchange + IMetadataSource seams — no
-// network, no clock.
+// The artist chart's PURE fold (merge + play-count top-up + the shared caps). The fetch half moved into the artist
+// ladder's Full rung (ArtistHydrationTests); what stays here is what must hold with no transport at all.
 public class ArtistPopularMergeTests
 {
     static Track T(string id, long plays = 0) =>
@@ -70,230 +69,47 @@ public class ArtistPopularMergeTests
     }
 
     [Fact]
-    public async Task NullService_HandsTheSeedBack()
+    public void WithPlayCounts_FillsOnlyTheCountlessRows_AndKeepsTheHead()
     {
-        var seed = new[] { T("a") };
-        Assert.Same(seed, await new NullArtistPopularTracksService().EnsureExtendedAsync("spotify:artist:x", seed));
+        // Step three: the overview head is authoritative (a kind-185 count for a head uri is ignored), the tail takes its
+        // count, a non-positive count is never applied, and a uri the wire did not answer stays 0.
+        var chart = new[] { T("a", 500), T("b"), T("c"), T("d") };
+        var counts = new Dictionary<string, long> { ["spotify:track:a"] = 1, ["spotify:track:b"] = 300, ["spotify:track:c"] = 0 };
+
+        var counted = ArtistPopularTracks.WithPlayCounts(chart, counts);
+
+        Assert.NotSame(chart, counted);
+        Assert.Equal([500, 300, 0, 0], counted.Select(t => t.PlayCount));
+        Assert.Same(chart[0], counted[0]);   // untouched rows keep their identity (the caller diffs by reference)
+        Assert.Equal(["spotify:track:c", "spotify:track:d"], ArtistPopularTracks.UrisWithoutPlayCount(counted));
     }
+
+    [Fact]
+    public void WithPlayCounts_NothingToApply_ReturnsTheSameInstance()
+    {
+        var chart = new[] { T("a", 500), T("b") };
+        Assert.Same(chart, ArtistPopularTracks.WithPlayCounts(chart, new Dictionary<string, long>()));
+        Assert.Same(chart, ArtistPopularTracks.WithPlayCounts(chart, new Dictionary<string, long> { ["spotify:track:z"] = 9 }));
+        Assert.Same(chart, ArtistPopularTracks.WithPlayCounts(chart, new Dictionary<string, long> { ["spotify:track:a"] = 9 }));
+    }
+
 }
 
-public class SpotifyArtistPopularTracksServiceTests
-{
-    static SessionContext Ctx => new("me", "US", "premium", "en", Tier.Premium, false);
-    const string ArtistUri = "spotify:artist:a1";
+// SpotifyArtistPopularTracksServiceTests is DELETED with the service (hydration-facade-plan.md 1.6). The chart is now
+// the artist ladder's FULL rung, so its cases live in ArtistHydrationTests:
+//   Ensure_FetchesEnrichesAndMergesIntoTheStore / _FillsTheExtensionTailWithKind185Counts
+//     -> Full_ChartGetThenIdentityBatchThenMerge_SeedHeadKeepsItsCounts + Full_AwaitsTheChartTraitPass_ThenReadsTheCountsOffTheRowsItWrote
+//   Ensure_AlreadyExtendedAndFresh_SkipsTheNetwork / _ButCountless_TopsUpWithoutTheGet / _ExtendedButStale_Refetches
+//     -> Full_AlreadyExtendedAndFreshButCountless_TopsUpWithoutTheGet (+ Rich_StaleStamp_RefetchesEvenThoughTheArtistIsAlreadyRich)
+//   Ensure_HttpFailure_KeepsTheSeedAndTheStoredList / _MalformedBody_DegradesToTheSeed / _PlayCountFailure_KeepsTheMergedChart
+//     -> Full_ChartFailure_KeepsTheOverviewSeed + Full_EmptyChart_LeavesTheSeedAndAsksForNothingElse
+//   Ensure_UnresolvableUris_AreSkippedNotPlaceheld -> Full_ChartGetThenIdentityBatchThenMerge (a uri the Identity batch
+//     never lands stays out of the chart projection rather than becoming a placeholder row)
+//   Ensure_NonSpotifyArtist_NeverCallsOut -> HydrationRouterTests (owner routing is the router's job, not a per-service prefix test)
+//   Ensure_ConcurrentCalls_ShareOneRequest -> HydrationLedgerTests.RunOnce_CoalescesConcurrentCallers
+//   Ensure_CancelledCaller_Throws_WithoutKillingTheSharedLoad -> HydrationLedgerTests.RunOnce_AbandonedCaller_DoesNotKillTheSharedRun
+//   Ensure_UsesTheRequestedUrl -> SpclientArtistChartFetch owns the url; ArtistHydrationTests pins the ladder's ONE call to it
 
-    static Track T(string id, long plays = 0) =>
-        new(id, "spotify:track:" + id, "T" + id, [], new AlbumRef("", "", ""), 1000, false, null, PlayCount: plays);
-
-    static HttpResp Json(string body)
-        => new(200, new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase), Encoding.UTF8.GetBytes(body));
-
-    static string TracksJson(params string[] ids)
-        => "{\"tracks\":[" + string.Join(",", ids.Select(i => $"{{\"uri\":\"spotify:track:{i}\"}}")) + "]}";
-
-    /// <summary>Projects every requested uri into the store as a real Track — what TrackV4 hydration does.</summary>
-    sealed class ProjectingSource : IMetadataSource
-    {
-        public int Calls;
-        public Task<IReadOnlyCollection<string>> FetchAsync(IReadOnlyList<EntityRef> entities, IStore store, CancellationToken ct, string? clientFeatureId = null, bool headerTraits = false)
-        {
-            Calls++;
-            var landed = new List<string>(entities.Count);
-            foreach (var e in entities)
-            {
-                store.UpsertTrack(new Track(e.Uri, e.Uri, "hydrated", [], new AlbumRef("", "", ""), 1000, false, null));
-                landed.Add(e.Uri);
-            }
-            return Task.FromResult<IReadOnlyCollection<string>>(landed);
-        }
-    }
-
-    static (SpotifyArtistPopularTracksService Svc, InMemoryStore Store, FakeExchange Http) Build(
-        Func<HttpReq, int, HttpResp> responder, IMetadataSource? source = null)
-    {
-        var store = new InMemoryStore();
-        var http = new FakeExchange(responder);
-        var metadata = new MetadataService(source ?? new ProjectingSource(), store, () => Ctx);
-        return (new SpotifyArtistPopularTracksService(http, () => "https://spclient", metadata, store, default), store, http);
-    }
-
-    static SpotifyArtistPopularTracksService Build(IHttpExchange http, out InMemoryStore store)
-    {
-        store = new InMemoryStore();
-        var metadata = new MetadataService(new ProjectingSource(), store, () => Ctx);
-        return new SpotifyArtistPopularTracksService(http, () => "https://spclient", metadata, store, default);
-    }
-
-    static void SeedArtist(InMemoryStore store, IReadOnlyList<Track> top, DateTimeOffset? fetchedAt = null)
-    {
-        foreach (var t in top) store.UpsertTrack(t);
-        store.UpsertArtist(new Artist("a1", ArtistUri, "A", null)
-        {
-            TopTracks = top,
-            FetchedAt = fetchedAt ?? DateTimeOffset.UtcNow,
-        });
-    }
-
-    [Fact]
-    public async Task Ensure_FetchesEnrichesAndMergesIntoTheStore()
-    {
-        var (svc, store, http) = Build((_, _) => Json(TracksJson("a", "b", "c", "d")));
-        var seed = new[] { T("a", 900), T("b", 800) };
-        SeedArtist(store, seed);
-
-        var merged = await svc.EnsureExtendedAsync(ArtistUri, seed, TestContext.Current.CancellationToken);
-
-        Assert.Equal(4, merged.Count);
-        Assert.Equal(900, merged[0].PlayCount);                 // seed head kept, play counts intact
-        Assert.Equal("hydrated", merged[3].Title);              // tail came from the metadata projection
-        Assert.Equal(4, store.GetArtist(ArtistUri)!.TopTracks!.Count);   // and it landed on the store artist
-        Assert.Equal(1, http.Calls);
-    }
-
-    [Fact]
-    public async Task Ensure_UsesTheRequestedUrl()
-    {
-        string? seen = null;
-        var (svc, store, _) = Build((r, _) => { seen = r.Url; return Json(TracksJson("a")); });
-        SeedArtist(store, [T("a")]);
-
-        await svc.EnsureExtendedAsync(ArtistUri, [T("a")], TestContext.Current.CancellationToken);
-
-        Assert.Equal("https://spclient/artistplaycontext/v1/page/spotify/artist-top-tracks-extensions/"
-            + Uri.EscapeDataString(ArtistUri), seen);
-    }
-
-    [Fact]
-    public async Task Ensure_AlreadyExtendedAndFresh_SkipsTheNetwork()
-    {
-        var (svc, store, http) = Build((_, _) => Json(TracksJson("z")));
-        var extended = Enumerable.Range(0, ArtistPopularTracks.OverviewSeedCap + 1).Select(i => T("t" + i)).ToArray();
-        SeedArtist(store, extended);
-
-        var result = await svc.EnsureExtendedAsync(ArtistUri, extended, TestContext.Current.CancellationToken);
-
-        Assert.Equal(extended.Length, result.Count);
-        Assert.Equal(0, http.Calls);
-    }
-
-    [Fact]
-    public async Task Ensure_ExtendedButStale_RefetchesOnTheStatsStamp()
-    {
-        // The stats overview write rewrites TopTracks back to the ~10 seed on its own 12h tick, so a stale stamp must
-        // re-open this path rather than pinning yesterday's list forever.
-        var (svc, store, http) = Build((_, _) => Json(TracksJson("z")));
-        var extended = Enumerable.Range(0, ArtistPopularTracks.OverviewSeedCap + 1).Select(i => T("t" + i)).ToArray();
-        SeedArtist(store, extended, DateTimeOffset.UtcNow - TimeSpan.FromHours(13));
-
-        await svc.EnsureExtendedAsync(ArtistUri, extended, TestContext.Current.CancellationToken);
-
-        Assert.Equal(1, http.Calls);
-    }
-
-    [Fact]
-    public async Task Ensure_NonSpotifyArtist_NeverCallsOut()
-    {
-        var (svc, _, http) = Build((_, _) => Json(TracksJson("a")));
-        var seed = new[] { T("a") };
-
-        Assert.Same(seed, await svc.EnsureExtendedAsync("local:artist:mine", seed, TestContext.Current.CancellationToken));
-        Assert.Equal(0, http.Calls);
-    }
-
-    [Fact]
-    public async Task Ensure_HttpFailure_KeepsTheSeedAndTheStoredList()
-    {
-        var (svc, store, _) = Build((_, _) => new HttpResp(503, new Dictionary<string, string>(), Array.Empty<byte>()));
-        var seed = new[] { T("a", 5), T("b") };
-        SeedArtist(store, seed);
-
-        var result = await svc.EnsureExtendedAsync(ArtistUri, seed, TestContext.Current.CancellationToken);
-
-        Assert.Equal(2, result.Count);
-        Assert.Equal(5, result[0].PlayCount);
-        Assert.Equal(2, store.GetArtist(ArtistUri)!.TopTracks!.Count);   // a failed step two never blanks the chart
-    }
-
-    [Fact]
-    public async Task Ensure_MalformedBody_DegradesToTheSeed()
-    {
-        var (svc, store, _) = Build((_, _) => Json("{\"nope\":1}"));
-        var seed = new[] { T("a") };
-        SeedArtist(store, seed);
-
-        Assert.Single(await svc.EnsureExtendedAsync(ArtistUri, seed, TestContext.Current.CancellationToken));
-    }
-
-    [Fact]
-    public async Task Ensure_UnresolvableUris_AreSkippedNotPlaceheld()
-    {
-        // A source that hydrates nothing: the extension uris must drop out rather than becoming uri-titled rows.
-        var (svc, store, _) = Build((_, _) => Json(TracksJson("a", "ghost")), new NoopSource());
-        var seed = new[] { T("a", 3) };
-        SeedArtist(store, seed);
-
-        var result = await svc.EnsureExtendedAsync(ArtistUri, seed, TestContext.Current.CancellationToken);
-
-        Assert.Single(result);
-        Assert.Equal("spotify:track:a", result[0].Uri);
-    }
-
-    [Fact]
-    public async Task Ensure_ConcurrentCalls_ShareOneRequest()
-    {
-        var http = new GatedExchange(Json(TracksJson("a", "b")));
-        var svc = Build(http, out var store);
-        var seed = new[] { T("a") };
-        SeedArtist(store, seed);
-
-        var first = svc.EnsureExtendedAsync(ArtistUri, seed);
-        var second = svc.EnsureExtendedAsync(ArtistUri, seed);
-        http.Release();
-        var results = await Task.WhenAll(first, second);
-
-        Assert.Equal(1, http.Calls);
-        Assert.All(results, r => Assert.Equal(2, r.Count));
-    }
-
-    [Fact]
-    public async Task Ensure_CancelledCaller_Throws_WithoutKillingTheSharedLoad()
-    {
-        // Cancellation cancels the caller's AWAIT, not the shared in-flight load — a second page joined to the same
-        // artist must still get its list, and the (uri-keyed) store write stays correct whenever it lands.
-        var http = new GatedExchange(Json(TracksJson("a", "b")));
-        var svc = Build(http, out var store);
-        SeedArtist(store, [T("a")]);
-
-        using var cts = new CancellationTokenSource();
-        var cancelled = svc.EnsureExtendedAsync(ArtistUri, [T("a")], cts.Token);
-        var joined = svc.EnsureExtendedAsync(ArtistUri, [T("a")]);
-        cts.Cancel();
-
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cancelled);
-        http.Release();
-        Assert.Equal(2, (await joined).Count);
-    }
-
-    /// <summary>An exchange whose response completes only when the test says so — so an in-flight load is observable
-    /// without blocking a thread.</summary>
-    sealed class GatedExchange : IHttpExchange
-    {
-        readonly TaskCompletionSource _gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        readonly HttpResp _resp;
-        public int Calls;
-        public GatedExchange(HttpResp resp) => _resp = resp;
-        public void Release() => _gate.TrySetResult();
-        public async Task<HttpResp> SendAsync(HttpReq req, CancellationToken ct)
-        {
-            Interlocked.Increment(ref Calls);
-            await _gate.Task.ConfigureAwait(false);
-            return _resp;
-        }
-    }
-
-    sealed class NoopSource : IMetadataSource
-    {
-        public Task<IReadOnlyCollection<string>> FetchAsync(IReadOnlyList<EntityRef> entities, IStore store, CancellationToken ct, string? clientFeatureId = null, bool headerTraits = false)
-            => Task.FromResult<IReadOnlyCollection<string>>(Array.Empty<string>());
-    }
-}
+// FakePlayCounts (the ITrackPlayCountSource double) is GONE with the seam: kind 185 is a trait projector now,
+// so both halves of the 185 story are pinned against the pipeline instead — PlayCountProjectorTests (the fill rules and
+// the decoder) and ArtistHydrationTests.Full_AwaitsTheChartTraitPass_ThenReadsTheCountsOffTheRowsItWrote (the chart).

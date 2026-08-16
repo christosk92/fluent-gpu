@@ -136,7 +136,7 @@ public class MediaProviderSeamTests
     public async Task CanPrepareNext_False_SkipsThePreparedHandoff()
     {
         var host = new PreparedHost();
-        var projection = new NowPlayingProjection("dev");
+        var projection = new NowPlayingProjection("dev", NotOwnedEntityHydrator.Instance, new InMemoryStore());
         using var controller = new PlaybackController(host, new StubTrackResolver(), projection,
             new FakeContextResolver("spotify:track:a", "spotify:track:b"), "dev");
         var asked = new ConcurrentQueue<string>();
@@ -154,7 +154,7 @@ public class MediaProviderSeamTests
     public async Task CanPrepareNext_Null_LeavesTheHandoffExactlyAsItIsToday()
     {
         var host = new PreparedHost();
-        var projection = new NowPlayingProjection("dev");
+        var projection = new NowPlayingProjection("dev", NotOwnedEntityHydrator.Instance, new InMemoryStore());
         using var controller = new PlaybackController(host, new StubTrackResolver(), projection,
             new FakeContextResolver("spotify:track:a", "spotify:track:b"), "dev");
 
@@ -168,7 +168,7 @@ public class MediaProviderSeamTests
     public async Task CanPrepareNext_True_PreparesJustLikeTheUnwiredPath()
     {
         var host = new PreparedHost();
-        var projection = new NowPlayingProjection("dev");
+        var projection = new NowPlayingProjection("dev", NotOwnedEntityHydrator.Instance, new InMemoryStore());
         using var controller = new PlaybackController(host, new StubTrackResolver(), projection,
             new FakeContextResolver("spotify:track:a", "spotify:track:b"), "dev");
         controller.CanPrepareNext = _ => true;
@@ -342,7 +342,7 @@ public class MediaProviderSeamTests
     sealed class PublisherHarness
     {
         public readonly StubTransport Transport = new();
-        public readonly NowPlayingProjection Proj = new("us", () => 0);
+        public readonly NowPlayingProjection Proj = new("us", NotOwnedEntityHydrator.Instance, new InMemoryStore(), () => 0);
         public readonly SimpleSubject<string?> ConnId = new(null);
         public string? CurrentConnId;
         public LocalPlaybackSnapshot? LastSnapshot;

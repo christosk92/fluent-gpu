@@ -9,86 +9,106 @@ using Wavee.Backend.Metadata;
 using Wavee.Backend.Spotify;
 using Wavee.Core;
 using Xunit;
+using Xm = Wavee.Protocol.ExtendedMetadata;
 
 namespace Wavee.Tests;
 
-public class EntityRefTests
-{
-    [Theory]
-    [InlineData("spotify:track:abc", EntityKind.Track)]
-    [InlineData("spotify:album:xyz", EntityKind.Album)]
-    [InlineData("spotify:artist:a1", EntityKind.Artist)]
-    [InlineData("spotify:playlist:p1", EntityKind.Playlist)]
-    [InlineData("spotify:episode:e1", EntityKind.Episode)]
-    [InlineData("spotify:show:s1", EntityKind.Show)]
-    [InlineData("spotify:wibble:x", EntityKind.Unknown)]
-    [InlineData("not-a-uri", EntityKind.Unknown)]
-    public void Parse_RecognizesKind(string uri, EntityKind kind)
-    {
-        var e = EntityRef.Parse(uri);
-        Assert.Equal(kind, e.Kind);
-        Assert.Equal(uri, e.Uri);
-    }
-
-    [Fact]
-    public void Parse_IsAllocationFree()   // the repo's zero-alloc discipline — String.Split would allocate ~4 objects/call
-    {
-        var uris = Enumerable.Range(0, 1000).Select(i => $"spotify:track:t{i}").ToArray();
-        foreach (var u in uris) _ = EntityRef.Parse(u);   // warm up JIT
-
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        var acc = EntityKind.Unknown;
-        foreach (var u in uris) acc |= EntityRef.Parse(u).Kind;
-        long delta = GC.GetAllocatedBytesForCurrentThread() - before;
-
-        Assert.Equal(EntityKind.Track, acc);   // keep the result live
-        Assert.True(delta < 200, $"EntityRef.Parse allocated {delta} bytes for 1000 parses (expected ~0)");
-    }
-}
-
 public class MetadataChunkingTests
 {
-    static IReadOnlyList<EntityRef> Tracks(int n) =>
-        Enumerable.Range(0, n).Select(i => EntityRef.Parse($"spotify:track:t{i}")).ToArray();
+    // The unconditional Ranges(EntityRef[]) overload died with MetadataService's raw bulk arm (hydration-facade-plan.md
+    // 1.6): every catalogue read is now conditional, so ExtensionRanges is THE chunker and these cases moved onto it.
 
-    [Fact]
-    public void Ranges_Packs10kTracks_IntoOneRequest()
+    // ── the ONE chunker — ExtensionRanges ────────────────────────────────────────────────────────────────────────────
+
+    static IReadOnlyList<(string Uri, Xm.ExtensionKind Kind, string? Etag)> Queries(int uris, int kindsPerUri)
     {
-        var ranges = MetadataChunking.Ranges(Tracks(10_000)).ToList();
-        Assert.Single(ranges);                     // ~30 bytes x 10k = ~300 KB < 4 MB → ONE request, not 20
-        Assert.Equal((0, 10_000), ranges[0]);
+        var list = new List<(string, Xm.ExtensionKind, string?)>(uris * kindsPerUri);
+        for (int u = 0; u < uris; u++)
+            for (int k = 0; k < kindsPerUri; k++)
+                list.Add(($"spotify:track:t{u}", (Xm.ExtensionKind)(k + 1), null));
+        return list;
     }
 
     [Fact]
-    public void Ranges_RespectsBodyBudget_AndCoversAllContiguously()
+    public void ExtensionRanges_CapsByDISTINCTUris_NotQueryCount()
     {
-        var entities = Tracks(1000);
-        var ranges = MetadataChunking.Ranges(entities, maxBodyBytes: 2000, headerBytes: 0).ToList();
+        // Four kinds per uri is the RowBundle shape: 300 uris x 4 = 1200 queries must still be ONE POST, because the
+        // server's ceiling is entities, not queries.
+        var ranges = MetadataChunking.ExtensionRanges(Queries(MetadataChunking.MaxEntitiesPerRequest, 4)).ToList();
+        Assert.Single(ranges);
+        Assert.Equal((0, MetadataChunking.MaxEntitiesPerRequest * 4), ranges[0]);
+    }
 
-        Assert.True(ranges.Count > 1);             // small budget → multiple chunks
+    [Fact]
+    public void ExtensionRanges_NeverSplitsAUrisKindsAcrossChunks()
+    {
+        var reqs = Queries(MetadataChunking.MaxEntitiesPerRequest + 1, 4);
+        var ranges = MetadataChunking.ExtensionRanges(reqs).ToList();
+
+        Assert.Equal(2, ranges.Count);
+        Assert.Equal(reqs.Count, ranges.Sum(r => r.Count));
         foreach (var (start, count) in ranges)
         {
-            int size = 0;
-            for (int i = start; i < start + count; i++) size += MetadataChunking.EstimateBytes(entities[i]);
-            Assert.True(count == 1 || size <= 2000, $"chunk {start}+{count} estimated {size} > 2000");
+            // A chunk boundary must fall on a uri boundary — a uri sent in two POSTs comes back as two partial
+            // entity groups and the projector sees it twice.
+            if (start > 0) Assert.NotEqual(reqs[start - 1].Uri, reqs[start].Uri);
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            for (int i = start; i < start + count; i++) seen.Add(reqs[i].Uri);
+            Assert.True(seen.Count <= MetadataChunking.MaxEntitiesPerRequest);
         }
+    }
+
+    [Fact]
+    public void ExtensionRanges_RespectsBodyBudget_AndCoversAllContiguously()
+    {
+        var reqs = Queries(200, 2);
+        var ranges = MetadataChunking.ExtensionRanges(reqs, maxBodyBytes: 400, headerBytes: 0).ToList();
+
+        Assert.True(ranges.Count > 1);
         Assert.Equal(0, ranges[0].Start);
-        Assert.Equal(1000, ranges.Sum(r => r.Count));
+        Assert.Equal(reqs.Count, ranges.Sum(r => r.Count));
         for (int i = 1; i < ranges.Count; i++)
             Assert.Equal(ranges[i - 1].Start + ranges[i - 1].Count, ranges[i].Start);   // contiguous
     }
 
     [Fact]
-    public void Ranges_OversizedEntity_GetsItsOwnChunk()
+    public void ExtensionRanges_Packs10kTracks_IntoWholeEntityPages()
     {
-        var entities = new[]
-        {
-            EntityRef.Parse("spotify:track:a"),
-            EntityRef.Parse("spotify:track:" + new string('x', 5000)),
-            EntityRef.Parse("spotify:track:b"),
-        };
-        Assert.Equal(3, MetadataChunking.Ranges(entities, maxBodyBytes: 100, headerBytes: 0).Count());
+        // Body size alone would pack all 10k into ONE body (~300 KB < 4 MB); the ENTITY cap is the other bound, and it
+        // is the one the server actually enforces - so 10k goes out as ceil(10000/300) full pages.
+        // (Ported from Ranges_Packs10kTracks_IntoWholeEntityPages when the EntityRef overload was deleted.)
+        var reqs = Queries(10_000, 1);
+        var ranges = MetadataChunking.ExtensionRanges(reqs).ToList();
+        Assert.Equal(34, ranges.Count);
+        Assert.Equal((0, MetadataChunking.MaxEntitiesPerRequest), ranges[0]);
+        Assert.Equal(10_000, ranges.Sum(r => r.Count));
+        foreach (var (_, count) in ranges) Assert.True(count <= MetadataChunking.MaxEntitiesPerRequest);
     }
+
+    [Fact]
+    public void ExtensionRanges_EntityCap_IsExactAtTheBoundary()
+    {
+        Assert.Single(MetadataChunking.ExtensionRanges(Queries(MetadataChunking.MaxEntitiesPerRequest, 1)));
+        Assert.Equal(2, MetadataChunking.ExtensionRanges(Queries(MetadataChunking.MaxEntitiesPerRequest + 1, 1)).Count());
+    }
+
+    [Fact]
+    public void ExtensionRanges_OversizedEntity_GetsItsOwnChunk()
+    {
+        // Ported from Ranges_OversizedEntity_GetsItsOwnChunk: a single query wider than the whole budget must still go
+        // out rather than wedge the pass - a chunk never splits below one uri.
+        var reqs = new (string, Xm.ExtensionKind, string?)[]
+        {
+            ("spotify:track:a", Xm.ExtensionKind.TrackV4, null),
+            ("spotify:track:" + new string('x', 5000), Xm.ExtensionKind.TrackV4, null),
+            ("spotify:track:b", Xm.ExtensionKind.TrackV4, null),
+        };
+        Assert.Equal(3, MetadataChunking.ExtensionRanges(reqs, maxBodyBytes: 100, headerBytes: 0).Count());
+    }
+
+    [Fact]
+    public void ExtensionRanges_Empty_YieldsNothing()
+        => Assert.Empty(MetadataChunking.ExtensionRanges(System.Array.Empty<(string, Xm.ExtensionKind, string?)>()));
 }
 
 public class HttpCompressionTests
@@ -103,141 +123,13 @@ public class HttpCompressionTests
     }
 }
 
-public class MetadataServiceTests
-{
-    static SessionContext Ctx => new("me", "US", "premium", "en", Tier.Premium, false);
-
-    sealed class FakeBatchSource : IMetadataSource
-    {
-        public int Calls { get; private set; }
-        public int TotalEntities { get; private set; }
-        readonly Action<EntityRef, IStore>? _project;
-        readonly Func<EntityRef, bool>? _projectFilter;
-        public FakeBatchSource(Action<EntityRef, IStore>? project = null, Func<EntityRef, bool>? projectFilter = null)
-        {
-            _project = project;
-            _projectFilter = projectFilter;
-        }
-        public Task<IReadOnlyCollection<string>> FetchAsync(IReadOnlyList<EntityRef> entities, IStore store, CancellationToken ct, string? clientFeatureId = null, bool headerTraits = false)
-        {
-            Calls++;
-            TotalEntities += entities.Count;
-            var landed = new List<string>(entities.Count);
-            if (_project is not null)
-            {
-                foreach (var e in entities)
-                {
-                    if (_projectFilter is not null && !_projectFilter(e)) continue;
-                    _project(e, store);
-                    landed.Add(e.Uri);
-                }
-            }
-            return Task.FromResult<IReadOnlyCollection<string>>(landed);
-        }
-    }
-
-    static Track Trk(EntityRef e) => new(e.Uri, e.Uri, "T", [], new AlbumRef("", "", ""), 0, false, null);
-
-    [Fact]
-    public async Task SyncAll_HandsTheWholeBatchToTheSource()
-    {
-        var src = new FakeBatchSource();
-        var svc = new MetadataService(src, new InMemoryStore(), () => Ctx);
-        var uris = Enumerable.Range(0, 10_000).Select(i => $"spotify:track:t{i}").ToList();
-
-        await svc.SyncAllAsync(uris, TestContext.Current.CancellationToken);
-
-        Assert.Equal(1, src.Calls);              // one hand-off; the source packs by body size (see MetadataChunking)
-        Assert.Equal(10_000, src.TotalEntities);
-    }
-
-    [Fact]
-    public async Task SyncAll_ProjectsEveryEntity()
-    {
-        var store = new InMemoryStore();
-        var svc = new MetadataService(new FakeBatchSource((e, st) => st.UpsertTrack(Trk(e))), store, () => Ctx);
-        await svc.SyncAllAsync(["spotify:track:a", "spotify:track:b"], TestContext.Current.CancellationToken);
-        Assert.NotNull(store.GetTrack("spotify:track:a"));
-        Assert.NotNull(store.GetTrack("spotify:track:b"));
-    }
-
-    [Fact]
-    public async Task SyncAll_PartialCache_OnlyFetchesTheMisses()
-    {
-        var store = new InMemoryStore();
-        var src = new FakeBatchSource((e, st) => st.UpsertTrack(Trk(e)));
-        var svc = new MetadataService(src, store, () => Ctx);
-        var all = Enumerable.Range(0, 10_000).Select(i => $"spotify:track:t{i}").ToList();
-
-        await svc.SyncAllAsync(all.Take(5000).ToList(), TestContext.Current.CancellationToken);   // warm 5k into cache
-        Assert.Equal(5000, src.TotalEntities);
-
-        await svc.SyncAllAsync(all, TestContext.Current.CancellationToken);   // first 5k fresh → only the new 5k fetch
-        Assert.Equal(10_000, src.TotalEntities);   // cumulative — NOT 15000, which a refetch-all would give
-    }
-
-    [Fact]
-    public async Task SyncAll_FullyCached_FetchesNothing()
-    {
-        var store = new InMemoryStore();
-        var src = new FakeBatchSource((e, st) => st.UpsertTrack(Trk(e)));
-        var svc = new MetadataService(src, store, () => Ctx);
-        await svc.SyncAllAsync(["spotify:track:a"], TestContext.Current.CancellationToken);
-        Assert.Equal(1, src.Calls);
-        await svc.SyncAllAsync(["spotify:track:a"], TestContext.Current.CancellationToken);   // already fresh
-        Assert.Equal(1, src.Calls);   // zero new requests
-    }
-
-    [Fact]
-    public async Task Use_FetchesOnce_ThenServesFresh()
-    {
-        var store = new InMemoryStore();
-        var src = new FakeBatchSource((e, st) => st.UpsertTrack(Trk(e)));
-        var svc = new MetadataService(src, store, () => Ctx);
-
-        await svc.EnsureAsync("spotify:track:t1");
-        Assert.Equal(1, src.Calls);
-        Assert.NotNull(store.GetTrack("spotify:track:t1"));
-        Assert.True(svc.Use("spotify:track:t1").IsReady);
-        Assert.Equal(1, src.Calls);   // fresh (1h TTL) → no refetch
-    }
-
-    [Fact]
-    public async Task SyncAll_SealsOnlyProjectedUris_OmittedStayUnsealed()
-    {
-        var store = new InMemoryStore();
-        // Projects a + c, omits b — b must remain a miss so the next SyncAll re-requests it.
-        var src = new FakeBatchSource(
-            (e, st) => st.UpsertTrack(Trk(e)),
-            e => e.Uri is "spotify:track:a" or "spotify:track:c");
-        var svc = new MetadataService(src, store, () => Ctx);
-
-        await svc.SyncAllAsync(["spotify:track:a", "spotify:track:b", "spotify:track:c"],
-            TestContext.Current.CancellationToken);
-        Assert.Equal(1, src.Calls);
-        Assert.Equal(3, src.TotalEntities);
-
-        await svc.SyncAllAsync(["spotify:track:a", "spotify:track:b", "spotify:track:c"],
-            TestContext.Current.CancellationToken);
-        Assert.Equal(2, src.Calls);
-        Assert.Equal(4, src.TotalEntities);   // only b re-requested
-        Assert.Null(store.GetTrack("spotify:track:b"));
-    }
-
-    [Fact]
-    public async Task MarkStale_ForcesRefetchOnNextSync()
-    {
-        var store = new InMemoryStore();
-        var src = new FakeBatchSource((e, st) => st.UpsertTrack(Trk(e)));
-        var svc = new MetadataService(src, store, () => Ctx);
-        await svc.SyncAllAsync(["spotify:track:a"], TestContext.Current.CancellationToken);
-        Assert.Equal(1, src.Calls);
-
-        svc.MarkStale("spotify:track:a");
-        await svc.SyncAllAsync(["spotify:track:a"], TestContext.Current.CancellationToken);
-        Assert.Equal(2, src.Calls);
-    }
-}
+// MetadataServiceTests is DELETED with MetadataService itself (hydration-facade-plan.md 1.6). Its cases live on:
+//   SyncAll_HandsTheWholeBatchToTheSource / _ProjectsEveryEntity -> XmCatalogFetchTests.MixedKinds_RideOnePost +
+//     .Landed_IsWhatProjected_NotWhatWasAsked (one POST per chunk, landed = what a projection actually wrote)
+//   SyncAll_PartialCache / _FullyCached / Use_FetchesOnce      -> XmCatalogFetchTests.SecondPass_IsServedFromTheEtagCache
+//     + HydrationLedgerTests.Seal_SealsEveryRungUpToReached / .RunOnce_CoalescesConcurrentCallers
+//   SyncAll_SealsOnlyProjectedUris_OmittedStayUnsealed        -> HydrationLedgerTests.Seal_AboveReached_IsExhausted_NotFresh
+//   MarkStale_ForcesRefetchOnNextSync                         -> HydrationLedgerTests.Invalidate_UnsealsEveryRung
 
 public class StoreBulkTests
 {

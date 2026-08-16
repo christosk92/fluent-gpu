@@ -12,7 +12,7 @@ namespace Wavee.Backend;
 // unified server call (GET /context-resolve/v1/{uri}); the live impl lives in SpotifyLive (JSON + HTTP), so this Backend
 // contract stays proto-free + unit-testable. (Contrast WaveeMusic, which hand-rolls a 3-layer context cache + a
 // retry/cooldown dict inside one 700-line ContextResolver; here the SWR + in-flight dedup is the shared Resource engine
-// and metadata hydration is MetadataService — no bespoke caches.)
+// and metadata hydration is the hydration facade (IEntityHydrator) — no bespoke caches.)
 
 /// <summary>One track in a resolved/queued context: the domain <see cref="Track"/> plus its provider-assigned context
 /// <c>uid</c> (skip_to-by-uid, the PutState player_state track.uid, outbound page uids). Uid is "" for synthetic /
@@ -149,9 +149,7 @@ public static class ContextResolve
     /// the queue/state and skip_to-by-uri stay valid even when metadata isn't available.</summary>
     public static Track Synthetic(string uri)
     {
-        int i = uri.LastIndexOf(':');
-        string id = i >= 0 && i + 1 < uri.Length ? uri[(i + 1)..] : uri;
-        return new Track(id, uri, uri, Array.Empty<ArtistRef>(), new AlbumRef("", "", ""), 0, false, null);
+        return new Track(EntityUri.IdOf(uri), uri, uri, Array.Empty<ArtistRef>(), new AlbumRef("", "", ""), 0, false, null);
     }
 }
 

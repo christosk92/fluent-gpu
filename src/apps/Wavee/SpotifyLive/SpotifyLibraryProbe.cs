@@ -2,9 +2,11 @@ using System.Collections.Generic;
 using System.Linq;
 using Wavee.Backend;
 using Wavee.Backend.Collections;
+using Wavee.Backend.Hydration;
 using Wavee.Backend.Metadata;
 using Wavee.Backend.Playlists;
 using Wavee.Core;
+using EntityKind = Wavee.Core.EntityKind;   // disambiguate: Wavee.Backend.Metadata has its own PERSISTED kind enum; this file speaks the ROUTING one
 
 namespace Wavee.SpotifyLive;
 
@@ -19,8 +21,7 @@ public static class SpotifyLibraryProbe
         if (live is null) return 1;
 
         var store = new InMemoryStore();
-        var metadata = new MetadataService(new ExtendedMetadataSource(live.Pipeline, () => live.BaseUrl, () => live.Session), store, () => live.Session);
-        var fetcher = new PlaylistFetcher(live.Pipeline, () => live.BaseUrl, store, (uris, c) => metadata.SyncAllAsync(uris, c), () => live.Username);
+        var fetcher = new PlaylistFetcher(live.Pipeline, () => live.BaseUrl, store, CatalogHydrate(live, store, log), () => live.Username);
 
         log.Info("Fetching playlist " + uri + " ...");
         try { await fetcher.FetchPlaylistAsync(uri, ct).ConfigureAwait(false); }
@@ -72,10 +73,9 @@ public static class SpotifyLibraryProbe
         if (live is null) return 1;
 
         var store = new InMemoryStore();
-        var metadata = new MetadataService(new ExtendedMetadataSource(live.Pipeline, () => live.BaseUrl, () => live.Session), store, () => live.Session);
         var revs = new Dictionary<string, string?>();
         var fetcher = new CollectionFetcher(live.Pipeline, () => live.BaseUrl, () => live.Username, store,
-            s => revs.TryGetValue(s, out var r) ? r : null, (s, r) => revs[s] = r, (uris, c) => metadata.SyncAllAsync(uris, c));
+            s => revs.TryGetValue(s, out var r) ? r : null, (s, r) => revs[s] = r, CatalogHydrate(live, store, log));
 
         log.Info("Fetching collection set '" + setId + "' ...");
         try { await fetcher.FetchSetAsync(setId, ct).ConfigureAwait(false); }
@@ -91,7 +91,22 @@ public static class SpotifyLibraryProbe
         return 0;
     }
 
-    static string PrintItem(string uri, IStore store) => EntityRef.Parse(uri).Kind switch
+    /// <summary>The fetchers' hydrate delegate, built exactly as go-live builds it: THE catalogue arm (one mixed-kind
+    /// extended-metadata POST per 300 uris, etag-conditional) rather than a probe-only transport. The membership rows a
+    /// fetcher lands need Identity facts, which is precisely what this arm writes (hydration-facade-design.md §2.2).</summary>
+    static Func<IReadOnlyList<string>, CancellationToken, Task> CatalogHydrate(LiveSpclient live, IStore store, WaveeLogger log)
+    {
+        var source = new ExtendedMetadataSource(live.Pipeline, () => live.BaseUrl, () => live.Session);
+        var catalog = new XmCatalogFetch(new ExtensionEtagCache(source, () => live.Session, log), store, log);
+        return async (uris, ct) =>
+        {
+            var refs = new List<EntityUri>(uris.Count);
+            for (int i = 0; i < uris.Count; i++) refs.Add(EntityUri.Parse(uris[i]));
+            await catalog.FetchAsync(refs, null, TraitSurface.None, ct).ConfigureAwait(false);
+        };
+    }
+
+    static string PrintItem(string uri, IStore store) => EntityUri.KindOf(uri) switch
     {
         EntityKind.Track => store.GetTrack(uri) is { } t ? t.Title + " - " + string.Join(", ", t.Artists.Select(a => a.Name)) : uri,
         EntityKind.Album => store.GetAlbum(uri)?.Name ?? uri,

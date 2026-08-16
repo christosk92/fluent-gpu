@@ -1,4 +1,4 @@
-namespace Wavee.Core;
+﻿namespace Wavee.Core;
 
 public enum LibraryItemKind { Track, Album, Artist, Playlist }
 
@@ -92,7 +92,7 @@ public sealed record SearchResults(
     };
 }
 
-/// <summary>One page of a streamed track list (skeleton-then-stream — see docs/architecture.md §3/§6): the tracks
+/// <summary>One page of a streamed track list (skeleton-then-stream — see docs/plans/wavee/architecture.md §3/§6): the tracks
 /// resolved so far, the running loaded count, and the known total (so the UI can size a progress cue up front).</summary>
 public sealed record TrackPage(IReadOnlyList<Track> Tracks, int Loaded, int Total);
 
@@ -108,9 +108,11 @@ public sealed record DiscographyPage(IReadOnlyList<Album> Items, int Total);
 /// paths (Pathfinder + SpClient) behind one async surface the UI binds against.</summary>
 public interface IMusicLibrary
 {
-    Task<Playlist> GetPlaylistAsync(string id, CancellationToken ct = default);
-    Task<Album> GetAlbumAsync(string id, CancellationToken ct = default);
-    Task<Artist> GetArtistAsync(string id, CancellationToken ct = default);
+    // `level` = the hydration rung the caller needs before it paints (design §1.2). Defaulted to Open so every
+    // existing call keeps its meaning; the album page asks Rich, the below-the-fold panel Full, the artist page Rich.
+    Task<Playlist> GetPlaylistAsync(string id, HydrationLevel level = HydrationLevel.Open, CancellationToken ct = default);
+    Task<Album> GetAlbumAsync(string id, HydrationLevel level = HydrationLevel.Open, CancellationToken ct = default);
+    Task<Artist> GetArtistAsync(string id, HydrationLevel level = HydrationLevel.Open, CancellationToken ct = default);
 
     /// <summary>Page an artist's discography facet (the virtualized grid pulls windows as you scroll). Returns the slice
     /// <c>[offset, offset+limit)</c> + the facet total so the grid can reserve full extent before everything has loaded.</summary>
@@ -160,5 +162,9 @@ public interface IMusicLibrary
 
     // Podcasts (federated to the Podcasts-capable sources): the library grid of shows + a single show's episodes.
     Task<IReadOnlyList<Show>> GetShowsAsync(CancellationToken ct = default);
-    Task<Show?> GetShowAsync(string uri, CancellationToken ct = default);
+    Task<Show?> GetShowAsync(string uri, HydrationLevel level = HydrationLevel.Open, CancellationToken ct = default);
+    /// <summary>Page the next block of a show's episodes into residency (see <see cref="IPodcastSource"/>). Returns the
+    /// new paging cursor (<c>Show.PagedThrough</c>); unchanged (<c>== from</c>) means the show has no further members,
+    /// so the episode list drops its load-more affordance.</summary>
+    Task<int> LoadMoreEpisodesAsync(string showUri, int from, CancellationToken ct = default);
 }

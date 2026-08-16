@@ -375,12 +375,17 @@ sealed class HomeSectionPage : Component
     static HomeCard FromBrowse(BrowseCard card) => new(card.Uri, card.Title, card.Subtitle, card.Image, KindOf(card.Uri),
         Meta: new HomeCardMeta(Accent: card.Accent ?? 0));
 
-    static HomeCardKind KindOf(string uri) =>
-        uri.StartsWith("spotify:artist:", StringComparison.Ordinal) ? HomeCardKind.Artist :
-        uri.StartsWith("spotify:album:", StringComparison.Ordinal) ? HomeCardKind.Album :
-        uri.StartsWith("spotify:show:", StringComparison.Ordinal) ? HomeCardKind.Podcast :
-        uri.StartsWith("spotify:episode:", StringComparison.Ordinal) ? HomeCardKind.Episode :
-        uri.StartsWith("spotify:track:", StringComparison.Ordinal) ? HomeCardKind.Track : HomeCardKind.Playlist;
+    // The card's uri names its kind through the ONE parser (hydration-facade-design.md §1.1); everything the browse
+    // feed can carry that is not one of these five still reads as a Playlist card, exactly as before.
+    static HomeCardKind KindOf(string uri) => EntityUri.KindOf(uri) switch
+    {
+        EntityKind.Artist => HomeCardKind.Artist,
+        EntityKind.Album => HomeCardKind.Album,
+        EntityKind.Show => HomeCardKind.Podcast,
+        EntityKind.Episode => HomeCardKind.Episode,
+        EntityKind.Track => HomeCardKind.Track,
+        _ => HomeCardKind.Playlist,
+    };
 
     static HomeCard[] BlankCards()
     {

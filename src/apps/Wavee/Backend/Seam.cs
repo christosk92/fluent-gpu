@@ -34,7 +34,7 @@ public sealed class EngineMutationSource : IMutationSource, IDisposable
     }
 
     public string Id => "spotify";
-    public bool Owns(string uri) => uri.StartsWith("spotify:", StringComparison.Ordinal);
+    public bool Owns(string uri) => EntityUri.Parse(uri).Provider == EntityProviders.Spotify;
     public SourceCapabilities Capabilities => SourceCapabilities.Mutations;
 
     public IReadOnlySet<string> Saved => _saved;
@@ -51,7 +51,7 @@ public sealed class EngineMutationSource : IMutationSource, IDisposable
         // store.SetSaved → Bump → OnStoreChange updates _saved + emits, synchronously — no explicit recompute needed.
         // §2.5 — a playlist follow/unfollow is a rootlist ADD/REM (routed to Follow), NOT a collection set write; every other
         // uri kind is a collection save with the set inferred from the uri kind.
-        if (uri.StartsWith("spotify:playlist:", StringComparison.Ordinal)) _mut.Follow(uri, saved);
+        if (EntityUri.KindOf(uri) == EntityKind.Playlist) _mut.Follow(uri, saved);
         else _mut.Save(SetForUri(uri), uri, saved);                        // optimistic + outbox; set inferred from the uri kind
         if (ScheduleDrain is { } viaLoop) { viaLoop(); return; }           // §6 — the loop drains, serialized with inbound
         await _mut.Drain(_transport, _ctx(), ct).ConfigureAwait(false);    // replay + reconcile (stub transport = succeeds)
@@ -93,15 +93,17 @@ public sealed class EngineMutationSource : IMutationSource, IDisposable
     // The save set is inferred from the uri kind (track→liked, album→albums, artist→artists, show→shows, episode→episodes),
     // so ONE source covers every library type while Saved/IsSaved stay a single aggregated snapshot. Non-standard uris fall
     // back to the configured set.
-    string SetForUri(string uri) =>
-        uri.StartsWith("spotify:track:", StringComparison.Ordinal) ? "liked" :
-        uri.StartsWith("spotify:album:", StringComparison.Ordinal) ? "albums" :
-        uri.StartsWith("spotify:artist:", StringComparison.Ordinal) ? "artists" :
-        uri.StartsWith("spotify:show:", StringComparison.Ordinal) ? "shows" :
-        uri.StartsWith("spotify:episode:", StringComparison.Ordinal) ? "episodes" :
-        uri.StartsWith("spotify:playlist:", StringComparison.Ordinal) ? "playlists" :   // §2.8 — a single-uri follow change updates Saved incrementally
-        uri.StartsWith(PreReleaseUris.PreReleaseScheme, StringComparison.Ordinal) ? "prerelease" :   // a pre-save (kind-138 entity); rides the "collection" wire set
-        _setId;
+    string SetForUri(string uri) => EntityUri.KindOf(uri) switch
+    {
+        EntityKind.Track => "liked",
+        EntityKind.Album => "albums",
+        EntityKind.Artist => "artists",
+        EntityKind.Show => "shows",
+        EntityKind.Episode => "episodes",
+        EntityKind.Playlist => "playlists",       // §2.8 — a single-uri follow change updates Saved incrementally
+        EntityKind.Prerelease => "prerelease",    // a pre-save (kind-138 entity); rides the "collection" wire set
+        _ => _setId,
+    };
 
     HashSet<string> BuildUnion(IStore store)
     {

@@ -63,6 +63,24 @@ static class PlaylistInlineEdit
     internal static bool SpotifyEditsLive(Services? svc)
         => svc?.RealPlaylistMutations is not null && svc.Session.Status == AuthStatus.Authenticated;
 
+    // ── THE edit gate ────────────────────────────────────────────────────────────────────────────────────────────
+    // Every playlist edit affordance in the app asks exactly one of these two questions, and neither is
+    // `Capabilities.CanEditItems` alone any more: a playlist that was deleted or whose access was revoked under the
+    // reader still carries the capabilities it had when it loaded, so the page would keep offering edits the server can
+    // only refuse. Routing the drag source, the drop target, the keyboard block move, the title/description/cover
+    // editors, the owner overflow and the invite control through ONE pair is what makes "a notice mounts ⇒ the edits go
+    // away" a single fact rather than nine call sites that have to agree.
+
+    /// <summary>May the user change this playlist's CONTENTS (add / remove / reorder rows) right now?</summary>
+    internal static bool Editable(DetailModel m) => m.Notice == DetailNotice.None && m.Capabilities.CanEditItems;
+
+    /// <summary>May the user change this playlist's METADATA (name / description / cover / permissions) right now?</summary>
+    internal static bool EditableMetadata(DetailModel m) => m.Notice == DetailNotice.None && m.Capabilities.CanEditMetadata;
+
+    /// <summary>The shared half of both gates, for the two OWNER affordances whose capability is neither items nor
+    /// metadata (the overflow's Delete, the invite control's permission administration): the page is not under a notice.</summary>
+    internal static bool Live(DetailModel m) => m.Notice == DetailNotice.None;
+
     static void PatchDetail(Loadable<DetailModel> full, Func<DetailModel, DetailModel> patch)
     {
         if ((LoadState)full.State.Peek() != LoadState.Ready) return;
@@ -98,7 +116,7 @@ static class PlaylistInlineEdit
         }
         catch (Exception ex)
         {
-            PlaylistEditErrors.Toast(ex);
+            PlaylistEditErrors.Toast(ex, PlaylistEditVerb.Rename);
             return false;
         }
     }
@@ -133,6 +151,41 @@ static class PlaylistInlineEdit
 
     /// <summary>The transient saving→saved chip. Mount-gated by the caller (status != idle); keyed by state so the
     /// saving→saved swap replays the enter fade, and unmount fades out via Exit.</summary>
+    /// <summary>The header's PENDING chip: "{n} changes pending" while this playlist has unacked edits in the durable
+    /// outbox. Sibling of the saving→saved chip and deliberately a separate one: "Saved" is about the edit you just
+    /// made landing LOCALLY, this is about the server not having it yet, and collapsing them would let a queued-offline
+    /// burst read as saved-and-done. A Component so it appears / counts / disappears off its own per-uri signal without
+    /// re-rendering the hero title next to it.</summary>
+    internal static Element PendingChip(string uri)
+        => Embed.Comp(() => new PlaylistPendingChip(uri)) with { Key = "pl-pending:" + uri };
+
+    sealed class PlaylistPendingChip : Component
+    {
+        readonly string _uri;
+        public PlaylistPendingChip(string uri) => _uri = uri;
+
+        public override Element Render()
+        {
+            var lib = UseContext(LibraryBridge.Slot);
+            if (lib is null) return new BoxEl { Width = 0f, Height = 0f, HitTestVisible = false };
+            int pending = lib.PendingEdits(_uri).Value;    // subscribe → this uri only
+            if (pending <= 0) return new BoxEl { Width = 0f, Height = 0f, HitTestVisible = false };
+
+            return ToolTip.Wrap(new BoxEl
+            {
+                Direction = 0, AlignItems = FlexAlign.Center, Gap = 6f, Shrink = 0f,
+                Padding = new Edges4(8f, 3f, 10f, 3f), Corners = CornerRadius4.All(12f),
+                Fill = Tok.FillSubtleSecondary,
+                Enter = new EnterExit(Opacity: 0f, Active: true),
+                Children =
+                [
+                    Ui.Icon(Icons.Refresh, 12f, Tok.TextTertiary),
+                    new TextEl(Strings.Detail.Edit.PendingCount(pending)) { Size = 11f, Weight = 600, Color = Tok.TextSecondary },
+                ],
+            }, Loc.Get(Strings.Detail.Edit.PendingSync));
+        }
+    }
+
     static Element StatusChip(int status) => new BoxEl
     {
         Direction = 0, AlignItems = FlexAlign.Center, Gap = 6f, Shrink = 0f,
@@ -207,25 +260,6 @@ static class PlaylistInlineEdit
         Children = [field, SaveCancelRow(save, cancel)],
     };
 
-    /// <summary>A round icon-only edit-action (status chip etc.).</summary>
-    static Element EditActionBtn(string glyph, bool accent, Action onClick, float size = 30f)
-    {
-        ColorF a = Tok.AccentTextPrimary;
-        return new BoxEl
-        {
-            Width = size, Height = size, Shrink = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-            Corners = CornerRadius4.All(size / 2f),
-            Fill = accent ? a with { A = 0.16f } : ColorF.Transparent,
-            HoverFill = accent ? a with { A = 0.26f } : Tok.FillSubtleSecondary,
-            PressedFill = accent ? a with { A = 0.12f } : Tok.FillSubtleTertiary,
-            HoverScale = WaveeMotion.ScaleSubtle.Hover, PressScale = WaveeMotion.ScaleSubtle.Press,
-            Cursor = CursorId.Hand, Focusable = true, AllowFocusOnInteraction = false,
-            Role = AutomationRole.Button, OnClick = onClick,
-            Enter = new EnterExit(Sx: 0.8f, Sy: 0.8f, Opacity: 0f, Active: true),
-            Children = [Ui.Icon(glyph, MathF.Round(size * 0.42f), accent ? a : Tok.TextSecondary)],
-        };
-    }
-
     /// <summary>Focus the field when its root realizes (deferred one pump). visual:false = pointer-style focus —
     /// caret at end, no select-all (the inline-edit affordance; select-all is for Tab keyboard focus only).</summary>
     static TemplateParts FocusOnMount(InputHooks hooks, Action<Action> post)
@@ -284,7 +318,23 @@ static class PlaylistInlineEdit
             var lib = UseContext(LibraryBridge.Slot);
             var svc = UseContext(Services.Slot);
             var m = _full.Value.Value;
-            if (lib is null || !m.Capabilities.CanEditMetadata || m.ContextUri is not { } uri)
+            bool coverEditable = lib is not null && EditableMetadata(m) && m.ContextUri is { Length: > 0 };
+            // DIAGNOSTIC ONLY (see DetailCoverTrace): this component wraps the hero's art when the playlist is editable,
+            // and its verdict decides WHICH element tree renders — an editable↔read-only flip between the preview model
+            // and the full model would restructure the cover's subtree (a remount ⇒ H3), so the verdict is logged too.
+            if (DetailCoverTrace.On)
+                WaveeLog.Instance.Debug("detail", "cover", "editable-cover",
+                    WaveeLogField.Of("arm", "editable"),
+                    WaveeLogField.Of("ctx", m.ContextUri),
+                    WaveeLogField.Of("editable", coverEditable),
+                    WaveeLogField.Of("hasLib", lib is not null),
+                    WaveeLogField.Of("size", _size),
+                    WaveeLogField.Of("decodePx", _decodePx),
+                    WaveeLogField.Of("preferLargest", _preferLargest),
+                    WaveeLogField.Of("cover", DetailCoverTrace.Id(m.Cover, _preferLargest)),
+                    WaveeLogField.Of("state", ((LoadState)_full.State.Peek()).ToString()),
+                    WaveeLogField.Of("morphKey", _morphKey));
+            if (lib is null || !EditableMetadata(m) || m.ContextUri is not { } uri)
                 return DetailRail.HeroArtwork(m, _size, _radius, connected: false,
                     morphKey: _morphKey, decodePx: _decodePx, preferLargest: _preferLargest);
 
@@ -392,6 +442,11 @@ static class PlaylistInlineEdit
         readonly Signal<int> _status = new(StatusIdle);
         readonly Ref<NodeHandle> _editShell = new(NodeHandle.Null);
         int _saveEpoch;
+        // The title as it stood when the user STARTED editing. Undo's `previousName` must be that, not the live model's
+        // title at commit time: a remote rename landing mid-edit would otherwise record an undo that restores the
+        // OTHER device's name — an edit the user never made and cannot recognise. (The draft itself is never re-seeded
+        // while editing, so the same push cannot overwrite what they are typing either: draft wins, undo remembers.)
+        string _titleAtEditStart = "";
 
         public EditableTitle(Loadable<DetailModel> full, float width, float titleSize, ushort weight, bool displayFace,
                              float lineHeight)
@@ -405,9 +460,19 @@ static class PlaylistInlineEdit
             var m = _full.Value.Value;
             string? uri = m.ContextUri;
             UseLayoutEffect(() => { if (!_editing.Peek()) _draft.Value = m.Title; }, (uri ?? "", m.Title));
+            // JUST CREATED HERE (PlaylistCreateIntent, armed by PlaylistCreateFlow at the navigation edge): open in edit
+            // mode so the numbered default name is selected and ready to be replaced. A layout effect, not a render-time
+            // write — and keyed on the uri, so it fires on the frame the real uri arrives, not on the preview frame
+            // before it. Take() consumes, so returning to the same playlist later does not re-open the editor.
+            UseLayoutEffect(() =>
+            {
+                if (uri is not { Length: > 0 } fresh || !PlaylistCreateIntent.Take(fresh)) return;
+                _titleAtEditStart = m.Title;
+                _editing.Value = true;
+            }, uri ?? "");
             UseEditScroll(this, post, _editing, _editShell, uri ?? "", _draft.Value);
 
-            if (lib is null || !m.Capabilities.CanEditMetadata || uri is null)
+            if (lib is null || !EditableMetadata(m) || uri is null)
             {
                 // The type ramp's paired line height, handed in by the caller — not a multiple of the size, which
                 // produced a different leading for every title size on the page.
@@ -458,7 +523,7 @@ static class PlaylistInlineEdit
                 Cursor = CursorId.IBeam,
                 OnHoverMove = _ => { if (!_hovered.Peek()) _hovered.Value = true; },
                 OnPointerExit = () => { if (_hovered.Peek()) _hovered.Value = false; },
-                OnClick = () => _editing.Value = true,
+                OnClick = () => { _titleAtEditStart = m.Title; _editing.Value = true; },
                 Enter = new EnterExit(Opacity: 0f, Active: true),
                 Children =
                 [
@@ -490,9 +555,14 @@ static class PlaylistInlineEdit
                 Children =
                 [
                     titleRow,
-                    status != StatusIdle
-                        ? new BoxEl { Direction = 0, Width = _width, Justify = FlexJustify.End, Children = [StatusChip(status)] }
-                        : new BoxEl { Width = _width, Height = 0f },
+                    // The trailing status row carries BOTH chips: the transient saving→saved one and the persistent
+                    // "{n} changes pending" one. Neither may participate in the hero title's horizontal measure (see
+                    // above), which is exactly why they live here rather than in titleRow.
+                    new BoxEl
+                    {
+                        Direction = 0, Width = _width, Gap = 6f, Justify = FlexJustify.End,
+                        Children = status != StatusIdle ? [StatusChip(status), PendingChip(uri)] : [PendingChip(uri)],
+                    },
                 ],
             });
         }
@@ -508,7 +578,7 @@ static class PlaylistInlineEdit
             if (next.Length == 0 || next == cur.Title) { _draft.Value = cur.Title; return; }
             _ = RunSaveAsync(async () =>
             {
-                bool saved = await SaveDetailsAsync(lib, uri, next, null, null, cur.Title).ConfigureAwait(false);
+                bool saved = await SaveDetailsAsync(lib, uri, next, null, null, _titleAtEditStart).ConfigureAwait(false);
                 if (saved) PatchDetail(_full, m => m with { Title = next });
                 return saved;
             }, _status, () => ++_saveEpoch, () => _saveEpoch);
@@ -544,7 +614,7 @@ static class PlaylistInlineEdit
             UseLayoutEffect(() => { if (!_editing.Peek()) _draft.Value = m.Description ?? ""; }, (uri ?? "", m.Description ?? ""));
             UseEditScroll(this, post, _editing, _editShell, uri ?? "", _draft.Value);
 
-            if (_maxLines <= 0 || lib is null || !m.Capabilities.CanEditMetadata || uri is null)
+            if (_maxLines <= 0 || lib is null || !EditableMetadata(m) || uri is null)
                 return new BoxEl();
 
             // Fixed edit height (~3 lines): never derive from the read-state line cap (can be huge on a tall rail) and
@@ -750,21 +820,25 @@ static class PlaylistInlineEdit
         catch (Exception ex) { PlaylistEditErrors.Toast(ex); return false; }
     }
 
-    static async Task<bool> SetCollaborativeAsync(LibraryBridge lib, Loadable<DetailModel> full, Services? svc, string uri, bool collaborative)
+    // ── the two permission writes (P2.9) ─────────────────────────────────────────────────────────────────────────
+    // Both are OPTIMISTIC-ONLY. The re-read that used to follow each of them is gone: the STORE header is now the
+    // canonical permission state, so the ack (and any concurrent flip from another device, which arrives as a dealer
+    // permission push) bumps StoreChange(uri) and the open page reloads itself in place — the flyout re-skins off that
+    // model with no request of its own. Re-fetching here bought nothing and raced the push: whichever landed second won.
+
+    static async Task<bool> SetCollaborativeAsync(LibraryBridge lib, Loadable<DetailModel> full, string uri, bool collaborative)
     {
         if (!await SaveDetailsAsync(lib, uri, null, null, collaborative).ConfigureAwait(false)) return false;
         PatchDetail(full, m => m with { Capabilities = m.Capabilities with { IsCollaborative = collaborative } });
-        await RefreshPlaylistDetailAsync(svc, full, uri).ConfigureAwait(false);
         return true;
     }
 
-    static async Task<bool> SetVisibilityAsync(LibraryBridge lib, Loadable<DetailModel> full, Services? svc, string uri, bool isPublic)
+    static async Task<bool> SetVisibilityAsync(LibraryBridge lib, Loadable<DetailModel> full, string uri, bool isPublic)
     {
         try
         {
             await lib.SetPlaylistVisibilityAsync(uri, isPublic).ConfigureAwait(false);
             PatchDetail(full, m => m with { IsPublic = isPublic });
-            await RefreshPlaylistDetailAsync(svc, full, uri).ConfigureAwait(false);
             return true;
         }
         catch (Exception ex) { PlaylistEditErrors.Toast(ex); return false; }
@@ -807,7 +881,7 @@ static class PlaylistInlineEdit
             var handle = UseRef<OverlayHandle?>(null);
 
             var m = _full.Value.Value;
-            if (lib is null || !SpotifyEditsLive(svc) || !m.Capabilities.CanAdministratePermissions || m.ContextUri is null)
+            if (lib is null || !SpotifyEditsLive(svc) || !Live(m) || !m.Capabilities.CanAdministratePermissions || m.ContextUri is null)
                 return new BoxEl { Shrink = 0f };
 
             void Toggle() => OpenAccessFlyout(overlay, lib, svc, _full, () => anchor.Value, handle, FlyoutPlacement.BottomEdgeAlignedLeft);
@@ -894,17 +968,22 @@ static class PlaylistInlineEdit
                     {
                         var c = _full.Value.Peek();
                         _ = RunSaveAsync(
-                            () => SetCollaborativeAsync(_lib, _full, _svc, u, !c.Capabilities.IsCollaborative),
+                            () => SetCollaborativeAsync(_lib, _full, u, !c.Capabilities.IsCollaborative),
                             _collaborativeStatus, () => ++_collaborativeEpoch, () => _collaborativeEpoch);
                     }));
                 content.Add(ToggleRow(
-                    Loc.Get(Strings.Detail.Edit.PublicPlaylist), Loc.Get(Strings.Detail.Edit.PublicHint),
+                    Loc.Get(Strings.Detail.Edit.PublicPlaylist),
+                    // The caption states what the CURRENT setting means rather than what the toggle is for: "public"
+                    // and "private" are the two halves of one sentence about who can reach this playlist, and a static
+                    // hint left the off state unexplained (the reachable audience of a private playlist is exactly its
+                    // collaborators, which is the fact people are actually asking about when they open this flyout).
+                    Loc.Get(m.IsPublic ? Strings.Detail.Access.PublicCaption : Strings.Detail.Access.PrivateCaption),
                     m.IsPublic, publicStatus,
                     () =>
                     {
                         var c = _full.Value.Peek();
                         _ = RunSaveAsync(
-                            () => SetVisibilityAsync(_lib, _full, _svc, u, !c.IsPublic),
+                            () => SetVisibilityAsync(_lib, _full, u, !c.IsPublic),
                             _publicStatus, () => ++_publicEpoch, () => _publicEpoch);
                     }));
             }
@@ -993,7 +1072,7 @@ static class PlaylistInlineEdit
             var accessHandle = UseRef<OverlayHandle?>(null);
 
             var m = _full.Value.Value;
-            if (lib is null || !SpotifyEditsLive(svc) || m.ContextUri is not { } uri || !m.Capabilities.IsOwner)
+            if (lib is null || !SpotifyEditsLive(svc) || m.ContextUri is not { } uri || !Live(m) || !m.Capabilities.IsOwner)
                 return new BoxEl();
 
             void Toggle()
@@ -1031,7 +1110,7 @@ static class PlaylistInlineEdit
         Services? svc, Loadable<DetailModel> full, DetailHandlers h, Func<NodeHandle> anchor, Ref<OverlayHandle?> accessHandle)
     {
         var m = full.Value.Peek();
-        if (overlay is null || lib is null || !SpotifyEditsLive(svc) || m.ContextUri is not { } uri || !m.Capabilities.IsOwner)
+        if (overlay is null || lib is null || !SpotifyEditsLive(svc) || m.ContextUri is not { } uri || !Live(m) || !m.Capabilities.IsOwner)
             return;
         if (m.Capabilities.CanAdministratePermissions)
         {

@@ -58,7 +58,7 @@ static class SidebarPaneInlineControls
         return new BoxEl
         {
             Key = labelKey,
-            Height = 26f, Shrink = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+            Height = SidebarRowGeometry.ChipHeight, Shrink = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
             Padding = new Edges4(10f, 0f, 10f, 0f), Corners = Radii.PillAll,
             Fill = on ? Tok.AccentDefault : Tok.FillSubtleSecondary,
             Role = AutomationRole.Button, Cursor = CursorId.Hand,

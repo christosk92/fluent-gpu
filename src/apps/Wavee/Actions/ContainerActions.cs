@@ -151,27 +151,45 @@ public static class ContainerActions
             if (c.S.Library is not { } lib || c.S.Overlay is not { } overlay) return;
             string uri = c.Target.Uri;
             string current = c.Target.Name;
-            var text = new Signal<string>(current);
-            ContentDialog.Show(overlay, d =>
+            RenameDialog(overlay, Loc.Get(Strings.Menu.RenamePlaylist), current, next =>
             {
-                d.Title = Loc.Get(Strings.Menu.RenamePlaylist);
-                d.PrimaryText = Loc.Get(Strings.Menu.Rename);
-                d.CloseText = Loc.Get(Strings.Auth.Cancel);
-                d.DefaultButton = ContentDialog.DefaultBtn.Primary;
-                d.Content = new BoxEl
-                {
-                    Direction = 1, MinWidth = 320f,
-                    Children = [Embed.Comp(() => new EditableText { Text = text, Width = 320f, Height = 32f })],
-                };
-                d.PrimaryClick = () =>
-                {
-                    string next = text.Peek().Trim();
-                    if (next.Length == 0 || string.Equals(next, current, StringComparison.Ordinal)) return;
-                    _ = RunRename(lib, uri, next, current);
-                };
+                if (string.Equals(next, current, StringComparison.Ordinal)) return;
+                _ = RunRename(lib, uri, next, current);
             });
         },
     };
+
+    /// <summary>The shared single-field naming dialog: a titled <c>ContentDialog</c> over one <c>EditableText</c> seeded
+    /// with <paramref name="current"/>. <paramref name="onCommit"/> receives the TRIMMED text and is never called with
+    /// an empty string; deciding "unchanged" is the caller's, because a create legitimately commits the seed name.
+    ///
+    /// <para><b>Why a dialog and not an inline editor</b> — the question the sidebar's folder rename raises. Sidebar rows
+    /// are recycled, bound <c>ItemsView</c> slots that re-plan on every rootlist push, and a rename lands a rootlist push
+    /// by definition: an inline editor would lose focus mid-push, mid-word. The playlist rename one row away has always
+    /// used this dialog, so the folder verbs joining it is also the consistent answer, not just the safe one.</para></summary>
+    internal static void RenameDialog(IOverlayService overlay, string title, string current, Action<string> onCommit,
+                                      string? primaryText = null)
+    {
+        var text = new Signal<string>(current);
+        ContentDialog.Show(overlay, d =>
+        {
+            d.Title = title;
+            d.PrimaryText = primaryText ?? Loc.Get(Strings.Menu.Rename);
+            d.CloseText = Loc.Get(Strings.Auth.Cancel);
+            d.DefaultButton = ContentDialog.DefaultBtn.Primary;
+            d.Content = new BoxEl
+            {
+                Direction = 1, MinWidth = 320f,
+                Children = [Embed.Comp(() => new EditableText { Text = text, Width = 320f, Height = 32f })],
+            };
+            d.PrimaryClick = () =>
+            {
+                string next = text.Peek().Trim();
+                if (next.Length == 0) return;
+                onCommit(next);
+            };
+        });
+    }
 
     static async Task RunRename(LibraryBridge lib, string uri, string next, string previous)
     {
@@ -238,6 +256,21 @@ public static class ContainerActions
         async Task Run()
         {
             try { await lib.SetPlaylistVisibilityAsync(uri, isPublic).ConfigureAwait(false); }
+            catch (Exception ex) { PlaylistEditErrors.Toast(ex); }
+        }
+    }
+
+    /// <summary>Turn collaboration on/off from a menu. A TOGGLE rather than the absolute pair visibility uses, because
+    /// this one state IS carried by the store header the menu reads at open — so the row can show where it stands.
+    /// The write rides <c>UpdateDetailsAsync(collaborative:)</c>, the same call the detail page's access flyout makes;
+    /// the resulting store change is what re-skins every surface (no re-read here).</summary>
+    internal static void SetCollaborative(ActionServices s, string uri, bool collaborative)
+    {
+        if (s.Library is not { } lib) return;
+        _ = Run();
+        async Task Run()
+        {
+            try { await lib.UpdatePlaylistDetailsAsync(uri, null, null, collaborative).ConfigureAwait(false); }
             catch (Exception ex) { PlaylistEditErrors.Toast(ex); }
         }
     }

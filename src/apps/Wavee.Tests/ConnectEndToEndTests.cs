@@ -17,7 +17,7 @@ public class ConnectEndToEndTests
     public async Task PlayThenPause_ThroughRealSilentHost_ReflectsInProjection()
     {
         var host = new SilentAudioHost();
-        var proj = new NowPlayingProjection("us");
+        var proj = new NowPlayingProjection("us", NotOwnedEntityHydrator.Instance, new InMemoryStore());
         using var c = new PlaybackController(host, new StubTrackResolver(), proj,
             new FakeContextResolver("spotify:track:a"), "us");
 
@@ -36,7 +36,7 @@ public class ConnectEndToEndTests
     [Fact]
     public void ClusterIngest_HotPath_IsBoundedAllocation()
     {
-        var proj = new NowPlayingProjection("us", () => 0);
+        var proj = new NowPlayingProjection("us", NotOwnedEntityHydrator.Instance, new InMemoryStore(), () => 0);
         var cluster = new ClusterDelta("other", true,
             new RemoteTrack("spotify:track:t", "T", "A", "spotify:artist:a", "Al", "spotify:album:al", null, 1000),
             "spotify:playlist:p", true, false, false, 0, 0, 0, 1000, false, RepeatMode.Off,
@@ -51,7 +51,7 @@ public class ConnectEndToEndTests
     public void PositionRead_OnProjection_IsZeroAlloc()
     {
         long now = 0;
-        var proj = new NowPlayingProjection("us", () => now);
+        var proj = new NowPlayingProjection("us", NotOwnedEntityHydrator.Instance, new InMemoryStore(), () => now);
         proj.OnHostSignal(new AudioHostSignal(AudioHostSignalKind.Playing, 0));
         long delta = ConnectHarness.AllocDelta(() => { now += 10; _ = proj.PositionMs; }, iters: 1000);
         Assert.True(delta < 1024, $"position read should be ~zero-alloc, was {delta} bytes / 1000 reads");

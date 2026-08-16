@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Diagnostics;
 using FluentGpu.Animation;
 using FluentGpu.Controls;
@@ -32,15 +32,16 @@ namespace Wavee;
 /// stays reachable even though the stage now carries a full transport of its own: it is the app's ONE persistent
 /// transport, and a surface that hid it would make closing the stage feel like losing playback control.</para>
 ///
-/// <para>MATERIAL — THE STAGE IS SINGLE-THEME: ALWAYS ART-DARK. In both themes. The room is lit by the playing track,
-/// the way every art-forward player lights it, and the whole surface (chrome AND lyrics) paints
-/// <see cref="WaveeOnMedia"/>'s theme-invariant white on top of it. There is no theme branch anywhere in this file.
-/// The stack is: the opaque <c>Tok.MediaStage</c> floor → the σ80 baked-blur artwork, full-bleed and drifting →
+/// <para>MATERIAL — THE STAGE FOLLOWS THE THEME, through ONE seam. Every colour on this surface (chrome AND lyrics)
+/// resolves through <see cref="StageInk"/>, which is the only file that knows the stage's polarity; there is no theme
+/// branch anywhere in this one. The stack is: the opaque <c>StageInk.Floor</c> → the σ80 baked-blur artwork,
+/// full-bleed and drifting →
 /// <see cref="StageChrome.Scrim"/>, ONE continuous vertical gradient over the whole body → <see
 /// cref="StageChrome.ColumnShade"/>, ONE left-anchored layer that deepens the ground under the identity column and
-/// feathers to exactly zero → content. It replaces a theme-flipping base scrim plus a patchwork of boxed per-region
-/// veils, which in light theme read as a collage of dark patches with locatable edges over a white ground — and left
-/// the theme-invariant white title sitting on the near-white part, invisible.</para>
+/// feathers to exactly zero → content. An EARLIER light arm did read as a collage — a theme-flipping scrim under ink
+/// that stayed white, so every region brought its own boxed dark veil and the white title vanished on the pale part.
+/// The difference is that the scrim and the ink now flip TOGETHER, from one source, which is what lets the two paint
+/// layers stay two.</para>
 /// </summary>
 sealed class ImmersiveLyricsSurface : Component
 {
@@ -50,7 +51,10 @@ sealed class ImmersiveLyricsSurface : Component
     // is the gutter INSIDE it, so the text block is ~570 DIP wide — roughly the reference's line length.
     // Internal: StagePanes owns the lyrics column now and clamps against the PANE's width, not the viewport's.
     internal const float ColumnMaxW = 700f;
-    internal const float ColumnGutter = 96f;   // breathing room reserved either side before the clamp bites
+    // The reading column's TRAILING air — the pane's right-hand gutter, so a long line never runs to the window edge.
+    // It was 96 split as two half-gutters back when the column was centred; the leading air is StageLayout.RegionGapW
+    // now, so this is one-sided and half the size.
+    internal const float ColumnGutter = 48f;
 
     // ── the animated cover backdrop ──────────────────────────────────────────────────────────────────────────────────
     // The cover is drawn OVERSIZED and re-centred so the drift can never expose an edge: 130 % of the viewport leaves a
@@ -83,6 +87,7 @@ sealed class ImmersiveLyricsSurface : Component
     // re-centring lives on its PARENT as a DECLARED, viewport-bound transform, so a window resize re-centres the
     // backdrop for free even when no ticker is running (setting off / reduced motion).
     NodeHandle _driftNode;
+    NodeHandle _root;                     // the surface root — the node the shield and the focus re-park park focus on
     long _driftOriginQpc;                 // QPC origin (Stopwatch.GetTimestamp — never TickCount64, which quantises to ~15.6 ms)
     Action? _driftTick;                   // the interval callback, allocated once (never per render)
     IReadSignal<Size2>? _viewport;        // Peeked by the tick — never subscribed from it
@@ -114,14 +119,14 @@ sealed class ImmersiveLyricsSurface : Component
         // A COARSE band signal, resolved in an effect (the PlayerBar idiom): the surface re-renders on a wide⇄compact
         // FLIP, never on a resize pixel, and the hysteresis in StageLayout.Resolve means dragging the window edge across
         // the boundary flips it exactly once per crossing instead of thrashing a mounted LyricsView.
-        var stage = UseSignal(StageLayout.FromWidth(vpSig.Peek().Width));
+        var stage = UseSignal(StageLayout.Seed(vpSig.Peek().Width, ColumnAvailH(vpSig.Peek().Height)));
         var stageSeeded = UseRef(vpSig.Peek().Width > 0f);
         UseSignalEffect(() =>
         {
             var prev = stage.Peek();
-            float w = vpSig.Value.Width;
-            var next = StageLayout.Resolve(w, stageSeeded.Value ? prev : null);
-            if (w > 0f) stageSeeded.Value = true;
+            var vp = vpSig.Value;
+            var next = StageLayout.Resolve(vp.Width, ColumnAvailH(vp.Height), stageSeeded.Value ? prev : null);
+            if (vp.Width > 0f) stageSeeded.Value = true;
             if (!next.Equals(prev)) stage.Value = next;
         });
 
@@ -162,34 +167,63 @@ sealed class ImmersiveLyricsSurface : Component
         return new BoxEl
         {
             Grow = 1f, Direction = 1,
+            // …and it DECLARES ITS PARTICIPATION. Grow alone is not enough: FlexShrink defaults to 0 (Columns.cs, the
+            // Yoga-style default) and MirrorParticipation copies that onto the component's anchor, so a subtree that
+            // measures WIDER than the window is arranged at that width and simply hangs off the edge. This surface
+            // measures exactly that way — the backdrop's oversize frame declares an explicit viewport x 1.30 Width, and
+            // MeasureZStack reports a bounded layer's own size as the stack's, so 1.30x propagated all the way up: the
+            // root was arranged 1534x952 inside a 1180x760 window. The pane region inherited the surplus (1062 wide
+            // where 708 was available), which put the reading column's first glyph at x=717 instead of 584, pushed the
+            // End-justified pivot past the right edge, and took the close button with it.
+            Shrink = 1f, MinWidth = 0f, MinHeight = 0f,
             // Full-bleed POSITIONER: only the body band below is hittable, so the window caption strip and the docked
             // player bar keep receiving input through this layer.
             HitTestPassThrough = true,
             Focusable = true,
+            OnBoundsChanged = RectProbe("root"),
+            OnRealized = h => _root = h,
             OnKeyDown = e =>
             {
                 if (e.Handled || e.KeyCode != Keys.Escape) return;
                 e.Handled = true;
                 Close(ui);
             },
+            // NEVER LEAVE FOCUS NULL WHILE THE SURFACE IS UP. Escape routes to the FOCUSED node
+            // (InputDispatcher.OnKey), and an unhandled Escape CLEARS focus — after which the dispatcher's whole
+            // focused-routing block is skipped and Escape is not accelerator-eligible, so a second Escape does
+            // literally nothing. Any path that drops focus to nothing therefore disarms the keyboard exit until the
+            // user happens to click something focusable again. This re-parks focus on the surface in exactly that
+            // case.
+            // It fires only on a real subtree BOUNDARY crossing (GotFocus/LostFocus are routed through ancestors), and
+            // the engine explicitly tolerates a LostFocus handler re-moving focus. Focus moving to another REAL node —
+            // the player bar's play button, the caption search field — leaves GetFocus non-null and is a NO-OP here:
+            // this must not fight the live chrome bands for focus, only refuse the null.
+            OnFocusChanged = got =>
+            {
+                if (got || _root.IsNull) return;
+                if ((hooks.GetFocus?.Invoke() ?? default).IsNull) hooks.FocusNode?.Invoke(_root, false);
+            },
             Children =
             [
                 new BoxEl { Height = TitleBar.ExpandedHeight, Shrink = 0f, HitTestPassThrough = true },
                 new BoxEl
                 {
+                    OnBoundsChanged = RectProbe("body"),
                     Grow = 1f, Shrink = 1f, MinHeight = 0f, ZStack = true, ClipToBounds = true,
                     // The opaque floor under the (possibly missing / still-decoding) cover: the surface must never let
                     // the page it covers show through. Bound so a live re-theme re-fires it in place.
-                    Fill = Prop.Of(() => Tok.FillSolidBase),
+                    Fill = Prop.Of(() => StageInk.Floor),
                     Children =
                     [
                         Backdrop(vpSig, stage, art, blurHash),
+                        Shield(hooks),
                         new BoxEl
                         {
+                            OnBoundsChanged = RectProbe("content"),
                             Grow = 1f, Direction = 1, MinHeight = 0f, MinWidth = 0f,
                             Children =
                             [
-                                TopBar(track, ui, svc?.Settings, secondary, secondaryAvailable),
+                                TopBar(track, ui, svc?.Settings, secondary, secondaryAvailable, stage.Value.Wide),
                                 StageBody(stage),
                             ],
                         },
@@ -204,6 +238,58 @@ sealed class ImmersiveLyricsSurface : Component
     {
         if (ui is not null) ui.ImmersiveLyrics.Value = false;
     }
+
+    // ── FG_STAGE_RECTS=1: the stage's ARRANGED geometry, by name ─────────────────────────────────────────────────────
+    // The engine has no per-node key store (Reconciler.DebugKeyOf only knows keep-alive/relative anchors), so a generic
+    // layout dump cannot name what it prints. This does the naming from the app side, where the names exist: one
+    // Element.OnBoundsChanged per region, edge-triggered by the engine, printing the rect the region ACTUALLY got.
+    // It is what turns "the lyrics are clipped" into "the pane region is N wide and the column inside it is M".
+    static readonly bool s_stageRects = Diag.EnvFlag("FG_STAGE_RECTS");
+    internal static bool StageRectsOn => s_stageRects;
+
+    /// <inheritdoc cref="s_stageRects"/>
+    internal static Action<RectF>? RectProbe(string name) =>
+        s_stageRects ? r => WaveeLog.Instance.Info("stage", $"rect {name} = {r.X:0.##},{r.Y:0.##} {r.W:0.##}x{r.H:0.##}") : null;
+
+    /// <summary>The surface's HIT SHIELD — one childless, full-bleed layer whose only job is to be the hit target
+    /// anywhere the stage's own content is not.</summary>
+    ///
+    /// <remarks>
+    /// <para><b>THE DEFECT IT FIXES: the stage was transparent to CLICKS.</b> <c>InputDispatcher.Hit</c> is
+    /// handler-GATED — a node self-hits only if its <c>HandlerMask</c> intersects the `hitAnywhere` set. This surface's
+    /// root is <c>HitTestPassThrough</c> with no click handler, and the body band carries only a <c>Fill</c> and a
+    /// <c>ZStack</c>, so neither was a hit target. <c>Hit</c> keeps the LAST non-null child across the shell's ZStack,
+    /// so when this layer contributed null the hit resolved from the CONTENT CARD UNDERNEATH survived. A click on the
+    /// stage's scrim could therefore activate a control on the hidden page — a track row under the pointer would start
+    /// a different song — and focus either moved into that page or was cleared outright, which is what made Escape
+    /// stop closing the surface.</para>
+    ///
+    /// <para><b>It must stay CHILDLESS.</b> Same contract, for the same mechanism, as
+    /// <c>StageIdentity.ContextShield</c>: a container that owns a pointer handler becomes the hover/press target for
+    /// every gap in its subtree, and <c>AnimScheduler.SetHover</c> then drives that state into every descendant
+    /// carrying a reveal or scale affordance — which is every <see cref="StageChrome"/> button. A childless layer's
+    /// cascade reaches exactly nothing.</para>
+    ///
+    /// <para><b>It must carry NO <c>Fill</c> and NO <c>Gradient</c>.</b> The scrim system is complete in two full-bleed
+    /// paint layers (<see cref="StageChrome.Scrim"/> + <see cref="StageChrome.ColumnShade"/>); a third painted layer
+    /// here would be exactly the per-region veil patchwork that was removed. The shield is input-only.</para>
+    ///
+    /// <para>Ordering: it sits AFTER the backdrop and BEFORE the content, but that is only for readability — since
+    /// <c>Hit</c> keeps the last matching child, every real control still wins over it regardless.</para>
+    /// </remarks>
+    const string ShieldKey = "stage:shield";
+
+    /// <inheritdoc cref="ShieldKey"/>
+    Element Shield(InputHooks hooks) => new BoxEl
+    {
+        Key = ShieldKey,
+        AlignSelf = FlexAlign.Stretch, JustifySelf = FlexAlign.Stretch,
+        // OnClick is what sets ClickBit and so makes this a hit target at all — the absorbing IS the fix. Parking
+        // focus back on the root is the second half: it re-arms the surface's own Escape handler after any click on
+        // dead space. (NearestFocusable would walk shield → body → root anyway, since the root is Focusable; the
+        // explicit call states the intent rather than relying on that walk.)
+        OnClick = () => { if (!_root.IsNull) hooks.FocusNode?.Invoke(_root, false); },
+    };
 
     // ── the two regions ──────────────────────────────────────────────────────────────────────────────────────────────
     // ONE tree, one reflow flag (StageLayout.Wide): the row direction is the only thing the band changes here, and the
@@ -222,6 +308,9 @@ sealed class ImmersiveLyricsSurface : Component
             Direction = (byte)(L.Wide ? 0 : 1),
             Grow = 1f, Shrink = 1f, MinHeight = 0f, MinWidth = 0f,
             AlignItems = FlexAlign.Stretch,
+            // The air between the two regions, as the band's own Gap — the ONE place it is spent, accounted for by
+            // FlexLayout in both measure and arrange. The compact shape stacks the two vertically and wants none.
+            Gap = L.Wide ? StageLayout.RegionGapW : 0f,
             Children =
             [
                 // ── THE IDENTITY'S PARTICIPATION LIVES HERE, not inside the component ─────────────────────────────────
@@ -239,6 +328,7 @@ sealed class ImmersiveLyricsSurface : Component
                 new BoxEl
                 {
                     Key = "stage:identity",
+                    OnBoundsChanged = RectProbe("identity"),
                     Direction = 1, MinHeight = 0f, MinWidth = 0f,
                     Grow = 0f, Shrink = 0f,
                     // Compact claims no column at all (StageLayout.CompactStage.LayoutWidth is 0) — the header row is
@@ -249,6 +339,7 @@ sealed class ImmersiveLyricsSurface : Component
                 new BoxEl
                 {
                     Key = "stage:panes",
+                    OnBoundsChanged = RectProbe("panes"),
                     Grow = 1f, Shrink = 1f, MinHeight = 0f, MinWidth = 0f,
                     Children = [Embed.Comp(() => new StagePanes())],
                 },
@@ -261,7 +352,8 @@ sealed class ImmersiveLyricsSurface : Component
     // the right edge under the caption veil. The secondary-line toggle sits immediately left of the close button — the
     // same relative position it takes in the rail header — and is shown only when a second line is actually available
     // AND the lyrics pane is the one on screen (a translation toggle over a queue is chrome for a pane you cannot see).
-    static Element TopBar(Track? track, ShellUi? ui, IAppSettings? settings, int secondary, int secondaryAvailable)
+    static Element TopBar(Track? track, ShellUi? ui, IAppSettings? settings, int secondary, int secondaryAvailable,
+                          bool wide)
     {
         bool lyricsPane = StagePane.Current.Value == StagePane.Lyrics;
         var accent = StageChrome.AccentFor(track);
@@ -280,30 +372,34 @@ sealed class ImmersiveLyricsSurface : Component
         return new BoxEl
         {
             Direction = 0, AlignItems = FlexAlign.Start, Gap = Spacing.S, Shrink = 0f,
-            Height = StageChrome.TopBandH,
-            Padding = new Edges4(Spacing.L, Spacing.M, Spacing.M, Spacing.M),
+            Height = StageChrome.TopBandFor(wide),
+            // 16 top / 16 right — the reference composition's inset for the collapse affordance.
+            Padding = new Edges4(Spacing.L, Spacing.L, Spacing.L, Spacing.M),
             // NO veil of its own. The scrim's top deepening already resolves under this band, across a feather many
             // times its height — a boxed gradient here is exactly the dark band across the top that this wave removed.
             Children = kids.ToArray(),
         };
     }
 
-    // One shape for the two buttons in this band, so the secondary-line toggle and the close button read as a pair.
-    //
-    // THE WAY OUT HAS TO BE VISIBLE. These two used to be StageChrome.Glyph — the stage's PLATELESS control, whose rest
-    // fill is GlassRest at alpha ZERO. That is right for a button standing on the scrim's own deepening (the transport,
-    // the column), and wrong here: this band is the thinnest part of the scrim and it sits directly over whatever the
-    // cover happens to be, so on bright art the only exit from a fullscreen surface was an unplated white glyph on
-    // white — invisible until you hovered the pixel it occupies. They are now StageChrome.ScrimFab: 40-DIP CIRCLES
-    // (the sanctioned on-media shape) carrying the on-media scrim plate AT REST plus the hairline ring — the same
-    // recipe MediaCard's cover FABs use over the same problem. Escape still closes the surface; this is the pointer's
-    // half of that affordance. The latched arm keeps the accent glyph the rail header's toggle speaks.
+    // The SECONDARY control in this band — the translation / romanization toggle. A 40-DIP StageChrome.ScrimFab: the
+    // on-media scrim plate at rest plus the hairline ring, the recipe MediaCard's cover FABs use, because this band
+    // sits over whatever the cover happens to be and a plateless glyph on bright art is invisible. The latched arm
+    // keeps the accent glyph the rail header's toggle speaks.
     static Element GlyphButton(string glyph, string tip, Action onClick, ColorF accent, bool active = false) =>
         ToolTip.Wrap(StageChrome.ScrimFab(glyph, onClick, RightRail.HeaderGlyph, accent, latched: active), tip);
 
-    // The "leave fullscreen" glyph — the deliberate counterpart of the rail header's Icons.FullScreen expand button.
+    // THE WAY OUT — and it is deliberately NOT the same shape as the button beside it.
+    //
+    // It was a 40-DIP ScrimFab too, matched to the toggle, and it could not be found: the scrim's own top deepening is
+    // already 76% black on every cover (StageLayout.ScrimTopA), so a 55%-black scrim plate on top of it has no edge at
+    // all. Matching the secondary control was the mistake — the exit outranks it. StageChrome.ExitFab is a 44-DIP disc
+    // whose ground is made of INK rather than of scrim, with a card shadow (the one separation channel that survives
+    // an inverted ink ladder), and the prototype's collapse CHEVRON rather than the two-rect BackToWindow glyph, which
+    // is a stronger read at this size.
+    //
+    // The tooltip names the KEYBOARD half. Escape is the fast way out and nothing else in the product teaches it.
     static Element CloseButton(Action onClick, ColorF accent) =>
-        GlyphButton(Icons.BackToWindow, Loc.Get(Strings.Player.CloseLyrics), onClick, accent);
+        ToolTip.Wrap(StageChrome.ExitFab(Icons.ChevronDown, onClick), Loc.Get(Strings.Player.CloseLyricsHint));
 
     // ── the backdrop stack ───────────────────────────────────────────────────────────────────────────────────────────
     // The backdrop fills the BODY band, not the whole window — the caption strip and the player bar are left to the
@@ -311,15 +407,21 @@ sealed class ImmersiveLyricsSurface : Component
     static float BodyW(float vpW) => MathF.Max(1f, vpW);
     static float BodyH(float vpH) => MathF.Max(1f, vpH - TitleBar.ExpandedHeight - WaveeSize.PlayerBarH);
 
+    /// <summary>The height the identity column actually gets: the body band less the surface's own top band. ONE
+    /// definition, passed into <see cref="StageLayout.Resolve"/>, so the allocator's height ladder and the tree that
+    /// realizes it cannot disagree about how much room there is — the same reason the width ladder takes the viewport
+    /// width rather than re-deriving it.</summary>
+    // The WIDE band height, unconditionally — and that is correct rather than a shortcut: the height ladder only ever
+    // runs on the wide path (Resolve returns CompactStage from the WIDTH test before it looks at height at all), so the
+    // compact band's smaller height can never be an input to it. Reading the live layout here would make the two
+    // mutually recursive for no gain.
+    static float ColumnAvailH(float vpH) => MathF.Max(0f, BodyH(vpH) - StageChrome.TopBandH);
+
     Element Backdrop(IReadSignal<Size2> vpSig, IReadSignal<StageLayout> stage, string art, string? blurHash)
     {
-        // One delegate per axis, shared by the frame's size AND its centring transform (cold path; no per-frame cost).
-        Func<float> frameW = () => BodyW(vpSig.Value.Width) * Overscale;
-        Func<float> frameH = () => BodyH(vpSig.Value.Height) * Overscale;
-
         Element cover = art.Length > 0
             ? Ui.Image(art, ImageFit.Cover, aspect: float.NaN, decodePx: 512f, corners: 0f,
-                placeholder: Surfaces.PlaceholderFor(art), blurHash: blurHash,
+                placeholder: StageInk.ArtStandIn(art), blurHash: blurHash,
                 transition: ImageTransition.Fade(220f)) with
                 {
                     AlignSelf = FlexAlign.Stretch, JustifySelf = FlexAlign.Stretch,
@@ -328,7 +430,7 @@ sealed class ImmersiveLyricsSurface : Component
             : new BoxEl
             {
                 AlignSelf = FlexAlign.Stretch, JustifySelf = FlexAlign.Stretch,
-                Fill = Surfaces.PlaceholderFor(null),
+                Fill = StageInk.ArtStandIn(null),
             };
 
         return new BoxEl
@@ -338,17 +440,31 @@ sealed class ImmersiveLyricsSurface : Component
             [
                 new BoxEl
                 {
-                    // The OVERSIZE + RE-CENTRE frame. A ZStack lays an explicitly-sized child out at its own origin, so
-                    // this one starts flush top-left and the transform pulls it back by half the overhang. That
-                    // transform is DECLARED (engine-owned, viewport-bound), which is what keeps the STATIC backdrop
-                    // resize-correct with no ticker running; the drift carrier below declares none, so the two never
-                    // fight over one LocalTransform.
-                    ZStack = true, HitTestVisible = false, Shrink = 0f,
-                    Width = Prop.Of(frameW),
-                    Height = Prop.Of(frameH),
-                    Transform = Prop.Of(() => Affine2D.Translation(
-                        -(Overscale - 1f) * 0.5f * BodyW(vpSig.Value.Width),
-                        -(Overscale - 1f) * 0.5f * BodyH(vpSig.Value.Height))),
+                    // The OVERSIZE frame — a PAINT scale, never a layout size.
+                    //
+                    // It used to declare Width/Height = viewport x 1.30 plus a compensating translation. That is the
+                    // same picture, but it states the overscale as GEOMETRY, and geometry propagates: MeasureZStack
+                    // reports a bounded layer's own explicit size as the stack's size (it is never min'd back against
+                    // the width it was offered), so 1.30x climbed the ZStacks into the surface root, which was then
+                    // arranged 1534x952 inside a 1180x760 window because FlexShrink defaults to 0. Everything the user
+                    // reported followed from that one number: the pane region got 1062 where 708 was available, so the
+                    // reading column's first glyph landed at x=717 instead of 584 and the lyrics ran off the right
+                    // edge; the End-justified pivot and the close button went with it; and the body band extended 192
+                    // DIP below the window, which is what cut the output-device line off the bottom of the column.
+                    //
+                    // As a SCALE about the box's own centre it is what it always was conceptually — a compositor
+                    // transform on a slot-sized layer — so it costs layout nothing on either axis and cannot escape
+                    // the surface again. Still DECLARED (engine-owned, viewport-bound), so the static backdrop stays
+                    // resize-correct with no ticker running, and the drift carrier below still declares none, so the
+                    // two never fight over one LocalTransform.
+                    ZStack = true, HitTestVisible = false,
+                    AlignSelf = FlexAlign.Stretch, JustifySelf = FlexAlign.Stretch,
+                    Transform = Prop.Of(() =>
+                    {
+                        float cx = BodyW(vpSig.Value.Width) * 0.5f, cy = BodyH(vpSig.Value.Height) * 0.5f;
+                        return new Affine2D(Overscale, 0f, 0f, Overscale,
+                                            cx * (1f - Overscale), cy * (1f - Overscale));
+                    }),
                     Children =
                     [
                         new BoxEl
@@ -398,13 +514,17 @@ sealed class ImmersiveLyricsSurface : Component
         float vw = BodyW(vp.Width), vh = BodyH(vp.Height);
         float sinA = MathF.Sin(Tau * t / DriftPeriodASec);
         float sinB = MathF.Sin(Tau * t / DriftPeriodBSec);
-        float dx = DriftAmpFrac * vw * sinA;
-        float dy = DriftAmpFrac * vh * sinB;
+        // Divided by Overscale because this carrier now sits UNDER the frame's 1.30x paint scale (the frame is
+        // slot-sized; the overscale is a transform, not a Width). Every DIP written here is magnified by that scale on
+        // the way to the screen, so the division is what keeps the felt drift byte-identical to the pre-fix geometry.
+        float dx = DriftAmpFrac * vw * sinA / Overscale;
+        float dy = DriftAmpFrac * vh * sinB / Overscale;
         // The scale wobble rides the SAME two sinusoids, so it inherits their incommensurability instead of adding a
         // third period that could beat against them. Range: exactly ±DriftScaleAmp.
         float s = 1f + DriftScaleAmp * 0.5f * (sinB - sinA);
-        // Scale about the carrier's own centre, then translate: T(dx,dy) ∘ T(c) ∘ S(s) ∘ T(-c).
-        float cx = vw * Overscale * 0.5f, cy = vh * Overscale * 0.5f;
+        // Scale about the carrier's own centre, then translate: T(dx,dy) ∘ T(c) ∘ S(s) ∘ T(-c). The carrier's box is
+        // the body slot now, not the oversized frame, so its centre is the slot's centre.
+        float cx = vw * 0.5f, cy = vh * 0.5f;
         var next = new Affine2D(s, 0f, 0f, s, cx * (1f - s) + dx, cy * (1f - s) + dy);
 
         ref NodePaint p = ref scene.Paint(h);

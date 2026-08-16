@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Runtime.CompilerServices;
 using Wavee;
@@ -80,6 +80,24 @@ public class MenuGrammarTests
         Assert.Contains("GoToArtistsItem", rows, StringComparison.Ordinal);
         Assert.Contains("ShareItem(in ctx)", rows, StringComparison.Ordinal);
         Assert.Contains("TrackActions.RemoveFromThisPlaylist", rows, StringComparison.Ordinal);
+    }
+
+    /// <summary>The container-navigation row is ONE row routed by kind: a song offers Go-to-album, an EPISODE offers
+    /// Go-to-podcast instead (it carries its SHOW in the album slot — EpisodeAsTrack, design §1.5 — so Go-to-album
+    /// would open the album page of a podcast). The two are mutually exclusive by construction (else-if), which is the
+    /// regression this pins: an episode row that offers both, or that keeps offering the album one.</summary>
+    [Fact]
+    public void TrackRows_RouteTheContainerRowByKind()
+    {
+        string rows = Body(Menus(), "public static IReadOnlyList<MenuFlyoutItem> TrackRows");
+        Assert.Contains("ActionRules.CanGoToAlbum(in ctx.Target)", rows, StringComparison.Ordinal);
+        Assert.Contains("else if", rows, StringComparison.Ordinal);
+        Assert.Contains("GoToPodcastItem(ctx.S, in ctx.Target)", rows, StringComparison.Ordinal);
+
+        // …and the podcast row navigates to the SHOW route, never to an album/episode one.
+        string item = Body(Menus(), "static MenuFlyoutItem? GoToPodcastItem");
+        Assert.Contains("ActionRules.CanGoToPodcast(in target)", item, StringComparison.Ordinal);
+        Assert.Contains("\"show:\" + uri", item, StringComparison.Ordinal);
     }
 
     /// <summary>The ORDER: collection → navigation → Share → surface extras → destructive last.</summary>
@@ -207,6 +225,29 @@ public class MenuGrammarTests
             "Delete playlist stays destructive-last");
     }
 
+    /// <summary>Visibility ▸ reports where the playlist actually stands. The sidebar summary that feeds this menu
+    /// carries no visibility at all, so the rows used to render unchecked whatever the state was; they now read the
+    /// STORE header (the canonical permission state — seeded on open, flipped by a dealer push) at menu-open, and the
+    /// submenu gained the Collaborative toggle that used to exist only inside the detail page's access flyout.</summary>
+    [Fact]
+    public void SidebarVisibilitySubmenu_ChecksTheLiveStateAndCarriesTheCollaborativeToggle()
+    {
+        string body = Body(Menus(), "static MenuFlyoutItem VisibilityItem(ActionServices s");
+
+        // Read the header — never a GET, and never a guessed check mark.
+        Assert.Contains("RealStore?.GetPlaylist(uri)", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("Async(", body, StringComparison.Ordinal);
+        // The absolute pair stays absolute (each row SETS what it names) but is now checkable…
+        Assert.Contains("MenuFlyoutItem.RadioItem(Loc.Get(Strings.Menu.MakePublic)", body, StringComparison.Ordinal);
+        Assert.Contains("MenuFlyoutItem.RadioItem(Loc.Get(Strings.Menu.MakePrivate)", body, StringComparison.Ordinal);
+        // …and no store (a fake backend / logged out) means NO check mark rather than a fabricated one.
+        Assert.Contains("known && isPublic", body, StringComparison.Ordinal);
+        Assert.Contains("known && !isPublic", body, StringComparison.Ordinal);
+        // The third state the header carries, as a real toggle.
+        Assert.Contains("MenuFlyoutItem.Toggle(", body, StringComparison.Ordinal);
+        Assert.Contains("ContainerActions.SetCollaborative(s, uri, !collaborative)", body, StringComparison.Ordinal);
+    }
+
     /// <summary>Every sidebar entity menu (projected row, folder, route, embed card) passes the pane's layout extras
     /// through the same <c>SidebarEntry</c> extras slot — a row that can move by drag can also move from the menu.</summary>
     [Fact]
@@ -273,15 +314,47 @@ public class MenuGrammarTests
     [Theory]
     [InlineData("Actions", "Menus.cs", "static void AddTo(ActionServices s")]
     [InlineData("Features/Detail", "PlaylistPicker.cs", "void AddTo(string uri, string name)")]
+    // …and the three EDIT paths the same defect class was found on (plan P1.8): remove was fire-and-forget, and both
+    // reorder commits discarded the move task outright.
+    [InlineData("Actions", "TrackActions.cs", "internal static void RemoveRows(ActionServices s")]
+    [InlineData("Features/DragDrop", "WaveeResourceDrag.cs", "public static Task<bool> DepositTracksAsync(")]
+    [InlineData("Features/Detail", "DetailTracks.cs", "bool TryBlockMove(int delta)")]
     public void EveryAddToPlaylistPath_AwaitsAndMapsItsFailure(string dir, string file, string signature)
     {
         string body = Body(Source(dir, file), signature);
 
         Assert.Contains("await ", body, StringComparison.Ordinal);
         Assert.Contains("catch (Exception ex)", body, StringComparison.Ordinal);
-        Assert.Contains("PlaylistEditErrors.Toast(ex)", body, StringComparison.Ordinal);
-        // The fire-and-forget shape, verbatim: no `_ =` discard of the add.
+        // `Toast(ex` rather than `Toast(ex)`: the edit paths pass a VERB so a lost reorder race gets its own sentence.
+        Assert.Contains("PlaylistEditErrors.Toast(ex", body, StringComparison.Ordinal);
+        // The fire-and-forget shapes, verbatim.
         Assert.DoesNotContain("_ = lib.AddTracksAsync", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("_ = lib.MovePlaylistRowsAsync", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("_ = lib.RemovePlaylistRowsAsync", body, StringComparison.Ordinal);
+    }
+
+    /// <summary>No reorder commit anywhere still discards its move task. The two that did (the same-list drag deposit
+    /// and Alt+Up/Alt+Down) both rolled the membership back on refusal — the rows visibly snapped home — and said
+    /// nothing at all.</summary>
+    [Fact]
+    public void NoReorderPath_DiscardsItsMoveTask()
+    {
+        Assert.Equal(0, Count(Source("Features/Detail", "DetailTracks.cs"), "_ = lib.MovePlaylistRowsAsync"));
+        Assert.Equal(0, Count(Source("Features/DragDrop", "WaveeResourceDrag.cs"), "_ = lib.MovePlaylistRowsAsync"));
+    }
+
+    /// <summary>A completed REMOVE offers Undo, exactly as a completed deposit does: it is the edit most often made by
+    /// accident, and the only way back used to be the notification panel.</summary>
+    [Fact]
+    public void ACompletedRemoveOffersUndo()
+    {
+        string toast = Body(Menus(), "internal static void ToastRemoved(");
+        Assert.Contains("Strings.Notifications.Undo", toast, StringComparison.Ordinal);
+        Assert.Contains("UndoByIdAsync", toast, StringComparison.Ordinal);
+
+        string remove = Body(Source("Actions", "TrackActions.cs"), "internal static void RemoveRows(ActionServices s");
+        Assert.Contains("RemovePlaylistRowsTrackedAsync", remove, StringComparison.Ordinal);
+        Assert.Contains("Menus.ToastRemoved", remove, StringComparison.Ordinal);
     }
 
     /// <summary>No deposit path leaks a raw <c>ex.Message</c> — engine prose is not a sentence a listener can act on, and
@@ -291,6 +364,10 @@ public class MenuGrammarTests
     {
         Assert.Equal(0, Count(Menus(), "Toast.Show(ex.Message"));
         Assert.Equal(0, Count(Source("Features/Detail", "PlaylistPicker.cs"), "Toast.Show(ex.Message"));
+        // The MAP itself: PlaylistEditErrors used to end in `_ => ex.Message`, so every failure its string sniffing did
+        // not recognise was shown to the user as engine prose. Neither file may mention ex.Message in any form now.
+        Assert.Equal(0, Count(Source("Features/Detail", "PlaylistEditErrors.cs"), "ex.Message"));
+        Assert.Equal(0, Count(Source("Features/Detail", "PlaylistEditErrorKinds.cs"), "ex.Message"));
     }
 
     /// <summary>A completed deposit offers <b>Undo</b>, not "Open": the user is mid-flow on the page they filed from and
@@ -325,16 +402,177 @@ public class MenuGrammarTests
     }
 
     /// <summary>A one-click "New playlist" is named "{base} #N", never another playlist literally called "New playlist"
-    /// (three of those in a sidebar are indistinguishable).</summary>
+    /// (three of those in a sidebar are indistinguishable) — and it is named that in exactly ONE place. Every surface
+    /// that creates a playlist now routes through <c>PlaylistCreateFlow.Create</c>: the two menu deposits, the picker's
+    /// inline row, the sidebar's drop-to-create target and all three sidebar designs. The three DESIGNS are the reason
+    /// this test grew: each one used to POST an unnumbered <c>Strings.Sidebar.NewPlaylist</c> of its own and await the
+    /// round trip before navigating.</summary>
     [Theory]
-    [InlineData("static void CreateAndAdd(ActionServices s")]
-    [InlineData("static void CreateAndDeposit(ActionServices s")]
-    [InlineData("static void CreateAndMove(ActionServices s")]
-    public void EveryCreatePath_UsesTheNumberedDefaultName(string signature)
+    [InlineData("Actions", "Menus.cs", "static void CreateAndAdd(ActionServices s")]
+    [InlineData("Actions", "Menus.cs", "static void CreateAndDeposit(ActionServices s")]
+    [InlineData("Actions", "Menus.cs", "static void CreateAndMove(ActionServices s")]
+    [InlineData("Features/Detail", "PlaylistPicker.cs", "void CreateAndAdd()")]
+    [InlineData("Features/Sidebar/Pane", "SidebarPane.cs", "internal void CreatePlaylistFromDrag(")]
+    [InlineData("Features/Sidebar", "WaveeSidebar.cs", "void CreatePlaylist()")]
+    [InlineData("Features/Sidebar/Modes", "CuratedSidebar.cs", "void CreatePlaylist()")]
+    [InlineData("Features/Sidebar/Modes/LibraryV3", "LibraryV3Session.cs", "public void CreatePlaylist()")]
+    public void EveryCreatePath_UsesTheNumberedDefaultName(string dir, string file, string signature)
     {
-        string body = Body(Menus(), signature);
-        Assert.Contains("NextPlaylistName(s)", body, StringComparison.Ordinal);
+        string body = Body(Source(dir, file), signature);
+        Assert.Contains("PlaylistCreateFlow.Create(", body, StringComparison.Ordinal);
+        // The shapes this replaced: the awaited transitional bridge, and the unnumbered per-design default name.
+        Assert.DoesNotContain("CreatePlaylistAsync", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("Loc.Get(Strings.Sidebar.NewPlaylist)", body, StringComparison.Ordinal);
         Assert.DoesNotContain("Loc.Get(Strings.Detail.NewPlaylist)", body, StringComparison.Ordinal);
+
+        // …and the ONE path is what mints the numbered name.
+        Assert.Contains("Menus.NextPlaylistName(s)", Source("Actions", "PlaylistCreateFlow.cs"), StringComparison.Ordinal);
+    }
+
+    /// <summary>The transitional awaited bridge is GONE, not merely bypassed — a second create path is exactly how the
+    /// six copies this pass deleted came to exist.</summary>
+    [Fact]
+    public void NoCreatePathAwaitsTheOldBridge()
+    {
+        Assert.Equal(0, Count(Source("App", "LibraryBridge.cs"), "CreatePlaylistAsync"));
+        Assert.Equal(0, Count(Menus(), "CreatePlaylistAsync"));
+    }
+
+    /// <summary>The create is observed, never awaited: the page is navigated to on the SYNCHRONOUS seam result, and
+    /// <c>Completion</c> decides afterwards whether it became real. A rejected create gets one mapped sentence and a
+    /// Retry (a NEW id, the same name) — never the raw engine text — and the open page learns through the bridge, so
+    /// its notice strip outlives the toast.</summary>
+    [Fact]
+    public void EveryCreatePath_ObservesCompletionAndMapsItsFailure()
+    {
+        string flow = Source("Actions", "PlaylistCreateFlow.cs");
+
+        string observe = Body(flow, "static void Observe(ActionServices s");
+        Assert.Contains("await completion", observe, StringComparison.Ordinal);
+        Assert.Contains("catch (Exception ex)", observe, StringComparison.Ordinal);
+        Assert.Contains("Failed(", observe, StringComparison.Ordinal);
+
+        string failed = Body(flow, "static void Failed(ActionServices s");
+        Assert.Contains("SettleCreate(uri, ok: false)", failed, StringComparison.Ordinal);
+        Assert.Contains("Strings.Detail.Edit.CreateFailed", failed, StringComparison.Ordinal);
+        Assert.Contains("Strings.Common.Retry", failed, StringComparison.Ordinal);
+        Assert.Equal(0, Count(flow, "ex.Message"));
+
+        // The page's notice rule is fed by the bridge, so CreateFailed is reachable at all (it used to be hard-coded off).
+        string page = Source("Features/Detail", "DetailPage.cs");
+        Assert.Contains("IsCreatePending(", page, StringComparison.Ordinal);
+        Assert.Contains("IsCreateFailed(", page, StringComparison.Ordinal);
+        Assert.Equal(0, Count(page, "isCreatePending: false)"));
+    }
+
+    /// <summary>The folder row menu, shared by Classic / Library V3 / Curated through one builder. ORDER: the disclosure
+    /// and creation verbs first, then the management block (Pin · Rename · Move out of {parent}), then Delete folder,
+    /// destructive-LAST exactly as a playlist's Delete is.
+    ///
+    /// <para>These rows used to be [Expand/Collapse · Pin] and nothing else, with a comment saying folder CRUD must not
+    /// appear "not even disabled" (the old locked decision 9). The wire landed with P3, so the lock is lifted and the
+    /// verbs are real commands — which is what <c>FolderActions.</c> being present here proves.</para></summary>
+    [Fact]
+    public void SidebarFolderRows_CarryTheFolderVerbs()
+    {
+        string rows = Body(Menus(), "static List<MenuFlyoutItem> SidebarFolderRows");
+        foreach (string verb in new[]
+                 {
+                     "Strings.Sidebar.Item.CollapseFolder", "Strings.Sidebar.NewPlaylistHere",
+                     "Strings.Sidebar.NewFolderInside", "PinActions.RowForEntry",
+                     "Strings.Sidebar.RenameFolder", "Strings.Menu.MoveOutOf", "Strings.Sidebar.DeleteFolder",
+                 })
+            Assert.Contains(verb, rows, StringComparison.Ordinal);
+
+        // Real commands, not promises.
+        Assert.Contains("FolderActions.", rows, StringComparison.Ordinal);
+
+        int rename = rows.IndexOf("Strings.Sidebar.RenameFolder", StringComparison.Ordinal);
+        int delete = rows.IndexOf("Strings.Sidebar.DeleteFolder", StringComparison.Ordinal);
+        Assert.True(rename >= 0 && delete > rename, "Rename comes before Delete");
+        // …and nothing is added after Delete: destructive-last, with no verb trailing it.
+        Assert.DoesNotContain("rows.Add(", rows[delete..], StringComparison.Ordinal);
+
+        // The create row keeps CLICK = new playlist and gains the folder verb as a menu.
+        string createRow = Body(Source("Features/Sidebar/Pane", "SidebarPaneSlot.cs"), "Element CreateRow(SidebarSectionSpec section)");
+        Assert.Contains("Strings.Sidebar.CreateFolder", createRow, StringComparison.Ordinal);
+        Assert.Contains("FolderActions.NewFolder(", createRow, StringComparison.Ordinal);
+        Assert.Contains("OnClick = click", createRow, StringComparison.Ordinal);
+
+        // The LOCK CLAIM is gone everywhere it was stated (the number may still be named, as the thing that was lifted).
+        Assert.Equal(0, Count(Menus(), "NO folder CRUD"));
+        Assert.Equal(0, Count(Menus(), "must not appear, not even disabled"));
+        Assert.Equal(0, Count(Source("Features/Sidebar/Pane", "SidebarPaneSlot.cs"), "Folder creation is deliberately absent"));
+        Assert.Equal(0, Count(Source("Features/Sidebar/Modes/LibraryV3", "LibraryV3View.cs"), "a tree it cannot write"));
+        Assert.Contains("<b>LIFTED</b>", Menus(), StringComparison.Ordinal);
+    }
+
+    /// <summary>A NESTED playlist row gets "Move out of {folder}" too — same verb, same command, one folder level up —
+    /// and a top-level row does not get it at all (absent, never a disabled promise).</summary>
+    [Fact]
+    public void NestedSidebarRows_OfferMoveOutOfTheirFolder()
+    {
+        string rows = Body(Menus(), "static List<MenuFlyoutItem> SidebarPlaylistRows");
+        Assert.Contains("parentFolderId.Length > 0", rows, StringComparison.Ordinal);
+        Assert.Contains("Strings.Menu.MoveOutOf(parentFolderName)", rows, StringComparison.Ordinal);
+        Assert.Contains("FolderActions.MoveOut(", rows, StringComparison.Ordinal);
+
+        // …fed by the projection's parent-folder facts, through the one SidebarEntry arm.
+        string entry = Body(Menus(), "public static ContextMenuModel? SidebarEntry");
+        Assert.Contains("e.ParentFolderId, e.ParentFolderName", entry, StringComparison.Ordinal);
+    }
+
+    /// <summary>A rootlist TREE row's menu gains the organisation verbs — <b>Move up · Move down · Move to folder…</b> —
+    /// through the same additive <c>layoutExtras</c> slot the navbar-customization verbs use, so the entity grammar
+    /// above them is untouched. Reordering the rootlist used to be a drag and nothing else (D12).
+    ///
+    /// <para>"Move out of {parent}" is deliberately NOT among them: it already lives in the entity rows themselves, on
+    /// every surface that shows the row (a pinned playlist row is the same rootlist member as its tree row), and a
+    /// second copy in the extras would show one verb twice on the one row that gets both.</para></summary>
+    [Fact]
+    public void SidebarTreeRows_GainTheRootlistMoveVerbs_Additively()
+    {
+        string extras = Body(Source("Features/Sidebar/Pane", "SidebarPaneSlot.cs"),
+                             "IReadOnlyList<MenuFlyoutItem>? NavExtras(");
+        foreach (string verb in new[] { "Strings.Menu.MoveUp", "Strings.Menu.MoveDown", "Strings.Menu.MoveToFolder" })
+            Assert.Contains(verb, extras, StringComparison.Ordinal);
+
+        int up = extras.IndexOf("FolderActions.MoveUp(", StringComparison.Ordinal);
+        int down = extras.IndexOf("FolderActions.MoveDown(", StringComparison.Ordinal);
+        int to = extras.IndexOf("FolderActions.MoveTo(", StringComparison.Ordinal);
+        Assert.True(up >= 0 && down > up && to > down, "Move up · Move down · Move to folder…, in that order");
+
+        Assert.DoesNotContain("Strings.Menu.MoveOutOf", extras, StringComparison.Ordinal);
+        Assert.Contains("Strings.Menu.MoveOutOf", Body(Menus(), "static List<MenuFlyoutItem> SidebarPlaylistRows"),
+                        StringComparison.Ordinal);
+        Assert.Contains("Strings.Menu.MoveOutOf", Body(Menus(), "static List<MenuFlyoutItem> SidebarFolderRows"),
+                        StringComparison.Ordinal);
+    }
+
+    /// <summary>Every rootlist organisation verb — the menu's three, the Alt+↑/↓ accelerator and "Move out of" — commits
+    /// through the ONE seam a DROP uses. That is what makes each of them await its mutation, map a failure by VERB
+    /// (<c>PlaylistEditVerb.Reorder</c>, never raw exception text), announce the result and offer Undo: the discipline is
+    /// written once, at the seam, rather than five times at five call sites.</summary>
+    [Fact]
+    public void EveryRootlistMoveVerb_AwaitsItsMutation_AndMapsTheFailureByVerb()
+    {
+        string folder = Source("Actions", "FolderActions.cs");
+        Assert.Equal(1, Count(folder, "WaveeResourceDrop.MoveRootlist("));       // exactly one commit path
+        Assert.Equal(0, Count(folder, "ex.Message"));
+        // The verbs reach it through the one chokepoint, and never call the seam themselves.
+        Assert.Equal(0, Count(Body(folder, "public static void Move(ActionServices s, string entryId, int delta)"),
+                              "MoveRootlistItemAsync"));
+        Assert.Equal(0, Count(Body(folder, "public static void MoveOut(ActionServices s, string entryId)"),
+                              "MoveRootlistItemAsync"));
+        // The picker's commit is the same chokepoint (its rows are destinations, not a second mutation path).
+        Assert.Contains("FolderActions.Commit(", Source("Features/Sidebar", "RootlistFolderPicker.cs"),
+                        StringComparison.Ordinal);
+
+        string seam = Body(Source("Features/DragDrop", "WaveeResourceDrag.cs"),
+                           "public static void MoveRootlist(ActionServices acts");
+        Assert.Contains("await lib.MoveRootlistItemAsync", seam, StringComparison.Ordinal);
+        Assert.Contains("PlaylistEditVerb.Reorder", seam, StringComparison.Ordinal);
+        Assert.Contains("Confirm(acts", seam, StringComparison.Ordinal);
     }
 
     // ── source-scan plumbing ─────────────────────────────────────────────────────────────────────────────────────────

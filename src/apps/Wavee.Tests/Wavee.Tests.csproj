@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <!-- Unit tests for the Wavee backend core. Source-includes src/apps/Wavee/Backend (which is engine-independent: deps =
        Wavee.Core + BCL only), so the test assembly stays lean — no FluentGpu/TerraFX/GPU. Honors "no separate backend
@@ -51,6 +51,13 @@
     <Protobuf Include="..\Wavee\SpotifyLive\Protos\video_associations.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
     <!-- upcoming-release identity (kind 138 PRERELEASE) — PreReleaseWireTests build the payload and drive the resolver -->
     <Protobuf Include="..\Wavee\SpotifyLive\Protos\prerelease.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
+    <!-- the uncapped credits drawer (kind 186 CREDITS_V2_TRAIT) — TrackCreditsTests craft the payload and drive the reader -->
+    <Protobuf Include="..\Wavee\SpotifyLive\Protos\credits_v2_trait.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
+    <!-- album publishing metadata (kind 183 PUBLISHING_METADATA_TRAIT) — PublishingProjectorTests craft the payload -->
+    <Protobuf Include="..\Wavee\SpotifyLive\Protos\publishing_metadata_trait.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
+    <Protobuf Include="..\Wavee\SpotifyLive\Protos\audio_attributes.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
+    <Protobuf Include="..\Wavee\SpotifyLive\Protos\extension_descriptor.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
+    <Protobuf Include="..\Wavee\SpotifyLive\Protos\visual_identity_trait.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
     <!-- playlist membership + collection delta wire types (the Backend mapping logic is unit-tested here) -->
     <Protobuf Include="..\Wavee\SpotifyLive\Protos\playlist_permission.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
     <Protobuf Include="..\Wavee\SpotifyLive\Protos\playlist4_external.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
@@ -60,6 +67,9 @@
     <!-- audio playback resolution: storage-resolve + AUDIO_FILES (FLAC) — LiveTrackResolverTests parse these -->
     <Protobuf Include="..\Wavee\SpotifyLive\Protos\storage-resolve.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
     <Protobuf Include="..\Wavee\SpotifyLive\Protos\audio_files_extension.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
+    <!-- the expand drawer's ~38 KB waveform (kind 237 THREE_BAND_WAVEFORMS) — TrackExpansionWireTests pin that it rides
+         the SAME EntityRequest as 99/98/5 rather than costing its own round trip -->
+    <Protobuf Include="..\Wavee\SpotifyLive\Protos\three_band_waveforms.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
     <Protobuf Include="..\Wavee\SpotifyLive\Protos\devices.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
     <Protobuf Include="..\Wavee\SpotifyLive\Protos\media.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
     <Protobuf Include="..\Wavee\SpotifyLive\Protos\player.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
@@ -87,6 +97,13 @@
     <Compile Include="..\Wavee\Components\MembershipDiff.cs" />
     <!-- detail layout breakpoint hysteresis (Wavee.Core + BCL only) — DetailLayoutBreakpointTests -->
     <Compile Include="..\Wavee\Features\Detail\DetailLayoutBreakpoints.cs" />
+    <!-- the PURE playlist-edit failure map (exception -> PlaylistMutationFailure -> loc key) and the playlist-page
+         notice rule. Both are System + Wavee.Core + the generated Strings consts only — the engine-side raise
+         (PlaylistEditErrors / PlaylistNoticeBar) is deliberately NOT included. PlaylistEditErrorKindsTests +
+         PlaylistPageNoticeRulesTests drive the real decisions. -->
+    <Compile Include="..\Wavee\Features\Detail\PlaylistEditErrorKinds.cs" />
+    <Compile Include="..\Wavee\Features\Detail\PlaylistPageNoticeRules.cs" />
+    <Compile Include="..\Wavee\Features\Detail\DetailOwnerIds.cs" />
     <Compile Include="..\Wavee\Features\Shell\ShellResponsiveLayout.cs" />
     <!-- the merged chrome row's PURE priority ladder (System only, exactly like its sibling above) — MergedChromeLayoutTests -->
     <Compile Include="..\Wavee\Features\Shell\MergedChromeLayout.cs" />
@@ -95,6 +112,11 @@
     <!-- the shell wash clip solver (System + FluentGpu.Foundation.Point2 only) — ShellWashGeometryTests -->
     <Compile Include="..\Wavee\Features\Shell\ShellWashGeometry.cs" />
     <Compile Include="..\Wavee\Features\Shell\ShellNav.cs" />
+    <!-- The content card's PURE page-swap policy: keep-alive slot identity (PageSlot / SlotKey) and the nav
+         direction → MotionRecipes map. Its only dependencies are FluentGpu.Foundation/Hooks (Engine, referenced
+         transitively) plus FluentGpu.Controls.Route, satisfied by the ShellNavDestTests shim — ContentHost itself is
+         engine- and page-bound and is deliberately NOT included. ContentHostPageTransitionTests. -->
+    <Compile Include="..\Wavee\Features\Shell\PageNavMotion.cs" />
     <!-- Home's landing projection is engine-free: tests pin one authored module per kind while the source ledger stays
          lossless for the Zune-style section directory. -->
     <Compile Include="..\Wavee\Features\Home\HomeLandingProjection.cs" />
@@ -158,6 +180,9 @@
     <!-- the SMTC timeline latch: the PURE half of SystemMediaControlsBridge (System only — no WinRT, no FluentGpu), so
          SmtcTimelineCoalescerTests pins the newest-wins burst coalescing without a media session — SmtcTimelineCoalescerTests -->
     <Compile Include="..\Wavee\App\SmtcTimelineCoalescer.cs" Link="SmtcTimelineCoalescer.cs" />
+    <!-- the deep-link PARSER (System + Wavee.Core only; the Win32/Signal half in DeepLink.cs is deliberately NOT
+         included) — DeepLinkParseTests pins which kinds become Play vs Open -->
+    <Compile Include="..\Wavee\App\DeepLinkParse.cs" Link="DeepLinkParse.cs" />
     <!-- the engine-free core of the extension registry (System + Wavee.Core + SidebarPinId only) — WaveeExtensionRegistryTests -->
     <Compile Include="..\Wavee\Actions\Extensibility\WaveeRegistryTable.cs" />
     <Compile Include="..\Wavee\Actions\Extensibility\WaveeActionTargeting.cs" />
@@ -205,6 +230,12 @@
     <Compile Include="..\Wavee\Features\Detail\ContextBandLayout.cs" />
     <!-- the immersive stage's pure width ladder (StageLayoutTests drives the real allocator) -->
     <Compile Include="..\Wavee\Features\Player\StageLayout.cs" />
+    <!-- …and its pure INK ARM: the two colour ladders (dark = WaveeOnMedia verbatim, light = the mirrored ground) as a
+         value type over Tok/WaveePalette/ColorRamp only. Engine-free of everything the renderers need — no cover plane,
+         no theme state, no window — so StageLayoutTests can drive BOTH arms without mutating Tok.Theme (this project
+         has no parallelism opt-out; a second theme-mutating class would race LightModeOverhaulTests). The live
+         StageInk static is app-composition-only (it resolves covers through Surfaces) and is deliberately NOT here. -->
+    <Compile Include="..\Wavee\Features\Player\..\..\Design\StageArm.cs" />
     <!-- the pure surface-placement state machine (System only; moves to FluentGpu.Engine/Surfaces/ with SurfaceHost) — PlacementCoreTests -->
     <Compile Include="..\Wavee\App\PlacementCore.cs" Link="PlacementCore.cs" />
     <!-- the pure "no mid-track auto-swap" rule over that machine (System only) — PlacementCoreTests' deferred-upgrade section -->
@@ -261,22 +292,25 @@
          which WaveeResourceKind a card carries, and WHY a drop was turned away, are DECISIONS — the elements and the
          DropTargetSpec they feed are not — WaveeDragRulesTests -->
     <Compile Include="..\Wavee\Features\DragDrop\WaveeDragRules.cs" />
-    <!-- the live music-video data service (Backend-only deps), source-included so VideoAssociationTests can drive it -->
-    <Compile Include="..\Wavee\SpotifyLive\SpotifyVideoService.cs" />
     <!-- the upcoming-release resolver (kind 138) + its seam/null/switchable trio — Backend + Wavee.Core deps only, so
          PreReleaseWireTests drive the REAL three-key cache, half-link rejection and negative caching over crafted protobuf -->
     <Compile Include="..\Wavee\SpotifyLive\PreReleaseService.cs" />
     <Compile Include="..\Wavee\SpotifyLive\SpotifyPreReleaseService.cs" />
-    <Compile Include="..\Wavee\SpotifyLive\SpotifyUserProfileService.cs" />
+    <!-- the kind-186 credits drawer + its seam/null/switchable trio (Backend + Wavee.Core deps only) — TrackCreditsTests
+         drive the REAL negative cache, in-flight coalescing and track-only guard over crafted protobuf -->
+    <Compile Include="..\Wavee\SpotifyLive\TrackCreditsService.cs" />
+    <Compile Include="..\Wavee\SpotifyLive\SpotifyTrackCreditsService.cs" />
+    <!-- the expand drawer's reader (kinds 99/98/5/237 in one ask, TrackV4 for the targets) — TrackExpansionWireTests
+         pin the request COUNT and SHAPE, which is the half no projector test can see -->
+    <Compile Include="..\Wavee\SpotifyLive\SpotifyTrackExpansionService.cs" />
     <!-- the live presence/friend-activity feed (Backend + Wavee.Core deps only) — FriendActivityServiceTests drive it -->
     <Compile Include="..\Wavee\SpotifyLive\SpotifyFriendActivityService.cs" />
     <!-- the live notification feeds (gander + what's-new) — Gander/WhatsNew tests drive them -->
     <Compile Include="..\Wavee\SpotifyLive\SpotifyNotificationsService.cs" />
     <Compile Include="..\Wavee\SpotifyLive\SpotifyWhatsNewService.cs" />
-    <!-- the artist chart's step two (spclient extensions + MetadataService + IStore; engine-free) — ArtistPopularTracksTests -->
-    <Compile Include="..\Wavee\SpotifyLive\SpotifyArtistPopularTracksService.cs" />
-    <!-- step ONE of the same chart: queryArtistOverview, the only source of play counts — ArtistStatsPlayCountTests -->
-    <Compile Include="..\Wavee\SpotifyLive\SpotifyArtistStatsService.cs" />
+    <!-- the hydration façade's Spotify transport adapters (design §2.2). Engine-free by construction — the ports they
+         implement live in Backend\Hydration, which is already source-included — so the whole folder rides one glob. -->
+    <Compile Include="..\Wavee\SpotifyLive\Hydration\**\*.cs" />
     <!-- one userTopContent response supplies both Home affinity facets — UserTopMapperTests pins the shared request -->
     <Compile Include="..\Wavee\SpotifyLive\SpotifyUserTopService.cs" />
     <Compile Include="..\Wavee\SpotifyLive\HomeDaylistHydrator.cs" />

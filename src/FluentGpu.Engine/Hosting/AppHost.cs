@@ -34,6 +34,11 @@ public readonly record struct FrameStats(int DrawCommandCount, int ClicksHandled
     public int SpansReRecorded { get; init; }
     public int SpanBytesCopied { get; init; }
     public int NodesCulled { get; init; }
+    /// <summary>Subtrees the record walk refused to descend into because the recording thread ran out of stack
+    /// (<see cref="SceneRecordStats.DepthAborts"/>). Nonzero ⇒ the presented frame is visibly INCOMPLETE (a page whose
+    /// deepest content — track rows, a hero — is missing). Must be 0 in a healthy build; the UI thread's 32 MB stack
+    /// (FluentApp.RunCore) is what keeps it there.</summary>
+    public int DepthAborts { get; init; }
     public SpanReuseDisabledReason SpanReuseDisabledReasons { get; init; }
     // Repaint damage (gpu-renderer.md §13.1) — the measure point for §5.1-A: what fraction of the window this frame
     // would have had to repaint, over how many disjoint rects, and (when the region gave up) why. No renderer consumes
@@ -3098,6 +3103,7 @@ public sealed class AppHost : IDisposable
             }
             float dtMs = _frameTime.NextDeltaMs();
             _frameClockMs += dtMs;                             // frame-clock timer base (headless: the deterministic FixedFrameTimeSource step; ignored by the real-window wall clock)
+            _scene.AnimClockMs = _frameClockMs;                // publish the ANIMATION timebase for orphan deadlines (same clamped delta the animator advances on)
             _anim.Tick(dtMs);                                  // 7 animation (transform/opacity/presented-size — never relayout)
             _reconciler.FinalizeKeepAliveTransitions();         // 7 park retained outgoing pages after their exit settles
             _inputHooks.RunAfterAnimations();                  // 7.1 tree lifecycle finalizers (overlays) before record/present
@@ -3286,9 +3292,12 @@ public sealed class AppHost : IDisposable
             // the ClearTransformDirty below wipes the content-node TransformDirty bit that drove this frame's DoF defer.
             CaptureProbeScroll(ProbeLyricsViewport, out int probeLyMode, out bool probeLyUser, out bool probeLyDirty);
             CaptureProbeScroll(ProbeMainViewport, out int probeMainMode, out bool _, out bool probeMainDirty);
-            // 8c consume the frame's motion bits (the glyph-snap gate read them during record). A motion frame queues ONE
-            // settle frame ONLY when glyph runs were recorded unsnapped (InMotion=1): the trailing static record re-snaps
-            // crisp. Rect-only transform ticks (EQ bars / seek playhead) must NOT pay a follow-up frame (§5.2 Fix B).
+            // 8c consume the frame's motion bits. The settle re-snap this used to queue is obsolete: glyph runs are no
+            // longer recorded "unsnapped", they carry a 0..255 SOFTNESS that already returns to 0 on its own as the
+            // scroll decelerates, so the crisp frame arrives as part of the deceleration rather than as a follow-up.
+            // UnsnappedGlyphSpans is consequently always 0 now (SceneRecorder stopped incrementing it) and the branch
+            // below is inert — kept so the stat and its consumer stay visibly paired if softness ever gets a hard cutoff.
+            // Rect-only transform ticks (EQ bars / seek playhead) must NOT pay a follow-up frame (§5.2 Fix B).
             // transformWrote is snapshotted BEFORE ClearTransformDirty — keep that order.
             bool transformWrote = _scene.AnyTransformWrote;
             // A bake is already bounded to ONE adaptive, downscaled job per cadence interval (BakedBlurQueue: the 33ms
@@ -3516,6 +3525,7 @@ public sealed class AppHost : IDisposable
                 SpansRebaseRejected = recordStats.SpansRebaseRejected,
                 SpansReRecorded = recordStats.SpansReRecorded,
                 SpanBytesCopied = recordStats.SpanBytesCopied,
+                DepthAborts = recordStats.DepthAborts,
                 SpanReuseDisabledReasons = recordStats.SpanReuseDisabledReasons,
                 RepaintCoverage = publishedRepaint.Coverage(layoutSize.Width, layoutSize.Height),
                 RepaintRectCount = publishedRepaint.Count,
@@ -3981,7 +3991,13 @@ public sealed class AppHost : IDisposable
     /// <summary>Settle timeout: a wedged exit track (one that never reaches its end) would keep its orphan LIVE,
     /// pinning OrphanCount &gt; 0 and so keeping the wake loop running forever. Reclaim every settled orphan (no tracks)
     /// as before, and FORCE-reclaim any orphan older than this even if it still has tracks. Healthy exit animations
-    /// settle in &lt;1s, so the backstop never fires in a well-behaved run.</summary>
+    /// settle in &lt;1s, so the backstop never fires in a well-behaved run.
+    /// This global wall-clock value stays the outer guard (it is what stops a never-painting app from pinning the wake
+    /// loop). An orphan enqueued with its own <see cref="SceneStore.OrphanMaxAgeMs"/> (the reconciler passes the exit
+    /// spec's duration + delay + slack) ALSO gets that tighter deadline, measured on
+    /// <see cref="SceneStore.AnimClockMs"/> — the same clamped timebase the exit tracks integrate on, so a healthy exit
+    /// can never trip it however badly the wall clock hitches, while a WEDGED page-sized exit (a skeleton shimmer
+    /// cross-dissolving under live content) is dropped in ~one exit duration instead of painting half-faded for 2s.</summary>
     private const long OrphanSettleTimeoutMs = 2000;
     private void ReclaimSettledOrphans()
     {
@@ -3999,9 +4015,14 @@ public sealed class AppHost : IDisposable
                 continue;
             }
             double ageMs = (nowTicks - _scene.OrphanEnqueuedTicks(i)) * 1000.0 / Stopwatch.Frequency;
-            if (ageMs >= OrphanSettleTimeoutMs)
+            float ownMaxAge = _scene.OrphanMaxAgeMs(i);
+            bool ownDeadlinePassed = ownMaxAge > 0f && _scene.OrphanAnimAgeMs(i) >= ownMaxAge;
+            if (ageMs >= OrphanSettleTimeoutMs || ownDeadlinePassed)
             {
-                Diag.Event("scene", $"orphan-backstop force-reclaim age={ageMs:0}ms (wedged exit track)");
+                // Diag.Enabled-gated: the interpolated message is an ARGUMENT, so it is built at the call site even when
+                // the sink is off — an unconditional call here allocates on a frame that reclaims (a phases 6-13 breach).
+                if (Diag.Enabled)
+                    Diag.Event("scene", $"orphan-backstop force-reclaim wall={ageMs:0}ms anim={_scene.OrphanAnimAgeMs(i):0}ms own={ownMaxAge:0}ms (wedged exit track)");
                 _scene.ReclaimOrphan(o);
                 i = Math.Min(i - 1, _scene.OrphanCount - 1);
                 continue;

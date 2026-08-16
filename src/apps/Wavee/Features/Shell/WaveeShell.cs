@@ -237,7 +237,13 @@ sealed class WaveeShell : Component
         _tierDesign = sidebar.Design.Peek();
 
         // Inert probe (screenshot / UI iteration only): open the right rail to the Lyrics panel at startup.
-        if (Diag.EnvFlag("WAVEE_LYRICS_OPEN") || Diag.EnvFlag("WAVEE_LIVE_LYRICS_SCROLL_PROBE") || Diag.EnvFlag("WAVEE_LYRICS_ADVANCE_PROBE")) { _shellUi.RailOpen.Value = true; _shellUi.Mode.Value = RailMode.Lyrics; }
+        if (Diag.EnvFlag("WAVEE_LYRICS_OPEN") || Diag.EnvFlag("WAVEE_LIVE_LYRICS_SCROLL_PROBE") || Diag.EnvFlag("WAVEE_LYRICS_ADVANCE_PROBE") || Diag.EnvFlag("WAVEE_IMMERSIVE_OPEN")) { _shellUi.RailOpen.Value = true; _shellUi.Mode.Value = RailMode.Lyrics; }
+        // Inert probe (screenshot / UI iteration only): open the IMMERSIVE STAGE at startup. Deliberately a startup flag
+        // rather than a WaveeNavProbe run-loop takeover, so the stage is captured through the app's own supported
+        // `--screenshot` path — which quiesces the render thread before CaptureBgra (FluentApp.RunCore). A probe that
+        // drives CaptureBgra itself races the render thread and dies on `capture.cmd.Reset failed: 0x80004005`.
+        // Usage: WAVEE_IMMERSIVE_OPEN=1 ... -- --fake --width W --height H --screenshot out.png
+        if (Diag.EnvFlag("WAVEE_IMMERSIVE_OPEN")) _shellUi.ImmersiveLyrics.Value = true;
         if (Diag.EnvFlag("WAVEE_NOWPLAYING_OPEN")) { _shellUi.RailOpen.Value = true; _shellUi.Mode.Value = RailMode.Details; }
 
         // WAVEE_STARTUP_BENCH belongs in this list even though it drives no navigation: the bench's "session restored"
@@ -1151,7 +1157,14 @@ sealed class WaveeShell : Component
             () => _shellUi.ImmersiveLyrics.Value,
             new BoxEl
             {
-                Grow = 1f, HitTestPassThrough = true,
+                // Direction = 1 is LOAD-BEARING, not style. A BoxEl defaults to a ROW, and in a row the single child's
+                // WIDTH is the main axis — where an oversized measure survives arrange (FlexShrink defaults to 0). As a
+                // COLUMN the child's width is the CROSS axis, which AlignItems.Stretch hard-clamps to the slot, so a
+                // layer can never be wider than the window whatever it measured. The banner and file-drop layers below
+                // already have this shape; the immersive layer was the one row among them, and the one that overflowed.
+                // Shrink/MinWidth/MinHeight say the same thing on the other axis.
+                Direction = 1, Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f,
+                HitTestPassThrough = true,
                 Enter = ImmersiveLyricsSurface.EnterTerminal,
                 Exit = ImmersiveLyricsSurface.ExitTerminal,
                 Children = [Embed.Comp(() => new ImmersiveLyricsSurface())],
@@ -1709,7 +1722,46 @@ sealed class WaveeShell : Component
 
     void OnShellKey(KeyEventArgs e)
     {
-        if (e.KeyCode != Keys.Space || e.Mods != KeyModifiers.None) return;
+        if (e.Handled || e.Mods != KeyModifiers.None) return;
+        switch (e.KeyCode)
+        {
+            case Keys.Escape: OnShellEscape(e); return;
+            case Keys.Space: OnShellSpace(e); return;
+        }
+    }
+
+    // THE IMMERSIVE STAGE'S SECOND WAY OUT, and why it lives here rather than on the surface.
+    //
+    // The surface has its own Escape handler, but Escape routes to the FOCUSED node and bubbles up ITS ancestors
+    // (InputDispatcher.OnKey) — and the stage deliberately leaves the caption strip and the docked player bar LIVE, so
+    // one click on either moves focus outside the surface's subtree and the surface's handler is never reached. This
+    // column is an ancestor of the title bar, the content region AND the player bar, so it catches every one of those.
+    //
+    // NOT an accelerator: the dispatcher only matches KeyAccelerator for Ctrl/Alt or F-keys, so bare Escape cannot be
+    // one (same reason Space is handled here). NOT InputHooks.KeyPreview either: that is a SINGLE slot which
+    // OverlayHost.Render re-assigns unconditionally on every one of its renders, so any chain installed at mount is
+    // destroyed the first time a context menu opens.
+    //
+    // Precedence comes for free from the routing order — everything that should beat us already has:
+    //   • an in-flight item drag cancels first (OnKey stage 1);
+    //   • OverlayHost.PreviewKey runs PRE-focus and swallows Escape for every menu / flyout / device picker /
+    //     ContentDialog that is dismissible, so those close instead of the stage;
+    //   • every deeper focused Escape owner (the palette's list, in-page search, SemanticZoom, Reorderable…) gets
+    //     first refusal by bubbling, and we bail on e.Handled above.
+    // The one competitor that is NOT ordered for us is the command palette, which is a SIBLING ZStack layer rather
+    // than an overlay entry — hence the explicit guard.
+    void OnShellEscape(KeyEventArgs e)
+    {
+        if (!_shellUi.ImmersiveLyrics.Peek()) return;   // nothing to close — leave the engine's focus-blur gesture alone
+        if (_paletteOpen.Peek()) return;                // the palette owns Escape while it is up (sibling layer, not an overlay)
+        _shellUi.ImmersiveLyrics.Value = false;
+        // Handled ALSO stops OnKey's unhandled-Escape arm from clearing focus, which would leave the keyboard with
+        // nowhere to route the next key.
+        e.Handled = true;
+    }
+
+    void OnShellSpace(KeyEventArgs e)
+    {
         if (FocusedIsTextEditor()) return;
         if (_actions.Playback is not { } pb) return;
         PlayerBarContent.TogglePlayPause(pb);

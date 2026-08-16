@@ -22,7 +22,7 @@ public sealed class BackendScaffold
         Store = new InMemoryStore();
         Session = new SessionContextHost(new SessionContext("me", "US", "premium", "en", Tier.Premium, false));
         Transport = new StubTransport();
-        Mutations = new MutationEngine(Store, new IMutationStrategy[] { new SetReplayStrategy(), new RootlistFollowStrategy(Store) });
+        Mutations = new MutationEngine(Store, new IMutationStrategy[] { new SetReplayStrategy(), new RootlistFollowStrategy(Store, new Playlists.RootlistLane()) });
         Audio = new StubAudioEngine();
         Playback = new PlaybackReducer(Audio);
     }
@@ -141,7 +141,7 @@ public static class BackendSelfTest
     }
 
     static Track Trk(string uri, string title, string artist) =>
-        new(uri.Substring(uri.LastIndexOf(':') + 1), uri, title,
+        new(EntityUri.IdOf(uri), uri, title,
             new[] { new ArtistRef(artist, "spotify:artist:" + artist, artist) },
             new AlbumRef("al", "spotify:album:al", "Album"),
             200_000, false, null);

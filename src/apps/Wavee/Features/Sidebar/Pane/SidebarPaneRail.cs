@@ -127,11 +127,17 @@ static class SidebarPaneRail
             {
                 var entry = entries[row.EntryIndex];
                 string folderId = entry.FolderId;
+                string cueKey = entry.Id;
+                // D16 — the tile is a real DESTINATION now, not just a way back into the pane. Into, and only Into:
+                // a 56-DIP strip has nothing above or below a tile to be "before" or "after".
+                var target = WaveeResourceDragPayload.FromEntry(entry, owner.Acts?.Svc, rootlistItem: true);
+                var folderDrop = folderId.Length > 0 ? owner.RailFolderDropSpec(entry, target) : null;
                 return SidebarRailItem.Icon("rail:" + entry.Id, Icons.Folder, false, () =>
                 {
                     owner.Prefs?.SetCollapsed(false);
                     owner.Prefs?.SetFolderExpanded(folderId, true);
-                }, entry.Name.Length > 0 ? entry.Name : SidebarPaneText.ShortUri(entry.Id));
+                }, entry.Name.Length > 0 ? entry.Name : SidebarPaneText.ShortUri(entry.Id),
+                    folderDrop, folderDrop is null ? null : () => owner.IsRailDropActive(cueKey));
             }
 
             // A hand-placed item (a route shortcut / a link) or a whole-section tile (Concerts, an extension contribution).

@@ -887,17 +887,11 @@ public sealed class PlaybackSession
     {
         var artists = string.IsNullOrEmpty(r.ArtistName) && string.IsNullOrEmpty(r.ArtistUri)
             ? Array.Empty<ArtistRef>()
-            : new[] { new ArtistRef(IdOfUri(r.ArtistUri), r.ArtistUri, r.ArtistName) };
-        var album = new AlbumRef(IdOfUri(r.AlbumUri), r.AlbumUri, r.AlbumName);
+            : new[] { new ArtistRef(EntityUri.IdOf(r.ArtistUri), r.ArtistUri, r.ArtistName) };
+        var album = new AlbumRef(EntityUri.IdOf(r.AlbumUri), r.AlbumUri, r.AlbumName);
         var img = string.IsNullOrEmpty(r.ImageUrl) ? null : new Image(r.ImageUrl!);
-        return new Track(IdOfUri(r.Uri), r.Uri, string.IsNullOrEmpty(r.Title) ? r.Uri : r.Title,
+        return new Track(EntityUri.IdOf(r.Uri), r.Uri, string.IsNullOrEmpty(r.Title) ? r.Uri : r.Title,
             artists, album, r.DurationMs, false, img);
     }
 
-    static string IdOfUri(string uri)
-    {
-        if (string.IsNullOrEmpty(uri)) return "";
-        int i = uri.LastIndexOf(':');
-        return i >= 0 && i + 1 < uri.Length ? uri[(i + 1)..] : uri;
-    }
 }

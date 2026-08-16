@@ -504,11 +504,14 @@ image pipeline applies `ImageEl.ColorOverlay` and `ImageEl.Mask` in the same ima
 not create effect layers and do not fork the baked-image cache key. Use dynamic `Element.Blur` only when the subtree
 pixels or sigma truly change over time; use `BakedBlurSpec` for immutable artwork/card frost.
 
-**FA-3 (`EnterExit.Blur` — exit cross-blur for the skeleton swap).** The presence/exit terminal `EnterExit` (owned
+**FA-3 (`EnterExit.Blur` — the blur leg of a presence terminal).** The presence/exit terminal `EnterExit` (owned
 here, on `LayoutTransition`) gains a `float Blur` field: `SeedEnter` seeds `AnimChannel.BlurSigma` Blur→0 on enter,
-`SeedExit` seeds current→Blur on exit. This is the only animation-side addition the native skeleton-loading kit needs
-(`reconciler-hooks.md`): an EXITING shimmer orphan blurs out (it renders until reclaimed; the recorder already honors
-BlurSigma via the self-blur layer) while the real content blur-reveals in — the two-layer cross-blur, same slot.
+`SeedExit` seeds current→Blur on exit. An exit orphan renders until reclaimed and the recorder already honors BlurSigma
+via the self-blur layer, so a *bounded* exiting element can blur out while its replacement blur-reveals in — the
+two-layer cross-blur, same slot. As-built scope: the native skeleton-loading kit (`reconciler-hooks.md`, which owns that
+swap) uses the Blur leg only on the ENTER half (`SoftReveal`); its exiting shimmer orphan cross-dissolves on **opacity
+alone**, because the shimmer is a page-sized subtree and a page-sized blur group is exactly the effect-layer cliff FA-1
+above warns about.
 
 **FA-2a (as-built — the cross-frame self-blur PIN cache + its position-independent key).** A self-blur whose subtree
 is byte-identical to a previous frame's reuses that frame's **retained, already-blurred pixels** (a "pin" — a small

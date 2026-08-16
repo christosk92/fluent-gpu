@@ -27,7 +27,7 @@ namespace Wavee;
 static class AlbumLoader
 {
     internal static async System.Threading.Tasks.Task<Album?> LoadAlbumAsync(Services svc, string uri, System.Threading.CancellationToken ct)
-        => await svc.Library.GetAlbumAsync(uri, ct).ConfigureAwait(false);
+        => await svc.Library.GetAlbumAsync(uri, ct: ct).ConfigureAwait(false);
 }
 
 // ── Discography facets (Albums / Singles / Compilations) ───────────────────────────────────────────────

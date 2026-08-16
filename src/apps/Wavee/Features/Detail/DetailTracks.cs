@@ -5,6 +5,7 @@ using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Input;
 using FluentGpu.Localization;
 using FluentGpu.Scene;
 using FluentGpu.Signals;
@@ -91,7 +92,11 @@ sealed class TrackList : Component
     // frame (694 spans re-recorded, record=72.4ms, 138 component re-renders, a gen2 GC inside it) — freshly mounted rows
     // have no cached span to reuse and the engine's realize budget exempts the visible band by design. Instead of that
     // one-shot swap, the cold reveal ramps the count of REAL rows up DetailRevealRamp.Chunk-at-a-time over a few frames;
-    // rows past the ramp render a cheap ShimmerRow, so no single frame records the whole band. Steady state = _reveal at
+    // rows past the ramp render a cheap ShimmerRow, so no single frame records the whole band. Each row's own crossing
+    // CROSS-FADES (BoundRowContent.RampReveal): the placeholder and the real row are two distinct element types in one
+    // slot, so the swap is a remount and the real row eases in — without that, 12 rows a frame hard-popped from grey bars
+    // into text while the page itself was still fading in. Only rows that actually shimmered fade; see the latch there.
+    // Steady state = _reveal at
     // DetailRevealRamp.Done (every row real, no per-row cost); an instant/cached load only skips the ramp on pages whose
     // list owns a real viewport — a HasTrailing page (album/single) is one unwindowed mandatory band, so it ramps warm
     // opens too (see the arming edge in Render). The progression math is the pure, unit-tested DetailRevealRamp.
@@ -255,7 +260,10 @@ sealed class TrackList : Component
         bool MarqueeDisabled, string? TopTrackId,
         // The app-wide BPM·Key column opt-in. Carried in the SNAPSHOT (not read in SetFor) per the contract above:
         // an appearance flag read outside the snapshot would recompute, compare equal, and never reach the rows.
-        bool TempoColumn = false);
+        bool TempoColumn = false,
+        // …and the app-wide Plays column opt-in, on exactly the same contract. Only consulted where the surface offers
+        // it (DetailConfig.PlaysColumnOptIn — playlist / Liked); album profiles carry the lane through ShowPlays.
+        bool PlaysColumn = false);
 
     // The row/header column geometry for the active tier. Equality-gated: ColumnSet is a value record and the
     // TrackSize[] is the per-tier cached instance, so a re-render that does not cross a breakpoint compares equal and
@@ -341,7 +349,8 @@ sealed class TrackList : Component
     // every shared cell agree on the build order: # · ♥ · (thumb) · Title · Album · AddedBy · DateAdded · Plays · Tempo · Duration · Video.)
     //
     // Drop order as the area narrows (most expendable first): Added-by (≥1) → Album (≥2) → Plays/Date (≥3) →
-    // art-thumb (≥5) → ♥ (≥5) → the trailing Video/"…" lane (6). Plays exists only on album surfaces; Video follows any hydrated
+    // art-thumb (≥5) → ♥ (≥5) → the trailing Video/"…" lane (6). Plays exists on album surfaces + the playlist/Liked
+    // opt-in column (DetailConfig.PlaysColumnOptIn × the persisted setting, carried in the snapshot); Video follows any hydrated
     // list that has one and is the LAST thing to go (28 DIP, and the row's only statement that a video exists).
     // Album/By/Date exist only on playlists. Compact playlist tiers retain Album in the title metadata subline.
     // Derived from the SNAPSHOT, never from the parent's mutable fields: a persistent row re-renders on its own
@@ -368,7 +377,7 @@ sealed class TrackList : Component
         // is reserved ONCE (More rides IN the Video lane when Video is on).
         ? new(Album: s.Config.ShowAlbumColumn && tier < 2, By: s.Model.HasAddedBy && tier < 1, Date: s.Model.HasDateAdded && tier < 3,
               Video: s.Model.HasVideo && tier < 6,
-              Plays: s.Config.ShowPlays && tier < 3, Heart: tier < 5,
+              Plays: (s.Config.ShowPlays || (s.Config.PlaysColumnOptIn && s.PlaysColumn)) && tier < 3, Heart: tier < 5,
               Thumb: s.Config.ShowArtThumb && tier < 5,
               Actions: tier < 6 && !(s.Model.HasVideo && tier < 6), Tier: tier,
               Tempo: s.Config.ShowTempo && s.TempoColumn, Expand: s.Config.ShowVersions && tier < 6)
@@ -380,7 +389,7 @@ sealed class TrackList : Component
             // it costs 28 DIP and it is the only place the row states "this song has a video". The old tier-2 gate made
             // the glyph a wide-window luxury and forced the fact into the artist subline below — one fact in two lanes.
             Video: s.Model.HasVideo && tier < 6,
-            Plays: s.Config.ShowPlays && tier < 3,
+            Plays: (s.Config.ShowPlays || (s.Config.PlaysColumnOptIn && s.PlaysColumn)) && tier < 3,
             // Survives to tier 4 (was < 4) — a 28-DIP lane that answers "is this in my library?" (and is the like
             // affordance) earns its place further down the ladder than the old 40-DIP hover-only gutter.
             Heart: tier < 5,
@@ -535,7 +544,7 @@ sealed class TrackList : Component
                 currentModel, config, handlers,
                 handlers.Sort.Value, handlers.Query.Value.Trim(), filters, saved,
                 noMarquee, TopTrack(currentModel.Tracks),
-                handlers.TempoColumn.Value);
+                handlers.TempoColumn.Value, handlers.PlaysColumn?.Value ?? false);
         });
         var rowItems = UseMemo(() => BoundItems.Project(
             rowsSnapshot,
@@ -720,7 +729,7 @@ sealed class TrackList : Component
             recsCapable
             && svc?.RealExtender is not null
             && PlaylistInlineEdit.SpotifyEditsLive(svc)
-            && model.Capabilities.CanEditItems
+            && PlaylistInlineEdit.Editable(model)
             && model.ContextUri is { Length: > 0 };
         _recsLive = recsLive;                            // published to the bound slots (plain field: never write a signal from Render)
         int recCount = recsLive ? _recs.Value.Count : 0;   // subscribe (only when LIVE) → the list re-sizes when a batch lands / an add removes one
@@ -945,13 +954,10 @@ sealed class TrackList : Component
     (float from, float delayMs)? SeedFade(int display)
         => _fade.TryGetValue(display, out var f) ? f : null;
 
+    // ONE definition of "which membership position does this display slot name" — the page and the keyed-anchor gate
+    // must agree about it or the gate would clear a slot the commit then resolves differently.
     int OriginalInsertionIndex(int displaySlot)
-    {
-        var view = View();
-        if (displaySlot <= 0) return view.Length > 0 ? view[0] : 0;
-        if (displaySlot >= view.Length) return _tracks.Count;
-        return view[displaySlot];
-    }
+        => PlaylistReorderRules.OriginalInsertionIndex(View(), _tracks.Count, displaySlot);
 
     // ── the declarative drop destination (framework-owned geometry; this page declares only INTENT) ───────────────────
     // Created ONCE and reused by all three list branches (flat · recommendations · vertical hero). Every delegate reads
@@ -991,7 +997,7 @@ sealed class TrackList : Component
     };
 
     /// <summary>The page-level write gate, answered LIVE (a nav preview that becomes editable must not need a remount).</summary>
-    bool DropEditable => _model.ContextUri is { Length: > 0 } && _model.Capabilities.CanEditItems
+    bool DropEditable => _model.ContextUri is { Length: > 0 } && PlaylistInlineEdit.Editable(_model)
                          && _acts is not null && _lib is not null;
 
     bool IsSameListDrop(object? payload)
@@ -1005,6 +1011,7 @@ sealed class TrackList : Component
     PlaylistDropRefusal DropVerdict(object? payload)
     {
         var sort = _h.Sort.Peek();
+        var rows = WaveeResourceDrag.Unwrap(payload)?.SourceRows;
         return PlaylistDropRefusalRules.Evaluate(
             editable: DropEditable,
             // A still-shimmering page has no membership to insert into: Wave 4 made an EMPTY list accept at slot 0, and
@@ -1013,7 +1020,12 @@ sealed class TrackList : Component
             payloadHasTracks: WaveeResourceDrag.Unwrap(payload) is { CanCopyTracks: true },
             sameList: IsSameListDrop(payload),
             naturalOrder: sort.Column == SortColumn.Index && !sort.Descending,
-            filtered: !PlaylistReorderRules.AllowsSameListMove(true, _h.Query.Peek(), _h.Filters.Peek()));
+            filtered: !PlaylistReorderRules.AllowsSameListMove(true, _h.Query.Peek(), _h.Filters.Peek()),
+            // The keyed-reorder gate: a row whose membership item_id has not arrived yet cannot be named by the wire's
+            // item-keyed MOV, and there is no positional fallback to fall back TO. Payload-level only, because the
+            // accept test is answered without a slot; the ANCHOR half of the same rule is checked at the commit
+            // (DepositAtAsync), which is the first moment a slot exists.
+            rowsKeyed: rows is not { Count: > 0 } || PlaylistReorderRules.RowsAreKeyed(rows));
     }
 
     bool CanDropResource(object? payload) => DropVerdict(payload) == PlaylistDropRefusal.None;
@@ -1034,6 +1046,7 @@ sealed class TrackList : Component
             : Loc.Get(Strings.Drag.NothingToAdd),
         PlaylistDropRefusal.Sorted => Loc.Get(Strings.Drag.ClearSortingToReorder),
         PlaylistDropRefusal.Filtered => Loc.Get(Strings.Drag.ClearFiltersToReorder),
+        PlaylistDropRefusal.Syncing => Loc.Get(Strings.Drag.StillSyncing),
         _ => null,
     };
 
@@ -1080,10 +1093,20 @@ sealed class TrackList : Component
     /// convention already discounts the rows removed above it (pinned by MoveRowsConventionTests), so correcting here
     /// would move the block twice.</summary>
     Task<bool> DepositAtAsync(object? payload, int displaySlot)
-        => _acts is { } acts && _model.ContextUri is { Length: > 0 } uri
-            ? WaveeResourceDrop.DepositTracksAsync(acts, uri, _model.Title, payload,
-                OriginalInsertionIndex(displaySlot))
-            : Task.FromResult(false);
+    {
+        if (_acts is not { } acts || _model.ContextUri is not { Length: > 0 } uri) return Task.FromResult(false);
+        int at = OriginalInsertionIndex(displaySlot);
+        // The ANCHOR half of the keyed-reorder gate (the rows half is already in DropVerdict): the wire names the
+        // landing position by the predecessor row's item_id, so a predecessor whose id has not arrived cannot be a
+        // landing position at all. Refused HERE — the first moment a slot exists — rather than sent and rolled back.
+        if (IsSameListDrop(payload) && WaveeResourceDrag.Unwrap(payload) is { SourceRows: { Count: > 0 } rows }
+            && !PlaylistReorderRules.AnchorRowIsKeyedAt(_tracks, rows, at))
+        {
+            PlaylistEditErrors.Toast(PlaylistMutationFailure.Pending, PlaylistEditVerb.Reorder);
+            return Task.FromResult(false);
+        }
+        return WaveeResourceDrop.DepositTracksAsync(acts, uri, _model.Title, payload, at);
+    }
 
     /// <summary>Alt+Up / Alt+Down: move the selected rows one position, through the SAME mutation seam and the same
     /// pre-move index convention the drag commits with (<c>MovePlaylistRowsAsync</c>). The rules themselves live in the
@@ -1095,7 +1118,7 @@ sealed class TrackList : Component
     {
         if (_lib is not { } lib || _model.ContextUri is not { Length: > 0 } uri) return false;
         var sort = _h.Sort.Peek();
-        if (!PlaylistReorderRules.AllowsBlockMove(_model.Capabilities.CanEditItems,
+        if (!PlaylistReorderRules.AllowsBlockMove(PlaylistInlineEdit.Editable(_model),
                 sort.Column == SortColumn.Index && !sort.Descending, _h.Query.Peek(), _h.Filters.Peek()))
             return false;
         if (HostInfo() is not { } host || host.Rows.Count == 0) return false;
@@ -1105,16 +1128,46 @@ sealed class TrackList : Component
         for (int i = 0; i < rows.Count; i++) indices[i] = rows[i].Index;
         int to = PlaylistReorderRules.BlockMoveTarget(indices, _tracks.Count, delta);
         if (to < 0) return false;
+        // The keyed-reorder gate, keystroke edition. The drag gets its refusal as a chip caption; a keyboard command
+        // has no chip, so the same verdict is spoken (assertively — the block did NOT move) and toasted through the
+        // one mapped-copy chokepoint, which says the same sentence.
+        if (!PlaylistReorderRules.RowsAreKeyed(rows) || !PlaylistReorderRules.AnchorRowIsKeyedAt(_tracks, rows, to))
+        {
+            Announcer.Say(Loc.Get(Strings.Drag.StillSyncing), assertive: true);
+            PlaylistEditErrors.Toast(PlaylistMutationFailure.Pending, PlaylistEditVerb.Reorder);
+            return false;
+        }
 
         int first = indices[0];
         for (int i = 1; i < indices.Length; i++) if (indices[i] < first) first = indices[i];
-        _ = lib.MovePlaylistRowsAsync(uri, rows, to);
+        var post = _post;
+        _ = Commit();
 
         int start = TrackStart + first + delta;
         _selection.ClearSelection();
         _selection.SelectRange(start, start + rows.Count - 1);
         _selection.AnchorIndex = start;
         return true;
+
+        // AWAITED, mapped, and — on a refusal — the selection is put back. This used to discard the move task outright:
+        // a rejected reorder rolled the membership back (the rows visibly snap home) while the selection stayed pointing
+        // at the slots the block would have landed in, so the next Alt+Down walked a DIFFERENT block down the list and
+        // nothing ever said the first move had been refused.
+        async System.Threading.Tasks.Task Commit()
+        {
+            try { await lib.MovePlaylistRowsTrackedAsync(uri, rows, to).ConfigureAwait(false); }
+            catch (Exception ex)
+            {
+                ContainerActions.Post(post, () =>
+                {
+                    int back = TrackStart + first;
+                    _selection.ClearSelection();
+                    _selection.SelectRange(back, back + rows.Count - 1);
+                    _selection.AnchorIndex = back;
+                    PlaylistEditErrors.Toast(ex, PlaylistEditVerb.Reorder);
+                });
+            }
+        }
     }
 
     WaveeResourceDragPayload? TrackDragPayload(int itemIndex, int trackStart)
@@ -1147,10 +1200,18 @@ sealed class TrackList : Component
         else Add(itemIndex);
 
         if (selectedTracks.Count == 0) return null;
-        string? source = snapshot.Model.ContextUri is { Length: > 0 } uri && snapshot.Model.Capabilities.CanEditItems
+        // A page under a notice (deleted / access revoked) is not a MOVE source: dragging its rows could only produce
+        // an edit the server will refuse. The rows still drag as a COPY — that is what `source == null` means.
+        string? source = snapshot.Model.ContextUri is { Length: > 0 } uri && PlaylistInlineEdit.Editable(snapshot.Model)
             ? uri : null;
         string name = selectedTracks.Count == 1 ? dragged.Title : Strings.Sidebar.SongCount(selectedTracks.Count);
-        return new WaveeResourceDragPayload(WaveeResourceKind.Track, dragged.Uri, dragged.Uri, name,
+        // The chip glyph/caption comes from the payload KIND, so a single episode row drags as an episode rather than
+        // as a song. A multi-row drag keeps the Track kind: a mixed selection has no one kind to state, and every
+        // destination reads the rows themselves anyway.
+        var kind = selectedTracks.Count == 1
+            ? WaveeResourceDragPayload.PlayableKind(dragged.Uri)
+            : WaveeResourceKind.Track;
+        return new WaveeResourceDragPayload(kind, dragged.Uri, dragged.Uri, name,
             selectedTracks, source, source is null ? null : sourceRows);
     }
 
@@ -1163,7 +1224,7 @@ sealed class TrackList : Component
         if (_rowsSnapshot is not { } source) return null;
         var snapshot = source.Peek();
         var model = snapshot.Model;
-        if (model.ContextUri is not { Length: > 0 } uri || !model.Capabilities.CanEditItems) return null;
+        if (model.ContextUri is not { Length: > 0 } uri || !PlaylistInlineEdit.Editable(model)) return null;
         int trackStart = TrackStart;
         var v = View(snapshot);
         var tracks = model.Tracks;
@@ -1376,7 +1437,7 @@ sealed class TrackList : Component
 
     bool HeroHasPulse() => _model.ExpiresAtMs > 0;   // the daylist rollover countdown row
 
-    bool HeroEditable() => _model.Capabilities.CanEditMetadata && _model.ContextUri is { Length: > 0 };
+    bool HeroEditable() => PlaylistInlineEdit.EditableMetadata(_model) && _model.ContextUri is { Length: > 0 };
 
     (Func<ScrollGeometry, long> Project, Action<ScrollGeometry> Action) SwipeCloseObserver()
         => (ProjectScrollState, ApplyScrollState);
@@ -1685,7 +1746,8 @@ sealed class TrackList : Component
 
         if (fit.Has(DetailTrackInlineCommand.Sort))
             kids.Add(MeasuredCommand(3, "cmd:sort",
-                Embed.Comp(() => new SortMenuButton(h.Sort, h.SetSort, cfg.ShowAlbumColumn, model.HasDateAdded, labeled: true))));
+                Embed.Comp(() => new SortMenuButton(h.Sort, h.SetSort, cfg.ShowAlbumColumn, model.HasDateAdded, labeled: true,
+                    hasPlays: () => cfg.ShowPlays || (cfg.PlaysColumnOptIn && (h.PlaysColumn?.Peek() ?? false))))));
         if (fit.Has(DetailTrackInlineCommand.Density))
             kids.Add(MeasuredCommand(4, "cmd:density",
                 Embed.Comp(() => new ListButton(h.Density, h.SetDensity, labeled: true))));
@@ -2249,41 +2311,29 @@ sealed class TrackList : Component
     // shimmer→real. Done (MaxValue) in steady state ⇒ always true, so a revealed list pays nothing here.
     internal bool RowRevealed(int displayIndex) => DetailRevealRamp.Revealed(displayIndex, _reveal.Value);
 
-    // A cheap placeholder row for slots beyond the reveal ramp: grey bars on the SAME column grid as a real row (so the
-    // reveal sweeps down cleanly, no ragged shift, same rowH extent) but with NO art component (CoverShimmer), text
-    // shaping, hover transport, marquee or context menu — the record cost the ramp spreads across frames. Static (no
-    // breathe): the ramp finishes in ≈4 frames, far too fast to perceive a pulse, and a static tile keeps the loop asleep.
-    Element ShimmerRow(ColumnSet set, TrackSize[] tracks, float rowH)
+    // The placeholder for a slot beyond the reveal ramp: an EMPTY row of the real row's exact extent — the same GridEl
+    // (same column tracks, same RowHeight) with one empty cell per lane and nothing painted. Deliberately blank, not grey
+    // bars: the crossing into the real row is a remount that fades the row in (BoundRowContent.RampReveal), and a bar
+    // that vanished on the swap frame under a row still at opacity 0 read as bars → blank → text — a per-row flicker, the
+    // very thing the ramp's cross-fade exists to remove. From blank the cascade is one gesture: rows fade in top-down,
+    // chunk by chunk, under the page's own entrance. (On a cold load the region's derived shimmer — RowsShimmer, 12 rows =
+    // one Chunk — is what dissolves under rows 0..11; slots past it were blank during Pending too.) It carries no art,
+    // text shaping, hover transport, marquee or context menu — the record cost the ramp spreads across frames — and it
+    // is static, so it keeps the loop asleep. It stays a GridEl on purpose: the real row mounts as a BoxEl wrapper, and
+    // the TYPE change is what makes the crossing a remount in a single-child slot (see BoundRowContent).
+    const string ShimmerRowKey = "row:shim";
+
+    Element ShimmerRow(TrackSize[] tracks, float rowH)
     {
-        static Element Bar(float w, float h) => new BoxEl { Width = w, Height = h, Corners = CornerRadius4.All(4f), Fill = Tok.FillSubtleSecondary };
-        // Follows TrackRow.Grid's column build order verbatim so cell count == tracks.Length and every bar lands in its lane.
-        var cells = new List<Element>(tracks.Length) { new BoxEl() };   // # lane (empty)
-        if (set.Heart) cells.Add(new BoxEl());
-        if (set.Thumb) cells.Add(new BoxEl { AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Children = [Bar(ThumbSize, ThumbSize)] });
-        cells.Add(new BoxEl
-        {
-            Direction = 1, Grow = 1f, Basis = 0f, Gap = 6f, Justify = FlexJustify.Center,
-            Children = _cfg.ShowTrackArtist ? [Bar(150f, 11f), Bar(90f, 9f)] : [Bar(180f, 11f)],
-        });
-        if (set.Album) cells.Add(new BoxEl { AlignItems = FlexAlign.Center, Children = [Bar(120f, 10f)] });
-        if (set.By) cells.Add(new BoxEl());
-        if (set.Date) cells.Add(new BoxEl { AlignItems = FlexAlign.Center, Children = [Bar(56f, 10f)] });
-        if (set.Plays) cells.Add(new BoxEl { AlignItems = FlexAlign.Center, Justify = FlexJustify.End, Children = [Bar(48f, 10f)] });
-        // Tempo lane: MUST be emitted whenever the width track exists, even though the real cell may render empty for
-        // an un-adorned track — the shimmer is positional (no cell keys), so a missing bar would shift duration into
-        // the tempo column and the whole skeleton would sit one lane left of the real rows.
-        if (TrackRow.ShowTempo(set)) cells.Add(new BoxEl { AlignItems = FlexAlign.Center, Justify = FlexJustify.End, Children = [Bar(48f, 10f)] });
-        cells.Add(new BoxEl { AlignItems = FlexAlign.Center, Justify = FlexJustify.End, Children = [Bar(28f, 10f)] });   // duration
-        if (set.Video) cells.Add(new BoxEl());
-        if (set.Actions) cells.Add(new BoxEl());
-        if (set.Expand) cells.Add(new BoxEl());
+        var cells = new Element[tracks.Length];
+        for (int i = 0; i < cells.Length; i++) cells[i] = new BoxEl();
         return new GridEl
         {
-            Columns = tracks, ColGap = TrackRow.ColGapFor(set.Tier), RowHeight = rowH, Grow = 1f,
-            // The tier-scaled inset, exactly like TrackRow.Grid — a constant PadX here put the ramp's placeholder row
-            // on a different column origin than the real row it is about to become at tiers 4+ (16 vs 12 vs 8).
-            Padding = new Edges4(TrackRow.PadXFor(set.Tier) - RowInset, 0f, TrackRow.PadXFor(set.Tier) - RowInset, 0f),
-            Children = cells.ToArray(),
+            // Paired with BoundRowContent.RealRowKey: the two roots of the same slot are DISTINCT identities, so the
+            // placeholder→real crossing is a remount (and gets the entrance fade), never an in-place patch.
+            Key = ShimmerRowKey,
+            Columns = tracks, RowHeight = rowH, Grow = 1f,
+            Children = cells,
         };
     }
 
@@ -2380,6 +2430,12 @@ sealed class TrackList : Component
         public override Element Render()
         {
             var likePrev = UseRef(((string?)null, false));               // hook FIRST (stable order) — per-slot like-edge memory
+            // The ramp-crossing latch: 0 = this slot has not rendered yet, 1 = its FIRST render was a shimmer placeholder
+            // (so the crossing into the real row is a visible swap and earns the fade below), 2 = it mounted ALREADY
+            // revealed. Only state 1 ever animates: a row that mounted real — steady state (_reveal at Done), a row
+            // scrolled in later, a warm page that never ramped — must play nothing, because an entrance replayed on a
+            // recycled slot reads as flicker (see the "where it may be used" note on WaveeEntrance in Design/WaveeMotion.cs).
+            var revealLatch = UseRef((byte)0);
             var shape = _o._rowShape!.Value;                             // subscribe → a breakpoint cross re-renders THIS row in place
             // Progressive reveal: while the cold list ramps in, a row past the ramp renders a cheap shimmer placeholder.
             // The bool is equality-gated (per-slot), so this row re-renders shimmer→real only on the single frame its own
@@ -2407,9 +2463,12 @@ sealed class TrackList : Component
                     rowState.Handlers.Go,
                     AddedByProfile(rowState.Model, t));
             });
+            // Latch this slot's FIRST reveal state before the branch below — it is what decides whether the crossing fades.
+            bool revealedNow = revealed.Value;
+            if (revealLatch.Value == 0) revealLatch.Value = revealedNow ? (byte)2 : (byte)1;
             // Not yet revealed (cold ramp): a cheap shimmer placeholder. All hooks above ran, so this early return keeps
             // hook order stable; presentation stays unread (lazy) so no real-row work happens until this row reveals.
-            if (!revealed.Value) return _o.ShimmerRow(shape.Set, shape.Tracks, _rowH);
+            if (!revealedNow) return _o.ShimmerRow(shape.Tracks, _rowH);
             var row = presentation.Value;
             var t = row.Track;
             var st = row.State;
@@ -2422,7 +2481,7 @@ sealed class TrackList : Component
             Element title = st.IsNow && !row.MarqueeDisabled
                 ? _o.BoundTitle(_item)
                 : _o.BoundTitlePlain(_item);
-            return _o.RowGrid(t, row.DisplayIndex, st.IsNow, st.IsPlaying, st.IsBuffering, st.IsTop, title, shape.Set, shape.Tracks, _rowH,
+            Element grid = _o.RowGrid(t, row.DisplayIndex, st.IsNow, st.IsPlaying, st.IsBuffering, st.IsTop, title, shape.Set, shape.Tracks, _rowH,
                               onPlay: () => _o.PlayRow(row.DisplayIndex),
                               saved: st.Saved, onLike: t.Uri.Length > 0 ? (Action)(() =>
                               {
@@ -2430,7 +2489,29 @@ sealed class TrackList : Component
                                   if (current.Uri.Length > 0) _o._lib?.ToggleSaved(current.Uri, current.Title);
                               }) : null,
                               likePop: likePop, presentation: row, hoverPaused: _hoverPaused);
+            // Rows that never shimmered return the grid bare — steady state, every recycled row, every warm page: not one
+            // extra node, not one transition slot. Only a slot whose first render WAS a placeholder (latch 1) is wrapped.
+            if (revealLatch.Value != 1) return grid;
+            // The ramp crossing. The placeholder and the real row are the SAME component slot, so the reconciler would
+            // patch one into the other in place — and a changed Key cannot ask for a remount here, because a component's
+            // root goes through ReconcileSingleChild, which reuses a same-type child and only *reports* the ignored key
+            // (Reconciler.ReportKeyIgnoredInSingleChildSlot). What actually forces Remove+Mount is the root's ELEMENT
+            // TYPE changing, GridEl → BoxEl — and the mount is what seeds Enter (Element.Enter/Animate.Enter is baked on
+            // BoxEl only, so the real row needs this box regardless). The keys are the intent, the type is the mechanism.
+            // Layout-neutral: the wrapper carries the grid's own flex config (Grow 1, Shrink 0, Basis auto, row direction).
+            return new BoxEl { Key = RealRowKey, Direction = 0, Grow = 1f, Animate = RampReveal, Children = [grid] };
         }
+
+        const string RealRowKey = "row:real";
+        // The crossing's softener: OPACITY ONLY — the row is already sitting in its final slot and its extent is the
+        // measured rowH, so a rise or a size channel would fight the geometry the placeholder just reserved. Same 280ms
+        // FluentDecelerate as the skin's mount entrance (BoundRowSkin `entrance`), so a ramp reveal and a re-cut remount
+        // read as one gesture. Reduced motion needs no branch here: the engine's ReducedSnap still cross-fades opacity.
+        // Static readonly ⇒ one shared spec for every row, so a crossing allocates the wrapper box and nothing else.
+        static readonly LayoutTransition RampReveal = new(
+            TransitionChannels.Opacity,
+            TransitionDynamics.Tween(280f, Easing.FluentDecelerate),
+            Enter: new EnterExit(Opacity: 0f, Active: true));
     }
 
     // Heterogeneous persistent-prefix content for the vertical playlist viewport. Prefix slots never recycle; track
@@ -2945,7 +3026,10 @@ sealed class TrackList : Component
                          // The ultra-compact tier also drops the "…" lane → no button built.
                          actionsCell: set.Actions ? TrackRow.MoreButton(more) : null,
                          // Keyed by the ROW, not the track: two rows holding the same song are two independent drawers.
-                         expandCell: set.Expand && t.Uri.Length > 0
+                         // TRACKS only: the drawer's whole content is alternate versions + per-item audio format, and
+                         // SpotifyTrackExpansionService is track-only by decision — an EPISODE row would open an empty
+                         // drawer, which is worse than no chevron at all (the lane is simply absent for it).
+                         expandCell: set.Expand && t.Uri.Length > 0 && EntityUri.KindOf(t.Uri) == EntityKind.Track
                              ? TrackRow.ExpandChevron(
                                  MembershipDiff.RowKeyMatches(_expandedRow.Value, t, displayIndex),
                                  () => ToggleExpanded(MembershipDiff.RowKey(t, displayIndex)))
@@ -3423,8 +3507,13 @@ sealed class SortMenuButton : Component
     readonly IReadSignal<TrackSort> _sort;
     readonly Action<TrackSort> _setSort;
     readonly bool _hasAlbum, _hasDate, _labeled;
-    public SortMenuButton(IReadSignal<TrackSort> sort, Action<TrackSort> setSort, bool hasAlbum, bool hasDate, bool labeled = false)
-    { _sort = sort; _setSort = setSort; _hasAlbum = hasAlbum; _hasDate = hasDate; _labeled = labeled; }
+    // A PREDICATE, not a bool, unlike hasAlbum/hasDate: those are facts about the SURFACE (frozen with the rest of this
+    // component's props at mount, per component-props-contract), while the Plays lane is a live user toggle that has to
+    // reach the menu the next time it OPENS — not the next time this button remounts.
+    readonly Func<bool>? _hasPlays;
+    public SortMenuButton(IReadSignal<TrackSort> sort, Action<TrackSort> setSort, bool hasAlbum, bool hasDate,
+                          bool labeled = false, Func<bool>? hasPlays = null)
+    { _sort = sort; _setSort = setSort; _hasAlbum = hasAlbum; _hasDate = hasDate; _labeled = labeled; _hasPlays = hasPlays; }
 
     internal static string Label(SortColumn c) => c switch
     {
@@ -3434,16 +3523,21 @@ sealed class SortMenuButton : Component
         SortColumn.Album => Loc.Get(Strings.Detail.Sort.Album),
         SortColumn.DateAdded => Loc.Get(Strings.Detail.Sort.DateAdded),
         SortColumn.Duration => Loc.Get(Strings.Detail.Sort.Duration),
+        SortColumn.Plays => Loc.Get(Strings.Detail.Column.Plays),
         _ => "",
     };
 
     internal static IReadOnlyList<MenuFlyoutItem> ItemsFor(
-        IReadSignal<TrackSort> sort, Action<TrackSort> setSort, bool hasAlbum, bool hasDate)
+        IReadSignal<TrackSort> sort, Action<TrackSort> setSort, bool hasAlbum, bool hasDate, bool hasPlays = false)
     {
         var cur = sort.Peek();
-        var fields = new List<SortColumn>(6) { SortColumn.Index, SortColumn.Title, SortColumn.Artist };
+        var fields = new List<SortColumn>(7) { SortColumn.Index, SortColumn.Title, SortColumn.Artist };
         if (hasAlbum) fields.Add(SortColumn.Album);
         if (hasDate) fields.Add(SortColumn.DateAdded);
+        // Offered only while the Plays lane is actually VISIBLE (album profiles always, playlist/Liked behind the
+        // opt-in): sorting by a column the reader cannot see reorders the list for no stated reason, and on a playlist
+        // the counts are not even filled until the column is on.
+        if (hasPlays) fields.Add(SortColumn.Plays);
         fields.Add(SortColumn.Duration);
 
         var items = new List<MenuFlyoutItem>(fields.Count + 3);
@@ -3460,7 +3554,7 @@ sealed class SortMenuButton : Component
         return items;
     }
 
-    IReadOnlyList<MenuFlyoutItem> Items() => ItemsFor(_sort, _setSort, _hasAlbum, _hasDate);
+    IReadOnlyList<MenuFlyoutItem> Items() => ItemsFor(_sort, _setSort, _hasAlbum, _hasDate, _hasPlays?.Invoke() ?? false);
 
     public override Element Render()
     {
@@ -3826,7 +3920,8 @@ sealed class DetailTrackMoreButton : Component
                 items.Add(new MenuFlyoutItem(Loc.Get(Strings.Detail.Shuffle), Icons.Shuffle, Invoke: _h.Shuffle));
             if ((_overflow & DetailTrackInlineCommand.Sort) != 0)
                 items.Add(MenuFlyoutItem.SubMenu(Loc.Get(Strings.Detail.Sort.Title),
-                    SortMenuButton.ItemsFor(_h.Sort, _h.SetSort, _cfg.ShowAlbumColumn, model.HasDateAdded),
+                    SortMenuButton.ItemsFor(_h.Sort, _h.SetSort, _cfg.ShowAlbumColumn, model.HasDateAdded,
+                        _cfg.ShowPlays || (_cfg.PlaysColumnOptIn && (_h.PlaysColumn?.Peek() ?? false))),
                     new IconRef { Glyph = Icons.Sort }));
             if ((_overflow & DetailTrackInlineCommand.Density) != 0)
                 items.Add(MenuFlyoutItem.SubMenu(Loc.Get(Strings.Detail.Density.RowSize),
@@ -3837,6 +3932,14 @@ sealed class DetailTrackMoreButton : Component
                 bool tempoOn = _h.TempoColumn.Peek();
                 items.Add(MenuFlyoutItem.Toggle(Loc.Get(Strings.Detail.TempoColumn), tempoOn,
                     () => _h.SetTempoColumn(!tempoOn)));
+            }
+            // Same shape for the Plays lane, offered only where the profile does not already carry one (playlist /
+            // Liked). Turning it on is also what authorises the kind-185 fill for this list — see DetailShell.
+            if (_cfg.PlaysColumnOptIn && _h.PlaysColumn is not null && _h.SetPlaysColumn is not null)
+            {
+                bool playsOn = _h.PlaysColumn.Peek();
+                items.Add(MenuFlyoutItem.Toggle(Loc.Get(Strings.Detail.PlaysColumn), playsOn,
+                    () => _h.SetPlaysColumn(!playsOn)));
             }
             if ((_overflow & DetailTrackInlineCommand.Select) != 0
                 && _h.MultiSelect is not null && _h.SetMultiSelect is not null)

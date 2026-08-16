@@ -56,7 +56,7 @@ public class SessionVolumeSyncTests
     static PlaybackController Make(out RecAudioHost host, out NowPlayingProjection proj, out RecOutbound outbound, out RecProj extra)
     {
         host = new RecAudioHost();
-        proj = new NowPlayingProjection("us", () => 0);
+        proj = new NowPlayingProjection("us", NotOwnedEntityHydrator.Instance, new InMemoryStore(), () => 0);
         outbound = new RecOutbound();
         extra = new RecProj();
         return new PlaybackController(host, new StubTrackResolver(), proj, new FakeContextResolver("spotify:track:a"), "us", outbound, new[] { extra });

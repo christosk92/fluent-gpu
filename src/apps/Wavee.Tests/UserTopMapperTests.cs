@@ -48,15 +48,18 @@ public sealed class UserTopMapperTests
         Assert.Equal(201000, tracks[0].DurationMs);
     }
 
+    // RETURN-ONLY (hydration-facade-plan.md 1.6): the service no longer writes the store. Both planes still come
+    // out of ONE request - that shared-document contract is what this case pins; the store assertions moved out
+    // with the thin UpsertArtist/UpsertTrack pass (a card opens through the facade, which hydrates properly).
     [Fact]
-    public async Task ArtistsAndTracks_ShareOneRequest_AndHydrateBothStorePlanes()
+    public async Task ArtistsAndTracks_ShareOneRequest()
     {
         var http = new FakeExchange((_, _) => new HttpResp(200,
             new Dictionary<string, string>(System.StringComparer.OrdinalIgnoreCase), Encoding.UTF8.GetBytes(Response)));
         var store = new InMemoryStore();
         var pf = new PathfinderResource(new PathfinderClient(http), static () =>
             new SessionContext("me", "US", "premium", "en", Tier.Premium, false));
-        var service = new SpotifyUserTopService(pf, store);
+        var service = new SpotifyUserTopService(pf);
 
         var artistsTask = service.GetTopArtistsAsync();
         var tracksTask = service.GetTopTracksAsync();
@@ -65,8 +68,8 @@ public sealed class UserTopMapperTests
         Assert.Equal(1, http.Calls);
         Assert.Single(await artistsTask);
         Assert.Single(await tracksTask);
-        Assert.NotNull(store.GetArtist("spotify:artist:a1"));
-        Assert.NotNull(store.GetTrack("spotify:track:t1"));
+        Assert.Null(store.GetArtist("spotify:artist:a1"));   // return-only: nothing was minted
+        Assert.Null(store.GetTrack("spotify:track:t1"));
     }
 
     // ── the negative cache window ──────────────────────────────────────────────────────────────────────────────
@@ -83,7 +86,7 @@ public sealed class UserTopMapperTests
             ? new HttpResp(500, NoHeaders(), System.Array.Empty<byte>())
             : new HttpResp(200, NoHeaders(), Encoding.UTF8.GetBytes(Response)));
         var now = new System.DateTimeOffset(2026, 1, 1, 0, 0, 0, System.TimeSpan.Zero);
-        var service = new SpotifyUserTopService(Pf(http), new InMemoryStore(), clock: () => now);
+        var service = new SpotifyUserTopService(Pf(http), clock: () => now);
 
         Assert.Empty(await service.GetTopArtistsAsync());        // the failure is cached, but only briefly
 
@@ -98,7 +101,7 @@ public sealed class UserTopMapperTests
     {
         var http = new FakeExchange((_, _) => new HttpResp(200, NoHeaders(), Encoding.UTF8.GetBytes(Response)));
         var now = new System.DateTimeOffset(2026, 1, 1, 0, 0, 0, System.TimeSpan.Zero);
-        var service = new SpotifyUserTopService(Pf(http), new InMemoryStore(), clock: () => now);
+        var service = new SpotifyUserTopService(Pf(http), clock: () => now);
 
         Assert.Single(await service.GetTopArtistsAsync());
         int afterFirst = http.Calls;

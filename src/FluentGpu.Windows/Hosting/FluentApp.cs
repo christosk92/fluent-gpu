@@ -129,10 +129,49 @@ public static class FluentApp
     // The single implementation. Public entry points (Run) and the diagnostic harness (FluentAppHarness.Run) both route
     // here; splitting the interactive options (AppOptions) from the test/diagnostic knobs (HarnessOptions: frames,
     // screenshot, frame-wait) keeps the everyday surface a one-liner while the harness owns the deterministic controls.
+    //
+    // THE UI THREAD IS A DEDICATED THREAD WITH A REAL STACK, not the process main thread. The frame loop records the
+    // scene on the UI thread (AppHost.RunFrame → SceneRecorder.Record), and that walk is recursive with a large frame
+    // (~21.5 KB optimized; a Debug JIT frame is several times that). On the apphost's default 1.5 MB main-thread stack
+    // the recorder's stack-headroom guard tripped at ~68 levels in Release and far shallower in Debug — and it degrades by
+    // NOT PAINTING the deepest subtree: a Debug build showed every detail page's row skins with no row content, no hero,
+    // no top tracks, for a whole session, silently. The main thread's reserve is baked into the apphost/PE header and is
+    // not reachable from managed code (no runtimeconfig knob; DOTNET_DefaultStackSize only shapes threads WE create), so
+    // the loop runs on a thread we create with a 32 MB reserve: reserve only (committed on demand ⇒ no cost), ~1,500
+    // levels at the Release frame size, hundreds in Debug — the guard becomes the last-resort net it was meant to be
+    // (SceneRecordStats.DepthAborts stays 0). Same path in Debug, Release and NativeAOT.
+    //
+    // STA: Wavee's Main is [STAThread] because file pickers / SMTC / taskbar are STA-only coclasses — the thread that
+    // owns the window and the pump must be STA too, so we set it before Start. Everything the callers do BEFORE Run
+    // (single-instance gate, protocol registration, the ActivationRedirected subscription) stays on Main; ThreadGuard
+    // binds roles per thread at runtime, so nothing in the engine assumes the process main thread. An exception on the
+    // UI thread is captured and rethrown on the caller so unhandled-exception logging / exit codes behave as before.
+    internal const int UiThreadStackBytes = 32 * 1024 * 1024;
+
     internal static void RunCore(Func<Component> root, AppOptions o, HarnessOptions h)
     {
         if (Array.IndexOf(Environment.GetCommandLineArgs(), "--audio-host") >= 0)
             throw new InvalidOperationException("FluentApp.Run must not be reached in --audio-host child mode.");
+
+        System.Runtime.ExceptionServices.ExceptionDispatchInfo? failure = null;
+        var ui = new Thread(() =>
+        {
+            try { RunCoreOnUiThread(root, o, h); }
+            catch (Exception ex) { failure = System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(ex); }
+        }, UiThreadStackBytes)
+        {
+            Name = "fgpu-ui",
+            IsBackground = false,   // the process lives exactly as long as the UI loop
+        };
+        ui.SetApartmentState(ApartmentState.STA);
+        ui.Start();
+        ui.Join();
+        failure?.Throw();
+    }
+
+    // The frame-loop body proper — everything from DPI awareness through the message pump — on the dedicated UI thread.
+    private static void RunCoreOnUiThread(Func<Component> root, AppOptions o, HarnessOptions h)
+    {
 
 #if DEBUG || FLUENTGPU_DIAG
         // Diagnostic A/B only: remove the DWM-Mica / premultiplied-composition path as ONE variable. This creates the

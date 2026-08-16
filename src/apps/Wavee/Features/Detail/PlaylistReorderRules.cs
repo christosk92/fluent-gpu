@@ -1,3 +1,6 @@
+using System.Collections.Generic;
+using Wavee.Core;
+
 namespace Wavee;
 
 /// <summary>What a playlist insertion's chip claims the drop will do (see <see cref="PlaylistReorderRules.VerbFor"/>).
@@ -52,6 +55,61 @@ static class PlaylistReorderRules
         if (delta < 0) return min > 0 ? min - 1 : -1;
         return max + 1 < itemCount ? max + 2 : -1;
     }
+
+    // ── the KEYED-reorder gate (P2) ───────────────────────────────────────────────────────────────────────────────
+    // The wire reorder is ONE item-keyed MOV: every moved row is named by its `item_id`, and the landing position is
+    // named by ONE anchor row's `item_id` (add_first / add_last for the two ends). There is deliberately NO positional
+    // fallback — sending indices while our own add is still in flight is exactly how rows land in the wrong place —
+    // so a row whose id has not arrived yet cannot be moved, and neither can a drop whose anchor row has no id.
+    // These two predicates answer that BEFORE the gesture commits, so the refusal is a caption rather than a rolled
+    // back move. They mirror PlaylistMutationSource.BuildKeyedMove's own derivation (which walks the same anchor back
+    // over the rows being moved); this is the page-side half of the same rule.
+
+    /// <summary>Every moved row carries the membership <c>item_id</c> the keyed MOV names it by.</summary>
+    public static bool RowsAreKeyed(IReadOnlyList<PlaylistRowRef> rows)
+    {
+        if (rows.Count == 0) return false;
+        for (int i = 0; i < rows.Count; i++)
+            if (string.IsNullOrEmpty(rows[i].ItemId)) return false;
+        return true;
+    }
+
+    /// <summary>The ORIGINAL membership index a DISPLAY slot names ("insert before the row currently here"). Slot 0 is
+    /// the head of the displayed order and the end is the end of MEMBERSHIP, which is why the two edges do not read
+    /// through the view map at all.</summary>
+    public static int OriginalInsertionIndex(ReadOnlySpan<int> view, int trackCount, int displaySlot)
+    {
+        if (displaySlot <= 0) return view.Length > 0 ? view[0] : 0;
+        if (displaySlot >= view.Length) return trackCount;
+        return view[displaySlot];
+    }
+
+    /// <summary>Will the row that becomes the MOVE'S ANCHOR carry an <c>item_id</c>? The two ends (<c>add_first</c> /
+    /// <c>add_last</c>) need no anchor at all and are therefore always keyed; otherwise the anchor is the predecessor
+    /// at <paramref name="at"/>−1, walking back over rows that are themselves being moved (that is what lets a GAPPED
+    /// selection land as one contiguous run) — nothing left above means <c>add_first</c>.</summary>
+    /// <param name="tracks">Membership in ORIGINAL order; <c>Track.ContextUid</c> is the row's <c>item_id</c>.</param>
+    /// <param name="moved">The rows being moved (ORIGINAL indices).</param>
+    /// <param name="at">The PRE-move insertion index into <paramref name="tracks"/>.</param>
+    public static bool AnchorRowIsKeyedAt(IReadOnlyList<Track> tracks, IReadOnlyList<PlaylistRowRef> moved, int at)
+    {
+        if (at <= 0 || at >= tracks.Count) return true;      // add_first / add_last — no anchor row to name
+        int j = at - 1;
+        while (j >= 0 && IsMoved(moved, j)) j--;
+        if (j < 0) return true;                              // everything above is moving → add_first
+        return !string.IsNullOrEmpty(tracks[j].ContextUid);
+
+        static bool IsMoved(IReadOnlyList<PlaylistRowRef> rows, int original)
+        {
+            for (int i = 0; i < rows.Count; i++) if (rows[i].Index == original) return true;
+            return false;
+        }
+    }
+
+    /// <summary>The same question asked in DISPLAY coordinates (what a drop hands us).</summary>
+    public static bool AnchorRowIsKeyed(ReadOnlySpan<int> view, IReadOnlyList<Track> tracks,
+                                        IReadOnlyList<PlaylistRowRef> moved, int displaySlot)
+        => AnchorRowIsKeyedAt(tracks, moved, OriginalInsertionIndex(view, tracks.Count, displaySlot));
 
     /// <summary>Invert the display→original view map for ONE dragged row: the drag payload carries ORIGINAL membership
     /// indices, while the framework's virtual-removal math counts DISPLAY positions. A same-list move is only legal in

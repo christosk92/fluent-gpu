@@ -260,18 +260,14 @@ public sealed class SidebarArtistTopTracksSource : SidebarDataSourceBase, ISideb
     public const int ArtistCacheCap = 8;
 
     readonly IMusicLibrary? _library;
-    readonly IArtistPopularTracksService? _popular;
     readonly Dictionary<string, List<SidebarLibraryEntry>> _byArtist = new(StringComparer.Ordinal);
     readonly Dictionary<string, SidebarSourceState> _stateByArtist = new(StringComparer.Ordinal);
     readonly List<string> _lru = new();
     Action<Action>? _post;
 
-    public SidebarArtistTopTracksSource(IMusicLibrary? library, IArtistPopularTracksService? popular)
+    public SidebarArtistTopTracksSource(IMusicLibrary? library)
         : base(SidebarContributions.ArtistTopTracks)
-    {
-        _library = library;
-        _popular = popular;
-    }
+        => _library = library;
 
     public override SidebarSourceItemType ItemType => SidebarSourceItemType.Track;
     public override SidebarSourceSorts SupportedSorts => SidebarSourceSorts.SourceOrder;
@@ -303,11 +299,11 @@ public sealed class SidebarArtistTopTracksSource : SidebarDataSourceBase, ISideb
         var state = SidebarSourceState.Ready;
         try
         {
-            var artist = await _library!.GetArtistAsync(artistUri).ConfigureAwait(false);
-            IReadOnlyList<Track> seed = artist?.TopTracks ?? Array.Empty<Track>();
-            tracks = _popular is null
-                ? seed
-                : await _popular.EnsureExtendedAsync(artistUri, seed).ConfigureAwait(false);
+            // The FULL rung IS the extended chart (overview seed ∪ artist-top-tracks-extensions, with counts) —
+            // one ask through the catalog replaces the seed-then-extend two-service dance. Offline the ladder stops at
+            // whatever is resident, so the pane renders the seed rather than nothing.
+            var artist = await _library!.GetArtistAsync(artistUri, HydrationLevel.Full).ConfigureAwait(false);
+            tracks = artist?.TopTracks ?? Array.Empty<Track>();
         }
         catch (OperationCanceledException) { return; }
         catch (Exception) { state = SidebarSourceState.Error; }

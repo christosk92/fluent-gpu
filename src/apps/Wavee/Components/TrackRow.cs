@@ -5,6 +5,7 @@ using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Localization;
 using FluentGpu.Scene;
 using FluentGpu.Signals;
 using Wavee.Core;
@@ -250,8 +251,11 @@ internal static class TrackRow
         // and 0 duration. Formatting those gives "0" and "0:00", which reads as a real, dismal track rather than as one
         // that is not out — so the cells state the absence instead. Reuses the `notYetOut` local above rather than
         // re-deriving the test: one row must not be dim-but-timed or bright-but-dashed.
+        // A count of 0 is "not known yet", never "nobody played it": the kind-185 reader refuses to invent a count, and
+        // playlist/Liked rows fill LAZILY (the whole-list hydrator runs off the open path, and album rows are countless
+        // until it lands too). Rendering that as "0" would state a fact the app does not have, so the cell dashes.
         if (set.Plays)
-            Add(CellKey.Plays, EndCell(Caption(notYetOut ? Dash : PlaysLabel(t.PlayCount)) with { Color = Tok.TextTertiary }));
+            Add(CellKey.Plays, EndCell(Caption(notYetOut || t.PlayCount <= 0 ? Dash : PlaysLabel(t.PlayCount)) with { Color = Tok.TextTertiary }));
         if (ShowTempo(set))
             Add(CellKey.Tempo, EndCell(TempoCell(t)));
         // A pending track states WHEN rather than a dash, when the metadata plane gave us a live instant in the future
@@ -586,6 +590,12 @@ internal static class TrackRow
         Children = [new TextEl("E") { Size = 10f, LineHeight = 12f, Weight = 600, Color = Tok.TextTertiary }],
     };
 
+    /// <summary>The route a metadata REF navigates to. A ref states its own kind, so the ONE route table
+    /// (<see cref="RichText.RouteForUri"/>) answers it — which is how a podcast SHOW sitting in the artist/album slot of
+    /// an episode row (<c>EpisodeAsTrack</c>, design §1.5) opens the show page instead of a dead album route. A ref the
+    /// table cannot classify (a name-only artist with no uri) keeps the lane's own prefix, i.e. today's behaviour.</summary>
+    static string RouteForRef(string uri, string fallbackPrefix) => RichText.RouteForUri(uri) ?? (fallbackPrefix + uri);
+
     /// <summary>The billed artists as one ellipsized run of per-artist links. <paramref name="size"/>/<paramref name="weight"/>
     /// default to the track-row metadata style (Caption 12/16); a caller with its own type ramp (the library detail
     /// pane's hero line) passes its own — including a matching <paramref name="lineHeight"/>, so the run never falls
@@ -600,7 +610,8 @@ internal static class TrackRow
         {
             if (i > 0) spans[n++] = new TextSpan(", ");
             var a = artists[i];   // fresh per-iteration capture → each link navigates to its OWN artist
-            spans[n++] = new TextSpan(a.Name, OnClick: () => go("artist:" + a.Uri, a.Name));
+            string route = RouteForRef(a.Uri, "artist:");
+            spans[n++] = new TextSpan(a.Name, OnClick: () => go(route, a.Name));
         }
         return new SpanTextEl(spans)
         {
@@ -618,6 +629,10 @@ internal static class TrackRow
     static Element MetadataLine(Track t, Action<string, string?> go, bool showArtists, bool showAlbum,
                                 bool showExplicit)
     {
+        // An EPISODE is a playable with no artists and its SHOW in the album slot (EpisodeAsTrack, design §1.5). Its
+        // subtitle is therefore the show — always, not only at the compact tiers where the Album lane folds into this
+        // line: dropping it would leave the row's second line empty and the row silent about which podcast it is from.
+        bool episode = EntityUri.KindOf(t.Uri) == EntityKind.Episode;
         var spans = new List<TextSpan>(t.Artists.Count * 2 + 2);
         if (showArtists)
         {
@@ -625,17 +640,29 @@ internal static class TrackRow
             {
                 if (i > 0) spans.Add(new TextSpan(", "));
                 var a = t.Artists[i];
-                spans.Add(new TextSpan(a.Name, OnClick: () => go("artist:" + a.Uri, a.Name)));
+                string artistRoute = RouteForRef(a.Uri, "artist:");
+                spans.Add(new TextSpan(a.Name, OnClick: () => go(artistRoute, a.Name)));
             }
         }
-        if (showAlbum && t.Album.Name.Length > 0)
+        if ((showAlbum || episode) && t.Album.Name.Length > 0)
         {
             if (spans.Count > 0) spans.Add(new TextSpan(" \u00B7 "));
             var album = t.Album;
-            spans.Add(new TextSpan(album.Name, OnClick: () => go("album:" + album.Uri, album.Name)));
+            // The ref decides its own route: a show uri opens the podcast page, an album uri the album page, and a
+            // uri-less ref (a name-only show/album) stays plain text rather than a link into an empty route.
+            string? route = RichText.RouteForUri(album.Uri);
+            spans.Add(new TextSpan(album.Name, OnClick: route is null ? null : () => go(route, album.Name)));
         }
 
         var kids = new List<Element>(3);
+        // The row's ONE type token, in the lane the explicit badge owns (the two never co-occur — an episode files no
+        // explicit mark here). It answers "why is this row in my playlist" with no new column and no second line, on
+        // the eyebrow rung the rest of the app states a type on (Caption 12/16/600 + tracking, tertiary).
+        if (episode)
+            kids.Add(WaveeType.Eyebrow(Loc.Get(Strings.Detail.Badge.Episode)) with
+            {
+                Color = Tok.TextTertiary, Shrink = 0f, MaxLines = 1,
+            });
         if (showExplicit) kids.Add(ExplicitBadge());
         if (spans.Count > 0)
             kids.Add(new SpanTextEl(spans.ToArray())
@@ -659,17 +686,19 @@ internal static class TrackRow
     // as pending — so a name-less album states the absence with the same `Dash` + TextTertiary treatment the Plays and
     // Duration cells use for a not-yet-out track, never a fabricated title. The click survives whenever a uri exists
     // (opening the album is itself one of the things that hydrates its name) and is dropped when it does not — a span
-    // that navigated to a bare "album:" was a dead link. MetadataService.SyncAllAsync closure (blank AlbumRef scan)
+    // that navigated to a bare "album:" was a dead link. The playable ladder's ref-closure post-step (blank AlbumRef scan)
     // closes the gap for liked rows that hydrate with a known album URI and an empty name — this is what the row looks
     // like until it does.
     internal static Element AlbumLink(AlbumRef album, Action<string, string?> go)
     {
         bool named = album.Name.Length > 0;
         Action? open = null;
-        if (album.Uri.Length > 0)
+        // An episode row carries its SHOW in this ref (EpisodeAsTrack, design §1.5), so the lane routes by the ref's own
+        // kind: "show:" for a podcast, "album:" for a release. RouteForUri is the ONE table this and the subline share.
+        if (RichText.RouteForUri(album.Uri) is { } route)
         {
-            string uri = album.Uri, title = album.Name;   // captured by value — no AlbumRef held by the closure
-            open = () => go("album:" + uri, title.Length > 0 ? title : null);
+            string title = album.Name;   // captured by value — no AlbumRef held by the closure
+            open = () => go(route, title.Length > 0 ? title : null);
         }
         return new SpanTextEl([new TextSpan(named ? album.Name : Dash, OnClick: open)])
         {

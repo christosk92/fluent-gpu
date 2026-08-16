@@ -35,10 +35,17 @@ sealed class TrackCreditsDialog : Component
         var infoL = UseResource(ct => LoadAsync(_svc, _artistUri, _trackUri, ct), (TrackNpvInfo?)null, (_artistUri, _trackUri)).Loadable;
         var state = (LoadState)infoL.State.Value;
         var info = infoL.Value.Value;
+        // The uncapped kind-186 drawer, keyed on the track alone. It is the preferred list — NPV's capped ten rows are
+        // the fallback for a track the wire has no 186 for, and for offline.
+        var creditsL = UseResource(ct => LoadCreditsAsync(_svc, _trackUri, ct), (TrackCredits?)null, _trackUri).Loadable;
+        var full = creditsL.Value.Value;
 
         Element body =
-            info?.Credits is { Count: > 0 } credits ? CreditsList(credits, info.CreditSources, _go)
-            : state == LoadState.Pending ? Loading()
+            full is { Credits.Count: > 0 } ? CreditsList(full.Credits, full.Sources, _go)
+            : info?.Credits is { Count: > 0 } credits ? CreditsList(credits, info.CreditSources, _go)
+            // Both reads have to be done before "no credits" is the truth — 186 answering late must not flash an empty
+            // drawer first.
+            : state == LoadState.Pending || (LoadState)creditsL.State.Value == LoadState.Pending ? Loading()
             : new TextEl(Loc.Get(Strings.Menu.NoCredits)) { Size = 13f, Color = Tok.TextSecondary };
 
         return new BoxEl { Direction = 1, MinWidth = 360f, MaxWidth = 440f, Children = [body] };
@@ -47,6 +54,14 @@ sealed class TrackCreditsDialog : Component
     static async Task<TrackNpvInfo?> LoadAsync(Services svc, string artistUri, string trackUri, CancellationToken ct)
     {
         try { return (await svc.AlbumEnrichment.GetNowPlayingInfoAsync(artistUri, trackUri, ct).ConfigureAwait(false))?.Track; }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch { return null; }
+    }
+
+    static async Task<TrackCredits?> LoadCreditsAsync(Services svc, string trackUri, CancellationToken ct)
+    {
+        if (trackUri.Length == 0) return null;
+        try { return await svc.TrackCredits.GetAsync(trackUri, ct).ConfigureAwait(false); }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch { return null; }
     }

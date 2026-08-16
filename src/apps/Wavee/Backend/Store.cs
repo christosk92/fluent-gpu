@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using Wavee.Backend.Playlists;
@@ -20,7 +20,10 @@ public readonly record struct StoreChange(string Uri, bool IsBulk = false, Colle
 }
 
 /// <summary>One rootlist row in the queryable spine: a playlist uri or a start/end-group marker (Kind 0=item, 1=start, 2=end).</summary>
-public readonly record struct RootlistEntry(int Position, int Kind, string Uri, string? GroupName, int Depth);
+/// <summary>One rootlist row. <paramref name="AddedAtMs"/> is the row's server ADD timestamp (playlist4
+/// <c>ItemAttributes.timestamp</c>, unix ms; 0 = not captured yet): a folder RENAME has to re-send the marker's
+/// ORIGINAL create timestamp, so it has to survive the round trip through the store.</summary>
+public readonly record struct RootlistEntry(int Position, int Kind, string Uri, string? GroupName, int Depth, long AddedAtMs = 0);
 
 /// <summary>One library-set member with its server add timestamp (unix ms; 0 = unknown) — the Liked-songs/collections
 /// default order (added-date descending) reads this; <see cref="IStore.SavedUris"/> stays the unordered fast path.</summary>
@@ -66,6 +69,14 @@ public interface IStore
     Show? GetShow(string uri);
     void UpsertEpisode(Episode e);
     Episode? GetEpisode(string uri);
+    // Playlist owners / added-by contributors (design §2.3 UserHydration). An owner is a first-class ENTITY, not a
+    // service-private cache: `UserHydration` writes it here and every surface that renders a name+avatar reads it back,
+    // so a profile that lands late repaints through the ordinary change stream instead of a bespoke `Changed` event.
+    // KEY: the canonical `spotify:user:<lowercased id>` uri (`UserProfileIds.Normalize`). Both members accept EITHER a
+    // bare id or a user uri and normalize internally — the wire spells owners both ways, and two spellings must never
+    // become two rows. A non-normalizable input is a silent no-op / null, never an exception.
+    void UpsertOwner(Owner owner);
+    Owner? GetOwner(string userUriOrId);
     // video↔audio associations (the music-video data side; persisted + etag-revalidated). NOT an entity kind — it is
     // keyed by the SAME entity uri as the Track, so it lives in its own side table rather than the entity store.
     void UpsertVideoAssociation(VideoAssociation a);
@@ -100,6 +111,14 @@ public interface IStore
     IObservable<StoreChange> Changes { get; }
     /// <summary>Coalesce a burst of writes (e.g. a 10k-entity metadata sync) into ONE change signal, not one per entity.</summary>
     IDisposable BeginBulk();
+
+    /// <summary>Record that a DETAIL SURFACE was opened for this entity — one of the `recent_surfaces` pin reasons, so
+    /// the newest opened surfaces survive the cache-tier TTL/budget and repaint offline after a restart.
+    /// <para>A DEFAULT member because it is a CACHE concern, not a query: only the persisted store has a pin table to
+    /// write, and the in-memory store legitimately has nothing to do. Putting it on the interface is what lets the show
+    /// ladder pin the membership it just paid for without knowing which store it is talking to (design §2.3).</para>
+    /// <param name="kind">The transport's <see cref="Wavee.Backend.Metadata.EntityKind"/> — the persisted column.</param></summary>
+    void RecordRecentSurface(string uri, int kind) { }
 }
 
 static class StoreEntityMerge
@@ -150,9 +169,10 @@ static class StoreEntityMerge
         };
     }
 
-    /// <summary>Blank OR <c>title == uri</c> (the synthetic placeholder thin writers seed before real metadata resolves).</summary>
-    public static bool TitleMissing(string? title, string uri)
-        => string.IsNullOrEmpty(title) || title == uri;
+    /// <summary>Blank OR <c>title == uri</c> (the synthetic placeholder thin writers seed before real metadata resolves).
+    /// ONE body, in <see cref="HydrationLevels.TitleMissing"/> - the merge and the ladder gates must never disagree about
+    /// what "thin" means, and StoreEntityGaps (the second copy) was deleted with the legacy hydration paths.</summary>
+    public static bool TitleMissing(string? title, string uri) => HydrationLevels.TitleMissing(title, uri);
 
     public static Album Album(Album? current, Album incoming)
     {
@@ -209,8 +229,12 @@ static class StoreEntityMerge
             // ordinary promo card on the next render.
             Pinned = incoming.Pinned ?? current.Pinned,
             // A FRESH overview write is authoritative about what the artist no longer has — see MergeExtras.PreRelease.
-            // FetchedAt is the existing discriminator: a full overview carries UtcNow, a thin write carries default.
-            Extras = MergeExtras(current.Extras, incoming.Extras, overviewAuthoritative: incoming.FetchedAt > current.FetchedAt),
+            // OverviewFetchedAt is the discriminator, NOT FetchedAt: FetchedAt is a max-of stamp every writer may raise
+            // (the chart step, a thin V4 upsert that happens to carry one), so a non-overview write that merely bumped
+            // it would claim authority over absences it knows nothing about and silently clear the pre-release card.
+            // Only the queryArtistOverview write stamps OverviewFetchedAt.
+            Extras = MergeExtras(current.Extras, incoming.Extras,
+                                 overviewAuthoritative: incoming.OverviewFetchedAt > current.OverviewFetchedAt),
             // Per-facet discography totals: a thin write (0 = unknown) must not drop a full-overview's real total.
             AlbumsTotal = incoming.AlbumsTotal > 0 ? incoming.AlbumsTotal : current.AlbumsTotal,
             SinglesTotal = incoming.SinglesTotal > 0 ? incoming.SinglesTotal : current.SinglesTotal,
@@ -219,6 +243,17 @@ static class StoreEntityMerge
             PopularReleases = Has(incoming.PopularReleases) ? incoming.PopularReleases : current.PopularReleases,
             // Keep the newer freshness stamp: a full-overview write carries UtcNow; a thin write carries default → keeps current.
             FetchedAt = incoming.FetchedAt > current.FetchedAt ? incoming.FetchedAt : current.FetchedAt,
+            // Same max-of rule, its own clock: the overview stamp can only ever move forward, and only an overview
+            // write moves it. That is what lets the Rich age gate ask "when did the OVERVIEW last land?" instead of
+            // "when did anyone last write this row?" — the question a chart write or a V4 upsert would answer wrong.
+            OverviewFetchedAt = incoming.OverviewFetchedAt > current.OverviewFetchedAt
+                ? incoming.OverviewFetchedAt : current.OverviewFetchedAt,
+            // …and the CHART's clock, on exactly the same max-of terms. Only ArtistHydration.EnsureChartAsync stamps
+            // it, so it answers "when did artist-top-tracks-extensions last speak?" — the question the Full rung's
+            // freshness has to ask, because an artist with a genuinely short chart can never satisfy the presence test
+            // (TopTracks.Count > OverviewSeedCap) and would otherwise re-GET forever.
+            ChartFetchedAt = incoming.ChartFetchedAt > current.ChartFetchedAt
+                ? incoming.ChartFetchedAt : current.ChartFetchedAt,
         };
     }
 
@@ -248,6 +283,9 @@ static class StoreEntityMerge
             Tuning = incoming.Tuning ?? current.Tuning,
             IsPublic = permissionWrite ? incoming.IsPublic : current.IsPublic,
             BasePermissionRevision = incoming.BasePermissionRevision ?? current.BasePermissionRevision,
+            // Tombstones LATCH: a delete observed once can never be un-observed by a later thin header write (the
+            // rootlist/header writers all default the flag to false). Only a real un-delete path would clear it.
+            DeletedByOwner = incoming.DeletedByOwner || current.DeletedByOwner,
         };
     }
 
@@ -263,6 +301,23 @@ static class StoreEntityMerge
             Description = incoming.Description ?? current.Description,
             // Episodes land via membership (S3); until then protect a present list from a thin header rewrite.
             Episodes = Has(incoming.Episodes) ? incoming.Episodes : current.Episodes,
+            // A READ-MODEL count (0 = this writer doesn't know) — no store writer stamps it, but the same
+            // 0-is-unknown discipline keeps a hypothetical one from blanking a known total.
+            TotalEpisodes = incoming.TotalEpisodes > 0 ? incoming.TotalEpisodes : current.TotalEpisodes,
+        };
+    }
+
+    /// <summary>An owner is three fields and two writers (the kind-15 batch and the REST fallback), so the merge is the
+    /// minimal protective one: a real Name never loses to a blank, and a null Avatar means "this writer didn't know",
+    /// never "clear it" (the REST body carries no image for some accounts while kind 15 does).</summary>
+    public static Owner Owner(Owner? current, Owner incoming)
+    {
+        if (current is null) return incoming;
+        return incoming with
+        {
+            Id = NonEmpty(incoming.Id, current.Id),
+            Name = NonEmpty(incoming.Name, current.Name),
+            Avatar = incoming.Avatar ?? current.Avatar,
         };
     }
 
@@ -274,6 +329,10 @@ static class StoreEntityMerge
             Id = NonEmpty(incoming.Id, current.Id),
             Title = NonEmpty(incoming.Title, current.Title),
             ShowName = NonEmpty(incoming.ShowName, current.ShowName),
+            // The show LINK is additive, never subtractive: a writer that knows the name but not the gid (a cluster
+            // row, a restored blob from before the field existed) must not strip the uri a catalogue write already
+            // landed — that is the same "thin write must not downgrade a rich row" rule the rest of this file applies.
+            ShowUri = incoming.ShowUri ?? current.ShowUri,
             Image = incoming.Image ?? current.Image,
             DurationMs = incoming.DurationMs > 0 ? incoming.DurationMs : current.DurationMs,
             PublishedAt = incoming.PublishedAt != default && incoming.PublishedAt != DateTimeOffset.UnixEpoch
@@ -368,35 +427,6 @@ static class StoreEntityMerge
     static string NonEmpty(string value, string fallback) => value.Length > 0 ? value : fallback;
 }
 
-/// <summary>One shared notion of "thin" for row-pickers and the SyncAllAsync closure. Presentation em-dashes stay
-/// local; envelope completeness (<see cref="Wavee.Backend.Library.StoreLibrarySource.IsAlbumComplete"/>) stays separate.</summary>
-static class StoreEntityGaps
-{
-    public static bool RefNeedsName(in AlbumRef r) => r.Uri.Length > 0 && r.Name.Length == 0;
-
-    public static bool TrackUnnamed(Track t)
-        => StoreEntityMerge.TitleMissing(t.Title, t.Uri) || ArtistsNeedNames(t);
-
-    /// <summary>Thin enough that a TrackV4 re-fetch is owed (unnamed title / artist uris without names). Album-name
-    /// blanks are a separate album-uri arm — ProjectArtist does not rewrite denormalized track artist lists.</summary>
-    public static bool TrackNeedsData(Track t) => TrackUnnamed(t);
-
-    /// <summary>The now-playing early-out (C5): art + named artist + named album. Kept so Pathfinder getTrack does
-    /// not fire on every cluster heartbeat when TrackV4 already closed the gap.</summary>
-    public static bool NowPlayingReady(Track? t)
-        => t is not null
-           && ImageSource.IsUsable(t.Image)
-           && t.Artists.Count > 0 && t.Artists[0].Name.Length > 0
-           && t.Album.Name.Length > 0;
-
-    static bool ArtistsNeedNames(Track t)
-    {
-        for (int i = 0; i < t.Artists.Count; i++)
-            if (t.Artists[i].Uri.Length > 0 && t.Artists[i].Name.Length == 0) return true;
-        return false;
-    }
-}
-
 public sealed class InMemoryStore : IStore
 {
     readonly object _gate = new();
@@ -406,6 +436,10 @@ public sealed class InMemoryStore : IStore
     readonly Dictionary<string, Playlist> _playlists = new();
     readonly Dictionary<string, Show> _shows = new();
     readonly Dictionary<string, Episode> _episodes = new();
+    // Owners are keyed by the canonical `spotify:user:<id>` uri and are deliberately OUTSIDE the six-kind residency /
+    // eviction model: an Owner is ~150 B of strings, the live set is bounded by the users the library actually surfaces
+    // (playlist owners + added-by contributors), and evicting one would only cost a re-resolve of something free.
+    readonly Dictionary<string, Owner> _owners = new(StringComparer.Ordinal);
     readonly Dictionary<string, VideoAssociation> _videoAssoc = new();
     readonly Dictionary<string, VideoOverride> _videoOverrides = new(StringComparer.Ordinal);
     readonly Dictionary<string, long> _versions = new();
@@ -675,6 +709,23 @@ public sealed class InMemoryStore : IStore
         MaybeBackstopEvict();
     }
     public Episode? GetEpisode(string uri) { lock (_gate) { if (_episodes.TryGetValue(uri, out var e)) { TouchUse(uri); return e; } return null; } }
+
+    public void UpsertOwner(Owner owner)
+    {
+        if (owner is null || UserProfileIds.Normalize(owner.Id) is not { } key) return;
+        lock (_gate)
+        {
+            _owners.TryGetValue(key, out var current);
+            _owners[key] = StoreEntityMerge.Owner(current, owner);
+        }
+        Bump(key);   // an owner landing is what makes a playlist row's byline readable — see StoreLibrarySource
+    }
+
+    public Owner? GetOwner(string userUriOrId)
+    {
+        if (UserProfileIds.Normalize(userUriOrId) is not { } key) return null;
+        lock (_gate) return _owners.TryGetValue(key, out var o) ? o : null;
+    }
 
     // A full replace (each fetch yields the complete association; a 304 keeps the prior record with a bumped FetchedAt,
     // handled by the caller). This DOES Bump: the association is now the has-video answer every surface renders

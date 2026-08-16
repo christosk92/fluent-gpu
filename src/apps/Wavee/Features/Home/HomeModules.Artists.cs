@@ -51,10 +51,13 @@ sealed class HomeArtistRow : Component
         var (selected, setSelected) = UseState(-1);
         string? selectedUri = (uint)selected < (uint)artists.Count ? artists[selected].Uri : null;
 
+        // The warm seed is a PRESENCE question, not an age one: paint the resident artist immediately iff it already
+        // carries what the expander shows (overview facets = Rich). Freshness/TTL belongs to the hydration ledger the
+        // GetArtistAsync below goes through — this is why ArtistStatsCache died (hydration-facade-plan.md §1.6).
         Artist? warm = selectedUri is null ? null : svc.RealStore?.GetArtist(selectedUri);
-        if (!ArtistStatsCache.IsFresh(warm)) warm = null;
+        if (HydrationLevels.Of(warm) < HydrationLevel.Rich) warm = null;
         var detail = UseResource(
-            async ct => selectedUri is null ? null : await svc.ArtistStats.EnsureStatsAsync(selectedUri, ct).ConfigureAwait(false),
+            async ct => selectedUri is null ? null : await svc.Library.GetArtistAsync(selectedUri, HydrationLevel.Rich, ct).ConfigureAwait(false),
             seed: warm, deps: DepKey.From(StringComparer.Ordinal.GetHashCode(selectedUri ?? "")));
 
         if (artists.Count == 0) return new BoxEl();

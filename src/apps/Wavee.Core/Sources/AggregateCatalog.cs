@@ -1,9 +1,9 @@
-using System.Linq;
+﻿using System.Linq;
 using System.Runtime.CompilerServices;
 
 namespace Wavee.Core;
 
-/// <summary>The source-agnostic façade the UI binds against (docs/architecture.md §4.3). Implements the UI-facing
+/// <summary>The source-agnostic façade the UI binds against (docs/plans/wavee/architecture.md §4.3). Implements the UI-facing
 /// <see cref="IMusicLibrary"/> by federating over a <see cref="SourceRegistry"/>: single-item reads route to the first
 /// owning source; collection reads MERGE (concat) across catalog sources — each source contributes only what it has,
 /// so the union is clean. Provider-mappings / dedup / fallback chains are the documented extension point (trivial with
@@ -11,13 +11,20 @@ namespace Wavee.Core;
 public sealed class AggregateCatalog : IMusicLibrary, ICollectionEvents
 {
     readonly SourceRegistry _reg;
+    readonly ICatalogSource? _fallback;
     readonly SimpleSubject<CollectionKind> _collections = new();
 
     public AggregateCatalog(SourceRegistry registry)
     {
         _reg = registry;
+        // The EXPLICIT last-resort step (design §2.1): the first source declaring SourceCapabilities.Fallback answers a
+        // single-item read that no source OWNS (or whose owner had no data). Ownership stayed with the real owners when
+        // FakeSource stopped claiming "everything that isn't spotify:", so this is what keeps an unrecognized uri
+        // opening a populated page in the demo backend — and its ABSENCE in the real backend is deliberate: a real
+        // account must not invent an entity.
+        _fallback = registry.OfCapability(SourceCapabilities.Fallback).OfType<ICatalogSource>().FirstOrDefault();
         // Fan-in: any source that emits its own collection deltas forwards into the ONE aggregate stream the cache
-        // subscribes to (off-page library freshness, docs/architecture.md §6). No source raises it today → neutral seam.
+        // subscribes to (off-page library freshness, docs/plans/wavee/architecture.md §6). No source raises it today → neutral seam.
         foreach (var s in registry.All.OfType<ISourceCollectionEvents>())
             s.CollectionsChanged.Subscribe(new ActionObserver<CollectionKind>(k => _collections.OnNext(k)));
     }
@@ -26,29 +33,36 @@ public sealed class AggregateCatalog : IMusicLibrary, ICollectionEvents
     public IObservable<CollectionKind> CollectionsChanged => _collections;
 
     // ── single-item reads: first owning source that returns non-null wins; else a minimal empty shape ──
-    public async Task<Playlist> GetPlaylistAsync(string id, CancellationToken ct = default)
+    public async Task<Playlist> GetPlaylistAsync(string id, HydrationLevel level = HydrationLevel.Open, CancellationToken ct = default)
     {
         foreach (var s in _reg.CatalogSources)
-            if (s.Owns(id) && await s.GetPlaylistAsync(id, ct).ConfigureAwait(false) is { } p) return p;
+            if (s.Owns(id) && await s.GetPlaylistAsync(id, level, ct).ConfigureAwait(false) is { } p) return p;
+        if (Fallback(id) is { } fb && await fb.GetPlaylistAsync(id, level, ct).ConfigureAwait(false) is { } fp) return fp;
         return new Playlist(id, id, "", null, "", null, 0, System.Array.Empty<Track>());
     }
 
-    public async Task<Album> GetAlbumAsync(string id, CancellationToken ct = default)
+    public async Task<Album> GetAlbumAsync(string id, HydrationLevel level = HydrationLevel.Open, CancellationToken ct = default)
     {
         foreach (var s in _reg.CatalogSources)
-            if (s.Owns(id) && await s.GetAlbumAsync(id, ct).ConfigureAwait(false) is { } a) return a;
+            if (s.Owns(id) && await s.GetAlbumAsync(id, level, ct).ConfigureAwait(false) is { } a) return a;
+        if (Fallback(id) is { } fb && await fb.GetAlbumAsync(id, level, ct).ConfigureAwait(false) is { } fa) return fa;
         return new Album(id, id, "", null, System.Array.Empty<ArtistRef>(), 0, 0, System.Array.Empty<Track>());
     }
 
-    public async Task<Artist> GetArtistAsync(string id, CancellationToken ct = default)
+    public async Task<Artist> GetArtistAsync(string id, HydrationLevel level = HydrationLevel.Open, CancellationToken ct = default)
     {
         foreach (var s in _reg.CatalogSources)
-            if (s.Owns(id) && await s.GetArtistAsync(id, ct).ConfigureAwait(false) is { } a) return a;
+            if (s.Owns(id) && await s.GetArtistAsync(id, level, ct).ConfigureAwait(false) is { } a) return a;
+        if (Fallback(id) is { } fb && await fb.GetArtistAsync(id, level, ct).ConfigureAwait(false) is { } fa) return fa;
         return new Artist(id, id, "", null);
     }
 
+    // Same three-step shape as the single-item reads: owner → fallback → empty. The fallback step is what keeps a
+    // context nobody owns (a synthetic podcast, an unrecognized uri) playable in the demo backend.
     public IAsyncEnumerable<TrackPage> StreamTracksAsync(string contextUri, CancellationToken ct = default)
-        => _reg.OwnerOf(contextUri)?.StreamTracksAsync(contextUri, ct) ?? EmptyPages(ct);
+        => _reg.OwnerOf(contextUri)?.StreamTracksAsync(contextUri, ct)
+           ?? Fallback(contextUri)?.StreamTracksAsync(contextUri, ct)
+           ?? EmptyPages(ct);
 
     // Paged discography window + facet total — routed to the owning source (mirrors GetArtistAsync). The live source
     // (StoreLibrarySource) owns paging + the real facet total; the DIM on non-paging sources serves the overview slice.
@@ -56,8 +70,13 @@ public sealed class AggregateCatalog : IMusicLibrary, ICollectionEvents
     {
         foreach (var s in _reg.CatalogSources)
             if (s.Owns(artistUri)) return await s.GetDiscographyAsync(artistUri, kind, offset, limit, ct).ConfigureAwait(false);
+        if (Fallback(artistUri) is { } fb) return await fb.GetDiscographyAsync(artistUri, kind, offset, limit, ct).ConfigureAwait(false);
         return new DiscographyPage(System.Array.Empty<Album>(), 0);
     }
+
+    /// <summary>The fallback source for a uri — null when there is none, or when it already had its turn in the loop
+    /// above (it OWNS the uri), so the last resort is never asked the same question twice.</summary>
+    ICatalogSource? Fallback(string uri) => _fallback is { } f && !f.Owns(uri) ? f : null;
 
     /// <summary>The one discography kind↔AlbumKind filter (Singles ⇒ Single OR EP), shared by the overview-slice DIM
     /// (<see cref="ICatalogSource"/>) and the live source so the offline count matches the live facet grouping.</summary>
@@ -221,11 +240,18 @@ public sealed class AggregateCatalog : IMusicLibrary, ICollectionEvents
         return r;
     }
 
-    public async Task<Show?> GetShowAsync(string uri, CancellationToken ct = default)
+    public async Task<Show?> GetShowAsync(string uri, HydrationLevel level = HydrationLevel.Open, CancellationToken ct = default)
     {
         foreach (var s in _reg.OfCapability(SourceCapabilities.Podcasts).OfType<IPodcastSource>())
-            if (s.Owns(uri) && await s.GetShowAsync(uri, ct).ConfigureAwait(false) is { } show) return show;
+            if (s.Owns(uri) && await s.GetShowAsync(uri, level, ct).ConfigureAwait(false) is { } show) return show;
         return null;
+    }
+
+    public async Task<int> LoadMoreEpisodesAsync(string showUri, int from, CancellationToken ct = default)
+    {
+        foreach (var s in _reg.OfCapability(SourceCapabilities.Podcasts).OfType<IPodcastSource>())
+            if (s.Owns(showUri)) return await s.LoadMoreEpisodesAsync(showUri, from, ct).ConfigureAwait(false);
+        return from;   // nobody owns it ⇒ the cursor did not move
     }
 
     static async IAsyncEnumerable<TrackPage> EmptyPages([EnumeratorCancellation] CancellationToken ct = default)

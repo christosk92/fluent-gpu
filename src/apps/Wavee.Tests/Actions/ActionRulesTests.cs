@@ -34,6 +34,42 @@ public class ActionRulesTests
         Assert.False(ActionRules.AllSaved(new[] { uriless }, _ => true));
     }
 
+    // ── The container-navigation pair: a song goes to its ALBUM, an episode to its PODCAST ─────────────────
+    // An EPISODE rides the same Track read-model (EpisodeAsTrack, design §1.5) with its SHOW in the album slot, so the
+    // two gates are one decision read twice: exactly ONE of them may be true for any row, and "Go to album" pointing at
+    // a show — which is what an Album.Uri.Length-only gate produced — is a route into a page that does not exist.
+    [Fact]
+    public void GoToAlbum_IsTheSongRow_GoToPodcast_IsTheEpisodeRow()
+    {
+        var song = ActionTarget.ForTracks(new[] { T.Mk("a") });
+        var episode = ActionTarget.ForTracks(new[]
+        {
+            T.Mk("e1", uriOverride: "spotify:episode:e1", artists: 0, albumUri: "spotify:show:s1"),
+        });
+
+        Assert.True(ActionRules.CanGoToAlbum(in song));
+        Assert.False(ActionRules.CanGoToPodcast(in song));
+
+        Assert.False(ActionRules.CanGoToAlbum(in episode));
+        Assert.True(ActionRules.CanGoToPodcast(in episode));
+    }
+
+    [Fact]
+    public void NeitherNavigationRow_ForARefWithNoUri()
+    {
+        // A name-only show/album ref (an episode whose catalogue write carried no show gid) has nowhere to go: both
+        // rows are ABSENT rather than dead — the GoToArtistItem rule.
+        var nameOnly = ActionTarget.ForTracks(new[] { T.Mk("e2", uriOverride: "spotify:episode:e2", artists: 0, albumUri: "") });
+        Assert.False(ActionRules.CanGoToAlbum(in nameOnly));
+        Assert.False(ActionRules.CanGoToPodcast(in nameOnly));
+
+        // Only a SHOW ref is excluded. A uri the parser cannot classify keeps the album row it has always had — the
+        // gate narrows one wrong destination, it does not become a spotify-only allow-list.
+        var unclassified = ActionTarget.ForTracks(new[] { T.Mk("u1", albumUri: "wavee:media:xyz") });
+        Assert.True(ActionRules.CanGoToAlbum(in unclassified));
+        Assert.False(ActionRules.CanGoToPodcast(in unclassified));
+    }
+
     // ── Remove-from-this-playlist gate: editable host + resolved rows ─────────────────────────────────────────────
     [Fact]
     public void CanRemoveFromPlaylist_RequiresEditableCapsAndRows()

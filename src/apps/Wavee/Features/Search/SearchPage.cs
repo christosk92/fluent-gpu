@@ -19,7 +19,7 @@ static class SearchQuery
     public static readonly Context<Signal<string>?> Slot = new(null);
 }
 
-// The Search page (docs/architecture.md §2 "Search, browse & home") — WaveeMusic's search skeleton: a filter-chip row
+// The Search page (docs/plans/wavee/architecture.md §2 "Search, browse & home") — WaveeMusic's search skeleton: a filter-chip row
 // (All / Songs / Artists / Albums / Playlists), an empty "Browse all" category grid, an "All" composite (Top result +
 // Songs band + per-type shelves), and a flat unified results list per chip (row + type pill). The query comes from the
 // live omnibar signal (SearchQuery.Slot) so typing re-runs the search; the route carries the query for history.
@@ -167,11 +167,6 @@ sealed class SearchPage : Component
         => Ctx.Provide(SearchAllList.Props, new SearchAllList.Model(r, go, playTrack, play, playKnownTrack),
             Embed.Comp(() => new SearchAllList()));
 
-    Element TopHitList(SearchResults r, Func<SearchTopHit, bool> include, string emptyTitle,
-                       Action<string, string?> go, Action<string> play, Action<string> playTrack, Action<Track> playKnownTrack)
-        => Ctx.Provide(SearchAllList.Props, new SearchAllList.Model(r, go, playTrack, play, playKnownTrack, include, emptyTitle),
-            Embed.Comp(() => new SearchAllList()));
-
     /// <summary>Render an explicit hit list (a dedicated facet's results) through the SAME row factory the All tab
     /// uses, so a search row looks and behaves identically regardless of which operation produced it.</summary>
     Element HitsList(IReadOnlyList<SearchTopHit>? hits, string emptyTitle, SearchResults r,
@@ -272,74 +267,6 @@ sealed class SearchPage : Component
                 Children = [Embed.Comp(() => new Wavee.Features.Browse.BrowseDirectory())],
             });
     }
-
-    // ── top result ───────────────────────────────────────────────────────────────────────────────────────
-    static Element? TopResult(SearchResults r, Action<string, string?> go, Action<string> play)
-    {
-        if (r.Artists.Count > 0)
-        {
-            var a = r.Artists[0];
-            return TopCard(a.Image, a.Name, Loc.Get(Strings.Search.TypeArtist), a.Id.GetHashCode(), true, () => go("artist:" + a.Uri, a.Name), () => play(a.Uri));
-        }
-        if (r.Albums.Count > 0)
-        {
-            var a = r.Albums[0];
-            return TopCard(a.Cover, a.Name, Loc.Get(Strings.Search.TypeAlbum), a.Id.GetHashCode(), false, () => go("album:" + a.Uri, a.Name), () => play(a.Uri));
-        }
-        if (r.Playlists.Count > 0)
-        {
-            var p = r.Playlists[0];
-            return TopCard(p.Cover, p.Name, Loc.Get(Strings.Search.TypePlaylist), p.Id.GetHashCode(), false, () => go("pl:" + p.Uri, p.Name), () => play(p.Uri));
-        }
-        return null;
-    }
-
-    static Element TopCard(Image? img, string name, string type, int seed, bool circular, Action open, Action play) => new BoxEl
-    {
-        Direction = 1, Gap = Spacing.M,
-        Padding = new Edges4(Spacing.L, Spacing.L, Spacing.L, Spacing.L),
-        Corners = CornerRadius4.All(Radii.Card), Fill = Tok.FillCardSecondary,
-        BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault, ClipToBounds = true,
-        HoverFill = Tok.FillCardDefault, OnClick = open,
-        Children =
-        [
-            new BoxEl { Width = 92f, Height = 92f, Corners = CornerRadius4.All(circular ? 46f : Radii.Card), ClipToBounds = true, Shadow = Elevation.Card,
-                Children = [Surfaces.Artwork(img, seed & 0x7fffffff, 92f, 92f, circular ? 46f : Radii.Card, decodePx: 256)] },
-            WaveeType.PageHero(name) with { MaxLines = 2, Wrap = TextWrap.Wrap, Trim = TextTrim.CharacterEllipsis },
-            new BoxEl
-            {
-                Direction = 0, AlignItems = FlexAlign.Center,
-                Children =
-                [
-                    TypePill(type),
-                    new BoxEl { Grow = 1f },
-                    new BoxEl { Width = 44f, Height = 44f, Corners = Radii.Circle(44f), Fill = Tok.AccentDefault,
-                        AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Shadow = Elevation.Card,
-                        HoverScale = WaveeMotion.ScaleEmphatic.Hover, PressScale = WaveeMotion.ScaleEmphatic.Press, OnClick = play,
-                        Children = [Icon(Icons.Play, 16f, Tok.TextOnAccentPrimary)] },
-                ],
-            },
-        ],
-    };
-
-    // ── songs (the All-view right column) — the SAME shared track cell as the detail/library lists, capped to 4 rows. ──
-    static Element SongsSection(IReadOnlyList<Track> tracks, Action<Track> playTrack, Action<string, string?> go) => new BoxEl
-    {
-        Direction = 1, Gap = Spacing.S,
-        Children =
-        [
-            WaveeType.RailHeader(Loc.Get(Strings.Search.Songs)),
-            Ctx.Provide(SearchSongs.Props, new SearchSongs.Model(tracks, playTrack, go, 4, new SelectionModel()),
-                Embed.Comp(() => new SearchSongs()) with { SkeletonProxy = () => SearchSongs.SkeletonShape(tracks, 4) }),
-        ],
-    };
-
-    // ── shelves & states ─────────────────────────────────────────────────────────────────────────────────
-    static Element Shelf(string title, int count, Func<int, float, Element> cardAt) => new BoxEl
-    {
-        Direction = 1,
-        Children = [PagedShelf.Create(count, cardAt: cardAt, measured: true, header: WaveeType.RailHeader(title))],
-    };
 
 }
 

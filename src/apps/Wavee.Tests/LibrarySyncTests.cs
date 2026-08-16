@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -27,12 +27,18 @@ sealed class SyncHarness : IAsyncDisposable
     public readonly List<string> Hydrated = new();
     public int PlaylistGets, RootlistGets, CollectionPosts;
     public readonly LibrarySync Sync;
+    public readonly PlaylistResyncQueue Resync = new();
+    /// <summary>Every route the loop asked the TRANSPORT for (the outbox drain + the on-open permission seed), in order.</summary>
+    public readonly List<string> TransportRoutes = new();
     readonly CancellationTokenSource _cts = new();
 
     public static HttpResp Ok(byte[] body) => new(200, new Dictionary<string, string>(), body);
 
+    /// <param name="transportRespond">Answers the loop's TRANSPORT requests (permission seed / drain). Null = the plain
+    /// StubTransport answer (200, empty body), which is what every non-permission test wants.</param>
     public SyncHarness(Func<HttpReq, HttpResp> responder, Func<string, string, bool>? hasPending = null,
-        Action<InMemoryStore, IReadOnlyList<string>>? onHydrate = null)
+        Action<InMemoryStore, IReadOnlyList<string>>? onHydrate = null,
+        Func<string, Resp>? transportRespond = null)
     {
         var http = new FakeExchange((req, _) =>
         {
@@ -50,12 +56,33 @@ sealed class SyncHarness : IAsyncDisposable
         var pf = new PlaylistFetcher(http, () => "https://x", Store, Hydrate, () => "");
         var cf = new CollectionFetcher(http, () => "https://x", () => "bob", Store,
             s => Revs.TryGetValue(s, out var r) ? r : null, (s, r) => Revs[s] = r, Hydrate, hasPending);
-        Mut = new MutationEngine(Store, new IMutationStrategy[] { new SetReplayStrategy(Echo), new OpRebaseStrategy(Store, () => "https://spclient.wg.spotify.com"), new RootlistFollowStrategy(Store) });
-        Sync = new LibrarySync(Store, pf, cf, Mut, Dealer,
+        Mut = new MutationEngine(Store, new IMutationStrategy[] { new SetReplayStrategy(Echo), new OpRebaseStrategy(Store, () => "https://spclient.wg.spotify.com", Resync), new RootlistFollowStrategy(Store, new RootlistLane()) });
+        var transport = new HarnessTransport(Dealer, TransportRoutes, transportRespond);
+        Sync = new LibrarySync(Store, pf, cf, Mut, Resync, transport,
             () => new SessionContext("bob", "US", "premium", "en", Tier.Premium, false), () => "bob", default, _cts.Token, Echo);
     }
 
     public async ValueTask DisposeAsync() { await Sync.DisposeAsync(); _cts.Cancel(); _cts.Dispose(); }
+}
+
+// The mutation transport the loop drains + seeds permissions over. Dealer pushes still ride the real StubTransport (the
+// router subscribes to it directly); only Request() is scriptable, so a test can answer the permission GET.
+sealed class HarnessTransport(StubTransport inner, List<string> routes, Func<string, Resp>? respond) : ITransport
+{
+    public Task<Resp> Request(Channel ch, string route, ReadOnlyMemory<byte> body, CancellationToken ct = default,
+        string? method = null, IReadOnlyDictionary<string, string>? headers = null)
+    {
+        lock (routes) routes.Add(route);
+        return respond is null
+            ? inner.Request(ch, route, body, ct, method, headers)
+            : Task.FromResult(respond(route));
+    }
+
+    public IObservable<WireEvent> Events(string topicPrefix) => inner.Events(topicPrefix);
+    public IObservable<WireRequest> Requests(string identPrefix) => inner.Requests(identPrefix);
+    public Task Reply(string requestId, RequestResult result) => inner.Reply(requestId, result);
+    public Task<Resp> Publish(string deviceId, string connectionId, ReadOnlyMemory<byte> putState, CancellationToken ct = default)
+        => inner.Publish(deviceId, connectionId, putState, ct);
 }
 
 sealed class ChangeCollector : IObserver<StoreChange>
@@ -89,6 +116,8 @@ public class LibrarySyncTests
 {
     static HttpResp Ok(byte[] body) => new(200, new Dictionary<string, string>(), body);
     static PlaylistMember M(string id, string uri) => new(id, uri, null, 0);
+    // I1 — only a 24-byte head is storable; fixtures that expect their revision to be adopted must carry one.
+    static byte[] Rev24(byte tag) { var r = new byte[24]; r[3] = tag; r[23] = tag; return r; }
     static Track Trk(string uri, string title = "Hydrated")
     {
         var id = uri[(uri.LastIndexOf(':') + 1)..];
@@ -100,7 +129,7 @@ public class LibrarySyncTests
     {
         if (req.Url.Contains("/rootlist"))
         {
-            var slc = new Pl.SelectedListContent { Revision = ByteString.CopyFrom(9) };
+            var slc = new Pl.SelectedListContent { Revision = ByteString.CopyFrom(Rev24(9)) };
             var c = new Pl.ListItems { Pos = 0, Truncated = false };
             c.Items.Add(new Pl.Item { Uri = "spotify:playlist:p1" });
             c.Items.Add(new Pl.Item { Uri = "spotify:playlist:p2" });
@@ -313,26 +342,11 @@ public class LibrarySyncTests
         Assert.Single(h.Store.Membership("spotify:playlist:p"));
     }
 
-    // A LIVE playlist open never reaches StoreLibrarySource.OnDemandFetch (the sync loop returns first), so music-video
-    // detection hangs off this hook instead. The loop itself stays video-agnostic — it just reports "tracklist resident".
-    [Fact]
-    public async Task OpenPlaylistAsync_FiresTheHydratedHook_AfterTheTracklistLands()
-    {
-        var slc = new Pl.SelectedListContent { Revision = ByteString.CopyFrom(3) };
-        var contents = new Pl.ListItems { Pos = 0, Truncated = false };
-        contents.Items.Add(new Pl.Item { Uri = "spotify:track:x" });
-        slc.Contents = contents;
-        await using var h = new SyncHarness(_ => Ok(slc.ToByteArray()));
-
-        var hydrated = new List<string>();
-        int membersAtHook = -1;
-        h.Sync.OnPlaylistHydrated = uri => { hydrated.Add(uri); membersAtHook = h.Store.Membership(uri).Count; };
-
-        await h.Sync.OpenPlaylistAsync("spotify:playlist:p", CancellationToken.None);
-
-        Assert.Equal("spotify:playlist:p", Assert.Single(hydrated));
-        Assert.Equal(1, membersAtHook);   // fires AFTER the tracklist is resident, never before
-    }
+    // OpenPlaylistAsync_FiresTheHydratedHook_AfterTheTracklistLands is DELETED with LibrarySync.OnPlaylistHydrated
+    // (hydration-facade-plan.md 1.6): the hook existed so music-video detection could hang off a live open, and the
+    // playlist ladder's post-step owns that now. Replacement: PlaylistHydrationTests.Open_AsksTraitsForEveryMember_EpisodesIncluded
+    // (the traits pass runs AFTER the membership is resident, over every member) plus .NeverWritesMembership,
+    // which pins the invariant the hook's removal depends on - the ladder asks, LibrarySync writes.
 
     [Fact]
     public async Task PlaylistPush_AddHydratesThenEmitsPlaylistBump()
@@ -639,5 +653,256 @@ public class LibrarySyncTests
             }
         }
         finally { foreach (var f in new[] { path, path + "-wal", path + "-shm" }) { try { System.IO.File.Delete(f); } catch { } } }
+    }
+
+    // ── P0: the dealer/revision correctness gates (I1 + the head-only playlist push) ──────────────────────────────────
+
+    // A rootlist revision persisted by an older build could be the URI BYTES of a misparsed dealer push. It lives in
+    // SQLite meta, so it survives restarts; sync start must clear it (rows preserved) and let the hydrate GET rewrite it.
+    [Fact]
+    public async Task Boot_CorruptRootlistRev_IsHealedThenRefetched()
+    {
+        var corrupt = System.Text.Encoding.UTF8.GetBytes("spotify:user:bob:rootlist");
+        var rows = RootlistTreeBuilder.EntriesFromUris(new[] { "spotify:playlist:p1" });
+
+        // (a) the rootlist GET fails, so ONLY the heal can have cleared the corrupt revision.
+        await using (var h = new SyncHarness(req => req.Url.Contains("/rootlist")
+            ? new HttpResp(500, new Dictionary<string, string>(), Array.Empty<byte>())
+            : HydrateResponder(req)))
+        {
+            h.Store.SetRootlist(rows, corrupt);
+            var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            h.Sync.Enqueue(new SyncCommand(SyncKind.InitialHydrate, Done: done));
+            await done.Task;
+
+            Assert.Equal(1, h.Sync.RootlistRevisionsHealed);
+            Assert.Null(h.Store.RootlistRevision());                     // the URI bytes are gone
+            Assert.Single(h.Store.Rootlist());                            // rows preserved (only the revision was cleared)
+        }
+
+        // (b) with the GET answering, the same boot ends on the real 24-byte head.
+        await using (var h2 = new SyncHarness(HydrateResponder))
+        {
+            h2.Store.SetRootlist(rows, corrupt);
+            var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            h2.Sync.Enqueue(new SyncCommand(SyncKind.InitialHydrate, Done: done));
+            await done.Task;
+
+            Assert.Equal(1, h2.Sync.RootlistRevisionsHealed);
+            Assert.Equal(Rev24(9), h2.Store.RootlistRevision());
+            Assert.True(PlaylistRevisions.IsWellFormed(h2.Store.RootlistRevision()));
+        }
+    }
+
+    // A head-only push ("the list rolled over, here is the new head") on the OPEN playlist revalidates through the
+    // revision-gated /diff — it is not a signal regeneration and must not force a full snapshot.
+    [Fact]
+    public async Task PlaylistPush_HeadOnly_Open_DiffsNotFullGet()
+    {
+        const string uri = "spotify:playlist:open";
+        int diffs = 0, fulls = 0;
+        await using var h = new SyncHarness(req =>
+        {
+            if (req.Url.Contains("/diff?")) { Interlocked.Increment(ref diffs); return Ok(new Pl.SelectedListContent { UpToDate = true }.ToByteArray()); }
+            Interlocked.Increment(ref fulls);
+            return Ok(FullSlcWithAttrs(Rev24(2), ("spotify:track:t1", "alice", 1_700_000_000_000L)));
+        });
+        // attribute-BEARING resident rows: the attr-heal gate must not be what answers this push.
+        h.Store.SetMembership(uri, new[] { new PlaylistMember("i1", "spotify:track:t1", "alice", 1_700_000_000_000L) }, Rev24(1));
+        h.Sync.SetOpenContext(uri);
+
+        h.Sync.Enqueue(new SyncCommand(SyncKind.PlaylistPush, uri, NewRev: Rev24(2), Ops: Array.Empty<PlaylistOp>()));
+        await h.Sync.WaitForIdleAsync();
+
+        Assert.Equal(1, diffs);
+        Assert.Equal(0, fulls);
+        Assert.Equal(1, h.Sync.DiffUpToDate);
+        Assert.Equal(0, h.Sync.PushMarkedDirty);
+    }
+
+    [Fact]
+    public async Task PlaylistPush_HeadOnly_Cold_MarksDirtyOnly()
+    {
+        const string uri = "spotify:playlist:cold";
+        await using var h = new SyncHarness(_ => Ok(Array.Empty<byte>()));
+        h.Store.SetMembership(uri, new[] { new PlaylistMember("i1", "spotify:track:t1", "alice", 1_700_000_000_000L) }, Rev24(1));
+
+        h.Sync.Enqueue(new SyncCommand(SyncKind.PlaylistPush, uri, NewRev: Rev24(2), Ops: Array.Empty<PlaylistOp>()));
+        await h.Sync.WaitForIdleAsync();
+
+        Assert.Equal(1, h.Sync.PushMarkedDirty);
+        Assert.Equal(0, h.PlaylistGets);                                  // anti-herd: nothing fetched
+        Assert.Equal(Rev24(1), h.Store.PlaylistRevision(uri));            // no head adopted without ops
+    }
+
+    // ── P1: tombstone, the pending shield, the on-open permission seed ────────────────────────────────────────────────
+
+    /// <summary>The remote-delete wire shape: UPDATE_LIST new{deleted_by_owner=1}.</summary>
+    static PlaylistOp TombstoneOp()
+        => new(PlaylistOpKind.UpdateList, ListPatch: new PlaylistListAttributePatch(DeletedByOwner: true));
+
+    [Fact]
+    public async Task PlaylistPush_Tombstone_RemovesFromRootlist_ClearsMembership_FlagsHeader()
+    {
+        const string uri = "spotify:playlist:gone";
+        await using var h = new SyncHarness(_ => Ok(Array.Empty<byte>()));
+        h.Store.UpsertPlaylist(new Playlist("gone", uri, "Doomed", null, "bob", null, 1));
+        h.Store.SetMembership(uri, new[] { M("i1", "spotify:track:t1") }, Rev24(1));
+        h.Store.SetRootlist(new[]
+        {
+            new RootlistEntry(0, 0, uri, null, 0),
+            new RootlistEntry(1, 0, "spotify:playlist:keep", null, 0),
+        }, Rev24(5));
+        h.Store.SetSaved("playlists", uri, true, SyncState.Confirmed);
+
+        h.Sync.Enqueue(new SyncCommand(SyncKind.PlaylistPush, uri, NewRev: Rev24(2), Ops: new[] { TombstoneOp() }));
+        await h.Sync.WaitForIdleAsync();
+
+        Assert.Equal(1, h.Sync.Tombstones);
+        Assert.DoesNotContain(h.Store.Rootlist(), e => e.Uri == uri);              // gone from the sidebar tree …
+        Assert.Equal("spotify:playlist:keep", Assert.Single(h.Store.Rootlist()).Uri);
+        Assert.Equal(Rev24(5), h.Store.RootlistRevision());                        // … rev-preserving (its own head follows)
+        Assert.Empty(h.Store.Membership(uri));                                     // … membership evicted
+        Assert.False(h.Store.IsSaved("playlists", uri));                           // … saved pill cleared
+        Assert.True(h.Store.GetPlaylist(uri)!.DeletedByOwner);                     // … header latched for the page notice
+        Assert.Equal(0, h.PlaylistGets);                                           // and NO network at all
+    }
+
+    // Once latched, no later header write can un-delete it (the store merge is `incoming || current`).
+    [Fact]
+    public async Task Tombstone_Latches_AcrossALaterHeaderWrite()
+    {
+        const string uri = "spotify:playlist:gone";
+        await using var h = new SyncHarness(_ => Ok(Array.Empty<byte>()));
+        h.Store.UpsertPlaylist(new Playlist("gone", uri, "Doomed", null, "bob", null, 1));
+
+        h.Sync.Enqueue(new SyncCommand(SyncKind.PlaylistPush, uri, NewRev: Rev24(2), Ops: new[] { TombstoneOp() }));
+        await h.Sync.WaitForIdleAsync();
+
+        h.Store.UpsertPlaylist(new Playlist("gone", uri, "Doomed", null, "bob", null, 1));   // a thin re-upsert
+        Assert.True(h.Store.GetPlaylist(uri)!.DeletedByOwner);
+    }
+
+    // I3(a) — local intent wins until acked. A push that arrives while our own edit is unacked describes a list that
+    // does NOT contain that edit, so applying it in place would visibly revert the user's action. Mark dirty instead.
+    [Fact]
+    public async Task PlaylistPush_WhilePending_MarksDirty_NoInPlaceApply()
+    {
+        const string uri = "spotify:playlist:p";
+        await using var h = new SyncHarness(_ => Ok(Array.Empty<byte>()));
+        h.Store.SetMembership(uri, new[] { M("i1", "spotify:track:a"), M("i2", "spotify:track:b") }, Rev24(1));
+
+        h.Mut.Edit(uri, new[] { new PlaylistOp(PlaylistOpKind.Remove, FromIndex: 0, Length: 1) });   // optimistic: [b]
+        Assert.Equal(1, h.Mut.PendingFor(uri));
+
+        // A parent-matching, ops-carrying push that WOULD have applied in place (gate 5) if nothing were pending.
+        var foreign = new PlaylistOp(PlaylistOpKind.Add, AddLast: true, Items: new[] { M("i9", "spotify:track:z") });
+        h.Sync.Enqueue(new SyncCommand(SyncKind.PlaylistPush, uri, ParentRev: Rev24(1), NewRev: Rev24(2), Ops: new[] { foreign }));
+        await h.Sync.WaitForIdleAsync();
+
+        Assert.Equal(1, h.Sync.PushDeferredPending);
+        Assert.Equal(0, h.Sync.PushApplied);
+        Assert.Equal("spotify:track:b", Assert.Single(h.Store.Membership(uri)).ItemUri);   // our optimistic list survives
+        Assert.Equal(Rev24(1), h.Store.PlaylistRevision(uri));                             // and the head is NOT adopted
+        Assert.Equal(0, h.PlaylistGets);                                                   // no eager revalidate either
+    }
+
+    // P1.3 — opening an OWNED playlist seeds its base permission into the store header. This is the one permission GET
+    // in the app; the detail page reads the answer off the store and a later dealer push converges it for free.
+    [Fact]
+    public async Task SetOpenContext_OwnerPlaylist_SeedsPermissionIntoStore()
+    {
+        const string uri = "spotify:playlist:mine";
+        // The proto dialect (P2): GET .../permission/base answers Permission{revision(8 opaque bytes), level}.
+        var proto = new Pl.Permission
+        {
+            PermissionLevel = Pl.PermissionLevel.Blocked,
+            Revision = Google.Protobuf.ByteString.CopyFrom(Convert.FromHexString("3b907c0d29c940a3")),
+        }.ToByteArray();
+        await using var h = new SyncHarness(_ => Ok(Array.Empty<byte>()),
+            transportRespond: _ => new Resp(true, proto, 200));
+        h.Store.UpsertPlaylist(new Playlist("mine", uri, "Mine", null, "bob", null, 0, IsPublic: true,
+            Capabilities: new PlaylistCapabilities(CanView: true, CanEditItems: true, CanEditMetadata: true,
+                IsCollaborative: false, IsOwner: true, CanAdministratePermissions: true)));
+
+        h.Sync.SetOpenContext(uri);
+        await h.Sync.WaitForIdleAsync();
+
+        Assert.Equal(1, h.Sync.PermissionSeeds);
+        Assert.Contains(h.TransportRoutes, r => r.Contains("/permission/base"));
+        var header = h.Store.GetPlaylist(uri)!;
+        Assert.False(header.IsPublic);                       // BLOCKED
+        Assert.Equal("3b907c0d29c940a3", header.BasePermissionRevision);   // hex, never a playlist4 revision
+    }
+
+    // THE cold deep-link regression (finding 12). SetOpenContext gates the seed on IsOwned, which reads the STORE
+    // header — and on a cold open (a shared link, a restart onto a playlist page) the page's mount effect runs BEFORE
+    // the header has landed. The owner check then said "not mine", nothing was enqueued, and nothing ever re-asked, so
+    // a private playlist the user owns rendered with no Private eyebrow until they navigated away and back. The
+    // header-landing paths on the loop now re-evaluate it.
+    [Fact]
+    public async Task ColdOpen_HeaderLandsAfterSetOpenContext_SeedsThePermissionOnce()
+    {
+        const string uri = "spotify:playlist:mine";
+        var perm = new Pl.Permission
+        {
+            PermissionLevel = Pl.PermissionLevel.Blocked,
+            Revision = Google.Protobuf.ByteString.CopyFrom(Convert.FromHexString("3b907c0d29c940a3")),
+        }.ToByteArray();
+        // An OWNED header on the wire: the server's CanAdministratePermissions flag is what PlaylistFetcher treats as
+        // authoritative ownership (the account-name fallback is not available to this harness).
+        var owned = new Pl.SelectedListContent
+        {
+            Revision = ByteString.CopyFrom(Rev24(2)),
+            OwnerUsername = "bob",
+            Attributes = new Pl.ListAttributes { Name = "Mine" },
+            Capabilities = new Pl.Capabilities { CanView = true, CanAdministratePermissions = true },
+            Contents = new Pl.ListItems { Pos = 0, Truncated = false },
+        }.ToByteArray();
+        await using var h = new SyncHarness(_ => Ok(owned), transportRespond: _ => new Resp(true, perm, 200));
+
+        // (1) The page mounts first — no header yet, so nothing can be seeded.
+        h.Sync.SetOpenContext(uri);
+        await h.Sync.WaitForIdleAsync();
+        Assert.Equal(0, h.Sync.PermissionSeeds);
+        Assert.Empty(h.TransportRoutes);
+
+        // (2) …then the open fetch lands the header. THAT is the first moment the owner check can succeed.
+        await h.Sync.OpenPlaylistAsync(uri, CancellationToken.None);
+        await h.Sync.WaitForIdleAsync();
+
+        Assert.Equal(1, h.Sync.PermissionSeeds);
+        Assert.Contains(h.TransportRoutes, r => r.Contains("/permission/base"));
+        var header = h.Store.GetPlaylist(uri)!;
+        Assert.False(header.IsPublic);                                    // BLOCKED
+        Assert.Equal("3b907c0d29c940a3", header.BasePermissionRevision);
+
+        // (3) ONCE per open context: every later revalidate of the open playlist runs through the same hook, and a
+        //     permission GET per /diff is exactly the herd the on-open seed was introduced to replace.
+        h.Sync.Enqueue(new SyncCommand(SyncKind.PlaylistRevalidate, uri));
+        await h.Sync.WaitForIdleAsync();
+        Assert.Equal(1, h.Sync.PermissionSeeds);
+
+        // (4) …and re-opening the page IS a new open context, so it seeds again.
+        h.Sync.SetOpenContext(uri);
+        await h.Sync.WaitForIdleAsync();
+        Assert.Equal(2, h.Sync.PermissionSeeds);
+    }
+
+    // A playlist someone else owns has no editable permission state (and the endpoint 403s) — never spend the GET.
+    [Fact]
+    public async Task SetOpenContext_ForeignPlaylist_DoesNotSeedPermission()
+    {
+        const string uri = "spotify:playlist:theirs";
+        await using var h = new SyncHarness(_ => Ok(Array.Empty<byte>()));
+        h.Store.UpsertPlaylist(new Playlist("theirs", uri, "Theirs", null, "someone", null, 0,
+            Capabilities: new PlaylistCapabilities(CanView: true, CanEditItems: false, CanEditMetadata: false,
+                IsCollaborative: false, IsOwner: false, CanAdministratePermissions: false)));
+
+        h.Sync.SetOpenContext(uri);
+        await h.Sync.WaitForIdleAsync();
+
+        Assert.Equal(0, h.Sync.PermissionSeeds);
+        Assert.Empty(h.TransportRoutes);
     }
 }
