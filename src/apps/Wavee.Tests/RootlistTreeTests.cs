@@ -72,7 +72,7 @@ public class RootlistTreeBuilderTests
     public void FolderName_DecodesPlusAsSpace_AndPercentEscapes(string wire, string expected)
     {
         var entries = RootlistTreeBuilder.EntriesFromUris(new[] { Start("g1", wire), End("g1") });
-        Assert.Equal(expected, entries[0].Name);
+        Assert.Equal(expected, entries[0].GroupName);
     }
 
     [Fact]
