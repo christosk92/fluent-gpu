@@ -78,7 +78,96 @@ function Num($s) {
   if ($null -eq $s -or "$s".Trim().Length -eq 0) { return 0.0 }
   $d = 0.0
   if ([double]::TryParse("$s", [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$d)) { return $d }
-  return 0.0
+  throw "Invalid invariant-culture number '$s' while packing $Session"
+}
+
+# Nullable numeric parse for fields where blank means NOT MEASURED rather than the trace ring's compact spelling of
+# an exact zero. Keep this separate from Num: most POD columns intentionally encode zero as blank, while external
+# PresentMon NA fields and legacy clock-skew rows must never be silently promoted into measured zeroes.
+function TryNum($s) {
+  if ($null -eq $s -or "$s".Trim().Length -eq 0 -or "$s" -eq 'NA') { return $null }
+  $d = 0.0
+  if ([double]::TryParse("$s", [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$d)) { return $d }
+  return $null
+}
+
+function Pct($part, $whole) {
+  if ($whole -le 0) { return $null }
+  return [math]::Round(100.0 * $part / $whole, 2)
+}
+
+# A clock-skew sample exists only when a drag frame actually resampled contact input. New traces carry that fact in
+# latency i1 bit 24, so a valid exact-zero f3 stays distinguishable from an unmeasured blank f3. Legacy traces have no
+# marker; their safe fallback is drag + a non-blank f3. That necessarily drops legacy exact zeroes, which is preferable
+# to manufacturing thousands of zero samples from wheel/idle rows that sampled nothing.
+$TrackingSampleValidBit = 1 -shl 24
+function SelectTrackingRows($rows, [bool]$explicitMarker, [bool]$stateColumnPresent) {
+  return @($rows | Where-Object {
+      if ($explicitMarker) { return (([int]$_.i1 -band $TrackingSampleValidBit) -ne 0) }
+      if (-not $stateColumnPresent -or (StateGesture $_.state) -ne 1) { return $false }
+      return -not [string]::IsNullOrWhiteSpace("$($_.f3)")
+    })
+}
+
+function SkewSummary($trackingRows, [bool]$explicitMarker, [double]$refreshPeriodMs) {
+  if ($trackingRows.Count -eq 0) {
+    return NotMeasured $(if ($explicitMarker) { 'no drag latency row carried trackingSampleValid' } else { 'legacy trace: no drag latency row carried a non-blank clockSampleSkewMs' })
+  }
+
+  [double[]]$values = @($trackingRows | ForEach-Object { Num $_.f3 })
+
+  # One-millisecond bins tolerate sub-tick jitter. The reported mode is the median of the winning bin rather than
+  # its arbitrary centre, retaining the meaningful -20.333 ms observed on a 120 Hz + 12 ms resample path.
+  $bins = @{}
+  foreach ($v in $values) {
+    $lower = [math]::Floor($v)
+    $key = $lower.ToString('0', [System.Globalization.CultureInfo]::InvariantCulture)
+    if (-not $bins.ContainsKey($key)) { $bins[$key] = New-Object System.Collections.ArrayList }
+    [void]$bins[$key].Add($v)
+  }
+  $orderedBins = @($bins.Keys | ForEach-Object {
+      $a = [double[]]@($bins[$_])
+      $lower = [double]::Parse($_, [System.Globalization.CultureInfo]::InvariantCulture)
+      [pscustomobject]@{ lowerMs = $lower; upperExclusiveMs = $lower + 1.0; count = $a.Count; values = $a }
+    } | Sort-Object @{ Expression = 'count'; Descending = $true }, @{ Expression = 'lowerMs'; Descending = $false })
+  $winning = $orderedBins[0]
+  $modeMs = Median $winning.values
+  $concentrated = @($values | Where-Object { [math]::Abs($_ - $modeMs) -le 1.0 }).Count
+  # "One refresh late" moves this signed value TOWARD zero (less negative), never farther negative. Preserve that
+  # direction explicitly: an absolute-value test reverses the diagnosis around the expected -20 ms mode. The split
+  # scales with the phase's measured refresh; the old fixed +6 ms happened to be 0.72R at 120 Hz but was wrong at
+  # 60/240 Hz. Seventy percent of R stays well beyond modal jitter while retaining the one-slot cluster.
+  if ([double]::IsNaN($refreshPeriodMs) -or [double]::IsInfinity($refreshPeriodMs) -or $refreshPeriodMs -le 0.0) {
+    $refreshPeriodMs = 16.67
+  }
+  $lateOffsetMs = 0.70 * $refreshPeriodMs
+  $lateThresholdMs = $modeMs + $lateOffsetMs
+  $late = @($values | Where-Object { $_ -gt $lateThresholdMs }).Count
+  $histogram = @($orderedBins | ForEach-Object {
+      [ordered]@{ lowerMs = $_.lowerMs; upperExclusiveMs = $_.upperExclusiveMs; count = $_.count }
+    })
+  $stats = Stats $values
+  foreach ($k in @('selection', 'trackingSampleValidMarker', 'modeMs', 'modalConcentrationWithin1MsCount',
+                    'modalConcentrationWithin1MsPct', 'refreshPeriodMs', 'oneRefreshLateThresholdOffsetMs',
+                    'oneRefreshLateThresholdMs', 'oneRefreshLateTailCount',
+                    'oneRefreshLateTailPct', 'histogramBinWidthMs', 'histogram')) {
+    # Reserve the keys before assigning below so ConvertTo-Json retains a stable, readable order after the common
+    # Stats fields used by existing consumers.
+    $stats[$k] = $null
+  }
+  $stats.selection = $(if ($explicitMarker) { 'trackingSampleValid=i1.bit24 (authoritative contact provenance)' } else { 'gesture=drag AND legacy f3 nonblank' })
+  $stats.trackingSampleValidMarker = $(if ($explicitMarker) { 'explicit:i1.bit24' } else { 'legacy:f3-nonblank-fallback' })
+  $stats.modeMs = [math]::Round($modeMs, 3)
+  $stats.modalConcentrationWithin1MsCount = $concentrated
+  $stats.modalConcentrationWithin1MsPct = Pct $concentrated $values.Count
+  $stats.refreshPeriodMs = [math]::Round($refreshPeriodMs, 3)
+  $stats.oneRefreshLateThresholdOffsetMs = [math]::Round($lateOffsetMs, 3)
+  $stats.oneRefreshLateThresholdMs = [math]::Round($lateThresholdMs, 3)
+  $stats.oneRefreshLateTailCount = $late
+  $stats.oneRefreshLateTailPct = Pct $late $values.Count
+  $stats.histogramBinWidthMs = 1.0
+  $stats.histogram = $histogram
+  return $stats
 }
 
 $consolePath = Join-Path $Session 'console.txt'
@@ -106,12 +195,13 @@ if (-not $anchorLine) {
   # look joined and are not.
   $hardFail += 'no [scrolltrace] anchor line in console.txt - the artifacts share no time axis, so nothing can be correlated'
 }
-$anchorQpc = $null; $qpcFreq = $null; $anchorWall = $null; $traceArmed = $null
+$anchorQpc = $null; $qpcFreq = $null; $anchorWall = $null; $traceArmed = $null; $anchorPid = $null
 if ($anchorLine) {
   if ($anchorLine -match 'qpc=(\d+)') { $anchorQpc = [long]$Matches[1] }
   if ($anchorLine -match 'qpcFreq=(\d+)') { $qpcFreq = [long]$Matches[1] }
   if ($anchorLine -match 'wallUtc=(\S+)') { $anchorWall = $Matches[1] }
   if ($anchorLine -match 'trace=(\d)') { $traceArmed = ($Matches[1] -eq '1') }
+  if ($anchorLine -match 'pid=(\d+)') { $anchorPid = [int]$Matches[1] }
 }
 
 $fpsLines = @($consoleLines | Where-Object { $_ -match '^\[fps\] ' })
@@ -169,25 +259,333 @@ if (Test-Path $phasesPath) {
 $scrollFps = @()
 foreach ($l in $fpsLines) {
   $rec = [ordered]@{}
-  if ($l -match 'tMs=([0-9.]+)') { $rec.tMs = [double]$Matches[1] }
+  if ($l -match 'tMs=([0-9.]+)') { $rec.tMs = Num $Matches[1] }
   # The ScrollActive marker is the literal ' scroll loop ' the host prints before the loop-fps token. A bare
   # \bscroll\b ALSO matches the ' | scroll clipE=' scroll-perf token, which appears on every [fps] line whenever
   # FG_SCROLL_PERF is set - so with that flag on, "scroll-active" silently became "all frames" and every per-scroll
   # statistic was computed over idle time as well.
   $rec.scroll = ($l -match ' scroll loop ')
   $rec.spike = ($l -match '\bSPIKE\b')
-  if ($l -match 'loop (\d+)fps ([0-9.]+)ms') { $rec.loopFps = [int]$Matches[1]; $rec.frameMs = [double]$Matches[2] }
+  if ($l -match 'loop (\d+)fps ([0-9.]+)ms') { $rec.loopFps = [int]$Matches[1]; $rec.frameMs = Num $Matches[2] }
   if ($l -match 'presentD=(\d+)') { $rec.presentDelta = [int]$Matches[1] }
   if ($l -match 'pubD=(\d+)') { $rec.publishDelta = [int]$Matches[1] }
   if ($l -match 'coal=(\d+)') { $rec.coalesced = [int]$Matches[1] }
   if ($l -match 'lag=(\d+)') { $rec.renderLagFrames = [int]$Matches[1] }
   if ($l -match 'skipD=(\d+)') { $rec.skipDelta = [int]$Matches[1] }
-  if ($l -match 'gpu ([0-9.]+)ms') { $rec.fenceWaitMs = [double]$Matches[1] }
+  if ($l -match 'gpu ([0-9.]+)ms') { $rec.fenceWaitMs = Num $Matches[1] }
+  if ($l -match 'latW([0-9.]+)(?:ms)?') { $rec.latencyWaitMs = Num $Matches[1] }
+  # Always-on whole-frame GPU EXECUTION span. The sequence belongs to the completed timestamp sample, not this log
+  # line: skip-submit/idle lines can repeat it, so consumers must deduplicate by sequence before computing stats.
+  if ($l -match 'gexec ([0-9.]+)ms#(\d+)') {
+    $rec.gpuExecutionMs = Num $Matches[1]
+    $rec.gpuExecutionSeq = [uint64]$Matches[2]
+  }
+  if ($l -match 'gexecAge=(\d+)') { $rec.gpuExecutionSubmitAge = [uint64]$Matches[1] }
+  # Optional FG_GPU_TIMING category profiler. Kept separate from gexec: this token exists only on a fresh category
+  # resolve and pays the high-cardinality query cost that the always-on whole-frame pair deliberately avoids.
+  if ($l -match 'grender ([0-9.]+)ms') { $rec.gpuCategoryRenderMs = Num $Matches[1] }
   if ($l -match 'wait ([a-z-]+)(-?\d+)') { $rec.waitKind = $Matches[1]; $rec.waitMs = [int]$Matches[2] }
+  if ($l -match 'smiss=gd(\d+)/sb(\d+)/ed(\d+)/ek(\d+)/ec(\d+)/cap(\d+)/mg(\d+)/mk(\d+)/geo(\d+)/mc(\d+)/mp(\d+)') {
+    $rec.spanMiss = [ordered]@{
+      globalDisabled = [int]$Matches[1]; scopedBlocked = [int]$Matches[2]
+      exactDirty = [int]$Matches[3]; exactKey = [int]$Matches[4]; exactClip = [int]$Matches[5]
+      exactCapacity = [int]$Matches[6]; moveGuard = [int]$Matches[7]; moveKey = [int]$Matches[8]
+      moveGeometry = [int]$Matches[9]; moveClip = [int]$Matches[10]; movePayload = [int]$Matches[11]
+    }
+  }
+  if ($l -match '\brq(\d+)/(\d+)') {
+    $rec.rectOpaqueInstances = [int]$Matches[1]
+    $rec.rectBlendedInstances = [int]$Matches[2]
+  }
+  if ($l -match 'rareaMp=([0-9.]+)/([0-9.]+)') {
+    $rec.rectOpaqueSubmittedMp = Num $Matches[1]
+    $rec.rectBlendedSubmittedMp = Num $Matches[2]
+  }
+  if ($l -match 'rareaSeq=(\d+)') { $rec.rectAreaSeq = [uint64]$Matches[1] }
+  if ($l -match 'btop=([^ ]+)') {
+    $top = New-Object System.Collections.ArrayList
+    foreach ($entry in $Matches[1].Split(',')) {
+      if ($entry -notmatch '^(\d+):([0-9.]+):([0-9.]+):([0-9.]+)x([0-9.]+):([0-9A-Fa-f]+)$') { continue }
+      [void]$top.Add([pscustomobject]@{
+        Ordinal = [int]$Matches[1]; AreaMp = Num $Matches[2]; EffectiveAlpha = Num $Matches[3]
+        LocalW = Num $Matches[4]; LocalH = Num $Matches[5]; Flags = [Convert]::ToInt32($Matches[6], 16)
+      })
+    }
+    $rec.blendedTop = @($top)
+  }
   if ($l -match '@(\d+)Hz') { $rec.panelHz = [int]$Matches[1] }
   if ($rec.Contains('tMs')) { $scrollFps += $rec }
 }
 $scrollOnly = @($scrollFps | Where-Object { $_.scroll })
+
+# rarea/rq is a backend-completed snapshot that can repeat on several UI-side FPS lines. Keep exactly its first
+# observation per target-local rareaSeq; that both removes stale repetition and prevents an idle-first snapshot from
+# being reassigned to a later scroll line. Older logs have no sequence, so retain their line observations but label
+# that fallback explicitly in the summary.
+$rectSnapshotBySeq = @{}
+$rectSnapshotUnique = New-Object System.Collections.ArrayList
+$rectSnapshotLegacy = New-Object System.Collections.ArrayList
+foreach ($r in @($scrollFps | Sort-Object { [double]$_['tMs'] })) {
+  $hasRectSnapshot = $r.Contains('rectOpaqueInstances') -or $r.Contains('rectOpaqueSubmittedMp')
+  if (-not $hasRectSnapshot) { continue }
+  if ($r.Contains('rectAreaSeq')) {
+    $key = ([uint64]$r.rectAreaSeq).ToString([System.Globalization.CultureInfo]::InvariantCulture)
+    if ($rectSnapshotBySeq.ContainsKey($key)) { continue }
+    $rectSnapshotBySeq[$key] = $r
+    [void]$rectSnapshotUnique.Add($r)
+  }
+  else { [void]$rectSnapshotLegacy.Add($r) }
+}
+$rectSnapshotsAll = @($rectSnapshotUnique) + @($rectSnapshotLegacy)
+$rectSnapshotsScroll = @($rectSnapshotUnique | Where-Object { $_.scroll }) + @($rectSnapshotLegacy | Where-Object { $_.scroll })
+
+function FpsMetricSummary($rows, $field, $reason, $semantics) {
+  [double[]]$values = @($rows | Where-Object { $_.Contains($field) } | ForEach-Object { [double]$_[$field] })
+  return [ordered]@{
+    semantics = $semantics
+    lineObservationCount = $values.Count
+    stats = $(if ($values.Count -gt 0) { Stats $values } else { NotMeasured $reason })
+  }
+}
+
+function WaitKindSummary($rows, $scope) {
+  $observed = @($rows | Where-Object { $_.Contains('waitKind') })
+  $kinds = @($observed | Group-Object { $_.waitKind } | Sort-Object Count -Descending | ForEach-Object {
+      [double[]]$timeouts = @($_.Group | Where-Object { $_.Contains('waitMs') } | ForEach-Object { [double]$_.waitMs })
+      [ordered]@{
+        kind = $_.Name
+        lineCount = $_.Count
+        requestedTimeoutMs = $(if ($timeouts.Count -gt 0) { Stats $timeouts } else { NotMeasured 'wait timeout token absent' })
+        requestedTimeoutMsSum = $(if ($timeouts.Count -gt 0) { [math]::Round((($timeouts | Measure-Object -Sum).Sum), 3) } else { $null })
+      }
+    })
+  return [ordered]@{
+    scope = $scope
+    semantics = 'line observations of the requested wait; timeout sums are upper bounds, not measured sleep duration (input can wake early)'
+    observedLineCount = $observed.Count
+    adaptiveGpuLineCount = @($observed | Where-Object { $_.waitKind -eq 'adaptive-gpu' }).Count
+    histogram = $kinds
+  }
+}
+
+function SpanMissSummary($rows, $scope) {
+  $observed = @($rows | Where-Object { $_.Contains('spanMiss') })
+  $fields = [ordered]@{
+    globalDisabled = 'globalDisabled'; scopedBlocked = 'scopedBlocked'; exactDirty = 'exactDirty'
+    exactKey = 'exactKey'; exactClip = 'exactClip'; exactCapacity = 'exactCapacity'
+    moveGuard = 'moveGuard'; moveKey = 'moveKey'; moveGeometry = 'moveGeometry'
+    moveClip = 'moveClip'; movePayload = 'movePayload'
+  }
+  $reasons = [ordered]@{}
+  foreach ($name in $fields.Keys) {
+    [double[]]$values = @($observed | ForEach-Object { [double]$_.spanMiss[$fields[$name]] })
+    $reasons[$name] = [ordered]@{
+      sumAcrossObservedFrames = $(if ($values.Count -gt 0) { [long](($values | Measure-Object -Sum).Sum) } else { NotMeasured 'no smiss token in this scope' })
+      perObservedFrame = $(if ($values.Count -gt 0) { Stats $values } else { NotMeasured 'no smiss token in this scope' })
+    }
+  }
+  return [ordered]@{
+    scope = $scope
+    semantics = 'diagnostic gate-decline census only; overlapping counters are not a causal attribution and require bisection before a product claim'
+    observedLineCount = $observed.Count
+    reasons = $reasons
+  }
+}
+
+function RectAreaSummary($rawRows, $summarizedRows, $scope) {
+  $observed = @($rawRows | Where-Object {
+      $_.Contains('rectOpaqueInstances') -or $_.Contains('rectOpaqueSubmittedMp')
+    })
+  $summarized = @($summarizedRows | Where-Object {
+      $_.Contains('rectOpaqueInstances') -or $_.Contains('rectOpaqueSubmittedMp')
+    })
+  $rawSequenced = @($observed | Where-Object { $_.Contains('rectAreaSeq') })
+  $legacy = @($observed | Where-Object { -not $_.Contains('rectAreaSeq') })
+  $rawDistinctSeqCount = @($rawSequenced | Group-Object { [string]$_.rectAreaSeq }).Count
+  $summarizedSequencedCount = @($summarized | Where-Object { $_.Contains('rectAreaSeq') }).Count
+  [double[]]$opaque = @($summarized | Where-Object { $_.Contains('rectOpaqueSubmittedMp') } |
+    ForEach-Object { [double]$_.rectOpaqueSubmittedMp })
+  [double[]]$blended = @($summarized | Where-Object { $_.Contains('rectBlendedSubmittedMp') } |
+    ForEach-Object { [double]$_.rectBlendedSubmittedMp })
+  [double[]]$opaqueInstances = @($summarized | Where-Object { $_.Contains('rectOpaqueInstances') } |
+    ForEach-Object { [double]$_.rectOpaqueInstances })
+  [double[]]$blendedInstances = @($summarized | Where-Object { $_.Contains('rectBlendedInstances') } |
+    ForEach-Object { [double]$_.rectBlendedInstances })
+  [double[]]$blendedFractions = @($summarized | Where-Object {
+      $_.Contains('rectOpaqueInstances') -and $_.Contains('rectBlendedInstances') -and
+      ([double]$_.rectOpaqueInstances + [double]$_.rectBlendedInstances) -gt 0
+    } | ForEach-Object {
+      [double]$_.rectBlendedInstances / ([double]$_.rectOpaqueInstances + [double]$_.rectBlendedInstances)
+    })
+  $candidateMap = @{}
+  foreach ($r in $summarized) {
+    if (-not $r.Contains('blendedTop')) { continue }
+    foreach ($x in @($r.blendedTop)) {
+      $w = ([double]$x.LocalW).ToString('0.###', [Globalization.CultureInfo]::InvariantCulture)
+      $h = ([double]$x.LocalH).ToString('0.###', [Globalization.CultureInfo]::InvariantCulture)
+      $a = ([double]$x.EffectiveAlpha).ToString('0.###', [Globalization.CultureInfo]::InvariantCulture)
+      $key = "${w}x${h}|a${a}|f$([int]$x.Flags)"
+      if (-not $candidateMap.ContainsKey($key)) {
+        $candidateMap[$key] = [pscustomobject]@{
+          signature = $key; localWDip = [double]$x.LocalW; localHDip = [double]$x.LocalH
+          effectiveAlpha = [double]$x.EffectiveAlpha; flags = [int]$x.Flags
+          observationCount = 0; areaMpSum = 0.0; areaMpMax = 0.0; firstOrdinal = [int]$x.Ordinal
+        }
+      }
+      $c = $candidateMap[$key]
+      $c.observationCount++
+      $c.areaMpSum += [double]$x.AreaMp
+      $c.areaMpMax = [math]::Max($c.areaMpMax, [double]$x.AreaMp)
+      $c.firstOrdinal = [math]::Min($c.firstOrdinal, [int]$x.Ordinal)
+    }
+  }
+  $candidates = @($candidateMap.Values | ForEach-Object {
+      [ordered]@{
+        signature = $_.signature; localWDip = $_.localWDip; localHDip = $_.localHDip
+        effectiveAlpha = $_.effectiveAlpha; flags = $_.flags; observationCount = $_.observationCount
+        meanAreaMp = $(if ($_.observationCount -gt 0) { [math]::Round($_.areaMpSum / $_.observationCount, 3) } else { 0.0 })
+        maxAreaMp = [math]::Round($_.areaMpMax, 3); firstOrdinal = $_.firstOrdinal
+      }
+    } | Sort-Object maxAreaMp, observationCount -Descending | Select-Object -First 32)
+  return [ordered]@{
+    scope = $scope
+    semantics = 'rq instance counts plus submitted nominal transformed rect area in physical megapixels; overlap/clipping are not removed, so area is painter work, not screen coverage'
+    observedLineCount = $observed.Count
+    summarizedSnapshotCount = $summarized.Count
+    deduplication = [ordered]@{
+      mode = $(if ($rawSequenced.Count -gt 0 -and $legacy.Count -eq 0) {
+          'rareaSeq: one first-observed backend snapshot per target-local sequence'
+        } elseif ($rawSequenced.Count -eq 0 -and $legacy.Count -gt 0) {
+          'legacy unsequenced FPS line observations; stale repeats cannot be removed'
+        } elseif ($rawSequenced.Count -gt 0) {
+          'mixed: rareaSeq rows deduplicated; legacy rows remain line observations'
+        } else { 'not measured' })
+      sequenceTaggedLineCount = $rawSequenced.Count
+      distinctSequenceCountObservedInScope = $rawDistinctSeqCount
+      firstObservedSequenceCountAttributedToScope = $summarizedSequencedCount
+      repeatedOrFirstObservedOutsideScopeCount = $rawSequenced.Count - $summarizedSequencedCount
+      legacyUnsequencedLineCount = $legacy.Count
+    }
+    opaqueInstances = $(if ($opaqueInstances.Count -gt 0) { Stats $opaqueInstances } else { NotMeasured 'no rq token in this scope' })
+    blendedInstances = $(if ($blendedInstances.Count -gt 0) { Stats $blendedInstances } else { NotMeasured 'no rq token in this scope' })
+    blendedInstanceFraction = $(if ($blendedFractions.Count -gt 0) { Stats $blendedFractions } else { NotMeasured 'no rq snapshot with at least one submitted rect in this scope' })
+    opaqueSubmittedMp = $(if ($opaque.Count -gt 0) { Stats $opaque } else { NotMeasured 'no rareaMp token (FG_RENDER_DIAG off or older build)' })
+    blendedSubmittedMp = $(if ($blended.Count -gt 0) { Stats $blended } else { NotMeasured 'no rareaMp token (FG_RENDER_DIAG off or older build)' })
+    blendedTopCandidateFlags = '1=rounded, 2=stroked, 4=roundedClip, 8=nonPlainKind; signatures are geometry/alpha clues, not scene-node identity'
+    repeatedTopCandidates = @($candidates)
+  }
+}
+
+# Sequence-aware gexec inventory. A sequence is counted exactly once, at its FIRST log observation; later appearances
+# are stale repeats, not more GPU work. This is intentionally independent of the line-observation distributions for
+# `gpu` (frame-fence wall wait), `latW` (DXGI latency waitable), and `grender` (opt-in category attribution).
+$gpuExecutionBySeq = @{}
+$gpuExecutionUnique = New-Object System.Collections.ArrayList
+$gpuExecutionRawTokens = 0; $gpuExecutionTokensWithoutAge = 0; $gpuExecutionConflicts = 0; $gpuExecutionNonMonotonic = 0
+$gpuExecutionAgeRegressions = 0
+$gpuExecutionRepeatAfterNewer = 0; [long]$gpuExecutionUnobservedSequenceGaps = 0; $lastNewGpuExecutionSeq = $null
+foreach ($r in @($scrollFps | Sort-Object { [double]$_['tMs'] })) {
+  if (-not $r.Contains('gpuExecutionSeq')) { continue }
+  $gpuExecutionRawTokens++
+  [uint64]$seq = $r.gpuExecutionSeq
+  $key = $seq.ToString([System.Globalization.CultureInfo]::InvariantCulture)
+  if ($gpuExecutionBySeq.ContainsKey($key)) {
+    $prior = $gpuExecutionBySeq[$key]
+    if ([math]::Abs($prior.Ms - [double]$r.gpuExecutionMs) -gt 0.0001) { $gpuExecutionConflicts++ }
+    if ($r.Contains('gpuExecutionSubmitAge')) {
+      [uint64]$age = $r.gpuExecutionSubmitAge
+      if ($null -ne $prior.MaxObservedSubmitAge -and $age -lt [uint64]$prior.MaxObservedSubmitAge) { $gpuExecutionAgeRegressions++ }
+      if ($null -eq $prior.MaxObservedSubmitAge -or $age -gt [uint64]$prior.MaxObservedSubmitAge) { $prior.MaxObservedSubmitAge = $age }
+    }
+    else { $gpuExecutionTokensWithoutAge++ }
+    if ($null -ne $lastNewGpuExecutionSeq -and $seq -lt [uint64]$lastNewGpuExecutionSeq) { $gpuExecutionRepeatAfterNewer++ }
+    continue
+  }
+  if ($null -ne $lastNewGpuExecutionSeq) {
+    [uint64]$lastSeq = [uint64]$lastNewGpuExecutionSeq
+    if ($seq -lt $lastSeq) { $gpuExecutionNonMonotonic++ }
+    elseif ($seq -gt ($lastSeq + [uint64]1)) { $gpuExecutionUnobservedSequenceGaps += [long]($seq - $lastSeq - [uint64]1) }
+  }
+  $firstAge = $null
+  if ($r.Contains('gpuExecutionSubmitAge')) { $firstAge = [uint64]$r.gpuExecutionSubmitAge }
+  else { $gpuExecutionTokensWithoutAge++ }
+  $sample = [pscustomobject]@{
+    Seq = $seq
+    Ms = [double]$r.gpuExecutionMs
+    FirstTMs = $(if ($r.Contains('tMs')) { [double]$r.tMs } else { $null })
+    FirstObservedDuringScroll = [bool]$r.scroll
+    FirstObservedSubmitAge = $firstAge
+    MaxObservedSubmitAge = $firstAge
+  }
+  $gpuExecutionBySeq[$key] = $sample
+  [void]$gpuExecutionUnique.Add($sample)
+  $lastNewGpuExecutionSeq = $seq
+}
+[double[]]$gpuExecutionAllValues = @($gpuExecutionUnique | ForEach-Object { $_.Ms })
+$gpuExecutionMaxPolicySubmitAge = 6   # mirrors AppHost.GpuGovernorMaxSubmitAge; age is emitted beside every current gexec token
+[double[]]$gpuExecutionFirstAges = @($gpuExecutionUnique | Where-Object { $null -ne $_.FirstObservedSubmitAge } | ForEach-Object { [double]$_.FirstObservedSubmitAge })
+[double[]]$gpuExecutionScrollValues = @($gpuExecutionUnique | Where-Object {
+    $_.FirstObservedDuringScroll -and $null -ne $_.FirstObservedSubmitAge -and
+    [uint64]$_.FirstObservedSubmitAge -le [uint64]$gpuExecutionMaxPolicySubmitAge
+  } | ForEach-Object { $_.Ms })
+$gpuExecutionScrollTooOld = @($gpuExecutionUnique | Where-Object {
+    $_.FirstObservedDuringScroll -and $null -ne $_.FirstObservedSubmitAge -and
+    [uint64]$_.FirstObservedSubmitAge -gt [uint64]$gpuExecutionMaxPolicySubmitAge
+  }).Count
+$gpuExecutionScrollUnknownAge = @($gpuExecutionUnique | Where-Object {
+    $_.FirstObservedDuringScroll -and $null -eq $_.FirstObservedSubmitAge
+  }).Count
+$gpuExecutionSummary = [ordered]@{
+  semantics = 'whole-frame GPU execution timestamp pair; unique completed samples only, never frame-fence wall wait'
+  rawTokenCount = $gpuExecutionRawTokens
+  uniqueSampleCount = $gpuExecutionUnique.Count
+  staleRepeatTokenCount = $gpuExecutionRawTokens - $gpuExecutionUnique.Count
+  tokenWithoutSubmitAgeCount = $gpuExecutionTokensWithoutAge
+  conflictingValueForSameSequenceCount = $gpuExecutionConflicts
+  monotonicFirstObservationOrder = ($gpuExecutionNonMonotonic -eq 0)
+  monotonicTokenOrderIgnoringAdjacentRepeats = ($gpuExecutionNonMonotonic -eq 0 -and $gpuExecutionRepeatAfterNewer -eq 0)
+  nonMonotonicNewSequenceCount = $gpuExecutionNonMonotonic
+  repeatAfterNewerSequenceCount = $gpuExecutionRepeatAfterNewer
+  submitAgeRegressionTokenCount = $gpuExecutionAgeRegressions
+  unobservedSequenceGapCount = $gpuExecutionUnobservedSequenceGaps
+  firstSequence = $(if ($gpuExecutionUnique.Count -gt 0) { [string]$gpuExecutionUnique[0].Seq } else { $null })
+  lastFirstObservedSequence = $(if ($gpuExecutionUnique.Count -gt 0) { [string]$gpuExecutionUnique[$gpuExecutionUnique.Count - 1].Seq } else { $null })
+  policyMaxSubmitAge = $gpuExecutionMaxPolicySubmitAge
+  firstObservedSubmitAge = $(if ($gpuExecutionFirstAges.Count -gt 0) { Stats $gpuExecutionFirstAges } else { NotMeasured 'gexecAge is absent (older token schema)' })
+  scrollFirstObservedTooOldCount = $gpuExecutionScrollTooOld
+  scrollFirstObservedUnknownAgeCount = $gpuExecutionScrollUnknownAge
+  allUniqueSamplesMs = $(if ($gpuExecutionAllValues.Count -gt 0) { Stats $gpuExecutionAllValues } else { NotMeasured 'no gexec token in [fps] lines (older build or no completed whole-frame timestamp sample)' })
+  scrollFirstObservedUniqueSamplesMs = $(if ($gpuExecutionScrollValues.Count -gt 0) { Stats $gpuExecutionScrollValues } else { NotMeasured 'no unique gexec sample was first observed on a scroll-active line within the governor submit-age bound (unknown/old samples are not attributed to that scroll)' })
+}
+$gpuTimingSummary = [ordered]@{
+  fenceWaitMs = [ordered]@{
+    allFps = FpsMetricSummary $scrollFps 'fenceWaitMs' 'no legacy gpu token in [fps] lines' 'wall wait on frame/backbuffer retirement; not shader/raster time'
+    scrollActiveFps = FpsMetricSummary $scrollOnly 'fenceWaitMs' 'no scroll-active legacy gpu token' 'line observations; may include queue retirement'
+  }
+  dxgiLatencyWaitMs = [ordered]@{
+    allFps = FpsMetricSummary $scrollFps 'latencyWaitMs' 'no latW token in [fps] lines' 'DXGI frame-latency waitable only'
+    scrollActiveFps = FpsMetricSummary $scrollOnly 'latencyWaitMs' 'no scroll-active latW token' 'line observations'
+  }
+  gpuExecutionMs = $gpuExecutionSummary
+  categoryProfilerRenderMs = [ordered]@{
+    allFps = FpsMetricSummary $scrollFps 'gpuCategoryRenderMs' 'no grender token (FG_GPU_TIMING was off or produced no fresh category sample)' 'FG_GPU_TIMING whole/category resolve; optional and higher overhead'
+    scrollActiveFps = FpsMetricSummary $scrollOnly 'gpuCategoryRenderMs' 'no scroll-active grender token' 'fresh category-profiler line observations only'
+  }
+}
+$waitPolicySummary = [ordered]@{
+  allFps = WaitKindSummary $scrollFps 'all logged [fps] lines'
+  scrollActiveFps = WaitKindSummary $scrollOnly 'scroll-active [fps] lines'
+}
+$renderDiagnosticsSummary = [ordered]@{
+  spanReuseMisses = [ordered]@{
+    allFps = SpanMissSummary $scrollFps 'all logged [fps] lines carrying smiss'
+    scrollActiveFps = SpanMissSummary $scrollOnly 'scroll-active [fps] lines carrying smiss'
+  }
+  submittedRectArea = [ordered]@{
+    allFps = RectAreaSummary $scrollFps $rectSnapshotsAll 'all logged [fps] lines carrying rq and/or rareaMp'
+    scrollActiveFps = RectAreaSummary $scrollOnly $rectSnapshotsScroll 'scroll-active [fps] lines carrying rq and/or rareaMp; sequenced snapshots are attributed only where first observed'
+  }
+}
 
 # ── observer cost: this bundle's frame time vs the paired plain-Release arm ───────────────────────────────────
 # Compared on the MEDIAN, not the mean: frame-time distributions have a long right tail, and one 500 ms outlier in
@@ -258,8 +656,9 @@ function StateRep($s) { if ($null -eq $s -or $s -eq '') { return 0 } return (([i
 
 $hasState = $false
 if ($csvRows.Count -gt 0) { $hasState = ($csvRows[0].PSObject.Properties.Name -contains 'state') }
+$hasExplicitTrackingSampleMarker = @($latRows | Where-Object { (([int]$_.i1 -band $TrackingSampleValidBit) -ne 0) }).Count -gt 0
 
-$gestureNames = @('idle', 'drag', 'inertia', 'settle')
+$gestureNames = @('idle', 'drag', 'ballistic', 'driven')
 $qualityNames = @('tick', 'dequeue', 'receive', 'hardware')
 $stageNames = @('wakeOverhead', 'flush', 'layout', 'anim', 'record', 'imagePump', 'realizeCatchup', 'submit', 'fenceWait')
 
@@ -273,8 +672,8 @@ $overrunFrames = 0
 
 foreach ($ord in $phaseOrdinals) {
   $mine = @($latRows | Where-Object { (StatePhase $_.state) -eq $ord })
-  # Repetition 1 is the WARM-UP and is excluded from every statistic. Pooling a cold pass (span record, glyph
-  # raster, image decode, PSO warm) with warm ones lets the cold pass dominate the verdict.
+  # Cold-pass bit (state bit 6) is excluded. The old guided protocol stamped repetition 1 as cold. Free-scroll
+  # stamps cold=0 for the whole session, so this filter does not drop the capture.
   $warm = @($mine | Where-Object { (StateCold $_.state) -eq 0 })
   $name = "phase$ord"
   $rec = @($phaseRecords | Where-Object { $_.ord -eq $ord }) | Select-Object -First 1
@@ -364,6 +763,12 @@ foreach ($ord in $phaseOrdinals) {
   $gluedAvg = $null; $steadyAvg = $null
   if ($gluedVals.Count -gt 0) { $gluedAvg = [math]::Round((($gluedVals | Measure-Object -Average).Average), 2) }
   if ($steadyVals.Count -gt 0) { $steadyAvg = [math]::Round((($steadyVals | Measure-Object -Average).Average), 2) }
+  $trackingRows = @(SelectTrackingRows $warm $hasExplicitTrackingSampleMarker $hasState)
+  $trackingInsufficient = ($trackingRows.Count -lt 20)
+  $trackingInsufficientReason = $(if ($trackingInsufficient) {
+      "only $($trackingRows.Count) warm frames actually resampled contact input (need >= 20; unmeasured blanks are not zeroes)"
+    } else { $null })
+  $skew = $(if ($trackingInsufficient) { NotMeasured $trackingInsufficientReason } else { SkewSummary $trackingRows $hasExplicitTrackingSampleMarker $refreshMs })
 
   $phaseSummaries += [ordered]@{
     ord = $ord; name = $name
@@ -376,11 +781,14 @@ foreach ($ord in $phaseOrdinals) {
     latency = [ordered]@{
       genStampQuality = $bestQuality
       genStampQualityHistogram = $qualities
+      trackingSampleFrames = $trackingRows.Count
+      trackingInsufficientData = $trackingInsufficient
+      trackingInsufficientDataReason = $trackingInsufficientReason
       # A sub-frame latency percentile off a `receive` stamp is a description of the producer's pump rate, not of
       # the input path. Refuse rather than publish it.
       inputToVblankOfPresentMs = $(if ($bestQuality -eq 'hardware') { $null } else { NotMeasured "genStampQuality=$bestQuality (below hardware)" })
-      appliedVsIntendedDip = $(if ($insufficient) { NotMeasured $insufficientReason } else { Stats(@($warm | ForEach-Object { (Num $_.f0) })) })
-      velocityDipPerMs = $(if ($insufficient) { NotMeasured $insufficientReason } else { Stats(@($warm | ForEach-Object { [math]::Abs((Num $_.f5)) })) })
+      appliedVsIntendedDip = $(if ($trackingInsufficient) { NotMeasured $trackingInsufficientReason } else { Stats(@($trackingRows | ForEach-Object { (Num $_.f0) })) })
+      velocityDipPerMs = $(if ($trackingInsufficient) { NotMeasured $trackingInsufficientReason } else { Stats(@($trackingRows | ForEach-Object { [math]::Abs((Num $_.f5)) })) })
       wakeOverheadMs = $(if ($insufficient) { NotMeasured $insufficientReason } else { Stats(@($warm | ForEach-Object { (Num $_.f1) })) })
       coalescingBiasNoted = $true
     }
@@ -391,7 +799,7 @@ foreach ($ord in $phaseOrdinals) {
       missedVsyncsMax = (($missed | Measure-Object -Maximum).Maximum)
       missedVsyncsGapSamplesExcluded = $missedGapsDropped
       frameOverrunMs = $(if ($insufficient) { NotMeasured $insufficientReason } else { Stats(@($warm | ForEach-Object { (Num $_.f2) })) })
-      clockSampleSkewMs = $(if ($insufficient) { NotMeasured $insufficientReason } else { Stats(@($warm | ForEach-Object { (Num $_.f3) })) })
+      clockSampleSkewMs = $skew
       overrunFrames = $overrunHere
       neverPresentedSamples = $neverPresented
       missedVsyncsAttestedSum = $(if ($attestedFrames -gt 0) { $attestedSum } else { NotMeasured 'no frame in this phase carried an attested vblank ordinal (DXGI frame statistics unavailable, disjoint, or the swapchain is not on a flip-model path)' })
@@ -405,6 +813,257 @@ foreach ($ord in $phaseOrdinals) {
 if ($phaseOrdinals.Count -eq 0 -and $latRows.Count -gt 0) {
   Warn "Latency rows exist but carry no phase ordinals - the phase marker never reached the app (FG_SCROLL_PHASE_FILE)."
   $untrusted += 'latency rows carry no phase ordinal, so per-phase slicing is unavailable'
+}
+
+# ── PresentMon -> trace QPC join ────────────────────────────────────────────────────────────────────────────
+# PresentMon's TimeInQPC and ScrollTrace's anchor are the only honest common clock. Do not line rows up by ordinal:
+# both producers may drop or suppress frames. A PresentMon row inherits the latest trace-state stamp at or before its
+# QPC, within the trace's observed time range (plus a small tail for Present returning after the final stamp). On the
+# current schema every trace row carries the state word; using all of them catches begin/end edges between frame rows.
+# A legacy CSV with no state COLUMN has no gesture witness at all and must remain unknown, never inferred as idle.
+function PresentColumnCoverage($records, $name) {
+  [double[]]$values = @($records | ForEach-Object {
+      $prop = $_.Raw.PSObject.Properties[$name]
+      if ($prop) { TryNum $prop.Value }
+    } | Where-Object { $null -ne $_ })
+  return [ordered]@{
+    measuredCount = $values.Count
+    missingCount = $records.Count - $values.Count
+    coveragePct = Pct $values.Count $records.Count
+    stats = $(if ($values.Count -gt 0) { Stats $values } else { NotMeasured "$name is NA or absent on every selected PresentMon row" })
+  }
+}
+
+function PresentBucketSummary($records, $allIntervalCount, $predicate) {
+  [double[]]$intervals = @($records | ForEach-Object { $_.IntervalMs })
+  $joined = @($records | Where-Object { $_.GestureState -ge 0 })
+  return [ordered]@{
+    predicate = $predicate
+    count = $records.Count
+    pctOfMeasuredIntervals = Pct $records.Count $allIntervalCount
+    gestureJoinedCount = $joined.Count
+    gestureActiveCount = @($joined | Where-Object { $_.GestureState -gt 0 }).Count
+    gestureIdleCount = @($joined | Where-Object { $_.GestureState -eq 0 }).Count
+    gestureUnknownCount = $records.Count - $joined.Count
+    intervalMs = $(if ($intervals.Count -gt 0) { Stats $intervals } else { NotMeasured 'no PresentMon interval matched this bucket' })
+    gpuBusyMs = PresentColumnCoverage $records 'MsGPUBusy'
+    gpuWaitMs = PresentColumnCoverage $records 'MsGPUWait'
+    renderPresentLatencyMs = PresentColumnCoverage $records 'MsRenderPresentLatency'
+  }
+}
+
+function PresentGestureSliceSummary($records, $scope) {
+  [double[]]$intervals = @($records | Where-Object { $null -ne $_.IntervalMs -and $_.IntervalMs -ge 0 } |
+    ForEach-Object { [double]$_.IntervalMs })
+  return [ordered]@{
+    scope = $scope
+    rowCount = $records.Count
+    intervalMs = $(if ($intervals.Count -gt 0) { Stats $intervals } else { NotMeasured "no measured present interval in $scope rows" })
+    gpuBusyMs = PresentColumnCoverage $records 'MsGPUBusy'
+    gpuWaitMs = PresentColumnCoverage $records 'MsGPUWait'
+    gpuTimeMs = PresentColumnCoverage $records 'MsGPUTime'
+    renderPresentLatencyMs = PresentColumnCoverage $records 'MsRenderPresentLatency'
+  }
+}
+
+function PresentModeSliceSummary($records, $allRowCount) {
+  return @($records |
+    Where-Object { -not [string]::IsNullOrWhiteSpace("$($_.Raw.PresentMode)") } |
+    Group-Object { $_.Raw.PresentMode } |
+    Sort-Object Count -Descending |
+    ForEach-Object {
+      $mode = $_.Name
+      $modeRows = @($_.Group)
+      [ordered]@{
+        mode = $mode
+        rowCount = $modeRows.Count
+        pctOfSelectedRows = Pct $modeRows.Count $allRowCount
+        # Promotion/demotion can coincide with maximize, occlusion, or idle. Keep interaction state separate inside
+        # each mode so an idle Composed frame is never pooled into an active Independent-Flip budget.
+        gestureSlices = [ordered]@{
+          all = PresentGestureSliceSummary $modeRows "PresentMode=$mode; every gesture state"
+          active = PresentGestureSliceSummary @($modeRows | Where-Object { $_.GestureState -gt 0 }) "PresentMode=$mode; gesture active"
+          idle = PresentGestureSliceSummary @($modeRows | Where-Object { $_.GestureState -eq 0 }) "PresentMode=$mode; gesture idle"
+          unknown = PresentGestureSliceSummary @($modeRows | Where-Object { $_.GestureState -lt 0 }) "PresentMode=$mode; gesture unavailable/unjoined"
+        }
+      }
+    })
+}
+
+$presentMonSummary = NotMeasured 'presentmon.csv missing'
+if (Test-Path $pmPath) {
+  try {
+    $pmImported = @(Import-Csv $pmPath)
+    $targetPid = $anchorPid
+    if ($null -eq $targetPid -and $manifest -and $manifest.presentMon -and $null -ne $manifest.presentMon.targetProcessId) {
+      $targetPid = [int]$manifest.presentMon.targetProcessId
+    }
+
+    $pmSelected = @()
+    $pidFiltered = $false
+    $applicationFallbackApplied = $false
+    $hasProcessId = ($pmImported.Count -gt 0 -and ($pmImported[0].PSObject.Properties.Name -contains 'ProcessID'))
+    $hasApplication = ($pmImported.Count -gt 0 -and ($pmImported[0].PSObject.Properties.Name -contains 'Application'))
+    if ($null -ne $targetPid) {
+      if (-not $hasProcessId) { throw 'target PID is known but presentmon.csv has no ProcessID column; cross-process rows cannot be selected safely' }
+      $pmSelected = @($pmImported | Where-Object {
+          $pidValue = TryNum $_.ProcessID
+          $null -ne $pidValue -and [int]$pidValue -eq $targetPid
+        })
+      if ($pmSelected.Count -eq 0) { throw "presentmon.csv has no row for target PID $targetPid" }
+      $pidFiltered = $true
+    }
+    elseif ($hasApplication) {
+      # Legacy launcher manifests did not retain the target PID. The only safe fallback is an unambiguous Wavee.exe
+      # application population; never silently aggregate the whole ETW session.
+      $waveeRows = @($pmImported | Where-Object { "$(($_.Application))" -match '(?i)(^|[\\/])Wavee\.exe$' })
+      if ($waveeRows.Count -eq 0) { throw 'target PID is absent and presentmon.csv has no Wavee.exe Application population' }
+      if ($hasProcessId) {
+        $waveePids = @($waveeRows | ForEach-Object { TryNum $_.ProcessID } | Where-Object { $null -ne $_ } |
+          ForEach-Object { [int]$_ } | Sort-Object -Unique)
+        if ($waveePids.Count -ne 1) { throw "target PID is absent and Wavee.exe rows span $($waveePids.Count) process IDs" }
+        $targetPid = [int]$waveePids[0]
+      }
+      $pmSelected = $waveeRows
+      $applicationFallbackApplied = $true
+    }
+    else {
+      throw 'target PID is absent and presentmon.csv has no Application column for a safe Wavee.exe fallback'
+    }
+
+    $traceStates = @()
+    if ($hasState) {
+      $traceStates = @($csvRows | ForEach-Object {
+          $tm = TryNum $_.tMs
+          if ($null -ne $tm) { [pscustomobject]@{ TMs = $tm; State = [int](Num $_.state) } }
+        } | Sort-Object TMs)
+    }
+    $canJoin = ($hasState -and $null -ne $anchorQpc -and $qpcFreq -gt 0 -and $traceStates.Count -gt 0 -and
+                $pmSelected.Count -gt 0 -and ($pmSelected[0].PSObject.Properties.Name -contains 'TimeInQPC'))
+    $tailToleranceMs = 100.0
+    $frameAt = -1
+    $pmObserved = New-Object System.Collections.ArrayList
+    foreach ($row in @($pmSelected | Sort-Object { $v = TryNum $_.TimeInQPC; if ($null -eq $v) { [double]::PositiveInfinity } else { $v } })) {
+      $qpc = TryNum $row.TimeInQPC
+      $interval = TryNum $row.MsBetweenPresents
+      $gesture = -1
+      $timeMs = $null
+      if ($canJoin -and $null -ne $qpc) {
+        $timeMs = ($qpc - $anchorQpc) * 1000.0 / $qpcFreq
+        while (($frameAt + 1) -lt $traceStates.Count -and $traceStates[$frameAt + 1].TMs -le $timeMs) { $frameAt++ }
+        if ($frameAt -ge 0 -and $timeMs -ge $traceStates[0].TMs -and
+            $timeMs -le ($traceStates[$traceStates.Count - 1].TMs + $tailToleranceMs)) {
+          $gesture = StateGesture $traceStates[$frameAt].State
+        }
+      }
+      $stream = "$($row.ProcessID)|$($row.SwapChainAddress)"
+      [void]$pmObserved.Add([pscustomobject]@{
+        Raw = $row; Qpc = $qpc; TMs = $timeMs; IntervalMs = $interval; GestureState = $gesture; Stream = $stream
+      })
+    }
+
+    $validIntervals = @($pmObserved | Where-Object { $null -ne $_.IntervalMs -and $_.IntervalMs -ge 0 })
+    $joined = @($pmObserved | Where-Object { $_.GestureState -ge 0 })
+    $bucket120 = @($validIntervals | Where-Object { $_.IntervalMs -ge 7.5 -and $_.IntervalMs -le 9.2 })
+    $bucket12To20 = @($validIntervals | Where-Object { $_.IntervalMs -ge 12.0 -and $_.IntervalMs -le 20.0 })
+    $bucketIdleGap = @($validIntervals | Where-Object { $_.IntervalMs -gt 20.0 })
+
+    # A run ends on the first non-12..20 interval in the same process/swapchain stream. Keeping streams separate
+    # prevents an interleaved secondary swapchain from either joining two runs or splitting one artificially.
+    $runs = New-Object System.Collections.ArrayList
+    foreach ($group in @($pmObserved | Group-Object Stream)) {
+      $current = New-Object System.Collections.ArrayList
+      foreach ($o in @($group.Group | Sort-Object Qpc)) {
+        $inRun = ($null -ne $o.IntervalMs -and $o.IntervalMs -ge 12.0 -and $o.IntervalMs -le 20.0)
+        if ($inRun) { [void]$current.Add($o); continue }
+        if ($current.Count -gt 0) {
+          [void]$runs.Add([pscustomobject]@{
+            stream = $group.Name; startQpc = [string]$current[0].Qpc; endQpc = [string]$current[$current.Count - 1].Qpc
+            frameCount = $current.Count
+            durationMs = [math]::Round((($current | ForEach-Object { $_.IntervalMs } | Measure-Object -Sum).Sum), 3)
+            gestureActiveCount = @($current | Where-Object { $_.GestureState -gt 0 }).Count
+            gestureIdleCount = @($current | Where-Object { $_.GestureState -eq 0 }).Count
+            gestureUnknownCount = @($current | Where-Object { $_.GestureState -lt 0 }).Count
+          })
+          $current = New-Object System.Collections.ArrayList
+        }
+      }
+      if ($current.Count -gt 0) {
+        [void]$runs.Add([pscustomobject]@{
+          stream = $group.Name; startQpc = [string]$current[0].Qpc; endQpc = [string]$current[$current.Count - 1].Qpc
+          frameCount = $current.Count
+          durationMs = [math]::Round((($current | ForEach-Object { $_.IntervalMs } | Measure-Object -Sum).Sum), 3)
+          gestureActiveCount = @($current | Where-Object { $_.GestureState -gt 0 }).Count
+          gestureIdleCount = @($current | Where-Object { $_.GestureState -eq 0 }).Count
+          gestureUnknownCount = @($current | Where-Object { $_.GestureState -lt 0 }).Count
+        })
+      }
+    }
+
+    $modeHist = @($pmObserved | Where-Object { -not [string]::IsNullOrWhiteSpace("$($_.Raw.PresentMode)") } |
+      Group-Object { $_.Raw.PresentMode } | Sort-Object Count -Descending | ForEach-Object {
+        [ordered]@{ mode = $_.Name; count = $_.Count; pct = Pct $_.Count $pmObserved.Count }
+      })
+    [double[]]$runLengths = @($runs | ForEach-Object { [double]$_.frameCount })
+    [double[]]$runDurations = @($runs | ForEach-Object { [double]$_.durationMs })
+
+    $presentMonSummary = [ordered]@{
+      sourceRowCount = $pmImported.Count
+      selectedRowCount = $pmObserved.Count
+      targetProcessId = $targetPid
+      processIdFilterApplied = $pidFiltered
+      applicationFallbackApplied = $applicationFallbackApplied
+      timeAxis = 'PresentMon.TimeInQPC -> ScrollTrace anchor qpc/qpcFreq -> latest preceding trace state'
+      gestureJoin = [ordered]@{
+        joinedCount = $joined.Count
+        unjoinedCount = $pmObserved.Count - $joined.Count
+        coveragePct = Pct $joined.Count $pmObserved.Count
+        activeCount = @($joined | Where-Object { $_.GestureState -gt 0 }).Count
+        idleCount = @($joined | Where-Object { $_.GestureState -eq 0 }).Count
+        tailToleranceMs = $tailToleranceMs
+        reasonNotJoined = $(if ($canJoin) { 'outside the trace time range, missing TimeInQPC, or beyond the final-stamp tail tolerance' } elseif (-not $hasState) { 'scroll.csv has no state column; legacy traces cannot attest gesture state' } else { 'missing anchor/qpcFreq, trace rows, or PresentMon TimeInQPC' })
+      }
+      measuredIntervalCount = $validIntervals.Count
+      allSelectedRowsScopeWarning = 'top-level columns include startup, idle, and every gesture state; use gestureSlices or a gesture-counted interval bucket for active-budget claims'
+      presentModeHistogram = $modeHist
+      presentModeSlices = @(PresentModeSliceSummary $pmObserved $pmObserved.Count)
+      intervalBuckets = [ordered]@{
+        panel120Like = PresentBucketSummary $bucket120 $validIntervals.Count '7.5 <= MsBetweenPresents <= 9.2'
+        twelveToTwentyMs = PresentBucketSummary $bucket12To20 $validIntervals.Count '12 <= MsBetweenPresents <= 20'
+        idleGap = PresentBucketSummary $bucketIdleGap $validIntervals.Count 'MsBetweenPresents > 20'
+      }
+      contiguousTwelveToTwentyMsRuns = [ordered]@{
+        definition = 'consecutive 12..20 ms rows within one ProcessID+SwapChainAddress stream'
+        runCount = $runs.Count
+        totalFrames = (($runs | Measure-Object frameCount -Sum).Sum)
+        lengthFrames = $(if ($runLengths.Count -gt 0) { Stats $runLengths } else { NotMeasured 'no 12..20 ms run' })
+        durationMs = $(if ($runDurations.Count -gt 0) { Stats $runDurations } else { NotMeasured 'no 12..20 ms run' })
+        longestRuns = @($runs | Sort-Object frameCount, durationMs -Descending | Select-Object -First 20)
+      }
+      gestureSlices = [ordered]@{
+        active = PresentGestureSliceSummary @($pmObserved | Where-Object { $_.GestureState -gt 0 }) 'gesture state drag/ballistic/driven'
+        idle = PresentGestureSliceSummary @($pmObserved | Where-Object { $_.GestureState -eq 0 }) 'gesture state idle'
+        unknown = PresentGestureSliceSummary @($pmObserved | Where-Object { $_.GestureState -lt 0 }) 'gesture state unavailable/unjoined'
+      }
+      columns = [ordered]@{
+        scope = 'all selected PresentMon rows, including startup and idle'
+        msGpuBusy = PresentColumnCoverage $pmObserved 'MsGPUBusy'
+        msGpuWait = PresentColumnCoverage $pmObserved 'MsGPUWait'
+        msGpuTime = PresentColumnCoverage $pmObserved 'MsGPUTime'
+        msRenderPresentLatency = PresentColumnCoverage $pmObserved 'MsRenderPresentLatency'
+        msCpuBusy = PresentColumnCoverage $pmObserved 'MsCPUBusy'
+        msCpuWait = PresentColumnCoverage $pmObserved 'MsCPUWait'
+        msInPresentApi = PresentColumnCoverage $pmObserved 'MsInPresentAPI'
+        msBetweenDisplayChange = PresentColumnCoverage $pmObserved 'MsBetweenDisplayChange'
+        msUntilDisplayed = PresentColumnCoverage $pmObserved 'MsUntilDisplayed'
+        msAllInputToPhotonLatency = PresentColumnCoverage $pmObserved 'MsAllInputToPhotonLatency'
+      }
+    }
+  }
+  catch {
+    $presentMonSummary = NotMeasured "presentmon.csv could not be selected or parsed safely: $($_.Exception.Message)"
+    $untrusted += "presentmon.csv could not be selected or parsed safely: $($_.Exception.Message)"
+  }
 }
 
 # ── buckets: predicate + refuter, ranked by measured tag frequency ───────────────────────────────────────────
@@ -494,17 +1153,22 @@ AddBucket 'imageDecodeDuringScroll' `
   $(if ($totalWarm -eq 0) { 'insufficientData' } elseif ($realizeTag -gt 0) { 'likelyContributor' } else { 'refuted' }) `
   $(if ($bisectArm -match 'noImagePump') { "THIS IS THE BISECTION ARM: tagged $realizeTag with the pump suppressed - compare against the control bundle" } else { "tagged $realizeTag of $overrunFrames overrun frames; run -NoImagePump to settle causation" })
 
-$skewFlagged = 0
+$skewFlagged = 0; $skewEvaluated = 0; $skewSamples = 0; $skewLate = 0
 foreach ($p in $phaseSummaries) {
   $s = $p.cadence.clockSampleSkewMs
-  if ($s -and $s.Contains('mean') -and [math]::Abs($s.mean) -gt 4.0) { $skewFlagged++ }
+  if ($s -and $s.Contains('modeMs') -and $null -ne $s.modeMs) {
+    $skewEvaluated++
+    $skewSamples += $s.count
+    $skewLate += $s.oneRefreshLateTailCount
+    if ($s.modalConcentrationWithin1MsPct -lt 90.0 -or $s.oneRefreshLateTailPct -gt 5.0) { $skewFlagged++ }
+  }
 }
 AddBucket 'clockSampling' `
-  'the offset baked into a frame represents an instant materially different from when that frame was displayed (mean |clockSampleSkewMs| over ~half a refresh)' `
-  'the mean skew sits within a packet interval of zero across every phase' `
+  'on actually-resampled contact frames, fewer than 90% of samples concentrate within 1 ms of the mode OR more than 5% sit one-refresh-late (> mode + 0.70×the phase measured refresh period, toward zero)' `
+  'the expected signed mode is concentrated and the less-negative one-refresh-late tail stays at or below 5%; the non-zero mode itself is structural resample+present latency, not a defect' `
   $skewFlagged $null `
-  $(if ($phaseSummaries.Count -eq 0) { 'insufficientData' } elseif ($skewFlagged -gt 0) { 'likelyContributor' } else { 'refuted' }) `
-  "$skewFlagged of $($phaseSummaries.Count) phases flagged"
+  $(if ($skewEvaluated -eq 0) { 'insufficientData' } elseif ($skewFlagged -gt 0) { 'likelyContributor' } else { 'refuted' }) `
+  "$skewFlagged of $skewEvaluated phases flagged; $skewLate of $skewSamples resampled-drag samples in the less-negative tail; selection=$(if ($hasExplicitTrackingSampleMarker) { 'i1.bit24' } else { 'legacy drag+nonblank f3' })"
 
 # Surviving buckets, NOT ranked by taggedFrames. That sort was wrong and actively misleading: taggedFrames means
 # a different thing per bucket - scrollBindThrash carries a peak binds-per-frame (22), clockSampling carries a
@@ -517,12 +1181,13 @@ $noDominant = ($ranked.Count -eq 0)
 
 # ── did the session even reproduce the complaint? ────────────────────────────────────────────────────────────
 $reproduced = $null
-# Synthetic phases are EXCLUDED from the reproduction question by construction: nobody touched the machine, so
-# there is no observation to corroborate. Counting them would let an unattended instrument-validation run answer
-# "did scrolling feel wrong", which it structurally cannot.
+$captureMode = $null
+if ($manifest -and $manifest.PSObject.Properties['captureMode']) { $captureMode = [string]$manifest.captureMode }
+
 $syntheticPhases = @($phaseRecords | Where-Object { $_.synthetic }).Count
-if ($syntheticPhases -gt 0) {
-  $untrusted += "$syntheticPhases synthetic phase records (unattended run): no human performed the gestures or scored them, so NO glued/steady verdict may be drawn from this bundle - it validates the instrument only"
+$isInstrumentCheck = ($captureMode -eq 'instrumentCheck') -or ($syntheticPhases -gt 0)
+if ($isInstrumentCheck) {
+  $untrusted += 'instrumentCheck / unattended run: no human used the app, so this bundle validates the instrument only'
 }
 $scored = @($phaseRecords | Where-Object {
     -not $_.coldPass -and -not $_.synthetic -and
@@ -539,7 +1204,10 @@ $trusted = ($hardFail.Count -eq 0)
 $summary = [ordered]@{
   schemaVersion = 1
   generatedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
-  generatorVersion = 1
+  # Additive schema-v1 extension: existing phase/stat keys remain intact; v2 added explicit skew provenance and the
+  # PresentMon QPC join, v3 adds sequence-deduplicated whole-frame GPU execution telemetry, and v4 makes wait policy,
+  # submit age, span-miss reasons, and submitted rect-area candidates first-class rather than manual console greps.
+  generatorVersion = 4
   standardsBorrowed = @('present-cadence-vs-submit-cadence', 'multi-label-stage-attribution', 'signed-frame-overrun', 'animation-clock-skew', 'prediction-error-split')
   validity = [ordered]@{
     buildFlavor = $(if ($diagBuild) { 'FLUENTGPU_DIAG' } else { 'plain-Release' })
@@ -550,6 +1218,7 @@ $summary = [ordered]@{
     anchorWallUtc = $anchorWall
     anchorQpc = $anchorQpc
     qpcFrequency = $qpcFreq
+    processId = $anchorPid
     fpsLineCount = $fpsLines.Count
     scrollActiveFpsLineCount = $scrollOnly.Count
     csvRowCount = $csvRows.Count
@@ -566,10 +1235,14 @@ $summary = [ordered]@{
   }
   environmentRef = './manifest.json'
   reproducedComplaint = $reproduced
-  # false ⇒ instrument-validation only. The rubric forbids any glued/steady verdict from such a bundle.
-  humanObserved = ($syntheticPhases -eq 0 -and $scored.Count -gt 0)
+  # false ⇒ instrument-validation only. A free-scroll session a person ran is observed even with no 1-5 scores.
+  humanObserved = ((-not $isInstrumentCheck) -and ($scored.Count -gt 0 -or $captureMode -eq 'freeScroll'))
   syntheticPhaseCount = $syntheticPhases
   phases = @($phaseSummaries)
+  gpuTiming = $gpuTimingSummary
+  waitPolicy = $waitPolicySummary
+  renderDiagnostics = $renderDiagnosticsSummary
+  presentMon = $presentMonSummary
   buckets = @($buckets)
   globalVerdict = [ordered]@{
     # Unordered on purpose - see the comment where $ranked is built. The key keeps its name for compatibility

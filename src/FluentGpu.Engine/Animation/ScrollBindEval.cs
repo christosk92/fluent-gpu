@@ -24,7 +24,6 @@ public static class ScrollBindEval
     public static int StickyClipDirties;
     public static int StickyClipFullyHidden;
     public static int PinDirties;
-    public static int MorphDirties;
     public static int ContinuousDirties;
     public static int ScrollBindCount;
 
@@ -36,7 +35,6 @@ public static class ScrollBindEval
         StickyClipDirties = 0;
         StickyClipFullyHidden = 0;
         PinDirties = 0;
-        MorphDirties = 0;
         ContinuousDirties = 0;
         int binds = 0;
         var table = scene.ScrollBinds;
@@ -112,7 +110,7 @@ public static class ScrollBindEval
             }
 
             // 2) Recompute the predicate bitfield + the distance-latched direction.
-            byte flags = ComputeFlags(scene, ref sc, horiz, anyStuckTop);
+            byte flags = ComputeFlags(scene, ref sc, horiz, anyStuckTop, vp);
             byte prev = sc.ScrollFlagsPrev;
             sc.ScrollFlags = flags;
 
@@ -151,7 +149,7 @@ public static class ScrollBindEval
         }
     }
 
-    static byte ComputeFlags(SceneStore scene, ref ScrollState sc, bool horiz, bool anyStuckTop)
+    static byte ComputeFlags(SceneStore scene, ref ScrollState sc, bool horiz, bool anyStuckTop, NodeHandle vp)
     {
         float offset = horiz ? sc.OffsetX : sc.OffsetY;
         float z = sc.ZoomFactor > 0f ? sc.ZoomFactor : 1f;
@@ -161,14 +159,22 @@ public static class ScrollBindEval
         if (anyStuckTop) f |= ScrollState.StuckTopBit;
         if (offset > 0.5f) f |= ScrollState.ScrollableUpBit;
         if (offset < maxOff - 0.5f) f |= ScrollState.ScrollableDownBit;
-        // MovingNow folds the conscious-scrollbar's "is the scroller in motion" trigger into the generic flag channel:
-        // any non-Idle Phase (Fling/WheelAnimating/TouchpadTracking/Overscroll/SnapBack), a held overscroll band, OR a
-        // residual eased target gap.
-        float tgt = horiz ? sc.TargetX : sc.TargetY;
-        if (sc.Phase != ScrollIntegrator.Idle || MathF.Abs(sc.FlingVelocity) > 1f || sc.Overscrolling || MathF.Abs(tgt - offset) > 0.5f)
+        // MovingNow folds the conscious-scrollbar's "is the scroller in motion" trigger into the generic flag channel
+        // (scroll-v3-plan §3.1): any non-Idle kernel Activity, a live coast/chase velocity, OR a held rubber-band.
+        // The old "residual eased-target gap" term read the kernel-internal TargetX/Y column, which no longer exists
+        // on ScrollState (it's kernel body state now) — Activity/Velocity/Band already cover every case that term
+        // caught (a live chase is never Idle with zero velocity).
+        if (sc.Activity != FluentGpu.Scroll.ScrollActivity.Idle || MathF.Abs(sc.Velocity) > 1f || sc.BandMain != 0f)
             f |= ScrollState.MovingNowBit;
-        if (sc.HasSnap && !float.IsNaN(sc.FlingSnapTarget) && MathF.Abs(offset - sc.FlingSnapTarget) <= 0.5f) f |= ScrollState.SnappedBit;
-        if (sc.IdleMs >= IdleExpireMs) f |= ScrollState.IdleExpiredBit;
+        // SnappedBit: geometry-derived (is the RESTING offset within tolerance of a configured snap value), not a read
+        // of the kernel's in-flight retarget bookkeeping (the old FlingSnapTarget column, deleted — that was kernel
+        // body state, not a scene column). Correct even for a snap the viewport arrived at some other way (a
+        // programmatic ScrollTo landing on it, not just a retargeted fling).
+        if (sc.HasSnap && sc.Activity == FluentGpu.Scroll.ScrollActivity.Idle && IsAtSnapValue(in sc, offset, 0.5f))
+            f |= ScrollState.SnappedBit;
+        // IdleExpiredBit now reads FluentGpu.Scroll.ScrollBarChromeTable's IdleMs (moved out of ScrollState, §3.1/§4)
+        // instead of the deleted ScrollState.IdleMs — chrome owns the idle timer, this pass only reads it.
+        if (scene.ScrollChrome.Get((int)vp.Raw.Index).IdleMs >= IdleExpireMs) f |= ScrollState.IdleExpiredBit;
 
         // Distance-latched direction (dt-invariant): ScrolledFwd carries until the offset travels past the hysteresis.
         bool fwd = (sc.ScrollFlagsPrev & ScrollState.ScrolledFwdBit) != 0;
@@ -177,6 +183,30 @@ public static class ScrollBindEval
         else if (sc.OffsetPrev - offset > DirHysteresisDip) { fwd = false; sc.OffsetPrev = offset; }
         if (fwd) f |= ScrollState.ScrolledFwdBit;
         return f;
+    }
+
+    /// <summary>True when <paramref name="value"/> is within <paramref name="tol"/> DIP of some configured snap value
+    /// (interval or explicit point) — the resting-value half of the old <c>ScrollSnap</c> evaluator (now
+    /// <c>FluentGpu.Scroll.ScrollPhysics.SnapTarget</c> for the kernel's own fling-landing math); this is a lighter,
+    /// LOCAL "am I sitting on one" predicate for <see cref="ScrollState.SnappedBit"/>, with no impulse/ignored-start
+    /// rule (that only matters while a fling is actively retargeting, which MovingNowBit already excludes here).</summary>
+    static bool IsAtSnapValue(in ScrollState sc, float value, float tol)
+    {
+        if (sc.SnapInterval > 0f)
+        {
+            float prev = MathF.Floor((value - sc.SnapStart) / sc.SnapInterval) * sc.SnapInterval + sc.SnapStart;
+            float next = prev + sc.SnapInterval;
+            float nearest = (value - prev) <= (next - value) ? prev : next;
+            if (sc.SnapEnd > sc.SnapStart) nearest = Math.Clamp(nearest, sc.SnapStart, sc.SnapEnd);
+            else if (nearest < sc.SnapStart) nearest = sc.SnapStart;
+            if (MathF.Abs(nearest - value) <= tol) return true;
+        }
+        if (sc.SnapPoints is { Length: > 0 } pts)
+        {
+            for (int i = 0; i < pts.Length; i++)
+                if (MathF.Abs(pts[i] - value) <= tol) return true;
+        }
+        return false;
     }
 
     /// <summary>Pin a node at the viewport top (CSS position:sticky), clamped to its containing block. Ported verbatim
@@ -290,32 +320,22 @@ public static class ScrollBindEval
         float vpExtent = horiz ? sc.ViewportW : sc.ViewportH;
         float maxOff = horiz ? MathF.Max(0f, sc.ContentW * z - sc.ViewportW)
                              : MathF.Max(0f, sc.ContentH * z - sc.ViewportH);
-        float bandLimit = OverscrollPhysics.BandLimit(vpExtent);
+        float bandLimit = FluentGpu.Scroll.ScrollPhysics.BandLimit(vpExtent);
         for (; s >= 0; s = table.At(s).Next)
         {
             ref ScrollBind b = ref table.At(s);
             if (!b.Has(ScrollBind.FlagGeometryAnchor)) continue;
-            float nodeTop = 0f, nodeH = 0f;
-            bool needNode = b.AnchorA is ScrollBindAnchor.NodeEnterViewport or ScrollBindAnchor.NodeExitViewport
-                         || b.AnchorB is ScrollBindAnchor.NodeEnterViewport or ScrollBindAnchor.NodeExitViewport;
-            if (needNode && scene.IsLive(b.Target) && !sc.ContentNode.IsNull)
-            {
-                nodeTop = NodeYInContent(scene, b.Target, vp, sc.ContentNode, out _);
-                nodeH = scene.Bounds(b.Target).H;
-            }
-            b.RangeA = ResolveAnchor(b.AnchorA, b.AnchorAv, maxOff, bandLimit, nodeTop, nodeH, vpExtent);
-            b.RangeB = ResolveAnchor(b.AnchorB, b.AnchorBv, maxOff, bandLimit, nodeTop, nodeH, vpExtent);
+            b.RangeA = ResolveAnchor(b.AnchorA, b.AnchorAv, maxOff, bandLimit);
+            b.RangeB = ResolveAnchor(b.AnchorB, b.AnchorBv, maxOff, bandLimit);
         }
     }
 
-    static float ResolveAnchor(ScrollBindAnchor kind, float val, float maxOff, float bandLimit, float nodeTop, float nodeH, float vpExtent)
+    static float ResolveAnchor(ScrollBindAnchor kind, float val, float maxOff, float bandLimit)
         => kind switch
         {
             ScrollBindAnchor.OffsetPx => val,
             ScrollBindAnchor.OffsetFrac => val * maxOff,
             ScrollBindAnchor.OverscrollBand => val <= 0f ? 0f : bandLimit,    // A=0 ⇒ 0, B (default 0) ⇒ bandLimit cap
-            ScrollBindAnchor.NodeEnterViewport => nodeTop - vpExtent,
-            ScrollBindAnchor.NodeExitViewport => nodeTop + nodeH,
             _ => val,
         };
 
@@ -335,7 +355,7 @@ public static class ScrollBindEval
             if (h.IsNull || !scene.IsLive(h) || !scene.HasScroll(h)) continue;
             ref ScrollState sc = ref scene.ScrollRef(h);
             var g = new ScrollGeometry(sc.OffsetX, sc.OffsetY, sc.ViewportW, sc.ViewportH, sc.ContentW, sc.ContentH,
-                                       sc.OverscrollPx, sc.FlingVelocity, sc.ScrollFlags, sc.UserScrollActive);
+                                       sc.BandMain, sc.Velocity, sc.ScrollFlags, sc.UserScrollActive);
             long key = row.Project(g);
             if (row.HasLast && key == row.LastKey) continue;
             row.Action(g);
@@ -351,15 +371,12 @@ public static class ScrollBindEval
         float sample = b.Source switch
         {
             ScrollChannel.Offset => offset,
-            ScrollChannel.OverscrollBand => -sc.OverscrollPx,            // top pull positive
-            ScrollChannel.Velocity => sc.FlingVelocity,
-            ScrollChannel.SignedPhase => SignedPhase(scene, b.Target, in sc, horiz, vp),
+            ScrollChannel.OverscrollBand => -sc.BandMain,                // top pull positive
             _ => offset,
         };
         float a = b.RangeA, bb = b.RangeB;
         float t;
-        if (b.Source == ScrollChannel.SignedPhase) t = Math.Clamp(sample, -1f, 1f);
-        else if (MathF.Abs(bb - a) < 1e-4f) t = 0f;                      // degenerate range ⇒ inactive (writes OutLo)
+        if (MathF.Abs(bb - a) < 1e-4f) t = 0f;                      // degenerate range ⇒ inactive (writes OutLo)
         else { t = (sample - a) / (bb - a); if (b.Has(ScrollBind.FlagClampOut)) t = Math.Clamp(t, 0f, 1f); }
         if (b.Ease != Easing.Linear) t = Easings.Ease(b.Ease, t);
         return b.OutLo + (b.OutHi - b.OutLo) * t;
@@ -382,45 +399,14 @@ public static class ScrollBindEval
             return;
         }
         var lt = p.LocalTransform;
-        if (b.Sink is BindSink.MorphViewportX or BindSink.MorphViewportY)
-        {
-            // Saturated morphs freeze: once progress hits 0 or 1, skip re-resolving viewport coords every scroll tick.
-            // Sticky/parent LocalTransform continues to carry children; remorph resumes when progress leaves the rail.
-            float t = Math.Clamp(v, 0f, 1f);
-            if (t >= 1f - 1e-3f && b.LastWritten >= 1f - 1e-3f) return;
-            if (t <= 1e-3f && b.LastWritten <= 1e-3f)
-            {
-                float cur0 = b.Sink == BindSink.MorphViewportX ? lt.Dx : lt.Dy;
-                if (MathF.Abs(cur0) <= 1e-3f) return;
-            }
-            bool x = b.Sink == BindSink.MorphViewportX;
-            float natural = NodeAxisInViewport(scene, b.Target, vp, x);
-            float delta = (b.Inset - natural) * t;
-            float current = x ? lt.Dx : lt.Dy;
-            if (MathF.Abs(delta - current) <= 1e-3f) { b.LastWritten = v; return; }
-            p.LocalTransform = x
-                ? new Affine2D(lt.M11, lt.M12, lt.M21, lt.M22, delta, lt.Dy)
-                : new Affine2D(lt.M11, lt.M12, lt.M21, lt.M22, lt.Dx, delta);
-            scene.Mark(b.Target, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
-            if (PerfEnabled) MorphDirties++;
-            b.LastWritten = v;
-            return;
-        }
         if (MathF.Abs(v - b.LastWritten) <= 1e-3f) return;
         switch (b.Sink)
         {
             case BindSink.TransY: p.LocalTransform = new Affine2D(lt.M11, lt.M12, lt.M21, lt.M22, lt.Dx, v); break;
             case BindSink.TransX: p.LocalTransform = new Affine2D(lt.M11, lt.M12, lt.M21, lt.M22, v, lt.Dy); break;
             case BindSink.ScaleUniform: p.LocalTransform = new Affine2D(v, lt.M12, lt.M21, v, lt.Dx, lt.Dy); break;
-            case BindSink.ScaleY: p.LocalTransform = new Affine2D(lt.M11, lt.M12, lt.M21, v, lt.Dx, lt.Dy); break;
             case BindSink.Opacity: p.Opacity = Math.Clamp(v, 0f, 1f); break;
-            case BindSink.Blur: p.BlurSigma = MathF.Max(0f, v); break;
             case BindSink.PresentedH: p.PresentedH = v; break;
-            case BindSink.ClipBottom:
-            {
-                var c = p.ClipRect.IsInfinite ? RectF.FromLTRB(-1e9f, -1e9f, 1e9f, v) : RectF.FromLTRB(p.ClipRect.X, p.ClipRect.Y, p.ClipRect.Right, v);
-                p.ClipRect = c; break;
-            }
             case BindSink.ClipTop:
             {
                 var c = p.ClipRect.IsInfinite ? RectF.FromLTRB(-1e9f, v, 1e9f, 1e9f) : RectF.FromLTRB(p.ClipRect.X, v, p.ClipRect.Right, p.ClipRect.Bottom);
@@ -433,27 +419,6 @@ public static class ScrollBindEval
         b.LastWritten = v;
     }
 
-    /// <summary>Target leading coordinate in viewport space, excluding only the target's own transform. Scroll-content
-    /// translation, sticky-ancestor translation, and presented trailing shifts are included so a morph remains attached
-    /// while those compositor owners move. Pair with transform origin (0,0) when scaling the target.</summary>
-    static float NodeAxisInViewport(SceneStore scene, NodeHandle node, NodeHandle vp, bool x)
-    {
-        float p = 0f;
-        var n = node;
-        while (!n.IsNull && n != vp)
-        {
-            ref RectF b = ref scene.Bounds(n);
-            p += x ? b.X : b.Y;
-            if (n != node)
-            {
-                ref NodePaint paint = ref scene.Paint(n);
-                p += x ? paint.LocalTransform.Dx : paint.LocalTransform.Dy + paint.ChildShiftY;
-            }
-            n = scene.Parent(n);
-        }
-        return p;
-    }
-
     /// <summary>iOS/Spotify stretchy header: the (h+pull)/h scale + band-cancel matrix on the target node directly
     /// (no leading-child walk). Ported verbatim from OverscrollPhysics.ApplyStretchHeader; the <c>!=</c> check IS the
     /// change-gate. The hero authors origin (0.5, 0); the recorder conjugates about it, so this matrix is scale + the
@@ -461,7 +426,7 @@ public static class ScrollBindEval
     static void ApplyStretch(SceneStore scene, ref ScrollBind b, in ScrollState sc)
     {
         if (sc.Orientation == 1) return;                                  // vertical scrollers only
-        float band = sc.OverscrollPx;
+        float band = sc.BandMain;                                        // Orientation==0 here, so BandMain == BandY
         float pull = band < 0f ? -band : 0f;                             // top overscroll only (band < 0)
         float h = scene.Bounds(b.Target).H;
         Affine2D target;
@@ -475,22 +440,6 @@ public static class ScrollBindEval
             scene.Mark(b.Target, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
             if (PerfEnabled) ContinuousDirties++;
         }
-    }
-
-    /// <summary>SwiftUI signed phase in [-1,+1] (identity 0): item-center vs viewport-center on the scroll axis.</summary>
-    static float SignedPhase(SceneStore scene, NodeHandle node, in ScrollState sc, bool horiz, NodeHandle vp)
-    {
-        if (sc.ContentNode.IsNull || !scene.IsLive(node)) return 0f;
-        float vpExtent = horiz ? sc.ViewportW : sc.ViewportH;
-        if (vpExtent <= 1f) return 0f;
-        float offset = horiz ? sc.OffsetX : sc.OffsetY;
-        float nodePos = NodeYInContent(scene, node, vp, sc.ContentNode, out bool inContent);
-        if (!inContent) return 0f;
-        var bnd = scene.Bounds(node);
-        float nodeExtent = horiz ? bnd.W : bnd.H;
-        float centerInViewport = (nodePos - offset) + nodeExtent * 0.5f;
-        float phase = (centerInViewport - vpExtent * 0.5f) / (vpExtent * 0.5f);
-        return Math.Clamp(phase, -1f, 1f);
     }
 
     /// <summary>Sum the local Y (or X) of a node up to — but excluding — the scroll content node, giving its

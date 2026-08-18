@@ -2,6 +2,7 @@ using FluentGpu.Animation;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Scroll;
 using FluentGpu.Signals;
 
 namespace FluentGpu.Controls;
@@ -77,16 +78,10 @@ internal sealed class FlipViewCore : Component
     const float SwipeCooldownMs = 350f;       // post-flip refractory for the packet stream (inertia keeps delivering)
     // Fling-distance projection divisor for the MandatorySingle commit. A release of speed v (px/s) coasts an extra
     // v / FlickProjectK px in the snap-settle window before resting; the projected offset is then snapped to the nearest
-    // index. Derived from the engine scroller decay (ScrollIntegrator.FlingDecayPerS = 0.05/s survival) over the ControlNormal settle
-    // window T: coast = v·(1−decay^T)/−ln(decay), so the divisor is −ln(decay)/(1−decay^T). A BOUNDED window (not the full
-    // infinite scroll coast) is the right model for a page snap — a slow under-50% drag springs back, a flick navigates. ≈ 4.0.
-    static readonly float FlickProjectK = ProjectDivisor(ScrollIntegrator.FlingDecayPerS, Motion.ControlNormal / 1000f);
-    static float ProjectDivisor(float decayPerS, float windowS)
-    {
-        float k = -MathF.Log(decayPerS);                 // the per-second decay rate (−ln survival)
-        float frac = 1f - MathF.Exp(-k * windowS);       // fraction of the full coast reached within the window
-        return frac > 1e-4f ? k / frac : k;              // divisor: projectedExtra = v / divisor = v·frac/k
-    }
+    // index. The ONE canonical value (ScrollFeel.Shipping.FlickProjectK — derived from the kernel's own fling decay,
+    // FlingDecayPerS = 0.05/s survival, over the ControlNormal settle window: coast = v·(1−decay^T)/−ln(decay), so the
+    // divisor is −ln(decay)/(1−decay^T)). A BOUNDED window (not the full infinite scroll coast) is the right model for a
+    // page snap — a slow under-50% drag springs back, a flick navigates. ≈ 4.0.
 
     public override Element Render()
     {
@@ -313,7 +308,7 @@ internal sealed class FlipViewCore : Component
             float vAxis = animations ? (vertical ? (hooks.PointerVelocity?.Invoke().Y ?? 0f)
                                                  : (hooks.PointerVelocity?.Invoke().X ?? 0f))
                                      : 0f;
-            float projected = live + vAxis / FlickProjectK;   // + velocity ⇒ toward index 0 (offset rises toward 0)
+            float projected = live + vAxis / ScrollFeel.Shipping.FlickProjectK;   // + velocity ⇒ toward index 0 (offset rises toward 0)
             // Rail to ±1 viewport of the start index (MandatorySingle never skips more than one per gesture).
             float lo = -(cur + 1) * extent, hi = -(cur - 1) * extent;
             projected = Math.Clamp(projected, lo, hi);

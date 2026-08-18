@@ -35,6 +35,32 @@ using static FluentGpu.VerticalSlice.Harness.Asserts;
 
 static class AnimSuite
 {
+    /// <summary>Test-only motion write for bare-<see cref="SceneStore"/> recorder gates: drives a real
+    /// <c>SceneScrollSink.Apply</c> (the ONE writer of the kernel's RESULT columns — scroll-v3-plan §3.1) on the bare
+    /// scene to flip a derived column (UserScrollActive/LiveSpeedDip/...). The sink also rewrites the content node's
+    /// LocalTransform; the isolated span/blur gates that need a specific "moved" transform hand-set it AFTER this call.
+    /// <paramref name="offsetY"/> overrides the written OffsetY (default: carry the current value through unchanged,
+    /// same as every other field here) — <c>ScrollState.OffsetY</c> has a private setter (ApplyMotion is the sole
+    /// writer), so a gate that wants a REAL, persisted offset — not a hand-poked LocalTransform the sink's next real
+    /// write would silently undo, since it unconditionally recomputes the content transform from the live offset —
+    /// has to go through here.</summary>
+    static void TestApplyScroll(SceneStore s, NodeHandle viewport,
+        FluentGpu.Scroll.ScrollActivity activity = FluentGpu.Scroll.ScrollActivity.Idle,
+        FluentGpu.Scroll.ScrollActivityFlags flags = FluentGpu.Scroll.ScrollActivityFlags.None,
+        FluentGpu.Scroll.ScrollWriteMask moved = FluentGpu.Scroll.ScrollWriteMask.None,
+        float? liveSpeedDip = null,
+        float? offsetY = null)
+    {
+        // Through the ONE writer (a real sink on the bare scene) — the token is never minted by a test, so the
+        // structural single-writer guarantee holds in the gates exactly as it does in the host.
+        ref ScrollState sc = ref s.ScrollRef(viewport);
+        var w = new FluentGpu.Scroll.ScrollWrite(
+            sc.OffsetX, offsetY ?? sc.OffsetY, sc.BandX, sc.BandY, sc.ZoomFactor,
+            sc.Velocity, liveSpeedDip ?? sc.LiveSpeedDip,
+            activity, flags, moved, sc.LastReleaseVelocity, FluentGpu.Scroll.ScrollWriteSource.Tick);
+        new FluentGpu.Scroll.SceneScrollSink(s, static () => { }).Apply((int)viewport.Raw.Index, in w);
+    }
+
     sealed class NeverImageDecoder : IImageDecoder
     {
         public bool Begin(int id, string source, int targetW, int targetH,
@@ -392,7 +418,7 @@ static class AnimSuite
 
         scene.ClearTransformDirty();
         scene.ClearRecordDirty();
-        scroll.UserScrollActive = true;
+        TestApplyScroll(scene, viewport, FluentGpu.Scroll.ScrollActivity.Drag, moved: FluentGpu.Scroll.ScrollWriteMask.OffsetY);
         scene.Paint(content).LocalTransform = Affine2D.Translation(0f, -36f);
         scene.Mark(content, NodeFlags.TransformDirty);
         SceneRecordStats user = SceneRecorder.Record(scene, dl);
@@ -406,7 +432,7 @@ static class AnimSuite
         // about the hold arm alone, not about motion.
         scene.ClearTransformDirty();
         scene.ClearRecordDirty();
-        scroll.UserScrollActive = false;
+        TestApplyScroll(scene, viewport, FluentGpu.Scroll.ScrollActivity.Idle);
         scene.Mark(lyric, NodeFlags.PaintDirty);
         SceneRecordStats global = SceneRecorder.Record(scene, dl, holdSelfBlurForAnyUserScroll: true);
         BlurCachePolicy globalPolicy = FirstBlurPolicy(dl.Bytes);
@@ -1863,10 +1889,10 @@ static class AnimSuite
 
             void ScrollTo(float y)
             {
-                ref ScrollState st = ref s.ScrollRef(vp);
-                st.OffsetY = y; st.TargetY = y;
-                s.Paint(content).LocalTransform = Affine2D.Translation(0f, -y);
-                s.Mark(content, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+                // scroll-v3: OffsetY/TargetY are gone as pokeable columns — post an immediate ScrollTo to the kernel
+                // (SceneScrollSink.Apply, the sole chokepoint, writes both the result columns and the content
+                // transform) and run a frame so Reclamp resolves it before the sticky pass reads geometry.
+                host.ScrollKernel.Port.Post(FluentGpu.Scroll.ScrollInput.ScrollTo((int)vp.Raw.Index, y, immediate: true));
                 // Wake the frame loop like real input would (a wheel scroll sets frameNeeded via dispatch; a raw
                 // ScrollRef write does not) — the sticky pass runs in the full frame pipeline.
                 window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(8f, 8f), 0, 0));
@@ -1952,10 +1978,10 @@ static class AnimSuite
             var content = s.ScrollRef(vp).ContentNode;
             void ScrollTo(float y)
             {
-                ref ScrollState st = ref s.ScrollRef(vp);
-                st.OffsetY = y; st.TargetY = y;
-                s.Paint(content).LocalTransform = Affine2D.Translation(0f, -y);
-                s.Mark(content, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+                // scroll-v3: OffsetY/TargetY are gone as pokeable columns — post an immediate ScrollTo to the kernel
+                // (SceneScrollSink.Apply, the sole chokepoint, writes both the result columns and the content
+                // transform) and run a frame so Reclamp resolves it before this pass reads geometry.
+                host.ScrollKernel.Port.Post(FluentGpu.Scroll.ScrollInput.ScrollTo((int)vp.Raw.Index, y, immediate: true));
                 window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(8f, 8f), 0, 0));
                 host.RunFrame();
             }
@@ -2047,10 +2073,10 @@ static class AnimSuite
             var content = s.ScrollRef(vp).ContentNode;
             void ScrollTo(float y)
             {
-                ref ScrollState st = ref s.ScrollRef(vp);
-                st.OffsetY = y; st.TargetY = y;
-                s.Paint(content).LocalTransform = Affine2D.Translation(0f, -y);
-                s.Mark(content, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+                // scroll-v3: OffsetY/TargetY are gone as pokeable columns — post an immediate ScrollTo to the kernel
+                // (SceneScrollSink.Apply, the sole chokepoint, writes both the result columns and the content
+                // transform) and run a frame so Reclamp resolves it before this pass reads geometry.
+                host.ScrollKernel.Port.Post(FluentGpu.Scroll.ScrollInput.ScrollTo((int)vp.Raw.Index, y, immediate: true));
                 window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(8f, 8f), 0, 0));
                 host.RunFrame();
             }
@@ -2119,12 +2145,9 @@ static class AnimSuite
                 return NodeHandle.Null;
             }
             var vp = FindScrollable(s.Root);
-            var content = s.ScrollRef(vp).ContentNode;
-            ref ScrollState st = ref s.ScrollRef(vp);
-            st.OffsetY = 80f; st.TargetY = 80f;
-            s.Paint(content).LocalTransform = Affine2D.Translation(0f, -80f);
-            s.Mark(content, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
-            ScrollBindEval.ApplyContinuous(s, vp, ref st);
+            // scroll-v3: OffsetY/TargetY are gone as pokeable columns and ApplyContinuous is now called by
+            // SceneScrollSink.Apply itself — post an immediate ScrollTo and let the kernel/sink resolve everything.
+            host.ScrollKernel.Port.Post(FluentGpu.Scroll.ScrollInput.ScrollTo((int)vp.Raw.Index, 80f, immediate: true));
             window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(8f, 8f), 0, 0));
             host.RunFrame();
 
@@ -2170,12 +2193,16 @@ static class AnimSuite
                 return NodeHandle.Null;
             }
             // Scroll "A" to row 20 (offset 400), then unmount → the offset is saved under its ScrollKey.
-            { ref ScrollState st = ref s.ScrollRef(Find(s.Root)); st.OffsetY = 400f; st.TargetY = 400f; }
+            // scroll-v3: OffsetY/TargetY are gone as pokeable columns — post an immediate ScrollTo to the kernel.
+            host.ScrollKernel.Port.Post(FluentGpu.Scroll.ScrollInput.ScrollTo((int)Find(s.Root).Raw.Index, 400f, immediate: true));
             host.RunFrame();
             root.Mounted.Value = false; host.RunFrame();          // unmount → SaveScroll caches "A"=400
             root.Mounted.Value = true;  host.RunFrame();          // cold remount → seed BEFORE the first realize
-            ref ScrollState ra = ref s.ScrollRef(Find(s.Root));
-            float restoredOffset = ra.OffsetY; int restoredFirst = ra.FirstRealized; bool noPending = !ra.RestorePending;
+            var restoredNode = Find(s.Root);
+            ref ScrollState ra = ref s.ScrollRef(restoredNode);
+            float restoredOffset = ra.OffsetY; int restoredFirst = ra.FirstRealized;
+            // RestorePending moved to the kernel's own ScrollBody (scroll-v3-plan §2.1) — not a scene column anymore.
+            bool noPending = !host.ScrollKernel.TryGetBody((int)restoredNode.Raw.Index, out var restoredBody) || !restoredBody.RestorePending;
             Check("scroll-restore.cold-seed: a cold remount seeds the saved offset on the FIRST realized window (no scroll-to-top flash)",
                 Near(restoredOffset, 400f, 1f) && restoredFirst > 0 && noPending,
                 $"offset={restoredOffset:0} firstRealized={restoredFirst} pending={!noPending}");
@@ -2183,7 +2210,7 @@ static class AnimSuite
             // Switch the ScrollKey on the reused viewport: new content starts at the top; the old content's offset is saved.
             root.Key.Value = "B"; host.RunFrame();
             float bTop = s.ScrollRef(Find(s.Root)).OffsetY;
-            { ref ScrollState stb = ref s.ScrollRef(Find(s.Root)); stb.OffsetY = 600f; stb.TargetY = 600f; }
+            host.ScrollKernel.Port.Post(FluentGpu.Scroll.ScrollInput.ScrollTo((int)Find(s.Root).Raw.Index, 600f, immediate: true));
             host.RunFrame();
             root.Key.Value = "A"; host.RunFrame();                // back to A → restore 400
             float aBack = s.ScrollRef(Find(s.Root)).OffsetY;
@@ -2216,7 +2243,8 @@ static class AnimSuite
                 return NodeHandle.Null;
             }
             var before = Find(s.Root);
-            { ref ScrollState st = ref s.ScrollRef(before); st.OffsetY = 400f; st.TargetY = 400f; }
+            // scroll-v3: OffsetY/TargetY are gone as pokeable columns — post an immediate ScrollTo to the kernel.
+            host.ScrollKernel.Port.Post(FluentGpu.Scroll.ScrollInput.ScrollTo((int)before.Raw.Index, 400f, immediate: true));
             host.RunFrame();
 
             root.WrapperKey.Value = 1; host.RunFrame();   // re-key the ANCESTOR → the list remounts onto a new viewport
@@ -3670,12 +3698,12 @@ static class AnimSuite
 
         var dl = new DrawList();
         var spans = new SpanTable();
-        var first = SceneRecorder.Record(scene, dl, spans: spans);
+        var first = SceneRecorder.Record(scene, dl, spans: spans, collectSpanReuseMisses: true);
         scene.ClearRecordDirty();
 
         ap.Fill = ColorF.FromRgba(0x40, 0xC0, 0x70);
         scene.Mark(a, NodeFlags.PaintDirty);
-        var dirty = SceneRecorder.Record(scene, dl, spans: spans);
+        var dirty = SceneRecorder.Record(scene, dl, spans: spans, collectSpanReuseMisses: true);
         bool dirtyBranch = dirty.SpanReuseDisabledReasons == SpanReuseDisabledReason.None
             && dirty.SpansReused >= 1
             && dirty.SpansReRecorded >= 2
@@ -3685,7 +3713,7 @@ static class AnimSuite
         byte[] dirtyBytes = dl.Bytes.ToArray();
         ulong[] dirtySort = dl.SortKeys.ToArray();
         int dirtyCommands = dl.CommandCount;
-        var steady = SceneRecorder.Record(scene, dl, spans: spans);
+        var steady = SceneRecorder.Record(scene, dl, spans: spans, collectSpanReuseMisses: true);
         bool steadyCopy = steady.SpanReuseDisabledReasons == SpanReuseDisabledReason.None
             && steady.SpansReused == 1
             && steady.SpansReRecorded == 0
@@ -3709,12 +3737,16 @@ static class AnimSuite
             && Near(movedFirstDx, steadyFirstDx + 25f);
 
         Check("P6.clean-span first record populates spans under the normal recorder path",
-            (first.SpanReuseDisabledReasons & SpanReuseDisabledReason.FirstRecord) != 0 && first.SpansReRecorded >= 3,
-            $"firstReason={first.SpanReuseDisabledReasons} recorded={first.SpansReRecorded}");
+            (first.SpanReuseDisabledReasons & SpanReuseDisabledReason.FirstRecord) != 0
+            && first.SpansReRecorded >= 3
+            && first.SpanReuseMisses.GlobalDisabled >= first.SpansReRecorded,
+            $"firstReason={first.SpanReuseDisabledReasons} recorded={first.SpansReRecorded} missDisabled={first.SpanReuseMisses.GlobalDisabled}");
         Check("P6.clean-span dirty child re-records ancestors while reusing a clean sibling",
-            dirtyBranch, $"reused={dirty.SpansReused} recorded={dirty.SpansReRecorded} copied={dirty.SpanBytesCopied}");
+            dirtyBranch && dirty.SpanReuseMisses.ExactDirty > 0 && dirty.SpanReuseMisses.MoveGuard > 0,
+            $"reused={dirty.SpansReused} recorded={dirty.SpansReRecorded} copied={dirty.SpanBytesCopied} exactDirty={dirty.SpanReuseMisses.ExactDirty} moveGuard={dirty.SpanReuseMisses.MoveGuard}");
         Check("P6.clean-span steady frame copies the root span byte-identically",
-            steadyCopy, $"reused={steady.SpansReused} recorded={steady.SpansReRecorded} copied={steady.SpanBytesCopied}/{dirtyBytes.Length}");
+            steadyCopy && steady.SpanReuseMisses == default,
+            $"reused={steady.SpansReused} recorded={steady.SpansReRecorded} copied={steady.SpanBytesCopied}/{dirtyBytes.Length} misses={steady.SpanReuseMisses}");
         Check("P6.v2 transform-only dirty root reuses by translating the prior span, not by re-recording",
             transformRebase, $"reused={moved.SpansReused} rebased={moved.SpansRebased} recorded={moved.SpansReRecorded} copied={moved.SpanBytesCopied}/{dirtyBytes.Length} firstDx={steadyFirstDx:0.##}->{movedFirstDx:0.##}");
 
@@ -3965,14 +3997,14 @@ static class AnimSuite
             BlurCachePolicy f3Policy = FirstBlurLayerPolicy(dl.Bytes);
 
             // f4 — the scroll turns direct with no other change: the blur defers to its hold policy...
-            s.ScrollRef(viewport).UserScrollActive = true;
+            TestApplyScroll(s, viewport, FluentGpu.Scroll.ScrollActivity.Drag, moved: FluentGpu.Scroll.ScrollWriteMask.OffsetY);
             var f4 = SceneRecorder.Record(s, dl, spans: spans);
             BlurCachePolicy f4Policy = FirstBlurLayerPolicy(dl.Bytes);
 
             // f5 — ...and the moment it stops being direct the blur must go back to recording Normally. Nothing else
             // changed, so the node is exact-copy eligible again: only the flag's presence in the span key stops f4's
             // held bytes from being resurrected verbatim at rest.
-            s.ScrollRef(viewport).UserScrollActive = false;
+            TestApplyScroll(s, viewport, FluentGpu.Scroll.ScrollActivity.Idle);
             _ = SceneRecorder.Record(s, dl, spans: spans);
             BlurCachePolicy f5Policy = FirstBlurLayerPolicy(dl.Bytes);
 
@@ -4164,6 +4196,7 @@ static class AnimSuite
             bool have0 = g0 && c0 && b0;
             bool rest0 = glyph0.InMotion == 0 && blur0.InMotion == 0;
 
+            TestApplyScroll(s, s.Root, liveSpeedDip: SceneRecorder.MotionSoftFullDip);
             s.Paint(content).LocalTransform = Affine2D.Translation(0f, Shift);
             s.Mark(content, NodeFlags.TransformDirty);
             var moved = SceneRecorder.Record(s, dl, spans: spans);
@@ -4173,7 +4206,8 @@ static class AnimSuite
             bool b1 = LayerOfKind(dl.Bytes, LayerKind.Blur, out var blur1);
             bool have1 = g1 && c1 && b1;
             bool glyphShifted = Near(glyph1.Transform.Dy, glyph0.Transform.Dy + Shift)
-                                && Near(glyph1.Transform.Dx, glyph0.Transform.Dx) && glyph1.InMotion == 1;
+                                && Near(glyph1.Transform.Dx, glyph0.Transform.Dx)
+                                && glyph1.InMotion == DrawList.QuantizeMotionSoft(1f);
             bool clipShifted = Near(clip1.DeviceRect.Y, clip0.DeviceRect.Y + Shift)
                                && Near(clip1.DeviceRect.X, clip0.DeviceRect.X)
                                && Near(clip1.DeviceRect.H, clip0.DeviceRect.H);
@@ -4201,15 +4235,33 @@ static class AnimSuite
             _ = SceneRecorder.Record(s, dl, spans: spans);
             s.ClearRecordDirty();
 
-            s.Paint(content).LocalTransform = Affine2D.Translation(0f, Shift);
-            s.Mark(content, NodeFlags.TransformDirty);
+            // A REAL (persisted) offset, not a hand-poked LocalTransform: SceneScrollSink.Apply — the sink both
+            // TestApplyScroll calls below go through — unconditionally RECOMPUTES the content's LocalTransform from
+            // the viewport's CURRENT OffsetY/BandY every call (ScrollContentTransform.WriteContentTransform), exactly
+            // as it does in the real engine (a settle write re-asserts the position the user is actually AT — offset
+            // doesn't teleport back to 0 just because the gesture ended). The original hand-set
+            // `s.Paint(content).LocalTransform = Affine2D.Translation(0f, Shift)` bypassed the sink for the "moved"
+            // frame, so the settle call's real recompute (from the never-changed OffsetY=0) silently undid it —
+            // glyphS.Transform.Dy snapped back to the row's UNshifted position instead of matching glyphM's shifted
+            // one, the actual root cause of this gate's failure (confirmed via a temporary Dy trace: glyphM.Dy=25 vs
+            // glyphS.Dy=45 — the row's true base Y). Setting a real OffsetY BEFORE the "moved" call, and never
+            // touching it again, makes the "moved" and "settle" sink calls agree — same offset in, same transform
+            // out — exactly like a real scroll that settles AT the position it was scrolled to.
+            TestApplyScroll(s, viewport, liveSpeedDip: SceneRecorder.MotionSoftFullDip, offsetY: -Shift);   // Dy = -(offset+band) — matches the old hand-set Shift's sign/magnitude
             var moved = SceneRecorder.Record(s, dl, spans: spans);
-            bool movedInMotion = FirstGlyph(dl.Bytes, out var glyphM) && glyphM.InMotion == 1 && moved.SpansRebased >= 1;
+            bool movedInMotion = FirstGlyph(dl.Bytes, out var glyphM)
+                                 && glyphM.InMotion == DrawList.QuantizeMotionSoft(1f)
+                                 && moved.SpansRebased >= 1;
 
             // settle: the transform write is over (the host clears the bits right after record) and the scrollbar fades.
             s.ClearTransformDirty();
             s.ClearRecordDirty();
-            s.ScrollRef(viewport).FadeT = 0.5f;
+            TestApplyScroll(s, viewport, liveSpeedDip: 0f);   // OffsetY unchanged since the "moved" call — a real settle, not a snap-to-0
+            // scroll-v3: FadeT/ExpandT moved out of ScrollState into the chrome side-table (scroll-v3 plan §3.1),
+            // SceneStore.ScrollChrome (a ScrollBarChromeTable). GetOrAddRow is internal (ScrollBarChrome.Tick's own
+            // ref-write access) but reachable here via the assembly's InternalsVisibleTo("FluentGpu.VerticalSlice")
+            // grant — the same low-level unit poke this gate wanted, bypassing the ScrollBarChrome ticker.
+            s.ScrollChrome.GetOrAddRow((int)viewport.Raw.Index).FadeT = 0.5f;
             var settle = SceneRecorder.Record(s, dl, spans: spans);
             uint settleFrame = spans.CurrentFrameId;
             bool resnapped = FirstGlyph(dl.Bytes, out var glyphS) && glyphS.InMotion == 0
@@ -4286,7 +4338,7 @@ static class AnimSuite
             s.ClearRecordDirty();
 
             // f2 — the gesture starts: userScrollActive flips, which legitimately re-keys the whole viewport subtree once.
-            s.ScrollRef(viewport).UserScrollActive = true;
+            TestApplyScroll(s, viewport, FluentGpu.Scroll.ScrollActivity.Drag, moved: FluentGpu.Scroll.ScrollWriteMask.OffsetY);
             s.Paint(content).LocalTransform = Affine2D.Translation(0f, Shift);
             s.Mark(content, NodeFlags.TransformDirty);
             _ = SceneRecorder.Record(s, dl, spans: spans);

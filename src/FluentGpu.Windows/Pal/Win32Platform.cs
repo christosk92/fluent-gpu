@@ -438,19 +438,10 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     [LibraryImport("gdi32.dll")] private static partial int GetDeviceCaps(nint hdc, int index);
 
     /// <summary>Vertical refresh (Hz) of the display this window is currently on, via <c>GetDeviceCaps(VREFRESH)</c> on the
-    /// window DC. Returns 0 when unknown (the driver reports 0/1 = "device default"). Diagnostic-only; call sparingly
-    /// (once per size change), not per frame.</summary>
-    /// <summary>Re-point the DirectManipulation manual-update pump at the display this window is currently on. Its
-    /// deadline CLAMPS every host wait while a touchpad gesture is live, so a fixed interval silently re-paces the whole
-    /// UI loop at the wrong rate on a 60 or 240 Hz panel. Cheap and rare (window creation, monitor/DPI change, mode
-    /// change); a driver that reports no rate leaves the pacer on its default.</summary>
-    private void RefreshDmPacerInterval()
-    {
-        if (_dm is null) return;
-        int hz = CurrentRefreshHz();
-        if (hz > 0) _dm.SetRefreshIntervalMs(1000.0 / hz);
-    }
-
+    /// window DC. Returns 0 when unknown (the driver reports 0/1 = "device default"). Diagnostic-only (the FG_FPS_LOG
+    /// resize line); call sparingly (once per size change), not per frame. DirectManipulation no longer has a pacer to
+    /// re-point at this rate — it is driven once per PRODUCED frame from <see cref="FluentGpu.Pal.FrameClock"/>
+    /// (scroll-v3-plan-2026-08-17.md §5.2), not a fixed millisecond interval.</summary>
     public int CurrentRefreshHz()
     {
         nint hdc = GetDC((nint)_hwnd);
@@ -535,37 +526,9 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     private uint _lastWheelMs;
     private bool _wheelHiRes;
     private const uint WheelGestureGapMs = 200;   // gap that ends a wheel gesture and re-evaluates the hi-res latch
-    // Rule 3 (§3.3): a sustained high-cadence exact-±120 burst is a one-way demotion to hi-res. A real detented wheel
-    // cannot physically sustain ≥6 sub-50ms notches; a PTP burst produces dozens. Never fires for notches 1-5 (the run
-    // must reach 6), so a fast mouse flick is never misread — the corrected form of the heuristic v1 reverted (it demoted
-    // on a single <35ms gap, regressing genuine wheels).
-    private const int WheelBurstRunToHiRes = 6;   // consecutive exact-±120 packets ⇒ demote
-    private const uint WheelBurstMaxGapMs = 50;   // each within this gap to count toward the run
-    private int _wheelBurstRun;                   // current run length of consecutive fast exact-±120 packets
     // Detented signed per-axis carryover (§3.2, the SumatraPDF #3032 fix): accumulate raw ×120 units, emit whole notches
     // per 120 crossed, keep the signed remainder, reset on a direction change. Reset (with the gesture) on an idle gap.
     private int _wheelAccumX, _wheelAccumY;
-    // Live-DM wheel defense (§7 on-device correction, 2026-07-02): while a DManip manipulation is live the OS can STILL
-    // synthesize ±120 WM_POINTERWHEEL bursts for the same gesture (observed at runway exhaustion mid-INERTIA: exact-120
-    // packets at ~15ms cadence, classified "genuinely mouse" by rule-4 exactness, hijacking the coast and snapping the
-    // band). A real mouse cannot sustain <50ms detents, so: HOLD the first ±120-multiple packet; a fast follow-up
-    // CONFIRMS synthesis (swallow the burst until it goes quiet); 50ms of silence proves it was a genuine notch and
-    // PumpInto flushes it (one notch, ≤50ms late — imperceptible during someone else's coast).
-    private int _dmHeldNotch;        // ±120-multiple notch held for confirmation (0 = none)
-    private uint _dmHeldMs;          // arrival time of the held notch
-    private bool _dmHeldHoriz;
-    private Point2 _dmHeldPt;
-    private uint _dmHeldPid;
-    private bool _dmWheelBurstLatch; // confirmed synthesis burst — swallow ±120s until WheelBurstMaxGapMs of silence
-    // DIAGNOSTIC ONLY (on-device 2026-07-02): last DM_POINTERHITTEST arrival. The OS sends that message before any
-    // touchpad manipulation over a DM-registered hwnd (170/170 engagements observed) but never for a real mouse wheel,
-    // so a sustained ±120 burst's distance from it says whether the burst is PTP synthesis (DM missed a touchpad
-    // contact — once observed, root cause undiagnosed) or a genuine fast/free-spin mouse (observed sustaining 8-16ms
-    // notches, falsifying rule 3's "a real wheel can't do sub-50ms" premise). Deliberately NOT used for routing:
-    // browser practice (Chromium DirectManipulationHelper / Firefox DirectManipulationOwner) runs no parallel touchpad
-    // classification while DM is enabled — residual wheel is mouse, and a DM miss is a bug to root-cause via this
-    // tripwire, not to classify around.
-    private uint _lastDmHitTestMs;   // last DM_POINTERHITTEST arrival (any outcome); 0 = never
 
     /// <summary>ScrollTrace rawWheel i1 flag bits (see <see cref="FluentGpu.Foundation.ScrollTrace.RawWheel"/>): the
     /// classifier's full verdict for one packet, so misclassification (e.g. an exact-±120 touchpad packet latching the
@@ -574,27 +537,17 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
         => (horizontal ? 1 : 0) | (thisHiRes ? 2 : 0) | (streamIdle ? 4 : 0) | (_wheelHiRes ? 8 : 0)
          | (ptTouchpad ? 16 : 0) | (ctrl ? 32 : 0) | (phasePath ? 64 : 0) | (fbActiveBefore ? 128 : 0);
 
-    // ── swallowed-packet trace rows (observability only; the arbitration itself is untouched) ─────────────────────────
-    // The DM wheel-arbitration block below returns true from several points ABOVE every rawWheel emit site, so a packet
-    // it eats leaves NO trace row at all — in a capture that is indistinguishable from a notch the user never rolled.
-    // These rows make the swallow visible WITHOUT duplicating the surviving packets' rows (each is emitted only on a
-    // path that currently emits nothing, so the "one rawWheel row per delivered packet" invariant still holds; a
-    // swallow row is identified by bit 8 and delivers no InputEvent).
+    // ── swallowed-packet trace row (observability only) ──────────────────────────────────────────────────────────────
+    // A wheel packet DM owns is swallowed above every rawWheel emit site (HandlePointerWheel), so it would otherwise
+    // leave NO trace row at all — in a capture that is indistinguishable from a notch the user never rolled. This row
+    // makes the swallow visible without duplicating the surviving packets' rows (it fires only on the one path that
+    // currently emits nothing, so the "one rawWheel row per delivered packet" invariant still holds; a swallow row is
+    // identified by bit 8 and delivers no InputEvent).
     //   i1 bit 8 (256) = SWALLOWED by the producer; reason = (i1 >> 9) & 7 (bits 1-128 keep their classifier meaning):
-    //     1 = DmWheelRoute.DmOwned — device evidence says touchpad and a DM manipulation is live
-    //     2 = confirmed burst latch still closed, this packet continues the burst (gap < WheelBurstMaxGapMs)
-    //     3 = burst CONFIRMED by this packet (two fast ±120s during a live manipulation); the latch arms here
-    //     4 = HELD for confirmation — not (yet) a drop: 50 ms of silence makes PumpInto's FlushHeldWheelNotch deliver it
-    //     5 = hi-res packet suppressed because DM is the live phase producer for this gesture
-    // Reasons 2/3/4 rest on rule 3's premise, which the remarks in the burst block record as FALSIFIED on this device (a
-    // free-spin mouse sustains exact ±120 at 8-16 ms). That premise is deliberately NOT changed here — these rows are
-    // exactly the evidence needed to size that change, which is why this pass is observability only.
+    //     1 = DM RUNNING owns this packet — device evidence says touchpad, or the source could not be positively
+    //         resolved to a physical mouse (a positively identified mouse takes over instead — HandlePointerWheel).
     private const int WheelTraceSwallowed = 256;
-    private const int WheelSwallowDmOwned = 1 << 9;
-    private const int WheelSwallowBurstContinue = 2 << 9;
-    private const int WheelSwallowBurstConfirm = 3 << 9;
-    private const int WheelSwallowHeld = 4 << 9;
-    private const int WheelSwallowHiResUnderDm = 5 << 9;
+    private const int WheelSwallowDmLive = 1 << 9;
 
     private void TraceWheelSwallow(int notch, int reason, bool horizontal, bool thisHiRes, bool streamIdle, bool ptTouchpad,
                                    uint wheelGapMs, bool phasePath = false)
@@ -788,12 +741,11 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
         // (the window then receives no OS drops). Revoked in Dispose. (RegisterDragDrop SUPPRESSES WM_DROPFILES.)
         _dropReg = Win32DropTarget.Register(_hwnd);
 
-        // The DirectManipulation touchpad producer (scroll-feel-rework-v2 §7, Phase D): a pure producer swap that emits
-        // the same ScrollBegin/Update/End + MomentumBegin/Update/End the integrator already consumes, from real
-        // PT_TOUCHPAD contacts + OS-curved momentum. Created AFTER the drop target so COM is already STA-init'd. Null on
-        // failure ⇒ the always-compiled §3.3 wheel-fallback classifier owns the touchpad (no regression).
+        // The DirectManipulation touchpad producer (scroll-v3-plan §5.2): emits the ScrollBegin/ScrollDelta/ScrollEnd
+        // phase contract the kernel consumes, from real PT_TOUCHPAD contacts — PTP inertia is engine-owned (no
+        // Momentum* kind). Created AFTER the drop target so COM is already STA-init'd. Null on failure ⇒ the
+        // always-compiled §5.3 wheel-fallback classifier owns the touchpad (no regression).
         _dm = Win32DirectManipulation.TryCreate(this, _hwnd);
-        RefreshDmPacerInterval();   // point the manual-update pump at THIS panel's refresh, not a hardcoded 120 Hz
 
         // A minimal UIA root provider for the window (served via WM_GETOBJECT) + the live-region announcer the app reaches
         // through InputHooks.Announce. Best-effort a11y: a null/failed provider just means no screen-reader announcements.
@@ -1159,13 +1111,41 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
         MSG msg;
         while (PeekMessageW(&msg, HWND.NULL, 0, 0, PM_REMOVE))
             DispatchQueuedMessage(&msg);
-        _dm?.UpdateIfDue();      // absolute-deadline manual-update tick; self-posted DM messages cannot spin the UI loop
+        // Idle drain (scroll-v3-plan-2026-08-17.md §5.2): DirectManipulation's manual-update queue must never sit
+        // forever. PumpScroll only runs from Paint while ScrollProducerLive (a contact engaged/pending or RUNNING), so
+        // an Enabled-but-idle producer needs its own periodic beat here — every wake, not every produced frame.
+        if (_dm is { Enabled: true } dm && !dm.Live && Environment.TickCount64 - dm.LastUpdateMs >= 250)
+            dm.UpdateIdle();
         TryEmitFallbackLift();   // hi-res silence lift (also fires off the LiftTimer when the loop is idle — see below)
-        // Live-DM wheel defense: a held ±120 notch that survived WheelBurstMaxGapMs without a fast follow-up was a
-        // genuine mouse notch (synthesis bursts arrive at packet cadence) — deliver it now, ≤50ms late.
-        if (_dmHeldNotch != 0 && Now() - _dmHeldMs >= WheelBurstMaxGapMs) FlushHeldWheelNotch();
         return _queue.MoveTo(ring);
     }
+
+    /// <summary>
+    /// The ONE per-produced-frame DirectManipulation <c>Update</c> (<c>IPlatformWindow.PumpScroll</c>,
+    /// scroll-v3-plan-2026-08-17.md §5.2): called from <c>AppHost.Paint</c> AFTER the display-phase gate, at a lattice-
+    /// snapped instant — never before it, so a frame-aligned producer never issues an <c>Update</c> against a frame the
+    /// gate turns out to decline. Every content delta from that one <c>Update</c> lands stamped with
+    /// <paramref name="clock"/>'s <c>FrameQpc</c> (<c>Win32DirectManipulation.UpdateFrame</c>), so the ring sums them
+    /// into exactly one <see cref="InputKind.ScrollDelta"/> per produced frame per contact.
+    /// <para>Also drives the hi-res wheel-fallback's silence-lift check (<see cref="TryEmitFallbackLift"/>) at this
+    /// same frame-aligned instant — <see cref="PumpInto"/> already checks it on every wake and the
+    /// <see cref="LiftTimerId"/> WM_TIMER checks it when the loop is fully idle, but a live scroll-producing session
+    /// wants the lift decision tied to the frame clock, not message-pump jitter.</para>
+    /// <para>Returns only the events THIS call enqueued: <see cref="PumpInto"/> already drained <see cref="_queue"/>
+    /// earlier this frame (before the phase gate), so whatever lands in it between here and there is exactly this
+    /// call's own production — the same "move whatever's pending" shape <see cref="PumpInto"/> uses.</para>
+    /// </summary>
+    public int PumpScroll(in FrameClock clock, InputEventRing ring)
+    {
+        if (_dm is { Enabled: true } dm && dm.Live) dm.UpdateFrame(in clock);
+        TryEmitFallbackLift();
+        return _queue.MoveTo(ring);
+    }
+
+    /// <summary>True while DirectManipulation has a contact engaged/pending or RUNNING, or a hi-res wheel-fallback
+    /// gesture is live — either way the host must produce one frame per refresh so <see cref="PumpScroll"/> is pumped
+    /// every vblank (scroll-v3-plan-2026-08-17.md §5.2).</summary>
+    public bool ScrollProducerLive => (_dm?.Live ?? false) || _fbActive;
 
     private void DispatchQueuedMessage(MSG* msg)
     {
@@ -1174,33 +1154,6 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
         if (_dm is { Enabled: true } dm && dm.ProcessInput(msg)) return;
         TranslateMessage(msg);
         DispatchMessageW(msg);
-    }
-
-    /// <summary>Deliver a ±120-multiple wheel notch that was HELD by the live-DM wheel defense (see the
-    /// <see cref="_dmHeldNotch"/> field remarks) and proved genuine: dispatch it exactly as the detented-mouse path
-    /// would have (carryover → wheel-lines scaling → one <see cref="InputKind.Wheel"/> event). No-op when nothing is
-    /// held. The engine's wheel-during-coast handoff then behaves normally, one notch late at most.</summary>
-    private void FlushHeldWheelNotch()
-    {
-        if (_dmHeldNotch == 0) return;
-        short notch = (short)_dmHeldNotch;
-        bool horizontal = _dmHeldHoriz;
-        _dmHeldNotch = 0;
-        _dmWheelBurstLatch = false;
-        int wholeV = horizontal ? 0 : Carryover(ref _wheelAccumY, notch);
-        int wholeH = horizontal ? Carryover(ref _wheelAccumX, notch) : 0;
-        float axisMul = SystemParams.WheelScrollPage ? PageScrollLinesEquivalent
-                      : ((horizontal ? SystemParams.WheelScrollChars : SystemParams.WheelScrollLines) / 3f);
-        float notchY = -wholeV * axisMul;
-        float notchX = wholeH * axisMul;
-        float dipY = -wholeV * WheelDipPerNotch;
-        float dipX = wholeH * WheelDipPerNotch;
-        if (FluentGpu.Foundation.ScrollLog.On)
-            FluentGpu.Foundation.ScrollLog.Line($"WHEEL {(horizontal ? "H" : "V")} notch={notch} dip={(horizontal ? dipX : dipY):0.0} (held-notch flush)");
-        _queue.Enqueue(new InputEvent(InputKind.Wheel, _dmHeldPt, 0, 0, dipY, Mods(),
-            Pointer: PointerKind.Mouse, TimestampMs: Now(),
-            PointerId: _dmHeldPid, ScrollDeltaX: dipX, WheelNotch: notchY, WheelNotchX: notchX,
-            QpcTicks: WheelStampQpc(_dmHeldPid)));
     }
 
     /// <summary>The device stamp for a wheel packet, and the ONE place that records how good it is.
@@ -1290,19 +1243,152 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
         return whole;
     }
 
+    /// <summary>The wheel classifier (scroll-v3-plan-2026-08-17.md §5.3): three rules, latched per gesture (a
+    /// <see cref="WheelGestureGapMs"/> idle gap re-evaluates), in priority order: (1) authoritative device evidence
+    /// (<see cref="WheelSourceEvidenceOf"/> / <see cref="PointerKindOf"/> → PT_TOUCHPAD) ⇒ hi-res; (2) sub-notch
+    /// granularity (<paramref name="notch"/> not an exact multiple of 120) ⇒ hi-res (a free-spin mouse wants
+    /// 1:1-ish motion, not detents); (3) otherwise ⇒ detented mouse. Rules 1/2 only ever LATCH hi-res true for the
+    /// gesture (never flip back), so a stray packet mid-stream can't toggle the physics path.
+    ///
+    /// <para>DirectManipulation arbitration: while <see cref="Win32DirectManipulation.Live"/> (a contact
+    /// engaged/pending or a manipulation RUNNING), this packet's device evidence decides ownership — a POSITIVELY
+    /// IDENTIFIED physical mouse takes over immediately
+    /// (<see cref="Win32DirectManipulation.TryStopForPhysicalWheel"/> ends the manipulation with a synchronous
+    /// ScrollEnd, then this same packet classifies fresh below); a touchpad, or a source the OS cannot positively
+    /// resolve, stays DM-owned and this packet is swallowed (DM already reports that motion through its own phase
+    /// stream — <see cref="TraceWheelSwallow"/> leaves a trace row so a capture never reads as "no wheel event").
+    /// There is no synthesized-burst defense left to run: that heuristic's premise (runway exhaustion mid-INERTIA
+    /// producing spurious exact-±120 bursts) cannot occur now that DM never enters OS INERTIA (§5.2).</para>
+    ///
+    /// <para>Shared by the owner window's own WM_POINTERWHEEL/HWHEEL case and <see cref="ForwardPopupPointerWheel"/>
+    /// (<paramref name="fromPopup"/> = true): the hi-res gesture state (<see cref="_wheelHiRes"/>,
+    /// <see cref="_fbActive"/>, the inter-packet gap ring, <see cref="_fbLastQpc"/>) is owner-window state shared
+    /// with popups — one gesture at a time. DirectManipulation is never live over a popup HWND (DM_POINTERHITTEST
+    /// only ever fires for the window under the pointer), so a precision-touchpad pan over a flyout falls straight
+    /// through rules 1/2 into the hi-res contact stream below, and the popup subtree gets the same engine-owned
+    /// fling a main-window pan gets (<c>WheelPt(lp)</c> already maps screen → OWNER dip, so the emitted event hits
+    /// the popup subtree).</para></summary>
+    internal void HandlePointerWheel(uint pid, long lp, short notch, bool horizontal, bool fromPopup)
+    {
+        uint nowMs = Now();
+        uint wheelGapMs = nowMs - _lastWheelMs;   // packet spacing (huge on the first-ever packet — fine)
+        bool streamIdle = wheelGapMs > WheelGestureGapMs;
+        _lastWheelMs = nowMs;
+        if (streamIdle) { _wheelHiRes = false; _wheelAccumX = 0; _wheelAccumY = 0; }
+
+        DmWheelSourceEvidence sourceEvidence = WheelSourceEvidenceOf(pid);
+        bool ptTouchpad = sourceEvidence == DmWheelSourceEvidence.Touchpad
+                          || PointerKindOf(pid) == PointerKind.Touchpad;   // rule 1
+        if (ptTouchpad) sourceEvidence = DmWheelSourceEvidence.Touchpad;
+
+        bool subNotch = notch != 0 && (notch % 120) != 0;   // rule 2 (also the trace's "thisHiRes")
+        bool dmRunning = _dm is { Enabled: true, Live: true };
+        DmWheelRoute dmRoute = DmWheelArbitration.Decide(dmRunning, sourceEvidence);
+        if (dmRoute == DmWheelRoute.StopDmAndPass)
+        {
+            // A positively identified physical mouse takes over immediately — over both contact and inertia.
+            if (_dm!.TryStopForPhysicalWheel()) { _wheelHiRes = false; _wheelAccumX = 0; _wheelAccumY = 0; }
+        }
+        else if (dmRunning)   // DmOwned (touchpad evidence) or an unresolved source while a manipulation is live
+        {
+            TraceWheelSwallow(notch, WheelSwallowDmLive, horizontal, subNotch, streamIdle, ptTouchpad, wheelGapMs);
+            return;
+        }
+        if (ptTouchpad || subNotch) _wheelHiRes = true;
+
+        // Precision-touchpad pan (hi-res) — the wheel-FALLBACK phase producer (design §5): raw packets become
+        // ScrollBegin/Update phase events with a single LINEAR scale (no soft-knee, no gain curve — the OS already
+        // applied its pointer acceleration; contact is 1:1 by contract). Lift is detected by packet silence
+        // (TryEmitFallbackLift, driven from PumpInto every wake, PumpScroll every produced frame, and the
+        // LiftTimerId WM_TIMER when the loop is fully idle).
+        if (_wheelHiRes)
+        {
+            // Ctrl+hi-res wheel is the OS's legacy PINCH synthesis — consume it, never scroll (design §5/§11).
+            if ((Mods() & KeyModifiers.Ctrl) != 0)
+            {
+                if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled)
+                    FluentGpu.Foundation.ScrollTrace.RawWheel(notch,
+                        WheelTraceFlags(horizontal, subNotch, streamIdle, ptTouchpad, ctrl: true, phasePath: true, fbActiveBefore: _fbActive),
+                        _fbSeq, 0f, wheelGapMs, 0);
+                return;
+            }
+
+            // contactDip = raw · 0.11 · (dpi/96) · UserTouchpadSpeed (scroll-feel-rework-v2 §3.2) — the frozen
+            // one-machine 0.11 is DPI-scaled (_scale = dpi/96) and multiplied by one user/settings speed.
+            float scale = _scale <= 0f ? 1f : _scale;
+            float dip = notch * HiResUnitDip * scale * UserTouchpadSpeed;
+            // Vertical: −delta = scroll toward content end (offset increases). Horizontal: +delta = right (offset increases).
+            float tpDipY = horizontal ? 0f : -dip;
+            float tpDipX = horizontal ? dip : 0f;
+            long qpc = WheelStampQpc(pid);   // device stamp when the OS has one; records its provenance either way
+            var pt = WheelPt(lp);
+            // Lift adaptivity (§5.3): feed this packet's inter-packet gap into the median ring and recompute the
+            // silence threshold = clamp(1.4×median, 50, 120) ms. A fresh gesture (streamIdle) starts the cadence over.
+            if (!streamIdle && wheelGapMs > 0 && wheelGapMs < 500) PushGap(wheelGapMs);
+            else if (streamIdle) { _gapCount = 0; _gapHead = 0; }
+            _hiResLiftMs = AdaptiveLiftMs();
+            InputKind kind = _fbActive ? InputKind.ScrollDelta : InputKind.ScrollBegin;
+            if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled)
+                FluentGpu.Foundation.ScrollTrace.RawWheel(notch,
+                    WheelTraceFlags(horizontal, subNotch, streamIdle, ptTouchpad, ctrl: false, phasePath: true, fbActiveBefore: _fbActive),
+                    unchecked((byte)(_fbSeq + 1)), horizontal ? tpDipX : tpDipY, wheelGapMs, qpc);
+            _fbActive = true;
+            _fbLastMs = nowMs; _fbLastQpc = qpc; _fbLastPos = pt;
+            _fbLastTick = Environment.TickCount64;   // the monotonic silence-check base (see field remarks)
+            // Arm/re-arm the lift timer so the silence check fires even when the frame loop is idle (no PumpInto);
+            // SetTimer with the same id resets the countdown, so it elapses _hiResLiftMs after the LAST packet.
+            SetTimer(_hwnd, LiftTimerId, _hiResLiftMs, null);
+            unchecked { _fbSeq++; }
+            if (FluentGpu.Foundation.ScrollLog.On)
+                FluentGpu.Foundation.ScrollLog.Line($"FB {(kind == InputKind.ScrollBegin ? "BEGIN " : "UPDATE")} {(horizontal ? "H" : "V")} notch={notch} dip={(horizontal ? tpDipX : tpDipY):0.0} seq={_fbSeq}{(fromPopup ? " popup" : "")}");
+            _queue.Enqueue(new InputEvent(kind, pt, 0, 0, tpDipY, Mods(),
+                Pointer: PointerKind.Touchpad, TimestampMs: nowMs, PointerId: pid,
+                ScrollDeltaX: tpDipX, QpcTicks: qpc, ScrollPhaseSeq: _fbSeq,
+                DeviceClassRaw: (byte)ScrollDeviceClass.WheelHiResFallback));
+            return;
+        }
+
+        // Detented mouse (§3.2): signed per-axis carryover — accumulate raw ×120 units, emit whole notches per 120
+        // crossed, keep the signed remainder, reset on direction change. A physical notch (exact ±120) trivially
+        // yields ±1 with a 0 remainder; the accumulator only does real work for residual/multi-notch packets.
+        int wholeV = horizontal ? 0 : Carryover(ref _wheelAccumY, notch);
+        int wholeH = horizontal ? Carryover(ref _wheelAccumX, notch) : 0;
+        // Wheel-lines: viewport distance scales by lines/3 (chars/3 horizontally); page mode uses a fixed
+        // page-equivalent multiplier (the producer can't see the viewport, so the true 0.875·vp needs the engine's
+        // WheelLinesMultiplier plumbing — §3.2 honest limit). The line scale rides WheelNotch (the viewport-relative
+        // path only); ScrollDelta stays the raw-notch DIP so element-level handlers (NumberBox) step once per notch.
+        float axisMul = SystemParams.WheelScrollPage ? PageScrollLinesEquivalent
+                      : ((horizontal ? SystemParams.WheelScrollChars : SystemParams.WheelScrollLines) / 3f);
+        // Vertical: +notch = scroll up, flipped to "positive = toward content end". Horizontal: +notch = right (no flip).
+        float notchY = -wholeV * axisMul;
+        float notchX =  wholeH * axisMul;
+        float dipY = -wholeV * WheelDipPerNotch;
+        float dipX =  wholeH * WheelDipPerNotch;
+        PointerKind wheelKind = _wheelHiRes ? PointerKind.Touchpad : PointerKind.Mouse;
+        long notchQpc = WheelStampQpc(pid);
+        if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled)
+            FluentGpu.Foundation.ScrollTrace.RawWheel(notch,
+                WheelTraceFlags(horizontal, subNotch, streamIdle, ptTouchpad, ctrl: false, phasePath: false, fbActiveBefore: _fbActive),
+                0, horizontal ? dipX : dipY, wheelGapMs, notchQpc);
+        if (FluentGpu.Foundation.ScrollLog.On)
+            FluentGpu.Foundation.ScrollLog.Line($"WHEEL {(horizontal ? "H" : "V")} notch={notch} dip={(horizontal ? dipX : dipY):0.0} hiRes={_wheelHiRes} kind={wheelKind}{(fromPopup ? " popup" : "")}");
+        _queue.Enqueue(new InputEvent(InputKind.Wheel, WheelPt(lp), 0, 0, dipY, Mods(),
+            Pointer: wheelKind, TimestampMs: nowMs,
+            PointerId: pid, ScrollDeltaX: dipX, WheelNotch: notchY, WheelNotchX: notchX,
+            QpcTicks: notchQpc));
+    }
+
     public void WaitForWork(int timeoutMs)
         => WaitForWork(new PlatformWaitRequest(timeoutMs));
 
     public void WaitForWork(in PlatformWaitRequest request)
     {
         int timeoutMs = request.TimeoutMs;
-        // Manual-update DirectManipulation shares this UI/STA pump. Clamp to its ABSOLUTE remaining deadline; queued
-        // messages may wake us early, but never re-arm or postpone that deadline.
-        if (_dm is { Enabled: true } dm)
-        {
-            int dmWaitMs = dm.DelayUntilNextUpdateMs(System.Diagnostics.Stopwatch.GetTimestamp());
-            if (dmWaitMs >= 0 && (timeoutMs < 0 || dmWaitMs < timeoutMs)) timeoutMs = dmWaitMs;
-        }
+        // An Enabled-but-idle DirectManipulation producer owes PumpInto's idle-drain beat every 250 ms (see PumpInto) —
+        // clamp so no host wait (however long/indefinite) starves it. A live gesture instead wakes every produced
+        // frame via ScrollProducerLive, so no clamp is needed there.
+        if (_dm is { Enabled: true } dm && !dm.Live && (timeoutMs < 0 || timeoutMs > 250))
+            timeoutMs = 250;
 
         if (request.InputWakePolicy is PlatformInputWakePolicy.CoalescePointerMotion && timeoutMs > 0)
         {
@@ -1624,16 +1710,9 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                     suggested->right - suggested->left, suggested->bottom - suggested->top,
                     SWP_NOZORDER | SWP_NOACTIVATE);
                 RefreshClientSize();
-                RefreshDmPacerInterval();   // a DPI change is usually a MONITOR change — re-read the panel's refresh
                 PaintRequested?.Invoke();
                 return true;
             }
-            case 0x007E:   // WM_DISPLAYCHANGE (WinUser.h — not surfaced by the TerraFX static-import set)
-                // Resolution / colour-depth / REFRESH-RATE change. Nothing else here depends on the mode, but the
-                // DirectManipulation pump's interval does: it clamps every host wait during a gesture, so leaving it on
-                // the old panel's period re-paces the loop at the wrong rate. Don't consume it — DefWindowProc runs too.
-                RefreshDmPacerInterval();
-                return false;
             case WM_PAINT:
                 PaintRequested?.Invoke();
                 ValidateRect(hWnd, null);
@@ -1747,7 +1826,6 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                 // shape. Non-touchpad / DM-disabled falls through to DefWindowProc exactly as before (no behavior change).
                 if (_dm is { Enabled: true } dmhit)
                 {
-                    _lastDmHitTestMs = Now();   // a touchpad manipulation is hit-testing us (mouse wheels never send this)
                     dmhit.NoteHitTest();        // the silent-owner detector's own TickCount64 stamp + unserved-attempt count
                     uint hitPid = GET_POINTERID_WPARAM(wParam);
                     PointerKind hitKind = PointerKindOf(hitPid);
@@ -1759,8 +1837,8 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                         // SetContact failure already logged inside; fall through so the OS keeps its default handling.
                     }
                     // A rejected hit-test means DM will NOT own this gesture — the OS then promotes it to ±120
-                    // WM_POINTERWHEEL synthesis and the fallback (rule-3 burst demotion) must catch it. Log the
-                    // rejection reason: this is the diagnosis point for "DM missed the contact" (on-device 2026-07-02).
+                    // WM_POINTERWHEEL synthesis and the wheel classifier's device-evidence rule (HandlePointerWheel)
+                    // must catch it. Log the rejection reason: this is the diagnosis point for "DM missed the contact".
                     else if (FluentGpu.Foundation.ScrollLog.On)
                         FluentGpu.Foundation.ScrollLog.Line($"DM HITTEST rejected pid={hitPid} kind={hitKind} — gesture stays on the fallback");
                 }
@@ -1770,203 +1848,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
             {
                 // HIWORD(wParam) = signed notch delta (×120). WM_POINTERWHEEL = VERTICAL, WM_POINTERHWHEEL = horizontal.
                 short notch = unchecked((short)((ulong)(nuint)wParam >> 16));
-                bool horizontal = msg == WM_POINTERHWHEEL;
-                // Classify hi-res contact (touchpad / free-spin) vs detented mouse, latched per gesture (idle gap >
-                // WheelGestureGapMs re-evaluates). scroll-feel-rework-v2 §3.3, in priority order:
-                //   1. authoritative device type (PointerKindOf → PT_TOUCHPAD) ⇒ hi-res;
-                //   2. sub-notch granularity (rawDelta % 120 ≠ 0) ⇒ hi-res (free-spin mice want 1:1-ish, not detents);
-                //   3. a sustained ≥6-packet exact-±120 burst each <50ms apart ⇒ ONE-WAY demotion to hi-res;
-                //   4. otherwise ⇒ detented mouse.
-                // Rules 1-3 only ever set hi-res true within a gesture (never flip back), so a stray packet can't toggle
-                // the physics path mid-stream; the idle gap resets everything for a fresh gesture.
-                uint nowMs = Now();
-                uint wheelGapMs = nowMs - _lastWheelMs;   // packet spacing (huge on the first-ever packet — fine)
-                bool streamIdle = wheelGapMs > WheelGestureGapMs;
-                _lastWheelMs = nowMs;
-                if (streamIdle) { _wheelHiRes = false; _wheelBurstRun = 0; _wheelAccumX = 0; _wheelAccumY = 0; }
-
-                uint wheelPid = GET_POINTERID_WPARAM(wParam);
-                DmWheelSourceEvidence sourceEvidence = WheelSourceEvidenceOf(wheelPid);
-                bool ptTouchpad = sourceEvidence == DmWheelSourceEvidence.Touchpad
-                                  || PointerKindOf(wheelPid) == PointerKind.Touchpad;   // rule 1
-                if (ptTouchpad) sourceEvidence = DmWheelSourceEvidence.Touchpad;
-
-                // Device-evidence arbitration happens before the live-DM hold/confirm heuristic. A positively identified
-                // physical mouse owns the same packet immediately over BOTH contact and inertia; a known touchpad stays
-                // DM-owned. Unknown sources retain the conservative hold/confirm path below.
-                bool wheelTookOverDm = false;
-                DmWheelRoute dmRoute = DmWheelArbitration.Decide(
-                    _dm is { Enabled: true, GestureLive: true }, sourceEvidence);
-                if (dmRoute == DmWheelRoute.DmOwned)
-                {
-                    TraceWheelSwallow(notch, WheelSwallowDmOwned, horizontal,
-                        thisHiRes: notch != 0 && (notch % 120) != 0, streamIdle, ptTouchpad, wheelGapMs);
-                    return true;
-                }
-                if (dmRoute == DmWheelRoute.StopDmAndPass && _dm is { Enabled: true } takeoverDm)
-                {
-                    wheelTookOverDm = takeoverDm.TryStopForPhysicalWheel();
-                    if (wheelTookOverDm)
-                    {
-                        _dmWheelBurstLatch = false;
-                        FlushHeldWheelNotch();
-                        _wheelHiRes = false;
-                        _wheelBurstRun = 0;
-                        _wheelAccumX = 0;
-                        _wheelAccumY = 0;
-                    }
-                    // TryStopForPhysicalWheel returns false only when there is no live manipulation left to stop, and the
-                    // burst latch means "swallow ±120s belonging to a live manipulation" — so a latch surviving that
-                    // return is stale, and would eat the opening notches of the NEXT gesture. Clear it with the gesture.
-                    else _dmWheelBurstLatch = false;
-                }
-                bool subNotch = notch != 0 && (notch % 120) != 0;                    // rule 2 (also the trace's "thisHiRes")
-                bool thisHiRes = subNotch;
-                if (ptTouchpad || subNotch) _wheelHiRes = true;
-
-                // rule 3: run of consecutive exact-±120 packets each <50ms apart (never fires for notches 1-5).
-                bool exact120 = notch == 120 || notch == -120;
-                if (exact120 && !streamIdle && wheelGapMs < WheelBurstMaxGapMs) _wheelBurstRun++;
-                else _wheelBurstRun = exact120 ? 1 : 0;
-                // §7 + v2.1 §A.7 (browser posture, re-affirmed 2026-07-02 after an on-device correction): when DM is the
-                // enabled producer, rule 4 is exact — residual WM_POINTERWHEEL is a mouse and the sustained-burst
-                // demotion (rule 3) stays FULLY suppressed, exactly like Chromium/Firefox, which run no parallel
-                // touchpad classification while DM is registered. Rule 3's premise ("a real detented wheel cannot
-                // sustain sub-50ms notches") was FALSIFIED on-device: a fast/free-spin mouse sustained exact ±120 at
-                // 8-16ms, and a briefly-armed rule 3 shredded it (60-DIP wheel-chase alternating with 19.8-DIP fallback
-                // crawl + phantom silence-lift flings). Rule 3 survives only for the DM-less fallback world.
-                // The once-observed DM-missed-touchpad burst rides the wheel path (fast but coherent chase); the
-                // tripwire below captures the evidence needed to root-cause the MISS itself (the principled fix).
-                bool dmExact = _dm is { Enabled: true };
-                if (!dmExact && _wheelBurstRun >= WheelBurstRunToHiRes) _wheelHiRes = true;
-                else if (dmExact && _wheelBurstRun == WheelBurstRunToHiRes && FluentGpu.Foundation.ScrollLog.On)
-                    FluentGpu.Foundation.ScrollLog.Line(
-                        $"WHEEL sustained ±120 burst under DM (hitTestAgoMs={(uint)(nowMs - _lastDmHitTestMs)}) — mouse if large, PTP-miss if recent; riding the wheel path either way");
-
-                // Live-DM wheel defense (see the field remarks at _dmHeldNotch): while a DManip manipulation is LIVE,
-                // rule-4 exactness is void — the OS can synthesize ±120 wheel bursts for the very gesture DM owns, and
-                // letting them through hijacks the coast (CancelGesture + WheelAnimating) and snaps the band. Hold-and-
-                // confirm: first ±120-multiple is held; a <50ms follow-up confirms synthesis (swallow the whole burst);
-                // 50ms of silence flushes it as a genuine mouse notch (FlushHeldWheelNotch in PumpInto).
-                if (!wheelTookOverDm && notch != 0 && notch % 120 == 0
-                    && _dm is { Enabled: true } dmg && dmg.GestureLive)
-                {
-                    if (_dmWheelBurstLatch)
-                    {
-                        if (wheelGapMs < WheelBurstMaxGapMs)
-                        {
-                            TraceWheelSwallow(notch, WheelSwallowBurstContinue, horizontal, thisHiRes, streamIdle, ptTouchpad, wheelGapMs);
-                            return true;   // the burst continues — swallow
-                        }
-                        _dmWheelBurstLatch = false;                          // went quiet: fresh evaluation below
-                    }
-                    if (_dmHeldNotch != 0 && nowMs - _dmHeldMs < WheelBurstMaxGapMs)
-                    {
-                        _dmHeldNotch = 0;
-                        _dmWheelBurstLatch = true;   // two fast ±120s during a live manipulation = synthesis
-                        if (FluentGpu.Foundation.ScrollLog.On)
-                            FluentGpu.Foundation.ScrollLog.Line("WHEEL ±120 burst during live DM gesture — swallowed (OS synthesis)");
-                        TraceWheelSwallow(notch, WheelSwallowBurstConfirm, horizontal, thisHiRes, streamIdle, ptTouchpad, wheelGapMs);
-                        return true;
-                    }
-                    FlushHeldWheelNotch();   // a stale held notch already proved genuine — deliver it first
-                    _dmHeldNotch = notch; _dmHeldMs = nowMs; _dmHeldHoriz = horizontal;
-                    _dmHeldPt = WheelPt(lp); _dmHeldPid = wheelPid;
-                    TraceWheelSwallow(notch, WheelSwallowHeld, horizontal, thisHiRes, streamIdle, ptTouchpad, wheelGapMs);
-                    return true;
-                }
-                FlushHeldWheelNotch();   // manipulation ended / non-±120 traffic: release any held notch in order
-
-                // Precision-touchpad pan (hi-res) — the wheel-FALLBACK phase producer (design §5): raw packets become
-                // ScrollBegin/Update phase events with a single LINEAR scale (no soft-knee, no gain curve — the OS
-                // already applied its pointer acceleration; contact is 1:1 by contract). Lift is detected by packet
-                // silence in PumpInto (ScrollEnd stamped with the LAST packet's time). An OS momentum tail keeps the
-                // stream flowing 1:1; when true silence comes, the engine's trailing IMPULSE velocity is ≈0 after a
-                // tail and the real hand speed otherwise — one self-fling, never double inertia.
-                if (_wheelHiRes)
-                {
-                    // Never two phase-contract producers for one gesture (§7): while a DManip manipulation is live, DM
-                    // is THE producer — a wheel packet routed to the hi-res fallback here would emit a competing
-                    // ScrollBegin/Update stream into the same latched gesture. Swallow it; DM reports the motion.
-                    if (!wheelTookOverDm && _dm is { Enabled: true } dmOwner && dmOwner.GestureLive)
-                    {
-                        TraceWheelSwallow(notch, WheelSwallowHiResUnderDm, horizontal, thisHiRes, streamIdle, ptTouchpad,
-                            wheelGapMs, phasePath: true);
-                        return true;
-                    }
-                    // Ctrl+hi-res wheel is the OS's legacy PINCH synthesis — consume it, never scroll (design §5/§11).
-                    if ((Mods() & KeyModifiers.Ctrl) != 0)
-                    {
-                        if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled)
-                            FluentGpu.Foundation.ScrollTrace.RawWheel(notch,
-                                WheelTraceFlags(horizontal, thisHiRes, streamIdle, ptTouchpad, ctrl: true, phasePath: true, fbActiveBefore: _fbActive),
-                                _fbSeq, 0f, wheelGapMs, 0);
-                        return true;
-                    }
-
-                    // contactDip = raw · 0.11 · (dpi/96) · UserTouchpadSpeed (scroll-feel-rework-v2 §3.2) — the frozen
-                    // one-machine 0.11 is now DPI-scaled (_scale = dpi/96) and multiplied by one user/settings speed.
-                    float scale = _scale <= 0f ? 1f : _scale;
-                    float dip = notch * HiResUnitDip * scale * UserTouchpadSpeed;
-                    // Vertical: −delta = scroll toward content end (offset increases). Horizontal: +delta = right (offset increases).
-                    float tpDipY = horizontal ? 0f : -dip;
-                    float tpDipX = horizontal ? dip : 0f;
-                    long qpc = WheelStampQpc(wheelPid);   // device stamp when the OS has one; records its provenance either way
-                    var pt = WheelPt(lp);
-                    // Lift adaptivity (§5/§6): feed this packet's inter-packet gap into the median ring and recompute the
-                    // silence threshold = clamp(1.4×median, 50, 120) ms. A fresh gesture (streamIdle) starts the cadence over.
-                    if (!streamIdle && wheelGapMs > 0 && wheelGapMs < 500) PushGap(wheelGapMs);
-                    else if (streamIdle) { _gapCount = 0; _gapHead = 0; }
-                    _hiResLiftMs = AdaptiveLiftMs();
-                    InputKind kind = _fbActive ? InputKind.ScrollUpdate : InputKind.ScrollBegin;
-                    if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled)
-                        FluentGpu.Foundation.ScrollTrace.RawWheel(notch,
-                            WheelTraceFlags(horizontal, thisHiRes, streamIdle, ptTouchpad, ctrl: false, phasePath: true, fbActiveBefore: _fbActive),
-                            unchecked((byte)(_fbSeq + 1)), horizontal ? tpDipX : tpDipY, wheelGapMs, qpc);
-                    _fbActive = true;
-                    _fbLastMs = nowMs; _fbLastQpc = qpc; _fbLastPos = pt;
-                    _fbLastTick = Environment.TickCount64;   // the monotonic silence-check base (see field remarks)
-                    // Arm/re-arm the lift timer so the silence check fires even when the frame loop is idle (no PumpInto);
-                    // SetTimer with the same id resets the countdown, so it elapses _hiResLiftMs after the LAST packet.
-                    SetTimer(_hwnd, LiftTimerId, _hiResLiftMs, null);
-                    unchecked { _fbSeq++; }
-                    if (FluentGpu.Foundation.ScrollLog.On)
-                        FluentGpu.Foundation.ScrollLog.Line($"FB {(kind == InputKind.ScrollBegin ? "BEGIN " : "UPDATE")} {(horizontal ? "H" : "V")} notch={notch} dip={(horizontal ? tpDipX : tpDipY):0.0} seq={_fbSeq}");
-                    _queue.Enqueue(new InputEvent(kind, pt, 0, 0, tpDipY, Mods(),
-                        Pointer: PointerKind.Touchpad, TimestampMs: nowMs, PointerId: wheelPid,
-                        ScrollDeltaX: tpDipX, QpcTicks: qpc, ScrollPhaseSeq: _fbSeq,
-                        DeviceClassRaw: (byte)ScrollDeviceClass.WheelHiResFallback));
-                    return true;
-                }
-
-                // Detented mouse (§3.2): signed per-axis carryover — accumulate raw ×120 units, emit whole notches per 120
-                // crossed, keep the signed remainder, reset on direction change. A physical notch (exact ±120) trivially
-                // yields ±1 with a 0 remainder; the accumulator only does real work for residual/multi-notch packets.
-                int wholeV = horizontal ? 0 : Carryover(ref _wheelAccumY, notch);
-                int wholeH = horizontal ? Carryover(ref _wheelAccumX, notch) : 0;
-                // Wheel-lines: viewport distance scales by lines/3 (chars/3 horizontally); page mode uses a fixed
-                // page-equivalent multiplier (the producer can't see the viewport, so the true 0.875·vp needs the engine's
-                // WheelLinesMultiplier plumbing — §3.2 honest limit). The line scale rides WheelNotch (the viewport-relative
-                // path only); ScrollDelta stays the raw-notch DIP so element-level handlers (NumberBox) step once per notch.
-                float axisMul = SystemParams.WheelScrollPage ? PageScrollLinesEquivalent
-                              : ((horizontal ? SystemParams.WheelScrollChars : SystemParams.WheelScrollLines) / 3f);
-                // Vertical: +notch = scroll up, flipped to "positive = toward content end". Horizontal: +notch = right (no flip).
-                float notchY = -wholeV * axisMul;
-                float notchX =  wholeH * axisMul;
-                float dipY = -wholeV * WheelDipPerNotch;
-                float dipX =  wholeH * WheelDipPerNotch;
-                PointerKind wheelKind = _wheelHiRes ? PointerKind.Touchpad : PointerKind.Mouse;
-                long notchQpc = WheelStampQpc(wheelPid);
-                if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled)
-                    FluentGpu.Foundation.ScrollTrace.RawWheel(notch,
-                        WheelTraceFlags(horizontal, thisHiRes, streamIdle, ptTouchpad, ctrl: false, phasePath: false, fbActiveBefore: _fbActive),
-                        0, horizontal ? dipX : dipY, wheelGapMs, notchQpc);
-                if (FluentGpu.Foundation.ScrollLog.On)
-                    FluentGpu.Foundation.ScrollLog.Line($"WHEEL {(horizontal ? "H" : "V")} notch={notch} dip={(horizontal ? dipX : dipY):0.0} hiRes={_wheelHiRes} kind={wheelKind} (notch fallback)");
-                _queue.Enqueue(new InputEvent(InputKind.Wheel, WheelPt(lp), 0, 0, dipY, Mods(),
-                    Pointer: wheelKind, TimestampMs: nowMs,
-                    PointerId: wheelPid, ScrollDeltaX: dipX, WheelNotch: notchY, WheelNotchX: notchX,
-                    QpcTicks: notchQpc));
+                HandlePointerWheel(GET_POINTERID_WPARAM(wParam), lp, notch, horizontal: msg == WM_POINTERHWHEEL, fromPopup: false);
                 return true;
             }
             case WM_KEYDOWN:
@@ -2261,22 +2143,13 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     internal void ForwardPopupPointerDownUp(uint pointerId, bool down) => PointerDownUp(pointerId, down);
 
     // WM_POINTERWHEEL/HWHEEL over the popup: HIWORD(wParam) = signed notch (×120), lParam = SCREEN px — same sign/DIP
-    // semantics as the owner's own wheel path, mapped to owner DIP so the forwarded wheel feels identical.
+    // semantics as the owner's own wheel path. Runs through the SAME classifier as the owner window's own wheel case
+    // (scroll-v3-plan-2026-08-17.md §5.3, "the popup hole"): a precision-touchpad pan over a flyout now takes rules
+    // 1/2 into the hi-res engine-owned-fling contact stream instead of being hard-coded to detented travel, which
+    // used to send 3.6-6× the intended distance over a popup list. DM is never live over a popup HWND, so the
+    // arbitration inside HandlePointerWheel is a no-op here in practice.
     internal void ForwardPopupPointerWheel(uint pointerId, long lp, short notch, bool horizontal)
-    {
-        // A popup is a transient mouse-wheel surface (no latched gesture / carryover): emit one whole notch, line-scaled
-        // (§3.2) on WheelNotch for the viewport path; ScrollDelta stays the raw-notch DIP for element handlers.
-        float whole = horizontal ? (notch / 120f) : -(notch / 120f);
-        float axisMul = SystemParams.WheelScrollPage ? PageScrollLinesEquivalent
-                      : ((horizontal ? SystemParams.WheelScrollChars : SystemParams.WheelScrollLines) / 3f);
-        float notchY = horizontal ? 0f : whole * axisMul;
-        float notchX = horizontal ? whole * axisMul : 0f;
-        float dipY = horizontal ? 0f : whole * WheelDipPerNotch;
-        float dipX = horizontal ? whole * WheelDipPerNotch : 0f;
-        _queue.Enqueue(new InputEvent(InputKind.Wheel, WheelPt(lp), 0, 0, dipY, Mods(),
-            Pointer: PointerKindOf(pointerId), TimestampMs: Now(), PointerId: pointerId, ScrollDeltaX: dipX, WheelNotch: notchY, WheelNotchX: notchX,
-            QpcTicks: WheelStampQpc(pointerId)));
-    }
+        => HandlePointerWheel(pointerId, lp, notch, horizontal, fromPopup: true);
 
     // WM_POINTERCAPTURECHANGED over the popup: the contact's implicit capture broke — cancel just THAT PointerId's
     // interaction in the dispatcher (no click), the same per-id cancel the owner emits for its own capture loss.

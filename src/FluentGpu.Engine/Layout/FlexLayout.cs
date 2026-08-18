@@ -730,37 +730,13 @@ public sealed class FlexLayout
         // instead of relying on an unrelated child dirty bit to defeat retained-subtree reuse.
         if (viewportPaintChanged) _scene.Mark(node, NodeFlags.PaintDirty);
 
-        // Re-clamp the scroll position to the (possibly changed) content on resize/relayout, and reflect it in the
-        // content's -offset transform, so a smaller content / wrapped reflow doesn't leave the view scrolled past the end.
-        float maxX = MathF.Max(0f, contentW - innerW), maxY = MathF.Max(0f, contentH - innerH);
-        // Scroll-position restoration latch: a revisit seeded RestoreX/Y (Reconciler.ApplyScrollKey). Re-assert it on EACH
-        // layout until the real content extent can hold it — the loading skeleton is short, so the saved deep offset can't
-        // apply until the taller real content lands; until then sit at the top rather than a clamped-mid skeleton position.
-        // Because the seed is in place before the FIRST realize/layout, the first PRESENTED frame is already at the saved
-        // row (no scroll-to-top flash). Released on satisfaction (here) or by a user scroll (InputDispatcher.SetScrollOffset).
-        if (sc.RestorePending)
-        {
-            bool okX = maxX + 0.5f >= sc.RestoreX, okY = maxY + 0.5f >= sc.RestoreY;
-            sc.OffsetX = sc.TargetX = okX ? sc.RestoreX : 0f;
-            sc.OffsetY = sc.TargetY = okY ? sc.RestoreY : 0f;
-            if (okX && okY) sc.RestorePending = false;
-        }
-        sc.OffsetX = Clamp(sc.OffsetX, 0f, maxX); sc.TargetX = Clamp(sc.TargetX, 0f, maxX);
-        sc.OffsetY = Clamp(sc.OffsetY, 0f, maxY); sc.TargetY = Clamp(sc.TargetY, 0f, maxY);
-        // Re-clamp the WheelAnimating/programmatic chase targets to the (possibly shrunk) extent too — else a chase seeded
-        // toward the old bottom keeps overshooting a moving clamp as the content extent drifts (the near-bottom oscillation).
-        if (!float.IsNaN(sc.PendingTargetX)) sc.PendingTargetX = Clamp(sc.PendingTargetX, 0f, maxX);
-        if (!float.IsNaN(sc.PendingTargetY)) sc.PendingTargetY = Clamp(sc.PendingTargetY, 0f, maxY);
-        if (!content.IsNull && _scene.IsLive(content))
-        {
-            ref NodePaint cp = ref _scene.Paint(content);
-            float off = horizontal ? sc.OffsetX : sc.OffsetY;
-            float maxOff = horizontal ? MathF.Max(0f, sc.ContentW - innerW) : MathF.Max(0f, sc.ContentH - innerH);
-            float band = OverscrollPhysics.GuardBandSign(sc.OverscrollPx, off, maxOff);
-            if (sc.Overscrolling && band != sc.OverscrollPx) sc.OverscrollPx = band;
-            OverscrollPhysics.WriteContentTransform(ref cp, in _scene.Bounds(content), horizontal, off, band,
-                sc.ZoomFactor, _scene.DeviceScale);
-        }
+        // scroll-v3 §3.2: layout no longer writes Offset/Target, no longer owns the restore latch, and no longer
+        // writes the content -offset transform — those are the kernel's single write, applied through
+        // SceneScrollSink.ApplyMotion. Layout's job is just to tell the kernel this viewport's frame geometry;
+        // AppHost's Reclamp() (after this layout solve — scroll-v3 §3.3 item 3) re-clamps against it, resolves any
+        // EdgeHitPending, and re-applies through the sink — including the transform — for every viewport that
+        // received SetFrame this frame (a mount-time Restore/Bind/AnchorShift lands the same way).
+        _scene.ScrollPort?.Post(FluentGpu.Scroll.ScrollInput.SetFrame((int)node.Raw.Index, BuildFrameSpec(in sc, contentW, contentH, innerW, innerH)));
         // (Re)bake geometry-dependent ranges (Content*/Bounds now known), then apply the generic scroll-driven bindings
         // in the SAME ArrangeViewport invocation — a resize frame must not paint a one-frame-stale bound transform.
         if (!content.IsNull && _scene.IsLive(content))
@@ -773,7 +749,7 @@ public sealed class FlexLayout
         // size (a mount realizes against the Height hint; a relayout can also grow the host). If the realized window
         // no longer covers the now-known viewport, flag the node — the host (AppHost.Paint) re-realizes + re-runs
         // scoped layout inside the SAME frame (bounded), so the first presented frame shows the real rows. Same
-        // windowing idiom as the scroll paths (ScrollIntegrator.Tick / InputDispatcher).
+        // windowing idiom as the scroll paths (ScrollKernel.Tick / ScrollInputRouter).
         if (sc.ItemCount > 0)
         {
             float vpExtent = horizontal ? sc.ViewportW : sc.ViewportH;
@@ -797,6 +773,44 @@ public sealed class FlexLayout
             if (VirtualWindowing.NeedsRealize(in sc, visibleFirst, visibleLast))
                 _scene.Mark(node, NodeFlags.VirtualRangeDirty);
         }
+    }
+
+    /// <summary>scroll-v3 §3.2/§3.3: the kernel's own copy of a viewport's frame geometry (the <c>ScrollBody.Frame</c>
+    /// slab field) — posted via <c>ScrollInput.SetFrame</c> whenever layout (re)computes it. Independent of the
+    /// <see cref="ScrollState"/> config columns layout ALSO still writes directly (ContentW/H, ViewportW/H): the
+    /// kernel has zero references to <see cref="SceneStore"/>/<see cref="ScrollState"/>, so its clamp/physics must be
+    /// fed this snapshot rather than reading the scene.</summary>
+    /// <summary>Re-post a viewport's current geometry+snap grid to the kernel WITHOUT running a layout pass — for a
+    /// control that mutates <see cref="ScrollState"/>'s snap columns (SnapInterval/Start/End/Points) directly, after
+    /// mount, from outside the reconciler's declaration path (<see cref="SnapSpec.ApplyTo"/>'s own doc: "ApplyTo has
+    /// no scene/node handle to post that command itself... the SetFrame call site is the one that actually arms
+    /// snapping"). A snap-only change is not itself layout-affecting, so nothing else would re-post <c>SetFrame</c>
+    /// and the kernel's cached <see cref="FluentGpu.Scroll.ScrollBody.Frame"/> would keep the STALE grid forever
+    /// (scroll-v3-plan §2 "the snap grid isn't reaching the kernel"). Idempotent — multiple <c>SetFrame</c> posts for
+    /// the same node in one frame are expected (plan §3.3 note ii). No-op if the node has no live scroll body yet.</summary>
+    public static void RepostFrame(SceneStore scene, NodeHandle node)
+    {
+        if (node.IsNull || !scene.IsLive(node) || !scene.HasScroll(node)) return;
+        ref ScrollState sc = ref scene.ScrollRef(node);
+        scene.ScrollPort?.Post(FluentGpu.Scroll.ScrollInput.SetFrame((int)node.Raw.Index,
+            BuildFrameSpec(in sc, sc.ContentW, sc.ContentH, sc.ViewportW, sc.ViewportH)));
+    }
+
+    private static FluentGpu.Scroll.ScrollFrameSpec BuildFrameSpec(in ScrollState sc, float contentW, float contentH, float viewportW, float viewportH)
+    {
+        bool horizontal = sc.Orientation == 1;
+        return new FluentGpu.Scroll.ScrollFrameSpec(
+            Orientation: sc.Orientation,
+            ExtentMain: horizontal ? contentW : contentH,
+            ExtentCross: horizontal ? contentH : contentW,
+            ViewportMain: horizontal ? viewportW : viewportH,
+            ViewportCross: horizontal ? viewportH : viewportW,
+            Zoom: sc.ZoomFactor,
+            ContentSized: sc.ContentSized,
+            SnapInterval: sc.SnapInterval,
+            SnapStart: sc.SnapStart,
+            SnapEnd: sc.SnapEnd,
+            SnapPoints: sc.SnapPoints);
     }
 
     private (float w, float h) ArrangePlainScroll(NodeHandle content, float innerW, float innerH, float padL, float padT, bool horizontal)
@@ -889,27 +903,31 @@ public sealed class FlexLayout
         float maxOff = MathF.Max(0f, mainContent - (horizontal ? innerW : innerH));
         pinned = Math.Clamp(pinned, 0f, maxOff);
         ref ScrollState scw = ref _scene.ScrollRef(node);
-        if (horizontal) scw.OffsetX = pinned; else scw.OffsetY = pinned;
         scw.AnchorIndex = anchorIndex;
-        RecordAnchorShift(ref scw, pinned - offset, horizontal, (int)node.Raw.Index, anchorIndex, offset);
+        PostAnchorShiftAndFrame(node, in scw, pinned - offset, contentW, contentH, innerW, innerH, anchorIndex, offset);
         scw.PrevArrangedFirst = first;
         scw.PrevArrangedLast = first + Math.Max(0, ord - sc.PersistentPrefixCount) - 1;
         if (deferred) _scene.Mark(node, NodeFlags.LayoutDirty);   // a deferred fresh-row correction needs one follow-up arrange
-        ref NodePaint cp = ref _scene.Paint(content);
-        cp.LocalTransform = Affine2D.Translation(horizontal ? -pinned : 0f, horizontal ? 0f : -pinned);
         return (contentW, contentH);
     }
 
-    // The virtualization anchor re-pin (above) shifts the offset directly to keep the topmost item fixed across
-    // estimate-then-correct extent changes. Record that shift as a coordinate delta the phase-7 ScrollIntegrator consumes,
-    // so its live intents (the resampler anchor + the WheelAnimating chase targets) move WITH the re-pin instead of being
-    // overwritten/fought a tick later (the mid-gesture jitter). += is deliberate: D1 realize-after-layout can run a second
-    // scoped arrange in the same frame, so multiple shifts accumulate until the next tick drains PendingAnchorShift.
-    private static void RecordAnchorShift(ref ScrollState scw, float delta, bool horizontal, int nodeIdx, int anchorIndex, float offset)
+    // The virtualization anchor re-pin (above) shifts the offset to keep the topmost item fixed across
+    // estimate-then-correct extent changes. Post that shift as a coordinate delta BEFORE the fresh frame — the kernel
+    // (ScrollKernel.Reclamp, drained after this layout solve) rebases every live intent (resampler anchor, chase
+    // targets, drag anchor) by the delta first, so they move WITH the re-pin instead of being overwritten/fought a
+    // tick later (the mid-gesture jitter — scroll-v3 §2.1 "AnchorShift... the blessed exception, made explicit"),
+    // THEN re-clamps to the new frame. Both are structural commands the kernel drains together in one Reclamp() —
+    // multiple SetFrame posts for the same node in one frame are expected and idempotent (scroll-v3 §3.3 note ii).
+    private void PostAnchorShiftAndFrame(NodeHandle node, in ScrollState scw, float delta, float contentW, float contentH,
+        float viewportW, float viewportH, int anchorIndex, float offset)
     {
-        if (delta == 0f) return;
-        scw.RebaseAnchorIntents(delta, horizontal);
-        if (ScrollTrace.CompiledIn && ScrollTrace.Enabled) ScrollTrace.Note(100, delta, nodeIdx, anchorIndex, offset);
+        int idx = (int)node.Raw.Index;
+        if (delta != 0f)
+        {
+            _scene.ScrollPort?.Post(FluentGpu.Scroll.ScrollInput.AnchorShift(idx, delta));
+            if (ScrollTrace.CompiledIn && ScrollTrace.Enabled) ScrollTrace.Note(100, delta, idx, anchorIndex, offset);
+        }
+        _scene.ScrollPort?.Post(FluentGpu.Scroll.ScrollInput.SetFrame(idx, BuildFrameSpec(in scw, contentW, contentH, viewportW, viewportH)));
     }
 
     /// <summary>True when the layout participates in estimate-then-correct (not a fixed-geometry grid posing as measured).</summary>
@@ -1028,14 +1046,11 @@ public sealed class FlexLayout
         float maxOff = MathF.Max(0f, mainContent - (horizontal ? innerW : innerH));
         pinned = Math.Clamp(pinned, 0f, maxOff);
         ref ScrollState scw = ref _scene.ScrollRef(node);
-        if (horizontal) scw.OffsetX = pinned; else scw.OffsetY = pinned;
         scw.AnchorIndex = anchorIndex;
-        RecordAnchorShift(ref scw, pinned - offset, horizontal, (int)node.Raw.Index, anchorIndex, offset);
+        PostAnchorShiftAndFrame(node, in scw, pinned - offset, contentW, contentH, innerW, innerH, anchorIndex, offset);
         scw.PrevArrangedFirst = first;
         scw.PrevArrangedLast = first + Math.Max(0, ord - sc.PersistentPrefixCount) - 1;
         if (deferred) _scene.Mark(node, NodeFlags.LayoutDirty);   // a deferred fresh-row correction needs one follow-up arrange
-        ref NodePaint cp = ref _scene.Paint(content);
-        cp.LocalTransform = Affine2D.Translation(horizontal ? -pinned : 0f, horizontal ? 0f : -pinned);
         return (contentW, contentH);
     }
 

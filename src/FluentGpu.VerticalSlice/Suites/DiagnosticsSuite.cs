@@ -151,8 +151,8 @@ static class DiagnosticsSuite
                             new TextEl("settle") { Size = 16f },
                             Button.Accent("ok", () => { }),
                             CheckBox.Create("opt", settleChecked),
-                            (Element)Repeater.ItemsRepeater(64, i => new BoxEl { Height = 32f, Fill = ColorF.FromRgba(28, 28, 28) },
-                                RepeatLayout.Stack(32f), keyOf: i => "s" + i),
+                            ItemsView.Create(64, i => new BoxEl { Height = 32f, Fill = ColorF.FromRgba(28, 28, 28) },
+                                RepeatLayout.Stack(32f), new ListOptions { KeyOf = i => "s" + i }),
                         ],
                     },
                 });
@@ -366,6 +366,40 @@ static class DiagnosticsSuite
             int names = FluentGpu.Foundation.ScrollTrace.KindNameCount;
             Check("gate.latency.kind-names-parity ScrollTrace has exactly one CSV name per record kind (a missing name silently discards the whole capture at flush)",
                 kinds == names, $"kinds={kinds} names={names}");
+        }
+
+        // ── latency.producer-encoding — pin the LIVE producer helpers, not a parser-side reconstruction. Bit 24 must
+        // stay outside quality + the nine stage bits, and the context-valid bits must make an exact (0,0) pointer a
+        // measured coordinate rather than an absent CSV value. Note 105 uses f2/f3; wheel drops use f3/f4 because their
+        // f0..f2 payload was already assigned before targeting context was added.
+        {
+            const int allStageBits = 0x1FF;
+            int packedTracking = ScrollTrace.EncodeLatencyI1(GenStampQuality.Hardware, allStageBits, trackingSampleValid: true);
+            int packedNoTracking = ScrollTrace.EncodeLatencyI1(GenStampQuality.Hardware, allStageBits, trackingSampleValid: false);
+            int expectedStageField = allStageBits << 8;
+            bool latencyBits = (ScrollTrace.LatencyTrackingSampleValidBit & expectedStageField) == 0
+                && packedTracking == ((int)GenStampQuality.Hardware | expectedStageField | ScrollTrace.LatencyTrackingSampleValidBit)
+                && packedNoTracking == ((int)GenStampQuality.Hardware | expectedStageField);
+
+            var latch = ScrollTrace.EncodeLatchRefusal(12.5f, -4.25f, refusal: 2, horizontal: true,
+                fallbackHandled: false, hitNode: -1, pointerXDip: 0f, pointerYDip: 0f);
+            bool latchColumns = latch.I0 == 105
+                && latch.I1 == (2 | (1 << 4) | ScrollTrace.LatchRefusalHitContextBit)
+                && latch.I2 == -1 && latch.F0 == 12.5f && latch.F1 == -4.25f
+                && latch.F2 == 0f && latch.F3 == 0f;
+
+            const int wheelBase = 0x10 | (1 << 5) | 0x100 | 0x200; // marker + no-scroller + horizontal + notch
+            var phaseWheel = ScrollTrace.EncodeWheelDrop(42, wheelBase, -1.25f, 0f, 0f, phaseFallback: true);
+            var physicalWheel = ScrollTrace.EncodeWheelDrop(42, wheelBase, -1.25f, 0f, 0f);
+            bool wheelColumns = phaseWheel.I0 == 42
+                && phaseWheel.I1 == (wheelBase | ScrollTrace.WheelDropHitContextBit | ScrollTrace.WheelDropPhaseFallbackBit)
+                && phaseWheel.I2 == 0 && phaseWheel.F0 == -1.25f
+                && phaseWheel.F1 == 0f && phaseWheel.F2 == 0f && phaseWheel.F3 == 0f && phaseWheel.F4 == 0f
+                && physicalWheel.I1 == (wheelBase | ScrollTrace.WheelDropHitContextBit);
+
+            Check("gate.latency.producer-encoding bit24 is disjoint from quality/stage bits; note 105 and wheel-drop producers place hit node + exact-zero DIP context in the documented columns, and only live phase fallback sets bit11",
+                latencyBits && latchColumns && wheelColumns,
+                $"latency=0x{packedTracking:X8}/0x{packedNoTracking:X8} latch={latch} phaseWheel={phaseWheel} physicalFlags=0x{physicalWheel.I1:X}");
         }
 
         // ── latency.state-pack — the ambient state slots are packed into ONE int so the POD ring record does not grow a

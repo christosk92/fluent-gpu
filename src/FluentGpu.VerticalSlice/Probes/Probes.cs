@@ -731,7 +731,12 @@ sealed class EmptyShowOverlayScrollProbe : Component
                 Width = 200, Height = 200, Fill = ColorF.FromRgba(20, 20, 20),
                 Content = new BoxEl { Direction = 1, Children = items },
             },
-            Flow.Show(() => OverlayOpen.Value, new BoxEl { Grow = 1f, Fill = ColorF.FromRgba(10, 10, 10) })) with
+            Flow.Show(() => OverlayOpen.Value, new BoxEl
+            {
+                Grow = 1f, Fill = ColorF.FromRgba(10, 10, 10),
+                // Modal overlay: consume the wheel so a containing-scroller fallback cannot reach the list beneath.
+                OnPointerWheel = static e => e.Handled = true,
+            })) with
         { Width = 200, Height = 200 };
     }
 }
@@ -793,6 +798,37 @@ sealed class ScrollHoverVirtualProbe : Component
                OnClick = static () => { },
            })
            with { Width = 200, Height = 200, Fill = ColorF.FromRgba(20, 20, 20) };
+}
+
+// Later-sibling chrome plate covering a vertical list: HitTestAny returns the plate, so ancestor-only targeting misses
+// the Scrollable underneath. The containing-scroller fallback must still latch / wheel the list.
+sealed class OverlaySiblingScrollProbe : Component
+{
+    public override Element Render()
+    {
+        var items = new Element[20];
+        for (int i = 0; i < items.Length; i++)
+            items[i] = new BoxEl { Width = 180, Height = 40, Fill = ColorF.FromRgba(40, 40, 40) };
+        return Ui.ZStack(
+            new ScrollEl
+            {
+                Width = 200, Height = 200, Fill = ColorF.FromRgba(20, 20, 20),
+                Content = new BoxEl { Direction = 1, Children = items },
+            },
+            new BoxEl { Width = 200, Height = 200, Fill = ColorF.FromRgba(10, 10, 10) }) with
+        { Width = 200, Height = 200 };
+    }
+}
+
+// Content fits the viewport (over = 0). A vertical pan must still latch so a loading/at-edge page is not a dead gesture.
+sealed class ZeroOverflowScrollProbe : Component
+{
+    public override Element Render()
+        => new ScrollEl
+        {
+            Width = 200, Height = 200, Fill = ColorF.FromRgba(20, 20, 20),
+            Content = new BoxEl { Width = 180, Height = 200, Fill = ColorF.FromRgba(40, 40, 40) },
+        };
 }
 
 // [Validatable] sample (form-validation.md): the ValidatorGenerator emits SignupRules.Validators.{Email,Password,Age}.
@@ -1628,7 +1664,7 @@ sealed class TouchFlingSettleProbe : Component
 // sets ScrollState.SnapInterval = RowH on the viewport after mount: the reconciler patches Orientation/ItemCount but its
 // snap patch is DECLARATION-GATED — it writes the snap fields only for an element that declares Snap (SnapSpec), and this
 // probe declares none, so a post-mount SnapInterval survives every reconcile. A flick then retargets its
-// friction decay to land EXACTLY on a RowH multiple (ScrollSnap + ScrollIntegrator). Large content keeps the snap target
+// friction decay to land EXACTLY on a RowH multiple (ScrollSnap + the ScrollKernel's SnapTarget physics). Large content keeps the snap target
 // interior (never clamp-bounded), so the landing is purely the snap math. Viewport = Scene.Root.
 sealed class SnapFlingProbe : Component
 {
@@ -1677,12 +1713,14 @@ sealed class ScrollFlipProbe : Component
     }
 }
 
-// scroll-feel-rework-v2 §8 HeadlessScrollProducer: scripts all six input kinds (contact begin/update/end, OS momentum,
-// discrete wheel notch, pointer-down-cancel) with SYNTHETIC timestamps into the headless Pal ring, and drives frames
-// while feeding the phase-7 integrator a synthetic frame clock (FrameQpcSec) so the §4.1 frame-time resampler runs
-// deterministically headless (the AppHost only wires the wall clock on real backends). Packet stamps live on the ms
-// domain (QpcTicks=0 ⇒ ContactSampleSec falls back to TimestampMs/1000), and FrameMs drives FrameQpcSec on the SAME
-// domain, so the resampler targets FrameMs−5ms honestly. No wall clock; 0-alloc per event (record-struct queue only).
+// scroll-v3 HeadlessScrollProducer: scripts all six input kinds (contact begin/update/end, OS momentum,
+// discrete wheel notch, pointer-down-cancel) with SYNTHETIC timestamps into the headless Pal ring, and drives frames.
+// The frame clock the ScrollKernel resamples against is now built entirely inside AppHost's own Paint step from its
+// internal headless accumulator (FixedFrameTimeSource) — a caller no longer forces packet-clock/frame-clock alignment
+// by hand (the old FrameQpcSec test hook on the deleted ScrollIntegrator is gone). Packet stamps live on the ms domain
+// (QpcTicks=0 ⇒ the router falls back to TimestampMs/1000 for ContactMove's T field); FrameMs is kept here only as the
+// caller-visible "how far apart are my scripted packets" clock for gates that want explicit control over packet
+// spacing — it no longer feeds anything on the host side. No wall clock; 0-alloc per event (record-struct queue only).
 sealed class HeadlessScrollProducer
 {
     readonly HeadlessWindow _win;
@@ -1701,21 +1739,18 @@ sealed class HeadlessScrollProducer
         Pointer: PointerKind.Touchpad, TimestampMs: Ms, PointerId: PointerId, ScrollPhaseSeq: _seq++, DeviceClassRaw: Device);
 
     public void ContactBegin(float dyDip = 0f) => _win.QueueInput(Ph(InputKind.ScrollBegin, dyDip));
-    public void ContactUpdate(float dyDip) => _win.QueueInput(Ph(InputKind.ScrollUpdate, dyDip));
+    public void ContactUpdate(float dyDip) => _win.QueueInput(Ph(InputKind.ScrollDelta, dyDip));
     public void ContactEnd() => _win.QueueInput(Ph(InputKind.ScrollEnd, 0f));
-    public void MomentumBegin() => _win.QueueInput(Ph(InputKind.MomentumBegin, 0f));
-    public void MomentumUpdate(float dyDip) => _win.QueueInput(Ph(InputKind.MomentumUpdate, dyDip));
-    public void MomentumEnd() => _win.QueueInput(Ph(InputKind.MomentumEnd, 0f));
     public void WheelNotch(float notches) => _win.QueueInput(new InputEvent(InputKind.Wheel, _at, 0, 0,
         Pointer: PointerKind.Mouse, WheelNotch: notches, TimestampMs: Ms));
     public void PointerDownAt(Point2 p, PointerKind kind = PointerKind.Mouse, uint id = 0) =>
         _win.QueueInput(new InputEvent(InputKind.PointerDown, p, 0, 0, Pointer: kind, TimestampMs: Ms, PointerId: id));
 
-    /// <summary>Present one frame: set the synthetic FrameQpcSec (headless never overwrites it), run, then advance the
-    /// frame clock by <paramref name="dtMs"/>. Folds this frame's offset-write count into the single-writer audit.</summary>
+    /// <summary>Present one frame, then advance the packet-spacing clock by <paramref name="dtMs"/>. Folds this frame's
+    /// offset-write count into the single-writer audit. (The host's own <c>ScrollClock</c> is built internally each
+    /// frame from its headless accumulator — no explicit clock hand-off from here any more.)</summary>
     public FrameStats Frame(float dtMs)
     {
-        _host.ScrollIntegratorForTest.FrameQpcSec = FrameMs / 1000.0;
         var f = _host.RunFrame();
         FluentGpu.Foundation.ScrollTrace.AuditResetFrame();
         FrameMs += dtMs;
@@ -2095,8 +2130,8 @@ sealed class IconProbe : Component
 }
 
 // Wheel-blocking probe (gate.ctx.scrim-blocks-wheel): a scroller with overflowing content, a context-menu row above it.
-// With a menu open the full-bleed scrim is the topmost hit → the ancestor-only wheel walk finds no scrollable → the list
-// stays put; with the menu closed the same wheel scrolls it (proving the wheel is real and the scrim was blocking).
+// With a menu open the full-bleed scrim consumes OnPointerWheel so containing-scroller fallback cannot reach the list;
+// with the menu closed the same wheel scrolls it (proving the wheel is real and the scrim was blocking).
 sealed class ContextWheelProbe : Component
 {
     public IOverlayService? Service;
@@ -2247,12 +2282,18 @@ sealed class VGridProbe : Component
 sealed class VarProbe : Component
 {
     public const int N = 200;
+    public const float Estimate = 50f;
     public static float H(int i) => 40f + (i % 3) * 20f;   // 40, 60, 80, 40, …
+    public MeasuredStackVirtualLayout? Layout;
     public override Element Render()
-        => Virtual.VariableList(N, 50f,
-               renderItem: i => new BoxEl { Height = H(i), Fill = ColorF.FromRgba(30, 30, 30) },
-               keyOf: i => "v" + i)
-           with { Width = 300, Height = 300 };
+    {
+        var layout = UseMemo(static () => new MeasuredStackVirtualLayout(Estimate), DepKey.Empty);
+        Layout = layout;
+        return Virtual.Measured(N, layout,
+                   renderItem: i => new BoxEl { Height = H(i), Fill = ColorF.FromRgba(30, 30, 30) },
+                   keyOf: i => "v" + i)
+               with { Width = 300, Height = 300 };
+    }
 }
 
 // An async image (album art) inside a box → proves the decode→ready→draw pipeline + residency pinning.
@@ -2407,8 +2448,8 @@ sealed class ControlsProbe : Component
     {
         var sv = UseFloatSignal(0f);
         var on = UseSignal(false);
-        var (sp, setSp) = UseState(0f);
-        SliderVal = sv.Peek(); Toggled = on.Value; ScrollPos = sp;
+        var sp = UseFloatSignal(0f);
+        SliderVal = sv.Peek(); Toggled = on.Value; ScrollPos = sp.Peek();
         return new BoxEl
         {
             Direction = 1, Gap = 0,
@@ -2417,7 +2458,7 @@ sealed class ControlsProbe : Component
                 Slider.Create(sv, x => SliderVal = x, length: 200f, thickness: 24f),
                 ToggleButton.Create("Shuffle", on),
                 IconButton.Create("▶", () => IconClicks++),
-                ScrollBar.Create(0.25f, sp, setSp, 200f),
+                ScrollBar.Create(0.25f, sp, x => ScrollPos = x, 200f),
             ],
         };
     }
@@ -4413,7 +4454,8 @@ sealed class ElevateEscapeProbe : Component
     };
 }
 
-// E11-L2 — ItemsRepeater lifecycle (ElementPrepared/ElementClearing/visible-range) recorded across a scroll recycle.
+// E11-L2 — VirtualListEl lifecycle (OnItemPrepared/OnItemClearing/OnVisibleRange, the WinUI ItemsRepeater
+// ElementPrepared/ElementClearing/visible-range trio) recorded across a scroll recycle.
 sealed class LifecycleRepeaterProbe : Component
 {
     public const int N = 1000;
@@ -4421,11 +4463,13 @@ sealed class LifecycleRepeaterProbe : Component
     public readonly List<int> Cleared = new();
     public readonly List<(int First, int Last)> Ranges = new();
     public override Element Render()
-        => ((VirtualListEl)Repeater.ItemsRepeater(N, i => new BoxEl { Height = 40f, Fill = ColorF.FromRgba(28, 28, 28) },
-                RepeatLayout.Stack(40f), keyOf: i => "lc" + i,
-                elementPrepared: Prepared.Add, elementClearing: Cleared.Add,
-                visibleRange: (f, l) => Ranges.Add((f, l))))
-           with { Width = 300, Height = 400 };   // explicit size ⇒ the MOUNT realize windows against 400, not the hint
+        => Virtual.List(N, 40f, i => new BoxEl { Height = 40f, Fill = ColorF.FromRgba(28, 28, 28) }, keyOf: i => "lc" + i)
+           with
+           {
+               OnItemPrepared = Prepared.Add, OnItemClearing = Cleared.Add,
+               OnVisibleRange = (f, l) => Ranges.Add((f, l)),
+               Width = 300, Height = 400,   // explicit size ⇒ the MOUNT realize windows against 400, not the hint
+           };
 }
 
 // Persistent-prefix virtualization: indices 0/1 are fixed bound slots ahead of the ordinary recyclable window.

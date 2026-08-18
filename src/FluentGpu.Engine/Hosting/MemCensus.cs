@@ -81,7 +81,7 @@ public readonly struct CensusSnapshot
         AnimLoopTracks = anim.LoopTrackCount;
         AnimTransitions = anim.TransitionCount;
         InteractActive = host.InteractionAnimatorCensus;
-        ScrollAnimActive = host.ScrollAnimatorCensus;
+        ScrollAnimActive = host.ScrollActiveCensus;
 
         PopupWindows = host.PopupWindows.Count;
 

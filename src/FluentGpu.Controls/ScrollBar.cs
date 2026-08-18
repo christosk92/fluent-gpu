@@ -6,13 +6,7 @@ using FluentGpu.Signals;
 namespace FluentGpu.Controls;
 
 /// <summary>
-/// WinUI <c>ScrollBar</c>. Two surfaces:
-/// <list type="bullet">
-/// <item><c>Create</c> (thin panning overload) — the legacy thin PANNING-indicator variant (thumb-only, absolute drag), kept
-/// source/behavior-compatible (VerticalSlice check 48 and the gallery drive it); it mirrors the template's
-/// VerticalPanningThumb (ScrollBar_themeresources.xaml:714 — Width 2, MinHeight 32, Margin 2,0,2,0, NO
-/// hover/press states — the touch indicator).</item>
-/// <item><c>Create</c> (full-anatomy signal overload) — the full WinUI mouse scrollbar: 12px rail (ScrollBarSize :180), acrylic track
+/// WinUI <c>ScrollBar</c>: the full WinUI mouse scrollbar. 12px rail (ScrollBarSize :180), acrylic track
 /// (ScrollBarTrackFill = AcrylicInAppFillColorDefaultBrush, :31/:143 both themes), two arrow RepeatButtons
 /// (vertical glyphs EDDB up / EDDC down, horizontal EDD9 left / EDDA right, FontSize 8 — :387/:344/:301/:258/:186;
 /// pressed arrow scale 0.875 :187; Interval=50 like every template RepeatButton :681-711), track-click PAGE
@@ -33,26 +27,24 @@ namespace FluentGpu.Controls;
 /// storyboards recolor only the Arrow foreground); disabled = ControlStrongFillColorDisabled (:29) + root opacity
 /// 0.5 (:436) + the mouse thumb itself hidden (ThumbVisual Opacity→0, the VerticalThumbTemplate Disabled
 /// storyboard :399-406). IsTabStop = false (:206). Vertical by default; <c>horizontal: true</c> mirrors the
-/// HorizontalRoot anatomy on the X axis (:672-693).</item>
-/// </list>
+/// HorizontalRoot anatomy on the X axis (:672-693).
 /// Thumb POSITION is compositor-bound (a <c>TransformBind</c> on the position signal): scrolling moves the thumb the
 /// same frame with no re-render/relayout and never enters the FLIP pipeline — WinUI's instant Thumb layout. ONLY the
 /// conscious cross-axis 2px↔6px expand (and the 83ms chrome fades) animate, after the debounced begin times; that
 /// choreography is stepped by a mounted FrameClock ticker at the engine's 16ms-per-frame convention (the
 /// <c>UseAnimatedValue</c> precedent), so it is deterministic on the headless FixedFrameTimeSource host.
 /// The auto-hiding OVERLAY scrollbar on scroll viewports is engine-drawn (SceneRecorder.EmitScrollbar) with its
-/// timing in <c>Animation.ScrollIntegrator</c> — this control is the standalone (always-visible) ScrollBar element.
+/// timing in <c>Scroll.ScrollBarChrome</c> — this control is the standalone (always-visible) ScrollBar element.
 /// </summary>
 public static partial class ScrollBar
 {
     // Template parts (see TemplateParts). Each part's doc lists the props the control OWNS (re-asserted after any
-    // modifier — a Parts customization cannot win those). Both surfaces take a trailing `TemplateParts? parts` and
-    // route the same vocabulary (the legacy panning variant has only the thumb). Const VALUES happen to match the
-    // internal reconcile Keys; the Keys themselves stay literal on the elements (never derived from these consts).
+    // modifier — a Parts customization cannot win those); Create takes a trailing `TemplateParts? parts`. Const
+    // VALUES happen to match the internal reconcile Keys; the Keys themselves stay literal on the elements (never
+    // derived from these consts).
     /// <summary>The draggable thumb (WinUI VerticalThumb/HorizontalThumb). Owned (Anatomy): Key, the main-axis
     /// length + the cross-axis Width/HeightBind (the conscious-expand eased cross-axis size — bind-driven geometry,
-    /// not style), TransformBind (the compositor-bound scroll position). On the legacy panning variant everything
-    /// is style (drag lives on the rail, no binds).</summary>
+    /// not style), TransformBind (the compositor-bound scroll position).</summary>
     public const string PartThumb = "sb-thumb";
     /// <summary>The always-mounted acrylic track (WinUI Vertical/HorizontalTrackRect). Owned: Key, the bound Opacity (the
     /// 83ms chrome fade).</summary>
@@ -82,66 +74,6 @@ public static partial class ScrollBar
     public const float LineDeltaPx = 16f;         // ScrollViewerLineDelta — one arrow line step (dxaml/xcp/dxaml/lib/ScrollViewer_Partial.h:27)
     public const float RepeatDelayMs = 500f;      // RepeatButton Delay DP default (dxaml/xcp/components/dependencyObject/DependencyProperty.cpp:714-720)
     public const float RepeatIntervalMs = 50f;    // every scrollbar RepeatButton sets Interval=50 (:681-711)
-    public const float PanningThumbMargin = 2f;   // VerticalPanningThumb Margin 2,0,2,0 (:714)
-
-    public sealed record Style
-    {
-        public float ThumbWidth { get; init; } = 2f;                 // VerticalPanningThumb Width=2 (:714)
-        public float MinThumb { get; init; } = 32f;                  // VerticalPanningThumb MinHeight=32 (:714)
-        public float CornerRadius { get; init; } = 3f;               // ScrollBarCornerRadius (:190)
-        public ColorF Thumb { get; init; }                          // ScrollBarPanningThumbBackground = ControlStrongFillColorDefault (:170)
-        public ColorF ThumbHover { get; init; }                     // == rest: the panning thumb has NO visual states (:713-715)
-        public ColorF ThumbPressed { get; init; }                   // == rest (:713-715)
-        public ColorF ThumbDisabled { get; init; }                  // ScrollBarPanningThumbBackgroundDisabled = ControlStrongFillColorDisabled (:39/:442)
-        public float ThumbHoverScale { get; init; } = 1f;            // no hover/press states on the panning thumb (:713-715)
-        public float ThumbPressScale { get; init; } = 1f;
-    }
-
-    public static Style? StyleOverride;
-    public static Style DefaultStyle => StyleOverride ?? new Style
-    {
-        Thumb = Tok.FillControlStrong,
-        ThumbHover = Tok.FillControlStrong,           // WinUI: the panning thumb never recolours on hover/press (:713-715)
-        ThumbPressed = Tok.FillControlStrong,
-        ThumbDisabled = Tok.FillControlStrongDisabled,
-    };
-
-    /// <summary>The legacy thin panning-indicator scrollbar (see the class doc): a draggable thumb on an invisible
-    /// rail; press/drag maps the pointer to an absolute 0..1 position. Kept source-compatible. Geometry mirrors the
-    /// template's VerticalPanningThumb: 2px thumb, 32px min length, 2px side margins (ScrollBar_themeresources
-    /// .xaml:714). <paramref name="parts"/> = per-part styling (only <see cref="PartThumb"/> exists on this
-    /// variant).</summary>
-    public static BoxEl Create(float fraction, float position, Action<float> onChange, float height = 200f, Style? style = null, bool disabled = false, TemplateParts? parts = null)
-    {
-        var s = style ?? DefaultStyle;
-        fraction = Math.Clamp(fraction, 0.05f, 1f);
-        position = Math.Clamp(position, 0f, 1f);
-        float thumbH = MathF.Max(s.MinThumb, fraction * height);
-        float travel = MathF.Max(1f, height - thumbH);
-        void Set(Point2 p) => onChange(Math.Clamp((p.Y - thumbH * 0.5f) / travel, 0f, 1f));
-        var thumb = new BoxEl
-        {
-            Width = s.ThumbWidth, Height = thumbH, Corners = CornerRadius4.All(s.CornerRadius),
-            Fill = disabled ? s.ThumbDisabled : s.Thumb,
-            Margin = new Edges4(PanningThumbMargin, 0f, PanningThumbMargin, 0f),   // Margin 2,0,2,0 (:714)
-            HoverScale = disabled ? 1f : s.ThumbHoverScale,
-            PressScale = disabled ? 1f : s.ThumbPressScale,
-        };
-        // Parts: the legacy panning thumb is pure style (no Key/binds; drag lives on the rail) — nothing to re-assert.
-        thumb = parts.Apply(PartThumb, thumb);
-        return new BoxEl
-        {
-            // The rail spans the thumb + its 2px side margins (:714) so the hit lane stays comfortably wide.
-            Width = s.ThumbWidth + 2f * PanningThumbMargin, Height = height, Direction = 1, Role = AutomationRole.ScrollBar,
-            // Disabled: drop the drag/press handlers so the thumb is inert (WinUI disabled scrollbar).
-            OnPointerDown = disabled ? null : Set, OnDrag = disabled ? null : Set,
-            Children =
-            [
-                new BoxEl { Height = position * travel },   // spacer above the thumb
-                thumb,
-            ],
-        };
-    }
 
     /// <summary>
     /// The ONE canonical full WinUI mouse-scrollbar anatomy (WS3 creation idiom; see the class doc for cites).
@@ -157,8 +89,7 @@ public static partial class ScrollBar
     /// <paramref name="largeChange01"/>/<paramref name="smallChange01"/> override the page/line amounts in 0..1
     /// position units (NaN = the WinUI-derived defaults above; pass 16/scrollableExtentPx for the exact line when
     /// the real content extent is known). <paramref name="parts"/> = per-part styling keyed by the <c>PartXxx</c>
-    /// consts (see <see cref="TemplateParts"/> for the contract). The legacy thin panning-indicator variant remains a
-    /// distinct overload of <see cref="Create(float, float, Action{float}, float, Style, bool, TemplateParts)"/>.
+    /// consts (see <see cref="TemplateParts"/> for the contract).
     /// </summary>
     public static Element Create(float fraction, FloatSignal? position = null, Action<float>? onChange = null,
                                  float length = 200f, bool disabled = false, TemplateParts? parts = null,

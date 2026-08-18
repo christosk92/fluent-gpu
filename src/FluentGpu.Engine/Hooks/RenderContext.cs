@@ -437,7 +437,9 @@ public sealed partial class RenderContext
     public AnimEngine? Anim;
     public ImageCache? Images;                  // host-injected; backs UseImage / PrefetchImage
     public SceneStore? Scene;                   // reconciler-injected; for measuring nodes (AbsoluteRect) + overlay positioning
-    public Action<NodeHandle>? ArmScroll;       // host-injected (→ ScrollIntegrator.Arm): arm a viewport so phase 7 eases Offset→Target (smooth programmatic scroll)
+    // ArmScroll (host-injected → ScrollIntegrator.Arm) is deleted (scroll-v3): a control requests a smooth
+    // programmatic scroll by posting ScrollInput.ScrollTo through the viewport's ScrollController (Dsl/Element.cs
+    // §7.1's Controller) instead of arming a viewport by NodeHandle through this seam.
     /// <summary>Host-injected peek: true while ANY viewport is in user scroll (wheel/fling/drag) or inside the post-scroll
     /// hold window. Apps use this to defer heavy per-frame work (e.g. lyrics glow/wipe) so main-content scroll stays smooth.</summary>
     public Func<bool>? PeekMainScrollBusy;

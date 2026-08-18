@@ -1,5 +1,6 @@
 using FluentGpu.Foundation;
 using FluentGpu.Hosting.Threading;
+using FluentGpu.Media;
 using FluentGpu.Signals;
 
 namespace FluentGpu.Scene;
@@ -758,12 +759,21 @@ public sealed class ImageCache
 
     /// <summary>Apply finished decodes (UI thread, once per frame) then evict to budget. Returns completions this pump.
     /// Allocation-free when idle (cached callback; empty-queue Pump does nothing) — safe in the hot phase.</summary>
-    public int Pump()
+    public int Pump() => Pump(long.MaxValue);
+
+    /// <summary>Frame-budget-aware overload (scroll-v3 §3.3 item 6, <c>Hosting.FrameBudget.DeadlineTicks</c>): while a
+    /// viewport is Drag/Ballistic the host bounds decode-apply work to the frame's motion slice, same as the paired
+    /// <c>TreeReconciler.ReRealizeVirtuals(long)</c> overload. Only <see cref="Media.DecodeScheduler"/> — the real,
+    /// scroll-throttled leaf — honors the deadline (it already caps applies-per-frame internally); the headless/fake
+    /// <see cref="IImageDecoder"/> leaves used by tests have no burst to bound, so they fall back to the plain drain.
+    /// long.MaxValue (the parameterless overload above; every steady frame) is unbounded either way.</summary>
+    public int Pump(long deadlineTicks)
     {
         _pumpCompleted = 0;
         if (_asyncUploads is { } q) DrainAsyncRejections(q);   // fold +1-frame async upload rejections before this pump's decodes
         DrainBakedBlurResults();
-        _decoder.Pump(_onComplete, _onPixels);
+        if (_decoder is DecodeScheduler ds) ds.Pump(_onComplete, _onPixels, deadlineTicks);
+        else _decoder.Pump(_onComplete, _onPixels);
         if (_pumpCompleted > 0) EvictToBudget();
         return _pumpCompleted;
     }

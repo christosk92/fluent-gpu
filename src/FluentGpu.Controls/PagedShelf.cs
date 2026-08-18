@@ -5,6 +5,7 @@ using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Scene;
+using FluentGpu.Scroll;
 using FluentGpu.Signals;
 using static FluentGpu.Dsl.Ui;
 
@@ -186,15 +187,15 @@ internal sealed class PagedShelfCore : Component
     const long PageKeyQuantumCap = (1L << 20) - 1L;
     // ── LIFT DEBOUNCE (ShelfSnap.Page). Grace window (ms) between a settle that WANTS a re-snap and the moment the glide
     // is actually armed. This is WALL-CLOCK SCHEDULING ONLY: it delays WHEN the one programmatic seam is called, never the
-    // glide itself (which stays the exact closed form the phase-7 integrator runs — dt-deterministic, untouched).
+    // glide itself (which stays the exact closed-form Driven chase the kernel runs — dt-deterministic, untouched).
     //
-    // Why it exists: a live two-finger pan is NOT one continuous motion. The OS segments it, and the phase-7 resampler
-    // clamps at the newest sample during a micro-pause — so no offset is written, movingNow is false, and UserScrollActive
-    // drops ~14–20 ms into any pause while Phase is still TouchpadTracking. Arming ScrollIntoView.ScrollTo there
-    // OVERWRITES the live gesture's phase (ScrollTo sets WheelAnimating|PhaseProgrammatic unconditionally) and the pan is
-    // dead: subsequent packets arrive as ScrollUpdate inside the synthetic-lift window and nothing restores the phase.
-    // The PHASE GATE (in the observer action) is the STRUCTURAL fix for that. This window covers the other half: the OS
-    // also segments one continuous scroll into several complete ScrollBegin/End cycles, and between two segments the phase
+    // Why it exists: a live two-finger pan is NOT one continuous motion. The OS segments it, and the kernel's contact
+    // resampler clamps at the newest sample during a micro-pause — so no offset moves, and UserScrollActive drops
+    // ~14–20 ms into any pause while Activity is still Drag. Arming ScrollIntoView.ScrollTo there would post a Driven
+    // chase INTO the live gesture and kill the pan just as surely as the old integrator's phase overwrite did — a
+    // fresh contact sample arriving mid-glide is not what "resumed panning" means to the kernel. The ACTIVITY GATE
+    // (in the observer action) is the STRUCTURAL fix for that. This window covers the other half: the OS also
+    // segments one continuous scroll into several complete gesture cycles, and between two segments Activity
     // genuinely IS Idle — no gate can tell that rest from a real one, only elapsed time can. A resumed pan pushes the
     // deadline out (both gesture edges bump _snapTick), so a segmented pan is never snapped mid-flight.
     //
@@ -271,11 +272,16 @@ internal sealed class PagedShelfCore : Component
     int _lastVirtualNav = -1;
 
     // ── Snap-feel state (ShelfSnap.Page). Plain UI-thread scalars: written by the settled-offset observer (which the host
-    // runs after the phase-7 integrator) and read by the one debounce callback. None of it is scene state, and none of it
-    // is physics — the offset stays single-writer (the integrator), reached only through ScrollIntoView.ScrollTo.
+    // runs after the scroll kernel's tick) and read by the one debounce callback. None of it is scene state, and none of
+    // it is physics — the offset stays single-writer (the kernel), reached only through ScrollIntoView.ScrollTo.
     float _pendingSnapTarget = float.NaN;   // the offset the debounce will glide to when it fires; NaN = nothing armed
     float _gestureAnchorX = float.NaN;      // the offset the CURRENT user gesture STARTED at; NaN = no gesture in flight
     bool _userScrollWas;                    // last observed UserScrollActive — the rising-edge detector for that anchor
+    // The kernel's live Driven-chase Target isn't a readable SceneStore column (ScrollState.TargetX is deleted,
+    // kernel-internal only) — mirror the last POSTED destination locally so ScrollMeasuredViewport can still tell
+    // "already chasing this exact target" from "a fresh destination" without re-arming/re-latching every effect
+    // re-fire. Cleared the moment the body isn't Driven any more (settled, or a user gesture took the offset back).
+    float? _lastProgrammaticTargetX;
     // Bumped on BOTH gesture edges: the rising edge pushes a pending snap's deadline out (a resumed pan cancels it), the
     // falling edge arms a fresh one. Render subscribes it, so a bump re-renders us and the UseTimeout below re-arms.
     readonly Signal<long> _snapTick = new(0);
@@ -378,6 +384,11 @@ internal sealed class PagedShelfCore : Component
             float pageW = perPageColumns * (cardW + _gap);
             ref ScrollState snapState = ref scene.ScrollRef(vp);
             ApplySnapGrid(ref snapState, pageW, snapState.ContentW - snapState.ViewportW);
+            // ApplySnapGrid only writes ScrollState's own snap columns (SnapSpec.ApplyTo's contract) — the kernel body
+            // caches its OWN copy of the snap grid (ScrollBody.Frame, set only by SetFrame) and a snap-only change is
+            // not itself layout-affecting, so nothing else would re-post it. Without this the kernel keeps flinging
+            // against whatever grid (or none) was live at the last real layout pass (scroll-v3-plan §2 kernel-side gap).
+            FluentGpu.Layout.FlexLayout.RepostFrame(scene, vp);
         }, DepKey.From(HashCode.Combine(perPageColumns, cardW, _count, ShelfViewport.IsNull)));
 
         // ── The LIFT-DEBOUNCE timer (ShelfSnap.Page). Every gesture edge bumps _snapTick; reading it here subscribes us,
@@ -528,32 +539,32 @@ internal sealed class PagedShelfCore : Component
              | (g.UserScrollActive ? 1L : 0L),
         g =>
         {
-            // The LIVE phase is what "settled" means (see below), so read it once up front — both branches need it.
+            // The LIVE activity is what "settled" means (see below), so read it once up front — both branches need it.
             if (Context.Scene is not { } scene) return;
             var vp = ShelfViewport;
             if (vp.IsNull || !scene.IsLive(vp) || !scene.HasScroll(vp)) return;
-            byte phase;
-            float pending;
+            ScrollActivity activity;
             {
                 ref ScrollState liveState = ref scene.ScrollRef(vp);
-                phase = liveState.Phase;
-                pending = liveState.PendingTargetX;
+                activity = liveState.Activity;
             }
 
             // ── (1) LIVE GESTURE. UserScrollActive keeps its change-detection role (it is in the key, so BOTH edges of a
             // gesture fire this action), and its RISING edge is where the directional commit's anchor is latched: the
             // offset the gesture started from, which is the only thing that can tell a forward flick from a backward one.
-            // A micro-pause mid-pan drops this bit but NOT the phase, so the anchor can never be re-latched mid-gesture
+            // A micro-pause mid-pan drops this bit but NOT the activity, so the anchor can never be re-latched mid-gesture
             // (gate 2 below returns first and leaves _userScrollWas set) — it stays the true gesture start.
             if (g.UserScrollActive)
             {
                 if (!_userScrollWas)
                 {
                     _userScrollWas = true;
-                    // CONTACT pans only. A mouse-wheel notch is ALSO user scroll (WheelAnimating), but it is a DISCRETE
-                    // request with no release velocity and its contract is the plain nearest-boundary re-snap — anchoring
-                    // it would turn a sub-half-stride notch into a page advance. No anchor ⇒ the nearest rule, unchanged.
-                    if (phase == ScrollIntegrator.TouchpadTracking || phase == ScrollIntegrator.Overscroll)
+                    // CONTACT pans only (ScrollActivity.Drag — overscroll is now a property (Band ≠ 0) of that same
+                    // activity, not a separate phase). A mouse-wheel notch is ALSO user scroll (Driven|Wheel), but it is a
+                    // DISCRETE request with no release velocity and its contract is the plain nearest-boundary re-snap —
+                    // anchoring it would turn a sub-half-stride notch into a page advance. No anchor ⇒ the nearest rule,
+                    // unchanged.
+                    if (activity == ScrollActivity.Drag)
                         _gestureAnchorX = g.OffsetX;
                     // A gesture RESUMING on top of an armed snap pushes its deadline out (scheduling only — see
                     // SnapGraceMs). Bumped only when something is actually pending, so a normal pan costs no re-render.
@@ -562,15 +573,13 @@ internal sealed class PagedShelfCore : Component
                 return;
             }
 
-            // ── (2) THE PHASE GATE — the root fix. UserScrollActive is a per-frame MOTION bit: the resampler clamps at
-            // the newest sample during any micro-pause of a live two-finger pan, so no offset is written, movingNow goes
-            // false, and this bit reads false ~14–20 ms into the pause WHILE Phase is still TouchpadTracking. Acting there
-            // re-snapped INTO the live gesture and killed it (ScrollTo overwrites Phase with WheelAnimating|Programmatic
-            // unconditionally, and nothing restores TouchpadTracking). Phase == Idle is reached ONLY through a real
-            // EndScrollGesture or a settled fling/glide, so this one test subsumes TouchpadTracking / Overscroll / Fling /
-            // SnapBack / WheelAnimating — including the PROGRAMMATIC chase whose PendingTargetX half is kept alongside it
-            // (a chase mid-flight is not a rest either, and re-snapping there glides back where it came from).
-            if (phase != ScrollIntegrator.Idle || !float.IsNaN(pending)) return;
+            // ── (2) THE ACTIVITY GATE — the root fix. UserScrollActive is a per-frame MOTION bit: the resampler clamps
+            // at the newest sample during any micro-pause of a live two-finger pan, so no offset is written, movingNow
+            // goes false, and this bit reads false ~14–20 ms into the pause WHILE Activity is still Drag. Acting there
+            // re-snapped INTO the live gesture and killed it. Activity == Idle is reached ONLY through a real gesture end
+            // or a settled fling/glide, so this one test subsumes Drag / Ballistic / Driven (Wheel or Programmatic) — a
+            // chase mid-flight is not a rest either, and re-snapping there glides back where it came from.
+            if (activity != ScrollActivity.Idle) return;
 
             // ── (3) A REAL REST. Consume the gesture anchor (a wheel notch / keyboard / chevron re-arm has none, which is
             // what degenerates the commit below to today's plain nearest rule) and let the commit decide the page.
@@ -643,6 +652,10 @@ internal sealed class PagedShelfCore : Component
         // read whatever ContentW existed at that fit, and on a fresh mount that is 0 — which leaves the grid open-ended
         // for the rest of the shelf's life unless the fit happens to change again.
         ApplySnapGrid(ref scene.ScrollRef(vp), grid.PageW, maxX);
+        // Same kernel-side gap as the fit-keyed layout effect above: a scene-column-only write is invisible to the
+        // kernel's cached Frame until a real layout pass reposts it, so a later fling would retarget onto the STALE
+        // (open-ended, or pre-bound) grid without this.
+        FluentGpu.Layout.FlexLayout.RepostFrame(scene, vp);
 
         // Already PARKED — on the nearest boundary, or at the content end. Nothing to re-snap, whatever the commit rule
         // below would have chosen. This is the SettleSnapEpsPx idempotence that makes re-entering on every settle free
@@ -678,8 +691,8 @@ internal sealed class PagedShelfCore : Component
     /// page (≈612 DIP on the artist chart) 50% is unreachable by panning, so every pan was yanked back to its start page.
     /// <paramref name="releaseVelocity"/> is <see cref="ScrollState.LastReleaseVelocity"/> (px/s, signed in offset space,
     /// recorded at lift; 0 for an OS-momentum gesture — which degenerates this to a pure "did the finger physically pass
-    /// <see cref="CommitFraction"/>" rule), projected over the bounded settle window by the shared engine divisor
-    /// <see cref="ScrollTuning.FlickProjectK"/>. The result is RAILED to ±1 page: one gesture never skips a page.</para>
+    /// <see cref="CommitFraction"/>" rule), projected over the bounded settle window by the shared kernel divisor
+    /// <c>ScrollFeel.Shipping.FlickProjectK</c>. The result is RAILED to ±1 page: one gesture never skips a page.</para>
     /// <para><paramref name="anchorX"/> NaN = no gesture anchor (a wheel notch, a keyboard page, a chevron re-arm, a
     /// glide's own settle) ⇒ returns <paramref name="nearestPage"/> verbatim. That is the degenerate contract this whole
     /// feature rests on: every non-gesture settle keeps exactly the behaviour it had before the directional commit.</para></summary>
@@ -692,7 +705,7 @@ internal sealed class PagedShelfCore : Component
         // OS split into several ScrollBegin/End segments still accumulate correctly — each segment measures progress from
         // the page it is basically on, so two 40% segments still commit one page forward.
         int anchorPage = Math.Clamp((int)MathF.Round(anchorX / pageW), 0, maxPage);
-        float projected = offsetX + releaseVelocity / ScrollTuning.FlickProjectK;
+        float projected = offsetX + releaseVelocity / ScrollFeel.Shipping.FlickProjectK;
         float progress = (projected - anchorPage * pageW) / pageW;
         // The step must also agree with the gesture's NET TRAVEL. Without this, a tiny nudge that ends just past a page
         // midpoint (so the anchor page rounded UP) reads as "0.4 pages backwards from the anchor page" and would commit
@@ -705,8 +718,8 @@ internal sealed class PagedShelfCore : Component
 
     // ── The debounced commit: the ONE place a settled shelf reaches the programmatic seam. Runs on the host timer queue
     // SnapGraceMs after the last gesture edge, and re-validates everything, because the world may have moved on: the user
-    // may have resumed panning (Phase back to TouchpadTracking), a chevron may have armed its own glide (PendingTargetX),
-    // the body may have swapped viewports, or the strip may already be on the target. Reduced motion is read as a VALUE at
+    // may have resumed panning (Activity back to Drag), a chevron may have armed its own glide (Activity Driven), the
+    // body may have swapped viewports, or the strip may already be on the target. Reduced motion is read as a VALUE at
     // seed (a direct write instead of a glide), never as a branch in the authoring path.
     void CommitPendingSnap()
     {
@@ -716,14 +729,14 @@ internal sealed class PagedShelfCore : Component
         if (Context.Scene is not { } scene) return;
         var vp = ShelfViewport;
         if (vp.IsNull || !scene.IsLive(vp) || !scene.HasScroll(vp)) return;
-        // Copy the three fields out before the call: ScrollTo takes its own ref, and holding one across it would alias.
-        byte phase;
-        float pending, offset;
+        // Copy the fields out before the call: ScrollTo takes its own ref, and holding one across it would alias.
+        ScrollActivity activity;
+        float offset;
         {
             ref ScrollState sc = ref scene.ScrollRef(vp);
-            phase = sc.Phase; pending = sc.PendingTargetX; offset = sc.OffsetX;
+            activity = sc.Activity; offset = sc.OffsetX;
         }
-        if (phase != ScrollIntegrator.Idle || !float.IsNaN(pending)) return;   // a gesture/chase owns the offset again
+        if (activity != ScrollActivity.Idle) return;                          // a gesture/chase owns the offset again
         if (MathF.Abs(offset - target) <= SettleSnapEpsPx) return;             // already there (idempotent)
         ScrollIntoView.ScrollTo(Context, vp, target, animate: !Motion.ReducedMotion);
     }
@@ -843,18 +856,20 @@ internal sealed class PagedShelfCore : Component
         // ScrollEl's negative horizontal margin widens the clip 2×HaloBleed into the surrounding gutters (rest positions
         // cancel: gutter +Bleed inside a viewport shifted −Bleed). Page targets anchor to page·cols·stride, so they cancel.
         Element strip = new BoxEl { Direction = 0, Gap = _gap, Padding = new Edges4(HaloBleed, LiftClearance, HaloBleed, ShadowClearance), Children = cells };
-        // The scroller owns the clip + edge-fade scope, so it is the native clip-ESCAPE root: the hovered cell parks
-        // under it and hoists after both scopes close. Keeping the ScrollEl as the root column's DIRECT child also
-        // preserves cross-axis stretch; an intervening default-row wrapper collapses this Grow=0 viewport to width 0.
-        return _parts.Apply(PagedShelf.PartViewport, new ScrollEl
+        // scroll-v3 §7.1: ScrollEl's own HoverElevateClipRoot is deleted (the escape-root flag now lives only on
+        // BoxEl). The scroller still owns the clip + edge-fade scope the hovered cell must escape, so a thin
+        // Direction=1 wrapper carries the flag instead — Direction=1 (a COLUMN) avoids the single-child wrapper's
+        // main-axis shrink-to-content collapse (fluentgpu skill rule #11: a default ROW wrapper would shrink this
+        // Grow=0 viewport to width 0), while still handing the ScrollEl the SAME cross-axis (width) stretch and
+        // main-axis (height) auto-size it got as a direct column child before. The ScrollEl's own negative Margin
+        // keeps widening ITS box (unchanged) — the wrapper only adds the escape-root paint-order flag.
+        var scroller = _parts.Apply(PagedShelf.PartViewport, new ScrollEl
         {
             Horizontal = true,
             Grow = 0f,
             SuppressScrollBar = true,
             AutoEdgeFade = fade,
             AutoEdgeFadeBand = _edgeFade,
-            // PAIRED with the cell flag in MeasuredBody: park and hoist arm together or not at all (see HoverElevate).
-            HoverElevateClipRoot = HoverElevate,
             Margin = new Edges4(-HaloBleed, 0f, -HaloBleed, 0f),
             OnScrollGeometryChanged = PageScrollSync(),
             Content = strip,
@@ -863,6 +878,13 @@ internal sealed class PagedShelfCore : Component
             // handle after a body swap simply fails the IsLive guard).
             OnRealized = h => { viewport.Value = h; _measuredVp = h; },
         });
+        return new BoxEl
+        {
+            Direction = 1,
+            // PAIRED with the cell flag in MeasuredBody: park and hoist arm together or not at all (see HoverElevate).
+            HoverElevateClipRoot = HoverElevate,
+            Children = [ scroller ],
+        };
     }
 
     void ScrollMeasuredViewport(NodeHandle vp, int page, int perPageColumns, float cardW, bool animate)
@@ -873,16 +895,20 @@ internal sealed class PagedShelfCore : Component
         float stride = cardW + _gap;
         float maxX = MathF.Max(0f, sc.ContentW - sc.ViewportW);
         float target = Math.Clamp(page * Math.Max(1, perPageColumns) * stride, 0f, maxX);
-        // Already at (idle) or already chasing this target ⇒ don't re-arm. Kept HERE rather than delegated: ScrollTo only
-        // compares against the live offset, so mid-glide it would re-arm every render and keep re-latching the half-life.
-        float pendCur = sc.PendingTargetX;
-        if ((!float.IsNaN(pendCur) && MathF.Abs(pendCur - target) < 0.5f) ||
-            (float.IsNaN(pendCur) && MathF.Abs(sc.OffsetX - target) < 0.5f)) return;
+        // Already at rest on this target, or already chasing it ⇒ don't re-arm. Kept HERE rather than delegated:
+        // ScrollTo only compares against the live offset, so mid-glide it would re-post every effect re-fire and keep
+        // re-latching the half-life. The kernel's live Target isn't a readable SceneStore column any more
+        // (ScrollState.TargetX is deleted, kernel-internal only) — _lastProgrammaticTargetX mirrors the last posted
+        // destination locally instead, self-clearing the moment the body isn't Driven (settled, or a user gesture
+        // took the offset back).
+        if (sc.Activity != ScrollActivity.Driven) _lastProgrammaticTargetX = null;
+        bool alreadyChasingIt = _lastProgrammaticTargetX is { } lastTarget && MathF.Abs(lastTarget - target) < 0.5f;
+        if (alreadyChasingIt || MathF.Abs(sc.OffsetX - target) < 0.5f) return;
 
-        // The ONE programmatic seam (ScrollIntoView): animate ⇒ arm the phase-7 chase with the distance-derived half-life
-        // and a velocity-preserving retarget; reduced motion / !animate ⇒ its snap path writes the offset + the content
-        // transform now AND arrests any in-flight chase (the hand-rolled version left one armed to drag the offset back off
-        // the target). Reduced motion is read as a VALUE at seed, never a branch in the authoring path.
+        // The ONE programmatic seam (ScrollIntoView): animate ⇒ posts a Driven chase to the kernel (distance-derived
+        // half-life, velocity-continuous retarget); reduced motion / !animate ⇒ its immediate path posts a snap that
+        // arrests any in-flight chase. Reduced motion is read as a VALUE at seed, never a branch in the authoring path.
+        _lastProgrammaticTargetX = target;
         ScrollIntoView.ScrollTo(Context, vp, target, animate && !Motion.ReducedMotion);
     }
 

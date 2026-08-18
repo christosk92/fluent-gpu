@@ -2,6 +2,7 @@ using FluentGpu.Animation;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Scroll;
 using FluentGpu.Signals;
 
 namespace FluentGpu.Controls;
@@ -171,19 +172,12 @@ internal sealed class SwipeControlCore : Component
     static readonly SpringParams DismissSpring = SpringParams.FromResponse(0.15f, 1.0f);
 
     // Fling-distance projection divisor for the release decision. A release of speed v (px/s) coasts an extra
-    // v / FlingProjectK px in the snap-settle window before resting. Derived from the engine scroller decay
-    // (ScrollIntegrator.FlingDecayPerS = 0.05/s survival) over the ControlNormal settle window T:
-    // coast = v·(1−decay^T)/−ln(decay), so the divisor is −ln(decay)/(1−decay^T) ≈ 4.0. A BOUNDED window (not the
-    // full infinite-decay scroll coast) is the right model for a threshold snap — a slow drag projects only a
-    // little, a fast flick projects past the threshold. Equivalent in spirit to the WWDC projection
-    // distance = (v/1000)·rate/(1−rate).
-    static readonly float FlingProjectK = ProjectDivisor(ScrollIntegrator.FlingDecayPerS, Motion.ControlNormal / 1000f);
-    static float ProjectDivisor(float decayPerS, float windowS)
-    {
-        float k = -MathF.Log(decayPerS);                 // the per-second decay rate (−ln survival)
-        float frac = 1f - MathF.Exp(-k * windowS);       // fraction of the full coast reached within the window
-        return frac > 1e-4f ? k / frac : k;              // divisor: projectedExtra = v / divisor = v·frac/k
-    }
+    // v / FlingProjectK px in the snap-settle window before resting. The ONE canonical value
+    // (ScrollFeel.Shipping.FlickProjectK — derived from the kernel's own fling decay, FlingDecayPerS = 0.05/s
+    // survival, over the ControlNormal settle window T: coast = v·(1−decay^T)/−ln(decay), so the divisor is
+    // −ln(decay)/(1−decay^T) ≈ 4.0). A BOUNDED window (not the full infinite-decay scroll coast) is the right model
+    // for a threshold snap — a slow drag projects only a little, a fast flick projects past the threshold.
+    // Equivalent in spirit to the WWDC projection distance = (v/1000)·rate/(1−rate).
 
     // ── Pure resolution statics (unit-tested by gate.arena.swipe-phone-settle) ──────────────────────────────────
 
@@ -222,7 +216,7 @@ internal sealed class SwipeControlCore : Component
 
     /// <summary>Projected resting distance: |offset| plus the bounded fling coast of the outward release speed.</summary>
     internal static float ProjectedDistance(float distancePx, float outwardVelocityPxPerS)
-        => MathF.Max(0f, distancePx + outwardVelocityPxPerS / FlingProjectK);
+        => MathF.Max(0f, distancePx + outwardVelocityPxPerS / ScrollFeel.Shipping.FlickProjectK);
 
     /// <summary>Release → rest-open decision. Fresh: projected ≥ 0.6×cluster (a fast short flick opens; a reversed
     /// flick cancels what position alone would have opened). Already open: halfway hysteresis so finger wobble does

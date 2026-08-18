@@ -1,10 +1,10 @@
 using System;
 using System.Collections.Generic;
-using FluentGpu.Animation;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Scene;
+using FluentGpu.Scroll;
 using FluentGpu.Signals;
 using static FluentGpu.Dsl.Ui;
 
@@ -131,6 +131,11 @@ public sealed class LazyGrid : Component
     bool _didInitialScroll;
     int _lastCols;
     float _lastRowH, _lastSectionTop;
+    // The kernel-owned Restore latch (ScrollBody.RestoreX/Y) isn't a readable SceneStore column — Geometry() used to
+    // read ScrollState.RestorePending/RestoreY directly (synchronous) for the one/two frames between posting the
+    // restore and the kernel's Reclamp landing it. Mirror the same value locally instead: set on post, cleared once
+    // the live offset actually reaches it (kernel caught up).
+    float? _pendingRestoreY;
 
     static long PackKey(in LazyGridMath.View v)
         => ((long)(uint)(v.FirstRow + 1) << 40) ^ ((long)(uint)(v.LastRow + 1) << 8) ^ (v.DrawerVisible ? 1L : 0L);
@@ -341,17 +346,11 @@ public sealed class LazyGrid : Component
         int anchorIndex = oldRow * oldCols;
         float within = rel - oldRow * oldRowH;
         float target = sectionTop + (anchorIndex / Math.Max(1, cols)) * rowH + within * (rowH / oldRowH);
-        target = Math.Clamp(target, 0f, MathF.Max(0f, sc.ContentH - sc.ViewportH));
-        sc.OffsetY = sc.TargetY = target;
-        sc.PendingTargetY = float.NaN;
-        sc.Phase = ScrollIntegrator.Idle;
-        var content = sc.ContentNode;
-        if (!content.IsNull && scene.IsLive(content))
-        {
-            scene.Paint(content).LocalTransform = Affine2D.Translation(0f, -target);
-            scene.Mark(content, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
-        }
-        scene.Mark(vp, NodeFlags.PaintDirty);
+        float delta = target - sc.OffsetY;
+        if (delta == 0f) return;
+        // A coordinate-frame rebase, not a motion — AnchorShift moves with every other live intent instead of
+        // restarting/interrupting one (the kernel clamps to [0, content − viewport] on its own Reclamp).
+        scene.ScrollPort!.Post(ScrollInput.AnchorShift((int)vp.Raw.Index, delta));
     }
 
     // This grid's top within the page scroll's CONTENT space (stable across scroll: my abs Y and the content's abs Y both
@@ -369,14 +368,22 @@ public sealed class LazyGrid : Component
         float top = scene.AbsoluteRect(_node).Y - scene.AbsoluteRect(content).Y;
         float vh = sc.ViewportH > 1f ? sc.ViewportH : scene.AbsoluteRect(vp).H;
         // Scroll observers publish after layout/animation. During route restoration the scene therefore holds the
-        // authoritative offset (or pending target) one frame before the throttled context signal catches up.
-        // Window against it so a restored viewport never paints only the old top-window spacers.
-        float effectiveOffset = sc.RestorePending ? sc.RestoreY : sc.OffsetY;
+        // authoritative offset (or pending target) one frame before the throttled context signal catches up. Window
+        // against it so a restored viewport never paints only the old top-window spacers — the kernel's own
+        // ScrollBody.RestoreX/Y latch isn't a readable SceneStore column, so mirror the posted target locally
+        // (_pendingRestoreY, cleared once the live offset actually reaches it — see MaybeInitialScroll).
+        float effectiveOffset = sc.OffsetY;
+        if (_pendingRestoreY is { } py)
+        {
+            if (MathF.Abs(sc.OffsetY - py) < 1f) _pendingRestoreY = null;
+            else effectiveOffset = py;
+        }
         return (top, vh > 1f ? vh : 1e9f, effectiveOffset);
     }
 
     // One-time scroll so item _initialIndex sits at the page-scroll's top — its content-Y = this grid's top + its row * rowH,
-    // seeded via the restore latch + a layout mark (the same path the scroll-restore uses). Runs once geometry is real.
+    // seeded via the kernel's Restore command (applied verbatim while geometry is still resolving, retried each Reclamp —
+    // the same path the engine's own scroll-restore uses). Runs once geometry is real.
     void MaybeInitialScroll(float sectionTop, float rowH, int cols)
     {
         var scene = Context.Scene;
@@ -386,9 +393,9 @@ public sealed class LazyGrid : Component
         if (vp.IsNull) return;
         ref ScrollState sc = ref scene.ScrollRef(vp);
         float targetY = sectionTop + (_initialIndex / Math.Max(1, cols)) * rowH;
-        sc.RestoreX = sc.OffsetX;
-        sc.RestoreY = Math.Clamp(targetY, 0f, MathF.Max(0f, sc.ContentH - sc.ViewportH));
-        sc.RestorePending = true;
+        float clamped = Math.Clamp(targetY, 0f, MathF.Max(0f, sc.ContentH - sc.ViewportH));
+        _pendingRestoreY = clamped;
+        scene.ScrollPort!.Post(ScrollInput.Restore((int)vp.Raw.Index, sc.OffsetX, clamped));
         scene.Mark(vp, NodeFlags.LayoutDirty);
         _didInitialScroll = true;
     }
@@ -404,13 +411,7 @@ public sealed class LazyGrid : Component
         ref ScrollState sc = ref scene.ScrollRef(vp);
         float rowStart = sectionTop + expandedRow * rowH;
         float target = LazyGridMath.ExpandedTarget(sc.ViewportH, sc.ContentH, rowStart, drawerH, _expandedTopInset);
-        if (MathF.Abs(target - sc.OffsetY) < 1f) return;
-
-        sc.Phase = ScrollIntegrator.WheelAnimating;
-        sc.PhaseFlags = ScrollState.PhaseProgrammatic;
-        sc.FlingVelocity = 0f;
-        sc.PendingTargetY = target;
-        Context.ArmScroll?.Invoke(vp);
-        Context.RequestRerender();
+        // Posts a Driven glide through the kernel (ScrollIntoView already no-ops within 0.5 DIP and wakes the frame).
+        ScrollIntoView.ScrollTo(Context, vp, target, animate: true);
     }
 }

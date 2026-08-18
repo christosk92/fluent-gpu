@@ -828,10 +828,6 @@ public sealed record ScrollEl : Element
     /// call site that only flips the bool is unchanged. Ignored unless <see cref="AutoEdgeFade"/> is set. A surface whose
     /// trailing content must stay crisp (a table's duration column) narrows the band here rather than dropping the fade.</summary>
     public float AutoEdgeFadeBand { get; init; }
-    /// <summary>Clip-escape root for a hover-elevated descendant. The recorder hoists the deferred child after this
-    /// viewport's clip and edge-fade scopes close, so only the hovered subtree can paint into the surrounding halo
-    /// gutter while resting scroll content remains clipped.</summary>
-    public bool HoverElevateClipRoot { get; init; }
     /// <summary>Keep the scrollbar VISIBLE (a persistent thin rail) whenever the content overflows, instead of the default
     /// auto-hide that only reveals on hover/scroll. Hover still expands the rail to the full draggable bar. For navigation
     /// surfaces (a sidebar) where a discoverable, always-present scroll affordance is wanted (WinUI 11 nav behavior).</summary>
@@ -847,12 +843,6 @@ public sealed record ScrollEl : Element
     /// declare a value the element can recompute each render — an interval derived from a frozen options record cannot.</para></summary>
     public FluentGpu.Scene.SnapSpec? Snap { get; init; }
 
-    /// <summary>Nested-scroll chaining policy (the CSS <c>overscroll-behavior</c> analog). Default <see cref="ScrollChainingMode.Auto"/>:
-    /// a touch pan that reaches this scroller's edge hands the residual to the nearest same-axis ancestor scroller
-    /// (Compose nested-scroll), and a flick at the edge throws into it. <see cref="ScrollChainingMode.Contain"/> rubber-bands
-    /// instead. (Wheel scrolling already bubbles to an outer scroller regardless.)</summary>
-    public ScrollChainingMode Chaining { get; init; } = ScrollChainingMode.Auto;
-
     /// <summary>Change-only scroll-geometry observer (the escape hatch; SwiftUI <c>onScrollGeometryChange</c>). The host
     /// projects the live geometry to a coarse <c>long</c> key after the integrator settles and fires the action only when
     /// that key changes (never per-px, never per-frame) — for pull-to-refresh triggers, analytics, bespoke app logic.
@@ -865,18 +855,19 @@ public sealed record ScrollEl : Element
     /// scroll-to-top flash. Distinct content (a different key) starts at the top; the same content open in two tabs is
     /// kept separate automatically (the engine namespaces by the enclosing KeepAlive slot). Null ⇒ no restoration.</summary>
     public string? ScrollKey { get; init; }
-    /// <summary>CSS <c>scroll-timeline-name</c>: publish this viewport's scroll progress under a NAME so a node that is
-    /// NOT one of its descendants can drive a <see cref="ScrollBindDsl.Timeline"/> bind from it. Null (default) publishes
-    /// nothing — a descendant finds this scroller by ancestry and needs no name.
-    /// <para>Last registration wins, so a name must have exactly ONE live publisher. Scope it to the content identity
-    /// (the way <see cref="ScrollKey"/> is), never a bare constant: two pages are co-mounted mid-navigation, and a shared
-    /// name would make the owner reconcile-order-dependent. Nested scrollers must not share one either — the inner one
-    /// commonly sits at a permanent offset 0.</para></summary>
-    public string? ScrollTimeline { get; init; }
     /// <summary>Never draw the conscious scrollbar for this viewport (parity with <see cref="VirtualListEl"/>); the offset
     /// is still programmatically scrollable. Used to hide the rail while a region is loading its skeleton.</summary>
     public bool SuppressScrollBar { get; init; }
     /// <summary>Called once when this viewport is realized into the scene, with its node handle. Lets composing controls
     /// drive the viewport programmatically while still using the engine's scroll animator.</summary>
     public Action<NodeHandle>? OnRealized { get; init; }
+
+    /// <summary>The ONE authoring handle over this viewport (scroll-v3-plan §7.2): an author-supplied
+    /// <see cref="FluentGpu.Scroll.ScrollController"/> the reconciler attaches to this node when it realizes (and
+    /// detaches on unmount / re-bake to a different scroller). Null (default, the common case) ⇒ the reconciler mints
+    /// and attaches its own internal instance instead — <c>Hooks.UseScroll()</c> always resolves SOME controller for
+    /// a mounted descendant, whether or not the author supplied one. Supply your own when you need to hold the handle
+    /// OUTSIDE the subtree (a sibling toolbar's PageUp/PageDown, a parent driving <c>ScrollTo</c> before the viewport's
+    /// own descendants have mounted).</summary>
+    public FluentGpu.Scroll.ScrollController? Controller { get; init; }
 }

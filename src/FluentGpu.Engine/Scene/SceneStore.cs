@@ -235,8 +235,28 @@ public sealed class SceneStore : ISceneBackend
     /// host; null on backends that don't use the index-keyed side-tables.</summary>
     public Action<int>? OnFreeIndex { get; set; }
 
+    /// <summary>The kernel's command intake (scroll-v3-plan §3.1) — installed by the host
+    /// (<c>AppHost</c> wires <c>_scene.ScrollPort = _scrollKernel.Port</c>). Null until wired (headless suites /
+    /// probes that never touch scroll never post). <see cref="ScrollRef"/>'s first-create posts
+    /// <c>FluentGpu.Scroll.ScrollInputKind.Bind</c>; <see cref="FreeSubtree"/>'s scroll-row removal posts
+    /// <c>Unbind</c> — both structural, drained by <c>ScrollKernel.Reclamp</c>, no time advance.</summary>
+    public FluentGpu.Scroll.ScrollCommandPort? ScrollPort { get; set; }
+
+    /// <summary>Per-viewport scrollbar "conscious" chrome side-table (scroll-v3-plan §3.1/§4) — FadeT/ExpandT/
+    /// PointerOver/PointerOverScrollbar/IdleMs, moved out of <see cref="ScrollState"/> so motion (kernel-owned) and
+    /// chrome (UI-ticker-owned) can never share a writer. Always present (never null) — construction is cheap (an
+    /// empty side-table) and every scroll-viewport caller (<c>SceneRecorder</c>, <c>ScrollBarChrome</c>) can assume it.</summary>
+    public FluentGpu.Scroll.ScrollBarChromeTable ScrollChrome { get; }
+
+    /// <summary>Node-index → live <see cref="FluentGpu.Scroll.ScrollController"/> side-table (scroll-v3-plan §7.2) —
+    /// <see cref="FluentGpu.Scroll.SceneScrollSink.Apply"/>'s ONE-line <c>NotifyMoved</c> call is what republishes an
+    /// attached controller's <c>Offset</c>/<c>Extent</c>/<c>Viewport</c> edge-driven off a real kernel write, never a
+    /// per-frame poll. Always present (never null), same rationale as <see cref="ScrollChrome"/>.</summary>
+    public FluentGpu.Scroll.ScrollControllerRegistry ScrollControllers { get; } = new();
+
     public SceneStore(int capacity = 64)
     {
+        ScrollChrome = new FluentGpu.Scroll.ScrollBarChromeTable();
         if (capacity < 4) capacity = 4;
         _gen = new uint[capacity];
         _nextFree = new int[capacity];
@@ -396,6 +416,13 @@ public sealed class SceneStore : ISceneBackend
                 Debug.Assert(_activeVirtualDisclosureCount > 0);
                 if (_activeVirtualDisclosureCount > 0) _activeVirtualDisclosureCount--;
             }
+            // scroll-v3-plan §3.1: Unbind first (structural, drained by the next Reclamp — the kernel's own body row
+            // is a separate slab, so this must reach it before the row here disappears), then drop the two
+            // side-tables the kernel/chrome never see: this node's ScrollState row and its chrome (fade/expand/
+            // hover) row. Both are index-keyed like OnFreeIndex's other consumers, so they need the same symmetric
+            // teardown — done directly here (not via OnFreeIndex) since ScrollChrome/ScrollPort are SceneStore's own.
+            ScrollPort?.Post(new FluentGpu.Scroll.ScrollInput(FluentGpu.Scroll.ScrollInputKind.Unbind, idx, 0d));
+            ScrollChrome.Clear(idx);
             _scroll.Remove(idx);
             _extents.Remove(idx);
             _scrollObs.Remove(idx);
@@ -439,7 +466,7 @@ public sealed class SceneStore : ISceneBackend
         if (DragGhost == node) { DragGhost = NodeHandle.Null; DragGhostBackplate = null; }   // a freed ghost must not linger in the recorder's top band
         if (DragOverlay == node) DragOverlay = NodeHandle.Null;   // …nor a freed preview-layer root in the overlay band
         if ((flags & NodeFlags.ConnectedOverlay) != 0) RemoveOverlay(node);   // a freed overlay must not linger in the band
-        OnFreeIndex?.Invoke(idx);   // symmetric teardown of INDEX-keyed external side-tables (AnimEngine transitions / ScrollIntegrator timers)
+        OnFreeIndex?.Invoke(idx);   // symmetric teardown of INDEX-keyed external side-tables (AnimEngine transitions / scroll chrome rows)
         _recordDirty[idx] = 0;
         _recordDirtySelf[idx] = 0;
         _recordDirtyDescendant[idx] = 0;
@@ -1192,12 +1219,38 @@ public sealed class SceneStore : ISceneBackend
     {
         int idx = (int)h.Raw.Index;
         ref ScrollState s = ref _scroll.GetOrAdd(idx, out bool existed);
-        if (!existed) { s = ScrollState.Default; _flags[idx] |= NodeFlags.Scrollable; MarkRecordDirty(idx); }
+        if (!existed)
+        {
+            s = ScrollState.Default;
+            _flags[idx] |= NodeFlags.Scrollable;
+            MarkRecordDirty(idx);
+            // scroll-v3-plan §3.1: a viewport's FIRST creation is the kernel's Bind — structural, drained by
+            // Reclamp() (no time advance), so it's safe to post before this frame's clock exists. T=0 is inert for a
+            // structural command. Null port = headless/no-scroll callers that never wired one.
+            ScrollPort?.Post(new FluentGpu.Scroll.ScrollInput(FluentGpu.Scroll.ScrollInputKind.Bind, idx, 0d));
+        }
         return ref s;
     }
     public bool HasScroll(NodeHandle h) => _scroll.Contains((int)h.Raw.Index);
     /// <summary>Read the scroll row by value (default if the node is not a viewport).</summary>
     public bool TryGetScroll(NodeHandle h, out ScrollState s) => _scroll.TryGet((int)h.Raw.Index, out s);
+
+    /// <summary>Index-based scroll row lookup for the kernel sink (<c>FluentGpu.Scroll.SceneScrollSink.Apply</c>):
+    /// the kernel only ever carries a raw node INDEX (<c>IScrollSink.Apply(int node, …)</c> — no generation, by
+    /// design, scroll-v3-plan §2.1), so this re-derives liveness from the slot's own generation + the
+    /// <see cref="NodeFlags.Scrollable"/> bit (set only by <see cref="ScrollRef"/>'s first-create, cleared by the row
+    /// removal in <see cref="FreeSubtree"/>) instead of trusting a caller-supplied handle. A late/stray Apply for an
+    /// index that was freed (or freed-and-reused by an unrelated node) since the command was posted lands harmlessly
+    /// on the scratch fallback row below — Unbind is posted before the row is removed, so this is a defensive guard
+    /// for a same-frame free+realloc race, not the steady-state path.</summary>
+    private ScrollState _scrollRefByIndexFallback;
+    public ref ScrollState ScrollRefByIndex(int node)
+    {
+        if ((uint)node < (uint)_high && _gen[node] != 0 && (_flags[node] & NodeFlags.Scrollable) != 0)
+            return ref _scroll.GetOrAdd(node, out _);   // guaranteed to already exist (Scrollable is only ever set alongside the row)
+        _scrollRefByIndexFallback = default;
+        return ref _scrollRefByIndexFallback;
+    }
     /// <summary>True while any viewport owns an active expand/collapse presentation.</summary>
     public bool HasActiveVirtualDisclosures => _activeVirtualDisclosureCount != 0;
     /// <summary>Resolve the shared recyclable-item clip owned by a virtual viewport from its direct content node.
@@ -1771,6 +1824,14 @@ public sealed class SceneStore : ISceneBackend
     }
 
     private NodeHandle Wrap(int idx) => idx == 0 ? NodeHandle.Null : new NodeHandle(new Handle((uint)idx, _gen[idx]));
+
+    /// <summary>Public index → handle wrap (scroll-v3-plan §3.1): <c>FluentGpu.Scroll.IScrollSink.Apply</c> and
+    /// <c>ScrollBarChrome</c> only ever carry a raw node index (the kernel is Scene-agnostic, §2), so this is how
+    /// they recover a <see cref="NodeHandle"/> to call the ordinary handle-based scene API (<see cref="Mark"/>,
+    /// <see cref="Paint"/>, <see cref="Bounds"/>, …) for the one node they DO need a handle for. Stamps the SLOT'S
+    /// CURRENT generation, so freeing bumps it out from under a stale index — callers still check
+    /// <see cref="IsLive"/> (or, equivalently here, <see cref="NodeFlags.Scrollable"/>) before trusting the result.</summary>
+    public NodeHandle HandleAt(int idx) => Wrap(idx);
 
     private void Grow() => ResizeColumns(_gen.Length * 2);
 

@@ -25,10 +25,11 @@ public enum ScrollTraceKind : byte
     AnimTick = 13,   // animator: per-active-node per-frame physics state
     AnimEvent = 14,  // animator: discrete transition (fling end / bounce seed / snap retarget / spring settle / fling seed)
     Note = 15,       // freeform marker (i0 = code)
-    OffsetWrite = 16,// integrator/chokepoint: ONE offset write (i0=node, i1=Phase §2.2, i2=writer §ScrollWriter, f0=offset)
+    OffsetWrite = 16,// kernel chokepoint (ApplyMotion): ONE offset write (i0=node, i1=Activity §2.1, i2=writer §ScrollWriter, f0=offset)
     FrameTiming = 17,// hitch attribution (emitted only for frames >12ms): f0..f5=flush/layout/anim/record/submit/fenceWait ms,
                      // i0=presentMs×100, i1=(measureCount<<10)|min(textShapeMisses,1023), i2=unclampedDtMs×100
-    Latency = 18,    // input→offset→present correlation row (NOT dt-gated): i0=publishSeq low 32, i1=stampQuality|stageMask<<8,
+    Latency = 18,    // input→offset→present correlation row (NOT dt-gated): i0=publishSeq low 32, i1=stampQuality|stageMask<<8
+                     // | trackingSampleValid<<24,
                      // i2=missedVsyncs, f0=lagDip signed, f1=wakeOverheadMs, f2=frameOverrunMs signed,
                      // f3=clockSampleSkewMs signed, f4=presentIntervalMs, f5=velocityDipPerMs, aux=genQpc
 }
@@ -57,7 +58,10 @@ public enum ScrollTraceState : byte
 {
     /// <summary>Capture-protocol phase ordinal, 0..15 (0 = none). Set by the app from the launcher's marker file.</summary>
     Phase = 0,
-    /// <summary>Gesture state, 0..3: 0=idle, 1=drag (finger down), 2=inertia (fling), 3=settle (bounce/snap spring).</summary>
+    /// <summary>Gesture-state word, 0..3, matching <see cref="FluentGpu.Scroll.ScrollActivity"/> plus a folded Bouncing
+    /// flag: 0=Idle, 1=Drag (finger down), 2=Ballistic (fling coast), 3=Driven|Bouncing (wheel/programmatic glide, or
+    /// the overscroll spring settling with no live contact) — same slots/values the pre-kernel integrator used, so
+    /// <c>ops/diag/pack-feel-summary.ps1</c> keeps parsing unchanged.</summary>
     Gesture = 1,
     /// <summary>1 while the current phase is its first (cold) pass over the content.</summary>
     ColdPass = 2,
@@ -67,15 +71,20 @@ public enum ScrollTraceState : byte
     AbVariant = 4,
 }
 
-/// <summary>Who wrote a scroll offset (scroll-feel-rework-v2 §8 single-writer gate). The v2 invariant (§2.1) is that
-/// the phase-7 <c>ScrollIntegrator</c> is the ONLY writer of the offset on the contact/wheel/fling/snap path — every
-/// <see cref="OffsetWrite"/> record on that path must carry <see cref="Integrator"/>. Touch finger-pan / scrollbar
-/// thumb-drag / pinch / drag-edge auto-scroll are sanctioned synchronous manipulations OUTSIDE the phase contract and
-/// tag their own id (the single-writer gate never drives those, so it sees only <see cref="Integrator"/>).</summary>
+/// <summary>Who wrote a scroll offset (scroll-v3 §3.1 single-writer token). The invariant is that every result-column
+/// write goes through <c>SceneScrollSink.ApplyMotion(in ScrollWriteToken, in ScrollWrite)</c>, which stamps the writer
+/// that produced it — <see cref="FluentGpu.Scroll.ScrollWriteSource"/> (in the portable kernel) declares the SAME byte
+/// values so a kernel-side <c>ScrollWrite.Writer</c> and a trace-side <see cref="ScrollWriter"/> are interchangeable
+/// without a conversion. <see cref="Tick"/> is the per-frame physics writer (§2.2 <c>ScrollKernel.Tick</c>);
+/// <see cref="Reclamp"/> is the structural-only re-apply after layout (mount/bind/geometry changes, edge-pending
+/// resolution — at most a handful of extra writes per touched body, never per frame steady-state);
+/// <see cref="Lease"/> is the render-thread fling lease (§6) ticking a leased-out body. There is no "direct"/untagged
+/// writer any more — the ref-struct token makes an untagged write a compile error outside <c>ApplyMotion</c>.</summary>
 public enum ScrollWriter : byte
 {
-    Direct = 0,          // an untagged synchronous SetScrollOffset caller (touch pan / scrollbar / auto-scroll / pinch)
-    Integrator = 1,      // the phase-7 ScrollIntegrator tick (via WriteScrollOffset) — the ONLY legal writer on the phase path
+    Tick = 1,            // ScrollKernel.Tick — the per-frame physics writer
+    Reclamp = 2,          // ScrollKernel.Reclamp — structural re-apply after layout (mount/bind/SetFrame/edge-pending)
+    Lease = 3,            // the render-thread fling lease ticking a leased-out body (§6)
 }
 
 /// <summary>
@@ -353,8 +362,9 @@ public static class ScrollTrace
         Add(new Rec { K = ScrollTraceKind.Release, I0 = flags, F0 = vx, F1 = vy, F2 = chosen, F3 = band, F4 = trailing, Aux = qpc });
     }
 
-    /// <summary>Gesture end/unlatch: i0=reason (0=ScrollEnd, 1=MomentumEnd, 2=restart-on-Begin, 3=wheel takeover,
-    /// 4=target died), i1=wasMomentum, f0=band handed to the spring.</summary>
+    /// <summary>Gesture end/unlatch: i0=reason (0=ScrollEnd, 1=reserved, 2=restart-on-Begin, 3=wheel takeover,
+    /// 4=target died), i1=wasMomentum (always 0 now — PTP inertia is engine-owned, no OS-momentum kind exists),
+    /// f0=band handed to the spring.</summary>
     public static void GestureEnd(int reason, int wasMomentum, float band)
     {
         if (!CompiledIn || !Enabled) return;
@@ -370,11 +380,17 @@ public static class ScrollTrace
     }
 
     /// <summary>Detented-wheel fling seed: i0=node index, i1=flags (1=sameDir accumulate, 2=atEdge-rejected),
-    /// f0=notch DIP delta, f1=fling velocity after, f2=offset.</summary>
-    public static void WheelSeed(int nodeIdx, int flags, float deltaDip, float v, float off)
+    /// f0=notch DIP delta, f1=fling velocity after, f2=offset. Drop-marker rows may additionally use f3/f4 for the
+    /// pointer's window-DIP position; their context-valid flag distinguishes a legitimate zero from absent context.</summary>
+    public static void WheelSeed(int nodeIdx, int flags, float deltaDip, float v, float off,
+        float hitX = 0f, float hitY = 0f)
     {
         if (!CompiledIn || !Enabled) return;
-        Add(new Rec { K = ScrollTraceKind.WheelSeed, I0 = nodeIdx, I1 = flags, F0 = deltaDip, F1 = v, F2 = off });
+        Add(new Rec
+        {
+            K = ScrollTraceKind.WheelSeed, I0 = nodeIdx, I1 = flags, F0 = deltaDip, F1 = v, F2 = off,
+            F3 = hitX, F4 = hitY,
+        });
     }
 
     /// <summary>Live gesture cancelled by a detented wheel: f0=offset at takeover, f1=band snapped away.</summary>
@@ -389,20 +405,23 @@ public static class ScrollTrace
     private static long s_lastAnimKey;     // dedup key of the previous AnimTick (node+mode+quantized off/band/vel)
     private static int s_animSuppressed;   // identical consecutive AnimTicks suppressed (i2 on the next emitted row)
 
-    /// <summary>Per-active-node physics tick: i0=node index, i1=ScrollMode, i2=identical rows suppressed since the
-    /// previous emitted row (a frozen band on a spinning loop repeats verbatim — 1-in-64 sampled), f0=offset, f1=target,
-    /// f2=fling velocity, f3=band px, f4=band spring velocity, f5=frame dtMs.</summary>
-    public static void AnimTick(int nodeIdx, int mode, float off, float tgt, float v, float band, float bandVel, float dtMs)
+    /// <summary>Per-active-node physics tick: i0=node index, i1=<paramref name="activityAndFlags"/> — the low nibble is
+    /// <see cref="FluentGpu.Scroll.ScrollActivity"/> (Idle/Drag/Ballistic/Driven), the high nibble (&lt;&lt;4) is
+    /// <see cref="FluentGpu.Scroll.ScrollActivityFlags"/> (Programmatic/Wheel/Chained/Banding/Bouncing/Autoscroll) —
+    /// i2=identical rows suppressed since the previous emitted row (a frozen band on a spinning loop repeats
+    /// verbatim — 1-in-64 sampled), f0=offset, f1=target, f2=velocity, f3=band px, f4=band spring velocity,
+    /// f5=frame dtMs.</summary>
+    public static void AnimTick(int nodeIdx, byte activityAndFlags, float off, float tgt, float v, float band, float bandVel, float dtMs)
     {
         if (!CompiledIn || !Enabled) return;
         long key = (long)((ulong)(uint)nodeIdx
-                 ^ ((ulong)(uint)mode << 24)
+                 ^ ((ulong)(uint)activityAndFlags << 24)
                  ^ ((ulong)(uint)BitConverter.SingleToInt32Bits(off) << 8)
                  ^ ((ulong)(uint)BitConverter.SingleToInt32Bits(band) << 20)
                  ^ ((ulong)(uint)BitConverter.SingleToInt32Bits(v) << 32));
         if (key == s_lastAnimKey && ++s_animSuppressed < 64) return;   // unchanged physics on a spinning loop
         s_lastAnimKey = key;
-        Add(new Rec { K = ScrollTraceKind.AnimTick, I0 = nodeIdx, I1 = mode, I2 = s_animSuppressed, F0 = off, F1 = tgt, F2 = v, F3 = band, F4 = bandVel, F5 = dtMs });
+        Add(new Rec { K = ScrollTraceKind.AnimTick, I0 = nodeIdx, I1 = activityAndFlags, I2 = s_animSuppressed, F0 = off, F1 = tgt, F2 = v, F3 = band, F4 = bandVel, F5 = dtMs });
         s_animSuppressed = 0;
     }
 
@@ -419,13 +438,19 @@ public static class ScrollTrace
     /// reader mis-decodes a capture (100/102/103/104 were documented, 110/111/113 were not, and drifted):
     /// <list type="bullet">
     /// <item>100 = anchor re-pin (i1=node, i2=anchorIndex, f0=delta, f1=offset) — Layout/FlexLayout.cs</item>
-    /// <item>101 = resampler hit the no-extrapolation clamp — Animation/ScrollIntegrator.cs</item>
-    /// <item>102 / 103 = pending anchor shift folded into the live anchor / drained with no tracked gesture (i1=node)</item>
+    /// <item>101 = resampler hit the no-extrapolation clamp — Scroll/ScrollPhysics.cs (ResampleContact)</item>
+    /// <item>102 / 103 = RE-HOMED to <see cref="FluentGpu.Scroll.ScrollInputKind.AnchorShift"/> (scroll-v3 §2.1): a
+    ///       posted <c>AnchorShift</c> command IS the "pending anchor shift" — the kernel folds it into the live body
+    ///       on the next <c>Tick</c>/<c>Reclamp</c> (no separate "drained with no tracked gesture" case; an
+    ///       <c>AnchorShift</c> on an untracked body is simply a coordinate-frame rebase applied verbatim). These two
+    ///       codes are retired; a kernel-side re-pin now shows up as an ordinary <see cref="OffsetWrite"/> row whose
+    ///       writer is <see cref="ScrollWriter.Reclamp"/>.</item>
     /// <item>104 = stale pre-latch shift discarded (i1=node)</item>
     /// <item>105 = touchpad slop-crossing latch REFUSED → wheel fallback (f0/f1 = accumX/accumY;
     ///       i1 bit0-3 = reason 1 wheelHandlerFallback / 2 noScrollerEitherAxis, bit4 = dominant axis was horizontal,
-    ///       bit5 = the fallback's DispatchWheel was consumed) — Input/InputDispatcher.cs</item>
-    /// <item>106 = wheel fallback RE-LATCHED on a later pan packet (f0=anchor, i1=node, i2=horiz, f1=gesture travel px)
+    ///       bit5 = the fallback's DispatchWheel was consumed, bit6 = hit context recorded; when bit6 is set,
+    ///       i2 = top hit node (-1 = no hit) and f2/f3 = pointer window DIP) — Input/InputDispatcher.cs</item>
+    /// <item>106 = wheel fallback RE-LATCHED on a later pan packet (f0=anchor, i1=node, i2=horiz, f1=gesture travel DIP)
     ///       — Input/InputDispatcher.cs. A 105 with no following 106 for the same gesture IS the dead-scroll signature.</item>
     /// <item>107 = DirectManipulation recovery strike (f0 = ms since DM last engaged, f1 = ms since the last
     ///       DM_POINTERHITTEST, i2 = strikes on the ladder; i1 = detector | action&lt;&lt;4 | dmStatus&lt;&lt;8, where
@@ -451,11 +476,38 @@ public static class ScrollTrace
     ///       The 100-block is per-subsystem engine context; the deliberately distant 210-block is capture protocol.</item>
     /// </list>
     /// Next free engine code: 112 (also &gt;=114). Register here in the same commit as the emitter.</summary>
-    public static void Note(int code, float f0 = 0f, int i1 = 0, int i2 = 0, float f1 = 0f)
+    public static void Note(int code, float f0 = 0f, int i1 = 0, int i2 = 0, float f1 = 0f,
+        float f2 = 0f, float f3 = 0f)
     {
         if (!CompiledIn || !Enabled) return;
-        Add(new Rec { K = ScrollTraceKind.Note, I0 = code, F0 = f0, I1 = i1, I2 = i2, F1 = f1 });
+        Add(new Rec { K = ScrollTraceKind.Note, I0 = code, F0 = f0, I1 = i1, I2 = i2, F1 = f1, F2 = f2, F3 = f3 });
     }
+
+    /// <summary>One pure encoded trace row used to pin diagnostic producer schemas in VerticalSlice without arming the
+    /// file-backed trace. It is constructed only inside already-compiled diagnostic guards on runtime paths.</summary>
+    internal readonly record struct EncodedRow(
+        int I0, int I1, int I2,
+        float F0, float F1, float F2, float F3, float F4 = 0f, float F5 = 0f);
+
+    internal const int LatchRefusalHitContextBit = 1 << 6;
+    internal const int WheelDropHitContextBit = 1 << 10;
+    internal const int WheelDropPhaseFallbackBit = 1 << 11;
+
+    /// <summary>Encode note 105 through the same helper the dispatcher emits, so zero-valued pointer coordinates remain
+    /// distinguishable from absent context through <see cref="LatchRefusalHitContextBit"/>.</summary>
+    internal static EncodedRow EncodeLatchRefusal(float accumX, float accumY, int refusal, bool horizontal,
+        bool fallbackHandled, int hitNode, float pointerXDip, float pointerYDip)
+        => new(105,
+            refusal | (horizontal ? 1 << 4 : 0) | (fallbackHandled ? 1 << 5 : 0) | LatchRefusalHitContextBit,
+            hitNode, accumX, accumY, pointerXDip, pointerYDip);
+
+    /// <summary>Encode a wheel-drop row through the same helper the dispatcher emits. The caller supplies the marker,
+    /// class and axis/notch flags; this helper owns the context-valid and live-phase-fallback bits plus f3/f4 placement.</summary>
+    internal static EncodedRow EncodeWheelDrop(int hitNode, int baseFlags, float delta, float pointerXDip,
+        float pointerYDip, bool phaseFallback = false)
+        => new(hitNode,
+            baseFlags | WheelDropHitContextBit | (phaseFallback ? WheelDropPhaseFallbackBit : 0),
+            0, delta, 0f, 0f, pointerXDip, pointerYDip);
 
     /// <summary>Hitch attribution (emit only for frames whose dt exceeded the hitch threshold): the frame's per-phase
     /// wall-clock split so a lurch in the SAME CSV as the offset writes is directly attributable. f0..f5 =
@@ -474,6 +526,17 @@ public static class ScrollTrace
         });
     }
 
+    /// <summary>Bit in a Latency row's i1 field proving that f0/f3/f5 describe a contact frame that actually resampled.
+    /// Older captures do not carry this bit; offline readers may use their documented non-empty-f3 fallback only for
+    /// those captures. This bit is deliberately outside the nine stage bits (i1 bits 8..16).</summary>
+    public const int LatencyTrackingSampleValidBit = 1 << 24;
+
+    /// <summary>Pack the latency row's i1 producer field. Kept pure so the bit-layout gate exercises the exact encoder
+    /// used by live rows rather than duplicating its arithmetic in a parser fixture.</summary>
+    internal static int EncodeLatencyI1(GenStampQuality quality, int stageMask, bool trackingSampleValid)
+        => (int)((uint)(byte)quality | ((uint)stageMask << 8)
+            | (trackingSampleValid ? (uint)LatencyTrackingSampleValidBit : 0u));
+
     /// <summary>Input→offset→present correlation row: the ONE record that carries a frame identity (<paramref
     /// name="publishSeq"/>) across the render seam, so an offset write can be joined to the present that actually
     /// carried it. Deliberately NOT gated on a dt threshold the way <see cref="FrameTiming"/> is — a session whose
@@ -486,7 +549,9 @@ public static class ScrollTrace
     /// that a cadence investigation is about.
     ///
     /// Columns: i0 = publishSeq low 32; i1 = (byte)<see cref="GenStampQuality"/> | stageMask&lt;&lt;8 (bit per stage that
-    /// exceeded one refresh period); i2 = missedVsyncs in the LOW 16 bits, and in the HIGH 16 bits the OS-ATTESTED
+    /// exceeded one refresh period) | <see cref="LatencyTrackingSampleValidBit"/> when f0/f3/f5 carry a real
+    /// resampled-contact observation. The explicit bit makes a valid numeric zero distinguishable from an empty CSV
+    /// cell (no tracking sample); i2 = missedVsyncs in the LOW 16 bits, and in the HIGH 16 bits the OS-ATTESTED
     /// missed-slot count biased by +1 (0 there = not attested, so "no data" is distinguishable from "zero missed" —
     /// they are opposite conclusions and a bare 0 would conflate them). The attested form comes from DXGI
     /// PresentRefreshCount deltas and supersedes the stamp-derived one wherever it is present, because it is what the
@@ -497,63 +562,93 @@ public static class ScrollTrace
     /// <see cref="GenStampQuality.Tick"/> and the packager refuses sub-tick percentiles).</summary>
     public static void Latency(ulong publishSeq, GenStampQuality quality, int stageMask, int missedVsyncs,
         float lagDip, float wakeOverheadMs, float frameOverrunMs, float clockSampleSkewMs,
-        float presentIntervalMs, float velocityDipPerMs, long genQpc, ulong ackedPublishSeq = 0UL)
+        float presentIntervalMs, float velocityDipPerMs, long genQpc, ulong ackedPublishSeq = 0UL,
+        bool trackingSampleValid = false)
     {
         if (!CompiledIn || !Enabled) return;
         Add(new Rec
         {
             K = ScrollTraceKind.Latency,
-            I0 = unchecked((int)(uint)publishSeq), I1 = (int)(uint)((byte)quality | ((uint)stageMask << 8)), I2 = missedVsyncs,
+            I0 = unchecked((int)(uint)publishSeq),
+            I1 = EncodeLatencyI1(quality, stageMask, trackingSampleValid),
+            I2 = missedVsyncs,
             F0 = lagDip, F1 = wakeOverheadMs, F2 = frameOverrunMs, F3 = clockSampleSkewMs,
             F4 = presentIntervalMs, F5 = velocityDipPerMs, Aux = genQpc,
             Ack = unchecked((int)(uint)ackedPublishSeq),
         });
     }
 
-    // ── §8 single-writer offset-write trace + audit ──────────────────────────────────────────────────────────────
-    // The v2 offset-write chokepoint records one row per real offset move, carrying the §2.2 Phase and the ScrollWriter
-    // id. A lightweight, ALWAYS-AVAILABLE, 0-alloc audit (independent of the CSV ring / <see cref="Enabled"/>) lets the §8
-    // single-writer gate assert (a) no write carries a writer ≠ Integrator on the phase path, and (b) at most one offset
-    // write happens per active node per frame — without turning on the (StreamWriter-backed) CSV. All state is static
-    // POD; the gate calls <see cref="AuditBegin"/> / per-frame <see cref="AuditResetFrame"/> / <see cref="AuditStop"/>.
+    // ── single-writer offset-write trace + audit (scroll-v3 §3.1 token / §9 gate.scroll.single-writer-structural) ────
+    // The kernel's ONE chokepoint — SceneScrollSink.ApplyMotion(in ScrollWriteToken, in ScrollWrite) — calls
+    // OffsetWrite() after every real offset move, carrying the §2.1 Activity and the ScrollWriter that produced it
+    // (Tick | Reclamp | Lease). A lightweight, ALWAYS-AVAILABLE, 0-alloc audit (independent of the CSV ring / see
+    // Enabled) lets gate.scroll.single-writer-structural assert the §3.3 shape per node per frame — at most one Tick
+    // write and a small bounded number of Reclamp writes (one per SetFrame recipient), never a raw/untagged write —
+    // without turning on the (StreamWriter-backed) CSV. All state is static POD; the gate calls AuditBegin() /
+    // per-frame AuditResetFrame() / AuditStop() and reads the per-writer counters below.
 
     /// <summary>Gate-only offset-write audit toggle (0-alloc; separate from the CSV <see cref="Enabled"/> path).</summary>
     public static bool Audit;
-    /// <summary>Sticky across the audited run: an offset write carried a writer ≠ <see cref="ScrollWriter.Integrator"/>.</summary>
+    /// <summary>Sticky across the audited run: an offset write carried a writer value the audit doesn't recognise
+    /// (i.e. not <see cref="ScrollWriter.Tick"/>/<see cref="ScrollWriter.Reclamp"/>/<see cref="ScrollWriter.Lease"/>) —
+    /// the "untagged write" signature the ref-struct token is supposed to make impossible.</summary>
     public static bool AuditForeignWriter;
-    /// <summary>Offset writes recorded since the last <see cref="AuditResetFrame"/> (one frame's worth).</summary>
+    /// <summary>Offset writes recorded since the last <see cref="AuditResetFrame"/> (one frame's worth, any writer).</summary>
     public static int AuditWritesThisFrame;
-    /// <summary>Sticky max of <see cref="AuditWritesThisFrame"/> seen at a frame boundary (must stay ≤ 1 for one node).</summary>
+    /// <summary><see cref="ScrollWriter.Tick"/> writes recorded since the last <see cref="AuditResetFrame"/>.</summary>
+    public static int AuditTickWritesThisFrame;
+    /// <summary><see cref="ScrollWriter.Reclamp"/> writes recorded since the last <see cref="AuditResetFrame"/>.</summary>
+    public static int AuditReclampWritesThisFrame;
+    /// <summary>Sticky max of <see cref="AuditWritesThisFrame"/> seen at a frame boundary.</summary>
     public static int AuditMaxWritesPerFrame;
+    /// <summary>Sticky max of <see cref="AuditTickWritesThisFrame"/> seen at a frame boundary (must stay ≤ 1 for one node).</summary>
+    public static int AuditMaxTickWritesPerFrame;
+    /// <summary>Sticky max of <see cref="AuditReclampWritesThisFrame"/> seen at a frame boundary.</summary>
+    public static int AuditMaxReclampWritesPerFrame;
 
     /// <summary>Begin an offset-write audit window (resets the counters + arms <see cref="Audit"/>).</summary>
     [Conditional("DEBUG"), Conditional("FLUENTGPU_DIAG")]
-    public static void AuditBegin() { Audit = true; AuditForeignWriter = false; AuditWritesThisFrame = 0; AuditMaxWritesPerFrame = 0; }
-    /// <summary>Frame boundary: fold this frame's write count into the running max, then zero it for the next frame.</summary>
+    public static void AuditBegin()
+    {
+        Audit = true; AuditForeignWriter = false;
+        AuditWritesThisFrame = 0; AuditTickWritesThisFrame = 0; AuditReclampWritesThisFrame = 0;
+        AuditMaxWritesPerFrame = 0; AuditMaxTickWritesPerFrame = 0; AuditMaxReclampWritesPerFrame = 0;
+    }
+    /// <summary>Frame boundary: fold this frame's write counts into the running maxes, then zero them for the next frame.</summary>
     [Conditional("DEBUG"), Conditional("FLUENTGPU_DIAG")]
     public static void AuditResetFrame()
     {
         if (AuditWritesThisFrame > AuditMaxWritesPerFrame) AuditMaxWritesPerFrame = AuditWritesThisFrame;
-        AuditWritesThisFrame = 0;
+        if (AuditTickWritesThisFrame > AuditMaxTickWritesPerFrame) AuditMaxTickWritesPerFrame = AuditTickWritesThisFrame;
+        if (AuditReclampWritesThisFrame > AuditMaxReclampWritesPerFrame) AuditMaxReclampWritesPerFrame = AuditReclampWritesThisFrame;
+        AuditWritesThisFrame = 0; AuditTickWritesThisFrame = 0; AuditReclampWritesThisFrame = 0;
     }
     /// <summary>End the audit window.</summary>
     [Conditional("DEBUG"), Conditional("FLUENTGPU_DIAG")]
     public static void AuditStop() { Audit = false; }
 
-    /// <summary>Record ONE real offset write (scroll-feel-rework-v2 §8): the sole offset-mutation chokepoint calls this
-    /// after an actual move. Feeds the 0-alloc single-writer audit always, and the CSV ring when the trace is armed
-    /// (<see cref="CompiledIn"/> &amp;&amp; <see cref="Enabled"/>). Never
-    /// allocates.</summary>
+    /// <summary>Record ONE real offset write (scroll-v3 §3.1): the sole offset-mutation chokepoint (<c>ApplyMotion</c>)
+    /// calls this after an actual move. Feeds the 0-alloc single-writer audit always, and the CSV ring when the trace is
+    /// armed (<see cref="CompiledIn"/> &amp;&amp; <see cref="Enabled"/>). <paramref name="activity"/> is a
+    /// <see cref="FluentGpu.Scroll.ScrollActivity"/> value; <paramref name="writer"/> is a <see cref="ScrollWriter"/>
+    /// value (both plain <c>byte</c> here so this file has zero compile dependency on <c>FluentGpu.Scroll</c> — the
+    /// portable kernel assembly does not reference <c>FluentGpu.Foundation</c> either). Never allocates.</summary>
     [Conditional("DEBUG"), Conditional("FLUENTGPU_DIAG")]
-    public static void OffsetWrite(int nodeIdx, byte phase, ScrollWriter writer, float offset)
+    public static void OffsetWrite(int nodeIdx, byte activity, byte writer, float offset)
     {
         if (Audit)
         {
             AuditWritesThisFrame++;
-            if (writer != ScrollWriter.Integrator) AuditForeignWriter = true;
+            switch (writer)
+            {
+                case (byte)ScrollWriter.Tick: AuditTickWritesThisFrame++; break;
+                case (byte)ScrollWriter.Reclamp: AuditReclampWritesThisFrame++; break;
+                case (byte)ScrollWriter.Lease: break;
+                default: AuditForeignWriter = true; break;
+            }
         }
         if (!CompiledIn || !Enabled) return;
-        Add(new Rec { K = ScrollTraceKind.OffsetWrite, I0 = nodeIdx, I1 = phase, I2 = (int)writer, F0 = offset });
+        Add(new Rec { K = ScrollTraceKind.OffsetWrite, I0 = nodeIdx, I1 = activity, I2 = writer, F0 = offset });
     }
 
     // ── storage + flush ──────────────────────────────────────────────────────────────────────────────────────────

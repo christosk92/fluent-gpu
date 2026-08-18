@@ -1,9 +1,124 @@
 using FluentGpu.Animation;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
+using FluentGpu.Scene;
 using FluentGpu.Signals;
 
 namespace FluentGpu.Controls;
+
+public enum RepeatKind : byte { Stack, Grid, Custom, Wrap, Inline }
+
+/// <summary>
+/// A pluggable layout for <see cref="ItemsView"/> (the equivalent of WinUI's <c>Layout</c> object). A readonly struct
+/// (no per-call allocation). Stack/Grid/Custom virtualize (only the window is realized); Wrap/Inline are non-virtual
+/// (build the whole child list — use for SMALL collections like a nav pane or a toolbar). Measured/LinedFlow/SpanGrid/
+/// HorizontalGrid ride the Custom slot (every layout object IS an <see cref="IVirtualLayout"/>; variable-extent ones
+/// are <see cref="IMeasuredVirtualLayout"/> — E11-L0's one seam).
+/// NOTE: the stateful layouts (Measured/LinedFlow/SpanGrid/Grouped) own realize tables — when the OWNING component
+/// re-renders, hoist the layout instance (e.g. <c>UseMemo</c>) instead of calling the factory inline each render.
+/// </summary>
+public readonly struct RepeatLayout
+{
+    public readonly RepeatKind Kind;
+    public readonly float Extent;          // Stack: item extent; Grid: item height (≤0 ⇒ measure rows); Wrap/Inline: gap
+    public readonly float Gap;             // Grid: cell gap
+    public readonly int Columns;           // Grid: fixed columns (0 when <see cref="MinCellWidth"/> drives responsive cols)
+    public readonly float MinCellWidth;    // Grid auto/fit: min cell width → column count from cross size
+    public readonly float Estimate;        // Grid auto/fit: initial row-height estimate before cells measure
+    public readonly bool Horizontal;
+    public readonly IVirtualLayout? CustomLayout;
+
+    private RepeatLayout(RepeatKind kind, float extent, float gap, int columns, bool horizontal, IVirtualLayout? custom,
+                         float minCellWidth = 0f, float estimate = 0f)
+        => (Kind, Extent, Gap, Columns, Horizontal, CustomLayout, MinCellWidth, Estimate) =
+            (kind, extent, gap, columns, horizontal, custom, minCellWidth, estimate);
+
+    /// <summary>Virtualized uniform stack (1-D).</summary>
+    public static RepeatLayout Stack(float itemExtent, bool horizontal = false) => new(RepeatKind.Stack, itemExtent, 0, 0, horizontal, null);
+    /// <summary>Virtualized uniform card grid (2-D, by row) at a fixed row height.</summary>
+    public static RepeatLayout Grid(int columns, float itemHeight, float gap = 0f) => new(RepeatKind.Grid, itemHeight, gap, columns, false, null);
+    /// <summary>Virtualized card grid with <b>measured row heights</b> (square art + text cards — no guessed text allowance).
+    /// Rows correct to the max measured cell height at arrange time; <paramref name="estimateRowHeight"/> seeds scroll extent.</summary>
+    public static RepeatLayout GridAuto(int columns, float gap = 0f, float estimateRowHeight = 120f)
+        => new(RepeatKind.Grid, 0f, gap, columns, false, null, estimate: estimateRowHeight);
+    /// <summary>Responsive measured grid: column count and cell width derive from the viewport cross size — callers pass only
+    /// <paramref name="minCellWidth"/> + gap (the virtualized <c>AutoGrid</c> shape).</summary>
+    public static RepeatLayout GridFit(float minCellWidth, float gap = 0f, float estimateRowHeight = 120f)
+        => new(RepeatKind.Grid, 0f, gap, 0, false, null, minCellWidth, estimateRowHeight);
+    /// <summary>Obsolete — use <see cref="GridAuto"/> or <see cref="GridFit"/> (measured rows) instead of guessing text height.</summary>
+    [Obsolete("Use GridAuto or GridFit — measured rows replace aspect+textAllowance guessing.")]
+    public static RepeatLayout AspectGrid(int columns, float aspect, float textAllowance, float gap = 0f)
+        => new(RepeatKind.Custom, 0, 0, 0, false, new AspectGridVirtualLayout(columns, aspect, textAllowance, gap));
+    /// <summary>Virtualized with ANY custom <see cref="IVirtualLayout"/>.</summary>
+    public static RepeatLayout Custom(IVirtualLayout layout, bool horizontal = false) => new(RepeatKind.Custom, 0, 0, 0, horizontal, layout);
+    /// <summary>Virtualized with a variable-extent <see cref="IMeasuredVirtualLayout"/> (estimate-then-correct + anchoring).</summary>
+    public static RepeatLayout Measured(IMeasuredVirtualLayout layout, bool horizontal = false) => new(RepeatKind.Custom, 0, 0, 0, horizontal, layout);
+    /// <summary>The WinUI <c>LinedFlowLayout</c> photo-wall (uniform-height lines, aspect-ratio widths). Stateful —
+    /// hoist when the owner re-renders (see the struct remarks).</summary>
+    public static RepeatLayout LinedFlow(float lineHeight, Func<int, float>? aspectRatio = null, float lineSpacing = 0f, float minItemSpacing = 0f)
+        => new(RepeatKind.Custom, 0, 0, 0, false, new LinedFlowLayout(lineHeight, aspectRatio, lineSpacing, minItemSpacing));
+    /// <summary>Uniform-row grid with item spanning (hero rows). Stateful — hoist when the owner re-renders.</summary>
+    public static RepeatLayout SpanGrid(int columns, float rowHeight, float gap, Func<int, int> spanOf)
+        => new(RepeatKind.Custom, 0, 0, 0, false, new SpanningGridVirtualLayout(columns, rowHeight, gap, spanOf));
+    /// <summary>Horizontally-scrolling uniform grid (a shelf <paramref name="rows"/> cells tall), by column.</summary>
+    public static RepeatLayout HorizontalGrid(int rows, float itemWidth, float gap = 0f)
+        => new(RepeatKind.Custom, 0, 0, 0, true, new HorizontalGridVirtualLayout(rows, itemWidth, gap));
+    /// <summary>Variable-extent uniform-list: every row seeds at <paramref name="estimatedExtent"/> and corrects to its
+    /// measured extent on realize (Fenwick estimate-then-correct + scroll anchoring — the <c>MeasuredStackVirtualLayout</c>).
+    /// Stateful — hoist when the owner re-renders (see the struct remarks).</summary>
+    public static RepeatLayout VariableList(float estimatedExtent, bool horizontal = false)
+        => new(RepeatKind.Custom, 0, 0, 0, horizontal, new MeasuredStackVirtualLayout(estimatedExtent, horizontal));
+    /// <summary>ANALYTIC variable-extent list: <paramref name="extentOf"/> reports a row's height straight from the
+    /// host's own model, so an unmeasured row seeds at its REAL extent instead of one global estimate — which is what
+    /// keeps the content extent and the scroll anchor still when the model inserts or removes rows in the MIDDLE of a
+    /// list whose rows are not all the same height. It is a SEED, not a substitute for measurement: measure feedback
+    /// still corrects any row the function cannot predict exactly, and <paramref name="estimatedExtent"/> is the
+    /// fallback for a non-finite/non-positive answer. Called only on a seed/resize/splice — never per frame — so keep
+    /// it allocation-free and cache the delegate (it is part of the layout's identity). Stateful — hoist when the owner
+    /// re-renders (see the struct remarks).</summary>
+    public static RepeatLayout Extents(Func<int, float> extentOf, float estimatedExtent, bool horizontal = false)
+        => new(RepeatKind.Custom, 0, 0, 0, horizontal,
+               new MeasuredStackVirtualLayout(estimatedExtent, horizontal, extentOf));
+    /// <summary>Grouped flat list with measured rows + a sticky-header hook: <paramref name="headerIndices"/> (sorted
+    /// ascending) are group-header flat indices — a header is just a measured item KIND. For <c>StickyHeaderIndexAt</c>
+    /// keep your own <c>GroupedListVirtualLayout</c> and pass it via <see cref="Measured"/> instead. Stateful — hoist when
+    /// the owner re-renders.</summary>
+    public static RepeatLayout GroupedList(int[] headerIndices, float headerExtent, float itemEstimate)
+        => new(RepeatKind.Custom, 0, 0, 0, false, new GroupedListVirtualLayout(headerIndices, headerExtent, itemEstimate));
+    /// <summary>Non-virtual wrap (flex-wrap) — for small collections.</summary>
+    public static RepeatLayout Wrap(float gap = 8f) => new(RepeatKind.Wrap, 0, gap, 0, false, null);
+    /// <summary>Non-virtual stack (column/row) — for small collections (nav panes, toolbars).</summary>
+    public static RepeatLayout Inline(bool horizontal = false, float gap = 0f) => new(RepeatKind.Inline, 0, gap, 0, horizontal, null);
+}
+
+/// <summary>
+/// WinUI <c>ItemCollectionTransition</c> mapped onto the engine's FLIP/<see cref="LayoutTransition"/> pipeline
+/// (E11-L2): Moves = position FLIP (a reorder/removal slides the survivors), Adds = enter fade-in, Removes = exit
+/// fade-out, all over WinUI's <c>ControlFastAnimationDuration</c> 167ms / decelerate spline (0,0,0,1) — the timing the
+/// ItemContainer/Repeater storyboards use (ItemContainer.xaml:54-56 KeySpline="0,0,0,1" at ControlFastAnimationDuration).
+/// Virtualized caveat (documented, deliberate): enter transitions also play when an item SCROLLS into the realized
+/// window as a fresh mount — WinUI's LinedFlow behaves the same way for newly realized elements.
+/// </summary>
+public readonly record struct ItemCollectionTransition(
+    bool AnimateAdds = true,
+    bool AnimateRemoves = true,
+    bool AnimateMoves = true,
+    float DurationMs = 167f)
+{
+    // NOTE: must spell the arguments out — on a record struct the parameterless `new()` ZERO-initializes
+    // (primary-ctor parameter defaults do not apply), which silently made Default an all-off 0ms transition.
+    public static ItemCollectionTransition Default => new(AnimateAdds: true, AnimateRemoves: true, AnimateMoves: true, DurationMs: 167f);
+
+    /// <summary>The engine-level spec each realized item root is stamped with (<see cref="BoxEl.Animate"/>).</summary>
+    internal LayoutTransition ToSpec()
+        => new(
+            (AnimateMoves ? TransitionChannels.Position : TransitionChannels.None)
+            | (AnimateAdds || AnimateRemoves ? TransitionChannels.Opacity : TransitionChannels.None),
+            TransitionDynamics.Tween(DurationMs, Easing.FluentDecelerate),
+            SizeMode.Auto,
+            Enter: AnimateAdds ? new EnterExit(Opacity: 0f, Active: true) : default,
+            Exit: AnimateRemoves ? new EnterExit(Opacity: 0f, Active: true) : default);
+}
 
 /// <summary>
 /// Scroll-surface knobs for an <see cref="ItemsView"/> (grouped out of <see cref="ListOptions"/> so the common factory
@@ -14,14 +129,13 @@ public sealed record ScrollOptions
     /// <summary>Identity-stable two-way vertical scroll controller. The viewport pushes exact range values and serves
     /// controller-originated absolute/relative requests through the engine's programmatic scroll seam.</summary>
     public IScrollController? VerticalScrollController { get; init; }
+    /// <summary>The ONE authoring handle (scroll-v3-plan §7.2) over this viewport's live scroll — attached on
+    /// realize, detached on unmount/re-bake, the <c>ItemsView</c> parity of <c>ScrollEl.Controller</c>. Distinct
+    /// from <see cref="VerticalScrollController"/> (the annotated-rail seam, which stays).</summary>
+    public FluentGpu.Scroll.ScrollController? Controller { get; init; }
     /// <summary>Scroll-position restoration key (see <c>VirtualListEl.ScrollKey</c>): a stable per-content identity so a
     /// revisit lands at the saved row on the first realized window. Null ⇒ no restoration.</summary>
     public string? ScrollKey { get; init; }
-    /// <summary>CSS <c>scroll-timeline-name</c> (see <c>VirtualListEl.ScrollTimeline</c>): publish this viewport's offset
-    /// under a NAME so a node OUTSIDE it can drive a <c>ScrollBindDsl.Timeline</c> bind from it — for a page-root backdrop
-    /// or parallax layer that must be a SIBLING of the scroller yet move with its content. Exactly one live publisher per
-    /// name, and scope it to the content identity the way <see cref="ScrollKey"/> is, never a bare constant.</summary>
-    public string? ScrollTimeline { get; init; }
     /// <summary>Never draw the conscious scrollbar for the virtualized viewport (a paged surface navigates by its pager).</summary>
     public bool SuppressScrollBar { get; init; }
     /// <summary>Scroll-edge cues for the virtualized viewport (controls.md §8.3) — the surface-colour fade at an

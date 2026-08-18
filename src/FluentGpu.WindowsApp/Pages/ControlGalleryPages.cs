@@ -111,7 +111,7 @@ sealed class FundamentalsPage : Component
     static readonly (string Key, string Glyph, string Title)[] Items =
     {
         ("state", Icons.Refresh, "State & components"), ("flex", Icons.Tag, "Flexbox"), ("grid", Icons.Grid, "CSS Grid"),
-        ("repeater", Icons.List, "ItemsRepeater"), ("virtualization", Icons.List, "List virtualization"),
+        ("repeater", Icons.List, "ItemsView"), ("virtualization", Icons.List, "List virtualization"),
         ("animation", Icons.Movie, "Animation"), ("compositor", Icons.Brush, "Compositor"),
         ("edge-fade", Icons.Brush, "Edge fade"), ("scrolling", Icons.Document, "Scrolling"),
     };

@@ -10,6 +10,7 @@ using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Localization;
 using FluentGpu.Scene;
+using FluentGpu.Scroll;
 using FluentGpu.Signals;
 using FluentGpu.Text;
 using Wavee.Backend.Lyrics;
@@ -141,6 +142,11 @@ sealed class LyricsView : Component
     long _resyncDeadlineWallMs;
 
     bool _scrollSnapped;
+    // The kernel's live Driven-chase Target isn't a readable SceneStore column (ScrollState.PendingTargetY is
+    // deleted, kernel-internal only) — mirror the last POSTED Resync destination locally so ScrollActiveIntoView can
+    // still tell "already chasing this exact target" from "a fresh destination" without re-latching the half-life on
+    // every re-arm. Cleared the moment the body isn't a Programmatic Driven chase any more.
+    float? _followProgrammaticTargetY;
     readonly Signal<int> _activeLine = new(-1);   // emphasis + scroll target (lead-shifted)
     readonly Signal<int> _voiceLine = new(-1);    // line currently being sung (true time) — owns the karaoke wipe/glow
     readonly FloatSignal _nowMs = new(0f);
@@ -1689,7 +1695,9 @@ sealed class LyricsView : Component
                 moving = true;
                 continue;                       // already written at arm time; nothing has moved
             }
-            // The exact ζ=1 closed-form step, verbatim from ScrollIntegrator.cs:521-527 (position AND velocity). It is
+            // The exact ζ=1 closed-form step (position AND velocity) — the same math the scroll kernel's own
+            // ChaseStep uses (ported from the old ScrollIntegrator.cs:521-527; this per-line DoF cascade is its own
+            // bespoke stepper, not a ScrollState/kernel read — it never touches scroll v3's Scroll/ namespace). It is
             // dt-deterministic, so the cascade lands at the same WALL time whatever the frame rate, and a mid-flight
             // re-arm stays velocity-continuous.
             float y = rate[i] > 0f ? rate[i] : CascadeSettleY / CascadeTotalS;
@@ -2257,7 +2265,7 @@ sealed class LyricsView : Component
             // paths that clear _scrollSnapped all ZeroCascade). There is nothing to compensate: the user has not seen a
             // previous position to travel from.
             _scrollSnapped = true;
-            LatchViewport(scene, viewport, ref sc, target);
+            LatchViewport(viewport, target);
             return FollowArmResult.AtTarget;
         }
         if (intent == FollowScrollIntent.Resync) _scrollSnapped = true;   // Resync is always a spring, never the open latch
@@ -2269,82 +2277,53 @@ sealed class LyricsView : Component
             // _scrollSnapped by the first-landing branch above), which is exactly the cascade's arming condition.
             float delta = target - sc.OffsetY;
             if (MathF.Abs(delta) <= 0.5f) return FollowArmResult.AtTarget;
-            LatchViewport(scene, viewport, ref sc, target);
+            LatchViewport(viewport, target);
             ArmCascade(scene, delta, active);
             return FollowArmResult.AtTarget;
         }
 
-        // ── Resync only, below: the engine's programmatic spring, flying the viewport back after a user scroll ──
+        // ── Resync only, below: the kernel's Driven chase, flying the viewport back after a user scroll ──
         // Velocity-continuous re-target: only zero the carried spring velocity on the FIRST entry into a Programmatic
-        // WheelAnimating chase. A re-target while ALREADY easing KEEPS the velocity so the engine spring chains smoothly
-        // to the new target instead of restarting a decelerating chase.
-        bool alreadyProgrammatic = sc.Phase == ScrollIntegrator.WheelAnimating && (sc.PhaseFlags & ScrollState.PhaseProgrammatic) != 0;
-        if (alreadyProgrammatic && !float.IsNaN(sc.PendingTargetY) && MathF.Abs(sc.PendingTargetY - target) <= 0.5f)
+        // Driven chase. A re-target while ALREADY easing KEEPS the velocity — the kernel retargets a live Driven chase
+        // for the same node in place (plan §2.2 "Driven"), so the spring chains smoothly to the new target instead of
+        // restarting a decelerating chase.
+        bool alreadyProgrammatic = sc.Activity == ScrollActivity.Driven
+                                  && (sc.ActivityFlags & ScrollActivityFlags.Programmatic) != 0;
+        if (!alreadyProgrammatic) _followProgrammaticTargetY = null;
+        if (alreadyProgrammatic && _followProgrammaticTargetY is { } lastTarget && MathF.Abs(lastTarget - target) <= 0.5f)
             return FollowArmResult.Armed;
         if (!alreadyProgrammatic && MathF.Abs(sc.OffsetY - target) <= 0.5f)
             return FollowArmResult.AtTarget;
 
-        // ZERO OVERSHOOT, here too. The old AMLL tune (ζ=0.833/ω0=10) selected the integrator's UNDERDAMPED closed form,
-        // which by definition crosses the target — the frame evidence refutes any overshoot in this motion. Leaving
-        // ProgrammaticZeta/Omega at 0 selects the ζ=1 halflife branch instead (ScrollIntegrator.cs:495 tests
-        // `Zeta > 0 && Zeta < 0.999 && Omega > 0`; the else arm at :518-528 is the critically-damped closed form driven
-        // by ProgrammaticHalflifeMs — Columns.cs:299-302, "ζ=1 branch only"). 110 ms half-life ⇒ a ~0.5 s settle, the
-        // same felt duration as before, monotone. The half-life is a PER-CHASE latch the integrator clears at every
-        // chase end (ScrollIntegrator.cs:474-479), so it is re-asserted on every arm below. The 4 DIP/s landing gate
-        // keeps the global 16 DIP/s wheel threshold from truncating the soft tail.
-        sc.ProgrammaticHalflifeMs = 110f;
-        sc.ProgrammaticSettleVelocity = 4f;
-        if (!alreadyProgrammatic)
-        {
-            sc.Phase = ScrollIntegrator.WheelAnimating;
-            sc.PhaseFlags = ScrollState.PhaseProgrammatic;
-            sc.FlingVelocity = 0f;
-        }
-        sc.FlingRetargeted = false;
-        sc.FlingSnapTarget = float.NaN;
-        sc.PendingTargetY = target;
-        Context.ArmScroll?.Invoke(viewport);
-        // No Context.RequestRerender(): ArmScroll drives the smooth scroll and the engine ScrollIntegrator re-realizes the
-        // virtual window on each offset move (reuseOverlap), while the active-line emphasis re-renders the line components
-        // IN PLACE via the _activeLine signal (same node ⇒ springs retarget by rebase). Re-rendering LyricsView here would
-        // rebuild the virtual window and remount every line, re-seeding its springs from default paint — every line would
-        // flash "active" for a frame on each line change (the reported swap-flash).
+        // ZERO OVERSHOOT, here too. The old AMLL tune (ζ=0.833/ω0=10) selected the UNDERDAMPED closed form, which by
+        // definition crosses the target — the frame evidence refutes any overshoot in this motion. zeta=0/omega=0
+        // selects the kernel's ζ=1 halflife branch instead. 110 ms half-life ⇒ a ~0.5 s settle, the same felt duration
+        // as before, monotone. The 4 DIP/s landing gate keeps the global 16 DIP/s wheel threshold from truncating the
+        // soft tail.
+        _followProgrammaticTargetY = target;
+        ScrollIntoView.ScrollTo(Context, viewport, target, halflifeMs: 110f, zeta: 0f, omega: 0f, settleVel: 4f);
+        // ScrollIntoView.ScrollTo wakes the frame WITHOUT re-rendering THIS component (RequestFrame, not
+        // RequestRerender): the kernel re-realizes the virtual window on each offset move (reuseOverlap), while the
+        // active-line emphasis re-renders the line components IN PLACE via the _activeLine signal (same node ⇒
+        // springs retarget by rebase). A full re-render here would rebuild the virtual window and remount every line,
+        // re-seeding its springs from default paint — every line would flash "active" for a frame on each line change
+        // (the reported swap-flash).
         return FollowArmResult.Armed;
     }
 
     // The INSTANT viewport latch — the one mechanism the follow uses in Following mode, for both the first landing and
-    // every subsequent handoff. Kills any in-flight phase, writes the offset/target, applies the content transform
-    // directly, then latches the offset as a scroll-RESTORE and marks LAYOUT|VIRTUALRANGE so FlexLayout.ArrangeViewport
-    // re-asserts the offset + content transform and re-realizes the virtual window (reuseOverlap — existing rows kept).
+    // every subsequent handoff. Posts an immediate ScrollTo through the kernel — no in-flight Driven chase survives it
+    // (a fresh ScrollTo always supersedes), the kernel's own Reclamp re-realizes the virtual window (reuseOverlap —
+    // existing rows kept).
     //
-    // Deliberately NO Context.RequestRerender(): that would re-run the Skel.Region content delegate, rebuild the
-    // VirtualListEl and remount every line node, re-seeding each line's springs from default paint (1.0) — the
-    // "all lines flash active for a frame" bug. This is the proven path; the cascade rides on top of it.
-    static void LatchViewport(SceneStore scene, NodeHandle viewport, ref ScrollState sc, float target)
+    // ScrollIntoView.ScrollTo wakes the frame WITHOUT re-rendering (RequestFrame, not RequestRerender) — re-rendering
+    // here would re-run the Skel.Region content delegate, rebuild the VirtualListEl and remount every line node,
+    // re-seeding each line's springs from default paint (1.0) — the "all lines flash active for a frame" bug. This is
+    // the proven path; the cascade rides on top of it.
+    void LatchViewport(NodeHandle viewport, float target)
     {
-        sc.Phase = ScrollIntegrator.Idle;
-        sc.PhaseFlags = 0;
-        sc.FlingVelocity = 0f;
-        sc.FlingRetargeted = false;
-        sc.FlingSnapTarget = float.NaN;
-        sc.PendingTargetY = float.NaN;
-        sc.ProgrammaticHalflifeMs = 0f;   // per-chase latch: never let a killed glide's half-life leak into the next one
-        sc.OffsetY = target;
-        sc.TargetY = target;
-        ApplyScrollTransform(scene, in sc, target);
-        sc.RestoreX = sc.OffsetX;
-        sc.RestoreY = target;
-        sc.RestorePending = true;
-        scene.Mark(viewport, NodeFlags.LayoutDirty | NodeFlags.VirtualRangeDirty);
-    }
-
-    static void ApplyScrollTransform(SceneStore scene, in ScrollState sc, float target)
-    {
-        var contentNode = sc.ContentNode;
-        if (contentNode.IsNull || !scene.IsLive(contentNode)) return;
-
-        scene.Paint(contentNode).LocalTransform = Affine2D.Translation(0f, -target);
-        scene.Mark(contentNode, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+        _followProgrammaticTargetY = null;   // an instant latch supersedes any live Resync chase
+        ScrollIntoView.ScrollTo(Context, viewport, target, animate: false);
     }
 
     internal void ResetScrollSnap()

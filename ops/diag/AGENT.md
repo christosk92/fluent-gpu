@@ -23,24 +23,20 @@ by relative differences between phases rather than by absolute values. It is a s
 frame time, not the mean: frame-time distributions have a long right tail, and one outlier in either arm would
 otherwise invent or hide an observer effect. Above roughly 10%, stop quoting absolute milliseconds entirely.
 
-## 2. `reproducedComplaint`
+## 2. `reproducedComplaint` and `humanObserved`
 
-`false` means every scored phase came back 4–5 — **the session did not reproduce the problem.** Report that and
-stop. Hunting for a cause in a capture where nothing felt wrong is how a harmless number becomes a "finding".
+`reproducedComplaint` is usually `null`. Captures are free-scroll: the operator used the app, nobody rated 1–5,
+and the traces are the evidence. Do **not** stop because scores are missing.
 
-`null` means nobody scored it, which makes the whole bundle uncorroborated: the numbers describe a session no
-human vouched for.
-
-Check `humanObserved` too. If it is `false` — `syntheticPhaseCount > 0`, an `-Unattended` run — **no glued or
-steady verdict may be drawn from this bundle at all.** Nobody touched the machine. Such a run exists to prove the
-instrument works end to end; it is structurally incapable of answering a question about feel, and treating its
-cadence numbers as a feel result would be inventing an observation that was never made.
+`humanObserved` is `true` for a free-scroll session a person ran (`captureMode: freeScroll`). If it is `false`
+(`instrumentCheck` / `-Unattended`) nobody used the app — that bundle only proves the instrument armed. Do not
+draw a feel conclusion from it.
 
 ## 3. `phases[].insufficientData`
 
-Skip those phases entirely. Under 20 warm scroll-active frames, a percentile describes noise. Repetition 1 of
-every phase is already excluded as a warm-up — the first pass over a list pays span record, glyph raster, image
-decode and PSO warm, and pooling it with warm passes lets the cold pass dominate every verdict.
+Skip a slice with under 20 scroll-active frames — a percentile of that is noise. A free-scroll bundle is one
+slice covering the whole session; idle vs drag vs ballistic vs driven still come from the engine's gesture bits
+in `state`, not from a human protocol.
 
 ## 4. `globalVerdict.rankedLikelyContributors`
 
@@ -61,7 +57,7 @@ present misses, so fixing the present symptom first treats the wrong end.
 | Pillar | Question | Where it lives |
 | --- | --- | --- |
 | **A — glued** | Does the content sit where the finger is? | `phases[].latency` |
-| **B — steady** | Do photons change on an even cadence? | `phases[].cadence` |
+| **B — steady** | Are submit-confirmed presents evenly paced? | `phases[].cadence` |
 
 Interventions **trade one against the other**: a pacing queue improves cadence and worsens latency. A fused
 "smoothness score" would call that trade a wash and hide both. If you find yourself averaging a latency number
@@ -80,6 +76,18 @@ with a cadence number, stop.
   anything. It means "published, not elided".
 - **A present stamp is submit-confirmed, not vblank-confirmed.** It says `Present()` returned. Panel scanout
   position, panel response and backlight are all invisible. Say `inputToVblankOfPresent`, never "photon".
+- **`[fps] gpu` is not shader time.** It is CPU wall time blocked by the DXGI latency waitable plus
+  `WaitForFrame` retiring an earlier use of the back buffer/allocator. `latW` isolates the DXGI part; sequence-deduped
+  `gexec` is the whole-command-list GPU execution span; `gexecAge` is its same-target submit age; PresentMon
+  `MsGPUBusy` is the external busy-time witness.
+- **Top-level PresentMon columns include startup and idle.** Use `presentMon.gestureSlices.active` or a bucket whose
+  joined active count is non-zero for an interaction budget; missing display-side columns stay unmeasured, never zero.
+- **`rq` / `rareaMp` describe one backend submit, not one FPS line.** Deduplicate the coherent snapshot by
+  `rareaSeq` (the async logger can repeat it). `rq` is opaque/blended instance count; `rareaMp` is submitted painter
+  work, not coverage, because it removes neither overlap nor clipping. `btop` groups geometry/alpha/flag clues but
+  carries no scene-node identity. Legacy lines without `rareaSeq` cannot have stale repeats removed.
+- **`smiss` counters overlap and are not causes.** They say which exact/translated reuse gates declined while walking;
+  a bisection is still required before blaming a re-record or changing product behavior.
 - **A `0` is not "no cost".** Check `reasonNotMeasured` first. Layout counts are 0 without `FG_LAYOUT_DIAG`, GPU
   splits are 0 without `FG_GPU_TIMING`. Reading an unmeasured 0 as "cheap" de-ranks real causes to the bottom.
 - **`pace-skip` now fires on the async default too.** It used to be assigned only when the render thread was
@@ -89,12 +97,13 @@ with a cadence number, stop.
   of "the scene is not changing"; cross-check it against `skipD=` rather than instead of it.
 - **An empty `[render-census]` is not a refutation.** It is suppressed unless flush ≥ 12 ms or components ≥ 25,
   so a shell-wide-but-cheap re-render every frame prints nothing at all.
-- **A 60 ambient cap under a 120 Hz panel BEATS** against the vsync-locked present — a software cap below the
-  refresh stacks onto vblank quantisation. Read `effectiveKnobs.ambientFps` against `display.panelNominalHz`
-  before blaming the present path.
-- **The adaptive-fps governor is default ON** and engages on its own when the smoothed fence wait exceeds its
-  budget, changing present cadence mid-session. Check `effectiveKnobs.adaptiveFps` before attributing a cadence
-  change to anything else.
+- **A software ambient cap below the panel refresh stacks onto vblank quantisation.** Wavee's current policy is
+  dynamic (30 fps focused on AC without energy saver, otherwise 24), not a fixed 60 fps. Read the structured
+  `effectiveKnobs.ambientFps` values against `display.panelNominalHz` before blaming the present path.
+- **The adaptive-fps governor is default ON**, but it consumes a per-swapchain, sequence-numbered whole-command-list
+  GPU execution timestamp (`gexec`), never the CPU's frame-fence wait. `wait adaptive-gpu` means its hysteresis is
+  engaged; a cached sample may hold that decision briefly between async retirements, then expires open to display-rate
+  pacing. Check `effectiveKnobs.adaptiveFps`, `gexec`, and the wait token before attributing a cadence change to it.
 - **A `PresentMode` change is not a regression.** Windows promotes and demotes composed ↔ independent flip on
   maximize, occlusion and MPO availability, and the two differ by about one refresh of latency. Bucket by mode.
 - **`spans=R/B/RR` describes what the engine did, not what the user saw.** Until a content-approximation metric
@@ -161,7 +170,8 @@ is the fault.
 ## If you need to go deeper
 
 1. `scroll.csv` — one row per traced event. Columns `tMs,frame,kind,i0,i1,i2,f0..f5,auxMs,state`. Slice by the
-   packed `state` word: phase bits 0–3, gesture 4–5 (0 idle / 1 drag / 2 inertia / 3 settle), coldPass 6,
+   packed `state` word: phase bits 0–3, gesture 4–5 (0 idle / 1 drag / 2 ballistic / 3 driven — an overscroll
+   spring settling with no live contact is driven too, per `ScrollActivityFlags.Bouncing`), coldPass 6,
    repetition 7–10, A/B variant 11–12. `ops/diag/parse-scroll-csv.ps1` summarises it.
 2. `console.txt` — `[fps]` per scroll-active frame, plus `[scrollperf]`, `[wakediag]`, `[render-census]`,
    `[renderbudget]`, `[OFFSET-JUMP]`. Every line carries `tMs=` from the same anchor as the CSV.

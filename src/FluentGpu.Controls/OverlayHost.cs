@@ -1148,6 +1148,10 @@ public sealed class OverlayHost : Component
                 OnPointerDown = svc.AnyInputBlocking
                     ? (lightDismiss ? _ => svc.CloseTopInputBlocking(OverlayCloseCause.LightDismiss) : _ => { })
                     : null,
+                // A full-bleed scrim is not a Scrollable ancestor of the list it covers. Containing-scroller fallback
+                // would otherwise wheel the page under an open menu. Consume the wheel here (WinUI: the light-dismiss
+                // layer eats PointerWheelChanged without dismissing). Modal eats it the same way.
+                OnPointerWheel = svc.AnyInputBlocking ? static e => e.Handled = true : null,
                 // Right-click on the light-dismiss scrim = WinUI outside-right-click: close the top overlay AND re-fire
                 // the context request at the same point so the node underneath opens its own menu in ONE gesture. The
                 // scrim is full-bleed at origin, so args.Position (scrim-local) IS the window-DIP point. CloseTop first

@@ -5,6 +5,7 @@ using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Scene;
+using FluentGpu.Scroll;
 using FluentGpu.Signals;
 using Wavee.Features.Detail;
 

@@ -21,6 +21,22 @@ public readonly record struct TextEditStyle(ColorF SelectionFill, ColorF Selecte
     public bool Enabled => SelectionFill.A > 0f || CaretColor.A > 0f;
 }
 
+/// <summary>Diagnostic counts for exact-copy and translated-copy gate conditions. They are intentionally not forced into
+/// one synthetic "cause": exact-copy may decline dirty while translated-copy succeeds, or an exact-key miss may be
+/// followed by a translated-key miss. Both facts are useful for bisection. Collected only when explicitly requested.</summary>
+public readonly record struct SpanReuseMissStats(
+    int GlobalDisabled,
+    int ScopedBlocked,
+    int ExactDirty,
+    int ExactKey,
+    int ExactClip,
+    int ExactCapacity,
+    int MoveGuard,
+    int MoveKey,
+    int MoveGeometry,
+    int MoveClip,
+    int MovePayload);
+
 public readonly record struct SceneRecordStats(int NodesVisited, int DrawnNodeCount, int CulledNodeCount, RectF Damage = default)
 {
     public int NodesCulled { get; init; }
@@ -37,11 +53,13 @@ public readonly record struct SceneRecordStats(int NodesVisited, int DrawnNodeCo
     public int SpansReRecorded { get; init; }
     public int SpanBytesCopied { get; init; }
     public SpanReuseDisabledReason SpanReuseDisabledReasons { get; init; }
+    public SpanReuseMissStats SpanReuseMisses { get; init; }
     /// <summary>Spatial reuse-scoping (scene-memory.md): how many ancestor-chain nodes were span-reuse-BLOCKED this
     /// frame (popup/overlay/orphan/fly chains). &gt; 0 means a scoped block was active WITHOUT the old whole-tree kill.</summary>
     public int ScopedBlocks { get; init; }
-    /// <summary>Glyph runs emitted with <c>InMotion=1</c> this frame (transform-dirty subtree skipped device-grid snap).
-    /// The host queues a settle re-record only when this is nonzero — rect-only motion (EQ/seek) must not pay it.</summary>
+    /// <summary>Retained for the host's settle latch pairing. Always 0: glyph runs carry a 0..255 softness scalar
+    /// (not a boolean unsnap), so there is nothing for a follow-up frame to re-snap. Rect-only and glyph transform
+    /// ticks must both skip that latch.</summary>
     public int UnsnappedGlyphSpans { get; init; }
     /// <summary>Subtrees the record walk REFUSED to descend into because the recording thread's stack was about to run
     /// out (<c>SceneRecorder.HasWalkStackHeadroom</c>): each one is a node whose own visual was emitted but whose whole
@@ -55,6 +73,39 @@ public readonly record struct SceneRecordStats(int NodesVisited, int DrawnNodeCo
     public RepaintDamageRegion RepaintDamage { get; init; }
 }
 
+/// <summary>One scrollable viewport's render-lease eligibility bookkeeping for THIS frame
+/// (scroll-v3-plan-2026-08-17.md §6.1/§10 Phase 4, WP-Q1 — a prerequisite the Phase-6 render-thread fling lease
+/// consumes; nothing in Phase 4 grants a lease). <see cref="NodeIndex"/> is the SCROLLABLE viewport — the node
+/// <see cref="FluentGpu.Scroll.ScrollKernel"/> bodies are keyed by — not its content child. Populated once per
+/// <see cref="SceneRecorder.Record"/> pass (only for a viewport whose content child was actually walked this frame —
+/// see <c>WalkCore</c>), read via <see cref="SceneRecorder.LeaseCaptures"/>.</summary>
+public struct ScrollLeaseCapture
+{
+    /// <summary>The scrollable viewport's scene node index (NOT its content child's).</summary>
+    public int NodeIndex;
+    /// <summary>The content subtree's byte range in THIS frame's <see cref="DrawList"/> arena.</summary>
+    public int SpanByteStart, SpanByteLen;
+    /// <summary>The content subtree's sort-key range, parallel to <see cref="SpanByteStart"/>/<see cref="SpanByteLen"/>.</summary>
+    public int SpanSortStart, SpanSortCount;
+    /// <summary>Byte offset of the enclosing viewport's own <c>PushClip</c>/<c>PushClipRounded</c> command (the scissor
+    /// that bounds the content span) — -1 if the viewport pushed no clip of its own this frame.</summary>
+    public int ViewportClipCmdOffset;
+    /// <summary>The <c>ScrollState.OffsetX/OffsetY</c> the content span was recorded against — the lease's patch delta
+    /// is (render-thread offset − this baseline), so a stale baseline after a UI hitch is still exact (§6.3).</summary>
+    public float BaselineOffsetX, BaselineOffsetY;
+    /// <summary>True when the content subtree contains an Acrylic <see cref="PushLayerCmd"/> or a <see cref="DrawOp.DrawVideo"/>
+    /// — either disqualifies a Phase-6 lease grant (§6: "no acrylic/video inside its content span"), even though a
+    /// uniform translated-copy of Acrylic is already rejected per-payload and DrawVideo is geometrically exact under
+    /// translation (see <see cref="DrawList.TranslateSpan"/>) — the lease's other concerns (retained-backdrop identity,
+    /// presenter cadence) are conservative and out of scope for this bookkeeping pass.</summary>
+    public bool HasAcrylicOrVideo;
+    /// <summary>True when the scroller owns a live <see cref="FluentGpu.Animation.ScrollBind"/> whose Target lives
+    /// inside this content subtree — a pin/parallax/sticky write that is NOT a 1:1 translate of the container offset,
+    /// so neither a SceneRecorder translated-copy NOR a Phase-6 lease patch can shift it uniformly (mirrors
+    /// <see cref="SceneRecorder.IsDirectMovingScrollContent"/>'s gate).</summary>
+    public bool HasContinuousBinds;
+}
+
 /// <summary>
 /// Phase 8 (record): walks the retained SceneStore and emits the DrawList. Composites like a browser — each node's
 /// geometry is emitted in LOCAL space with a world transform (parent ∘ translate ∘ LocalTransform, scale/rotate about
@@ -64,6 +115,12 @@ public readonly record struct SceneRecordStats(int NodesVisited, int DrawnNodeCo
 public static class SceneRecorder
 {
     private const bool EnableSubtreeCull = true;
+    private const bool SpanMissDiagnosticsCompiledIn =
+#if DEBUG || FLUENTGPU_DIAG
+        true;
+#else
+        false;
+#endif
 
     // Opaque occlusion cull (ALWAYS ON): skip a node's own visual when a later-drawn direct child provably, fully,
     // opaquely covers it — those fill/border pixels are overwritten regardless, so the emit is dead work (finding: the
@@ -130,6 +187,19 @@ public static class SceneRecorder
         _videoRects[_videoRectCount++] = deviceRect;
     }
 
+    // Render-thread fling-lease capture bookkeeping (scroll-v3-plan-2026-08-17.md §6.1/§10 Phase 4, WP-Q1): populated
+    // once per scrollable-viewport-with-live-content-child visited during a Record() pass. Phase 6's lease grant logic
+    // reads this (read-only, via LeaseCaptures below) instead of re-walking the tree to find a candidate's content span,
+    // clip offset and eligibility flags. Same UI-thread-only static-scratch discipline as _dmgEntries/_videoRects above:
+    // reset once per Record(), zero per-frame allocation, fixed capacity (overflow silently drops the capture — Phase 6
+    // simply finds no entry for that viewport this frame and does not grant/continue a lease, self-correcting next frame).
+    private const int LeaseCaptureCap = 32;
+    private static readonly ScrollLeaseCapture[] _leaseCaptures = new ScrollLeaseCapture[LeaseCaptureCap];
+    private static int _leaseCaptureCount;
+
+    /// <summary>This frame's render-lease captures (§6.1) — read-only, valid until the next <see cref="Record"/> call.</summary>
+    public static ReadOnlySpan<ScrollLeaseCapture> LeaseCaptures => _leaseCaptures.AsSpan(0, _leaseCaptureCount);
+
     // Effect-halo allowance for an extent captured OUTSIDE the recorder — a freed node's model rect, a structural-cancel
     // seed. Those carry no shadow/blur information, whereas every extent the recorder itself produces already does:
     // SpanRecordResult.SubtreeBounds unions the shadow quad's `offset + spread + 3σ` box (see the shadow emit) and the
@@ -187,7 +257,7 @@ public static class SceneRecorder
 
     private static void ResetDamageEntries()
     {
-        _dmgEntryCount = 0; _dmgOverflow = false; _acrylicRangeCount = 0; _videoRectCount = 0;
+        _dmgEntryCount = 0; _dmgOverflow = false; _acrylicRangeCount = 0; _videoRectCount = 0; _leaseCaptureCount = 0;
     }
 
     // Register a freshly-walked cached-acrylic layer's PushLayer byte offset + its own-subtree entry-range start.
@@ -227,8 +297,21 @@ public static class SceneRecorder
         public int SpansRebaseRejected;
         public int SpansReRecorded;
         public int SpanBytesCopied;
+        public int SpanMissGlobalDisabled;
+        public int SpanMissScopedBlocked;
+        public int SpanMissExactDirty;
+        public int SpanMissExactKey;
+        public int SpanMissExactClip;
+        public int SpanMissExactCapacity;
+        public int SpanMissMoveGuard;
+        public int SpanMissMoveKey;
+        public int SpanMissMoveGeometry;
+        public int SpanMissMoveClip;
+        public int SpanMissMovePayload;
         public int ScopedBlocks;
+#pragma warning disable CS0649 // Retained AppHost settle-latch pair; softness made the increment a lie (always 0).
         public int UnsnappedGlyphSpans;
+#pragma warning restore CS0649
         public int DepthAborts;    // subtrees dropped by the stack-headroom guard (see HasWalkStackHeadroom) — never silent
         public SpanReuseDisabledReason SpanReuseDisabledReasons;
         public RectF Damage;       // union of this frame's changed-node device bounds → the acrylic backdrop-cache damage region
@@ -239,6 +322,7 @@ public static class SceneRecorder
         // re-records ∪ removals ∪ scrolled viewports). Feeding either from the other reintroduces the bug the split fixes.
         public RepaintDamageRegion Repaint;
         public bool HasActiveVirtualDisclosures;
+        public bool CollectSpanMisses;
 
         // Hover-elevate clip-ESCAPE (HoverElevateClipRootBit): under a flagged clip root, the sibling deferral PARKS
         // the elevated child here (with everything its re-walk needs) instead of emitting; the flagged ancestor hoists
@@ -282,6 +366,18 @@ public static class SceneRecorder
             SpansRebaseRejected = this.SpansRebaseRejected,
             SpansReRecorded = this.SpansReRecorded,
             SpanBytesCopied = this.SpanBytesCopied,
+            SpanReuseMisses = new SpanReuseMissStats(
+                SpanMissGlobalDisabled,
+                SpanMissScopedBlocked,
+                SpanMissExactDirty,
+                SpanMissExactKey,
+                SpanMissExactClip,
+                SpanMissExactCapacity,
+                SpanMissMoveGuard,
+                SpanMissMoveKey,
+                SpanMissMoveGeometry,
+                SpanMissMoveClip,
+                SpanMissMovePayload),
             ScopedBlocks = this.ScopedBlocks,
             UnsnappedGlyphSpans = this.UnsnappedGlyphSpans,
             DepthAborts = this.DepthAborts,
@@ -411,7 +507,8 @@ public static class SceneRecorder
                                           SpanReuseDisabledReason spanReuseDisabled = SpanReuseDisabledReason.None,
                                           ReadOnlySpan<RectF> pendingStructuralDamage = default,
                                           ulong damageEpoch = 0,
-                                          ReadOnlySpan<NodeHandle> reuseBlockRoots = default)
+                                          ReadOnlySpan<NodeHandle> reuseBlockRoots = default,
+                                          bool collectSpanReuseMisses = false)
     {
         if (spans is null) dl.Reset();
         else dl.SwapAndReset();
@@ -419,7 +516,11 @@ public static class SceneRecorder
 
         _scrollLogFrame++;
         ResetDamageEntries();
-        var stats = new RecordAccumulator { HasActiveVirtualDisclosures = scene.HasActiveVirtualDisclosures };
+        var stats = new RecordAccumulator
+        {
+            HasActiveVirtualDisclosures = scene.HasActiveVirtualDisclosures,
+            CollectSpanMisses = collectSpanReuseMisses,
+        };
         // Seed the frame damage with any band a structural-track CANCEL vacated this frame (AnimEngine.PendingStructuralDamage):
         // when a suppressed/resized FLIP or Reveal is snapped to its final bounds, the node stops covering the extent it drew
         // at last frame, but no node re-touches that band — so the region-aware acrylic/backdrop cache would freeze last
@@ -1003,6 +1104,16 @@ public static class SceneRecorder
         // confirms the content actually translated this frame (only ScrollIntegrator/Input write that), not scale/blur.
         bool scrollInMotion = parentScrollInMotion;
         bool userScrollActive = parentUserScrollActive;
+        // WP-Q1 render-lease-capture bookkeeping (scroll-v3-plan-2026-08-17.md §6.1/§10 Phase 4): hoisted out of the
+        // Scrollable block below so the children loop and the end-of-function finalizer (both further down this same
+        // WalkCore call) can see them. `leaseContentNode` stays Null — no capture emitted — for a plain non-scrollable
+        // node or a scroller with no live content child.
+        NodeHandle leaseContentNode = default;
+        float leaseBaselineX = 0f, leaseBaselineY = 0f;
+        bool leaseHasContinuousBinds = false;
+        int leaseContentByteStart = 0, leaseContentByteLen = 0, leaseContentSortStart = 0, leaseContentSortLen = 0;
+        bool leaseContentCaptured = false;
+        bool leaseHasAcrylicOrVideo = false;
         if ((flags & NodeFlags.Scrollable) != 0 && scene.HasScroll(node))
         {
             ref var scrollState = ref scene.ScrollRef(node);
@@ -1026,6 +1137,13 @@ public static class SceneRecorder
                     // Offset unchanged but still coasting — keep blur-hold without forcing a full re-record.
                     scrollInMotion = true;
                 }
+            }
+            if (!scrollState.ContentNode.IsNull && scene.IsLive(scrollState.ContentNode))
+            {
+                leaseContentNode = scrollState.ContentNode;
+                leaseBaselineX = scrollState.OffsetX;
+                leaseBaselineY = scrollState.OffsetY;
+                leaseHasContinuousBinds = HasContinuousScrollBindInside(scene, node, leaseContentNode);
             }
         }
 
@@ -1100,6 +1218,15 @@ public static class SceneRecorder
             byte recordDirtyBits = scene.RecordDirtyBits(node);
             byte descendantDirtyBits = scene.RecordDirtyDescendantBits(node);
             bool directMovingScrollContent = IsDirectMovingScrollContent(scene, node, flags);
+            if (SpanMissDiagnosticsCompiledIn && stats.CollectSpanMisses)
+            {
+                if (blocked) stats.SpanMissScopedBlocked++;
+                else
+                {
+                    if (spanReuseDisabled) stats.SpanMissGlobalDisabled++;
+                    if (recordDirtyBits != 0) stats.SpanMissExactDirty++;
+                }
+            }
 
             // Off-screen clean-subtree cull — valid under any spanReuseDisabled reason, but NOT while blocked (StoreCulled
             // would poison a chain node's future frame with a span that omits the special).
@@ -1183,7 +1310,7 @@ public static class SceneRecorder
                     && IsClipComplete(TranslateBounds(span.SubtreeBounds, dx, dy), in clip))
                 {
                     if (dl.CopySpanFromPriorTranslated(span.ByteStart, span.ByteLength, span.SortStart, span.SortCount,
-                            span.CommandCount, in copiedStats, dx, dy))
+                            span.CommandCount, in copiedStats, dx, dy, inherited.MotionSoft))
                     {
                         RectF translatedBounds = TranslateBounds(span.SubtreeBounds, dx, dy);
                         var currentSpan = span with { ByteStart = copiedByteStart, SortStart = copiedSortStart, World = world, SubtreeBounds = translatedBounds, ClipComplete = true };
@@ -1210,13 +1337,9 @@ public static class SceneRecorder
                             }
                         }
                         if (copiedStats.DrawVideo > 0) NoteVideoRect(translatedBounds);
-                        // Translate-rebase patches InMotion=1 onto glyph payloads without re-walking Text nodes — count
-                        // them so the host still queues a settle re-snap (§5.2 Fix B).
-                        if (inMotion)
-                        {
-                            int glyphs = copiedStats.DrawGlyphRun + copiedStats.DrawGlyphRunGradient;
-                            if (glyphs > 0) stats.UnsnappedGlyphSpans += glyphs;
-                        }
+                        // Softness is patched onto glyph payloads here (DrawList.TranslateCopiedSpan). Do not count
+                        // those runs as UnsnappedGlyphSpans — that latch queued a follow-up whose command stream was
+                        // byte-identical (softness already 0 on a DIP-step tick) and skip-submit then elided it.
                         stats.SpansReused++;
                         stats.SpansRebased++;
                         stats.SpanBytesCopied += span.ByteLength;
@@ -1227,6 +1350,38 @@ public static class SceneRecorder
                     // Key + clip said yes but the per-payload walk refused (an ACRYLIC layer, or an opcode the
                     // translator does not know): the partial copy was rolled back, so fall through and re-record.
                     stats.SpansRebaseRejected++;
+                    if (SpanMissDiagnosticsCompiledIn && stats.CollectSpanMisses) stats.SpanMissMovePayload++;
+                }
+            }
+
+            // Successful reuse has already returned. Classify this fallthrough with read-only table probes only in an
+            // explicitly diagnostic recording pass; the normal paint path pays neither the duplicate lookups nor the
+            // counters. The original decision flow above remains the sole behavior authority.
+            if (SpanMissDiagnosticsCompiledIn && stats.CollectSpanMisses && !spanReuseDisabled && !blocked)
+            {
+                if (recordDirtyBits == 0)
+                {
+                    if (!spans.TryGet((int)node.Raw.Index, node.Raw.Gen, spanFrame, spanInputSig, out var exactMiss))
+                        stats.SpanMissExactKey++;
+                    else if (!exactMiss.ClipComplete || !IsClipComplete(exactMiss.SubtreeBounds, in clip))
+                        stats.SpanMissExactClip++;
+                    else if (!dl.CanCopyPriorSpan(exactMiss.ByteStart, exactMiss.ByteLength, exactMiss.SortStart, exactMiss.SortCount))
+                        stats.SpanMissExactCapacity++;
+                }
+
+                bool moveGuarded = descendantDirtyBits != 0
+                    || directMovingScrollContent
+                    || (recordDirtyBits & SceneStore.RecordDirtyContent) != 0;
+                if (moveGuarded) stats.SpanMissMoveGuard++;
+                else if (!spans.TryGetTranslated((int)node.Raw.Index, node.Raw.Gen, spanFrame, spanMoveSig, out var moveMiss))
+                    stats.SpanMissMoveKey++;
+                else
+                {
+                    var moveMissWorld = moveMiss.World;
+                    if (!TryTranslationDelta(in moveMissWorld, in world, out float mdx, out float mdy) || (mdx == 0f && mdy == 0f))
+                        stats.SpanMissMoveGeometry++;
+                    else if (!moveMiss.ClipComplete || !IsClipComplete(TranslateBounds(moveMiss.SubtreeBounds, mdx, mdy), in clip))
+                        stats.SpanMissMoveClip++;
                 }
             }
 
@@ -1402,8 +1557,22 @@ public static class SceneRecorder
         bool pushedClip = false;
         RectF childClip = recordClip;
         bool wantClip = (flags & NodeFlags.ClipsToBounds) != 0 || !p.ClipRect.IsInfinite;
+        // Phase-6 hook (scroll-v3-plan-2026-08-17.md §6.2, WP-Q1): the render-thread fling lease needs this viewport's
+        // record clip widened along the scroll axis by the runway, so culling/clamping never clip away the edge the
+        // lease ticks past a UI hitch — "recordClip expanded along the scroll axis by the runway" (§4/§6.2). Kept as a
+        // named local (not threaded through the recursive Walk parameter list) so wiring it up is a one-line change at
+        // this call site, not a re-plumb: 0 today ⇒ byte-identical to the pre-WP-Q1 clip, Phase 6 assigns a real value
+        // computed from the leased body's velocity/decay.
+        float recordClipRunwayMain = 0f;
+        int leaseViewportClipOffset = -1;   // this node's own PushClip/PushClipRounded byte offset, for LeaseCaptures below
         if ((flags & NodeFlags.ClipsToBounds) != 0)
-            childClip = childClip.Intersect(deviceBounds);
+        {
+            RectF clipBounds = recordClipRunwayMain > 0f
+                ? new RectF(deviceBounds.X - recordClipRunwayMain, deviceBounds.Y - recordClipRunwayMain,
+                    deviceBounds.W + 2f * recordClipRunwayMain, deviceBounds.H + 2f * recordClipRunwayMain)
+                : deviceBounds;
+            childClip = childClip.Intersect(clipBounds);
+        }
         if (!p.ClipRect.IsInfinite)
             childClip = childClip.Intersect(world.TransformBounds(p.ClipRect));
         bool childClipEmpty = wantClip && childClip.IsEmpty;
@@ -1431,6 +1600,7 @@ public static class SceneRecorder
                 if (c4.TopLeft <= 0f && c4.TopRight <= 0f) sdfBox = new RectF(sdfBox.X, sdfBox.Y - rDev, sdfBox.W, sdfBox.H + rDev);
                 if (c4.TopRight <= 0f && c4.BottomRight <= 0f) sdfBox = new RectF(sdfBox.X, sdfBox.Y, sdfBox.W + rDev, sdfBox.H);
                 if (c4.TopLeft <= 0f && c4.BottomLeft <= 0f) sdfBox = new RectF(sdfBox.X - rDev, sdfBox.Y, sdfBox.W + rDev, sdfBox.H);
+                if (!leaseContentNode.IsNull) leaseViewportClipOffset = dl.BytePosition;
                 dl.PushClipRounded(childClip, sdfBox, rDev, key);
                 pushedClip = true;
             }
@@ -1440,6 +1610,7 @@ public static class SceneRecorder
             // Cuts command-stream bloat and scissor churn on every such container, every frame, incl. every reused span.
             else if (childClip != recordClip)
             {
+                if (!leaseContentNode.IsNull) leaseViewportClipOffset = dl.BytePosition;
                 dl.PushClip(childClip, key);
                 pushedClip = true;
             }
@@ -1922,10 +2093,32 @@ public static class SceneRecorder
                         // Lower progress than the deferred card → record it now in normal order (falls through).
                     }
                 }
+                // WP-Q1 lease-capture bookkeeping: bracket the content child's own Walk with the arena's byte/sort/opcode
+                // position so the delta — whether this frame reused, translated-copied, or fully re-recorded it — is the
+                // content subtree's span for LeaseCaptures below. Only the plain (non-deferred, non-disclosure-shifted)
+                // path is instrumented: a scroll content node is a plain wrapper in every real usage, never a
+                // hover-elevate card, so the rarer branches above simply leave leaseContentCaptured false for this
+                // frame — Phase 6 finds no entry and does not grant/continue a lease, self-correcting next frame.
+                bool isLeaseContentChild = !leaseContentNode.IsNull && !leaseContentCaptured && c == leaseContentNode;
+                DrawListOpcodeStats leaseContentOpcodeBefore = default;
+                if (isLeaseContentChild)
+                {
+                    leaseContentByteStart = dl.BytePosition;
+                    leaseContentSortStart = dl.SortPosition;
+                    leaseContentOpcodeBefore = dl.OpcodeStats;
+                }
                 var childResult = Walk(scene, dl, images, c, activeChildWorld, opacity, depth + 1,
                     activeChildClip, in focus, in textEdit, scrollThumb, scrollTrack,
                     childScaleX, childScaleY, inMotion, globalBlurHold, scrollInMotion, userScrollActive, childState, skipRoots, spans, spanFrame, spanReuseDisabled, spanStoreEnabled, ref stats);
                 result.Include(childResult);
+                if (isLeaseContentChild)
+                {
+                    leaseContentByteLen = dl.BytePosition - leaseContentByteStart;
+                    leaseContentSortLen = dl.SortPosition - leaseContentSortStart;
+                    var leaseContentOpcodeDelta = dl.OpcodeStats.Minus(in leaseContentOpcodeBefore);
+                    leaseHasAcrylicOrVideo = leaseContentOpcodeDelta.Acrylic > 0 || leaseContentOpcodeDelta.DrawVideo > 0;
+                    leaseContentCaptured = true;
+                }
             }
             // The elevated (hovered) card paints after its non-elevated siblings, but before any sticky-pinned chrome.
             // Under a HoverElevateClipRoot ancestor it doesn't emit HERE at all: it PARKS in the accumulator (one slot)
@@ -2034,11 +2227,12 @@ public static class SceneRecorder
         if (ScrollLogNow && (flags & NodeFlags.Scrollable) != 0)
         {
             bool hs = scene.TryGetScroll(node, out var d);
+            float dFadeT = hs ? scene.ScrollChrome.Get((int)node.Raw.Index).FadeT : 0f;
             Console.Error.WriteLine(
                 $"[scroll] gate n#{node.Raw.Index} bounds={b.W:0}x{b.H:0} dev=({deviceBounds.X:0},{deviceBounds.Y:0} {deviceBounds.W:0}x{deviceBounds.H:0}) " +
                 $"clip=({clip.X:0},{clip.Y:0} {clip.W:0}x{clip.H:0}) overlapClip={overlapsClip} thumbA={scrollThumb.A:0.00} " +
                 $"hasState={hs} content={(hs ? d.ContentW : 0):0}x{(hs ? d.ContentH : 0):0} viewport={(hs ? d.ViewportW : 0):0}x{(hs ? d.ViewportH : 0):0} " +
-                $"offset={(hs ? d.OffsetX : 0):0},{(hs ? d.OffsetY : 0):0} fadeT={(hs ? d.FadeT : 0):0.00} orient={(hs ? d.Orientation : 0)} " +
+                $"offset={(hs ? d.OffsetX : 0):0},{(hs ? d.OffsetY : 0):0} fadeT={dFadeT:0.00} orient={(hs ? d.Orientation : 0)} " +
                 $"autoEdge={(hs && d.AutoEdgeFade)} band={(hs ? d.AutoEdgeFadeBand : 0):0} " +
                 $"edgeResolved={isEdgeFade} edges={(isEdgeFade ? edgeFade.Edges : EdgeMask.None)} " +
                 $"edgeBands={(isEdgeFade ? edgeFade.BandLeft : 0):0.0},{(isEdgeFade ? edgeFade.BandTop : 0):0.0}," +
@@ -2056,7 +2250,10 @@ public static class SceneRecorder
 
         if (scrollThumb.A > 0f && overlapsRecordClip && (flags & NodeFlags.Scrollable) != 0 &&
             scene.TryGetScroll(node, out var scb))
-            EmitScrollbar(dl, b, in scb, world, opacity, key | 0x20, scrollThumb, scrollTrack);
+        {
+            var scbChrome = scene.ScrollChrome.Get((int)node.Raw.Index);
+            EmitScrollbar(dl, b, in scb, in scbChrome, world, opacity, key | 0x20, scrollThumb, scrollTrack);
+        }
 
         // Close the flat opacity / self-blur group LAST: everything this node emitted (shadow, fill, children, border,
         // focus ring, scrollbar) flattens into the offscreen RT and composites once (blurred, for the blur group) at the
@@ -2179,6 +2376,29 @@ public static class SceneRecorder
             stats.SpansReRecorded++;
         }
 
+        // WP-Q1 lease-capture bookkeeping (scroll-v3-plan-2026-08-17.md §6.1): this node is a scrollable viewport whose
+        // content child was actually walked this frame (leaseContentCaptured) — record everything Phase 6's lease grant
+        // needs so it never re-walks the tree to find it. A missing viewport clip offset (-1: e.g. a ScrollView whose
+        // content exactly fills the incoming clip, so the no-op-push elision at :childClip != recordClip above skipped
+        // the PushClip) still stores the capture — Phase 6 treats -1 as "no scissor of its own, bounded by the ancestor
+        // clip already in effect" rather than a reason to withhold the capture.
+        if (leaseContentCaptured && _leaseCaptureCount < LeaseCaptureCap)
+        {
+            _leaseCaptures[_leaseCaptureCount++] = new ScrollLeaseCapture
+            {
+                NodeIndex = (int)node.Raw.Index,
+                SpanByteStart = leaseContentByteStart,
+                SpanByteLen = leaseContentByteLen,
+                SpanSortStart = leaseContentSortStart,
+                SpanSortCount = leaseContentSortLen,
+                ViewportClipCmdOffset = leaseViewportClipOffset,
+                BaselineOffsetX = leaseBaselineX,
+                BaselineOffsetY = leaseBaselineY,
+                HasAcrylicOrVideo = leaseHasAcrylicOrVideo,
+                HasContinuousBinds = leaseHasContinuousBinds,
+            };
+        }
+
         return result;
     }
 
@@ -2294,9 +2514,10 @@ public static class SceneRecorder
         MixFloat(ref h, sc.ViewportH);
         MixFloat(ref h, sc.OffsetX);
         MixFloat(ref h, sc.OffsetY);
-        MixFloat(ref h, sc.OverscrollPx);
-        MixFloat(ref h, sc.FadeT);
-        MixFloat(ref h, sc.ExpandT);
+        MixFloat(ref h, sc.BandMain);
+        var chromeRow = scene.ScrollChrome.Get((int)node.Raw.Index);
+        MixFloat(ref h, chromeRow.FadeT);
+        MixFloat(ref h, chromeRow.ExpandT);
         MixFloat(ref h, sc.AutoEdgeFadeBand);
         Mix(ref h, sc.Orientation);
         Mix(ref h, sc.EdgeCueConfig);
@@ -2314,11 +2535,55 @@ public static class SceneRecorder
         MixFloat(ref h, fadeBand);
     }
 
+    /// <summary>WP-Q1 (scroll-v3-plan-2026-08-17.md §4/§10 Phase 4): narrowed from "always force a full re-record of
+    /// the moving scroll-content subtree" to only the case a uniform translated-copy of the whole span would be WRONG —
+    /// a live <see cref="FluentGpu.Animation.ScrollBind"/> whose Target lives INSIDE this content subtree. Such a bind
+    /// (parallax fraction, sticky/pin hold, collapse) writes a transform/opacity/clip that is NOT a 1:1 translate of the
+    /// container offset, so shifting its already-recorded bytes by the same (dx,dy) as the rest of the span — which is
+    /// exactly what <see cref="DrawList.TranslateCopiedSpan"/> does — would misplace it.
+    /// <para>Deliberately NOT pre-checked here: an Acrylic <see cref="PushLayerCmd"/> and a <see cref="DrawOp.DrawVideo"/>
+    /// inside the span. Acrylic is already the sole payload-level rejection <see cref="DrawList.TranslateCopiedSpan"/>
+    /// documents ("No opcode PRE-check… the rollback below discards the partial copy so the caller re-records exactly
+    /// as if the span had never been eligible") — duplicating that check here would only re-walk what the attempt
+    /// itself already walks before rejecting. DrawVideo translates EXACTLY under a uniform shift (see its case in
+    /// <see cref="DrawList.TranslateCopiedSpan"/>: "the hole is pure geometry and the presenter drives the video
+    /// visual's own rect independently") — there is nothing to protect against. Both are still tracked, conservatively,
+    /// in <see cref="ScrollLeaseCapture.HasAcrylicOrVideo"/> for the Phase-6 render-thread lease, whose eligibility bar
+    /// is stricter than "byte-translation is correct" (retained-backdrop identity, presenter cadence).</para>
+    /// <para>For everything else — the common ItemsView row list, no binds — this returns false and the per-row
+    /// translated-copy path a few lines below does the job in O(edge rows) instead of an O(subtree) full re-record on
+    /// every scroll frame.</para></summary>
     private static bool IsDirectMovingScrollContent(SceneStore scene, NodeHandle node, NodeFlags flags)
     {
         if ((flags & NodeFlags.TransformDirty) == 0) return false;
         var parent = scene.Parent(node);
-        return !parent.IsNull && scene.HasScroll(parent) && scene.ScrollRef(parent).ContentNode == node;
+        if (parent.IsNull || !scene.HasScroll(parent) || scene.ScrollRef(parent).ContentNode != node) return false;
+        return HasContinuousScrollBindInside(scene, parent, node);
+    }
+
+    /// <summary>True when <paramref name="scroller"/> owns a live <see cref="FluentGpu.Animation.ScrollBind"/> whose
+    /// <see cref="FluentGpu.Animation.ScrollBind.Target"/> is <paramref name="content"/> itself or one of its
+    /// descendants. <see cref="FluentGpu.Animation.ScrollBindTable"/> rows are nav-rate (a handful per bind-owning
+    /// scroller — see <see cref="FluentGpu.Animation.ScrollBindEval.BeginPerfFrame"/>'s census), so this is an
+    /// O(binds × ancestor-depth-to-scroller) walk, alloc-free, bounded by the viewport's own subtree depth.</summary>
+    private static bool HasContinuousScrollBindInside(SceneStore scene, NodeHandle scroller, NodeHandle content)
+    {
+        var table = scene.ScrollBinds;
+        for (int s = table.Head((int)scroller.Raw.Index); s >= 0; s = table.At(s).Next)
+        {
+            NodeHandle target = table.At(s).Target;
+            if (target.IsNull || !scene.IsLive(target)) continue;
+            if (target == content) return true;
+            var p = scene.Parent(target);
+            int guard = 0;
+            while (!p.IsNull && guard++ < PriorExtentAncestorWalkCap)
+            {
+                if (p == content) return true;
+                if (p == scroller) break;   // walked out of the content subtree without hitting it — not inside
+                p = scene.Parent(p);
+            }
+        }
+        return false;
     }
 
     private static RectF TranslateBounds(in RectF bounds, float dx, float dy)
@@ -2738,7 +3003,7 @@ public static class SceneRecorder
     }
 
     /// <summary>An auto-hiding scrollbar thumb sized from the viewport's content/offset, faded by <c>FadeT</c>, expanded on lane hover.</summary>
-    private static void EmitScrollbar(DrawList dl, in RectF b, in ScrollState sc, in Affine2D world, float opacity, ulong key, ColorF thumb, ColorF track)
+    private static void EmitScrollbar(DrawList dl, in RectF b, in ScrollState sc, in FluentGpu.Scroll.ScrollBarChromeRow chrome, in Affine2D world, float opacity, ulong key, ColorF thumb, ColorF track)
     {
         if (sc.SuppressBar || sc.LoadingBarSuppressors > 0) return;   // pager-driven shelf, or a descendant skeleton is loading — no rail
         bool horizontal = sc.Orientation == 1;
@@ -2761,8 +3026,8 @@ public static class SceneRecorder
 
             // Persistent bar (ScrollEl.AlwaysShowScrollbar): pin the rail visible (fade=1) whenever content overflows,
             // bypassing the auto-hide FadeT. Hover still drives ExpandT (thin rail → full bar) through the normal arm path.
-            float fade = sc.AlwaysShowBar ? 1f : Math.Clamp(sc.FadeT, 0f, 1f);
-            float expand = Math.Clamp(sc.ExpandT, 0f, 1f);
+            float fade = sc.AlwaysShowBar ? 1f : Math.Clamp(chrome.FadeT, 0f, 1f);
+            float expand = Math.Clamp(chrome.ExpandT, 0f, 1f);
             if (fade <= 0.01f && expand <= 0.01f)
             {
                 if (ScrollLogNow) Console.Error.WriteLine("[scroll]   emit SKIPPED: faded out");

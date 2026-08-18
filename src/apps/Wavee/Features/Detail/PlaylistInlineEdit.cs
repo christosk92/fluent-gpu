@@ -10,6 +10,7 @@ using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Localization;
 using FluentGpu.Scene;
+using FluentGpu.Scroll;
 using FluentGpu.Signals;
 using FluentGpu.WindowsApi.Dialogs;
 using Wavee.Core;

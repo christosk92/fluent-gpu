@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentGpu.Foundation;
@@ -174,10 +175,20 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     }
 
     // UI thread: drain finished decodes; upload pixels; report completion. Idle ⇒ one empty TryDequeue, zero alloc.
-    public void Pump(ImageCompleteHandler onComplete, ImageReadyHandler onPixels)
+    public void Pump(ImageCompleteHandler onComplete, ImageReadyHandler onPixels) => Pump(onComplete, onPixels, long.MaxValue);
+
+    /// <summary>Frame-budget-aware overload (scroll-v3 §3.3 item 6 / §4, <c>Hosting.FrameBudget</c>): stops APPLYING
+    /// further completions once <see cref="Stopwatch.GetTimestamp"/> passes <paramref name="deadlineTicks"/> — the
+    /// un-applied decodes stay queued (their <c>ImageCache</c> entries stay <c>State==Pending</c>) for a later Pump,
+    /// same visible effect as the existing per-frame apply cap running out early. The deadline is an ADDITIONAL, independent
+    /// stop condition checked BETWEEN applies (never mid-apply) — the 1-apply-cap-while-<see cref="ScrollThrottled"/>
+    /// rule is unchanged and still guarantees a frame's head always makes progress. <c>long.MaxValue</c> (the
+    /// two-arg overload above; every steady frame) never reads the clock — zero extra cost.</summary>
+    public void Pump(ImageCompleteHandler onComplete, ImageReadyHandler onPixels, long deadlineTicks)
     {
         LastPumpAppliedCount = 0;
         LastPumpAppliedBytes = 0;
+        bool bounded = deadlineTicks != long.MaxValue;
         int controlDrained = 0;
         while (controlDrained < ControlDrainPerFrame && _controlOut.TryDequeue(out var control))
         {
@@ -191,7 +202,7 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
         int cap = ScrollThrottled ? Math.Min(1, s_maxAppliesPerFrame) : s_maxAppliesPerFrame;
         int byteCap = ScrollThrottled ? Math.Min(ScrollApplyBytesPerFrame, s_maxApplyBytesPerFrame) : s_maxApplyBytesPerFrame;
         int appliedBytes = 0;
-        while (applied < cap && TryPeekPixels(out var next, out bool large))
+        while (applied < cap && (!bounded || Stopwatch.GetTimestamp() < deadlineTicks) && TryPeekPixels(out var next, out bool large))
         {
             // A row may recycle after the worker published pixels but before this UI-thread pump. Discard that buffer
             // as control work: no upload, no apply slot, and no byte-budget charge.

@@ -11,31 +11,26 @@ tell you.
 ## Quick start
 
 ```powershell
-# 0. Read what is already on disk before building anything.
-ops\diag\parse-scroll-csv.cmd ops\scratch\hitch-measure-20260723-191423.scroll.csv
-
-# 1. (optional) Prove PresentMon can even see our swapchain on this machine. Wavee must be running and scrolling.
-#    Needs elevation OR membership in Performance Log Users — it opens an ETW session. If neither is available,
-#    SKIP IT: the launcher records why, and the in-app DXGI/DWM statistics (always compiled in) become the
-#    present-side truth. That is a supported configuration; what you lose is the independent witness.
-ops\diag\probe-presentmode.cmd
-
-# 2. Capture a guided interactive session (publishes a diag build, prompts you through 7 gestures, packs a bundle).
+# Capture: publishes a diag build, opens Wavee, waits until YOU close the window, packs the bundle.
+# Use the app however you want for 10-30 minutes. No gestures, no ratings, no ENTER.
 ops\diag\wavee-scroll-session.cmd -Diag
 
-# 3. The mandatory paired arm — same gestures, plain Release, so observer cost is a number and not an assumption.
+# Same, already published:
+ops\diag\wavee-scroll-session.cmd -Diag -SkipPublish
+
+# Then tell an agent the session folder under ops/diag/sessions/ — they read feel-summary.json + scroll.csv.
+
+# Optional paired arm — same free-scroll, plain Release, so observer cost is a number:
 ops\diag\wavee-scroll-session.cmd
-#    then fold it in — this is what turns observerDeltaVsPlainReleasePct from null into a measurement:
 ops\diag\pack-feel-summary.cmd -Session <diag session> -Control <plain-Release session>
 
-# 4. The bisection — the only causal evidence in the kit. Same switches as (2) plus the treatment.
+# Optional bisection (image pump off) as a SECOND session against a control with otherwise identical switches:
 ops\diag\wavee-scroll-session.cmd -Diag -NoImagePump
 
-# Instrument self-test (no human, no gestures): proves the build armed and the pipeline works end to end.
-# Produces a bundle stamped synthetic — it can NEVER answer a question about feel.
+# Instrument self-test (no human): proves the build armed and the pipeline works. Never a feel result.
 ops\diag\wavee-scroll-session.cmd -Diag -Unattended
 
-# 5. Unattended A/B of CADENCE (no human): identical synthetic input into two builds, then compare.
+# Unattended A/B of CADENCE (synthetic wheel packets, not a human):
 ops\diag\synthetic-scroll-capture.ps1 -ExePath <build A>\Wavee.exe -Label BEFORE
 ops\diag\synthetic-scroll-capture.ps1 -ExePath <build B>\Wavee.exe -Label AFTER
 python ops\diag\analyze-cadence.py <before-dir>[;<more>] <after-dir>[;<more>]
@@ -45,7 +40,7 @@ ops\diag\pack-feel-summary.cmd -Session ops\diag\sessions\<id>
 ```
 
 Bundles land in `ops/diag/sessions/`, which is gitignored. The scripts are tracked; the captures are not — a
-bundle records an exe hash, a panel, a power state and a human's subjective scores, so it is evidence for one
+bundle records an exe hash, a panel, a power state and a free-scroll trace, so it is evidence for one
 investigation rather than a repo artifact.
 
 ---
@@ -55,7 +50,7 @@ investigation rather than a repo artifact.
 | Pillar | Question | Chain |
 | --- | --- | --- |
 | **A — glued** | Does the content sit where the finger is? | OS packet → producer queue → engine ring → latch/resample → offset commit |
-| **B — steady** | Do photons change on an even cadence? | offset → record DrawList → PUBLISH → render thread submit → Present → vblank |
+| **B — steady** | Are submit-confirmed presents evenly paced? | offset → record DrawList → PUBLISH → render thread submit → Present |
 
 They stay **structurally separate** in every artifact. Interventions trade one against the other — a pacing queue
 improves cadence and worsens latency — so a fused "smoothness score" would score that trade as a wash and hide
@@ -124,8 +119,9 @@ a probe, which then reports an empty bucket that looks like a clean result.
   fixed-size resolve **every** frame. The boundary count **peaks** on a dense fill → image → glyph list — i.e.
   maximally during the fling being diagnosed. Get GPU busy-vs-wait from PresentMon at zero in-app cost first, and
   turn this on only after the GPU is already implicated.
-- **`FG_SCROLL_PRESENT_INTERVAL0`.** Unreachable without `FG_GPU_TIMING` (it is gated on `gpuRenderMs > 0`), so
-  it is a paired arm, never an independent switch. The launcher enforces that.
+- **`FG_SCROLL_PRESENT_INTERVAL0`.** Unreachable without `FG_GPU_TIMING` (it requires a fresh detailed-profiler
+  sample as well as the always-on whole-frame execution sample), so it is a paired arm, never an independent switch.
+  The launcher enforces that.
 - **`FG_SCROLL_LOG` / `FG_SCROLLLOG`.** Per-event `Console.WriteLine` with `AutoFlush`. Its own class doc warns
   that it perturbs pacing.
 - **`dotnet-trace`.** Dominant observer effect. Never in a feel session.
@@ -158,7 +154,14 @@ are opposite conclusions and a bare 0 would merge them.
 | `PresentStats` (DXGI + DWM) | `Rhi` seam + `D3D12Device` | the measured refresh period and the vblank-attested cadence had no source at all |
 | detented-wheel `QpcTicks` | `Win32Platform` | the wheel path enqueued stamp `0`, silently degrading every wheel latency figure to message time |
 | `GenStampQuality` | producers → `ScrollTrace` | so the packager can **refuse** to publish sub-tick percentiles off a `receive`-grade stamp |
-| `LatencyWaitMs` split | `D3D12Device` | the frame-latency wait (backpressure) was summed with the fence wait (GPU work); they have opposite fixes |
+
+> **Forward-looking:** today the DirectManipulation touchpad path stamps at `GenStampQuality.Receive` — the pump
+> samples on its own rate, quantised against the digitizer rather than timestamped per contact. It is expected to
+> reach `GenStampQuality.Hardware` once the Phase-3 Windows-producer rewrite lands, delivering one delta per frame
+> stamped at the frame's own contact, not today's pump-rate-quantised sample.
+| `LatencyWaitMs` split | `D3D12Device` | the DXGI latency waitable (present backpressure) was hidden inside the broader CPU fence/back-buffer-retirement wait |
+| per-swapchain `gexec <ms>#<seq>` | `D3D12Device` → `[fps]` | adaptive pacing and offline analysis no longer mistake CPU fence retirement for current-frame GPU execution; repeated log observations are deduplicated by sequence |
+| coherent `rq`, `rareaMp`, `rareaSeq`, `btop` snapshot | swapchain backend → `[fps]` | the async logger could repeat or race mutable render-thread counters; one target-local sequence now identifies the instance/area/top-N payload that the packer deduplicates |
 
 ### Gates
 
@@ -168,6 +171,17 @@ name throws on the first row of that kind, the catch eats it, and **every buffer
 discarded with no error printed anywhere**. The operator sees a short CSV and concludes "not much happened".
 
 Also `gate.latency.state-pack`, `gate.latency.alloc-zero` and `gate.latency.join-forward`.
+
+The offline schema/packaging gate is dependency-free and runs under the same Windows PowerShell 5.1 runtime as the
+capture tools:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File ops\diag\test-feel-diagnostics.ps1
+```
+
+It locks JSON array cardinality (including 0/1/2 PresentMode populations), targeting-candidate classification,
+explicit/legacy tracking provenance, gexec sequence+age handling, wait/span parsing, sequence-deduplicated rq/rect-area
+snapshots, strict trace-number parsing, and PresentMon PID/QPC joins.
 
 ---
 
@@ -220,7 +234,7 @@ These have each produced a wrong conclusion before.
   refactor and out of scope for diagnostics.
 - **`WaveeNavProbe` is a budget/regression harness, not this.** It calls `SuppressLatencyWaitOnce()` +
   `SuppressVsyncOnce()` per measured frame — it deliberately **removes the present path**, which is precisely why
-  it structurally cannot see present cadence, DropOldest, or photon smoothness. It answers a different question
+  it structurally cannot see present cadence, DropOldest, or display-side smoothness. It answers a different question
   (CPU work cost with presentation suppressed) and keeps its own summary format; `ops/diag/AGENT.md` owns the
   feel-verdict vocabulary.
 - **The three `ops/scratch/run-*.bat` files are untracked**, so replacing them with these tracked scripts is not
@@ -230,14 +244,11 @@ These have each produced a wrong conclusion before.
 
 ## `-Unattended` — validates the instrument, never the feel
 
-Runs the phase timeline with no human and no gestures, stamping every phase `synthetic: true` with **null** scores
-(null, not 0 — a 0 would average into a "bad" score and manufacture a complaint out of an empty run). The packager
-marks the bundle `humanObserved: false` and excludes synthetic phases from the reproduction question entirely.
-
-Use it to answer *"does the toolchain work?"* — did the diag build arm, did the anchor land, did the streams merge,
-did the phase marker reach the app, did the packager run. Use it for nothing else. With no input there is no scroll,
-so there are no latency rows, and the packager will correctly hard-fail on that: **a hard fail here is the expected
-and correct result**, and seeing it is itself the proof that the hard-fail path works.
+Launches Wavee, idles a few seconds, closes it. The packager marks `humanObserved: false` / `captureMode:
+instrumentCheck`. Use it to answer *"does the toolchain work?"* — did the diag build arm, did the anchor land,
+did the streams merge, did the packager run. Use it for nothing else. With no input there is no scroll, so there
+are no latency rows, and the packager will correctly hard-fail on that: **a hard fail here is the expected and
+correct result**.
 
 ## Synthetic capture: cadence without a human
 

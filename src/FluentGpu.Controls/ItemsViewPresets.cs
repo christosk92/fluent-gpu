@@ -33,8 +33,8 @@ namespace FluentGpu.Controls;
 ///   + <see cref="ItemsView.DisplacementVersion"/> — ItemsView host-seeds an ANIMATED translate FLIP on each realized
 ///   row (the WinUI "part to make room" glide), replacing the old STATIC <c>OffsetY</c> hint (the dragged slot gets 0
 ///   so it stays put — WinUI source targetIndex=-1, never repositioned, ListViewBase_Partial_Reorder.cpp:2194-2228).
-///   Edge auto-scroll through <see cref="ItemsViewController.ScrollBy"/> (a hand-rolled ±8dip-within-24dip nudge; the
-///   WinUI 100px/150-1500px/s edge gradient lives in DragDropContext, which this path doesn't route through), and the
+///   Edge auto-scroll through <see cref="ItemsViewController.SetAutoScrollVelocity"/> (a hand-tuned 480dip/s-within-24dip
+///   hold; the WinUI 100px/150-1500px/s edge gradient lives in DragDropContext, which this path doesn't route through), and the
 ///   WinUI RemoveAt+Insert commit (ReorderList.Move).
 /// </summary>
 internal sealed class ItemsViewListPreset : Component
@@ -151,25 +151,33 @@ internal sealed class ItemsViewListPreset : Component
         {
             if (reorder.Update(e.TotalDy))
                 orderVersion.Value = orderVersion.Peek() + 1;
-            // Edge auto-scroll (E5-L3): pointer within 24dip of the viewport edge nudges the scroll.
+            // Edge auto-scroll (E5-L3): pointer within 24dip of the viewport edge holds a continuous scroll velocity
+            // for as long as it stays there — SetAutoScrollVelocity(0) the instant it leaves the band, so the kernel's
+            // Autoscroll activity never outlives the hold. dipPerS keeps the old per-event ±8dip nudge's FELT speed
+            // (it fired once per pointer-move event, which at a ~60Hz pointer-move cadence read as ~8dip/16ms ⇒
+            // ~480dip/s) — now expressed as a rate instead of a per-event instant jump (Scroll v3 plan §3.2 row
+            // "Controls/ItemsView.cs:1088 ScrollByDelta (drag-edge autoscroll) … SetVelocity(vp, dipPerS)").
             var scene = ctx.Scene;
             if (scene is not null && !ctx.HostNode.IsNull && scene.IsLive(ctx.HostNode))
             {
                 var r = scene.AbsoluteRect(ctx.HostNode);
-                const float edge = 24f, speed = 8f;
-                if (e.Absolute.Y < r.Y + edge) controller.ScrollBy(-speed);
-                else if (e.Absolute.Y > r.Y + r.H - edge) controller.ScrollBy(speed);
+                const float edge = 24f, dipPerS = 480f;
+                if (e.Absolute.Y < r.Y + edge) controller.SetAutoScrollVelocity(-dipPerS);
+                else if (e.Absolute.Y > r.Y + r.H - edge) controller.SetAutoScrollVelocity(dipPerS);
+                else controller.SetAutoScrollVelocity(0f);
             }
         }
 
         void OnDragCompleted(DragEventArgs e)
         {
+            controller.SetAutoScrollVelocity(0f);            // drop never leaves an edge autoscroll coasting
             reorder.Complete();                              // fires OnCommit when the slot changed
             orderVersion.Value = orderVersion.Peek() + 1;
         }
 
         void OnDragCanceled()
         {
+            controller.SetAutoScrollVelocity(0f);
             reorder.Cancel();
             orderVersion.Value = orderVersion.Peek() + 1;
         }

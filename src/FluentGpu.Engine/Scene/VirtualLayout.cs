@@ -88,34 +88,37 @@ public interface IViewportVirtualLayout : IVirtualLayout
 /// <summary>Decides whether a scroll offset needs a virtual-window refresh, using the realized overscan as a guard band.</summary>
 public static class VirtualWindowing
 {
-    /// <summary>Fling speed (px/s along the scroll axis) below which the directional overscan collapses to the historical
-    /// symmetric guard — so an at-rest / slow-wheel realize computes exactly the pre-E5 window (existing gates unchanged);
-    /// the velocity skew engages only under a real fling.</summary>
+    /// <summary>Scroll speed (DIP/s along the scroll axis) below which the directional overscan collapses to the
+    /// historical symmetric guard — so an at-rest / slow-wheel realize computes exactly the pre-E5 window (existing
+    /// gates unchanged); the velocity skew engages under any live kernel motion (scroll-v3-plan §4 — no longer
+    /// fling-only: <c>sc.Velocity</c> is populated by drag/ballistic/driven/wheel-chase alike).</summary>
     public const float FlingGuardThreshold = 1f;
-    /// <summary>E5: ahead-guard grows by <c>ceil(|FlingVelocity|·<see cref="VelocityOverscanFactor"/> / avgExtent)</c> rows —
-    /// ~120ms of travel pre-buffered on the scroll-direction edge.</summary>
-    public const float VelocityOverscanFactor = 0.12f;
+    /// <summary>E5: ahead-guard grows by <c>ceil(|Velocity|·<see cref="VelocityOverscanFactor"/> / avgExtent)</c> rows —
+    /// ~100ms of travel pre-buffered on the scroll-direction edge (scroll-v3-plan §2.1 <c>ScrollFeel.Shipping.RealizeAheadSec</c>
+    /// = 0.10; kept as a local const here rather than a cross-package reference to the kernel's feel record).</summary>
+    public const float VelocityOverscanFactor = 0.10f;
 
     /// <summary>E5 velocity-proportional DIRECTIONAL overscan — a FIXED-SUM skew. The two overscan halves always sum to
     /// <c>2·Overscan</c> (the pre-E5 total), so the realized WINDOW WIDTH is velocity-independent — critical for the
     /// zero-alloc bound-list path, whose persistent slots would otherwise grow/shrink (allocate) as velocity varied. Under
-    /// a fling the fixed budget is redistributed toward the scroll direction: ahead = <c>Overscan + k</c>, behind =
-    /// <c>Overscan − k</c> (k ∝ speed, clamped to <c>Overscan−1</c> so behind ≥ 1). At rest / below
-    /// <see cref="FlingGuardThreshold"/> both are <paramref name="overscan"/> (symmetric — identical to the pre-E5 window).
-    /// Pure integer arithmetic, allocation-free. <paramref name="flingVelocity"/> is signed in offset space (≥0 ⇒ scrolling
-    /// toward higher indices ⇒ the high-index edge is ahead).</summary>
-    public static void DirectionalOverscan(int overscan, float flingVelocity, float avgExtent, out int lowOverscan, out int highOverscan)
+    /// live motion the fixed budget is redistributed toward the scroll direction: ahead = <c>clamp(Overscan + k, 1,
+    /// 2·Overscan−1)</c>, behind = <c>2·Overscan − ahead</c> (k ∝ speed, so ahead never collapses the budget to less
+    /// than 1 row on either side). At rest / below <see cref="FlingGuardThreshold"/> both are <paramref name="overscan"/>
+    /// (symmetric — identical to the pre-E5 window). Pure integer arithmetic, allocation-free.
+    /// <paramref name="velocityMain"/> is <c>ScrollState.Velocity</c> — signed in offset space (≥0 ⇒ scrolling toward
+    /// higher indices ⇒ the high-index edge is ahead).</summary>
+    public static void DirectionalOverscan(int overscan, float velocityMain, float avgExtent, out int lowOverscan, out int highOverscan)
     {
-        bool flinging = MathF.Abs(flingVelocity) > FlingGuardThreshold;
+        bool moving = MathF.Abs(velocityMain) > FlingGuardThreshold;
         int aheadOv = overscan, behindOv = overscan;
-        if (flinging && overscan > 0)
+        if (moving && overscan > 0)
         {
             float avg = avgExtent > 0f ? avgExtent : 1f;
-            int k = Math.Clamp((int)MathF.Ceiling(MathF.Abs(flingVelocity) * VelocityOverscanFactor / avg), 0, overscan - 1);
+            int k = Math.Clamp((int)MathF.Ceiling(MathF.Abs(velocityMain) * VelocityOverscanFactor / avg), 0, overscan - 1);
             aheadOv = overscan + k;   // sum stays 2·overscan ⇒ constant window width ⇒ no bound-slot churn
             behindOv = overscan - k;
         }
-        bool forward = flingVelocity >= 0f;                 // offset increasing ⇒ high-index edge is ahead
+        bool forward = velocityMain >= 0f;                  // offset increasing ⇒ high-index edge is ahead
         lowOverscan = forward ? behindOv : aheadOv;
         highOverscan = forward ? aheadOv : behindOv;
     }
@@ -141,7 +144,7 @@ public static class VirtualWindowing
         // less. At rest DirectionalOverscan is symmetric ⇒ both guards are max(1, Overscan/2) — byte-identical to pre-E5.
         float contentExt = sc.Orientation == 1 ? sc.ContentW : sc.ContentH;
         float avg = sc.ItemCount > 0 && contentExt > 0f ? contentExt / sc.ItemCount : 1f;
-        DirectionalOverscan(sc.Overscan, sc.FlingVelocity, avg, out int lowOv, out int highOv);
+        DirectionalOverscan(sc.Overscan, sc.Velocity, avg, out int lowOv, out int highOv);
         int guardLow = Math.Max(1, lowOv / 2);
         int guardHigh = Math.Max(1, highOv / 2);
 

@@ -6,6 +6,7 @@ using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Scene;
+using FluentGpu.Scroll;
 using FluentGpu.Signals;
 using static FluentGpu.Dsl.Ui;
 
@@ -31,8 +32,8 @@ sealed class AnimationPage : Component
         var hooksOpen = UseSignal(true);
         Signal<bool>[] all = [tracksOpen, revealsOpen, layoutOpen, interactionOpen, hooksOpen];
 
-        // Section anchors for the quick-nav: captured at realize, scrolled to with the SetScrollOffset idiom
-        // (write Offset+Target, apply the layout-free -offset content transform, re-render — ItemsView.cs:212-254).
+        // Section anchors for the quick-nav: captured at realize, scrolled to with the ScrollIntoView seam (posts an
+        // immediate ScrollTo through the scroll kernel — clamp/transform/virtualization are the kernel's job now).
         var anchors = UseRef(new NodeHandle[5]);
         void ScrollToSection(int i)
         {
@@ -45,12 +46,7 @@ sealed class AnimationPage : Component
             ref ScrollState sc = ref scene.ScrollRef(vp);
             if (sc.ContentNode.IsNull || !scene.IsLive(sc.ContentNode)) return;
             float y = scene.AbsoluteRect(target).Y - scene.AbsoluteRect(sc.ContentNode).Y;   // content-space position
-            float t = Math.Clamp(y - 8f, 0f, MathF.Max(0f, sc.ContentH - sc.ViewportH));
-            sc.OffsetY = t; sc.TargetY = t;
-            scene.Paint(sc.ContentNode).LocalTransform = Affine2D.Translation(0f, -t);
-            scene.Mark(sc.ContentNode, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
-            scene.Mark(vp, NodeFlags.VirtualRangeDirty);
-            Context.RequestRerender();
+            ScrollIntoView.ScrollTo(Context, vp, y - 8f, animate: false);
         }
 
         return GalleryPage.Shell("Animation",

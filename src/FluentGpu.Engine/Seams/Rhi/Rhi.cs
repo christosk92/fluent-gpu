@@ -37,6 +37,38 @@ namespace FluentGpu.Rhi;
 public readonly record struct FrameInfo(Size2 SizePx, float Scale, ColorF Clear, RectF Damage = default, float ImageClockMs = 0f, ulong FrameEpoch = 0, bool ScrollHold = false,
     RepaintDamageRegion RepaintDamage = default, ulong PublishSequence = 0, ulong CarriedFromSeq = 0, ulong DrawListHash = 0);
 
+/// <summary>A coherent whole-command-list GPU execution measurement owned by one swapchain. <paramref name="Sequence"/>
+/// is monotonic within that target; <paramref name="SubmitAge"/> is how many submissions to the SAME target have happened
+/// since the measured submit (the double-buffered D3D path normally publishes at age 2); <paramref name="PublishedQpc"/>
+/// is the CPU QPC instant at which fence retirement made the timestamp pair readable.</summary>
+public readonly record struct GpuRenderSample(double ExecutionMs, ulong Sequence, ulong SubmitAge, long PublishedQpc);
+
+/// <summary>Coherent optional FG_GPU_TIMING whole/scene/category timeline owned by one swapchain target.</summary>
+public readonly record struct GpuProfileSample(ulong Sequence, double WholeMs, double SceneMs,
+    double FillMs, double ShadowMs, double ImageMs, double GlyphMs, double CompositeMs);
+
+[Flags]
+public enum RectSubmittedAreaFlags : byte
+{
+    None = 0,
+    Rounded = 1,
+    Stroked = 2,
+    RoundedClip = 4,
+    NonPlainKind = 8,
+}
+
+/// <summary>One large blended-rect descriptor from a submitted-area diagnostic snapshot. Local W/H are DIP;
+/// <paramref name="AreaPx2"/> includes the affine determinant and DPI scale. Ordinal is among submitted rect instances,
+/// not a scene-node/source identity.</summary>
+public readonly record struct RectSubmittedAreaItem(
+    int Ordinal, double AreaPx2, float EffectiveAlpha, float LocalW, float LocalH, RectSubmittedAreaFlags Flags);
+
+/// <summary>Coherent target-local rect submitted-area snapshot. Areas are nominal transformed px², not coverage:
+/// clipping and overlap are deliberately not removed. Sequence increments once per successful target submit.</summary>
+public readonly record struct RectSubmittedAreaSample(
+    ulong Sequence, int OpaqueInstances, int BlendedInstances, bool HasArea,
+    double OpaquePx2, double BlendedPx2, int TopCount);
+
 /// <summary><paramref name="DesktopAcrylic"/> = back this composited popup with a true desktop-sampling acrylic
 /// (Windows.UI.Composition host backdrop) tinted by <paramref name="AcrylicTint"/> — the WinUI MenuFlyout material,
 /// reached without the Windows App SDK. Ignored by backends that don't support it (they fall back to a plain swapchain).</summary>
@@ -127,22 +159,18 @@ public interface IGpuDevice : IDisposable
     /// rendezvous on real hardware, without TDR-ing the whole desktop. No-op default (headless / no injection support).</summary>
     void InjectDeviceLost() { }
 
-    /// <summary>Diagnostic: wall-time (ms) spent BLOCKED on GPU fences — the frame fence (<c>WaitForFrame</c>) plus the
-    /// present-latency waitable — inside the most recent <see cref="SubmitDrawList(ReadOnlySpan{byte}, ReadOnlySpan{ulong}, in FrameInfo)"/>.
-    /// This UI-thread stall is what dominates measured "submit" time today (the render-thread seam will move it off the UI
-    /// thread). The host folds it into <c>FrameStats.FenceWaitMs</c>. Default 0 for backends that don't block on a GPU fence
-    /// (headless), so it reads as "no stall" rather than missing.</summary>
+    /// <summary>Diagnostic: wall-time (ms) spent blocked on the frame-retirement fence plus the present-latency waitable
+    /// inside the most recent <see cref="SubmitDrawList(ReadOnlySpan{byte}, ReadOnlySpan{ulong}, in FrameInfo)"/>. This is
+    /// queue/back-buffer retirement and compositor pacing, not GPU execution time. The host folds it into
+    /// <c>FrameStats.FenceWaitMs</c>. Default 0 for backends that do not block there.</summary>
     double LastFenceWaitMs => 0;
 
-    /// <summary>Diagnostic (FG_GPU_TIMING=1): the TRUE on-GPU wall-time (ms) of the most recent submitted frame, measured
-    /// by a begin/end timestamp-query pair bracketing the whole command list (resolved one frame later, so it lags by one
-    /// frame). Unlike <see cref="LastFenceWaitMs"/> — which conflates raster with the vblank/present-latency wait — this is
-    /// the actual rasterization cost, the number that says whether a maximized 60fps lock is GPU-fill-bound (render ≳ the
-    /// refresh budget) or merely vblank-quantized (render &lt; budget but the fence stalls). 0 when timing is off or
-    /// unsupported. The host folds it into <c>FrameStats.GpuRenderMs</c>.</summary>
-    double LastGpuRenderMs => 0;
+    /// <summary>Diagnostic (FG_GPU_TIMING=1): whole-command-list elapsed timestamp span paired with the detailed scene
+    /// and category values below. This remains distinct from the target-local always-on
+    /// <see cref="ISwapchain.TryGetGpuRenderSample"/> sample. 0 when off/unsupported.</summary>
+    double LastGpuProfileMs => 0;
 
-    /// <summary>Diagnostic (FG_GPU_TIMING=1): of <see cref="LastGpuRenderMs"/>, the SCENE-RASTER portion (clear + draw-list
+    /// <summary>Diagnostic (FG_GPU_TIMING=1): the SCENE-EXECUTION portion (clear + draw-list
     /// playback + layer composites), excluding image uploads and baked-blur. When this ≈ the whole and ≳ the refresh budget,
     /// the maximize lock is content fill/overdraw (not uploads/blur). 0 when off. Host folds into <c>FrameStats.GpuSceneMs</c>.</summary>
     double LastGpuSceneMs => 0;
@@ -166,9 +194,8 @@ public interface IGpuDevice : IDisposable
     /// <summary>Diagnostic (FG_GPU_TIMING=1): of <see cref="LastGpuSceneMs"/>, the layer/acrylic COMPOSITE portion. 0 when off. Folds into <c>FrameStats.GpuCompositeMs</c>.</summary>
     double LastGpuCompositeMs => 0;
 
-    /// <summary>Diagnostic (FG_GPU_TIMING=1): true when <see cref="LastGpuRenderMs"/> was resolved on the most recent
-    /// submit (not a leftover from a prior present). Skip-submit / present stand-down leave this false so <c>[fps]</c>
-    /// does not re-quote a stale <c>grender</c>.</summary>
+    /// <summary>Diagnostic (FG_GPU_TIMING=1): true when the detailed scene/category timestamp block was resolved on the
+    /// most recent submit. This is deliberately separate from the always-on whole-frame sample above.</summary>
     bool GpuTimingSampleFresh => false;
 
     /// <summary>True when the most recent <see cref="ISwapchain.Present"/> stood down (cloaked / OCCLUDED probe still
@@ -250,6 +277,33 @@ public interface ISwapchain : IDisposable
     /// compositor (for example DirectComposition). The host uses this to scope interactive present experiments; opaque
     /// HWND swapchains and backends that do not opt in stay on their ordinary vsync path.</summary>
     bool SupportsCompositedIntervalZero => false;
+
+    /// <summary>Read the most recently retired whole-frame GPU execution sample for THIS target. Returns false when the
+    /// backend cannot measure it or no sample for this swapchain has retired yet. Target ownership is load-bearing: a
+    /// popup/child submission must never update the main host's governor (and vice versa).</summary>
+    bool TryGetGpuRenderSample(out GpuRenderSample sample)
+    {
+        sample = default;
+        return false;
+    }
+
+    /// <summary>Read the most recently retired optional FG_GPU_TIMING timeline for THIS target. Sequence is target-local
+    /// and monotonic, allowing asynchronous log consumers to reject repeated observations.</summary>
+    bool TryGetGpuProfileSample(out GpuProfileSample sample)
+    {
+        sample = default;
+        return false;
+    }
+
+    /// <summary>Copy one coherent target-local submitted-rect snapshot: opaque/blended instance counts are always
+    /// available on supporting backends; <see cref="RectSubmittedAreaSample.HasArea"/> gates the optional
+    /// <c>FG_RENDER_DIAG</c> areas and fixed top-N descriptors. Returns false when unsupported or before the target's
+    /// first submit. Implementations must not expose mutable render-thread counters through this seam.</summary>
+    bool TryCopyRectSubmittedAreaSample(Span<RectSubmittedAreaItem> blendedTop, out RectSubmittedAreaSample sample)
+    {
+        sample = default;
+        return false;
+    }
 
     /// <summary>Configure the windowed popup's composition chrome (rounded acrylic content rect + outer shadow) for the
     /// current placement. Called on each placement before show. Default no-op: only a backdrop-backed backend honors it.</summary>

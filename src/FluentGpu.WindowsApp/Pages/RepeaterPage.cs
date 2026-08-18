@@ -26,8 +26,8 @@ sealed class StaggerLayout : IVirtualLayout
     }
 }
 
-// Showcases the ItemsRepeater abstraction: one control, data + template + a pluggable layout (Wrap / Grid / Custom).
-[GalleryPage("repeater", "ItemsRepeater", "Fundamentals", Icon = Icons.List)]
+// Showcases the ItemsView abstraction: one control, data + template + a pluggable layout (Wrap / Grid / Custom).
+[GalleryPage("repeater", "ItemsView", "Fundamentals", Icon = Icons.List)]
 sealed class RepeaterPage : Component
 {
     static readonly ColorF Grey = ColorF.FromRgba(0x9A, 0x9A, 0x9A);
@@ -37,19 +37,19 @@ sealed class RepeaterPage : Component
         Direction = 1, Gap = 18, Padding = Edges4.All(24),
         Children =
         [
-            Heading("ItemsRepeater & custom layouts"),
+            Heading("ItemsView & custom layouts"),
             Text("One control: data + a template + a pluggable layout. Stack/Grid VIRTUALIZE (only the window realizes, recycled over the slab free-list, 0-alloc steady scroll); Wrap is non-virtual for small sets. Any IVirtualLayout you implement plugs in unchanged.")
                 .Foreground(Grey)
                 .Wrapped(),
 
             Label("RepeatLayout.Wrap — non-virtual chips"),
-            Repeater.ItemsRepeater(14, Chip, RepeatLayout.Wrap(8f)),
+            ItemsView.Create(14, Chip, RepeatLayout.Wrap(8f)),
 
             Label("RepeatLayout.Grid — virtualized 4-column card grid (1,000 items)"),
-            new BoxEl { Height = 260, Children = [Repeater.ItemsRepeater(1000, Card, RepeatLayout.Grid(4, 110f, 12f), keyOf: i => "c" + i)] },
+            new BoxEl { Height = 260, Children = [ItemsView.Create(1000, Card, RepeatLayout.Grid(4, 110f, 12f), new ListOptions { KeyOf = i => "c" + i })] },
 
             Label("RepeatLayout.Custom(StaggerLayout) — your own geometry (5,000 items)"),
-            new BoxEl { Height = 260, Children = [Repeater.ItemsRepeater(5000, Row, RepeatLayout.Custom(new StaggerLayout(44f, 16f)), keyOf: i => "s" + i)] },
+            new BoxEl { Height = 260, Children = [ItemsView.Create(5000, Row, RepeatLayout.Custom(new StaggerLayout(44f, 16f)), new ListOptions { KeyOf = i => "s" + i })] },
         ],
     });
 

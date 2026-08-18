@@ -1,30 +1,28 @@
 ﻿<#
 .SYNOPSIS
-  Run ONE guided, interactive Wavee scroll-feel capture and emit a self-describing session bundle.
+  Run ONE free-scroll Wavee capture and emit a self-describing session bundle.
 
 .DESCRIPTION
+  Launch Wavee with the feel-instrument environment, let the operator scroll however they want, then pack
+  console.txt + scroll.csv when they close the window. No gesture script, no ENTER-when-ready, no 1-5 ratings.
+
   "Smooth scroll" is two independent properties, and they trade against each other:
 
-    Pillar A - GLUED:  does the content sit where the finger is?     (input -> offset commit)
-    Pillar B - STEADY: do photons change on an even cadence?         (offset -> record -> publish -> present -> vblank)
+    Pillar A - glued:  does the content sit where the finger is?     (input -> offset commit)
+    Pillar B - steady: are submit-confirmed presents evenly paced?   (offset -> record -> publish -> present)
 
-  A pacing queue improves B and worsens A. So this bundle keeps them structurally separate and never fuses them
-  into one "smoothness score" - a fused score calls that trade a wash and hides both.
+  A pacing queue improves B and worsens A. The packager keeps them structurally separate. Do not invent a fused
+  smoothness score, and do not ask a human to rate either pillar - the traces already contain both.
 
   What this script produces (ops/diag/sessions/<utcStamp>-<sha>/):
     manifest.json   build + machine + display + power + the full env dump, each var tagged default/overridden/cleared
     console.txt     stdout AND stderr, merged; MUST contain the [scrolltrace] anchor line
     scroll.csv      the ScrollTrace POD ring (diag builds only)
-    phases.jsonl    one record per phase: human name, wall clock, QPC, and the operator's subjective scores
+    phases.jsonl    one freeScroll slice covering the whole session (wall clock + QPC; scores are always null)
     feel-summary.json / AGENT.md   written by pack-feel-summary.ps1 (run automatically at the end)
-
-  INTERACTIVE BY DESIGN. It prompts a human to perform specific gestures and to score how they felt. Synthetic
-  input can prove "the drops happen even with no input", but it cannot answer "does this feel glued", so the
-  subjective score is a first-class column of the bundle, not a nicety.
 
 .EXAMPLE
   ops\diag\wavee-scroll-session.cmd -Diag
-  powershell -File ops\diag\wavee-scroll-session.ps1 -Diag -Repetitions 3
   powershell -File ops\diag\wavee-scroll-session.ps1 -SkipPublish -ExePath C:\path\Wavee.exe
 
 .NOTES
@@ -62,20 +60,13 @@ param(
   [switch]$SkipPublish,
   [string]$ExePath,
   [string]$OutRoot,
-  [int]$PhaseSeconds = 10,
-  [ValidateRange(1, 9)]
-  [int]$Repetitions = 3,
   # Skip the packaging step (leave the raw bundle for manual inspection).
   [switch]$NoPack,
-  # UNATTENDED: run the phase timeline with NO human and NO gestures. Every phase is stamped synthetic:true and
-  # carries NULL subjective scores rather than invented ones.
-  #
-  # This exists to validate the INSTRUMENT, not the feel. It proves the diag build armed, the anchor landed, the
-  # streams merged, the marker reached the app and the packager ran - on a real process rather than a fixture. It
-  # cannot answer whether anything felt glued or steady, because nobody touched the machine, and the packager
-  # refuses to let a synthetic phase produce a feel verdict. Never report a scroll conclusion from one.
+  # UNATTENDED: launch, idle briefly, close. Stamped instrumentCheck / synthetic. Validates the toolchain
+  # (diag build armed, anchor landed, streams merged, packager ran). Nobody scrolled, so it cannot answer
+  # a feel question. Never report a scroll conclusion from one.
   [switch]$Unattended,
-  [int]$UnattendedPhaseSeconds = 4,
+  [int]$UnattendedSeconds = 4,
   # Proceed even though the machine is not idle. The measured value is recorded either way; this only skips the
   # refusal, and the bundle is stamped untrusted so the override cannot be forgotten later.
   [switch]$AllowBusyMachine
@@ -116,20 +107,6 @@ if ($PresentInterval0 -and -not $GpuTiming) {
 if ($NoImagePump -and -not $Diag) {
   throw "-NoImagePump requires -Diag. The arm is compiled behind '#if DEBUG || FLUENTGPU_DIAG', so a plain Release run would pump images normally while the manifest claimed the bisection had been performed - which would turn 'no change' into a false refutation."
 }
-
-# ── the gesture script ───────────────────────────────────────────────────────────────────────────────────────
-# Each phase exists to isolate ONE thing. Equal fixed windows so sample counts are comparable; an "Enter when
-# ready" phase has an unequal count by construction and cannot be compared to its own repetitions.
-$GestureScriptVersion = 1
-$phases = @(
-  @{ ord = 1; name = 'idleFirst';        instruction = 'HANDS OFF the machine. Do not touch anything.';                        why = 'the noise floor every cadence metric is measured against, and the ambient-cap baseline' }
-  @{ ord = 2; name = 'homeFling';        instruction = 'On HOME: 3 hard flicks down the touchpad, about 1 second apart.';      why = 'image-heavy shelf - exercises the image pump and the phase-7.6 realize catch-up' }
-  @{ ord = 3; name = 'wheelNotches';     instruction = 'With a MOUSE WHEEL: 10 single notches, about 1 per second.';           why = 'the only non-contact path that can carry a hardware-grade input stamp' }
-  @{ ord = 4; name = 'likedSlowPan';     instruction = 'On LIKED SONGS: ONE slow continuous drag, finger DOWN the whole time.'; why = 'pillar A at low velocity, where tracking error is not masked by speed' }
-  @{ ord = 5; name = 'likedFling';       instruction = 'On LIKED SONGS: 3 hard flicks.';                                       why = 'inertia - the resampler extrapolation clamp and the OS momentum tail' }
-  @{ ord = 6; name = 'densePlaylistFling'; instruction = 'On a DENSE PLAYLIST: 3 hard flicks.';                                why = 'maximal fill/image/glyph churn and span re-record pressure' }
-  @{ ord = 7; name = 'idleLast';         instruction = 'HANDS OFF again. Do not touch anything.';                              why = 'drift vs phase 1 AND - non-negotiable - it triggers the ScrollTrace idle flush' }
-)
 
 # ── build identity ───────────────────────────────────────────────────────────────────────────────────────────
 Step "Build identity"
@@ -201,18 +178,10 @@ else {
   if ($idleCpu -gt 5.0) {
     Warn "Idle CPU is $idleCpu% (over the 5% bar). Something else is using this machine, and its hitches would be"
     Warn "recorded as ours with nothing in the bundle able to tell them apart afterwards."
-    if ($AllowBusyMachine) {
-      Warn "-AllowBusyMachine given: continuing. The measured value is recorded and the bundle is stamped untrusted."
+    if ($Unattended -and -not $AllowBusyMachine) {
+      throw "Aborted: machine not idle ($idleCpu% > 5%). Wait for it to settle (a just-finished AOT publish is a common cause) and re-run, or pass -AllowBusyMachine."
     }
-    elseif ($Unattended) {
-      # No human to answer a prompt here. Note a common self-inflicted cause: a NativeAOT publish leaves the machine
-      # busy for a while, so a session started straight after one measures the compiler's tail, not the app.
-      throw "Aborted: machine not idle ($idleCpu% > 5%). Wait for it to settle (a just-finished AOT publish is a common cause) and re-run, or pass -AllowBusyMachine to proceed with the bundle stamped untrusted."
-    }
-    else {
-      $go = Read-Host "    Continue anyway? The bundle will be stamped untrusted. (y/N)"
-      if ($go -ne 'y') { throw "Aborted: machine not idle." }
-    }
+    Warn "Continuing anyway. The measured value is recorded and the bundle is stamped untrusted."
   }
 }
 if (Get-Process -Name 'Wavee' -ErrorAction SilentlyContinue) {
@@ -241,31 +210,13 @@ $etwRights = ($elevatedNow -or $inPerfGroup)
 if (-not $presentMonInstalled) { $presentMonReason = 'not installed (winget install Intel.PresentMon.Console)' }
 elseif (-not $etwRights) { $presentMonReason = 'installed but this session has neither elevation nor Performance Log Users membership, so it cannot open an ETW session' }
 else { $presentMonUsable = $true }
-if ($presentMonUsable) { Info "PresentMon $presentMonVersion available (run ops\diag\probe-presentmode.ps1 separately while scrolling)" }
+if ($presentMonUsable) { Info "PresentMon $presentMonVersion available (in-app DXGI/DWM stats still captured either way)" }
 else {
   Warn "PresentMon unusable: $presentMonReason"
-  Warn "Falling back to the IN-APP DXGI/DWM present statistics, which this build carries unconditionally. That is a"
-  Warn "supported configuration, not a degraded one - what is lost is the INDEPENDENT witness, so every present-side"
-  Warn "number then comes from the same process being measured."
+  Warn "Falling back to the IN-APP DXGI/DWM present statistics, which this build carries unconditionally."
 }
 if ($Unattended) {
-  Warn "UNATTENDED: no human, no gestures. This validates the INSTRUMENT, not the feel."
-  Warn "Every phase will be stamped synthetic:true with NULL scores, and no feel verdict may be drawn from it."
-  $PhaseSeconds = $UnattendedPhaseSeconds
-}
-elseif ([Console]::IsInputRedirected) {
-  # Refuse rather than silently fabricate. With stdin redirected (a pipe, a CI job, an agent driving the shell)
-  # every Read-Host below returns empty, int::TryParse leaves 0, and the bundle records glued=0 steady=0 for every
-  # phase - the numeric floor. The packager would then read a run nobody watched as a severe reproduction of the
-  # complaint, which is the single worst artifact this whole design exists to prevent. There is no safe default
-  # here: 0 invents a complaint and 5 invents an all-clear, so the only correct move is to not produce a bundle.
-  throw @"
-Interactive mode requires a real console, but stdin is redirected.
-
-An interactive session's subjective scores are load-bearing - the rubric halts the entire investigation when every
-phase scores 4-5 - so they can be neither defaulted nor guessed. Re-run from a terminal, or use -Unattended, which
-records NULL scores and stamps the bundle synthetic so it can never be read as a feel result.
-"@
+  Warn "UNATTENDED / instrumentCheck: no human, no gestures. This validates the INSTRUMENT, not the feel."
 }
 
 # ── session directory ────────────────────────────────────────────────────────────────────────────────────────
@@ -285,7 +236,10 @@ $outRaw = Join-Path $sess '.stdout.txt'
 $errRaw = Join-Path $sess '.stderr.txt'
 $phaseMarker = Join-Path $sess '.phase-marker.txt'
 $phasesJsonl = Join-Path $sess 'phases.jsonl'
-WriteMarker $phaseMarker "0 0 0 0"
+$abVariant = 0
+if ($Opaque) { $abVariant = 1 }
+# Stamp the free-scroll slice BEFORE launch so the first host-loop poll already has a phase ordinal.
+WriteMarker $phaseMarker "1 1 $abVariant 0"
 
 # ── environment ──────────────────────────────────────────────────────────────────────────────────────────────
 # Every variable is set or CLEARED explicitly and recorded with its origin, so a bundle can never be read under
@@ -311,7 +265,7 @@ SetEnv 'FG_LAYOUT_DIAG' '1' 'measure/arrange/text-shape counts; without it the F
 
 if ($Diag) {
   SetEnv 'FG_SCROLL_TRACE' $scrollCsv 'the POD ring, written straight into the bundle (any value != "1" is used as a path)'
-  SetEnv 'FG_SCROLL_PHASE_FILE' $phaseMarker 'the capture-protocol phase marker, polled OUTSIDE the frame'
+  SetEnv 'FG_SCROLL_PHASE_FILE' $phaseMarker 'one free-scroll slice marker, polled OUTSIDE the frame'
   SetEnv 'FG_RENDER_DIAG' '1' 'the [renderbudget] every-frame re-render roster'
   # These two are CompiledIn && !disabled - i.e. default ON once the symbol exists. Leaving them on would make the
   # diag build measurably different from the Release build being complained about, which invalidates the session.
@@ -345,6 +299,11 @@ ClearEnv 'FG_ALLOC_TYPES' 'process-global EventListener - separate run'
 ClearEnv 'FG_SCROLL_LOG' 'per-event Console.WriteLine with AutoFlush - its own class doc warns it perturbs pacing'
 ClearEnv 'FG_SCROLLLOG' 'recorder-side variant of the same'
 ClearEnv 'FG_NOVSYNC' 'would remove the present pacing being measured'
+# Resolve default-on pacing knobs instead of inheriting an invisible shell override. The manifest below records the
+# resulting values, not an obsolete description of what an older Wavee build happened to request.
+ClearEnv 'FG_ADAPTIVE_FPS' 'production default ON; capture must not inherit an unrecorded governor override'
+ClearEnv 'FG_PRECISE_WAIT' 'production default ON; capture must not inherit an unrecorded wait-path override'
+ClearEnv 'FG_ANIM_FPS' 'use Wavee runtime policy (30 focused+AC without energy saver; otherwise 24)'
 ClearEnv 'WAVEE_FPS' 'app-side overlay - extra per-frame text work'
 ClearEnv 'WAVEE_LOG_LEVEL' 'app logging noise'
 ClearEnv 'WAVEE_LOG_FILE_LEVEL' 'app logging noise'
@@ -358,7 +317,7 @@ Info "cleared: $((($envSet.Keys | Where-Object { $envSet[$_].origin -eq 'explici
 
 # ── launch ───────────────────────────────────────────────────────────────────────────────────────────────────
 # stdout and stderr are captured to SEPARATE files and merged afterwards rather than teed through a pipeline:
-# a pipeline blocks until the process exits, which would make the interactive phase protocol below impossible.
+# a pipeline blocks until the process exits, which would make waiting on the window-close below impossible.
 # Nothing is lost - crucially NOT stdout, where the [scrolltrace] banner goes, and which a bare '2>' redirect
 # drops (that is why the previously committed capture has 476 [fps] lines and zero scrolltrace lines). The
 # cross-stream ORDER is recovered from the tMs= prefix every diagnostic line carries, not from file order.
@@ -384,109 +343,50 @@ if ($Diag -and -not $banner) {
 }
 if ($Diag) { Info "diag build confirmed (scrolltrace banner seen)" }
 
-# ── the guided protocol ──────────────────────────────────────────────────────────────────────────────────────
-Say ""
-Say "=================================================================="
-Say " SCROLL-FEEL SESSION - $($phases.Count) phases x $Repetitions repetitions x $PhaseSeconds s"
-Say "=================================================================="
-Say " Repetition 1 of every phase is DISCARDED as a warm-up: the first"
-Say " pass over a list pays span record, glyph raster, image decode and"
-Say " PSO warm, and pooling that with warm passes dominates every verdict."
-Say ""
-Say " After each phase you will score TWO SEPARATE things 1-5:"
-Say "   GLUED  - did the content sit exactly where your finger was?"
-Say "   STEADY - did it move evenly, with no stutter or freeze?"
-Say " Score them independently. A fix for one usually costs the other,"
-Say " so a single blended score would hide exactly what we are after."
-Say "=================================================================="
-Say ""
-if (-not $Unattended) { Read-Host "Put Wavee where you can reach it, then press ENTER to begin" }
+# ── free-scroll: operator uses the app, then closes the window ───────────────────────────────────────────────
+# Gesture idle/drag/inertia still come from the engine's own state word.
+$startWall = (Get-Date).ToUniversalTime().ToString('o')
+$startQpc = [System.Diagnostics.Stopwatch]::GetTimestamp()
 
-$abVariant = 0
-if ($Opaque) { $abVariant = 1 }
-$phaseRecords = @()
-
-foreach ($ph in $phases) {
-  for ($rep = 1; $rep -le $Repetitions; $rep++) {
-    $cold = 0
-    if ($rep -eq 1) { $cold = 1 }
-    Say ""
-    Say "------------------------------------------------------------------"
-    Say " PHASE $($ph.ord)/$($phases.Count): $($ph.name)   repetition $rep/$Repetitions$(if ($rep -eq 1) { '  (WARM-UP - will be discarded)' })"
-    Say " $($ph.instruction)"
-    Info " why: $($ph.why)"
-    Say "------------------------------------------------------------------"
-    if (-not $Unattended) {
-      Read-Host " Press ENTER when you are in position"
-      foreach ($c in @(3, 2, 1)) { Write-Host " $c..." -ForegroundColor Yellow; Start-Sleep -Seconds 1 }
-    }
-
-    # Stamp the phase in-band BEFORE the window opens: the app polls this file from its host loop (never from
-    # inside a frame) and stamps the ordinals into every subsequent trace record.
-    WriteMarker $phaseMarker "$($ph.ord) $rep $abVariant $cold"
-    $startWall = (Get-Date).ToUniversalTime().ToString('o')
-    $startQpc = [System.Diagnostics.Stopwatch]::GetTimestamp()
-
-    Write-Host " GO - $PhaseSeconds seconds" -ForegroundColor Green
-    Start-Sleep -Seconds $PhaseSeconds
-    Write-Host " STOP" -ForegroundColor Green
-
-    $endQpc = [System.Diagnostics.Stopwatch]::GetTimestamp()
-    $endWall = (Get-Date).ToUniversalTime().ToString('o')
-    WriteMarker $phaseMarker "0 $rep $abVariant $cold"
-
-    # NULL, not 0, when nobody scored it. A 0 would average into a "bad" score and manufacture a complaint out of
-    # an unattended run; null makes the packager report the session as uncorroborated, which is the truth.
-    $gluedN = $null; $steadyN = $null; $note = ''
-    if (-not $Unattended) {
-      $glued = Read-Host " GLUED  1-5 (1 = lagged far behind my finger, 5 = stuck to it)"
-      $steady = Read-Host " STEADY 1-5 (1 = stuttered badly, 5 = perfectly even)"
-      $note = Read-Host " Anything else you noticed (ENTER to skip)"
-      # Unparseable or out-of-range stays NULL, never 0. A skipped prompt must read as "not scored", because 0 is
-      # below the scale and would land as the worst possible rating on a phase nobody actually judged.
-      $g = 0; $s = 0
-      if ([int]::TryParse($glued, [ref]$g) -and $g -ge 1 -and $g -le 5) { $gluedN = $g }
-      if ([int]::TryParse($steady, [ref]$s) -and $s -ge 1 -and $s -le 5) { $steadyN = $s }
-      if ($null -eq $gluedN -or $null -eq $steadyN) {
-        Warn " Score not in 1-5; recorded as NOT SCORED for this phase rather than as a zero."
-      }
-    }
-
-    $phaseRecords += [ordered]@{
-      ord = $ph.ord; name = $ph.name; repetition = $rep; coldPass = ($cold -eq 1)
-      abVariant = $abVariant; abVariantName = $(if ($abVariant -eq 1) { 'opaque' } else { 'mica' })
-      synthetic = [bool]$Unattended
-      wallStartUtc = $startWall; wallEndUtc = $endWall
-      startQpc = $startQpc; endQpc = $endQpc
-      gluedScore1to5 = $gluedN; steadyScore1to5 = $steadyN; note = $note
-      instruction = $ph.instruction
-    }
-  }
-}
-
-# ── shutdown ─────────────────────────────────────────────────────────────────────────────────────────────────
-# CLOSE THE WINDOW, do not kill the process. The trace ring flushes on exactly three triggers - 30 consecutive
-# idle frames, a full ring, and the ProcessExit hook. A killed process runs none of them and the tail of the
-# capture is simply gone.
 Say ""
 if ($Unattended) {
-  # Still a graceful close, not a kill: the ring flushes on 30 idle frames, a full ring, or ProcessExit. A kill
-  # runs none of them and silently truncates the tail of the very capture being validated.
-  Step "Closing Wavee gracefully (CloseMainWindow, not a kill)"
+  Step "Instrument check: idling $UnattendedSeconds s, then closing Wavee"
+  Start-Sleep -Seconds $UnattendedSeconds
   [void]$proc.CloseMainWindow()
 }
 else {
-  Step "Close the Wavee WINDOW now (the X button)."
-  Warn "Do NOT kill it from Task Manager: the trace ring flushes on process exit, and a kill loses the tail."
+  Say "Wavee is running. Use it however you want. Close the window when you are done."
+  Warn "Do not kill it from Task Manager: the trace flushes on process exit, and a kill loses the tail."
 }
+
 $waited = 0
-while (-not $proc.HasExited -and $waited -lt 180) { Start-Sleep -Seconds 1; $waited++ }
+$maxWaitSec = 8 * 3600
+while (-not $proc.HasExited -and $waited -lt $maxWaitSec) {
+  Start-Sleep -Seconds 2
+  $waited += 2
+}
 if (-not $proc.HasExited) {
-  Warn "Still running after 3 minutes; forcing. The scroll.csv tail may be truncated."
+  Warn "Still running after 8 hours; forcing. The scroll.csv tail may be truncated."
   Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
   Start-Sleep -Seconds 2
 }
 Info "exited (code $($proc.ExitCode))"
+
+$endQpc = [System.Diagnostics.Stopwatch]::GetTimestamp()
+$endWall = (Get-Date).ToUniversalTime().ToString('o')
+WriteMarker $phaseMarker "0 1 $abVariant 0"
+
+$phaseRecords = @(
+  [ordered]@{
+    ord = 1; name = 'freeScroll'; repetition = 1; coldPass = $false
+    abVariant = $abVariant; abVariantName = $(if ($abVariant -eq 1) { 'opaque' } else { 'mica' })
+    synthetic = [bool]$Unattended
+    wallStartUtc = $startWall; wallEndUtc = $endWall
+    startQpc = $startQpc; endQpc = $endQpc
+    gluedScore1to5 = $null; steadyScore1to5 = $null; note = ''
+    instruction = 'use the app; close the window when done'
+  }
+)
 
 # ── assemble the bundle ──────────────────────────────────────────────────────────────────────────────────────
 Step "Assembling bundle"
@@ -519,12 +419,13 @@ $batt = $null
 try { $batt = Get-CimInstance Win32_Battery -ErrorAction Stop | Select-Object -First 1 } catch { }
 
 $manifest = [ordered]@{
-  schemaVersion = 1
+  # v2 makes the pacing knobs structured resolved values and records the launched target PID for PresentMon joins.
+  schemaVersion = 2
   sessionId = $sessionId
   utcStart = $utcStamp
   utcEnd = (Get-Date).ToUniversalTime().ToString('o')
-  launcherVersion = 1
-  gestureScriptVersion = $GestureScriptVersion
+  launcherVersion = 3
+  captureMode = $(if ($Unattended) { 'instrumentCheck' } else { 'freeScroll' })
   build = [ordered]@{
     gitSha = $gitSha; gitDirty = $gitDirty; gitBranch = $gitBranch
     # NOT an identity: InformationalVersion is a hand-edited literal in the csproj and does not move per build.
@@ -559,15 +460,26 @@ $manifest = [ordered]@{
     idleCpuPctPreCapture = $idleCpu
   }
   env = $envSet
-  # The default-ON knobs no switch names. A cadence verdict computed without knowing these is unsound: an ambient
-  # cap BELOW the panel refresh BEATS against the vsync-locked present, and the adaptive governor changes present
-  # cadence mid-session on its own.
+  # Resolved capture-time policy. These three environment variables were explicitly cleared above, so the values
+  # below describe this process rather than whatever happened to be inherited by the PowerShell host. Wavee's
+  # ambient policy is dynamic; record both reachable values instead of pretending the whole session ran at one rate.
   effectiveKnobs = [ordered]@{
-    adaptiveFps = 'default-ON (engages when the smoothed fence-wait EMA exceeds the GPU-bound budget)'
-    preciseWait = 'default-ON'
+    adaptiveFps = [ordered]@{
+      enabled = $true
+      resolvedFrom = 'engine default; FG_ADAPTIVE_FPS explicitly cleared'
+    }
+    preciseWait = [ordered]@{
+      enabled = $true
+      resolvedFrom = 'engine default; FG_PRECISE_WAIT explicitly cleared'
+    }
     bindContract = $(if ($Diag) { 'explicitly disabled' } else { 'not compiled in' })
     backwardsWrite = $(if ($Diag) { 'explicitly disabled' } else { 'not compiled in' })
-    ambientFps = 'Wavee sets 60 - BEATS against a 120 Hz panel by design'
+    ambientFps = [ordered]@{
+      mode = 'Wavee power/attention policy; FG_ANIM_FPS explicitly cleared'
+      focusedAcNoEnergySaver = 30
+      backgroundBatteryOrEnergySaver = 24
+      mayChangeDuringSession = $true
+    }
     gpuTiming = [bool]$GpuTiming
     layoutDiag = $true
     opaqueWindow = [bool]$Opaque
@@ -585,6 +497,7 @@ $manifest = [ordered]@{
     installed = $presentMonInstalled
     path = $presentMonPath
     version = $presentMonVersion
+    targetProcessId = $proc.Id
     etwRightsAvailable = $etwRights
     unavailableReason = $presentMonReason
     argv = @()
@@ -593,11 +506,9 @@ $manifest = [ordered]@{
     diag = [bool]$Diag; opaque = [bool]$Opaque; gpuTiming = [bool]$GpuTiming
     presentInterval0 = [bool]$PresentInterval0; skipPublish = [bool]$SkipPublish
     noImagePump = [bool]$NoImagePump
-    repetitions = $Repetitions; phaseSeconds = $PhaseSeconds
+    unattended = [bool]$Unattended
   }
-  subjectiveScores = @($phaseRecords | ForEach-Object {
-      [ordered]@{ phase = $_.name; repetition = $_.repetition; gluedScore1to5 = $_.gluedScore1to5; steadyScore1to5 = $_.steadyScore1to5; note = $_.note }
-    })
+  subjectiveScores = @()
 }
 WriteJsonNoBom $manifest (Join-Path $sess 'manifest.json')
 

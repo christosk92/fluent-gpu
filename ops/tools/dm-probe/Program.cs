@@ -4,6 +4,12 @@
 // and does EnableMouseInPointer(true) starve that channel?
 // Cells: A = no MIP, fixed rect   B = MIP ON, fixed rect (the linchpin — our engine's world)
 //        C = no MIP, window rect  D = MIP ON, no ProcessInput pumping (expected wedge)
+// scroll-v3-plan-2026-08-17.md §5.6 hardware-verification cells for the WP-P2 producer rewrite (window rect, no
+// SetContentRect — matches the real Win32DirectManipulation producer):
+//        E = config WITHOUT inertia (INTERACTION|TX|TY|SCALING) — verifies the bare RUNNING->READY lift: latency,
+//            and whether any WM_POINTERWHEEL follows it (it must not, once DM owns the touchpad)
+//        F = config WITH inertia, Stop() issued at the RUNNING->INERTIA edge (deferred to the next pump, never
+//            called from inside the sink callback — same discipline as the shipped producer's _pendingStop)
 // CoreCLR + classic [ComImport] interop on purpose — this is a throwaway probe, not engine code.
 
 using System.Diagnostics;
@@ -16,6 +22,9 @@ internal static class Program
 {
     // ---- cell config ----
     private static bool _mip, _windowRect, _pump = true;
+    // scroll-v3-plan §5.6 cells E/F: no SetContentRect (matches the real producer), E drops the inertia config bits,
+    // F keeps them and issues Stop() at the RUNNING->INERTIA edge (deferred — see _pendingStopAtInertia).
+    private static bool _noContentRect, _noInertiaCfg, _stopAtInertia;
     private static string _cell = "B";
 
     private static readonly Stopwatch Clock = Stopwatch.StartNew();
@@ -34,6 +43,13 @@ internal static class Program
                        _cContentUpdates, _cRunningFrames, _cInertiaFrames, _cProcessInputHandled;
     private static readonly Dictionary<string, int> _statusEdges = new();
 
+    // cell E/F: RUNNING->READY/INERTIA lift latency + "did a WM_POINTERWHEEL follow the lift" (cell E, §5.6 item 3).
+    private static long _runningEnteredMs = -1, _liftAtMs = -1;
+    private static int _wheelCountAtLift = -1;
+    // cell F: Stop() at the INERTIA edge must never run inside the sink callback (same discipline as the shipped
+    // producer's _pendingStop) — serviced from RunLoop instead.
+    private static bool _pendingStopAtInertia;
+
     [STAThread]
     private static int Main(string[] args)
     {
@@ -44,12 +60,16 @@ internal static class Program
             case "B": _mip = true;  _windowRect = false; _pump = true; break;
             case "C": _mip = false; _windowRect = true;  _pump = true; break;
             case "D": _mip = true;  _windowRect = false; _pump = false; break;
-            default: Console.WriteLine("usage: dm-probe [A|B|C|D]"); return 2;
+            case "E": _mip = true;  _windowRect = true;  _pump = true; _noContentRect = true; _noInertiaCfg = true; break;
+            case "F": _mip = true;  _windowRect = true;  _pump = true; _noContentRect = true; _stopAtInertia = true; break;
+            default: Console.WriteLine("usage: dm-probe [A|B|C|D|E|F]"); return 2;
         }
 
         string logPath = Path.Combine(AppContext.BaseDirectory, $"trace-{_cell}.log");
         _log = new StreamWriter(logPath, append: false) { AutoFlush = true };
-        Log($"CELL {_cell}  mip={_mip} rect={(_windowRect ? "window" : "1000x1000")} pump={_pump}  os={Environment.OSVersion} arch={RuntimeInformation.ProcessArchitecture}");
+        Log($"CELL {_cell}  mip={_mip} rect={(_windowRect ? "window" : "1000x1000")} pump={_pump} "
+            + $"noContentRect={_noContentRect} noInertiaCfg={_noInertiaCfg} stopAtInertia={_stopAtInertia}  "
+            + $"os={Environment.OSVersion} arch={RuntimeInformation.ProcessArchitecture}");
 
         Native.CoInitializeEx(IntPtr.Zero, Native.COINIT_APARTMENTTHREADED);
         if (_mip)
@@ -171,7 +191,9 @@ internal static class Program
         hr = _vp.SetViewportRect(ref rect);
         Log($"SetViewportRect({rect.left},{rect.top},{rect.right},{rect.bottom}) hr=0x{hr:X8}");
 
-        const int cfg = 0x1 | 0x2 | 0x4 | 0x20 | 0x10 | 0x80; // INTERACTION|TX|TY|TRANSLATION_INERTIA|SCALING|SCALING_INERTIA
+        // scroll-v3-plan §5.6: cell E drops the inertia bits (INTERACTION|TX|TY|SCALING — the primary producer config);
+        // every other cell (incl. F) keeps them (INTERACTION|TX|TY|TRANSLATION_INERTIA|SCALING|SCALING_INERTIA).
+        int cfg = _noInertiaCfg ? 0x1 | 0x2 | 0x4 | 0x20 : 0x1 | 0x2 | 0x4 | 0x20 | 0x10 | 0x80;
         hr = _vp.AddConfiguration(cfg);       Log($"AddConfiguration(0x{cfg:X}) hr=0x{hr:X8}");
         hr = _vp.ActivateConfiguration(cfg);  Log($"ActivateConfiguration hr=0x{hr:X8}");
         hr = _vp.SetViewportOptions(0x2);     Log($"SetViewportOptions(MANUALUPDATE) hr=0x{hr:X8}");
@@ -183,17 +205,26 @@ internal static class Program
         Guid iidContent = typeof(IDirectManipulationContent).GUID;
         hr = _vp.GetPrimaryContent(ref iidContent, out _content);
         Log($"GetPrimaryContent hr=0x{hr:X8}");
-        if (hr >= 0)
+        if (hr >= 0 && !_noContentRect)
         {
             var crect = new Native.RECT { left = 0, top = 0, right = 20000, bottom = 20000 };
             hr = _content.SetContentRect(ref crect);
             Log($"SetContentRect(20000x20000) hr=0x{hr:X8}");
         }
+        else if (_noContentRect)
+        {
+            // §5.2/§5.6: unbounded default content — matches the real Win32DirectManipulation producer, no runway
+            // to exhaust, no giant recenter origin to amplify scale drift.
+            Log("SetContentRect SKIPPED (cell E/F: unbounded default content)");
+        }
 
         hr = _vp.Enable();          Log($"viewport.Enable hr=0x{hr:X8}");
         hr = _mgr.Activate(_hwnd);  Log($"manager.Activate hr=0x{hr:X8}");
-        hr = _vp.ZoomToRect(9500f, 9500f, 10500f, 10500f, false);   // after Enable — center for symmetric runway
-        Log($"ZoomToRect(center) hr=0x{hr:X8}");
+        if (!_noContentRect)
+        {
+            hr = _vp.ZoomToRect(9500f, 9500f, 10500f, 10500f, false);   // after Enable — center for symmetric runway
+            Log($"ZoomToRect(center) hr=0x{hr:X8}");
+        }
         return 0;
     }
 
@@ -221,10 +252,34 @@ internal static class Program
                 Native.DispatchMessageW(ref m);
             }
             long now = Clock.ElapsedMilliseconds;
+            if (_pendingStopAtInertia)
+            {
+                // Cell F: never call COM from inside the sink that observed INERTIA — serviced here instead, one pump
+                // later, exactly like the shipped producer's _pendingStop (Win32DirectManipulation.cs).
+                _pendingStopAtInertia = false;
+                int hrStop = _vp?.Stop() ?? -1;
+                Log($"cell F: Stop() at RUNNING->INERTIA edge hr=0x{hrStop:X8}");
+            }
             if (now - lastUpdate >= 8)
             {
                 lastUpdate = now;
                 _upd?.Update(IntPtr.Zero);
+            }
+            if (_liftAtMs >= 0)
+            {
+                // Cell E, §5.6 item 3: a genuinely-owned lift must produce NO WM_POINTERWHEEL — DM should not chain a
+                // synthesized wheel burst once it lifts cleanly (that shape was runway exhaustion, removed at the
+                // source by the no-SetContentRect setup these cells already use).
+                if (_cPtrWheel > _wheelCountAtLift)
+                {
+                    Log($"POST-LIFT WM_POINTERWHEEL observed +{now - _liftAtMs}ms after lift");
+                    _liftAtMs = -1;
+                }
+                else if (now - _liftAtMs > 500)
+                {
+                    Log("POST-LIFT: no WM_POINTERWHEEL within 500ms of lift (clean)");
+                    _liftAtMs = -1;
+                }
             }
             Native.MsgWaitForMultipleObjectsEx(0, IntPtr.Zero, 4, 0x04FF /*QS_ALLINPUT*/, 0);
         }
@@ -265,6 +320,23 @@ internal static class Program
     internal static void CountEdge(string edge) { _statusEdges.TryGetValue(edge, out int n); _statusEdges[edge] = n + 1; }
     internal static void CountContent(bool inertia) { _cContentUpdates++; if (inertia) _cInertiaFrames++; else _cRunningFrames++; }
 
+    // ---- cell E/F instrumentation (§5.6 items 1-2, item 3, cell F Stop()-at-INERTIA) ----
+    internal static long NowMs => (long)Clock.Elapsed.TotalMilliseconds;
+    internal static bool StopAtInertia => _stopAtInertia;
+
+    internal static void NoteRunningEntered(long nowMs) => _runningEnteredMs = nowMs;
+
+    internal static void NoteLift(long nowMs, bool toInertia)
+    {
+        if (_runningEnteredMs >= 0)
+            Log($"LIFT RUNNING->{(toInertia ? "INERTIA" : "READY")} latency={nowMs - _runningEnteredMs}ms (§5.6 item 1)");
+        _runningEnteredMs = -1;
+        _liftAtMs = nowMs;
+        _wheelCountAtLift = _cPtrWheel;
+    }
+
+    internal static void RequestStopAtInertia() => _pendingStopAtInertia = true;
+
     // ---------------- the sink ----------------
 
     internal sealed class ProbeSink : IDirectManipulationViewportEventHandler
@@ -277,6 +349,25 @@ internal static class Program
         {
             string edge = $"{StatusName(previous)}->{StatusName(current)}";
             CountEdge(edge);
+            long nowMs = Program.NowMs;
+            if (current == 3 /*RUNNING*/) Program.NoteRunningEntered(nowMs);
+            if (previous == 3 /*RUNNING*/ && current is 5 /*READY*/ or 4 /*INERTIA*/)
+                Program.NoteLift(nowMs, toInertia: current == 4);
+            // Cell F only: never call Stop() from inside this callback (same COM-reentrancy discipline the shipped
+            // producer's _pendingStop follows) — request it, RunLoop services it one pump later.
+            if (Program.StopAtInertia && current == 4 /*INERTIA*/ && previous == 3 /*RUNNING*/)
+            {
+                Program.RequestStopAtInertia();
+                // NOT IMPLEMENTED here: reading IDirectManipulationPrimaryContent::GetInertiaEndTransform at this edge
+                // (§5.6 cell F "log GetInertiaEndTransform") needs a hand-rolled COM interface this probe does not
+                // declare — IDirectManipulationPrimaryContent extends IDirectManipulationContent (this file's 8
+                // members, unchanged order) with SetContentRepresentationSizes/GetContentRepresentationSizes/
+                // SetSnapInterval/SetSnapPoints/SetHorizontalAlignment/GetHorizontalAlignment/SetVerticalAlignment/
+                // GetVerticalAlignment/GetInertiaEndTransform/IsSuballocatedAtOrigin/GetTargetSize — verify the EXACT
+                // order against the Windows 10.0.26100.0 SDK's directmanipulation.h before adding it (a wrong vtable
+                // slot order here is an AV against live hardware, not a compile error); QI _content to it and call
+                // GetInertiaEndTransform(matrix, 6) right here once verified.
+            }
             _status = current;
             Log($"STATUS {edge}");
             if (current == 5 /*READY*/) { _lastTx = 0; _lastTy = 0; _lastScale = 1f; } // transform resets with gesture

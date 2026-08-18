@@ -3,6 +3,7 @@ using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Localization;
+using FluentGpu.Scroll;
 using FluentGpu.Signals;
 
 namespace FluentGpu.Controls;

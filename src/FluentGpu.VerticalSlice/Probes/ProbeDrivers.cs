@@ -210,7 +210,6 @@ public static int ScrollFlickerProbe()
     var device = new HeadlessGpuDevice();
     var fonts = new HeadlessFontSystem(strings);
     using var host = new AppHost(app, window, device, fonts, strings, new VirtualProbe());
-    host.SmoothScroll = true;   // engage the ScrollIntegrator (TargetChase ease) — the hypothesis' path.
 
     host.RunFrame();
     var vp = host.Scene.Root;
@@ -245,12 +244,15 @@ public static int ScrollFlickerProbe()
             float gap = MathF.Max(leadGap, trailGap);
             if (gap > worstGap) worstGap = gap;
             if (uncovered <= 12)
+            {
+                host.ScrollKernel.TryGetBody((int)vp.Raw.Index, out var bodyDiag);
                 Console.WriteLine($"  frame {f}: UNCOVERED drawnOffset={drawnOffset:0.#} " +
-                    $"pending={sc.PendingTargetY:0.#} drawnView=[{viewTop:0.#},{viewBot:0.#}) " +
+                    $"target={bodyDiag.Target:0.#} drawnView=[{viewTop:0.#},{viewBot:0.#}) " +
                     $"realized=[{realizedTop:0.#},{realizedBot:0.#}) leadGap={leadGap:0.#} trailGap={trailGap:0.#}");
+            }
         }
         frames++;
-        if (sc.Phase == ScrollIntegrator.Idle && sc.OffsetY > 0f) break;   // WheelAnimating chase settled
+        if (sc.Activity == FluentGpu.Scroll.ScrollActivity.Idle && sc.OffsetY > 0f) break;   // Driven wheel chase settled
     }
 
     Console.WriteLine($"\nSMOOTH ease over one 4000px notch: {uncovered}/{frames} frames had the drawn viewport NOT " +

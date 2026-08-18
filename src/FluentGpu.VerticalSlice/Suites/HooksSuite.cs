@@ -1356,29 +1356,35 @@ static class HooksSuite
                 $"ticks={ticks} presented={presented} settleLatches={settleLatches} quietFollowUps={quietFollowUps} skipped={skipped}");
         }
 
-        // ── gate.present.transform-tick-glyph: companion — a glyph run under the moving plate KEEPS the settle frame.
+        // ── gate.present.transform-tick-glyph: companion — a glyph run under the moving plate is the same contract as
+        //    the rect tick. Softness already rides the command stream; a host settle latch would queue a byte-identical
+        //    follow-up that skip-submit then elides (Presented=false), which is a wasted FrameNeeded, not a re-snap.
         {
             using var app = new HeadlessPlatformApp();
             var window = new HeadlessWindow(new WindowDesc("present-tick-glyph", new Size2(200, 120), 1f)); window.Show();
             var probe = new BoundTransformTickProbe(32f, withGlyph: true);
             using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
-            for (int i = 0; i < 24; i++) host.Paint(0);
-            int settleSeen = 0, settlePresented = 0, ticksSeen = 0;
-            for (int i = 0; i < 96 && ticksSeen < 6; i++)
+            for (int i = 0; i < 24; i++) host.Paint(0);   // warm past mount + first ticks
+            int t0 = probe.Ticks;
+            long skip0 = host.FramesSkippedSubmit;
+            int presented = 0, settleLatches = 0, quietFollowUps = 0;
+            for (int i = 0; i < 96; i++)
             {
                 int before = probe.Ticks;
                 var f = host.Paint(0);
-                if (probe.Ticks <= before) continue;
-                ticksSeen++;
-                bool settleQueued = (host.CurrentWakeReasons & WakeReasons.FrameNeeded) != 0;
-                if (!settleQueued) continue;
-                settleSeen++;
-                var settle = host.Paint(0);   // the host-queued settle re-snap
-                if (settle.Presented) settlePresented++;
+                bool tick = probe.Ticks > before;
+                if (f.Presented) presented++;
+                else quietFollowUps++;
+                if (tick && (host.CurrentWakeReasons & WakeReasons.FrameNeeded) != 0) settleLatches++;
             }
-            Check("gate.present.transform-tick-glyph a glyph run inside a transform-dirty subtree keeps the settle FrameNeeded and that settle frame still submits (crisp re-snap)",
-                ticksSeen >= 4 && settleSeen == ticksSeen && settlePresented == settleSeen,
-                $"ticksSeen={ticksSeen} settleSeen={settleSeen} settlePresented={settlePresented}");
+            int ticks = probe.Ticks - t0;
+            long skipped = host.FramesSkippedSubmit - skip0;
+            bool onePresentPerTick = ticks >= 8 && presented == ticks;
+            bool noSettle = settleLatches == 0;
+            bool followUpsElided = quietFollowUps > 0 && skipped == quietFollowUps;
+            Check("gate.present.transform-tick-glyph a 30Hz-class interval writing a bound Transform over a glyph run submits exactly once per tick, queues no settle FrameNeeded, and elides forced quiet follow-up paints (FramesSkippedSubmit == follow-up count)",
+                onePresentPerTick && noSettle && followUpsElided,
+                $"ticks={ticks} presented={presented} settleLatches={settleLatches} quietFollowUps={quietFollowUps} skipped={skipped}");
         }
 
         // ── gate.timer.warm-cadence: passive motion stays cold; semantic input holds cadence, then quiesces ──

@@ -254,7 +254,6 @@ public static class FluentApp
         using var host = new AppHost(app, window, device, fonts, strings, root(), images);
         BootStamp("apphost-ctor");
         host.PixelPool = pixelPool;   // before the first RunFrame
-        host.SmoothScroll = true;   // inertial wheel scrolling + auto-hiding scrollbars (the real-app default)
         // App-set ambient power throttle (>0): pace perpetual loop animation (spinner/shimmer/equalizer/media-playhead) to
         // this rate so a never-idling app (one with always-on ambient motion) doesn't free-run the whole render+present
         // pipeline at the panel refresh. A live FG_ANIM_FPS env var still wins (the host seeded its default from it), so
@@ -336,23 +335,48 @@ public static class FluentApp
         bool prevSpike = false;
         // Deltas, not levels: PresentedSequence/FramesSkippedSubmit/PublishSequence are monotonic counters, and the
         // question a cadence investigation asks is always "how many since the last line".
-        ulong prevPresentSeq = 0, prevPublishSeq = 0;
+        ulong prevPresentSeq = 0, prevPublishSeq = 0, prevGpuProfileLogSeq = 0;
         long prevSkipped = 0, prevGated = 0, prevRephased = 0, prevStoodDown = 0;
         long prevFpsLineQpc = System.Diagnostics.Stopwatch.GetTimestamp();
         var prevInputPacing = window.InputPacingSnapshot;
         long scrollPerfWindowStart = scrollPerf ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
-        int spFrames = 0, spClipE = 0, spClipD = 0, spFullHide = 0, spPinD = 0, spMorphD = 0, spContD = 0, spBindsMax = 0;
+        int spFrames = 0, spClipE = 0, spClipD = 0, spFullHide = 0, spPinD = 0, spContD = 0, spBindsMax = 0;
         static string WaitTok(FluentGpu.Hosting.HostWaitKind k) => k switch
         {
             FluentGpu.Hosting.HostWaitKind.Idle => "idle",
             FluentGpu.Hosting.HostWaitKind.Hud => "hud",
             FluentGpu.Hosting.HostWaitKind.Baked => "baked",
             FluentGpu.Hosting.HostWaitKind.Ambient => "ambient",
+            FluentGpu.Hosting.HostWaitKind.AdaptiveGpu => "adaptive-gpu",
             FluentGpu.Hosting.HostWaitKind.PaceSkipSubmit => "pace-skip",
             FluentGpu.Hosting.HostWaitKind.PaceAsync => "pace-async",
             FluentGpu.Hosting.HostWaitKind.DisplayRate => "display",
             _ => "?",
         };
+        static string RectSubmitTok(AppHost host)
+        {
+            Span<RectSubmittedAreaItem> top = stackalloc RectSubmittedAreaItem[8];
+            if (!host.TryCopyRectSubmittedAreaSample(top, out RectSubmittedAreaSample area)) return "";
+            // rq + sequence are always available on D3D. FG_RENDER_DIAG adds rareaMp/top-N. Area is submitted nominal
+            // transformed physical megapixels, NOT coverage: clipping/overlap are not removed. rareaSeq identifies the
+            // one coherent TARGET submit for every token here; btop entries are ordinal:areaMp:alpha:localWxH:flagsHex.
+            var sb = new System.Text.StringBuilder(224);
+            sb.Append(System.FormattableString.Invariant($" rq{area.OpaqueInstances}/{area.BlendedInstances}"));
+            if (area.HasArea)
+                sb.Append(System.FormattableString.Invariant(
+                    $" rareaMp={area.OpaquePx2 / 1_000_000.0:0.###}/{area.BlendedPx2 / 1_000_000.0:0.###}"));
+            sb.Append(System.FormattableString.Invariant($" rareaSeq={area.Sequence}"));
+            int n = area.HasArea ? area.TopCount : 0;
+            if (n > 0) sb.Append(" btop=");
+            for (int i = 0; i < n; i++)
+            {
+                if (i > 0) sb.Append(',');
+                RectSubmittedAreaItem x = top[i];
+                sb.Append(System.FormattableString.Invariant(
+                    $"{x.Ordinal}:{x.AreaPx2 / 1_000_000.0:0.###}:{x.EffectiveAlpha:0.###}:{x.LocalW:0.#}x{x.LocalH:0.#}:{(byte)x.Flags:X}"));
+            }
+            return sb.ToString();
+        }
         while (!window.IsClosed)
         {
             host.RunFrame();
@@ -387,14 +411,13 @@ public static class FluentApp
                     spikeCluster = 0;
                     prevSpike = false;
                 }
-                if (scrollPerf && (s.StickyClipEvals | s.StickyClipDirties | s.PinDirties | s.MorphDirties | s.ContinuousDirties) != 0)
+                if (scrollPerf && (s.StickyClipEvals | s.StickyClipDirties | s.PinDirties | s.ContinuousDirties) != 0)
                 {
                     spFrames++;
                     spClipE += s.StickyClipEvals;
                     spClipD += s.StickyClipDirties;
                     spFullHide += s.StickyClipFullyHidden;
                     spPinD += s.PinDirties;
-                    spMorphD += s.MorphDirties;
                     spContD += s.ContinuousDirties;
                     if (s.ScrollBindCount > spBindsMax) spBindsMax = s.ScrollBindCount;
                 }
@@ -408,9 +431,9 @@ public static class FluentApp
                         {
                             Console.Error.WriteLine(
                                 $"[scrollperf] frames={spFrames} clipE={spClipE} clipD={spClipD} fullHide={spFullHide} " +
-                                $"pinD={spPinD} morphD={spMorphD} contD={spContD} bindsMax={spBindsMax}");
+                                $"pinD={spPinD} contD={spContD} bindsMax={spBindsMax}");
                         }
-                        spFrames = spClipE = spClipD = spFullHide = spPinD = spMorphD = spContD = spBindsMax = 0;
+                        spFrames = spClipE = spClipD = spFullHide = spPinD = spContD = spBindsMax = 0;
                         scrollPerfWindowStart = System.Diagnostics.Stopwatch.GetTimestamp();
                     }
                 }
@@ -419,11 +442,15 @@ public static class FluentApp
                 // The line is built and written outside RunFrame, so its allocation never touches the hot phases.
                 if (fpsLog && (spike || s.ScrollActive || n % 30 == 0))
                 {
-                    double gpuRenderMs = s.GpuRenderMs;   // FG_GPU_TIMING: true raster ms (0 when off) — disambiguates the fence wait
+                    double gpuProfileMs = s.GpuProfileMs; // optional whole span paired with the category split below
                     // latW splits the always-printed `gpu` number (LastGpuFenceWaitMs conflates the frame fence with the
                     // swapchain latency waitable), so it is ungated exactly like `gpu`; opgrp counts the full-window layer
                     // composites the `comp` bucket is paid for, so it rides the FG_GPU_TIMING-gated grender group.
                     double latWaitMs = gpuDev?.LastLatencyWaitMs ?? 0.0;
+                    string gpuExecutionTok = host.TryGetGpuRenderSample(out GpuRenderSample gpuExecutionSample)
+                        ? System.FormattableString.Invariant(
+                            $" gexec {gpuExecutionSample.ExecutionMs:0.0}ms#{gpuExecutionSample.Sequence} gexecAge={gpuExecutionSample.SubmitAge}")
+                        : "";
                     int opGroups = gpuDev?.LastOpacityGroups ?? 0;
                     // …split by kind (they sum to opGroups) plus how many blended the FULL canvas — a bare count cannot
                     // tell a dozen cheap scissored row-fades from a handful of full-window reads, which is the real cost.
@@ -435,12 +462,13 @@ public static class FluentApp
                     // grender X(scene Y: rect R shad S img I glyph G comp C) opgrpN(o/bo/bl/ef,full) — all 0 unless FG_GPU_TIMING.
                     // `shad` is split out of `rect`: the two behave differently (a shadow is a big always-blended SDF quad),
                     // and the merged number could not say which one owned the ~5ms.
-                    // Freshness gate: after skip-submit / stand-down, LastGpuRenderMs still holds the prior sample —
-                    // only print grender when this submit actually resolved timestamps.
-                    bool gpuFresh = gpuDev?.GpuTimingSampleFresh ?? false;
-                    string gpuRenderTok = gpuRenderMs > 0.0 && gpuFresh
-                        ? $" grender {gpuRenderMs:0.0}ms(scene {s.GpuSceneMs:0.0}: rect {s.GpuFillMs:0.0} shad {s.GpuShadowMs:0.0} img {s.GpuImageMs:0.0} glyph {s.GpuGlyphMs:0.0} comp {s.GpuCompositeMs:0.0}) opgrp{opGroups}(o{opPlain}/bo{opBounded}/bl{opBlur}/ef{opEdge},full{opFull})"
+                    // Freshness gate for the OPTIONAL category block: after skip-submit / stand-down those category
+                    // fields still hold the prior sample, so only print grender when this submit resolved its timeline.
+                    bool gpuFresh = s.GpuProfileSequence != 0 && s.GpuProfileSequence != prevGpuProfileLogSeq;
+                    string gpuRenderTok = gpuProfileMs > 0.0 && gpuFresh
+                        ? $" grender {gpuProfileMs:0.0}ms(scene {s.GpuSceneMs:0.0}: rect {s.GpuFillMs:0.0} shad {s.GpuShadowMs:0.0} img {s.GpuImageMs:0.0} glyph {s.GpuGlyphMs:0.0} comp {s.GpuCompositeMs:0.0}) grenderSeq={s.GpuProfileSequence} opgrp{opGroups}(o{opPlain}/bo{opBounded}/bl{opBlur}/ef{opEdge},full{opFull})"
                         : "";
+                    if (gpuRenderTok.Length != 0) prevGpuProfileLogSeq = s.GpuProfileSequence;
                     // efS = physical px the PURE-fade STRIP path copied + restored this frame (the offscreen-free edge
                     // fade); efL = pure fades that were strip-eligible by payload yet still had to lease a full-canvas
                     // group RT. Read together with `ef` above: `efS0/efL0` = no pure fade on screen, `efS0/efL2` = two
@@ -459,12 +487,9 @@ public static class FluentApp
                     string edgeStripTok = (opEdge > 0 || efStripPx > 0 || efFallbacks > 0)
                         ? $" efS{efStripPx}/efL{efFallbacks}{efReasonTok}"
                         : "";
-                    // rq<opaque>/<blended> — rect INSTANCES by PSO class. Ungated for the same reason efS/efL is: a feel
-                    // session (no FG_GPU_TIMING, no FG_DIAG) has to be able to see whether a heavy page's fill cost is
-                    // opaque plate coverage or a stack of full-viewport translucent passes. Two plain device fields.
-                    int rqOpaque = gpuDev?.LastRectOpaqueInstances ?? 0;
-                    int rqBlended = gpuDev?.LastRectBlendedInstances ?? 0;
-                    string rectPassTok = (rqOpaque > 0 || rqBlended > 0) ? $" rq{rqOpaque}/{rqBlended}" : "";
+                    // rq + optional submitted-area/top-N are one target-owned coherent snapshot. Async logger repeats
+                    // carry the same rareaSeq and downstream summaries dedupe them as one backend submit.
+                    string rectSubmitTok = RectSubmitTok(host);
                     // pin<hit>/<miss> — the cross-frame self-blur PIN cache's per-frame census. Ungated, same discipline
                     // as rq/efS: `bl` groups alone cannot say whether a blur-heavy view is re-blurring every submit or
                     // riding retained pins, and the answer decides whether the blur budget is a caching problem at all.
@@ -506,15 +531,19 @@ public static class FluentApp
                     string layoutSplitTok = s.LayoutMs >= 0.1
                         ? $"(fx{s.LayoutSolveMs:0.0} eff{s.LayoutEffectsMs:0.0} conn{s.ConnectedTickMs:0.0} rf{s.ReflowSeedMs:0.0})"
                         : "";
+                    var sm = s.SpanReuseMisses;
+                    string spanMissTok = sm != default
+                        ? $" smiss=gd{sm.GlobalDisabled}/sb{sm.ScopedBlocked}/ed{sm.ExactDirty}/ek{sm.ExactKey}/ec{sm.ExactClip}/cap{sm.ExactCapacity}/mg{sm.MoveGuard}/mk{sm.MoveKey}/geo{sm.MoveGeometry}/mc{sm.MoveClip}/mp{sm.MovePayload}"
+                        : "";
                     string hitchTok =
                         $" | hitch comps={s.ComponentsRendered} nodes={s.NodesVisited}/{s.DrawNodeCount} " +
                         $"pump={s.ImagePumpMs:0.0}ms apply={s.ImageApplyCount}/{s.ImageApplyBytes / 1024}KB realize={s.RealizeCatchupMs:0.0}ms " +
                         $"escapes={s.RootRelayoutEscapes} escLoc={s.LocalRelayoutResolves} " +
                         $"spans={s.SpansReused}/{s.SpansRebased}/{s.SpansReRecorded}(rej{s.SpansRebaseRejected}) " +
-                        $"reasons=0x{((uint)s.SpanReuseDisabledReasons):X} gc0=+{s.Gc0Delta} gc1=+{s.Gc1Delta} gc2=+{s.Gc2Delta}";
+                        $"reasons=0x{((uint)s.SpanReuseDisabledReasons):X}{spanMissTok} gc0=+{s.Gc0Delta} gc1=+{s.Gc1Delta} gc2=+{s.Gc2Delta}";
                     string scrollTok = scrollPerf
                         ? $" | scroll clipE={s.StickyClipEvals} clipD={s.StickyClipDirties} fullHide={s.StickyClipFullyHidden} " +
-                          $"pinD={s.PinDirties} morphD={s.MorphDirties} contD={s.ContinuousDirties} binds={s.ScrollBindCount}"
+                          $"pinD={s.PinDirties} contD={s.ContinuousDirties} binds={s.ScrollBindCount}"
                         : "";
                     // Read the LIVE host properties, not the FrameStats copies: five early-out paths in RunFrame
                     // construct `new FrameStats(0, ..., Rendered: false)` and leave both of these at 0, which is the
@@ -564,7 +593,7 @@ public static class FluentApp
                         $"{(s.ScrollActive ? " scroll" : "")} loop {s.Fps:0}fps {s.FrameMs:0.0}ms " +
                         $"(flush{s.FlushMs:0.0} rx{s.ReactiveFlushMs:0.0}/vr{s.VirtualRealizeMs:0.0} layout{s.LayoutMs:0.0}{layoutSplitTok} " +
                         $"anim{s.AnimMs:0.0} record{s.RecordMs:0.0} submit{s.SubmitMs:0.0}) | presentNow {presentNow:0}fps present1s {host.PresentFps:0}fps seq={presentSeq}{seamTok} " +
-                        $"gpu {gpuMs:0.0}ms latW{latWaitMs:0.0}{gpuRenderTok}{edgeStripTok}{rectPassTok}{pinTok}{dmgTok} | wait {WaitTok(host.LastWaitKind)}{host.LastWaitMs} " +
+                        $"gpu {gpuMs:0.0}ms latW{latWaitMs:0.0}{gpuExecutionTok}{gpuRenderTok}{edgeStripTok}{rectSubmitTok}{pinTok}{dmgTok} | wait {WaitTok(host.LastWaitKind)}{host.LastWaitMs} " +
                         $"{szpx.Width}x{szpx.Height}@{cachedHz}Hz (f{n}){hitchTok}{scrollTok}{inputPaceTok}");
                 }
             }

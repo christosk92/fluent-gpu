@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Threading;
 using TerraFX.Interop.Windows;
 using static TerraFX.Interop.Windows.Windows;
@@ -25,8 +26,9 @@ namespace FluentGpu.Pal.Windows;
 /// point: callers observe ticks through <see cref="TickEvent"/> only.
 ///
 /// <b>Capability probe, not a flag.</b> The export is not usable everywhere (remote sessions in particular). The FIRST
-/// failure marks the clock permanently unavailable and parks the thread for good; the host then keeps its wall-clock
-/// timeout, which is exactly the pre-existing behavior. This is a runtime probe by design — the engine does not gate new
+/// failure — <c>WAIT_FAILED</c>, a missing export, OR a sustained run of sub-millisecond successes (the clock returns
+/// without waiting, which would free-spin the UI loop) — marks it permanently unavailable and parks the thread for
+/// good; the host then keeps its wall-clock timeout. This is a runtime probe by design — the engine does not gate new
 /// behavior behind environment switches.
 ///
 /// <b>Power.</b> The thread is armed only for the duration of a display-paced wait and parks on
@@ -39,6 +41,9 @@ internal sealed unsafe class Win32CompositorClock : IDisposable
     /// <summary>Liveness timeout for one compositor wait (ms). Bounds how long teardown can block and how long a wedged
     /// compositor can hold the thread; a timeout is NOT a tick and never signals the event.</summary>
     private const uint WaitTimeoutMs = 100;
+    /// <summary>Consecutive sub-millisecond successes before the clock is ruled out. One coalesced tick after Arm is
+    /// legal; a remote DWM that never blocks is not.</summary>
+    private const int FastStreakLimit = 16;
 
     // Not in the TerraFX static-import surface (the same reason Win32Window declares its own pair).
     private const uint WAIT_TIMEOUT = 0x00000102, WAIT_FAILED = 0xFFFFFFFF;
@@ -47,6 +52,7 @@ internal sealed unsafe class Win32CompositorClock : IDisposable
     private readonly AutoResetEvent _armGate = new(false);   // parks the waiter thread while disarmed
     private readonly Thread _thread;
     private int _armed;
+    private int _fastStreak;                    // waiter-thread only: consecutive sub-millisecond successes
     private volatile bool _unavailable;
     private volatile bool _disposed;
 
@@ -87,11 +93,13 @@ internal sealed unsafe class Win32CompositorClock : IDisposable
         {
             if (Volatile.Read(ref _armed) == 0)
             {
+                _fastStreak = 0;
                 _armGate.WaitOne();   // 0% CPU while the app is idle, minimized, or not display-paced
                 continue;
             }
 
             uint r;
+            long t0 = Stopwatch.GetTimestamp();
             try
             {
                 // count=0/handles=null: wait on the compositor clock alone. The timeout is liveness only.
@@ -105,8 +113,17 @@ internal sealed unsafe class Win32CompositorClock : IDisposable
             }
 
             if (_disposed) break;
-            if (r == WAIT_TIMEOUT) continue;                 // no tick: liveness only, never signal
+            if (r == WAIT_TIMEOUT) { _fastStreak = 0; continue; }   // no tick: liveness only, never signal
             if (r == WAIT_FAILED) { MarkUnavailable(); continue; }
+            // Remote sessions (RDP / Shadow) can succeed WITHOUT waiting: the export returns WAIT_OBJECT_0 in
+            // microseconds, which would republish ticks at CPU speed and free-spin the UI loop. A sustained run of
+            // sub-millisecond successes is the same verdict as WAIT_FAILED — the clock is not a phase reference.
+            long dt = Stopwatch.GetTimestamp() - t0;
+            if (dt < Stopwatch.Frequency / 1000)
+            {
+                if (++_fastStreak >= FastStreakLimit) { MarkUnavailable(); continue; }
+            }
+            else _fastStreak = 0;
             // Republish the tick. Disarm may have raced us here; the arm-side ResetEvent discards the stale signal.
             if (Volatile.Read(ref _armed) != 0 && _tickEvent != HANDLE.NULL) SetEvent(_tickEvent);
         }

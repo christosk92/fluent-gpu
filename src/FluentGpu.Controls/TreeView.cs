@@ -3,6 +3,7 @@ using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Scene;
+using FluentGpu.Scroll;
 
 namespace FluentGpu.Controls;
 
@@ -355,32 +356,41 @@ public sealed class TreeView : Component
             }
         }, DepKey.From(reordering ? tick + 1 : 0L));
 
+        // Walk to the nearest scrollable ancestor of this tree (the consumer's ScrollView). Null → no-op (the gallery
+        // card has none — harmless).
+        NodeHandle FindEdgeAutoScrollViewport(SceneStore s)
+        {
+            for (var n = Context.HostNode; !n.IsNull; n = s.Parent(n))
+                if ((s.Flags(n) & NodeFlags.Scrollable) != 0) return n;
+            return NodeHandle.Null;
+        }
+
         // Edge auto-scroll during a drag (WinUI band 100px, 150-1500px/s, ListViewBase_Partial_Reorder.cpp:39-47).
-        // The flat row column has no ScrollView of its own, so nudge the nearest SCROLLABLE ANCESTOR (the consumer's
-        // ScrollView) when one exists; no-op otherwise (the gallery card has none → harmless). Cold drag path.
+        // A HELD continuous velocity for as long as the pointer sits in the band — SetVelocity(0) the instant it
+        // leaves (below) or the drag ends/cancels (StopEdgeAutoScroll), so the kernel's Autoscroll never outlives it.
         void EdgeAutoScroll(float pointerY)
         {
             if (Context.Scene is not { } s) return;
-            // Walk to the nearest scrollable ancestor of this tree (the consumer's ScrollView). None → no-op.
-            var vp = NodeHandle.Null;
-            for (var n = Context.HostNode; !n.IsNull; n = s.Parent(n))
-                if ((s.Flags(n) & NodeFlags.Scrollable) != 0) { vp = n; break; }
-            if (vp.IsNull || !s.IsLive(vp) || !s.TryGetScroll(vp, out var sc)) return;
+            var vp = FindEdgeAutoScrollViewport(s);
+            if (vp.IsNull || !s.IsLive(vp) || !s.HasScroll(vp)) return;
             var rc = s.AbsoluteRect(vp);
-            const float band = 24f, speed = 8f;   // engine nudge (the WinUI 100px/150-1500px/s gradient lives in DragDropContext; the tree path is hand-rolled to match ListView's nudge)
-            float delta = 0f;
-            if (pointerY < rc.Y + band) delta = -speed;
-            else if (pointerY > rc.Y + rc.H - band) delta = speed;
-            if (delta == 0f) return;
-            float viewport = sc.ViewportH, content = sc.ContentH, now = sc.OffsetY;
-            float target = Math.Clamp(now + delta, 0f, MathF.Max(0f, content - viewport));
-            if (target == now) return;
-            ref ScrollState scw = ref s.ScrollRef(vp);
-            scw.OffsetY = target; scw.TargetY = target;
-            var cn = sc.ContentNode;
-            if (!cn.IsNull && s.IsLive(cn)) { s.Paint(cn).LocalTransform = Affine2D.Translation(0f, -target); s.Mark(cn, NodeFlags.TransformDirty | NodeFlags.PaintDirty); }
-            s.Mark(vp, NodeFlags.VirtualRangeDirty);
-            orderVersion.Value = orderVersion.Peek() + 1;
+            // engine nudge (the WinUI 100px/150-1500px/s gradient lives in DragDropContext; the tree path is
+            // hand-rolled to match ListView's nudge) — dipPerS mirrors ItemsViewPresets' edge autoscroll (the old
+            // ±8dip-per-pointer-move-event nudge expressed as a rate, assuming a 60Hz pointer-move/frame cadence:
+            // 8 × 60 = 480 — the same felt speed, now held rather than re-applied per event).
+            const float band = 24f, dipPerS = 480f;
+            float velocity = pointerY < rc.Y + band ? -dipPerS
+                            : pointerY > rc.Y + rc.H - band ? dipPerS
+                            : 0f;
+            s.ScrollPort!.Post(ScrollInput.SetVelocity((int)vp.Raw.Index, velocity));
+        }
+
+        void StopEdgeAutoScroll()
+        {
+            if (Context.Scene is not { } s) return;
+            var vp = FindEdgeAutoScrollViewport(s);
+            if (!vp.IsNull && s.IsLive(vp) && s.HasScroll(vp))
+                s.ScrollPort!.Post(ScrollInput.SetVelocity((int)vp.Raw.Index, 0f));
         }
 
         float BlockExtent(TreeNode n, string? collapsedId)
@@ -455,6 +465,7 @@ public sealed class TreeView : Component
                     },
                     OnDragCompleted = _ =>
                     {
+                        StopEdgeAutoScroll();
                         reorder.Complete();
                         dragParentId.Value = null;
                         draggedId.Value = null;
@@ -463,6 +474,7 @@ public sealed class TreeView : Component
                     },
                     OnDragCanceled = () =>
                     {
+                        StopEdgeAutoScroll();
                         reorder.Cancel();
                         dragParentId.Value = null;
                         draggedId.Value = null;

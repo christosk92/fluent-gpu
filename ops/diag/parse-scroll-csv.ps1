@@ -42,8 +42,19 @@ if (-not (Test-Path $Csv)) { throw "No such CSV: $Csv" }
 function Step($m) { Write-Host "==> $m" -ForegroundColor Cyan }
 function Note($m) { Write-Host "    $m" -ForegroundColor DarkGray }
 
-# PowerShell 5.1 renders single-element arrays as scalars in JSON; force arrays at the boundary.
-function AsArray($x) { if ($null -eq $x) { return @() } return @($x) }
+# Import-Csv leaves every cell as text. Parse with the trace's invariant-culture contract instead of relying on the
+# machine's decimal separator, and make the blank-cell policy explicit: most fixed POD numeric columns serialize zero
+# as blank, so their numeric default is zero. Optional-signal callers must gate rows before calling Num (latency's
+# trackingSampleValid bit below is the exemplar) rather than silently turning "not sampled" into a measured zero.
+function Num($value, [double]$default = 0.0) {
+  if ($null -eq $value -or [string]::IsNullOrWhiteSpace([string]$value)) { return $default }
+  [double]$parsed = 0.0
+  $style = [Globalization.NumberStyles]::Float
+  if (-not [double]::TryParse([string]$value, $style, [Globalization.CultureInfo]::InvariantCulture, [ref]$parsed)) {
+    throw "Invalid invariant-culture number '$value' in $Csv"
+  }
+  return $parsed
+}
 
 function Stats([double[]]$v) {
   if ($v.Count -eq 0) { return $null }
@@ -162,13 +173,178 @@ if ($ftRows.Count -gt 0) {
   Note "slow on them, so optimising a render phase cannot fix that share of the hitches."
 }
 
-# ── layout churn during scroll ───────────────────────────────────────────────────────────────────────────────
+# ── scroll targeting + path notes ────────────────────────────────────────────────────────────────────────────
 $note100 = @($rows | Where-Object { $_.kind -eq 'note' -and $_.i0 -eq '100' }).Count
 $note101 = @($rows | Where-Object { $_.kind -eq 'note' -and $_.i0 -eq '101' }).Count
+$note105Rows = @($rows | Where-Object { $_.kind -eq 'note' -and $_.i0 -eq '105' })
+$note106Rows = @($rows | Where-Object { $_.kind -eq 'note' -and $_.i0 -eq '106' })
 $note111 = @($rows | Where-Object { $_.kind -eq 'note' -and $_.i0 -eq '111' }).Count
+$latchRows = @($rows | Where-Object { $_.kind -eq 'latch' })
+$gestureEndRows = @($rows | Where-Object { $_.kind -eq 'gestureEnd' })
+
+$note105ReasonWheelHandler = @($note105Rows | Where-Object { (([int](Num $_.i1)) -band 0xF) -eq 1 }).Count
+$note105ReasonNoScroller = @($note105Rows | Where-Object { (([int](Num $_.i1)) -band 0xF) -eq 2 }).Count
+$note105Consumed = @($note105Rows | Where-Object { (([int](Num $_.i1)) -band 0x20) -ne 0 }).Count
+$note105WithHitContext = @($note105Rows | Where-Object { (([int](Num $_.i1)) -band 0x40) -ne 0 }).Count
+$note105Observations = @($note105Rows | ForEach-Object {
+  $flags = [int](Num $_.i1)
+  $hasContext = ($flags -band 0x40) -ne 0
+  [ordered]@{
+    tMs                  = Num $_.tMs
+    frame                = [int](Num $_.frame)
+    reason               = $flags -band 0xF
+    dominantHorizontal   = ($flags -band 0x10) -ne 0
+    dispatchWheelHandled = ($flags -band 0x20) -ne 0
+    hitContextRecorded   = $hasContext
+    topHitNode           = $(if ($hasContext) { [int](Num $_.i2) } else { $null })
+    pointerXDip          = $(if ($hasContext) { Num $_.f2 } else { $null })
+    pointerYDip          = $(if ($hasContext) { Num $_.f3 } else { $null })
+  }
+})
+$note106Observations = @($note106Rows | ForEach-Object {
+  [ordered]@{
+    tMs          = Num $_.tMs
+    frame        = [int](Num $_.frame)
+    node         = [int](Num $_.i1)
+    horizontal   = ([int](Num $_.i2)) -ne 0
+    anchor       = Num $_.f0
+    gestureTravelDip = Num $_.f1
+  }
+})
+$latchHorizontal = @($latchRows | Where-Object { (([int](Num $_.i1)) -band 0x100) -ne 0 }).Count
+$latchSticky = @($latchRows | Where-Object { (([int](Num $_.i1)) -band 0x200) -ne 0 }).Count
+$gestureEndReasons = [ordered]@{ scrollEnd = 0; momentumEnd = 0; restart = 0; wheelTakeover = 0; cancelOrTargetDied = 0; unknown = 0 }
+foreach ($r in $gestureEndRows) {
+  switch ([int](Num $r.i0)) {
+    0 { $gestureEndReasons.scrollEnd++ }
+    1 { $gestureEndReasons.momentumEnd++ }
+    2 { $gestureEndReasons.restart++ }
+    3 { $gestureEndReasons.wheelTakeover++ }
+    4 { $gestureEndReasons.cancelOrTargetDied++ }
+    default { $gestureEndReasons.unknown++ }
+  }
+}
+
+# Only refusal reason 2 with an initially-unhandled fallback is a retryable targeting miss. Reason 1 is deliberate
+# element-wheel ownership and must never be labelled dead; a later class-4 wheel marker also proves that a reason-2
+# fallback found a consumer even though it correctly emitted no note 106. GestureEnd cannot delimit an unlatched
+# fallback, so close candidates on the producer's phase rows (InputKind 12/14/17).
+$openRetryableRefusal = $false
+$retryableRefusals = 0
+$retryableRefusalsRelatched = 0
+$retryableRefusalsWheelHandled = 0
+$deadTargetingCandidates = 0
+foreach ($r in $rows) {
+  if ($r.kind -eq 'note' -and $r.i0 -eq '105') {
+    if ($openRetryableRefusal) { $deadTargetingCandidates++ }
+    $refusalFlags = [int](Num $r.i1)
+    $openRetryableRefusal = (($refusalFlags -band 0xF) -eq 2 -and ($refusalFlags -band 0x20) -eq 0)
+    if ($openRetryableRefusal) { $retryableRefusals++ }
+  }
+  elseif ($r.kind -eq 'note' -and $r.i0 -eq '106') {
+    if ($openRetryableRefusal) { $retryableRefusalsRelatched++; $openRetryableRefusal = $false }
+  }
+  elseif ($openRetryableRefusal -and $r.kind -eq 'wheelSeed') {
+    $dropFlags = [int](Num $r.i1)
+    $dropClass = ($dropFlags -shr 5) -band 7
+    if (($dropFlags -band 0x10) -ne 0 -and $dropClass -eq 4 -and ($dropFlags -band 0x800) -ne 0) {
+      $retryableRefusalsWheelHandled++
+      $openRetryableRefusal = $false
+    }
+  }
+  elseif ($r.kind -eq 'phase') {
+    $phaseKind = [int](Num $r.i0)
+    if ($openRetryableRefusal -and ($phaseKind -eq 12 -or $phaseKind -eq 14 -or $phaseKind -eq 17)) {
+      $deadTargetingCandidates++
+      $openRetryableRefusal = $false
+    }
+  }
+}
+if ($openRetryableRefusal) { $deadTargetingCandidates++ }
+
+$wheelDropRows = @($rows | Where-Object {
+  $_.kind -eq 'wheelSeed' -and (([int](Num $_.i1)) -band 0x10) -ne 0
+})
+$wheelDropCounts = [ordered]@{
+  noScroller = 0
+  crossAxisOnly = 0
+  sameAxisExhausted = 0
+  elementHandled = 0
+  unknown = 0
+}
+$wheelDropFlagHistogram = [ordered]@{}
+$wheelPhaseFallbackHandled = 0
+foreach ($r in $wheelDropRows) {
+  $dropFlags = [int](Num $r.i1)
+  $dropClass = ($dropFlags -shr 5) -band 7
+  $dropFlagName = '0x{0:X}' -f $dropFlags
+  if ($wheelDropFlagHistogram.Contains($dropFlagName)) { $wheelDropFlagHistogram[$dropFlagName]++ }
+  else { $wheelDropFlagHistogram[$dropFlagName] = 1 }
+  switch ($dropClass) {
+    1 { $wheelDropCounts.noScroller++ }
+    2 { $wheelDropCounts.crossAxisOnly++ }
+    3 { $wheelDropCounts.sameAxisExhausted++ }
+    4 {
+      $wheelDropCounts.elementHandled++
+      if (($dropFlags -band 0x800) -ne 0) { $wheelPhaseFallbackHandled++ }
+    }
+    default { $wheelDropCounts.unknown++ }
+  }
+}
+$wheelNoScrollerRows = @($wheelDropRows | Where-Object { ((([int](Num $_.i1)) -shr 5) -band 7) -eq 1 })
+$wheelNoScrollerObservations = @($wheelNoScrollerRows | ForEach-Object {
+  $flags = [int](Num $_.i1)
+  $hasContext = ($flags -band 0x400) -ne 0
+  [ordered]@{
+    tMs                = Num $_.tMs
+    frame              = [int](Num $_.frame)
+    horizontal         = ($flags -band 0x100) -ne 0
+    notchUnits         = ($flags -band 0x200) -ne 0
+    hitContextRecorded = $hasContext
+    topHitNode         = $(if ($hasContext) { [int](Num $_.i0) } else { $null })
+    pointerXDip        = $(if ($hasContext) { Num $_.f3 } else { $null })
+    pointerYDip        = $(if ($hasContext) { Num $_.f4 } else { $null })
+  }
+})
+
+$targeting = [ordered]@{
+  note101ResamplerClamp = $note101
+  note105LatchRefused = $note105Rows.Count
+  note105ReasonWheelHandlerFallback = $note105ReasonWheelHandler
+  note105ReasonNoScrollerEitherAxis = $note105ReasonNoScroller
+  note105DispatchWheelHandled = $note105Consumed
+  note105HitContextRows = $note105WithHitContext
+  note105Observations = @($note105Observations)
+  note106Relatched = $note106Rows.Count
+  note106Observations = @($note106Observations)
+  retryableRefusals = $retryableRefusals
+  retryableRefusalRelatchedBeforeEnd = $retryableRefusalsRelatched
+  retryableRefusalWheelHandledBeforeEnd = $retryableRefusalsWheelHandled
+  deadTargetingCandidates = $deadTargetingCandidates
+  latches = $latchRows.Count
+  latchHorizontal = $latchHorizontal
+  latchSticky = $latchSticky
+  gestureEnds = $gestureEndRows.Count
+  gestureEndReasons = $gestureEndReasons
+  wheelDrops = $wheelDropCounts
+  wheelPhaseFallbackHandled = $wheelPhaseFallbackHandled
+  wheelDropFlagHistogram = $wheelDropFlagHistogram
+  wheelNoScrollerObservations = @($wheelNoScrollerObservations)
+}
+
 Write-Host ""
-Step "Scroll-path notes"
+Step "Scroll-path notes and targeting"
 Note "100 anchor re-pin: $note100    101 resampler no-extrapolation clamp: $note101    111 per-row extent correction: $note111"
+Note "105 latch refused: $($note105Rows.Count) (reason1 wheel-handler $note105ReasonWheelHandler; reason2 no-scroller $note105ReasonNoScroller; handled $note105Consumed)"
+Note "106 re-latched: $($note106Rows.Count)    retryable reason-2 refusals: $retryableRefusals (re-latched $retryableRefusalsRelatched; later wheel-handled $retryableRefusalsWheelHandled; dead candidates $deadTargetingCandidates)"
+Note "latch: $($latchRows.Count)    gestureEnd: $($gestureEndRows.Count)"
+Note "wheel drops: no-scroller $($wheelDropCounts.noScroller), cross-axis-only $($wheelDropCounts.crossAxisOnly), same-axis-exhausted $($wheelDropCounts.sameAxisExhausted), element-handled $($wheelDropCounts.elementHandled)"
+if ($note105Rows.Count -gt 0 -and $note105WithHitContext -eq 0) {
+  Note "note-105 rows predate hit context: overlay/chrome/content location is not recoverable from this capture."
+}
+if ($wheelNoScrollerRows.Count -gt 0 -and @($wheelNoScrollerRows | Where-Object { (([int](Num $_.i1)) -band 0x400) -ne 0 }).Count -eq 0) {
+  Note "class-1 wheel drops predate hit context: their top hit node and pointer coordinates are not recorded."
+}
 if ($note100 -gt 0) { Note "An anchor re-pin MOVES THE FRAME OF REFERENCE — tracking-lag samples spanning one are not comparable." }
 
 # ── latency rows (only present in captures from the instrumented build) ──────────────────────────────────────
@@ -189,13 +365,36 @@ if ($latRows.Count -gt 0) {
     Write-Host "    No hardware-grade input stamps: sub-frame latency percentiles are NOT publishable from this" -ForegroundColor Yellow
     Write-Host "    capture. Report them as insufficientData, not as a measured value." -ForegroundColor Yellow
   }
+  $trackingValidBit = 0x01000000
+  $explicitTrackingRows = @($latRows | Where-Object { (([int](Num $_.i1)) -band $trackingValidBit) -ne 0 })
+  if ($explicitTrackingRows.Count -gt 0) {
+    $trackingRows = $explicitTrackingRows
+    $trackingValidity = 'explicit-bit24'
+  }
+  elseif ($hasState) {
+    # Legacy rows serialized zero as an empty CSV cell and had no validity flag. Require both the packed drag state and
+    # a non-empty f3; a valid exact-zero sample is unrecoverable in that schema. New bit-24 rows do not use global
+    # gesture state because another settling scroller can legitimately outrank the contact in that aggregate word.
+    $trackingRows = @($latRows | Where-Object {
+      ((([int](Num $_.state)) -shr 4) -band 3) -eq 1 -and
+      -not [string]::IsNullOrWhiteSpace([string]$_.f3)
+    })
+    $trackingValidity = 'legacy-drag-and-nonempty-f3'
+  }
+  else {
+    $trackingRows = @()
+    $trackingValidity = 'legacy-state-missing-not-measured'
+  }
   $latency = [ordered]@{
     rows                = $latRows.Count
     stampQuality        = $qHist
-    lagDip              = Stats(@($latRows | ForEach-Object { (Num $_.f0) }))
+    trackingRows        = $trackingRows.Count
+    trackingValidity    = $trackingValidity
+    lagDip              = Stats(@($trackingRows | ForEach-Object { (Num $_.f0) }))
     wakeOverheadMs      = Stats(@($latRows | ForEach-Object { (Num $_.f1) }))
     frameOverrunMs      = Stats(@($latRows | ForEach-Object { (Num $_.f2) }))
-    clockSampleSkewMs   = Stats(@($latRows | ForEach-Object { (Num $_.f3) }))
+    clockSampleSkewMs   = Stats(@($trackingRows | ForEach-Object { (Num $_.f3) }))
+    trackingVelocityDipPerMs = Stats(@($trackingRows | ForEach-Object { (Num $_.f5) }))
     presentIntervalMs   = Stats(@($latRows | Where-Object { (Num $_.f4) -gt 0 } | ForEach-Object { (Num $_.f4) }))
     # i2 packs two counts: low 16 = stamp-derived missed slots, high 16 = OS-attested biased by +1 (0 = not attested).
     missedVsyncsSum     = (($latRows | ForEach-Object { [int]$_.i2 -band 0xFFFF } | Measure-Object -Sum).Sum)
@@ -205,6 +404,7 @@ if ($latRows.Count -gt 0) {
     neverPresentedRows  = @($latRows | Where-Object { [int]$_.i0 -eq 0 }).Count
   }
   Note "missedVsyncs total: $($latency.missedVsyncsSum)   neverPresented (skip-submit) samples: $($latency.neverPresentedRows)"
+  Note "tracking samples: $($latency.trackingRows) ($trackingValidity; non-tracking rows excluded from lag/skew statistics)"
 }
 else {
   Write-Host ""
@@ -243,7 +443,7 @@ if ($Console) {
 # ── machine-readable output ──────────────────────────────────────────────────────────────────────────────────
 if ($Json) {
   $out = [ordered]@{
-    schemaVersion   = 1
+    schemaVersion   = 2
     generatedAtUtc  = (Get-Date).ToUniversalTime().ToString('o')
     source          = (Resolve-Path $Csv).Path
     schema          = $(if ($hasState) { 'state' } else { 'legacy' })
@@ -256,8 +456,9 @@ if ($Json) {
     phaseMsOnHitch  = $phaseStats
     note113Count    = $note113.Count
     note113PctOfHitches = $slackShare
-    idleGapCount    = (AsArray $idleGaps).Count
+    idleGapCount    = $idleGaps.Count
     notes           = [ordered]@{ anchorRepin = $note100; resamplerClamp = $note101; extentCorrection = $note111 }
+    targeting       = $targeting
     latency         = $latency
     console         = $consoleSummary
   }

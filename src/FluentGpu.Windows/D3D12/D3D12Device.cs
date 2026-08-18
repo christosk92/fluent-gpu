@@ -170,11 +170,6 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     public int LastEdgeFadeStripRejectScratch => _efStripRejectScratch;
     /// <summary>Of <see cref="LastOpacityGroups"/>, the ones that blended the FULL canvas (no bounding scissor).</summary>
     public int LastFullTargetGroups => _opacity?.FullTargetGroupsThisFrame ?? 0;
-    /// <summary>Rect instances this frame drawn through the OPAQUE (no-blend, no-SDF) rect PSO.</summary>
-    public int LastRectOpaqueInstances => _frameRectOpaqueInsts;
-    /// <summary>Rect instances this frame drawn through the BLENDED rect PSO — each one is a read-modify-write over its
-    /// covered pixels, so this (not the raw rect count) is what a full-viewport translucent ladder shows up as.</summary>
-    public int LastRectBlendedInstances => _frameRectBlendedInsts;
     private GlyphRenderer? _glyphs;
     private ImageTextureStore? _imageTextures;
     private ImagePipeline? _imagePipe;
@@ -203,6 +198,18 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // exactly the "heavy-page rect overdraw" question. VideoHole punches ride the rect buffer but take the DestOut PSO
     // and are counted in NEITHER bucket.
     private int _frameRectOpaqueInsts, _frameRectBlendedInsts;
+    // Existing FG_RENDER_DIAG only: submitted rect area is a fixed/no-allocation painter-work census. It deliberately
+    // does NOT intersect scissors/rounded clips or union overlaps; calling it "coverage" would be false. The top-N can
+    // identify geometry/alpha shape but not a source node because RectInstance carries no node identity.
+#if DEBUG || FLUENTGPU_DIAG
+    private static readonly bool s_rectAreaDiag = FluentGpu.Foundation.Diag.EnvFlag("FG_RENDER_DIAG");
+#else
+    private const bool s_rectAreaDiag = false;
+#endif
+    private const int BlendedRectAreaTopCount = 8;
+    private double _frameRectOpaqueSubmittedPx2, _frameRectBlendedSubmittedPx2;
+    private readonly RectSubmittedAreaItem[] _frameBlendedTop = new RectSubmittedAreaItem[BlendedRectAreaTopCount];
+    private int _frameBlendedTopCount, _frameRectAreaOrdinal;
     private int _frameGlyphInstanceCount;
     // ── Cross-segment command-list state cache ──
     // Clip ops now update desired scissor state and flush only when pending draws need the old scissor; layer ops remain
@@ -596,10 +603,20 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // for a non-device-loss throw (a genuine bug — must NOT be masked).
     public bool NoteIfDeviceLost()
     {
+        if (System.Threading.Volatile.Read(ref _deviceLostReason) != 0) return true;
         if (_device == null) return false;
         int reason = (int)_device->GetDeviceRemovedReason();
         if (reason != 0) { System.Threading.Volatile.Write(ref _deviceLostReason, reason); return true; }
         return false;
+    }
+
+    private void NoteRemovedFenceValue()
+    {
+        if (NoteIfDeviceLost()) return;
+        // ID3D12Fence::GetCompletedValue's UINT64_MAX is itself the documented device-removal sentinel. Preserve that
+        // evidence even if GetDeviceRemovedReason races and briefly returns S_OK, so the ordinary host recovery gate
+        // still owns teardown/recreation instead of letting this submit continue into unresolved readback memory.
+        System.Threading.Volatile.Write(ref _deviceLostReason, unchecked((int)0x887A0005u));
     }
 
     public void DumpDeviceLostDiagnostics(Action<string> write)
@@ -687,15 +704,23 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     }
 
     // Async fence wait that never blocks forever on a lost device: poll GetDeviceRemovedReason on a bounded cadence and
-    // bail (recording the reason) if the device died. Only bails on ACTUAL removal — a merely-slow GPU keeps waiting, so
-    // we never return early and read an unfinished back buffer.
-    private void WaitFenceEventBounded()
+    // bail (recording the reason) if the device died. A signaled event is verified against GetCompletedValue: device
+    // removal reports UINT64_MAX there and must never masquerade as retirement of a timestamp/readback bank.
+    private bool WaitFenceEventBounded(ulong targetValue)
     {
         while (true)
         {
-            if (WaitForSingleObject(_fenceEvent, 1000) == 0u) return;   // WAIT_OBJECT_0 — fence signaled
+            uint wait = WaitForSingleObject(_fenceEvent, 1000);
+            ulong completed = global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.GetCompletedValue(_fence);
+            if (completed != ulong.MaxValue && completed >= targetValue) return true;
             int reason = (int)_device->GetDeviceRemovedReason();
-            if (reason != 0) { System.Threading.Volatile.Write(ref _deviceLostReason, reason); return; }
+            if (completed == ulong.MaxValue || reason != 0)
+            {
+                if (reason != 0) System.Threading.Volatile.Write(ref _deviceLostReason, reason);
+                else NoteRemovedFenceValue();
+                return false;
+            }
+            if (wait == 0xFFFFFFFFu) throw new InvalidOperationException("WaitForSingleObject(fence) failed.");
         }
     }
 
@@ -1072,25 +1097,33 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // Normally throttle to present cadence before producing this frame. A keep-alive repaint fired from inside an
         // OS modal move/size loop (host called SuppressLatencyWaitOnce) skips it so the WndProc thread isn't blocked
         // up to a vblank — the drag-start/live-resize hitch. Self-resetting: one suppressed wait per call.
-        // Time the two BLOCKING GPU-fence waits (latency waitable + frame fence) separately — this UI-thread stall is the
-        // bulk of measured "submit" (FrameStats.FenceWaitMs); the render-thread seam will move it off this thread.
+        // Time the two BLOCKING pacing/retirement waits (latency waitable + frame fence) separately. Under async this is
+        // render-thread wall time; under force-sync it is UI-thread wall time. Neither duration measures GPU execution.
         long fenceWaitStart = System.Diagnostics.Stopwatch.GetTimestamp();
         if (_skipLatencyOnce) _skipLatencyOnce = false;
         else WaitForLatency();   // bound queued-frame latency before starting this frame's production
         // Split the two waits: the LATENCY waitable is compositor/present-queue backpressure ("a ready frame is being
-        // held"), the frame FENCE is GPU work ("we were slow"). Summed together as one number they are indistinguishable,
-        // and those two diagnoses have opposite fixes. LastFenceWaitMs keeps its historical meaning (both, summed).
+        // held"), while the frame FENCE is prior back-buffer/queue RETIREMENT. Neither is a raster/busy measurement.
+        // Summed together they remain indistinguishable; LastFenceWaitMs keeps its historical meaning (both, summed).
         long latencyDone = System.Diagnostics.Stopwatch.GetTimestamp();
         _lastLatencyWaitMs = System.Diagnostics.Stopwatch.GetElapsedTime(fenceWaitStart, latencyDone).TotalMilliseconds;
         _frameIndex = _swapChain->GetCurrentBackBufferIndex();
-        WaitForFrame(_frameIndex);
+        if (!WaitForFrame(_frameIndex))
+            throw new InvalidOperationException("Frame fence did not reach the awaited value; submit cannot reuse its bank.");
         _lastFenceWaitMs = System.Diagnostics.Stopwatch.GetElapsedTime(fenceWaitStart).TotalMilliseconds;
-        if (s_gpuTiming) { EnsureGpuTiming(); CollectGpuRenderTime(_frameIndex); }   // read this index's retired timestamps
+        EnsureGpuExecutionTiming();
+        CollectGpuExecutionTime(_frameIndex);   // read this index's retired always-on whole-frame timestamps
+        _gpuTimingFresh = false;
+        if (s_gpuTiming) { EnsureGpuTiming(); CollectGpuCategoryTimes(_frameIndex); }   // optional detailed profiler
         ID3D12CommandAllocator* allocator = _allocators[_frameIndex];
         Check(allocator->Reset(), "allocator.Reset");
         Check(_cmdList->Reset(allocator, null), "cmdList.Reset");
         InvalidateCmdState();   // fresh command list — nothing is bound
-        // GPU timer: begin (query 3i) brackets ALL of this frame's GPU work.
+        // Always-on execution timer: begin brackets the entire submitted command-list execution span. This two-query path is separate from
+        // the optional FG_GPU_TIMING category profiler so pacing never has to infer GPU cost from a CPU fence wait.
+        if (_gpuExecutionQueryHeap != null)
+            _cmdList->EndQuery(_gpuExecutionQueryHeap, D3D12_QUERY_TYPE.D3D12_QUERY_TYPE_TIMESTAMP, 2u * _frameIndex);
+        // Detailed GPU profiler: begin (query 259i) brackets the same work and supplies its optional category timeline.
         if (s_gpuTiming && _gpuQueryHeap != null)
             _cmdList->EndQuery(_gpuQueryHeap, D3D12_QUERY_TYPE.D3D12_QUERY_TYPE_TIMESTAMP, GpuTsPerFrame * _frameIndex);
         _imageTextures?.FlushUploads(_cmdList);
@@ -1128,6 +1161,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _edgeFadeStripFallbacks = 0;   // reset HERE (not only in SubmitWithLayers) so a layer-free frame reports 0, not the last layered frame's count
         _efStripRejectNested = 0; _efStripRejectDepth = 0; _efStripRejectScratch = 0;
         _frameRectOpaqueInsts = 0; _frameRectBlendedInsts = 0;
+        _frameRectOpaqueSubmittedPx2 = _frameRectBlendedSubmittedPx2 = 0.0;
+        _frameBlendedTopCount = 0; _frameRectAreaOrdinal = 0;
         ClearRootDamage();   // §13.1: the clamp is per-REPLAY state — never let a previous frame's leak into this one
         (_lastBlurHashes, _curBlurHashes) = (_curBlurHashes, _lastBlurHashes);   // rotate the blur-cache recurrence ring
         _lastBlurHashCount = _curBlurHashCount; _curBlurHashCount = 0;
@@ -1269,7 +1304,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 _clearScratch4[2] = ctx.Clear.B; _clearScratch4[3] = ctx.Clear.A;
                 fixed (float* clear = _clearScratch4)
                     _cmdList->ClearRenderTargetView(rtv, clear, 0, null);
-                StampGpuSceneMid();   // scene-raster block starts after transition+clear
+                StampGpuSceneMid();   // scene-execution block starts after transition+clear
                 SetFullViewport();
                 SubmitStreaming(drawList, lw, lh);
             }
@@ -1340,6 +1375,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         Diag.Set("d3d12", "rects", _frameRectCount);
         Diag.Set("d3d12", "rectInstOpaque", _frameRectOpaqueInsts);           // rect instances drawn through the opaque no-blend PSO
         Diag.Set("d3d12", "rectInstBlended", _frameRectBlendedInsts);         // ── and through the blended SDF PSO (the read-modify-write class)
+        Diag.Set("d3d12", "rectSubmittedOpaquePx2", _frameRectOpaqueSubmittedPx2);   // submitted nominal area, NOT unioned/clipped coverage
+        Diag.Set("d3d12", "rectSubmittedBlendedPx2", _frameRectBlendedSubmittedPx2);
         Diag.Set("d3d12", "glyphInstances", _frameGlyphInstanceCount);
         // Sub-glyph WIPE (karaoke) budget: only the ACTIVELY wiping run reaches the gradient batch — a settled split
         // routes to the plain glyph batch (GlyphRenderer.LayoutRunGradient). >0 dropped ⇒ a truncated wipe; the peak is
@@ -1361,6 +1398,17 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         Diag.Set("text.run", "runsShaped", _glyphs.RunsShaped);      // this frame: runs (re)shaped — should be ~0 in steady state
 
         Barrier(backBuffer, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PRESENT);
+        bool gpuExecutionResolved = false, gpuProfileResolved = false;
+        // Close + resolve the inexpensive whole-frame pair. WaitForFrame on this index's next use proves this readback
+        // range has retired before CollectGpuExecutionTime publishes it.
+        if (_gpuExecutionQueryHeap != null && _gpuExecutionTsReadback != null)
+        {
+            uint q = 2u * _frameIndex;
+            _cmdList->EndQuery(_gpuExecutionQueryHeap, D3D12_QUERY_TYPE.D3D12_QUERY_TYPE_TIMESTAMP, q + 1u);
+            _cmdList->ResolveQueryData(_gpuExecutionQueryHeap, D3D12_QUERY_TYPE.D3D12_QUERY_TYPE_TIMESTAMP,
+                q, 2u, _gpuExecutionTsReadback, (ulong)q * sizeof(ulong));
+            gpuExecutionResolved = true;
+        }
         // GPU timer: end (query base+2) + resolve this index's marks (begin/mid/end + category boundaries) into the readback
         // (read one frame later). Before stamping 'end', close the final scene interval so the tail is attributed correctly.
         if (s_gpuTiming && _gpuQueryHeap != null && _gpuTsReadback != null)
@@ -1373,7 +1421,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             _cmdList->EndQuery(_gpuQueryHeap, D3D12_QUERY_TYPE.D3D12_QUERY_TYPE_TIMESTAMP, GpuTsPerFrame * _frameIndex + 2u);
             _cmdList->ResolveQueryData(_gpuQueryHeap, D3D12_QUERY_TYPE.D3D12_QUERY_TYPE_TIMESTAMP,
                 GpuTsPerFrame * _frameIndex, GpuTsPerFrame, _gpuTsReadback, (ulong)(GpuTsPerFrame * _frameIndex) * sizeof(ulong));
-            _gpuTsPending[_frameIndex] = true;
+            gpuProfileResolved = true;
         }
         Check(_cmdList->Close(), "cmdList.Close");
 
@@ -1381,6 +1429,21 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         global::FluentGpu.Interop.Generated.ID3D12CommandQueueVtbl.ExecuteCommandLists(_queue, 1, (void**)&execList);   // GEN-COM (wired)
         _bakedBlur?.PublishRecorded(_bakedBlurQueue);
         SignalFrame(_frameIndex);
+        ulong gpuExecutionSubmitSequence = sc.NoteGpuSubmit();   // target-local age clock advances only after successful queue+fence submit
+        if (gpuExecutionResolved)
+        {
+            _gpuExecutionTsPending[_frameIndex] = true;
+            _gpuExecutionTsOwner[_frameIndex] = sc;
+            _gpuExecutionTsOwnerSubmit[_frameIndex] = gpuExecutionSubmitSequence;
+        }
+        if (gpuProfileResolved)
+        {
+            _gpuTsPending[_frameIndex] = true;
+            _gpuTsOwner[_frameIndex] = sc;
+        }
+        sc.PublishRectSubmittedArea(_frameRectOpaqueInsts, _frameRectBlendedInsts, s_rectAreaDiag,
+            _frameRectOpaqueSubmittedPx2, _frameRectBlendedSubmittedPx2,
+            _frameBlendedTop.AsSpan(0, _frameBlendedTopCount));
         StoreActive();
     }
 
@@ -2089,6 +2152,48 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         && r.Opacity >= 1f && r.A >= 1f
         && r.ClipW <= 0f;
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void NoteRectSubmitted(ReadOnlySpan<RectInstance> instances, bool opaque)
+    {
+#if DEBUG || FLUENTGPU_DIAG
+        if (!s_rectAreaDiag) return;
+        for (int i = 0; i < instances.Length; i++) NoteRectSubmitted(in instances[i], opaque);
+#endif
+    }
+
+    private void NoteRectSubmitted(in RectInstance r, bool opaque)
+    {
+        int ordinal = _frameRectAreaOrdinal++;
+        double determinant = (double)r.M11 * r.M22 - (double)r.M12 * r.M21;
+        double scale = _frameScale;
+        double areaPx2 = Math.Abs((double)r.W * r.H * determinant) * scale * scale;
+        if (!double.IsFinite(areaPx2) || areaPx2 <= 0.0) return;
+        if (opaque)
+        {
+            _frameRectOpaqueSubmittedPx2 += areaPx2;
+            return;
+        }
+
+        _frameRectBlendedSubmittedPx2 += areaPx2;
+        float alpha = r.A * r.Opacity;
+        if (!float.IsFinite(alpha)) alpha = 0f;
+        alpha = Math.Clamp(alpha, 0f, 1f);
+        RectSubmittedAreaFlags flags = RectSubmittedAreaFlags.None;
+        if (r.RTL != 0f || r.RTR != 0f || r.RBR != 0f || r.RBL != 0f) flags |= RectSubmittedAreaFlags.Rounded;
+        if (r.StrokeWidth != 0f) flags |= RectSubmittedAreaFlags.Stroked;
+        if (r.ClipW > 0f) flags |= RectSubmittedAreaFlags.RoundedClip;
+        if (r.Kind != 0f) flags |= RectSubmittedAreaFlags.NonPlainKind;
+        var sample = new RectSubmittedAreaItem(ordinal, areaPx2, alpha, r.W, r.H, flags);
+
+        int insert = 0;
+        while (insert < _frameBlendedTopCount && _frameBlendedTop[insert].AreaPx2 >= areaPx2) insert++;
+        if (insert >= BlendedRectAreaTopCount) return;
+        int nextCount = Math.Min(_frameBlendedTopCount + 1, BlendedRectAreaTopCount);
+        for (int j = nextCount - 1; j > insert; j--) _frameBlendedTop[j] = _frameBlendedTop[j - 1];
+        _frameBlendedTop[insert] = sample;
+        _frameBlendedTopCount = nextCount;
+    }
+
     private int DroppedInstanceCount()
         => (_rectPipe?.DroppedInstances ?? 0) + (_shadowPipe?.DroppedInstances ?? 0) +
            (_arcPipe?.DroppedInstances ?? 0) + (_polylinePipe?.DroppedInstances ?? 0) +
@@ -2157,6 +2262,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                             bool bindRectShared = !_sharedSdfStateBound;
                             bool bindRectPso = _boundPipe != BoundPipe.Rect;
                             _frameRectBlendedInsts += rectRun.Length;   // opaque PSO unavailable ⇒ every instance blends
+                            NoteRectSubmitted(rectRun, opaque: false);
                             NoteSdfPipeBind(_rectPipe!.Record(_cmdList, rectRun, lw, lh, bindRectShared, bindRectPso),
                                 bindRectShared, bindRectPso, BoundPipe.Rect);
                             break;
@@ -2167,6 +2273,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                             int sj = si + 1;
                             while (sj < rectRun.Length && IsOpaquePlainRect(in rectRun[sj]) == op) sj++;
                             if (op) _frameRectOpaqueInsts += sj - si; else _frameRectBlendedInsts += sj - si;
+                            NoteRectSubmitted(rectRun.Slice(si, sj - si), op);
                             var want = op ? BoundPipe.RectOpaque : BoundPipe.Rect;
                             bool bindShared = !_sharedSdfStateBound;
                             bool bindPso = _boundPipe != want;
@@ -2375,7 +2482,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         else
         {
             _acrylic!.BeginCanvasPartial(_cmdList, ctx.Clear, completed, parity, phys.Slice(0, n));
-            StampGpuSceneMid();   // R10: the scene-raster block starts AFTER the canvas transition + the rect clears
+            StampGpuSceneMid();   // R10: the scene-execution block starts AFTER the canvas transition + the rect clears
             InvalidateCmdState();
             SetFullViewport();
             for (int i = 0; i < n; i++)
@@ -2414,7 +2521,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             _clearScratch4[2] = ctx.Clear.B; _clearScratch4[3] = ctx.Clear.A;
             fixed (float* clr = _clearScratch4)
                 _cmdList->ClearRenderTargetView(backRtv, clr, 0, null);
-            StampGpuSceneMid();   // scene-raster block starts after transition+clear
+            StampGpuSceneMid();   // scene-execution block starts after transition+clear
             SetFullViewport();
         }
         else if (canvasClearRects.Length > 0)
@@ -3368,13 +3475,28 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _frameFenceValues[frameIndex] = v;
     }
 
-    private void WaitForFrame(uint frameIndex)
+    private bool WaitForFrame(uint frameIndex)
     {
         ulong v = _frameFenceValues[frameIndex];
-        if (v == 0 || global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.GetCompletedValue(_fence) >= v) return;
+        if (v == 0) return true;
+        ulong completed = global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.GetCompletedValue(_fence);
+        if (completed == ulong.MaxValue)
+        {
+            NoteRemovedFenceValue();
+            return false;
+        }
+        if (completed >= v) return true;
         Check((HRESULT)global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.SetEventOnCompletion(_fence, v, (void*)_fenceEvent), "SetEventOnCompletion");   // GEN-COM (wired)
-        if (_signalDeviceLostInsteadOfThrow) WaitFenceEventBounded();   // Step 4: no INFINITE hang on a lost device (async)
-        else WaitForSingleObject(_fenceEvent, INFINITE);
+        if (_signalDeviceLostInsteadOfThrow) return WaitFenceEventBounded(v);   // Step 4: no INFINITE hang on a lost device (async)
+        uint wait = WaitForSingleObject(_fenceEvent, INFINITE);
+        if (wait == 0xFFFFFFFFu) throw new InvalidOperationException("WaitForSingleObject(frame fence) failed.");
+        completed = global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.GetCompletedValue(_fence);
+        if (completed == ulong.MaxValue)
+        {
+            NoteRemovedFenceValue();
+            return false;
+        }
+        return completed >= v;
     }
 
     // Block until the swapchain is ready to accept a new frame (bounds present-queue depth → lower latency, efficient wait).
@@ -3387,30 +3509,43 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     private bool _skipLatencyOnce;   // set by SuppressLatencyWaitOnce, consumed by the next SubmitDrawList
 
     private double _lastFenceWaitMs;   // wall-time blocked on the latency waitable + frame fence in the last SubmitDrawList
-    private double _lastLatencyWaitMs; // of which: the frame-latency waitable alone (compositor backpressure, not GPU work)
+    private double _lastLatencyWaitMs; // of which: frame-latency waitable alone (compositor backpressure, not command execution)
     /// <inheritdoc/>
     public double LastFenceWaitMs => _lastFenceWaitMs;
     /// <summary>Diagnostic: of <see cref="LastFenceWaitMs"/>, the frame-latency-waitable portion alone — compositor/present
-    /// backpressure rather than GPU work. Always measured (no env gate); the <c>[fps]</c> line's <c>latW</c> token.</summary>
+    /// backpressure rather than command execution. Always measured (no env gate); the <c>[fps]</c> line's <c>latW</c> token.</summary>
     public double LastLatencyWaitMs => _lastLatencyWaitMs;
 
-    // ── Whole-frame GPU timer (FG_GPU_TIMING=1) ─────────────────────────────────────────────────────────────────────
-    // A begin/end TIMESTAMP-query pair bracketing the entire command list, one pair per back-buffer index. Resolved into a
-    // READBACK buffer each frame and read one frame later (WaitForFrame proves that index's GPU work retired), so the value
-    // lags by one frame. This is the TRUE raster cost — the number that disambiguates LastFenceWaitMs (which conflates
-    // raster with the vblank/present-latency wait). Mirrors the proven BakedBlurCompositor timestamp pattern. Default-off;
-    // creation failure silently disables it (never throws on the shipping path).
+    // ── Always-on whole-frame GPU execution timer ────────────────────────────────────────────────────────────────────
+    // Exactly two TIMESTAMP queries per submitted command list, banked by back-buffer index. Their resolve is read only
+    // after WaitForFrame proves that index's prior work retired. This is policy input, so it must exist independently of
+    // FG_GPU_TIMING's expensive category timeline: a CPU fence wait is not a substitute for on-GPU execution time.
+    // Creation failure is a supported state (sequence stays 0); the adaptive governor then remains disengaged.
+    private const uint GpuExecutionTsPerFrame = 2;
+    private ID3D12QueryHeap* _gpuExecutionQueryHeap;
+    private ID3D12Resource* _gpuExecutionTsReadback;
+    private ulong* _gpuExecutionTsData;
+    private ulong _gpuExecutionTsFreq;
+    private readonly bool[] _gpuExecutionTsPending = new bool[FRAME_COUNT];
+    private readonly D3D12Swapchain?[] _gpuExecutionTsOwner = new D3D12Swapchain?[FRAME_COUNT];
+    private readonly ulong[] _gpuExecutionTsOwnerSubmit = new ulong[FRAME_COUNT];
+    private bool _gpuExecutionTimingInitTried;
+
+    // ── Detailed GPU category profiler (FG_GPU_TIMING=1) ─────────────────────────────────────────────────────────────
+    // This retains its existing whole/mid/end stamps because they anchor the category-boundary timeline. It is optional
+    // diagnostic instrumentation and never feeds pacing policy.
     private static readonly bool s_gpuTiming = FluentGpu.Foundation.Diag.EnvFlag("FG_GPU_TIMING");
     private ID3D12QueryHeap* _gpuQueryHeap;
     private ID3D12Resource* _gpuTsReadback;
     private ulong* _gpuTsData;
     private ulong _gpuTsFreq;
     private readonly bool[] _gpuTsPending = new bool[FRAME_COUNT];
+    private readonly D3D12Swapchain?[] _gpuTsOwner = new D3D12Swapchain?[FRAME_COUNT];
     private bool _gpuTimingInitTried;
-    private double _lastGpuRenderMs;
-    private double _lastGpuSceneMs;   // of the whole: the scene-raster block (clear + drawlist playback + layer composites), excl. uploads/baked-blur
+    private double _lastGpuProfileMs; // optional whole-command-list span paired with the category timeline
+    private double _lastGpuSceneMs;   // of the profiled whole: scene execution (clear + drawlist playback + layer composites), excl. uploads/baked-blur
     // ── Per-category scene split (FG_GPU_TIMING=1) ─────────────────────────────────────────────────────────────────────
-    // The scene-raster block (mid→end) is further split into rect/solid FILL, SHADOW, IMAGE, GLYPH and layer/acrylic COMPOSITE. The
+    // The scene-execution block (mid→end) is further split into rect/solid FILL, SHADOW, IMAGE, GLYPH and layer/acrylic COMPOSITE. The
     // categories INTERLEAVE in painter order (a card emits bg-fill → image → text; segments repeat), so a fixed pair-per-run
     // bracket is impossible within a compile-time slot budget. Instead we lay down a *boundary timeline*: mid is the first
     // boundary, and one timestamp is emitted at every category CHANGE (SceneCat). The interval between two consecutive marks
@@ -3437,7 +3572,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     private double _lastGpuFillMs, _lastGpuShadowMs, _lastGpuImageMs, _lastGpuGlyphMs, _lastGpuCompositeMs;
     private const uint GpuTsPerFrame = 3 + (uint)SceneMarkCap;   // begin | mid (after uploads+baked-blur) | end | then up to SceneMarkCap category-boundary marks
     /// <inheritdoc/>
-    public double LastGpuRenderMs => _lastGpuRenderMs;
+    public double LastGpuProfileMs => _lastGpuProfileMs;
     /// <inheritdoc/>
     public double LastGpuSceneMs => _lastGpuSceneMs;
     /// <inheritdoc/>
@@ -3469,7 +3604,72 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _sceneCurCat = cat;
     }
 
-    // Lazily create the query heap + readback buffer on the first submit (the queue exists by then). Guarded by
+    // Lazily create the always-on two-query heap + readback buffer on the first submit (the queue exists by then).
+    private void EnsureGpuExecutionTiming()
+    {
+        if (_gpuExecutionTimingInitTried) return;
+        _gpuExecutionTimingInitTried = true;
+        ulong freq;
+        if (_queue == null || _queue->GetTimestampFrequency(&freq) < 0 || freq == 0) return;
+        _gpuExecutionTsFreq = freq;
+
+        D3D12_QUERY_HEAP_DESC qd = default;
+        qd.Type = D3D12_QUERY_HEAP_TYPE.D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
+        qd.Count = GpuExecutionTsPerFrame * FRAME_COUNT;
+        ID3D12QueryHeap* heap;
+        if (_device->CreateQueryHeap(&qd, __uuidof<ID3D12QueryHeap>(), (void**)&heap) < 0) return;
+        _gpuExecutionQueryHeap = heap;
+
+        D3D12_HEAP_PROPERTIES hp = default;
+        hp.Type = D3D12_HEAP_TYPE.D3D12_HEAP_TYPE_READBACK;
+        D3D12_RESOURCE_DESC rd = default;
+        rd.Dimension = D3D12_RESOURCE_DIMENSION.D3D12_RESOURCE_DIMENSION_BUFFER;
+        rd.Width = GpuExecutionTsPerFrame * FRAME_COUNT * sizeof(ulong);
+        rd.Height = 1; rd.DepthOrArraySize = 1; rd.MipLevels = 1;
+        rd.Format = DXGI_FORMAT.DXGI_FORMAT_UNKNOWN; rd.SampleDesc.Count = 1;
+        rd.Layout = D3D12_TEXTURE_LAYOUT.D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        ID3D12Resource* readback;
+        if (_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_NONE, &rd,
+            D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST, null,
+            __uuidof<ID3D12Resource>(), (void**)&readback) < 0)
+        {
+            _gpuExecutionQueryHeap->Release(); _gpuExecutionQueryHeap = null; return;
+        }
+        _gpuExecutionTsReadback = readback;
+        void* mapped;
+        if (readback->Map(0, null, &mapped) >= 0)
+        {
+            _gpuExecutionTsData = (ulong*)mapped;
+            D3D12MemoryDiagnostics.Track(readback, "GpuExecution.TimestampReadback", rd.Width);
+        }
+        else
+        {
+            _gpuExecutionTsReadback->Release(); _gpuExecutionTsReadback = null;
+            _gpuExecutionQueryHeap->Release(); _gpuExecutionQueryHeap = null;
+        }
+    }
+
+    // WaitForFrame already retired this QUERY BANK. The bank may have been recorded for a DIFFERENT swapchain than the
+    // one whose current back-buffer index caused its reuse, so publish through the owner captured at resolve time — never
+    // through a device-global "last" slot. A failed/invalid resolve advances no target sequence.
+    private void CollectGpuExecutionTime(uint frameIndex)
+    {
+        if (_gpuExecutionTsData == null || _gpuExecutionTsFreq == 0 || !_gpuExecutionTsPending[frameIndex]) return;
+        _gpuExecutionTsPending[frameIndex] = false;
+        D3D12Swapchain? owner = _gpuExecutionTsOwner[frameIndex];
+        ulong ownerSubmit = _gpuExecutionTsOwnerSubmit[frameIndex];
+        _gpuExecutionTsOwner[frameIndex] = null;
+        _gpuExecutionTsOwnerSubmit[frameIndex] = 0;
+        if (owner is null || owner.Disposed) return;
+        uint q = GpuExecutionTsPerFrame * frameIndex;
+        ulong begin = _gpuExecutionTsData[q], end = _gpuExecutionTsData[q + 1u];
+        if (end <= begin) return;
+        double ms = (end - begin) * 1000.0 / _gpuExecutionTsFreq;
+        if (!double.IsFinite(ms) || ms <= 0.0) return;
+        owner.PublishGpuRenderSample(ms, ownerSubmit, System.Diagnostics.Stopwatch.GetTimestamp());
+    }
+
+    // Lazily create the optional profiler query heap + readback buffer on the first instrumented submit. Guarded by
     // _gpuTimingInitTried so a failed create is attempted once, then treated as "unsupported" (heap stays null).
     private void EnsureGpuTiming()
     {
@@ -3505,21 +3705,25 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         else { _gpuTsReadback->Release(); _gpuTsReadback = null; _gpuQueryHeap->Release(); _gpuQueryHeap = null; }
     }
 
-    // Read the timestamps this back-buffer index resolved on its PREVIOUS use (its GPU work has since retired — WaitForFrame
-    // above proved it). end-begin over the queue's timestamp frequency = the true GPU raster ms of that earlier frame.
-    private void CollectGpuRenderTime(uint frameIndex)
+    // Read the timestamps this back-buffer index resolved on its PREVIOUS use (WaitForFrame proved the query bank retired).
+    // end-begin is the elapsed command-list execution span; it is paired with, and never substituted for, the categories.
+    private void CollectGpuCategoryTimes(uint frameIndex)
     {
         // Freshness: a successful resolve sets GpuTimingSampleFresh; skip-submit / stand-down never call Collect, so the
         // [fps] printer must check the flag (otherwise it re-quotes the last present's grender forever).
         _gpuTimingFresh = false;
         if (_gpuTsData == null || _gpuTsFreq == 0 || !_gpuTsPending[frameIndex]) return;
         _gpuTsPending[frameIndex] = false;
+        D3D12Swapchain? owner = _gpuTsOwner[frameIndex];
+        _gpuTsOwner[frameIndex] = null;
+        if (owner is null || owner.Disposed) return;
         uint q = GpuTsPerFrame * frameIndex;
         ulong begin = _gpuTsData[q], mid = _gpuTsData[q + 1], end = _gpuTsData[q + 2];
+        if (end <= begin) return;
         // Mid is stamped AFTER transition+clear; if mid is unset treat scene == whole.
-        if (end >= begin) _lastGpuRenderMs = (end - begin) * 1000.0 / _gpuTsFreq;
+        _lastGpuProfileMs = end >= begin ? (end - begin) * 1000.0 / _gpuTsFreq : 0.0;
         if (mid >= begin && end >= mid) _lastGpuSceneMs = (end - mid) * 1000.0 / _gpuTsFreq;
-        else _lastGpuSceneMs = _lastGpuRenderMs;
+        else _lastGpuSceneMs = _lastGpuProfileMs;
 
         // Fold the boundary timeline into the four category buckets. Marks in EXECUTION order: mid (t0), then
         // _sceneCatCount-1 interior boundaries at slots q+3+j, then end. Interval j (category = cats[j]) spans [t_j, t_{j+1}].
@@ -3545,12 +3749,48 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             }
         }
         _lastGpuFillMs = fill; _lastGpuShadowMs = shadow; _lastGpuImageMs = image; _lastGpuGlyphMs = glyph; _lastGpuCompositeMs = comp;
+        owner.PublishGpuProfileSample(_lastGpuProfileMs, _lastGpuSceneMs,
+            fill, shadow, image, glyph, comp);
         _gpuTimingFresh = true;
     }
 
     private bool _gpuTimingFresh;
-    /// <summary>True when <see cref="LastGpuRenderMs"/> was resolved this submit (not a leftover from a prior present).</summary>
+    /// <summary>True when the optional FG_GPU_TIMING category timeline was resolved this submit.</summary>
     public bool GpuTimingSampleFresh => _gpuTimingFresh;
+
+    private void ReleaseGpuTimingResources()
+    {
+        if (_gpuExecutionTsReadback != null)
+        {
+            if (_gpuExecutionTsData != null) _gpuExecutionTsReadback->Unmap(0, null);
+            D3D12MemoryDiagnostics.Release(_gpuExecutionTsReadback, "GpuExecution.TimestampReadback");
+            _gpuExecutionTsReadback->Release();
+            _gpuExecutionTsReadback = null; _gpuExecutionTsData = null;
+        }
+        if (_gpuExecutionQueryHeap != null) { _gpuExecutionQueryHeap->Release(); _gpuExecutionQueryHeap = null; }
+        if (_gpuTsReadback != null)
+        {
+            if (_gpuTsData != null) _gpuTsReadback->Unmap(0, null);
+            _gpuTsReadback->Release(); _gpuTsReadback = null; _gpuTsData = null;
+        }
+        if (_gpuQueryHeap != null) { _gpuQueryHeap->Release(); _gpuQueryHeap = null; }
+
+        Array.Clear(_gpuExecutionTsPending, 0, _gpuExecutionTsPending.Length);
+        Array.Clear(_gpuExecutionTsOwner, 0, _gpuExecutionTsOwner.Length);
+        Array.Clear(_gpuExecutionTsOwnerSubmit, 0, _gpuExecutionTsOwnerSubmit.Length);
+        Array.Clear(_gpuTsPending, 0, _gpuTsPending.Length);
+        Array.Clear(_gpuTsOwner, 0, _gpuTsOwner.Length);
+        _gpuExecutionTsFreq = 0; _gpuTsFreq = 0;
+        _gpuExecutionTimingInitTried = false; _gpuTimingInitTried = false;
+        _gpuTimingFresh = false;
+        for (int i = 0; i < _swapchains.Count; i++)
+        {
+            _swapchains[i].InvalidateGpuRenderSample();
+            _swapchains[i].InvalidateGpuProfileSample();
+            _swapchains[i].InvalidateRectSubmittedArea();
+        }
+        _lastGpuProfileMs = _lastGpuSceneMs = _lastGpuFillMs = _lastGpuShadowMs = _lastGpuImageMs = _lastGpuGlyphMs = _lastGpuCompositeMs = 0.0;
+    }
 
     /// <inheritdoc/>
     public bool HasPendingUploads => _imageTextures?.HasPendingUploads ?? false;
@@ -3581,11 +3821,26 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     {
         ulong v = ++_fenceValue;
         Check((HRESULT)global::FluentGpu.Interop.Generated.ID3D12CommandQueueVtbl.Signal(_queue, _fence, v), "queue.Signal");   // GEN-COM (wired)
-        if (global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.GetCompletedValue(_fence) < v)
+        ulong completed = global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.GetCompletedValue(_fence);
+        if (completed == ulong.MaxValue)
+        {
+            NoteRemovedFenceValue();
+            throw new InvalidOperationException("GPU fence reported device removal.");
+        }
+        if (completed < v)
         {
             Check((HRESULT)global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.SetEventOnCompletion(_fence, v, (void*)_fenceEvent), "SetEventOnCompletion");   // GEN-COM (wired)
-            if (_signalDeviceLostInsteadOfThrow) WaitFenceEventBounded();   // Step 4: no INFINITE hang on a lost device (async)
-            else WaitForSingleObject(_fenceEvent, INFINITE);
+            bool retired;
+            if (_signalDeviceLostInsteadOfThrow) retired = WaitFenceEventBounded(v);   // Step 4: no INFINITE hang on a lost device (async)
+            else
+            {
+                uint wait = WaitForSingleObject(_fenceEvent, INFINITE);
+                if (wait == 0xFFFFFFFFu) throw new InvalidOperationException("WaitForSingleObject(GPU fence) failed.");
+                completed = global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.GetCompletedValue(_fence);
+                if (completed == ulong.MaxValue) NoteRemovedFenceValue();
+                retired = completed != ulong.MaxValue && completed >= v;
+            }
+            if (!retired) throw new InvalidOperationException("GPU fence did not reach the awaited value.");
         }
     }
 
@@ -3708,6 +3963,24 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     private void ReleaseSwapchainResources(D3D12Swapchain target)
     {
         if (target.Disposed) return;
+        // A query bank can still name this target after its fence retired but before another submit collected it. Drop
+        // that ownership now so the bank neither retains a closed popup nor publishes into it on a later target's submit.
+        for (int i = 0; i < _gpuExecutionTsOwner.Length; i++)
+        {
+            if (!ReferenceEquals(_gpuExecutionTsOwner[i], target)) continue;
+            _gpuExecutionTsPending[i] = false;
+            _gpuExecutionTsOwner[i] = null;
+            _gpuExecutionTsOwnerSubmit[i] = 0;
+        }
+        for (int i = 0; i < _gpuTsOwner.Length; i++)
+        {
+            if (!ReferenceEquals(_gpuTsOwner[i], target)) continue;
+            _gpuTsPending[i] = false;
+            _gpuTsOwner[i] = null;
+        }
+        target.InvalidateGpuRenderSample();
+        target.InvalidateGpuProfileSample();
+        target.InvalidateRectSubmittedArea();
         target.Disposed = true;
         // Tear down the WUC backdrop FIRST (it holds a composition surface wrapping the swapchain).
         target.Backdrop?.Dispose();
@@ -3753,6 +4026,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         }
         for (uint i = 0; i < FRAME_COUNT; i++) _backBuffers[i] = null;
         // 2. Release device-level ComPtrs + pipelines (null the pipe fields so EnsurePipelines re-runs). NO WaitForGpu.
+        ReleaseGpuTimingResources();
         if (_dcomp != null) { _dcomp->Release(); _dcomp = null; }
         _glyphs?.Dispose(); _glyphs = null;
         _imagePipe?.Dispose(); _imagePipe = null;
@@ -3829,8 +4103,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _rectPipe?.Dispose();
         _sdf?.Dispose();
         for (uint i = 0; i < FRAME_COUNT; i++) _backBuffers[i] = null;
-        if (_gpuTsReadback != null) { _gpuTsReadback->Unmap(0, null); _gpuTsReadback->Release(); _gpuTsReadback = null; _gpuTsData = null; }
-        if (_gpuQueryHeap != null) { _gpuQueryHeap->Release(); _gpuQueryHeap = null; }
+        ReleaseGpuTimingResources();
         D3D12MemoryDiagnostics.Snapshot("D3D12Device.Dispose");
         // GEN-COM (wired): COM teardown via the generated IUnknown.Release calli (vtable slot 2, universal to every COM ptr).
         if (_cmdList != null) global::FluentGpu.Interop.Generated.IUnknownVtbl.Release(_cmdList);
@@ -3868,6 +4141,24 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
     internal readonly ColorF AcrylicTint;
     internal readonly float CornerRadiusPx;
     internal bool Disposed;
+    // Whole-frame execution samples are TARGET state, not device state. Main + popup/child hosts share one command queue;
+    // publishing here prevents a heavy popup submit from steering the main host's adaptive governor (or vice versa).
+    private long _gpuSampleVersion;        // seqlock: odd while any field below changes
+    private long _gpuSubmitSequence;
+    private long _gpuSampleSequence;
+    private long _gpuSampleSubmitSequence;
+    private long _gpuSamplePublishedQpc;
+    private double _gpuSampleExecutionMs;
+    private long _gpuProfileVersion, _gpuProfileSequence;
+    private int _gpuProfileValid;
+    private double _gpuProfileWholeMs, _gpuProfileSceneMs, _gpuProfileFillMs, _gpuProfileShadowMs;
+    private double _gpuProfileImageMs, _gpuProfileGlyphMs, _gpuProfileCompositeMs;
+    private const int RectSubmittedAreaTopCapacity = 8;
+    private long _rectAreaVersion;
+    private long _rectAreaSequence;
+    private int _rectAreaValid, _rectAreaHasArea, _rectAreaOpaqueInstances, _rectAreaBlendedInstances, _rectAreaTopCount;
+    private double _rectAreaOpaquePx2, _rectAreaBlendedPx2;
+    private readonly RectSubmittedAreaItem[] _rectAreaTop = new RectSubmittedAreaItem[RectSubmittedAreaTopCapacity];
 
     internal D3D12Swapchain(D3D12Device device, HWND hwnd, uint w, uint h, bool composited, bool desktopAcrylic, ColorF acrylicTint, float cornerRadiusPx)
     {
@@ -3883,6 +4174,163 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
 
     public Size2 SizePx => new(W, H);
     public bool SupportsCompositedIntervalZero => Composited;
+    internal ulong NoteGpuSubmit()
+    {
+        System.Threading.Interlocked.Increment(ref _gpuSampleVersion);
+        long submit = System.Threading.Interlocked.Increment(ref _gpuSubmitSequence);
+        System.Threading.Interlocked.Increment(ref _gpuSampleVersion);
+        return unchecked((ulong)submit);
+    }
+
+    internal void PublishGpuRenderSample(double executionMs, ulong submitSequence, long publishedQpc)
+    {
+        System.Threading.Interlocked.Increment(ref _gpuSampleVersion);
+        System.Threading.Volatile.Write(ref _gpuSampleExecutionMs, executionMs);
+        System.Threading.Interlocked.Exchange(ref _gpuSampleSubmitSequence, unchecked((long)submitSequence));
+        System.Threading.Interlocked.Exchange(ref _gpuSamplePublishedQpc, publishedQpc);
+        System.Threading.Interlocked.Increment(ref _gpuSampleSequence);
+        System.Threading.Interlocked.Increment(ref _gpuSampleVersion);
+    }
+
+    internal void InvalidateGpuRenderSample()
+    {
+        System.Threading.Interlocked.Increment(ref _gpuSampleVersion);
+        System.Threading.Volatile.Write(ref _gpuSampleExecutionMs, 0.0);
+        System.Threading.Interlocked.Exchange(ref _gpuSampleSubmitSequence, 0);
+        System.Threading.Interlocked.Exchange(ref _gpuSamplePublishedQpc, 0);
+        System.Threading.Interlocked.Increment(ref _gpuSampleVersion);
+    }
+
+    public bool TryGetGpuRenderSample(out GpuRenderSample sample)
+    {
+        for (int attempt = 0; attempt < 3; attempt++)
+        {
+            long before = System.Threading.Volatile.Read(ref _gpuSampleVersion);
+            if ((before & 1L) != 0) continue;
+            double ms = System.Threading.Volatile.Read(ref _gpuSampleExecutionMs);
+            long sequence = System.Threading.Interlocked.Read(ref _gpuSampleSequence);
+            long sampleSubmit = System.Threading.Interlocked.Read(ref _gpuSampleSubmitSequence);
+            long publishedQpc = System.Threading.Interlocked.Read(ref _gpuSamplePublishedQpc);
+            long currentSubmit = System.Threading.Interlocked.Read(ref _gpuSubmitSequence);
+            long after = System.Threading.Volatile.Read(ref _gpuSampleVersion);
+            if (before != after || (after & 1L) != 0) continue;
+            if (sequence == 0 || sampleSubmit <= 0 || publishedQpc <= 0 || !double.IsFinite(ms) || ms <= 0.0) break;
+            ulong submitAge = currentSubmit >= sampleSubmit
+                ? unchecked((ulong)(currentSubmit - sampleSubmit))
+                : ulong.MaxValue;
+            sample = new GpuRenderSample(ms, unchecked((ulong)sequence), submitAge, publishedQpc);
+            return true;
+        }
+        sample = default;
+        return false;
+    }
+
+    internal void PublishGpuProfileSample(double wholeMs, double sceneMs, double fillMs, double shadowMs,
+        double imageMs, double glyphMs, double compositeMs)
+    {
+        System.Threading.Interlocked.Increment(ref _gpuProfileVersion);
+        System.Threading.Volatile.Write(ref _gpuProfileWholeMs, wholeMs);
+        System.Threading.Volatile.Write(ref _gpuProfileSceneMs, sceneMs);
+        System.Threading.Volatile.Write(ref _gpuProfileFillMs, fillMs);
+        System.Threading.Volatile.Write(ref _gpuProfileShadowMs, shadowMs);
+        System.Threading.Volatile.Write(ref _gpuProfileImageMs, imageMs);
+        System.Threading.Volatile.Write(ref _gpuProfileGlyphMs, glyphMs);
+        System.Threading.Volatile.Write(ref _gpuProfileCompositeMs, compositeMs);
+        System.Threading.Interlocked.Increment(ref _gpuProfileSequence);
+        System.Threading.Volatile.Write(ref _gpuProfileValid, 1);
+        System.Threading.Interlocked.Increment(ref _gpuProfileVersion);
+    }
+
+    internal void InvalidateGpuProfileSample()
+    {
+        System.Threading.Interlocked.Increment(ref _gpuProfileVersion);
+        System.Threading.Volatile.Write(ref _gpuProfileValid, 0);
+        System.Threading.Interlocked.Increment(ref _gpuProfileVersion);
+    }
+
+    public bool TryGetGpuProfileSample(out GpuProfileSample sample)
+    {
+        for (int attempt = 0; attempt < 3; attempt++)
+        {
+            long before = System.Threading.Volatile.Read(ref _gpuProfileVersion);
+            if ((before & 1L) != 0) continue;
+            int valid = System.Threading.Volatile.Read(ref _gpuProfileValid);
+            long sequence = System.Threading.Interlocked.Read(ref _gpuProfileSequence);
+            double whole = System.Threading.Volatile.Read(ref _gpuProfileWholeMs);
+            double scene = System.Threading.Volatile.Read(ref _gpuProfileSceneMs);
+            double fill = System.Threading.Volatile.Read(ref _gpuProfileFillMs);
+            double shadow = System.Threading.Volatile.Read(ref _gpuProfileShadowMs);
+            double image = System.Threading.Volatile.Read(ref _gpuProfileImageMs);
+            double glyph = System.Threading.Volatile.Read(ref _gpuProfileGlyphMs);
+            double composite = System.Threading.Volatile.Read(ref _gpuProfileCompositeMs);
+            long after = System.Threading.Volatile.Read(ref _gpuProfileVersion);
+            if (before != after || (after & 1L) != 0) continue;
+            if (valid == 0 || sequence == 0) break;
+            sample = new GpuProfileSample(unchecked((ulong)sequence), whole, scene,
+                fill, shadow, image, glyph, composite);
+            return true;
+        }
+        sample = default;
+        return false;
+    }
+
+    internal void PublishRectSubmittedArea(int opaqueInstances, int blendedInstances, bool hasArea,
+        double opaquePx2, double blendedPx2, ReadOnlySpan<RectSubmittedAreaItem> blendedTop)
+    {
+        System.Threading.Interlocked.Increment(ref _rectAreaVersion);
+        System.Threading.Volatile.Write(ref _rectAreaOpaqueInstances, opaqueInstances);
+        System.Threading.Volatile.Write(ref _rectAreaBlendedInstances, blendedInstances);
+        System.Threading.Volatile.Write(ref _rectAreaHasArea, hasArea ? 1 : 0);
+        System.Threading.Volatile.Write(ref _rectAreaOpaquePx2, opaquePx2);
+        System.Threading.Volatile.Write(ref _rectAreaBlendedPx2, blendedPx2);
+        int count = Math.Min(blendedTop.Length, RectSubmittedAreaTopCapacity);
+        for (int i = 0; i < count; i++) _rectAreaTop[i] = blendedTop[i];
+        System.Threading.Volatile.Write(ref _rectAreaTopCount, count);
+        System.Threading.Interlocked.Increment(ref _rectAreaSequence);
+        System.Threading.Volatile.Write(ref _rectAreaValid, 1);
+        System.Threading.Interlocked.Increment(ref _rectAreaVersion);
+    }
+
+    internal void InvalidateRectSubmittedArea()
+    {
+        System.Threading.Interlocked.Increment(ref _rectAreaVersion);
+        System.Threading.Volatile.Write(ref _rectAreaValid, 0);
+        System.Threading.Volatile.Write(ref _rectAreaHasArea, 0);
+        System.Threading.Volatile.Write(ref _rectAreaOpaqueInstances, 0);
+        System.Threading.Volatile.Write(ref _rectAreaBlendedInstances, 0);
+        System.Threading.Volatile.Write(ref _rectAreaTopCount, 0);
+        System.Threading.Volatile.Write(ref _rectAreaOpaquePx2, 0.0);
+        System.Threading.Volatile.Write(ref _rectAreaBlendedPx2, 0.0);
+        System.Threading.Interlocked.Increment(ref _rectAreaVersion);
+    }
+
+    public bool TryCopyRectSubmittedAreaSample(Span<RectSubmittedAreaItem> blendedTop,
+        out RectSubmittedAreaSample sample)
+    {
+        for (int attempt = 0; attempt < 3; attempt++)
+        {
+            long before = System.Threading.Volatile.Read(ref _rectAreaVersion);
+            if ((before & 1L) != 0) continue;
+            int valid = System.Threading.Volatile.Read(ref _rectAreaValid);
+            long sequence = System.Threading.Interlocked.Read(ref _rectAreaSequence);
+            int opaqueInstances = System.Threading.Volatile.Read(ref _rectAreaOpaqueInstances);
+            int blendedInstances = System.Threading.Volatile.Read(ref _rectAreaBlendedInstances);
+            bool hasArea = System.Threading.Volatile.Read(ref _rectAreaHasArea) != 0;
+            double opaque = System.Threading.Volatile.Read(ref _rectAreaOpaquePx2);
+            double blended = System.Threading.Volatile.Read(ref _rectAreaBlendedPx2);
+            int count = Math.Min(System.Threading.Volatile.Read(ref _rectAreaTopCount), blendedTop.Length);
+            for (int i = 0; i < count; i++) blendedTop[i] = _rectAreaTop[i];
+            long after = System.Threading.Volatile.Read(ref _rectAreaVersion);
+            if (before != after || (after & 1L) != 0) continue;
+            if (valid == 0 || sequence == 0) break;
+            sample = new RectSubmittedAreaSample(unchecked((ulong)sequence), opaqueInstances, blendedInstances,
+                hasArea, opaque, blended, count);
+            return true;
+        }
+        sample = default;
+        return false;
+    }
+
     public void Resize(Size2 px) => Device.Resize(this, (uint)px.Width, (uint)px.Height);
     public void Present() => Device.Present(this);
     public void ConfigurePopupChrome(in PopupChromeMetrics m) => Backdrop?.ConfigureChrome(m.ContentRectPx, m.OpensUp, m.ClosedRatio, m.CornerRadiusPx);

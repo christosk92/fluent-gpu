@@ -602,8 +602,8 @@ static class ControlsSuite
                 oneLive, $"anyOpen={probe.Service!.AnyOpen} popupWindows={host.PopupWindows.Count}");
         }
 
-        // gate.ctx.scrim-blocks-wheel — with a menu open the light-dismiss scrim is the topmost hit, so a wheel over the
-        // covered list scrolls NOTHING (the ancestor-only wheel walk finds no scrollable); once closed, the same wheel
+        // gate.ctx.scrim-blocks-wheel — with a menu open the light-dismiss scrim is the topmost hit and consumes
+        // OnPointerWheel (Handled), so a wheel over the covered list scrolls NOTHING; once closed, the same wheel
         // scrolls the list (proving the wheel is real and the scrim was blocking it).
         {
             using var app = new HeadlessPlatformApp();

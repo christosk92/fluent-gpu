@@ -75,11 +75,19 @@ public sealed class DragDropContext
     private float _edgeVelocity;         // px/s along the viewport's scroll orientation (negative = toward 0)
     private float _edgeDelayLeftMs;
     private bool _edgeScrolling;         // past the 50ms delay-start
+    // Scroll v3 (docs/plans/scroll-v3-plan-2026-08-17.md §3.2): the LAST velocity actually posted to the kernel (and
+    // which viewport it was posted to) — AutoScroll is a time-true continuous command (the kernel integrates
+    // off += v·dt itself), so it is posted only on a CHANGE (new value or new viewport), not every Tick like the old
+    // per-frame delta poke. Lets Tick/UpdateEdgeScroll/End all detect "does the router need a fresh post" cheaply.
+    private NodeHandle _postedVp;
+    private float _postedVelocity;
 
-    /// <summary>Wired by the dispatcher: immediate clamped scroll-offset write (the SetScrollOffset idiom — applies
-    /// the content transform + virtual re-realize + scrollbar reveal). Returns false when clamped to a no-op (at the
-    /// boundary), which stops the edge scroll exactly like WinUI's at-the-edge suppression.</summary>
-    internal Func<NodeHandle, float, bool>? ScrollBy;
+    /// <summary>Wired by the dispatcher (Scroll v3): a time-true edge-scroll VELOCITY (DIP/s; 0 = stop) — replaces the
+    /// legacy per-frame delta-write <c>ScrollBy</c> (<c>Func&lt;NodeHandle,float,bool&gt;</c>, immediate clamped write +
+    /// "did it move" feedback). The kernel now owns the clamp/at-the-edge stop internally (plan §2.2 Autoscroll:
+    /// <c>off += v·dt</c>), so this is fire-and-forget — <see cref="Tick"/> posts it only when the desired velocity or
+    /// target viewport changes (see <see cref="_postedVp"/>/<see cref="_postedVelocity"/>).</summary>
+    internal Action<NodeHandle, float>? AutoScroll;
 
     public DragDropContext(SceneStore scene, Action requestRerender)
     {
@@ -302,26 +310,36 @@ public sealed class DragDropContext
         if (!_spring.IsNull && !_scene.IsLive(_spring)) ClearSpring();
         if (!_scrollViewport.IsNull && !_scene.IsLive(_scrollViewport))
         {
+            // The node died — SceneStore's removal path already posted Unbind to the kernel (WP-B), so there is
+            // nothing further to tell it; just forget the local bookkeeping (StopPostedAutoScroll would no-op here
+            // anyway, since it also gates on IsLive, but a dead handle should never linger in these fields).
             _scrollViewport = NodeHandle.Null;
             _edgeVelocity = 0f;
             _edgeScrolling = false;
+            _postedVp = NodeHandle.Null; _postedVelocity = 0f;
         }
     }
 
     /// <summary>Phase-7 host tick, driving the two time-based behaviours of a live session. (1) SPRING-LOAD: accumulate
-    /// the dwell on the current host and fire it once. (2) EDGE AUTO-SCROLL: hold the 50ms delay-start, then scroll the
-    /// viewport by velocity·dt through <see cref="ScrollBy"/> (clamped writes; hitting the boundary stops it, the WinUI
-    /// at-the-edge suppression). Returns true while EITHER still has work so the host keeps frames coming — the two are
-    /// deliberately independent, since a spring-load usually counts down over a perfectly stationary pointer. 0-alloc.</summary>
+    /// the dwell on the current host and fire it once. (2) EDGE AUTO-SCROLL: hold the 50ms delay-start, then post the
+    /// desired velocity through <see cref="AutoScroll"/> (Scroll v3: the kernel integrates + clamps continuously — no
+    /// more per-frame delta write / "did it move" feedback; the at-the-edge stop is the kernel's, not this class's).
+    /// Returns true while EITHER still has work so the host keeps frames coming — the two are deliberately independent,
+    /// since a spring-load usually counts down over a perfectly stationary pointer. 0-alloc.</summary>
     public bool Tick(float dtMs)
     {
         if (!_active) return false;
         bool springArmed = TickSpring(dtMs);
-        if (_edgeVelocity == 0f) return springArmed;
-        if (_scrollViewport.IsNull || !_scene.IsLive(_scrollViewport) || ScrollBy is null)
+        if (_edgeVelocity == 0f)
+        {
+            StopPostedAutoScroll();
+            return springArmed;
+        }
+        if (_scrollViewport.IsNull || !_scene.IsLive(_scrollViewport) || AutoScroll is null)
         {
             _edgeVelocity = 0f;
             _edgeScrolling = false;
+            StopPostedAutoScroll();
             return springArmed;
         }
         if (!_edgeScrolling)
@@ -330,18 +348,25 @@ public sealed class DragDropContext
             if (_edgeDelayLeftMs > 0f) return true;   // delay-start pending (LISTVIEWBASE_EDGE_SCROLL_START_DELAY_MSEC)
             _edgeScrolling = true;
         }
-        float delta = _edgeVelocity * (dtMs / 1000f);
-        if (delta != 0f && !ScrollBy(_scrollViewport, delta))
+        if (_postedVp != _scrollViewport || _postedVelocity != _edgeVelocity)
         {
-            _edgeVelocity = 0f;       // pinned to the boundary → stop (cpp:1686-1690 at-the-edge suppression)
-            _edgeScrolling = false;
-            return springArmed;
+            if (_postedVp != _scrollViewport) StopPostedAutoScroll();   // the target changed — zero the OLD viewport first
+            AutoScroll(_scrollViewport, _edgeVelocity);                 // instant update once running (cpp:1749-1753)
+            _postedVp = _scrollViewport; _postedVelocity = _edgeVelocity;
         }
         // The pointer did not move, but the target's content geometry did. Re-run the current destination's projection
         // so insertion slots/previews track edge autoscroll continuously instead of lagging until the next mouse event.
         if (!_over.IsNull && _scene.IsLive(_over)) _overSpec?.OnOver?.Invoke(_session);
         _requestRerender();
         return true;
+    }
+
+    /// <summary>Zero the last-posted velocity if one is live, and forget which viewport it targeted (idempotent).</summary>
+    private void StopPostedAutoScroll()
+    {
+        if (_postedVelocity == 0f) return;
+        if (!_postedVp.IsNull && _scene.IsLive(_postedVp)) AutoScroll?.Invoke(_postedVp, 0f);
+        _postedVp = NodeHandle.Null; _postedVelocity = 0f;
     }
 
     // ── internals ─────────────────────────────────────────────────────────────────────────────────
@@ -538,6 +563,7 @@ public sealed class DragDropContext
 
     private void End()
     {
+        StopPostedAutoScroll();   // a live session ending mid-edge-scroll must not leave the viewport coasting
         _scene.ClearDropSpotlight();
         _requestRerender();
         _spotlightTargetVersion = -1;

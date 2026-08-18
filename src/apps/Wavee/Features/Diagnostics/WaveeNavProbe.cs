@@ -264,7 +264,7 @@ internal static class WaveeNavProbe
             host.Scene.TryGetScroll(detailVp, out var detailAfter);
             Log.Info($"[tracklist-shot] detail-scroll expected=n#{detailVp.Raw.Index} hit=n#{hit.Raw.Index} routed=n#{routed.Raw.Index} " +
                 $"rect=({rr.X:0},{rr.Y:0} {rr.W:0}x{rr.H:0}) view={detailBefore.ViewportH:0} content={detailBefore.ContentH:0} " +
-                $"offset={detailBefore.OffsetY:0}->{detailAfter.OffsetY:0} phase={detailAfter.Phase} pending={detailAfter.PendingTargetY:0} " +
+                $"offset={detailBefore.OffsetY:0}->{detailAfter.OffsetY:0} activity={detailAfter.Activity} flags={detailAfter.ActivityFlags} " +
                 $"result={(MathF.Abs(detailAfter.OffsetY - detailBefore.OffsetY) > 1f ? "PASS" : "FAIL")}");
             if (routed.IsNull)
             {
@@ -583,13 +583,9 @@ internal static class WaveeNavProbe
             {
                 ref FluentGpu.Scene.ScrollState sc = ref scene.ScrollRef(pageVp);
                 float t = MathF.Max(0f, (sc.ContentH - sc.ViewportH) * frac);
-                sc.OffsetY = t; sc.TargetY = t;
-                NodeHandle content = sc.ContentNode;
-                if (!content.IsNull && scene.IsLive(content))
-                {
-                    scene.Paint(content).LocalTransform = FluentGpu.Foundation.Affine2D.Translation(0f, -t);
-                    scene.Mark(content, FluentGpu.Foundation.NodeFlags.TransformDirty | FluentGpu.Foundation.NodeFlags.PaintDirty);
-                }
+                // OffsetY/TargetY are kernel-owned result columns now (single-writer token) — post through the port
+                // instead of writing the scene directly; the kernel's own sink applies the offset + content transform.
+                scene.ScrollPort!.Post(FluentGpu.Scroll.ScrollInput.ScrollTo((int)pageVp.Raw.Index, t, immediate: true, halflifeMs: 0));
                 Settle(30);
                 Shot($"artist_{(int)(frac * 100):D2}");
             }
@@ -1031,7 +1027,8 @@ internal static class WaveeNavProbe
                 host.RunFrame();
             }
             host.Scene.TryGetScroll(homeVp, out var hidden);
-            Log.Info($"[home-scroll-reactivate] hidden fade={hidden.FadeT:0.00} pointerOver={hidden.PointerOver} off={hidden.OffsetY:0}");
+            host.Scene.ScrollChrome.TryGet((int)homeVp.Raw.Index, out var hiddenChrome);   // FadeT/PointerOver moved off ScrollState
+            Log.Info($"[home-scroll-reactivate] hidden fade={hiddenChrome.FadeT:0.00} pointerOver={hiddenChrome.PointerOver} off={hidden.OffsetY:0}");
 
             window.QueueInput(new InputEvent(InputKind.WindowFocus, default, 0, 0));
             window.QueueInput(new InputEvent(InputKind.PointerMove, pos, 0, 0));
@@ -1048,9 +1045,10 @@ internal static class WaveeNavProbe
                 host.RunFrame();
             }
             host.Scene.TryGetScroll(homeVp, out var reactivated);
+            host.Scene.ScrollChrome.TryGet((int)homeVp.Raw.Index, out var reactivatedChrome);   // FadeT/PointerOver moved off ScrollState
             bool reactivatedMoved = MathF.Abs(reactivated.OffsetY - beforeReactivatedWheel) > 1f;
-            bool reactivatedBar = reactivated.FadeT > 0.5f;
-            Log.Info($"[home-scroll-reactivate] home=n#{homeVp.Raw.Index} routed=n#{routedAfterFocus.Raw.Index} fade={reactivated.FadeT:0.00} pointerOver={reactivated.PointerOver} " +
+            bool reactivatedBar = reactivatedChrome.FadeT > 0.5f;
+            Log.Info($"[home-scroll-reactivate] home=n#{homeVp.Raw.Index} routed=n#{routedAfterFocus.Raw.Index} fade={reactivatedChrome.FadeT:0.00} pointerOver={reactivatedChrome.PointerOver} " +
                 $"off={beforeReactivatedWheel:0}->{reactivated.OffsetY:0} wheel={(reactivatedMoved ? "PASS" : "FAIL")} bar={(reactivatedBar ? "PASS" : "FAIL")}");
 
             // Real app-loop cadence: production order is RunFrame -> RecommendedWaitMs -> WaitForWork. The old probe
@@ -1928,7 +1926,7 @@ internal static class WaveeNavProbe
             float offArm = LyricsOffsetY();
             bool handoff = MathF.Abs(offArm - offPrev) > 0.5f;
             if (handoff) p1Handoffs++;
-            if (sArm.LyricsScrollMode == FluentGpu.Animation.ScrollIntegrator.WheelAnimating) p1SpringFrames++;
+            if (sArm.LyricsScrollMode == (int)FluentGpu.Scroll.ScrollActivity.Driven) p1SpringFrames++;
             if (!sArm.LyricsUserScrollActive && sArm.LyricsContentDirtyAtRecord && sArm.BlurCandidateCount == 0) p1BlurAbsentFrames++;
             AppendAdvanceRow(csv, "P1-cascade", li, 0, handoff ? "latch" : "no-move", sArm, prevLyMode, host.Scene, lyricsVp, mainVp, gpu);
             prevLyMode = sArm.LyricsScrollMode;
@@ -1955,7 +1953,7 @@ internal static class WaveeNavProbe
 
                 // (a) the offset LANDED on the latch frame: nothing may move it again for the rest of the handoff.
                 if (MathF.Abs(LyricsOffsetY() - offArm) > 0.5f) p1LateOffsetFrames++;
-                if (s.LyricsScrollMode == FluentGpu.Animation.ScrollIntegrator.WheelAnimating) p1SpringFrames++;
+                if (s.LyricsScrollMode == (int)FluentGpu.Scroll.ScrollActivity.Driven) p1SpringFrames++;
 
                 // (b) + (d): every line's comp must decay monotonically to 0 without crossing zero, and a line must not
                 // start moving before the line above it (the onset frame is the first CHANGE, not the first non-zero —
@@ -2151,8 +2149,11 @@ internal static class WaveeNavProbe
         FluentGpu.Scene.SceneStore scene, NodeHandle lyricsVp, NodeHandle mainVp, D3D12Device gpu)
     {
         var ld = LyricsView.LastFrameDiagnostics;
-        float lyOff = 0f, lyTgt = 0f;
-        if (!lyricsVp.IsNull && scene.IsLive(lyricsVp) && scene.TryGetScroll(lyricsVp, out var lsc)) { lyOff = lsc.OffsetY; lyTgt = lsc.TargetY; }
+        // TargetY is gone (ScrollState.TargetY deleted — the kernel's live Driven-chase target is now
+        // ScrollBody-internal and not introspectable from outside the kernel). Keep the CSV column present (NaN) so
+        // existing column-position parsers don't shift.
+        float lyOff = 0f, lyTgt = float.NaN;
+        if (!lyricsVp.IsNull && scene.IsLive(lyricsVp) && scene.TryGetScroll(lyricsVp, out var lsc)) lyOff = lsc.OffsetY;
         csv.Append(phase).Append(',')
            .Append(line.ToString(CultureInfo.InvariantCulture)).Append(',')
            .Append(frame.ToString(CultureInfo.InvariantCulture)).Append(',')
@@ -2296,9 +2297,12 @@ internal static class WaveeNavProbe
         int transformDirty = 0;
         if (!sc.ContentNode.IsNull && scene.IsLive(sc.ContentNode) && (scene.Flags(sc.ContentNode) & NodeFlags.TransformDirty) != 0)
             transformDirty = 1;
+        // TargetY is gone (kernel-internal, ScrollBody-only) — NaN keeps the column present so existing CSV
+        // column-position parsers don't shift; Phase's successor is the Activity result column (int-cast, same as the
+        // old byte Phase value's shape).
         csv.Append(',').Append(F(sc.OffsetY))
-           .Append(',').Append(F(sc.TargetY))
-           .Append(',').Append(sc.Phase.ToString(CultureInfo.InvariantCulture))
+           .Append(',').Append(F(float.NaN))
+           .Append(',').Append(((int)sc.Activity).ToString(CultureInfo.InvariantCulture))
            .Append(',').Append(transformDirty.ToString(CultureInfo.InvariantCulture));
     }
 
@@ -2654,7 +2658,7 @@ internal static class WaveeNavProbe
         // ── Phase 4: SCROLL via REAL mouse-wheel INPUT. NOT WriteScrollOffset (that bypasses input): here every notch is an
         //    InputKind.Wheel event injected through window.QueueInput → PumpInto → the dispatcher ring → DispatchWheel/ScrollAt
         //    (hit-test the cursor pos, route to the nearest VERTICAL scroller), and SmoothScroll eases each +60 DIP notch via
-        //    the ScrollIntegrator (inertia). So this measures the full real path a mouse drives: hit-test + wheel routing + the
+        //    the scroll kernel (inertia). So this measures the full real path a mouse drives: hit-test + wheel routing + the
         //    eased per-frame re-layout / virtualization re-realize / re-record, including the inertial COAST after a flick. ──
         var scroll = new Phase("scroll (real wheel)");
         if (Diag.EnvFlag("WAVEE_LIKED_SHOT")) { window.SetClientSize(1456, 820); Settle(12); Nav("liked", null); Settle(50); var px0 = gpu.CaptureBgra(out int cw0, out int ch0); PngWriter.WriteBgra(ProbeArtifacts.PathFor("liked_header.png"), px0, cw0, ch0); }
@@ -2687,7 +2691,7 @@ internal static class WaveeNavProbe
                 window.QueueInput(new InputEvent(InputKind.Wheel, pos, 0, 0, i < 100 ? +60f : -60f));
                 Measure(scroll, i < 100 ? "wheel-down" : "wheel-up");
             }
-            // Flick-and-coast: a 6-notch burst, then STOP — the ScrollIntegrator eases the residual to rest. These COAST frames
+            // Flick-and-coast: a 6-notch burst, then STOP — the scroll kernel eases the residual to rest. These COAST frames
             // are exactly what a programmatic offset-set can never see (it lands instantly); a real flick animates for ~15 frames.
             for (int rep = 0; rep < 6 && !window.IsClosed; rep++)
             {

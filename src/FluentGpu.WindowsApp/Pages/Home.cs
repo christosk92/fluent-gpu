@@ -17,7 +17,7 @@ sealed class WelcomePage : Component
         ("icons", Icons.Star, "Iconography", "All 1,500+ Segoe Fluent glyphs"),
         ("flex", Icons.Tag, "Flexbox", "justify · align · grow · wrap"),
         ("grid", Icons.Grid, "CSS Grid", "Track-based + uniform grid"),
-        ("repeater", Icons.List, "ItemsRepeater", "Data-driven, virtualized"),
+        ("repeater", Icons.List, "ItemsView", "Data-driven, virtualized"),
         ("virtualization", Icons.List, "List virtualization", "100k rows, recycled"),
         ("buttons", Icons.Accept, "Buttons & commands", "Accent · standard · toggle"),
         ("inputs", Icons.Volume, "Inputs & sliders", "Sliders, scrollbars, toggles"),

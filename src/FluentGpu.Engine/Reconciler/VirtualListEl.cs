@@ -141,8 +141,8 @@ public sealed record VirtualListEl : Element
     /// seed is applied before <c>RealizeWindow</c>), with no top-then-jump. Null ⇒ no restoration.</summary>
     public string? ScrollKey { get; init; }
 
-    /// <summary>CSS <c>scroll-timeline-name</c> — see <see cref="ScrollEl.ScrollTimeline"/> for the full contract (one
-    /// live publisher per name; scope it to the content identity, never a bare constant). Lets a node OUTSIDE this
-    /// viewport drive a <c>ScrollBindDsl.Timeline</c> bind from its offset.</summary>
-    public string? ScrollTimeline { get; init; }
+    /// <summary>The ONE authoring handle over this self-scrolling viewport — see <see cref="ScrollEl.Controller"/> for
+    /// the full contract (null ⇒ the reconciler mints its own internal instance; <c>Hooks.UseScroll()</c> always
+    /// resolves one for a mounted descendant either way).</summary>
+    public FluentGpu.Scroll.ScrollController? Controller { get; init; }
 }

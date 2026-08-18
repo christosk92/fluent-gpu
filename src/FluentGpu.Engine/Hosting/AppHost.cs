@@ -12,6 +12,7 @@ using FluentGpu.Reconciler;
 using FluentGpu.Render;
 using FluentGpu.Rhi;
 using FluentGpu.Scene;
+using FluentGpu.Scroll;
 using FluentGpu.Signals;
 using FluentGpu.Text;
 
@@ -40,6 +41,8 @@ public readonly record struct FrameStats(int DrawCommandCount, int ClicksHandled
     /// (FluentApp.RunCore) is what keeps it there.</summary>
     public int DepthAborts { get; init; }
     public SpanReuseDisabledReason SpanReuseDisabledReasons { get; init; }
+    /// <summary>Per-node span-reuse gate refusals, populated only under <c>FG_RENDER_DIAG=1</c>.</summary>
+    public SpanReuseMissStats SpanReuseMisses { get; init; }
     // Repaint damage (gpu-renderer.md §13.1) — the measure point for §5.1-A: what fraction of the window this frame
     // would have had to repaint, over how many disjoint rects, and (when the region gave up) why. No renderer consumes
     // the region yet, so these are the ONLY way to validate the accumulator against a real workload.
@@ -108,15 +111,22 @@ public readonly record struct FrameStats(int DrawCommandCount, int ClicksHandled
     public int ImageApplyCount { get; init; }
     public int ImageApplyBytes { get; init; }
     public double RealizeCatchupMs { get; init; }
-    // Submit sub-split (diagnostics for the #1 hotspot — GPU fence/present pacing is charged to "submit" on the UI thread
-    // until the render-thread seam lands). FenceWaitMs = wall-time BLOCKED on the frame fence + present-latency waitable
+    // Submit sub-split (diagnostics for the #1 hotspot; async runs the backend submit on the render thread).
+    // FenceWaitMs = submitting-thread wall-time BLOCKED on back-buffer retirement + present-latency waitable
     // INSIDE SubmitDrawList; PresentMs = the Present() call. cmdBuild = SubmitMs − FenceWaitMs − PresentMs is the real CPU
     // command-build cost. Lets a probe attribute a 27 ms "submit" spike to the stall vs the build without an external profiler.
     public double FenceWaitMs { get; init; }
     public double PresentMs { get; init; }
-    /// <summary>Most recent true on-GPU whole-frame raster time (timestamp queries; 0 when disabled).</summary>
+    /// <summary>Most recent true on-GPU whole-frame execution span (always-on timestamp pair; 0 when unsupported or no
+    /// sample has retired yet).</summary>
     public double GpuRenderMs { get; init; }
-    /// <summary>Scene-raster portion of <see cref="GpuRenderMs"/> (0 when timestamp queries are disabled).</summary>
+    /// <summary>Optional FG_GPU_TIMING whole-command-list span paired with the detailed category fields below.</summary>
+    public double GpuProfileMs { get; init; }
+    /// <summary>True when <see cref="GpuProfileMs"/> and its category fields were resolved for this stats sample.</summary>
+    public bool GpuProfileFresh { get; init; }
+    /// <summary>Target-local identity of the coherent optional profile sample.</summary>
+    public ulong GpuProfileSequence { get; init; }
+    /// <summary>Scene-execution portion of <see cref="GpuProfileMs"/> (0 when timestamp queries are disabled).</summary>
     public double GpuSceneMs { get; init; }
     /// <summary>Rect/solid-fill portion of <see cref="GpuSceneMs"/> (0 when timestamp queries are disabled).</summary>
     public double GpuFillMs { get; init; }
@@ -160,7 +170,6 @@ public readonly record struct FrameStats(int DrawCommandCount, int ClicksHandled
     public int StickyClipDirties { get; init; }
     public int StickyClipFullyHidden { get; init; }
     public int PinDirties { get; init; }
-    public int MorphDirties { get; init; }
     public int ContinuousDirties { get; init; }
     public int ScrollBindCount { get; init; }
 }
@@ -203,9 +212,10 @@ public sealed class PopupWindowSlot
 }
 
 /// <summary>Which branch of <see cref="AppHost.RecommendedWaitMs"/> produced the last wait — the diagnostic that
-/// distinguishes ambient software-pacing from display-rate free-run. <c>Ambient</c> means the loop was throttled to
-/// <see cref="AppHost.AmbientAnimationFps"/> (the software 60 Hz cap); <c>DisplayRate</c>/<c>PaceAsync</c> mean the loop
-/// ran at panel rate and any lock is downstream (Present/GPU miss-vblank). Surfaced via <see cref="AppHost.LastWaitKind"/>.</summary>
+/// distinguishes ambient app-policy pacing, measured adaptive-GPU pacing, and display-rate free-run. <c>Ambient</c>
+/// means the loop was throttled to the configured ambient rate; <c>AdaptiveGpu</c> means a fresh on-GPU execution sample
+/// selected that same sustainable cadence; <c>DisplayRate</c>/<c>PaceAsync</c> mean the loop ran at panel rate and any
+/// lock is downstream. Surfaced via <see cref="AppHost.LastWaitKind"/>.</summary>
 public enum HostWaitKind : byte
 {
     Idle,            // -1: fully idle / minimized — block until a message
@@ -215,6 +225,7 @@ public enum HostWaitKind : byte
     PaceSkipSubmit,  // AppHost.DeriveAsyncPaceMs after an elided submit (sync path)
     PaceAsync,       // AppHost.DeriveAsyncPaceMs — async present pace cap (or the phase-gate ceiling while armed)
     DisplayRate,     // 0: latency-sensitive / one-shot motion — sync present-throttled (panel rate)
+    AdaptiveGpu,     // AmbientFrameWaitMs selected by fresh on-GPU execution samples (not ambient app policy)
 }
 
 /// <summary>How the ambient-animation pacing RATE is selected (the cap's rate, not whether it engages — that stays
@@ -335,10 +346,27 @@ public sealed class AppHost : IDisposable
     private readonly InputDispatcher _dispatcher;
     private readonly InputEventRing _ring = new();
     private readonly IFrameTimeSource _frameTime;
-    private readonly bool _isHeadless;   // headless: FixedFrameTimeSource + FrameQpcSec stays 0 (resampler uses the latest sample, deterministic)
+    private readonly bool _isHeadless;   // headless: FixedFrameTimeSource; the scroll clock's FrameSec is the deterministic _frameClockMs instead of a QPC read
     private readonly AnimEngine _anim;
     private readonly ConnectedAnimation _connected;
-    private readonly ScrollIntegrator _scrollAnim;   // the deterministic, engine-owned scroll integrator (wheel/touchpad/touch/spring) — the ONLY scroll source
+    // scroll-v3: the portable, thread-agnostic kernel is the ONE scroll source (wheel/touchpad/touch fling +
+    // overscroll spring + programmatic glide + snap) — see docs/plans/scroll-v3-plan-2026-08-17.md §2/§3.
+    private readonly SceneScrollSink _scrollSink;
+    private readonly ScrollKernel _scrollKernel;
+    private readonly ScrollBarChrome _scrollChrome;      // conscious-fade scrollbar ticker — motion never touches chrome, chrome never touches motion
+    private readonly ScrollInputRouter _scrollRouter;
+    private ScrollFrameSummary _scrollSummary;           // this frame's kernel.Tick() summary (§3.3 item 1)
+    private double _scrollClockFrameSec;                 // this frame's ScrollClock.FrameSec — EmitLatencyRow's clockSampleSkewMs reads it back
+    // ── the ONE frame clock (scroll-v3-plan §5.1) — built once at the top of RunFrame, before pump/dispatch, so
+    // PumpScroll (Paint, after the display-phase gate) and the kernel's Tick (also Paint) share the identical
+    // (FrameQpc, PresentQpc) pair with whatever DirectManipulation samples this frame. Named _palFrameClock (not
+    // _frameClock) because that identifier is already the FrameClock.Tick poller's frame counter (_frameClockSig).
+    private FluentGpu.Pal.FrameClock _palFrameClock;
+    private ulong _frameClockSeq;                         // RunFrame-call ordinal — FrameClock.Seq (never resets)
+    private long _frameClockFloorQpc;                     // RefreshLattice.Snap's monotonicity floor (replaces the old QuantizedFrameSec's _lastQuantizedFrameQpc)
+    private long _prevScrollFrameQpc;                     // previous PAINTED frame's FrameClock.FrameQpc — ScrollClock.DtSec's Δ base (real-window path only)
+    private readonly InputEventRing _scrollPumpRing = new();  // dedicated ring for IPlatformWindow.PumpScroll (kept separate from _ring, which the top-of-RunFrame pump already drained this frame)
+    private readonly FrameBudget _frameBudget = new();   // motion-UI slice bound for realize + image-apply while Drag/Ballistic (§3.3 item 6)
     private readonly RepeatTicker _repeat;
     private readonly CaretBlinker _caretBlinker;
     private readonly ImageCache _images;
@@ -668,7 +696,7 @@ public sealed class AppHost : IDisposable
         mode = 0; userScroll = false; contentDirty = false;
         if (vp.IsNull || !_scene.IsLive(vp) || !_scene.HasScroll(vp)) return;
         ref var sc = ref _scene.ScrollRef(vp);
-        mode = sc.Phase;
+        mode = (int)sc.Activity;   // ScrollState.Phase is deleted (scroll-v3 §3.1) — Activity is the kernel's coarser-grained result column
         userScroll = sc.UserScrollActive;
         var c = sc.ContentNode;
         contentDirty = !c.IsNull && _scene.IsLive(c) && (_scene.Flags(c) & NodeFlags.TransformDirty) != 0;
@@ -746,6 +774,7 @@ public sealed class AppHost : IDisposable
         DumpDeviceLostFrames(null, "async-render");
         _device.DumpDeviceLostDiagnostics(WriteDeviceLostLine);
         _device.RecoverDevice();
+        ResetAdaptiveGpuGovernor();
     }
 
     private bool TryRecoverForegroundDeviceLost(Exception ex, int clicks)
@@ -755,6 +784,7 @@ public sealed class AppHost : IDisposable
         DumpDeviceLostFrames(ex, "foreground");
         _device.DumpDeviceLostDiagnostics(WriteDeviceLostLine);
         _device.RecoverDevice();
+        ResetAdaptiveGpuGovernor();
         _scene.MarkAllPaintDirty();
         _repaintTargetValid = false;   // the rebuilt target holds nothing — the next frame repaints in full (§13.1)
         _needFullLayout = true;
@@ -764,6 +794,15 @@ public sealed class AppHost : IDisposable
         LastStats = new FrameStats(0, clicks, 0, Rendered: false) { Fps = _fps, FrameMs = _frameMs };
         PublishFrameStats(LastStats);
         return true;
+    }
+
+    private void ResetAdaptiveGpuGovernor()
+    {
+        _gpuBoundEma = 0.0;
+        _gpuBoundSampleSequence = 0;
+        _gpuBoundLastSample = default;
+        _gpuGovernorEngaged = false;
+        _lastGpuProfileStatsSequence = 0;
     }
 
     private void RememberDeviceLostFrame(int clicks, bool keepAlive, bool resized, bool reconciled, bool layoutNeeded,
@@ -862,9 +901,13 @@ public sealed class AppHost : IDisposable
     // falling out of the shorter grace between notches — a 30Hz↔display-rate oscillation felt as a per-notch lurch.
     private long _scrollGraceUntil;
     private static readonly long ScrollGraceTicks = (long)(0.25 * Stopwatch.Frequency);
-    // One-bit latch: did ANY viewport's scroll offset actually advance LAST frame (ScrollIntegrator.AnyOffsetWroteThisFrame,
-    // captured right after the phase-7 scroll tick)? Read at the TOP of the next Paint — before FLIP capture — to gate the
-    // MotionSuppressionSource.Scroll layout-transition suppression on REAL offset motion, not merely the hold window.
+    // The "did any viewport's offset actually advance" latch is _scrollSink.AnyRealMoveThisFrame (computed at
+    // phase 2.5 — top of Paint, before this SAME frame's FLIP capture, right after _scrollKernel.Tick): scroll-v3
+    // ticks the kernel early precisely so this is THIS frame's answer, not last frame's. NOT _scrollSummary.AnyMoved
+    // — that kernel summary is touched-count based (true on an idempotent same-geometry SetFrame repost same as a
+    // real write), so it stays permanently true across ordinary steady-state relayouts. See
+    // SceneScrollSink.AnyRealMoveThisFrame's remarks and _anyOffsetWroteLastFrame below for the FLIP-suppression
+    // one-frame latch built on top of it.
     private bool _anyOffsetWroteLastFrame;
     private long _selfBlurHoldUntil;
     private static readonly long SelfBlurHoldAfterScrollTicks = (long)(0.12 * Stopwatch.Frequency);
@@ -941,6 +984,82 @@ public sealed class AppHost : IDisposable
         _ => explicitFps > 0 ? explicitFps : 0,
     };
 
+    /// <summary>Consume one coherent, completed whole-frame GPU execution sample into the adaptive governor. Returns
+    /// true only for a new valid sample. Sequence 0 (unsupported), a repeated sequence, NaN/infinity and non-positive
+    /// durations never update the EMA. A repeated sample may still retain an already-engaged decision while its target-
+    /// local submit age and wall age remain bounded; <see cref="IsAdaptiveGpuSampleUsable"/> owns that separate law.
+    /// Invalid NEW samples are consumed and fail open rather than preserving an old engaged decision indefinitely.
+    ///
+    /// Pure apart from its explicit state refs so VerticalSlice can lock the no-fence-fallback, consume-once and
+    /// hysteresis laws without a D3D device.</summary>
+    internal static bool TryAdvanceAdaptiveGpuGovernor(double executionMs, ulong sequence,
+        ref ulong consumedSequence, ref double emaMs, ref bool engaged)
+    {
+        if (sequence == 0 || sequence == consumedSequence) return false;
+        consumedSequence = sequence;
+        if (!double.IsFinite(executionMs) || executionMs <= 0.0)
+        {
+            emaMs = 0.0;
+            engaged = false;
+            return false;
+        }
+
+        double prior = double.IsFinite(emaMs) && emaMs > 0.0 ? emaMs : 0.0;
+        emaMs = prior * (1.0 - GpuGovernorAlpha) + executionMs * GpuGovernorAlpha;
+        if (engaged)
+        {
+            if (emaMs <= GpuGovernorReleaseMs) engaged = false;
+        }
+        else if (emaMs >= GpuGovernorEngageMs)
+        {
+            engaged = true;
+        }
+        return true;
+    }
+
+    /// <summary>Can a previously published target-local sample still support the current governor decision? Freshness
+    /// controls EMA mutation; age controls decision validity. A repeated sequence remains usable while BOTH its same-
+    /// target submit age and wall age are bounded, then fails open. Pure for deterministic policy gates.</summary>
+    internal static bool IsAdaptiveGpuSampleUsable(in GpuRenderSample sample, long nowQpc,
+        ulong maxSubmitAge, long maxWallAgeTicks)
+    {
+        if (sample.Sequence == 0 || !double.IsFinite(sample.ExecutionMs) || sample.ExecutionMs <= 0.0
+            || sample.SubmitAge > maxSubmitAge || sample.PublishedQpc <= 0 || nowQpc < sample.PublishedQpc
+            || maxWallAgeTicks < 0)
+            return false;
+        return nowQpc - sample.PublishedQpc <= maxWallAgeTicks;
+    }
+
+    /// <summary>Apply the complete adaptive-GPU sample policy. A usable repeated sequence does not touch the EMA but
+    /// retains the current hysteresis decision. Unsupported/invalid/expired evidence clears the decision and its EMA.
+    /// The return value alone authorizes the adaptive wait; callers must still apply the input/scroll/grace gates.</summary>
+    internal static bool EvaluateAdaptiveGpuSample(in GpuRenderSample sample, long nowQpc,
+        ulong maxSubmitAge, long maxWallAgeTicks, ref ulong consumedSequence, ref double emaMs, ref bool engaged)
+    {
+        if (!IsAdaptiveGpuSampleUsable(in sample, nowQpc, maxSubmitAge, maxWallAgeTicks))
+        {
+            emaMs = 0.0;
+            engaged = false;
+            return false;
+        }
+
+        _ = TryAdvanceAdaptiveGpuGovernor(sample.ExecutionMs, sample.Sequence,
+            ref consumedSequence, ref emaMs, ref engaged);
+        return engaged;
+    }
+
+    /// <summary>Evaluate a target-local sample read while tolerating a transient unavailable read during the backend's
+    /// seqlock publication. The last coherent sample remains bounded by the exact same submit/wall-age policy; a backend
+    /// that has never supplied one therefore stays fail-open.</summary>
+    internal static bool EvaluateAdaptiveGpuRead(bool sampleAvailable, in GpuRenderSample sample, long nowQpc,
+        ulong maxSubmitAge, long maxWallAgeTicks, ref GpuRenderSample cachedSample,
+        ref ulong consumedSequence, ref double emaMs, ref bool engaged)
+    {
+        if (sampleAvailable) cachedSample = sample;
+        return EvaluateAdaptiveGpuSample(in cachedSample, nowQpc, maxSubmitAge, maxWallAgeTicks,
+            ref consumedSequence, ref emaMs, ref engaged);
+    }
+
     /// <summary>Is a software ambient cap in effect AT ALL? The mode-aware replacement for the old
     /// <c>AmbientAnimationFps &gt; 0</c> test that gated both pacing branches: HalfRefresh is always engaged (its rate is
     /// only known once the refresh is read, inside <see cref="AmbientFrameWaitMs"/>), ExplicitFps only for a positive
@@ -952,8 +1071,8 @@ public sealed class AppHost : IDisposable
         AmbientRateMode.HalfRefresh => true,
         _ => AmbientAnimationFps > 0,
     };
-    // FG_ADAPTIVE_FPS governor (default off): when the GPU genuinely cannot sustain the panel rate at the current size
-    // (smoothed fence-wait over the ~120Hz budget — e.g. a maximized frame that rasters in ~14ms), pace CONTINUOUS
+    // Adaptive GPU governor: when on-GPU execution genuinely cannot sustain the panel rate at the current size
+    // (a maximized frame whose command list executes in ~14ms), pace CONTINUOUS
     // animation (playhead/shimmer) to the ambient cap instead of free-running the loop into vblank-misses. A steady 60
     // beats a jittery 60 and halves GPU/power; it NEVER engages for latency-sensitive frames (no added input/scroll
     // latency) and routes through the Resync-exempt AmbientFrameWaitMs so it can't trip the frozen-anim clock guard.
@@ -987,8 +1106,17 @@ public sealed class AppHost : IDisposable
     /// otherwise read as "disabling the pump changed nothing", which is the opposite of what happened.</summary>
     public long BisectImagePumpsSuppressed => Volatile.Read(ref _bisectPumpsSuppressed);
     private const double ScrollPresentGpuBudgetMs = 8.0;
-    private double _gpuBoundEma;   // smoothed recent GPU fence-wait (ms); governor input
-    private const double GpuBoundBudgetMs = 10.0;   // sustained fence-wait above this ⇒ can't hold 120 (8.3ms) → pace to ambient
+    private double _gpuBoundEma;            // smoothed fresh whole-frame GPU execution samples (never fence waits)
+    private ulong _gpuBoundSampleSequence;  // last completed device sample consumed into the EMA
+    private GpuRenderSample _gpuBoundLastSample; // last coherent sample from THIS host's swapchain; TTL-bounded on read contention
+    private bool _gpuGovernorEngaged;
+    private ulong _lastGpuProfileStatsSequence;
+    internal const double GpuGovernorEngageMs = 10.0;
+    internal const double GpuGovernorReleaseMs = 8.0;   // hysteresis: don't chatter around the engage threshold
+    private const double GpuGovernorAlpha = 0.15;
+    internal const ulong GpuGovernorMaxSubmitAge = 6;   // includes the normal FRAME_COUNT=2 resolve lag + bounded slack
+    internal const int GpuGovernorSampleTtlMs = 250;
+    private static readonly long GpuGovernorSampleTtlTicks = (long)(GpuGovernorSampleTtlMs * (Stopwatch.Frequency / 1000.0));
     // The governor NEVER paces these: genuine interactions (would add input/scroll latency) + an explicit UI frame-clock
     // poller (for example the compositor-bound playback playhead). It DOES pace art-reveal crossfades / one-shot transitions / ambient loops when GPU-bound (a 60Hz crossfade is
     // imperceptible, and the GPU can't do better than ~60 at that size anyway). Narrower than LatencySensitiveWake — which
@@ -1339,9 +1467,24 @@ public sealed class AppHost : IDisposable
     /// spuriously trip the frame-clock step-up Resync (the frozen one-shot-anim bug class).</summary>
     public static int DeriveAsyncPaceMs(double refreshMs) => Math.Clamp((int)Math.Floor(refreshMs) - 1, 3, 32);
 
+    /// <summary>Software floor (ms) when Present is attested unpaced (no vblank). 15 = 60 Hz, matching the headless /
+    /// unknown-refresh fallback. Remote streams are 60 Hz; spinning faster only burns CPU.</summary>
+    public const int UnpacedPresentPaceMs = 15;
+
+    /// <summary>Apply the unpaced-present floor to a <see cref="DeriveAsyncPaceMs"/> result. Pure so the gate can lock
+    /// it without a live panel. A vsync-locked 120 Hz derived wait (7) becomes 15; an already-60-or-slower wait is
+    /// unchanged. Never raises a 32 ms ceilinged wait.</summary>
+    public static int FloorPaceMsWhenUnpaced(int derivedMs) => Math.Max(derivedMs, UnpacedPresentPaceMs);
+
     /// <summary>The live pace cap for THIS host: <see cref="DeriveAsyncPaceMs"/> over the measured refresh period (which
-    /// falls back to 60 Hz when the backend reports none — headless always does).</summary>
-    private int AsyncDisplayPaceMs() => DeriveAsyncPaceMs(RefreshPeriodQpcOrDefault() * 1000.0 / Stopwatch.Frequency);
+    /// falls back to 60 Hz when the backend reports none — headless always does). When Present is not vsync-locked the
+    /// result is floored at <see cref="UnpacedPresentPaceMs"/> so a remote DWM that reports a 2 ms "refresh" cannot
+    /// clamp to the 3 ms spin floor.</summary>
+    private int AsyncDisplayPaceMs()
+    {
+        int derived = DeriveAsyncPaceMs(RefreshPeriodQpcOrDefault() * 1000.0 / Stopwatch.Frequency);
+        return _unpacedDetector.Unpaced ? FloorPaceMsWhenUnpaced(derived) : derived;
+    }
 
     // ── Display-phase gate ───────────────────────────────────────────────────────────────────────────────────────────
     // Measured 2026-07-25 (ops/diag bundle 20260725-080953, 29,867 latency rows, operator-scored): the engine missed
@@ -1375,6 +1518,7 @@ public sealed class AppHost : IDisposable
     // late, forever. Only the present site can (the interval between presents), so the detector lives there and the UI
     // side reads two volatile ints. See Threading/PresentSlipDetector.cs and threading-render-seam.md §11.1.4.
     private readonly Threading.PresentSlipDetector _slipDetector = new();
+    private readonly Threading.PresentUnpacedDetector _unpacedDetector = new();
     private int _rephaseEpisodeSeen;        // the engage ordinal the escape budget below is currently spending
     private int _rephaseEscapesInEpisode;   // escapes taken inside that episode
     private long _rephaseEscapes;           // lifetime census (diagnostic)
@@ -1420,7 +1564,8 @@ public sealed class AppHost : IDisposable
     /// way this could make the loop worse:
     /// <list type="number">
     /// <item><b>Kind must be <see cref="HostWaitKind.PaceAsync"/>.</b> The ambient and adaptive-governor branches sit
-    /// BEFORE the armed branch in <see cref="RecommendedWaitMsCore"/> and produce <see cref="HostWaitKind.Ambient"/>.
+    /// BEFORE the armed branch in <see cref="RecommendedWaitMsCore"/> and produce <see cref="HostWaitKind.Ambient"/> or
+    /// <see cref="HostWaitKind.AdaptiveGpu"/> respectively.
     /// A loop that is deliberately capped — 30 Hz shimmer, a governor that measured the GPU cannot hold panel rate —
     /// presents ~2R by construction and would otherwise be forced back to panel rate by its own throttle's signature.</item>
     /// <item><b>Under budget.</b> A scene that genuinely cannot sustain the rate keeps producing the 2R cadence no
@@ -1471,6 +1616,9 @@ public sealed class AppHost : IDisposable
     private void OnRenderPresentAck()
     {
         Thread.MemoryBarrier();
+        // Unpaced Present (no vblank): the ack lands at CPU speed. Waking the UI on it would free-spin the loop.
+        // The wall-clock floor in AsyncDisplayPaceMs is the pacer; this wake would defeat it.
+        if (_unpacedDetector.Unpaced) return;
         if (_phaseGate is { IsArmed: true }) _window.WakePresent();
     }
 
@@ -1486,6 +1634,11 @@ public sealed class AppHost : IDisposable
     /// <summary>Stopwatch/QPC stamp taken immediately after the last successful <c>Present()</c> returned. SUBMIT-confirmed,
     /// not vblank-confirmed — the panel had not scanned out yet. 0 before the first present.</summary>
     public long LastPresentQpc => Volatile.Read(ref _lastPresentQpc);
+    /// <summary>THIS frame's <see cref="FluentGpu.Pal.FrameClock"/> (scroll-v3-plan §5.1) — built once at the top of
+    /// <see cref="RunFrame"/>, before the input pump/dispatch. The one target time <c>IPlatformWindow.PumpScroll</c>
+    /// and the scroll kernel's tick both consume this same frame; UI-thread read-only (no setter — RunFrame is the
+    /// sole writer).</summary>
+    public FluentGpu.Pal.FrameClock FrameClock => _palFrameClock;
     /// <summary>Frames handed to the render seam so far (UI side). <c>PublishSequence - PresentedSequence</c> is the only
     /// measure of DropOldest coalescing — publishes the render thread never presented because a newer frame replaced
     /// them. Nothing else in the engine counts those.</summary>
@@ -1497,26 +1650,38 @@ public sealed class AppHost : IDisposable
     public ulong RenderPresentAck => _renderThread?.PresentAck ?? _renderSeam.LastConsumedSeq;
     /// <summary>Actual successful-present cadence over the trailing one-second window.</summary>
     public double PresentFps => _presentFps;
-    /// <summary>Wall-time the render thread most recently BLOCKED on the GPU (frame fence + present latency) inside its
-    /// submit — the real render-side cost async hides from FrameMs. High + climbing ⇒ GPU-bound. Diagnostic (FG_FPS_LOG).</summary>
+    /// <summary>Wall-time the render thread most recently blocked on frame/back-buffer retirement plus present latency.
+    /// This is the render-side stall async hides from FrameMs, not GPU execution time. Diagnostic (FG_FPS_LOG).</summary>
     public double LastGpuFenceWaitMs => _device.LastFenceWaitMs;
-    /// <summary>Diagnostic (FG_GPU_TIMING=1): the TRUE on-GPU raster time (ms) of the most recent frame, from a whole-frame
-    /// timestamp-query pair (lags one frame). Unlike <see cref="LastGpuFenceWaitMs"/> this excludes the vblank/latency wait,
-    /// so it says whether a maximized 60fps lock is GPU-fill-bound (render ≳ refresh budget) or vblank-quantized. 0 when off.</summary>
-    public double LastGpuRenderMs => _device.LastGpuRenderMs;
-    /// <summary>Diagnostic (FG_GPU_TIMING=1): the scene-raster portion of <see cref="LastGpuRenderMs"/> (excl. uploads/baked-blur)
+    /// <summary>The TRUE on-GPU execution span (ms) of the most recently retired frame, from the inexpensive always-on
+    /// whole-frame timestamp pair. Unlike <see cref="LastGpuFenceWaitMs"/> this excludes vblank/latency/back-buffer waits.
+    /// 0 only when the backend does not support timestamp measurement or no sample has retired yet.</summary>
+    public double LastGpuRenderMs => _swapchain.TryGetGpuRenderSample(out GpuRenderSample sample) ? sample.ExecutionMs : 0.0;
+    /// <summary>Monotonic publication identity for this HOST'S swapchain sample (0 = unsupported/not yet sampled).</summary>
+    public ulong LastGpuRenderSampleSequence
+        => _swapchain.TryGetGpuRenderSample(out GpuRenderSample sample) ? sample.Sequence : 0;
+    /// <summary>Read the coherent whole-frame execution sample owned by this host's swapchain.</summary>
+    public bool TryGetGpuRenderSample(out GpuRenderSample sample) => _swapchain.TryGetGpuRenderSample(out sample);
+    /// <summary>Copy the coherent submitted-rect-area diagnostic snapshot owned by this host's swapchain.</summary>
+    public bool TryCopyRectSubmittedAreaSample(Span<RectSubmittedAreaItem> blendedTop,
+        out RectSubmittedAreaSample sample) => _swapchain.TryCopyRectSubmittedAreaSample(blendedTop, out sample);
+    /// <summary>Read this host's coherent target-local optional FG_GPU_TIMING profile.</summary>
+    public bool TryGetGpuProfileSample(out GpuProfileSample sample) => _swapchain.TryGetGpuProfileSample(out sample);
+    /// <summary>Diagnostic (FG_GPU_TIMING=1): the whole-command-list timestamp span paired with the category fields.</summary>
+    public double LastGpuProfileMs => _swapchain.TryGetGpuProfileSample(out GpuProfileSample p) ? p.WholeMs : 0.0;
+    /// <summary>Diagnostic (FG_GPU_TIMING=1): the scene-execution portion of <see cref="LastGpuProfileMs"/> (excl. uploads/baked-blur)
     /// — when this dominates and exceeds the refresh budget, the maximize lock is content fill/overdraw. 0 when off.</summary>
-    public double LastGpuSceneMs => _device.LastGpuSceneMs;
+    public double LastGpuSceneMs => _swapchain.TryGetGpuProfileSample(out GpuProfileSample p) ? p.SceneMs : 0.0;
     /// <summary>Diagnostic (FG_GPU_TIMING=1): the rect/solid-fill, shadow, image, glyph and composite splits of <see cref="LastGpuSceneMs"/> (0 when off).</summary>
-    public double LastGpuFillMs => _device.LastGpuFillMs;
+    public double LastGpuFillMs => _swapchain.TryGetGpuProfileSample(out GpuProfileSample p) ? p.FillMs : 0.0;
     /// <inheritdoc cref="LastGpuFillMs"/>
-    public double LastGpuShadowMs => _device.LastGpuShadowMs;
+    public double LastGpuShadowMs => _swapchain.TryGetGpuProfileSample(out GpuProfileSample p) ? p.ShadowMs : 0.0;
     /// <inheritdoc cref="LastGpuFillMs"/>
-    public double LastGpuImageMs => _device.LastGpuImageMs;
+    public double LastGpuImageMs => _swapchain.TryGetGpuProfileSample(out GpuProfileSample p) ? p.ImageMs : 0.0;
     /// <inheritdoc cref="LastGpuFillMs"/>
-    public double LastGpuGlyphMs => _device.LastGpuGlyphMs;
+    public double LastGpuGlyphMs => _swapchain.TryGetGpuProfileSample(out GpuProfileSample p) ? p.GlyphMs : 0.0;
     /// <inheritdoc cref="LastGpuFillMs"/>
-    public double LastGpuCompositeMs => _device.LastGpuCompositeMs;
+    public double LastGpuCompositeMs => _swapchain.TryGetGpuProfileSample(out GpuProfileSample p) ? p.CompositeMs : 0.0;
 
     /// <summary>The message-loop wait timeout (ms) for the NEXT pump: how long to block in <c>WaitForWork</c> before
     /// running another frame. Computes the wake mask ONCE and paces by it:
@@ -1546,8 +1711,9 @@ public sealed class AppHost : IDisposable
     /// value, timer-clamped): 0 = display-rate, &gt;0 = ambient/HUD throttle, -1 = blocked idle. Diagnostic (FG_FPS_LOG).</summary>
     public int LastWaitMs => _lastWaitMs;
     /// <summary>Which <see cref="RecommendedWaitMsCore"/> branch produced <see cref="LastWaitMs"/> — the signal that tells a
-    /// maximize/60fps investigation whether the loop is <see cref="HostWaitKind.Ambient"/>-throttled (software cap) or running
-    /// at display rate (a lock is then downstream in Present/GPU). Diagnostic (FG_FPS_LOG).</summary>
+    /// maximize/60fps investigation whether the loop is <see cref="HostWaitKind.Ambient"/>-throttled by app policy,
+    /// <see cref="HostWaitKind.AdaptiveGpu"/>-throttled by measured execution, or running at display rate (a lock is then
+    /// downstream in Present/GPU). Diagnostic (FG_FPS_LOG).</summary>
     public HostWaitKind LastWaitKind => _lastWaitKind;
 
     /// <summary>Shorten an IDLE/throttled wait so the loop wakes when the earliest frame-clock timer is due (a pending
@@ -1587,17 +1753,19 @@ public sealed class AppHost : IDisposable
         // Default off: every branch that has a better phase reference, or none at all (idle, HUD, baked, ambient),
         // leaves the vblank waiter parked. Only the two branches below opt in.
         _lastWaitWantsDisplayClock = false;
-        // Feed the FG_ADAPTIVE_FPS governor: smooth the true on-GPU raster time so a sustained over-budget stretch (a
-        // maximized fill-bound frame) is detected without one-frame jitter flipping the pacing. Cheap; only when armed.
-        // NOT the fence wait: that conflates raster with PACING — vblank/latency-waitable and buffer-release
-        // serialization land in it, so the moment the cap paces to 60 the wait inflates to a full 13-16ms refresh
-        // interval and the governor keeps itself engaged on its own output (a measured feedback loop). LastGpuRenderMs
-        // is the DXGI-timestamp raster time and carries none of that, but it is 0 unless FG_GPU_TIMING=1 — so fall back
-        // to the fence wait when the query heap is off, which is the pre-existing (contaminated) behavior, never worse.
+        long now = Stopwatch.GetTimestamp();
+        // Freshness gates EMA mutation; bounded TARGET-LOCAL age gates whether the resulting state may pace. Repeated
+        // RecommendedWaitMs calls against one completed sample therefore retain an engaged decision instead of alternating
+        // AdaptiveGpu/display, but only for six same-target submits and 250ms. A transient unavailable seqlock read uses
+        // the same bounded cached sample; unsupported-never-seen and expired evidence fail open. LastFenceWaitMs is
+        // intentionally absent: it includes present/back-buffer waits and fed policy its own output.
+        bool adaptiveGpuWaitEligible = false;
         if (s_adaptiveFps)
         {
-            double renderMs = _device.LastGpuRenderMs;
-            _gpuBoundEma = _gpuBoundEma * 0.85 + (renderMs > 0 ? renderMs : _device.LastFenceWaitMs) * 0.15;
+            bool sampleAvailable = _swapchain.TryGetGpuRenderSample(out GpuRenderSample executionSample);
+            adaptiveGpuWaitEligible = EvaluateAdaptiveGpuRead(sampleAvailable, in executionSample, now,
+                GpuGovernorMaxSubmitAge, GpuGovernorSampleTtlTicks, ref _gpuBoundLastSample,
+                ref _gpuBoundSampleSequence, ref _gpuBoundEma, ref _gpuGovernorEngaged);
         }
         if (IsMinimized) { MaybeTrimOnIdle(); _lastWaitKind = HostWaitKind.Idle; return -1; }   // nothing to paint; only the restore message wakes us (see RunFrame's minimize gate)
         WakeReasons r = ComputeWakeReasons();
@@ -1613,14 +1781,13 @@ public sealed class AppHost : IDisposable
         }
         // A live scroll arms a short display-rate grace so the eased settle + any in-flight art reveal finish at the
         // display rate instead of snapping back to the 30 Hz ambient cadence the instant the fling drops below cutoff.
-        // Gated on REAL MOTION (an offset actually advanced on the last ticked frame), NOT on the ScrollAnim wake bit:
-        // that bit is set by merely-ARMED viewports too (ScrollIntegrator.HasActive counts armed, not moving — a
-        // scrollbar fade timer with zero motion sets it). Re-arming off the bit made the loop free-run at the display
-        // rate for ~2s after EVERY scroll with `rendered 0` (the wakediag `sole: scrollAnim=N` bursts), defeating both
-        // the ambient cap and the adaptive governor. The wake bit itself is untouched — an armed viewport still gets
-        // frames for its fade, but a fade is ambient-class motion and now paces like one.
-        long now = Stopwatch.GetTimestamp();
-        if (_scrollAnim.AnyOffsetWroteThisFrame) _scrollGraceUntil = now + ScrollGraceTicks;
+        // Gated on REAL MOTION (an offset actually advanced on the last ticked frame — this frame's kernel Summary),
+        // NOT on the ScrollAnim wake bit: that bit is set by merely-active-but-not-moving bodies too (a scrollbar fade
+        // timer with zero motion sets it). Re-arming off the bit made the loop free-run at the display rate for ~2s
+        // after EVERY scroll with `rendered 0` (the wakediag `sole: scrollAnim=N` bursts), defeating both the ambient
+        // cap and the adaptive governor. The wake bit itself is untouched — an active-but-idle body still gets frames
+        // for its fade, but a fade is ambient-class motion and now paces like one.
+        if (_scrollSummary.AnyMoved) _scrollGraceUntil = now + ScrollGraceTicks;
         // Ambient-only animation (no latency-sensitive interaction live, and any AnimEngine activity is loop-only — a
         // spinner/shimmer, NOT a one-shot transition mid-flight): pace to AmbientAnimationFps instead of the full
         // display refresh. A real input/post still wakes WaitForWork early, so this paces only the autonomous tick.
@@ -1640,10 +1807,10 @@ public sealed class AppHost : IDisposable
         // playhead), but the GPU can't sustain the panel rate at this size — running full-rate just thrashes into
         // vblank-misses. Pace to the ambient cap for a STEADY sustainable cadence. Same latency-sensitive + scroll-hold
         // guards as the ambient branch (never touches interaction/scroll), and the same Resync-exempt wait.
-        if (s_adaptiveFps && AmbientCapEngaged && (r & GovernorNeverPace) == 0
-            && _gpuBoundEma > GpuBoundBudgetMs && now >= _scrollGraceUntil && now >= _mainScrollHoldUntil)
+        if (s_adaptiveFps && adaptiveGpuWaitEligible && AmbientCapEngaged
+            && (r & GovernorNeverPace) == 0 && now >= _scrollGraceUntil && now >= _mainScrollHoldUntil)
         {
-            _lastWaitKind = HostWaitKind.Ambient;
+            _lastWaitKind = HostWaitKind.AdaptiveGpu;
             return AmbientFrameWaitMs();
         }
         // Parked on the display-phase gate: sleep until the render thread's present-ack wake, with the stall ceiling as
@@ -1660,7 +1827,7 @@ public sealed class AppHost : IDisposable
         // stands, which is why the tick is not merely a supplementary wake here: PhaseGateBlocks OPENS the gate on it
         // instead of re-gating, so the woken frame produces and re-anchors the chain to the vblank. Bounded twice over —
         // the engaged episode ends on the first healthy present, and the escape budget bounds it inside the episode.
-        if (_asyncActive && _phaseGate is { IsArmed: true })
+        if (_asyncActive && _phaseGate is { IsArmed: true } && !_unpacedDetector.Unpaced)
         {
             _lastWaitKind = HostWaitKind.PaceAsync;
             _lastWaitWantsDisplayClock = _slipDetector.RephaseWanted;
@@ -1691,6 +1858,11 @@ public sealed class AppHost : IDisposable
         if (_lastFrameSkippedSubmit)
         {
             _lastWaitKind = HostWaitKind.PaceSkipSubmit;
+            if (_unpacedDetector.Unpaced)
+            {
+                _lastWaitWantsDisplayClock = false;
+                return FloorPaceMsWhenUnpaced(PhaseGateCeilingMs());
+            }
             _lastWaitWantsDisplayClock = true;
             return PhaseGateCeilingMs();
         }
@@ -1698,7 +1870,9 @@ public sealed class AppHost : IDisposable
         // pacer — precisely the case the display clock exists to replace. Sync (DisplayRate) returns 0 and needs no wake
         // source at all.
         _lastWaitKind = _asyncActive ? HostWaitKind.PaceAsync : HostWaitKind.DisplayRate;
-        _lastWaitWantsDisplayClock = _asyncActive;
+        // Unpaced Present: the compositor clock is not a phase reference (it may tick at CPU speed). Sleep the
+        // wall-clock floor; input still ends WaitForWork immediately.
+        _lastWaitWantsDisplayClock = _asyncActive && !_unpacedDetector.Unpaced;
         return _asyncActive ? AsyncDisplayPaceMs() : 0;   // latency-sensitive / one-shot motion: sync = present-throttled (0); async = pace cap (present is off-thread — 0 would free-spin)
     }
 
@@ -1878,7 +2052,13 @@ public sealed class AppHost : IDisposable
         // used to pin the host at panel rate for a paused Driven playhead; NextDueMs returns +∞ for that case.
         if (_connected.HasActive || (_anim.HasActive && _anim.NextDueMs(_timers.NowMs) <= 0f))
             r |= WakeReasons.Anim;   // connected fly / snapshot awaiting dest; hover/press fades are now _anim tracks too
-        if (_scrollAnim.HasActive) r |= WakeReasons.ScrollAnim;
+        // A posted-but-undrained kernel command (a wheel notch, a ScrollTo, a producer delta) IS pending scroll work: the
+        // kernel ticks inside Paint, so the port's backlog must wake a frame exactly like an armed body does.
+        if (_scrollKernel.ActiveCount > 0 || _scrollKernel.Port.Pending > 0 || _scrollRouter.HasPendingFrameDelta || _scrollChrome.Active) r |= WakeReasons.ScrollAnim;
+        // A frame-aligned producer (DirectManipulation engaged/pending, or a hi-res wheel-fallback gesture live) needs
+        // one PumpScroll per refresh regardless of whether the kernel already has an active body (§5.2) — e.g. the
+        // very first frame of a fresh contact, before any ScrollBegin has reached the kernel yet.
+        if (_window.ScrollProducerLive) r |= WakeReasons.ScrollProducer;
         if (_repeat.HasActive) r |= WakeReasons.Repeat;
         if (_caretBlinker.HasActive) r |= WakeReasons.Caret;
         if (_scene.HasBrushAnims) r |= WakeReasons.BrushAnims;
@@ -1916,8 +2096,6 @@ public sealed class AppHost : IDisposable
         return r;
     }
 
-    /// <summary>Enable inertial smooth scrolling + auto-hiding scrollbars (the real app turns this on; off = immediate).</summary>
-    public bool SmoothScroll { get => _dispatcher.SmoothScroll; set => _dispatcher.SmoothScroll = value; }
 
     public ImageCache Images => _images;
 
@@ -1928,14 +2106,21 @@ public sealed class AppHost : IDisposable
     /// <summary>Last <c>FG_RENDER_CENSUS</c> spike dump (empty when census off or no spike this frame).</summary>
     public string LastRenderCensusDump => _reconciler.LastRenderCensusDump;
     internal int InteractionAnimatorCensus => _anim.HoverPressTrackCount;   // hover/press are now engine HoverFade/PressFade tracks (InteractionAnimator deleted)
-    internal int ScrollAnimatorCensus => _scrollAnim.ActiveCount;
+    // Combined census: the kernel's own ActiveCount (drag/ballistic/snap bodies still advancing) PLUS the chrome
+    // ticker's live-cycle Count — a bar revealed purely by hover, or still fading after its kernel body already
+    // settled, has zero kernel activity but is very much still "armed" (gate.scroll.nonScrollableBarRetires).
+    internal int ScrollActiveCensus => _scrollKernel.ActiveCount + _scrollChrome.Count;
 
-    /// <summary>Test-only handle to the phase-7 scroll integrator (scroll-feel-rework-v2 §8 headless gates). Headless
-    /// leaves <see cref="ScrollIntegrator.FrameQpcSec"/> at 0 (the resampler is then vacuous — deterministic for the
-    /// legacy gates), so the §8 gates that must exercise real frame-time resampling set it to a SYNTHETIC frame clock via
-    /// this seam before each <c>RunFrame</c> (headless never overwrites it — see the <c>!_isHeadless</c> guard at the
-    /// tick). Not exposed publicly; VerticalSlice has InternalsVisibleTo.</summary>
-    internal ScrollIntegrator ScrollIntegratorForTest => _scrollAnim;
+    /// <summary>The scroll-v3 kernel (docs/plans/scroll-v3-plan-2026-08-17.md §3.3 item 5) — the single, portable,
+    /// thread-agnostic scroll source (wheel/touchpad/touch fling + overscroll spring + programmatic glide + snap).
+    /// Exposed for VerticalSlice/host gates (posting synthetic <see cref="ScrollInput"/>s + reading <see cref="ScrollKernel.Diag"/>).</summary>
+    public ScrollKernel ScrollKernel => _scrollKernel;
+    /// <summary>The scrollbar conscious-fade chrome ticker (§4) — motion never touches chrome; chrome never touches
+    /// motion. Exposed for VerticalSlice/host gates.</summary>
+    public ScrollBarChrome ScrollChrome => _scrollChrome;
+    /// <summary>The ONE writer of the ScrollState result columns (the kernel's sink). Exposed so headless gates can
+    /// drive a real motion write through the chokepoint (transform + binds + virtual re-realize) instead of poking columns.</summary>
+    public SceneScrollSink ScrollSink => _scrollSink;
     internal int DeviceLostRecoveryCountForTest => _deviceLostRecoveryCount;
     /// <summary>Test-only (wake.scrollHoldSuppressesAmbientCap): read/force the 0.45s post-scroll hold so the gate can
     /// pin the hold live/expired deterministically instead of sleeping wall-clock. Stopwatch-tick deadline.</summary>
@@ -1978,9 +2163,9 @@ public sealed class AppHost : IDisposable
 
     public AppHost(IPlatformApp app, IPlatformWindow window, IGpuDevice device, IFontSystem fonts,
                    StringTable strings, Component root, ImageCache? images = null, IFrameTimeSource? frameTime = null,
-                   ScrollTuning? scrollTuning = null, bool compositeSwapchain = false, bool isDetachedChild = false,
+                   bool compositeSwapchain = false, bool isDetachedChild = false,
                    Threading.RenderThread? parentRenderThread = null)
-        : this(app, window, device, fonts, strings, root, images, frameTime, scrollTuning, compositeSwapchain,
+        : this(app, window, device, fonts, strings, root, images, frameTime, compositeSwapchain,
                isDetachedChild, parentRenderThread, loopModeOverride: null) { }
 
     // Internal ctor carrying the render-loop mode override. loopModeOverride is the ONLY way to request ForceSync (or pin
@@ -1990,7 +2175,7 @@ public sealed class AppHost : IDisposable
     // ctor above delegates here with null (⇒ Async for a real windowed host — the landed default).
     internal AppHost(IPlatformApp app, IPlatformWindow window, IGpuDevice device, IFontSystem fonts,
                      StringTable strings, Component root, ImageCache? images, IFrameTimeSource? frameTime,
-                     ScrollTuning? scrollTuning, bool compositeSwapchain, bool isDetachedChild,
+                     bool compositeSwapchain, bool isDetachedChild,
                      Threading.RenderThread? parentRenderThread, RenderLoopMode? loopModeOverride)
     {
         _app = app;
@@ -2044,15 +2229,24 @@ public sealed class AppHost : IDisposable
         _layout = new FlexLayout(_scene, fonts);
         _invalidator = new LayoutInvalidator(_scene, _layout);
         _invalidator.DebugKeyResolver = _reconciler.DebugKeyOf;   // best-effort node→key for the FG_DIAG relayout-escape message (DEBUG-only invocation)
-        var scrollProfile = scrollTuning ?? ScrollTuning.WinUiLike;   // WinUI-parity wheel distance + feel (the Win32 app default)
-        _dispatcher = new InputDispatcher(_scene) { Tuning = scrollProfile };
+        _dispatcher = new InputDispatcher(_scene);
         _reconciler.OnSubtreeDeactivated = _dispatcher.DeactivateSubtree;
         _anim = new AnimEngine(_scene);
         _connected = new ConnectedAnimation(_scene, _anim, _images);   // shared-element (connected-animation) Hero flies
-        // Scroll is fully engine-owned: the deterministic ScrollIntegrator is the single, portable scroll source (§2.1
-        // single writer) on every platform (WheelAnimating chase + touch/touchpad fling + overscroll spring + conscious
-        // scrollbar). There is no OS scroll source — touchpad arrives as phase-tagged scroll events, touch as the gesture path.
-        _scrollAnim = new ScrollIntegrator(_scene, scrollProfile);
+        // scroll-v3 (docs/plans/scroll-v3-plan-2026-08-17.md §3.3 item 5): the kernel is the single, portable,
+        // thread-agnostic scroll source (wheel/touchpad/touch fling + overscroll spring + programmatic glide + snap)
+        // on every platform. SceneScrollSink is the UI-side glue (writes ScrollState through the ApplyMotion
+        // chokepoint + the content transform + VirtualRangeDirty); ScrollInputRouter converts InputEvent → ScrollInput
+        // (hit-test/latch/chain); ScrollBarChrome is a separate UI ticker — motion never touches chrome, chrome never
+        // touches motion. There is no OS scroll source — touchpad/touch arrive as raw contact/frame-delta samples.
+        _scrollSink = new SceneScrollSink(_scene, WakeFrame);
+        _scrollKernel = new ScrollKernel(_scrollSink, ScrollFeel.Shipping);
+        _scene.ScrollPort = _scrollKernel.Port;
+        _scrollChrome = new ScrollBarChrome(_scene);
+        _scrollSink.Chrome = _scrollChrome;   // identity-only wire (node index, no motion value) so a wheel/touch write with no hover still arms the bar
+        _scrollRouter = new ScrollInputRouter(_scene, _scrollKernel);
+        _dispatcher.Scroll = _scrollRouter;
+        _dispatcher.Chrome = _scrollChrome;
         _repeat = new RepeatTicker(_scene);
         _caretBlinker = new CaretBlinker(_scene);
         _lastSize = window.ClientSizePx;
@@ -2061,24 +2255,10 @@ public sealed class AppHost : IDisposable
         // A reactive write (anywhere) requests a frame.
         _runtime.FrameRequested = WakeFrame;
         _dispatcher.RequestRerender = WakeFrame;   // virtual list crossing an item boundary on scroll
-        _scrollAnim.RequestRerender = WakeFrame;   // re-realize the virtual window on a boundary crossing
         // Hover/press edges drive BOTH the (record-time) InteractionAnimator AND the new declarative While* resolver.
         // The resolver is a no-op for nodes without WhileHover/WhilePressed targets — additive, no regression.
         _dispatcher.OnHoverChanged = (n, on) => { _anim.SetHover(n, on); _anim.ApplyInteractionEdge(n, AnimEngine.InteractKind.Hover, on); };
         _dispatcher.OnPressChanged = (n, on) => { _anim.SetPress(n, on); _anim.ApplyInteractionEdge(n, AnimEngine.InteractKind.Press, on); };
-        _dispatcher.OnScrollArmed = _scrollAnim.Arm;
-        _dispatcher.OnScrollHover = _scrollAnim.Hover;
-        _dispatcher.OnScrollLeave = _scrollAnim.Leave;
-        _scrollAnim.ScrollWrite = _dispatcher.WriteScrollOffset;   // Fling integrator writes absolute offsets through the Input chokepoint
-        _scrollAnim.OverscrollWrite = _dispatcher.WriteOverscroll; // overscroll spring-back writes the visual band (offset untouched)
-        _dispatcher.OnFlingStarted = SeedScrollFling;              // touch-up flick → friction-decay inertia in phase 7
-        // scroll-feel-rework-v2 §2.1/§2.3: the phase-driven dispatcher is a pure intent recorder — it records
-        // TouchpadTracking contact onto the integrator resampler; phase 7 (ScrollIntegrator.Tick) is the SOLE offset/band
-        // writer. CancelFling zeros a coast on every PointerDown / scrollbar grab (R6 fix).
-        _dispatcher.OnScrollTrackBegin = _scrollAnim.BeginTracking;
-        _dispatcher.OnScrollTrackSample = _scrollAnim.AppendContactSample;
-        _dispatcher.OnScrollTrackEnd = _scrollAnim.EndTracking;
-        _dispatcher.OnCancelFling = _scrollAnim.CancelFling;
         _dispatcher.OnRepeatArmed = _repeat.Arm;
         _dispatcher.OnRepeatReleased = _repeat.Disarm;
         _dispatcher.OnRepeatPaused = _repeat.Pause;     // held pointer left the repeat node → stop ticking
@@ -2096,7 +2276,7 @@ public sealed class AppHost : IDisposable
         _dispatcher.OnCursorChanged = _window.SetCursor;                        // hover-resolved cursor (hand/I-beam/resize)
         _dispatcher.OnWindowBlur = _inputHooks.NotifyWindowBlur;                // deactivation → light-dismiss overlays close
         _dispatcher.OnPointerDownObserved = _inputHooks.NotifyPointerDown;
-        _dispatcher.OnScrollStartedObserved = _inputHooks.NotifyScrollStarted;
+        _scrollRouter.OnGestureStarted = _inputHooks.NotifyScrollStarted;     // "a scroll started" (SwipeControl auto-dismiss) — the router owns gesture begin now
         _inputHooks.RedispatchContextAt = _dispatcher.RequestContextAt;         // scrim right-click → close top + reopen the node's menu (one gesture)
 
         // Custom-titlebar chrome seam (WindowDesc.CustomFrame): pull-state + caption commands to the window, the
@@ -2241,7 +2421,8 @@ public sealed class AppHost : IDisposable
 
         _reconciler.Anim = _anim;
         _reconciler.Connected = _connected;   // shared-element (connected-animation) participant registry, fed by Element.MorphId
-        _reconciler.ArmScroll = _scrollAnim.Arm;   // controls can request a smooth programmatic scroll (set Target + arm → phase 7 eases)
+        // ArmScroll is deleted (scroll-v3): a control requests a smooth programmatic scroll through its viewport's
+        // ScrollController (Dsl §7.1's Controller, landing in Phase 5) posting ScrollTo — not a NodeHandle-keyed arm.
         _reconciler.RequestFrame = WakeFrame;      // wake-only seam: mutate retained scene state, wake, DON'T re-render
         _reconciler.PeekMainScrollBusy = () => Stopwatch.GetTimestamp() < _mainScrollHoldUntil;
         // KeepAlive park/un-park → quiesce/resume the parked subtree's animation + scroll tickers so a backgrounded tab's
@@ -2249,12 +2430,21 @@ public sealed class AppHost : IDisposable
         // shared-element node also captures its reverse-fly snapshot here (Back returns to it via the like-tagged dest).
         _reconciler.OnNodeParkedChanged = (node, parked) =>
         {
-            _anim.SetNodeParked(node, parked); _scrollAnim.SetNodeParked(node, parked);
+            _anim.SetNodeParked(node, parked);
+            // Only viewports own a kernel body / chrome row — the reconciler raises this for EVERY node in the parked
+            // subtree, and posting a Park per node would flood the command port (a page has thousands of nodes).
+            if (_scene.HasScroll(node))
+            {
+                int idx = (int)node.Raw.Index;
+                _scene.ScrollPort?.Post(ScrollInput.Park(idx, parked));
+                _scrollChrome.SetNodeParked(idx, parked);
+            }
             _connected.OnNodeParked(node, parked);
         };
         // Symmetric teardown of INDEX-keyed per-node side-tables on slot free (mem-06): a freed node's slot is reused,
-        // so the AnimEngine layout-transition spec + the ScrollIntegrator conscious-bar timers (both keyed by node index,
-        // not gen-checked handle) must be dropped or the next node reusing that index inherits the stale row.
+        // so the AnimEngine layout-transition spec (keyed by node index, not gen-checked handle) must be dropped or the
+        // next node reusing that index inherits the stale row. The kernel's own ScrollBody slab is unbound via the
+        // Unbind command SceneStore.ScrollRef posts on removal (scroll-v3 §3.1) — no index-keyed clear needed here.
         _scene.OnFreeIndex = OnSceneSlotFreed;
         _reconciler.Images = _images;
         // A detached CHILD host shares the parent's device + ImageCache. The parent (always constructed FIRST) has already
@@ -2308,7 +2498,9 @@ public sealed class AppHost : IDisposable
         _reconciler.SetAmbient(Viewport.Scale, _viewportScaleSig);
         _reconciler.SetAmbient(FrameDiagnostics.Current, _frameStatsSig);
         _reconciler.SetAmbient(InputHooks.Current, _inputHooksSig);
-        _reconciler.SetAmbient(FrameClock.Tick, _frameClockSig);
+        // Fully qualified: FluentGpu.Pal.FrameClock (the scroll-v3 seam clock, §5.1) is now ALSO in scope via
+        // `using FluentGpu.Pal;` — bare `FrameClock` is ambiguous with FluentGpu.Hooks.FrameClock (this ambient key).
+        _reconciler.SetAmbient(FluentGpu.Hooks.FrameClock.Tick, _frameClockSig);
         _uiPoster = Post;   // ONE delegate instance so HostDispatch.Current can be identity-compared on teardown
         _hostPostSig = new Signal<object?>(_uiPoster);   // ambient UI-thread poster (HostDispatch.Post / UsePost)
         _reconciler.SetAmbient(HostDispatch.Post, _hostPostSig);
@@ -2443,28 +2635,9 @@ public sealed class AppHost : IDisposable
         if (!_uiPosts.IsEmpty) _frameNeeded = true;
     }
 
-    /// <summary>Wired to <see cref="InputDispatcher.OnFlingStarted"/>: a touch pan released with a flick speed hands its
-    /// offset-space velocity here. Seed the viewport's <see cref="ScrollState.FlingVelocity"/> (clamped to the §4.3
-    /// FlingMaxVelocityPxPerS = 8000 px/s seed cap) + <c>Phase = Fling</c> and arm the <see cref="ScrollIntegrator"/> so
-    /// phase 7 coasts it via the exact-integral CoastStep (and <c>WakeReasons.ScrollAnim</c> keeps frames coming until it
-    /// settles). 0-alloc: a cached method group, a few field writes on a ref.</summary>
-    private void SeedScrollFling(NodeHandle node, float velocityPxPerS)
-    {
-        if (node.IsNull || !_scene.IsLive(node) || !_scene.HasScroll(node)) return;
-        ref ScrollState sc = ref _scene.ScrollRef(node);
-        sc.FlingVelocity = Math.Clamp(velocityPxPerS, -ScrollIntegrator.FlingMaxVelocityPxPerS, ScrollIntegrator.FlingMaxVelocityPxPerS);
-        sc.Phase = ScrollIntegrator.Fling;
-        sc.PhaseFlags = 0;   // a touch/PTP-fallback self-fling (not OS-owned): the exact-integral coast owns it
-        // A snap-configured viewport re-solves the velocity on the FIRST fling tick (ScrollIntegrator) so the same decay
-        // curve lands EXACTLY on a snap value — capture the launch offset (the impulse "ignored value" anchor) and reset
-        // the one-shot retarget latch here. A non-snap viewport ignores both.
-        sc.FlingRetargeted = false;
-        sc.FlingSnapTarget = float.NaN;
-        sc.FlingFromOffset = sc.Orientation == 1 ? sc.OffsetX : sc.OffsetY;
-        if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled)
-            FluentGpu.Foundation.ScrollTrace.AnimEvent((int)node.Raw.Index, 4, velocityPxPerS, sc.FlingFromOffset, 0f);
-        _scrollAnim.Arm(node);
-    }
+    // SeedScrollFling is deleted (scroll-v3): the kernel seeds Ballistic itself on ContactEnd (touch/PTP-fallback) or
+    // on DM RUNNING→READY (Phase 3) — there is no host-side fling seed step; ScrollInputRouter posts ContactEnd and
+    // the kernel's ImpulseEstimator does the rest.
 
     /// <summary>Events pumped into the ring this frame — recorded by the <see cref="FluentGpu.Foundation.ScrollTrace"/>
     /// frame marker (diagnostic only; written every frame, read only when the trace is on).</summary>
@@ -2476,9 +2649,7 @@ public sealed class AppHost : IDisposable
         | (1u << (int)InputKind.PointerCancel) | (1u << (int)InputKind.Key)
         | (1u << (int)InputKind.KeyUp) | (1u << (int)InputKind.Char)
         | (1u << (int)InputKind.Wheel) | (1u << (int)InputKind.ScrollBegin)
-        | (1u << (int)InputKind.ScrollUpdate) | (1u << (int)InputKind.ScrollEnd)
-        | (1u << (int)InputKind.MomentumBegin) | (1u << (int)InputKind.MomentumUpdate)
-        | (1u << (int)InputKind.MomentumEnd);
+        | (1u << (int)InputKind.ScrollDelta) | (1u << (int)InputKind.ScrollEnd);
 
     /// <summary>Run one full frame: pump + input, then paint (the reactive flush + layout + record happen in Paint).</summary>
     public FrameStats RunFrame()
@@ -2488,6 +2659,29 @@ public sealed class AppHost : IDisposable
         Threading.ThreadGuard.BindCurrent(Threading.ThreadGuard.ThreadRole.Ui);
         Threading.ThreadGuard.AssertUi();
         _lastFrameStartTicks = Stopwatch.GetTimestamp();   // frame-start stamp for RecommendedWaitMs ambient-fps pacing
+
+        // ── ONE frame clock (scroll-v3-plan §5.1) — built HERE, before the pump/dispatch below, so a frame-aligned
+        // producer's PumpScroll (Paint, after the display-phase gate) and the scroll kernel's Tick (also Paint) both
+        // consume the identical (FrameQpc, PresentQpc) pair for this RunFrame call. Cheap: two field reads + integer
+        // arithmetic (RefreshLattice is pure), no allocation.
+        unchecked { _frameClockSeq++; }
+        if (_isHeadless)
+        {
+            long headlessFrameQpc = (long)(_frameClockMs * 1e-3 * Stopwatch.Frequency);
+            _palFrameClock = RefreshLattice.Headless(headlessFrameQpc, RefreshPeriodQpcOrDefault(), _frameClockSeq);
+        }
+        else
+        {
+            var presentStats = _device.LastPresentStats;
+            long anchorQpc = presentStats.Valid ? presentStats.SyncQpc : Volatile.Read(ref _lastPresentQpc);
+            long refreshQpc = RefreshPeriodQpcOrDefault();
+            long nowQpc = Stopwatch.GetTimestamp();
+            bool latticeValid = anchorQpc > 0 && refreshQpc > 0;
+            _palFrameClock = RefreshLattice.Build(anchorQpc, refreshQpc, nowQpc, _frameClockFloorQpc, _frameClockSeq,
+                latticeValid, _unpacedDetector.Unpaced);
+            _frameClockFloorQpc = _palFrameClock.FrameQpc;
+        }
+
         long db = 0, dt = 0;
         if (s_allocDiag) { db = GC.GetAllocatedBytesForCurrentThread(); dt = Stopwatch.GetTimestamp(); }
         long diagUiStart = db;
@@ -2786,14 +2980,6 @@ public sealed class AppHost : IDisposable
             if (ScrollBindEval.PerfEnabled) ScrollBindEval.BeginPerfFrame(_scene);
             _reconciler.BeginRenderCensus();
             Motion.SetLayoutTransitionsSuppressed(MotionSuppressionSource.WindowResize, _window.InModalLoop);
-            // Scroll-coincident reconcile → snap, don't FLIP (perf plan W2-P2.2): while a user scroll is actually moving
-            // content (an offset REALLY advanced last frame — the latch below the phase-7 scroll tick — AND the 0.45s
-            // post-scroll hold is live), a reconcile that lands this frame must not seed FLIP projections: rows/cards
-            // flying to their new slots through a scrolling viewport reads as jank and burns structural tracks per frame.
-            // Set BEFORE CaptureProjections so ApplyProjections takes its suppressed-snap branch. Gating on the offset
-            // latch (not the hold alone) keeps a click-triggered expand right after scrolling FLIPping normally.
-            Motion.SetLayoutTransitionsSuppressed(MotionSuppressionSource.Scroll,
-                _anyOffsetWroteLastFrame && frameStart < _mainScrollHoldUntil);
             // FG_RESIZE_DIAG: per-tick segment timing of the modal-loop keep-alive paint. Captured only when both the flag
             // is on AND this is a keep-alive tick — zero work / zero alloc otherwise (the normal hot path is untouched).
             bool diagTick = keepAlive && s_resizeDiag;
@@ -2832,6 +3018,104 @@ public sealed class AppHost : IDisposable
 
             var layoutSize = LayoutSizeForFrame(keepAlive);
             PublishViewport(layoutSize);
+
+            // ── Scroll kernel tick — phase 2.5 (scroll-v3-plan-2026-08-17.md §3.3 item 1) ──────────────────────────────
+            // The scroll offset is the INPUT to realization (ReRealizeVirtuals windows on it) and to layout
+            // (ArrangeViewport), so it must be current before either runs — ticking at the old phase-7 slot is exactly
+            // why the deleted phase-7.6 catch-up loop existed. The kernel integrates against LAST frame's geometry;
+            // EdgeHitPending resolves later, in Reclamp() (after this frame's layout, §3.3 item 3), once the fresh
+            // bounds are known.
+            //
+            // fps consistency (root fix, moved verbatim from the old phase-7 site): if the loop paced INTO this frame
+            // from a throttled (ambient 30 Hz) or idle cadence AND this frame now drives interactive or one-shot
+            // motion (scroll/hover/drag/repeat, or a connected-animation fly / non-loop transition), the frame
+            // clock's pending delta is the stale throttle gap, not a real interval — drop it so the first active
+            // frame advances ~one frame instead of leaping ~34 ms. Resync fires ONLY when stepping UP from a
+            // genuinely THROTTLED/idle cadence to display rate. Resync-predicate mitigation (§3.3 item 1): this now
+            // runs BEFORE the flush/reconcile that would otherwise freshen RuntimePending-derived wake bits, so also
+            // resync when reactive work is already queued from a prior post — otherwise a same-frame Signal write
+            // right before Paint could be missed by ComputeWakeReasons() here.
+            if (!_lastWaitWasDisplayRate)
+            {
+                WakeReasons stepUp = ComputeWakeReasons();
+                if ((stepUp & EffectiveLatencySensitiveWake(frameStart)) != 0
+                    || (_anim.HasActive && !AnimIsAmbient()) || _connected.HasActive
+                    || (_runtime.HasPending && !_lastWaitWasDisplayRate))
+                    _frameTime.Resync();
+            }
+            float dtMs = _frameTime.NextDeltaMs();
+            _frameClockMs += dtMs;                             // frame-clock timer base (headless: the deterministic FixedFrameTimeSource step; ignored by the real-window wall clock)
+            _scene.AnimClockMs = _frameClockMs;                // publish the ANIMATION timebase for orphan deadlines (same clamped delta the animator advances on)
+
+            // PumpScroll (scroll-v3-plan §5.2): a frame-aligned producer (DirectManipulation) issues its ONE Update
+            // for THIS frame's _palFrameClock here — after the display-phase gate (Paint only runs when the gate lets
+            // a frame through), so it never fires against a declined instant. Dispatched through the ordinary input
+            // path: InputDispatcher.Dispatch already routes ScrollBegin/ScrollDelta/ScrollEnd to
+            // _scrollRouter.Phase, so a scripted headless producer or a real DM producer are handled identically.
+            _scrollPumpRing.Clear();
+            int scrollPumped = _window.PumpScroll(in _palFrameClock, _scrollPumpRing);
+            if (scrollPumped > 0)
+                _dispatcher.Dispatch(_scrollPumpRing.Drain(), _scrollPumpRing.DrainVelocitySamples());
+
+            // ONE target time shared with DM/the lease (§5.1), derived from THIS frame's _palFrameClock (built at the
+            // top of RunFrame, before pump/dispatch — see there). DtSec is the Δ of FrameQpc between frames, clamped
+            // to 34 ms, EXCEPT headless — which keeps the deterministic FixedFrameTimeSource's own dt (the headless
+            // FrameQpc is derived from _frameClockMs itself, so a Δ-of-FrameQpc dt would double-count the step).
+            double scrollFrameSec = _palFrameClock.FrameQpc / (double)Stopwatch.Frequency;
+            float scrollRefreshSec = _palFrameClock.RefreshQpc / (float)Stopwatch.Frequency;
+            double scrollPresentSec = _palFrameClock.PresentQpc / (double)Stopwatch.Frequency;
+            float scrollDtSec;
+            if (_isHeadless)
+                scrollDtSec = dtMs * 0.001f;
+            else
+            {
+                long deltaQpc = _palFrameClock.FrameQpc - _prevScrollFrameQpc;
+                if (deltaQpc < 0) deltaQpc = 0;
+                long maxDeltaQpc = (long)(0.034 * Stopwatch.Frequency);
+                if (deltaQpc > maxDeltaQpc) deltaQpc = maxDeltaQpc;
+                scrollDtSec = (float)(deltaQpc / (double)Stopwatch.Frequency);
+            }
+            _prevScrollFrameQpc = _palFrameClock.FrameQpc;
+            var scrollClock = new ScrollClock(scrollFrameSec, scrollDtSec, scrollPresentSec, scrollRefreshSec);
+            _scrollClockFrameSec = scrollFrameSec;   // EmitLatencyRow's clockSampleSkewMs reads this frame's sample instant back
+            _scrollRouter.EndFrame();          // flush this frame's accumulated FrameDelta samples into the kernel port
+            // Bump BEFORE Tick (not after): Tick's sink.Apply calls stamp ScrollState.LastMovedFrame with
+            // _scrollSink.FrameIndex's value at call time, and ScrollBarChrome.Tick (phase 7, below) later compares
+            // sc.LastMovedFrame == _scrollChrome.FrameIndex. Incrementing after Tick would stamp this frame's writes
+            // with the STALE (pre-increment) index while chrome compares against the NEW one — "moved this frame"
+            // would never match and the scrollbar would never reveal on motion. Both counters advance together here,
+            // before Tick AND before Reclamp (later this frame, §3.3 item 2), so every sink.Apply call this frame —
+            // from either kernel entry point — stamps the SAME index chrome.Tick reads.
+            _scrollSink.FrameIndex++;
+            _scrollChrome.FrameIndex++;
+            _scrollSink.BeginFrame();          // reset the sink's own per-frame "really moved" latch (see its remarks) — sampled below, NOT the kernel's touched-count-based Summary.AnyMoved
+            _scrollKernel.Tick(in scrollClock);
+            _scrollSummary = _scrollKernel.Summary;
+            if (_scrollSummary.AnyDragOrBallistic) _frameBudget.Arm(frameStart); else _frameBudget.Disarm();
+
+            // Scroll-coincident reconcile → snap, don't FLIP (perf plan W2-P2.2): while a user scroll is actually moving
+            // content (an offset REALLY advanced THIS frame's tick) OR advanced LAST frame, a reconcile that lands
+            // this frame must not seed FLIP projections: rows/cards flying to their new slots through a scrolling
+            // viewport reads as jank and burns structural tracks per frame. Set BEFORE CaptureProjections so
+            // ApplyProjections takes its suppressed-snap branch.
+            //
+            // NOT _scrollSummary.AnyMoved: that kernel summary is touched-count based (ScrollFrameSummary.AnyMoved =
+            // _touchedCount > 0), true on an idempotent same-geometry SetFrame repost same as a real offset write —
+            // see SceneScrollSink.AnyRealMoveThisFrame's remarks for the identical issue ScrollBarChrome hit. Using
+            // the kernel summary here left suppression permanently latched on any frame that merely re-touched the
+            // viewport (e.g. every steady-state relayout), so a reconcile arriving well after the user's scroll had
+            // actually settled still silently snapped instead of FLIPping.
+            //
+            // ALSO not JUST this frame's real move: a reconcile that lands the very frame right AFTER the last real
+            // offset write (the write and the click/state-change that triggers the reconcile can straddle a frame
+            // boundary) must still snap — cards must not FLIP through a scroll that visually only just stopped one
+            // frame ago. _anyOffsetWroteLastFrame is that one-frame latch (ported from the pre-v3 dispatcher's
+            // AnyOffsetWroteThisFrame field of the same name/intent), cleared the frame after so a reconcile landing
+            // TWO+ frames after the last real write FLIPs normally again.
+            bool anyOffsetWroteThisFrame = _scrollSink.AnyRealMoveThisFrame;
+            Motion.SetLayoutTransitionsSuppressed(MotionSuppressionSource.Scroll,
+                (anyOffsetWroteThisFrame || _anyOffsetWroteLastFrame) && frameStart < _mainScrollHoldUntil);
+            _anyOffsetWroteLastFrame = anyOffsetWroteThisFrame;
 
             // FLIP "First": capture presented rects of layout-animated nodes BEFORE the reconcile/relayout that moves them.
             // Skip on the very first layout — freshly-mounted nodes are unmeasured (0-size), so FLIPping them would animate
@@ -2968,8 +3252,9 @@ public sealed class AppHost : IDisposable
             {
                 long tRx0 = Stopwatch.GetTimestamp();
                 _runtime.Flush();                              // 3–5 apply scheduled re-renders (render-effects reconcile) + bindings
+                _scrollKernel.Reclamp();                       // 5.5: mount-time Restore/Bind/SetFrame land before ReRealizeVirtuals sees them (§3.3 item 2)
                 long tRx1 = Stopwatch.GetTimestamp();
-                virtualsChanged = _reconciler.ReRealizeVirtuals();   // virtual boundary re-realize (granular)
+                virtualsChanged = _reconciler.ReRealizeVirtuals(_frameBudget.DeadlineTicks);   // virtual boundary re-realize (granular); budget-bounded while Drag/Ballistic (§4)
                 long tVr1 = Stopwatch.GetTimestamp();
                 if (virtualsChanged && _runtime.HasPending) _runtime.Flush();   // bound-row rebinds (slot signal writes) land THIS frame
                 long tRx2 = Stopwatch.GetTimestamp();
@@ -2987,7 +3272,7 @@ public sealed class AppHost : IDisposable
             // count WITHOUT consuming it (ConsumeRenderCount runs later when assembling LastStats).
             int censusComps = _reconciler.PeekRenderCount();
             _reconciler.MaybeDumpRenderCensus(ToMs(tFlush - frameStart), reactiveFlushMs, virtualRealizeMs, censusComps,
-                _anyOffsetWroteLastFrame || Stopwatch.GetTimestamp() < _mainScrollHoldUntil);
+                _scrollSummary.AnyMoved || Stopwatch.GetTimestamp() < _mainScrollHoldUntil);
             // Page-fill grace: this flush rendered a page's worth of components (a nav / structural mount), so the image
             // reveal it just kicked off is an ENTRANCE, not background churn — hold display-rate pacing across it. Reuses
             // the census count already peeked above (no new state read) and the frame's own timestamp.
@@ -3013,6 +3298,7 @@ public sealed class AppHost : IDisposable
                     _invalidator.RunDirty(layoutSize);         // 6 scoped relayout: only dirty subtrees, firewalled at boundaries
                 }
                 _scene.ClearLayoutDirty();
+                SolveDirtyAndReclamp();   // 6.7: re-clamp + resolve EdgeHitPending against this pass's fresh bounds (§3.3 item 3)
 
                 // D1 realize-after-layout (bounded): ArrangeViewport flags viewports whose realized window no longer
                 // covers the viewport size it just published (a mount realizes against a hint BEFORE any layout; a
@@ -3026,12 +3312,14 @@ public sealed class AppHost : IDisposable
                     _reconciler.ConsumeReconciled();           // realize mounts are folded into this frame's layout
                     reconciled = true;
                     _invalidator.RunDirty(layoutSize);
+                    SolveDirtyAndReclamp();   // 6.7: the D1 catch-up re-arranges viewports too — reclamp their fresh SetFrame the same pass
                     _scene.ClearLayoutDirty();
                 }
             }
             long tSolve = Stopwatch.GetTimestamp();            // of LayoutMs: the flex solve itself (full or scoped + realize catch-up)
 
             DrainLayoutEffects();                              // 6.5 layout effects (Bounds valid)
+            SolveDirtyAndReclamp();   // 6.7: an Immediate ScrollTo from a layout effect lands this frame (the edit-enter case)
             long tLayoutEffects = Stopwatch.GetTimestamp();
             _connected.ReducedMotion = Motion.ReducedMotion;   // 6.5 connected-animation: remember tag rects, seed flies to arrived dests, expire stale
             _connected.Tick65();
@@ -3078,37 +3366,12 @@ public sealed class AppHost : IDisposable
 
             bool keepAliveSuppressed = _reconciler.ConsumeKeepAliveLayoutSuppressionFrame();
             if (capturedProjections) ApplyProjections(keepAliveSuppressed);       // FLIP "Last+Invert+Play"
-            // fps consistency (root fix): if the loop paced INTO this frame from a throttled (ambient 30 Hz) or idle
-            // cadence AND this frame now drives interactive or one-shot motion (scroll/hover/drag/repeat, or a
-            // connected-animation fly / non-loop transition), the frame clock's pending delta is the stale throttle gap,
-            // not a real interval. Drop it so the first active frame advances ~one frame instead of leaping ~34 ms — the
-            // root of "scroll/connected animations feel 24 fps then 120 fps." Steady display-rate frames (prev wait 0)
-            // and genuine mid-scroll GC hitches are untouched; steady ambient frames never enter (no interactive work).
-            // Resync fires ONLY when stepping UP from a genuinely THROTTLED/idle cadence (ambient 30 Hz, HUD 10 Hz, or a
-            // blocked idle) to display rate — feeding that stale throttle gap into the animators would make one-shot motion
-            // LEAP on frame 1. A frame already AT display rate must NOT resync. Sync display rate waits 0; ASYNC display
-            // rate waits AsyncDisplayPaceMs (the free-spin cap, RecommendedWaitMsCore) — so BOTH are "already at display
-            // rate." Excluding AsyncDisplayPaceMs is load-bearing: without it EVERY async animating frame resynced →
-            // NextDeltaMs()==0 every frame → one-shot enter transitions froze at their initial (invisible) state, so
-            // animated content (sidebar sections, home cards) never appeared on-screen while non-animated chrome did.
-            // Same EFFECTIVE mask as the pacing decision that produced the throttled wait we are stepping up from: once
-            // the post-scroll holds expire, image reveals are ambient-paced, so a 33 ms gap between two of their frames is
-            // a REAL interval and resyncing it away would stall the crossfade instead of un-lurching it.
-            if (!_lastWaitWasDisplayRate)
-            {
-                WakeReasons stepUp = ComputeWakeReasons();
-                if ((stepUp & EffectiveLatencySensitiveWake(frameStart)) != 0
-                    || (_anim.HasActive && !AnimIsAmbient()) || _connected.HasActive)
-                    _frameTime.Resync();
-            }
-            float dtMs = _frameTime.NextDeltaMs();
-            _frameClockMs += dtMs;                             // frame-clock timer base (headless: the deterministic FixedFrameTimeSource step; ignored by the real-window wall clock)
-            _scene.AnimClockMs = _frameClockMs;                // publish the ANIMATION timebase for orphan deadlines (same clamped delta the animator advances on)
             _anim.Tick(dtMs);                                  // 7 animation (transform/opacity/presented-size — never relayout)
             _reconciler.FinalizeKeepAliveTransitions();         // 7 park retained outgoing pages after their exit settles
             _inputHooks.RunAfterAnimations();                  // 7.1 tree lifecycle finalizers (overlays) before record/present
             RunIncrementalLayout();                            // 7 scoped subtree relayout for SizeMode.Relayout
             RunReflowLayout(layoutSize);                       // 7 boundary-scoped re-solve for SizeMode.Reflow (smooth reflow)
+            SolveDirtyAndReclamp();   // 6.7: the reflow re-solve can move a viewport's bounds too
             // 7.2 video pump: event/geometry/transport requests are coalesced into one post-layout turn per surface.
             // Native DirectComposition video presents decoded frames independently, so a playing video no longer turns
             // every host frame into RepaintCurrentFrame. Render remains pure; registered pumps only write value-gated
@@ -3123,37 +3386,23 @@ public sealed class AppHost : IDisposable
             // (TickTouchpad is gone — scroll phase events apply 1:1 at dispatch; design §6/§12.)
             if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled)
                 FluentGpu.Foundation.ScrollTrace.Frame(dtMs, _tracePumpedEvents, _traceInputKindMask,
-                    _scrollAnim.HasActive || _dispatcher.GestureActive);
-            // scroll-feel-rework-v2 §4.1: the TouchpadTracking resampler targets frameT − ScrollTuning.ResampleLatencyMs
-            // (12ms as shipped, NOT the 5ms of the original design — four comments drifted on that and are now fixed).
-            // Feed the frame's QPC clock (matches the dispatcher's per-packet QpcTicks). Headless leaves it 0 → the
-            // resampler uses the latest deposited sample (no synthesis), preserving gate determinism.
-            //
-            // VBLANK-QUANTIZED, not a raw clock read. The resampled position is a smooth least-squares function of time
-            // (ScrollIntegrator.ResampleContact), so the evenness of the MOTION is exactly the evenness of the instant we
-            // evaluate it at. A bare Stopwatch.GetTimestamp() here is taken mid-phase-7 — after _anim.Tick, incremental
-            // layout and reflow — so its spacing carries all of their variance (measured sd 1.4–2.4 ms, p05 6.77 / p95
-            // 9.85 ms) while the photons it feeds land on a rigid refresh lattice (95% of attested PresentRefreshCount
-            // deltas advance exactly one slot). Evaluating a smooth curve at a jittery argument and displaying it on an
-            // even grid IS the judder: same applied offsets divided by the actual frame interval measure 24.3% velocity
-            // roughness, divided by the real refresh grid 37.0% — a 1.53x amplification affecting every frame at every
-            // speed (ops/diag/sessions/live-20260814-152702-freescroll).
-            if (!_isHeadless) _scrollAnim.FrameQpcSec = QuantizedFrameSec(Stopwatch.GetTimestamp());
-            _scrollAnim.Tick(dtMs);                            // 7 smooth scroll + fling + overscroll spring + scrollbar fade (the engine-owned integrator)
+                    _scrollKernel.ActiveCount > 0 || _scrollRouter.GestureActive);
+            // The kernel already ticked at phase 2.5 (top of Paint) — offset/band/velocity/activity are THIS frame's
+            // committed values here, read-only. (The old phase-7 FrameQpcSec-then-Tick site + its VBLANK-QUANTIZED
+            // resample-instant rationale are gone with it: the kernel resamples against scrollClock.FrameSec at the
+            // SAME early instant that motion suppression/realize/layout already used this frame — nothing here re-samples
+            // a second, later, jitter-carrying clock read.)
             long scrollHoldNow = Stopwatch.GetTimestamp();
-            if (_scrollAnim.AnyUserScrollActiveThisFrame)
+            if (_scrollSummary.AnyUserActive)
             {
                 _selfBlurHoldUntil = scrollHoldNow + SelfBlurHoldAfterScrollTicks;
                 _mainScrollHoldUntil = scrollHoldNow + MainScrollHoldTicks;
             }
-            // Latch for NEXT frame's MotionSuppressionSource.Scroll decision (set at the top of Paint, before FLIP
-            // capture): did any viewport's offset actually advance THIS frame? Captured here — right at the scroll-apply
-            // site — so the next Paint reads last frame's real motion, not the whole hold window.
-            _anyOffsetWroteLastFrame = _scrollAnim.AnyOffsetWroteThisFrame;
             bool holdSelfBlurForScroll = scrollHoldNow < _selfBlurHoldUntil;
-            bool scrollActive = holdSelfBlurForScroll || _scrollAnim.AnyOffsetWroteThisFrame;
+            bool scrollActive = holdSelfBlurForScroll || _scrollSummary.AnyMoved;
             _images.SuppressReveals = scrollActive;
             _images.ScrollThrottled = scrollActive;   // upload-burst → fence-stall guard (the safe lever; triple-buffer hung the Adreno)
+            _scrollChrome.Tick(dtMs);                          // 7 conscious scrollbar fade/expand (motion never touches chrome; chrome never touches motion)
             ScrollBindEval.ApplyPinAndFlagPass(_scene);       // 7 generic scroll-bind pins + the predicate-flag channel (sticky etc.)
             ScrollBindEval.RunObservers(_scene);              // 7 change-only scroll-geometry observers (pull-to-refresh / analytics)
             _repeat.Tick(dtMs);                                // 7 RepeatButton auto-repeat (held → re-fire click)
@@ -3194,7 +3443,7 @@ public sealed class AppHost : IDisposable
                 // to escape Paint entirely. Route it into the SAME foreground recovery gate; a genuine (non-device-loss)
                 // decoder/upload bug still propagates. The backend soft-fails staging first, so this is the net, not the
                 // normal path (media-pipeline.md §4.1).
-                try { _images.Pump(); }
+                try { _images.Pump(_frameBudget.DeadlineTicks); }
                 catch (Exception ex)
                 {
                     if (!TryRecoverForegroundDeviceLost(ex, clicks)) throw;
@@ -3205,24 +3454,14 @@ public sealed class AppHost : IDisposable
             long tImagePump = Stopwatch.GetTimestamp();
             if (s_allocDiag) { db = Probe(SegImages, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
-            // Scroll re-realize catch-up (phase 7.6): the fling/smooth scroll animators above advanced the content's
-            // -ScrollOffset transform AFTER this frame's pre-layout ReRealizeVirtuals, so a fast fling would record the
-            // viewport translated PAST the realized rows — the leading edge draws through (FG_PROBE=scroll-flicker).
-            // Re-realize for the just-advanced offset + scoped relayout the newly mounted rows so the recorded frame's
-            // realized window matches the offset it draws. No-op on steady frames (ReRealizeVirtuals returns false when
-            // nothing is VirtualRangeDirty); bounded to 2 passes like the cold realize edge in the layout block above.
-            for (int scrollPass = 0; scrollPass < 2 && _reconciler.ReRealizeVirtuals(); scrollPass++)
-            {
-                if (_runtime.HasPending) _runtime.Flush();   // bound-slot rebinds (RowBind) for the newly realized rows
-                _reconciler.ConsumeReconciled();
-                reconciled = true;                           // this frame DID realize+relayout — keep FrameStats.Rendered honest
-                _invalidator.RunDirty(layoutSize);
-                _scene.ClearLayoutDirty();
-            }
-            // A stationary pointer emits no PointerMove while edge auto-scroll moves/recycles the rows beneath it.
-            // Re-hit after catch-up so the nearest target and its insertion slot follow the newly visible content.
+            // The phase-7.6 scroll re-realize catch-up loop is deleted (scroll-v3 §3.3 item 4 / §4): the kernel now
+            // ticks at phase 2.5 (top of Paint), BEFORE the pre-layout ReRealizeVirtuals and BEFORE ArrangeViewport,
+            // so this frame's offset is already the one realize+layout windowed on — there is nothing left to catch
+            // up. FrameStats.RealizeCatchupMs stays ~0 on every frame (the field is kept for trace continuity).
+            // A stationary pointer emits no PointerMove while edge auto-scroll moves/recycles the rows beneath it;
+            // still re-hit after the frame's realize so the nearest target and its insertion slot follow.
             if (dragEdgeActive) _dispatcher.RefreshDragDropAfterAutoScroll();
-            long tRealizeCatchup = Stopwatch.GetTimestamp();   // 7.6 cost was invisibly charged to RecordMs — split it out
+            long tRealizeCatchup = Stopwatch.GetTimestamp();
 
             // Stuck-hover fix (input-a11y.md §5.4/§15 — "hover re-resolves when content moves under a stationary pointer,
             // not just layout commits"): a scroll offset write OR a reconcile/relayout this frame moved content under a
@@ -3236,7 +3475,7 @@ public sealed class AppHost : IDisposable
             // only on frames that actually wrote offsets OR relaid out (`layoutNeeded` = full/scoped layout ran; steady
             // idle/paint-only frames never enter), never per-idle-frame. The dispatcher self-gates mouse/pen + a valid
             // last position + no touch pan/item-drag. One hit-test; zero-alloc scalar walk through the hover chokepoints.
-            if (_scrollAnim.AnyOffsetWroteThisFrame) _dispatcher.RefreshHoverAfterScroll();
+            if (_scrollSummary.AnyMoved) _dispatcher.RefreshHoverAfterScroll();
             // Layout-move stuck-hover (input-a11y.md §5.4/§15): a reconcile/relayout this frame — NOT a scroll write — can
             // TRANSLATE a node out from under a STATIONARY mouse/pen cursor with no PointerMove to re-resolve it (the sidebar
             // collapse snapping its 240→56 rail carries its hover-only resize grip away, leaving the grip's seam hairline lit
@@ -3282,7 +3521,8 @@ public sealed class AppHost : IDisposable
                 // CancelStructuralAll above) vacated this frame — else the ghost rail persists. AsSpan is alloc-free.
                 pendingStructuralDamage: CollectionsMarshal.AsSpan(_anim.PendingStructuralDamage), // 8 record
                 damageEpoch: _damageEpoch, // §2.3/E9 own-subtree carve-out epoch
-                reuseBlockRoots: CollectionsMarshal.AsSpan(_reuseBlockRoots)); // W5 spatial scoping: connected-anim fly anchor chains to block
+                reuseBlockRoots: CollectionsMarshal.AsSpan(_reuseBlockRoots), // W5 spatial scoping: connected-anim fly anchor chains to block
+                collectSpanReuseMisses: RenderBudget.CompiledIn && RenderBudget.Enabled);
             _anim.PendingStructuralDamage.Clear();   // retains capacity → no steady-state alloc
             SceneRecorder.RecordDetached(_scene, _drawList, _images, _connected.Detached, _scene.OverlayClip);   // 8 detached fly snapshots (flag-gated rebuild; no-op when none)
             RecordPopupWindows(in focus, in textEdit);         // 8b record each popup window's subtree DrawList
@@ -3397,9 +3637,11 @@ public sealed class AppHost : IDisposable
                 var submitInfo = new FrameInfo(FrameSizePx(keepAlive), _window.Scale, Clear, recordStats.Damage, _images.ClockMs, _damageEpoch, holdSelfBlurForScroll,
                                                repaint, DrawListHash: dlHash);
                 if (resized && keepAlive) _device.HintSettlePresent();
-                double gpuRenderMs = _device.LastGpuRenderMs;
+                double gpuRenderMs = LastGpuRenderMs;
+                bool hasTargetProfile = _swapchain.TryGetGpuProfileSample(out _);
                 bool interactivePresent = !keepAlive && s_scrollPresentIntervalZero && scrollActive
                     && _swapchain.SupportsCompositedIntervalZero
+                    && hasTargetProfile   // preserves the A/B's explicit FG_GPU_TIMING opt-in without another target's sample
                     && gpuRenderMs > 0.0 && gpuRenderMs <= ScrollPresentGpuBudgetMs;
                 // Keep the returned seq: it is this frame's identity across the seam, and the ONLY thing that lets a
                 // present stamp be attributed back to the offsets this frame baked in (it was previously discarded).
@@ -3509,6 +3751,9 @@ public sealed class AppHost : IDisposable
             if (keepAlive && s_resizeDiag)
                 ReportResizeTick(frameStart, ensureMs, layoutMs0, subStart, resized, layoutPath,
                     componentsRendered, recordStats.NodesVisited, _drawList.CommandCount, hotAlloc);
+            bool hasGpuProfile = _swapchain.TryGetGpuProfileSample(out GpuProfileSample gpuProfile);
+            bool gpuProfileFresh = hasGpuProfile && gpuProfile.Sequence != _lastGpuProfileStatsSequence;
+            if (gpuProfileFresh) _lastGpuProfileStatsSequence = gpuProfile.Sequence;
             LastStats = new FrameStats(_drawList.CommandCount, clicks, hotAlloc, reconciled || layoutNeeded)
             {
                 NodesVisited = recordStats.NodesVisited,
@@ -3527,6 +3772,7 @@ public sealed class AppHost : IDisposable
                 SpanBytesCopied = recordStats.SpanBytesCopied,
                 DepthAborts = recordStats.DepthAborts,
                 SpanReuseDisabledReasons = recordStats.SpanReuseDisabledReasons,
+                SpanReuseMisses = recordStats.SpanReuseMisses,
                 RepaintCoverage = publishedRepaint.Coverage(layoutSize.Width, layoutSize.Height),
                 RepaintRectCount = publishedRepaint.Count,
                 RepaintFullReason = publishedRepaint.FullReason,
@@ -3556,15 +3802,18 @@ public sealed class AppHost : IDisposable
                 ImageApplyBytes = _images.LastPumpAppliedBytes,
                 RealizeCatchupMs = ToMs(tRealizeCatchup - tImagePump), // of which: phase-7.6 re-realize + scoped relayout
                 SubmitMs = ToMs(tSubmit - tRecord),     // command build + GPU submit + present (total; ~0 on a skipped frame)
-                FenceWaitMs = skipSubmit ? 0.0 : _device.LastFenceWaitMs,  // of which: UI-thread stall on the frame fence + latency waitable
+                FenceWaitMs = skipSubmit ? 0.0 : _device.LastFenceWaitMs,  // of which: submitting-thread wait for back-buffer retirement + latency waitable
                 PresentMs = ToMs(tSubmit - tSubmitDone),// of which: the Present() call (0 on a skipped frame)
-                GpuRenderMs = _device.LastGpuRenderMs,
-                GpuSceneMs = _device.LastGpuSceneMs,
-                GpuFillMs = _device.LastGpuFillMs,
-                GpuShadowMs = _device.LastGpuShadowMs,
-                GpuImageMs = _device.LastGpuImageMs,
-                GpuGlyphMs = _device.LastGpuGlyphMs,
-                GpuCompositeMs = _device.LastGpuCompositeMs,
+                GpuRenderMs = LastGpuRenderMs,
+                GpuProfileMs = hasGpuProfile ? gpuProfile.WholeMs : 0.0,
+                GpuProfileFresh = gpuProfileFresh,
+                GpuProfileSequence = hasGpuProfile ? gpuProfile.Sequence : 0,
+                GpuSceneMs = hasGpuProfile ? gpuProfile.SceneMs : 0.0,
+                GpuFillMs = hasGpuProfile ? gpuProfile.FillMs : 0.0,
+                GpuShadowMs = hasGpuProfile ? gpuProfile.ShadowMs : 0.0,
+                GpuImageMs = hasGpuProfile ? gpuProfile.ImageMs : 0.0,
+                GpuGlyphMs = hasGpuProfile ? gpuProfile.GlyphMs : 0.0,
+                GpuCompositeMs = hasGpuProfile ? gpuProfile.CompositeMs : 0.0,
                 Presented = !skipSubmit,
                 ScrollActive = scrollActive,
                 PublishSeq = _framePublishSeq,
@@ -3580,7 +3829,6 @@ public sealed class AppHost : IDisposable
                 StickyClipDirties = ScrollBindEval.PerfEnabled ? ScrollBindEval.StickyClipDirties : 0,
                 StickyClipFullyHidden = ScrollBindEval.PerfEnabled ? ScrollBindEval.StickyClipFullyHidden : 0,
                 PinDirties = ScrollBindEval.PerfEnabled ? ScrollBindEval.PinDirties : 0,
-                MorphDirties = ScrollBindEval.PerfEnabled ? ScrollBindEval.MorphDirties : 0,
                 ContinuousDirties = ScrollBindEval.PerfEnabled ? ScrollBindEval.ContinuousDirties : 0,
                 ScrollBindCount = ScrollBindEval.PerfEnabled ? ScrollBindEval.ScrollBindCount : 0,
             };
@@ -4033,13 +4281,23 @@ public sealed class AppHost : IDisposable
 
     /// <summary>Slot-free fan-out (wired to <see cref="SceneStore.OnFreeIndex"/>): drop every INDEX-keyed per-node row
     /// the engine subsystems hold so a freed slot leaves nothing for the next node reusing that index to inherit. The
-    /// gen-checked-handle side-tables (in-flight anim tracks, the interaction/scroll armed sets) self-prune at their next
-    /// tick and are deliberately untouched here.</summary>
+    /// gen-checked-handle side-tables (in-flight anim tracks, the interaction armed sets) self-prune at their next
+    /// tick and are deliberately untouched here. The kernel's own ScrollBody slab needs no index-keyed clear: it is
+    /// unbound structurally via the Unbind command SceneStore.ScrollRef posts on removal (scroll-v3 §3.1).</summary>
     private void OnSceneSlotFreed(int index)
     {
         _anim.ClearForIndex(index);
-        _scrollAnim.ClearForIndex(index);
     }
+
+    /// <summary>scroll-v3 §3.3 item 3: after any layout solve that may have moved a scroll viewport's bounds
+    /// (ArrangeViewport posts SetFrame during layout; the anchor re-pin posts AnchorShift+SetFrame), re-clamp +
+    /// resolve any EdgeHitPending against the fresh geometry and re-apply through the sink for EVERY viewport that
+    /// received SetFrame this pass — not only the ones whose clamp actually moved (a body that landed exactly on its
+    /// new clamp still needs its content transform re-applied against the new bounds). Called after every layout
+    /// solve site in Paint (full/scoped layout, the D1 realize-after-layout loop, DrainLayoutEffects, RunReflowLayout)
+    /// so a mount-time Restore, a layout-effect's Immediate ScrollTo, and an ordinary relayout all land the same
+    /// frame they occur. No time advance (Tick already ran once, at phase 2.5, above).</summary>
+    private void SolveDirtyAndReclamp() => _scrollKernel.Reclamp();
 
     // ── Latency-row assembly (diagnostics; only reached when the scroll trace is armed AND scroll is active) ─────────
     // Everything here is integer/float arithmetic over values the frame already computed. No allocation, no formatting,
@@ -4056,43 +4314,9 @@ public sealed class AppHost : IDisposable
         return p > 0 ? p : Stopwatch.Frequency / 60;
     }
 
-    /// <summary>The frame's motion-sampling instant, SNAPPED to the display's refresh lattice: the phase anchor is the
-    /// last present stamp (a real vblank the OS attested), the step is the measured refresh period, and the result is
-    /// the lattice point nearest <paramref name="nowQpc"/>.
-    ///
-    /// <para>Why snap at all. Everything downstream of this value is smooth by construction — the resampler evaluates a
-    /// least-squares line, the spring is analytical — so the only place per-frame motion roughness can enter is the
-    /// ARGUMENT. Snapping makes consecutive frames differ by exactly one refresh period, which is what the display will
-    /// actually do with them.</para>
-    ///
-    /// <para>NEAREST, not next. Rounding to the nearest lattice point is a zero-mean correction, so it removes variance
-    /// without shifting the resampler's effective latency — the 12 ms <c>ResampleLatencyMs</c> lag keeps its meaning and
-    /// the no-extrapolation clamp (note 101) does not start firing more often, which projecting FORWARD to the expected
-    /// present would have caused (the target would routinely land past the newest contact sample and clamp).</para>
-    ///
-    /// <para>Falls back to the raw clock whenever the lattice cannot be trusted: no present stamped yet (first frames,
-    /// headless), a non-positive period, or an anchor so old that accumulated period error would have drifted the phase
-    /// — better an honest jittery instant than a confidently wrong one. MONOTONIC by construction: the returned value
-    /// never goes backwards, because a backwards step would hand the integrator a negative dt and freeze the motion.</para></summary>
-    private double QuantizedFrameSec(long nowQpc)
-    {
-        long refresh = RefreshPeriodQpcOrDefault();
-        long anchor = Volatile.Read(ref _lastPresentQpc);
-        double freq = Stopwatch.Frequency;
-        if (anchor <= 0 || refresh <= 0) { _lastQuantizedFrameQpc = nowQpc; return nowQpc / freq; }
-        long delta = nowQpc - anchor;
-        // A stale anchor cannot carry phase: at 120 Hz a 0.1% period error is a whole refresh of drift after ~1.4 s.
-        if (delta < 0 || delta > refresh * 128) { _lastQuantizedFrameQpc = nowQpc; return nowQpc / freq; }
-        long k = (delta + refresh / 2) / refresh;         // nearest lattice point (delta >= 0 here, so no floor/trunc split)
-        long snapped = anchor + k * refresh;
-        // Never rewind: a snap that lands before the previous frame's instant would produce a negative dt downstream.
-        if (snapped < _lastQuantizedFrameQpc) snapped = _lastQuantizedFrameQpc;
-        _lastQuantizedFrameQpc = snapped;
-        return snapped / freq;
-    }
-
-    /// <summary>Previous <see cref="QuantizedFrameSec"/> result (QPC ticks) — the monotonicity floor.</summary>
-    private long _lastQuantizedFrameQpc;
+    // QuantizedFrameSec (the ad-hoc lattice snap this method used to do inline) is now RefreshLattice.Snap, called
+    // once per RunFrame at the top (see the _palFrameClock build there) — this file just consumes the result via
+    // _palFrameClock.FrameQpc. The monotonicity floor is _frameClockFloorQpc.
 
     private void EmitLatencyRow(float dtMs)
     {
@@ -4158,10 +4382,10 @@ public sealed class AppHost : IDisposable
         // chase, an idle tick) sampled nothing. Emitting it there produced a plausible-looking number derived from
         // frame-start alone, which is not the same measurement and would be averaged in as if it were.
         float clockSampleSkewMs = 0f;
-        double frameQpcSec = _scrollAnim.FrameQpcSec;
-        if (frameQpcSec > 0.0 && presentQpc != 0 && _scrollAnim.TrackingLagSampled)
+        double frameQpcSec = _scrollClockFrameSec;
+        if (frameQpcSec > 0.0 && presentQpc != 0 && _scrollKernel.Diag.TrackingLagSampled)
         {
-            double offsetSampleQpc = frameQpcSec * Stopwatch.Frequency - FluentGpu.Animation.ScrollTuning.ResampleLatencyMs / msPerTick;
+            double offsetSampleQpc = frameQpcSec * Stopwatch.Frequency - ScrollFeel.Shipping.ResampleLatencyMs / msPerTick;
             double expectedPresentQpc = presentQpc + vsyncTicks;
             clockSampleSkewMs = (float)((offsetSampleQpc - expectedPresentQpc) * msPerTick);
         }
@@ -4180,19 +4404,20 @@ public sealed class AppHost : IDisposable
         if (LastStats.SubmitMs > vsyncMs) stageMask |= 1 << 7;
         if (LastStats.FenceWaitMs > vsyncMs) stageMask |= 1 << 8;
 
-        double genSec = _scrollAnim.LastContactSampleSec;
+        double genSec = _scrollKernel.Diag.LastContactSampleSec;
         long genQpc = genSec > 0.0 ? (long)(genSec * Stopwatch.Frequency) : 0L;
         var quality = genQpc == 0 ? Foundation.GenStampQuality.Tick : Foundation.ScrollTrace.ContactStampQuality;
 
         FluentGpu.Foundation.ScrollTrace.Latency(
             _framePublishSeq, quality, stageMask, missedPacked,
-            _scrollAnim.TrackingLagSampled ? _scrollAnim.TrackingLagDip : 0f,
+            _scrollKernel.Diag.TrackingLagSampled ? _scrollKernel.Diag.TrackingLagDip : 0f,
             wakeOverheadMs, frameOverrunMs, clockSampleSkewMs, presentIntervalMs,
-            _scrollAnim.TrackingLagSampled ? _scrollAnim.TrackingVelocityDipPerMs : 0f, genQpc,
+            _scrollKernel.Diag.TrackingLagSampled ? _scrollKernel.Diag.TrackingVelocityDipPerMs : 0f, genQpc,
             // The exact present join: WHICH published frame the seam had acknowledged when this row was written.
             // Without it a consumer can only infer the winner from row adjacency.
-            ackedPublishSeq: LastPresentPublishSeq);
-        _scrollAnim.TrackingLagSampled = false;   // one row per sample; a stale value must not be re-reported as fresh
+            ackedPublishSeq: LastPresentPublishSeq,
+            trackingSampleValid: _scrollKernel.Diag.TrackingLagSampled);
+        _scrollKernel.Diag.TrackingLagSampled = false;   // one row per sample; a stale value must not be re-reported as fresh
     }
 
     /// <summary>Called on whichever thread just returned from <c>Present()</c> (the render thread under the async
@@ -4204,6 +4429,7 @@ public sealed class AppHost : IDisposable
     private void NotePresented(ulong publishSeq)
     {
         long qpc = Stopwatch.GetTimestamp();   // first statement: everything downstream of Present is attribution error
+        long prevPresentQpc = Volatile.Read(ref _lastPresentQpc);
         Volatile.Write(ref _lastPresentQpc, qpc);
         if (publishSeq != 0) Volatile.Write(ref _lastPresentPublishSeq, (long)publishSeq);
         Interlocked.Increment(ref _presentedSequence);
@@ -4211,6 +4437,10 @@ public sealed class AppHost : IDisposable
         // gate sees only "publish owed a present", and in the locked state every publish IS presented — one refresh
         // late, forever. Present-thread-owned; the UI side only reads two volatile ints.
         _slipDetector.OnPresent(qpc, RefreshPeriodQpcOrDefault());
+        var presentStats = _device.LastPresentStats;
+        long refreshQpc = RefreshPeriodQpcOrDefault();
+        double intervalMs = prevPresentQpc > 0 ? (qpc - prevPresentQpc) * 1000.0 / Stopwatch.Frequency : 0.0;
+        _unpacedDetector.OnPresent(presentStats.Valid, presentStats.LatencyWaitMs, intervalMs, refreshQpc * 1000.0 / Stopwatch.Frequency);
     }
 
     private void UpdateFrameTiming(long frameStart)

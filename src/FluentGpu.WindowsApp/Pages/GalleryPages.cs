@@ -393,7 +393,7 @@ sealed class InputsPage : Component
         var seek = UseFloatSignal(0.3f);
         var shuffle = UseSignal(false);
         var repeat = UseSignal(true);
-        var (pos, setPos) = UseState(0f);
+        var pos = UseFloatSignal(0f);
 
         const int trackSeconds = 214; // ~3:34 song
 
@@ -505,12 +505,13 @@ sealed class InputsPage : Component
                 AlignItems = FlexAlign.Center,
                 Children =
                 [
-                    ScrollBar.Create(0.3f, pos, setPos, 160f, ScrollBar.DefaultStyle with { ThumbWidth = 10f }),
+                    ScrollBar.Create(0.3f, pos, length: 160f,
+                        parts: new TemplateParts { [ScrollBar.PartThumb] = t => t with { Width = 10f } }),
                     new BoxEl
                     {
                         Children =
                         [
-                            new TextEl("position " + pos.ToString("0.00"))
+                            new TextEl("position " + pos.Peek().ToString("0.00"))
                             {
                                 Size = 14f,
                                 Color = Theme.WindowText,

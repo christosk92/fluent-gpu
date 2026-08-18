@@ -45,6 +45,7 @@ public static class SuiteRegistry
         new("hooks", "hooks", HooksSuite.Run),
         new("anim", "anim", AnimSuite.Run),
         new("scroll", "scroll", ScrollSuite.Run),
+        new("kernel", "kernel", ScrollKernelSuite.Run),
         new("touch", "touch", TouchSuite.Run),
         new("image", "image", ImageSuite.Run),
         new("controls", "controls", ControlsSuite.Run),

@@ -50,30 +50,99 @@ public enum InputKind : byte
     /// <summary>The window's placement changed (normal ↔ maximized/minimized) — a custom titlebar re-glyphs max↔restore.</summary>
     WindowStateChanged = 11,
 
-    // ── the phase-tagged scroll contract (docs/plans/scroll-feel-rework-design.md §1) ──────────────────────────────
-    // Six additive kinds produced by the phase producers (DirectManipulation PTP, the touch arena, the hardened
-    // wheel-fallback classifier, macOS NSEvent later; scripted by the headless producer for gates). Contact deltas are
-    // applied 1:1 by the integrator; Momentum* deltas are OS-owned inertia applied verbatim. The legacy Wheel kind
-    // stays for detented mouse notches + element-level OnPointerWheel. Fields: ScrollDelta/ScrollDeltaX carry the DIP
-    // deltas (same sign convention), DeviceClassRaw the producer tag, QpcTicks the per-packet high-res stamp.
-    /// <summary>Contact engaged (touch pan claimed / DManip RUNNING entered). Delta may be 0.</summary>
+    // ── the phase-tagged scroll contract (scroll-v3-plan-2026-08-17.md §2.1/§5.5) ──────────────────────────────────
+    // Three kinds produced by the phase producers (DirectManipulation PTP, the touch arena, the hardened
+    // wheel-fallback classifier, macOS NSEvent later; scripted by the headless producer for gates). The kernel
+    // (FluentGpu.Scroll.ScrollKernel) is the ONE consumer/integrator — these kinds only carry the RAW producer signal
+    // to FluentGpu.Scroll.ScrollInputRouter.Phase, which folds them into ScrollInputKind.ContactBegin/Move/End
+    // (touch/pen resample path) or ScrollInputKind.FrameDelta (DM RUNNING / hi-res fallback — no resample, applied
+    // 1:1). PTP/precision-touchpad inertia is ENGINE-owned (the kernel seeds Ballistic from the last 40–60 ms of
+    // frame deltas on lift) — there is no OS-momentum kind: a producer must never ride OS-owned inertia; DirectManip-
+    // ulation is configured without TRANSLATION_INERTIA/SCALING_INERTIA (§5.2), and RUNNING→INERTIA is treated as a
+    // lift (ScrollEnd), not a momentum handoff. The legacy Wheel kind stays for detented mouse notches + element-level
+    // OnPointerWheel. Fields: ScrollDelta/ScrollDeltaX carry the DIP deltas (same sign convention), DeviceClassRaw the
+    // producer tag (see ScrollDeviceClass), QpcTicks the per-packet high-res stamp.
+    /// <summary>A frame-aligned producer engaged (touch pan claimed / DManip RUNNING entered / a hi-res wheel
+    /// gesture started). Delta may be 0. Never coalesces.</summary>
     ScrollBegin = 12,
-    /// <summary>Contact delta — 1:1 raw application. Ring-coalesces per frame (deltas sum, newest stamp).</summary>
-    ScrollUpdate = 13,
-    /// <summary>Contact lifted with NO OS momentum to follow (hard lift). Never coalesces.</summary>
+    /// <summary>
+    /// FRAME-ALIGNED contact displacement, DIP. The ring sums this per <c>(frame, PointerId)</c> — ring-coalesces
+    /// per frame, newest stamp survives (deltas add). <see cref="InputEvent.QpcTicks"/> is
+    /// <c>FrameClock.FrameQpc</c> for a DirectManipulation producer (one <c>Update</c> per produced frame, so the
+    /// packet IS the frame's own stamp by construction) or the last raw packet's QPC for the hi-res wheel fallback
+    /// (no DManip clock to align to). Touch/pen samples arrive through the SAME kind but are resampled by the
+    /// kernel at <c>frameT − ResampleLatencyMs</c> against the <see cref="PointerVelSample"/> side-ring history
+    /// rather than applied 1:1 — the router (not this PAL layer) makes that distinction from
+    /// <see cref="InputEvent.Pointer"/>/<see cref="InputEvent.DeviceClassRaw"/>.
+    /// </summary>
+    ScrollDelta = 13,
+    /// <summary>Contact/gesture lifted (hard lift — there is no OS momentum to follow; PTP/precision-touchpad
+    /// inertia is engine-owned, so a lift here is always the kernel's cue to seed its own Ballistic fling from the
+    /// trailing frame-delta history). Never coalesces.</summary>
     ScrollEnd = 14,
-    /// <summary>OS inertia starts (DManip INERTIA). Never coalesces.</summary>
-    MomentumBegin = 15,
-    /// <summary>OS inertia delta — applied verbatim (no second integrator). Ring-coalesces per frame.</summary>
-    MomentumUpdate = 16,
-    /// <summary>OS inertia finished or cancelled. Never coalesces.</summary>
-    MomentumEnd = 17,
 }
 
-/// <summary>Producer tag on scroll-phase events (<see cref="InputEvent.DeviceClassRaw"/>) — the integrator picks its
-/// momentum-ownership row from this (design §1): 1 = precision touchpad via DManip, 2 = touch (engine owns momentum),
-/// 3 = detented mouse wheel, 4 = hi-res wheel fallback (no DManip), 5 = reserved for macOS NSTrackpad.</summary>
-public enum ScrollDeviceClass : byte { Unset = 0, Touchpad = 1, Touch = 2, WheelDetented = 3, WheelHiResFallback = 4, NSTrackpad = 5 }
+/// <summary>Producer tag on scroll-phase events (<see cref="InputEvent.DeviceClassRaw"/>) — the kernel picks its
+/// resample-vs-1:1 handling from this (scroll-v3-plan §5.1/§5.5): 1 = precision touchpad via DManip, 2 = touch
+/// (resampled), 3 = detented mouse wheel, 4 = hi-res wheel fallback (no DManip).</summary>
+public enum ScrollDeviceClass : byte { Unset = 0, Touchpad = 1, Touch = 2, WheelDetented = 3, WheelHiResFallback = 4 }
+
+/// <summary>
+/// Flags on <see cref="FrameClock"/> (scroll-v3-plan-2026-08-17.md §5.1).
+/// </summary>
+[Flags]
+public enum FrameClockFlags : byte
+{
+    None = 0,
+    /// <summary>The lattice anchor (a real OS-attested vblank stamp) was available and fresh enough to snap
+    /// <see cref="FrameClock.FrameQpc"/> against — as opposed to the raw-clock fallback (no present yet, headless,
+    /// or an anchor too stale to trust). Mirrors <c>RefreshLattice.Build</c>'s internal fallback decision.</summary>
+    LatticeValid = 1,
+    /// <summary>The present pacer is not honoring the display's cadence (<c>PresentUnpacedDetector.Unpaced</c> —
+    /// e.g. an RDP/remote session, a driver that ignores <c>SetMaximumFrameLatency</c>). While set, a frame-aligned
+    /// producer's lead time is floored to 0 and the render-thread fling lease (§6) declines new grants.</summary>
+    Unpaced = 2,
+    /// <summary>Produced by the headless PAL (<c>RefreshLattice.Headless</c>): no real present/vblank exists,
+    /// <see cref="FrameClock.FrameQpc"/> is the deterministic <c>FixedFrameTimeSource</c> accumulator instead of a
+    /// QPC read, so gates stay bit-reproducible.</summary>
+    Headless = 4,
+}
+
+/// <summary>
+/// ONE target time for the frame about to be produced — shared by DirectManipulation's per-frame <c>Update</c>
+/// (<see cref="IPlatformWindow.PumpScroll"/>), the <c>FluentGpu.Scroll.ScrollKernel</c> tick, and (Phase 6) the
+/// render-thread fling lease. Built ONCE per <c>AppHost.RunFrame</c>, at the top, before the input pump/dispatch —
+/// scroll-v3-plan-2026-08-17.md §5.1.
+///
+/// <para><see cref="FrameQpc"/> is "now", LATTICE-SNAPPED: the nearest point on <c>anchor + k·refresh</c> to the raw
+/// QPC read, monotone frame-to-frame (never rewinds — a snap that would land before the previous frame's value is
+/// clamped forward). This is the physics clock's "now": <c>ScrollClock.FrameSec = FrameQpc / Frequency</c>, and the
+/// resampler's target instant is <c>FrameSec − ResampleLatencyMs</c>. Snapping removes per-frame sampling jitter
+/// without shifting the resampler's effective latency (nearest, not next — a zero-mean correction).</para>
+///
+/// <para><see cref="PresentQpc"/> is the PREDICTED vblank this frame's pixels will actually land on — not the next
+/// vblank, but the one AFTER it: the swapchain is created with <c>SetMaximumFrameLatency(1)</c>
+/// (<c>D3D12Device.cs</c>), so a frame produced right after the present-ack for frame N-1 shows at the vblank after
+/// next, not the next one. <c>ScrollClock.PresentSec = PresentQpc / Frequency</c> feeds DirectManipulation's contact
+/// lead (<c>CompositionDeltaMs</c>) and, later, the render-thread lease's self-tick target.</para>
+///
+/// <para><see cref="RefreshQpc"/> is the display's measured frame period — DXGI/DWM <c>qpcRefreshPeriod</c>
+/// (<see cref="FluentGpu.Rhi.PresentStats.RefreshPeriodQpc"/>) when attested, else <c>Stopwatch.Frequency / 60</c>.
+/// Substituted for a body's per-frame <c>DtSec</c> on the FIRST tick after it wakes — kills the zero-dt dead zone a
+/// raw "now minus last-now" delta would hit on a body's very first sample.</para>
+///
+/// <para><see cref="NowQpc"/> is the raw, unsnapped <c>Stopwatch.GetTimestamp()</c> this clock was built from —
+/// diagnostics only (the lattice skew a consumer reports IS <c>FrameQpc − NowQpc</c>); nothing in the scroll/render
+/// path should read it for physics.</para>
+///
+/// <para><see cref="Seq"/> is a per-<c>RunFrame</c> monotonic ordinal (never resets), so a consumer that observes two
+/// clocks a frame apart can tell "the very next frame" from "we skipped some" without comparing ticks.</para>
+///
+/// Provenance: DXGI <c>SyncQPCTime</c> is documented as sharing the QPC domain with <c>Stopwatch.GetTimestamp()</c>
+/// on Windows (no unit conversion needed to join the two); the "shows two vblanks out under
+/// <c>MaximumFrameLatency=1</c>" shape mirrors WinUI/XAML's own frame-info-to-composition-target reasoning.
+/// </summary>
+public readonly record struct FrameClock(long FrameQpc, long PresentQpc, long RefreshQpc, long NowQpc, ulong Seq, FrameClockFlags Flags);
 
 /// <summary>Window placement, surfaced for custom-titlebar chrome (<see cref="IPlatformWindow.State"/>).</summary>
 public enum WindowState : byte { Normal = 0, Maximized = 1, Minimized = 2 }
@@ -130,7 +199,7 @@ public readonly record struct InputEvent(
 /// <para><paramref name="Seq"/> is the depositing scroll-phase packet's <see cref="InputEvent.ScrollPhaseSeq"/> ordinal
 /// (0 for touch/pen move deposits, which have no scroll-phase sequence). Tagging the sample with BOTH the pointer id and
 /// the monotonic phase sequence (scroll-feel-rework-v2 §3.4) lets a consumer that latches one gesture drain only that
-/// gesture's samples — an interleaved event that splits a frame into two <see cref="InputKind.ScrollUpdate"/>s can never
+/// gesture's samples — an interleaved event that splits a frame into two <see cref="InputKind.ScrollDelta"/>s can never
 /// replay a later packet's deposit against an earlier base. The estimator's strictly-increasing-stamp rejection already
 /// covers the single-latched-gesture case; the seq tag hardens the cross-gesture case (and the DirectManipulation sink).</para></summary>
 public readonly record struct PointerVelSample(uint PointerId, float X, float Y, uint TimestampMs, long QpcTicks, byte Seq = 0);
@@ -170,15 +239,20 @@ public sealed class InputEventRing
     {
         if (e.Kind == InputKind.PointerMove)
         {
+            // Deposit EVERY touch/pen move into the velocity side ring (scroll-v3-plan §5.4/§1 deliverable), not just
+            // the one that gets coalesced away: the coalesced slab keeps only the newest position per contact (for
+            // hit-test/hover), but the release-velocity estimator needs the FULL chronological packet stream —
+            // depositing only the overwritten sample dropped the LAST move of every frame (it is never overwritten by
+            // a later one in the same frame). Deposited BEFORE the coalesce decision so ordering matches arrival.
+            if (e.Pointer is PointerKind.Touch or PointerKind.Pen)
+                PushVelocitySample(new PointerVelSample(e.PointerId, e.PositionPx.X, e.PositionPx.Y, e.TimestampMs, e.QpcTicks));
+
             int slot = IdSlot(e.PointerId);
             if (slot >= 0 && _lastMove[slot] >= 0)
             {
-                // Coalesce: overwrite this id's pending move in place — but a touch/pen sample the estimator needs
-                // must not vanish with it: deposit the OVERWRITTEN move into the velocity side ring first (design §2).
-                ref InputEvent prev = ref _buf[_lastMove[slot]];
-                if (prev.Pointer is PointerKind.Touch or PointerKind.Pen)
-                    PushVelocitySample(new PointerVelSample(prev.PointerId, prev.PositionPx.X, prev.PositionPx.Y, prev.TimestampMs, prev.QpcTicks));
-                prev = e;
+                // Coalesce: overwrite this id's pending move in place (hit-test/hover only needs the latest position
+                // per contact between frames) — its velocity contribution was already deposited above.
+                _buf[_lastMove[slot]] = e;
                 return;
             }
             int idx = Append(in e);
@@ -211,21 +285,19 @@ public sealed class InputEventRing
             }
         }
 
-        // Scroll-phase Update pair: deltas sum per frame (the vsync resample), newest stamp/seq survives; the raw
-        // packet's timing goes to the velocity side ring. Begin/End/Momentum-transition kinds NEVER coalesce (§1).
-        if (e.Kind is InputKind.ScrollUpdate or InputKind.MomentumUpdate && _count > 0)
+        // Scroll-phase Delta pair: deltas sum per frame (the vsync resample), newest stamp/seq survives; the raw
+        // packet's timing goes to the velocity side ring. Begin/End NEVER coalesce (§1).
+        if (e.Kind == InputKind.ScrollDelta && _count > 0)
         {
             ref InputEvent prev = ref _buf[_count - 1];
             if (prev.Kind == e.Kind && prev.PointerId == e.PointerId)
             {
-                // Contact packets feed release velocity; momentum packets don't. Axis order: PointerVelSample.X is the
-                // HORIZONTAL channel (ScrollDeltaX) and .Y the VERTICAL (ScrollDelta) — the same X/Y semantics the
-                // touch-move deposit above uses. (These were SWAPPED here once: the estimator then saw the pan axis as
-                // flat plateaus + per-frame spikes and inflated release velocity ~4-6× whenever ≥2 packets folded into
-                // one frame — the oversized-fling / violent-edge-bounce defect. gate.scroll.phase-release-velocity
-                // pins the corrected order.)
-                if (e.Kind == InputKind.ScrollUpdate)
-                    PushVelocitySample(new PointerVelSample(prev.PointerId, prev.ScrollDeltaX, prev.ScrollDelta, prev.TimestampMs, prev.QpcTicks, prev.ScrollPhaseSeq));
+                // Axis order: PointerVelSample.X is the HORIZONTAL channel (ScrollDeltaX) and .Y the VERTICAL
+                // (ScrollDelta) — the same X/Y semantics the touch-move deposit above uses. (These were SWAPPED here
+                // once: the estimator then saw the pan axis as flat plateaus + per-frame spikes and inflated release
+                // velocity ~4-6× whenever ≥2 packets folded into one frame — the oversized-fling / violent-edge-bounce
+                // defect. gate.scroll.phase-release-velocity pins the corrected order.)
+                PushVelocitySample(new PointerVelSample(prev.PointerId, prev.ScrollDeltaX, prev.ScrollDelta, prev.TimestampMs, prev.QpcTicks, prev.ScrollPhaseSeq));
                 if (ScrollTrace.CompiledIn && ScrollTrace.Enabled)
                     ScrollTrace.Coalesce((byte)e.Kind, e.ScrollDelta, e.ScrollDeltaX,
                         prev.ScrollDelta + e.ScrollDelta, prev.ScrollDeltaX + e.ScrollDeltaX, e.QpcTicks);
@@ -239,7 +311,9 @@ public sealed class InputEventRing
     }
 
     // ── the velocity side ring (design §2) ────────────────────────────────────────────────────────────────────────
-    private const int VelCapacity = 64;   // ≥4× headroom over a 1 kHz device at 60 Hz frames (≈16 samples/frame)
+    private const int VelCapacity = 128;  // ≥4× headroom over a 1 kHz device at 60 Hz frames (≈16 samples/frame); raised
+                                           // from 64 for the every-move deposit rule above (every touch/pen PointerMove
+                                           // now deposits, not just the coalesced-away ones — scroll-v3-plan §5.4).
     private readonly PointerVelSample[] _vel = new PointerVelSample[VelCapacity];
     private int _velCount;
 
@@ -519,6 +593,32 @@ public interface IPlatformWindow : IDisposable
 
     /// <summary>Drain queued OS input/window events into the ring (once per frame).</summary>
     int PumpInto(InputEventRing ring);
+
+    /// <summary>
+    /// Called from <c>AppHost.Paint</c> AFTER the display-phase gate has decided this frame is actually going to be
+    /// produced — never before it, so a frame-aligned producer never issues an <c>Update</c> against an instant that
+    /// turns out to be non-lattice (scroll-v3-plan-2026-08-17.md §5.2, "hole found &amp; fixed": the old pump ran
+    /// before the gate could decline production). Called ONCE per PRODUCED frame: a frame-aligned producer
+    /// (DirectManipulation on Windows) issues its ONE <c>Update</c> for <paramref name="clock"/> here and enqueues
+    /// this frame's <see cref="InputKind.ScrollBegin"/>/<see cref="InputKind.ScrollDelta"/>/<see cref="InputKind.ScrollEnd"/>
+    /// into <paramref name="ring"/> — the same shape <see cref="PumpInto"/> produces, so the host dispatches the
+    /// returned span through the ordinary input path (<c>InputDispatcher.Dispatch</c> already routes these kinds to
+    /// <c>FluentGpu.Scroll.ScrollInputRouter.Phase</c>). Returns the number of events written (0 = nothing pending —
+    /// the common case when no frame-aligned gesture is live). Default: a no-op (backends without a frame-aligned
+    /// scroll producer — a bare wheel/touch-only platform, most headless tests — never need to override this).
+    /// </summary>
+    int PumpScroll(in FrameClock clock, InputEventRing ring) => 0;
+
+    /// <summary>
+    /// True while a frame-aligned scroll producer has a contact engaged or pending (DirectManipulation SetContact
+    /// issued but not yet RUNNING, or already RUNNING) OR a hi-res wheel-fallback gesture is live — in every such
+    /// case the host MUST produce one frame per refresh so <see cref="PumpScroll"/> gets called every vblank (a
+    /// frame-aligned producer that misses a pump either stalls or, worse, accumulates an unbounded backlog). Folded
+    /// into the frame loop's wake/idle decision (<c>AppHost.ComputeWakeReasons</c>,
+    /// <see cref="FluentGpu.Hosting.WakeReasons.ScrollProducer"/>) alongside the kernel's own active-body count.
+    /// Default false (no frame-aligned producer, or none currently engaged).
+    /// </summary>
+    bool ScrollProducerLive => false;
 
     /// <summary>
     /// Block until platform work arrives or <paramref name="timeoutMs"/> elapses. Negative timeout means wait indefinitely.

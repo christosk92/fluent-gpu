@@ -2377,7 +2377,10 @@ static class OverlaySuite
             void Hover(float x, float y) { window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(x, y), 0, 0)); host.RunFrame(); }
             void Step(float ms) { clock.Advance(ms); host.RunFrame(); }
             void Poll() { for (int i = 0; i < 4; i++) host.RunFrame(); }
-            float ScrollProgress() { ref var st = ref s.ScrollRef(vp); return MathF.Max(st.TargetY, st.OffsetY); }
+            // scroll-v3: TargetY is gone as a scene column (wheel input is a Driven glide now, resolved kernel-side —
+            // ScrollBody.Target is internal to the kernel). OffsetY is the live result column and, after 6 frames of
+            // glide below, is by itself a faithful "how far did this wheel actually move the page" progress read.
+            float ScrollProgress() { ref var st = ref s.ScrollRef(vp); return st.OffsetY; }
 
             Hover(60f, 116f);                 // over the wrapped target (content y 100..132)
             Poll(); Step(850f); Poll();       // the 800ms show delay elapses → bubble open

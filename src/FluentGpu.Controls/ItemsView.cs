@@ -4,6 +4,7 @@ using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Reconciler;
 using FluentGpu.Scene;
+using FluentGpu.Scroll;
 using FluentGpu.Signals;
 
 namespace FluentGpu.Controls;
@@ -19,6 +20,7 @@ public sealed class ItemsViewController
     internal Func<int>? GetCurrent;
     internal TryGetItemIndexDelegate? TryGetItemIndexImpl;
     internal Action<float>? ScrollByImpl;
+    internal Action<float>? SetAutoScrollVelocityImpl;
     internal CorrectMeasuredExtentDelegate? CorrectMeasuredExtentImpl;
     internal Func<int, bool>? IsItemRealizedImpl;
     internal Func<float>? GetOffsetImpl;
@@ -77,8 +79,8 @@ public sealed class ItemsViewController
     /// scrolling the virtualized viewport. <paramref name="alignmentRatio"/> NaN = minimal scroll (the default
     /// BringIntoViewOptions); 0 = align item start to viewport start, 1 = end to end (the Home/End ratios,
     /// ItemsViewInteractions.cpp:1013-1016). <paramref name="animate"/> true = SMOOTH-scroll to the target (the
-    /// ScrollIntegrator eases the offset, matching WinUI's <c>BringIntoViewOptions.AnimationDesired</c>); false (default) =
-    /// snap immediately. Animated paging (e.g. a PagedShelf's chevrons) passes true.</summary>
+    /// scroll kernel's Driven chase eases the offset, matching WinUI's <c>BringIntoViewOptions.AnimationDesired</c>);
+    /// false (default) = snap immediately. Animated paging (e.g. a PagedShelf's chevrons) passes true.</summary>
     public void StartBringItemIntoView(int index, float alignmentRatio = float.NaN, bool animate = false)
         => BringIntoViewImpl?.Invoke(index, alignmentRatio, animate);
 
@@ -92,10 +94,20 @@ public sealed class ItemsViewController
         return false;
     }
 
-    /// <summary>Nudge the virtualized viewport by <paramref name="delta"/> DIP along its scroll axis (clamped).
-    /// The drag-reorder EDGE AUTO-SCROLL seam: a composing list (ListView) calls this while the pointer drags near
-    /// the viewport edge (the plan's E5-L3 edge auto-scroll in virtualized lists). No-op for non-virtual hosts.</summary>
+    /// <summary>Shift the virtualized viewport's offset by <paramref name="delta"/> DIP along its scroll axis — an
+    /// INSTANT coordinate-frame rebase (the kernel's <c>AnchorShift</c>: it moves with every other live intent, never
+    /// starts a chase/coast), for a caller correcting the visible anchor after a structural change (e.g. a live
+    /// reorder/insert shifting an index — <c>DetailTracks.Choreograph</c>). No-op for non-virtual hosts. For the
+    /// drag-reorder EDGE AUTO-SCROLL seam (a held nudge for as long as the pointer sits near the viewport edge), use
+    /// <see cref="SetAutoScrollVelocity"/> instead — a one-shot instant shift is the wrong primitive for a continuous
+    /// drag hold (see ItemsViewPresets' E5-L3 wiring).</summary>
     public void ScrollBy(float delta) => ScrollByImpl?.Invoke(delta);
+
+    /// <summary>The drag-reorder EDGE AUTO-SCROLL seam: set (or replace) a continuous scroll velocity (DIP/s, signed
+    /// along the view's scroll axis) for as long as the pointer holds near a viewport edge; 0 stops it. Posts the
+    /// kernel's <c>SetVelocity</c> — an Autoscroll <c>ScrollActivity</c>, coasting smoothly rather than the per-event
+    /// instant jump <see cref="ScrollBy"/> gives. No-op for non-virtual hosts.</summary>
+    public void SetAutoScrollVelocity(float dipPerS) => SetAutoScrollVelocityImpl?.Invoke(dipPerS);
 
     /// <summary>Correct a cached measured extent, preserving the current visible anchor and every active scroll intent.
     /// This is the unrealized-row counterpart to the layout engine's normal measure feedback: use it when transient UI
@@ -435,6 +447,10 @@ public sealed class ItemsView : Component
     public ItemsViewController? Controller;
     /// <summary>Identity-stable two-way controller for this view's vertical viewport.</summary>
     public IScrollController? VerticalScrollController;
+    /// <summary>The ONE authoring handle over this view's live scroll viewport (scroll-v3-plan §7.2) — forwarded
+    /// straight onto the built <see cref="VirtualListEl.Controller"/>; the reconciler attaches/detaches it. Distinct
+    /// from <see cref="VerticalScrollController"/> (the annotated-rail seam).</summary>
+    public FluentGpu.Scroll.ScrollController? ScrollHandle;
     /// <summary>WinUI <c>ItemTransitionProvider</c> (ItemsView.idl:45, template-bound onto the inner repeater,
     /// ItemsView.xaml:30): the collection transition stamped onto each realized container root — Adds/Removes
     /// fade, Moves FLIP, 167ms decelerate (<see cref="ItemCollectionTransition"/>).</summary>
@@ -503,10 +519,6 @@ public sealed class ItemsView : Component
     /// <summary>Scroll-position restoration key (see <see cref="VirtualListEl.ScrollKey"/>): a stable per-content identity
     /// so a revisit lands at the saved row on the first realized window. Forwarded onto the built VirtualListEl.</summary>
     public string? ScrollKey;
-    /// <summary>CSS <c>scroll-timeline-name</c> (see <see cref="VirtualListEl.ScrollTimeline"/>): publish this viewport's
-    /// offset under a NAME so a node OUTSIDE it can drive a <c>ScrollBindDsl.Timeline</c> bind from it. Forwarded onto the
-    /// built VirtualListEl.</summary>
-    public string? ScrollTimeline;
     /// <summary>Viewport-space top clip applied as one shared band to recyclable items after
     /// <see cref="PersistentPrefixCount"/>. NaN disables it.</summary>
     public float ItemClipTopInset = float.NaN;
@@ -567,13 +579,13 @@ public sealed class ItemsView : Component
             IsItemEnabled = o.IsItemEnabled,
             Controller = o.Controller,
             VerticalScrollController = o.Scroll?.VerticalScrollController,
+            ScrollHandle = o.Scroll?.Controller,
             OverscanItems = o.Overscan,
             ContainerFactory = o.ContainerFactory,
             KeyOf = o.KeyOf,
             Grow = o.Grow,
             SuppressScrollBar = o.Scroll?.SuppressScrollBar ?? false,
             ScrollKey = o.Scroll?.ScrollKey,
-            ScrollTimeline = o.Scroll?.ScrollTimeline,
             ItemClipTopInset = o.Scroll?.ItemClipTopInset ?? float.NaN,
             ItemClipTopFadeBand = o.Scroll?.ItemClipTopFadeBand ?? 0f,
             EdgeCues = o.Scroll?.EdgeCues ?? ScrollEdgeCues.Auto,
@@ -629,11 +641,11 @@ public sealed class ItemsView : Component
             IsItemEnabled = o.IsItemEnabled,
             Controller = o.Controller,
             VerticalScrollController = o.Scroll?.VerticalScrollController,
+            ScrollHandle = o.Scroll?.Controller,
             OverscanItems = o.Overscan,
             Grow = o.Grow,
             SuppressScrollBar = o.Scroll?.SuppressScrollBar ?? false,
             ScrollKey = o.Scroll?.ScrollKey,
-            ScrollTimeline = o.Scroll?.ScrollTimeline,
             ItemClipTopInset = o.Scroll?.ItemClipTopInset ?? float.NaN,
             ItemClipTopFadeBand = o.Scroll?.ItemClipTopFadeBand ?? 0f,
             EdgeCues = o.Scroll?.EdgeCues ?? ScrollEdgeCues.Auto,
@@ -980,9 +992,8 @@ public sealed class ItemsView : Component
                     target -= frl.LeadInset;
             }
 
-            // Animated (WinUI AnimationDesired) arms the phase-7 ScrollIntegrator for the crit-damped programmatic
-            // chase; snap (default) writes Offset==Target and applies the -offset content transform now. Clamping to
-            // [0, content − viewport] happens inside the seam.
+            // Animated (WinUI AnimationDesired) posts a Driven chase to the scroll kernel; snap (default) posts an
+            // immediate ScrollTo. Clamping to [0, content − viewport] happens inside the seam.
             ScrollIntoView.ScrollTo(Context, vp, target, animate);
         }
 
@@ -1070,46 +1081,32 @@ public sealed class ItemsView : Component
             if (on) sceneRef.Mark(n, NodeFlags.Focusable); else sceneRef.Unmark(n, NodeFlags.Focusable);
         }
 
-        // Edge auto-scroll seam (drag reorder near the viewport edge): nudge Offset/Target by a clamped delta.
+        // Instant coordinate-frame rebase (drag-reorder anchor correction, e.g. DetailTracks.Choreograph — must land
+        // THIS frame, exactly, never eased): post the kernel's AnchorShift, which "rebases every intent" (plan §2.1) —
+        // the same single POD write path Reclamp uses for a layout-time re-pin, just posted from outside the frame loop.
         void ScrollByDelta(float delta)
+        {
+            if (sceneRef is null || delta == 0f) return;
+            var vp = viewportNode.Value;
+            if (vp.IsNull || !sceneRef.IsLive(vp) || !sceneRef.HasScroll(vp)) return;
+            sceneRef.ScrollPort!.Post(ScrollInput.AnchorShift((int)vp.Raw.Index, delta));
+            // WAKE, don't re-render — the kernel's Reclamp resolves the shift (offset + content transform +
+            // VirtualRangeDirty) on its own; re-rendering the whole ItemsView here was the entire measured UI-thread
+            // allocation of a programmatic scroll (Reconciler.ReRealizeVirtuals already drains the virtual window
+            // granularly per frame with no component re-render needed).
+            (Context.RequestFrame ?? Context.RequestRerender)();
+        }
+
+        // Edge auto-scroll seam (drag reorder near the viewport edge, E5-L3, ItemsViewPresets.OnDragDelta): a HELD
+        // continuous scroll for as long as the pointer sits in the edge band — the kernel's SetVelocity/Autoscroll,
+        // not a one-shot AnchorShift (a per-pointer-move instant jump reads as micro-stutter at drag speed; a velocity
+        // coasts smoothly and stops cleanly with one SetVelocity(0) on leave/drop).
+        void SetAutoScrollVelocity(float dipPerS)
         {
             if (sceneRef is null) return;
             var vp = viewportNode.Value;
             if (vp.IsNull || !sceneRef.IsLive(vp) || !sceneRef.HasScroll(vp)) return;
-            ref ScrollState sc = ref sceneRef.ScrollRef(vp);
-            float viewport = horizontal ? sc.ViewportW : sc.ViewportH;
-            float content = horizontal ? sc.ContentW : sc.ContentH;
-            float offsetNow = horizontal ? sc.OffsetX : sc.OffsetY;
-            // Zoom-scaled max — the dispatcher's clamp contract (identical on the ZoomFactor==1 path).
-            float zr = sc.ZoomFactor > 0f ? sc.ZoomFactor : 1f;
-            float maxOffset = MathF.Max(0f, content * zr - viewport);
-            float target = Math.Clamp(offsetNow + delta, 0f, maxOffset);
-            if (target == offsetNow) return;
-            if (horizontal) { sc.OffsetX = target; sc.TargetX = target; }
-            else { sc.OffsetY = target; sc.TargetY = target; }
-            var contentNode = sc.ContentNode;
-            if (!contentNode.IsNull && sceneRef.IsLive(contentNode))
-            {
-                // Device-pixel-snapped, zoom-aware, band-composed — the shared writer (a raw Translation here painted
-                // an unsnapped/unzoomed transform until the next ArrangeViewport healed it).
-                ref NodePaint paint = ref sceneRef.Paint(contentNode);
-                float band = OverscrollPhysics.GuardBandSign(sc.OverscrollPx, target, maxOffset);
-                if (sc.Overscrolling && band != sc.OverscrollPx) sc.OverscrollPx = band;
-                OverscrollPhysics.WriteContentTransform(ref paint, in sceneRef.Bounds(contentNode), horizontal, target,
-                    band, sc.ZoomFactor, sceneRef.DeviceScale);
-                sceneRef.Mark(contentNode, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
-            }
-            sceneRef.Mark(vp, NodeFlags.VirtualRangeDirty);
-            // WAKE, don't re-render. Everything this scroll needs is already written above: the offset + target on the
-            // ScrollState POD, the content transform, and VirtualRangeDirty on the viewport — which the reconciler's
-            // ReRealizeVirtuals drains granularly each frame ("no component re-render", Reconciler.ReRealizeVirtuals).
-            // Re-rendering the whole ItemsView produced a byte-identical element tree (same count, memoized layout,
-            // same VirtualListEl props) and was the entire measured UI-thread allocation of a programmatic scroll —
-            // the list element, every template/rowBind closure and the keyed diff of the result, rebuilt per ScrollBy.
-            // The frame WAKE is the only load-bearing part, so take that alone. (The engine's own wheel/fling path
-            // never re-rendered here — its RequestRerender is already wired to WakeFrame — so this makes the
-            // controller-driven scroll behave like the input-driven one.)
-            (Context.RequestFrame ?? Context.RequestRerender)();
+            sceneRef.ScrollPort!.Post(ScrollInput.SetVelocity((int)vp.Raw.Index, dipPerS));
         }
 
         // An off-screen variable row cannot feed its collapsed size through ArrangeVirtualMeasured. Apply that one
@@ -1141,43 +1138,35 @@ public sealed class ItemsView : Component
             float oldMain = horizontal ? expectedLayout.ItemRect(index, cross).W : expectedLayout.ItemRect(index, cross).H;
             if (oldMain == mainExtent) return true;
 
-            expectedLayout.SetMeasured(index, mainExtent, cross);
+            expectedLayout.SetMeasured(index, mainExtent, cross);   // the layout-table mutation — kept verbatim
             float mainContent = expectedLayout.ContentExtent(sc.ItemCount, cross);
-            // Zoom-scaled max, the dispatcher's clamp contract (identical on the ZoomFactor==1 path).
-            float zc = sc.ZoomFactor > 0f ? sc.ZoomFactor : 1f;
-            float maxOffset = MathF.Max(0f, mainContent * zc - viewport);
-            float pinned = Math.Clamp(expectedLayout.OffsetOf(anchorIndex, cross) + anchorWithin, 0f, maxOffset);
+            // Unclamped on purpose: the kernel's Reclamp owns the zoom-scaled [0, content − viewport] clamp for every
+            // frame recipient of SetFrame (plan §3.3) — posting the raw pinned target here and letting Reclamp settle
+            // it is the same "never finalize a clamp ahead of the kernel" contract CorrectMeasuredExtent's old TargetX/Y
+            // pre-clamp existed to approximate by hand.
+            float pinned = expectedLayout.OffsetOf(anchorIndex, cross) + anchorWithin;
             float delta = pinned - oldOffset;
 
-            if (horizontal) { sc.OffsetX = pinned; sc.ContentW = mainContent; }
-            else            { sc.OffsetY = pinned; sc.ContentH = mainContent; }
+            if (horizontal) sc.ContentW = mainContent; else sc.ContentH = mainContent;
             sc.AnchorIndex = anchorIndex;
-            sc.RebaseAnchorIntents(delta, horizontal);
-            // This seam can run after phase 6, so clamp chase destinations against the corrected extent immediately;
-            // otherwise phase 7 gets one tick against an out-of-range target before ArrangeViewport can reclamp it.
-            if (horizontal)
-            {
-                sc.TargetX = Math.Clamp(sc.TargetX, 0f, maxOffset);
-                if (!float.IsNaN(sc.PendingTargetX)) sc.PendingTargetX = Math.Clamp(sc.PendingTargetX, 0f, maxOffset);
-            }
-            else
-            {
-                sc.TargetY = Math.Clamp(sc.TargetY, 0f, maxOffset);
-                if (!float.IsNaN(sc.PendingTargetY)) sc.PendingTargetY = Math.Clamp(sc.PendingTargetY, 0f, maxOffset);
-            }
 
-            float band = OverscrollPhysics.GuardBandSign(sc.OverscrollPx, pinned, maxOffset);
-            if (sc.Overscrolling && band != sc.OverscrollPx) sc.OverscrollPx = band;
+            var spec = new ScrollFrameSpec(
+                Orientation: sc.Orientation,
+                ExtentMain: mainContent,
+                ExtentCross: cross,
+                ViewportMain: viewport,
+                ViewportCross: horizontal ? sc.ViewportH : sc.ViewportW,
+                Zoom: sc.ZoomFactor,
+                ContentSized: sc.ContentSized,
+                SnapInterval: sc.SnapInterval,
+                SnapStart: sc.SnapStart,
+                SnapEnd: sc.SnapEnd,
+                SnapPoints: sc.SnapPoints);
 
-            var contentNode = sc.ContentNode;
-            if (!contentNode.IsNull && sceneRef.IsLive(contentNode))
-            {
-                ref NodePaint paint = ref sceneRef.Paint(contentNode);
-                OverscrollPhysics.WriteContentTransform(ref paint, in sceneRef.Bounds(contentNode), horizontal, pinned,
-                    band, sc.ZoomFactor, sceneRef.DeviceScale);
-                sceneRef.Mark(contentNode, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
-            }
-            sceneRef.Mark(vp, NodeFlags.LayoutDirty | NodeFlags.VirtualRangeDirty | NodeFlags.PaintDirty);
+            var port = sceneRef.ScrollPort!;
+            port.Post(ScrollInput.AnchorShift((int)vp.Raw.Index, delta));
+            port.Post(ScrollInput.SetFrame((int)vp.Raw.Index, in spec));
+            sceneRef.Mark(vp, NodeFlags.LayoutDirty | NodeFlags.VirtualRangeDirty);
             (Context.RequestFrame ?? Context.RequestRerender)();
             return true;
         }
@@ -1194,14 +1183,13 @@ public sealed class ItemsView : Component
         {
             if (horizontal || sceneRef is null) return;
             var vp = viewportNode.Value;
-            if (vp.IsNull || !sceneRef.IsLive(vp) || !sceneRef.TryGetScroll(vp, out var sc)) return;
-            // Accumulate on the live chase target when one is armed — the dispatcher's own wheel idiom
-            // (SetPendingWheelTarget bases the next notch on PendingTarget, not the animating offset). Re-basing a
-            // second notch on the mid-chase offset silently ate most of its travel.
-            float from = request.Animate && sc.Phase == ScrollIntegrator.WheelAnimating && !float.IsNaN(sc.PendingTargetY)
-                ? sc.PendingTargetY
-                : sc.OffsetY;
-            ScrollIntoView.ScrollTo(Context, vp, from + request.Delta, request.Animate);
+            if (vp.IsNull || !sceneRef.IsLive(vp) || !sceneRef.HasScroll(vp)) return;
+            // The kernel's ScrollBy accumulates on the live Driven-chase target when one is already armed (the same
+            // "second notch bases off the pending target, not the mid-chase offset" contract the old wheel idiom read
+            // ScrollState.Phase/PendingTargetY back here for — now owned end-to-end by the kernel).
+            sceneRef.ScrollPort!.Post(ScrollInput.ScrollBy((int)vp.Raw.Index, request.Delta,
+                immediate: !request.Animate, halflifeMs: 0));
+            Context.RequestRerender();
         }
 
         void MoveCurrent(int next, bool ctrl, bool shift, float alignmentRatio = float.NaN)
@@ -1443,6 +1431,7 @@ public sealed class ItemsView : Component
             ctl.GetCurrent = current.Peek;
             ctl.Selection = model;
             ctl.ScrollByImpl = ScrollByDelta;
+            ctl.SetAutoScrollVelocityImpl = SetAutoScrollVelocity;
             ctl.CorrectMeasuredExtentImpl = CorrectMeasuredExtent;
             ctl.IsItemRealizedImpl = index =>
             {
@@ -1498,6 +1487,7 @@ public sealed class ItemsView : Component
                 ctl.TryGetItemIndexImpl = null;
                 ctl.GetCurrent = null;
                 ctl.ScrollByImpl = null;
+                ctl.SetAutoScrollVelocityImpl = null;
                 ctl.CorrectMeasuredExtentImpl = null;
                 ctl.IsItemRealizedImpl = null;
                 ctl.GetViewportImpl = null;
@@ -1760,9 +1750,10 @@ public sealed class ItemsView : Component
         };
 
         // ItemTransitionProvider (ItemsView.idl:45 → the inner repeater, ItemsView.xaml:30): stamp the collection
-        // transition onto each realized container root. The non-virtual fallback passes it to ItemsRepeater instead.
+        // transition onto each realized container root. The non-virtual fallback (BuildNonVirtualList) wraps the
+        // same way for its own child list.
         Func<int, Element> realizeTemplate = Transition is { } tr
-            ? Repeater.WrapTransition(containerTemplate, tr.ToSpec())
+            ? WrapTransition(containerTemplate, tr.ToSpec())
             : containerTemplate;
 
         // Bound (signals-first) realize: build the row ONCE per slot from a RowScope of per-row read-signals (the index
@@ -1816,7 +1807,7 @@ public sealed class ItemsView : Component
                 AutoEdgeFadeBand = AutoEdgeFadeBand,
                 SuppressScrollBar = SuppressScrollBar,
                 ScrollKey = ScrollKey,
-                ScrollTimeline = ScrollTimeline,
+                Controller = ScrollHandle,
                 ItemClipTopInset = ItemClipTopInset,
                 ItemClipTopFadeBand = ItemClipTopFadeBand,
                 OnScrollGeometryChanged = geometryObserver,
@@ -1840,7 +1831,7 @@ public sealed class ItemsView : Component
                 AutoEdgeFadeBand = AutoEdgeFadeBand,
                 SuppressScrollBar = SuppressScrollBar,
                 ScrollKey = ScrollKey,
-                ScrollTimeline = ScrollTimeline,
+                Controller = ScrollHandle,
                 ItemClipTopInset = ItemClipTopInset,
                 ItemClipTopFadeBand = ItemClipTopFadeBand,
                 OnScrollGeometryChanged = geometryObserver,
@@ -1854,7 +1845,7 @@ public sealed class ItemsView : Component
             }
             // Wrap/Inline small-collection fallback (always a BoxEl) — capture the host box so FocusIndex can
             // walk its children (ord == index; no scroll state).
-            : ((BoxEl)Repeater.ItemsRepeater(count, containerTemplate, in spec, keyOf: KeyOf, transition: Transition))
+            : BuildNonVirtualList(count, containerTemplate, KeyOf, Transition, in spec)
                 with { OnRealized = h => viewportNode.Value = h };
 
         // Declarative insertion: the view hosts its OWN drop surface — the list body, the in-gap preview and the
@@ -1902,6 +1893,34 @@ public sealed class ItemsView : Component
             Justify = FlexJustify.Center,
             Children = [new TextEl(i < Items.Count ? Items[i] : string.Empty) { Size = 13f, Color = Tok.TextPrimary }],
         };
+
+    /// <summary>Stamp the collection-transition spec onto each item ROOT (only a <see cref="BoxEl"/> can carry
+    /// <c>Animate</c>; an explicit author spec wins) — the ItemTransitionProvider seam (ItemsView.idl:45) shared by
+    /// both the virtual realize template and <see cref="BuildNonVirtualList"/>.</summary>
+    private static Func<int, Element> WrapTransition(Func<int, Element> template, LayoutTransition spec)
+        => i =>
+        {
+            var el = template(i);
+            return el is BoxEl b && b.Animate is null ? b with { Animate = spec } : el;
+        };
+
+    /// <summary>Wrap/Inline small-collection fallback (<see cref="RepeatKind.Wrap"/>/<see cref="RepeatKind.Inline"/>):
+    /// build the WHOLE keyed child list up front (no virtualization/recycling — for small collections like a nav
+    /// pane or a toolbar).</summary>
+    private static BoxEl BuildNonVirtualList(int count, Func<int, Element> template, Func<int, string>? keyOf,
+                                             ItemCollectionTransition? transition, in RepeatLayout spec)
+    {
+        Func<int, Element> tpl = transition is { } tr ? WrapTransition(template, tr.ToSpec()) : template;
+        var children = count <= 0 ? [] : new Element[count];
+        for (int i = 0; i < count; i++)
+        {
+            var el = tpl(i);
+            children[i] = keyOf is null ? el : el with { Key = keyOf(i) };
+        }
+        return spec.Kind == RepeatKind.Wrap
+            ? new BoxEl { Direction = 0, Wrap = true, Gap = spec.Gap, Children = children }
+            : new BoxEl { Direction = spec.Horizontal ? (byte)0 : (byte)1, Gap = spec.Gap, Children = children };
+    }
 }
 
 /// <summary>

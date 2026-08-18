@@ -527,13 +527,11 @@ static class LayoutShellSuite
         host.RunFrame();
         var s = host.Scene;
         var vp = PlainViewport(s, s.Root);
-        var content = s.ScrollRef(vp).ContentNode;
-        ref ScrollState st = ref s.ScrollRef(vp);
-        st.OffsetY = 260f;
-        st.TargetY = 260f;
-        s.Paint(content).LocalTransform = Affine2D.Translation(0f, -260f);
-        s.Mark(content, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
-        ScrollBindEval.ApplyContinuous(s, vp, ref st);
+        // scroll-v3: OffsetY/TargetY are gone as pokeable columns and ApplyContinuous is now called by
+        // SceneScrollSink.Apply itself — post an immediate ScrollTo and paint a frame so the kernel/sink resolve the
+        // offset, content transform, and bind eval before this baseline read.
+        host.ScrollKernel.Port.Post(FluentGpu.Scroll.ScrollInput.ScrollTo((int)vp.Raw.Index, 260f, immediate: true));
+        host.Paint(0, keepAlive: true);
         float collapsedBefore = s.Paint(probe.Hero).PresentedH;
 
         float mediaBefore = s.Paint(probe.Media).Opacity;
@@ -578,13 +576,9 @@ static class LayoutShellSuite
             host.RunFrame();
             var s = host.Scene;
             var vp = PlainViewport(s, s.Root);
-            var content = s.ScrollRef(vp).ContentNode;
-            ref ScrollState st = ref s.ScrollRef(vp);
-            st.OffsetY = 260f;
-            st.TargetY = 260f;
-            s.Paint(content).LocalTransform = Affine2D.Translation(0f, -260f);
-            s.Mark(content, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
-            ScrollBindEval.ApplyContinuous(s, vp, ref st);
+            // scroll-v3: OffsetY/TargetY are gone as pokeable columns and ApplyContinuous is now called by
+            // SceneScrollSink.Apply itself — post an immediate ScrollTo and let the kernel/sink resolve everything.
+            host.ScrollKernel.Port.Post(FluentGpu.Scroll.ScrollInput.ScrollTo((int)vp.Raw.Index, 260f, immediate: true));
             host.Paint(0, keepAlive: true);
             float collapsed = s.Paint(probe.Hero).PresentedH;
             float mediaCollapsed = s.Paint(probe.Media).Opacity;
@@ -838,10 +832,12 @@ static class LayoutShellSuite
 
         bool overflow = ssc.ContentH > ssc.ViewportH + 1f;
         bool scrolled = ssc.OffsetY > 1f;
-        bool barRevealed = ssc.FadeT > 0.01f;
+        // scroll-v3: FadeT moved out of ScrollState into the chrome side-table (scroll-v3-plan §3.1).
+        float fadeT = host.Scene.ScrollChrome.Get((int)vpn.Raw.Index).FadeT;
+        bool barRevealed = fadeT > 0.01f;
         Check("S4. navview: overflowing sidebar scrolls on wheel + reveals the auto-hiding scrollbar",
             !vpn.IsNull && overflow && scrolled && barRevealed,
-            $"offY={ssc.OffsetY:0.#} contentH={ssc.ContentH:0.#} vpH={ssc.ViewportH:0.#} fadeT={ssc.FadeT:0.00}");
+            $"offY={ssc.OffsetY:0.#} contentH={ssc.ContentH:0.#} vpH={ssc.ViewportH:0.#} fadeT={fadeT:0.00}");
     }
 
     static void WrapChecks(StringTable strings)
@@ -1428,6 +1424,9 @@ static class LayoutShellSuite
             $"realized={realized} content={sc.ContentH:0} cell0w={b0.W:0} live {live0}→{liveEnd}");
     }
 
+    // Scroll-v3 WP-R3: the Repeater-shape assertions (Inline eagerly returns a BoxEl; Stack eagerly returns a
+    // VirtualListEl) inspected Repeater's own deleted mechanics — ItemsView.Create always returns a Component-wrapped
+    // Element (Embed.Comp), so there is no equivalent eager-shape check; only the ZStack-overlay assertion survives.
     static void ZStackRepeaterChecks(StringTable strings)
     {
         var scene = LayoutTree(strings, Ui.ZStack(
@@ -1437,12 +1436,8 @@ static class LayoutShellSuite
         var z1 = scene.AbsoluteRect(Child(scene, scene.Root, 1));
         bool zstack = Near(z0.X, 0) && Near(z0.Y, 0) && Near(z1.X, 0) && Near(z1.Y, 0) && Near(z0.W, 120) && Near(z1.W, 60);
 
-        var inlineEl = Repeater.ItemsRepeater(5, i => new BoxEl { Width = 10, Height = 10 }, RepeatLayout.Inline(gap: 2f), keyOf: i => "k" + i);
-        bool inlineN = inlineEl is BoxEl box && box.Children.Length == 5 && box.Children[0].Key == "k0";
-        bool stackVirtual = Repeater.ItemsRepeater(1000, i => new BoxEl(), RepeatLayout.Stack(40f)) is VirtualListEl;
-
-        Check("55. ZStack overlays at origin; ItemsRepeater builds (Inline) / virtualizes (Stack)", zstack && inlineN && stackVirtual,
-            $"z0=({z0.X:0},{z0.Y:0}) z1=({z1.X:0},{z1.Y:0}) inlineN={inlineN} stackVirt={stackVirtual}");
+        Check("55. ZStack overlays at origin", zstack,
+            $"z0=({z0.X:0},{z0.Y:0}) z1=({z1.X:0},{z1.Y:0})");
     }
 
     /// <summary>gate.layout.zstack-align — a ZStack aligns on BOTH axes (the WinUI overlay-Grid model): the container's

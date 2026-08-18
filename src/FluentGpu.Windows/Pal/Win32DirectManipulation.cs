@@ -3,8 +3,8 @@ using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
-using FluentGpu.Foundation;   // Point2, KeyModifiers, ScrollLog, ScrollTrace
-using FluentGpu.Pal;          // InputEvent, InputKind, PointerKind, ScrollDeviceClass
+using FluentGpu.Foundation;   // Point2, KeyModifiers, ScrollLog, ScrollTrace, Diag
+using FluentGpu.Pal;          // InputEvent, InputKind, PointerKind, ScrollDeviceClass, FrameClock
 using TerraFX.Interop.DirectX;
 using TerraFX.Interop.Windows;
 using static TerraFX.Interop.Windows.Windows;
@@ -12,13 +12,32 @@ using static TerraFX.Interop.Windows.Windows;
 namespace FluentGpu.Pal.Windows;
 
 /// <summary>
-/// Phase D of scroll-feel-rework-v2 (§7): the DirectManipulation touchpad producer — the recommended fidelity ceiling.
+/// The DirectManipulation touchpad producer (scroll-v3-plan-2026-08-17.md §5.2): ONE
+/// <c>IDirectManipulationUpdateManager::Update</c> per PRODUCED frame, issued from <c>Win32Platform.PumpScroll</c>
+/// (<see cref="FluentGpu.Pal.IPlatformWindow.PumpScroll"/>) AFTER the display-phase gate has already decided this
+/// frame is going to be produced, stamped with the SAME <see cref="FrameClock"/> the scroll kernel ticks against and
+/// the physics clock reads — DM, physics and present now share one target time. There is no manual-update pacer, no
+/// idle heartbeat and no wall-clock deadline anywhere in this file: a live gesture gets exactly one <c>Update</c> per
+/// produced frame (<see cref="UpdateFrame"/>), and the MANUALUPDATE queue is otherwise drained on demand
+/// (<see cref="UpdateIdle"/>, called by the host roughly every 250ms while <see cref="Enabled"/> and not
+/// <see cref="Live"/> — see <c>Win32Platform.PumpInto</c>). <see cref="LastUpdateMs"/> is the one shared clock those
+/// two entry points and the host's idle-drain threshold read.
 ///
-/// <para>It is a <b>pure producer swap</b>: it emits the exact same <see cref="InputKind.ScrollBegin"/>/<c>Update</c>/<c>End</c>
-/// + <see cref="InputKind.MomentumBegin"/>/<c>Update</c>/<c>End</c> phase-contract events the landed integrator already
-/// consumes (<c>InputDispatcher.OnScrollPhase</c>), tagged <see cref="ScrollDeviceClass.Touchpad"/>. Nothing downstream
-/// changes — DM just replaces the §3.3 wheel-classifier heuristic with real <c>PT_TOUCHPAD</c> contacts, true finger-lift,
-/// and OS-curved momentum, eliminating R4 (touchpad-vs-wheel guessing).</para>
+/// <para>It emits the <see cref="InputKind.ScrollBegin"/>/<see cref="InputKind.ScrollDelta"/>/<see cref="InputKind.ScrollEnd"/>
+/// phase-contract the <c>FluentGpu.Scroll.ScrollKernel</c> consumes, tagged <see cref="ScrollDeviceClass.Touchpad"/> —
+/// one <see cref="InputKind.ScrollDelta"/> per produced frame, stamped <c>QpcTicks = clock.FrameQpc</c>, which is why
+/// <c>ScrollTrace.ContactStampQuality</c> reads HARDWARE-grade here rather than the old receive-quantised grade (the
+/// packet no longer arrives at the producer's own pump rate — it IS the frame's own stamp). PTP inertia is
+/// ENGINE-owned: the PRIMARY configuration (<see cref="DM_CFG"/>) does not include
+/// <c>TRANSLATION_INERTIA</c>/<c>SCALING_INERTIA</c> at all, so DM lifts straight RUNNING→READY and that lift alone is
+/// the kernel's cue (<see cref="InputKind.ScrollEnd"/>) to seed its own Ballistic fling from the trailing frame-delta
+/// history — there is no OS-curved coast left to ride, and no <c>Momentum*</c> kind exists to carry one. A
+/// compile-time-only fallback (<see cref="UseOsInertiaStopFallback"/>, default OFF) exists for the case dm-probe cell
+/// E/F (§5.6) finds the bare lift misbehaving on some hardware: flipping the const keeps <c>TRANSLATION_INERTIA</c> in
+/// <see cref="DM_CFG"/>, lets DM enter INERTIA, and stops it from the OUTSIDE — <c>IDirectManipulationViewport::Stop</c>
+/// is MSDN-documented legal in any viewport state — at the next pump rather than ride the curve; see
+/// <see cref="HandleStatusChanged"/> and the <c>_pendingStop</c> field for why that <c>Stop()</c> cannot run inside the
+/// COM sink callback that observes the INERTIA transition (same reason as <c>_pendingStrike</c> below).</para>
 ///
 /// <para><b>COM discipline (com-interop.md).</b> Event-source only, all UI-thread. The DManip objects
 /// (<c>Manager</c>/<c>UpdateManager</c>/<c>Viewport</c>/<c>Content</c>) are consumed through TerraFX's hand-vtable RCW
@@ -28,81 +47,70 @@ namespace FluentGpu.Pal.Windows;
 /// released on every path (<see cref="Teardown"/>), and the whole file lives inside <c>FluentGpu.Windows</c> so the
 /// engine / Controls / VerticalSlice closure stays TerraFX-free.</para>
 ///
-/// <para><b>Coexistence with the fallback (§7, "never two owners for one packet").</b> When DM is enabled it owns every
-/// touchpad contact — its <c>ProcessInput</c> consumes those packets before the WndProc sees them, so the §3.3
-/// wheel-fallback path never double-processes them, and any <c>WM_POINTERWHEEL</c> that still reaches the WndProc is
-/// genuinely a mouse (classifier rule 4 becomes exact). Every way DManip can stop serving the touchpad — the engage
-/// wedge (<see cref="DmEngageTimeoutMs"/>), a SUSPENDED read while an engage is pending, the inertia stall
-/// (<see cref="DmInertiaStallTimeoutMs"/>) and the silent-owner case (<see cref="DmSilentOwner"/>: DM holds the
-/// contacts but never engages) — feeds ONE <see cref="DmRecoveryLadder"/>, which escalates Stop → recycle → session
-/// disable (<see cref="Teardown"/>), after which the always-compiled §3.3 heuristic takes over. Popups never get a
-/// producer, so they keep the fallback unconditionally.</para>
+/// <para><b>Coexistence with the fallback (§5.3 wheel classifier, "never two owners for one packet").</b> When DM is
+/// enabled it owns every touchpad contact — its <c>ProcessInput</c> consumes those packets before the WndProc sees
+/// them, so the wheel-fallback path never double-processes them, and any <c>WM_POINTERWHEEL</c> that still reaches the
+/// WndProc is genuinely a mouse. The MINIMAL recovery ladder that survives the rewrite — the engage wedge
+/// (<see cref="DmEngageTimeoutMs"/>), a SUSPENDED read while an engage is pending, and the silent-owner case
+/// (<see cref="DmSilentOwner"/>: DM holds the contacts but never engages) — feeds ONE <see cref="DmRecoveryLadder"/>,
+/// which escalates Stop → recycle → session disable (<see cref="Teardown"/>), after which the always-compiled §5.3
+/// heuristic takes over. The dedicated inertia-stall watchdog is DELETED: with RUNNING folded into liveness it killed a
+/// genuine two-finger hold-then-continue after 250ms — a real bug, not a safety net. Popups never get a producer, so
+/// they keep the fallback unconditionally.</para>
 /// </summary>
 internal sealed unsafe class Win32DirectManipulation : IDisposable
 {
     // ── DIRECTMANIPULATION_STATUS (directmanipulation.h) — the viewport lifecycle we map to phase-contract events ──
-    // internal, not private: the pure wedge/stall arbiters below (and their headless tests) decide off these values.
+    // internal, not private: the pure wedge/silent-owner arbiters below (and their headless tests) decide off these values.
     internal const int DM_BUILDING = 0, DM_ENABLED = 1, DM_DISABLED = 2, DM_RUNNING = 3, DM_INERTIA = 4, DM_READY = 5,
                        DM_SUSPENDED = 6;
 
+    /// <summary>Compile-time-only switch (scroll-v3-plan §5.2): OFF (default) is the primary producer — no OS
+    /// inertia, ever, and DM lifts RUNNING→READY directly. ON keeps <c>TRANSLATION_INERTIA</c> configured and stops a
+    /// live INERTIA manipulation from the outside instead of riding its curve (see the class remarks and
+    /// <see cref="HandleStatusChanged"/>). Flip this ONE constant — never a runtime knob — if hardware verification
+    /// (dm-probe cell E, §5.6) finds the bare RUNNING→READY lift misbehaving (a stray post-lift
+    /// <c>WM_POINTERWHEEL</c>, a late/duplicated status callback, …).</summary>
+    private const bool UseOsInertiaStopFallback = false;
+
     // ── DIRECTMANIPULATION_CONFIGURATION flags (directmanipulation.h), verified against the dm-probe cell-B PASS ──
-    //   INTERACTION|TRANSLATION_X|TRANSLATION_Y|SCALING|TRANSLATION_INERTIA|SCALING_INERTIA. No RAILS_* — the integrator's
-    //   axis latch owns railing (§7). SCALING(+INERTIA) is configured only so a pinch is a legal gesture we can DETECT and
-    //   suppress (|scale-1|>ε ⇒ emit no pan); we never translate a scale into scroll.
+    //   Primary: INTERACTION|TRANSLATION_X|TRANSLATION_Y|SCALING — NO TRANSLATION_INERTIA/SCALING_INERTIA (§5.2: PTP
+    //   inertia is engine-owned; there is no OS coast to configure). SCALING stays configured (without SCALING_INERTIA)
+    //   only so a pinch is a legal gesture we can DETECT and suppress (|scale-1|>ε ⇒ emit no pan); we never translate a
+    //   scale into scroll. No RAILS_* — the integrator's axis latch owns railing. TRANSLATION_INERTIA is added back ONLY
+    //   when UseOsInertiaStopFallback flips true (both const, so this folds to a compile-time value — no runtime cost,
+    //   no dead branch left in the shipped primary build).
     private const int DM_CFG =
         (int)(DIRECTMANIPULATION_CONFIGURATION.DIRECTMANIPULATION_CONFIGURATION_INTERACTION
             | DIRECTMANIPULATION_CONFIGURATION.DIRECTMANIPULATION_CONFIGURATION_TRANSLATION_X
             | DIRECTMANIPULATION_CONFIGURATION.DIRECTMANIPULATION_CONFIGURATION_TRANSLATION_Y
-            | DIRECTMANIPULATION_CONFIGURATION.DIRECTMANIPULATION_CONFIGURATION_SCALING
-            | DIRECTMANIPULATION_CONFIGURATION.DIRECTMANIPULATION_CONFIGURATION_TRANSLATION_INERTIA
-            | DIRECTMANIPULATION_CONFIGURATION.DIRECTMANIPULATION_CONFIGURATION_SCALING_INERTIA);
+            | DIRECTMANIPULATION_CONFIGURATION.DIRECTMANIPULATION_CONFIGURATION_SCALING)
+        | (UseOsInertiaStopFallback ? (int)DIRECTMANIPULATION_CONFIGURATION.DIRECTMANIPULATION_CONFIGURATION_TRANSLATION_INERTIA : 0);
 
-    // ── §7/§4.6 tuning: DManip-only constants (they belong to the Windows producer, not the portable ScrollTuning) ──
-    /// <summary>Frozen DIP per content-transform unit (§7, "no knee"). The 1000×1000 viewport rect is in physical px, so
+    // ── §5.2 tuning: DManip-only constants (they belong to the Windows producer, not the portable ScrollKernel) ──
+    /// <summary>Frozen DIP per content-transform unit (no knee). The 1000×1000 viewport rect is in physical px, so
     /// the content-transform translation is in physical device px; DIP = px / (dpi/96). DManip returns true OS device
     /// pixels — no <c>HiResUnitDip</c> calibration.</summary>
     private const float DmDipPerTransformUnit = 1.0f;
-    /// <summary>|scale−1| beyond this ⇒ the gesture is a pinch, not a pan ⇒ emit no pan (§7).</summary>
+    /// <summary>|scale−1| beyond this ⇒ the gesture is a pinch, not a pan ⇒ emit no pan.</summary>
     private const float DmPinchScaleEpsilon = 0.01f;
     /// <summary>Transform-unit delta below which a content update is treated as a no-op (skips zero-delta spam; well below
     /// the smallest real inertia-tail delta observed in the probe, ~0.1u).</summary>
     private const float DmMinTransformDelta = 0.01f;
-    /// <summary>Wedge watchdog (§7): a <c>SetContact</c> that does not reach <c>RUNNING</c> within this many ms is a wedge.</summary>
+    /// <summary>Wedge watchdog: a <c>SetContact</c> that does not reach <c>RUNNING</c> within this many ms is a wedge.</summary>
     private const long DmEngageTimeoutMs = 120;
-    /// <summary>Stall watchdog for a LIVE manipulation — the inertia sibling of the engage wedge above. A gesture that
-    /// reached RUNNING/INERTIA and then produces neither a content delta nor a status change for this long is stuck: the
-    /// observed case is a coast whose fling target is unmounted by a navigation mid-inertia, after which DM never fires
-    /// the terminal READY callback. Nothing clears <see cref="GestureLive"/> then, so <see cref="NeedsClockTick"/> stays
-    /// true, <see cref="DmManualUpdatePacer.ClampWait"/> keeps returning a due-now 0, and the host's
-    /// <c>MsgWaitForMultipleObjectsEx</c> degenerates into a pure poll — the UI loop free-runs at 1000-3300 it/s.
-    /// 250ms is comfortably longer than any real inertia frame gap (DM emits every vblank while coasting) and short
-    /// enough that a user never sees the poll. Recovery goes through <c>Viewport.Stop()</c> so the ordinary READY
-    /// callback runs the ordinary terminal path — this watchdog never fabricates state.</summary>
-    internal const long DmInertiaStallTimeoutMs = 250;
-    /// <summary>Idle heartbeat period (ms) for the manual-update pump — see <see cref="UpdateIfDue"/>. DM runs in
-    /// MANUALUPDATE mode, so everything it has queued (content deltas AND status transitions) surfaces only inside an
-    /// <c>IDirectManipulationUpdateManager.Update</c> call. Before this heartbeat that call was issued ONLY while
-    /// <see cref="NeedsClockTick"/> held, i.e. only while we already believed a gesture was live or pending. If DM still
-    /// owns a contact stream while our <c>_status</c> reads READY (a contact-end lost under CPU pressure — the same
-    /// non-live blind spot as the silent-owner case, one layer deeper), DM sits on its queue forever: a CONTINUING
-    /// manipulation posts no new DM_POINTERHITTEST, so the silent-owner detector (which needs &gt;=2 unserved hit-tests)
-    /// is structurally blind and NOTHING pumps the queue. The live signature is 1.5-4 s of total input silence during an
-    /// active scroll, ended by a burst when a genuinely new contact finally hit-tests → SetContact → RUNNING → flush.
-    /// 250 ms is far slower than any gesture cadence (4 idle COM calls/s costs nothing measurable) and short enough that
-    /// a queue can never sit for the seconds the capture recorded.</summary>
-    internal const long IdleHeartbeatMs = 250;
     /// <summary>Minimum gap (ms) between ScrollTrace note-109 hit-test rows. Normal scrolling hit-tests at contact
     /// cadence and would otherwise flood the ring, hiding the very stall the row exists to characterise.</summary>
     internal const long HitTestNoteMinGapMs = 250;
 
-    // The fake event-source viewport = the real window client rect, with NO SetContentRect (scroll-feel-v2.1 §A.5). Both
-    // browsers (direct_manipulation_helper_win.cc, DirectManipulationOwner.cpp) size the viewport to the window and never
-    // call SetContentRect — DM translation against the DEFAULT content is effectively unbounded, so runway exhaustion (the
-    // old 200k-content trigger) never occurs. That deletes BOTH self-inflicted defects at the source: F3 (the OS chaining
-    // an exhausted pan out as synthesized ±120 WM_POINTERWHEEL bursts) and F4 (a giant ~1e5 recenter origin amplifying
-    // sub-epsilon two-finger scale drift ds into origin·ds phantom pan). We never DISPLAY this transform — we only read its
-    // translation deltas; the viewport recenters to identity only at READY (between gestures). A 1000×1000 fallback is used
-    // only when the window rect is unavailable (a 0-size pre-first-layout window).
+    // The fake event-source viewport = the real window client rect, with NO SetContentRect. Both browsers
+    // (direct_manipulation_helper_win.cc, DirectManipulationOwner.cpp) size the viewport to the window and never call
+    // SetContentRect — DM translation against the DEFAULT content is effectively unbounded, so runway exhaustion (the
+    // old 200k-content trigger) never occurs. That deletes BOTH self-inflicted defects at the source: the OS chaining an
+    // exhausted pan out as synthesized ±120 WM_POINTERWHEEL bursts, and a giant recenter origin amplifying sub-epsilon
+    // two-finger scale drift ds into an origin·ds phantom pan. We never DISPLAY this transform — we only read its
+    // translation deltas; the viewport recenters to identity only at READY (between gestures). A 1000×1000 fallback is
+    // used only when the window rect is unavailable (a 0-size pre-first-layout window).
     private const int ViewportFallbackSize = 1000;
 
     // ── COM (all created + released on the UI thread) ──
@@ -127,51 +135,45 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
     private int _status = DM_READY;
     private float _lastTx, _lastTy;
     private bool _haveBaseline;             // false ⇒ the next content update establishes the baseline (emits nothing)
-    private uint _contactId;                // stable per gesture ⇒ the ring's ScrollUpdate coalescing sums per frame
+    private uint _contactId;                // stable per gesture ⇒ the ring's ScrollDelta coalescing sums per frame
     private Point2 _contactPos;             // the pan anchor (touchpad cursor at engage) — hit-tests the scroll target
     private byte _seq;                      // per-gesture packet ordinal (velocity side-buffer cross-contamination tag)
 
     // ── wedge watchdog ──
     private bool _awaitingEngage;           // a SetContact is pending RUNNING
     private long _engageTick;               // Environment.TickCount64 at SetContact
-    // ── inertia stall watchdog ──
-    private long _lastProgressMs;           // Environment.TickCount64 at the last content delta / status change
     // ── silent-owner watchdog (see DmSilentOwner) ──
-    // Deliberately NOT keyed on _lastProgressMs: SetContact and every status change re-stamp it, and those are exactly
-    // the events that DO keep occurring per contact while DM owns the touchpad without ever engaging — keyed on it the
-    // predicate could never fire. These stamps move only on real DM manipulation / real user attempts.
+    // Deliberately NOT keyed on a "last progress" stamp: SetContact and every status change would re-stamp such a
+    // value, and those are exactly the events that DO keep occurring per contact while DM owns the touchpad without
+    // ever engaging — keyed on it the predicate could never fire. These stamps move only on real DM manipulation /
+    // real user attempts.
     private long _lastEngagedMs;            // TickCount64 when DM last actually manipulated (RUNNING/INERTIA, or an owned content delta); 0 = never
     private long _lastHitTestMs;            // TickCount64 at the last DM_POINTERHITTEST (see NoteHitTest)
     private int _hitTestsSinceEngage;       // hit-tests observed since DM last engaged — the "unserved attempts" count
     private long _lastHitTestNoteMs;        // TickCount64 at the last note-109 row (rate limit; 0 = never, so the first hit-test always records)
-    // ── idle heartbeat (see IdleHeartbeatMs) ──
-    private long _lastHeartbeatMs;          // TickCount64 at the last disarmed-pacer UpdateCore; 0 = never (first idle pump beats)
-    private int _sinkCallbacks;             // monotone count of DM sink callbacks (status + content), sampled around the heartbeat Update
-    // ── unified recovery escalation (all four detectors feed it) ──
+    // ── unified recovery escalation (all detectors feed it) ──
     private DmRecoveryLadder _ladder;
     // A strike raised from inside a COM sink callback, serviced at the next pump. RecordStrike can reach the Disable
     // rung, and Teardown frees the very IDirectManipulationViewportEventHandler CCW whose thunk is on the stack
     // (RemoveEventHandler + NativeMemory.Free) while DM still holds a raw pointer to it. Deferring costs one pump.
     private DmStallDetector _pendingStrike;
+    // The fallback's deferred Stop() (see UseOsInertiaStopFallback): set from inside HandleStatusChanged on
+    // RUNNING→INERTIA, serviced at the top of the NEXT UpdateFrame/UpdateIdle — never inside the sink callback.
+    private bool _pendingStop;
 
-    // ── pump-time stamping (scroll-jitter §B.1) ──
-    private long _pumpQpc;                   // Stopwatch.GetTimestamp() captured once at the top of Update() — the frame instant
+    // ── pump-time stamping (scroll-jitter §B.1 / scroll-v3 §5.2) ──
+    private long _pumpQpc;                   // the frame instant this pump's content deltas are stamped with (FrameClock.FrameQpc for a produced frame)
     private long _pumpMs;                    // Environment.TickCount64 captured at the same instant (coarse ms clock, kept in step)
-    private float _pumpEmaMs = 8f;           // EMA of the pump-to-pump interval ≈ this machine's vblank period during a gesture
-    private DmManualUpdatePacer _updatePacer;
-                                             // (present-paced loop) — feeds CompositionDeltaMs so DM's lead matches the display
-    // A stamp older than this (relative to now) was NOT produced by the current Update pump — an Emit reached from a
+    // A stamp older than this (relative to now) was NOT produced by the current pump — an Emit reached from a
     // ProcessInput-time status change (contact-engage → RUNNING) — so Emit re-reads now instead of back-dating it.
     // ~20ms ≈ 1.2 vsync frames: comfortably larger than any same-pump Update body, smaller than a cross-frame gap.
     private static readonly long StaleStampTicks = Stopwatch.Frequency / 50;
 
-    /// <summary>Estimated milliseconds from this pump's <c>UpdateManager.Update</c> until the resulting pixels are on
-    /// screen — handed to DM through the <see cref="DmFrameInfoProviderCcw"/> so it evaluates its curve at the
-    /// composition instant, not the pump instant (Microsoft's documented frame-info purpose). The platform may set this
-    /// per frame from real present cadence; absent that it defaults to 8ms (~one 120Hz vblank). XAML hardcodes 16 (one
-    /// 60Hz vblank) — on a 120Hz panel that over-leads the finger by a full extra vblank, which a feel session reported
-    /// as "too fast / easy to lose control". See §B.2 — a follow-up knob once host present timing is threaded here.</summary>
-    public float NextPresentDeltaMs { get; set; } = 8f;
+    /// <summary>Environment.TickCount64 of the last <c>IDirectManipulationUpdateManager::Update</c> call this producer
+    /// issued — of EITHER kind, <see cref="UpdateFrame"/> or <see cref="UpdateIdle"/>. The host reads this to decide
+    /// when the idle MANUALUPDATE queue is next owed a drain (roughly every 250ms while <see cref="Enabled"/> and not
+    /// <see cref="Live"/>) — there is no pacer/heartbeat left in this file to do that on its own.</summary>
+    internal long LastUpdateMs { get; private set; }
 
     private Win32DirectManipulation(Win32Window window, HWND hwnd)
     {
@@ -180,8 +182,8 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
     }
 
     /// <summary>Create + wire the producer for <paramref name="hwnd"/>, or return null if DirectManipulation is
-    /// unavailable (MTA thread, CoCreate failed, any setup HRESULT failed) — the caller then relies on the §3.3 fallback.
-    /// Mirrors <c>Win32DropTarget.Register</c>'s best-effort posture.</summary>
+    /// unavailable (MTA thread, CoCreate failed, any setup HRESULT failed) — the caller then relies on the §5.3
+    /// fallback. Mirrors <c>Win32DropTarget.Register</c>'s best-effort posture.</summary>
     internal static Win32DirectManipulation? TryCreate(Win32Window window, HWND hwnd)
     {
         if (hwnd == HWND.NULL) return null;
@@ -196,28 +198,14 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
 
     internal bool Enabled => _enabled;
 
-    /// <summary>True while a DManip manipulation is live (RUNNING contact or INERTIA momentum). While live, the wheel
-    /// fallback must not accept "residual = genuinely mouse" ±120 packets at burst cadence — the OS can synthesize
-    /// legacy wheel messages for the SAME gesture (observed at runway exhaustion), and a second producer taking over a
-    /// live gesture snaps the band and hijacks the coast.</summary>
-    internal bool GestureLive => _enabled && (_status == DM_RUNNING || _status == DM_INERTIA);
-
-    /// <summary>True while manual-update DirectManipulation needs a compositor tick. The update manager is STA-bound:
-    /// the window pump owns the tick, while <see cref="DmManualUpdatePacer"/> prevents self-posted DM messages from
-    /// advancing it faster than display production.</summary>
-    internal bool NeedsClockTick => DmIdleHeartbeat.NeedsClockTick(_enabled, _awaitingEngage, _status);
-
-    /// <summary>Remaining whole milliseconds until the absolute manual-update deadline, or -1 while idle.</summary>
-    internal int DelayUntilNextUpdateMs(long nowQpc)
-        => NeedsClockTick ? _updatePacer.ClampWait(-1, nowQpc) : -1;
-
-    /// <summary>Point the manual-update pacer at the live panel's refresh period (ms). The pump's deadline truncates
-    /// every host wait during a gesture, so a fixed interval re-paces the whole loop at the wrong rate on any display
-    /// that is not 120 Hz. Fed at enable and on a display/DPI change; ignored when the value is unknown.</summary>
-    internal void SetRefreshIntervalMs(double ms) => _updatePacer.SetIntervalMs(ms);
-
-    /// <summary>The manual-update interval currently in force, in whole ms (test/diagnostic seam).</summary>
-    internal int UpdateIntervalMs => _updatePacer.IntervalMsInForce;
+    /// <summary>True while a produced-frame pump is owed to DM: a contact is engaged or pending engagement, or a
+    /// manipulation is RUNNING (plus INERTIA when <see cref="UseOsInertiaStopFallback"/> is on). Drives the host's
+    /// per-refresh production decision (<see cref="FluentGpu.Pal.IPlatformWindow.ScrollProducerLive"/>), the idle-drain
+    /// gate (<c>Enabled &amp;&amp; !Live</c> in <c>PumpInto</c>), and every internal "is DM genuinely live right now"
+    /// check in this file (the silent-owner watchdog, <see cref="TryStopForPhysicalWheel"/>'s wheel-arbitration guard)
+    /// — one boolean, one definition, no drift between what gates production and what gates recovery.</summary>
+    internal bool Live => _enabled && (_awaitingEngage || _status == DM_RUNNING
+                                        || (UseOsInertiaStopFallback && _status == DM_INERTIA));
 
     private bool SetUp()
     {
@@ -242,17 +230,18 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
 
         // The frame-info provider must exist before CreateViewport (DM holds it for the viewport's life) and is also
         // passed to every UpdateManager.Update. It carries a composition-latency hint so DM predicts content position
-        // instead of sampling its curve at the raw pump instant (§B.2). CreateViewport treats it as _In_opt_.
+        // to the instant this pump's frame actually lands, instead of sampling its curve at the raw pump instant.
+        // CreateViewport treats it as _In_opt_. Left at the CCW's own XAML-parity default (16ms) until the first real
+        // UpdateFrame/UpdateIdle call overwrites it with a computed lead.
         _frameInfo = DmFrameInfoProviderCcw.Create();
-        _frameInfo->CompositionDeltaMs = (ulong)MathF.Round(MathF.Max(0f, NextPresentDeltaMs));
 
         Guid iidVp = IID_IDirectManipulationViewport;
         IDirectManipulationViewport* vp = null;
         if (_mgr->CreateViewport((IDirectManipulationFrameInfoProvider*)_frameInfo, _hwnd, &iidVp, (void**)&vp).FAILED || vp == null) return false;
         _vp = vp;
 
-        // §A.5: viewport rect = the window client rect (browsers size the DM viewport to the window). Fallback to
-        // 1000×1000 only if the rect is unavailable (a 0-size pre-first-layout window).
+        // Viewport rect = the window client rect (browsers size the DM viewport to the window). Fallback to 1000×1000
+        // only if the rect is unavailable (a 0-size pre-first-layout window).
         RECT client;
         int vw = ViewportFallbackSize, vh = ViewportFallbackSize;
         if (GetClientRect(_hwnd, &client) && client.right > client.left && client.bottom > client.top)
@@ -273,8 +262,8 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
         if (_vp->AddEventHandler(_hwnd, (IDirectManipulationViewportEventHandler*)_sink, &cookie).FAILED) return false;
         _cookie = cookie;   // AddEventHandler AddRef'd the sink (Rc 1→2); RemoveEventHandler drops it back to our 1
 
-        // Hold the primary content for GetContentTransform (deltas) + the READY identity-skip. §A.5: NO SetContentRect —
-        // the default content gives unbounded translation, so there is no runway to exhaust and no giant origin to amplify
+        // Hold the primary content for GetContentTransform (deltas) + the READY identity-skip. NO SetContentRect — the
+        // default content gives unbounded translation, so there is no runway to exhaust and no giant origin to amplify
         // scale drift.
         Guid iidContent = IID_IDirectManipulationContent;
         IDirectManipulationContent* content = null;
@@ -290,9 +279,9 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
         return true;
     }
 
-    // ── message pump hooks (called from Win32Window.PumpInto, UI thread) ──
+    // ── message pump hooks (called from Win32Window.PumpInto / Win32Platform.PumpScroll, UI thread) ──
 
-    /// <summary>Feed one pumped message to DManip BEFORE dispatch (§7 "per-message ProcessInput"). Returns true when
+    /// <summary>Feed one pumped message to DManip BEFORE dispatch (§5.2 "per-message ProcessInput"). Returns true when
     /// DManip consumed it (an active touchpad-contact packet) so the caller skips Translate/Dispatch — this is what keeps
     /// the fallback from ever seeing a packet DM owns.</summary>
     internal bool ProcessInput(MSG* msg)
@@ -303,132 +292,105 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
         return (bool)handled;
     }
 
-    /// <summary>Advance manual-update DirectManipulation at most once per absolute display-production interval. A DM
-    /// update can enqueue another window message; an unconditional update after every message drain therefore forms a
-    /// self-wake loop. The absolute pacer never slides on those early wakes and never catches up missed ticks in a burst.</summary>
-    internal void UpdateIfDue()
+    /// <summary>
+    /// THE one <c>IDirectManipulationUpdateManager::Update</c> issued for a PRODUCED frame — called from
+    /// <c>Win32Platform.PumpScroll</c> (<see cref="FluentGpu.Pal.IPlatformWindow.PumpScroll"/>) AFTER the
+    /// display-phase gate has already decided this frame is going to be produced (scroll-v3-plan-2026-08-17.md §5.2
+    /// "hole found &amp; fixed": the old pacer could fire an Update against a declined, non-lattice instant).
+    /// <paramref name="clock"/> is the SAME <see cref="FrameClock"/> the scroll kernel ticks against.
+    ///
+    /// <para>Sets the DManip frame-info hint (<c>DmFrameInfoProviderCcw.CompositionDeltaMs</c>) to this frame's
+    /// CONTACT LEAD — <c>clamp(PresentQpc − now, 0, one refresh)</c>, the contact-lead policy of min(actual lead, one
+    /// refresh) — so DM evaluates/predicts to the instant this frame's pixels actually land, never leading by more
+    /// than a single vblank (the "16ms felt too fast / easy to lose control" field report was two refreshes' worth of
+    /// lead on a 120Hz panel — see §5.6). Floored to 0 while <see cref="FrameClockFlags.Unpaced"/> is set (an unpaced
+    /// present has no meaningful lead to predict to).</para>
+    ///
+    /// <para>Every content delta this Update produces is stamped <c>QpcTicks = clock.FrameQpc</c> (see
+    /// <see cref="Emit"/>) — exactly one <see cref="InputKind.ScrollDelta"/> per produced frame per contact, at the
+    /// frame's own stamp, hardware-grade by construction.</para>
+    /// </summary>
+    internal void UpdateFrame(in FrameClock clock)
     {
         if (!_enabled) return;
-        long nowQpc = Stopwatch.GetTimestamp();
         long nowMs = Environment.TickCount64;
-        // A strike raised inside a status callback (see _pendingStrike) — serviced here, out of the COM stack frame.
+        ServiceWatchdogs(nowMs);
+        if (!_enabled) return;   // the ladder may have session-disabled + torn down mid-service
+
+        if (UseOsInertiaStopFallback && _pendingStop)
+        {
+            _pendingStop = false;
+            if (_vp != null) _vp->Stop();   // never called from inside the COM sink that observed INERTIA — see the class remarks
+        }
+
+        ScrollTrace.ContactStampQuality = GenStampQuality.Hardware;
+
+        long nowQpc = Stopwatch.GetTimestamp();
+        double refreshMs = clock.RefreshQpc > 0 ? clock.RefreshQpc * 1000.0 / Stopwatch.Frequency : 0.0;
+        double leadMs = (clock.Flags & FrameClockFlags.Unpaced) != 0
+            ? 0.0
+            : Math.Clamp((clock.PresentQpc - nowQpc) * 1000.0 / Stopwatch.Frequency, 0.0, refreshMs);
+
+        PumpOnce(clock.FrameQpc, nowMs, leadMs);
+    }
+
+    /// <summary>The idle MANUALUPDATE drain (§5.2 "idle drain replacement"): a bare <c>Update</c> with lead 0, so a
+    /// queue DM has been holding (a content update from the READY recenter, a status transition) is never left to sit
+    /// forever between produced frames. Called by the host (<c>Win32Platform.PumpInto</c>) at most every ~250ms while
+    /// <see cref="Enabled"/> and not <see cref="Live"/> — while <see cref="Live"/>, <see cref="UpdateFrame"/> already
+    /// pumps every produced frame and this would double-pump. Content updates surfaced here while <c>!Owns</c>
+    /// re-baseline silently (<see cref="HandleContentUpdated"/>'s <c>!Owns</c> guard) — they never reach
+    /// <see cref="Emit"/>.</summary>
+    internal void UpdateIdle()
+    {
+        if (!_enabled) return;
+        long nowMs = Environment.TickCount64;
+        ServiceWatchdogs(nowMs);
+        if (!_enabled) return;
+        PumpOnce(Stopwatch.GetTimestamp(), nowMs, 0.0);
+    }
+
+    /// <summary>Shared pump body for <see cref="UpdateFrame"/>/<see cref="UpdateIdle"/>/<see cref="TryStopForPhysicalWheel"/>:
+    /// stamp, set the composition-latency hint, call <c>Update</c>, record <see cref="LastUpdateMs"/>.</summary>
+    private void PumpOnce(long stampQpc, long nowMs, double leadMs)
+    {
+        _pumpQpc = stampQpc;
+        _pumpMs = nowMs;
+        if (_frameInfo != null) _frameInfo->CompositionDeltaMs = (ulong)Math.Round(Math.Max(0.0, leadMs));
+        if (_upd != null) _upd->Update((IDirectManipulationFrameInfoProvider*)_frameInfo);
+        LastUpdateMs = nowMs;
+    }
+
+    /// <summary>The minimal recovery-ladder poll (§5.2 "minimal"): a strike raised from inside a COM sink callback
+    /// (see <see cref="_pendingStrike"/>), the engage wedge (a <c>SetContact</c> that never reached RUNNING within
+    /// <see cref="DmEngageTimeoutMs"/>), and the silent-owner case (DM holds the touchpad but never engages while
+    /// hit-tests keep arriving — <see cref="DmSilentOwner"/>). Called from BOTH pump entry points
+    /// (<see cref="UpdateFrame"/>, <see cref="UpdateIdle"/>) so every produced-frame pump and every idle drain
+    /// services the same ladder — there is no separate pacer/heartbeat loop driving it any more. The SUSPENDED-while-
+    /// pending case is event-driven (see <see cref="HandleStatusChanged"/>) and reaches the ladder through
+    /// <see cref="_pendingStrike"/> like the rest; the dedicated inertia-stall watchdog that used to live here is
+    /// DELETED (class remarks).</summary>
+    private void ServiceWatchdogs(long nowMs)
+    {
         if (_pendingStrike != DmStallDetector.None)
         {
             DmStallDetector pending = _pendingStrike;
             _pendingStrike = DmStallDetector.None;
             RecordStrike(pending);
-            if (!_enabled) return;   // the ladder may have session-disabled + torn down
+            if (!_enabled) return;
         }
-        // Wedge watchdog: a SetContact that never reached RUNNING within the engage window is a wedge (DManip did not
-        // engage). Reaching RUNNING clears _awaitingEngage, so a legitimate finger-down-then-pause is NOT a wedge.
         if (_awaitingEngage && nowMs - _engageTick > DmEngageTimeoutMs)
         {
             _awaitingEngage = false;
             RecordStrike(DmStallDetector.EngageWedge);
             if (!_enabled) return;
         }
-        // Inertia stall watchdog (see DmInertiaStallTimeoutMs): a live gesture that has produced nothing for the timeout
-        // is stuck, and a stuck gesture holds NeedsClockTick true — which pins the host wait at 0 and free-runs the loop.
-        // Rung 1 is still the bare Stop(): the READY status callback then emits the terminal phase event, disarms the
-        // pacer and recenters the viewport exactly as a normal gesture end does. Re-stamping progress here bounds the
-        // retry to one strike per timeout window if DM is wedged badly enough to ignore it.
-        if (DmInertiaStall.IsStalled(GestureLive, nowMs, _lastProgressMs) && _vp != null)
-        {
-            _lastProgressMs = nowMs;
-            RecordStrike(DmStallDetector.InertiaStall);
-            if (!_enabled) return;
-        }
-        // Silent-owner watchdog: DM holds the touchpad with a NON-live status while contacts keep hit-testing us and
-        // none of them engages. Both watchdogs above are structurally inert there (GestureLive false, _awaitingEngage
-        // already cancelled), which is how a 218-second input blackout produced zero detector fires. Re-arming both
-        // inputs bounds the re-fire to one strike per DmSilentOwner.TimeoutMs, mirroring the stall governor above.
-        if (DmSilentOwner.IsSilentOwner(GestureLive, nowMs, _lastHitTestMs, _lastEngagedMs, _hitTestsSinceEngage))
+        if (DmSilentOwner.IsSilentOwner(Live, nowMs, _lastHitTestMs, _lastEngagedMs, _hitTestsSinceEngage))
         {
             RecordStrike(DmStallDetector.SilentOwner);   // first, so its note still carries the true blackout age
             if (!_enabled) return;
             _hitTestsSinceEngage = 0;
             _lastEngagedMs = nowMs;
-        }
-        if (!NeedsClockTick)
-        {
-            _updatePacer.Disarm();
-            IdleHeartbeat(nowQpc, nowMs);
-            return;
-        }
-        if (!_updatePacer.Armed) _updatePacer.ArmImmediate(nowQpc);
-        if (!_updatePacer.TryConsume(nowQpc)) return;
-        UpdateCore(nowQpc, nowMs);
-    }
-
-    /// <summary>The idle heartbeat: keep pumping <c>UpdateManager.Update</c> at <see cref="IdleHeartbeatMs"/> even when
-    /// the pacer is disarmed, so manual-update DM can never sit silently on a queue.
-    ///
-    /// <para><b>Where this runs.</b> <see cref="UpdateIfDue"/> skips <see cref="UpdateCore"/> in exactly three places:
-    /// (a) <c>!_enabled</c> (or a strike that just disabled us) — a torn-down producer, where nothing may be called;
-    /// (b) <c>!NeedsClockTick</c> — the pacer is DISARMED and no update would EVER be issued; (c) an armed pacer whose
-    /// absolute deadline has not come due — where an update is already guaranteed within one display interval. The
-    /// heartbeat lives in (b) alone: (a) still returns before reaching it and (c) is untouched, so the armed
-    /// display-paced path keeps its exact cadence and the self-wake bound the pacer exists to enforce.</para>
-    ///
-    /// <para><b>Division of labour (deliberate).</b> This method adds NO recovery. Its only job is to guarantee DM gets
-    /// a chance to speak; if the Update surfaces stuck state, the EXISTING machinery reacts through the ordinary
-    /// callbacks — a surfaced status transition runs <see cref="HandleStatusChanged"/> (emitting the terminal phase
-    /// event, re-stamping the watchdog inputs and, on RUNNING, resetting the ladder), and a surfaced content delta runs
-    /// <see cref="HandleContentUpdated"/>. The four detectors and <see cref="DmRecoveryLadder"/> keep sole ownership of
-    /// escalation. The heartbeat also never arms the pacer itself: should the Update land us in RUNNING/INERTIA,
-    /// <see cref="NeedsClockTick"/> is true on the NEXT pump and the armed path re-arms exactly as after a SetContact.</para></summary>
-    private void IdleHeartbeat(long nowQpc, long nowMs)
-    {
-        if (!_enabled || _torn || _upd == null) return;
-        if (!DmIdleHeartbeat.Due(nowMs, _lastHeartbeatMs)) return;
-        _lastHeartbeatMs = nowMs;
-
-        // Cheap before/after evidence: two int/field reads, no allocation, no COM call of their own. `_sinkCallbacks`
-        // moves only when DM calls INTO us, so a non-zero difference proves this Update flushed something DM had been
-        // holding — which is the whole hypothesis under test.
-        int statusBefore = _status;
-        int callbacksBefore = _sinkCallbacks;
-        UpdateCore(nowQpc, nowMs);
-        int surfaced = _sinkCallbacks - callbacksBefore;
-        if (surfaced != 0 || _status != statusBefore)
-            ScrollTrace.Note(108, (float)(nowMs - _lastHitTestMs), statusBefore | (_status << 8), surfaced,
-                (float)(nowMs - _lastEngagedMs));
-    }
-
-    private void UpdateCore(long nowQpc, long nowMs)
-    {
-        // §B.1: stamp this pump once. Every content update DM advances inside the _upd->Update() below fires on this
-        // thread synchronously, so all of them (which Emit coalesces into one per-frame ScrollUpdate downstream) share
-        // this single instant — the resampler's QPC x-axis then carries no per-packet receive jitter.
-        long prevPump = _pumpQpc;
-        _pumpQpc = nowQpc;
-        _pumpMs = nowMs;
-        // Stamp provenance for the diagnostics latency row: RECEIVE, not hardware. This pump stamp is when WE observed
-        // the content update, and the digitizer runs at roughly twice this rate (see the EMA below), so every sample
-        // carries up to half a pump interval of quantisation. The packager refuses to publish sub-tick latency
-        // percentiles off anything below hardware grade — which, on a machine where DM is the primary touchpad
-        // producer, is the honest state of affairs rather than a defect to paper over.
-        FluentGpu.Foundation.ScrollTrace.ContactStampQuality = FluentGpu.Foundation.GenStampQuality.Receive;
-        // Self-measured pump cadence (EMA): during a gesture the loop is present-paced, so the pump interval IS this
-        // machine's vblank period (8.3ms @120Hz, 16.7 @60Hz) — no refresh-rate query exists in the PAL, and hardcoding
-        // either value over/under-leads the finger on the other class of machine. Idle gaps (>25ms) are excluded.
-        if (prevPump != 0)
-        {
-            float iv = (_pumpQpc - prevPump) * 1000f / Stopwatch.Frequency;
-            if (iv > 2f && iv < 25f) _pumpEmaMs += (iv - _pumpEmaMs) * 0.1f;
-        }
-        if (_upd != null)
-        {
-            // Refresh the composition-latency hint for this pump before DM samples its curve (§B.2) — but ONLY during
-            // INERTIA. DM's prediction is exact for its own smooth inertia curve (pure latency win), while during
-            // CONTACT it linearly extrapolates the ragged digitizer motion and AMPLIFIES the noise: traced roughness
-            // rose 10.4%→13-20% with a contact lead, and a 16ms lead felt "too fast / easy to lose control". Contact
-            // stays sample-at-pump (the Chromium/Firefox behavior); the engine's own resampler smooths it downstream.
-            float delta = _status != DM_INERTIA ? 0f
-                        : float.IsNaN(NextPresentDeltaMs) ? Math.Clamp(_pumpEmaMs, 4f, 20f)
-                        : MathF.Max(0f, NextPresentDeltaMs);
-            if (_frameInfo != null) _frameInfo->CompositionDeltaMs = (ulong)MathF.Round(delta);
-            _upd->Update((IDirectManipulationFrameInfoProvider*)_frameInfo);
         }
     }
 
@@ -445,15 +407,15 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
         // decidable from the ring alone — a blackout with NO 109 rows means no contact ever reached us (DM or the OS
         // swallowed the stream), while 109 rows through the blackout mean hit-tests arrived and went unserved, which is
         // the silent-owner shape. Without it the two are indistinguishable in a capture.
-        if (DmIdleHeartbeat.DueEvery(nowMs, _lastHitTestNoteMs, HitTestNoteMinGapMs))
+        if (nowMs - _lastHitTestNoteMs >= HitTestNoteMinGapMs)
         {
             _lastHitTestNoteMs = nowMs;
             ScrollTrace.Note(109, (float)(nowMs - _lastEngagedMs), _status, _hitTestsSinceEngage);
         }
     }
 
-    /// <summary>DM_POINTERHITTEST (0x0250) → claim this contact for DManip. Gated to <c>PT_TOUCHPAD</c> by the caller
-    /// (§7). Returns true iff SetContact succeeded (the caller then consumes the message, matching the dm-probe).</summary>
+    /// <summary>DM_POINTERHITTEST (0x0250) → claim this contact for DManip. Gated to <c>PT_TOUCHPAD</c> by the caller.
+    /// Returns true iff SetContact succeeded (the caller then consumes the message, matching the dm-probe).</summary>
     internal bool SetContact(uint pointerId, Point2 contactDip)
     {
         if (!_enabled || _vp == null) return false;
@@ -464,7 +426,7 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
             return false;
         }
         // Latch the anchor once per gesture so mid-gesture second-finger hit-tests don't move the target / flip the id
-        // (a stable id keeps the ring's ScrollUpdate coalescing summing per frame).
+        // (a stable id keeps the ring's ScrollDelta coalescing summing per frame).
         if (!Owns)
         {
             _contactId = pointerId;
@@ -472,18 +434,19 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
         }
         _awaitingEngage = true;
         _engageTick = Environment.TickCount64;
-        _lastProgressMs = _engageTick;   // a fresh engage is progress — never let a new gesture inherit a stale stamp
-        _updatePacer.ArmImmediate(Stopwatch.GetTimestamp());
         return true;
     }
 
-    private bool Owns => _status == DM_RUNNING || _status == DM_INERTIA;
+    /// <summary>True while DM is genuinely manipulating the primary content right now (RUNNING, plus INERTIA under
+    /// the fallback) — distinct from <see cref="Live"/>, which also counts a pending-but-not-yet-engaged contact.
+    /// Governs whether a fresh <c>SetContact</c> may re-latch the gesture anchor and whether a content-transform read
+    /// is a real delta or a re-baseline.</summary>
+    private bool Owns => _status == DM_RUNNING || (UseOsInertiaStopFallback && _status == DM_INERTIA);
 
     // ── the CCW sink callbacks (forwarded from the hand-vtable thunks; UI thread) ──
 
     internal void HandleStatusChanged(int current, int previous)
     {
-        unchecked { _sinkCallbacks++; }   // DM spoke — the idle heartbeat's evidence counter (see IdleHeartbeat)
         // OUR tracked prior status drives every emit/disarm decision, not DM's `previous` param. They are identical in
         // normal flow; they diverge exactly when the recovery ladder has already fabricated the terminal event and set
         // _status = DM_READY itself (rungs >=2), and then a late real READY(previous=RUNNING) must NOT re-emit it.
@@ -491,11 +454,6 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
         int prior = _status;
         long nowMs = Environment.TickCount64;
         _status = current;
-        // A status change IS progress (stall watchdog). Deliberately NOT debounced to "meaningful" transitions: this
-        // stamp is a load-bearing input to DmInertiaStall, and narrowing it to harden hypothesis B (status chatter
-        // masking a live stall — zero observed instances) would risk manufacturing false stall fires. The recovery
-        // ladder is immune to chatter by construction: it reads the separate _lastEngagedMs stamp.
-        _lastProgressMs = nowMs;
         Diag.Set("dm", "status", current);
         if (ScrollLog.On) ScrollLog.Line($"DM STATUS {StatusName(previous)}->{StatusName(current)}");
 
@@ -513,7 +471,8 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
             }
             _lastEngagedMs = nowMs;
             _hitTestsSinceEngage = 0;
-            if (prior == DM_INERTIA) Emit(InputKind.MomentumEnd, 0f, 0f);   // fingers re-landed mid-coast (stop-on-contact)
+            // fingers re-landed mid-coast (stop-on-contact): the prior INERTIA entry already closed the gesture with
+            // a ScrollEnd (below) — no second terminal event needed, just open the new one.
             Emit(InputKind.ScrollBegin, 0f, 0f);
             _haveBaseline = false;     // the next content update captures the baseline, emits nothing
             _seq = 0;
@@ -521,29 +480,46 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
         else if (current == DM_INERTIA && prior == DM_RUNNING)
         {
             _lastEngagedMs = nowMs;
-            Emit(InputKind.MomentumBegin, 0f, 0f);
-            // keep the baseline — inertia continues from the same transform, deltas flow seamlessly as MomentumUpdate
+#pragma warning disable CS0162 // UseOsInertiaStopFallback folds: exactly one arm is live per the flipped const (Component.cs precedent)
+            if (UseOsInertiaStopFallback)
+            {
+                // Never call COM from inside a sink callback (same reason as _pendingStrike) — serviced at the top of
+                // the NEXT UpdateFrame/UpdateIdle. ScrollEnd is deferred to the READY that Stop() produces ("stamped
+                // at the edge" — see the READY branch below), not emitted here.
+                _pendingStop = true;
+            }
+            else
+            {
+                // The primary configuration never enables TRANSLATION_INERTIA, so DM should never report INERTIA; if a
+                // driver still does, PTP inertia is engine-owned regardless (§5.2) — treat it exactly like an ordinary
+                // lift, same as the RUNNING→READY hold-release path below.
+                Emit(InputKind.ScrollEnd, 0f, 0f);
+            }
+#pragma warning restore CS0162
+            // Keep the baseline live either way — HandleContentUpdated still tracks DM's transform while INERTIA runs
+            // (so a re-contact mid-coast has a sane reference), it just stops forwarding it (see HandleContentUpdated).
         }
         else if (current == DM_READY)
         {
-            if (prior == DM_INERTIA) Emit(InputKind.MomentumEnd, 0f, 0f);
-            else if (prior == DM_RUNNING) Emit(InputKind.ScrollEnd, 0f, 0f);   // hold-release, no OS momentum
+            // Natural RUNNING→READY finish (hold-release, no OS momentum): the ordinary lift.
+            if (prior == DM_RUNNING) Emit(InputKind.ScrollEnd, 0f, 0f);
+            // Fallback only: the deferred Stop() (see the INERTIA branch above) completed — the lift fires HERE, at
+            // the edge, per §5.2. Unreachable when UseOsInertiaStopFallback is false (DM never enters INERTIA then).
+            else if (UseOsInertiaStopFallback && prior == DM_INERTIA) Emit(InputKind.ScrollEnd, 0f, 0f);
+            _pendingStop = false;
             // Cancel the engage wedge ONLY on a READY that genuinely terminates an engage. A spurious READY (from
             // ENABLED/BUILDING/SUSPENDED) used to disarm it unconditionally, which is precisely how a DM that owned
-            // the touchpad but never engaged silenced the watchdog. The pacer disarm and the recenter stay
-            // unconditional — NeedsClockTick still includes _awaitingEngage, so UpdateIfDue re-arms the pacer and the
-            // 120ms wedge still fires. A tap-to-click contact DM legitimately declines now wedges; that is harmless,
-            // because rung 1 on a READY viewport is a no-op Stop and the tap safety lives in the ladder's
-            // reset-on-RUNNING plus its 10-second decay, not in this disarm.
+            // the touchpad but never engaged silenced the watchdog. A tap-to-click contact DM legitimately declines
+            // now wedges; that is harmless, because rung 1 on a READY viewport is a no-op Stop and the tap safety
+            // lives in the ladder's reset-on-RUNNING plus its 10-second decay, not in this disarm.
             if (DmEngageWedge.Disarms(current, prior)) _awaitingEngage = false;
-            _updatePacer.Disarm();
-            ResetViewport();           // §7 "viewport reset" — recenter so the next gesture has fresh runway
+            ResetViewport();           // recenter so the next gesture has fresh runway
             _haveBaseline = false;     // the recenter's content update re-baselines silently (Owns is false now)
         }
         else if (DmEngageWedge.WedgesImmediately(current, _awaitingEngage))
         {
-            // scroll-feel-rework-design §223-224, previously unimplemented: SUSPENDED while a SetContact is pending
-            // RUNNING means DM parked the contact instead of engaging it — there is no timeout left worth waiting out.
+            // SUSPENDED while a SetContact is pending RUNNING means DM parked the contact instead of engaging it —
+            // there is no timeout left worth waiting out.
             _awaitingEngage = false;
             _pendingStrike = DmStallDetector.Suspended;   // out of the COM sink — see the _pendingStrike remarks
         }
@@ -556,28 +532,24 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
     /// ±120 burst latch) is stale — Win32Platform clears it on this return so it cannot eat the next gesture.</summary>
     internal bool TryStopForPhysicalWheel()
     {
-        if (!GestureLive || _vp == null) return false;
+        if (!Live || _vp == null) return false;
         _vp->Stop();
-        long nowQpc = Stopwatch.GetTimestamp();
-        _updatePacer.ArmImmediate(nowQpc);
-        if (_updatePacer.TryConsume(nowQpc))
-            UpdateCore(nowQpc, Environment.TickCount64);
+        PumpOnce(Stopwatch.GetTimestamp(), Environment.TickCount64, 0.0);
         return true;
     }
 
     internal void HandleContentUpdated(IDirectManipulationContent* content)
     {
-        unchecked { _sinkCallbacks++; }   // counted BEFORE any early-out: a callback at all is the evidence, not its payload
         if (content == null) return;
         float* m = stackalloc float[6];
         if (content->GetContentTransform(m, 6).FAILED) return;
         float scale = m[0], tx = m[4], ty = m[5];
 
-        // CONTENT-SPACE position: the content coordinate under the viewport origin, p = −t/s (scroll-feel-v2.1 §A.5, kept).
-        // At s=1 the diff equals the browsers' negated raw-translation diff (the F1 sign convention) — a strict superset:
-        // content space also stays robust to residual two-finger scale drift (ds contributes only its bounded zoom-center
-        // shift, not the origin·ds phantom pan) EVEN NOW THAT the giant recenter origin is gone (§A.5 deleted the 200k
-        // runway that used to amplify F4). Deliberately differs from the browsers' raw diff because it subsumes it.
+        // CONTENT-SPACE position: the content coordinate under the viewport origin, p = −t/s. At s=1 the diff equals
+        // the browsers' negated raw-translation diff (the F1 sign convention) — a strict superset: content space also
+        // stays robust to residual two-finger scale drift (ds contributes only its bounded zoom-center shift, not an
+        // origin·ds phantom pan) now that the giant recenter origin is gone (no SetContentRect deletes the runway that
+        // used to amplify it). Deliberately differs from the browsers' raw diff because it subsumes it.
         float invS = scale > 0.001f ? 1f / scale : 1f;
         float px = -tx * invS, py = -ty * invS;
 
@@ -592,43 +564,44 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
         float dx = px - _lastTx, dy = py - _lastTy;
         _lastTx = px; _lastTy = py;   // advance the baseline even on suppressed frames so no jump accumulates
 
-        // The stall watchdog measures DM PRODUCTION, not emitted scroll: a pinch is suppressed downstream but DM is very
-        // much alive, so stamp before the suppression returns. Sub-epsilon no-op deltas deliberately do NOT stamp — a
-        // manipulation that only ever produces those is exactly the stuck state the watchdog exists to end.
-        // Both stamps move together here: we are past the !Owns guard, so DM is genuinely manipulating — which is
-        // exactly what _lastEngagedMs means to the silent-owner detector.
-        if (MathF.Abs(scale - 1f) > DmPinchScaleEpsilon) { _lastProgressMs = _lastEngagedMs = Environment.TickCount64; return; }   // pinch: suppress the pan (§7)
+        // The silent-owner watchdog measures DM PRODUCTION, not emitted scroll: a pinch is suppressed downstream but
+        // DM is very much alive, so stamp before the suppression returns. Sub-epsilon no-op deltas deliberately do NOT
+        // stamp — a manipulation that only ever produces those is exactly the stuck state the watchdog exists to end.
+        if (MathF.Abs(scale - 1f) > DmPinchScaleEpsilon) { _lastEngagedMs = Environment.TickCount64; return; }   // pinch: suppress the pan (§5.2)
         if (MathF.Abs(dx) < DmMinTransformDelta && MathF.Abs(dy) < DmMinTransformDelta) return;
-        _lastProgressMs = _lastEngagedMs = Environment.TickCount64;
+        _lastEngagedMs = Environment.TickCount64;
 
         float wscale = _window.ScaleInternal;
         if (wscale <= 0f) wscale = 1f;
         // Content-space px → DIP. p = −t/s already carries the engine's delta convention: for a pure pan (s=1) the
-        // diff equals the NEGATED raw-translation diff, which the on-hardware verification (2026-07-02) fixed as the
-        // convention matching the WM_POINTERWHEEL fallback ("−delta = scroll toward content end") — fingers up ⇒
-        // advance toward content end.
+        // diff equals the NEGATED raw-translation diff, matching the WM_POINTERWHEEL fallback ("−delta = scroll toward
+        // content end") — fingers up ⇒ advance toward content end.
         float dipX = dx * DmDipPerTransformUnit / wscale;
         float dipY = dy * DmDipPerTransformUnit / wscale;
 
-        Emit(_status == DM_INERTIA ? InputKind.MomentumUpdate : InputKind.ScrollUpdate, dipX, dipY);
+        // PTP inertia is engine-owned (§5.2): under the primary config DM never reports INERTIA, so this check never
+        // trips there. Under the fallback, the RUNNING→INERTIA transition already closed the gesture (deferred to the
+        // READY the Stop() produces — see HandleStatusChanged), so DM's own INERTIA-phase content deltas are tracked
+        // (the baseline advance above) but never forwarded — the kernel's own Ballistic fling is already running.
+        if (_status != DM_INERTIA) Emit(InputKind.ScrollDelta, dipX, dipY);
     }
 
     // ── event emission ──
 
     private void Emit(InputKind kind, float dipX, float dipY)
     {
-        // §B.1: prefer this pump's frame timestamp so every content update from one UpdateManager.Update shares one
-        // instant. Emit is ALSO reachable outside the Update pump: a contact-engage status change (RUNNING) can fire
+        // Prefer this pump's frame timestamp so every content update from one UpdateManager.Update shares one instant.
+        // Emit is ALSO reachable outside the Update pump: a contact-engage status change (RUNNING) can fire
         // synchronously inside ProcessInput, where _pumpQpc still holds the PREVIOUS pump's value (~1 frame stale). We
         // detect that (stamp older than ~1 frame, or never set) and read now instead, so phase markers aren't
-        // back-dated; content updates — the resampler-critical path — always run inside Update and see a fresh
+        // back-dated; content updates — the resampler-critical path — always run inside a pump and see a fresh
         // _pumpQpc. ms is taken from the same instant (Stopwatch and TickCount64 both advance in real time).
         long now = Stopwatch.GetTimestamp();
         long qpc = _pumpQpc;
         long ms64 = _pumpMs;
         if (qpc == 0 || now - qpc > StaleStampTicks) { qpc = now; ms64 = Environment.TickCount64; }
         uint ms = unchecked((uint)ms64);
-        bool isUpdate = kind is InputKind.ScrollUpdate or InputKind.MomentumUpdate;
+        bool isUpdate = kind == InputKind.ScrollDelta;
         _window.EnqueueExternal(new InputEvent(
             kind, _contactPos, 0, 0, dipY, KeyModifiers.None,
             Pointer: PointerKind.Touchpad, TimestampMs: ms, PointerId: _contactId, Pressure: 1f,
@@ -641,10 +614,11 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
     private void ResetViewport()
     {
         if (_vp == null) return;
-        // §A.5: recenter the runway-free viewport back to identity between gestures — but SKIP the reset when the content
-        // transform is ALREADY identity (both browsers' OnViewportStatusChanged skip a no-op reset; a gesture that netted
-        // zero, or the first READY, needs no recenter). ZoomToRect(0,0,w,h) with the window-sized viewport maps the content
-        // back to origin. The caller then clears _haveBaseline so the recenter's async content update re-baselines silently.
+        // Recenter the runway-free viewport back to identity between gestures — but SKIP the reset when the content
+        // transform is ALREADY identity (both browsers' OnViewportStatusChanged skip a no-op reset; a gesture that
+        // netted zero, or the first READY, needs no recenter). ZoomToRect(0,0,w,h) with the window-sized viewport maps
+        // the content back to origin. The caller then clears _haveBaseline so the recenter's async content update
+        // re-baselines silently.
         if (_content != null)
         {
             float* m = stackalloc float[6];
@@ -687,10 +661,10 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
             case DmRecoveryAction.Disable:
                 FabricateTerminalIfLive();
                 // Session-disable, edge-triggered: tear down so ProcessInput/SetContact are no longer called and the
-                // §3.3 fallback owns every subsequent packet. There is never a window with two owners for one packet.
-                // The cost is calibrated: the user keeps a working scroll and loses OS-curve momentum fidelity plus
-                // exact device classification until the next launch — bounded, unlike minutes of dead input.
-                if (ScrollLog.On) ScrollLog.Line("DM DISABLED (recovery ladder) — §3.3 heuristic fallback now owns the touchpad");
+                // §5.3 fallback owns every subsequent packet. There is never a window with two owners for one packet.
+                // The cost is calibrated: the user keeps a working scroll and loses exact device classification until
+                // the next launch — bounded, unlike minutes of dead input.
+                if (ScrollLog.On) ScrollLog.Line("DM DISABLED (recovery ladder) — §5.3 heuristic fallback now owns the touchpad");
                 Diag.Set("dm", "enabled", 0);
                 _enabled = false;
                 Teardown();
@@ -718,21 +692,23 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
         _awaitingEngage = false;
         _haveBaseline = false;
         _pendingStrike = DmStallDetector.None;   // status chatter from the toggles above is ours, not a fresh wedge
-        _updatePacer.Disarm();
+        _pendingStop = false;
         return true;
     }
 
-    /// <summary>Close an open phase contract the integrator would otherwise hold forever. This is a DELIBERATE,
-    /// confined exception to this file's never-fabricate doctrine (see <see cref="DmInertiaStallTimeoutMs"/>: the
-    /// watchdogs Stop and let DM's own READY callback run the terminal path). At ladder rungs >=2 DM has already
-    /// refused to fire that callback and the recovery re-creates the input session underneath it, so nothing else will
+    /// <summary>Close an open phase contract the kernel would otherwise hold forever. This is a DELIBERATE, confined
+    /// exception to this file's never-fabricate doctrine. At ladder rungs >=2 DM has already refused to fire the
+    /// ordinary terminal callback and the recovery re-creates the input session underneath it, so nothing else will
     /// ever end the gesture. Double emission is impossible: <see cref="HandleStatusChanged"/> gates on OUR tracked
-    /// prior status, which this sets to READY, so a late real READY(previous=RUNNING) emits nothing.</summary>
+    /// prior status, which this sets to READY, so a late real READY(previous=RUNNING) emits nothing — and, under the
+    /// fallback, an INERTIA gesture's ScrollEnd is already pending via <c>_pendingStop</c>'s eventual READY, so only a
+    /// still genuinely-open RUNNING gesture needs one fabricated here.</summary>
     private void FabricateTerminalIfLive()
     {
-        if (!GestureLive) return;
-        Emit(_status == DM_INERTIA ? InputKind.MomentumEnd : InputKind.ScrollEnd, 0f, 0f);
+        if (_status != DM_RUNNING && !(UseOsInertiaStopFallback && _status == DM_INERTIA)) return;
+        if (_status == DM_RUNNING) Emit(InputKind.ScrollEnd, 0f, 0f);
         _status = DM_READY;
+        _pendingStop = false;
     }
 
     private static string StatusName(int s) => s switch
@@ -751,7 +727,6 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
         if (_torn) return;
         _torn = true;
         _enabled = false;
-        _updatePacer.Disarm();
 
         if (_vp != null)
         {
@@ -793,105 +768,6 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
         new(0xB89962CB, 0x3D89, 0x442B, 0xBB, 0x58, 0x50, 0x98, 0xFA, 0x0F, 0x9F, 0x16);
 }
 
-/// <summary>Allocation-free absolute-deadline pacer for manual-update DirectManipulation. It is deliberately free of any
-/// OS dependency (time is a parameter) so message-storm, no-drift, and no-catch-up behavior can be locked by the Windows
-/// headless tests. Its only state beyond the deadline is the <see cref="ZeroWaitRun"/> tripwire counter — so
-/// <see cref="ClampWait"/> does mutate, and must be called on the live pacer, never on a copy.</summary>
-internal struct DmManualUpdatePacer
-{
-    /// <summary>The default manual-update interval (ms) — the 120 Hz answer, used until the platform reports the panel's
-    /// real refresh through <see cref="SetIntervalMs"/> (and kept forever on a display that reports nothing).</summary>
-    internal const int IntervalMs = 7;
-    /// <summary>Clamp for a platform-fed interval. 3 ms is short of a spin at 240 Hz+, 17 ms is one 60 Hz refresh — past
-    /// that the pump would truncate host waits it has no business truncating.</summary>
-    private const double MinIntervalMs = 3.0, MaxIntervalMs = 17.0;
-
-    private static readonly long s_defaultIntervalTicks = Math.Max(1L,
-        (long)Math.Ceiling(Stopwatch.Frequency * (IntervalMs / 1000d)));
-
-    // Per-instance so the pump follows the panel: a 7 ms deadline truncates every host wait on a 60 Hz display (which
-    // is what made a touchpad gesture re-pace the whole loop at 142 Hz there) and is a whole refresh late at 240.
-    // 0 = never configured ⇒ the default above; the struct's default value must stay a valid pacer.
-    private long _intervalTicks;
-    private readonly long IntervalTicks => _intervalTicks > 0 ? _intervalTicks : s_defaultIntervalTicks;
-
-    /// <summary>Adopt the live display's refresh period (ms), clamped. Called at DM enable and whenever the panel or the
-    /// monitor changes; a non-positive/unknown value leaves the current interval alone. Does not move the pending
-    /// deadline — the next <see cref="TryConsume"/> picks the new cadence up, so a rate change mid-gesture cannot
-    /// retro-date a deadline the host is already waiting on.</summary>
-    internal void SetIntervalMs(double ms)
-    {
-        if (!(ms > 0.0)) return;
-        double clamped = ms < MinIntervalMs ? MinIntervalMs : ms > MaxIntervalMs ? MaxIntervalMs : ms;
-        _intervalTicks = Math.Max(1L, (long)Math.Ceiling(Stopwatch.Frequency * (clamped / 1000d)));
-    }
-
-    /// <summary>The interval currently in force, in whole ms (test/diagnostic seam).</summary>
-    internal readonly int IntervalMsInForce =>
-        (int)Math.Round(IntervalTicks * 1000d / Stopwatch.Frequency);
-
-    private long _nextDueQpc;
-    private int _zeroWaitRun;                  // consecutive due-now (0 ms) clamps with no intervening consume
-    private static int s_maxZeroWaitRun;       // process high-water — the free-run tripwire (UI thread only)
-    internal bool Armed { get; private set; }
-
-    /// <summary>Consecutive <see cref="ClampWait"/> calls that returned a due-now 0 without an intervening successful
-    /// <see cref="TryConsume"/>. The healthy loop never exceeds 1: a 0 wait means the deadline has passed, so the host
-    /// wait returns at once, the pump drains, and <c>UpdateIfDue</c> consumes the slot — which advances the deadline. A
-    /// climbing run is the free-run pathology itself (the host polling <c>MsgWaitForMultipleObjectsEx</c> at 0 ms because
-    /// something keeps <c>NeedsClockTick</c> true while the update never runs), so it is the regression tripwire for the
-    /// inertia stall watchdog: with the watchdog working, it stays ≤1.</summary>
-    internal int ZeroWaitRun => _zeroWaitRun;
-
-    /// <summary>Longest <see cref="ZeroWaitRun"/> seen this process — surfaced through <c>Diag</c> as
-    /// <c>dm.pacer.zeroWaitRun</c> whenever it climbs (diag builds only; the call site is erased from Release).</summary>
-    internal static int MaxZeroWaitRun => s_maxZeroWaitRun;
-
-    internal void ArmImmediate(long nowQpc)
-    {
-        _nextDueQpc = nowQpc;
-        Armed = true;
-    }
-
-    internal void Disarm()
-    {
-        _nextDueQpc = 0;
-        Armed = false;
-        _zeroWaitRun = 0;
-    }
-
-    internal bool TryConsume(long nowQpc)
-    {
-        if (!Armed || nowQpc < _nextDueQpc) return false;
-        long ticks = IntervalTicks;
-        long late = nowQpc - _nextDueQpc;
-        long slots = late / ticks + 1;
-        _nextDueQpc += slots * ticks;
-        _zeroWaitRun = 0;   // the due slot was taken and the deadline moved — the next clamp is a real wait again
-        return true;
-    }
-
-    internal int ClampWait(int hostTimeoutMs, long nowQpc)
-    {
-        if (!Armed) return hostTimeoutMs;
-        long remaining = _nextDueQpc - nowQpc;
-        int dueMs = remaining <= 0 ? 0 : (int)Math.Min(int.MaxValue,
-            Math.Ceiling(remaining * 1000d / Stopwatch.Frequency));
-        if (dueMs == 0)
-        {
-            // Cheap (two int ops, no allocation) and only REPORTS on a new high-water, so a diag build does not pay a
-            // dictionary write per poll while the pathology is live.
-            _zeroWaitRun++;
-            if (_zeroWaitRun > s_maxZeroWaitRun)
-            {
-                s_maxZeroWaitRun = _zeroWaitRun;
-                Diag.Set("dm.pacer", "zeroWaitRun", _zeroWaitRun);
-            }
-        }
-        return hostTimeoutMs < 0 ? dueMs : Math.Min(hostTimeoutMs, dueMs);
-    }
-}
-
 internal enum DmWheelSourceEvidence : byte
 {
     Unknown,
@@ -906,56 +782,13 @@ internal enum DmWheelRoute : byte
     DmOwned,
 }
 
-/// <summary>Pure stall arbitration — the decision half of the inertia watchdog, split out (like
-/// <see cref="DmWheelArbitration"/>) so it can be locked by the Windows headless tests without a real HWND, a real
-/// DirectManipulation viewport, or an STA pump.</summary>
-internal static class DmInertiaStall
-{
-    /// <summary>True when a LIVE manipulation has gone <see cref="Win32DirectManipulation.DmInertiaStallTimeoutMs"/>
-    /// without a content delta or a status change. Idle DM is never stalled — the whole point is that a gesture nobody
-    /// will ever terminate is what pins the host wait at 0.</summary>
-    internal static bool IsStalled(bool gestureLive, long nowMs, long lastProgressMs)
-        => gestureLive && nowMs - lastProgressMs > Win32DirectManipulation.DmInertiaStallTimeoutMs;
-}
-
-/// <summary>Pure cadence arbitration for the manual-update idle heartbeat (and the note-109 rate limit), split out like
-/// <see cref="DmInertiaStall"/>/<see cref="DmSilentOwner"/> so the Windows headless tests can lock the boundary without a
-/// real HWND, a real viewport or an STA pump. Inclusive (<c>&gt;=</c>) on purpose: a fixed-period heartbeat that only
-/// fires strictly past its period drifts one pump later every beat.</summary>
-internal static class DmIdleHeartbeat
-{
-    /// <summary>True when the disarmed-pacer pump owes DM an <c>UpdateManager.Update</c>. A zero
-    /// <paramref name="lastMs"/> (never beaten) is always due — <c>TickCount64</c> is machine uptime, so the very first
-    /// idle pump of the process beats once and then settles onto the period.</summary>
-    internal static bool Due(long nowMs, long lastMs) => DueEvery(nowMs, lastMs, Win32DirectManipulation.IdleHeartbeatMs);
-
-    /// <summary>The same fixed-period predicate with an explicit period — used by the note-109 rate limit, which shares
-    /// the shape but keeps its own stamp and its own constant.</summary>
-    internal static bool DueEvery(long nowMs, long lastMs, long periodMs) => nowMs - lastMs >= periodMs;
-
-    /// <summary>The pacer-arming predicate behind <see cref="Win32DirectManipulation.NeedsClockTick"/>, lifted here so
-    /// the heartbeat's branch condition is a single pinned expression rather than one the tests restate.</summary>
-    internal static bool NeedsClockTick(bool enabled, bool awaitingEngage, int status)
-        => enabled && (awaitingEngage
-                    || status == Win32DirectManipulation.DM_RUNNING
-                    || status == Win32DirectManipulation.DM_INERTIA);
-
-    /// <summary>True exactly in the branch the heartbeat may run in: the producer is alive, and the pacer is DISARMED
-    /// so no update would otherwise ever be issued. A disabled/torn producer must reach neither branch (no COM call at
-    /// all), and an armed pacer already guarantees an update within one display interval — beating there would
-    /// double-pump a live gesture.</summary>
-    internal static bool BeatsInsteadOfPacing(bool enabled, bool awaitingEngage, int status)
-        => enabled && !NeedsClockTick(enabled, awaitingEngage, status);
-}
-
-/// <summary>Which watchdog raised a strike. The values are wire-visible: they are the low nibble of ScrollTrace note
-/// 107's i1, so they may be appended to but never renumbered.</summary>
+/// <summary>Which watchdog raised a strike. The values are wire-visible (the low nibble of ScrollTrace note 107's i1):
+/// append only, never renumber — 3 is unassigned.</summary>
 internal enum DmStallDetector : byte
 {
     None = 0,
     EngageWedge = 1,
     Suspended = 2,
-    InertiaStall = 3,
     SilentOwner = 4,
     /// <summary>Not a strike — the row emitted when DM engages again with strikes outstanding, so a capture names the
     /// rung that actually revived input.</summary>
@@ -971,8 +804,8 @@ internal enum DmRecoveryAction : byte
     Disable = 3,
 }
 
-/// <summary>Pure engage-wedge arbitration — the decision half of the 120ms wedge watchdog, split out like
-/// <see cref="DmInertiaStall"/> so the Windows headless tests can lock it without a real HWND or viewport.</summary>
+/// <summary>Pure engage-wedge arbitration — the decision half of the 120ms wedge watchdog, split out so the Windows
+/// headless tests can lock it without a real HWND or viewport.</summary>
 internal static class DmEngageWedge
 {
     /// <summary>True only for a READY that genuinely TERMINATES an engage. A READY arriving from
@@ -983,19 +816,18 @@ internal static class DmEngageWedge
         => current == Win32DirectManipulation.DM_READY
         && (prior == Win32DirectManipulation.DM_RUNNING || prior == Win32DirectManipulation.DM_INERTIA);
 
-    /// <summary>SUSPENDED while a SetContact is pending RUNNING is a wedge with no timeout left worth waiting out
-    /// (scroll-feel-rework-design §223-224). Gated on the pending engage so an occlusion-SUSPENDED between gestures
-    /// records nothing.</summary>
+    /// <summary>SUSPENDED while a SetContact is pending RUNNING is a wedge with no timeout left worth waiting out.
+    /// Gated on the pending engage so an occlusion-SUSPENDED between gestures records nothing.</summary>
     internal static bool WedgesImmediately(int current, bool awaitingEngage)
         => current == Win32DirectManipulation.DM_SUSPENDED && awaitingEngage;
 }
 
 /// <summary>Pure silent-owner arbitration: DM holds the touchpad with a NON-live status while contacts keep reaching
-/// the window and none of them engages. Both older watchdogs are structurally inert in that state — the inertia stall
-/// needs a live gesture and the engage wedge needs a pending engage — which is exactly why a stall could run for
-/// minutes undetected. The predicate deliberately reads stamps that only real DM manipulation and real user attempts
-/// move; keying it on the progress stamp would be self-defeating, because SetContact and status chatter re-stamp that
-/// one on every contact of the stall.</summary>
+/// the window and none of them engages. The engage wedge alone is structurally inert in that state (it needs a
+/// pending engage) — which is exactly why a stall could run for minutes undetected before this watchdog existed. The
+/// predicate deliberately reads stamps that only real DM manipulation and real user attempts move; keying it on a
+/// generic "last progress" stamp would be self-defeating, because SetContact and status chatter re-stamp that one on
+/// every contact of the stall.</summary>
 internal static class DmSilentOwner
 {
     /// <summary>How long since DM last manipulated before ownership counts as silent, and how recent a hit-test must
@@ -1012,12 +844,12 @@ internal static class DmSilentOwner
         && nowMs - lastEngagedMs > TimeoutMs;
 }
 
-/// <summary>The unified recovery escalation: one strike counter fed by all four detectors (engage wedge, SUSPENDED
-/// read, inertia stall, silent owner), so a real episode escalates on its second and third symptom whichever watchdog
-/// happens to see them. Pure and time-parameterised for the headless tests.
+/// <summary>The unified recovery escalation: one strike counter fed by every detector (engage wedge, SUSPENDED read,
+/// silent owner), so a real episode escalates on its second and third symptom whichever watchdog happens to see them.
+/// Pure and time-parameterised for the headless tests.
 ///
 /// <para>Stale strikes decay before the increment: a real episode strikes every 120-1500ms, while isolated tap-wedges
-/// an hour apart must never accumulate into a session disable — which the previous never-reset wedge counter did.</para></summary>
+/// an hour apart must never accumulate into a session disable — which a previous never-reset wedge counter did.</para></summary>
 internal struct DmRecoveryLadder
 {
     internal const int StrikesToDisable = 3;
@@ -1139,7 +971,7 @@ internal unsafe struct DmViewportEventHandlerCcw
 /// field) — same hand-vtable shape as <see cref="DmViewportEventHandlerCcw"/>. DM calls <c>GetNextFrameInfo</c> once per
 /// <c>UpdateManager.Update</c> to learn when the frame it is about to compute will hit the screen, and evaluates its
 /// manipulation/inertia curve at that composition instant instead of the raw pump instant (Microsoft's documented
-/// frame-info purpose — the DM-side latency compensation this file's §B.2 fix adds).
+/// frame-info purpose — the DM-side latency compensation <see cref="Win32DirectManipulation.UpdateFrame"/> feeds).
 ///
 /// <para>Unlike the event-handler sink this CCW does NOT carry an owner <c>GCHandle</c>: the per-query callback must be
 /// POD-only (no managed transition on the hot path), so the owner writes the answer into <see cref="CompositionDeltaMs"/>

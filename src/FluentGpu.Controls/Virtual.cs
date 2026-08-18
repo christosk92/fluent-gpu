@@ -38,17 +38,6 @@ public static class Virtual
             KeyOf = keyOf, Overscan = overscan, Horizontal = horizontal, Grow = 1f,
         };
 
-    /// <summary>A vertically-virtualized list of variable-height rows (Fenwick extent table + scroll anchoring) —
-    /// the legacy built-in variable path (<c>ItemLayout = null</c>). The seam-shaped equivalent is
-    /// <see cref="Measured"/> with a <see cref="MeasuredStackVirtualLayout"/> (E11-L0), which custom layouts mirror.</summary>
-    public static VirtualListEl VariableList(int itemCount, float estimatedExtent, Func<int, Element> renderItem,
-                                             Func<int, string>? keyOf = null, int overscan = 4)
-        => new()
-        {
-            ItemCount = itemCount, ItemLayout = null, EstimatedExtent = estimatedExtent, RenderItem = renderItem,
-            KeyOf = keyOf, Overscan = overscan, Grow = 1f,
-        };
-
     /// <summary>A virtualized collection over ANY variable-extent <see cref="IMeasuredVirtualLayout"/> (E11-L0): rows
     /// realize at the layout's estimate, correct to their measured extent on arrange, and the engine re-pins the
     /// scroll anchor across corrections. The layout is STATEFUL — create it once (hoist in a <c>UseMemo</c>) and

@@ -1,5 +1,6 @@
 ﻿using System.Buffers;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -141,7 +142,7 @@ public sealed class TreeReconciler
     // over frame under a sustained fast fling; once it is gone every row entering the mandatory band is a COLD realize
     // instead of a warm recycler hit, and comps/realize-ms climb in lockstep until deceleration lets it drain. So the
     // per-frame pool is lifted from the floor toward a ceiling in proportion to the rows/second the edge is consuming
-    // (|FlingVelocity| / avgExtent). This changes ONLY the fill RATE — never the window SIZE, which stays the
+    // (|sc.Velocity| / avgExtent). This changes ONLY the fill RATE — never the window SIZE, which stays the
     // velocity-INDEPENDENT fixed sum E5's DirectionalOverscan enforces (the zero-alloc bound-slot guarantee).
     private const int SteadyRealizeRowsPerFrame = 12;
     private const int SteadyRealizeRowsCeiling = 36;
@@ -169,6 +170,15 @@ public sealed class TreeReconciler
     private readonly Dictionary<int, (object Channel, Signal<object?> Sig)> _providerSig = new();
     // Host-published ambient contexts (Viewport.Size, FrameDiagnostics.Current), keyed by channel.
     private readonly Dictionary<object, Signal<object?>> _ambient = new();
+
+    // scroll-v3-plan §7.2 (WP-R1): the ScrollController currently ATTACHED to a ScrollEl/VirtualListEl node (whichever
+    // of the two BindScrollController picked — author-supplied or internally minted), keyed by node index — so a
+    // re-bake that swaps instances detaches the one it replaces, and UnmountSubtree always has something to detach.
+    private readonly Dictionary<int, FluentGpu.Scroll.ScrollController> _boundScrollController = new();
+    // Internally-minted controllers ONLY (the element declared no Controller): kept stable across re-renders so
+    // Hooks.UseScroll() subscribers never see the handle's identity change under them. Never touched when the
+    // element supplies its own Controller.
+    private readonly Dictionary<int, FluentGpu.Scroll.ScrollController> _internalScrollControllers = new();
 
     // Per-node reactive bindings + control-flow effects, disposed when the node is unmounted.
     private readonly Dictionary<int, List<Computation>> _nodeBindings = new();
@@ -357,9 +367,6 @@ public sealed class TreeReconciler
     /// <summary>Set by the host; shared-element (connected-animation) registry. A node carrying <c>Element.MorphId</c> is
     /// registered as a participant here so its art flies between routes (backdrop-effects-animation.md §5.4/§5.6).</summary>
     public ConnectedAnimation? Connected { get; set; }
-    /// <summary>Set by the host (→ ScrollIntegrator.Arm); injected into each component so a control can arm a viewport for a
-    /// smooth programmatic scroll (set Target, then phase 7 eases the offset toward it).</summary>
-    public Action<FluentGpu.Foundation.NodeHandle>? ArmScroll { get; set; }
     /// <summary>Set by the host (→ AppHost.WakeFrame); injected into each component so an escape hatch that has already
     /// mutated retained scene state can wake the frame loop WITHOUT scheduling its own render-effect.</summary>
     public Action? RequestFrame { get; set; }
@@ -374,7 +381,8 @@ public sealed class TreeReconciler
     public Action<RenderContext, bool>? RegisterPendingEffectContext { get; set; }
     /// <summary>Set by the host; called for each node as a subtree is parked/un-parked by KeepAlive so the animation +
     /// scroll tickers can quiesce that node's tracks (a parked, invisible tab must not keep the app awake / defeat the
-    /// idle wake-stop). Wired to <c>AnimEngine.SetNodeParked</c> + <c>ScrollIntegrator.SetNodeParked</c>.</summary>
+    /// idle wake-stop). Wired to <c>AnimEngine.SetNodeParked</c> + <c>ScrollInput.Park</c> (posted to the kernel) +
+    /// <c>ScrollBarChrome.SetNodeParked</c>.</summary>
     public Action<NodeHandle, bool>? OnNodeParkedChanged { get; set; }
 
     public TreeReconciler(SceneStore scene, StringTable strings, ReactiveRuntime? runtime = null)
@@ -492,10 +500,6 @@ public sealed class TreeReconciler
             // reconcile paths — an identical-shape root re-render must not force a full solve.
         }
         _oldRoot = newRoot;
-        // Named-timeline binds link HERE, once the whole tree is baked — a bind and the scroller it names can be reached
-        // in either order (a ZStack backdrop sibling is baked before the page it backs), so neither side can resolve the
-        // other at its own bake time. Nav/render rate, and a no-op for the overwhelmingly common ancestor-resolved bind.
-        _scene.ScrollBinds.ResolveNamedTimelines(_scene);
         if (_root is not null) _root.Context.HostNode = _scene.Root;
     }
 
@@ -507,16 +511,27 @@ public sealed class TreeReconciler
     }
 
     /// <summary>Re-realize any virtual-list windows flagged <see cref="NodeFlags.VirtualRangeDirty"/> (scroll boundary
-    /// crossing) — granular, no component re-render. Called by the host each frame.</summary>
-    public bool ReRealizeVirtuals()
+    /// crossing) — granular, no component re-render. Called by the host each frame. Unbounded (== <c>ReRealizeVirtuals
+    /// (long.MaxValue)</c>) — every steady frame; a fling/fast-scroll frame instead calls the deadline overload below
+    /// via <c>Hosting.FrameBudget.DeadlineTicks</c> (scroll-v3 §3.3 item 6 / §4).</summary>
+    public bool ReRealizeVirtuals() => ReRealizeVirtuals(long.MaxValue);
+
+    /// <summary>Budget-bounded overload: bails BETWEEN rows once <see cref="Stopwatch.GetTimestamp"/> passes
+    /// <paramref name="deadlineTicks"/>, leaving the not-yet-processed dirty viewports still queued and still flagged
+    /// <see cref="NodeFlags.VirtualRangeDirty"/> — "owed" work that a later frame's realize picks back up, instead of
+    /// draining a whole fling's worth of boundary crossings into one frame. <c>long.MaxValue</c> (the parameterless
+    /// overload) skips the clock read entirely — zero extra cost on every steady frame.</summary>
+    public bool ReRealizeVirtuals(long deadlineTicks)
     {
         var dirty = _scene.VirtualRangeDirtyNodes;   // E6: the scene-owned queue — NO _virtuals dictionary scan
         if (_scanFrameEpoch != FrameEpoch) { _scanFrameEpoch = FrameEpoch; LastReRealizeScan = 0; LastReRealizeRealized = 0; }
         LastReRealizeScan += dirty.Count;
         _realizeProgress = false;
+        bool bounded = deadlineTicks != long.MaxValue;
         // Reverse-iterate so a swap-remove (moving the tail entry into the freed slot) never skips an unprocessed entry.
         for (int i = dirty.Count - 1; i >= 0; i--)
         {
+            if (bounded && Stopwatch.GetTimestamp() >= deadlineTicks) break;   // owed: remaining entries keep their VirtualRangeDirty flag
             var node = dirty[i];
             bool alive = _scene.IsLive(node)
                          && (_scene.Flags(node) & NodeFlags.VirtualRangeDirty) != 0
@@ -533,9 +548,6 @@ public sealed class TreeReconciler
         // host performs the same-frame reactive flush for the rewritten index signals. A queue left dirty PURELY by
         // budget exhaustion (visible already covered, window unchanged, no rebind) returns false, so the AppHost 2-pass
         // loops don't burn a pass re-checking it — the budget catch-up rides subsequent frames (HasBudgetDeferredVirtuals).
-        // A freshly realized row may carry a named-timeline bind (or BE the named scroller), so link the same way the
-        // root diff does. Guarded on an empty registry inside, so a run with no named timeline pays one dictionary count.
-        if (_realizeProgress) _scene.ScrollBinds.ResolveNamedTimelines(_scene);
         return _realizeProgress;
 
         static void SwapRemoveDirty(List<NodeHandle> list, int i)
@@ -552,7 +564,6 @@ public sealed class TreeReconciler
         ctx.Anim = Anim;
         ctx.Images = Images;
         ctx.Scene = _scene;
-        ctx.ArmScroll = ArmScroll;
         ctx.RequestFrame = RequestFrame;
         ctx.PeekMainScrollBusy = PeekMainScrollBusy;
         ctx.BeginVirtualRemoval = BeginVirtualRemoval;
@@ -1916,21 +1927,63 @@ public sealed class TreeReconciler
     private static string ScrollCacheKey(string? scope, string key)
         => scope is { Length: > 0 } ? scope + "" + key : key;
 
-    private static void SeedRestore(ref ScrollState sc, float x, float y)
-    {
-        sc.OffsetX = sc.TargetX = x; sc.OffsetY = sc.TargetY = y;
-        sc.RestoreX = x; sc.RestoreY = y; sc.RestorePending = true;
-    }
+    /// <summary>scroll-v3 §3.2 (Reconciler.cs:1921 row): post a Restore command — latched by the kernel until the
+    /// real content extent can hold it (retried each Reclamp), replacing the old direct Offset/Target + RestoreX/Y +
+    /// RestorePending latch this method used to seed by hand.</summary>
+    private void SeedRestore(NodeHandle node, float x, float y)
+        => _scene.ScrollPort?.Post(FluentGpu.Scroll.ScrollInput.Restore((int)node.Raw.Index, x, y));
 
-    /// <summary>Publish/retire this viewport's NAMED scroll timeline (CSS <c>scroll-timeline-name</c>), so a node that is
-    /// not one of its descendants can drive a <see cref="ScrollBindDsl.Timeline"/> bind from it. Re-asserted on every
-    /// patch, like the snap/edge-fade columns, so a name that becomes null (or changes) retires the old registration
-    /// rather than stranding it.</summary>
-    private void ApplyScrollTimeline(NodeHandle node, string? name)
+    /// <summary>scroll-v3-plan §7.2: attach this viewport's ONE authoring handle — <paramref name="authored"/> (the
+    /// element's own <c>Controller</c> prop) when supplied, else a per-node internally-minted instance that stays
+    /// stable across re-renders — and publish it on <see cref="FluentGpu.Hooks.ScrollControllerChannel"/> so a
+    /// descendant's <c>Hooks.UseScroll()</c> resolves it. Re-asserted on every patch (mount + re-bake), like the
+    /// snap/edge-fade columns; a swap away from a previously-bound instance detaches it (see
+    /// <see cref="_boundScrollController"/>). <see cref="UnmountSubtree"/> detaches on teardown.</summary>
+    private void BindScrollController(NodeHandle node, FluentGpu.Scroll.ScrollController? authored)
     {
         int idx = (int)node.Raw.Index;
-        if (name is { Length: > 0 }) _scene.ScrollBinds.PublishTimeline(idx, node, name);
-        else _scene.ScrollBinds.UnpublishTimeline(idx);
+        FluentGpu.Scroll.ScrollController ctrl;
+        if (authored is not null)
+        {
+            _internalScrollControllers.Remove(idx);   // the element now owns its handle; drop the internal fallback
+            ctrl = authored;
+        }
+        else if (!_internalScrollControllers.TryGetValue(idx, out ctrl!))
+        {
+            ctrl = new FluentGpu.Scroll.ScrollController();
+            _internalScrollControllers[idx] = ctrl;
+        }
+        if (_boundScrollController.TryGetValue(idx, out var prev) && !ReferenceEquals(prev, ctrl)) prev.Detach();
+        _boundScrollController[idx] = ctrl;
+        ctrl.Attach(_scene, node, RequestFrame);
+        // Same reuse-the-signal rule as the ContextProviderEl patch path (:776): a fresh Signal every bake would
+        // strand any consumer holding the old one (UseContext's parked-cache fallback resolves by REFERENCE).
+        if (_providerSig.TryGetValue(idx, out var existing) && ReferenceEquals(existing.Channel, FluentGpu.Hooks.ScrollControllerChannel.Current))
+            existing.Sig.Value = ctrl;
+        else
+            _providerSig[idx] = (FluentGpu.Hooks.ScrollControllerChannel.Current, new Signal<object?>(ctrl));
+    }
+
+
+    /// <summary>scroll-v3 §3.2/§3.3: the kernel's own frame-geometry copy, built from the (possibly pre-layout, still
+    /// last-known) <see cref="ScrollState"/> columns — used at the WriteColumns config-patch site (Reconciler.cs:4277
+    /// row) where a fresh layout pass hasn't necessarily republished Content*/Viewport* yet this frame. See
+    /// <c>FlexLayout.BuildFrameSpec</c> for the layout-side twin that takes freshly-computed extents directly.</summary>
+    private static FluentGpu.Scroll.ScrollFrameSpec BuildFrameSpecFromState(in ScrollState sc)
+    {
+        bool horizontal = sc.Orientation == 1;
+        return new FluentGpu.Scroll.ScrollFrameSpec(
+            Orientation: sc.Orientation,
+            ExtentMain: horizontal ? sc.ContentW : sc.ContentH,
+            ExtentCross: horizontal ? sc.ContentH : sc.ContentW,
+            ViewportMain: horizontal ? sc.ViewportW : sc.ViewportH,
+            ViewportCross: horizontal ? sc.ViewportH : sc.ViewportW,
+            Zoom: sc.ZoomFactor,
+            ContentSized: sc.ContentSized,
+            SnapInterval: sc.SnapInterval,
+            SnapStart: sc.SnapStart,
+            SnapEnd: sc.SnapEnd,
+            SnapPoints: sc.SnapPoints);
     }
 
     /// <summary>Seed/save the viewport offset for its <see cref="ScrollState.ScrollKey"/>. At mount: stamp the slot scope +
@@ -1945,7 +1998,7 @@ public sealed class TreeReconciler
             if (newKey is null) return;                  // the common no-restoration viewport: skip the scope walk
             sc.ScrollScope = ScopeFor(node);
             if (_scrollMem.TryGet(ScrollCacheKey(sc.ScrollScope, newKey), out float x, out float y))
-                SeedRestore(ref sc, x, y);
+                SeedRestore(node, x, y);
             return;
         }
         if (newKey == sc.ScrollKey) return;   // not a content-identity change → leave the live offset untouched
@@ -1955,9 +2008,13 @@ public sealed class TreeReconciler
         if (newKey is not null)
         {
             sc.ScrollScope ??= ScopeFor(node);   // scope is fixed for the node's lifetime; compute once if a null-key mount skipped it
-            if (_scrollMem.TryGet(ScrollCacheKey(sc.ScrollScope, newKey), out float nx, out float ny)) { SeedRestore(ref sc, nx, ny); return; }
+            if (_scrollMem.TryGet(ScrollCacheKey(sc.ScrollScope, newKey), out float nx, out float ny)) { SeedRestore(node, nx, ny); return; }
         }
-        sc.OffsetX = sc.TargetX = 0f; sc.OffsetY = sc.TargetY = 0f; sc.RestorePending = false;   // fresh/keyless content → top
+        // fresh/keyless content → top: a hard, immediate reset + Cancel any live drag/fling/chase — a re-key mid-gesture
+        // must not leave a stale coast racing the reset (scroll-v3 §3.2 Reconciler.cs:1960 row).
+        int idx = (int)node.Raw.Index;
+        _scene.ScrollPort?.Post(FluentGpu.Scroll.ScrollInput.ScrollTo(idx, 0f, immediate: true));
+        _scene.ScrollPort?.Post(FluentGpu.Scroll.ScrollInput.Cancel(idx));
     }
 
     /// <summary>Persist a scroll node's offset to <see cref="_scrollMem"/> on teardown (content-swap removal or KeepAlive
@@ -2063,14 +2120,14 @@ public sealed class TreeReconciler
         // halo in one paint so HasBudgetDeferredVirtuals drops to 0 on a static page. Mount still defers the halo
         // for one frame unless prop-eager (visible band first; next FrameEpoch at rest fills overscan without E4 drip).
         bool propEager = ve.RealizeOverscanImmediately;
-        bool atRest = MathF.Abs(sc.FlingVelocity) <= VirtualWindowing.FlingGuardThreshold;
+        bool atRest = MathF.Abs(sc.Velocity) <= VirtualWindowing.FlingGuardThreshold;
         bool mountDefer = mount && !propEager;
         if (mountDefer) entry.MountDeferEpoch = FrameEpoch;
         int effOverscan = mountDefer ? 0 : rowOverscan;
         // Same-epoch as mount-defer: keep ClipRealizeBudget (MountVirtual + ReRealizeVirtuals share one Paint).
         bool sameEpochAsMountDefer = entry.MountDeferEpoch == FrameEpoch;
         bool eagerOverscan = propEager || (atRest && !mountDefer && !sameEpochAsMountDefer);
-        VirtualWindowing.DirectionalOverscan(effOverscan, sc.FlingVelocity, avgExtent, out int lowOv, out int highOv);
+        VirtualWindowing.DirectionalOverscan(effOverscan, sc.Velocity, avgExtent, out int lowOv, out int highOv);
 
         int first, last, visibleFirst, visibleLast, mandFirst, mandLast;
         if (ve.ItemLayout is not null)
@@ -2185,7 +2242,7 @@ public sealed class TreeReconciler
     /// is idempotent. Returns true when budget ran out before the desired window was reached (overscan still owed).
     /// <para>E4b — the pool is not flat: <c>SteadyRealizeRowsPerFrame</c> is the FLOOR (unchanged at rest and at slow
     /// scroll) and the fling lifts it toward <c>SteadyRealizeRowsCeiling</c> in proportion to the rows/second the
-    /// visible edge is consuming — <c>extra = clamp(⌈|FlingVelocity|·SteadyRealizeVelocityFactor / avgExtent⌉, 0,
+    /// visible edge is consuming — <c>extra = clamp(⌈|sc.Velocity|·SteadyRealizeVelocityFactor / avgExtent⌉, 0,
     /// ceiling − floor)</c>, with <paramref name="avgExtent"/> the caller's <c>ContentExtent / ItemCount</c>. Without
     /// it the halo drains under a sustained fling (the mandatory band grows with velocity, a flat refill does not) and
     /// every row entering the band becomes a cold realize. This scales the refill RATE only: the desired window
@@ -2205,12 +2262,12 @@ public sealed class TreeReconciler
         int floor = SteadyRealizeBudget;
         int room = Math.Max(0, SteadyRealizeCeiling - floor);
         int extra = avgExtent > 0f
-            ? Math.Clamp((int)MathF.Ceiling(MathF.Abs(sc.FlingVelocity) * SteadyRealizeVelocityFactor / avgExtent), 0, room)
+            ? Math.Clamp((int)MathF.Ceiling(MathF.Abs(sc.Velocity) * SteadyRealizeVelocityFactor / avgExtent), 0, room)
             : 0;
         int budget = Math.Max(0, floor + extra - _frameRealizeBudgetUsed);
         int lowWant = haveFirst - df;    // overscan rows still owed below
         int highWant = dl - haveLast;    // overscan rows still owed above
-        bool forward = sc.FlingVelocity >= 0f;   // velocity side = ahead: fill it first
+        bool forward = sc.Velocity >= 0f;   // velocity side = ahead: fill it first
         int newFirst = haveFirst, newLast = haveLast;
         if (forward)
         {
@@ -3226,9 +3283,8 @@ public sealed class TreeReconciler
         int idx = (int)node.Raw.Index;
         Anim?.CancelAll(node);
         SaveScroll(node);   // persist this viewport's offset for its ScrollKey so a cold revisit can restore it
-        // Retire any named scroll timeline this viewport published. A useful name is CONTENT-scoped, so skipping this
-        // would leak one registry entry per page visited (and leave a dead handle that no bind can ever resolve).
-        _scene.ScrollBinds.UnpublishTimeline(idx);
+        if (_boundScrollController.Remove(idx, out var scrollCtrl)) scrollCtrl.Detach();   // scroll-v3-plan §7.2
+        _internalScrollControllers.Remove(idx);
         if (_morphKeyByNode.Remove(idx, out string? morphKey))
         {
             RemoveMorphKey(node, morphKey);
@@ -3330,12 +3386,12 @@ public sealed class TreeReconciler
         if (binds is null) return;
         foreach (var d in binds)
         {
-            bool ownsTransform = d.PinTop.HasValue || d.StretchFromTop || d.MorphLeftTo.HasValue || d.MorphTopTo.HasValue
-                || d.To is BindSink.TransX or BindSink.TransY or BindSink.ScaleUniform or BindSink.ScaleY;
+            bool ownsTransform = d.PinTop.HasValue || d.StretchFromTop
+                || d.To is BindSink.TransX or BindSink.TransY or BindSink.ScaleUniform;
             if (ownsTransform)
                 throw new System.InvalidOperationException(
                     "Transform owner conflict: a static Transform matrix cannot be combined with a transform-owning " +
-                    "ScrollBind (PinTop / StretchFromTop / MorphLeftTo / MorphTopTo / a Trans*|Scale* sink) — the bind " +
+                    "ScrollBind (PinTop / StretchFromTop / a Trans*|ScaleUniform sink) — the bind " +
                     "rewrites LocalTransform every frame and would clobber the static matrix.");
         }
     }
@@ -3360,11 +3416,7 @@ public sealed class TreeReconciler
             if ((_scene.Flags(p) & NodeFlags.Scrollable) != 0) { scroller = p; break; }
 
         table.ClearNode(nodeIdx);                                 // wholesale re-bake (slot reuse self-cleans)
-        // A NAMED-timeline entry needs no ancestor scroller — that is the whole point of it — so the no-scroller bail
-        // must not swallow this node's binds when even one of them names a timeline. Named rows are added with a null
-        // scroller and linked by ResolveNamedTimelines once the whole tree is baked (either order is possible, and the
-        // consumer is commonly baked first).
-        if (dsls is null || dsls.Length == 0 || (scroller.IsNull && !AnyNamedTimeline(dsls)))
+        if (dsls is null || dsls.Length == 0 || scroller.IsNull)
         {
             if (hadTrailing) ResetTrailingScrollSink(node);
             return;
@@ -3373,7 +3425,6 @@ public sealed class TreeReconciler
         foreach (var d in dsls)
         {
             var row = new FluentGpu.Animation.ScrollBind { Target = node, OnFlag = d.OnFlag, FlagBit = d.FlagBit };
-            AssertTimelineIsContainmentFree(d);
             if (d.PinTop is { } inset)
             {
                 row.PinKind = 1;
@@ -3398,17 +3449,7 @@ public sealed class TreeReconciler
             else
             {
                 row.Source = d.From;
-                if (d.MorphLeftTo is { } morphX)
-                {
-                    row.Sink = FluentGpu.Animation.BindSink.MorphViewportX;
-                    row.Inset = morphX;
-                }
-                else if (d.MorphTopTo is { } morphY)
-                {
-                    row.Sink = FluentGpu.Animation.BindSink.MorphViewportY;
-                    row.Inset = morphY;
-                }
-                else row.Sink = d.To;
+                row.Sink = d.To;
                 row.OutLo = d.OutStart;
                 row.OutHi = d.OutEnd;
                 row.Ease = d.Ease;
@@ -3424,57 +3465,11 @@ public sealed class TreeReconciler
                     row.Flags |= FluentGpu.Animation.ScrollBind.FlagGeometryAnchor;   // (re)bake at ArrangeViewport
                 else { row.RangeA = row.AnchorAv; row.RangeB = row.AnchorBv; }          // literal-px ⇒ bake now
             }
-            // A named entry defers: it is added with NO scroller (so it joins the node's teardown chain but no eval
-            // chain) and carries the name for ResolveNamedTimelines to link once the publisher is known. It never falls
-            // back to the ancestor scroller — a name that resolves to nothing must stay inert rather than quietly ride
-            // whatever scroller happens to enclose the node.
-            if (d.Timeline is { Length: > 0 } timeline)
-            {
-                row.TimelineName = timeline;
-                table.Add(nodeIdx, NodeHandle.Null, row);
-            }
-            else table.Add(nodeIdx, scroller, row);
+            table.Add(nodeIdx, scroller, row);
         }
 
         if (hadTrailing && (!willOwnTrailing || !table.NodeOwnsSink(nodeIdx, FluentGpu.Animation.BindSink.PresentedHTrailing)))
             ResetTrailingScrollSink(node);
-    }
-
-    private static bool AnyNamedTimeline(ScrollBindDsl[] dsls)
-    {
-        for (int i = 0; i < dsls.Length; i++)
-            if (dsls[i].Timeline is { Length: > 0 }) return true;
-        return false;
-    }
-
-    /// <summary>[Conditional("DEBUG")] tripwire for the one way a named timeline can be misused: pairing it with an op
-    /// that measures the target's position INSIDE the viewport. A named bind exists precisely so a NON-descendant can be
-    /// driven, and for such a node "where is it in the viewport" has no answer — a pin would clamp against a containing
-    /// block it does not have, a morph/SignedPhase would resolve a coordinate through a parent chain that never reaches
-    /// the scroller, and an Enter/Exit range would bake bounds from the wrong space. All silently produce a plausible
-    /// wrong number, so this is a throw rather than a fallback. Erased from the shipping AOT binary — in production,
-    /// safety == the CI gate that exercises this.</summary>
-    [System.Diagnostics.Conditional("DEBUG")]
-    private static void AssertTimelineIsContainmentFree(in ScrollBindDsl d)
-    {
-        if (d.Timeline is not { Length: > 0 }) return;
-        string? offender =
-            d.PinTop.HasValue ? nameof(d.PinTop)
-            : d.ClipTopAtViewport.HasValue ? nameof(d.ClipTopAtViewport)
-            : d.StretchFromTop ? nameof(d.StretchFromTop)
-            : d.MorphLeftTo.HasValue ? nameof(d.MorphLeftTo)
-            : d.MorphTopTo.HasValue ? nameof(d.MorphTopTo)
-            : d.From == FluentGpu.Animation.ScrollChannel.SignedPhase ? nameof(FluentGpu.Animation.ScrollChannel.SignedPhase)
-            // Frac / OverscrollBand anchors are SCROLLER-derived (max offset, band limit) and stay valid across trees;
-            // only the two node-relative ones are rejected.
-            : IsNodeRelativeAnchor(d.Range.A) || IsNodeRelativeAnchor(d.Range.B) ? "a NodeEnter/ExitViewport range"
-            : null;
-        if (offender is not null)
-            throw new System.InvalidOperationException(
-                $"ScrollBind '{d.Timeline}' combines a named timeline with {offender}, which measures the target's " +
-                "position inside the viewport. A named timeline drives a node that is NOT a descendant of the scroller, " +
-                "so there is no such position — use a literal ScrollRange.Px/Frac range with a transform / opacity / " +
-                "blur / clip sink, or drop the name and let the bind resolve its ancestor scroller.");
     }
 
     /// <summary>Detach realized bound slots into the exit-orphan layer before their backing items disappear, then remap
@@ -3680,21 +3675,13 @@ public sealed class TreeReconciler
         for (int i = 0; i < dsls.Length; i++)
         {
             var d = dsls[i];
-            if (d.PinTop is null && d.ClipTopAtViewport is null && d.MorphLeftTo is null && d.MorphTopTo is null
-                && !d.StretchFromTop && d.To == sink) return true;
+            if (d.PinTop is null && d.ClipTopAtViewport is null && !d.StretchFromTop && d.To == sink) return true;
         }
         return false;
     }
 
     private static bool IsGeometryAnchor(FluentGpu.Animation.ScrollBindAnchor a)
         => a != FluentGpu.Animation.ScrollBindAnchor.OffsetPx;
-
-    /// <summary>The subset of geometry anchors that bake from the TARGET's position inside the viewport (as opposed to
-    /// <see cref="FluentGpu.Animation.ScrollBindAnchor.OffsetFrac"/> / <see cref="FluentGpu.Animation.ScrollBindAnchor.OverscrollBand"/>,
-    /// which bake from the scroller's own extent and so remain meaningful for a named cross-tree bind).</summary>
-    private static bool IsNodeRelativeAnchor(FluentGpu.Animation.ScrollBindAnchor a)
-        => a is FluentGpu.Animation.ScrollBindAnchor.NodeEnterViewport
-             or FluentGpu.Animation.ScrollBindAnchor.NodeExitViewport;
 
     /// <summary>Build a LayoutTransition from the new declarative Element fields (Enter/Exit/Transition/Layout/Stagger)
     /// so the rework's authoring surface routes through the existing FLIP/enter/exit seed lifecycle. Null when the node
@@ -4233,26 +4220,24 @@ public sealed class TreeReconciler
                 ss.EdgeCueConfig = ResolveEdgeCues(s.EdgeCues);
                 ss.ItemClipTopInset = float.NaN;
                 ss.ItemClipTopFadeBand = 0f;
-                ss.Chaining = (byte)s.Chaining;                  // nested-scroll hand-off policy (touch pan)
                 // Change-only scroll-geometry observer (the escape hatch; pull-to-refresh / analytics).
                 if (s.OnScrollGeometryChanged is { } obs) _scene.SetScrollObserver(node, obs.Project, obs.Action);
                 else _scene.ClearScrollObserver(node);
                 if (s.EdgeFade is { } sef) _scene.SetEdgeFade(node, sef); else _scene.ClearEdgeFade(node);
                 ss.AutoEdgeFade = s.AutoEdgeFade;
                 ss.AutoEdgeFadeBand = s.AutoEdgeFade ? ResolveAutoEdgeFadeBand(s.AutoEdgeFadeBand) : 0f;
-                // ScrollEl owns the real clip + edge-fade scope, so it can be the native escape root for a hovered
-                // descendant (PagedShelf's measured realize-all strip). Paint-order only; never a hit-test bit.
-                ref InteractionInfo ii = ref _scene.Interaction(node);
-                if (s.HoverElevateClipRoot) ii.HandlerMask |= InteractionInfo.HoverElevateClipRootBit;
-                else ii.HandlerMask &= ~InteractionInfo.HoverElevateClipRootBit;
                 ss.AlwaysShowBar = s.AlwaysShowScrollbar;
                 ss.SuppressBar = s.SuppressScrollBar;
                 // DECLARATION-GATED (the ScrollState snap-field writer contract): only a declaring element writes the snap
                 // columns, and then on EVERY patch (so a per-render interval stays current). A null Snap leaves them
                 // exactly as they are, which is what keeps a control's/probe's post-mount SnapInterval write alive.
                 if (s.Snap is { } snapSpec) snapSpec.ApplyTo(ref ss);
+                // scroll-v3 §3.2 (Reconciler.cs:4277 row): a declarative orientation/snap config change must reach the
+                // kernel's own frame copy even on a frame where layout doesn't otherwise re-arrange this viewport;
+                // ArrangeViewport posts its own (idempotent) SetFrame too once layout actually runs this frame.
+                _scene.ScrollPort?.Post(FluentGpu.Scroll.ScrollInput.SetFrame((int)node.Raw.Index, BuildFrameSpecFromState(in ss)));
                 ApplyScrollKey(node, ref ss, s.ScrollKey, isMount);   // seed (mount) / save+seed (content change) the offset
-                ApplyScrollTimeline(node, s.ScrollTimeline);
+                BindScrollController(node, s.Controller);
                 break;
             }
             case VirtualListEl v:
@@ -4291,8 +4276,10 @@ public sealed class TreeReconciler
                 sc.SuppressBar = v.SuppressScrollBar;
                 // Declaration-gated, exactly as for ScrollEl above (see the ScrollState snap-field writer contract).
                 if (v.Snap is { } vSnapSpec) vSnapSpec.ApplyTo(ref sc);
+                // scroll-v3 §3.2 (Reconciler.cs:4277 row): see the identical ScrollEl note above.
+                _scene.ScrollPort?.Post(FluentGpu.Scroll.ScrollInput.SetFrame((int)node.Raw.Index, BuildFrameSpecFromState(in sc)));
                 ApplyScrollKey(node, ref sc, v.ScrollKey, isMount);   // seed BEFORE RealizeWindow → first window at saved row
-                ApplyScrollTimeline(node, v.ScrollTimeline);
+                BindScrollController(node, v.Controller);
                 break;
             }
             case GridEl g:

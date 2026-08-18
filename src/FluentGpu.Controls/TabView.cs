@@ -2,6 +2,7 @@ using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Scene;
+using FluentGpu.Scroll;
 using FluentGpu.Signals;
 
 namespace FluentGpu.Controls;
@@ -263,31 +264,22 @@ public sealed class TabView : Component
 
         // ── scrolling (the WinUI strip ScrollViewer, TabView.xaml:114-127) ───────────────────────────────────────
 
-        void UpdateEdges(in ScrollState sc)
+        void UpdateEdges(float offsetX, float contentW, float viewportW)
         {
             // Enabled/disabled at the extremes, 0.1 threshold (TabView.cpp:689-734).
-            float scrollable = MathF.Max(0f, sc.ContentW - sc.ViewportW);
-            int e = (sc.OffsetX > 0.1f ? 1 : 0) | (sc.OffsetX < scrollable - 0.1f ? 2 : 0);
+            float scrollable = MathF.Max(0f, contentW - viewportW);
+            int e = (offsetX > 0.1f ? 1 : 0) | (offsetX < scrollable - 0.1f ? 2 : 0);
             if (edgeSig.Peek() != e) edgeSig.Value = e;
         }
 
         void ApplyScroll(NodeHandle vp, float target)
         {
             ref ScrollState sc = ref scene!.ScrollRef(vp);
-            target = Math.Clamp(target, 0f, MathF.Max(0f, sc.ContentW - sc.ViewportW));
-            if (target != sc.OffsetX)
-            {
-                sc.OffsetX = target;
-                sc.TargetX = target;
-                var contentNode = sc.ContentNode;
-                if (!contentNode.IsNull && scene.IsLive(contentNode))
-                {
-                    scene.Paint(contentNode).LocalTransform = Affine2D.Translation(-target, 0f);
-                    scene.Mark(contentNode, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
-                }
-            }
-            UpdateEdges(in sc);
-            Context.RequestRerender();
+            float clamped = Math.Clamp(target, 0f, MathF.Max(0f, sc.ContentW - sc.ViewportW));
+            // Edge chevrons reflect the DESTINATION, not the live offset — the click already commits the intent, and
+            // nothing else re-polls edgeSig while the kernel's glide (below) is still in flight.
+            UpdateEdges(clamped, sc.ContentW, sc.ViewportW);
+            ScrollIntoView.ScrollTo(Context, vp, clamped, animate: true);
         }
 
         // ±50px per repeat tick (OnScrollDecreaseClick/OnScrollIncreaseClick, TabView.cpp:1097-1117).
@@ -326,7 +318,7 @@ public sealed class TabView : Component
             if (MathF.Abs(tabAreaW.Peek() - sc.ViewportW) > 0.5f) tabAreaW.Value = sc.ViewportW;
             bool of = sc.ContentW > sc.ViewportW + 0.5f;
             if (overflowSig.Peek() != of) overflowSig.Value = of;
-            UpdateEdges(in sc);
+            UpdateEdges(sc.OffsetX, sc.ContentW, sc.ViewportW);
         }
         UseLayoutEffect(MeasureStrip, DepKey.From(HashCode.Combine(version, count, (int)TabWidthMode, viewportSize, measuredW, overflowing, edges)));
 

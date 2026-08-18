@@ -37,6 +37,8 @@ public enum WakeReasons
     VideoPumpPending = 1 << 23, // one coalesced native-video / geometry pump must run after layout settles
     WarmingVirtuals = 1 << 24,  // bound cold-realize stagger and/or KeepAlive unpark replay drip still in flight
     BudgetDeferredVirtuals = 1 << 25, // E4 overscan halo only partially realized this paint — catch-up owed next frame
+    ScrollProducer = 1 << 26,  // IPlatformWindow.ScrollProducerLive (scroll-v3-plan §5.2): a frame-aligned producer (DM
+                               // engaged/pending, or a hi-res wheel-fallback gesture live) needs one PumpScroll per refresh
 }
 
 /// <summary>

@@ -92,6 +92,69 @@ public sealed class HeadlessWindow : IPlatformWindow
 
     public void WaitForWork(int timeoutMs) { }
 
+    // ── scripted frame-aligned scroll producer (scroll-v3-plan §5.5 "Headless: PumpScroll returns scripted
+    // QueueScrollDelta(dipX, dipY) for that frame"). Additive to — and independent of — the QueueInput-based scripted
+    // scroll-phase API the VerticalSlice suites already use (InputKind.ScrollBegin/ScrollDelta/ScrollEnd queued
+    // directly and drained by the ordinary PumpInto above): that API stays intact. This one instead exercises the
+    // PumpScroll seam itself (a frame-aligned producer, called once per produced frame from Paint after the display-
+    // phase gate) so AppHost's PumpScroll→router→kernel wiring can be gated headlessly too.
+    private float _pendingScrollDipX, _pendingScrollDipY;
+    private bool _pendingScrollDeltaQueued;
+    private bool _pendingScrollLift;
+    private bool _scrollGestureOpen;
+    private PointerKind _scrollPointerKind = PointerKind.Touchpad;
+    private uint _scrollContactId = 1;   // fixed synthetic id — one concurrent scripted gesture
+
+    /// <summary>Queue a frame-aligned scroll delta (DIP), accumulated until the next <see cref="PumpScroll"/> call —
+    /// so multiple calls between pumps sum into one frame's delta, matching a real per-frame producer. Opens the
+    /// gesture (emits <see cref="InputKind.ScrollBegin"/>) on the first pump after the gesture was closed/never
+    /// started.</summary>
+    public void QueueScrollDelta(float dipX, float dipY, PointerKind kind = PointerKind.Touchpad)
+    {
+        _pendingScrollDipX += dipX;
+        _pendingScrollDipY += dipY;
+        _pendingScrollDeltaQueued = true;
+        _scrollPointerKind = kind;
+    }
+
+    /// <summary>Queue the gesture's lift — emits <see cref="InputKind.ScrollEnd"/> on the NEXT <see cref="PumpScroll"/>
+    /// call (after flushing any still-pending queued delta first).</summary>
+    public void QueueScrollLift() => _pendingScrollLift = true;
+
+    /// <inheritdoc cref="IPlatformWindow.ScrollProducerLive"/>
+    public bool ScrollProducerLive => _scrollGestureOpen;
+
+    public int PumpScroll(in FrameClock clock, InputEventRing ring)
+    {
+        int n = 0;
+        if (_pendingScrollDeltaQueued)
+        {
+            if (!_scrollGestureOpen)
+            {
+                ring.Write(new InputEvent(InputKind.ScrollBegin, default, 0, 0, QpcTicks: clock.FrameQpc,
+                    Pointer: _scrollPointerKind, PointerId: _scrollContactId,
+                    DeviceClassRaw: (byte)ScrollDeviceClass.Touchpad));
+                _scrollGestureOpen = true;
+                n++;
+            }
+            ring.Write(new InputEvent(InputKind.ScrollDelta, default, 0, 0, _pendingScrollDipY, QpcTicks: clock.FrameQpc,
+                Pointer: _scrollPointerKind, PointerId: _scrollContactId,
+                ScrollDeltaX: _pendingScrollDipX, DeviceClassRaw: (byte)ScrollDeviceClass.Touchpad));
+            n++;
+            _pendingScrollDipX = 0f; _pendingScrollDipY = 0f; _pendingScrollDeltaQueued = false;
+        }
+        if (_pendingScrollLift && _scrollGestureOpen)
+        {
+            ring.Write(new InputEvent(InputKind.ScrollEnd, default, 0, 0, QpcTicks: clock.FrameQpc,
+                Pointer: _scrollPointerKind, PointerId: _scrollContactId,
+                DeviceClassRaw: (byte)ScrollDeviceClass.Touchpad));
+            _scrollGestureOpen = false;
+            _pendingScrollLift = false;
+            n++;
+        }
+        return n;
+    }
+
     public void SetCursor(CursorId id) => LastCursor = id;
     public void SetTitle(StringId title) { }
     public void Show() => Shown = true;

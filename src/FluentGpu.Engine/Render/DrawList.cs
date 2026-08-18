@@ -47,6 +47,12 @@ public struct DrawListOpcodeStats
     public int FillRoundRect, DrawGlyphRun, PushClip, PopClip, DrawImage, DrawRoundRectStroke, DrawShadow;
     public int DrawGradientRect, PushLayer, PopLayer, DrawGradientStroke, DrawArc, DrawPolylineStroke, DrawTabShape, DrawGlyphRunGradient;
     public int DrawIconMask, DrawVideo, EraseRoundRect;
+    /// <summary>PushLayer commands specifically of <see cref="LayerKind.Acrylic"/> (a subset of <see cref="PushLayer"/>,
+    /// which does not discriminate kind). Incremented only by the raw <see cref="DrawList.PushLayer"/> emitter — the
+    /// Opacity/Blur/EdgeFade convenience methods pass a different <c>Kind</c> and do not touch this field. Lets a caller
+    /// that only has a subtree's aggregate <see cref="DrawSpan.OpcodeStats"/> (scroll-v3-plan-2026-08-17.md §6.1, WP-Q1's
+    /// <c>ScrollLeaseCapture.HasAcrylicOrVideo</c>) answer "does this span contain an Acrylic layer" without re-walking it.</summary>
+    public int Acrylic;
 
     public void Add(DrawOp op)
     {
@@ -93,6 +99,7 @@ public struct DrawListOpcodeStats
         DrawIconMask += other.DrawIconMask;
         DrawVideo += other.DrawVideo;
         EraseRoundRect += other.EraseRoundRect;
+        Acrylic += other.Acrylic;
     }
 
     public readonly DrawListOpcodeStats Minus(in DrawListOpcodeStats other) => new()
@@ -115,10 +122,11 @@ public struct DrawListOpcodeStats
         DrawIconMask = DrawIconMask - other.DrawIconMask,
         DrawVideo = DrawVideo - other.DrawVideo,
         EraseRoundRect = EraseRoundRect - other.EraseRoundRect,
+        Acrylic = Acrylic - other.Acrylic,
     };
 
     public override readonly string ToString()
-        => $"fill={FillRoundRect} glyph={DrawGlyphRun} glyphGrad={DrawGlyphRunGradient} clip={PushClip}/{PopClip} img={DrawImage} stroke={DrawRoundRectStroke} shadow={DrawShadow} grad={DrawGradientRect}/{DrawGradientStroke} layer={PushLayer}/{PopLayer} arc={DrawArc} poly={DrawPolylineStroke} tab={DrawTabShape} icon={DrawIconMask} video={DrawVideo} erase={EraseRoundRect}";
+        => $"fill={FillRoundRect} glyph={DrawGlyphRun} glyphGrad={DrawGlyphRunGradient} clip={PushClip}/{PopClip} img={DrawImage} stroke={DrawRoundRectStroke} shadow={DrawShadow} grad={DrawGradientRect}/{DrawGradientStroke} layer={PushLayer}/{PopLayer} arc={DrawArc} poly={DrawPolylineStroke} tab={DrawTabShape} icon={DrawIconMask} video={DrawVideo} erase={EraseRoundRect} acrylic={Acrylic}";
 }
 
 /// <summary>How a <see cref="FillRoundRectCmd"/> fills its interior.</summary>
@@ -545,6 +553,7 @@ public sealed class DrawList
         WritePayload(new PushLayerCmd(deviceRect, radii, tint, fallback, tintOpacity, blurSigma, noiseOpacity, luminosityOpacity,
             GroupAlpha: Math.Clamp(groupAlpha, 0f, 1f), LayerId: layerId, FeatherFrac: featherFrac));
         PushSort(sortKey);
+        _opcodeStats.Acrylic++;   // the raw PushLayer emitter's default Kind IS Acrylic (0) — see DrawListOpcodeStats.Acrylic
     }
 
     /// <summary>Begin a FLAT opacity group (<see cref="LayerKind.Opacity"/>): everything until the matching
@@ -818,6 +827,143 @@ public sealed class DrawList
             }
         }
         return p == end;
+    }
+
+    /// <summary>Static twin of <see cref="TranslateCopiedSpan"/> for the render-thread fling lease
+    /// (scroll-v3-plan-2026-08-17.md §6.2, WP-Q1): restores <paramref name="pristine"/>'s bytes at
+    /// [<paramref name="start"/>, <paramref name="start"/>+<paramref name="len"/>) into <paramref name="dst"/> at the
+    /// SAME offset, then patches every command in <paramref name="dst"/> in place by (<paramref name="dx"/>,
+    /// <paramref name="dy"/>) — the exact same per-opcode rules as the instance method, including the ACRYLIC
+    /// rejection (a <see cref="LayerKind.Acrylic"/> <see cref="PushLayerCmd"/> makes this return false; the caller —
+    /// the lease ticker — must then treat the lease as no longer eligible rather than present a partially-patched
+    /// frame, since unlike <see cref="CopySpanFromPriorTranslated"/> there is no arena length to roll back to here).
+    /// <para><paramref name="motionSoft"/> defaults to full softness (255): a leased body is Ballistic/Driven and
+    /// therefore mid-motion on every tick it exists for — the "just settled, re-snap crisp" transition happens on the
+    /// UI thread at Revoke/settle (outside this call), never inside a lease tick.</para>
+    /// <para>Allocation-free; both buffers are caller-owned (the render-private scratch arena — a pristine copy of the
+    /// acquired frame's bytes, taken once per acquire — and the frame buffer being submitted this tick). No instance
+    /// state is touched, so this is safe to call from the render thread against render-owned memory only.</para></summary>
+    public static bool TranslateSpan(Span<byte> dst, ReadOnlySpan<byte> pristine, int start, int len, float dx, float dy, int motionSoft = 255)
+    {
+        if (start < 0 || len < 0 || (uint)(start + len) > (uint)pristine.Length || (uint)(start + len) > (uint)dst.Length)
+            return false;
+        pristine.Slice(start, len).CopyTo(dst.Slice(start, len));
+        if (dx == 0f && dy == 0f) return true;
+        int p = start;
+        int end = start + len;
+        while (p < end)
+        {
+            if (end - p < sizeof(int)) return false;
+            var op = (DrawOp)MemoryMarshal.Read<int>(dst.Slice(p, sizeof(int)));
+            p += sizeof(int);
+            switch (op)
+            {
+                case DrawOp.FillRoundRect:
+                    if (!TranslatePayloadStatic<FillRoundRectCmd>(dst, ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
+                    break;
+                case DrawOp.DrawImage:
+                    if (!TranslatePayloadStatic<DrawImageCmd>(dst, ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
+                    break;
+                case DrawOp.DrawRoundRectStroke:
+                    if (!TranslatePayloadStatic<DrawRoundRectStrokeCmd>(dst, ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
+                    break;
+                case DrawOp.DrawShadow:
+                    if (!TranslatePayloadStatic<DrawShadowCmd>(dst, ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
+                    break;
+                case DrawOp.DrawGradientRect:
+                    if (!TranslatePayloadStatic<DrawGradientRectCmd>(dst, ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
+                    break;
+                case DrawOp.DrawGradientStroke:
+                    if (!TranslatePayloadStatic<DrawGradientStrokeCmd>(dst, ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
+                    break;
+                case DrawOp.DrawArc:
+                    if (!TranslatePayloadStatic<DrawArcCmd>(dst, ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
+                    break;
+                case DrawOp.DrawPolylineStroke:
+                    if (!TranslatePayloadStatic<DrawPolylineStrokeCmd>(dst, ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
+                    break;
+                case DrawOp.DrawTabShape:
+                    if (!TranslatePayloadStatic<DrawTabShapeCmd>(dst, ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
+                    break;
+                case DrawOp.DrawIconMask:
+                    if (!TranslatePayloadStatic<DrawIconMaskCmd>(dst, ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
+                    break;
+                case DrawOp.DrawVideo:
+                    // Exact under translation, like FillRoundRect (see TranslateCopiedSpan's DrawVideo case).
+                    if (!TranslatePayloadStatic<DrawVideoCmd>(dst, ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
+                    break;
+                case DrawOp.EraseRoundRect:
+                    if (!TranslatePayloadStatic<EraseRoundRectCmd>(dst, ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
+                    break;
+                case DrawOp.DrawGlyphRun:
+                    if (!TranslatePayloadMotionStatic<DrawGlyphRunCmd>(dst, ref p, end, dx, dy, motionSoft, static (c, x, y, soft) => c with { Transform = Translate(c.Transform, x, y), InMotion = soft })) return false;
+                    break;
+                case DrawOp.DrawGlyphRunGradient:
+                    if (!TranslatePayloadMotionStatic<DrawGlyphRunGradientCmd>(dst, ref p, end, dx, dy, motionSoft, static (c, x, y, soft) => c with { Transform = Translate(c.Transform, x, y), InMotion = soft })) return false;
+                    break;
+                case DrawOp.PushClip:
+                    if (!TranslatePayloadStatic<ClipCmd>(dst, ref p, end, dx, dy, static (c, x, y) => c with
+                    {
+                        DeviceRect = OffsetRect(c.DeviceRect, x, y),
+                        RoundedRect = c.CornerRadius > 0f ? OffsetRect(c.RoundedRect, x, y) : c.RoundedRect,
+                    })) return false;
+                    break;
+                case DrawOp.PopClip:
+                    break;   // zero payload — nothing to advance, nothing to patch
+                case DrawOp.PushLayer:
+                    if (!TranslatePushLayerStatic(dst, ref p, end, dx, dy)) return false;
+                    break;
+                case DrawOp.PopLayer:
+                    if (!TranslatePayloadStatic<PopLayerCmd>(dst, ref p, end, dx, dy, static (c, x, y) => c with { DeviceRect = OffsetRect(c.DeviceRect, x, y) })) return false;
+                    break;
+                default:
+                    return false;
+            }
+        }
+        return p == end;
+    }
+
+    private static bool TranslatePayloadStatic<T>(Span<byte> buf, ref int p, int end, float dx, float dy, TranslatePayloadFunc<T> translate) where T : unmanaged
+    {
+        int size = Unsafe.SizeOf<T>();
+        if (p + size > end) return false;
+        var span = buf.Slice(p, size);
+        T cmd = MemoryMarshal.Read<T>(span);
+        cmd = translate(cmd, dx, dy);
+        MemoryMarshal.Write(span, in cmd);
+        p += size;
+        return true;
+    }
+
+    private static bool TranslatePayloadMotionStatic<T>(Span<byte> buf, ref int p, int end, float dx, float dy, int soft, TranslatePayloadMotionFunc<T> translate) where T : unmanaged
+    {
+        int size = Unsafe.SizeOf<T>();
+        if (p + size > end) return false;
+        var span = buf.Slice(p, size);
+        T cmd = MemoryMarshal.Read<T>(span);
+        cmd = translate(cmd, dx, dy, soft);
+        MemoryMarshal.Write(span, in cmd);
+        p += size;
+        return true;
+    }
+
+    /// <summary>Static twin of <see cref="TranslatePushLayer"/> — same ACRYLIC rejection, same field patch.</summary>
+    private static bool TranslatePushLayerStatic(Span<byte> buf, ref int p, int end, float dx, float dy)
+    {
+        int size = Unsafe.SizeOf<PushLayerCmd>();
+        if (p + size > end) return false;
+        var span = buf.Slice(p, size);
+        var cmd = MemoryMarshal.Read<PushLayerCmd>(span);
+        if (cmd.Kind == (int)LayerKind.Acrylic) return false;
+        cmd = cmd with
+        {
+            DeviceRect = OffsetRect(cmd.DeviceRect, dx, dy),
+            CompositeClip = cmd.CompositeClip == default ? cmd.CompositeClip : OffsetRect(cmd.CompositeClip, dx, dy),
+            InMotion = cmd.Kind == (int)LayerKind.Blur ? 1 : cmd.InMotion,
+        };
+        MemoryMarshal.Write(span, in cmd);
+        p += size;
+        return true;
     }
 
     /// <summary>Translate a <see cref="PushLayerCmd"/> in place, or REJECT the whole span (false) when the layer's pixels
