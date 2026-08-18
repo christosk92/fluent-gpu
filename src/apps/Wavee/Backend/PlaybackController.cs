@@ -246,7 +246,10 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     /// <c>FluentVideoMediaHost.LoadVideo</c>, returning true once a source has started opening and FALSE when the track has no
     /// playable video (so this controller can fall back to audio instead of leaving the user in silence). Kept as a delegate
     /// so the portable controller never references the SpotifyLive video types. Wired by <c>LiveConnect.WireVideoMedia</c>.</summary>
-    public Func<Track, CancellationToken, Task<bool>>? LoadCurrentVideoAsync { get; set; }
+    /// <para>The <c>long</c> is the position the video session must START at (<c>&lt;= 0</c> = from the beginning). It
+    /// travels with the LOAD rather than as a follow-up seek because at the moment of an audio→video swap the video
+    /// player does not exist yet — see <c>VideoLoadRequest</c>.</para>
+    public Func<Track, long, CancellationToken, Task<bool>>? LoadCurrentVideoAsync { get; set; }
 
     /// <summary>Source-agnostic seam — may a prepared (gapless/crossfaded) hand-off be scheduled INTO this playable? Wired
     /// by the live bootstrap to the media-provider registry's <c>SupportsPreparedNext</c>, so a source that ships without
@@ -416,13 +419,19 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             }
             else
                 _log.Info($"media kind re-evaluated {_currentKind}→{next} for {cur.Uri} — reloading the current playable");
-            // POSITION HANDOFF IS DELIBERATELY NOT ATTEMPTED across a kind boundary, in EITHER direction. A music video is a
-            // DIFFERENT EDIT of the song with its own timeline (spoken intros, alternate arrangements), so the audio position
-            // and the video position are NOT comparable — seeking one to the other lands in the wrong place. Both directions
-            // therefore start at 0. Do not "fix" this into a seek. (Real position continuity for the audio→video→audio round
-            // trip needs a per-kind checkpoint; that is M7's job, alongside real buffering.)
+            // POSITION IS CARRIED ACROSS THE KIND BOUNDARY, in both directions: toggling video keeps your place instead of
+            // restarting the song. This reverses an earlier deliberate refusal, whose reasoning was that a music video is a
+            // DIFFERENT EDIT (spoken intros, alternate arrangements) so the two timelines are not strictly comparable. That
+            // is true, but restarting at 0 is the worse answer for the common case — the edits are the same song, and a user
+            // who toggles at 1:20 expects to still be at 1:20. Where the edits genuinely differ the landing is approximate,
+            // never wrong-by-construction: the incoming side clamps against ITS OWN duration (audio here from the catalog
+            // length; video inside the host, once the media engine reports the real one), so a carry that overruns a shorter
+            // edit lands near its end rather than past it.
+            long carry = Math.Max(0, _currentHost.PositionMs);
+            if (next != PlayableKind.Video && cur.DurationMs > 0 && carry > cur.DurationMs)
+                carry = cur.DurationMs;   // heading to audio: the catalog length is known here, so clamp before the load
             MintCommand("playbtn");
-            await LoadAndPlayCurrentAsync(EvKind.Started, ct).ConfigureAwait(false);
+            await LoadAndPlayCurrentAsync(EvKind.Started, ct, carry).ConfigureAwait(false);
         }
         finally { _lock.Release(); }
     }
@@ -2160,16 +2169,18 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
 
         try
         {
-            if (!await loadVideo(cur, ct).ConfigureAwait(false)) return false;
+            if (!await loadVideo(cur, resumePositionMs, ct).ConfigureAwait(false)) return false;
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex) { ReportPlaybackError(ex); return true; }   // handled (surfaced) — do not also start audio
 
         if (!initiallyPaused) _currentHost.Play();
-        // The video starts at ITS OWN 0 and a resume position is honored only when the caller explicitly asked for one (a
-        // retry checkpoint on the same video). A kind SWITCH never passes one — see RefreshCurrentMediaKindAsync: the audio
-        // and video timelines are different edits and are not comparable, so we deliberately do not seek across the boundary.
-        if (resumePositionMs > 0) _currentHost.Seek(resumePositionMs);
+        // NO follow-up Seek here: the resume position was handed to `loadVideo` above and is applied INSIDE the load, after
+        // the session opens and before it plays. That ordering is the whole point — at an audio→video switch the video
+        // player does not exist yet (the host serializes teardown→build→open through its load pump), so a seek issued at
+        // this line would land on a null player and be dropped. That is exactly why every audio→video switch used to
+        // restart at 0. Applying it in the load also means the first frame shown is already at the right place.
+        // A retry checkpoint on the same video travels the same path (the host seeks the live session instead of rebuilding).
         // Publish the track change even while the video source is still opening — the projection is source-agnostic (position
         // comes from the host clock; duration from Track.DurationMs). A video boundary is a hard cut: no prepared-next warm.
         Emit(BuildEvent(kind, cur, Math.Max(0, resumePositionMs), mediaId, bitrateKbps, audioFormat, durationMs, fileId));

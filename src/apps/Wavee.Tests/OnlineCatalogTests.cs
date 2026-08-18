@@ -372,6 +372,8 @@ public class OnlineCatalogTests
         Assert.Equal("blue", vars.GetProperty("query").GetString());
         Assert.False(vars.TryGetProperty("searchTerm", out _));
         Assert.Equal(2, vars.GetProperty("sectionFilters").GetArrayLength());
+        Assert.Equal(50, vars.GetProperty("numberOfTopResults").GetInt32());   // desktop pins 50, not the caller limit
+        Assert.False(vars.GetProperty("includeAlbumPreReleases").GetBoolean());
     }
 
     // Audiobooks is the ONE facet whose op sends includePreReleases:true (wire-verified).
@@ -386,6 +388,22 @@ public class OnlineCatalogTests
 
         Assert.Equal(PathfinderOps.SearchAudiobooks, wire.Op(0));
         Assert.True(wire.Vars(0).GetProperty("includePreReleases").GetBoolean());
+    }
+
+    [Fact]
+    public async Task SpotifySearch_GenresFacet_UsesSearchTerm()
+    {
+        var store = new InMemoryStore();
+        var wire = new Wire("""{ "data": { "searchV2": { "genres": { "totalCount": 2, "items": [] } } } }""");
+        using var catalog = Catalog(wire, store, new RecordingHydrator(store));
+
+        await catalog.SearchAsync("sleep", SearchFacet.Genres, 0, 30);
+
+        Assert.Equal(PathfinderOps.SearchGenres, wire.Op(0));
+        var vars = wire.Vars(0);
+        Assert.Equal("sleep", vars.GetProperty("searchTerm").GetString());
+        Assert.False(vars.GetProperty("includeAlbumPreReleases").GetBoolean());
+        Assert.Equal(20, vars.GetProperty("numberOfTopResults").GetInt32());
     }
 
     // A row-less answer warms nothing — no empty trait pass per keystroke.
@@ -440,6 +458,8 @@ public class OnlineCatalogTests
         Assert.Equal(PathfinderOps.SearchSuggestions, wire.Op(0));
         Assert.Equal(PathfinderOps.SearchSuggestions, wire.Op(1));
         Assert.Equal("blue", wire.Vars(0).GetProperty("query").GetString());
+        Assert.False(wire.Vars(0).GetProperty("includeAlbumPreReleases").GetBoolean());
+        Assert.Equal(30, wire.Vars(0).GetProperty("numberOfTopResults").GetInt32());
     }
 
     const string HomeResponse = """{ "data": { "home": { "greeting": { "transformedLabel": "Good evening" } } } }""";
@@ -498,6 +518,9 @@ public class OnlineCatalogTests
             SuggestCalls++;
             return Task.FromResult(Suggest is null ? SearchSuggestions.Empty : Suggest(query));
         }
+
+        public Task<IReadOnlyList<SearchTopHit>> RecentSearchesAsync(CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<SearchTopHit>>(Array.Empty<SearchTopHit>());
 
         public Task<LiveHomeResult?> GetHomeAsync(CancellationToken ct = default)
         {

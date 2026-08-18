@@ -1160,6 +1160,93 @@ static class OverlaySuite
                 ok, $"query='{root.Query!.Peek()}' chosen={string.Join("|", root.Chosen)}");
         }
 
+        // ── W0f.8b — AutoSuggestBox inline ghost: paints suffix; Tab/Right-at-end accept; Right mid-string and empty Completion do not ──
+        {
+            static bool HasSceneText(SceneStore s, NodeHandle n, StringTable intern, string want)
+            {
+                if (s.Paint(n).VisualKind == VisualKind.Text && intern.Resolve(s.Paint(n).Text) == want) return true;
+                for (var c = s.FirstChild(n); !c.IsNull; c = s.NextSibling(c))
+                    if (HasSceneText(s, c, intern, want)) return true;
+                return false;
+            }
+            static bool HasTertiaryText(SceneStore s, NodeHandle n, StringTable intern, string want)
+            {
+                if (s.Paint(n).VisualKind == VisualKind.Text && intern.Resolve(s.Paint(n).Text) == want
+                    && s.Paint(n).TextColor == Tok.TextTertiary) return true;
+                for (var c = s.FirstChild(n); !c.IsNull; c = s.NextSibling(c))
+                    if (HasTertiaryText(s, c, intern, want)) return true;
+                return false;
+            }
+
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("w0f-asbg", new Size2(420, 320), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new W0fAsbGhostProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var scene = host.Scene;
+            ClickNode(host, window, FindRole(scene, scene.Root, AutomationRole.Text));
+            foreach (char c in "Ca") window.QueueInput(new InputEvent(InputKind.Char, default, 0, c));
+            host.RunFrame();
+            root.Completion!.Value = "Cascadia Code";
+            host.RunFrame();
+            bool paints = HasSceneText(scene, scene.Root, strings, "Cascadia Code") && root.Query!.Peek() == "Ca";
+
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Tab));
+            host.RunFrame();
+            bool tabOk = root.Query!.Peek() == "Cascadia Code"
+                && root.Submitted.Count == 0
+                && root.Changes.Count > 0 && root.Changes[^1] == ("Cascadia Code", TextChangeReason.ProgrammaticChange);
+
+            // Fresh box: Right-at-end accepts; Right after Left (mid-string) does not.
+            var rootR = new W0fAsbGhostProbe();
+            using var hostR = new AppHost(app, window, device, fonts, strings, rootR);
+            hostR.RunFrame();
+            ClickNode(hostR, window, FindRole(hostR.Scene, hostR.Scene.Root, AutomationRole.Text));
+            foreach (char c in "Ca") window.QueueInput(new InputEvent(InputKind.Char, default, 0, c));
+            hostR.RunFrame();
+            rootR.Completion!.Value = "Cascadia Code";
+            hostR.RunFrame();
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Left));
+            hostR.RunFrame();
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Right));
+            hostR.RunFrame();
+            bool midRight = rootR.Query!.Peek() == "Ca";
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Right));
+            hostR.RunFrame();
+            bool endRight = rootR.Query!.Peek() == "Cascadia Code" && rootR.Submitted.Count == 0;
+
+            // Highlight hides the ghost (arrow preview owns the field).
+            var rootH = new W0fAsbGhostProbe();
+            using var hostH = new AppHost(app, window, device, fonts, strings, rootH);
+            hostH.RunFrame();
+            ClickNode(hostH, window, FindRole(hostH.Scene, hostH.Scene.Root, AutomationRole.Text));
+            foreach (char c in "Ca") window.QueueInput(new InputEvent(InputKind.Char, default, 0, c));
+            hostH.RunFrame();
+            hostH.RunFrame();
+            rootH.Completion!.Value = "Cascadia Code";
+            hostH.RunFrame();
+            bool ghostBefore = HasTertiaryText(hostH.Scene, hostH.Scene.Root, strings, "Cascadia Code");
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Down));
+            hostH.RunFrame();
+            bool hideHi = ghostBefore && !HasTertiaryText(hostH.Scene, hostH.Scene.Root, strings, "Cascadia Code");
+
+            // Tab with no completion does not eat focus (second field receives it).
+            var rootT = new W0fAsbGhostProbe { TwoFields = true };
+            using var hostT = new AppHost(app, window, device, fonts, strings, rootT);
+            hostT.RunFrame();
+            var texts = Roles(hostT.Scene, AutomationRole.Text);
+            ClickNode(hostT, window, texts[0]);
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Tab));
+            hostT.RunFrame();
+            bool tabLeaves = texts.Count >= 2 && (hostT.Scene.Flags(texts[0]) & NodeFlags.Focused) == 0;
+
+            Check("W0f.8b AutoSuggestBox ghost: paints suffix; Tab/Right-at-end accept (ProgrammaticChange, no submit); Right mid-string does not; highlight hides; Tab with no completion leaves the field",
+                paints && tabOk && midRight && endRight && hideHi && tabLeaves,
+                $"paints={paints} tab={tabOk} midR={midRight} endR={endRight} hideHi={hideHi} tabLeaves={tabLeaves}");
+        }
+
         // ── W0f.9 — AutoSuggestBox row click: SuggestionChosen BEFORE QuerySubmitted; item content inset 12 ──
         {
             using var app = new HeadlessPlatformApp();

@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using FluentGpu.Animation;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
@@ -8,6 +9,7 @@ using FluentGpu.Hooks;
 using FluentGpu.Localization;
 using FluentGpu.Signals;
 using Wavee.Core;
+using Wavee.Features.Detail;
 using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
@@ -19,70 +21,118 @@ static class SearchQuery
     public static readonly Context<Signal<string>?> Slot = new(null);
 }
 
-// The Search page (docs/plans/wavee/architecture.md §2 "Search, browse & home") — WaveeMusic's search skeleton: a filter-chip row
-// (All / Songs / Artists / Albums / Playlists), an empty "Browse all" category grid, an "All" composite (Top result +
-// Songs band + per-type shelves), and a flat unified results list per chip (row + type pill). The query comes from the
-// live omnibar signal (SearchQuery.Slot) so typing re-runs the search; the route carries the query for history.
+// The Search page — one keep-alive workspace. Fetch keys off the committed route Arg, not the live omnibar
+// (typing on an open Search page must not fire searchTopResultsList). Empty Arg is recents + Browse.
 sealed class SearchPage : Component
 {
-    readonly Signal<int> _chip = new(0);   // 0 All · 1 Songs · 2 Artists · 3 Albums · 4 Playlists
-    readonly SelectionModel _songsSel = new();
-    IReadOnlyList<Track> _songsTracks = Array.Empty<Track>();
+    readonly IReadSignal<Route> _route;
+    readonly Signal<int> _chip = new(0);   // index into _facets (0 is always All)
+    SearchFacet[] _facets = [SearchFacet.All];
+    SearchResults? _chipSource;
+    int _prevChip;
+    bool _slideArmed;
     const int SearchPageSize = 50;
+    const float FacetUnderlineH = 3f;
+    const float FacetUnderlineMs = 260f;
+
+    public SearchPage(IReadSignal<Route> route) => _route = route;
 
     public override Element Render()
     {
         var svc = UseContext(Services.Slot);
         var go = UseContext(HistoryStore.NavCtx);
-        var querySig = UseContext(SearchQuery.Slot);
         if (svc is null) return new BoxEl { Grow = 1f };
-        // Debounce the omnibar query 250ms: a fast typist fires ONE search, not one per keystroke. The thunk auto-tracks
-        // querySig, so each keystroke re-arms the trailing-edge commit; the UseResource deps below ride the debounced value
-        // (empty query → BrowseAll after the same quiet window). Zero re-render until the debounce fires.
-        string q = UseDebouncedValue(() => (querySig?.Value ?? "").Trim(), 250f).Value;   // subscribe → re-render + re-search after quiet
-        int chip = _chip.Value;                             // subscribe
-        UseEffect(() => _songsSel.ClearSelection(), q + ":" + chip);
-        var facet = RequestFacetFor(chip);
-        var results = UseResource(ct => svc.Library.SearchAsync(q, facet, 0, SearchPageSize, ct), SearchResults.Empty, (q, chip)).Loadable;   // selected tab drives the live facet op
+        string q = (_route.Value.Arg ?? "").Trim();
+        int chip = _chip.Value;
+        UseEffect(() => { _chip.Value = 0; _chipSource = null; _prevChip = 0; _slideArmed = false; }, q);
+        int facetCount = _facets.Length;
+        UseEffect(() => { if (_chip.Peek() >= facetCount) _chip.Value = 0; }, facetCount);
+        var facet = FacetAt(chip);
+        var pageScroll = UseSignal(0f);
+        UseEffect(() => pageScroll.Value = 0f, q + ":" + (int)facet);
+        var results = UseResource(ct => q.Length == 0
+            ? System.Threading.Tasks.Task.FromResult(SearchResults.Empty)
+            : svc.Library.SearchAsync(q, facet, 0, SearchPageSize, ct), SearchResults.Empty, (q, (int)facet)).Loadable;
 
-        // Scroll-position restoration keyed by the query: each distinct query has its own remembered scroll (a new query
-        // starts at the top; returning to a prior query restores it). One ScrollView node serves every query in place.
+        (Func<ScrollGeometry, long> Project, Action<ScrollGeometry> Publish) scrollPub =
+            (g => (long)(g.OffsetY / 24f), g => pageScroll.Value = g.OffsetY);
+
         if (q.Length == 0)
-            return ScrollView(BrowseAll(querySig)) with { Grow = 1f, ScrollKey = "search:" };
+            return Ctx.Provide(LazyScroll.Slot, (IReadSignal<float>)pageScroll,
+                ScrollView(EmptyLanding(go)) with
+                {
+                    Grow = 1f, MinWidth = 0f, ScrollKey = "search:",
+                    OnScrollGeometryChanged = scrollPub,
+                });
+
+        bool slide = _slideArmed && _prevChip != chip;
+        bool forward = chip > _prevChip;
+        _prevChip = chip;
+        _slideArmed = true;
 
         var resultBody = new BoxEl
         {
-            Direction = 1, Gap = Spacing.L,
+            Direction = 1, MinWidth = 0f, AlignSelf = FlexAlign.Stretch,
             Padding = new Edges4(Spacing.L, Spacing.S, Spacing.L, PlayerDock.Reserve + Spacing.XXL),
-            // Songs (chip 1) is a BOUND virtualized list — its slots realize AFTER the skel-reveal walk runs, so the
-            // block-level StaggerRows would fade the whole list as one; the per-slot RowRise entrance in SearchSongs
-            // owns the stagger there instead (mirrors the detail list's entrance-vs-reveal split).
-            Children = [Skel.Region(results, SearchShimmer, r => ResultsFor(r, chip, q, svc, go),
-                reveal: chip == 1 ? SkelReveal.None : SkelReveal.StaggerRows,
-                onFailed: () => ErrorState.Build(results.Error))],
-        };
-
-        return new BoxEl
-        {
-            Direction = 1,
-            Grow = 1f,
-            MinHeight = 0f,
             Children =
             [
                 new BoxEl
                 {
-                    Shrink = 0f,
-                    Padding = new Edges4(Spacing.L, Spacing.M, Spacing.L, Spacing.S),
-                    Children = [ChipBar(chip)],
+                    Key = "facet-body:" + (int)facet,
+                    Animate = slide
+                        ? (forward ? MotionRecipes.PageSlideForward : MotionRecipes.PageSlideBack)
+                        : null,
+                    Direction = 1, MinWidth = 0f, AlignSelf = FlexAlign.Stretch,
+                    Children =
+                    [
+                        // smoothResize:false — a facet body is not a section whose height nudges by a row or two. It
+                        // swaps a fixed shimmer for a COMPLETE result set (a virtualized grid reserves extent for all
+                        // 700 albums), and that height changes again every time a page lands. Easing 0 -> thousands of
+                        // DIP makes the region clip its own content into a strip that grows line by line. The reveal
+                        // (below) is what should carry the entrance; the layout height must land at once.
+                        Skel.Region(results, SearchShimmer, r => ResultsFor(r, chip, q, svc, go),
+                            reveal: facet == SearchFacet.Tracks ? SkelReveal.None : SkelReveal.StaggerRows,
+                            onFailed: () => ErrorState.Build(results.Error),
+                            smoothResize: false),
+                    ],
                 },
-                chip == 1
-                    ? ZStack(
-                        ScrollView(resultBody) with { Grow = 1f, MinHeight = 0f, ScrollKey = "search:" + q + ":" + chip },
-                        Embed.Comp(() => new SelectionCommandBar(_songsSel, i => (uint)i < (uint)_songsTracks.Count ? _songsTracks[i] : null)))
-                        with { Grow = 1f, MinHeight = 0f }
-                    : ScrollView(resultBody) with { Grow = 1f, MinHeight = 0f, ScrollKey = "search:" + q + ":" + chip },
             ],
         };
+
+        return Ctx.Provide(LazyScroll.Slot, (IReadSignal<float>)pageScroll, new BoxEl
+        {
+            Direction = 1,
+            Grow = 1f,
+            MinWidth = 0f,
+            MinHeight = 0f,
+            AlignSelf = FlexAlign.Stretch,
+            Children =
+            [
+                new BoxEl
+                {
+                    Direction = 1, Shrink = 0f, MinWidth = 0f, AlignSelf = FlexAlign.Stretch, Gap = Spacing.S,
+                    Padding = new Edges4(Spacing.L, Spacing.M, Spacing.L, Spacing.S),
+                    Children =
+                    [
+                        // Shrink, never Grow: Grow + MinWidth=0 + ellipsis is the "R..." collapse (a Basis-0 / grow
+                        // title in a definite-width row reports one glyph as its min size). Stretch gives the query the
+                        // pane width; ellipsis only kicks in when that width is actually tight.
+                        WaveeType.SurfaceDisplay(q.ToLowerInvariant()) with
+                        {
+                            MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
+                            Shrink = 1f, MinWidth = 0f, AlignSelf = FlexAlign.Stretch,
+                        },
+                        ChipBar(results),
+                    ],
+                },
+                ScrollView(resultBody) with
+                {
+                    Grow = 1f, MinWidth = 0f, MinHeight = 0f,
+                    ScrollKey = "search:" + q + ":" + (int)facet,
+                    OnScrollGeometryChanged = scrollPub,
+                },
+            ],
+        });
     }
 
     // Lightweight loading skeleton (finding #7): a fixed list of result-row placeholders so the pending edge doesn't build
@@ -100,37 +150,138 @@ sealed class SearchPage : Component
         return new BoxEl { Direction = 1, Gap = Spacing.S, AlignSelf = FlexAlign.Stretch, Children = rows };
     }
 
-    Element ChipBar(int chip) => new BoxEl
+    Element ChipBar(Loadable<SearchResults> results)
     {
-        Direction = 0, AlignItems = FlexAlign.Center,
-        Children = [SelectorBar.Create(ChipLabels(), _chip)],
+        _ = results.State.Value;
+        var r = results.Value.Value;
+        if (r.ChipOrder is { Count: > 0 } || r.TopHits is { Count: > 0 })
+            _chipSource = r;
+        var source = _chipSource ?? r;
+        _facets = FacetsFrom(source);
+        int selected = _chip.Value;
+        int n = _facets.Length;
+        var tabs = new Element[n];
+        for (int i = 0; i < n; i++)
+        {
+            var f = _facets[i];
+            tabs[i] = FacetTab(i, f == SearchFacet.All ? Loc.Get(Strings.Search.All) : FacetName(f),
+                f == SearchFacet.All ? 0 : FacetCount(f, source), i == selected);
+        }
+        return new BoxEl
+        {
+            Direction = 0, Wrap = true, AlignItems = FlexAlign.End, MinWidth = 0f, Grow = 1f,
+            Children = tabs,
+        };
+    }
+
+    Element FacetTab(int index, string name, int total, bool selected)
+    {
+        int i = index;
+        var labelKids = new List<Element>(2)
+        {
+            Body(name) with
+            {
+                Color = selected ? Tok.TextPrimary : Tok.TextSecondary,
+                HoverColor = Tok.TextSecondary,
+                Wrap = TextWrap.NoWrap, Shrink = 0f, MaxLines = 1,
+            },
+        };
+        if (total > 0)
+            labelKids.Add(Caption(total.ToString(System.Globalization.CultureInfo.InvariantCulture)) with
+            {
+                Color = Tok.TextTertiary, Wrap = TextWrap.NoWrap, Shrink = 0f, MaxLines = 1,
+            });
+        return new BoxEl
+        {
+            Direction = 1, Shrink = 0f,
+            Role = AutomationRole.Tab, Cursor = CursorId.Hand, OnClick = () => _chip.Value = i,
+            Children =
+            [
+                new BoxEl
+                {
+                    Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.XS,
+                    Padding = new Edges4(Spacing.M, Spacing.S, Spacing.M, Spacing.XS),
+                    Children = labelKids.ToArray(),
+                },
+                selected
+                    ? new BoxEl
+                    {
+                        Key = "underline",
+                        Height = FacetUnderlineH, Shrink = 0f, AlignSelf = FlexAlign.Stretch,
+                        Corners = Radii.FullAll, Fill = Tok.AccentDefault,
+                        TransformOriginX = 0f,
+                        Enter = new EnterExit(Sx: 0f, Active: true),
+                        Transition = MotionTokenDef.Eased(FacetUnderlineMs, Easing.SmoothOut),
+                    }
+                    : new BoxEl { Height = FacetUnderlineH, Shrink = 0f, Fill = ColorF.Transparent },
+            ],
+        };
+    }
+
+    SearchFacet FacetAt(int chip) => (uint)chip < (uint)_facets.Length ? _facets[chip] : SearchFacet.All;
+
+    static SearchFacet[] FacetsFrom(SearchResults r)
+    {
+        var list = new List<SearchFacet>(12) { SearchFacet.All };
+        var seen = new HashSet<SearchFacet> { SearchFacet.All };
+        if (r.ChipOrder is { Count: > 0 } order)
+        {
+            // chipOrder is the server's tab list. Do NOT require All-payload HasAny/TotalFor — those nested
+            // collections are often empty even when the chip is real (episodes/genres/podcasts/…). Clicking the
+            // chip runs the dedicated op.
+            for (int i = 0; i < order.Count; i++)
+            {
+                var f = order[i].Facet;
+                if (seen.Add(f)) list.Add(f);
+            }
+        }
+        SearchFacet[] fallback =
+        [
+            SearchFacet.Tracks, SearchFacet.Albums, SearchFacet.Playlists, SearchFacet.Audiobooks,
+            SearchFacet.Podcasts, SearchFacet.Artists, SearchFacet.Episodes, SearchFacet.Profiles,
+            SearchFacet.Genres, SearchFacet.Authors,
+        ];
+        for (int i = 0; i < fallback.Length; i++)
+        {
+            var f = fallback[i];
+            if (!seen.Add(f)) continue;
+            if (r.HasAny(f) || r.TotalFor(f) > 0) list.Add(f);
+        }
+        return list.ToArray();
+    }
+
+    static int FacetCount(SearchFacet f, SearchResults r)
+    {
+        int n = r.TotalFor(f);
+        if (n > 0) return n;
+        if (r.ChipOrder is { Count: > 0 } chips)
+        {
+            for (int i = 0; i < chips.Count; i++)
+                if (chips[i].Facet == f && chips[i].Total > 0) return chips[i].Total;
+        }
+        return 0;
+    }
+
+    static string FacetName(SearchFacet f) => f switch
+    {
+        SearchFacet.Tracks => Loc.Get(Strings.Search.Songs),
+        SearchFacet.Albums => Loc.Get(Strings.Search.Albums),
+        SearchFacet.Playlists => Loc.Get(Strings.Search.Playlists),
+        SearchFacet.Audiobooks => Loc.Get(Strings.Search.Audiobooks),
+        SearchFacet.Podcasts => Loc.Get(Strings.Search.PodcastsShows),
+        SearchFacet.Artists => Loc.Get(Strings.Search.Artists),
+        SearchFacet.Episodes => Loc.Get(Strings.Search.Episodes),
+        SearchFacet.Profiles => Loc.Get(Strings.Search.Profiles),
+        SearchFacet.Genres => Loc.Get(Strings.Search.Genres),
+        SearchFacet.Authors => Loc.Get(Strings.Search.Authors),
+        _ => Loc.Get(Strings.Search.All),
     };
 
-    static string[] ChipLabels() =>
-    [
-        Loc.Get(Strings.Search.All), Loc.Get(Strings.Search.Songs), Loc.Get(Strings.Search.Albums),
-        Loc.Get(Strings.Search.Playlists), Loc.Get(Strings.Search.Audiobooks),
-        Loc.Get(Strings.Search.PodcastsShows), Loc.Get(Strings.Search.Artists),
-        Loc.Get(Strings.Search.Episodes), Loc.Get(Strings.Search.Profiles),
-    ];
-
-    // Every chip maps to a dedicated captured Pathfinder operation now, so the request facet IS the display facet.
-    // Audiobooks/Podcasts used to query All and filter the unified top hits, which capped them at the top-results page
-    // size and mixed in unrelated kinds.
-    static SearchFacet RequestFacetFor(int chip) => FacetFor(chip);
-
-    static SearchFacet FacetFor(int chip) => chip switch
+    void SelectFacet(SearchFacet facet)
     {
-        1 => SearchFacet.Tracks,
-        2 => SearchFacet.Albums,
-        3 => SearchFacet.Playlists,
-        4 => SearchFacet.Audiobooks,
-        5 => SearchFacet.Podcasts,
-        6 => SearchFacet.Artists,
-        7 => SearchFacet.Episodes,
-        8 => SearchFacet.Profiles,
-        _ => SearchFacet.All,
-    };
+        for (int i = 0; i < _facets.Length; i++)
+            if (_facets[i] == facet) { _chip.Value = i; return; }
+    }
 
     // ── results dispatch (All composite vs a flat per-type list) ──
     Element ResultsFor(SearchResults r, int chip, string q, Services svc, Action<string, string?> go)
@@ -139,33 +290,121 @@ sealed class SearchPage : Component
         void PlayTrack(string uri) => _ = svc.Player.PlayTrackAsync(uri);
         void PlayKnownTrack(Track track) => _ = svc.Player.PlayTrackAsync(track);
 
-        // Dedicated facets render their OWN result list (not a filtered slice of the All-tab top hits), so they page
-        // properly and keep their per-kind metadata: an audiobook's access signifier, an episode's show name.
-        if (chip == 4)
+        var facet = FacetAt(chip);
+        if (facet == SearchFacet.Audiobooks)
             return HitsList(r.Audiobooks, Loc.Get(Strings.Search.NoAudiobookResults), r, go, Play, PlayTrack, PlayKnownTrack);
-        if (chip == 5)
+        if (facet == SearchFacet.Podcasts)
             return HitsList(ShowHits(r.Shows), Loc.Get(Strings.Search.NoPodcastResults), r, go, Play, PlayTrack, PlayKnownTrack);
-        if (chip == 7)
+        if (facet == SearchFacet.Episodes)
             return HitsList(EpisodeHits(r.Episodes), Loc.Get(Strings.Search.NoEpisodeResults), r, go, Play, PlayTrack, PlayKnownTrack);
-        if (chip == 8)
+        if (facet == SearchFacet.Profiles)
             return HitsList(r.Profiles, Loc.Get(Strings.Search.NoProfileResults), r, go, Play, PlayTrack, PlayKnownTrack);
+        if (facet == SearchFacet.Authors)
+            return HitsList(r.Authors, Loc.Get(Strings.Search.NoAuthorResults), r, go, Play, PlayTrack, PlayKnownTrack);
+        if (facet == SearchFacet.Genres)
+            return SearchGenreTiles.Grid(r.Genres, go, header: false);
 
-        if (chip != 0 && r.Tracks.Count + r.Artists.Count + r.Albums.Count + r.Playlists.Count == 0)
+        if (facet != SearchFacet.All && r.Tracks.Count + r.Artists.Count + r.Albums.Count + r.Playlists.Count == 0)
             return EmptyState.Build(Loc.Get(Strings.Search.NoResults), Strings.Search.NoResultsSub(q));
 
-        return chip switch
+        return facet switch
         {
-            1 => SongsList(r.Tracks, PlayKnownTrack, go, int.MaxValue),
-            2 => FlatList(r.Albums.Select(a => ResultRow(a.Cover, a.Id.GetHashCode(), a.Name, a.Artists.Count > 0 ? a.Artists[0].Name : "", Loc.Get(Strings.Search.TypeAlbum), false, () => go("album:" + a.Uri, a.Name)))),
-            3 => FlatList(r.Playlists.Select(p => ResultRow(p.Cover, p.Id.GetHashCode(), p.Name, p.OwnerName, Loc.Get(Strings.Search.TypePlaylist), false, () => go("pl:" + p.Uri, p.Name)))),
-            6 => FlatList(r.Artists.Select(a => ResultRow(a.Image, a.Id.GetHashCode(), a.Name, Loc.Get(Strings.Search.TypeArtist), Loc.Get(Strings.Search.TypeArtist), true, () => go("artist:" + a.Uri, a.Name)))),
-            _ => AllView(r, go, Play, PlayTrack, PlayKnownTrack),
+            SearchFacet.Tracks => SongsGrid(r, go, Play, PlayTrack, PlayKnownTrack),
+            SearchFacet.Albums => AlbumGrid(r, go, Play, q),
+            SearchFacet.Playlists => PlaylistGrid(r, go, Play, q),
+            SearchFacet.Artists => FlatList(r.Artists.Select(a => ResultRow(a.Image, a.Id.GetHashCode(), a.Name, Loc.Get(Strings.Search.TypeArtist), Loc.Get(Strings.Search.TypeArtist), true, () => go("artist:" + a.Uri, a.Name)))),
+            _ => AllView(r, q, go, Play, PlayTrack, PlayKnownTrack),
         };
     }
 
-    Element AllView(SearchResults r, Action<string, string?> go, Action<string> play, Action<string> playTrack, Action<Track> playKnownTrack)
-        => Ctx.Provide(SearchAllList.Props, new SearchAllList.Model(r, go, playTrack, play, playKnownTrack),
-            Embed.Comp(() => new SearchAllList()));
+    Element AllView(SearchResults r, string q, Action<string, string?> go, Action<string> play, Action<string> playTrack, Action<Track> playKnownTrack)
+    {
+        var model = new SearchAllList.Model(r, go, playTrack, play, playKnownTrack);
+        var kids = new List<Element>(8);
+
+        var hits = r.TopHits;
+        if (hits is { Count: > 0 })
+        {
+            kids.Add(Embed.Comp(() => new SearchHero(hits[0])) with { Key = "hero:" + hits[0].Uri });
+            if (hits.Count > 1)
+            {
+                var rest = new SearchTopHit[hits.Count - 1];
+                for (int i = 1; i < hits.Count; i++) rest[i - 1] = hits[i];
+                kids.Add(FillCross(Ctx.Provide(SearchAllList.Props,
+                    new SearchAllList.Model(r, go, playTrack, play, playKnownTrack, Hits: rest),
+                    Embed.Comp(new SearchHitsGrid.Props(ShelfPager.Chevrons | ShelfPager.Pips), () => new SearchHitsGrid()) with { Key = "best:" + rest[0].Uri + ":" + rest.Length })));
+            }
+        }
+        else
+        {
+            kids.Add(Ctx.Provide(SearchAllList.Props, model, Embed.Comp(() => new SearchAllList())));
+        }
+
+        var playlists = PlaylistShelfItems(r, hits is { Count: > 0 } ? hits[0].Uri : null);
+        if (playlists.Length > 0)
+        {
+            var items = new SearchMediaGrid.Item[playlists.Length];
+            for (int i = 0; i < playlists.Length; i++)
+            {
+                var p = playlists[i];
+                items[i] = new SearchMediaGrid.Item(p.Cover, p.Name, p.Owner, p.Uri, false, "pl:" + p.Uri, WaveeResourceKind.Playlist);
+            }
+            kids.Add(FillCross(Embed.Comp(
+                new SearchMediaGrid.Props(items, go, play, ShelfPager.Chevrons | ShelfPager.Pips,
+                    SearchChrome.TickHeader(Loc.Get(Strings.Search.Playlists), () => SelectFacet(SearchFacet.Playlists))),
+                () => new SearchMediaGrid()) with { Key = "all-pl:" + items[0].Uri + ":" + items.Length }));
+        }
+
+        kids.Add(FillCross(Embed.Comp(() => new SearchGenreTiles(q, go)) with { Key = "genres:" + q }));
+        kids.Add(FillCross(Embed.Comp(() => new SearchRelatedQueries(q, go)) with { Key = "related:" + q }));
+
+        return Ctx.Provide(SearchAllList.Props, model,
+            new BoxEl { Direction = 1, Gap = Spacing.L, MinWidth = 0f, AlignSelf = FlexAlign.Stretch, Children = kids.ToArray() });
+    }
+
+    /// <summary><see cref="ComponentEl"/> has no layout props. Wrap it in a column box so All-tab sections
+    /// cross-stretch to the pane; otherwise a TickHeader's ellipsis title measures as one glyph ("R...").</summary>
+    static BoxEl FillCross(Element child) => new()
+    {
+        Direction = 1, MinWidth = 0f, AlignSelf = FlexAlign.Stretch,
+        Children = [child],
+    };
+
+    static (Image? Cover, string Name, string Owner, string Uri)[] PlaylistShelfItems(SearchResults r, string? skipUri)
+    {
+        var list = new List<(Image? Cover, string Name, string Owner, string Uri)>(8);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        if (skipUri is { Length: > 0 }) seen.Add(skipUri);
+
+        void Add(Image? cover, string name, string owner, string uri)
+        {
+            if (uri.Length == 0 || !seen.Add(uri)) return;
+            list.Add((cover, name, owner, uri));
+        }
+
+        var hits = r.TopHits;
+        if (hits is { Count: > 0 })
+        {
+            for (int i = 0; i < hits.Count; i++)
+            {
+                var h = hits[i];
+                if (h.Kind == SearchHitKind.Playlist) Add(h.Image, h.Name, PlaylistOwnerOf(h.Subtitle), h.Uri);
+            }
+        }
+        for (int i = 0; i < r.Playlists.Count; i++)
+        {
+            var p = r.Playlists[i];
+            Add(p.Cover, p.Name, p.OwnerName, p.Uri);
+        }
+        return list.ToArray();
+    }
+
+    static string PlaylistOwnerOf(string subtitle)
+    {
+        const string sep = " • ";
+        int i = subtitle.IndexOf(sep, StringComparison.Ordinal);
+        return i < 0 ? subtitle : subtitle[(i + sep.Length)..];
+    }
 
     /// <summary>Render an explicit hit list (a dedicated facet's results) through the SAME row factory the All tab
     /// uses, so a search row looks and behaves identically regardless of which operation produced it.</summary>
@@ -175,6 +414,51 @@ sealed class SearchPage : Component
             new SearchAllList.Model(r, go, playTrack, play, playKnownTrack, Filter: null, EmptyTitle: emptyTitle,
                                     Hits: hits ?? Array.Empty<SearchTopHit>()),
             Embed.Comp(() => new SearchAllList()));
+
+    Element SongsGrid(SearchResults r, Action<string, string?> go, Action<string> play, Action<string> playTrack, Action<Track> playKnownTrack)
+    {
+        if (r.Tracks.Count == 0) return EmptyState.Build(Loc.Get(Strings.Search.NoResults));
+        var hits = TrackHits(r.Tracks);
+        return FillCross(Ctx.Provide(SearchAllList.Props,
+            new SearchAllList.Model(r, go, playTrack, play, playKnownTrack, Hits: hits),
+            Embed.Comp(() => new SearchSongsGrid()) with { Key = "songs-grid:" + hits[0].Uri + ":" + hits.Length }));
+    }
+
+    // A dedicated facet tab is the COMPLETE result set, not a rail: a uniform grid that pages the wire as you scroll.
+    // The horizontal PagedShelf these used to be showed five of 177 albums behind five pips, which made the facet chip's
+    // own count point at nothing. SearchMediaGrid (the shelf) stays — it is still the right shape for the All tab's
+    // curated playlist rail.
+    Element AlbumGrid(SearchResults r, Action<string, string?> go, Action<string> play, string q)
+    {
+        if (r.Albums.Count == 0) return EmptyState.Build(Loc.Get(Strings.Search.NoResults));
+        return FacetGrid(SearchFacet.Albums, SearchFacetGrid.AlbumItems(r.Albums), r.AlbumsTotal, go, play, q);
+    }
+
+    Element PlaylistGrid(SearchResults r, Action<string, string?> go, Action<string> play, string q)
+    {
+        if (r.Playlists.Count == 0) return EmptyState.Build(Loc.Get(Strings.Search.NoResults));
+        return FacetGrid(SearchFacet.Playlists, SearchFacetGrid.PlaylistItems(r.Playlists), r.PlaylistsTotal, go, play, q);
+    }
+
+    // The page-0 window is SEEDED into the grid's VirtualCollection, so mounting it costs no extra request — the search
+    // page has already made exactly this call (it is what fills the chip counts).
+    static Element FacetGrid(SearchFacet facet, SearchMediaGrid.Item[] seed, int total,
+                             Action<string, string?> go, Action<string> play, string q)
+        => FillCross(Embed.Comp(new SearchFacetGrid.Props(q, facet, seed, total, go, play),
+            () => new SearchFacetGrid()) with { Key = "facet-grid:" + (int)facet + ":" + q });
+
+    static SearchTopHit[] TrackHits(IReadOnlyList<Track> tracks)
+    {
+        var hits = new SearchTopHit[tracks.Count];
+        for (int i = 0; i < tracks.Count; i++)
+        {
+            var t = tracks[i];
+            hits[i] = new SearchTopHit(SearchHitKind.Track, t.Uri, t.Title, SearchAllList.Names(t.Artists),
+                Loc.Get(Strings.Search.TypeSong), t.Image, RoundImage: false, Followable: false,
+                MatchedLyrics: false, AccessLabel: null);
+        }
+        return hits;
+    }
 
     // Show/Episode are real domain records (the app has podcast surfaces to route into); the search LIST renders them
     // through the shared hit row, so they are projected here instead of duplicating the row factory.
@@ -204,13 +488,6 @@ sealed class SearchPage : Component
                 MatchedLyrics: false, AccessLabel: null, Detail: ep.Description);
         }
         return hits;
-    }
-
-    Element SongsList(IReadOnlyList<Track> tracks, Action<Track> playTrack, Action<string, string?> go, int max)
-    {
-        _songsTracks = tracks;
-        return Ctx.Provide(SearchSongs.Props, new SearchSongs.Model(tracks, playTrack, go, max, _songsSel),
-            Embed.Comp(() => new SearchSongs()) with { SkeletonProxy = () => SearchSongs.SkeletonShape(tracks, max) });
     }
 
     // ── flat unified results list (per chip) ──
@@ -246,188 +523,71 @@ sealed class SearchPage : Component
         Children = [WaveeType.Eyebrow(type) with { Color = Tok.TextTertiary }],
     };
 
-    // ── browse empty state ───────────────────────────────────────────────────────────────────────────────────────
-    // No query → the real Browse directory (every Spotify category, grouped and alphabetised), NOT a hardcoded grid of
-    // invented category tiles. Type to search, don't type and you're browsing.
-    Element BrowseAll(Signal<string>? querySig)
+    static Element EmptyLanding(Action<string, string?> go)
     {
-        var go = UseContext(HistoryStore.NavCtx);
-        var model = new Wavee.Features.Browse.BrowseDirectory.Model(
+        var browseModel = new Wavee.Features.Browse.BrowseDirectory.Model(
             OnOpenCategory: (uri, title) => go(Wavee.Features.Browse.BrowseRoutes.Page(uri), title),
-            // Live Events is a BrowseClientFeature, not a page — it routes into the Concerts hub Wavee already has.
             OnOpenFeature: uri => go(string.Equals(uri, "spotify:concerts", StringComparison.Ordinal)
                 ? Wavee.Features.Concerts.ConcertRoutes.Hub
                 : uri, null));
 
-        return Ctx.Provide(Wavee.Features.Browse.BrowseDirectory.Props, model,
+        return Ctx.Provide(Wavee.Features.Browse.BrowseDirectory.Props, browseModel,
             new BoxEl
             {
-                Direction = 1, MinWidth = 0f,
+                Direction = 1, MinWidth = 0f, Gap = Spacing.L,
                 Padding = new Edges4(Spacing.L, Spacing.M, Spacing.L, PlayerDock.Reserve + Spacing.XXL),
-                Children = [Embed.Comp(() => new Wavee.Features.Browse.BrowseDirectory())],
+                Children =
+                [
+                    Embed.Comp(() => new SearchRecents()),
+                    Embed.Comp(() => new Wavee.Features.Browse.BrowseDirectory()),
+                ],
             });
     }
+
+    // ── browse empty state ───────────────────────────────────────────────────────────────────────────────────────
+    // No query → recent entity rows above the real Browse directory. Type to search, don't type and you're browsing.
 
 }
 
-// Search track rows — the All-view "Songs" preview (capped) and the dedicated "Songs" tab (full). A Component so the rows
-// re-skin live on play/like: it renders the SAME shared TrackRow cell as the detail + library lists (number↔play/pause on
-// hover, the now-playing equalizer, the per-row heart, art + artist subline, duration), just eager (no virtualization) and
-// single-click-to-play, since search lists are short. Columns: [#↔play, ♥, art, title+artist, duration].
-sealed class SearchSongs : Component
+/// <summary>Empty-search recents. Fail-soft: a 400/transport miss renders nothing and Browse stays.</summary>
+sealed class SearchRecents : Component
 {
-    internal sealed record Model(IReadOnlyList<Track> Tracks, Action<Track> PlayTrack, Action<string, string?> Go, int Max, SelectionModel Selection);
-    internal static readonly Context<Model?> Props = new(null);
-
-    static readonly ColumnSet Cols = new(Album: false, By: false, Date: false, Video: false, Plays: false, Heart: true, Thumb: true);
-    static readonly TrackSize[] Columns =
-        [TrackSize.Px(36f), TrackSize.Px(TrackRow.HeartCol), TrackSize.Px(TrackRow.ThumbSize), TrackSize.Star(), TrackSize.Px(52f), TrackSize.Px(40f)];   // trailing 40px = the "…" overflow lane
-    const float RowContentH = 56f;
-    const float RowExtent = 60f;
-    readonly SwipeGroup _swipeGroup = new();
-
-    // The bound Songs list's entrance is the app's ONE list recipe (WaveeEntrance): a per-slot mount Enter — rise +
-    // fade + blur — with a baked per-index delay off WaveeMotion.StaggerMs, capped so a long result set finishes
-    // arriving in 360ms rather than two seconds. This file used to own a private copy of that spec (its own transition
-    // constant, its own cap of 12, its own `!Motion.ReducedMotion` gate); the recipe now lives in the design system so
-    // a second staggered surface cannot re-pick the numbers.
     public override Element Render()
     {
-        var model = UseContext(Props);
-        if (model is null) return new BoxEl();
-        var bridge = UseContext(PlaybackBridge.Slot);
-        var lib = UseContext(LibraryBridge.Slot);
-        var acts = UseContext(ActionServices.Slot);      // row context menus (selection-aware TrackContextMenu)
-        var menuOverlay = UseContext(Overlay.Service);
-        var tracks = model.Tracks;
-        int n = Math.Min(model.Max, tracks.Count);
-        if (n <= 0) return new BoxEl();
-        Func<bool> showChecks = () =>
+        var svc = UseContext(Services.Slot);
+        var go = UseContext(HistoryStore.NavCtx);
+        if (svc is null) return new BoxEl();
+        var recents = UseResource(ct => svc.Library.RecentSearchesAsync(ct),
+            (IReadOnlyList<SearchTopHit>)Array.Empty<SearchTopHit>(), 0).Loadable;
+        // Stretch on the RENDERED ROOT, like every other section on this page (FillCross / SearchSectionRoot.Stretch):
+        // a ComponentEl carries no layout props, and relying on the parent column's AlignItems default leaves the
+        // section measured at its own content width — which collapses Surfaces.SectionHeader's ellipsised title to a
+        // single glyph ("R..."). Also smoothResize:false: the shimmer here is an EMPTY box, so the region would ease
+        // its height from literal zero and clip the rows into a growing strip.
+        return SearchSectionRoot.Stretch(Skel.Region(recents, () => new BoxEl(),
+            hits => Body(hits, go, svc),
+            isEmpty: hits => hits.Count == 0,
+            onEmpty: () => new BoxEl(),
+            onFailed: () => new BoxEl(),
+            smoothResize: false));
+    }
+
+    static Element Body(IReadOnlyList<SearchTopHit> hits, Action<string, string?> go, Services svc)
+    {
+        void Play(string uri) => _ = svc.Player.PlayAsync(uri, 0);
+        void PlayTrack(string uri) => _ = svc.Player.PlayTrackAsync(uri);
+        void PlayKnown(Track t) => _ = svc.Player.PlayTrackAsync(t);
+        return new BoxEl
         {
-            // 2+ only: a plain single click must not flip the list into checkbox mode.
-            _ = model.Selection.Version.Value;
-            return model.Selection.SelectedCount > 1;
+            Direction = 1, Gap = Spacing.M, MinWidth = 0f, AlignSelf = FlexAlign.Stretch,
+            Children =
+            [
+                Surfaces.SectionHeader(Loc.Get(Strings.Search.RecentSearches)),
+                Ctx.Provide(SearchAllList.Props,
+                    new SearchAllList.Model(SearchResults.Empty, go, PlayTrack, Play, PlayKnown, Hits: hits),
+                    Embed.Comp(() => new SearchAllList())),
+            ],
         };
-        return ItemsView.CreateBound(
-            n,
-            // transitions.dev texts-reveal for the Songs tab: every committed query remounts this whole subtree (the
-            // Skel branch replace), so each realized slot's Enter plays ONCE with a per-index stagger delay; scroll
-            // recycling re-binds slots without remounting → no replay mid-scroll. A WRAPPER carries the Enter (not
-            // `AccentPill with { Animate }` — its root has a bound Opacity that would fight an Enter opacity track).
-            scope =>
-            {
-                int slot0 = scope.Index.Peek();   // the slot's initial item index at realize
-                var wrapper = new BoxEl
-                {
-                    // Transparent row, not a stroked card - see ResultRow.
-                    Direction = 1, Corners = Radii.ControlAll, ClipToBounds = true,
-                    Animate = WaveeEntrance.Row(slot0),
-                    // Search results are a COPY source: no SourcePlaylistUri/SourceRows, so a playlist destination adds
-                    // rather than moves. A drag starting inside the multi-selection carries all of it (the DetailTracks
-                    // rule); the row index is read at PROMOTION, never captured, because slots recycle.
-                    Draggable = Drag.Source(WaveeDragKinds.Resource, () => SongsPayload(model, scope.Index.Peek())),
-                    Children = [SelectorVisualsBound.AccentPill(scope, Embed.Comp(() => new SearchSongRow(model, scope, bridge, lib)), showChecks)],
-                };
-                // Right-click / long-press: the selection-aware track menu (Explorer semantics — inside a multi-
-                // selection acts on all of it; outside collapses to the clicked row). No playlist host here.
-                var row = wrapper;
-                if (acts is { } a)
-                    row = row.WithContextMenu(menuOverlay, () => TrackContextMenu.Build(
-                        a, model.Selection, i => (uint)i < (uint)Math.Min(model.Max, model.Tracks.Count) ? model.Tracks[i] : null,
-                        scope.Index.Peek(), static () => null));
-                Element result = row;
-                if (acts is { } swipeActs)
-                    result = RowSwipe.WrapBound(result, () =>
-                    {
-                        int i = scope.Index.Peek();
-                        int count = Math.Min(model.Max, model.Tracks.Count);
-                        return (uint)i < (uint)count
-                            ? new ActionContext(ActionTarget.ForTracks(new[] { model.Tracks[i] }), swipeActs)
-                            : null;
-                    }, _swipeGroup, TrackActions.ToggleLike, TrackActions.AddToQueue, scope.Index);
-                return result;
-            },
-            RepeatLayout.Stack(RowExtent),
-            new ListOptions
-            {
-                SelectionMode = ItemsSelectionMode.Extended,
-                Selection = model.Selection,
-                IsItemInvokedEnabled = true,
-                OnInvoked = i =>
-                {
-                    if ((uint)i >= (uint)n) return;
-                    var t = tracks[i];
-                    TrackRow.Invoke(bridge, t, () => model.PlayTrack(t));
-                },
-                ItemText = i => (uint)i < (uint)n ? tracks[i].Title : "",
-                Grow = 0f,
-                Scroll = new ScrollOptions { OnScrollGeometryChanged = (g => _swipeGroup.AnyOpen ? BitConverter.SingleToInt32Bits(g.OffsetY) : 0L, _ => _swipeGroup.Close()) },
-            });
-    }
-
-    /// <summary>The Songs-list drag payload for the row at <paramref name="index"/>: the whole SELECTION when the drag
-    /// starts on a selected row (Explorer semantics, matching the track context menu), else that one row. Null when the
-    /// index no longer resolves — a null payload simply means "nothing to drag".</summary>
-    static WaveeResourceDragPayload? SongsPayload(Model model, int index)
-    {
-        int n = Math.Min(model.Max, model.Tracks.Count);
-        if ((uint)index >= (uint)n) return null;
-        if (!model.Selection.IsSelected(index)) return WaveeResourceDragPayload.ForTrack(model.Tracks[index]);
-        var picked = new List<Track>();
-        for (int i = 0; i < model.Selection.ItemCount && i < n; i++)
-            if (model.Selection.IsSelected(i)) picked.Add(model.Tracks[i]);
-        return WaveeResourceDragPayload.ForTracks(picked);
-    }
-
-    sealed class SearchSongRow : Component
-    {
-        readonly Model _model;
-        readonly RowScope _scope;
-        readonly PlaybackBridge? _bridge;
-        readonly LibraryBridge? _lib;
-        public SearchSongRow(Model model, RowScope scope, PlaybackBridge? bridge, LibraryBridge? lib)
-        { _model = model; _scope = scope; _bridge = bridge; _lib = lib; }
-
-        public override Element Render()
-        {
-            var likePrev = UseRef(((string?)null, false));   // hook BEFORE the early return (stable order) — like-edge memory
-            int i = _scope.Index.Value;
-            int n = Math.Min(_model.Max, _model.Tracks.Count);
-            if ((uint)i >= (uint)n) return new BoxEl();
-            var t = _model.Tracks[i];
-            var st = TrackRow.StateOf(_bridge, _lib, t);
-            bool likePop = TrackRow.LikeEdge(likePrev, t.Uri, st.Saved);   // pop only on the SAME-uri unsaved→saved edge
-            Element title = new TextEl(t.Title)
-            {
-                Size = 14f,
-                Weight = 600,
-                Color = st.IsNow ? Tok.AccentTextPrimary : Tok.TextPrimary,
-                Wrap = TextWrap.NoWrap,
-                MaxLines = 1,
-                Trim = TextTrim.CharacterEllipsis,
-                MinWidth = 0f,
-            };
-            return TrackRow.Grid(t, i, st, Cols, Columns, RowContentH, title, showTrackArtist: true, _model.Go,
-                onPlay: () => TrackRow.Invoke(_bridge, t, () => _model.PlayTrack(t)),
-                onLike: t.Uri.Length > 0 ? () => _lib?.ToggleSaved(t.Uri, t.Title) : null,
-                likePop: likePop,
-                // Trailing "…" opens the row's context menu (the .WithContextMenu wrapper at the slot) via ClickRequestsContext.
-                actionsCell: TrackRow.MoreButton(true));
-        }
-    }
-
-    // The skeleton shape the deriver walks (SkeletonProxy at the Embed.Comp site): a few real TrackRow rows with no-op
-    // handlers so the search-songs list shimmers as rows instead of one bar.
-    public static Element SkeletonShape(IReadOnlyList<Track> tracks, int max)
-    {
-        int n = Math.Min(Math.Min(max, tracks.Count), 6);
-        var rows = new Element[n];
-        for (int i = 0; i < n; i++)
-            rows[i] = TrackRow.Row(tracks[i], i, new TrackRow.State(false, false, false, IsTop: false, Saved: false),
-                                   Cols, Columns, RowContentH, showTrackArtist: true, static (_, _) => { },
-                                   onPlay: static () => { }, onLike: null,
-                                   actionsCell: TrackRow.MoreButton(false));   // reserve the "…" lane so the shimmer matches the live rows
-        return new BoxEl { Direction = 1, Children = rows };
     }
 }
 
@@ -514,12 +674,12 @@ sealed class SearchAllList : Component
             var rows = new List<Element>(hits.Count);
             rows.Add(HitRow(hits[0], lib, model, large: true, acts, menuOverlay));
             for (int i = 1; i < hits.Count; i++) rows.Add(HitRow(hits[i], lib, model, large: false, acts, menuOverlay));
-            return new BoxEl { Direction = 1, Gap = Spacing.S, Children = rows.ToArray() };
+            return new BoxEl { Direction = 1, Gap = Spacing.S, MinWidth = 0f, AlignSelf = FlexAlign.Stretch, Children = rows.ToArray() };
         }
 
         var fallback = FallbackRows(r, lib, model, acts, menuOverlay);
         if (fallback.Count > 0)
-            return new BoxEl { Direction = 1, Gap = Spacing.S, Children = fallback.ToArray() };
+            return new BoxEl { Direction = 1, Gap = Spacing.S, MinWidth = 0f, AlignSelf = FlexAlign.Stretch, Children = fallback.ToArray() };
 
         // No unified top-results and no facet rows.
         return EmptyState.Build(Loc.Get(Strings.Search.NoResults));
@@ -538,11 +698,11 @@ sealed class SearchAllList : Component
         var rows = new Element[hits.Count];
         for (int i = 0; i < hits.Count; i++)
             rows[i] = HitRow(hits[i], lib, model, large: false, acts, menuOverlay);
-        return new BoxEl { Direction = 1, Gap = Spacing.S, Children = rows };
+        return new BoxEl { Direction = 1, Gap = Spacing.S, MinWidth = 0f, AlignSelf = FlexAlign.Stretch, Children = rows };
     }
 
     // ── every row is MediaCard.Row (the shared factory); these supply the per-kind data + actions only ───────────────────
-    static Element HitRow(SearchTopHit h, LibraryBridge? lib, Model model, bool large,
+    internal static Element HitRow(SearchTopHit h, LibraryBridge? lib, Model model, bool large,
                           ActionServices? acts = null, IOverlayService? menuOverlay = null)
     {
         bool isTrack = h.Kind == SearchHitKind.Track;
@@ -554,16 +714,17 @@ sealed class SearchAllList : Component
             : null;
         Action play = isTrack ? () => model.PlayTrack(h.Uri) : () => model.PlayContext(h.Uri);
         Action open = isTrack ? play : OpenFor(model, h.Kind, h.Uri, h.Name);
-        string? eyebrow = large ? null : (h.MatchedLyrics ? "Lyrics match" : h.AccessLabel);
+        string? eyebrow = large ? null : (h.MatchedLyrics ? Loc.Get(Strings.Search.LyricsMatch) : h.AccessLabel);
         bool isPremiumEyebrow = !h.MatchedLyrics && h.AccessLabel is { Length: > 0 };
         return MediaCard.Row(h.Image, h.Name, h.Subtitle, h.Uri, h.RoundImage, open, play,
             eyebrow: eyebrow,
             eyebrowColor: isPremiumEyebrow ? WaveeColors.PremiumText : Tok.AccentTextPrimary,
-            typeChip: large ? null : h.TypeLabel, detail: large ? null : h.Detail, trailing: trailing, large: large,
+            typeChip: null, detail: large ? null : h.Detail, trailing: trailing, large: large,
             meta: large ? null : h.Meta, detailBelowArt: h.Kind == SearchHitKind.Audiobook,
             onSubtitleNav: key => model.Go(key, null),   // artist/album names in the subtitle are individually clickable
             menu: HitMenu(acts, menuOverlay, model, h),
-            drag: EntityDrag(acts, model, h));
+            drag: EntityDrag(acts, model, h),
+            plated: false);
     }
 
     /// <summary>The page's own results ARE the track resolver for a uri-only track hit: the same track that produced
@@ -618,17 +779,17 @@ sealed class SearchAllList : Component
     static Element TrackRowFb(Track t, LibraryBridge? lib, Model model,
                               ActionServices? acts = null, IOverlayService? menuOverlay = null) => MediaCard.Row(
         t.Image, t.Title, (VideoPresence.HasVideo(t) ? "Music video" : "Song") + " • " + Names(t.Artists), t.Uri, false,
-        () => model.PlayKnownTrack(t), () => model.PlayKnownTrack(t), typeChip: "Song",
+        () => model.PlayKnownTrack(t), () => model.PlayKnownTrack(t),
         trailing: SaveButton(t.Uri.Length > 0 && (lib?.IsSaved(t.Uri) ?? false), () => { if (t.Uri.Length > 0) lib?.ToggleSaved(t.Uri, t.Title); }),
         menu: TrackMenu(acts, menuOverlay, t),
-        drag: TrackDrag(t));
+        drag: TrackDrag(t), plated: false);
 
     static Element ArtistRow(Artist a, LibraryBridge? lib, Model model, bool large,
                              ActionServices? acts = null, IOverlayService? menuOverlay = null) => MediaCard.Row(
         a.Image, a.Name, Loc.Get(Strings.Search.TypeArtist), a.Uri, true,
         () => model.Go("artist:" + a.Uri, a.Name), () => model.PlayContext(a.Uri),
-        typeChip: large ? null : Loc.Get(Strings.Search.TypeArtist),
         trailing: Embed.Comp(() => new FollowButton(a.Uri, a.Name)) with { Key = "follow:" + a.Uri }, large: large,
+        plated: false,
         menu: CardMenu(acts, menuOverlay, a.Uri, a.Name, a.Image, Loc.Get(Strings.Search.TypeArtist), circular: true),
         // An artist is PINNABLE but carries no tracks — dropping it on a playlist is refused with a cue, never a guess.
         drag: Drag.Source(WaveeDragKinds.Resource,
@@ -638,7 +799,7 @@ sealed class SearchAllList : Component
                             ActionServices? acts = null, IOverlayService? menuOverlay = null) => MediaCard.Row(
         a.Cover, a.Name, Loc.Get(Strings.Search.TypeAlbum) + (a.Artists.Count > 0 ? " • " + a.Artists[0].Name : ""), a.Uri, false,
         () => model.Go("album:" + a.Uri, a.Name), () => model.PlayContext(a.Uri),
-        typeChip: large ? null : Loc.Get(Strings.Search.TypeAlbum), large: large,
+        large: large, plated: false,
         menu: CardMenu(acts, menuOverlay, a.Uri, a.Name, a.Cover,
             a.Artists.Count > 0 ? a.Artists[0].Name : Loc.Get(Strings.Search.TypeAlbum)),
         drag: Drag.Source(WaveeDragKinds.Resource,
@@ -648,19 +809,23 @@ sealed class SearchAllList : Component
                                ActionServices? acts = null, IOverlayService? menuOverlay = null) => MediaCard.Row(
         p.Cover, p.Name, Loc.Get(Strings.Search.TypePlaylist), p.Uri, false,
         () => model.Go("pl:" + p.Uri, p.Name), () => model.PlayContext(p.Uri),
-        typeChip: large ? null : Loc.Get(Strings.Search.TypePlaylist), large: large,
+        large: large, plated: false,
         menu: CardMenu(acts, menuOverlay, p.Uri, p.Name, p.Cover, Loc.Get(Strings.Search.TypePlaylist)),
         drag: Drag.Source(WaveeDragKinds.Resource,
             () => WaveeResourceDragPayload.ForEntity(WaveeResourceKind.Playlist, p.Uri, p.Name, p.Cover, acts)));
 
-    static Action OpenFor(Model model, SearchHitKind kind, string uri, string name) => kind switch
+    internal static Action OpenFor(Model model, SearchHitKind kind, string uri, string name) => kind switch
     {
         SearchHitKind.Artist => () => model.Go("artist:" + uri, name),
         SearchHitKind.Album => () => model.Go("album:" + uri, name),
         SearchHitKind.Playlist => () => model.Go("pl:" + uri, name),
         SearchHitKind.Audiobook or SearchHitKind.Podcast => () => model.Go("show:" + uri, name),
+        SearchHitKind.Episode => () => model.PlayContext(uri),
+        SearchHitKind.Genre => () => SearchRoutes.OpenGenre(uri, name, model.Go),
         _ => static () => { },
     };
+
+    internal static Element SaveTrailing(bool saved, Action toggle) => SaveButton(saved, toggle);
 
     static Element SaveButton(bool saved, Action toggle) => new BoxEl
     {
@@ -670,11 +835,234 @@ sealed class SearchAllList : Component
         Children = [Icon(saved ? Icons.Accept : Icons.Add, 16f, saved ? Tok.AccentDefault : Tok.TextSecondary)],
     };
 
-    static string Names(IReadOnlyList<ArtistRef> artists)
+    internal static string Names(IReadOnlyList<ArtistRef> artists)
     {
         if (artists.Count == 0) return "";
         var sb = new System.Text.StringBuilder();
         for (int i = 0; i < artists.Count && i < 3; i++) { if (i > 0) sb.Append(", "); sb.Append(artists[i].Name); }
         return sb.ToString();
+    }
+}
+
+/// <summary>Songs facet: a wrapping <see cref="Ui.AutoGrid"/> of <see cref="MediaCard.Row"/> cells. Page size is 50,
+/// so this scrolls with the page — no nested pager, chevrons, or pips. All-tab Best matches stays on
+/// <see cref="SearchHitsGrid"/>.</summary>
+sealed class SearchSongsGrid : Component
+{
+    const float MinColW = 280f;
+    const float RowH = 64f;
+
+    public override Element Render()
+    {
+        var model = UseContext(SearchAllList.Props);
+        var lib = UseContext(LibraryBridge.Slot);
+        var acts = UseContext(ActionServices.Slot);
+        var overlay = UseContext(Overlay.Service);
+        if (model?.Hits is not { Count: > 0 } hits) return new BoxEl();
+        var cells = new Element[hits.Count];
+        for (int i = 0; i < hits.Count; i++)
+        {
+            cells[i] = new BoxEl
+            {
+                Direction = 1, MinWidth = 0f, AlignSelf = FlexAlign.Stretch,
+                Children = [SearchAllList.HitRow(hits[i], lib, model, large: false, acts, overlay)],
+            };
+        }
+        return new BoxEl
+        {
+            Direction = 1, MinWidth = 0f, AlignSelf = FlexAlign.Stretch,
+            Children = [AutoGrid(MinColW, Spacing.M, RowH, cells)],
+        };
+    }
+}
+
+/// <summary>All-tab "Best matches" after the hero: a width-fitted N×N page of <see cref="MediaCard.Row"/> cells with
+/// the same pips pager as the artist Top-tracks chart. Column count comes from the measured slot (hysteresis so a
+/// resize does not flicker); row count matches it (1-wide stays 3 rows so a single column is not a 1-cell pager).</summary>
+sealed class SearchHitsGrid : Component
+{
+    internal sealed record Props(ShelfPager Pager, bool ShowHeader = true);
+
+    const float CellGap = Spacing.M;
+    const float MinCellW = 280f;
+    const float RowH = 64f;
+    const int MaxCols = 3;
+    const int SingleColRows = 3;
+
+    IReadOnlyList<SearchTopHit> _hits = Array.Empty<SearchTopHit>();
+    SearchAllList.Model? _model;
+    LibraryBridge? _lib;
+    ActionServices? _acts;
+    IOverlayService? _overlay;
+    ShelfPager _pager = ShelfPager.Chevrons | ShelfPager.Pips;
+    bool _showHeader = true;
+    int _cols = 2;
+    bool _colsInit;
+
+    public override Element Render()
+    {
+        var p = UseProps<Props>();
+        var model = UseContext(SearchAllList.Props);
+        _lib = UseContext(LibraryBridge.Slot);
+        _acts = UseContext(ActionServices.Slot);
+        _overlay = UseContext(Overlay.Service);
+        _pager = p.Pager;
+        _showHeader = p.ShowHeader;
+        if (model?.Hits is not { Count: > 0 } hits) return new BoxEl();
+        _hits = hits;
+        _model = model;
+        // Wrapper: PagedShelf's Key must be a CHILD (ReconcileSingleChild ignores Key on this component's root).
+        // Responsive.Of picks the N×N from the measured slot; PagedShelf then self-fits cards inside that grid.
+        return new BoxEl
+        {
+            Direction = 1, MinWidth = 0f, AlignSelf = FlexAlign.Stretch,
+            Children =
+            [
+                Responsive.Of(w =>
+                {
+                    int n = _hits.Count;
+                    int cols = ColsFor(w);
+                    int rows = cols <= 1 ? SingleColRows : cols;
+                    int maxCols = Math.Min(cols, Math.Max(1, (n + rows - 1) / rows));
+                    string first = n > 0 ? _hits[0].Uri : "";
+                    return PagedShelf.Create(
+                        n,
+                        cardAt: Card,
+                        cardHeight: static _ => RowH,
+                        header: _showHeader ? SearchChrome.TickHeader(Loc.Get(Strings.Search.BestMatches)) : null,
+                        pager: _pager,
+                        minCardW: MinCellW,
+                        maxCardW: 9999f,
+                        gap: CellGap,
+                        rows: rows,
+                        maxColumns: maxCols,
+                        snap: ShelfSnap.Page,
+                        cardWidthAgnostic: true,
+                        edgeFade: 16f,
+                        keyOf: i => (uint)i < (uint)_hits.Count ? _hits[i].Uri : i.ToString())
+                        with { Key = "hits-shelf:" + n + ":" + maxCols + ":" + rows + ":" + (int)_pager + ":" + first };
+                }, fallback: 0f),
+            ],
+        };
+    }
+
+    int ColsFor(float w)
+    {
+        int nominal = w <= 0f ? 1 : Math.Clamp((int)MathF.Floor((w + CellGap) / (MinCellW + CellGap)), 1, MaxCols);
+        if (!_colsInit) { _colsInit = true; return _cols = nominal; }
+        if (nominal >= _cols) return _cols = nominal;
+        float need = _cols * MinCellW + (_cols - 1) * CellGap;
+        return w < need - DetailLayoutBreakpoints.TierHysteresisDip ? (_cols = nominal) : _cols;
+    }
+
+    Element Card(int i, float _)
+    {
+        if (_model is null || (uint)i >= (uint)_hits.Count) return new BoxEl();
+        return SearchAllList.HitRow(_hits[i], _lib, _model, large: false, _acts, _overlay);
+    }
+}
+
+/// <summary>Album / playlist shelf: the same 148–188 DIP <see cref="MediaCard.GridCard"/> rail Home Recents uses.</summary>
+sealed class SearchMediaGrid : Component
+{
+    internal sealed record Item(Image? Cover, string Name, string Subtitle, string Uri, bool Circular, string OpenKey, WaveeResourceKind Kind);
+    internal sealed record Props(IReadOnlyList<Item> Items, Action<string, string?> Go, Action<string> Play, ShelfPager Pager, Element? Header = null);
+
+    const float CellGap = Spacing.M;
+
+    IReadOnlyList<Item> _items = Array.Empty<Item>();
+    Action<string, string?> _go = static (_, _) => { };
+    Action<string> _play = static _ => { };
+    ActionServices? _acts;
+    IOverlayService? _overlay;
+    ShelfPager _pager = ShelfPager.Chevrons | ShelfPager.Pips;
+
+    public override Element Render()
+    {
+        var p = UseProps<Props>();
+        _acts = UseContext(ActionServices.Slot);
+        _overlay = UseContext(Overlay.Service);
+        if (p.Items.Count == 0) return new BoxEl();
+        _items = p.Items;
+        _go = p.Go;
+        _play = p.Play;
+        _pager = p.Pager;
+        int n = _items.Count;
+        string first = n > 0 ? _items[0].Uri : "";
+        return new BoxEl
+        {
+            Direction = 1, MinWidth = 0f, AlignSelf = FlexAlign.Stretch,
+            Children =
+            [
+                PagedShelf.Create(
+                    n,
+                    cardAt: Card,
+                    cardHeight: MediaCard.ShelfHeight,
+                    header: p.Header,
+                    pager: _pager,
+                    minCardW: HomeModuleLayout.ShelfCardMin,
+                    maxCardW: HomeModuleLayout.ShelfCardMax,
+                    gap: CellGap,
+                    snap: ShelfSnap.Page,
+                    cardWidthAgnostic: true,
+                    edgeFade: HomeModuleLayout.ShelfEdgeFade,
+                    keyOf: i => (uint)i < (uint)_items.Count ? _items[i].Uri : i.ToString())
+                    with { Key = "media-shelf:" + n + ":" + first },
+            ],
+        };
+    }
+
+    Element Card(int i, float _)
+        => (uint)i >= (uint)_items.Count ? new BoxEl() : CardFor(_items[i], _acts, _overlay, _go, _play);
+
+    /// <summary>The ONE search card factory — shared with <see cref="SearchFacetGrid"/> so a facet tab's grid card and
+    /// this shelf's card cannot drift in artwork, menu or drag payload.</summary>
+    internal static Element CardFor(Item it, ActionServices? acts, IOverlayService? overlay,
+                                    Action<string, string?> go, Action<string> play)
+    {
+        MenuAttach? menu = acts is null || overlay is null
+            ? null
+            : Menus.CardAttach(acts, overlay, it.Uri, it.Name, it.Cover, it.Subtitle, it.Circular);
+        return MediaCard.GridCard(it.Cover, it.Name, it.Subtitle, it.Uri,
+            () => go(it.OpenKey, it.Name), () => play(it.Uri),
+            circular: it.Circular, menu: menu,
+            drag: Drag.Source(WaveeDragKinds.Resource,
+                () => WaveeResourceDragPayload.ForEntity(it.Kind, it.Uri, it.Name, it.Cover, acts)));
+    }
+}
+
+/// <summary>All-tab section label: a vertical accent pip beside a rail header. Not
+/// <see cref="Surfaces.AccentHeader"/> (that one is a horizontal rule under the title).</summary>
+static class SearchChrome
+{
+    internal static Element TickHeader(string title, Action? open = null)
+    {
+        BoxEl label = new BoxEl
+        {
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S,
+            MinWidth = 0f, Shrink = 1f,
+            Children =
+            [
+                new BoxEl
+                {
+                    Width = 3f, Height = 14f, Shrink = 0f,
+                    Corners = CornerRadius4.All(1.5f), Fill = Tok.AccentDefault,
+                },
+                // Shrink, never Grow — same contract as Surfaces.SectionHeader. A PagedShelf already grows a
+                // trailing spacer; Grow + MinWidth=0 + ellipsis here makes the cluster's intrinsic width one glyph.
+                WaveeType.RailHeader(title) with
+                {
+                    Shrink = 1f, MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
+                },
+            ],
+        };
+        if (open is null) return label with { AlignSelf = FlexAlign.Stretch };
+        return new BoxEl
+        {
+            Direction = 0, Gap = Spacing.XS, AlignItems = FlexAlign.Center,
+            Shrink = 1f, MinWidth = 0f, OnClick = open,
+            Cursor = CursorId.Hand, Role = AutomationRole.Hyperlink, Focusable = true,
+            Children = [label, Icon(Icons.ChevronRight, 12f, Tok.TextTertiary) with { Shrink = 0f }],
+        };
     }
 }

@@ -155,18 +155,46 @@ public sealed class AggregateCatalog : IMusicLibrary, ICollectionEvents
     {
         var t = new List<Track>(); var al = new List<Album>(); var ar = new List<Artist>(); var pl = new List<Playlist>();
         IReadOnlyList<SearchTopHit>? topHits = null;
+        IReadOnlyList<SearchChip>? chipOrder = null;
+        IReadOnlyList<Show>? shows = null;
+        IReadOnlyList<Episode>? episodes = null;
+        IReadOnlyList<SearchTopHit>? audiobooks = null;
+        IReadOnlyList<SearchTopHit>? profiles = null;
+        IReadOnlyList<SearchGenre>? genres = null;
+        IReadOnlyList<SearchTopHit>? authors = null;
         int tt = 0, at = 0, art = 0, pt = 0;
+        int showsT = -1, epT = -1, booksT = -1, profT = -1, genT = -1, authT = -1;
         foreach (var s in _reg.CatalogSources)
         {
             var x = await s.SearchAsync(query, facet, offset, limit, ct).ConfigureAwait(false);
             t.AddRange(x.Tracks); al.AddRange(x.Albums); ar.AddRange(x.Artists); pl.AddRange(x.Playlists);
             topHits ??= x.TopHits;
+            chipOrder ??= x.ChipOrder;
+            shows ??= x.Shows;
+            episodes ??= x.Episodes;
+            audiobooks ??= x.Audiobooks;
+            profiles ??= x.Profiles;
+            genres ??= x.Genres;
+            authors ??= x.Authors;
             tt += x.TracksTotal >= 0 ? x.TracksTotal : x.Tracks.Count;
             at += x.AlbumsTotal >= 0 ? x.AlbumsTotal : x.Albums.Count;
             art += x.ArtistsTotal >= 0 ? x.ArtistsTotal : x.Artists.Count;
             pt += x.PlaylistsTotal >= 0 ? x.PlaylistsTotal : x.Playlists.Count;
+            if (showsT < 0 && x.ShowsTotal >= 0) showsT = x.ShowsTotal;
+            if (epT < 0 && x.EpisodesTotal >= 0) epT = x.EpisodesTotal;
+            if (booksT < 0 && x.AudiobooksTotal >= 0) booksT = x.AudiobooksTotal;
+            if (profT < 0 && x.ProfilesTotal >= 0) profT = x.ProfilesTotal;
+            if (genT < 0 && x.GenresTotal >= 0) genT = x.GenresTotal;
+            if (authT < 0 && x.AuthorsTotal >= 0) authT = x.AuthorsTotal;
         }
-        return new SearchResults(t, al, ar, pl, topHits, tt, at, art, pt);
+        return new SearchResults(t, al, ar, pl, topHits, tt, at, art, pt,
+            Shows: shows, ShowsTotal: showsT,
+            Episodes: episodes, EpisodesTotal: epT,
+            Audiobooks: audiobooks, AudiobooksTotal: booksT,
+            Profiles: profiles, ProfilesTotal: profT,
+            ChipOrder: chipOrder,
+            Genres: genres, GenresTotal: genT,
+            Authors: authors, AuthorsTotal: authT);
     }
 
     // Offline library search: the first source that has cached data wins (the store-backed source); others default empty.
@@ -195,6 +223,16 @@ public sealed class AggregateCatalog : IMusicLibrary, ICollectionEvents
             if (x.Queries.Count + x.Items.Count > 0) return x;
         }
         return SearchSuggestions.Empty;
+    }
+
+    public async Task<IReadOnlyList<SearchTopHit>> RecentSearchesAsync(CancellationToken ct = default)
+    {
+        foreach (var s in _reg.CatalogSources)
+        {
+            var x = await s.RecentSearchesAsync(ct).ConfigureAwait(false);
+            if (x.Count > 0) return x;
+        }
+        return System.Array.Empty<SearchTopHit>();
     }
 
     public async Task<LibraryStats> GetStatsAsync(CancellationToken ct = default)

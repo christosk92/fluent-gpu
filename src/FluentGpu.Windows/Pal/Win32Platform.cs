@@ -626,13 +626,6 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     private HANDLE _preciseWaitTimer;       // lazy one-shot timer for display-rate waits
     private bool _preciseWaitUnavailable;   // sticky creation failure => plain timeout forever
     private HANDLE _presentAckEvent;        // auto-reset: general cross-thread Wake signal waited with messages (not message-only)
-    // The PHASE-CRITICAL wake gets its OWN auto-reset event. _presentAckEvent is the general-purpose nudge — every
-    // AppHost.Post, every background producer, every WakeFrame reaches it — so a present-ack sharing it is indistinguishable
-    // from four other wake sources, and one of those firing just before the ack consumes the auto-reset signal the loop
-    // was going to be woken by. Splitting them makes the display's ack its own handle in the wait set.
-    private HANDLE _displayWakeEvent;
-    // The display clock (DCompositionWaitForCompositorClock republished as an event). Created on the FIRST wait that asks
-    // for it — an app that never display-paces never spawns the thread — and armed only for the duration of such a wait.
     private Win32CompositorClock? _compositorClock;
     private bool _wasZoomed;      // WM_SIZE edge-detect → InputKind.WindowStateChanged
     private bool _inMoveSizeLoop; // WM_ENTERSIZEMOVE..WM_EXITSIZEMOVE modal loop
@@ -718,7 +711,6 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
         // Create this before the window is handed to AppHost: Wake may be called from the render thread, so lazy
         // creation in Wake/WaitForWork would race and could leave the waiter observing a different handle.
         _presentAckEvent = CreateEventW(null, BOOL.FALSE, BOOL.FALSE, null);
-        _displayWakeEvent = CreateEventW(null, BOOL.FALSE, BOOL.FALSE, null);
 
         // Re-run WM_NCCALCSIZE under the custom-frame policy (it already ran during creation with _customFrame set,
         // but a frame-changed pass is the documented way to make the new client geometry stick).
@@ -928,6 +920,14 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     /// unaffected). The WM_GETMINMAXINFO handler converts it to a window (outer) minimum so the user cannot drag the
     /// frame below a usable video size.</summary>
     public void SetMinClientSizePx(Size2 px) => _minClientPx = px;
+
+    // True while this window composites a live video child visual (pushed by the host's video drain). It exempts the
+    // window from the composited edge-resize paint defer below: the child visual is placed FROM the frame loop, so with
+    // zero frames it keeps its pre-resize geometry while the frame moves under it. Volatile — written on the render/
+    // submit thread at the drain, read here on the window thread inside the modal loop.
+    private volatile bool _hasLiveVideo;
+
+    public void SetHasLiveVideo(bool hasLiveVideo) => _hasLiveVideo = hasLiveVideo;
 
     // client (physical px) → window (outer) size, adding the current frame for this window's style/exstyle/DPI. Standard
     // frame ⇒ AdjustWindowRectExForDpi; a custom frame reclaims the caption as client (WM_NCCALCSIZE keeps the top inset
@@ -1415,7 +1415,6 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     {
         uint n = 0;
         if (_presentAckEvent != HANDLE.NULL) handles[n++] = _presentAckEvent;
-        if (_displayWakeEvent != HANDLE.NULL) handles[n++] = _displayWakeEvent;
         if (clock is not null) handles[n++] = clock.TickEvent;
         return n;
     }
@@ -1423,8 +1422,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     private void WaitForImmediateWork(int timeoutMs, bool wakeOnDisplayClock)
     {
         Win32CompositorClock? clock = DisplayClockOrNull(wakeOnDisplayClock);
-        clock?.Arm();
-        try
+        SetDisplayClockArmed(clock, wakeOnDisplayClock);
         {
             HANDLE* handles = stackalloc HANDLE[4];
             uint n = FillWakeHandles(handles, clock);
@@ -1452,7 +1450,15 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
             }
             MsgWaitForMultipleObjectsEx(0, null, timeout, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
         }
-        finally { clock?.Disarm(); }
+    }
+
+    /// <summary>The compositor clock stays armed ACROSS frames while the host wants display pacing (a tick landing
+    /// mid-frame is counted, not lost) and parks only when a wait arrives without the request — idle, ambient, HUD,
+    /// minimized — so a quiet app runs no compositor wait.</summary>
+    private void SetDisplayClockArmed(Win32CompositorClock? clock, bool wanted)
+    {
+        if (wanted) clock?.Arm();
+        else _compositorClock?.Disarm();
     }
 
     private void WaitForPacedWork(int timeoutMs, bool wakeOnDisplayClock)
@@ -1460,8 +1466,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
         long start = System.Diagnostics.Stopwatch.GetTimestamp();
         long deadline = start + (long)Math.Ceiling(timeoutMs * (System.Diagnostics.Stopwatch.Frequency / 1000.0));
         Win32CompositorClock? clock = DisplayClockOrNull(wakeOnDisplayClock);
-        clock?.Arm();
-        try
+        SetDisplayClockArmed(clock, wakeOnDisplayClock);
         {
             HANDLE timer = HANDLE.NULL;
             bool precise = false;
@@ -1480,8 +1485,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
             // The wake handles were written in FillWakeHandles' fixed order; recover the indices from the same
             // conditions so the signalled-handle bookkeeping below stays in step with the set that was actually built.
             int ackIndex = _presentAckEvent != HANDLE.NULL ? 0 : -1;
-            int displayIndex = _displayWakeEvent != HANDLE.NULL ? (ackIndex + 1) : -1;
-            int tickIndex = clock is not null ? (displayIndex >= 0 ? displayIndex + 1 : ackIndex + 1) : -1;
+            int tickIndex = clock is not null ? ackIndex + 1 : -1;
             int timerIndex = -1;
             if (precise) { timerIndex = (int)handleCount; handles[handleCount++] = timer; }
 
@@ -1517,10 +1521,9 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                     if (PacedInputWaitClassifier.IsMotion(msg.message)) _pacedMotionMessages++;
                     DispatchQueuedMessage(&msg);
 
-                    // The phase signals stay urgent even while a continuous motion stream keeps the queue nonempty:
-                    // deferring a present-ack or a compositor tick behind motion is exactly the phase drift being fixed.
+                    // The phase signal stays urgent even while a continuous motion stream keeps the queue nonempty:
+                    // deferring a compositor tick (or a cross-thread wake) behind motion is exactly the phase drift being fixed.
                     if (ackIndex >= 0 && WaitForSingleObject(_presentAckEvent, 0) == WAIT_OBJECT_0) return;
-                    if (displayIndex >= 0 && WaitForSingleObject(_displayWakeEvent, 0) == WAIT_OBJECT_0) return;
                     if (tickIndex >= 0 && WaitForSingleObject(clock!.TickEvent, 0) == WAIT_OBJECT_0) return;
                     if (System.Diagnostics.Stopwatch.GetTimestamp() >= deadline)
                     {
@@ -1531,7 +1534,6 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                 if (!removed) return; // spurious message wake: avoid a zero-time spin
             }
         }
-        finally { clock?.Disarm(); }
     }
 
     private bool TryEnsurePreciseWaitTimer()
@@ -1568,14 +1570,16 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
         PostMessageW(_hwnd, 0u /* WM_NULL */, 0, 0);
     }
 
-    /// <summary>The phase-critical wake (IPlatformWindow.WakePresent): the render thread has presented a published frame,
-    /// so a UI loop parked on the display-phase gate may produce the next one. Signals its OWN auto-reset event and posts
-    /// NOTHING — this fires at the panel's rate, so the WM_NULL <see cref="Wake"/> posts for message-only pumps would be
-    /// 120 pointless messages a second through the WndProc, and sharing the general wake event would let any of the four
-    /// other producers consume the auto-reset signal this loop is waiting for. SetEvent is thread-safe.</summary>
-    public void WakePresent()
+    /// <summary>The display clock the host paces production on (<see cref="IPlatformWindow.DisplayClock"/>): a
+    /// snapshot of the compositor clock's tick seq + vblank instant. Unavailable until the first display-paced wait
+    /// created the clock, or once the runtime probe ruled the export out (remote sessions).</summary>
+    public DisplayClockSample DisplayClock
     {
-        if (_displayWakeEvent != HANDLE.NULL) SetEvent(_displayWakeEvent);
+        get
+        {
+            var c = _compositorClock;
+            return c is { IsAvailable: true } ? new DisplayClockSample(true, c.TickSeq, c.TickQpc) : default;
+        }
     }
 
     /// <summary>Raise a screen-reader announcement (UIA live region) on this window's provider — wired onto
@@ -1595,7 +1599,6 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
         _compositorClock = null;
         if (_preciseWaitTimer != HANDLE.NULL) { CloseHandle(_preciseWaitTimer); _preciseWaitTimer = HANDLE.NULL; }
         if (_presentAckEvent != HANDLE.NULL) { CloseHandle(_presentAckEvent); _presentAckEvent = HANDLE.NULL; }
-        if (_displayWakeEvent != HANDLE.NULL) { CloseHandle(_displayWakeEvent); _displayWakeEvent = HANDLE.NULL; }
         // The UIA provider CCW is intentionally LEAKED (not freed): UIA may still hold a ref after the HWND dies and a
         // synchronous free would risk a use-after-free. A few bytes, one per window, reclaimed at process exit.
         if (_uiaProvider != null) { _uiaProvider = null; FluentGpu.Hooks.InputHooks.Current.Default.Announce = null; }
@@ -1692,7 +1695,10 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                 }
                 if (_inMoveSizeLoop)
                 {
-                    if (_composited) return true;
+                    // Live video is the ONE exemption from the composited full defer: with no frames the DComp child
+                    // keeps its pre-resize rect while the frame moves under it, so the picture lags the window. Fall
+                    // through to the throttled paint so the hole and the child are recomputed together.
+                    if (_composited && !_hasLiveVideo) return true;
                     if (!ThrottleModalResizePaint()) PaintRequested?.Invoke();
                     return true;
                 }
@@ -1754,7 +1760,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                 {
                     // Composited edge-resize: full defer (zero paints). Composited pure move + non-composited: throttled
                     // keep-alives so ambient animation can advance without flooding the modal loop.
-                    if (_composited && _inMoveSizeLoop && _sizedInMoveSizeLoop) return true;
+                    if (_composited && _inMoveSizeLoop && _sizedInMoveSizeLoop && !_hasLiveVideo) return true;
                     if (_inMoveSizeLoop && ThrottleModalTickPaint()) return true;
                     if (Diag.EnvFlag("FG_MOVE_DIAG")) Console.Error.WriteLine($"[FG_MOVE_DIAG t={Environment.TickCount64}] timer paint");
                     PaintRequested?.Invoke();

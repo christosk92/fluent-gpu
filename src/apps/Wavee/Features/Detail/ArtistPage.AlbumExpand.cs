@@ -86,7 +86,7 @@ sealed class AlbumDrawerPanel : Component
     public AlbumDrawerPanel(Services svc, Action<string> play, Action<string, string?> go, Func<ColorF> accent)
     {
         _svc = svc; _play = play; _go = go; _accent = accent;
-        _showChecks = () => { _ = _sel.Version.Value; return _sel.SelectedCount > 1; };   // 2+ only (a plain click must not summon checkboxes)
+        _showChecks = () => { _ = _sel.Version.Value; return _sel.SelectedCount > 1; };   // 2+ only (a plain click must not summon checkboxes or the batch bar)
     }
 
     static readonly ColumnSet DrawerCols = new(Album: false, By: false, Date: false, Video: false, Plays: false, Heart: true, Thumb: false);
@@ -287,6 +287,7 @@ sealed class DiscoGrid : Component
     readonly int _initialIndex;
     readonly Action<LazyGridVisibleRange>? _visibleRangeChanged;
     readonly float _expandedTopInset;
+    readonly float _expandedRevealPeek;
     static readonly Func<ColorF> ThemeAccent = static () => Tok.AccentDefault;
     readonly Func<ColorF> _accent;
     readonly Signal<int> _expanded = new(-1);
@@ -334,12 +335,14 @@ sealed class DiscoGrid : Component
 
     public DiscoGrid(VirtualCollection<Album> vc, Services svc, Action<string, string?> go, Action<string> play,
                      int initialIndex = 0, Func<ColorF>? accent = null,
-                     Action<LazyGridVisibleRange>? onVisibleRangeChanged = null, float expandedTopInset = 28f)
+                     Action<LazyGridVisibleRange>? onVisibleRangeChanged = null, float expandedTopInset = 28f,
+                     float expandedRevealPeek = DrawerHeaderH + 2f * TrackRow.CompactListItemExtent)
     {
         _vc = vc; _svc = svc; _go = go; _play = play; _initialIndex = initialIndex;
         _accent = accent ?? ThemeAccent;
         _visibleRangeChanged = onVisibleRangeChanged;
         _expandedTopInset = expandedTopInset;
+        _expandedRevealPeek = expandedRevealPeek;
     }
 
     public override Element Render()
@@ -395,7 +398,8 @@ sealed class DiscoGrid : Component
         drawerHeight: DrawerHeight,
         initialIndex: _initialIndex,
         onVisibleRangeChanged: _visibleRangeChanged,
-        expandedTopInset: _expandedTopInset));
+        expandedTopInset: _expandedTopInset,
+        expandedRevealPeek: _expandedRevealPeek));
     }
 
     int Count()
@@ -591,11 +595,6 @@ sealed class DiscographySection : Component
             EdgeFade = _gridClipped.Value
                 ? new EdgeFadeSpec(EdgeMask.Top, DetailVerticalLayout.StickyFadeBand)
                 : null,
-            ScrollBinds = [new()
-            {
-                ClipTopAtViewport = StickyInset,
-                OnFlag = clipped => { if (_gridClipped.Peek() != clipped) _gridClipped.Value = clipped; },
-            }],
             Children =
             [
                 Embed.Comp(() => new DiscoGrid(_vc!, _svc, _go, _play,
@@ -603,7 +602,7 @@ sealed class DiscographySection : Component
                     onVisibleRangeChanged: OnVisibleRangeChanged,
                     expandedTopInset: StickyInset)),
             ],
-        };
+        }.ClipBelow(StickyInset, clipped => { if (_gridClipped.Peek() != clipped) _gridClipped.Value = clipped; });
 
         var parts = Parts();
 

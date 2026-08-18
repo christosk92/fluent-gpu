@@ -436,6 +436,7 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
                 _contextMetadata = new Dictionary<string, string>();
             }
             _durMs = c.DurationMs > 0 ? c.DurationMs : (c.HasTrack ? c.Track.DurationMs : _durMs);
+            SyncDurationOverrideLocked();   // …unless the media reported this playable's real length (a video is its own edit)
             if (!suppressPlayState)
             {
                 // no-active-device Playing→Paused clamp (ported correctness): if nobody is active, we are not playing.

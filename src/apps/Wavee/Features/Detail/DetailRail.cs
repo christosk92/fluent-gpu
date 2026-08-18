@@ -148,7 +148,7 @@ static class DetailRail
         // Billed-artist row (album/single): a STACKED artist face-pile (overlapping avatars + "+N" of the distinct album
         // artists + the billed name) when the album carries artist avatars; else the plain clickable artist names.
         if (cfg.Badges == BadgeStyle.TypeYear && m.Artists.Count > 0)
-            kids.Add(LateRow("rail:artists", Embed.Comp(() => new ArtistFacePile(m, cover, h))));
+            kids.Add(LateRow("rail:artists", Embed.Comp(new ArtistFacePile.Props(m.Artists, m.AlbumArtists, m.Tracks, cover, h), () => new ArtistFacePile())));
 
         // Meta line — albums surface Songs/Length/Released as the bento facts panel below, so an inline line would just
         // duplicate it; only non-album surfaces (playlists / liked) show it here.
@@ -324,7 +324,7 @@ static class DetailRail
             ? PlaylistInlineEdit.Title(modelSource, 600f, 28f, lineHeight: 36f)
             : WaveeType.PageHero(m.Title) with { Size = 28f, LineHeight = 36f, Weight = 600, Wrap = TextWrap.WrapWholeWords, MaxLines = 3, Trim = TextTrim.CharacterEllipsis }));
         if (cfg.Badges == BadgeStyle.TypeYear && m.Artists.Count > 0)
-            info.Add(LateRow("hdr:artists", Embed.Comp(() => new ArtistFacePile(m, 600f, h))));
+            info.Add(LateRow("hdr:artists", Embed.Comp(new ArtistFacePile.Props(m.Artists, m.AlbumArtists, m.Tracks, 600f, h), () => new ArtistFacePile())));
         if (cfg.Badges != BadgeStyle.TypeYear && m.MetaLine is { Length: > 0 })
             info.Add(LateRow("hdr:meta", WaveeType.TrackMeta(m.MetaLine) with { MaxLines = 1, Trim = TextTrim.CharacterEllipsis }));
 

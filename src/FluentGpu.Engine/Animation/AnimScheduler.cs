@@ -159,6 +159,7 @@ public sealed partial class AnimEngine
         ref AnimValue r = ref _slab.At(slot);
         NodeHandle node = r.Node;
         bool refreshBlurIntent = r.Channel == AnimChannel.BlurSigma;
+        if (r.Has(AnimFlags.ClipAdded)) ReleaseReflowClip(node);   // reflow rows own the clip they added (see AnimFlags.ClipAdded)
         if (r.Has(AnimFlags.Parked)) _parked--;
         ClearKeys(slot);
         _slab.Free(slot);
@@ -346,7 +347,10 @@ public sealed partial class AnimEngine
         int idx = (int)node.Raw.Index;
         // adjust the parked census before the bulk clear
         for (int s = _slab.HeadOnNode(idx); s >= 0; s = _slab.At(s).NextOnNode)
+        {
             if (_slab.At(s).Has(AnimFlags.Parked)) _parked--;
+            if (_slab.At(s).Has(AnimFlags.ClipAdded)) ReleaseReflowClip(node);   // ClearNode bypasses FreeSlot
+        }
         _slab.ClearNode(idx);
         RefreshBlurAnimationActive(node);
     }

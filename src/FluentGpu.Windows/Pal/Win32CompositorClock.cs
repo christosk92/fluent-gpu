@@ -31,10 +31,13 @@ namespace FluentGpu.Pal.Windows;
 /// good; the host then keeps its wall-clock timeout. This is a runtime probe by design — the engine does not gate new
 /// behavior behind environment switches.
 ///
-/// <b>Power.</b> The thread is armed only for the duration of a display-paced wait and parks on
-/// <see cref="_armGate"/> otherwise, so an idle or minimized app pays nothing: no compositor wait runs and no event is
-/// signalled. <see cref="Arm"/>/<see cref="Disarm"/> are allocation-free (an interlocked write plus an event signal), so
-/// they are safe on the per-frame wait path.
+/// <b>Ticks are the production clock.</b> Each tick bumps <see cref="TickSeq"/> and stamps <see cref="TickQpc"/> (the
+/// vblank instant, Stopwatch domain) BEFORE the event is signalled, so the host can gate production to one frame per
+/// tick and stamp the frame with the exact vblank it was produced for. The clock stays armed across frames while the
+/// host keeps asking for display pacing (<see cref="Arm"/> is idempotent) — a tick that lands while the host is
+/// producing is counted and its event stays signalled, so the next wait returns immediately instead of losing a vblank —
+/// and parks only when the host explicitly <see cref="Disarm"/>s (idle / ambient / minimized): no compositor wait runs
+/// and no event is signalled while the app is quiet.
 /// </summary>
 internal sealed unsafe class Win32CompositorClock : IDisposable
 {
@@ -53,6 +56,8 @@ internal sealed unsafe class Win32CompositorClock : IDisposable
     private readonly Thread _thread;
     private int _armed;
     private int _fastStreak;                    // waiter-thread only: consecutive sub-millisecond successes
+    private long _tickSeq;                      // bumped once per delivered tick (waiter thread writes, host reads)
+    private long _tickQpc;                      // Stopwatch instant of the latest tick
     private volatile bool _unavailable;
     private volatile bool _disposed;
 
@@ -74,13 +79,17 @@ internal sealed unsafe class Win32CompositorClock : IDisposable
     /// caller then leaves the tick out of its handle set and its wall-clock timeout paces the loop as before.</summary>
     internal bool IsAvailable => !_unavailable && _tickEvent != HANDLE.NULL;
 
-    /// <summary>Start delivering ticks. Idempotent and allocation-free; safe to call on the per-frame wait path. Clears
-    /// any tick left over from the previous armed window so a stale signal cannot short-circuit this wait.</summary>
+    /// <summary>Delivered-tick count (monotone) and the Stopwatch instant of the latest one. Read on the UI thread; the
+    /// seq is written AFTER the stamp on the waiter thread, so a reader that observes a new seq also observes its stamp.</summary>
+    internal long TickSeq => Volatile.Read(ref _tickSeq);
+    internal long TickQpc => Volatile.Read(ref _tickQpc);
+
+    /// <summary>Start (or keep) delivering ticks. Idempotent and allocation-free; safe to call on the per-frame wait path.
+    /// A tick signalled since the last wait is deliberately kept: it is a real vblank the host has not produced for.</summary>
     internal void Arm()
     {
         if (_disposed || _unavailable) return;
-        if (Interlocked.Exchange(ref _armed, 1) == 1) return;
-        if (_tickEvent != HANDLE.NULL) ResetEvent(_tickEvent);
+        if (Interlocked.Exchange(ref _armed, 1) == 1) return;   // already armed: keep any pending tick signal — it is a real vblank the host has not produced for yet
         _armGate.Set();   // unpark the waiter
     }
 
@@ -124,7 +133,11 @@ internal sealed unsafe class Win32CompositorClock : IDisposable
                 if (++_fastStreak >= FastStreakLimit) { MarkUnavailable(); continue; }
             }
             else _fastStreak = 0;
-            // Republish the tick. Disarm may have raced us here; the arm-side ResetEvent discards the stale signal.
+            // Publish the tick: stamp first, then seq (release), then the event — a host that wakes on the event or
+            // observes the new seq sees the stamp. A tick that lands while the host is mid-frame stays signalled
+            // (auto-reset, consumed by the next wait), so no vblank is lost to a wake that arrived a little early.
+            Volatile.Write(ref _tickQpc, Stopwatch.GetTimestamp());
+            Volatile.Write(ref _tickSeq, _tickSeq + 1);
             if (Volatile.Read(ref _armed) != 0 && _tickEvent != HANDLE.NULL) SetEvent(_tickEvent);
         }
     }

@@ -16,7 +16,7 @@ enum HomeRow : byte
     Podcasts, Timeline, Sections, Editorial, Feed, Tail,
 }
 
-/// <summary>One app-authored Home module plus the source section that can satisfy a server-side "Show all". The
+/// <summary>One app-authored Home module plus the source section that can satisfy a server-side drill-in. The
 /// module is a landing-page projection only: the source ledger remains untouched and owns drill-in/accounting.</summary>
 internal sealed record HomeLandingModule(HomeGroup Group, HomeSection? PrimarySection);
 
@@ -100,7 +100,7 @@ internal static class HomeLandingProjection
             var lone = kind == HomeGroupKind.QuickGrid ? loneWeekly : null;
             if (source.Count == 0 && lone is null) continue;
             var cards = UniqueCards(source);
-            // FIRST, not appended: the grid renders only its first HomeModuleLayout.QuickShown cards before "Show all",
+            // FIRST, not appended: the grid renders only its first HomeModuleLayout.QuickShown cards on the landing,
             // so appending would re-hide the very card this fallback exists to save.
             if (lone is not null && !Holds(cards, lone.Uri)) cards.Insert(0, lone);
             if (cards.Count == 0) continue;

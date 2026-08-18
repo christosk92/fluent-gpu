@@ -494,6 +494,16 @@ sealed class PlayerBarContent : Component
                     MenuFlyoutItem.RadioItem(Loc.Get(Strings.Player.VideoInSeparateWindow), now == SurfacePlacement.Detached,
                         () => b.ShowVideoAt(SurfacePlacement.Detached), Icons.Movie),
                 };
+                // Always-on-top is a property of the SEPARATE WINDOW, so it is only offered when that is where the video
+                // lives. A checkable item rather than a mode switch: it is a preference the user flips and forgets, and
+                // the window applies it live (VideoPlacementHost) instead of at the next open.
+                if (svc?.Settings is { } vset && now == SurfacePlacement.Detached)
+                {
+                    bool onTop = vset.Get(WaveeSettings.VideoWindowAlwaysOnTop);
+                    items.Add(MenuFlyoutItem.Separator);
+                    items.Add(MenuFlyoutItem.Toggle(Loc.Get(Strings.Player.VideoAlwaysOnTop), onTop,
+                        () => VideoWindowPrefs.SetAlwaysOnTop(vset, !onTop)));
+                }
                 if (b.VideoActive())   // "off" is only meaningful while something is on
                 {
                     items.Add(MenuFlyoutItem.Separator);

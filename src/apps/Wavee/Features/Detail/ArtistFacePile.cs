@@ -4,6 +4,7 @@ using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using Wavee.Backend;
 using Wavee.Core;
 using static FluentGpu.Dsl.Ui;
 
@@ -12,45 +13,58 @@ namespace Wavee;
 // Album header artist control: WaveeMusic's AvatarStack translated to FluentGPU and made interactive.
 // Visible stack = album-billed artists only. The "+N" badge counts track-only contributors, and tapping the stack opens
 // a flyout of every distinct artist on the album.
+//
+// Portraits do not ride getAlbum (that persisted query ships billed artists as uri+name only). ArtistV4 Identity
+// carries PortraitGroup, so this control asks the hydrator for those billed uris and reads the store back. Re-pushed
+// props keep the billed set live across a route-reused DetailPage; constructor fields would freeze the first album.
 sealed class ArtistFacePile : Component
 {
-    readonly IReadOnlyList<ArtistRef> _billedRefs;
-    readonly IReadOnlyList<Artist>? _billedDetailed;
-    readonly IReadOnlyList<Track> _tracks;
-    readonly float _maxWidth;
-    readonly DetailHandlers _h;
+    internal sealed record Props(
+        IReadOnlyList<ArtistRef> Artists,
+        IReadOnlyList<Artist>? AlbumArtists,
+        IReadOnlyList<Track> Tracks,
+        float MaxWidth,
+        DetailHandlers Handlers);
 
     const float Avatar = 28f, Ring = 2f, Outer = Avatar + Ring * 2f, Overlap = 12f;
     const int MaxVisible = 4;
 
-    public ArtistFacePile(DetailModel m, float maxWidth, DetailHandlers h)
-    {
-        _billedRefs = m.Artists;
-        _billedDetailed = m.AlbumArtists;
-        _tracks = m.Tracks;
-        _maxWidth = maxWidth;
-        _h = h;
-    }
-
     public override Element Render()
     {
-        var billed = BilledArtists();
-        var all = AllDistinctArtists(billed);
-        if (all.Count == 0) return new BoxEl();
+        var p = UseProps<Props>();
+        var svc = UseContext(Services.Slot);
+        var overlay = UseContext(Overlay.Service);
+        string billedKey = UriKey(p.Artists);
+        // Identity hydrate is the re-render trigger: seed Resolve may already have a resident portrait (NPV about-artist,
+        // a prior artist-page visit). When any billed avatar is still missing, one ArtistV4 batch fills the rest.
+        var portraits = UseResource(async ct =>
+        {
+            var seed = ResolveBilled(p.Artists, p.AlbumArtists, svc?.RealStore);
+            if (svc is null || !NeedsPortraitFetch(seed)) return 0;
+            var uris = UrisOf(p.Artists);
+            if (uris.Count == 0) return 0;
+            await svc.Hydrator.EnsureManyAsync(uris, HydrationLevel.Identity, HydrationOptions.Default, ct)
+                .ConfigureAwait(false);
+            return 1;
+        }, 0, billedKey);
+        _ = portraits.Loadable.Value.Value;
+
+        var billed = ResolveBilled(p.Artists, p.AlbumArtists, svc?.RealStore);
+        var all = AllDistinctArtists(billed, p.Tracks, p.AlbumArtists, svc?.RealStore);
         var visible = billed.Count > 0 ? billed : all;
         int overflow = billed.Count > 0 ? Math.Max(0, all.Count - billed.Count) : Math.Max(0, all.Count - MaxVisible);
 
         var anchor = UseRef<NodeHandle>(default);
         var handle = UseRef<OverlayHandle?>(null);
-        var svc = UseContext(Overlay.Service);
+        if (all.Count == 0) return new BoxEl();
 
         void Toggle()
         {
-            if (svc is null) return;
+            if (overlay is null) return;
             if (handle.Value is { IsOpen: true } open) { open.Close(); return; }
-            handle.Value = svc.Open(
+            handle.Value = overlay.Open(
                 () => anchor.Value,
-                () => Flyout(all, () => handle.Value?.Close()),
+                () => Flyout(all, p.Handlers, () => handle.Value?.Close()),
                 FlyoutPlacement.BottomEdgeAlignedLeft,
                 new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss, Chrome: PopupChrome.Popup)
                 { ConstrainToRootBounds = false });
@@ -83,11 +97,11 @@ sealed class ArtistFacePile : Component
 
         return new BoxEl
         {
-            Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S, MaxWidth = _maxWidth,
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S, MaxWidth = p.MaxWidth,
             Children =
             [
                 ToolTip.Wrap(button, "View all artists"),
-                ArtistLinks(visible),
+                ArtistLinks(visible, p.Handlers),
             ],
         };
     }
@@ -125,7 +139,7 @@ sealed class ArtistFacePile : Component
         ],
     };
 
-    Element ArtistLinks(IReadOnlyList<Artist> billed)
+    static Element ArtistLinks(IReadOnlyList<Artist> billed, DetailHandlers h)
     {
         // ONE clickable, ellipsized run (to the lead artist). A long multi-artist string must truncate CLEANLY, never clip
         // under the scrollbar — the chevron's "view all artists" flyout is the per-artist escape hatch. Grow+Basis 0 so the
@@ -138,13 +152,13 @@ sealed class ArtistFacePile : Component
         return new BoxEl
         {
             Direction = 0, Grow = 1f, Basis = 0f, Shrink = 1f,
-            OnClick = enabled ? () => _h.Go("artist:" + lead.Uri, lead.Name) : null,
+            OnClick = enabled ? () => h.Go("artist:" + lead.Uri, lead.Name) : null,
             Cursor = enabled ? CursorId.Hand : (CursorId?)null, Role = enabled ? AutomationRole.Hyperlink : AutomationRole.Text,
             Children = [new TextEl(sb.ToString()) { Size = 14f, Weight = 700, Color = Tok.AccentTextPrimary, Grow = 1f, Basis = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis }],
         };
     }
 
-    Element Flyout(IReadOnlyList<Artist> artists, Action close)
+    static Element Flyout(IReadOnlyList<Artist> artists, DetailHandlers h, Action close)
     {
         var rows = new Element[artists.Count];
         for (int i = 0; i < artists.Count; i++)
@@ -156,7 +170,7 @@ sealed class ArtistFacePile : Component
                 Padding = new Edges4(Spacing.S, 0f, Spacing.S, 0f),
                 Corners = CornerRadius4.All(6f),
                 Role = AutomationRole.MenuItem, Focusable = true, Cursor = a.Uri.Length > 0 ? CursorId.Hand : (CursorId?)null,
-                OnClick = a.Uri.Length > 0 ? () => { _h.Go("artist:" + a.Uri, a.Name); close(); } : null,
+                OnClick = a.Uri.Length > 0 ? () => { h.Go("artist:" + a.Uri, a.Name); close(); } : null,
                 Children =
                 [
                     PersonPicture.Create("", 32f, displayName: a.Name, imageSourcePath: a.Image?.Url),
@@ -174,43 +188,84 @@ sealed class ArtistFacePile : Component
         };
     }
 
-    IReadOnlyList<Artist> BilledArtists()
+    static IReadOnlyList<Artist> ResolveBilled(IReadOnlyList<ArtistRef> billedRefs, IReadOnlyList<Artist>? billedDetailed, IStore? store)
     {
         var result = new List<Artist>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
-        var detailed = new Dictionary<string, Artist>(StringComparer.Ordinal);
-        if (_billedDetailed is { Count: > 0 })
-            for (int i = 0; i < _billedDetailed.Count; i++)
-                if (_billedDetailed[i].Uri.Length > 0) detailed[_billedDetailed[i].Uri] = _billedDetailed[i];
-
-        foreach (var a in _billedRefs) Add(a);
-        return result;
-
-        void Add(ArtistRef ar)
+        var detailed = IndexByUri(billedDetailed);
+        foreach (var ar in billedRefs)
         {
-            if (ar.Uri.Length == 0 || !seen.Add(ar.Uri)) return;
-            result.Add(detailed.TryGetValue(ar.Uri, out var full)
-                ? full with { Name = full.Name.Length > 0 ? full.Name : ar.Name }
-                : new Artist(ar.Id, ar.Uri, ar.Name, null));
+            if (ar.Uri.Length == 0 || !seen.Add(ar.Uri)) continue;
+            result.Add(ResolveOne(ar, detailed, store));
         }
+        return result;
     }
 
-    IReadOnlyList<Artist> AllDistinctArtists(IReadOnlyList<Artist> billed)
+    static IReadOnlyList<Artist> AllDistinctArtists(IReadOnlyList<Artist> billed, IReadOnlyList<Track> tracks,
+        IReadOnlyList<Artist>? billedDetailed, IStore? store)
     {
         var result = new List<Artist>(billed);
         var seen = new HashSet<string>(StringComparer.Ordinal);
         for (int i = 0; i < billed.Count; i++)
             if (billed[i].Uri.Length > 0) seen.Add(billed[i].Uri);
+        var detailed = IndexByUri(billedDetailed);
 
-        foreach (var t in _tracks)
-            foreach (var a in t.Artists)
-                Add(a);
+        foreach (var t in tracks)
+            foreach (var ar in t.Artists)
+            {
+                if (ar.Uri.Length == 0 || !seen.Add(ar.Uri)) continue;
+                result.Add(ResolveOne(ar, detailed, store));
+            }
         return result;
+    }
 
-        void Add(ArtistRef ar)
+    static Dictionary<string, Artist> IndexByUri(IReadOnlyList<Artist>? artists)
+    {
+        var detailed = new Dictionary<string, Artist>(StringComparer.Ordinal);
+        if (artists is { Count: > 0 })
+            for (int i = 0; i < artists.Count; i++)
+                if (artists[i].Uri.Length > 0) detailed[artists[i].Uri] = artists[i];
+        return detailed;
+    }
+
+    static Artist ResolveOne(ArtistRef ar, Dictionary<string, Artist> detailed, IStore? store)
+    {
+        detailed.TryGetValue(ar.Uri, out var fromAlbum);
+        var fromStore = store?.GetArtist(ar.Uri);
+        var image = fromAlbum?.Image ?? fromStore?.Image;
+        string name = fromAlbum is { Name.Length: > 0 } ? fromAlbum.Name
+            : ar.Name.Length > 0 ? ar.Name
+            : fromStore?.Name ?? "";
+        if (fromAlbum is not null) return fromAlbum with { Name = name, Image = image };
+        if (fromStore is not null) return fromStore with { Name = name.Length > 0 ? name : fromStore.Name, Image = image ?? fromStore.Image };
+        return new Artist(ar.Id, ar.Uri, name, image);
+    }
+
+    static bool NeedsPortraitFetch(IReadOnlyList<Artist> billed)
+    {
+        for (int i = 0; i < billed.Count; i++)
+            if (billed[i].Image is null && billed[i].Uri.Length > 0) return true;
+        return false;
+    }
+
+    static List<string> UrisOf(IReadOnlyList<ArtistRef> billed)
+    {
+        var uris = new List<string>(billed.Count);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var ar in billed)
+            if (ar.Uri.Length > 0 && seen.Add(ar.Uri)) uris.Add(ar.Uri);
+        return uris;
+    }
+
+    static string UriKey(IReadOnlyList<ArtistRef> billed)
+    {
+        if (billed.Count == 0) return "";
+        var sb = new System.Text.StringBuilder();
+        for (int i = 0; i < billed.Count; i++)
         {
-            if (ar.Uri.Length == 0 || !seen.Add(ar.Uri)) return;
-            result.Add(new Artist(ar.Id, ar.Uri, ar.Name, null));
+            if (i > 0) sb.Append('\n');
+            sb.Append(billed[i].Uri);
         }
+        return sb.ToString();
     }
 }

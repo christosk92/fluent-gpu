@@ -184,6 +184,10 @@ public sealed class AutoSuggestBox : Component
     public AutoSuggestBoxChrome Chrome;
     /// <summary>Suggestion host. Inline never opens a nested overlay and mounts the presenter directly below the field.</summary>
     public AutoSuggestBoxSuggestionPresentation SuggestionPresentation;
+    /// <summary>Inline ghost completion (empty = no ghost). A muted copy of the full string sits under the editor so
+    /// the typed prefix stays <see cref="Tok.TextPrimary"/> and the suffix shows through. Hidden when the caret is not
+    /// at the end, a suggestion is highlighted, or the completion does not start with the live document.</summary>
+    public IReadSignal<string>? Completion;
 
     public static Element Create(
         IReadOnlyList<string> suggestions,
@@ -211,7 +215,8 @@ public sealed class AutoSuggestBox : Component
         IReadSignal<bool>? loadingSignal = null,
         AutoSuggestBoxPresenter? presenter = null,
         AutoSuggestBoxChrome chrome = AutoSuggestBoxChrome.Standard,
-        AutoSuggestBoxSuggestionPresentation suggestionPresentation = AutoSuggestBoxSuggestionPresentation.Popup)
+        AutoSuggestBoxSuggestionPresentation suggestionPresentation = AutoSuggestBoxSuggestionPresentation.Popup,
+        IReadSignal<string>? completion = null)
         => Embed.Comp(() => new AutoSuggestBox
         {
             Suggestions = suggestions, SuggestionsSignal = suggestionsSignal, LoadingSignal = loadingSignal,
@@ -223,6 +228,7 @@ public sealed class AutoSuggestBox : Component
             TextChanged = textChanged, UpdateTextOnSelect = updateTextOnSelect, Parts = parts, Field = field,
             FieldMinHeight = minHeight, FieldRadius = cornerRadius, BoldMatch = boldMatch, ItemGlyph = itemGlyph,
             Presenter = presenter, Chrome = chrome, SuggestionPresentation = suggestionPresentation,
+            Completion = completion,
         });
 
     // The rendered width — what sizes the inner editor and the popup. Reading it inside a Render subscribes THAT
@@ -492,16 +498,45 @@ public sealed class AutoSuggestBox : Component
         // plain Width freezes at ITS mount, and a parent re-render reuses it without re-running the factory), so it
         // subscribes to this memo and resizes itself when the live width moves.
         var innerWidth = UseComputed(() => EffectiveWidth - iconCol);
+        var caretAtEnd = UseSignal(true);
 
+        bool TryAcceptCompletion(KeyEventArgs e)
+        {
+            if (e.KeyCode != Keys.Tab && e.KeyCode != Keys.Right) return false;
+            if ((e.Mods & (KeyModifiers.Ctrl | KeyModifiers.Alt | KeyModifiers.Shift)) != 0) return false;
+            var edit = _edit;
+            if (edit is null) return false;
+            string completion = Completion?.Peek() ?? "";
+            if (completion.Length == 0) return false;
+            string typed = query.Peek();
+            if (completion.Length <= typed.Length
+                || !completion.StartsWith(typed, StringComparison.OrdinalIgnoreCase))
+                return false;
+            if (highlight.Peek() >= 0) return false;
+            if (edit.SelectionLength != 0 || edit.SelectionStart != edit.DocumentLength) return false;
+            SetTextWithReason(completion, TextChangeReason.ProgrammaticChange);
+            return true;
+        }
+
+        // Same height and content padding as the chromeless EditableText lane (WinUI 10,5,6,6). The ghost is a
+        // ZStack underlay of the FULL completion string; without Center it hugs the padded top while the editor
+        // vertically centers its run, so the untyped suffix sits a dip above the typed glyphs.
+        float editorH = Chrome == AutoSuggestBoxChrome.ElevatedPill ? MathF.Max(32f, FieldMinHeight - 4f) : 32f;
         var editor = Embed.Comp(() =>
         {
             var e = new EditableText
             {
                 Text = query, Width = width - iconCol, WidthSignal = innerWidth,
-                Height = Chrome == AutoSuggestBoxChrome.ElevatedPill ? MathF.Max(32f, FieldMinHeight - 4f) : 32f,
+                Height = editorH,
                 Placeholder = Placeholder,
                 Chromeless = true,
                 OnCommit = OnEnter, OnCancel = OnEscape,
+                PreviewKeyDown = TryAcceptCompletion,
+                OnSelectionChanged = (s, len) =>
+                {
+                    bool atEnd = len == 0 && s == (_edit?.DocumentLength ?? 0);
+                    if (caretAtEnd.Peek() != atEnd) caretAtEnd.Value = atEnd;
+                },
                 OnFocusChanged = f =>
                 {
                     focused.Value = f;
@@ -511,6 +546,38 @@ public sealed class AutoSuggestBox : Component
             _edit = e;
             return e;
         });
+
+        string completionText = Completion?.Value ?? "";
+        int hi = highlight.Value;
+        bool showGhost = hi < 0 && caretAtEnd.Value
+            && completionText.Length > q.Length
+            && completionText.StartsWith(q, StringComparison.OrdinalIgnoreCase);
+        Element ghost = showGhost
+            ? new BoxEl
+            {
+                Height = editorH,
+                Direction = 0, AlignItems = FlexAlign.Center,
+                Padding = new Edges4(10, 5, 6, 6),
+                HitTestVisible = false,
+                Children =
+                [
+                    new TextEl(completionText)
+                    {
+                        Size = 14f, Color = Tok.TextTertiary,
+                        MaxLines = 1, Trim = TextTrim.CharacterEllipsis, Wrap = TextWrap.NoWrap,
+                    },
+                ],
+            }
+            : new BoxEl { HitTestVisible = false };
+        var fieldStack = new BoxEl
+        {
+            ZStack = true, ClipToBounds = true, AlignItems = FlexAlign.Stretch,
+            Grow = Grow > 0f ? 1f : 0f,
+            Basis = Grow > 0f ? 0f : float.NaN,
+            Shrink = Grow > 0f ? 1f : 0f,
+            MinWidth = Grow > 0f ? 0f : float.NaN,
+            Children = [ghost, editor],
+        };
         var children = new List<Element>
         {
             // FILL MODE — the editor is wrapped in a Basis=0 box. EditableText is a FIXED-WIDTH control (its root always
@@ -520,10 +587,7 @@ public sealed class AutoSuggestBox : Component
             // (infinite expansion). FlexLayout zeroes a Basis=0 child's measured main (FlexLayout.cs:217), so this box
             // contributes 0 to our measured width — we collapse to just the query button — while Grow=1 still arranges
             // the editor to fill. (Non-fill keeps the editor inline: the explicit Width is the INTENDED fixed size.)
-            Grow > 0f
-                ? new BoxEl { Grow = 1f, Basis = 0f, Shrink = 1f, ClipToBounds = true,
-                              AlignItems = FlexAlign.Stretch, Children = [editor] }
-                : editor,
+            fieldStack,
         };
 
         if (hasIcon)

@@ -953,9 +953,11 @@ internal sealed class PagedShelfCore : Component
                     new BoxEl { Direction = 1, Padding = _rows == 1 ? new Edges4(0f, LiftClearance, 0f, ShadowClearance) : default, HoverElevatePaint = HoverElevate, Children = [content] },
             });
 
+        float vpH = shelfH > 0f ? (_rows == 1 ? shelfH + ShadowClearance + LiftClearance : shelfH) : float.NaN;
         return _parts.Apply(PagedShelf.PartViewport, new BoxEl
         {
-            Height = shelfH > 0f ? (_rows == 1 ? shelfH + ShadowClearance + LiftClearance : shelfH) : float.NaN,
+            Height = vpH,
+            MinHeight = vpH,
             ClipToBounds = true,
             // Clip-ESCAPE root: the hover-elevated cell hoists out of this clip + the inner scroller's edge fade — its
             // lift/halo paint into the page while resting content stays exactly clipped. SINGLE-ROW ONLY (HoverElevate):

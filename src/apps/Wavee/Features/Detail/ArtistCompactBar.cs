@@ -108,10 +108,8 @@ static class ArtistCompactBar
         {
             Width = width, Height = ContextBandLayout.Height,
             ZStack = true, HitTestVisible = canHit, HitTestPassThrough = true,
-            ScrollBinds = ContextBand.RevealBinds(
-                ArtistHeroLayout.CompactRevealStart(collapseDistance), collapseDistance),
             Children = [surface, ContextBand.HairlineOverlay(width)],
-        };
+        }.Reveal(ArtistHeroLayout.CompactRevealStart(collapseDistance), collapseDistance, Spacing.XS);
     }
 
     // The band paints nothing while the page is shimmering (it is invisible at offset 0 anyway); an empty proxy stops

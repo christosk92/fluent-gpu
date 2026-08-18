@@ -541,7 +541,7 @@ public class ConnectControllerTests
         using var controller = new PlaybackController(
             audio, new StubTrackResolver(), projection, Ctx("spotify:track:a"), "us", videoHost: video);
         controller.ShouldPlayAsVideo = _ => true;
-        controller.LoadCurrentVideoAsync = (_, _) =>
+        controller.LoadCurrentVideoAsync = (_, _, _) =>
         {
             Interlocked.Increment(ref videoLoads);
             return Task.FromResult(true);
@@ -577,7 +577,7 @@ public class ConnectControllerTests
         using var controller = new PlaybackController(
             audio, new StubTrackResolver(), projection, Ctx("spotify:track:a"), "us", videoHost: video);
         controller.ShouldPlayAsVideo = _ => true;
-        controller.LoadCurrentVideoAsync = (_, _) => { Interlocked.Increment(ref videoLoads); return Task.FromResult(true); };
+        controller.LoadCurrentVideoAsync = (_, _, _) => { Interlocked.Increment(ref videoLoads); return Task.FromResult(true); };
         byte[] payload = Encoding.UTF8.GetBytes(
             "{\"command\":{\"endpoint\":\"play\",\"context\":{\"uri\":\"spotify:playlist:p\"}}}");
         await controller.HandleRemoteCommandAsync(new ConnectCommand(

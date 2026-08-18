@@ -337,13 +337,11 @@ static class DetailVerticalHero
         {
             ZStack = true, Width = viewportW, Height = DetailVerticalLayout.CompactIdentityHeight,
             HitTestVisible = compactCanHit, HitTestPassThrough = true,
-            ScrollBinds = ContextBand.RevealBinds(
-                DetailVerticalLayout.CompactRevealStart(collapseDistance), collapseDistance),
             Children =
             [
                 compactIdentityContent,
             ],
-        };
+        }.Reveal(DetailVerticalLayout.CompactRevealStart(collapseDistance), collapseDistance, Spacing.XS);
 
         Element expandedPresentation = ZStack(expanded) with
         {

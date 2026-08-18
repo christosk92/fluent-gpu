@@ -217,7 +217,7 @@ public class PlaybackAttributionTests
         {
             bool asVideo = true;
             c.ShouldPlayAsVideo = _ => asVideo;
-            c.LoadCurrentVideoAsync = (_, _) => Task.FromResult(true);
+            c.LoadCurrentVideoAsync = (_, _, _) => Task.FromResult(true);
 
             await c.PlayAsync("spotify:playlist:p", 0);
             video.Emit(new AudioHostSignal(AudioHostSignalKind.Buffering, 0));
@@ -256,7 +256,7 @@ public class PlaybackAttributionTests
         {
             var dead = new List<string>();
             c.ShouldPlayAsVideo = _ => true;
-            c.LoadCurrentVideoAsync = (_, _) => Task.FromResult(false);   // resolved to nothing → fall back to audio
+            c.LoadCurrentVideoAsync = (_, _, _) => Task.FromResult(false);   // resolved to nothing → fall back to audio
             c.OnVideoMediaUnavailable = t => dead.Add(t.Uri);
 
             await c.PlayAsync("spotify:playlist:p", 0);
@@ -275,7 +275,7 @@ public class PlaybackAttributionTests
         {
             var dead = new List<string>();
             c.ShouldPlayAsVideo = _ => true;
-            c.LoadCurrentVideoAsync = (_, _) => Task.FromResult(true);
+            c.LoadCurrentVideoAsync = (_, _, _) => Task.FromResult(true);
             c.OnVideoMediaUnavailable = t => dead.Add(t.Uri);
 
             await c.PlayAsync("spotify:playlist:p", 0);
@@ -295,7 +295,7 @@ public class PlaybackAttributionTests
         {
             var dead = new List<string>();
             c.ShouldPlayAsVideo = _ => true;
-            c.LoadCurrentVideoAsync = (_, _) => Task.FromResult(true);
+            c.LoadCurrentVideoAsync = (_, _, _) => Task.FromResult(true);
             c.OnVideoMediaUnavailable = t => dead.Add(t.Uri);
 
             await c.PlayAsync("spotify:playlist:p", 0);

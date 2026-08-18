@@ -80,6 +80,7 @@ static class AnimSuite
         EnterExitChecks(strings);
         SizeModeChecks(strings);
         ReflowChecks(strings);
+        SkelReflowClipChecks(strings);
         AnimRegressionChecks(strings);
         StyleChecks();
         ButtonAxesChecks();
@@ -2392,9 +2393,27 @@ static class AnimSuite
             bool drawerAbove = !v3.DrawerVisible && Near(v3.TopPad, 3900f, 0.5f) && Near(Extent(v3, 300f), 20300f, 0.5f);
             var vEnd = LazyGridMath.Compute(1e9f, vh, rowH, total, over, -1, 0f);          // clamped at the bottom
             bool atEnd = vEnd.LastRow == total - 1 && Near(Extent(vEnd, 0f), 20000f, 0.5f);
-            float shortTarget = LazyGridMath.ExpandedTarget(700f, 5000f, 1100f, 220f);
-            float tallTarget = LazyGridMath.ExpandedTarget(700f, 5380f, 1100f, 600f);   // same drawer-less extent
-            bool bring = Near(shortTarget, 1072f, 0.5f) && Near(tallTarget, shortTarget, 0.01f);
+
+            // Card+peek reveal (NOT whole-block reveal, and never pin-to-top): keep the current offset whenever the
+            // card already sits below the sticky inset AND a drawerPeek of drawer already clears the viewport bottom.
+            // A full 10-row drawer (56 + 10*44 + 30 = 526) plus a 320 card is taller than the band left under a 96
+            // sticky inset, so "reveal the whole block" had no solution and degenerated to pin-to-top.
+            const float off = 700f, viewH = 800f, inset = 96f, peek = 144f, cardH = 320f, midTop = 900f, tallDrawer = 526f;
+            float placed = LazyGridMath.MinRevealTarget(off, viewH, midTop, cardH, tallDrawer, inset, peek);
+            float underSticky = LazyGridMath.MinRevealTarget(off, viewH, 740f, cardH, tallDrawer, inset, peek);
+            float pastBottom = LazyGridMath.MinRevealTarget(off, viewH, 1400f, cardH, tallDrawer, inset, peek);
+            float sameShort = LazyGridMath.MinRevealTarget(off, viewH, midTop, cardH, 218f, inset, peek);
+            float sameTall = LazyGridMath.MinRevealTarget(off, viewH, midTop, cardH, tallDrawer, inset, peek);
+            float tinyDrawer = LazyGridMath.MinRevealTarget(off, viewH, midTop, cardH, 86f, inset, peek);
+            float noSlack = LazyGridMath.MinRevealTarget(off, viewH, midTop, 700f, tallDrawer, inset, peek);
+            float noGeom = LazyGridMath.MinRevealTarget(off, 0f, midTop, cardH, tallDrawer, inset, peek);
+            bool bring = Near(placed, off, 0.5f)                 // mid-viewport expand → do not move
+                         && Near(underSticky, 644f, 0.5f)        // cardTop − inset
+                         && Near(pastBottom, 1064f, 0.5f)        // cardTop + cardH + peek − viewH (NOT 1304 = whole block)
+                         && Near(sameShort, off, 0.5f) && Near(sameTall, off, 0.5f)   // short→tall same row → still still
+                         && Near(tinyDrawer, off, 0.5f)          // peek saturates at drawerH
+                         && Near(noSlack, 804f, 0.5f)            // card taller than the band → leading wins
+                         && Near(noGeom, off, 0.5f);             // viewportH unknown → never jump to 0
 
             var exactTop = LazyGridMath.VisibleRange(0f, vh, rowH, 20, 2, -1, 0f);
             var exactMid = LazyGridMath.VisibleRange(1000f, vh, rowH, 20, 2, -1, 0f);
@@ -2402,12 +2421,10 @@ static class AnimSuite
             bool exact = exactTop == new LazyGridVisibleRange(0, 4, 2)
                          && exactMid == new LazyGridVisibleRange(10, 14, 2)
                          && exactDrawer == new LazyGridVisibleRange(4, 8, 2);
-            float insetTarget = LazyGridMath.ExpandedTarget(700f, 5000f, 1100f, 220f, 72f);
-            bool inset = Near(insetTarget, 1028f, 0.5f);
 
-            Check("lazy-grid: window covers the viewport and spacers reserve the exact extent (incl. inline drawer in/above window)",
-                atTop && mid && largerOverscan && drawerIn && drawerAbove && atEnd && bring && exact && inset,
-                $"top=({v0.FirstRow},{v0.LastRow},pad{v0.TopPad:0}) mid=({v1.FirstRow},{v1.LastRow}) ahead=({vAhead.FirstRow},{vAhead.LastRow}) drawerAboveTopPad={v3.TopPad:0} endLast={vEnd.LastRow} bring={shortTarget:0}/{tallTarget:0} exact={exactTop}/{exactMid}/{exactDrawer} inset={insetTarget:0}");
+            Check("lazy-grid: window covers the viewport, spacers reserve the exact extent, and expand reveals card+drawer-peek (never pin-to-top)",
+                atTop && mid && largerOverscan && drawerIn && drawerAbove && atEnd && bring && exact,
+                $"top=({v0.FirstRow},{v0.LastRow},pad{v0.TopPad:0}) mid=({v1.FirstRow},{v1.LastRow}) ahead=({vAhead.FirstRow},{vAhead.LastRow}) drawerAboveTopPad={v3.TopPad:0} endLast={vEnd.LastRow} bring placed={placed:0} sticky={underSticky:0} bottom={pastBottom:0} same={sameShort:0}/{sameTall:0} tiny={tinyDrawer:0} noSlack={noSlack:0} noGeom={noGeom:0} exact={exactTop}/{exactMid}/{exactDrawer}");
         }
 
         // A flat grid uses the same exact extent at every window boundary. This is the regression for stacked artist
@@ -2563,6 +2580,90 @@ static class AnimSuite
             $"rigid={rigid} rode={rode} seeded={seeded} dx0={dx0:0.0} held={held} landed={landed}");
     }
 
+    // 23r.c — the REAL Skel shape (Wavee's empty-Search page), which 23r.a/b/23x structurally cannot see: ReflowProbe
+    // declares ClipToBounds AND a Trailing anchor, so its wrapper never overpaints. A `Skel.Region` gets NEITHER — the
+    // reconciler only marks it BoundsAnimated + SizeMode.Reflow — and its Pending branch here is a literally EMPTY box,
+    // so the region reflows from ZERO while its Ready content is arranged at full natural height. Unclipped, the whole
+    // region paints over the sibling below it. Wrapped in an Embed.Comp anchor, MirrorParticipation would additionally
+    // snapshot the EASED height onto that anchor as a hard declared size that SettleRestore never restores — turning a
+    // ~250ms flash into a permanent freeze. All four assertions below are that bug.
+    static void SkelReflowClipChecks(StringTable strings)
+    {
+        SkelOverpaintProbe.Data = Loadable<int>.Pending(0);
+        SkelOverpaintProbe.Bump.Value = 0;
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("skelreflow", new Size2(360, 520), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        var root = new SkelOverpaintProbe();
+        using var host = new AppHost(app, window, device, fonts, strings, root);
+        var s = host.Scene;
+
+        host.RunFrame();                                     // mount PENDING: the shimmer is an empty box (height 0)
+        var anchorNode = Child(s, s.Root, 0);                // the Embed.Comp component anchor (layout-transparent)
+        var sibling = Child(s, s.Root, 1);
+        var region = FindSkelRegion(s, anchorNode);
+        bool found = !region.IsNull && !sibling.IsNull;
+        bool authorClip = found && (s.Flags(region) & NodeFlags.ClipsToBounds) != 0;   // must be FALSE: nobody declared it
+
+        SkelOverpaintProbe.Data.SetReady(1);                 // Pending → Ready: the region eases 0 → ContentH
+        host.RunFrame();                                     // the swap commits; the host seeds the reflow track
+
+        // Mid-flight. Every sample RE-RENDERS the wrapping component first (Bump), so MirrorParticipation runs while the
+        // reflow is live — the exact window in which the anchor used to snapshot the EASED height as a hard declared
+        // size that nothing ever restores. Each sample must: still be easing, be CLIPPED (else the full-height content
+        // paints over the sibling), keep the sibling exactly at the region's animated bottom, and leave the anchor's
+        // declared height NaN.
+        bool everMid = false, clippedMid = true, noOverlap = true, anchorSane = true;
+        int samples = 0;
+        float midH = 0f, midSibY = 0f, midAnchorH = 0f, worstGap = 0f;
+        for (int i = 0; i < 8 && found; i++)
+        {
+            SkelOverpaintProbe.Bump.Value = i + 1;           // an ordinary parent re-render mid-flight
+            host.RunFrame();
+            if (!host.Animation.HasTracks(region)) break;
+            float h = s.AbsoluteRect(region).H;
+            if (h >= SkelOverpaintProbe.ContentH - 1f) continue;
+            everMid = true; samples++;
+            midH = h;
+            midSibY = s.AbsoluteRect(sibling).Y;
+            midAnchorH = s.Layout(anchorNode).Height;
+            if ((s.Flags(region) & NodeFlags.ClipsToBounds) == 0) clippedMid = false;
+            float gap = MathF.Abs(midSibY - (s.AbsoluteRect(region).Y + h));
+            if (gap > worstGap) worstGap = gap;
+            if (gap > 1f) noOverlap = false;
+            if (!float.IsNaN(midAnchorH)) anchorSane = false;   // never a mid-flight number on the anchor
+        }
+
+        for (int i = 0; i < 60; i++) host.RunFrame();        // settle
+        bool settledDeclared = found && float.IsNaN(s.Layout(region).Height);   // declared (auto) restored, not the ease
+        bool unclipped = found && (s.Flags(region) & NodeFlags.ClipsToBounds) == 0;   // the reflow took its clip back
+        float anchorH = found ? s.Layout(anchorNode).Height : 0f;
+        bool anchorFree = float.IsNaN(anchorH);
+        float finalH = found ? s.AbsoluteRect(region).H : 0f;
+        float finalSibY = found ? s.AbsoluteRect(sibling).Y : 0f;
+        bool fullyOpen = found && Near(finalH, SkelOverpaintProbe.ContentH, 1.5f)
+                         && Near(finalSibY, s.AbsoluteRect(region).Y + SkelOverpaintProbe.ContentH, 1.5f);
+
+        Check("23r.c Skel reflow: the region CLIPS while its layout height eases (sibling never overpainted), unclips at settle, and its component anchor is never frozen at a mid-flight size",
+            found && !authorClip && everMid && clippedMid && noOverlap && anchorSane
+            && settledDeclared && unclipped && anchorFree && fullyOpen,
+            $"found={found} authorClip={authorClip} samples={samples} mid(h={midH:0.0} sibY={midSibY:0.0} anchorH={midAnchorH:0.0} clipped={clippedMid} worstGap={worstGap:0.00} noOverlap={noOverlap} anchorSane={anchorSane}) "
+            + $"settle(h={finalH:0.0} sibY={finalSibY:0.0} regionLiNaN={settledDeclared} unclipped={unclipped} anchorH={anchorH:0.0} anchorNaN={anchorFree} fullyOpen={fullyOpen})");
+
+        static NodeHandle FindSkelRegion(SceneStore sc, NodeHandle from)
+        {
+            if (!sc.IsLive(from)) return NodeHandle.Null;
+            if (sc.ElementTypeId(from) == 13) return from;                 // SkelRegionEl
+            for (var c = sc.FirstChild(from); !c.IsNull; c = sc.NextSibling(c))
+            {
+                var hit = FindSkelRegion(sc, c);
+                if (!hit.IsNull) return hit;
+            }
+            return NodeHandle.Null;
+        }
+    }
 
     static void StyleChecks()
     {
@@ -4472,4 +4573,43 @@ static class AnimSuite
             return false;
         }
     }
+}
+
+// 23r.c probe — the real Skel.Region shape: an EMPTY pending branch (so the region reflows from ZERO) and an
+// AUTO-height ready branch, wrapped in an Embed.Comp component anchor, with a plain sibling right below it.
+// Deliberately declares NO ClipToBounds and NO SizeAnchor: everything the region gets, it gets from the reconciler's
+// smooth-resize enrolment. `Bump` re-renders the wrapping component (an ordinary parent re-render) so the gate can
+// drive MirrorParticipation WHILE the reflow is in flight — the window in which the anchor used to be frozen.
+sealed class SkelOverpaintProbe : Component
+{
+    public const float ContentH = 160f;
+    public static Loadable<int> Data = Loadable<int>.Pending(0);
+    public static readonly Signal<int> Bump = new(0);
+
+    sealed class RegionHost : Component
+    {
+        public override Element Render()
+        {
+            _ = Bump.Value;   // an ordinary parent-driven re-render → MirrorParticipation runs again
+            return Skel.Region(Data,
+                shimmerSource: () => new BoxEl(),                  // PENDING: literally empty ⇒ the reflow starts at 0
+                content: _ => new BoxEl                            // READY: AUTO height (declared stays NaN)
+                {
+                    Direction = 1,
+                    Children = [new BoxEl { Height = 40f }, new BoxEl { Height = 40f },
+                                new BoxEl { Height = 40f }, new BoxEl { Height = 40f }],
+                },
+                reveal: SkelReveal.None);
+        }
+    }
+
+    public override Element Render() => new BoxEl
+    {
+        Direction = 1,
+        Children =
+        [
+            Embed.Comp(() => new RegionHost()),      // [0] the layout-transparent component anchor
+            new BoxEl { Height = 40f },              // [1] the sibling the region must not paint over
+        ],
+    };
 }

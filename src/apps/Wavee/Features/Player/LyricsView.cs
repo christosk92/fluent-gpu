@@ -403,10 +403,13 @@ sealed class LyricsView : Component
             : null;
         Element resync = ResyncOverlay();
         Element dots = InterludeDots();
+        Element unsynced = UnsyncedBanner(b);
         var stack = new BoxEl
         {
             Grow = 1f, MinHeight = 0f, ClipToBounds = true, ZStack = true,
-            Children = ticker is null ? [body, dots, resync] : [body, ticker, dots, resync],
+            Children = ticker is null
+                ? [body, dots, resync, unsynced]
+                : [body, ticker, dots, resync, unsynced],
         };
 
         if (!_lyricsDebug) return stack;
@@ -421,6 +424,47 @@ sealed class LyricsView : Component
     // A corner pill opens a panel that shows, for the playing track, the request metadata the sources searched with and a
     // per-source row (outcome + timing + the breadcrumb "why") + the reranker's verdict. Data is LyricsDiagnostics, which
     // the AggregatingLyricsProvider publishes once per fetch (so the report is already there for the current track).
+
+    /// <summary>The top-docked note shown while a video suppresses timed sync (<see cref="LyricsSyncGate"/>). It exists
+    /// so the missing highlight reads as a deliberate state rather than as broken sync: the lines are all still here and
+    /// still scrollable, they just are not being followed, because the video is a different edit of the song and these
+    /// timings belong to the audio edit.
+    /// <para>Same shape discipline as <see cref="ResyncOverlay"/>: the full-bleed positioner stays OUTSIDE
+    /// <c>Flow.Show</c>, because a control-flow wrapper mirrors layout participation but NOT
+    /// <c>HitTestPassThrough</c> — returning the positioner through it would leave a full-viewport hittable node over
+    /// the list and silently kill wheel/touch scrolling.</para></summary>
+    Element UnsyncedBanner(PlaybackBridge b) => new BoxEl
+    {
+        Grow = 1f, MinHeight = 0f, HitTestPassThrough = true,
+        Direction = 1, Justify = FlexJustify.Start, AlignItems = FlexAlign.Center,
+        Padding = new Edges4(Spacing.M, _large ? 20f : 12f, Spacing.M, 0f),
+        Children =
+        [
+            Flow.Show(
+                () => LyricsSyncGate.SyncSuppressed(b.VideoActive()),
+                new BoxEl
+                {
+                    Shrink = 0f, MinWidth = 0f,
+                    Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.XS,
+                    Padding = new Edges4(Spacing.S, Spacing.XS, Spacing.S, Spacing.XS),
+                    Corners = CornerRadius4.All(Radii.Control),
+                    // Ink + plate come from LyricsInk, never from a raw Tok.*: this ONE view renders both the theme rail
+                    // and the on-media stage, so a hardcoded theme ink is invisible on media (the seam LyricsInk exists
+                    // to close, and what StageLayoutTests.TheLyricsReadingSurface_PaintsNoThemeInk enforces).
+                    Fill = _ink.Plate,
+                    HitTestVisible = false,
+                    Children =
+                    [
+                        new TextEl(Loc.Get(Strings.Player.LyricsSyncUnavailableDuringVideo))
+                        {
+                            Size = 12f, Weight = 600, MinWidth = 0f,
+                            Color = _ink.Tertiary,   // meta caption, not lyric text
+                            Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
+                        },
+                    ],
+                }),
+        ],
+    };
 
     Element ResyncOverlay()
     {
@@ -1234,9 +1278,18 @@ sealed class LyricsView : Component
     // keeps 22 so the narrow panel never reads cramped.
     float RowSidePad => _large ? 64f : 22f;
 
+    /// <summary>Whether timed sync is suppressed right now, read so the CALLER SUBSCRIBES — this runs in Render, and the
+    /// subscription is what re-renders the surface (swapping the timed presentation for the unsynced one) the moment a
+    /// video starts or stops. <c>OnFrame</c> deliberately peeks the same state instead; see the note there.</summary>
+    bool SyncSuppressedNow() => _b is { } b && LyricsSyncGate.SyncSuppressed(PlacementCore.IsActive(b.VideoSurface.Value));
+
     Element LyricsContent(LyricsDocument doc)
     {
-        if (!IsTimed(doc)) return UnsyncedLyricsContent(doc);
+        // A timed document whose sync is SUPPRESSED renders exactly like an untimed one. This is the whole presentation
+        // change, and it matters: leaving it on the timed path meant every line sat in the INACTIVE treatment — the big
+        // karaoke type at the dimmed far-from-active opacity — which reads as broken lyrics rather than as a document
+        // you are meant to read. There is no active line to be far from, so there is no reason to render as if there were.
+        if (!IsTimed(doc) || SyncSuppressedNow()) return UnsyncedLyricsContent(doc);
 
         var lines = doc.Lines;
         // Bigger type (rail 20 -> 26) and a tighter rhythm. Rows are CONTENT-FIT (variable height) via the measured
@@ -1291,12 +1344,15 @@ sealed class LyricsView : Component
 
     Element UnsyncedLyricsContent(LyricsDocument doc)
     {
-        // Same LEFT-ALIGNED, WRAPPED treatment as the timed path, at the timed path's metrics: an unsynced document is
-        // the same reading surface minus the wipe, and the immersive surface must not switch typographic systems just
-        // because the lyric happens to be untimed.
-        float fontSz = _large ? RowFontSize : 24f;
-        float lineHt = _large ? RowLineHeight : 32f;
-        float rowPad = _large ? 8f : 6f;
+        // Same LEFT-ALIGNED, WRAPPED treatment as the timed path, but at SMALLER type. The timed metrics are sized for
+        // one line at a time sweeping through a focal band — they are display type, and a whole document set in them is
+        // a wall. Unsynced lyrics are read as a block, top to bottom, so they take reading type instead (this is also how
+        // Spotify presents its unsynced lyrics). Superseded rationale: this used to deliberately reuse the timed metrics
+        // so the surface "would not switch typographic systems"; in practice the switch is the point — nothing is being
+        // followed, so nothing needs to be legible from across the room.
+        float fontSz = _large ? 28f : 19f;
+        float lineHt = _large ? 36f : 26f;
+        float rowPad = _large ? 7f : 5f;
         float sidePad = RowSidePad;
         var rows = new Element[doc.Lines.Count];
 
@@ -1878,6 +1934,22 @@ sealed class LyricsView : Component
         var b = _b; var doc = _doc;
         if (b is null || doc is null || doc.Lines.Count == 0) return;
         if (!IsTimed(doc)) return;
+        // A VIDEO is a different edit of the song, so these line timings — which belong to the AUDIO edit — no longer
+        // describe what is being heard (LyricsSyncGate). Suppressing sync here, at the ONE driver, is what makes the
+        // whole timed apparatus stop together: no active/voice resolve, no emphasis rewrite, no follow scroll, no wipe.
+        // Doing it per-consumer instead would leave some of them ticking against a clock that means nothing.
+        // The document itself is untouched and stays freely scrollable — the rows simply render in their resting ink,
+        // which is exactly what an active index of -1 already means everywhere downstream.
+        // Peek, not .Value: OnFrame is a frame callback, not a Render scope, so a subscribing read here would either be
+        // dropped or attach to whatever computation happened to be tracking. Same reason PlaybackBridge.ShouldPlayAsVideo
+        // peeks. The BANNER in Render subscribes, which is what re-renders the view when video starts or stops.
+        if (LyricsSyncGate.SyncSuppressed(PlacementCore.IsActive(b.VideoSurface.Peek())))
+        {
+            if (_activeLine.Peek() != -1) _activeLine.Value = -1;
+            if (_voiceLine.Peek() != -1) _voiceLine.Value = -1;
+            ResetFollowState(Context.Scene);   // drop any armed follow so the view does not keep chasing a stale target
+            return;
+        }
 
         // Dejittered media clock. The authoritative IPC PositionMs is itself a coarse ~1 Hz extrapolation; the old code
         // HARD re-anchored on every snapshot, so a delayed/corrected one snapped nowMs — and since BOTH the active-line

@@ -159,8 +159,13 @@ sealed class FluentRichOmnibar : Component
     {
         var svc = UseContext(Services.Slot);
         var post = UsePost();
-        string text = _text.Value.Trim();
+        string text = UseDebouncedValue(() => _text.Value.Trim(), AutoSuggestBox.TextChangedDebounceMs).Value;
         UseEffect(() => StartFetch(svc, post, text), text);
+        var completion = UseComputed(() =>
+        {
+            if (_highlight.Value >= 0) return "";
+            return SearchSuggestions.GhostFor(_text.Value.Trim(), _suggestions.Value.Queries) ?? "";
+        });
 
         void Submit(string q)
         {
@@ -192,6 +197,16 @@ sealed class FluentRichOmnibar : Component
                 case SearchSuggestionKind.Artist: _go("artist:" + item.Uri, item.Title); break;
                 case SearchSuggestionKind.Album: _go("album:" + item.Uri, item.Title); break;
                 case SearchSuggestionKind.Playlist: _go("pl:" + item.Uri, item.Title); break;
+                case SearchSuggestionKind.Podcast:
+                case SearchSuggestionKind.Audiobook:
+                    _go("show:" + item.Uri, item.Title);
+                    break;
+                case SearchSuggestionKind.Episode:
+                    if (svc is not null) _ = svc.Player.PlayAsync(item.Uri, 0);
+                    break;
+                case SearchSuggestionKind.Genre:
+                    SearchRoutes.OpenGenre(item.Uri, item.Title, _go);
+                    break;
             }
             return true;
         }
@@ -221,7 +236,8 @@ sealed class FluentRichOmnibar : Component
         return AutoSuggestBox.Create(Array.Empty<string>(), Loc.Get(Strings.Shell.SearchPlaceholder),
             grow: 1f, maxFillWidth: _maxWidth, text: _text, onQuerySubmitted: Submit,
             minHeight: 32f, cornerRadius: 0f, presenter: presenter, parts: _parts,
-            chrome: AutoSuggestBoxChrome.Standard, suggestionPresentation: _suggestionPresentation);
+            chrome: AutoSuggestBoxChrome.Standard, suggestionPresentation: _suggestionPresentation,
+            completion: completion);
     }
 
     void StartFetch(Services? svc, Action<Action> post, string q)
@@ -380,27 +396,27 @@ sealed class OmnibarSuggestionsPopup : Component
     Element RichRow(SearchSuggestionItem item, int selectionIndex, bool selected,
                     Services? svc, ActionServices? acts, IOverlayService? overlay, LibraryBridge? lib)
     {
-        bool circular = item.Kind == SearchSuggestionKind.Artist;
+        bool circular = item.Kind is SearchSuggestionKind.Artist or SearchSuggestionKind.User;
         float radius = circular ? 22f : 5f;
         bool saved = lib?.IsSaved(item.Uri) ?? false;
+        bool canPlay = item.Kind is not (SearchSuggestionKind.User or SearchSuggestionKind.Genre);
         Action play = () => PlayItem(item, svc);
         Action open = () =>
         {
             if (_choose is not null) { _choose(selectionIndex); return; }
             Invoke(item, svc);
         };
-        // Trailing cluster: Play · Like · More — always visible (fills the empty gap before the type pill). More raises
-        // the same context menu as right-click (ClickRequestsContext → WithContextMenu ancestor).
+        var trailingKids = new List<Element>(4);
+        if (canPlay) trailingKids.Add(IconButton(Icons.Play, play));
+        if (item.Kind == SearchSuggestionKind.Track)
+            trailingKids.Add(TrackRow.Heart(saved, () => lib?.ToggleSaved(item.Uri, item.Title)));
+        if (acts is not null && overlay is not null && canPlay)
+            trailingKids.Add(MoreButton(true));
+        trailingKids.Add(TypePill(TypeLabel(item.Kind)));
         var trailing = new BoxEl
         {
             Direction = 0, Shrink = 0f, AlignItems = FlexAlign.Center, Gap = 2f,
-            Children =
-            [
-                IconButton(Icons.Play, play),
-                TrackRow.Heart(saved, () => lib?.ToggleSaved(item.Uri, item.Title)),
-                MoreButton(acts is not null && overlay is not null),
-                TypePill(TypeLabel(item.Kind)),
-            ],
+            Children = trailingKids.ToArray(),
         };
 
         var row = new BoxEl
@@ -445,6 +461,7 @@ sealed class OmnibarSuggestionsPopup : Component
     void PlayItem(SearchSuggestionItem item, Services? svc)
     {
         if (svc is null) return;
+        if (item.Kind is SearchSuggestionKind.User or SearchSuggestionKind.Genre) return;
         if (item.Kind == SearchSuggestionKind.Track) _ = svc.Player.PlayTrackAsync(item.Uri);
         else _ = svc.Player.PlayAsync(item.Uri, 0);
         _close?.Invoke();
@@ -466,6 +483,16 @@ sealed class OmnibarSuggestionsPopup : Component
                 break;
             case SearchSuggestionKind.Playlist:
                 _go?.Invoke("pl:" + item.Uri, item.Title);
+                break;
+            case SearchSuggestionKind.Podcast:
+            case SearchSuggestionKind.Audiobook:
+                _go?.Invoke("show:" + item.Uri, item.Title);
+                break;
+            case SearchSuggestionKind.Episode:
+                if (svc is not null) _ = svc.Player.PlayAsync(item.Uri, 0);
+                break;
+            case SearchSuggestionKind.Genre:
+                if (_go is { } go) SearchRoutes.OpenGenre(item.Uri, item.Title, go);
                 break;
         }
         _close?.Invoke();
@@ -515,6 +542,11 @@ sealed class OmnibarSuggestionsPopup : Component
         SearchSuggestionKind.Artist => Loc.Get(Strings.Search.TypeArtist),
         SearchSuggestionKind.Album => Loc.Get(Strings.Search.TypeAlbum),
         SearchSuggestionKind.Playlist => Loc.Get(Strings.Search.TypePlaylist),
+        SearchSuggestionKind.Genre => Loc.Get(Strings.Search.TypeGenre),
+        SearchSuggestionKind.Episode => Loc.Get(Strings.Search.TypeEpisode),
+        SearchSuggestionKind.Podcast => Loc.Get(Strings.Search.TypePodcast),
+        SearchSuggestionKind.Audiobook => Loc.Get(Strings.Search.TypeAudiobook),
+        SearchSuggestionKind.User => Loc.Get(Strings.Search.TypeUser),
         _ => "",
     };
 

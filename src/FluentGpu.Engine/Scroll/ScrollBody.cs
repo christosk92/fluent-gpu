@@ -24,6 +24,15 @@ public struct ScrollBody
     public float Velocity;
     /// <summary>Main-axis Driven target (ScrollTo/ScrollBy/ThumbSet-as-Immediate/WheelNotch accumulator).</summary>
     public float Target;
+    /// <summary>The REQUESTED Driven destination, UNCLAMPED — <see cref="Target"/> is that same value clamped
+    /// against the frame known at the time it was posted. Kept so a programmatic request posted BEFORE the content
+    /// grew (an inline <c>SizeMode.Reflow</c> drawer animating 0→full, a virtualized list that measures late) is not
+    /// silently truncated forever: <c>ScrollKernel.ApplySetFrame</c> re-derives <see cref="Target"/> from this value
+    /// against the NEW extent and keeps the chase running. Honoured ONLY while
+    /// <c>Activity == ScrollActivity.Driven &amp;&amp; (Flags &amp; ScrollActivityFlags.Programmatic) != 0</c> — a
+    /// Cancel/ContactBegin/ThumbSet/wheel notch relatches it to <see cref="Target"/>, so a drag or a wheel notch
+    /// always wins over a pending programmatic request instead of letting a stale one resurrect on the next growth.</summary>
+    public float TargetRaw;
     public float Zoom;
 
     public ScrollActivity Activity;

@@ -52,7 +52,7 @@ public sealed class FluentVideoMediaHost : IMediaHost
 
     // Every load/stop is serialized through ONE worker (teardown→build, latest-wins) so a predecessor's process-global
     // native Stop can never land on a successor session. See VideoLoadPump for the wedge this removes.
-    readonly VideoLoadPump<PopOutVideoSource> _pump;
+    readonly VideoLoadPump<VideoLoadRequest> _pump;
     // Players handed over for disposal off the pump (Stop nulls the player synchronously so IsPlaying is false at once,
     // but the ACTUAL native teardown is queued so it stays ordered against the next load).
     readonly ConcurrentQueue<MediaPlayer> _toDispose = new();
@@ -63,17 +63,39 @@ public sealed class FluentVideoMediaHost : IMediaHost
     bool _muted;                      // the app's mute intent — re-applied to EVERY player this host builds (see BuildAndOpenAsync)
     PlaybackState _lastState = PlaybackState.Idle;
     bool _errorReported;
-    bool _durationReported;           // DurationKnown fires at most ONCE per loaded source
+    // The duration last relayed for the CURRENT load (0 = none yet). NOT a one-shot bool: Media Foundation publishes a
+    // duration at first LOADEDMETADATA, which for an adaptive/DASH manifest is commonly still 0, and a manifest can
+    // later revise it — so a latch-on-first-positive would freeze the wrong length for the whole track.
+    long _reportedDurMs;
     bool _disposed;
 
     // ── the per-load start watchdog (guarded by _gate; evaluated on the existing 200ms ticker, zero-alloc) ────────────
     VideoStartWatchdog _watchdog;
     bool _playIntent;                 // does the controller/user want the CURRENT load playing right now?
     bool _progressed;                 // has the CURRENT load demonstrably started/advanced? (latched, reset per load)
+    // The start position this load was opened at (0 = from the beginning), kept ONLY until the real duration arrives so
+    // Tick can re-clamp it: a position carried from the audio edit can exceed a shorter video edit, which would
+    // otherwise open at/past the end. Cleared once clamped (or once duration proves it needed no clamp).
+    long _startAtMs;
+    bool _startSeekPending;
+    // Remaining play re-assertions for the CURRENT load (see the Ready/Paused arm in Tick). Bounded so a genuinely
+    // paused-by-the-user session can never be nudged back into playing, and a wedged one cannot spin.
+    int _playReassertsLeft;
 
     /// <summary>Bounded teardown budget for one player. Larger than the 3s native thread join inside the protected
     /// player's Dispose, so a healthy teardown always completes inside it and a wedged one still cannot block forever.</summary>
     const int TeardownTimeoutMs = 5_000;
+    /// <summary>Re-relay <see cref="DurationKnown"/> only when the engine's duration moves more than this, so a
+    /// jittering adaptive estimate does not spam the projection (and the seek bar) every tick.</summary>
+    const long DurationRelayEpsilonMs = 250;
+    /// <summary>A carried start position within this much of the end counts as "past the end" and is pulled back.</summary>
+    const long StartClampGuardMs = 250;
+    /// <summary>How far back from the end a clamped carried position lands — enough to see that playback resumed.</summary>
+    const long StartClampBackoffMs = 2_000;
+    /// <summary>How many times one load may re-assert play when the engine sits Ready with the play command unlanded.
+    /// At the 200ms tick that is ~1.6s of nudging — long enough to cover a lost command, far short of fighting a user.</summary>
+    const int PlayReassertBudget = 8;
+
     /// <summary>Bounded budget for the OPEN the pump awaits. It exists only so a pathological open cannot stall every
     /// later skip; the start watchdog is what turns a genuinely stuck session into a fault.</summary>
     const int OpenTimeoutMs = 15_000;
@@ -93,7 +115,7 @@ public sealed class FluentVideoMediaHost : IMediaHost
         _log = log;
         _watchdog = new VideoStartWatchdog(startWatchdogMs);
         _ticker = new Timer(_ => Tick(), null, Timeout.Infinite, Timeout.Infinite);
-        _pump = new VideoLoadPump<PopOutVideoSource>(TeardownAsync, BuildAndOpenAsync, IsAlreadyLive, log);
+        _pump = new VideoLoadPump<VideoLoadRequest>(TeardownAsync, BuildAndOpenAsync, IsAlreadyLive, log);
     }
 
     /// <summary>The live engine player for the current video source (null before the first <see cref="LoadVideo"/> / after a
@@ -156,9 +178,12 @@ public sealed class FluentVideoMediaHost : IMediaHost
             _sourceKey = "";
             _lastState = PlaybackState.Idle;
             _errorReported = false;
-            _durationReported = false;
+            _reportedDurMs = 0;
             _playIntent = false;
             _progressed = false;
+            _startAtMs = 0;
+            _startSeekPending = false;
+            _playReassertsLeft = 0;
             _watchdog.Disarm();
         }
         if (old is not null)
@@ -174,9 +199,12 @@ public sealed class FluentVideoMediaHost : IMediaHost
         _pump.RequestClear();
     }
 
-    public void Seek(long positionMs)
+    public void Seek(long positionMs) => SeekPlayer(CurrentPlayer, positionMs);
+
+    /// <summary>Seek one player instance, fail-soft. Shared by the transport <see cref="Seek"/> and by the load path, so
+    /// a repositioning request lands identically whether it arrives on the live session or with a fresh load.</summary>
+    void SeekPlayer(MediaPlayer? p, long positionMs)
     {
-        var p = CurrentPlayer;
         if (p is null) return;
         try { _ = p.SeekAsync(TimeSpan.FromMilliseconds(Math.Max(0, positionMs)), SeekMode.Accurate); }
         catch (Exception ex) { _log.Info($"video-host seek failed: {ex.Message}"); }
@@ -212,24 +240,34 @@ public sealed class FluentVideoMediaHost : IMediaHost
     /// previous session down TO COMPLETION before building this one, and drops this request entirely if a newer load
     /// arrives while it is queued (latest-wins coalescing). That ordering is what keeps the process-global native
     /// PlayReady session from being stopped out from under its own successor on a video→video track skip.</para></summary>
-    public void LoadVideo(PopOutVideoSource src)
+    public void LoadVideo(PopOutVideoSource src, long startAtMs = 0)
     {
         if (_disposed || src is null) return;
         // The idempotence check lives in the pump (IsAlreadyLive), evaluated at DEQUEUE time — checking it here would
         // wrongly drop a load that follows a queued teardown, when the "already playing" key is about to be gone.
-        _pump.Request(src);
+        _pump.Request(new VideoLoadRequest(src, startAtMs));
     }
 
     // The pump's liveness probe: is this exact source ALREADY the live player? The controller may re-enter the video path
     // for the track that is already playing (a placement flip, a re-published source, a kind re-evaluation) — rebuilding
     // would restart it from 0, so that request is dropped without a teardown or a rebuild.
-    bool IsAlreadyLive(PopOutVideoSource src)
+    bool IsAlreadyLive(VideoLoadRequest req)
     {
+        MediaPlayer? live;
         lock (_gate)
         {
-            if (_player is null || !string.Equals(_sourceKey, src.Key, StringComparison.Ordinal)) return false;
+            if (_player is null || !string.Equals(_sourceKey, req.Source.Key, StringComparison.Ordinal)) return false;
+            live = _player;
         }
-        _log.Info($"video-host load ignored — already playing key={src.Key}");
+        // Same source, already playing: never rebuild — that is what would restart it from 0 on a placement flip or a
+        // re-published source. But a request carrying an explicit start position is a deliberate reposition (a retry
+        // checkpoint, a forced same-kind reload), so honor it on the LIVE session instead of dropping it silently.
+        if (req.StartAtMs > 0)
+        {
+            _log.Info($"video-host load ignored (already playing key={req.Source.Key}) — seeking live session to {req.StartAtMs}ms");
+            SeekPlayer(live, req.StartAtMs);
+        }
+        else _log.Info($"video-host load ignored — already playing key={req.Source.Key}");
         return true;
     }
 
@@ -254,8 +292,11 @@ public sealed class FluentVideoMediaHost : IMediaHost
             _sourceKey = "";
             _lastState = PlaybackState.Idle;
             _errorReported = false;
-            _durationReported = false;
+            _reportedDurMs = 0;
             _progressed = false;
+            _startAtMs = 0;
+            _startSeekPending = false;
+            _playReassertsLeft = 0;
             _watchdog.Disarm();
         }
         if (old is not null)
@@ -276,8 +317,9 @@ public sealed class FluentVideoMediaHost : IMediaHost
     /// inside the pump is the second half of the fix: a later teardown can then never land on a half-opened session whose
     /// <c>IMediaSession</c> had not been assigned yet (which would leak the native session and wedge every later video on
     /// the singleton latch).</summary>
-    async System.Threading.Tasks.Task BuildAndOpenAsync(PopOutVideoSource src, long epoch)
+    async System.Threading.Tasks.Task BuildAndOpenAsync(VideoLoadRequest req, long epoch)
     {
+        PopOutVideoSource src = req.Source;
         MediaPlayer built;
         try
         {
@@ -324,9 +366,12 @@ public sealed class FluentVideoMediaHost : IMediaHost
             _sourceKey = src.Key ?? "";
             _lastState = PlaybackState.Idle;
             _errorReported = false;
-            _durationReported = false;
+            _reportedDurMs = 0;
             _playIntent = true;
             _progressed = false;
+            _startAtMs = Math.Max(0, req.StartAtMs);
+            _startSeekPending = _startAtMs > 0;   // applied+clamped in Tick once the duration proves the session is seekable
+            _playReassertsLeft = PlayReassertBudget;
             _watchdog.Arm(Environment.TickCount64);   // armed per load; disarmed by progress or by the next teardown
         }
         // Announce the new player so the mounted surface re-binds its MediaPlayerElement to THIS instance (the app marshals
@@ -385,6 +430,13 @@ public sealed class FluentVideoMediaHost : IMediaHost
         // Superseded during the open — leave it alone; the pump's next teardown disposes it in order.
         if (_disposed || _pump.IsStale(epoch)) return;
         if (built.Error.Peek() is not null) return;   // Tick's Error poll raises the Fault
+        // NOTE: the carried position is deliberately NOT seeked here. `OpenAsync` returning does NOT mean the session can
+        // accept a seek — on the protected (PlayReady/CENC) path the open completes in ~30ms while the native session is
+        // still spinning up, and a seek issued in that window is silently DROPPED (observed: a carried 126034ms seek
+        // followed by a put-state reporting pos=1145, i.e. it started at 0 regardless). Seeking a not-yet-running
+        // protected session is also a plausible cause of the "video sits buffering until I press play" stall.
+        // It is applied in Tick instead, at the first moment the engine reports a positive duration — which proves
+        // metadata is loaded and the session is live and seekable.
         // Play is NOT awaited: the protected transport ack can take up to 5s and must not hold the pump (a skip would
         // queue behind it). Observed via the helper so a faulted ack can never surface as an unobserved task exception.
         _ = PlayQuietlyAsync(built);
@@ -411,17 +463,40 @@ public sealed class FluentVideoMediaHost : IMediaHost
 
         // The source's REAL length, the moment the engine knows it. Polled here rather than awaited at open because the MF
         // session only resolves a duration once a mounted surface has pumped it (the MF-pump caveat above).
-        if (!_durationReported)
+        // Re-relayed when it CHANGES, not once: MF's first publish lands at LOADEDMETADATA, which for an adaptive/DASH
+        // manifest is commonly still 0, and a manifest can revise it afterwards. Value-gated on a ~250ms band so a
+        // jittering estimate does not spam the projection.
         {
             long durMs = 0;
             try { durMs = (long)p.Duration.Peek().TotalMilliseconds; } catch { }
-            if (durMs > 0)
+            if (durMs > 0 && Math.Abs(durMs - _reportedDurMs) > DurationRelayEpsilonMs)
             {
-                _durationReported = true;
+                _reportedDurMs = durMs;
                 string key;
                 lock (_gate) key = _sourceKey;
                 try { DurationKnown?.Invoke(key, durMs); }
                 catch (Exception ex) { _log.Info($"video-host duration relay failed: {ex.Message}"); }
+            }
+            // APPLY the position carried in from the audio edit. This is the earliest point the session is provably
+            // seekable: a positive duration means metadata loaded and the native session is running. Seeking at the open
+            // instead silently did nothing (see BuildAndOpenAsync). Runs at most once per load.
+            // Clamped here too, for free: a music video is a different — often shorter — edit, so a carried position can
+            // sit at or past its end, which would land on a dead frame or fire Ended immediately.
+            if (_startSeekPending && durMs > 0)
+            {
+                long start;
+                lock (_gate) { start = _startAtMs; _startSeekPending = false; _startAtMs = 0; }
+                if (start > durMs - StartClampGuardMs)
+                {
+                    long clamped = Math.Max(0, durMs - StartClampBackoffMs);
+                    _log.Info($"video-host carried position {start}ms exceeds this edit ({durMs}ms) — clamping to {clamped}ms");
+                    start = clamped;
+                }
+                if (start > 0)
+                {
+                    _log.Info($"video-host applying carried position {start}ms (duration {durMs}ms, session now seekable)");
+                    SeekPlayer(p, start);
+                }
             }
         }
 
@@ -441,15 +516,18 @@ public sealed class FluentVideoMediaHost : IMediaHost
         bool progressed = _progressed || _errorReported
             || state is PlaybackState.Playing or PlaybackState.Ended or PlaybackState.Failed
             || pos > 0;
-        bool playIntent;
-        try { playIntent = p.IsPlayRequested.Peek(); } catch { playIntent = true; }
+        bool enginePlayRequested;
+        try { enginePlayRequested = p.IsPlayRequested.Peek(); } catch { enginePlayRequested = true; }
         bool fault;
         lock (_gate)
         {
             _progressed |= progressed;
-            // A deliberate pause is never a fault: the host's own intent AND the engine's play-request must both be set
-            // for the budget to age (VideoStartWatchdog re-bases while intent is false, so a resume gets a fresh budget).
-            fault = _watchdog.ShouldFault(Environment.TickCount64, _playIntent && playIntent, progressed);
+            // Ages on THIS HOST's intent only. It used to require the engine's IsPlayRequested as well, which made the
+            // exact failure it exists to catch invisible: when the fire-and-forget PlayAsync never takes, the engine's
+            // play-request stays FALSE, so the budget never aged, no fault was ever raised, and the transport sat
+            // paused at 0:00 forever with nothing to recover from ("it just buffers until I click play"). A deliberate
+            // pause is still never a fault — Pause() clears _playIntent, and the watchdog re-bases while it is false.
+            fault = _watchdog.ShouldFault(Environment.TickCount64, _playIntent, progressed);
             if (fault) _errorReported = true;
         }
         if (fault)
@@ -471,7 +549,25 @@ public sealed class FluentVideoMediaHost : IMediaHost
                 break;
             case PlaybackState.Paused:
             case PlaybackState.Ready:
-                if (_lastState is not (PlaybackState.Paused or PlaybackState.Ready))
+                // Ready/Paused WHILE we want to play is a session that has not started yet, not a paused one. Reporting
+                // Paused here is what surfaced the stall as a transport that looked deliberately paused at 0:00 — the
+                // engine settles on Ready right after the open, ~200ms before the fire-and-forget PlayAsync lands, and
+                // if that command is lost it never leaves Ready. Re-assert play a bounded number of times (the protected
+                // transport ack can genuinely take seconds, so this is a nudge, not a spin) and report Buffering, which
+                // is what is actually happening. Only a state with NO play intent is published as Paused.
+                if (_playIntent && !enginePlayRequested)
+                {
+                    bool nudge = false;
+                    lock (_gate) { if (_playReassertsLeft > 0) { _playReassertsLeft--; nudge = true; } }
+                    if (nudge)
+                    {
+                        _log.Info($"video-host re-asserting play — session is {state} with play intent unset " +
+                                  $"(key={CurrentSourceKey}); the open's play command did not take");
+                        _ = PlayQuietlyAsync(p);
+                    }
+                    if (_lastState != state) _signals.OnNext(new AudioHostSignal(AudioHostSignalKind.Buffering, pos));
+                }
+                else if (_lastState is not (PlaybackState.Paused or PlaybackState.Ready))
                     _signals.OnNext(new AudioHostSignal(AudioHostSignalKind.Paused, pos));
                 break;
             case PlaybackState.Opening:

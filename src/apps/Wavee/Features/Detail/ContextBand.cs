@@ -160,34 +160,6 @@ static class ContextBand
     /// <inheritdoc cref="ClipInset"/>
     public const float ClipFadeBand = ContextBandLayout.ClipFadeBand;
 
-    /// <summary>The band's arrival: opacity 0→1 with a small upward settle, ramped over the final collapse band so it
-    /// is reversible and tracks the finger rather than snapping at a threshold.
-    ///
-    /// <para>REDUCED MOTION IS A VALUE here, not a branch: the translate leg is simply absent from the returned array
-    /// (the opacity cross-fade stays — a fade aids orientation, it is not motion). Same shape either way, no hook
-    /// count changes, which is the rule a scroll-bound header is especially exposed to because a resize grip can flip
-    /// the flag mid-session.</para></summary>
-    public static ScrollBindDsl[] RevealBinds(float revealStart, float collapseDistance)
-    {
-        var opacity = new ScrollBindDsl
-        {
-            From = ScrollChannel.Offset, To = BindSink.Opacity,
-            Range = ScrollRange.Px(revealStart, collapseDistance),
-            OutStart = 0f, OutEnd = 1f, Ease = Easing.Linear,
-        };
-        if (Motion.ReducedMotion) return [opacity];
-        return
-        [
-            opacity,
-            new ScrollBindDsl
-            {
-                From = ScrollChannel.Offset, To = BindSink.TransY,
-                Range = ScrollRange.Px(revealStart, collapseDistance),
-                OutStart = Spacing.XS, OutEnd = 0f, Ease = Easing.Linear,
-            },
-        ];
-    }
-
     /// <summary>Wrap a page section so the band's scroll spy can find it. Layout-neutral by construction — a bare
     /// column wrapper around the section, adding no size, no padding and no flex of its own.</summary>
     public static Element Anchor(SectionAnchors anchors, string key, Element section) => new BoxEl

@@ -1079,11 +1079,11 @@ internal static class WaveeNavProbe
 
                 int wait = host.RecommendedWaitMs();
                 if (wait > 0) { realLoopThrottled++; if (wait > realLoopMaxWait) realLoopMaxWait = wait; }
-                if (host.LastWaitKind == HostWaitKind.PaceAsync) realLoopWaitAsync++;
+                if (host.LastWaitKind is HostWaitKind.DisplayTick or HostWaitKind.SoftwarePace) realLoopWaitAsync++;
                 else if (host.LastWaitKind == HostWaitKind.Ambient) realLoopWaitAmbient++;
                 else realLoopWaitOther++;
                 // A synthetic queued event is not an HWND message and therefore cannot wake an infinite idle wait.
-                // Clamp that diagnostic-only case; a correctly armed scroll returns PaceAsync (7ms) here.
+                // Clamp that diagnostic-only case; a correctly armed scroll returns a display-paced wait here.
                 window.WaitForWork(wait < 0 ? 8 : Math.Min(wait, 40));
             }
             long loopEnd = Stopwatch.GetTimestamp();

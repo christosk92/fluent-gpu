@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -54,6 +55,14 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
     private bool _watchdogFired;
     private int _lastLoggedState = -1;
     private bool _loggedSize, _loggedHandle;
+
+    // [video] diagnostics only (behind VideoLogEnabled): the slowest single Native.FgPlayReadyGetSnapshot call seen
+    // this load, in Stopwatch ticks (a duration, not a timestamp — reported via GetElapsedTime(0, ticks)). Updated in
+    // Pump ONLY inside an `if (VideoLogEnabled)` branch, so with logging off this is neither timed nor written —
+    // a true no-op on the per-frame pump path. Reported once, piggybacked on the existing state-change log, the
+    // first time native leaves the Idle/Loading states for this load.
+    private long _maxSnapshotTicks;
+    private bool _loggedMaxSnapshot;
 
     // [video] lifecycle diagnostics are gated on the app's file-log verbosity (WAVEE_LOG_FILE_LEVEL=Debug|Trace) and
     // APPENDED to the SAME desktop-playready.log the native backend writes, so native + managed lines share one timeline.
@@ -122,6 +131,8 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
         _watchdogFired = false;
         _lastLoggedState = -1;
         _loggedSize = _loggedHandle = false;
+        _maxSnapshotTicks = 0;
+        _loggedMaxSnapshot = false;
         if (VideoLogEnabled)
         {
             string host = "";
@@ -135,7 +146,23 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
         // Seed the process-global native transport level BEFORE the worker enters FgPlayReadyRunEx. MediaPlayer opens
         // sessions paused and immediately calls PlayAsync; that Play can otherwise arrive before RunEx initializes and
         // be overwritten by its startup reset. RunEx intentionally preserves this pre-seeded atomic level.
-        if (_playRequested) Native.FgPlayReadyPlay(); else Native.FgPlayReadyPause();
+        // This is also the FIRST P/Invoke into FluentGpu.PlayReady.Native.dll, so on the timed path it implicitly pays
+        // for LoadLibrary of that DLL plus its whole MF/PlayReady dependency chain. Runs on whatever thread called
+        // Start() (i.e. NOT the "fgpu-playready-desktop" worker below, which does not exist yet) — logged so a slow
+        // load can distinguish "first-call DLL load" from the worker's own FgPlayReadyRunEx cost.
+        if (VideoLogEnabled)
+        {
+            long t0 = Stopwatch.GetTimestamp();
+            if (_playRequested) Native.FgPlayReadyPlay(); else Native.FgPlayReadyPause();
+            LogVideo($"first native call ({(_playRequested ? "FgPlayReadyPlay" : "FgPlayReadyPause")}) on thread " +
+                     $"'{Thread.CurrentThread.Name ?? "(unnamed)"}' (managed id={Environment.CurrentManagedThreadId}) " +
+                     $"took {Stopwatch.GetElapsedTime(t0).TotalMilliseconds:F1}ms " +
+                     "(implicit LoadLibrary of FluentGpu.PlayReady.Native.dll + its MF/PlayReady dependency chain)");
+        }
+        else
+        {
+            if (_playRequested) Native.FgPlayReadyPlay(); else Native.FgPlayReadyPause();
+        }
 
         var system = request.Drm?.System ?? DrmSystem.PlayReady;
         _bridge = new DrmLicenseBridge(request.LicenseRelay, system, request.LicenseTimeout,
@@ -193,7 +220,14 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
                 IntPtr, byte*, int, char*, delegate* unmanaged[Stdcall]<IntPtr, byte*, int, void>, IntPtr, int>)&LicenseThunk;
             IntPtr ctx = GCHandle.ToIntPtr(self);
 
+            // Timed on the "fgpu-playready-desktop" MTA thread: this is the phase that does CDM init + licence
+            // acquisition (a network round-trip), so it is the prime suspect for whatever stalls the app during a
+            // DRM load. `t0` stays a plain default(long) when logging is off — no Stopwatch call, no cost.
+            long t0 = VideoLogEnabled ? Stopwatch.GetTimestamp() : 0;
             _runHr = Native.FgPlayReadyRunEx(_dataRoot, ref desc, callback, ctx);
+            if (VideoLogEnabled)
+                LogVideo($"FgPlayReadyRunEx returned 0x{unchecked((uint)_runHr):X8} after " +
+                         $"{Stopwatch.GetElapsedTime(t0).TotalMilliseconds:F1}ms (CDM init + licence acquisition)");
 
             // BUSY self-heal: the native session is a process-global singleton (a CAS latch inside FgPlayReadyRunEx),
             // so a previous session that was never stopped — any missed-stop bug, or a teardown still in its bounded
@@ -206,12 +240,16 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
             {
                 LogVideo("native session BUSY (a stale session holds the singleton latch) — signaling stop + retrying");
                 long deadline = Environment.TickCount64 + 5_000;
+                long retryT0 = VideoLogEnabled ? Stopwatch.GetTimestamp() : 0;
                 while (_runHr == ErrorBusy && !_disposed && Environment.TickCount64 < deadline)
                 {
                     try { Native.FgPlayReadyStop(); } catch { }
                     Thread.Sleep(200);
                     _runHr = Native.FgPlayReadyRunEx(_dataRoot, ref desc, callback, ctx);
                 }
+                if (VideoLogEnabled)
+                    LogVideo($"BUSY retry loop took {Stopwatch.GetElapsedTime(retryT0).TotalMilliseconds:F1}ms, " +
+                             $"final result 0x{unchecked((uint)_runHr):X8}");
                 if (_runHr == ErrorBusy)
                     LogVideo("native session still BUSY after 5s of stop+retry — surfacing the failure");
             }
@@ -348,14 +386,36 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
             _state.Value = ProtectedVideoState.Error;
         }
 
-        if (Native.FgPlayReadyGetSnapshot(out var s) < 0) return;
+        // The snapshot call itself is timed ONLY when VideoLogEnabled — with logging off this is exactly the original
+        // single unconditional call, no Stopwatch, no extra branch cost on the per-frame UI-thread pump path.
+        NativeSnapshot s;
+        if (VideoLogEnabled)
+        {
+            long snapT0 = Stopwatch.GetTimestamp();
+            bool ok = Native.FgPlayReadyGetSnapshot(out s) >= 0;
+            long elapsedTicks = Stopwatch.GetTimestamp() - snapT0;
+            if (elapsedTicks > _maxSnapshotTicks) _maxSnapshotTicks = elapsedTicks;
+            if (!ok) return;
+        }
+        else
+        {
+            if (Native.FgPlayReadyGetSnapshot(out s) < 0) return;
+        }
 
         // Low-volume [video] transition log (never per-frame: only when the native state integer actually changes).
         if (VideoLogEnabled && s.State != _lastLoggedState)
         {
+            // One-shot "slowest snapshot call this load" line, piggybacked here rather than a new log site: reported
+            // the first time native leaves Idle(0)/Loading(1) for this load (i.e. reaches a terminal/ready state).
+            string maxSnap = "";
+            if (s.State >= 2 && !_loggedMaxSnapshot)
+            {
+                _loggedMaxSnapshot = true;
+                maxSnap = $" maxSnapshotMs={Stopwatch.GetElapsedTime(0, _maxSnapshotTicks).TotalMilliseconds:F2}";
+            }
             LogVideo($"native state {_lastLoggedState} -> {s.State} ({NativeStateName(s.State)}) at " +
                      $"{Environment.TickCount64 - _startTicks}ms handle=0x{s.Handle:X} size={s.Width}x{s.Height} " +
-                     $"err=0x{unchecked((uint)s.ErrorHr):X8}");
+                     $"err=0x{unchecked((uint)s.ErrorHr):X8}{maxSnap}");
             _lastLoggedState = s.State;
         }
 

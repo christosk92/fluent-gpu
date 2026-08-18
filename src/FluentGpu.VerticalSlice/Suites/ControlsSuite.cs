@@ -1164,13 +1164,23 @@ static class ControlsSuite
         host.RunFrame();
         bool iconClicked = probe.IconClicks == 1;
 
-        // scrollbar: drag the thumb to ~bottom → position near 1
-        Press(Kid(3), 5f, 190f);
-        host.RunFrame();
-        bool scrolled = probe.ScrollPos > 0.5f;
+        // ScrollBar (the WinUI-parity anatomy — see gate.ctl.bind.scrollbar): a bare TRACK press is a page step
+        // (fraction 0.25 → one page ≈ 0.33), never a click-to-position jump. Click near the very bottom of the
+        // track (2px above the reserved down-arrow cell) each time — that point stays BELOW the thumb (and so keeps
+        // landing a page-down, not a drag-grab) for every position short of the very end.
+        var bar = FindRole(host.Scene, host.Scene.Root, AutomationRole.ScrollBar);
+        var barR = host.Scene.AbsoluteRect(bar);
+        var pt = new Point2(barR.X + barR.W * 0.5f, barR.Bottom - 14f);
+        for (int i = 0; i < 3; i++)
+        {
+            window.QueueInput(new InputEvent(InputKind.PointerDown, pt, 0, 0));
+            window.QueueInput(new InputEvent(InputKind.PointerUp, pt, 0, 0));
+            host.RunFrame();
+        }
+        bool scrolled = probe.ScrollPos > 0.9f;
 
         Check("48. Toggle flips, IconButton clicks, ScrollBar drags", toggled && iconClicked && scrolled,
-            $"toggled={probe.Toggled} icon={probe.IconClicks} scrollPos={probe.ScrollPos:0.0}");
+            $"toggled={probe.Toggled} icon={probe.IconClicks} scrollPos={probe.ScrollPos:0.000}");
     }
 
     static void AutoFitTextChecks(StringTable strings)
@@ -8445,6 +8455,62 @@ static class ControlsSuite
                 token > 0 && ra > 0 && rb > 0 && aDrivesFirst && bSuppressed && noRepeatWithoutRequest
                     && bDrivesAfter && aSuppressed && aRestored,
                 $"aFirst={aDrivesFirst} bSupp={bSuppressed} noRepeat={noRepeatWithoutRequest} bDrives={bDrivesAfter} aSupp={aSuppressed} restored={aRestored}");
+        }
+
+        // gate.media.el.geometry-pump: a tracked surface whose ABSOLUTE rect moves gets exactly ONE pump request per
+        // move, and a surface that did not move gets NONE (so this can never become a permanent per-frame pump cadence).
+        // The COMPOSITOR-TRANSFORM case is the one that regressed: Wavee's mini-player moves by LocalTransform only, which
+        // changes no layout bounds — MediaPlayerElement's OnBoundsChanged never fired, nothing requested a pump, and the
+        // DComp child trailed the card during a drag. AbsoluteRect folds LocalTransform in, so both movers must register.
+        {
+            var scene = new SceneStore();
+            var node = scene.CreateNode(1);
+            scene.Root = node;
+            scene.Bounds(node) = new RectF(0f, 0f, 320f, 180f);
+
+            var reg = new VideoSurfaceRegistry();
+            int token = reg.Acquire();
+            int runs = 0;
+            int rid = reg.RegisterPump(token, new object(), _ => runs++);
+            reg.PumpPending(1f);                       // drain the registration's own establishing pump
+            int baseRuns = runs;
+
+            reg.SetGeometryNode(token, node);
+            reg.RequestGeometryPumps(scene); reg.PumpPending(1f);
+            bool firstTrack = runs == baseRuns + 1;    // adopting a node places it once
+
+            reg.RequestGeometryPumps(scene); reg.PumpPending(1f);
+            bool idleCostsNothing = runs == baseRuns + 1;   // unmoved => no request, no pump
+
+            // (a) a LAYOUT move (the resize case).
+            scene.Bounds(node) = new RectF(0f, 0f, 400f, 225f);
+            reg.RequestGeometryPumps(scene); reg.PumpPending(1f);
+            bool layoutMoveTracked = runs == baseRuns + 2;
+
+            // (b) a COMPOSITOR-ONLY move (the drag case) — no layout change at all.
+            scene.Paint(node).LocalTransform = Affine2D.Translation(64f, 40f);
+            reg.RequestGeometryPumps(scene); reg.PumpPending(1f);
+            bool transformMoveTracked = runs == baseRuns + 3;
+
+            reg.RequestGeometryPumps(scene); reg.PumpPending(1f);
+            bool settles = runs == baseRuns + 3;       // still => quiet again
+
+            // Zero managed allocation on the steady-state (nothing moved) scan — it runs every host frame.
+            long a0 = GC.GetAllocatedBytesForCurrentThread();
+            for (int i = 0; i < 64; i++) reg.RequestGeometryPumps(scene);
+            long quietAlloc = GC.GetAllocatedBytesForCurrentThread() - a0;
+
+            // A released slot must stop being scanned (a stale node handle must never be dereferenced).
+            reg.UnregisterPump(rid);
+            reg.Release(token);
+            reg.RequestGeometryPumps(scene);
+            bool releasedIsInert = true;
+
+            Check("gate.media.el.geometry-pump",
+                token > 0 && rid > 0 && firstTrack && idleCostsNothing && layoutMoveTracked
+                    && transformMoveTracked && settles && quietAlloc == 0 && releasedIsInert,
+                $"firstTrack={firstTrack} idleFree={idleCostsNothing} layoutMove={layoutMoveTracked} " +
+                $"transformMove={transformMoveTracked} settles={settles} quietAlloc={quietAlloc}B");
         }
 
         // gate.media.el.pins-anchor-autohide: while a picker (an anchored PinsAnchor overlay inside the player) is open,

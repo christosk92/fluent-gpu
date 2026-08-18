@@ -1,4 +1,5 @@
 using System;
+using FluentGpu.Controls;
 using FluentGpu.Controls.Media;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
@@ -37,21 +38,31 @@ sealed class PopOutVideoWindow : Component
         // Mount whenever a player exists — a brief source null must not unmount the only MF pump.
         bool live = VideoSurfaceMount.ShouldMountPlayerStage(binding.Player is not null);
         string stageKey = src?.Key ?? ("gen:" + binding.Generation.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        return new BoxEl
+        // WRAPPED IN AN OVERLAY HOST. A detached window builds its OWN AppHost — its own reconciler and its own ambient
+        // context map — so nothing from the shell's tree reaches it, including the shell's OverlayHost. Without one here
+        // `UseContext(Overlay.Service)` resolves to NullOverlayService, and every flyout the transport owns silently does
+        // nothing: the speed (1×) and more (…) buttons were dead, and the volume button fell through to a bare mute
+        // because its slider flyout could never open. The host must wrap the CONTENT (it renders a top-level ZStack over
+        // it), so it is the outermost element here.
+        return OverlayHost.Create(new BoxEl
         {
             Direction = 1,
             Width = Prop.Of(() => vp.Value.Width),
             Height = Prop.Of(() => vp.Value.Height),
-            // The video composites as a PASSIVE HOLE: the DComp video sits z-BELOW the UI swapchain, so the video rect
-            // must stay TRANSPARENT (premul-0) for it to show through. An opaque fill here paints OVER the video (the
-            // black-video bug). So fill opaque until the stage is actually presenting a player (keeps the window from
-            // being see-through while the host resolves/opens); once it is, MediaPlayerElement paints the opaque
-            // letterbox bars AROUND the video rect and leaves the rect itself the transparent hole.
-            Fill = live ? ColorF.Transparent : Tok.MediaLetterbox,
+            // ALWAYS opaque — including while live. The video composites as a passive hole punched by a DESCENDANT
+            // (MediaPlayerElement's VideoHole node), and that punch is a DestOut erase: it zeroes the UI back buffer
+            // over the video rect, which removes this fill there just as it removes the element's own letterbox fill.
+            // So an opaque root does NOT cause the black-video bug — only something painting AFTER the hole, i.e. a
+            // later sibling or higher z, can do that.
+            // It used to be transparent while live, on the assumption the element would cover everything around the
+            // video. It does not: the element draws a ROUNDED, BORDERED frame, so its corners and any slack between
+            // frame and window were never painted by anyone — and in a composited window "not painted" means the
+            // DESKTOP shows through. That was the wallpaper-coloured strip under the titlebar.
+            Fill = Tok.MediaLetterbox,
             Children = live
                 ? [new BoxEl { Grow = 1, Children = [Embed.Comp(() => new PopOutVideoStage { Source = src, Player = Player }) with { Key = "stage:" + stageKey }] }]
                 : Array.Empty<Element>(),
-        };
+        });
     }
 }
 

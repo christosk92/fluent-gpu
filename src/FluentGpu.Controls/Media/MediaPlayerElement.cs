@@ -485,6 +485,10 @@ public sealed class MediaPlayerElement : Component
         SizeI natural = Player.NaturalSize.Peek();
         bool audioOnly = IsAudioOnly(natural);
         RectF videoRect = area;
+        // The node whose absolute rect the surface must FOLLOW. Registered from here rather than at realize time
+        // because this is the one place that already decides hole-vs-area, so a hole that appears later (videoReady
+        // flipping) upgrades the tracked node for free. The registry value-gates it, so re-affirming costs nothing.
+        NodeHandle geom = h;
         if (!audioOnly)
         {
             // Fallback while the hole is not (yet) realized — the first frame after the stream goes ready, or any frame
@@ -492,10 +496,14 @@ public sealed class MediaPlayerElement : Component
             NodeHandle hole = _holeRef?.Value ?? default;
             bool live = !hole.IsNull && scene.IsLive(hole);
             videoRect = live ? scene.AbsoluteRect(hole) : default;
+            if (live) geom = hole;
             if (!live || videoRect.W <= 0f || videoRect.H <= 0f)
                 videoRect = FitVideoRect(area, natural, _aspectForPump?.Peek() ?? VideoAspectMode.Uniform,
                     _customAspectForPump?.Peek() ?? (16.0 / 9.0));
         }
+        // Track geometry so a compositor-only move (a PiP drag, a page transition) re-places the DComp child on the
+        // frame it moves, instead of waiting for an unrelated native/transport event to request the next pump.
+        b.SetGeometryNode(geom);
         // Clip the viewport to every clipping ancestor before handing it to the presenter. The frame composites in its
         // OWN DirectComposition visual BELOW the UI swapchain — it is not inside any scissor the UI draws with — so a
         // viewport of the element's own rect keeps presenting at full size while the element scrolls out of its

@@ -1020,7 +1020,17 @@ public sealed class TreeReconciler
         ref LayoutInput a = ref _scene.Layout(anchor);
         ref LayoutInput c = ref _scene.Layout(child);
         a.FlexGrow = c.FlexGrow; a.FlexShrink = c.FlexShrink; a.FlexBasis = c.FlexBasis; a.AlignSelf = c.AlignSelf; a.JustifySelf = c.JustifySelf;
-        a.Width = c.Width; a.Height = c.Height;
+        // NEVER snapshot an ACTIVELY ANIMATED size. A SizeMode.Reflow track writes the eased extent straight into the
+        // child's LayoutInput.Width/Height each tick; mirroring THAT onto the transparent anchor freezes a mid-flight
+        // number as a hard declared size, and nothing ever undoes it — SettleRestore restores only the animated node,
+        // and MountComponent never writes an anchor's LayoutInput. Mirror the DECLARED value the track will restore
+        // (normally NaN/auto) so the anchor stays genuinely transparent and measures the eased child naturally.
+        if (Anim is { } mpAnim)
+        {
+            a.Width = mpAnim.TryGetReflowDeclared(child, AnimChannel.LayoutW, out float mpW) ? mpW : c.Width;
+            a.Height = mpAnim.TryGetReflowDeclared(child, AnimChannel.LayoutH, out float mpH) ? mpH : c.Height;
+        }
+        else { a.Width = c.Width; a.Height = c.Height; }
         a.MinW = c.MinW; a.MinH = c.MinH; a.MaxW = c.MaxW; a.MaxH = c.MaxH;
         a.MeasureUnboundedWidth = c.MeasureUnboundedWidth;
     }

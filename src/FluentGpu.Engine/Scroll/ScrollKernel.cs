@@ -262,6 +262,42 @@ public sealed class ScrollKernel
         if (spec.Zoom > 0f && b.Zoom <= 0f) b.Zoom = spec.Zoom;
         if (b.Zoom <= 0f) b.Zoom = 1f;
         ClampToFrame(ref b);
+        // A programmatic request re-derives its target against the NEW extent. Content that grows AFTER the post (a
+        // SizeMode.Reflow drawer animating 0→full, a virtualized list measuring late) would otherwise leave the
+        // destination truncated forever, since Target was clamped at post time and nothing re-clamps it upward.
+        // TWO shapes qualify:
+        //   • a LIVE chase (Driven+Programmatic) — re-target in place; the chase is velocity-continuous by kernel
+        //     contract, so re-deriving + MarkActive is the whole regrow;
+        //   • a request the OLD extent already TRUNCATED (TargetRaw ≠ Target) whose chase has therefore already
+        //     hard-stopped at the edge and settled to Idle — the common case, because a target beyond the extent
+        //     reaches the clamp on the very first tick. It re-arms as the same Driven chase (the DrivenHalflifeMs/
+        //     Zeta/Omega/SettleVel latched at post time survive the settle) and continues from where it stopped.
+        // Idle is the only settled state that qualifies: a Drag/Ballistic body has moved on, and every takeover path
+        // (Cancel/ContactBegin/ThumbSet/wheel notch) relatches TargetRaw to Target so a dead request cannot resurrect.
+        bool liveChase = b.Activity == ScrollActivity.Driven && (b.Flags & ScrollActivityFlags.Programmatic) != 0;
+        // The settled case additionally requires the body to still be PARKED at its truncated destination: that is
+        // the signature of "stopped because of the clamp". If anything moved it since (a Restore, an AnchorShift,
+        // any path that is not one of the relatching takeovers), the request is stale and must die rather than
+        // glide the viewport somewhere the user has long left behind.
+        bool truncatedPending = b.Activity == ScrollActivity.Idle && b.TargetRaw != b.Target
+                                && MathF.Abs(b.PositionMain - b.Target) < 0.5f;
+        if (liveChase || truncatedPending)
+        {
+            float zoomNow = b.Zoom > 0f ? b.Zoom : 1f;
+            float maxOff = MathF.Max(0f, b.Frame.ExtentMain * zoomNow - b.Frame.ViewportMain);
+            float retarget = Math.Clamp(b.TargetRaw, 0f, maxOff);
+            if (liveChase || retarget != b.Target)
+            {
+                b.Target = retarget;
+                if (!liveChase)
+                {
+                    b.Activity = ScrollActivity.Driven;
+                    b.Flags = (b.Flags & ~(ScrollActivityFlags.Wheel | ScrollActivityFlags.Autoscroll | ScrollActivityFlags.Bouncing)) | ScrollActivityFlags.Programmatic;
+                    b.Awake = false;
+                }
+                MarkActive(idx);
+            }
+        }
         if (b.RestorePending && TryApplyRestore(ref b)) _restorePendingCount--;
         MarkTouched(idx);
     }
@@ -281,6 +317,7 @@ public sealed class ScrollKernel
         b.Activity = ScrollActivity.Idle;
         b.Velocity = 0f;
         b.Flags = ScrollActivityFlags.None;
+        b.TargetRaw = b.Target;   // zoom rewrites content space — the old raw request no longer means anything
         MarkTouched(idx);
     }
 
@@ -293,6 +330,7 @@ public sealed class ScrollKernel
         b.BandVelMain = 0f;
         b.BandX = 0f; b.BandY = 0f;
         b.Flags = ScrollActivityFlags.None;
+        b.TargetRaw = b.Target;   // the request is dead — never let it resurrect when the content next grows
         b.EdgeHitPending = false;
         b.Awake = false;
         MarkTouched(idx);
@@ -309,6 +347,7 @@ public sealed class ScrollKernel
         b.Velocity = 0f;
         b.Activity = ScrollActivity.Idle;
         b.Flags = ScrollActivityFlags.None;
+        b.TargetRaw = b.Target;   // dragging the thumb wins over any pending programmatic request
         MarkTouched(idx);
     }
 
@@ -359,6 +398,7 @@ public sealed class ScrollKernel
         b.DragAnchor += delta;
         b.DragRaw += delta;
         b.Target += delta;
+        b.TargetRaw += delta;     // the whole content moved — the raw request travels with it (lockstep)
         if (b.RestorePending)
         {
             if (b.Horizontal) b.RestoreX += delta; else b.RestoreY += delta;
@@ -394,6 +434,7 @@ public sealed class ScrollKernel
         PushHistory(ref b, cmd.T, cmd.A);
         b.Impulse.Reset(cmd.A, cmd.T);
         b.Flags &= ~(ScrollActivityFlags.Wheel | ScrollActivityFlags.Programmatic | ScrollActivityFlags.Autoscroll | ScrollActivityFlags.Bouncing | ScrollActivityFlags.Chained);
+        b.TargetRaw = b.Target;   // the finger took over — a pending programmatic request must not resurrect on growth
         b.BandVelMain = 0f;
         b.LastAbsorbed = -1;
         b.EdgeHitPending = false;
@@ -507,6 +548,7 @@ public sealed class ScrollKernel
         snapTarget = Math.Clamp(snapTarget, 0f, maxOff);
         seed.Velocity = (snapTarget - seed.PositionMain) * k;
         seed.Target = snapTarget;
+        seed.TargetRaw = snapTarget;
         seed.SnapArmed = true;
     }
 
@@ -613,6 +655,7 @@ public sealed class ScrollKernel
         float maxOff = MathF.Max(0f, b.Frame.ExtentMain * zoom - b.Frame.ViewportMain);
         float baseTarget = sameFlavourLive ? b.Target : b.PositionMain;
         b.Target = Math.Clamp(baseTarget + cmd.A, 0f, maxOff);
+        b.TargetRaw = b.Target;   // a wheel notch supersedes any pending programmatic request
         if (!sameFlavourLive) { b.Velocity = 0f; b.Awake = false; }
         b.Activity = ScrollActivity.Driven;
         b.Flags = (b.Flags & ~(ScrollActivityFlags.Programmatic | ScrollActivityFlags.Autoscroll | ScrollActivityFlags.Bouncing)) | ScrollActivityFlags.Wheel;
@@ -640,12 +683,17 @@ public sealed class ScrollKernel
         bool immediate = (cmd.Flags & (byte)ScrollInputFlags.Immediate) != 0;
         float zoom = b.Zoom > 0f ? b.Zoom : 1f;
         float maxOff = MathF.Max(0f, b.Frame.ExtentMain * zoom - b.Frame.ViewportMain);
+        // Latch the RAW request BEFORE the clamp: the extent known right now may be a fraction of what the content
+        // will be a few frames from here (a Reflow drawer mid-animation, a list that measures late), and without this
+        // the truncated Target would be the permanent destination — ApplySetFrame re-derives from TargetRaw instead.
+        b.TargetRaw = target;
         target = Math.Clamp(target, 0f, maxOff);
 
         if (immediate)
         {
             SetOffsetMain(ref b, target);
             b.Target = target;
+            b.TargetRaw = target;   // a snap has no chase to regrow — never leave the pair disagreeing
             b.Velocity = 0f;
             b.Activity = ScrollActivity.Idle;
             b.Flags &= ~(ScrollActivityFlags.Programmatic | ScrollActivityFlags.Wheel | ScrollActivityFlags.Autoscroll);

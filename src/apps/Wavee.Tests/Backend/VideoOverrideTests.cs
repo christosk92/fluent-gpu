@@ -554,7 +554,7 @@ public class VideoOverrideTests
             Controller = new PlaybackController(Audio, new StubTrackResolver(), Projection,
                 new FakeContextResolver("spotify:track:a", "spotify:track:b"), "us", videoHost: Video);
             Controller.ShouldPlayAsVideo = _ => VideoIntent;
-            Controller.LoadCurrentVideoAsync = (_, _) => { LoadVideoCalls++; return Task.FromResult(true); };
+            Controller.LoadCurrentVideoAsync = (_, _, _) => { LoadVideoCalls++; return Task.FromResult(true); };
             Controller.OnPlaybackError = e => { lock (Errors) Errors.Add(e); };
         }
 

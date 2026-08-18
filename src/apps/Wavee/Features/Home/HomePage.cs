@@ -57,9 +57,6 @@ sealed class HomePage : Component
         // Home groups have substantially different heights (quick grid / hero / compact grid / shelf / editorial).
         // Hoist one measured extent table so the viewport can correct and anchor rows while recycling offscreen groups.
         var homeLayout = UseMemo(static () => new HomeFeedVirtualLayout(), DepKey.Empty);
-        // Every module's "Show all" flag, hoisted here: a UseState inside a module shell would be re-created on every
-        // realization, so an expanded module would silently collapse the moment it scrolled out and back in.
-        var more = UseMemo(static () => new HomeShowAll(), DepKey.Empty);
         // The background home-refresh loop, tied to this component's lifetime. Its Reactive.OnCleanup fires on unmount
         // (KeepAlive eviction / a page whose cache entry was evicted) and before each re-run. Without it, each cold
         // remount of Home leaked an orphaned 60s PeriodicTimer loop that COMPOUNDED over a long session. Mirrors the
@@ -224,6 +221,14 @@ sealed class HomePage : Component
             go(route, section.Title);
         }
 
+        void OpenLanding(HomeLandingModule module)
+        {
+            var g = module.Group;
+            OpenSection(module.PrimarySection ?? new HomeSection(
+                g.Uri, g.Title, g.Subtitle, g.Cards,
+                Math.Max(g.TotalCount, g.Cards.Count), g.Cards.Count));
+        }
+
         void NavUri(HomeFeed feed, string key)
         {
             if (HomeSectionRoutes.Is(key))
@@ -380,6 +385,8 @@ sealed class HomePage : Component
         Element RenderRow(HomeFeed feed, HomeLanding landing, HomeRow row)
         {
             void Navigate(string key) => NavUri(feed, key);
+            Action<HomeGroup>? Drill(HomeGroupKind kind)
+                => landing.Get(kind) is { } m ? _ => OpenLanding(m) : null;
             switch (row)
             {
                 case HomeRow.Chips:
@@ -396,66 +403,66 @@ sealed class HomePage : Component
                         : new BoxEl();
                 case HomeRow.Weekly:
                     return FeedGroup(landing, row) is { } weekly
-                        ? HomeModules.WeeklyPair(weekly, NavOf, ChromeOf) : new BoxEl();
+                        ? HomeModules.WeeklyPair(weekly, NavOf, ChromeOf, Drill(HomeGroupKind.WeeklyPair)) : new BoxEl();
                 case HomeRow.Quick:
                     return FeedGroup(landing, row) is { } quick
-                        ? HomeModules.Quick(quick, NavOf, PlayOf, ChromeOf, more.For(quick, "quick")) : new BoxEl();
+                        ? HomeModules.Quick(quick, NavOf, PlayOf, ChromeOf, Drill(HomeGroupKind.QuickGrid)) : new BoxEl();
                 case HomeRow.Recents:
-                    // The ONE shelf whose header does not drill into a `home-section:` page. Recents has a page of its
-                    // own (ContentHost's "recents" arm), backed by /playlist/v2/list/recents/page rather than by the
-                    // home document, so it navigates to that route and never through OpenSection. Armed
-                    // UNCONDITIONALLY for the same reason: the landing projection's Recents group carries a null Uri,
-                    // and the destination's availability has nothing to do with this shelf's payload.
+                    // Recents has a page of its own (ContentHost's "recents" arm), backed by
+                    // /playlist/v2/list/recents/page rather than by the home document, so it navigates to that route
+                    // and never through OpenSection. Armed UNCONDITIONALLY: the landing projection's Recents group
+                    // carries a null Uri, and the destination's availability has nothing to do with this shelf's payload.
+                    // The strip still pages in place — pager is reserved for horizontal shelves.
                     return FeedGroup(landing, row) is { } recents
                         ? HomeModules.Recents(recents, NavOf, KindLabel, ChromeOf, () => go("recents", null))
                         : new BoxEl();
                 case HomeRow.MixBand:
                     return FeedGroup(landing, row) is { } mixes
-                        ? HomeModules.MixBand(mixes, NavOf, ChromeOf) : new BoxEl();
+                        ? HomeModules.MixBand(mixes, NavOf, ChromeOf, Drill(HomeGroupKind.MixBand)) : new BoxEl();
                 case HomeRow.Artists:
                     return Embed.Comp(() => new HomeArtistRow());
                 case HomeRow.ChipCards:
                     return FeedGroup(landing, row) is { } chips
-                        ? HomeModules.ChipCards(chips, NavOf, ChromeOf, Navigate, more.For(chips, "chips")) : new BoxEl();
+                        ? HomeModules.ChipCards(chips, NavOf, ChromeOf, Navigate, Drill(HomeGroupKind.ChipCards)) : new BoxEl();
                 case HomeRow.Radio:
                     return FeedGroup(landing, row) is { } radio
-                        ? HomeModules.Radio(radio, NavOf, PlayOf, ChromeOf, more.For(radio, "radio")) : new BoxEl();
+                        ? HomeModules.Radio(radio, NavOf, PlayOf, ChromeOf, Drill(HomeGroupKind.RadioDial)) : new BoxEl();
                 case HomeRow.EpisodesAndBooks:
                 {
                     var episodes = landing.Get(HomeGroupKind.QueueList)?.Group;
                     var books = landing.Get(HomeGroupKind.RatedShelf)?.Group;
                     if (episodes is null && books is null) return new BoxEl();
                     Element left = episodes is null ? new BoxEl()
-                        : HomeModules.UpNext(episodes, NavOf, ChromeOf, more.For(episodes, "queue"));
+                        : HomeModules.UpNext(episodes, NavOf, ChromeOf, Drill(HomeGroupKind.QueueList));
                     Element right = books is null ? new BoxEl()
-                        : HomeModules.Audiobooks(books, NavOf, ChromeOf, more.For(books, "books"));
+                        : HomeModules.Audiobooks(books, NavOf, ChromeOf, Drill(HomeGroupKind.RatedShelf));
                     if (episodes is null) return HomeModules.SplitSingle(right);
                     if (books is null) return HomeModules.SplitSingle(left);
                     return HomeModules.SplitEven(left, right);
                 }
                 case HomeRow.Queue:
                     return landing.Get(HomeGroupKind.QueueList)?.Group is { } queueOnly
-                        ? HomeModules.SplitSingle(HomeModules.UpNext(queueOnly, NavOf, ChromeOf, more.For(queueOnly, "queue")))
+                        ? HomeModules.SplitSingle(HomeModules.UpNext(queueOnly, NavOf, ChromeOf, Drill(HomeGroupKind.QueueList)))
                         : new BoxEl();
                 case HomeRow.Books:
                     return landing.Get(HomeGroupKind.RatedShelf)?.Group is { } booksOnly
-                        ? HomeModules.SplitSingle(HomeModules.Audiobooks(booksOnly, NavOf, ChromeOf, more.For(booksOnly, "books")))
+                        ? HomeModules.SplitSingle(HomeModules.Audiobooks(booksOnly, NavOf, ChromeOf, Drill(HomeGroupKind.RatedShelf)))
                         : new BoxEl();
                 case HomeRow.Timeline:
                     return Embed.Comp(() => new HomeTimeline());
                 case HomeRow.Podcasts:
                     return FeedGroup(landing, row) is { } podcasts
-                        ? HomeModules.Podcasts(podcasts, NavOf, PlayOf, ChromeOf) : new BoxEl();
+                        ? HomeModules.Podcasts(podcasts, NavOf, PlayOf, ChromeOf, Drill(HomeGroupKind.PodcastShelf)) : new BoxEl();
                 case HomeRow.Sections:
                     return landing.Sections.Count == 0 ? new BoxEl()
                         : HomeModules.SectionDeck(landing.Sections, OpenSection);
                 case HomeRow.Editorial:
                     return FeedGroup(landing, row) is { } editorial
                         ? HomeModules.Editorial(editorial, NavOf, PlayOf, CardMeta, ChromeOf, Navigate,
-                            more.For(editorial, "editorial")) : new BoxEl();
+                            Drill(HomeGroupKind.Featured)) : new BoxEl();
                 case HomeRow.Feed:
                     return FeedGroup(landing, row) is { } discover
-                        ? HomeModules.Feed(discover, NavOf, PlayOf, ChromeOf, Navigate) : new BoxEl();
+                        ? HomeModules.Feed(discover, NavOf, PlayOf, ChromeOf, Navigate, Drill(HomeGroupKind.DiscoverFeed)) : new BoxEl();
                 default:
                     return tail;
             }
@@ -527,6 +534,9 @@ sealed class HomePage : Component
             home,
             group: HomeSkeleton.Group,
             reveal: SkelReveal.StaggerRows,
+            // VirtualHome is a Grow=1 fill-list. Easing the region's height 0 → feed clips the first shelf of covers
+            // into a strip while the pane still fills (empty mica under the shear). Search's facet body is the same.
+            smoothResize: false,
             isEmpty: feed => feed.Groups.Count == 0,
             onEmpty: () => StateHome(EmptyState.Default()),
             onFailed: () => StateHome(ErrorState.Build(home.Error)),
@@ -685,7 +695,7 @@ sealed class HomePage : Component
     // ── the landing projection, memoized on the feed ───────────────────────────────────────────────────────────────
     // Project() walks every group and every card of the feed (per-kind aggregation, a URI dedupe set per module, the
     // section directory) and is a PURE function of (feed, titles). It used to run inside VirtualHome, which is re-entered
-    // on every re-render of the page — a hover fade, a chip selection, a landed cover grading, a "Show all" toggle — so
+    // on every re-render of the page — a hover fade, a chip selection, a landed cover grading — so
     // the whole projection was rebuilt many times per second while nothing about the feed had changed.
     //
     // The feed is an immutable snapshot published by the refresh loop, so a REFERENCE hit is a content hit. Titles are
@@ -729,35 +739,6 @@ sealed class HomePage : Component
     }
 
     // ── helpers ────────────────────────────────────────────────────────────────────────────────────────
-}
-
-/// <summary>Every module's "Show all" flag, hoisted by the page so it survives the virtual list recycling its row. A
-/// <c>UseState</c> inside a module shell would be re-created on every realization, so the module would silently collapse
-/// back the moment it scrolled out and in again.</summary>
-sealed class HomeShowAll
-{
-    /// <summary>Bounded FIFO, exactly like <see cref="HomeSectionPreviewStore"/>. The key carries the group's leading
-    /// card URI, so every 60-second refresh that reshuffles a shelf mints a NEW key and strands the old one — an
-    /// all-day session accumulated one dead flag per lane per refresh, forever. Only the handful of lanes on the page
-    /// (quick / chips / radio / queue / books / editorial) are ever live, so 32 keeps several refresh generations of
-    /// history and a module still on screen can never lose its expanded flag to eviction.</summary>
-    const int Capacity = 32;
-    readonly Dictionary<string, ShowAllState> _states = new(StringComparer.Ordinal);
-    readonly Queue<string> _order = new();
-
-    /// <summary>One state per source group and lane. Section identity is part of the key, so expanding one peer shelf
-    /// never unfolds another shelf of the same module kind.</summary>
-    public ShowAllState For(HomeGroup group, string lane)
-    {
-        string key = lane + "\u001F" + (group.Uri ?? group.Title ?? "") + "\u001F"
-            + (group.Cards.Count > 0 ? group.Cards[0].Uri : "");
-        if (_states.TryGetValue(key, out var state)) return state;
-        state = new ShowAllState(new Signal<bool>(false));
-        _states.Add(key, state);
-        _order.Enqueue(key);
-        while (_states.Count > Capacity && _order.TryDequeue(out var oldest)) _states.Remove(oldest);
-        return state;
-    }
 }
 
 /// <summary>Variable-height Home stack with row-aware first estimates. The engine still measures every realized row and

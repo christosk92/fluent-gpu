@@ -102,19 +102,8 @@ sealed partial class ArtistPage : Component
             Width = width, Height = photoH, ZStack = true, ClipToBounds = true,
             TransformOriginX = 0.5f, TransformOriginY = 0f,
             EdgeFade = new EdgeFadeSpec(EdgeMask.Bottom, ArtistHeroLayout.PhotoFadeBandFor(photoH)),
-            ScrollBinds =
-            [
-                new() { StretchFromTop = true },
-                new()
-                {
-                    From = ScrollChannel.Offset, To = BindSink.TransY,
-                    Range = ScrollRange.Px(0f, photoH),
-                    OutStart = 0f, OutEnd = photoH * ArtistHeroLayout.PhotoParallaxFraction,
-                    Ease = Easing.Linear,
-                },
-            ],
             Children = [art],
-        };
+        }.StretchFromTop().ParallaxY(ArtistHeroLayout.PhotoParallaxFraction, photoH);
 
         void MeasureHero(RectF bounds)
         {
@@ -199,20 +188,8 @@ sealed partial class ArtistPage : Component
             ClipToBounds = true,
             ZStack = true,
             OnBoundsChanged = MeasureHero,
-            ScrollBinds =
-            [
-                new() { PinTop = 0f },
-                new()
-                {
-                    From = ScrollChannel.Offset,
-                    To = BindSink.PresentedH,
-                    Range = ScrollRange.Px(0f, collapseDistance),
-                    OutStart = height,
-                    OutEnd = ArtistHeroLayout.CompactIdentityHeight,
-                },
-            ],
             Children = [expandedPresentation, compactPresentation],
-        };
+        }.Collapse(height, ArtistHeroLayout.CompactIdentityHeight, collapseDistance);
     }
 
     Element HeroActions(Artist a, string uri, Action play, Action shuffle, Action radio, ArtistHeroTier tier)

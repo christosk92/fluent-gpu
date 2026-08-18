@@ -30,6 +30,9 @@ public interface IOnlineCatalog
     /// <summary>As-you-type completions PLUS the typed entity hits. Empty offline.</summary>
     Task<SearchSuggestions> SuggestRichAsync(string query, CancellationToken ct = default);
 
+    /// <summary>Entities the user opened from search. Empty offline. A live failure throws (same contract as search).</summary>
+    Task<IReadOnlyList<SearchTopHit>> RecentSearchesAsync(CancellationToken ct = default);
+
     /// <summary>The editorial/personalized Home feed. <c>null</c> means "no live Home" — the caller then contributes its
     /// degraded library shelves and, critically, does NOT pin/carry a facet chip row it has no live feed to filter.</summary>
     Task<LiveHomeResult?> GetHomeAsync(CancellationToken ct = default);
@@ -46,11 +49,13 @@ public sealed class OfflineOnlineCatalog : IOnlineCatalog
     static readonly Task<SearchResults?> NoSearch = Task.FromResult<SearchResults?>(null);
     static readonly Task<IReadOnlyList<string>> NoQueries = Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
     static readonly Task<SearchSuggestions> NoSuggestions = Task.FromResult(SearchSuggestions.Empty);
+    static readonly Task<IReadOnlyList<SearchTopHit>> NoHits = Task.FromResult<IReadOnlyList<SearchTopHit>>(Array.Empty<SearchTopHit>());
     static readonly Task<LiveHomeResult?> NoHome = Task.FromResult<LiveHomeResult?>(null);
 
     public Task<SearchResults?> SearchAsync(string query, SearchFacet facet, int offset, int limit, CancellationToken ct = default) => NoSearch;
     public Task<IReadOnlyList<string>> SuggestAsync(string query, CancellationToken ct = default) => NoQueries;
     public Task<SearchSuggestions> SuggestRichAsync(string query, CancellationToken ct = default) => NoSuggestions;
+    public Task<IReadOnlyList<SearchTopHit>> RecentSearchesAsync(CancellationToken ct = default) => NoHits;
     public Task<LiveHomeResult?> GetHomeAsync(CancellationToken ct = default) => NoHome;
 }
 
@@ -83,6 +88,9 @@ public sealed class SwitchableOnlineCatalog : IOnlineCatalog
 
     public Task<SearchSuggestions> SuggestRichAsync(string query, CancellationToken ct = default)
         => _inner.SuggestRichAsync(query, ct);
+
+    public Task<IReadOnlyList<SearchTopHit>> RecentSearchesAsync(CancellationToken ct = default)
+        => _inner.RecentSearchesAsync(ct);
 
     public Task<LiveHomeResult?> GetHomeAsync(CancellationToken ct = default)
         => _inner.GetHomeAsync(ct);

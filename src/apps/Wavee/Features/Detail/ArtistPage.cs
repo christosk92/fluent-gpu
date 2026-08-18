@@ -271,9 +271,7 @@ sealed partial class ArtistPage : Component
         var sentinel = new BoxEl
         {
             Height = 0f, HitTestVisible = false,
-            ScrollBinds = [new() { PinTop = ArtistHeroLayout.CompactIdentityHeight,
-                OnFlag = v => compactInteractive.Value = v }],
-        };
+        }.Sticky(ArtistHeroLayout.CompactIdentityHeight, v => compactInteractive.Value = v);
         float heroWidth = _heroWidth.Value;
         bool colorWashesDisabled = svc.Settings.Get(WaveeSettings.DisableColorWashes);
         // Cover-keyed leaf: a late grading re-renders only the wash box, not this Body / magazine sections.
@@ -295,12 +293,10 @@ sealed partial class ArtistPage : Component
         // The feather's gate is `compactInteractive` — NOT a second signal. That flag is the sentinel's PinTop(56)
         // edge, and the sentinel sits at exactly the magazine's top, so it flips on precisely the frame the clip
         // engages. Reusing it means the feather costs no additional page re-render: this Render already reads it.
-        ScrollBindDsl BandClip() => new() { ClipTopAtViewport = ContextBand.ClipInset };
         Element magazine = new BoxEl
         {
             Key = "artist-under-band",
             Direction = 1,
-            ScrollBinds = [BandClip()],
             // The feather is measured off the VISIBLE boundary (the sticky ClipRect), not the element box — see
             // SceneRecorder's EdgeFade note — so it rides exactly on the cut. Mounted only while engaged: an
             // always-on top fade would feather the divider under the hero at rest.
@@ -312,7 +308,7 @@ sealed partial class ArtistPage : Component
                 new BoxEl { Height = 1f, Fill = Tok.StrokeDividerDefault, HitTestVisible = false },
                 new BoxEl { Direction = 0, Justify = FlexJustify.Center, Children = [inner] },
             ],
-        };
+        }.ClipBelow(ContextBand.ClipInset);
         return new BoxEl
         {
             ZStack = true,
@@ -321,9 +317,8 @@ sealed partial class ArtistPage : Component
                 new BoxEl
                 {
                     Key = "artist-wash-clip", Direction = 1, HitTestVisible = false,
-                    ScrollBinds = [BandClip()],
                     Children = [washLayer],
-                },
+                }.ClipBelow(ContextBand.ClipInset),
                 new BoxEl
                 {
                     Direction = 1,

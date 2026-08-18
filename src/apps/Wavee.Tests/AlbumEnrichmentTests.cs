@@ -220,6 +220,32 @@ public class AlbumEnrichmentMapperTests
         Assert.Equal("spotify:album:OTHER", more.Uri);
         Assert.Equal("Earlier", more.Name);
     }
+
+    [Fact]
+    public void AlbumFromUnion_MapsBilledArtistAvatars_IncludingDataWrapper()
+    {
+        var album = SpotifyExportMapper.AlbumFromUnion(Root("""
+        { "data": { "albumUnion": {
+            "uri": "spotify:album:MAIN", "name": "Main", "type": "ALBUM",
+            "date": { "isoString": "2021-05-01T00:00:00Z" },
+            "coverArt": { "sources": [ { "url": "https://cdn/main", "width": 640, "height": 640 } ] },
+            "artists": { "items": [
+              { "uri": "spotify:artist:LEAD", "profile": { "name": "Lead" },
+                "visuals": { "avatarImage": { "sources": [ { "url": "https://cdn/lead", "width": 160, "height": 160 } ] } } },
+              { "data": { "uri": "spotify:artist:FEAT", "profile": { "name": "Feat" },
+                "visuals": { "avatarImage": { "sources": [ { "url": "https://cdn/feat", "width": 160, "height": 160 } ] } } } }
+            ] },
+            "tracksV2": { "items": [] }
+        } } }
+        """));
+
+        Assert.NotNull(album);
+        Assert.Equal(2, album!.Artists.Count);
+        Assert.Equal("Feat", album.Artists[1].Name);
+        Assert.Equal(2, album.ArtistsDetailed!.Count);
+        Assert.Equal("https://cdn/lead", album.ArtistsDetailed[0].Image!.Url);
+        Assert.Equal("https://cdn/feat", album.ArtistsDetailed[1].Image!.Url);
+    }
 }
 
 public class ExtendedMetadataExtensionTests

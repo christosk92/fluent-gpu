@@ -7,7 +7,6 @@ using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Localization;
 using FluentGpu.Scene;
-using FluentGpu.Signals;
 using Wavee.Core;
 using static FluentGpu.Dsl.Ui;
 
@@ -34,12 +33,13 @@ static class HomeModules
     };
 
     /// <summary>The `home-section:` drill-in header. The affordance is GATED on the group naming something the section
-    /// page can actually open — a URI, or a TotalCount it can page — because that page reads the home document and a
-    /// group with neither would drill into an empty surface.</summary>
+    /// page can actually open — a URI, a TotalCount it can page, or cards already in hand — because that page reads the
+    /// home document and a group with none of those would drill into an empty surface.</summary>
     static Element ModuleHeader(HomeGroup group, string? subtitle, Element? tools, Action<HomeGroup>? openSection)
     {
         if (group.Title is not { Length: > 0 } title) return new BoxEl();
-        Action? open = openSection is null || (group.Uri is not { Length: > 0 } && group.TotalCount <= 0)
+        Action? open = openSection is null
+            || (group.Uri is not { Length: > 0 } && group.TotalCount <= 0 && group.Cards.Count == 0)
             ? null
             : () => openSection(group);
         return ModuleHeader(title, subtitle, tools, open);
@@ -107,20 +107,16 @@ static class HomeModules
         if (cards.Count == 0) return new BoxEl();
         var tracks = new TrackSize[Math.Max(1, columns)];
         for (int i = 0; i < tracks.Length; i++) tracks[i] = TrackSize.Star();
-        return Ui.Grid(tracks, colGap, rowGap, float.NaN, [.. cards]);
+        // Stretch is load-bearing: a star grid measured against infinite/hug width collapses its tracks to content,
+        // so a 1-column dial sits as a left-aligned list instead of filling the module (and the estimator, which
+        // assumed full-width wrapping, under-sizes the Home row and clips the tail).
+        return Ui.Grid(tracks, colGap, rowGap, float.NaN, [.. cards]) with { AlignSelf = FlexAlign.Stretch };
     }
 
     /// <summary>Two star tracks at explicit weights — the editorial `1.08fr / 1fr` and the even split. Same reason as
     /// <see cref="Grid"/>: a two-child flex row measures BOTH children at the full width.</summary>
     static Element TwoColumn(float leftWeight, float gap, Element left, Element right)
         => Ui.Grid([TrackSize.Star(leftWeight), TrackSize.Star(1f)], gap, gap, float.NaN, left, right);
-
-    /// <summary>The "Show all {n}" link, and only when there is something hidden to show. A dead control is worse than no
-    /// control: the prototype's links are non-functional mockups, so here the link EXPANDS the module in place — the same
-    /// behaviour as its one real instance, the feed's "Show more".</summary>
-    static Element? ShowAll(int total, int shown, Action onExpand)
-        => total <= shown ? null
-        : HyperlinkButton.Create(Strings.Home.ShowAllCount(total), onExpand, size: ControlSize.Small);
 
     // ── A2 · the weekly pair ───────────────────────────────────────────────────────────────────────────────────
     public static Element WeeklyPair(HomeGroup g, Func<HomeCard, Action> nav, Func<HomeCard, HomeCardChrome> chrome,
@@ -134,15 +130,13 @@ static class HomeModules
 
     // ── B · jump back in ───────────────────────────────────────────────────────────────────────────────────────
     public static Element Quick(HomeGroup g, Func<HomeCard, Action> nav, Func<HomeCard, Action> play,
-                                Func<HomeCard, HomeCardChrome> chrome, ShowAllState more,
-                                Action<HomeGroup>? openSection = null)
+                                Func<HomeCard, HomeCardChrome> chrome, Action<HomeGroup>? openSection = null)
         => Responsive.Of(width =>
         {
-            int shown = more.Expanded ? g.Cards.Count : Math.Min(g.Cards.Count, HomeModuleLayout.QuickShown);
+            int shown = Math.Min(g.Cards.Count, HomeModuleLayout.QuickShown);
             var cards = g.Cards.Take(shown).Select(c => Keyed(HomeCards.QuickTile(c, nav(c), play(c)), g.Kind, c.Uri, chrome(c))).ToArray();
             return Module(g, Strings.Home.MostOpenedOf(shown, g.Cards.Count),
-                ShowAll(g.Cards.Count, shown, more.Expand),
-                Grid(HomeModuleLayout.Columns(g.Kind, width), Spacing.M, Spacing.M, cards), openSection);
+                null, Grid(HomeModuleLayout.Columns(g.Kind, width), Spacing.M, Spacing.M, cards), openSection);
         }, fallback: HomeModuleLayout.FallbackWidth);
 
     // ── C · the recents rail ───────────────────────────────────────────────────────────────────────────────────
@@ -150,11 +144,11 @@ static class HomeModules
     /// every entity participates in the same chevron paging and 24-DIP edge fade as the other browse-y modules.
     ///
     /// <para><paramref name="openAll"/> is an <c>Action</c>, not the <c>Action&lt;HomeGroup&gt; openSection</c> every
-    /// other module takes, and that difference is the point: this shelf's "show all" opens the app's OWN Recents page
-    /// (<c>/playlist/v2/list/recents/page</c> — the whole grouped snapshot), not a <c>home-section:</c> drill-in built
-    /// from this group. There is no group to hand a callback, so it is not asked for one, and the affordance is armed
+    /// other module takes, and that difference is the point: this shelf's header drills into the app's OWN Recents page
+    /// (<c>/playlist/v2/list/recents/page</c> — the whole grouped snapshot), not a <c>home-section:</c> page built from
+    /// this group. There is no group to hand a callback, so it is not asked for one, and the affordance is armed
     /// UNCONDITIONALLY: the landing projection's Recents group carries a null Uri, and gating on that would hide a
-    /// destination whose availability the shelf's payload has nothing to do with.</para></summary>
+    /// destination whose availability the shelf's payload has nothing to do with. Chevron paging stays on the strip.</para></summary>
     public static Element Recents(HomeGroup g, Func<HomeCard, Action> nav, Func<HomeCard, string> kindLabel,
                                   Func<HomeCard, HomeCardChrome> chrome, Action? openAll = null)
     {
@@ -217,36 +211,34 @@ static class HomeModules
 
     // ── F · chip cards ─────────────────────────────────────────────────────────────────────────────────────────
     public static Element ChipCards(HomeGroup g, Func<HomeCard, Action> nav, Func<HomeCard, HomeCardChrome> chrome,
-                                    Action<string> onNavUri, ShowAllState more, Action<HomeGroup>? openSection = null)
+                                    Action<string> onNavUri, Action<HomeGroup>? openSection = null)
         => Responsive.Of(width =>
         {
-            int shown = more.Expanded ? g.Cards.Count : Math.Min(g.Cards.Count, HomeModuleLayout.ChipCardsShown);
+            int shown = Math.Min(g.Cards.Count, HomeModuleLayout.ChipCardsShown);
             var cards = g.Cards.Take(shown).Select(c => Keyed(HomeCards.ChipCard(c, nav(c), onNavUri), g.Kind, c.Uri, chrome(c))).ToArray();
             return Module(g, Strings.Home.MixesFromArtists(g.Cards.Count),
-                ShowAll(g.Cards.Count, shown, more.Expand),
-                Grid(HomeModuleLayout.Columns(g.Kind, width), Spacing.M, Spacing.M, cards), openSection);
+                null, Grid(HomeModuleLayout.Columns(g.Kind, width), Spacing.M, Spacing.M, cards), openSection);
         }, fallback: HomeModuleLayout.FallbackWidth);
 
     // ── G · the radio dial ─────────────────────────────────────────────────────────────────────────────────────
     /// <summary>Two columns with a COLUMN gap only — no row gap. Twenty station rows read as one dial that happens to be
     /// folded in half, which a row gap would break into ten separate pairs.</summary>
     public static Element Radio(HomeGroup g, Func<HomeCard, Action> nav, Func<HomeCard, Action> play,
-                                Func<HomeCard, HomeCardChrome> chrome, ShowAllState more,
-                                Action<HomeGroup>? openSection = null)
+                                Func<HomeCard, HomeCardChrome> chrome, Action<HomeGroup>? openSection = null)
         => Responsive.Of(width =>
         {
-            int shown = more.Expanded ? g.Cards.Count : Math.Min(g.Cards.Count, HomeModuleLayout.RadioShown);
+            int shown = Math.Min(g.Cards.Count, HomeModuleLayout.RadioShown);
             var cards = g.Cards.Take(shown).Select(c => Keyed(HomeCards.RadioRow(c, nav(c), play(c)), g.Kind, c.Uri, chrome(c))).ToArray();
+            int columns = HomeModuleLayout.Columns(g.Kind, width);
             return Module(g, Strings.Home.StationCount(g.Cards.Count),
-                ShowAll(g.Cards.Count, shown, more.Expand),
-                Grid(HomeModuleLayout.Columns(g.Kind, width), Spacing.XXL, 0f, cards), openSection);
+                null, Grid(columns, Spacing.XXL, 0f, cards) with { Key = "radio-grid:" + columns }, openSection);
         }, fallback: HomeModuleLayout.FallbackWidth);
 
     // ── H1 · up next (episodes) ────────────────────────────────────────────────────────────────────────────────
     public static Element UpNext(HomeGroup g, Func<HomeCard, Action> nav, Func<HomeCard, HomeCardChrome> chrome,
-                                 ShowAllState more, Action<HomeGroup>? openSection = null)
+                                 Action<HomeGroup>? openSection = null)
     {
-        int shown = more.Expanded ? g.Cards.Count : Math.Min(g.Cards.Count, HomeModuleLayout.QueueShown);
+        int shown = Math.Min(g.Cards.Count, HomeModuleLayout.QueueShown);
         long queued = 0;
         for (int i = 0; i < shown; i++) queued += g.Cards[i].Meta?.DurationMs ?? 0;
         var rows = new Element[shown];
@@ -256,22 +248,20 @@ static class HomeModules
             rows[i] = Keyed(HomeCards.QueueRow(c, nav(c), last: i == shown - 1), g.Kind, c.Uri, chrome(c));
         }
         return Module(g, Strings.Home.QueuedSuggestions(HomeCards.Duration(queued), g.Cards.Count),
-            ShowAll(g.Cards.Count, shown, more.Expand),
-            new BoxEl { Direction = 1, Gap = 0f, MinWidth = 0f, Children = rows }, openSection);
+            null, new BoxEl { Direction = 1, Gap = 0f, MinWidth = 0f, Children = rows }, openSection);
     }
 
     // ── H2 · audiobooks ───────────────────────────────────────────────────────────────────────────────────────
     public static Element Audiobooks(HomeGroup g, Func<HomeCard, Action> nav, Func<HomeCard, HomeCardChrome> chrome,
-                                     ShowAllState more, Action<HomeGroup>? openSection = null)
+                                     Action<HomeGroup>? openSection = null)
     {
-        int shown = more.Expanded ? g.Cards.Count : Math.Min(g.Cards.Count, HomeModuleLayout.BooksShown);
+        int shown = Math.Min(g.Cards.Count, HomeModuleLayout.BooksShown);
         var rows = g.Cards.Take(shown).Select(c => Keyed(HomeCards.BookRow(c, nav(c)), g.Kind, c.Uri, chrome(c))).ToArray();
         // A DELIBERATE 2, not the 12 every other module grid now uses: the audiobook shelf is a dense TABULAR stack
         // (the same family as the queue's Gap = 0 + divider list), where a 12-DIP gap would break six rows into six
         // cards. 2 is the spacing scale's own smallest rung, so it is on the grid rather than off it.
         return Module(g, Strings.Home.IncludedWithPremium(g.Cards.Count),
-            ShowAll(g.Cards.Count, shown, more.Expand),
-            new BoxEl { Direction = 1, Gap = Spacing.XXS, MinWidth = 0f, Children = rows }, openSection);
+            null, new BoxEl { Direction = 1, Gap = Spacing.XXS, MinWidth = 0f, Children = rows }, openSection);
     }
 
     /// <summary>The `split even` pairing: episodes and audiobooks SIDE BY SIDE at width, stacked below ~1020px. Two
@@ -294,14 +284,13 @@ static class HomeModules
     /// something to say; the column keeps the module from being a single lonely hero.</summary>
     public static Element Editorial(HomeGroup g, Func<HomeCard, Action> nav, Func<HomeCard, Action> play,
                                     Func<HomeCard, string> meta, Func<HomeCard, HomeCardChrome> chrome,
-                                    Action<string> onNavUri, ShowAllState more,
-                                    Action<HomeGroup>? openSection = null)
+                                    Action<string> onNavUri, Action<HomeGroup>? openSection = null)
         => Responsive.Of(width =>
         {
             var feature = g.Cards[0];
             // The prototype shows one feature and three companions. Everything editorial that home returns lands in this
-            // bucket though — 18 cards on a real payload — so the rest has to be REACHABLE, not quietly dropped.
-            int companions = more.Expanded ? g.Cards.Count - 1 : HomeModuleLayout.EditorialCompanions;
+            // bucket though — 18 cards on a real payload — so the rest is reachable through the header drill-in.
+            int companions = HomeModuleLayout.EditorialCompanions;
             var rest = g.Cards.Skip(1).Take(companions).ToList();
             Element left = Keyed(HomeCards.FeatureCard(feature, meta(feature), nav(feature), play(feature), onNavUri), g.Kind, feature.Uri, chrome(feature));
             Element right = new BoxEl
@@ -314,8 +303,7 @@ static class HomeModules
                 // fighting the column beside it.
                 ? TwoColumn(1.08f, Spacing.L, left, right)
                 : new BoxEl { Direction = 1, Gap = Spacing.L, MinWidth = 0f, Children = rest.Count > 0 ? [left, right] : [left] };
-            return Module(g, Loc.Get(Strings.Home.EditorsPicksSub),
-                ShowAll(g.Cards.Count, 1 + rest.Count, more.Expand), content, openSection);
+            return Module(g, Loc.Get(Strings.Home.EditorsPicksSub), null, content, openSection);
         }, fallback: HomeModuleLayout.FallbackWidth);
 
     /// <summary>A source-owned show shelf. Podcasts are destinations, so the card and module title drill rather than
@@ -393,7 +381,8 @@ static class HomeModules
     /// <summary>The landing projection's unique baseline recommendations in one paged shelf. Source reasons remain in
     /// the section directory rather than becoming one chevron-bearing header per server section.</summary>
     public static Element Feed(HomeGroup group, Func<HomeCard, Action> nav, Func<HomeCard, Action> play,
-                               Func<HomeCard, HomeCardChrome> chrome, Action<string> onNavUri)
+                               Func<HomeCard, HomeCardChrome> chrome, Action<string> onNavUri,
+                               Action<HomeGroup>? openSection = null)
     {
         return PagedShelf.Create(group.Cards.Count,
             (i, cardW) =>
@@ -405,8 +394,7 @@ static class HomeModules
                     onNavUri: onNavUri, menu: ch.Menu, drag: ch.Drag);
             },
             cardHeight: HomeModuleLayout.ShelfCardHeight,
-            header: Surfaces.SectionHeader(HomeModuleCopy.Titles.BecauseYouListened,
-                Strings.Home.RecommendationsWithReason(group.Cards.Count)),
+            header: ModuleHeader(group, Strings.Home.RecommendationsWithReason(group.Cards.Count), null, openSection),
             minCardW: HomeModuleLayout.ShelfCardMin, maxCardW: HomeModuleLayout.ShelfCardMax,
             gap: Spacing.M, edgeFade: HomeModuleLayout.ShelfEdgeFade,
             keyOf: i => HomeModuleLayout.SourceCardKey(group, group.Cards[i]))
@@ -419,15 +407,6 @@ static class HomeModules
 /// properties of the entity rather than of the skin, so they are applied once by <c>Keyed</c> instead of being threaded
 /// through every card signature.</summary>
 readonly record struct HomeCardChrome(DragSource? Drag, MenuAttach? Menu);
-
-/// <summary>A module's "Show all" toggle, hoisted by the page so it survives row recycling. Passed by reference rather
-/// than owned by the shell because the shells are pure functions — a `UseState` inside one would be re-created every time
-/// the virtual list realized the row.</summary>
-sealed class ShowAllState(Signal<bool> flag)
-{
-    public bool Expanded => flag.Value;                 // read subscribes the page, which is what re-renders the module
-    public void Expand() => flag.Value = true;
-}
 
 // ── One source of truth for module geometry ──────────────────────────────────────────────────────────────────────────
 // Both the RENDERER (HomeModules) and the ESTIMATOR (HomeFeedVirtualLayout) read these. Keeping them in one place is what
@@ -458,7 +437,7 @@ static class HomeModuleLayout
     public const float SectionCardHeight = 112f;
     public const float SectionArt = 80f;
 
-    // Display counts — what the prototype shows before "Show all".
+    // Display counts — the landing preview. The rest of the section lives on the drill-in page.
     public const int QuickShown = 8;
     public const int ChipCardsShown = 6;
     public const int RadioShown = 12;
@@ -469,6 +448,20 @@ static class HomeModuleLayout
 
     public static float Gap(float width) => width >= 1080f ? ModuleGap : ModuleGapNarrow;
 
+    /// <summary>Minimum width of one radio-dial column: 32 art + row pad + gap to text + a BodyStrong run that can
+    /// still read as a station name (three thumb rungs). Same arithmetic the estimator uses so a wrap cannot desync
+    /// the Home row's measured height.</summary>
+    public static float RadioColMin =>
+        WaveeSize.Thumb32 + 2f * Spacing.S + Spacing.M + 3f * WaveeSize.Thumb64;
+
+    /// <summary>1 or 2 columns for the radio dial at <paramref name="width"/>. Floor-fit, then cap at 2.</summary>
+    public static int RadioColumns(float width)
+    {
+        float gap = Spacing.XXL;
+        int n = (int)MathF.Floor((MathF.Max(0f, width) + gap) / (RadioColMin + gap));
+        return Math.Clamp(n, 1, 2);
+    }
+
     /// <summary>Column count per module at a given row width — the prototype's container queries, verbatim.</summary>
     public static int Columns(HomeGroupKind kind, float width) => kind switch
     {
@@ -478,8 +471,8 @@ static class HomeModuleLayout
         HomeGroupKind.QuickGrid => width > 1120f ? 4 : width > 780f ? 3 : 2,
         // `.chipcards` repeat(3) / 2 ≤1020 / 1 ≤680.
         HomeGroupKind.ChipCards => width > 1020f ? 3 : width > 680f ? 2 : 1,
-        // `.dial` 1fr 1fr / 1 ≤900.
-        HomeGroupKind.RadioDial => width > 900f ? 2 : 1,
+        // Two 1fr tracks when each would be at least a station row; never 3 — the prototype dial is a fold, not a grid.
+        HomeGroupKind.RadioDial => RadioColumns(width),
         // `.weekly` 1fr 1fr / 1 ≤760.
         HomeGroupKind.WeeklyPair => width > 760f ? 2 : 1,
         _ => 1,
@@ -532,7 +525,7 @@ static class HomeModuleLayout
         _ => 0f,
     };
 
-    /// <summary>Display count per module before "Show all" — the estimator must size what is SHOWN, not what is held.</summary>
+    /// <summary>Display count per module on the landing — the estimator must size what is SHOWN, not what the drill-in holds.</summary>
     public static int Shown(HomeGroupKind kind, int count) => kind switch
     {
         HomeGroupKind.Hero => Math.Min(count, 1),

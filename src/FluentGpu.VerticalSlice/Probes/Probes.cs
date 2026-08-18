@@ -2458,7 +2458,7 @@ sealed class ControlsProbe : Component
                 Slider.Create(sv, x => SliderVal = x, length: 200f, thickness: 24f),
                 ToggleButton.Create("Shuffle", on),
                 IconButton.Create("▶", () => IconClicks++),
-                ScrollBar.Create(0.25f, sp, x => ScrollPos = x, 200f),
+                ScrollBar.Create(0.25f, sp, x => { sp.Value = x; ScrollPos = x; }, 200f),
             ],
         };
     }
@@ -3533,6 +3533,40 @@ sealed class W0fAsbProbe : Component
                 onSuggestionChosen: s => { Chosen.Add(s); Order.Add("C:" + s); },
                 onQuerySubmitted: s => { Submitted.Add(s); Order.Add("Q:" + s); },
                 updateTextOnSelect: UpdateTextOnSelect),
+        });
+    }
+}
+
+sealed class W0fAsbGhostProbe : Component
+{
+    public Signal<string>? Query;
+    public Signal<string>? Completion;
+    public bool TwoFields;
+    public readonly List<(string Text, TextChangeReason Reason)> Changes = new();
+    public readonly List<string> Submitted = new();
+    public override Element Render()
+    {
+        var q = UseSignal(""); Query = q;
+        var c = UseSignal(""); Completion = c;
+        var q2 = UseSignal("");
+        Element asb = AutoSuggestBox.Create(
+            new[] { "Cascadia Code", "Calendar", "Calculator" }, "Search", 260f, q, debounceMs: 0f,
+            textChanged: (s, r) => Changes.Add((s, r)),
+            onQuerySubmitted: s => Submitted.Add(s),
+            completion: c);
+        if (!TwoFields)
+            return Embed.Comp(() => new OverlayHost { Child = asb });
+        return Embed.Comp(() => new OverlayHost
+        {
+            Child = new BoxEl
+            {
+                Direction = 1, Gap = 8f,
+                Children =
+                [
+                    asb,
+                    AutoSuggestBox.Create(Array.Empty<string>(), "B", 260f, q2, debounceMs: 0f, queryIcon: null),
+                ],
+            },
         });
     }
 }

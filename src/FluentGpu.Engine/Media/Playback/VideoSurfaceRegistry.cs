@@ -48,6 +48,12 @@ public sealed class VideoSurfaceRegistry
 
         // single-writer pump ownership (UI thread): the ONE owner whose registered pump drives this slot.
         public object? PumpOwner;
+
+        // ── geometry-change auto-pump (UI thread; see RequestGeometryPumps) ──────────────────────────────────────────
+        // The scene node whose ABSOLUTE rect defines where this surface should composite, plus the rect it was last
+        // pumped at. Held as opaque data — the registry never interprets them; RequestGeometryPumps does the compare.
+        public NodeHandle GeomNode;
+        public RectF GeomRect;
     }
 
     private readonly Entry[] _entries = new Entry[MaxSurfaces];
@@ -148,6 +154,23 @@ public sealed class VideoSurfaceRegistry
     /// <summary>True when at least one surface has active presentation state. Retained for diagnostics; it does not
     /// control host wake cadence.</summary>
     public bool HasActivePresentation => _presentingCount > 0;
+
+    /// <summary>True when at least one surface is live on screen — created, bound to a handle, and visible. The host
+    /// pushes this to the window (<c>IWindow.SetHasLiveVideo</c>) so a composited window carrying video can opt out of
+    /// the modal edge-resize paint defer, which would otherwise leave the video child at its pre-resize geometry while
+    /// the frame moves under it. O(MaxSurfaces), zero-alloc.</summary>
+    public bool HasLiveSurface
+    {
+        get
+        {
+            for (int i = 0; i < MaxSurfaces; i++)
+            {
+                ref Entry e = ref _entries[i];
+                if (e.InUse && !e.ReleasePending && e.Visible && !e.SurfaceId.IsNone && e.BoundHandle != 0) return true;
+            }
+            return false;
+        }
+    }
 
     /// <summary>Bind the DirectComposition surface handle produced by a video source (the single DRM attach point).
     /// Value-gated: re-binding the same handle is a no-op.</summary>
@@ -254,6 +277,46 @@ public sealed class VideoSurfaceRegistry
 
     /// <summary>True when at least one coalesced video pump must run on the next host frame. O(1), zero-alloc.</summary>
     public bool HasPendingPumps => _pendingPumpCount > 0;
+
+    /// <summary>Declare the scene node whose ABSOLUTE rect this surface should follow, so a move that changes only a
+    /// composited transform still re-places the video child. Pass <see cref="NodeHandle.Null"/> to stop tracking.
+    /// <para>Why this exists: a surface's on-screen rect can change with NO layout change at all — a compositor-only
+    /// <c>Transform</c> translation (Wavee's draggable mini-player), a page transition, a FLIP projection. Those move
+    /// the punched hole (it is painted through the node's transform) but fire no bounds-changed edge, so nothing
+    /// requested a pump and the DirectComposition child stayed at its last-pumped offset until some unrelated event
+    /// (a native state change, a transport command) happened to request one. That is the video visibly trailing the
+    /// card during a drag.</para></summary>
+    public void SetGeometryNode(int token, NodeHandle node)
+    {
+        int ti = token - 1;
+        if ((uint)ti >= MaxSurfaces || !_entries[ti].InUse) return;
+        ref Entry e = ref _entries[ti];
+        if (e.GeomNode == node) return;
+        e.GeomNode = node;
+        e.GeomRect = default;   // force the next compare to fire, so a re-pointed node re-places immediately
+    }
+
+    /// <summary>Request a pump for every tracked surface whose absolute rect MOVED since its last pump. Called by the
+    /// host once per frame at phase 7.2, immediately before <see cref="PumpPending"/>, so the placement it produces is
+    /// drained on this same frame turn.
+    /// <para>Deliberately NOT a wake reason: this only observes a frame that is already being produced (a drag, an
+    /// animation, a relayout), and it requests nothing when nothing moved — so a playing video still does not turn
+    /// every host frame into a repaint. Zero managed allocation: a fixed-array scan over at most
+    /// <c>MaxSurfaces</c> slots with struct-only math.</para></summary>
+    public void RequestGeometryPumps(FluentGpu.Scene.SceneStore scene)
+    {
+        if (scene is null) return;
+        for (int i = 0; i < MaxSurfaces; i++)
+        {
+            ref Entry e = ref _entries[i];
+            if (!e.InUse || e.ReleasePending || !e.Visible || e.GeomNode.IsNull) continue;
+            if (!scene.IsLive(e.GeomNode)) continue;
+            RectF now = scene.AbsoluteRect(e.GeomNode);
+            if (now == e.GeomRect) continue;
+            e.GeomRect = now;
+            RequestPump(i + 1);
+        }
+    }
 
     /// <summary>Invoke each requested slot's current owner once. The host calls this on the UI thread after layout is
     /// settled and before <see cref="Drain"/>. Clearing the pending bit before invoking allows a re-entrant native event
@@ -440,6 +503,10 @@ public readonly struct VideoBinding
     public void SetContentSize(SizeI px) { if (_registry is { } r) r.SetContentSize(Token, (uint)Math.Max(0, px.Width), (uint)Math.Max(0, px.Height)); }
     /// <summary>Show/hide the surface.</summary>
     public void SetVisible(bool visible) { if (_registry is { } r) r.SetVisible(Token, visible); }
+    /// <summary>Declare the scene node whose absolute rect this surface follows, so a compositor-only move (a drag, a
+    /// page transition, a FLIP projection) re-places the video child even though it changes no layout bounds.
+    /// See <see cref="VideoSurfaceRegistry.SetGeometryNode"/>.</summary>
+    public void SetGeometryNode(NodeHandle node) { if (_registry is { } r) r.SetGeometryNode(Token, node); }
     /// <summary>Record whether a media player is actively presenting new frames into this surface (playing / ramping to
     /// play). Diagnostic only; native video presentation does not force the host's frame cadence.</summary>
     public void SetPresenting(bool presenting) { if (_registry is { } r) r.SetPresenting(Token, presenting); }

@@ -19,6 +19,21 @@ namespace Wavee.Features.Video;
 /// <see cref="IDetachedVideoWindow.OnClosed"/>, which reports the close to the placement model — the model, not this
 /// component, then decides that "closed the pop-out" means "keep watching in the mini player" rather than "off".
 /// </summary>
+/// <summary>Bumped whenever a detached-video-window PREFERENCE is written, so live surfaces re-read it. A
+/// <c>SettingKey</c> is a registry entry with nothing to subscribe to, so the epoch is the subscription — the same
+/// shape as <c>LyricsPrefs.Epoch</c>.</summary>
+static class VideoWindowPrefs
+{
+    public static readonly FluentGpu.Signals.Signal<int> Epoch = new(0);
+
+    /// <summary>Write the always-on-top preference and notify every live reader.</summary>
+    public static void SetAlwaysOnTop(IAppSettings settings, bool onTop)
+    {
+        settings.Set(WaveeSettings.VideoWindowAlwaysOnTop, onTop);
+        Epoch.Value++;
+    }
+}
+
 sealed class VideoPlacementHost : Component
 {
     const SurfacePlacement Owned = SurfacePlacement.Detached;   // the ONE placement this owner is responsible for
@@ -57,9 +72,10 @@ sealed class VideoPlacementHost : Component
                         out float rx, out float ry, out float rw, out float rh))
                     restored = new RectF(rx, ry, rw, rh);
 
+                bool onTop = Settings?.Get(WaveeSettings.VideoWindowAlwaysOnTop) ?? true;
                 var win = hooks?.OpenDetachedWindow?.Invoke(new DetachedWindowRequest(
                     WindowTitle(b), new Size2(480, 270),
-                    new PopOutVideoWindow { Source = b.PopOutVideoSource, Player = b.VideoPlayer }, AlwaysOnTop: true,
+                    new PopOutVideoWindow { Source = b.PopOutVideoSource, Player = b.VideoPlayer }, AlwaysOnTop: onTop,
                     InitialBoundsPx: restored));
                 handle.Value = win;
                 if (win is null)
@@ -104,6 +120,17 @@ sealed class VideoPlacementHost : Component
         {
             var title = WindowTitleOf(b.CurrentTrack.Value);
             if (handle.Value is { IsOpen: true } live) live.SetTitle(title);
+        });
+
+        // Always-on-top follows the preference LIVE, not just at open: a user who turns it off while the window is up
+        // means "get out of the way now", and making them close and reopen the window to apply it would be the same
+        // frozen-at-open staleness the title effect above exists to avoid. Keyed on the prefs epoch (a SettingKey has
+        // nothing to subscribe to on its own — the same idiom LyricsPrefs uses).
+        UseSignalEffect(() =>
+        {
+            _ = VideoWindowPrefs.Epoch.Value;   // subscribe → re-apply when the toggle is written
+            if (Settings is not { } st) return;
+            if (handle.Value is { IsOpen: true } live) live.SetTopmost(st.Get(WaveeSettings.VideoWindowAlwaysOnTop));
         });
 
         // Unmount cleanup: the shell can swap this component out (e.g. logout) while the window is still open.

@@ -103,6 +103,10 @@ public class PlaybackControllerHostSwapTests
         /// <summary>Whether the video source resolve succeeds (false = the account isn't served a playable video).</summary>
         public bool VideoSourceAvailable = true;
         public int LoadVideoCalls;
+        /// <summary>The start position the LAST video load was asked to begin at. The position carried across an
+        /// audio→video switch rides the LOAD (not a follow-up Seek) because the real host has no player yet at that
+        /// moment — so this, not a "video:seek:N" log entry, is where the carry is observable.</summary>
+        public long LastVideoStartAtMs = -1;
 
         public Harness(bool wireHooks = true, bool injectVideoHost = true, bool wireLoadHook = true)
         {
@@ -114,9 +118,10 @@ public class PlaybackControllerHostSwapTests
             if (!wireHooks) return;
             Controller.ShouldPlayAsVideo = _ => VideoIntent;
             if (!wireLoadHook) return;
-            Controller.LoadCurrentVideoAsync = (track, ct) =>
+            Controller.LoadCurrentVideoAsync = (track, startAtMs, ct) =>
             {
                 LoadVideoCalls++;
+                LastVideoStartAtMs = startAtMs;
                 if (!VideoSourceAvailable) return Task.FromResult(false);
                 Video?.LoadVideo(track.Uri);
                 return Task.FromResult(true);
@@ -407,5 +412,79 @@ public class PlaybackControllerHostSwapTests
 
         Assert.Equal(PlayableKind.Audio, h.Controller.CurrentMediaKind);
         Assert.Equal(videoCalls, h.Video.Calls.Count);
+    }
+
+    // ── position carry across the kind boundary (both directions) ─────────────────────────────────────────────────────
+
+    /// <summary>audio→video carries the audio position INTO THE LOAD. It must not arrive as a follow-up Seek: at the
+    /// swap the real host has not built its player yet (teardown→build→open is serialized through its load pump), so a
+    /// seek at that instant is dropped — which is why this switch used to restart every video at 0.</summary>
+    [Fact]
+    public async Task AudioToVideo_CarriesPositionIntoTheLoad()
+    {
+        using var h = new Harness();
+        await h.Controller.PlayAsync("spotify:playlist:ctx");
+        h.Audio.PositionMs = 80_000;   // 1:20 into the song
+
+        h.VideoIntent = true;
+        await h.Controller.RefreshCurrentMediaKindAsync();
+
+        Assert.Equal(PlayableKind.Video, h.Controller.CurrentMediaKind);
+        Assert.Equal(80_000, h.LastVideoStartAtMs);
+        AssertNeverTwoHostsPlaying(h.Log);
+    }
+
+    /// <summary>video→audio restores the audio session at the video's position. The audio host loads synchronously, so
+    /// here the carry IS observable as a seek on the incoming host.</summary>
+    [Fact]
+    public async Task VideoToAudio_CarriesPositionBack()
+    {
+        using var h = new Harness();
+        h.VideoIntent = true;
+        await h.Controller.PlayAsync("spotify:playlist:ctx");
+        Assert.Equal(PlayableKind.Video, h.Controller.CurrentMediaKind);
+        h.Video!.PositionMs = 45_000;   // 0:45 into the video edit
+
+        h.VideoIntent = false;
+        await h.Controller.RefreshCurrentMediaKindAsync();
+
+        Assert.Equal(PlayableKind.Audio, h.Controller.CurrentMediaKind);
+        Assert.Contains("audio:seek:45000", h.Log);
+        AssertNeverTwoHostsPlaying(h.Log);
+    }
+
+    /// <summary>A forced same-kind video reload (the user attached/replaced/removed a local override mid-song) keeps the
+    /// place too — the reload is not a restart.</summary>
+    [Fact]
+    public async Task ForcedSameKindVideoReload_CarriesPosition()
+    {
+        using var h = new Harness();
+        h.VideoIntent = true;
+        await h.Controller.PlayAsync("spotify:playlist:ctx");
+        h.Video!.PositionMs = 30_000;
+        h.LastVideoStartAtMs = -1;
+
+        await h.Controller.RefreshCurrentMediaKindAsync(forceReloadIfVideo: true);
+
+        Assert.Equal(PlayableKind.Video, h.Controller.CurrentMediaKind);
+        Assert.Equal(30_000, h.LastVideoStartAtMs);
+    }
+
+    /// <summary>Heading to AUDIO the catalog length is known, so an overrunning carry is clamped before the load rather
+    /// than seeking past the end of the song.</summary>
+    [Fact]
+    public async Task VideoToAudio_ClampsCarryToCatalogDuration()
+    {
+        using var h = new Harness();
+        h.VideoIntent = true;
+        await h.Controller.PlayAsync("spotify:playlist:ctx");
+        long catalogMs = h.Projection.DurationMs;
+        Assert.True(catalogMs > 0, "the stub track must carry a catalog duration for this test to mean anything");
+        h.Video!.PositionMs = catalogMs + 60_000;   // the video edit ran long past the song
+
+        h.VideoIntent = false;
+        await h.Controller.RefreshCurrentMediaKindAsync();
+
+        Assert.Contains("audio:seek:" + catalogMs, h.Log);
     }
 }

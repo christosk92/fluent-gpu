@@ -30,6 +30,10 @@ static class Program
     [STAThread]
     static void Main(string[] args)
     {
+        // Factory-reset wipe MUST run before settings / logs / library.db open. The previous process only armed a
+        // marker (files were still locked); this process is a clean first launch afterwards.
+        FactoryReset.ApplyIfPending();
+
         // CLI flags below print to the console; a WinExe has none on a bare terminal launch, so attach the parent's first
         // (otherwise a --spotify-* run — incl. the device-code prompt — runs invisibly and looks "stuck").
         if (args.Length > 0 && OperatingSystem.IsWindows()) AttachParentConsole();

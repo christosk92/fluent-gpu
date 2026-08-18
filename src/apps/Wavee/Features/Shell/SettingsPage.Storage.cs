@@ -401,7 +401,31 @@ sealed partial class SettingsPage
                     svc?.LibraryStore.ShedDetails(keep: 16);
                     Toast.Show(Loc.Get(Strings.Settings.Storage.DetailsReleased), new ToastOptions { Severity = InfoBarSeverity.Success });
                     Bump();
-                }), Icons.List));
+                }), Icons.List),
+            SettingsSectionHeader(Loc.Get(Strings.Settings.Storage.FactoryReset), Icons.Delete,
+                Loc.Get(Strings.Settings.Storage.FactoryResetSub)),
+            SettingsRow(Loc.Get(Strings.Settings.Storage.FactoryReset), Loc.Get(Strings.Settings.Storage.FactoryResetRowSub),
+                Button.Standard(Loc.Get(Strings.Settings.Storage.FactoryResetAction), () =>
+                    ConfirmThen(Loc.Get(Strings.Settings.Storage.FactoryResetConfirmTitle),
+                        Loc.Get(Strings.Settings.Storage.FactoryResetConfirmBody),
+                        Loc.Get(Strings.Settings.Storage.FactoryResetAction),
+                        () => RequestFactoryReset(svc))), Icons.Delete));
+    }
+
+    static void RequestFactoryReset(Services? svc)
+    {
+        try { Wavee.SpotifyLive.SpotifyLiveLogin.ClearStoredCredential(); }
+        catch { }
+
+        string? extra = null;
+        try
+        {
+            string custom = svc?.Settings.Get(WaveeSettings.AudioBodyCacheBasePath) ?? "";
+            if (custom.Length > 0) extra = AudioBodyDiskCache.ResolveDirectory(custom);
+        }
+        catch { }
+
+        FactoryReset.RequestAndRelaunch(extra is null ? null : [extra]);
     }
 
     Element StorageUsageBar(StorageSnapshot s)

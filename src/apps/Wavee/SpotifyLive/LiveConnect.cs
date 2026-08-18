@@ -214,7 +214,10 @@ public sealed class LiveConnect : IDisposable
         // 2. The async source handoff. Reuses the bridge's resolve path (same resolver, same publish onto PopOutVideoSource so
         //    the surfaces key their content on the very source the host plays). Returns FALSE on "no playable video", which is
         //    the controller's signal to fall back to audio for this playable instead of leaving the user in silence.
-        Controller.LoadCurrentVideoAsync = async (track, ct) =>
+        //    startAtMs carries a position across an audio→video switch. It rides the LOAD rather than a follow-up seek
+        //    because the video player does not exist yet at the moment of the swap (the host serializes teardown→build→open),
+        //    so a bare seek would be dropped — see VideoLoadRequest.
+        Controller.LoadCurrentVideoAsync = async (track, startAtMs, ct) =>
         {
             var src = await bridge.ResolveVideoSourceForPlaybackAsync(track.Uri, ct).ConfigureAwait(false);
             if (src is null)
@@ -222,7 +225,7 @@ public sealed class LiveConnect : IDisposable
                 _playbackLog.Info($"no playable video source resolved for {track.Uri} - the controller will play it as audio");
                 return false;
             }
-            _videoHost.LoadVideo(src);   // the HOST builds/owns the player and raises PlayerChanged (relayed below)
+            _videoHost.LoadVideo(src, startAtMs);   // the HOST builds/owns the player and raises PlayerChanged (relayed below)
             return true;
         };
 
@@ -249,17 +252,21 @@ public sealed class LiveConnect : IDisposable
         //    separately: only an explicit user media intent may drop the remote playback ids (see the controller's remarks).
         bridge.RequestMediaKindRefresh = (forced, clearConnect) => _ = RefreshMediaKindAsync(forced, clearConnect);
 
-        // 5. MP4-AUTHORITATIVE DURATION. A user-attached local video is a different edit with its own length; the moment the
-        //    media engine knows it, it becomes the projection's truth for that playable (seek bar + the PutState duration
-        //    follow automatically). Scoped to `local:video:` keys ONLY — a Spotify music video keeps publishing the catalog
-        //    duration byte-for-byte as before.
+        // 5. ENGINE-AUTHORITATIVE DURATION, for EVERY video source. Whatever is playing is a different edit from the audio
+        //    track with its own length — a user-attached mp4, a Canvas loop, and a Spotify music video alike (a music video
+        //    routinely runs longer than the song: intros, outros, alternate arrangements). The moment the media engine knows
+        //    the real length it becomes the projection's truth for that playable, so the seek bar and the remaining-time
+        //    readout stop mis-scaling against the catalog duration. Dropped again when video stops being the current media
+        //    (PlaybackController.SwitchHost), so audio goes straight back to the catalog length.
+        //    This used to be scoped to `local:video:` keys only, which is precisely why a music video showed the song's length.
+        //    NoteDuration stays local-only: it persists a fact about a user's attached FILE, not about the now-playing edit.
         _onVideoDurationKnown = (key, ms) =>
         {
-            if (!key.StartsWith(Wavee.Backend.VideoOverride.SourceKeyPrefix, StringComparison.Ordinal)) return;
             if (Projection.CurrentTrack?.Uri is not { Length: > 0 } uri) return;
             Projection.SetDurationOverride(uri, ms);
-            overrides?.NoteDuration(uri, ms);
-            _playbackLog.Info($"local video duration adopted for {uri}: {ms} ms");
+            if (key.StartsWith(Wavee.Backend.VideoOverride.SourceKeyPrefix, StringComparison.Ordinal))
+                overrides?.NoteDuration(uri, ms);
+            _playbackLog.Info($"video duration adopted for {uri}: {ms} ms (source {key})");
         };
         _videoHost.DurationKnown += _onVideoDurationKnown;
 

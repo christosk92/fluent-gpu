@@ -125,7 +125,7 @@ sealed class HomeSectionPage : Component
         Element Body(HomeSection current) => new BoxEl
         {
             Direction = 1, Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f,
-            Padding = new Edges4(Spacing.PageWide, Spacing.XXL, Spacing.PageWide, PlayerDock.Reserve + Spacing.L),
+            Padding = new Edges4(Spacing.PageWide, Spacing.XXL, Spacing.PageWide, Spacing.L),
             Gap = Spacing.L,
             Children =
             [
@@ -135,22 +135,41 @@ sealed class HomeSectionPage : Component
                 Header(current, loadingMore.Value,
                     canLoadMore: CanPage(current) && !exhausted.Value && HomeSectionPaging.HasMore(current, cursor.Value),
                     loadMore: () => LoadMore(current)),
-                // grow:1 is LOAD-BEARING, not decoration. ResponsiveBox renders `BoxEl { Direction = 1, Grow = grow }`
-                // and grow defaults to 0 — which in this COLUMN parent sizes it to its CONTENT. Its content is a
-                // VirtualListEl, whose natural height is 0 because a virtualized scroller expects to be GIVEN a height,
-                // so the grid's own Grow=1 was being measured against a zero-height wrapper and the section rendered
-                // header-only with an empty body. Every other Responsive.Of caller wraps something content-sized (a
-                // hero, a card), which is why this is the only site that needs it.
-                Responsive.Of(width => Grid(current, width, Open, svc, acts, overlay), fallback: 1100f, grow: 1f),
+                // Recents' list slot: Grow=1 + MinHeight=0 in a COLUMN whose parent has a definite height. Without
+                // this the Responsive wrapper (and the Virtual.Grid inside it) measure as content-sized; a virtual
+                // viewport's natural height is 0, so the grid is given a stub cross-size, Fill/Grid item rects come
+                // out shorter than the square covers, and ClipToBounds shears them while the page box still fills
+                // the pane (empty mica down to the player).
+                new BoxEl
+                {
+                    Direction = 1, Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f,
+                    Children =
+                    [
+                        // grow:1 is LOAD-BEARING. ResponsiveBox defaults grow to 0, which in this COLUMN sizes it to
+                        // content. The grid must inherit the slot height above, not hug a zero-height viewport.
+                        Responsive.Of(width => Grid(current, width, Open, svc, acts, overlay), fallback: 1100f, grow: 1f),
+                    ],
+                },
             ],
         };
 
-        return Skel.Region(section,
-            reveal: SkelReveal.StaggerRows,
-            isEmpty: s => s.Cards.Count == 0 && s.UnsupportedCount == 0,
-            onEmpty: () => new BoxEl { Grow = 1f, Children = [EmptyState.Default()] },
-            onFailed: () => new BoxEl { Grow = 1f, Children = [ErrorState.Build(section.Error)] },
-            content: Body);
+        // ComponentEl has no layout props. Recents puts Grow=1 / MinHeight=0 on the RENDERED root so the host pane's
+        // height actually reaches Body. smoothResize:false: easing 0 → N rows of a virtual grid clips the covers into
+        // a strip (SearchPage's facet-body comment — same shape).
+        return new BoxEl
+        {
+            Direction = 1, Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f,
+            Children =
+            [
+                Skel.Region(section,
+                    reveal: SkelReveal.StaggerRows,
+                    smoothResize: false,
+                    isEmpty: s => s.Cards.Count == 0 && s.UnsupportedCount == 0,
+                    onEmpty: () => new BoxEl { Grow = 1f, MinHeight = 0f, Children = [EmptyState.Default()] },
+                    onFailed: () => new BoxEl { Grow = 1f, MinHeight = 0f, Children = [ErrorState.Build(section.Error)] },
+                    content: Body),
+            ],
+        };
     }
 
     /// <summary>A section is pageable only when it names a real server resource: a client-minted
@@ -237,7 +256,12 @@ sealed class HomeSectionPage : Component
             HomeModuleLayout.ShelfCardMin, HomeModuleLayout.ShelfCardMax, GridGap);
         columns = Math.Max(1, columns);
         int tier = columns;
-        return Virtual.Grid(section.Cards.Count, columns, HomeModuleLayout.ShelfCardHeight(cardW), GridGap,
+        // AspectGrid derives row height from the grid's LIVE cross size (cellW × 1 + shelf chrome). A separately
+        // fitted cardW for Virtual.Grid's itemHeight was the max-height clip: scrollbar gutter / first-frame width
+        // made item rects shorter than the square covers, and the viewport sheared them.
+        float chrome = HomeModuleLayout.ShelfCardHeight(0f);
+        return Virtual.Custom(section.Cards.Count,
+            new AspectGridVirtualLayout(columns, 1f, chrome, GridGap),
             i =>
             {
                 var card = section.Cards[i];
@@ -251,7 +275,7 @@ sealed class HomeSectionPage : Component
                         card.Uri, () => open(card), () => { if (svc is not null) _ = svc.Player.PlayAsync(card.Uri, 0); },
                         cardW, circular: card.Kind == HomeCardKind.Artist, menu: menu, drag: drag) with
                     { Key = "home-section-card:" + tier + ":" + card.Uri };
-                return new BoxEl { Direction = 1, Width = cardW, MinWidth = 0f, Children = [media] };
+                return new BoxEl { Direction = 1, Grow = 1f, MinWidth = 0f, Children = [media] };
             },
             keyOf: i => section.Uri + "\u001F" + section.Cards[i].Uri,
             overscan: 2) with { MinHeight = 0f };

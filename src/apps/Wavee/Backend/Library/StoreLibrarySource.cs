@@ -359,6 +359,13 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
         catch { return SearchSuggestions.Empty; }
     }
 
+    public async Task<IReadOnlyList<SearchTopHit>> RecentSearchesAsync(CancellationToken ct = default)
+    {
+        try { return await _online.RecentSearchesAsync(ct).ConfigureAwait(false); }
+        catch (OperationCanceledException) { throw; }
+        catch { return Array.Empty<SearchTopHit>(); }
+    }
+
     // A home built from the synced library without appending a second library tail: pinned jump-back-in quick picks
     // (Liked + first playlists), followed by the live section-owned modules. Empty only on a truly empty store.
     //

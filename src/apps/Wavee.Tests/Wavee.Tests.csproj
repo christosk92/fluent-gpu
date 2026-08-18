@@ -181,6 +181,8 @@
          engine-bound UI and is deliberately NOT included. -->
     <Compile Include="..\Wavee\Features\Sidebar\Curated\SidebarCustomizerLayout.cs" />
     <Compile Include="..\Wavee\App\SidebarBootstrap.cs" Link="SidebarBootstrap.cs" />
+    <!-- factory-reset wipe (System + WindowsApi storage only) — FactoryResetTests drive it against TEMP trees, never the real %LOCALAPPDATA% -->
+    <Compile Include="..\Wavee\App\FactoryReset.cs" Link="FactoryReset.cs" />
     <Compile Include="..\Wavee\App\PlayLogStore.cs" Link="PlayLogStore.cs" />
     <Compile Include="..\Wavee\App\SessionSnapshotStore.cs" Link="SessionSnapshotStore.cs" />
     <!-- the teaching-tip service's PURE half: the acknowledged-id set codec + the one gating decision (System + BCL only;
@@ -251,6 +253,7 @@
     <Compile Include="..\Wavee\App\VideoUpgradeGate.cs" Link="VideoUpgradeGate.cs" />
     <!-- pure media host-swap decision rules (System + the PlayableKind enum only) — MediaSwitchLogicTests -->
     <Compile Include="..\Wavee\App\MediaSwitchLogic.cs" Link="MediaSwitchLogic.cs" />
+    <Compile Include="..\Wavee\App\LyricsSyncGate.cs" Link="LyricsSyncGate.cs" />
     <!-- pure override-mutation / track-boundary / reveal / stage-mount rules — VideoOverrideMutationCoreTests -->
     <Compile Include="..\Wavee\App\VideoOverrideMutationCore.cs" Link="VideoOverrideMutationCore.cs" />
     <Compile Include="..\Wavee\App\VideoSurfaceMount.cs" Link="VideoSurfaceMount.cs" />

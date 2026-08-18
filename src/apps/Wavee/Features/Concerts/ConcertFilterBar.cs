@@ -100,9 +100,8 @@ sealed class ConcertFilterBar : Component
             Corners = CornerRadius4.All(Radii.Card), Fill = Tok.FillLayerDefault,
             // Stroke OR shadow, never both statically (the pinned bar is a docked surface, not a floating card).
             BorderWidth = 1f, BorderColor = Tok.StrokeSurfaceDefault,
-            ScrollBinds = [ new() { PinTop = 0f } ],
             Children = [ caption, scroller ],
-        };
+        }.Sticky();
     }
 
     // ── where ────────────────────────────────────────────────────────────────────────────────────────────────────────

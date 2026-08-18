@@ -89,7 +89,7 @@ public sealed class HomeLandingProjectionTests
         var one = Card("one");
         var lone = new HomeGroup(HomeGroupKind.WeeklyPair, null, [discover], Uri: "spotify:section:dw");
 
-        // AHEAD of the picks: the grid renders only its first HomeModuleLayout.QuickShown cards before "Show all", so
+        // AHEAD of the picks: the grid renders only its first HomeModuleLayout.QuickShown cards on the landing, so
         // appending would rescue the card from the feed and hide it from the page in the same move.
         var landing = HomeLandingProjection.Project(
             new HomeFeed("", [lone, new HomeGroup(HomeGroupKind.QuickGrid, "Picks", [one])]), HomeModuleTitles.Default);

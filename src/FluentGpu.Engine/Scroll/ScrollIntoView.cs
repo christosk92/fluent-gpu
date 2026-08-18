@@ -15,6 +15,12 @@ namespace FluentGpu.Scroll;
 //  the kernel's next Reclamp); `animate:true` posts a glide with `halflifeMs:0`, which the kernel derives from the
 //  travel distance itself (ScrollFeel.Shipping.ProgrammaticHalflifeS) — the caller no longer latches a half-life.
 //
+//  THE CLAMP IS THE KERNEL'S, NOT OURS. What gets posted is the RAW destination; the kernel latches it as
+//  ScrollBody.TargetRaw and re-derives the clamped ScrollBody.Target on every SetFrame, so a request posted BEFORE
+//  the content grew (an inline SizeMode.Reflow drawer animating 0→full, a virtualized list that measures late) is
+//  honoured once the extent arrives instead of being truncated forever. The live extent is still consulted here, but
+//  only as the near-miss test: we skip the post when the request neither moves the offset NOR was truncated.
+//
 //  NOT modelled here (deliberately): velocity-continuous re-targeting of an already-running programmatic chase with
 //  bespoke spring constants. LyricsView's follow-scroll needs that (a re-target mid-chase must keep the carried
 //  velocity or the list visibly trails the song) — the kernel itself provides the continuity (retargeting a live
@@ -89,16 +95,19 @@ public static class ScrollIntoView
     /// <summary>The WRITE half on its own: move <paramref name="viewport"/> to a CONTENT-SPACE offset along its own
     /// orientation, clamped to <c>[0, content − viewport]</c> (zoom-scaled). Split out for callers that compute the
     /// destination from a layout MODEL rather than a realized node — a virtualized list scrolling to an index that is
-    /// not realized yet has no node to hand <see cref="Bring"/>. Posts <see cref="ScrollInput.ScrollTo"/> through the
-    /// scene's <see cref="SceneStore.ScrollPort"/> — the kernel resolves the clamp, the motion and the write.
-    /// Returns true when a scroll was posted (the target differs from the live offset by ≥ 0.5 DIP).</summary>
+    /// not realized yet has no node to hand <see cref="Bring"/>. Posts the RAW <paramref name="target"/> through
+    /// <see cref="ScrollInput.ScrollTo"/> on the scene's <see cref="SceneStore.ScrollPort"/> — the KERNEL owns the
+    /// clamp (against <c>[0, content − viewport]</c>, zoom-scaled), re-deriving it as the content grows.
+    /// Returns true when a scroll was posted: the clamped target differs from the live offset by ≥ 0.5 DIP, OR the
+    /// request was truncated by the CURRENT extent (that truncated request is exactly the one that must be honoured
+    /// once the content finishes growing).</summary>
     public static bool ScrollTo(RenderContext ctx, NodeHandle viewport, float target, bool animate)
     {
         var scene = ctx.Scene;
         if (scene is null || viewport.IsNull || !scene.IsLive(viewport) || !scene.HasScroll(viewport)) return false;
-        if (!TryClampAgainstLive(scene, viewport, target, out float clamped)) return false;
+        if (!ShouldPost(scene, viewport, target)) return false;
 
-        scene.ScrollPort!.Post(ScrollInput.ScrollTo((int)viewport.Raw.Index, clamped, immediate: !animate, halflifeMs: 0));
+        scene.ScrollPort!.Post(ScrollInput.ScrollTo((int)viewport.Raw.Index, target, immediate: !animate, halflifeMs: 0));
         // WAKE, don't re-render: the kernel resolves the offset/transform/VirtualRangeDirty on its own, so the tree the
         // calling component would re-render is byte-identical — RequestFrame is exactly this escape hatch's contract
         // (falls back to RequestRerender when a caller hasn't wired it).
@@ -106,7 +115,8 @@ public static class ScrollIntoView
         return true;
     }
 
-    /// <summary>The explicit-glide overload: same clamp/near-miss contract as <see cref="ScrollTo(RenderContext,NodeHandle,float,bool)"/>,
+    /// <summary>The explicit-glide overload: same near-miss contract (and same kernel-owned clamp) as
+    /// <see cref="ScrollTo(RenderContext,NodeHandle,float,bool)"/>,
     /// but pins the kernel's Driven-chase constants instead of letting it derive a half-life from the travel distance.
     /// This is the seam LyricsView's follow-scroll (velocity-continuous re-target, bespoke ζ/ω/settle-velocity) uses —
     /// posting a <see cref="ScrollInput.ScrollTo"/> for a node that is ALREADY mid-Driven-chase keeps the kernel's
@@ -116,9 +126,9 @@ public static class ScrollIntoView
     {
         var scene = ctx.Scene;
         if (scene is null || viewport.IsNull || !scene.IsLive(viewport) || !scene.HasScroll(viewport)) return false;
-        if (!TryClampAgainstLive(scene, viewport, target, out float clamped)) return false;
+        if (!ShouldPost(scene, viewport, target)) return false;
 
-        scene.ScrollPort!.Post(ScrollInput.ScrollTo((int)viewport.Raw.Index, clamped, immediate: false,
+        scene.ScrollPort!.Post(ScrollInput.ScrollTo((int)viewport.Raw.Index, target, immediate: false,
             halflifeMs: halflifeMs, zeta: zeta, omega: omega, settleVel: settleVel));
         // WAKE, don't re-render — see the note on the other overload. This one matters MORE here: a per-line-emphasis
         // caller re-targeting a live chase every frame (LyricsView's follow-scroll) cannot afford a full component
@@ -128,10 +138,11 @@ public static class ScrollIntoView
         return true;
     }
 
-    // Zoom-scaled max, the same clamp contract the kernel's own Reclamp uses — the unscaled `content − viewport` this
-    // used to be silently disagreed with every wheel/fling clamp on a zoomed viewport. `false` = already at target
-    // (within 0.5 DIP), the minimal-scroll no-op.
-    static bool TryClampAgainstLive(SceneStore scene, NodeHandle viewport, float target, out float clamped)
+    // The near-miss test ONLY (the kernel owns the clamp that actually ships). Zoom-scaled max, the same clamp
+    // contract the kernel's own Reclamp uses — the unscaled `content − viewport` this used to be silently disagreed
+    // with every wheel/fling clamp on a zoomed viewport. `false` = the post would be a no-op: the clamped destination
+    // is already where we are (within 0.5 DIP) AND the request wasn't truncated by the live extent.
+    static bool ShouldPost(SceneStore scene, NodeHandle viewport, float target)
     {
         ref ScrollState sc = ref scene.ScrollRef(viewport);
         bool horizontal = sc.Orientation != 0;
@@ -141,7 +152,9 @@ public static class ScrollIntoView
 
         float z = sc.ZoomFactor > 0f ? sc.ZoomFactor : 1f;
         float maxOffset = MathF.Max(0f, contentExtent * z - viewportExtent);
-        clamped = Math.Clamp(target, 0f, maxOffset);
-        return MathF.Abs(clamped - offset) >= 0.5f;
+        float clamped = Math.Clamp(target, 0f, maxOffset);
+        // The second term is load-bearing: a truncated request moves nowhere TODAY, but it is precisely the request
+        // that must reach the kernel so ScrollBody.TargetRaw can honour it once the content grows.
+        return MathF.Abs(clamped - offset) >= 0.5f || MathF.Abs(target - clamped) >= 0.5f;
     }
 }

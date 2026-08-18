@@ -505,7 +505,7 @@ sealed class InputsPage : Component
                 AlignItems = FlexAlign.Center,
                 Children =
                 [
-                    ScrollBar.Create(0.3f, pos, length: 160f,
+                    ScrollBar.Create(0.3f, pos, x => pos.Value = x, 160f,
                         parts: new TemplateParts { [ScrollBar.PartThumb] = t => t with { Width = 10f } }),
                     new BoxEl
                     {

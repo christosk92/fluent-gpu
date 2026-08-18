@@ -128,16 +128,19 @@ public static class SpotifyExportMapper
     }
 
     // The album's primary artists WITH avatars (albumUnion.artists.items[].visuals.avatarImage) — for the stacked header.
+    // Live getAlbum (hash b9bfabef…) currently ships id/uri/profile.name only, so Image is often null here; the album
+    // face-pile then fills portraits from ArtistV4. Unwrap `data` so a wrapper item still maps.
     static List<Artist> MapUnionArtistsDetailed(JsonElement items)
     {
         var list = new List<Artist>();
         if (items.ValueKind != JsonValueKind.Array) return list;
         foreach (var a in items.EnumerateArray())
         {
-            var u = Str(a, "uri");
-            var n = Str(a, "profile", "name");
+            var node = UnwrapData(a);
+            var u = Str(node, "uri") ?? Str(a, "uri");
+            var n = Str(node, "profile", "name") ?? Str(a, "profile", "name");
             if (u is null || n is null) continue;
-            list.Add(new Artist(EntityUri.IdOf(u), u, n, PickImage(Dig(a, "visuals", "avatarImage", "sources"))));
+            list.Add(new Artist(EntityUri.IdOf(u), u, n, ArtistAvatar(node) ?? ArtistAvatar(a)));
         }
         return list;
     }
@@ -331,11 +334,19 @@ public static class SpotifyExportMapper
         if (items.ValueKind != JsonValueKind.Array) return list;
         foreach (var a in items.EnumerateArray())
         {
-            var u = Str(a, "uri");
-            var n = Str(a, "profile", "name");
+            var node = UnwrapData(a);
+            var u = Str(node, "uri") ?? Str(a, "uri");
+            var n = Str(node, "profile", "name") ?? Str(a, "profile", "name");
             if (u is not null && n is not null) list.Add(new ArtistRef(EntityUri.IdOf(u), u, n));
         }
         return list;
+    }
+
+    /// <summary>GraphQL artist items are either the artist object or a <c>{ data: Artist }</c> wrapper.</summary>
+    static JsonElement UnwrapData(JsonElement e)
+    {
+        var data = Dig(e, "data");
+        return data.ValueKind == JsonValueKind.Object ? data : e;
     }
 
     static int YearFromIso(string? iso)
@@ -438,6 +449,28 @@ public static class SpotifyExportMapper
                 Image: null, RoundImage: true, Followable: true, MatchedLyrics: false, AccessLabel: null));
         }
 
+        List<SearchGenre>? genres = null;
+        foreach (var it in Arr(Dig(sv, "genres", "items")))
+        {
+            var d = Dig(it, "data");
+            if (Str(d, "uri") is not { } uri || IsNotFound(d)) continue;
+            uint accent = GradedHex(Dig(d, "image", "extractedColors")) ?? 0u;
+            (genres ??= new List<SearchGenre>()).Add(new SearchGenre(uri, Str(d, "name") ?? "", accent));
+        }
+
+        List<SearchTopHit>? authorHits = null;
+        foreach (var it in Arr(Dig(sv, "authors", "items")))
+        {
+            var d = Dig(it, "data");
+            if (Str(d, "uri") is not { } uri || IsNotFound(d)) continue;
+            (authorHits ??= new List<SearchTopHit>()).Add(new SearchTopHit(
+                SearchHitKind.Author, uri, Str(d, "name") ?? "", "", "Author",
+                PickImage(Dig(d, "visuals", "avatarImage", "sources")) ?? PickImage(Dig(d, "image", "sources")),
+                RoundImage: true, Followable: true, MatchedLyrics: false, AccessLabel: null));
+        }
+
+        var chips = ChipOrderFrom(Dig(sv, "chipOrder", "items"));
+
         return new SearchResults(tracks, albums, artists, playlists,
             TracksTotal: TotalCount(sv, "tracksV2"),
             AlbumsTotal: TotalCount(sv, "albumsV2"),
@@ -446,8 +479,40 @@ public static class SpotifyExportMapper
             Shows: shows, ShowsTotal: TotalCount(sv, "podcasts"),
             Episodes: episodes, EpisodesTotal: TotalCount(sv, "episodes"),
             Audiobooks: audiobooks, AudiobooksTotal: TotalCount(sv, "audiobooks"),
-            Profiles: profiles, ProfilesTotal: TotalCount(sv, "users"));
+            Profiles: profiles, ProfilesTotal: TotalCount(sv, "users"),
+            ChipOrder: chips,
+            Genres: genres, GenresTotal: TotalCount(sv, "genres"),
+            Authors: authorHits, AuthorsTotal: TotalCount(sv, "authors"));
     }
+
+    static IReadOnlyList<SearchChip>? ChipOrderFrom(JsonElement items)
+    {
+        if (items.ValueKind != JsonValueKind.Array || items.GetArrayLength() == 0) return null;
+        var chips = new List<SearchChip>(items.GetArrayLength());
+        foreach (var it in items.EnumerateArray())
+        {
+            if (FacetFromTypeName(Str(it, "typeName")) is not { } facet) continue;
+            int total = (int)Long(it, "totalCount");
+            if (total == 0) total = -1;   // chipOrder items often omit totalCount; SearchFromV2 fills via TotalFor
+            chips.Add(new SearchChip(facet, total));
+        }
+        return chips.Count == 0 ? null : chips;
+    }
+
+    static SearchFacet? FacetFromTypeName(string? typeName) => (typeName ?? "").ToUpperInvariant() switch
+    {
+        "TRACKS" or "SONGS" => SearchFacet.Tracks,
+        "ALBUMS" => SearchFacet.Albums,
+        "ARTISTS" => SearchFacet.Artists,
+        "PLAYLISTS" => SearchFacet.Playlists,
+        "PODCASTS" or "SHOWS" or "PODCASTS_AND_SHOWS" => SearchFacet.Podcasts,
+        "EPISODES" => SearchFacet.Episodes,
+        "AUDIOBOOKS" => SearchFacet.Audiobooks,
+        "USERS" or "PROFILES" => SearchFacet.Profiles,
+        "GENRES" or "GENRES_AND_MOODS" => SearchFacet.Genres,
+        "AUTHORS" => SearchFacet.Authors,
+        _ => null,
+    };
 
     /// <summary>A search result whose entity no longer resolves comes back as a wrapper with
     /// <c>__typename: "NotFound"</c> and nothing else — observed on searchAuthors, and mixed in among real items on
@@ -480,10 +545,13 @@ public static class SpotifyExportMapper
         {
             var wrapper = it.TryGetProperty("item", out var item) ? item : it;
             bool lyrics = HasMatchedField(it, "LYRICS") || HasMatchedField(wrapper, "LYRICS");
+            bool title = HasMatchedField(it, "TITLE") || HasMatchedField(it, "NAME")
+                || HasMatchedField(wrapper, "TITLE") || HasMatchedField(wrapper, "NAME");
             var data = Dig(wrapper, "data");
             var d = data.ValueKind == JsonValueKind.Object ? data : wrapper;
             var type = TopHitType(Str(wrapper, "__typename"), Str(d, "__typename"), Str(d, "uri"));
-            if (MapTopHit(type, d, lyrics) is { } hit) hits.Add(hit);
+            if (MapTopHit(type, d, lyrics) is { } hit)
+                hits.Add(title ? hit with { MatchedTitle = true } : hit);
         }
         return hits;
     }
@@ -512,6 +580,9 @@ public static class SpotifyExportMapper
             if (value.Contains("Audiobook", StringComparison.OrdinalIgnoreCase)) return "Audiobook";
             if (value.Contains("Podcast", StringComparison.OrdinalIgnoreCase) || value.Contains("Show", StringComparison.OrdinalIgnoreCase)) return "Podcast";
             if (value.Contains("Episode", StringComparison.OrdinalIgnoreCase)) return "Episode";
+            if (value.Contains("Genre", StringComparison.OrdinalIgnoreCase)) return "Genre";
+            if (value.Contains("User", StringComparison.OrdinalIgnoreCase) || value.Contains("Profile", StringComparison.OrdinalIgnoreCase)) return "User";
+            if (value.Contains("Author", StringComparison.OrdinalIgnoreCase)) return "Author";
             return "";
         }
         var type = Normalize(dataType);
@@ -532,6 +603,9 @@ public static class SpotifyExportMapper
                 case EntityKind.Episode: return "Episode";
             }
             if (uri.StartsWith("spotify:audiobook:", StringComparison.Ordinal)) return "Audiobook";
+            if (uri.StartsWith("spotify:genre:", StringComparison.Ordinal)) return "Genre";
+            if (uri.StartsWith("spotify:user:", StringComparison.Ordinal)) return "User";
+            if (uri.StartsWith("spotify:author:", StringComparison.Ordinal)) return "Author";
         }
         return "";
     }
@@ -570,8 +644,17 @@ public static class SpotifyExportMapper
             case "Episode":
                 return new SearchTopHit(SearchHitKind.Episode, uri, Str(d, "name") ?? "", "Episode • " + Esc(EpisodeShowName(d)), "Episode",
                     PickImage(Dig(d, "coverArt", "sources")) ?? PickImage(Dig(d, "podcastV2", "data", "coverArt", "sources")), false, false, lyrics, null);
+            case "Genre":
+                return new SearchTopHit(SearchHitKind.Genre, uri, Str(d, "name") ?? "", "Genre", "Genre",
+                    PickImage(Dig(d, "image", "sources")), false, false, lyrics, null);
+            case "User":
+                return new SearchTopHit(SearchHitKind.User, uri, Str(d, "displayName") ?? Str(d, "username") ?? "", "Profile", "Profile",
+                    PickImage(Dig(d, "avatar", "sources")) ?? PickImage(Dig(d, "visuals", "avatarImage", "sources")), true, true, lyrics, null);
+            case "Author":
+                return new SearchTopHit(SearchHitKind.Author, uri, Str(d, "name") ?? "", "Author", "Author",
+                    PickImage(Dig(d, "visuals", "avatarImage", "sources")) ?? PickImage(Dig(d, "image", "sources")), true, true, lyrics, null);
             default:
-                return null;   // Author/User: not surfaced in the All hero list
+                return null;
         }
     }
 
@@ -714,6 +797,32 @@ public static class SpotifyExportMapper
             : new SearchSuggestions(queries, items);
     }
 
+    /// <summary>Map <c>recentSearches</c> → entity rows for the empty Search landing
+    /// (<c>data.recentSearches.recentSearchesItems.items[]</c>).</summary>
+    public static IReadOnlyList<SearchTopHit> RecentSearchesFrom(JsonElement responseRoot)
+    {
+        var hits = new List<SearchTopHit>();
+        foreach (var it in Arr(Dig(responseRoot, "data", "recentSearches", "recentSearchesItems", "items")))
+        {
+            var wrapper = it.TryGetProperty("item", out var item) ? item : it;
+            var data = Dig(wrapper, "data");
+            var d = data.ValueKind == JsonValueKind.Object ? data : wrapper;
+            if (d.ValueKind != JsonValueKind.Object) continue;
+            var type = TopHitType(Str(wrapper, "__typename"), Str(d, "__typename"), Str(d, "uri"));
+            if (type.Length == 0)
+            {
+                var nested = Dig(d, "data");
+                if (nested.ValueKind == JsonValueKind.Object)
+                {
+                    d = nested;
+                    type = TopHitType(Str(wrapper, "__typename"), Str(d, "__typename"), Str(d, "uri"));
+                }
+            }
+            if (MapTopHit(type, d, lyrics: false) is { } hit) hits.Add(hit);
+        }
+        return hits;
+    }
+
     static SearchSuggestionItem? TryMapSuggestionItem(string itemType, JsonElement data)
     {
         var dataType = Str(data, "__typename") ?? "";
@@ -751,6 +860,49 @@ public static class SpotifyExportMapper
             if (uri is null) return null;
             return new SearchSuggestionItem(SearchSuggestionKind.Playlist, uri, Str(data, "name") ?? "",
                 Str(data, "ownerV2", "data", "name") ?? "Playlist", ImagesCover(data));
+        }
+
+        if (itemType.Contains("Genre", StringComparison.OrdinalIgnoreCase) || dataType == "Genre")
+        {
+            var uri = Str(data, "uri");
+            if (uri is null) return null;
+            return new SearchSuggestionItem(SearchSuggestionKind.Genre, uri, Str(data, "name") ?? "",
+                "Genre", PickImage(Dig(data, "image", "sources")));
+        }
+
+        if (itemType.Contains("Episode", StringComparison.OrdinalIgnoreCase) || dataType == "Episode")
+        {
+            var uri = Str(data, "uri");
+            if (uri is null) return null;
+            return new SearchSuggestionItem(SearchSuggestionKind.Episode, uri, Str(data, "name") ?? "",
+                EpisodeShowName(data), PickImage(Dig(data, "coverArt", "sources"))
+                    ?? PickImage(Dig(data, "podcastV2", "data", "coverArt", "sources")));
+        }
+
+        if (itemType.Contains("Podcast", StringComparison.OrdinalIgnoreCase) || itemType.Contains("Show", StringComparison.OrdinalIgnoreCase)
+            || dataType is "Podcast" or "Show")
+        {
+            var uri = Str(data, "uri");
+            if (uri is null) return null;
+            return new SearchSuggestionItem(SearchSuggestionKind.Podcast, uri, Str(data, "name") ?? "",
+                Str(data, "publisher", "name") ?? "Podcast", PickImage(Dig(data, "coverArt", "sources")));
+        }
+
+        if (itemType.Contains("Audiobook", StringComparison.OrdinalIgnoreCase) || dataType == "Audiobook")
+        {
+            var uri = Str(data, "uri");
+            if (uri is null) return null;
+            return new SearchSuggestionItem(SearchSuggestionKind.Audiobook, uri, Str(data, "name") ?? "",
+                AuthorName(Dig(data, "authorsV2")), PickImage(Dig(data, "coverArt", "sources")));
+        }
+
+        if (itemType.Contains("User", StringComparison.OrdinalIgnoreCase) || dataType == "User")
+        {
+            var uri = Str(data, "uri");
+            if (uri is null) return null;
+            return new SearchSuggestionItem(SearchSuggestionKind.User, uri,
+                Str(data, "displayName") ?? Str(data, "username") ?? "",
+                "Profile", PickImage(Dig(data, "avatar", "sources")) ?? PickImage(Dig(data, "visuals", "avatarImage", "sources")));
         }
 
         return null;

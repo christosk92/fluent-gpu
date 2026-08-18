@@ -334,7 +334,7 @@ sealed class WaveeShell : Component
         _lastSelectedPinnedTabId = _open[selected].Id;
         var tab = _open[selected];
         _route.Value = new Route(tab.Key, tab.Arg);
-        if (tab.Key == "search" && tab.Arg is { Length: > 0 }) _searchText.Value = tab.Arg;
+        SyncOmnibarToRoute(_route.Peek());
         SeedTabExtent();
     }
 
@@ -356,7 +356,7 @@ sealed class WaveeShell : Component
             _route.Value = new Route(active.Name, active.Arg);
             _canBack.Value = _history.Count > 0;
             _canForward.Value = _forwardHistory.Count > 0;
-            if (active.Name == "search" && active.Arg is { Length: > 0 }) _searchText.Value = active.Arg;
+            SyncOmnibarToRoute(_route.Peek());
             int idx = IndexOfTabId(tabId);
             if (idx >= 0) _selectedTab.Value = idx;
             // Update the selected tab's route in place without SavePinnedWorkspace — restore must not rewrite pins.
@@ -1507,7 +1507,17 @@ sealed class WaveeShell : Component
         _historyStore.Add(_route.Peek());
         RecordRecentSurface(_route.Peek());
         SyncActiveTab(_route.Peek());
+        SyncOmnibarToRoute(_route.Peek());
         CaptureNav();
+    }
+
+    /// <summary>Spotify chrome: the omnibar is the search page's query. Leaving Search (Home, a result, another tab)
+    /// clears it back to the placeholder; arriving on Search restores the route Arg. Live typing is untouched because
+    /// this only runs on navigation, not on keystrokes.</summary>
+    void SyncOmnibarToRoute(Route r)
+    {
+        string next = r.Name == "search" ? (r.Arg ?? "") : "";
+        if (_searchText.Peek() != next) _searchText.Value = next;
     }
 
     // Addendum A5 — the `recent_surfaces` pin reason. Hooked to FORWARD navigation only: Back/Forward re-visit a surface
@@ -1534,6 +1544,7 @@ sealed class WaveeShell : Component
         _canBack.Value = _history.Count > 0;
         _historyStore.Add(_route.Peek());
         SyncActiveTab(_route.Peek());
+        SyncOmnibarToRoute(_route.Peek());
         CaptureNav();
     }
 
@@ -1549,6 +1560,7 @@ sealed class WaveeShell : Component
         _canForward.Value = _forwardHistory.Count > 0;
         _historyStore.Add(_route.Peek());
         SyncActiveTab(_route.Peek());
+        SyncOmnibarToRoute(_route.Peek());
         CaptureNav();
     }
 
@@ -1557,9 +1569,6 @@ sealed class WaveeShell : Component
     // History always opens in its own tab (global view — same as browser convention).
     void GoNav(string key, string? arg)
     {
-        // A search route carries the query in Arg → sync the omnibar text so the box + the SearchPage (which reads
-        // SearchQuery.Slot live, as-you-type) agree, whether the nav came from the box, a history entry, or a suggestion.
-        if (key == "search" && arg is { Length: > 0 }) _searchText.Value = arg;
         if (key == "history") OpenNewTab(key);
         else Go(key, arg);
     }

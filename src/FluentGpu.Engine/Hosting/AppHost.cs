@@ -214,17 +214,17 @@ public sealed class PopupWindowSlot
 /// <summary>Which branch of <see cref="AppHost.RecommendedWaitMs"/> produced the last wait — the diagnostic that
 /// distinguishes ambient app-policy pacing, measured adaptive-GPU pacing, and display-rate free-run. <c>Ambient</c>
 /// means the loop was throttled to the configured ambient rate; <c>AdaptiveGpu</c> means a fresh on-GPU execution sample
-/// selected that same sustainable cadence; <c>DisplayRate</c>/<c>PaceAsync</c> mean the loop ran at panel rate and any
+/// selected that same sustainable cadence; <c>DisplayRate</c>/<c>DisplayTick</c> mean the loop ran at panel rate and any
 /// lock is downstream. Surfaced via <see cref="AppHost.LastWaitKind"/>.</summary>
 public enum HostWaitKind : byte
 {
     Idle,            // -1: fully idle / minimized — block until a message
     Hud,             // 100: DynamicText-only readout throttle
     Baked,           // baked-blur queue cadence
-    Ambient,         // AmbientFrameWaitMs — the software fps cap (the maximize-lock suspect)
-    PaceSkipSubmit,  // AppHost.DeriveAsyncPaceMs after an elided submit (sync path)
-    PaceAsync,       // AppHost.DeriveAsyncPaceMs — async present pace cap (or the phase-gate ceiling while armed)
-    DisplayRate,     // 0: latency-sensitive / one-shot motion — sync present-throttled (panel rate)
+    Ambient,         // AmbientFrameWaitMs — the software fps cap for autonomous animation
+    DisplayTick,     // async: production paced on the compositor tick (one frame per vblank); the timeout is a backstop
+    SoftwarePace,    // async without a display clock: wall-clock pace at the refresh period (60 Hz floor when unknown)
+    DisplayRate,     // 0: sync render path — present-throttled (panel rate)
     AdaptiveGpu,     // AmbientFrameWaitMs selected by fresh on-GPU execution samples (not ambient app policy)
 }
 
@@ -758,6 +758,10 @@ public sealed class AppHost : IDisposable
             // UI-side; the UI-side call at phase 11.5 is skipped whenever a render thread exists. Uses the FRAME's scale
             // (rf.Submit.Scale) rather than the live _window.Scale — the drain must place video for the frame it presents.
             if (_device.GetVideoPresenter(_swapchain) is { } vp) _videoSurfaces.Drain(vp, rf.Submit.Scale);
+            // Advisory, one way engine → PAL: a composited window defers ALL painting during an OS modal
+            // edge-resize, which would leave this video child at its pre-resize geometry while the frame moves
+            // under it. Telling the window it carries live video lets it keep a throttled keep-alive instead.
+            _window.SetHasLiveVideo(_videoSurfaces.HasLiveSurface);
         }
         catch (System.Exception) when (_asyncActive)
         {
@@ -1277,6 +1281,10 @@ public sealed class AppHost : IDisposable
             if (child._window.IsClosed)
             {
                 _detachedHosts.RemoveAt(i);
+                // Persist a pending resize/move first: the user closing the window with the OS chrome lands HERE (not in
+                // DetachedWindowHandle.Close), and the frame-stillness settle may never have run for a near-frameless
+                // video window. Uses the last sampled rect since the OS window is already gone.
+                child.FlushPendingBoundsChange();
                 // Stop the render thread from touching this child's seam/swapchain BEFORE we dispose it. The rendezvous
                 // (Quiesce) guarantees no in-flight DrainChildRenderSources present is mid-flight against the swapchain
                 // we are about to release. No-op when the parent has no render thread (pure single-thread inline path).
@@ -1313,6 +1321,24 @@ public sealed class AppHost : IDisposable
         _boundsDirty = false;
         _boundsSettleFrames = 0;
         BoundsChanged?.Invoke(now);
+    }
+
+    /// <summary>Report a pending bounds change NOW, without waiting for the frame-stillness settle. Called when a detached
+    /// window is closing.
+    /// <para>Why this is needed: <see cref="SampleDetachedBounds"/> only advances while frames are being produced, and a
+    /// detached VIDEO window is very nearly frameless by design — DirectComposition presents the decoded video
+    /// independently, so an idle window with no UI animation can go long stretches without a single host frame. The
+    /// settle counter then never reaches 10 and the resize is never persisted at all: resize the pop-out, let the next
+    /// track have no video (the window closes), and it reopens at the old size. The close IS the settle signal.</para></summary>
+    private void FlushPendingBoundsChange()
+    {
+        if (!_boundsDirty || BoundsChanged is null) return;
+        var now = _window.OuterBoundsPx;
+        if (now.W <= 1f || now.H <= 1f) now = _lastBoundsPx;   // backend already tore the window down — use the last sample
+        if (now.W <= 1f || now.H <= 1f) return;
+        _boundsDirty = false;
+        _boundsSettleFrames = 0;
+        BoundsChanged.Invoke(now);
     }
 
     // ── detached-window render routing (parent host; runs THROUGH the parent's single render thread) ─────────────────────
@@ -1423,7 +1449,13 @@ public sealed class AppHost : IDisposable
         public bool IsOpen => !_window.IsClosed && _parent._detachedHosts.Contains(_child);
         public void SetTopmost(bool topmost) => _window.SetTopmost(topmost);
         public void SetBounds(RectF outerBoundsPx) => _window.SetBoundsPx(outerBoundsPx);
-        public void Close() => _window.CloseWindow();   // WM_CLOSE → IsClosed → reaped by TickDetachedHosts
+        public void Close()
+        {
+            // Persist a pending resize/move BEFORE the window goes away — the frame-stillness settle may never have run
+            // (see AppHost.FlushPendingBoundsChange). Ordered first so the observer still sees a live window rect.
+            _child.FlushPendingBoundsChange();
+            _window.CloseWindow();   // WM_CLOSE → IsClosed → reaped by TickDetachedHosts
+        }
         // Reads/writes the child host's field so the parent's reaper (which holds the child, not the handle) fires it.
         public Action? OnClosed { get => _child.OnClosed; set => _child.OnClosed = value; }
         public RectF BoundsPx => _window.OuterBoundsPx;
@@ -1467,159 +1499,60 @@ public sealed class AppHost : IDisposable
     /// spuriously trip the frame-clock step-up Resync (the frozen one-shot-anim bug class).</summary>
     public static int DeriveAsyncPaceMs(double refreshMs) => Math.Clamp((int)Math.Floor(refreshMs) - 1, 3, 32);
 
-    /// <summary>Software floor (ms) when Present is attested unpaced (no vblank). 15 = 60 Hz, matching the headless /
-    /// unknown-refresh fallback. Remote streams are 60 Hz; spinning faster only burns CPU.</summary>
-    public const int UnpacedPresentPaceMs = 15;
+    /// <summary>Software pace floor (ms) when no display clock exists AND the refresh period cannot be trusted (headless,
+    /// a remote session reporting a bogus 2 ms "refresh"): 60 Hz. Remote streams are 60 Hz; spinning faster only burns CPU.</summary>
+    public const int SoftwarePaceFloorMs = 15;
 
-    /// <summary>Apply the unpaced-present floor to a <see cref="DeriveAsyncPaceMs"/> result. Pure so the gate can lock
-    /// it without a live panel. A vsync-locked 120 Hz derived wait (7) becomes 15; an already-60-or-slower wait is
-    /// unchanged. Never raises a 32 ms ceilinged wait.</summary>
-    public static int FloorPaceMsWhenUnpaced(int derivedMs) => Math.Max(derivedMs, UnpacedPresentPaceMs);
+    /// <summary>The wall-clock production pace when the platform has no compositor clock: just under the refresh period
+    /// when the panel's period is attested (present stats valid and >= 4 ms), else the 60 Hz floor. Pure so the gate can
+    /// lock it without a panel.</summary>
+    public static int SoftwarePaceMs(double refreshMs, bool refreshTrusted)
+        => refreshTrusted && refreshMs >= 4.0 ? DeriveAsyncPaceMs(refreshMs) : SoftwarePaceFloorMs;
 
-    /// <summary>The live pace cap for THIS host: <see cref="DeriveAsyncPaceMs"/> over the measured refresh period (which
-    /// falls back to 60 Hz when the backend reports none — headless always does). When Present is not vsync-locked the
-    /// result is floored at <see cref="UnpacedPresentPaceMs"/> so a remote DWM that reports a 2 ms "refresh" cannot
-    /// clamp to the 3 ms spin floor.</summary>
-    private int AsyncDisplayPaceMs()
+    private int SoftwarePaceMs()
     {
-        int derived = DeriveAsyncPaceMs(RefreshPeriodQpcOrDefault() * 1000.0 / Stopwatch.Frequency);
-        return _unpacedDetector.Unpaced ? FloorPaceMsWhenUnpaced(derived) : derived;
+        var stats = _device.LastPresentStats;
+        double refreshMs = RefreshPeriodQpcOrDefault() * 1000.0 / Stopwatch.Frequency;
+        return SoftwarePaceMs(refreshMs, stats.Valid && stats.RefreshPeriodQpc > 0);
     }
 
-    // ── Display-phase gate ───────────────────────────────────────────────────────────────────────────────────────────
-    // Measured 2026-07-25 (ops/diag bundle 20260725-080953, 29,867 latency rows, operator-scored): the engine missed
-    // ZERO deadlines — frameOverrun p50 −16 ms against a 16.7 ms budget, present interval p05 7.98 / p50 8.33 / p95
-    // 8.69 ms, and DXGI PresentRefreshCount attested ~no dropped slots. Yet STEADY scored 1–3 while GLUED scored 3–4.
-    //
-    // The cause was phase, not throughput. The UI loop woke on input, on the DirectManipulation pump deadline, and on
-    // the 7 ms cap above — a union that produced a frame every ~5.6 ms (p05 0.41 ms) against 8.33 ms presents, so 1.5–2.6
-    // frames were produced per present and DropOldest discarded the surplus. Which publish happened to be newest at each
-    // vblank then varied, so the POSITIONS reaching the screen were sampled 6.0–14.0 ms apart (p05→p95) even though the
-    // FRAMES arrived a metronomic 8.33 ms apart. At the measured p50 gesture velocity that is a 13.5→31.6 DIP spread in
-    // per-frame motion where smooth would be a constant ~18.7. Punctual pixels, jittering positions: "120 fps, not
-    // buttery". Discarding 61% of rendered frames was the same symptom seen from the power side.
-    //
-    // The gate restores the phase reference the async flip removed: never produce a frame while a published one is still
-    // unpresented. Because the render thread self-paces inside the swapchain's frame-latency waitable, its acks land one
-    // refresh apart, so production inherits the display's phase and every frame's clock sample sits a CONSTANT offset
-    // from the vblank that shows it. Constant offset is invisible; a varying one is the stutter.
-    //
-    // This is backpressure, not throttling. It cannot add visible latency: the frames it declines to produce are exactly
-    // the ones DropOldest was about to discard, and input is dispatched BEFORE the gate, so contact samples keep landing
-    // in the resampler's history and the next produced frame consumes all of them (the resampler is built to fold
-    // several packets into one frame — that is what ResampleLatencyMs = 12 exists for).
-    // The arm-then-recheck handshake and its memory ordering live in the primitive, not here — inlining them cost a
-    // lost wake on ~16% of frames in the first implementation. See Threading/DisplayPhaseGate.cs.
-    private Threading.DisplayPhaseGate? _phaseGate;
+    // -- Production pacing: one frame per compositor tick -----------------------------------------------------------
+    // With Present on the render thread the UI loop has no natural vblank reference; producing on every wake (input,
+    // DirectManipulation, timers) makes several frames per refresh of which the render thread shows the newest — the
+    // POSITIONS reaching the screen are then sampled at uneven intervals even though presents are metronomic (measured
+    // 2026-07-25: 1.5–2.6 productions per present, 61% discarded, motion 6–14 ms apart on an 8.33 ms grid). The display's
+    // own clock (IPlatformWindow.DisplayClock — DCompositionWaitForCompositorClock republished as a tick seq + vblank
+    // instant) is the phase reference: input is dispatched on every wake, but a FRAME is produced at most once per tick,
+    // and the frame is stamped with that tick's vblank instant (FrameClock.FrameQpc). No present-ack handshake, no stall
+    // ceiling, no slip/unpaced heuristics: the tick IS the vblank, so there is nothing to infer.
+    private long _frameTickSeq;            // the display-clock tick this RunFrame was sampled on (0 = clock unavailable)
+    private long _lastProducedTickSeq;     // the tick the last produced frame belongs to
+    private long _productionDeclines;      // diagnostic census: RunFrames that dispatched input but produced no frame (already produced for this tick)
 
-    // The gate's one blind spot, and its escape. Once a single vblank slips, the render thread's acks land one refresh
-    // apart (16.67 ms on a 120 Hz panel) — UNDER the 17 ms ceiling, so the ceiling never fires — and ack-paced
-    // production follows at 60 Hz indefinitely. The gate cannot see it: every publish IS presented, just one refresh
-    // late, forever. Only the present site can (the interval between presents), so the detector lives there and the UI
-    // side reads two volatile ints. See Threading/PresentSlipDetector.cs and threading-render-seam.md §11.1.4.
-    private readonly Threading.PresentSlipDetector _slipDetector = new();
-    private readonly Threading.PresentUnpacedDetector _unpacedDetector = new();
-    private int _rephaseEpisodeSeen;        // the engage ordinal the escape budget below is currently spending
-    private int _rephaseEscapesInEpisode;   // escapes taken inside that episode
-    private long _rephaseEscapes;           // lifetime census (diagnostic)
-    /// <summary>Escapes allowed per lock episode. Bounds the cost when a scene is genuinely too slow to hold the panel
-    /// rate and therefore sustains the 2R cadence on its own: the escape re-anchors the chain a handful of times, finds
-    /// the cadence unchanged, and stops. Eight is ~65 ms of re-phasing at 120 Hz — long enough to break a real lock,
-    /// short enough that a hopeless one is not paid for every frame.</summary>
-    private const int RephaseEscapeBudget = 8;
+    /// <summary>Frames declined for production because a frame was already produced for the current compositor tick
+    /// (input was still dispatched). Each one is a frame DropOldest would have discarded. Diagnostic (FG_FPS_LOG).</summary>
+    public long ProductionDeclines => _productionDeclines;
 
-    /// <summary>Frames the display-phase gate declined to produce (diagnostic). Each one is a frame that would have
-    /// been discarded by DropOldest before reaching the screen.</summary>
-    public long PhaseGatedFrames => _phaseGate?.GatedFrames ?? 0;
-
-    /// <summary>Times the display-phase gate's two-refresh liveness ceiling fired. Retained for liveness; every escape
-    /// must be reported in pacing traces rather than treated as a smoothness win.</summary>
-    public long PhaseGateCeilingEscapes => _phaseGate?.CeilingEscapes ?? 0;
-
-    /// <summary>Times the armed gate was opened by the slip re-phase escape (§11.1.4) rather than by an ack or the
-    /// ceiling. Its own counter, deliberately: a re-phase escape PRODUCES a frame, so it must not inflate
-    /// <see cref="PhaseGatedFrames"/> (the census of declines) nor <see cref="PhaseGateCeilingEscapes"/> (the liveness
-    /// backstop) — those two mean what the pacing argument uses them for only if this stays separate.</summary>
-    public long PhaseGateRephaseEscapes => Volatile.Read(ref _rephaseEscapes);
-
-    /// <summary>Stall ceiling for the gate, in ms: never wait more than two refresh periods for a present-ack. The gate
-    /// must be an optimization, never a liveness dependency — an occluded, stalled, or device-lost render thread stops
-    /// acking, and the loop has to keep running (input, timers, recovery) regardless. Clamped so a bogus or missing
-    /// refresh period cannot produce either a spin (too low) or a visible freeze (too high).</summary>
-    private int PhaseGateCeilingMs()
+    /// <summary>Backstop timeout (ms) for a tick-paced wait: two refresh periods, clamped 8–34. The tick normally ends the
+    /// wait; this only fires if the compositor stalls or the tick is missed, so the loop keeps running input, timers and
+    /// recovery. Never a pacer in itself.</summary>
+    private int TickBackstopMs()
     {
         double refreshMs = RefreshPeriodQpcOrDefault() * 1000.0 / Stopwatch.Frequency;
         int ms = (int)Math.Round(refreshMs * 2.0);
         return ms < 8 ? 8 : ms > 34 ? 34 : ms;
     }
 
-    /// <summary>Stall ceiling in Stopwatch ticks (the gate's own clock domain).</summary>
-    private long PhaseGateCeilingTicks() => (long)(PhaseGateCeilingMs() * (Stopwatch.Frequency / 1000.0));
-
-    /// <summary>Should this frame take the slip re-phase escape — open the armed gate and PRODUCE, breaking the 60 Hz
-    /// ack lock (§11.1.4)? Pure and internal so the gate can lock the truth table without a live panel, exactly as
-    /// <see cref="DeriveAsyncPaceMs"/> is.
-    ///
-    /// The three conjuncts past <paramref name="rephaseWanted"/> are the ping-pong guards, and each closes a distinct
-    /// way this could make the loop worse:
-    /// <list type="number">
-    /// <item><b>Kind must be <see cref="HostWaitKind.PaceAsync"/>.</b> The ambient and adaptive-governor branches sit
-    /// BEFORE the armed branch in <see cref="RecommendedWaitMsCore"/> and produce <see cref="HostWaitKind.Ambient"/> or
-    /// <see cref="HostWaitKind.AdaptiveGpu"/> respectively.
-    /// A loop that is deliberately capped — 30 Hz shimmer, a governor that measured the GPU cannot hold panel rate —
-    /// presents ~2R by construction and would otherwise be forced back to panel rate by its own throttle's signature.</item>
-    /// <item><b>Under budget.</b> A scene that genuinely cannot sustain the rate keeps producing the 2R cadence no
-    /// matter how often the chain is re-anchored; the per-episode budget makes that cost bounded instead of permanent.</item>
-    /// <item><b>Armed.</b> Armed means a publish is actually owed a present. Unarmed there is nothing to release, and
-    /// the unarmed branch already asks for the display clock.</item>
-    /// </list></summary>
-    internal static bool ShouldRephaseEscape(bool rephaseWanted, bool gateArmed, HostWaitKind lastWaitKind, int escapesInEpisode, int budget)
-        => rephaseWanted && gateArmed && lastWaitKind == HostWaitKind.PaceAsync && escapesInEpisode < budget;
-
-    /// <summary>True when a published frame has not yet been presented, so producing another would only feed DropOldest.
-    /// Delegates the arm/recheck handshake to <see cref="Threading.DisplayPhaseGate"/>. Open when async is off, when no
-    /// render thread owns the present, or past the stall ceiling. UI thread only.</summary>
-    private bool PhaseGateBlocks()
+    /// <summary>True when a frame has already been produced for the current compositor tick — producing another would
+    /// only feed DropOldest. Open when async is off (the sync path present-throttles), when the platform has no display
+    /// clock (the software pace wait is the pacer), or when the previous wait did not arm the clock (ticks were not
+    /// counted while idle/ambient — the first frame after a wake must not wait a vblank). UI thread only.</summary>
+    private bool ProductionGateBlocks()
     {
-        if (!_asyncActive || _renderThread is null || _phaseGate is null) return false;
-        // A NEW lock episode gets a fresh budget: the count below bounds one episode's re-phasing, not the process's.
-        int episode = _slipDetector.Episode;
-        if (episode != _rephaseEpisodeSeen) { _rephaseEpisodeSeen = episode; _rephaseEscapesInEpisode = 0; }
-        // The re-phase escape. While the present thread attests a sustained one-vblank slip, the wake that got us here
-        // (the compositor tick the armed branch now asks for — see RecommendedWaitMsCore) must PRODUCE, not re-gate.
-        // Re-gating on the tick is precisely the busywork the armed branch's rationale objects to; producing is what
-        // re-anchors the present chain to the vblank the tick came from, and DropOldest makes the over-production safe.
-        // _lastWaitKind is the kind latched by the wait that paced INTO this frame (RecommendedWaitMs), not a prediction.
-        if (ShouldRephaseEscape(_slipDetector.RephaseWanted, _phaseGate.IsArmed, _lastWaitKind, _rephaseEscapesInEpisode, RephaseEscapeBudget))
-        {
-            _phaseGate.Open();           // idempotent, and never counts — this is a produced frame, not a decline
-            _rephaseEscapesInEpisode++;
-            _rephaseEscapes++;
-            return false;
-        }
-        return _phaseGate.Blocks(_renderSeam.PublishSeq, Stopwatch.GetTimestamp(), PhaseGateCeilingTicks());
-    }
-
-    /// <summary>Render thread: nudge the UI out of its wait after a present, but only while it is actually parked on the
-    /// gate. Elided otherwise so a 120 Hz present cadence does not post 120 wakes/s at a loop that is idle or already
-    /// running (video playback presents continuously with nothing waiting on it).
-    ///
-    /// The barrier is required, not defensive: RenderThread publishes the ack with a release write, then this reads the
-    /// armed flag — a StoreLoad pair that neither x86 nor ARM orders for free. Without it this can observe a stale
-    /// "not armed" for a UI thread that has already armed and gone to sleep, which is precisely the lost wake the
-    /// handshake exists to close. <see cref="IPlatformWindow.Wake"/> signals a waitable the UI
-    /// <see cref="IPlatformWindow.WaitForWork"/> waits on atomically with input (and the HR timer), not message-only.
-    /// <see cref="IPlatformWindow.WakePresent"/> rather than <see cref="IPlatformWindow.Wake"/>: this is the
-    /// phase-critical signal, and it gets its own waitable so no other producer can consume the auto-reset wake this
-    /// loop is parked on (and so it posts no message — at panel rate that would be 120 WM_NULLs a second).
-    /// </summary>
-    private void OnRenderPresentAck()
-    {
-        Thread.MemoryBarrier();
-        // Unpaced Present (no vblank): the ack lands at CPU speed. Waking the UI on it would free-spin the loop.
-        // The wall-clock floor in AsyncDisplayPaceMs is the pacer; this wake would defeat it.
-        if (_unpacedDetector.Unpaced) return;
-        if (_phaseGate is { IsArmed: true }) _window.WakePresent();
+        if (!_asyncActive || _renderThread is null) return false;
+        if (_frameTickSeq == 0 || !_lastWaitWantsDisplayClock) return false;
+        if (_frameTickSeq == _lastProducedTickSeq) { _productionDeclines++; return true; }
+        return false;
     }
 
     /// <summary>Monotonic successful main-swapchain present count in inline, force-sync, and async modes. Unlike a
@@ -1813,67 +1746,25 @@ public sealed class AppHost : IDisposable
             _lastWaitKind = HostWaitKind.AdaptiveGpu;
             return AmbientFrameWaitMs();
         }
-        // Parked on the display-phase gate: sleep until the render thread's present-ack wake, with the stall ceiling as
-        // the backstop. Returning the pace cap here instead would wake the loop mid-flight only to gate again — busywork
-        // that also re-samples the DirectManipulation pump deadline and drags production off the display's phase, which
-        // is the behaviour being fixed. Input still ends this wait immediately (WaitForWork is MsgWait-based).
-        // For the same reason this branch does NOT ask for the display clock: the ack IS its phase reference, and a
-        // per-tick wake would re-enter the loop while the gate is still armed and gate again — the exact busywork above.
-        // EXCEPT while the present thread attests a sustained one-vblank slip. Then the ack is not a phase reference at
-        // all, it IS the 60 Hz attractor: acks land 16.67 ms apart on a 120 Hz panel, under the 17 ms ceiling, so the
-        // ceiling never fires, production follows the acks, and the next present is late for the same reason — a stable
-        // fixed point that held for minutes live (ops/diag/sessions/live-20260804-073148). Sleeping on the ack is then
-        // sleeping on the lock, and the compositor tick is the only wake source outside it. The busywork objection still
-        // stands, which is why the tick is not merely a supplementary wake here: PhaseGateBlocks OPENS the gate on it
-        // instead of re-gating, so the woken frame produces and re-anchors the chain to the vblank. Bounded twice over —
-        // the engaged episode ends on the first healthy present, and the escape budget bounds it inside the episode.
-        if (_asyncActive && _phaseGate is { IsArmed: true } && !_unpacedDetector.Unpaced)
+        // Active work (interaction, one-shot motion, scroll, a live producer, image work inside the holds): produce ONE
+        // frame per compositor tick. Async: the wait ends on the display clock's tick (or the backstop if the compositor
+        // stalls); ProductionGateBlocks declines a second production inside the same tick. Input still ends the wait
+        // immediately (WaitForWork is MsgWait-based) and is dispatched on that wake — only the frame waits for its tick.
+        // No display clock (headless / a session where the runtime probe ruled the export out): wall-clock software pace
+        // at the refresh period, 60 Hz floor when the period is untrusted. Sync render path: 0 — Present throttles.
+        if (_asyncActive)
         {
-            _lastWaitKind = HostWaitKind.PaceAsync;
-            _lastWaitWantsDisplayClock = _slipDetector.RephaseWanted;
-            return PhaseGateCeilingMs();
-        }
-        // Skip-submit pacing floor: an elided submit skips Present — so a scroll-armed-but-unchanged stretch (a held
-        // band, a spring tail, the 2s scrollbar idle-hide dwell, a mounted FrameClock poller over a static scene) would
-        // otherwise free-run the loop re-recording a byte-identical scene (measured on-device: ~785 fps, a full core,
-        // for the whole armed window). BOTH branches this can fall between are display-rate KINDS, so both are exempt
-        // from the NextDeltaMs Resync guard and the animation clock stays monotonic across a switch between them (a wait
-        // that read as a throttle gap here would zero-dt every animating frame — the frozen one-shot-anim bug class).
-        // Input still ends the wait immediately (WaitForWork is MsgWait-based), so nothing gains latency; the first
-        // frame that actually changes pixels submits.
-        //
-        // The display clock IS this branch's pacer, not a supplement, and the returned value is a pure FALLBACK for when
-        // the compositor clock is unavailable (headless, a remote session where the probe fails). It must therefore be
-        // LONGER than a refresh period, not shorter. Returning the pace cap here — DeriveAsyncPaceMs, i.e. refresh-1ms —
-        // made the wall clock RACE the tick and always win, so the loop woke on a 7ms timer instead of the 8.33ms vblank
-        // and production drifted off the panel's phase entirely: measured 219 fps of record-only frames against a 120 Hz
-        // panel, with present intervals smeared 8–50 ms and no vsync quantisation at all
-        // (ops/diag/sessions/live-20260814-152702-freescroll). The gate's own stall ceiling (2x refresh, clamped) is the
-        // right shape: with a tick the tick fires first and paces us onto the vblank; without one, byte-identical frames
-        // pace at 2R, which costs nothing because they produce no pixels by construction.
-        //
-        // Ordering: this sits BELOW the armed-gate branch deliberately. While the gate is armed a publish IS owed a
-        // present, the ack is the better phase reference, and asking for a per-tick wake there would re-enter the loop
-        // only to gate again — the busywork Pal.cs's WakeOnDisplayClock contract calls out by name.
-        if (_lastFrameSkippedSubmit)
-        {
-            _lastWaitKind = HostWaitKind.PaceSkipSubmit;
-            if (_unpacedDetector.Unpaced)
+            _lastWaitWantsDisplayClock = true;   // arms (and keeps armed) the display clock; the first wait also creates it
+            if (_window.DisplayClock.Available)
             {
-                _lastWaitWantsDisplayClock = false;
-                return FloorPaceMsWhenUnpaced(PhaseGateCeilingMs());
+                _lastWaitKind = HostWaitKind.DisplayTick;
+                return TickBackstopMs();
             }
-            _lastWaitWantsDisplayClock = true;
-            return PhaseGateCeilingMs();
+            _lastWaitKind = HostWaitKind.SoftwarePace;
+            return SoftwarePaceMs();
         }
-        // Unarmed async: nothing is owed a present, so there is no ack to sleep on and the wall-clock cap is the only
-        // pacer — precisely the case the display clock exists to replace. Sync (DisplayRate) returns 0 and needs no wake
-        // source at all.
-        _lastWaitKind = _asyncActive ? HostWaitKind.PaceAsync : HostWaitKind.DisplayRate;
-        // Unpaced Present: the compositor clock is not a phase reference (it may tick at CPU speed). Sleep the
-        // wall-clock floor; input still ends WaitForWork immediately.
-        _lastWaitWantsDisplayClock = _asyncActive && !_unpacedDetector.Unpaced;
-        return _asyncActive ? AsyncDisplayPaceMs() : 0;   // latency-sensitive / one-shot motion: sync = present-throttled (0); async = pace cap (present is off-thread — 0 would free-spin)
+        _lastWaitKind = HostWaitKind.DisplayRate;
+        return 0;
     }
 
     /// <summary>Was the wait that paced INTO the current frame a display-rate one? Latched in
@@ -1883,7 +1774,7 @@ public sealed class AppHost : IDisposable
     /// <summary>True when the loop was ALREADY running at display rate, as opposed to throttled/idle.
     ///
     /// Classified by BRANCH (<see cref="HostWaitKind"/>), not by timeout value. The value-based form this replaces was
-    /// wrong two ways. It aliased: <see cref="PhaseGateCeilingMs"/> is 17 ms on a 120 Hz panel and
+    /// wrong two ways. It aliased: <see cref="TickBackstopMs"/> is 17 ms on a 120 Hz panel and
     /// <see cref="AmbientFrameWaitMs"/> returns integers 1..17 there, so an Ambient-throttled frame that happened to
     /// compute 17 was classified display-rate — which skipped both the timer clamp and the step-up Resync, the exact
     /// cadence-lurch this guard exists to prevent. And it was stale: the gate wait was a mutable field read a frame
@@ -1903,7 +1794,7 @@ public sealed class AppHost : IDisposable
     /// recognised as one, EVERY animating async frame resyncs, NextDeltaMs() returns 0 every frame, and one-shot enter
     /// transitions freeze at their initial (invisible) state — animated content never appears while static chrome does.</summary>
     private static bool IsDisplayRateWait(HostWaitKind kind, int w) =>
-        kind is HostWaitKind.DisplayRate or HostWaitKind.PaceAsync or HostWaitKind.PaceSkipSubmit
+        kind is HostWaitKind.DisplayRate or HostWaitKind.DisplayTick or HostWaitKind.SoftwarePace
             || (kind is HostWaitKind.Baked && w == 0);
 
     /// <summary>True when capping the frame rate won't dull a one-shot transition: either no AnimEngine track is running,
@@ -2005,7 +1896,6 @@ public sealed class AppHost : IDisposable
     // ── Skip-submit gate state (finding #3a) ─────────────────────────────────────────────────────────────────────────
     private ulong _lastPresentedDrawListHash;   // FNV-1a of the last PRESENTED command stream; a byte-identical frame skips submit+present
     private long _framesSkippedSubmit;          // diagnostic census of elided submits (idle/playback redundant presents avoided)
-    private bool _lastFrameSkippedSubmit;       // the previous frame elided Present → RecommendedWaitMs must self-pace (no vsync block happened)
     private long _framesStoodDown;              // census of covered/cloaked Present stand-downs — NOT skip-submit elisions
     /// <summary>Frames whose GPU submit+present was elided because the recorded command stream matched the last presented one.</summary>
     public long FramesSkippedSubmit => _framesSkippedSubmit;
@@ -2535,16 +2425,9 @@ public sealed class AppHost : IDisposable
             // the render thread) + bound its fence waits, and give the render loop a recover gate (_device.RecoverDevice
             // under render confinement) + a thread-safe UI wake to nudge the UI out of its clean block on RecoverDone.
             if (_asyncActive) { _deviceLost = new Threading.DeviceLostCoordinator(); _device.EnableAsyncDeviceLostSignaling(); }
-            // Constructed BEFORE the render thread: the thread can present (and call back) the moment it exists, and a
-            // null gate on that path would drop the very first wake. The ack closure is allocated once here, never per
-            // frame — `_renderThread` is captured by reference so the not-yet-assigned field resolves at call time.
-            if (_asyncActive) _phaseGate = new Threading.DisplayPhaseGate(() => _renderThread?.PresentAck ?? 0UL);
             _renderThread = new Threading.RenderThread(_renderSeam, SubmitPresentOnRenderThread, async: _asyncActive,
                 deviceLost: _deviceLost, recover: _deviceLost is null ? null : RecoverDeviceAfterDump, windowWake: _deviceLost is null ? null : _window.Wake,
-                extraDrain: DrainChildRenderSources,
-                // The display-phase gate's clock. Async only: force-sync already blocks the UI in DrainSync (its phase
-                // reference was never lost), and a wake there would be pure overhead.
-                presentWake: _asyncActive ? OnRenderPresentAck : null);
+                extraDrain: DrainChildRenderSources);
             _device.MarkRenderConfined();
         }
 
@@ -2661,8 +2544,8 @@ public sealed class AppHost : IDisposable
         _lastFrameStartTicks = Stopwatch.GetTimestamp();   // frame-start stamp for RecommendedWaitMs ambient-fps pacing
 
         // ── ONE frame clock (scroll-v3-plan §5.1) — built HERE, before the pump/dispatch below, so a frame-aligned
-        // producer's PumpScroll (Paint, after the display-phase gate) and the scroll kernel's Tick (also Paint) both
-        // consume the identical (FrameQpc, PresentQpc) pair for this RunFrame call. Cheap: two field reads + integer
+        // producer's PumpScroll (Paint, after the production gate) and the scroll kernel's Tick (also Paint) both
+        // consume the identical (FrameQpc, PresentQpc) pair for this RunFrame call. Cheap: a few field reads + integer
         // arithmetic (RefreshLattice is pure), no allocation.
         unchecked { _frameClockSeq++; }
         if (_isHeadless)
@@ -2672,13 +2555,12 @@ public sealed class AppHost : IDisposable
         }
         else
         {
-            var presentStats = _device.LastPresentStats;
-            long anchorQpc = presentStats.Valid ? presentStats.SyncQpc : Volatile.Read(ref _lastPresentQpc);
-            long refreshQpc = RefreshPeriodQpcOrDefault();
-            long nowQpc = Stopwatch.GetTimestamp();
-            bool latticeValid = anchorQpc > 0 && refreshQpc > 0;
-            _palFrameClock = RefreshLattice.Build(anchorQpc, refreshQpc, nowQpc, _frameClockFloorQpc, _frameClockSeq,
-                latticeValid, _unpacedDetector.Unpaced);
+            // The compositor tick this frame belongs to (§13.2): production is gated to one frame per tick, and the frame
+            // is stamped with that tick's vblank instant. Sampled ONCE here so the gate below and the clock agree.
+            var display = _window.DisplayClock;
+            _frameTickSeq = display.Available ? display.TickSeq : 0;
+            _palFrameClock = RefreshLattice.Build(display.Available, display.TickQpc, RefreshPeriodQpcOrDefault(),
+                Stopwatch.GetTimestamp(), _frameClockFloorQpc, _frameClockSeq);
             _frameClockFloorQpc = _palFrameClock.FrameQpc;
         }
 
@@ -2876,11 +2758,11 @@ public sealed class AppHost : IDisposable
             if (s_wakeDiag) wake = ComputeWakeReasons();   // a completed decode forced this paint → re-attribute (now FrameNeeded)
         }
 
-        // Display-phase gate (see PhaseGateBlocks). Deliberately the LAST thing before Paint: the pump, the input
+        // Production gate (see ProductionGateBlocks). Deliberately the LAST thing before Paint: the pump, the input
         // dispatch, the close/device-lost/minimize gates and the image pump above have all already run, so nothing that
         // affects correctness or input latency is skipped — only the production of a frame that could not have been
         // shown. Reported Rendered:false, which is already the shape of the five other early-outs in this method.
-        if (PhaseGateBlocks())
+        if (ProductionGateBlocks())
         {
             LastStats = new FrameStats(0, clicks, 0, Rendered: false) { Fps = _fps, FrameMs = _frameMs };
             if (_wakeDiag is not null) { _wakeDiag.Record(wake, awake: true, rendered: false, reconciled: false, laidOut: false, minimized: false); _wakeDiag.MaybeReport(); }
@@ -2889,6 +2771,7 @@ public sealed class AppHost : IDisposable
         }
 
         if (s_allocDiag) _diagUiBytes += GC.GetAllocatedBytesForCurrentThread() - diagUiStart;
+        _lastProducedTickSeq = _frameTickSeq;   // this frame is the one produced for the current compositor tick
         FrameStats painted = Paint(clicks);
         if (_wakeDiag is not null)
         {
@@ -3376,6 +3259,13 @@ public sealed class AppHost : IDisposable
             // Native DirectComposition video presents decoded frames independently, so a playing video no longer turns
             // every host frame into RepaintCurrentFrame. Render remains pure; registered pumps only write value-gated
             // intents, with fullscreen single-writer ownership enforced by the registry.
+            // A surface's on-screen rect can move with NO layout change — a compositor-only Transform translation (a
+            // draggable mini-player), a page transition, a FLIP projection. Those move the punched hole but fire no
+            // bounds-changed edge, so nothing requested a pump and the DComp child stayed at its last-pumped offset
+            // (the video trailing the card during a drag). This compares each tracked surface's absolute rect and
+            // requests a pump only when it actually moved — so it observes a frame already being produced and never
+            // becomes a wake reason of its own. Must precede PumpPending so the placement drains this same frame turn.
+            _videoSurfaces.RequestGeometryPumps(_scene);
             _videoSurfaces.PumpPending(_scene.DeviceScale);
             ReclaimSettledOrphans();                           // 7 free settled exit orphans
             _connected.Settle();                               // 7 retire landed shared-element flies (reveal dest, unpin, free overlay)
@@ -3602,7 +3492,6 @@ public sealed class AppHost : IDisposable
                 // silent hole — a hole would make the pacing bucket look clean precisely when pacing is the fault.
                 _framePublishSeq = 0;
                 _framesSkippedSubmit++;
-                _lastFrameSkippedSubmit = true;   // no Present happened → RecommendedWaitMs applies the pacing floor
                 hotAlloc = GC.GetAllocatedBytesForCurrentThread() - before;
                 tSubmitDone = tSubmit = Stopwatch.GetTimestamp();
             }
@@ -3647,13 +3536,6 @@ public sealed class AppHost : IDisposable
                 // present stamp be attributed back to the offsets this frame baked in (it was previously discarded).
                 _framePublishSeq = _renderSeam.Publish(_drawList.Bytes, _drawList.SortKeys, in submitInfo,
                     suppressVsync: keepAlive, interactivePresent: interactivePresent);
-                // Arm the display-phase gate for the frame we JUST handed over, before waking the render thread. The
-                // gate is polled at the top of a frame, so a producing cycle used to run its whole record/layout/publish
-                // with the gate disarmed — and OnRenderPresentAck elides its wake when unarmed, so the ack for this very
-                // frame delivered nothing and the loop fell back to the wall-clock pace. Arming here (and BEFORE the
-                // wake, so the ack cannot land in the gap) is what puts the producing frames back on the display's
-                // phase. Never counts a gated frame: this one was produced, not declined.
-                if (_asyncActive) _phaseGate?.ArmAtPublish(_framePublishSeq, Stopwatch.GetTimestamp());
                 if (_renderThread is not null)
                 {
                     if (_asyncActive) _renderThread.WakeAsync();   // async: UI does NOT wait (present happens later, render-side)
@@ -3707,14 +3589,8 @@ public sealed class AppHost : IDisposable
                 {
                     // Counted SEPARATELY from skip-submit. `skipD` is the elided-redundant-frame metric a perf capture
                     // is judged by; folding stand-downs into it would let a covered/cloaked window manufacture a pass.
-                    _lastFrameSkippedSubmit = _device.LastPresentStoodDown;
-                    if (_lastFrameSkippedSubmit) _framesStoodDown++;
+                    if (_device.LastPresentStoodDown) _framesStoodDown++;
                 }
-                // A real submit+present paced this frame. MUST clear unconditionally: on the async path presentAwaited
-                // is false (the default since the render-async flip), so without this the flag latches true for the rest
-                // of the session after the first skip-submit frame, and the pacing floor then fires on a frame that
-                // actually presented the moment _asyncActive drops (modal loop, resize, render-thread teardown).
-                else _lastFrameSkippedSubmit = false;
                 hotAlloc = GC.GetAllocatedBytesForCurrentThread() - before;
                 tSubmit = Stopwatch.GetTimestamp();
             }
@@ -3733,6 +3609,10 @@ public sealed class AppHost : IDisposable
             // its video drain rides the parent thread's DrainChildRenderSources → child.SubmitPresentOnRenderThread — so
             // this UI-side drain must skip it too, or GetVideoPresenter's AssertSubmitThread trips on the UI thread.
             if (_renderThread is null && _parentRenderThread is null && _device.GetVideoPresenter(_swapchain) is { } vp) _videoSurfaces.Drain(vp, _window.Scale);
+            // Advisory, one way engine → PAL: a composited window defers ALL painting during an OS modal
+            // edge-resize, which would leave this video child at its pre-resize geometry while the frame moves
+            // under it. Telling the window it carries live video lets it keep a throttled keep-alive instead.
+            _window.SetHasLiveVideo(_videoSurfaces.HasLiveSurface);
 
             DrainPassiveEffects();                             // 12 passive effects
             _strings.Tick();                                   // 12.5 reclaim released text ids (behind the reader quarantine)
@@ -4429,18 +4309,12 @@ public sealed class AppHost : IDisposable
     private void NotePresented(ulong publishSeq)
     {
         long qpc = Stopwatch.GetTimestamp();   // first statement: everything downstream of Present is attribution error
-        long prevPresentQpc = Volatile.Read(ref _lastPresentQpc);
         Volatile.Write(ref _lastPresentQpc, qpc);
         if (publishSeq != 0) Volatile.Write(ref _lastPresentPublishSeq, (long)publishSeq);
         Interlocked.Increment(ref _presentedSequence);
         // The one place the 60 Hz phase-lock is observable (§11.1.4): the interval between consecutive presents. The
         // gate sees only "publish owed a present", and in the locked state every publish IS presented — one refresh
         // late, forever. Present-thread-owned; the UI side only reads two volatile ints.
-        _slipDetector.OnPresent(qpc, RefreshPeriodQpcOrDefault());
-        var presentStats = _device.LastPresentStats;
-        long refreshQpc = RefreshPeriodQpcOrDefault();
-        double intervalMs = prevPresentQpc > 0 ? (qpc - prevPresentQpc) * 1000.0 / Stopwatch.Frequency : 0.0;
-        _unpacedDetector.OnPresent(presentStats.Valid, presentStats.LatencyWaitMs, intervalMs, refreshQpc * 1000.0 / Stopwatch.Frequency);
     }
 
     private void UpdateFrameTiming(long frameStart)

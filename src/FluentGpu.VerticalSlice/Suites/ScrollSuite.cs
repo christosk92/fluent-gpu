@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
@@ -168,6 +168,81 @@ static class ScrollSuite
         // named scroll-timelines are removed from the DSL entirely (scroll-v3 plan §7.3 authoring collapse); no successor gate.
         ScrollControllerFoundationChecks(strings);
         ScrollV3HostLevelChecks(strings);
+        DrivenTargetRegrowChecks();
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+    // gate.scroll.driven-target-survives-growth — a programmatic Driven target posted BEFORE the content grew (an
+    // inline SizeMode.Reflow drawer animating 0→full, a virtualized list that measures late) used to be clamped
+    // against the extent known AT POST TIME and truncated forever. The kernel now latches the RAW request
+    // (ScrollBody.TargetRaw) and re-derives ScrollBody.Target on every SetFrame — and a takeover (Cancel here) must
+    // still kill it dead, so a stale request never resurrects on the next growth.
+    // ══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>Discards every write — these checks read the body snapshot (<see cref="ScrollKernel.TryGetBody"/>)
+    /// rather than the write stream, but the kernel still requires a sink.</summary>
+    sealed class NullScrollSink : IScrollSink
+    {
+        public void Apply(int node, in ScrollWrite w) { }
+    }
+
+    static void DrivenTargetRegrowChecks()
+    {
+        static ScrollFrameSpec Frame(float extent, float viewport)
+            => new(0, extent, 300f, viewport, 300f, 1f, false, 0f, 0f, 0f, null);
+
+        const int Node = 1;
+        const float Viewport = 400f;
+        const float SmallExtent = 1000f;    // maxOff = 600
+        const float GrownExtent = 3000f;    // maxOff = 2600
+        const float RawTarget = 2000f;      // beyond the SMALL extent's max, inside the GROWN one's
+
+        static float Settle(ScrollKernel k, ref double t)
+        {
+            for (int i = 0; i < 400; i++)
+            {
+                t += 0.00833;
+                k.Tick(new ScrollClock(t, 0.00833f, t, 0.00833f));
+            }
+            k.TryGetBody(Node, out var b);
+            return b.OffsetY;
+        }
+
+        // ── half 1: the truncated request is honoured once the content grows ──────────────────────────────────
+        var kA = new ScrollKernel(new NullScrollSink(), ScrollFeel.Shipping);
+        kA.Port.Post(ScrollInput.Bind(Node));
+        kA.Port.Post(ScrollInput.SetFrame(Node, Frame(SmallExtent, Viewport)));
+        kA.Reclamp();
+
+        double tA = 0;
+        kA.Port.Post(ScrollInput.ScrollTo(Node, RawTarget));
+        float truncated = Settle(kA, ref tA);
+        bool landedAtOldMax = MathF.Abs(truncated - (SmallExtent - Viewport)) <= 0.5f;
+
+        kA.Port.Post(ScrollInput.SetFrame(Node, Frame(GrownExtent, Viewport)));
+        kA.Reclamp();
+        float regrown = Settle(kA, ref tA);
+        bool reachedRaw = MathF.Abs(regrown - RawTarget) <= 0.5f;
+
+        // ── half 2: a cancelled request stays dead across the same growth ─────────────────────────────────────
+        var kB = new ScrollKernel(new NullScrollSink(), ScrollFeel.Shipping);
+        kB.Port.Post(ScrollInput.Bind(Node));
+        kB.Port.Post(ScrollInput.SetFrame(Node, Frame(SmallExtent, Viewport)));
+        kB.Reclamp();
+
+        double tB = 0;
+        kB.Port.Post(ScrollInput.ScrollTo(Node, RawTarget));
+        kB.Port.Post(ScrollInput.Cancel(Node));
+        float afterCancel = Settle(kB, ref tB);
+
+        kB.Port.Post(ScrollInput.SetFrame(Node, Frame(GrownExtent, Viewport)));
+        kB.Reclamp();
+        float afterGrowth = Settle(kB, ref tB);
+        bool stayedDead = MathF.Abs(afterGrowth - afterCancel) <= 0.5f;
+
+        Check("gate.scroll.driven-target-survives-growth a programmatic ScrollTo beyond the extent known at post time lands at the old max, then reaches its RAW target once the content grows (the kernel re-derives Target from ScrollBody.TargetRaw on SetFrame); a Cancel before the growth kills the request dead — it never resurrects",
+            landedAtOldMax && reachedRaw && stayedDead,
+            $"truncated={truncated:0.#}(want {SmallExtent - Viewport:0.#}) regrown={regrown:0.#}(want {RawTarget:0.#}) cancelled={afterCancel:0.#}→{afterGrowth:0.#}");
     }
 
     sealed class ControllerProbe : IScrollController
@@ -2855,129 +2930,42 @@ static class ScrollSuite
                 $"panels={panels} clamped={clamped} monotone={monotone} (120⇒{AppHost.DeriveAsyncPaceMs(1000.0 / 120)} 144⇒{AppHost.DeriveAsyncPaceMs(1000.0 / 144)} 240⇒{AppHost.DeriveAsyncPaceMs(1000.0 / 240)} 60⇒{AppHost.DeriveAsyncPaceMs(1000.0 / 60)} unknown⇒{AppHost.DeriveAsyncPaceMs(0.0)})");
         }
 
-        // gate.wake.unpacedPresentFloor: remote sessions (RDP / Shadow) often have no vblank — DXGI interval-1 returns
-        // in microseconds and DWM's compositor clock succeeds without waiting, so the UI loop free-runs at hundreds of
-        // FPS. The present thread attests this by TWO signals together: LatencyWaitMs ~ 0 AND presents completing
-        // faster than half a refresh apart (impossible under vblank lock). Eight consecutive such presents engage a
-        // 60 Hz software floor; the first 4 ms wait disengages. A sub-ms wait with vblank-spaced presents (the UI merely
-        // producing slower than the panel — a heavy page fill) must NOT engage: that combination floored a real 120 Hz
-        // panel to 60 Hz and latched there. Invalid stats classify nothing.
+        // gate.pace.frame-clock-from-tick: production is paced on the compositor tick (scroll-v3-plan §13.2) and the
+        // frame is stamped with THAT tick's vblank instant — exact, monotone, one per vblank — with PresentQpc two
+        // refreshes later (SetMaximumFrameLatency(1) + DWM composition). A stale tick (the clock was parked while the
+        // loop idled: older than two refreshes) stamps the frame with `now` instead; no clock at all ⇒ Unpaced + `now`.
+        // FrameQpc never rewinds past the previous frame.
         {
-            const double refresh = 8.333;
-            bool floor = AppHost.FloorPaceMsWhenUnpaced(3) == 15
-                      && AppHost.FloorPaceMsWhenUnpaced(7) == 15
-                      && AppHost.FloorPaceMsWhenUnpaced(15) == 15
-                      && AppHost.FloorPaceMsWhenUnpaced(32) == 32;
-
-            var det = new FluentGpu.Hosting.Threading.PresentUnpacedDetector();
-            for (int i = 0; i < 7; i++) det.OnPresent(statsValid: true, latencyWaitMs: 0.1, presentIntervalMs: 2.0, refreshMs: refresh);
-            bool sevenNotEnough = !det.Unpaced && det.StreakForTest == 7;
-            det.OnPresent(statsValid: true, latencyWaitMs: 0.1, presentIntervalMs: 2.0, refreshMs: refresh);
-            bool eighthEngages = det.Unpaced && det.StreakForTest == 8;
-            det.OnPresent(statsValid: true, latencyWaitMs: 4.0, presentIntervalMs: 8.3, refreshMs: refresh);
-            bool pacedDisengages = !det.Unpaced && det.StreakForTest == 0;
-
-            var mid = new FluentGpu.Hosting.Threading.PresentUnpacedDetector();
-            for (int i = 0; i < 7; i++) mid.OnPresent(statsValid: true, latencyWaitMs: 0.1, presentIntervalMs: 2.0, refreshMs: refresh);
-            mid.OnPresent(statsValid: true, latencyWaitMs: 2.0, presentIntervalMs: 2.0, refreshMs: refresh);   // 1..4 ms: hold, do not grow
-            bool midResetsStreak = !mid.Unpaced && mid.StreakForTest == 0;
-
-            var slow = new FluentGpu.Hosting.Threading.PresentUnpacedDetector();
-            for (int i = 0; i < 20; i++) slow.OnPresent(statsValid: true, latencyWaitMs: 0.1, presentIntervalMs: 17.0, refreshMs: refresh);   // slower-than-refresh producer on a real panel
-            bool slowProducerNeverEngages = !slow.Unpaced && slow.StreakForTest == 0;
-
-            var junk = new FluentGpu.Hosting.Threading.PresentUnpacedDetector();
-            for (int i = 0; i < 7; i++) junk.OnPresent(statsValid: true, latencyWaitMs: 0.1, presentIntervalMs: 2.0, refreshMs: refresh);
-            junk.OnPresent(statsValid: false, latencyWaitMs: 0.0, presentIntervalMs: 2.0, refreshMs: refresh);
-            bool invalidInert = !junk.Unpaced && junk.StreakForTest == 7;
-
-            Check("gate.wake.unpacedPresentFloor eight consecutive sub-ms latency waits WITH faster-than-refresh presents engage a 60 Hz software floor (3→15, 7→15, 15 stays, 32 stays); one 4 ms wait disengages; 1..4 ms, a slower-than-refresh producer, and invalid stats never trip a live panel",
-                floor && sevenNotEnough && eighthEngages && pacedDisengages && midResetsStreak && slowProducerNeverEngages && invalidInert,
-                $"floor={floor} seven={sevenNotEnough} eighth={eighthEngages} paced={pacedDisengages} mid={midResetsStreak} slow={slowProducerNeverEngages} junk={invalidInert}");
+            long f = System.Diagnostics.Stopwatch.Frequency;
+            long refresh = f / 120;
+            long tick = 1_000_000 * (f / 1_000_000);   // an arbitrary vblank instant
+            var onTick = FluentGpu.Hosting.RefreshLattice.Build(tickAvailable: true, tickQpc: tick, refreshQpc: refresh, nowQpc: tick + refresh / 4, lastFrameQpc: 0, seq: 1);
+            bool stampsTick = onTick.FrameQpc == tick && onTick.PresentQpc == tick + 2 * refresh
+                && (onTick.Flags & FluentGpu.Pal.FrameClockFlags.LatticeValid) != 0 && (onTick.Flags & FluentGpu.Pal.FrameClockFlags.Unpaced) == 0;
+            long later = tick + 3 * refresh;
+            var stale = FluentGpu.Hosting.RefreshLattice.Build(true, tick, refresh, nowQpc: later, lastFrameQpc: onTick.FrameQpc, seq: 2);
+            bool staleUsesNow = stale.FrameQpc == later && (stale.Flags & FluentGpu.Pal.FrameClockFlags.LatticeValid) == 0;
+            var noClock = FluentGpu.Hosting.RefreshLattice.Build(false, 0, refresh, nowQpc: later + refresh, lastFrameQpc: stale.FrameQpc, seq: 3);
+            bool unpaced = (noClock.Flags & FluentGpu.Pal.FrameClockFlags.Unpaced) != 0 && noClock.FrameQpc == later + refresh
+                && noClock.PresentQpc == noClock.FrameQpc + 2 * refresh;
+            var rewind = FluentGpu.Hosting.RefreshLattice.Build(true, tick, refresh, nowQpc: tick + refresh / 2, lastFrameQpc: tick + refresh, seq: 4);
+            bool neverRewinds = rewind.FrameQpc == tick + refresh;
+            Check("gate.pace.frame-clock-from-tick a produced frame is stamped with its compositor tick's vblank instant (PresentQpc = +2 refresh, LatticeValid); a stale tick (>2R old) or no clock stamps `now` (no clock ⇒ Unpaced); FrameQpc never rewinds",
+                stampsTick && staleUsesNow && unpaced && neverRewinds,
+                $"tick={stampsTick} stale={staleUsesNow} unpaced={unpaced} monotone={neverRewinds}");
         }
 
-        // gate.wake.armedSlipRephase: the armed phase gate's one blind spot (threading-render-seam.md §11.1.4). After a
-        // single slipped vblank the render thread's acks land one refresh apart — 16.67 ms on a 120 Hz panel, UNDER the
-        // 17 ms ceiling, so the ceiling structurally never fires — ack-paced production follows at 60 Hz and the lock
-        // sustains itself for minutes. The escape needs the present thread to attest the slip and the UI thread to
-        // produce on the compositor tick instead of re-gating. Both halves are pure state machines over injected QPC,
-        // so both are locked here without a live panel.
+        // gate.pace.software-pace: without a display clock the loop wall-clock paces at just under the refresh period
+        // when the panel period is attested, and at the 60 Hz floor when it is not (headless; a remote DWM reporting a
+        // bogus 2 ms "refresh" must never clamp to the 3 ms spin floor).
         {
-            const long R = 83333;   // one 120 Hz refresh at a 10 MHz QPC
-            // Hysteresis: two one-slips must NOT engage, the third must. Engaging on the first would fire on every
-            // isolated scheduling hiccup and force the loop to panel rate for no reason.
-            var det = new FluentGpu.Hosting.Threading.PresentSlipDetector();
-            long t = 1_000_000;
-            det.OnPresent(t, R);                       // first present: no interval to classify
-            bool firstStamped = !det.RephaseWanted && det.SlipStreakForTest == 0;
-            t += 2 * R; det.OnPresent(t, R);
-            t += 2 * R; det.OnPresent(t, R);
-            bool twoNotEnough = !det.RephaseWanted && det.SlipStreakForTest == 2 && det.Episode == 0;
-            t += 2 * R; det.OnPresent(t, R);
-            bool thirdEngages = det.RephaseWanted && det.Episode == 1;
-
-            // A healthy interval disengages IMMEDIATELY: the escape has done its job and holding the tick armed past
-            // that point is the busywork the armed branch exists to avoid.
-            t += R; det.OnPresent(t, R);
-            bool oneHealthyDisengages = !det.RephaseWanted && det.SlipStreakForTest == 0 && det.Episode == 1;
-
-            // Re-locking is a NEW episode, so a budget-spending consumer starts over rather than inheriting a spent one.
-            for (int i = 0; i < 3; i++) { t += 2 * R; det.OnPresent(t, R); }
-            bool reEngageBumpsEpisode = det.RephaseWanted && det.Episode == 2;
-
-            // Jitter tolerance: the band is 1.5R..2.5R, so 2R ± 0.3R stays engaged, and 1.2R (healthy) disengages.
-            t += (long)(2.3 * R); det.OnPresent(t, R);
-            t += (long)(1.7 * R); det.OnPresent(t, R);
-            bool jitterStaysEngaged = det.RephaseWanted && det.Episode == 2;
-            t += (long)(1.2 * R); det.OnPresent(t, R);
-            bool nearHealthyDisengages = !det.RephaseWanted;
-
-            // >= 2.5R is an idle gap, occlusion, or a GPU that genuinely cannot hold the rate — never a phase problem,
-            // and it must also RESET an in-progress streak rather than counting toward an engage.
-            var idle = new FluentGpu.Hosting.Threading.PresentSlipDetector();
-            long u = 5_000_000;
-            idle.OnPresent(u, R);
-            u += 2 * R; idle.OnPresent(u, R);
-            u += 2 * R; idle.OnPresent(u, R);          // streak 2, one short of engaging
-            u += 40 * R; idle.OnPresent(u, R);         // a long gap lands instead
-            bool gapResets = !idle.RephaseWanted && idle.SlipStreakForTest == 0 && idle.Episode == 0;
-            for (int i = 0; i < 6; i++) { u += 3 * R; idle.OnPresent(u, R); }
-            bool gapNeverEngages = !idle.RephaseWanted && idle.Episode == 0;
-            // Garbage input (no measured refresh, a non-monotonic stamp) classifies nothing and destroys no streak.
-            var junk = new FluentGpu.Hosting.Threading.PresentSlipDetector();
-            long v = 9_000_000;
-            junk.OnPresent(v, R);
-            v += 2 * R; junk.OnPresent(v, R);
-            v += 2 * R; junk.OnPresent(v, R);
-            junk.OnPresent(v + 2 * R, 0);              // no refresh period reported
-            junk.OnPresent(v - R, R);                  // clock went backwards
-            bool junkInert = !junk.RephaseWanted && junk.SlipStreakForTest == 2;
-
-            // The UI half: the escape fires only for (wanted, armed, PaceAsync, under budget). The kind guard is the
-            // load-bearing one — Ambient/adaptive-governor branches precede the armed branch and pace ~2R BY DESIGN, so
-            // without it a deliberately-capped loop would be forced to panel rate by its own throttle's signature.
-            bool truth = AppHost.ShouldRephaseEscape(true, true, HostWaitKind.PaceAsync, 0, 8)
-                      && AppHost.ShouldRephaseEscape(true, true, HostWaitKind.PaceAsync, 7, 8)
-                      && !AppHost.ShouldRephaseEscape(true, true, HostWaitKind.PaceAsync, 8, 8)     // at budget
-                      && !AppHost.ShouldRephaseEscape(true, true, HostWaitKind.PaceAsync, 9, 8)
-                      && !AppHost.ShouldRephaseEscape(false, true, HostWaitKind.PaceAsync, 0, 8)    // no slip attested
-                      && !AppHost.ShouldRephaseEscape(true, false, HostWaitKind.PaceAsync, 0, 8)    // nothing owed
-                      && !AppHost.ShouldRephaseEscape(true, true, HostWaitKind.Ambient, 0, 8)
-                      && !AppHost.ShouldRephaseEscape(true, true, HostWaitKind.AdaptiveGpu, 0, 8)
-                      && !AppHost.ShouldRephaseEscape(true, true, HostWaitKind.DisplayRate, 0, 8)
-                      && !AppHost.ShouldRephaseEscape(true, true, HostWaitKind.PaceSkipSubmit, 0, 8)
-                      && !AppHost.ShouldRephaseEscape(true, true, HostWaitKind.Idle, 0, 8)
-                      && !AppHost.ShouldRephaseEscape(true, true, HostWaitKind.Hud, 0, 8)
-                      && !AppHost.ShouldRephaseEscape(true, true, HostWaitKind.Baked, 0, 8);
-
-            bool detectorOk = firstStamped && twoNotEnough && thirdEngages && oneHealthyDisengages
-                           && reEngageBumpsEpisode && jitterStaysEngaged && nearHealthyDisengages
-                           && gapResets && gapNeverEngages && junkInert;
-            Check("gate.wake.armedSlipRephase the present thread attests a sustained one-vblank slip (3 consecutive 1.5R..2.5R intervals engage, one healthy interval disengages, >=2.5R gaps never engage and reset the streak, re-engaging bumps the episode); the armed gate escapes only for (wanted, armed, PaceAsync, under budget)",
-                detectorOk && truth,
-                $"first={firstStamped} two={twoNotEnough} third={thirdEngages} healthy={oneHealthyDisengages} " +
-                $"episode={reEngageBumpsEpisode} jitter={jitterStaysEngaged} nearHealthy={nearHealthyDisengages} " +
-                $"gapReset={gapResets} gapNever={gapNeverEngages} junk={junkInert} truthTable={truth}");
+            bool trusted120 = AppHost.SoftwarePaceMs(1000.0 / 120, refreshTrusted: true) == AppHost.DeriveAsyncPaceMs(1000.0 / 120);
+            bool trusted60 = AppHost.SoftwarePaceMs(1000.0 / 60, refreshTrusted: true) == AppHost.DeriveAsyncPaceMs(1000.0 / 60);
+            bool untrusted = AppHost.SoftwarePaceMs(1000.0 / 120, refreshTrusted: false) == AppHost.SoftwarePaceFloorMs;
+            bool bogus = AppHost.SoftwarePaceMs(2.0, refreshTrusted: true) == AppHost.SoftwarePaceFloorMs;
+            Check("gate.pace.software-pace no display clock ⇒ wall-clock pace just under the attested refresh (7@120, 15@60); untrusted or bogus (<4 ms) refresh ⇒ the 60 Hz floor",
+                trusted120 && trusted60 && untrusted && bogus && AppHost.SoftwarePaceFloorMs == 15,
+                $"120={trusted120} 60={trusted60} untrusted={untrusted} bogus={bogus}");
         }
 
         // gate.motion.scrollSuppressionSnapsFlip (W2-P2.2): a reconcile landing on the frame right after a scroll

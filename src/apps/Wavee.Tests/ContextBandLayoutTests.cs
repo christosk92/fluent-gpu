@@ -378,7 +378,10 @@ public class ContextBandLayoutTests
         if (root is null) { Assert.Skip("app sources not present (binary-only run)"); return; }
 
         string artist = File.ReadAllText(Path.Combine(root, "Features", "Detail", "ArtistPage.cs"));
-        Assert.Contains("ClipTopAtViewport = ContextBand.ClipInset", artist);
+        // scroll-v3 WP-R3: the raw ScrollBindDsl { ClipTopAtViewport = ContextBand.ClipInset } row became the
+        // .ClipBelow(ContextBand.ClipInset) recipe (Dsl/ScrollBindDsl.cs ScrollRecipes.ClipBelow) — same POD row,
+        // authored form only.
+        Assert.Contains(".ClipBelow(ContextBand.ClipInset)", artist);
         Assert.Contains("ScrollEdgeCues.None", artist);
 
         string tracks = File.ReadAllText(Path.Combine(root, "Features", "Detail", "DetailTracks.cs"));

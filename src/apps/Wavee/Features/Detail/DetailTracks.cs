@@ -1261,10 +1261,13 @@ sealed class TrackList : Component
                 Element content = Embed.Comp(() =>
                     new VerticalItemContent(this, scope, rowH, narrateRemount));
                 int initial = scope.Index.Peek();
-                ScrollBindDsl[]? binds = initial == VerticalHeroIndex
-                    ? VerticalHeroBinds(VerticalHeaderHeight(), DetailVerticalLayout.CollapseDistance(VerticalHeaderHeight()))
-                    : initial == VerticalChromeIndex ? VerticalChromeBinds() : null;
-                return new BoxEl { Direction = 1, ScrollBinds = binds ?? [], Children = [content] };
+                Element row = new BoxEl { Direction = 1, Children = [content] };
+                return initial == VerticalHeroIndex
+                    ? row.Collapse(VerticalHeaderHeight(), DetailVerticalLayout.CompactIdentityHeight,
+                        DetailVerticalLayout.CollapseDistance(VerticalHeaderHeight()))
+                    : initial == VerticalChromeIndex
+                        ? row.Sticky(DetailVerticalLayout.CompactIdentityHeight, pinned => _verticalCompactInteractive.Value = pinned)
+                        : row;
             },
             RepeatLayout.Measured(layout),
             new ListOptions
@@ -1453,19 +1456,6 @@ sealed class TrackList : Component
         if (_swipeGroup.AnyOpen) _swipeGroup.Close();
     }
 
-    ScrollBindDsl[] VerticalHeroBinds(float expandedHeight, float collapseDistance) =>
-    [
-        new() { PinTop = 0f },
-        new() { From = ScrollChannel.Offset, To = BindSink.PresentedH,
-            Range = ScrollRange.Px(0f, collapseDistance), OutStart = expandedHeight, OutEnd = DetailVerticalLayout.CompactIdentityHeight },
-    ];
-
-    ScrollBindDsl[] VerticalChromeBinds() =>
-    [
-        new() { PinTop = DetailVerticalLayout.CompactIdentityHeight,
-            OnFlag = pinned => _verticalCompactInteractive.Value = pinned },
-    ];
-
     void ApplyVerticalItemBand(float stickyInset)
     {
         if (!_verticalHeader || _cfg.HasTrailing || Context.Scene is not { } scene) return;
@@ -1533,16 +1523,14 @@ sealed class TrackList : Component
     Element VerticalHeroRoot(float expandedHeight, float collapseDistance) => new BoxEl
     {
         Key = "vertical:hero-root", Direction = 1, ClipToBounds = true,
-        ScrollBinds = VerticalHeroBinds(expandedHeight, collapseDistance),
         Children = [VerticalHero()],
-    };
+    }.Collapse(expandedHeight, DetailVerticalLayout.CompactIdentityHeight, collapseDistance);
 
     Element VerticalChromeRoot(Element chrome) => new BoxEl
     {
         Key = "vertical:chrome-root", Direction = 1,
-        ScrollBinds = VerticalChromeBinds(),
         Children = [chrome],
-    };
+    }.Sticky(DetailVerticalLayout.CompactIdentityHeight, pinned => _verticalCompactInteractive.Value = pinned);
 
     // Album/single AND playlist/liked vertical: hero + chrome are direct children of the OUTER scroll content, so
     // their binds resolve this scroller. Everything after chrome shares ONE sticky clip owner (never per-row clips —

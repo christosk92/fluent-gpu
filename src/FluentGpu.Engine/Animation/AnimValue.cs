@@ -42,6 +42,10 @@ public enum AnimFlags : ushort
     Accumulate    = 1 << 9,   // distinguishes Add vs Accumulate when Additive is set
     DisplayRate   = 1 << 10,  // a TRANSIENT loop (e.g. an indeterminate progress bar) that opts OUT of the ambient
                               // frame-rate cap and runs at the panel refresh — it's short-lived, not a perpetual idle loop
+    ClipAdded     = 1 << 11,  // SizeMode.Reflow: THIS row put NodeFlags.ClipsToBounds on the node (the node did not
+                              // declare it), so the row's teardown must take it off again — and only then. While a
+                              // reflow writes an EASED LayoutInput.Height the content is still arranged at its natural
+                              // height, so without the clip the node paints straight over the sibling below it.
 }
 
 /// <summary>The 16-byte tagged-union generator law. The owning <see cref="AnimValue.Kind"/> selects the reading.

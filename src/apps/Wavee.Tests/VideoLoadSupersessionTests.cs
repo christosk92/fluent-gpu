@@ -330,7 +330,7 @@ public class VideoLoadSupersessionTests
         using var controller = new PlaybackController(audio, new StubTrackResolver(), projection,
             new FakeContextResolver("spotify:track:a", "spotify:track:b"), "us", videoHost: video);
         controller.ShouldPlayAsVideo = _ => true;
-        controller.LoadCurrentVideoAsync = (_, _) => Task.FromResult(true);
+        controller.LoadCurrentVideoAsync = (_, _, _) => Task.FromResult(true);
         controller.OnPlaybackError = e => { lock (errors) errors.Add(e); };
 
         await controller.PlayAsync("spotify:playlist:p");
@@ -358,7 +358,7 @@ public class VideoLoadSupersessionTests
         using var controller = new PlaybackController(audio, new StubTrackResolver(), projection,
             new FakeContextResolver("spotify:track:a", "spotify:track:b"), "us", videoHost: video);
         controller.ShouldPlayAsVideo = _ => true;
-        controller.LoadCurrentVideoAsync = (_, _) => Task.FromResult(true);
+        controller.LoadCurrentVideoAsync = (_, _, _) => Task.FromResult(true);
         controller.OnPlaybackError = e => { lock (errors) errors.Add(e); };
 
         await controller.PlayAsync("spotify:playlist:p");
@@ -389,7 +389,7 @@ public class VideoLoadSupersessionTests
         using var controller = new PlaybackController(audio, new StubTrackResolver(), projection,
             new FakeContextResolver("spotify:track:a", "spotify:track:b"), "us", videoHost: video);
         controller.ShouldPlayAsVideo = _ => true;
-        controller.LoadCurrentVideoAsync = (_, _) => { Interlocked.Increment(ref loads); return Task.FromResult(true); };
+        controller.LoadCurrentVideoAsync = (_, _, _) => { Interlocked.Increment(ref loads); return Task.FromResult(true); };
         controller.OnPlaybackError = e => { lock (errors) errors.Add(e); };
 
         await controller.PlayAsync("spotify:playlist:p");

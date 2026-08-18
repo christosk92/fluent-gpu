@@ -22,6 +22,7 @@ sealed class SelectionCommandBar : Component
     readonly Action _exit;
     readonly Func<PlaylistHost?>? _host;
     readonly bool _standalone;
+    readonly int _minCount = 1;
     readonly float _bottomPadding;
     readonly Signal<float> _laneW = new(0f);
 
@@ -49,6 +50,9 @@ sealed class SelectionCommandBar : Component
         _exit = sel.DeselectAll;
         _host = host;
         _standalone = true;
+        // Overlay hosts have no explicit multi-select mode. A plain click is a 1-row highlight (ListView Extended);
+        // the batch bar is for a real multi-selection — the same 2+ rule as the drawer's checkbox lane.
+        _minCount = 2;
         _bottomPadding = bottomPadding;
     }
 
@@ -66,7 +70,7 @@ sealed class SelectionCommandBar : Component
         int count = SelectedTrackCount();
         bool wasVisible = previousCount.Value > 0;
         previousCount.Value = count;
-        if (count == 0) return new BoxEl();
+        if (count < _minCount) return new BoxEl();
 
         Element content = new BoxEl
         {

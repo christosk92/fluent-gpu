@@ -90,12 +90,12 @@ sealed class SpotifyOnlineCatalog : IOnlineCatalog, IDisposable
             w.WriteString("query", query);
             w.WriteNumber("limit", limit);
             w.WriteNumber("offset", offset);
-            w.WriteNumber("numberOfTopResults", limit);
+            w.WriteNumber("numberOfTopResults", 50);
             w.WriteBoolean("includeArtistHasConcertsField", false);
             w.WriteBoolean("includeAudiobooks", true);
             w.WriteBoolean("includeAuthors", true);
             w.WriteBoolean("includePreReleases", true);
-            w.WriteBoolean("includeAlbumPreReleases", true);
+            w.WriteBoolean("includeAlbumPreReleases", false);
             w.WriteBoolean("includeEpisodeContentRatingsV2", true);
             w.WriteNull("isPrefix");
             w.WriteStartArray("sectionFilters");
@@ -127,6 +127,20 @@ sealed class SpotifyOnlineCatalog : IOnlineCatalog, IDisposable
             w.WriteBoolean("includeEpisodeContentRatingsV2", true);
         }
 
+        // searchGenres: capture 1.2.96.518 (search.saz SID 098). Keyed on searchTerm; includeAlbumPreReleases false.
+        void VarsGenres(Utf8JsonWriter w)
+        {
+            w.WriteBoolean("includePreReleases", false);
+            w.WriteBoolean("includeAlbumPreReleases", false);
+            w.WriteNumber("numberOfTopResults", 20);
+            w.WriteString("searchTerm", query);
+            w.WriteNumber("offset", offset);
+            w.WriteNumber("limit", limit);
+            w.WriteBoolean("includeAudiobooks", true);
+            w.WriteBoolean("includeAuthors", true);
+            w.WriteBoolean("includeEpisodeContentRatingsV2", true);
+        }
+
         var callerCt = ct;
         using var searchCts = CancellationTokenSource.CreateLinkedTokenSource(callerCt);
         searchCts.CancelAfter(TimeSpan.FromSeconds(8));
@@ -153,6 +167,8 @@ sealed class SpotifyOnlineCatalog : IOnlineCatalog, IDisposable
                 SearchFacet.Audiobooks => (PathfinderOps.SearchAudiobooks, PathfinderOps.SearchAudiobooksHash),
                 SearchFacet.Episodes => (PathfinderOps.SearchFullEpisodes, PathfinderOps.SearchFullEpisodesHash),
                 SearchFacet.Profiles => (PathfinderOps.SearchUsers, PathfinderOps.SearchUsersHash),
+                SearchFacet.Genres => (PathfinderOps.SearchGenres, PathfinderOps.SearchGenresHash),
+                SearchFacet.Authors => (PathfinderOps.SearchAuthors, PathfinderOps.SearchAuthorsHash),
                 // Unreachable: every SearchFacet member is mapped above. Kept as a loud failure so a NEW enum member
                 // added without an operation fails at the call instead of silently returning empty results.
                 _ => throw new NotSupportedException($"Search facet '{facet}' is not wired to a Pathfinder operation."),
@@ -165,6 +181,7 @@ sealed class SpotifyOnlineCatalog : IOnlineCatalog, IDisposable
             {
                 SearchFacet.Audiobooks => VarsAudiobooks,
                 SearchFacet.Episodes => VarsEpisodes,
+                SearchFacet.Genres => VarsGenres,
                 _ => Vars,
             };
 
@@ -198,10 +215,24 @@ sealed class SpotifyOnlineCatalog : IOnlineCatalog, IDisposable
                 w.WriteNumber("numberOfTopResults", 30);
                 w.WriteNumber("offset", 0);
                 w.WriteBoolean("includeAuthors", true);
-                w.WriteBoolean("includeAlbumPreReleases", true);
+                w.WriteBoolean("includeAlbumPreReleases", false);
                 w.WriteBoolean("includeEpisodeContentRatingsV2", true);
             }, PathfinderClient.Platform.WebPlayer, ct).ConfigureAwait(false);
         return doc is null ? SearchSuggestions.Empty : Wavee.Core.SpotifyExportMapper.SuggestionsFromV2(doc.RootElement);
+    }
+
+    public async Task<IReadOnlyList<SearchTopHit>> RecentSearchesAsync(CancellationToken ct = default)
+    {
+        using var doc = await _pathfinder.QueryAsync(PathfinderOps.RecentSearches, PathfinderOps.RecentSearchesHash,
+            w =>
+            {
+                w.WriteNumber("limit", 50);
+                w.WriteBoolean("includeAuthors", true);
+                w.WriteBoolean("includeEpisodeContentRatingsV2", true);
+            }, PathfinderClient.Platform.WebPlayer, ct).ConfigureAwait(false);
+        return doc is null
+            ? Array.Empty<SearchTopHit>()
+            : Wavee.Core.SpotifyExportMapper.RecentSearchesFrom(doc.RootElement);
     }
 
     // ── home ─────────────────────────────────────────────────────────────────────────────────────────────────────────

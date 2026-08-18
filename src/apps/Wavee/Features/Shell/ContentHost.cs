@@ -139,7 +139,7 @@ sealed class ContentHost : Component
 
         if (r.Name == "search")
             return new BoxEl { Key = "page:search", Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
-                Children = [ Embed.Comp(() => new SearchPage()) ] };
+                Children = [ Embed.Comp(() => new SearchPage(_route)) ] };
 
         if (r.Name == "albums" || r.Name == "artists" || r.Name == "podcasts")
             return new BoxEl { Key = "page:" + r.Name, Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,

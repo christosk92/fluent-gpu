@@ -45,3 +45,21 @@ public sealed record PopOutVideoSource
         Func<LicenseRequest, ValueTask<LicenseResponse>> relay, string? licenseServerUri)
         => new() { DrmDescriptor = descriptor, LicenseRelay = relay, LicenseServerUri = licenseServerUri, Key = manifestId };
 }
+
+/// <summary>
+/// ONE video load request: the resolved <see cref="PopOutVideoSource"/> plus the position the session must START at.
+///
+/// <para>The start position travels WITH the request rather than being latched on the host, and that is load-bearing.
+/// A position carried across an audio→video switch is issued at the moment of the swap, when the video player does not
+/// exist yet — <c>LoadVideo</c> hands off to the serialized <see cref="VideoLoadPump{TSource}"/>, which awaits the
+/// predecessor's teardown to completion before building the successor. A bare <c>Seek</c> at that instant lands on a
+/// null player and is dropped (that is why every audio→video switch used to restart at 0), and a host-side latch cannot
+/// fix it safely: the pump runs teardown BEFORE build for the same request, so a latch cleared on teardown dies before
+/// use, while one that survives teardown leaks onto the next track's load. Carrying it on the request makes it scoped to
+/// exactly one load by construction, and the pump's latest-wins coalescing scopes it for free.</para>
+/// </summary>
+/// <param name="Source">The resolved video source to open.</param>
+/// <param name="StartAtMs">Where the session must begin, in ms. <c>&lt;= 0</c> means "from the start" — the ordinary
+/// case for a fresh track. Clamped against the video's real duration once the media engine reports it, because a
+/// carried audio position can exceed a shorter video edit.</param>
+public sealed record VideoLoadRequest(PopOutVideoSource Source, long StartAtMs);

@@ -210,6 +210,9 @@ public sealed class EditableText : Component
     public bool LastEditWasDeletion { get; private set; }
     /// <summary>Selection changed: (start, length) in UTF-16 document indices (WinUI <c>SelectionChanged</c>).</summary>
     public Action<int, int>? OnSelectionChanged;
+    /// <summary>Optional preview. Returning true consumes the key before the editor keymap — AutoSuggestBox uses this
+    /// so Tab / Right-at-end can accept an inline completion without the caret chord eating the key.</summary>
+    public Func<KeyEventArgs, bool>? PreviewKeyDown;
 
     /// <summary>The editing state machine — the honest selection/caret/undo surface (<c>SelectionStart</c>,
     /// <c>CanUndo</c>, <c>UndoDepth</c>…). Reads are free; for programmatic mutations prefer the wrappers below so the
@@ -217,6 +220,7 @@ public sealed class EditableText : Component
     public TextEditCore Core => _core;
     public int SelectionStart => _core.Selection.Start;
     public int SelectionLength => _core.Selection.Length;
+    public int DocumentLength => _core.Doc.Length;
     public string SelectedText => _core.SelectedText;
     public void Select(int start, int length) { _core.Select(start, length); SyncVisual(); }
     public void SelectAll() { _core.SelectAll(); SyncVisual(); }
@@ -614,6 +618,7 @@ public sealed class EditableText : Component
     // ── keyboard ────────────────────────────────────────────────────────────────────────────────────────────────────
     private void HandleKey(KeyEventArgs e)
     {
+        if (PreviewKeyDown?.Invoke(e) == true) { e.Handled = true; return; }
         var bind = TextEditKeymap.Map(e.KeyCode, e.Mods, AcceptsReturn);
         if (bind.Command == TextEditCommand.None) return;   // not ours — MUST bubble (AutoSuggestBox Up/Down nav)
 

@@ -85,7 +85,15 @@ public sealed partial class AnimEngine
         }
         else if (MathF.Abs(from - to) < 0.5f) return;
 
-        float declared = ch == AnimChannel.LayoutW ? _scene.Layout(node).Width : _scene.Layout(node).Height;
+        // The DECLARED value must be captured ONCE, on the row's creation. `_scene.Layout(node)` is the very column
+        // this track writes each tick, so re-reading it on a genuine RETARGET (the two guards above protect the track,
+        // not this snapshot) hands back a MID-ANIMATION number — which SettleRestore would then write back as the
+        // node's permanent declared size. Carry the existing row's RestoreTo forward instead.
+        bool hadRow = ex >= 0;
+        bool hadClipAdded = hadRow && _slab.At(ex).Has(AnimFlags.ClipAdded);
+        float declared = hadRow
+            ? _slab.At(ex).RestoreTo
+            : (ch == AnimChannel.LayoutW ? _scene.Layout(node).Width : _scene.Layout(node).Height);
         if (dyn.Kind == DynamicsKind.Spring)
             Spring(node, ch, to, SpringParams.FromResponse(dyn.Response, dyn.DampingRatio), initial: from, delayMs: spec.DelayMs);
         else
@@ -97,7 +105,45 @@ public sealed partial class AnimEngine
             ref AnimValue r = ref _slab.At(s);
             r.RestoreTo = declared;
             if (spec.Anchor == SizeAnchor.Trailing) r.Flags |= AnimFlags.TrailingAnchor;
+            // The code that writes LayoutInput owns the clip. A reflow drives the node's LAYOUT size while its CONTENT
+            // is still arranged at the natural height, so an unclipped node paints over whatever follows it (a Skel
+            // region easing 0→H is the pathological case: it starts at ZERO and covers the whole sibling below). Add
+            // the clip for the life of the track and remember that WE added it — a node that declared ClipToBounds
+            // itself, or a ScrollEl / VirtualListEl viewport, must never be un-clipped when the row is freed.
+            if (hadClipAdded) r.Flags |= AnimFlags.ClipAdded;   // survives a retarget that rewrote Flags
+            else if (!hadRow && _scene.IsLive(node) && (_scene.Flags(node) & NodeFlags.ClipsToBounds) == 0)
+            {
+                _scene.Mark(node, NodeFlags.ClipsToBounds);
+                _scene.Mark(node, NodeFlags.PaintDirty);
+                r.Flags |= AnimFlags.ClipAdded;
+            }
         }
+    }
+
+    /// <summary>Take back the <see cref="NodeFlags.ClipsToBounds"/> a reflow row added (see
+    /// <see cref="AnimFlags.ClipAdded"/>). Called from the ONE row-teardown sink (<c>FreeSlot</c>) plus
+    /// <c>CancelAll</c>'s bulk clear, so no path — settle, Cancel, or a structural snap — can leak the clip.</summary>
+    private void ReleaseReflowClip(NodeHandle node)
+    {
+        if (!_scene.IsLive(node)) return;
+        _scene.Unmark(node, NodeFlags.ClipsToBounds);
+        _scene.Mark(node, NodeFlags.PaintDirty);
+    }
+
+    /// <summary>The DECLARED (author-written) LayoutInput value a live SizeMode.Reflow row on
+    /// <paramref name="node"/>/<paramref name="ch"/> will restore at settle — normally NaN (auto). False when no reflow
+    /// row is in flight. The reconciler's transparent-boundary mirror consults this so a component anchor never
+    /// snapshots the EASED size as a hard declared size (nothing would ever restore the anchor: SettleRestore only
+    /// touches the animated node itself, and MountComponent never writes an anchor's LayoutInput).</summary>
+    public bool TryGetReflowDeclared(NodeHandle node, AnimChannel ch, out float declared)
+    {
+        if (ch is AnimChannel.LayoutW or AnimChannel.LayoutH)
+        {
+            int s = Find(node, ch);
+            if (s >= 0) { declared = _slab.At(s).RestoreTo; return true; }
+        }
+        declared = float.NaN;
+        return false;
     }
 
     /// <summary>Mark a live Reveal-size track as Relayout-mode (the host re-solves the subtree each tick; the declared

@@ -3415,6 +3415,17 @@ public sealed class InputDispatcher
 
         if (key == Keys.Tab)
         {
+            // Offer Tab to the focused node first so a control can consume it (AutoSuggestBox ghost accept). Unhandled
+            // Tab still moves focus — empty Completion must not steal the leave-field gesture.
+            if (!_focused.IsNull)
+            {
+                var tabArgs = new KeyEventArgs(key, e.Mods, e.IsRepeat);
+                for (var n = _focused; !n.IsNull; n = _scene.Parent(n))
+                {
+                    if ((_scene.Flags(n) & NodeFlags.Disabled) == 0) _scene.GetKeyHandler(n)?.Invoke(tabArgs);
+                    if (tabArgs.Handled) return;
+                }
+            }
             MoveFocus(forward: (e.Mods & KeyModifiers.Shift) == 0);
             return;
         }

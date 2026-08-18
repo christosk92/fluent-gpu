@@ -4,7 +4,7 @@ public enum LibraryItemKind { Track, Album, Artist, Playlist }
 
 public sealed record LibraryItem(string Uri, string Title, string? Subtitle, Image? Image, LibraryItemKind Kind);
 
-public enum SearchSuggestionKind { Track, Artist, Album, Playlist }
+public enum SearchSuggestionKind { Track, Artist, Album, Playlist, Genre, Episode, Podcast, Audiobook, User }
 
 public sealed record SearchSuggestionItem(
     SearchSuggestionKind Kind,
@@ -20,13 +20,33 @@ public sealed record SearchSuggestions(
 {
     public static readonly SearchSuggestions Empty = new(
         System.Array.Empty<string>(), System.Array.Empty<SearchSuggestionItem>());
+
+    /// <summary>First autocomplete query that starts with <paramref name="typed"/> (ordinal-ignore-case) and is
+    /// longer — the inline ghost. Not blindly <c>Queries[0]</c>: <c>loff</c> ghosts <c>loffler</c> even when
+    /// <c>koffie</c> ranks first.</summary>
+    public static string? GhostFor(string typed, IReadOnlyList<string> queries)
+    {
+        if (string.IsNullOrEmpty(typed) || queries is null) return null;
+        for (int i = 0; i < queries.Count; i++)
+        {
+            string q = queries[i];
+            if (q.Length > typed.Length && q.StartsWith(typed, System.StringComparison.OrdinalIgnoreCase))
+                return q;
+        }
+        return null;
+    }
 }
 
-// Ordered as the result tabs read left-to-right. Episodes/Profiles were added when the corresponding Spotify search
-// operations were captured; every member now maps to a real operation (no member throws).
-public enum SearchFacet { All, Tracks, Albums, Playlists, Audiobooks, Podcasts, Artists, Episodes, Profiles }
+// Ordered as the result tabs read left-to-right. Every member maps to a real Pathfinder operation.
+public enum SearchFacet { All, Tracks, Albums, Playlists, Audiobooks, Podcasts, Artists, Episodes, Profiles, Genres, Authors }
 
-public enum SearchHitKind { Track, Artist, Album, Playlist, Audiobook, Podcast, Episode, Author, User, Unknown }
+public enum SearchHitKind { Track, Artist, Album, Playlist, Audiobook, Podcast, Episode, Author, User, Genre, Unknown }
+
+/// <summary>One chip from <c>searchV2.chipOrder</c> — server-ranked facet plus its <c>totalCount</c>.</summary>
+public sealed record SearchChip(SearchFacet Facet, int Total);
+
+/// <summary>A search-genres tile: name, <c>spotify:genre:…</c> uri, and extracted color as opaque ARGB (0 = none).</summary>
+public sealed record SearchGenre(string Uri, string Name, uint Accent);
 
 /// <summary>One row of Spotify's unified search top-results (topResultsV2.itemsV2) — SERVER ORDER preserved (the first
 /// item IS the Top Result), each carrying its type and the per-hit eyebrow signals: a "LYRICS" lyric match, and an
@@ -35,7 +55,8 @@ public sealed record SearchTopHit(
     SearchHitKind Kind, string Uri, string Name, string Subtitle, string TypeLabel,
     Image? Image, bool RoundImage, bool Followable, bool MatchedLyrics, string? AccessLabel,
     string? Detail = null,
-    string? Meta = null);
+    string? Meta = null,
+    bool MatchedTitle = false);
 
 public sealed record SearchResults(
     IReadOnlyList<Track> Tracks,
@@ -58,7 +79,12 @@ public sealed record SearchResults(
     IReadOnlyList<SearchTopHit>? Audiobooks = null,
     int AudiobooksTotal = -1,
     IReadOnlyList<SearchTopHit>? Profiles = null,
-    int ProfilesTotal = -1)
+    int ProfilesTotal = -1,
+    IReadOnlyList<SearchChip>? ChipOrder = null,
+    IReadOnlyList<SearchGenre>? Genres = null,
+    int GenresTotal = -1,
+    IReadOnlyList<SearchTopHit>? Authors = null,
+    int AuthorsTotal = -1)
 {
     public static readonly SearchResults Empty = new(
         System.Array.Empty<Track>(), System.Array.Empty<Album>(), System.Array.Empty<Artist>(), System.Array.Empty<Playlist>());
@@ -73,6 +99,8 @@ public sealed record SearchResults(
         SearchFacet.Episodes => EpisodesTotal >= 0 ? EpisodesTotal : Episodes?.Count ?? 0,
         SearchFacet.Audiobooks => AudiobooksTotal >= 0 ? AudiobooksTotal : Audiobooks?.Count ?? 0,
         SearchFacet.Profiles => ProfilesTotal >= 0 ? ProfilesTotal : Profiles?.Count ?? 0,
+        SearchFacet.Genres => GenresTotal >= 0 ? GenresTotal : Genres?.Count ?? 0,
+        SearchFacet.Authors => AuthorsTotal >= 0 ? AuthorsTotal : Authors?.Count ?? 0,
         _ => TopHits?.Count ?? Tracks.Count + Albums.Count + Artists.Count + Playlists.Count,
     };
 
@@ -88,6 +116,8 @@ public sealed record SearchResults(
         SearchFacet.Episodes => Episodes is { Count: > 0 },
         SearchFacet.Audiobooks => Audiobooks is { Count: > 0 },
         SearchFacet.Profiles => Profiles is { Count: > 0 },
+        SearchFacet.Genres => Genres is { Count: > 0 },
+        SearchFacet.Authors => Authors is { Count: > 0 },
         _ => TopHits is { Count: > 0 },
     };
 }
@@ -129,6 +159,10 @@ public interface IMusicLibrary
     Task<IReadOnlyList<string>> SuggestAsync(string query, CancellationToken ct = default);
     /// <summary>As-you-type search suggestions with typed rich hits from the same online response.</summary>
     Task<SearchSuggestions> SuggestRichAsync(string query, CancellationToken ct = default);
+
+    /// <summary>Entities the user opened from search (empty-search landing). Empty offline / on failure.</summary>
+    Task<IReadOnlyList<SearchTopHit>> RecentSearchesAsync(CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<SearchTopHit>>(System.Array.Empty<SearchTopHit>());
 
     // Per-collection read paths — the sidebar's "Your Library" rows route to their own page, each loading its own slice.
     Task<IReadOnlyList<Album>> GetAlbumsAsync(CancellationToken ct = default);

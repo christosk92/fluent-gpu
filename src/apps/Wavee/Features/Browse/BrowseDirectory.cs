@@ -25,11 +25,6 @@ sealed class BrowseDirectory : Component
     internal sealed record Model(Action<string, string> OnOpenCategory, Action<string> OnOpenFeature);
     internal static readonly Context<Model?> Props = new(null);
 
-    // Column widths chosen so a long localised title ("Cooking & Dining", "Fiction & Literature") fits without
-    // wrapping at the widest tier, then the column count steps down rather than the text truncating.
-    const float MinColumnWidth = 190f;
-    const int MaxColumns = 6;
-
     public override Element Render()
     {
         var svc = UseContext(Services.Slot);
@@ -53,8 +48,11 @@ sealed class BrowseDirectory : Component
         // through WaveeEntrance below), and a block-level blur-reveal on top of that would fade the whole directory in
         // as one slab while its bands were still arriving — two entrances for one mount. Same entrance-vs-reveal split
         // SearchPage documents for its bound Songs list.
+        // smoothResize:false for the same reason SearchRecents and the search facet body set it: this is a PAGE-level
+        // region whose two branches differ by hundreds of DIP, not a section whose height nudges by a row. Easing that
+        // makes the region clip its own directory into a strip that grows. WaveeEntrance below owns the entrance.
         return Skel.Region(cats, Skeleton, c => Body(c, model),
-            reveal: SkelReveal.None,
+            reveal: SkelReveal.None, smoothResize: false,
             isEmpty: c => c.Count == 0,
             onEmpty: () => EmptyState.Build(Loc.Get(Strings.Browse.Unavailable)),
             onFailed: () => EmptyState.Build(Loc.Get(Strings.Browse.Unavailable)));
@@ -120,35 +118,29 @@ sealed class BrowseDirectory : Component
             Children =
             [
                 WaveeType.Eyebrow(label) with { Color = Tok.TextTertiary },
-                Responsive.Of(width => Columns(items, model, width > 0f ? width : 900f), fallback: 900f),
+                LinkColumns.Create(ToItems(items, model)),
             ],
         };
 
-    static Element Columns(IReadOnlyList<BrowseCategory> items, Model? model, float width)
+    // Browse's categories as the shared grid's items. A null model means the directory is inert (no navigation host
+    // yet) — the link still renders and still highlights, it just does nothing, exactly as before.
+    static IReadOnlyList<LinkColumns.Item> ToItems(IReadOnlyList<BrowseCategory> items, Model? model)
     {
-        int cols = Math.Clamp((int)(width / MinColumnWidth), 1, MaxColumns);
-        int rows = (items.Count + cols - 1) / cols;
-
-        // Column-major fill so the eye reads DOWN each column — the order the alphabetised list is sorted in. A
-        // row-major fill would scatter the alphabet across the row and defeat the sort entirely.
-        var columnEls = new Element[cols];
-        for (int c = 0; c < cols; c++)
+        var mapped = new LinkColumns.Item[items.Count];
+        for (int i = 0; i < items.Count; i++)
         {
-            var cells = new List<Element>(rows);
-            for (int r = 0; r < rows; r++)
+            var c = items[i];
+            mapped[i] = new LinkColumns.Item(c.Title, c.Uri, model is null ? Noop : () =>
             {
-                int idx = c * rows + r;
-                if (idx >= items.Count) break;
-                cells.Add(Link(items[idx], model));
-            }
-            columnEls[c] = new BoxEl
-            {
-                Direction = 1, Gap = Spacing.XS, Grow = 1f, Basis = 0f, MinWidth = 0f,
-                Children = cells.ToArray(),
-            };
+                // A client feature (Live Events) is NOT a browse page — it routes into the client's own surface.
+                if (c.IsClientFeature) model.OnOpenFeature(c.Uri);
+                else model.OnOpenCategory(c.Uri, c.Title);
+            });
         }
-        return new BoxEl { Direction = 0, Gap = Spacing.M, MinWidth = 0f, Children = columnEls };
+        return mapped;
     }
+
+    static readonly Action Noop = static () => { };
 
     /// <summary>The localised band heading. Membership is fixed in BrowseTaxonomy (uri-keyed, culture-independent);
     /// only the label translates, so the two concerns stay on opposite sides of the UI boundary.</summary>
@@ -160,30 +152,6 @@ sealed class BrowseDirectory : Component
         BrowseGroup.MoodActivity => Loc.Get(Strings.Browse.MoodActivity),
         BrowseGroup.Charts => Loc.Get(Strings.Browse.Charts),
         _ => Loc.Get(Strings.Browse.More),
-    };
-
-    static Element Link(BrowseCategory c, Model? model) => new BoxEl
-    {
-        // A link, not a button: it navigates. Role + Focusable give it keyboard reach and the right screen-reader verb.
-        Role = AutomationRole.Hyperlink, Focusable = true, Cursor = CursorId.Hand,
-        FocusVisualMargin = new Edges4(2f, 2f, 2f, 2f),
-        Padding = new Edges4(Spacing.XS, 4f, Spacing.XS, 4f),
-        Corners = CornerRadius4.All(Radii.Control),
-        HoverFill = Tok.FillControlSecondary,
-        MinWidth = 0f,
-        OnClick = model is null ? null : () =>
-        {
-            // A client feature (Live Events) is NOT a browse page — it routes into the client's own surface.
-            if (c.IsClientFeature) model.OnOpenFeature(c.Uri);
-            else model.OnOpenCategory(c.Uri, c.Title);
-        },
-        Children =
-        [
-            new TextEl(c.Title)
-            {
-                Size = 14f, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
-            },
-        ],
     };
 
     // While the directory loads, mirror the REAL layout: eyebrow, big title, then grouped bands of column-major link
@@ -212,7 +180,7 @@ sealed class BrowseDirectory : Component
                 [
                     new BoxEl { Width = 90f, Height = 11f, Corners = CornerRadius4.All(4f), Fill = Tok.FillSubtleTertiary },
                     // Same responsive column count as the loaded directory, so the bars sit where the links will.
-                    Responsive.Of(width => SkeletonColumns(rows, width > 0f ? width : 900f), fallback: 900f),
+                    LinkColumns.Skeleton(rows),
                 ],
             });
 
@@ -222,27 +190,5 @@ sealed class BrowseDirectory : Component
             Padding = new Edges4(Spacing.L, Spacing.M, Spacing.L, Spacing.XL),   // matches the loaded page exactly
             Children = children.ToArray(),
         }.Skeletonized(true);
-    }
-
-    static Element SkeletonColumns(int rows, float width)
-    {
-        int cols = Math.Clamp((int)(width / MinColumnWidth), 1, MaxColumns);
-        var columnEls = new Element[cols];
-        for (int c = 0; c < cols; c++)
-        {
-            var cells = new List<Element>(rows);
-            for (int r = 0; r < rows; r++)
-                cells.Add(new BoxEl
-                {
-                    // Varied widths so the band reads as a list of NAMES rather than a solid block of identical bars.
-                    Width = 92f + ((c * 7 + r * 13) % 5) * 22f,
-                    // FillSubtleTertiary, not FillCardSecondary: on the light canvas Secondary sits ~2% off the page and the
-                    // whole skeleton read as a blank screen rather than as loading content.
-                    Height = 13f, Corners = CornerRadius4.All(4f), Fill = Tok.FillSubtleTertiary,
-                });
-            // Spacing.XS gap — the SAME rhythm Columns() gives the real links, so nothing shifts on landing.
-            columnEls[c] = new BoxEl { Direction = 1, Gap = Spacing.XS, Grow = 1f, Basis = 0f, MinWidth = 0f, Children = cells.ToArray() };
-        }
-        return new BoxEl { Direction = 0, Gap = Spacing.M, MinWidth = 0f, Children = columnEls };
     }
 }

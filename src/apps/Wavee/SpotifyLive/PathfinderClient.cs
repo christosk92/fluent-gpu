@@ -171,10 +171,18 @@ public static class PathfinderOps
     public const string GetDynamicColorsByUrisHash = "f0f112945d6d745bd8ff790317bbf8d310036da75df33130490e9d6dc96c59d9";
 
     public const string SearchSuggestions = "searchSuggestions";
-    public const string SearchSuggestionsHash = "556f5a15b2fdd3a7113ffd377ad9805e38a3a27b8bb1ca7d6d76bad54aa8ee12";
+    public const string SearchSuggestionsHash = "23f33ca50a0f4153dafc5cd1b4d1370db01b72130c2994bd0ffd07d5a7fee8f0";
 
     public const string SearchTopResults = "searchTopResultsList";
-    public const string SearchTopResultsHash = "63a93cc04f6d8dea84a85de315e43f396a76cb681500de9ac5ccf5fc618c84cb";
+    public const string SearchTopResultsHash = "337d8b1b4f911fb12c60996623391703c2807550baccb51d95f5eabc8c8bdacd";
+
+    // Desktop 1.2.96.518 (search.saz). Uses searchTerm, not query. Wavee had no genres facet until Search v5.
+    public const string SearchGenres = "searchGenres";
+    public const string SearchGenresHash = "9e1c0e056c46239dd1956ea915b988913c87c04ce3dadccdb537774490266f46";
+
+    // Desktop 1.2.96.518 (search.saz). Empty-search recents: full entities, not strings.
+    public const string RecentSearches = "recentSearches";
+    public const string RecentSearchesHash = "3ec071f88e403779d4da9bc5744feb9d64cd07d10daf1f966b912baadaa3d598";
 
     public const string QueryAlbumMerch = "queryAlbumMerch";
     public const string QueryAlbumMerchHash = "3ef44ed6f17be67299538fe77faffab4075aeaf9e1085f10fc835592266711b5";

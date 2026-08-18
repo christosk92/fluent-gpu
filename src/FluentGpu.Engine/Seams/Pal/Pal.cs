@@ -94,13 +94,13 @@ public enum ScrollDeviceClass : byte { Unset = 0, Touchpad = 1, Touch = 2, Wheel
 public enum FrameClockFlags : byte
 {
     None = 0,
-    /// <summary>The lattice anchor (a real OS-attested vblank stamp) was available and fresh enough to snap
-    /// <see cref="FrameClock.FrameQpc"/> against — as opposed to the raw-clock fallback (no present yet, headless,
-    /// or an anchor too stale to trust). Mirrors <c>RefreshLattice.Build</c>'s internal fallback decision.</summary>
+    /// <summary><see cref="FrameClock.FrameQpc"/> IS a compositor tick's vblank instant (the frame was produced for a
+    /// live, fresh display-clock tick) — as opposed to the `now` fallback (no clock, or a tick left stale by an idle
+    /// stretch). Mirrors <c>RefreshLattice.Build</c>'s decision.</summary>
     LatticeValid = 1,
-    /// <summary>The present pacer is not honoring the display's cadence (<c>PresentUnpacedDetector.Unpaced</c> —
-    /// e.g. an RDP/remote session, a driver that ignores <c>SetMaximumFrameLatency</c>). While set, a frame-aligned
-    /// producer's lead time is floored to 0 and the render-thread fling lease (§6) declines new grants.</summary>
+    /// <summary>No display clock: the platform has no usable compositor clock (headless; a remote session where the
+    /// runtime probe ruled the export out), so production is wall-clock paced. While set, a frame-aligned producer's
+    /// lead time is floored to 0 and the render-thread fling lease (§6) declines new grants.</summary>
     Unpaced = 2,
     /// <summary>Produced by the headless PAL (<c>RefreshLattice.Headless</c>): no real present/vblank exists,
     /// <see cref="FrameClock.FrameQpc"/> is the deterministic <c>FixedFrameTimeSource</c> accumulator instead of a
@@ -560,15 +560,19 @@ public enum PlatformInputWakePolicy : byte
     CoalescePointerMotion = 1,
 }
 
+/// <summary>A snapshot of the platform display clock (see <see cref="IPlatformWindow.DisplayClock"/>): <paramref name="TickSeq"/>
+/// increments once per compositor tick (vblank) while armed; <paramref name="TickQpc"/> is the <c>Stopwatch</c>-domain
+/// instant of that tick. <paramref name="Available"/> false ⇒ no compositor clock (the host software-paces).</summary>
+public readonly record struct DisplayClockSample(bool Available, long TickSeq, long TickQpc);
+
 /// <summary>One host-to-platform wait request. Negative timeout means wait indefinitely.
 ///
-/// <paramref name="WakeOnDisplayClock"/> asks the backend to end the wait on the DISPLAY's clock as well as on its usual
-/// sources — the vblank reference the async flip removed from the UI thread (moving <c>Present()</c> to the render thread
-/// left the loop with nothing but a wall-clock timer, which can bound how OFTEN it produces but never WHEN). It is a
-/// REQUEST, not a contract: a backend without a compositor clock (headless, a remote session where the probe fails)
-/// ignores it and the wall-clock timeout remains the pacer. Set it only on waits that have no better phase reference —
-/// a wait already parked on the render thread's present-ack must NOT set it, because a per-tick wake would re-enter the
-/// loop while the display-phase gate is still armed and immediately gate again.</summary>
+/// <paramref name="WakeOnDisplayClock"/> asks the backend to end the wait on the DISPLAY's clock (the compositor tick —
+/// the vblank) as well as on its usual sources. It is the production pacer of the async render path: while it is set the
+/// backend keeps its display clock armed across frames (ticks are counted even while the host is producing, so a tick
+/// that lands mid-frame ends the NEXT wait immediately instead of being missed), and the host produces at most one frame
+/// per tick (<see cref="DisplayClockSample"/>). A backend without a compositor clock (headless, a remote session where
+/// the probe fails) ignores it and the wall-clock timeout paces the loop.</summary>
 public readonly record struct PlatformWaitRequest(
     int TimeoutMs,
     PlatformInputWakePolicy InputWakePolicy = PlatformInputWakePolicy.Immediate,
@@ -642,16 +646,13 @@ public interface IPlatformWindow : IDisposable
     /// </summary>
     void Wake() { }
 
-    /// <summary>
-    /// The PHASE-CRITICAL wake: the render thread signalling that a published frame has been presented, so the UI loop
-    /// parked on the display-phase gate may produce the next one. Separated from <see cref="Wake"/> because the two have
-    /// opposite requirements — <see cref="Wake"/> is the general-purpose cross-thread nudge (it also posts a message so
-    /// message-only pumps see it), while this one fires at the display's rate and must be as close to a bare event
-    /// signal as the backend can make it. Win32 gives it its OWN auto-reset event rather than sharing the five-way
-    /// general wake, and posts no message.
-    /// <para>Default: <see cref="Wake"/>, so a backend that draws no distinction keeps today's behavior verbatim.</para>
-    /// </summary>
-    void WakePresent() => Wake();
+    /// <summary>The display clock the host paces production on: the compositor tick sequence and the QPC instant of the
+    /// latest tick (a vblank). <see cref="DisplayClockSample.Available"/> is false when the backend has no usable
+    /// compositor clock (headless; a remote session where the runtime probe ruled it out) — the host then software-paces.
+    /// Ticks are counted while the clock is armed by a <see cref="PlatformWaitRequest.WakeOnDisplayClock"/> wait and
+    /// keep counting until the host issues a wait WITHOUT that request (idle/ambient), so a produced frame's tick is
+    /// never lost to a wake that landed mid-frame.</summary>
+    DisplayClockSample DisplayClock => default;
 
     /// <summary>
     /// Invoked by the platform when the OS demands an immediate repaint *outside* the app's frame loop —
@@ -724,6 +725,19 @@ public interface IPlatformWindow : IDisposable
     /// <summary>Minimum CLIENT size in physical px (Win32 <c>WM_GETMINMAXINFO</c>). Default <c>0×0</c> = no clamp, so
     /// the primary window is unaffected; a detached mini-player sets a floor.</summary>
     void SetMinClientSizePx(Size2 px) { }
+
+    /// <summary>Tell the window whether it currently composites a LIVE video surface. Pushed by the host at the video
+    /// drain, one way, engine → PAL (the same direction as <see cref="SetMinClientSizePx"/>); the PAL only ever reads
+    /// a bool and never reaches back for the registry.
+    ///
+    /// <para>WHY A WINDOW NEEDS TO KNOW. A composited window DEFERS ALL PAINTING for the duration of an OS modal
+    /// edge-resize — deliberately, because DWM keeps presenting the last flip surface and repainting mid-loop only
+    /// costs frames. But a video child visual is placed from the frame loop, so with zero frames the child keeps its
+    /// pre-resize size and position while the window frame moves under it: the picture visibly lags the frame until the
+    /// loop ends. A window carrying live video therefore keeps a throttled keep-alive during the resize so the hole and
+    /// the child stay together. Default <c>false</c> — the general defer is a real performance win and stays intact
+    /// for every window without video.</para></summary>
+    void SetHasLiveVideo(bool hasLiveVideo) { }
 }
 
 /// <summary>Versioned external-store-shaped locale seam (modeled on ISystemColors). L9.</summary>

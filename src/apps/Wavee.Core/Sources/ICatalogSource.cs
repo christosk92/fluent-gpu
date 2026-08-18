@@ -72,6 +72,9 @@ public interface ICatalogSource : ISource
         => Task.FromResult<IReadOnlyList<string>>(System.Array.Empty<string>());
     async Task<SearchSuggestions> SuggestRichAsync(string query, CancellationToken ct = default)
         => new(await SuggestAsync(query, ct).ConfigureAwait(false), System.Array.Empty<SearchSuggestionItem>());
+    /// <summary>Entities the user opened from search. Default empty — only the online source provides them.</summary>
+    Task<IReadOnlyList<SearchTopHit>> RecentSearchesAsync(CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<SearchTopHit>>(System.Array.Empty<SearchTopHit>());
     Task<HomeContribution> GetHomeAsync(CancellationToken ct = default);
     Task<LibraryStats> GetStatsAsync(CancellationToken ct = default);
 

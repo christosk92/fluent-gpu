@@ -136,6 +136,11 @@ static class WaveeSettings
     public static readonly SettingKey<string> VideoPipRect = new("video.pip.rect", "");        // window-DIP "x,y,w,h"
     public static readonly SettingKey<string> VideoWindowRect = new("video.window.rect", "");  // screen-px "x,y,w,h"
 
+    /// <summary>Keep the detached video window above other windows. TRUE by default — staying visible while you work in
+    /// another app is the whole point of popping the video out — but it is a preference, not a law: an always-on-top
+    /// window that will not get out of the way is the classic complaint about the pattern.</summary>
+    public static readonly SettingKey<bool> VideoWindowAlwaysOnTop = new("video.window.ontop", true);
+
     // PlayPlay runtime pointer — empty string means unset (AppDataSettings cannot round-trip null strings).
     public static readonly SettingKey<string> PlaybackRuntimePath = new("playback.runtime.path", "");
     public static readonly SettingKey<string> PlaybackRuntimePackId = new("playback.runtime.packId", "");

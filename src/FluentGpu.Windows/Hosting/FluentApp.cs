@@ -336,7 +336,7 @@ public static class FluentApp
         // Deltas, not levels: PresentedSequence/FramesSkippedSubmit/PublishSequence are monotonic counters, and the
         // question a cadence investigation asks is always "how many since the last line".
         ulong prevPresentSeq = 0, prevPublishSeq = 0, prevGpuProfileLogSeq = 0;
-        long prevSkipped = 0, prevGated = 0, prevRephased = 0, prevStoodDown = 0;
+        long prevSkipped = 0, prevDeclined = 0, prevStoodDown = 0;
         long prevFpsLineQpc = System.Diagnostics.Stopwatch.GetTimestamp();
         var prevInputPacing = window.InputPacingSnapshot;
         long scrollPerfWindowStart = scrollPerf ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
@@ -348,8 +348,8 @@ public static class FluentApp
             FluentGpu.Hosting.HostWaitKind.Baked => "baked",
             FluentGpu.Hosting.HostWaitKind.Ambient => "ambient",
             FluentGpu.Hosting.HostWaitKind.AdaptiveGpu => "adaptive-gpu",
-            FluentGpu.Hosting.HostWaitKind.PaceSkipSubmit => "pace-skip",
-            FluentGpu.Hosting.HostWaitKind.PaceAsync => "pace-async",
+            FluentGpu.Hosting.HostWaitKind.DisplayTick => "tick",
+            FluentGpu.Hosting.HostWaitKind.SoftwarePace => "swpace",
             FluentGpu.Hosting.HostWaitKind.DisplayRate => "display",
             _ => "?",
         };
@@ -558,16 +558,10 @@ public static class FluentApp
                     // legitimately run ahead of publishSeq. An unguarded subtraction would wrap to ~1.8e19 and read as
                     // a catastrophic backlog.
                     static ulong Behind(ulong ahead, ulong behind) => ahead > behind ? ahead - behind : 0UL;
-                    // gateD = frames the display-phase gate declined since the last line. In steady scrolling this
-                    // should be SMALL and coal should sit at ~0: the gate's whole purpose is to stop producing the
-                    // frames that coal was counting as discarded. A large gateD with a large coal means the gate is
-                    // being bypassed (ceiling hit, or a non-async path).
-                    long gated = host.PhaseGatedFrames;
-                    // rephD = slip re-phase escapes since the last line (threading-render-seam.md §11.1.4). Non-zero
-                    // means the present thread attested a sustained one-vblank slip and the loop broke the 60 Hz ack
-                    // lock by producing on the compositor tick. A steady trickle at exactly the budget means the scene
-                    // cannot hold the panel rate — read it with latW and the present interval, not on its own.
-                    long rephased = host.PhaseGateRephaseEscapes;
+                    // declD = RunFrames that dispatched input but produced no frame because one was already produced
+                    // for the current compositor tick (production is one frame per tick). In steady scrolling coal
+                    // should sit at ~0: every produced frame is presented.
+                    long declined = host.ProductionDeclines;
                     long fpsLineQpc = System.Diagnostics.Stopwatch.GetTimestamp();
                     double fpsLineSec = Math.Max(0.000001,
                         (fpsLineQpc - prevFpsLineQpc) / (double)System.Diagnostics.Stopwatch.Frequency);
@@ -577,16 +571,14 @@ public static class FluentApp
                     string seamTok =
                         $" presentD={presentDelta} pubD={Behind(publishSeq, prevPublishSeq)} " +
                         $"coal={Behind(publishSeq, presentSeq)} lag={Behind(publishSeq, consumedSeq)} " +
-                        $"ack={host.RenderPresentSeq} skipD={skipped - prevSkipped} sdD={stoodDown - prevStoodDown} gateD={gated - prevGated} " +
-                        $"rephD={rephased - prevRephased}";
+                        $"ack={host.RenderPresentSeq} skipD={skipped - prevSkipped} sdD={stoodDown - prevStoodDown} declD={declined - prevDeclined}";
                     string inputPaceTok =
                         $" | motion msgD={inputPacing.MotionMessages - prevInputPacing.MotionMessages}" +
                         $" moveD={inputPacing.MoveEvents - prevInputPacing.MoveEvents}" +
                         $" coalD={inputPacing.CoalescedMoveEvents - prevInputPacing.CoalescedMoveEvents}" +
                         $" deadlineD={inputPacing.DeadlineWakes - prevInputPacing.DeadlineWakes}" +
                         $" urgentD={inputPacing.UrgentBreaks - prevInputPacing.UrgentBreaks}";
-                    prevPresentSeq = presentSeq; prevPublishSeq = publishSeq; prevSkipped = skipped; prevGated = gated; prevStoodDown = stoodDown;
-                    prevRephased = rephased;
+                    prevPresentSeq = presentSeq; prevPublishSeq = publishSeq; prevSkipped = skipped; prevDeclined = declined; prevStoodDown = stoodDown;
                     prevFpsLineQpc = fpsLineQpc; prevInputPacing = inputPacing;
                     Console.Error.WriteLine(
                         $"[fps] tMs={FluentGpu.Foundation.ScrollTrace.NowMs:0.000}{(spike ? " SPIKE" : "")}{clusterTok}" +

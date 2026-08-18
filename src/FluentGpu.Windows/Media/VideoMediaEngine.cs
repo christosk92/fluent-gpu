@@ -35,6 +35,9 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
 {
     private const uint MFSTARTUP_FULL_ = 0;
     private const int S_OK = 0;
+    // Cap on how long a UI-thread Invoke<T> will wait for the engine thread to answer before giving up and
+    // returning default(T) (see the Invoke<T> doc comment). Tens of ms is never worth freezing a frame for.
+    private const int InvokeTimeoutMs = 50;
 
     // ── Owned only on the engine (MTA) thread ──────────────────────────────────────────────────────────────────────
     private ID3D11Device* _d3d;
@@ -327,17 +330,68 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
         }
     }
 
-    // Marshal a func onto the engine thread and wait (the engine's COM is single-thread-affine to that MTA thread).
+    // Marshal a func onto the engine thread and wait, BOUNDED, for the answer (the engine's COM is
+    // single-thread-affine to that MTA thread). The UI thread reaches this 1-5x per frame while a video is
+    // opening, queued behind Media Foundation's internal engine lock (held for the whole of async source
+    // resolution) — an unbounded wait here is the documented STA/MF deadlock in the class doc comment above,
+    // and even short of that, a multi-second UI freeze. So the wait is capped at InvokeTimeoutMs: on expiry we
+    // return default(T), and EVERY caller (VideoMediaEngine's own properties and MfMediaSession, which polls
+    // them every pump) must treat a returned default as "no answer yet, ask again next pump" rather than as a
+    // real value. The Func<T> signature is unchanged; only the wait became bounded.
+    //
+    // Event lifetime (the subtlety a naive timeout introduces): the queued closure below still runs later on
+    // the engine thread and writes into the captured slot's Result field, then calls Done.Set() — regardless of
+    // whether the caller gave up waiting. The original code's `using var done = new ManualResetEventSlim(false)`
+    // would DISPOSE that event on timeout while the engine thread could still call Set() on it: a latent
+    // ObjectDisposedException/crash. Fix: the queued closure closes over a heap-allocated InvokeSlot<T> whose
+    // lifetime is NOT tied to this stack frame — it lives exactly as long as something (the closure, or the
+    // pool) still refs it, and is never disposed early. When the wait completes normally, the slot has already
+    // been signaled and cannot be touched again by the engine thread, so it is safe to reset and return to a
+    // per-T pool for the next call (this is what keeps the invoke path allocation-free after warmup — no more
+    // per-call ManualResetEventSlim). When the wait TIMES OUT, the slot is simply abandoned (not pooled, not
+    // disposed) — the late-arriving Set()/write lands on an object nobody but the orphaned closure references,
+    // and it becomes eligible for GC once that closure returns. A slot is only ever reused after we have
+    // observed its own Done.Wait() return true, which is the only point at which we know the engine thread is
+    // finished with it.
     private T Invoke<T>(Func<T> f)
     {
-        if (_thread == null || Thread.CurrentThread == _thread) return f();
+        // Closing the apartment-violation landmine: _thread is only null before Initialize has published it
+        // (unreachable in practice — the session isn't published until after _thread is set), but running the
+        // lambda here would touch raw IMFMediaEngine* COM pointers on the CALLING thread, potentially the UI
+        // STA. Never run it off the engine thread; report "unknown" instead.
+        if (_thread == null) return default!;
+        if (Thread.CurrentThread == _thread) return f();   // re-entrant call from the engine thread itself: fine
         if (_work.IsAddingCompleted) return default!;
-        T result = default!;
-        using var done = new ManualResetEventSlim(false);
-        try { _work.Add(() => { try { result = f(); } finally { done.Set(); } }); }
+
+        InvokeSlot<T> slot = InvokeSlotPool<T>.Bag.TryTake(out var pooled) ? pooled : new InvokeSlot<T>();
+        slot.Done.Reset();
+        try { _work.Add(() => { try { slot.Result = f(); } finally { slot.Done.Set(); } }); }
         catch (InvalidOperationException) { return default!; }   // queue completed during teardown
-        done.Wait();
-        return result;
+
+        if (slot.Done.Wait(InvokeTimeoutMs))
+        {
+            T result = slot.Result;
+            slot.Result = default!;
+            InvokeSlotPool<T>.Bag.Add(slot);   // safe: we just observed the one and only Set() for this slot
+            return result;
+        }
+        // Timed out — abandon the slot (see lifetime note above); do NOT pool or dispose it.
+        return default!;
+    }
+
+    // A slot's ManualResetEventSlim + result box, reused across calls once we have observed it signal. Pooled
+    // per T (a handful of concrete T's are used: uint, nuint, double, bool, and small value tuples), shared
+    // across all VideoMediaEngine instances/threads via a lock-free bag — cheap and simple, and this class only
+    // ever has one live instance in practice.
+    private sealed class InvokeSlot<T>
+    {
+        public readonly ManualResetEventSlim Done = new(false);
+        public T Result = default!;
+    }
+
+    private static class InvokeSlotPool<T>
+    {
+        public static readonly ConcurrentBag<InvokeSlot<T>> Bag = new();
     }
 
     private static uint MF_VERSION_() => (uint)MF.MF_VERSION;

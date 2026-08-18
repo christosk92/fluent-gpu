@@ -54,6 +54,30 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
     // hand-off or a real media-engine event, never once per host frame.
     private int _repaintPending = 1;
 
+    // ── Off-thread cache for the engine polls PumpVideo used to make blocking round-trips for every frame
+    // (ReadyState/DurationSeconds/CurrentTimeSeconds all marshal to VideoMediaEngine's dedicated MTA thread and
+    // block the caller — see the plan). Refreshed by RefreshEngineStateCache from two places: (a) OnEngineStateChanged,
+    // which already runs off an MF worker thread on every discrete transition, and (b) a lightweight background
+    // timer, needed because MF's continuous TIMEUPDATE notifications are deliberately NOT wired to StateChanged
+    // (VideoMediaEngine.OnEngineEvent — avoids a pump storm), so position would otherwise only refresh on discrete
+    // transport events and go stale mid-playback. PumpVideo (the UI thread) only ever READS these.
+    //
+    // VideoMediaEngine.Invoke is now bounded (Agent A): a call that doesn't answer within its timeout returns
+    // default(T), i.e. 0. DurationSeconds/CurrentTimeSeconds already treat 0.0 as "unknown" by their own contract
+    // (see their doc comments in VideoMediaEngine.cs), so a timed-out refresh is indistinguishable from — and
+    // handled identically to — a genuine "not known yet" read: we simply never regress an already-known value back
+    // down to 0/unknown; the next successful refresh (soon — the timeout is tens of ms, the poll period is 100ms)
+    // corrects it. ReadyState has no such "0 = unknown" convention (0 is also HAVE_NOTHING), but it only feeds a
+    // cosmetic buffering percentage, so a transient 0 from a timeout just self-corrects on the next tick.
+    private uint _cachedReadyState;
+    private double _cachedDurationSeconds;
+    private double _cachedPositionSeconds;
+    private Timer? _pollTimer;
+    // 10 Hz. MediaSeekBar already treats a native position report as a low-cadence anchor and interpolates between
+    // reports on its own FrameClock ticker (see MediaSeekBar.cs) — the playhead needs nowhere near per-frame (60Hz+)
+    // freshness, and 100ms is comfortably inside what that interpolation smooths over.
+    private const int PositionPollMs = 100;
+
     /// <inheritdoc/>
     public event Action? PumpRequested;
 
@@ -80,9 +104,32 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
         _playRequested = !opts.StartPaused;
         if (_playRequested) _everPlayed = true;
         _engine.StateChanged += OnEngineStateChanged;
+        _pollTimer = new Timer(static state => ((MfMediaSession)state!).RefreshEngineStateCache(), this, PositionPollMs, PositionPollMs);
     }
 
-    private void OnEngineStateChanged() => RequestPump();
+    private void OnEngineStateChanged()
+    {
+        RefreshEngineStateCache();   // already off the UI thread (MF worker) — prime the cache before waking the pump
+        RequestPump();
+    }
+
+    // Off the UI thread by construction (called from an MF worker via OnEngineStateChanged, or from the background
+    // poll timer's threadpool thread) — the blocking VideoMediaEngine round-trips are fine here.
+    private void RefreshEngineStateCache()
+    {
+        if (_disposed) return;
+        _cachedReadyState = _engine.ReadyState;
+        if (_cachedDurationSeconds <= 0)
+        {
+            double d = _engine.DurationSeconds;   // 0.0 == "unknown" by this property's own contract
+            if (d > 0) _cachedDurationSeconds = d;   // never regress a known duration back to unknown
+        }
+        if (_engine.MetadataLoaded)
+        {
+            double p = _engine.CurrentTimeSeconds;   // ditto: 0.0 == "unknown/not yet answered", not "reset to 0"
+            if (p > 0 || _cachedPositionSeconds == 0) _cachedPositionSeconds = p;
+        }
+    }
 
     private void RequestPump()
     {
@@ -280,15 +327,33 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
             return;
         }
 
+        // 1b. Still opening — no LOADEDMETADATA yet. Every recurring engine read below (ReadyState/DurationSeconds/
+        // CurrentTimeSeconds) marshals to the engine's MTA thread and blocks — exactly the per-frame freeze during
+        // load. There is nothing useful to ask the engine in this window anyway: the transition itself lands via
+        // OnEngineStateChanged (which primes the cache above off the UI thread), so skip the engine entirely and
+        // publish from the cheap volatile fields + the cache instead, so buffering/state/live-timeline don't go
+        // dark during the load.
+        if (!_engine.MetadataLoaded)
+        {
+            PlaybackState opening = DeriveState();
+            Publish(sink, opening);
+            PublishBuffering(sink, opening);
+            if (_manifest is { IsLive: true }) PublishLiveTimeline(sink, TimeSpan.FromSeconds(_cachedPositionSeconds));
+            return;
+        }
+
         // 2. First metadata → publish natural size / duration / commands and become Ready (or Playing on intent).
-        if (_engine.MetadataLoaded && !_metaReady)
+        if (!_metaReady)
         {
             _metaReady = true;
             if (_engine.TryGetNativeVideoSize(out uint cx, out uint cy) && cx > 0 && cy > 0)
                 _naturalSize = new SizeI((int)cx, (int)cy);
             sink.NaturalSize(_naturalSize);
 
-            double dur = _engine.DurationSeconds;
+            // Cache-first: RefreshEngineStateCache already ran off-thread (OnEngineStateChanged fires for
+            // LOADEDMETADATA before this pump observes MetadataLoaded==true), so this is normally free; the direct
+            // read is only a fallback for the rare race where the pump beats that refresh.
+            double dur = _cachedDurationSeconds > 0 ? _cachedDurationSeconds : _engine.DurationSeconds;
             _duration = dur > 0 ? TimeSpan.FromSeconds(dur) : TimeSpan.Zero;
             sink.Duration(_duration);
 
@@ -313,6 +378,20 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
             // Honor the accepted play/pause intent now that the source has resolved.
             if (_playRequested) _engine.Play(); else _engine.Pause();
             Volatile.Write(ref _repaintPending, 1);
+        }
+        else if (_metaReady && _duration <= TimeSpan.Zero)
+        {
+            // 2b. LATE DURATION. The publish above happens once, at first LOADEDMETADATA — and for an adaptive/DASH
+            // source GetDuration() is commonly still 0 or non-finite at that instant, so a one-shot publish freezes the
+            // length at "unknown" for the whole track. (App-side that showed up as a music video reporting the SONG's
+            // catalog length.) Re-read until it turns positive, then publish once more. Value-gated on _duration, so a
+            // finite duration publishes at most twice and a genuinely live/infinite stream never publishes again and
+            // never allocates. Reads the cache (kept fresh off-thread) instead of round-tripping the engine here.
+            if (_cachedDurationSeconds > 0)
+            {
+                _duration = TimeSpan.FromSeconds(_cachedDurationSeconds);
+                sink.Duration(_duration);
+            }
         }
 
         // 3. Composited-surface handoff (Path A) — the single (DRM-free here) bind point. Value-gated all the way down.
@@ -349,7 +428,7 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
         PublishBuffering(sink, state);
         if (_metaReady)
         {
-            TimeSpan pos = TimeSpan.FromSeconds(_engine.CurrentTimeSeconds);
+            TimeSpan pos = TimeSpan.FromSeconds(_cachedPositionSeconds);
             sink.Position(pos);
             _cuePlayheadMs = (int)Math.Clamp(pos.TotalMilliseconds, 0.0, int.MaxValue);   // feed the windowed cue loader
             TimedCue? cue = null;
@@ -360,7 +439,7 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
                 sink.ActiveCue(cue);
             }
         }
-        if (_manifest is { IsLive: true }) PublishLiveTimeline(sink, TimeSpan.FromSeconds(_engine.CurrentTimeSeconds));
+        if (_manifest is { IsLive: true }) PublishLiveTimeline(sink, TimeSpan.FromSeconds(_cachedPositionSeconds));
     }
 
     private static MediaCommandFlags sinkCoreCommands(SizeI size)
@@ -463,7 +542,7 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
         BufferPolicy policy = _opts.Buffering ?? BufferPolicy.Vod;
         BufferingReason reason = _seeking || _engine.Seeking ? BufferingReason.Seeking
             : _metaReady ? BufferingReason.Rebuffering : BufferingReason.Initial;
-        uint ready = Math.Min(_engine.ReadyState, 4u);
+        uint ready = Math.Min(_cachedReadyState, 4u);
         double percent = ready / 4.0;
         TimeSpan target = reason == BufferingReason.Initial ? policy.InitialPlayback : policy.ResumePlayback;
         sink.Buffering(new BufferingInfo(reason, percent, TimeSpan.FromTicks((long)(target.Ticks * percent)), target,
@@ -512,6 +591,8 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
         var engine = _engine;
         engine.StateChanged -= OnEngineStateChanged;
         PumpRequested = null;
+        _pollTimer?.Dispose();
+        _pollTimer = null;
         // The engine tears down its MTA thread + COM on ITS thread (a blocking join); do it off the UI thread.
         await Task.Run(engine.Dispose).ConfigureAwait(false);
     }
