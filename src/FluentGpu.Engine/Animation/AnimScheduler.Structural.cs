@@ -47,16 +47,35 @@ public sealed partial class AnimEngine
     }
 
     /// <summary>Spring/ease the gesture channels toward a <see cref="MotionTarget"/> (WhileHover/WhilePressed/WhileFocus
-    /// when the state engages) or back to rest (pass <c>default</c>). The InteractionState resolver picks which target
-    /// is active; this applies it.</summary>
+    /// when the state engages) or back to identity (pass <c>new MotionTarget()</c>). Kept as the public entry point
+    /// (source-compat with every non-interaction caller) but reimplemented as a rest-relative fold over an IDENTITY
+    /// rest pose — <c>new MotionTarget()</c>, not <c>default</c>, so Scale/Opacity multiply against 1 rather than 0
+    /// (see <see cref="MotionTarget"/>'s <c>default</c> gotcha). The InteractionState resolver (AnimScheduler.Interact)
+    /// instead calls <see cref="SeedTargetOver"/> directly with the node's AUTHORED rest pose.</summary>
     public void SeedTarget(NodeHandle node, in MotionTarget t, in MotionTokenDef m)
+        => SeedTargetOver(node, new MotionTarget(), in t, in m);
+
+    /// <summary>Spring/ease the gesture channels toward <paramref name="rest"/> folded with the DELTA
+    /// <paramref name="d"/> (a WhileHover/WhilePressed/WhileFocus target, or the identity delta on release) — the
+    /// rest-pose-relative contract on <see cref="MotionTarget"/>: offset/rotation/blur ADD, scale/opacity MULTIPLY.
+    /// <para>WHY the rest pose has to be carried explicitly (rather than just seeding the delta and letting PASS2's
+    /// fold-over-live-paint pick up the authored pose for free): PASS2 folds a node's rows over its CURRENT paint with
+    /// <c>replace: true</c> for every non-additive row (<c>AnimScheduler.cs</c> Tick, PASS2) — so once a gesture
+    /// channel is seeded, its track OWNS that channel outright until it settles and frees. A bare identity delta seeded
+    /// on release would replace the channel with identity, not the authored pose, permanently erasing an authored
+    /// static transform (<c>Rotation</c>/<c>OffsetX</c>/…) the instant a hover/press state first engages and then lets
+    /// go — exactly the bug this rework fixes. Folding the rest pose in HERE, at seed time, means the seeded target
+    /// value already IS the authored-pose-plus-delta, so the replace-fold composes correctly with no rest-pose memory
+    /// needed downstream.</para></summary>
+    internal void SeedTargetOver(NodeHandle node, in MotionTarget rest, in MotionTarget d, in MotionTokenDef m)
     {
-        SeedChannel(node, AnimChannel.ScaleX, t.Scale, in m, null, 0f);
-        SeedChannel(node, AnimChannel.ScaleY, t.Scale, in m, null, 0f);
-        SeedChannel(node, AnimChannel.Opacity, t.Opacity, in m, null, 0f);
-        SeedChannel(node, AnimChannel.TranslateX, t.OffsetX, in m, null, 0f);
-        SeedChannel(node, AnimChannel.TranslateY, t.OffsetY, in m, null, 0f);
-        SeedChannel(node, AnimChannel.BlurSigma, t.Blur, in m, null, 0f);
+        SeedChannel(node, AnimChannel.ScaleX,     rest.Scale    * d.Scale,    in m, null, 0f);
+        SeedChannel(node, AnimChannel.ScaleY,     rest.Scale    * d.Scale,    in m, null, 0f);
+        SeedChannel(node, AnimChannel.Opacity,    rest.Opacity  * d.Opacity,  in m, null, 0f);
+        SeedChannel(node, AnimChannel.TranslateX, rest.OffsetX  + d.OffsetX,  in m, null, 0f);
+        SeedChannel(node, AnimChannel.TranslateY, rest.OffsetY  + d.OffsetY,  in m, null, 0f);
+        SeedChannel(node, AnimChannel.Rotation,   rest.Rotation + d.Rotation, in m, null, 0f);
+        SeedChannel(node, AnimChannel.BlurSigma,  rest.Blur     + d.Blur,     in m, null, 0f);
     }
 
     /// <summary>Seed (or retarget) ONE channel toward <paramref name="to"/> under a NAMED motion token — the focused,

@@ -98,6 +98,8 @@ static class AnimSuite
         WaveeSkeletonChecks(strings);
         BrushTransitionChecks(strings);
         AnimRestChecks(strings);
+        WhileRestPoseChecks(strings);
+        RotationCurrentValueChecks(strings);
     }
 
     static void AnimChecks()
@@ -3677,6 +3679,168 @@ static class AnimSuite
                 settled && Near(host.Scene.Paint(poly).LocalTransform.Dx, 14f, 0.1f),
                 $"settled={settled} dx={host.Scene.Paint(poly).LocalTransform.Dx}");
         }
+    }
+
+    /// <summary>Decompose a composited transform's rotation angle in degrees — the SAME formula as
+    /// <c>Accum.FromPaint</c> and the <c>CurrentValue</c> Rotation arm (both in AnimScheduler.cs), so a gate reads
+    /// exactly what the engine itself would recover from a live node's paint.</summary>
+    static float RotOf(in Affine2D tf)
+        => (tf.M11 != 0f || tf.M12 != 0f) ? MathF.Atan2(tf.M12, tf.M11) * (180f / MathF.PI) : 0f;
+
+    // ── the rest-pose-relative While* contract (fanned-cover-stack fix) ────────────────────────────────────────────
+    //
+    // Before this rework, AnimEngine.SeedTarget folded a gesture-state release with an IDENTITY target (replace:true
+    // over PASS2's live-paint accumulator). Because a gesture channel's track OWNS its channel outright once seeded,
+    // that permanently wiped an authored static Rotation/OffsetX/OffsetY/Blur the instant hover/press first engaged
+    // and then let go — every existing While* call site happened to rest at identity (HoverElevatePaint cards,
+    // Interaction.Interactive presets), so nothing caught it until a fanned cover stack needed BOTH an authored rest
+    // pose AND a hover delta. MotionTarget's fields are now DELTAS on the node's authored rest pose (offset/rotation/
+    // blur ADD, scale/opacity MULTIPLY — see MotionTok.cs), folded in at seed time by SeedTargetOver
+    // (AnimScheduler.Structural.cs) so a release animates back to that authored pose, never to identity.
+    static void WhileRestPoseChecks(StringTable strings)
+    {
+        // gate.anim.while.restPose — hover-on settles at rest+delta; hover-off settles back at the AUTHORED rest
+        // pose (Rotation=-11, OffsetX=5), not at 0/0.
+        {
+            var scene = new SceneStore();
+            var engine = new AnimEngine(scene);
+            var recon = new TreeReconciler(scene, strings) { Anim = engine };
+            recon.ReconcileRoot(new BoxEl
+            {
+                Width = 40, Height = 40,
+                Rotation = -11f, OffsetX = 5f,
+                WhileHover = new MotionTarget { Rotation = -5f, OffsetX = -10f },
+                Transition = MotionTok.ControlFaster,
+            }, null);
+            var node = scene.Root;
+
+            engine.ApplyInteractionEdge(node, AnimEngine.InteractKind.Hover, true);
+            for (int i = 0; i < 12 && engine.HasActive; i++) engine.Tick(16f);   // > 83ms (ControlFaster) → settled
+            float rotOn = RotOf(scene.Paint(node).LocalTransform);
+            float txOn = scene.Paint(node).LocalTransform.Dx;
+            bool onOk = Near(rotOn, -16f, 0.25f) && Near(txOn, -5f, 0.25f);
+
+            engine.ApplyInteractionEdge(node, AnimEngine.InteractKind.Hover, false);
+            for (int i = 0; i < 12 && engine.HasActive; i++) engine.Tick(16f);
+            float rotOff = RotOf(scene.Paint(node).LocalTransform);
+            float txOff = scene.Paint(node).LocalTransform.Dx;
+            bool offOk = Near(rotOff, -11f, 0.25f) && Near(txOff, 5f, 0.25f);   // the AUTHORED rest pose, NOT 0
+
+            Check("gate.anim.while.restPose", onOk && offOk,
+                $"on: rot={rotOn:0.0} tx={txOn:0.0} (want -16/-5)  off: rot={rotOff:0.0} tx={txOff:0.0} (want -11/5)");
+        }
+
+        // gate.anim.while.cascade — the hover edge on an interaction-boundary PARENT (OnClick) reaches a non-
+        // boundary, purely-presentational CHILD's own While* row via AnimScheduler.Hover.SetHoverDescendants' new
+        // third leg (the EXISTING reveal/scale walk, extended — no second traversal). The child is
+        // HitTestVisible=false and owns no click/pointer handler, so nothing ever edges it directly; without the
+        // cascade it sits frozen at rest under a hovered container forever.
+        {
+            var scene = new SceneStore();
+            var engine = new AnimEngine(scene);
+            var recon = new TreeReconciler(scene, strings) { Anim = engine };
+            recon.ReconcileRoot(new BoxEl
+            {
+                OnClick = static () => { },   // an interaction boundary — owns its own hover edge
+                Children = [new BoxEl { HitTestVisible = false, WhileHover = new MotionTarget { Rotation = 8f, OffsetX = 4f } }],
+            }, null);
+            var parent = scene.Root;
+            var child = scene.FirstChild(parent);
+
+            engine.SetHover(parent, true);
+            engine.ApplyInteractionEdge(parent, AnimEngine.InteractKind.Hover, true);   // AppHost.OnHoverChanged's real edge pair
+            for (int i = 0; i < 12 && engine.HasActive; i++) engine.Tick(16f);
+            float rotOn = RotOf(scene.Paint(child).LocalTransform);
+            float txOn = scene.Paint(child).LocalTransform.Dx;
+            bool onOk = Near(rotOn, 8f, 0.25f) && Near(txOn, 4f, 0.25f);
+
+            engine.SetHover(parent, false);
+            engine.ApplyInteractionEdge(parent, AnimEngine.InteractKind.Hover, false);
+            for (int i = 0; i < 12 && engine.HasActive; i++) engine.Tick(16f);
+            float rotOff = RotOf(scene.Paint(child).LocalTransform);
+            float txOff = scene.Paint(child).LocalTransform.Dx;
+            bool offOk = Near(rotOff, 0f, 0.25f) && Near(txOff, 0f, 0.25f);
+
+            Check("gate.anim.while.cascade", onOk && offOk,
+                $"on: rot={rotOn:0.0} tx={txOn:0.0} (want 8/4)  off: rot={rotOff:0.0} tx={txOff:0.0} (want 0/0)");
+        }
+
+        // gate.anim.while.boundaryStops — the SAME cascade must NOT reach a nested child that owns its OWN
+        // interaction scope (OnClick + its own WhileHover): `if (boundary) continue;` has to run BEFORE the new
+        // ApplyInteractionEdgeSelf call, or a nested control's declarative motion would fire off its container's
+        // hover edge — reintroducing the "all ellipses" defect the reveal/scale cascade split already fixed once
+        // for the older two legs (NestedHoverBoundaryChecks, above).
+        {
+            var scene = new SceneStore();
+            var engine = new AnimEngine(scene);
+            var recon = new TreeReconciler(scene, strings) { Anim = engine };
+            recon.ReconcileRoot(new BoxEl
+            {
+                OnClick = static () => { },
+                Children = [new BoxEl { OnClick = static () => { }, WhileHover = new MotionTarget { Rotation = 8f } }],
+            }, null);
+            var parent = scene.Root;
+            var child = scene.FirstChild(parent);
+
+            engine.SetHover(parent, true);
+            engine.ApplyInteractionEdge(parent, AnimEngine.InteractKind.Hover, true);
+            bool noCascade = !engine.HasTracks(child);   // never edged at all — the boundary owns no row here
+            engine.Tick(16f); engine.Tick(16f);
+            float rot = RotOf(scene.Paint(child).LocalTransform);
+            Check("gate.anim.while.boundaryStops", noCascade && Near(rot, 0f, 0.25f),
+                $"noCascade={noCascade} rot={rot:0.0}");
+        }
+
+        // gate.anim.while.reducedMotion — reduced-motion-as-a-value (backdrop-effects-animation.md §5.9): under
+        // Motion.ReducedMotion, a MotionTok.ControlNormal fan (Eased/KeepFade) still SNAPS every non-Opacity channel
+        // to its end value immediately (ReducedSnap only exempts Opacity from KeepFade), so a fan is already fully
+        // deployed on the very SEED frame instead of mid-way through a 250ms ease.
+        {
+            bool prev = Motion.ReducedMotion;
+            Motion.ReducedMotion = true;
+            try
+            {
+                var scene = new SceneStore();
+                var engine = new AnimEngine(scene);
+                var recon = new TreeReconciler(scene, strings) { Anim = engine };
+                recon.ReconcileRoot(new BoxEl
+                {
+                    WhileHover = new MotionTarget { Rotation = 20f, OffsetX = 12f },
+                    Transition = MotionTok.ControlNormal,
+                }, null);
+                var node = scene.Root;
+
+                engine.ApplyInteractionEdge(node, AnimEngine.InteractKind.Hover, true);
+                engine.Tick(0f);   // the SEED frame — a real 250ms ease would still read the REST value (0) at u=0
+                float rot = RotOf(scene.Paint(node).LocalTransform);
+                float tx = scene.Paint(node).LocalTransform.Dx;
+                Check("gate.anim.while.reducedMotion", Near(rot, 20f, 0.25f) && Near(tx, 12f, 0.25f),
+                    $"rot={rot:0.0} tx={tx:0.0}");
+            }
+            finally { Motion.ReducedMotion = prev; }
+        }
+    }
+
+    static void RotationCurrentValueChecks(StringTable strings)
+    {
+        // gate.anim.rotation.currentValue — CurrentValue's Rotation arm (AnimScheduler.cs) must recover the LIVE
+        // angle (atan2 decompose, matching Accum.FromPaint exactly) so an eased `from: null` retarget departs from
+        // where the node ALREADY IS, not from 0. Before this arm existed, a rotated node fed through
+        // SeedValue/SeedChannel with no explicit `from` would visibly snap to 0° and ease FROM there — a fan would
+        // pop to flat before re-fanning.
+        var scene = new SceneStore();
+        var engine = new AnimEngine(scene);
+        var recon = new TreeReconciler(scene, strings) { Anim = engine };
+        recon.ReconcileRoot(new BoxEl { Width = 40, Height = 40, Rotation = 30f }, null);   // static authored rotation, no track yet
+        var node = scene.Root;
+        float live = RotOf(scene.Paint(node).LocalTransform);
+
+        engine.SeedValue(node, AnimChannel.Rotation, 60f, MotionTok.ControlNormal, from: null);
+        bool gotTrack = engine.TryGetTrackValue(node, AnimChannel.Rotation, out float seededFrom);
+
+        Check("gate.anim.rotation.currentValue",
+            gotTrack && Near(seededFrom, live, 0.25f) && !Near(seededFrom, 0f, 5f),
+            $"live={live:0.0} seeded-from={seededFrom:0.0}");
     }
 
     static void MarqueeChecks(StringTable strings)

@@ -239,6 +239,53 @@ using static FluentGpu.VerticalSlice.Harness.Asserts;
         }
     }
 
+    // Hold-last-good (media-pipeline.md §hold-last-good) test decoder: completion is gated PER-ID (Release(id)) rather
+    // than per-source, so a test can complete an OLD decode while a NEW one (same source, different key — or a
+    // different source under the bound path) sits Pending under a separate id, exactly the window the reconciler's
+    // SwapImageId hold must cover. Pump() only resolves ids explicitly released (still the +1-frame contract: Begin
+    // never completes synchronously).
+    sealed class SelectiveIdDecoder : IImageDecoder
+    {
+        readonly Dictionary<int, (int W, int H)> _pending = new();
+        readonly HashSet<int> _release = new();
+        readonly HashSet<int> _fail = new();
+        readonly HashSet<int> _canceled = new();
+        byte[] _scratch = Array.Empty<byte>();
+
+        public int LastBeginId { get; private set; }   // the most recently Begin'd id — lets a test discover a NEW
+                                                          // (held) pending id it can never see in a recorded draw.
+        public bool IsPending(int id) => _pending.ContainsKey(id);
+        public void Release(int id) => _release.Add(id);
+        public void Fail(int id) { _release.Add(id); _fail.Add(id); }
+        public bool WasCanceled(int id) => _canceled.Contains(id);
+
+        public bool Begin(int id, string source, int targetW, int targetH, ImagePriority priority = ImagePriority.Visible)
+        {
+            LastBeginId = id;
+            _pending[id] = (Math.Max(1, targetW), Math.Max(1, targetH));
+            return true;
+        }
+
+        public void Cancel(int id) => _canceled.Add(id);
+
+        public void Pump(ImageCompleteHandler onComplete, ImageReadyHandler onPixels)
+        {
+            if (_release.Count == 0) return;
+            foreach (int id in _release.ToArray())
+            {
+                _release.Remove(id);
+                bool fail = _fail.Remove(id);
+                if (!_pending.Remove(id, out var wh)) continue;
+                if (fail) { onComplete(id, false, 0, 0, ImageFailureKind.Decode, 1); continue; }
+                int bytes = wh.W * wh.H * 4;
+                if (_scratch.Length < bytes) _scratch = new byte[bytes];
+                _scratch.AsSpan(0, bytes).Fill(0xFF);
+                onPixels(id, _scratch.AsSpan(0, bytes), wh.W, wh.H);
+                onComplete(id, true, wh.W, wh.H, ImageFailureKind.None, 1);
+            }
+        }
+    }
+
 static class ImageSuite
 {
     public static void Run(StringTable strings)
@@ -255,6 +302,7 @@ static class ImageSuite
         ImageEvictChecks();
         ImageLifecycleChecks(strings);
         UseImageChecks(strings);
+        HoldLastGoodChecks(strings);
     }
 
     static void IconChecks(StringTable strings)
@@ -916,6 +964,24 @@ static class ImageSuite
 
         Check("46f. ImageTransition: default fade eases 0→1; None disables (instant)", fades && disabled,
             $"cf0={cf0:0.00} cf1={cf1:0.00}");
+
+        // 45e: ImageCache.WasReady — a re-decode of a key that has already been Ready once, landing fast, reveals
+        // instantly EVEN AT REST (not just mid-scroll); a first-ever decode still gets its authored fade (the
+        // synchronous test decoder must not flip a fresh reveal to instant just because it lands fast too).
+        var wr = new FakeImageDecoder();
+        var wcache = new ImageCache(wr);
+        var wHandle = wcache.Request("warm", 16, 16);
+        wcache.Pump();                                    // first-ever decode — WasReady was false when this landed
+        float firstCf = wcache.CrossFadeOf(wHandle);
+        bool firstFades = firstCf < 0.999f;
+
+        wcache.ReRealizeAllResident();                    // forces a re-decode of the now-Ready entry (WasReady==true)
+        wcache.Pump();                                    // lands immediately — well under InstantRevealWindowMs
+        float warmCf = wcache.CrossFadeOf(wHandle);
+        bool warmInstant = warmCf >= 0.999f;
+
+        Check("45e. ImageCache WasReady: a re-decode of a previously-Ready entry landing fast reveals instantly at rest; a first decode keeps its authored fade",
+            firstFades && warmInstant, $"firstCf={firstCf:0.00} warmCf={warmCf:0.00}");
     }
 
     static void ImageEvictChecks()
@@ -1107,6 +1173,233 @@ static class ImageSuite
             Check("46h2. UseImage: per-handle status epochs re-render only the image consumer whose handle completed",
                 onlyA && onlyB,
                 $"renders A={initialA}->{afterA}->{fanoutProbe.RendersA} B={initialB}->{untouchedB}->{fanoutProbe.RendersB} states={fanoutProbe.StateA}/{fanoutProbe.StateB}");
+        }
+    }
+
+    // Hold-last-good (media-pipeline.md §hold-last-good, Reconciler.cs SwapImageId): when a mounted Image node's
+    // cache key changes, the OLD Ready texture keeps drawing until the NEW key settles (Ready or Failed), then a
+    // hard cut — no fade restart. Every case here uses SelectiveIdDecoder so the test controls EXACTLY when each id
+    // completes, opening the window the reconciler's hold must cover.
+    static void HoldLastGoodChecks(StringTable strings)
+    {
+        // 46n: unbound swap site (WriteColumns `case ImageEl`) — a decode-size change re-keys a Ready image.
+        {
+            var dec = new SelectiveIdDecoder();
+            var cache = new ImageCache(dec);
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("hold-n", new Size2(200, 200), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var probe = new HoldLastGoodProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, probe, cache);
+
+            host.RunFrame();                          // mount at Px=64 → Request/Begin id A (Pending)
+            int idA = dec.LastBeginId;
+            dec.Release(idA);
+            host.RunFrame();                           // A completes → Ready
+            bool aReady = device.LastImages.Count == 1 && device.LastImages[0].ImageId == idA
+                && device.LastImages[0].Ready == 1 && cache.StateOf(new ImageHandle(idA)) == ImageState.Ready;
+
+            probe.Px.Value = 128f;                     // decode-size change → a new SourceKey → a new Pending entry
+            host.RunFrame();
+            int idB = dec.LastBeginId;
+            bool held = idB != 0 && idB != idA
+                && device.LastImages.Count == 1 && device.LastImages[0].ImageId == idA   // still drawing the OLD id
+                && device.LastImages[0].Ready == 1
+                && cache.StateOf(new ImageHandle(idA)) == ImageState.Ready
+                && cache.StateOf(new ImageHandle(idB)) == ImageState.Pending;
+
+            dec.Release(idB);
+            host.RunFrame();                           // B settles → MarkImageDirty commits the hard cut
+            bool committed = device.LastImages.Count == 1 && device.LastImages[0].ImageId == idB
+                && device.LastImages[0].Ready == 1
+                && cache.StateOf(new ImageHandle(idB)) == ImageState.Ready
+                && cache.CrossFadeOf(new ImageHandle(idB)) >= 0.999f;   // hard cut — no fade restart
+
+            Check("46n. hold-last-good: a re-keyed Ready image holds its OLD texture while the NEW key decodes, then hard-cuts with no fade restart",
+                aReady && held && committed,
+                $"idA={idA} idB={idB} aReady={aReady} held={held} committed={committed}");
+        }
+
+        // 46n2a: the OLD pin survives a forced EvictToBudget while the hold is in progress; commit releases exactly
+        // the OLD pin (the NEW one becomes the sole survivor).
+        {
+            var dec = new SelectiveIdDecoder();
+            const long imgBytes = 64 * 64 * 4;
+            var cache = new ImageCache(dec, budgetBytes: imgBytes + 100);   // room for ~1 image + slack, not 2
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("hold-n2a", new Size2(200, 200), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var probe = new HoldLastGoodProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, probe, cache);
+
+            host.RunFrame();
+            int idA = dec.LastBeginId;
+            dec.Release(idA);
+            host.RunFrame();                           // A Ready, pinned (Refs=1)
+
+            probe.Px.Value = 128f;
+            host.RunFrame();                            // hold: B Begun+Pending, also pinned
+            int idB = dec.LastBeginId;
+
+            var extra = cache.Request("hold/unrelated", 64, 64);   // an unrelated, never-pinned entry
+            dec.Release(extra.Id);
+            cache.Pump();                                // extra completes Ready → UsedBytes now > budget → evicts
+            bool survivedEvict = cache.StateOf(new ImageHandle(idA)) == ImageState.Ready
+                && cache.RefsOf(new ImageHandle(idA)) >= 1;
+
+            dec.Release(idB);
+            host.RunFrame();                             // commit
+            bool commitReleasedOld = cache.RefsOf(new ImageHandle(idA)) == 0
+                && cache.RefsOf(new ImageHandle(idB)) == 1
+                && cache.StateOf(new ImageHandle(idB)) == ImageState.Ready;
+
+            Check("46n2a. hold-last-good pin bookkeeping: the OLD pin survives a forced EvictToBudget mid-hold; commit releases exactly the OLD pin",
+                survivedEvict && commitReleasedOld,
+                $"idA={idA} idB={idB} survivedEvict={survivedEvict} refsA={cache.RefsOf(new ImageHandle(idA))} refsB={cache.RefsOf(new ImageHandle(idB))}");
+        }
+
+        // 46n2b: re-keying back to the id currently on screen (while a different id is mid-hold) cancels the now-
+        // orphaned pending decode (refs hit 0 → Cancel).
+        {
+            var dec = new SelectiveIdDecoder();
+            var cache = new ImageCache(dec);
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("hold-n2b", new Size2(200, 200), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var probe = new HoldLastGoodProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, probe, cache);
+
+            host.RunFrame();
+            int idA = dec.LastBeginId;
+            dec.Release(idA);
+            host.RunFrame();
+
+            probe.Px.Value = 128f;
+            host.RunFrame();
+            int idB = dec.LastBeginId;
+            bool holding = cache.StateOf(new ImageHandle(idB)) == ImageState.Pending
+                && cache.RefsOf(new ImageHandle(idB)) >= 1;
+
+            probe.Px.Value = 64f;                        // back to the OLD (already-cached) key
+            host.RunFrame();
+            bool rekeyedBack = device.LastImages.Count == 1 && device.LastImages[0].ImageId == idA;
+            bool pendingCanceled = dec.WasCanceled(idB) && cache.RefsOf(new ImageHandle(idB)) == 0;
+
+            Check("46n2b. hold-last-good: re-keying back to the currently-drawn id cancels the orphaned pending decode",
+                holding && rekeyedBack && pendingCanceled,
+                $"idA={idA} idB={idB} rekeyedBack={rekeyedBack} canceled={dec.WasCanceled(idB)} refsB={cache.RefsOf(new ImageHandle(idB))}");
+        }
+
+        // 46n2c: an unmount mid-hold releases BOTH pins — the OLD (drawn) id and the pending NEW one.
+        {
+            var dec = new SelectiveIdDecoder();
+            var cache = new ImageCache(dec);
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("hold-n2c", new Size2(200, 200), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var probe = new HoldLastGoodProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, probe, cache);
+
+            host.RunFrame();
+            int idA = dec.LastBeginId;
+            dec.Release(idA);
+            host.RunFrame();
+
+            probe.Px.Value = 128f;
+            host.RunFrame();
+            int idB = dec.LastBeginId;
+            bool bothPinnedBeforeUnmount = cache.RefsOf(new ImageHandle(idA)) >= 1
+                && cache.RefsOf(new ImageHandle(idB)) >= 1;
+
+            probe.Show.Value = false;                    // unmount mid-hold
+            host.RunFrame();
+            bool bothReleased = cache.RefsOf(new ImageHandle(idA)) == 0 && cache.RefsOf(new ImageHandle(idB)) == 0;
+
+            Check("46n2c. hold-last-good: an unmount mid-hold releases BOTH pins (the OLD drawn id and the pending NEW one)",
+                bothPinnedBeforeUnmount && bothReleased,
+                $"idA={idA} idB={idB} refsA={cache.RefsOf(new ImageHandle(idA))} refsB={cache.RefsOf(new ImageHandle(idB))}");
+        }
+
+        // 46n3: the BOUND-source binding-effect swap site (Reconciler.BindNode's `ime.Source.IsBound` branch) takes
+        // the same hold path as the unbound WriteColumns site above.
+        {
+            var dec = new SelectiveIdDecoder();
+            var cache = new ImageCache(dec);
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("hold-n3", new Size2(200, 200), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var probe = new BoundHoldLastGoodProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, probe, cache);
+
+            host.RunFrame();
+            int idA = dec.LastBeginId;
+            dec.Release(idA);
+            host.RunFrame();
+            bool aReady = device.LastImages.Count == 1 && device.LastImages[0].ImageId == idA
+                && device.LastImages[0].Ready == 1;
+
+            probe.Src.Value = "hold/bound-b";            // a different SOURCE (bound extent props are stable)
+            host.RunFrame();
+            int idB = dec.LastBeginId;
+            bool held = idB != 0 && idB != idA
+                && device.LastImages.Count == 1 && device.LastImages[0].ImageId == idA
+                && device.LastImages[0].Ready == 1
+                && cache.StateOf(new ImageHandle(idB)) == ImageState.Pending;
+
+            dec.Release(idB);
+            host.RunFrame();
+            bool committed = device.LastImages.Count == 1 && device.LastImages[0].ImageId == idB
+                && device.LastImages[0].Ready == 1
+                && cache.CrossFadeOf(new ImageHandle(idB)) >= 0.999f;
+
+            Check("46n3. hold-last-good: the BOUND-source binding-effect swap site takes the same hold path",
+                aReady && held && committed,
+                $"idA={idA} idB={idB} aReady={aReady} held={held} committed={committed}");
+        }
+
+        // 46n4: the steady-frame alloc gate (gate.icon.alloc's idiom) extended through a hold + commit sequence — the
+        // TRANSITION frames themselves legitimately allocate (a real component re-render for the Px change; a real
+        // pixel upload — including this test's OWN SelectiveIdDecoder growing its scratch buffer to the new decode
+        // size — for the commit), same as any other frame that does real reconcile/decode work. What must stay at
+        // 0 is every STEADY frame once the sequence settles: no per-hold/per-commit residue (a leaked pin, a
+        // dangling Dictionary entry) should show up as recurring hot-phase (6–13) allocation.
+        {
+            var dec = new SelectiveIdDecoder();
+            var cache = new ImageCache(dec);
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("hold-n4", new Size2(200, 200), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var probe = new HoldLastGoodProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, probe, cache);
+
+            host.RunFrame();
+            int idA = dec.LastBeginId;
+            dec.Release(idA);
+            for (int i = 0; i < 3; i++) host.RunFrame();   // settle one-time/JIT allocs before measuring
+
+            probe.Px.Value = 128f;
+            host.RunFrame();                                // the hold transition frame (not measured — real reconcile work)
+            int idB = dec.LastBeginId;
+            dec.Release(idB);
+            host.RunFrame();                                 // the commit transition frame (not measured — real upload work)
+
+            long worst = 0;
+            for (int i = 0; i < 8; i++) { var f = host.RunFrame(); if (f.HotPhaseAllocBytes > worst) worst = f.HotPhaseAllocBytes; }
+
+            Check("46n4. hold-last-good: every steady frame after a hold + commit sequence keeps hot-phase (6–13) alloc at 0",
+                worst == 0, $"worstSteady={worst}B idA={idA} idB={idB}");
         }
     }
 }

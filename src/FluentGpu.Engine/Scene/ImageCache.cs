@@ -136,6 +136,13 @@ public sealed class ImageCache
         public float RevealMs;
         public float RequestedMs = float.NegativeInfinity;   // clock (ms) when the current decode was requested → the cache-adjacent test
         public float LastRestartMs = float.NegativeInfinity;   // backoff gate for visible/transient-failure retries
+        // Sticky: true once this entry has EVER reached Ready. Persists through RestartDecode/eviction (the Entry
+        // object survives in _byId — a tombstone keeps its key), so a LATER re-decode of an already-known-good key
+        // is recognized as a warm hit even after the original reveal fully settled. See BeginReveal's instant-at-rest
+        // arm (set AFTER that call on the decode completing this entry — never before it — so entry's FIRST-ever
+        // decode still sees WasReady==false there and keeps its authored fade, even under a synchronous test decoder
+        // that lands well inside InstantRevealWindowMs).
+        public bool WasReady;
         public bool Derived;
         public int SourceId;
         public int BakeTargetW, BakeTargetH;
@@ -513,7 +520,16 @@ public sealed class ImageCache
         }
         e.RevealMs = e.Transition.DurationMs;
         e.TextureMs = _clockMs;
-        if (SuppressReveals)
+        if (e.WasReady && _clockMs - e.RequestedMs <= InstantRevealWindowMs)
+        {
+            // A re-decode of a key that has been Ready BEFORE (RestartDecode after eviction/failure, a device-lost
+            // ReRealizeAllResident, a disk/OS-cache hit) landing within the instant-reveal window is a WARM hit, not
+            // a first-ever placeholder period — fading it reads as lag even AT REST, not just mid-scroll (the
+            // SuppressReveals arm below already covers the scroll case). WasReady is false on a true first decode, so
+            // that one still gets its authored fade regardless of how fast the (possibly synchronous test) decoder lands.
+            e.TextureMs = _clockMs - e.RevealMs;
+        }
+        else if (SuppressReveals)
         {
             // Scroll. Textures now LAND mid-gesture (DecodeScheduler admits one completion per frame whatever its
             // size), so the old "already finished" reveal would hard-pop a full-size cover in under a moving finger —
@@ -546,6 +562,22 @@ public sealed class ImageCache
         if (!e.Transition.Enabled || float.IsNaN(e.TextureMs)) return;
         float deadline = e.TextureMs + e.RevealMs;
         if (deadline > _maxCrossfadeDeadlineMs) _maxCrossfadeDeadlineMs = deadline;
+    }
+
+    /// <summary>Force an entry's placeholder→image reveal to its settled (<see cref="CrossFadeOf"/>==1) state — used by
+    /// the reconciler's hold-last-good commit (Reconciler.cs §hold-last-good: a re-keyed Image node held its OLD Ready
+    /// texture while the new key decoded). The sharper texture should hard-cut in, not restart the fade it already
+    /// finished long ago under the old key. Exactly the disabled-transition arm of <see cref="BeginReveal"/>.
+    /// <para>Entries are shared by (source, decodeW, decodeH): settling one also instantly finishes any OTHER node's
+    /// still-fading reveal of the same key. Rare (two nodes landing on the identical key at once) and benign (a fade
+    /// cut a few ms early for the other node).</para></summary>
+    public void SettleReveal(ImageHandle h)
+    {
+        if (!_byId.TryGetValue(h.Id, out var e)) return;
+        bool wasActiveDeadline = e.Transition.Enabled && !float.IsNaN(e.TextureMs) && e.TextureMs + e.RevealMs >= _clockMs;
+        e.TextureMs = float.NaN;
+        e.RevealMs = 0f;
+        if (wasActiveDeadline) RecomputeCrossfadeDeadline();
     }
 
     /// <summary>Recompute the crossfade-deadline high-water from scratch — used only after evicting an entry that could
@@ -930,6 +962,7 @@ public sealed class ImageCache
         e.Failure = ok ? ImageFailureKind.None : failure;
         e.Attempts = attempts;
         if (ok && float.IsNaN(e.TextureMs)) BeginReveal(e, id, "decode");
+        if (ok) e.WasReady = true;   // AFTER BeginReveal: a first-ever decode must still see WasReady==false there
         e.W = w; e.H = h;
         e.Bytes = ok ? (long)w * h * 4 : 0;
         UsedBytes += e.Bytes;

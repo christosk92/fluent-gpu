@@ -83,13 +83,24 @@ public readonly struct MotionTokenDef : System.IEquatable<MotionTokenDef>
 
 /// <summary>A gesture-state target set (Framer <c>whileHover</c>/<c>whileTap</c>): the channel values a node animates
 /// TO while a state (hover/press/focus) is active, and back FROM on release — resolved by the InteractionState
-/// priority machine (higher-priority state wins; releasing it animates to the next writer's value). Defaults are
-/// identity (Scale 1, Opacity 1, no offset/blur), so <c>new() { Scale = 1.04f }</c> lifts on hover and rests at 1.</summary>
+/// priority machine (higher-priority state wins; releasing it animates to the next writer's value).
+/// <para><b>Rest-pose-RELATIVE contract:</b> every field here is a DELTA on the node's AUTHORED rest pose, never an
+/// absolute value — <see cref="OffsetX"/>/<see cref="OffsetY"/>/<see cref="Rotation"/>/<see cref="Blur"/> ADD to the
+/// rest pose's offset/rotation/blur; <see cref="Scale"/>/<see cref="Opacity"/> MULTIPLY it. Releasing every state
+/// (no Hover/Press/Focus active) animates back to the authored rest pose, not to identity — see
+/// <c>AnimEngine.SeedTargetOver</c>, the fold that carries the rest pose through. Defaults are the identity DELTA
+/// (Scale 1, Opacity 1, no offset/rotation/blur), so <c>new() { Scale = 1.04f }</c> lifts a node 4% off its own rest
+/// scale on hover and rests back at its own rest scale (not literal 1) on release.</para>
+/// <para><b>Gotcha:</b> <c>default(MotionTarget)</c> bypasses this struct's parameterless ctor and yields
+/// <c>Scale = 0, Opacity = 0</c> (a node that scales to nothing and vanishes) — every "identity delta" use MUST be
+/// <c>new MotionTarget()</c>, never <c>default</c>.</para></summary>
 public readonly record struct MotionTarget
 {
     public float Scale { get; init; }
     public float OffsetX { get; init; }
     public float OffsetY { get; init; }
+    /// <summary>Degrees — a DELTA on the node's authored rest <see cref="FluentGpu.Dsl.Element"/><c>.Rotation</c>.</summary>
+    public float Rotation { get; init; }
     public float Opacity { get; init; }
     public float Blur { get; init; }
     public MotionTarget() { Scale = 1f; Opacity = 1f; }

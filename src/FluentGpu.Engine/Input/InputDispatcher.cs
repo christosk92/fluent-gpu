@@ -612,6 +612,16 @@ public sealed class InputDispatcher
     {
         if (root.IsNull || !_scene.IsLive(root)) return;
 
+        // Hover is the one singleton CancelPointer (below) does not touch — it clears _pressed unconditionally but
+        // leaves _hovered/HoverWithin exactly as they were, so a KeepAlive park mid-hover left NodeFlags.Hovered set
+        // and the HoverFade/While* rows targeting their engaged state forever (reactivation resurrected a stale
+        // elevated pose the pointer never re-confirmed). Route through the SAME hover-exit path a real pointer leave
+        // uses (SetState → the dispatcher's Notify → AppHost's OnHoverChanged → AnimEngine.SetHover/ApplyInteractionEdge
+        // cascade) rather than hand-rolling a second one. A per-node scan of the subtree isn't needed: HoverWithin is
+        // only ever set on ancestors of the CURRENT _hovered singleton, so if it isn't inside root, nothing inside
+        // root carries HoverWithin either; if it is, clearing it walks (and clears) every ancestor up to the app root.
+        if (IsSelfOrAncestorOf(root, _hovered)) SetState(ref _hovered, NodeHandle.Null, NodeFlags.Hovered);
+
         bool cancelPointer = IsSelfOrAncestorOf(root, _hovered) || IsSelfOrAncestorOf(root, _pressed)
                              || IsSelfOrAncestorOf(root, _down) || IsSelfOrAncestorOf(root, _dragTarget)
                              || IsSelfOrAncestorOf(root, _scrollHovered) || IsSelfOrAncestorOf(root, _scrollDragNode)

@@ -461,7 +461,16 @@ public sealed partial class AnimEngine
             AnimChannel.StrokeTrimStart => !float.IsNaN(p.StrokeTrimStart) ? p.StrokeTrimStart : 0f,
             AnimChannel.StrokeTrimEnd => !float.IsNaN(p.StrokeTrimEnd) ? p.StrokeTrimEnd : 1f,
             AnimChannel.DisclosureProgress => _scene.VirtualDisclosureProgress(node),
-            _ => 0f,   // Rotation: not recoverable from a scaled matrix; springs from 0
+            // Rotation IS recoverable — atan2(M12, M11) is exact for a uniform-scale transform (rotation composed
+            // BEFORE scale in Compose: tf = Translation * Rotation * Scale, so M11/M12 carry the rotation angle
+            // unscaled). Matches Accum.FromPaint's decomposition below verbatim, so a fresh CurrentValue read and a
+            // live PASS2 fold agree on the same node. Before this arm existed, an eased `from: null` gesture-channel
+            // retarget (SeedTargetOver → SeedChannel with initial=null) departed from 0 regardless of the live angle —
+            // a rotated node would visibly snap to 0° and ease FROM there instead of from where it already was.
+            AnimChannel.Rotation => (p.LocalTransform.M11 != 0f || p.LocalTransform.M12 != 0f)
+                ? MathF.Atan2(p.LocalTransform.M12, p.LocalTransform.M11) * (180f / MathF.PI)
+                : 0f,
+            _ => 0f,
         };
     }
 

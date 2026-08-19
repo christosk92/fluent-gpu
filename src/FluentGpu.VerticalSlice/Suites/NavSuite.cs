@@ -40,6 +40,7 @@ static class NavSuite
         NavigationChecks();
         PageHostChecks(strings);
         KeepAliveChecks(strings);
+        KeepAliveWedgedExitBackstopChecks(strings);
         SemanticZoomNavigationChecks(strings);
         ParkBeforeRenderChecks(strings);
         UnparkReplayBudgetChecks(strings);
@@ -257,6 +258,62 @@ static class NavSuite
                || anim.TryGetTrackValue(node, AnimChannel.SizeH, out _)
                || anim.TryGetTrackValue(node, AnimChannel.LayoutW, out _)
                || anim.TryGetTrackValue(node, AnimChannel.LayoutH, out _);
+    }
+
+    // gate.reconciler.keepalive-exit-backstop — FinalizeKeepAliveTransitions' deadline mirrors the orphan path's own
+    // hard deadline (ExitMaxAgeMs) + wall-clock guard, because HasTracks is index-only: it matches ANY row on the
+    // outgoing root, including a Parked one PASS1/PASS2 will never advance. Without the backstop a wedged exit pins
+    // ExitingKey — and the boundary's ZStack overlay — forever.
+    static void KeepAliveWedgedExitBackstopChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("keepalive-wedge", new Size2(260, 160), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        var probe = new KeepAliveWedgeProbe();
+        using var host = new AppHost(app, window, device, fonts, strings, probe);
+
+        host.RunFrame();
+        // KeepAlive's View() returns Embed.Comp(...) (KeepAliveWedgePage), so probe.RootA (OnRealized on the page's
+        // OWN BoxEl) is one level BELOW the KeepAlive-managed entry.Root — the ComponentEl anchor SeedExit/HasTracks
+        // actually target. Walk up to it; its parent is the boundary (state.Boundary).
+        var aRoot = host.Scene.Parent(probe.RootA);
+        var boundary = host.Scene.Parent(aRoot);
+        bool mountedA = !aRoot.IsNull && !boundary.IsNull && HasGlyph(device, strings, "wedge-a");
+
+        probe.Route!.Value = "b";
+        host.RunFrame();   // BeginKeepAliveExit: seeds the 250ms PageSlideForward exit, marks the boundary ZStack
+        bool overlapLive = (host.Scene.Flags(boundary) & NodeFlags.ZStack) != 0
+                            && host.Scene.IsLive(aRoot) && host.Animation.HasTracks(aRoot)
+                            && HasGlyph(device, strings, "wedge-b");
+
+        // Wedge: freeze A's exit rows mid-flight — the same SetNodeParked idiom 50a5 uses to plant a frozen row. PASS1/
+        // PASS2 skip Parked rows, so HasTracks(aRoot) never goes false on its own from here.
+        host.Animation.SetNodeParked(aRoot, true);
+        Console.Error.WriteLine($"[dbg] after park: tracks={host.Animation.HasTracks(aRoot)}");
+
+        for (int i = 0; i < 15; i++)
+        {
+            host.RunFrame();
+            Console.Error.WriteLine($"[dbg] i={i} tracks={host.Animation.HasTracks(aRoot)} Z={(host.Scene.Flags(boundary) & NodeFlags.ZStack) != 0} parentNull={host.Scene.Parent(aRoot).IsNull}");
+        }   // ~240ms of anim-clock — under the ~350ms (250+0+100) deadline
+        bool stillHeldBeforeDeadline = (host.Scene.Flags(boundary) & NodeFlags.ZStack) != 0
+                                        && !host.Scene.Parent(aRoot).IsNull;
+
+        bool anyAlloc = false;
+        for (int i = 0; i < 10; i++)                    // past the deadline — must force-finish, and stay alloc-clean
+        {
+            var stats = host.RunFrame();
+            if (stats.HotPhaseAllocBytes != 0) anyAlloc = true;
+        }
+        bool forceFinished = (host.Scene.Flags(boundary) & NodeFlags.ZStack) == 0
+                              && host.Scene.Parent(aRoot).IsNull
+                              && HasGlyph(device, strings, "wedge-b");
+
+        Check("gate.reconciler.keepalive-exit-backstop a wedged (parked mid-flight) KeepAlive exit track is force-finished at its own anim-clock deadline instead of pinning the ZStack overlay forever",
+            mountedA && overlapLive && stillHeldBeforeDeadline && forceFinished && !anyAlloc,
+            $"mountedA={mountedA} overlapLive={overlapLive} heldBeforeDeadline={stillHeldBeforeDeadline} forceFinished={forceFinished} alloc={anyAlloc}");
     }
 
     static void SemanticZoomNavigationChecks(StringTable strings)

@@ -1363,7 +1363,17 @@ internal sealed class FlyoutSurface : Component
                 [
                     new BoxEl   // the plate — fills the stack (ZStack child without explicit size)
                     {
-                        Fill = ColorF.Transparent,
+                        // Fill is the acrylic's FALLBACK, not Transparent. The plate's visible body is the engine
+                        // acrylic LAYER, and a layer is a DrawOp.PushLayer that the D3D12 backend honours only on the
+                        // device's PRIMARY swapchain (D3D12Device: `layerKind = isPrimary ? StreamLayerKind(..) : 0`,
+                        // guarding the one shared acrylic canvas against a differently-sized secondary target). Any
+                        // host that is NOT the first window — a detached child window, e.g. the video pop-out — is
+                        // therefore secondary, its PushLayer is silently skipped, and a Transparent-filled plate
+                        // rendered as nothing but its 1px border, its shadow and the item text: a menu of floating
+                        // text over whatever was behind it. The fallback keeps the surface solid wherever the layer
+                        // path does not run, and is invisible where it does (the acrylic composite is opaque inside
+                        // the plate). Same pairing as ScrollBar's track — see ScrollBar.cs.
+                        Fill = Tok.AcrylicFlyout.Fallback,
                         Acrylic = Tok.AcrylicFlyout,
                         BorderColor = Tok.StrokeFlyoutDefault,
                         BorderWidth = 1f,
@@ -1386,7 +1396,9 @@ internal sealed class FlyoutSurface : Component
     {
         Direction = 1,
         AlignSelf = FlexAlign.Start,
-        Fill = ColorF.Transparent,
+        // See the plate above: a PushLayer acrylic is dropped on a non-primary swapchain, so a Transparent fill
+        // leaves this card as border + shadow + text in any detached child window. The fallback is the surface.
+        Fill = Tok.AcrylicFlyout.Fallback,
         Acrylic = Tok.AcrylicFlyout,
         BorderColor = Tok.StrokeFlyoutDefault,
         BorderWidth = 1f,

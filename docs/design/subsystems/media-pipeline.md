@@ -476,6 +476,50 @@ in-flight upload memory.
 - A *re-residency* after eviction (scroll back) goes Placeholder→cross-fade again, because the evict bumped
   `ContentEpoch` and cleared `Texture`.
 
+### 7.1 Hold-last-good: a re-keyed Ready image never regresses to its placeholder
+
+When a mounted `ImageEl` node's cache key (`source, decodeW, decodeH`) changes — a CDN size-hash bump, a decode
+size landing after the first width measure — the naive swap is: unpin the old handle, adopt the new (freshly
+`Pending`) one, pin it. That drops the OLD Ready texture the same frame the new key is requested, so the node
+flashes back to its placeholder for however long the new decode takes — visible flicker on every re-key, not just
+a cold mount. Mount (no prior texture) is unaffected: there is nothing to hold.
+
+The reconciler (`Reconciler.cs`, `SwapImageId` — the single write path for `NodePaint.ImageId`, replacing both
+former inline swap sites: the unbound `WriteColumns` `case ImageEl` and the bound-source binding-effect twin)
+instead **holds**: when the OLD id is `Ready` and the NEW id is `Pending`, `NodePaint.ImageId` stays on the OLD id
+(so the recorder keeps drawing it, fully revealed) while the NEW id is pinned + tracked under a sparse
+`node index → pending image id` map (reconciler-local — not on `ImageVisualEffects`, which is rewritten wholesale
+from the element every reconcile, so it cannot carry state across a hold). A synchronous cache hit or an instant
+failure on the new key (both already terminal) skip the hold and commit immediately — today's behavior, unchanged.
+
+The hold resolves on `MarkImageDirty` (the `ImageStatusChanged` → dirty-node fan-out, §5): when the id that just
+reached a terminal state (`Ready` or `Failed`) is a node's *pending* id, that is the commit — `NodePaint.ImageId`
+is reassigned to it (a plain field write; the id is already pinned + tracked by the hold, never re-pinned) and the
+pending entry is cleared. On `Ready`, the cache's `ImageCache.SettleReveal(handle)` forces that entry's
+placeholder→image reveal to its already-settled state (`TextureMs = NaN`, mirroring `BeginReveal`'s
+disabled-transition arm) — a **hard cut**, not a fade restart, since the sharper texture is replacing an already
+fully-revealed image, not appearing from nothing. `SettleReveal` mutates a shared cache entry (keyed by
+`source, decodeW, decodeH`): settling one hold also instantly finishes any OTHER node's still-fading reveal of the
+same key — rare (two nodes landing on the identical key at once) and benign.
+
+Pending-pin lifecycle parity: everywhere `DerivedImageId` is pinned/unpinned alongside `NodePaint.ImageId`, the
+pending id is treated identically — unmount/recycle unpins it (and removes the map entry) same as an unmount mid-
+fade would; `SetSubtreeResourcesActive` (KeepAlive park/unpark) pins/unpins it alongside `ImageId`/`DerivedImageId`
+so a parked hold doesn't leave the new decode live-but-unpinned (evictable) while parked. A re-key that lands back
+on the id currently drawn (while a different id was mid-hold) drops the now-orphaned pending pin — `UnpinImageNode`'s
+`Refs == 0` check cancels the orphaned decode via the decoder's `Cancel`. The OLD (drawn) id's pin, like any pin,
+survives an `EvictToBudget` pass while held (residency's `Refs > 0 ⇒ never evicted` invariant, §4, applies
+unchanged) — a hold never risks the very texture it's protecting.
+
+**`ImageCache.Entry.WasReady`** (sticky, sets once — never reset by `RestartDecode`/eviction, since the `Entry`
+object persists in `_byId`): true once a cache entry has EVER reached `Ready`. `BeginReveal` uses it to recognize a
+*warm* re-decode of an already-known-good key (a device-lost `ReRealizeAllResident`, a disk/OS-cache hit after
+`RestartDecode`) landing within `InstantRevealWindowMs` as a hard-cut case even AT REST, not only mid-scroll (the
+existing `SuppressReveals` instant-window carve-out already covered the scroll case) — fading a warm hit reads as
+lag either way. `WasReady` is set *after* the completing `BeginReveal` call, not before, so a genuinely first-ever
+decode still gets its authored fade regardless of how fast it lands (the deterministic headless test decoder
+completes well inside the window on every first decode too).
+
 ---
 
 ## 8. Video — the present-tree redesign (FluentGpu touches no video pixels)

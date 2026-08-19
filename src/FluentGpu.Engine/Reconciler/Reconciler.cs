@@ -219,6 +219,12 @@ public sealed class TreeReconciler
         public readonly Dictionary<string, KeepAliveEntry> Entries = new();
         public string? ActiveKey;
         public string? ExitingKey;
+        // Backstop deadlines for the CURRENT ExitingKey (mirrors the orphan path's own-deadline + host wall-clock
+        // guard — see ExitMaxAgeMs / AppHost.OrphanSettleTimeoutMs): a parked/wedged exit row never advances
+        // (HasTracks stays true forever), so FinalizeKeepAliveTransitions needs a deadline independent of tracks
+        // settling. Zeroed whenever ExitingKey is nulled — not load-bearing, just honest state.
+        public double ExitDeadlineAnimMs;
+        public long ExitStartTicks;
         public KeepAliveOptions? Options;
         public NodeHandle Boundary;
         public long Clock;
@@ -253,6 +259,10 @@ public sealed class TreeReconciler
     private readonly ScrollMemory _scrollMem = new();
     private readonly HashSet<long> _imagePinnedNodes = new();
     private readonly Dictionary<int, List<NodeHandle>> _imageNodes = new();   // imageId → nodes that pinned it (for status→dirty)
+    // Hold-last-good (media-pipeline.md §hold-last-good): node index → the NEW (still-decoding) image id a re-keyed
+    // Image node is holding while its OLD Ready texture keeps drawing. Absent ⇒ no hold in progress for that node.
+    // Lives here, not on ImageVisualEffects, because that struct is rewritten wholesale from the element every reconcile.
+    private readonly Dictionary<int, int> _pendingImageId = new();
 
     private Component? _root;
     private Element? _oldRoot;
@@ -1358,6 +1368,7 @@ public sealed class TreeReconciler
             {
                 Anim?.CancelAll(entry.Root);
                 state.ExitingKey = null;
+                state.ExitDeadlineAnimMs = 0; state.ExitStartTicks = 0;
                 _scene.Mark(entry.Root, NodeFlags.HitTestVisible);
             }
 
@@ -1396,12 +1407,19 @@ public sealed class TreeReconciler
         Anim!.CancelAll(entry.Root);
         Anim.SeedExit(entry.Root, spec.Exit, spec);
         state.ExitingKey = entry.Key;
+        // Mirror the orphan path's own hard deadline (ExitMaxAgeMs, below) on the ANIMATION-clock timebase, plus the
+        // wall-clock start for FinalizeKeepAliveTransitions' secondary guard: HasTracks is index-only and matches ANY
+        // row on the root (including a Parked one the scheduler never advances), so a parked/wedged exit must not be
+        // able to pin ExitingKey — and the outgoing page in the ZStack overlay — forever.
+        state.ExitDeadlineAnimMs = _scene.AnimClockMs + ExitMaxAgeMs(spec);
+        state.ExitStartTicks = Stopwatch.GetTimestamp();
     }
 
     private void FinishKeepAliveExit(KeepAliveState state, KeepAliveOptions options)
     {
         if (state.ExitingKey is not { } key) return;
         state.ExitingKey = null;
+        state.ExitDeadlineAnimMs = 0; state.ExitStartTicks = 0;
         if (!state.Entries.TryGetValue(key, out var entry))
         {
             if (_scene.IsLive(state.Boundary)) _scene.Unmark(state.Boundary, NodeFlags.ZStack);
@@ -1413,17 +1431,32 @@ public sealed class TreeReconciler
         if (_scene.IsLive(state.Boundary)) _scene.Unmark(state.Boundary, NodeFlags.ZStack);
     }
 
-    /// <summary>Park retained outgoing pages once their finite exit track settles. Called by the host after animation
-    /// ticking; no allocations and no scan unless a KeepAlive boundary exists.</summary>
+    /// <summary>Park retained outgoing pages once their finite exit track settles — OR force-finish at the exit's own
+    /// backstop deadline even while HasTracks still reports true. HasTracks is index-only (matches ANY row on the
+    /// root, PASS1/PASS2-skipped Parked rows included), so a wedged/parked exit that never advances would otherwise
+    /// pin ExitingKey (and the boundary's ZStack overlay) forever — the same failure mode the orphan path's own
+    /// deadline (ExitMaxAgeMs) + the host's 2s wall-clock backstop (AppHost.OrphanSettleTimeoutMs) exist to catch.
+    /// Called by the host after animation ticking; no allocations and no scan unless a KeepAlive boundary exists.</summary>
     public void FinalizeKeepAliveTransitions()
     {
         foreach (var state in _keepAliveState.Values)
         {
             if (state.ExitingKey is not { } key || !state.Entries.TryGetValue(key, out var entry)) continue;
-            if (Anim is not null && Anim.HasTracks(entry.Root)) continue;
+            bool settled = Anim is null || !Anim.HasTracks(entry.Root);
+            if (!settled)
+            {
+                bool animDeadlinePassed = _scene.AnimClockMs >= state.ExitDeadlineAnimMs;
+                double wallAgeMs = (Stopwatch.GetTimestamp() - state.ExitStartTicks) * 1000.0 / Stopwatch.Frequency;
+                if (!animDeadlinePassed && wallAgeMs < KeepAliveExitWallTimeoutMs) continue;   // still within its exit window
+            }
             FinishKeepAliveExit(state, state.Options ?? KeepAliveOptions.Default);
         }
     }
+
+    // Wall-clock outer guard, same value/rationale as AppHost.OrphanSettleTimeoutMs: the anim-clock deadline
+    // (ExitMaxAgeMs) can never trip on a healthy exit however badly the wall clock hitches, so this only fires on a
+    // genuinely wedged track.
+    private const long KeepAliveExitWallTimeoutMs = 2000;
 
     private void ReactivateKeepAliveEntry(NodeHandle parent, KeepAliveEntry entry, KeepAliveOptions options)
     {
@@ -1519,6 +1552,14 @@ public sealed class TreeReconciler
             {
                 if (active) PinImageNode(node, effects.DerivedImageId);
                 else UnpinImageNode(node, effects.DerivedImageId);
+            }
+            // A hold-last-good in progress (media-pipeline.md §hold-last-good): the pending (new, still-decoding) id
+            // is pinned exactly like paint.ImageId/DerivedImageId, so a park doesn't leave it live-but-unpinned
+            // (evictable mid-hold) and an un-park re-pins it (idempotent via _imagePinnedNodes).
+            if (_pendingImageId.TryGetValue((int)node.Raw.Index, out int pendingId) && pendingId != 0)
+            {
+                if (active) PinImageNode(node, pendingId);
+                else UnpinImageNode(node, pendingId);
             }
         }
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
@@ -1630,6 +1671,60 @@ public sealed class TreeReconciler
         }
     }
 
+    // Sole write path for paint.ImageId (media-pipeline.md §hold-last-good). A bare re-key would swap straight onto
+    // the new (Pending) entry, dropping the OLD Ready texture the same frame — the placeholder flashes back in.
+    // Instead, when the old texture is Ready and the new one is still decoding, HOLD: keep drawing the old id, pin
+    // the new one (so its completion is tracked) under _pendingImageId, and let MarkImageDirty commit the hard cut
+    // once the new entry settles (Ready or Failed) — no fade restart (see ImageCache.SettleReveal). Mount (oldId==0),
+    // a synchronous cache hit, and an instant failure (the new entry is already terminal) all fall straight through
+    // to the immediate commit below — today's behavior, unchanged.
+    private void SwapImageId(NodeHandle node, ref NodePaint paint, int newId)
+    {
+        int idx = (int)node.Raw.Index;
+        int oldId = paint.ImageId;
+        if (newId == oldId)
+        {
+            // Re-keyed back to what's already on screen while a DIFFERENT id was mid-hold: that pending decode is
+            // now orphaned. Unpin it — UnpinImageNode's refs==0 check cancels it — and drop the bookkeeping.
+            if (_pendingImageId.Remove(idx, out int stale) && stale != newId)
+                UnpinImageNode(node, stale);
+            return;
+        }
+
+        _pendingImageId.TryGetValue(idx, out int pending);
+        if (pending != 0 && pending == newId) return;   // already holding on exactly this id — nothing changed
+
+        bool holdable = Images is not null && oldId != 0 && newId != 0
+            && Images.StateOf(new ImageHandle(oldId)) == ImageState.Ready
+            && Images.StateOf(new ImageHandle(newId)) == ImageState.Pending;
+
+        if (holdable)
+        {
+            if (pending != 0) UnpinImageNode(node, pending);   // superseded hold target
+            _pendingImageId[idx] = newId;
+            PinImageNode(node, newId);   // pins + tracks — MarkImageDirty reaches this node when `newId` settles
+            _scene.Mark(node, NodeFlags.PaintDirty);
+            if (Diag.CompiledIn && Diag.Enabled && Images is not null && ImageCache.DiagTraced(Images.SourceOf(new ImageHandle(newId))))
+                Diag.Event("img", $"hold node={node.Raw.Index} old={oldId} new={newId} " +
+                    $"src={ImageCache.DiagSourceTail(Images.SourceOf(new ImageHandle(newId)))}");
+            return;
+        }
+
+        if (pending != 0)
+        {
+            _pendingImageId.Remove(idx);
+            if (pending != newId) UnpinImageNode(node, pending);
+        }
+        UnpinImageNode(node, oldId);
+        paint.ImageId = newId;
+        if (newId != 0) PinImageNode(node, newId);
+        _scene.Mark(node, NodeFlags.PaintDirty);
+        if (Diag.CompiledIn && Diag.Enabled && Images is not null && newId != 0
+            && ImageCache.DiagTraced(Images.SourceOf(new ImageHandle(newId))))
+            Diag.Event("img", $"commit node={node.Raw.Index} old={oldId} new={newId} " +
+                $"src={ImageCache.DiagSourceTail(Images.SourceOf(new ImageHandle(newId)))}");
+    }
+
     void TrackImageNode(int imageId, NodeHandle node)
     {
         if (!_imageNodes.TryGetValue(imageId, out var list))
@@ -1663,10 +1758,31 @@ public sealed class TreeReconciler
                 list.RemoveAt(i);
                 continue;
             }
-            ref readonly NodePaint paint = ref _scene.Paint(node);
+            int idx = (int)node.Raw.Index;
+            bool isPending = _pendingImageId.TryGetValue(idx, out int pending) && pending == imageId;
+            ref NodePaint paint = ref _scene.Paint(node);
             bool owns = paint.ImageId == imageId
-                || (_scene.TryGetImageEffects(node, out var effects) && effects.DerivedImageId == imageId);
+                || (_scene.TryGetImageEffects(node, out var effects) && effects.DerivedImageId == imageId)
+                || isPending;
             if (!owns) { list.RemoveAt(i); continue; }
+
+            // Hold-last-good settle (media-pipeline.md §hold-last-good): the held (new) texture just reached a
+            // terminal state — commit the hard cut. It's already pinned + tracked (SwapImageId's hold path did
+            // that), so this is a plain field write, never a re-pin.
+            if (isPending && Images is not null)
+            {
+                var state = Images.StateOf(new ImageHandle(imageId));
+                if (state is ImageState.Ready or ImageState.Failed)
+                {
+                    UnpinImageNode(node, paint.ImageId);   // release the OLD (held) id — reads paint.ImageId BEFORE overwrite
+                    paint.ImageId = imageId;
+                    _pendingImageId.Remove(idx);
+                    if (state == ImageState.Ready) Images.SettleReveal(new ImageHandle(imageId));   // hard cut, no fade restart
+                    if (Diag.CompiledIn && Diag.Enabled && ImageCache.DiagTraced(Images.SourceOf(new ImageHandle(imageId))))
+                        Diag.Event("img", $"commit node={node.Raw.Index} new={imageId} state={state} via=settle");
+                }
+            }
+
             _scene.Mark(node, NodeFlags.PaintDirty);
         }
         if (list.Count == 0) _imageNodes.Remove(imageId);
@@ -1845,15 +1961,9 @@ public sealed class TreeReconciler
                     int newId = Images is not null && src.Length > 0
                         ? Images.Request(src, dW, dH, ImagePriority.Visible, ime.BlurHash, ime.RevealTransition).Id : 0;
                     ref var paint = ref _scene.Paint(node);
-                    int oldId = paint.ImageId;
                     int oldDerived = _scene.TryGetImageEffects(node, out var oldEffects) ? oldEffects.DerivedImageId : 0;
                     int newDerived = RequestBakedImage(in ime, newId, dW, dH);
-                    if (newId != oldId)
-                    {
-                        UnpinImageNode(node, oldId);
-                        paint.ImageId = newId;
-                        if (newId != 0) PinImageNode(node, newId);
-                    }
+                    SwapImageId(node, ref paint, newId);
                     if (newDerived != oldDerived)
                     {
                         UnpinImageNode(node, oldDerived);
@@ -2657,6 +2767,10 @@ public sealed class TreeReconciler
                 if (item >= first && item < last) continue;          // stays in the window — normal handling
                 if (!keepAlive(item)) continue;                       // plain row — recycle/shrink handles it
                 if (kept.ContainsKey(item)) continue;                 // defensive: already parked
+                // Same hover/press/focus hygiene as the boundary-level Flow.KeepAlive path (BeginKeepAliveExit/
+                // DeactivateKeepAliveEntry) — invoke BEFORE Detach so the ancestor-HoverWithin clear walk still sees
+                // the live parent chain. Row-level virtualized KeepAlive was missing this call entirely.
+                OnSubtreeDeactivated?.Invoke(slots[i].Root);
                 _scene.Detach(slots[i].Root);
                 SetSubtreeParked(slots[i].Root, parked: true);         // quiesce render-effects/animations (Flow.KeepAlive mechanics)
                 kept[item] = new KeptSlot
@@ -3321,6 +3435,9 @@ public sealed class TreeReconciler
             if (paint.VisualKind == VisualKind.Image && paint.ImageId != 0) UnpinImageNode(node, paint.ImageId);
             if (paint.VisualKind == VisualKind.Image && _scene.TryGetImageEffects(node, out var effects)
                 && effects.DerivedImageId != 0) UnpinImageNode(node, effects.DerivedImageId);
+            // A hold-last-good in progress (media-pipeline.md §hold-last-good): unpin the pending (new, still-decoding)
+            // id too — otherwise an unmount mid-hold would leak its pin (UnpinImageNode's refs==0 check cancels it).
+            if (_pendingImageId.Remove(idx, out int pendingId)) UnpinImageNode(node, pendingId);
         }
         if (_nodeBindings.Remove(idx, out var binds)) for (int i = 0; i < binds.Count; i++) binds[i].Dispose();
         _providerSig.Remove(idx);
@@ -3991,7 +4108,17 @@ public sealed class TreeReconciler
                 // NEW declarative gesture-state targets (WhileHover/WhilePressed/WhileFocus): stashed for the
                 // InteractionState priority resolver, which springs them on the input edge (AppHost wires
                 // ApplyInteractionEdge). All-null clears the row, so it's inert for nodes that don't use While*.
-                Anim?.SetInteractTargets((int)node.Raw.Index, b.WhileHover, b.WhilePressed, b.WhileFocus, b.Transition ?? MotionTok.ControlFaster);
+                // The rest pose is ALSO stashed (every While* target is a DELTA on it — MotionTarget's rest-pose-
+                // relative contract) so releasing every gesture state animates back to the node's authored static
+                // transform instead of identity. MotionTarget.Scale is uniform, so a non-uniform static
+                // ScaleX != ScaleY combined with While* is unrepresentable here — ScaleX wins (ScaleY is dropped).
+                Anim?.SetInteractTargets((int)node.Raw.Index, b.WhileHover, b.WhilePressed, b.WhileFocus,
+                    new MotionTarget
+                    {
+                        Scale = b.ScaleX, OffsetX = b.OffsetX, OffsetY = b.OffsetY, Rotation = b.Rotation,
+                        Opacity = b.Opacity.IsBound ? 1f : b.Opacity.Value, Blur = b.Blur,
+                    },
+                    b.Transition ?? MotionTok.ControlFaster);
                 if (b.HitTestVisible) _scene.Mark(node, NodeFlags.HitTestVisible); else _scene.Unmark(node, NodeFlags.HitTestVisible);
                 // Disabled gate (set unconditionally each reconcile — toggling IsEnabled must both set AND clear the bit).
                 if (b.IsEnabled) _scene.Unmark(node, NodeFlags.Disabled); else _scene.Mark(node, NodeFlags.Disabled);
@@ -4379,18 +4506,11 @@ public sealed class TreeReconciler
                     }
                 }
 
-                int oldId = paint.ImageId;
                 if (!im.Source.IsBound)   // bound rows request via the binding (the effect owns pin/unpin)
                 {
                     int newId = (Images is not null && im.Source.Value.Length > 0)
                         ? Images.Request(im.Source.Value, decodeW, decodeH, ImagePriority.Visible, im.BlurHash, im.RevealTransition).Id : 0;
-                    if (newId != oldId)
-                    {
-                        UnpinImageNode(node, oldId);
-                        paint.ImageId = newId;
-                        if (newId != 0) PinImageNode(node, newId);
-                        _scene.Mark(node, NodeFlags.PaintDirty);
-                    }
+                    SwapImageId(node, ref paint, newId);
                 }
 
                 int oldDerived = _scene.TryGetImageEffects(node, out var oldEffects) ? oldEffects.DerivedImageId : 0;

@@ -56,13 +56,28 @@ public sealed partial class AnimEngine
     // A fill-only control (♥/like: HoverFill with no HoverOpacity/scale) is in NEITHER leg and never was: it owns no
     // InteractionAnim row, so it tracks the actual pointer. Press now applies the SAME predicate as hover rather than its
     // looser interact-row gate, so the two can no longer disagree about who is being driven.
+    // The hover edge ALSO cascades the declarative While* surface to non-boundary descendants — a third leg alongside
+    // the reveal/scale legs above, added for the fanned-cover-stack case: a purely presentational child
+    // (HitTestVisible=false, no handlers of its own) carrying WhileHover never gets a direct pointer edge, so without
+    // this it would sit frozen at rest forever while its hovered container's card lifts. ApplyInteractionEdgeSelf is a
+    // no-op for a node with no stashed InteractTargets row (AnimScheduler.Interact.cs), so this stays free for the
+    // overwhelming majority of nodes that don't use While*. Reuses this walk's EXISTING boundary predicate rather than
+    // a second traversal — `if (boundary) continue;` already stops at a nested control's own interaction scope, so a
+    // While* on a nested button drives from ITS OWN edge only, never its container's (see gate.anim.while.boundaryStops).
+    // TrySeedHoverFromContainer below calls this same method, so a node that mounts/re-keys inside an already-hovered
+    // container also gets its While* seeded on mount, not just on the next pointer move.
+    //
+    // Press/Focus do NOT get the same treatment (SetPressDescendants, below, is untouched): a press state belongs to
+    // the control that was actually pressed — there is no "the container is pressed so the fan spreads" case the way
+    // there is for hover-driven reveal, so extending the asymmetry here would be manufacturing a cascade nothing needs.
     private void SetHoverDescendants(NodeHandle node, bool on)
     {
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
         {
             bool boundary = IsNestedHoverBoundary(c);
             if (FollowsContainer(c, boundary)) SetHoverCore(c, on, force: false);
-            if (boundary) continue;
+            if (boundary) continue;                                 // its own interaction scope — the dispatcher edges it directly
+            ApplyInteractionEdgeSelf(c, InteractKind.Hover, on);    // declarative While* follows its container
             SetHoverDescendants(c, on);
         }
     }

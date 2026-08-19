@@ -617,6 +617,17 @@ reads are further memoized against a slab-mutation `Version` (bumped on `Add`/`F
 at the seed paths that rewrite `Loop`/`DisplayRate` in place), since the host's `ComputeWakeReasons` evaluates them
 several times per frame. Gate: `anim.activeChainMatchesDictionary`.
 
+**As-built (rest-pose-relative While\*):** a `While*` `MotionTarget` (the owning struct is in `MotionTok.cs`) is a
+DELTA on the node's AUTHORED rest pose, not an absolute target: offset/rotation/blur ADD, scale/opacity MULTIPLY, and
+releasing every gesture state animates back to that authored pose — never to identity — via
+`AnimScheduler.Structural.SeedTargetOver`. `Rotation` is a first-class gesture channel (`AnimChannel.Rotation`),
+recoverable from a live node's composited transform the same way `Accum.FromPaint` decomposes it, so an eased
+retarget departs from the live angle rather than snapping through 0. The hover edge (`AnimScheduler.Hover.cs`) also
+cascades to non-boundary descendants' own `While*` rows, following the same boundary predicate as the existing
+reveal/scale cascade; press and focus do not cascade (a press/focus state belongs to the control it was raised on).
+Gates: `gate.anim.while.restPose`, `gate.anim.while.cascade`, `gate.anim.while.boundaryStops`,
+`gate.anim.while.reducedMotion`, `gate.anim.rotation.currentValue`.
+
 ### 5.1 `AnimTrack` and the engine (owned here)
 
 ```csharp

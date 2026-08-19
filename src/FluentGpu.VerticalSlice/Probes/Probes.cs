@@ -2358,6 +2358,35 @@ sealed class SharedImageSwapProbe : Component
     };
 }
 
+// Hold-last-good (media-pipeline.md §hold-last-good), UNBOUND swap site: a plain (non-Prop.Of) Source/Width read
+// straight off signals, so a Src or Px change produces a literal (non-bound) ImageEl the reconciler patches via
+// its normal element diff — the WriteColumns `case ImageEl` swap path, not the binding-effect twin below.
+sealed class HoldLastGoodProbe : Component
+{
+    public readonly Signal<string> Src = new("hold/cover");
+    public readonly Signal<float> Px = new(64f);
+    public readonly Signal<bool> Show = new(true);   // flip false to unmount mid-hold (46n2's unmount-releases-both case)
+
+    public override Element Render() => Flow.Show(() => Show.Value, new BoxEl
+    {
+        Width = 200, Height = 200,
+        Children = [new ImageEl { Source = Src.Value, Width = Px.Value, Height = Px.Value }],
+    });
+}
+
+// Hold-last-good, BOUND swap site: Source rides a Prop.Of thunk, so a Src change fires the binding effect
+// (Reconciler.BindNode's `ime.Source.IsBound` branch) instead of a structural element diff.
+sealed class BoundHoldLastGoodProbe : Component
+{
+    public readonly Signal<string> Src = new("hold/bound-a");
+
+    public override Element Render() => new BoxEl
+    {
+        Width = 120, Height = 120,
+        Children = [new ImageEl { Source = Prop.Of(() => Src.Value), Width = 64, Height = 64 }],
+    };
+}
+
 // A responsive (aspect-ratio) image tile inside a fixed-width card: no fixed extent — it fills the card's content width
 // and derives a square height. CardWidth varies per host to prove the art scales with the cell (the overflow fix).
 sealed class AspectTileProbe : Component
@@ -3155,6 +3184,41 @@ sealed class KeepAlivePresencePage : Component
                 Children = [Text("presence-" + _key)],
             });
     }
+}
+
+// gate.reconciler.keepalive-exit-backstop — a real page transition (TransitionFor → PageSlideForward, a 250ms tween
+// exit) whose outgoing root gets frozen mid-flight via the SAME SetNodeParked idiom other NavSuite gates use to
+// simulate a wedged row (see 50a5, above). HasTracks stays true forever on a parked row, so this exercises the
+// FinalizeKeepAliveTransitions backstop deadline rather than the normal HasTracks-settles path.
+sealed class KeepAliveWedgeProbe : Component
+{
+    public Signal<string>? Route;
+    public NodeHandle RootA;
+
+    public override Element Render()
+    {
+        var route = UseSignal("a");
+        Route = route;
+        return Flow.KeepAlive(
+            () => route.Value,
+            key => key,
+            key => Embed.Comp(() => new KeepAliveWedgePage(key, this)),
+            new KeepAliveOptions(TransitionFor: static (_, _) => MotionRecipes.PageSlideForward));
+    }
+}
+
+sealed class KeepAliveWedgePage : Component
+{
+    readonly string _key;
+    readonly KeepAliveWedgeProbe _owner;
+    public KeepAliveWedgePage(string key, KeepAliveWedgeProbe owner) { _key = key; _owner = owner; }
+
+    public override Element Render() => new BoxEl
+    {
+        Width = 120f, Height = 60f,
+        OnRealized = n => { if (_key == "a") _owner.RootA = n; },
+        Children = [Text("wedge-" + _key)],
+    };
 }
 
 // ── gate.reconciler.park-before-render ──────────────────────────────────────────────────────────────────────────────
