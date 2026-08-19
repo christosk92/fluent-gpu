@@ -45,7 +45,7 @@ internal static class WaveeNavProbe
     ];
     static readonly (string Key, string? Arg)[] CheapRoutes =
     [
-        ("albums", null), ("artists", null), ("podcasts", null), ("local", null), ("search", null),
+        ("albums", null), ("artists", null), ("podcasts", null), ("local", null), ("browse", null),
     ];
 
     /// <summary>Every env flag that hands this probe the run loop. ONE list, read by both <see cref="TryRun"/> and the

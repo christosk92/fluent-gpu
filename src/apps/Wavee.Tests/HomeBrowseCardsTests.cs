@@ -110,6 +110,18 @@ public class HomeBrowseCardsTests
         Assert.Equal(HomeCardKind.Album, section.Cards[1].Kind);
     }
 
+    [Fact]
+    public void Section_TotalCountIsAtLeastTheCardCount()
+    {
+        var browseSection = new BrowseSection("spotify:section:x", "T", BrowseSectionKind.Shelf,
+            [MakeCard("spotify:playlist:a"), MakeCard("spotify:playlist:b")], [], Total: 0);
+
+        var section = HomeBrowseCards.Section(browseSection, null);
+
+        Assert.Equal(2, section.TotalCount);
+        Assert.Equal(2, section.RawItemCount);
+    }
+
     // ── LoadChartDeckAsync: one HomeSection per ChartSections.All uri, never a per-playlist fan ─────────────────
 
     [Fact]
@@ -155,6 +167,18 @@ public class HomeBrowseCardsTests
         Assert.Equal(2, deck.Count);
         Assert.Equal(ChartSections.Featured, deck[0].Uri);
         Assert.Equal(ChartSections.NowAvailable, deck[1].Uri);
+    }
+
+    [Fact]
+    public async Task LoadChartDeckAsync_StampsTheRequestedTaxonomyUri_WhenTheResponseUriDiffers()
+    {
+        var browse = new FakeBrowse();
+        browse.Sections[ChartSections.Featured] = Shelf("spotify:section:other", "Featured Charts", 1,
+            MakeCard("spotify:playlist:a", "Top Songs — Global"));
+
+        var deck = await HomeBrowseCards.LoadChartDeckAsync(browse);
+
+        Assert.Equal(ChartSections.Featured, Assert.Single(deck).Uri);
     }
 
     [Fact]

@@ -63,9 +63,9 @@ static class SidebarCover
     public static Element ForPin(SidebarPin pin, Image? cover, IReadOnlyList<string>? mosaicTiles, float size)
         => pin.Kind switch
         {
-            SidebarPinKind.Folder => Folder(size),
-            SidebarPinKind.Route => RouteGlyph(pin.Id, size),
-            _ => Art(cover, mosaicTiles, pin.Id, size, pin.Kind == SidebarPinKind.Artist),
+            SidebarEntryKind.Folder => Folder(size),
+            SidebarEntryKind.AppRoute => RouteGlyph(pin.Id, size),
+            _ => Art(cover, mosaicTiles, pin.Id, size, pin.Kind == SidebarEntryKind.Artist),
         };
 
     /// <summary>Cover art: the image when there is one, a 2×2 mosaic when the playlist is cover-less but carries ≥4

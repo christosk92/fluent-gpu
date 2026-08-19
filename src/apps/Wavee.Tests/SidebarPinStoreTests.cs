@@ -9,7 +9,7 @@ namespace Wavee.Tests;
 /// against production code rather than a copy of it.</summary>
 public class SidebarPinStoreTests
 {
-    static SidebarPin Pin(string id, SidebarPinKind kind = SidebarPinKind.Playlist,
+    static SidebarPin Pin(string id, SidebarEntryKind kind = SidebarEntryKind.Playlist,
                           string uri = "spotify:playlist:x", string name = "n", long addedAtMs = 0)
         => new(id, kind, uri, name, addedAtMs);
 
@@ -145,14 +145,14 @@ public class SidebarPinStoreTests
     public void RouteAndEntityPins_Coexist_InInsertionOrder()
     {
         var s = new SidebarPinStore();
-        Assert.True(s.Pin(Pin("liked", SidebarPinKind.Route, "spotify:collection:tracks", "Liked Songs")));
-        Assert.True(s.Pin(Pin("pl:spotify:playlist:1", SidebarPinKind.Playlist)));
-        Assert.True(s.Pin(Pin("folder:6a1f2c", SidebarPinKind.Folder, "", "Cafe & chill")));
-        Assert.True(s.Pin(Pin("artist:spotify:artist:1", SidebarPinKind.Artist, "spotify:artist:1", "Daft Punk")));
+        Assert.True(s.Pin(Pin("liked", SidebarEntryKind.AppRoute, "spotify:collection:tracks", "Liked Songs")));
+        Assert.True(s.Pin(Pin("pl:spotify:playlist:1", SidebarEntryKind.Playlist)));
+        Assert.True(s.Pin(Pin("folder:6a1f2c", SidebarEntryKind.Folder, "", "Cafe & chill")));
+        Assert.True(s.Pin(Pin("artist:spotify:artist:1", SidebarEntryKind.Artist, "spotify:artist:1", "Daft Punk")));
 
         Assert.Equal(new[] { "liked", "pl:spotify:playlist:1", "folder:6a1f2c", "artist:spotify:artist:1" }, IdsOf(s));
-        Assert.Equal(SidebarPinKind.Route, s[0].Kind);
-        Assert.Equal(SidebarPinKind.Folder, s[2].Kind);
+        Assert.Equal(SidebarEntryKind.AppRoute, s[0].Kind);
+        Assert.Equal(SidebarEntryKind.Folder, s[2].Kind);
     }
 
     [Fact]
@@ -213,11 +213,11 @@ public class SidebarPinStoreTests
         => Assert.Null(SidebarPinId.FromUri(uri));
 
     [Theory]
-    [InlineData("spotify:playlist:37i9dQZF1DX4sWSpwq3LiO", "pl:spotify:playlist:37i9dQZF1DX4sWSpwq3LiO", SidebarPinKind.Playlist)]
-    [InlineData("spotify:album:4aawyAB79vO75wG7WLfDzB", "album:spotify:album:4aawyAB79vO75wG7WLfDzB", SidebarPinKind.Album)]
-    [InlineData("spotify:artist:4tZwfgrHOc3mvqYlEYSvVi", "artist:spotify:artist:4tZwfgrHOc3mvqYlEYSvVi", SidebarPinKind.Artist)]
-    [InlineData("spotify:show:4rOoJ6Egrf8K2IrywzwOMk", "show:spotify:show:4rOoJ6Egrf8K2IrywzwOMk", SidebarPinKind.Show)]
-    public void EntityUris_MapToAPrefixedId_AndBackToTheirKind(string uri, string expectedId, SidebarPinKind expectedKind)
+    [InlineData("spotify:playlist:37i9dQZF1DX4sWSpwq3LiO", "pl:spotify:playlist:37i9dQZF1DX4sWSpwq3LiO", SidebarEntryKind.Playlist)]
+    [InlineData("spotify:album:4aawyAB79vO75wG7WLfDzB", "album:spotify:album:4aawyAB79vO75wG7WLfDzB", SidebarEntryKind.Album)]
+    [InlineData("spotify:artist:4tZwfgrHOc3mvqYlEYSvVi", "artist:spotify:artist:4tZwfgrHOc3mvqYlEYSvVi", SidebarEntryKind.Artist)]
+    [InlineData("spotify:show:4rOoJ6Egrf8K2IrywzwOMk", "show:spotify:show:4rOoJ6Egrf8K2IrywzwOMk", SidebarEntryKind.Show)]
+    public void EntityUris_MapToAPrefixedId_AndBackToTheirKind(string uri, string expectedId, SidebarEntryKind expectedKind)
     {
         string? id = SidebarPinId.FromUri(uri);
         Assert.Equal(expectedId, id);
@@ -230,7 +230,7 @@ public class SidebarPinStoreTests
         // The one special case: the Liked Songs collection uri is the "liked" ROUTE, because the pin id IS the nav route key.
         string? id = SidebarPinId.FromUri("spotify:collection:tracks");
         Assert.Equal("liked", id);
-        Assert.Equal(SidebarPinKind.Route, SidebarPinId.KindOf(id!));
+        Assert.Equal(SidebarEntryKind.AppRoute, SidebarPinId.KindOf(id!));
     }
 
     [Fact]
@@ -240,7 +240,7 @@ public class SidebarPinStoreTests
         {
             string route = SidebarPinId.PinnableRoutes[i];
             Assert.Equal(route, SidebarPinId.FromRoute(route));
-            Assert.Equal(SidebarPinKind.Route, SidebarPinId.KindOf(route));
+            Assert.Equal(SidebarEntryKind.AppRoute, SidebarPinId.KindOf(route));
         }
         // The picker is intentionally curated, but the pin model accepts any durable app destination.
         Assert.Equal("browse:spotify:page:music", SidebarPinId.FromRoute("browse:spotify:page:music"));
@@ -281,7 +281,7 @@ public class SidebarPinStoreTests
         Assert.Contains("recents", SidebarPinId.PinnableRoutes);
         Assert.Equal("recents", SidebarPinId.FromRoute("recents"));
         Assert.True(SidebarPinId.IsPinnableRoute("recents"));
-        Assert.Equal(SidebarPinKind.Route, SidebarPinId.KindOf("recents"));
+        Assert.Equal(SidebarEntryKind.AppRoute, SidebarPinId.KindOf("recents"));
         Assert.Equal("recents", SidebarPinId.RouteOf("recents"));
         Assert.Equal("", SidebarPinId.UriOf("recents"));            // a route pin carries no entity uri
 
@@ -310,7 +310,7 @@ public class SidebarPinStoreTests
     {
         string id = SidebarPinId.ForFolder("6a1f2c");
         Assert.Equal("folder:6a1f2c", id);
-        Assert.Equal(SidebarPinKind.Folder, SidebarPinId.KindOf(id));
+        Assert.Equal(SidebarEntryKind.Folder, SidebarPinId.KindOf(id));
         Assert.Equal("6a1f2c", SidebarPinId.FolderIdOf(id));
         Assert.Null(SidebarPinId.RouteOf(id));          // a folder expands in place — it has no route
         Assert.Equal("", SidebarPinId.UriOf(id));
@@ -329,7 +329,7 @@ public class SidebarPinStoreTests
     {
         var s = new SidebarPinStore();
         string id = SidebarPinId.ForFolder("6a1f2c");
-        Assert.True(s.Pin(Pin(id, SidebarPinKind.Folder, "", "Late night")));
+        Assert.True(s.Pin(Pin(id, SidebarEntryKind.Folder, "", "Late night")));
 
         // The folder is deleted on another device: nothing in the store is told, and nothing in the store reacts.
         Assert.True(s.IsPinned(id));
@@ -347,7 +347,7 @@ public class SidebarPinStoreTests
     {
         var s = new SidebarPinStore();
         string id = SidebarPinId.FromUri("spotify:playlist:37i9dQZF1DX4sWSpwq3LiO")!;
-        Assert.True(s.Pin(Pin(id, SidebarPinKind.Playlist, "spotify:playlist:37i9dQZF1DX4sWSpwq3LiO", "Peaceful Piano")));
+        Assert.True(s.Pin(Pin(id, SidebarEntryKind.Playlist, "spotify:playlist:37i9dQZF1DX4sWSpwq3LiO", "Peaceful Piano")));
 
         s.Touch(id, "Peaceful Piano (2026)");
         Assert.True(s.IsPinned(id));
@@ -371,7 +371,7 @@ public class SidebarPinStoreTests
         // Card/hero drops used to persist the bare uri as SidebarPin.Id. The menu looks up pl:… / album:… / artist:…
         // — without the alias those pins were immortal (Pin was a silent no-op, Unpin never appeared).
         var s = new SidebarPinStore();
-        Assert.True(s.Pin(Pin("spotify:playlist:stuck", SidebarPinKind.Playlist, "spotify:playlist:stuck", "My Playlist #6")));
+        Assert.True(s.Pin(Pin("spotify:playlist:stuck", SidebarEntryKind.Playlist, "spotify:playlist:stuck", "My Playlist #6")));
         Assert.Equal("pl:spotify:playlist:stuck", s[0].Id);          // Pin canonicalizes on the way in
         Assert.True(s.IsPinned("spotify:playlist:stuck"));
         Assert.True(s.IsPinned("pl:spotify:playlist:stuck"));
@@ -385,8 +385,8 @@ public class SidebarPinStoreTests
         var s = new SidebarPinStore();
         s.LoadFrom(
         [
-            Pin("spotify:playlist:stuck", SidebarPinKind.Playlist, "spotify:playlist:stuck", "My Playlist #6"),
-            Pin("pl:spotify:playlist:stuck", SidebarPinKind.Playlist, "spotify:playlist:stuck", "My Playlist #6"),
+            Pin("spotify:playlist:stuck", SidebarEntryKind.Playlist, "spotify:playlist:stuck", "My Playlist #6"),
+            Pin("pl:spotify:playlist:stuck", SidebarEntryKind.Playlist, "spotify:playlist:stuck", "My Playlist #6"),
         ]);
         Assert.Equal(new[] { "pl:spotify:playlist:stuck" }, IdsOf(s));
         Assert.Equal(0, s.Unpin("spotify:playlist:stuck"));

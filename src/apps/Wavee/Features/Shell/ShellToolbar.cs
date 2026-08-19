@@ -159,6 +159,7 @@ sealed class FluentRichOmnibar : Component
     {
         var svc = UseContext(Services.Slot);
         var post = UsePost();
+        var goOrigin = UseContext(HistoryStore.GoWithOrigin);
         string text = UseDebouncedValue(() => _text.Value.Trim(), AutoSuggestBox.TextChangedDebounceMs).Value;
         UseEffect(() => StartFetch(svc, post, text), text);
         var completion = UseComputed(() =>
@@ -171,6 +172,12 @@ sealed class FluentRichOmnibar : Component
         {
             var trimmed = q.Trim();
             _go("search", trimmed.Length == 0 ? null : trimmed);
+        }
+
+        NavOrigin? GenreOrigin()
+        {
+            string q = _text.Peek().Trim();
+            return q.Length == 0 ? null : new NavOrigin(q, "search", q);
         }
 
         bool InvokeSelection(int selection)
@@ -205,7 +212,7 @@ sealed class FluentRichOmnibar : Component
                     if (svc is not null) _ = svc.Player.PlayAsync(item.Uri, 0);
                     break;
                 case SearchSuggestionKind.Genre:
-                    SearchRoutes.OpenGenre(item.Uri, item.Title, _go);
+                    SearchRoutes.OpenGenre(item.Uri, item.Title, _go, GenreOrigin(), goOrigin);
                     break;
             }
             return true;
@@ -270,6 +277,7 @@ sealed class OmnibarSuggestionsPopup : Component
     readonly IReadSignal<int>? _highlight;
     readonly Action<int>? _choose;
     readonly bool _allowNarrow;
+    Action<string, string?, NavOrigin?>? _goOrigin;
 
     public OmnibarSuggestionsPopup(Signal<string> text, IReadSignal<SearchSuggestions> suggestions, IReadSignal<bool> loading,
         IReadSignal<float> width, Services? svc, Action<string, string?> go, Action close)
@@ -309,6 +317,8 @@ sealed class OmnibarSuggestionsPopup : Component
         var acts = UseContext(ActionServices.Slot);
         var overlay = UseContext(Overlay.Service);
         var lib = UseContext(LibraryBridge.Slot);
+        var goOrigin = UseContext(HistoryStore.GoWithOrigin);
+        _goOrigin = goOrigin;
 
         // No client-side re-filter: the server's fuzzy matching (apostrophes, word order) is authoritative;
         // a literal Contains() check would drop most of its hits. Staleness is handled at publish time.
@@ -492,7 +502,12 @@ sealed class OmnibarSuggestionsPopup : Component
                 if (svc is not null) _ = svc.Player.PlayAsync(item.Uri, 0);
                 break;
             case SearchSuggestionKind.Genre:
-                if (_go is { } go) SearchRoutes.OpenGenre(item.Uri, item.Title, go);
+                if (_go is { } go)
+                {
+                    string q = _text.Peek().Trim();
+                    var origin = q.Length == 0 ? (NavOrigin?)null : new NavOrigin(q, "search", q);
+                    SearchRoutes.OpenGenre(item.Uri, item.Title, go, origin, _goOrigin);
+                }
                 break;
         }
         _close?.Invoke();

@@ -33,6 +33,7 @@ sealed class SearchGenreTiles : Component
     public override Element Render()
     {
         var svc = UseContext(Services.Slot);
+        var goOrigin = UseContext(HistoryStore.GoWithOrigin);
         if (svc is null || _query.Length == 0) return new BoxEl();
         var results = UseResource(
             ct => svc.Library.SearchAsync(_query, SearchFacet.Genres, 0, 30, ct),
@@ -42,18 +43,19 @@ sealed class SearchGenreTiles : Component
         // it is built from the SAME BrowseTiles.Link cells the real content renders — 8 varied-length seed names
         // read as a plausible genre list at every column count, and SkeletonDeriver turns their TextEl runs into
         // bars sized from that same text, never a second hand-tuned width table.
-        return SearchSectionRoot.Stretch(Skel.Region(results, () => Grid(SeedGenres, _go),
-            r => Grid(r.Genres, _go),
+        return SearchSectionRoot.Stretch(Skel.Region(results, () => Grid(SeedGenres, _go, originQ: _query, goOrigin: goOrigin),
+            r => Grid(r.Genres, _go, originQ: _query, goOrigin: goOrigin),
             isEmpty: r => r.Genres is not { Count: > 0 },
             onEmpty: () => new BoxEl(),
             onFailed: () => ErrorState.Compact(results.Error),
             smoothResize: false));
     }
 
-    internal static Element Grid(IReadOnlyList<SearchGenre>? genres, Action<string, string?> go, bool header = true)
+    internal static Element Grid(IReadOnlyList<SearchGenre>? genres, Action<string, string?> go, bool header = true,
+        string? originQ = null, Action<string, string?, NavOrigin?>? goOrigin = null)
     {
         if (genres is not { Count: > 0 } list) return new BoxEl();
-        Element body = Responsive.Of(width => Columns(list, go, width), fallback: BrowseLayout.DirectoryFallbackWidth);
+        Element body = Responsive.Of(width => Columns(list, go, width, originQ, goOrigin), fallback: BrowseLayout.DirectoryFallbackWidth);
         if (!header) return body;
         return new BoxEl
         {
@@ -67,15 +69,17 @@ sealed class SearchGenreTiles : Component
     // browse-category link share the cell, so they share its column AND track math too, not just the cell.
     // The Key stays this class's own (search-genres-grid, not BrowseTiles.LinkGrid's browse-link-grid) — a genre
     // search result is a different subtree than the directory's Genres band, so there is no key to converge on.
-    static Element Columns(IReadOnlyList<SearchGenre> genres, Action<string, string?> go, float width)
+    static Element Columns(IReadOnlyList<SearchGenre> genres, Action<string, string?> go, float width,
+        string? originQ = null, Action<string, string?, NavOrigin?>? goOrigin = null)
     {
         int cols = BrowseLayout.LinkColumns(width > 0f ? width : BrowseLayout.DirectoryFallbackWidth);
         var cells = new Element[genres.Count];
+        var origin = originQ is { Length: > 0 } q ? new NavOrigin(q, "search", q) : (NavOrigin?)null;
         for (int i = 0; i < genres.Count; i++)
         {
             var g = genres[i];
             cells[i] = BrowseTiles.Link(new BrowseTileModel(g.Name, g.Uri, null, null,
-                () => SearchRoutes.OpenGenre(g.Uri, g.Name, go)));
+                () => SearchRoutes.OpenGenre(g.Uri, g.Name, go, origin, goOrigin)));
         }
         return BrowseLayout.StarGrid(cols, Spacing.M, Spacing.S, cells) with { Key = "search-genres-grid:" + cols };
     }

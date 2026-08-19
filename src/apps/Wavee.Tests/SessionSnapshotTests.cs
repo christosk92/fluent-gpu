@@ -271,4 +271,38 @@ public class SessionSnapshotTests : IDisposable
         Assert.Equal("spotify:track:keep", loaded.Playback!.TrackUri);
         Assert.Equal(9, loaded.Playback.PositionMs);
     }
+
+    [Fact]
+    public void RoundTrip_OriginFields_Survive()
+    {
+        var origins = new NavOriginStore();
+        origins.Write("browse:spotify:page:x", "Pop", new NavOrigin("pop", "search", "pop"));
+        var store = Store();
+        store.UpdateNav(R("browse:spotify:page:x", "Pop"), Array.Empty<Route>(), Array.Empty<Route>(), 1, origins);
+        store.SaveAndWait();
+
+        var loaded = Store().Load();
+        var active = loaded!.Nav!.Active;
+        Assert.Equal("pop", active?.OriginLabel);
+        Assert.Equal("search", active?.OriginName);
+        Assert.Equal("pop", active?.OriginArg);
+    }
+
+    [Fact]
+    public void OldSnapshot_WithoutOriginFields_FailsSoft()
+    {
+        var nav = new SessionNavDto
+        {
+            Active = new SessionRouteDto("browse:spotify:page:x", "Pop"),
+            Back = [new("home", null)],
+            Forward = [],
+            ActiveTabId = 0,
+        };
+        var back = new List<SessionRouteDto>();
+        var fwd = new List<SessionRouteDto>();
+        Assert.True(SessionSnapshotStore.TryApplyNav(nav, back, fwd, out var active, out _));
+        Assert.Null(active.OriginLabel);
+        Assert.Null(active.OriginName);
+        Assert.Null(back[0].OriginLabel);
+    }
 }

@@ -351,10 +351,14 @@ static class Program
                 return WaveeStartupBench.TryRun(h, w, d) || WaveePerfBench.TryRun(h, w, d) || WaveeNavProbe.TryRun(h, w, d) || WaveeResizeProbe.TryRun(h, w, d) || WaveeMemSoak.TryRun(h, w, d);
             };
             // customFrame:true → the in-app TitleBar (WaveeShell) draws the extended caption buttons + drag region.
-            // micaAlt → Mica BaseAlt (the flatter File-Explorer tint, matching WaveeMusic's MicaBackdrop Kind="BaseAlt")
-            // unless the profile carries base Mica (WaveeSettings.WindowMaterialBaseMica — no longer user-facing). The
-            // DWM material is only VISIBLE under the login screen and the host fallback: the authenticated shell paints
-            // its own opaque deterministic ground edge-to-edge, so nothing behind it reads through.
+            // micaAlt → Mica BaseAlt (DWMSBT_TABBEDWINDOW) unless the profile carries base Mica
+            // (WaveeSettings.WindowMaterialBaseMica, now TRUE by default). Alt is a STRONGER tint of the desktop
+            // wallpaper than base Mica (Microsoft's documented behaviour) — matching WaveeMusic's MicaBackdrop
+            // Kind="BaseAlt" was the historical reason Alt was the default, and that parity is now REJECTED: the
+            // visible result was an over-saturated navy chrome next to apps (Wino Mail) that default to
+            // the neutral base Mica on the same wallpaper. The DWM material is visible through EVERY chrome band —
+            // titlebar, sidebar, player dock — because WaveeShell's root is transparent and each band is a deliberate
+            // paint-site omission over live Mica, not just under the login screen and the host fallback.
             // NO AmbientFps here any more (it used to hard-code 60): the pacing of PERPETUAL ambient motion — the
             // seek playhead, now-playing equalizer, skeleton shimmer, buffering spinner, karaoke lyrics wipe — is
             // AmbientPowerPolicy's call, attached above. Explicit ~30 fps always (HalfRefresh is avoided — on a 120 Hz

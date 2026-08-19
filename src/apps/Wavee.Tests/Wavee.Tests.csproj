@@ -124,6 +124,10 @@
     <!-- The breadcrumb as a pure function of the route (System + FluentGpu.Localization + BrowseRoutes only, no engine
          Element/Component types) — DrillTrailTests drives the real IA-parent decision (Home vs Browse) directly. -->
     <Compile Include="..\Wavee\Features\Shell\DrillTrail.cs" />
+    <!-- NavOrigin + registry + origin store (Signals shim + loc + Browse/Concert routes) — NavOriginStoreTests / ShellMastheadRegistryTests. -->
+    <Compile Include="..\Wavee\Features\Shell\NavOrigin.cs" />
+    <!-- Empty search → browse home + legacy recents rewrite (System + Route + BrowseRoutes) — NavRouteNormalizerTests. -->
+    <Compile Include="..\Wavee\Features\Shell\NavRouteNormalizer.cs" />
     <!-- The content card's PURE page-swap policy: keep-alive slot identity (PageSlot / SlotKey) and the nav
          direction → MotionRecipes map. Its only dependencies are FluentGpu.Foundation/Hooks (Engine, referenced
          transitively) plus FluentGpu.Controls.Route, satisfied by the ShellNavDestTests shim — ContentHost itself is
@@ -141,6 +145,8 @@
          of HomeSectionNavigation.cs, whose preview store is Context-bound — so HomeSectionPagingTests drives the real
          rules without a page, a service or a response. -->
     <Compile Include="..\Wavee\Features\Home\HomeSectionPaging.cs" />
+    <!-- browseSection page fold + Charts title filter (Wavee.Core + HomeSectionPaging + HomeBrowseCards). -->
+    <Compile Include="..\Wavee\Features\Home\BrowseSectionWalk.cs" />
     <!-- Home/Browse section route prefixes (HomeSectionRoutes/BrowseSectionRoutes): System only, no FluentGpu.Hooks —
          split out of HomeSectionNavigation.cs (whose HomeSectionPreviewStore/HomeCardNav stay Context-bound) so
          HomeSectionRouteContractTests can drive the real prefix/Is/UriOf/IsLocal logic directly. -->
@@ -232,6 +238,8 @@
     <!-- the directory skeleton's seed categories (Wavee.Core + BCL only) — BrowseChartTaxonomyTests pins that their
          taxonomy grouping (per-band counts) matches the loading directory's intent -->
     <Compile Include="..\Wavee\Features\Browse\BrowseDirectorySeeds.cs" />
+    <!-- browse overlay-masthead reserve (Spacing + TitleLarge line only) — BrowseMastheadMetricsTests -->
+    <Compile Include="..\Wavee\Features\Browse\BrowseMastheadMetrics.cs" />
     <!-- the flatten decision: named shelves vs one uniform grid, over BrowsePageModel (Wavee.Core + BCL only) —
          BrowsePageLayoutTests -->
     <Compile Include="..\Wavee\Features\Browse\BrowsePageLayout.cs" />

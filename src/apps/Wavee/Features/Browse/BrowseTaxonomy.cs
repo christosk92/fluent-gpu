@@ -170,4 +170,12 @@ public static class ChartSections
     /// <c>browseSection</c> each, mapped to one Fold tile. Featured is <c>All[0]</c> so a null there is the fail-loud
     /// signal; later shelves that come back null/empty are omitted.</summary>
     public static readonly IReadOnlyList<string> All = [Featured, Weekly, Daily, NowAvailable, Podcast];
+
+    public static bool Contains(string? uri)
+    {
+        if (uri is not { Length: > 0 }) return false;
+        for (int i = 0; i < All.Count; i++)
+            if (string.Equals(All[i], uri, StringComparison.Ordinal)) return true;
+        return false;
+    }
 }

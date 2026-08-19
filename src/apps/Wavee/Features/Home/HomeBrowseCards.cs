@@ -20,7 +20,10 @@ static class HomeBrowseCards
     {
         var cards = new HomeCard[s.Cards.Count];
         for (int i = 0; i < cards.Length; i++) cards[i] = Card(s.Cards[i]);
-        return new HomeSection(s.Uri, s.Title ?? routeTitle, null, cards, s.Total, s.Cards.Count);
+        // totalCount under-reports (or is omitted). Never let the ledger claim fewer items than we already hold —
+        // a 20/0 seed made HasMore false and froze Weekly at El Salvador.
+        int total = Math.Max(s.Total, s.Cards.Count);
+        return new HomeSection(s.Uri, s.Title ?? routeTitle, null, cards, total, s.Cards.Count);
     }
 
     /// <summary>The Charts Fold deck: one HomeSection per <see cref="ChartSections.All"/> uri, cards kept on that
@@ -42,7 +45,9 @@ static class HomeBrowseCards
         {
             var s = pages[i];
             if (s is null || s.Cards.Count == 0) continue;
-            list.Add(Section(s, null));
+            // Stamp the taxonomy URI we asked for. A mapper variant on s.Uri would miss ChartSections.Contains
+            // on the drill page, which skips the walk and the in-page filter.
+            list.Add(Section(s, null) with { Uri = uris[i] });
         }
         return list;
     }

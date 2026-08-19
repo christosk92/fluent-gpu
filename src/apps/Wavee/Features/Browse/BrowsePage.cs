@@ -61,15 +61,14 @@ sealed class BrowsePage : Component
     }
 
     ActionServices? _acts;
-    /// <summary>Identity for race-free last-writer-wins on <see cref="ShellMasthead"/> (see <c>ShellMastheadState</c>):
-    /// a page clears the masthead only while it is still the owner — <see cref="ShellMaterial"/>'s own
-    /// <c>_washOwner</c> contract, one channel over.</summary>
-    readonly object _mastheadOwner = new();
+    Action<string, string?, NavOrigin?>? _goOrigin;
+    string _pageTitle = "";
 
     public override Element Render()
     {
         var svc = UseContext(Services.Slot);
         _acts = UseContext(ActionServices.Slot);
+        _goOrigin = UseContext(HistoryStore.GoWithOrigin);
         var overlay = UseContext(Overlay.Service);
         var model = UseContext(Props);
         var navPreview = UseContext(NavPreviewStore.Slot);
@@ -158,7 +157,9 @@ sealed class BrowsePage : Component
         // Go(BrowseRoutes.Page(uri), title) — exactly the fallback DrillTrail itself applies to liveTitle. G2c-B: the
         // trail itself is no longer computed here — the shell's ShellMastheadBand derives it from the ROUTE (this
         // published title is its liveTitle override); see the publish leg below.
-        string title = loadedNow.Title is { Length: > 0 } lt ? lt : model?.RouteArg ?? " ";
+        string title = !string.IsNullOrWhiteSpace(loadedNow.Title) ? loadedNow.Title.Trim()
+                     : model?.RouteArg ?? "";
+        _pageTitle = title;
 
         // Tools (FlattenOne's own "Show all") — computed from layout/paged exactly as FlattenBody used to; hoisted
         // here because the masthead is a PUBLICATION now (ShellMastheadBand renders the actual button from these
@@ -182,40 +183,25 @@ sealed class BrowsePage : Component
             }
         }
 
-        // ── the shell MASTHEAD publication ──────────────────────────────────────────────────────────────────────
-        // Same three-leg publish/clear lifecycle ShellMaterial's wash uses (HomeSectionPage's _washOwner contract,
-        // one channel over): a deps-leg republishes whenever title/mode/tools change, UseActivation covers a
-        // KeepAlive reactivation (which skips the mount effect), and the unmount leg clears ownership so a parked
-        // or evicted page never leaves a stale masthead behind it.
-        void SetMasthead()
+        // One deps-leg publication: any value the published state captures is a dep. No owner token, no
+        // UseActivation / unmount-clear — an entry for a non-active route is simply never rendered.
+        UseEffect(() =>
         {
-            if (mastheadStore is not null)
-                mastheadStore.Value = new ShellMastheadState(_mastheadOwner, title, null, toolsVisible, toolsLoading, toolsAction);
-        }
-        void ClearMasthead()
-        {
-            if (mastheadStore is not null && ReferenceEquals(mastheadStore.Peek()?.Owner, _mastheadOwner))
-                mastheadStore.Value = null;
-        }
-        UseEffect(() => SetMasthead(),
-            DepKey.From(HashCode.Combine(title, (int)layout.Mode, toolsVisible, toolsLoading)));
-        // A KeepAlive-cached page does not re-run its mount effect, so reactivation re-publishes…
-        UseActivation(onActivated: () => SetMasthead(), onDeactivated: ClearMasthead);
-        // …and UNMOUNT clears too, because onDeactivated fires only on PARK. Owner-gated, so it can never clobber
-        // whatever the next page has already published.
-        UseEffect(() => (Action?)ClearMasthead, DepKey.Empty);
+            if (mastheadStore is null || model is null) return;
+            mastheadStore.Publish(model.RouteName, model.RouteArg,
+                new ShellMastheadState(title, null, toolsVisible, toolsLoading, toolsAction));
+        }, DepKey.From(HashCode.Combine(title, (int)layout.Mode, toolsVisible, toolsLoading)));
 
-        // T12: outer column split — Padding owns the shared FrameX gutters for the body below the shell's masthead
-        // band; the top inset is now Spacing.L (the band itself owns FrameTop) — the same net gap the masthead's
-        // own margin used to give, just moved from "under the masthead" to "under the band". The Skel.Region wraps
-        // ONLY the body, so a data load never shimmers or remounts anything above it. Bottom stays the small
-        // Spacing.L margin flatten mode always used — Shelves mode's own bottom dock clearance (PlayerDock.Reserve +
-        // Spacing.XXL) moves INSIDE its ScrollView's scrolled content instead (see ShelvesBody), so neither mode's
-        // effective inset changes.
+        // T12: outer column split — Padding owns the shared FrameX gutters and the overlay masthead reserve (the band
+        // no longer takes in-flow height). Spacing.L under that reserve is the same net gap the masthead's own margin
+        // used to give. The Skel.Region wraps ONLY the body, so a data load never shimmers or remounts anything above
+        // it. Bottom stays the small Spacing.L margin flatten mode always used — Shelves mode's own bottom dock
+        // clearance (PlayerDock.Reserve + Spacing.XXL) moves INSIDE its ScrollView's scrolled content instead (see
+        // ShelvesBody), so neither mode's effective inset changes.
         return new BoxEl
         {
             Direction = 1, Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Gap = Spacing.L,
-            Padding = new Edges4(BrowseLayout.FrameX, Spacing.L, BrowseLayout.FrameX, Spacing.L),
+            Padding = BrowseMastheadMetrics.FamilyBodyPad(Spacing.L),
             Children =
             [
                 new BoxEl
@@ -226,7 +212,9 @@ sealed class BrowsePage : Component
                         // The explicit-shimmerSource overload (SkeletonRegion.cs): the real Shelves-mode body
                         // renders its shelves through PagedShelf — a virtualized carousel that measures ZERO rows
                         // until its viewport width lands — so content(seed) cannot BE the shimmer here (see
-                        // ShimmerBody's doc comment for the flicker this used to cause).
+                        // ShimmerBody's doc comment for the flicker this used to cause). FadeOnly (not None): None
+                        // floors shimmer ExitMs at 400ms assuming the body owns its own entrance; this body has none,
+                        // so None left the ghost under real content for 400ms.
                         Skel.Region(page,
                             shimmerSource: () => ShimmerBody(model),
                             content: _ => BodyBelow(effective, layout, model, navPreview, sectionPreview, svc, overlay,
@@ -234,7 +222,7 @@ sealed class BrowsePage : Component
                             isEmpty: p => p.IsEmpty,
                             onEmpty: () => FramedContent(EmptyBody(model), model),
                             onFailed: () => FramedContent(ErrorState.Build(page.Error), model),
-                            reveal: SkelReveal.None, smoothResize: false),
+                            reveal: SkelReveal.FadeOnly, smoothResize: false),
                     ],
                 },
             ],
@@ -441,9 +429,7 @@ sealed class BrowsePage : Component
             if (model is not null && !exhausted && BrowsePageLayout.HasMore(primary))
             {
                 string primaryUri = primary.Uri;
-                scrollWatch = (
-                    static g => ((long)(g.OffsetY / 24f) << 20) ^ (long)(g.ContentH / 48f),
-                    g => nearTail.Value = g.OffsetY + g.ViewportH >= g.ContentH - 1.5f * g.ViewportH);
+                scrollWatch = HomeSectionAppendPreloader.NearTailWatch(nearTail);
                 int? cursorForKey = paged.Value?.Cursor.TryGetValue(primaryUri, out var c) == true ? c : null;
                 preloader = Embed.Comp(() => new HomeSectionAppendPreloader
                 {
@@ -656,7 +642,8 @@ sealed class BrowsePage : Component
         var mapped = HomeBrowseCards.Section(s, s.Title);
         Action? openHeader = model is null
             ? null
-            : () => HomeCardNav.OpenBrowseSection(mapped, navPreview, sectionPreview, model.Go, model.Play);
+            : () => HomeCardNav.OpenBrowseSection(mapped, navPreview, sectionPreview, model.Go, model.Play,
+                origin: new NavOrigin(_pageTitle, model.RouteName, model.RouteArg), goOrigin: _goOrigin);
         var acts = _acts;
 
         return PagedShelf.Create(

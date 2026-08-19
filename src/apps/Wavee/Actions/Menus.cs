@@ -566,7 +566,7 @@ public static class Menus
     /// <c>Wavee.Core</c> models an episode as its own record, not a <c>Track</c>.</summary>
     static ContextMenuModel ShowCard(ActionServices s, string uri, string name, Image? image, string? subtitle)
         => new(ShowRows(s, uri, name, "show:" + uri,
-                        PinActions.RowForId(s, SidebarPinId.FromUri(uri), SidebarPinKind.Show, uri, name)),
+                        PinActions.RowForId(s, SidebarPinId.FromUri(uri), SidebarEntryKind.Show, uri, name)),
                Header(image, uri, name, subtitle is { Length: > 0 } ? subtitle : "Podcast"));
 
     /// <summary>The show row list, shared by the card arm and the sidebar arm. <paramref name="pinRow"/> is passed in
@@ -702,7 +702,7 @@ public static class Menus
                 () => FolderActions.MoveOut(s, entryId.Length > 0 ? entryId : SidebarPinId.Canonical(uri) ?? uri))
             : null;
         Group(rows, OrganizeItem(organize, moveOut,
-            PinActions.RowForId(s, SidebarPinId.Canonical(uri), SidebarPinKind.Playlist, uri, name)));
+            PinActions.RowForId(s, SidebarPinId.Canonical(uri), SidebarEntryKind.Playlist, uri, name)));
         if (isOwner) rows.Add(ContainerActions.RenamePlaylist.ToMenuItem(ctx));
 
         // GROUP 3 — access & sharing. Access ▸ is owner+live only (the permission verbs mean nothing otherwise); Share ▸

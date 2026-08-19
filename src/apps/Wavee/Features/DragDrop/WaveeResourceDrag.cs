@@ -46,8 +46,9 @@ sealed record WaveeResourceDragPayload(
     /// <summary>This payload's chip data (the engine-free resolution rules).</summary>
     public WaveeDragChipModel ChipModel() => WaveeDragChipModel.For(Name, ArtUrl, Tracks, RootlistCount);
 
-    public bool CanPin => Kind is WaveeResourceKind.Route or WaveeResourceKind.Playlist or WaveeResourceKind.Album
-        or WaveeResourceKind.Artist or WaveeResourceKind.Show or WaveeResourceKind.Folder;
+    /// <summary>Cheap eligibility check for UI gating (drop-zone reveal, spring-load) — routes through the SAME
+    /// boundary <see cref="TryPin"/> uses rather than duplicating its kind list, so the two can never drift apart.</summary>
+    public bool CanPin => TryPin(out _);
 
     public bool CanCopyTracks => Tracks is { Count: > 0 } || TrackResolver is not null;
 
@@ -56,19 +57,25 @@ sealed record WaveeResourceDragPayload(
             : TrackResolver is { } resolve ? resolve(ct)
             : Task.FromResult<IReadOnlyList<Track>>(Array.Empty<Track>());
 
-    public bool TryPin(out SidebarPinKind kind)
+    /// <summary>Resolve the pin kind this payload would create, or refuse — routed through
+    /// <see cref="SidebarPinId.IsPinnable"/> at the boundary rather than letting an unpinnable resource (a track, an
+    /// episode) fall through to a guessed kind. <c>Kind</c> is <see cref="WaveeResourceKind"/>, a wider enum than
+    /// <see cref="SidebarEntryKind"/> (it also carries Track/Episode, which are never a pin), so those two arms map to
+    /// the explicit <see cref="SidebarEntryKind.Track"/> sentinel and are then refused by <c>IsPinnable</c> — never
+    /// silently collapsed to a route pin.</summary>
+    public bool TryPin(out SidebarEntryKind kind)
     {
         kind = Kind switch
         {
-            WaveeResourceKind.Playlist => SidebarPinKind.Playlist,
-            WaveeResourceKind.Album => SidebarPinKind.Album,
-            WaveeResourceKind.Artist => SidebarPinKind.Artist,
-            WaveeResourceKind.Show => SidebarPinKind.Show,
-            WaveeResourceKind.Folder => SidebarPinKind.Folder,
-            WaveeResourceKind.Route => SidebarPinKind.Route,
-            _ => SidebarPinKind.Route,
+            WaveeResourceKind.Playlist => SidebarEntryKind.Playlist,
+            WaveeResourceKind.Album => SidebarEntryKind.Album,
+            WaveeResourceKind.Artist => SidebarEntryKind.Artist,
+            WaveeResourceKind.Show => SidebarEntryKind.Show,
+            WaveeResourceKind.Folder => SidebarEntryKind.Folder,
+            WaveeResourceKind.Route => SidebarEntryKind.AppRoute,
+            _ => SidebarEntryKind.Track,   // Track / Episode — never pinnable
         };
-        return CanPin;
+        return SidebarPinId.IsPinnable(kind);
     }
 
     public static WaveeResourceDragPayload FromEntry(SidebarLibraryEntry entry, Services? svc, bool rootlistItem = false)
@@ -116,12 +123,13 @@ sealed record WaveeResourceDragPayload(
     {
         var kind = destination.Kind switch
         {
-            SidebarPinKind.Playlist => WaveeResourceKind.Playlist,
-            SidebarPinKind.Album => WaveeResourceKind.Album,
-            SidebarPinKind.Artist => WaveeResourceKind.Artist,
-            SidebarPinKind.Show => WaveeResourceKind.Show,
-            SidebarPinKind.Folder => WaveeResourceKind.Folder,
-            _ => WaveeResourceKind.Route,
+            SidebarEntryKind.Playlist => WaveeResourceKind.Playlist,
+            SidebarEntryKind.Album => WaveeResourceKind.Album,
+            SidebarEntryKind.Artist => WaveeResourceKind.Artist,
+            SidebarEntryKind.Show => WaveeResourceKind.Show,
+            SidebarEntryKind.Folder => WaveeResourceKind.Folder,
+            SidebarEntryKind.AppRoute => WaveeResourceKind.Route,
+            _ => WaveeResourceKind.Route,   // Track — a SidebarDestination is never built from one (FromRoute only)
         };
         // A destination is a ROUTE record — it carries no cover (the tab strip never had one to show), so a tab drag's
         // chip falls back to the kind glyph tile. It carries no OWNERSHIP either, so rootlist membership is looked up

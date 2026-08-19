@@ -26,9 +26,11 @@ namespace Wavee.Tests;
 //     already settled. The root cause was structural, not a timing mismatch: every browse-family page rendered its
 //     OWN copy of BrowseMasthead, plus a misclassified search-with-query route and an inverted FluentAccelerate/
 //     SmoothOut curve pairing in the family-swap recipe that briefly lived here (PageNavMotion.SharesMasthead /
-//     MastheadSwap). The structural fix is ShellMastheadBand: ONE masthead, mounted above this whole boundary
-//     (ContentHost.Render), that never participates in a page transition — so PageTransition/RecipeFor went back to
-//     pure direction→recipe mapping below, with no masthead-family special case left to test here.
+//     MastheadSwap). The structural fix is ShellMastheadBand: ONE masthead, mounted as an overlay on this whole
+//     boundary (ContentHost.Render), that never consumes KeepAlive height — so PageTransition/RecipeFor went back to
+//  4. Symmetric page-slide double-exposure (A/B/D recordings). RecipeFor used MotionRecipes.PageSlideForward/Back —
+//     250ms opacity mix of two full-bleed pages at mismatched scroll offsets. ContentHost now uses fade-through
+//     (exit in place, enter delayed); the shared PageSlide recipes stay on SearchPage's facet swap.
 public class ContentHostPageTransitionTests
 {
     // ── 2. slot identity ────────────────────────────────────────────────────────────────────────────────────────────
@@ -61,12 +63,23 @@ public class ContentHostPageTransitionTests
     }
 
     [Fact]
-    public void SearchIsOneWorkspacePerTab_ItsQueryDoesNotForkTheSlot()
+    public void EverySearchQueryOwnsItsOwnSlot()
     {
+        Assert.NotEqual(PageNavMotion.SlotKey(new PageSlot(1, new Route("search", "radiohead"))),
+                        PageNavMotion.SlotKey(new PageSlot(1, new Route("search", "aphex twin"))));
         Assert.Equal(PageNavMotion.SlotKey(new PageSlot(1, new Route("search", "radiohead"))),
-                     PageNavMotion.SlotKey(new PageSlot(1, new Route("search", "aphex twin"))));
+                     PageNavMotion.SlotKey(new PageSlot(1, new Route("search", "radiohead"))));
         Assert.NotEqual(PageNavMotion.SlotKey(new PageSlot(1, new Route("search", "radiohead"))),
                         PageNavMotion.SlotKey(new PageSlot(2, new Route("search", "radiohead"))));
+    }
+
+    [Fact]
+    public void BrowseHomeOwnsItsOwnSlot()
+    {
+        var home = new PageSlot(1, new Route("browse"));
+        Assert.Equal(PageNavMotion.SlotKey(home), PageNavMotion.SlotKey(new PageSlot(1, new Route("browse"))));
+        Assert.NotEqual(PageNavMotion.SlotKey(home), PageNavMotion.SlotKey(new PageSlot(1, new Route("search", "x"))));
+        Assert.NotEqual(PageNavMotion.SlotKey(home), PageNavMotion.SlotKey(new PageSlot(2, new Route("browse"))));
     }
 
     [Fact]
@@ -94,23 +107,38 @@ public class ContentHostPageTransitionTests
     }
 
     [Fact]
-    public void DirectionsMapToTheirRecipes_AndTheSlidesAreMirrors()
+    public void DirectionsMapToFadeThrough_ExitInPlaceEnterFollows()
     {
-        Assert.Equal(MotionRecipes.PageSlideForward, PageNavMotion.RecipeFor(NavTransitionKind.Forward));
-        Assert.Equal(MotionRecipes.PageSlideBack, PageNavMotion.RecipeFor(NavTransitionKind.Back));
+        Assert.Equal(PageNavMotion.PageFadeThroughForward, PageNavMotion.RecipeFor(NavTransitionKind.Forward));
+        Assert.Equal(PageNavMotion.PageFadeThroughBack, PageNavMotion.RecipeFor(NavTransitionKind.Back));
         Assert.Equal(MotionRecipes.PageFade, PageNavMotion.RecipeFor(NavTransitionKind.Neutral));
 
         var fwd = PageNavMotion.RecipeFor(NavTransitionKind.Forward);
         var back = PageNavMotion.RecipeFor(NavTransitionKind.Back);
-        // forward: the new page arrives from +X while the old one leaves toward −X (and back is the exact reverse)
-        Assert.True(fwd.Enter.Dx > 0f && fwd.Exit.Dx < 0f);
-        Assert.True(back.Enter.Dx < 0f && back.Exit.Dx > 0f);
-        Assert.Equal(fwd.Enter.Dx, -fwd.Exit.Dx);
+        Assert.Equal(0f, fwd.Exit.Dx);
+        Assert.Equal(0f, back.Exit.Dx);
+        Assert.True(fwd.Enter.Dx > 0f);
+        Assert.True(back.Enter.Dx < 0f);
         Assert.Equal(fwd.Enter.Dx, -back.Enter.Dx);
-        // neutral (tab activation / open / close) is a pure cross-fade: no direction to imply
         var neutral = PageNavMotion.RecipeFor(NavTransitionKind.Neutral);
         Assert.Equal(0f, neutral.Enter.Dx);
         Assert.Equal(0f, neutral.Exit.Dx);
+    }
+
+    [Fact]
+    public void PageSwapIsFadeThrough_ExitLeadsEnterFollows()
+    {
+        foreach (var motion in new[] { NavTransitionKind.Forward, NavTransitionKind.Back })
+        {
+            var recipe = PageNavMotion.RecipeFor(motion);
+            Assert.Equal(0f, recipe.ExitDelayMs);
+            Assert.True(recipe.DelayMs > 0f, $"{motion}: enter must wait so the outgoing fade leads");
+            Assert.NotNull(recipe.ExitDynamics);
+            Assert.True(recipe.ExitDynamics!.Value.DurationMs < recipe.Dynamics.DurationMs,
+                $"{motion}: exit shorter than enter");
+            Assert.True(recipe.DelayMs < recipe.ExitDynamics.Value.DurationMs,
+                $"{motion}: enter delay inside the exit window — no empty-card gap");
+        }
     }
 
     [Fact]
@@ -124,4 +152,8 @@ public class ContentHostPageTransitionTests
             Assert.Equal(0f, recipe.Exit.Blur);
         }
     }
+
+    [Fact]
+    public void MastheadFadeSharesThePageExitWindow()
+        => Assert.Equal(120f, PageNavMotion.FadeThroughExitMs);
 }

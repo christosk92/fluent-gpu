@@ -45,11 +45,10 @@ sealed class WaveeShell : Component
     // ShellMaterial.Slot; rendered by ShellMaterialLayer.
     readonly Signal<ShellMaterialState> _shellMaterial = new(default);
 
-    // Page-scoped shell MASTHEAD (G2c): a page overrides the band's title/caption/tools while it is active, mirroring
-    // ShellMaterialState's owner-token contract. Null ⇒ ShellMastheadBand falls back to the route-derived trail (a
-    // Browse-family route still gets a title from DrillTrail even before any page publishes). Provided at the root via
-    // ShellMasthead.Slot; rendered by ShellMastheadBand, mounted once in ContentHost above the KeepAlive boundary.
-    readonly Signal<ShellMastheadState?> _shellMasthead = new(null);
+    // Page-scoped shell MASTHEAD: route-keyed publications (no owner tokens). The band is the one renderer, mounted
+    // once in ContentHost above the KeepAlive boundary. Registry decides which families show; the store holds dynamics.
+    readonly ShellMastheadStore _shellMasthead = new();
+    readonly NavOriginStore _navOrigins = new();
 
     // Right-rail (lyrics / queue / now-playing panels) UI state — created here, provided via ShellUi.Slot, and
     // toggled from the player bar. The rail reserves inline width when it fits; otherwise it floats over the content.
@@ -341,7 +340,7 @@ sealed class WaveeShell : Component
         _selectedTab.Value = selected;
         _lastSelectedPinnedTabId = _open[selected].Id;
         var tab = _open[selected];
-        _route.Value = new Route(tab.Key, tab.Arg);
+        _route.Value = NavRouteNormalizer.Apply(tab.Key, tab.Arg);
         SyncOmnibarToRoute(_route.Peek());
         SeedTabExtent();
     }
@@ -359,9 +358,21 @@ sealed class WaveeShell : Component
                 return;
             _history.Clear();
             _forwardHistory.Clear();
-            for (int h = 0; h < back.Count; h++) _history.Add(new Route(back[h].Name, back[h].Arg));
-            for (int h = 0; h < fwd.Count; h++) _forwardHistory.Add(new Route(fwd[h].Name, fwd[h].Arg));
-            _route.Value = new Route(active.Name, active.Arg);
+            for (int h = 0; h < back.Count; h++)
+            {
+                var r = NavRouteNormalizer.Apply(back[h].Name, back[h].Arg);
+                _history.Add(r);
+                _navOrigins.Restore(r.Name, r.Arg, OriginOf(back[h]));
+            }
+            for (int h = 0; h < fwd.Count; h++)
+            {
+                var r = NavRouteNormalizer.Apply(fwd[h].Name, fwd[h].Arg);
+                _forwardHistory.Add(r);
+                _navOrigins.Restore(r.Name, r.Arg, OriginOf(fwd[h]));
+            }
+            var activeRoute = NavRouteNormalizer.Apply(active.Name, active.Arg);
+            _navOrigins.Restore(activeRoute.Name, activeRoute.Arg, OriginOf(active));
+            _route.Value = activeRoute;
             _canBack.Value = _history.Count > 0;
             _canForward.Value = _forwardHistory.Count > 0;
             SyncOmnibarToRoute(_route.Peek());
@@ -371,8 +382,8 @@ sealed class WaveeShell : Component
             int i = _selectedTab.Peek();
             if ((uint)i < (uint)_open.Count)
             {
-                var (title, glyph) = ShellNav.Dest(active.Name, active.Arg);
-                _open[i] = _open[i] with { Key = active.Name, Label = title, Glyph = glyph, Arg = active.Arg };
+                var (title, glyph) = ShellNav.Dest(activeRoute.Name, activeRoute.Arg);
+                _open[i] = _open[i] with { Key = activeRoute.Name, Label = title, Glyph = glyph, Arg = activeRoute.Arg };
             }
             SeedTabExtent();
         }
@@ -1197,8 +1208,10 @@ sealed class WaveeShell : Component
         return Ctx.Provide(ShellUi.Slot, _shellUi,
                Ctx.Provide(ShellMaterial.Slot, _shellMaterial,
                Ctx.Provide(ShellMasthead.Slot, _shellMasthead,
+               Ctx.Provide(HistoryStore.OriginSlot, _navOrigins,
                Ctx.Provide(HistoryStore.BackCtx, (Action)Back,
                Ctx.Provide(HistoryStore.NavCtx, (Action<string, string?>)GoNav,
+               Ctx.Provide(HistoryStore.GoWithOrigin, (Action<string, string?, NavOrigin?>)GoNav,
                Ctx.Provide(HistoryStore.Slot, _historyStore,
                Ctx.Provide(NavPreviewStore.Slot, _navPreview,
                Ctx.Provide(HomeSectionPreviewStore.Slot, _homeSectionPreview,
@@ -1207,7 +1220,7 @@ sealed class WaveeShell : Component
                Ctx.Provide(SearchQuery.Slot, _searchText,
                Ctx.Provide(ActionServices.Slot, _actions,
                Ctx.Provide(WaveeExtensionRegistry.Slot, _actions.Extensions,
-               OverlayHost.Create(shellWithOverlays))))))))))))));
+               OverlayHost.Create(shellWithOverlays))))))))))))))));
     }
 
     Element TabStripHost()
@@ -1342,7 +1355,7 @@ sealed class WaveeShell : Component
     DropTargetSpec TabDropTarget(SidebarDestination? destination, int tabId)
     {
         var acts = _actions;
-        if (destination is { Kind: SidebarPinKind.Playlist } d && WaveeRootlist.CanEditPlaylist(acts, d.Uri))
+        if (destination is { Kind: SidebarEntryKind.Playlist } d && WaveeRootlist.CanEditPlaylist(acts, d.Uri))
         {
             string uri = d.Uri, name = d.Name;
             return Drop.Target<WaveeResourceDragPayload>(WaveeDragKinds.Resource,
@@ -1444,7 +1457,12 @@ sealed class WaveeShell : Component
 
     /// <summary>Zero-alloc persist: passes the live stacks; the store copies into reused buffers and debounces 2 s.</summary>
     void CaptureNav()
-        => _session.UpdateNav(_route.Peek(), _history, _forwardHistory, PeekActiveTabId());
+        => _session.UpdateNav(_route.Peek(), _history, _forwardHistory, PeekActiveTabId(), _navOrigins);
+
+    static NavOrigin? OriginOf(in SessionRouteDto d)
+        => d.OriginLabel is { Length: > 0 } && d.OriginName is { Length: > 0 }
+            ? new NavOrigin(d.OriginLabel, d.OriginName, d.OriginArg)
+            : null;
 
     void DrainDeepLinks()
     {
@@ -1505,14 +1523,18 @@ sealed class WaveeShell : Component
     }
 
     // ── navigation (the single source of truth the chrome reads) ─────────────────────────────────
-    void Go(string key, string? arg, NavTransitionKind motion = NavTransitionKind.Forward)
+    void Go(string key, string? arg, NavTransitionKind motion = NavTransitionKind.Forward, NavOrigin? origin = null)
     {
+        var normalized = NavRouteNormalizer.Apply(key, arg);
+        key = normalized.Name;
+        arg = normalized.Arg;
         CloseNarrowDrawer();
         _history.Add(_route.Peek());
         if (_history.Count > MaxBackStack) _history.RemoveAt(0);   // bound the in-memory back-stack
         _forwardHistory.Clear();
         _canForward.Value = false;
         _navMotion.Value = motion;
+        _navOrigins.Write(key, arg, origin);   // every Go writes; null overwrites — latest arrival wins
         _route.Value = new Route(key, arg);
         _canBack.Value = _history.Count > 0;
         _historyStore.Add(_route.Peek());
@@ -1578,10 +1600,12 @@ sealed class WaveeShell : Component
     void Home() => Go("home", null);
 
     // History always opens in its own tab (global view — same as browser convention).
-    void GoNav(string key, string? arg)
+    void GoNav(string key, string? arg) => GoNav(key, arg, null);
+
+    void GoNav(string key, string? arg, NavOrigin? origin)
     {
         if (key == "history") OpenNewTab(key);
-        else Go(key, arg);
+        else Go(key, arg, NavTransitionKind.Forward, origin);
     }
 
     void SyncActiveTab(Route r)

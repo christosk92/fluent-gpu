@@ -74,6 +74,8 @@ static class HomeFoldTile
                 // the reduced-motion policy (KeepFade — see MotionTok.Get), which is the engine's reduced-motion-as-a-
                 // value rule. Branching on the mutable global here would be a hook-order hazard on top of fighting
                 // that rule, and this factory has no hooks to hazard in the first place.
+                // KeepAlive park/un-park snaps Offset/Rotation back to this rest (SnapAuthoredPose). Hover must not
+                // be what puts the stack on the right after Browse → Featured Charts → Back.
                 HitTestVisible = false,
                 Shadow = Elevation.Card, ClipToBounds = true,
                 Corners = CornerRadius4.All(Radii.Control),
@@ -83,9 +85,8 @@ static class HomeFoldTile
         }
 
         string title = section.Title is { Length: > 0 } t ? t : Loc.Get(Strings.Home.Sections);
-        int count = Math.Max(section.TotalCount, cards.Count);
 
-        var copyChildren = new List<Element>(3);
+        var copyChildren = new List<Element>(2);
         if (eyebrow is { Length: > 0 })
             copyChildren.Add(WaveeType.Eyebrow(eyebrow) with
             {
@@ -97,7 +98,6 @@ static class HomeFoldTile
             // The title keeps its OWN casing too — never lowercased.
             Wrap = TextWrap.Wrap, MaxLines = 3, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
         });
-        copyChildren.Add(WaveeType.TrackMeta(Strings.Home.SectionItems(count)));
 
         // HitTestVisible=false: the ROOT is the one hyperlink (Role/OnClick live there), so the copy column must not
         // steal the click/hover hit-test away from it.
@@ -116,7 +116,9 @@ static class HomeFoldTile
 
         return new BoxEl
         {
-            ZStack = true, Height = HomeModuleLayout.FoldCardHeight, MinWidth = 0f, ClipToBounds = true,
+            // Width is the fitted shelf cell: without it, Offset covers expand the tile's intrinsic box and paint
+            // through the Charts header (Featured's stack sitting on top of "Charts" / "Featured").
+            ZStack = true, Width = cardW > 0f ? cardW : float.NaN, Height = HomeModuleLayout.FoldCardHeight, MinWidth = 0f, ClipToBounds = true,
             Corners = Radii.CardAll, Fill = Tok.FillCardDefault, HoverFill = Tok.FillCardSecondary,
             BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault, Shadow = Elevation.Card,
             OnClick = () => open(section), Cursor = CursorId.Hand, Role = AutomationRole.Hyperlink, Focusable = true,

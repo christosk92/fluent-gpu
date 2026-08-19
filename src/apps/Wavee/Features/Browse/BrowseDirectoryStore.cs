@@ -6,13 +6,12 @@ using Wavee.Core;
 namespace Wavee.Features.Browse;
 
 /// <summary>Session cache for the Browse directory's two loads (categories + the Charts deck). The shell's
-/// <c>Flow.KeepAlive</c> holds only 8 page slots (ContentHost.cs), and Search shares ONE of them per tab
-/// (<c>tabIdsearch</c>) — a normal browsing session (a category page here, a section drill there) evicts it
-/// before the user comes back. Without this store, that eviction cold-remounts <see cref="BrowseDirectory"/>, its two
+/// <c>Flow.KeepAlive</c> holds only 8 page slots (ContentHost.cs); a long browsing session can still evict the
+/// directory slot. Without this store, that eviction cold-remounts <see cref="BrowseDirectory"/>, its two
 /// <c>UseResource</c> loads refetch from the network, and the page renders its skeleton (short content) — so the
-/// ScrollView's keyed offset (<c>SearchPage.EmptyLanding</c>'s <c>ScrollKey = "search:"</c>) has nothing real to
+/// ScrollView's keyed offset (<c>BrowseDirectoryPage</c>'s <c>ScrollKey = "browse"</c>) has nothing real to
 /// restore against. This store makes a remount paint the last successful load INSTANTLY: full-height content right
-/// away, so the keyed scroll restoration lands on real layout instead of a skeleton.
+/// away, so keyed scroll restoration lands on real layout instead of a skeleton.
 ///
 /// Written from the <c>UseResource</c> loader — which runs off the UI thread (<c>ResourceCell.Launch</c>'s
 /// <c>Task.Run</c>) — and from a detached background-refresh task (see <see cref="BrowseDirectory"/>'s stale path),

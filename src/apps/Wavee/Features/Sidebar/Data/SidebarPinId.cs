@@ -11,15 +11,17 @@ namespace Wavee;
 //   * the recency join against HistoryStore is an identity lookup on Route.Name (F.7.6), and
 //   * a pin survives a library refresh, because it never depends on a list index.
 
-/// <summary>What a pin points at. Values are PERSISTED (<c>sidebar-layout.json</c> → <c>SidebarPinDto.Kind</c>) —
-/// append only, never reorder or reuse.</summary>
-public enum SidebarPinKind : byte { Route = 0, Playlist = 1, Album = 2, Artist = 3, Show = 4, Folder = 5 }
-
 /// <summary>One pinned sidebar item. <see cref="Id"/> is the STABLE identity (F.5.4) and is also the nav route key for
-/// every kind except <see cref="SidebarPinKind.Folder"/>. <see cref="Name"/>/<see cref="Uri"/> are a display CACHE so a
+/// every kind except <see cref="SidebarEntryKind.Folder"/>. <see cref="Name"/>/<see cref="Uri"/> are a display CACHE so a
 /// pinned row paints instantly offline before the library resolves; they are refreshed by the projection and are never
-/// the source of truth.</summary>
-public sealed record SidebarPin(string Id, SidebarPinKind Kind, string Uri, string Name, long AddedAtMs)
+/// the source of truth.
+///
+/// <para><see cref="Kind"/> is <see cref="SidebarEntryKind"/> — the SAME vocabulary the projection uses (there is no
+/// more separate "persisted pin kind" enum; the old <c>SidebarPinKind</c> and the two lossy mappings between it and
+/// <see cref="SidebarEntryKind"/> — <c>KindOfPin</c>/<c>KindOfEntry</c> — are deleted). The wire freezes the OLD
+/// numbering in <c>SidebarLayoutWire</c>'s frozen legacy table instead of duplicating the domain type; see
+/// <c>SidebarLayoutDoc.cs</c>.</para></summary>
+public sealed record SidebarPin(string Id, SidebarEntryKind Kind, string Uri, string Name, long AddedAtMs)
 {
     /// <summary>§3.0 consumer alias — the pin store keys on <see cref="Id"/>.</summary>
     public string Key => Id;
@@ -86,7 +88,7 @@ public static class SidebarPinId
     public static string? Canonical(string? idOrUri)
     {
         if (string.IsNullOrEmpty(idOrUri)) return null;
-        if (KindOf(idOrUri) != SidebarPinKind.Route) return idOrUri;   // already a prefixed pin id
+        if (KindOf(idOrUri) != SidebarEntryKind.AppRoute) return idOrUri;   // already a prefixed pin id
         if (idOrUri.StartsWith("spotify:", StringComparison.Ordinal)
             || idOrUri.StartsWith("wavee:", StringComparison.Ordinal))
             return FromUri(idOrUri);                                   // an entity uri never becomes a route pin
@@ -157,35 +159,42 @@ public static class SidebarPinId
     /// <summary>A rootlist group id → its pin id. Folders are pinnable (locked decision 4) even though they never navigate.</summary>
     public static string ForFolder(string folderId) => FolderPrefix + folderId;
 
-    /// <summary>Prefix dispatch; no known prefix ⇒ <see cref="SidebarPinKind.Route"/> (the bare-route form).</summary>
-    public static SidebarPinKind KindOf(string? pinId) =>
-        pinId is null ? SidebarPinKind.Route
-        : pinId.StartsWith(PlaylistPrefix, StringComparison.Ordinal) ? SidebarPinKind.Playlist
-        : pinId.StartsWith(AlbumPrefix, StringComparison.Ordinal) ? SidebarPinKind.Album
-        : pinId.StartsWith(ArtistPrefix, StringComparison.Ordinal) ? SidebarPinKind.Artist
-        : pinId.StartsWith(ShowPrefix, StringComparison.Ordinal) ? SidebarPinKind.Show
-        : pinId.StartsWith(FolderPrefix, StringComparison.Ordinal) ? SidebarPinKind.Folder
-        : SidebarPinKind.Route;
+    /// <summary>Prefix dispatch; no known prefix ⇒ <see cref="SidebarEntryKind.AppRoute"/> (the bare-route form).</summary>
+    public static SidebarEntryKind KindOf(string? pinId) =>
+        pinId is null ? SidebarEntryKind.AppRoute
+        : pinId.StartsWith(PlaylistPrefix, StringComparison.Ordinal) ? SidebarEntryKind.Playlist
+        : pinId.StartsWith(AlbumPrefix, StringComparison.Ordinal) ? SidebarEntryKind.Album
+        : pinId.StartsWith(ArtistPrefix, StringComparison.Ordinal) ? SidebarEntryKind.Artist
+        : pinId.StartsWith(ShowPrefix, StringComparison.Ordinal) ? SidebarEntryKind.Show
+        : pinId.StartsWith(FolderPrefix, StringComparison.Ordinal) ? SidebarEntryKind.Folder
+        : SidebarEntryKind.AppRoute;
 
-    /// <summary>The nav route a pin opens. Null for <see cref="SidebarPinKind.Folder"/> (a folder expands in place; it
+    /// <summary>The nav route a pin opens. Null for <see cref="SidebarEntryKind.Folder"/> (a folder expands in place; it
     /// never navigates) — every other kind's id IS its route key.</summary>
-    public static string? RouteOf(string pinId) => KindOf(pinId) == SidebarPinKind.Folder ? null : pinId;
+    public static string? RouteOf(string pinId) => KindOf(pinId) == SidebarEntryKind.Folder ? null : pinId;
 
     /// <summary>The entity uri behind a pin id ("" for a route or folder pin). The inverse of <see cref="FromUri"/> for
     /// the prefixed kinds — used when a pinned row needs a play/share target and the display cache is stale.</summary>
     public static string UriOf(string pinId) => KindOf(pinId) switch
     {
-        SidebarPinKind.Playlist => pinId.Substring(PlaylistPrefix.Length),
-        SidebarPinKind.Album => pinId.Substring(AlbumPrefix.Length),
-        SidebarPinKind.Artist => pinId.Substring(ArtistPrefix.Length),
-        SidebarPinKind.Show => pinId.Substring(ShowPrefix.Length),
-        SidebarPinKind.Route when string.Equals(pinId, "liked", StringComparison.Ordinal) => LikedSongsUri,
+        SidebarEntryKind.Playlist => pinId.Substring(PlaylistPrefix.Length),
+        SidebarEntryKind.Album => pinId.Substring(AlbumPrefix.Length),
+        SidebarEntryKind.Artist => pinId.Substring(ArtistPrefix.Length),
+        SidebarEntryKind.Show => pinId.Substring(ShowPrefix.Length),
+        SidebarEntryKind.AppRoute when string.Equals(pinId, "liked", StringComparison.Ordinal) => LikedSongsUri,
         _ => "",
     };
 
     /// <summary>The rootlist group id behind a folder pin ("" when the pin is not a folder).</summary>
     public static string FolderIdOf(string pinId) =>
-        KindOf(pinId) == SidebarPinKind.Folder ? pinId.Substring(FolderPrefix.Length) : "";
+        KindOf(pinId) == SidebarEntryKind.Folder ? pinId.Substring(FolderPrefix.Length) : "";
+
+    /// <summary>Whether a <see cref="SidebarEntryKind"/> can ever back a pin. <see cref="SidebarEntryKind.Track"/> is the
+    /// ONE refusal (locked decision 4) — every other kind is either a real navigable library entity or the bare-route
+    /// family, and the id scheme above already knows how to address both. Call this at every pin-CREATION boundary
+    /// (never infer pinnability from whether a mapping happens to fall through to a default) so an unpinnable kind is
+    /// rejected with a clear "no" instead of silently becoming a route pin.</summary>
+    public static bool IsPinnable(SidebarEntryKind kind) => kind != SidebarEntryKind.Track;
 
     /// <summary>An action target → its pin id (null = not pinnable). Deriving from the target's URI rather than its
     /// <c>TargetKind</c> is deliberate: it keeps <c>ActionTarget</c>/<c>TargetKind</c>/<c>ActionRules</c> untouched, and a
@@ -200,17 +209,5 @@ public static class SidebarPinId
         SidebarEntryKind.AppRoute => FromRoute(e.Id),
         SidebarEntryKind.Track => null,
         _ => e.Id,
-    };
-
-    /// <summary>The <see cref="SidebarPinKind"/> a projected entry pins as (the two enums have different orderings on
-    /// purpose — <see cref="SidebarPinKind"/> is persisted, <see cref="SidebarEntryKind"/> is not).</summary>
-    public static SidebarPinKind KindOfEntry(SidebarEntryKind kind) => kind switch
-    {
-        SidebarEntryKind.Playlist => SidebarPinKind.Playlist,
-        SidebarEntryKind.Album => SidebarPinKind.Album,
-        SidebarEntryKind.Artist => SidebarPinKind.Artist,
-        SidebarEntryKind.Show => SidebarPinKind.Show,
-        SidebarEntryKind.Folder => SidebarPinKind.Folder,
-        _ => SidebarPinKind.Route,
     };
 }

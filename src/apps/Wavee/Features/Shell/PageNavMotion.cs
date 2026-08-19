@@ -1,4 +1,5 @@
 using FluentGpu.Controls;
+using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 
@@ -23,22 +24,44 @@ static class PageNavMotion
 {
     /// <summary>Every destination page gets its own slot inside the active tab, so ALL forward/back navigation uses the
     /// same page-slide language (Fluent Frame SlideNavigationTransitionInfo / Zune panorama: the page moves, the content
-    /// does not then cascade). Search remains ONE live workspace because its query changes in place as the omnibar is
-    /// edited — its Arg is deliberately excluded from the key.</summary>
+    /// does not then cascade). Each committed search query is its own slot; Back walks query history.</summary>
     public static string SlotKey(PageSlot s)
-    {
-        if (s.Route.Name == "search") return s.TabId + "\u001Fsearch";
-        return s.TabId + "\u001F" + s.Route.Name + "\u001F" + (s.Route.Arg ?? "");
-    }
+        => s.TabId + "\u001F" + s.Route.Name + "\u001F" + (s.Route.Arg ?? "");
 
     /// <summary>The recipe for a page swap, WITH its Exit half. Both halves are load-bearing: the reconciler's
     /// <c>BeginKeepAliveExit</c> only overlaps the outgoing page (ZStack on the boundary, hit-test invisible, parked
     /// once its tracks settle) when <c>Exit.Active</c> is true — with a stripped Exit the outgoing page is detached in
-    /// the same frame and the card flashes EMPTY before the incoming page arrives.</summary>
+    /// the same frame and the card flashes EMPTY before the incoming page arrives.
+    /// Fade-through (not a symmetric slide): exit fades in place (~120ms accelerate) so two full-bleed pages never
+    /// mix at readable opacity; enter follows after 90ms with a short directional slide. SearchPage facet swaps keep
+    /// the shared <see cref="MotionRecipes.PageSlideForward"/> / Back recipes.</summary>
     public static LayoutTransition RecipeFor(NavTransitionKind motion) => motion switch
     {
-        NavTransitionKind.Back => MotionRecipes.PageSlideBack,
+        NavTransitionKind.Back => PageFadeThroughBack,
         NavTransitionKind.Neutral => MotionRecipes.PageFade,
-        _ => MotionRecipes.PageSlideForward,
+        _ => PageFadeThroughForward,
     };
+
+    // Outgoing is mostly gone by ~70ms; incoming starts at 90ms — the readable double-exposure window shrinks from
+    // 250ms full-mix to a short low-alpha crossover, and the card is never empty (Exit.Active stays true).
+    internal const float FadeThroughExitMs = 120f;
+    const float FadeThroughEnterDelayMs = 90f;
+
+    public static LayoutTransition PageFadeThroughForward => new(
+        TransitionChannels.Position | TransitionChannels.Opacity,
+        TransitionDynamics.Tween(Expressive.Fast, Easing.SmoothOut),
+        Enter: new EnterExit(Dx: Expressive.DistLarge, Opacity: 0f, Active: true),
+        Exit: new EnterExit(Dx: 0f, Opacity: 0f, Active: true),
+        ExitDynamics: TransitionDynamics.Tween(FadeThroughExitMs, Easing.FluentAccelerate),
+        DelayMs: FadeThroughEnterDelayMs,
+        ExitDelayMs: 0f);
+
+    public static LayoutTransition PageFadeThroughBack => new(
+        TransitionChannels.Position | TransitionChannels.Opacity,
+        TransitionDynamics.Tween(Expressive.Fast, Easing.SmoothOut),
+        Enter: new EnterExit(Dx: -Expressive.DistLarge, Opacity: 0f, Active: true),
+        Exit: new EnterExit(Dx: 0f, Opacity: 0f, Active: true),
+        ExitDynamics: TransitionDynamics.Tween(FadeThroughExitMs, Easing.FluentAccelerate),
+        DelayMs: FadeThroughEnterDelayMs,
+        ExitDelayMs: 0f);
 }

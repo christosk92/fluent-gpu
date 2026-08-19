@@ -84,7 +84,8 @@ static class HomeCardNav
     /// section page is the 1-tile "intermediate" void.</summary>
     public static void OpenBrowseSection(HomeSection s, NavPreviewStore? navPreview,
                                          HomeSectionPreviewStore? sectionPreview, Action<string, string?> go,
-                                         Action<string>? playTrack)
+                                         Action<string>? playTrack, NavOrigin? origin = null,
+                                         Action<string, string?, NavOrigin?>? goOrigin = null)
     {
         if (s.Cards.Count == 1)
         {
@@ -93,7 +94,8 @@ static class HomeCardNav
         }
         string route = BrowseSectionRoutes.Page(s.Uri ?? "");
         sectionPreview?.Set(route, s);
-        go(route, s.Title);
+        if (goOrigin is not null) goOrigin(route, s.Title, origin);
+        else go(route, s.Title);
     }
 }
 

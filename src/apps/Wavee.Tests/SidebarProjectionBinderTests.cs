@@ -279,6 +279,75 @@ public sealed class SidebarProjectionBinderTests
         Assert.Equal("Beta", list[0].Name);
     }
 
+    // ── an unlisted pin (editorial/Spotify-owned playlist, or anything else never saved to the library) ────────────────
+    //
+    // Repro: pinning "Top Songs - South Korea" (owner "Spotify") rendered a blank cover + "0 songs" in the Pinned
+    // section even though the same playlist's own detail page painted real art and a full tracklist in the SAME
+    // session. Root cause: SidebarProjectionBinder.ResolvePins resolves a pin by looking it up in `_index`, which is
+    // built ONLY from LibraryStore's rootlist tree + Albums/Artists/Shows (the user's own library) — an editorial
+    // playlist the user never saved is never in there, so the old code fell straight to a bare display-cache row
+    // (Cover = null, ChildCount = 0) with no path to ever fill in real data. SidebarBinderPipeline.ResolveUnlistedPin
+    // is the pure merge the binder now runs instead: same bare row when nothing has been hydrated yet, overlaid with
+    // whatever RequestPinHydration resolved (through the same Services.Library façade DetailPage uses) once it lands.
+
+    [Fact]
+    public void An_unlisted_pin_with_no_hydration_yet_still_renders_the_offline_display_cache()
+    {
+        var pin = new SidebarPin(SidebarPinId.PlaylistPrefix + "spotify:playlist:korea",
+            SidebarEntryKind.Playlist, "spotify:playlist:korea", "Top Songs - South Korea", AddedAtMs: 1000);
+
+        var row = SidebarBinderPipeline.ResolveUnlistedPin(pin, sourceOrder: 0, hydrated: null);
+
+        Assert.True(row.IsPinned);
+        Assert.Equal(pin.Id, row.Id);
+        Assert.Equal(SidebarEntryKind.Playlist, row.Kind);
+        Assert.Equal("Top Songs - South Korea", row.Name);         // the pin's own cached name, never blank
+        Assert.Null(row.Cover);                                    // …but no art or count until hydration lands
+        Assert.Equal(0, row.TrackCount);
+    }
+
+    [Fact]
+    public void An_unlisted_pin_projects_real_art_and_a_real_track_count_once_hydrated()
+    {
+        // The playlist is NOT in the rootlist/library projection (that is the whole point of this fixture: an
+        // editorial playlist), so the row can ONLY come from the hydration overlay, exactly like
+        // SidebarProjectionBinder.HydratePlaylistAsync builds it from Services.Library.GetPlaylistAsync.
+        var pin = new SidebarPin(SidebarPinId.PlaylistPrefix + "spotify:playlist:korea",
+            SidebarEntryKind.Playlist, "spotify:playlist:korea", "Top Songs - South Korea", AddedAtMs: 1000);
+        var hydrated = new SidebarLibraryEntry(
+            "", SidebarEntryKind.Playlist, "", "", "Spotify", new Image("https://i.scdn.co/image/korea-cover"), null,
+            ChildCount: 50, AddedAtMs: 0, SortStamp: 0, LastVisitedTicksUtc: 0,
+            SourceOrder: 0, Depth: 0, Circular: false, Flavor: SidebarPlaylistFlavor.None);
+
+        var row = SidebarBinderPipeline.ResolveUnlistedPin(pin, sourceOrder: 0, hydrated);
+
+        Assert.True(row.IsPinned);
+        Assert.Equal(pin.Id, row.Id);
+        Assert.Equal("Top Songs - South Korea", row.Name);         // the pin's own cache still names the row
+        Assert.NotNull(row.Cover);
+        Assert.Equal("https://i.scdn.co/image/korea-cover", row.Cover!.Url);
+        Assert.Equal(50, row.TrackCount);
+        Assert.Equal("Spotify", row.Creator);                      // the owner name, from the SAME façade the detail page uses
+    }
+
+    [Fact]
+    public void An_unlisted_pins_hydration_overlay_never_blanks_a_field_it_did_not_resolve()
+    {
+        // A partial hydration reply (e.g. a show's Publisher with no cover yet) must not stomp the pin's own display
+        // cache with an empty value — only a field the overlay actually carries wins.
+        var pin = new SidebarPin(SidebarPinId.ShowPrefix + "spotify:show:1", SidebarEntryKind.Show,
+            "spotify:show:1", "cached", AddedAtMs: 0);
+        var hydrated = new SidebarLibraryEntry(
+            "", SidebarEntryKind.Show, "", "", "Acme Media", null, null,
+            ChildCount: 0, AddedAtMs: 0, SortStamp: 0, LastVisitedTicksUtc: 0,
+            SourceOrder: 0, Depth: 0, Circular: false, Flavor: SidebarPlaylistFlavor.None);
+
+        var row = SidebarBinderPipeline.ResolveUnlistedPin(pin, sourceOrder: 0, hydrated);
+
+        Assert.Null(row.Cover);                 // the overlay had none — the (already-null) base value survives
+        Assert.Equal("Acme Media", row.Creator); // …but the field the overlay DID carry wins
+    }
+
     // ── the first-seen commit trigger (commit point #9) ────────────────────────────────────────────────────────────────
 
     [Fact]

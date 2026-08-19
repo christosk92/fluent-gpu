@@ -214,9 +214,13 @@ public static class MediaCard
     // responsive grid whose track width isn't known at template time.
     /// <remarks>The cover placeholder resolves its colour from <c>CoverColorPlane</c> inside <c>Surfaces</c> — a grid
     /// is where that matters most, since a whole screen of covers decodes at once.</remarks>
+    /// <param name="titleLines">How many lines the title may wrap to. 1 (the default) keeps every existing grid on its
+    /// single ellipsized line; &gt;1 wraps, and the CALLER must widen its cell reserve to match
+    /// (<c>HomeModuleLayout.GridCardChromeFor</c>) or the extra lines land under the next row.</param>
     public static Element GridCard(Image? cover, string title, string subtitle, string uri,
                                    Action onClick, Action onPlay, bool circular = false, Action? onNavigate = null,
-                                   ColorF? accent = null, MenuAttach? menu = null, DragSource? drag = null)
+                                   ColorF? accent = null, MenuAttach? menu = null, DragSource? drag = null,
+                                   int matchStart = 0, int matchLen = 0, int titleLines = 1)
     {
         var hovered = new Signal<bool>(false);
         float r = circular ? Radii.Full : Radii.Card;
@@ -247,7 +251,18 @@ public static class MediaCard
                     Direction = 1, Gap = Spacing.XXS, AlignItems = circular ? FlexAlign.Center : FlexAlign.Start,
                     Children =
                     [
-                        WaveeType.TrackTitle(title) with { Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f },
+                        // The highlight gets the SAME line budget as the plain title, so a filter narrowing the grid
+                        // does not re-flow a card from two lines to one ellipsized one (SearchHighlight.Row wraps its
+                        // run row rather than shaping a paragraph — see its maxLines doc for why).
+                        matchLen > 0
+                            ? SearchHighlight.Row(title, matchStart, matchLen, 14f, 600, Tok.TextPrimary,
+                                                  maxLines: titleLines < 1 ? 1 : titleLines)
+                            : WaveeType.TrackTitle(title) with
+                              {
+                                  Wrap = titleLines > 1 ? TextWrap.Wrap : TextWrap.NoWrap,
+                                  MaxLines = titleLines < 1 ? 1 : titleLines,
+                                  Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
+                              },
                         subtitle.Length == 0 ? new BoxEl()
                             : WaveeType.TrackMeta(subtitle) with { Wrap = TextWrap.Wrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f },
                     ],

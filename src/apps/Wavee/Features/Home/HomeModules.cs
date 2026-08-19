@@ -396,16 +396,22 @@ static class HomeModules
     /// sizes rows from the arranged cross size × 1 + the two-line chrome under the square cover — a separately
     /// fitted cardW was the shear: first-frame width / scrollbar gutter made item rects shorter than the covers,
     /// and titles ellipsized into "Netherla…".</summary>
+    /// <param name="titleLines">How many lines a card title may wrap to. The cell reserve is derived from the SAME
+    /// number (<see cref="HomeModuleLayout.GridCardChromeFor"/>), so the two cannot drift.</param>
     public static Element SectionGrid(IReadOnlyList<HomeCard> cards, string? sectionKey, float width,
                                       Action<HomeCard> open, Services? svc, ActionServices? acts, IOverlayService overlay,
-                                      (Func<ScrollGeometry, long> Project, Action<ScrollGeometry> Action)? onScrollGeometryChanged = null)
+                                      (Func<ScrollGeometry, long> Project, Action<ScrollGeometry> Action)? onScrollGeometryChanged = null,
+                                      string? highlightQuery = null, int titleLines = 1)
     {
         var (columns, _) = FillRowVirtualLayout.Fit(width,
             HomeModuleLayout.ShelfCardMin, HomeModuleLayout.ShelfCardMax, HomeModuleLayout.GridGap);
         columns = Math.Max(1, columns);
         int tier = columns;
+        bool charts = Wavee.Features.Browse.ChartSections.Contains(sectionKey);
         return Virtual.Custom(cards.Count,
-            new AspectGridVirtualLayout(columns, 1f, HomeModuleLayout.GridCardChrome, HomeModuleLayout.GridGap),
+            // `charts` blanks the subtitle below, so the reserve must not pay for that rung — same bool, both places.
+            new AspectGridVirtualLayout(columns, 1f, HomeModuleLayout.GridCardChromeFor(titleLines, hasSubtitle: !charts),
+                                        HomeModuleLayout.GridGap),
             i =>
             {
                 var card = cards[i];
@@ -415,13 +421,22 @@ static class HomeModules
                     : Drag.Source(WaveeDragKinds.Resource,
                         () => WaveeResourceDragPayload.ForEntity(WaveeDragKindMap.Of(card.Kind), card.Uri,
                             card.Title, card.Image, acts));
-                return MediaCard.GridCard(card.Image, card.Title, SpotifyExportMapper.ToPlainText(card.Subtitle) ?? "",
+                string subtitle = charts ? "" : SpotifyExportMapper.ToPlainText(card.Subtitle) ?? "";
+                ChartTitleMatch.TryFind(card.Title, highlightQuery, out int matchStart, out int matchLen);
+                return MediaCard.GridCard(card.Image, card.Title, subtitle,
                     card.Uri, () => open(card), () => { if (svc is not null) _ = svc.Player.PlayAsync(card.Uri, 0); },
-                    circular: card.Kind == HomeCardKind.Artist, menu: menu, drag: drag) with
-                { Key = "home-section-card:" + tier + ":" + card.Uri };
+                    circular: card.Kind == HomeCardKind.Artist, menu: menu, drag: drag,
+                    matchStart: matchStart, matchLen: matchLen, titleLines: titleLines) with
+                // The tier (column count) is already in the key; titleLines joins it because it changes the cell's
+                // measured SHAPE, and the recycle-shape guard compares structure per key.
+                { Key = "home-section-card:" + tier + ":" + titleLines + ":" + card.Uri };
             },
             keyOf: i => sectionKey + "\u001F" + cards[i].Uri,
-            overscan: 2) with { MinHeight = 0f, OnScrollGeometryChanged = onScrollGeometryChanged };
+            overscan: 2) with
+            {
+                Grow = 1f, Shrink = 1f, MinHeight = 0f,
+                OnScrollGeometryChanged = onScrollGeometryChanged,
+            };
     }
 
 }
@@ -459,7 +474,32 @@ static class HomeModuleLayout
     /// The drill-in grid's cell gap and under-cover chrome (pad + title + metadata) — promoted from
     /// HomeSectionPage so a Browse category page's flattened body renders the IDENTICAL grid.
     public const float GridGap = Spacing.M;
+    /// <summary>The shipped one-title-line, one-metadata-line reserve — kept as the name every existing caller knows,
+    /// and reproduced EXACTLY by <c>GridCardChromeFor(1, hasSubtitle: true)</c>.</summary>
     public const float GridCardChrome = 52f;
+    /// <summary>One title line box (<c>Ui.BodyStrong</c>: 14/20) — what each title line costs a cell.</summary>
+    public const float GridTitleLineH = 20f;
+    /// <summary>The metadata line and the gap above it (<c>Ui.Caption</c> 12/16 + <c>Spacing.XXS</c>) — the block a grid
+    /// that blanks its subtitles does NOT need, and reclaiming it is what pays for a second title line.</summary>
+    public const float GridSubtitleBlockH = 16f + Spacing.XXS;
+    /// <summary>Everything in a card's label block that is not a line box: MediaCard's cover→label gap plus its bottom
+    /// padding, minus the padding the square cover already gives back. Derived so
+    /// <c>GridCardChromeFor(1, true) == <see cref="GridCardChrome"/></c> — change one and the other must move.</summary>
+    public const float GridLabelOverhead = GridCardChrome - GridTitleLineH - GridSubtitleBlockH;
+
+    /// <summary>The cell reserve for a grid, from the two things that actually set a card's label height: how many lines
+    /// its title may wrap to, and whether it renders a metadata line at all.
+    /// <para>Both arguments matter, and the second is why Charts costs almost nothing: <c>SectionGrid</c> BLANKS the
+    /// subtitle on a chart card, so a naive "add a line box per extra title line" reserve paid for a metadata rung that
+    /// was never drawn — 40 DIP of dead plate under every one-line title. Reclaiming that rung buys the second title
+    /// line for 2 DIP.</para>
+    /// <para><see cref="AspectGridVirtualLayout"/> takes ONE ExtraHeight for the whole grid, so the renderer and this
+    /// estimator must be handed the same numbers — see <c>HomeModules.SectionGrid</c>, which derives both from the same
+    /// pair of arguments.</para></summary>
+    public static float GridCardChromeFor(int titleLines, bool hasSubtitle) =>
+        GridLabelOverhead
+        + (titleLines < 1 ? 1 : titleLines) * GridTitleLineH
+        + (hasSubtitle ? GridSubtitleBlockH : 0f);
 
     // ── THE Fold tile — home-sections-v1-mica.html, the Blend tab (`.blend` / `.blend .stack`, CSS ~329-349) ─────────
     /// <summary>`.blend { height:176px }`.</summary>
@@ -481,7 +521,9 @@ static class HomeModuleLayout
     /// cover's absolute left is (cardW - 250 + 40) + its local left. Baked in here so the tile needs no wrapper node.</summary>
     public static void FoldRest(int i, float cardW, out float x, out float y, out float rot)
     {
-        float left = cardW - 250f + 40f;                 // right:-40px on a 250-wide stack box
+        // Prototype stack box is right:-40 / width:250. Clamp so a 0-width first frame (or a cell narrower than
+        // the stack) cannot park covers at a negative X and paint into the band header.
+        float left = MathF.Max(0f, cardW - 250f + 40f);  // right:-40px on a 250-wide stack box
         (float lx, float ly, float r) = i switch
         {
             0 => ( 0f, 32f, -11f),

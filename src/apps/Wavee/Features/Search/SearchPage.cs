@@ -15,18 +15,18 @@ using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
 
-// The shared omnibar query signal, provided once at the shell root (WaveeShell) and read by the SearchPage live, so the
-// page tracks the search box AS-YOU-TYPE without threading the signal down through ContentHost / the route.
+// The shared omnibar query signal, provided once at the shell root (WaveeShell). Live typing updates the box; committed
+// queries navigate to a SearchPage slot. The KeepAlive boundary is the only route subscriber.
 static class SearchQuery
 {
     public static readonly Context<Signal<string>?> Slot = new(null);
 }
 
-// The Search page — one keep-alive workspace. Fetch keys off the committed route Arg, not the live omnibar
-// (typing on an open Search page must not fire searchTopResultsList). Empty Arg is recents + Browse.
+// The Search page — results for one committed query. The query is the route snapshot at mount (a new query is a new
+// keep-alive slot). Fetch keys off that frozen Arg, not the live omnibar (typing must not fire searchTopResultsList).
 sealed class SearchPage : Component
 {
-    readonly IReadSignal<Route> _route;
+    readonly string _query;
     readonly Signal<int> _chip = new(0);   // index into _facets (0 is always All)
     SearchFacet[] _facets = [SearchFacet.All];
     SearchResults? _chipSource;
@@ -35,65 +35,26 @@ sealed class SearchPage : Component
     const int SearchPageSize = 50;
     const float FacetUnderlineH = 3f;
     const float FacetUnderlineMs = 260f;
-    /// <summary>Identity for race-free last-writer-wins on <see cref="ShellMasthead"/> (see <c>ShellMastheadState</c>)
-    /// — the same owner-token contract <c>HomeSectionPage</c>/<c>BrowsePage</c> use for their own publish.</summary>
-    readonly object _mastheadOwner = new();
 
-    public SearchPage(IReadSignal<Route> route) => _route = route;
+    public SearchPage(Route route) => _query = (route.Arg ?? "").Trim();
 
     public override Element Render()
     {
         var svc = UseContext(Services.Slot);
         var go = UseContext(HistoryStore.NavCtx);
-        var mastheadStore = UseContext(ShellMasthead.Slot);
         if (svc is null) return new BoxEl { Grow = 1f };
-        string q = (_route.Value.Arg ?? "").Trim();
+        string q = _query;
         int chip = _chip.Value;
-        UseEffect(() => { _chip.Value = 0; _chipSource = null; _prevChip = 0; _slideArmed = false; }, q);
-
-        // ── the shell MASTHEAD publication ──────────────────────────────────────────────────────────────────────
-        // Search's empty landing IS the Browse directory (EmptyLanding, below) and has no route of its own to give
-        // ShellMastheadBand a trail to derive (a bare "search" route is not a Browse-family route) — so this is the
-        // ONE place a page publishes a masthead with no family route backing it. A committed query owner-gates the
-        // clear instead: the results branch below owns its own query chrome in-page, and a bare "search" route with
-        // nothing published collapses the band to zero height (see ShellMastheadBand's doc-comment).
-        void SetMasthead()
-        {
-            if (mastheadStore is not null)
-                mastheadStore.Value = new ShellMastheadState(_mastheadOwner, Loc.Get(Strings.Browse.Title), Loc.Get(Strings.Browse.Subtitle));
-        }
-        void ClearMasthead()
-        {
-            if (mastheadStore is not null && ReferenceEquals(mastheadStore.Peek()?.Owner, _mastheadOwner))
-                mastheadStore.Value = null;
-        }
-        UseEffect(() => { if (q.Length == 0) SetMasthead(); else ClearMasthead(); }, q);
-        // A KeepAlive-cached page does not re-run its mount effect, so reactivation re-publishes (only when the
-        // landing is what's actually showing — a reactivated page mid-query stays silently cleared, exactly what
-        // the q-driven deps-leg above already left it as).
-        UseActivation(onActivated: () => { if (q.Length == 0) SetMasthead(); }, onDeactivated: ClearMasthead);
-        // …and UNMOUNT clears too, because onDeactivated fires only on PARK. Owner-gated, so it can never clobber
-        // whatever the next page has already published.
-        UseEffect(() => (Action?)ClearMasthead, DepKey.Empty);
         int facetCount = _facets.Length;
         UseEffect(() => { if (_chip.Peek() >= facetCount) _chip.Value = 0; }, facetCount);
         var facet = FacetAt(chip);
         var pageScroll = UseSignal(0f);
-        UseEffect(() => pageScroll.Value = 0f, q + ":" + (int)facet);
         var results = UseResource(ct => q.Length == 0
             ? System.Threading.Tasks.Task.FromResult(SearchResults.Empty)
-            : svc.Library.SearchAsync(q, facet, 0, SearchPageSize, ct), SearchResults.Empty, (q, (int)facet)).Loadable;
+            : svc.Library.SearchAsync(q, facet, 0, SearchPageSize, ct), SearchResults.Empty, (int)facet).Loadable;
 
         (Func<ScrollGeometry, long> Project, Action<ScrollGeometry> Publish) scrollPub =
             (g => (long)(g.OffsetY / 24f), g => pageScroll.Value = g.OffsetY);
-
-        if (q.Length == 0)
-            return Ctx.Provide(LazyScroll.Slot, (IReadSignal<float>)pageScroll,
-                ScrollView(EmptyLanding(go)) with
-                {
-                    Grow = 1f, MinWidth = 0f, ScrollKey = "search:",
-                    OnScrollGeometryChanged = scrollPub,
-                });
 
         bool slide = _slideArmed && _prevChip != chip;
         bool forward = chip > _prevChip;
@@ -158,7 +119,7 @@ sealed class SearchPage : Component
                 ScrollView(resultBody) with
                 {
                     Grow = 1f, MinWidth = 0f, MinHeight = 0f,
-                    ScrollKey = "search:" + q + ":" + (int)facet,
+                    ScrollKey = "search:" + (int)facet,
                     OnScrollGeometryChanged = scrollPub,
                 },
             ],
@@ -553,33 +514,6 @@ sealed class SearchPage : Component
         Children = [WaveeType.Eyebrow(type) with { Color = Tok.TextTertiary }],
     };
 
-    static Element EmptyLanding(Action<string, string?> go)
-    {
-        var browseModel = new Wavee.Features.Browse.BrowseDirectory.Model(
-            OnOpenCategory: (uri, title) => go(Wavee.Features.Browse.BrowseRoutes.Page(uri), title),
-            OnOpenFeature: uri => go(Wavee.Features.Browse.BrowseRoutes.FeatureRoute(uri), null));
-
-        return Ctx.Provide(Wavee.Features.Browse.BrowseDirectory.Props, browseModel,
-            new BoxEl
-            {
-                Direction = 1, MinWidth = 0f, Gap = Spacing.L,
-                // G2c-B: FrameTop dropped — the shell's ShellMastheadBand now owns that top inset (this page
-                // publishes into it above, in Render). Spacing.L keeps the same net gap the directory's own
-                // masthead margin used to give, just moved from "under the masthead" to "under the band"; FrameX
-                // still matches a category page / a section drill so the content column never jumps.
-                Padding = new Edges4(Wavee.Features.Browse.BrowseLayout.FrameX, Spacing.L,
-                    Wavee.Features.Browse.BrowseLayout.FrameX, PlayerDock.Reserve + Spacing.XXL),
-                Children =
-                [
-                    Embed.Comp(() => new Wavee.Features.Browse.BrowseDirectory()),
-                ],
-            });
-    }
-
-    // ── browse empty state ───────────────────────────────────────────────────────────────────────────────────────
-    // No query → the empty state IS the real Browse directory, full stop. The shell already owns the search field
-    // (see the header above), so Browse never grows a second one of its own here.
-
 }
 
 // The "All" tab body — the modern Spotify layout: a FULL-WIDTH Top Result card, then a unified "best results" list that
@@ -607,11 +541,14 @@ sealed class SearchAllList : Component
         var lib = UseContext(LibraryBridge.Slot);
         var acts = UseContext(ActionServices.Slot);      // row context menus (Menus.Card / Menus.TrackAttach)
         var menuOverlay = UseContext(Overlay.Service);
+        var goOrigin = UseContext(HistoryStore.GoWithOrigin);
+        string q = (UseContext(SearchQuery.Slot)?.Peek() ?? "").Trim();
+        var origin = q.Length == 0 ? (NavOrigin?)null : new NavOrigin(q, "search", q);
         if (model.Hits is { } explicitHits)
-            return BuildHits(explicitHits, lib, model, model.EmptyTitle ?? Loc.Get(Strings.Search.NoResults), acts, menuOverlay);
+            return BuildHits(explicitHits, lib, model, model.EmptyTitle ?? Loc.Get(Strings.Search.NoResults), acts, menuOverlay, origin, goOrigin);
         return model.Filter is { } filter
-            ? BuildFiltered(model.Results, lib, model, filter, model.EmptyTitle ?? Loc.Get(Strings.Search.NoResults), acts, menuOverlay)
-            : Build(model.Results, lib, model, acts, menuOverlay);
+            ? BuildFiltered(model.Results, lib, model, filter, model.EmptyTitle ?? Loc.Get(Strings.Search.NoResults), acts, menuOverlay, origin, goOrigin)
+            : Build(model.Results, lib, model, acts, menuOverlay, origin, goOrigin);
     }
 
     // A uri-only card menu (top hits carry uri + name, no domain object); null when the action system isn't provided.
@@ -652,7 +589,8 @@ sealed class SearchAllList : Component
         () => WaveeResourceDragPayload.ForTrack(t));
 
     internal static Element Build(SearchResults r, LibraryBridge? lib, Model model,
-                                  ActionServices? acts = null, IOverlayService? menuOverlay = null)
+                                  ActionServices? acts = null, IOverlayService? menuOverlay = null,
+                                  NavOrigin? origin = null, Action<string, string?, NavOrigin?>? goOrigin = null)
     {
 
         // Spotify's unified "All" tab: render topResultsV2.itemsV2 IN ORDER — the FIRST item is the Top Result (the `large`
@@ -663,8 +601,8 @@ sealed class SearchAllList : Component
         if (hits is { Count: > 0 })
         {
             var rows = new List<Element>(hits.Count);
-            rows.Add(HitRow(hits[0], lib, model, large: true, acts, menuOverlay));
-            for (int i = 1; i < hits.Count; i++) rows.Add(HitRow(hits[i], lib, model, large: false, acts, menuOverlay));
+            rows.Add(HitRow(hits[0], lib, model, large: true, acts, menuOverlay, origin, goOrigin));
+            for (int i = 1; i < hits.Count; i++) rows.Add(HitRow(hits[i], lib, model, large: false, acts, menuOverlay, origin, goOrigin));
             return new BoxEl { Direction = 1, Gap = Spacing.S, MinWidth = 0f, AlignSelf = FlexAlign.Stretch, Children = rows.ToArray() };
         }
 
@@ -677,24 +615,27 @@ sealed class SearchAllList : Component
     }
 
     internal static Element BuildFiltered(SearchResults r, LibraryBridge? lib, Model model, Func<SearchTopHit, bool> include, string emptyTitle,
-                                          ActionServices? acts = null, IOverlayService? menuOverlay = null)
-        => BuildHits(r.TopHits?.Where(include).ToArray() ?? Array.Empty<SearchTopHit>(), lib, model, emptyTitle, acts, menuOverlay);
+                                          ActionServices? acts = null, IOverlayService? menuOverlay = null,
+                                          NavOrigin? origin = null, Action<string, string?, NavOrigin?>? goOrigin = null)
+        => BuildHits(r.TopHits?.Where(include).ToArray() ?? Array.Empty<SearchTopHit>(), lib, model, emptyTitle, acts, menuOverlay, origin, goOrigin);
 
     /// <summary>Render a hit list through the shared row factory — one code path for the All tab's filtered slice and
     /// for a dedicated facet's own results, so a podcast row is identical wherever it came from.</summary>
     internal static Element BuildHits(IReadOnlyList<SearchTopHit> hits, LibraryBridge? lib, Model model, string emptyTitle,
-                                      ActionServices? acts = null, IOverlayService? menuOverlay = null)
+                                      ActionServices? acts = null, IOverlayService? menuOverlay = null,
+                                      NavOrigin? origin = null, Action<string, string?, NavOrigin?>? goOrigin = null)
     {
         if (hits.Count == 0) return EmptyState.Build(emptyTitle);
         var rows = new Element[hits.Count];
         for (int i = 0; i < hits.Count; i++)
-            rows[i] = HitRow(hits[i], lib, model, large: false, acts, menuOverlay);
+            rows[i] = HitRow(hits[i], lib, model, large: false, acts, menuOverlay, origin, goOrigin);
         return new BoxEl { Direction = 1, Gap = Spacing.S, MinWidth = 0f, AlignSelf = FlexAlign.Stretch, Children = rows };
     }
 
     // ── every row is MediaCard.Row (the shared factory); these supply the per-kind data + actions only ───────────────────
     internal static Element HitRow(SearchTopHit h, LibraryBridge? lib, Model model, bool large,
-                          ActionServices? acts = null, IOverlayService? menuOverlay = null)
+                          ActionServices? acts = null, IOverlayService? menuOverlay = null,
+                          NavOrigin? origin = null, Action<string, string?, NavOrigin?>? goOrigin = null)
     {
         bool isTrack = h.Kind == SearchHitKind.Track;
         Element? trailing =
@@ -704,7 +645,7 @@ sealed class SearchAllList : Component
             : isTrack ? SaveButton(lib?.IsSaved(h.Uri) ?? false, () => { if (h.Uri.Length > 0) lib?.ToggleSaved(h.Uri, h.Name); })
             : null;
         Action play = isTrack ? () => model.PlayTrack(h.Uri) : () => model.PlayContext(h.Uri);
-        Action open = isTrack ? play : OpenFor(model, h.Kind, h.Uri, h.Name);
+        Action open = isTrack ? play : OpenFor(model, h.Kind, h.Uri, h.Name, origin, goOrigin);
         string? eyebrow = large ? null : (h.MatchedLyrics ? Loc.Get(Strings.Search.LyricsMatch) : h.AccessLabel);
         bool isPremiumEyebrow = !h.MatchedLyrics && h.AccessLabel is { Length: > 0 };
         return MediaCard.Row(h.Image, h.Name, h.Subtitle, h.Uri, h.RoundImage, open, play,
@@ -805,14 +746,15 @@ sealed class SearchAllList : Component
         drag: Drag.Source(WaveeDragKinds.Resource,
             () => WaveeResourceDragPayload.ForEntity(WaveeResourceKind.Playlist, p.Uri, p.Name, p.Cover, acts)));
 
-    internal static Action OpenFor(Model model, SearchHitKind kind, string uri, string name) => kind switch
+    internal static Action OpenFor(Model model, SearchHitKind kind, string uri, string name,
+        NavOrigin? origin = null, Action<string, string?, NavOrigin?>? goOrigin = null) => kind switch
     {
         SearchHitKind.Artist => () => model.Go("artist:" + uri, name),
         SearchHitKind.Album => () => model.Go("album:" + uri, name),
         SearchHitKind.Playlist => () => model.Go("pl:" + uri, name),
         SearchHitKind.Audiobook or SearchHitKind.Podcast => () => model.Go("show:" + uri, name),
         SearchHitKind.Episode => () => model.PlayContext(uri),
-        SearchHitKind.Genre => () => SearchRoutes.OpenGenre(uri, name, model.Go),
+        SearchHitKind.Genre => () => SearchRoutes.OpenGenre(uri, name, model.Go, origin, goOrigin),
         _ => static () => { },
     };
 

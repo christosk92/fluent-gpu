@@ -23,7 +23,8 @@ namespace Wavee.Features.Browse;
 /// gets that same card weight rather than being demoted for being unsorted. Density is what this page spends to say
 /// "here is how much this destination is"; the reader learns the hierarchy from weight, not from column position.
 ///
-/// Rendered as Search's empty state: type to search, don't type and you're browsing.</summary>
+/// Rendered as the <c>browse</c> keep-alive page (<see cref="BrowseDirectoryPage"/>). Search is a separate
+/// results page keyed by committed query.</summary>
 sealed class BrowseDirectory : Component
 {
     internal sealed record Model(Action<string, string> OnOpenCategory, Action<string> OnOpenFeature);
@@ -46,8 +47,8 @@ sealed class BrowseDirectory : Component
         // nothing to explain it. Skel.Region owns Pending / Ready / Empty / Failed, so "stuck loading" stops being a
         // state this component can express.
         //
-        // T11: the shell's KeepAlive holds only 8 slots and Search shares one across a whole tab, so a normal browsing
-        // session evicts it before the user returns — cold-remounting this component. `cache` (BrowseDirectoryStore,
+        // T11: the shell's KeepAlive holds only 8 slots, so a long browsing session can still evict the directory
+        // before the user returns — cold-remounting this component. `cache` (BrowseDirectoryStore,
         // Context-provided at the shell root) survives that eviction: the seed below is the LAST loaded value when the
         // store has one (full-height content immediately, so the ScrollView's keyed offset restores against real
         // layout instead of a skeleton), and LoadCategoriesAsync below serves fresh-cached/stale-cached/empty-cached
@@ -95,14 +96,14 @@ sealed class BrowseDirectory : Component
     static Element Body(IReadOnlyList<BrowseCategory> categories, Model? model, Func<int, Element> chartsBandAt)
     {
         var groups = BrowseTaxonomy.Grouped(categories);
-        // The directory is EAGER and mounts exactly once per Search-page mount (no virtualization anywhere in it), and
+        // The directory is EAGER and mounts exactly once per BrowseDirectoryPage mount (no virtualization anywhere in it), and
         // its band count is fixed by the taxonomy (plus the always-present Charts band) — the two conditions
         // WaveeEntrance requires. So the title lands first and the bands follow it 40ms apart, which is the whole Zune
-        // "the page assembles itself" moment on the surface a user sees the instant they open Search.
+        // "the page assembles itself" moment on the surface a user sees the instant they open Browse.
         var children = new List<Element>(groups.Count + 2);
 
         // G2c-B: the masthead itself moved OUT — the shell's ShellMastheadBand renders "Browse" above the KeepAlive
-        // swap now (SearchPage.EmptyLanding publishes the title/subtitle into it), so this wrapper no longer
+        // swap now (Browse home is a family route with a route-derived title arm), so this wrapper no longer
         // carries a masthead child. `band` still starts at 1, not 0: that offset was never about the masthead
         // CHILD occupying a cascade slot (BrowseMasthead owns its own entrance timing, never WaveeEntrance — see
         // the old comment this replaced) — it is the first real band's OWN entrance delay, unrelated to this list's
@@ -126,7 +127,7 @@ sealed class BrowseDirectory : Component
 
         return new BoxEl
         {
-            // The HOST owns the frame (SearchPage.EmptyLanding's own Padding; the shell's ShellMastheadBand owns the
+            // The HOST owns the frame (BrowseDirectoryPage's own Padding; the shell's ShellMastheadBand owns the
             // masthead itself now — G2c-B) — this body is gutterless.
             Direction = 1, Gap = Spacing.L, MinWidth = 0f,
             Children = children.ToArray(),
@@ -227,7 +228,7 @@ sealed class BrowseDirectory : Component
         }
     }
 
-    // One band: a compact eyebrow heading over the density this band's destinations earn (see the class doc-comment).
+    // One band: a module header over the density this band's destinations earn (see the class doc-comment).
     // `index` is the band's position in the entrance cascade (see Body) — the ONLY thing it is used for.
     static Element BandOf(BrowseGroup group, IReadOnlyList<BrowseCategory> items, Model? model, int index)
         => new BoxEl
@@ -239,8 +240,8 @@ sealed class BrowseDirectory : Component
                 BandLabel(GroupLabel(group)),
                 group switch
                 {
-                    BrowseGroup.Top => WrapRow(items, model, BrowseTiles.Word, Spacing.L),
-                    BrowseGroup.ForYou => WrapRow(items, model, BrowseTiles.Name, Spacing.L),
+                    BrowseGroup.Top => WrapRow(items, model, BrowseTiles.Word, BrowseLayout.ChipGap),
+                    BrowseGroup.ForYou => WrapRow(items, model, BrowseTiles.Name, BrowseLayout.ChipGap),
                     BrowseGroup.Genres => Responsive.Of(width => LinkGrid(items, model, width), fallback: BrowseLayout.DirectoryFallbackWidth),
                     BrowseGroup.MoodActivity => Responsive.Of(width => BarGrid(items, model, width), fallback: BrowseLayout.DirectoryFallbackWidth),
                     BrowseGroup.More => Responsive.Of(width => MoreGrid(items, model, width), fallback: BrowseLayout.DirectoryFallbackWidth),
@@ -263,8 +264,7 @@ sealed class BrowseDirectory : Component
             [
                 Skel.Region(charts.Loadable,
                     content: list => HomeModules.FoldDeck(list, Loc.Get(Strings.Browse.Charts), openBrowseSection,
-                        openHeader: model is null ? null : () => model.OnOpenCategory(ChartPages.Charts, Loc.Get(Strings.Home.Charts)),
-                        eyebrowOf: s => HomeModules.ChartEyebrow(s.Uri)),
+                        openHeader: model is null ? null : () => model.OnOpenCategory(ChartPages.Charts, Loc.Get(Strings.Home.Charts))),
                     isEmpty: list => list.Count == 0,
                     onEmpty: () => EmptyState.Compact(Loc.Get(Strings.Home.ChartsEmpty)),
                     onFailed: () => ErrorState.Build(charts.Loadable.Error, onRetry: charts.Refresh),
@@ -309,20 +309,17 @@ sealed class BrowseDirectory : Component
         return BrowseLayout.StarGrid(cols, Spacing.M, Spacing.M, cells) with { Key = "browse-more-grid:" + cols };
     }
 
-    static Element BandLabel(string label) => new BoxEl
-    {
-        Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S, MinWidth = 0f,
-        Children =
-        [
-            new BoxEl
-            {
-                Width = BrowseLayout.TickW, Height = BrowseLayout.TickH, Shrink = 0f,
-                Corners = CornerRadius4.All(Spacing.XXS), Fill = Tok.AccentDefault,
-                HitTestVisible = false,
-            },
-            WaveeType.Eyebrow(label) with { MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f },
-        ],
-    };
+    // Same header grammar as the Charts Fold deck / a Featured Charts shelf — flush at FrameX, no tick+gap stepping
+    // "Top" a rung right of Music/Podcasts.
+    /// <summary>A band heading NAMES the row below it; it is not a peer of the destinations in it. It used to be
+    /// <see cref="WaveeType.ModuleHeader"/> — the exact alias <c>BrowseTiles.Name</c> set its links in, and a rung
+    /// SMALLER than the Display type <c>BrowseTiles.Word</c> used — so "Top" and "Music" read as one stack and nothing
+    /// marked which half was pressable. The eyebrow rung (Caption/600 + tracking, already secondary-coloured) demotes
+    /// the label to what it is, and the links take the plate; the two changes only work as a pair.
+    /// <para>Sentence case, NOT caps: <see cref="WaveeType.Eyebrow"/> forbids a <c>ToUpper</c> on a localized string
+    /// (Turkish dotted i, German ß) and the app is sentence-case throughout.</para></summary>
+    static Element BandLabel(string label) =>
+        WaveeType.Eyebrow(label) with { MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f };
 
     // Browse's categories as the shared tile model. A null model means the directory is inert (no navigation host
     // yet) — the cell still renders and still highlights, it just does nothing, exactly as before.
@@ -352,8 +349,7 @@ sealed class BrowseDirectory : Component
         {
             Direction = 1, MinWidth = 0f,
             Animate = WaveeEntrance.Row(index),
-            Children = [HomeModules.FoldDeck(HomeBrowseCards.ChartDeckSeed, Loc.Get(Strings.Browse.Charts), NoopSection,
-                eyebrowOf: s => HomeModules.ChartEyebrow(s.Uri))],
+            Children = [HomeModules.FoldDeck(HomeBrowseCards.ChartDeckSeed, Loc.Get(Strings.Browse.Charts), NoopSection)],
         };
 
         return Body(BrowseDirectorySeeds.Categories, null, ChartsBandAt).Skeletonized(true);

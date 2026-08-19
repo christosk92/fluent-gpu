@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Threading.Tasks;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
@@ -51,6 +52,7 @@ public sealed class SidebarProjectionBinder : ISidebarProjectionSnapshot
     readonly LibraryStore _library;
     readonly PlayLogStore? _playLog;
     readonly PlaybackBridge? _playback;
+    readonly IMusicLibrary? _catalog;
 
     // Rebuild buffers — allocated once, reused forever (the F.7.5 allocation contract).
     readonly List<SidebarLibraryEntry> _all = new(256);       // the full projection, source order (planner Library)
@@ -75,6 +77,16 @@ public sealed class SidebarProjectionBinder : ISidebarProjectionSnapshot
     readonly Func<string, bool> _isFolderExpanded;
     readonly Action _syncAction;
     readonly Action _onSourceChanged;
+    // A pin the live projection does not know (an editorial/Spotify-owned playlist, or any other entity never saved to
+    // the user's own library/rootlist) is hydrated through the SAME façade the detail page uses (Services.Library),
+    // rather than rendering a permanent blank cover + "0 songs". Keyed by pin id; populated on the UI thread once a
+    // fetch lands (see RequestPinHydration/HydratePinAsync), so ResolvePins can overlay it onto the pin's own offline
+    // display cache. _pinHydrationInFlight is "asked at least once" for the whole session: a HIT clears the pin's id
+    // (nothing left to dedupe once it is cached), but a MISS leaves the id in place — ResolvePins runs on every
+    // rebuild, so retrying a permanently-gone/unreachable pin there would hit the network once per rebuild forever.
+    readonly Dictionary<string, SidebarLibraryEntry> _pinHydration = new(StringComparer.Ordinal);
+    readonly HashSet<string> _pinHydrationInFlight = new(StringComparer.Ordinal);
+    Action<Action>? _post;
 #if DEBUG || FLUENTGPU_DIAG
     readonly Action<string> _onSourceChangedWithId;
 #endif
@@ -110,12 +122,14 @@ public sealed class SidebarProjectionBinder : ISidebarProjectionSnapshot
 #endif
 
     public SidebarProjectionBinder(SidebarPreferences prefs, LibraryStore library,
-                                  PlayLogStore? playLog = null, PlaybackBridge? playback = null)
+                                  PlayLogStore? playLog = null, PlaybackBridge? playback = null,
+                                  IMusicLibrary? catalog = null)
     {
         _prefs = prefs ?? throw new ArgumentNullException(nameof(prefs));
         _library = library ?? throw new ArgumentNullException(nameof(library));
         _playLog = playLog;
         _playback = playback;
+        _catalog = catalog;
         // Cached delegates: a rebuild must not allocate a closure per pass.
         _isFolderExpanded = prefs.IsFolderExpanded;
         _syncAction = () => Sync();
@@ -154,6 +168,7 @@ public sealed class SidebarProjectionBinder : ISidebarProjectionSnapshot
     public void Start(Action<Action> post)
     {
         ArgumentNullException.ThrowIfNull(post);
+        _post = post;
         if (_started) { Invalidate(); Sync(); return; }
         _started = true;
 
@@ -424,24 +439,117 @@ public sealed class SidebarProjectionBinder : ISidebarProjectionSnapshot
                 prefs.TouchPin(pin.Id, entry.Name);
                 continue;
             }
-            _pinRows.Add(new SidebarLibraryEntry(
-                pin.Id, KindOfPin(pin.Kind), pin.Uri, pin.Name, "", null, null,
-                ChildCount: 0, AddedAtMs: pin.AddedAtMs, SortStamp: pin.AddedAtMs, LastVisitedTicksUtc: 0,
-                SourceOrder: i, Depth: 0, Circular: pin.Kind == SidebarPinKind.Artist,
-                Flavor: SidebarPlaylistFlavor.None)
-            { IsPinned = true, FolderId = "", FolderName = "", FirstArtistName = "" });
+
+            // Not in the user's own library/rootlist projection — an editorial/Spotify-owned playlist (or any other
+            // entity never saved to the library) never appears in `_index` (it is built from LibraryStore's rootlist
+            // tree + Albums/Artists/Shows only). Render the pin's own offline display cache immediately, overlaid with
+            // whatever RequestPinHydration has already resolved through the SAME catalog façade the detail page uses —
+            // and kick a hydration request the first time we see it unresolved.
+            SidebarLibraryEntry? hydrated = _pinHydration.TryGetValue(pin.Id, out var h) ? h : null;
+            _pinRows.Add(SidebarBinderPipeline.ResolveUnlistedPin(pin, i, hydrated));
+            if (hydrated is null) RequestPinHydration(pin);
         }
     }
 
-    static SidebarEntryKind KindOfPin(SidebarPinKind kind) => kind switch
+    // Fire-and-forget, deduped per pin id: ask Services.Library (the same façade DetailPage.LoadPlaylistAsync /
+    // LoadAlbumAsync use) for cover + track count, then post the result back onto the UI thread and nudge the binder
+    // dirty through the existing source-epoch signal — the same mechanism a contributed data source uses to say
+    // "I have more now" (OnSourceChanged). No catalog wired (a headless/offline build) ⇒ the pin stays on its display
+    // cache forever, which is the previous (correct) behaviour for those builds.
+    void RequestPinHydration(SidebarPin pin)
     {
-        SidebarPinKind.Playlist => SidebarEntryKind.Playlist,
-        SidebarPinKind.Album => SidebarEntryKind.Album,
-        SidebarPinKind.Artist => SidebarEntryKind.Artist,
-        SidebarPinKind.Show => SidebarEntryKind.Show,
-        SidebarPinKind.Folder => SidebarEntryKind.Folder,
-        _ => SidebarEntryKind.AppRoute,
-    };
+        if (_catalog is null || pin.Uri.Length == 0) return;
+        if (!_pinHydrationInFlight.Add(pin.Id)) return;
+        _ = HydratePinAsync(pin.Id, pin.Uri, pin.Kind);
+    }
+
+    async Task HydratePinAsync(string id, string uri, SidebarEntryKind kind)
+    {
+        SidebarLibraryEntry? resolved = null;
+        try
+        {
+            resolved = kind switch
+            {
+                SidebarEntryKind.Playlist => await HydratePlaylistAsync(uri).ConfigureAwait(false),
+                SidebarEntryKind.Album => await HydrateAlbumAsync(uri).ConfigureAwait(false),
+                SidebarEntryKind.Show => await HydrateShowAsync(uri).ConfigureAwait(false),
+                SidebarEntryKind.Artist => await HydrateArtistAsync(uri).ConfigureAwait(false),
+                _ => null,   // AppRoute / Folder / Track — no catalog fetch backs any of these
+            };
+        }
+        catch (Exception ex)
+        {
+            WaveeLog.Instance.Event(WaveeLogLevel.Warning, "sidebar", "sidebar.pin.hydrate_failed",
+                "Hydrating an unlisted pin's art/count failed.", ex: ex, fields: [WaveeLogField.Of("pin_id", id)]);
+        }
+
+        _post?.Invoke(() =>
+        {
+            if (resolved is { } r)
+            {
+                // Success: drop the in-flight marker (nothing left to dedupe) and let the row pick up the cache entry
+                // on the next ResolvePins pass.
+                _pinHydrationInFlight.Remove(id);
+                _pinHydration[id] = r;
+                OnSourceChanged();   // marks dirty + bumps _sourceEpoch, exactly like a contributed source's Changed.
+            }
+            // A miss (not found / no cover / a transport failure) DELIBERATELY stays in _pinHydrationInFlight rather
+            // than being retried next rebuild: ResolvePins runs on EVERY rebuild (a keystroke in search, a sort change,
+            // an unrelated pin mutation), and a pin pointing at a permanently-gone/unreachable entity would otherwise
+            // hit the network once per rebuild for the rest of the session. One attempt per pin per session is enough
+            // — the row still renders from its own offline display cache either way, and a restart (or the pin
+            // resolving into the library some other way) clears this set.
+        });
+    }
+
+    async Task<SidebarLibraryEntry?> HydratePlaylistAsync(string uri)
+    {
+        var p = await _catalog!.GetPlaylistAsync(uri, HydrationLevel.Open).ConfigureAwait(false);
+        if (p is null || (p.Cover is null && p.TrackCount == 0)) return null;
+        return Hydrated(SidebarEntryKind.Playlist, p.Cover, p.TrackCount, p.OwnerName);
+    }
+
+    async Task<SidebarLibraryEntry?> HydrateAlbumAsync(string uri)
+    {
+        var a = await _catalog!.GetAlbumAsync(uri, HydrationLevel.Open).ConfigureAwait(false);
+        if (a is null || (a.Cover is null && a.TrackCount == 0)) return null;
+        return Hydrated(SidebarEntryKind.Album, a.Cover, a.TrackCount, JoinArtistNames(a.Artists));
+    }
+
+    async Task<SidebarLibraryEntry?> HydrateShowAsync(string uri)
+    {
+        var s = await _catalog!.GetShowAsync(uri, HydrationLevel.Open).ConfigureAwait(false);
+        if (s is null || s.Cover is null) return null;
+        return Hydrated(SidebarEntryKind.Show, s.Cover, 0, s.Publisher);
+    }
+
+    async Task<SidebarLibraryEntry?> HydrateArtistAsync(string uri)
+    {
+        var a = await _catalog!.GetArtistAsync(uri, HydrationLevel.Open).ConfigureAwait(false);
+        if (a is null || a.Image is null) return null;
+        return Hydrated(SidebarEntryKind.Artist, a.Image, 0, "");
+    }
+
+    // A minimal carrier for the fields ResolveUnlistedPin overlays (Cover/ChildCount/Creator) — everything else on this
+    // instance is unused by the merge and never reaches a row.
+    static SidebarLibraryEntry Hydrated(SidebarEntryKind kind, Image? cover, int childCount, string creator) =>
+        new("", kind, "", "", creator, cover, null, ChildCount: childCount, AddedAtMs: 0, SortStamp: 0,
+            LastVisitedTicksUtc: 0, SourceOrder: 0, Depth: 0, Circular: false, Flavor: SidebarPlaylistFlavor.None);
+
+    static string JoinArtistNames(IReadOnlyList<ArtistRef> artists)
+    {
+        if (artists.Count == 0) return "";
+        if (artists.Count == 1) return artists[0].Name;
+        var sb = new StringBuilder(64);
+        int n = Math.Min(artists.Count, 3);
+        for (int i = 0; i < n; i++)
+        {
+            if (i > 0) sb.Append(", ");
+            sb.Append(artists[i].Name);
+        }
+        if (artists.Count > n) sb.Append('…');
+        return sb.ToString();
+    }
 
     // RecentContexts allocates (a list + a dedupe set), so it is recomputed only when the log actually moved. This is also
     // the ONE place PlayLogStore's vocabulary is translated into the engine-free row shape the mappers work on.

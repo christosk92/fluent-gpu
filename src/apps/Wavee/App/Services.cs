@@ -331,7 +331,7 @@ public sealed class Services
         // WaveeExtensionRegistry.Build(ActionServices) from the shell — it needs the service bag the shell owns — and this
         // table is published into that registry by RegisterSidebarSources below. The sidebar never waits for it: its own
         // host resolves the first-party table directly, and consults the registry only for contributed (third-party) ids.
-        SidebarBinder = new SidebarProjectionBinder(Sidebar, LibraryStore, PlayLog, Playback);
+        SidebarBinder = new SidebarProjectionBinder(Sidebar, LibraryStore, PlayLog, Playback, library);
         SidebarSources = WaveeBuiltInDataSources.RegisterAll(registrar: null, SidebarBinder, library,
             WhatsNew, Concerts, Playback);
         SidebarBinder.UseHost(new WaveeBuiltInDataSources.ContributionHost(SidebarSources), SidebarSources);

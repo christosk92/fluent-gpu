@@ -24,7 +24,10 @@ sealed class SearchHero : Component
     {
         var model = UseContext(SearchAllList.Props);
         var lib = UseContext(LibraryBridge.Slot);
+        var goOrigin = UseContext(HistoryStore.GoWithOrigin);
+        string q = (UseContext(SearchQuery.Slot)?.Peek() ?? "").Trim();
         if (model is null) return new BoxEl();
+        var origin = q.Length == 0 ? (NavOrigin?)null : new NavOrigin(q, "search", q);
 
         var h = _hit;
         string? url = h.Image?.Url;
@@ -40,7 +43,7 @@ sealed class SearchHero : Component
         bool canOpen = h.Kind is SearchHitKind.Artist or SearchHitKind.Album or SearchHitKind.Playlist
             or SearchHitKind.Podcast or SearchHitKind.Audiobook or SearchHitKind.Genre or SearchHitKind.Episode;
         Action play = isTrack ? () => model.PlayTrack(h.Uri) : () => model.PlayContext(h.Uri);
-        Action open = isTrack ? play : SearchAllList.OpenFor(model, h.Kind, h.Uri, h.Name);
+        Action open = isTrack ? play : SearchAllList.OpenFor(model, h.Kind, h.Uri, h.Name, origin, goOrigin);
 
         Element? trailing =
             h.Followable ? Embed.Comp(() => new FollowButton(h.Uri, h.Name)) with { Key = "follow:" + h.Uri }

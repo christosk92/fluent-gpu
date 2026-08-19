@@ -57,12 +57,19 @@ public sealed class SidebarLayoutDocDto
     [JsonExtensionData] public Dictionary<string, JsonElement>? Extra { get; set; }
 }
 
-/// <summary>One shared pin. <c>Kind</c> is the <c>SidebarPinKind</c> byte as an int — deliberately NOT a string: the pin
-/// kinds are a closed, append-only set owned by the pin-id scheme, and the mapping lives in the pin store, not here.</summary>
+/// <summary>One shared pin. <c>Kind</c> is the LEGACY form — the pre-unification <c>SidebarPinKind</c> byte as an int,
+/// frozen forever in <see cref="SidebarLayoutWire.TryLegacyPinKind"/> — kept on WRITE so a build that predates the
+/// <c>SidebarPinKind</c>/<c>SidebarEntryKind</c> unification (2026-08-19) does not lose the pin on downgrade.
+/// <see cref="EntityKind"/> is the PREFERRED string form and is read first; <c>Kind</c> is only consulted when
+/// <see cref="EntityKind"/> is absent (every profile written before this change). Both are written on every save —
+/// the sidebar wire's preserve-don't-destroy rule for an additive field.</summary>
 public sealed class SidebarPinDto
 {
     public string? Id { get; set; }                          // REQUIRED — the stable pin id (F.5.4)
-    public int Kind { get; set; }
+    public int Kind { get; set; }                             // LEGACY — see SidebarLayoutWire.TryLegacyPinKind
+    public string? EntityKind { get; set; }                   // "playlist" | "album" | "artist" | "show" |
+                                                               // "playlistFolder" | "appRoute" | "track" — see
+                                                               // SidebarLayoutWire.PinKindName / TryParsePinKind
     public string? Uri { get; set; }
     public string? Name { get; set; }
     public long AddedAtMs { get; set; }
@@ -347,6 +354,86 @@ public static class SidebarLayoutWire
         "playlistFolder" => SidebarEntityKind.PlaylistFolder,
         "track" => SidebarEntityKind.Track,
         _ => SidebarEntityKind.None,
+    };
+
+    // ── pin kind (SidebarPin.Kind, a SidebarEntryKind — F.5.4, folded from the deleted SidebarPinKind 2026-08-19) ──────
+    //
+    // NOT the same enum as SidebarEntityKind above (that one is a curated section ITEM's target-kind restriction and is
+    // untouched by this unification) — but the two are close enough in meaning that the wire reuses the same lower-camel
+    // spellings for the five kinds they share ("playlist"/"album"/"artist"/"show"/"playlistFolder"), plus "appRoute" for
+    // the bare-route family only a PIN (never a section item) can address, and "track" purely for degrade-explicitly
+    // symmetry (see IsPinnable — writing it is unreachable).
+
+    /// <summary>The preferred WIRE STRING for <see cref="SidebarPinDto.EntityKind"/>. Every <see cref="SidebarEntryKind"/>
+    /// member has an explicit arm here, even <see cref="SidebarEntryKind.Track"/> (never actually written —
+    /// <c>SidebarPinId.IsPinnable</c> refuses a track pin at creation): a future member LEFT OFF this switch falls
+    /// through to the same default as an unknown prefix, but that miss is still caught — its round trip through
+    /// <see cref="TryParsePinKind"/> back to a string would come back as <c>"appRoute"</c>, not its own name, which is
+    /// exactly what the exhaustiveness test asserts on.</summary>
+    public static string PinKindName(SidebarEntryKind k) => k switch
+    {
+        SidebarEntryKind.Playlist => "playlist",
+        SidebarEntryKind.Album => "album",
+        SidebarEntryKind.Artist => "artist",
+        SidebarEntryKind.Show => "show",
+        SidebarEntryKind.Folder => "playlistFolder",
+        SidebarEntryKind.Track => "track",
+        _ => "appRoute",   // AppRoute — no known-prefix pin id, matching SidebarPinId.KindOf's own default
+    };
+
+    /// <summary>Parse <see cref="SidebarPinDto.EntityKind"/>. False for an unrecognized string — the caller's job is to
+    /// preserve-or-drop (there is no in-place default here to hide a future kind behind).</summary>
+    public static bool TryParsePinKind(string? s, out SidebarEntryKind kind)
+    {
+        switch (s)
+        {
+            case "playlist": kind = SidebarEntryKind.Playlist; return true;
+            case "album": kind = SidebarEntryKind.Album; return true;
+            case "artist": kind = SidebarEntryKind.Artist; return true;
+            case "show": kind = SidebarEntryKind.Show; return true;
+            case "playlistFolder": kind = SidebarEntryKind.Folder; return true;
+            case "appRoute": kind = SidebarEntryKind.AppRoute; return true;
+            case "track": kind = SidebarEntryKind.Track; return true;
+            default: kind = default; return false;
+        }
+    }
+
+    /// <summary>FROZEN LEGACY TABLE. The exact byte numbering of the deleted <c>SidebarPinKind</c> enum
+    /// (<c>Route=0, Playlist=1, Album=2, Artist=3, Show=4, Folder=5</c>) — the ONLY place that numbering may still
+    /// exist in the tree. Never edit these values: their sole job is decoding a <see cref="SidebarPinDto.Kind"/> int
+    /// written by a build that predates the SidebarPinKind/SidebarEntryKind unification.</summary>
+    static readonly SidebarEntryKind[] LegacyPinKindTable =
+    [
+        SidebarEntryKind.AppRoute,   // 0 = the old SidebarPinKind.Route
+        SidebarEntryKind.Playlist,   // 1
+        SidebarEntryKind.Album,      // 2
+        SidebarEntryKind.Artist,     // 3
+        SidebarEntryKind.Show,       // 4
+        SidebarEntryKind.Folder,     // 5
+    ];
+
+    /// <summary>Decode a legacy <see cref="SidebarPinDto.Kind"/> int. False for a value outside 0..5 — the caller's job
+    /// is to preserve-or-drop, exactly like <see cref="TryParsePinKind"/>.</summary>
+    public static bool TryLegacyPinKind(int legacy, out SidebarEntryKind kind)
+    {
+        if ((uint)legacy < (uint)LegacyPinKindTable.Length) { kind = LegacyPinKindTable[legacy]; return true; }
+        kind = default;
+        return false;
+    }
+
+    /// <summary>The inverse of <see cref="LegacyPinKindTable"/> — written alongside <see cref="PinKindName"/> so a
+    /// downgraded build (which only reads the legacy int) still sees the pin. There is no legacy slot for
+    /// <see cref="SidebarEntryKind.Track"/> (a track could never have been pinned under the old scheme either); it
+    /// writes the old Route slot only because some int must be written, never because a track pin can exist to reach
+    /// this arm.</summary>
+    public static int LegacyPinKindInt(SidebarEntryKind kind) => kind switch
+    {
+        SidebarEntryKind.Playlist => 1,
+        SidebarEntryKind.Album => 2,
+        SidebarEntryKind.Artist => 3,
+        SidebarEntryKind.Show => 4,
+        SidebarEntryKind.Folder => 5,
+        _ => 0,   // AppRoute, and the unreachable Track
     };
 
     // ── display / query scalars ───────────────────────────────────────────────────────────────────────────────────────

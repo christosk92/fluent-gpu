@@ -13,6 +13,7 @@ using FluentGpu.Scene;
 using FluentGpu.Signals;
 using Wavee.Core;
 using Wavee.Core.Home;
+using Wavee.Features.Browse;
 using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
@@ -270,15 +271,14 @@ sealed class HomePage : Component
             with { Key = "home-concerts-editorial" };
 
         // The Browse destination, in the SAME editorial voice as the concert card directly above it — two calm
-        // full-width destinations closing the feed, rather than one and an abrupt end. Routes to Search's empty state,
-        // which IS the browse directory.
+        // full-width destinations closing the feed, rather than one and an abrupt end.
         Element browse = ConcertUi.WideEditorialDestination(
             artwork: null,
             eyebrow: Loc.Get(Strings.Browse.Eyebrow),
             title: Loc.Get(Strings.Browse.HomeTitle),
             subtitle: Loc.Get(Strings.Browse.HomeSubtitle),
             actionLabel: Loc.Get(Strings.Browse.ExploreAll),
-            onClick: () => go("search", null))
+            onClick: () => go(BrowseRoutes.Home, null))
             with { Key = "home-browse-editorial" };
 
         // Both destinations ride the final virtual row together, so the tail mounts once.
@@ -477,8 +477,7 @@ sealed class HomePage : Component
                     return Skel.Region(
                         charts.Loadable,
                         content: list => HomeModules.FoldDeck(list, Loc.Get(Strings.Home.Charts), OpenBrowseSection,
-                            openHeader: () => go(Wavee.Features.Browse.BrowseRoutes.Page(Wavee.Features.Browse.ChartPages.Charts), Loc.Get(Strings.Home.Charts)),
-                            eyebrowOf: s => HomeModules.ChartEyebrow(s.Uri)),
+                            openHeader: () => go(Wavee.Features.Browse.BrowseRoutes.Page(Wavee.Features.Browse.ChartPages.Charts), Loc.Get(Strings.Home.Charts))),
                         isEmpty: list => list.Count == 0,
                         onEmpty: () => EmptyState.Compact(Loc.Get(Strings.Home.ChartsEmpty)),
                         onFailed: () => ErrorState.Build(charts.Loadable.Error, onRetry: charts.Refresh),

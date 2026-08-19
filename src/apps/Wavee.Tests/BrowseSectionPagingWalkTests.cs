@@ -22,6 +22,8 @@ public class BrowseSectionPagingWalkTests
     {
         readonly IReadOnlyDictionary<int, BrowseSection?> _pagesByOffset;
         public readonly List<int> RequestedOffsets = new();
+        public int? HoldOffset;
+        public TaskCompletionSource<BrowseSection?>? Hold;
 
         public FakeBrowseService(IReadOnlyDictionary<int, BrowseSection?> pagesByOffset) => _pagesByOffset = pagesByOffset;
 
@@ -34,6 +36,8 @@ public class BrowseSectionPagingWalkTests
         public Task<BrowseSection?> GetSectionAsync(string sectionUri, int offset, CancellationToken ct = default)
         {
             RequestedOffsets.Add(offset);
+            if (Hold is not null && offset == HoldOffset)
+                return Hold.Task;
             return Task.FromResult(_pagesByOffset.TryGetValue(offset, out var page) ? page : null);
         }
     }
@@ -41,30 +45,35 @@ public class BrowseSectionPagingWalkTests
     static BrowseCard[] Cards(int start, int count) =>
         Enumerable.Range(start, count).Select(i => new BrowseCard("spotify:playlist:p" + i, "Track " + i, null, null)).ToArray();
 
-    sealed record WalkResult(IReadOnlyList<BrowseCard> Cards, bool Exhausted);
+    sealed record WalkResult(IReadOnlyList<HomeCard> Cards, bool Exhausted);
 
-    // Replicates HomeSectionPage.LoadInitialAsync + the LoadMoreAsync loop: fetch at the current offset, fold new
-    // (by-uri, ordinal) cards in, resolve the next cursor via BrowseSectionNextOffset, and stop on any of the three
-    // terminators production uses — no cursor, a cursor that cannot advance (CanAdvance), or a page that made no
-    // progress (every item already seen).
-    static async Task<WalkResult> WalkAsync(IBrowseService svc, string sectionUri)
+    // Production fold: HomeSectionPage.WalkChartsAsync / BrowseSectionWalk.Begin + Fold.
+    static async Task<WalkResult> WalkAsync(IBrowseService svc, string sectionUri, HomeSection? seed = null,
+                                           Action<IReadOnlyList<HomeCard>>? onPublished = null)
     {
-        var cards = new List<BrowseCard>();
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        int offset = 0;
+        var start = BrowseSectionWalk.Begin(seed);
+        HomeSection current;
+        int offset;
+        if (start.FetchFirst)
+        {
+            current = new HomeSection(sectionUri, "Weekly", null, Array.Empty<HomeCard>(), 0, 0);
+            offset = 0;
+        }
+        else
+        {
+            current = start.Current!;
+            offset = start.Offset;
+            if (start.Publish) onPublished?.Invoke(current.Cards);
+            if (start.Exhausted) return new WalkResult(current.Cards, true);
+        }
         while (true)
         {
             var page = await svc.GetSectionAsync(sectionUri, offset);
-            if (page is null || page.Cards.Count == 0) return new WalkResult(cards, true);
-
-            int before = cards.Count;
-            foreach (var c in page.Cards) if (seen.Add(c.Uri)) cards.Add(c);
-            bool progressed = cards.Count > before;
-
-            int? next = HomeSectionPaging.BrowseSectionNextOffset(offset, page);
-            bool advances = HomeSectionPaging.CanAdvance(offset, next) && progressed;
-            if (!advances) return new WalkResult(cards, true);
-            offset = next!.Value;
+            if (page is null || page.Cards.Count == 0) return new WalkResult(current.Cards, true);
+            var step = BrowseSectionWalk.Fold(current, offset, page);
+            current = step.Section;
+            if (step.Exhausted) return new WalkResult(current.Cards, true);
+            offset = step.NextOffset!.Value;
         }
     }
 
@@ -89,6 +98,141 @@ public class BrowseSectionPagingWalkTests
         // …and every card exactly once: a page boundary that double-counted would show up here as duplicates.
         Assert.Equal(74, result.Cards.Select(c => c.Uri).Distinct().Count());
     }
+
+    [Fact]
+    public async Task Walk_FromASeededFirstPage_AsksOffset20AndReaches74()
+    {
+        var pages = WeeklyPages();
+        var svc = new FakeBrowseService(pages);
+        var seed = HomeBrowseCards.Section(pages[0]!, null);
+
+        var result = await WalkAsync(svc, "spotify:section:weekly", seed);
+
+        Assert.Equal(74, result.Cards.Count);
+        Assert.True(result.Exhausted);
+        Assert.Equal(new[] { 20, 40, 60 }, svc.RequestedOffsets);
+    }
+
+    [Fact]
+    public void Begin_WeeklySeedWithCards_PublishesSeedAndAsksOffset20()
+    {
+        var seed = HomeBrowseCards.Section(WeeklyPages()[0]!, null);
+        var start = BrowseSectionWalk.Begin(seed);
+        Assert.True(start.Publish);
+        Assert.False(start.FetchFirst);
+        Assert.False(start.Exhausted);
+        Assert.Equal(20, start.Offset);
+        Assert.Equal(20, start.Current!.Cards.Count);
+    }
+
+    [Fact]
+    public void Begin_EmptyHasMoreSeed_FetchesOffset0AndDoesNotPublish()
+    {
+        var seed = new HomeSection("spotify:section:weekly", "Weekly Song Charts", null, Array.Empty<HomeCard>(), 74, 0);
+        var start = BrowseSectionWalk.Begin(seed);
+        Assert.False(start.Publish);
+        Assert.True(start.FetchFirst);
+        Assert.Equal(0, start.Offset);
+        Assert.Null(start.Current);
+    }
+
+    [Fact]
+    public void Begin_CompleteFeaturedSeed_PublishesAndAsksOffset4()
+    {
+        // A non-empty seed is never complete in Begin — HomeSection dropped the browse cursor. Featured still
+        // publishes the 4 cards, then the walk asks offset 4 once and Fold / empty / PagingComplete stop it.
+        var cards = Cards(0, 4).Select(c => HomeBrowseCards.Card(c)).ToArray();
+        var seed = new HomeSection("spotify:section:featured", "Featured Charts", null, cards, 4, 4);
+        var start = BrowseSectionWalk.Begin(seed);
+        Assert.True(start.Publish);
+        Assert.False(start.Exhausted);
+        Assert.False(start.FetchFirst);
+        Assert.Equal(4, start.Offset);
+        Assert.Equal(4, start.Current!.Cards.Count);
+    }
+
+    [Fact]
+    public async Task Walk_FromAFeaturedSeed_AsksOffset4OnceAndStops()
+    {
+        var seedCards = Cards(0, 4).Select(c => HomeBrowseCards.Card(c)).ToArray();
+        var seed = new HomeSection("spotify:section:featured", "Featured Charts", null, seedCards, 4, 4);
+        var svc = new FakeBrowseService(new Dictionary<int, BrowseSection?>
+        {
+            [4] = new("spotify:section:featured", "Featured Charts", BrowseSectionKind.Shelf, [], [], 4,
+                BrowseSection.PagingComplete),
+        });
+
+        var result = await WalkAsync(svc, "spotify:section:featured", seed);
+
+        Assert.Equal(4, result.Cards.Count);
+        Assert.True(result.Exhausted);
+        Assert.Equal(new[] { 4 }, svc.RequestedOffsets);
+    }
+
+    [Fact]
+    public void Begin_UnderReportedTotal_StillAsksOffset20()
+    {
+        // Live offset-0 often looks like 20 of 20 once HomeBrowseCards.Section drops nextOffset. HasMore(seed)
+        // is then false; Begin must still ask offset 20 or Weekly freezes at El Salvador.
+        var seed = new HomeSection("spotify:section:weekly", "Weekly Song Charts", null,
+            Cards(0, 20).Select(c => HomeBrowseCards.Card(c)).ToArray(), 20, 20);
+        var start = BrowseSectionWalk.Begin(seed);
+        Assert.True(start.Publish);
+        Assert.False(start.Exhausted);
+        Assert.False(start.FetchFirst);
+        Assert.Equal(20, start.Offset);
+        Assert.Equal(20, start.Current!.Cards.Count);
+    }
+
+    [Fact]
+    public async Task Walk_FromASeededFirstPage_UnderReportedTotal_AsksOffset20AndReaches74()
+    {
+        var pages = WeeklyPages();
+        var svc = new FakeBrowseService(pages);
+        var seed = new HomeSection(pages[0]!.Uri, pages[0]!.Title, null,
+            pages[0]!.Cards.Select(c => HomeBrowseCards.Card(c)).ToArray(), 20, 20);
+
+        var result = await WalkAsync(svc, "spotify:section:weekly", seed);
+
+        Assert.Equal(74, result.Cards.Count);
+        Assert.True(result.Exhausted);
+        Assert.Equal(new[] { 20, 40, 60 }, svc.RequestedOffsets);
+    }
+
+    // THE UI handoff: offset 20 is in-flight, the published section must already be the 20 seed cards. WalkChartsAsync
+    // used to skip SetReady(seed) on this path, so Weekly Song Charts stayed blank until (or unless) page 2 landed.
+    [Fact]
+    public async Task Walk_FromASeededFirstPage_PublishesSeedBeforeOffset20Returns()
+    {
+        var pages = WeeklyPages();
+        var svc = new FakeBrowseService(pages)
+        {
+            HoldOffset = 20,
+            Hold = new TaskCompletionSource<BrowseSection?>(TaskCreationOptions.RunContinuationsAsynchronously),
+        };
+        var seed = HomeBrowseCards.Section(pages[0]!, null);
+        IReadOnlyList<HomeCard>? published = null;
+        var walk = WalkAsync(svc, "spotify:section:weekly", seed, cards => published = cards);
+
+        // Begin publishes synchronously, then the walk awaits offset 20 — the seed must already be the visible section.
+        Assert.NotNull(published);
+        Assert.Equal(20, published.Count);
+        Assert.Equal(new[] { 20 }, svc.RequestedOffsets);
+
+        svc.Hold!.SetResult(pages[20]);
+        // Remaining pages (40, 60) are immediate so the walk can finish.
+        var result = await walk;
+        Assert.Equal(74, result.Cards.Count);
+        Assert.True(result.Exhausted);
+    }
+
+    static Dictionary<int, BrowseSection?> WeeklyPages() => new()
+    {
+        [0] = new("spotify:section:weekly", "Weekly Song Charts", BrowseSectionKind.Shelf, Cards(0, 20), [], 74, 20),
+        [20] = new("spotify:section:weekly", "Weekly Song Charts", BrowseSectionKind.Shelf, Cards(20, 20), [], 74, 40),
+        [40] = new("spotify:section:weekly", "Weekly Song Charts", BrowseSectionKind.Shelf, Cards(40, 20), [], 74, 60),
+        [60] = new("spotify:section:weekly", "Weekly Song Charts", BrowseSectionKind.Shelf, Cards(60, 14), [], 74, BrowseSection.PagingComplete),
+    };
 
     // Pathological terminator #1: a "complete" answer of nextOffset: 0 must not be honoured as a cursor (0 is not
     // > the requested offset), even on the very first page — CanAdvance(0, 0) is false, so the walk stops after one
@@ -144,5 +288,39 @@ public class BrowseSectionPagingWalkTests
         Assert.Equal(20, result.Cards.Count);
         Assert.True(result.Exhausted);
         Assert.Single(svc.RequestedOffsets);
+    }
+
+    // ── The walk's PROGRESS reading ──────────────────────────────────────────────────────────────────────────────
+    // Same premise as Begin's: totalCount under-reports, and HomeBrowseCards.Section floors it at the card count. So a
+    // total that does not EXCEED what we hold must never read as a finished walk — that is what painted a full bar on
+    // the 20-card Weekly seed while offsets 20/40/60 were still to come.
+    [Fact]
+    public void WalkFraction_UntrustworthyTotal_IsNeverComplete()
+    {
+        var seed = new HomeSection("spotify:section:weekly", "Weekly", null,
+            Cards(0, 20).Select(c => HomeBrowseCards.Card(c)).ToArray(), 20, 20);
+
+        float frac = HomeSectionPaging.WalkFraction(seed, 20);
+
+        Assert.True(frac < 1f, "an under-reported total must not report a finished walk");
+        Assert.Equal(0.5f, frac, 3);                         // 20 held / (20 + one assumed page)
+    }
+
+    [Fact]
+    public void WalkFraction_TrustworthyTotal_IsTheRealRatio()
+    {
+        var mid = new HomeSection("spotify:section:weekly", "Weekly", null,
+            Cards(0, 40).Select(c => HomeBrowseCards.Card(c)).ToArray(), 74, 40);
+
+        Assert.Equal(40f / 74f, HomeSectionPaging.WalkFraction(mid, 20), 3);
+    }
+
+    // A section with nothing in it yet reads 0, not NaN — the bar mounts before the first page lands.
+    [Fact]
+    public void WalkFraction_EmptySection_IsZero()
+    {
+        var empty = new HomeSection("spotify:section:weekly", "Weekly", null, Array.Empty<HomeCard>(), 0, 0);
+
+        Assert.Equal(0f, HomeSectionPaging.WalkFraction(empty, 20));
     }
 }

@@ -30,14 +30,32 @@ sealed class HomeSectionPage : Component
     /// <summary>How far down the grid the wash may look for a card that can vouch for a colour. The wash is the TOP of
     /// the page, not a search over a fully-paged section — the same bound, for the same reason, as RecentsPage's.</summary>
     const int WashScan = 32;
+    /// <summary>The Charts filter field: WinUI's compact search width, not a full-bleed run. 32 DIP is the shared
+    /// toolbar rung Library's own filter sits on.</summary>
+    const float FilterBoxWidth = 300f;
+    const float FilterBoxHeight = 32f;
+    /// <summary>The walk indicator. <c>WalkBarTrackH</c> = WinUI's ProgressBarMinHeight, reserved on the permanent slot
+    /// so the row's height does not move when the bar appears.</summary>
+    const float WalkBarWidth = 160f;
+    const float WalkBarTrackH = 3f;
+    /// <summary>What an unknown remaining count is worth to the progress fraction: one more browse page. Charts exists
+    /// because <c>totalCount</c> under-reports, so a total at or below what we already hold must never read as done.
+    /// </summary>
+    const int WalkPageAssumed = 20;
+    /// <summary>A hard stop on the eager Charts walk. The endpoint's terminators are the real end (Fold /
+    /// PagingComplete / an empty page); this is the backstop for a cursor that advances forever, so a bad section
+    /// cannot pin a request loop for the life of the process.</summary>
+    const int WalkMaxRequests = 40;
+    /// <summary>Charts titles wrap to two lines — enough for every "Top Songs - <em>country</em>" name, and paid for
+    /// almost entirely by the metadata rung these cards do not render (see
+    /// <c>HomeModuleLayout.GridCardChromeFor</c>, which derives the cell reserve from this same number).</summary>
+    const int ChartsTitleLines = 2;
+    static readonly string[] NoSuggest = [];
 
     readonly Route _route;
     /// <summary>Identity for race-free last-writer-wins on <see cref="ShellMaterial"/> (see <c>ShellMaterialState</c>):
     /// a page clears the material only while it is still the owner.</summary>
     readonly object _washOwner = new();
-    /// <summary>Identity for race-free last-writer-wins on <see cref="ShellMasthead"/> (see <c>ShellMastheadState</c>)
-    /// — the same owner-token contract as <see cref="_washOwner"/>, one channel over.</summary>
-    readonly object _mastheadOwner = new();
     public HomeSectionPage(Route route) => _route = route;
 
     public override Element Render()
@@ -65,10 +83,22 @@ sealed class HomeSectionPage : Component
         // server would turn a stale route into a hard ErrorState for a section Home was quite happily rendering. Fall
         // through to the page's ordinary empty state instead, and never issue the request.
         bool expired = seeded is null && HomeSectionRoutes.IsLocal(sectionUri);
-        var placeholder = seeded ?? (expired
-            ? new HomeSection(null, _route.Arg, null, Array.Empty<HomeCard>(), 0, 0)
-            : new HomeSection(sectionUri, _route.Arg ?? " ", null, BlankCards(), 8, 8));
-        var section = UseLoadable(seeded is null && !expired
+        // The ROUTE's uri only — never the seed's. WalkChartsAsync pages `sectionUri`, so accepting a seed whose uri
+        // is a chart id while the route's is not would fold page 2 of one section onto page 1 of another: exactly the
+        // silent cross-wiring the prefix split in the class doc-comment exists to make impossible. The taxonomy uri is
+        // stamped on the deck by HomeBrowseCards.LoadChartDeckAsync, so a mapper variant cannot miss Contains here.
+        bool charts = browse && ChartSections.Contains(sectionUri);
+        // Charts-only: an empty HasMore seed must not start Ready (that latches EmptyState while WalkChartsAsync
+        // fetches page 0). Non-charts keep the old Ready(seed) path — their mount effect skips LoadInitial when a
+        // seed exists, so flipping them to Pending would stick on a skeleton forever.
+        var start = BrowseSectionWalk.Begin(seeded);
+        bool seedPaints = seeded is not null && (!charts || start.Publish);
+        var placeholder = seedPaints
+            ? seeded!
+            : (expired
+                ? new HomeSection(null, _route.Arg, null, Array.Empty<HomeCard>(), 0, 0)
+                : new HomeSection(sectionUri, _route.Arg ?? " ", null, BlankCards(), 8, 8));
+        var section = UseLoadable(!seedPaints && !expired
             ? Loadable<HomeSection>.Pending(placeholder)
             : Loadable<HomeSection>.Ready(placeholder));
         // T12 (refinement A, verbatim): "since we know the group title we will navigate to, just load it
@@ -91,10 +121,31 @@ sealed class HomeSectionPage : Component
         // first page shorter than the viewport still fills the screen once; dropped after every append (LoadMoreAsync)
         // so only a fresh scroll-geometry event continues the chain.
         var nearTail = UseSignal(true);
+        var walking = UseSignal(false);
+        var walkFrac = UseFloatSignal(0f);
+        var filter = UseSignal("");
+
+        // The eager Charts walk is the one read here that keeps issuing requests after the first answer, so it is the
+        // one that needs a leash: UseSignalEffect takes no cleanup, so the token lives in a ref and UNMOUNT cancels it
+        // below. Without this a drill-away mid-walk keeps fetching and posting into a page that is gone (or parked).
+        var walkCts = UseRef<CancellationTokenSource?>(null);
+        UseEffect(() => (Action?)(() =>
+        {
+            if (walkCts.Value is { } c) { c.Cancel(); c.Dispose(); walkCts.Value = null; }
+        }), DepKey.Empty);
 
         Context.UseSignalEffect(() =>
         {
             if (expired || svc is null || sectionUri.Length == 0) return;
+            if (charts)
+            {
+                walking.Value = true;
+                var cts = new CancellationTokenSource();
+                walkCts.Value = cts;
+                _ = WalkChartsAsync(svc, sectionUri, _route.Arg, seeded, section, cursor, exhausted, walking, walkFrac,
+                                    post, cts.Token);
+                return;
+            }
             // A Fold-tile drill stashes the first page in the preview store, so LoadInitial is skipped. Arm the
             // paging cursor from that seed (Total vs raw count) or a 74-item Weekly section would show ten cards
             // with no way to get the rest.
@@ -158,12 +209,8 @@ sealed class HomeSectionPage : Component
 
         // The near-tail scroll-geometry watch for the grid below: fed straight from the SELF-SCROLLING Virtual.Custom
         // viewport (there is no page-level ScrollView here to observe instead — see the `nearTail` field doc comment).
-        // ConcertHubPage's exact quantization: the 24px-floored offset + a content-height term, so the check re-fires
-        // on append growth (an append pushes the tail away → nearness recomputes false until the user scrolls again).
         (Func<FluentGpu.Animation.ScrollGeometry, long> Project, Action<FluentGpu.Animation.ScrollGeometry> Action) GridScrollWatch()
-            => (
-                static g => ((long)(g.OffsetY / 24f) << 20) ^ (long)(g.ContentH / 48f),
-                g => nearTail.Value = g.OffsetY + g.ViewportH >= g.ContentH - 1.5f * g.ViewportH);
+            => HomeSectionAppendPreloader.NearTailWatch(nearTail);
 
         // T12: the grid-only body — GridBody used to be Body's inner list slot; the masthead is no longer a
         // sibling rendered in this tree at all (G2c-B: it is a PUBLICATION now — see the leg below). Recents' list
@@ -174,22 +221,40 @@ sealed class HomeSectionPage : Component
         // while the page box still fills the pane (empty mica down to the player).
         Element GridBody(HomeSection current)
         {
-            // Same arming rule the published masthead's own "Show all" tools triple uses (`canLoadMore` below) —
-            // the preloader is just a second, silent trigger for the identical LoadMore call, so it must never be
-            // armed when the manual affordance is not.
-            bool canAutoPage = CanPage(current) && !exhausted.Value && HomeSectionPaging.HasMore(current, cursor.Value);
+            bool canAutoPage = !charts && CanPage(current) && !exhausted.Value && HomeSectionPaging.HasMore(current, cursor.Value);
             return new BoxEl
             {
                 Direction = 1, Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f,
                 Children =
                 [
-                    // grow:1 is LOAD-BEARING. ResponsiveBox defaults grow to 0, which in this COLUMN sizes it to
-                    // content. The grid must inherit the slot height above, not hug a zero-height viewport.
-                    Responsive.Of(width => HomeModules.SectionGrid(current.Cards, current.Uri, width, Open, svc, acts, overlay,
-                        onScrollGeometryChanged: GridScrollWatch()), fallback: HomeModuleLayout.FallbackWidth, grow: 1f),
-                    // The infinite-scroll trigger (no visual footprint — see HomeSectionAppendPreloader's own doc
-                    // comment for why). Keyed on the CURSOR so a successful append remounts it with a fresh retry
-                    // budget for the next page, mirroring ConcertAppendPreloader's per-page remount.
+                    // grow:1 is LOAD-BEARING (same slot as BrowsePage.FlattenBody): ResponsiveBox defaults grow to 0,
+                    // which in this COLUMN sizes it to content. The virtual grid's natural height is 0, so without
+                    // inherit-the-slot the viewport realizes 0 rows and the pane is empty mica under the masthead.
+                    //
+                    // The card list is derived INSIDE this closure, off SIGNALS, and that placement is load-bearing.
+                    // Responsive.Of FREEZES its build closure: ResponsiveBox takes it as a constructor argument, so
+                    // Embed.Comp runs the factory once and a parent re-render reuses the propless component WITHOUT
+                    // re-running it (the reconciler's "the component is AUTONOMOUS" reuse path — SelectionCommandBar
+                    // carries the same scar). A list computed in GridBody's own scope therefore paints ONCE and never
+                    // changes again: the Charts filter did nothing at all, and an appended page only ever appeared
+                    // because an unrelated unkeyed child-index shift happened to remount the grid. Reading the section
+                    // and the filter in HERE subscribes ResponsiveBox itself, so it re-renders on its own — the
+                    // component-props-contract rule (data reaches a frozen child through a Signal that child reads).
+                    Responsive.Of(width =>
+                    {
+                        var live = section.Value.Value;                    // subscribe: a landed/appended page repaints
+                        string lq = charts ? filter.Value.Trim() : "";     // subscribe: a keystroke repaints
+                        var shown = charts ? ChartTitleMatch.Filter(live.Cards, lq) : live.Cards;
+                        if (lq.Length > 0 && shown.Count == 0)
+                            return new BoxEl { Grow = 1f, MinHeight = 0f, Children = [EmptyState.Compact(Loc.Get(Strings.Library.NoMatch))] };
+                        return HomeModules.SectionGrid(shown, live.Uri, width, Open, svc, acts, overlay,
+                            onScrollGeometryChanged: charts ? null : GridScrollWatch(),
+                            highlightQuery: lq.Length > 0 ? lq : null,
+                            // Charts cards carry no subtitle (SectionGrid blanks it) and their names run long
+                            // ("Top Songs - Netherlands"), so the freed metadata rung pays for the second title line.
+                            // Every other section keeps its single ellipsized line.
+                            titleLines: charts ? ChartsTitleLines : 1);
+                    }, fallback: HomeModuleLayout.FallbackWidth, grow: 1f),
                     canAutoPage
                         ? Embed.Comp(() => new HomeSectionAppendPreloader
                           {
@@ -208,63 +273,86 @@ sealed class HomeSectionPage : Component
         // shell's ShellMastheadBand renders it above the KeepAlive swap; only GridBody (via Skel.Region's own
         // content(seed) derivation) shimmers.
         string title = SectionTitle(currentSection);
-        string meta = currentSection.Subtitle is { Length: > 0 } sub
-            ? sub
-            : currentSection.TotalCount > 0 ? Strings.Home.SectionItems(currentSection.TotalCount) : "";
-        // Same arming rule GridBody's `canAutoPage` uses — the preloader is just a second, silent trigger for the
-        // identical LoadMore call, so the published "Show all" tools triple and the preloader stay armed together.
-        bool canLoadMore = CanPage(currentSection) && !exhausted.Value && HomeSectionPaging.HasMore(currentSection, cursor.Value);
+        _ = section.State.Value;
+        bool canLoadMore = !charts && CanPage(currentSection) && !exhausted.Value && HomeSectionPaging.HasMore(currentSection, cursor.Value);
 
-        // ── the shell MASTHEAD publication ──────────────────────────────────────────────────────────────────────
-        // Same three-leg publish/clear lifecycle the wash (_washOwner, above) uses: a deps-leg republishes whenever
-        // title/meta/tools change, UseActivation covers a KeepAlive reactivation (which skips the mount effect), and
-        // the unmount leg clears ownership so a parked/evicted page never leaves a stale masthead behind it.
-        void SetMasthead()
+        // One deps-leg publication. Cursor is a dep: the Show-all action closes over it.
+        UseEffect(() =>
         {
-            if (mastheadStore is not null)
-                mastheadStore.Value = new ShellMastheadState(_mastheadOwner, title, meta.Length > 0 ? meta : null,
-                    canLoadMore, loadingMore.Value, canLoadMore ? () => LoadMore(currentSection) : null);
-        }
-        void ClearMasthead()
-        {
-            if (mastheadStore is not null && ReferenceEquals(mastheadStore.Peek()?.Owner, _mastheadOwner))
-                mastheadStore.Value = null;
-        }
-        UseEffect(() => SetMasthead(),
-            DepKey.From(HashCode.Combine(title, meta, canLoadMore, loadingMore.Value)));
-        // A KeepAlive-cached page does not re-run its mount effect, so reactivation re-publishes…
-        UseActivation(onActivated: () => SetMasthead(), onDeactivated: ClearMasthead);
-        // …and UNMOUNT clears too, because onDeactivated fires only on PARK. Owner-gated, so it can never clobber
-        // whatever the next page has already published.
-        UseEffect(() => (Action?)ClearMasthead, DepKey.Empty);
+            if (mastheadStore is null) return;
+            mastheadStore.Publish(_route.Name, _route.Arg,
+                new ShellMastheadState(title, null,
+                    canLoadMore, loadingMore.Value, canLoadMore ? () => LoadMore(currentSection) : null));
+        }, DepKey.From(HashCode.Combine(title, canLoadMore, loadingMore.Value, cursor.Value)));
 
         // ComponentEl has no layout props. Recents puts Grow=1 / MinHeight=0 on the RENDERED root so the host pane's
         // height actually reaches the content below. smoothResize:false: easing 0 → N rows of a virtual grid clips
         // the covers into a strip (SearchPage's facet-body comment — same shape).
         //
-        // G2c-B: the masthead itself moved OUT to the shell's ShellMastheadBand (above); this Padding's top inset is
-        // now Spacing.L (the band owns FrameTop) rather than BrowseLayout.Frame's FrameTop — the same net gap the
-        // masthead's own bottom margin used to give, just moved from "under the masthead" to "under the band". The
+        // G2c-B: the masthead itself moved OUT to the shell's ShellMastheadBand overlay; this Padding's top inset is
+        // MastheadReserve + Spacing.L so the body clears the overlay (the band no longer takes in-flow height). The
         // FrameX gutters still match the directory / a category page, so a drill never jumps the content column.
+        var bodyKids = new List<Element>(2);
+        if (charts)
+        {
+            // ONE toolbar row, and its child COUNT never changes. bodyKids is unkeyed, and ReconcileChildren matches
+            // unkeyed children by position + element type: a ProgressBar added only while walking shifted the grid box
+            // down one index, where — both being BoxEl — it was diffed IN PLACE against the bar's own ZStack and its
+            // entire virtual viewport remounted. Twice per drill (walk start, walk end), which is also the only reason
+            // a frozen Responsive.Of closure ever showed more than the seed's 20 cards. Height is reserved on the row
+            // because AutoSuggestBox.Create is Embed.Comp and a ROW of one unmirrored ComponentEl measures 0.
+            bodyKids.Add(new BoxEl
+            {
+                Direction = 0, Grow = 0f, Shrink = 0f, MinHeight = FilterBoxHeight,
+                MinWidth = 0f, AlignSelf = FlexAlign.Stretch, AlignItems = FlexAlign.Center, Gap = Spacing.M,
+                Children =
+                [
+                    // A fixed compact width, NOT grow + maxFillWidth. Library's box grows because it shares a row with
+                    // a picker pill; this one sits alone above a grid, so filling the whole content run strands the
+                    // query glyph a screenful from the text. MinHeight only — a hard Height clips under text scaling.
+                    AutoSuggestBox.Create(NoSuggest, Loc.Get(Strings.Library.Filter), width: FilterBoxWidth,
+                        text: filter, queryIcon: Icons.Search, minHeight: FilterBoxHeight,
+                        cornerRadius: Radii.Control),
+                    new BoxEl { Grow = 1f, Shrink = 1f, MinWidth = 0f },
+                    // The walk indicator's SLOT is permanent; only the bar inside it comes and goes, so nothing outside
+                    // this row can shift. Always determinate (walkFrac): Create(null) returns a ComponentEl while
+                    // Create(signal) returns a BoxEl, so gating on the value would swap the element type mid-walk.
+                    new BoxEl
+                    {
+                        Direction = 0, Grow = 0f, Shrink = 0f, Width = WalkBarWidth,
+                        AlignSelf = FlexAlign.Center, MinHeight = WalkBarTrackH,
+                        Children = walking.Value
+                            ? [ProgressBar.Create(walkFrac, width: WalkBarWidth)]
+                            : System.Array.Empty<Element>(),
+                    },
+                ],
+            });
+        }
+        bodyKids.Add(new BoxEl
+        {
+            Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
+            Children =
+            [
+                Skel.Region(section,
+                    reveal: SkelReveal.StaggerRows,
+                    smoothResize: false,
+                    isEmpty: s => s.Cards.Count == 0 && s.UnsupportedCount == 0,
+                    onEmpty: () => new BoxEl { Grow = 1f, MinHeight = 0f, Children = [EmptyState.Default()] },
+                    onFailed: () => new BoxEl { Grow = 1f, MinHeight = 0f, Children = [ErrorState.Build(section.Error)] },
+                    content: GridBody),
+            ],
+        });
+
         return new BoxEl
         {
             Direction = 1, Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Gap = Spacing.L,
-            Padding = new Edges4(BrowseLayout.FrameX, Spacing.L, BrowseLayout.FrameX, Spacing.L),
+            Padding = BrowseMastheadMetrics.FamilyBodyPad(Spacing.L),
             Children =
             [
                 new BoxEl
                 {
-                    Direction = 1, Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f,
-                    Children =
-                    [
-                        Skel.Region(section,
-                            reveal: SkelReveal.StaggerRows,
-                            smoothResize: false,
-                            isEmpty: s => s.Cards.Count == 0 && s.UnsupportedCount == 0,
-                            onEmpty: () => new BoxEl { Grow = 1f, MinHeight = 0f, Children = [EmptyState.Default()] },
-                            onFailed: () => new BoxEl { Grow = 1f, MinHeight = 0f, Children = [ErrorState.Build(section.Error)] },
-                            content: GridBody),
-                    ],
+                    Direction = 1, Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Gap = Spacing.M,
+                    Children = bodyKids.ToArray(),
                 },
             ],
         };
@@ -293,6 +381,132 @@ sealed class HomeSectionPage : Component
     static string SectionTitle(HomeSection section) => section.Title is { Length: > 0 } title
         ? title
         : section.Cards.FirstOrDefault()?.Title ?? Loc.Get(Strings.Browse.Title);
+
+    /// <summary>Publish the walk's progress. The arithmetic — and the reason an under-reported total must not read as
+    /// finished — lives in <see cref="HomeSectionPaging.WalkFraction"/> with the rest of the cursor ledger, where it is
+    /// pinned by tests.</summary>
+    static void SetWalkFrac(HomeSection s, FloatSignal frac) =>
+        frac.Value = HomeSectionPaging.WalkFraction(s, WalkPageAssumed);
+
+    static async Task WalkChartsAsync(Services svc, string uri, string? routeTitle, HomeSection? seed,
+        Loadable<HomeSection> target, Signal<int?> cursor, Signal<bool> exhausted, Signal<bool> walking,
+        FloatSignal walkFrac, Action<Action> post, CancellationToken ct)
+    {
+        int requests = 0;
+        try
+        {
+            HomeSection current;
+            int offset;
+            var start = BrowseSectionWalk.Begin(seed);
+            if (start.FetchFirst)
+            {
+                requests++;
+                var first = await svc.Browse.GetSectionAsync(uri, 0, ct).ConfigureAwait(false);
+                if (first is null) throw new InvalidOperationException("browseSection returned no section for " + uri + ".");
+                var mapped = HomeBrowseCards.Section(first, routeTitle);
+                int? next = HomeSectionPaging.BrowseSectionNextOffset(0, first);
+                bool pageable = HomeSectionPaging.CanAdvance(0, next);
+                current = mapped;
+                offset = next ?? 0;
+                post(() =>
+                {
+                    target.SetReady(mapped);
+                    if (pageable) cursor.Value = next;
+                    else { exhausted.Value = true; walking.Value = false; walkFrac.Value = 1f; }
+                    SetWalkFrac(mapped, walkFrac);
+                });
+                if (!pageable) return;
+            }
+            else
+            {
+                current = start.Current!;
+                offset = start.Offset;
+                var published = current;
+                bool done = start.Exhausted;
+                int next = offset;
+                post(() =>
+                {
+                    // Paint the preview seed before the offset-20 await — a 74-item Weekly walk used to leave the
+                    // grid on whatever UseLoadable started with and never re-publish, which is a blank page when
+                    // that start was empty/pending and a frozen first frame when it was Ready.
+                    target.SetReady(published);
+                    if (done)
+                    {
+                        exhausted.Value = true;
+                        walking.Value = false;
+                        walkFrac.Value = 1f;
+                    }
+                    else
+                    {
+                        cursor.Value = next;
+                        SetWalkFrac(published, walkFrac);
+                    }
+                });
+                if (done) return;
+            }
+
+            while (true)
+            {
+                if (++requests > WalkMaxRequests)
+                {
+                    // Not a terminator the server gave us — say so, and stop with what we have visible rather than
+                    // paging forever. exhausted latches so nothing downstream re-arms off TotalCount.
+                    svc.Log?.Event(WaveeLogLevel.Warning, "home", "home.section.walk.capped",
+                        "Charts walk hit its request cap; the section is shown truncated", uri,
+                        fields: [WaveeLogField.Of("requests", requests - 1), WaveeLogField.Of("offset", offset)]);
+                    post(() => { exhausted.Value = true; walking.Value = false; walkFrac.Value = 1f; });
+                    return;
+                }
+                var page = await svc.Browse.GetSectionAsync(uri, offset, ct).ConfigureAwait(false);
+                if (page is null || page.Cards.Count == 0)
+                {
+                    post(() => { exhausted.Value = true; walking.Value = false; walkFrac.Value = 1f; });
+                    return;
+                }
+                var step = BrowseSectionWalk.Fold(current, offset, page);
+                current = step.Section;
+                var snap = step;
+                post(() =>
+                {
+                    target.SetReady(snap.Section);
+                    if (snap.Exhausted)
+                    {
+                        exhausted.Value = true;
+                        walking.Value = false;
+                        walkFrac.Value = 1f;
+                    }
+                    else
+                    {
+                        cursor.Value = snap.NextOffset;
+                        SetWalkFrac(snap.Section, walkFrac);
+                    }
+                });
+                if (snap.Exhausted) return;
+                offset = snap.NextOffset!.Value;
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // The page is gone (or parked). Touch no signal — post() would write into an unmounted tree.
+        }
+        catch (Exception ex)
+        {
+            // A walk that stops half-way leaves NO affordance behind: Charts has no append preloader and no armed
+            // "Show all" (see canAutoPage / canLoadMore), so a truncated section is invisible unless it is logged.
+            svc.Log?.Event(WaveeLogLevel.Warning, "home", "home.section.walk.fail",
+                "Charts walk failed; the pages already folded remain visible", uri, ex: ex,
+                fields: [WaveeLogField.Of("requests", requests)]);
+            post(() =>
+            {
+                walking.Value = false;
+                exhausted.Value = true;
+                // Ready-but-empty (an empty HasMore seed that started Ready, or a walk that never landed a card)
+                // must fail loudly — Catch used to leave that as a silent empty grid because IsReady was already true.
+                if (!target.IsReady || target.Value.Peek().Cards.Count == 0)
+                    target.SetFailed(ex);
+            });
+        }
+    }
 
     static async Task LoadInitialAsync(Services svc, string uri, string? routeTitle, bool browse,
                                        Loadable<HomeSection> target, Signal<int?> cursor, Signal<bool> exhausted,

@@ -1,4 +1,5 @@
 using System;
+using FluentGpu;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
@@ -64,6 +65,16 @@ sealed partial class SettingsPage
         Loc.Get(Strings.Settings.Choice.Hero),
     ];
 
+    // NOTE the index is the INVERSE of the stored value here, unlike every other picker in this file (Theme/Density/
+    // PageLayout all have index == stored value). Index 0 = base Mica = WindowMaterialBaseMica TRUE; index 1 = Mica Alt
+    // = WindowMaterialBaseMica FALSE. The picker orders base Mica first because it is the default; the setting stores
+    // "is it base Mica" rather than "is it the alt", so the two run backwards from each other.
+    static string[] WindowMaterialLabels() =>
+    [
+        Loc.Get(Strings.Settings.Appearance.MaterialMica),
+        Loc.Get(Strings.Settings.Appearance.MaterialMicaAlt),
+    ];
+
     // The lyrics SECOND line. Ordered to match WaveeSettings.LyricsSecondaryLine (0 none · 1 translation · 2
     // romanization) so the SelectorBar index IS the stored value — the ThemeMode/RowDensity convention.
     static string[] LyricsSecondaryLabels() =>
@@ -96,12 +107,6 @@ sealed partial class SettingsPage
             Bump();
         }, style: SettingsCard.CompactToggleStyle());
 
-    // (The "Use base Mica" row is gone, but NOT because the shell covers the backdrop — it does the opposite: the
-    // authenticated shell is bare Mica with translucent content-layer rungs over it, so the DWM material is visible
-    // through every chrome band. The row went away because MicaAlt is the one right answer for that stack and a
-    // base/alt toggle is a choice with no good second option. WaveeSettings.WindowMaterialBaseMica + its Program.cs
-    // seed stay — they still pick the material.)
-
     Element GeneralTab(Services? svc, Action<float>? requestTheme)
     {
         var settings = svc?.Settings;
@@ -109,6 +114,7 @@ sealed partial class SettingsPage
         int density = Math.Clamp(_density.Value, 0, DensityLabels().Length - 1);
         int pageLayout = Math.Clamp(settings?.Get(WaveeSettings.DetailPageLayout) ?? 0, 0, PageLayoutLabels().Length - 1);
         int lyricsSecondary = Math.Clamp(settings?.Get(WaveeSettings.LyricsSecondaryLine) ?? 0, 0, LyricsSecondaryLabels().Length - 1);
+        int windowMaterial = (settings?.Get(WaveeSettings.WindowMaterialBaseMica) ?? true) ? 0 : 1;
         var languageOptions = LanguageOptions();
 
         void SetTheme(int mode)
@@ -129,6 +135,17 @@ sealed partial class SettingsPage
         {
             settings?.Set(WaveeSettings.DetailPageLayout, i);
             DetailHeroPrefs.Bump();   // live-update any mounted (incl. KeepAlive-parked) detail page's rail↔hero choice
+            Bump();
+        }
+
+        // Not an AppearanceToggle: this flips a DWM window attribute, not an AppearancePrefs.Epoch-gated render choice —
+        // write the setting, then do the side effect (the SpotifyLinksToggle shape).
+        void SetWindowMaterial(int i)
+        {
+            if (settings is null) return;
+            bool baseMica = i == 0;
+            settings.Set(WaveeSettings.WindowMaterialBaseMica, baseMica);
+            FluentApp.SetWindowMaterialAlt(!baseMica);   // live, no restart
             Bump();
         }
 
@@ -156,6 +173,8 @@ sealed partial class SettingsPage
                 SelectorBar.Create(ThemeLabels(), new Signal<int>(themeMode), onChange: SetTheme), Icons.Brush),
             SettingsRow(Loc.Get(Strings.Settings.Appearance.Palette), Loc.Get(Strings.Settings.Appearance.PaletteSub),
                 PaletteRow(settings, requestTheme), Icons.Brush),
+            SettingsRow(Loc.Get(Strings.Settings.Appearance.WindowMaterial), Loc.Get(Strings.Settings.Appearance.WindowMaterialSub),
+                SelectorBar.Create(WindowMaterialLabels(), new Signal<int>(windowMaterial), onChange: SetWindowMaterial), Icons.Brush),
             VisualEffectsGroup(settings),
 
             // Layout & density: the two picker groups that decide how a track page is put together. Both collapsed —

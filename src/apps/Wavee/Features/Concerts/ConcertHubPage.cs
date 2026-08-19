@@ -10,6 +10,7 @@ using FluentGpu.Localization;
 using FluentGpu.Scene;
 using FluentGpu.Signals;
 using Wavee.Core;
+using Wavee.Features.Browse;
 using Wavee.Features.Concerts;
 using static FluentGpu.Dsl.Ui;
 
@@ -126,22 +127,13 @@ sealed class ConcertHubPage : Component
         {
             Direction = 1, Gap = Spacing.L,
             // The standard desktop page frame: PageWide (36) gutters, the 24 top every other page takes.
-            Padding = new Edges4(Spacing.PageWide, Spacing.XXL, Spacing.PageWide, PlayerDock.Reserve + Spacing.PageWide),
+            Padding = new Edges4(Spacing.PageWide, BrowseLayout.MastheadReserve + Spacing.XXL, Spacing.PageWide, PlayerDock.Reserve + Spacing.PageWide),
             Children = kids.ToArray(),
         };
         var scroll = ScrollView(content) with
         {
             Grow = 1f, MinHeight = 0f, ScrollKey = "concert-hub",
-            // ONE geometry observer feeds both consumers: the 24px-quantized offset drives the LazyGrid windowing
-            // (the ArtistPage write-throttle floor) and the content-height term re-fires the tail-nearness check on
-            // append growth (an append pushes the tail away → nearness recomputes false until the user scrolls again).
-            OnScrollGeometryChanged = (
-                static g => ((long)(g.OffsetY / 24f) << 20) ^ (long)(g.ContentH / 48f),
-                g =>
-                {
-                    _pageScroll.Value = g.OffsetY;
-                    _nearTail.Value = g.OffsetY + g.ViewportH >= g.ContentH - 1.5f * g.ViewportH;
-                }),
+            OnScrollGeometryChanged = HomeSectionAppendPreloader.NearTailWatch(_nearTail, _pageScroll),
         };
         // Provide the page scroll to the All Events LazyGrid deeper in the body (the LazyVGrid-in-ScrollView wiring).
         return Ctx.Provide(LazyScroll.Slot, (IReadSignal<float>)_pageScroll, scroll);

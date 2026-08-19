@@ -10,6 +10,7 @@ using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Localization;
 using FluentGpu.Signals;
+using Wavee.Features.Browse;
 using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
@@ -31,6 +32,7 @@ public sealed record HistoryEntry(Route Route, DateTime VisitedAt)
         Route.Name.StartsWith("show:", StringComparison.Ordinal) ? "show" :
         Route.Name is "albums" or "artists" or "liked" or "podcasts" or "local" ? "library" :
         Route.Name == "search" ? "search" :
+        BrowseRoutes.IsHome(Route.Name) ? "browse" :
         "page";
 }
 
@@ -130,6 +132,11 @@ public sealed class HistoryStore
         new(null);
     public static readonly Context<Action<string, string?>> NavCtx =
         new((_, _) => { });
+    /// <summary>Forward navigation that can attach a parent crumb (the journey answer). <see cref="NavCtx"/> stays
+    /// the 2-arg wrapper that writes a null origin — latest arrival wins, including a clear.</summary>
+    public static readonly Context<Action<string, string?, NavOrigin?>> GoWithOrigin =
+        new((_, _, _) => { });
+    public static readonly Context<NavOriginStore?> OriginSlot = new(null);
     /// <summary>The shell's real browser-style Back operation. Null outside a shell mount, where pages may choose a
     /// deterministic fallback without manufacturing a forward history entry.</summary>
     public static readonly Context<Action?> BackCtx = new(null);
@@ -251,7 +258,7 @@ sealed class HistoryPage : Component
         FilterKind.Shows     => e.Kind == "show",
         FilterKind.Library   => e.Kind == "library",
         FilterKind.Search    => e.Kind == "search",
-        FilterKind.Pages     => e.Kind == "page",
+        FilterKind.Pages     => e.Kind is "page" or "browse",
         _                    => true,
     };
 

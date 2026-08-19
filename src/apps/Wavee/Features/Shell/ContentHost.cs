@@ -5,6 +5,7 @@ using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Localization;
 using FluentGpu.Signals;
+using Wavee.Features.Browse;
 using Wavee.Features.Concerts;
 using static FluentGpu.Dsl.Ui;
 
@@ -13,10 +14,11 @@ namespace Wavee;
 // The content-card body opts routes into FluentGpu keep-alive caching. Route changes swap inside the boundary, scoped
 // by the active browser tab, so same-route tabs never share page state. Slot identity + the direction→recipe map live in
 // PageNavMotion (PageSlot / SlotKey / RecipeFor).
+//
+// Pages receive Route VALUES, never Signal<Route> — the KeepAlive boundary is the only route subscriber. A live route
+// signal handed into a retained page re-renders it against foreign destinations during an animated exit.
 sealed class ContentHost : Component
 {
-    internal const string LegacyRecentsRoute = "home-section:spotify:list:recents:main";
-
     readonly Signal<Route> _route;
     readonly Signal<NavTransitionKind> _motion;
     readonly Func<int> _activeTabId;
@@ -34,24 +36,40 @@ sealed class ContentHost : Component
         float reserve = bridge?.FloatingSurfaceReserve.Value ?? 0f;   // subscribe → re-inset as the surface comes and goes
         return new BoxEl
         {
-            Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
+            Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1, ZStack = true,
             Padding = new Edges4(0f, 0f, 0f, reserve),
             Children =
             [
-                // THE one masthead band (G2c), ALWAYS mounted, first child, above the KeepAlive boundary below —
-                // appearing/disappearing would remount the KeepAlive subtree and cold-restart every cached page, so it
-                // collapses to Height 0 instead of unmounting (see ShellMastheadBand.Collapsed).
-                Embed.Comp(() => new ShellMastheadBand(_route)),
-                // The token reads the tab + the route ONLY. `_motion` is read untracked inside PageTransition (Peek), so
-                // a direction write can never re-run this thunk and re-activate the page that is already active.
-                Flow.KeepAlive(
-                    () => new PageSlot(_activeTabId(), _route.Value),
-                    PageNavMotion.SlotKey,
-                    s => PageFor(s.Route),
-                    new KeepAliveOptions(
-                        MaxEntries: 8,
-                        TransitionFor: PageTransition,
-                        SuppressLayoutTransitionsOnActivation: true)),
+                // Clip exiting pages so they cannot paint through the incoming body. Grow+MinHeight give the keep-alive
+                // a definite height so ClipToBounds has a box to clip against. This layer FILLS the card — the masthead
+                // overlays it and must never steal column height (browse → playlist used to snap the band to 0 and
+                // yank this box up ~84 DIP in the same frame the fade-through started).
+                new BoxEl
+                {
+                    Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, ClipToBounds = true,
+                    Children =
+                    [
+                        // The token reads the tab + the route ONLY. `_motion` is read untracked inside PageTransition
+                        // (Peek), so a direction write can never re-run this thunk and re-activate the page that is
+                        // already active.
+                        Flow.KeepAlive(
+                            () => new PageSlot(_activeTabId(), _route.Value),
+                            PageNavMotion.SlotKey,
+                            s => PageFor(s.Route),
+                            new KeepAliveOptions(
+                                MaxEntries: 8,
+                                TransitionFor: PageTransition,
+                                SuppressLayoutTransitionsOnActivation: true)),
+                    ],
+                },
+                // THE one masthead band (G2c), ALWAYS mounted as an overlay — never an in-flow sibling of KeepAlive.
+                // HitTestPassThrough yields empty overlay area to the page beneath; the band's own children still hit.
+                new BoxEl
+                {
+                    Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
+                    HitTestPassThrough = true,
+                    Children = [ Embed.Comp(() => new ShellMastheadBand(_route)) ],
+                },
             ],
         };
     }
@@ -66,9 +84,9 @@ sealed class ContentHost : Component
     // G2c: this used to special-case a "masthead family" (search's directory, a browse category, the two section
     // drills) with a fixed dissolve instead of the directional slide, because each of those pages rendered its OWN
     // copy of the shared masthead and sliding the page root double-exposed "Browse" and "Browse ›" at nearly the same
-    // spot. The masthead now lives in ShellMastheadBand, mounted ONCE above this whole boundary (ContentHost.Render) —
-    // bodies below it are free to slide like every other page swap, and the masthead itself never participates in a
-    // page transition at all.
+    // spot. The masthead now lives in ShellMastheadBand, mounted ONCE as an overlay on this boundary (ContentHost.Render)
+    // — bodies underneath slide like every other page swap, the band never consumes KeepAlive height, and it fades
+    // opacity on family↔non-family instead of snapping Height 0.
     LayoutTransition? PageTransition(object oldToken, object newToken)
         => newToken is PageSlot ? PageNavMotion.RecipeFor(_motion.Peek()) : null;
 
@@ -104,7 +122,7 @@ sealed class ContentHost : Component
         // Older Home documents and persisted navigation history can still carry the synthetic section route. It was
         // never page-able (spotify:list:recents:main is not a home-section resource); render the canonical playlist4
         // Recents destination before the generic home-section arm can claim it.
-        if (string.Equals(r.Name, LegacyRecentsRoute, StringComparison.Ordinal))
+        if (string.Equals(r.Name, NavRouteNormalizer.LegacyRecentsRoute, StringComparison.Ordinal))
             r = new Route("recents", r.Arg);
 
         if (r.Name == "home")
@@ -151,9 +169,13 @@ sealed class ContentHost : Component
             return new BoxEl { Key = "page:sidebar-customize:" + (r.Arg ?? ""), Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
                 Children = [ Embed.Comp(() => new SidebarCustomizerPage(r.Arg)) with { Key = "sidebar-customizer:" + (r.Arg ?? "") } ] };
 
+        if (BrowseRoutes.IsHome(r.Name))
+            return new BoxEl { Key = "page:browse-home", Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
+                Children = [ Embed.Comp(() => new BrowseDirectoryPage()) ] };
+
         if (r.Name == "search")
             return new BoxEl { Key = "page:search", Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
-                Children = [ Embed.Comp(() => new SearchPage(_route)) ] };
+                Children = [ Embed.Comp(() => new SearchPage(r)) ] };
 
         if (r.Name == "albums" || r.Name == "artists" || r.Name == "podcasts")
             return new BoxEl { Key = "page:" + r.Name, Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
@@ -163,11 +185,10 @@ sealed class ContentHost : Component
             return new BoxEl { Key = "page:disco", Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
                 Children = [ Embed.Comp(() => new DiscographyPage(new Signal<Route>(r))) ] };
 
-        // A browse CATEGORY page. The directory itself has no route — it is Search's empty state — so only the page
-        // needs one, which is what makes opening a category back-navigable and keep-alive cached.
-        if (Wavee.Features.Browse.BrowseRoutes.Is(r.Name))
+        // A browse CATEGORY page (prefix browse:). The directory is BrowseRoutes.Home, handled above.
+        if (BrowseRoutes.Is(r.Name))
             return new BoxEl { Key = "page:browse", Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
-                Children = [ Embed.Comp(() => new Wavee.Features.Browse.BrowsePageHost(r)) ] };
+                Children = [ Embed.Comp(() => new BrowsePageHost(r)) ] };
 
         if (ConcertRoutes.Is(r.Name))
             return new BoxEl { Key = "page:concert-route", Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,

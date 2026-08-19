@@ -792,7 +792,7 @@ sealed class LibraryPage : Component
         // reason. Only present for non-name hits with an attributable reason.
         if (!string.IsNullOrEmpty(eyebrow))
             textKids.Add(new TextEl(eyebrow!) { Size = 12f, LineHeight = 16f, Weight = 600, Color = Tok.TextSecondary, MaxLines = 1, Wrap = TextWrap.NoWrap, Trim = TextTrim.CharacterEllipsis });
-        textKids.Add(HighlightRow(title, matchStart, matchLen, 14f, 600, Tok.TextPrimary));
+        textKids.Add(SearchHighlight.Row(title, matchStart, matchLen, 14f, 600, Tok.TextPrimary));
         if (subtitle.Length > 0)
             textKids.Add(new TextEl(subtitle) { Size = 12f, LineHeight = 16f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis });
         return new BoxEl
@@ -838,7 +838,7 @@ sealed class LibraryPage : Component
                 SkeletonOverride = CoverSkeleton(36f, 4f),
                 Children = [Surfaces.Artwork(t.Cover, t.Uri.GetHashCode() & 0x7fffffff, 36f, 36f, 4f)] },
             new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, ClipToBounds = true,
-                Children = [HighlightRow(t.Title, t.MatchStart, t.MatchLen, 13f, 600, Tok.TextPrimary)] },
+                Children = [SearchHighlight.Row(t.Title, t.MatchStart, t.MatchLen, 13f, 600, Tok.TextPrimary)] },
         ],
     }.Interactive(Interaction.Subtle);
 
@@ -849,30 +849,6 @@ sealed class LibraryPage : Component
         AlbumKind.Compilation => Loc.Get(Strings.Detail.Badge.Compilation),
         _ => Loc.Get(Strings.Detail.Badge.Album),
     };
-
-    // The accent-tinted highlight pill (Outlook-style, on-brand): a flex row of [before] [pill:match] [after]. Rows are
-    // single-line, so a real background plate needs no engine change (TextSpan carries no background). The matched run
-    // sits in a rounded AccentSelectedTextBackground box; the flanks stay in the base color and ellipsize.
-    static Element HighlightRow(string text, int matchStart, int matchLen, float size, ushort weight, ColorF baseColor)
-    {
-        if (matchLen <= 0 || matchStart < 0 || matchStart + matchLen > text.Length)
-            return new TextEl(text) { Size = size, Weight = weight, Color = baseColor, MaxLines = 1, Trim = TextTrim.CharacterEllipsis };
-
-        Element Seg(string s, bool grow) => new TextEl(s)
-        { Size = size, Weight = weight, Color = baseColor, Grow = grow ? 1f : 0f, MaxLines = 1, Wrap = TextWrap.NoWrap, Trim = TextTrim.CharacterEllipsis };
-
-        var kids = new List<Element>(3);
-        if (matchStart > 0) kids.Add(Seg(text.Substring(0, matchStart), false));
-        kids.Add(new BoxEl
-        {
-            Shrink = 0f, Corners = CornerRadius4.All(4f), Fill = Tok.AccentSelectedTextBackground,
-            Padding = new Edges4(3f, 1f, 3f, 1f),
-            Children = [new TextEl(text.Substring(matchStart, matchLen)) { Size = size, Weight = weight, Color = Tok.TextOnAccentSelectedText, MaxLines = 1, Wrap = TextWrap.NoWrap }],
-        });
-        int after = matchStart + matchLen;
-        kids.Add(after < text.Length ? Seg(text.Substring(after), true) : new BoxEl { Grow = 1f });
-        return new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Grow = 1f, Basis = 0f, ClipToBounds = true, Children = kids.ToArray() };
-    }
 
     static string NavHash(NavItem[] shown) { int h = 17; foreach (var it in shown) h = h * 31 + it.RouteKey.GetHashCode(); return (h & 0x7fffffff).ToString(); }
 

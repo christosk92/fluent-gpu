@@ -363,6 +363,8 @@ static class SidebarEntityRow
             : selected ? WaveeColors.SelectedRest
             : spec.MultiSelected ? Tok.FillSubtleSecondary
             : ColorF.Transparent;
+        // The row's HOVERED plate, as a value.
+        ColorF hoverFill = !enabled ? ColorF.Transparent : selected ? WaveeColors.SelectedHover : Tok.FillSubtleSecondary;
 
         // ── leading column ──────────────────────────────────────────────────────────────────────────────────────────
         Element leading;
@@ -392,11 +394,16 @@ static class SidebarEntityRow
         }
 
         // ── children ────────────────────────────────────────────────────────────────────────────────────────────────
+        // The trailing "…" is NOT a flex sibling of the text any more (see OverflowButton()): reserving its 26-DIP
+        // width + gap UNCONDITIONALLY — even though HoverOpacity keeps it invisible at rest — is exactly the bug this
+        // shape fixes (a title ellipsized well before the pane's free space ran out). It is composed as a ZSTACK
+        // OVERLAY on top of the row instead, so it costs the text lane ZERO width whether or not the row is hovered:
+        // no reserved-vs-revealed toggle, and therefore no reflow/re-trim on hover either.
+        bool overflow = ShowsOverflow(in spec);
         int count = 2                                                   // leading cluster + text
                   + (spec.CheckLane is null ? 0 : 1)
                   + (spec.Playing ? 1 : 0)
-                  + (spec.Trailing is null ? 0 : 1)
-                  + (ShowsOverflow(in spec) ? 1 : 0);
+                  + (spec.Trailing is null ? 0 : 1);
         var kids = new Element[count];
         int k = 0;
         // FIRST, ahead of the leading cluster: WinUI's inline multi-select lane slides in from −28 px and pushes the
@@ -409,13 +416,37 @@ static class SidebarEntityRow
         kids[k++] = text;
         if (spec.Playing) kids[k++] = WaveeEqualizer.Of(spec.PlayingAnimated, Tok.AccentDefault, 12f);
         if (spec.Trailing is { } trailing) kids[k++] = trailing;
-        if (ShowsOverflow(in spec)) kids[k++] = OverflowButton();
+
+        // Without the overflow affordance, the row stays the plain flex row it always was — no extra node, no ZStack
+        // measure/arrange cost for the vast majority of non-menu rows (a folder end-cap, a disabled retention row, …).
+        Element[] rowChildren;
+        if (overflow)
+        {
+            var content = new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Gap = gap, Children = kids };
+            // The button is a ZSTACK OVERLAY, never a flex sibling: it must cost the title NO width, or the title
+            // ellipsizes early with visible free space beside it (the bug this replaced). A long title's last
+            // glyphs can therefore sit under the hovered "…" — accepted deliberately: the row is translucent over
+            // live Mica, so there is no opaque tone to fade or clip into (see the WaveeTokens.cs tombstone on why a
+            // constant material over Mica reads as a slab), and a hover-conditional width would re-render and
+            // relayout the row on every pointer enter/exit.
+            rowChildren = [content, OverflowButton()];
+        }
+        else
+        {
+            rowChildren = kids;
+        }
 
         var row = new BoxEl
         {
             Key = spec.Key,
             Animate = spec.Animate,
             OnRealized = spec.OnRealized,
+            // ZStack only when the button exists: `content` then fills the row exactly like the plain flex children
+            // did (its own AlignSelf/JustifySelf are unset ⇒ Auto ⇒ inherit this row's AlignItems/Justify, so the whole
+            // content cluster shrinks-to-fit and centers vertically the same way each flex child used to individually
+            // — see the file-level remarks above OverflowButton()). Padding stays HERE (not innermost), so the fill
+            // ramp below still paints the row's FULL bleed and only the CONTENT is inset by it, exactly as before.
+            ZStack = overflow,
             Direction = 0, Height = height, AlignItems = FlexAlign.Center, Gap = gap,
             Padding = new Edges4(SidebarRowMetrics.IndentFor(spec.Depth), 0f, 8f, 0f),
             Corners = CornerRadius4.All(4f),
@@ -429,7 +460,7 @@ static class SidebarEntityRow
             Fill = plateOn is null
                 ? rest
                 : Prop.Of(() => plateOn() ? Tok.AccentDefault with { A = 0.18f } : rest),
-            HoverFill = !enabled ? ColorF.Transparent : selected ? WaveeColors.SelectedHover : Tok.FillSubtleSecondary,
+            HoverFill = hoverFill,
             PressedFill = !enabled ? ColorF.Transparent : selected ? WaveeColors.SelectedPressed : Tok.FillSubtleTertiary,
             BorderWidth = plateOn is null ? 0f : 1f,
             BorderColor = plateOn is null ? ColorF.Transparent
@@ -466,7 +497,7 @@ static class SidebarEntityRow
                               thresholdMultiplier: Drag.ClickPrimaryThresholdMultiplier)
                 : null,
             DropTarget = spec.DropTarget,
-            Children = kids,
+            Children = rowChildren,
         };
 
         // Right-click / Menu key / long-press. Attach CHAINS onto the row's existing OnRealized + OnContextRequested —
@@ -571,12 +602,20 @@ static class SidebarEntityRow
     static bool ShowsOverflow(in SidebarRowSpec spec)
         => spec.Overflow && spec.Enabled && spec.MenuOverlay is not null && spec.Menu is not null;
 
-    /// <summary>The hover-revealed trailing "…". <c>ClickRequestsContext</c> re-enters the context-request funnel, so the
-    /// walk finds the row's own <c>OnContextRequested</c> (the <c>WithContextMenu</c> attach) and the button and the
-    /// right-click open the same menu anchored at the button.</summary>
+    /// <summary>The hover-revealed trailing "…", as a ZSTACK OVERLAY (a sized layer inside the row's outer
+    /// <c>ZStack = true</c> — see <c>Create</c>) rather than a flex sibling of the text: <c>JustifySelf = End</c> +
+    /// <c>AlignSelf = Center</c> park it flush against the row's own trailing 8-DIP padding, vertically centred,
+    /// WITHOUT ever taking a share of the row's main-axis width. That is the fix — the old flex-sibling shape (with
+    /// `Shrink = 0f`) reserved its 26-DIP width + gap from the text's measuring width EVEN AT REST, while
+    /// <c>Opacity = 0f</c> only ever hid its paint, not its layout footprint, so a title was ellipsized well before
+    /// the pane's free space actually ran out. An overlay costs the text lane nothing either way, so hovering never
+    /// re-trims/reflows the title (a reserve-toggle would). <c>ClickRequestsContext</c> re-enters the context-request
+    /// funnel, so the walk finds the row's own <c>OnContextRequested</c> (the <c>WithContextMenu</c> attach) and the
+    /// button and the right-click open the same menu anchored at the button.</summary>
     static Element OverflowButton() => new BoxEl
     {
-        Opacity = 0f, HoverOpacity = 1f, Shrink = 0f,
+        Width = 26f, Height = 26f, JustifySelf = FlexAlign.End, AlignSelf = FlexAlign.Center,
+        Opacity = 0f, HoverOpacity = 1f,
         Children =
         [
             new BoxEl

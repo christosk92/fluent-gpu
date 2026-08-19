@@ -73,14 +73,17 @@ static class WaveeSettings
     public static readonly SettingKey<bool> DetailPageToneHeroOnly = new("detail.page.tone.heroOnly", false);
     public static readonly SettingKey<bool> DisableMarquee = new("appearance.marquee.disabled", false);
     public static readonly SettingKey<bool> DisableColorWashes = new("appearance.colorWashes.disabled", false);
-    // The DWM window material. FALSE (the default) = Mica ALT (DWMSBT_TABBEDWINDOW — the flatter, neutral File-Explorer
-    // tint); TRUE = base Mica (DWMSBT_MAINWINDOW — more wallpaper-tinted, the stock "main window" backdrop). A bool, not
-    // an enum: DWM offers exactly these two Mica kinds, and acrylic is not a window-level option here (mica:false is the
-    // engine's no-Mica path, not a user choice). NO LONGER USER-FACING: the authenticated shell paints its own opaque
-    // deterministic ground over the whole window, so the DWM backdrop only ever shows under the LOGIN screen and the
-    // host fallback — the Settings ▸ Appearance row that flipped this was removed because there is nothing to choose
-    // between. The key stays as the startup seed for AppOptions.MicaAlt (Program.cs) and keeps existing profiles valid.
-    public static readonly SettingKey<bool> WindowMaterialBaseMica = new("appearance.windowMaterial.baseMica", false);
+    // The DWM window material. TRUE (the default) = base Mica (DWMSBT_MAINWINDOW — the NEUTRAL "main window" backdrop);
+    // FALSE = Mica ALT (DWMSBT_TABBEDWINDOW — Microsoft's documented STRONGER tint of the desktop wallpaper, the "tabbed
+    // window" kind File Explorer uses). A bool, not an enum: DWM offers exactly these two Mica kinds, and acrylic is not
+    // a window-level option here (mica:false is the engine's no-Mica path, not a user choice). The default flipped to
+    // base Mica because the authenticated shell (WaveeShell) is now transparent over the DWM material end to end — the
+    // titlebar, sidebar and player dock are all deliberate paint-site omissions, so the backdrop kind is visible across
+    // the whole window, not just under the login screen. Mica Alt's stronger tint read as a saturated navy chrome next
+    // to Wino Mail and other apps that default to base Mica on the same wallpaper; the Alt default predated the shell
+    // going transparent, when an opaque ground hid the difference. The key is the startup seed for AppOptions.MicaAlt
+    // (Program.cs: MicaAlt = !this) and backs the Settings ▸ Appearance row.
+    public static readonly SettingKey<bool> WindowMaterialBaseMica = new("appearance.windowMaterial.baseMica", true);
     // The immersive lyrics surface's slowly-drifting blurred-cover backdrop. TRUE (the default) = the baked-blur cover
     // wanders on two incommensurate sinusoids; FALSE = the same cover, held perfectly still (and no ticker at all).
     // Deliberately a SETTING, not an env var — the DisableColorWashes precedent: it is a taste/comfort choice a

@@ -20,42 +20,46 @@ readonly record struct BrowseTileModel(string Title, string Uri, uint? Color, Im
 /// own uri) — the one thing every density shares, mirroring the single row-link cell this file replaces.</summary>
 static class BrowseTiles
 {
-    // ── Top: bare Display type on the mica ground — no plate, no fill. Four destinations Spotify puts first need no
-    // further identity than their own name set large. ──────────────────────────────────────────────────────────────
-    public static Element Word(BrowseTileModel m) => new BoxEl
+    // ── The plate every bare-text density now sits on ─────────────────────────────────────
+    // Word and Name used to be UNPLATED type, and Name was set in the very same alias as the band heading above it
+    // (WaveeType.ModuleHeader → Ui.Subtitle) while Word was set LARGER than that heading — so "Top" and "Music" read as
+    // one undifferentiated stack with nothing to say that half of it is pressable, and the hierarchy was inverted on
+    // top of that. The fix is a PAIR: the band heading drops to the eyebrow rung (BrowseDirectory.BandLabel) and the
+    // destinations take a real control plate. The grammar is ContentFilterChips.Chip's, verbatim, because that is
+    // already this app's interactive pill — FillControlDefault → Secondary on hover, a stroke that goes accent on
+    // hover, and the subtle hover/press scale that says "button" before a pointer ever lands.
+    static Element Chip(BrowseTileModel m, float height, Element? lead, TextEl label)
     {
-        Key = m.Uri,
-        Role = AutomationRole.Hyperlink, Focusable = true, Cursor = CursorId.Hand,
-        FocusVisualMargin = new Edges4(2f, 2f, 2f, 2f),
-        OnClick = m.Open, MinWidth = 0f,
-        Children =
-        [
-            WaveeType.FoldTitle(m.Title) with
-            {
-                MaxLines = 1, Trim = TextTrim.CharacterEllipsis, HoverColor = Tok.AccentTextPrimary, MinWidth = 0f,
-            },
-        ],
-    };
+        var text = label with { MaxLines = 1, Wrap = TextWrap.NoWrap, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f };
+        return new BoxEl
+        {
+            Key = m.Uri,
+            Role = AutomationRole.Hyperlink, Focusable = true, Cursor = CursorId.Hand,
+            FocusVisualMargin = new Edges4(2f, 2f, 2f, 2f),
+            OnClick = m.Open,
+            // Shrink 0 on a WRAPPING row: the row breaks to a new line rather than compressing every pill until its
+            // label ellipsises (ContentFilterChips' rail makes the same call for the same reason).
+            Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center, Height = height, Shrink = 0f, MinWidth = 0f,
+            Padding = new Edges4(Spacing.M, 0f, Spacing.M, 0f),
+            Corners = CornerRadius4.All(999f),
+            Fill = Tok.FillControlDefault, HoverFill = Tok.FillControlSecondary,
+            BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault, HoverBorderColor = Tok.AccentDefault,
+            HoverScale = WaveeMotion.ScaleSubtle.Hover,
+            HoverDurationMs = WaveeMotion.Fast, HoverEasing = Easing.FluentDecelerate,
+            PressScale = WaveeMotion.ScaleSubtle.Press,
+            Children = lead is null ? [text] : [lead, text],
+        };
+    }
 
-    // ── For you: a colour pip + a module-rung name. One step down from Word — still no plate, but the pip gives each
-    // destination an identity colour the way its own detail page will. ────────────────────────────────────────────
-    public static Element Name(BrowseTileModel m) => new BoxEl
-    {
-        Key = m.Uri,
-        Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center, MinWidth = 0f,
-        Role = AutomationRole.Hyperlink, Focusable = true, Cursor = CursorId.Hand,
-        FocusVisualMargin = new Edges4(2f, 2f, 2f, 2f),
-        OnClick = m.Open,
-        Children =
-        [
-            Pip(m),
-            WaveeType.ModuleHeader(m.Title) with
-            {
-                HoverColor = Tok.AccentTextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
-                MinWidth = 0f, Shrink = 1f,
-            },
-        ],
-    };
+    // ── Top: the four destinations Spotify puts first — the tallest pill, and the only one at BodyStrong, so the row
+    // still reads as the primary one without being set larger than the heading that names it. ─────────────
+    public static Element Word(BrowseTileModel m) =>
+        Chip(m, BrowseLayout.WordChipH, null, Ui.BodyStrong(m.Title));
+
+    // ── For you: the same plate one rung down, with the colour pip that gives each destination the identity colour
+    // its own detail page will carry. ──────────────────────────────────────────────────
+    public static Element Name(BrowseTileModel m) =>
+        Chip(m, BrowseLayout.NameChipH, Pip(m), Ui.Body(m.Title));
 
     // ── Genres (also Search's genre results — SearchGenreTiles.Grid): the pip again, next to Body secondary —
     // one rung below Name because a genre column runs ~25 deep and a module-rung name would read as a wall of
@@ -286,11 +290,25 @@ static class BrowseLayout
     /// masthead's own title line (BrowseMasthead — Zune's breadcrumb-as-title) — this is now plain shared breathing
     /// room above the masthead, the one title Y every Browse-family surface shares.
     public const float FrameTop = Spacing.XXXL;
+    /// Overlay masthead reserve (FrameTop + SurfaceDisplay line). Family pages pad this PLUS Spacing.L so the body
+    /// stays put while the overlay fades — a live height would re-pad parked pages mid-exit.
+    public const float MastheadReserve = BrowseMastheadMetrics.Reserve;
     /// The page gutter — Home's own (HomeSectionPage, RecentsPage use the same), so a drill never shifts the column.
     public const float FrameX = Spacing.PageWide;
     public static Edges4 Frame(float bottom) => new(FrameX, FrameTop, FrameX, bottom);
     /// First-frame width guess the directory's Responsive grids share before a real measure lands.
     public const float DirectoryFallbackWidth = 900f;
+
+    /// <summary>The Top band's pill height — WinUI's 36 DIP "large" control rung, the tallest of the three link
+    /// densities.</summary>
+    public const float WordChipH = 36f;
+    /// <summary>The For-you band's pill height — the standard 32 DIP control rung, one step under
+    /// <see cref="WordChipH"/> so the two bands stay ordered without either being set larger than its own heading.
+    /// </summary>
+    public const float NameChipH = 32f;
+    /// <summary>Gap between plated link cells. Bare words needed <c>Spacing.L</c> of air to separate; pills carry their
+    /// own edges, so the same gap reads as a scattered row.</summary>
+    public const float ChipGap = Spacing.S;
 
     /// <summary>Prototype <c>.sec .tick</c> — 3×14, the compact band label and the Bar/Peek left hairline share the width.</summary>
     public const float TickW = 3f;

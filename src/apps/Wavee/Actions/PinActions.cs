@@ -65,9 +65,10 @@ public static class PinActions
     /// <summary>The sidebar's own rows know their pin id directly (a folder has no uri and an app-route row has no
     /// <see cref="ActionTarget"/> at all), so they pass it explicitly. Same rule, same toasts, same undo — just no
     /// <see cref="ActionTarget"/> in the middle.</summary>
-    public static MenuFlyoutItem? RowForId(ActionServices s, string? pinId, SidebarPinKind kind, string? uri, string? name)
+    public static MenuFlyoutItem? RowForId(ActionServices s, string? pinId, SidebarEntryKind kind, string? uri, string? name)
     {
         if (s.Sidebar is not { } prefs) return null;
+        if (!SidebarPinId.IsPinnable(kind)) return null;
         string id = pinId ?? "";
         switch (PinRowRule.Decide(true, pinId, prefs.IsPinned(pinId)))
         {
@@ -85,7 +86,7 @@ public static class PinActions
     /// <summary>The projected-row overload (<c>Menus.SidebarEntry</c>): the entry's <c>Id</c> already IS the pin id
     /// (F.5.4), with the not-pinnable kinds screened out by <see cref="SidebarPinId.FromEntry"/>.</summary>
     public static MenuFlyoutItem? RowForEntry(ActionServices s, in SidebarLibraryEntry e)
-        => RowForId(s, SidebarPinId.FromEntry(in e), SidebarPinId.KindOfEntry(e.Kind), e.Uri, e.Name);
+        => RowForId(s, SidebarPinId.FromEntry(in e), e.Kind, e.Uri, e.Name);
 
     /// <summary>Tab/page overload: the destination already carries the canonical route identity and display cache.</summary>
     public static MenuFlyoutItem? RowForDestination(ActionServices s, in SidebarDestination destination)
@@ -95,9 +96,9 @@ public static class PinActions
 
     /// <summary>Append the pin + raise the undo toast. Already-pinned is a SILENT no-op (no toast): the store is
     /// idempotent and a double invoke must never reorder the list or claim it did something.</summary>
-    internal static void Pin(SidebarPreferences prefs, string pinId, SidebarPinKind kind, string? uri, string? name)
+    internal static void Pin(SidebarPreferences prefs, string pinId, SidebarEntryKind kind, string? uri, string? name)
     {
-        if (string.IsNullOrEmpty(pinId)) return;
+        if (string.IsNullOrEmpty(pinId) || !SidebarPinId.IsPinnable(kind)) return;
         var pin = new SidebarPin(pinId, kind, uri ?? "", name ?? "",
             DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         if (!prefs.Pin(pin)) return;

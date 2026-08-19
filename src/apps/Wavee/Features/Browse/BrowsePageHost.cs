@@ -36,7 +36,7 @@ sealed class BrowsePageHost : Component
             OnOpenFeature: uri => go(BrowseRoutes.FeatureRoute(uri), null),
             Go: go,
             Play: uri => { if (svc is not null) _ = svc.Player.PlayAsync(uri, 0); },
-            OnExploreAll: () => go("search", null),
+            OnExploreAll: () => go(BrowseRoutes.Home, null),
             RouteName: _route.Name,
             RouteArg: _route.Arg);
 

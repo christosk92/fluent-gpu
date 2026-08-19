@@ -698,8 +698,15 @@ public sealed class SidebarPreferences
         _layout = _layout with { TopBar = SidebarLayoutWire.ReadTopBar(load.Doc.TopBar, _carry) };
     }
 
-    // ── pins ⇄ wire. Inline (not in the wire file) because the pin RECORD is app-side and this store owns it; the mapping
-    // is a straight field copy with the same "unknown value degrades, never throws" discipline as SidebarLayoutWire.
+    // ── pins ⇄ wire. The pin RECORD is app-side and this store owns the mapping, but the enum⇄string/legacy-int TABLES
+    // it calls into live on SidebarLayoutWire (Persistence/SidebarLayoutDoc.cs) — the one translation layer, and the one
+    // place Wavee.Tests (which does not include this file) can reach to pin the exhaustiveness contract.
+    //
+    // Read prefers SidebarPinDto.EntityKind (the string form); a document written before the SidebarPinKind→
+    // SidebarEntryKind unification (2026-08-19) has no EntityKind, so that pin falls back to the legacy int. Either
+    // arm that fails to resolve DROPS the pin rather than guessing a kind — the pin's Kind is load-bearing for
+    // rendering/navigation, and there is no richer "carry" bucket for a single scalar the way an unknown SECTION kind
+    // gets one, so silently rendering a wrong kind is a worse failure than an honestly logged drop.
     static List<SidebarPin>? PinsFromDto(SidebarPinDto[]? dto)
     {
         if (dto is null || dto.Length == 0) return null;
@@ -708,12 +715,31 @@ public sealed class SidebarPreferences
         {
             var d = dto[i];
             if (d is null || string.IsNullOrEmpty(d.Id)) continue;   // an id-less row has no identity — it cannot be a pin
-            var kind = (uint)d.Kind <= (uint)SidebarPinKind.Folder ? (SidebarPinKind)d.Kind : SidebarPinKind.Route;
+            SidebarEntryKind kind;
+            if (!string.IsNullOrEmpty(d.EntityKind))
+            {
+                if (!SidebarLayoutWire.TryParsePinKind(d.EntityKind, out kind))
+                {
+                    WaveeLog.Instance.Warn("sidebar", "sidebar.pin.unknown_kind",
+                        "Dropped a pinned row with an unrecognized kind string.",
+                        WaveeLogField.Of("pin_id", d.Id!), WaveeLogField.Of("kind", d.EntityKind));
+                    continue;
+                }
+            }
+            else if (!SidebarLayoutWire.TryLegacyPinKind(d.Kind, out kind))
+            {
+                WaveeLog.Instance.Warn("sidebar", "sidebar.pin.unknown_legacy_kind",
+                    "Dropped a pinned row with an unrecognized legacy kind int.",
+                    WaveeLogField.Of("pin_id", d.Id!), WaveeLogField.Of("kind", d.Kind));
+                continue;
+            }
             list.Add(new SidebarPin(d.Id!, kind, d.Uri ?? "", d.Name ?? "", d.AddedAtMs));
         }
         return list;
     }
 
+    // Write BOTH the new string and the legacy int on every save (preserve-don't-destroy for a downgrade — the same
+    // stance ReadCurated/WriteCurated take for a section this build doesn't recognize).
     static SidebarPinDto[]? PinsToDto(SidebarPinStore pins)
     {
         if (pins.Count == 0) return null;
@@ -723,7 +749,10 @@ public sealed class SidebarPreferences
             var p = pins[i];
             arr[i] = new SidebarPinDto
             {
-                Id = p.Id, Kind = (int)p.Kind, Uri = p.Uri, Name = p.Name, AddedAtMs = p.AddedAtMs,
+                Id = p.Id,
+                Kind = SidebarLayoutWire.LegacyPinKindInt(p.Kind),
+                EntityKind = SidebarLayoutWire.PinKindName(p.Kind),
+                Uri = p.Uri, Name = p.Name, AddedAtMs = p.AddedAtMs,
             };
         }
         return arr;

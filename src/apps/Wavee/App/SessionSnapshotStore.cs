@@ -34,8 +34,11 @@ public sealed class SessionNavDto
     public int ActiveTabId { get; set; } = -1;
 }
 
-/// <summary>Opaque Wavee route key + optional display arg — the same pair <c>FluentGpu.Controls.Route</c> carries.</summary>
-public readonly record struct SessionRouteDto(string Name, string? Arg);
+/// <summary>Opaque Wavee route key + optional display arg — the same pair <c>FluentGpu.Controls.Route</c> carries.
+/// Origin fields are the journey parent crumb; old snapshots omit them and fail-soft to the IA trail.</summary>
+public readonly record struct SessionRouteDto(
+    string Name, string? Arg,
+    string? OriginLabel = null, string? OriginName = null, string? OriginArg = null);
 
 /// <summary>Playback resume payload. Schema-stable; write/consume lands in a later agent. All fields optional.</summary>
 public sealed class SessionPlaybackDto
@@ -71,6 +74,9 @@ public sealed class SessionSnapshotStore
     string? _path;
     string? _activeName;
     string? _activeArg;
+    string? _activeOriginLabel;
+    string? _activeOriginName;
+    string? _activeOriginArg;
     int _backCount;
     int _fwdCount;
     int _tabId = -1;
@@ -159,15 +165,20 @@ public sealed class SessionSnapshotStore
 
     /// <summary>Mark nav dirty and debounce a save. Zero alloc after warmup: copies into reused 50-slot buffers.
     /// Pass the live shell lists — this method copies; the caller must not allocate a snapshot.</summary>
-    internal void UpdateNav(Route route, IReadOnlyList<Route> back, IReadOnlyList<Route> forward, int tabId)
+    internal void UpdateNav(Route route, IReadOnlyList<Route> back, IReadOnlyList<Route> forward, int tabId,
+        NavOriginStore? origins = null)
     {
         if (_writesBlocked) return;
         lock (_gate)
         {
             _activeName = route.Name;
             _activeArg = route.Arg;
-            _backCount = CopyNewest(back, _backScratch);
-            _fwdCount = CopyNewest(forward, _fwdScratch);
+            var activeOrigin = origins?.Peek(route.Name, route.Arg);
+            _activeOriginLabel = activeOrigin?.Label;
+            _activeOriginName = activeOrigin?.RouteName;
+            _activeOriginArg = activeOrigin?.RouteArg;
+            _backCount = CopyNewest(back, _backScratch, origins);
+            _fwdCount = CopyNewest(forward, _fwdScratch, origins);
             _tabId = tabId;
         }
         Interlocked.Exchange(ref _dirty, 1);
@@ -208,7 +219,7 @@ public sealed class SessionSnapshotStore
         forward.Clear();
         AppendCapped(nav.Back, back);
         AppendCapped(nav.Forward, forward);
-        active = new SessionRouteDto(a.Name, a.Arg);
+        active = new SessionRouteDto(a.Name, a.Arg, a.OriginLabel, a.OriginName, a.OriginArg);
         tabId = nav.ActiveTabId;
         return true;
     }
@@ -217,6 +228,9 @@ public sealed class SessionSnapshotStore
     {
         _activeName = nav?.Active?.Name;
         _activeArg = nav?.Active?.Arg;
+        _activeOriginLabel = nav?.Active?.OriginLabel;
+        _activeOriginName = nav?.Active?.OriginName;
+        _activeOriginArg = nav?.Active?.OriginArg;
         _tabId = nav?.ActiveTabId ?? -1;
         _backCount = CopyDtos(nav?.Back, _backScratch);
         _fwdCount = CopyDtos(nav?.Forward, _fwdScratch);
@@ -251,14 +265,17 @@ public sealed class SessionSnapshotStore
         }
     }
 
-    static int CopyNewest(IReadOnlyList<Route> src, SessionRouteDto[] dest)
+    static int CopyNewest(IReadOnlyList<Route> src, SessionRouteDto[] dest, NavOriginStore? origins)
     {
         int n = Math.Min(src.Count, MaxStack);
         int start = src.Count - n;
         for (int i = 0; i < n; i++)
         {
             var r = src[start + i];
-            dest[i] = new SessionRouteDto(r.Name, r.Arg);
+            var o = origins?.Peek(r.Name, r.Arg);
+            dest[i] = o is { } x
+                ? new SessionRouteDto(r.Name, r.Arg, x.Label, x.RouteName, x.RouteArg)
+                : new SessionRouteDto(r.Name, r.Arg);
         }
         return n;
     }
@@ -303,7 +320,9 @@ public sealed class SessionSnapshotStore
                 Version = CurrentVersion,
                 Nav = new SessionNavDto
                 {
-                    Active = _activeName is { Length: > 0 } name ? new SessionRouteDto(name, _activeArg) : null,
+                    Active = _activeName is { Length: > 0 } name
+                        ? new SessionRouteDto(name, _activeArg, _activeOriginLabel, _activeOriginName, _activeOriginArg)
+                        : null,
                     Back = back,
                     Forward = fwd,
                     ActiveTabId = _tabId,

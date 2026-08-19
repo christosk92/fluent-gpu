@@ -15,6 +15,7 @@ namespace Wavee.Tests
         [Theory]
         [InlineData("home")]
         [InlineData("search")]
+        [InlineData("browse")]
         [InlineData("recents")]
         [InlineData("history")]
         [InlineData("albums")]
@@ -63,7 +64,7 @@ namespace Wavee.Tests
 
             Assert.Equal(2, crumbs.Count);
             Assert.Equal(Loc.Get(Strings.Browse.HomeTitle), crumbs[0].Label);
-            Assert.Equal("search", crumbs[0].RouteName);
+            Assert.Equal(BrowseRoutes.Home, crumbs[0].RouteName);
             Assert.Equal("Top 50 - Global", crumbs[1].Label);
             Assert.Null(crumbs[1].RouteName);
             Assert.DoesNotContain(crumbs, c => c.Label == Loc.Get(Strings.Nav.Home));
@@ -77,7 +78,7 @@ namespace Wavee.Tests
 
             Assert.Equal(2, crumbs.Count);
             Assert.Equal(Loc.Get(Strings.Browse.HomeTitle), crumbs[0].Label);
-            Assert.Equal("search", crumbs[0].RouteName);
+            Assert.Equal(BrowseRoutes.Home, crumbs[0].RouteName);
             Assert.Equal("Music", crumbs[1].Label);
             Assert.Null(crumbs[1].RouteName);
         }
@@ -125,6 +126,59 @@ namespace Wavee.Tests
         public void UnknownRoute_HasNoTrail()
         {
             Assert.Empty(DrillTrail.Of("some-unregistered-route", null, "Whatever"));
+        }
+
+        // Defect G: Browse › Netflix → "New on Netflix" must keep the category parent, not collapse to Browse › section.
+        [Fact]
+        public void BrowseSection_FromCategory_KeepsCategoryCrumb()
+        {
+            var category = BrowseRoutes.Page("spotify:page:netflix");
+            var section = BrowseSectionRoutes.Page("spotify:section:new-on-netflix");
+            var origin = new NavOrigin("Netflix", category, "Netflix");
+            var crumbs = DrillTrail.Of(section, null, "New on Netflix", origin);
+
+            Assert.Equal(3, crumbs.Count);
+            Assert.Equal(Loc.Get(Strings.Browse.HomeTitle), crumbs[0].Label);
+            Assert.Equal(BrowseRoutes.Home, crumbs[0].RouteName);
+            Assert.Equal("Netflix", crumbs[1].Label);
+            Assert.Equal(category, crumbs[1].RouteName);
+            Assert.Equal("New on Netflix", crumbs[2].Label);
+            Assert.Null(crumbs[2].RouteName);
+        }
+
+        // Defect G: a Pop genre page opened from search results "pop" must trail from the query, not invent Browse.
+        [Fact]
+        public void GenreFromSearch_TrailsFromQueryNotBrowse()
+        {
+            var origin = new NavOrigin("pop", "search", "pop");
+            var crumbs = DrillTrail.Of(BrowseRoutes.Page("spotify:page:pop"), null, "Pop", origin);
+
+            Assert.Equal(2, crumbs.Count);
+            Assert.Equal("pop", crumbs[0].Label);
+            Assert.Equal("search", crumbs[0].RouteName);
+            Assert.Equal("pop", crumbs[0].RouteArg);
+            Assert.Equal("Pop", crumbs[1].Label);
+            Assert.Null(crumbs[1].RouteName);
+            Assert.DoesNotContain(crumbs, c => c.Label == Loc.Get(Strings.Browse.HomeTitle));
+        }
+
+        [Fact]
+        public void OriginNull_PreservesEveryIaArm()
+        {
+            Assert.Equal(2, DrillTrail.Of(HomeSectionRoutes.Page("spotify:section:1"), null, "Made For You").Count);
+            Assert.Equal(2, DrillTrail.Of(BrowseSectionRoutes.Page("spotify:section:charts"), null, "Top 50").Count);
+            Assert.Equal(2, DrillTrail.Of(BrowseRoutes.Page("spotify:page:music"), null, "Music").Count);
+        }
+
+        [Fact]
+        public void ConcertsHub_TrailsToBrowse()
+        {
+            var crumbs = DrillTrail.Of(Wavee.Features.Concerts.ConcertRoutes.Hub, null, null);
+            Assert.Equal(2, crumbs.Count);
+            Assert.Equal(Loc.Get(Strings.Browse.HomeTitle), crumbs[0].Label);
+            Assert.Equal(BrowseRoutes.Home, crumbs[0].RouteName);
+            Assert.Equal(Loc.Get(Strings.Concerts.Title), crumbs[1].Label);
+            Assert.Null(crumbs[1].RouteName);
         }
     }
 }

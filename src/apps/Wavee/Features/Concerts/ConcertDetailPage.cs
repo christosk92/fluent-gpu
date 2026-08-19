@@ -9,6 +9,7 @@ using FluentGpu.Hooks;
 using FluentGpu.Localization;
 using FluentGpu.Signals;
 using Wavee.Core;
+using Wavee.Features.Browse;
 using Wavee.Features.Concerts;
 using static FluentGpu.Dsl.Ui;
 
@@ -67,7 +68,7 @@ sealed class ConcertDetailPage : Component
         var content = new BoxEl
         {
             Direction = 1,
-            Padding = new Edges4(32f, 40f, 32f, PlayerDock.Reserve + 40f),
+            Padding = new Edges4(32f, BrowseLayout.MastheadReserve + 40f, 32f, PlayerDock.Reserve + 40f),
             Children = [ region ],
         };
         return ScrollView(content) with { Grow = 1f, MinHeight = 0f, ScrollKey = "concert-detail:" + _concertUri };

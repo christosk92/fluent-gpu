@@ -9,7 +9,7 @@ public readonly record struct SidebarDestination(
     string RouteKey,
     string? Arg,
     string PinId,
-    SidebarPinKind Kind,
+    SidebarEntryKind Kind,
     string Uri,
     string Name)
 {

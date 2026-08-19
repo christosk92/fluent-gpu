@@ -9,11 +9,20 @@ static class SearchRoutes
 {
     const string GenrePrefix = "spotify:genre:";
 
-    public static void OpenGenre(string uri, string name, Action<string, string?> go)
+    public static void OpenGenre(string uri, string name, Action<string, string?> go,
+        NavOrigin? origin = null, Action<string, string?, NavOrigin?>? goOrigin = null)
     {
         if (uri.StartsWith(GenrePrefix, StringComparison.Ordinal) && uri.Length > GenrePrefix.Length)
-            go(BrowseRoutes.Page("spotify:page:" + uri[GenrePrefix.Length..]), name);
+        {
+            string route = BrowseRoutes.Page("spotify:page:" + uri[GenrePrefix.Length..]);
+            if (goOrigin is not null) goOrigin(route, name, origin);
+            else go(route, name);
+        }
         else
-            go("search", name.Length == 0 ? null : name);
+        {
+            string? arg = name.Length == 0 ? null : name;
+            if (goOrigin is not null) goOrigin("search", arg, origin);
+            else go("search", arg);
+        }
     }
 }

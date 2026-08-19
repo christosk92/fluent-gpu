@@ -14,8 +14,11 @@ namespace Wavee;
 // Locked decision 11: ICatalogSource.GetLibraryAsync is NOT the source (StoreLibrarySource returns empty for it). The
 // projection reads LibraryStore.PlaylistTree / Albums / Artists / Shows / AddedAt instead.
 
-/// <summary>The row families the unified list carries. Values are NOT persisted (the persisted vocabularies are
-/// <see cref="SidebarPinKind"/> and <c>Wavee.Core.Sidebar.SidebarEntityKind</c>) — this is a projection-time enum.
+/// <summary>The row families the unified list carries. This is also the ONE persisted pin-kind vocabulary
+/// (<c>SidebarPin.Kind</c> — the deleted <c>SidebarPinKind</c> and its two lossy mappings are folded into this enum),
+/// so a pin and a projected row can never disagree about what an entity "is". The unrelated
+/// <c>Wavee.Core.Sidebar.SidebarEntityKind</c> is a different, narrower vocabulary (a curated section ITEM's target
+/// kind) and is outside this unification.
 ///
 /// <para><see cref="Track"/> is produced ONLY by a data source that yields tracks (<c>wavee.queue</c>,
 /// <c>wavee.nowPlaying</c>, <c>wavee.artist.topTracks</c>) — never by <see cref="SidebarProjection.Build"/>, because a

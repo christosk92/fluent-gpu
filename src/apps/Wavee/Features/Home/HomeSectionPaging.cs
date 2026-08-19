@@ -74,6 +74,20 @@ static class HomeSectionPaging
         };
     }
 
+    /// <summary>How far along an eager walk is, as 0..1 — the Charts progress bar's value.
+    /// <para>The load-bearing case is an UNTRUSTWORTHY total. <c>HomeBrowseCards.Section</c> floors
+    /// <see cref="HomeSection.TotalCount"/> at the card count, and the walk exists precisely because that total
+    /// under-reports, so a total at or below what we already hold says "unknown", never "finished": treating it as the
+    /// denominator paints a FULL bar on a 20-card seed while three more pages are in flight, then falls back to ~54%
+    /// when the next one lands. Such a total is worth <paramref name="pageAssumed"/> more items instead. The caller
+    /// writes 1f explicitly on its terminal latch — this never reports done on its own.</para></summary>
+    public static float WalkFraction(HomeSection section, int pageAssumed)
+    {
+        int have = section.Cards.Count;
+        int total = section.TotalCount > have ? section.TotalCount : have + Math.Max(1, pageAssumed);
+        return total <= 0 ? 0f : have / (float)total;
+    }
+
     /// <summary>Did an <see cref="Append"/> put anything new on screen? Named rather than inlined because it is a
     /// TERMINATION signal, not a cosmetic check: a page the dedup ate entirely means clicking again can only produce the
     /// same nothing, however healthy the server's cursor and total look.</summary>

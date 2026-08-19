@@ -1,6 +1,7 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
+using FluentGpu.Animation;
 using FluentGpu.Dsl;
 using FluentGpu.Hooks;
 using FluentGpu.Signals;
@@ -38,6 +39,19 @@ sealed class HomeSectionAppendPreloader : Component
     /// dropped to false after each append so only a fresh scroll event continues the chain.</summary>
     public required IReadSignal<bool> NearTail;
     public required Action Start;
+
+    /// <summary>24px-floored offset + a content-height term so the check re-fires on append growth (an append pushes
+    /// the tail away → nearness recomputes false until the user scrolls again). Optional <paramref name="offset"/>
+    /// is a second writer for hosts that also publish the page scroll (ConcertHub's LazyGrid).</summary>
+    public static (Func<ScrollGeometry, long> Project, Action<ScrollGeometry> Action) NearTailWatch(
+        Signal<bool> nearTail, Signal<float>? offset = null)
+        => (
+            static g => ((long)(g.OffsetY / 24f) << 20) ^ (long)(g.ContentH / 48f),
+            g =>
+            {
+                if (offset is not null) offset.Value = g.OffsetY;
+                nearTail.Value = g.OffsetY + g.ViewportH >= g.ContentH - 1.5f * g.ViewportH;
+            });
 
     CancellationTokenSource? _arm;
     int _attempts;

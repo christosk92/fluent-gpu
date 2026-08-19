@@ -135,6 +135,7 @@ namespace Wavee.Tests
         public void FixedRoutes_KeepTheirOwnLabelsAndGlyphs()
         {
             Assert.Equal((Loc.Get(Strings.Nav.Home), Icons.Home), Dest("home"));
+            Assert.Equal((Loc.Get(Strings.Browse.HomeTitle), Icons.Globe), Dest("browse"));
             Assert.Equal((Loc.Get(Strings.Nav.Albums), Icons.Album), Dest("albums"));
             Assert.Equal((Loc.Get(Strings.Nav.Artists), Icons.Contact), Dest("artists"));
             Assert.Equal((Loc.Get(Strings.Nav.LikedSongs), Icons.Heart), Dest("liked"));

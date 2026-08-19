@@ -1,25 +1,53 @@
 using System;
+using System.Collections.Generic;
 using FluentGpu.Hooks;
 using FluentGpu.Signals;
 
 namespace Wavee;
 
-/// <summary>Page-published overrides for the shell masthead band (<c>ShellMastheadBand</c>). Owner-token'd exactly
-/// like <see cref="ShellMaterialState"/>: on an animated swap the INCOMING page's activate-publish lands ~250ms
-/// BEFORE the outgoing page's deactivate-clear, so a clear must be owner-gated or it blanks the new page's masthead
-/// mid-read.</summary>
-public sealed record ShellMastheadState(object? Owner, string? Title, string? Caption,
+/// <summary>Page-published overrides for the shell masthead band. Route-keyed: an entry for a non-active route is
+/// simply never rendered. No owner tokens — Publish is last-write-wins per route identity.
+/// <para>Deps rule: any value a published closure captures must be a UseEffect dep (including paging cursors).</para></summary>
+public sealed record ShellMastheadState(string? Title, string? Caption,
     bool ToolsVisible = false, bool ToolsLoading = false, Action? ToolsAction = null);
 
-/// <summary>
-/// The shell-owned, page-scoped MASTHEAD channel. The shell mounts ONE <c>ShellMastheadBand</c> above the
-/// content card's KeepAlive boundary, and a page overrides its title/caption/tools by writing this signal while it
-/// is the active, visible page — mirroring <see cref="ShellMaterial"/>'s owner-token contract.
-/// </summary>
+/// <summary>Bounded LRU of per-route masthead publications. One <see cref="Version"/> signal; the band reads
+/// <see cref="For"/> for the active route.</summary>
+public sealed class ShellMastheadStore
+{
+    public const int Capacity = 16;
+    public readonly Signal<int> Version = new(0);
+
+    readonly Dictionary<string, ShellMastheadState> _map = new(StringComparer.Ordinal);
+    readonly List<string> _lru = [];
+
+    static string KeyOf(string name, string? arg) => name + "\u001F" + (arg ?? "");
+
+    public void Publish(string name, string? arg, ShellMastheadState state)
+    {
+        string k = KeyOf(name, arg);
+        _lru.Remove(k);
+        _lru.Add(k);
+        _map[k] = state;
+        while (_map.Count > Capacity && _lru.Count > 0)
+        {
+            string old = _lru[0];
+            _lru.RemoveAt(0);
+            _map.Remove(old);
+        }
+        Version.Value++;
+    }
+
+    public ShellMastheadState? For(string name, string? arg)
+    {
+        _ = Version.Value;
+        return _map.TryGetValue(KeyOf(name, arg), out var s) ? s : null;
+    }
+}
+
+/// <summary>The shell-owned MASTHEAD channel. The shell mounts ONE <c>ShellMastheadBand</c> above the content card
+/// and provides this store; pages publish dynamics with one deps-leg effect.</summary>
 public static class ShellMasthead
 {
-    /// <summary>Context slot — the shell provides its masthead signal here; consumers read it with
-    /// <c>UseContext(ShellMasthead.Slot)</c>. Null when no shell is mounted (e.g. headless tests), in which case a
-    /// publisher simply no-ops and <c>ShellMastheadBand</c> falls back to the route-derived trail.</summary>
-    public static readonly Context<Signal<ShellMastheadState?>?> Slot = new(null);
+    public static readonly Context<ShellMastheadStore?> Slot = new(null);
 }

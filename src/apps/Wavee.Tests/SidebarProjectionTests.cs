@@ -548,12 +548,12 @@ public class SidebarProjectionTests
     [Fact]
     public void PinId_KindAndRouteRoundTrip()
     {
-        Assert.Equal(SidebarPinKind.Playlist, SidebarPinId.KindOf("pl:spotify:playlist:x"));
-        Assert.Equal(SidebarPinKind.Album, SidebarPinId.KindOf("album:spotify:album:x"));
-        Assert.Equal(SidebarPinKind.Artist, SidebarPinId.KindOf("artist:spotify:artist:x"));
-        Assert.Equal(SidebarPinKind.Show, SidebarPinId.KindOf("show:spotify:show:x"));
-        Assert.Equal(SidebarPinKind.Folder, SidebarPinId.KindOf("folder:6a1f2c"));
-        Assert.Equal(SidebarPinKind.Route, SidebarPinId.KindOf("liked"));
+        Assert.Equal(SidebarEntryKind.Playlist, SidebarPinId.KindOf("pl:spotify:playlist:x"));
+        Assert.Equal(SidebarEntryKind.Album, SidebarPinId.KindOf("album:spotify:album:x"));
+        Assert.Equal(SidebarEntryKind.Artist, SidebarPinId.KindOf("artist:spotify:artist:x"));
+        Assert.Equal(SidebarEntryKind.Show, SidebarPinId.KindOf("show:spotify:show:x"));
+        Assert.Equal(SidebarEntryKind.Folder, SidebarPinId.KindOf("folder:6a1f2c"));
+        Assert.Equal(SidebarEntryKind.AppRoute, SidebarPinId.KindOf("liked"));
 
         Assert.Equal("show:spotify:show:x", SidebarPinId.RouteOf("show:spotify:show:x"));
         Assert.Null(SidebarPinId.RouteOf("folder:6a1f2c"));         // a folder expands in place; it never navigates

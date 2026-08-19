@@ -170,6 +170,37 @@ public static class SidebarBinderPipeline
     }
 
     /// <summary>
+    /// Build the row for a pin the live projection does NOT know — an editorial/Spotify-owned playlist (or any other
+    /// entity) never saved to the user's own library/rootlist, so it never appears in the binder's <c>_index</c> (built
+    /// solely from <c>LibraryStore</c>'s rootlist tree + Albums/Artists/Shows). Root cause of the "blank cover + 0
+    /// songs" defect: the OLD code stopped here and rendered the pin's bare display cache forever.
+    ///
+    /// <para>This still renders the pin's own offline display cache (F.5.4's offline-first contract — an unresolved
+    /// pin must never disappear, and must render something the instant it is drawn), but OVERLAYS
+    /// <paramref name="hydrated"/> — Cover / ChildCount / Creator resolved by the binder through the same catalog
+    /// façade the detail page uses (<c>SidebarProjectionBinder.RequestPinHydration</c>) — once it lands. Pure: the
+    /// binder is the only impure caller (it owns the async fetch + the per-pin cache), so this merge is what a headless
+    /// test drives to pin the "art/count arrive once hydrated" contract without a network or an engine.</para>
+    /// </summary>
+    public static SidebarLibraryEntry ResolveUnlistedPin(SidebarPin pin, int sourceOrder, SidebarLibraryEntry? hydrated)
+    {
+        var baseEntry = new SidebarLibraryEntry(
+            pin.Id, pin.Kind, pin.Uri, pin.Name, "", null, null,
+            ChildCount: 0, AddedAtMs: pin.AddedAtMs, SortStamp: pin.AddedAtMs, LastVisitedTicksUtc: 0,
+            SourceOrder: sourceOrder, Depth: 0, Circular: pin.Kind == SidebarEntryKind.Artist,
+            Flavor: SidebarPlaylistFlavor.None)
+        { IsPinned = true, FolderId = "", FolderName = "", FirstArtistName = "" };
+
+        if (hydrated is not { } h) return baseEntry;
+        return baseEntry with
+        {
+            Cover = h.Cover ?? baseEntry.Cover,
+            ChildCount = h.ChildCount,
+            Creator = h.Creator.Length > 0 ? h.Creator : baseEntry.Creator,
+        };
+    }
+
+    /// <summary>
     /// Resolve EVERY <c>SidebarSectionKind.Extension</c> section in the document (top level + one nesting level) into a
     /// row slice, appending their rows into the one shared <paramref name="entries"/> pool.
     ///
