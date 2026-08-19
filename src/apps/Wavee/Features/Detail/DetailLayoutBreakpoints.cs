@@ -14,6 +14,29 @@ public static class DetailLayoutBreakpoints
     /// its first frame.</summary>
     public static int InitialTierForViewport(float viewportWidth) => NominalTierFor(viewportWidth);
 
+    // ── the WINDOW-viewport-vs-PAGE-width gap ───────────────────────────────────────────────────────────────────────
+    // The detail page's own content column sits inside the shell's nav pane, so the WINDOW viewport a pre-measure seed
+    // reads (Ctx Viewport.Size) overstates the page's actual width by roughly a sidebar. Left uncorrected, a window a
+    // little above one of this file's breakpoints can seed the WIDE arm (rail / two-column) for its first composed
+    // frame while the real page — narrower by the sidebar — can only hold the narrower one; the very next Measure then
+    // flips it, which is exactly the hero-remount flicker this estimate exists to prevent.
+    //
+    // ShellResponsiveLayout.NavPaneNarrowW (240) is the sidebar's own default/minimum footprint (SidebarPreferences
+    // seeds the pane at it pre-measure, and it is also the width the shell's nav-pane ladder actually holds across the
+    // window-width band where this file's OWN breakpoints (560/660/820) fall — the ladder only steps wider at 1400+).
+    // Deliberately the sidebar's SMALLEST plausible width, not its live (possibly wider, user-resized) one: a too-SMALL
+    // allowance can make this estimate OVERSHOOT the real page width and seed a too-wide arm (the failure mode above);
+    // a too-LARGE allowance only makes it undershoot, which just seeds a narrower arm than strictly needed and self-
+    // corrects at the very next Measure (this file's <see cref="ModeFor"/> / <see cref="TierFor"/> hysteresis only
+    // ever widens on a genuine subsequent measurement, never on a stale seed).
+    public const float ShellChromeAllowanceDip = ShellResponsiveLayout.NavPaneNarrowW;
+
+    /// <summary>A pre-measure PAGE width from the WINDOW viewport (see <see cref="ShellChromeAllowanceDip"/>) — what
+    /// <see cref="InitialModeForViewport"/> / <see cref="InitialTierForViewport"/> and the vertical hero's pre-measure
+    /// geometry should seed from instead of the raw viewport width.</summary>
+    public static float EstimatePageWidthFromViewport(float viewportWidth)
+        => MathF.Max(0f, viewportWidth - ShellChromeAllowanceDip);
+
     /// <summary>Narrow (drop a column) immediately; re-admit a column only once the width clears the threshold by
     /// <see cref="TierHysteresisDip"/> — the safe asymmetry, since the cost of the wrong guess in the widening
     /// direction is a column set the pane cannot hold.

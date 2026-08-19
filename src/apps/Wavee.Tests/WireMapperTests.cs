@@ -281,6 +281,73 @@ public class PlaylistWireMapperTests
         var op = Assert.Single(PlaylistWireMapper.MapOps(new[] { wire }));
         Assert.False(op.ListPatch!.DeletedByOwner);
     }
+
+    // ── chart playlist per-row rank movement (ItemAttributes.format_attributes, desktop-verified) ──────────────────────
+    static Pl.Item ChartItem(string uri, params (string Key, string Value)[] pairs)
+    {
+        var attrs = new Pl.ItemAttributes();
+        foreach (var (k, v) in pairs) attrs.FormatAttributes.Add(new Pl.FormatListAttribute { Key = k, Value = v });
+        return new Pl.Item { Uri = uri, Attributes = attrs };
+    }
+
+    static PlaylistMember ParseOne(Pl.Item item)
+    {
+        var slc = new Pl.SelectedListContent();
+        var contents = new Pl.ListItems { Pos = 0, Truncated = false };
+        contents.Items.Add(item);
+        slc.Contents = contents;
+        return PlaylistWireMapper.ParseContents(slc).Members[0];
+    }
+
+    [Fact]
+    public void ToMember_ParsesChartStatus_Up()
+    {
+        var m = ParseOne(ChartItem("spotify:track:a",
+            ("status", "UP"), ("current_pos", "3"), ("previous_pos", "4"), ("rank", "41545")));
+        Assert.NotNull(m.Chart);
+        Assert.Equal(ChartEntryStatus.Up, m.Chart!.Value.Status);
+        Assert.Equal(3, m.Chart.Value.CurrentPos);
+        Assert.Equal(4, m.Chart.Value.PreviousPos);
+        Assert.Equal(41545L, m.Chart.Value.Rank);
+    }
+
+    [Fact]
+    public void ToMember_ParsesChartStatus_NewHasNoPreviousPos()
+    {
+        var m = ParseOne(ChartItem("spotify:track:b",
+            ("status", "NEW"), ("current_pos", "22"), ("rank", "18579")));
+        Assert.NotNull(m.Chart);
+        Assert.Equal(ChartEntryStatus.New, m.Chart!.Value.Status);
+        Assert.Equal(22, m.Chart.Value.CurrentPos);
+        Assert.Equal(0, m.Chart.Value.PreviousPos);   // absent on the wire when NEW
+        Assert.Equal(18579L, m.Chart.Value.Rank);
+    }
+
+    [Fact]
+    public void ToMember_ParsesChartStatus_Equal()
+    {
+        var m = ParseOne(ChartItem("spotify:track:c",
+            ("status", "EQUAL"), ("current_pos", "1"), ("previous_pos", "1"), ("rank", "49051")));
+        Assert.NotNull(m.Chart);
+        Assert.Equal(ChartEntryStatus.Equal, m.Chart!.Value.Status);
+        Assert.Equal(1, m.Chart.Value.CurrentPos);
+        Assert.Equal(1, m.Chart.Value.PreviousPos);
+    }
+
+    [Fact]
+    public void ToMember_NoFormatAttributes_ChartIsNull()
+    {
+        var m = ParseOne(new Pl.Item { Uri = "spotify:track:d", Attributes = new Pl.ItemAttributes { AddedBy = "alice" } });
+        Assert.Null(m.Chart);
+    }
+
+    [Fact]
+    public void ToMember_UnknownChartStatus_MapsToUnknown()
+    {
+        var m = ParseOne(ChartItem("spotify:track:e", ("status", "SIDEWAYS"), ("current_pos", "9")));
+        Assert.NotNull(m.Chart);
+        Assert.Equal(ChartEntryStatus.Unknown, m.Chart!.Value.Status);
+    }
 }
 
 // Map the collection2v2 DeltaResponse/PageResponse onto the domain CollectionDelta.

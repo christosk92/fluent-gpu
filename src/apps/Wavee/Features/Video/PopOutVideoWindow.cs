@@ -28,6 +28,32 @@ sealed class PopOutVideoWindow : Component
     /// window never builds a player — it binds to this one, so a placement flip re-binds instead of restarting from 0.</summary>
     public required IReadSignal<PlaybackBridge.VideoPlayerBinding> Player { get; init; }
 
+    /// <summary>Wrap the content in an overlay host so the transport's flyouts (speed, more, quality, CC, the volume
+    /// slider) actually open. A detached window builds its OWN AppHost — its own reconciler and ambient context map —
+    /// so the shell's OverlayHost never reaches it and <c>UseContext(Overlay.Service)</c> would resolve to
+    /// <c>NullOverlayService</c>, making every one of those buttons a silent no-op.
+    ///
+    /// <para>The child MUST be a COMPONENT, never an inline element tree. <see cref="OverlayHost.Child"/> is
+    /// <c>[MountOnceContent]</c> and <see cref="OverlayHost.Create"/> hands it to <c>Embed.Comp</c>, so it is built
+    /// ONCE and frozen (the props-freeze contract — see docs/design/subsystems/component-props-contract.md). Passing
+    /// the element tree directly froze it at the first render, when no player existed yet: the window then rendered an
+    /// empty root FOREVER, so no <c>MediaPlayerElement</c> was ever mounted, nothing pumped the protected session, and
+    /// the managed side sat at <c>Opening</c> until the start watchdog gave up — while the native log showed the video
+    /// licensed, playing and feeding samples. A component re-renders itself, so its signal reads stay live.</para></summary>
+    public override Element Render() =>
+        OverlayHost.Create(Embed.Comp(() => new PopOutVideoContent { Source = Source, Player = Player }));
+}
+
+/// <summary>The pop-out's actual content, as a COMPONENT so it re-renders when the source/player signals change (see
+/// the note on <see cref="PopOutVideoWindow.Render"/> for why this cannot be an inline element tree). Both props are
+/// FROZEN signal instances — freezing a <c>Signal</c> is correct; freezing the values read out of one is not.</summary>
+sealed class PopOutVideoContent : Component
+{
+    /// <inheritdoc cref="PopOutVideoWindow.Source"/>
+    public required IReadSignal<PopOutVideoSource?> Source { get; init; }
+    /// <inheritdoc cref="PopOutVideoWindow.Player"/>
+    public required IReadSignal<PlaybackBridge.VideoPlayerBinding> Player { get; init; }
+
     public override Element Render()
     {
         // Size the root to THIS window's viewport (the AppHost does NOT auto-stretch a scene root — a bare Grow=1 hugs to
@@ -38,13 +64,7 @@ sealed class PopOutVideoWindow : Component
         // Mount whenever a player exists — a brief source null must not unmount the only MF pump.
         bool live = VideoSurfaceMount.ShouldMountPlayerStage(binding.Player is not null);
         string stageKey = src?.Key ?? ("gen:" + binding.Generation.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        // WRAPPED IN AN OVERLAY HOST. A detached window builds its OWN AppHost — its own reconciler and its own ambient
-        // context map — so nothing from the shell's tree reaches it, including the shell's OverlayHost. Without one here
-        // `UseContext(Overlay.Service)` resolves to NullOverlayService, and every flyout the transport owns silently does
-        // nothing: the speed (1×) and more (…) buttons were dead, and the volume button fell through to a bare mute
-        // because its slider flyout could never open. The host must wrap the CONTENT (it renders a top-level ZStack over
-        // it), so it is the outermost element here.
-        return OverlayHost.Create(new BoxEl
+        return new BoxEl
         {
             Direction = 1,
             Width = Prop.Of(() => vp.Value.Width),
@@ -62,7 +82,7 @@ sealed class PopOutVideoWindow : Component
             Children = live
                 ? [new BoxEl { Grow = 1, Children = [Embed.Comp(() => new PopOutVideoStage { Source = src, Player = Player }) with { Key = "stage:" + stageKey }] }]
                 : Array.Empty<Element>(),
-        });
+        };
     }
 }
 

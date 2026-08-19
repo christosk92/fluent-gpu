@@ -115,7 +115,7 @@ static class DetailRail
             // The cover drags the whole entity. On the FRAMING box, not on the editable cover inside it, so the
             // file-drop target that cover owns stays untouched (see WaveeDetailDrag.Hero).
             Draggable = WaveeDetailDrag.Hero(m, acts),
-            Children = [editable ? PlaylistInlineEdit.Cover(modelSource, cover) : HeroArtwork(m, cover, saturation: 1.18f)],
+            Children = [editable ? PlaylistInlineEdit.Cover(modelSource, cover, saturation: 1.18f) : HeroArtwork(m, cover, saturation: 1.18f)],
         });
 
         // Identity eyebrow — the type/year fact as ONE tracked-out run, occupying exactly the row the type/year pills
@@ -158,6 +158,9 @@ static class DetailRail
         // Daylist rollover countdown — the same flip strip the Home hero mounts, at rail scale. The card keeps its own
         // remount-on-rollover key INSIDE this row's stable slot: the two keys answer different questions.
         if (DaylistCard(m, h, compact: true) is { } daylist) kids.Add(LateRow("rail:daylist", daylist));
+
+        // Chart-playlist "N new entries · <date>" caption — a plain static row, unlike the daylist countdown above.
+        if (ChartCaption(m) is { } chartCaption) kids.Add(LateRow("rail:chart", chartCaption));
 
         // CTA cluster: Play pill + a GROUP of shuffle/heart/share FABs. Wrap=true → at a wide rail they're one line; at a
         // narrow rail the FAB group wraps to the next line AS A UNIT (Play above, the three FABs together below) instead
@@ -385,6 +388,17 @@ static class DetailRail
         => m.ExpiresAtMs > 0
             ? Embed.Comp(() => new FlipCountdown { ExpiresAtMs = m.ExpiresAtMs, Accent = () => h.Accent, Compact = compact })
                 with { Key = "daylist:" + m.ContextUri + ":" + m.ExpiresAtMs.ToString(System.Globalization.CultureInfo.InvariantCulture) }
+            : null;
+
+    /// <summary>The chart-playlist "N new entries · <c>MMM d</c>" caption, or null off a non-chart playlist (or a chart
+    /// header reporting no new entries). A plain static caption — unlike <see cref="DaylistCard"/> it states a fact as
+    /// of the last load rather than counting down live, so it needs no Component/remount key of its own.</summary>
+    internal static Element? ChartCaption(DetailModel m)
+        => m.ChartNewEntries > 0
+            ? Caption(Strings.Detail.ChartNewEntries(m.ChartNewEntries, DetailFormat.ChartUpdatedDateLabel(m.ChartUpdatedAtMs))) with
+            {
+                Color = Tok.TextSecondary,
+            }
             : null;
 
     // The play cluster for the vertical (narrow) header: Play pill + shuffle / save / share, wrapping as a unit. The list

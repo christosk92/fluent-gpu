@@ -10,8 +10,10 @@ namespace Wavee.Backend.Playlists;
 // and positions drift), which is why remove/reorder rebase keys on ItemId, never on raw indices.
 
 /// <summary>One ordered membership row: the stable per-row <see cref="ItemId"/>, the referenced entity
-/// <see cref="ItemUri"/> (joined to the shared Store entity at read), and the per-membership add facts.</summary>
-public readonly record struct PlaylistMember(string ItemId, string ItemUri, string? AddedBy, long AddedAt);
+/// <see cref="ItemUri"/> (joined to the shared Store entity at read), and the per-membership add facts.
+/// <paramref name="Chart"/> carries a chart playlist's per-row rank movement (null off a non-chart list, or when the
+/// wire's ItemAttributes carried no format_attributes at all).</summary>
+public readonly record struct PlaylistMember(string ItemId, string ItemUri, string? AddedBy, long AddedAt, ChartEntry? Chart = null);
 
 /// <summary>List-level attribute patch carried by <see cref="PlaylistOpKind.UpdateList"/> — name, description, cover,
 /// collaborative toggle, or per-field clears.</summary>

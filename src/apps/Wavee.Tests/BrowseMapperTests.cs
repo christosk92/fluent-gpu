@@ -146,6 +146,63 @@ public class BrowseMapperTests
         Assert.NotNull(section);
         Assert.Equal("Discover new music", section!.Title);
         Assert.Equal("New Music Friday", Assert.Single(section.Cards).Title);
+        // pagingInfo.nextOffset is explicitly null here — the PagingComplete sentinel, not the "no cursor" null.
+        Assert.Equal(BrowseSection.PagingComplete, section.NextOffset);
+    }
+
+    // Fiddler-captured browseSection walk (Weekly Song Charts, totalCount 74): offset 20 → nextOffset 40, a real
+    // mid-walk cursor value the mapper must pass through untouched.
+    [Fact]
+    public void SectionPage_MapsARealNextOffset_ForAMidWalkPage()
+    {
+        var json = """
+        {"data":{"browseSection":{"uri":"spotify:section:weekly",
+          "data":{"__typename":"BrowseGenericSectionData","title":{"transformedLabel":"Weekly Song Charts"}},
+          "sectionItems":{"totalCount":74,"pagingInfo":{"nextOffset":40},"items":[
+            {"content":{"data":{"__typename":"Playlist","uri":"spotify:playlist:a","name":"El Salvador"}}}
+          ]}}}}
+        """;
+        var section = SpotifyBrowseMapper.SectionPage(Root(json));
+        Assert.NotNull(section);
+        Assert.Equal(40, section!.NextOffset);
+        Assert.Equal(74, section.Total);
+    }
+
+    // The captured sequence's LAST page: offset 60 returns 14 items, nextOffset EXPLICITLY null, totalCount 74
+    // (60 + 14 == 74 — the total and the terminator agree here). The mapper still records the PagingComplete
+    // sentinel rather than folding it into "absent", so a consumer never confuses this with a legacy response that
+    // carried no pagingInfo at all.
+    [Fact]
+    public void SectionPage_LastPage_MapsExplicitNullAsPagingComplete()
+    {
+        var json = """
+        {"data":{"browseSection":{"uri":"spotify:section:weekly",
+          "data":{"__typename":"BrowseGenericSectionData","title":{"transformedLabel":"Weekly Song Charts"}},
+          "sectionItems":{"totalCount":74,"pagingInfo":{"nextOffset":null},"items":[
+            {"content":{"data":{"__typename":"Playlist","uri":"spotify:playlist:a","name":"Last One"}}}
+          ]}}}}
+        """;
+        var section = SpotifyBrowseMapper.SectionPage(Root(json));
+        Assert.NotNull(section);
+        Assert.Equal(BrowseSection.PagingComplete, section!.NextOffset);
+        Assert.Equal(74, section.Total);
+    }
+
+    // No pagingInfo object at all — a legacy/degenerate shape. The mapper must NOT invent PagingComplete here: the
+    // caller needs to fall back to the synthesized offset+count-vs-total cursor instead of treating this as "done".
+    [Fact]
+    public void SectionPage_NoPagingInfoAtAll_MapsToPlainNull()
+    {
+        var json = """
+        {"data":{"browseSection":{"uri":"spotify:section:s1",
+          "data":{"__typename":"BrowseGenericSectionData","title":{"transformedLabel":"Discover new music"}},
+          "sectionItems":{"totalCount":3,"items":[
+            {"content":{"data":{"__typename":"Playlist","uri":"spotify:playlist:a","name":"New Music Friday"}}}
+          ]}}}}
+        """;
+        var section = SpotifyBrowseMapper.SectionPage(Root(json));
+        Assert.NotNull(section);
+        Assert.Null(section!.NextOffset);
     }
 
     [Fact]

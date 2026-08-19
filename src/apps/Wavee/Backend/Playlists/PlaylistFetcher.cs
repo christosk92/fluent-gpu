@@ -276,6 +276,7 @@ public sealed class PlaylistFetcher
         // seed to the resolved display name + avatar; the null-avatar seed only fills the gap until the profile lands.
         Owner? ownerChip = owner.Length > 0 ? new Owner(owner, owner, null) : null;
         var daylist = DaylistWindowOf(attr);
+        var chart = ChartInfoOf(attr);
         return new Playlist(EntityUri.IdOf(uri), uri, name, desc, owner, CoverOf(attr), len,
             Owner: ownerChip,
             Capabilities: CapabilitiesOf(attr, slc, owner),
@@ -286,7 +287,8 @@ public sealed class PlaylistFetcher
             DaylistCreatedAtMs: daylist.CreatedAtMs,
             // A full GET / diff of a playlist the owner deleted still answers 200 — with deleted_by_owner set. The sync
             // loop turns a header carrying this into the same eviction the dealer tombstone push takes.
-            DeletedByOwner: attr.HasDeletedByOwner && attr.DeletedByOwner);
+            DeletedByOwner: attr.HasDeletedByOwner && attr.DeletedByOwner,
+            ChartNewEntries: chart.NewEntries, ChartUpdatedAtMs: chart.UpdatedAtMs, ChartRankType: chart.RankType);
     }
 
     /// <summary>The daylist rollover window from the header's format_attributes — (expires, created) as unix ms,
@@ -305,6 +307,32 @@ public sealed class PlaylistFetcher
             else if (item.Key == "created") created = InstantMs(item.Value);
         }
         return (expires, created);
+    }
+
+    /// <summary>A chart playlist's header facts from <c>format_attributes</c> (desktop-verified: <c>new_entries_count</c>,
+    /// <c>last_updated</c> as ISO-8601, <c>rank_type</c>) — <c>(0, 0, null)</c> for every other format or when the keys
+    /// are absent/unparsable. Sibling of <see cref="DaylistWindowOf"/> (same format_attributes bag, a different
+    /// format value gates it).</summary>
+    internal static (int NewEntries, long UpdatedAtMs, string? RankType) ChartInfoOf(Pl.ListAttributes attr)
+    {
+        if (!attr.HasFormat || !string.Equals(attr.Format, "chart", StringComparison.Ordinal)) return (0, 0, null);
+        int newEntries = 0;
+        long updatedAtMs = 0;
+        string? rankType = null;
+        for (int i = 0; i < attr.FormatAttributes.Count; i++)
+        {
+            var item = attr.FormatAttributes[i];
+            if (!item.HasKey || !item.HasValue) continue;
+            switch (item.Key)
+            {
+                case "new_entries_count":
+                    int.TryParse(item.Value, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out newEntries);
+                    break;
+                case "last_updated": updatedAtMs = InstantMs(item.Value); break;
+                case "rank_type": rankType = item.Value; break;
+            }
+        }
+        return (newEntries, updatedAtMs, rankType);
     }
 
     /// <summary>Epoch seconds / epoch ms / ISO-8601 → unix ms; 0 when unparsable.</summary>

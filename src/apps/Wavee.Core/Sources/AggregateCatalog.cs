@@ -225,16 +225,6 @@ public sealed class AggregateCatalog : IMusicLibrary, ICollectionEvents
         return SearchSuggestions.Empty;
     }
 
-    public async Task<IReadOnlyList<SearchTopHit>> RecentSearchesAsync(CancellationToken ct = default)
-    {
-        foreach (var s in _reg.CatalogSources)
-        {
-            var x = await s.RecentSearchesAsync(ct).ConfigureAwait(false);
-            if (x.Count > 0) return x;
-        }
-        return System.Array.Empty<SearchTopHit>();
-    }
-
     public async Task<LibraryStats> GetStatsAsync(CancellationToken ct = default)
     {
         int al = 0, ar = 0, lk = 0, pod = 0;

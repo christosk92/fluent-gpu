@@ -37,11 +37,19 @@ sealed class WaveeShell : Component
     readonly SessionSnapshotStore _session = new();
     readonly NavPreviewStore _navPreview = new();   // click→detail handoff: the card stashes its known cover/title/artist
     readonly HomeSectionPreviewStore _homeSectionPreview = new(); // Home source section → seeded drill page
+    readonly Wavee.Features.Browse.BrowseDirectoryStore _browseDirectory = new(); // Browse's two loads, surviving KeepAlive eviction (T11)
+    readonly Wavee.Features.Browse.BrowsePageStore _browsePages = new(); // Browse CATEGORY pages, keyed by pageUri (G1)
     // Page-scoped shell MATERIAL: a page writes its art colour (flat tint) or Home's three washes here while active; the
     // shell paints it as the one layer between the window's base layer (live Mica) and the chrome column. Null tint +
     // null wash ⇒ the bare base. Owner-gated writes (ShellMaterialState) make A→B navigation race-free. Provided at the root via
     // ShellMaterial.Slot; rendered by ShellMaterialLayer.
     readonly Signal<ShellMaterialState> _shellMaterial = new(default);
+
+    // Page-scoped shell MASTHEAD (G2c): a page overrides the band's title/caption/tools while it is active, mirroring
+    // ShellMaterialState's owner-token contract. Null ⇒ ShellMastheadBand falls back to the route-derived trail (a
+    // Browse-family route still gets a title from DrillTrail even before any page publishes). Provided at the root via
+    // ShellMasthead.Slot; rendered by ShellMastheadBand, mounted once in ContentHost above the KeepAlive boundary.
+    readonly Signal<ShellMastheadState?> _shellMasthead = new(null);
 
     // Right-rail (lyrics / queue / now-playing panels) UI state — created here, provided via ShellUi.Slot, and
     // toggled from the player bar. The rail reserves inline width when it fits; otherwise it floats over the content.
@@ -1188,15 +1196,18 @@ sealed class WaveeShell : Component
 
         return Ctx.Provide(ShellUi.Slot, _shellUi,
                Ctx.Provide(ShellMaterial.Slot, _shellMaterial,
+               Ctx.Provide(ShellMasthead.Slot, _shellMasthead,
                Ctx.Provide(HistoryStore.BackCtx, (Action)Back,
                Ctx.Provide(HistoryStore.NavCtx, (Action<string, string?>)GoNav,
                Ctx.Provide(HistoryStore.Slot, _historyStore,
                Ctx.Provide(NavPreviewStore.Slot, _navPreview,
                Ctx.Provide(HomeSectionPreviewStore.Slot, _homeSectionPreview,
+               Ctx.Provide(Wavee.Features.Browse.BrowseDirectoryStore.Slot, _browseDirectory,
+               Ctx.Provide(Wavee.Features.Browse.BrowsePageStore.Slot, _browsePages,
                Ctx.Provide(SearchQuery.Slot, _searchText,
                Ctx.Provide(ActionServices.Slot, _actions,
                Ctx.Provide(WaveeExtensionRegistry.Slot, _actions.Extensions,
-               OverlayHost.Create(shellWithOverlays)))))))))));
+               OverlayHost.Create(shellWithOverlays))))))))))))));
     }
 
     Element TabStripHost()

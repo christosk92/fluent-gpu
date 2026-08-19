@@ -29,8 +29,12 @@ public readonly record struct ColdExtension(
 public readonly record struct ColdVideoAssoc(string Uri, byte[] Payload);
 public readonly record struct ColdSaved(string SetId, string Uri, SyncState Sync, long AddedAtMs = 0);
 /// <summary>One ordered playlist-membership row: the stable per-row <paramref name="ItemId"/> (survives reorder),
-/// the referenced entity <paramref name="ItemUri"/>, and the per-membership add facts.</summary>
-public readonly record struct ColdPlaylistItem(string ItemId, string ItemUri, string? AddedBy, long AddedAt);
+/// the referenced entity <paramref name="ItemUri"/>, and the per-membership add facts. <paramref name="ChartStatus"/>/
+/// <paramref name="ChartCurrentPos"/>/<paramref name="ChartPreviousPos"/>/<paramref name="ChartRank"/> are the chart
+/// rank-movement scalars (<see cref="Wavee.Core.ChartEntryStatus"/> as a byte; all zero = no chart facts), so a cold-opened
+/// chart playlist shows its arrows before the live re-fetch lands.</summary>
+public readonly record struct ColdPlaylistItem(string ItemId, string ItemUri, string? AddedBy, long AddedAt,
+    byte ChartStatus = 0, int ChartCurrentPos = 0, int ChartPreviousPos = 0, long ChartRank = 0);
 /// <summary>One rootlist row: a playlist uri or a start/end-group marker. <paramref name="Kind"/> 0=item, 1=start-group, 2=end-group.</summary>
 public readonly record struct ColdRootlistEntry(int Position, int Kind, string Uri, string? GroupName, int Depth, long AddedAtMs = 0);
 

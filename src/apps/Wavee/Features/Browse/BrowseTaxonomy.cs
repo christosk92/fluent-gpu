@@ -18,8 +18,8 @@ public enum BrowseGroup
 
 /// <summary>The Browse directory's grouping.
 ///
-/// The wire has NO grouping: <c>browseAll</c> returns one flat section of ~70 categories. The Top / For you / Genres /
-/// Mood &amp; activity / Charts / More bands are a product decision, so they live here as a curated map.
+/// The wire has NO grouping: <c>browseAll</c> returns one flat section of ~70 categories. The Top / Charts / For you /
+/// Genres / Mood &amp; activity / More bands are a product decision, so they live here as a curated map.
 ///
 /// Two rules make this safe to maintain:
 ///  • Keyed by page URI, NEVER by title. Titles arrive already localised by the server ("Dutch music" on an nl
@@ -30,6 +30,12 @@ public enum BrowseGroup
 /// Group LABELS are localised (<c>Strings.Browse.*</c>); group MEMBERSHIP is not.</summary>
 public static class BrowseTaxonomy
 {
+    /// <summary>The Browse directory's band order — Top, Charts, For you, Genres, Mood &amp; activity, More. THE one
+    /// spelling of it: <see cref="Grouped"/> and <see cref="BrowseDirectory"/>'s Body both iterate this list rather
+    /// than each carrying their own copy of the sequence.</summary>
+    public static readonly IReadOnlyList<BrowseGroup> BandOrder =
+        [BrowseGroup.Top, BrowseGroup.Charts, BrowseGroup.ForYou, BrowseGroup.Genres, BrowseGroup.MoodActivity, BrowseGroup.More];
+
     // Uri -> group. Uris are stable Spotify page ids captured from browseAll (browe.saz).
     static readonly FrozenDictionary<string, BrowseGroup> Map = new Dictionary<string, BrowseGroup>(StringComparer.Ordinal)
     {
@@ -95,8 +101,8 @@ public static class BrowseTaxonomy
         ["spotify:page:0JQ5DAqbMKFAXlCG6QvYQ4"] = BrowseGroup.MoodActivity, // Workout Music
 
         // ── Charts ──────────────────────────────────────────────────────────────────────────────────────────────────
-        ["spotify:page:0JQ5DAudkNjCgYMM0TZXDw"] = BrowseGroup.Charts,       // Charts
-        ["spotify:page:0JQ5DAB3zgCauRwnvdEQjJ"] = BrowseGroup.Charts,       // Podcast Charts
+        [ChartPages.Charts] = BrowseGroup.Charts,                          // Charts
+        [ChartPages.PodcastCharts] = BrowseGroup.Charts,                   // Podcast Charts
     }.ToFrozenDictionary(StringComparer.Ordinal);
 
     /// <summary>The band a category belongs to. Unmapped → <see cref="BrowseGroup.More"/>, so a new Spotify category
@@ -123,10 +129,8 @@ public static class BrowseTaxonomy
             list.Add(c);
         }
 
-        var order = new[] { BrowseGroup.Top, BrowseGroup.ForYou, BrowseGroup.Genres,
-                            BrowseGroup.MoodActivity, BrowseGroup.Charts, BrowseGroup.More };
-        var result = new List<(BrowseGroup, IReadOnlyList<BrowseCategory>)>(order.Length);
-        foreach (var g in order)
+        var result = new List<(BrowseGroup, IReadOnlyList<BrowseCategory>)>(BandOrder.Count);
+        foreach (var g in BandOrder)
         {
             if (!buckets.TryGetValue(g, out var list) || list.Count == 0) continue;
             // Top keeps the SERVER's order — Music / Podcasts / Audiobooks / Live Events is a deliberate ranking,
@@ -137,4 +141,33 @@ public static class BrowseTaxonomy
         }
         return result;
     }
+}
+
+/// <summary>The Charts directory PAGES (Browse category tiles) — stable Spotify page ids, same provenance as
+/// <see cref="BrowseTaxonomy.Map"/>. Kept as named constants (rather than inline literals in the Map) so
+/// <see cref="ChartSections"/> can name their parent page without a second copy of either id.</summary>
+public static class ChartPages
+{
+    public const string Charts        = "spotify:page:0JQ5DAudkNjCgYMM0TZXDw";
+    public const string PodcastCharts = "spotify:page:0JQ5DAB3zgCauRwnvdEQjJ";
+}
+
+/// <summary>The Charts SECTIONS underneath those pages — captured from <c>browsePage</c> in <c>home_23.saz</c> /
+/// <c>browe.saz</c> (see <c>docs/plans/wavee/2026-08-18-home-hub-strip-charts.md</c>). Section ids, not page ids:
+/// they are <c>spotify:section:</c> URIs and therefore only ever legal as a <c>browseSection</c> read — never a
+/// <c>homeSection</c> one, however much they look like a Home section URI (that confusion is the bug this taxonomy
+/// exists to prevent).</summary>
+public static class ChartSections
+{
+    /// <summary>Featured Charts — the first tile, and the one whose absence fails the Charts row loudly.</summary>
+    public const string Featured = "spotify:section:0JQ5DAzQHECxDlYNI6xD1g";
+    public const string Weekly       = "spotify:section:0JQ5DAzQHECxDlYNI6xD1h";   // Weekly Song Charts, under Charts
+    public const string Daily        = "spotify:section:0JQ5DAzQHECxDlYNI6xD1i";   // Daily Song Charts, under Charts
+    public const string NowAvailable = "spotify:section:0JQ5DAzQHECxDlYNI6xD1x";   // Now available, under Charts
+    public const string Podcast      = "spotify:section:0JQ5DAob0LrW8pqFzVs4ut";   // untitled shelf, under Podcast Charts
+
+    /// <summary>Home's Charts row and Browse's Charts band fetch exactly these, in this order — one
+    /// <c>browseSection</c> each, mapped to one Fold tile. Featured is <c>All[0]</c> so a null there is the fail-loud
+    /// signal; later shelves that come back null/empty are omitted.</summary>
+    public static readonly IReadOnlyList<string> All = [Featured, Weekly, Daily, NowAvailable, Podcast];
 }

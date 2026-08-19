@@ -121,6 +121,9 @@
     <!-- the shell wash clip solver (System + FluentGpu.Foundation.Point2 only) — ShellWashGeometryTests -->
     <Compile Include="..\Wavee\Features\Shell\ShellWashGeometry.cs" />
     <Compile Include="..\Wavee\Features\Shell\ShellNav.cs" />
+    <!-- The breadcrumb as a pure function of the route (System + FluentGpu.Localization + BrowseRoutes only, no engine
+         Element/Component types) — DrillTrailTests drives the real IA-parent decision (Home vs Browse) directly. -->
+    <Compile Include="..\Wavee\Features\Shell\DrillTrail.cs" />
     <!-- The content card's PURE page-swap policy: keep-alive slot identity (PageSlot / SlotKey) and the nav
          direction → MotionRecipes map. Its only dependencies are FluentGpu.Foundation/Hooks (Engine, referenced
          transitively) plus FluentGpu.Controls.Route, satisfied by the ShellNavDestTests shim — ContentHost itself is
@@ -138,6 +141,10 @@
          of HomeSectionNavigation.cs, whose preview store is Context-bound — so HomeSectionPagingTests drives the real
          rules without a page, a service or a response. -->
     <Compile Include="..\Wavee\Features\Home\HomeSectionPaging.cs" />
+    <!-- Home/Browse section route prefixes (HomeSectionRoutes/BrowseSectionRoutes): System only, no FluentGpu.Hooks —
+         split out of HomeSectionNavigation.cs (whose HomeSectionPreviewStore/HomeCardNav stay Context-bound) so
+         HomeSectionRouteContractTests can drive the real prefix/Is/UriOf/IsLocal logic directly. -->
+    <Compile Include="..\Wavee\Features\Home\HomeSectionRoutes.cs" />
     <!-- Home's what's-new timeline merge: which notifications belong on the module, in what order, in which day group,
          and what the "N unheard of M" counter says. System + Wavee.Core only (the row RENDER stays in the component),
          so HomeTimelineMergeTests drives the real gate/sort/grouping without a page, a feed or a clock. -->
@@ -146,6 +153,9 @@
          construction (Wavee.Core + the plane's Scheme + WaveePalette, both already source-included), so HomeWashSourceTests
          drive the real selection/derivation without a plane, a theme or a window. -->
     <Compile Include="..\Wavee\Features\Home\HomeWashSource.cs" />
+    <!-- The browse→home card mapping (Wavee.Core + BCL only) — split out of HomeSectionPage, which is engine-bound
+         and deliberately NOT included, so tests can drive Section/Card/LoadChartDeckAsync against the real production code. -->
+    <Compile Include="..\Wavee\Features\Home\HomeBrowseCards.cs" />
     <!-- The Recents page's PURE half: chip derivation from the wire content types, the client-side filter map, the
          realized-window → URI batching rule, shared-element eligibility, and the culture-only played-at/summary
          formatting. System + Wavee.Core only (the page itself is engine-bound and is deliberately NOT included), so
@@ -219,6 +229,12 @@
     <Compile Include="..\Wavee\Features\Concerts\ConcertRoutes.cs" />
     <!-- browse category grouping: pure uri->band map + ordering (Wavee.Core + BCL only) — BrowseTaxonomyTests -->
     <Compile Include="..\Wavee\Features\Browse\BrowseTaxonomy.cs" />
+    <!-- the directory skeleton's seed categories (Wavee.Core + BCL only) — BrowseChartTaxonomyTests pins that their
+         taxonomy grouping (per-band counts) matches the loading directory's intent -->
+    <Compile Include="..\Wavee\Features\Browse\BrowseDirectorySeeds.cs" />
+    <!-- the flatten decision: named shelves vs one uniform grid, over BrowsePageModel (Wavee.Core + BCL only) —
+         BrowsePageLayoutTests -->
+    <Compile Include="..\Wavee\Features\Browse\BrowsePageLayout.cs" />
     <Compile Include="..\Wavee\Features\Browse\BrowseRoutes.cs" />
     <!-- pure schedule shaping (chronological sort/dedup) + geolocation-status → message map (Wavee.Core + FluentGpu.Pal) -->
     <Compile Include="..\Wavee\Features\Concerts\ConcertScheduleModel.cs" />

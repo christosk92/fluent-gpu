@@ -114,7 +114,22 @@ public static class SpotifyBrowseMapper
             SpotifyExportMapper.Str(s, "uri") ?? "",
             SpotifyExportMapper.Str(data, "title", "transformedLabel"),
             kind, cards, categories,
-            (int)SpotifyExportMapper.Long(itemsNode, "totalCount"));
+            (int)SpotifyExportMapper.Long(itemsNode, "totalCount"),
+            SectionNextOffset(SpotifyExportMapper.Dig(itemsNode, "pagingInfo")));
+    }
+
+    /// <summary>The <see cref="BrowseSection.NextOffset"/> tri-state, distinguishing "no pagingInfo at all" (plain
+    /// <c>null</c> — the caller should synthesize a cursor) from "pagingInfo present, nextOffset EXPLICITLY null"
+    /// (<see cref="BrowseSection.PagingComplete"/> — a real terminator). The page-level cursor
+    /// (<see cref="NextOffset(JsonElement)"/>, used by <see cref="Page"/>) does not need this distinction — a stale
+    /// page-level cursor is deliberately un-wired by the UI (see <see cref="BrowsePageModel"/>'s doc comment) — so it
+    /// keeps its simpler two-state form rather than being folded into this one.</summary>
+    static int? SectionNextOffset(JsonElement pagingInfo)
+    {
+        if (pagingInfo.ValueKind != JsonValueKind.Object) return null;
+        if (!pagingInfo.TryGetProperty("nextOffset", out var n)) return null;
+        if (n.ValueKind == JsonValueKind.Null) return BrowseSection.PagingComplete;
+        return n.TryGetInt32(out int v) ? v : null;
     }
 
     /// <summary>One entity card in a shelf. A browse shelf mixes Playlist / Album / Episode / Podcast / Audiobook, and

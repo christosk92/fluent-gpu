@@ -432,13 +432,28 @@ public sealed class CachedStore : IStore, ILibraryCandidateStore, IDisposable
     static IReadOnlyList<ColdPlaylistItem> ToCold(IReadOnlyList<PlaylistMember> rows)
     {
         var list = new List<ColdPlaylistItem>(rows.Count);
-        for (int i = 0; i < rows.Count; i++) { var r = rows[i]; list.Add(new ColdPlaylistItem(r.ItemId, r.ItemUri, r.AddedBy, r.AddedAt)); }
+        for (int i = 0; i < rows.Count; i++)
+        {
+            var r = rows[i];
+            var c = r.Chart;
+            list.Add(new ColdPlaylistItem(r.ItemId, r.ItemUri, r.AddedBy, r.AddedAt,
+                c is { } chart ? (byte)chart.Status : (byte)0, c?.CurrentPos ?? 0, c?.PreviousPos ?? 0, c?.Rank ?? 0));
+        }
         return list;
     }
     static IReadOnlyList<PlaylistMember> FromCold(IReadOnlyList<ColdPlaylistItem> rows)
     {
         var list = new List<PlaylistMember>(rows.Count);
-        for (int i = 0; i < rows.Count; i++) { var r = rows[i]; list.Add(new PlaylistMember(r.ItemId, r.ItemUri, r.AddedBy, r.AddedAt)); }
+        for (int i = 0; i < rows.Count; i++)
+        {
+            var r = rows[i];
+            // status==Unknown(0) with every other chart scalar also zero is indistinguishable from "no chart facts were
+            // ever stored" — both read back as null, which is the correct answer for a non-chart playlist's rows.
+            ChartEntry? chart = r.ChartStatus == 0 && r.ChartCurrentPos == 0 && r.ChartPreviousPos == 0 && r.ChartRank == 0
+                ? null
+                : new ChartEntry((ChartEntryStatus)r.ChartStatus, r.ChartCurrentPos, r.ChartPreviousPos, r.ChartRank);
+            list.Add(new PlaylistMember(r.ItemId, r.ItemUri, r.AddedBy, r.AddedAt, chart));
+        }
         return list;
     }
     static IReadOnlyList<ColdRootlistEntry> ToColdRoot(IReadOnlyList<RootlistEntry> e)

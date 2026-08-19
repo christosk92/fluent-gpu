@@ -25,4 +25,20 @@ public static class ErrorState
             onRetry is null ? null : Loc.Get(Strings.Common.Retry),
             onRetry);
     }
+
+    /// <summary>The <see cref="EmptyState.Compact"/> sibling of <see cref="Build"/> — same grammar, same copy, same
+    /// log line, just the Subtitle-rung headline instead of PageHero: for a narrow SECTION (a Browse band, a Search
+    /// facet body) rather than a whole page, exactly the page-vs-section split <see cref="EmptyState.Compact"/>
+    /// itself documents.</summary>
+    public static Element Compact(Exception? error = null, Action? onRetry = null, string? message = null)
+    {
+        WaveeLog.Instance.Log(WaveeLogLevel.Warning, "ui",
+            error is null ? "Surface error shown" : "Surface error shown: " + error.Message, error);
+
+        return EmptyState.Compact(
+            message ?? Loc.Get(Strings.Common.ErrorTitle),
+            Loc.Get(Strings.Common.ErrorSubtitle),
+            onRetry is null ? null : Loc.Get(Strings.Common.Retry),
+            onRetry);
+    }
 }

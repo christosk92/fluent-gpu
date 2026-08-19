@@ -466,27 +466,10 @@ sealed class RecentsPage : Component
                 static n => Strings.Recents.ItemCount(n),
                 static n => Strings.Recents.GroupedFrom(n))
             : "";
-        // W2.1: the control kit's BreadcrumbBar — the HOUSE IDIOM for a drill-in trail (HomeSectionPage, LibraryPage
-        // and DiscographyPage all state their path with this exact call). The hand-rolled caption row it replaces
-        // looked the same and behaved worse: one hand-wired Box was the only tab stop, so "Home" and "Recents" were
-        // not crumbs to a screen reader and Left/Right did nothing. The control gives every crumb a tab stop, arrow-key
-        // crumb-to-crumb focus, the WinUI hover/press foreground ramps and the chevron glyph — free, and identical
-        // across the four surfaces that use it. Default styling on purpose: a per-page restyle is how four trails end
-        // up looking like four different controls.
-        // A ComponentEl cannot carry Enter/Transition itself, so the hero stagger lives on this wrapper — same shape
-        // the title/summary lines below use.
-        Element breadcrumb = new BoxEl
-        {
-            Direction = 0, AlignItems = FlexAlign.Center,
-            Enter = new EnterExit(Dy: 10f, Opacity: 0f, Active: true),
-            Transition = MotionTok.StandardEnter,
-            Children =
-            [
-                BreadcrumbBar.Create(
-                    [Loc.Get(Strings.Nav.Home), Loc.Get(Strings.Nav.Recents)],
-                    i => { if (i == 0) _go("home", null); }),
-            ],
-        };
+        // Recents is a ROOT — DrillTrail.Of returns empty for a root route, so it carries no "Home > Recents" crumb;
+        // that ancestry never existed. A drilled-in Browse-family surface renders its trail INLINE in its own
+        // title line instead (BrowseMasthead — Zune's breadcrumb-as-title); Recents has no trail to render, so it
+        // keeps hand-rolling its own plain title here rather than routing through that surface.
         var title = WaveeType.SurfaceDisplay(Loc.Get(Strings.Home.Recents)) with
         {
             MaxLines = 1, Wrap = TextWrap.NoWrap, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
@@ -496,9 +479,8 @@ sealed class RecentsPage : Component
         };
         var overview = Button.Create(Loc.Get(Strings.Recents.Overview), OpenOverviewFromMasthead,
             ButtonAppearance.Subtle, ControlSize.Small, glyph: Icons.Calendar) with { Shrink = 0f };
-        var lines = new List<Element>(3)
+        var lines = new List<Element>(2)
         {
-            breadcrumb,
             new BoxEl
             {
                 Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M, MinWidth = 0f,

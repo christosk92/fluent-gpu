@@ -7,6 +7,13 @@ description: Wavee Spotify desktop client under src/apps/ (Wavee, Wavee.Core, Wa
 
 Scope: `src/apps/Wavee/**`, `src/apps/Wavee.Core/**`, `src/apps/Wavee.Tests/**` only.
 
+> **⛔ HARD RULES for subagents (agents dispatched by an orchestrator).** (1) **Never `git stash`** — or any
+> other git state change (no commit/checkout/reset/restore/stash pop): the working tree is shared and a stash
+> wipes every parallel agent's in-progress edits. (2) **Never run builds or test suites** — no `dotnet build`,
+> `dotnet test`, VerticalSlice, or check-canon: parallel builds on the shared `obj/bin` collide and exhaust the
+> machine. Write code + tests only; the orchestrator runs the full verification once after the whole batch.
+> (Working solo, i.e. not as a dispatched subagent? Then the Build & verify commands below are yours to run.)
+
 ## Build & verify
 
 ```powershell

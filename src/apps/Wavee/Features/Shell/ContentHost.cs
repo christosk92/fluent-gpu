@@ -38,6 +38,10 @@ sealed class ContentHost : Component
             Padding = new Edges4(0f, 0f, 0f, reserve),
             Children =
             [
+                // THE one masthead band (G2c), ALWAYS mounted, first child, above the KeepAlive boundary below —
+                // appearing/disappearing would remount the KeepAlive subtree and cold-restart every cached page, so it
+                // collapses to Height 0 instead of unmounting (see ShellMastheadBand.Collapsed).
+                Embed.Comp(() => new ShellMastheadBand(_route)),
                 // The token reads the tab + the route ONLY. `_motion` is read untracked inside PageTransition (Peek), so
                 // a direction write can never re-run this thunk and re-activate the page that is already active.
                 Flow.KeepAlive(
@@ -58,6 +62,13 @@ sealed class ContentHost : Component
     // Direction comes from the motion signal by PEEK: the shell writes it before the route in the same flush, so at
     // reconcile time it already IS the direction of the route being activated — and an untracked read keeps a
     // motion-only write from re-running the keep-alive thunk.
+    //
+    // G2c: this used to special-case a "masthead family" (search's directory, a browse category, the two section
+    // drills) with a fixed dissolve instead of the directional slide, because each of those pages rendered its OWN
+    // copy of the shared masthead and sliding the page root double-exposed "Browse" and "Browse ›" at nearly the same
+    // spot. The masthead now lives in ShellMastheadBand, mounted ONCE above this whole boundary (ContentHost.Render) —
+    // bodies below it are free to slide like every other page swap, and the masthead itself never participates in a
+    // page transition at all.
     LayoutTransition? PageTransition(object oldToken, object newToken)
         => newToken is PageSlot ? PageNavMotion.RecipeFor(_motion.Peek()) : null;
 
@@ -104,7 +115,10 @@ sealed class ContentHost : Component
             return new BoxEl { Key = "page:home-customize", Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
                 Children = [ Embed.Comp(() => HomeCustomizerPage.Create()) ] };
 
-        if (HomeSectionRoutes.Is(r.Name))
+        // One page class, two prefixes: HomeSectionPage itself switches on the PREFIX (home-section: vs
+        // browse-section:) to pick homeSection vs browseSection, never on the section's own uri — see its class
+        // doc-comment for why a uri-shaped discriminator is the bug this split replaced.
+        if (HomeSectionRoutes.Is(r.Name) || BrowseSectionRoutes.Is(r.Name))
             return new BoxEl { Key = "page:home-section", Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
                 Children = [ Embed.Comp(() => new HomeSectionPage(r)) ] };
 

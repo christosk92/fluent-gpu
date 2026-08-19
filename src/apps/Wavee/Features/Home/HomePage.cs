@@ -53,6 +53,15 @@ sealed class HomePage : Component
 
         var home = UseLoadable(Loadable<HomeFeed>.Pending(FakeData.HomeSeed));   // seed renders the loading shape; later refreshes swap Ready->Ready in place
         _facetFeed = home;   // so a facet selection republishes into THIS loadable rather than remounting the page
+
+        // Charts is chrome, not a home-document module — it rides its OWN resource. Five browseSection reads
+        // (ChartSections.All), one Fold tile each: Featured null throws (fail-loud); later shelves that come back
+        // empty are omitted. No browsePage fallback, no homeSection: see BrowseSectionRoutes.
+        var browseSvc = svc.Browse;
+        var charts = UseResource<IReadOnlyList<HomeSection>>(
+            async ct => await HomeBrowseCards.LoadChartDeckAsync(browseSvc, ct).ConfigureAwait(false),
+            seed: HomeBrowseCards.ChartDeckSeed, deps: DepKey.Empty);
+
         var post = UsePost();
         // Home groups have substantially different heights (quick grid / hero / compact grid / shelf / editorial).
         // Hoist one measured extent table so the viewport can correct and anchor rows while recycling offscreen groups.
@@ -221,6 +230,9 @@ sealed class HomePage : Component
             go(route, section.Title);
         }
 
+        void OpenBrowseSection(HomeSection s) =>
+            HomeCardNav.OpenBrowseSection(s, preview, sectionPreview, go, uri => _ = svc.Player.PlayTrackAsync(uri));
+
         void OpenLanding(HomeLandingModule module)
         {
             var g = module.Group;
@@ -263,7 +275,7 @@ sealed class HomePage : Component
         Element browse = ConcertUi.WideEditorialDestination(
             artwork: null,
             eyebrow: Loc.Get(Strings.Browse.Eyebrow),
-            title: Loc.Get(Strings.Browse.Title),
+            title: Loc.Get(Strings.Browse.HomeTitle),
             subtitle: Loc.Get(Strings.Browse.HomeSubtitle),
             actionLabel: Loc.Get(Strings.Browse.ExploreAll),
             onClick: () => go("search", null))
@@ -308,6 +320,11 @@ sealed class HomePage : Component
             HomeFeedDiagnostics.LogModules(feed);
             var landing = Landing(feed);
             homeLayout.Configure(landing);
+            // The layout object can't see the loadable itself (it is hoisted OUTSIDE Render, per-page state that
+            // survives a refresh), so mirror it in as a byte + an empty bit — the same pattern _sectionDeckCount uses
+            // for the section directory. `.Value` on both reads SUBSCRIBE (not Peek), so the row re-estimates the
+            // instant the fetch resolves, not on the next unrelated re-render.
+            homeLayout.SetChartsState((byte)charts.Loadable.State.Value, charts.Loadable.Value.Value.Count == 0);
 
             // Rows come from the landing AFTER hide+reorder. A hidden Hero is omitted (no empty slot) and a
             // user reorder is the order RowAt / KeyAt / Estimate all switch on.
@@ -378,6 +395,9 @@ sealed class HomePage : Component
             // Service rows add their gap only after their async data is non-empty; an empty component contributes 0.
             HomeRow.Artists or HomeRow.Timeline => false,
             HomeRow.Chips or HomeRow.Tail => true,
+            // Charts is present in EVERY state (Pending/Ready/Failed all paint something — that's the point of
+            // Skel.Region's onFailed/onEmpty arms), so it always contributes its module gap.
+            HomeRow.Charts => true,
             HomeRow.Sections => landing.Sections.Count > 0,
             _ => FeedGroup(landing, row) is not null,
         };
@@ -453,9 +473,19 @@ sealed class HomePage : Component
                 case HomeRow.Podcasts:
                     return FeedGroup(landing, row) is { } podcasts
                         ? HomeModules.Podcasts(podcasts, NavOf, PlayOf, ChromeOf, Drill(HomeGroupKind.PodcastShelf)) : new BoxEl();
+                case HomeRow.Charts:
+                    return Skel.Region(
+                        charts.Loadable,
+                        content: list => HomeModules.FoldDeck(list, Loc.Get(Strings.Home.Charts), OpenBrowseSection,
+                            openHeader: () => go(Wavee.Features.Browse.BrowseRoutes.Page(Wavee.Features.Browse.ChartPages.Charts), Loc.Get(Strings.Home.Charts)),
+                            eyebrowOf: s => HomeModules.ChartEyebrow(s.Uri)),
+                        isEmpty: list => list.Count == 0,
+                        onEmpty: () => EmptyState.Compact(Loc.Get(Strings.Home.ChartsEmpty)),
+                        onFailed: () => ErrorState.Build(charts.Loadable.Error, onRetry: charts.Refresh),
+                        reveal: SkelReveal.None, smoothResize: false);
                 case HomeRow.Sections:
                     return landing.Sections.Count == 0 ? new BoxEl()
-                        : HomeModules.SectionDeck(landing.Sections, OpenSection);
+                        : HomeModules.FoldDeck(landing.Sections, Loc.Get(Strings.Home.Sections), OpenSection);
                 case HomeRow.Editorial:
                     return FeedGroup(landing, row) is { } editorial
                         ? HomeModules.Editorial(editorial, NavOf, PlayOf, CardMeta, ChromeOf, Navigate,
@@ -760,9 +790,27 @@ sealed class HomeFeedVirtualLayout : IMeasuredVirtualLayout
     // the section directory and does not multiply module extents or vertical gaps here.
     readonly Dictionary<HomeGroupKind, List<GroupMetric>> _groups = new();
     int _sectionDeckCount;
+    // Charts rides its OWN resource (HomePage.charts), invisible from here, so HomePage mirrors it in every render via
+    // SetChartsState — same shape as _sectionDeckCount for the section directory. State is a byte (Pending/Ready/
+    // Failed — FluentGpu.Signals.LoadState) rather than the enum itself, matching Loadable<T>.State's own wire type.
+    // _chartsEmpty is folded in alongside it (one call, one dep) rather than a second setter: a Ready-with-zero-
+    // sections read must estimate the STATE extent (the empty grammar), not the deck extent, and the two bits always
+    // change together from this call site's point of view.
+    byte _chartsState;
+    bool _chartsEmpty;
     int _shapeVersion;
     int _seededVersion = -1;
     float _seededCross = float.NaN;
+
+    /// <summary>Mirror Charts' resource state in. Bumps <see cref="_shapeVersion"/> only on an actual change, so a
+    /// steady Ready state re-renders (hover, hover fade, hero grading) cost nothing here.</summary>
+    public void SetChartsState(byte state, bool empty)
+    {
+        if (state == _chartsState && empty == _chartsEmpty) return;
+        _chartsState = state;
+        _chartsEmpty = empty;
+        _shapeVersion++;
+    }
 
     public void Configure(HomeLanding landing)
     {
@@ -926,7 +974,12 @@ sealed class HomeFeedVirtualLayout : IMeasuredVirtualLayout
             // Up to 8 rows in day groups (a 40 cover with 8 of padding a side); it hides itself when the feed is empty
             // and the measured pass corrects it.
             HomeRow.Timeline => Head + 8f * (WaveeSize.Thumb40 + 2f * Spacing.S) + gap,
-            HomeRow.Sections => _sectionDeckCount == 0 ? 0f : HomeModuleLayout.SectionDeckExtent + gap,
+            // Pending estimates the LOADED shape (FoldExtent) — the seed IS Fold-shaped, so the shimmer never needs the
+            // compact empty grammar. Only a settled Failed, or a settled Ready with zero sections, switches to it.
+            HomeRow.Charts => ((_chartsState == (byte)LoadState.Failed
+                    || (_chartsState == (byte)LoadState.Ready && _chartsEmpty))
+                ? HomeModuleLayout.FoldStateExtent : HomeModuleLayout.FoldExtent) + gap,
+            HomeRow.Sections => _sectionDeckCount == 0 ? 0f : HomeModuleLayout.FoldExtent + gap,   // was the two-row SectionDeckExtent
             HomeRow.Editorial => RowStack(HomeGroupKind.Featured),
             HomeRow.Feed => Count(HomeGroupKind.DiscoverFeed) == 0 ? 0f
                 : HomeModuleLayout.ContentExtent(HomeGroupKind.DiscoverFeed, available, Count(HomeGroupKind.DiscoverFeed)) + gap,

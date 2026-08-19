@@ -359,13 +359,6 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
         catch { return SearchSuggestions.Empty; }
     }
 
-    public async Task<IReadOnlyList<SearchTopHit>> RecentSearchesAsync(CancellationToken ct = default)
-    {
-        try { return await _online.RecentSearchesAsync(ct).ConfigureAwait(false); }
-        catch (OperationCanceledException) { throw; }
-        catch { return Array.Empty<SearchTopHit>(); }
-    }
-
     // A home built from the synced library without appending a second library tail: pinned jump-back-in quick picks
     // (Liked + first playlists), followed by the live section-owned modules. Empty only on a truly empty store.
     //
@@ -594,7 +587,7 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
             var t = _store.GetTrack(m.ItemUri) ?? EpisodeAsTrack.From(_store.GetEpisode(m.ItemUri));
             if (t is null) continue;   // offline-first inner join: a not-yet-hydrated member has no row until it lands
             DateTimeOffset? at = m.AddedAt > 0 ? DateTimeOffset.FromUnixTimeMilliseconds(m.AddedAt) : null;
-            list.Add(t with { AddedAt = at, AddedBy = m.AddedBy, ContextUid = m.ItemId });   // stamp membership facts (+ per-row uid) onto the read-model copy
+            list.Add(t with { AddedAt = at, AddedBy = m.AddedBy, ContextUid = m.ItemId, Chart = m.Chart });   // stamp membership facts (+ per-row uid + chart rank) onto the read-model copy
         }
         return list;
     }

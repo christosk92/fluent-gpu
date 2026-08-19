@@ -269,23 +269,4 @@ public class SearchSuggestionMapperTests
         Assert.Equal(SearchFacet.Podcasts, results.ChipOrder[1].Facet);
     }
 
-    [Fact]
-    public void RecentSearchesFrom_MapsEntityRows()
-    {
-        var hits = SpotifyExportMapper.RecentSearchesFrom(Root("""
-        { "data": { "recentSearches": { "recentSearchesItems": { "items": [
-          { "item": { "__typename": "PlaylistResponseWrapper", "data": {
-            "uri": "spotify:playlist:sleep",
-            "name": "Sleep",
-            "ownerV2": { "data": { "name": "Spotify" } },
-            "images": { "items": [ { "sources": [ { "url": "https://i.scdn.co/image/pl", "width": 300, "height": 300 } ] } ] }
-          } } }
-        ] } } } }
-        """));
-
-        var hit = Assert.Single(hits);
-        Assert.Equal(SearchHitKind.Playlist, hit.Kind);
-        Assert.Equal("Sleep", hit.Name);
-        Assert.Equal("spotify:playlist:sleep", hit.Uri);
-    }
 }

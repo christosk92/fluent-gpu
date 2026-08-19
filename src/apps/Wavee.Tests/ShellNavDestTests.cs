@@ -98,7 +98,29 @@ namespace Wavee.Tests
         public void BrowseCategory_UsesItsPageTitleAndExploreGlyph()
         {
             Assert.Equal(("Music", Icons.Globe), Dest("browse:spotify:page:music", "Music"));
-            Assert.Equal(Loc.Get(Strings.Browse.Title), Dest("browse:spotify:page:music").Title);
+            Assert.Equal(Loc.Get(Strings.Browse.HomeTitle), Dest("browse:spotify:page:music").Title);
+        }
+
+        // browse-section: (BrowseSectionRoutes.Prefix) is a DIFFERENT route family from browse: (BrowseRoutes.Prefix —
+        // the category PAGE route above): it addresses a section paged through IBrowseService.GetSectionAsync. Before
+        // this arm existed it had no prefix check here at all, so it fell past every "startswith" arm into the exact-match
+        // switch and hit the "Your Library" DEFAULT — the same class of regression Show/Prerelease pin above.
+        [Fact]
+        public void BrowseSection_UsesItsArgOrTheBrowseHomeTitle_AndGlobeGlyph()
+        {
+            var (title, glyph) = Dest("browse-section:spotify:section:x", "Featured Charts");
+            Assert.Equal("Featured Charts", title);
+            Assert.Equal(Icons.Globe, glyph);
+            Assert.Equal(Loc.Get(Strings.Browse.HomeTitle), Dest("browse-section:spotify:section:x").Title);
+        }
+
+        [Fact]
+        public void BrowseSection_DoesNotFallThroughToTheYourLibraryDefault()
+        {
+            var fallback = Dest("some-unregistered-route");
+            var browseSection = Dest("browse-section:spotify:section:x");
+            Assert.NotEqual(fallback.Title, browseSection.Title);
+            Assert.NotEqual(fallback.Glyph, browseSection.Glyph);
         }
 
         [Fact]

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using Google.Protobuf;
 using Google.Protobuf.Collections;
 using Wavee.Core;
@@ -32,14 +33,55 @@ public static class PlaylistWireMapper
         string itemId = "";
         string? addedBy = null;
         long addedAt = 0;
+        ChartEntry? chart = null;
         if (item.Attributes is { } a)
         {
             if (a.HasItemId) itemId = Convert.ToHexStringLower(a.ItemId.Span);   // stable per-row key (survives reorder)
             if (a.HasAddedBy) addedBy = a.AddedBy;
             if (a.HasTimestamp) addedAt = a.Timestamp;
+            chart = ChartEntryOf(a);
         }
-        return new PlaylistMember(itemId, item.Uri, addedBy, addedAt);
+        return new PlaylistMember(itemId, item.Uri, addedBy, addedAt, chart);
     }
+
+    /// <summary>A chart playlist's per-row rank movement off <c>ItemAttributes.format_attributes</c> (desktop-verified:
+    /// <c>status</c>/<c>current_pos</c>/<c>previous_pos</c>/<c>rank</c>). Null when the item carries no format_attributes
+    /// at all (a non-chart list, or a chart row the wire has not yet stated) or no <c>status</c> key — every captured
+    /// example carries one, so its absence means this is not a chart-format attribute bag.</summary>
+    static ChartEntry? ChartEntryOf(Pl.ItemAttributes a)
+    {
+        if (a.FormatAttributes.Count == 0) return null;
+        string? status = null;
+        int currentPos = 0, previousPos = 0;
+        long rank = 0;
+        for (int i = 0; i < a.FormatAttributes.Count; i++)
+        {
+            var item = a.FormatAttributes[i];
+            if (!item.HasKey || !item.HasValue) continue;
+            switch (item.Key)
+            {
+                case "status": status = item.Value; break;
+                case "current_pos": int.TryParse(item.Value, NumberStyles.None, CultureInfo.InvariantCulture, out currentPos); break;
+                // Absent on a NEW entry (no prior position) — currentPos/previousPos default to 0 either way, defensive parse.
+                case "previous_pos": int.TryParse(item.Value, NumberStyles.None, CultureInfo.InvariantCulture, out previousPos); break;
+                case "rank": long.TryParse(item.Value, NumberStyles.None, CultureInfo.InvariantCulture, out rank); break;
+            }
+        }
+        if (status is null) return null;
+        return new ChartEntry(ChartStatusOf(status), currentPos, previousPos, rank);
+    }
+
+    /// <summary>Only <c>EQUAL</c>/<c>UP</c>/<c>DOWN</c>/<c>NEW</c> have ever been observed on the wire; any other string
+    /// (a status this client does not understand) maps to <see cref="ChartEntryStatus.Unknown"/> — rendered as no glyph
+    /// rather than a guessed arrow.</summary>
+    static ChartEntryStatus ChartStatusOf(string status) => status switch
+    {
+        "EQUAL" => ChartEntryStatus.Equal,
+        "UP" => ChartEntryStatus.Up,
+        "DOWN" => ChartEntryStatus.Down,
+        "NEW" => ChartEntryStatus.New,
+        _ => ChartEntryStatus.Unknown,
+    };
 
     /// <summary>Map the playlist4 Ops onto the domain ops the applier understands. Throws
     /// <see cref="ArgumentOutOfRangeException"/> on a shape this client cannot express — the same signal a torn apply

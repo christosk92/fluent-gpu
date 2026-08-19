@@ -5,7 +5,6 @@ using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Scene;
 using Wavee.Core;
-using Wavee.Features.Concerts;
 using static FluentGpu.Dsl.Ui;
 
 namespace Wavee.Features.Browse;
@@ -34,28 +33,23 @@ sealed class BrowsePageHost : Component
             OnOpenCategory: (uri, title) => go(BrowseRoutes.Page(uri), title),
             // A client feature is not a browse page: Live Events carries featureUri "spotify:concerts" and routes into
             // the Concerts hub Wavee already has.
-            OnOpenFeature: uri => go(FeatureRoute(uri), null),
+            OnOpenFeature: uri => go(BrowseRoutes.FeatureRoute(uri), null),
             Go: go,
             Play: uri => { if (svc is not null) _ = svc.Player.PlayAsync(uri, 0); },
-            OnExploreAll: () => go("search", null));
+            OnExploreAll: () => go("search", null),
+            RouteName: _route.Name,
+            RouteArg: _route.Arg);
 
+        // Scroll ownership moved INTO BrowsePage (T8): a flattened body's Virtual.Custom grid must own the scroll
+        // container itself (the cover-shear trap — a virtual viewport measures 0 natural height inside a page-level
+        // ScrollView), so BrowsePage now decides ScrollView-vs-not per BrowsePageLayout.Of's mode. This host only
+        // resolves the route and provides the model; the frame padding (BrowseLayout.Frame — the ONE masthead frame
+        // the directory and a category page share) now lives on whichever body BrowsePage renders.
         return Ctx.Provide(BrowsePage.Props, model,
-            ScrollView(new BoxEl
+            new BoxEl
             {
-                Direction = 1, MinWidth = 0f,
-                // 32 left/right to match the artist and Concerts page bodies — the category page previously sat at 16
-                // while the directory it descends from sat at 36, so stepping into a category visibly shifted the
-                // content leftward. One gutter across the browse tree and its neighbours.
-                Padding = new Edges4(32f, Spacing.M, 32f, PlayerDock.Reserve + Spacing.XXL),
+                Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
                 Children = [Embed.Comp(() => new BrowsePage()) with { Key = "browse-page:" + pageUri }],
-            }) with { Grow = 1f, MinHeight = 0f, ScrollKey = "browse:" + pageUri });
+            });
     }
-
-    /// <summary>Map a BrowseClientFeature uri onto the client surface that owns it. Only Spotify's Live Events tile is
-    /// known to appear here; anything else falls back to the entity route so a new feature opens *something* rather
-    /// than silently doing nothing.</summary>
-    static string FeatureRoute(string featureUri)
-        => string.Equals(featureUri, "spotify:concerts", StringComparison.Ordinal)
-            ? ConcertRoutes.Hub
-            : featureUri;
 }

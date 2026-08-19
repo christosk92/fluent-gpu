@@ -77,6 +77,10 @@ public sealed record DetailModel(
     // card's Pathfinder attributes carried in on the nav preview (DetailPreview.FromPlaylist / the DetailPage merge).
     // 0 = not a daylist / unknown. Drives the FlipCountdown row on the rail and the vertical hero.
     long ExpiresAtMs = 0, long CreatedAtMs = 0,
+    // Chart playlist header facts (playlist4 format_attributes, format=="chart"): how many rows are new since the last
+    // update, and when that update happened (unix ms). ChartNewEntries == 0 = not a chart / nothing new — drives the
+    // "N new entries · <date>" caption on the rail and vertical hero, same gate shape as the daylist countdown above.
+    int ChartNewEntries = 0, long ChartUpdatedAtMs = 0,
     // Podcast show: how many episodes the show HAS (its membership baseline), against Episodes.Count = how many are
     // resident. A 700-episode show opens with 300 rows, so the difference is the episode list's load-more affordance.
     int TotalEpisodes = 0)
@@ -273,6 +277,16 @@ internal static class DetailFormat
         return d.Year == DateTimeOffset.Now.Year
             ? d.ToString("MMM d")
             : d.ToString("MMM d, yyyy");
+    }
+
+    /// <summary>The chart-header "last updated" date — an absolute "MMM d" (same-year) / "MMM d, yyyy" date, matching
+    /// <see cref="DateAddedLabel"/>'s absolute branch. Never relative ("3 days ago"): the header states WHEN the chart
+    /// rolled over, not how long ago that was.</summary>
+    public static string ChartUpdatedDateLabel(long unixMs)
+    {
+        if (unixMs <= 0) return "";
+        var d = DateTimeOffset.FromUnixTimeMilliseconds(unixMs).ToLocalTime();
+        return d.Year == DateTimeOffset.Now.Year ? d.ToString("MMM d") : d.ToString("MMM d, yyyy");
     }
 
     /// <summary>"· "-joined billed-artist names.</summary>

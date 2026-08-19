@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using FluentGpu.Animation;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
@@ -51,23 +52,29 @@ static class HomeModules
     /// whether it can be opened. Same rendered header either way — one affordance, two ways of naming its target.</summary>
     static Element ModuleHeader(string title, string? subtitle, Element? tools, Action? open)
     {
-        if (open is null) return Surfaces.SectionHeader(title, subtitle, tools);
-
         Element label = subtitle is { Length: > 0 } sub
             ? WaveeType.ModuleHeader(title, sub)
             : WaveeType.ModuleHeader(title);
+
+        // No drill-in target: the SAME label — the module strip wears exactly one header grammar (WaveeType.ModuleHeader's
+        // display-face cut) whether or not it opens anything, just without the chevron/click wrapper. This used to fall
+        // back to Surfaces.SectionHeader, a second grammar entirely; FoldDeck routes here whenever ITS caller passes no
+        // openHeader (Home's own Sections row is exactly that), so a Fold deck must never wear that second grammar.
+        Element titleEl = open is null
+            ? new BoxEl { Direction = 0, Shrink = 1f, MinWidth = 0f, Children = [label] }
+            : new BoxEl
+            {
+                Direction = 0, Gap = Spacing.XS, AlignItems = FlexAlign.Center,
+                Shrink = 1f, MinWidth = 0f, OnClick = open,
+                Cursor = CursorId.Hand, Role = AutomationRole.Hyperlink, Focusable = true,
+                Children = [label, Icon(Icons.ChevronRight, 12f, Tok.TextTertiary)],
+            };
         return new BoxEl
         {
             Direction = 0, Gap = Spacing.M, AlignItems = FlexAlign.Center, MinWidth = 0f,
             Children =
             [
-                new BoxEl
-                {
-                    Direction = 0, Gap = Spacing.XS, AlignItems = FlexAlign.Center,
-                    Shrink = 1f, MinWidth = 0f, OnClick = open,
-                    Cursor = CursorId.Hand, Role = AutomationRole.Hyperlink, Focusable = true,
-                    Children = [label, Icon(Icons.ChevronRight, 12f, Tok.TextTertiary)],
-                },
+                titleEl,
                 new BoxEl { Grow = 1f, MinWidth = 0f },
                 tools ?? new BoxEl(),
             ],
@@ -324,58 +331,41 @@ static class HomeModules
             gap: Spacing.M, edgeFade: HomeModuleLayout.ShelfEdgeFade,
             keyOf: i => HomeModuleLayout.SourceCardKey(g, g.Cards[i]));
 
-    /// <summary>The Zune-style directory layer: peer or mixed sections become a two-row deck, and each tile opens a
-    /// full section page. No selection state lives on Home.</summary>
-    public static Element SectionDeck(IReadOnlyList<HomeSection> sections, Action<HomeSection> openSection)
+    /// <summary>THE Fold deck. Home's section directory, Home's Charts row and Browse's Charts band are the SAME one row —
+    /// one factory, one card height, one key shape. rows:1, no tile chevron; pager chevrons stay on PagedShelf.
+    /// <paramref name="eyebrowOf"/> is per-tile (Charts: charts/weekly/daily); <paramref name="tileEyebrow"/> is the
+    /// fallback when a section has no mapping.</summary>
+    public static Element FoldDeck(IReadOnlyList<HomeSection> sections, string title, Action<HomeSection> openTile,
+                                   Action? openHeader = null, string? tileEyebrow = null,
+                                   Func<HomeSection, string?>? eyebrowOf = null)
         => PagedShelf.Create(sections.Count,
-            (i, cardW) => SectionTile(sections[i], cardW, openSection),
-            cardHeight: static _ => HomeModuleLayout.SectionCardHeight,
-            header: Surfaces.SectionHeader(Loc.Get(Strings.Home.Sections)),
-            minCardW: HomeModuleLayout.SectionCardMin, maxCardW: HomeModuleLayout.SectionCardMax,
-            gap: Spacing.M, rows: 2, edgeFade: HomeModuleLayout.ShelfEdgeFade,
-            keyOf: i => "home-section-tile:" + (sections[i].Uri ?? i.ToString(System.Globalization.CultureInfo.InvariantCulture)))
-           with { Key = HomeModuleLayout.SectionSetKey(sections) };
+            (i, cardW) => HomeFoldTile.Create(sections[i], cardW,
+                eyebrowOf?.Invoke(sections[i]) ?? tileEyebrow, openTile),
+            cardHeight: static _ => HomeModuleLayout.FoldCardHeight,
+            header: ModuleHeader(title, null, null, openHeader),
+            minCardW: HomeModuleLayout.FoldCardMin, maxCardW: HomeModuleLayout.FoldCardMax,
+            gap: Spacing.M, rows: 1, maxColumns: 2, edgeFade: HomeModuleLayout.ShelfEdgeFade,
+            keyOf: i => "home-fold-tile:" + (sections[i].Uri ?? i.ToString(System.Globalization.CultureInfo.InvariantCulture)))
+           with { Key = HomeModuleLayout.SectionSetKey(sections) + ":fold" };
 
-    static Element SectionTile(HomeSection section, float cardW, Action<HomeSection> openSection)
+    /// <summary>The chevron header FoldDeck and BrowsePage shelves share. Open-null is a label, not a second grammar.
+    /// Blank title ⇒ no header — an empty box, not an empty row that still pays the band's height.</summary>
+    internal static Element DrillHeader(string title, Action? open)
+        => title.Length == 0 ? new BoxEl() : ModuleHeader(title, null, null, open);
+
+    /// <summary>Per-tile Charts eyebrow (prototype: charts / weekly / daily / video / podcasts). Sentence case, never
+    /// <c>ToUpper</c> — <see cref="WaveeType.Eyebrow"/> already carries that contract.</summary>
+    internal static string ChartEyebrow(string? uri)
     {
-        var first = section.Cards.FirstOrDefault();
-        string title = section.Title is { Length: > 0 } t ? t : first?.Title ?? Loc.Get(Strings.Home.Sections);
-        string meta = section.Subtitle is { Length: > 0 } s
-            ? s
-            : Strings.Home.SectionItems(Math.Max(section.TotalCount, section.Cards.Count));
-        var tile = new BoxEl
-        {
-            Direction = 0, Height = HomeModuleLayout.SectionCardHeight, MinWidth = 0f,
-            Gap = Spacing.M, AlignItems = FlexAlign.Center, Padding = Edges4.All(Spacing.S),
-            Corners = CornerRadius4.All(Radii.Card), ClipToBounds = true,
-            OnClick = () => openSection(section), Cursor = CursorId.Hand, Role = AutomationRole.Hyperlink,
-            Children =
-            [
-                Surfaces.Artwork(first?.Image, SpotifyExportMapper.Hash(section.Uri ?? title),
-                    HomeModuleLayout.SectionArt, HomeModuleLayout.SectionArt, Radii.Control, decodePx: 128),
-                new BoxEl
-                {
-                    Direction = 1, Gap = Spacing.XS, Grow = 1f, Basis = 0f, MinWidth = 0f,
-                    Children =
-                    [
-                        WaveeType.TrackTitle(title) with
-                        {
-                            Wrap = TextWrap.Wrap, MaxLines = 2, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
-                        },
-                        WaveeType.TrackMeta(meta) with
-                        {
-                            MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
-                        },
-                    ],
-                },
-                Icon(Icons.ChevronRight, 14f, Tok.TextTertiary) with { Shrink = 0f },
-            ],
-        }.Interactive(Interaction.Card);
-        return MediaCard.ApplyCardPhysics(tile) with
-        {
-            Key = "home-section-tile-body:" + cardW.ToString(System.Globalization.CultureInfo.InvariantCulture)
-                + ":" + section.Uri,
-        };
+        if (string.Equals(uri, Wavee.Features.Browse.ChartSections.Weekly, StringComparison.Ordinal))
+            return Loc.Get(Strings.Home.WeeklyEye);
+        if (string.Equals(uri, Wavee.Features.Browse.ChartSections.Daily, StringComparison.Ordinal))
+            return Loc.Get(Strings.Home.DailyEye);
+        if (string.Equals(uri, Wavee.Features.Browse.ChartSections.NowAvailable, StringComparison.Ordinal))
+            return Loc.Get(Strings.Home.VideoEye);
+        if (string.Equals(uri, Wavee.Features.Browse.ChartSections.Podcast, StringComparison.Ordinal))
+            return Loc.Get(Strings.Home.PodcastsEye);
+        return Loc.Get(Strings.Home.ChartEye);
     }
 
     /// <summary>The landing projection's unique baseline recommendations in one paged shelf. Source reasons remain in
@@ -399,6 +389,39 @@ static class HomeModules
             gap: Spacing.M, edgeFade: HomeModuleLayout.ShelfEdgeFade,
             keyOf: i => HomeModuleLayout.SourceCardKey(group, group.Cards[i]))
             with { Key = HomeModuleLayout.SourceGroupKey(group) + ":feed" };
+    }
+
+    /// <summary>The drill-in card grid — HomeSectionPage's, and (via this promotion) a Browse category page's. Fit
+    /// is for the COLUMN COUNT only: GridCard fills the LIVE cell width (no separately fitted cardW). AspectGrid
+    /// sizes rows from the arranged cross size × 1 + the two-line chrome under the square cover — a separately
+    /// fitted cardW was the shear: first-frame width / scrollbar gutter made item rects shorter than the covers,
+    /// and titles ellipsized into "Netherla…".</summary>
+    public static Element SectionGrid(IReadOnlyList<HomeCard> cards, string? sectionKey, float width,
+                                      Action<HomeCard> open, Services? svc, ActionServices? acts, IOverlayService overlay,
+                                      (Func<ScrollGeometry, long> Project, Action<ScrollGeometry> Action)? onScrollGeometryChanged = null)
+    {
+        var (columns, _) = FillRowVirtualLayout.Fit(width,
+            HomeModuleLayout.ShelfCardMin, HomeModuleLayout.ShelfCardMax, HomeModuleLayout.GridGap);
+        columns = Math.Max(1, columns);
+        int tier = columns;
+        return Virtual.Custom(cards.Count,
+            new AspectGridVirtualLayout(columns, 1f, HomeModuleLayout.GridCardChrome, HomeModuleLayout.GridGap),
+            i =>
+            {
+                var card = cards[i];
+                var menu = Menus.CardAttach(acts, overlay, card.Uri, card.Title, card.Image,
+                    SpotifyExportMapper.ToPlainText(card.Subtitle), circular: card.Kind == HomeCardKind.Artist);
+                var drag = card.Kind is HomeCardKind.Track or HomeCardKind.Episode ? null
+                    : Drag.Source(WaveeDragKinds.Resource,
+                        () => WaveeResourceDragPayload.ForEntity(WaveeDragKindMap.Of(card.Kind), card.Uri,
+                            card.Title, card.Image, acts));
+                return MediaCard.GridCard(card.Image, card.Title, SpotifyExportMapper.ToPlainText(card.Subtitle) ?? "",
+                    card.Uri, () => open(card), () => { if (svc is not null) _ = svc.Player.PlayAsync(card.Uri, 0); },
+                    circular: card.Kind == HomeCardKind.Artist, menu: menu, drag: drag) with
+                { Key = "home-section-card:" + tier + ":" + card.Uri };
+            },
+            keyOf: i => sectionKey + "\u001F" + cards[i].Uri,
+            overscan: 2) with { MinHeight = 0f, OnScrollGeometryChanged = onScrollGeometryChanged };
     }
 
 }
@@ -432,10 +455,58 @@ static class HomeModuleLayout
     public const float ShelfCardMin = 148f;
     public const float ShelfCardMax = 188f;
     public const float ShelfEdgeFade = 24f;
-    public const float SectionCardMin = 256f;
-    public const float SectionCardMax = 320f;
-    public const float SectionCardHeight = 112f;
-    public const float SectionArt = 80f;
+
+    /// The drill-in grid's cell gap and under-cover chrome (pad + title + metadata) — promoted from
+    /// HomeSectionPage so a Browse category page's flattened body renders the IDENTICAL grid.
+    public const float GridGap = Spacing.M;
+    public const float GridCardChrome = 52f;
+
+    // ── THE Fold tile — home-sections-v1-mica.html, the Blend tab (`.blend` / `.blend .stack`, CSS ~329-349) ─────────
+    /// <summary>`.blend { height:176px }`.</summary>
+    public const float FoldCardHeight = 176f;
+    /// <summary>`.blend .stack .c { width:124px; height:124px }`.</summary>
+    public const float FoldCover = 124f;
+    /// <summary>`.blend .copy { max-width:70% }`.</summary>
+    public const float FoldCopyMaxFrac = 0.70f;
+    /// <summary>Two-up floor, not a preferred width. With <c>maxColumns: 2</c> and an uncapped max the fitted card is
+    /// always <c>(row − gap) / cols</c>; this only decides WHERE the second tile appears
+    /// (<c>2×440 + Spacing.M</c> ≈ 892 of content). Below that, one tile fills the row. Sized so FoldRest's stack
+    /// (<c>left = cardW − 210</c>) leaves the copy on the card plate rather than on the covers.</summary>
+    public const float FoldCardMin = 440f;
+    /// <summary>UNCAPPED on purpose: with maxColumns 2 the fitted card must keep filling the band. A real ceiling
+    /// (the prototype CSS 480, or the old Hub 320) either adds a third skinny column or strands leftover mica.</summary>
+    public const float FoldCardMax = 9999f;
+
+    /// <summary>Cover i's REST pose in CARD-LOCAL DIP. The prototype's stack box is right:-40 / top:6 / width:250, so a
+    /// cover's absolute left is (cardW - 250 + 40) + its local left. Baked in here so the tile needs no wrapper node.</summary>
+    public static void FoldRest(int i, float cardW, out float x, out float y, out float rot)
+    {
+        float left = cardW - 250f + 40f;                 // right:-40px on a 250-wide stack box
+        (float lx, float ly, float r) = i switch
+        {
+            0 => ( 0f, 32f, -11f),
+            1 => (44f, 16f,   5f),
+            _ => (92f,  2f,  -2f),
+        };
+        x = left + lx; y = 6f + ly; rot = r;             // top:6px on the stack box
+    }
+
+    /// <summary>Cover i's hover DELTA = the prototype's hover absolute MINUS its rest absolute. WhileHover is additive on
+    /// the rest pose; the prototype's hover CSS REPLACES the whole rest transform, so these are differences, never the
+    /// CSS numbers. (rot: -16-(-11)=-5, 8-5=+3, 1-(-2)=+3. The prototype's front-cover scale(1.03) is deliberately out.)</summary>
+    public static void FoldFan(int i, out float dx, out float dy, out float drot)
+        => (dx, dy, drot) = i switch
+        {
+            0 => (-10f,  6f, -5f),
+            1 => (  2f, -6f,  3f),
+            _ => ( 10f,  0f,  3f),
+        };
+
+    /// <summary>32 header + card + 12 lift + 12 shadow clearance — the same shape as <see cref="ShelfExtent"/>, one row.</summary>
+    public const float FoldExtent = 32f + FoldCardHeight + 2f * Spacing.M;
+    /// <summary>Empty/failed Charts: 32 header + the compact empty grammar + the module pad. ONE named constant, never a
+    /// measured guess — the row STAYS, so the estimator can never report 0 and flap the scroll anchor.</summary>
+    public const float FoldStateExtent = 32f + 96f + Spacing.XXL;
 
     // Display counts — the landing preview. The rest of the section lives on the drill-in page.
     public const int QuickShown = 8;
@@ -491,9 +562,6 @@ static class HomeModuleLayout
         var (_, cardW) = FillRowVirtualLayout.Fit(width, ShelfCardMin, ShelfCardMax, Spacing.M);
         return 32f + ShelfCardHeight(cardW) + 2f * Spacing.M;
     }
-
-    /// <summary>32 header + 12 header gap + two 112-DIP cards + their 12-DIP row gap.</summary>
-    public const float SectionDeckExtent = 32f + Spacing.M + 2f * SectionCardHeight + Spacing.M;
 
     // Every arm below is the SKIN's own arithmetic restated in the SKIN's own tokens — art rung + padding rungs + line
     // heights — never a measured guess. That is the only thing keeping the estimator and the renderer from disagreeing.

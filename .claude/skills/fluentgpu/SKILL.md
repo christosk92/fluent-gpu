@@ -9,6 +9,14 @@ FluentGpu is a near-zero-alloc, NativeAOT, D3D12-rendered .NET 10 UI engine. Rea
 (`Element` records + `Component` + hooks) on a **signals-first (Solid-style) reactive core**. Full guide:
 `docs/guide/` (start at `docs/guide/README.md`). This skill is the fast path + the rules that prevent most bugs.
 
+> **⛔ HARD RULES for subagents (agents dispatched by an orchestrator).** (1) **Never `git stash`** — or any
+> other git state change (no commit/checkout/reset/restore/stash pop): the working tree is shared and a stash
+> wipes every parallel agent's in-progress edits. (2) **Never run builds or test suites** — no `dotnet build`,
+> no `dotnet run --project src/FluentGpu.VerticalSlice`, no `dotnet test`, no check-canon.ps1: parallel builds
+> on the shared `obj/bin` collide and exhaust the machine. Write code + gates/tests only; the orchestrator runs
+> the full verification once after the whole batch. (Working solo, not as a dispatched subagent? Then the usual
+> build/VerticalSlice loop applies.)
+
 > **✅ Animation engine — REWORKED (landed + verified, 521 VerticalSlice gates green).** Motion is a **signals-first** model: one POD `AnimValue` slab keyed `(node, channel)` driven by the slab scheduler (the class is still named `AnimEngine`) + the analytical closed-form spring (sampled at absolute `t` — dt-deterministic, replaced the sub-stepped Euler) + the complete declarative surface (`Transition`/`WhileHover`/`WhilePressed`/`WhileFocus`/`Enter`/`Exit`/`Stagger`/`Layout`), with **brush/color as just another channel** (the `BrushFade` channel; `BrushTransitionMs` still triggers it) and **reduced-motion as a value, never a `Use*` early-return**. `InteractionAnimator` and the `AdvanceBrushAnims` ticker are **deleted** (subsumed as `HoverFade`/`PressFade`/`BrushFade` side-table channels); `ConnectedAnimation` → `DetachedAnimSlab`/`RecordDetached` rebuild rides `FG_DETACHED_FLY` (default-off = the proven live-overlay path). Implemented design: `docs/plans/animation-engine-rework-design.md`. **Prefer the declarative surface for new motion;** `BrushTransitionMs`/`MotionRecipes.*`/the `Use*` motion hooks still work (repointed at the new engine), so existing controls are unchanged.
 
 ## The one mental model

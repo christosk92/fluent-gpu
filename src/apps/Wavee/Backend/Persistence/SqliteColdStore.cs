@@ -31,8 +31,10 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
     /// + its LRU index, which is what finally makes the extension tier EVICTABLE: before it, `cache_bytes` counted those
     /// payloads but no sweep could delete them, so the byte budget had an unbounded floor it could never get under.
     /// v8 = `rootlist.added_at` (a folder rename resends the marker's ORIGINAL create timestamp) + `outbox.parent_folder`
-    /// (a queued rootlist ADD remembers its folder, because the INDEX moves while the op waits)).</summary>
-    public const int CurrentSchemaVersion = 8;
+    /// (a queued rootlist ADD remembers its folder, because the INDEX moves while the op waits). v9 =
+    /// `playlist_items.chart_*` (status/current_pos/previous_pos/rank) — a chart playlist's per-row rank movement,
+    /// so a cold-opened chart shows its arrows before the live re-fetch lands.</summary>
+    public const int CurrentSchemaVersion = 9;
 
     /// <summary>Cap for the bulk <see cref="LoadAllExtensions"/> read. NOT used by the live path any more — the cache is
     /// point-read per miss — so this only bounds tests and offline tooling.</summary>
@@ -106,10 +108,16 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
         // the column here; an existing v5 file gets it through the guarded ALTER in MigrateToV6().
         Exec("CREATE TABLE IF NOT EXISTS playlists(uri TEXT PRIMARY KEY, base_rev BLOB, adopted_at INTEGER NOT NULL DEFAULT 0);");
         Exec("CREATE TABLE IF NOT EXISTS playlist_items(playlist_uri TEXT NOT NULL, position INTEGER NOT NULL, item_id TEXT, " +
-             "item_uri TEXT NOT NULL, added_by TEXT, added_at INTEGER, PRIMARY KEY(playlist_uri, position));");
+             "item_uri TEXT NOT NULL, added_by TEXT, added_at INTEGER, " +
+             "chart_status INTEGER NOT NULL DEFAULT 0, chart_current_pos INTEGER NOT NULL DEFAULT 0, " +
+             "chart_previous_pos INTEGER NOT NULL DEFAULT 0, chart_rank INTEGER NOT NULL DEFAULT 0, " +
+             "PRIMARY KEY(playlist_uri, position));");
         // `added_at` (v8) is the row's playlist4 ADD timestamp: a folder RENAME has to resend the marker's ORIGINAL
         // create timestamp, so it must survive a restart. A fresh db gets the column here; an existing file gets it
         // through the guarded ALTER in MigrateToV8().
+        // `chart_*` (v9) is the row's chart rank-movement snapshot (ItemAttributes.format_attributes on a
+        // format=="chart" list) — all zero = no chart facts, indistinguishable from "not a chart row". A fresh db gets
+        // the columns here; an existing file gets them through the guarded ALTERs in MigrateToV9().
         Exec("CREATE TABLE IF NOT EXISTS rootlist(account TEXT NOT NULL, position INTEGER NOT NULL, kind INTEGER, uri TEXT, group_name TEXT, depth INTEGER, added_at INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(account, position));");
         // Durable mutation outbox: pending intents survive a restart. `op` holds the wire ListChanges body for oprebase edits.
         Exec("CREATE TABLE IF NOT EXISTS outbox(id INTEGER PRIMARY KEY, type TEXT NOT NULL, entity_key TEXT NOT NULL, set_id TEXT, target_saved INTEGER, op BLOB, base_rev BLOB, attempts INTEGER NOT NULL DEFAULT 0, parent_folder TEXT);");
@@ -281,7 +289,26 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
             if (ver == "5") { MigrateToV6(); ver = "6"; }
             if (ver == "6") { MigrateToV7(); ver = "7"; }
             if (ver == "7") { MigrateToV8(); ver = "8"; }
+            if (ver == "8") { MigrateToV9(); ver = "9"; }
         }
+    }
+
+    // ── v8 → v9: chart-playlist per-row rank movement ────────────────────────────────────────────────────────────────
+    // Purely ADDITIVE (four guarded ALTERs, no row rewritten): the chart status/positions/rank an ordinary playlist
+    // never carries default to 0, which FromCold reads back as "no chart facts" — a pre-v9 row round-trips unchanged.
+    void MigrateToV9()
+    {
+        using var tx = _conn.BeginTransaction();
+        if (!ColumnExistsLocked("playlist_items", "chart_status", tx))
+            ExecLocked("ALTER TABLE playlist_items ADD COLUMN chart_status INTEGER NOT NULL DEFAULT 0;", tx);
+        if (!ColumnExistsLocked("playlist_items", "chart_current_pos", tx))
+            ExecLocked("ALTER TABLE playlist_items ADD COLUMN chart_current_pos INTEGER NOT NULL DEFAULT 0;", tx);
+        if (!ColumnExistsLocked("playlist_items", "chart_previous_pos", tx))
+            ExecLocked("ALTER TABLE playlist_items ADD COLUMN chart_previous_pos INTEGER NOT NULL DEFAULT 0;", tx);
+        if (!ColumnExistsLocked("playlist_items", "chart_rank", tx))
+            ExecLocked("ALTER TABLE playlist_items ADD COLUMN chart_rank INTEGER NOT NULL DEFAULT 0;", tx);
+        ExecLocked("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','9');", tx);
+        tx.Commit();
     }
 
     // ── v7 → v8: rootlist ADD timestamps + the queued create's rootlist placement ─────────────────────────────────────
@@ -949,13 +976,16 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
         lock (_readLock)
         {
             using var c = _read.CreateCommand();
-            c.CommandText = "SELECT item_id, item_uri, added_by, added_at FROM playlist_items WHERE playlist_uri=$p ORDER BY position;";
+            c.CommandText = "SELECT item_id, item_uri, added_by, added_at, chart_status, chart_current_pos, chart_previous_pos, chart_rank " +
+                             "FROM playlist_items WHERE playlist_uri=$p ORDER BY position;";
             c.Parameters.AddWithValue("$p", playlistUri);
             using var r = c.ExecuteReader();
             while (r.Read())
                 list.Add(new ColdPlaylistItem(
                     r.IsDBNull(0) ? "" : r.GetString(0), r.GetString(1),
-                    r.IsDBNull(2) ? null : r.GetString(2), r.IsDBNull(3) ? 0 : r.GetInt64(3)));
+                    r.IsDBNull(2) ? null : r.GetString(2), r.IsDBNull(3) ? 0 : r.GetInt64(3),
+                    r.IsDBNull(4) ? (byte)0 : (byte)r.GetInt64(4), r.IsDBNull(5) ? 0 : r.GetInt32(5),
+                    r.IsDBNull(6) ? 0 : r.GetInt32(6), r.IsDBNull(7) ? 0 : r.GetInt64(7)));
         }
         return list;
     }
@@ -983,13 +1013,19 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
             using (var ins = _conn.CreateCommand())
             {
                 ins.Transaction = tx;
-                ins.CommandText = "INSERT INTO playlist_items(playlist_uri,position,item_id,item_uri,added_by,added_at) VALUES($p,$pos,$id,$u,$by,$at);";
+                ins.CommandText = "INSERT INTO playlist_items(playlist_uri,position,item_id,item_uri,added_by,added_at," +
+                                   "chart_status,chart_current_pos,chart_previous_pos,chart_rank) " +
+                                   "VALUES($p,$pos,$id,$u,$by,$at,$cs,$ccp,$cpp,$cr);";
                 var pp = ins.Parameters.Add("$p", SqliteType.Text); pp.Value = playlistUri;
                 var ppos = ins.Parameters.Add("$pos", SqliteType.Integer);
                 var pid = ins.Parameters.Add("$id", SqliteType.Text);
                 var pu = ins.Parameters.Add("$u", SqliteType.Text);
                 var pby = ins.Parameters.Add("$by", SqliteType.Text);
                 var pat = ins.Parameters.Add("$at", SqliteType.Integer);
+                var pcs = ins.Parameters.Add("$cs", SqliteType.Integer);
+                var pccp = ins.Parameters.Add("$ccp", SqliteType.Integer);
+                var pcpp = ins.Parameters.Add("$cpp", SqliteType.Integer);
+                var pcr = ins.Parameters.Add("$cr", SqliteType.Integer);
                 for (int i = 0; i < rows.Count; i++)
                 {
                     var row = rows[i];
@@ -998,6 +1034,10 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
                     pu.Value = row.ItemUri;
                     pby.Value = (object?)row.AddedBy ?? DBNull.Value;
                     pat.Value = row.AddedAt;
+                    pcs.Value = row.ChartStatus;
+                    pccp.Value = row.ChartCurrentPos;
+                    pcpp.Value = row.ChartPreviousPos;
+                    pcr.Value = row.ChartRank;
                     ins.ExecuteNonQuery();
                 }
             }

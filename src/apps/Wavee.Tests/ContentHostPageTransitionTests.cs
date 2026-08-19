@@ -18,6 +18,17 @@ namespace Wavee.Tests;
 //     ignored Motion, so writing `_navMotion` alone (tab activation / open / close all write Neutral) changed the token
 //     on the ACTIVE key — which the reconciler reads as an activation change and re-seeds the entrance, i.e. a full-page
 //     re-fade with no content change whatsoever.
+//
+//  3. Masthead double-exposure (G2c — history). Navigating between two pages that shared the drill masthead (search's
+//     directory, a browse category, a section drill) used to run PageSlideForward — enter and exit both at 250ms in
+//     lockstep, plus the incoming title on a 500ms EmphasizedEnter — so the outgoing and incoming 40px display titles
+//     double-exposed at nearly the same X/Y, and "Browse ›" was left reading alone for 250ms after the pages had
+//     already settled. The root cause was structural, not a timing mismatch: every browse-family page rendered its
+//     OWN copy of BrowseMasthead, plus a misclassified search-with-query route and an inverted FluentAccelerate/
+//     SmoothOut curve pairing in the family-swap recipe that briefly lived here (PageNavMotion.SharesMasthead /
+//     MastheadSwap). The structural fix is ShellMastheadBand: ONE masthead, mounted above this whole boundary
+//     (ContentHost.Render), that never participates in a page transition — so PageTransition/RecipeFor went back to
+//     pure direction→recipe mapping below, with no masthead-family special case left to test here.
 public class ContentHostPageTransitionTests
 {
     // ── 2. slot identity ────────────────────────────────────────────────────────────────────────────────────────────

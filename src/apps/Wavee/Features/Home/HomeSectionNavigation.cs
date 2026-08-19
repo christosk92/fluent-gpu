@@ -5,29 +5,6 @@ using Wavee.Core;
 
 namespace Wavee;
 
-static class HomeSectionRoutes
-{
-    public const string Prefix = "home-section:";
-
-    /// <summary>The scheme Home mints for a section the SERVER gave no URI for: <c>wavee:local:&lt;hash&gt;</c>. It is a
-    /// purely LOCAL route identity — it addresses a <see cref="HomeSectionPreviewStore"/> entry and nothing else. It must
-    /// never reach a paging endpoint: neither <c>homeSection</c> nor <c>browseSection</c> can resolve it, which the
-    /// section page used to surface as a hard error page once the bounded preview store had evicted the seed.
-    /// <para>OWNER: this const. <c>HomePage.OpenSection</c> still builds the same string as a literal — that literal is
-    /// redundant and should migrate here, so the minting side and the recognising side share one definition.</para>
-    /// </summary>
-    public const string LocalPrefix = "wavee:local:";
-
-    public static string Page(string sectionUri) => Prefix + sectionUri;
-    public static bool Is(string route) => route.StartsWith(Prefix, StringComparison.Ordinal);
-    public static string UriOf(string route) => Is(route) ? route[Prefix.Length..] : "";
-
-    /// <summary>True for a client-minted section identity — there is no server resource behind it, so it is never a
-    /// legal argument to a browse read.</summary>
-    public static bool IsLocal(string? uri) =>
-        uri is not null && uri.StartsWith(LocalPrefix, StringComparison.Ordinal);
-}
-
 /// <summary>Click-to-section handoff. Home already holds the returned first page, so a drill route can paint it before
 /// the <c>homeSection</c> read lands. The bounded entry remains available for Back/remount: a synthetic section without
 /// a server URI cannot be reconstructed once its preview is consumed.</summary>
@@ -101,7 +78,25 @@ static class HomeCardNav
                 return;
         }
     }
+
+    /// <summary>A Charts Fold tile (or a Browse shelf header) drills into <c>browse-section:</c> so paging uses
+    /// <c>browseSection</c>, not <c>homeSection</c>. A section that is only one card is that card — opening it as a
+    /// section page is the 1-tile "intermediate" void.</summary>
+    public static void OpenBrowseSection(HomeSection s, NavPreviewStore? navPreview,
+                                         HomeSectionPreviewStore? sectionPreview, Action<string, string?> go,
+                                         Action<string>? playTrack)
+    {
+        if (s.Cards.Count == 1)
+        {
+            Open(s.Cards[0], navPreview, go, playTrack);
+            return;
+        }
+        string route = BrowseSectionRoutes.Page(s.Uri ?? "");
+        sectionPreview?.Set(route, s);
+        go(route, s.Title);
+    }
 }
 
 // HomeSectionPaging — the cursor arithmetic — lives in its own engine-free file (HomeSectionPaging.cs) so
-// Wavee.Tests can source-include and drive it without this file's Context/Hooks dependencies.
+// Wavee.Tests can source-include and drive it without this file's Context/Hooks dependencies. HomeSectionRoutes and
+// BrowseSectionRoutes moved out the same way, into HomeSectionRoutes.cs.

@@ -192,6 +192,15 @@ public static class WaveeType
         CharSpacing = -12f,
     };
 
+    /// <summary>The Fold tile's Zune crop — the SAME cut as <see cref="PickQuote"/> (Ui.Title 28/36 in the display face,
+    /// Weight 400, CharSpacing -12). Named for the surface it sits on rather than for the voice it carries: a Fold tile's
+    /// title is a card headline, not an artist speaking, so it does not borrow <see cref="PickQuote"/>'s name even though
+    /// it borrows every one of its numbers. The prototype's own cut for this role (<c>font-weight:300; font-size:32px</c>)
+    /// is deliberately NOT copied — 300 is off the house's 400/600 weight policy (see the class header) and 32px has no
+    /// rung on the engine's type ramp; PickQuote's already-sanctioned 28/36/400 divergence covers the same "regular,
+    /// display-face, editorial" register without adding a second weight exception.</summary>
+    public static TextEl FoldTitle(string s) => PickQuote(s);
+
     /// <summary>A ZUNE-style pivot tab header (All / Music / Podcasts / Artists) — the Display face at SemiLight, one
     /// rung under <see cref="RailHeader(string)"/>. 19 / 25 / <b>350</b> — the second sanctioned weight divergence (see
     /// the class header): the same SemiLight the engine's own <c>Pivot</c> control uses for its header row, carried

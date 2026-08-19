@@ -209,7 +209,7 @@ internal static class TrackRow
         // # cell: number / live equalizer / fetch spinner at rest; reveals a SINGLE-CLICK play (or pause) button on ROW
         // hover — suppressed for a track that is not released, where the hover play would be a button that does nothing.
         Add(CellKey.Num, NumberCell(displayIndex, st.IsNow, st.IsPlaying, st.IsBuffering, st.IsTop,
-                                    notYetOut ? null : onPlay, hoverPaused));
+                                    notYetOut ? null : onPlay, hoverPaused, chart: t.Chart));
 
         // ♥ — in the left cluster (between # and the art thumb). Filled when saved; click toggles via the caller's bridge.
         if (set.Heart) Add(CellKey.Heart, CenterCell(Heart(st.Saved, onLike, likePop)));
@@ -874,16 +874,22 @@ internal static class TrackRow
     /// <param name="ctx">The page's ambient accent (<see cref="WaveeAccentCtx"/>), read by the CALLER — this is a plain
     /// static helper, not a Component, so it cannot call UseContext itself. Null (what a caller on any page other than
     /// Recents has to pass) is a pure no-op: the equalizer keeps its ordinary <c>Tok.AccentTextPrimary</c>.</param>
+    /// <param name="chart">A chart playlist's per-row rank movement (null off a non-chart list). Rendered as a small
+    /// glyph beside the plain track-number rest state ONLY — the equalizer/star/spinner states already say something
+    /// about this row, so the movement glyph does not compete with them for the same few pixels.</param>
     internal static Element NumberCell(int index, bool isNow, bool isPlaying, bool isBuffering, bool isTop,
                                        Action? onPlay = null, IReadSignal<bool>? hoverPaused = null,
-                                       IReadSignal<PageAccent>? ctx = null)
+                                       IReadSignal<PageAccent>? ctx = null, ChartEntry? chart = null)
     {
         ColorF accent = Tok.AccentTextPrimary;
+        Element number = Caption((index + 1).ToString()) with { Color = Tok.TextTertiary };
         Element rest =
             isBuffering ? Spinner()
             : isNow     ? WaveeEqualizer.Of(isPlaying, () => ctx is {} a ? a.Value.Ink : Tok.AccentTextPrimary, paused: hoverPaused)
             : isTop     ? Icon(Icons.FavoriteStarFill, 11f, accent)
-            :             Caption((index + 1).ToString()) with { Color = Tok.TextTertiary };
+            : ChartGlyph(chart) is { } glyph
+                        ? new BoxEl { Direction = 0, Gap = 2f, AlignItems = FlexAlign.Center, Children = [number, glyph] }
+                        : number;
         Element transport = isBuffering
             ? Spinner()
             : new BoxEl
@@ -907,6 +913,19 @@ internal static class TrackRow
             ],
         };
     }
+
+    // The chart rank-movement glyph beside the # cell's plain number: a green up-triangle / red down-triangle / a
+    // compact "NEW" label / nothing at all (Equal or an Unknown status this client has never seen — never a guessed
+    // arrow). Plain Unicode glyphs rather than the icon font: the movement is a tiny, three-way fact next to a number,
+    // not an action, and it keeps this cell out of the shared Icons glyph table entirely. Constant literals only — no
+    // per-render string concat, matching the row's existing zero-alloc-in-hot-cells discipline.
+    static Element? ChartGlyph(ChartEntry? chart) => chart?.Status switch
+    {
+        ChartEntryStatus.Up => new TextEl("▲") { Size = 8f, LineHeight = 12f, Color = Tok.SystemFillSuccess, Weight = 700 },
+        ChartEntryStatus.Down => new TextEl("▼") { Size = 8f, LineHeight = 12f, Color = Tok.SystemFillCritical, Weight = 700 },
+        ChartEntryStatus.New => new TextEl("NEW") { Size = 8f, LineHeight = 12f, Color = Tok.SystemFillSuccess, Weight = 700 },
+        _ => null,   // Equal / Unknown — no glyph, never a guess
+    };
 
     // The indeterminate fetch/buffer spinner (WinUI ProgressRing). The now-playing equalizer is the shared WaveeEqualizer.
     internal static Element Spinner() => ProgressRing.Indeterminate(size: 16f, foreground: Tok.AccentTextPrimary);

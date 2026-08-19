@@ -247,9 +247,9 @@ public static class MediaCard
                     Direction = 1, Gap = Spacing.XXS, AlignItems = circular ? FlexAlign.Center : FlexAlign.Start,
                     Children =
                     [
-                        WaveeType.TrackTitle(title) with { Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                        WaveeType.TrackTitle(title) with { Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f },
                         subtitle.Length == 0 ? new BoxEl()
-                            : WaveeType.TrackMeta(subtitle) with { Wrap = TextWrap.Wrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                            : WaveeType.TrackMeta(subtitle) with { Wrap = TextWrap.Wrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f },
                     ],
                 },
             ],

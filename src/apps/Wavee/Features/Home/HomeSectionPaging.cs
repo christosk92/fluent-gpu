@@ -78,4 +78,28 @@ static class HomeSectionPaging
     /// TERMINATION signal, not a cosmetic check: a page the dedup ate entirely means clicking again can only produce the
     /// same nothing, however healthy the server's cursor and total look.</summary>
     public static bool Progressed(HomeSection before, HomeSection after) => after.Cards.Count > before.Cards.Count;
+
+    /// <summary>BrowseSection has no server cursor — synthesize one from the offset we asked for plus how many cards
+    /// came back, versus <c>totalCount</c>. Null means this page exhausted the total (or the total is unknown/zero).
+    /// </summary>
+    public static int? BrowseNextOffset(int requestedOffset, int pageCount, int total)
+    {
+        int loaded = requestedOffset + pageCount;
+        return total > loaded ? loaded : null;
+    }
+
+    /// <summary>Resolve a fetched <see cref="BrowseSection"/> page's next cursor, preferring the server's own value
+    /// over the synthesized one. <see cref="BrowseSection.NextOffset"/> is a tri-state (see its doc comment): a real
+    /// offset passes straight through; <see cref="BrowseSection.PagingComplete"/> — an EXPLICIT server terminator —
+    /// resolves to <c>null</c> outright, even when <c>page.Total</c> still claims more (never fall back to
+    /// <see cref="BrowseNextOffset"/> in that case, or a section the server has already finished serving would stay
+    /// armed forever off an unreliable total — the same trap <see cref="HasMore"/> exists to avoid for Home's own
+    /// sections); a plain <c>null</c> — no <c>pagingInfo</c> came back at all — is the ONLY case that falls back to
+    /// the synthesized offset+count-vs-total cursor.</summary>
+    public static int? BrowseSectionNextOffset(int requestedOffset, BrowseSection page) => page.NextOffset switch
+    {
+        BrowseSection.PagingComplete => null,
+        { } v => v,
+        null => BrowseNextOffset(requestedOffset, page.Cards.Count, page.Total),
+    };
 }

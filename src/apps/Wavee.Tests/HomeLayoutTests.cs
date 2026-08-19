@@ -277,6 +277,93 @@ public sealed class HomeLayoutTests : IDisposable
         Assert.Equal(HomeLandingProjection.DefaultRows, landing.Rows);
     }
 
+    // ── HomeRow.Charts: chrome, appended unconditionally, never a HomeGroupKind ─────────────────────────────────────
+    // Charts is CHROME (see HomeLandingProjection.cs's own comment on the HomeRow enum): it is not a HomeGroupKind
+    // module, is not in home-layout.json v1, and is not user-hideable. These tests pin that it always exists exactly
+    // once, immediately before HomeRow.Sections, regardless of feed content, hidden modules, or where PodcastShelf
+    // (the module whose presence in ApplyLayout decides WHICH of its two `rows.Add(HomeRow.Sections)` sites runs)
+    // ends up.
+
+    [Fact]
+    public void DefaultRows_ContainsExactlyOneCharts_ImmediatelyBeforeSections()
+    {
+        var rows = HomeLandingProjection.DefaultRows;
+        Assert.Equal(1, rows.Count(r => r == HomeRow.Charts));
+        int charts = IndexOf(rows, HomeRow.Charts);
+        int sections = IndexOf(rows, HomeRow.Sections);
+        Assert.True(charts >= 0 && sections >= 0);
+        Assert.Equal(charts + 1, sections);
+    }
+
+    public static IEnumerable<object[]> LayoutsThatMustKeepChartsBeforeSections()
+    {
+        // Default layout: PodcastShelf is visible, so ApplyLayout adds Charts from the IN-LOOP site
+        // (`if (kind == HomeGroupKind.PodcastShelf) { … rows.Add(HomeRow.Charts); … }`).
+        yield return new object[] { "default layout", HomeLayoutDoc.Default };
+
+        // Unrelated modules hidden: PodcastShelf stays visible, so this still reaches the in-loop site.
+        var modulesHidden = HomeLayoutReducer.Apply(HomeLayoutDoc.Default, new SetHomeModuleHidden(HomeGroupKind.Hero, true)).Layout;
+        modulesHidden = HomeLayoutReducer.Apply(modulesHidden, new SetHomeModuleHidden(HomeGroupKind.MixBand, true)).Layout;
+        yield return new object[] { "unrelated modules hidden", modulesHidden };
+
+        // PodcastShelf itself hidden (absent from `visible`): the loop never sees it, so this is the only way to
+        // reach the FALLBACK site after the loop (`if (!afterPodcasts) { … rows.Add(HomeRow.Charts); … }`).
+        var podcastHidden = HomeLayoutReducer.Apply(HomeLayoutDoc.Default, new SetHomeModuleHidden(HomeGroupKind.PodcastShelf, true)).Layout;
+        yield return new object[] { "PodcastShelf hidden (absent)", podcastHidden };
+
+        // PodcastShelf reordered to the front: still visible (back to the in-loop site), but Charts must now move
+        // WITH it rather than staying pinned to a fixed index.
+        int from = HomeLayoutDoc.Default.IndexOf(HomeGroupKind.PodcastShelf);
+        var podcastMoved = HomeLayoutReducer.Apply(HomeLayoutDoc.Default, new MoveHomeModule(from, 0)).Layout;
+        yield return new object[] { "PodcastShelf moved to front", podcastMoved };
+    }
+
+    [Theory]
+    [MemberData(nameof(LayoutsThatMustKeepChartsBeforeSections))]
+    public void ApplyLayout_PlacesExactlyOneCharts_ImmediatelyBeforeSections(string label, HomeLayoutDoc layout)
+    {
+        var landing = HomeLandingProjection.Project(HomeFeed.Empty, HomeModuleTitles.Default, layout);
+        Assert.Equal(1, landing.Rows.Count(r => r == HomeRow.Charts));
+        int charts = IndexOf(landing.Rows, HomeRow.Charts);
+        int sections = IndexOf(landing.Rows, HomeRow.Sections);
+        Assert.True(charts >= 0 && sections >= 0, $"{label}: charts={charts} sections={sections}");
+        Assert.Equal(charts + 1, sections);
+    }
+
+    [Fact]
+    public void Charts_IsPresent_RegardlessOfWhichHomeGroupKindsTheFeedCarries()
+    {
+        var richFeed = FeedWith(
+            new HomeGroup(HomeGroupKind.Hero, null, [Card("hero")]),
+            new HomeGroup(HomeGroupKind.MixBand, "Made for you", [Card("mix")]),
+            new HomeGroup(HomeGroupKind.PodcastShelf, "Podcasts", [Card("pod")]));
+        var richLanding = HomeLandingProjection.Project(richFeed, HomeModuleTitles.Default);
+        Assert.Contains(HomeRow.Charts, richLanding.Rows);
+
+        // Charts is CHROME, not a module projected from feed content — a wholly empty feed carries it too.
+        var emptyLanding = HomeLandingProjection.Project(HomeFeed.Empty, HomeModuleTitles.Default);
+        Assert.Contains(HomeRow.Charts, emptyLanding.Rows);
+    }
+
+    [Fact]
+    public void Charts_IsNotAHomeGroupKind_AndDefaultOrderCarriesNoChartsEntry()
+    {
+        Assert.DoesNotContain("Charts", System.Enum.GetNames<HomeGroupKind>());
+        Assert.All(HomeLayoutModules.DefaultOrder, kind => Assert.NotEqual("Charts", kind.ToString()));
+    }
+
+    [Fact]
+    public void HidingEveryFixedModule_StillLeavesExactlyOneChartsInRows()
+    {
+        var layout = HomeLayoutDoc.Default;
+        foreach (var kind in HomeLayoutModules.DefaultOrder)
+            layout = HomeLayoutReducer.Apply(layout, new SetHomeModuleHidden(kind, true)).Layout;
+
+        var landing = HomeLandingProjection.Project(HomeFeed.Empty, HomeModuleTitles.Default, layout);
+        Assert.Equal(1, landing.Rows.Count(r => r == HomeRow.Charts));
+        Assert.Contains(HomeRow.Charts, landing.Rows);
+    }
+
     static int IndexOf(IReadOnlyList<HomeRow> rows, HomeRow row)
     {
         for (int i = 0; i < rows.Count; i++)

@@ -254,6 +254,16 @@ public static class DetailVerticalLayout
     public static int ArtworkDecodePx(float artworkSize)
         => artworkSize <= 128f ? 256 : artworkSize <= 288f ? 512 : 1024;
 
+    /// <summary>The hero's decode bucket gated on whether a REAL width has landed yet. Unmeasured always asks for 256 —
+    /// the same bucket the Home shelf card, the grid tiles and <c>DetailRail.HeroCoverDecodePx</c> use — instead of
+    /// <see cref="ArtworkDecodePx(float)"/> off a pre-measure artwork size that is itself only a guess (derived from
+    /// <see cref="FallbackW"/> or a page-width estimate, never the page's real geometry): first frame is then a
+    /// synchronous cache hit against the SAME texture the preview/skeleton/grid already resolved, instead of a
+    /// probably-wrong bucket that forces a fresh decode the moment the real width lands anyway. The measured case is
+    /// unchanged.</summary>
+    public static int ArtworkDecodePx(float artworkSize, bool widthMeasured)
+        => widthMeasured ? ArtworkDecodePx(artworkSize) : 256;
+
     /// <summary>The hero band the page tone measures against: the hero's own measured extent, floored so a
     /// not-yet-measured hero still yields a plausible band rather than a hairline. Sole consumer is hero-only mode's
     /// fade start (<c>CoverPageTonePlane.HeroOnlyVeil</c>) — the blurred artwork band that used to share it is deleted,

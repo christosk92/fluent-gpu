@@ -153,4 +153,59 @@ public sealed class HomeSectionPagingTests
         var current = Section(40, 1, "a");
         Assert.Equal(1, HomeSectionPaging.Append(current, [Card("A")], pageTotal: 40).DuplicateCount);
     }
+
+    // ── BrowseSection's synthesized cursor ────────────────────────────────────────────────────────────────────────
+    [Theory]
+    [InlineData(0, 10, 74, 10)]     // 10 of 74 in hand: ask for the next 10.
+    [InlineData(70, 4, 74, null)]   // 74 of 74 in hand: the total is exhausted.
+    [InlineData(0, 0, 0, null)]     // nothing requested, nothing returned, nothing to page.
+    [InlineData(0, 10, 10, null)]   // a complete section returned whole on page one.
+    public void BrowseNextOffset_SynthesizesFromOffsetPlusPageCount_VersusTotal(
+        int requestedOffset, int pageCount, int total, int? expected)
+    {
+        Assert.Equal(expected, HomeSectionPaging.BrowseNextOffset(requestedOffset, pageCount, total));
+    }
+
+    // ── BrowseSectionNextOffset: server cursor first, explicit terminator wins, synthesized cursor is the last resort ──
+    static BrowseSection MakeBrowseSection(int total, int cardCount, int? nextOffset) =>
+        new("spotify:section:s", "Section", BrowseSectionKind.Shelf,
+            Enumerable.Range(0, cardCount).Select(i => new BrowseCard("spotify:playlist:" + i, "t" + i, null, null)).ToArray(),
+            [], total, nextOffset);
+
+    [Fact]
+    public void BrowseSectionNextOffset_PrefersTheServerCursor_OverTheSynthesizedOne()
+    {
+        // 20 of 74 in hand; the server's own cursor says 40 (skipping straight to the next window) — the
+        // synthesized offset+count-vs-total arithmetic would also say 20+20=40 here, but a case where they disagree
+        // must still take the server's word: BrowseSectionNextOffset never even computes the synthesized value when
+        // a real server cursor is present.
+        var page = MakeBrowseSection(total: 74, cardCount: 20, nextOffset: 40);
+        Assert.Equal(40, HomeSectionPaging.BrowseSectionNextOffset(0, page));
+    }
+
+    [Fact]
+    public void BrowseSectionNextOffset_ExplicitTerminator_StopsEvenWhenTotalClaimsMore()
+    {
+        // The trap this exists to avoid: PagingComplete means the server is DONE with this section, even though
+        // Total (74) still claims 54 more past what this page (20 cards) holds. Falling back to the synthesized
+        // cursor here (as a naive `page.NextOffset ?? BrowseNextOffset(...)` would) re-arms a section the server has
+        // already finished serving — the same total-vs-cursor disagreement HomeSectionPaging.cs documents for Home.
+        var page = MakeBrowseSection(total: 74, cardCount: 20, nextOffset: BrowseSection.PagingComplete);
+        Assert.Null(HomeSectionPaging.BrowseSectionNextOffset(0, page));
+    }
+
+    [Fact]
+    public void BrowseSectionNextOffset_NoServerCursorAtAll_FallsBackToTheSynthesizedOne()
+    {
+        // Plain null — no pagingInfo came back — is the ONLY case that falls back to offset+count-vs-total.
+        var page = MakeBrowseSection(total: 74, cardCount: 10, nextOffset: null);
+        Assert.Equal(10, HomeSectionPaging.BrowseSectionNextOffset(0, page));
+    }
+
+    [Fact]
+    public void BrowseSectionNextOffset_NoServerCursor_SynthesizedAlsoTerminatesAtTotal()
+    {
+        var page = MakeBrowseSection(total: 74, cardCount: 14, nextOffset: null);
+        Assert.Null(HomeSectionPaging.BrowseSectionNextOffset(60, page));
+    }
 }

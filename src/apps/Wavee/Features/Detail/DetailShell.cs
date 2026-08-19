@@ -430,9 +430,16 @@ sealed class DetailShell : Component
             _modeInitialized = true;
             if (md != _mode.Peek()) _mode.Value = md;
         }
+        // The window VIEWPORT overstates this page's own width by roughly the shell's nav pane — seed from an ESTIMATE
+        // of the page's own content width instead (see DetailLayoutBreakpoints.EstimatePageWidthFromViewport): a
+        // window a little above one of ModeFor's breakpoints otherwise composes the WIDE arm (rail / two-column) for
+        // its first frame while the real, narrower page can only hold the vertical one, and the very next Measure then
+        // flips it — the hero-remount flicker this estimate exists to prevent. Reused below for the vertical hero's
+        // own pre-measure width (verticalHeroWSeed) so the two seeds can never disagree.
+        float pageWidthEstimate = DetailLayoutBreakpoints.EstimatePageWidthFromViewport(viewportSig.Peek().Width);
         int mode = _mode.Value;   // subscribe → re-render on mode change
         if (!_modeInitialized && _measuredW <= 0f)
-            mode = Math.Max(mode, DetailLayoutBreakpoints.InitialModeForViewport(viewportSig.Peek().Width));
+            mode = Math.Max(mode, DetailLayoutBreakpoints.InitialModeForViewport(pageWidthEstimate));
         // Self-heal (fail-safe #2, mirroring TrackList's tier clamp): never RENDER a mode wider than the last measured
         // width supports — a stale mode signal would keep the two-column layout at a width where its rail + tracks
         // cannot coexist. Narrower-than-needed is fine; the next Measure widens it.
@@ -473,6 +480,7 @@ sealed class DetailShell : Component
                     Embed.Comp(() => new TrackList(_route, _model, bridge, handlers, showToolbar,
                         verticalHeader: verticalTracks,
                         verticalHeroHeight: _verticalHeroHeight,
+                        verticalHeroWSeed: pageWidthEstimate,
                         liveHandlers: _liveHandlers)) with
                     {
                         // A route is a new scroll/hero identity. Remounting prevents an album→album swap from painting

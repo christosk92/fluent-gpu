@@ -350,7 +350,23 @@ public sealed record Track(
     IReadOnlyList<string>? Tags = null,
     // Linked-URI canonical playable (TrackV4 canonical_uri). Null = unknown-or-self. Null-coalesce merge like Isrc;
     // EntityJson omit-null → free persist. Video miss-bridge + recovery promotion stamp it.
-    string? CanonicalUri = null);
+    string? CanonicalUri = null,
+    // Chart-playlist rank movement (playlist4 ItemAttributes.format_attributes on a format=="chart" list). READ-MODEL
+    // ONLY, exactly like ContextUid: stamped by StoreLibrarySource.JoinMembership from the owning PlaylistMember, never
+    // passed to UpsertTrack. Null = not a chart row (or chart facts not yet joined).
+    ChartEntry? Chart = null);
+
+/// <summary>A chart playlist's per-row rank-movement status (playlist4 <c>ItemAttributes.format_attributes</c> on a
+/// <c>format=="chart"</c> list — desktop-verified wire values <c>EQUAL</c>/<c>UP</c>/<c>DOWN</c>/<c>NEW</c>). Any other
+/// string (a status this client has never observed) maps to <see cref="Unknown"/>, which renders as no glyph — the
+/// "we don't understand this" fallback, never a guessed arrow.</summary>
+public enum ChartEntryStatus : byte { Unknown, Equal, Up, Down, New }
+
+/// <summary>One track's chart-rank facts for the row it currently occupies on a chart playlist. <see cref="PreviousPos"/>
+/// is <c>0</c> when the wire carries none (the <see cref="ChartEntryStatus.New"/> case — a fresh entry has no prior
+/// position). <see cref="Rank"/> is the chart's own ranking metric (a play-count-like number on the observed
+/// <c>rank_type=="plays"</c> wire, e.g. 41545) — opaque to us; carried for completeness, not currently rendered.</summary>
+public readonly record struct ChartEntry(ChartEntryStatus Status, int CurrentPos, int PreviousPos, long Rank);
 
 /// <summary>A per-track credit. <paramref name="RoleGroup"/> groups rows such as composition, production, or performers.</summary>
 public sealed record TrackCredit(string Name, string Role, string? RoleGroup = null,
@@ -447,7 +463,11 @@ public sealed record Playlist(
     long DaylistExpiresAtMs = 0, long DaylistCreatedAtMs = 0,
     // TOMBSTONE (P1): the owner deleted this playlist remotely (playlist4 `ListAttributes.deleted_by_owner`). Latching:
     // the store merge is `incoming || current`, so once a delete is observed no later header write can un-delete it.
-    bool DeletedByOwner = false);
+    bool DeletedByOwner = false,
+    // Chart-playlist header facts (format_attributes on a format=="chart" list: `new_entries_count`, `last_updated`,
+    // `rank_type`). 0 / null = unknown or not a chart. Drives the "N new entries · <date>" caption on the detail rail
+    // and vertical hero, mirroring the daylist window fields above.
+    int ChartNewEntries = 0, long ChartUpdatedAtMs = 0, string? ChartRankType = null);
 
 public enum QueueBucket { NowPlaying, UserQueue, NextUp, History }
 

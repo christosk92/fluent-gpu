@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
-using FluentGpu.Animation;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
@@ -11,19 +10,23 @@ using FluentGpu.Localization;
 using FluentGpu.Scene;
 using FluentGpu.Signals;
 using Wavee.Core;
+using Wavee.Features.Browse;
 using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
 
-/// <summary>A Home source section as a first-class page. Its first page is seeded by Home; further cards come from the
-/// <c>homeSection</c> operation — the read the desktop client actually issues for this gesture, and the one that owns
-/// <c>spotify:section:</c> URIs. (This page used to page them through <c>browseSection</c>, a BROWSE resource that was
-/// only ever inferred to accept a Home section URI. There is no fallback back to it: a stale persisted hash answers 400,
-/// which surfaces here as a visible failure rather than as a silent read of the wrong endpoint.)</summary>
+/// <summary>One page class for two drill-in kinds — a Home source section and a Browse section — because both render
+/// the identical grid-of-cards shape. Which read the mount effect issues is decided by the ROUTE PREFIX the caller
+/// built (<see cref="HomeSectionRoutes"/>'s <c>home-section:</c> vs <see cref="BrowseSectionRoutes"/>'s
+/// <c>browse-section:</c>), never by sniffing the section's own <c>spotify:section:</c> URI: some hardcoded browse
+/// sections (<c>Wavee.Features.Browse.BrowseTaxonomy.ChartSections</c>) carry a URI that is textually indistinguishable
+/// from a Home section URI, so a URI-shaped discriminator silently sent those reads to <c>homeSection</c> instead of
+/// <c>browseSection</c> — the bug this split exists to make structurally impossible. A <c>home-section:</c> route pages
+/// through <c>homeSection</c> ONLY; a <c>browse-section:</c> route pages through <c>browseSection</c> ONLY. There is no
+/// fallback from one to the other in either direction: a stale persisted hash or a 400 surfaces here as a visible
+/// failure rather than as a silent read of the wrong endpoint.</summary>
 sealed class HomeSectionPage : Component
 {
-    const float GridGap = Spacing.M;
-
     /// <summary>How far down the grid the wash may look for a card that can vouch for a colour. The wash is the TOP of
     /// the page, not a search over a fully-paged section — the same bound, for the same reason, as RecentsPage's.</summary>
     const int WashScan = 32;
@@ -32,6 +35,9 @@ sealed class HomeSectionPage : Component
     /// <summary>Identity for race-free last-writer-wins on <see cref="ShellMaterial"/> (see <c>ShellMaterialState</c>):
     /// a page clears the material only while it is still the owner.</summary>
     readonly object _washOwner = new();
+    /// <summary>Identity for race-free last-writer-wins on <see cref="ShellMasthead"/> (see <c>ShellMastheadState</c>)
+    /// — the same owner-token contract as <see cref="_washOwner"/>, one channel over.</summary>
+    readonly object _mastheadOwner = new();
     public HomeSectionPage(Route route) => _route = route;
 
     public override Element Render()
@@ -43,8 +49,15 @@ sealed class HomeSectionPage : Component
         var acts = UseContext(ActionServices.Slot);
         var overlay = UseContext(Overlay.Service);
         var shellMaterial = UseContext(ShellMaterial.Slot);
+        var mastheadStore = UseContext(ShellMasthead.Slot);
         var post = UsePost();
-        string sectionUri = HomeSectionRoutes.UriOf(_route.Name);
+        // The PREFIX selects the API — never the uri, which a hardcoded browse chart section can share the shape of
+        // with a Home section (see the class doc-comment). An unrecognised route is a routing bug, not a data problem,
+        // so it throws here rather than falling through to either endpoint by default.
+        bool browse = BrowseSectionRoutes.Is(_route.Name);
+        if (!browse && !HomeSectionRoutes.Is(_route.Name))
+            throw new InvalidOperationException("HomeSectionPage got " + _route.Name);
+        string sectionUri = browse ? BrowseSectionRoutes.UriOf(_route.Name) : HomeSectionRoutes.UriOf(_route.Name);
         var seeded = UseMemo(() => preview?.Get(_route.Name), _route.Name);
         // A section Home minted a LOCAL identity for (the server published none) exists ONLY as its seed: the preview
         // store is a bounded FIFO and is the sole copy. Once that entry is evicted — 32 drill-ins later, or after a
@@ -58,6 +71,11 @@ sealed class HomeSectionPage : Component
         var section = UseLoadable(seeded is null && !expired
             ? Loadable<HomeSection>.Pending(placeholder)
             : Loadable<HomeSection>.Ready(placeholder));
+        // T12 (refinement A, verbatim): "since we know the group title we will navigate to, just load it
+        // immediately". `placeholder`'s own Title is already the route's arg (see above) — reading it here, before
+        // the resource resolves, is what lets the masthead below render as REAL content from frame one instead of
+        // waiting on Skel.Region's Ready branch.
+        var currentSection = section.Value.Value;
         var loadingMore = UseSignal(false);
         // The server answered with nothing, or with a cursor that cannot advance, or with a page the dedup ate whole.
         // HomeSection carries no exhausted flag and TotalCount is the SERVER's number — not ours to rewrite — so the
@@ -66,11 +84,29 @@ sealed class HomeSectionPage : Component
         // The server's own pagingInfo.nextOffset from the last page we read. Null means we have no cursor at all (a
         // section still showing Home's seed), which is the ONLY case where TotalCount gets to arm the button.
         var cursor = UseSignal<int?>(null);
+        // Infinite-scroll proximity gate for the grid below (HomeSectionAppendPreloader) — ConcertAppendPreloader's
+        // same three-gate idiom (near-tail + arm-debounce + single-in-flight), driven off the SELF-SCROLLING grid's
+        // own scroll geometry rather than a page-level ScrollView (see HomeModules.SectionGrid's OnScrollGeometryChanged
+        // wiring below — this page has no outer ScrollView; the grid owns its own scroll, T8-style). Seeded true so a
+        // first page shorter than the viewport still fills the screen once; dropped after every append (LoadMoreAsync)
+        // so only a fresh scroll-geometry event continues the chain.
+        var nearTail = UseSignal(true);
 
         Context.UseSignalEffect(() =>
         {
-            if (seeded is not null || expired || svc is null || sectionUri.Length == 0) return;
-            _ = LoadInitialAsync(svc, sectionUri, _route.Arg, section, cursor, exhausted, post);
+            if (expired || svc is null || sectionUri.Length == 0) return;
+            // A Fold-tile drill stashes the first page in the preview store, so LoadInitial is skipped. Arm the
+            // paging cursor from that seed (Total vs raw count) or a 74-item Weekly section would show ten cards
+            // with no way to get the rest.
+            if (seeded is not null)
+            {
+                if (HomeSectionPaging.HasMore(seeded))
+                    cursor.Value = HomeSectionPaging.NextOffset(seeded);
+                else
+                    exhausted.Value = true;
+                return;
+            }
+            _ = LoadInitialAsync(svc, sectionUri, _route.Arg, browse, section, cursor, exhausted, post);
         });
 
         // ── the shell MATERIAL (Mica wash) ────────────────────────────────────────────────────────────────────────
@@ -80,7 +116,7 @@ sealed class HomeSectionPage : Component
         // graded cover second, and a NULL leg when neither exists (an invented colour is a lie about the content).
         _ = AppearancePrefs.Epoch.Value;   // the Settings toggle applies LIVE (the DisableColorWashes idiom)
         bool washesDisabled = svc is null || svc.Settings.Get(WaveeSettings.DisableColorWashes);
-        var washSource = section.Value.Value;   // subscribe: a landed page (or a paged one) re-picks the wash source
+        var washSource = currentSection;   // subscribe: a landed page (or a paged one) re-picks the wash source
         var washCard = washesDisabled ? null : WashCard(washSource);
         // Watch exactly the ONE artwork whose grading the wash is still waiting on — never the plane's global epoch,
         // which every realized batch of this page's own grid would bump.
@@ -117,57 +153,119 @@ sealed class HomeSectionPage : Component
         {
             if (svc is null || !CanPage(current) || loadingMore.Peek()) return;
             loadingMore.Value = true;
-            _ = LoadMoreAsync(svc, current, section, loadingMore, cursor, exhausted, post);
+            _ = LoadMoreAsync(svc, current, browse, section, loadingMore, cursor, exhausted, nearTail, post);
         }
 
-        // Same gutter, first-row inset and page measure as Home itself — this page is one drill-in from it, so the
-        // content column must not jump to a different width and a different inset on the way.
-        Element Body(HomeSection current) => new BoxEl
+        // The near-tail scroll-geometry watch for the grid below: fed straight from the SELF-SCROLLING Virtual.Custom
+        // viewport (there is no page-level ScrollView here to observe instead — see the `nearTail` field doc comment).
+        // ConcertHubPage's exact quantization: the 24px-floored offset + a content-height term, so the check re-fires
+        // on append growth (an append pushes the tail away → nearness recomputes false until the user scrolls again).
+        (Func<FluentGpu.Animation.ScrollGeometry, long> Project, Action<FluentGpu.Animation.ScrollGeometry> Action) GridScrollWatch()
+            => (
+                static g => ((long)(g.OffsetY / 24f) << 20) ^ (long)(g.ContentH / 48f),
+                g => nearTail.Value = g.OffsetY + g.ViewportH >= g.ContentH - 1.5f * g.ViewportH);
+
+        // T12: the grid-only body — GridBody used to be Body's inner list slot; the masthead is no longer a
+        // sibling rendered in this tree at all (G2c-B: it is a PUBLICATION now — see the leg below). Recents' list
+        // slot: Grow=1 + MinHeight=0 in a COLUMN whose
+        // parent has a definite height. Without this the Responsive wrapper (and the Virtual.Grid inside it)
+        // measure as content-sized; a virtual viewport's natural height is 0, so the grid is given a stub
+        // cross-size, Fill/Grid item rects come out shorter than the square covers, and ClipToBounds shears them
+        // while the page box still fills the pane (empty mica down to the player).
+        Element GridBody(HomeSection current)
         {
-            Direction = 1, Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f,
-            Padding = new Edges4(Spacing.PageWide, Spacing.XXL, Spacing.PageWide, Spacing.L),
-            Gap = Spacing.L,
+            // Same arming rule the published masthead's own "Show all" tools triple uses (`canLoadMore` below) —
+            // the preloader is just a second, silent trigger for the identical LoadMore call, so it must never be
+            // armed when the manual affordance is not.
+            bool canAutoPage = CanPage(current) && !exhausted.Value && HomeSectionPaging.HasMore(current, cursor.Value);
+            return new BoxEl
+            {
+                Direction = 1, Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f,
+                Children =
+                [
+                    // grow:1 is LOAD-BEARING. ResponsiveBox defaults grow to 0, which in this COLUMN sizes it to
+                    // content. The grid must inherit the slot height above, not hug a zero-height viewport.
+                    Responsive.Of(width => HomeModules.SectionGrid(current.Cards, current.Uri, width, Open, svc, acts, overlay,
+                        onScrollGeometryChanged: GridScrollWatch()), fallback: HomeModuleLayout.FallbackWidth, grow: 1f),
+                    // The infinite-scroll trigger (no visual footprint — see HomeSectionAppendPreloader's own doc
+                    // comment for why). Keyed on the CURSOR so a successful append remounts it with a fresh retry
+                    // budget for the next page, mirroring ConcertAppendPreloader's per-page remount.
+                    canAutoPage
+                        ? Embed.Comp(() => new HomeSectionAppendPreloader
+                          {
+                              Loading = loadingMore,
+                              NearTail = nearTail,
+                              Start = () => LoadMore(section.Value.Peek()),
+                          }) with { Key = "home-section-append:" + current.Uri + ":" + cursor.Value }
+                        : new BoxEl(),
+                ],
+            };
+        }
+
+        // T12 (refinement A, verbatim): "for the shimmer, dont include the breadcrumb ... just load it
+        // immediately". The title is known from `currentSection` (the seed while pending, the real section once
+        // ready — see its own doc-comment above), so the PUBLISH below carries real content from frame one — the
+        // shell's ShellMastheadBand renders it above the KeepAlive swap; only GridBody (via Skel.Region's own
+        // content(seed) derivation) shimmers.
+        string title = SectionTitle(currentSection);
+        string meta = currentSection.Subtitle is { Length: > 0 } sub
+            ? sub
+            : currentSection.TotalCount > 0 ? Strings.Home.SectionItems(currentSection.TotalCount) : "";
+        // Same arming rule GridBody's `canAutoPage` uses — the preloader is just a second, silent trigger for the
+        // identical LoadMore call, so the published "Show all" tools triple and the preloader stay armed together.
+        bool canLoadMore = CanPage(currentSection) && !exhausted.Value && HomeSectionPaging.HasMore(currentSection, cursor.Value);
+
+        // ── the shell MASTHEAD publication ──────────────────────────────────────────────────────────────────────
+        // Same three-leg publish/clear lifecycle the wash (_washOwner, above) uses: a deps-leg republishes whenever
+        // title/meta/tools change, UseActivation covers a KeepAlive reactivation (which skips the mount effect), and
+        // the unmount leg clears ownership so a parked/evicted page never leaves a stale masthead behind it.
+        void SetMasthead()
+        {
+            if (mastheadStore is not null)
+                mastheadStore.Value = new ShellMastheadState(_mastheadOwner, title, meta.Length > 0 ? meta : null,
+                    canLoadMore, loadingMore.Value, canLoadMore ? () => LoadMore(currentSection) : null);
+        }
+        void ClearMasthead()
+        {
+            if (mastheadStore is not null && ReferenceEquals(mastheadStore.Peek()?.Owner, _mastheadOwner))
+                mastheadStore.Value = null;
+        }
+        UseEffect(() => SetMasthead(),
+            DepKey.From(HashCode.Combine(title, meta, canLoadMore, loadingMore.Value)));
+        // A KeepAlive-cached page does not re-run its mount effect, so reactivation re-publishes…
+        UseActivation(onActivated: () => SetMasthead(), onDeactivated: ClearMasthead);
+        // …and UNMOUNT clears too, because onDeactivated fires only on PARK. Owner-gated, so it can never clobber
+        // whatever the next page has already published.
+        UseEffect(() => (Action?)ClearMasthead, DepKey.Empty);
+
+        // ComponentEl has no layout props. Recents puts Grow=1 / MinHeight=0 on the RENDERED root so the host pane's
+        // height actually reaches the content below. smoothResize:false: easing 0 → N rows of a virtual grid clips
+        // the covers into a strip (SearchPage's facet-body comment — same shape).
+        //
+        // G2c-B: the masthead itself moved OUT to the shell's ShellMastheadBand (above); this Padding's top inset is
+        // now Spacing.L (the band owns FrameTop) rather than BrowseLayout.Frame's FrameTop — the same net gap the
+        // masthead's own bottom margin used to give, just moved from "under the masthead" to "under the band". The
+        // FrameX gutters still match the directory / a category page, so a drill never jumps the content column.
+        return new BoxEl
+        {
+            Direction = 1, Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Gap = Spacing.L,
+            Padding = new Edges4(BrowseLayout.FrameX, Spacing.L, BrowseLayout.FrameX, Spacing.L),
             Children =
             [
-                BreadcrumbBar.Create(
-                    [Loc.Get(Strings.Nav.Home), SectionTitle(current)],
-                    i => { if (i == 0) go("home", null); }),
-                Header(current, loadingMore.Value,
-                    canLoadMore: CanPage(current) && !exhausted.Value && HomeSectionPaging.HasMore(current, cursor.Value),
-                    loadMore: () => LoadMore(current)),
-                // Recents' list slot: Grow=1 + MinHeight=0 in a COLUMN whose parent has a definite height. Without
-                // this the Responsive wrapper (and the Virtual.Grid inside it) measure as content-sized; a virtual
-                // viewport's natural height is 0, so the grid is given a stub cross-size, Fill/Grid item rects come
-                // out shorter than the square covers, and ClipToBounds shears them while the page box still fills
-                // the pane (empty mica down to the player).
                 new BoxEl
                 {
                     Direction = 1, Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f,
                     Children =
                     [
-                        // grow:1 is LOAD-BEARING. ResponsiveBox defaults grow to 0, which in this COLUMN sizes it to
-                        // content. The grid must inherit the slot height above, not hug a zero-height viewport.
-                        Responsive.Of(width => Grid(current, width, Open, svc, acts, overlay), fallback: 1100f, grow: 1f),
+                        Skel.Region(section,
+                            reveal: SkelReveal.StaggerRows,
+                            smoothResize: false,
+                            isEmpty: s => s.Cards.Count == 0 && s.UnsupportedCount == 0,
+                            onEmpty: () => new BoxEl { Grow = 1f, MinHeight = 0f, Children = [EmptyState.Default()] },
+                            onFailed: () => new BoxEl { Grow = 1f, MinHeight = 0f, Children = [ErrorState.Build(section.Error)] },
+                            content: GridBody),
                     ],
                 },
-            ],
-        };
-
-        // ComponentEl has no layout props. Recents puts Grow=1 / MinHeight=0 on the RENDERED root so the host pane's
-        // height actually reaches Body. smoothResize:false: easing 0 → N rows of a virtual grid clips the covers into
-        // a strip (SearchPage's facet-body comment — same shape).
-        return new BoxEl
-        {
-            Direction = 1, Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f,
-            Children =
-            [
-                Skel.Region(section,
-                    reveal: SkelReveal.StaggerRows,
-                    smoothResize: false,
-                    isEmpty: s => s.Cards.Count == 0 && s.UnsupportedCount == 0,
-                    onEmpty: () => new BoxEl { Grow = 1f, MinHeight = 0f, Children = [EmptyState.Default()] },
-                    onFailed: () => new BoxEl { Grow = 1f, MinHeight = 0f, Children = [ErrorState.Build(section.Error)] },
-                    content: Body),
             ],
         };
     }
@@ -176,59 +274,6 @@ sealed class HomeSectionPage : Component
     /// <c>wavee:local:</c> identity has no endpoint behind it (and the seed is all there will ever be).</summary>
     static bool CanPage(HomeSection section) =>
         section.Uri is { Length: > 0 } && !HomeSectionRoutes.IsLocal(section.Uri);
-
-    /// <summary>The masthead — the SAME one RecentsPage established, because these are the app's two drill-in surfaces
-    /// and two mastheads would read as two designs: <see cref="WaveeType.SurfaceDisplay"/>'s 40/52/400 display cut over
-    /// one thin metadata line, the stagger on the CONTAINER and the enter on each line (the engine's own idiom).
-    ///
-    /// <para>The bordered, filled 116-DIP band this replaced was authored before the page had a Mica wash under it: a
-    /// FillLayerDefault card with its own contour sits ON TOP of the wash and hides exactly the part of it the eye
-    /// reads first. The "show all" button keeps its place and its behaviour — only the chrome around it is gone.</para></summary>
-    static Element Header(HomeSection section, bool loading, bool canLoadMore, Action loadMore)
-    {
-        string title = SectionTitle(section);
-        string meta = section.Subtitle is { Length: > 0 } sub
-            ? sub
-            : section.TotalCount > 0 ? Strings.Home.SectionItems(section.TotalCount) : "";
-
-        var lines = new List<Element>(2)
-        {
-            WaveeType.SurfaceDisplay(title) with
-            {
-                MaxLines = 2, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
-                Enter = new EnterExit(Dy: 10f, Opacity: 0f, Active: true),
-                Transition = MotionTok.StandardEnter,
-            },
-        };
-        if (meta.Length > 0)
-            lines.Add(Caption(meta) with
-            {
-                Color = Tok.TextTertiary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
-                Enter = new EnterExit(Dy: 10f, Opacity: 0f, Active: true),
-                Transition = MotionTok.StandardEnter,
-            });
-
-        var masthead = new BoxEl
-        {
-            Direction = 1, Gap = Spacing.XS, Grow = 1f, Basis = 0f, MinWidth = 0f,
-            Stagger = Motion.ReducedMotion ? 0f : WaveeMotion.MastheadStaggerMs,
-            Children = lines.ToArray(),
-        };
-        // The row is UNCONDITIONAL — `tools ?? new BoxEl()`, exactly as before. Returning the bare masthead when there
-        // is nothing left to page would change this subtree's shape the moment the section exhausts, remounting the
-        // masthead and replaying its entrance in the middle of a read.
-        var tools = canLoadMore
-            ? Button.Create(Loc.Get(Strings.Browse.ShowAll),
-                loadMore, ButtonAppearance.Subtle, ControlSize.Small, isEnabled: !loading)
-            : null;
-        // The paging control rides the masthead's LAST baseline rather than a card corner, so a one-line and a two-line
-        // section title both leave it in the same place relative to the copy.
-        return new BoxEl
-        {
-            Direction = 0, MinWidth = 0f, Gap = Spacing.M, AlignItems = FlexAlign.End,
-            Children = [masthead, tools ?? new BoxEl()],
-        };
-    }
 
     /// <summary>The wash's source card: the first card that can actually vouch for a colour — a payload accent, or a
     /// cover the plane can grade. Null until one can, so the page never publishes an invented tint (the skeleton cards
@@ -249,50 +294,13 @@ sealed class HomeSectionPage : Component
         ? title
         : section.Cards.FirstOrDefault()?.Title ?? Loc.Get(Strings.Browse.Title);
 
-    static Element Grid(HomeSection section, float width, Action<HomeCard> open, Services? svc,
-                        ActionServices? acts, IOverlayService overlay)
-    {
-        var (columns, cardW) = FillRowVirtualLayout.Fit(width,
-            HomeModuleLayout.ShelfCardMin, HomeModuleLayout.ShelfCardMax, GridGap);
-        columns = Math.Max(1, columns);
-        int tier = columns;
-        // AspectGrid derives row height from the grid's LIVE cross size (cellW × 1 + shelf chrome). A separately
-        // fitted cardW for Virtual.Grid's itemHeight was the max-height clip: scrollbar gutter / first-frame width
-        // made item rects shorter than the square covers, and the viewport sheared them.
-        float chrome = HomeModuleLayout.ShelfCardHeight(0f);
-        return Virtual.Custom(section.Cards.Count,
-            new AspectGridVirtualLayout(columns, 1f, chrome, GridGap),
-            i =>
-            {
-                var card = section.Cards[i];
-                var menu = Menus.CardAttach(acts, overlay, card.Uri, card.Title, card.Image,
-                    SpotifyExportMapper.ToPlainText(card.Subtitle), circular: card.Kind == HomeCardKind.Artist);
-                var drag = card.Kind is HomeCardKind.Track or HomeCardKind.Episode ? null
-                    : Drag.Source(WaveeDragKinds.Resource,
-                        () => WaveeResourceDragPayload.ForEntity(WaveeDragKindMap.Of(card.Kind), card.Uri,
-                            card.Title, card.Image, acts));
-                var media = MediaCard.Shelf(card.Image, card.Title, SpotifyExportMapper.ToPlainText(card.Subtitle) ?? "",
-                        card.Uri, () => open(card), () => { if (svc is not null) _ = svc.Player.PlayAsync(card.Uri, 0); },
-                        cardW, circular: card.Kind == HomeCardKind.Artist, menu: menu, drag: drag) with
-                    { Key = "home-section-card:" + tier + ":" + card.Uri };
-                return new BoxEl { Direction = 1, Grow = 1f, MinWidth = 0f, Children = [media] };
-            },
-            keyOf: i => section.Uri + "\u001F" + section.Cards[i].Uri,
-            overscan: 2) with { MinHeight = 0f };
-    }
-
-    /// <summary>A section URI the HOME document owns, and therefore one <c>homeSection</c> answers. Everything else
-    /// (browse-minted section URIs reached through this page) keeps the browse read; <c>wavee:local:</c> never gets
-    /// here at all — <see cref="CanPage"/> and the mount effect both stop it.</summary>
-    static bool IsHomeSection(string? uri) =>
-        uri is not null && uri.StartsWith("spotify:section:", StringComparison.Ordinal);
-
-    static async Task LoadInitialAsync(Services svc, string uri, string? routeTitle, Loadable<HomeSection> target,
-                                       Signal<int?> cursor, Signal<bool> exhausted, Action<Action> post)
+    static async Task LoadInitialAsync(Services svc, string uri, string? routeTitle, bool browse,
+                                       Loadable<HomeSection> target, Signal<int?> cursor, Signal<bool> exhausted,
+                                       Action<Action> post)
     {
         try
         {
-            if (IsHomeSection(uri))
+            if (!browse)
             {
                 // No browseSection fallback on failure — a null here is a 400 on a stale persisted hash (PathfinderClient
                 // logs it as such) or a dead session, and quietly re-asking the wrong endpoint is what hid this for so
@@ -300,39 +308,46 @@ sealed class HomeSectionPage : Component
                 var result = await svc.HomeSections.GetHomeSectionAsync(uri, 0).ConfigureAwait(false);
                 if (result is null) throw new InvalidOperationException("homeSection returned no section for " + uri + ".");
                 var first = Identify(result.Section, uri, routeTitle);
-                bool more = HomeSectionPaging.CanAdvance(0, result.NextOffset);
+                bool hasMore = HomeSectionPaging.CanAdvance(0, result.NextOffset);
                 post(() =>
                 {
-                    if (more) cursor.Value = result.NextOffset; else exhausted.Value = true;
+                    if (hasMore) cursor.Value = result.NextOffset; else exhausted.Value = true;
                     target.SetReady(first);
                 });
                 return;
             }
 
+            // Same rule, the other endpoint: no homeSection fallback on failure — a browse-routed section is never
+            // legal input to homeSection, so a null here fails loudly instead of quietly reading the wrong endpoint.
             var page = await svc.Browse.GetSectionAsync(uri, 0).ConfigureAwait(false);
-            if (page is null) throw new InvalidOperationException("Home section paging returned no section.");
-            var mapped = FromBrowse(page, routeTitle);
-            post(() => target.SetReady(mapped));
+            if (page is null) throw new InvalidOperationException("browseSection returned no section for " + uri + ".");
+            var mapped = HomeBrowseCards.Section(page, routeTitle);
+            int? next = HomeSectionPaging.BrowseSectionNextOffset(0, page);
+            bool pageable = HomeSectionPaging.CanAdvance(0, next);
+            post(() =>
+            {
+                if (pageable) cursor.Value = next; else exhausted.Value = true;
+                target.SetReady(mapped);
+            });
         }
         catch (Exception ex) { post(() => target.SetFailed(ex)); }
     }
 
-    static async Task LoadMoreAsync(Services svc, HomeSection current, Loadable<HomeSection> target,
+    static async Task LoadMoreAsync(Services svc, HomeSection current, bool browse, Loadable<HomeSection> target,
                                     Signal<bool> loading, Signal<int?> cursor, Signal<bool> exhausted,
-                                    Action<Action> post)
+                                    Signal<bool> nearTail, Action<Action> post)
     {
         // The RAW server cursor, never the deduped card count — see HomeSectionPaging for why the two differ and what
         // paging by the deduped one did (re-fetching dropped items; an all-duplicate page looping on one offset).
         int offset = HomeSectionPaging.NextOffset(current);
         string uri = current.Uri ?? "";
-        bool home = IsHomeSection(uri);
         IReadOnlyList<HomeCard>? cards = null;
         int total = current.TotalCount;
         int? nextOffset = null;
         Exception? error = null;
         try
         {
-            if (home)
+            if (!browse)
             {
                 if (await svc.HomeSections.GetHomeSectionAsync(uri, offset).ConfigureAwait(false) is { } result)
                 {
@@ -344,15 +359,21 @@ sealed class HomeSectionPage : Component
             else if (await svc.Browse.GetSectionAsync(uri, offset).ConfigureAwait(false) is { } page)
             {
                 var mapped = new HomeCard[page.Cards.Count];
-                for (int i = 0; i < mapped.Length; i++) mapped[i] = FromBrowse(page.Cards[i]);
+                for (int i = 0; i < mapped.Length; i++) mapped[i] = HomeBrowseCards.Card(page.Cards[i]);
                 cards = mapped;
                 total = page.Total;
+                nextOffset = HomeSectionPaging.BrowseSectionNextOffset(offset, page);
             }
         }
         catch (Exception ex) { error = ex; }
         post(() =>
         {
             loading.Value = false;
+            // Disarm until the next scroll-geometry event re-confirms the user is still heading down — this is what
+            // stops the tail from chain-loading the whole section while the page sits still (ConcertAppendPreloader's
+            // identical rule). Unconditional: whatever this fetch resolved to (more, exhausted, or a transient
+            // failure that leaves the button armed), only a FRESH scroll continues the auto-page chain.
+            nearTail.Value = false;
             if (cards is null || cards.Count == 0)
             {
                 if (error is not null)
@@ -375,8 +396,9 @@ sealed class HomeSectionPage : Component
             //  • the server's cursor is null (complete) or points at/behind the offset we just asked for — a COMPLETE
             //    section answers nextOffset: 0, so honouring it as a cursor loops on page one forever;
             //  • the whole page was already-seen URIs, so another click can only produce the same nothing.
-            // The browse path carries no cursor of its own, so only the dedup guard applies to it.
-            bool advances = (!home || HomeSectionPaging.CanAdvance(offset, nextOffset))
+            // Browse resolves that cursor via BrowseSectionNextOffset (server cursor, explicit terminator, or the
+            // synthesized offset+count-vs-total fallback — see its own doc comment).
+            bool advances = HomeSectionPaging.CanAdvance(offset, nextOffset)
                             && HomeSectionPaging.Progressed(current, next);
             if (advances) cursor.Value = nextOffset; else exhausted.Value = true;
             target.SetReady(next);
@@ -390,25 +412,6 @@ sealed class HomeSectionPage : Component
     {
         Uri = section.Uri is { Length: > 0 } ? section.Uri : uri,
         Title = section.Title is { Length: > 0 } ? section.Title : routeTitle,
-    };
-
-    static HomeSection FromBrowse(BrowseSection section, string? routeTitle) => new(
-        section.Uri, section.Title ?? routeTitle, null, section.Cards.Select(FromBrowse).ToArray(),
-        section.Total, section.Cards.Count);
-
-    static HomeCard FromBrowse(BrowseCard card) => new(card.Uri, card.Title, card.Subtitle, card.Image, KindOf(card.Uri),
-        Meta: new HomeCardMeta(Accent: card.Accent ?? 0));
-
-    // The card's uri names its kind through the ONE parser (hydration-facade-design.md §1.1); everything the browse
-    // feed can carry that is not one of these five still reads as a Playlist card, exactly as before.
-    static HomeCardKind KindOf(string uri) => EntityUri.KindOf(uri) switch
-    {
-        EntityKind.Artist => HomeCardKind.Artist,
-        EntityKind.Album => HomeCardKind.Album,
-        EntityKind.Show => HomeCardKind.Podcast,
-        EntityKind.Episode => HomeCardKind.Episode,
-        EntityKind.Track => HomeCardKind.Track,
-        _ => HomeCardKind.Playlist,
     };
 
     static HomeCard[] BlankCards()

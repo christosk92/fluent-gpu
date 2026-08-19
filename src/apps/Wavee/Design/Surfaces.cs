@@ -167,12 +167,15 @@ public static class Surfaces
             // Tinted from the cover's own graded colour when the plane has one, else the neutral opaque tile.
             // This is the difference between a track list of blank grey squares and one that paints its covers at once.
             return new BoxEl { Width = width, Height = height, Corners = CornerRadius4.All(corners), Fill = PlaceholderFor(url) };
-        // Covers/cards: the breathing shimmer. Keyed by url so a virtualized card that REBINDS to a new cover remounts
-        // the tile (a Component freezes its ctor args at mount) — the breathe + load-state read then track the new item.
+        // Covers/cards: the breathing shimmer. Keyed by url AND the decode bucket so a virtualized card that REBINDS to
+        // a new cover, OR the SAME cover at a new decode target (a detail hero's unmeasured→measured bucket jump, a
+        // shelf↔grid decode-size mismatch), remounts the tile (a Component freezes its ctor args at mount) — otherwise
+        // the stale Component instance keeps calling UseImage against its FIRST decode handle and its load-state read
+        // (and hence the breathe/settle) never tracks the size the new real Image actually asked for.
         // Skeletonized(false): inside a Skel.Region's derived skeleton this opaque component would otherwise map to the
         // deriver's default bar (a stray stripe in the cover). Dropping it lets the paired Image's derived placeholder be
         // the cover square — identical to a grid card (ArtworkFill is a bare Image), so every loading cover reads the same.
-        return (Embed.Comp(() => new CoverShimmer(u, decodeW, decodeH, width, height, corners)) with { Key = "shim:" + u })
+        return (Embed.Comp(() => new CoverShimmer(u, decodeW, decodeH, width, height, corners)) with { Key = "shim:" + u + ":" + decodeW + "x" + decodeH })
             .Skeletonized(false);
     }
 

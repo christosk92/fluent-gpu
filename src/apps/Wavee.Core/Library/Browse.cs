@@ -36,18 +36,35 @@ public sealed record BrowseCard(
 
 /// <summary>One section of a browse page. <paramref name="Total"/> is the server's item count, which is frequently far
 /// larger than <paramref name="Cards"/> (a section returned 10 of 1000) — that gap is what a "Show all" affordance
-/// pages through via <c>browseSection</c>, an axis INDEPENDENT of the page's own section paging.</summary>
+/// pages through via <c>browseSection</c>, an axis INDEPENDENT of the page's own section paging.
+/// <para><paramref name="NextOffset"/> is the server's own <c>sectionItems.pagingInfo.nextOffset</c> cursor for THIS
+/// axis, in one of three states: a non-negative value is the offset to request next; <see cref="PagingComplete"/>
+/// (a sentinel, not a real offset) marks that <c>pagingInfo</c> was present and <c>nextOffset</c> was EXPLICITLY
+/// <c>null</c> — the section is done, full stop, even if <see cref="Total"/> still claims more (the same
+/// total-vs-cursor disagreement <c>HomeSectionPaging.cs</c> documents for Home's own sections: measured, a complete
+/// section can answer a total that overshoots what it actually holds); plain <c>null</c> means no <c>pagingInfo</c>
+/// came back at all, so callers fall back to the synthesized <c>HomeSectionPaging.BrowseNextOffset</c> cursor instead
+/// of trusting an absent field as "done". Use <c>HomeSectionPaging.BrowseSectionNextOffset</c> rather than reading
+/// this field directly — it resolves all three states.</para></summary>
 public sealed record BrowseSection(
     string Uri,
     string? Title,
     BrowseSectionKind Kind,
     IReadOnlyList<BrowseCard> Cards,
     IReadOnlyList<BrowseCategory> Categories,
-    int Total);
+    int Total,
+    int? NextOffset = null)
+{
+    /// <summary>Sentinel for <see cref="NextOffset"/>: the server explicitly terminated this section's paging (see the
+    /// record's own doc comment). Never a legal offset value — offsets are always non-negative.</summary>
+    public const int PagingComplete = -1;
+}
 
 /// <summary>A rendered browse page: the header (title + the server's own accent, which is often absent) and its
 /// sections. <paramref name="NextSectionOffset"/> is the page-level paging cursor — null when every section has been
-/// returned.</summary>
+/// returned. Deliberately un-wired by the UI: captures show browse pages return all sections at offset 0, so there
+/// is nothing to page here in practice. The per-SECTION cursor (<see cref="BrowsePageModel.WithSectionCardsAppended"/>
+/// + <c>IBrowseService.GetSectionAsync</c>) is the axis the UI actually pages.</summary>
 public sealed record BrowsePageModel(
     string Uri,
     string? Title,

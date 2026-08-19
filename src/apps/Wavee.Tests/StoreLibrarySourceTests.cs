@@ -225,6 +225,21 @@ public class StoreLibrarySourceTests
     }
 
     [Fact]
+    public async Task GetPlaylist_StampsChartEntryFromMembership_WithoutPollutingSharedStore()
+    {
+        var store = new InMemoryStore();
+        store.UpsertTrack(Trk("t1"));
+        store.UpsertPlaylist(new Playlist("p", "spotify:playlist:p", "Top Songs - Argentina", null, "spotify", null, 0));
+        var chart = new ChartEntry(ChartEntryStatus.Up, 3, 4, 41545);
+        store.SetMembership("spotify:playlist:p", new[] { new PlaylistMember("rowuid-1", "spotify:track:t1", null, 0, chart) }, null);
+        var src = new StoreLibrarySource(store, Offline(store), OfflineOnlineCatalog.Instance);
+        var pl = await src.GetPlaylistAsync("spotify:playlist:p");
+
+        Assert.Equal(chart, pl!.Tracks![0].Chart);                    // per-row chart facts stamped from PlaylistMember.Chart
+        Assert.Null(store.GetTrack("spotify:track:t1")!.Chart);       // the SHARED stored entity is untouched (read-model only)
+    }
+
+    [Fact]
     public async Task GetPlaylist_OverlaysResolvedOwnerAndCollaborators_WithoutChangingTrackAddedBy()
     {
         var store = new InMemoryStore();

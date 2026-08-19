@@ -30,8 +30,15 @@ static class DetailSkeleton
     /// <para><paramref name="colW"/> is the track column's measured width — the same value the hero itself derives
     /// from — and the four flags are the hero's own emit predicates for THIS model (see
     /// <c>TrackList.HeroHas*</c>), so an album's eyebrow and a playlist's owner row each reserve their real row.</para></summary>
+    /// <param name="previewArt">When the model already carries a usable preview cover (the grid-click nav path always
+    /// does), the caller's factory for the REAL hero artwork block — same <c>Surfaces.Artwork</c>, same url, same
+    /// bucket the unmeasured loaded hero uses (<c>DetailVerticalLayout.ArtworkDecodePx(_, widthMeasured: false)</c>) —
+    /// wrapped so the deriver leaves it unshimmered (see <c>TrackList.PreviewHeroArt</c>). Invoked with the exact
+    /// artwork edge this method derives, so the caller never re-guesses it. Null (deep link, no preview cover yet)
+    /// keeps the plain gray reserved box below — the pre-fix behaviour.</param>
     public static Element VerticalHeroBand(float colW, bool rowFlow, float compactLeft,
-        bool eyebrow, bool attribution, bool meta, bool description, bool pulse = false)
+        bool eyebrow, bool attribution, bool meta, bool description, bool pulse = false,
+        Func<float, Element>? previewArt = null)
     {
         float bw = DetailVerticalLayout.BucketW(colW);
         float pad = DetailVerticalLayout.HeroPadFor(bw);
@@ -65,7 +72,7 @@ static class DetailSkeleton
             Children = blocks.ToArray(),
         };
 
-        Element artwork = new BoxEl
+        Element artwork = previewArt?.Invoke(art) ?? new BoxEl
         {
             Width = art, Height = art, Shrink = 0f,
             Corners = CornerRadius4.All(Radii.Card),

@@ -160,10 +160,6 @@ public interface IMusicLibrary
     /// <summary>As-you-type search suggestions with typed rich hits from the same online response.</summary>
     Task<SearchSuggestions> SuggestRichAsync(string query, CancellationToken ct = default);
 
-    /// <summary>Entities the user opened from search (empty-search landing). Empty offline / on failure.</summary>
-    Task<IReadOnlyList<SearchTopHit>> RecentSearchesAsync(CancellationToken ct = default)
-        => Task.FromResult<IReadOnlyList<SearchTopHit>>(System.Array.Empty<SearchTopHit>());
-
     // Per-collection read paths — the sidebar's "Your Library" rows route to their own page, each loading its own slice.
     Task<IReadOnlyList<Album>> GetAlbumsAsync(CancellationToken ct = default);
     Task<IReadOnlyList<Artist>> GetArtistsAsync(CancellationToken ct = default);

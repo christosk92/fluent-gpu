@@ -58,7 +58,7 @@ static class DetailVerticalHero
     const float SatelliteSize = WaveeCta.IconButtonSize;
 
     public static Element Build(DetailModel m, DetailConfig cfg, DetailHandlers h, Loadable<DetailModel> full,
-                                bool rowFlow, float availW,
+                                bool rowFlow, float availW, bool widthMeasured,
                                 float compactLeft, float collapseDistance,
                                 IReadSignal<bool> compactInteractive,
                                 IReadSignal<bool> searchExpanded, IReadSignal<bool> selectionCommandsVisible,
@@ -79,7 +79,10 @@ static class DetailVerticalHero
         float titleSize = DetailVerticalLayout.TitleSizeFor(bw);
         float titleLineHeight = DetailVerticalLayout.TitleLineHeightFor(titleSize);
         int descLines = DetailVerticalLayout.DescriptionMaxLines(rowFlow);
-        int heroDecodePx = DetailVerticalLayout.ArtworkDecodePx(artSize);
+        // Unmeasured (widthMeasured false — availW is a page-width ESTIMATE, not a real bounds callback yet): 256, the
+        // SAME bucket the grid tiles / DetailRail hero use, so the very first frame is a cache hit instead of a guess
+        // off geometry that is itself only an estimate. See DetailVerticalLayout.ArtworkDecodePx(float,bool).
+        int heroDecodePx = DetailVerticalLayout.ArtworkDecodePx(artSize, widthMeasured);
 
         // DIAGNOSTIC ONLY (see DetailCoverTrace): the narrow/Hero arm is the one that flashes, and this is where the
         // cover URL and the decode bucket are chosen. `artSize`/`heroDecodePx` moving between two consecutive lines for
@@ -118,7 +121,7 @@ static class DetailVerticalHero
             [
                 editable
                     ? PlaylistInlineEdit.Cover(full, artSize, Radii.Card, shadow: true,
-                        morphKey: null, decodePx: heroDecodePx)
+                        morphKey: null, decodePx: heroDecodePx, saturation: 1.18f)
                     : DetailRail.HeroArtwork(m, artSize, Radii.Card, connected: false,
                         saturation: 1.18f, morphKey: null, decodePx: heroDecodePx)
             ],
@@ -184,6 +187,10 @@ static class DetailVerticalHero
         // Daylist rollover countdown — hero scale, between the meta line and the action row (the Home hero's slot).
         // Null-safe: Add skips it for every non-daylist model, exactly like the optional blocks above.
         Add("hero-pulse", DetailRail.DaylistCard(m, h, compact: false), late: true);
+
+        // Chart-playlist "N new entries · <date>" caption — same slot shape as the daylist pulse above, null off every
+        // non-chart model.
+        Add("hero-chart", DetailRail.ChartCaption(m), late: true);
 
         // ── the action row ─────────────────────────────────────────────────────────────────────────────────────
         // The accent Play capsule LEADS (the same WaveeCta.Play builder and the same artwork accent the two-column

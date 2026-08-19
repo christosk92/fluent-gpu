@@ -1,6 +1,7 @@
 using System;
 using FluentGpu.Controls;
 using FluentGpu.Localization;
+using Wavee.Features.Browse;
 using Wavee.Features.Concerts;
 
 namespace Wavee;
@@ -22,10 +23,15 @@ static class ShellNav
         // own label + glyph here — without this it falls through to the "Your Library" default in the tab strip, the history
         // rows, and the sidebar's pinned rows (whose pin id IS the route key). Icons.RadioTower is the podcasts glyph below.
         if (key.StartsWith("show:", StringComparison.Ordinal)) return (arg ?? Loc.Get(Strings.Nav.Show), Icons.RadioTower);
-        if (key.StartsWith("home-section:", StringComparison.Ordinal))
+        if (key.StartsWith(HomeSectionRoutes.Prefix, StringComparison.Ordinal))
             return (arg ?? Loc.Get(Strings.Nav.Home), Icons.MusicNote);
-        if (key.StartsWith("browse:", StringComparison.Ordinal))
-            return (arg ?? Loc.Get(Strings.Browse.Title), Icons.Globe);
+        if (key.StartsWith(BrowseRoutes.Prefix, StringComparison.Ordinal))
+            return (arg ?? Loc.Get(Strings.Browse.HomeTitle), Icons.Globe);
+        // A browse SECTION (paged via IBrowseService.GetSectionAsync) is a different route family from the category
+        // page above — without this arm it fell past every prefix check into the exact-match switch and hit the
+        // "Your Library" default, same as the "show:" regression this file already guards against.
+        if (key.StartsWith(BrowseSectionRoutes.Prefix, StringComparison.Ordinal))
+            return (arg ?? Loc.Get(Strings.Browse.HomeTitle), Icons.Globe);
         if (ConcertRoutes.TryParse(key, out var concertRoute))
             return concertRoute.Kind switch
             {

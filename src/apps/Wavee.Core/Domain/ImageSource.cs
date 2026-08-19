@@ -130,15 +130,28 @@ public static class ImageSource
     /// cover shares it. Empty for a null/blank url.</summary>
     public static ReadOnlySpan<char> ArtIdentity(string? url) => ArtIdentityOf(ImageIdSpan(url));
 
+    /// <summary>The identity url <see cref="SameArt"/> compares: the image's own <see cref="Image.Url"/> when it has
+    /// one, else its first mosaic tile — the same reduction <c>Surfaces.Artwork</c> applies before painting a 1-3-tile
+    /// mosaic as a single cover (<c>image = new Image(tiles[0])</c>). Without this a cover-less playlist (Url == "",
+    /// tiles only) can never match a single-cover rendition of the SAME first tile — e.g. a nav-preview card that
+    /// already reduced the mosaic to its lead tile vs. the full model's still-mosaic Image — and the latch always lost.</summary>
+    static string ReducedUrl(Image? image)
+    {
+        if (image is null) return "";
+        if (Normalize(image.Url) is { Length: > 0 } u) return u;
+        return image.MosaicTiles is { Count: > 0 } tiles ? Normalize(tiles[0]) ?? "" : "";
+    }
+
     /// <summary>True when both images show the SAME ARTWORK — <see cref="SameSource"/>, or two Spotify image ids that
-    /// differ only in their size marker (a card-size and a hero-size rendition of one cover). Null/empty pairs are not
-    /// the same art. This is the identity a "keep what is already on screen" latch must use.</summary>
+    /// differ only in their size marker (a card-size and a hero-size rendition of one cover), comparing the REDUCED
+    /// identity (<see cref="ReducedUrl"/>) so a mosaic and a single-tile rendition of its own lead tile also match.
+    /// Null/empty pairs are not the same art. This is the identity a "keep what is already on screen" latch must use.</summary>
     public static bool SameArt(Image? a, Image? b)
     {
         if (a is null || b is null) return false;
         if (SameSource(a, b)) return true;
-        var ua = Normalize(a.Url) ?? "";
-        var ub = Normalize(b.Url) ?? "";
+        var ua = ReducedUrl(a);
+        var ub = ReducedUrl(b);
         if (ua.Length == 0 || ub.Length == 0) return false;
         var ia = ImageIdSpan(ua);
         var ib = ImageIdSpan(ub);

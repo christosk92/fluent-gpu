@@ -9,6 +9,7 @@ using FluentGpu.Hooks;
 using FluentGpu.Localization;
 using FluentGpu.Signals;
 using Wavee.Core;
+using Wavee.Features.Browse;
 using Wavee.Features.Detail;
 using static FluentGpu.Dsl.Ui;
 
@@ -34,6 +35,9 @@ sealed class SearchPage : Component
     const int SearchPageSize = 50;
     const float FacetUnderlineH = 3f;
     const float FacetUnderlineMs = 260f;
+    /// <summary>Identity for race-free last-writer-wins on <see cref="ShellMasthead"/> (see <c>ShellMastheadState</c>)
+    /// — the same owner-token contract <c>HomeSectionPage</c>/<c>BrowsePage</c> use for their own publish.</summary>
+    readonly object _mastheadOwner = new();
 
     public SearchPage(IReadSignal<Route> route) => _route = route;
 
@@ -41,10 +45,36 @@ sealed class SearchPage : Component
     {
         var svc = UseContext(Services.Slot);
         var go = UseContext(HistoryStore.NavCtx);
+        var mastheadStore = UseContext(ShellMasthead.Slot);
         if (svc is null) return new BoxEl { Grow = 1f };
         string q = (_route.Value.Arg ?? "").Trim();
         int chip = _chip.Value;
         UseEffect(() => { _chip.Value = 0; _chipSource = null; _prevChip = 0; _slideArmed = false; }, q);
+
+        // ── the shell MASTHEAD publication ──────────────────────────────────────────────────────────────────────
+        // Search's empty landing IS the Browse directory (EmptyLanding, below) and has no route of its own to give
+        // ShellMastheadBand a trail to derive (a bare "search" route is not a Browse-family route) — so this is the
+        // ONE place a page publishes a masthead with no family route backing it. A committed query owner-gates the
+        // clear instead: the results branch below owns its own query chrome in-page, and a bare "search" route with
+        // nothing published collapses the band to zero height (see ShellMastheadBand's doc-comment).
+        void SetMasthead()
+        {
+            if (mastheadStore is not null)
+                mastheadStore.Value = new ShellMastheadState(_mastheadOwner, Loc.Get(Strings.Browse.Title), Loc.Get(Strings.Browse.Subtitle));
+        }
+        void ClearMasthead()
+        {
+            if (mastheadStore is not null && ReferenceEquals(mastheadStore.Peek()?.Owner, _mastheadOwner))
+                mastheadStore.Value = null;
+        }
+        UseEffect(() => { if (q.Length == 0) SetMasthead(); else ClearMasthead(); }, q);
+        // A KeepAlive-cached page does not re-run its mount effect, so reactivation re-publishes (only when the
+        // landing is what's actually showing — a reactivated page mid-query stays silently cleared, exactly what
+        // the q-driven deps-leg above already left it as).
+        UseActivation(onActivated: () => { if (q.Length == 0) SetMasthead(); }, onDeactivated: ClearMasthead);
+        // …and UNMOUNT clears too, because onDeactivated fires only on PARK. Owner-gated, so it can never clobber
+        // whatever the next page has already published.
+        UseEffect(() => (Action?)ClearMasthead, DepKey.Empty);
         int facetCount = _facets.Length;
         UseEffect(() => { if (_chip.Peek() >= facetCount) _chip.Value = 0; }, facetCount);
         var facet = FacetAt(chip);
@@ -527,68 +557,29 @@ sealed class SearchPage : Component
     {
         var browseModel = new Wavee.Features.Browse.BrowseDirectory.Model(
             OnOpenCategory: (uri, title) => go(Wavee.Features.Browse.BrowseRoutes.Page(uri), title),
-            OnOpenFeature: uri => go(string.Equals(uri, "spotify:concerts", StringComparison.Ordinal)
-                ? Wavee.Features.Concerts.ConcertRoutes.Hub
-                : uri, null));
+            OnOpenFeature: uri => go(Wavee.Features.Browse.BrowseRoutes.FeatureRoute(uri), null));
 
         return Ctx.Provide(Wavee.Features.Browse.BrowseDirectory.Props, browseModel,
             new BoxEl
             {
                 Direction = 1, MinWidth = 0f, Gap = Spacing.L,
-                Padding = new Edges4(Spacing.L, Spacing.M, Spacing.L, PlayerDock.Reserve + Spacing.XXL),
+                // G2c-B: FrameTop dropped — the shell's ShellMastheadBand now owns that top inset (this page
+                // publishes into it above, in Render). Spacing.L keeps the same net gap the directory's own
+                // masthead margin used to give, just moved from "under the masthead" to "under the band"; FrameX
+                // still matches a category page / a section drill so the content column never jumps.
+                Padding = new Edges4(Wavee.Features.Browse.BrowseLayout.FrameX, Spacing.L,
+                    Wavee.Features.Browse.BrowseLayout.FrameX, PlayerDock.Reserve + Spacing.XXL),
                 Children =
                 [
-                    Embed.Comp(() => new SearchRecents()),
                     Embed.Comp(() => new Wavee.Features.Browse.BrowseDirectory()),
                 ],
             });
     }
 
     // ── browse empty state ───────────────────────────────────────────────────────────────────────────────────────
-    // No query → recent entity rows above the real Browse directory. Type to search, don't type and you're browsing.
+    // No query → the empty state IS the real Browse directory, full stop. The shell already owns the search field
+    // (see the header above), so Browse never grows a second one of its own here.
 
-}
-
-/// <summary>Empty-search recents. Fail-soft: a 400/transport miss renders nothing and Browse stays.</summary>
-sealed class SearchRecents : Component
-{
-    public override Element Render()
-    {
-        var svc = UseContext(Services.Slot);
-        var go = UseContext(HistoryStore.NavCtx);
-        if (svc is null) return new BoxEl();
-        var recents = UseResource(ct => svc.Library.RecentSearchesAsync(ct),
-            (IReadOnlyList<SearchTopHit>)Array.Empty<SearchTopHit>(), 0).Loadable;
-        // Stretch on the RENDERED ROOT, like every other section on this page (FillCross / SearchSectionRoot.Stretch):
-        // a ComponentEl carries no layout props, and relying on the parent column's AlignItems default leaves the
-        // section measured at its own content width — which collapses Surfaces.SectionHeader's ellipsised title to a
-        // single glyph ("R..."). Also smoothResize:false: the shimmer here is an EMPTY box, so the region would ease
-        // its height from literal zero and clip the rows into a growing strip.
-        return SearchSectionRoot.Stretch(Skel.Region(recents, () => new BoxEl(),
-            hits => Body(hits, go, svc),
-            isEmpty: hits => hits.Count == 0,
-            onEmpty: () => new BoxEl(),
-            onFailed: () => new BoxEl(),
-            smoothResize: false));
-    }
-
-    static Element Body(IReadOnlyList<SearchTopHit> hits, Action<string, string?> go, Services svc)
-    {
-        void Play(string uri) => _ = svc.Player.PlayAsync(uri, 0);
-        void PlayTrack(string uri) => _ = svc.Player.PlayTrackAsync(uri);
-        void PlayKnown(Track t) => _ = svc.Player.PlayTrackAsync(t);
-        return new BoxEl
-        {
-            Direction = 1, Gap = Spacing.M, MinWidth = 0f, AlignSelf = FlexAlign.Stretch,
-            Children =
-            [
-                Surfaces.SectionHeader(Loc.Get(Strings.Search.RecentSearches)),
-                Ctx.Provide(SearchAllList.Props,
-                    new SearchAllList.Model(SearchResults.Empty, go, PlayTrack, Play, PlayKnown, Hits: hits),
-                    Embed.Comp(() => new SearchAllList())),
-            ],
-        };
-    }
 }
 
 // The "All" tab body — the modern Spotify layout: a FULL-WIDTH Top Result card, then a unified "best results" list that
@@ -1043,10 +1034,14 @@ static class SearchChrome
             MinWidth = 0f, Shrink = 1f,
             Children =
             [
+                // The tick is BrowseLayout-owned now (T9 dedup): Browse's own band-label tick (BrowseDirectory.
+                // BandLabel) is the SAME 3×14 accent mark, so both read the size off BrowseLayout.TickW/TickH rather
+                // than each carrying its own copy of the literals. Corner 2 (Spacing.XXS) vs the old 1.5 is
+                // imperceptible at this size.
                 new BoxEl
                 {
-                    Width = 3f, Height = 14f, Shrink = 0f,
-                    Corners = CornerRadius4.All(1.5f), Fill = Tok.AccentDefault,
+                    Width = BrowseLayout.TickW, Height = BrowseLayout.TickH, Shrink = 0f,
+                    Corners = CornerRadius4.All(Spacing.XXS), Fill = Tok.AccentDefault,
                 },
                 // Shrink, never Grow — same contract as Surfaces.SectionHeader. A PagedShelf already grows a
                 // trailing spacer; Grow + MinWidth=0 + ellipsis here makes the cluster's intrinsic width one glyph.

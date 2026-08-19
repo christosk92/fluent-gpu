@@ -6,14 +6,18 @@ using Wavee.Core.Home;
 namespace Wavee;
 
 /// <summary>The page's rows, in the prototype's order unless a <see cref="Wavee.Core.Home.HomeLayoutDoc"/> reorders
-/// the authored modules. Chrome rows (Chips / Artists / Timeline / Sections / Tail) are not user-orderable in v1.
-/// <see cref="Queue"/> / <see cref="Books"/> exist so a split pair that the user pulled apart does not render twice
+/// the authored modules. Chrome rows (Chips / Artists / Timeline / Charts / Sections / Tail) are not user-orderable in
+/// v1. <see cref="Queue"/> / <see cref="Books"/> exist so a split pair that the user pulled apart does not render twice
 /// inside <see cref="EpisodesAndBooks"/>.</summary>
 enum HomeRow : byte
 {
     Chips, Hero, Weekly, Quick, Recents, MixBand, Artists, ChipCards, Radio, EpisodesAndBooks,
     Queue, Books,
     Podcasts, Timeline, Sections, Editorial, Feed, Tail,
+    // Charts is CHROME — not a HomeGroupKind, not in home-layout.json v1, not user-hideable. Appended rather than
+    // inserted: the enum is `: byte` and is never persisted, so its ordinal position carries no compatibility
+    // contract and a new member is free to land wherever reads best.
+    Charts,
 }
 
 /// <summary>One app-authored Home module plus the source section that can satisfy a server-side drill-in. The
@@ -62,7 +66,7 @@ internal static class HomeLandingProjection
     [
         HomeRow.Chips, HomeRow.Hero, HomeRow.Weekly, HomeRow.Quick, HomeRow.Recents, HomeRow.MixBand,
         HomeRow.Artists, HomeRow.ChipCards, HomeRow.Radio, HomeRow.EpisodesAndBooks, HomeRow.Podcasts,
-        HomeRow.Timeline, HomeRow.Sections, HomeRow.Editorial, HomeRow.Feed, HomeRow.Tail,
+        HomeRow.Timeline, HomeRow.Charts, HomeRow.Sections, HomeRow.Editorial, HomeRow.Feed, HomeRow.Tail,
     ];
 
     public static HomeLanding Project(HomeFeed feed, HomeModuleTitles titles)
@@ -159,6 +163,7 @@ internal static class HomeLandingProjection
             if (kind == HomeGroupKind.PodcastShelf)
             {
                 rows.Add(HomeRow.Timeline);
+                rows.Add(HomeRow.Charts);
                 rows.Add(HomeRow.Sections);
                 afterPodcasts = true;
             }
@@ -168,6 +173,7 @@ internal static class HomeLandingProjection
         if (!afterPodcasts)
         {
             rows.Add(HomeRow.Timeline);
+            rows.Add(HomeRow.Charts);
             rows.Add(HomeRow.Sections);
         }
         rows.Add(HomeRow.Tail);

@@ -74,7 +74,11 @@ sealed class TrackList : Component
     readonly Signal<bool> _verticalCompactInteractive = new(false); // pin-edge only: enable compact Play hit target
     readonly Signal<bool> _verticalBodyClipEngaged = new(false);     // trailing page only: fade exactly while the sticky cut is active
     readonly Signal<float> _verticalHeaderHeight = new(0f);
-    readonly Signal<float> _verticalHeroW = new(0f);           // measured page width (vertical mode) → the hero's art size / flow
+    // Measured page width (vertical mode) → the hero's art size / flow. Seeded (ctor) from DetailShell's page-width
+    // ESTIMATE (see DetailLayoutBreakpoints.EstimatePageWidthFromViewport) rather than 0, so the hero's own pre-measure
+    // geometry derives from that estimate instead of DetailVerticalLayout.FallbackW (580, a constant unrelated to this
+    // window). OnBoundsChanged below overwrites it with the real width the moment layout measures it either way.
+    readonly Signal<float> _verticalHeroW;
     bool _verticalHeroRowFlow;                                  // artwork BESIDE the identity column (see DetailVerticalLayout.RowFlow)
     bool _verticalHeroFlowInitialized;
     bool _hasDate;                                             // any track carries an AddedAt → the Date-added column exists
@@ -234,13 +238,16 @@ sealed class TrackList : Component
 
     public TrackList(Signal<Route> route, Loadable<DetailModel> full, PlaybackBridge? bridge, DetailHandlers h,
                      bool showToolbar = true, bool embedded = false, bool verticalHeader = false,
-                     Signal<float>? verticalHeroHeight = null,
+                     Signal<float>? verticalHeroHeight = null, float verticalHeroWSeed = 0f,
                      IReadSignal<DetailHandlers?>? liveHandlers = null)
     {
         _route = route; _full = full; _bridge = bridge; _initialH = _h = h; _liveHandlers = liveHandlers;
         _showToolbar = showToolbar; _embedded = embedded;
         _verticalHeader = verticalHeader && !embedded;
         _verticalHeroHeightOut = verticalHeroHeight;
+        // A one-shot mount seed, not a reactive prop (component props freeze at mount by design here) — OnBoundsChanged
+        // is the only thing that ever writes this signal again once the real width lands.
+        _verticalHeroW = new Signal<float>(MathF.Max(0f, verticalHeroWSeed));
     }
 
     // No scroll timeline is published here any more. It existed for exactly one consumer — the page-tone plane's
@@ -495,8 +502,11 @@ sealed class TrackList : Component
         {
             float seedW = viewport.Peek().Width;
             _initialTierSeed = DetailLayoutBreakpoints.InitialTierForViewport(seedW);
+            // The vertical arm's own column IS the page (no sibling rail), so its pre-measure flow seed uses the same
+            // PAGE-width estimate DetailShell seeds its mode from, not the raw window viewport — see
+            // DetailLayoutBreakpoints.EstimatePageWidthFromViewport.
             if (_verticalHeader && !_verticalHeroFlowInitialized)
-                _verticalHeroRowFlow = DetailVerticalLayout.RowFlow(seedW);
+                _verticalHeroRowFlow = DetailVerticalLayout.RowFlow(DetailLayoutBreakpoints.EstimatePageWidthFromViewport(seedW));
         }
         _svc = svc; _post = UsePost();           // cached so the rec fetch/add handlers reach the extender + marshal results back to the UI thread
         Context.UseSignalEffect(() => Reactive.OnCleanup(() => { try { _recCts.Cancel(); _recCts.Dispose(); } catch { } }));   // cancel in-flight rec fetches on unmount
@@ -1508,7 +1518,7 @@ sealed class TrackList : Component
             Key = "vhero:header",
             Direction = 1,
             OnBoundsChanged = MeasureVerticalHeader,
-            Children = [DetailVerticalHero.Build(_model, _cfg, h, _full, rowFlow, availW,
+            Children = [DetailVerticalHero.Build(_model, _cfg, h, _full, rowFlow, availW, _verticalHeroFlowInitialized,
                 compactLeft, collapseDistance, _verticalCompactInteractive,
                 _searchExpanded, _selectionCommandsVisible!,
                 toolbar, compactSearch, compactActions, compactSelection, _acts)],
@@ -2263,11 +2273,26 @@ sealed class TrackList : Component
         [
             DetailSkeleton.VerticalHeroBand(
                 _verticalHeroW.Peek(), _verticalHeroRowFlow, TrackRow.PadXFor(tier),
-                HeroHasEyebrow(), HeroHasAttribution(), HeroHasMeta(), HeroHasDescription(), HeroHasPulse()),
+                HeroHasEyebrow(), HeroHasAttribution(), HeroHasMeta(), HeroHasDescription(), HeroHasPulse(),
+                previewArt: ImageSource.IsUsable(_model.Cover) ? PreviewHeroArt : null),
             Chrome(set, tracks, sort, labeled, tier, checkInset, contentFilterBar: contentFilterBar),
             RowsShimmer(set, tracks, rowH),
         ],
     };
+
+    /// <summary>The real hero cover for the loading skeleton's hero slot (see <c>DetailSkeleton.VerticalHeroBand</c>'s
+    /// <c>previewArt</c>). The grid-click nav path always hands the page a usable preview cover (<c>DetailPage</c>'s
+    /// preview→full latch, <see cref="ImageSource.PreferVisible"/>), so <c>_model.Cover</c> already carries it while
+    /// <c>_full</c> is Pending — the same 256-bucket <c>Surfaces.Artwork</c> block the unmeasured real hero mounts
+    /// (<see cref="DetailRail.HeroArtwork"/>'s own default), so the swap to the real hero is a synchronous cache hit.
+    /// <c>.Skel(art)</c> (a self-override) is what makes this exempt from <c>SkeletonDeriver</c>'s generic recursion —
+    /// without it the deriver would strip the real <c>ImageEl</c>'s Source and repaint it as a plain gray placeholder,
+    /// which is the bug this fixes.</summary>
+    Element PreviewHeroArt(float artSize)
+    {
+        Element art = DetailRail.HeroArtwork(_model, artSize, Radii.Card, connected: false, saturation: 1.18f);
+        return art.Skel(art);
+    }
 
     // The shimmer source for the track list: N copies of the REAL Row built with an empty track. The engine derives the
     // grey shimmer bars from this (one source of truth — the row shape can never drift from the real rows).

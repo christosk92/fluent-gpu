@@ -180,10 +180,6 @@ public static class PathfinderOps
     public const string SearchGenres = "searchGenres";
     public const string SearchGenresHash = "9e1c0e056c46239dd1956ea915b988913c87c04ce3dadccdb537774490266f46";
 
-    // Desktop 1.2.96.518 (search.saz). Empty-search recents: full entities, not strings.
-    public const string RecentSearches = "recentSearches";
-    public const string RecentSearchesHash = "3ec071f88e403779d4da9bc5744feb9d64cd07d10daf1f966b912baadaa3d598";
-
     public const string QueryAlbumMerch = "queryAlbumMerch";
     public const string QueryAlbumMerchHash = "3ef44ed6f17be67299538fe77faffab4075aeaf9e1085f10fc835592266711b5";
     // The DESKTOP document (16 samples in the corpus vs 1 for the web-player variant it replaces). Strict superset:

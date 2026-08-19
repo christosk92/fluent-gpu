@@ -663,6 +663,39 @@ public class SqliteColdStoreTests
         finally { TryDelete(path); }
     }
 
+    /// <summary>v9 — a chart playlist's per-row rank movement round-trips through a cold reopen: the "arrows" survive a
+    /// restart instead of waiting for the live re-fetch. A row with no chart facts (every scalar 0) still round-trips
+    /// as the ordinary non-chart shape.</summary>
+    [Fact]
+    public void PlaylistMembership_RoundTrips_ChartRankMovement()
+    {
+        var path = TempDb();
+        try
+        {
+            using (var s = new SqliteColdStore(path))
+                s.ReplaceMembership("spotify:playlist:chart", new[]
+                {
+                    new ColdPlaylistItem("id1", "spotify:track:a", null, 100, ChartStatus: (byte)ChartEntryStatus.Up, ChartCurrentPos: 3, ChartPreviousPos: 4, ChartRank: 41545),
+                    new ColdPlaylistItem("id2", "spotify:track:b", null, 200, ChartStatus: (byte)ChartEntryStatus.New, ChartCurrentPos: 22, ChartPreviousPos: 0, ChartRank: 18579),
+                    new ColdPlaylistItem("id3", "spotify:track:c", null, 300),   // no chart facts at all
+                }, null);
+
+            using var s2 = new SqliteColdStore(path);
+            var rows = s2.LoadMembership("spotify:playlist:chart");
+            Assert.Equal(3, rows.Count);
+            Assert.Equal((byte)ChartEntryStatus.Up, rows[0].ChartStatus);
+            Assert.Equal(3, rows[0].ChartCurrentPos);
+            Assert.Equal(4, rows[0].ChartPreviousPos);
+            Assert.Equal(41545, rows[0].ChartRank);
+            Assert.Equal((byte)ChartEntryStatus.New, rows[1].ChartStatus);
+            Assert.Equal(22, rows[1].ChartCurrentPos);
+            Assert.Equal(0, rows[1].ChartPreviousPos);
+            Assert.Equal(0, rows[2].ChartStatus);
+            Assert.Equal(0, rows[2].ChartCurrentPos);
+        }
+        finally { TryDelete(path); }
+    }
+
     [Fact]
     public void ReplaceMembership_ReplacesNotAppends()
     {

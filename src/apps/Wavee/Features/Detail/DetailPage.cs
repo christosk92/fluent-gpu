@@ -36,6 +36,17 @@ sealed class DetailPage : Component
     static readonly OwnerScope NoOwners = new(null, new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase));
     volatile OwnerScope _owners = NoOwners;
 
+    // The NO-PREVIEW cover latch's "visible" fallback (see the cover latch below and the live-refresh latch in the
+    // UseSignalEffect further down): a deep link / search hit opens with no nav-preview card to latch a first cover
+    // against, so PreferVisible had nothing to compare the loaded cover to and simply always took it — fine for the
+    // FIRST load, but a route-reused instance's SECOND load (this same route re-fetching) then re-decoded and faded
+    // in a cover that was already on screen the moment the wire named it under a different size hash. Tracking the
+    // last cover THIS instance actually published closes that gap without touching the route/preview identity: it is
+    // written on the async loader's background-thread continuation (ConfigureAwait(false) throughout), hence
+    // volatile, and it is read-only input to PreferVisible's SameArt check — a stale cover from a DIFFERENT context
+    // can never leak in as the wrong art, because PreferVisible only keeps it when the incoming cover is the SAME art.
+    volatile Image? _lastCover;
+
     /// <summary>The page's owner identities (<see cref="DetailOwnerIds"/>), scoped to the page id they were read from
     /// so a stale snapshot cannot answer for the next route.</summary>
     static OwnerScope OwnersOf(string? pid, DetailModel m)
@@ -113,7 +124,11 @@ sealed class DetailPage : Component
             // every consumer of this loadable — the two-column rail, the vertical hero, the editable playlist cover, the
             // tone plane — reads ONE stable cover. (The old per-shell latch covered only the rail; the vertical hero and
             // EditableCover read the raw model and re-decoded on every hash change.)
-            loaded = loaded with { Cover = ImageSource.PreferVisible(loaded.Cover, preview?.Cover) };
+            // No preview (deep link / search hit)? Fall back to the last cover THIS instance actually published
+            // (_lastCover) — mirrors the live-refresh latch below — so a route-reused instance's later load still has
+            // something to latch a same-art cover against instead of always taking whatever the wire just named.
+            loaded = loaded with { Cover = ImageSource.PreferVisible(loaded.Cover, preview?.Cover ?? _lastCover) };
+            _lastCover = loaded.Cover;
             // DIAGNOSTIC ONLY (see DetailCoverTrace): the handoff the whole "flash" question turns on — the nav-preview
             // cover the page opened with vs the cover the full load brought. `same=false` with two ids that share their
             // last 24 chars is H1 exactly: identical art, a different CDN size hash, hence a different ImageCache key.
@@ -179,6 +194,7 @@ sealed class DetailPage : Component
                     // no stake in this list's order.
                     if (k == DetailKind.Playlist && PlaylistReorderDefer.TryHold(model, next, pid)) return;
                     model.SetReady(next);
+                    _lastCover = next.Cover;   // the no-preview latch's fallback (see the initial load above)
                 });
             }, onStorm: passes =>
             {
@@ -482,7 +498,8 @@ sealed class DetailPage : Component
             BasePermissionRevision: p.BasePermissionRevision,
             Tuning: p.Tuning,
             ShareUrl: SpotifyPlaylistWebUrl(p.Uri),
-            ExpiresAtMs: p.DaylistExpiresAtMs, CreatedAtMs: p.DaylistCreatedAtMs)
+            ExpiresAtMs: p.DaylistExpiresAtMs, CreatedAtMs: p.DaylistCreatedAtMs,
+            ChartNewEntries: p.ChartNewEntries, ChartUpdatedAtMs: p.ChartUpdatedAtMs)
         {
             // A cold open of a tombstoned / revoked uri renders the SHELL with a notice, never the error state: the
             // header and (evicted) membership are still the truest thing we can show, and "this playlist was deleted"

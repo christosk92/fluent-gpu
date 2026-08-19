@@ -26,8 +26,8 @@ namespace Wavee;
 static class PlaylistInlineEdit
 {
     internal static Element Cover(Loadable<DetailModel> full, float size, float radius = Radii.Card, bool shadow = true,
-                                  string? morphKey = null, int decodePx = 256, bool preferLargest = false)
-        => Embed.Comp(() => new EditableCover(full, size, radius, shadow, morphKey, decodePx, preferLargest))
+                                  string? morphKey = null, int decodePx = 256, bool preferLargest = false, float saturation = 1f)
+        => Embed.Comp(() => new EditableCover(full, size, radius, shadow, morphKey, decodePx, preferLargest, saturation))
             with { Key = $"pl-edit-cover:{(int)size}:{(int)radius}:{shadow}:{morphKey}:{decodePx}:{preferLargest}" };
 
     /// <summary>The editable arm of the hero title. <paramref name="lineHeight"/> is the type-ramp line height paired
@@ -301,6 +301,10 @@ static class PlaylistInlineEdit
         readonly string? _morphKey;
         readonly int _decodePx;
         readonly bool _preferLargest;
+        // The read-only HeroArtwork sibling this rail/hero slot swaps against (DetailRail.Build / DetailVerticalHero.
+        // Build) paints at 1.18 oversaturation; without threading the same value here the editable↔read-only remount
+        // (H3) is not just a structural swap, it visibly pops the cover's vibrancy for a frame.
+        readonly float _saturation;
         readonly Signal<bool> _hovered = new(false);
         readonly Signal<bool> _dropOver = new(false);
         readonly Signal<int> _status = new(StatusIdle);
@@ -308,10 +312,10 @@ static class PlaylistInlineEdit
         int _saveEpoch;
 
         public EditableCover(Loadable<DetailModel> full, float size, float radius, bool shadow,
-                             string? morphKey, int decodePx, bool preferLargest)
+                             string? morphKey, int decodePx, bool preferLargest, float saturation = 1f)
         {
             _full = full; _size = size; _radius = radius; _shadow = shadow;
-            _morphKey = morphKey; _decodePx = decodePx; _preferLargest = preferLargest;
+            _morphKey = morphKey; _decodePx = decodePx; _preferLargest = preferLargest; _saturation = saturation;
         }
 
         public override Element Render()
@@ -337,7 +341,7 @@ static class PlaylistInlineEdit
                     WaveeLogField.Of("morphKey", _morphKey));
             if (lib is null || !EditableMetadata(m) || m.ContextUri is not { } uri)
                 return DetailRail.HeroArtwork(m, _size, _radius, connected: false,
-                    morphKey: _morphKey, decodePx: _decodePx, preferLargest: _preferLargest);
+                    saturation: _saturation, morphKey: _morphKey, decodePx: _decodePx, preferLargest: _preferLargest);
 
             var drag = UseDragState();
             bool compatibleDrag = drag.Active && drag.Kind == DropKinds.Files;
@@ -366,7 +370,7 @@ static class PlaylistInlineEdit
                 Children =
                 [
                     DetailRail.HeroArtwork(m, _size, _radius, connected: false,
-                        morphKey: _morphKey, decodePx: _decodePx, preferLargest: _preferLargest),
+                        saturation: _saturation, morphKey: _morphKey, decodePx: _decodePx, preferLargest: _preferLargest),
                     // Always-mounted overlay — the cross-fade is a bound-opacity transition (compositor-only).
                     CoverOverlay(dropCue),
                 ],

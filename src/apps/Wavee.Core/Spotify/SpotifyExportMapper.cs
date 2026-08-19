@@ -797,32 +797,6 @@ public static class SpotifyExportMapper
             : new SearchSuggestions(queries, items);
     }
 
-    /// <summary>Map <c>recentSearches</c> → entity rows for the empty Search landing
-    /// (<c>data.recentSearches.recentSearchesItems.items[]</c>).</summary>
-    public static IReadOnlyList<SearchTopHit> RecentSearchesFrom(JsonElement responseRoot)
-    {
-        var hits = new List<SearchTopHit>();
-        foreach (var it in Arr(Dig(responseRoot, "data", "recentSearches", "recentSearchesItems", "items")))
-        {
-            var wrapper = it.TryGetProperty("item", out var item) ? item : it;
-            var data = Dig(wrapper, "data");
-            var d = data.ValueKind == JsonValueKind.Object ? data : wrapper;
-            if (d.ValueKind != JsonValueKind.Object) continue;
-            var type = TopHitType(Str(wrapper, "__typename"), Str(d, "__typename"), Str(d, "uri"));
-            if (type.Length == 0)
-            {
-                var nested = Dig(d, "data");
-                if (nested.ValueKind == JsonValueKind.Object)
-                {
-                    d = nested;
-                    type = TopHitType(Str(wrapper, "__typename"), Str(d, "__typename"), Str(d, "uri"));
-                }
-            }
-            if (MapTopHit(type, d, lyrics: false) is { } hit) hits.Add(hit);
-        }
-        return hits;
-    }
-
     static SearchSuggestionItem? TryMapSuggestionItem(string itemType, JsonElement data)
     {
         var dataType = Str(data, "__typename") ?? "";

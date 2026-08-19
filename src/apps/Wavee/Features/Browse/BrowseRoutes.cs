@@ -1,4 +1,5 @@
 using System;
+using Wavee.Features.Concerts;
 
 namespace Wavee.Features.Browse;
 
@@ -22,4 +23,12 @@ public static class BrowseRoutes
     /// <summary>The page uri carried by a browse route, or "" when the route is not one.</summary>
     public static string UriOf(string routeName)
         => Is(routeName) ? routeName.Substring(Prefix.Length) : "";
+
+    /// <summary>Map a BrowseClientFeature uri onto the client surface that owns it. Only Spotify's Live Events tile is
+    /// known to appear here; anything else falls back to the entity route so a new feature opens *something* rather
+    /// than silently doing nothing.</summary>
+    public static string FeatureRoute(string featureUri)
+        => string.Equals(featureUri, "spotify:concerts", StringComparison.Ordinal)
+            ? ConcertRoutes.Hub
+            : featureUri;
 }

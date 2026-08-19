@@ -221,20 +221,6 @@ sealed class SpotifyOnlineCatalog : IOnlineCatalog, IDisposable
         return doc is null ? SearchSuggestions.Empty : Wavee.Core.SpotifyExportMapper.SuggestionsFromV2(doc.RootElement);
     }
 
-    public async Task<IReadOnlyList<SearchTopHit>> RecentSearchesAsync(CancellationToken ct = default)
-    {
-        using var doc = await _pathfinder.QueryAsync(PathfinderOps.RecentSearches, PathfinderOps.RecentSearchesHash,
-            w =>
-            {
-                w.WriteNumber("limit", 50);
-                w.WriteBoolean("includeAuthors", true);
-                w.WriteBoolean("includeEpisodeContentRatingsV2", true);
-            }, PathfinderClient.Platform.WebPlayer, ct).ConfigureAwait(false);
-        return doc is null
-            ? Array.Empty<SearchTopHit>()
-            : Wavee.Core.SpotifyExportMapper.RecentSearchesFrom(doc.RootElement);
-    }
-
     // ── home ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
     /// <summary>The cached editorial home + separately refreshed recents.</summary>

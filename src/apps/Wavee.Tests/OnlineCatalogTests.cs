@@ -519,9 +519,6 @@ public class OnlineCatalogTests
             return Task.FromResult(Suggest is null ? SearchSuggestions.Empty : Suggest(query));
         }
 
-        public Task<IReadOnlyList<SearchTopHit>> RecentSearchesAsync(CancellationToken ct = default)
-            => Task.FromResult<IReadOnlyList<SearchTopHit>>(Array.Empty<SearchTopHit>());
-
         public Task<LiveHomeResult?> GetHomeAsync(CancellationToken ct = default)
         {
             HomeCalls++;
