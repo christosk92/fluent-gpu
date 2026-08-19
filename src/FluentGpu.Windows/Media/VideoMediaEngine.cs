@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using FluentGpu.Foundation;
 using TerraFX.Interop.DirectX;
 using TerraFX.Interop.Windows;
 using static TerraFX.Interop.DirectX.DirectX;
@@ -285,8 +286,30 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
     /// <summary>Pause playback (the frame stays live for compositing).</summary>
     public void Pause() => Invoke(() => { if (_engine != null) _engine->Pause(); return 0; });
 
-    /// <summary>Seek: set the current presentation time.</summary>
-    public void SeekTo(double seconds) => Invoke(() => { if (_engine != null) _engine->SetCurrentTime(seconds < 0 ? 0 : seconds); return 0; });
+    /// <summary>
+    /// Seek: set the current presentation time. When <paramref name="approximate"/> is requested AND the
+    /// <c>IMFMediaEngineEx</c> QI succeeded, drives <c>SetCurrentTimeEx(t, MF_MEDIA_ENGINE_SEEK_MODE_APPROXIMATE)</c> —
+    /// MF's fast keyframe-snap seek that skips decoding forward to the exact requested PTS. This is what makes a
+    /// scrub cheap on a DRM/CENC network source; the plain <c>SetCurrentTime</c> path below is MF's "normal" seek and
+    /// always re-buffers from the preceding IDR to land exactly on the target, which is correct for a final commit but
+    /// far too costly per throttled drag step. Falls back to the exact path when <c>_engineEx</c> is unavailable
+    /// (QI failed) so a requested seek never silently no-ops.
+    /// </summary>
+    public void SeekTo(double seconds, bool approximate = false) => Invoke(() =>
+    {
+        double t = seconds < 0 ? 0 : seconds;
+        bool tookApproximate = false;
+        if (approximate && _engineEx != null)
+        {
+            int hr = _engineEx->SetCurrentTimeEx(t, MF_MEDIA_ENGINE_SEEK_MODE.MF_MEDIA_ENGINE_SEEK_MODE_APPROXIMATE);
+            if (hr < 0) Log("SetCurrentTimeEx(APPROXIMATE)", hr);
+            else tookApproximate = true;
+        }
+        if (!tookApproximate && _engine != null) _engine->SetCurrentTime(t);
+        if (Diag.Enabled)
+            Diag.Event("media.seek", $"engine seconds={t:0.000} requestedApprox={approximate} engineExAvailable={_engineEx != null} tookApprox={tookApproximate}");
+        return 0;
+    });
 
     /// <summary>Set the playback rate (1.0 = normal).</summary>
     public void SetPlaybackRate(double rate) => Invoke(() => { if (_engine != null) _engine->SetPlaybackRate(rate); return 0; });

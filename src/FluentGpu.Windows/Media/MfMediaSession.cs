@@ -195,7 +195,13 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
         _seeking = true;
         _sink?.Buffering(new BufferingInfo(BufferingReason.Seeking, -1, TimeSpan.Zero,
             (_opts.Buffering ?? BufferPolicy.Vod).ResumePlayback, false));
-        _engine.SeekTo(t);
+        // Keyframe = fast scrub-preview (approximate MF seek: snaps to the nearest keyframe, no exact-PTS decode);
+        // Accurate = the final commit (normal/exact MF seek). Threading this through is the fix for the DRM scrub
+        // slowdown — SeekMode used to be discarded here and every throttled drag step paid for an exact re-buffer.
+        bool approximate = mode == SeekMode.Keyframe;
+        _engine.SeekTo(t, approximate);
+        if (Diag.Enabled)
+            Diag.Event("media.seek", $"requested={to.TotalMilliseconds:0}ms clamped={t:0.000}s mode={mode} approx={approximate}");
         // Reflect the seek target immediately so a bound seekbar doesn't snap back for a frame.
         _sink?.Position(TimeSpan.FromSeconds(t));
         _sink?.SettleTransport();

@@ -54,8 +54,10 @@ internal interface IVideoEngine : IDisposable
     // ── transport ──────────────────────────────────────────────────────────────────────────────────────────────────
     void Play();
     void Pause();
-    /// <summary>Seek: set the current presentation time (seconds).</summary>
-    void SeekTo(double seconds);
+    /// <summary>Seek: set the current presentation time (seconds). <paramref name="approximate"/> requests MF's
+    /// approximate/keyframe seek (fast — snaps to the nearest keyframe, skips the exact-PTS decode) instead of the
+    /// default normal/exact seek (decodes to the requested PTS). See <see cref="FluentGpu.Media.SeekMode"/>.</summary>
+    void SeekTo(double seconds, bool approximate = false);
     void SetPlaybackRate(double rate);
     void SetVolume(double volume);
     void SetMuted(bool muted);

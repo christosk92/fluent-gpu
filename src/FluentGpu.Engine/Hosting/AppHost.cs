@@ -2120,7 +2120,7 @@ public sealed class AppHost : IDisposable
         _invalidator = new LayoutInvalidator(_scene, _layout);
         _invalidator.DebugKeyResolver = _reconciler.DebugKeyOf;   // best-effort node→key for the FG_DIAG relayout-escape message (DEBUG-only invocation)
         _dispatcher = new InputDispatcher(_scene);
-        _reconciler.OnSubtreeDeactivated = _dispatcher.DeactivateSubtree;
+        _reconciler.OnSubtreeDeactivated = OnSubtreeDeactivated;
         _anim = new AnimEngine(_scene);
         _connected = new ConnectedAnimation(_scene, _anim, _images);   // shared-element (connected-animation) Hero flies
         // scroll-v3 (docs/plans/scroll-v3-plan-2026-08-17.md §3.3 item 5): the kernel is the single, portable,
@@ -2454,6 +2454,12 @@ public sealed class AppHost : IDisposable
     {
         if (_inPaint) _frameAfterPaint = true;
         else _frameNeeded = true;
+    }
+
+    void OnSubtreeDeactivated(NodeHandle root)
+    {
+        _dispatcher.DeactivateSubtree(root);
+        _inputHooks.RunSubtreeDeactivated(root);
     }
 
     /// <summary>Snapshot the live typed drag for <c>UseDragState</c> — both the in-app <c>DragSource</c> session and the

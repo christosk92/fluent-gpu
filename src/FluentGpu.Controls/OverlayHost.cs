@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using FluentGpu.Animation;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
@@ -115,6 +116,10 @@ public readonly record struct PopupOptions(
     /// <c>m_subMenuOverlapPixels = 4</c>; cpp:678 subMenuPosition.X += subItemWidth − 4 → pass −4 with
     /// <see cref="FlyoutPlacement.RightEdgeAlignedTop"/>).</summary>
     public float AnchorOffsetX { get; init; }
+
+    /// <summary>When the anchor dies (generation-dead, parked, or deactivated KeepAlive page), keep the last placed
+    /// rect instead of closing. Default false closes the overlay with its usual fade the frame the anchor dies.</summary>
+    public bool FreezeAtLastRect { get; init; }
 }
 
 public interface IOverlayService
@@ -208,7 +213,10 @@ internal sealed class OverlayEntry
     public PopupChrome Chrome;
     public bool ConstrainToRootBounds = true;
     public bool PinsAnchor = true;    // WS3 P6 anchor-liveness: pins the anchor's auto-hide scope while open
+    public bool FreezeAtLastRect;     // opt-in: dead-anchor holds last rect instead of BeginClose
     public bool OwnerWasLive;         // latch: this entry's owner node has been observed live at least once
+    public bool AnchorDeathNotified;  // one-shot: don't re-BeginClose every frame after a vetoed dead-anchor close
+    public long CloseStartTicks;      // BeginClose stamp; AfterAnimations force-finalizes past ClosingDeadlineMs
     public int ParentId = -1;         // nested flyout chain: the entry whose subtree contains this entry's anchor
     public int PopupWindowToken = -1; // host popup-window lease for an out-of-bounds popup (-1 = none/in-window)
     public OverlayPhase Phase;
@@ -296,6 +304,7 @@ internal sealed class OverlayServiceImpl : IOverlayService
             Chrome = options.Chrome,
             ConstrainToRootBounds = options.ConstrainToRootBounds,
             PinsAnchor = options.PinsAnchor,
+            FreezeAtLastRect = options.FreezeAtLastRect,
             SeamOffsetY = options.SeamOffsetY,
             PassThrough = options.PassThrough,
             AnchorOffsetX = options.AnchorOffsetX,
@@ -381,7 +390,7 @@ internal sealed class OverlayServiceImpl : IOverlayService
     // Hide() begins — Popup_Partial.h:63-64 SavedFocusState; FlyoutBase returns focus to the invoker synchronously on
     // Hide, not after the close animation), then keep the entry (so it stays on top and fades) and mark it closing;
     // the host seeds the fade-out and AfterAnimations removes it once the animation settles.
-    private void BeginClose(OverlayEntry e, OverlayCloseCause cause)
+    internal void BeginClose(OverlayEntry e, OverlayCloseCause cause)
     {
         if (e.Phase == OverlayPhase.Closing) return;
         if (e.Handle.ClosingAction is { } beforeClose && !beforeClose(cause)) return;
@@ -396,6 +405,7 @@ internal sealed class OverlayServiceImpl : IOverlayService
 
         e.CloseCause = cause;
         e.Phase = OverlayPhase.Closing;
+        e.CloseStartTicks = Stopwatch.GetTimestamp();
         e.Handle.IsOpen = false;
         if (e.PinsAnchor) _pinEpoch.Value = _pinEpoch.Peek() + 1;   // close START unpins the anchor scope
 
@@ -538,6 +548,8 @@ internal sealed class OverlayServiceImpl : IOverlayService
         }
     }
 
+    internal const long ClosingDeadlineMs = 2000;
+
     /// <summary>Host phase 7.1: remove closing entries whose retained tracks have settled, before recording the frame —
     /// and follow LIVE anchors: an open popup whose anchor node moved since its last placement re-places against the
     /// cached measure (the WinUI slider thumb tooltip tracks the scrubbing thumb; an anchored flyout rides a reflow).
@@ -551,44 +563,44 @@ internal sealed class OverlayServiceImpl : IOverlayService
         for (int i = Entries.Count - 1; i >= 0; i--)
         {
             var e = Entries[i];
-            if (e.Phase != OverlayPhase.Closing || !e.CloseSeeded) continue;
-            bool surfaceSettled = e.SurfaceNode.IsNull || !scene.IsLive(e.SurfaceNode) || !anim.HasTracks(e.SurfaceNode);
+            if (e.Phase != OverlayPhase.Closing) continue;
+            bool surfaceSettled = e.CloseSeeded
+                && (e.SurfaceNode.IsNull || !scene.IsLive(e.SurfaceNode) || !anim.HasTracks(e.SurfaceNode));
             bool scrimSettled = e.Chrome != PopupChrome.Modal || ScrimNode.IsNull || !scene.IsLive(ScrimNode) || !anim.HasTracks(ScrimNode);
-            if (surfaceSettled && scrimSettled) Finalize(e);
+            bool deadline = e.CloseStartTicks != 0
+                && (Stopwatch.GetTimestamp() - e.CloseStartTicks) * 1000.0 / Stopwatch.Frequency >= ClosingDeadlineMs;
+            if ((surfaceSettled && scrimSettled) || deadline) Finalize(e);
         }
 
         // Orphaned-owner prune (belt-and-braces for a control that forgets its unmount teardown — ToolTip's was the
         // reported case). An entry whose OWNER node was realized and is now gone from the scene has lost the component
         // that opened it: nothing will ever call Close(), the rect-thunk form is re-placed against a dead node on every
-        // OverlayHost render (:835-839) and walks to the origin, and the node-anchored form freezes on stale geometry.
+        // OverlayHost render and walks to the origin, and the node-anchored form freezes on stale geometry.
         // Close it the normal animated way so the fade + Finalize path (and any ClosedAction) still run.
         //
-        // The OwnerWasLive LATCH is what keeps legitimate ownerless popups alive: OpenAt's owner defaults to
-        // `static () => NodeHandle.Null` (:271), so a point-placed popup with no owner, or an entry opened before its
-        // owner is realized, never satisfies the latch and is never pruned. A context menu opened via OpenAtLocal DOES
-        // pass a real owner (ContextMenu.cs:124) and SHOULD close when that row leaves the tree — a WinUI flyout does
-        // not outlive its anchor. Modal is excluded unconditionally: a ContentDialog is app-modal, not owner-scoped.
+        // Null-forever owners (OpenAt's default `() => NodeHandle.Null`) stay exempt — those are point-placed popups
+        // with no node to outlive. A NON-null generation-dead handle is prunable even if never observed live (the
+        // OwnerWasLive latch used to skip that case, which stranded a tooltip opened in the same flush the owner died).
+        // Modal is excluded unconditionally: a ContentDialog is app-modal, not owner-scoped.
         for (int i = Entries.Count - 1; i >= 0; i--)
         {
             var e = Entries[i];
             if (e.Phase == OverlayPhase.Closing) continue;
             if (e.Chrome == PopupChrome.Modal || e.DismissBehavior == DismissBehavior.Modal) continue;
             var owner = e.Anchor();
+            if (owner.IsNull) continue;   // point-placed / no owner — never prune
             // Flow.KeepAlive intentionally leaves an inactive page's nodes live while marking the whole subtree Parked.
             // A targeted popup must not survive that transition: its owner is no longer presented even though its handle
             // is generation-valid. Treat parked exactly like orphaned so cached pages cannot leak tips/flyouts over the
             // newly active route.
-            if (!owner.IsNull && scene.IsLive(owner) && (scene.Flags(owner) & NodeFlags.Parked) == 0)
+            if (scene.IsLive(owner) && (scene.Flags(owner) & NodeFlags.Parked) == 0)
             {
                 e.OwnerWasLive = true;
+                e.AnchorDeathNotified = false;
                 continue;
             }
-            if (!e.OwnerWasLive) continue;
-            // One-shot: clear the latch BEFORE closing. A VETOED close (Handle.ClosingAction returning false — an app
-            // Closing handler with Cancel = true) leaves the entry non-Closing, and without this the prune would
-            // re-fire that app event every single frame. Re-latches (and so retries once) only if the owner is realized
-            // again and then dies again. A successful close sets Phase = Closing, which the loop skips from then on.
-            e.OwnerWasLive = false;
+            if (e.FreezeAtLastRect || e.AnchorDeathNotified) continue;
+            e.AnchorDeathNotified = true;
             BeginClose(e, OverlayCloseCause.Programmatic);
         }
 
@@ -599,9 +611,13 @@ internal sealed class OverlayServiceImpl : IOverlayService
             // Modal centers on the viewport, a Closing entry keeps its last placement while it fades.
             if (e.Phase == OverlayPhase.Closing || e.Chrome == PopupChrome.Modal || e.AnchorRect is not null) continue;
             if (e.WrapperNode.IsNull || !scene.IsLive(e.WrapperNode) || e.MeasuredW <= 0f) continue;
-            var anchor = e.Anchor();
-            if (anchor.IsNull || !scene.IsLive(anchor)) continue;
-            var aRect = scene.AbsoluteRect(anchor);
+            var resolve = ResolveAnchor(e, scene, out var aRect);
+            if (resolve == AnchorResolve.Dead)
+            {
+                if (!e.FreezeAtLastRect) BeginClose(e, OverlayCloseCause.Programmatic);
+                continue;
+            }
+            if (resolve != AnchorResolve.Live) continue;
             if (MathF.Abs(aRect.X - e.LastAnchorRect.X) < 0.5f && MathF.Abs(aRect.Y - e.LastAnchorRect.Y) < 0.5f
                 && MathF.Abs(aRect.W - e.LastAnchorRect.W) < 0.5f && MathF.Abs(aRect.H - e.LastAnchorRect.H) < 0.5f)
                 continue;
@@ -637,6 +653,50 @@ internal sealed class OverlayServiceImpl : IOverlayService
             }
             OverlayHost.SyncWindowedMenuBackdrop(scene, e);
         }
+    }
+
+    /// <summary>KeepAlive exit/park/evict: close (or freeze) overlays whose node-anchor lives under the deactivated
+    /// root. Seeds the close animation only — OverlayHost does not re-render synchronously.</summary>
+    public void OnSubtreeDeactivated(NodeHandle root)
+    {
+        if (root.IsNull || Scene is not { } scene) return;
+        for (int i = Entries.Count - 1; i >= 0; i--)
+        {
+            var e = Entries[i];
+            if (e.Phase == OverlayPhase.Closing) continue;
+            if (e.Chrome == PopupChrome.Modal || e.DismissBehavior == DismissBehavior.Modal) continue;
+            var owner = e.Anchor();
+            if (owner.IsNull) continue;
+            if (!IsUnder(scene, root, owner)) continue;
+            if (e.FreezeAtLastRect) continue;
+            BeginClose(e, OverlayCloseCause.Programmatic);
+        }
+    }
+
+    internal enum AnchorResolve : byte { Pending, Live, Dead }
+
+    internal static bool IsOriginGhost(in RectF r) => r.X == 0f && r.Y == 0f && r.W == 0f && r.H == 0f;
+
+    static bool IsUnder(SceneStore scene, NodeHandle root, NodeHandle node)
+    {
+        for (var n = node; !n.IsNull; n = scene.Parent(n))
+            if (n == root) return true;
+        return false;
+    }
+
+    internal AnchorResolve ResolveAnchor(OverlayEntry e, SceneStore scene, out RectF aRect)
+    {
+        aRect = default;
+        if (e.AnchorRect is { } thunk)
+        {
+            aRect = thunk();
+            return IsOriginGhost(in aRect) ? AnchorResolve.Dead : AnchorResolve.Live;
+        }
+        var owner = e.Anchor();
+        if (owner.IsNull) return AnchorResolve.Pending;
+        if (!scene.IsLive(owner)) return AnchorResolve.Dead;
+        aRect = scene.AbsoluteRect(owner);
+        return AnchorResolve.Live;
     }
 
     public void Finalize(OverlayEntry e)
@@ -804,6 +864,7 @@ public sealed class OverlayHost : Component
         var hooks = UseContext(InputHooks.Current);
         hooks.KeyPreview = svc.PreviewKey;
         hooks.SetAfterAnimations(svc, svc.AfterAnimations);
+        hooks.SetSubtreeDeactivatedListener(svc, svc.OnSubtreeDeactivated);
         svc.GetFocus = hooks.GetFocus;          // host-wired focus get/restore → flyout focus-restoration on close
         svc.RestoreFocus = hooks.RestoreFocus;
         svc.Hooks = hooks;                      // popup-window + work-area seams (E4 out-of-bounds popups)
@@ -843,23 +904,12 @@ public sealed class OverlayHost : Component
                 // re-placing it could yank it back into the viewport mid-fade.
                 if (e.Chrome != PopupChrome.Modal && e.Phase != OverlayPhase.Closing)
                 {
-                    RectF aRect = default;
-                    bool haveAnchor = false;
-                    if (e.AnchorRect is { } rectThunk)
+                    var resolve = svc.ResolveAnchor(e, scene, out var aRect);
+                    if (resolve == OverlayServiceImpl.AnchorResolve.Dead)
                     {
-                        aRect = rectThunk();
-                        haveAnchor = true;
+                        if (!e.FreezeAtLastRect) svc.BeginClose(e, OverlayCloseCause.Programmatic);
                     }
-                    else
-                    {
-                        var anchor = e.Anchor();
-                        if (!anchor.IsNull && scene.IsLive(anchor))
-                        {
-                            aRect = scene.AbsoluteRect(anchor);
-                            haveAnchor = true;
-                        }
-                    }
-                    if (haveAnchor)
+                    else if (resolve == OverlayServiceImpl.AnchorResolve.Live)
                     {
                         var pRect = scene.AbsoluteRect(e.WrapperNode);
                         e.MeasuredW = pRect.W;

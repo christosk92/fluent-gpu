@@ -33,7 +33,7 @@ public sealed class TreeReconciler
     // bindings deliberately stay NODE-owned (_nodeBindings, disposed at node unmount) — a bind created during a render
     // outlives that render and can die with its node WITHOUT the component unmounting (Show/For swaps, KeepAlive
     // eviction), so it must not hang off the component scope. G4c's per-component props signal will hang off Scope too.
-    private sealed class CompEntry { public Component Comp = null!; public Element? Rendered; public Type Type = null!; public Effect? Effect; public ReactiveScope? Scope; public bool Parked; public bool DeferredRender; public bool QueuedReplay; public Signal<bool>? ActiveSig; public Signal<object?>? PropsSig; public SkeletonStyle? DerivedSkeletonStyle; }
+    private sealed class CompEntry { public Component Comp = null!; public Element? Rendered; public Type Type = null!; public Effect? Effect; public ReactiveScope? Scope; public bool Parked; public bool ExitFrozen; public bool DeferredRender; public bool QueuedReplay; public Signal<bool>? ActiveSig; public Signal<object?>? PropsSig; public SkeletonStyle? DerivedSkeletonStyle; }
     private readonly Dictionary<NodeHandle, CompEntry> _comps = new();
     private readonly Dictionary<Component, NodeHandle> _anchorOf = new();
     private readonly List<Component> _live = new();
@@ -961,10 +961,11 @@ public sealed class TreeReconciler
     private void RunComponent(NodeHandle node, CompEntry entry)
     {
         if (!_scene.IsLive(node)) return;
-        // Parked by Flow.KeepAlive (inactive tab/page): skip the render entirely — it is invisible and detached, so
-        // rebuilding it is pure waste (and a parked page subscribed to a per-frame signal would re-render every frame).
-        // Remember that a render was owed; ReactivateKeepAliveEntry replays it once when the subtree comes back.
-        if (entry.Parked) { entry.DeferredRender = true; return; }
+        // Parked by Flow.KeepAlive (inactive tab/page), OR exit-frozen while a KeepAlive page is still attached and
+        // animating out: skip the render — an exiting page must not rebuild against the incoming route (or any other
+        // write) mid-fade. Parked pages are detached; exit-frozen pages stay attached so the exit track can paint.
+        // Remember that a render was owed; un-park / un-freeze replays it once when the subtree comes back.
+        if (entry.Parked || entry.ExitFrozen) { entry.DeferredRender = true; return; }
         // A real invalidation (a signal write reaching this component) beat the un-park drip to it — running now settles
         // the debt, so cancel the queue slot (the drain skips a cancelled entry without spending its budget).
         entry.QueuedReplay = false;
@@ -1370,6 +1371,11 @@ public sealed class TreeReconciler
                 state.ExitingKey = null;
                 state.ExitDeadlineAnimMs = 0; state.ExitStartTicks = 0;
                 _scene.Mark(entry.Root, NodeFlags.HitTestVisible);
+                // Mid-exit reclaim: the page was render-frozen (not parked) so the exit track could paint. Cancel the
+                // freeze with the same budgeted replay un-park uses — the deferred render (if any) lands once, now
+                // against the restored route, instead of dumping a whole page into this flush.
+                BeginUnparkReplayWindow();
+                SetSubtreeExitFrozen(entry.Root, frozen: false, budgetReplays: true);
             }
 
             if (entry.El.ElementTypeId == desired.ElementTypeId)
@@ -1406,11 +1412,14 @@ public sealed class TreeReconciler
         _scene.Unmark(entry.Root, NodeFlags.HitTestVisible);
         Anim!.CancelAll(entry.Root);
         Anim.SeedExit(entry.Root, spec.Exit, spec);
+        // Freeze component renders for the outgoing snapshot: the page stays attached (exit tracks keep ticking;
+        // UseActivation does not fire — park still owns that) but must not rebuild against the incoming route.
+        SetSubtreeExitFrozen(entry.Root, frozen: true);
         state.ExitingKey = entry.Key;
-        // Mirror the orphan path's own hard deadline (ExitMaxAgeMs, below) on the ANIMATION-clock timebase, plus the
-        // wall-clock start for FinalizeKeepAliveTransitions' secondary guard: HasTracks is index-only and matches ANY
-        // row on the root (including a Parked one the scheduler never advances), so a parked/wedged exit must not be
-        // able to pin ExitingKey — and the outgoing page in the ZStack overlay — forever.
+        // Belt-and-braces after exit-freeze: the freeze is what keeps the outgoing page a snapshot. These deadlines
+        // still catch a wedged exit track that never settles (HasTracks is index-only and matches ANY row on the
+        // root, including a Parked one the scheduler never advances) so ExitingKey — and the ZStack overlay — cannot
+        // pin forever. Mirror of the orphan path's ExitMaxAgeMs + AppHost.OrphanSettleTimeoutMs.
         state.ExitDeadlineAnimMs = _scene.AnimClockMs + ExitMaxAgeMs(spec);
         state.ExitStartTicks = Stopwatch.GetTimestamp();
     }
@@ -1581,11 +1590,16 @@ public sealed class TreeReconciler
         // A cached page can be parked halfway through a card-refit/reveal. Navigation-owned activation must land those
         // finite geometry rows before un-parking; looping/opacity/brush tracks remain paused/resumable as authored.
         if (!parked && snapStructural) Anim?.SnapStructuralToLayout(node);
+        // WhileHover Offset/Rotation shares TranslateX with FLIP. A Fold cover parked mid-fan (or snapped to
+        // identity on activation) stays at the origin until the next hover retargets it — the "hover puts the
+        // covers back" Browse→Charts→Back bug. Land the authored rest on both edges; pointer state is gone.
+        Anim?.SnapAuthoredPose(node);
         if (parked) _scene.Mark(node, NodeFlags.Parked); else _scene.Unmark(node, NodeFlags.Parked);
         OnNodeParkedChanged?.Invoke(node, parked);
         if (_comps.TryGetValue(node, out var entry))
         {
             entry.Parked = parked;
+            if (parked) entry.ExitFrozen = false;   // park subsumes freeze; DeferredRender debt carries
             if (entry.ActiveSig is { } sig) sig.Value = !parked;   // value-gated; flips the UseIsActive memo → UseActivation
             // Re-parked before its queued replay ran: cancel the queue slot and hand the debt back to DeferredRender, so
             // the NEXT un-park owns it (a parked component must never be scheduled by the drip).
@@ -1599,6 +1613,35 @@ public sealed class TreeReconciler
         }
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
             SetSubtreeParked(c, parked, snapStructural, budgetReplays);
+    }
+
+    // Render-freeze an attached KeepAlive page for the duration of its exit. Orthogonal to Parked: no NodeFlags.Parked
+    // (the AnimScheduler must keep ticking the exit), no ActiveSig flip (UseActivation stays a park/un-park event),
+    // no Detach (the outgoing root stays in the ZStack overlay). Scope is component render-effects only — node-level
+    // property binds still fire so the exit can paint. Un-freeze replays DeferredRender the same way un-park does.
+    private void SetSubtreeExitFrozen(NodeHandle node, bool frozen, bool budgetReplays = false)
+    {
+        if (!_scene.IsLive(node)) return;
+        if (_comps.TryGetValue(node, out var entry))
+        {
+            if (frozen)
+            {
+                entry.ExitFrozen = true;
+                if (entry.QueuedReplay) { entry.QueuedReplay = false; entry.DeferredRender = true; }
+            }
+            else if (entry.ExitFrozen)
+            {
+                entry.ExitFrozen = false;
+                if (entry.DeferredRender && !entry.Parked)
+                {
+                    entry.DeferredRender = false;
+                    if (!budgetReplays || TakeReplayBudget()) entry.Effect?.Schedule();
+                    else { entry.QueuedReplay = true; _replayQueue.Enqueue(entry); }
+                }
+            }
+        }
+        for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
+            SetSubtreeExitFrozen(c, frozen, budgetReplays);
     }
 
     // The per-frame replay allowance, epoch-keyed exactly like the steady realize budget (the host bumps FrameEpoch once
@@ -2047,9 +2090,9 @@ public sealed class TreeReconciler
     private static string ScrollCacheKey(string? scope, string key)
         => scope is { Length: > 0 } ? scope + "" + key : key;
 
-    /// <summary>scroll-v3 §3.2 (Reconciler.cs:1921 row): post a Restore command — latched by the kernel until the
-    /// real content extent can hold it (retried each Reclamp), replacing the old direct Offset/Target + RestoreX/Y +
-    /// RestorePending latch this method used to seed by hand.</summary>
+    /// <summary>scroll-v3 §3.2: post a Restore command — a goal, not a one-shot. The kernel clamps-and-applies
+    /// best-effort each Reclamp and stays latched until the content extent can hold the saved offset (or the retry
+    /// deadline fires). User/programmatic input cancels the latch.</summary>
     private void SeedRestore(NodeHandle node, float x, float y)
         => _scene.ScrollPort?.Post(FluentGpu.Scroll.ScrollInput.Restore((int)node.Raw.Index, x, y));
 

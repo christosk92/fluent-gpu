@@ -21,6 +21,7 @@ internal sealed class FakeVideoEngine : IVideoEngine
     public int InitializeResult;
     public int InitializeCalls, PlayCalls, PauseCalls, DisposeCalls, RepaintCalls;
     public double LastSeek = double.NaN, LastRate = 1, LastVolume = 1;
+    public bool LastSeekApproximate;
     public bool LastMuted, LastLoop = true;
     public int StreamW, StreamH;
 
@@ -48,7 +49,7 @@ internal sealed class FakeVideoEngine : IVideoEngine
     public void RepaintCurrentFrame() => RepaintCalls++;
     public void Play() => PlayCalls++;
     public void Pause() => PauseCalls++;
-    public void SeekTo(double seconds) => LastSeek = seconds;
+    public void SeekTo(double seconds, bool approximate = false) { LastSeek = seconds; LastSeekApproximate = approximate; }
     public void SetPlaybackRate(double rate) => LastRate = rate;
     public void SetVolume(double volume) => LastVolume = volume;
     public void SetMuted(bool muted) => LastMuted = muted;

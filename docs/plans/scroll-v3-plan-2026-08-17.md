@@ -75,7 +75,7 @@ public sealed class ScrollCommandPort {           // fixed ring (1024), zero-all
     public int Pending { get; } }
 public struct ScrollBody { /* POD: Offset[2], Band[2], BandVel, Velocity, Target, Zoom, Activity, Flags, Frame (ScrollFrameSpec copy),
     ChainParent, LastAbsorbed, DragAnchor, contact history 5×(t,x), ImpulseEstimator, Driven params (halflife/zeta/omega/settleVel),
-    RestoreX/Y + RestorePending, EdgeHitPending, Parked, LeaseSeq */ }
+    RestoreX/Y + RestorePending + RestoreRetries, EdgeHitPending, Parked, LeaseSeq */ }
 public sealed class ScrollKernel {
     public ScrollKernel(IScrollSink sink, in ScrollFeel feel, int initialCapacity = 64);
     public ScrollCommandPort Port { get; }
@@ -122,7 +122,7 @@ public readonly record struct ScrollFeel(...) { public static readonly ScrollFee
 | `FlexLayout.cs:741-763` restore/re-clamp/transform | direct Offset + transform | `SetFrame(node, spec)` only; transform written by `Reclamp()`→sink; restore latch kernel-owned |
 | `FlexLayout.cs:888-899` variable re-pin | Offset + `RecordAnchorShift` + raw transform | `AnchorShift(node, pinned − offset)` then `SetFrame`; keep `AnchorIndex/PrevArranged*`; delete :899 transform |
 | `FlexLayout.cs:1031` measured re-pin | same | same |
-| `Reconciler.cs:1921` `SeedRestore` | Offset+Restore* | `Restore(node, x, y)` (applied verbatim while geometry unknown; retried each Reclamp) |
+| `Reconciler.cs:1921` `SeedRestore` | Offset+Restore* | `Restore(node, x, y)` — a goal: clamp-and-apply each Reclamp until extent holds the offset (or RestoreMaxRetries=180); user/programmatic input cancels |
 | `Reconciler.cs:1960` ScrollKey reset | Offset=0 | `ScrollTo(node, 0, Immediate)` + `Cancel` |
 | `Controls/LazyGrid.cs:345` PreserveColumnAnchor | raw Offset+Translation | `AnchorShift(vp, target − offset)`; guard reads `UserScrollActive` result column |
 | `Controls/ItemsView.cs:1088` ScrollByDelta (drag-edge autoscroll) | Offset+transform+VirtualRangeDirty | `SetVelocity(vp, dipPerS)` near the edge, `SetVelocity(vp, 0)` on leave |

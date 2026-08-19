@@ -90,6 +90,9 @@ public struct ScrollBody
 
     public float RestoreX, RestoreY;
     public bool RestorePending;
+    /// <summary>How many Reclamp attempts have applied a still-short restore. Resolve when the extent can hold
+    /// the saved offset, or when this hits <see cref="ScrollKernel.RestoreMaxRetries"/>.</summary>
+    public byte RestoreRetries;
 
     /// <summary>Set when a Ballistic step this tick landed past the clamp against LAST frame's geometry — resolved
     /// in <see cref="ScrollKernel.Reclamp"/> once fresh geometry is known (plan §2.2 "hole 1").</summary>

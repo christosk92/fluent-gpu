@@ -210,10 +210,14 @@ contracts owned elsewhere:
   `Animation/{AnimEngine,ScrollAnimator}.cs`, `Foundation/NodeFlags.cs`.
 - **Transition-aware retained pages.** `KeepAliveOptions.TransitionFor(oldToken, newToken)` may return a
   `LayoutTransition`. The boundary becomes an overlay during the swap: the old root stops hit testing immediately and
-  runs its finite exit while the new/reactivated root enters. Once the root track settles, the reconciler uses the normal
+  runs its finite exit while the new/reactivated root enters. Component render-effects on the outgoing subtree are
+  **exit-frozen** for that interval (orthogonal to park: the exit track still ticks, `UseActivation` does not fire, the
+  root stays attached) so the page cannot rebuild against the incoming route mid-fade; a mid-exit reclaim un-freezes
+  with the same budgeted replay un-park uses. Once the root track settles, the reconciler uses the normal
   park/resource-release path rather than unmounting it. Each boundary permits one outgoing root; a rapid navigation
   parks the older outgoing root before starting the next transition, and revisiting an exiting key cancels its exit and
-  reuses the retained subtree. Reduced motion bypasses the overlap and parks immediately.
+  reuses the retained subtree. Reduced motion bypasses the overlap and parks immediately. The 2s wall-clock exit
+  backstop is belt-and-braces after freeze, not the snapshot mechanism.
 
 ---
 

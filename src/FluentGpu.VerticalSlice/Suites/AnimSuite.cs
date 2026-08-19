@@ -3819,6 +3819,42 @@ static class AnimSuite
             }
             finally { Motion.ReducedMotion = prev; }
         }
+
+        // gate.anim.while.snapRestoresAuthoredPose — KeepAlive un-park runs SnapStructuralToLayout (FLIP TranslateX
+        // shares the channel with Offset/WhileHover). Cancelling those rows used to reset LocalTransform to identity,
+        // stacking Fold covers at the card origin until the next hover retargeted them. Snap must land the AUTHORED
+        // rest, not 0, and SnapAuthoredPose must drop a leftover hover fan the same way.
+        {
+            var scene = new SceneStore();
+            var engine = new AnimEngine(scene);
+            var recon = new TreeReconciler(scene, strings) { Anim = engine };
+            recon.ReconcileRoot(new BoxEl
+            {
+                Width = 40, Height = 40,
+                Rotation = -11f, OffsetX = 100f, OffsetY = 38f,
+                WhileHover = new MotionTarget { Rotation = -5f, OffsetX = -10f, OffsetY = 6f },
+                Transition = MotionTok.ControlFaster,
+            }, null);
+            var node = scene.Root;
+
+            engine.ApplyInteractionEdge(node, AnimEngine.InteractKind.Hover, true);
+            for (int i = 0; i < 12 && engine.HasActive; i++) engine.Tick(16f);
+            float txFan = scene.Paint(node).LocalTransform.Dx;
+            bool wasFan = Near(txFan, 90f, 0.25f);
+
+            engine.SnapStructuralToLayout(node);
+            float txAfterFlipSnap = scene.Paint(node).LocalTransform.Dx;
+            bool flipKeptRest = Near(txAfterFlipSnap, 100f, 0.25f) || Near(txAfterFlipSnap, 90f, 0.25f);
+
+            engine.SnapAuthoredPose(node);
+            float rotRest = RotOf(scene.Paint(node).LocalTransform);
+            float txRest = scene.Paint(node).LocalTransform.Dx;
+            float tyRest = scene.Paint(node).LocalTransform.Dy;
+            bool atRest = Near(rotRest, -11f, 0.25f) && Near(txRest, 100f, 0.25f) && Near(tyRest, 38f, 0.25f);
+
+            Check("gate.anim.while.snapRestoresAuthoredPose", wasFan && flipKeptRest && atRest,
+                $"wasFan={wasFan} txFan={txFan:0.0} flipTx={txAfterFlipSnap:0.0} rest rot={rotRest:0.0} tx={txRest:0.0} ty={tyRest:0.0}");
+        }
     }
 
     static void RotationCurrentValueChecks(StringTable strings)

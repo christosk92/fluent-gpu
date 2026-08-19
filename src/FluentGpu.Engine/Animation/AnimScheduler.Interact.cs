@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using FluentGpu.Foundation;
+using FluentGpu.Scene;
 
 namespace FluentGpu.Animation;
 
@@ -73,5 +74,44 @@ public sealed partial class AnimEngine
             t.IsHovered && t.Hover is { } h ? h :
             new MotionTarget();                          // identity DELTA ⇒ animate back to the AUTHORED pose
         SeedTargetOver(node, in t.Rest, in delta, in t.Motion);
+    }
+
+    /// <summary>Cancel While* transform tracks and land the node on its authored rest pose immediately. KeepAlive
+    /// park/un-park uses this so a cached page does not present a leftover hover fan — and so
+    /// <see cref="SnapStructuralToLayout"/> cannot leave Fold covers at identity (FLIP TranslateX shares the channel
+    /// with Offset/WhileHover; hover then looks like it "fixes" the stack because it retargets from 0 to rest+delta).
+    /// Pointer state is cleared: the parked subtree is not under the cursor.</summary>
+    public void SnapAuthoredPose(NodeHandle node)
+    {
+        int idx = (int)node.Raw.Index;
+        if (!_interactTargets.TryGetValue(idx, out var t)) return;
+        t.IsHovered = false; t.IsPressed = false; t.IsFocused = false;
+        _interactTargets[idx] = t;
+
+        Cancel(node, AnimChannel.TranslateX);
+        Cancel(node, AnimChannel.TranslateY);
+        Cancel(node, AnimChannel.ScaleX);
+        Cancel(node, AnimChannel.ScaleY);
+        Cancel(node, AnimChannel.Rotation);
+
+        if (!_scene.IsLive(node)) return;
+        ref NodePaint p = ref _scene.Paint(node);
+        p.LocalTransform = ComposeRest(in t.Rest);
+        _scene.Mark(node, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+    }
+
+    /// <summary>Whether a structural-looking Translate/Scale row is actually the While* gesture channel, not a FLIP
+    /// projection. <see cref="SnapStructuralToLayout"/> must not treat those as FLIP leftovers — freeing them and
+    /// resetting <c>LocalTransform</c> to identity parks authored Offset at the origin until the next hover.</summary>
+    private bool IsGestureOwnedTransform(int nodeIndex, AnimChannel ch)
+        => (ch is AnimChannel.TranslateX or AnimChannel.TranslateY or AnimChannel.ScaleX or AnimChannel.ScaleY)
+           && _interactTargets.ContainsKey(nodeIndex);
+
+    static Affine2D ComposeRest(in MotionTarget rest)
+    {
+        var tf = Affine2D.Translation(rest.OffsetX, rest.OffsetY);
+        if (rest.Rotation != 0f) tf = tf.Multiply(Affine2D.Rotation(rest.Rotation * (MathF.PI / 180f)));
+        if (rest.Scale != 1f) tf = tf.Multiply(Affine2D.Scale(rest.Scale, rest.Scale));
+        return tf;
     }
 }

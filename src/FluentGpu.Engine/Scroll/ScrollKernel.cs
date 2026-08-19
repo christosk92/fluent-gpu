@@ -12,6 +12,9 @@ public sealed class ScrollKernel
     /// <summary>A contact sample farther than this from the frame clock is stamped in a foreign clock domain (a
     /// scripted or replayed stream): the resample then evaluates relative to the newest sample (see Tick).</summary>
     private const double ForeignClockToleranceSec = 0.5;
+    /// <summary>Restore is a goal: clamp-and-apply every Reclamp until the extent can hold the saved offset, or
+    /// this many retries elapse (~3s at 60 Hz). User/programmatic input cancels sooner.</summary>
+    public const byte RestoreMaxRetries = 180;
     private readonly IScrollSink _sink;
     private readonly ScrollFeel _feel;
 
@@ -333,6 +336,7 @@ public sealed class ScrollKernel
         b.TargetRaw = b.Target;   // the request is dead — never let it resurrect when the content next grows
         b.EdgeHitPending = false;
         b.Awake = false;
+        CancelRestore(ref b);
         MarkTouched(idx);
     }
 
@@ -348,6 +352,7 @@ public sealed class ScrollKernel
         b.Activity = ScrollActivity.Idle;
         b.Flags = ScrollActivityFlags.None;
         b.TargetRaw = b.Target;   // dragging the thumb wins over any pending programmatic request
+        CancelRestore(ref b);
         MarkTouched(idx);
     }
 
@@ -358,6 +363,7 @@ public sealed class ScrollKernel
         bool wasPending = b.RestorePending;
         b.RestoreX = cmd.A; b.RestoreY = cmd.B;
         b.RestorePending = true;
+        b.RestoreRetries = 0;
         if (!wasPending) _restorePendingCount++;
         if (TryApplyRestore(ref b)) _restorePendingCount--;
         MarkTouched(idx);
@@ -385,8 +391,25 @@ public sealed class ScrollKernel
         float zoom = b.Zoom > 0f ? b.Zoom : 1f;
         float maxOff = MathF.Max(0f, b.Frame.ExtentMain * zoom - b.Frame.ViewportMain);
         SetOffsetMain(ref b, Math.Clamp(value, 0f, maxOff));
+        // Goal, not event: land immediately at the best-effort clamp, but stay latched while the saved offset is
+        // still past the current extent (content is still growing). Resolve when the extent can hold it, or when
+        // the retry deadline fires so a permanently-short page cannot latch forever.
+        if (maxOff >= value - 0.5f || b.RestoreRetries >= RestoreMaxRetries)
+        {
+            b.RestorePending = false;
+            b.RestoreRetries = 0;
+            return true;
+        }
+        if (b.RestoreRetries < byte.MaxValue) b.RestoreRetries++;
+        return false;
+    }
+
+    private void CancelRestore(ref ScrollBody b)
+    {
+        if (!b.RestorePending) return;
         b.RestorePending = false;
-        return true;
+        b.RestoreRetries = 0;
+        _restorePendingCount--;
     }
 
     private void ApplyAnchorShift(in ScrollInput cmd)
@@ -438,6 +461,7 @@ public sealed class ScrollKernel
         b.BandVelMain = 0f;
         b.LastAbsorbed = -1;
         b.EdgeHitPending = false;
+        CancelRestore(ref b);
         MarkActive(idx);
         MarkTouched(idx);
     }
@@ -656,6 +680,7 @@ public sealed class ScrollKernel
         float baseTarget = sameFlavourLive ? b.Target : b.PositionMain;
         b.Target = Math.Clamp(baseTarget + cmd.A, 0f, maxOff);
         b.TargetRaw = b.Target;   // a wheel notch supersedes any pending programmatic request
+        CancelRestore(ref b);
         if (!sameFlavourLive) { b.Velocity = 0f; b.Awake = false; }
         b.Activity = ScrollActivity.Driven;
         b.Flags = (b.Flags & ~(ScrollActivityFlags.Programmatic | ScrollActivityFlags.Autoscroll | ScrollActivityFlags.Bouncing)) | ScrollActivityFlags.Wheel;
@@ -687,6 +712,7 @@ public sealed class ScrollKernel
         // will be a few frames from here (a Reflow drawer mid-animation, a list that measures late), and without this
         // the truncated Target would be the permanent destination — ApplySetFrame re-derives from TargetRaw instead.
         b.TargetRaw = target;
+        CancelRestore(ref b);
         target = Math.Clamp(target, 0f, maxOff);
 
         if (immediate)

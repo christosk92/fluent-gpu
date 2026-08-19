@@ -43,6 +43,7 @@ static class NavSuite
         KeepAliveWedgedExitBackstopChecks(strings);
         SemanticZoomNavigationChecks(strings);
         ParkBeforeRenderChecks(strings);
+        FreezeOnExitChecks(strings);
         UnparkReplayBudgetChecks(strings);
         NavRouterChecks(strings);
         GalleryChecks(strings);
@@ -291,18 +292,16 @@ static class NavSuite
         // Wedge: freeze A's exit rows mid-flight — the same SetNodeParked idiom 50a5 uses to plant a frozen row. PASS1/
         // PASS2 skip Parked rows, so HasTracks(aRoot) never goes false on its own from here.
         host.Animation.SetNodeParked(aRoot, true);
-        Console.Error.WriteLine($"[dbg] after park: tracks={host.Animation.HasTracks(aRoot)}");
+        // Parking A quiesces HasActive on the exit tracks, so the host would idle-skip (AnimClockMs stops). Seed a
+        // 0-alloc dummy on B so frames — and the anim-clock deadline — keep advancing without a component re-render.
+        host.Animation.SeedEased(probe.RootB, AnimChannel.ScaleX, 1f, 1.01f, 4000f, Easing.Linear);
 
-        for (int i = 0; i < 15; i++)
-        {
-            host.RunFrame();
-            Console.Error.WriteLine($"[dbg] i={i} tracks={host.Animation.HasTracks(aRoot)} Z={(host.Scene.Flags(boundary) & NodeFlags.ZStack) != 0} parentNull={host.Scene.Parent(aRoot).IsNull}");
-        }   // ~240ms of anim-clock — under the ~350ms (250+0+100) deadline
+        for (int i = 0; i < 15; i++) host.RunFrame();   // ~240ms of anim-clock — under the ~350ms (250+0+100) deadline
         bool stillHeldBeforeDeadline = (host.Scene.Flags(boundary) & NodeFlags.ZStack) != 0
                                         && !host.Scene.Parent(aRoot).IsNull;
 
         bool anyAlloc = false;
-        for (int i = 0; i < 10; i++)                    // past the deadline — must force-finish, and stay alloc-clean
+        for (int i = 0; i < 20; i++)                    // past the deadline — must force-finish, and stay alloc-clean
         {
             var stats = host.RunFrame();
             if (stats.HotPhaseAllocBytes != 0) anyAlloc = true;
@@ -461,6 +460,69 @@ static class NavSuite
         string trace = string.Join(",", log.Entries.Skip(before));
         return (!staleRender && boundaryLed && incomingRendered,
             $"trace={trace} stale={staleRender} boundaryLed={boundaryLed} incoming={incomingRendered}");
+    }
+
+    // gate.reconciler.freeze-on-exit — BeginKeepAliveExit render-freezes the outgoing page (orthogonal to park).
+    // The page stays attached so the exit track paints; component renders do not run against the incoming route
+    // or against unrelated signal writes mid-exit; UseActivation does not fire at freeze (only at park/un-park);
+    // a mid-exit reclaim replays exactly one deferred render.
+    static void FreezeOnExitChecks(StringTable strings)
+    {
+        var scene = new SceneStore();
+        var anim = new AnimEngine(scene);
+        var recon = new TreeReconciler(scene, strings) { Anim = anim };
+        var route = new Signal<string>("a");
+        var bump = new Signal<int>(0);
+        var log = new ParkOrderLog();
+        var act = new FreezeExitActivation();
+
+        recon.ReconcileRoot(
+            Flow.KeepAlive(
+                () => route.Value,
+                k => k,
+                k => Embed.Comp(() => new FreezeExitPage(k, route, bump, log, act)),
+                new KeepAliveOptions(MaxEntries: 2,
+                    TransitionFor: static (_, _) => MotionRecipes.PageSlideForward)),
+            null);
+
+        int afterMount = log.Entries.Count;
+        int onA0 = act.On.GetValueOrDefault("a");
+        int offA0 = act.Off.GetValueOrDefault("a");
+
+        route.Value = "b";
+        recon.Runtime.Flush();
+
+        bool staleRender = false, incomingRendered = false;
+        int outgoingRenders = 0;
+        for (int i = afterMount; i < log.Entries.Count; i++)
+        {
+            string e = log.Entries[i];
+            if (e == "a@b") staleRender = true;
+            if (e == "b@b") incomingRendered = true;
+            if (e.StartsWith("a@", StringComparison.Ordinal)) outgoingRenders++;
+        }
+        bool freezeNoActivation = act.On.GetValueOrDefault("a") == onA0 && act.Off.GetValueOrDefault("a") == offA0;
+
+        int beforeBump = log.Entries.Count;
+        bump.Value++;
+        recon.Runtime.Flush();
+        bool bumpRenderedOutgoing = false;
+        for (int i = beforeBump; i < log.Entries.Count; i++)
+            if (log.Entries[i].StartsWith("a@", StringComparison.Ordinal)) bumpRenderedOutgoing = true;
+
+        int beforeReclaim = log.Entries.Count;
+        route.Value = "a";
+        recon.Runtime.Flush();
+        int reclaimRenders = 0;
+        for (int i = beforeReclaim; i < log.Entries.Count; i++)
+            if (log.Entries[i].StartsWith("a@", StringComparison.Ordinal)) reclaimRenders++;
+
+        bool activationUnchanged = act.On.GetValueOrDefault("a") == onA0 && act.Off.GetValueOrDefault("a") == offA0;
+
+        Check("gate.reconciler.freeze-on-exit an exit-Active KeepAlive swap freeze-renders the outgoing page: no render against the incoming route or mid-exit unrelated writes; reclaim replays exactly one deferred render; UseActivation fires on park/un-park only",
+            !staleRender && incomingRendered && outgoingRenders == 0 && !bumpRenderedOutgoing
+            && freezeNoActivation && reclaimRenders == 1 && activationUnchanged,
+            $"stale={staleRender} incoming={incomingRendered} outRenders={outgoingRenders} bumpOut={bumpRenderedOutgoing} freezeAct={freezeNoActivation} reclaim={reclaimRenders} onA={act.On.GetValueOrDefault("a")} offA={act.Off.GetValueOrDefault("a")}");
     }
 
     // gate.reconciler.unpark-replay-budget — the un-park replay is BUDGETED, not dumped into one flush.

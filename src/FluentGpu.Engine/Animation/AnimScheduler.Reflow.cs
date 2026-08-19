@@ -216,8 +216,10 @@ public sealed partial class AnimEngine
     /// size/reflow row settle-restores FIRST (declared LayoutInput back — usually NaN — plus PresentedW/H → NaN, the
     /// Relayouting flag cleared, child-shift zeroed) so SizeMode.Relayout leaves no li.Width/Height poisoned with a
     /// stale PresentedW; the FLIP position/scale rows drop and the composited transform resets to identity so no stale
-    /// translate/scale survives to draw the node at slot+staleOffset. Interaction/brush/opacity/blur rows are left
-    /// running. Zero-alloc POD-slab walk (no LINQ/enumerator); the caller runs it BEFORE layout so bounds land clean.</summary>
+    /// translate/scale survives to draw the node at slot+staleOffset. Gesture-owned Translate/Scale (WhileHover Offset
+    /// on a Fold cover) are skipped — those are the authored rest pose, not a FLIP leftover; wiping them to identity
+    /// stacked covers at the origin until the next hover. Interaction/brush/opacity/blur rows are left running.
+    /// Zero-alloc POD-slab walk (no LINQ/enumerator); the caller runs it BEFORE layout so bounds land clean.</summary>
     public void SnapStructuralToLayout(NodeHandle node)
     {
         int idx = (int)node.Raw.Index;
@@ -230,7 +232,7 @@ public sealed partial class AnimEngine
         {
             int next = _slab.At(s).NextOnNode;   // read the link BEFORE FreeSlot unlinks the row
             AnimChannel ch = _slab.At(s).Channel;
-            if (IsStructuralChannel(ch))
+            if (IsStructuralChannel(ch) && !IsGestureOwnedTransform(idx, ch))
             {
                 // Ghost-band damage (Fix 1): the FIRST structural row we're about to cancel means this node was drawing
                 // at a translated/reveal-inflated extent LAST frame. Snapshot that last-presented rect NOW — before the

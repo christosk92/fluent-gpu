@@ -1,6 +1,7 @@
 using System;
 using System.Buffers;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -2597,6 +2598,126 @@ static class OverlaySuite
 
             Check("e4popup.7d a Parked KeepAlive owner closes its targeted overlay",
                 opened && closing && gone, $"opened={opened} closing={closing} gone={gone}");
+        }
+
+        // gate.overlay.anchor-death-close — BeginKeepAliveExit fires OnSubtreeDeactivated at exit start; an overlay
+        // whose node-anchor lives under that root BeginCloses the same frame (no wait for AfterAnimations prune).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("overlay-anchor-death", new Size2(360, 240), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var probe = new OverlayKeepAliveDeathProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, probe);
+            host.RunFrame();
+            var svc = (OverlayServiceImpl)probe.Service!;
+            svc.Open(() => probe.PageA, () => Text("death-tip"), FlyoutPlacement.BottomLeft,
+                new PopupOptions(FocusTrap: false, DismissBehavior: DismissBehavior.None, Chrome: PopupChrome.Raw));
+            for (int i = 0; i < 8; i++) host.RunFrame();
+            bool opened = svc.Entries.Count == 1 && svc.Entries[0].Phase != OverlayPhase.Closing
+                && !FindTextNode(host.Scene, strings, host.Scene.Root, "death-tip").IsNull;
+
+            probe.Route!.Value = "b";
+            host.RunFrame();   // BeginKeepAliveExit → OnSubtreeDeactivated → BeginClose (phase only; no OverlayHost re-render required)
+            bool closingSameFrame = svc.Entries.Count == 1 && svc.Entries[0].Phase == OverlayPhase.Closing;
+            for (int i = 0; i < 20; i++) host.RunFrame();
+            bool gone = svc.Entries.Count == 0 && FindTextNode(host.Scene, strings, host.Scene.Root, "death-tip").IsNull;
+
+            Check("gate.overlay.anchor-death-close a KeepAlive exit closes overlays anchored under the outgoing page the same frame",
+                opened && closingSameFrame && gone,
+                $"opened={opened} closingSameFrame={closingSameFrame} gone={gone}");
+        }
+
+        // gate.overlay.dead-anchor-no-origin-walk — a rect thunk that degrades to default must not re-place at origin.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("overlay-origin-walk", new Size2(360, 240), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new OverlayProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var svc = (OverlayServiceImpl)root.Service!;
+            RectF live = new(80f, 80f, 40f, 24f);
+            svc.OpenAt(() => live, () => Text("walk-tip"), FlyoutPlacement.BottomLeft,
+                new PopupOptions(FocusTrap: false, DismissBehavior: DismissBehavior.None, Chrome: PopupChrome.Raw));
+            for (int i = 0; i < 8; i++) host.RunFrame();
+            var tip = FindTextNode(host.Scene, strings, host.Scene.Root, "walk-tip");
+            bool opened = !tip.IsNull;
+            RectF placed = opened ? host.Scene.AbsoluteRect(tip) : default;
+            bool offOrigin = placed.Y > 40f;
+
+            live = default;   // dead-anchor thunk (ToolTip's generation-dead AbsoluteRect)
+            host.RunFrame();
+            var mid = FindTextNode(host.Scene, strings, host.Scene.Root, "walk-tip");
+            RectF midRect = mid.IsNull ? default : host.Scene.AbsoluteRect(mid);
+            bool notOriginWalk = mid.IsNull
+                || (midRect.Y > 40f && MathF.Abs(midRect.Y - placed.Y) < 2f);
+            bool closing = svc.Entries.Count == 0
+                || (svc.Entries.Count == 1 && svc.Entries[0].Phase == OverlayPhase.Closing);
+
+            Check("gate.overlay.dead-anchor-no-origin-walk a default rect thunk does not re-place the bubble at the origin",
+                opened && offOrigin && notOriginWalk && closing,
+                $"opened={opened} offOrigin={offOrigin} notWalk={notOriginWalk} closing={closing} "
+                + $"placed=({placed.X:0.#},{placed.Y:0.#}) mid=({midRect.X:0.#},{midRect.Y:0.#})");
+        }
+
+        // gate.overlay.closing-deadline — a wedged close fade force-finalizes past 2000ms wall even while HasTracks.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("overlay-close-deadline", new Size2(360, 240), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new OverlayProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var svc = (OverlayServiceImpl)root.Service!;
+            svc.Open(() => root.Anchor, () => Text("wedge-tip"), FlyoutPlacement.BottomLeft,
+                new PopupOptions(FocusTrap: false, DismissBehavior: DismissBehavior.None, Chrome: PopupChrome.Raw));
+            for (int i = 0; i < 8; i++) host.RunFrame();
+            bool opened = svc.Entries.Count == 1;
+            svc.BeginClose(svc.Entries[0], OverlayCloseCause.Programmatic);
+            host.RunFrame();
+            bool closing = opened && svc.Entries.Count == 1 && svc.Entries[0].Phase == OverlayPhase.Closing;
+            var surface = svc.Entries[0].SurfaceNode;
+            host.Animation.SetNodeParked(surface, true);   // HasTracks stays true
+            svc.Entries[0].CloseStartTicks = Stopwatch.GetTimestamp() - (long)(3.0 * Stopwatch.Frequency);
+            host.RunFrame();
+            bool forceFinished = svc.Entries.Count == 0;
+
+            Check("gate.overlay.closing-deadline a wedged close fade force-finalizes past the 2000ms wall",
+                opened && closing && forceFinished,
+                $"opened={opened} closing={closing} forceFinished={forceFinished}");
+        }
+
+        // gate.overlay.latch-hole — a non-null generation-dead owner is prunable even if never observed live.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("overlay-latch-hole", new Size2(360, 240), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new OverlayProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var svc = (OverlayServiceImpl)root.Service!;
+            var dead = new NodeHandle(new Handle(999, 1));
+            svc.Open(() => dead, () => Text("latch-tip"), FlyoutPlacement.Top,
+                new PopupOptions(FocusTrap: false, DismissBehavior: DismissBehavior.None, Chrome: PopupChrome.Raw));
+            host.RunFrame();   // AfterAnimations prune: generation-dead, OwnerWasLive still false
+            bool closedOrClosing = svc.Entries.Count == 0
+                || (svc.Entries.Count == 1 && svc.Entries[0].Phase == OverlayPhase.Closing);
+            var tip = FindTextNode(host.Scene, strings, host.Scene.Root, "latch-tip");
+            bool noOriginGhost = tip.IsNull || host.Scene.AbsoluteRect(tip).Y > -8f; // not parked above the title bar
+            for (int i = 0; i < 20; i++) host.RunFrame();
+            bool gone = svc.Entries.Count == 0;
+
+            Check("gate.overlay.latch-hole a never-live generation-dead owner is pruned (no immortal origin ghost)",
+                closedOrClosing && gone,
+                $"closedOrClosing={closedOrClosing} gone={gone} noOriginGhost={noOriginGhost} tipNull={tip.IsNull}");
         }
 
         // e4popup.8 — focus restores to the pre-open node when the close STARTS, not when the fade finishes: WinUI

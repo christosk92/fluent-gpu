@@ -3194,6 +3194,7 @@ sealed class KeepAliveWedgeProbe : Component
 {
     public Signal<string>? Route;
     public NodeHandle RootA;
+    public NodeHandle RootB;
 
     public override Element Render()
     {
@@ -3216,7 +3217,7 @@ sealed class KeepAliveWedgePage : Component
     public override Element Render() => new BoxEl
     {
         Width = 120f, Height = 60f,
-        OnRealized = n => { if (_key == "a") _owner.RootA = n; },
+        OnRealized = n => { if (_key == "a") _owner.RootA = n; else _owner.RootB = n; },
         Children = [Text("wedge-" + _key)],
     };
 }
@@ -3243,6 +3244,38 @@ sealed class ParkOrderPage : Component
         string seen = _route.Value;   // subscribe the SAME signal the boundary routes on — the whole point of the gate
         _log.Entries.Add(_key + "@" + seen);
         return new BoxEl { Width = 60f, Height = 24f, Children = [Text("page-" + _key)] };
+    }
+}
+
+// gate.reconciler.freeze-on-exit — clone of ParkOrderPage plus an unrelated bump signal and UseActivation counters
+// so the freeze can be distinguished from park (activation must not fire until park/un-park).
+sealed class FreezeExitActivation
+{
+    public readonly Dictionary<string, int> On = new();
+    public readonly Dictionary<string, int> Off = new();
+}
+
+sealed class FreezeExitPage : Component
+{
+    readonly string _key;
+    readonly Signal<string> _route;
+    readonly Signal<int> _bump;
+    readonly ParkOrderLog _log;
+    readonly FreezeExitActivation _act;
+    public FreezeExitPage(string key, Signal<string> route, Signal<int> bump, ParkOrderLog log, FreezeExitActivation act)
+    {
+        _key = key; _route = route; _bump = bump; _log = log; _act = act;
+    }
+
+    public override Element Render()
+    {
+        UseActivation(
+            onActivated:   () => { _act.On.TryGetValue(_key, out int n);  _act.On[_key] = n + 1; },
+            onDeactivated: () => { _act.Off.TryGetValue(_key, out int n); _act.Off[_key] = n + 1; });
+        string seen = _route.Value;
+        _ = _bump.Value;
+        _log.Entries.Add(_key + "@" + seen);
+        return new BoxEl { Width = 60f, Height = 24f, Children = [Text("freeze-" + _key)] };
     }
 }
 
@@ -3807,6 +3840,46 @@ sealed class OverlayProbeInner : Component
             ],
         };
     }
+}
+
+// KeepAlive page swap + an overlay anchored on page A: BeginKeepAliveExit must close the overlay the frame the
+// swap starts (OnSubtreeDeactivated), so a tooltip cannot walk to the origin over the incoming page.
+sealed class OverlayKeepAliveDeathProbe : Component
+{
+    public IOverlayService? Service;
+    public Signal<string>? Route;
+    public NodeHandle PageA;
+    public override Element Render() => Embed.Comp(() => new OverlayHost { Child = Embed.Comp(() => new OverlayKeepAliveDeathInner(this)) });
+}
+
+sealed class OverlayKeepAliveDeathInner : Component
+{
+    readonly OverlayKeepAliveDeathProbe _p;
+    public OverlayKeepAliveDeathInner(OverlayKeepAliveDeathProbe p) => _p = p;
+    public override Element Render()
+    {
+        _p.Service = UseContext(Overlay.Service);
+        var route = UseSignal("a");
+        _p.Route = route;
+        return Flow.KeepAlive(
+            () => route.Value,
+            key => key,
+            key => Embed.Comp(() => new OverlayKeepAliveDeathPage(key, _p)),
+            new KeepAliveOptions(TransitionFor: static (_, _) => MotionRecipes.PageSlideForward));
+    }
+}
+
+sealed class OverlayKeepAliveDeathPage : Component
+{
+    readonly string _key;
+    readonly OverlayKeepAliveDeathProbe _owner;
+    public OverlayKeepAliveDeathPage(string key, OverlayKeepAliveDeathProbe owner) { _key = key; _owner = owner; }
+    public override Element Render() => new BoxEl
+    {
+        Width = 160f, Height = 80f,
+        OnRealized = n => { if (_key == "a") _owner.PageA = n; },
+        Children = [Text("page-" + _key)],
+    };
 }
 
 // ── G5g — MediaPlayerElement host probe: mounts the player under a REAL OverlayHost so its chrome can consult the

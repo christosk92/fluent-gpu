@@ -36,8 +36,9 @@ public static class FluentApp
     // next theme flip.
     private static bool s_mica, s_customFrame, s_micaAlt;
 
-    /// <summary>True when the window is using Mica <b>BaseAlt</b> (the flatter File-Explorer tint) rather than base Mica.
-    /// Seeded from <see cref="AppOptions.MicaAlt"/>; changed by <see cref="SetWindowMaterialAlt"/>.</summary>
+    /// <summary>True when the window is using Mica <b>BaseAlt</b> (a stronger tint of the desktop wallpaper than base
+    /// Mica) rather than base Mica. Seeded from <see cref="AppOptions.MicaAlt"/>; changed by
+    /// <see cref="SetWindowMaterialAlt"/>.</summary>
     public static bool WindowMaterialAlt => s_micaAlt;
 
     /// <summary>Switch the LIVE window between Mica BaseAlt (<paramref name="micaAlt"/> true) and base Mica — the

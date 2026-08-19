@@ -16,7 +16,7 @@ public static partial class Win32Theme
     // DWM_SYSTEMBACKDROP_TYPE
     private const int DWMSBT_MAINWINDOW = 2;   // Mica (WinUI MicaKind.Base)
     private const int DWMSBT_TRANSIENTWINDOW = 3; // Acrylic
-    private const int DWMSBT_TABBEDWINDOW = 4; // Mica Alt (WinUI MicaKind.BaseAlt — the flatter, neutral File-Explorer tint)
+    private const int DWMSBT_TABBEDWINDOW = 4; // Mica Alt (WinUI MicaKind.BaseAlt — a STRONGER desktop-wallpaper tint)
     private const int DWMWCP_ROUND = 2;
     private const int DWMWCP_DONOTROUND = 1;   // square window: the engine/composition draws the rounded chrome, not DWM
 
@@ -107,8 +107,10 @@ public static partial class Win32Theme
     /// the client (a -1 sheet-of-glass composites its OWN min/max/close — the "double caption buttons" bug; even a 1px
     /// sliver draws a DWM strip and re-anchors the Win11 snap flyout off the extended frame). The Mica backdrop fills
     /// the whole window from DWMWA_SYSTEMBACKDROP_TYPE alone — no frame extension needed.</summary>
-    /// <param name="micaAlt">true = Mica <b>BaseAlt</b> (DWMSBT_TABBEDWINDOW, the flatter File-Explorer tint, matching
-    /// WaveeMusic's <c>MicaBackdrop Kind="BaseAlt"</c>); false = Mica Base (DWMSBT_MAINWINDOW). Ignored when mica is false.</param>
+    /// <param name="micaAlt">true = Mica <b>BaseAlt</b> (DWMSBT_TABBEDWINDOW) — Microsoft's documented STRONGER tint of
+    /// the desktop wallpaper, the "tabbed window" kind; false = Mica Base (DWMSBT_MAINWINDOW), the neutral "main window"
+    /// backdrop. Not a cosmetic pair: on a strongly coloured wallpaper Alt reads as saturated chrome where Base stays
+    /// near-neutral. Ignored when mica is false.</param>
     public static void ApplyWindowMaterial(nint hwnd, bool dark, bool mica = true, bool customFrame = false, bool micaAlt = false)
     {
         int d = dark ? 1 : 0;

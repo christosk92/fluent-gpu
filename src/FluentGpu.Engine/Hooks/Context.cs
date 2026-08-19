@@ -314,6 +314,7 @@ public sealed class InputHooks
     public Func<bool>? HideTouchKeyboard;
 
     private readonly List<(object Owner, Action Action)> _afterAnimations = new();
+    private readonly List<(object Owner, Action<NodeHandle> Action)> _subtreeDeactivated = new();
 
     /// <summary>
     /// Host phase 7 hook: after <c>AnimEngine.Tick</c>, before record/present. Tree-level systems with retained
@@ -336,6 +337,29 @@ public sealed class InputHooks
     {
         for (int i = 0; i < _afterAnimations.Count; i++)
             _afterAnimations[i].Action();
+    }
+
+    /// <summary>
+    /// Sibling of <see cref="SetAfterAnimations"/>: the host fires this synchronously when a retained subtree is
+    /// deactivated (KeepAlive exit start, park, eviction). OverlayHost uses it to close entries whose anchor lives
+    /// under that root — a dead-anchor tooltip must not wait for AfterAnimations prune.
+    /// </summary>
+    public void SetSubtreeDeactivatedListener(object owner, Action<NodeHandle>? action)
+    {
+        for (int i = 0; i < _subtreeDeactivated.Count; i++)
+        {
+            if (!ReferenceEquals(_subtreeDeactivated[i].Owner, owner)) continue;
+            if (action is null) _subtreeDeactivated.RemoveAt(i);
+            else _subtreeDeactivated[i] = (owner, action);
+            return;
+        }
+        if (action is not null) _subtreeDeactivated.Add((owner, action));
+    }
+
+    public void RunSubtreeDeactivated(NodeHandle root)
+    {
+        for (int i = 0; i < _subtreeDeactivated.Count; i++)
+            _subtreeDeactivated[i].Action(root);
     }
 
     public static readonly Context<InputHooks> Current = new(new InputHooks());

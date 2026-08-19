@@ -23,6 +23,9 @@ static class ScrollKernelSuite
         WheelAccumulateHardStopCheck();
         ProgrammaticGlideRetargetCheck();
         RestoreLatchUntilExtentCheck();
+        RestoreGoalExtentGrowsCheck();
+        RestoreCancelOnInputCheck();
+        RestoreDeadlineCheck();
         AnchorShiftUnderDragCheck();
         EdgePendingResolvesOnGrowCheck();
         UndersampledFlickCheck();
@@ -444,6 +447,65 @@ static class ScrollKernelSuite
         bool landed = MathF.Abs(afterGeometry.PositionMain - 250f) < 0.01f;
         Check("gate.kernel.restore-latch-until-extent", latched && landed,
             $"beforeGeometry={beforeGeometry.PositionMain} afterGeometry={afterGeometry.PositionMain}");
+    }
+
+    // ── gate.kernel.restore-goal-extent-grows ─────────────────────────────────────────────────────────────────
+
+    private static void RestoreGoalExtentGrowsCheck()
+    {
+        var sink = new RecordingSink();
+        var k = new ScrollKernel(sink, ScrollFeel.Shipping);
+        k.Port.Post(ScrollInput.Bind(1));
+        k.Port.Post(ScrollInput.Restore(1, 0f, 500f));
+        k.Port.Post(ScrollInput.SetFrame(1, Frame(200f, 100f))); // maxOff=100 — short of 500
+        k.Reclamp();
+        k.TryGetBody(1, out var shortExtent);
+        bool bestEffort = MathF.Abs(shortExtent.PositionMain - 100f) < 0.01f && shortExtent.RestorePending;
+
+        k.Port.Post(ScrollInput.SetFrame(1, Frame(2000f, 100f))); // maxOff=1900 — holds 500
+        k.Reclamp();
+        k.TryGetBody(1, out var grown);
+        bool resolved = MathF.Abs(grown.PositionMain - 500f) < 0.01f && !grown.RestorePending;
+        Check("gate.kernel.restore-goal-extent-grows", bestEffort && resolved,
+            $"short={shortExtent.PositionMain} pending={shortExtent.RestorePending} grown={grown.PositionMain} grownPending={grown.RestorePending}");
+    }
+
+    // ── gate.kernel.restore-cancel-on-input ───────────────────────────────────────────────────────────────────
+
+    private static void RestoreCancelOnInputCheck()
+    {
+        var sink = new RecordingSink();
+        var k = new ScrollKernel(sink, ScrollFeel.Shipping);
+        k.Port.Post(ScrollInput.Bind(1));
+        k.Port.Post(ScrollInput.Restore(1, 0f, 500f));
+        k.Port.Post(ScrollInput.SetFrame(1, Frame(200f, 100f)));
+        k.Reclamp();
+        k.TryGetBody(1, out var latched);
+        bool wasPending = latched.RestorePending;
+
+        k.Port.Post(ScrollInput.ContactBegin(1, 0.0, 0f));
+        k.Tick(ClockAt(0.008));
+        k.TryGetBody(1, out var afterBegin);
+        bool cancelled = wasPending && !afterBegin.RestorePending;
+        Check("gate.kernel.restore-cancel-on-input", cancelled,
+            $"wasPending={wasPending} afterBeginPending={afterBegin.RestorePending}");
+    }
+
+    // ── gate.kernel.restore-deadline ──────────────────────────────────────────────────────────────────────────
+
+    private static void RestoreDeadlineCheck()
+    {
+        var sink = new RecordingSink();
+        var k = new ScrollKernel(sink, ScrollFeel.Shipping);
+        k.Port.Post(ScrollInput.Bind(1));
+        k.Port.Post(ScrollInput.Restore(1, 0f, 5000f));
+        k.Port.Post(ScrollInput.SetFrame(1, Frame(200f, 100f))); // maxOff=100 forever
+        k.Reclamp();
+        for (int i = 0; i < ScrollKernel.RestoreMaxRetries; i++) k.Reclamp();
+        k.TryGetBody(1, out var after);
+        bool resolved = !after.RestorePending && MathF.Abs(after.PositionMain - 100f) < 0.01f;
+        Check("gate.kernel.restore-deadline", resolved,
+            $"pending={after.RestorePending} pos={after.PositionMain} retries={after.RestoreRetries}");
     }
 
     // ── gate.kernel.anchor-shift-under-drag ───────────────────────────────────────────────────────────────────
