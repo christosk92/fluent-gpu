@@ -273,8 +273,11 @@
     <Compile Include="..\Wavee\Features\Player\..\..\Design\StageArm.cs" />
     <!-- the pure surface-placement state machine (System only; moves to FluentGpu.Engine/Surfaces/ with SurfaceHost) — PlacementCoreTests -->
     <Compile Include="..\Wavee\App\PlacementCore.cs" Link="PlacementCore.cs" />
+    <Compile Include="..\Wavee\App\VideoAspectPersistence.cs" Link="VideoAspectPersistence.cs" />
     <!-- the pure "no mid-track auto-swap" rule over that machine (System only) — PlacementCoreTests' deferred-upgrade section -->
     <Compile Include="..\Wavee\App\VideoUpgradeGate.cs" Link="VideoUpgradeGate.cs" />
+    <!-- the pure rail<->docked-video coupling rules + the RailMode enum they're keyed on (System only) — RailVideoCouplingTests -->
+    <Compile Include="..\Wavee\App\RailVideoCoupling.cs" Link="RailVideoCoupling.cs" />
     <!-- pure media host-swap decision rules (System + the PlayableKind enum only) — MediaSwitchLogicTests -->
     <Compile Include="..\Wavee\App\MediaSwitchLogic.cs" Link="MediaSwitchLogic.cs" />
     <Compile Include="..\Wavee\App\LyricsSyncGate.cs" Link="LyricsSyncGate.cs" />

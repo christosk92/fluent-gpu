@@ -59,6 +59,12 @@ public sealed class MediaPlayerElement : Component
         Enter: new EnterExit(Sx: 0.96f, Sy: 0.96f, Opacity: 0f, Active: true),
         Exit: new EnterExit(Sx: 0.98f, Sy: 0.98f, Opacity: 0f, Active: true),
         ExitDynamics: TransitionDynamics.Tween(140f, Easing.EaseInOut));
+    private static readonly ContextMenuOptions MoreMenuOptions = new()
+    {
+        MinWidth = MenuFlyout.ThemeMinWidth,
+        PointerPlacement = FlyoutPlacement.BottomEdgeAlignedLeft,
+        KeyboardPlacement = FlyoutPlacement.TopEdgeAlignedRight,
+    };
 
     /// <summary>The player this element presents (headless contract; the MF backend drives real video).</summary>
     public required IMediaPlayer Player { get; init; }
@@ -76,11 +82,17 @@ public sealed class MediaPlayerElement : Component
     /// small decorative slot that same floor turns the composited rect into a capsule that overflows its container.</summary>
     public bool IsDecorative { get; init; }
 
-    /// <summary>The UI-side corner shape of the frame and the video stage. Fullscreen is square; decoration follows
-    /// <see cref="CornerRadius"/> so the UI clip agrees with the compositor clip (a decorative surface's shape IS the
-    /// caller's shape); everything else keeps the standard overlay radius.</summary>
+    /// <summary>The UI-side corner shape of the frame and the video stage. Fullscreen is square. An explicitly-set
+    /// <see cref="CornerRadius"/> (&gt; 0) drives the frame regardless of <see cref="IsDecorative"/> — E2: a
+    /// non-decorative (operable) player asked for e.g. <c>CornerRadius = Radii.Card</c> previously got a UI frame at
+    /// the hard-coded <see cref="Radii.OverlayAll"/> while the DComp child underneath was already told
+    /// <see cref="CornerRadius"/> via <see cref="VideoSurfaceRegistry.SetCornerRadius"/> (<see cref="PumpNow"/>
+    /// ~:516-517) — the UI clip and the compositor clip disagreed. <see cref="CornerRadius"/> == 0 keeps BOTH
+    /// pre-existing defaults unchanged: decoration still follows its own (square-by-default) shape (a decorative
+    /// surface's shape IS the caller's shape), and everything else still keeps the standard overlay radius.</summary>
     private CornerRadius4 FrameCorners =>
         IsFullscreenPresentation ? default
+        : CornerRadius > 0f ? CornerRadius4.All(CornerRadius)
         : IsDecorative ? CornerRadius4.All(CornerRadius)
         : Radii.OverlayAll;
     /// <summary>Show the transport controls. Never crashes across OS versions (there is no OS control). Default true.</summary>
@@ -110,6 +122,20 @@ public sealed class MediaPlayerElement : Component
     public Element? PosterContent { get; init; }
     /// <summary>Bring-your-own transport (still reads the same bound player). Null → the default FluentGpu transport.</summary>
     public Element? TransportOverride { get; init; }
+    /// <summary>When set, F11 and the transport's fullscreen button DELEGATE instead of opening this element's own
+    /// overlay — the host app owns where fullscreen lives. Unset keeps the standalone behaviour verbatim.</summary>
+    public Action? FullscreenRequested { get; init; }
+    /// <summary>Rows the HOST app contributes to the transport's More (⋯) menu. They render FIRST — above the element's own
+    /// rows, with a separator between — because a host's commands are more specific than the element's generic playback
+    /// settings, and on a small surface "where should this video live" is the likeliest reason to open the menu at all.
+    ///
+    /// <para>A <see cref="Func{T}"/> and not a list, deliberately: these rows are STATE-DEPENDENT (which option is
+    /// radio-checked, which is disabled and why) and init props FREEZE AT MOUNT, so a frozen list would show a stale
+    /// checkmark for the lifetime of the element — the same trap <c>SplitButton</c>'s ChecksReuse tripwire exists to catch.
+    /// Invoked once per menu open, so it always reflects live state.</para>
+    ///
+    /// <para>The element never interprets these rows; it only renders them. It stays host-agnostic.</para></summary>
+    public Func<IReadOnlyList<MenuFlyoutItem>>? MoreMenuItems { get; init; }
 
     /// <summary>Controlled fullscreen state (auto-materialized when absent).</summary>
     internal Signal<bool>? FullscreenState { get; init; }
@@ -168,7 +194,6 @@ public sealed class MediaPlayerElement : Component
         var areaRef = UseRef<NodeHandle>(default);
         var holeRef = UseRef<NodeHandle>(default);
         var playerRoot = UseRef<NodeHandle>(default);
-        var moreAnchor = UseRef<NodeHandle>(default);
         var ccAnchor = UseRef<NodeHandle>(default);
         var qualityAnchor = UseRef<NodeHandle>(default);
         var rateAnchor = UseRef<NodeHandle>(default);
@@ -268,6 +293,7 @@ public sealed class MediaPlayerElement : Component
         void ToggleFullscreen()
         {
             if (IsFullscreenPresentation) { ExitFullscreen?.Invoke(); return; }
+            if (FullscreenRequested is { } request) { request(); return; }
             if (fullscreen.Peek()) { LeaveFullscreen(); return; }
             fullscreen.Value = true;
             hooks?.WindowSetFullscreen?.Invoke(true);
@@ -400,8 +426,8 @@ public sealed class MediaPlayerElement : Component
                 Justify = FlexJustify.End,
                 HitTestPassThrough = true,
                 Animate = ChromeMotion,
-                Children = [TransportOverride ?? BuildTransport(area.W, aspect, customAspect, SetAspect, ToggleFullscreen,
-                    moreAnchor, ccAnchor, qualityAnchor, rateAnchor, overlayService)],
+                Children = [TransportOverride ?? BuildTransport(area.W, ToggleFullscreen,
+                    ccAnchor, qualityAnchor, rateAnchor, overlayService)],
             });
 
         void HandleKey(KeyEventArgs e)
@@ -424,7 +450,7 @@ public sealed class MediaPlayerElement : Component
             }
         }
 
-        return new BoxEl
+        var frame = new BoxEl
         {
             ZStack = true,
             Grow = 1f,
@@ -440,6 +466,15 @@ public sealed class MediaPlayerElement : Component
             OnFocusChanged = focused => { if (focused) RevealAndRearm(); },
             Children = layers.ToArray(),
         };
+        // One menu, every gesture. The context-request event supplies the LIVE source/owner node, so the More button
+        // never depends on an OnRealized handle that can go stale across a transport re-render (the origin-flyout bug).
+        // Pointer/hold opens at the requested point; ClickRequestsContext/Menu-key anchors to the invoking node rect.
+        // Decorative clips are not operable players and deliberately expose no playback menu.
+        return IsDecorative
+            ? frame
+            : frame.WithContextMenu(overlayService,
+                () => new ContextMenuModel(BuildMoreMenuItems(aspectSig, customAspectSig, SetAspect, ToggleFullscreen)),
+                MoreMenuOptions);
     }
 
     /// <summary>The engine-invoked on-demand video pump (registered at mount; see <see cref="VideoPump"/>). Reads the
@@ -523,13 +558,26 @@ public sealed class MediaPlayerElement : Component
     ///
     /// The UI gets this for free from the scissor stack; a composited video visual does not, because it lives outside
     /// the UI back buffer entirely. Walking the parent chain is cheap — it runs once per coalesced pump, and the chain
-    /// is a handful of nodes deep.</summary>
+    /// is a handful of nodes deep.
+    ///
+    /// E1: a <see cref="SizeMode.Reveal"/> ancestor animates <c>NodePaint.PresentedW</c>/<c>PresentedH</c>
+    /// (<c>Columns.cs:110-113</c>) while <see cref="SceneStore.AbsoluteRect"/> keeps returning the node's FINAL
+    /// laid-out bounds (<c>SceneStore.cs:1809-1824</c> never reads Presented*). Left alone, a revealing clipping
+    /// ancestor narrows (or widens) what the UI actually paints/clips while this walk kept intersecting against the
+    /// final rect — so the pumped video viewport disagreed with the visible clip and the composited frame spilled
+    /// outside it. Mirror the exact sentinel the recorder itself uses at the same site
+    /// (<c>SceneRecorder.cs:1185-1186</c>, also <c>SceneStore.cs:516-517</c>): not-NaN means a Reveal row is live and
+    /// its presented value wins.</summary>
     private static RectF ClipToAncestors(SceneStore scene, NodeHandle node, RectF rect)
     {
         for (NodeHandle p = scene.Parent(node); !p.IsNull && scene.IsLive(p); p = scene.Parent(p))
         {
             if ((scene.Flags(p) & NodeFlags.ClipsToBounds) == 0) continue;
             RectF c = scene.AbsoluteRect(p);
+            ref NodePaint pp = ref scene.Paint(p);
+            float cw = float.IsNaN(pp.PresentedW) ? c.W : pp.PresentedW;
+            float ch = float.IsNaN(pp.PresentedH) ? c.H : pp.PresentedH;
+            c = new RectF(c.X, c.Y, cw, ch);
             float x0 = MathF.Max(rect.X, c.X), y0 = MathF.Max(rect.Y, c.Y);
             float x1 = MathF.Min(rect.X + rect.W, c.X + c.W), y1 = MathF.Min(rect.Y + rect.H, c.Y + c.H);
             rect = new RectF(x0, y0, MathF.Max(0f, x1 - x0), MathF.Max(0f, y1 - y0));
@@ -540,8 +588,7 @@ public sealed class MediaPlayerElement : Component
 
     // ── default transport (pure FluentGpu: play/pause, scrub Slider, GPU time text, mute) ────────────────────────────
 
-    private Element BuildTransport(float areaWidth, VideoAspectMode aspect, double customAspect,
-        Action<VideoAspectMode, double> setAspect, Action toggleFullscreen, Ref<NodeHandle> moreAnchor,
+    private Element BuildTransport(float areaWidth, Action toggleFullscreen,
         Ref<NodeHandle> ccAnchor, Ref<NodeHandle> qualityAnchor, Ref<NodeHandle> rateAnchor,
         IOverlayService overlayService)
     {
@@ -590,7 +637,9 @@ public sealed class MediaPlayerElement : Component
         if (!compact && (commands & MediaCommandFlags.Rate) != 0)
             controls.Add(TextButton(MediaStrings.RateLabel(rate), () => OpenPicker(rateAnchor, SpeedItems()))
                 with { OnRealized = h => rateAnchor.Value = h });
-        controls.Add(IconButton(Icons.More, OpenMore) with { OnRealized = h => moreAnchor.Value = h });
+        // The button raises the SAME context request as right-click / long-press / Menu-key. ContextMenu.Attach reads
+        // args.Source at invoke time, so placement follows this live button without a captured realization handle.
+        controls.Add(IconButton(Icons.More, static () => { }) with { OnClick = null, ClickRequestsContext = true });
         controls.Add(IconButton(IsFullscreenPresentation ? Icons.BackToWindow : Icons.FullScreen, toggleFullscreen));
 
         return new BoxEl
@@ -610,8 +659,11 @@ public sealed class MediaPlayerElement : Component
 
         void OpenPicker(Ref<NodeHandle> anchor, System.Collections.Generic.List<MenuFlyoutItem> items)
         {
+            var node = anchor.Value;
+            var scene = Context.Scene;
+            if (node.IsNull || scene is null || !scene.IsLive(node)) return;
             OverlayHandle? m = null;
-            m = overlayService.Open(() => anchor.Value,
+            m = overlayService.Open(() => node,
                 () => MenuFlyout.Build(items, () => m?.Close()), FlyoutPlacement.TopEdgeAlignedRight,
                 new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss) { ConstrainToRootBounds = false });
             // PopupOptions.PinsAnchor defaults true → the open flyout PINS the player's auto-hide scope; the chrome's
@@ -646,17 +698,106 @@ public sealed class MediaPlayerElement : Component
             return items;
         }
 
+        System.Collections.Generic.List<MenuFlyoutItem> SpeedItems() =>
+        [
+            Speed(0.5), Speed(0.75), Speed(1), Speed(1.25), Speed(1.5), Speed(2),
+        ];
+
+        MenuFlyoutItem Speed(double value) => MenuFlyoutItem.RadioItem(MediaStrings.RateLabel((float)value), Math.Abs(rate - value) < 0.01,
+            () => Player.SetRate(value));
+
+    }
+
+    /// <summary>Build the complete More/context menu against LIVE state. This is invoked once per open by
+    /// <see cref="ContextMenu.Attach"/>; no render-time snapshot or mount-frozen host row can stale its radio marks.</summary>
+    private System.Collections.Generic.List<MenuFlyoutItem> BuildMoreMenuItems(
+        Signal<VideoAspectMode> aspectSignal, Signal<double> customAspectSignal,
+        Action<VideoAspectMode, double> setAspect, Action toggleFullscreen)
+    {
+        VideoAspectMode aspect = aspectSignal.Peek();
+        double customAspect = customAspectSignal.Peek();
+        MediaCommandFlags commands = Player.Commands.Available.Peek();
+        MediaTrack? text = Player.Tracks.SelectedText.Peek();
+        QualitySelection quality = Player.Qualities.Selected.Peek();
+        float rate = Player.Rate.Peek();
+
+        var items = new System.Collections.Generic.List<MenuFlyoutItem>(12);
+        IReadOnlyList<MenuFlyoutItem>? hostItems = MoreMenuItems?.Invoke();
+        if (hostItems is { Count: > 0 })
+        {
+            for (int i = 0; i < hostItems.Count; i++) items.Add(hostItems[i]);
+            items.Add(MenuFlyoutItem.Separator);
+        }
+        items.Add(MenuFlyoutItem.SubMenu(MediaStrings.AspectRatio,
+        [
+            MenuFlyoutItem.RadioItem(MediaStrings.AspectFit, aspect == VideoAspectMode.Uniform, () => setAspect(VideoAspectMode.Uniform, 0)),
+            MenuFlyoutItem.RadioItem(MediaStrings.AspectCrop, aspect == VideoAspectMode.UniformToFill, () => setAspect(VideoAspectMode.UniformToFill, 0)),
+            MenuFlyoutItem.RadioItem(MediaStrings.AspectStretch, aspect == VideoAspectMode.Fill, () => setAspect(VideoAspectMode.Fill, 0)),
+            MenuFlyoutItem.RadioItem(MediaStrings.AspectNative, aspect == VideoAspectMode.Native, () => setAspect(VideoAspectMode.Native, 0)),
+            MenuFlyoutItem.Separator,
+            MenuFlyoutItem.RadioItem(MediaStrings.Ratio169, aspect == VideoAspectMode.Custom && Near(customAspect, 16.0 / 9.0), () => setAspect(VideoAspectMode.Custom, 16.0 / 9.0)),
+            MenuFlyoutItem.RadioItem(MediaStrings.Ratio43, aspect == VideoAspectMode.Custom && Near(customAspect, 4.0 / 3.0), () => setAspect(VideoAspectMode.Custom, 4.0 / 3.0)),
+            MenuFlyoutItem.RadioItem(MediaStrings.Ratio219, aspect == VideoAspectMode.Custom && Near(customAspect, 21.0 / 9.0), () => setAspect(VideoAspectMode.Custom, 21.0 / 9.0)),
+            MenuFlyoutItem.RadioItem(MediaStrings.Ratio239, aspect == VideoAspectMode.Custom && Near(customAspect, 2.39), () => setAspect(VideoAspectMode.Custom, 2.39)),
+        ], Icons.Movie));
+        if ((commands & MediaCommandFlags.Rate) != 0)
+            items.Add(MenuFlyoutItem.SubMenu(MediaStrings.PlaybackSpeed, SpeedItems()));
+        if ((commands & MediaCommandFlags.SelectVideoQuality) != 0 && Player.Qualities.Variants.Count > 0)
+            items.Add(MenuFlyoutItem.SubMenu(MediaStrings.Quality, QualityItems()));
+        if ((commands & MediaCommandFlags.SelectAudioTrack) != 0 && Player.Tracks.Audio.Count > 1)
+            items.Add(MenuFlyoutItem.SubMenu(MediaStrings.AudioTrack, AudioItems()));
+        if ((commands & MediaCommandFlags.SelectTextTrack) != 0 && Player.Tracks.Text.Count > 0)
+            items.Add(MenuFlyoutItem.SubMenu(MediaStrings.Captions, CaptionItems()));
+        if ((commands & MediaCommandFlags.Chapters) != 0)
+        {
+            items.Add(MenuFlyoutItem.Separator);
+            items.Add(new MenuFlyoutItem(MediaStrings.PreviousChapter, Icons.Previous, Invoke: () => _ = Player.PreviousChapterAsync()));
+            items.Add(new MenuFlyoutItem(MediaStrings.NextChapter, Icons.Next, Invoke: () => _ = Player.NextChapterAsync()));
+        }
+        items.Add(MenuFlyoutItem.Separator);
+        items.Add(new MenuFlyoutItem(IsFullscreenPresentation ? MediaStrings.ExitFullscreen : MediaStrings.Fullscreen,
+            IsFullscreenPresentation ? Icons.BackToWindow : Icons.FullScreen, Invoke: toggleFullscreen) { AcceleratorText = MediaStrings.F11 });
+        return items;
+
+        System.Collections.Generic.List<MenuFlyoutItem> CaptionItems()
+        {
+            var result = new System.Collections.Generic.List<MenuFlyoutItem>(Player.Tracks.Text.Count + 1)
+            { MenuFlyoutItem.RadioItem(MediaStrings.Off, text is null, () => _ = Player.SelectTrackAsync(null)) };
+            for (int i = 0; i < Player.Tracks.Text.Count; i++)
+            {
+                MediaTrack track = Player.Tracks.Text[i];
+                result.Add(MenuFlyoutItem.RadioItem(track.Label ?? track.Language ?? MediaStrings.CaptionsIndexed(i + 1), text?.Id == track.Id,
+                    () => _ = Player.SelectTrackAsync(track)));
+            }
+            return result;
+        }
+
+        System.Collections.Generic.List<MenuFlyoutItem> QualityItems()
+        {
+            var result = new System.Collections.Generic.List<MenuFlyoutItem>(Player.Qualities.Variants.Count + 1)
+            { MenuFlyoutItem.RadioItem(MediaStrings.Auto, quality.IsAuto, () => _ = Player.SelectQualityAsync(QualitySelection.Auto)) };
+            for (int i = 0; i < Player.Qualities.Variants.Count; i++)
+            {
+                QualityVariant variant = Player.Qualities.Variants[i];
+                string id = variant.Id;
+                string label = variant.Resolution.Height > 0 ? MediaStrings.QualityHeight(variant.Resolution.Height) : variant.Label ?? id;
+                result.Add(MenuFlyoutItem.RadioItem(label, !quality.IsAuto && quality.VariantId == id,
+                    () => _ = Player.SelectQualityAsync(QualitySelection.Pin(id))));
+            }
+            return result;
+        }
+
         System.Collections.Generic.List<MenuFlyoutItem> AudioItems()
         {
-            var items = new System.Collections.Generic.List<MenuFlyoutItem>(Player.Tracks.Audio.Count);
+            var result = new System.Collections.Generic.List<MenuFlyoutItem>(Player.Tracks.Audio.Count);
             MediaTrack? audio = Player.Tracks.SelectedAudio.Peek();
             for (int i = 0; i < Player.Tracks.Audio.Count; i++)
             {
                 MediaTrack track = Player.Tracks.Audio[i];
-                items.Add(MenuFlyoutItem.RadioItem(track.Label ?? track.Language ?? MediaStrings.AudioIndexed(i + 1), audio?.Id == track.Id,
+                result.Add(MenuFlyoutItem.RadioItem(track.Label ?? track.Language ?? MediaStrings.AudioIndexed(i + 1), audio?.Id == track.Id,
                     () => _ = Player.SelectTrackAsync(track)));
             }
-            return items;
+            return result;
         }
 
         System.Collections.Generic.List<MenuFlyoutItem> SpeedItems() =>
@@ -666,42 +807,6 @@ public sealed class MediaPlayerElement : Component
 
         MenuFlyoutItem Speed(double value) => MenuFlyoutItem.RadioItem(MediaStrings.RateLabel((float)value), Math.Abs(rate - value) < 0.01,
             () => Player.SetRate(value));
-
-        void OpenMore()
-        {
-            var items = new System.Collections.Generic.List<MenuFlyoutItem>(12);
-            items.Add(MenuFlyoutItem.SubMenu(MediaStrings.AspectRatio,
-            [
-                MenuFlyoutItem.RadioItem(MediaStrings.AspectFit, aspect == VideoAspectMode.Uniform, () => setAspect(VideoAspectMode.Uniform, 0)),
-                MenuFlyoutItem.RadioItem(MediaStrings.AspectCrop, aspect == VideoAspectMode.UniformToFill, () => setAspect(VideoAspectMode.UniformToFill, 0)),
-                MenuFlyoutItem.RadioItem(MediaStrings.AspectStretch, aspect == VideoAspectMode.Fill, () => setAspect(VideoAspectMode.Fill, 0)),
-                MenuFlyoutItem.RadioItem(MediaStrings.AspectNative, aspect == VideoAspectMode.Native, () => setAspect(VideoAspectMode.Native, 0)),
-                MenuFlyoutItem.Separator,
-                MenuFlyoutItem.RadioItem(MediaStrings.Ratio169, aspect == VideoAspectMode.Custom && Near(customAspect, 16.0 / 9.0), () => setAspect(VideoAspectMode.Custom, 16.0 / 9.0)),
-                MenuFlyoutItem.RadioItem(MediaStrings.Ratio43, aspect == VideoAspectMode.Custom && Near(customAspect, 4.0 / 3.0), () => setAspect(VideoAspectMode.Custom, 4.0 / 3.0)),
-                MenuFlyoutItem.RadioItem(MediaStrings.Ratio219, aspect == VideoAspectMode.Custom && Near(customAspect, 21.0 / 9.0), () => setAspect(VideoAspectMode.Custom, 21.0 / 9.0)),
-                MenuFlyoutItem.RadioItem(MediaStrings.Ratio239, aspect == VideoAspectMode.Custom && Near(customAspect, 2.39), () => setAspect(VideoAspectMode.Custom, 2.39)),
-            ], Icons.Movie));
-            if ((commands & MediaCommandFlags.Rate) != 0)
-                items.Add(MenuFlyoutItem.SubMenu(MediaStrings.PlaybackSpeed, SpeedItems()));
-            if ((commands & MediaCommandFlags.SelectVideoQuality) != 0 && Player.Qualities.Variants.Count > 0)
-                items.Add(MenuFlyoutItem.SubMenu(MediaStrings.Quality, QualityItems()));
-            if ((commands & MediaCommandFlags.SelectAudioTrack) != 0 && Player.Tracks.Audio.Count > 1)
-                items.Add(MenuFlyoutItem.SubMenu(MediaStrings.AudioTrack, AudioItems()));
-            if ((commands & MediaCommandFlags.SelectTextTrack) != 0 && Player.Tracks.Text.Count > 0)
-                items.Add(MenuFlyoutItem.SubMenu(MediaStrings.Captions, CaptionItems()));
-            if ((commands & MediaCommandFlags.Chapters) != 0)
-            {
-                items.Add(MenuFlyoutItem.Separator);
-                items.Add(new MenuFlyoutItem(MediaStrings.PreviousChapter, Icons.Previous, Invoke: () => _ = Player.PreviousChapterAsync()));
-                items.Add(new MenuFlyoutItem(MediaStrings.NextChapter, Icons.Next, Invoke: () => _ = Player.NextChapterAsync()));
-            }
-            items.Add(MenuFlyoutItem.Separator);
-            items.Add(new MenuFlyoutItem(IsFullscreenPresentation ? MediaStrings.ExitFullscreen : MediaStrings.Fullscreen,
-                IsFullscreenPresentation ? Icons.BackToWindow : Icons.FullScreen, Invoke: toggleFullscreen) { AcceleratorText = MediaStrings.F11 });
-
-            OpenPicker(moreAnchor, items);
-        }
     }
 
     /// <summary>The <c>elapsed / total</c> time label as its OWN component. It bridges the ~per-frame position/duration

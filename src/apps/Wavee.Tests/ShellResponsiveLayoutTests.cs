@@ -127,4 +127,35 @@ public class ShellResponsiveLayoutTests
         Assert.Equal(460f, grownWidth);
         Assert.Equal(-460f, ShellResponsiveLayout.DrawerRestingTranslateX(open: false, grownWidth));
     }
+
+    [Fact]
+    public void RailWidth_ClampsToTheSharedBounds()
+    {
+        Assert.Equal(200f, ShellResponsiveLayout.RailMinW);
+        Assert.Equal(500f, ShellResponsiveLayout.RailMaxW);
+        Assert.Equal(340f, ShellResponsiveLayout.RailDefaultW);
+        Assert.Equal(200f, ShellResponsiveLayout.ClampRailWidth(180f));
+        Assert.Equal(500f, ShellResponsiveLayout.ClampRailWidth(600f));
+        Assert.Equal(340f, ShellResponsiveLayout.ClampRailWidth(340f));
+    }
+
+    [Fact]
+    public void DockedVideoHeight_FloorsAtSixteenByNineOfRailWidth()
+    {
+        Assert.Equal(191.25f, ShellResponsiveLayout.DockedVideoNaturalH(340f));
+        Assert.Equal(191.25f, ShellResponsiveLayout.ClampDockedVideoHeight(0f, 340f));
+        Assert.Equal(191.25f, ShellResponsiveLayout.ClampDockedVideoHeight(100f, 340f));
+        Assert.Equal(400f, ShellResponsiveLayout.ClampDockedVideoHeight(400f, 340f));
+        Assert.Equal(ShellResponsiveLayout.DockedVideoMaxH, ShellResponsiveLayout.ClampDockedVideoHeight(900f, 340f));
+        Assert.True(ShellResponsiveLayout.DockedVideoMaxH > ShellResponsiveLayout.DockedVideoNaturalH(ShellResponsiveLayout.RailDefaultW));
+    }
+
+    [Fact]
+    public void CanFitRail_UsesTheCallersRailWidth()
+    {
+        Assert.False(ShellResponsiveLayout.CanFitRail(1200f, 240f, railW: 500f));
+        Assert.True(ShellResponsiveLayout.CanFitRail(1200f, 240f, railW: 340f));
+        Assert.True(ShellResponsiveLayout.CanFitRail(1280f, 240f));
+        Assert.False(ShellResponsiveLayout.CanFitRail(1000f, 240f));
+    }
 }

@@ -6,6 +6,7 @@ using FluentGpu.Signals;
 using Wavee.Backend;
 using Wavee.Backend.Audio;
 using Wavee.Core;
+using VideoAspectMode = FluentGpu.Media.VideoAspectMode;
 
 namespace Wavee;
 
@@ -192,19 +193,88 @@ public sealed class PlaybackBridge
     /// </summary>
     public Signal<PlacementState> VideoSurface { get; } = new(PlacementState.Initial(PlacementPolicy.Video));
 
-    /// <summary>The settings store, wired at composition. Only the PREFERRED placement is persisted here — never whether
-    /// a video is running (a launch must not resume one) and never Fullscreen (a mode, not a home).</summary>
+    /// <summary>The global display policy shared by every video player mount (docked, floating, detached and
+    /// fullscreen). Unlike playback intent, this is a durable preference and is seeded before the first frame.</summary>
+    public Signal<VideoAspectMode> VideoAspectPolicy { get; } = new(VideoAspectMode.Uniform);
+    public Signal<double> VideoCustomAspectRatio { get; } = new(VideoAspectPersistence.DefaultCustomRatio);
+    VideoAspectPreference _persistedVideoAspect = VideoAspectPreference.Fit;
+    double _persistedVideoCustomAspect = VideoAspectPersistence.DefaultCustomRatio;
+
+    /// <summary>What THIS host can actually do for the video surface right now, as a placement bit-set — Docked (does
+    /// the rail fit?), Floating (always), Detached (can a second window/swapchain open?), Fullscreen (does the hook
+    /// exist?). Placement is already this class's business, and host/fit capability is an INPUT to placement (folded
+    /// into <see cref="VideoUpgradeGate.AvailabilityFor"/> alongside has-video), not chrome state that belongs on
+    /// <c>ShellUi</c>. Written from two places: <c>WaveeShell</c> keeps the <c>Docked</c> bit live next to its own
+    /// rail-fit test, and the composition root (<c>Services.cs</c>) seeds the <c>Detached</c>/<c>Fullscreen</c> bits
+    /// once from <c>InputHooks</c> at startup. Conservative until a writer reports otherwise: Docked+Floating on,
+    /// Detached+Fullscreen off — so an unwired host degrades to exactly today's Floating/Detached-only
+    /// behavior instead of offering a placement it cannot actually honor.</summary>
+    public Signal<PlacementSet> HostPlacementCapability { get; } =
+        new(PlacementSet.Docked | PlacementSet.Floating);
+
+    /// <summary>The settings store, wired at composition. The preferred placement and display aspect are persisted here —
+    /// never whether a video is running (a launch must not resume one) and never Fullscreen (a mode, not a home).</summary>
     public IAppSettings? Settings;
 
-    /// <summary>Seed the video surface from persisted settings. Call ONCE at composition, before the first frame, so the
-    /// remembered placement is already in place rather than popping in after the shell mounts.</summary>
+    /// <summary>Seed durable video preferences. Call ONCE at composition, before the first frame, so neither placement
+    /// nor aspect visibly changes after the shell mounts.</summary>
     public void SeedVideoSurfaceFromSettings(IAppSettings settings)
     {
         Settings = settings;
         var preferred = PlacementPersistence.LoadPlacement(settings.Get(WaveeSettings.VideoPreferredPlacement), PlacementPolicy.Video);
         var s = VideoSurface.Peek();
         if (s.Preferred != preferred) VideoSurface.Value = s with { Preferred = preferred };
+
+        _persistedVideoAspect = VideoAspectPersistence.LoadMode(settings.Get(WaveeSettings.VideoAspectMode));
+        _persistedVideoCustomAspect = VideoAspectPersistence.LoadRatio(settings.Get(WaveeSettings.VideoCustomAspectRatio));
+        VideoAspectPolicy.Value = ToVideoAspectMode(_persistedVideoAspect);
+        VideoCustomAspectRatio.Value = _persistedVideoCustomAspect;
     }
+
+    /// <summary>Commit the aspect choice made by any mounted player's built-in menu. The controlled element writes the
+    /// signals before notifying us, so persistence compares against the last STORED values rather than signal equality.</summary>
+    public void SetVideoAspect(VideoAspectMode mode, double customRatio)
+    {
+        mode = mode switch
+        {
+            VideoAspectMode.UniformToFill or VideoAspectMode.Fill or VideoAspectMode.Native or VideoAspectMode.Custom => mode,
+            _ => VideoAspectMode.Uniform,
+        };
+        customRatio = VideoAspectPersistence.LoadRatio(customRatio);
+        var storedMode = ToVideoAspectPreference(mode);
+
+        VideoAspectPolicy.Value = mode;
+        VideoCustomAspectRatio.Value = customRatio;
+        if (Settings is not { } settings) return;
+        if (storedMode != _persistedVideoAspect)
+        {
+            settings.Set(WaveeSettings.VideoAspectMode, VideoAspectPersistence.SaveMode(storedMode));
+            _persistedVideoAspect = storedMode;
+        }
+        if (customRatio != _persistedVideoCustomAspect)
+        {
+            settings.Set(WaveeSettings.VideoCustomAspectRatio, customRatio);
+            _persistedVideoCustomAspect = customRatio;
+        }
+    }
+
+    static VideoAspectMode ToVideoAspectMode(VideoAspectPreference mode) => mode switch
+    {
+        VideoAspectPreference.Crop => VideoAspectMode.UniformToFill,
+        VideoAspectPreference.Stretch => VideoAspectMode.Fill,
+        VideoAspectPreference.Native => VideoAspectMode.Native,
+        VideoAspectPreference.Custom => VideoAspectMode.Custom,
+        _ => VideoAspectMode.Uniform,
+    };
+
+    static VideoAspectPreference ToVideoAspectPreference(VideoAspectMode mode) => mode switch
+    {
+        VideoAspectMode.UniformToFill => VideoAspectPreference.Crop,
+        VideoAspectMode.Fill => VideoAspectPreference.Stretch,
+        VideoAspectMode.Native => VideoAspectPreference.Native,
+        VideoAspectMode.Custom => VideoAspectPreference.Custom,
+        _ => VideoAspectPreference.Fit,
+    };
 
     /// <summary>The placement that should be mounted right now, or <see cref="SurfacePlacement.None"/> for "nothing".
     /// This is the ONE thing every video surface gates on (each mounts iff it is the resolved placement) and the ONE
@@ -256,10 +326,13 @@ public sealed class PlaybackBridge
         return PlacementCore.ResolveWith(VideoSurface.Peek(), AvailabilityFor(hasVideo)) != SurfacePlacement.None;
     }
 
-    /// <summary>Content availability → the placement set. A track WITHOUT a video makes every placement unavailable, so
-    /// the surface hides and the media stays audio through the exact same path a host limitation would take. (Host
-    /// capability — "can a second window be opened at all?" — folds in here too once that seam exists.)</summary>
-    static PlacementSet AvailabilityFor(bool hasVideo) => VideoUpgradeGate.AvailabilityFor(hasVideo);
+    /// <summary>Content availability × host capability → the placement set — see
+    /// <see cref="VideoUpgradeGate.AvailabilityFor"/>. A track WITHOUT a video makes every placement unavailable, so
+    /// the surface hides and the media stays audio through the exact same path a host limitation would take.
+    /// <see cref="HostPlacementCapability"/> is read via <c>Peek()</c>: no caller of this method was ever subscribing
+    /// through the old static/pure form, so Peek introduces no new subscription for any of them (including
+    /// <see cref="ShouldPlayAsVideo"/>, which must stay Peek-only on the playback thread).</summary>
+    PlacementSet AvailabilityFor(bool hasVideo) => VideoUpgradeGate.AvailabilityFor(hasVideo, HostPlacementCapability.Peek());
 
     /// <summary>The two orthogonal flags a media-kind re-evaluation carries (see <see cref="RequestMediaKindRefresh"/>).</summary>
     public delegate void MediaKindRefreshRequest(bool forceReloadIfVideo, bool clearConnectAudioFirst);
@@ -331,13 +404,15 @@ public sealed class PlaybackBridge
     /// an association that lands mid-track updates the badge but deliberately leaves the surface (and therefore
     /// <c>Available</c>) alone — see <see cref="RecomputeHasVideo"/> — so a toggle read straight off the stale state
     /// would resolve to None and do nothing while the button sat lit.</summary>
-    PlacementState IntentBase() => VideoUpgradeGate.FoldAvailability(VideoSurface.Peek(), CurrentTrackHasVideo.Peek());
+    PlacementState IntentBase() => VideoUpgradeGate.FoldAvailability(
+        VideoSurface.Peek(), CurrentTrackHasVideo.Peek(), HostPlacementCapability.Peek());
 
     /// <summary>The PRIMARY video affordance, and it is symmetric: lit → off (from ANY placement), unlit → open at the
     /// user's preferred placement. Nothing else is needed to guarantee the toggle can always be turned off. After a
     /// deferred land it starts the video the badge is advertising — see <see cref="VideoUpgradeGate.PrimaryClick"/>.</summary>
     public void ToggleVideo() => CommitVideoSurface(
-        VideoUpgradeGate.PrimaryClick(VideoSurface.Peek(), CurrentTrackHasVideo.Peek()), clearConnectAudioFirst: true);
+        VideoUpgradeGate.PrimaryClick(VideoSurface.Peek(), CurrentTrackHasVideo.Peek(), HostPlacementCapability.Peek()),
+        clearConnectAudioFirst: true);
 
     /// <summary>Show the video at a specific placement (the surface picker). Also clears a per-track dismiss and adopts
     /// the target as the preferred home, so the primary button and the next track follow the user there.</summary>
@@ -370,6 +445,21 @@ public sealed class PlaybackBridge
     /// the song's own audio. STICKY — no subsequent track re-opens it. The preferred placement is remembered for the
     /// next time the user asks for video.</summary>
     public void TurnVideoOff() => CommitVideoSurface(PlacementCore.TurnOff(VideoSurface.Peek()), clearConnectAudioFirst: true);
+
+    /// <summary>Leave Fullscreen for wherever <see cref="PlacementState.ReturnTo"/> points (or the preferred home) —
+    /// Esc / F11 / the exit chrome. Matches <see cref="ShowVideoAt"/>'s shape: an explicit placement intent, so it
+    /// clears the per-track dismiss scope like every other explicit intent.</summary>
+    public void ExitVideoFullscreen() => CommitVideoSurface(
+        PlacementCore.ExitFullscreen(VideoSurface.Peek()), clearConnectAudioFirst: true);
+
+    /// <summary>Move the video surface WITHOUT changing <see cref="PlacementState.Preferred"/> — for an AMBIENT
+    /// change that takes the placement away but is not the user closing the feature (the rail closing while video is
+    /// docked). NEVER call this for a user-initiated close of the feature itself — that is <see cref="TurnVideoOff"/>
+    /// or <see cref="NotifyVideoSurfaceClosed"/>, both of which are sticky-off by design; this is the opposite:
+    /// watching continues, just somewhere cheaper, and the next time the condition is restored (the rail re-opens) it
+    /// re-docks.</summary>
+    public void DemoteVideoTo(SurfacePlacement to) => CommitVideoSurface(
+        PlacementCore.Demote(VideoSurface.Peek(), to), clearConnectAudioFirst: true);
 
     /// <summary>A surface reports that the USER closed it by its own chrome (the mini player's ✕, the pop-out's OS ✕ /
     /// Alt+F4). Closing an IN-APP surface turns video off globally and stickily — it used to be a per-song dismiss that

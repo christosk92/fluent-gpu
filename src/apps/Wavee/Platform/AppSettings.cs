@@ -106,6 +106,11 @@ static class WaveeSettings
     // older build with a different floor must never seed the layout raw.
     public static readonly SettingKey<float> DetailAlbumRailWidth = new("detail.rail.album.width", WaveeSize.RailAlbum);
     public static readonly SettingKey<float> DetailPlaylistRailWidth = new("detail.rail.playlist.width", WaveeSize.RailPlaylist);
+    // Shell right rail (lyrics / queue / now-playing). Seeded + clamped at WaveeShell; committed on splitter release.
+    public static readonly SettingKey<float> ShellRailWidth = new("shell.rail.width", ShellResponsiveLayout.RailDefaultW);
+    // Docked-video cap height in the right rail (Lyrics/Queue/Friends/Video). 0 = 16:9 of the live rail width (the
+    // splitter only grows from there). Seeded + clamped at WaveeShell; committed on the vertical splitter's release.
+    public static readonly SettingKey<float> ShellDockedVideoHeight = new("shell.rail.docked-video.height", 0f);
     // …and whether that rail is DRAGGED SHUT (the grip's force-push detent, WP-η). Separate from the width so re-opening
     // restores the width the user chose rather than a default. Collapse is a WIDE-layout (mode 0) preference only: the
     // responsive mid/narrow modes always compose their breakpoint rail, and the collapsed preference returns with the
@@ -138,6 +143,10 @@ static class WaveeSettings
     public static readonly SettingKey<string> VideoPreferredPlacement = new("video.placement", "");
     public static readonly SettingKey<string> VideoPipRect = new("video.pip.rect", "");        // window-DIP "x,y,w,h"
     public static readonly SettingKey<string> VideoWindowRect = new("video.window.rect", "");  // screen-px "x,y,w,h"
+    // One display policy for every track and presentation surface. Stable string names avoid coupling persisted data to
+    // VideoAspectMode's numeric order; the ratio is retained while another mode is active so returning to Custom restores it.
+    public static readonly SettingKey<string> VideoAspectMode = new("video.aspect.mode", "fit");
+    public static readonly SettingKey<double> VideoCustomAspectRatio = new("video.aspect.customRatio", VideoAspectPersistence.DefaultCustomRatio);
 
     /// <summary>Keep the detached video window above other windows. TRUE by default — staying visible while you work in
     /// another app is the whole point of popping the video out — but it is a preference, not a law: an always-on-top

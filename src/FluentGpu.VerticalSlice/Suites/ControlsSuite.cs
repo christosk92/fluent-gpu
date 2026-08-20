@@ -57,6 +57,7 @@ static class ControlsSuite
         WaveBInputChecks(strings);
         E5DragDropChecks(strings);
         SortableMathChecks();
+        SplitterMathChecks();
         SortableSurfaceChecks(strings);
         SortableCloseChecks(strings);
         VirtualDisclosureChecks(strings);
@@ -5563,6 +5564,43 @@ static class ControlsSuite
         }
     }
 
+    static void SplitterMathChecks()
+    {
+        const float min = 200f, max = 500f;
+        bool trailing = Near(SplitterMath.RawWidth(340f, 100f, 110f, SplitterPolarity.Trailing), 350f)
+            && Near(SplitterMath.RawWidth(340f, 100f, 90f, SplitterPolarity.Trailing), 330f);
+        bool leading = Near(SplitterMath.RawWidth(340f, 100f, 110f, SplitterPolarity.Leading), 330f)
+            && Near(SplitterMath.RawWidth(340f, 100f, 90f, SplitterPolarity.Leading), 350f);
+        bool clamp = Near(SplitterMath.ClampWidth(180f, min, max), min)
+            && Near(SplitterMath.ClampWidth(600f, min, max), max)
+            && Near(SplitterMath.ClampWidth(340f, min, max), 340f);
+        bool fade = Near(SplitterMath.Fade(0f, 44f, 0.35f), 1f)
+            && Near(SplitterMath.Fade(44f, 44f, 0.35f), 0.35f)
+            && Near(SplitterMath.Fade(22f, 44f, 0.35f), 0.675f)
+            && Near(SplitterMath.Fade(10f, 0f, 0.35f), 1f);
+        bool collapse = !SplitterMath.ShouldCollapse(43f, 44f)
+            && SplitterMath.ShouldCollapse(44f, 44f)
+            && !SplitterMath.ShouldCollapse(100f, 0f);
+        bool resist = Near(SplitterMath.ResistWidth(min, 44f, 0.28f), min - 44f * 0.28f);
+        var savedStyle = Splitter.StyleOverride;
+        try
+        {
+            Splitter.StyleOverride = null;
+            bool tok = Splitter.DefaultStyle.IndicatorFill.Equals(Tok.FillControlStrong)
+                && Near(Splitter.DefaultStyle.IndicatorW, 2f);
+            var partial = Splitter.DefaultStyle with { IndicatorW = 3f };
+            bool withKeepsTok = partial.IndicatorFill.Equals(Tok.FillControlStrong) && Near(partial.IndicatorW, 3f);
+            Splitter.StyleOverride = new() { IndicatorFill = Tok.AccentDefault };
+            bool hook = Splitter.DefaultStyle.IndicatorFill.Equals(Tok.AccentDefault);
+            Check("gate.ctl.splitter.style DefaultStyle fills Tok only; with keeps colors; StyleOverride wins",
+                tok && withKeepsTok && hook, $"tok={tok} with={withKeepsTok} hook={hook}");
+        }
+        finally { Splitter.StyleOverride = savedStyle; }
+        Check("gate.ctl.splitter.math polarity inverts the pointer delta; clamp/fade/collapse/resist match the shipping detent; Axis default is Horizontal",
+            trailing && leading && clamp && fade && collapse && resist && new Splitter.SplitterOptions().Axis == SplitterAxis.Horizontal,
+            $"trail={trailing} lead={leading} clamp={clamp} fade={fade} collapse={collapse} resist={resist} axis={new Splitter.SplitterOptions().Axis}");
+    }
+
     static void VirtualDisclosureChecks(StringTable strings)
     {
         using var app = new HeadlessPlatformApp();
@@ -8562,7 +8600,11 @@ static class ControlsSuite
             var fonts = new HeadlessFontSystem(strings);
             var player = PlayingPlayer(new SizeI(100, 100));                  // square video → pillarbox under Uniform in a wide area
             var ext = new Signal<VideoAspectMode>(VideoAspectMode.Uniform);
-            var root = new FluentGpu.Controls.Media.MediaPlayerElement { Player = player, AspectMode = ext };
+            var customExt = new Signal<double>(16.0 / 9.0);
+            var root = new FluentGpu.Controls.Media.MediaPlayerElement
+            {
+                Player = player, AspectMode = ext, CustomAspectRatio = customExt,
+            };
             using var host = new AppHost(app, window, device, fonts, strings, root);
             host.RunFrame();
             player.Pump(TimeSpan.FromMilliseconds(1)); host.RunFrame();
@@ -8610,11 +8652,33 @@ static class ControlsSuite
             bool pillarAuto = Pillarboxed(host2);
             int fillsAuto = CountFill(host2.Scene, host2.Scene.Root, Tok.MediaLetterbox);
 
+            // The owner-held signals outlive a player-generation remount. A fresh element must immediately present the
+            // same custom policy instead of falling back to its local Uniform/16:9 defaults.
+            customExt.Value = 4.0 / 3.0;
+            ext.Value = VideoAspectMode.Custom;
+            var player3 = PlayingPlayer(new SizeI(1920, 1080));
+            var root3 = new FluentGpu.Controls.Media.MediaPlayerElement
+            {
+                Player = player3, AspectMode = ext, CustomAspectRatio = customExt,
+            };
+            using var host3 = new AppHost(new HeadlessPlatformApp(),
+                new HeadlessWindow(new WindowDesc("g5g-mpe-remount", new Size2(520, 340), 1f)),
+                new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, root3);
+            host3.RunFrame();
+            player3.Pump(TimeSpan.FromMilliseconds(1)); host3.RunFrame();
+            player3.Pump(TimeSpan.FromMilliseconds(1)); host3.RunFrame();
+            for (int i = 0; i < 5; i++) host3.Paint(0);
+            var remountHoleNode = FindVisual(host3.Scene, host3.Scene.Root, VisualKind.Video);
+            RectF remountHole = remountHoleNode.IsNull ? default : host3.Scene.AbsoluteRect(remountHoleNode);
+            bool customSurvivesRemount = !remountHoleNode.IsNull && remountHole.H > 0f
+                && Near(remountHole.W / remountHole.H, 4f / 3f, 0.02f);
+
             Check("gate.media.el.controlled-aspect",
                 pillarUniform && coveredCrop && pillarUniform2 && pillarAuto
-                    && fillsUniform == 1 && fillsCrop == 1 && fillsAuto == 1,
+                    && customSurvivesRemount && fillsUniform == 1 && fillsCrop == 1 && fillsAuto == 1,
                 $"uniformPillarboxed={pillarUniform} cropCovers={coveredCrop} uniform2={pillarUniform2} "
-                + $"autoMaterialized={pillarAuto} stageFills={fillsUniform}/{fillsCrop}/{fillsAuto} (want 1 each)");
+                + $"autoMaterialized={pillarAuto} customRemount={customSurvivesRemount} "
+                + $"stageFills={fillsUniform}/{fillsCrop}/{fillsAuto} (want 1 each)");
         }
 
         // gate.media.el.tokens: the media element carries ZERO hardcoded FromRgba color literals — every ink/scrim/stage
@@ -8771,6 +8835,485 @@ static class ControlsSuite
                 $"audioOnlyHoles={audioHoles} (playing={audioPlaying}) openingHoles={openingHoles} (state={pending.State.Peek()}) "
                 + $"framesRecorded={audioFrameRecorded}/{openingFrameRecorded}");
         }
+
+        // gate.media.el.docked-corners — E2: an OPERABLE (IsDecorative = false) player honors CornerRadius for its UI
+        // frame just as much as a decorative one. Before the fix, FrameCorners hard-coded Radii.OverlayAll unless
+        // IsDecorative — so a docked card at CornerRadius = 12 (deliberately NOT Radii.Overlay's own 8, so a bug
+        // that silently falls back to the overlay radius can never be confused with a passing result) got an 8-DIP
+        // UI frame while the compositor was already told 12. Checked on BOTH the outer frame box and the inner
+        // video-stage box — Render sets Corners = FrameCorners on each (:392, :441).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("g5g-mpe-corners", new Size2(420, 280), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var player = PlayingPlayer(new SizeI(160, 90));
+            const float radius = 12f;   // deliberately NOT Radii.Overlay (8) — see comment above
+            var root = new FluentGpu.Controls.Media.MediaPlayerElement
+            {
+                Player = player, CornerRadius = radius, IsDecorative = false,
+            };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            player.Pump(TimeSpan.FromMilliseconds(1)); host.RunFrame();
+            player.Pump(TimeSpan.FromMilliseconds(1)); host.RunFrame();
+            for (int i = 0; i < 5; i++) host.Paint(0);
+
+            var holeNode = FindVisual(host.Scene, host.Scene.Root, VisualKind.Video);
+            var stage = holeNode.IsNull ? NodeHandle.Null : host.Scene.Parent(holeNode);
+            var outer = stage.IsNull ? NodeHandle.Null : host.Scene.Parent(stage);
+
+            var want = CornerRadius4.All(radius);
+            var stageCorners = stage.IsNull ? default : host.Scene.Paint(stage).Corners;
+            var outerCorners = outer.IsNull ? default : host.Scene.Paint(outer).Corners;
+            bool notOverlayFallback = outerCorners != Radii.OverlayAll;   // the regression this fixes
+
+            Check("gate.media.el.docked-corners",
+                !stage.IsNull && !outer.IsNull && stageCorners == want && outerCorners == want && notOverlayFallback,
+                $"stage={stageCorners} outer={outerCorners} want={want} overlayFallback={Radii.OverlayAll}");
+        }
+
+        // gate.media.el.transport-suppressed — AreTransportControlsEnabled = false records NO transport subtree (no
+        // Button-role nodes at all — the built-in transport is this element's only source of them). It also cannot
+        // arm the idle/auto-hide timer: the runtime effect is unobservable precisely because the chrome it would hide
+        // never shows in the first place, so this is pinned structurally — both showChrome and autoHideArmed are
+        // gated FIRST on the SAME AreTransportControlsEnabled && … chain (source-scanned).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("g5g-mpe-notransport", new Size2(420, 280), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var player = PlayingPlayer();
+            var root = new FluentGpu.Controls.Media.MediaPlayerElement
+            {
+                Player = player, AreTransportControlsEnabled = false,
+            };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            player.Pump(TimeSpan.FromMilliseconds(1)); host.RunFrame();
+            player.Pump(TimeSpan.FromMilliseconds(1)); host.RunFrame();
+            for (int i = 0; i < 5; i++) host.Paint(0);
+            bool noButtons = Roles(host.Scene, AutomationRole.Button).Count == 0;
+
+            string? src = ReadRepoFile("src/FluentGpu.Controls/Media/MediaPlayerElement.cs");
+            bool found = src is not null;
+            bool chromeGatedOnTransport = src is not null
+                && src.Contains("bool showChrome = AreTransportControlsEnabled &&", StringComparison.Ordinal);
+            bool autoHideGatedOnTransport = src is not null
+                && src.Contains("bool autoHideArmed = AreTransportControlsEnabled &&", StringComparison.Ordinal);
+
+            Check("gate.media.el.transport-suppressed",
+                noButtons && found && chromeGatedOnTransport && autoHideGatedOnTransport,
+                $"noButtons={noButtons} found={found} chromeGated={chromeGatedOnTransport} autoHideGated={autoHideGatedOnTransport}");
+        }
+
+        // gate.media.el.fullscreen-delegates — E3: with FullscreenRequested set, F11 (ToggleFullscreen's key path)
+        // invokes the delegate INSTEAD of opening the element's own modal overlay. The internal fullscreen machinery
+        // (FullscreenState / IsFullscreenPresentation / PresentationBinding) is untouched by this plan — only WHO
+        // ASKS changes — so the only new observable is this one early-return branch. AreTransportControlsEnabled is
+        // false here so the ONLY way to reach ToggleFullscreen is the F11 key path (HandleKey), which is exactly the
+        // "F11 … DELEGATE" half of E3's contract.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("g5g-mpe-fs-delegate", new Size2(420, 280), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var player = PlayingPlayer();
+            bool invoked = false;
+            var root = new FluentGpu.Controls.Media.MediaPlayerElement
+            {
+                Player = player, AreTransportControlsEnabled = false, FullscreenRequested = () => invoked = true,
+            };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            player.Pump(TimeSpan.FromMilliseconds(1)); host.RunFrame();
+            player.Pump(TimeSpan.FromMilliseconds(1)); host.RunFrame();
+            host.Paint(0);
+            int overlaysBefore = host.Scene.OverlayCount;
+
+            // Focus the (sole focusable) root, then ask for fullscreen the way the transport's own button/F11 would.
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Tab)); host.RunFrame();
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.F11)); host.RunFrame();
+            host.Paint(0);
+
+            Check("gate.media.el.fullscreen-delegates",
+                invoked && overlaysBefore == 0 && host.Scene.OverlayCount == 0,
+                $"invoked={invoked} overlaysBefore={overlaysBefore} overlaysAfter={host.Scene.OverlayCount}");
+        }
+
+        // gate.media.el.one-surface-per-player — E4: the registry enforces single-writer PER SLOT, not per PLAYER;
+        // two LIVE slots bound to the SAME DComp handle (the hazard: two elements on one IMediaPlayer, each calling
+        // SetVideoStreamRect with its own rect — a size fight) must trip OneSurfacePerPlayerGuard.Violations. Observed
+        // rather than crashed (ThrowOnViolation forced off). Asserts the CORRECT behaviour in BOTH build configs: in
+        // Debug/FLUENTGPU_DIAG the second bind must report exactly one violation; in Release the guard folds away
+        // entirely, so it must report none — either way this can fail, unlike a bare "true".
+        {
+            FluentGpu.Media.OneSurfacePerPlayerGuard.Reset();
+            FluentGpu.Media.OneSurfacePerPlayerGuard.ThrowOnViolation = false;   // observe, don't crash
+            FluentGpu.Media.OneSurfacePerPlayerGuard.Enabled = FluentGpu.Media.OneSurfacePerPlayerGuard.CompiledIn;
+
+            var reg = new VideoSurfaceRegistry();
+            int tokenA = reg.Acquire();
+            int tokenB = reg.Acquire();
+            const nuint sharedHandle = 0xABCD;
+            reg.Bind(tokenA, sharedHandle);                 // first surface claims the handle — no violation yet
+            int afterFirst = FluentGpu.Media.OneSurfacePerPlayerGuard.Violations;
+            reg.Bind(tokenB, sharedHandle);                 // a SECOND surface bound to the SAME player's handle
+            int afterSecond = FluentGpu.Media.OneSurfacePerPlayerGuard.Violations;
+            string? last = FluentGpu.Media.OneSurfacePerPlayerGuard.LastViolation;
+
+            bool compiledIn = FluentGpu.Media.OneSurfacePerPlayerGuard.CompiledIn;
+            bool ok = compiledIn
+                ? afterFirst == 0 && afterSecond == afterFirst + 1
+                    && last is { Length: > 0 } && last.Contains("bound to DComp handle", StringComparison.Ordinal)
+                : afterFirst == 0 && afterSecond == 0;   // Release: folded away — no crash, no false report either
+
+            Check("gate.media.el.one-surface-per-player",
+                tokenA > 0 && tokenB > 0 && tokenA != tokenB && ok,
+                $"compiledIn={compiledIn} tokenA={tokenA} tokenB={tokenB} afterFirst={afterFirst} afterSecond={afterSecond} last={last}");
+        }
+
+        // gate.media.el.reveal-clip-follows-presented — E1: ClipToAncestors must honor a live SizeMode.Reveal
+        // ancestor's PresentedW/H (mid-animation, narrower than the final laid-out bounds) rather than
+        // SceneStore.AbsoluteRect's FINAL rect — otherwise the pumped viewport stays at the final size while the UI's
+        // own paint clips to the smaller presented extent, and the composited video visibly spills past the
+        // (correctly narrower) visible edge. ClipToAncestors is private static and pure (SceneStore + NodeHandle +
+        // RectF in, RectF out) with no player/element dependency, so it is exercised directly via reflection over a
+        // hand-built three-node scene — no AppHost/player wiring needed to reach the exact function this fixes.
+        {
+            var scene = new SceneStore();
+            var root = scene.CreateNode(1);
+            scene.Root = root;
+            scene.Bounds(root) = new RectF(0f, 0f, 800f, 600f);
+
+            var clipAncestor = scene.CreateNode(2);
+            scene.AppendChild(root, clipAncestor);
+            scene.Bounds(clipAncestor) = new RectF(0f, 0f, 400f, 300f);   // the FINAL, fully-revealed size
+            scene.Flags(clipAncestor) |= NodeFlags.ClipsToBounds;
+            scene.Paint(clipAncestor).PresentedW = 200f;                  // mid-animation: only half revealed…
+            scene.Paint(clipAncestor).PresentedH = 150f;
+
+            var hole = scene.CreateNode(3);
+            scene.AppendChild(clipAncestor, hole);
+            scene.Bounds(hole) = new RectF(0f, 0f, 400f, 300f);           // the video wants the FULL final area
+
+            var method = typeof(FluentGpu.Controls.Media.MediaPlayerElement).GetMethod("ClipToAncestors",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+            bool methodFound = method is not null;
+            RectF clipped = default;
+            if (method is not null)
+                clipped = (RectF)method.Invoke(null, new object[] { scene, hole, scene.AbsoluteRect(hole) })!;
+
+            bool followsPresented = methodFound && Near(clipped.W, 200f) && Near(clipped.H, 150f);
+            bool notFinalBounds = methodFound && !Near(clipped.W, 400f);   // the pre-fix bug: clip stayed 400×300
+
+            Check("gate.media.el.reveal-clip-follows-presented",
+                methodFound && followsPresented && notFinalBounds,
+                $"methodFound={methodFound} clipped=({clipped.X:0},{clipped.Y:0},{clipped.W:0},{clipped.H:0}) want=(0,0,200,150)");
+        }
+
+        // gate.media.el.pinned-slot-no-edgefade: DrawOp.DrawVideo is a DestOut erase against WHATEVER render target
+        // is currently bound. At the top level that is the back buffer, so the erase reveals the composited DComp
+        // video visual underneath. But the recorder pushes an offscreen layer (PushLayer…PopLayer) around a subtree
+        // whenever an ancestor carries NodePaint.OpacityGroup (opacity < 1), an edge fade (explicit or a scroller's
+        // AutoEdgeFade), or a self-blur — SceneRecorder.cs's own comment at the DrawVideo emit site (~:1751) admits
+        // this is a known, UNFIXED limitation: "inside a PushLayer the erase hits the offscreen layer RT rather than
+        // the back buffer". If the hole is recorded inside that bracket, the erase never reaches the back buffer and
+        // the composited video underneath simply never shows through — no error, no black rect, nothing in the logs.
+        // This is exactly why NowPlayingPanel's docked video tile had to be hoisted OUT of
+        // ScrollView(scrollBody) with { AutoEdgeFade = true } — that scroller pushes precisely this bracket around
+        // every scrolled child, and the docked video's cover-art tile used to be the scroller's first scrolled child.
+        //
+        // OBSERVABLE: HeadlessGpuDevice's LastVideos/LastLayers are separate, un-interleaved lists — it tracks a
+        // clip-stack depth per DrawVideo (_videoClipDepth) but NO layer-nesting depth, so it cannot answer this
+        // question by itself. The DrawVideo op's own Opacity field doesn't help either: an OpacityGroup renders its
+        // children at FULL alpha into the pooled offscreen RT and composites ONCE at the group alpha
+        // (SceneRecorder.cs ~1410-1417), so a nested DrawVideo's Opacity stays 1 regardless of the group's alpha —
+        // attenuation is not observable per-op. The one thing the recorder genuinely exposes is POSITION in the flat
+        // POD byte stream: decoding it exactly like HeadlessGpuDevice's own switch (same opcodes, same struct sizes)
+        // while tracking PushLayer/PopLayer balance recovers the nesting depth in effect at the DrawVideo command —
+        // depth 0 ⇒ back buffer, depth > 0 ⇒ swallowed by an offscreen layer. CONTROL and TREATMENT below are
+        // otherwise IDENTICAL three-node scenes (root → ancestor → video); the only difference is the ancestor's
+        // OpacityGroup/Opacity, the most direct, honest way to arm that PushLayer/PopLayer bracket by hand — it is
+        // the SAME bracket AutoEdgeFade/EdgeFade and self-blur groups push (SceneRecorder.cs ~1421-1423), so a
+        // passing gate here pins the shared swallow-the-hole mechanism those paths would also trigger.
+        {
+            const int surfaceId = 7;
+            var controlScene = new SceneStore();
+            var controlRoot = controlScene.CreateNode(1);
+            controlScene.Root = controlRoot;
+            controlScene.Bounds(controlRoot) = new RectF(0f, 0f, 400f, 300f);
+            var controlAncestor = controlScene.CreateNode(1);
+            controlScene.AppendChild(controlRoot, controlAncestor);
+            controlScene.Bounds(controlAncestor) = new RectF(0f, 0f, 400f, 300f);
+            controlScene.Paint(controlAncestor) = NodePaint.Default;   // plain ancestor — no offscreen layer
+            var controlVideo = controlScene.CreateNode(1);
+            controlScene.AppendChild(controlAncestor, controlVideo);
+            controlScene.Bounds(controlVideo) = new RectF(20f, 20f, 160f, 90f);
+            ref var controlVideoPaint = ref controlScene.Paint(controlVideo);
+            controlVideoPaint = NodePaint.Default;
+            controlVideoPaint.VisualKind = VisualKind.Video;
+            controlVideoPaint.ImageId = surfaceId;
+
+            var controlDl = new DrawList();
+            SceneRecorder.Record(controlScene, controlDl);
+            var (controlVideoCount, controlDepth, controlBalance) = DecodeVideoLayerNesting(controlDl.Bytes);
+
+            var treatmentScene = new SceneStore();
+            var treatmentRoot = treatmentScene.CreateNode(1);
+            treatmentScene.Root = treatmentRoot;
+            treatmentScene.Bounds(treatmentRoot) = new RectF(0f, 0f, 400f, 300f);
+            var treatmentAncestor = treatmentScene.CreateNode(1);
+            treatmentScene.AppendChild(treatmentRoot, treatmentAncestor);
+            treatmentScene.Bounds(treatmentAncestor) = new RectF(0f, 0f, 400f, 300f);
+            ref var ancestorPaint = ref treatmentScene.Paint(treatmentAncestor);
+            ancestorPaint = NodePaint.Default;
+            ancestorPaint.OpacityGroup = true;
+            ancestorPaint.Opacity = 0.5f;             // < 1 is the ONLY thing that arms the PushLayer{Opacity} bracket
+            var treatmentVideo = treatmentScene.CreateNode(1);
+            treatmentScene.AppendChild(treatmentAncestor, treatmentVideo);
+            treatmentScene.Bounds(treatmentVideo) = new RectF(20f, 20f, 160f, 90f);
+            ref var treatmentVideoPaint = ref treatmentScene.Paint(treatmentVideo);
+            treatmentVideoPaint = NodePaint.Default;
+            treatmentVideoPaint.VisualKind = VisualKind.Video;
+            treatmentVideoPaint.ImageId = surfaceId;
+
+            var treatmentDl = new DrawList();
+            SceneRecorder.Record(treatmentScene, treatmentDl);
+            var (treatmentVideoCount, treatmentDepth, treatmentBalance) = DecodeVideoLayerNesting(treatmentDl.Bytes);
+
+            bool controlReachesBackBuffer = controlVideoCount == 1 && controlDepth == 0 && controlBalance == 0;
+            bool treatmentSwallowedByLayer = treatmentVideoCount == 1 && treatmentDepth > 0 && treatmentBalance == 0;
+
+            Check("gate.media.el.pinned-slot-no-edgefade",
+                controlReachesBackBuffer && treatmentSwallowedByLayer,
+                $"control(videos={controlVideoCount} depth={controlDepth} balance={controlBalance}) "
+                + $"treatment(videos={treatmentVideoCount} depth={treatmentDepth} balance={treatmentBalance})");
+        }
+
+        // gate.media.el.context-menu-live-anchor — the transport More button, a right-click on the video, and Menu-key
+        // all enter the SAME lazy menu. More is rect-anchored above its LIVE source button; pointer opens at the tap.
+        // Toggling the controlled aspect first forces player re-renders, covering the old stale-OnRealized origin bug.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("g5g-mpe-context", new Size2(640, 800), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var player = PlayingPlayer();
+            var aspect = new Signal<VideoAspectMode>(VideoAspectMode.Uniform);
+            int builds = 0;
+            Func<IReadOnlyList<MenuFlyoutItem>> hostItems = () =>
+            {
+                builds++;
+                return [MenuFlyoutItem.RadioItem("Dock in rail", true)];
+            };
+            var root = new OverlayHost
+            {
+                Child = Embed.Comp(() => new FluentGpu.Controls.Media.MediaPlayerElement
+                {
+                    Player = player, AspectMode = aspect, MoreMenuItems = hostItems,
+                }),
+            };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            player.Pump(TimeSpan.FromMilliseconds(1)); host.RunFrame();
+            player.Pump(TimeSpan.FromMilliseconds(1)); host.RunFrame();
+            aspect.Value = VideoAspectMode.UniformToFill; host.RunFrame();
+            aspect.Value = VideoAspectMode.Uniform; host.RunFrame();
+            host.Paint(0);
+
+            var more = Roles(host.Scene, AutomationRole.Button)[^2];
+            RectF moreRect = host.Scene.AbsoluteRect(more);
+            ClickNode(host, window, more);
+            for (int i = 0; i < 3; i++) host.Paint(0);
+            var moreRow = Roles(host.Scene, AutomationRole.RadioButton)[0];
+            RectF moreMenuRect = moreRow.IsNull ? default : host.Scene.AbsoluteRect(moreRow);
+            int moreMenuItems = Roles(host.Scene, AutomationRole.MenuItem).Count;
+            int moreRadioItems = Roles(host.Scene, AutomationRole.RadioButton).Count;
+            bool moreAnchored = !moreRow.IsNull && moreMenuRect.X > 100f && moreMenuRect.Y > 100f
+                && moreMenuRect.Y < moreRect.Y;
+            bool lazyFirstOpen = builds == 1;
+
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Escape));
+            for (int i = 0; i < 45; i++) host.RunFrame();
+
+            var point = new Point2(240f, 220f);
+            window.QueueInput(new InputEvent(InputKind.PointerDown, point, 1, 0));
+            window.QueueInput(new InputEvent(InputKind.PointerUp, point, 1, 0));
+            host.RunFrame();
+            for (int i = 0; i < 3; i++) host.Paint(0);
+            var pointerRow = Roles(host.Scene, AutomationRole.RadioButton)[0];
+            RectF pointerMenuRect = pointerRow.IsNull ? default : host.Scene.AbsoluteRect(pointerRow);
+            bool atPointer = !pointerRow.IsNull && Near(pointerMenuRect.X, point.X, 30f)
+                && pointerMenuRect.Y >= point.Y - 2f && pointerMenuRect.Y <= point.Y + 30f;
+            bool samePointerRows = Roles(host.Scene, AutomationRole.MenuItem).Count == moreMenuItems
+                && Roles(host.Scene, AutomationRole.RadioButton).Count == moreRadioItems;
+            bool lazySecondOpen = builds == 2;
+
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Escape));
+            for (int i = 0; i < 45; i++) host.RunFrame();
+            more = Roles(host.Scene, AutomationRole.Button)[^2];
+            host.Input.SetFocus(more);
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Apps));
+            host.RunFrame();
+            for (int i = 0; i < 3; i++) host.Paint(0);
+            var keyboardRow = Roles(host.Scene, AutomationRole.RadioButton)[0];
+            bool keyboardSame = !keyboardRow.IsNull && builds == 3
+                && Roles(host.Scene, AutomationRole.MenuItem).Count == moreMenuItems
+                && Roles(host.Scene, AutomationRole.RadioButton).Count == moreRadioItems
+                && host.Input.Focused == keyboardRow;
+
+            Check("gate.media.el.context-menu-live-anchor",
+                moreAnchored && lazyFirstOpen && atPointer && samePointerRows && lazySecondOpen && keyboardSame,
+                $"more={moreAnchored} moreRow=({moreMenuRect.X:0.#},{moreMenuRect.Y:0.#}) btn=({moreRect.X:0.#},{moreRect.Y:0.#}) "
+                + $"pointer={atPointer} pointerRow=({pointerMenuRect.X:0.#},{pointerMenuRect.Y:0.#}) pt=({point.X:0.#},{point.Y:0.#}) "
+                + $"samePointer={samePointerRows} keyboard={keyboardSame} builds={builds}");
+        }
+
+        // gate.media.el.more-menu-host-items: MoreMenuItems rows render FIRST — above the element's own rows, with a
+        // separator between (see the prop's doc on MediaPlayerElement). The built-in AspectRatio/PlaybackSpeed/
+        // Fullscreen rows are MenuItem-role (SubMenu/Command kind); a host RadioItem row is RadioButton-role, so the
+        // FIRST MenuItem-role node is ALWAYS the element's own first row regardless of host content — a structural
+        // anchor that does not depend on any localized label text. Control: MoreMenuItems = null keeps the menu
+        // byte-identical to today's (exactly the one built-in separator before Fullscreen, no stray leading one).
+        {
+            // ── control ──────────────────────────────────────────────────────────────────────────────────────────
+            int controlDividers;
+            {
+                using var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc("g5g-mpe-more-ctl", new Size2(560, 360), 1f));
+                window.Show();
+                var device = new HeadlessGpuDevice();
+                var fonts = new HeadlessFontSystem(strings);
+                var player = PlayingPlayer();
+                var root = new OverlayHost
+                {
+                    Child = Embed.Comp(() => new FluentGpu.Controls.Media.MediaPlayerElement { Player = player }),
+                };
+                using var host = new AppHost(app, window, device, fonts, strings, root);
+                host.RunFrame();
+                player.Pump(TimeSpan.FromMilliseconds(1)); host.RunFrame();
+                player.Pump(TimeSpan.FromMilliseconds(1)); host.RunFrame();
+                host.Paint(0);
+                var moreBtn = Roles(host.Scene, AutomationRole.Button)[^2];   // More sits right before Fullscreen (both unconditional)
+                ClickNode(host, window, moreBtn);
+                for (int i = 0; i < 3; i++) host.Paint(0);
+                controlDividers = CountFill(host.Scene, host.Scene.Root, Tok.StrokeDividerDefault);
+            }
+
+            // ── treatment: the Func flips WHICH row it returns between opens — proof it runs at OPEN time, never
+            //    cached/frozen from mount or from the first open (the whole reason MoreMenuItems is a Func, not a list).
+            int opens = 0;
+            Func<IReadOnlyList<MenuFlyoutItem>> hostItems = () =>
+            {
+                opens++;
+                return new[] { MenuFlyoutItem.RadioItem(opens == 1 ? "Move to mini player" : "Pop out window", true) };
+            };
+
+            using var app2 = new HeadlessPlatformApp();
+            var window2 = new HeadlessWindow(new WindowDesc("g5g-mpe-more-trt", new Size2(560, 360), 1f));
+            window2.Show();
+            var device2 = new HeadlessGpuDevice();
+            var fonts2 = new HeadlessFontSystem(strings);
+            var player2 = PlayingPlayer();
+            var root2 = new OverlayHost
+            {
+                Child = Embed.Comp(() => new FluentGpu.Controls.Media.MediaPlayerElement
+                {
+                    Player = player2, MoreMenuItems = hostItems,
+                }),
+            };
+            using var host2 = new AppHost(app2, window2, device2, fonts2, strings, root2);
+            host2.RunFrame();
+            player2.Pump(TimeSpan.FromMilliseconds(1)); host2.RunFrame();
+            player2.Pump(TimeSpan.FromMilliseconds(1)); host2.RunFrame();
+            host2.Paint(0);
+            bool notInvokedAtMount = opens == 0;
+
+            var moreBtn2 = Roles(host2.Scene, AutomationRole.Button)[^2];
+            ClickNode(host2, window2, moreBtn2);
+            for (int i = 0; i < 3; i++) host2.Paint(0);
+            bool firstOpenRan = opens == 1;
+            var hostLabel1 = FindTextNode(host2.Scene, strings, host2.Scene.Root, "Move to mini player");
+            var nativeFirst1 = Roles(host2.Scene, AutomationRole.MenuItem)[0];
+            var sep1 = FindFillNode(host2.Scene, host2.Scene.Root, Tok.StrokeDividerDefault);
+            float hostY1 = hostLabel1.IsNull ? -1f : host2.Scene.AbsoluteRect(hostLabel1).Y;
+            float nativeY1 = nativeFirst1.IsNull ? -1f : host2.Scene.AbsoluteRect(nativeFirst1).Y;
+            float sepY1 = sep1.IsNull ? -1f : host2.Scene.AbsoluteRect(sep1).Y;
+            bool hostAboveNative1 = !hostLabel1.IsNull && !nativeFirst1.IsNull && hostY1 < nativeY1;
+            bool separatorBetween1 = !sep1.IsNull && hostY1 < sepY1 && sepY1 < nativeY1;
+
+            // Close (Escape ⇒ LightDismiss) and reopen: the Func must run AGAIN and reflect the FLIPPED row — a
+            // cached/frozen result would keep showing "Move to mini player" forever.
+            window2.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Escape));
+            for (int i = 0; i < 45; i++) host2.RunFrame();   // deliver Escape + settle the 83ms light-dismiss fade
+            bool closedBeforeReopen = FindRole(host2.Scene, host2.Scene.Root, AutomationRole.MenuItem).IsNull;
+
+            ClickNode(host2, window2, moreBtn2);
+            for (int i = 0; i < 3; i++) host2.Paint(0);
+            bool secondOpenRan = opens == 2;
+            bool newRowShown = !FindTextNode(host2.Scene, strings, host2.Scene.Root, "Pop out window").IsNull;
+            bool oldRowGone = FindTextNode(host2.Scene, strings, host2.Scene.Root, "Move to mini player").IsNull;
+
+            Check("gate.media.el.more-menu-host-items",
+                controlDividers == 1 && notInvokedAtMount && firstOpenRan && hostAboveNative1 && separatorBetween1
+                    && closedBeforeReopen && secondOpenRan && newRowShown && oldRowGone,
+                $"controlDividers={controlDividers}(want 1) notAtMount={notInvokedAtMount} open1={firstOpenRan} "
+                + $"hostAboveNative={hostAboveNative1}(host={hostY1:0.#} native={nativeY1:0.#}) "
+                + $"sepBetween={separatorBetween1}(sep={sepY1:0.#}) closed={closedBeforeReopen} open2={secondOpenRan} "
+                + $"newShown={newRowShown} oldGone={oldRowGone}");
+        }
+    }
+
+    /// <summary>Decodes a raw POD draw list exactly like <see cref="FluentGpu.Rhi.Headless.HeadlessGpuDevice"/>'s own
+    /// switch (same opcodes, same struct sizes — kept in lockstep with it deliberately), but ALSO tracks the
+    /// PushLayer/PopLayer nesting depth in effect at the moment each <see cref="DrawOp.DrawVideo"/> is emitted. The
+    /// headless device does not expose this itself: its LastVideos/LastLayers are separate, un-interleaved lists,
+    /// and unlike its per-video CLIP depth (<c>_videoClipDepth</c>) it keeps no per-video LAYER depth. A depth &gt; 0
+    /// at the first DrawVideo means it was recorded strictly inside an unclosed PushLayer/PopLayer bracket — i.e. its
+    /// DestOut erase targets that layer's pooled offscreen RT, not the back buffer (gate.media.el.pinned-slot-no-edgefade).
+    /// Returns (how many DrawVideo commands were recorded, the layer depth at the FIRST one — -1 if none, the final
+    /// layer balance — must be 0 for a well-formed frame).</summary>
+    static (int videoCount, int firstVideoLayerDepth, int finalLayerBalance) DecodeVideoLayerNesting(ReadOnlySpan<byte> drawList)
+    {
+        int pos = 0, layerBalance = 0, videoCount = 0, firstVideoDepth = -1;
+        while (pos + sizeof(int) <= drawList.Length)
+        {
+            int op = MemoryMarshal.Read<int>(drawList.Slice(pos));
+            pos += sizeof(int);
+            switch ((DrawOp)op)
+            {
+                case DrawOp.FillRoundRect: pos += Unsafe.SizeOf<FillRoundRectCmd>(); break;
+                case DrawOp.DrawGlyphRun: pos += Unsafe.SizeOf<DrawGlyphRunCmd>(); break;
+                case DrawOp.DrawGlyphRunGradient: pos += Unsafe.SizeOf<DrawGlyphRunGradientCmd>(); break;
+                case DrawOp.PushClip: pos += Unsafe.SizeOf<ClipCmd>(); break;
+                case DrawOp.PopClip: break;
+                case DrawOp.DrawImage: pos += Unsafe.SizeOf<DrawImageCmd>(); break;
+                case DrawOp.DrawRoundRectStroke: pos += Unsafe.SizeOf<DrawRoundRectStrokeCmd>(); break;
+                case DrawOp.DrawShadow: pos += Unsafe.SizeOf<DrawShadowCmd>(); break;
+                case DrawOp.DrawArc: pos += Unsafe.SizeOf<DrawArcCmd>(); break;
+                case DrawOp.DrawPolylineStroke: pos += Unsafe.SizeOf<DrawPolylineStrokeCmd>(); break;
+                case DrawOp.DrawGradientRect: pos += Unsafe.SizeOf<DrawGradientRectCmd>(); break;
+                case DrawOp.DrawGradientStroke: pos += Unsafe.SizeOf<DrawGradientStrokeCmd>(); break;
+                case DrawOp.DrawTabShape: pos += Unsafe.SizeOf<DrawTabShapeCmd>(); break;
+                case DrawOp.DrawIconMask: pos += Unsafe.SizeOf<DrawIconMaskCmd>(); break;
+                case DrawOp.EraseRoundRect: pos += Unsafe.SizeOf<EraseRoundRectCmd>(); break;
+                case DrawOp.PushLayer: pos += Unsafe.SizeOf<PushLayerCmd>(); layerBalance++; break;
+                case DrawOp.PopLayer: pos += Unsafe.SizeOf<PopLayerCmd>(); layerBalance--; break;
+                case DrawOp.DrawVideo:
+                    if (videoCount == 0) firstVideoDepth = layerBalance;
+                    videoCount++;
+                    pos += Unsafe.SizeOf<DrawVideoCmd>();
+                    break;
+                default:
+                    return (videoCount, firstVideoDepth, layerBalance);   // unknown opcode — corrupt stream guard
+            }
+        }
+        return (videoCount, firstVideoDepth, layerBalance);
     }
 
     /// <summary>First node (pre-order) whose paint records <paramref name="kind"/> — e.g. the single VisualKind.Video

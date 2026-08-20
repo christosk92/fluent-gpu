@@ -41,15 +41,20 @@ public sealed class ConnectVideoFacts
 /// </summary>
 public static class VideoUpgradeGate
 {
-    /// <summary>Content availability → the placement set. A playable WITHOUT a video makes every placement unavailable.</summary>
-    public static PlacementSet AvailabilityFor(bool hasVideo) => hasVideo ? PlacementPolicy.Video.Allowed : PlacementSet.None;
+    /// <summary>Content availability × HOST capability → the placement set. A playable WITHOUT a video makes every
+    /// placement unavailable; one WITH a video is further masked by what the host can actually do right now (can the
+    /// rail fit it, can a second window/swapchain open, does the fullscreen hook exist) — the same bit-set carries
+    /// both "this track has no video" and "this host cannot do that placement right now" through the exact same
+    /// path.</summary>
+    public static PlacementSet AvailabilityFor(bool hasVideo, PlacementSet hostCapable)
+        => hasVideo ? PlacementPolicy.Video.Allowed & hostCapable : PlacementSet.None;
 
-    /// <summary>Re-stamp a state with the availability THIS playable actually has. Required before acting on a user
-    /// intent: a deferred upgrade leaves <c>Available</c> stale at <see cref="PlacementSet.None"/>, and both
-    /// <c>PlacementCore.Resolve</c> and <c>IsActive</c> consult it — so a lit badge's toggle would otherwise resolve to
-    /// <see cref="SurfacePlacement.None"/> and do nothing at all.</summary>
-    public static PlacementState FoldAvailability(in PlacementState s, bool hasVideo)
-        => PlacementCore.WithAvailability(s, AvailabilityFor(hasVideo));
+    /// <summary>Re-stamp a state with the availability THIS playable actually has, masked by <paramref name="hostCapable"/>.
+    /// Required before acting on a user intent: a deferred upgrade leaves <c>Available</c> stale at
+    /// <see cref="PlacementSet.None"/>, and both <c>PlacementCore.Resolve</c> and <c>IsActive</c> consult it — so a lit
+    /// badge's toggle would otherwise resolve to <see cref="SurfacePlacement.None"/> and do nothing at all.</summary>
+    public static PlacementState FoldAvailability(in PlacementState s, bool hasVideo, PlacementSet hostCapable)
+        => PlacementCore.WithAvailability(s, AvailabilityFor(hasVideo, hostCapable));
 
     /// <summary>True when <paramref name="target"/> would turn an inactive surface ON and the caller is not entitled to
     /// commit that (i.e. it is neither a track boundary nor an explicit user action). The badge still updates; only the
@@ -63,9 +68,9 @@ public static class VideoUpgradeGate
     /// would read the state as "already watching" and the user's FIRST click would turn video off — they would have to
     /// click twice to start it. The click therefore COMMITS exactly what <see cref="DeferUpgrade"/> withheld; every other
     /// state toggles as before (and the player bar agrees, because it draws its lit state from the un-folded state).</para></summary>
-    public static PlacementState PrimaryClick(in PlacementState s, bool hasVideo)
+    public static PlacementState PrimaryClick(in PlacementState s, bool hasVideo, PlacementSet hostCapable)
     {
-        var folded = FoldAvailability(s, hasVideo);
+        var folded = FoldAvailability(s, hasVideo, hostCapable);
         return DeferUpgrade(s, folded, commitUpgrade: false) ? folded : PlacementCore.TogglePrimary(folded);
     }
 }

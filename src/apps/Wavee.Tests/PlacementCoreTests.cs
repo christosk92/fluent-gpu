@@ -14,7 +14,9 @@ namespace Wavee.Tests;
 public class PlacementCoreTests
 {
     static readonly PlacementPolicy Policy = PlacementPolicy.Video;
-    const PlacementSet All = PlacementSet.Floating | PlacementSet.Detached;   // a track that HAS a video
+    // a track that HAS a video — now all four rungs (Docked/Fullscreen widened in), since content availability is no
+    // longer "floating or detached only"; HOST capability is the separate mask VideoUpgradeGate.AvailabilityFor applies.
+    const PlacementSet All = PlacementSet.Docked | PlacementSet.Floating | PlacementSet.Detached | PlacementSet.Fullscreen;
 
     static PlacementState Off(PlacementSet available = All)
         => PlacementState.Initial(Policy) with { Available = available };
@@ -54,13 +56,25 @@ public class PlacementCoreTests
         Assert.True(PlacementCore.IsActive(NextTrack(NextTrack(watching, PlacementSet.None))));
     }
 
+    // ── Docked is the default (this plan) ───────────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Docked_IsTheDefaultForAFreshProfile()
+        => Assert.Equal(SurfacePlacement.Docked, PlacementState.Initial(Policy).Preferred);
+
+    [Fact]
+    public void StoredFloating_SurvivesTheDefaultChange()
+        // A returning user with video.placement = "floating" keeps the mini player — only a fresh ("") profile picks
+        // up the new Docked default (LoadPlacement reads the stored name; B2).
+        => Assert.Equal(SurfacePlacement.Floating, PlacementPersistence.LoadPlacement("floating", Policy));
+
     // ── the click spec ──────────────────────────────────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void PrimaryClick_WhenUnlit_OpensAtPreferred_WhichDefaultsToTheMiniPlayer()
+    public void PrimaryClick_WhenUnlit_OpensAtPreferred_WhichDefaultsToDocked()
     {
         var s = PlacementCore.TogglePrimary(Off());
-        Assert.Equal(SurfacePlacement.Floating, PlacementCore.Resolve(s));   // NOT a new OS window
+        Assert.Equal(SurfacePlacement.Docked, PlacementCore.Resolve(s));   // least-committing VISIBLE placement, not a new OS window
     }
 
     [Theory]
@@ -188,6 +202,29 @@ public class PlacementCoreTests
         Assert.Equal(SurfacePlacement.None, PlacementCore.ResolveWith(closed, All));   // ShouldPlayAsVideo(currentTrack) = false
     }
 
+    /// <summary>B9 — the docked card's own ✕ is exactly the same sticky-off rule as the mini player's, because
+    /// <see cref="PlacementCore.HostClosed"/> only special-cases <see cref="SurfacePlacement.Detached"/>: closing
+    /// Docked in-app is <see cref="PlacementCore.TurnOff"/>, not a demote to Floating. Critically, a LATER
+    /// availability recompute (the rail fits again; the next track has video) must not revive it — only an explicit
+    /// re-enable does.</summary>
+    [Fact]
+    public void DockedClose_IsStickyOff()
+    {
+        var docked = At(SurfacePlacement.Docked);
+        var closed = PlacementCore.HostClosed(docked, SurfacePlacement.Docked);
+        Assert.False(PlacementCore.IsActive(closed));
+        Assert.Equal(SurfacePlacement.None, closed.Requested);
+        Assert.Equal(SurfacePlacement.Docked, closed.Preferred);   // remembered, but not resurrected
+
+        // A later WithAvailability recompute does not revive it…
+        var recomputed = PlacementCore.WithAvailability(closed, All);
+        Assert.False(PlacementCore.IsActive(recomputed));
+        Assert.Equal(SurfacePlacement.None, recomputed.Requested);
+
+        // …and neither does a track change (even one with video).
+        Assert.False(PlacementCore.IsActive(NextTrack(recomputed)));
+    }
+
     // ── availability (content ∧ host caps) ──────────────────────────────────────────────────────────────────────────
 
     [Fact]
@@ -213,6 +250,23 @@ public class PlacementCoreTests
         Assert.Equal(SurfacePlacement.Floating, PlacementCore.Resolve(s));
         Assert.Equal(SurfacePlacement.Detached, s.Requested);
         Assert.Equal(SurfacePlacement.Detached, PlacementCore.Resolve(PlacementCore.WithAvailability(s, All)));
+    }
+
+    /// <summary>B4/B5 — the Docked-specific round trip: narrowing the window below the fit threshold drops the
+    /// Docked bit and the video becomes the PiP WITHOUT rewriting intent (free — no new code); widening it again
+    /// re-docks automatically because <see cref="PlacementState.Requested"/> was never overwritten.</summary>
+    [Fact]
+    public void NarrowWindow_DropsDockedBit_ResolvesFloating_PreferredIntact()
+    {
+        var docked = At(SurfacePlacement.Docked);   // requested = preferred = Docked, everything available
+        var narrowed = PlacementCore.WithAvailability(docked,
+            PlacementSet.Floating | PlacementSet.Detached | PlacementSet.Fullscreen);   // the rail no longer fits
+        Assert.Equal(SurfacePlacement.Floating, PlacementCore.Resolve(narrowed));   // B4: becomes the PiP…
+        Assert.Equal(SurfacePlacement.Docked, narrowed.Requested);                 // …intent untouched…
+        Assert.Equal(SurfacePlacement.Docked, narrowed.Preferred);
+
+        var widened = PlacementCore.WithAvailability(narrowed, All);
+        Assert.Equal(SurfacePlacement.Docked, PlacementCore.Resolve(widened));      // B5: …and it snaps back
     }
 
     [Fact]
@@ -265,6 +319,33 @@ public class PlacementCoreTests
         Assert.Equal(moved, after);
     }
 
+    // ── Demote — the rail-close AMBIENT move (§3.2): Preferred survives, unlike OpenAt/TurnOff ─────────────────────────
+
+    [Fact]
+    public void Demote_KeepsPreferred()
+    {
+        var docked = At(SurfacePlacement.Docked);   // everything available
+        var demoted = PlacementCore.Demote(docked, SurfacePlacement.Floating);
+        Assert.Equal(SurfacePlacement.Floating, demoted.Requested);
+        Assert.Equal(SurfacePlacement.Docked, demoted.Preferred);   // …so re-opening the rail re-docks (ReDockOnRailOpen)
+        Assert.True(PlacementCore.Invariant(demoted));
+    }
+
+    [Fact]
+    public void Demote_WithNothingAvailable_TurnsOff()
+    {
+        var docked = At(SurfacePlacement.Docked, PlacementSet.None);   // nothing is available at all
+        var demoted = PlacementCore.Demote(docked, SurfacePlacement.Floating);
+        Assert.Equal(SurfacePlacement.None, demoted.Requested);
+        Assert.Equal(SurfacePlacement.Docked, demoted.Preferred);   // still remembered
+        Assert.False(PlacementCore.IsActive(demoted));
+        Assert.True(PlacementCore.Invariant(demoted));
+    }
+
+    [Fact]
+    public void Demote_IsInert_WhenAlreadyOff()
+        => Assert.Equal(Off(), PlacementCore.Demote(Off(), SurfacePlacement.Floating));
+
     // ── fullscreen (reserved surface; the rules are live) ────────────────────────────────────────────────────────────
 
     [Fact]
@@ -283,8 +364,12 @@ public class PlacementCoreTests
     [Fact]
     public void Fullscreen_EnteredFromOff_ExitsToThePreferredHome()
     {
+        // Entering fullscreen from OFF leaves nothing to return TO (ReturnTo captures the previous Requested, which was
+        // None), so the exit falls back to Preferred — the surface's own default home. Asserted as Policy.Default, not a
+        // literal: this test is about "exits to the preferred home", and hard-coding the placement is what made it fail
+        // when the video surface's default moved from Floating to Docked.
         var back = PlacementCore.ExitFullscreen(PlacementCore.EnterFullscreen(Off()));
-        Assert.Equal(SurfacePlacement.Floating, back.Requested);
+        Assert.Equal(Policy.Default, back.Requested);
     }
 
     [Fact]
@@ -295,12 +380,57 @@ public class PlacementCoreTests
     }
 
     [Fact]
-    public void Fullscreen_WhenUnavailable_ResolvesDownTheLadder()
+    public void Fullscreen_WhenUnavailable_FallsToTheOnlyAvailablePlacement()
     {
-        // Fullscreen is not in the video policy yet, so requesting it still shows the video somewhere real.
-        var fs = PlacementCore.EnterFullscreen(At(SurfacePlacement.Detached));
+        // Only Detached is available (no Docked, no Floating, no Fullscreen hook) — Fullscreen still resolves
+        // somewhere real. (Was "…ResolvesDownTheLadder" and asserted the pre-fix walk-from-above-the-ladder behavior;
+        // fixed alongside Fullscreen_WhenUnavailable_NeverEscalatesToDetached, §3.3.)
+        var fs = PlacementCore.EnterFullscreen(At(SurfacePlacement.Detached, PlacementSet.Detached));
         Assert.Equal(SurfacePlacement.Detached, PlacementCore.Resolve(fs));
     }
+
+    /// <summary>§3.3 — the regression this plan fixes: <c>LadderIndex(Fullscreen)</c> used to start the fallback walk
+    /// ABOVE the ladder, so an unavailable Fullscreen would walk DOWN into Detached first — spawning a whole OS
+    /// window nobody asked for — even when a cheaper rung (Docked/Floating) was sitting right there available. The
+    /// fix walks from the CHEAPEST rung instead.</summary>
+    [Fact]
+    public void Fullscreen_WhenUnavailable_NeverEscalatesToDetached()
+    {
+        // Docked, Floating AND Detached are all available, Fullscreen alone is not — the cheapest rung must win, not
+        // the most committing one.
+        var avail = PlacementSet.Docked | PlacementSet.Floating | PlacementSet.Detached;
+        Assert.Equal(SurfacePlacement.Docked, PlacementCore.FirstAvailable(SurfacePlacement.Fullscreen, avail));
+
+        // Without Docked in the mix, Floating (still cheaper than Detached) wins.
+        Assert.Equal(SurfacePlacement.Floating,
+            PlacementCore.FirstAvailable(SurfacePlacement.Fullscreen, PlacementSet.Floating | PlacementSet.Detached));
+
+        // Only Detached is left — that, and only that, is where it falls.
+        Assert.Equal(SurfacePlacement.Detached,
+            PlacementCore.FirstAvailable(SurfacePlacement.Fullscreen, PlacementSet.Detached));
+    }
+
+    /// <summary>B16/B17 — entering fullscreen FROM Docked remembers Docked as <see cref="PlacementState.ReturnTo"/>
+    /// (not Floating/Detached, and never Fullscreen itself as <see cref="PlacementState.Preferred"/>), and exiting
+    /// restores exactly that.</summary>
+    [Fact]
+    public void Fullscreen_CapturesAndRestoresReturnTo_FromDocked()
+    {
+        var fs = PlacementCore.EnterFullscreen(At(SurfacePlacement.Docked));
+        Assert.Equal(SurfacePlacement.Docked, fs.ReturnTo);
+        Assert.Equal(SurfacePlacement.Fullscreen, fs.Requested);
+        Assert.Equal(SurfacePlacement.Docked, fs.Preferred);   // NOT Fullscreen — must not survive a restart
+
+        var back = PlacementCore.ExitFullscreen(fs);
+        Assert.Equal(SurfacePlacement.Docked, back.Requested);
+        Assert.Equal(SurfacePlacement.None, back.ReturnTo);
+    }
+
+    /// <summary>Pins the existing behaviour explicitly under its plan-table name — <see cref="OffAndFullscreen_AreNeverPersisted"/>
+    /// already covers this as a theory case; this is the named regression the plan calls out on its own.</summary>
+    [Fact]
+    public void Fullscreen_IsNeverPersisted()
+        => Assert.Equal("", PlacementPersistence.SavePlacement(SurfacePlacement.Fullscreen));
 
     // ── owner mount decisions (parity port: the old DecideDetached cases) ────────────────────────────────────────────
 
@@ -422,10 +552,10 @@ public class PlacementCoreTests
     /// <summary>The UX complaint: the primary click spawned an always-on-top OS window — the MOST committing placement —
     /// as its first response. It must open the lowest-commitment surface instead.</summary>
     [Fact]
-    public void Regression_FirstClick_OpensTheMiniPlayer_NotAnAlwaysOnTopWindow()
+    public void Regression_FirstClick_OpensDocked_NotAnAlwaysOnTopWindow()
     {
         var s = PlacementCore.TogglePrimary(PlacementState.Initial(Policy) with { Available = All });
-        Assert.Equal(SurfacePlacement.Floating, PlacementCore.Resolve(s));
+        Assert.Equal(SurfacePlacement.Docked, PlacementCore.Resolve(s));
         Assert.NotEqual(SurfacePlacement.Detached, PlacementCore.Resolve(s));
     }
 
@@ -447,6 +577,7 @@ public class PlacementCoreTests
     // ── persistence: "persist where you like to work; never persist whether it is running" ──────────────────────────
 
     [Theory]
+    [InlineData(SurfacePlacement.Docked)]
     [InlineData(SurfacePlacement.Floating)]
     [InlineData(SurfacePlacement.Detached)]
     public void PreferredPlacement_RoundTrips(SurfacePlacement p)
@@ -466,7 +597,7 @@ public class PlacementCoreTests
     [InlineData("")]
     [InlineData("   ")]
     [InlineData("nonsense")]
-    [InlineData("docked")]   // a real placement, but this surface does not allow it
+    [InlineData("fullscreen")]   // a real word, but a MODE — no LoadPlacement arm, and never persisted anyway
     public void UnusablePreference_FallsBackToTheSurfaceDefault(string? raw)
         => Assert.Equal(Policy.Default, PlacementPersistence.LoadPlacement(raw, Policy));
 
@@ -529,7 +660,7 @@ public class PlacementCoreTests
         var playingAsAudio = PlacementCore.WithAvailability(At(SurfacePlacement.Floating), PlacementSet.None);
         Assert.False(PlacementCore.IsActive(playingAsAudio));
 
-        var target = VideoUpgradeGate.FoldAvailability(playingAsAudio, hasVideo: true);
+        var target = VideoUpgradeGate.FoldAvailability(playingAsAudio, hasVideo: true, hostCapable: All);
 
         Assert.True(PlacementCore.IsActive(target));                                             // it WOULD turn on…
         Assert.True(VideoUpgradeGate.DeferUpgrade(playingAsAudio, target, commitUpgrade: false)); // …and is withheld
@@ -541,7 +672,7 @@ public class PlacementCoreTests
     public void ATrackBoundary_OrAnExplicitUserAction_CommitsTheUpgrade()
     {
         var playingAsAudio = PlacementCore.WithAvailability(At(SurfacePlacement.Floating), PlacementSet.None);
-        var target = VideoUpgradeGate.FoldAvailability(playingAsAudio, hasVideo: true);
+        var target = VideoUpgradeGate.FoldAvailability(playingAsAudio, hasVideo: true, hostCapable: All);
 
         Assert.False(VideoUpgradeGate.DeferUpgrade(playingAsAudio, target, commitUpgrade: true));
     }
@@ -552,7 +683,7 @@ public class PlacementCoreTests
     public void ADowngrade_AlwaysCommits_EvenOnTheDeferredPath()
     {
         var watching = At(SurfacePlacement.Floating);
-        var target = VideoUpgradeGate.FoldAvailability(watching, hasVideo: false);
+        var target = VideoUpgradeGate.FoldAvailability(watching, hasVideo: false, hostCapable: All);
 
         Assert.False(PlacementCore.IsActive(target));
         Assert.False(VideoUpgradeGate.DeferUpgrade(watching, target, commitUpgrade: false));
@@ -563,7 +694,7 @@ public class PlacementCoreTests
     {
         // No intent ⇒ the fold resolves to None ⇒ there is no upgrade to withhold (and committing it is inert).
         var off = PlacementCore.WithAvailability(Off(), PlacementSet.None);
-        var target = VideoUpgradeGate.FoldAvailability(off, hasVideo: true);
+        var target = VideoUpgradeGate.FoldAvailability(off, hasVideo: true, hostCapable: All);
 
         Assert.False(PlacementCore.IsActive(target));
         Assert.False(VideoUpgradeGate.DeferUpgrade(off, target, commitUpgrade: false));
@@ -578,8 +709,8 @@ public class PlacementCoreTests
         var stale = PlacementCore.WithAvailability(At(SurfacePlacement.Floating), PlacementSet.None);   // badge lit, surface untouched
 
         Assert.False(PlacementCore.IsActive(PlacementCore.TogglePrimary(stale)));                      // the bug, if the fold is dropped
-        Assert.True(PlacementCore.IsActive(VideoUpgradeGate.PrimaryClick(stale, hasVideo: true)));
-        Assert.Equal(SurfacePlacement.Floating, PlacementCore.Resolve(VideoUpgradeGate.PrimaryClick(stale, hasVideo: true)));
+        Assert.True(PlacementCore.IsActive(VideoUpgradeGate.PrimaryClick(stale, hasVideo: true, hostCapable: All)));
+        Assert.Equal(SurfacePlacement.Floating, PlacementCore.Resolve(VideoUpgradeGate.PrimaryClick(stale, hasVideo: true, hostCapable: All)));
     }
 
     /// <summary>…and it must take ONE click, not two: the standing Requested intent is still ON under a deferred upgrade,
@@ -589,28 +720,28 @@ public class PlacementCoreTests
     {
         var stale = PlacementCore.WithAvailability(At(SurfacePlacement.Floating), PlacementSet.None);
 
-        Assert.False(PlacementCore.IsActive(PlacementCore.TogglePrimary(VideoUpgradeGate.FoldAvailability(stale, true))));   // the two-click bug
-        Assert.True(PlacementCore.IsActive(VideoUpgradeGate.PrimaryClick(stale, hasVideo: true)));
+        Assert.False(PlacementCore.IsActive(PlacementCore.TogglePrimary(VideoUpgradeGate.FoldAvailability(stale, true, All))));   // the two-click bug
+        Assert.True(PlacementCore.IsActive(VideoUpgradeGate.PrimaryClick(stale, hasVideo: true, hostCapable: All)));
     }
 
     [Fact]
     public void PrimaryClick_StillTogglesNormally_WhenNothingWasDeferred()
     {
         var watching = At(SurfacePlacement.Floating);
-        Assert.False(PlacementCore.IsActive(VideoUpgradeGate.PrimaryClick(watching, hasVideo: true)));   // lit → off
+        Assert.False(PlacementCore.IsActive(VideoUpgradeGate.PrimaryClick(watching, hasVideo: true, hostCapable: All)));   // lit → off
 
         var off = PlacementCore.TurnOff(watching);
-        Assert.True(PlacementCore.IsActive(VideoUpgradeGate.PrimaryClick(off, hasVideo: true)));         // unlit → on
+        Assert.True(PlacementCore.IsActive(VideoUpgradeGate.PrimaryClick(off, hasVideo: true, hostCapable: All)));         // unlit → on
 
         // …and a track with no video at all cannot be turned on by any number of clicks.
-        Assert.False(PlacementCore.IsActive(VideoUpgradeGate.PrimaryClick(off, hasVideo: false)));
+        Assert.False(PlacementCore.IsActive(VideoUpgradeGate.PrimaryClick(off, hasVideo: false, hostCapable: All)));
     }
 
     [Fact]
     public void ShowVideoAt_AfterADeferredLand_AlsoRefolds()
     {
         var stale = PlacementCore.WithAvailability(Off(), PlacementSet.None);
-        var opened = PlacementCore.OpenAt(VideoUpgradeGate.FoldAvailability(stale, hasVideo: true), SurfacePlacement.Detached);
+        var opened = PlacementCore.OpenAt(VideoUpgradeGate.FoldAvailability(stale, hasVideo: true, hostCapable: All), SurfacePlacement.Detached);
 
         Assert.Equal(SurfacePlacement.Detached, PlacementCore.Resolve(opened));
     }
@@ -618,8 +749,26 @@ public class PlacementCoreTests
     [Fact]
     public void AvailabilityFor_IsTheOneContentChannel()
     {
-        Assert.Equal(PlacementPolicy.Video.Allowed, VideoUpgradeGate.AvailabilityFor(true));
-        Assert.Equal(PlacementSet.None, VideoUpgradeGate.AvailabilityFor(false));
+        Assert.Equal(PlacementPolicy.Video.Allowed, VideoUpgradeGate.AvailabilityFor(true, All));
+        Assert.Equal(PlacementSet.None, VideoUpgradeGate.AvailabilityFor(false, All));
+    }
+
+    /// <summary>§3.4 — availability is content ∧ HOST capability, not all-or-nothing: a track with a video is further
+    /// masked by what the host can actually do right now (can the rail fit it, can a second window/swapchain open,
+    /// does the fullscreen hook exist).</summary>
+    [Fact]
+    public void AvailabilityFor_MasksByHostCapability()
+    {
+        // Host can only do Docked + Floating (no second window, no fullscreen hook) — Detached/Fullscreen drop out
+        // even though the policy allows them and the track has video.
+        var hostCapable = PlacementSet.Docked | PlacementSet.Floating;
+        Assert.Equal(hostCapable, VideoUpgradeGate.AvailabilityFor(true, hostCapable));
+
+        // No video at all → None, regardless of host capability.
+        Assert.Equal(PlacementSet.None, VideoUpgradeGate.AvailabilityFor(hasVideo: false, hostCapable: All));
+
+        // Fully capable host → the whole policy, unmasked.
+        Assert.Equal(PlacementPolicy.Video.Allowed, VideoUpgradeGate.AvailabilityFor(hasVideo: true, hostCapable: All));
     }
 
     // ── property tests ──────────────────────────────────────────────────────────────────────────────────────────────

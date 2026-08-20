@@ -3,8 +3,9 @@ using FluentGpu.Signals;
 
 namespace Wavee;
 
-/// <summary>Which panel the right rail is showing.</summary>
-public enum RailMode { Lyrics, Queue, Details, Friends }
+// RailMode lives in RailVideoCoupling.cs — it is System-only (no Signal<T>/FluentGpu types) so it can be
+// source-included into the engine-free Wavee.Tests project alongside the pure rail<->docked-video coupling rules
+// that are keyed on it. Same `Wavee` namespace, so no `using` is needed here.
 
 /// <summary>
 /// UI-only chrome state for the WaveeMusic-style right rail. Kept off <see cref="PlaybackBridge"/> so the bridge stays
@@ -22,7 +23,11 @@ public sealed class ShellUi
     public Signal<RailMode> Mode { get; } = new(RailMode.Lyrics);
 
     /// <summary>The rail's expanded width in DIP.</summary>
-    public FloatSignal RailWidth { get; } = new(340f);
+    public FloatSignal RailWidth { get; } = new(ShellResponsiveLayout.RailDefaultW);
+
+    /// <summary>Docked music-video cap height in DIP (Lyrics/Queue/Friends/Video). Floor is 16:9 of
+    /// <see cref="RailWidth"/>; the vertical splitter only grows from there.</summary>
+    public FloatSignal DockedVideoHeight { get; } = new(ShellResponsiveLayout.DockedVideoNaturalH(ShellResponsiveLayout.RailDefaultW));
 
     /// <summary>
     /// Whether the rail can currently reserve inline layout width alongside the sidebar and content region. When false,
@@ -52,6 +57,7 @@ public sealed class ShellUi
     }
 
     /// <summary>Viewport-fit test for sidebar + rail + a minimum usable content region.</summary>
-    public static bool CanFitRail(float viewportW, float sidebarW, float railW = 340f, float minContentW = 480f)
-        => sidebarW + railW + minContentW <= viewportW;
+    public static bool CanFitRail(float viewportW, float sidebarW,
+        float railW = ShellResponsiveLayout.RailDefaultW, float minContentW = 480f)
+        => ShellResponsiveLayout.CanFitRail(viewportW, sidebarW, railW, minContentW);
 }

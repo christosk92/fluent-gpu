@@ -559,6 +559,22 @@ Gates: `gate.ctl.bind.{toggle,check,tristate,radio,naming}`.
 - **macOS:** the same `ITextDocument`/`SelectionState`/`ITextReadSide` feed `NSTextInputClient` + `NSAccessibility`
   text (text.md §15/§18 boundary) — the control recompiles unchanged.
 
+### 5.8 Splitter (composition; GridSplitter analogue)
+
+- **Composition:** a 16-DIP paint-free (or hover-thumb) hit strip. `BoxEl.OnDrag` eager-captures; window-X (or
+  window-Y when `SplitterAxis.Vertical`) is reconstructed as `local + AbsoluteRect`. Size writes are 1:1;
+  `MotionSuppressionSource.AppResize` snaps layout transitions for the gesture. Kit shape: nested `Style`
+  (`StyleOverride` / `DefaultStyle` — structural defaults on the record, Tok colors only in `DefaultStyle`) + nested
+  `SplitterOptions` (range / polarity / axis / detent knobs) +
+  `Create(width, onCommit, options, collapsed, fade, dragging, style, parts)`. `width` is a `Signal<float>` or
+  `FloatSignal` (height when `Axis = Vertical`). Opt-in detent (`collapsed` Create arg): resist + fade below min,
+  collapse past `ForcePush`, re-open past `ReExpand`. `SplitterPolarity.Leading` inverts the delta (right-rail left
+  edge). Fade/detent knobs are per-call-site; defaults match the shipping sidebar grip. Pure math: `SplitterMath`
+  (`gate.ctl.splitter.math`). Vertical discovery is `CursorId.SizeNS`; the strip is 16 DIP tall and stretches on X.
+- **UIA / keyboard:** not a tab-stop. Discovery is `CursorId.SizeWE` (horizontal) or `CursorId.SizeNS` (vertical). A collapsed remnant's bare click re-opens
+  (asymmetric: a click never collapses).
+- **Name/role:** structure, not a labelled control. Indicator fill is `Tok.FillControlStrong` (never accent).
+
 ---
 
 ## 6. Overlay-hosted controls (over the OverlayManager + arena)
@@ -968,6 +984,35 @@ the slot math read the SAMPLED prefix sums when `ExtentOf` is set, instead of as
 - **Motion/cursor/RTL:** auto-hide/expand motion-token; horizontal scrollbar mirrors origin RTL (§10A); cursor `Arrow`
   over track/thumb. Thumb fling uses the inertia integrator (input-a11y §7B), transform-only.
 
+### 8.4 As built (2026-08) — `MediaPlayerElement`'s UI-frame contract: corners, fullscreen delegation, one live menu
+
+`MediaPlayerElement` (`FluentGpu.Controls/Media/MediaPlayerElement.cs`) is otherwise owned end-to-end by
+`media-pipeline.md` §8 (present-tree, pump/ownership seam, DRM attach) — this entry documents only the three
+control-surface behaviors that changed, not a full five-tuple audit of the element (its UIA/keyboard/name-role
+facts are not asserted here; note the a11y posture is unchanged either way — there is no UIA tree of the element's
+own, see input-a11y.md's root-only-provider note).
+
+- **Corner parity (was: hard-pinned to `Radii.OverlayAll` unless `IsDecorative`).** When the element's
+  `CornerRadius` is explicitly set (`CornerRadius > 0`), `FrameCorners` now uses that value for the UI frame
+  regardless of `IsDecorative`, so an operable (non-decorative) player at a custom radius no longer gets a UI frame
+  at overlay radius while its video paints at the caller's radius. No existing caller passed `CornerRadius`
+  non-decoratively before this change.
+- **Fullscreen delegation — `Action? FullscreenRequested` (new init prop).** Unset, F11 and the fullscreen glyph
+  keep the element's standalone behavior verbatim (its own modal overlay via the existing internal
+  `FullscreenState`/`IsFullscreenPresentation`/`PresentationBinding`/`TransferOwnershipTo` machinery, which this
+  change does not touch). Set, both DELEGATE to the callback instead of opening that overlay — the intent is only to
+  change *who asks*, so a host app (or, longer-term, the generic engine `SurfaceHost` primitive planned in
+  `docs/plans/wavee-surfaces-placement-design.md` M6) can own where fullscreen actually lives.
+- **One live More/context menu.** Every non-decorative player attaches the same lazy row factory through
+  `ContextMenu.Attach`. The transport's ⋯ is a `ClickRequestsContext` source; right-click/long-press opens at the
+  contact point; Menu-key/keyboard activation anchors to the live invoking node and focuses the first item. No route
+  captures the ⋯ node through `OnRealized`, so a transport re-render/remount cannot strand a menu at the viewport
+  origin. The default `PinsAnchor` contract still holds the auto-hide chrome while the menu is open. Inline
+  caption/quality/rate pickers retain their specialized rows but refuse a null or generation-dead anchor.
+
+Observed gates: `gate.media.el.docked-corners`, `gate.media.el.fullscreen-delegates`,
+`gate.media.el.context-menu-live-anchor`.
+
 ---
 
 ## 9. Cross-cutting wiring summary (the seam matrix)
@@ -1078,7 +1123,7 @@ generational handles, and the portable seam interfaces.
 - **Control components (the kit):** `Button`, `Checkbox`, `RadioButton`/`RadioGroup`, `Switch`, `Slider`,
   `ProgressBar`/`ProgressRing`, `TextField`/`TextBox`, `ComboBox`, `ListView`/`GridView`, `TreeView`, `Tabs`,
   `Menu`/`MenuBar`/`ContextMenu`/`MenuItem`, `Dialog`/`Flyout`/`Popup`, `ToolTip`, `Scrollbar`, `Expander`, `InfoBar`,
-  `AnnotatedScrollBar`, `SemanticZoom`, plus their props structs and default templates.
+  `AnnotatedScrollBar`, `SemanticZoom`, `Splitter`, plus their props structs and default templates.
 - **The per-control five-tuple contract** (composition / UIA pattern+ControlType / keyboard / name-role / motion-
   cursor-RTL) and the universal control contract (§4) that validation.md gates.
 
@@ -1145,6 +1190,14 @@ here. `VirtualListEl` stays in `Reconciler`.
   notifications, focus/Escape behavior and mapped `ItemsViewController` anchoring before the incoming view presents.
   Each view preserves its own scroll state. Its `MotionRecipes.SemanticZoomOut/In` are owned by
   backdrop-effects-animation.md; this control only selects the directional recipe.
+
+**As built (2026-08) — `MediaPlayerElement`'s UI-frame contract (this assembly OWNS these three behaviors only):**
+- **`CornerRadius` → `FrameCorners` parity** when explicitly set, independent of `IsDecorative` (§8.4).
+- **`FullscreenRequested`** — the init prop that makes F11 / the fullscreen glyph delegate instead of opening the
+  element's own overlay (§8.4). The element's broader media contract — present-tree, the video-pump/ownership seam,
+  DRM attach — remains owned by `media-pipeline.md` §8 and is not restated here.
+- **One lazy More/context-menu factory** reached by ⋯, right-click, long-press and Menu-key through live context-request
+  nodes (§8.4); no captured More anchor and no origin fallback.
 
 **Explicitly NOT owned here (referenced):** `DragLift`/`DragVisualStyle`/`DragSession`/`DragState`/`DropTargetSpec`
 (incl. `SpotlightWhen`/`RefusalCaption`/spring-load), `DragSourceOpacityOverride`, the settle window and the

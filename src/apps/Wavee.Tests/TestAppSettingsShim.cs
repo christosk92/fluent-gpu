@@ -36,6 +36,8 @@ static class WaveeSettings
     public static readonly SettingKey<int> SidebarDesign = new("sidebar.design", 0);
     public static readonly SettingKey<bool> SidebarOnboardingSeen = new("sidebar.onboarding.seen", false);
     public static readonly SettingKey<int> SidebarBootstrapVersion = new("sidebar.bootstrap.version", 0);
+    public static readonly SettingKey<string> VideoAspectMode = new("video.aspect.mode", "fit");
+    public static readonly SettingKey<double> VideoCustomAspectRatio = new("video.aspect.customRatio", VideoAspectPersistence.DefaultCustomRatio);
 }
 
 // The per-design sidebar keys (F.3.1), mirroring the production SidebarKeys. Depends on SidebarDesignInfo.Slug/Tiers —

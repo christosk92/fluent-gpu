@@ -180,6 +180,24 @@ public sealed class VideoSurfaceRegistry
         if (e.DesiredHandle == dcompSurfaceHandle) return;
         e.DesiredHandle = dcompSurfaceHandle;
         MarkDirty(ref e);
+        if (OneSurfacePerPlayerGuard.CompiledIn && OneSurfacePerPlayerGuard.Enabled && dcompSurfaceHandle != 0)
+            CheckOneSurfacePerPlayer(token, dcompSurfaceHandle);
+    }
+
+    /// <summary>E4 tripwire body: scan the fixed slot array for another LIVE slot already carrying the SAME desired
+    /// handle — two elements bound to one player's MF swapchain, a size fight the moment both pump (each calls
+    /// SetVideoStreamRect with its own laid-out rect). O(MaxSurfaces), zero-alloc on the passing path (struct-field
+    /// compares only; the message is built inside <see cref="OneSurfacePerPlayerGuard.Violation"/>, never here).</summary>
+    private void CheckOneSurfacePerPlayer(int token, nuint handle)
+    {
+        int ti = token - 1;
+        for (int i = 0; i < MaxSurfaces; i++)
+        {
+            if (i == ti) continue;
+            ref Entry other = ref _entries[i];
+            if (!other.InUse || other.ReleasePending || other.DesiredHandle != handle) continue;
+            OneSurfacePerPlayerGuard.Violation(token, i + 1, handle);
+        }
     }
 
     /// <summary>Release the token: the host tears down the presenter surface on the next drain, then frees the slot.</summary>
@@ -527,3 +545,77 @@ public readonly struct VideoBinding
     /// <summary>True when <paramref name="owner"/> currently owns this slot's pump.</summary>
     public bool IsPumpOwner(object owner) => _registry is { } r && r.IsPumpOwner(Token, owner);
 }
+
+/// <summary>
+/// A DEBUG-only correctness tripwire (modeled on <see cref="FluentGpu.Hooks.ReuseGuard"/> /
+/// <see cref="FluentGpu.Reconciler.BindContract"/> / <see cref="FluentGpu.Signals.BackwardsWriteGuard"/>). The
+/// registry enforces single-writer PER SLOT (<see cref="VideoSurfaceRegistry.TransferOwnership"/>, the non-owner
+/// suppression in <see cref="VideoSurfaceRegistry.PumpPending"/>) but nothing enforces ONE SLOT PER PLAYER: two
+/// mounted elements bound to the SAME <c>IMediaPlayer</c> acquire DIFFERENT tokens (<see cref="VideoSurfaceRegistry.Acquire"/>
+/// is slot-blind to the caller), both <see cref="VideoSurfaceRegistry.Bind"/> the SAME MF DComp swapchain handle, and
+/// both end up asking the presenter to place that one swapchain at two different rects — a size fight, one repaint
+/// per flip. Hazard documented at <c>MediaPlayerElement.cs:120-124</c> (the <c>PresentationBinding</c> doc comment:
+/// sharing ONE <see cref="VideoBinding"/> is the sanctioned way two views present one player), never checked until
+/// now. This surfaces exactly that: two LIVE (in-use, not release-pending) slots sharing one nonzero
+/// <c>DesiredHandle</c>.
+/// <para>
+/// Cost discipline (matches the sibling guards): gated by the const <see cref="CompiledIn"/> (<c>false</c> unless
+/// <c>DEBUG</c>/<c>FLUENTGPU_DIAG</c>), so <c>VideoSurfaceRegistry.Bind</c>'s
+/// <c>if (OneSurfacePerPlayerGuard.CompiledIn &amp;&amp; OneSurfacePerPlayerGuard.Enabled) { ... }</c> guard folds
+/// away entirely in the shipping AOT binary. When compiled in it defaults ON (kill-switch
+/// <c>FG_ONE_SURFACE_PER_PLAYER=0</c>) and is report-only unless <c>FG_ONE_SURFACE_PER_PLAYER_THROW=1</c>. This
+/// registry's own remarks already place it OUTSIDE the zero-alloc gate surface, but the check costs nothing extra
+/// anyway: a fixed <c>MaxSurfaces</c>-slot scan over struct fields, no allocation on the passing path (the message
+/// is built only inside <see cref="Violation"/>).
+/// </para>
+/// </summary>
+public static class OneSurfacePerPlayerGuard
+{
+    /// <summary>Compile-time master switch — <c>false</c> in release so the registry's guard folds away.</summary>
+    public const bool CompiledIn =
+#if DEBUG || FLUENTGPU_DIAG
+        true;
+#else
+        false;
+#endif
+
+    /// <summary>Runtime gate (only consulted when <see cref="CompiledIn"/>): defaults ON, kill-switch
+    /// <c>FG_ONE_SURFACE_PER_PLAYER=0</c> disables it.</summary>
+    public static bool Enabled = CompiledIn && !Diag.EnvFlagDisabled("FG_ONE_SURFACE_PER_PLAYER");
+
+    /// <summary>When set, a detected violation THROWS <see cref="OneSurfacePerPlayerException"/> instead of only
+    /// reporting — <c>FG_ONE_SURFACE_PER_PLAYER_THROW=1</c>, or a gate scoping the strict path. Default report-only.</summary>
+    public static bool ThrowOnViolation = CompiledIn && Diag.EnvFlag("FG_ONE_SURFACE_PER_PLAYER_THROW");
+
+    /// <summary>Count of violations since the last <see cref="Reset"/> — the VerticalSlice gate accessor for
+    /// <c>gate.media.el.one-surface-per-player</c>.</summary>
+    public static int Violations { get; private set; }
+
+    /// <summary>The most recent violation message (gate accessor).</summary>
+    public static string? LastViolation { get; private set; }
+
+    /// <summary>Reset the accumulators (between gate scenarios).</summary>
+    public static void Reset() { Violations = 0; LastViolation = null; }
+
+    /// <summary>Report two live registry slots (<paramref name="tokenA"/>, <paramref name="tokenB"/>) bound to the
+    /// same <paramref name="handle"/>. Reports to <see cref="Diag.Sink"/>/stderr; throws when
+    /// <see cref="ThrowOnViolation"/>.</summary>
+    public static void Violation(int tokenA, int tokenB, nuint handle)
+    {
+        Violations++;
+        string msg = $"[one-surface-per-player] tokens {tokenA} and {tokenB} are both bound to DComp handle 0x{handle:X} "
+                   + "— two LIVE registry slots writing one MF swapchain (a size fight: each pump will call "
+                   + "SetVideoStreamRect with its own rect). The registry enforces single-writer PER SLOT, not per "
+                   + "player — share ONE VideoBinding (the fullscreen PresentationBinding hand-off idiom in "
+                   + "MediaPlayerElement) instead of acquiring a second slot for the same player.";
+        LastViolation = msg;
+        if (Diag.Sink is { } sink) sink(msg);
+        else Console.Error.WriteLine(msg);
+        if (ThrowOnViolation) throw new OneSurfacePerPlayerException(msg);
+    }
+}
+
+/// <summary>Thrown by <see cref="OneSurfacePerPlayerGuard"/> in strict mode
+/// (<c>FG_ONE_SURFACE_PER_PLAYER_THROW</c>) when two live registry slots were bound to the same DComp handle. Never
+/// thrown in release (the guard is compiled out).</summary>
+public sealed class OneSurfacePerPlayerException(string message) : InvalidOperationException(message);

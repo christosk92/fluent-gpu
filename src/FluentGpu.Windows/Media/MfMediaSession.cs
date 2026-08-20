@@ -44,6 +44,10 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
     // Realized/published state (UI thread, via the pump).
     private bool _metaReady;
     private SizeI _naturalSize = SizeI.Zero;
+    // True while the engine has still not ANSWERED what the decoded video size is (its bounded Invoke expired), as
+    // opposed to having answered "audio-only". Keeps the pump asking — and keeps the poll timer requesting pumps to ask
+    // with — until a real answer arrives. See the LATE NATURAL SIZE block in Pump.
+    private bool _naturalSizePending;
     private TimeSpan _duration = TimeSpan.Zero;
     private nuint _handle;
     private int _streamW, _streamH;
@@ -104,7 +108,15 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
         _playRequested = !opts.StartPaused;
         if (_playRequested) _everPlayed = true;
         _engine.StateChanged += OnEngineStateChanged;
-        _pollTimer = new Timer(static state => ((MfMediaSession)state!).RefreshEngineStateCache(), this, PositionPollMs, PositionPollMs);
+        _pollTimer = new Timer(static state =>
+        {
+            var self = (MfMediaSession)state!;
+            self.RefreshEngineStateCache();
+            // Pumps are EVENT-driven (VideoSurfaceRegistry never pumps per host frame), so a session still waiting on an
+            // answer from the engine has to ask for the pump that will re-ask the question — otherwise a read that lost
+            // its bounded-Invoke race is never retried. Self-terminating: the engine always answers eventually.
+            if (self._naturalSizePending && !self._disposed) self.RequestPump();
+        }, this, PositionPollMs, PositionPollMs);
     }
 
     private void OnEngineStateChanged()
@@ -352,8 +364,13 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
         if (!_metaReady)
         {
             _metaReady = true;
-            if (_engine.TryGetNativeVideoSize(out uint cx, out uint cy) && cx > 0 && cy > 0)
-                _naturalSize = new SizeI((int)cx, (int)cy);
+            NativeSizeAnswer answer = _engine.QueryNativeVideoSize(out uint cx, out uint cy);
+            if (answer == NativeSizeAnswer.Ok) _naturalSize = new SizeI((int)cx, (int)cy);
+            // NoAnswer is NOT "audio-only" — this is the busiest instant on the engine thread (it is still finishing
+            // source resolution), so the bounded read routinely expires here on a large local file. Publish what we
+            // know (an empty size resets any stale value) and keep the question open; the LATE NATURAL SIZE block below
+            // re-asks until the engine answers.
+            _naturalSizePending = answer == NativeSizeAnswer.NoAnswer;
             sink.NaturalSize(_naturalSize);
 
             // Cache-first: RefreshEngineStateCache already ran off-thread (OnEngineStateChanged fires for
@@ -363,23 +380,7 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
             _duration = dur > 0 ? TimeSpan.FromSeconds(dur) : TimeSpan.Zero;
             sink.Duration(_duration);
 
-            sink.Commands(_naturalSize.IsEmpty
-                ? MediaCommandFlags.Play | MediaCommandFlags.Pause | MediaCommandFlags.Seek | MediaCommandFlags.Rate
-                : MediaCommandFlags.Play | MediaCommandFlags.Pause | MediaCommandFlags.Seek | MediaCommandFlags.Rate | MediaCommandFlags.StepFrame);
-
-            if (_manifest is { } catalog)
-            {
-                MediaCommandFlags adaptive = MediaCommandFlags.SelectVideoQuality;
-                for (int g = 0; g < catalog.TrackGroups.Count; g++)
-                    adaptive |= catalog.TrackGroups[g].Type switch
-                    {
-                        AdaptiveTrackType.Audio => MediaCommandFlags.SelectAudioTrack,
-                        AdaptiveTrackType.Text => MediaCommandFlags.SelectTextTrack,
-                        _ => MediaCommandFlags.None,
-                    };
-                if (catalog.IsLive) adaptive |= MediaCommandFlags.GoLive;
-                sink.Commands(sinkCoreCommands(_naturalSize) | adaptive);
-            }
+            sink.Commands(sinkCoreCommands(_naturalSize) | AdaptiveCommands());
 
             // Honor the accepted play/pause intent now that the source has resolved.
             if (_playRequested) _engine.Play(); else _engine.Pause();
@@ -397,6 +398,31 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
             {
                 _duration = TimeSpan.FromSeconds(_cachedDurationSeconds);
                 sink.Duration(_duration);
+            }
+        }
+
+        // 2c. LATE NATURAL SIZE — the sibling of 2b, and the reason a playing video could sit under an eternal
+        // "Starting playback…". The size read in 2 is issued at the exact instant the engine thread is busiest (it is
+        // still resolving the source when LOADEDMETADATA lands), and VideoMediaEngine.Invoke gives up after a bounded
+        // wait — so on a large local file it routinely comes back with NO ANSWER, not with a size. Latching that as
+        // "audio-only" is fatal downstream and never self-corrects: MediaPlayerElement reads an empty NaturalSize as
+        // audio-only (so it never punches a video hole and keeps the opening spinner up), MediaPlayer.PumpVideo then
+        // reports the surface as not presenting, and Video below stays VideoDelivery.None. So re-ask until the engine
+        // ANSWERS — the same value-gated re-read the protected path has always done (ProtectedMediaSession §2).
+        // An answered "no video" clears the flag, so a genuinely audio-only source pays for exactly one extra read.
+        if (_metaReady && _naturalSizePending)
+        {
+            NativeSizeAnswer late = _engine.QueryNativeVideoSize(out uint lw, out uint lh);
+            if (late != NativeSizeAnswer.NoAnswer)
+            {
+                _naturalSizePending = false;
+                if (late == NativeSizeAnswer.Ok)
+                {
+                    _naturalSize = new SizeI((int)lw, (int)lh);
+                    sink.NaturalSize(_naturalSize);
+                    sink.Commands(sinkCoreCommands(_naturalSize) | AdaptiveCommands());
+                    Volatile.Write(ref _repaintPending, 1);   // the hand-off below can now report a real surface
+                }
             }
         }
 
@@ -446,6 +472,24 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
             }
         }
         if (_manifest is { IsLive: true }) PublishLiveTimeline(sink, TimeSpan.FromSeconds(_cachedPositionSeconds));
+    }
+
+    /// <summary>The manifest-derived command bits (quality/track selection, GoLive), or <c>None</c> for a plain
+    /// progressive source. Extracted so the first-metadata publish and the LATE NATURAL SIZE re-publish can never
+    /// disagree about what this session can do.</summary>
+    private MediaCommandFlags AdaptiveCommands()
+    {
+        if (_manifest is not { } catalog) return MediaCommandFlags.None;
+        MediaCommandFlags adaptive = MediaCommandFlags.SelectVideoQuality;
+        for (int g = 0; g < catalog.TrackGroups.Count; g++)
+            adaptive |= catalog.TrackGroups[g].Type switch
+            {
+                AdaptiveTrackType.Audio => MediaCommandFlags.SelectAudioTrack,
+                AdaptiveTrackType.Text => MediaCommandFlags.SelectTextTrack,
+                _ => MediaCommandFlags.None,
+            };
+        if (catalog.IsLive) adaptive |= MediaCommandFlags.GoLive;
+        return adaptive;
     }
 
     private static MediaCommandFlags sinkCoreCommands(SizeI size)

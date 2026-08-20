@@ -233,6 +233,17 @@ public class DetailSkeletonGeometryTests
         // …and the rail is composed as `railFaded` beside `right`, never inside it.
         Assert.Contains("? [railFaded, DetailRailGrip(", shell);
         Assert.Contains(": [railFaded, right];", shell);
+        Assert.Contains("Key = \"detail-rail-fade\"", shell);
+        // The fade wrapper is a ROW child of [rail | right]. Height is the CROSS axis — AlignSelf=Stretch
+        // takes the row's definite height; AlignItems=Stretch then hands that height to DetailRail.Build,
+        // whose inner ScrollView grows into it. Direction=1 here makes height the MAIN axis, and Build's
+        // root has no Grow, so the scroller collapses to 0 and ClipToBounds paints an empty column.
+        Assert.Contains("Direction = 0, AlignItems = FlexAlign.Stretch, AlignSelf = FlexAlign.Stretch", shell);
+        Assert.Contains("Children = [DetailRail.Build(", shell);
+        // Cover/title sizes are CoverEdge(railW). Peek + a wrapper Width bind updates the column box but not
+        // Build's frozen inner widths, so a drag looks like a no-op. Subscribe like LibraryPage's `_leftW.Value`.
+        Assert.Contains("mode == 0 && resizableRail ? railWidthSignal.Value", shell);
+        Assert.DoesNotContain("mode == 0 && resizableRail ? railWidthSignal.Peek()", shell);
     }
 
     static string Read(string root, params string[] parts) => File.ReadAllText(Path.Combine(root, Path.Combine(parts)));

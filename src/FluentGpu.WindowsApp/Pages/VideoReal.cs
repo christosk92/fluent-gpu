@@ -104,7 +104,7 @@ static class VideoReal
 
             // Geometry: fit the native video into the window (below the top bar), preserving aspect, device px.
             uint vw = 1280, vh = 720;
-            engine.TryGetNativeVideoSize(out vw, out vh);
+            engine.QueryNativeVideoSize(out vw, out vh);   // NoAnswer zeroes the out-params → the 1280x720 fallback below
             if (vw == 0 || vh == 0) { vw = 1280; vh = 720; }
             var px = device.SizePx;
             int wpx = (int)px.Width, hpx = (int)px.Height;

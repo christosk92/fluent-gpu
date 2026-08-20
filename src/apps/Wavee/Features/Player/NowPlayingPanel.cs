@@ -10,10 +10,28 @@ using FluentGpu.Hooks;
 using FluentGpu.Localization;
 using FluentGpu.Signals;
 using Wavee.Core;
+using Wavee.Features.Video;
 using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
 
+/// <summary>
+/// The Details rail body — now split into a PINNED hero (<see cref="NowPlayingHeroTile"/>, mounted separately by
+/// <c>RightRail</c>) and everything that still scrolls (this class). Only the 324x324 cover-art tile was hoisted out;
+/// title / meta / <c>SaveButton</c> / <c>NpvLyricsPeek</c> / credits / "Next up" are unchanged below, still built and
+/// still scrolled by this component exactly as before.
+///
+/// <para><b>Why the split exists at all.</b> A composited video cannot live inside <c>ScrollView(...) with
+/// { AutoEdgeFade = true }</c> (this class used to return exactly that, with the art tile as its first scrolled
+/// child): <c>AutoEdgeFade</c> pushes an offscreen render target, and <c>DrawOp.DrawVideo</c> is a DestOut erase
+/// against the BACK BUFFER — inside an offscreen layer the erase never lands and the video renders BLACK. See the
+/// docked-video design's §1 for the other two reasons (the fling-lease disqualification, the rect-only ancestor
+/// clip). Hoisting the tile out of the scroller is therefore mandatory, not cosmetic — do not re-nest it.</para>
+///
+/// <para><b>DELIBERATE BEHAVIOUR CHANGE:</b> the Details hero no longer scrolls away with the rest of the panel — it
+/// is now always visible for as long as the Details rail is open, video docked or not. That is the accepted price of
+/// the pinned slot (the docked-video design calls this out explicitly), not an oversight to "fix" later.</para>
+/// </summary>
 sealed class NowPlayingPanel : Component
 {
     static readonly ColumnSet NextCols = new(Album: false, By: false, Date: false, Video: true, Plays: false, Heart: false, Thumb: false);
@@ -68,7 +86,10 @@ sealed class NowPlayingPanel : Component
             Direction = 1,
             Children =
             [
-                Hero(track, lib, go),
+                // The 324x324 art tile is no longer here — NowPlayingHeroTile below hosts it, pinned, outside this
+                // ScrollView. HeroMeta is everything that was Hero() minus that tile: title/meta/SaveButton/lyrics
+                // peek, still the first thing that scrolls.
+                HeroMeta(track, lib, go),
                 sections.Count == 0 ? new BoxEl()
                     : new BoxEl
                     {
@@ -97,7 +118,31 @@ sealed class NowPlayingPanel : Component
         catch { return null; }
     }
 
-    static Element Hero(Track track, LibraryBridge? lib, Action<string, string?>? go)
+    // The 324x324 cover-art tile, alone — moved verbatim out of the old Hero() so NowPlayingHeroTile (below) can
+    // mount it PINNED, outside NowPlayingPanel's own ScrollView. Every property here (Placeholder=wash, BlurHash,
+    // DecodePx=512, Cover fit, 1:1 aspect, Radii.Card corners on all four) is unchanged from before the split — the
+    // panel must look and behave identically to the pre-split build whenever video is not docked here.
+    internal static Element HeroArt(Track track)
+    {
+        string? url = track.Image?.Url is { Length: > 0 } u ? ImageSource.Normalize(u) : null;
+        // Bound placeholder: Watch is inside the thunk so a late grading paints without re-rendering the panel.
+        Prop<ColorF> wash = Prop.Of(() => HeroWashColor(url));
+        return new ImageEl
+        {
+            Source = url ?? "",
+            Fit = ImageFit.Cover,
+            AspectRatio = 1f,
+            DecodePx = 512,
+            Corners = CornerRadius4.All(Radii.Card),
+            Placeholder = wash,
+            BlurHash = track.Image?.BlurHash,
+            AlignSelf = FlexAlign.Stretch,
+        };
+    }
+
+    // Everything Hero() used to build BELOW the art tile — title, artist/album meta, SaveButton, NpvLyricsPeek —
+    // unchanged, and still the first thing NowPlayingPanel's ScrollView scrolls.
+    static Element HeroMeta(Track track, LibraryBridge? lib, Action<string, string?>? go)
     {
         var meta = new List<Element>(3);
         if (track.Artists.Count > 0)
@@ -114,29 +159,16 @@ sealed class NowPlayingPanel : Component
         else if (track.Album.Name.Length > 0)
             meta.Add(new TextEl(track.Album.Name) { Size = 12f, LineHeight = 16f, Color = Tok.TextTertiary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis });
 
-        string? url = track.Image?.Url is { Length: > 0 } u ? ImageSource.Normalize(u) : null;
-        // Bound placeholder: Watch is inside the thunk so a late grading paints without re-rendering the panel.
-        Prop<ColorF> wash = Prop.Of(() => HeroWashColor(url));
-        Element art = new ImageEl
-        {
-            Source = url ?? "",
-            Fit = ImageFit.Cover,
-            AspectRatio = 1f,
-            DecodePx = 512,
-            Corners = CornerRadius4.All(Radii.Card),
-            Placeholder = wash,
-            BlurHash = track.Image?.BlurHash,
-            AlignSelf = FlexAlign.Stretch,
-        };
-
         return new BoxEl
         {
             Direction = 1,
-            Padding = new Edges4(Spacing.S, Spacing.S, Spacing.S, Spacing.L),
+            // LEFT/RIGHT S mirror the pinned tile's own inset (NowPlayingHeroTile) so the two stay flush; TOP M is
+            // the Gap the art tile used to buy for free as Hero()'s first inter-child gap, now that the tile itself
+            // owns no bottom padding of its own; BOTTOM L is unchanged from the pre-split Hero() padding.
+            Padding = new Edges4(Spacing.S, Spacing.M, Spacing.S, Spacing.L),
             Gap = Spacing.M,
             Children =
             [
-                art,
                 new BoxEl
                 {
                     Direction = 0, Gap = Spacing.M, AlignItems = FlexAlign.Start,
@@ -442,4 +474,58 @@ sealed class NowPlayingPanel : Component
     static Element Empty(string message) => EmptyState.Compact(message);
 
     static string Count(long n) => n.ToString("N0");
+}
+
+/// <summary>
+/// The pinned Details hero — the 324x324 cover-art tile HOISTED OUT of <see cref="NowPlayingPanel"/>'s own
+/// <c>ScrollView</c>, where it used to be the first scrolled child (<see cref="NowPlayingPanel.HeroArt"/> is that
+/// same tile, moved verbatim). <c>RightRail</c> mounts this component separately, Shrink=0f, ABOVE
+/// <see cref="NowPlayingPanel"/>'s own scrolled body, in the Details arm only — see this class's own doc comment for
+/// why a composited video cannot live inside that scroller (<c>AutoEdgeFade</c> erases the hole, a scrolled
+/// <c>DrawVideo</c> disqualifies the fling lease, and ancestor clipping is rect-only against the rail's rounded
+/// silhouette).
+///
+/// <para>Shows the DOCKED video (<see cref="DockedVideoSurface"/>'s <see cref="DockedVideoFace.ArtTile"/> face — the
+/// SAME video, letterboxed into this identical 324x324 envelope) layered over the track's own artwork. The video
+/// layer mounts UNCONDITIONALLY, the same idiom <c>RightRail</c>'s own Cap-face slot already uses: its OWN mount gate
+/// (<c>VideoPlacementNow() != Docked</c> ⇒ an empty, zero-size <c>BoxEl</c>) is what makes it disappear with no
+/// reflow the instant the video is anywhere else, painting nothing over the artwork rather than this tile branching
+/// on placement itself. That keeps exactly one place — <see cref="DockedVideoSurface"/> — deciding whether the video
+/// is live here, instead of two copies of the same check drifting apart.</para>
+/// </summary>
+sealed class NowPlayingHeroTile : Component
+{
+    public override Element Render()
+    {
+        var b = UseContext(PlaybackBridge.Slot);
+        var track = b?.CurrentTrack.Value;
+        // Nothing playing: NowPlayingPanel itself shows Empty(...) with no hero at all, so the pinned slot must
+        // collapse to nothing too — an empty square above "Nothing playing" would be a tile for no track.
+        if (track is null) return new BoxEl();
+
+        return new BoxEl
+        {
+            Shrink = 0f,
+            // LEFT/TOP/RIGHT S, no bottom: the gap to whatever scrolls beneath is NowPlayingPanel.HeroMeta's own
+            // top padding (see that method's comment) — this tile does not own the space between itself and the
+            // scrolled content, so RightRail's two pinned tiles (this one and the Cap-face card) stay symmetric.
+            Padding = new Edges4(Spacing.S, Spacing.S, Spacing.S, 0f),
+            Children =
+            [
+                // A ZStack's OWN size is the max of its children's measured sizes (AspectRatio on the ZStack node
+                // itself is not read at measure time) — so the square comes from HeroArt's own AspectRatio=1f
+                // ImageEl and, when it is the live layer, DockedVideoSurface.ArtTile's own AspectRatio=1f outer box;
+                // both already resolve to the same width-derived square independently.
+                new BoxEl
+                {
+                    ZStack = true,
+                    Children =
+                    [
+                        NowPlayingPanel.HeroArt(track),
+                        Embed.Comp(() => new DockedVideoSurface { Face = DockedVideoFace.ArtTile }) with { Key = "npv-hero-video" },
+                    ],
+                },
+            ],
+        };
+    }
 }

@@ -167,7 +167,7 @@ sealed class InWindowVideoPip : Component
             Children =
             [
                 // Layer 0 — the video, full-bleed. It IS the card.
-                BuildVideoArea(b),
+                BuildVideoArea(b, Settings),
                 // Layer 1 — the hover-revealed top chrome (drag surface + ✕), floating over the video.
                 BuildChrome(b),
                 // Layer 2 — the eight resize zones, topmost so a band always wins over the chrome beneath it.
@@ -257,7 +257,7 @@ sealed class InWindowVideoPip : Component
     // it). In every OTHER state it paints a POSTER: the track's own artwork, dimmed, with a spinner. Resolving a manifest
     // and acquiring a DRM licence takes real time on every track change, and a surface that is a black rectangle for
     // those seconds reads as broken rather than as loading.
-    static Element BuildVideoArea(PlaybackBridge b)
+    static Element BuildVideoArea(PlaybackBridge b, IAppSettings? settings)
     {
         var src = b.PopOutVideoSource.Value;                          // subscribe → remount the stage on a source change
         var binding = b.VideoPlayer.Value;                            // subscribe → poster ↔ hole
@@ -266,8 +266,12 @@ sealed class InWindowVideoPip : Component
         if (mount)
         {
             string stageKey = src?.Key ?? ("gen:" + binding.Generation.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            var stage = Embed.Comp(() => new PopOutVideoStage { Source = src, Player = b.VideoPlayer })
-                with { Key = "pipstage:" + stageKey };
+            // Bridge/Settings put the placement ladder on the video's OWN ⋯ menu, so the mini player can be moved from
+            // the surface the user is actually looking at instead of only from the player bar across the window.
+            var stage = Embed.Comp(() => new PopOutVideoStage
+            {
+                Source = src, Player = b.VideoPlayer, Bridge = b, Settings = settings,
+            }) with { Key = "pipstage:" + stageKey };
             if (src is not null)
                 return new BoxEl
                 {

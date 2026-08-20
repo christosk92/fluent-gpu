@@ -4,6 +4,65 @@
 **Author:** lead architect / UX.
 **Grounded in current `main` @ `3893b056`** — every file and line reference below was read, not recalled.
 
+> ### Amendment — 2026-08-19: **Docked becomes the video default; Fullscreen is honored; two new declared rules**
+>
+> The docked-video plan (the accompanying implementation plan and its two Mica mockups) lands this spec's
+> **M5-for-video** and **M6** directly on the app-side `PlacementCore`, ahead of M3's generic engine `SurfaceHost`
+> primitive. That ordering is deliberate, not a shortcut: the pure core is deliberately app-local but has ZERO app
+> dependencies today (`src/apps/Wavee/App/PlacementCore.cs:187-190`), so the later extraction to
+> `FluentGpu.Engine/Surfaces/PlacementCore.cs` is still mechanical. The cost is real and is named here plainly: video
+> is now a SECOND bespoke surface arriving before the primitive this document wanted built first, so for one more
+> milestone the rail and the video dock are still two hand-wired systems, not two descriptors over one host.
+>
+> **What changed.** `PlacementPolicy.Video` widens from `Floating | Detached` to all four placements
+> (`PlacementCore.cs:45-46`), and `Default` moves from `Floating` to `Docked` — the least-committing placement that is
+> actually **visible** (Docked reserves layout, Floating is a framed overlay; both are "no OS window", but Docked no
+> longer bleeds over page content once the rail fits). **Existing users are unaffected**: only a `""`-stored
+> preference (never placed video before) picks up the new default; a persisted `"floating"` string keeps opening the
+> mini player exactly as before (`LoadPlacement` reads the stored name unchanged).
+>
+> **§2.1's placement table** — the `Video` row — changes from `— | default | ✅ | ✅` (Docked / Floating / Detached /
+> Fullscreen) to **`default | ✅ | ✅ | ✅`**: Docked is now the default, and Fullscreen — reserved since this document
+> was written — is honored. **§3.2**'s "First ever use = `DefaultPlacement`, which is the lowest-commitment placement
+> the surface supports: **Floating for video**" is superseded: read it as **Docked for video**, Floating remaining
+> the fallback the moment the rail does not fit (narrow window ⇒ `Docked ∉ Available` ⇒ `FirstAvailable` walks up to
+> Floating, so the pre-existing behavior survives unchanged as the degraded path, not the default one). The
+> `DefaultPlacement = SurfacePlacement.Floating` line in **§5.4**'s illustrative `Video` `SurfaceDescriptor` (the
+> future M3 registration shape) carries the same correction if and when that registration is written.
+>
+> **Nothing is deleted this time.** Unlike 2026-07-26, this amendment only widens a policy and adds one pure
+> transition; the per-content-dismiss machinery that amendment removed stays removed.
+>
+> **New rules worth pinning, not previously expressible:**
+> - **`Demote`** — a new pure transition, distinct from both `OpenAt` (writes `Preferred`) and the sticky-off
+>   `HostClosed` path (`PlacementCore.cs:348`). The rail closing while video is docked is an AMBIENT change, not the
+>   user closing the feature: `Demote` moves `Requested` down the ladder (to `Floating`, or `None` if nothing is
+>   available) while leaving `Preferred` untouched, so re-opening the rail re-docks. `OpenAt` and `HostClosed` are
+>   unchanged.
+> - **A docked card's own ✕ is still sticky off** — it is a user-initiated close, so it goes through the unchanged
+>   `HostClosed` → non-Detached → `TurnOff` path this document's 2026-07-26 amendment already established. `Demote`
+>   is for the rail taking the surface away from under the user, never for the user asking to close it.
+> - **A trackless video body leaves the panel, not the rail.** When the current track has no video while the rail is
+>   showing the video body, the video card unmounts (freeing the decode surface — video still holds a scarce
+>   resource, so it does not get the lyrics treatment of simply going empty) but the **rail panel stays open**,
+>   showing track meta / Up next plus a "No video for this song" empty state. This borrows the **lyrics** empty-state
+>   precedent from this document's own §1.2 ("the panel stays and shows 'No lyrics for this song'"), and is a
+>   deliberate, narrow departure from §1.2's blanket claim that "video hides entirely" — that claim continues to hold
+>   for the whole PANEL surfacing decision (an unavailable video body does not force the rail open, and closing the
+>   rail is unaffected); it just no longer holds for "the specific pixels the card occupies" once the rail is already
+>   open in Video mode for other reasons.
+>
+> **A bug fix riding along, not a design change:** `LadderIndex(Fullscreen)` returned `Ladder.Length` — one past the
+> end of `[Docked, Floating, Detached]` — so `FirstAvailable(Fullscreen, …)`'s downward walk started past the end of
+> the ladder and, if the walk kept failing, continued upward into spawning a detached OS window nobody asked for. A
+> momentarily-unavailable Fullscreen (no `InputHooks.WindowSetFullscreen`, headless, a detached child host) must
+> never escalate to a new window; `FirstAvailable` now special-cases `Fullscreen` to walk the ladder from the top and
+> fall all the way to `None` rather than up past Detached.
+>
+> This amendment supersedes §2.1's `Video` row, §3.2's default-placement sentence, and (contingently, on landing)
+> §5.4's illustrative snippet. It does not touch §2.2–§2.5, §7, or §9's milestone descriptions beyond the M5/M6
+> ordering note above.
+
 > ### Amendment — 2026-07-26: **closing a surface is STICKY OFF; the per-content dismiss is deleted**
 >
 > The user reported the consequence of the rule this document designed: close the video, and the next song that has one

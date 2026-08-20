@@ -6,8 +6,9 @@ using Wavee.SpotifyLive;
 namespace Wavee;
 
 /// <summary>
-/// Wavee's power-session policy: keep-awake while audio (or fullscreen video) is playing, pause + flush on suspend,
-/// re-announce Connect on resume when reachable. Distinct from <see cref="AmbientPowerPolicy"/> (render cadence).
+/// Wavee's power-session policy: keep-awake while audio (or an active video placement — Docked, Floating, Detached or
+/// Fullscreen) is playing, pause + flush on suspend, re-announce Connect on resume when reachable. Distinct from
+/// <see cref="AmbientPowerPolicy"/> (render cadence).
 /// </summary>
 /// <remarks>
 /// <b>KeepAwake is per-thread.</b> Acquire and dispose the handle on the UI thread only — <c>SetThreadExecutionState</c>
@@ -64,7 +65,7 @@ static class PowerBridge
         try
         {
             bool playing = bridge.IsPlaying.Peek();
-            ApplyKeepAwake(playing, playing && IsFullscreenVideo(bridge, subscribe: false));
+            ApplyKeepAwake(playing, playing && IsActiveVideo(bridge, subscribe: false));
         }
         catch { }
     }
@@ -83,15 +84,20 @@ static class PowerBridge
         try
         {
             bool playing = bridge.IsPlaying.Value;
-            ApplyKeepAwake(playing, playing && IsFullscreenVideo(bridge, subscribe: true));
+            ApplyKeepAwake(playing, playing && IsActiveVideo(bridge, subscribe: true));
         }
         catch { }
     }
 
-    static bool IsFullscreenVideo(PlaybackBridge bridge, bool subscribe)
+    /// <summary>Whether video is active in ANY placement right now — Docked, Floating, Detached or Fullscreen — via
+    /// the single derived <see cref="PlacementCore.IsActive"/> truth. Previously gated on Fullscreen only, which
+    /// meant a playing docked card or mini player let the display sleep mid-video; broadened as part of the
+    /// docked-video work so keep-awake tracks every placement that actually shows a moving picture, not just the one
+    /// that happens to fill the screen.</summary>
+    static bool IsActiveVideo(PlaybackBridge bridge, bool subscribe)
     {
         var s = subscribe ? bridge.VideoSurface.Value : bridge.VideoSurface.Peek();
-        return s.Requested == SurfacePlacement.Fullscreen || s.Live == SurfacePlacement.Fullscreen;
+        return PlacementCore.IsActive(s);
     }
 
     static void ApplyKeepAwake(bool playing, bool keepDisplayOn)
@@ -163,7 +169,7 @@ static class PowerBridge
             if (bridge is not null)
             {
                 bool playing = bridge.IsPlaying.Peek();
-                ApplyKeepAwake(playing, playing && IsFullscreenVideo(bridge, subscribe: false));
+                ApplyKeepAwake(playing, playing && IsActiveVideo(bridge, subscribe: false));
             }
             ReannounceConnect();
         }

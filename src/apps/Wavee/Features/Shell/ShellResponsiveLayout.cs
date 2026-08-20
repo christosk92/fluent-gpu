@@ -105,6 +105,26 @@ public static class ShellResponsiveLayout
     // must clamp through these — a second literal pair is how the drag and the probe drifted apart.
     public const float NavPaneMinW = 240f, NavPaneMaxW = 460f;
 
+    // ── right rail (lyrics / queue / now-playing) ────────────────────────────────────────────────────────────────────
+    // One clamp for every writer (the left-seam splitter, the settings seed, CanFitRail). A second literal pair is how
+    // the sidebar drag and the probe drifted apart; do not reintroduce that here.
+    public const float RailMinW = 200f, RailMaxW = 500f, RailDefaultW = 340f;
+    public static float ClampRailWidth(float w) => Math.Clamp(w, RailMinW, RailMaxW);
+    /// <summary>16:9 height of a full-bleed rail-width video cap (no inset). The splitter's floor — drag only grows
+    /// from here.</summary>
+    public static float DockedVideoNaturalH(float railW) => railW * 9f / 16f;
+    /// <summary>How tall the docked cap may grow. Leaves the lyrics/queue body as the remaining Grow=1 column.</summary>
+    public const float DockedVideoMaxH = 560f;
+    public static float ClampDockedVideoHeight(float h, float railW)
+    {
+        float min = DockedVideoNaturalH(railW);
+        float max = Math.Max(min, DockedVideoMaxH);
+        return h <= 0f ? min : Math.Clamp(h, min, max);
+    }
+    /// <summary>Viewport-fit test for sidebar + rail + a minimum usable content region.</summary>
+    public static bool CanFitRail(float viewportW, float sidebarW, float railW = RailDefaultW, float minContentW = 480f)
+        => sidebarW + railW + minContentW <= viewportW;
+
     // Stock NavigationView authors OpenPaneLength per window class rather than one fixed number: the 240-DIP floor for
     // ordinary windows and 320 once the window is wide enough that a 240 pane reads as a cramped gutter beside a very wide
     // content card. These three tiers are that ladder; they are the DEFAULT only — a user who drags the seam pins their own

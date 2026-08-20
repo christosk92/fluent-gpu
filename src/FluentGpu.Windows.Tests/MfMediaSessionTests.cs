@@ -134,6 +134,50 @@ public sealed class MfMediaSessionTests
     }
 
     [Fact]
+    public void NaturalSize_NoAnswerAtMetadata_IsRetriedUntilTheEngineAnswers()
+    {
+        // The regression: VideoMediaEngine.Invoke is bounded, so the size read issued the instant LOADEDMETADATA lands
+        // can come back with NO ANSWER (the engine thread is still resolving the source). Latching that as audio-only
+        // left a playing video under an eternal "Starting playback…" — MediaPlayerElement treats an empty NaturalSize as
+        // audio-only and never punches a video hole.
+        var (s, core, eng) = NewSession(startPaused: true);
+        var binding = NewBinding(out _);
+        eng.MetadataLoaded = true; eng.DurationSeconds = 10.0;
+        eng.NativeW = 1920; eng.NativeH = 1080;
+        eng.NativeSizeResult = NativeSizeAnswer.NoAnswer;   // the bounded read expires
+
+        s.PumpVideo(binding, Rect, 1f);
+        Assert.True(core.NaturalSize.Peek().IsEmpty);                                    // nothing learned yet…
+        Assert.Equal(0, (int)(core.Commands.Available.Value & MediaCommandFlags.StepFrame));
+
+        eng.NativeSizeResult = NativeSizeAnswer.Ok;         // …the engine frees up and answers
+        s.PumpVideo(binding, Rect, 1f);
+
+        Assert.Equal(new SizeI(1920, 1080), core.NaturalSize.Peek());
+        Assert.True((core.Commands.Available.Value & MediaCommandFlags.StepFrame) != 0);
+    }
+
+    [Fact]
+    public void NaturalSize_AnsweredAudioOnly_IsNotRetried()
+    {
+        // The other half of the tri-state: an ANSWERED "no video" is authoritative, so the pump must stop asking (one
+        // marshaled read per pump forever would be a real UI-thread cost for an audio-only source).
+        var (s, core, eng) = NewSession(startPaused: true);
+        var binding = NewBinding(out _);
+        eng.MetadataLoaded = true; eng.DurationSeconds = 10.0;
+        eng.NativeSizeResult = NativeSizeAnswer.NoVideo;
+
+        s.PumpVideo(binding, Rect, 1f);
+        int afterFirst = eng.NativeSizeQueries;
+        s.PumpVideo(binding, Rect, 1f);
+        s.PumpVideo(binding, Rect, 1f);
+
+        Assert.Equal(1, afterFirst);
+        Assert.Equal(1, eng.NativeSizeQueries);
+        Assert.True(core.NaturalSize.Peek().IsEmpty);
+    }
+
+    [Fact]
     public void PlayThenPause_WalksPlayingToPaused()
     {
         var (s, core, eng) = NewSession();

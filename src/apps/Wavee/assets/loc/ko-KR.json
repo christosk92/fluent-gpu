@@ -648,7 +648,17 @@
     "playingNext": "다음 재생",
     "fromContext": "{source}에서",
     "resyncLyrics": "가사 다시 맞추기",
-    "likedSongs": "좋아요 표시한 곡"
+    "likedSongs": "좋아요 표시한 곡",
+    "dockInRail": "레일에 도킹",
+    "video": "비디오",
+    "videoMiniPlayer": "미니 플레이어에서 재생",
+    "videoFullScreen": "전체 화면",
+    "videoExitFullScreen": "전체 화면 종료",
+    "noVideoForThisSong": "이 곡에는 비디오가 없습니다",
+    "videoNeedsWiderWindow": "창을 더 넓혀야 합니다",
+    "videoNoSecondWindow": "이 디스플레이 구성에서는 사용할 수 없습니다",
+    "videoNoFullscreen": "여기서는 사용할 수 없습니다",
+    "videoUpNext": "다음 곡"
   },
 
   "menu": {

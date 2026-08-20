@@ -54,6 +54,12 @@ sealed class WaveeShell : Component
     // toggled from the player bar. The rail reserves inline width when it fits; otherwise it floats over the content.
     readonly ShellUi _shellUi = new();
 
+    // Whether the CURRENT (or next) transition of PlaybackBridge.VideoSurface into resolved Fullscreen was reached by
+    // an explicit user action rather than an automatic reappearance — written by the rail↔video coupling effect
+    // below, read once at mount by VideoFullscreenSurface (see that type's UserInitiated doc comment for why the
+    // surface itself cannot tell the difference).
+    readonly Signal<bool> _videoFullscreenUserOpen = new(true);
+
     // The signals-first action system's ambient service bag (Actions/ActionServices.cs): ONE reference-stable instance
     // provided at the root next to NavCtx; fields are refreshed each render, Overlay is bound inside the OverlayHost
     // subtree (ActionServicesOverlayBinder). Context, not ctor args — the component-props-freeze contract.
@@ -109,6 +115,7 @@ sealed class WaveeShell : Component
     bool _navPaneTierSeeded;                                   // false until the first effect run with a real viewport width
     SidebarDesign _tierDesign;                                 // which design the tier ladder is currently seeded against
     readonly Signal<float> _sidebarFade = new(1f);             // content-opacity cue as a resize nears the collapse detent
+    readonly Signal<float> _rightRailFade = new(1f);           // same cue on the right-rail left-seam splitter
     Action<float>? _requestTheme;                              // ambient ThemeControl.Request: live animated re-theme (captured in Render)
 
     // (The rail layout-defer lock that used to live here is gone — see the note in ShellUi. The projected path commits
@@ -242,6 +249,9 @@ sealed class WaveeShell : Component
         _sidebarCompact = sidebar.Collapsed;
         _sidebarWidth = sidebar.Width;
         _tierDesign = sidebar.Design.Peek();
+        _shellUi.RailWidth.Value = ShellResponsiveLayout.ClampRailWidth(settings.Get(WaveeSettings.ShellRailWidth));
+        _shellUi.DockedVideoHeight.Value = ShellResponsiveLayout.ClampDockedVideoHeight(
+            settings.Get(WaveeSettings.ShellDockedVideoHeight), _shellUi.RailWidth.Peek());
 
         // Inert probe (screenshot / UI iteration only): open the right rail to the Lyrics panel at startup.
         if (Diag.EnvFlag("WAVEE_LYRICS_OPEN") || Diag.EnvFlag("WAVEE_LIVE_LYRICS_SCROLL_PROBE") || Diag.EnvFlag("WAVEE_LYRICS_ADVANCE_PROBE") || Diag.EnvFlag("WAVEE_IMMERSIVE_OPEN")) { _shellUi.RailOpen.Value = true; _shellUi.Mode.Value = RailMode.Lyrics; }
@@ -483,6 +493,12 @@ sealed class WaveeShell : Component
     }
 
     void CommitSidebarDrag() => SaveSidebar(widthUserSet: true);
+    void CommitRailDrag()
+    {
+        float w = ShellResponsiveLayout.ClampRailWidth(_shellUi.RailWidth.Peek());
+        _shellUi.RailWidth.Value = w;
+        _settings.Set(WaveeSettings.ShellRailWidth, w);
+    }
 
     void ToggleSidebar()
     {
@@ -648,6 +664,90 @@ sealed class WaveeShell : Component
             float sbW = presentedCompact.Value ? ShellResponsiveLayout.CompactRailW : _sidebarWidth.Value;
             bool fits = ShellUi.CanFitRail(vpW, sbW, _shellUi.RailWidth.Value);
             _shellUi.RailFits.SetIfChanged(fits);
+
+            // ── the video host-capability report (docked-video plan §3.4) ────────────────────────────────────────────
+            // An INPUT to VideoUpgradeGate.AvailabilityFor's intersection, never chrome state — this effect only
+            // REPORTS what the host can do right now. Docked rides the SAME rail-fit test above (a docked card needs
+            // exactly the room the rail needs); Floating has no host precondition; Detached/Fullscreen come from the
+            // live InputHooks, because this is the shell's one seam onto them (Services.cs's ctor runs before AppHost
+            // wires ANY hook, so its own seed stays permissive rather than duplicating this test). A null
+            // CanOpenDetachedWindow means the platform never wired the preflight, not that it refuses — treat that as
+            // available so a platform without one keeps working exactly as it did before capability existed.
+            if (_actions.Playback is { } capBridge)
+            {
+                bool detached = _inputHooks?.CanOpenDetachedWindow?.Invoke() ?? true;
+                bool fullscreen = _inputHooks?.WindowSetFullscreen is not null;
+                var cap = (fits ? PlacementSet.Docked : PlacementSet.None) | PlacementSet.Floating
+                        | (detached ? PlacementSet.Detached : PlacementSet.None)
+                        | (fullscreen ? PlacementSet.Fullscreen : PlacementSet.None);
+                capBridge.HostPlacementCapability.SetIfChanged(cap);
+            }
+        });
+
+        // ── §3.5 / B1, B6, B7, B13-B14 — the rail ↔ docked-video coupling, and the fullscreen focus guard ────────────
+        // ONE effect over the two independent drivers (ShellUi.RailOpen, PlaybackBridge.VideoSurface) — never in
+        // render. Put here (not at the scattered rail open/close write sites in RightRail/PlayerBar) because reacting
+        // to the RESULT of those writes is exactly what a signals-first coupling is for: nothing else needs to know
+        // this rule exists.
+        var railOpenWas = UseRef(_shellUi.RailOpen.Peek());
+        var videoStateWas = UseRef(_actions.Playback?.VideoSurface.Peek() ?? PlacementState.Initial(PlacementPolicy.Video));
+        UseSignalEffect(() =>
+        {
+            if (_actions.Playback is not { } pb) return;
+            bool railOpen = _shellUi.RailOpen.Value;
+            var state = pb.VideoSurface.Value;   // subscribe
+
+            bool wasOpen = railOpenWas.Value;
+            var prev = videoStateWas.Value;
+            railOpenWas.Value = railOpen;
+            videoStateWas.Value = state;
+
+            // B1 — docking was just requested (Requested transitioned INTO Docked, an explicit ShowVideoAt): open the
+            // rail into Video mode, but only when it was closed — ModeOnDock's own null leaves an already-open rail
+            // showing whatever it was showing.
+            if (state.Requested == SurfacePlacement.Docked && prev.Requested != SurfacePlacement.Docked
+                && RailVideoCoupling.ModeOnDock(railOpen, _shellUi.Mode.Peek()) is { } dockMode)
+            {
+                _shellUi.Mode.Value = dockMode;
+                _shellUi.RailOpen.Value = true;
+            }
+
+            // B6 — the user closed the rail while a video was docked: demote to Floating so playback continues.
+            // Preferred stays untouched (Demote's whole point), so re-opening the rail re-docks (B7).
+            if (!railOpen && wasOpen)
+            {
+                var demoteTo = RailVideoCoupling.OnRailClosed(state);
+                if (demoteTo != SurfacePlacement.None) pb.DemoteVideoTo(demoteTo);
+            }
+
+            // B7 — the rail was re-opened: only re-dock when Preferred says the rail is what took it away, never when
+            // the user deliberately chose the mini player (that write sets Preferred = Floating).
+            if (railOpen && !wasOpen && RailVideoCoupling.ReDockOnRailOpen(state))
+                pb.ShowVideoAt(SurfacePlacement.Docked);
+
+            // B13/B14 — the EXPLICIT intent left the dock (turned off, or moved to another placement) while the rail
+            // was showing the video-first body: that body has nothing left to show, so close the rail. Keyed on
+            // Requested (not Resolve), so an AVAILABILITY-only drop — B10, this track simply has no video — leaves
+            // the rail open per the empty-state precedent instead of thrashing it closed every track boundary.
+            bool videoLeftDock = prev.Requested == SurfacePlacement.Docked && state.Requested != SurfacePlacement.Docked;
+            if (RailVideoCoupling.CloseRailOnVideoLeft(_shellUi.Mode.Peek(), videoLeftDock))
+                _shellUi.RailOpen.Value = false;
+
+            // ── §5.4 — user-initiated vs automatic fullscreen entry (the focus-steal guard) ──────────────────────────
+            // VideoFullscreenSurface reads _videoFullscreenUserOpen ONCE at its own mount to decide whether to take
+            // focus. Computed HERE, not there, because that surface remounts fresh every time Flow.Show toggles it
+            // (no memory of its own history) — only the shell, which never unmounts, can tell "Requested just BECAME
+            // Fullscreen" (an explicit ShowVideoAt(Fullscreen)/F11) apart from "Requested was ALREADY Fullscreen and
+            // Resolve is only NOW catching up because availability came back" (the exact analogue of B12's "never
+            // re-opened by a track change", for Fullscreen: a video-less interstitial track drops ALL availability —
+            // including Fullscreen's — to None, and the next video track can re-open it with Requested never having
+            // moved). Written exactly once per mount-transition (never left stale for the next one) so a later
+            // automatic remount always reads the correct, freshly-computed answer.
+            bool resolvedFullscreenNow = PlacementCore.Resolve(state) == SurfacePlacement.Fullscreen;
+            bool resolvedFullscreenWas = PlacementCore.Resolve(prev) == SurfacePlacement.Fullscreen;
+            if (resolvedFullscreenNow && !resolvedFullscreenWas)
+                _videoFullscreenUserOpen.Value =
+                    state.Requested == SurfacePlacement.Fullscreen && prev.Requested != SurfacePlacement.Fullscreen;
         });
 
         // ── merged chrome pressure projection ─────────────────────────────────────────────────────────────────────────
@@ -721,6 +821,11 @@ sealed class WaveeShell : Component
                 {
                     Width = 0f, Height = 0f, Shrink = 0f, HitTestVisible = false,
                     Accelerator = ForwardChord, OnClick = Forward,
+                },
+                new BoxEl
+                {
+                    Width = 0f, Height = 0f, Shrink = 0f, HitTestVisible = false,
+                    Accelerator = VideoFullscreenChord, OnClick = ToggleVideoFullscreen,
                 },
                 // THE chrome row. One 48-DIP TitleBar in merged mode: the tabs island carries Wavee's nav cluster and
                 // the text-first strip, the flexible centre column carries the window-centred omnibar, and the trailing
@@ -988,14 +1093,38 @@ sealed class WaveeShell : Component
                     // the sidebar ScrollView instead of a non-scrollable overlay branch.
                     new BoxEl
                     {
-                        Width = Prop.Of(() => narrowShell.Value ? 0f : 16f), Direction = 1, ClipToBounds = true,
+                        Width = Prop.Of(() => narrowShell.Value ? 0f : Splitter.StripW), Direction = 1, ClipToBounds = true,
                         Transform = Prop.Of(() => Affine2D.Translation(presentedCompact.Value
                             ? ShellResponsiveLayout.CompactRailW : _sidebarWidth.Value, 0f)),
                         Children =
                         [
                             // The strip is entirely on the content side of the seam to avoid covering the sidebar's
-                            // 12-DIP scrollbar lane; SidebarResizeGrip's root Grow=1 fills this definite-height column.
-                            Embed.Comp(() => new SidebarResizeGrip(_sidebarCompact, _sidebarWidth, _sidebarDragging, _sidebarFade, CommitSidebarDrag)),
+                            // 12-DIP scrollbar lane; Splitter's root Grow=1 fills this definite-height column.
+                            Splitter.Create(_sidebarWidth, CommitSidebarDrag, new()
+                            {
+                                Min = ShellResponsiveLayout.NavPaneMinW,
+                                Max = ShellResponsiveLayout.NavPaneMaxW,
+                                ShowIndicator = false,
+                                CompactWidth = ShellResponsiveLayout.CompactRailW,
+                            }, collapsed: _sidebarCompact, fade: _sidebarFade, dragging: _sidebarDragging),
+                        ],
+                    },
+                    new BoxEl
+                    {
+                        Width = Prop.Of(() => _shellUi.RailOpen.Value ? Splitter.StripW : 0f),
+                        Direction = 1, ClipToBounds = true,
+                        Transform = Prop.Of(() => Affine2D.Translation(
+                            vpSig.Value.Width - _shellUi.RailWidth.Value - Splitter.StripW, 0f)),
+                        Children =
+                        [
+                            Splitter.Create(_shellUi.RailWidth, CommitRailDrag, new()
+                            {
+                                Min = ShellResponsiveLayout.RailMinW,
+                                Max = ShellResponsiveLayout.RailMaxW,
+                                Polarity = SplitterPolarity.Leading,
+                                ShowIndicator = false,
+                                InvertCollapsed = true,
+                            }, collapsed: _shellUi.RailOpen, fade: _rightRailFade),
                         ],
                     },
                     new BoxEl
@@ -1046,6 +1175,7 @@ sealed class WaveeShell : Component
                                         // RightRail translates its retained subtree, so this box's width is stable
                                         // rather than animating. It already clips, so Boundary() adds only IsolateLayout.
                                         IsolateLayout = true,
+                                        Opacity = Prop.Of(() => _rightRailFade.Value),
                                         Children = [ Embed.Comp(() => new RightRail()) ],
                                     },
                                 ],
@@ -1191,6 +1321,22 @@ sealed class WaveeShell : Component
                 Exit = ImmersiveLyricsSurface.ExitTerminal,
                 Children = [Embed.Comp(() => new ImmersiveLyricsSurface())],
             });
+        // The FULLSCREEN VIDEO surface (docked-video plan §5.4) — same full-bleed-layer pattern as the immersive
+        // lyrics stage just above, mounted where the OTHER video placements (InWindowVideoPip / VideoPlacementHost)
+        // already sit, below. Enter/Exit terminals come from the surface itself; UNLIKE the lyrics stage's, they carry
+        // NO opacity component — a cross-fade would wash the video hole out (see that surface's own remarks).
+        var videoFullscreenLayer = Flow.Show(
+            () => _actions.Playback?.VideoPlacementNow() == SurfacePlacement.Fullscreen,
+            new BoxEl
+            {
+                // Same load-bearing Direction = 1 as the lyrics stage above — see its comment for why a row would let
+                // an oversized measure survive arrange.
+                Direction = 1, Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f,
+                HitTestPassThrough = true,
+                Enter = Wavee.Features.Video.VideoFullscreenSurface.EnterTerminal,
+                Exit = Wavee.Features.Video.VideoFullscreenSurface.ExitTerminal,
+                Children = [Embed.Comp(() => new Wavee.Features.Video.VideoFullscreenSurface { UserInitiated = _videoFullscreenUserOpen })],
+            });
         var shellWithOverlays = Ui.ZStack(tinted, immersiveLyricsLayer, runtimeBannerLayer, fileDropLayer,
             WaveeCommandPalette.Overlay(_paletteOpen, GoNav, _actions, _settings, ToggleTheme),
             Embed.Comp(() => new ActionServicesOverlayBinder(_actions)),
@@ -1203,6 +1349,7 @@ sealed class WaveeShell : Component
             _actions.Svc?.SidebarBinder.MountPoint() ?? new BoxEl { HitTestVisible = false, Shrink = 0f },
             Embed.Comp(() => new Wavee.Features.Video.InWindowVideoPip { Settings = _settings }),
             Embed.Comp(() => new Wavee.Features.Video.VideoPlacementHost { Settings = _settings }),
+            videoFullscreenLayer,
             DragPreviewLayer.Of(WaveeResourceDrag.Preview)) with { Grow = 1f };
 
         return Ctx.Provide(ShellUi.Slot, _shellUi,
@@ -1757,8 +1904,21 @@ sealed class WaveeShell : Component
     static readonly KeyAccelerator FindChord = new(Keys.F, KeyModifiers.Ctrl);
     static readonly KeyAccelerator BackChord = new(Keys.Left, KeyModifiers.Alt);
     static readonly KeyAccelerator ForwardChord = new(Keys.Right, KeyModifiers.Alt);
+    // F11 — bare, no modifier: F-keys ARE accelerator-eligible with no modifier (InputDispatcher.FindAccelerator
+    // matches Ctrl/Alt OR an F-key), unlike bare Space/Escape. No existing shell chord claims F11 (checked: NewTab is
+    // Ctrl+T, palette Ctrl+K, find Ctrl+F, back/forward Alt+Left/Right — none is an F-key), so this is a fresh binding.
+    static readonly KeyAccelerator VideoFullscreenChord = new(Keys.F11, KeyModifiers.None);
 
     void OpenPalette() => _paletteOpen.Value = !_paletteOpen.Peek();
+
+    // F11 toggles video fullscreen ONLY while a video is active (docked-video plan §5.4/B16-B18) — with no video
+    // playing there is nothing to fill the screen with, so the chord is a no-op rather than opening an empty stage.
+    void ToggleVideoFullscreen()
+    {
+        if (_actions.Playback is not { } pb) return;
+        if (pb.VideoPlacementNow() == SurfacePlacement.Fullscreen) { pb.ExitVideoFullscreen(); return; }
+        if (pb.VideoActive()) pb.ShowVideoAt(SurfacePlacement.Fullscreen);
+    }
 
     void FocusFind()
     {
@@ -1777,11 +1937,12 @@ sealed class WaveeShell : Component
         }
     }
 
-    // THE IMMERSIVE STAGE'S SECOND WAY OUT, and why it lives here rather than on the surface.
+    // THE IMMERSIVE STAGE'S (AND THE FULLSCREEN VIDEO SURFACE'S) SECOND WAY OUT, and why it lives here rather than on
+    // either surface.
     //
-    // The surface has its own Escape handler, but Escape routes to the FOCUSED node and bubbles up ITS ancestors
-    // (InputDispatcher.OnKey) — and the stage deliberately leaves the caption strip and the docked player bar LIVE, so
-    // one click on either moves focus outside the surface's subtree and the surface's handler is never reached. This
+    // Both surfaces have their own Escape handler, but Escape routes to the FOCUSED node and bubbles up ITS ancestors
+    // (InputDispatcher.OnKey) — and both deliberately leave the caption strip and the docked player bar LIVE, so one
+    // click on either moves focus outside the surface's subtree and the surface's own handler is never reached. This
     // column is an ancestor of the title bar, the content region AND the player bar, so it catches every one of those.
     //
     // NOT an accelerator: the dispatcher only matches KeyAccelerator for Ctrl/Alt or F-keys, so bare Escape cannot be
@@ -1792,19 +1953,30 @@ sealed class WaveeShell : Component
     // Precedence comes for free from the routing order — everything that should beat us already has:
     //   • an in-flight item drag cancels first (OnKey stage 1);
     //   • OverlayHost.PreviewKey runs PRE-focus and swallows Escape for every menu / flyout / device picker /
-    //     ContentDialog that is dismissible, so those close instead of the stage;
+    //     ContentDialog that is dismissible, so those close instead of either surface;
     //   • every deeper focused Escape owner (the palette's list, in-page search, SemanticZoom, Reorderable…) gets
     //     first refusal by bubbling, and we bail on e.Handled above.
     // The one competitor that is NOT ordered for us is the command palette, which is a SIBLING ZStack layer rather
     // than an overlay entry — hence the explicit guard.
+    //
+    // Video fullscreen is checked AFTER immersive lyrics — docked-video plan §5.4 — so an Escape while BOTH happen to
+    // be up (not reachable today; immersive lyrics has no video-fullscreen entry point) closes the lyrics stage first.
     void OnShellEscape(KeyEventArgs e)
     {
-        if (!_shellUi.ImmersiveLyrics.Peek()) return;   // nothing to close — leave the engine's focus-blur gesture alone
-        if (_paletteOpen.Peek()) return;                // the palette owns Escape while it is up (sibling layer, not an overlay)
-        _shellUi.ImmersiveLyrics.Value = false;
-        // Handled ALSO stops OnKey's unhandled-Escape arm from clearing focus, which would leave the keyboard with
-        // nowhere to route the next key.
-        e.Handled = true;
+        if (_paletteOpen.Peek()) return;   // the palette owns Escape while it is up (sibling layer, not an overlay)
+        if (_shellUi.ImmersiveLyrics.Peek())
+        {
+            _shellUi.ImmersiveLyrics.Value = false;
+            // Handled ALSO stops OnKey's unhandled-Escape arm from clearing focus, which would leave the keyboard
+            // with nowhere to route the next key.
+            e.Handled = true;
+            return;
+        }
+        if (_actions.Playback is { } pb && pb.VideoPlacementNow() == SurfacePlacement.Fullscreen)
+        {
+            pb.ExitVideoFullscreen();
+            e.Handled = true;
+        }
     }
 
     void OnShellSpace(KeyEventArgs e)

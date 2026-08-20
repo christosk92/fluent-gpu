@@ -302,6 +302,23 @@ public sealed class Services
         // Seed the movable video surface from persisted settings BEFORE the first frame, so the remembered placement is
         // already in effect rather than popping in after the shell mounts.
         Playback.SeedVideoSurfaceFromSettings(settings);
+        // Seed the host-capability bits the video placement policy masks availability against
+        // (VideoUpgradeGate.AvailabilityFor). PERMISSIVE, not conservative: this constructor runs strictly BEFORE
+        // AppHost wires ANY InputHooks delegate (WaveeApp's ctor, which builds this Services instance, is evaluated
+        // as an argument to `new AppHost(...)` in FluentApp.cs, before AppHost's own body runs) — so there is no live
+        // hook here to ask, and there used to be a dead read of `InputHooks.Current.Default` that always saw null and
+        // silently left Detached/Fullscreen off. Since AvailabilityFor now INTERSECTS with this capability set, that
+        // conservative seed was a live regression: it masked OUT Detached (breaking the existing pop-out window,
+        // which nothing was ever wrong with) and masked OUT Fullscreen (the very feature this phase adds), for every
+        // frame before WaveeShell's own effect narrows the set from live hooks.
+        //
+        // A refused placement is already discovered on ATTEMPT, not on availability — VideoPlacementHost reports a
+        // refused OpenDetachedWindow as a close (falls back to the mini player), which is exactly the "unavailable"
+        // outcome a correct capability bit would have produced anyway. So seeding all four bits open here costs
+        // nothing behaviourally and preserves today's behaviour, while WaveeShell.cs narrows Docked/Floating/
+        // Detached/Fullscreen from the real rail-fit test + live InputHooks the moment it renders its first frame.
+        Playback.HostPlacementCapability.Value =
+            PlacementSet.Docked | PlacementSet.Floating | PlacementSet.Detached | PlacementSet.Fullscreen;
         Activity = new ActivityLog(activityStore);
         LibraryBridge = new LibraryBridge(mutations, userPlaylists, playlistEdits, Activity);
         FriendsBridge = new FriendsBridge(Friends);

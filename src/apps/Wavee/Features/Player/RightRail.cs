@@ -4,9 +4,11 @@ using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Input;
 using FluentGpu.Localization;
 using FluentGpu.Signals;
 using Wavee.Core;
+using Wavee.Features.Video;
 
 namespace Wavee;
 
@@ -21,14 +23,17 @@ sealed class RightRail : Component
     {
         var ui = UseContext(ShellUi.Slot);
         // Unconditional (before the null-guard below): a hook taken after an early return would shift the hook order the
-        // frame the shell context arrives. Only the lyrics header reads it.
+        // frame the shell context arrives. Only the lyrics header reads it. The bridge joins it for the same reason —
+        // RailMode.Video's header glyphs (pop-out/fullscreen) need it too.
         var svc = UseContext(Services.Slot);
+        var b = UseContext(PlaybackBridge.Slot);
         if (ui is null) return new BoxEl();
         bool open = ui.RailOpen.Value;
         float railWidth = ui.RailWidth.Value;
         var mode = ui.Mode.Value;   // subscribe → swap the panel on a mode change
         bool floating = !ui.RailFits.Value;
         bool nowPlaying = mode == RailMode.Details;
+        bool dockedVideo = b is not null && b.VideoPlacementNow() == SurfacePlacement.Docked;
 
         // The shell keeps this panel at its final layout width. Animate the component host itself so open AND close retain
         // the fully-laid-out subtree while it slides through the shell's fixed clip; no width/layout writes occur per tick.
@@ -90,9 +95,12 @@ sealed class RightRail : Component
 
         // Lyrics only: promote the panel to the fullscreen immersive surface (WaveeShell mounts it off this signal).
         // The rail is left exactly as it is underneath — the surface covers the shell rather than replacing the panel.
-        Element[] headerKids = mode == RailMode.Lyrics
-            ? LyricsHeaderKids(ui, svc?.Settings)
-            : [TitleText(mode), CloseButton(() => ui.RailOpen.Value = false)];
+        Element[] headerKids = mode switch
+        {
+            RailMode.Lyrics => LyricsHeaderKids(ui, svc?.Settings),
+            RailMode.Video => VideoHeaderKids(ui, b),
+            _ => [TitleText(mode), CloseButton(() => ui.RailOpen.Value = false)],
+        };
 
         var header = new BoxEl
         {
@@ -112,6 +120,7 @@ sealed class RightRail : Component
                 visible: () => ui.RailOpen.Value && !ui.ImmersiveLyrics.Value)),
             RailMode.Queue => Embed.Comp(() => new QueuePanel()),
             RailMode.Friends => Embed.Comp(() => new FriendsPanel()),
+            RailMode.Video => Embed.Comp(() => new VideoRailPanel()),
             _ => Embed.Comp(() => new NowPlayingPanel()),
         };
 
@@ -130,7 +139,21 @@ sealed class RightRail : Component
                 Children =
                 [
                     surface,
-                    new BoxEl { Grow = 1f, MinHeight = 0f, ClipToBounds = true, Children = [body] },
+                    new BoxEl
+                    {
+                        // Wrapped in a column (was a bare Grow=1f box): the pinned Art-tile hero (docked-video design
+                        // Phase 3) sits ABOVE the scrolled sections here, Shrink=0f, the same "Shrink=0f pinned,
+                        // Grow=1f scrolls" shape the non-Details arm below already uses for the Cap-face docked video
+                        // card. PinnedHero wraps NowPlayingHeroTile (NowPlayingPanel.cs) — the 324x324 cover-art tile
+                        // hoisted OUT of NowPlayingPanel's own ScrollView — with the Art|Video toggle laid over its
+                        // top-right corner.
+                        Direction = 1, Grow = 1f, MinHeight = 0f, ClipToBounds = true,
+                        Children =
+                        [
+                            PinnedHero(b),
+                            new BoxEl { Grow = 1f, MinHeight = 0f, ClipToBounds = true, Children = [body] },
+                        ],
+                    },
                     edge,
                 ],
             };
@@ -149,12 +172,141 @@ sealed class RightRail : Component
                 new BoxEl
                 {
                     Direction = 1, Grow = 1f, MinHeight = 0f, ClipToBounds = true,
-                    Children = [header, new BoxEl { Grow = 1f, MinHeight = 0f, ClipToBounds = true, Children = [body] }],
+                    // The docked video card is a Shrink=0f sibling of header, pinned above it — never inside it. It
+                    // mounts UNCONDITIONALLY here (both the Cap face — Lyrics/Queue/Friends — and the Takeover face —
+                    // Video — share this exact slot per the docked-video design's §1): DockedVideoSurface's OWN mount
+                    // gate (VideoPlacementNow() != Docked ⇒ an empty, Shrink=0f BoxEl) is what makes it disappear with
+                    // no reflow the instant the video is anywhere else. The wrapper Height bind collapses to 0 when
+                    // not docked so the vertical splitter cannot reserve a strip. Reasons this must stay pinned rather
+                    // than scrolled live in that design's §1 (AutoEdgeFade erasing the hole, ScrollLeaseCapture
+                    // disqualifying the fling lease, rect-only ancestor clipping against the rail's rounded silhouette).
+                    Children = [DockedCap(ui, dockedVideo, svc?.Settings, railWidth), header, new BoxEl { Grow = 1f, MinHeight = 0f, ClipToBounds = true, Children = [body] }],
                 },
                 edge,
             ],
         };
     }
+
+    // Full-bleed cap + a vertical Splitter overlaid on its bottom 16 DIP (HitTestPassThrough so chrome/clicks on the
+    // video keep working). Height is the SAME FloatSignal the splitter writes — a stable bind, not a new Prop.Of
+    // thunk each render (that left LayoutInput.Height as NaN and the ZStack collapsed to the 16-DIP strip).
+    // Floor = 16:9 of the live rail width (drag only grows); the lyrics/queue body remains the Grow=1 remainder.
+    static Element DockedCap(ShellUi ui, bool docked, IAppSettings? settings, float railWidth)
+    {
+        void Commit()
+        {
+            float h = ShellResponsiveLayout.ClampDockedVideoHeight(ui.DockedVideoHeight.Peek(), ui.RailWidth.Peek());
+            ui.DockedVideoHeight.Value = h;
+            settings?.Set(WaveeSettings.ShellDockedVideoHeight, h);
+        }
+
+        Element video = Embed.Comp(() => new DockedVideoSurface());
+        if (!docked) return video;
+
+        return new BoxEl
+        {
+            Direction = 1, ZStack = true, Shrink = 0f, ClipToBounds = true,
+            Height = ui.DockedVideoHeight,
+            Fill = Tok.MediaLetterbox,
+            Children =
+            [
+                video,
+                new BoxEl
+                {
+                    Grow = 1f, Direction = 1, Justify = FlexJustify.End, HitTestPassThrough = true,
+                    Children =
+                    [
+                        Splitter.Create(ui.DockedVideoHeight, Commit, new()
+                        {
+                            Min = ShellResponsiveLayout.DockedVideoNaturalH(railWidth),
+                            Max = ShellResponsiveLayout.DockedVideoMaxH,
+                            Axis = SplitterAxis.Vertical,
+                            ShowIndicator = false,
+                        }),
+                    ],
+                },
+            ],
+        };
+    }
+
+    // Video mode's header: title + pop-out + fullscreen + the standard close (which closes the RAIL, not the video —
+    // WaveeShell's RailVideoCoupling.OnRailClosed is what demotes a docked video to Floating on that edge, matching
+    // every other mode's close). Falls back to a bare title+close when the bridge is not yet attached (mirrors every
+    // other arm's null-tolerance elsewhere in this file).
+    static Element[] VideoHeaderKids(ShellUi ui, PlaybackBridge? b) => b is null
+        ? [TitleText(RailMode.Video), CloseButton(() => ui.RailOpen.Value = false)]
+        :
+        [
+            TitleText(RailMode.Video),
+            HeaderButton(Icons.BackToWindow, Loc.Get(Strings.Player.VideoMiniPlayer), () =>
+            {
+                Announcer.Say(Loc.Get(Strings.Player.VideoMiniPlayer));
+                b.ShowVideoAt(SurfacePlacement.Floating);
+            }),
+            HeaderButton(Icons.FullScreen, Loc.Get(Strings.Player.VideoFullScreen), () =>
+            {
+                Announcer.Say(Loc.Get(Strings.Player.VideoFullScreen));
+                b.ShowVideoAt(SurfacePlacement.Fullscreen);
+            }),
+            CloseButton(() => ui.RailOpen.Value = false),
+        ];
+
+    // The Details arm's pinned hero: NowPlayingHeroTile alone (art, or the docked video — that class's own concern),
+    // plus, laid over its top-right corner, the 2-state Art|Video toggle — but ONLY while video is docked OR
+    // dockable here. `dockable` reuses PlacementCore.Allows against the ONE resolved availability set, the same gate
+    // the video menu and PlayerBar's split button already read, so a track with no video (Available carries no
+    // Docked bit at all, VideoUpgradeGate.AvailabilityFor) or a window too narrow to dock leaves the tile bare —
+    // exactly how it looked before this phase.
+    static Element PinnedHero(PlaybackBridge? b)
+    {
+        Element tile = Embed.Comp(() => new NowPlayingHeroTile());
+        if (b is null) return tile;
+
+        var state = b.VideoSurface.Value;   // subscribe: the toggle appears/relights with availability and placement
+        if (!PlacementCore.Allows(state.Available, SurfacePlacement.Docked)) return tile;
+
+        bool docked = PlacementCore.Resolve(state) == SurfacePlacement.Docked;
+        // ZStack, not a Margin trick on the tile itself: NowPlayingHeroTile's own layout (its S-inset padding, its
+        // art/video ZStack) is untouched by having a sibling layer overlaid on top of it.
+        return new BoxEl { ZStack = true, Children = [tile, ArtVideoToggle(b, docked)] };
+    }
+
+    // `docked` picks which half is lit — NOT which half's tooltip is shown; each half's tooltip is the action IT
+    // performs, unconditionally, the same "name of record" idiom DockedVideoSurface's own glyph strip uses. "Art"
+    // is the sticky-off path (NotifyVideoSurfaceClosed, never TurnVideoOff — see that method's own doc for why the
+    // stale-close identity guard matters), "Video" docks it; both are scoped to THIS surface only.
+    static Element ArtVideoToggle(PlaybackBridge b, bool docked) => new BoxEl
+    {
+        Height = 24f, Shrink = 0f,
+        AlignSelf = FlexAlign.Start, JustifySelf = FlexAlign.End,
+        Margin = new Edges4(0f, Spacing.XS, Spacing.XS, 0f),
+        Direction = 0, Corners = CornerRadius4.All(Radii.Control), ClipToBounds = true,
+        Fill = WaveeOnMedia.GlassHover,
+        Children =
+        [
+            ToggleHalf(Icons.Picture, !docked, Loc.Get(Strings.Player.SwitchToAudio),
+                () => b.NotifyVideoSurfaceClosed(SurfacePlacement.Docked)),
+            ToggleHalf(Icons.Movie, docked, Loc.Get(Strings.Player.SwitchToVideo),
+                () => b.ShowVideoAt(SurfacePlacement.Docked)),
+        ],
+    };
+
+    static Element ToggleHalf(string glyph, bool selected, string tip, Action onClick) => ToolTip.Wrap(new BoxEl
+    {
+        Width = 24f, Height = 24f, Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+        Corners = CornerRadius4.All(Radii.Control),
+        Fill = selected ? Tok.OnMediaPrimary with { A = 0.16f } : ColorF.Transparent,
+        Role = AutomationRole.Button, Focusable = true, AllowFocusOnInteraction = false,
+        Cursor = CursorId.Hand, OnClick = onClick,
+        Children =
+        [
+            new TextEl(glyph)
+            {
+                Size = 11f, FontFamily = Theme.IconFont,
+                Color = selected ? Tok.OnMediaPrimary : Tok.OnMediaSecondary,
+            },
+        ],
+    }, tip);
 
     // The lyrics header: title · (secondary-line toggle) · inspect · expand · close.
     //
@@ -233,6 +385,7 @@ sealed class RightRail : Component
         RailMode.Lyrics => Loc.Get(Strings.Player.Lyrics),
         RailMode.Queue => Loc.Get(Strings.Player.Queue),
         RailMode.Friends => Loc.Get(Strings.Friends.Title),
+        RailMode.Video => Loc.Get(Strings.Player.Video),
         _ => Loc.Get(Strings.Player.NowPlaying),
     };
 

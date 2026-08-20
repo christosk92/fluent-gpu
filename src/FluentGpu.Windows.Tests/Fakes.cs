@@ -39,11 +39,20 @@ internal sealed class FakeVideoEngine : IVideoEngine
     public double CurrentTimeSeconds { get; set; }
 
     public uint NativeW = 1920, NativeH = 1080;
-    public bool HasNativeSize = true;
+    // What the fake engine "answers" when asked for the native size. NoAnswer models the bounded-Invoke expiry the real
+    // engine hits while it is still resolving the source (see NativeSizeAnswer).
+    public NativeSizeAnswer NativeSizeResult = NativeSizeAnswer.Ok;
     public nuint Handle;
 
     public int Initialize(string url) { InitializeCalls++; return InitializeResult; }
-    public bool TryGetNativeVideoSize(out uint cx, out uint cy) { cx = NativeW; cy = NativeH; return HasNativeSize; }
+    public NativeSizeAnswer QueryNativeVideoSize(out uint cx, out uint cy)
+    {
+        NativeSizeQueries++;
+        bool answered = NativeSizeResult == NativeSizeAnswer.Ok;
+        cx = answered ? NativeW : 0; cy = answered ? NativeH : 0;
+        return NativeSizeResult;
+    }
+    public int NativeSizeQueries;
     public nuint GetSwapchainHandle() => Handle;
     public int SetVideoStreamRect(int w, int h) { StreamW = w; StreamH = h; return 0; }
     public void RepaintCurrentFrame() => RepaintCalls++;

@@ -214,17 +214,22 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
         return (nuint)(nint)h;
     });
 
-    /// <summary>Native decoded video size (px). Valid after <c>LOADEDMETADATA</c>.</summary>
-    public bool TryGetNativeVideoSize(out uint cx, out uint cy)
+    /// <summary>Native decoded video size (px). Valid after <c>LOADEDMETADATA</c>.
+    /// <para>Tri-state (see <see cref="NativeSizeAnswer"/>) because <see cref="Invoke{T}"/> is BOUNDED: a busy engine
+    /// thread returns <c>default</c>, which here is <see cref="NativeSizeAnswer.NoAnswer"/> — "nothing learned, ask
+    /// again", NOT "this source is audio-only". Only an answer that actually came back from the engine thread reports
+    /// <see cref="NativeSizeAnswer.Ok"/>/<see cref="NativeSizeAnswer.NoVideo"/>.</para></summary>
+    public NativeSizeAnswer QueryNativeVideoSize(out uint cx, out uint cy)
     {
-        (bool ok, uint w, uint h) = Invoke(() =>
+        (NativeSizeAnswer answer, uint w, uint h) = Invoke(() =>
         {
-            if (_engineEx == null) return (false, 0u, 0u);
+            // No engine yet (or already torn down): that is not an answer about the CONTENT, so keep it retryable.
+            if (_engineEx == null) return (NativeSizeAnswer.NoAnswer, 0u, 0u);
             uint a, b;
-            if (_engineEx->GetNativeVideoSize(&a, &b) < 0) return (false, 0u, 0u);
-            return (a > 0 && b > 0, a, b);
+            if (_engineEx->GetNativeVideoSize(&a, &b) < 0) return (NativeSizeAnswer.NoVideo, 0u, 0u);
+            return (a > 0 && b > 0 ? NativeSizeAnswer.Ok : NativeSizeAnswer.NoVideo, a, b);
         });
-        cx = w; cy = h; return ok;
+        cx = w; cy = h; return answer;
     }
 
     /// <summary>

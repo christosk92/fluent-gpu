@@ -8,7 +8,6 @@ using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Localization;
-using FluentGpu.Scene;
 using FluentGpu.Signals;
 using Wavee.Core;
 using static FluentGpu.Dsl.Ui;
@@ -430,7 +429,7 @@ sealed class LibraryPage : Component
     /// every detail page open on — and it lives INSIDE this toolbar rather than above the columns because the toolbar
     /// IS this page's header: the library is a master–detail browser whose right-hand panes are owned by whatever is
     /// selected, so a full-width band above them would be a title for three surfaces at once. The master column floors
-    /// at 240 DIP (<see cref="ColumnGrip"/>'s min), which fits "Podcasts" — the longest of the three — on one line.</para>
+    /// at 240 DIP (the library splitter's min), which fits "Podcasts" — the longest of the three — on one line.</para>
     ///
     /// <para><paramref name="title"/> is false in the COLLAPSED single-column layout, where <c>CollapsedCrumbBar</c>
     /// already names the kind as the breadcrumb root: two titles for one column is the double-title this converges
@@ -930,241 +929,26 @@ sealed class LibraryPage : Component
         Children = [EmptyState.Compact(Loc.Get(key))],
     };
 
-    // The grip's ColumnGrip carries Grow=1 to fill the column HEIGHT — so it must be boxed in a fixed-width / Shrink=0
+    // The grip carries Grow=1 to fill the column HEIGHT — so it must be boxed in a fixed-width / Shrink=0
     // wrapper, else that Grow leaks into the horizontal row and the grip eats half the leftover width (the empty-gap bug).
-    // The width is ColumnGrip.StripW (16), not a local number: the strip IS the hit target, and all three library
+    // The width is Splitter.StripW (16), not a local number: the strip IS the hit target, and all three library
     // splitters plus the detail rail's must be the same target.
-    // THE SEAM. Every column boundary on this page is a Grip, so one 1-DIP StrokeCardDefault line centred in the strip
-    // separates nav|pane and pane|pane everywhere at once.
     //
-    // ColumnGrip's own header records that it DELETED a permanent hairline, and this is not a re-litigation of that: it
-    // deleted a hairline "between two panes that already read as separate surfaces" — the complaint was a redundant
-    // line, plus a 7-DIP hit strip and a TEXT token used as a HoverFill, and both of those stay fixed. In light the
-    // premise turned out to be false (see NavPanel/Pane above: the columns separate by ≈0.5/255 of fill), so the seam
-    // is now carrying real work, and a card fill paired with a card stroke is WinUI's own recipe rather than a
-    // decoration. It sits BEHIND the grip's reveal indicator and is HitTestVisible = false, so the 16-DIP drag target
-    // is unchanged.
+    // THE SEAM. Every column boundary on this page is a Grip, so one 1-DIP StrokeCardDefault line centred in the strip
+    // separates nav|pane and pane|pane everywhere at once. It sits BEHIND the grip's reveal indicator and is
+    // HitTestVisible = false, so the 16-DIP drag target is unchanged.
     static Element Grip(Signal<float> w, float min, float max, Action onCommit) => new BoxEl
     {
-        Width = ColumnGrip.StripW, Shrink = 0f, ZStack = true,
+        Width = Splitter.StripW, Shrink = 0f, ZStack = true,
         Children =
         [
             new BoxEl { Width = 1f, AlignSelf = FlexAlign.Stretch, JustifySelf = FlexAlign.Center,
                         HitTestVisible = false, Fill = Prop.Of(() => Tok.StrokeCardDefault) },
             new BoxEl { Direction = 1, AlignItems = FlexAlign.Stretch,
                         AlignSelf = FlexAlign.Stretch, JustifySelf = FlexAlign.Stretch,
-                        Children = [Embed.Comp(() => new ColumnGrip(w, min, max, onCommit))] },
+                        Children = [Splitter.Create(w, onCommit, new() { Min = min, Max = max })] },
         ],
     };
-}
-
-// A drag-to-resize seam between two library columns — the app's GridSplitter. Reuses the engine's eager pointer capture
-// (BoxEl.OnDrag) and reconstructs the true window-X each frame (the grip moves as the column resizes).
-//
-// STOCK GRIDSPLITTER MODEL (WinUI / the Toolkit's GridSplitter + WinUI 3 Gallery's PropertySizer, and the same shape
-// SidebarResizeGrip already ships): a WIDE, INVISIBLE hit strip with a reveal-on-hover indicator inside it. The engine
-// has no splitter control of its own (checked: FluentGpu.Controls has ScrollBar/Slider/SplitView but no Splitter/Sizer),
-// so this component is it.
-//
-// It used to be a 7-DIP strip around a PERMANENT 1px hairline, which was wrong twice over:
-//   · 7 DIP is half the pointer-accuracy target for an edge gesture (16 is what the sidebar grip and every stock sizer
-//     use), and there is no touch story at 7 at all;
-//   · the hairline was always painted, so a *seam* was drawn between two panes that already read as separate surfaces —
-//     and it "brightened on hover" via `HoverFill = Tok.TextTertiary`, a TEXT token used as a FILL. Worse, that hover
-//     only fired when the pointer was over the 1-DIP line itself: a plain HoverFill child is not driven by its
-//     container's hover (AnimScheduler.SetHoverDescendants only cascades to REVEAL affordances — HoverOpacity /
-//     Hover-PressScale), so 6 of the strip's 7 DIP were dead to the cue. The indicator below is opacity-revealed for
-//     exactly that reason, and it therefore lights from anywhere in the strip, including mid-drag (PressedOpacity).
-//
-// OPT-IN COLLAPSE DETENT (WP-η). By default this is the plain hard-clamp splitter every library column has always used:
-// the width tracks the cursor 1:1 inside [min,max], drag-end commits, and NOTHING else happens. Passing a `collapsed`
-// signal + a non-zero `forcePush` ARMS the sidebar's detent gesture on this grip instead (SidebarResizeGrip is the
-// mechanics being ported): below `min` the column RESISTS and its content fades, and only a force-push past the
-// threshold collapses it to nothing; re-opening needs a deliberate pull past a higher `reExpand` point (hysteresis) or
-// — for keyboard/touch — a bare click on the surviving seam.
-// The two paths are strictly separated — every detent behaviour, including the AppResize motion suppression, is inside
-// `if (Detent)` / behind the cached `_onReleased`, so LibraryPage's three splitters keep byte-identical behaviour with
-// the defaults (their release handler IS the `onCommit` delegate they always passed).
-sealed class ColumnGrip : Component
-{
-    // Detent tuning that no call site needs to vary (the collapse geometry — min/forcePush/reExpand — is per-surface and
-    // therefore a ctor argument; these two are feel constants shared with SidebarResizeGrip).
-    const float DetentResist = 0.28f;   // residual shrink inside the resist zone (lower = stickier)
-    const float DetentMinFade = 0.35f;  // content-opacity floor at the collapse edge
-
-    readonly Signal<float> _width;
-    readonly float _min, _max;
-    readonly Action _onCommit;
-    // Detent arming (all optional). `_collapsed` is the host's collapse state (written from the gesture, read by the
-    // host to drop the column); `_fade` is the host's paint-bound content opacity; `_forcePush`/`_reExpand` the
-    // collapse and re-open distances in DIP. Null / 0 ⇒ the plain grip.
-    readonly Signal<bool>? _collapsed;
-    readonly Signal<float>? _fade;
-    readonly float _forcePush, _reExpand;
-    // Cached handler identities: the plain grip publishes the EXACT delegates it always did (`_onCommit` itself as the
-    // release edge, no cancel handler), so its node's prop diff is unchanged.
-    readonly Action _onReleased;
-    readonly Action? _onCanceled;
-    NodeHandle _self;
-    float _startW, _startPx;
-    bool _startedCollapsed;
-    bool _moved;   // a zero-movement click on the seam is not a width/collapse preference — only a real drag commits
-
-    public ColumnGrip(Signal<float> width, float min, float max, Action onCommit,
-        Signal<bool>? collapsed = null, Signal<float>? fade = null, float forcePush = 0f, float reExpand = 0f)
-    {
-        _width = width; _min = min; _max = max; _onCommit = onCommit;
-        _collapsed = collapsed; _fade = fade; _forcePush = forcePush; _reExpand = reExpand;
-        _onReleased = Detent ? new Action(OnReleased) : onCommit;
-        _onCanceled = Detent ? new Action(OnCanceled) : null;
-    }
-
-    // Armed only with BOTH a collapse target and a real force-push distance — a caller that passes just a fade signal
-    // gets the plain grip rather than a half-wired detent.
-    bool Detent => _collapsed is not null && _forcePush > 0f;
-
-    /// <summary>THE splitter hit strip (DIP). Every column seam in the app is this wide — the library's three, the
-    /// detail rail's, and the sidebar's own grip, which already used 16. Wide enough to grab without aiming; invisible
-    /// at rest, so widening it costs the page nothing.</summary>
-    public const float StripW = 16f;
-    /// <summary>The reveal-on-hover indicator: a 2-DIP rounded line, inset 4 from the top and bottom of the column so it
-    /// reads as a grab handle rather than as a full-bleed divider.</summary>
-    const float IndicatorW = 2f, IndicatorInset = 4f;
-
-    public override Element Render() => new BoxEl
-    {
-        // An INVISIBLE 16-DIP hit strip with a centred indicator that fades in on hover / drag. When the host has
-        // collapsed the column it may widen its wrapper further (the seam is then the only re-open affordance) — that is
-        // the host's business; this component just fills whatever strip it is given.
-        Grow = 1f, Shrink = 0f, Direction = 1, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-        Cursor = CursorId.SizeWE,
-        OnRealized = h => _self = h, OnPointerDown = OnDown, OnDrag = OnMove,
-        OnClick = _onReleased,   // for an OnDrag node, OnClick IS the release/commit edge (drag-end) — persist the chosen width
-        OnDragCanceled = _onCanceled,
-        Children =
-        [
-            new BoxEl
-            {
-                Width = IndicatorW, Grow = 1f, Shrink = 0f,
-                Margin = new Edges4(0f, IndicatorInset, 0f, IndicatorInset),
-                Corners = CornerRadius4.All(IndicatorW * 0.5f),
-                // ControlStrongFill — the token WinUI puts on a THUMB (scrollbar thumb, slider rail): this is a grab
-                // handle, so it takes the grab-handle colour. Deliberately NOT the accent: WaveeAccent's rule (b) says
-                // accent is never structure, and a splitter is structure.
-                Fill = Tok.FillControlStrong,
-                // Opacity, not HoverFill — a fill-only child does not follow its container's hover (see the type
-                // comment), whereas a reveal does, so this lights from anywhere in the 16-DIP strip and stays lit for
-                // the whole drag.
-                Opacity = 0f, HoverOpacity = 1f, PressedOpacity = 1f,
-                HoverDurationMs = WaveeMotion.Fast, HoverEasing = Easing.FluentDecelerate,
-                HitTestVisible = false,
-            },
-        ],
-    };
-
-    void OnDown(Point2 local)
-    {
-        var s = Context.Scene;
-        if (s is null || _self.IsNull || !s.IsLive(_self)) return;
-        // NOTE: deliberately do NOT flip Motion.ReducedMotion here (SidebarResizeGrip does, to kill its width spring).
-        // Column widths aren't sprung, so there's nothing to suppress — and toggling that global mid-drag is exactly what
-        // shifted UseSoftReveal/UseEntrance's hook count and crashed (now also hardened engine-side).
-        // The DETENT path is different: collapsing/re-opening is a real structural layout change, so it does gate geometry
-        // transitions — and it must be set SYNCHRONOUSLY here, because the first drag move can batch with pointer-down in
-        // the same frame and ApplyProjections would otherwise see the collapse spring for live width writes. Scoped to
-        // MotionSuppressionSource.AppResize (an arbiter source, not the global reduced-motion flag).
-        if (Detent)
-        {
-            Motion.SetLayoutTransitionsSuppressed(MotionSuppressionSource.AppResize, true);
-            _moved = false;
-            _startedCollapsed = _collapsed!.Peek();
-            // Collapsed seed is 0 even when the host keeps a compact identity strip (DetailShell WP-κ): the strip is a
-            // separate fixed-width child, not `_width`, so the pointer's travel from the seam still IS the prospective
-            // expanded column width (same origin as the expanded column). Sidebar keeps its own compact width because
-            // THAT width IS the sidebar's `_width` signal.
-            _startW = _startedCollapsed ? 0f : _width.Peek();
-            _startPx = local.X + s.AbsoluteRect(_self).X;
-            return;
-        }
-        _startW = _width.Peek();
-        _startPx = local.X + s.AbsoluteRect(_self).X;
-    }
-
-    void OnMove(Point2 local)
-    {
-        var s = Context.Scene;
-        if (s is null || _self.IsNull || !s.IsLive(_self)) return;
-        float px = local.X + s.AbsoluteRect(_self).X;
-        float rawW = _startW + (px - _startPx);
-        if (!Detent) { _width.Value = Math.Clamp(rawW, _min, _max); return; }
-
-        _moved = true;
-        var collapsed = _collapsed!;
-        if (_startedCollapsed)
-        {
-            // Currently collapsed: only a deliberate pull past the re-expand point opens it (hysteresis above the
-            // collapse point, so the column can't flicker shut/open at the seam).
-            if (rawW >= _reExpand)
-            {
-                _startedCollapsed = false;
-                collapsed.Value = false;
-                _width.Value = Math.Clamp(rawW, _min, _max);
-                if (_fade is not null) _fade.Value = 1f;
-            }
-            return;
-        }
-
-        if (rawW >= _min)   // SnapThreshold == the min width: at/above it the column resizes 1:1
-        {
-            collapsed.Value = false;
-            _width.Value = Math.Clamp(rawW, _min, _max);
-            if (_fade is not null) _fade.Value = 1f;
-            return;
-        }
-
-        // Resist zone: the column sticks (shrinks only a little) and its content fades; force-push past → collapse.
-        float into = _min - rawW;                          // how far into the zone (>0)
-        _width.Value = _min - into * DetentResist;         // sticky width (deliberately a hair below _min while held)
-        if (_fade is not null)
-            _fade.Value = Math.Clamp(1f - (into / _forcePush) * (1f - DetentMinFade), DetentMinFade, 1f);
-        if (into >= _forcePush)
-        {
-            collapsed.Value = true;
-            _startedCollapsed = true;                       // further drag in THIS gesture now uses re-expand
-            if (_fade is not null) _fade.Value = 1f;
-        }
-    }
-
-    // The DETENT-armed release edge only — a plain grip wires `_onCommit` itself as its click handler (above), so this
-    // never runs there and `Motion` is never touched on that path.
-    void OnReleased()
-    {
-        // Release the geometry suppression BEFORE the discrete detent clamp so the final settle uses its authored recipe.
-        Motion.SetLayoutTransitionsSuppressed(MotionSuppressionSource.AppResize, false);
-        // Settle the sticky sub-min width back to the min. Unconditional (the sidebar guards this on !compact because its
-        // collapsed pane keeps a width of its own; a collapsed COLUMN has none, and the value here is what gets persisted
-        // — so a sub-min sticky width must never survive the release in either state).
-        _width.Value = Math.Clamp(_width.Peek(), _min, _max);
-        if (_fade is not null) _fade.Value = 1f;
-        if (_moved) { _onCommit(); return; }   // a real drag: persist the width + collapse decision it produced
-
-        // A BARE click (zero movement) on the seam of a COLLAPSED column RE-OPENS it. This is the non-drag re-open path:
-        // the grip is a focusable clickable node, so a keyboard Enter lands here, and a touch tap that doesn't wander
-        // does too — otherwise a collapsed column could only ever be recovered by a 220-DIP pointer drag.
-        // Deliberately ASYMMETRIC: a bare click never COLLAPSES an open column (far too easy to hit by accident on a thin
-        // seam); collapsing stays the deliberate force-push gesture only.
-        if (!_collapsed!.Peek()) return;   // bare click on an open seam changed nothing — commit nothing
-        _collapsed.Value = false;
-        _onCommit();
-    }
-
-    void OnCanceled()
-    {
-        // Capture loss mid-gesture: unwind the suppression + the fade cue, but commit nothing.
-        Motion.SetLayoutTransitionsSuppressed(MotionSuppressionSource.AppResize, false);
-        _width.Value = Math.Clamp(_width.Peek(), _min, _max);
-        if (_fade is not null) _fade.Value = 1f;
-    }
 }
 
 // The compact detail pane (WaveeMusic LibraryDetailPanel) for an album/show: a 104px hero + an action row + the content

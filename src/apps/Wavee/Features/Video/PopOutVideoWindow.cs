@@ -15,9 +15,11 @@ namespace Wavee.Features.Video;
 /// <see cref="PopOutVideoStage"/>, which PRESENTS the player owned by <c>FluentVideoMediaHost</c>. The OS window frame
 /// handles move/resize/close; the host sets always-on-top.
 ///
-/// Both props are FROZEN signals on purpose: app <c>Ctx.Provide</c> chains do NOT cross the AppHost boundary (a detached
-/// window builds its own reconciler + ambient map), so the bridge's signals are handed in directly. Reading them inside
-/// <c>Render</c> still subscribes normally — this window has its own render loop.
+/// <see cref="Source"/>/<see cref="Player"/> are FROZEN signals on purpose: app <c>Ctx.Provide</c> chains do NOT cross
+/// the AppHost boundary (a detached window builds its own reconciler + ambient map), so the bridge's signals are handed
+/// in directly. Reading them inside <c>Render</c> still subscribes normally — this window has its own render loop.
+/// <see cref="Bridge"/>/<see cref="Settings"/> are frozen for the same boundary reason, but are stable INSTANCES rather
+/// than signals — correct to freeze outright (no subscription needed; only the values reachable FROM them are live).
 /// </summary>
 sealed class PopOutVideoWindow : Component
 {
@@ -27,6 +29,17 @@ sealed class PopOutVideoWindow : Component
     /// <summary>The live video player owned by the backend media host (see <see cref="PlaybackBridge.VideoPlayer"/>). This
     /// window never builds a player — it binds to this one, so a placement flip re-binds instead of restarting from 0.</summary>
     public required IReadSignal<PlaybackBridge.VideoPlayerBinding> Player { get; init; }
+
+    /// <summary>OPTIONAL — frozen because a detached window builds its own AppHost/reconciler and does NOT inherit the
+    /// shell's <c>Ctx.Provide</c> chain, so <c>UseContext(PlaybackBridge.Slot)</c> would resolve to null in here even
+    /// though the instance is perfectly stable (same reasoning as freezing <see cref="Player"/>). When present, the
+    /// video's own transport More (⋯) menu gains the shared placement rows (<see cref="VideoPlacementMenu"/>) ahead of
+    /// its own — see <see cref="PopOutVideoStage.Bridge"/>. When null (the caller has not threaded it through yet),
+    /// the element's own More menu still works; it simply carries no placement rows.</summary>
+    public PlaybackBridge? Bridge { get; init; }
+
+    /// <summary>OPTIONAL, same freezing rationale as <see cref="Bridge"/> — needed only for the Always-on-top row.</summary>
+    public IAppSettings? Settings { get; init; }
 
     /// <summary>Wrap the content in an overlay host so the transport's flyouts (speed, more, quality, CC, the volume
     /// slider) actually open. A detached window builds its OWN AppHost — its own reconciler and ambient context map —
@@ -41,7 +54,7 @@ sealed class PopOutVideoWindow : Component
     /// the managed side sat at <c>Opening</c> until the start watchdog gave up — while the native log showed the video
     /// licensed, playing and feeding samples. A component re-renders itself, so its signal reads stay live.</para></summary>
     public override Element Render() =>
-        OverlayHost.Create(Embed.Comp(() => new PopOutVideoContent { Source = Source, Player = Player }));
+        OverlayHost.Create(Embed.Comp(() => new PopOutVideoContent { Source = Source, Player = Player, Bridge = Bridge, Settings = Settings }));
 }
 
 /// <summary>The pop-out's actual content, as a COMPONENT so it re-renders when the source/player signals change (see
@@ -53,6 +66,10 @@ sealed class PopOutVideoContent : Component
     public required IReadSignal<PopOutVideoSource?> Source { get; init; }
     /// <inheritdoc cref="PopOutVideoWindow.Player"/>
     public required IReadSignal<PlaybackBridge.VideoPlayerBinding> Player { get; init; }
+    /// <inheritdoc cref="PopOutVideoWindow.Bridge"/>
+    public PlaybackBridge? Bridge { get; init; }
+    /// <inheritdoc cref="PopOutVideoWindow.Settings"/>
+    public IAppSettings? Settings { get; init; }
 
     public override Element Render()
     {
@@ -80,7 +97,7 @@ sealed class PopOutVideoContent : Component
             // DESKTOP shows through. That was the wallpaper-coloured strip under the titlebar.
             Fill = Tok.MediaLetterbox,
             Children = live
-                ? [new BoxEl { Grow = 1, Children = [Embed.Comp(() => new PopOutVideoStage { Source = src, Player = Player }) with { Key = "stage:" + stageKey }] }]
+                ? [new BoxEl { Grow = 1, Children = [Embed.Comp(() => new PopOutVideoStage { Source = src, Player = Player, Bridge = Bridge, Settings = Settings }) with { Key = "stage:" + stageKey }] }]
                 : Array.Empty<Element>(),
         };
     }
@@ -102,12 +119,29 @@ sealed class PopOutVideoStage : Component
     public PopOutVideoSource? Source { get; init; }
     public required IReadSignal<PlaybackBridge.VideoPlayerBinding> Player { get; init; }
 
+    /// <summary>OPTIONAL — when present, wires <see cref="MediaPlayerElement.MoreMenuItems"/> with the shared
+    /// <see cref="VideoPlacementMenu"/> rows (Fullscreen omitted: the element already has its own Fullscreen row,
+    /// which delegates to the app, so including ours would duplicate it). All Wavee placement hosts thread this
+    /// instance through; null remains a safe standalone fallback with only the element's playback rows.</summary>
+    public PlaybackBridge? Bridge { get; init; }
+    /// <summary>OPTIONAL, paired with <see cref="Bridge"/> — needed only for the Always-on-top row.</summary>
+    public IAppSettings? Settings { get; init; }
+
     public override Element Render()
     {
         var binding = Player.Value;   // subscribe → re-bind when the host rebuilds/clears its player
         // The player vanished (host stopped) — render nothing; the owning surface unmounts this on the same pass.
         if (binding.Player is not { } player) return new BoxEl { Grow = 1f, MinHeight = 0f };
-        return Embed.Comp(() => new MediaPlayerElement { Player = player, Stretch = MediaStretch.Uniform })
+        var bridge = Bridge;
+        var settings = Settings;
+        return Embed.Comp(() => new MediaPlayerElement
+            {
+                Player = player, Stretch = MediaStretch.Uniform,
+                AspectMode = bridge?.VideoAspectPolicy,
+                CustomAspectRatio = bridge?.VideoCustomAspectRatio,
+                AspectModeChanged = bridge is null ? null : bridge.SetVideoAspect,
+                MoreMenuItems = bridge is null ? null : () => VideoPlacementMenu.Items(bridge, settings, includeFullscreen: false),
+            })
             with { Key = "player:" + binding.Generation.ToString(System.Globalization.CultureInfo.InvariantCulture) };
     }
 }

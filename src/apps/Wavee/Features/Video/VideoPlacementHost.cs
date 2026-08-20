@@ -75,7 +75,14 @@ sealed class VideoPlacementHost : Component
                 bool onTop = Settings?.Get(WaveeSettings.VideoWindowAlwaysOnTop) ?? true;
                 var win = hooks?.OpenDetachedWindow?.Invoke(new DetachedWindowRequest(
                     WindowTitle(b), new Size2(480, 270),
-                    new PopOutVideoWindow { Source = b.PopOutVideoSource, Player = b.VideoPlayer }, AlwaysOnTop: onTop,
+                    // Bridge/Settings are handed in as frozen props for the same reason Player is: app context does not
+                    // cross the AppHost boundary (each detached window builds its own ambient map), but the bridge
+                    // OBJECT crosses fine. That is what puts the placement rows on the pop-out's own ⋯ menu — without
+                    // them the window can present video it has no way to move.
+                    new PopOutVideoWindow
+                    {
+                        Source = b.PopOutVideoSource, Player = b.VideoPlayer, Bridge = b, Settings = Settings,
+                    }, AlwaysOnTop: onTop,
                     InitialBoundsPx: restored));
                 handle.Value = win;
                 if (win is null)

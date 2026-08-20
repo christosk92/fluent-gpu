@@ -580,21 +580,34 @@ the hole-punch present logic).
   built the grading is deferred** — the recorder emits `VideoReady = 1` and the app swaps poster↔hole
   discretely; a poster-drawn-after pattern must grade the *poster* (`gpu-renderer.md §7.3`).
 
-### 8.3 `VideoSurfaceRegistry` + `UseVideoSurface` (priority arbitration)
+### 8.3 `VideoSurfaceRegistry` — the original priority-arbitration design (UNBUILT) and the as-built pump/ownership seam (G5g)
+
+**Status: the block below is the ORIGINAL design and was never built.** It predates the G5g seam described
+immediately after it and is kept here as historical intent, not shipped behavior — read the "As-built
+reconciliation" note below the code for what `VideoSurfaceRegistry` actually does today.
 
 ```csharp
 public readonly struct VideoBinding { public VideoSurfaceId Surface; public bool IsActive; public float VideoReady; }
-VideoBinding UseVideoSurface(VideoOwner owner, int priority);   // theatre=20 > PiP=10 > sidebar=5
+VideoBinding UseVideoSurface(VideoOwner owner, int priority);   // theatre=20 > PiP=10 > sidebar=5 <!-- canon-allow: labelled UNBUILT design, see the As-built G5g note below -->
 
 public sealed class VideoSurfaceRegistry    // UI-thread arbitration; portable port of Wavee ActiveVideoSurfaceService
 {
-    // Exactly ONE live surface at a time (the OS has one hardware overlay path worth using).
+    // Exactly ONE live surface at a time (the OS has one hardware overlay path worth using). <!-- canon-allow: labelled UNBUILT design, see the As-built G5g note below -->
     // Highest-priority owner wins; handoff is ATOMIC (the new owner Places + SetVisible before the old hides)
-    //   so there is no black frame on theatre↔PiP↔sidebar transitions.
+    //   so there is no black frame on theatre↔PiP↔sidebar transitions. <!-- canon-allow: labelled UNBUILT design, see the As-built G5g note below -->
     public VideoBinding Acquire(VideoOwner owner, int priority);
     public void Release(VideoOwner owner);
 }
 ```
+
+> **As-built reconciliation.** The shipped registry (`src/FluentGpu.Engine/Media/Playback/VideoSurfaceRegistry.cs`)
+> has none of the above: **16 flat slots** (`MaxSurfaces = 16`), **first-registrant-claims** ownership
+> (`PumpOwner ??= owner`, not a priority comparison), an explicit `TransferOwnership` call for a deliberate
+> hand-off (not an automatic highest-priority preemption), and a non-owner's pump is merely **suppressed and
+> counted**, never torn down. There is no "exactly one live surface" cap — multiple slots may be `InUse`
+> simultaneously; only the **pump** is exclusive per slot. A docked (sidebar) video placement is exactly the case
+> this block promised an atomic priority hand-off for, and the ladder above was never implemented for it — the
+> docked-video work relies on the as-built explicit-transfer contract described next, not on this block.
 
 > **As built (2026-07, G5g — the pump/ownership seam).** The rebuilt `MediaPlayerElement` (SPEC-INDEX §2, the
 > unified-media control) turned the registry into the **single-writer video-pump seam**, so that per-frame
@@ -603,15 +616,23 @@ public sealed class VideoSurfaceRegistry    // UI-thread arbitration; portable p
 > `delegate void VideoPump(float scale)`; `RegisterPump(token, owner, pump)` (first registrant claims the slot) /
 > `UnregisterPump(regId)` / **`TransferOwnership(token, owner)`** (the first-class fullscreen hand-off — enforces
 > **exactly one pumping owner**, replacing the old "exactly one pumps" convention + conditional hook) /
-> `IsPumpOwner(token, owner)` / `PumpAll(scale)` (invokes only the owner's pump; non-owner calls are suppressed and
-> counted in `SuppressedNonOwnerPumpCount`, owner calls in `PumpInvocationCount`). The `VideoBinding` façade mirrors
-> them (`RegisterPump`/`TransferOwnershipTo`/`IsPumpOwner`). **Driven from `AppHost`** at **phase 7.2** —
-> `_videoSurfaces.PumpAll(_scene.DeviceScale)` in the paint prelude *after* `RunAfterAnimations()` (7.1) and
+> `IsPumpOwner(token, owner)` / `PumpPending(scale)` (invokes only the owner's pump; non-owner calls are suppressed
+> and counted in `SuppressedNonOwnerPumpCount`, owner calls in `PumpInvocationCount`). The `VideoBinding` façade
+> mirrors them (`RegisterPump`/`TransferOwnershipTo`/`IsPumpOwner`). **Driven from `AppHost`** at **phase 7.2** —
+> `_videoSurfaces.PumpPending(_scene.DeviceScale)` in the paint prelude *after* `RunAfterAnimations()` (7.1) and
 > incremental relayout, *before* the phase-11.5 `Drain`. This is the ownership-transfer contract WS-MediaUI fix #2/#3
 > asked for; `Render` becomes pure.
 
-- **Atomic handoff:** on a higher-priority `Acquire`, the registry first `Place`s+`SetVisible(true)` the new
-  owner's rect, then `SetVisible(false)` the old — committed in one render-thread DComp `Commit` (phase 11).
+- **Atomic handoff (UNBUILT — the same original design as the code block above):** "on a higher-priority `Acquire`, <!-- canon-allow: labelled UNBUILT design, see the As-built G5g note above -->
+  the registry first `Place`s+`SetVisible(true)` the new owner's rect, then `SetVisible(false)` the old" describes
+  the priority-arbitration registry automatically resolving a cross-slot hand-off — that registry-driven arbitration
+  was never built (see the reconciliation above). **What is as-built:** `Place(token, rect, z)` and
+  `SetVisible(token, visible)` are real, generic, **per-slot** primitives, and any single call that changes one is
+  committed on the render thread at phase 11 (`Drain` → `presenter.Commit()`), so no in-flight frame observes a
+  torn half-write. But the registry itself does not sequence "new owner in, old owner out" across two slots as one
+  atomic unit the way the unbuilt design promised — a caller wanting a hand-off calls `Place`/`SetVisible` on each
+  token itself, so a multi-slot hand-off's atomicity is only as good as the caller's own ordering, not a guarantee
+  the registry enforces.
 - **PiP drag** moves the DComp child off-loop via `Place`, **with the canvas-RT hole committed in lockstep in
   the same phase-11 DComp Commit** — otherwise the two clocks (UI hole vs DComp visual position) tear at the
   PiP edge. This is the folded "two-clock tear" fix.
@@ -620,6 +641,14 @@ public sealed class VideoSurfaceRegistry    // UI-thread arbitration; portable p
   transparent clear is re-emitted and the canvas-RT region stays a hole under partial repaint.
 - **Persistence across nav:** the PiP `VideoSurfaceId` is a retained registry entry; tab switch / page nav does
   not `Destroy` it, so the mini player survives navigation (the Wavee requirement).
+- **Per-player double-bind is a DEBUG tripwire, not a runtime guarantee.** The registry enforces single-writer
+  ownership **per slot** (the pump-ownership rule above), but nothing before this stops two live slots from being
+  bound to the same underlying player: two mounted elements on one `IMediaPlayer` would each bind the same MF
+  swapchain handle and independently call `SetVideoStreamRect` with their own rect — a size fight. Under
+  `DEBUG || FLUENTGPU_DIAG` the registry detects two live slots sharing a bound player and surfaces it as a
+  diagnostics assertion; in a Release build the condition remains representable and simply produces the size fight
+  described above. This is a development-time contract intended to catch the mistake in testing, not a
+  construction-level invariant that prevents it in a shipping binary.
 
 **macOS boundary:** `IVideoPresenter` → `AVPlayerLayer` as a `CALayer` sibling under the `CAMetalLayer`; the
 hole-punch protocol is identical (premul-0 clear + z-order). No engine change.

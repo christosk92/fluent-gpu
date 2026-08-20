@@ -648,7 +648,17 @@
     "playingNext": "Hierna",
     "fromContext": "van {source}",
     "resyncLyrics": "Opnieuw synchroniseren",
-    "likedSongs": "Nummers die je leuk vindt"
+    "likedSongs": "Nummers die je leuk vindt",
+    "dockInRail": "Vastzetten in zijbalk",
+    "video": "Video",
+    "videoMiniPlayer": "Afspelen in minispeler",
+    "videoFullScreen": "Volledig scherm",
+    "videoExitFullScreen": "Volledig scherm afsluiten",
+    "noVideoForThisSong": "Geen video voor dit nummer",
+    "videoNeedsWiderWindow": "Vereist een breder venster",
+    "videoNoSecondWindow": "Niet beschikbaar bij deze scherminstelling",
+    "videoNoFullscreen": "Hier niet beschikbaar",
+    "videoUpNext": "Hierna"
   },
 
   "menu": {

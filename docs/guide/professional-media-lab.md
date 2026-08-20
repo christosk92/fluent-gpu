@@ -37,6 +37,12 @@ keyboard input reveal it again. The idle-hide is a declarative `UseTimeout` rest
 picker/menu **pins** the chrome (`IOverlayService.IsAnchorPinned`), the timeout does not collapse it out from under the
 open flyout; closing the flyout re-arms the timer.
 
+The transport ⋯, right-click/long-press on the video, and the Menu key open that same menu from one lazy factory. The
+pointer route opens at the contact; button/keyboard routes use the live invoking node, so a re-render cannot leave a
+captured anchor at the window origin. Aspect remains a controlled input: a host that wants it to follow player mounts
+passes shared `AspectMode`/`CustomAspectRatio` signals and persists changes from `AspectModeChanged` (Wavee does this
+globally across tracks, placements and restarts).
+
 ## Architecture notes (the G5g rebuild)
 
 The `MediaPlayerElement` is built on the overhauled engine seams and is the flagship proof control:

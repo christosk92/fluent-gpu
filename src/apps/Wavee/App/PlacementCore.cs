@@ -9,15 +9,20 @@ public enum SurfacePlacement : byte
 {
     /// <summary>Not shown at all. The only value that means "off".</summary>
     None = 0,
-    /// <summary>Inline in the shell (the right rail / an inline panel). Reserved — no video surface honors it yet.</summary>
+    /// <summary>Inline in the shell (the right rail / an inline panel). The DEFAULT for video: it costs the user
+    /// nothing (no new OS window, no overlay) and it is the least-committing VISIBLE placement — showing something
+    /// beats showing nothing, and Floating is the fallback when the rail cannot fit. Honored by the docked video card
+    /// in the right rail.</summary>
     Docked = 1,
-    /// <summary>The in-window, draggable + resizable mini player (<c>InWindowVideoPip</c>). The DEFAULT: it is the
-    /// lowest-commitment way to say "show me the video" — no new OS window, dismissible, stays with the app.</summary>
+    /// <summary>The in-window, draggable + resizable mini player (<c>InWindowVideoPip</c>). The fallback when
+    /// <see cref="Docked"/> cannot fit (the rail has no room) — still low-commitment: no new OS window, dismissible,
+    /// stays with the app.</summary>
     Floating = 2,
     /// <summary>A separate always-on-top OS window (<c>PopOutVideoWindow</c>). The most committing placement.</summary>
     Detached = 3,
     /// <summary>Fills the shell. A MODE, not a home: entering remembers <see cref="PlacementState.ReturnTo"/> and exiting
-    /// restores it, and it is never persisted as <see cref="PlacementState.Preferred"/>. Reserved (M8).</summary>
+    /// restores it, and it is never persisted as <see cref="PlacementState.Preferred"/>. Honored by the full-bleed
+    /// video fullscreen surface.</summary>
     Fullscreen = 4,
 }
 
@@ -39,11 +44,13 @@ public enum PlacementSet : byte
 /// <param name="Default">The initial <see cref="PlacementState.Preferred"/> — where an unlit primary click opens it.</param>
 public readonly record struct PlacementPolicy(PlacementSet Allowed, SurfacePlacement Default)
 {
-    /// <summary>The music-video surface: the in-window mini player (default) or a detached pop-out window. Docked and
-    /// Fullscreen are deliberately NOT allowed yet — there is no surface to honor them, and an unhonorable placement
-    /// would resolve to a mount nobody performs.</summary>
-    public static readonly PlacementPolicy Video =
-        new(PlacementSet.Floating | PlacementSet.Detached, SurfacePlacement.Floating);
+    /// <summary>The music-video surface: a docked card in the right rail (default), the in-window mini player, a
+    /// detached pop-out window, or a full-bleed fullscreen surface — the full commitment ladder plus the fullscreen
+    /// mode. Docked is the default because it is the least-committing placement that is actually VISIBLE: no new OS
+    /// window, no overlay, nothing to dismiss — just video already there while the user browses.</summary>
+    public static readonly PlacementPolicy Video = new(
+        PlacementSet.Docked | PlacementSet.Floating | PlacementSet.Detached | PlacementSet.Fullscreen,
+        SurfacePlacement.Docked);
 }
 
 /// <summary>
@@ -107,7 +114,7 @@ public enum MountAction : byte
 /// (and therefore property-tested over arbitrary command sequences) — the app calls the named transitions directly.</summary>
 public enum PlacementCommandKind : byte
 {
-    TogglePrimary, OpenAt, TurnOff, Availability, HostClosed, EnterFullscreen, ExitFullscreen, LiveChanged,
+    TogglePrimary, OpenAt, TurnOff, Availability, HostClosed, EnterFullscreen, ExitFullscreen, LiveChanged, Demote,
 }
 
 /// <summary>One command for <see cref="PlacementCore.Apply"/>. Unused fields are ignored per <paramref name="Kind"/>.</summary>
@@ -220,6 +227,16 @@ public static class PlacementCore
     {
         if (want == SurfacePlacement.None) return SurfacePlacement.None;
         if (Allows(available, want)) return want;
+        // Fullscreen is a MODE, not a rung: when it is unavailable, do NOT walk DOWN from "above the ladder" (that
+        // lands on Detached and spawns a whole OS window nobody asked for — the bug this fixes, e.g. no
+        // InputHooks.WindowSetFullscreen hook, headless, or a detached child host). Fall back to the CHEAPEST
+        // available placement instead — there is no meaningful "where would Fullscreen have exited to" here, that is
+        // ReturnTo/ExitFullscreen's job, not FirstAvailable's.
+        if (want == SurfacePlacement.Fullscreen)
+        {
+            for (int f = 0; f < Ladder.Length; f++) if (Allows(available, Ladder[f])) return Ladder[f];
+            return SurfacePlacement.None;
+        }
         int i = LadderIndex(want);
         for (int d = i - 1; d >= 0; d--) if (Allows(available, Ladder[d])) return Ladder[d];
         for (int u = i + 1; u < Ladder.Length; u++) if (Allows(available, Ladder[u])) return Ladder[u];
@@ -324,6 +341,19 @@ public static class PlacementCore
         return s with { Requested = back, ReturnTo = SurfacePlacement.None };
     }
 
+    /// <summary>Move the surface WITHOUT changing where the user says they like it — for an AMBIENT change that takes
+    /// the current placement away but is not the user closing the feature (the rail being closed while video is
+    /// docked). The difference from <see cref="OpenAt"/> is the whole point: <see cref="PlacementState.Preferred"/>
+    /// survives, so restoring the condition (re-opening the rail) re-docks automatically instead of leaving the user
+    /// stuck wherever this demoted them to.</summary>
+    public static PlacementState Demote(in PlacementState s, SurfacePlacement to)
+    {
+        if (s.Requested == SurfacePlacement.None || to == SurfacePlacement.None) return s;
+        var next = FirstAvailable(to, s.Available);
+        return next == SurfacePlacement.None ? s with { Requested = SurfacePlacement.None }
+                                             : s with { Requested = next };
+    }
+
     /// <summary>
     /// The user closed the surface by its OWN chrome (an OS ✕ / Alt+F4 on the detached window, the mini player's ✕).
     /// This is the transition that used to be missing entirely, and it is why the toggle could be left lit pointing at
@@ -384,6 +414,7 @@ public static class PlacementCore
         PlacementCommandKind.EnterFullscreen => EnterFullscreen(s),
         PlacementCommandKind.ExitFullscreen => ExitFullscreen(s),
         PlacementCommandKind.LiveChanged => WithLive(s, c.Placement),
+        PlacementCommandKind.Demote => Demote(s, c.Placement),
         _ => s,
     };
 

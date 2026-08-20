@@ -3,6 +3,25 @@ using System;
 namespace FluentGpu.Media.Windows;
 
 /// <summary>
+/// What the engine ANSWERED when asked for the decoded video size. Tri-state on purpose: <see cref="VideoMediaEngine"/>
+/// marshals every COM read onto its own MTA thread with a BOUNDED wait, so a zero size cannot mean both "this source has
+/// no video" and "the engine thread was busy resolving the source and has not answered yet". Conflating the two is what
+/// latched an audio-only verdict onto a playing video and left it under an eternal "Starting playback…" spinner:
+/// <see cref="MfMediaSession"/> published the natural size exactly once, at first <c>LOADEDMETADATA</c> — the instant the
+/// engine thread is at its busiest — and never asked again. <see cref="NoAnswer"/> means ASK AGAIN on the next pump.
+/// </summary>
+public enum NativeSizeAnswer : byte
+{
+    /// <summary>The engine did not answer in time (the bounded <c>Invoke</c> expired). Nothing was learned; retry.
+    /// MUST be the default(0) value — a timed-out <c>Invoke&lt;T&gt;</c> returns <c>default</c>.</summary>
+    NoAnswer = 0,
+    /// <summary>The engine answered and this source has no decoded video size (audio-only). Stop asking.</summary>
+    NoVideo,
+    /// <summary>The engine answered with a real size (both dimensions &gt; 0).</summary>
+    Ok,
+}
+
+/// <summary>
 /// The minimal boundary <see cref="MfMediaSession"/> drives, extracted from the PROVEN <see cref="VideoMediaEngine"/> so
 /// the session's state-mapping / transport / surface-handoff logic is unit-testable WITHOUT standing up a real D3D11 + MF +
 /// DirectComposition device (a fake implements this in <c>FluentGpu.Windows.Tests</c>). <see cref="VideoMediaEngine"/> is
@@ -37,7 +56,10 @@ internal interface IVideoEngine : IDisposable
     uint ReadyState { get; }
 
     // ── metadata / geometry ────────────────────────────────────────────────────────────────────────────────────────
-    bool TryGetNativeVideoSize(out uint cx, out uint cy);
+    /// <summary>Native decoded video size (px), valid once metadata has loaded. Returns
+    /// <see cref="NativeSizeAnswer.NoAnswer"/> when the engine has not answered yet — the caller must ask again on a
+    /// later pump instead of treating the zeroed out-params as "audio-only".</summary>
+    NativeSizeAnswer QueryNativeVideoSize(out uint cx, out uint cy);
     /// <summary>Media duration in seconds (0 until known; may be +Inf for a live/looping source — the caller clamps).</summary>
     double DurationSeconds { get; }
     /// <summary>Current presentation time in seconds (the authoritative clock).</summary>

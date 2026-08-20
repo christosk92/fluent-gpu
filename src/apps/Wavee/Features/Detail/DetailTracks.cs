@@ -107,7 +107,7 @@ sealed class TrackList : Component
     readonly Signal<int> _reveal = new(DetailRevealRamp.Done);   // rows with displayIndex < _reveal are REAL; the rest render ShimmerRow. Done ⇒ all real
     readonly Signal<bool> _rampActive = new(false);     // gates the per-frame reveal clock — mounted only while ramping so the frame loop quiesces after
     bool _sawPending;                                    // this content actually showed shimmer (cold load) ⇒ the ready edge ramps; a warm load ramps only on a HasTrailing page
-    float _lastRightW;                                         // last measured right-area width — replayed once when the rail layout-lock clears (Task C)
+    float _lastRightW;                                         // last measured right-area width (0 until the first positive bounds)
     readonly SelectionModel _selection = new();                // external → survives a tier remount
     // Keyed by the COLUMN SET, not the tier: the set already folds in every input the track sizes depend on (tier +
     // which optional columns the model/config actually offer), so a cached entry can never go stale behind a snapshot

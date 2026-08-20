@@ -471,6 +471,15 @@ sealed class PlayerBarContent : Component
         // Everything here is a pure INTENT on the bridge; the placement model decides the rest, and the surfaces render
         // from its one resolved answer. The split button needs ~1.5 slots, so it rides the same crowding threshold as
         // Queue and degrades into the overflow menu below it (see the else-branch) instead of vanishing.
+        //
+        // The full four-rung ladder, COMMITMENT ORDER, radio-checked against the one resolved placement, disabled-
+        // with-a-reason rather than hidden — a disabled MenuFlyoutItem cannot carry a tooltip (IsEnabled = false
+        // removes hit-testing), so the reason goes in the accelerator column, the same idiom as the device-picker
+        // rows below (:740-747) and WaveeActionDescriptor.ToMenuItem. The ROWS themselves are the single shared
+        // VideoPlacementMenu.Items definition (Features/Video/VideoPlacementMenu.cs) — this split button's own
+        // chevron menu below, the narrow-layout overflow's cascading Flyout (PlayerMoreMenu), and the video's own
+        // transport More menu all call it, so the three pickers cannot drift apart.
+
         if (active && hasVideo && showQueue)
         {
             // DERIVED state — the ONE resolved placement. The button faces reflect what is actually mounted, so they
@@ -486,29 +495,7 @@ sealed class PlayerBarContent : Component
             {
                 if (menuOverlay is not { } videoSvc) return;
                 if (videoMenu.Value is { IsOpen: true } open) { open.Close(); return; }
-                var now = b.VideoPlacementNow();
-                var items = new List<MenuFlyoutItem>(4)
-                {
-                    MenuFlyoutItem.RadioItem(Loc.Get(Strings.Player.PlayVideoHere), now == SurfacePlacement.Floating,
-                        () => b.ShowVideoAt(SurfacePlacement.Floating), Icons.BackToWindow),
-                    MenuFlyoutItem.RadioItem(Loc.Get(Strings.Player.VideoInSeparateWindow), now == SurfacePlacement.Detached,
-                        () => b.ShowVideoAt(SurfacePlacement.Detached), Icons.Movie),
-                };
-                // Always-on-top is a property of the SEPARATE WINDOW, so it is only offered when that is where the video
-                // lives. A checkable item rather than a mode switch: it is a preference the user flips and forgets, and
-                // the window applies it live (VideoPlacementHost) instead of at the next open.
-                if (svc?.Settings is { } vset && now == SurfacePlacement.Detached)
-                {
-                    bool onTop = vset.Get(WaveeSettings.VideoWindowAlwaysOnTop);
-                    items.Add(MenuFlyoutItem.Separator);
-                    items.Add(MenuFlyoutItem.Toggle(Loc.Get(Strings.Player.VideoAlwaysOnTop), onTop,
-                        () => VideoWindowPrefs.SetAlwaysOnTop(vset, !onTop)));
-                }
-                if (b.VideoActive())   // "off" is only meaningful while something is on
-                {
-                    items.Add(MenuFlyoutItem.Separator);
-                    items.Add(new(Loc.Get(Strings.Player.TurnOffVideo), Icons.Cancel, true, b.TurnVideoOff));
-                }
+                var items = VideoPlacementMenu.Items(b, svc?.Settings, includeFullscreen: true);
                 videoMenu.Value = videoSvc.Open(
                     () => videoAnchor.Value,
                     () => MenuFlyout.Create(items, () => videoMenu.Value?.Close()),
@@ -547,7 +534,8 @@ sealed class PlayerBarContent : Component
         else if (active && hasVideo)
             overflowCommands.Add(new AppBarCommand(Icons.Movie,
                 Loc.Get(b.VideoActive() ? Strings.Player.SwitchToAudio : Strings.Player.SwitchToVideo),
-                b.ToggleVideo, AppBarCommandKind.ToggleButton, b.VideoActive(), true));
+                b.ToggleVideo, AppBarCommandKind.ToggleButton, b.VideoActive(), true)
+                { Flyout = VideoPlacementMenu.Items(b, svc?.Settings, includeFullscreen: true) });
         if (showQueue)
             rightKids.Add(Transport(Icons.Queue, () => ui?.Toggle(RailMode.Queue), ui is not null,
                 ui?.RailOpen.Value == true && ui.Mode.Value == RailMode.Queue, accent, buttonBox, buttonGlyph)
@@ -938,6 +926,20 @@ sealed class PlayerBarContent : Component
             vh = vh * 31 + (c.Label?.GetHashCode() ?? 0);
             if (c.IsChecked) vh ^= 0x55555555;
             if (c.Enabled) vh ^= 0x0F0F0F0F;
+            // A command's own Flyout (the video placement ladder) can change shape — which rung is checked, which is
+            // disabled, and why — without the outer command's IsChecked/Enabled moving at all (e.g. the rail-fit bit
+            // flipping while playback state is untouched). Fold it too, or PlayerMoreMenu's frozen `_commands`
+            // (component props freeze at mount) would show a stale cascading menu until an unrelated bar change
+            // happens to bump this hash.
+            if (c.Flyout is { Count: > 0 } sub)
+                for (int j = 0; j < sub.Count; j++)
+                {
+                    var si = sub[j];
+                    vh = vh * 31 + (si.Label?.GetHashCode() ?? 0);
+                    vh = vh * 31 + (si.AcceleratorText?.GetHashCode() ?? 0);
+                    if (si.IsChecked) vh ^= 0x33333333;
+                    if (si.Enabled) vh ^= 0x0C0C0C0C;
+                }
         }
         string version = "more#" + vh;
         return new BoxEl
@@ -988,9 +990,15 @@ sealed class PlayerBarContent : Component
                 for (int i = 0; i < _commands.Count; i++)
                 {
                     var c = _commands[i];
-                    items.Add(c.Kind == AppBarCommandKind.ToggleButton
-                        ? MenuFlyoutItem.Toggle(c.Label, c.IsChecked, c.Invoke, c.Icon, c.Enabled)
-                        : new MenuFlyoutItem(c.Label, c.Icon, c.Enabled, c.Invoke));
+                    // A command carrying its own Flyout (the video placement ladder below ~1100 DIP) becomes a
+                    // cascading sub-menu row — MenuFlyout natively supports MenuItemKind.SubMenu (hover/Right-arrow
+                    // opens the nested popup; Actions/Menus.cs and DetailTracks.cs already rely on this outside
+                    // CommandBarFlyoutBody), so no new engine machinery is needed here.
+                    items.Add(c.Flyout is { Count: > 0 } sub
+                        ? MenuFlyoutItem.SubMenu(c.Label, sub, c.Icon, c.Enabled)
+                        : c.Kind == AppBarCommandKind.ToggleButton
+                            ? MenuFlyoutItem.Toggle(c.Label, c.IsChecked, c.Invoke, c.Icon, c.Enabled)
+                            : new MenuFlyoutItem(c.Label, c.Icon, c.Enabled, c.Invoke));
                 }
                 if (_includeVolume)
                 {

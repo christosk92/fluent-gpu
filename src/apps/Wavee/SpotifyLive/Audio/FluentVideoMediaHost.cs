@@ -67,6 +67,11 @@ public sealed class FluentVideoMediaHost : IMediaHost
     // duration at first LOADEDMETADATA, which for an adaptive/DASH manifest is commonly still 0, and a manifest can
     // later revise it — so a latch-on-first-positive would freeze the wrong length for the whole track.
     long _reportedDurMs;
+    // Once-per-load diagnostics for the ONE state that makes a playing video look permanently stuck: an empty
+    // NaturalSize. MediaPlayerElement reads that as audio-only, so it never punches a video hole and keeps the
+    // "Starting playback…" spinner up over a session that is otherwise fine. Logged so the log alone tells the two
+    // apart next time (see MfMediaSession's LATE NATURAL SIZE block, which is what keeps re-asking for it).
+    bool _sizeLogged, _noSizeLogged;
     bool _disposed;
 
     // ── the per-load start watchdog (guarded by _gate; evaluated on the existing 200ms ticker, zero-alloc) ────────────
@@ -179,6 +184,8 @@ public sealed class FluentVideoMediaHost : IMediaHost
             _lastState = PlaybackState.Idle;
             _errorReported = false;
             _reportedDurMs = 0;
+            _sizeLogged = false;
+            _noSizeLogged = false;
             _playIntent = false;
             _progressed = false;
             _startAtMs = 0;
@@ -293,6 +300,8 @@ public sealed class FluentVideoMediaHost : IMediaHost
             _lastState = PlaybackState.Idle;
             _errorReported = false;
             _reportedDurMs = 0;
+            _sizeLogged = false;
+            _noSizeLogged = false;
             _progressed = false;
             _startAtMs = 0;
             _startSeekPending = false;
@@ -367,6 +376,8 @@ public sealed class FluentVideoMediaHost : IMediaHost
             _lastState = PlaybackState.Idle;
             _errorReported = false;
             _reportedDurMs = 0;
+            _sizeLogged = false;
+            _noSizeLogged = false;
             _playIntent = true;
             _progressed = false;
             _startAtMs = Math.Max(0, req.StartAtMs);
@@ -497,6 +508,27 @@ public sealed class FluentVideoMediaHost : IMediaHost
                     _log.Info($"video-host applying carried position {start}ms (duration {durMs}ms, session now seekable)");
                     SeekPlayer(p, start);
                 }
+            }
+        }
+
+        // Video geometry, once per load: which it is decides whether the surface can ever show a picture.
+        if (!_sizeLogged)
+        {
+            SizeI natural = default;
+            try { natural = p.NaturalSize.Peek(); } catch { }
+            if (natural.Width > 0 && natural.Height > 0)
+            {
+                _sizeLogged = true;
+                _log.Info($"video-host natural size {natural.Width}x{natural.Height} for key={CurrentSourceKey}");
+            }
+            else if (!_noSizeLogged && _reportedDurMs > 0)
+            {
+                // Metadata is loaded (a duration exists) but the decoder still reports no picture size — the exact
+                // signature of a surface that will sit under the opening spinner. Still recoverable (the session re-asks
+                // the engine), so this is a note, not a fault.
+                _noSizeLogged = true;
+                _log.Info($"video-host has NO natural size yet although duration is known ({_reportedDurMs}ms) " +
+                          $"key={CurrentSourceKey} — the surface stays on the opening spinner until the decoder reports one");
             }
         }
 

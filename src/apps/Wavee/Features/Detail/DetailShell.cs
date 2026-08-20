@@ -99,7 +99,7 @@ sealed class DetailShell : Component
     // material over this page's art-derived ground instead of over the neutral Mica reference; the band paints
     // NOTHING now — content is clipped at its lower edge and the tone plane simply shows through — so the tone never
     // has to leave the leaf that resolves it. The hero-only fade needs the plane's own geometry, not its colour.)
-    float _measuredW;                     // last measured page width — replayed once when the rail layout-lock clears (Task C)
+    float _measuredW;                     // last measured page width (0 until the first positive bounds)
     float _measuredH;                     // last measured page height — the tone plane's hero-only fade is a fraction of it
     bool _modeInitialized;                // first measurement uses the nominal breakpoints; later vertical crosses hysteresis
     readonly Signal<TrackSort> _sort = new(TrackSort.Default);   // track-list sort, persisted per context (loaded per route)
@@ -161,17 +161,13 @@ sealed class DetailShell : Component
     // SnapThreshold == RailMinW: at/above the floor the rail tracks the cursor 1:1; below it the grip RESISTS and the
     // rail's content fades, and only pushing ForcePush further (raw ≈ 136) collapses into the compact identity strip
     // (WP-κ — never to oblivion). Re-opening needs a pull past ReExpand (220) — comfortably above the 136 collapse
-    // point, so the rail cannot flicker shut/open at the seam. Feel constants (resist 0.28, fade floor 0.35) live in
-    // ColumnGrip.
+    // point, so the rail cannot flicker shut/open at the seam. Feel constants live on SplitterOptions (kit defaults).
     const float RailForcePush = 44f, RailReExpand = 220f;
     // Compact strip width while collapsed (sidebar analog): wide enough for a readable cover + 2-line title, narrow
     // enough that the track list keeps most of the card. Cover = strip − 2× Spacing.S.
     const float RailCompactW = 96f;
-    // The grip's hit strip: the shared 16-DIP splitter target (ColumnGrip.StripW), invisible at rest with a
-    // reveal-on-hover indicator — the stock GridSplitter model. Collapsed keeps a wider 20 because the seam is then
-    // also a re-open gesture (the compact strip carries cover/chevron re-open; the seam still accepts a bare click or a
-    // drag past ReExpand). Was 7/12 — under half the pointer target every stock sizer ships.
-    static float GripStripW => ColumnGrip.StripW;
+    // The grip's hit strip: Splitter.StripW, invisible at rest with a reveal-on-hover indicator. Collapsed keeps a
+    // wider 20 because the seam is then also a re-open gesture.
     const float GripStripCollapsedW = 20f;
 
     public override Element Render()
@@ -587,6 +583,7 @@ sealed class DetailShell : Component
             // mid-glyph ("Plays"→"Pl") instead of the table reflowing to a tighter tier. `right` already shrinks (below);
             // the fix is to let its PARENT shrink so the reduced width actually reaches it.
             Direction = 0, Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Basis = 0f, MaxWidth = 1600f,
+            AlignItems = FlexAlign.Stretch,
             // The hero/rail column is a SIBLING of the track list, so a drag released over the cover, the title or the
             // actions used to reach no destination at all — the dead zone this closes.
             DropTarget = PageDropTarget(m, acts, kind),
@@ -710,14 +707,17 @@ sealed class DetailShell : Component
 
         // The fade wrapper is present in EVERY non-collapsed mode (0/1/2), not just the resizable one, so crossing a
         // breakpoint never changes the row's child SHAPE at index 0 — the rail subtree reconciles in place instead of
-        // being rebuilt against a wrapper. Direction=0 + AlignItems=Stretch reproduces exactly what the row itself gave
-        // the rail when it was a direct child (a stretched, full-height cross-axis item at its own fixed Width): the
-        // rail's inner ScrollView needs that definite height, and DetailRail.Build returns an `Element`, which carries no
-        // Grow to re-declare from here.
+        // being rebuilt against a wrapper.
+        // Height is this wrapper's CROSS axis (it is a row child of [rail | right]). AlignSelf=Stretch takes the
+        // row's definite height; AlignItems=Stretch hands that height to DetailRail.Build, whose inner ScrollView
+        // grows into it. A Direction=1 wrapper would make height the MAIN axis, and Build's root has no Grow, so
+        // the scroller collapsed to 0 and ClipToBounds painted an empty column.
         Element railFaded = new BoxEl
         {
             Key = "detail-rail-fade",
-            Direction = 0, AlignItems = FlexAlign.Stretch, Width = railW, Shrink = 0f,
+            Direction = 0, AlignItems = FlexAlign.Stretch, AlignSelf = FlexAlign.Stretch,
+            MinHeight = 0f, Shrink = 0f,
+            Width = railW,
             // PAINT-BOUND (WaveeShell's sidebar-fade pattern): the resist-zone cue rides the compositor's opacity
             // channel, so a drag toward the detent never re-renders the rail subtree.
             Opacity = Prop.Of(() => _railFade.Value),
@@ -728,27 +728,28 @@ sealed class DetailShell : Component
             : [railFaded, right];
     }
 
-    // Same persisted splitter implementation as LibraryPage's artist columns, with the collapse detent ARMED (WP-η): it
-    // owns a 7-DIP hit strip (12 while collapsed) around a persistent 1px seam; width writes are direct during drag and
-    // committed to settings only on release.
+    // Same Splitter as the library columns, with the collapse detent ARMED (WP-η): width writes are direct during
+    // drag and committed to settings only on release.
     Element DetailRailGrip(Signal<float> width, Signal<bool> collapsed, DetailKind kind, IAppSettings? settings,
         bool collapsedNow) => new BoxEl
     {
         Key = "detail-rail-grip-strip",
-        Width = collapsedNow ? GripStripCollapsedW : GripStripW,
+        Width = collapsedNow ? GripStripCollapsedW : Splitter.StripW,
         Shrink = 0f, Direction = 1, AlignItems = FlexAlign.Stretch,
         Children =
         [
-            Embed.Comp(() => new ColumnGrip(width, RailMinW, RailMaxW, () =>
+            Splitter.Create(width, () =>
                 {
-                    // ONE commit edge for the whole gesture: the width AND the collapse decision the same drag produced.
                     bool pl = kind == DetailKind.Playlist;
                     settings?.Set(pl ? WaveeSettings.DetailPlaylistRailWidth : WaveeSettings.DetailAlbumRailWidth, width.Peek());
                     settings?.Set(pl ? WaveeSettings.DetailPlaylistRailCollapsed : WaveeSettings.DetailAlbumRailCollapsed, collapsed.Peek());
                 },
-                collapsed: collapsed, fade: _railFade, forcePush: RailForcePush, reExpand: RailReExpand))
-                // DetailShell is reused album↔playlist. Component ctor arguments are mount-stable, so key by width family
-                // to remount the grip with the correct signal + persistence key on a cross-kind route.
+                new()
+                {
+                    Min = RailMinW, Max = RailMaxW,
+                    ForcePush = RailForcePush, ReExpand = RailReExpand,
+                },
+                collapsed: collapsed, fade: _railFade)
                 with { Key = "detail-rail-grip:" + kind },
         ],
     };
