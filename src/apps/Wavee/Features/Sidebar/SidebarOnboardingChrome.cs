@@ -35,6 +35,11 @@ sealed class SidebarOnboardingChrome : Component
         UseEffect(() =>
         {
             if (opened.Value || prefs is null) return;
+            // Belt-and-braces over SidebarBootstrap's own ordering: the setup wizard's page 5 IS this same chooser
+            // (Features/Setup/SetupChrome.cs), so while the wizard is still pending this chrome must never race it
+            // open on its own — a factory-reset (or any path that re-arms SetupPending) must not resurrect a SECOND,
+            // independent chooser popup behind/alongside the wizard's own page.
+            if (SetupGating.IsPending(_settings)) return;
             if (!SidebarDesignGating.ShouldShowChooser(_settings)) return;
             opened.Value = true;
             // TWO nested posts: the first lands after this mount's commit, the second after the frame that PAINTED the

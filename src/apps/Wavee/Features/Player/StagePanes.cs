@@ -223,6 +223,7 @@ sealed class StageQueuePane : Component
         }
 
         bool viewer = PlayerBarContent.RemoteDevice(b) is not null;
+        bool showTrackArtwork = !AppearancePrefs.TrackArtworkHidden(svc?.Settings);
         string? source = ctxName.Value.Value is { Length: > 0 } rn ? rn : ImmediateContextName(ctxUri);
 
         ConfigureReorder(b, acts, display, userQueue);
@@ -240,12 +241,14 @@ sealed class StageQueuePane : Component
         if (userQueue.Count > 0)
             content.Add((BoxEl)_reorder.List(
                 Rows("q", userQueue, b, lib, go, display, removable: !viewer, dim: false, acts, menuOverlay,
-                     reorder: viewer ? null : _reorder))
+                     showTrackArtwork, reorder: viewer ? null : _reorder))
                 with { Grow = 0f, Key = "stagelane:q" });
         if (ctxUp.Count > 0)
-            content.Add(Rows("u", ctxUp, b, lib, go, display, removable: !viewer, dim: false, acts, menuOverlay));
+            content.Add(Rows("u", ctxUp, b, lib, go, display, removable: !viewer, dim: false, acts, menuOverlay,
+                showTrackArtwork));
         if (autoplay && autoUp.Count > 0)
-            content.Add(Rows("a", autoUp, b, lib, go, display, removable: !viewer, dim: true, acts, menuOverlay));
+            content.Add(Rows("a", autoUp, b, lib, go, display, removable: !viewer, dim: true, acts, menuOverlay,
+                showTrackArtwork));
         if (userQueue.Count == 0 && ctxUp.Count == 0 && autoUp.Count == 0)
             content.Add(new BoxEl
             {
@@ -367,7 +370,8 @@ sealed class StageQueuePane : Component
 
     Element Rows(string tag, List<QueueEntry> entries, PlaybackBridge b, LibraryBridge? lib,
                  Action<string, string?>? go, Signal<IReadOnlyList<QueueEntry>> display, bool removable, bool dim,
-                 ActionServices? acts, IOverlayService? menuOverlay, Reorderable? reorder = null)
+                 ActionServices? acts, IOverlayService? menuOverlay, bool showTrackArtwork,
+                 Reorderable? reorder = null)
     {
         int n = Math.Min(entries.Count, Math.Max(1, _pages.Value) * PageSize);
         var kids = new List<Element>(n + 1);
@@ -376,7 +380,7 @@ sealed class StageQueuePane : Component
             int item = reorder is { } ro ? ro.ItemAt(i) : i;
             if ((uint)item >= (uint)entries.Count) item = i;
             var row = Row(b, lib, go, display, entries[item], item, entries, removable, dim, acts, menuOverlay,
-                          ownDrag: reorder is null, gripped: reorder is not null);
+                          ownDrag: reorder is null, gripped: reorder is not null, showArtwork: showTrackArtwork);
             kids.Add(reorder is { } r
                 ? (BoxEl)r.Item(item, row, key: RowKey(entries[item])) with { Direction = 1 }
                 : row);
@@ -389,7 +393,7 @@ sealed class StageQueuePane : Component
     Element Row(PlaybackBridge b, LibraryBridge? lib, Action<string, string?>? go,
                 Signal<IReadOnlyList<QueueEntry>> display, QueueEntry entry, int index, IReadOnlyList<QueueEntry> section,
                 bool removable, bool dim, ActionServices? acts, IOverlayService? menuOverlay,
-                bool ownDrag, bool gripped)
+                bool ownDrag, bool gripped, bool showArtwork)
     {
         var t = entry.Track;
         int count = section.Count;
@@ -407,9 +411,26 @@ sealed class StageQueuePane : Component
             MoveInSection(b, display, section, index, index + delta);
         }
 
+        Element[] artwork = showArtwork
+            ?
+            [
+                new BoxEl
+                {
+                    Width = RowArt, Height = RowArt, Shrink = 0f, ZStack = true, ClipToBounds = true,
+                    Corners = Radii.ControlAll,
+                    Children =
+                    [
+                        Surfaces.Artwork(t.Image, t.Id.GetHashCode() & 0x7fffffff, RowArt, RowArt, Radii.Control, decodePx: 96),
+                        NowPlayingOverlay.Create(t.Uri, () => PlayQueueEntry(b, entry), 26f, cover: true, RowArt, centered: true)
+                            .Skeletonized(false),
+                    ],
+                },
+            ]
+            : Array.Empty<Element>();
+
         var row = new BoxEl
         {
-            Key = RowKey(entry),
+            Key = RowKey(entry) + ":art=" + showArtwork,
             Draggable = ownDrag
                 ? Drag.Source(WaveeDragKinds.Resource, () => WaveeResourceDragPayload.ForTrack(t))
                 : null,
@@ -437,17 +458,7 @@ sealed class StageQueuePane : Component
                     Opacity = 0f, HoverOpacity = gripped ? 1f : 0f, HitTestVisible = false,
                     Children = [new TextEl(Icons.GripperBar) { Size = 14f, FontFamily = Theme.IconFont, Color = StageInk.InkTertiary }],
                 },
-                new BoxEl
-                {
-                    Width = RowArt, Height = RowArt, Shrink = 0f, ZStack = true, ClipToBounds = true,
-                    Corners = Radii.ControlAll,
-                    Children =
-                    [
-                        Surfaces.Artwork(t.Image, t.Id.GetHashCode() & 0x7fffffff, RowArt, RowArt, Radii.Control, decodePx: 96),
-                        NowPlayingOverlay.Create(t.Uri, () => PlayQueueEntry(b, entry), 26f, cover: true, RowArt, centered: true)
-                            .Skeletonized(false),
-                    ],
-                },
+                ..artwork,
                 new BoxEl
                 {
                     Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Justify = FlexJustify.Center, Gap = 1f,

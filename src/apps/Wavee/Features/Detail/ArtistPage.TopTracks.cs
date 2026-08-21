@@ -34,13 +34,16 @@ sealed partial class ArtistPage : Component
     Element TopBand(IReadOnlyList<Track> popular, string uri, PlaybackBridge? bridge, Services svc,
                     PinnedItem? pinned, Image? artistImage, Image? artistBackground, string artistName,
                     ArtistPreRelease? upcoming,
-                    Action<string, string?> go, Action<string> play, Func<ColorF> accent) =>
-        Responsive.Of(w =>
+                    Action<string, string?> go, Action<string> play, Func<ColorF> accent)
+    {
+        bool showTrackArtwork = !AppearancePrefs.TrackArtworkHidden(svc.Settings);
+        bool classic = svc.Settings.Get(WaveeSettings.TrackRowStyle) == 1;
+        return Responsive.Of(w =>
         {
             bool wide = TopBandWide(w);
             string popTitle = Loc.Get(Strings.Artist.TopTracks);
             Element tracks = Embed.Comp(() => new ArtistPopular(popular, uri, bridge, svc, popTitle, accent))
-                with { SkeletonProxy = () => ArtistPopular.SkeletonShape(popular, popTitle) };
+                with { SkeletonProxy = () => ArtistPopular.SkeletonShape(popular, popTitle, showTrackArtwork, classic) };
             Element featured = FeaturedColumn(pinned, artistImage, artistBackground, artistName, upcoming, go, play, accent, wide);
             bool hasFeatured = pinned is not null || upcoming is { IsUpcoming: true };
 
@@ -66,6 +69,7 @@ sealed partial class ArtistPage : Component
                 ],
             };
         }, fallback: 900f);
+    }
 
     // The pick owns this column outright. A standalone Upcoming card renders here only when there is NO pick —
     // when both exist, the announcement moves to its own full-width band above Latest release (ArtistPage.cs Body),

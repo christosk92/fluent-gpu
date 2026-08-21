@@ -32,7 +32,7 @@ static class WaveeSettings
     public static readonly SettingKey<bool> SidebarCollapsed = new("sidebar.collapsed", false);
     // The active sidebar DESIGN as a SidebarDesign int (the RowDensity/ThemeMode/DetailPageLayout convention —
     // AppDataSettings has no enum arm). DEFAULT 0 = Classic IS LOAD-BEARING: an existing install that never wrote the key
-    // silently stays Classic (locked decision 5). Fresh installs get 2 (Curated) written explicitly by SidebarBootstrap.
+    // silently stays Classic. Fresh installs also get Classic written explicitly by SidebarBootstrap.
     public static readonly SettingKey<int> SidebarDesign = new("sidebar.design", 0);
     // The one-time design-chooser marker. SidebarBootstrap sets it true for EXISTING installs so they never see the
     // chooser; a fresh install leaves it false and every exit path of the chooser sets it true.
@@ -41,6 +41,20 @@ static class WaveeSettings
     // and the legacy-key migration so both run exactly once (IAppSettings has no key-exists probe — Get returns the
     // default for an absent key — so "never written" is otherwise indistinguishable from "written as the default").
     public static readonly SettingKey<int> SidebarBootstrapVersion = new("sidebar.bootstrap.version", 0);
+    // ── First-run setup wizard (SetupBootstrap / SetupGating) ─────────────────────────────────────────────────────────
+    // Armed for a fresh install by SetupBootstrap and shown by the shell once it has painted; every wizard exit path
+    // (Continue through Done, "Not now", Escape, light-of-modal) clears it via SetupGating.MarkCompleted/MarkDeferred so
+    // it can never reappear uninvited on a later launch — the same "one-time dialog that keeps coming back" failure mode
+    // SidebarOnboardingSeen exists to prevent.
+    public static readonly SettingKey<bool> SetupPending = new("setup.pending", false);
+    // The user reached the wizard's Done page at least once. Distinct from SetupPending being false: a deferred wizard
+    // ALSO clears Pending but leaves this false, so a later "you skipped setup" nudge (or Settings' own "Run setup
+    // again" affordance) can still tell "finished" apart from "dismissed".
+    public static readonly SettingKey<bool> SetupCompleted = new("setup.completed", false);
+    // Monotonic "has SetupBootstrap run" guard — the SidebarBootstrapVersion precedent, for the same reason: IAppSettings
+    // has no key-exists probe, so this is the only thing distinguishing "never written" from "written as the default",
+    // which is exactly what makes a factory-reset profile (every key back at its default) re-arm the wizard automatically.
+    public static readonly SettingKey<int> SetupBootstrapVersion = new("setup.bootstrap.version", 0);
     public static readonly SettingKey<bool> PlayerBarShowRemaining = new("playerbar.duration.remaining", true);
     // Theme preference: 0 = System (follow the OS live), 1 = Light, 2 = Dark. Default System so a fresh install matches
     // the OS; an explicit in-app toggle pins Light/Dark and stops following the OS. Seeded at startup before the first frame.
@@ -51,6 +65,12 @@ static class WaveeSettings
     // an explicit BCP-47/language tag selects the matching bundled JSON table. Applied before first mount on next launch.
     public static readonly SettingKey<string> UiCulture = new("localization.culture", "system");
     public static readonly SettingKey<int> RowDensity = new("detail.rowdensity", 1);   // 0 Compact · 1 Default · 2 Cozy · 3 Comfortable
+    // Track-table grammar/chrome: 0 Modern (art + stacked artist + rounded rows) · 1 Classic (separate Artist lane,
+    // square hairline rows, no art). Stored as an int like RowDensity because AppDataSettings has no enum arm.
+    public static readonly SettingKey<int> TrackRowStyle = new("detail.rowstyle", 0);
+    // App-wide policy for artwork inside TRACK cells only. TRUE removes the thumbnail lane and returns its width to the
+    // title; page heroes, media cards, sidebar covers and the player's identity artwork are deliberately unaffected.
+    public static readonly SettingKey<bool> HideTrackArtwork = new("appearance.trackArtwork.hidden", false);
     // BPM · Key as its own track-list COLUMN. Off by default: tempo/key is enrichment most listeners never scan for, and
     // a permanent column costs width on every row. It is always available inside a row's expander, so this setting only
     // promotes it to a column for the users who do want to scan it (DJ-adjacent use). App-wide, like RowDensity.

@@ -840,14 +840,13 @@ public sealed class LiveSessionHost : IAsyncDisposable
             wiring.Set(Wavee.Backend.Wiring.LiveSeams.HomeFacet, static () => { },
                 () => postUi(() => svc.HomeFacet.Value = null));   // UI-thread Signal, torn down from a pool thread
 
-            // (b) playlist HEADERS (name/cover) so home + the sidebar show names on a cold start — the Identity rung of
-            //     every header-less rootlist playlist, on the pump, instead of a bespoke sequential loop in this file.
-            var rootlistPlaylists = new List<string>();
-            foreach (var e in store.Rootlist())
-                if (e.Kind == 0 && EntityUri.KindOf(e.Uri) == EntityKind.Playlist && store.GetPlaylist(e.Uri) is null)
-                    rootlistPlaylists.Add(e.Uri);
+            // (b) complete every THIN root-list playlist in the background. Identity-only used to skip any row with a
+            //     saved header, even when it had no membership baseline; that left Classic showing "0 songs" and no
+            //     mosaic until the user opened the playlist. Open asks LibrarySync for the authoritative membership and
+            //     its member metadata. The plan treats a known empty baseline as complete, so real empty lists stay cheap.
+            var rootlistPlaylists = Wavee.Backend.Hydration.PlaylistHydration.RootlistOpenPlan(store);
             if (rootlistPlaylists.Count > 0)
-                _ = hydrator.EnsureManyAsync(rootlistPlaylists, HydrationLevel.Identity, HydrationOptions.Prefetch, cts.Token);
+                _ = hydrator.EnsureManyAsync(rootlistPlaylists, HydrationLevel.Open, HydrationOptions.Prefetch, cts.Token);
         }
 
         // Friend-activity (presence) feed — session-scoped, display-only (never touches the Store). Seeds on the dealer

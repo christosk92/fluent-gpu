@@ -10,8 +10,8 @@ namespace Wavee;
 
 // ── A BoxEl renderer for the QR module matrix (the encoder lives in Qr.cs) ────────────────────────────────────────────
 // Renders Qr.Encode()'s matrix as a COALESCED BoxEl grid (consecutive dark modules in a row merge into one box → a few
-// hundred nodes, not version²), on a white quiet-zone plate, with a small accent music-note badge punched into the centre
-// (ECC level M absorbs the ~2%-area occlusion — verified within the ECC-M correction budget for the pairing URL's v3).
+// hundred nodes, not version²), on a clean white quiet-zone plate. The production pairing QR deliberately has no
+// centre logo: uninterrupted modules match the setup prototype and maximize contrast/scan reliability.
 sealed class QrGrid : Component
 {
     readonly string _text;
@@ -53,37 +53,16 @@ sealed class QrGrid : Component
             Children = rows,
         };
 
-        // White plate (quiet zone) with the modules, and a small accent music-note badge punched into the centre.
+        // White plate + uninterrupted modules, matching the clean square QR used by the onboarding prototype.
         return new BoxEl
         {
-            ZStack = true, Width = plate, Height = plate, AlignSelf = FlexAlign.Center,
+            Width = plate, Height = plate, AlignSelf = FlexAlign.Center,
             Corners = CornerRadius4.All(Radii.Card), Fill = ColorF.FromRgba(0xFF, 0xFF, 0xFF), ClipToBounds = true,
-            Children = [modules, CentreBadge(plate)],
+            Children = [modules],
         };
     }
 
     static readonly ColorF QrInk = ColorF.FromRgba(0x00, 0x00, 0x00);   // PURE black modules (max contrast on white → reliable binarization)
-
-    // A small accent music-note badge centred on the matrix. KEPT SMALL (~15% width → ~2% of the QR area, well inside
-    // ECC-M's ~15% recovery) and with NO drop shadow (a shadow greys neighbouring modules → corruption beyond the white box).
-    static Element CentreBadge(float plate)
-    {
-        float d = MathF.Round(plate * 0.15f);
-        return new BoxEl
-        {
-            Width = plate, Height = plate, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, HitTestVisible = false,
-            Children =
-            [
-                new BoxEl
-                {
-                    Width = d, Height = d, Corners = CornerRadius4.All(d * 0.26f),
-                    AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                    Fill = ColorF.FromRgba(0xFF, 0xFF, 0xFF), BorderWidth = 1f, BorderColor = ColorF.FromRgba(0x00, 0x00, 0x00, 0x12),
-                    Children = [new TextEl(Icons.MusicNote) { Size = d * 0.54f, FontFamily = Theme.IconFont, Color = ColorF.FromRgba(0x1D, 0xB9, 0x54) }],
-                },
-            ],
-        };
-    }
 
     Element Fallback() => new BoxEl
     {

@@ -229,13 +229,15 @@
       "ep": "EP",
       "album": "ALBUM",
       "compilation": "COMPILATION",
-      "episode": "EPISODE"
+      "episode": "EPISODE",
+      "explicit": "EXPLICIT"
     },
     "versions": {
       "thisTrack": "This track",
       "musicVideo": "Music video",
       "alternateAudio": "Alternate audio",
-      "useDefaultQuality": "Use my default quality"
+      "useDefaultQuality": "Use my default quality",
+      "versionsAndFormats": "Versions and formats"
     }
   },
   "artist": {
@@ -385,10 +387,10 @@
     "videoEye": "video",
     "podcastsEye": "podcasts",
     "chartsEmpty": "No charts right now",
-      "sectionItems": "{count} items",
-      "podcasts": "Podcasts for you",
-      "inYourTop": "In your top {count}",
-      "mixview": "Mixview",
+    "sectionItems": "{count} items",
+    "podcasts": "Podcasts for you",
+    "inYourTop": "In your top {count}",
+    "mixview": "Mixview",
     "topTracks": "Top tracks",
     "showAll": "Show all",
     "showAllCount": "Show all {count}",
@@ -489,7 +491,7 @@
     "resume": "Resume",
     "noEpisodes": "No episodes match this filter",
     "loadMore": "Load more episodes",
-    "loadingMore": "Loading\u2026",
+    "loadingMore": "Loading…",
     "filter": {
       "all": "All",
       "unplayed": "Unplayed",
@@ -662,7 +664,17 @@
       "materialMica": "Mica",
       "materialMicaAlt": "Mica Alt",
       "rowDensity": "Row density",
-      "rowDensitySub": "Height of rows in track lists",
+      "rowDensitySub": "Choose how much music fits on screen; the miniature rows preview the real spacing.",
+      "densityCompactSub": "Fits the most tracks on screen with tight rows.",
+      "densityDefaultSub": "Balanced spacing for everyday browsing.",
+      "densityCozySub": "Adds breathing room while keeping lists efficient.",
+      "densityComfortableSub": "Largest targets and the most relaxed spacing.",
+      "trackListStyle": "Track list style",
+      "trackListStyleSub": "Choose artwork-forward rows or a classic column table.",
+      "trackListModern": "Modern",
+      "trackListClassic": "Classic",
+      "hideTrackArtwork": "Always hide track artwork",
+      "hideTrackArtworkSub": "Remove cover thumbnails from track rows and return the space to titles. Other artwork stays visible.",
       "pageLayout": "Track page layout",
       "pageLayoutSub": "Use the side rail automatically, or the artwork Hero at every size",
       "pageTone": "Limit page color to the hero",
@@ -1111,7 +1123,9 @@
       "downloadSetup": "Download & set up",
       "notNow": "Not now",
       "checkingSupport": "Checking what’s available for your device…",
+      "reachingCatalog": "Reaching the runtime catalog",
       "downloading": "Downloading…",
+      "downloadBlocking": "You can’t leave this step while a download is in progress.",
       "verifying": "Verifying download…",
       "verifyingCaption": "Checking integrity and signature",
       "untrustedBody": "This file isn’t Spotify-signed. It matches the expected fingerprint, but the publisher signature couldn’t be verified. Only continue if you trust the source.",
@@ -1132,6 +1146,7 @@
       "upToDate": "You’re on the latest supported version.",
       "detailVersion": "Version",
       "detailArch": "Architecture",
+      "detailSha256": "SHA-256",
       "detailSignature": "Signature",
       "viewSignature": "View signature",
       "viewSignatureFailed": "Windows couldn't open the digital signature details.",
@@ -1255,6 +1270,7 @@
       "v3Sub": "The latest Spotify library sidebar.",
       "custom": "Custom",
       "customSub": "Build your own sidebar from the sections you want.",
+      "comingSoon": "Coming soon",
       "active": "Active"
     },
     "chooser": {
@@ -1553,11 +1569,24 @@
         "excludeUris": "Exclude",
         "maxItems": "Maximum items"
       },
-      "recents": { "maxItems": "Maximum items" },
-      "newReleases": { "maxItems": "Maximum items" },
-      "concerts": { "maxItems": "Maximum events", "radiusKm": "Search radius (km)" },
-      "artistTopTracks": { "artist": "Artist", "maxItems": "Maximum tracks", "unset": "Pick an artist" },
-      "queue": { "maxItems": "Maximum items" }
+      "recents": {
+        "maxItems": "Maximum items"
+      },
+      "newReleases": {
+        "maxItems": "Maximum items"
+      },
+      "concerts": {
+        "maxItems": "Maximum events",
+        "radiusKm": "Search radius (km)"
+      },
+      "artistTopTracks": {
+        "artist": "Artist",
+        "maxItems": "Maximum tracks",
+        "unset": "Pick an artist"
+      },
+      "queue": {
+        "maxItems": "Maximum items"
+      }
     },
     "v3": {
       "title": "Your Library",
@@ -1725,5 +1754,112 @@
     "exploreAll": "Explore all categories",
     "unavailable": "This category isn't available right now",
     "homeSubtitle": "Genres, moods and charts — everything Spotify is featuring right now."
+  },
+  "setup": {
+    "preSetup": "Pre-setup",
+    "complete": "Setup complete",
+    "stepOf": "Step {n} of {total}",
+    "startSetup": "Start setup",
+    "notNow": "Not now",
+    "continue": "Continue",
+    "decideForMe": "Decide for me",
+    "useThisLayout": "Use this layout",
+    "openWavee": "Open Wavee",
+    "accept": "Accept",
+    "decline": "Decline",
+    "runAgain": "Run setup again",
+    "eyebrow": {
+      "terms": "Before we start",
+      "signIn": "Step 2 · Your account",
+      "localPlayback": "Step 3 · Local playback",
+      "appearance": "Step 4 · Appearance",
+      "sidebar": "Step 5 · Navigation",
+      "sound": "Step 6 · Playback",
+      "notifications": "Step 7 · Reach"
+    },
+    "welcome": {
+      "kicker": "Wavee for Windows",
+      "headlinePrefix": "Let's get you ",
+      "headlineBold": "listening",
+      "lead": "Seven short steps, one window. We'll sign you in to Spotify, set up local playback, then let you shape the shell — and you can change every single thing later in Settings.",
+      "metaTimeValue": "~2 min",
+      "metaTimeLabel": "Typical setup",
+      "metaPremiumValue": "Premium",
+      "metaPremiumLabel": "Required to stream",
+      "metaDownloadValue": "One download",
+      "metaDownloadLabel": "Local playback runtime"
+    },
+    "terms": {
+      "title": "Terms & what Wavee is",
+      "lead": "Wavee is an independent desktop client for your own Spotify account. It is not made by, endorsed by, or affiliated with Spotify AB.",
+      "needGroup": "What Wavee needs from you",
+      "premiumTitle": "Your Spotify Premium account",
+      "premiumBody": "Wavee streams full-quality, on-demand audio, which Spotify only allows on Premium accounts. Free accounts can browse, but playback is blocked.",
+      "runtimeTitle": "A one-time local playback component",
+      "runtimeBody": "Downloaded from Spotify's own CDN, verified by fingerprint and signature, and stored per-machine. Nothing else is installed and nothing is bundled with Wavee.",
+      "dataTitle": "Local data on this PC",
+      "dataBody": "Login, library, metadata cache, settings and logs live under %LOCALAPPDATA%\\Wavee. Factory reset erases all of it.",
+      "trademarksGroup": "Trademarks",
+      "fine": "Spotify® and the Spotify logo are registered trademarks of Spotify AB. All trademarks, logos and brand names are the property of their respective owners; their use here is nominative only. Wavee itself ships under its own licence — the full text is in Settings → About → Licences.",
+      "readFull": "Read the full agreement",
+      "sectionsCount": "{count} sections",
+      "section1Title": "1 · Base software & copyright",
+      "section1Body": "Wavee's own source is licensed to you under the terms shipped in the About tab. You may not redistribute a build that removes the attribution above.",
+      "section2Title": "2 · Your account & your library",
+      "section2Body": "Signing in lets Wavee read and modify your Spotify library — saves, follows, playlist edits, playback state — on your behalf, using Spotify's own APIs.",
+      "section3Title": "3 · Streaming & online services",
+      "section3Body": "Using Spotify through Wavee means Spotify's own terms of service still apply to your account and your listening.",
+      "section4Title": "4 · Local files & caches",
+      "section4Body": "Encrypted audio bodies and licence keys are cached locally to avoid re-downloading. You control the budget and the location, and can clear both at any time."
+    },
+    "appearance": {
+      "lead": "Choose how Wavee looks and how much content fits. Every change previews live in the shell behind this window.",
+      "rowsTitle": "Track list density",
+      "rowsSub": "Choose the rhythm that makes long lists comfortable to scan.",
+      "detailTitle": "Detail page shell",
+      "detailSub": "Choose where artwork and identity sit around the track list.",
+      "pageLayoutAutomaticSub": "Adapts between a side rail and a hero as the window changes.",
+      "pageLayoutHeroSub": "Keeps artwork and identity above the track list at every size.",
+      "otherTitle": "Other appearance",
+      "otherSub": "Theme, window material and optional visual effects."
+    },
+    "sidebar": {
+      "templateGroup": "Starting point for Custom",
+      "useThisTemplate": "Use this"
+    },
+    "sound": {
+      "lead": "Streaming quality, transitions, and how much of it Wavee keeps on disk. Skip and we'll keep every default."
+    },
+    "notifications": {
+      "moreTopics": "More topics & quiet hours",
+      "moreCount": "{count} more",
+      "linksLanguageGroup": "Links & language"
+    },
+    "signIn": {
+      "title": "Sign in to Spotify",
+      "busyNote": "This happens on the same page on purpose — the step list is the page's own state, not a second dialog on top of it.",
+      "doneLead": "You're signed in. Wavee is now reading your library in the background — the rest of setup doesn't wait for it."
+    },
+    "localPlayback": {
+      "advancedSub": "Supply a Spotify.dll yourself — Wavee recognizes supported builds by fingerprint and configures the rest automatically.",
+      "chooseVersionCaption": "By default Wavee picks the recommended build for your architecture",
+      "diagnosticsCaption": "Every path Wavee searched, and why each one was rejected"
+    },
+    "done": {
+      "headlinePrefix": "You're ",
+      "headlineBold": "in",
+      "headlineSuffixNamed": ", {name}.",
+      "headlineSuffixPlain": ".",
+      "lead": "Your part is finished. Wavee just needs to finish reading your library and apply what you chose — that runs on its own, and you can start listening while it does.",
+      "fine": "Everything here can be changed later in Settings. If you picked Custom, the sidebar's layout menu opens the full customizer.",
+      "applyingKicker": "Almost there",
+      "applyingHeadlinePrefix": "Setting ",
+      "applyingHeadlineBold": "up",
+      "applyingFine": "Depending on how large your library is this can take a few minutes. It keeps going in the background — nothing here blocks the window opening.",
+      "stepSettings": "Applying your settings",
+      "stepSidebar": "Refreshing your sidebar",
+      "stepLibrary": "Starting library sync",
+      "stepRuntime": "Checking local playback"
+    }
   }
 }

@@ -27,15 +27,22 @@ public static class ArtistHeroLayout
 
     public const float WideHeight = 440f;
     public const float MediumHeight = 384f;
-    public const float CompactHeight = 540f;
-    public const float NarrowHeight = 516f;
 
     // Stacked (Compact/Narrow) photo band: the photograph is a FIELD at the top of the hero and the identity column
     // sits BELOW it on the page surface — copy never floats over the picture on these tiers, so there is no overlay
-    // veil to size. The remainder of the fixed hero height (240/276) is the identity band; the totals stay
-    // CompactHeight/NarrowHeight so the collapse math (CollapseDistance/PresentedH) is untouched.
+    // veil to size.
     public const float CompactPhotoHeight = 300f;
     public const float NarrowPhotoHeight = 240f;
+
+    // The stacked identity band has a declared WORST-CASE anatomy and its fixed hero must actually reserve it:
+    // verified caption (16) + compact title (3 × 40) + bio (2 × 20) + three vertical meta rows (3 × 20 + 2 × 4)
+    // + the four 8-DIP inter-block gaps + 12/20 vertical padding + actions. Compact actions are one 36-DIP row;
+    // Narrow owns two such rows plus their 8-DIP gap. The former 240/276 identity remainders only fit a short artist
+    // and clipped Maroon 5's Play pill at the hero boundary once rank + listeners + followers were present.
+    public const float CompactExpandedIdentityHeight = 344f;
+    public const float NarrowExpandedIdentityHeight = 388f;
+    public const float CompactHeight = CompactPhotoHeight + CompactExpandedIdentityHeight;
+    public const float NarrowHeight = NarrowPhotoHeight + NarrowExpandedIdentityHeight;
 
     /// <summary>The photograph's own extent inside the hero: the full hero on horizontal tiers, the top slice on
     /// stacked tiers. Both the banner's media box and <c>HeroArt</c> derive from THIS, so they cannot disagree.</summary>

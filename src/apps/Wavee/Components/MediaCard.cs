@@ -946,7 +946,7 @@ public static class MediaCard
                               string? detail = null, Action<string>? onSubtitleNav = null, string? meta = null, bool detailBelowArt = false,
                               MenuAttach? menu = null, DragSource? drag = null, string? morphKey = null,
                               Func<Element, Element>? leadingArtwork = null, Element? metaContent = null,
-                              bool plated = true)
+                              bool plated = true, bool showArtwork = true)
     {
         var hovered = new Signal<bool>(false);
         float art = large ? 84f : WaveeSize.Thumb48;
@@ -987,11 +987,13 @@ public static class MediaCard
         if (hasDetail && !belowArt)
             textKids.Add(Caption(detail!) with
             { Color = Tok.TextTertiary, Grow = 1f, Basis = 0f, MaxLines = 2, Wrap = TextWrap.Wrap, Trim = TextTrim.CharacterEllipsis });
-        var kids = new System.Collections.Generic.List<Element>(4)
+        var kids = new System.Collections.Generic.List<Element>(4);
+        if (showArtwork) kids.Add(leading);
+        kids.Add(new BoxEl
         {
-            leading,
-            new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, Gap = large ? Spacing.S : Spacing.XXS, Children = textKids.ToArray() },
-        };
+            Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f,
+            Gap = large ? Spacing.S : Spacing.XXS, Children = textKids.ToArray(),
+        });
         if (typeChip is { Length: > 0 }) kids.Add(RowChip(typeChip));
         if (trailing is not null) kids.Add(trailing);
         if (belowArt)

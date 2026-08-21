@@ -3,6 +3,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using FluentGpu.Foundation;
 using FluentGpu.Media;
+using FluentGpu.Media.Adaptive;
 using FluentGpu.Pal;
 
 namespace FluentGpu.WindowsApi.Media.PlayReady;
@@ -35,6 +36,15 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
     private bool _errorPublished;
     private double _volume = 1.0;
     private bool _muted;
+    private readonly ProtectedTrackDescriptor? _videoTrack;
+    private readonly QualityVariant[] _qualityVariants = Array.Empty<QualityVariant>();
+    private readonly AdaptiveBitrateController? _abr;
+    private QualitySelection _qualitySelection = QualitySelection.Auto;
+    private QualityVariant? _activeQuality;
+    private string? _pendingRepresentationId;
+    private long _lastBytesDownloaded;
+    private long _lastThroughputTicks;
+    private long _lastAbrTicks;
 
     // Session-level start watchdog (belt-and-suspenders around the player's own): guarantees a terminal Failed even if the
     // underlying player never reports Error. Overridable via FG_VIDEO_START_TIMEOUT_MS (ms); default 20s.
@@ -65,6 +75,16 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         _opts = opts;
         _playRequested = !opts.StartPaused;
         _locus = new MediaLocus(null, request.Source, null, null, null);
+        _videoTrack = FindDefaultTrack(request.Catalog, TrackKind.Video);
+        if (_videoTrack is { Representations.Count: > 0 })
+        {
+            _qualityVariants = new QualityVariant[_videoTrack.Representations.Count];
+            for (int i = 0; i < _qualityVariants.Length; i++)
+                _qualityVariants[i] = _videoTrack.Representations[i].Quality;
+            _abr = opts.Abr as AdaptiveBitrateController ?? new AdaptiveBitrateController();
+            _qualitySelection = _abr.Selection;
+            _activeQuality = FindInitialQuality(_videoTrack, request.InitUrl);
+        }
     }
 
     /// <inheritdoc/>
@@ -74,7 +94,10 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         sink.PlayRequested(!_opts.StartPaused);
         sink.State(PlaybackState.Opening);
         _publishedState = PlaybackState.Opening;
+        PublishCatalog(sink);
         StartOnce();
+        if (!_qualitySelection.IsAuto && _qualitySelection.VariantId is { } initialPin)
+            RequestRepresentation(initialPin);
         KeepPollingFor(TransportSettlePollMs);
         RequestPump();
     }
@@ -192,6 +215,35 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         _sink?.Muted(muted);
     }
 
+    /// <inheritdoc/>
+    public async ValueTask SelectQualityAsync(QualitySelection selection)
+    {
+        if (_disposed || _videoTrack is null) return;
+        if (!selection.IsAuto && FindRepresentation(_videoTrack, selection.VariantId) is null)
+            throw new ArgumentOutOfRangeException(nameof(selection), "The protected manifest does not contain that representation.");
+
+        _qualitySelection = selection;
+        if (_abr is not null) _abr.Selection = selection;
+        _sink?.QualitySelection(selection, _activeQuality);
+        if (!selection.IsAuto && selection.VariantId is { } id)
+        {
+            _pendingRepresentationId = id;
+            await _player.SelectVideoRepresentationAsync(id).ConfigureAwait(false);
+        }
+        KeepPollingFor(TransportSettlePollMs);
+        RequestPump();
+    }
+
+    /// <inheritdoc/>
+    public ValueTask SelectTrackAsync(MediaTrack? track)
+    {
+        if (_disposed || track is null || _request.Catalog is null) return ValueTask.CompletedTask;
+        for (int i = 0; i < _request.Catalog.Tracks.Count; i++)
+            if (_request.Catalog.Tracks[i].Id == track.Id && _request.Catalog.Tracks[i].Kind == track.Kind)
+                return _player.SelectTrackAsync(track.Id);
+        throw new ArgumentOutOfRangeException(nameof(track), "The protected manifest does not contain that track.");
+    }
+
     // ── the UI-thread pump (state mapping + the composited-surface handoff) ───────────────────────────────────────────
 
     /// <inheritdoc/>
@@ -203,6 +255,7 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         // Advance the native snapshot + bind the PROTECTED DComp handle (value-gated inside the player).
         _player.Pump(binding);
         var pv = _player.State.Value;
+        UpdateAdaptiveState(sink);
 
         // 1. Terminal CDM/DRM error → typed MediaError (published once). Never a silent drop.
         if (pv == ProtectedVideoState.Error)
@@ -245,7 +298,11 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
             if (!_commandsPublished)
             {
                 _commandsPublished = true;
-                sink.Commands(MediaCommandFlags.Play | MediaCommandFlags.Pause | MediaCommandFlags.Seek | MediaCommandFlags.Rate);
+                var commands = MediaCommandFlags.Play | MediaCommandFlags.Pause | MediaCommandFlags.Seek | MediaCommandFlags.Rate;
+                if (_videoTrack is { Representations.Count: > 1 }) commands |= MediaCommandFlags.SelectVideoQuality;
+                if (CountTracks(TrackKind.Audio) > 1) commands |= MediaCommandFlags.SelectAudioTrack;
+                if (CountTracks(TrackKind.Video) > 1) commands |= MediaCommandFlags.SelectVideoTrack;
+                sink.Commands(commands);
             }
         }
         long durMs = _player.DurationMs.Value;
@@ -272,6 +329,111 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         Publish(sink, MapState(pv));
         sink.Position(TimeSpan.FromMilliseconds(posMs));
         SetPumpPoll(ShouldPoll(pv));
+    }
+
+    private void PublishCatalog(MediaSignalSink sink)
+    {
+        sink.ResetTracks();
+        if (_request.Catalog is null) return;
+        for (int i = 0; i < _request.Catalog.Tracks.Count; i++)
+        {
+            var track = _request.Catalog.Tracks[i];
+            if (track.Representations.Count == 0) continue;
+            sink.Track(track.Id, track.Kind, track.Language, track.Label, track.Role,
+                track.Representations[0].Quality.Codec, track.IsDefault);
+        }
+        if (_videoTrack is not null)
+        {
+            sink.QualityVariants(_qualityVariants);
+            sink.QualitySelection(_qualitySelection, _activeQuality);
+        }
+    }
+
+    private void UpdateAdaptiveState(MediaSignalSink sink)
+    {
+        if (_videoTrack is null || _abr is null) return;
+        long now = Environment.TickCount64;
+        long bytes = _player.BytesDownloaded;
+        if (_lastThroughputTicks != 0 && bytes > _lastBytesDownloaded)
+            _abr.RecordDownload(bytes - _lastBytesDownloaded, TimeSpan.FromMilliseconds(now - _lastThroughputTicks));
+        if (bytes >= _lastBytesDownloaded)
+        {
+            _lastBytesDownloaded = bytes;
+            _lastThroughputTicks = now;
+        }
+
+        string? activeId = _player.ActiveVideoRepresentationId;
+        if (activeId is not null && !string.Equals(activeId, _activeQuality?.Id, StringComparison.Ordinal)
+            && FindRepresentation(_videoTrack, activeId) is { } active)
+        {
+            _activeQuality = active.Quality;
+            if (string.Equals(_pendingRepresentationId, activeId, StringComparison.Ordinal)) _pendingRepresentationId = null;
+            sink.QualitySelection(_qualitySelection, _activeQuality);
+            sink.NaturalSize(active.Quality.Resolution);
+        }
+
+        if (!_qualitySelection.IsAuto || now - _lastAbrTicks < 1_000) return;
+        _lastAbrTicks = now;
+        int chosen = _abr.Choose(_qualityVariants, TimeSpan.FromMilliseconds(Math.Max(0, _player.ForwardBufferedMs)));
+        string id = _qualityVariants[Math.Clamp(chosen, 0, _qualityVariants.Length - 1)].Id;
+        if (!string.Equals(id, _activeQuality?.Id, StringComparison.Ordinal)
+            && !string.Equals(id, _pendingRepresentationId, StringComparison.Ordinal))
+            RequestRepresentation(id);
+    }
+
+    private void RequestRepresentation(string id)
+    {
+        _pendingRepresentationId = id;
+        try
+        {
+            ValueTask pending = _player.SelectVideoRepresentationAsync(id);
+            if (!pending.IsCompletedSuccessfully) _ = ObserveSwitchAsync(pending, id);
+        }
+        catch { _pendingRepresentationId = null; }
+    }
+
+    private async Task ObserveSwitchAsync(ValueTask pending, string id)
+    {
+        try { await pending.ConfigureAwait(false); }
+        catch { if (string.Equals(_pendingRepresentationId, id, StringComparison.Ordinal)) _pendingRepresentationId = null; }
+    }
+
+    private int CountTracks(TrackKind kind)
+    {
+        if (_request.Catalog is null) return 0;
+        int count = 0;
+        for (int i = 0; i < _request.Catalog.Tracks.Count; i++)
+            if (_request.Catalog.Tracks[i].Kind == kind) count++;
+        return count;
+    }
+
+    private static ProtectedTrackDescriptor? FindDefaultTrack(ProtectedAdaptiveCatalog? catalog, TrackKind kind)
+    {
+        if (catalog is null) return null;
+        ProtectedTrackDescriptor? first = null;
+        for (int i = 0; i < catalog.Tracks.Count; i++)
+        {
+            var track = catalog.Tracks[i];
+            if (track.Kind != kind) continue;
+            first ??= track;
+            if (track.IsDefault) return track;
+        }
+        return first;
+    }
+
+    private static ProtectedRepresentationDescriptor? FindRepresentation(ProtectedTrackDescriptor track, string? id)
+    {
+        if (id is null) return null;
+        for (int i = 0; i < track.Representations.Count; i++)
+            if (string.Equals(track.Representations[i].Id, id, StringComparison.Ordinal)) return track.Representations[i];
+        return null;
+    }
+
+    private static QualityVariant? FindInitialQuality(ProtectedTrackDescriptor track, string? initUrl)
+    {
+        for (int i = 0; i < track.Representations.Count; i++)
+            if (string.Equals(track.Representations[i].InitUrl, initUrl, StringComparison.Ordinal)) return track.Representations[i].Quality;
+        return track.Representations.Count > 0 ? track.Representations[0].Quality : null;
     }
 
     private static PlaybackState MapState(ProtectedVideoState s) => s switch

@@ -14,7 +14,7 @@ namespace Wavee;
 
 // Artist "Top tracks" chart — the ops/scratch/popular-releases-prototype.html row, verbatim geometry:
 // rank · 44px art (40px under pressure) · title+subline (E · feat. X +N · plays) · heart · duration,
-// 56px rows, 12px gutters,
+// Modern: 56px rows + 12px gutters. Classic: 48px rows + S gutters + hairline separators, while retaining artwork.
 // ≤2 columns: a third column stole the width the mid column needs for title+feat+plays, and one column
 // below ColBreakW of CHART COLUMN for the same reason (paging is the better trade there).
 // Behavior stays canonical: the # cell is TrackRow.NumberCell
@@ -35,7 +35,8 @@ namespace Wavee;
 // standing (it strips Fill/Border/hover brushes), so the
 // live chart and its own shimmer read identically. Do not "restore" the bands.
 //
-// The chart HUGS its rows: a flat 56px each, one gap apart, and the strip simply ends where the last row does. It does
+// The chart HUGS its rows: Modern is a flat 56px each; Classic is the denser 48px artwork ledger with hairlines. The
+// strip simply ends where the last row does. It does
 // NOT stretch to meet the (usually taller) Releases column beside it. Both earlier attempts at using that leftover
 // height failed the eye — growing the rows made chunky slabs, and distributing it as spacing (SpaceBetween) floated
 // small rows in ~137px slots. A ragged band bottom is the correct answer; the rhythm is the shimmer's.
@@ -58,6 +59,8 @@ sealed class ArtistPopular : Component
     ActionServices? _acts;
     IOverlayService? _overlay;
     int _total;
+    bool _showArtwork = true;
+    bool _classic;
     // ROW SELECTION — the same contract every other track list in the app has (DetailTracks' external SelectionModel):
     // a single click SELECTS (Ctrl toggles, Shift extends from the anchor) and a DOUBLE click plays. It lives on the
     // component rather than on the list because PagedShelf hard-wires its ItemsView to ItemsSelectionMode.None, and a
@@ -77,8 +80,9 @@ sealed class ArtistPopular : Component
     const int MaxRows = 5;          // the band is NEVER taller than five rows — it pages instead
     const int MaxColumns = 2;       // two at most — the band pages instead of packing a third column
     const float RowH = 56f;
+    const float ClassicRowH = 48f;
     // ONE gap, both axes: PagedShelf/FillRowVirtualLayout expose a single knob and it is the column stride AND the row
-    // pitch. The prototype's horizontal 12px wins, so the row pitch is 12 rather than the pre-shelf 8.
+    // pitch. Modern keeps the prototype's horizontal 12px; Classic tightens both axes to the four-grid's S rung.
     const float CellGap = 12f;      // prototype .chart gap: 2px 12px
     const float HeaderGap = 10f;    // header → first row, on screen (PagedShelf keeps a multi-row header gap verbatim)
     // Below this the band is ONE column. It is measured on the CHART COLUMN, which is ⅔ of the responsive band (TopBand
@@ -98,6 +102,8 @@ sealed class ArtistPopular : Component
         var lib = UseContext(LibraryBridge.Slot);
         var acts = UseContext(ActionServices.Slot);
         var menuOverlay = UseContext(Overlay.Service);
+        _showArtwork = !AppearancePrefs.TrackArtworkHidden(_svc.Settings);
+        _classic = _svc.Settings.Get(WaveeSettings.TrackRowStyle) == 1;
 
         // The extended chart IS the artist's FULL rung (design §1.2): overview seed ∪ artist-top-tracks-extensions,
         // merged, with kind-185 counts on the tail. Asking for the rung revalidates into the SAME component — the chart
@@ -109,6 +115,7 @@ sealed class ArtistPopular : Component
 
         int total = Math.Min(_live.Count, MaxTracks);
         int counted = CountedRows(_live, total);
+        var mediaFacts = MediaFacts(_live, total);
         // The back-channel the shelf's frozen closures read (see the field docs) — written BEFORE the shelf builds.
         _total = total; _go = go; _lib = lib; _acts = acts; _overlay = menuOverlay;
         // Selection indices are chart ordinals; the extended list only ever GROWS past the seed, so raising the
@@ -118,6 +125,8 @@ sealed class ArtistPopular : Component
         // Never offer more columns than the rows can fill: a ≤5-track chart is ONE full-width column, not two
         // half-empty ones (the shelf's own fit is count-independent, so this is where that clamp lives).
         int maxCols = Math.Clamp((total + MaxRows - 1) / MaxRows, 1, MaxColumns);
+        float rowH = _classic ? ClassicRowH : RowH;
+        float cellGap = _classic ? Spacing.S : CellGap;
 
         // No measured width, no page signal, no pages clamp: the shelf self-measures, owns the page, and snaps. The only
         // width-derived thing left in this file is the density tier, which is computed from the fitted column width the
@@ -137,7 +146,7 @@ sealed class ArtistPopular : Component
                 PagedShelf.Create(
                     total,
                     cardAt: Card,
-                    cardHeight: static _ => RowH,
+                    cardHeight: _ => rowH,
                     header: Surfaces.AccentHeader(_title, accent),
                     // The stock pager row can't express this chart's two needs: it degrades to a bare count label at one
                     // page (stock chevrons would sit there permanently disabled instead), and the chevron chrome on this
@@ -152,8 +161,8 @@ sealed class ArtistPopular : Component
                     // UNCAPPED on purpose: with maxColumns 2 the fitted card must keep filling the band, and a real
                     // maximum would strand the row short of its column (the duration cell floating mid-air).
                     maxCardW: 9999f,
-                    gap: CellGap,
-                    headerGap: HeaderGap,
+                    gap: cellGap,
+                    headerGap: _classic ? Spacing.S : HeaderGap,
                     // ≥ the shelf's 12px halo-bleed gutter (the fade is what keeps a mid-glide neighbor soft) and no
                     // more: past that the fade reaches into the row's trailing cell, and the duration must stay crisp.
                     edgeFade: 16f,
@@ -166,7 +175,10 @@ sealed class ArtistPopular : Component
                     // WITHOUT its length changing — the rows read _live only on remount, see ChartRow), and the header
                     // element (the cover palette lands after first paint). Each changes at most once per visit, while
                     // the chart is still resting on page one, so the remount costs nothing anyone can see.
-                    with { Key = "chart:" + total + ":" + counted + ":" + accent.GetHashCode() },
+                    with { Key = "chart:" + total + ":" + counted + ":facts="
+                        + mediaFacts.Explicit.ToString("X") + "." + mediaFacts.Video.ToString("X")
+                        + ":" + accent.GetHashCode()
+                        + ":art=" + _showArtwork + ":classic=" + _classic },
             ],
         };
     }
@@ -180,6 +192,23 @@ sealed class ArtistPopular : Component
         return n;
     }
 
+    /// <summary>Ordinal media-fact signature for the frozen PagedShelf row factory. Full hydration can add explicit and
+    /// video facts without changing chart length or play counts; folding them into the shelf key remounts precisely that
+    /// same-length transition instead of leaving the seed rows mounted without their badges.</summary>
+    readonly record struct MediaFactSignature(ulong Explicit, ulong Video);
+
+    static MediaFactSignature MediaFacts(IReadOnlyList<Track> list, int total)
+    {
+        ulong explicitBits = 0UL, videoBits = 0UL;
+        int n = Math.Min(Math.Min(total, list.Count), MaxTracks);
+        for (int i = 0; i < n; i++)
+        {
+            if (list[i].IsExplicit) explicitBits |= 1UL << i;
+            if (VideoPresence.HasVideo(list[i])) videoBits |= 1UL << i;
+        }
+        return new MediaFactSignature(explicitBits, videoBits);
+    }
+
     // ── one chart row, at the fitted column width ───────────────────────────────────────────────────────────
     // The pressure tiers derive from THAT width — never from a captured measurement: this closure is frozen at the
     // shelf's mount, so a render-time local would be the mount-time width forever.
@@ -190,18 +219,19 @@ sealed class ArtistPopular : Component
         var t = list[i];
         // Pressure tiers (prototype): shrink art < 220, drop duration < 200; full play counts from 300.
         // Below 340 the subtitle stacks (feat / plays on their own lines) so the feat name isn't crushed.
-        float art = cellW < 220f ? 40f : 44f;
+        float art = _classic ? 40f : cellW < 220f ? 40f : 44f;
         bool showDuration = cellW >= 200f;
         bool fullPlays = cellW >= 300f;
-        bool stackSub = cellW < 340f;
+        bool stackSub = !_classic && cellW < 340f;
         string tier = TierTag(art, showDuration, fullPlays, stackSub);
         // Density props freeze at mount (component-props contract), so the tier is IN the key — a tier flip is a
         // deliberate remount. The ordinal deliberately is not (see RowKey); the row still RECEIVES it, for the rank
         // number and its own _live read.
         Element content = Embed.Comp(() => new ChartRow(this, i, _go, _lib, art, showDuration, fullPlays, stackSub))
-            with { Key = "row:" + t.Uri + tier };
+            with { Key = "row:" + t.Uri + tier + (_showArtwork ? "|art" : "|noart")
+                + (_classic ? "|classic" : "|modern") };
         // A pass-through wrapper carrying the drag source (and, when services exist, the context menu): the row owns
-        // its own 56px height (which is exactly the shelf's cell), so this must not add a height contract of its own
+        // its own style-selected height (which is exactly the shelf's cell), so this must not add a height contract of its own
         // (that is what let the old cap leak into a stretched slot).
         //
         // Axis arbitration is the ENGINE's, and it lands the right way here for free: DragController's arena-lite
@@ -210,14 +240,14 @@ sealed class ArtistPopular : Component
         // to it, finds the shelf's overflowing horizontal viewport, and yields to the pan that pages the chart.
         // ZStack (not Direction 1) so the WinUI left accent selection bar can overlay the row without displacing a
         // single pixel of it — the DetailTracks skin's shape exactly. A ZStack child with no declared width still
-        // fills the slot (FlexLayout.ArrangeZStack), so the row keeps the cell's full width and its own 56px height.
+        // fills the slot (FlexLayout.ArrangeZStack), so the row keeps the cell's full width and its own selected height.
         BoxEl row = new BoxEl
         {
             ZStack = true,
             // The chart is not an editable playlist, so a drop is always a COPY — but the payload still carries the
             // whole SELECTION when the pressed row is part of it, exactly like a detail-page track drag.
             Draggable = Drag.Source(WaveeDragKinds.Resource, () => ChartDragPayload(i)),
-            Children = [content, SelectionPill(i)],
+            Children = [content, SelectionPill(i, _classic)],
         };
         return _acts is { } a && _overlay is { } ov
             ? row.WithContextMenu(ov, () => TrackContextMenu.BuildSingle(a, t))
@@ -228,13 +258,13 @@ sealed class ArtistPopular : Component
     /// <c>DetailTracks.BoundRowSkin</c>: selection never changes the fill). ALWAYS mounted and revealed by a BOUND
     /// opacity over the model's <c>Version</c>, so selecting a row is a compositor-only re-skin: no chart re-render, no
     /// remount, and none of the realized window's Enter transitions replay.</summary>
-    Element SelectionPill(int index)
+    Element SelectionPill(int index, bool classic)
     {
         var sel = _selection;
         return new BoxEl
         {
             Key = "row-pill", Width = 3f, Height = 16f, Margin = new Edges4(2f, 0f, 0f, 0f),
-            Corners = CornerRadius4.All(1.5f), AlignSelf = FlexAlign.Center,
+            Corners = classic ? CornerRadius4.All(Radii.None) : CornerRadius4.All(1.5f), AlignSelf = FlexAlign.Center,
             Fill = _accent(), HitTestVisible = false,
             Opacity = Prop.Of(() => { _ = sel.Version.Value; return sel.IsSelected(index) ? 1f : 0f; }),
         };
@@ -280,7 +310,8 @@ sealed class ArtistPopular : Component
         return (uint)i < (uint)list.Count && list[i].Uri.Length > 0 ? "chart:" + list[i].Uri : "chart#" + i;
     }
 
-    public static Element SkeletonShape(IReadOnlyList<Track> tracks, string title)
+    public static Element SkeletonShape(IReadOnlyList<Track> tracks, string title, bool showArtwork = true,
+                                        bool classic = false)
     {
         // The skeleton stands in for the FIRST paint, which is always the overview seed — never the extended list. Two
         // columns is now the live chart's own maximum (MaxColumns), so the shimmer and the wide chart agree exactly;
@@ -299,16 +330,21 @@ sealed class ArtistPopular : Component
                 int index = c * rowsPerCol + r;
                 rows[r] = Row(tracks[index], index,
                     new TrackRow.State(false, false, false, false, false),
-                    art: 44f, showDuration: true, fullPlays: false, stackSub: false, featLine: null,
-                    onPlay: static () => { }, onLike: null);
+                    art: classic ? 40f : 44f, showDuration: true, fullPlays: false, stackSub: false, featLine: null,
+                    onPlay: static () => { }, onLike: null, showArtwork: showArtwork, classic: classic);
             }
             // Same column contract as the live chart — shimmer and content must not drift geometrically. One gap on
             // both axes, because that is all the live shelf has.
-            colEls[c] = new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, Gap = CellGap, Children = rows };
+            colEls[c] = new BoxEl
+            {
+                Direction = 1, Grow = 1f, Basis = 0f,
+                Gap = classic ? Spacing.S : CellGap,
+                Children = rows,
+            };
         }
         return new BoxEl
         {
-            Direction = 1, Gap = HeaderGap,
+            Direction = 1, Gap = classic ? Spacing.S : HeaderGap,
             Children =
             [
                 // The header is the live one's shape exactly: NATURAL width (the shelf's own spacer is what pushes the
@@ -318,7 +354,7 @@ sealed class ArtistPopular : Component
                     Direction = 0, AlignItems = FlexAlign.Center,
                     Children = [Surfaces.AccentHeader(title, Tok.AccentDefault)],
                 },
-                new BoxEl { Direction = 0, Gap = CellGap, Children = colEls },
+                new BoxEl { Direction = 0, Gap = classic ? Spacing.S : CellGap, Children = colEls },
             ],
         };
     }
@@ -326,7 +362,8 @@ sealed class ArtistPopular : Component
     // ── the prototype row (shared by live rows and the skeleton) ────────────────────────────────────────────
     static Element Row(Track t, int index, in TrackRow.State st, float art, bool showDuration,
                        bool fullPlays, bool stackSub, Element? featLine, Action onPlay, Action? onLike,
-                       IReadSignal<bool>? hoverPaused = null, Action<KeyModifiers>? onTap = null)
+                       IReadSignal<bool>? hoverPaused = null, Action<KeyModifiers>? onTap = null,
+                       bool showArtwork = true, bool classic = false)
     {
         // Tight cells: feat and plays stop competing for one line — feat keeps line 2, plays moves to line 3
         // (where the full count always fits). Rows without a feat line never cramped, so they stay 2-line.
@@ -335,38 +372,90 @@ sealed class ArtistPopular : Component
         // EXACT-SIZE arrays, not List+ToArray. This row builder runs on every realize and a column crossing realizes the
         // whole mandatory band (five rows) in ONE frame, so each avoided List+copy pair is a real slice of that burst.
         // parts·2−1 is exactly the interleaved "part · part · part" length; 0 parts needs no array at all.
-        bool hasExplicit = t.IsExplicit, hasFeat = featLine is not null, hasPlays = t.PlayCount > 0 && !stacked;
-        int parts = (hasExplicit ? 1 : 0) + (hasFeat ? 1 : 0) + (hasPlays ? 1 : 0);
+        bool classicNow = classic && st.IsNow;
+        bool hasExplicit = t.IsExplicit;
+        bool hasVideo = VideoPresence.HasVideo(t);
+        bool hasFeat = featLine is not null, hasPlays = t.PlayCount > 0 && !stacked;
+        int parts = (hasExplicit ? 1 : 0) + (hasVideo ? 1 : 0) + (hasFeat ? 1 : 0) + (hasPlays ? 1 : 0);
         var sub = parts == 0 ? Array.Empty<Element>() : new Element[parts * 2 - 1];
         int n = 0;
-        if (hasExplicit) sub[n++] = TrackRow.ExplicitBadge();
-        if (hasFeat) { if (n > 0) sub[n++] = Dot(); sub[n++] = featLine!; }
+        if (hasExplicit)
+            sub[n++] = classic
+                ? TrackRow.ClassicExplicitBadge(classicNow ? Tok.AccentTextPrimary : null)
+                : TrackRow.ExplicitBadge();
+        if (hasVideo)
+        {
+            if (n > 0) sub[n++] = Dot(classicNow ? Tok.AccentTextPrimary : null);
+            sub[n++] = Icon(Icons.Movie, 13f, classicNow ? Tok.AccentTextPrimary : Tok.TextTertiary);
+        }
+        if (hasFeat) { if (n > 0) sub[n++] = Dot(classicNow ? Tok.AccentTextPrimary : null); sub[n++] = featLine!; }
         if (hasPlays)
         {
-            if (n > 0) sub[n++] = Dot();
+            if (n > 0) sub[n++] = Dot(classicNow ? Tok.AccentTextPrimary : null);
             sub[n++] = new TextEl((fullPlays ? t.PlayCount.ToString("N0") : TrackRow.PlaysLabel(t.PlayCount)) + " plays")
             {
-                Size = 12f, Color = Tok.TextTertiary, MaxLines = 1, Shrink = 0f,   // plays never disappear
+                Size = 12f, Color = classicNow ? Tok.AccentTextPrimary : Tok.TextTertiary,
+                MaxLines = 1, Shrink = 0f,   // plays never disappear
             };
         }
 
         var trail = new Element[showDuration ? 2 : 1];
-        trail[0] = TrackRow.Heart(st.Saved, onLike);
+        trail[0] = TrackRow.Heart(st.Saved, onLike, classic: classic);
         if (showDuration)
-            trail[1] = new TextEl(DetailFormat.TrackTime(t.DurationMs)) { Size = 13f, Color = Tok.TextSecondary };
+            trail[1] = new TextEl(DetailFormat.TrackTime(t.DurationMs))
+            { Size = 13f, Color = classicNow ? Tok.AccentTextPrimary : Tok.TextSecondary };
+
+        var rowChildren = new Element[showArtwork ? 4 : 3];
+        int child = 0;
+        rowChildren[child++] = new BoxEl
+        {
+            Width = 24f, Height = 24f, Shrink = 0f,
+            Children = [TrackRow.NumberCell(index, st.IsNow, st.IsPlaying, st.IsBuffering, false, onPlay, hoverPaused,
+                classic: classic)],
+        };
+        if (showArtwork)
+            rowChildren[child++] = new BoxEl
+            {
+                Width = art, Height = art, Shrink = 0f, ClipToBounds = true,
+                Corners = CornerRadius4.All(Radii.Control),
+                Children = [Surfaces.Artwork(t.Image, t.Id.GetHashCode() & 0x7fffffff, art, art, Radii.Control, decodePx: 96)],
+            };
+        rowChildren[child++] = new BoxEl
+        {
+            Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f,
+            Gap = classic ? Spacing.XS : 1f, Justify = FlexJustify.Center,
+            Children = MidColumn(t, st, sub, stacked),
+        };
+        rowChildren[child] = new BoxEl
+        {
+            Direction = 0, Gap = 6f, AlignItems = FlexAlign.Center, Shrink = 0f,
+            Children = trail,
+        };
+
+        float rowHeight = classic ? ClassicRowH : RowH;
+        var body = new BoxEl
+        {
+            Direction = 0, Grow = 1f, MinWidth = 0f, MinHeight = rowHeight,
+            AlignItems = FlexAlign.Center, Gap = Spacing.S,
+            Padding = classic
+                ? new Edges4(Spacing.XS, 0f, Spacing.XS, 0f)
+                : new Edges4(Spacing.S, 0f, Spacing.S, 0f),
+            Children = rowChildren,
+        };
 
         return new BoxEl
         {
-            Direction = 0, MinHeight = RowH, AlignItems = FlexAlign.Center, Gap = 8f,
-            Padding = new Edges4(Spacing.S, 0f, Spacing.S, 0f), Corners = CornerRadius4.All(6f), MinWidth = 0f,
+            ZStack = true, MinHeight = rowHeight, MinWidth = 0f, ClipToBounds = classic,
+            Corners = classic ? CornerRadius4.All(Radii.None) : CornerRadius4.All(6f),
             // Fluent: no resting fill (hover/press only). Now-playing is content state — NumberCell EQ +
             // AccentTextPrimary title — same cues as BoundRowSkin / TrackRow; selection pill is orthogonal.
             Fill = ColorF.Transparent,
             HoverFill = WaveeColors.RowHover,
             PressedFill = WaveeColors.RowPressed,
-            PressScale = WaveeMotion.ScaleSubtle.Press, BorderWidth = 1f,
+            PressScale = WaveeMotion.ScaleSubtle.Press,
+            BorderWidth = classic ? 0f : 1f,
             BorderColor = ColorF.Transparent,
-            HoverBorderColor = Tok.StrokeCardDefault,
+            HoverBorderColor = classic ? ColorF.Transparent : Tok.StrokeCardDefault,
             Role = AutomationRole.Button,
             // Single click SELECTS, DOUBLE click plays — the DetailTracks contract (BoundRowSkin's OnPointerReleased),
             // so every track list in the app answers a click the same way. Playing on a single click stays available
@@ -386,30 +475,7 @@ sealed class ArtistPopular : Component
             OnPointerExit = hoverPaused is Signal<bool> hs2
                 ? () => { if (hs2.Peek()) hs2.Value = false; }
                 : static () => { },
-            Children =
-            [
-                new BoxEl
-                {
-                    Width = 24f, Height = 24f, Shrink = 0f,
-                    Children = [TrackRow.NumberCell(index, st.IsNow, st.IsPlaying, st.IsBuffering, false, onPlay, hoverPaused)],
-                },
-                new BoxEl
-                {
-                    Width = art, Height = art, Shrink = 0f, ClipToBounds = true,
-                    Corners = CornerRadius4.All(Radii.Control),
-                    Children = [Surfaces.Artwork(t.Image, t.Id.GetHashCode() & 0x7fffffff, art, art, Radii.Control, decodePx: 96)],
-                },
-                new BoxEl
-                {
-                    Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = 1f, Justify = FlexJustify.Center,
-                    Children = MidColumn(t, st, sub, stacked),
-                },
-                new BoxEl
-                {
-                    Direction = 0, Gap = 6f, AlignItems = FlexAlign.Center, Shrink = 0f,
-                    Children = trail,
-                },
-            ],
+            Children = classic ? [body, ClassicHairline()] : [body],
         };
     }
 
@@ -437,7 +503,16 @@ sealed class ArtistPopular : Component
         ];
     }
 
-    static Element Dot() => new TextEl("·") { Size = 12f, Color = Tok.TextTertiary, Shrink = 0f };
+    static Element Dot(ColorF? ink = null) => new TextEl("·")
+    { Size = 12f, Color = ink ?? Tok.TextTertiary, Shrink = 0f };
+
+    static Element ClassicHairline() => new BoxEl
+    {
+        Key = "classic-hairline",
+        AlignSelf = FlexAlign.End, JustifySelf = FlexAlign.Stretch,
+        Height = 1f, Fill = Prop.Of(static () => Tok.StrokeDividerDefault),
+        HitTestVisible = false,
+    };
 
     // ── the ‹ ●● › header pager: the chart's own chevron chrome around a WinUI PipsPager ────────────────────
     // The chevrons are the pre-shelf chart's, unchanged (28px, no resting fill); the pips replace the old "1/2" text as
@@ -537,7 +612,9 @@ sealed class ArtistPopular : Component
                     _o._ctx, new PlaybackContextTrack(t.Uri), _index)),
                 onLike: t.Uri.Length > 0 ? () => _lib?.ToggleSaved(t.Uri, t.Title) : null,
                 hoverPaused: hovered,
-                onTap: mods => _o.SelectRow(_index, mods));
+                onTap: mods => _o.SelectRow(_index, mods),
+                showArtwork: _o._showArtwork,
+                classic: _o._classic);
         }
     }
 

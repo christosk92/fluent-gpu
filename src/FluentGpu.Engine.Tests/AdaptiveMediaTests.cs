@@ -160,6 +160,21 @@ public sealed class AdaptiveMediaTests
     }
 
     [Fact]
+    public void AbrManualPinUsesStableVariantId_NotListIndex()
+    {
+        var codec = new MediaContentType(Container.Mp4, CodecId.H264, CodecId.None);
+        QualityVariant[] variants =
+        [
+            new("5", 250_000, new SizeI(320, 180), 30, codec),
+            new("2", 1_500_000, new SizeI(854, 480), 30, codec),
+            new("0", 7_500_000, new SizeI(1920, 1080), 30, codec),
+        ];
+        var abr = new AdaptiveBitrateController { Selection = QualitySelection.Pin("0"), MaxHeight = 480 };
+
+        Assert.Equal(2, abr.Choose(variants, TimeSpan.Zero));
+    }
+
+    [Fact]
     public void BufferingThresholdReportsProgressAndResumeReadiness()
     {
         var info = AdaptiveSegmentScheduler.Buffering(BufferingReason.Rebuffering, TimeSpan.FromSeconds(1.5),

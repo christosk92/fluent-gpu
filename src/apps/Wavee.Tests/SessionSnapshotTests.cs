@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Runtime.CompilerServices;
 using FluentGpu.Controls;
 using Xunit;
 
@@ -71,6 +72,7 @@ public class SessionSnapshotTests : IDisposable
             AutoplayActive = true,
             CapturedAtUnixMs = 1_700_000_000_000,
         });
+        store.UpdateShell(railOpen: true, railMode: 4);
         store.SaveAndWait();
 
         var loaded = Store().Load();
@@ -106,6 +108,11 @@ public class SessionSnapshotTests : IDisposable
         Assert.Equal(["spotify:track:q1", "spotify:track:q2"], pb.UserQueueUris);
         Assert.True(pb.AutoplayActive);
         Assert.Equal(1_700_000_000_000, pb.CapturedAtUnixMs);
+
+        var shell = loaded.Shell;
+        Assert.NotNull(shell);
+        Assert.True(shell!.RailOpen);
+        Assert.Equal(4, shell.RailMode);
     }
 
     [Fact]
@@ -259,6 +266,7 @@ public class SessionSnapshotTests : IDisposable
         var store = Store();
         store.UpdateNav(R("home"), Array.Empty<Route>(), Array.Empty<Route>(), -1);
         store.UpdatePlayback(new SessionPlaybackDto { TrackUri = "spotify:track:keep", PositionMs = 9 });
+        store.UpdateShell(railOpen: true, railMode: 4);
         store.SaveAndWait();
 
         var reopened = Store();
@@ -270,6 +278,34 @@ public class SessionSnapshotTests : IDisposable
         Assert.Equal("search", loaded!.Nav!.Active?.Name);
         Assert.Equal("spotify:track:keep", loaded.Playback!.TrackUri);
         Assert.Equal(9, loaded.Playback.PositionMs);
+        Assert.True(loaded.Shell!.RailOpen);
+        Assert.Equal(4, loaded.Shell.RailMode);
+    }
+
+    [Fact]
+    public void OldV1Snapshot_WithoutShellSection_LoadsWithDefaultChrome()
+    {
+        File.WriteAllText(_path, """{"version":1,"nav":{"active":{"name":"home"}}}""");
+
+        var store = Store();
+        var loaded = store.Load();
+
+        Assert.NotNull(loaded);
+        Assert.Null(loaded!.Shell);
+        Assert.Null(store.ShellSection);
+    }
+
+    [Fact]
+    public void WaveeShell_RestoresAndPersistsTheRailPresentation()
+    {
+        string root = AppSourceRoot();
+        if (root is null) { Assert.Skip("app sources not present (binary-only run)"); return; }
+        string shell = File.ReadAllText(Path.Combine(root, "Features", "Shell", "WaveeShell.cs"));
+
+        Assert.Contains("_session.ShellSection", shell);
+        Assert.Contains("_shellUi.RailOpen.Value = shell.RailOpen", shell);
+        Assert.Contains("_shellUi.Mode.Value = (RailMode)shell.RailMode", shell);
+        Assert.Contains("_session.UpdateShell(_shellUi.RailOpen.Value, (int)_shellUi.Mode.Value)", shell);
     }
 
     [Fact]
@@ -304,5 +340,13 @@ public class SessionSnapshotTests : IDisposable
         Assert.Null(active.OriginLabel);
         Assert.Null(active.OriginName);
         Assert.Null(back[0].OriginLabel);
+    }
+
+    static string AppSourceRoot([CallerFilePath] string here = "")
+    {
+        string? tests = Path.GetDirectoryName(here);
+        if (tests is null) return null!;
+        string app = Path.Combine(Path.GetDirectoryName(tests)!, "Wavee");
+        return Directory.Exists(app) ? app : null!;
     }
 }

@@ -1,6 +1,7 @@
 using FluentGpu.Animation;
 using FluentGpu.Foundation;
 using FluentGpu.Pal;
+using FluentGpu.Render;
 using FluentGpu.Scene;
 using FluentGpu.Scroll;
 using FluentGpu.Text;
@@ -3871,8 +3872,13 @@ public sealed class InputDispatcher
     /// NOTHING, and the guillotined content is by construction a LATER sibling than the chrome pinned on that line
     /// (both hit walks keep the LAST matching child). Without this gate the invisible rows above the cut won every
     /// click aimed at the band — the artist page's section pivot and the album/show band's actions were dead across
-    /// their whole width. This is not paint-derived hit-testing (which stays deliberately absent): a clip is a
-    /// SCISSOR the recorder hands to the whole subtree, and input has always followed scissors.</para>
+    /// their whole width. This is not paint-derived hit-testing — that stays deliberately absent, with exactly ONE
+    /// narrow, opt-in exception (gpu-renderer.md §5.1: "hit-test shares the fill RULE, not just the vertices"): a
+    /// <see cref="VisualKind.Path"/> node whose <c>PathSpec.HitTestGeometry</c> was explicitly set true additionally
+    /// requires <see cref="PathHitTest.Contains"/> at the node-local point, in <see cref="Hit"/>/<see cref="HitAny"/>
+    /// below. Defaulting false keeps every OTHER node's hit-testing exactly what it always was — box + clip, never
+    /// paint — and even a Path node degrades to plain box hit-testing unless its author opted in. A clip, by
+    /// contrast, is a SCISSOR the recorder hands to the whole subtree, and input has always followed scissors.</para>
     ///
     /// <para><b>Why only that clip.</b> A FINITE ClipRect box is a reveal/flight presentation — an
     /// <c>AnimChannel.ClipL/T/R/B</c> ComboBox dropdown splitting open, a connected-animation flight — over a surface
@@ -3887,6 +3893,47 @@ public sealed class InputDispatcher
         var c = np.ClipRect;
         if (c.IsInfinite || c.X > -NodePaint.StickyClipSpan) return true;
         return local.Y >= c.Y;
+    }
+
+    /// <summary>Cold-path flatten tolerance for <see cref="PathGeometryAdmits"/> (path units, deviceScale 1 — see
+    /// that method's doc for why re-flattening per event, not per frame, is the accepted cost here).</summary>
+    private const float PathHitTestTolerance = 0.25f;
+
+    /// <summary>The one licensed exception to "hit-testing never looks at paint" (see <see cref="ClipRectAdmits"/>'s
+    /// doc): for a <see cref="VisualKind.Path"/> node whose <c>PathSpec.HitTestGeometry</c> was explicitly opted in,
+    /// require <paramref name="local"/> to also land inside the AUTHORED fill geometry — under the geometry's own
+    /// <c>PathSpec.Rule</c> (gpu-renderer.md §5.1: "hit-test shares the fill RULE, not just the vertices") — not
+    /// merely inside the node's box, so a click in the hole of a donut icon falls through to whatever is behind it
+    /// instead of being swallowed by the box. True (admits) for every other node, and even for an opted-out Path
+    /// node — this only ever NARROWS an already-passed box+clip admission, never widens one.
+    ///
+    /// <para><paramref name="hitW"/>/<paramref name="hitH"/> are the same PresentedW/H-or-Bounds fallback the caller
+    /// already computed for its own box test. When <c>PathSpec.ViewBoxW/H</c> is set, <see cref="local"/> is divided
+    /// by the identical uniform-fit scale <c>SceneRecorder</c>'s <see cref="VisualKind.Path"/> arm bakes into the
+    /// paint transform (<c>min(hitW/ViewBoxW, hitH/ViewBoxH)</c>, anchored at the node origin, no centering) before
+    /// testing containment — otherwise a scaled icon's clickable silhouette would drift off its painted one.</para>
+    ///
+    /// <para>Flattens the geometry ON DEMAND via <see cref="PathFlatten.Flatten"/> rather than reusing
+    /// <see cref="PathRealizationCache"/>: that cache retains TESSELLATED triangles (fill/stroke soup), not the
+    /// flattened polygon contours a point-in-polygon test needs, so there is nothing cheaper to reach without a
+    /// second cache keyed the same way. Acceptable because a hit-test runs per INPUT EVENT, not per frame — unlike
+    /// the render path, this is not a phases-6–13 zero-alloc surface.</para></summary>
+    private bool PathGeometryAdmits(NodeHandle node, in NodePaint np, Point2 local, float hitW, float hitH)
+    {
+        if (np.VisualKind != VisualKind.Path) return true;
+        if (!_scene.TryGetPath(node, out var ps) || !ps.HitTestGeometry) return true;
+        var geometry = ps.Geometry;
+        if (geometry is null || geometry.VerbCount == 0) return false;   // opted in, but nothing authored to contain the point
+
+        float gx = local.X, gy = local.Y;
+        if (ps.ViewBoxW > 0f && ps.ViewBoxH > 0f && hitW > 0f && hitH > 0f)
+        {
+            float fit = MathF.Min(hitW / ps.ViewBoxW, hitH / ps.ViewBoxH);
+            if (fit > 1e-6f) { gx /= fit; gy /= fit; }
+        }
+
+        PathFlatten.Flatten(geometry, PathHitTestTolerance, 1f, out var pts, out var starts, out var counts, out _);
+        return PathHitTest.Contains(pts, starts, counts, ps.Rule, gx, gy);
     }
 
     // Both walks descend the POINT through each node's inverse transform (scale-aware — WinUI hit-tests the rendered
@@ -3942,7 +3989,7 @@ public sealed class InputDispatcher
             var r = HitAny(c, presentedPoint, netSx, netSy, anyDisclosure);
             if (!r.IsNull) result = r;
         }
-        if (result.IsNull && inside && !YieldsToPassThrough(node))
+        if (result.IsNull && inside && !YieldsToPassThrough(node) && PathGeometryAdmits(node, in np, local, hitW, hitH))
             result = node;
         return result;
     }
@@ -4010,7 +4057,8 @@ public sealed class InputDispatcher
             const int hitAnywhere = InteractionInfo.ClickBit | InteractionInfo.PointerBit | InteractionInfo.PressedBit
                 | InteractionInfo.DragBit | InteractionInfo.CursorBit | InteractionInfo.SelectableTextBit | InteractionInfo.GestureBit
                 | InteractionInfo.ContextBit;
-            if ((flags & NodeFlags.Disabled) == 0 && inside && !YieldsToPassThrough(node))   // disabled nodes don't hit-test
+            if ((flags & NodeFlags.Disabled) == 0 && inside && !YieldsToPassThrough(node)   // disabled nodes don't hit-test
+                && PathGeometryAdmits(node, in np, local, hitW, hitH))
             {
                 if ((ii.HandlerMask & hitAnywhere) != 0)
                     result = node;

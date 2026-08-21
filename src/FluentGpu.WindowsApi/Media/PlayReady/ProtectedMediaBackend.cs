@@ -113,6 +113,7 @@ public sealed class ProtectedMediaBackend : IMediaBackend, IPreparableBackend
         {
             return req with
             {
+                Catalog = descriptor.Catalog,
                 InitUrl = descriptor.InitUrl,
                 SegmentBaseUrl = descriptor.SegmentBaseUrl,
                 SegmentPrefix = descriptor.SegmentPrefix,

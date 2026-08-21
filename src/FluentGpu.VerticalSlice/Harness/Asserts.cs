@@ -201,6 +201,9 @@ public static class Asserts
         DrawOp.DrawGlyphRunGradient => Unsafe.SizeOf<DrawGlyphRunGradientCmd>(),
         DrawOp.DrawIconMask => Unsafe.SizeOf<DrawIconMaskCmd>(),
         DrawOp.DrawVideo => Unsafe.SizeOf<DrawVideoCmd>(),
+        DrawOp.EraseRoundRect => Unsafe.SizeOf<EraseRoundRectCmd>(),
+        DrawOp.FillPath => Unsafe.SizeOf<FillPathCmd>(),
+        DrawOp.StrokePath => Unsafe.SizeOf<StrokePathCmd>(),
         _ => 0,
     };
     public static void ClickNode(AppHost host, HeadlessWindow window, NodeHandle n)

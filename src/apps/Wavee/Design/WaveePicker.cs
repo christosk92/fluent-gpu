@@ -31,7 +31,7 @@ static class WaveePicker
     {
         public static Ink For(bool on) => on
             ? new(Tok.AccentDefault, Tok.AccentDefault with { A = 0.45f })
-            : new(Tok.FillSubtleTertiary, Tok.FillSubtleTertiary with { A = 0.7f });
+            : new(Tok.AccentDefault with { A = 0.58f }, Tok.AccentDefault with { A = 0.22f });
     }
 
     /// <summary>A card footprint. <paramref name="Inset"/> is the RESTING padding: a selected card spends 1 DIP of it
@@ -62,7 +62,9 @@ static class WaveePicker
         Padding = Edges4.All(on ? s.Inset - 1f : s.Inset),
         ClipToBounds = true,
         Corners = CornerRadius4.All(Radii.Card),
-        Fill = Tok.FillSubtleSecondary,
+        Fill = on ? Tok.AccentSubtle : Tok.FillCardDefault,
+        HoverFill = on ? WaveeColors.SelectedHover : Tok.FillCardSecondary,
+        PressedFill = on ? Tok.AccentSubtle : Tok.FillSubtleSecondary,
         BorderWidth = on ? 2f : 1f,
         BorderColor = on ? Tok.AccentDefault : Tok.StrokeControlDefault,
         HoverScale = WaveeMotion.ScaleSubtle.Hover,

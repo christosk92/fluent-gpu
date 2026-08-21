@@ -1853,13 +1853,21 @@ sealed class RecentsPage : Component
 
     static readonly ColumnSet ChildCols = new(Album: false, By: false, Date: false, Video: false, Plays: false,
         Heart: true, Thumb: true, Actions: true);
+    static readonly ColumnSet ChildColsNoArt = ChildCols with { Thumb = false };
     static readonly TrackSize[] ChildTracks =
         [TrackSize.Px(30f), TrackSize.Px(TrackRow.HeartCol), TrackSize.Px(TrackRow.ThumbSize), TrackSize.Star(1f), TrackSize.Px(52f), TrackSize.Px(40f)];
+    static readonly TrackSize[] ChildTracksNoArt =
+        [TrackSize.Px(30f), TrackSize.Px(TrackRow.HeartCol), TrackSize.Star(1f), TrackSize.Px(52f), TrackSize.Px(40f)];
 
     Element ChildRowContent(string uri, RowFacts facts, int index,
                             PlaybackBridge? bridge, LibraryBridge? lib, ActionServices? acts, IOverlayService? overlay)
-        => BindTrackRow(ResolveTrack(uri, facts), index, ChildCols, ChildTracks, ChildRowHeight, showTrackArtist: true,
-            bridge, lib, acts, overlay);
+    {
+        bool showArtwork = !AppearancePrefs.TrackArtworkHidden(_svc?.Settings);
+        return BindTrackRow(ResolveTrack(uri, facts), index,
+            showArtwork ? ChildCols : ChildColsNoArt,
+            showArtwork ? ChildTracks : ChildTracksNoArt,
+            ChildRowHeight, showTrackArtist: true, bridge, lib, acts, overlay);
+    }
 
     Element SavedArtwork(RecentsRow row, Element context)
     {
@@ -1901,7 +1909,10 @@ sealed class RecentsPage : Component
                             PlaybackBridge? bridge, LibraryBridge? lib, ActionServices? acts, IOverlayService? overlay)
     {
         _ = row;    // the single arm has no group facts to state — its identity is entirely the track's
-        return BindTrackRow(ResolveTrack(uri, facts), displayIndex, SingleRowCols, SingleRowTracks, RowHeight,
+        bool showArtwork = !AppearancePrefs.TrackArtworkHidden(_svc?.Settings);
+        return BindTrackRow(ResolveTrack(uri, facts), displayIndex,
+            showArtwork ? SingleRowCols : SingleRowColsNoArt,
+            showArtwork ? SingleRowTracks : SingleRowTracksNoArt, RowHeight,
             showTrackArtist: false, bridge, lib, acts, overlay);
     }
 
@@ -1909,8 +1920,11 @@ sealed class RecentsPage : Component
     /// varies — this surface has no width tiers.</summary>
     static readonly ColumnSet SingleRowCols = new(Album: false, By: false, Date: false, Video: false, Plays: false,
         Heart: true, Thumb: true, Actions: true);
+    static readonly ColumnSet SingleRowColsNoArt = SingleRowCols with { Thumb = false };
     static readonly TrackSize[] SingleRowTracks =
         [TrackSize.Px(36f), TrackSize.Px(TrackRow.HeartCol), TrackSize.Px(TrackRow.ThumbSize), TrackSize.Star(1f), TrackSize.Px(52f), TrackSize.Px(40f)];
+    static readonly TrackSize[] SingleRowTracksNoArt =
+        [TrackSize.Px(36f), TrackSize.Px(TrackRow.HeartCol), TrackSize.Star(1f), TrackSize.Px(52f), TrackSize.Px(40f)];
 
     Track ResolveTrack(string uri, RowFacts facts)
     {

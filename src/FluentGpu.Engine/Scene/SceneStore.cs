@@ -143,6 +143,7 @@ public sealed class SceneStore : ISceneBackend
     private readonly ColdSlab<ShadowSpec> _shadows = new();   // GEN-17 (wired): dense slab, not Dictionary
     private readonly ColdSlab<ArcSpec> _arcs = new();
     private readonly ColdSlab<PolylineStrokeSpec> _polylines = new();   // GEN-17 (wired)
+    private readonly ColdSlab<PathSpec> _paths = new();   // GEN-17 (wired) — VisualKind.Path's geometry/fill/stroke
     private readonly ColdSlab<GradientSpec> _gradients = new();   // GEN-17 (wired)
     private readonly ColdSlab<Point2> _radialGradientCenters = new(); // bindable normalized override for radial fills
     private readonly ColdSlab<GradientSpec> _borderBrushes = new();   // GEN-17 (wired) — gradient border stroke (elevation edge)
@@ -435,6 +436,7 @@ public sealed class SceneStore : ISceneBackend
             _shadows.Remove(idx);
             _arcs.Remove(idx);
             _polylines.Remove(idx);
+            _paths.Remove(idx);
             _gradients.Remove(idx);
             _radialGradientCenters.Remove(idx);
             _borderBrushes.Remove(idx);
@@ -1480,6 +1482,16 @@ public sealed class SceneStore : ISceneBackend
     }
     public bool TryGetPolylineStroke(NodeHandle h, out PolylineStrokeSpec p) => _polylines.TryGet((int)h.Raw.Index, out p);
     public void ClearPolylineStroke(NodeHandle h) { int idx = (int)h.Raw.Index; _polylines.Remove(idx); MarkRecordDirty(idx); }
+
+    public void SetPath(NodeHandle h, in PathSpec ps)
+    {
+        int idx = (int)h.Raw.Index;
+        _flags[idx] |= NodeFlags.SparsePaint;
+        _paths.GetOrAdd(idx) = ps;
+        MarkRecordDirty(idx);
+    }
+    public bool TryGetPath(NodeHandle h, out PathSpec ps) => _paths.TryGet((int)h.Raw.Index, out ps);
+    public void ClearPath(NodeHandle h) { int idx = (int)h.Raw.Index; _paths.Remove(idx); MarkRecordDirty(idx); }
 
     public void SetGradient(NodeHandle h, in GradientSpec g)
     {

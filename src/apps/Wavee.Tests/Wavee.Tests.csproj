@@ -97,6 +97,8 @@
     <Compile Include="..\Wavee\Components\MembershipDiff.cs" />
     <!-- detail layout breakpoint hysteresis (Wavee.Core + BCL only) — DetailLayoutBreakpointTests -->
     <Compile Include="..\Wavee\Features\Detail\DetailLayoutBreakpoints.cs" />
+    <!-- pure Classic/Modern track-table column + sort grammar — TrackRowStyleRulesTests -->
+    <Compile Include="..\Wavee\Features\Detail\DetailTrackTableRules.cs" />
     <!-- the PURE playlist-edit failure map (exception -> PlaylistMutationFailure -> loc key) and the playlist-page
          notice rule. Both are System + Wavee.Core + the generated Strings consts only — the engine-side raise
          (PlaylistEditErrors / PlaylistNoticeBar) is deliberately NOT included. PlaylistEditErrorKindsTests +
@@ -197,6 +199,14 @@
          engine-bound UI and is deliberately NOT included. -->
     <Compile Include="..\Wavee\Features\Sidebar\Curated\SidebarCustomizerLayout.cs" />
     <Compile Include="..\Wavee\App\SidebarBootstrap.cs" Link="SidebarBootstrap.cs" />
+    <!-- the first-run setup wizard's engine-free gating/labels/bootstrap (System + Wavee.Core + IAppSettings shim only)
+         — SetupGatingTests / SetupCommandsTests / SetupSignInProjectionTests drive the REAL decisions, exactly like
+         SidebarBootstrap/SidebarDesignGating above. SetupBootstrap reuses SidebarBootstrap.IsFreshInstall directly. -->
+    <Compile Include="..\Wavee\App\SetupGating.cs" Link="SetupGating.cs" />
+    <Compile Include="..\Wavee\App\SetupCommands.cs" Link="SetupCommands.cs" />
+    <Compile Include="..\Wavee\App\SetupBootstrap.cs" Link="SetupBootstrap.cs" />
+    <Compile Include="..\Wavee\App\SetupRuntimePresentation.cs" Link="SetupRuntimePresentation.cs" />
+    <Compile Include="..\Wavee\Features\Setup\SetupLayout.cs" Link="SetupLayout.cs" />
     <!-- factory-reset wipe (System + WindowsApi storage only) — FactoryResetTests drive it against TEMP trees, never the real %LOCALAPPDATA% -->
     <Compile Include="..\Wavee\App\FactoryReset.cs" Link="FactoryReset.cs" />
     <Compile Include="..\Wavee\App\PlayLogStore.cs" Link="PlayLogStore.cs" />

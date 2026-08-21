@@ -505,6 +505,93 @@ public sealed record PolylineStrokeEl : Element
     public Edges4 Margin { get; init; }
 }
 
+/// <summary>
+/// A tessellated vector-path leaf (gpu-renderer.md §5): its own fill (<see cref="Fill"/>/<see cref="Rule"/>) and/or
+/// stroke (<see cref="StrokeColor"/>/<see cref="Stroke"/>) over an authored <see cref="Geometry"/>.
+///
+/// <para>A NEW LEAF, not a <c>BoxEl.Path</c>-style decoration. Contrast <see cref="ArcSpec"/>, which IS a
+/// <see cref="BoxEl"/> decoration (<see cref="BoxEl.Arc"/>): an arc is drawn ON a box that may ALSO carry its own
+/// fill/border/corners (ProgressRing's track — the ring and the track are two visuals on one node). A path with its
+/// own view-box, fill rule AND stroke is instead the node's ENTIRE visual — <c>Fill</c>/<c>Corners</c>/
+/// <c>BorderWidth</c> on the same node would be meaningless-but-legal (which fill? which corners, when the path is
+/// itself an arbitrary silhouette?). Group transform/opacity/clip already exist on an ordinary <see cref="BoxEl"/>/
+/// ZStack parent, so this element carries only the per-leaf transform/flex boilerplate below (copied verbatim from
+/// <see cref="PolylineStrokeEl"/>) plus its own geometry fields.</para>
+/// </summary>
+public sealed record PathEl : Element
+{
+    // ElementTypeId 16. IDs 1-5 and 7-15 are already taken by other Element records (see the grep of every
+    // `ElementTypeId =>` in this assembly). 6 was documented (by the approved plan this element implements) as "a
+    // free hole from a retired type — do NOT recycle it" — but as-built, 6 is CURRENTLY LIVE (VirtualListEl,
+    // Reconciler/VirtualListEl.cs), so that premise did not match this tree at the time this was authored. It does
+    // not change the outcome: 1-15 are all taken regardless, so 16 remains the correct next-free id. Left here so a
+    // future reader isn't confused by a stale "6 is free" claim anywhere upstream of this file.
+    public override ushort ElementTypeId => 16;
+
+    /// <summary>The authored vector geometry (parallel verb/point streams + fill rule + content epoch). Null or empty
+    /// (<see cref="PathData.VerbCount"/> == 0) draws nothing.</summary>
+    public PathData? Geometry { get; init; }
+    public ColorF Fill { get; init; }
+    public FillRule Rule { get; init; } = FillRule.NonZero;
+    public ColorF StrokeColor { get; init; }
+    public StrokeStyle Stroke { get; init; }
+    /// <summary>Authored stroke-trim fractions (0..1); overridden per frame by a live <c>AnimChannel.StrokeTrimStart/
+    /// End</c> track (the NaN-sentinel convention <c>DrawArc</c>/<c>DrawPolylineStroke</c> already use) without ever
+    /// reaching the tessellation-realization cache key.</summary>
+    public float TrimStart { get; init; }
+    public float TrimEnd { get; init; } = 1f;
+    /// <summary>Mirrors <c>PathTrimSpace</c> (Render/PathTessellator.cs): 0 = PerContour (default), 1 = WholePath.</summary>
+    public byte TrimMode { get; init; }
+    /// <summary>0 (default) = <see cref="Geometry"/> is already node-local DIP. Paired with <see cref="ViewBoxH"/> &gt; 0,
+    /// bakes a uniform-fit scale into this node's world transform at record time, so one authored path (e.g. a
+    /// 24x24-unit icon) renders correctly at any box size.</summary>
+    public float ViewBoxW { get; init; }
+    public float ViewBoxH { get; init; }
+    /// <summary>Opt in to hit-testing against the filled geometry itself (honouring <see cref="FillRule"/>) instead of
+    /// the node's bounding box, so a point in a donut's hole falls through to whatever is beneath it. Default
+    /// <c>false</c> keeps plain box behaviour. This is the ONE licensed exception to the engine's
+    /// "paint-derived hit-testing stays deliberately absent" rule (gpu-renderer.md §5.1: "hit-test shares the fill
+    /// RULE, not just the vertices") — see <c>InputDispatcher.PathGeometryAdmits</c>, which mirrors the recorder's
+    /// <see cref="ViewBoxW"/>/<see cref="ViewBoxH"/> fit-scale so the click and the pixels agree.
+    /// <para>Note: a <c>PathEl</c> cannot itself own a click today — the reconciler only writes
+    /// <c>InteractionInfo.HandlerMask</c>/<c>NodeFlags.HitTestVisible</c> for <see cref="BoxEl"/> — so this currently
+    /// affects the <c>HitAny</c> lane (drag-drop targeting, scroll-target and gesture resolution). Wrap the path in a
+    /// <see cref="BoxEl"/> if you need an actual click handler.</para></summary>
+    public bool HitTestGeometry { get; init; }
+
+    /// <summary>Called once when this path is realized into the scene, with its node handle (mirrors
+    /// <see cref="BoxEl.OnRealized"/>) — the ONLY way to obtain the <c>NodeHandle</c> a caller needs to drive this
+    /// path's own <see cref="AnimChannel.StrokeTrimStart"/>/<see cref="AnimChannel.StrokeTrimEnd"/>/transform/opacity
+    /// tracks via <c>AnimEngine.Keyframes</c> (an authored draw-on stroke-trim loop, e.g.) — without it a <c>PathEl</c>
+    /// could declare <see cref="TrimStart"/>/<see cref="TrimEnd"/> statics but never an animated timeline. Fires at
+    /// mount only.</summary>
+    public Action<NodeHandle>? OnRealized { get; init; }
+
+    public float OffsetX { get; init; }
+    public float OffsetY { get; init; }
+    public float ScaleX { get; init; } = 1f;
+    public float ScaleY { get; init; } = 1f;
+    public float Rotation { get; init; }
+    public float Opacity { get; init; } = 1f;
+    public float TransformOriginX { get; init; } = 0.5f;
+    public float TransformOriginY { get; init; } = 0.5f;
+    public float HoverScale { get; init; } = 1f;
+    public float PressScale { get; init; } = 1f;
+
+    public float Width { get; init; } = float.NaN;
+    public float Height { get; init; } = float.NaN;
+    public float MinWidth { get; init; } = float.NaN;
+    public float MinHeight { get; init; } = float.NaN;
+    public float MaxWidth { get; init; } = float.NaN;
+    public float MaxHeight { get; init; } = float.NaN;
+    public float Grow { get; init; }
+    public float Shrink { get; init; }
+    public float Basis { get; init; } = float.NaN;
+    public FlexAlign AlignSelf { get; init; } = FlexAlign.Auto;
+    public FlexAlign JustifySelf { get; init; } = FlexAlign.Auto;
+    public Edges4 Margin { get; init; }
+}
+
 public sealed record TextEl(Prop<string> Text) : Element
 {
     public override ushort ElementTypeId => 2;

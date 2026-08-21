@@ -3,7 +3,7 @@ using FluentGpu.Text;
 
 namespace FluentGpu.Scene;
 
-public enum VisualKind : byte { None = 0, Box = 1, Text = 2, Image = 3, PolylineStroke = 4, TabShape = 5, IconLayer = 6, Video = 7 }
+public enum VisualKind : byte { None = 0, Box = 1, Text = 2, Image = 3, PolylineStroke = 4, TabShape = 5, IconLayer = 6, Video = 7, Path = 8 }
 
 /// <summary>Sparse image-only payload kept out of the dense paint column. The source id stays in
 /// <see cref="NodePaint.ImageId"/>; <see cref="DerivedImageId"/> is selected only after its bake reaches Ready.</summary>

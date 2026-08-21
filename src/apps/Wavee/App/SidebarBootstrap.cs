@@ -6,8 +6,8 @@ namespace Wavee;
 
 /// <summary>Startup-only sidebar work, run ONCE per install from <c>Program.Main</c> BEFORE anything constructs
 /// <c>Services</c> / opens <c>library.db</c> (F.4.1): (1) fold the legacy global pane keys into Classic's bag (F.3.3),
-/// (2) decide whether this is a FRESH install and, if so, default it to Wavee Curated and arm the one-time chooser
-/// (locked decision 5). Settings writes only — no UI, no directory creation, no disk mutation.
+/// (2) decide whether this is a FRESH install and, if so, default it to Spotify Classic and arm the one-time chooser.
+/// Settings writes only — no UI, no directory creation, no disk mutation.
 ///
 /// The ordering is load-bearing: <c>WaveeApp</c>'s constructor synchronously calls <c>Services.CreateReal</c>, which
 /// opens/creates <c>library.db</c>. Probing after that point would always see the file and EVERY install would look
@@ -33,7 +33,7 @@ static class SidebarBootstrap
         bool fresh = IsFreshInstall(settings, localAppDataOverride, log);
         if (fresh)
         {
-            settings.Set(WaveeSettings.SidebarDesign, (int)SidebarDesign.Curated);   // locked decision 5
+            settings.Set(WaveeSettings.SidebarDesign, (int)SidebarDesign.Classic);
             settings.Set(WaveeSettings.SidebarOnboardingSeen, false);                // the chooser will show ONCE
         }
         else
@@ -45,7 +45,7 @@ static class SidebarBootstrap
 
         settings.Set(WaveeSettings.SidebarBootstrapVersion, TargetVersion);
         log.Info("sidebar", "sidebar.bootstrap",
-            fresh ? "Fresh install: Wavee Curated chooser armed." : "Existing install: sidebar chooser suppressed.",
+            fresh ? "Fresh install: Spotify Classic sidebar chooser armed." : "Existing install: sidebar chooser suppressed.",
             WaveeLogField.Of("fresh", fresh));
     }
 
@@ -66,7 +66,10 @@ static class SidebarBootstrap
     /// Why four witnesses, not one: <c>library.db</c> alone is wrong for a fake-backend/demo run (<c>Services.CreateFake</c>
     /// never creates it) and for a user who deleted their cache; credentials alone is wrong for a never-signed-in user who
     /// nonetheless used the app; <c>history.json</c> is the strongest generic "has run" marker; the settings witnesses
-    /// catch a user who ran an older build with a different data root.</summary>
+    /// catch a user who ran an older build with a different data root.
+    ///
+    /// SHARED with <see cref="SetupBootstrap"/> (already <c>internal static</c>, so no widening needed): "is this a
+    /// fresh install" is one decision, and the setup wizard must never disagree with the sidebar chooser about it.</summary>
     internal static bool IsFreshInstall(IAppSettings settings, string? localAppDataOverride = null, IWaveeLog? log = null)
     {
         log ??= WaveeLog.Instance;

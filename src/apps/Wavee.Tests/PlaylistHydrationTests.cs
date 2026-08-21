@@ -47,6 +47,31 @@ public class PlaylistHydrationTests
         => store.SetMembership(Uri, members.Select((m, i) => new PlaylistMember("i" + i, m, null, 0)).ToArray(), null);
 
     [Fact]
+    public void RootlistOpenPlan_IncludesThinRows_ButNotKnownEmptyPlaylists()
+    {
+        const string missing = "spotify:playlist:missing";
+        const string thin = "spotify:playlist:thin";
+        const string headerless = "spotify:playlist:headerless";
+        const string empty = "spotify:playlist:empty";
+        var store = new InMemoryStore();
+        store.SetRootlist([
+            new RootlistEntry(0, 1, "spotify:start-group:g:Folder", "Folder", 0),
+            new RootlistEntry(1, 0, missing, null, 1),
+            new RootlistEntry(2, 0, thin, null, 1),
+            new RootlistEntry(3, 0, headerless, null, 1),
+            new RootlistEntry(4, 0, empty, null, 1),
+            new RootlistEntry(5, 2, "spotify:end-group:g", null, 0),
+            new RootlistEntry(6, 0, thin, null, 0),   // malformed duplicate cannot schedule duplicate work
+        ]);
+        store.UpsertPlaylist(new Playlist("thin", thin, "Thin", null, "me", null, 152));
+        store.SetMembership(headerless, [new PlaylistMember("i1", "spotify:track:t1", null, 0)], null);
+        store.UpsertPlaylist(new Playlist("empty", empty, "Actually empty", null, "me", null, 0));
+        store.SetMembership(empty, Array.Empty<PlaylistMember>(), null);
+
+        Assert.Equal([missing, thin, headerless], PlaylistHydration.RootlistOpenPlan(store));
+    }
+
+    [Fact]
     public async Task NoBaseline_AwaitsTheRealOpen()
     {
         using var h = new Harness();

@@ -814,6 +814,7 @@ public sealed class TreeReconciler
         IconLayerEl x => b is IconLayerEl y ? IconLayerElDiff.FirstBoundFlip(x, y) : null,
         SpanTextEl x => b is SpanTextEl y ? SpanTextElDiff.FirstBoundFlip(x, y) : null,
         PolylineStrokeEl x => b is PolylineStrokeEl y ? PolylineStrokeElDiff.FirstBoundFlip(x, y) : null,
+        PathEl x => b is PathEl y ? PathElDiff.FirstBoundFlip(x, y) : null,
         _ => null,
     };
 
@@ -829,6 +830,7 @@ public sealed class TreeReconciler
         IconLayerEl x => b is not IconLayerEl y || IconLayerElDiff.AnyChanged(x, y),
         SpanTextEl x => b is not SpanTextEl y || SpanTextElDiff.AnyChanged(x, y),
         PolylineStrokeEl x => b is not PolylineStrokeEl y || PolylineStrokeElDiff.AnyChanged(x, y),
+        PathEl x => b is not PathEl y || PathElDiff.AnyChanged(x, y),
         _ => true,
     };
 
@@ -2032,6 +2034,13 @@ public sealed class TreeReconciler
                 AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Paint(node).Fill = tbind is not null ? tbind() : tsig!.Value; _scene.Mark(node, NodeFlags.PaintDirty); } }, owner: null, runNow: true));
             }
         }
+        else if (el is PathEl pe)
+        {
+            // Mirrors BoxEl.OnRealized above (:1972) — BindNode runs at mount only (Mount(), :623), so this fires
+            // exactly once, handing the caller the live NodeHandle a draw-on stroke-trim/transform Keyframes loop needs
+            // to target (PathEl carries no bindable channels of its own today, so this is BindNode's only PathEl work).
+            pe.OnRealized?.Invoke(node);
+        }
     }
 
     // Decode-target px for an image: explicit Width/Height drive it; otherwise the DecodePx hint (a fluid/aspect image's
@@ -3150,6 +3159,10 @@ public sealed class TreeReconciler
                 return !il.Tint.IsBound;   // ThemedIcon always binds Tint (theme-live), so an icon layer mounts fresh (like a bound image)
             case PolylineStrokeEl:
                 return true;
+            case PathEl pe:
+                // Mirrors the BoxEl rule just below: a path with an OnRealized capture (the hero-art draw-on timelines)
+                // must mount fresh every time so the callback fires and the caller's ref stays pointed at a live node.
+                return pe.OnRealized is null;
             case BoxEl b:
                 if (b.Transform.IsBound || b.Opacity.IsBound || b.Fill.IsBound || b.BorderColor.IsBound
                     || b.RadialGradientCenter.IsBound || b.Width.IsBound || b.Height.IsBound
@@ -4507,6 +4520,42 @@ public sealed class TreeReconciler
                 li.MinW = pl.MinWidth; li.MinH = pl.MinHeight; li.MaxW = pl.MaxWidth; li.MaxH = pl.MaxHeight;
                 li.FlexGrow = pl.Grow; li.FlexShrink = pl.Shrink; li.FlexBasis = pl.Basis;
                 li.AlignSelf = pl.AlignSelf; li.JustifySelf = pl.JustifySelf;
+                break;
+            }
+            case PathEl pe:
+            {
+                ref NodePaint paint = ref _scene.Paint(node);
+                paint.VisualKind = VisualKind.Path;
+                paint.OriginX = pe.TransformOriginX;
+                paint.OriginY = pe.TransformOriginY;
+                paint.Opacity = pe.Opacity;
+
+                // Identity value-gate, matching PolylineStrokeEl/BoxEl (:1003): an identity-declared path has no
+                // opinion about its matrix — leave it to AnimEngine owners.
+                if (pe.OffsetX != 0f || pe.OffsetY != 0f || pe.Rotation != 0f || pe.ScaleX != 1f || pe.ScaleY != 1f)
+                {
+                    var tf = Affine2D.Translation(pe.OffsetX, pe.OffsetY);
+                    if (pe.Rotation != 0f) tf = tf.Multiply(Affine2D.Rotation(pe.Rotation * (MathF.PI / 180f)));
+                    if (pe.ScaleX != 1f || pe.ScaleY != 1f) tf = tf.Multiply(Affine2D.Scale(pe.ScaleX, pe.ScaleY));
+                    paint.LocalTransform = tf;
+                }
+
+                if (pe.HoverScale != 1f || pe.PressScale != 1f)
+                {
+                    ref InteractionAnim ia = ref _scene.InteractRef(node);
+                    ia.HoverScale = pe.HoverScale;
+                    ia.PressScale = pe.PressScale;
+                }
+
+                _scene.SetPath(node, new PathSpec(pe.Geometry, pe.Fill, pe.Rule, pe.StrokeColor, pe.Stroke,
+                    pe.TrimStart, pe.TrimEnd, pe.TrimMode, pe.ViewBoxW, pe.ViewBoxH, pe.HitTestGeometry));
+
+                ref LayoutInput lip = ref _scene.Layout(node);
+                lip.Margin = pe.Margin;
+                lip.Width = pe.Width; lip.Height = pe.Height;
+                lip.MinW = pe.MinWidth; lip.MinH = pe.MinHeight; lip.MaxW = pe.MaxWidth; lip.MaxH = pe.MaxHeight;
+                lip.FlexGrow = pe.Grow; lip.FlexShrink = pe.Shrink; lip.FlexBasis = pe.Basis;
+                lip.AlignSelf = pe.AlignSelf; lip.JustifySelf = pe.JustifySelf;
                 break;
             }
             case ImageEl im:

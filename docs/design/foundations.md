@@ -286,6 +286,13 @@ public enum DrawOp : byte
     PushTransform, PopTransform, // 2x3 affine; stack composed on CPU but emitted for GPU clip math
     SetScissor,
 }
+// AS-BUILT NOTE: this sketch enum (byte-tagged, distinct opcode set — FillRect/StrokeRoundRect/PushClipPath/
+// SetScissor never shipped) and the 8-byte DrawCmd header below do not match the real encoder. The shipped
+// DrawOp (src/FluentGpu.Engine/Render/DrawList.cs) is `enum DrawOp : int`, and the wire format has NO header
+// struct at all — a 4-byte int op tag is written directly, immediately followed by the fixed-size POD
+// payload for that op (no Flags/PayloadSz/reserved fields). FillPath/StrokePath ARE now built, as 19/20 on
+// that int-tagged enum. See gpu-renderer.md §3.1/§5 and scene-memory.md §4.1 (the encoding framework's
+// owning doc, which retains the same design-sketch print) for the as-built shape and the full opcode list.
 
 // 8-byte header; payloads are separate fixed-size POD structs, arena-adjacent.
 [StructLayout(LayoutKind.Sequential)]

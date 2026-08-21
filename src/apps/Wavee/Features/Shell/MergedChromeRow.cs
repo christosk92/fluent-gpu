@@ -92,11 +92,36 @@ sealed class MergedChromeRow
     public Element CaptionLeading()
     {
         var l = _layout.Value;
-        return l.SearchMode == MergedSearchMode.Icon
-            ? Embed.Comp(() => new MergedSearchFlyoutButton(
-                _searchText, _go, _searchFocusRequest, _searchFlyoutOpen))
-            : new BoxEl { Width = 0f, Height = 0f, HitTestVisible = false };
+        var kids = new List<Element>(2) { ThemeToggle() };
+        if (l.SearchMode == MergedSearchMode.Icon)
+            kids.Add(Embed.Comp(() => new MergedSearchFlyoutButton(
+                _searchText, _go, _searchFocusRequest, _searchFlyoutOpen)));
+        return new BoxEl
+        {
+            Direction = 0,
+            Height = TitleBar.ExpandedHeight,
+            Shrink = 0f,
+            AlignItems = FlexAlign.Center,
+            Children = kids.ToArray(),
+        };
     }
+
+    Element ThemeToggle() => ToolTip.Wrap(new BoxEl
+    {
+        Key = "chrome-theme-toggle",
+        Width = ShellResponsiveLayout.ChromeThemeToggleW,
+        Height = Spacing.XXXL,
+        Shrink = 0f,
+        AlignItems = FlexAlign.Center,
+        Justify = FlexJustify.Center,
+        Corners = Radii.ControlAll,
+        Role = AutomationRole.Button,
+        Cursor = CursorId.Hand,
+        Focusable = true,
+        OnClick = _toggleTheme,
+        Children = [Icon(Theme.Dark ? Icons.Sun : Icons.Moon, Spacing.L, Tok.TextSecondary)],
+    }.Interactive(Interaction.Subtle),
+        Theme.Dark ? Loc.Get(Strings.Shell.LightTheme) : Loc.Get(Strings.Shell.DarkTheme));
 
     public Element Trailing()
     {

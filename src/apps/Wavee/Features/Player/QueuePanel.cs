@@ -124,6 +124,11 @@ sealed class QueuePanel : Component
         uiLogSig.Value = sigRef;
 
         bool viewer = PlayerBarContent.RemoteDevice(b) is not null;
+        bool artworkHidden = AppearancePrefs.TrackArtworkHidden(svc?.Settings);
+        bool classic = (svc?.Settings.Get(WaveeSettings.TrackRowStyle) ?? 0) == 1;
+        // Classic owns identity chrome, not just density: like the detail table it suppresses cell artwork even when
+        // the independent generic artwork preference is off. TrackArtworkHidden's Epoch read makes both settings live.
+        bool showTrackArtwork = !classic && !artworkHidden;
         string? source = ctxName.Value.Value is { Length: > 0 } rn ? rn : ImmediateContextName(ctxUri);
         string? sourceHref = source is { Length: > 0 } ? RichText.RouteForUri(ctxUri) : null;
 
@@ -134,7 +139,7 @@ sealed class QueuePanel : Component
         if (source is { Length: > 0 })
             content.Add(PlayingFrom(source, sourceHref, go));
         if (track is { } t)
-            content.Add(NowPlayingCard(b, lib, t, go));
+            content.Add(NowPlayingCard(b, lib, t, go, classic));
         if (userQueue.Count > 0)
         {
             content.Add(SectionHeader(Loc.Get(Strings.Player.NextInQueue), userQueue.Count,
@@ -143,20 +148,22 @@ sealed class QueuePanel : Component
             // free space of the scroll column, which would push every later section to the bottom of a short queue).
             content.Add((BoxEl)_reorder.List(
                 Rows("q", userQueue, b, lib, go, display, removable: !viewer, dim: false, _queuePages, acts, menuOverlay,
-                     _swipeGroup, reorder: viewer ? null : _reorder))
+                     _swipeGroup, showTrackArtwork, classic, reorder: viewer ? null : _reorder))
                 with { Grow = 0f, Key = "lane:q" });
         }
         if (ctxUp.Count > 0)
         {
             content.Add(SectionHeader(Loc.Get(Strings.Player.NextUp), ctxUp.Count, null));
             content.Add(RefusingLane("u", Loc.Get(Strings.Drag.CantReorderNextUp),
-                Rows("u", ctxUp, b, lib, go, display, removable: !viewer, dim: false, _upPages, acts, menuOverlay, _swipeGroup)));
+                Rows("u", ctxUp, b, lib, go, display, removable: !viewer, dim: false, _upPages, acts, menuOverlay,
+                    _swipeGroup, showTrackArtwork, classic)));
         }
         if (autoplay && autoUp.Count > 0)
         {
             content.Add(SectionHeader(Loc.Get(Strings.Player.Autoplay), autoUp.Count, null, sub: Loc.Get(Strings.Player.AutoplayHint)));
             content.Add(RefusingLane("a", Loc.Get(Strings.Drag.CantReorderAutoplay),
-                Rows("a", autoUp, b, lib, go, display, removable: !viewer, dim: true, _autoPages, acts, menuOverlay, _swipeGroup)));
+                Rows("a", autoUp, b, lib, go, display, removable: !viewer, dim: true, _autoPages, acts, menuOverlay,
+                    _swipeGroup, showTrackArtwork, classic)));
         }
         if (track is null && userQueue.Count == 0 && ctxUp.Count == 0)
             content.Add(EmptyState.Compact(Loc.Get(Strings.Player.NothingPlaying)));
@@ -294,56 +301,69 @@ sealed class QueuePanel : Component
 
     // ── The pinned NOW-PLAYING CARD: a bordered card, keyed by track uri (a track change remounts it with an Enter
     // fade — the cross-fade the old anchor row could never do). The EQ overlay toggles play/pause. ──
-    static Element NowPlayingCard(PlaybackBridge b, LibraryBridge? lib, Track t, Action<string, string?>? go)
+    static Element NowPlayingCard(PlaybackBridge b, LibraryBridge? lib, Track t, Action<string, string?>? go, bool classic)
     {
         var st = TrackRow.StateOf(b, lib, t);
         Action? like = t.Uri.Length > 0 && lib is not null ? () => lib.ToggleSaved(t.Uri, t.Title) : null;
+        var children = new List<Element>(3);
+        if (!classic)
+            children.Add(new BoxEl
+            {
+                Width = 44f, Height = 44f, Shrink = 0f, ZStack = true, ClipToBounds = true,
+                Corners = Radii.ControlAll,
+                Children =
+                [
+                    Surfaces.Artwork(t.Image, t.Id.GetHashCode() & 0x7fffffff, 44f, 44f, Radii.Control, decodePx: 96),
+                    NowPlayingOverlay.Create(t.Uri, () => { }, 28f, cover: true, 44f, centered: true)
+                        .Skeletonized(false),
+                ],
+            });
+        children.Add(classic
+            ? QueueIdentity(t, go, nowPlaying: true)
+            : new BoxEl
+            {
+                Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Justify = FlexJustify.Center, Gap = 1f,
+                Children =
+                [
+                    new TextEl(t.Title)
+                    {
+                        Size = 14f, LineHeight = 20f, Weight = 600, Color = Tok.AccentTextPrimary,
+                        Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
+                    },
+                    go is null
+                        ? new TextEl(DetailFormat.ArtistNames(t.Artists))
+                        { Size = 12f, LineHeight = 16f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f }
+                        : TrackRow.ArtistLinks(t.Artists, (r, n) => go(r, n)),
+                ],
+            });
+        children.Add(new BoxEl
+        {
+            Width = 30f, Height = classic ? RowExtent : 44f, Shrink = 0f,
+            AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+            Children = [TrackRow.Heart(st.Saved, like, classic: classic)],
+        });
+
+        var body = new BoxEl
+        {
+            Direction = 0, Grow = 1f, MinWidth = 0f, AlignItems = FlexAlign.Center,
+            Gap = classic ? Spacing.S : Spacing.L,
+            MinHeight = classic ? RowExtent : 64f,
+            Padding = classic ? new Edges4(Spacing.S, 0f, Spacing.XS, 0f) : Edges4.All(10f),
+            Children = children.ToArray(),
+        };
+
         return new BoxEl
         {
-            Key = "np:" + t.Uri,
-            Direction = 0, AlignItems = FlexAlign.Center, Gap = 12f, MinHeight = 64f,
-            Margin = new Edges4(0f, 0f, 0f, 10f),
-            Padding = Edges4.All(10f),
-            Corners = CornerRadius4.All(Radii.Card),
-            Fill = Tok.FillCardDefault,
-            BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
+            Key = "np:" + t.Uri + ":classic=" + classic,
+            ZStack = true, MinHeight = classic ? RowExtent : 64f, ClipToBounds = classic,
+            Margin = classic ? Edges4.All(0f) : new Edges4(0f, 0f, 0f, 10f),
+            Corners = classic ? CornerRadius4.All(Radii.None) : CornerRadius4.All(Radii.Card),
+            Fill = classic ? ColorF.Transparent : Tok.FillCardDefault,
+            BorderWidth = classic ? 0f : 1f,
+            BorderColor = classic ? ColorF.Transparent : Tok.StrokeCardDefault,
             Enter = new EnterExit(Dy: 6f, Opacity: 0f, Active: true),
             Layout = LayoutTransition.Slide,
-            Children =
-            [
-                new BoxEl
-                {
-                    Width = 44f, Height = 44f, Shrink = 0f, ZStack = true, ClipToBounds = true,
-                    Corners = Radii.ControlAll,
-                    Children =
-                    [
-                        Surfaces.Artwork(t.Image, t.Id.GetHashCode() & 0x7fffffff, 44f, 44f, Radii.Control, decodePx: 96),
-                        NowPlayingOverlay.Create(t.Uri, () => { }, 28f, cover: true, 44f, centered: true)
-                            .Skeletonized(false),
-                    ],
-                },
-                new BoxEl
-                {
-                    Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Justify = FlexJustify.Center, Gap = 1f,
-                    Children =
-                    [
-                        new TextEl(t.Title)
-                        {
-                            Size = 14f, LineHeight = 20f, Weight = 600, Color = Tok.AccentTextPrimary,
-                            Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
-                        },
-                        go is null
-                            ? new TextEl(DetailFormat.ArtistNames(t.Artists))
-                            { Size = 12f, LineHeight = 16f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f }
-                            : TrackRow.ArtistLinks(t.Artists, (r, n) => go(r, n)),
-                    ],
-                },
-                new BoxEl
-                {
-                    Width = 30f, Height = 44f, Shrink = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                    Children = [TrackRow.Heart(st.Saved, like)],
-                },
-            ],
+            Children = classic ? [body, ClassicHairline()] : [body],
         };
     }
 
@@ -388,7 +408,7 @@ sealed class QueuePanel : Component
     static Element Rows(string sectionTag, List<QueueEntry> entries, PlaybackBridge b, LibraryBridge? lib,
         Action<string, string?>? go, Signal<IReadOnlyList<QueueEntry>> display, bool removable, bool dim, Signal<int> pages,
         ActionServices? acts = null, IOverlayService? menuOverlay = null, SwipeGroup? swipeGroup = null,
-        Reorderable? reorder = null)
+        bool showTrackArtwork = true, bool classic = false, Reorderable? reorder = null)
     {
         int n = Math.Min(entries.Count, Math.Max(1, pages.Value) * PageSize);
         var kids = new List<Element>(n + 1);
@@ -400,7 +420,7 @@ sealed class QueuePanel : Component
             int item = reorder is { } ro ? ro.ItemAt(i) : i;
             if ((uint)item >= (uint)entries.Count) item = i;
             var row = QueueRow(b, lib, go, display, entries[item], item, entries, removable, dim,
-                               acts, menuOverlay, swipeGroup, reorder is null);
+                               acts, menuOverlay, swipeGroup, reorder is null, showTrackArtwork, classic);
             // Direction 1 on the wrapper: its single child must stretch across the WIDTH (a row-direction wrapper
             // would size the row to its content and collapse the hover plate to the text).
             kids.Add(reorder is { } r
@@ -436,7 +456,7 @@ sealed class QueuePanel : Component
         Signal<IReadOnlyList<QueueEntry>> display, QueueEntry entry, int bucketIndex, IReadOnlyList<QueueEntry> section,
         bool removable, bool dim,
         ActionServices? acts = null, IOverlayService? menuOverlay = null, SwipeGroup? swipeGroup = null,
-        bool ownDrag = true)
+        bool ownDrag = true, bool showArtwork = true, bool classic = false)
     {
         var t = entry.Track;
         int bucketCount = section.Count;
@@ -456,38 +476,9 @@ sealed class QueuePanel : Component
             MoveInSection(b, display, section, bucketIndex, bucketIndex + delta);
         }
 
-        var row = new BoxEl
-        {
-            Key = RowKey(entry),
-            // Rows the Reorderable owns get their drag source from it (payload = the ReorderPayload every Wavee target
-            // already unwraps); every other row drags itself as a COPY — the queue is never mutated by a drag OUT.
-            Draggable = ownDrag
-                ? Drag.Source(WaveeDragKinds.Resource, () => WaveeResourceDragPayload.ForTrack(t))
-                : null,
-            Direction = 0, AlignItems = FlexAlign.Center, Gap = 8f, MinHeight = 44f,
-            Padding = new Edges4(Spacing.S, 0f, Spacing.XS, 0f),
-            Corners = Radii.ControlAll,
-            // NO ZEBRA. Striping is a scanning aid for lists long enough to lose your place in; the queue shows a
-            // handful of rows in a 340-DIP rail, where the stripe is not navigation, it is just texture - and it
-            // halved the contrast the hover state had left to move against. Plain rows, standard hover.
-            Fill = ColorF.Transparent,
-            HoverFill = WaveeColors.RowHover,
-            PressedFill = WaveeColors.RowPressed,
-            PressScale = WaveeMotion.ScaleSubtle.Press,
-            Opacity = dim ? 0.72f : 1f,
-            Role = AutomationRole.Button, Cursor = CursorId.Hand, Focusable = true,
-            OnClick = () => PlayQueueEntry(b, entry),
-            Enter = new EnterExit(Dy: 6f, Opacity: 0f, Active: true),
-            Exit = new EnterExit(Dy: -4f, Opacity: 0f, Active: true),
-            Layout = LayoutTransition.Slide,
-            Children =
+        Element[] artwork = showArtwork
+            ?
             [
-                new BoxEl
-                {
-                    Width = 26f, Height = 44f, Shrink = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                    BlocksDragArm = true,   // its own affordance — a press on the heart is never a drag handle
-                    Children = [TrackRow.Heart(st.Saved, like)],
-                },
                 new BoxEl
                 {
                     Width = QueueArt, Height = QueueArt, Shrink = 0f, ZStack = true, ClipToBounds = true,
@@ -495,29 +486,47 @@ sealed class QueuePanel : Component
                     Children =
                     [
                         Surfaces.Artwork(t.Image, t.Id.GetHashCode() & 0x7fffffff, QueueArt, QueueArt, Radii.Control, decodePx: 72),
-                        // Fluent now-playing cue (EQ / play-pause) — same overlay as RecRow / Next-up ArtCards.
                         NowPlayingOverlay.Create(t.Uri, () => PlayQueueEntry(b, entry), 26f, cover: true, QueueArt, centered: true)
                             .Skeletonized(false),
                     ],
                 },
+            ]
+            : Array.Empty<Element>();
+
+        var rowBody = new BoxEl
+        {
+            Direction = 0, Grow = 1f, MinWidth = 0f, AlignItems = FlexAlign.Center, Gap = Spacing.S,
+            MinHeight = RowExtent,
+            Padding = new Edges4(Spacing.S, 0f, Spacing.XS, 0f),
+            Children =
+            [
                 new BoxEl
                 {
-                    Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Justify = FlexJustify.Center,
-                    Children =
-                    [
-                        // BodyStrong (14/20/600) — the app's track-title rung. Was a fractional 13.5.
-                        new TextEl(t.Title)
-                        {
-                            Size = 14f, LineHeight = 20f, Weight = 600,
-                            Color = st.IsNow ? Tok.AccentTextPrimary : Tok.TextPrimary,
-                            Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
-                        },
-                        go is null
-                            ? new TextEl(DetailFormat.ArtistNames(t.Artists))
-                            { Size = 12f, LineHeight = 16f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f }
-                            : TrackRow.ArtistLinks(t.Artists, (r, n) => go(r, n)),
-                    ],
+                    Width = 26f, Height = RowExtent, Shrink = 0f,
+                    AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                    BlocksDragArm = true,
+                    Children = [TrackRow.Heart(st.Saved, like, classic: classic)],
                 },
+                ..artwork,
+                classic
+                    ? QueueIdentity(t, go, nowPlaying: st.IsNow)
+                    : new BoxEl
+                    {
+                        Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Justify = FlexJustify.Center,
+                        Children =
+                        [
+                            new TextEl(t.Title)
+                            {
+                                Size = 14f, LineHeight = 20f, Weight = 600,
+                                Color = st.IsNow ? Tok.AccentTextPrimary : Tok.TextPrimary,
+                                Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
+                            },
+                            go is null
+                                ? new TextEl(DetailFormat.ArtistNames(t.Artists))
+                                { Size = 12f, LineHeight = 16f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f }
+                                : TrackRow.ArtistLinks(t.Artists, (r, n) => go(r, n)),
+                        ],
+                    },
                 // Hover-revealed "…" overflow beside the ✕ (kept): opens the SAME queue-entry menu the row shows on
                 // right-click, anchored at the button — the engine's ClickRequestsContext re-enters the context-request
                 // funnel here and the walk finds the row's OnContextRequested (the WithContextMenu attach below). Only
@@ -535,7 +544,7 @@ sealed class QueuePanel : Component
                             {
                                 Width = WaveeCta.IconButtonSize, Height = WaveeCta.IconButtonSize,
                                 AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                                Corners = Radii.ControlAll,
+                                Corners = classic ? CornerRadius4.All(Radii.None) : Radii.ControlAll,
                                 HoverFill = WaveeColors.RowPressed,
                                 Role = AutomationRole.Button, Cursor = CursorId.Hand,
                                 ClickRequestsContext = true,
@@ -547,10 +556,9 @@ sealed class QueuePanel : Component
                 removable && !entry.ItemId.IsNone
                     ? new BoxEl
                     {
-                        // Row 1 of the icon-button geometry table (see WaveeCta): 32-square at the control radius.
                         Width = WaveeCta.IconButtonSize, Height = WaveeCta.IconButtonSize, Shrink = 0f,
                         AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                        Corners = Radii.ControlAll,
+                        Corners = classic ? CornerRadius4.All(Radii.None) : Radii.ControlAll,
                         HoverFill = WaveeColors.RowPressed,
                         Role = AutomationRole.Button, Cursor = CursorId.Hand,
                         BlocksDragArm = true,
@@ -559,6 +567,30 @@ sealed class QueuePanel : Component
                     }
                     : new BoxEl { Width = WaveeCta.IconButtonSize, Shrink = 0f },
             ],
+        };
+
+        var row = new BoxEl
+        {
+            Key = RowKey(entry) + ":art=" + showArtwork + ":classic=" + classic,
+            // Rows the Reorderable owns get their drag source from it (payload = the ReorderPayload every Wavee target
+            // already unwraps); every other row drags itself as a COPY — the queue is never mutated by a drag OUT.
+            Draggable = ownDrag
+                ? Drag.Source(WaveeDragKinds.Resource, () => WaveeResourceDragPayload.ForTrack(t))
+                : null,
+            ZStack = true, MinHeight = RowExtent, ClipToBounds = classic,
+            Corners = classic ? CornerRadius4.All(Radii.None) : Radii.ControlAll,
+            // NO ZEBRA. Classic adds only a hairline; both styles retain the shared hover/press depth.
+            Fill = ColorF.Transparent,
+            HoverFill = WaveeColors.RowHover,
+            PressedFill = WaveeColors.RowPressed,
+            PressScale = WaveeMotion.ScaleSubtle.Press,
+            Opacity = dim ? 0.72f : 1f,
+            Role = AutomationRole.Button, Cursor = CursorId.Hand, Focusable = true,
+            OnClick = () => PlayQueueEntry(b, entry),
+            Enter = new EnterExit(Dy: 6f, Opacity: 0f, Active: true),
+            Exit = new EnterExit(Dy: -4f, Opacity: 0f, Active: true),
+            Layout = LayoutTransition.Slide,
+            Children = classic ? [rowBody, ClassicHairline()] : [rowBody],
         };
         bool canRemove = removable && !entry.ItemId.IsNone;
         // Right-click / long-press: the queue-entry menu. "Play now" = the row's own skip-in-place; "Remove from
@@ -584,6 +616,58 @@ sealed class QueuePanel : Component
         }
         return rowEl;
     }
+
+    /// <summary>Classic's rail-width fallback: the dedicated Artist column folds into the same one-line identity run,
+    /// exactly as the detail table does at its narrowest pressure tier. Artwork is absent and the full explicit word-mark
+    /// remains pinned after the ellipsized identity.</summary>
+    static Element QueueIdentity(Track t, Action<string, string?>? go, bool nowPlaying)
+    {
+        ColorF primary = nowPlaying ? Tok.AccentTextPrimary : Tok.TextPrimary;
+        ColorF secondary = nowPlaying ? Tok.AccentTextPrimary : Tok.TextSecondary;
+        var spans = new List<TextSpan>(t.Artists.Count * 2 + 2)
+        {
+            new(t.Title, Weight: 600, Color: primary),
+        };
+        if (t.Artists.Count > 0) spans.Add(new TextSpan("  ·  ", Color: secondary));
+        for (int i = 0; i < t.Artists.Count; i++)
+        {
+            if (i > 0) spans.Add(new TextSpan(", ", Color: secondary));
+            var artist = t.Artists[i];
+            string route = RichText.RouteForUri(artist.Uri) ?? ("artist:" + artist.Uri);
+            spans.Add(new TextSpan(artist.Name, Color: secondary,
+                OnClick: go is null ? null : () => go(route, artist.Name)));
+        }
+
+        var identity = new SpanTextEl(spans.ToArray())
+        {
+            Size = 14f, LineHeight = 20f, Color = primary,
+            Wrap = TextWrap.NoWrap, Trim = TextTrim.CharacterEllipsis, MaxLines = 1,
+            Shrink = 1f, MinWidth = 0f,
+        };
+        var kids = new List<Element>(2)
+        {
+            new BoxEl
+            {
+                Grow = 1f, Basis = 0f, MinWidth = 0f, ClipToBounds = true,
+                Children = [identity],
+            },
+        };
+        if (t.IsExplicit) kids.Add(TrackRow.ClassicExplicitBadge(nowPlaying ? Tok.AccentTextPrimary : null));
+        return new BoxEl
+        {
+            Direction = 0, Grow = 1f, Basis = 0f, MinWidth = 0f,
+            AlignItems = FlexAlign.Center, Gap = Spacing.S, ClipToBounds = true,
+            Children = kids.ToArray(),
+        };
+    }
+
+    static Element ClassicHairline() => new BoxEl
+    {
+        Key = "classic-hairline",
+        AlignSelf = FlexAlign.End, JustifySelf = FlexAlign.Stretch,
+        Height = 1f, Fill = Prop.Of(static () => Tok.StrokeDividerDefault),
+        HitTestVisible = false,
+    };
 
     static string RowKey(in QueueEntry e) => e.ItemId.IsNone ? "e" + e.EntryId : "i" + e.ItemId.Value;
 

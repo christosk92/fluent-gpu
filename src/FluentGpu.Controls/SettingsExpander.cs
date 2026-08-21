@@ -153,7 +153,8 @@ sealed class SettingsExpanderCore : Component
                 var styled = o.Parts.Apply(SettingsExpander.PartExpanderHeader, h);
                 return styled with
                 {
-                    MinHeight = SettingsCard.MinHeight,
+                    // Keep the expander hit surface and chevron centered against the header card's chosen density.
+                    MinHeight = s.HeaderCardStyle.MinHeight,
                     Padding = Edges4.All(0f),
                 };
             },

@@ -24,17 +24,6 @@ public enum BadgeStyle { None, TypeYear, OwnerRow }
 /// <summary>The heart affordance semantics (no Core mutation command exists yet — optimistic-local until one lands).</summary>
 public enum HeartMode { None, Save, Follow }
 
-/// <summary>What the list is sorted by. <see cref="Index"/> = the original (context) order. <see cref="Artist"/> has no
-/// column of its own (it's the title subline), so it's offered via the sort menu rather than a clickable header.
-/// (Appended in persisted order — the int is stored, so never reorder.)</summary>
-public enum SortColumn { Index, Title, Album, Duration, Artist, DateAdded, Plays }
-
-/// <summary>The track-list sort state — persisted per context (each album/playlist remembers its own).</summary>
-public readonly record struct TrackSort(SortColumn Column, bool Descending)
-{
-    public static readonly TrackSort Default = new(SortColumn.Index, false);
-}
-
 /// <summary>
 /// The unified detail view model — one shape the rail, the track rows, and the trailing sections all read. The loader
 /// maps each <see cref="IMusicLibrary"/> domain record (Album / Playlist / liked-songs) onto this, so the view code is

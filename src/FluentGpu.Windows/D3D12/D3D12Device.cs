@@ -65,6 +65,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     private readonly List<PolylineStrokeInstance> _polylineInsts = new();
     private GradientPipeline? _gradPipe;
     private readonly List<GradientInstance> _gradInsts = new();
+    private PathPipeline? _pathPipe;
+    private readonly List<PathDrawItem> _pathDraws = new();
     private readonly List<RectF> _clipStack = new(16);
     // Tier-2 rounded clip (E9), parallel to _clipStack: the innermost rounded-box clip in effect (W <= 0 = none).
     // A rounded PushClip replaces it; a plain (rectangular) PushClip inherits the enclosing rounded clip — a reveal
@@ -183,7 +185,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // VideoHole is its OWN run class, not a Rect: a hole instance is opaque-alpha (A = VideoReady = 1) and square, so
     // inside the Rect class it would satisfy IsOpaquePlainRect and be drawn by the NO-BLEND opaque PSO as solid black —
     // the exact inverse of an erase. Its own class keeps the opaque segmentation of real rects byte-identical too.
-    private enum PrimKind : byte { Rect, Shadow, Gradient, Image, Arc, Polyline, VideoHole }
+    private enum PrimKind : byte { Rect, Shadow, Gradient, Image, Arc, Polyline, VideoHole, Path }
     private readonly List<(PrimKind Kind, int Count)> _runs = new();
     private int _frameImageCount;
     private int _frameImageSkipped;
@@ -226,7 +228,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // (no-blend + minimal shader). So it participates in the same _sharedSdfStateBound dedup; only a PSO rebind is needed
     // when a rect run crosses the opaque↔blended boundary.
     // RectDestOut is a third rect PSO on the same shared SDF state (the video hole punch — RectPass.DestOut).
-    private enum BoundPipe : byte { None, Rect, RectOpaque, RectDestOut, Shadow, Arc, Polyline, Gradient, Glyph, GradGlyph, Image }
+    private enum BoundPipe : byte { None, Rect, RectOpaque, RectDestOut, Shadow, Arc, Polyline, Gradient, Glyph, GradGlyph, Image, Path }
     private BoundPipe _boundPipe;
     private bool _sharedSdfStateBound;
     private RECT _lastScissor;
@@ -428,7 +430,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
 
     // Pipeline bring-up order for the parallel stage table below (index == task slot; used for the [boot.pipe] lines).
     private static readonly string[] s_pipeStageNames =
-        ["roundrect", "shadow", "arc", "polyline", "gradient", "acrylic", "opacity", "glyphs", "image-textures", "image", "baked-blur"];
+        ["roundrect", "shadow", "arc", "polyline", "gradient", "path", "acrylic", "opacity", "glyphs", "image-textures", "image", "baked-blur"];
 
     /// <summary>
     /// Builds the SDF shared resources + the eleven draw pipelines. The SDF bring-up is SERIAL and FIRST (five of the
@@ -454,6 +456,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         ArcPipeline? arcPipe = null;
         PolylineStrokePipeline? polylinePipe = null;
         GradientPipeline? gradPipe = null;
+        PathPipeline? pathPipe = null;
         AcrylicCompositor? acrylic = null;
         OpacityLayerCompositor? opacity = null;
         GlyphRenderer? glyphs = null;
@@ -475,18 +478,19 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         tasks[2] = Stage(2, () => { var p = new ArcPipeline(); p.Init(_device, sdf); arcPipe = p; });
         tasks[3] = Stage(3, () => { var p = new PolylineStrokePipeline(); p.Init(_device, sdf); polylinePipe = p; });
         tasks[4] = Stage(4, () => { var p = new GradientPipeline(); p.Init(_device, sdf); gradPipe = p; });
-        tasks[5] = Stage(5, () => { var p = new AcrylicCompositor(); p.Init(_device); acrylic = p; });
-        tasks[6] = Stage(6, () => { var p = new OpacityLayerCompositor(); p.Init(_device, _queue); opacity = p; });
-        tasks[7] = Stage(7, () =>
+        tasks[5] = Stage(5, () => { var p = new PathPipeline(); p.Init(_device, sdf); pathPipe = p; });
+        tasks[6] = Stage(6, () => { var p = new AcrylicCompositor(); p.Init(_device); acrylic = p; });
+        tasks[7] = Stage(7, () => { var p = new OpacityLayerCompositor(); p.Init(_device, _queue); opacity = p; });
+        tasks[8] = Stage(8, () =>
         {
             var p = new GlyphRenderer();
             p.SetLivenessSource(_strings);   // reclaimed text ids → prompt run-cache eviction (quad-array recycling)
             p.Init(_device);
             glyphs = p;
         });
-        tasks[8] = Stage(8, () => { var p = new ImageTextureStore(); p.Init(_device); imageTextures = p; });
-        tasks[9] = Stage(9, () => { var p = new ImagePipeline(); p.Init(_device); imagePipe = p; });
-        tasks[10] = Stage(10, () => { var p = new BakedBlurCompositor(); p.Init(_device, _queue); bakedBlur = p; });
+        tasks[9] = Stage(9, () => { var p = new ImageTextureStore(); p.Init(_device); imageTextures = p; });
+        tasks[10] = Stage(10, () => { var p = new ImagePipeline(); p.Init(_device); imagePipe = p; });
+        tasks[11] = Stage(11, () => { var p = new BakedBlurCompositor(); p.Init(_device, _queue); bakedBlur = p; });
 
         try
         {
@@ -504,6 +508,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _arcPipe = arcPipe;
         _polylinePipe = polylinePipe;
         _gradPipe = gradPipe;
+        _pathPipe = pathPipe;
         _acrylic = acrylic;
         _opacity = opacity;
         _glyphs = glyphs;
@@ -1174,6 +1179,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _arcPipe!.BeginFrame((int)_frameIndex);
         _polylinePipe!.BeginFrame((int)_frameIndex);
         _gradPipe!.BeginFrame((int)_frameIndex);
+        _pathPipe!.BeginFrame((int)_frameIndex);
         _glyphs!.BeginFrame((int)_frameIndex);
         _imagePipe!.BeginFrame((int)_frameIndex);
         float lw = _w / _frameScale, lh = _h / _frameScale;
@@ -1391,6 +1397,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         Diag.Set("d3d12", "imageSrvUsed", _imageTextures.DescriptorSlotsUsed);
         Diag.Set("d3d12", "imageSrvHighWater", _imageTextures.DescriptorHighWater);
         Diag.Set("d3d12", "imageUploadRejected", _imageTextures.DroppedThisRun);
+        Diag.Set("path", "draws", _pathPipe?.DrawsThisFrame ?? 0);          // DrawIndexedInstanced calls this frame (one per FillPath/StrokePath)
+        Diag.Set("path", "uploadBytes", _pathPipe?.UploadBytesThisFrame ?? 0L);   // bytes memcpy'd from PathRealizationCache.Shared into this frame's VB/IB, post-dedupe
+        Diag.Set("path", "dropped", _pathPipe?.DroppedInstances ?? 0);      // >0 ⇒ the fixed-capacity VB/IB/instance/dedupe-map bank overflowed this frame
         Diag.Set("text.atlas", "cachedGlyphs", _glyphs!.CachedGlyphs);
         Diag.Set("text.atlas", "nonZeroBytes", _glyphs.AtlasNonZero);
         Diag.Set("text.run", "cachedRuns", _glyphs.CachedRuns);      // shaped runs held across frames
@@ -1458,7 +1467,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // Residency evicted the image → free its GPU texture (deferred behind the frame fence in the store).
     public void EvictImage(int imageId) => _imageTextures?.Free(imageId);
 
-    private void ClearInsts() { _rectInsts.Clear(); _glyphInsts.Clear(); _gradGlyphInsts.Clear(); _shadowInsts.Clear(); _arcInsts.Clear(); _polylineInsts.Clear(); _gradInsts.Clear(); _imageDraws.Clear(); _runs.Clear(); }
+    private void ClearInsts() { _rectInsts.Clear(); _glyphInsts.Clear(); _gradGlyphInsts.Clear(); _shadowInsts.Clear(); _arcInsts.Clear(); _polylineInsts.Clear(); _gradInsts.Clear(); _imageDraws.Clear(); _pathDraws.Clear(); _runs.Clear(); }
 
     // Record (or extend) a painter-order run for the just-appended primitive, so RecordAll can replay in stream order.
     private void PushRun(PrimKind kind)
@@ -1819,6 +1828,54 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 case DrawOp.PopLayer:
                     pos += Unsafe.SizeOf<PopLayerCmd>();
                     break;
+                case DrawOp.FillPath:
+                {
+                    var c = MemoryMarshal.Read<FillPathCmd>(cmds.Slice(pos));
+                    pos += Unsafe.SizeOf<FillPathCmd>();
+                    if (Cull(c.Rect.X, c.Rect.Y, c.Rect.W, c.Rect.H, c.Transform.M11, c.Transform.M12,
+                             c.Transform.M21, c.Transform.M22, c.Transform.Dx, c.Transform.Dy, RepaintCull.AaHaloDip)) break;
+                    if (c.VtxCount > 0 && c.IdxCount > 0)
+                    {
+                        _pathDraws.Add(new PathDrawItem
+                        {
+                            VtxStart = c.VtxStart, VtxCount = c.VtxCount, IdxStart = c.IdxStart, IdxCount = c.IdxCount,
+                            Inst = new PathInstance
+                            {
+                                R = c.Fill.R, G = c.Fill.G, B = c.Fill.B, A = c.Fill.A,
+                                M11 = c.Transform.M11, M12 = c.Transform.M12, M21 = c.Transform.M21, M22 = c.Transform.M22,
+                                Dx = c.Transform.Dx, Dy = c.Transform.Dy, Opacity = c.Opacity, ArcLenPx = 0f,
+                                // Fills pass the full-cover trim window and no dash — a per-draw UNIFORM, never geometry —
+                                // so the SAME PathPipeline shader/PSO serves both DrawOp.FillPath and DrawOp.StrokePath.
+                                TrimStart = 0f, TrimEnd = 1f, DashOn = 0f, DashOff = 0f,
+                            },
+                        });
+                        PushRun(PrimKind.Path);
+                    }
+                    break;
+                }
+                case DrawOp.StrokePath:
+                {
+                    var c = MemoryMarshal.Read<StrokePathCmd>(cmds.Slice(pos));
+                    pos += Unsafe.SizeOf<StrokePathCmd>();
+                    if (Cull(c.Rect.X, c.Rect.Y, c.Rect.W, c.Rect.H, c.Transform.M11, c.Transform.M12,
+                             c.Transform.M21, c.Transform.M22, c.Transform.Dx, c.Transform.Dy, RepaintCull.AaHaloDip)) break;
+                    if (c.VtxCount > 0 && c.IdxCount > 0)
+                    {
+                        _pathDraws.Add(new PathDrawItem
+                        {
+                            VtxStart = c.VtxStart, VtxCount = c.VtxCount, IdxStart = c.IdxStart, IdxCount = c.IdxCount,
+                            Inst = new PathInstance
+                            {
+                                R = c.Color.R, G = c.Color.G, B = c.Color.B, A = c.Color.A,
+                                M11 = c.Transform.M11, M12 = c.Transform.M12, M21 = c.Transform.M21, M22 = c.Transform.M22,
+                                Dx = c.Transform.Dx, Dy = c.Transform.Dy, Opacity = c.Opacity, ArcLenPx = c.ArcLenPx,
+                                TrimStart = c.TrimStart, TrimEnd = c.TrimEnd, DashOn = c.DashOn, DashOff = c.DashOff,
+                            },
+                        });
+                        PushRun(PrimKind.Path);
+                    }
+                    break;
+                }
                 default:
                     pos = cmds.Length;
                     break;
@@ -2198,7 +2255,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         => (_rectPipe?.DroppedInstances ?? 0) + (_shadowPipe?.DroppedInstances ?? 0) +
            (_arcPipe?.DroppedInstances ?? 0) + (_polylinePipe?.DroppedInstances ?? 0) +
            (_gradPipe?.DroppedInstances ?? 0) + (_glyphs?.DroppedInstances ?? 0) +
-           (_imagePipe?.DroppedInstances ?? 0);
+           (_imagePipe?.DroppedInstances ?? 0) + (_pathPipe?.DroppedInstances ?? 0);
 
     private void RecordAll(float lw, float lh)
     {
@@ -2214,7 +2271,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             var arcSpan = CollectionsMarshal.AsSpan(_arcInsts);
             var polylineSpan = CollectionsMarshal.AsSpan(_polylineInsts);
             var gradSpan = CollectionsMarshal.AsSpan(_gradInsts);
-            int rc = 0, sc = 0, ac = 0, pc = 0, gc = 0, ic = 0;
+            var pathSpan = CollectionsMarshal.AsSpan(_pathDraws);
+            int rc = 0, sc = 0, ac = 0, pc = 0, gc = 0, ic = 0, pdc = 0;
             _frameRuns += _runs.Count;
             foreach (var (kind, count) in _runs)
             {
@@ -2333,6 +2391,26 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                             _imagePipe!.DrawRange(_cmdList, srv, CollectionsMarshal.AsSpan(_imageRangeScratch));
                         }
                         ic = end;
+                        break;
+                    case PrimKind.Path:
+                        // TRAP (see PathPipeline's type doc): Path binds its OWN vertex buffer, index buffer, and
+                        // TRIANGLELIST topology — it does NOT participate in the five-pipe shared-SDF-state dedup
+                        // (_sharedSdfStateBound), so this MUST follow the Image pattern (explicit Begin + clear the
+                        // flag) and MUST NOT route through NoteSdfPipeBind. Leaving _sharedSdfStateBound true here
+                        // would make the NEXT Rect/Arc/Polyline/Gradient run skip rebinding the shared quad VB +
+                        // TRIANGLESTRIP topology and draw with Path's VB/IB/topology still bound — silent,
+                        // intermittent corruption that no headless gate can catch (needs real GPU pixels to see).
+                        SceneCat(CatFill);
+                        if (_boundPipe != BoundPipe.Path)
+                        {
+                            _pathPipe!.Begin(_cmdList, lw, lh);
+                            _boundPipe = BoundPipe.Path;
+                            _sharedSdfStateBound = false;
+                            _framePipeBinds++;
+                        }
+                        else _framePipeBindsSkipped++;
+                        int pend = pdc + count;
+                        for (; pdc < pend; pdc++) _pathPipe!.Record(_cmdList, in pathSpan[pdc]);
                         break;
                 }
             }
@@ -3174,6 +3252,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 case DrawOp.DrawIconMask: pos += Unsafe.SizeOf<DrawIconMaskCmd>(); break;
                 case DrawOp.DrawVideo: pos += Unsafe.SizeOf<DrawVideoCmd>(); break;
                 case DrawOp.EraseRoundRect: pos += Unsafe.SizeOf<EraseRoundRectCmd>(); break;
+                case DrawOp.FillPath: pos += Unsafe.SizeOf<FillPathCmd>(); break;
+                case DrawOp.StrokePath: pos += Unsafe.SizeOf<StrokePathCmd>(); break;
                 case DrawOp.PushLayer:
                     var L = MemoryMarshal.Read<PushLayerCmd>(cmds.Slice(pos));
                     pos += Unsafe.SizeOf<PushLayerCmd>();
@@ -3221,6 +3301,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 case DrawOp.DrawIconMask: pos += Unsafe.SizeOf<DrawIconMaskCmd>(); break;
                 case DrawOp.DrawVideo: pos += Unsafe.SizeOf<DrawVideoCmd>(); break;
                 case DrawOp.EraseRoundRect: pos += Unsafe.SizeOf<EraseRoundRectCmd>(); break;
+                case DrawOp.FillPath: pos += Unsafe.SizeOf<FillPathCmd>(); break;
+                case DrawOp.StrokePath: pos += Unsafe.SizeOf<StrokePathCmd>(); break;
                 case DrawOp.PushLayer: pos += Unsafe.SizeOf<PushLayerCmd>(); depth++; break;
                 case DrawOp.PopLayer:
                     pos += Unsafe.SizeOf<PopLayerCmd>();
@@ -4036,6 +4118,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _arcPipe?.Dispose(); _arcPipe = null;
         _polylinePipe?.Dispose(); _polylinePipe = null;
         _gradPipe?.Dispose(); _gradPipe = null;
+        _pathPipe?.Dispose(); _pathPipe = null;
         _acrylic?.Dispose(); _acrylic = null;
         _opacity?.Dispose(); _opacity = null;
         _rectPipe?.Dispose(); _rectPipe = null;
@@ -4098,6 +4181,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _arcPipe?.Dispose();
         _polylinePipe?.Dispose();
         _gradPipe?.Dispose();
+        _pathPipe?.Dispose();
         _acrylic?.Dispose();
         _opacity?.Dispose();
         _rectPipe?.Dispose();

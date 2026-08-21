@@ -19,6 +19,8 @@ public sealed class ProtectedVideoOptions
 /// </summary>
 public sealed record ProtectedVideoRequest
 {
+    /// <summary>All selectable protected tracks and representations, when the manifest exposes an adaptive catalog.</summary>
+    public ProtectedAdaptiveCatalog? Catalog { get; init; }
     /// <summary>The originating <see cref="MediaSource"/> (advisory — carries the URI + metadata), or null.</summary>
     public MediaSource? Source { get; init; }
     /// <summary>The protection configuration (drives the <see cref="DrmSystem"/> reported to the relay).</summary>

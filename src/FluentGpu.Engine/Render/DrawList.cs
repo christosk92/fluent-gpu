@@ -38,6 +38,13 @@ public enum DrawOp : int
                                // opaque, erase the holes, composite once at the group alpha ⇒ a scrim with rounded,
                                // anti-aliased windows over the compatible drop targets. Emitted OUTSIDE a group it erases
                                // the canvas itself — that is DrawVideo's contract, use that opcode instead.
+    FillPath = 19,             // tessellated path fill (gpu-renderer.md §5): a triangle-soup fill realized once by
+                               // PathRealizationCache.Shared and referenced here by (VtxStart,VtxCount,IdxStart,IdxCount)
+                               // into its retained slab. Pure geometry — exact under a span translation (patch Transform
+                               // only), safe under a damage-clamped scissor replay.
+    StrokePath = 20,           // tessellated path stroke (gpu-renderer.md §5): same realization-cache contract as
+                               // FillPath, plus a per-frame TrimStart/TrimEnd/dash uniform that never touches the
+                               // realization key — so a 60 Hz stroke-trim draw-on still hits the SAME cached tessellation.
 }
 
 /// <summary>Per-opcode command counts for the current <see cref="DrawList"/>. Stored as scalar fields so the host can
@@ -47,6 +54,7 @@ public struct DrawListOpcodeStats
     public int FillRoundRect, DrawGlyphRun, PushClip, PopClip, DrawImage, DrawRoundRectStroke, DrawShadow;
     public int DrawGradientRect, PushLayer, PopLayer, DrawGradientStroke, DrawArc, DrawPolylineStroke, DrawTabShape, DrawGlyphRunGradient;
     public int DrawIconMask, DrawVideo, EraseRoundRect;
+    public int FillPath, StrokePath;
     /// <summary>PushLayer commands specifically of <see cref="LayerKind.Acrylic"/> (a subset of <see cref="PushLayer"/>,
     /// which does not discriminate kind). Incremented only by the raw <see cref="DrawList.PushLayer"/> emitter — the
     /// Opacity/Blur/EdgeFade convenience methods pass a different <c>Kind</c> and do not touch this field. Lets a caller
@@ -76,6 +84,8 @@ public struct DrawListOpcodeStats
             case DrawOp.DrawIconMask: DrawIconMask++; break;
             case DrawOp.DrawVideo: DrawVideo++; break;
             case DrawOp.EraseRoundRect: EraseRoundRect++; break;
+            case DrawOp.FillPath: FillPath++; break;
+            case DrawOp.StrokePath: StrokePath++; break;
         }
     }
 
@@ -99,6 +109,8 @@ public struct DrawListOpcodeStats
         DrawIconMask += other.DrawIconMask;
         DrawVideo += other.DrawVideo;
         EraseRoundRect += other.EraseRoundRect;
+        FillPath += other.FillPath;
+        StrokePath += other.StrokePath;
         Acrylic += other.Acrylic;
     }
 
@@ -122,11 +134,13 @@ public struct DrawListOpcodeStats
         DrawIconMask = DrawIconMask - other.DrawIconMask,
         DrawVideo = DrawVideo - other.DrawVideo,
         EraseRoundRect = EraseRoundRect - other.EraseRoundRect,
+        FillPath = FillPath - other.FillPath,
+        StrokePath = StrokePath - other.StrokePath,
         Acrylic = Acrylic - other.Acrylic,
     };
 
     public override readonly string ToString()
-        => $"fill={FillRoundRect} glyph={DrawGlyphRun} glyphGrad={DrawGlyphRunGradient} clip={PushClip}/{PopClip} img={DrawImage} stroke={DrawRoundRectStroke} shadow={DrawShadow} grad={DrawGradientRect}/{DrawGradientStroke} layer={PushLayer}/{PopLayer} arc={DrawArc} poly={DrawPolylineStroke} tab={DrawTabShape} icon={DrawIconMask} video={DrawVideo} erase={EraseRoundRect} acrylic={Acrylic}";
+        => $"fill={FillRoundRect} glyph={DrawGlyphRun} glyphGrad={DrawGlyphRunGradient} clip={PushClip}/{PopClip} img={DrawImage} stroke={DrawRoundRectStroke} shadow={DrawShadow} grad={DrawGradientRect}/{DrawGradientStroke} layer={PushLayer}/{PopLayer} arc={DrawArc} poly={DrawPolylineStroke} tab={DrawTabShape} icon={DrawIconMask} video={DrawVideo} erase={EraseRoundRect} fillPath={FillPath} strokePath={StrokePath} acrylic={Acrylic}";
 }
 
 /// <summary>How a <see cref="FillRoundRectCmd"/> fills its interior.</summary>
@@ -305,6 +319,29 @@ public readonly record struct DrawVideoCmd(RectF Dst, CornerRadius4 Radii, int S
 // Same SDF geometry contract as FillRoundRectCmd, drawn through the DestOut PSO DrawVideo already builds. Pure geometry:
 // no surface identity, no registry. The scrim band uses it INSIDE an opacity group to cut spotlight windows.
 public readonly record struct EraseRoundRectCmd(RectF Rect, CornerRadius4 Radii, float Strength, Affine2D Transform, float Opacity);
+
+// A tessellated path FILL (see DrawOp.FillPath, gpu-renderer.md §5). Rect is the node-local box (metadata, like every
+// other cmd's Rect — the actual triangle-soup positions are PathRealizationCache.Shared's PathVertex.X/Y, in the
+// path's own authored coordinate space; Transform maps that space to device). VtxStart/VtxCount/IdxStart/IdxCount
+// index PathRealizationCache.Shared's retained slab (a cache HIT reuses them across every frame the geometry/style/
+// scale key doesn't change — zero re-tessellation). RealizationId is reserved for a future GPU-resident realization
+// handle (§1.5's PathPipeline residency); unpopulated (0) until that lands — the CPU-side offsets already fully
+// identify the realization for the headless/decode paths that exist today. Self-describing POD: a clean-span memcpy
+// and a TRANSLATED rebase both work with only a Transform patch (see DrawList.TranslateCopiedSpan).
+public readonly record struct FillPathCmd(RectF Rect, ColorF Fill, int RealizationId,
+    int VtxStart, int VtxCount, int IdxStart, int IdxCount, byte Rule,
+    Affine2D Transform, float Opacity);
+// A tessellated path STROKE (see DrawOp.StrokePath). Same realization-slab contract as FillPathCmd (RealizationId
+// reserved, see its doc), plus the trim/dash/arc-length uniforms a draw-on or dashed stroke needs PER FRAME.
+// TrimStart/TrimEnd/DashOn/DashOff/TrimMode are DELIBERATELY payload-only, never folded into the realization
+// key (PathRealizationCache.TryRealizeStroke's key is geometry+style+scale) — so a 60 Hz stroke-trim animation
+// (AnimChannel.StrokeTrimStart/End) hits the SAME cached tessellation every frame; only this uniform changes.
+// ArcLenPx (device px, from PathStroker via PathRef.ArcLenPx) is the total contour length, for a dash-phase/draw-on
+// shader that needs it without re-walking the geometry. TrimMode mirrors PathTrimSpace (0 = PerContour, 1 = WholePath).
+public readonly record struct StrokePathCmd(RectF Rect, ColorF Color, int RealizationId,
+    int VtxStart, int VtxCount, int IdxStart, int IdxCount,
+    float TrimStart, float TrimEnd, float DashOn, float DashOff, float ArcLenPx, byte TrimMode,
+    Affine2D Transform, float Opacity);
 
 /// <summary>
 /// Flat POD command stream consumed by the RHI (<c>SubmitDrawList</c>). The slice grows a single contiguous buffer;
@@ -696,6 +733,32 @@ public sealed class DrawList
         PushSort(sortKey);
     }
 
+    /// <summary>A tessellated path FILL (see <see cref="FillPathCmd"/>): <paramref name="pathRef"/> is the
+    /// <c>PathRealizationCache.Shared</c> slab reference (fill or miss-then-fill already resolved by the caller).
+    /// <paramref name="rule"/> is the <c>FillRule</c> byte value used for the realization (diagnostic/replay parity —
+    /// the triangle soup itself already bakes the rule).</summary>
+    public void FillPath(in RectF rect, in ColorF fill, in PathRef pathRef, byte rule, in Affine2D transform, float opacity, ulong sortKey = 0)
+    {
+        WriteOp(DrawOp.FillPath);
+        WritePayload(new FillPathCmd(rect, fill, 0, pathRef.VtxStart, pathRef.VtxCount, pathRef.IdxStart, pathRef.IdxCount, rule, transform, opacity));
+        PushSort(sortKey);
+    }
+
+    /// <summary>A tessellated path STROKE (see <see cref="StrokePathCmd"/>): <paramref name="trimStart"/>/
+    /// <paramref name="trimEnd"/> (0..1, clamped here) and <paramref name="dashOn"/>/<paramref name="dashOff"/> ride the
+    /// PAYLOAD only — never the realization key — so a per-frame trim/dash animation replays the SAME cached
+    /// tessellation (<paramref name="pathRef"/>) with zero re-tessellation. <paramref name="pathRef"/>.ArcLenPx carries
+    /// through as the command's device-px contour length.</summary>
+    public void StrokePath(in RectF rect, in ColorF color, in PathRef pathRef, float trimStart, float trimEnd,
+        float dashOn, float dashOff, byte trimMode, in Affine2D transform, float opacity, ulong sortKey = 0)
+    {
+        WriteOp(DrawOp.StrokePath);
+        WritePayload(new StrokePathCmd(rect, color, 0, pathRef.VtxStart, pathRef.VtxCount, pathRef.IdxStart, pathRef.IdxCount,
+            Math.Clamp(trimStart, 0f, 1f), Math.Clamp(trimEnd, 0f, 1f), MathF.Max(0f, dashOn), MathF.Max(0f, dashOff),
+            pathRef.ArcLenPx, trimMode, transform, opacity));
+        PushSort(sortKey);
+    }
+
     private void WriteOp(DrawOp op)
     {
         Ensure(sizeof(int));
@@ -788,6 +851,14 @@ public sealed class DrawList
                 case DrawOp.EraseRoundRect:
                     // Exact under translation, like FillRoundRect: an erase is pure geometry.
                     if (!TranslatePayload<EraseRoundRectCmd>(ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
+                    break;
+                case DrawOp.FillPath:
+                    // Exact under translation, like FillRoundRect: the triangle soup is authored in the path's own
+                    // local space and only the Transform carries absolute position.
+                    if (!TranslatePayload<FillPathCmd>(ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
+                    break;
+                case DrawOp.StrokePath:
+                    if (!TranslatePayload<StrokePathCmd>(ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
                     break;
                 case DrawOp.DrawGlyphRun:
                     // Patch the world transform AND stamp THIS frame's text-motion softness, which is exactly what a
@@ -894,6 +965,12 @@ public sealed class DrawList
                     break;
                 case DrawOp.EraseRoundRect:
                     if (!TranslatePayloadStatic<EraseRoundRectCmd>(dst, ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
+                    break;
+                case DrawOp.FillPath:
+                    if (!TranslatePayloadStatic<FillPathCmd>(dst, ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
+                    break;
+                case DrawOp.StrokePath:
+                    if (!TranslatePayloadStatic<StrokePathCmd>(dst, ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
                     break;
                 case DrawOp.DrawGlyphRun:
                     if (!TranslatePayloadMotionStatic<DrawGlyphRunCmd>(dst, ref p, end, dx, dy, motionSoft, static (c, x, y, soft) => c with { Transform = Translate(c.Transform, x, y), InMotion = soft })) return false;

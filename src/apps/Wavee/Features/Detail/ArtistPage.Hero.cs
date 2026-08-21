@@ -20,7 +20,8 @@ sealed partial class ArtistPage : Component
     readonly Signal<float> _heroWidth = new(ArtistHeroLayout.WideWidth);
 
     Element Banner(Artist a, string uri, Action play, Action shuffle, Action radio,
-                   bool compactCanHit, ContextPivotItem[] pivot, IReadSignal<float> pageScroll)
+                   bool compactCanHit, ContextPivotItem[] pivot, IReadSignal<float> pageScroll,
+                   IReadSignal<float> pageViewportHeight, IReadSignal<bool> pageAtEnd)
     {
         float width = MathF.Max(1f, _heroWidth.Value);
         var tier = UseRef(ArtistHeroTier.Wide);
@@ -179,7 +180,7 @@ sealed partial class ArtistPage : Component
         // and paints a phantom avatar/name/button row above the hero on every artist page load. Off keeps its slot
         // (an empty spacer, harmless inside this ZStack) without shimmering content nobody sees yet.
         Element compactPresentation = ArtistCompactBar.Build(a, uri, width, collapseDistance,
-            _accent, play, compactCanHit, pivot, _anchors, pageScroll).Skeletonized(false);
+            _accent, play, compactCanHit, pivot, _anchors, pageScroll, pageViewportHeight, pageAtEnd).Skeletonized(false);
 
         return new BoxEl
         {

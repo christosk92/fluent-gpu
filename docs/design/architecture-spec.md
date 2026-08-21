@@ -411,7 +411,11 @@ Opcodes: `FillRoundRectCmd`, `FillRoundRectStrokeCmd`, `DrawShadowCmd`, `DrawGly
 `PopTransformCmd`, `PushStencilClipCmd`/`PopStencilClipCmd`, `DrawFocusRingCmd` (the production focus visual;
 the rectangular `DrawFocusRect` is a superseded debug placeholder), `DrawAccessKeyBadgeCmd`.
 `DrawGlyphRunCmd` references by `{GlyphRunHandle, origin, BrushHandle}` and **never bakes atlas UVs** —
-UVs resolve at batch time (keeps eviction transparent).
+UVs resolve at batch time (keeps eviction transparent). **AS-BUILT note:** `FillPathCmd`/`StrokePathCmd`
+(`FillPath`=19/`StrokePath`=20, gpu-renderer.md §5) are now genuinely built, but the 8-byte-header framing
+above is the design sketch — the shipped encoder tags each op with a plain 4-byte `int` (`DrawOp : int`)
+and has no `DrawCmd` header struct at all (no `Flags`/`PayloadSz`/reserved fields); see gpu-renderer.md
+§3.1 and scene-memory.md §4.1 for the as-built wire format and the full opcode list.
 
 **Incremental story (the linchpin, with invariants):** re-record dirty subtrees into the front arena;
 `memcpy` clean layers' command spans from the back arena; swap at frame end → zero per-frame managed

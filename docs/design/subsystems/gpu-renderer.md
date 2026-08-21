@@ -153,15 +153,31 @@ per-frame DComp `Commit` (§7.3, §11).
 
 ### 3.1 Command stream (consumed; physical format pinned by architecture-spec §4.5)
 
-8-byte `DrawCmd` header + fixed POD payload, in **render-thread-private, ≥3-deep arenas** (the keystone
-hardening fix — the UI thread never swaps or resets a DrawList arena; the render thread reads its own
-prior arena for clean-span memcpy). **64-bit `SortKey` lives in a parallel `ulong[]` arena** (folds FA-2:
-the header `SortKey` field is only 32-bit). Backing byte/`ulong[]` arenas are
-`GC.AllocateUninitializedArray(cap, pinned: true)` (skip memset at multi-KB sizes; pinned removes GC
-fix-up before native submit). The recorder writes through the **`IBufferWriter<byte>` contract over the
-arena cursor** — never `ArrayBufferWriter` (hidden grow+copy), never `Pipe`/`ReadOnlySequence`.
+> **AS-BUILT correction (2026-08) — the printed enum below is design, not the wire format.** The design
+> sketch is an **8-byte `DrawCmd` header** (`byte Op` + `Flags`/`PayloadSz`/reserved) ahead of each POD
+> payload. **The shipped encoder (`src/FluentGpu.Engine/Render/DrawList.cs`) has no `DrawCmd` struct at
+> all.** `DrawOp` is declared **`enum DrawOp : int`**, and `WriteOp` writes that 4-byte `int` tag directly
+> into the byte arena (`MemoryMarshal.Write(_buf.AsSpan(_len), in v)`) with the fixed-size POD payload
+> immediately following it — the physical stream is **`[int Op][payload][int Op][payload]…`**, with no
+> `Flags`/`PayloadSz`/reserved fields anywhere in the bitstream (per-opcode dispatch decodes a known,
+> fixed payload size for each `Op`, so `PayloadSz` was never needed to walk the stream). The 64-bit
+> `SortKey` parallel `ulong[]` arena described below IS as-built (`DrawList.PushSort`/`SortKeys`), and
+> `FillPath = 19`/`StrokePath = 20` are now real, shipped values on that `int`-tagged enum (`gpu-renderer.md`
+> §5). `scene-memory.md` §4.1 is the encoding framework's owning doc and carries the same design-sketch
+> `DrawCmd`/`byte`-tagged enum print; both are retained as the ORIGINAL design target, not a description of
+> the shipping encoder.
+
+**render-thread-private, ≥3-deep arenas** (the keystone hardening fix — the UI thread never swaps or
+resets a DrawList arena; the render thread reads its own prior arena for clean-span memcpy). **64-bit
+`SortKey` lives in a parallel `ulong[]` arena** (folds FA-2: the design header's `SortKey` field was only
+32-bit; the as-built encoder has no header at all, so this constraint is moot but the parallel-arena shape
+is unchanged). Backing byte/`ulong[]` arenas are `GC.AllocateUninitializedArray(cap, pinned: true)` (skip
+memset at multi-KB sizes; pinned removes GC fix-up before native submit). The recorder writes through the
+**`IBufferWriter<byte>` contract over the arena cursor** — never `ArrayBufferWriter` (hidden grow+copy),
+never `Pipe`/`ReadOnlySequence`.
 
 ```csharp
+// DESIGN SKETCH (not as-built — see the AS-BUILT correction above for the real wire format):
 [StructLayout(LayoutKind.Sequential, Size = 8)]
 public struct DrawCmd { public DrawOp Op; public byte Flags; public ushort PayloadSz; public uint _resv; }
 
@@ -179,6 +195,7 @@ public enum DrawOp : byte {
 // entries DrawFocusRing + DrawSelectionRect + DrawScrim are registered there; this doc owns only their PAYLOAD
 // STRUCT SHAPES (§3.6) and their RASTERIZATION (§4.4). The enum reprinted here is for local readability and
 // must stay in lockstep. DrawFocusRect is the superseded rectangular placeholder; DrawFocusRing is production.
+// AS-BUILT: FillPath = 19, StrokePath = 20 on the real `int`-tagged DrawOp (src/FluentGpu.Engine/Render/DrawList.cs).
 ```
 
 Representative payloads (POD; handle/index refs only; never GC pointers):
@@ -604,59 +621,190 @@ float cov      = 1.0 - smoothstep(-aa, +aa, ring);     // analytic AA, aa = fwid
 
 ---
 
-## 5. Path tessellation — vetted O(n log n) monotone/trapezoidal sweep
+## 5. Path tessellation — vetted O(n log n) monotone/trapezoidal sweep (AS-BUILT 2026-08)
 
-**MADE: CPU tessellation into an arena, AA-fringe (feather), MSAA off by default; flows through the same
-instanced/batched path as everything else.** Rejected stencil-then-cover (stencil contention with
-clipping, breaks instanced batching, still needs flattening, non-portable to Metal). Paths are NOT the
-hot path in Fluent UI; a correct, allocation-free tessellator **cached by geometry hash** is the right
-cost point.
+**MADE: CPU tessellation into caller-supplied destination spans, AA-fringe (feather), MSAA off by
+default; flows through its own D3D12 TRIANGLELIST lane (`PathPipeline`), not the shared SDF-quad
+path.** Rejected stencil-then-cover (stencil contention with clipping, breaks instanced batching, still
+needs flattening, non-portable to Metal). Paths are NOT the hot path in Fluent UI; a correct,
+allocation-free tessellator **cached by content+scale+style** is the right cost point.
 
-**The two claims are SEPARATED (hardened §4.3, replacing the original's ear-clip language):**
-- **Complexity-bound = SAFE-by-construction.** **DELETE ear-clipping.** Use **one vetted O(n log n)
-  monotone/trapezoidal sweep** — there is no O(n²) path in the codebase. (Ear-clipping was O(n²) worst
-  case and is gone.)
-- **Geometric correctness = MANAGED, fuzz-gated + differential-rasterizer cross-check.** FP degeneracy
-  can produce a watertight-but-wrong result; robust-predicate failures are **fuzz-gated** (watertightness
-  + winding + robust-area cross-check vs an independent higher-precision scanline rasterizer). **D2D
-  fallback on golden failure** (`IPrimitiveFallback`, Windows-only crutch → per-primitive Metal-milestone
-  debt list).
+**The two claims are SEPARATED (hardened §4.3, replacing the original's ear-clip language):** <!-- canon-allow: explains the deleted ear-clip decision -->
+- **Complexity-bound = SAFE-by-construction.** **DELETED ear-clipping.** <!-- canon-allow: explains the deleted ear-clip decision -->
+  `PathSweep` is one vetted O(n log n) banded trapezoidal sweep with LOCAL crossing refinement in place of
+  a global Bentley–Ottmann event queue (a depth-capped recursive band bisection, `PathSweep.MaxBandSplitDepth
+  = 6`) — there is no O(n²) path in the codebase. Flattening runs FIRST (`PathFlatten`), so every edge
+  handed to the sweep is already a straight, y-monotone segment: the entire "split at local curvature
+  extrema" phase that makes a curve-aware sweep intricate does not exist here. **Self-intersecting fills
+  are correct BY CONSTRUCTION**: the winding-accumulation sweep only cares about crossing edges and their
+  direction, so a pentagram or a self-crossing ribbon tessellates correctly under both `FillRule`s with no
+  "is this a simple polygon" precondition — a reason to prefer this algorithm beyond its complexity bound
+  (a triangulator that assumes a simple polygon, ear-clipping included, gets a self-intersecting input <!-- canon-allow: explains the deleted ear-clip decision -->
+  wrong).
+- **Geometric correctness = MANAGED, fuzz-gated + differential-rasterizer cross-check.** `IconRaster` (an
+  independent, already-trusted scanline rasterizer) is reused as both the fill-rule reference and, fed the
+  emitted triangle soup under nonzero winding, the tessellator's own correctness check
+  (`src/FluentGpu.VerticalSlice/Suites/PathSuite.cs`) — no new rasterizer written for this batch. **D2D
+  fallback (`IPrimitiveFallback`) did NOT ship** — only the seam name survived from the design; standing it
+  up means a D2D device + an interop surface + a second present path inside a D3D12 swapchain, which is
+  larger than the tessellator itself (descope list below; `macos-debt-ledger.md`).
 
 ```csharp
-public ref struct PathTessellator {                  // outputs into caller arena spans — ZERO heap alloc
-    public PathTessellator(ArenaAllocator vtxArena, ArenaAllocator idxArena, float deviceScale);
-    public PathRef Tessellate(in PathData path, FillRule rule, float strokeWidth, in StrokeStyle stroke);
+// src/FluentGpu.Engine/Render/PathTessellator.cs — the AS-BUILT signature.
+// Deviation from canon: canon printed PathTessellator(ArenaAllocator vtxArena, ArenaAllocator idxArena,
+// float deviceScale). ArenaAllocator (Foundation/Allocators.cs) is the PER-FRAME bump allocator whose
+// spans die on Reset() — exactly what §5.1's RETAINED realization slab forbids (a tessellation must
+// outlive many frames). Taking destination Span<T>s directly is strictly more general: it serves both a
+// transient per-frame caller AND PathRealizationCache's retained slab, and never throws / never grows
+// storage behind the caller's back.
+public ref struct PathTessellator {
+    public PathTessellator(Span<PathVertex> vtx, Span<uint> idx, float deviceScale);
+    public bool TryTessellateFill(PathData path, FillRule rule, out PathRef r);          // NeededVtx/NeededIdx on false
+    public bool TryTessellateStroke(PathData path, in StrokeStyle s, out PathRef r,
+        PathTrimSpace trimSpace = PathTrimSpace.PerContour);                             // additive optional param
 }
-public readonly struct PathRef { public int VtxStart, VtxCount, IdxStart, IdxCount; public RectF Bounds; }
+[StructLayout(LayoutKind.Sequential)]
+public struct PathVertex { public float X, Y, Cov, S; }   // 16 bytes, blittable, no padding
+public readonly struct PathRef { public readonly int VtxStart, VtxCount, IdxStart, IdxCount;
+                                  public readonly RectF Bounds; public readonly float ArcLenPx; }
 ```
-Algorithm:
-1. **Flatten** cubics/quadratics/arcs by adaptive subdivision to `tol = 0.25px / deviceScale`. Use
-   **Wang's-formula segment count up front** (no recursion, no stack alloc — write straight into the
-   arena). Arcs → cubic spans ≤90°.
-2. **Fill triangulation:** the monotone/trapezoidal sweep honoring `FillRule` (nonzero/evenodd) via
-   winding accumulation. Trapezoidation is the robust default for any winding; a cheaply-detected
-   convex/simple fast path uses monotone decomposition.
-3. **Stroke:** offset the flattened polyline by `±strokeWidth/2`; miter/round/bevel joins + butt/round/
-   square caps tessellated to the same `tol`. Output is a triangle list (SDF stroke is rect-family only).
-4. **Edge AA:** **MADE: AA-fringe (feather) — extruded edge triangles with a 0→1 coverage vertex
-   attribute; MSAA off.** Keeps the whole renderer single-sample (no resolve, no MSAA RT) and matches the
-   analytic-rect look. `RenderConfig.PathAaMode = Fringe | Msaa4` is a fallback flag for pathological thin
-   concentric curves. `OQ-1`: validate fringe vs MSAA4 on real icon-as-paths / Bézier logos via the
-   golden gate before locking MSAA out.
 
-### 5.1 Geometry realization cache
+`PathVertex` is the as-built vertex: position, an AA-fringe coverage attribute (`Cov`, 0 outer → 1
+inside), and a normalized arc-length position along a stroke's contour (`S`, 0 for a fill — only
+`PathStroker` ever writes a non-zero `S`; see §5.1 for why trim/dash read it as a shader uniform rather
+than a tessellation input). `PathRef.ArcLenPx` is the stroke's total contour length in DEVICE pixels,
+reported so a draw-on/dash shader can use it without re-walking the geometry.
 
-`PathRealizationKey = (PathGeometryId, quantizedDeviceScale, strokeWidthQ, ruleByte)` **with the
-content-epoch in the key**, over an immutable `PathData` whose ctor **requires** the epoch → a missed
-bump is a **compile error** (hardened §4.3). Resolves to a `PathRef` into a **retained** vertex/index slab
-(not the per-frame arena). Tessellate once on first paint or scale change; thereafter the recorder emits
-`FillPathCmd`/`StrokePathCmd` referencing the cached `PathRef`. LRU eviction by slab pressure. This is the
-"static SVG/icon costs nothing per frame" guarantee; it makes steady-state on-UI-thread tessellation
-zero-pending-work, which is **why on-UI tessellation ships first** (off-thread is descoped — §15).
+Algorithm (`PathFlatten` → `PathSweep`/`PathStroker`):
+1. **Flatten** (`PathFlatten.cs`). Wang's-formula segment counts computed UP FRONT — `WangSegmentsQuad` is
+   the EXACT closed form (the quadratic's chord deviation is maximized at t=0.5, so solving for n has no
+   empirical fudge factor); `WangSegmentsCubic` is the classic Wang-1984 approximate cubic bound via the
+   two second-difference vectors, deliberately erring high. Both clamp to `[MinSegs, MaxSegs] = [1, 512]`.
+   **Every emitted point is snapped to a 1/256-device-pixel grid** (`GridSubdivisions = 256`, expressed in
+   path-local units so the snap stays translation-invariant — the realization cache keys on content+scale,
+   never screen position). This is the single highest-leverage robustness decision in the file: it is what
+   makes near-exact orientation/crossing predicates possible downstream, because two edges meant to share
+   an endpoint now do, bit-for-bit, instead of differing in the last mantissa bit after independent curve
+   evaluation.
+2. **Fill triangulation** (`PathSweep.cs`) honoring `FillRule` via winding accumulation. A lone convex
+   contour (checked by an O(n) turning-angle scan that also rejects same-handed multiply-wound star
+   polygons) fan-triangulates directly; everything else — concave, multi-contour, self-intersecting — goes
+   through the general banded sweep. The sweep bands the plane at every edge endpoint Y, and inside a band
+   sorts active edges by x at the midpoint; **an adjacent pair whose x-order flips between the band's top
+   and bottom is a crossing inside the band**, resolved by an EXACT linear solve (not an iterative
+   estimate) and a depth-capped recursive bisection — the alternative to a global Bentley–Ottmann event
+   queue the design brief called for. Both the crossing split and every trapezoid corner are re-snapped to
+   the SAME device-pixel grid `PathFlatten` used, so two crossings that are mathematically meant to
+   coincide (e.g. a mirror-symmetric self-intersecting star's left/right inner points, each computed from a
+   different pair of edges) land on the identical vertex instead of a near-duplicate a fraction of a device
+   pixel away — the difference between a watertight mesh and a T-junction.
+3. **Stroke** (`PathStroker.cs`): offset the flattened polyline by ±`Width/2`; all three `LineJoin`s
+   (bevel/round/miter-with-bevel-fallback) and all three `LineCap`s (butt/round/square); a baked normalized
+   arc-length attribute (`S`) for a draw-on/dash shader. **A 1-device-pixel stroke width floor**: the
+   geometric width is clamped to 1px, and `Cov` on every opaque (non-fringe) vertex is scaled by
+   `actualWidthDevicePx / 1px` below that floor. Without it, a stroke thinner than one device pixel has its
+   two AA fringes overlap, coverage saturates back toward 1, and the line reads too dark and wobbles
+   frame-to-frame under animation/scale — reusing the fringe's own `Cov` channel makes this a one-line fix,
+   not a second shader path. **Known v1 gap (documented, not fixed):** an opaque stroke that overlaps
+   itself (a join whose miter/round radius exceeds the local curvature radius) double-blends under
+   premultiplied SrcOver at the overlap — invisible for opaque line art, a visible seam for a translucent
+   stroke; fixing it needs a stencil/coverage-max pass the tessellator does not have.
+4. **AA fringe (feather), MSAA off.** `PathSweep.AddFringe` generates the fringe **from the input contours,
+   not the trapezoid soup** — one outward-extruded quad per contour edge, `Cov=1` on the inner rail (shared
+   with the interior vertices — the interior is NEVER inset) and `Cov=0` on the outer rail, plus a wedge
+   triangle per vertex so adjacent edge fringes abut. A known residual (canon's open `OQ-1`): at a sharp
+   concave vertex the two adjacent fringe quads can overlap slightly — accepted for v1. `GpuProfile.PathAaMode
+   { Fringe = 0, Msaa4 = 1 }` is the as-built flag — canon printed `RenderConfig.PathAaMode`; <!-- canon-allow: names the superseded RenderConfig form on purpose --> **there is no
+   `RenderConfig` type anywhere in this repo**. `Msaa4` is a selectable value with NO backend behind it: it
+   falls back to `Fringe` and counts the fallback via `GpuProfile.NotePathMsaaFallback()`
+   (`Diag.Count("path","msaaFallback")`) rather than silently doing nothing. `OQ-1` (validate fringe vs
+   MSAA4 on real icon-as-paths / Bézier logos before locking MSAA out) is still open.
+
+The D3D12 lane (`src/FluentGpu.Windows/D3D12/PathPipeline.cs`) is the renderer's first bound index buffer
+— every sibling SDF pipeline instances one shared TRIANGLESTRIP unit quad. `PathPipeline` is a
+TRIANGLELIST lane reusing `SdfSharedResources.RootSignature` (the same b0/t0 layout every SDF pipe uses):
+MSAA off (`SampleDesc.Count = 1`), the tessellated `Cov` fringe is the only AA, `CullMode = NONE` (the
+tessellator makes no front-face winding guarantee), premultiplied SrcOver blend. Trim/dash (§5.1) ride a
+64-byte `PathInstance` per-draw uniform record so one PSO serves both `FillPath` and `StrokePath` (fills
+pass `TrimStart=0/TrimEnd=1/DashOn=0`, the full-cover window). Per frame it (a) copies each DISTINCT
+realization actually drawn this frame from `PathRealizationCache.Shared`'s retained slab into its own
+fixed-capacity, double-buffered upload VB/IB exactly once — deduped by a fixed-capacity open-addressed map
+reset every `BeginFrame`, zero managed allocation — and (b) issues one `DrawIndexedInstanced` per path.
+`DrawsThisFrame`/`UploadBytesThisFrame`/`DroppedInstances` feed `Diag.Set("path", …)` counters that make
+the GPU-resident-slab + per-vertex-PathIdx follow-up (one `DrawIndexed` per RUN instead of per path)
+data-driven rather than guessed at; that follow-up, and off-thread tessellation, are both intentionally NOT
+built in this batch (descope list below).
+
+**Honest scope of the "compile error" mechanic** (§5.1 relies on it): C# cannot make a *missed content
+bump* an error in general — nothing stops a caller from tessellating stale geometry on purpose. What
+`PathContentEpoch` actually makes a compile error is *constructing a `PathData` (or calling `WithRule`)
+without naming a freshly-minted epoch at the call site* — the type has no public constructor other than
+`Mint()`, so the only way to get an epoch into a `PathData` ctor call is to either write
+`PathContentEpoch.Mint()` right there or explicitly thread through one already minted for this exact
+content. A caller can still misuse that by minting once and reusing the same epoch across genuinely
+different content; that misuse is not caught here.
+
+**Descoped, honestly** (not built in this batch, and not silently dropped from the record):
+`PathAaMode.Msaa4` (the enum member exists and falls back to `Fringe` with a `Diag` counter, above);
+the `IPrimitiveFallback` D2D implementation (only the seam survives — see above); off-thread tessellation
+(already §15-descoped); `FillGradient` on paths; stroke boolean-union for translucent self-overlap (the
+known v1 gap above); path clipping (§6's stencil tier); animatable dash offset as an `AnimChannel`; and
+round-capped trim tips (the PS-discard trim in `PathPipeline`'s shader gives a butt tip at the cut even
+when `StrokeStyle.Cap == LineCap.Round`).
+
+### 5.1 Geometry realization cache (AS-BUILT 2026-08)
+
+`PathRealizationCache.Shared` (`src/FluentGpu.Engine/Render/PathRealizationCache.cs`) is a retained
+vertex/index slab (two growable managed arrays with a bump cursor — deliberately NOT the per-frame
+`ArenaAllocator`, whose spans die on `Reset()`, and NOT `SlabAllocator<T>`, which is a fixed-size-per-handle
+allocator and a tessellated path's vertex/index run varies wildly in size) plus an LRU realization cache
+keyed by:
+
+```csharp
+// PathRealizationKey (src/FluentGpu.Engine/Render/PathRealizationCache.cs) — AS-BUILT.
+public readonly record struct PathRealizationKey(
+    int GeometryId, ulong ContentEpoch, ushort DeviceScaleQ, ushort StrokeWidthQ,
+    byte RuleByte, byte JoinCapByte, byte Kind);   // Kind: 0 = fill, 1 = stroke
+```
+
+`ContentEpoch` folds in `PathData.Epoch.Value` directly, so a geometry edit (a fresh `PathContentEpoch`,
+even over byte-identical points) is a cache MISS by construction, never a stale replay. `DeviceScaleQ`/
+`StrokeWidthQ` are quantized ×64 and rounded so a sub-quantum scale/width wobble still hits.
+
+**`JoinCapByte` is additive beyond canon** (canon's §5.1 printed a 4-field key without it): without
+folding join/cap/miter-limit into the key, two stroke nodes sharing one geometry at one width but
+DIFFERENT joins would collide on the same cache slot and one would silently render with the other's
+tessellation. Packed as `(join<<6)|(cap<<4)|quantizedMiterLimit` via `PathRealizationKey.PackJoinCap`.
+
+**Trim and dash are deliberately NOT in the key — this is the single most important thing to record here,
+because a future reader would otherwise "fix" it.** `StrokeStyle.DashOn`/`DashOff` and any animated trim
+(`AnimChannel.StrokeTrimStart/End`, a draw-on reveal) are per-frame PIXEL-SHADER uniforms on `PathInstance`
+(§5) that read the baked `PathVertex.S` arc-length attribute; `PathStroker` ignores `DashOn`/`DashOff` on
+purpose and never re-tessellates for them. Consequently a 60 Hz stroke-trim or dash-phase animation is a
+cache HIT on the SAME `PathRef` every frame, with zero re-tessellation — putting trim/dash in the
+realization key would instead re-tessellate every animated stroke ~60 times a second, exactly defeating the
+"static geometry costs nothing per frame" guarantee this cache exists to provide.
+
+Resolves to a `PathRef` (`VtxStart, VtxCount, IdxStart, IdxCount, Bounds, ArcLenPx`) into the retained slab
+(not a per-frame arena). Tessellate once on first paint or on a genuine key miss (scale/content/style
+change); every subsequent frame the recorder emits `FillPathCmd`/`StrokePathCmd` referencing the SAME
+`PathRef` — zero pending tessellation work, zero managed allocation, on the steady-state path.
+`TessellationCount` (misses only) and `RealizationCount` (hits+misses) are always-on plain counters — NOT
+`[Conditional]` — because a Release build's zero-re-tessellation proof reads them directly.
+
+**LRU eviction** mirrors `ImageTextureStore.Free`'s deferred-behind-the-frame-fence discipline,
+generalized from its fixed 2 frames to `QuarantineFrames = 2`: an entry's `LastUsedFrame` must be strictly
+older than `currentFrame - QuarantineFrames` before it is even eligible for eviction, and compaction runs
+ONLY at a `BeginFrame` boundary — never mid-frame, never on the read path — gated by
+`GpuProfile.PathSlabBudgetBytes` (default 4 MiB, advisory: eviction tries to stay under it but never fails
+a realization, and never evicts a quarantined entry, just to respect it). The key→`PathRef` map is a
+pre-sized OPEN-ADDRESSED struct array (linear probe + tombstones), never `Dictionary<K,V>` — this is read
+on the record-time lookup path, and a `Dictionary` resize allocates exactly where this repo's zero-alloc
+discipline forbids it.
 
 **Hit-test shares the fill RULE (nonzero winding default), not just the vertices** (folds the input-a11y
-fix) — the same `FillRule` is exposed to `FluentGpu.Input` so a click inside a complex path's hole behaves
-consistently with what's painted.
+fix) — `PathData.Rule` is the same `FillRule` the tessellator honors, exposed to `FluentGpu.Input` so a
+click inside a complex path's hole behaves consistently with what's painted.
 
 ---
 
@@ -1042,23 +1190,31 @@ are owned by **scene-memory.md §4.3b**.
 
 ## 12. AA quality — corpus-gated regression net (NOT a "validated property")
 
-**MADE: an AA-fringe → MSAA(4) → D2D fallback ladder, gated by a golden-image + perceptual gate, honestly
-labeled a "corpus-gated regression net," not a proven property** (folds the hardened §4.3 + painpoints
-overclaim correction).
+**MADE: an AA-fringe default, gated by a golden-image + perceptual gate, honestly labeled a "corpus-gated
+regression net," not a proven property** (folds the hardened §4.3 + painpoints overclaim correction).
+**AS-BUILT 2026-08 correction:** the design's MSAA(4) and D2D-fallback rungs did NOT ship — see §5's
+descope list. `PathAaMode.Msaa4` is a selectable enum value with no backend behind it (falls back to
+`Fringe`, counted via `GpuProfile.NotePathMsaaFallback()`), and `IPrimitiveFallback` never got a D2D
+implementation (only the seam name exists). The path lane is single-sample AA-fringe, full stop, today.
 
 | Content | AA method | Sample count | Resolve? |
 |---|---|---|---|
 | Rounded rects, borders, shadows | Analytic SDF (`fwidth` smoothstep / `erf` shadow) | 1 | no |
 | Glyphs | Pre-rasterized coverage atlas + gamma blend | 1 | no |
 | Images / video hole | bilinear sample / scissored clear | 1 | no |
-| Tessellated path fill/stroke | AA-fringe (feather) | 1 (default) | no |
-| Path fallback (pathological) | MSAA | 4 | yes (per layer only) |
+| Tessellated path fill/stroke | AA-fringe (feather) — the ONLY shipped path AA method | 1 | no |
+| Path fallback (pathological) — `PathAaMode.Msaa4` | **NOT BUILT**; selecting it falls back to Fringe | — | — |
 
-The gate: a **16× supersampled CPU reference**, **CIEDE2000 + edge-shift** perceptual comparison, and
-A/B-vs-DWrite for text. Explicit caveat: **uncovered DPI/rotation/color/script combinations are ungated**;
-WARP-vs-hardware forces a perceptual tolerance (WARP is not bit-identical to hardware). **Whole renderer is
-single-sample by default → no global MSAA RT, no per-frame resolve, minimal RT memory** — the footprint-
-optimal choice.
+The gate (rect/glyph/image lanes): a **16× supersampled CPU reference**, **CIEDE2000 + edge-shift**
+perceptual comparison, and A/B-vs-DWrite for text. **The path lane's gate is different and as-built**:
+`PathSuite`'s fuzz-gated differential cross-check against `IconRaster` (an independent, already-trusted
+scanline rasterizer), reused as both the fill-rule reference and, fed the emitted triangle soup, the
+tessellator's own correctness check (`src/FluentGpu.VerticalSlice/Suites/PathSuite.cs`) — not the
+supersampled/perceptual comparison this section otherwise describes. Explicit caveat: **uncovered
+DPI/rotation/color/script combinations are ungated**; WARP-vs-hardware forces a perceptual tolerance (WARP
+is not bit-identical to hardware). **Whole renderer is single-sample by default → no global MSAA RT, no
+per-frame resolve, minimal RT memory** — the footprint-optimal choice, and, for paths specifically, the
+only choice actually shipped.
 
 ---
 
@@ -1411,7 +1567,7 @@ Amendments folded into this actualization (everything else preserved from the or
    reading an immutable triple-buffered `SceneFrame`; render thread is the **sole ComPtr owner**; DrawList
    arenas are render-thread-private and **≥3-deep** (was 2-deep, UI-swapped). Single-thread-correct ships
    first; parallelism flips behind the `seam.race` gate. (hardened §2/§4.1/§6)
-2. **Tessellator.** **DELETED ear-clipping**; replaced with one vetted **O(n log n) monotone/trapezoidal
+2. **Tessellator.** **DELETED ear-clipping**; <!-- canon-allow: explains the deleted ear-clip decision --> replaced with one vetted **O(n log n) monotone/trapezoidal
    sweep**. Separated the **complexity-bound (SAFE-by-construction)** from **geometric correctness
    (fuzz-gated + differential-rasterizer cross-check + D2D golden fallback)**. (hardened §4.3)
 3. **RenderLane classifier** added — SDF default, paths the exception — plus a tessellation-fraction

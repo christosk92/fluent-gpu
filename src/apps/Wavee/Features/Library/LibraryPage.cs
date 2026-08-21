@@ -825,21 +825,31 @@ sealed class LibraryPage : Component
         Fill = SkeletonStyle.Default.BarColor, IsEnabled = false, HitTestVisible = false,
     };
 
-    Element TrackHitRow(LibraryTrackHit t, string albumUri) => new BoxEl
+    Element TrackHitRow(LibraryTrackHit t, string albumUri)
     {
-        Key = "search:" + t.Uri, Animate = SearchRowChange,
-        Direction = 0, Height = 44f, AlignItems = FlexAlign.Center, Gap = Spacing.M, ClipToBounds = true,
-        Padding = new Edges4(Spacing.S, 0f, Spacing.S, 0f), Corners = Radii.ControlAll,
-        OnClick = () => PlayTrack(albumUri, t.AlbumIndex),
-        Children =
-        [
-            new BoxEl { Width = 36f, Height = 36f, Shrink = 0f, Corners = CornerRadius4.All(4f), ClipToBounds = true,
-                SkeletonOverride = CoverSkeleton(36f, 4f),
-                Children = [Surfaces.Artwork(t.Cover, t.Uri.GetHashCode() & 0x7fffffff, 36f, 36f, 4f)] },
-            new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, ClipToBounds = true,
-                Children = [SearchHighlight.Row(t.Title, t.MatchStart, t.MatchLen, 13f, 600, Tok.TextPrimary)] },
-        ],
-    }.Interactive(Interaction.Subtle);
+        bool showArtwork = !AppearancePrefs.TrackArtworkHidden(_settings);
+        var children = new List<Element>(2);
+        if (showArtwork)
+            children.Add(new BoxEl
+            {
+                Width = 36f, Height = 36f, Shrink = 0f, Corners = CornerRadius4.All(Radii.Control), ClipToBounds = true,
+                SkeletonOverride = CoverSkeleton(36f, Radii.Control),
+                Children = [Surfaces.Artwork(t.Cover, t.Uri.GetHashCode() & 0x7fffffff, 36f, 36f, Radii.Control)],
+            });
+        children.Add(new BoxEl
+        {
+            Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, ClipToBounds = true,
+            Children = [SearchHighlight.Row(t.Title, t.MatchStart, t.MatchLen, 13f, 600, Tok.TextPrimary)],
+        });
+        return new BoxEl
+        {
+            Key = "search:" + t.Uri + ":art=" + showArtwork, Animate = SearchRowChange,
+            Direction = 0, Height = 44f, AlignItems = FlexAlign.Center, Gap = Spacing.M, ClipToBounds = true,
+            Padding = new Edges4(Spacing.S, 0f, Spacing.S, 0f), Corners = Radii.ControlAll,
+            OnClick = () => PlayTrack(albumUri, t.AlbumIndex),
+            Children = children.ToArray(),
+        }.Interactive(Interaction.Subtle);
+    }
 
     static string KindLabelOf(AlbumKind k) => k switch
     {
@@ -964,7 +974,7 @@ sealed class LibraryDetailPane : Component
     // own per-pane sort/filter/density. The route is fixed to kind=Album (the pane only ever shows album/release tracks);
     // the actual cfg — Album vs Compilation (various-artists → per-track artist subline) — is re-derived from the loaded
     // model's ReleaseKind inside TrackList, so a compilation in the library shows artists just like its detail page would.
-    readonly Signal<TrackSort> _sort = new(TrackSort.Default);
+    readonly Signal<DetailTrackSort> _sort = new(DetailTrackSort.Default);
     readonly Signal<string> _query = new("");
     readonly Signal<TrackFilterState> _filters = new(TrackFilterState.Default);
     readonly Signal<bool> _tempoColumn = new(false);

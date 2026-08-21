@@ -1936,6 +1936,58 @@ public static class SceneRecorder
                 }
                 break;
             }
+            case VisualKind.Path:
+            {
+                if (!maybeSparsePaint || !overlapsRecordClip) break;
+                if (!scene.TryGetPath(node, out var ps) || ps.IsNone) break;
+                var geometry = ps.Geometry;
+                if (geometry is null) break;   // ps.IsNone already implies this, but narrow explicitly for the nullable analyzer
+
+                // ViewBoxW/H > 0: bake a uniform-fit (min-axis) scale into THIS draw's world transform, so one authored
+                // path (e.g. a 24x24-unit icon) renders correctly at any box size (PathSpec's documented contract).
+                // ViewBoxW/H == 0 (the common case): the geometry is already node-local DIP — no rebase needed.
+                Affine2D pathWorld = world;
+                if (ps.ViewBoxW > 0f && ps.ViewBoxH > 0f && pw > 0f && ph > 0f)
+                {
+                    float fit = MathF.Min(pw / ps.ViewBoxW, ph / ps.ViewBoxH);
+                    pathWorld = world.Multiply(Affine2D.Scale(fit, fit));
+                }
+                // Realization-cache quantization scale: the axis-aligned |M11| scale THIS draw applies to the path's
+                // own coordinate space, times the frame's device-pixel scale — the same world.M11 convention the
+                // tier-2 rounded-clip radius above uses, so a sub-quantum DPI/zoom wobble still hits the cache.
+                float scaleQ = MathF.Abs(pathWorld.M11 != 0f ? pathWorld.M11 : 1f) * (scene.DeviceScale > 0f ? scene.DeviceScale : 1f);
+
+                if (ps.Fill.A > 0f && PathRealizationCache.Shared.TryRealizeFill(geometry, ps.Rule, scaleQ, out var fr))
+                {
+                    dl.FillPath(local, ps.Fill, fr, (byte)ps.Rule, pathWorld, opacity, key);
+                    // Union the fill's device bounds — inflated by the ½-device-px AA fringe — the same shape as the
+                    // shadow-halo union above, so damage/off-screen-cull/opacity-extent see the true painted extent.
+                    float fillFringe = 0.5f / scaleQ;
+                    result.Include(pathWorld.TransformBounds(new RectF(
+                        fr.Bounds.X - fillFringe, fr.Bounds.Y - fillFringe,
+                        fr.Bounds.W + 2f * fillFringe, fr.Bounds.H + 2f * fillFringe)));
+                }
+                // Trim values reach the PAYLOAD, never the realization key (TryRealizeStroke's key folds geometry +
+                // style + scale only) — so a 60 Hz stroke-trim draw-on (the same StrokeTrim channels arc/polyline
+                // already consume) hits the SAME cached tessellation every frame; only the shader's per-frame trim
+                // uniform changes.
+                if (ps.StrokeColor.A > 0f && !ps.Stroke.IsNone)
+                {
+                    float t0 = float.IsNaN(p.StrokeTrimStart) ? ps.TrimStart : p.StrokeTrimStart;
+                    float t1 = float.IsNaN(p.StrokeTrimEnd) ? ps.TrimEnd : p.StrokeTrimEnd;
+                    t0 = Math.Clamp(t0, 0f, 1f);
+                    t1 = Math.Clamp(t1, 0f, 1f);
+                    if (t1 > t0 && PathRealizationCache.Shared.TryRealizeStroke(geometry, ps.Stroke, scaleQ, out var sr))
+                    {
+                        dl.StrokePath(local, ps.StrokeColor, sr, t0, t1, ps.Stroke.DashOn, ps.Stroke.DashOff, ps.TrimMode, pathWorld, opacity, key | 0x1);
+                        float strokeFringe = 0.5f / scaleQ;
+                        result.Include(pathWorld.TransformBounds(new RectF(
+                            sr.Bounds.X - strokeFringe, sr.Bounds.Y - strokeFringe,
+                            sr.Bounds.W + 2f * strokeFringe, sr.Bounds.H + 2f * strokeFringe)));
+                    }
+                }
+                break;
+            }
         }
 
         // Child-group shift (SizeMode.Reflow Trailing anchor): every child rides this offset while the node's own

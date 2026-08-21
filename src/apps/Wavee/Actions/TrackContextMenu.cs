@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using FluentGpu.Controls;
 using Wavee.Core;
 
@@ -19,10 +20,12 @@ public static class TrackContextMenu
     /// exactly the target set). <paramref name="showGoToAlbum"/> is false on album detail pages.</summary>
     public static ContextMenuModel? Build(
         ActionServices s, SelectionModel selection, Func<int, Track?> trackAt,
-        int itemIndex, Func<PlaylistHost?> host, bool showGoToAlbum = true)
+        int itemIndex, Func<PlaylistHost?> host, bool showGoToAlbum = true,
+        Func<Track, IReadOnlyList<MenuFlyoutItem>?>? singleTrackExtras = null)
     {
         if (TrackTargetResolver.Resolve(selection, trackAt, itemIndex, host) is not { } target) return null;
-        return Menus.Tracks(new ActionContext(target, s), showGoToAlbum);
+        var extras = target.Single is { } track ? singleTrackExtras?.Invoke(track) : null;
+        return Menus.Tracks(new ActionContext(target, s), showGoToAlbum, extras);
     }
 
     /// <summary>The eager-list overload (artist Popular pages without selection, search rows): one track, no host.</summary>

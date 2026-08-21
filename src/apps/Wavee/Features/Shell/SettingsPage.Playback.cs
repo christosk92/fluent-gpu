@@ -60,7 +60,7 @@ sealed partial class SettingsPage
         var settings = svc?.Settings;
         bool eqOn = settings?.Get(WaveeSettings.EqualizerEnabled) ?? false;
         bool crossOn = settings?.Get(WaveeSettings.CrossfadeEnabled) ?? false;
-        float[] gains = ReadEqGains(settings);
+        float[] gains = PlaybackDsp.ReadEqGains(settings);
         int preset = Math.Clamp(_eqPreset.Value, 0, s_eqPresetIds.Length - 1);
 
         Element Toggle(SettingKey<bool> key, bool pushDsp = false, bool bumpPlayerBar = false, bool bumpPlayback = false) =>
@@ -68,7 +68,7 @@ sealed partial class SettingsPage
             {
                 if (settings is null) return;
                 settings.Set(key, !settings.Get(key));
-                if (pushDsp) PushDsp(svc);
+                if (pushDsp) PlaybackDsp.Push(svc);
                 if (bumpPlayerBar) PlayerBarPrefs.Bump();
                 if (bumpPlayback) PlaybackPrefs.Bump();
                 Bump();
@@ -158,7 +158,7 @@ sealed partial class SettingsPage
         {
             if (settings is null) return;
             settings.Set(WaveeSettings.EqualizerEnabled, !settings.Get(WaveeSettings.EqualizerEnabled));
-            PushDsp(svc);
+            PlaybackDsp.Push(svc);
             Bump();
         }, style: SettingsCard.CompactToggleStyle());
 
@@ -205,7 +205,7 @@ sealed partial class SettingsPage
         {
             if (settings is null) return;
             settings.Set(WaveeSettings.CrossfadeEnabled, !settings.Get(WaveeSettings.CrossfadeEnabled));
-            PushDsp(svc);
+            PlaybackDsp.Push(svc);
             Bump();
         }, style: SettingsCard.CompactToggleStyle());
 
@@ -216,7 +216,7 @@ sealed partial class SettingsPage
             settings.Set(WaveeSettings.CrossfadeMs, ms);
             _crossSecs.Value = ms / 1000.0;
             _crossSlider.Value = (float)(ms / 1000.0);
-            PushDsp(svc);
+            PlaybackDsp.Push(svc);
             Bump();
         }
 
@@ -354,18 +354,6 @@ sealed partial class SettingsPage
             });
     }
 
-    static float[] ReadEqGains(IAppSettings? settings)
-    {
-        var gains = new float[10];
-        string raw = settings?.Get(WaveeSettings.EqualizerGains) ?? WaveeSettings.EqualizerGains.Default;
-        var parts = raw.Split(',', StringSplitOptions.TrimEntries);
-        for (int i = 0; i < gains.Length && i < parts.Length; i++)
-        {
-            if (float.TryParse(parts[i], NumberStyles.Float, CultureInfo.InvariantCulture, out float v))
-                gains[i] = Math.Clamp(v, -12f, 12f);
-        }
-        return gains;
-    }
 
     static string SerializeEqGains(float[] gains)
     {
@@ -398,7 +386,7 @@ sealed partial class SettingsPage
         _eqPreset.Value = idx;
         settings.Set(WaveeSettings.EqualizerPreset, s_eqPresetIds[idx]);
         settings.Set(WaveeSettings.EqualizerGains, SerializeEqGains(s_eqPresetGains[idx]));
-        PushDsp(svc);
+        PlaybackDsp.Push(svc);
         Bump();
     }
 
@@ -408,27 +396,18 @@ sealed partial class SettingsPage
         settings.Set(WaveeSettings.EqualizerGains, SerializeEqGains(s_eqPresetGains[0]));
         _eqPreset.Value = 0;
         settings.Set(WaveeSettings.EqualizerPreset, s_eqPresetIds[0]);
-        PushDsp(svc);
+        PlaybackDsp.Push(svc);
         Bump();
     }
 
     void SetEqBand(Services? svc, IAppSettings? settings, int band, float gain)
     {
         if (settings is null || band < 0 || band >= 10) return;
-        var gains = ReadEqGains(settings);
+        var gains = PlaybackDsp.ReadEqGains(settings);
         gains[band] = Math.Clamp(gain, -12f, 12f);
         settings.Set(WaveeSettings.EqualizerGains, SerializeEqGains(gains));
-        PushDsp(svc);
+        PlaybackDsp.Push(svc);
         Bump();
     }
 
-    static void PushDsp(Services? svc)
-    {
-        if (svc?.LiveHost?.Connect.Audio?.Host is not Wavee.Backend.IAudioDspControl dsp)
-            return;
-        var settings = svc.Settings;
-        dsp.SetEqualizer(settings.Get(WaveeSettings.EqualizerEnabled), ReadEqGains(settings));
-        dsp.SetCrossfade(settings.Get(WaveeSettings.CrossfadeEnabled),
-            Math.Clamp(settings.Get(WaveeSettings.CrossfadeMs), 0, 12_000));
-    }
 }

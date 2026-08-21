@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Globalization;
 using FluentGpu.Animation;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
@@ -40,6 +41,7 @@ sealed class TrackList : Component
     // width than the song title, and the pair splits the space left by the fixed columns rather than one of them
     // absorbing every squeeze. (Playlist/Liked only — album pages have no Album column.)
     const float TitleStar = 1f;
+    const float ArtistStar = 0.75f;
     const float AlbumStar = 0.75f;
     const int VerticalHeroIndex = 0;
     const int VerticalChromeIndex = 1;
@@ -114,7 +116,7 @@ sealed class TrackList : Component
     // change. That matters because _rowShape is a lazily-evaluated memo — it can recompute before this component's
     // render body would have had a chance to invalidate a tier-keyed cache.
     readonly Dictionary<ColumnSet, TrackSize[]> _tracksBySet = new();
-    (TrackSort Sort, string Query, TrackFilterState Filters) _viewKey = (new((SortColumn)(-1), false), "\0", TrackFilterState.Default);   // invalid sentinel
+    (DetailTrackSort Sort, string Query, TrackFilterState Filters) _viewKey = (new((SortColumn)(-1), false), "\0", TrackFilterState.Default);   // invalid sentinel
     IReadOnlyList<Track>? _viewTrackSet;                       // source-list identity paired with the sort/filter cache key
     IReadOnlySet<string>? _viewSavedSet;                       // only populated by Liked-only; reference change invalidates the cached map
     int[] _view = Array.Empty<int>();                          // filtered + sorted → original track-index map (rows read via this)
@@ -263,8 +265,8 @@ sealed class TrackList : Component
 
     readonly record struct TrackRowsSnapshot(
         DetailModel Model, DetailConfig Config, DetailHandlers Handlers,
-        TrackSort Sort, string Query, TrackFilterState Filters, IReadOnlySet<string>? Saved,
-        bool MarqueeDisabled, string? TopTrackId,
+        DetailTrackSort Sort, string Query, TrackFilterState Filters, IReadOnlySet<string>? Saved,
+        bool MarqueeDisabled, bool TrackArtworkHidden, bool Classic, string? TopTrackId,
         // The app-wide BPM·Key column opt-in. Carried in the SNAPSHOT (not read in SetFor) per the contract above:
         // an appearance flag read outside the snapshot would recompute, compare equal, and never reach the rows.
         bool TempoColumn = false,
@@ -363,7 +365,13 @@ sealed class TrackList : Component
     // Derived from the SNAPSHOT, never from the parent's mutable fields: a persistent row re-renders on its own
     // subscriptions (index rebind, sort, now-playing, and now the tier), so it must be able to derive its column set
     // without depending on this parent having published _cfg/_model first. Same contract as TrackRowsSnapshot itself.
-    ColumnSet SetFor(in TrackRowsSnapshot s, int tier) => _verticalHeader
+    ColumnSet SetFor(in TrackRowsSnapshot s, int tier)
+    {
+        var identity = DetailTrackTableRules.IdentityColumns(
+            s.Classic, s.Config.ShowArtThumb, s.TrackArtworkHidden, s.Config.ShowTrackArtist, tier);
+        var trailing = DetailTrackTableRules.TrailingColumns(
+            s.Classic, s.Model.HasVideo, s.Config.ShowVersions, tier);
+        return _verticalHeader
         // Vertical (Apple Music) profile: a simplified # · ♥ · (thumb) · Song(title + artist subline) · (Album) · Time · [⋯]
         // table. The artist rides the title subline (Spotify-style, per config), never its own lane; Album appears at wide
         // tiers (playlists/Liked) on the SAME gate as the standard profile; album surfaces retain their Plays lane so
@@ -383,11 +391,12 @@ sealed class TrackList : Component
         // glyph vanished on the hero/vertical system at every width. Actions is its exact complement — the trailing lane
         // is reserved ONCE (More rides IN the Video lane when Video is on).
         ? new(Album: s.Config.ShowAlbumColumn && tier < 2, By: s.Model.HasAddedBy && tier < 1, Date: s.Model.HasDateAdded && tier < 3,
-              Video: s.Model.HasVideo && tier < 6,
+              Video: trailing.Video,
               Plays: (s.Config.ShowPlays || (s.Config.PlaysColumnOptIn && s.PlaysColumn)) && tier < 3, Heart: tier < 5,
-              Thumb: s.Config.ShowArtThumb && tier < 5,
-              Actions: tier < 6 && !(s.Model.HasVideo && tier < 6), Tier: tier,
-              Tempo: s.Config.ShowTempo && s.TempoColumn, Expand: s.Config.ShowVersions && tier < 6)
+              Thumb: identity.Thumb,
+              Actions: trailing.Actions, Tier: tier,
+              Tempo: s.Config.ShowTempo && s.TempoColumn, Expand: trailing.Expand,
+              Artist: identity.Artist, Classic: s.Classic)
         : new(
             Album: s.Config.ShowAlbumColumn && tier < 2,
             By: s.Model.HasAddedBy && tier < 1,
@@ -395,22 +404,24 @@ sealed class TrackList : Component
             // Video rides the trailing lane at EVERY tier that keeps one (down to, but not including, ultra-compact 6):
             // it costs 28 DIP and it is the only place the row states "this song has a video". The old tier-2 gate made
             // the glyph a wide-window luxury and forced the fact into the artist subline below — one fact in two lanes.
-            Video: s.Model.HasVideo && tier < 6,
+            Video: trailing.Video,
             Plays: (s.Config.ShowPlays || (s.Config.PlaysColumnOptIn && s.PlaysColumn)) && tier < 3,
             // Survives to tier 4 (was < 4) — a 28-DIP lane that answers "is this in my library?" (and is the like
             // affordance) earns its place further down the ladder than the old 40-DIP hover-only gutter.
             Heart: tier < 5,
-            Thumb: s.Config.ShowArtThumb && tier < 5,
+            Thumb: identity.Thumb,
             // Video lane hosts More (rest=Movie / hover=bare "…") — reserve the trailing Actions track only when
             // Video is off. EXACT complement of the Video expression above, so the trailing lane is reserved once and
             // never twice. Ultra-compact still drops both (More stays reachable via the row context menu).
-            Actions: tier < 6 && !(s.Model.HasVideo && tier < 6),
+            Actions: trailing.Actions,
             Tier: tier,
             // Tempo gates on the tier inside TrackRow.ShowTempo (<= 3), so the flag here is purely "does this surface
             // want the column at all" — one place decides presence, one place decides width pressure.
             Tempo: s.Config.ShowTempo && s.TempoColumn,
             // The drawer needs room to breathe, so the chevron follows the same width gate as the "…" lane.
-            Expand: s.Config.ShowVersions && tier < 6);
+            Expand: trailing.Expand,
+            Artist: identity.Artist, Classic: s.Classic);
+    }
 
     // Right-area-width breakpoints (sized off the widest column set), so the Star Title keeps a usable width at each
     // tier's minimum. Fewer-column contexts just cross the same widths with nothing to drop until a present column.
@@ -449,6 +460,7 @@ sealed class TrackList : Component
         if (s.Heart) t.Add(TrackSize.Px(TrackRow.HeartCol));  // ♥ in the LEFT cluster — between # and the art thumb
         if (s.Thumb) t.Add(TrackSize.Px(ThumbSize));   // dedicated art column: the Title header aligns over the title text, not the art
         t.Add(TrackSize.Star(TitleStar));
+        if (s.Artist) t.Add(TrackSize.Star(ArtistStar));
         // Album is a SECOND star track at AlbumStar : TitleStar (0.75 : 1), not a fixed 180 DIP lane. Two consequences,
         // both wanted: the album name can never be wider than the song title (it is the weaker fact), and the two share
         // the squeeze proportionally instead of the fixed lane holding its 180 while the flexible Title collapses toward
@@ -483,7 +495,7 @@ sealed class TrackList : Component
     static float ArtCentreIndent(in ColumnSet s)
     {
         float gap = TrackRow.ColGapFor(s.Tier);
-        float x = TrackRow.PadXFor(s.Tier) - TrackRow.RowInset;   // the grid's own left pad
+        float x = TrackRow.PadXFor(s.Tier) - (s.Classic ? 0f : TrackRow.RowInset);   // the grid's own left pad
         x += 36f;                                                 // the # column
         if (s.Heart) x += gap + TrackRow.HeartCol;
         // Land on the MIDDLE of the art so the rail drops from the centre of the cover, not its edge.
@@ -548,12 +560,14 @@ sealed class TrackList : Component
             // snapshot would recompute here, compare equal, and silently never reach the rows.
             _ = AppearancePrefs.Epoch.Value;
             bool noMarquee = svc?.Settings.Get(WaveeSettings.DisableMarquee) ?? false;
+            bool hideTrackArtwork = svc?.Settings.Get(WaveeSettings.HideTrackArtwork) ?? false;
+            bool classic = (svc?.Settings.Get(WaveeSettings.TrackRowStyle) ?? 0) == 1;
             var filters = handlers.Filters.Value;
             IReadOnlySet<string>? saved = filters.LikedOnly ? _lib?.Saved.Value : null;
             return new TrackRowsSnapshot(
                 currentModel, config, handlers,
                 handlers.Sort.Value, handlers.Query.Value.Trim(), filters, saved,
-                noMarquee, TopTrack(currentModel.Tracks),
+                noMarquee, hideTrackArtwork, classic, TopTrack(currentModel.Tracks),
                 handlers.TempoColumn.Value, handlers.PlaysColumn?.Value ?? false);
         });
         var rowItems = UseMemo(() => BoundItems.Project(
@@ -650,7 +664,7 @@ sealed class TrackList : Component
         int density = _h.Density.Value;          // subscribe → remount with the new row height on density change
         string query = _h.Query.Value;           // subscribe → remount with the filtered set on query change
         var filters = _h.Filters.Value;          // subscribe → update on local advanced-filter changes
-        float rowH = TrackRow.RowHeightFor(density);
+        float rowH = DetailTrackTableRules.RowHeightFor(density, set.Classic);
         var verticalLayout = UseMemo(() => new MeasuredStackVirtualLayout(rowH), rowH);
         // The flat list's layout. Stateful — hoisted so it survives re-renders and keeps its extent table.
         var flatLayout = UseMemo(() => new MeasuredStackVirtualLayout(rowH), rowH);
@@ -889,7 +903,7 @@ sealed class TrackList : Component
         // every bound slot in the viewport for nothing. A capable page mounts the recommendations template up front and
         // simply carries a total of `visible` until the gate goes live.
         string filterKey = _verticalHeader ? "" : ":q" + query + ":f" + filters.GetHashCode();
-        Element listKeyed = new BoxEl { Key = "list:" + _route.Value.Name + ":" + (_verticalHeader ? "vh:" : "") + "d" + density + filterKey + ":r" + _resetEpoch + (recsCapable ? ":rec" : ""), Grow = listGrow, Shrink = 1f, MinHeight = 0f, Direction = 1, Children = [list] };
+        Element listKeyed = new BoxEl { Key = "list:" + _route.Value.Name + ":" + (_verticalHeader ? "vh:" : "") + "d" + density + (set.Classic ? ":classic" : ":modern") + filterKey + ":r" + _resetEpoch + (recsCapable ? ":rec" : ""), Grow = listGrow, Shrink = 1f, MinHeight = 0f, Direction = 1, Children = [list] };
 
         Element rightBody = _cfg.HasTrailing
             ? TrailingBody(listKeyed,
@@ -1001,7 +1015,9 @@ sealed class TrackList : Component
         Caption = InsertionCaption,
         RefusalCaption = DropRefusalCaption,
         GapPreview = (payload, _) => WaveeResourceDrag.Unwrap(payload) is { } resource
-            ? PlaylistInsertionPreview.Cards(resource, TrackRow.RowHeightFor(_h.Density.Peek()))
+            ? PlaylistInsertionPreview.Cards(resource,
+                DetailTrackTableRules.RowHeightFor(_h.Density.Peek(), _rowsSnapshot?.Peek().Classic ?? false),
+                showArtwork: !AppearancePrefs.TrackArtworkHidden(_svc?.Settings))
             : new BoxEl { Height = 0f },
         PreviewCap = PlaylistInsertionPreview.Cap,
     };
@@ -1601,7 +1617,7 @@ sealed class TrackList : Component
     // dynamic-overflow behavior, in Wavee's own 32px pill styling. The rail owns Add-to-queue / Copy-to-playlist, so the
     // bar doesn't carry them. Keyed by the labeled state so a tier cross rebuilds cleanly. (Composed from ToolFx, not the
     // CommandBar control, which only does the classic labels-on-open mode.)
-    Element Chrome(ColumnSet set, TrackSize[] tracks, TrackSort sort, bool labeled, int tier, bool checkInset,
+    Element Chrome(ColumnSet set, TrackSize[] tracks, DetailTrackSort sort, bool labeled, int tier, bool checkInset,
                    float padX = PadX, float? padRight = null, Element? contentFilterBar = null)
     {
         Element header = Header(set, tracks, sort, checkInset);
@@ -1716,13 +1732,15 @@ sealed class TrackList : Component
                     {
                         Size = 14f,
                         FontFamily = WaveeIcons.Font,
-                        Color = Tok.TextSecondary,
+                        // SplitButton owns this content after mount, so a literal token would freeze across a live
+                        // theme flip. Keep the ink on a binding just like the theme-live page surface behind it.
+                        Color = Prop.Of(static () => Tok.TextSecondary),
                     },
                     new TextEl(Loc.Get(Strings.Detail.PlayNext))
                     {
                         Size = 12f,
                         Weight = 600,
-                        Color = Tok.TextSecondary,
+                        Color = Prop.Of(static () => Tok.TextSecondary),
                     },
                 ],
             };
@@ -2118,31 +2136,36 @@ sealed class TrackList : Component
         Children = [Icon(glyph, 14f, Tok.TextSecondary)],
     }.Interactive(Interaction.Subtle);
 
-    Element Header(ColumnSet set, TrackSize[] tracks, TrackSort sort, bool checkInset)
+    Element Header(ColumnSet set, TrackSize[] tracks, DetailTrackSort sort, bool checkInset)
     {
         // Keyed exactly like the row cells (TrackRow.CellKey) — same reason: a breakpoint cross drops a MIDDLE column,
         // and an unkeyed positional diff would reconcile the surviving header cells against the wrong ones.
         var cells = new List<Element>(tracks.Length);
         void Add(string key, Element cell) => cells.Add(cell with { Key = key });
 
-        Add(TrackRow.CellKey.Num, IndexSortCell(sort));
+        Add(TrackRow.CellKey.Num, set.Classic ? new BoxEl() : IndexSortCell(sort));
         if (set.Heart) Add(TrackRow.CellKey.Heart, new BoxEl());
         if (set.Thumb) Add(TrackRow.CellKey.Art, new BoxEl());
-        // Title / Song header: the standard Title→Artist SortLabel cycle everywhere (the artist rides the title subline,
-        // so this header is the only column route to an artist sort). The `song` flag reads "Song"/"Artist" in the
-        // vertical profile, "Title"/"Artist" elsewhere; SortMenuButton stays the always-available artist-sort route too.
-        Element titleHeader = Embed.Comp(() => new SortLabel(_h.Sort, song: _verticalHeader));
-        Add(TrackRow.CellKey.Title, SortCell(titleHeader, SortColumn.Title, sort, FlexJustify.Start));
-        if (set.Album) Add(TrackRow.CellKey.Album, SortCell(HLabel(Loc.Get(Strings.Detail.Column.Album), SortColumn.Album, sort), SortColumn.Album, sort, FlexJustify.Start));
-        if (set.By) Add(TrackRow.CellKey.By, PlainHeader(Loc.Get(Strings.Detail.Column.AddedBy)));
-        if (set.Date) Add(TrackRow.CellKey.Date, SortCell(HLabel(Loc.Get(Strings.Detail.Column.DateAdded), SortColumn.DateAdded, sort), SortColumn.DateAdded, sort, FlexJustify.Start));
-        if (set.Plays) Add(TrackRow.CellKey.Plays, SortCell(HLabel(Loc.Get(Strings.Detail.Column.Plays), SortColumn.Plays, sort), SortColumn.Plays, sort, FlexJustify.End));
+        // Title owns Artist only while the responsive grammar has folded Artist into its metadata subline. At wider
+        // Classic tiers Artist is a peer header and each cell owns an independent three-state sort cycle.
+        Element titleHeader = Embed.Comp(() => new SortLabel(
+            _h.Sort, song: _verticalHeader, artistColumn: set.Artist, classic: set.Classic))
+            with { Key = set.Classic ? "sort-label:classic" : "sort-label:modern" };
+        Add(TrackRow.CellKey.Title, SortCell(titleHeader, SortColumn.Title, sort, FlexJustify.Start, set.Artist));
+        if (set.Artist)
+            Add(TrackRow.CellKey.Artist, SortCell(
+                HLabel(Loc.Get(Strings.Detail.Column.Artist), SortColumn.Artist, sort, set.Classic),
+                SortColumn.Artist, sort, FlexJustify.Start, artistColumn: true));
+        if (set.Album) Add(TrackRow.CellKey.Album, SortCell(HLabel(Loc.Get(Strings.Detail.Column.Album), SortColumn.Album, sort, set.Classic), SortColumn.Album, sort, FlexJustify.Start));
+        if (set.By) Add(TrackRow.CellKey.By, PlainHeader(Loc.Get(Strings.Detail.Column.AddedBy), classic: set.Classic));
+        if (set.Date) Add(TrackRow.CellKey.Date, SortCell(HLabel(Loc.Get(Strings.Detail.Column.DateAdded), SortColumn.DateAdded, sort, set.Classic), SortColumn.DateAdded, sort, FlexJustify.Start));
+        if (set.Plays) Add(TrackRow.CellKey.Plays, SortCell(HLabel(Loc.Get(Strings.Detail.Column.Plays), SortColumn.Plays, sort, set.Classic), SortColumn.Plays, sort, FlexJustify.End));
         // Tempo · key. Not sortable: tempo lands ASYNCHRONOUSLY per row (kind 222), so a sort would reorder the list
         // under the user's cursor as adornments arrive. End-aligned to match the EndCell value lane.
-        if (TrackRow.ShowTempo(set)) Add(TrackRow.CellKey.Tempo, PlainHeader(Loc.Get(Strings.Detail.Column.Tempo), FlexJustify.End));
+        if (TrackRow.ShowTempo(set)) Add(TrackRow.CellKey.Tempo, PlainHeader(Loc.Get(Strings.Detail.Column.Tempo), FlexJustify.End, set.Classic));
         // Duration header: a "Time" text label in the vertical (Apple Music) profile, the clock icon everywhere else.
         Add(TrackRow.CellKey.Duration, SortCell(_verticalHeader
-                ? HLabel(Loc.Get(Strings.Detail.Column.Time), SortColumn.Duration, sort)
+                ? HLabel(Loc.Get(Strings.Detail.Column.Time), SortColumn.Duration, sort, set.Classic)
                 : Icon(Icons.Clock, 14f, sort.Column == SortColumn.Duration ? Tok.TextSecondary : Tok.TextTertiary),
                            SortColumn.Duration, sort, FlexJustify.End));
         if (set.Video) Add(TrackRow.CellKey.Video, new BoxEl());   // trailing film / "…" lane: no header label
@@ -2151,7 +2174,8 @@ sealed class TrackList : Component
 
         var grid = new GridEl
         {
-            Columns = tracks, ColGap = TrackRow.ColGapFor(set.Tier), RowHeight = HeaderHeight,
+            Columns = tracks, ColGap = TrackRow.ColGapFor(set.Tier),
+            RowHeight = DetailTrackTableRules.HeaderHeightFor(set.Classic),
             Children = cells.ToArray(),
         };
         var headerGrid = new BoxEl
@@ -2160,7 +2184,17 @@ sealed class TrackList : Component
             Padding = new Edges4(checkInset ? 28f : 0f, 0f, 0f, 0f),
             Animate = new LayoutTransition(TransitionChannels.Position,
                 TransitionDynamics.Tween(MotionTok.DisclosureExpand.DurationMs, Easing.FluentDecelerate)),
-            Children = [grid, new BoxEl { Height = 1f, Fill = Tok.StrokeDividerDefault }],
+            Children =
+            [
+                grid,
+                new BoxEl
+                {
+                    Height = 1f, Fill = Tok.StrokeDividerDefault,
+                    // Chrome already owns the same PadX inset that Classic rows apply locally. A second inset here
+                    // shortened only the header rule, so its endpoints missed every row hairline by one full PadX.
+                    Margin = Edges4.All(0f),
+                },
+            ],
         };
         return headerGrid;
     }
@@ -2170,29 +2204,36 @@ sealed class TrackList : Component
 
     // Does this header own the active sort? The Title header also owns Artist (the title subline has no column of its
     // own), so it stays lit — and reads "Artist" — while the list is sorted by artist.
-    static bool HeaderActive(SortColumn header, SortColumn active) =>
-        header == active || (header == SortColumn.Title && active == SortColumn.Artist);
+    static bool HeaderActive(SortColumn header, SortColumn active, bool artistColumn = false) =>
+        DetailTrackTableRules.HeaderActive(header, active, artistColumn);
 
     // The owning header brightens — EXCEPT Index (#), the default "original order", which carries no indicator.
-    static TextEl HLabel(string s, SortColumn col, TrackSort sort) =>
-        new(s)
+    static TextEl HLabel(string s, SortColumn col, DetailTrackSort sort, bool classic = false) =>
+        new(ClassicHeaderText(s, classic))
         {
-            Size = 12f, Weight = 600, Color = HeaderActive(col, sort.Column) ? Tok.TextSecondary : Tok.TextTertiary,
+            Size = classic ? 11f : 12f, Weight = 600,
+            CharSpacing = classic ? WaveeType.EyebrowTracking : 0f,
+            Color = HeaderActive(col, sort.Column) ? Tok.TextSecondary : Tok.TextTertiary,
             MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
         };
 
+    static string ClassicHeaderText(string label, bool classic) =>
+        classic ? label.ToUpper(CultureInfo.CurrentUICulture) : label;
+
     // A non-sortable column header — static label, no click/caret. Default Start (Added by); Tempo passes End so it
     // shares the value lane's right edge.
-    static Element PlainHeader(string label, FlexJustify justify = FlexJustify.Start) => new BoxEl
+    static Element PlainHeader(string label, FlexJustify justify = FlexJustify.Start, bool classic = false) => new BoxEl
     {
         Direction = 0, AlignItems = FlexAlign.Center, Justify = justify,
         MinWidth = 0f, ClipToBounds = true,
-        Children = [new TextEl(label) { Size = 12f, Weight = 600, Color = Tok.TextTertiary, MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis }],
+        Children = [new TextEl(ClassicHeaderText(label, classic)) { Size = classic ? 11f : 12f, Weight = 600,
+            CharSpacing = classic ? WaveeType.EyebrowTracking : 0f,
+            Color = Tok.TextTertiary, MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis }],
     };
 
     // The row number lives at the exact centre of its 36-DIP lane. Reserve the same 9-DIP slot on both sides and put
     // the descending caret only in the right slot, so enabling the indicator never nudges # away from the row numbers.
-    Element IndexSortCell(TrackSort sort)
+    Element IndexSortCell(DetailTrackSort sort)
     {
         bool showCaret = sort.Column == SortColumn.Index && sort.Descending;
         Element side(bool trailing) => new BoxEl
@@ -2221,9 +2262,9 @@ sealed class TrackList : Component
     // A clickable column header: click to sort by this column (toggles asc/desc on repeat), with a caret on the active
     // column (before the content for the right-aligned duration, after it otherwise). The default Index/# column shows
     // NO caret and resets to the original order on click.
-    Element SortCell(Element content, SortColumn col, TrackSort sort, FlexJustify justify)
+    Element SortCell(Element content, SortColumn col, DetailTrackSort sort, FlexJustify justify, bool artistColumn = false)
     {
-        bool showCaret = HeaderActive(col, sort.Column)
+        bool showCaret = HeaderActive(col, sort.Column, artistColumn)
             && (col != SortColumn.Index || sort.Descending);   // default/original order stays visually quiet
         // The caret is a self-animating component: it pops in when its column becomes the sort and springs its rotation
         // 0°↔180° on every direction flip (so the Title cell's ↑→↓→↑→↓ run reads as one continuous spin).
@@ -2238,7 +2279,7 @@ sealed class TrackList : Component
             // header label can never paint over the next column while the grid is narrower than its fixed tracks.
             MinWidth = 0f, ClipToBounds = true,
             Corners = CornerRadius4.All(Radii.Control), HoverFill = Tok.FillSubtleSecondary,
-            OnClick = () => _h.SetSort(NextSort(sort, col)),
+            OnClick = () => _h.SetSort(NextSort(sort, col, artistColumn)),
             Children = kids,
         };
     }
@@ -2247,25 +2288,14 @@ sealed class TrackList : Component
     // run of clicks always lands back on the default. The Title header carries TWO fields — Title then Artist — so it
     // cycles Title↑ → Title↓ → Artist↑ → Artist↓ → default (the only header route to an artist sort). The # / Index
     // header always resets to the default.
-    static TrackSort NextSort(TrackSort cur, SortColumn clicked)
-    {
-        if (clicked == SortColumn.Index)
-            return cur.Column == SortColumn.Index ? new TrackSort(SortColumn.Index, !cur.Descending) : TrackSort.Default;
-        if (clicked == SortColumn.Title)
-        {
-            if (cur.Column == SortColumn.Title) return cur.Descending ? new TrackSort(SortColumn.Artist, false) : new TrackSort(SortColumn.Title, true);
-            if (cur.Column == SortColumn.Artist) return cur.Descending ? TrackSort.Default : new TrackSort(SortColumn.Artist, true);
-            return new TrackSort(SortColumn.Title, false);
-        }
-        if (cur.Column == clicked) return cur.Descending ? TrackSort.Default : new TrackSort(clicked, true);
-        return new TrackSort(clicked, false);
-    }
+    static DetailTrackSort NextSort(DetailTrackSort cur, SortColumn clicked, bool artistColumn = false) =>
+        DetailTrackTableRules.NextSort(cur, clicked, artistColumn);
 
     /// <summary>The vertical/hero arm's shimmer: the reserved hero band, the REAL chrome (built exactly as
     /// <c>VerticalItemContent</c> builds list item 1 — same overload, same default inset — so the derived shimmer sits
     /// on the same column origin the loaded header will), then the row shimmer. Those three ARE the vertical list's
     /// item sequence, so a loaded page replaces each of them in place instead of appearing above them (D49).</summary>
-    Element VerticalShimmer(ColumnSet set, TrackSize[] tracks, TrackSort sort, bool labeled, int tier,
+    Element VerticalShimmer(ColumnSet set, TrackSize[] tracks, DetailTrackSort sort, bool labeled, int tier,
                             bool checkInset, Element? contentFilterBar, float rowH) => new BoxEl
     {
         Direction = 1,
@@ -2412,10 +2442,10 @@ sealed class TrackList : Component
     // row), so render it as a plain, bound, ellipsis TextEl — ONE node, no extra component, no measure cycle, no animation.
     // Recycle-safe: a recycled row is non-playing → stays plain (no type swap); only the single now-playing row uses the
     // marquee, and BoundRowContent re-renders (swapping plain↔marquee for just that row) when now-playing changes.
-    Element BoundTitlePlain(IReadSignal<Track> item) => new TextEl(Prop.Of(() => item.Value.Title))
+    Element BoundTitlePlain(IReadSignal<Track> item, bool nowPlaying) => new TextEl(Prop.Of(() => item.Value.Title))
     {
         Size = 14f, Weight = 600,
-        Color = Tok.TextPrimary,
+        Color = nowPlaying ? Tok.AccentTextPrimary : Tok.TextPrimary,
         Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
     };
 
@@ -2493,7 +2523,7 @@ sealed class TrackList : Component
             // Marquee only for the now-playing row; every other row is a cheap plain ellipsis title (see BoundTitlePlain).
             Element title = st.IsNow && !row.MarqueeDisabled
                 ? _o.BoundTitle(_item)
-                : _o.BoundTitlePlain(_item);
+                : _o.BoundTitlePlain(_item, st.IsNow);
             Element grid = _o.RowGrid(t, row.DisplayIndex, st.IsNow, st.IsPlaying, st.IsBuffering, st.IsTop, title, shape.Set, shape.Tracks, _rowH,
                               onPlay: () => _o.PlayRow(row.DisplayIndex),
                               saved: st.Saved, onLike: t.Uri.Length > 0 ? (Action)(() =>
@@ -2716,7 +2746,8 @@ sealed class TrackList : Component
                 onPlay: () => { _ = _bridge?.Player.PlayAsync(t.Uri, 0); },
                 art: 40f, showArtists: true, explicitBadge: true, showDuration: true,
                 onAdd: () => AddRec(t),
-                showMore: _acts is not null && _menuOverlay is not null),
+                showMore: _acts is not null && _menuOverlay is not null,
+                showArtwork: !_rowsSnapshot!.Peek().TrackArtworkHidden),
         ],
     }.WithMenu(_menuOverlay is { } ov ? Menus.TrackAttach(_acts, ov, t) : null);
 
@@ -2849,7 +2880,7 @@ sealed class TrackList : Component
 
     static bool IsNaturalContextOrder(TrackRowsSnapshot snapshot, int[] v)
     {
-        if (snapshot.Sort != TrackSort.Default) return false;
+        if (snapshot.Sort != DetailTrackSort.Default) return false;
         if (snapshot.Query.Length != 0 || !snapshot.Filters.IsDefault) return false;
         if (v.Length != snapshot.Model.Tracks.Count) return false;
         for (int i = 0; i < v.Length; i++)
@@ -2916,9 +2947,10 @@ sealed class TrackList : Component
             // Subscribe to the slot's own index too: it is half the row identity whenever the read model carries no
             // per-row uid, so a recycle must be able to move the drawer off this slot.
             int displayIndex = _scope.Index.Value - _trackStart;
+            var shape = _o._rowShape!.Value;                 // style/columns are live for both the row skin and drawer
             var row = _o.WrapRowSwipe(_scope,
                 _o.BoundRowSkin(_scope, _o.BoundRow(_scope, _item, _rowH, _trackStart, rowHovered),
-                    _rowH, _narrate, _trackStart, rowHovered),
+                    _rowH, _narrate, _trackStart, shape.Set, rowHovered),
                 _trackStart, _item);
 
             bool hasTrack = track is { Uri.Length: > 0 };
@@ -2932,7 +2964,6 @@ sealed class TrackList : Component
             {
                 // Subscribe to the shape: a breakpoint cross changes which leading columns exist, so an open drawer
                 // must re-indent in place rather than keep the indent it mounted with.
-                var shape = _o._rowShape!.Value;
                 var model = new TrackVersionsPanel.Model(
                     track!,
                     // A version's KIND is the user's requested form — clicking the music video means "watch it", not
@@ -2964,9 +2995,15 @@ sealed class TrackList : Component
                     // The drawer continues the row's plate: same zebra parity, same inset, bottom corners only.
                     // BOUND, not a value — the slot recycles by an index-signal write, so a plain fill would keep
                     // whichever parity it was first built with.
-                    Fill = Prop.Of(() => _scope.Index.Value % 2 != 0 ? WaveeColors.RowZebra : ColorF.Transparent),
-                    Margin = new Edges4(TrackRow.RowInset, 0f, TrackRow.RowInset, 0f),
-                    Corners = new CornerRadius4(0f, 0f, 6f, 6f),
+                    Fill = shape.Set.Classic
+                        ? ColorF.Transparent
+                        : Prop.Of(() => _scope.Index.Value % 2 != 0 ? WaveeColors.RowZebra : ColorF.Transparent),
+                    Margin = shape.Set.Classic
+                        ? Edges4.All(0f)
+                        : new Edges4(TrackRow.RowInset, 0f, TrackRow.RowInset, 0f),
+                    Corners = shape.Set.Classic
+                        ? CornerRadius4.All(Radii.None)
+                        : new CornerRadius4(0f, 0f, 6f, 6f),
                     Children =
                     [
                         Ctx.Provide(TrackVersionsPanel.Props, model,
@@ -3025,7 +3062,8 @@ sealed class TrackList : Component
                     IReadSignal<bool>? hoverPaused = null)
     {
         var snapshot = presentation is null ? _rowsSnapshot!.Peek() : default;
-        bool showTrackArtist = presentation is { } row ? row.ShowTrackArtist : snapshot.Config.ShowTrackArtist;
+        bool configuredTrackArtist = presentation is { } row ? row.ShowTrackArtist : snapshot.Config.ShowTrackArtist;
+        bool showTrackArtist = configuredTrackArtist && !set.Artist;
         bool showListMetadata = presentation is { } rowMeta ? rowMeta.ShowListMetadata : snapshot.Config.ShowAlbumColumn;
         var go = presentation is { } rowGo ? rowGo.Go : snapshot.Handlers.Go;
         Owner? addedBy = presentation is { } rowOwner ? rowOwner.AddedBy : AddedByProfile(snapshot.Model, t);
@@ -3037,7 +3075,7 @@ sealed class TrackList : Component
                          // reserved lane but stays non-interactive and hidden.
                          // When Video is on, More lives in the Video lane (set.Actions false) → no trailing button.
                          // The ultra-compact tier also drops the "…" lane → no button built.
-                         actionsCell: set.Actions ? TrackRow.MoreButton(more) : null,
+                         actionsCell: set.Actions ? TrackRow.MoreButton(more, classic: set.Classic) : null,
                          // Keyed by the ROW, not the track: two rows holding the same song are two independent drawers.
                          // TRACKS only: the drawer's whole content is alternate versions + per-item audio format, and
                          // SpotifyTrackExpansionService is track-only by decision — an EPISODE row would open an empty
@@ -3047,7 +3085,7 @@ sealed class TrackList : Component
                                  MembershipDiff.RowKeyMatches(_expandedRow.Value, t, displayIndex),
                                  () => ToggleExpanded(MembershipDiff.RowKey(t, displayIndex)))
                              : null,
-                         showAlbumInMeta: showListMetadata && !set.Album,
+                         showAlbumInMeta: !set.Classic && showListMetadata && !set.Album,
                          showListBadges: showListMetadata,
                          moreEnabled: more,
                          hoverPaused: hoverPaused);
@@ -3066,7 +3104,7 @@ sealed class TrackList : Component
     // and the left accent pill is an ALWAYS-PRESENT child revealed by a BOUND opacity on scope.IsSelected — so a
     // selection change is a compositor-only re-skin (no list re-render, no remount, no Enter replay → no flash).
     // Border stays uniform; the bound hover/press restores the zebra-vs-flush hover-depth nuance.
-    BoxEl BoundRowSkin(RowScope scope, Element content, float rowH, bool entrance, int trackStart,
+    BoxEl BoundRowSkin(RowScope scope, Element content, float rowH, bool entrance, int trackStart, ColumnSet set,
                        Signal<bool>? rowHovered = null)
     {
         var index = scope.Index;
@@ -3105,15 +3143,16 @@ sealed class TrackList : Component
         // The hero-system page's STACKED flow uses plain rows (no per-row pill/border) — the page is one column there
         // and an inset pill reads as a second, narrower page. Row flow (a wide hero-system page) keeps the WinUI
         // zebra-pill treatment below, as every two-column page does.
-        bool plainRows = _verticalHeader && !_verticalHeroRowFlow;
+        bool classic = set.Classic;
+        bool plainRows = !classic && _verticalHeader && !_verticalHeroRowFlow;
         var skin = new BoxEl
         {
             ZStack = true, MinHeight = rowH, ClipToBounds = true,    // ZStack → the left accent bar overlays the content
-            Margin = plainRows ? Edges4.All(0f) : new Edges4(RowInset, 0f, RowInset, 0f), // inset → rounded pill (#32)
+            Margin = classic || plainRows ? Edges4.All(0f) : new Edges4(RowInset, 0f, RowInset, 0f), // inset → rounded pill (#32)
             // Bottom corners square while THIS row's drawer is open, so the row and the drawer below it read as one
             // taller pill instead of a rounded row with a second plate stuck to it. Bound, so opening a drawer re-skins
             // the row on the compositor without re-rendering the list.
-            Corners = plainRows
+            Corners = classic || plainRows
                 ? Prop.Of(() => CornerRadius4.All(0f))
                 : Prop.Of(() => DisplayTrack(index.Value, trackStart) is { Uri.Length: > 0 } dt
                                 && MembershipDiff.RowKeyMatches(_expandedRow.Value, dt, index.Value - trackStart)
@@ -3130,23 +3169,24 @@ sealed class TrackList : Component
             // The .mp4 drop cue rides the fill closure that already exists (an extra overlay child would cost a node per
             // row); DropCue() is a constant false when no drop target was built.
             DropTarget = drop,
-            Fill = plainRows ? Prop.Of(() => DropCue() ? WaveeColors.RowHover : ColorF.Transparent)
+            Fill = classic ? Prop.Of(() => DropCue() || isSel() ? WaveeColors.RowHover : ColorF.Transparent)
+                : plainRows ? Prop.Of(() => DropCue() ? WaveeColors.RowHover : ColorF.Transparent)
                 : Prop.Of(() => DropCue() ? WaveeColors.RowHover
                     : DisplayIndex() % 2 != 0 ? WaveeColors.RowZebra : ColorF.Transparent),
-            HoverFill = plainRows ? WaveeColors.RowHover
+            HoverFill = classic || plainRows ? WaveeColors.RowHover
                 : Prop.Of(() => DisplayIndex() % 2 != 0 ? WaveeColors.RowHoverZebra : WaveeColors.RowHover),
-            PressedFill = plainRows ? WaveeColors.RowPressed
+            PressedFill = classic || plainRows ? WaveeColors.RowPressed
                 : Prop.Of(() => DisplayIndex() % 2 != 0 ? WaveeColors.RowPressedZebra : WaveeColors.RowPressed),
-            PressScale = WaveeMotion.ScaleSubtle.Press,   // subtle push-down on press (a depth cue so the row isn't flat)
+            PressScale = WaveeMotion.ScaleSubtle.Press,
             // Stationary lift: the row stays in its slot at 0.4 (Atlassian's "it's in the chip" dim) while the chip
             // follows the pointer — the full-width lifted row snapshot was the S1 ghost failure.
             Draggable = Drag.Source(WaveeDragKinds.Resource, () => TrackDragPayload(index.Peek(), trackStart)),
 
-            BorderWidth = plainRows ? 0f : 1f,
+            BorderWidth = classic || plainRows ? 0f : 1f,
             // WinUI even rows: CardStroke at rest. BorderColor is Prop<ColorF> — bind to the zebra index.
-            BorderColor = plainRows ? ColorF.Transparent
+            BorderColor = classic || plainRows ? ColorF.Transparent
                 : Prop.Of(() => DisplayIndex() % 2 != 0 ? Tok.StrokeCardDefault : ColorF.Transparent),
-            HoverBorderColor = plainRows ? ColorF.Transparent : Tok.StrokeCardDefault,
+            HoverBorderColor = classic || plainRows ? ColorF.Transparent : Tok.StrokeCardDefault,
             FocusVisualMargin = Edges4.All(1f),
             Focusable = false,                       // the ItemsView roving effect owns the single tab stop
             Role = AutomationRole.Button,
@@ -3198,10 +3238,19 @@ sealed class TrackList : Component
                 new BoxEl
                 {
                     Key = "row-pill", Width = 3f, Height = 16f, Margin = new Edges4(2f, 0f, 0f, 0f),
-                    Corners = CornerRadius4.All(1.5f),
+                    Corners = classic ? CornerRadius4.All(Radii.None) : CornerRadius4.All(1.5f),
                     Fill = Prop.Of(() => _rowAccent!.Value), AlignSelf = FlexAlign.Center,
                     HitTestVisible = false, PressScale = 10f / 16f,
-                    Opacity = Prop.Of(() => isSel() && !_checksVisibleRead() ? 1f : 0f),
+                    Opacity = Prop.Of(() => !classic && isSel() && !_checksVisibleRead() ? 1f : 0f),
+                },
+                new BoxEl
+                {
+                    Key = "row-divider", AlignSelf = FlexAlign.End, JustifySelf = FlexAlign.Stretch,
+                    Height = 1f, Fill = classic ? Tok.StrokeDividerDefault : ColorF.Transparent,
+                    Margin = classic
+                        ? new Edges4(TrackRow.PadXFor(set.Tier), 0f, TrackRow.PadXFor(set.Tier), 0f)
+                        : Edges4.All(0f),
+                    HitTestVisible = false,
                 },
             ],
         };
@@ -3211,9 +3260,30 @@ sealed class TrackList : Component
         // vertical hero/chrome, overscan) resolve no track → no menu. Covers the flat, recommendations and vertical
         // layouts at once — all three go through this skin.
         if (_acts is { } acts && _menuOverlay is { } menuSvc)
+        {
+            IReadOnlyList<MenuFlyoutItem>? ClassicTrackExtras(Track track)
+            {
+                bool musicTrack = track.Uri.Length > 0 && EntityUri.KindOf(track.Uri) == EntityKind.Track;
+                bool showVersions = _rowsSnapshot?.Peek().Config.ShowVersions ?? _cfg.ShowVersions;
+                if (!DetailTrackTableRules.ShowClassicVersionsMenu(classic, showVersions, musicTrack)) return null;
+
+                int displayIndex = index.Peek() - trackStart;
+                string rowKey = MembershipDiff.RowKey(track, displayIndex);
+                return
+                [
+                    new MenuFlyoutItem(
+                        Loc.Get(Strings.Detail.Versions.VersionsAndFormats),
+                        Icons.List,
+                        Invoke: () => ToggleExpanded(rowKey)),
+                ];
+            }
+
+            Func<Track, IReadOnlyList<MenuFlyoutItem>?>? extras = classic ? ClassicTrackExtras : null;
             return skin.WithContextMenu(menuSvc, () => TrackContextMenu.Build(
                 acts, _selection, i => DisplayTrack(i, trackStart), index.Peek(), HostInfo,
-                showGoToAlbum: _rowsSnapshot?.Peek().Config.ShowAlbumColumn ?? _cfg.ShowAlbumColumn));
+                showGoToAlbum: _rowsSnapshot?.Peek().Config.ShowAlbumColumn ?? _cfg.ShowAlbumColumn,
+                singleTrackExtras: extras));
+        }
         return skin;
     }
 
@@ -3253,8 +3323,8 @@ sealed class MultiSelectButton : Component
 // (its column persists → the spring is velocity-continuous; a column change remounts it → it pops in afresh).
 sealed class SortCaret : Component
 {
-    readonly IReadSignal<TrackSort> _sort;
-    public SortCaret(IReadSignal<TrackSort> sort) { _sort = sort; }
+    readonly IReadSignal<DetailTrackSort> _sort;
+    public SortCaret(IReadSignal<DetailTrackSort> sort) { _sort = sort; }
 
     public override Element Render()
     {
@@ -3276,19 +3346,28 @@ sealed class SortCaret : Component
 // Title↔Artist swap reads as a transition rather than a snap.
 sealed class SortLabel : Component
 {
-    readonly IReadSignal<TrackSort> _sort;
+    readonly IReadSignal<DetailTrackSort> _sort;
     readonly bool _song;   // vertical (Apple Music) profile: the base label reads "Song" instead of "Title"
-    public SortLabel(IReadSignal<TrackSort> sort, bool song = false) { _sort = sort; _song = song; }
+    readonly bool _artistColumn;
+    readonly bool _classic;
+    public SortLabel(IReadSignal<DetailTrackSort> sort, bool song = false, bool artistColumn = false, bool classic = false)
+    { _sort = sort; _song = song; _artistColumn = artistColumn; _classic = classic; }
 
     public override Element Render()
     {
         var col = _sort.Value.Column;
-        string text = col == SortColumn.Artist ? Loc.Get(Strings.Detail.Column.Artist)
+        string text = !_artistColumn && col == SortColumn.Artist ? Loc.Get(Strings.Detail.Column.Artist)
             : Loc.Get(_song ? Strings.Detail.Column.Song : Strings.Detail.Column.Title);
-        bool active = col == SortColumn.Title || col == SortColumn.Artist;
+        if (_classic) text = text.ToUpper(CultureInfo.CurrentUICulture);
+        bool active = DetailTrackTableRules.HeaderActive(SortColumn.Title, col, _artistColumn);
         UseTransition(AnimChannel.Opacity, 0f, 1f, Expressive.Fast, Easing.SmoothOut, text);
         UseTransition(AnimChannel.TranslateY, 4f, 0f, Expressive.Fast, Easing.SmoothOut, text);
-        return new TextEl(text) { Size = 12f, Weight = 600, Color = active ? Tok.TextSecondary : Tok.TextTertiary };
+        return new TextEl(text)
+        {
+            Size = _classic ? 11f : 12f, Weight = 600,
+            CharSpacing = _classic ? WaveeType.EyebrowTracking : 0f,
+            Color = active ? Tok.TextSecondary : Tok.TextTertiary,
+        };
     }
 }
 
@@ -3517,14 +3596,14 @@ sealed class PlaylistTuneButton : Component
 
 sealed class SortMenuButton : Component
 {
-    readonly IReadSignal<TrackSort> _sort;
-    readonly Action<TrackSort> _setSort;
+    readonly IReadSignal<DetailTrackSort> _sort;
+    readonly Action<DetailTrackSort> _setSort;
     readonly bool _hasAlbum, _hasDate, _labeled;
     // A PREDICATE, not a bool, unlike hasAlbum/hasDate: those are facts about the SURFACE (frozen with the rest of this
     // component's props at mount, per component-props-contract), while the Plays lane is a live user toggle that has to
     // reach the menu the next time it OPENS — not the next time this button remounts.
     readonly Func<bool>? _hasPlays;
-    public SortMenuButton(IReadSignal<TrackSort> sort, Action<TrackSort> setSort, bool hasAlbum, bool hasDate,
+    public SortMenuButton(IReadSignal<DetailTrackSort> sort, Action<DetailTrackSort> setSort, bool hasAlbum, bool hasDate,
                           bool labeled = false, Func<bool>? hasPlays = null)
     { _sort = sort; _setSort = setSort; _hasAlbum = hasAlbum; _hasDate = hasDate; _labeled = labeled; _hasPlays = hasPlays; }
 
@@ -3541,7 +3620,7 @@ sealed class SortMenuButton : Component
     };
 
     internal static IReadOnlyList<MenuFlyoutItem> ItemsFor(
-        IReadSignal<TrackSort> sort, Action<TrackSort> setSort, bool hasAlbum, bool hasDate, bool hasPlays = false)
+        IReadSignal<DetailTrackSort> sort, Action<DetailTrackSort> setSort, bool hasAlbum, bool hasDate, bool hasPlays = false)
     {
         var cur = sort.Peek();
         var fields = new List<SortColumn>(7) { SortColumn.Index, SortColumn.Title, SortColumn.Artist };
@@ -3556,7 +3635,7 @@ sealed class SortMenuButton : Component
         var items = new List<MenuFlyoutItem>(fields.Count + 3);
         foreach (var col in fields)
             items.Add(MenuFlyoutItem.RadioItem(Label(col), cur.Column == col,
-                () => setSort(col == SortColumn.Index ? TrackSort.Default : new TrackSort(col, cur.Descending))));
+                () => setSort(col == SortColumn.Index ? DetailTrackSort.Default : new DetailTrackSort(col, cur.Descending))));
 
         // Direction applies to original/custom order too: descending is the explicit "invert this list" operation.
         items.Add(MenuFlyoutItem.Separator);
@@ -3641,7 +3720,7 @@ static class ToolFx
             Width = 1f,
             Height = 20f,
             AlignSelf = FlexAlign.Center,
-            Fill = Tok.StrokeDividerDefault,
+            Fill = Prop.Of(static () => Tok.StrokeDividerDefault),
         },
     };
 
@@ -3649,16 +3728,21 @@ static class ToolFx
     public static Element Button(string glyph, bool active, Action onClick, Action<NodeHandle> onRealized)
     {
         ColorF accent = Tok.AccentTextPrimary;
+        Prop<ColorF> ink = active
+            ? Prop.Of(static () => Tok.AccentTextPrimary)
+            : Prop.Of(static () => Tok.TextSecondary);
         return new BoxEl
         {
             Width = 32f, Height = 32f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
             Corners = CornerRadius4.All(Radii.Control),
-            Fill = active ? accent with { A = 0.11f } : ColorF.Transparent,
+            Fill = active
+                ? Prop.Of(static () => Tok.AccentTextPrimary with { A = 0.11f })
+                : ColorF.Transparent,
             HoverFill = active ? accent with { A = 0.17f } : Tok.FillSubtleSecondary,
             PressedFill = active ? accent with { A = 0.08f } : Tok.FillSubtleTertiary,
             HoverDurationMs = Motion.ControlFaster, PressDurationMs = Motion.ControlFaster,
             OnClick = onClick, OnRealized = onRealized,
-            Children = [Ui.Icon(glyph, 14f, active ? accent : Tok.TextSecondary)],
+            Children = [Ui.Icon(glyph, 14f) with { Color = ink }],
         };
     }
 
@@ -3668,12 +3752,17 @@ static class ToolFx
                                         Action<NodeHandle> onRealized, Element? trailing = null)
     {
         ColorF accent = Tok.AccentTextPrimary;
+        Prop<ColorF> ink = active
+            ? Prop.Of(static () => Tok.AccentTextPrimary)
+            : Prop.Of(static () => Tok.TextSecondary);
         return new BoxEl
         {
             Direction = 0, AlignItems = FlexAlign.Center, Gap = 6f, Height = 32f,
             Padding = new Edges4(9f, 0f, 10f, 0f),
             Corners = CornerRadius4.All(Radii.Control),
-            Fill = active ? accent with { A = 0.11f } : ColorF.Transparent,
+            Fill = active
+                ? Prop.Of(static () => Tok.AccentTextPrimary with { A = 0.11f })
+                : ColorF.Transparent,
             HoverFill = active ? accent with { A = 0.17f } : Tok.FillSubtleSecondary,
             PressedFill = active ? accent with { A = 0.08f } : Tok.FillSubtleTertiary,
             HoverDurationMs = Motion.ControlFaster, PressDurationMs = Motion.ControlFaster,
@@ -3681,13 +3770,13 @@ static class ToolFx
             Children = trailing is null
                 ?
                 [
-                    Ui.Icon(glyph, 14f, active ? accent : Tok.TextSecondary),
-                    new TextEl(label) { Size = 12f, Weight = 600, Color = active ? accent : Tok.TextSecondary },
+                    Ui.Icon(glyph, 14f) with { Color = ink },
+                    new TextEl(label) { Size = 12f, Weight = 600, Color = ink },
                 ]
                 :
                 [
-                    Ui.Icon(glyph, 14f, active ? accent : Tok.TextSecondary),
-                    new TextEl(label) { Size = 12f, Weight = 600, Color = active ? accent : Tok.TextSecondary },
+                    Ui.Icon(glyph, 14f) with { Color = ink },
+                    new TextEl(label) { Size = 12f, Weight = 600, Color = ink },
                     trailing,
                 ],
         };
@@ -3696,7 +3785,8 @@ static class ToolFx
     // A vertical group separator (the WinUI AppBarSeparator) — a 1px divider between command groups in the bar.
     public static Element Separator() => new BoxEl
     {
-        Width = 1f, Height = 20f, AlignSelf = FlexAlign.Center, Fill = Tok.StrokeDividerDefault,
+        Width = 1f, Height = 20f, AlignSelf = FlexAlign.Center,
+        Fill = Prop.Of(static () => Tok.StrokeDividerDefault),
         Margin = new Edges4(Spacing.XS, 0f, Spacing.XS, 0f),
     };
 

@@ -105,6 +105,9 @@ internal static class SkeletonDeriver
             case PolylineStrokeEl p:
                 return Bar(s, p.Width, p.Height, p.Grow, default, default, FlexAlign.Auto);
 
+            case PathEl pe:
+                return Bar(s, pe.Width, pe.Height, pe.Grow, default, default, FlexAlign.Auto);
+
             case ScrollEl sc:
                 return sc with { Content = Derive(sc.Content, s) };
 

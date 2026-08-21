@@ -20,7 +20,7 @@ namespace Wavee;
 /// default) accent colour.</summary>
 readonly record struct DetailHandlers(
     Action<int> Play, Action PlayAll, Action Shuffle, Action<string> PlayContext, Action<string, string?> Go, ColorF Accent,
-    IReadSignal<TrackSort> Sort, Action<TrackSort> SetSort,
+    IReadSignal<DetailTrackSort> Sort, Action<DetailTrackSort> SetSort,
     // List-view controls surfaced by the chrome / header toolbar (search query, advanced local filters, row density).
     Signal<string> Query, IReadSignal<TrackFilterState> Filters, Action<TrackFilterState> SetFilters,
     IReadSignal<int> Density, Action<int> SetDensity,
@@ -102,7 +102,7 @@ sealed class DetailShell : Component
     float _measuredW;                     // last measured page width (0 until the first positive bounds)
     float _measuredH;                     // last measured page height — the tone plane's hero-only fade is a fraction of it
     bool _modeInitialized;                // first measurement uses the nominal breakpoints; later vertical crosses hysteresis
-    readonly Signal<TrackSort> _sort = new(TrackSort.Default);   // track-list sort, persisted per context (loaded per route)
+    readonly Signal<DetailTrackSort> _sort = new(DetailTrackSort.Default);   // track-list sort, persisted per context (loaded per route)
     readonly Signal<string> _query = new("");                    // filter search query (transient — clears on navigation)
     readonly Signal<TrackFilterState> _filters = new(TrackFilterState.Default);   // local advanced filters (transient)
     readonly Signal<int> _density = new(1);                      // row density 0..3 (app-wide, persisted)
@@ -139,7 +139,7 @@ sealed class DetailShell : Component
     // Songs opens added-date-newest-first (the Spotify collection default). An explicit user choice persists ≥ 0.
     SettingKey<int> SortColKey() => new("detail.sort.col:" + (_ctxUri ?? _cfg.RailWidth.ToString()), -1);
     SettingKey<bool> SortDescKey() => new("detail.sort.desc:" + (_ctxUri ?? _cfg.RailWidth.ToString()), false);
-    TrackSort _defaultSort = TrackSort.Default;   // per-kind fallback, derived each render (DateAdded desc for Liked)
+    DetailTrackSort _defaultSort = DetailTrackSort.Default;   // per-kind fallback, derived each render (DateAdded desc for Liked)
 
     // Adaptive layout by the page's own width: 0 Wide (full rail) · 1 Mid (rail 224) · 2 Narrow (rail 188, still
     // two-column) · 3 Vertical (rail collapses to a top header, list below). Sized so the right track area keeps a
@@ -193,7 +193,7 @@ sealed class DetailShell : Component
         var raw = _model.Value.Value;                  // subscribe → re-render preview→full (header updates in place)
         _cfg = DetailPage.ResolveConfig(kind, raw);    // release-kind-dependent (album→single) → re-derived as the model loads
         _ctxUri = raw.ContextUri;                      // the per-context sort key, refreshed as the model loads
-        _defaultSort = kind == DetailKind.Liked ? new TrackSort(SortColumn.DateAdded, Descending: true) : TrackSort.Default;
+        _defaultSort = kind == DetailKind.Liked ? new DetailTrackSort(SortColumn.DateAdded, Descending: true) : DetailTrackSort.Default;
         // The cover is latched where the model is PUBLISHED (DetailPage: PreferVisible on the initial merge and on every
         // live refresh — same art at another CDN size keeps the rendition already on screen), so raw.Cover here is
         // already the stable one and every arm (rail, vertical hero, editable cover, tone plane) reads the same url.
@@ -322,12 +322,12 @@ sealed class DetailShell : Component
             _multiSelect.Value = false;
             if (settings is null) { _sort.Value = _defaultSort; return; }
             int col = settings.Get(SortColKey());   // −1 sentinel = never chosen → the per-kind default (Liked: DateAdded desc)
-            _sort.Value = col < 0 ? _defaultSort : new TrackSort((SortColumn)col, settings.Get(SortDescKey()));
+            _sort.Value = col < 0 ? _defaultSort : new DetailTrackSort((SortColumn)col, settings.Get(SortDescKey()));
             _density.Value = settings.Get(WaveeSettings.RowDensity);
             _tempoColumn.Value = settings.Get(WaveeSettings.TempoColumn);
             _playsColumn.Value = settings.Get(WaveeSettings.PlaysColumn);
         }, _ctxUri ?? "");
-        void SetSort(TrackSort s)
+        void SetSort(DetailTrackSort s)
         {
             _sort.Value = s;
             settings?.Set(SortColKey(), (int)s.Column);

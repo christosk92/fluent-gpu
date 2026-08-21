@@ -130,12 +130,12 @@ public class SidebarBootstrapTests : IDisposable
     // ── Run: the fresh-install branch ─────────────────────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void Run_FreshInstall_DefaultsToCurated_AndArmsTheChooser()
+    public void Run_FreshInstall_DefaultsToClassic_AndArmsTheChooser()
     {
         var settings = new MemoryAppSettings();
         SidebarBootstrap.Run(settings, _local);
 
-        Assert.Equal((int)SidebarDesign.Curated, settings.Get(WaveeSettings.SidebarDesign));
+        Assert.Equal((int)SidebarDesign.Classic, settings.Get(WaveeSettings.SidebarDesign));
         Assert.False(settings.Get(WaveeSettings.SidebarOnboardingSeen));   // the chooser will show ONCE
         Assert.Equal(SidebarBootstrap.TargetVersion, settings.Get(WaveeSettings.SidebarBootstrapVersion));
     }

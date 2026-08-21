@@ -75,7 +75,13 @@ sealed class LoginView : Component
 
         // Keyed cross-fade between screens (rise + fade); reduced-motion → instant (the engine honors Motion.ReducedMotion).
         string key = snap.Phase == LoginPhase.AwaitingApproval && snap.Challenge is { } ch ? "pair:" + ch.UserCode : "screen:" + snap.Phase;
-        card = card with { Key = key };
+        card = card with
+        {
+            Key = key,
+            Enter = new EnterExit(Dy: 8f, Opacity: 0f, Active: true),
+            Exit = new EnterExit(Dy: -4f, Opacity: 0f, Active: true),
+            Transition = MotionTok.StandardEnter,
+        };
 
         // Full-window Mica backdrop (the shell root runs Mica passthrough) → the centered card.
         return new BoxEl
@@ -125,7 +131,194 @@ sealed class LoginView : Component
     internal static Element FullAccent(string label, Action onClick) =>
         Button.Accent(label, onClick) with { AlignSelf = FlexAlign.Stretch, MinHeight = 44f };
 
+    internal static Element SpotifyBrand() => new BoxEl
+    {
+        Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center,
+        Children =
+        [
+            new TextEl(Icons.MusicNote) { Size = 30f, FontFamily = Theme.IconFont, Color = SpotifyGreen },
+            new TextEl("Spotify") { Size = 26f, Weight = 700, Color = SpotifyGreen },
+        ],
+    };
+
+    internal static Element BrowserLoginButton(Action onClick) => new BoxEl
+    {
+        AlignSelf = FlexAlign.Stretch, Direction = 0, Gap = Spacing.S,
+        AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, MinHeight = 48f,
+        Corners = Radii.ControlAll, Fill = Tok.AccentDefault,
+        HoverFill = Tok.AccentSecondary, PressedFill = Tok.AccentTertiary,
+        BrushTransitionMs = Motion.ControlFaster, Role = AutomationRole.Button,
+        Focusable = true, OnClick = onClick,
+        Children =
+        [
+            new TextEl(Loc.Get(Strings.Auth.LogIn)) { Size = 15f, Weight = 600, Color = Tok.TextOnAccentPrimary },
+            new TextEl(Icons.OpenInNewWindow) { Size = 14f, FontFamily = Theme.IconFont, Color = Tok.TextOnAccentPrimary },
+        ],
+    };
+
     internal static void OpenUrl(string url) => InputHooks.Current.Default.OpenUri?.Invoke(url);
+
+    // ── the QR pane + OR divider, extracted for reuse by the setup wizard's SignIn page (page 2) — a second full
+    // two-pane login card there would duplicate this column pixel-for-pixel, which is exactly the drift this repo
+    // keeps catching. TwoPaneLogin (below) composes these two the same way it always did.
+
+    internal static Element OrDivider(float width = 48f, bool horizontal = false) => horizontal
+        ? new BoxEl
+        {
+            Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+            AlignSelf = FlexAlign.Stretch, Gap = Spacing.S,
+            Children =
+            [
+                new BoxEl { Height = 1f, Grow = 1f, Fill = Tok.StrokeDividerDefault },
+                new BoxEl
+                {
+                    Padding = new Edges4(Spacing.S, Spacing.XS, Spacing.S, Spacing.XS),
+                    Corners = CornerRadius4.All(Radii.Pill), Fill = Tok.FillSubtleSecondary,
+                    Children = [WaveeType.Eyebrow(Loc.Get(Strings.Auth.Or)) with { Color = Tok.TextSecondary }],
+                },
+                new BoxEl { Height = 1f, Grow = 1f, Fill = Tok.StrokeDividerDefault },
+            ],
+        }
+        : new BoxEl
+    {
+        Direction = 1, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Width = width, Gap = Spacing.S,
+        Padding = new Edges4(0f, Spacing.S, 0f, Spacing.S),
+        Children =
+        [
+            new BoxEl { Width = 1f, Grow = 1f, Fill = Tok.StrokeDividerDefault },
+            new BoxEl
+            {
+                Padding = new Edges4(Spacing.S, Spacing.XS, Spacing.S, Spacing.XS),
+                Corners = CornerRadius4.All(Radii.Pill), Fill = Tok.FillSubtleSecondary,
+                Children = [WaveeType.Eyebrow(Loc.Get(Strings.Auth.Or)) with { Color = Tok.TextSecondary }],
+            },
+            new BoxEl { Width = 1f, Grow = 1f, Fill = Tok.StrokeDividerDefault },
+        ],
+    };
+
+    /// <summary>The QR + pairing-code column. <paramref name="copied"/>/<paramref name="onCopy"/> are the caller's own
+    /// "copied" feedback signal + writer (each mount scopes its own, per <see cref="CopyButton"/>'s doc comment).</summary>
+    // Returns BoxEl, not Element: the setup wizard's sign-in page re-sizes this pane with a `with` expression, and
+    // layout props (Grow/Basis/Width/Shrink) live on BoxEl — a declared `Element` return makes that a CS0117.
+    internal static BoxEl RightPane(LoginChallenge c, Signal<bool> copied, Action onCopy) => new BoxEl
+    {
+        Direction = 1, Grow = 1f, Basis = 0f, Gap = Spacing.M, AlignItems = FlexAlign.Center, Justify = FlexJustify.Start,
+        Padding = new Edges4(36f, 0f, 4f, 0f),
+        Children =
+        [
+            Embed.Comp(() => new QrGrid(c.VerificationUriComplete ?? c.VerificationUri, 220f)),
+            BodyStrong(Loc.Get(Strings.Auth.ScanToLogIn)),
+            // "Go to [spotify.com/pair ↗] and enter this code:" — the link carries the external-open glyph + tight padding.
+            new BoxEl
+            {
+                Direction = 0, Gap = 6f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, AlignSelf = FlexAlign.Center,
+                Children =
+                [
+                    Caption(Loc.Get(Strings.Auth.OrGoTo)).Secondary(),
+                    LinkWithIcon(Loc.Get(Strings.Auth.PairUrl), c.VerificationUri),
+                    Caption(Loc.Get(Strings.Auth.EnterCodeColon)).Secondary(),
+                ],
+            },
+            new BoxEl
+            {
+                Direction = 1, Gap = Spacing.S, AlignItems = FlexAlign.Center, AlignSelf = FlexAlign.Center,
+                Children =
+                [
+                    new TextEl(c.UserCode) { Size = 32f, Weight = 700, CharSpacing = 70f, FontFamily = CodeFont, Color = Tok.TextPrimary },
+                    new BoxEl
+                    {
+                        Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center,
+                        Children = [Embed.Comp(() => new CopyButton(copied, onCopy)), OpenButton(c.VerificationUriComplete ?? c.VerificationUri)],
+                    },
+                ],
+            },
+            // Live "Waiting for you to authorize…" (animated dots) + the 1 Hz expiry countdown — replaces the static status.
+            new BoxEl
+            {
+                Direction = 1, Gap = Spacing.S, AlignItems = FlexAlign.Center, AlignSelf = FlexAlign.Center, Margin = new Edges4(0, Spacing.S, 0, 0),
+                Children =
+                [
+                    new BoxEl
+                    {
+                        Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center,
+                        Children = [Embed.Comp(() => new WaitingDots()), Caption(Loc.Get(Strings.Auth.WaitingApproval)).Secondary()],
+                    },
+                    Embed.Comp(() => new LoginCountdown(c.Expiry)),
+                ],
+            },
+        ],
+    };
+
+    /// <summary>The setup wizard's deliberately lean 196-DIP pairing lane: the approved prototype's 138-DIP QR,
+    /// pairing link, code, expiry and waiting state. Copy/Open remain on <see cref="RightPane"/>, the standalone
+    /// takeover surface with enough room for them.</summary>
+    internal static BoxEl CompactRightPane(LoginChallenge c) => new BoxEl
+    {
+        Direction = 1, Width = SetupLayout.CompactPairingWidth, Shrink = 0f,
+        Gap = Spacing.S, AlignItems = FlexAlign.Center, Justify = FlexJustify.Start,
+        Padding = new Edges4(Spacing.M, Spacing.XXS, Spacing.M, Spacing.S),
+        Children =
+        [
+            Embed.Comp(() => new QrGrid(c.VerificationUriComplete ?? c.VerificationUri, SetupLayout.CompactQrSize)),
+            BodyStrong(Loc.Get(Strings.Auth.ScanToLogIn)),
+            new BoxEl
+            {
+                Direction = 0, Wrap = true, Gap = Spacing.XS, MinWidth = 0f,
+                AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, AlignSelf = FlexAlign.Stretch,
+                Children =
+                [
+                    Caption(Loc.Get(Strings.Auth.OrGoTo)).Secondary(),
+                    CompactPairingLink(Loc.Get(Strings.Auth.PairUrl), c.VerificationUri),
+                    Caption(Loc.Get(Strings.Auth.EnterCodeColon)).Secondary(),
+                ],
+            },
+            new TextEl(c.UserCode)
+            {
+                Size = 21f, Weight = 700, CharSpacing = 70f, FontFamily = CodeFont,
+                Color = Tok.TextPrimary, MaxLines = 1,
+            },
+            Embed.Comp(() => new LoginCountdown(c.Expiry, compact: true)),
+            new BoxEl
+            {
+                Direction = 0, Gap = Spacing.XS, AlignItems = FlexAlign.Center,
+                Children = [Caption(Loc.Get(Strings.Auth.WaitingApproval)).Secondary(), Embed.Comp(() => new WaitingDots())],
+            },
+        ],
+    };
+
+    static Element CompactPairingLink(string text, string url) => new BoxEl
+    {
+        Padding = new Edges4(Spacing.XXS, 0f, Spacing.XXS, 0f), Corners = CornerRadius4.All(Radii.Control),
+        Role = AutomationRole.Hyperlink, Focusable = true, Cursor = CursorId.Hand, OnClick = () => OpenUrl(url),
+        Children = [new TextEl(text) { Size = 12.5f, Weight = 600, Color = Tok.AccentTextPrimary, MaxLines = 1 }],
+    }.Interactive(Interaction.Subtle);
+
+    // A compact inline link with a trailing external-open glyph (tight padding so it sits flush between the words).
+    internal static Element LinkWithIcon(string text, string url) => new BoxEl
+    {
+        Direction = 0, Gap = 4f, AlignItems = FlexAlign.Center, Padding = new Edges4(3, 1, 3, 1), Corners = CornerRadius4.All(Radii.Control),
+        Role = AutomationRole.Hyperlink, Focusable = true, OnClick = () => OpenUrl(url),
+        Children =
+        [
+            new TextEl(text) { Size = 13f, Weight = 600, Color = Tok.AccentTextPrimary },
+            new TextEl(Icons.OpenInNewWindow) { Size = 11f, FontFamily = Theme.IconFont, Color = Tok.AccentTextPrimary },
+        ],
+    }.Interactive(Interaction.Subtle);
+
+    // Open the pairing page (pre-filled with the code via VerificationUriComplete) in the system browser.
+    static Element OpenButton(string url) => new BoxEl
+    {
+        Direction = 0, Gap = Spacing.XS, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+        Height = 34f, MinWidth = 96f, Padding = new Edges4(10, 0, 12, 0), Corners = CornerRadius4.All(Radii.Control),
+        Fill = Tok.FillControlDefault, HoverFill = Tok.FillControlSecondary, PressedFill = Tok.FillControlTertiary,
+        BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault, BrushTransitionMs = Motion.ControlFaster,
+        Role = AutomationRole.Button, Focusable = true, OnClick = () => OpenUrl(url),
+        Children =
+        [
+            new TextEl(Icons.OpenInNewWindow) { Size = 14f, FontFamily = Theme.IconFont, Color = Tok.TextSecondary },
+            new TextEl(Loc.Get(Strings.Auth.Open)) { Size = 12f, LineHeight = 16f, Color = Tok.TextSecondary },
+        ],
+    };
 
     // ── narrow status screens ────────────────────────────────────────────────────────────────────────────────────────
     Element Splash(string status, string? sub) => Card(
@@ -149,7 +342,7 @@ sealed class LoginView : Component
             {
                 Direction = 1, Gap = Spacing.XS, AlignSelf = FlexAlign.Stretch,
                 Padding = new Edges4(Spacing.S, Spacing.XS, Spacing.S, 0),
-                Stagger = 55f,   // MILLISECONDS on the live path (Reconciler → LayoutTransition.DelayMs), despite the doc
+                Stagger = Motion.ReducedMotion ? 0f : WaveeMotion.StaggerMs,
                 Children =
                 [
                     Row(LoginStep.Connecting, Loc.Get(Strings.Auth.StepConnecting)),
@@ -211,7 +404,7 @@ sealed class TwoPaneLogin : Component
         var content = new BoxEl
         {
             Direction = 0, AlignItems = FlexAlign.Stretch, AlignSelf = FlexAlign.Stretch,
-            Children = [LeftPane(), OrDivider(), RightPane(copied, () =>
+            Children = [LeftPane(), LoginView.OrDivider(), LoginView.RightPane(_c, copied, () =>
             {
                 InputHooks.Current.Default.Clipboard?.SetText(_c.UserCode);
                 InputHooks.Current.Default.Announce?.Invoke(Loc.Get(Strings.Auth.Copied), false);   // screen-reader confirm
@@ -254,122 +447,14 @@ sealed class TwoPaneLogin : Component
         Children =
         [
             // Spotify wordmark (green) — identification use; the disclaimer below states the trademark.
-            new BoxEl
-            {
-                Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center,
-                Children =
-                [
-                    new TextEl(Icons.MusicNote) { Size = 30f, FontFamily = Theme.IconFont, Color = LoginView.SpotifyGreen },
-                    new TextEl("Spotify") { Size = 26f, Weight = 700, Color = LoginView.SpotifyGreen },
-                ],
-            },
+            LoginView.SpotifyBrand(),
             new TextEl(Loc.Get(Strings.Auth.SpotifySignInWeb)) { Size = 14f, LineHeight = 20f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap, MaxWidth = 330f },
             // The primary: open the official Spotify login in the system browser (PKCE loopback races the device code).
-            new BoxEl
-            {
-                AlignSelf = FlexAlign.Stretch, Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, MinHeight = 48f,
-                Corners = Radii.ControlAll, Fill = Tok.AccentDefault, HoverFill = Tok.AccentSecondary, PressedFill = Tok.AccentTertiary,
-                BrushTransitionMs = Motion.ControlFaster, Role = AutomationRole.Button, Focusable = true, OnClick = _onLoginBrowser,
-                Children =
-                [
-                    new TextEl(Loc.Get(Strings.Auth.LogIn)) { Size = 15f, Weight = 600, Color = Tok.TextOnAccentPrimary },
-                    new TextEl(Icons.OpenInNewWindow) { Size = 14f, FontFamily = Theme.IconFont, Color = Tok.TextOnAccentPrimary },
-                ],
-            },
+            LoginView.BrowserLoginButton(_onLoginBrowser),
             new TextEl(Loc.Get(Strings.Auth.Disclaimer)) { Size = 11.5f, LineHeight = 17f, Color = Tok.TextTertiary, Wrap = TextWrap.Wrap, MaxWidth = 360f },
         ],
     };
 
-    Element OrDivider() => new BoxEl
-    {
-        Direction = 1, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Width = 48f, Gap = Spacing.S,
-        Children =
-        [
-            new BoxEl { Width = 1f, Grow = 1f, Fill = Tok.StrokeDividerDefault },
-            new BoxEl
-            {
-                Padding = new Edges4(10f, 4f, 10f, 4f), Corners = CornerRadius4.All(11f), Fill = Tok.FillSubtleSecondary,
-                Children = [WaveeType.Eyebrow(Loc.Get(Strings.Auth.Or)) with { Color = Tok.TextSecondary }],
-            },
-            new BoxEl { Width = 1f, Grow = 1f, Fill = Tok.StrokeDividerDefault },
-        ],
-    };
-
-    Element RightPane(Signal<bool> copied, Action onCopy) => new BoxEl
-    {
-        Direction = 1, Grow = 1f, Basis = 0f, Gap = Spacing.M, AlignItems = FlexAlign.Center, Justify = FlexJustify.Start,
-        Padding = new Edges4(36f, 0f, 4f, 0f),
-        Children =
-        [
-            Embed.Comp(() => new QrGrid(_c.VerificationUriComplete ?? _c.VerificationUri, 220f)),
-            BodyStrong(Loc.Get(Strings.Auth.ScanToLogIn)),
-            // "Go to [spotify.com/pair ↗] and enter this code:" — the link carries the external-open glyph + tight padding.
-            new BoxEl
-            {
-                Direction = 0, Gap = 6f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, AlignSelf = FlexAlign.Center,
-                Children =
-                [
-                    Caption(Loc.Get(Strings.Auth.OrGoTo)).Secondary(),
-                    LinkWithIcon(Loc.Get(Strings.Auth.PairUrl), _c.VerificationUri),
-                    Caption(Loc.Get(Strings.Auth.EnterCodeColon)).Secondary(),
-                ],
-            },
-            new BoxEl
-            {
-                Direction = 1, Gap = Spacing.S, AlignItems = FlexAlign.Center, AlignSelf = FlexAlign.Center,
-                Children =
-                [
-                    new TextEl(_c.UserCode) { Size = 32f, Weight = 700, CharSpacing = 70f, FontFamily = LoginView.CodeFont, Color = Tok.TextPrimary },
-                    new BoxEl
-                    {
-                        Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center,
-                        Children = [Embed.Comp(() => new CopyButton(copied, onCopy)), OpenButton(_c.VerificationUriComplete ?? _c.VerificationUri)],
-                    },
-                ],
-            },
-            // Live "Waiting for you to authorize…" (animated dots) + the 1 Hz expiry countdown — replaces the static status.
-            new BoxEl
-            {
-                Direction = 1, Gap = Spacing.S, AlignItems = FlexAlign.Center, AlignSelf = FlexAlign.Center, Margin = new Edges4(0, Spacing.S, 0, 0),
-                Children =
-                [
-                    new BoxEl
-                    {
-                        Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center,
-                        Children = [Embed.Comp(() => new WaitingDots()), Caption(Loc.Get(Strings.Auth.WaitingApproval)).Secondary()],
-                    },
-                    Embed.Comp(() => new LoginCountdown(_c.Expiry)),
-                ],
-            },
-        ],
-    };
-
-    // A compact inline link with a trailing external-open glyph (tight padding so it sits flush between the words).
-    static Element LinkWithIcon(string text, string url) => new BoxEl
-    {
-        Direction = 0, Gap = 4f, AlignItems = FlexAlign.Center, Padding = new Edges4(3, 1, 3, 1), Corners = CornerRadius4.All(Radii.Control),
-        Role = AutomationRole.Hyperlink, Focusable = true, OnClick = () => LoginView.OpenUrl(url),
-        Children =
-        [
-            new TextEl(text) { Size = 13f, Weight = 600, Color = Tok.AccentTextPrimary },
-            new TextEl(Icons.OpenInNewWindow) { Size = 11f, FontFamily = Theme.IconFont, Color = Tok.AccentTextPrimary },
-        ],
-    }.Interactive(Interaction.Subtle);
-
-    // Open the pairing page (pre-filled with the code via VerificationUriComplete) in the system browser.
-    static Element OpenButton(string url) => new BoxEl
-    {
-        Direction = 0, Gap = Spacing.XS, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-        Height = 34f, MinWidth = 96f, Padding = new Edges4(10, 0, 12, 0), Corners = CornerRadius4.All(Radii.Control),
-        Fill = Tok.FillControlDefault, HoverFill = Tok.FillControlSecondary, PressedFill = Tok.FillControlTertiary,
-        BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault, BrushTransitionMs = Motion.ControlFaster,
-        Role = AutomationRole.Button, Focusable = true, OnClick = () => LoginView.OpenUrl(url),
-        Children =
-        [
-            new TextEl(Icons.OpenInNewWindow) { Size = 14f, FontFamily = Theme.IconFont, Color = Tok.TextSecondary },
-            new TextEl(Loc.Get(Strings.Auth.Open)) { Size = 12f, LineHeight = 16f, Color = Tok.TextSecondary },
-        ],
-    };
 }
 
 // ── The copy button — an explicit scale-POP on the checkmark when copied (the proven anim-keyframe path, not a keyed Enter
@@ -438,18 +523,6 @@ sealed class LoginStepRow : Component
         bool current = cur == mine;
         bool failed = current && snap.Phase == LoginPhase.Failed;
 
-        var iconRef = UseRef<NodeHandle>(default);
-        UseEffect(() =>
-        {
-            if (!done || Motion.ReducedMotion) return;
-            var anim = Context.Anim;
-            var scene = Context.Scene;
-            if (anim is null || scene is null || iconRef.Value.IsNull || !scene.IsLive(iconRef.Value)) return;
-            var pop = new Keyframe[] { new(0f, 0.3f, Easing.EaseOut), new(0.55f, 1.18f, Easing.EaseOut), new(1f, 1f, Easing.EaseInOut) };
-            anim.Keyframes(iconRef.Value, AnimChannel.ScaleX, pop, 320f, loop: false);
-            anim.Keyframes(iconRef.Value, AnimChannel.ScaleY, pop, 320f, loop: false);
-        }, done);
-
         Element mark = current && !failed
             ? ProgressRing.Indeterminate(16f)
             : new TextEl(failed ? Icons.Cancel : done ? Icons.Accept : Icons.RadioBullet)
@@ -458,6 +531,14 @@ sealed class LoginStepRow : Component
                 FontFamily = Theme.IconFont,
                 Color = failed ? Tok.SystemFillCritical : done ? Tok.AccentDefault : Tok.TextTertiary,
             };
+        string markState = failed ? "failed" : done ? "done" : current ? "current" : "pending";
+        mark = mark with
+        {
+            Key = "login-step-mark:" + markState,
+            Enter = new EnterExit(Sx: 0.72f, Sy: 0.72f, Opacity: 0f, Active: true),
+            Exit = new EnterExit(Sx: 0.88f, Sy: 0.88f, Opacity: 0f, Active: true),
+            Transition = MotionTok.ControlNormal,
+        };
 
         return new BoxEl
         {
@@ -468,7 +549,7 @@ sealed class LoginStepRow : Component
                 new BoxEl
                 {
                     Width = 18f, Height = 18f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                    OnRealized = h => iconRef.Value = h, Children = [mark],
+                    Children = [mark],
                 },
                 new TextEl(_label)
                 {
@@ -484,12 +565,23 @@ sealed class LoginStepRow : Component
 }
 
 // ── The Finalizing progress bar ──────────────────────────────────────────────────────────────────────────────────────
-// Determinate off the step index, so the bar means something instead of sweeping forever. It SNAPS between the four
-// stops: ProgressBar binds its indicator width as a Prop<float> thunk, which the compositor re-evaluates but does not
-// interpolate. With the go-live stall fixed the steps land within a few hundred ms of each other, so the snap reads as
-// a deliberate tick rather than a stutter; smoothing it would mean animating the fill node's ScaleX directly.
+// Determinate off the step index, so the bar means something instead of sweeping forever. The stock ProgressBar remains
+// the primitive; its Fill part opts into token-driven width reflow so fast bootstrap writes ease between their real
+// values instead of flashing through four hard width snaps.
 sealed class LoginStepBar : Component
 {
+    static readonly LayoutTransition FillEase = new(
+        TransitionChannels.Size,
+        MotionTok.ControlNormal.ToDynamics(),
+        Size: SizeMode.Reflow,
+        Anchor: SizeAnchor.Leading,
+        Axes: SizeAxes.Width);
+
+    static readonly TemplateParts ProgressParts = new()
+    {
+        [ProgressBar.PartFill] = b => b with { Layout = FillEase },
+    };
+
     readonly Signal<LoginSnapshot> _login;
     public LoginStepBar(Signal<LoginSnapshot> login) { _login = login; }
 
@@ -499,7 +591,8 @@ sealed class LoginStepBar : Component
         const float Steps = 4f;    // Connecting / Metadata / Audio / Profile — Done means all four landed
         float v = Math.Clamp((int)snap.Step / Steps, 0f, 1f);
         return ProgressBar.Determinate(v, 220f,
-            snap.Phase == LoginPhase.Failed ? ProgressBarState.Error : ProgressBarState.Normal);
+            snap.Phase == LoginPhase.Failed ? ProgressBarState.Error : ProgressBarState.Normal,
+            ProgressParts);
     }
 }
 
@@ -543,7 +636,8 @@ sealed class WaitingDots : Component
 sealed class LoginCountdown : Component
 {
     readonly DateTimeOffset _expiry;
-    public LoginCountdown(DateTimeOffset expiry) => _expiry = expiry;
+    readonly bool _compact;
+    public LoginCountdown(DateTimeOffset expiry, bool compact = false) { _expiry = expiry; _compact = compact; }
 
     public override Element Render()
     {
@@ -563,6 +657,9 @@ sealed class LoginCountdown : Component
         var remaining = _expiry - DateTimeOffset.UtcNow;
         if (remaining < TimeSpan.Zero) remaining = TimeSpan.Zero;
         string txt = ((int)remaining.TotalMinutes).ToString("00") + ":" + remaining.Seconds.ToString("00");
+        if (_compact)
+            return new TextEl(Strings.Auth.ExpiresIn(txt)) { Size = 11.5f, Color = Tok.TextTertiary };
+
         return new BoxEl
         {
             Direction = 0, Gap = Spacing.XS, AlignItems = FlexAlign.Center,

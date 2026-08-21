@@ -69,7 +69,9 @@ public enum MediaCommandFlags : uint
     /// <summary>Navigate chapters.</summary>
     Chapters = 32768,
     /// <summary>Enter or leave fullscreen presentation.</summary>
-    Fullscreen = 65536
+    Fullscreen = 65536,
+    /// <summary>Select a video track (distinct camera/angle/program, not an adaptive quality rung).</summary>
+    SelectVideoTrack = 131072
 }
 
 /// <summary>The capability bitset surface (spec §10). One control kit drives file/stream/live/cast backends and greys out

@@ -20,10 +20,9 @@ namespace Wavee;
 //     SidebarPreferences.Design (a Signal<SidebarDesign>), and reading it through the delegate INSIDE Render subscribes
 //     this component to it directly. A mirror signal would need a write-during-render (the BackwardsWriteGuard's exact
 //     tripwire) to stay in step with a switch made from the sidebar's own layout menu while Settings is open.
-//  2. NO LIVE SIDEBARS IN THE PREVIEW. Each card's miniature is static BoxEl/TextEl geometry at 7-px type, never a
-//     mounted mode component — three live sidebars in a dialog is not worth the frame cost, and two of them would be
-//     mounted against state the user has not chosen. Real cached content (library row names, pin names) fills the name
-//     slots when it is already warm; when it is not, the slots are neutral bars. Fabricated titles are never shown.
+//  2. NO LIVE SIDEBARS OR MICRO-TEXT IN THE PREVIEW. Each card's miniature is static semantic geometry, never a
+//     mounted mode component. At this scale text only becomes grey noise (or leaks opaque IDs while data is warming),
+//     so every content slot is represented by a clean bar/tile hierarchy.
 //  3. NO IMAGE DECODES. The miniature's covers are solid tiles, not Images: at 10-16 DIP a real cover decode buys
 //     nothing legible and would put three N-cover working sets behind a dialog the user sees once.
 sealed class SidebarDesignPicker : Component
@@ -31,14 +30,17 @@ sealed class SidebarDesignPicker : Component
     readonly Func<int> _selected;
     readonly Action<int> _onChange;
     readonly bool _compact;
+    readonly bool _allowCustom;
 
     /// <param name="selected">The live selection, read on every render (0 Classic · 1 Library · 2 Wavee Curated — the
     /// persisted <c>WaveeSettings.SidebarDesign</c> numbering, via <see cref="SidebarDesignGating.IndexOf"/>).</param>
     /// <param name="onChange">Applied IMMEDIATELY on click — no confirmation, no restart (§C6.1).</param>
     /// <param name="compact">The 200×168 card (Settings, where the picker shares a page column) instead of 224×196.</param>
-    public SidebarDesignPicker(Func<int> selected, Action<int> onChange, bool compact = false)
+    /// <param name="allowCustom">Temporary feature gate for the unfinished Custom design. When false, its preview is
+    /// still visible for discoverability but is disabled and labelled “Coming soon”.</param>
+    public SidebarDesignPicker(Func<int> selected, Action<int> onChange, bool compact = false, bool allowCustom = false)
     {
-        _selected = selected; _onChange = onChange; _compact = compact;
+        _selected = selected; _onChange = onChange; _compact = compact; _allowCustom = allowCustom;
     }
 
     // ── hosts ─────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -46,18 +48,18 @@ sealed class SidebarDesignPicker : Component
     /// <summary>The card row bound to the preference service: the ONE apply path (<c>SwitchDesign</c>) and the ONE
     /// selection source (<c>Design</c>). <paramref name="settings"/> is the fallback writer for the isolated-mount case
     /// (a settings page hosted without <c>SidebarPreferences</c> — the picker still functions and still persists).</summary>
-    public static Element Row(SidebarPreferences? prefs, IAppSettings? settings, bool compact = false)
+    public static Element Row(SidebarPreferences? prefs, IAppSettings? settings, bool compact = false,
+                              bool allowCustom = false)
         => Embed.Comp(() => new SidebarDesignPicker(
             () => prefs is not null
                 ? SidebarDesignGating.IndexOf(prefs.Design.Value)
                 : SidebarDesignGating.IndexOf(SidebarDesignGating.ActiveDesign(settings)),
             value => Apply(prefs, settings, value),
-            compact))
-            // KEYED BY THE ONE FROZEN PROP. `prefs`/`settings` are reference-stable for the process, but `compact` is
-            // computed from the live viewport by the chooser — and a reused ComponentEl never re-runs its factory, so a
-            // resize across the threshold would otherwise keep rendering the old card size forever. A changed key is a
-            // remount, which is exactly the semantics wanted here (the cards carry no state to lose).
-            with { Key = compact ? "sidebar.design.picker.compact" : "sidebar.design.picker" };
+            compact,
+            allowCustom))
+            // KEYED BY THE FROZEN LAYOUT/AVAILABILITY PROPS. `prefs`/`settings` are reference-stable for the process,
+            // but compact can change at a viewport tier and the temporary availability gate will eventually flip.
+            with { Key = $"sidebar.design.picker:{(compact ? "compact" : "full")}:{allowCustom}" };
 
     /// <summary>Apply a card's value. Goes through <c>SwitchDesign</c> (state snapshot/restore + the settings write +
     /// the design signal bump) whenever the service exists; falls back to a bare settings write when it does not, so an
@@ -103,27 +105,36 @@ sealed class SidebarDesignPicker : Component
 
     public override Element Render()
     {
-        var prefs = UseContext(SidebarPreferences.Slot);
-        var store = UseContext(LibraryStore.Slot);
-
-        // Idempotent and already warmed by LibraryStore.WarmCheap in every real composition — this only covers a host
-        // that mounted the settings page before the warm ran. In an effect, never in the render body: Ensure* starts a
-        // task and completes into a signal write.
-        UseEffect(() => { store?.EnsurePlaylists(); }, DepKey.Empty);
-
         int sel = _selected();
-        var content = PreviewContent.Gather(prefs, store);
         var m = Metrics.For(_compact);
 
-        // ONE radio group, not three independent tab stops — which is what §C6.1's "group semantics are an engine
-        // follow-up" note was waiting for. WaveePicker.Strip delegates to FluentGpu.Controls.RadioButtons: a single tab
-        // stop that lands on the active design, arrow-key roving between the cards, selection following focus, and the
-        // wrap the row needs when three cards do not fit. The apply path is unchanged — Strip's onChange is _onChange,
-        // so every selection still goes through SwitchDesign.
-        return WaveePicker.Strip(3, sel, (i, on) => Card(SidebarDesignGating.FromIndex(i), on, in m, in content), _onChange);
+        // The two available choices remain one real radio group. Custom is kept OUTSIDE it while unavailable so it is
+        // absent from arrow-key selection and cannot be invoked accidentally; its disabled card stays in the same
+        // wrapping row to communicate that the design exists without pretending it is usable.
+        if (!_allowCustom)
+        {
+            var unavailable = Card(SidebarDesign.Curated, sel == (int)SidebarDesign.Curated, in m, comingSoon: true);
+            return new BoxEl
+            {
+                Direction = 0, Wrap = true, Gap = Spacing.M, AlignItems = FlexAlign.Start,
+                Children =
+                [
+                    WaveePicker.Strip(2, sel < 2 ? sel : -1,
+                        (i, on) => Card(SidebarDesignGating.FromIndex(i), on, in m), _onChange),
+                    unavailable with
+                    {
+                        IsEnabled = false, Focusable = false, TabStop = false,
+                        Role = AutomationRole.RadioButton, Cursor = CursorId.No,
+                        Opacity = 0.62f, HoverScale = 1f, PressScale = 1f,
+                    },
+                ],
+            };
+        }
+
+        return WaveePicker.Strip(3, sel, (i, on) => Card(SidebarDesignGating.FromIndex(i), on, in m), _onChange);
     }
 
-    Element Card(SidebarDesign design, bool on, in Metrics m, in PreviewContent content)
+    BoxEl Card(SidebarDesign design, bool on, in Metrics m, bool comingSoon = false)
     {
         // WaveePicker owns the card shell, the accent ink pair and the selected-label treatment — the same three things
         // the Settings density/page-layout/palette pickers were each carrying their own copy of.
@@ -135,12 +146,14 @@ sealed class SidebarDesignPicker : Component
             Direction = 1, Gap = m.Gap, ClipToBounds = true,
             Padding = new Edges4(8f, 7f, 8f, 0f),   // no bottom pad: the miniature CONTINUES past the fold, like a pane
             Corners = CornerRadius4.All(6f),
-            Fill = on ? Tok.AccentDefault with { A = 0.08f } : Tok.FillSubtleTertiary with { A = 0.45f },
+            Fill = on ? Tok.AccentSubtle : Tok.FillLayerDefault,
+            BorderWidth = 1f,
+            BorderColor = on ? Tok.AccentDefault : Tok.StrokeCardDefault,
             Children = design switch
             {
-                SidebarDesign.LibraryV3 => LibraryPreview(in m, in content, ink.Block, ink.Faint),
-                SidebarDesign.Curated => CuratedPreview(in m, in content, ink.Block, ink.Faint),
-                _ => ClassicPreview(in m, in content, ink.Block, ink.Faint),
+                SidebarDesign.LibraryV3 => LibraryPreview(in m, ink.Block, ink.Faint),
+                SidebarDesign.Curated => CuratedPreview(in m, ink.Block, ink.Faint),
+                _ => ClassicPreview(in m, ink.Block, ink.Faint),
             },
         };
 
@@ -150,7 +163,9 @@ sealed class SidebarDesignPicker : Component
             Direction = 0, Gap = 6f, AlignItems = FlexAlign.Center, AlignSelf = FlexAlign.Stretch,
             // A11y honesty (§C6.1): the selected card is distinguishable by the "Active" tag as well as by colour, so
             // the choice survives a colour-blind read.
-            Children = on ? [title with { Shrink = 1f }, ActiveTag(m)] : [title],
+            Children = comingSoon
+                ? [title with { Shrink = 1f }, StatusTag(Loc.Get(Strings.Sidebar.Design.ComingSoon), m, active: false)]
+                : on ? [title with { Shrink = 1f }, StatusTag(Loc.Get(Strings.Sidebar.Design.Active), m, active: true)] : [title],
         };
 
         return WaveePicker.Card(on, m.Shell,
@@ -168,31 +183,31 @@ sealed class SidebarDesignPicker : Component
     /// corner (the spec's sketch): the engine has no absolute positioning, and reserving an overlay row inside the
     /// 116-DIP preview would cost the Curated miniature — five stacked bands — the space it needs. Being a tag rather
     /// than a colour is the point (it survives a colour-blind read).</summary>
-    static Element ActiveTag(in Metrics m) => new BoxEl
+    static Element StatusTag(string text, in Metrics m, bool active) => new BoxEl
     {
-        Height = 16f, Shrink = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-        Padding = new Edges4(6f, 0f, 6f, 0f),
-        Corners = Radii.PillAll, Fill = Tok.AccentDefault,
-        Children = [new TextEl(Loc.Get(Strings.Sidebar.Design.Active))
-            { Size = m.TagSize, Weight = 600, Color = Tok.TextOnAccentPrimary, MaxLines = 1 }],
+        Height = Spacing.L, Shrink = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+        Padding = new Edges4(Spacing.S, 0f, Spacing.S, 0f),
+        Corners = Radii.PillAll, Fill = active ? Tok.AccentDefault : Tok.FillControlDefault,
+        Children = [new TextEl(text)
+            { Size = m.TagSize, Weight = 600, Color = active ? Tok.TextOnAccentPrimary : Tok.TextSecondary, MaxLines = 1 }],
     };
 
     // ── the three miniatures ──────────────────────────────────────────────────────────────────────────────────────────
 
     /// <summary>Classic: the Library icon shortcuts, a divider, then the flat playlist list (§C6.1).</summary>
-    static Element[] ClassicPreview(in Metrics m, in PreviewContent content, ColorF block, ColorF faint)
+    static Element[] ClassicPreview(in Metrics m, ColorF block, ColorF faint)
     {
         int icons = m.Compact ? 4 : 5;
         int arts = m.Compact ? 2 : 3;
         var kids = new List<Element>(icons + arts + 1);
         for (int i = 0; i < icons; i++) kids.Add(IconRow(IconBarW(i), block, faint));
         kids.Add(Hairline(faint));
-        for (int i = 0; i < arts; i++) kids.Add(ArtRow(content.Name(i), m, block, faint));
+        for (int i = 0; i < arts; i++) kids.Add(ArtRow(m, block, faint));
         return kids.ToArray();
     }
 
     /// <summary>Library V3: the filter chip strip, the sort pill, then the unified list (§C6.1).</summary>
-    static Element[] LibraryPreview(in Metrics m, in PreviewContent content, ColorF block, ColorF faint)
+    static Element[] LibraryPreview(in Metrics m, ColorF block, ColorF faint)
     {
         int arts = m.Compact ? 3 : 4;
         var kids = new List<Element>(arts + 2)
@@ -208,13 +223,13 @@ sealed class SidebarDesignPicker : Component
                 Children = [Pill(34f, 8f, faint), new BoxEl { Grow = 1f, HitTestVisible = false }],
             },
         };
-        for (int i = 0; i < arts; i++) kids.Add(ArtRow(content.Name(i), m, block, faint));
+        for (int i = 0; i < arts; i++) kids.Add(ArtRow(m, block, faint));
         return kids.ToArray();
     }
 
     /// <summary>Wavee Curated: two pin tiles, a divider, the 2-up "Jump back in" grid, the app-route links, then a
-    /// library section (§C6.1). The pin tiles carry the user's REAL first two pins when they have any.</summary>
-    static Element[] CuratedPreview(in Metrics m, in PreviewContent content, ColorF block, ColorF faint)
+    /// library section (§C6.1).</summary>
+    static Element[] CuratedPreview(in Metrics m, ColorF block, ColorF faint)
     {
         int icons = m.Compact ? 2 : 3;
         int arts = m.Compact ? 1 : 2;
@@ -223,7 +238,7 @@ sealed class SidebarDesignPicker : Component
             new BoxEl
             {
                 Direction = 0, Gap = 5f, Shrink = 0f,
-                Children = [PinTile(content.Pin(0), m, faint), PinTile(content.Pin(1), m, faint)],
+                Children = [PinTile(faint), PinTile(faint)],
             },
             Hairline(faint),
             new BoxEl
@@ -233,7 +248,7 @@ sealed class SidebarDesignPicker : Component
             },
         };
         for (int i = 0; i < icons; i++) kids.Add(IconRow(IconBarW(i), block, faint));
-        for (int i = 0; i < arts; i++) kids.Add(ArtRow(content.Name(i), m, block, faint));
+        for (int i = 0; i < arts; i++) kids.Add(ArtRow(m, block, faint));
         return kids.ToArray();
     }
 
@@ -251,18 +266,10 @@ sealed class SidebarDesignPicker : Component
     static Element IconRow(float barW, ColorF block, ColorF faint)
         => SidebarMiniature.IconRow(barW, block, faint);
 
-    /// <summary>One list row: a cover tile plus the entity's REAL name at 7 px — or a neutral bar when nothing is
-    /// cached. Never a fabricated title.</summary>
-    static Element ArtRow(string name, in Metrics m, ColorF block, ColorF faint)
+    /// <summary>One text-free list row: a cover tile plus two geometric metadata bars.</summary>
+    static Element ArtRow(in Metrics m, ColorF block, ColorF faint)
     {
         float h = m.RowH;
-        Element label = name.Length > 0
-            ? new TextEl(name)
-            {
-                Size = m.MicroSize, Color = Tok.TextSecondary, Grow = 1f, Shrink = 1f,
-                MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
-            }
-            : Bar(m.Compact ? 52f : 62f, 4f, faint);
 
         return new BoxEl
         {
@@ -270,95 +277,53 @@ sealed class SidebarDesignPicker : Component
             Children =
             [
                 new BoxEl { Width = h, Height = h, Shrink = 0f, Corners = CornerRadius4.All(2.5f), Fill = block },
-                label,
+                new BoxEl
+                {
+                    Direction = 1, Gap = Spacing.XXS, Grow = 1f, Basis = 0f, MinWidth = 0f,
+                    Children =
+                    [
+                        Bar(m.Compact ? 52f : 62f, Spacing.XS, faint),
+                        Bar(m.Compact ? 34f : 42f, Spacing.XXS, faint),
+                    ],
+                },
             ],
         };
     }
 
-    /// <summary>A Pinned tile carrying the user's REAL pin name when they have one. Deliberately the FAINT fill rather
-    /// than the solid block: a pin name has to be legible on it in both themes and in both selected states, and
-    /// text-on-accent only works over the solid accent.</summary>
-    static Element PinTile(string name, in Metrics m, ColorF faint) => new BoxEl
+    /// <summary>A text-free pin tile. The short inner bar communicates content without pretending to be legible copy.</summary>
+    static Element PinTile(ColorF faint) => new BoxEl
     {
         Grow = 1f, Shrink = 1f, Height = 16f, MinWidth = 0f,
-        AlignItems = FlexAlign.Center, Justify = FlexJustify.Start,
-        Padding = new Edges4(4f, 0f, 4f, 0f), ClipToBounds = true,
-        Corners = CornerRadius4.All(4f), Fill = faint,
-        Children = name.Length > 0
-            ? [new TextEl(name) { Size = m.MicroSize, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis }]
-            : [],
+        Direction = 0, Gap = Spacing.XS, AlignItems = FlexAlign.Center,
+        Padding = new Edges4(Spacing.XS, 0f, Spacing.XS, 0f), ClipToBounds = true,
+        Corners = Radii.ControlAll, Fill = faint,
+        Children =
+        [
+            new BoxEl
+            {
+                Width = Spacing.XL,
+                Height = Spacing.XXS,
+                Corners = Radii.PillAll,
+                Fill = Tok.AccentDefault with { A = 0.58f },
+            },
+        ],
     };
 
     static Element GridCell(ColorF block, ColorF faint) => SidebarMiniature.GridCell(block, faint);
 
-    // ── metrics + real content ────────────────────────────────────────────────────────────────────────────────────────
+    // ── metrics ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
     /// <summary>What this picker owns: the MINIATURE's proportions and its type ramp. The card's own footprint (width,
     /// resting inset, child gap) is <see cref="WaveePicker.Shell"/>'s — shared with the Settings wireframe pickers, so a
     /// change to the selected-border mechanic lands in one place.</summary>
     readonly record struct Metrics(bool Compact, WaveePicker.Shell Shell, float PreviewH, float Gap, float RowH,
-                                   float TitleSize, float SubSize, float MicroSize, float TagSize)
+                                   float TitleSize, float SubSize, float TagSize)
     {
         public static Metrics For(bool compact) => compact
-            ? new Metrics(true, WaveePicker.PaneCompact, 96f, 3f, 10f, 12f, 10.5f, 6.5f, 9f)
-            : new Metrics(false, WaveePicker.Pane, 116f, 3f, 11f, 13f, 11f, 7f, 9.5f);
+            ? new Metrics(true, WaveePicker.PaneCompact, 96f, 3f, 10f, 12f, 10.5f, 9f)
+            : new Metrics(false, WaveePicker.Pane, 116f, 3f, 11f, 13f, 11f, 9.5f);
     }
 
-    /// <summary>The real cached content the miniatures fill their name slots from, resolved ONCE per render. Preference
-    /// order: the sidebar's own projected entries (already the exact rows the real pane shows), then the library's warm
-    /// playlist cell, then nothing — in which case the slots render as neutral bars (never invented titles).</summary>
-    readonly struct PreviewContent
-    {
-        readonly string[] _names;
-        readonly string[] _pins;
-
-        PreviewContent(string[] names, string[] pins) { _names = names; _pins = pins; }
-
-        // "" for an unfilled slot AND for a default(PreviewContent) — the shape callers branch on ("has a real name?"),
-        // so it must never be null and never throw on an out-of-range slot.
-        public string Name(int i) => _names is { } a && (uint)i < (uint)a.Length ? a[i] : "";
-        public string Pin(int i) => _pins is { } a && (uint)i < (uint)a.Length ? a[i] : "";
-
-        public static PreviewContent Gather(SidebarPreferences? prefs, LibraryStore? store)
-        {
-            var names = new string[4];
-            var pins = new string[2];
-            Array.Fill(names, "");
-            Array.Fill(pins, "");
-
-            if (prefs is not null)
-            {
-                _ = prefs.Entries.Version.Value;   // subscribe: a projection rebuild refreshes the miniatures
-                _ = prefs.PinsVersion.Value;
-
-                var entries = prefs.Entries.Current;
-                int n = 0;
-                for (int i = 0; i < entries.Count && n < names.Length; i++)
-                {
-                    var e = entries[i];
-                    // Routes/folders/tracks are not "library rows" in the miniature's sense (a route name is chrome, a
-                    // folder has no cover, a track is not pinnable) — the art rows want entities.
-                    if (e.Kind is SidebarEntryKind.AppRoute or SidebarEntryKind.Folder or SidebarEntryKind.Track) continue;
-                    if (e.Name.Length == 0) continue;
-                    names[n++] = e.Name;
-                }
-
-                var pinStore = prefs.Pins;
-                for (int i = 0, p = 0; i < pinStore.Count && p < pins.Length; i++)
-                    if (pinStore[i].Name is { Length: > 0 } pinName) pins[p++] = pinName;
-            }
-
-            if (names[0].Length == 0 && store is not null)
-            {
-                _ = store.Playlists.State.Value;   // subscribe to the load edge, not just the value
-                var list = store.Playlists.Value.Value;
-                for (int i = 0, n = 0; i < list.Count && n < names.Length; i++)
-                    if (list[i].Name is { Length: > 0 } plName) names[n++] = plName;
-            }
-
-            return new PreviewContent(names, pins);
-        }
-    }
 }
 
 /// <summary>The one-time chooser's card (§C6.2). A Component because it owns the confirm→"Customize now" follow-up

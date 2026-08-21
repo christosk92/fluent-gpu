@@ -8,6 +8,7 @@ using FluentGpu.Hooks;
 using FluentGpu.Localization;
 using FluentGpu.Signals;
 using Wavee.Core;
+using Wavee.Features.Detail;
 using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
@@ -15,14 +16,25 @@ namespace Wavee;
 // The biography + profile-facts + "listened most in" two-column band.
 sealed partial class ArtistPage : Component
 {
+    int _biographyMode;
+    bool _biographyModeInitialized;
+
+    bool BiographyWide(float width)
+    {
+        _biographyMode = DetailLayoutBreakpoints.ModeFor(width, _biographyMode, _biographyModeInitialized);
+        _biographyModeInitialized = true;
+        return _biographyMode == 0;
+    }
+
     // ── biography + profile facts + listened-most-in (2-column band) ─────────────────────────────────────
     Element BiographyBand(Artist a, int albums, int singles, ArtistExtras? extras, int relatedCount, Action<string, string?> go) =>
         Responsive.Of(w =>
         {
-            bool wide = w >= 820f;
+            bool wide = BiographyWide(w);
             var left = new BoxEl
             {
-                Direction = 1, Gap = Spacing.L, Grow = wide ? 2f : 1f, Basis = 0f, MinWidth = 0f, ClipToBounds = true,
+                Direction = 1, Gap = Spacing.L, Grow = wide ? 2f : 0f, Basis = wide ? 0f : float.NaN,
+                MinWidth = 0f, ClipToBounds = true,
                 Padding = new Edges4(Spacing.XL, Spacing.L, Spacing.XL, Spacing.L),
                 Corners = CornerRadius4.All(Radii.Card), Fill = Tok.FillCardSecondary,
                 BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
@@ -48,7 +60,8 @@ sealed partial class ArtistPage : Component
             Tile(relatedCount, Loc.Get(Strings.Artist.Stat.Related));
             var right = new BoxEl
             {
-                Direction = 1, Gap = Spacing.M, Grow = 1f, Basis = 0f, MinWidth = 0f,
+                Direction = 1, Gap = Spacing.M, Grow = wide ? 1f : 0f, Basis = wide ? 0f : float.NaN,
+                MinWidth = 0f,
                 Children =
                 [
                     AccentHeader(Loc.Get(Strings.Artist.ProfileFacts)),
@@ -57,7 +70,9 @@ sealed partial class ArtistPage : Component
             };
             return new BoxEl
             {
+                Key = wide ? "artist-biography:wide" : "artist-biography:stacked",
                 Direction = (byte)(wide ? 0 : 1), Gap = Spacing.XL,
+                AlignItems = wide ? FlexAlign.Start : FlexAlign.Stretch,
                 Children = tiles.Count > 0 ? new Element[] { left, right } : new Element[] { left },
             };
         }, fallback: 900f);

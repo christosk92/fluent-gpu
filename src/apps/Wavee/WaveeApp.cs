@@ -210,35 +210,78 @@ sealed class WaveeApp : Component
         // effect, not the app-root render (a play/pause must not re-render the shell).
         Context.UseEffect(PowerBridge.SyncFromSignals);
 
-        // (Re)start the takeover login on every Auth flip to not-authenticated: the real backend kicks the silent-resume →
-        // device-code two-pane; the fake demo seeds a demo challenge — but ONLY after it has authenticated once (wasAuthed),
-        // so the initial launch goes straight to the shell with no takeover flash. WAVEE_FAKE_CHALLENGE skips this entirely.
+        // ── The login GATE's boolean, computed early ────────────────────────────────────────────────────────────────
+        // The fake demo never shows the takeover (no real auth); the real backend shows it until Authenticated. The coarse
+        // bridge.Auth drives the swap (identical for fake + live). WAVEE_FAKE_CHALLENGE forces the takeover (deterministic
+        // login screenshots, no network). Authenticated → shell. Logged out → the takeover (real backend always; the fake
+        // demo only AFTER its first auth, so the initial demo launch lands on the shell — but a fake LOGOUT now shows the
+        // same two-pane, re-signing-in via FakeSignIn).
+        //
+        // Computed HERE (not down at the gate itself, as before) because both the setup wizard's pre-auth mount below AND
+        // the device-code restart effect right after it need to know "authenticated yet?" before the gate is built.
         var authState = bridge.Auth.Value;   // subscribe → re-run on the flip
+        bool authed = !Diag.EnvFlag("WAVEE_FAKE_CHALLENGE")
+                   && (authState == AuthStatus.Authenticated || (!Services.UseRealBackend && !wasAuthed.Value));
+
+        // ── The first-run setup wizard's PRE-AUTH mount ──────────────────────────────────────────────────────────────
+        // Armed (SetupGating.IsPending) and not yet authenticated ⇒ SetupPreAuthRoot takes the takeover's place below.
+        // Reads SetupSession.MarkerEpoch (subscribing) so a defer/complete burned by SetupDialog.Open's ClosedAction —
+        // the marker discipline, see that method — makes THIS re-evaluate immediately: without it, closing the bare
+        // pre-auth dialog would leave SetupPreAuthRoot's empty titlebar-only chrome mounted forever, with no way back
+        // to LoginView.
+        _ = SetupSession.MarkerEpoch.Value;   // subscribe
+        SetupSession? setupSession = null;
+        if (!authed)
+        {
+            // The wizard is Wavee's ONE sign-in surface. There is deliberately no second standalone login takeover:
+            // shipping both meant the same action looked different in two places, and "Not now" dropped the user from
+            // the wizard into the other one — the exact duplication this design exists to remove.
+            //   • setup never completed  ⇒ FirstRun, all seven steps from Welcome.
+            //   • setup completed, signed out (a logout, or a revoked token) ⇒ Reauth, straight to the SignIn page.
+            //     Re-walking terms/appearance/sidebar for someone who already chose them would be nonsense.
+            bool completed = SetupGating.IsCompleted(_services.Settings);
+            setupSession = SetupSession.Current ??= completed
+                ? new SetupSession(SetupSession.EntryPoint.Reauth, alreadyAuthenticated: false, SetupPage.SignIn)
+                : new SetupSession(SetupSession.EntryPoint.FirstRun, alreadyAuthenticated: false);
+            // TEMP (hero-animation screenshot validation, see the WAVEE_FAKE_CHALLENGE precedent just above): jump the
+            // fresh wizard straight to an arbitrary page for `--screenshot`, e.g. WAVEE_SETUP_START_PAGE=3. Not a
+            // shipped feature — revert with the rest of this task's throwaway validation aids if it outlives them.
+            if (setupSession.Page.Value == SetupPage.Welcome
+                && Environment.GetEnvironmentVariable("WAVEE_SETUP_START_PAGE") is { Length: > 0 } sp
+                && int.TryParse(sp, out int spOrd) && spOrd is >= 0 and <= (int)SetupPage.Done)
+                setupSession.Page.Value = (SetupPage)spOrd;
+            // Publish this run's real intents into the session's auto-properties so they are non-null wherever it is
+            // mounted (pre-auth here, or post-auth in SetupChrome after SignIn completes — same instance, carried via
+            // SetupSession.Current). Re-assigning every render is harmless: plain fields, not signals.
+            // Real backend: the PKCE browser hand-off + device-code re-mint. Fake/demo backend: the same two intents
+            // mapped onto its stubs, so the wizard's sign-in page works there too now that it is the only surface.
+            setupSession.StartBrowser = Services.UseRealBackend ? StartBrowser : FakeSignIn;
+            setupSession.RestartCode = Services.UseRealBackend ? RestartCode : SeedDemoChallenge;
+            setupSession.QuitApp = CloseApp;
+        }
+
+        // Remember a successful fake/demo authentication so a later logout enters the re-auth wizard. Challenge startup
+        // belongs to SetupSignInPage itself: that component knows when its keep-alive page is actually active, and owning
+        // the request there prevents both premature expiry and competing root/page restarts.
         Context.UseEffect(() =>
         {
             if (Diag.EnvFlag("WAVEE_FAKE_CHALLENGE")) return;
-            if (authState == AuthStatus.Authenticated) { wasAuthed.Value = true; return; }
-            if (Services.UseRealBackend) RestartCode();
-            else if (wasAuthed.Value) SeedDemoChallenge();   // a fake LOGOUT (not the first launch) → the demo two-pane
+            if (authState == AuthStatus.Authenticated) wasAuthed.Value = true;
         }, (int)authState);
 
         this.UseSoftReveal(); // app entrance (compositor-only, reduced-motion-aware)
 
         // ── The login GATE ───────────────────────────────────────────────────────────────────────────────────────────
-        // The fake demo never shows the takeover (no real auth); the real backend shows it until Authenticated. The coarse
-        // bridge.Auth drives the swap (identical for fake + live); the takeover's inner card reads the rich bridge.Login.
-        // Providers stay ABOVE the gate so the bridges' subscriptions survive the takeover ↔ shell swap (and back, on logout).
-        // WAVEE_FAKE_CHALLENGE forces the takeover (deterministic login screenshots, no network).
-        // Authenticated → shell. Logged out → the takeover (real backend always; the fake demo only AFTER its first auth, so
-        // the initial demo launch lands on the shell — but a fake LOGOUT now shows the same two-pane, re-signing-in via
-        // FakeSignIn). WAVEE_FAKE_CHALLENGE forces the takeover (deterministic login screenshots, no network).
-        bool authed = !Diag.EnvFlag("WAVEE_FAKE_CHALLENGE")
-                   && (bridge.Auth.Value == AuthStatus.Authenticated || (!Services.UseRealBackend && !wasAuthed.Value));
+        // Providers stay ABOVE the gate so the bridges' subscriptions survive the takeover ↔ shell swap (and back, on
+        // logout) — and now also survive the pre-auth-wizard ↔ shell swap the same way. Setup-pending-and-not-authed wins
+        // over the plain takeover; authed wins over both; otherwise today's LoginView takeover.
+        // TWO leaves, not three: signed in ⇒ the shell; otherwise ⇒ the setup wizard, which owns sign-in. The old
+        // standalone `LoginView` takeover is no longer mounted anywhere (its two-pane parts live on as the shared
+        // building blocks the wizard's SignIn page composes — QrGrid, LoginStepRow/Bar, CopyButton, WaitingDots,
+        // LoginCountdown, RightPane, OrDivider).
         Element leaf = authed
             ? Embed.Comp(() => new WaveeShell(_services.Settings, _services.Sidebar))
-            : Services.UseRealBackend
-                ? Embed.Comp(() => new LoginView(StartBrowser, RestartCode, CloseApp))
-                : Embed.Comp(() => new LoginView(FakeSignIn, SeedDemoChallenge, CloseApp));
+            : Embed.Comp(() => new SetupPreAuthRoot(setupSession!, _services.Settings));
 
         var root = Ctx.Provide(Services.Slot, _services,
             Ctx.Provide(PlaybackBridge.Slot, bridge,

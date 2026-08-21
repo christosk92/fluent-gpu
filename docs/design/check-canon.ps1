@@ -15,8 +15,20 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Root = $PSScriptRoot
+    # NOT defaulted to $PSScriptRoot in the param block: under `powershell -File <relative path>` on Windows
+    # PowerShell 5.1, parameter defaults bind BEFORE $PSScriptRoot is in scope, so it silently evaluated to ''.
+    # Get-ChildItem -Path '' then falls back to the CWD and scanned the WHOLE repo — including stale
+    # .claude/worktrees copies of docs/design — reporting CANON DRIFT that does not exist in the live tree,
+    # on exactly the invocation CLAUDE.md documents.
+    [string]$Root
 )
+
+if ([string]::IsNullOrWhiteSpace($Root)) { $Root = $PSScriptRoot }
+if ([string]::IsNullOrWhiteSpace($Root) -and $MyInvocation.MyCommand.Path) {
+    $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
+}
+if ([string]::IsNullOrWhiteSpace($Root)) { throw 'check-canon: could not resolve the design-docs root.' }
+$Root = (Resolve-Path -LiteralPath $Root).Path
 
 $ErrorActionPreference = 'Stop'
 
@@ -47,11 +59,24 @@ $rules = @(
         Name    = 'bind-props'
         Pattern = '\b(Transform|Opacity|Fill|Width|Height|Text|Color|Source|Placeholder)Bind\b'
         Why     = 'The dual static+*Bind element surface is superseded by one Prop<T> per bindable channel (reconciler-hooks.md sec.0bis). The *Bind property spelling is gone.'
+    },
+    @{
+        Name    = 'path-aa-config'
+        Pattern = 'RenderConfig\.PathAaMode'
+        Why     = 'the as-built flag is GpuProfile.PathAaMode (gpu-renderer.md sec.5); there is no RenderConfig type.'
+    },
+    @{
+        Name    = 'path-earclip'
+        Pattern = 'ear-?clipping'
+        Why     = 'canon DELETED ear-clipping (gpu-renderer.md sec.5): one vetted O(n log n) monotone/trapezoidal sweep.'
     }
 )
 
 $docs = Get-ChildItem -Path $Root -Recurse -Filter *.md |
-    Where-Object { $_.FullName -notmatch '[\\/]archive[\\/]' }
+    Where-Object { $_.FullName -notmatch '[\\/]archive[\\/]' } |
+    # Belt-and-braces: a leftover git worktree carries its own older copy of docs/design. Linting it reports
+    # drift that does not exist in the live tree and cannot be fixed from here, so never scan one.
+    Where-Object { $_.FullName -notmatch '[\\/]\.claude[\\/]' -and $_.FullName -notmatch '[\\/]worktrees[\\/]' }
 
 $violations = New-Object System.Collections.Generic.List[object]
 foreach ($rule in $rules) {

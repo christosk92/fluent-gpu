@@ -31,6 +31,37 @@ public readonly record struct PolylineStrokeSpec(
     public bool IsNone => Color.A <= 0f || Thickness <= 0f || PointCount < 2 || TrimEnd <= TrimStart;
 }
 
+/// <summary>
+/// A retained tessellated vector path (gpu-renderer.md §5): its own fill (<see cref="Fill"/>/<see cref="Rule"/>) and/or
+/// stroke (<see cref="StrokeColor"/>/<see cref="Stroke"/>) over an authored <see cref="Geometry"/>. Carried by
+/// <c>PathEl</c> (a leaf, not a decoration — see that type's doc for why an arc/polyline stay <c>BoxEl</c> decorations
+/// while a path does not).
+/// <para><see cref="TrimStart"/>/<see cref="TrimEnd"/> are the AUTHORED stroke-trim fractions (0..1); the recorder's
+/// NaN-sentinel fallback (the same two generic channels <c>DrawArc</c>/<c>DrawPolylineStroke</c> already consume —
+/// <c>AnimChannel.StrokeTrimStart/End</c>) overrides them per frame WITHOUT reaching the realization cache key, so a
+/// draw-on animation never re-tessellates. <see cref="TrimMode"/> mirrors <c>PathTrimSpace</c> (Render/PathTessellator.cs; 0 = PerContour,
+/// 1 = WholePath) — carried as a raw byte here so Foundation does not need to reference Render's enum.</para>
+/// <para><see cref="ViewBoxW"/>/<see cref="ViewBoxH"/> == 0 (the default) means <see cref="Geometry"/> is already
+/// node-local DIP. Non-zero makes the recorder bake a uniform-fit (min-axis) scale into the node's world transform at
+/// record time, so one authored path (e.g. a 24x24-unit icon) renders correctly at any box size — one authored
+/// geometry, many box sizes, without re-authoring points per size.</para>
+/// </summary>
+public readonly record struct PathSpec(
+    PathData? Geometry, ColorF Fill, FillRule Rule, ColorF StrokeColor, StrokeStyle Stroke,
+    float TrimStart = 0f, float TrimEnd = 1f, byte TrimMode = 0,
+    float ViewBoxW = 0f, float ViewBoxH = 0f, bool HitTestGeometry = false)
+{
+    public bool IsNone
+    {
+        get
+        {
+            var g = Geometry;   // local narrowing — a property access (not a local/parameter) isn't reliably
+                                 // null-narrowed by the nullable analyzer across `||` the way a local is.
+            return g is null || g.VerbCount == 0 || (Fill.A <= 0f && (StrokeColor.A <= 0f || Stroke.IsNone));
+        }
+    }
+}
+
 /// <summary>One gradient stop: a normalized position (0..1 along the gradient axis) and its color.</summary>
 public readonly record struct GradientStop(float Offset, ColorF Color);
 

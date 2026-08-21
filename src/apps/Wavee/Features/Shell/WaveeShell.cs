@@ -252,6 +252,12 @@ sealed class WaveeShell : Component
         _shellUi.RailWidth.Value = ShellResponsiveLayout.ClampRailWidth(settings.Get(WaveeSettings.ShellRailWidth));
         _shellUi.DockedVideoHeight.Value = ShellResponsiveLayout.ClampDockedVideoHeight(
             settings.Get(WaveeSettings.ShellDockedVideoHeight), _shellUi.RailWidth.Peek());
+        if (_session.ShellSection is { } shell
+            && shell.RailMode >= (int)RailMode.Lyrics && shell.RailMode <= (int)RailMode.Video)
+        {
+            _shellUi.RailOpen.Value = shell.RailOpen;
+            _shellUi.Mode.Value = (RailMode)shell.RailMode;
+        }
 
         // Inert probe (screenshot / UI iteration only): open the right rail to the Lyrics panel at startup.
         if (Diag.EnvFlag("WAVEE_LYRICS_OPEN") || Diag.EnvFlag("WAVEE_LIVE_LYRICS_SCROLL_PROBE") || Diag.EnvFlag("WAVEE_LYRICS_ADVANCE_PROBE") || Diag.EnvFlag("WAVEE_IMMERSIVE_OPEN")) { _shellUi.RailOpen.Value = true; _shellUi.Mode.Value = RailMode.Lyrics; }
@@ -581,6 +587,12 @@ sealed class WaveeShell : Component
         // Keep an owner-safe suppression edge in the reactive lifecycle as cleanup insurance. This snaps geometry only;
         // the user's reduced-motion preference and non-layout feedback remain untouched.
         UseEffect(() => SyncDragSuppression(), dragging);
+
+        // Session chrome, not a durable preference: reopening the app should restore the right rail exactly as it was,
+        // including the Video mode shown beside the artist page in the user's repro. The store equality-gates the mount
+        // run after it adopted the snapshot, so only real open/close or mode changes schedule a save.
+        UseSignalEffect(() =>
+            _session.UpdateShell(_shellUi.RailOpen.Value, (int)_shellUi.Mode.Value));
 
         // Rail viewport-fit + layout-defer (off-render, auto-tracking effects — the render body stays subscription-free
         // so the shell isn't re-run on every resize pixel; only the rail band / pages re-solve from the signals below).
@@ -1344,6 +1356,10 @@ sealed class WaveeShell : Component
             // the same reason ActionServicesOverlayBinder lives here): opens the one-time design chooser once per install,
             // after the first painted frame.
             Embed.Comp(() => new SidebarOnboardingChrome(_settings)),
+            // Zero-size chrome, same reason as SidebarOnboardingChrome just above: owns both post-auth ways the
+            // setup wizard can come up (a manual "Run setup again" re-run, or continuing a first-run wizard that
+            // was still pending when auth completed). See Features/Setup/SetupChrome.cs.
+            Embed.Comp(() => new SetupChrome(_settings)),
             // The sidebar projection binder's pump — zero-size, always-mounted, BELOW the HistoryStore provide so the
             // visited feed resolves (see SidebarProjectionBinder remarks). Nothing rebuilds the projection without it.
             _actions.Svc?.SidebarBinder.MountPoint() ?? new BoxEl { HitTestVisible = false, Shrink = 0f },

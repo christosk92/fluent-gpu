@@ -45,7 +45,9 @@ sealed class VideoRailPanel : Component
     {
         var b = UseContext(PlaybackBridge.Slot);
         var lib = UseContext(LibraryBridge.Slot);
+        var svc = UseContext(Services.Slot);
         var go = UseContext(HistoryStore.NavCtx);
+        bool showTrackArtwork = !AppearancePrefs.TrackArtworkHidden(svc?.Settings);
         if (b is null) return new BoxEl();
 
         var track = b.CurrentTrack.Value;
@@ -80,7 +82,7 @@ sealed class VideoRailPanel : Component
         {
             var rows = new List<Element>(upNext.Length);
             foreach (var e in upNext)
-                rows.Add(Row(b, lib, go, e));
+                rows.Add(Row(b, lib, go, e, showTrackArtwork));
             content.Add(new BoxEl { Direction = 1, Gap = 2f, Children = rows.ToArray() });
         }
 
@@ -130,7 +132,7 @@ sealed class VideoRailPanel : Component
         ],
     };
 
-    static Element Row(PlaybackBridge b, LibraryBridge? lib, Action<string, string?>? go, QueueEntry e)
+    static Element Row(PlaybackBridge b, LibraryBridge? lib, Action<string, string?>? go, QueueEntry e, bool showArtwork)
     {
         var t = e.Track;
         var st = TrackRow.StateOf(b, lib, t);
@@ -146,7 +148,8 @@ sealed class VideoRailPanel : Component
                     showArtists: true,
                     explicitBadge: false,
                     showDuration: false,
-                    kind: TrackRow.ArtCardKind.Rail),
+                    kind: TrackRow.ArtCardKind.Rail,
+                    showArtwork: showArtwork),
             ],
         };
     }

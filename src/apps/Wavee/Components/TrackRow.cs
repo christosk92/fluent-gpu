@@ -65,7 +65,7 @@ sealed class ArtistMoreButton : Component
 }
 
 // Which optional columns a track row shows. #, Title and Duration are always present. Cell build order (and the matching
-// track widths) is: # · ♥ · (thumb) · Title · Album · AddedBy · DateAdded · Plays · Tempo · Duration · Video · Actions.
+// track widths) is: # · ♥ · (thumb) · Title · Artist · Album · AddedBy · DateAdded · Plays · Tempo · Duration · Video · Actions.
 // SHARED by the detail TrackList header + every row builder, so the header and the rows stay column-aligned by
 // construction. Video sits in the trailing chrome (before Expand) so film / hover "…" never land between Album and
 // Tempo. Actions = the trailing "…" overflow lane when Video is off (dropped at the ultra-compact tier; still reachable
@@ -82,7 +82,13 @@ internal readonly record struct ColumnSet(bool Album, bool By, bool Date, bool V
                                           bool Tempo = false,
                                           // The expand chevron (alternate versions + per-item audio format). Sits at
                                           // the very END of the row, after the Video/"…" lane.
-                                          bool Expand = false);
+                                          bool Expand = false,
+                                          // Classic's dedicated artist lane. Default false keeps every non-detail row
+                                          // on the established title-subline grammar.
+                                          bool Artist = false,
+                                          // Classic table chrome/ink. Carried with the shape so persistent rows patch
+                                          // live even when a surface (for example an album) has no optional columns.
+                                          bool Classic = false);
 
 // ── the ONE track-row cell, used EVERYWHERE a track is shown (detail list, library pane, artist "Popular", search) ──
 // This is the single source of truth for what a track row LOOKS like and how it BEHAVES at rest/hover/now-playing — the
@@ -124,6 +130,7 @@ internal static class TrackRow
         internal const string Heart = "c.heart";
         internal const string Art = "c.art";
         internal const string Title = "c.title";
+        internal const string Artist = "c.artist";
         internal const string Album = "c.album";
         internal const string By = "c.by";
         internal const string Date = "c.date";
@@ -205,14 +212,18 @@ internal static class TrackRow
         // DetailTracks.PlayRow and the "N of M songs" fact tile must never disagree about which rows are pending, and it
         // un-dims the row the moment its live timestamp passes — no refetch needed.
         bool notYetOut = t.IsNotYetOut();
+        bool classicNow = set.Classic && st.IsNow;
+        ColorF secondaryInk = classicNow ? Tok.AccentTextPrimary : Tok.TextSecondary;
+        ColorF tertiaryInk = classicNow ? Tok.AccentTextPrimary : Tok.TextTertiary;
 
         // # cell: number / live equalizer / fetch spinner at rest; reveals a SINGLE-CLICK play (or pause) button on ROW
         // hover — suppressed for a track that is not released, where the hover play would be a button that does nothing.
         Add(CellKey.Num, NumberCell(displayIndex, st.IsNow, st.IsPlaying, st.IsBuffering, st.IsTop,
-                                    notYetOut ? null : onPlay, hoverPaused, chart: t.Chart));
+                                    notYetOut ? null : onPlay, hoverPaused, chart: t.Chart,
+                                    classic: set.Classic));
 
         // ♥ — in the left cluster (between # and the art thumb). Filled when saved; click toggles via the caller's bridge.
-        if (set.Heart) Add(CellKey.Heart, CenterCell(Heart(st.Saved, onLike, likePop)));
+        if (set.Heart) Add(CellKey.Heart, CenterCell(Heart(st.Saved, onLike, likePop, classic: set.Classic)));
 
         // Art thumb (playlist/liked) gets its OWN column before Title — so the "Title" header aligns over the title TEXT,
         // not the artwork (the WaveeMusic RowArtColDef pattern). Then the title + artist subline (subline hidden on
@@ -223,7 +234,13 @@ internal static class TrackRow
         // that keeps one (see set.Video), so a row states "has a video" in exactly ONE place. A subline copy meant the
         // same fact moved lanes across a breakpoint cross — the film icon jumping from the trailing chrome into the
         // artist line and back.
-        bool showMeta = showTrackArtist || showAlbumInMeta || (showListBadges && t.IsExplicit);
+        bool showMeta = !set.Classic && (showTrackArtist || showAlbumInMeta || (showListBadges && t.IsExplicit));
+        bool classicVideo = DetailTrackTableRules.ShowClassicInlineVideo(
+            set.Classic, VideoPresence.HasVideo(t), set.Tier);
+        Element titleLine = set.Classic
+            ? ClassicTitleLine(t, title, showTrackArtist, classicVideo,
+                showListBadges && t.IsExplicit, go, classicNow)
+            : title;
         var titleCol = new BoxEl
         {
             // MinWidth=0: this stack sits in the STAR track, which the overflow guard collapses to 0 first. Without the
@@ -236,17 +253,24 @@ internal static class TrackRow
             // At compact playlist tiers the dedicated Album lane disappears. Preserve its information on the existing
             // artist subline instead of simply dropping it: Explicit · artists · album.
             Children = showMeta
-                ? [title, MetadataLine(t, go, showTrackArtist, showAlbumInMeta, showListBadges && t.IsExplicit)]
-                : [title],
+                ? [titleLine, MetadataLine(t, go, showTrackArtist, showAlbumInMeta, showListBadges && t.IsExplicit,
+                                      classicNow ? Tok.AccentTextPrimary : null)]
+                : [titleLine],
         };
         Add(CellKey.Title, new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, MinWidth = 0f, ClipToBounds = true, Children = [titleCol] });
 
+        if (set.Artist)
+            Add(CellKey.Artist, LeftCell(ArtistLinks(t.Artists, go,
+                size: set.Classic ? 14f : 12f, lineHeight: set.Classic ? 20f : 16f,
+                color: secondaryInk)));
         if (set.Album)
-            Add(CellKey.Album, LeftCell(AlbumLink(t.Album, go)));
+            Add(CellKey.Album, LeftCell(AlbumLink(t.Album, go, secondaryInk,
+                size: set.Classic ? 14f : 12f, lineHeight: set.Classic ? 20f : 16f)));
         if (set.By)
-            Add(CellKey.By, AddedByCell(t.AddedBy, addedByProfile));
+            Add(CellKey.By, AddedByCell(t.AddedBy, addedByProfile, secondaryInk, classic: set.Classic));
         if (set.Date)
-            Add(CellKey.Date, LeftCell(Caption(DetailFormat.DateAddedLabel(t.AddedAt)) with { Color = Tok.TextSecondary, Grow = 1f, Basis = 0f, MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis }));
+            Add(CellKey.Date, LeftCell(FactualText(DetailFormat.DateAddedLabel(t.AddedAt), set.Classic, secondaryInk)
+                with { Grow = 1f, Basis = 0f, MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis }));
         // A track the server says is not playable yet (an unreleased entry on a partly-released album) reports 0 plays
         // and 0 duration. Formatting those gives "0" and "0:00", which reads as a real, dismal track rather than as one
         // that is not out — so the cells state the absence instead. Reuses the `notYetOut` local above rather than
@@ -255,9 +279,10 @@ internal static class TrackRow
         // playlist/Liked rows fill LAZILY (the whole-list hydrator runs off the open path, and album rows are countless
         // until it lands too). Rendering that as "0" would state a fact the app does not have, so the cell dashes.
         if (set.Plays)
-            Add(CellKey.Plays, EndCell(Caption(notYetOut || t.PlayCount <= 0 ? Dash : PlaysLabel(t.PlayCount)) with { Color = Tok.TextTertiary }));
+            Add(CellKey.Plays, EndCell(FactualText(
+                notYetOut || t.PlayCount <= 0 ? Dash : PlaysLabel(t.PlayCount), set.Classic, tertiaryInk)));
         if (ShowTempo(set))
-            Add(CellKey.Tempo, EndCell(TempoCell(t)));
+            Add(CellKey.Tempo, EndCell(TempoCell(t, classicNow ? Tok.AccentTextPrimary : null, set.Classic)));
         // A pending track states WHEN rather than a dash, when the metadata plane gave us a live instant in the future
         // (TrackV4.earliest_live_timestamp). "Fri 4 Sep" answers the question the row actually raises; "—" only says
         // the duration is unknown, which the reader can already see.
@@ -267,10 +292,8 @@ internal static class TrackRow
         // Every secondary COLUMN in the row (album, added-by, date, plays, tempo, duration, the resting number) sits on
         // ONE rung — Caption 12/16 — instead of the old 13/12.5/13/13/12.5/13/13 spread. The row therefore carries
         // exactly two type steps: BodyStrong 14/20/600 for the title and Caption 12/16 for everything factual.
-        Add(CellKey.Duration, EndCell(Caption(durationText) with
-        {
-            Color = notYetOut ? Tok.TextTertiary : Tok.TextSecondary,
-        }));
+        Add(CellKey.Duration, EndCell(FactualText(durationText, set.Classic,
+            classicNow ? Tok.AccentTextPrimary : notYetOut ? Tok.TextTertiary : Tok.TextSecondary)));
 
         // Trailing chrome: Video (film at rest / bare "…" on hover) OR dedicated Actions "…", then Expand. Video must
         // sit AFTER Duration so it never wedges between Album and Tempo when the BPM column is on.
@@ -291,7 +314,8 @@ internal static class TrackRow
         {
             Columns = tracks, ColGap = ColGapFor(set.Tier), RowHeight = rowH, Grow = 1f,   // fill the row skin's content lane
             // Pad padX − RowInset: with the skin's RowInset margin, columns still start at padX (header-aligned).
-            Padding = new Edges4(padX - RowInset, 0f, padX - RowInset, 0f),
+            Padding = new Edges4(set.Classic ? padX : padX - RowInset, 0f,
+                                 set.Classic ? padX : padX - RowInset, 0f),
             Children = cells.ToArray(),
         };
     }
@@ -360,7 +384,8 @@ internal static class TrackRow
                                     Action onPlay, Action? onLike = null, float art = 48f,
                                     bool showArtists = true, bool explicitBadge = false,
                                     bool showDuration = true, ArtCardKind kind = ArtCardKind.Rail,
-                                    Action? onAdd = null, bool likePop = false, bool showMore = false)
+                                    Action? onAdd = null, bool likePop = false, bool showMore = false,
+                                    bool showArtwork = true)
     {
         // One radius for the art, not the old grid-4 / list-5 split (5 was on no ramp at all).
         const float radius = Radii.Control;
@@ -411,6 +436,47 @@ internal static class TrackRow
         // card hover exactly like a track row. The card must carry a .WithContextMenu ancestor (ArtistPopular does).
         if (showMore) trailing.Add(MoreButton(true));
 
+        var content = new List<Element>(2 + trailing.Count);
+        if (showArtwork)
+        {
+            content.Add(new BoxEl
+            {
+                Width = art,
+                Height = art,
+                Shrink = 0f,
+                ZStack = true,
+                ClipToBounds = true,
+                Corners = CornerRadius4.All(radius),
+                Children =
+                [
+                    Surfaces.Artwork(t.Image, t.Id.GetHashCode() & 0x7fffffff, art, art, radius,
+                                     decodePx: (int)MathF.Max(64f, art * 2f)),
+                    st.IsBuffering
+                        ? new BoxEl { Width = art, Height = art, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Fill = WaveeOnMedia.CoverScrim, Children = [Spinner()] }
+                        : NowPlayingOverlay.Create(t.Uri, onPlay, fab, cover: true, art, centered: true).Skeletonized(false),
+                ],
+            });
+        }
+        else
+        {
+            content.Add(new BoxEl
+            {
+                Width = WaveeSize.ControlH,
+                Height = WaveeSize.ControlH,
+                Shrink = 0f,
+                AlignItems = FlexAlign.Center,
+                Justify = FlexJustify.Center,
+                Corners = Radii.ControlAll,
+                Role = AutomationRole.Button,
+                Cursor = CursorId.Hand,
+                Focusable = true,
+                OnClick = onPlay,
+                Children = [st.IsBuffering ? Spinner() : Icon(st.IsNow && st.IsPlaying ? Icons.Pause : Icons.Play, 14f, Tok.TextPrimary)],
+            }.Interactive(Interaction.Subtle));
+        }
+        content.Add(new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = Spacing.XXS, Justify = FlexJustify.Center, Children = textKids.ToArray() });
+        content.AddRange(trailing);
+
         return new BoxEl
         {
             Direction = 0,
@@ -421,28 +487,7 @@ internal static class TrackRow
             Gap = Spacing.M,   // was a 10-vs-10 ternary — one value, on the grid
             Padding = kind == ArtCardKind.Grid ? Edges4.All(Spacing.XS) : new Edges4(Spacing.XS, Spacing.XXS, Spacing.XS, Spacing.XXS),
             AlignItems = FlexAlign.Center,
-            Children =
-            [
-                new BoxEl
-                {
-                    Width = art,
-                    Height = art,
-                    Shrink = 0f,
-                    ZStack = true,
-                    ClipToBounds = true,
-                    Corners = CornerRadius4.All(radius),
-                    Children =
-                    [
-                        Surfaces.Artwork(t.Image, t.Id.GetHashCode() & 0x7fffffff, art, art, radius,
-                                         decodePx: (int)MathF.Max(64f, art * 2f)),
-                        st.IsBuffering
-                            ? new BoxEl { Width = art, Height = art, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Fill = WaveeOnMedia.CoverScrim, Children = [Spinner()] }
-                            : NowPlayingOverlay.Create(t.Uri, onPlay, fab, cover: true, art, centered: true).Skeletonized(false),
-                    ],
-                },
-                new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = Spacing.XXS, Justify = FlexJustify.Center, Children = textKids.ToArray() },
-                .. trailing,
-            ],
+            Children = content.ToArray(),
         };
     }
 
@@ -514,7 +559,7 @@ internal static class TrackRow
     /// text stays short enough for a narrow lane. One key token only (Camelot preferred, else standard). Renders EMPTY
     /// (not "0 BPM" / "—") when the adornment has not landed: kind 222 arrives asynchronously, and a placeholder dash
     /// would flicker to a real value a moment later.</summary>
-    static Element TempoCell(Track t)
+    static Element TempoCell(Track t, ColorF? factualInk = null, bool classic = false)
     {
         if (t.TempoBpm is not { } bpm || bpm <= 0d) return new BoxEl();
 
@@ -531,13 +576,13 @@ internal static class TrackRow
                 Width = 6f, Height = 6f, Corners = CornerRadius4.All(1.5f), Opacity = 0.85f,
                 Fill = WaveePalette.DataDotInk(argb, Tok.Theme), AlignSelf = FlexAlign.Center,
             });
-        parts.Add(Caption(DetailFormat.Bpm(bpm)) with { Color = Tok.TextSecondary });
+        parts.Add(FactualText(DetailFormat.Bpm(bpm), classic, factualInk ?? Tok.TextSecondary));
         if (KeyLabel(t) is { Length: > 0 } key)
         {
             // Separator: two bare numeric-ish tokens ("110 7B") read as one mangled value. The middot is the same
             // metadata-joining glyph the sublines use.
-            parts.Add(Caption("·") with { Color = Tok.TextTertiary });
-            parts.Add(Caption(key) with { Color = Tok.TextTertiary });
+            parts.Add(FactualText("·", classic, factualInk ?? Tok.TextTertiary));
+            parts.Add(FactualText(key, classic, factualInk ?? Tok.TextTertiary));
         }
 
         return new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.XS, Children = parts.ToArray() };
@@ -570,6 +615,96 @@ internal static class TrackRow
         ],
     };
 
+    /// <summary>Classic's one-line Title cell. The title/media facts stay together at the leading edge while the
+    /// content-rating mark is pinned to the column's trailing edge, matching the legacy desktop table. When the
+    /// dedicated Artist lane folds, title + video + linked artists become one ellipsized span run instead of growing a
+    /// modern metadata subline.</summary>
+    static Element ClassicTitleLine(Track t, Element title, bool showArtists, bool showVideo, bool showExplicit,
+                                    Action<string, string?> go, bool nowPlaying)
+    {
+        ColorF primary = nowPlaying ? Tok.AccentTextPrimary : Tok.TextPrimary;
+        ColorF secondary = nowPlaying ? Tok.AccentTextPrimary : Tok.TextSecondary;
+        ColorF tertiary = nowPlaying ? Tok.AccentTextPrimary : Tok.TextTertiary;
+        Element leading;
+
+        if (showArtists)
+        {
+            var spans = new List<TextSpan>(t.Artists.Count * 2 + 4)
+            {
+                new(t.Title, Weight: 600, Color: primary),
+            };
+            if (showVideo)
+            {
+                spans.Add(new TextSpan(" "));
+                spans.Add(new TextSpan(Icons.Movie, Color: tertiary, FontFamily: Theme.IconFont));
+            }
+            if (t.Artists.Count > 0) spans.Add(new TextSpan("  ·  ", Color: tertiary));
+            for (int i = 0; i < t.Artists.Count; i++)
+            {
+                if (i > 0) spans.Add(new TextSpan(", ", Color: secondary));
+                var artist = t.Artists[i];
+                string route = RouteForRef(artist.Uri, "artist:");
+                spans.Add(new TextSpan(artist.Name, Color: secondary,
+                    OnClick: () => go(route, artist.Name)));
+            }
+            leading = new SpanTextEl(spans.ToArray())
+            {
+                Size = 14f, LineHeight = 20f, Color = primary,
+                Wrap = TextWrap.NoWrap, Trim = TextTrim.CharacterEllipsis, MaxLines = 1,
+                Shrink = 1f, MinWidth = 0f,
+            };
+        }
+        else
+        {
+            var titleKids = new List<Element>(2)
+            {
+                new BoxEl
+                {
+                    Grow = 1f, Basis = 0f, MinWidth = 0f, ClipToBounds = true,
+                    Children = [title],
+                },
+            };
+            if (showVideo)
+                titleKids.Add(Icon(Icons.Movie, 12f, tertiary) with { Shrink = 0f });
+            leading = new BoxEl
+            {
+                Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.XS,
+                // This lane lives inside another flexible wrapper. It must claim that wrapper's solved width before
+                // its own Basis=0 title child can grow; Shrink-only made the intrinsic width collapse to the optional
+                // movie glyph, leaving every ordinary Classic title at zero width.
+                Grow = 1f, Basis = 0f, MinWidth = 0f, ClipToBounds = true,
+                Children = titleKids.ToArray(),
+            };
+        }
+
+        var kids = new List<Element>(2)
+        {
+            new BoxEl
+            {
+                Direction = 0, Grow = 1f, Basis = 0f, MinWidth = 0f,
+                AlignItems = FlexAlign.Center, ClipToBounds = true,
+                Children = [leading],
+            },
+        };
+        if (showExplicit) kids.Add(ClassicExplicitBadge(nowPlaying ? Tok.AccentTextPrimary : null));
+        return new BoxEl
+        {
+            Direction = 0, Grow = 1f, Basis = 0f, MinWidth = 0f,
+            AlignItems = FlexAlign.Center, Gap = Spacing.S, ClipToBounds = true,
+            Children = kids.ToArray(),
+        };
+    }
+
+    static TextEl FactualText(string text, bool classic, ColorF color) => new(text)
+    {
+        Size = classic ? 14f : 12f,
+        LineHeight = classic ? 20f : 16f,
+        Color = color,
+        Wrap = TextWrap.NoWrap,
+        MaxLines = 1,
+        Trim = TextTrim.CharacterEllipsis,
+    };
+
     /// <summary>The "explicit" badge. TWO DELIBERATE EXCEPTIONS to the ramps, both documented here rather than left as
     /// bare literals:
     /// <list type="number">
@@ -590,6 +725,23 @@ internal static class TrackRow
         Children = [new TextEl("E") { Size = 10f, LineHeight = 12f, Weight = 600, Color = Tok.TextTertiary }],
     };
 
+    /// <summary>The legacy table's full content-rating mark. It deliberately stays separate from the compact modern
+    /// single-letter badge: Classic pins this word-mark to the right edge of the Title lane.</summary>
+    internal static Element ClassicExplicitBadge(ColorF? ink = null) => new BoxEl
+    {
+        Height = 14f, Padding = new Edges4(Spacing.XXS, 0f, Spacing.XXS, 0f), Shrink = 0f,
+        Corners = CornerRadius4.All(2f), BorderWidth = 1f, BorderColor = ink ?? Tok.TextTertiary,
+        Opacity = ink is null ? 0.6f : 1f,
+        AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+        Children =
+        [
+            new TextEl(Loc.Get(Strings.Detail.Badge.Explicit))
+            {
+                Size = 9f, LineHeight = 12f, Weight = 600, Color = ink ?? Tok.TextTertiary,
+            },
+        ],
+    };
+
     /// <summary>The route a metadata REF navigates to. A ref states its own kind, so the ONE route table
     /// (<see cref="RichText.RouteForUri"/>) answers it — which is how a podcast SHOW sitting in the artist/album slot of
     /// an episode row (<c>EpisodeAsTrack</c>, design §1.5) opens the show page instead of a dead album route. A ref the
@@ -601,7 +753,8 @@ internal static class TrackRow
     /// pane's hero line) passes its own — including a matching <paramref name="lineHeight"/>, so the run never falls
     /// back to the shaper's natural box.</summary>
     internal static Element ArtistLinks(IReadOnlyList<ArtistRef> artists, Action<string, string?> go,
-                                        float size = 12f, ushort weight = 0, float lineHeight = 0f)
+                                        float size = 12f, ushort weight = 0, float lineHeight = 0f,
+                                        ColorF? color = null)
     {
         if (artists.Count == 0) return new BoxEl();
         var spans = new TextSpan[artists.Count * 2 - 1];
@@ -619,7 +772,7 @@ internal static class TrackRow
             // vertical rhythm. At the Caption default the ramp's 16 is pinned; a caller that raised the SIZE without
             // naming a line height keeps its previous natural box rather than being silently squeezed into 16.
             Size = size, LineHeight = lineHeight > 0f ? lineHeight : size <= 12f ? 16f : float.NaN,
-            Weight = weight, Color = Tok.TextSecondary, Wrap = TextWrap.NoWrap, Trim = TextTrim.CharacterEllipsis, MaxLines = 1,
+            Weight = weight, Color = color ?? Tok.TextSecondary, Wrap = TextWrap.NoWrap, Trim = TextTrim.CharacterEllipsis, MaxLines = 1,
             MinWidth = 0f,   // the NoWrap names must not inflate the flexible title column
         };
     }
@@ -627,7 +780,7 @@ internal static class TrackRow
     // The responsive playlist/Liked metadata subline. Artist and album remain separate hyperlinks even though they share
     // one ellipsized text run; the middle-dot separator makes the compact fallback read as one deliberate metadata line.
     static Element MetadataLine(Track t, Action<string, string?> go, bool showArtists, bool showAlbum,
-                                bool showExplicit)
+                                bool showExplicit, ColorF? factualInk = null)
     {
         // An EPISODE is a playable with no artists and its SHOW in the album slot (EpisodeAsTrack, design §1.5). Its
         // subtitle is therefore the show — always, not only at the compact tiers where the Album lane folds into this
@@ -667,7 +820,7 @@ internal static class TrackRow
         if (spans.Count > 0)
             kids.Add(new SpanTextEl(spans.ToArray())
             {
-                Size = 12f, LineHeight = 16f, Color = Tok.TextSecondary, Wrap = TextWrap.NoWrap,
+                Size = 12f, LineHeight = 16f, Color = factualInk ?? Tok.TextSecondary, Wrap = TextWrap.NoWrap,
                 Trim = TextTrim.CharacterEllipsis, MaxLines = 1,
                 Grow = 1f, Basis = 0f, MinWidth = 0f,
             });
@@ -689,7 +842,8 @@ internal static class TrackRow
     // that navigated to a bare "album:" was a dead link. The playable ladder's ref-closure post-step (blank AlbumRef scan)
     // closes the gap for liked rows that hydrate with a known album URI and an empty name — this is what the row looks
     // like until it does.
-    internal static Element AlbumLink(AlbumRef album, Action<string, string?> go)
+    internal static Element AlbumLink(AlbumRef album, Action<string, string?> go, ColorF? color = null,
+                                      float size = 12f, float lineHeight = 16f)
     {
         bool named = album.Name.Length > 0;
         Action? open = null;
@@ -702,17 +856,20 @@ internal static class TrackRow
         }
         return new SpanTextEl([new TextSpan(named ? album.Name : Dash, OnClick: open)])
         {
-            Size = 12f, LineHeight = 16f, Color = named ? Tok.TextSecondary : Tok.TextTertiary,
+            Size = size, LineHeight = lineHeight, Color = color ?? (named ? Tok.TextSecondary : Tok.TextTertiary),
             Wrap = TextWrap.NoWrap, Trim = TextTrim.CharacterEllipsis, MaxLines = 1,
             Grow = 1f, Basis = 0f, MinWidth = 0f,   // yield to a squeezed Album track instead of flooring at the name's width
         };
     }
 
     // The Added-by cell: resolved profile when available, otherwise the raw playlist membership id.
-    internal static Element AddedByCell(string? by, Owner? profile = null)
+    internal static Element AddedByCell(string? by, Owner? profile = null, ColorF? color = null, bool classic = false)
     {
         if (string.IsNullOrEmpty(by)) return new BoxEl();
         string label = profile?.Name is { Length: > 0 } name ? name : by;
+        if (classic)
+            return FactualText(label, classic: true, color: color ?? Tok.TextSecondary)
+                with { Grow = 1f, Basis = 0f, MinWidth = 0f };
         return new BoxEl
         {
             Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Start, Gap = Spacing.S,
@@ -720,7 +877,7 @@ internal static class TrackRow
             Children =
             [
                 PersonPicture.Create("", Spacing.XXL, displayName: label, imageSourcePath: profile?.Avatar?.Url),
-                Caption(label) with { Color = Tok.TextSecondary, Grow = 1f, Basis = 0f, MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                Caption(label) with { Color = color ?? Tok.TextSecondary, Grow = 1f, Basis = 0f, MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
             ],
         };
     }
@@ -750,7 +907,7 @@ internal static class TrackRow
     // Always painted at rest — filled when saved, outline when not. Saved-ness is a FACT the row owes the reader, and
     // hiding the outline until hover left a 40-DIP dead gutter on every unsaved row (the common case). The outline is
     // the like affordance sitting in a lane the table already reserved; it has to be there to click.
-    internal static Element Heart(bool saved, Action? onLike, bool pop = false)
+    internal static Element Heart(bool saved, Action? onLike, bool pop = false, bool classic = false)
     {
         return new BoxEl
         {
@@ -766,7 +923,9 @@ internal static class TrackRow
                 {
                     Key = saved ? "hg:on" : "hg:off",              // keyed CHILD of the stable circle (keys live in child arrays)
                     Animate = pop && saved ? HeartPopIn : null,
-                    Children = [Icon(saved ? Icons.HeartFill : Icons.Heart, 14f, saved ? Tok.AccentTextPrimary : Tok.TextTertiary)],
+                    Children = [Icon(saved ? Icons.HeartFill : Icons.Heart, 14f,
+                        saved ? (classic ? Tok.TextPrimary : Tok.AccentTextPrimary)
+                              : (classic ? Tok.TextSecondary : Tok.TextTertiary))],
                 },
             ],
         }.Interactive(Interaction.Subtle);
@@ -779,18 +938,20 @@ internal static class TrackRow
     // the context-request funnel here, so the ancestor row's OnContextRequested opens byte-identically to a right-click,
     // with no OnRealized node capture, no InputHooks, no re-hit-test. `enabled: false` → a static, non-interactive, hidden
     // placeholder (skeleton / overscan) so the shimmer derives the identical reserved lane.
-    internal static Element MoreButton(bool enabled)
+    internal static Element MoreButton(bool enabled, bool classic = false)
     {
         var btn = new BoxEl
         {
             Width = 28f, Height = 28f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-            Corners = Radii.Circle(28f),
-            HoverScale = WaveeMotion.ScaleEmphatic.Hover, PressScale = WaveeMotion.ScaleEmphatic.Press,
+            Corners = classic ? CornerRadius4.All(Radii.None) : Radii.Circle(28f),
+            HoverScale = classic ? 1f : WaveeMotion.ScaleEmphatic.Hover,
+            PressScale = classic ? 1f : WaveeMotion.ScaleEmphatic.Press,
             Cursor = enabled ? CursorId.Hand : (CursorId?)null, ClickRequestsContext = enabled,
             Role = AutomationRole.Button,
             BlocksDragArm = true,   // its own affordance — a press here opens the menu, it never drags the row
             Children = [Icon(Icons.More, 16f, Tok.TextSecondary)],
-        }.Interactive(Interaction.Subtle);
+        };
+        Element button = classic ? btn : btn.Interactive(Interaction.Subtle);
         // QUIET at rest, full on row hover (inherited from the row's hover progress). Fully hidden at rest was the
         // discoverability half of "adding to playlist is unclear" (user report 2026-08-10): every per-row verb — add to
         // playlist, go to album, share, remove — lives behind this glyph, and a control that does not exist until you
@@ -800,8 +961,9 @@ internal static class TrackRow
         return new BoxEl
         {
             Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-            Opacity = enabled ? MoreRestOpacity : 0f, HoverOpacity = enabled ? 1f : 0f,
-            Children = [btn],
+            Opacity = enabled ? (classic ? 0f : MoreRestOpacity) : 0f,
+            HoverOpacity = enabled ? 1f : 0f,
+            Children = [button],
         };
     }
 
@@ -879,17 +1041,21 @@ internal static class TrackRow
     /// about this row, so the movement glyph does not compete with them for the same few pixels.</param>
     internal static Element NumberCell(int index, bool isNow, bool isPlaying, bool isBuffering, bool isTop,
                                        Action? onPlay = null, IReadSignal<bool>? hoverPaused = null,
-                                       IReadSignal<PageAccent>? ctx = null, ChartEntry? chart = null)
+                                       IReadSignal<PageAccent>? ctx = null, ChartEntry? chart = null,
+                                       bool classic = false)
     {
         ColorF accent = Tok.AccentTextPrimary;
         Element number = Caption((index + 1).ToString()) with { Color = Tok.TextTertiary };
-        Element rest =
-            isBuffering ? Spinner()
-            : isNow     ? WaveeEqualizer.Of(isPlaying, () => ctx is {} a ? a.Value.Ink : Tok.AccentTextPrimary, paused: hoverPaused)
-            : isTop     ? Icon(Icons.FavoriteStarFill, 11f, accent)
-            : ChartGlyph(chart) is { } glyph
-                        ? new BoxEl { Direction = 0, Gap = 2f, AlignItems = FlexAlign.Center, Children = [number, glyph] }
-                        : number;
+        Element rest = classic
+            ? isBuffering ? Spinner()
+              : isNow ? Icon(Icons.Volume, 13f, accent)
+              : new BoxEl()
+            : isBuffering ? Spinner()
+              : isNow ? WaveeEqualizer.Of(isPlaying, () => ctx is {} a ? a.Value.Ink : Tok.AccentTextPrimary, paused: hoverPaused)
+              : isTop ? Icon(Icons.FavoriteStarFill, 11f, accent)
+              : ChartGlyph(chart) is { } glyph
+                  ? new BoxEl { Direction = 0, Gap = 2f, AlignItems = FlexAlign.Center, Children = [number, glyph] }
+                  : number;
         Element transport = isBuffering
             ? Spinner()
             : new BoxEl

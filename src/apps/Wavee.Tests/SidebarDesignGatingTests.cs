@@ -132,13 +132,13 @@ public class SidebarDesignGatingTests : IDisposable
     // ── the bootstrap hand-off (the two installs that matter) ─────────────────────────────────────────────────────────
 
     [Fact]
-    public void FreshInstall_SeesTheChooserOnceOnCurated()
+    public void FreshInstall_SeesTheChooserOnceOnClassic()
     {
         var settings = new MemoryAppSettings();
         SidebarBootstrap.Run(settings, _local);
 
         Assert.True(SidebarDesignGating.ShouldShowChooser(settings));
-        Assert.Equal(SidebarDesign.Curated, SidebarDesignGating.ActiveDesign(settings));
+        Assert.Equal(SidebarDesign.Classic, SidebarDesignGating.ActiveDesign(settings));
 
         // …and having answered it (by any exit path), never again — including across a re-run of the bootstrap.
         SidebarDesignGating.MarkChooserSeen(settings);

@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.IO;
+using System.Runtime.InteropServices;
 using FluentGpu;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
@@ -28,7 +29,9 @@ static class PlaybackRuntimeSetupCard
     {
         services.Log.Event(WaveeLogLevel.Info, "ui", "runtime.setup.open", "Playback runtime setup opened",
             fields: [WaveeLogField.Of("status", bridge.RuntimeStatus.Peek().Outcome.ToString())]);
-        var model = new PlaybackRuntimeSetupModel(services, settings, bridge, services.PlayPlayProvisioner, post);
+        // The live-session seam is installed after authentication. Resolve it when an operation starts instead of
+        // freezing today's value into the model: the first-run wizard itself is deliberately created pre-auth.
+        var model = new PlaybackRuntimeSetupModel(services, settings, bridge, () => services.PlayPlayProvisioner, post);
         var handle = ContentDialog.Show(overlay, d =>
         {
             d.Title = Loc.Get(Strings.Playback.Runtime.Title);
@@ -61,6 +64,7 @@ sealed class PlaybackRuntimeSetupModel
     public readonly Signal<long> Received = new(0);
     public readonly Signal<long> Total = new(0);            // 0 = indeterminate
     public readonly Signal<string?> DownloadLabel = new(null);   // "Spotify 1.2.93.667 · Arm64" during download
+    public PlayPlayRuntimeCatalogEntry? ActiveEntry { get; private set; }
     public readonly Signal<int> SelectedPackIndex = new(0);
     /// <summary>True while the Ready phase is showing because a check/install found the ALREADY-active pack rather
     /// than a fresh success — distinct wording, and distinct from a genuine install (no post-success runtime refresh).</summary>
@@ -71,7 +75,7 @@ sealed class PlaybackRuntimeSetupModel
     readonly Services _services;
     readonly IAppSettings _settings;
     readonly PlaybackBridge _bridge;
-    readonly IPlayPlayProvisioner? _provisioner;
+    readonly Func<IPlayPlayProvisioner?> _getProvisioner;
     readonly Action<Action> _post;
 
     CancellationTokenSource? _cts;
@@ -79,36 +83,50 @@ sealed class PlaybackRuntimeSetupModel
     string? _untrustedDir;
 
     public PlaybackRuntimeSetupModel(Services services, IAppSettings settings, PlaybackBridge bridge,
-        IPlayPlayProvisioner? provisioner, Action<Action> post)
+        Func<IPlayPlayProvisioner?> getProvisioner, Action<Action> post)
     {
         _services = services;
         _settings = settings;
         _bridge = bridge;
-        _provisioner = provisioner;
+        _getProvisioner = getProvisioner;
         _post = post;
         PhaseSig = new(bridge.RuntimeStatus.Value.IsReady ? Phase.Ready : Phase.Offer);
         Log(WaveeLogLevel.Debug, "runtime.setup.model", "Playback runtime setup model created",
             WaveeLogField.Of("initialPhase", PhaseSig.Peek().ToString()),
             WaveeLogField.Of("status", bridge.RuntimeStatus.Peek().Outcome.ToString()),
-            WaveeLogField.Of("hasProvisioner", provisioner is not null));
+            WaveeLogField.Of("hasProvisioner", getProvisioner() is not null));
     }
 
     public PlaybackRuntimeStatus Status => _bridge.RuntimeStatus.Value;
-    public bool IsBusy => PhaseSig.Value is Phase.Downloading or Phase.Verifying;
+    public bool IsBusy => PhaseSig.Value is Phase.FetchingCatalog or Phase.Downloading or Phase.Verifying;
 
     public void Bind(OverlayHandle handle) => _handle = handle;
     public void Dispose() => _cts?.Cancel();
 
-    public void Close() => _handle?.Close();
+    /// <summary>Set by the wizard (<c>SetupSession.EnsureRuntime</c>): inside the wizard, "close this page" means
+    /// advance to the next page, not tear down an overlay this model never opened. Null outside the wizard, where
+    /// <see cref="Close"/> falls back to the standalone dialog's own <see cref="_handle"/>.</summary>
+    public Action? OnClose { get; set; }
 
-    /// <summary>"Not now": stop offering (banner included) and close — the user stays remote-only until they ask.</summary>
-    public void NotNow()
+    /// <summary>Set by the wizard: the escape hatch to close the ENTIRE wizard (not just this page) — wired to
+    /// <c>SetupSession.RequestClose</c>. Null outside the wizard, where <see cref="OpenDiagnostics"/>'s plain
+    /// <see cref="Close"/> already tears down the standalone dialog via its own handle.</summary>
+    public Action? OnWizardExit { get; set; }
+
+    public void Close() { if (OnClose is { } c) c(); else _handle?.Close(); }
+
+    /// <summary>The two settings writes + the banner bump — "stop offering, stay remote-only" without closing
+    /// anything. Split out of <see cref="NotNow"/> so the wizard's own "Not now" can dismiss the setting and then
+    /// ADVANCE (the user stays remote-only but setup continues) instead of tearing down the whole flow.</summary>
+    public void DismissSetting()
     {
         Log(WaveeLogLevel.Info, "runtime.setup.dismiss", "Playback runtime setup dismissed");
         _settings.Set(WaveeSettings.PlaybackRuntimeSetupDismissed, true);
         PlaybackRuntimeBannerState.Bump();
-        Close();
     }
+
+    /// <summary>"Not now": stop offering (banner included) and close — the user stays remote-only until they ask.</summary>
+    public void NotNow() { DismissSetting(); Close(); }
 
     public void Back()
     {
@@ -127,7 +145,8 @@ sealed class PlaybackRuntimeSetupModel
 
     public void StartDownload()
     {
-        if (_provisioner is null) { Fail(Loc.Get(Strings.Playback.Runtime.NotActive)); return; }
+        var provisioner = _getProvisioner();
+        if (provisioner is null) { Fail(Loc.Get(Strings.Playback.Runtime.NotActive)); return; }
         Log(WaveeLogLevel.Info, "runtime.setup.download.start", "Runtime setup download flow started");
         Error.Value = null;
         SetPhase(Phase.FetchingCatalog, "start-download");
@@ -137,16 +156,16 @@ sealed class PlaybackRuntimeSetupModel
         {
             try
             {
-                var catalog = await _provisioner.FetchCatalogAsync(cts.Token).ConfigureAwait(false);
+                var catalog = await provisioner.FetchCatalogAsync(cts.Token).ConfigureAwait(false);
                 if (cts.IsCancellationRequested) return;
                 if (catalog is null)
                 {
                     _post(() => SetCatalog(CatalogState.Failed, "catalog-null"));
-                    PostFail(ProvisioningOutcome.PackDownloadFailed);
+                    PostFail(provisioner, ProvisioningOutcome.PackDownloadFailed);
                     return;
                 }
-                var (best, anyOther) = _provisioner.SelectBest(catalog);
-                var supported = _provisioner.SupportedPacks(catalog);
+                var (best, anyOther) = provisioner.SelectBest(catalog);
+                var supported = provisioner.SupportedPacks(catalog);
                 _post(() =>
                 {
                     AnyForOtherArch = anyOther;
@@ -155,7 +174,7 @@ sealed class PlaybackRuntimeSetupModel
                 });
                 if (best is null)
                 {
-                    PostFail(anyOther ? ProvisioningOutcome.ArchUnsupported : ProvisioningOutcome.NoSupportedPack);
+                    PostFail(provisioner, anyOther ? ProvisioningOutcome.ArchUnsupported : ProvisioningOutcome.NoSupportedPack);
                     return;
                 }
                 // The newest catalog entry is often the one already installed (no genuinely newer pack exists yet).
@@ -166,7 +185,7 @@ sealed class PlaybackRuntimeSetupModel
                     _post(AlreadyUpToDate);
                     return;
                 }
-                await DownloadEntryAsync(best, cts, allowUntrusted: false).ConfigureAwait(false);
+                await DownloadEntryAsync(provisioner, best, cts, allowUntrusted: false).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -182,7 +201,8 @@ sealed class PlaybackRuntimeSetupModel
 
     public void InstallSelected()
     {
-        if (_provisioner is null) { Fail(Loc.Get(Strings.Playback.Runtime.NotActive)); return; }
+        var provisioner = _getProvisioner();
+        if (provisioner is null) { Fail(Loc.Get(Strings.Playback.Runtime.NotActive)); return; }
         int idx = SelectedPackIndex.Value;
         if (idx < 0 || idx >= SupportedPacks.Count) return;
         var entry = SupportedPacks[idx];
@@ -201,19 +221,21 @@ sealed class PlaybackRuntimeSetupModel
         var cts = NewCts();
         _ = Task.Run(async () =>
         {
-            try { await DownloadEntryAsync(entry, cts, allowUntrusted: false).ConfigureAwait(false); }
+            try { await DownloadEntryAsync(provisioner, entry, cts, allowUntrusted: false).ConfigureAwait(false); }
             catch (OperationCanceledException) { _post(() => SetPhase(Phase.Advanced, "install-cancelled")); }
             catch (Exception ex) { _post(() => Fail(ex.Message)); }
         });
     }
 
-    async Task DownloadEntryAsync(PlayPlayRuntimeCatalogEntry entry, CancellationTokenSource cts, bool allowUntrusted)
+    async Task DownloadEntryAsync(IPlayPlayProvisioner provisioner, PlayPlayRuntimeCatalogEntry entry,
+        CancellationTokenSource cts, bool allowUntrusted)
     {
         _post(() =>
         {
             Received.Value = 0;
             Total.Value = entry.DownloadSize ?? 0;
             DownloadLabel.Value = $"Spotify {entry.SpotifyVersion} · {entry.Arch}";
+            ActiveEntry = entry;
             SetPhase(Phase.Downloading, "download-entry");
         });
         var progress = new CallbackProgress<PlayPlayDownloadProgress>(p => _post(() =>
@@ -223,14 +245,14 @@ sealed class PlaybackRuntimeSetupModel
             if (p.TotalBytes is { } t) Total.Value = t;
             if (PhaseSig.Value != Phase.Downloading) SetPhase(Phase.Downloading, "download-progress");
         }));
-        var verify = await _provisioner!.DownloadAndInstallAsync(entry, allowUntrusted, progress, cts.Token).ConfigureAwait(false);
+        var verify = await provisioner.DownloadAndInstallAsync(entry, allowUntrusted, progress, cts.Token).ConfigureAwait(false);
         if (cts.IsCancellationRequested) return;
-        _post(() => ApplyVerify(verify));
+        _post(() => ApplyVerify(provisioner, verify));
     }
 
-    void ApplyVerify(PlayPlayRuntimeVerifyResult verify)
+    void ApplyVerify(IPlayPlayProvisioner provisioner, PlayPlayRuntimeVerifyResult verify)
     {
-        _bridge.UpdateRuntimeStatus(_provisioner!.GetSnapshot());
+        _bridge.UpdateRuntimeStatus(provisioner.GetSnapshot());
         if (verify.NeedsUntrustedConfirmation)
         {
             _untrustedDir = verify.RuntimeDir;
@@ -257,7 +279,8 @@ sealed class PlaybackRuntimeSetupModel
     /// <summary>Fetch the catalog for the Advanced version picker (idempotent; re-tries after a failure).</summary>
     void EnsureCatalog()
     {
-        if (_provisioner is null) return;
+        var provisioner = _getProvisioner();
+        if (provisioner is null) return;
         if (CatalogSig.Value is CatalogState.Fetching or CatalogState.Loaded) return;
         SetCatalog(CatalogState.Fetching, "ensure-catalog");
         var cts = NewCts();
@@ -265,11 +288,11 @@ sealed class PlaybackRuntimeSetupModel
         {
             try
             {
-                var catalog = await _provisioner.FetchCatalogAsync(cts.Token).ConfigureAwait(false);
+                var catalog = await provisioner.FetchCatalogAsync(cts.Token).ConfigureAwait(false);
                 if (cts.IsCancellationRequested) return;
                 if (catalog is null) { _post(() => SetCatalog(CatalogState.Failed, "advanced-catalog-null")); return; }
-                var (_, anyOther) = _provisioner.SelectBest(catalog);
-                var supported = _provisioner.SupportedPacks(catalog);
+                var (_, anyOther) = provisioner.SelectBest(catalog);
+                var supported = provisioner.SupportedPacks(catalog);
                 _post(() =>
                 {
                     AnyForOtherArch = anyOther;
@@ -301,15 +324,16 @@ sealed class PlaybackRuntimeSetupModel
 
     public void ConfirmUntrusted()
     {
-        if (_provisioner is null || _untrustedDir is null) { SetPhase(Phase.Offer, "confirm-untrusted-missing"); return; }
+        var provisioner = _getProvisioner();
+        if (provisioner is null || _untrustedDir is null) { SetPhase(Phase.Offer, "confirm-untrusted-missing"); return; }
         var dir = _untrustedDir;
         Log(WaveeLogLevel.Warning, "runtime.setup.untrusted.confirm", "User confirmed untrusted PlayPlay runtime",
             WaveeLogField.Of("dir", dir));
         SetPhase(Phase.Verifying, "confirm-untrusted");
         _ = Task.Run(() =>
         {
-            bool ok = _provisioner.TryRegisterRuntime(dir, allowUntrustedSignature: true);
-            var snap = _provisioner.GetSnapshot();
+            bool ok = provisioner.TryRegisterRuntime(dir, allowUntrustedSignature: true);
+            var snap = provisioner.GetSnapshot();
             _post(() =>
             {
                 _bridge.UpdateRuntimeStatus(snap);
@@ -322,12 +346,20 @@ sealed class PlaybackRuntimeSetupModel
     public void CancelUntrusted() => SetPhase(Phase.Offer, "cancel-untrusted");
 
     /// <summary>"View diagnostics": close the modal and land on the full locate/verify report. Reachable in one click
-    /// from the Failed phase, which is exactly where someone is looking at a sentence that doesn't explain itself.</summary>
+    /// from the Failed phase, which is exactly where someone is looking at a sentence that doesn't explain itself.
+    /// Inside the wizard (<see cref="OnWizardExit"/> set) this is a deliberate departure from the WHOLE flow, not
+    /// just this page: burn the wizard's own deferred marker (exactly like Welcome's "Not now") before leaving,
+    /// since a route change means the wizard is not coming back on its own.</summary>
     public void OpenDiagnostics(Action<string, string?> go)
     {
         Log(WaveeLogLevel.Info, "runtime.setup.diagnostics", "Playback runtime diagnostics opened from setup",
             WaveeLogField.Of("phase", PhaseSig.Peek().ToString()));
-        Close();
+        if (OnWizardExit is { } exitWizard)
+        {
+            SetupGating.MarkDeferred(_settings);
+            exitWizard();
+        }
+        else Close();
         go(PlaybackRuntimeDiagnosticsPage.Route, null);
     }
 
@@ -361,14 +393,15 @@ sealed class PlaybackRuntimeSetupModel
 
     void RegisterDir(string dir, bool allowUntrusted)
     {
-        if (_provisioner is null) { Fail(Loc.Get(Strings.Playback.Runtime.NotActive)); return; }
+        var provisioner = _getProvisioner();
+        if (provisioner is null) { Fail(Loc.Get(Strings.Playback.Runtime.NotActive)); return; }
         Log(WaveeLogLevel.Info, "runtime.setup.register_dir", "Registering selected PlayPlay runtime directory",
             WaveeLogField.Of("dir", dir),
             WaveeLogField.Of("allowUntrusted", allowUntrusted));
         Error.Value = null;
         SetPhase(Phase.Verifying, "register-dir");
-        bool ok = _provisioner.TryRegisterRuntime(dir, allowUntrusted);
-        var snap = _provisioner.GetSnapshot();
+        bool ok = provisioner.TryRegisterRuntime(dir, allowUntrusted);
+        var snap = provisioner.GetSnapshot();
         _bridge.UpdateRuntimeStatus(snap);
         if (!ok && snap.NeedsUntrustedConfirmation) { _untrustedDir = dir; SetPhase(Phase.Untrusted, "register-needs-untrusted"); return; }
         if (!ok) { Error.Value = AudioFailureText.ToUserMessage(snap.Outcome, snap.Detail); SetPhase(Phase.Failed, "register-failed"); return; }
@@ -378,7 +411,7 @@ sealed class PlaybackRuntimeSetupModel
     public void Remove()
     {
         Log(WaveeLogLevel.Warning, "runtime.setup.remove", "Removing active PlayPlay runtime pointer");
-        _provisioner?.ClearActivePointer();
+        _getProvisioner()?.ClearActivePointer();
         _settings.Set(WaveeSettings.PlaybackRuntimeSetupDismissed, false);
         PlaybackRuntimeBannerState.Bump();
         _bridge.UpdateRuntimeStatus(new PlaybackRuntimeStatus(ProvisioningOutcome.RuntimeUnavailable));
@@ -439,9 +472,9 @@ sealed class PlaybackRuntimeSetupModel
         SetPhase(Phase.Failed, "fail");
     }
 
-    void PostFail(ProvisioningOutcome outcome) => _post(() =>
+    void PostFail(IPlayPlayProvisioner provisioner, ProvisioningOutcome outcome) => _post(() =>
     {
-        var snap = _provisioner!.GetSnapshot();
+        var snap = provisioner.GetSnapshot();
         _bridge.UpdateRuntimeStatus(snap);
         Error.Value = AudioFailureText.ToUserMessage(outcome, snap.Detail);
         Log(WaveeLogLevel.Warning, "runtime.setup.failed_outcome", "Playback runtime setup failed",
@@ -494,10 +527,9 @@ sealed class SetupBody : Component
         return _m.PhaseSig.Value switch
         {
             PlaybackRuntimeSetupModel.Phase.Offer => Body(Loc.Get(Strings.Playback.Runtime.OfferBody)),
-            PlaybackRuntimeSetupModel.Phase.FetchingCatalog => BusyRow(Loc.Get(Strings.Playback.Runtime.CheckingSupport), null),
+            PlaybackRuntimeSetupModel.Phase.FetchingCatalog => CatalogWaiting(),
             PlaybackRuntimeSetupModel.Phase.Downloading => Downloading(),
-            PlaybackRuntimeSetupModel.Phase.Verifying => BusyRow(Loc.Get(Strings.Playback.Runtime.Verifying),
-                                                                 Loc.Get(Strings.Playback.Runtime.VerifyingCaption)),
+            PlaybackRuntimeSetupModel.Phase.Verifying => Verifying(),
             PlaybackRuntimeSetupModel.Phase.Untrusted => Untrusted(),
             PlaybackRuntimeSetupModel.Phase.Ready => Ready(_m.Status, overlay),
             PlaybackRuntimeSetupModel.Phase.Failed => Failed(),
@@ -506,14 +538,17 @@ sealed class SetupBody : Component
         };
     }
 
-    static Element Column(params Element[] kids) => new BoxEl { Direction = 1, Gap = Spacing.M, Children = kids };
+    internal static Element Column(params Element[] kids) => new BoxEl { Direction = 1, Gap = Spacing.M, Children = kids };
 
-    static Element Body(string text, ColorF? color = null) =>
+    internal static Element Body(string text, ColorF? color = null) =>
         new TextEl(text) { Size = 13f, Color = color ?? Tok.TextSecondary, Wrap = TextWrap.Wrap };
+
+    internal static Element Lead(string text) =>
+        new TextEl(text) { Size = 16f, Color = Tok.TextPrimary, Wrap = TextWrap.Wrap };
 
     /// <summary>Inline status block — a coloured status glyph + heading, then wrapped body copy. Reads as clean dialog
     /// content instead of a box-in-a-box InfoBar.</summary>
-    static Element Status(string glyph, ColorF glyphColor, string heading, string body) => new BoxEl
+    internal static Element Status(string glyph, ColorF glyphColor, string heading, string body) => new BoxEl
     {
         Direction = 0, Gap = Spacing.M, AlignItems = FlexAlign.Start,
         Children =
@@ -531,7 +566,7 @@ sealed class SetupBody : Component
         ],
     };
 
-    static Element BusyRow(string message, string? caption)
+    internal static Element BusyRow(string message, string? caption)
     {
         Element label = caption is null
             ? Body(message, Tok.TextPrimary)
@@ -547,44 +582,95 @@ sealed class SetupBody : Component
         };
     }
 
-    Element Downloading()
+    const float RuntimeProgressWidth = 412f;
+
+    /// <summary>The prototype's catalog phase: one calm status line and the real indeterminate ProgressBar animation,
+    /// with the process architecture visible so the wait explains what is being selected.</summary>
+    internal static Element CatalogWaiting() => Column(
+        Lead(Loc.Get(Strings.Playback.Runtime.CheckingSupport)),
+        ProgressMetricRow(
+            Loc.Get(Strings.Playback.Runtime.ReachingCatalog),
+            RuntimeInformation.ProcessArchitecture.ToString()),
+        ProgressBar.Indeterminate(width: RuntimeProgressWidth));
+
+    internal Element Downloading()
     {
         long received = _m.Received.Value;
         long total = _m.Total.Value;
         Element bar = total > 0
-            ? ProgressBar.Determinate((float)((double)received / total), width: 412f)
-            : ProgressBar.Indeterminate(width: 412f);
-        string bytes = total > 0
-            ? $"{received / 1_000_000.0:0.0} MB of {total / 1_000_000.0:0.0} MB"
-            : $"{received / 1_000_000.0:0.0} MB";
+            ? ProgressBar.Determinate(SetupRuntimePresentation.ProgressFraction(received, total), width: RuntimeProgressWidth)
+            : ProgressBar.Indeterminate(width: RuntimeProgressWidth);
+        string bytes = DownloadBytes(received, total);
         return Column(
-            new TextEl(_m.DownloadLabel.Value ?? Loc.Get(Strings.Playback.Runtime.Downloading))
-                { Size = 13f, Weight = 600, Color = Tok.TextPrimary },
+            Lead(Loc.Get(Strings.Playback.Runtime.Downloading)),
+            ProgressMetricRow(_m.DownloadLabel.Value ?? Loc.Get(Strings.Playback.Runtime.Downloading), bytes),
             bar,
-            new TextEl(bytes) { Size = 12f, Color = Tok.TextSecondary });
+            new TextEl(Loc.Get(Strings.Playback.Runtime.DownloadBlocking))
+                { Size = 12f, Color = Tok.TextTertiary, Wrap = TextWrap.Wrap });
     }
 
-    static Element Untrusted() => Status(
+    /// <summary>Verification remains indeterminate because the provisioner reports one real Verifying stage, not
+    /// invented sub-percentages. The selected catalog entry still lets the page name exactly what is being checked.</summary>
+    internal Element Verifying()
+    {
+        var entry = _m.ActiveEntry;
+        long total = _m.Total.Value;
+        string version = entry?.SpotifyVersion ?? "—";
+        string arch = entry?.Arch ?? RuntimeInformation.ProcessArchitecture.ToString();
+        string hash = entry is null ? "—" : SetupRuntimePresentation.ShortHash(entry.DllSha256);
+
+        return Column(
+            Lead(Loc.Get(Strings.Playback.Runtime.Verifying)),
+            ProgressMetricRow(
+                Loc.Get(Strings.Playback.Runtime.VerifyingCaption),
+                total > 0 ? $"{total / 1_000_000.0:0.0} MB" : "—"),
+            ProgressBar.Indeterminate(width: RuntimeProgressWidth),
+            new BoxEl
+            {
+                Direction = 1, Gap = Spacing.XS,
+                Padding = Edges4.All(Spacing.S),
+                Fill = Tok.FillLayerAlt,
+                Corners = CornerRadius4.All(Radii.Control),
+                BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
+                Children =
+                [
+                    RuntimeDetailRow(Loc.Get(Strings.Playback.Runtime.DetailVersion), version),
+                    RuntimeDetailRow(Loc.Get(Strings.Playback.Runtime.DetailArch), arch),
+                    RuntimeDetailRow(Loc.Get(Strings.Playback.Runtime.DetailSha256), hash),
+                ],
+            });
+    }
+
+    static Element ProgressMetricRow(string label, string value) => new BoxEl
+    {
+        Direction = 0, Gap = Spacing.M, AlignItems = FlexAlign.Center,
+        Children =
+        [
+            new TextEl(label)
+            {
+                Size = 13f, Weight = 600, Color = Tok.TextPrimary,
+                Grow = 1f, Basis = 0f, MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
+            },
+            new TextEl(value) { Size = 12f, Color = Tok.TextSecondary, Shrink = 0f },
+        ],
+    };
+
+    static string DownloadBytes(long received, long total) => total > 0
+        ? $"{received / 1_000_000.0:0.0} / {total / 1_000_000.0:0.0} MB"
+        : $"{received / 1_000_000.0:0.0} MB";
+
+    internal static Element Untrusted() => Status(
         Icons.StatusWarning, Tok.SystemFillCaution,
         Loc.Get(Strings.Playback.Runtime.SignatureInvalid),
         Loc.Get(Strings.Playback.Runtime.UntrustedBody));
 
-    Element Ready(PlaybackRuntimeStatus status, IOverlayService overlay)
+    internal Element Ready(PlaybackRuntimeStatus status, IOverlayService overlay)
     {
         string sig = status.SignatureTrust switch
         {
             SignatureTrust.Trusted => "Verified",
             SignatureTrust.Untrusted => "Not trusted (loaded by your choice)",
             _ => "Unknown",
-        };
-        static Element DetailRow(string label, string? value) => new BoxEl
-        {
-            Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center,
-            Children =
-            [
-                new TextEl(label) { Size = 12f, Color = Tok.TextSecondary, Width = 92f, Shrink = 0f },
-                new TextEl(value ?? "—") { Size = 12f, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, Grow = 1f },
-            ],
         };
         var kids = new List<Element>
         {
@@ -607,10 +693,10 @@ sealed class SetupBody : Component
             BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
             Children =
             [
-                DetailRow(Loc.Get(Strings.Playback.Runtime.DetailVersion), status.SpotifyVersion),
-                DetailRow(Loc.Get(Strings.Playback.Runtime.DetailArch), status.Arch?.ToString()),
+                RuntimeDetailRow(Loc.Get(Strings.Playback.Runtime.DetailVersion), status.SpotifyVersion),
+                RuntimeDetailRow(Loc.Get(Strings.Playback.Runtime.DetailArch), status.Arch?.ToString()),
                 SignatureRow(status, overlay),
-                DetailRow(Loc.Get(Strings.Playback.Runtime.DetailLocation), status.RuntimePath),
+                RuntimeDetailRow(Loc.Get(Strings.Playback.Runtime.DetailLocation), status.RuntimePath),
             ],
         });
         kids.Add(new BoxEl
@@ -625,12 +711,23 @@ sealed class SetupBody : Component
         return new BoxEl { Direction = 1, Gap = Spacing.M, Children = kids.ToArray() };
     }
 
-    Element Failed() => Status(
+    internal static Element RuntimeDetailRow(string label, string? value) => new BoxEl
+    {
+        Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center,
+        Children =
+        [
+            new TextEl(label) { Size = 12f, Color = Tok.TextSecondary, Width = 92f, Shrink = 0f },
+            new TextEl(value ?? "—")
+                { Size = 12f, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, Grow = 1f, MinWidth = 0f },
+        ],
+    };
+
+    internal Element Failed() => Status(
         Icons.StatusError, Tok.SystemFillCritical,
         Loc.Get(Strings.Playback.Runtime.Missing),
         _m.Error.Value ?? Loc.Get(Strings.Playback.Runtime.NoPack));
 
-    Element SignatureRow(PlaybackRuntimeStatus status, IOverlayService overlay)
+    internal Element SignatureRow(PlaybackRuntimeStatus status, IOverlayService overlay)
     {
         var kids = new List<Element>(3)
         {
@@ -656,7 +753,7 @@ sealed class SetupBody : Component
         };
     }
 
-    void ShowSignatureDetails(IOverlayService overlay, PlaybackRuntimeStatus status)
+    internal void ShowSignatureDetails(IOverlayService overlay, PlaybackRuntimeStatus status)
     {
         if (status.SignatureInfo is not { } signature) return;
         _m.SignatureDetailsOpened(signature);
@@ -672,7 +769,7 @@ sealed class SetupBody : Component
         });
     }
 
-    static Element SignatureDetailsContent(PlaybackRuntimeStatus status, DigitalSignatureInfo signature) => new BoxEl
+    internal static Element SignatureDetailsContent(PlaybackRuntimeStatus status, DigitalSignatureInfo signature) => new BoxEl
     {
         Direction = 1, Gap = Spacing.M,
         Children =
@@ -701,7 +798,7 @@ sealed class SetupBody : Component
         ],
     };
 
-    static Element DialogDetailRow(string label, string? value) => new BoxEl
+    internal static Element DialogDetailRow(string label, string? value) => new BoxEl
     {
         Direction = 1, Gap = 2f,
         Children =
@@ -741,7 +838,7 @@ sealed class SetupBody : Component
         _ => "Unknown",
     };
 
-    Element Advanced()
+    internal Element Advanced()
     {
         var kids = new List<Element> { Body(Loc.Get(Strings.Playback.Runtime.AdvancedBody)) };
 
@@ -785,7 +882,7 @@ sealed class SetupBody : Component
 
     /// <summary>A clickable settings-card row: leading glyph, title + caption stack, trailing chevron — the
     /// ProfileMenu.MenuRow chrome (hover/pressed fills) + the LibraryPage two-line stack.</summary>
-    static Element SettingRow(string glyph, string title, string caption, Action onClick) => new BoxEl
+    internal static Element SettingRow(string glyph, string title, string caption, Action onClick) => new BoxEl
     {
         Direction = 0, AlignItems = FlexAlign.Center, Gap = 13f,
         Padding = new Edges4(12f, 9f, 12f, 9f),
@@ -846,11 +943,14 @@ sealed class SetupFooter : Component
 
             // The one phase that owes an explanation, so it gets the escape hatch: the full locate/verify report sits
             // beside "Advanced options" rather than behind a Settings tab the confused user would have to discover.
+            // The diagnostics link itself only EXISTS when there is somewhere to navigate to (go is not null) —
+            // a clickable-but-inert link is worse than no link.
             PlaybackRuntimeSetupModel.Phase.Failed => Row(
-                LeftLinks(
-                    Link(Loc.Get(Strings.Playback.Runtime.Advanced), _m.ShowAdvanced),
-                    HyperlinkButton.Create(Loc.Get(Strings.Playback.Runtime.ViewDiagnostics),
-                        () => { if (go is not null) _m.OpenDiagnostics(go); })),
+                go is not null
+                    ? LeftLinks(
+                        Link(Loc.Get(Strings.Playback.Runtime.Advanced), _m.ShowAdvanced),
+                        HyperlinkButton.Create(Loc.Get(Strings.Playback.Runtime.ViewDiagnostics), () => _m.OpenDiagnostics(go)))
+                    : Link(Loc.Get(Strings.Playback.Runtime.Advanced), _m.ShowAdvanced),
                 Btn(Loc.Get(Strings.Playback.Runtime.NotNow), _m.NotNow),
                 AccentBtn(Loc.Get(Strings.Playback.Runtime.TryAgain), _m.Retry)),
 

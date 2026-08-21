@@ -34,7 +34,7 @@ public static class ShellResponsiveLayout
     /// than the band where it exists at all: below this it becomes a profile-menu row (<c>MergedChromeLayout.
     /// FriendsInMenu</c>), so the affordance never disappears.
     /// <para>The bell's 800 and the theme toggle's 720 are GONE, not moved: notifications now ride the profile chip's
-    /// unread badge and the theme toggle is an unconditional profile-menu row, so neither has a width at which it
+    /// unread badge and the theme toggle has a permanent caption-leading button, so neither has a width at which it
     /// drops. The ladder is shorter by two stages on purpose.</para></summary>
     public const float ChromeFriendsEnterW = 1000f;
     /// <summary>Forward folds into the "⋯" overflow at the SAME 520/560 band the old ShellToolbar used for its primary
@@ -71,6 +71,8 @@ public static class ShellResponsiveLayout
     public const float ChromeMinDragStripW = 4f;
     /// <summary>The caption cluster: 3 × <c>CaptionButton.Width</c> (46).</summary>
     public const float ChromeCaptionClusterW = 138f;
+    /// <summary>The permanent theme toggle immediately before the native caption buttons.</summary>
+    public const float ChromeThemeToggleW = 32f;
     /// <summary>Reserved on EACH flank of the centre island so the search never butts against the tabs strip or the
     /// identity cluster. The bar's two grow bands split the real leftover between them; this is only the floor that
     /// keeps the two clusters from touching when the row is full.</summary>

@@ -30,6 +30,8 @@ public sealed class HeadlessGpuDevice : IGpuDevice
     private readonly List<DrawIconMaskCmd> _iconMasks = new(16);
     private readonly List<DrawVideoCmd> _videos = new(4);
     private readonly List<EraseRoundRectCmd> _erases = new(4);
+    private readonly List<FillPathCmd> _fillPaths = new(16);
+    private readonly List<StrokePathCmd> _strokePaths = new(16);
     private readonly List<int> _videoClipDepth = new(4);
     private readonly List<(int id, int w, int h)> _uploads = new(32);
     private readonly Dictionary<int, (int w, int h)> _resident = new(32);
@@ -87,6 +89,37 @@ public sealed class HeadlessGpuDevice : IGpuDevice
     /// cutouts. The real backend runs them through the DestOut PSO against whatever surface is bound (an opacity-group
     /// RT for the scrim); headless just captures the payload in emission order.</summary>
     public IReadOnlyList<EraseRoundRectCmd> LastErases => _erases;
+    /// <summary>Tessellated path fills recorded this frame (DrawOp.FillPath — gpu-renderer.md §5). VtxStart/VtxCount/
+    /// IdxStart/IdxCount index <see cref="FluentGpu.Render.PathRealizationCache.Shared"/>'s retained slab; headless just
+    /// captures the payload (no GPU pipeline — that is §1.5).</summary>
+    public IReadOnlyList<FillPathCmd> LastFillPaths => _fillPaths;
+    /// <summary>Tessellated path strokes recorded this frame (DrawOp.StrokePath). TrimStart/TrimEnd/DashOn/DashOff/
+    /// TrimMode are payload-only (never part of the realization key) — see <see cref="StrokePathCmd"/>.</summary>
+    public IReadOnlyList<StrokePathCmd> LastStrokePaths => _strokePaths;
+    /// <summary>Sum of <see cref="FillPathCmd.VtxCount"/>/<see cref="StrokePathCmd.VtxCount"/> across this frame's path
+    /// draws — a cheap "did anything actually tessellate/draw" probe for gates, without re-decoding the stream.</summary>
+    public int LastPathVertexCount
+    {
+        get
+        {
+            int n = 0;
+            foreach (var f in _fillPaths) n += f.VtxCount;
+            foreach (var s in _strokePaths) n += s.VtxCount;
+            return n;
+        }
+    }
+    /// <summary>Sum of <see cref="FillPathCmd.IdxCount"/>/<see cref="StrokePathCmd.IdxCount"/> across this frame's path
+    /// draws.</summary>
+    public int LastPathIndexCount
+    {
+        get
+        {
+            int n = 0;
+            foreach (var f in _fillPaths) n += f.IdxCount;
+            foreach (var s in _strokePaths) n += s.IdxCount;
+            return n;
+        }
+    }
     /// <summary>Clip-stack depth at each <see cref="LastVideos"/> command (parallel list) — a PiP hole records INSIDE
     /// its rounded container's clip, which is where its corner rounding actually comes from.</summary>
     public IReadOnlyList<int> LastVideoClipDepths => _videoClipDepth;
@@ -150,6 +183,8 @@ public sealed class HeadlessGpuDevice : IGpuDevice
         _iconMasks.Clear();
         _videos.Clear();
         _erases.Clear();
+        _fillPaths.Clear();
+        _strokePaths.Clear();
         _videoClipDepth.Clear();
         LastClear = ctx.Clear;
         LastFrameInfo = ctx;
@@ -239,6 +274,14 @@ public sealed class HeadlessGpuDevice : IGpuDevice
                 case DrawOp.EraseRoundRect:
                     _erases.Add(MemoryMarshal.Read<EraseRoundRectCmd>(drawList.Slice(pos)));
                     pos += Unsafe.SizeOf<EraseRoundRectCmd>();
+                    break;
+                case DrawOp.FillPath:
+                    _fillPaths.Add(MemoryMarshal.Read<FillPathCmd>(drawList.Slice(pos)));
+                    pos += Unsafe.SizeOf<FillPathCmd>();
+                    break;
+                case DrawOp.StrokePath:
+                    _strokePaths.Add(MemoryMarshal.Read<StrokePathCmd>(drawList.Slice(pos)));
+                    pos += Unsafe.SizeOf<StrokePathCmd>();
                     break;
                 default:
                     return; // unknown opcode — stop (corrupt stream guard)

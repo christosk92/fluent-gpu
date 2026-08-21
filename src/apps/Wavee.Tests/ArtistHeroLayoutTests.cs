@@ -52,6 +52,19 @@ public class ArtistHeroLayoutTests
         Assert.True(ArtistHeroLayout.NarrowPhotoHeight < narrow.MinHeight);
     }
 
+    /// <summary>The fixed stacked hero must reserve the complete identity anatomy it declares. The old 240/276-DIP
+    /// remainders ended at the top of the Play pill once a real artist carried bio + rank + both audience figures.</summary>
+    [Fact]
+    public void StackedHeroes_ReserveTheirFullIdentityAndActionBands()
+    {
+        Assert.Equal(ArtistHeroLayout.CompactPhotoHeight + ArtistHeroLayout.CompactExpandedIdentityHeight,
+            ArtistHeroLayout.CompactHeight);
+        Assert.Equal(ArtistHeroLayout.NarrowPhotoHeight + ArtistHeroLayout.NarrowExpandedIdentityHeight,
+            ArtistHeroLayout.NarrowHeight);
+        Assert.True(ArtistHeroLayout.CompactExpandedIdentityHeight > 240f);
+        Assert.True(ArtistHeroLayout.NarrowExpandedIdentityHeight > 276f);
+    }
+
     [Fact]
     public void WideAndMedium_PhotoOwnsTheWholeHero()
     {

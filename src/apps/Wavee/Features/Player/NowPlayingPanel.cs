@@ -42,6 +42,7 @@ sealed class NowPlayingPanel : Component
         var lib = UseContext(LibraryBridge.Slot);
         var svc = UseContext(Services.Slot);
         var go = UseContext(HistoryStore.NavCtx);
+        bool showTrackArtwork = !AppearancePrefs.TrackArtworkHidden(svc?.Settings);
 
         var track = b?.CurrentTrack.Value;
         string artistUri = track is { Artists.Count: > 0 } ? track.Artists[0].Uri : "";
@@ -79,7 +80,7 @@ sealed class NowPlayingPanel : Component
         if (merch is { Count: > 0 }) sections.Add(Merch(merch));
 
         var next = NextUp(b.Queue.Value);
-        if (next.Count > 0) sections.Add(NextUpSection(next, b, lib, go));
+        if (next.Count > 0) sections.Add(NextUpSection(next, b, lib, go, showTrackArtwork));
 
         var scrollBody = new BoxEl
         {
@@ -405,7 +406,8 @@ sealed class NowPlayingPanel : Component
         ],
     };
 
-    static Element NextUpSection(IReadOnlyList<QueueEntry> next, PlaybackBridge b, LibraryBridge? lib, Action<string, string?>? go)
+    static Element NextUpSection(IReadOnlyList<QueueEntry> next, PlaybackBridge b, LibraryBridge? lib,
+                                 Action<string, string?>? go, bool showArtwork)
     {
         var rows = new List<Element>(next.Count);
         for (int i = 0; i < next.Count; i++)
@@ -423,7 +425,8 @@ sealed class NowPlayingPanel : Component
                         showArtists: true,
                         explicitBadge: false,
                         showDuration: false,
-                        kind: TrackRow.ArtCardKind.Rail),
+                        kind: TrackRow.ArtCardKind.Rail,
+                        showArtwork: showArtwork),
                 ],
             });
         }

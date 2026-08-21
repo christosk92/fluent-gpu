@@ -9,37 +9,11 @@ using Xunit;
 namespace Wavee.Tests;
 
 /// <summary>
-/// The text-chrome context band: the pure allocator (what the 56-DIP bar carries at a width) and the scroll spy
-/// (which section is "here"), plus the source gates that keep the band's material and grammar from drifting back.
-///
-/// <para>Modelled on <c>MergedChromeLayoutTests</c>: a width LADDER rather than a handful of spot checks, because the
-/// defect class here is a band that behaves differently at two widths a few DIP apart — and because the one property
-/// that actually matters for a resize drag (widening never removes anything) can only be shown by walking.</para>
+/// The text-chrome context band: fixed geometry, horizontal-overflow structure and the scroll spy (which section is
+/// "here"), plus the source gates that keep the band's material and grammar from drifting back.
 /// </summary>
 public class ContextBandLayoutTests
 {
-    // A representative artist pivot: the sections an artist page really renders, at their real English lengths.
-    static readonly string[] ArtistPivot =
-    [
-        "Top tracks", "Albums", "Singles & EPs", "Compilations", "Appears on",
-        "Music videos", "Biography", "Fans also like",
-    ];
-
-    static float[] PivotWidths(params string[] labels)
-    {
-        var w = new float[labels.Length];
-        for (int i = 0; i < labels.Length; i++)
-            w[i] = ContextBandLayout.EstimateLabelWidth(labels[i], ContextBandLayout.PivotPadX);
-        return w;
-    }
-
-    static float ArtistActions()
-        => ContextBandLayout.ActionsWidth(
-        [
-            ContextBandLayout.EstimateLabelWidth("Play", ContextBandLayout.ActionPadX),
-            ContextBandLayout.EstimateLabelWidth("Following", ContextBandLayout.ActionPadX),
-        ]);
-
     // ── the band's fixed geometry ────────────────────────────────────────────────────────────────────────────────
 
     /// <summary>The band is 56 DIP and it is the SAME 56 the detail collapse ladder targets. If these two ever
@@ -91,134 +65,39 @@ public class ContextBandLayoutTests
             ContextBandLayout.ActionsWidth([30f, 30f, 30f]));
     }
 
-    // ── the fit ──────────────────────────────────────────────────────────────────────────────────────────────────
+    // ── horizontal overflow ──────────────────────────────────────────────────────────────────────────────────────
 
-    /// <summary>The title floor and cap are honoured in both directions: a one-character page name still claims the
-    /// floor (a title slot narrower than that identifies nothing), and a 300-character playlist name never claims more
-    /// than the cap (past it the room is better spent on the pivot, which does something).</summary>
     [Fact]
-    public void Title_IsClampedToItsFloorAndCap()
+    public void PivotOverflow_ScrollsWithAnAlphaFadeAndNeverDropsTrailingSections()
     {
-        var wide = ContextBandLayout.Resolve(1400f, 4f, 200f, PivotWidths(ArtistPivot));
-        Assert.Equal(ContextBandLayout.TitleFloor, wide.TitleWidth);
+        string root = AppSourceRoot();
+        if (root is null) { Assert.Skip("app sources not present (binary-only run)"); return; }
 
-        var huge = ContextBandLayout.Resolve(1400f, 5000f, 200f, PivotWidths(ArtistPivot));
-        Assert.Equal(ContextBandLayout.TitleCap, huge.TitleWidth);
-    }
-
-    /// <summary>THE priority rule. At a width that cannot hold everything, the pivot is what is missing — never the
-    /// title, never the actions. (The actions are not modelled as droppable at all: this asserts the band still
-    /// budgets their full claim, i.e. the leftover handed to the pivot never borrows from them.)</summary>
-    [Fact]
-    public void UnderPressure_ThePivotYieldsAndTheTitleAndActionsDoNot()
-    {
-        var pivot = PivotWidths(ArtistPivot);
-        float actions = ArtistActions();
-        const float width = 560f;
-        var tight = ContextBandLayout.Resolve(width, 240f, actions, pivot);
-
-        Assert.True(tight.TitleWidth >= ContextBandLayout.TitleFloor);
-        Assert.True(tight.PivotCount > 0, "the pivot vanished at a width that could still hold part of it");
-        Assert.True(tight.PivotCount < ArtistPivot.Length);
-        Assert.True(tight.PivotTruncated);
-
-        // What the pivot actually claimed plus everything ahead of it still fits the band it was resolved against.
-        float claimed = 0f;
-        for (int i = 0; i < tight.PivotCount; i++)
-            claimed += pivot[i] + (i > 0 ? ContextBandLayout.PivotGap : 0f);
-        Assert.True(claimed + tight.TitleWidth + actions + 2f * ContextBandLayout.ClusterGap <= width + 0.01f,
-            "the band allocated more than the width it was handed");
-    }
-
-    /// <summary>Below the title floor + the actions' claim there is nothing left to allocate, and the band says so by
-    /// dropping the pivot entirely — it does NOT hand out a negative budget or a lone item that would clip. (The two
-    /// survivors still overflow the arithmetic at that width; that is deliberate and is what the title's
-    /// <c>Shrink</c>/ellipsis absorbs in the real row — the actions are never the thing that clips.)</summary>
-    [Fact]
-    public void BelowTheFloors_ThePivotIsAbsentEntirely()
-    {
-        var pivot = PivotWidths(ArtistPivot);
-        var fit = ContextBandLayout.Resolve(360f, 240f, ArtistActions(), pivot);
-        Assert.Equal(0, fit.PivotCount);
-        Assert.True(fit.PivotTruncated);
-        Assert.True(fit.TitleWidth >= ContextBandLayout.TitleFloor);
-    }
-
-    /// <summary>Truncation is from the RIGHT: the surviving items are always a PREFIX of the section order, so the
-    /// pivot stays a walk down the page rather than an arbitrary subset of it.</summary>
-    [Theory]
-    [InlineData(400f)]
-    [InlineData(560f)]
-    [InlineData(720f)]
-    [InlineData(900f)]
-    [InlineData(1100f)]
-    [InlineData(1400f)]
-    public void Truncation_KeepsAPrefixOfTheSectionOrder(float width)
-    {
-        var pivot = PivotWidths(ArtistPivot);
-        var fit = ContextBandLayout.Resolve(width, 200f, ArtistActions(), pivot);
-
-        Assert.InRange(fit.PivotCount, 0, ArtistPivot.Length);
-        Assert.Equal(fit.PivotCount < ArtistPivot.Length, fit.PivotTruncated);
-
-        // The prefix property, restated as the thing the renderer relies on: item i is shown ⇒ every earlier item is.
-        int shownDirect = ContextBandLayout.FitPivots(
-            width - Math.Clamp(200f, ContextBandLayout.TitleFloor, ContextBandLayout.TitleCap)
-                  - ArtistActions() - 2f * ContextBandLayout.ClusterGap,
-            pivot);
-        Assert.Equal(fit.PivotCount, shownDirect);
-    }
-
-    /// <summary>THE resize invariant, walked rather than spot-checked: widening the window never REMOVES a pivot item.
-    /// A non-monotone allocator is invisible in a screenshot and unmissable under a drag.</summary>
-    [Fact]
-    public void WideningNeverRemovesAPivotItem()
-    {
-        var pivot = PivotWidths(ArtistPivot);
-        float actions = ArtistActions();
-        int previous = -1;
-        for (float w = 0f; w <= 2000f; w += 1f)
-        {
-            var fit = ContextBandLayout.Resolve(w, 260f, actions, pivot);
-            Assert.True(fit.PivotCount >= previous,
-                $"pivot lost an item as the band widened to {w} ({previous} → {fit.PivotCount})");
-            previous = fit.PivotCount;
-        }
-        Assert.Equal(ArtistPivot.Length, previous);   // the full pivot is reachable at desktop widths
-    }
-
-    /// <summary>A band with no room at all still returns a usable title slot and simply has no pivot — it must never
-    /// return a negative slot or a count the renderer would index past.</summary>
-    [Theory]
-    [InlineData(0f)]
-    [InlineData(-40f)]
-    [InlineData(40f)]
-    [InlineData(88f)]
-    public void DegenerateWidths_ProduceNoPivotAndNoNegativeSlot(float width)
-    {
-        var fit = ContextBandLayout.Resolve(width, 300f, 200f, PivotWidths(ArtistPivot));
-        Assert.True(fit.TitleWidth >= 0f);
-        Assert.Equal(0, fit.PivotCount);
-        Assert.True(fit.PivotTruncated);
+        string pivot = File.ReadAllText(Path.Combine(root, "Features", "Detail", "ContextBand.cs"));
+        Assert.Contains("int shown = Math.Min(p.Items.Length, MaxItems)", pivot);
+        Assert.Contains("Horizontal = true", pivot);
+        Assert.Contains("SuppressScrollBar = true", pivot);
+        Assert.Contains("AutoEdgeFade = true", pivot);
+        Assert.Contains("EdgeCues = ScrollEdgeCues.None", pivot);
+        Assert.DoesNotContain("p.Visible", pivot);
     }
 
     [Fact]
-    public void AnEmptyPivot_IsNeverReportedAsTruncated()
+    public void ActivePivotTab_IsAutomaticallyRevealedWithoutMovingTheFixedClusters()
     {
-        var fit = ContextBandLayout.Resolve(1400f, 200f, 200f, ReadOnlySpan<float>.Empty);
-        Assert.Equal(0, fit.PivotCount);
-        Assert.False(fit.PivotTruncated);
-    }
+        string root = AppSourceRoot();
+        if (root is null) { Assert.Skip("app sources not present (binary-only run)"); return; }
 
-    [Fact]
-    public void FitPivots_NeverExceedsWhatItWasGiven()
-    {
-        Assert.Equal(0, ContextBandLayout.FitPivots(0f, [10f, 10f]));
-        Assert.Equal(0, ContextBandLayout.FitPivots(-10f, [10f, 10f]));
-        Assert.Equal(2, ContextBandLayout.FitPivots(100000f, [10f, 10f]));
-        // Exactly enough for two: 10 + gap + 10.
-        Assert.Equal(2, ContextBandLayout.FitPivots(20f + ContextBandLayout.PivotGap, [10f, 10f]));
-        Assert.Equal(1, ContextBandLayout.FitPivots(20f + ContextBandLayout.PivotGap - 1f, [10f, 10f]));
+        string pivot = File.ReadAllText(Path.Combine(root, "Features", "Detail", "ContextBand.cs"));
+        Assert.Contains("RevealActive(current)", pivot);
+        Assert.Contains("ScrollIntoView.BringInto(Context, _tabViewport, node, Spacing.S", pivot);
+
+        string artist = File.ReadAllText(Path.Combine(root, "Features", "Detail", "ArtistCompactBar.cs"));
+        Assert.Contains("MaxWidth = ContextBandLayout.TitleCap", artist);
+        Assert.Contains("Grow = 1f, Basis = 0f, MinWidth = 0f", artist);
+        Assert.Contains("Element actions = new BoxEl", artist);
+        Assert.Contains("Shrink = 0f", artist);
+        Assert.DoesNotContain("ContextBandLayout.Resolve", artist);
     }
 
     // ── the scroll spy ───────────────────────────────────────────────────────────────────────────────────────────
@@ -229,21 +108,59 @@ public class ContextBandLayoutTests
     public void AtRest_TheFirstSectionIsActive()
     {
         // Nothing has crossed: every top is below the band.
-        Assert.Equal(0, ContextBandLayout.ActiveSection([600f, 1200f, 1800f], ContextBandLayout.Height));
+        Assert.Equal(0, ContextBandLayout.ActiveSection(
+            [600f, 1200f, 1800f], ContextBandLayout.Height, 800f, atScrollEnd: false));
     }
 
-    /// <summary>Arrival is measured against the BAND's lower edge, not the window's: a section whose top is under the
-    /// bar is hidden behind the very chrome that names it, so it must already be the active one.</summary>
+    /// <summary>Arrival is early enough to describe what dominates the viewport: the incoming heading crosses the
+    /// upper quarter of the usable region below the band, with the small probe retained as boundary tolerance.</summary>
     [Fact]
-    public void ArrivalIsMeasuredAgainstTheBandNotTheWindow()
+    public void ArrivalIsMeasuredAtTheUpperQuarterOfTheUsableViewport()
     {
         float band = ContextBandLayout.Height;
-        // Section 1's top sits 10 DIP below the viewport top — i.e. BEHIND a 56-DIP band.
-        Assert.Equal(1, ContextBandLayout.ActiveSection([-400f, 10f, 900f], band));
-        // Just below the band (+ the probe) it has not arrived yet.
-        Assert.Equal(0, ContextBandLayout.ActiveSection([-400f, band + ContextBandLayout.SpyProbe + 1f, 900f], band));
-        // Exactly at the probe edge it HAS.
-        Assert.Equal(1, ContextBandLayout.ActiveSection([-400f, band + ContextBandLayout.SpyProbe, 900f], band));
+        const float viewport = 800f;
+        float line = ContextBandLayout.SpyLine(band, viewport);
+        Assert.Equal(250f, line);
+        Assert.Equal(0, ContextBandLayout.ActiveSection(
+            [-400f, line + 1f, 900f], band, viewport, atScrollEnd: false));
+        Assert.Equal(1, ContextBandLayout.ActiveSection(
+            [-400f, line, 900f], band, viewport, atScrollEnd: false));
+    }
+
+    [Fact]
+    public void ActivationLine_TracksViewportHeightAndFailsSoftBeforeMeasurement()
+    {
+        float band = ContextBandLayout.Height;
+        Assert.Equal(150f, ContextBandLayout.SpyLine(band, 400f));
+        Assert.Equal(250f, ContextBandLayout.SpyLine(band, 800f));
+        Assert.Equal(band + ContextBandLayout.SpyProbe, ContextBandLayout.SpyLine(band, 0f));
+    }
+
+    [Fact]
+    public void ScrollEnd_RequiresRealOverflowAndMovement()
+    {
+        Assert.False(ContextBandLayout.IsAtScrollEnd(0f, 800f, 800f));
+        Assert.False(ContextBandLayout.IsAtScrollEnd(0f, 800f, 1200f));
+        Assert.False(ContextBandLayout.IsAtScrollEnd(380f, 800f, 1200f));
+        Assert.True(ContextBandLayout.IsAtScrollEnd(392f, 800f, 1200f));
+        Assert.True(ContextBandLayout.IsAtScrollEnd(400f, 800f, 1200f));
+    }
+
+    /// <summary>A short final shelf cannot reach the quarter line when there is not enough content below it. At the
+    /// real lower limit it nevertheless owns the page, while an unrealized tail still cannot be invented.</summary>
+    [Fact]
+    public void AtScrollEnd_TheLastMeasuredSectionWinsBelowTheQuarterLine()
+    {
+        float band = ContextBandLayout.Height;
+        const float viewport = 800f;
+        float belowLine = ContextBandLayout.SpyLine(band, viewport) + 160f;
+
+        Assert.Equal(1, ContextBandLayout.ActiveSection(
+            [-700f, -40f, belowLine], band, viewport, atScrollEnd: false));
+        Assert.Equal(2, ContextBandLayout.ActiveSection(
+            [-700f, -40f, belowLine], band, viewport, atScrollEnd: true));
+        Assert.Equal(1, ContextBandLayout.ActiveSection(
+            [-700f, -40f, float.NaN], band, viewport, atScrollEnd: true));
     }
 
     /// <summary>Walking a whole page top to bottom: the active index is non-decreasing and lands on the last section.
@@ -259,7 +176,7 @@ public class ContextBandLayoutTests
         for (float offset = 0f; offset <= 2800f; offset += 5f)
         {
             for (int i = 0; i < tops.Length; i++) tops[i] = contentTops[i] - offset;
-            int at = ContextBandLayout.ActiveSection(tops, band);
+            int at = ContextBandLayout.ActiveSection(tops, band, 800f, atScrollEnd: false);
             Assert.True(at >= previous, $"active index went backwards at offset {offset}");
             previous = at;
         }
@@ -271,7 +188,8 @@ public class ContextBandLayoutTests
     [Fact]
     public void AnUnrealizedSection_StopsTheScan()
     {
-        Assert.Equal(1, ContextBandLayout.ActiveSection([-900f, -100f, float.NaN, float.NaN], ContextBandLayout.Height));
+        Assert.Equal(1, ContextBandLayout.ActiveSection(
+            [-900f, -100f, float.NaN, float.NaN], ContextBandLayout.Height, 800f, atScrollEnd: false));
     }
 
     /// <summary>A scan that learned NOTHING (not even the first section has a measurement) reports −1 — "no answer,
@@ -285,15 +203,41 @@ public class ContextBandLayoutTests
     [Fact]
     public void AScanThatLearnedNothing_HoldsTheLastAnswerInsteadOfSnappingToTheFirst()
     {
-        Assert.Equal(-1, ContextBandLayout.ActiveSection([float.NaN, float.NaN], ContextBandLayout.Height));
-        Assert.Equal(-1, ContextBandLayout.ActiveSection([float.NaN, -900f], ContextBandLayout.Height));
+        Assert.Equal(-1, ContextBandLayout.ActiveSection(
+            [float.NaN, float.NaN], ContextBandLayout.Height, 800f, atScrollEnd: false));
+        Assert.Equal(-1, ContextBandLayout.ActiveSection(
+            [float.NaN, -900f], ContextBandLayout.Height, 800f, atScrollEnd: true));
         // …but ONE realized section is evidence, and it answers normally.
-        Assert.Equal(0, ContextBandLayout.ActiveSection([-900f, float.NaN], ContextBandLayout.Height));
+        Assert.Equal(0, ContextBandLayout.ActiveSection(
+            [-900f, float.NaN], ContextBandLayout.Height, 800f, atScrollEnd: true));
     }
 
     [Fact]
     public void AnEmptyPivot_HasNoActiveSection()
-        => Assert.Equal(-1, ContextBandLayout.ActiveSection(ReadOnlySpan<float>.Empty, ContextBandLayout.Height));
+        => Assert.Equal(-1, ContextBandLayout.ActiveSection(
+            ReadOnlySpan<float>.Empty, ContextBandLayout.Height, 800f, atScrollEnd: true));
+
+    [Fact]
+    public void StackedBiographyUsesNaturalHeight_AndTheSpyObservesTheRealEnd()
+    {
+        string root = AppSourceRoot();
+        if (root is null) { Assert.Skip("app sources not present (binary-only run)"); return; }
+
+        string biography = File.ReadAllText(Path.Combine(root, "Features", "Detail", "ArtistPage.Biography.cs"));
+        Assert.Contains("DetailLayoutBreakpoints.ModeFor", biography);
+        Assert.Contains("Grow = wide ? 2f : 0f, Basis = wide ? 0f : float.NaN", biography);
+        Assert.Contains("Grow = wide ? 1f : 0f, Basis = wide ? 0f : float.NaN", biography);
+        Assert.Contains("artist-biography:stacked", biography);
+        Assert.DoesNotContain("Grow = wide ? 2f : 1f, Basis = 0f", biography);
+
+        string page = File.ReadAllText(Path.Combine(root, "Features", "Detail", "ArtistPage.cs"));
+        Assert.Contains("pageAtEnd", page);
+        Assert.Contains("ContextBandLayout.IsAtScrollEnd(g.OffsetY, g.ViewportH, g.ContentH)", page);
+
+        string pivot = File.ReadAllText(Path.Combine(root, "Features", "Detail", "ContextBand.cs"));
+        Assert.Contains("_ = _atScrollEnd.Value", pivot);
+        Assert.Contains("_atScrollEnd.Peek()", pivot);
+    }
 
     [Fact]
     public void ScrollTarget_ParksTheSectionUnderTheBandAndNeverGoesNegative()

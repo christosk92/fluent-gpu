@@ -7,7 +7,7 @@
 > design), or **Unaddressed** (Windows-only, no macOS mention). Owning docs stay authoritative; this is
 > the index. Canonical contracts: [`SPEC-INDEX.md`](./SPEC-INDEX.md). Harvested: **2026-06-06**.
 >
-> **Tally: Designed 33 · Deferred 9 · Unaddressed 6.** The Unaddressed bucket is the load-bearing risk —
+> **Tally: Designed 34 · Deferred 9 · Unaddressed 6.** The Unaddressed bucket is the load-bearing risk —
 > the entire COM/`calli`/winmd-harvest stack and the flat-C `[LibraryImport]` surface have **no macOS
 > analog** because macOS has no COM; that machinery is pure Windows debt.
 
@@ -29,7 +29,8 @@
 | Backdrop/Mica | Window Mica/Acrylic via `DwmSetWindowAttribute(DWMWA_SYSTEMBACKDROP_TYPE)` / DComp sibling | `NSVisualEffectView` (`.material`, `blendingMode=.behindWindow`) behind layer-backed `CAMetalLayer` | Designed | window-backdrop-mica.md:46; backdrop-effects-animation.md:122 |
 | Backdrop/Mica | `DwmExtendFrameIntoClientArea`, immersive-dark, legacy Mica 1029, `BackdropCaps` build-probe (RDP/Win10) | macOS `Mica→.sidebar`, `Acrylic→.hudWindow`; version/RDP/fallback logic is Windows-only | Deferred | window-backdrop-mica.md:42,102,129 |
 | GPU renderer | erf shadow / SDF rect family (HLSL, `fwidth`) | portable shader math, HLSL→SPIR-V→MSL | Designed | gpu-renderer.md:330,804 |
-| GPU renderer | D2D `IPrimitiveFallback` (path goldens + per-corner shadows) | "Windows-only crutch — per-primitive Metal-milestone debt list" (no Metal impl) | Deferred | gpu-renderer.md:386,817; hardened-v1-plan.md:127 |
+| GPU renderer | path AA-fringe HLSL (`PathPipeline`'s VS/PS: the tessellated `Cov` coverage attribute is the only AA, MSAA off) | portable shader math, no MSAA RT, HLSL→SPIR-V→MSL — same story as the erf/SDF rect family above; the path lane costs the Metal milestone nothing extra | Designed | gpu-renderer.md §5; `src/FluentGpu.Windows/D3D12/PathPipeline.cs` |
+| GPU renderer | D2D `IPrimitiveFallback` (path goldens + per-corner shadows) | "Windows-only crutch — per-primitive Metal-milestone debt list" (no Metal impl) | Deferred — **AS-BUILT 2026-08, now honestly so**: only the seam NAME survives from the design; no D2D device, interop surface, or fallback present path was ever built (standing it up is larger than the tessellator it would fall back from) | gpu-renderer.md §5 (descope list); hardened-v1-plan.md:127 |
 | GPU renderer | multi-visual DComp tree + `Present1` partial-present + premul-0 hole-punch | `CALayer` tree: `CAMetalLayer` + sibling layers; hole-punch identical | Designed | gpu-renderer.md:143,809; pal-rhi.md:392 |
 | GPU renderer | color: `BGRA8_UNORM` + `_UNORM_SRGB` RTV + DComp PREMULTIPLIED | `CAMetalLayer.colorspace` (linear); atlas + linear-blend map cleanly | Designed | gpu-renderer.md:516; pal-rhi.md:642 |
 | GPU renderer | one shared root signature baked into PSOs | maps to Metal argument buffers | Designed | gpu-renderer.md:736; architecture-spec.md:1152 |

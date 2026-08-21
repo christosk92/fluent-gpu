@@ -3,6 +3,7 @@ using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Text.Json;
+using FluentGpu.Media;
 using FluentGpu.WindowsApi.Media.PlayReady;
 
 namespace Wavee.SpotifyLive;
@@ -32,6 +33,8 @@ sealed class SpotifyVideoManifest
     public string VideoCodec { get; init; } = "";
     public int Width { get; init; }
     public int Height { get; init; }
+    /// <summary>Every compatible PlayReady/H.264 rung, ordered from lowest to highest quality.</summary>
+    public IReadOnlyList<SpotifyVideoManifestProfile> VideoProfiles { get; init; } = Array.Empty<SpotifyVideoManifestProfile>();
 
     // ── segment addressing for the native CENC source (base + prefix + <startTs + i*strideSeconds> + suffix) ──
     public string InitUrl { get; init; } = "";
@@ -59,6 +62,8 @@ sealed class SpotifyVideoManifest
     /// <summary>The audio profile's own CENC key id (hyphenated GUID). Equal to <see cref="CencKid"/> on real Spotify
     /// manifests — that equality is what makes the already-acquired video licence cover the audio too.</summary>
     public string? AudioCencKid { get; init; }
+    /// <summary>Every compatible AAC representation. Opus/WebM is intentionally excluded.</summary>
+    public IReadOnlyList<SpotifyVideoManifestProfile> AudioProfiles { get; init; } = Array.Empty<SpotifyVideoManifestProfile>();
 
     /// <summary>Whether a usable (AAC, PlayReady-indexed, addressable) audio representation was selected.</summary>
     public bool HasAudio => AudioCodec.Length > 0 && AudioInitUrl.Length > 0;
@@ -129,6 +134,8 @@ sealed class SpotifyVideoManifest
         string? cencKid = null, prKid = null;
         bool hasPlayReadyMp4 = false;
         SpotifyVideoManifestProfile? bestAudio = null;
+        var videoProfiles = new List<SpotifyVideoManifestProfile>();
+        var audioProfiles = new List<SpotifyVideoManifestProfile>();
         string? audioKid = null;
         if (content.TryGetProperty("profiles", out var profiles) && profiles.ValueKind == JsonValueKind.Array)
         {
@@ -139,16 +146,19 @@ sealed class SpotifyVideoManifest
                 if (!ProfileMatchesEncryptionIndex(p, playReadyIndex)) continue;
                 int pid = Int(p, "id") ?? 0;
 
-                if (Str(p, "video_codec") is { Length: > 0 } vc)
+                if (Str(p, "video_codec") is { Length: > 0 } vc && IsH264(vc))
                 {
                     hasPlayReadyMp4 = true;
-                    cencKid ??= FormatCencKeyId(Str(p, "key_id"));
+                    string? profileKid = FormatCencKeyId(Str(p, "key_id"));
+                    cencKid ??= profileKid;
                     prKid ??= FormatPlayReadyKeyId(Str(p, "key_id"));
 
                     int pw = Int(p, "video_width") ?? Int(p, "width") ?? 0;
                     int ph = Int(p, "video_height") ?? Int(p, "height") ?? 0;
                     int bw = Int(p, "max_bitrate") ?? Int(p, "bandwidth_estimate") ?? Int(p, "video_bitrate") ?? 0;
-                    best = ChooseConservative(best, new SpotifyVideoManifestProfile(pid, vc, pw, ph, bw));
+                    var cand = new SpotifyVideoManifestProfile(pid, vc, pw, ph, bw, profileKid);
+                    videoProfiles.Add(cand);
+                    best = ChooseConservative(best, cand);
                     continue;
                 }
 
@@ -158,7 +168,8 @@ sealed class SpotifyVideoManifest
                 if (Str(p, "audio_codec") is { Length: > 0 } ac && IsAac(ac))
                 {
                     int abw = Int(p, "audio_bitrate") ?? Int(p, "max_bitrate") ?? Int(p, "bandwidth_estimate") ?? 0;
-                    var cand = new SpotifyVideoManifestProfile(pid, ac, 0, 0, abw);
+                    var cand = new SpotifyVideoManifestProfile(pid, ac, 0, 0, abw, FormatCencKeyId(Str(p, "key_id")));
+                    audioProfiles.Add(cand);
                     if (bestAudio is null || cand.Bandwidth > bestAudio.Bandwidth)
                     {
                         bestAudio = cand;
@@ -166,6 +177,8 @@ sealed class SpotifyVideoManifest
                     }
                 }
             }
+            videoProfiles.Sort(CompareProfiles);
+            audioProfiles.Sort(CompareProfiles);
             if (best is { } sel) { profileId = sel.Id; vcodec = sel.Codec; w = sel.Width; h = sel.Height; }
         }
 
@@ -196,6 +209,7 @@ sealed class SpotifyVideoManifest
             VideoCodec = vcodec,
             Width = w,
             Height = h,
+            VideoProfiles = videoProfiles.ToArray(),
             InitUrl = initUrl,
             SegmentBaseUrl = segBase,
             SegmentPrefix = segPrefix,
@@ -210,6 +224,7 @@ sealed class SpotifyVideoManifest
             AudioSegmentPrefix = audioPrefix,
             AudioSegmentSuffix = audioSuffix,
             AudioCencKid = audioInit.Length > 0 ? audioKid : null,
+            AudioProfiles = audioProfiles.ToArray(),
             Pssh = pssh,
             Pro = pro,
             CencKid = cencKid,
@@ -224,8 +239,79 @@ sealed class SpotifyVideoManifest
     public DashSourceDescriptor? ToDashDescriptor()
     {
         if (!HasPlayReadyMp4 || string.IsNullOrEmpty(InitUrl) || SegmentCount <= 0) return null;
+        var tracks = new List<ProtectedTrackDescriptor>(HasAudio ? 2 : 1);
+        var videoRepresentations = new List<ProtectedRepresentationDescriptor>(VideoProfiles.Count);
+        for (int i = 0; i < VideoProfiles.Count; i++)
+        {
+            var p = VideoProfiles[i];
+            var a = BuildAddressingForProfile(p.Id);
+            if (a.Init.Length == 0 || a.Base.Length == 0) continue;
+            videoRepresentations.Add(new ProtectedRepresentationDescriptor
+            {
+                Id = p.Id.ToString(CultureInfo.InvariantCulture),
+                Quality = new QualityVariant(
+                    p.Id.ToString(CultureInfo.InvariantCulture), p.Bandwidth, new SizeI(p.Width, p.Height), 0,
+                    new MediaContentType(Container.Mp4, CodecId.H264, CodecId.None),
+                    Label: p.Height > 0 ? p.Height.ToString(CultureInfo.InvariantCulture) + "p" : null),
+                InitUrl = a.Init,
+                SegmentBaseUrl = a.Base,
+                SegmentPrefix = a.Prefix,
+                SegmentSuffix = a.Suffix,
+                StartNumber = 0,
+                SegmentCount = SegmentCount,
+                SegmentStride = SegmentStrideSeconds,
+                DefaultKid = p.CencKid,
+            });
+        }
+        if (videoRepresentations.Count > 0)
+            tracks.Add(new ProtectedTrackDescriptor
+            {
+                Id = 1,
+                Kind = TrackKind.Video,
+                Label = "Video",
+                IsDefault = true,
+                Representations = videoRepresentations,
+            });
+
+        if (HasAudio)
+        {
+            var audioRepresentations = new List<ProtectedRepresentationDescriptor>(AudioProfiles.Count);
+            for (int i = 0; i < AudioProfiles.Count; i++)
+            {
+                var p = AudioProfiles[i];
+                var a = BuildAddressingForProfile(p.Id);
+                if (a.Init.Length == 0 || a.Base.Length == 0) continue;
+                audioRepresentations.Add(new ProtectedRepresentationDescriptor
+                {
+                    Id = p.Id.ToString(CultureInfo.InvariantCulture),
+                    Quality = new QualityVariant(
+                        p.Id.ToString(CultureInfo.InvariantCulture), p.Bandwidth, SizeI.Zero, 0,
+                        new MediaContentType(Container.Mp4, CodecId.None, CodecId.Aac), Label: "AAC"),
+                    InitUrl = a.Init,
+                    SegmentBaseUrl = a.Base,
+                    SegmentPrefix = a.Prefix,
+                    SegmentSuffix = a.Suffix,
+                    StartNumber = 0,
+                    SegmentCount = SegmentCount,
+                    SegmentStride = SegmentStrideSeconds,
+                    DefaultKid = p.CencKid,
+                });
+            }
+            if (audioRepresentations.Count > 0)
+                tracks.Add(new ProtectedTrackDescriptor
+                {
+                    Id = 2,
+                    Kind = TrackKind.Audio,
+                    Label = "Main",
+                    Role = TrackRole.Main,
+                    IsDefault = true,
+                    Representations = audioRepresentations,
+                });
+        }
+
         return new DashSourceDescriptor
         {
+            Catalog = new ProtectedAdaptiveCatalog { Tracks = tracks },
             InitUrl = InitUrl,
             SegmentBaseUrl = SegmentBaseUrl,
             SegmentPrefix = SegmentPrefix,
@@ -245,6 +331,22 @@ sealed class SpotifyVideoManifest
             AudioSegmentSuffix = HasAudio ? AudioSegmentSuffix : null,
             AudioCodecs = HasAudio ? AudioCodec : null,
         };
+    }
+
+    (string Init, string Base, string Prefix, string Suffix) BuildAddressingForProfile(int profileId)
+    {
+        if (profileId == ProfileId) return (InitUrl, SegmentBaseUrl, SegmentPrefix, SegmentSuffix);
+        if (profileId == AudioProfileId) return (AudioInitUrl, AudioSegmentBaseUrl, AudioSegmentPrefix, AudioSegmentSuffix);
+
+        // All Spotify v9 representations use the same URL template. Replace only the explicit profile lane in the
+        // already-resolved URLs so signed query parameters remain byte-for-byte intact.
+        string selected = "/profiles/" + ProfileId.ToString(CultureInfo.InvariantCulture) + "/";
+        string replacement = "/profiles/" + profileId.ToString(CultureInfo.InvariantCulture) + "/";
+        return (
+            InitUrl.Replace(selected, replacement, StringComparison.Ordinal),
+            SegmentBaseUrl.Replace(selected, replacement, StringComparison.Ordinal),
+            SegmentPrefix.Replace(selected, replacement, StringComparison.Ordinal),
+            SegmentSuffix);
     }
 
     /// <summary>Locate the two elements a v9 manifest splits itself across — the ONE definition, shared with the
@@ -286,6 +388,17 @@ sealed class SpotifyVideoManifest
     static bool IsAac(string codec)
         => codec.StartsWith("mp4a", StringComparison.OrdinalIgnoreCase)
         || codec.StartsWith("aac", StringComparison.OrdinalIgnoreCase);
+
+    static bool IsH264(string codec)
+        => codec.StartsWith("avc1", StringComparison.OrdinalIgnoreCase)
+        || codec.StartsWith("avc3", StringComparison.OrdinalIgnoreCase)
+        || codec.Equals("h264", StringComparison.OrdinalIgnoreCase);
+
+    static int CompareProfiles(SpotifyVideoManifestProfile left, SpotifyVideoManifestProfile right)
+    {
+        int height = left.Height.CompareTo(right.Height);
+        return height != 0 ? height : left.Bandwidth.CompareTo(right.Bandwidth);
+    }
 
     static string Subst(string template, int profileId) => template
         .Replace("{{profile_id}}", profileId.ToString(CultureInfo.InvariantCulture))
@@ -388,4 +501,4 @@ sealed class SpotifyVideoManifest
     static long? Long(JsonElement e, string name) => e.TryGetProperty(name, out var v) && v.TryGetInt64(out var l) ? l : null;
 }
 
-sealed record SpotifyVideoManifestProfile(int Id, string Codec, int Width, int Height, int Bandwidth);
+sealed record SpotifyVideoManifestProfile(int Id, string Codec, int Width, int Height, int Bandwidth, string? CencKid);

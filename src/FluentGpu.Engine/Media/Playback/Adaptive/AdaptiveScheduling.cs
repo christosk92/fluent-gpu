@@ -139,6 +139,11 @@ public sealed class AdaptiveBitrateController : IAbrPolicy
     public int Choose(IReadOnlyList<QualityVariant> variants, TimeSpan forwardBuffered)
     {
         if (variants.Count == 0) return 0;
+        if (!Selection.IsAuto && Selection.VariantId is { } pinnedId)
+        {
+            for (int i = 0; i < variants.Count; i++)
+                if (string.Equals(variants[i].Id, pinnedId, StringComparison.Ordinal)) return _current = i;
+        }
         Span<int> bitrates = variants.Count <= 64 ? stackalloc int[variants.Count] : new int[variants.Count];
         Span<int> indices = variants.Count <= 64 ? stackalloc int[variants.Count] : new int[variants.Count];
         int allowed = 0;

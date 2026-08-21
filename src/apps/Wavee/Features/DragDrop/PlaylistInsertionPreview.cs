@@ -17,7 +17,7 @@ static class PlaylistInsertionPreview
     /// gap from <see cref="SortableMath.DefaultPreviewCap"/>, so a local literal would drift the cards off the gap.</summary>
     internal const int Cap = SortableMath.DefaultPreviewCap;
 
-    internal static Element Cards(WaveeResourceDragPayload payload, float rowH)
+    internal static Element Cards(WaveeResourceDragPayload payload, float rowH, bool showArtwork = true)
     {
         var tracks = payload.Tracks;
         int total = tracks is { Count: > 0 } ? tracks.Count : 1;
@@ -27,12 +27,12 @@ static class PlaylistInsertionPreview
         {
             Track? track = tracks is { Count: > 0 } && i < tracks.Count ? tracks[i] : null;
             int hidden = i == shown - 1 ? total - shown : 0;
-            rows[i] = Row(track, payload.Name, rowH, hidden);
+            rows[i] = Row(track, payload.Name, rowH, hidden, showArtwork);
         }
         return new BoxEl { Direction = 1, Shrink = 0f, HitTestVisible = false, Children = rows };
     }
 
-    static Element Row(Track? track, string fallback, float height, int hidden)
+    static Element Row(Track? track, string fallback, float height, int hidden, bool showArtwork)
     {
         string title = track?.Title is { Length: > 0 } name ? name : fallback;
         string subtitle = track?.Artists is { Count: > 0 } artists ? artists[0].Name : "";
@@ -45,9 +45,10 @@ static class PlaylistInsertionPreview
                 Corners = Radii.ControlAll, Fill = Tok.FillSubtleSecondary,
                 Children = [Ui.Icon(Icons.MusicNote, 16f, Tok.TextSecondary)],
             };
-        var children = new Element[hidden > 0 ? 3 : 2];
-        children[0] = art;
-        children[1] = new BoxEl
+        var children = new Element[(showArtwork ? 1 : 0) + 1 + (hidden > 0 ? 1 : 0)];
+        int child = 0;
+        if (showArtwork) children[child++] = art;
+        children[child++] = new BoxEl
         {
             Direction = 1, Grow = 1f, Shrink = 1f, MinWidth = 0f, Gap = Spacing.XXS,
             Children =
@@ -57,7 +58,7 @@ static class PlaylistInsertionPreview
             ],
         };
         if (hidden > 0)
-            children[2] = new BoxEl
+            children[child] = new BoxEl
             {
                 Shrink = 0f, Padding = new Edges4(Spacing.S, Spacing.XXS, Spacing.S, Spacing.XXS),
                 Corners = Radii.PillAll, Fill = Tok.AccentSubtle,

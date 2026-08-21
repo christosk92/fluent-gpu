@@ -35,41 +35,31 @@ static class ArtistCompactBar
     /// scroll observer.</summary>
     public static Element Build(Artist artist, string uri, float width, float collapseDistance, ColorF accent,
                                 Action play, bool canHit, ContextPivotItem[] pivot, SectionAnchors anchors,
-                                IReadSignal<float> scroll)
+                                IReadSignal<float> scroll, IReadSignal<float> viewportHeight,
+                                IReadSignal<bool> atScrollEnd)
     {
         float gutter = ArtistHeroLayout.PageGutterFor(width);
         float rowWidth = MathF.Min(MathF.Max(1f, width), WaveeSize.PageMaxW);
-        float inner = MathF.Max(0f, rowWidth - 2f * gutter);
 
         string playLabel = Loc.Get(Strings.Artist.Play);
-        // The follow leg is budgeted at its LONGER wording ("Following"), so the row does not re-fit when the toggle
-        // flips — a pivot item appearing because the user unfollowed would be nonsense.
-        string followLabel = Loc.Get(Strings.Artist.Following);
-        Span<float> actionWidths =
-        [
-            ContextBandLayout.EstimateLabelWidth(playLabel, ContextBandLayout.ActionPadX),
-            ContextBandLayout.EstimateLabelWidth(followLabel, ContextBandLayout.ActionPadX),
-        ];
-        float actionsW = ContextBandLayout.ActionsWidth(actionWidths);
-
-        int items = Math.Min(pivot.Length, ContextPivot.MaxItems);
-        Span<float> pivotWidths = stackalloc float[ContextPivot.MaxItems];
-        for (int i = 0; i < items; i++)
-            pivotWidths[i] = ContextBandLayout.EstimateLabelWidth(pivot[i].Label, ContextBandLayout.PivotPadX);
-
-        var fit = ContextBandLayout.Resolve(inner,
-            ContextBandLayout.EstimateLabelWidth(artist.Name, 0f), actionsW, pivotWidths[..items]);
-
         Element title = new BoxEl
         {
-            Direction = 1, MinWidth = 0f, Shrink = 1f, MaxWidth = fit.TitleWidth,
+            Direction = 1, MinWidth = 0f, Shrink = 1f, MaxWidth = ContextBandLayout.TitleCap,
             Children = [ContextBand.Title(artist.Name)],
         };
 
-        Element pivotCluster = Embed.Comp(
-            new ContextPivot.Props(pivot, fit.PivotCount, ContextBandLayout.Height, accent),
-            () => new ContextPivot(anchors, scroll))
-            with { Key = "artist-pivot:" + uri, SkeletonProxy = EmptyShape };
+        Element pivotContent = Embed.Comp(
+            new ContextPivot.Props(pivot, ContextBandLayout.Height, accent),
+            () => new ContextPivot(anchors, scroll, viewportHeight, atScrollEnd))
+            with
+            {
+                Key = "artist-pivot:" + uri, SkeletonProxy = EmptyShape,
+            };
+        Element pivotCluster = new BoxEl
+        {
+            Direction = 0, Grow = 1f, Basis = 0f, MinWidth = 0f, Height = ContextBandLayout.Height,
+            Children = [pivotContent],
+        };
 
         Element actions = new BoxEl
         {
@@ -89,7 +79,6 @@ static class ArtistCompactBar
             [
                 title,
                 pivotCluster,
-                new BoxEl { Grow = 1f, Basis = 0f, MinWidth = 0f, Height = 1f, HitTestVisible = false },
                 actions,
             ]);
 

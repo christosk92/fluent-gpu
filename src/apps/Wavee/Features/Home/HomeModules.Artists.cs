@@ -178,6 +178,7 @@ sealed class HomeArtistRow : Component
     // bar that reads like nothing else.
     static readonly ColumnSet TrackCols = new(Album: false, By: false, Date: false, Video: false,
                                                        Plays: true, Heart: true, Thumb: true);
+    static readonly ColumnSet TrackColsNoArt = TrackCols with { Thumb = false };
     static readonly TrackSize[] TrackColumns =
     [
         TrackSize.Px(36f),                      // # ↔ play
@@ -188,12 +189,24 @@ sealed class HomeArtistRow : Component
         TrackSize.Px(52f),                      // duration
         TrackSize.Px(160f),                     // personal badge + trailing overflow
     ];
+    static readonly TrackSize[] TrackColumnsNoArt =
+    [
+        TrackSize.Px(36f),
+        TrackSize.Px(TrackRow.HeartCol),
+        TrackSize.Star(),
+        TrackSize.Px(84f),
+        TrackSize.Px(52f),
+        TrackSize.Px(160f),
+    ];
 
     // `.exp-l` — padding 16/18/18, a head with a subdued fact and a Play, then the track rows.
     static Element TopTracks(Artist? a, RelatedArtist picked, Services svc, Action<string, string?>? go,
                              PlaybackBridge? bridge, LibraryBridge? lib,
                              IReadOnlySet<string> userTopUris, int userTopCount)
     {
+        bool showArtwork = !AppearancePrefs.TrackArtworkHidden(svc.Settings);
+        var rowCols = showArtwork ? TrackCols : TrackColsNoArt;
+        var rowTracks = showArtwork ? TrackColumns : TrackColumnsNoArt;
         var kids = new List<Element>(8)
         {
             new BoxEl
@@ -226,13 +239,13 @@ sealed class HomeArtistRow : Component
                 var t = tracks[i];
                 var st = TrackRow.StateOf(bridge, lib, t);
                 // `i`, not `i + 1`: TrackRow renders DisplayIndex + 1, so passing the ordinal made the list start at 2.
-                kids.Add(TrackRow.Row(t, i, st, TrackCols, TrackColumns, TrackRow.RowHeight,
+                kids.Add(TrackRow.Row(t, i, st, rowCols, rowTracks, TrackRow.RowHeight,
                              showTrackArtist: false,
                              navigate,
                              onPlay: () => TrackRow.Invoke(bridge, t, () => _ = svc.Player.PlayTrackAsync(t.Uri)),
                              onLike: t.Uri.Length > 0 ? () => lib?.ToggleSaved(t.Uri, t.Title) : null,
                               actionsCell: TrackActions(userTopUris.Contains(t.Uri), userTopCount))
-                         with { Key = "home-toptrack:" + t.Uri });
+                         with { Key = "home-toptrack:" + t.Uri + ":art=" + showArtwork });
             }
         }
         else

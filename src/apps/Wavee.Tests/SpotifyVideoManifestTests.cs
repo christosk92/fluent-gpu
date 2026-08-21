@@ -46,6 +46,36 @@ public class SpotifyVideoManifestTests
     }
 
     [Fact]
+    public void RealManifest_ExposesEveryH264Rung_InAscendingOrder()
+    {
+        var m = Real();
+        Assert.Collection(m.VideoProfiles,
+            p => Assert.Equal(180, p.Height),
+            p => Assert.Equal(240, p.Height),
+            p => Assert.Equal(320, p.Height),
+            p => Assert.Equal(480, p.Height),
+            p => Assert.Equal(720, p.Height),
+            p => Assert.Equal(1080, p.Height));
+        Assert.Equal(480, m.Height); // catalog expansion must not make startup more aggressive
+    }
+
+    [Fact]
+    public void RealManifest_ProjectsStableQualityIdsAndSignedAddresses()
+    {
+        var d = Real().ToDashDescriptor();
+        Assert.NotNull(d?.Catalog);
+        var video = Assert.Single(d!.Catalog!.Tracks, t => t.Kind == FluentGpu.Media.TrackKind.Video);
+        Assert.Equal(6, video.Representations.Count);
+        for (int i = 0; i < video.Representations.Count; i++)
+        {
+            var rep = video.Representations[i];
+            Assert.Equal(rep.Id, rep.Quality.Id);
+            Assert.Contains("/profiles/" + rep.Id + "/", rep.InitUrl, StringComparison.Ordinal);
+            Assert.Contains("?token=", rep.SegmentSuffix, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
     public void RealManifest_CarriesPlayReadyInitDataAndBothKeyIdForms()
     {
         var m = Real();

@@ -384,6 +384,10 @@ public static class RepaintStreamSafety
                 case DrawOp.DrawIconMask: body = Unsafe.SizeOf<DrawIconMaskCmd>(); break;
                 case DrawOp.DrawVideo: body = Unsafe.SizeOf<DrawVideoCmd>(); break;
                 case DrawOp.EraseRoundRect: body = Unsafe.SizeOf<EraseRoundRectCmd>(); break;
+                // Pure geometry (a retained triangle-soup fill/stroke, like FillRoundRect): every read is inside the
+                // node's own device box, so a damage-clamped scissor replay is safe.
+                case DrawOp.FillPath: body = Unsafe.SizeOf<FillPathCmd>(); break;
+                case DrawOp.StrokePath: body = Unsafe.SizeOf<StrokePathCmd>(); break;
                 case DrawOp.PopLayer: body = Unsafe.SizeOf<PopLayerCmd>(); break;
                 case DrawOp.PushLayer:
                     body = Unsafe.SizeOf<PushLayerCmd>();

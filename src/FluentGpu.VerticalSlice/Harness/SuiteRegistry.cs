@@ -53,6 +53,7 @@ public static class SuiteRegistry
         new("nav", "nav", NavSuite.Run),
         new("overlay", "overlay", OverlaySuite.Run),
         new("damage", "damage", DamageSuite.Run),
+        new("path", "path", PathSuite.Run),
         new("text", "text", TextSuite.Run),
         new("diagnostics", "diagnostics", DiagnosticsSuite.Run),
     ];

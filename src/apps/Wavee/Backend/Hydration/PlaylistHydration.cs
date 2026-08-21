@@ -31,6 +31,25 @@ public sealed class PlaylistHydration : IKindHydration
     public HydrationLevel LevelOf(string uri)
         => HydrationLevels.Of(_store.GetPlaylist(uri), _store.HasMembership(uri));
 
+    /// <summary>The root-list playlists that still need an Open pass before their sidebar rows are authoritative.
+    /// A header alone is not enough: without a membership baseline the projected count is only a thin metadata hint and
+    /// a cover-less playlist cannot derive its track mosaic. Conversely, <see cref="IStore.HasMembership"/> keeps a
+    /// genuinely empty playlist complete, so it is not fetched again on every login.</summary>
+    public static IReadOnlyList<string> RootlistOpenPlan(IStore store)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        var result = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var root = store.Rootlist();
+        for (int i = 0; i < root.Count; i++)
+        {
+            var e = root[i];
+            if (e.Kind != 0 || EntityUri.KindOf(e.Uri) != EntityKind.Playlist || !seen.Add(e.Uri)) continue;
+            if (store.GetPlaylist(e.Uri) is null || !store.HasMembership(e.Uri)) result.Add(e.Uri);
+        }
+        return result;
+    }
+
     /// <summary>Nothing extra: a playlist's catalogue answer is LIST_METADATA_V2 (205) alone.</summary>
     public void ExtraCatalogKinds(in EntityUri uri, HydrationLevel level, List<(string Uri, int Kind)> into) { }
 

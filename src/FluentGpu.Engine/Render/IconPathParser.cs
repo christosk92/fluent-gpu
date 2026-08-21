@@ -207,13 +207,17 @@ public static class IconPathParser
         b.Finish();
     }
 
-    private static bool IsCommand(char c)
+    // Shared with FluentGpu.Render.PathDataParser (the verb-preserving parser) — promoted from private so the two
+    // parsers can never disagree on what a command letter, a number, or an arc flag means.
+    internal static bool IsCommand(char c)
         => c is 'M' or 'm' or 'L' or 'l' or 'H' or 'h' or 'V' or 'v'
             or 'C' or 'c' or 'S' or 's' or 'Q' or 'q' or 'T' or 't' or 'A' or 'a' or 'Z' or 'z';
 
     /// <summary>Read one number, tolerating the compressed export syntax (single decimal point per number; a sign not
-    /// preceded by <c>e</c> ends the number). Returns 0 on a malformed token and leaves the cursor past it.</summary>
-    private static float ReadNum(string s, ref int i)
+    /// preceded by <c>e</c> ends the number). Returns 0 on a malformed token and leaves the cursor past it. Shared with
+    /// <c>PathDataParser</c> (promoted from private; retyped to <see cref="ReadOnlySpan{Char}"/> so both a
+    /// <c>string</c> — via the implicit span conversion — and a caller-owned span can be tokenized identically).</summary>
+    internal static float ReadNum(ReadOnlySpan<char> s, ref int i)
     {
         int n = s.Length;
         while (i < n && (s[i] == ' ' || s[i] == ',' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r')) i++;
@@ -236,12 +240,13 @@ public static class IconPathParser
         }
         int len = i - start;
         if (len <= 0) { if (i == start && i < n) i++; return 0f; }   // never stall
-        return float.TryParse(s.AsSpan(start, len), NumberStyles.Float, CultureInfo.InvariantCulture, out float v) ? v : 0f;
+        return float.TryParse(s.Slice(start, len), NumberStyles.Float, CultureInfo.InvariantCulture, out float v) ? v : 0f;
     }
 
     /// <summary>Read a single arc flag (0/1). SVG permits flags with no separator (e.g. <c>a5 5 0 015 5</c>), so a flag
-    /// is exactly one character.</summary>
-    private static int ReadFlag(string s, ref int i)
+    /// is exactly one character. Shared with <c>PathDataParser</c> (promoted from private; retyped like
+    /// <see cref="ReadNum"/>).</summary>
+    internal static int ReadFlag(ReadOnlySpan<char> s, ref int i)
     {
         int n = s.Length;
         while (i < n && (s[i] == ' ' || s[i] == ',' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r')) i++;
@@ -289,10 +294,37 @@ public static class IconPathParser
     }
 
     // SVG endpoint-parameterization arc → a sequence of cubic Béziers (≤90° each), then flattened. (SVG impl notes F.6.)
+    // The parameterization itself lives in ArcToCubics (below) — shared with FluentGpu.Render.PathDataParser, which
+    // emits the same cubic spans as CubicTo verbs instead of flattening them.
     private static void FlattenArc(ContourBuilder b, float x1, float y1, float rx, float ry, float phiDeg,
         bool largeArc, bool sweep, float x2, float y2)
     {
-        if (rx == 0f || ry == 0f) { b.LineTo(x2, y2); return; }
+        Span<float> spans = stackalloc float[24];
+        int segs = ArcToCubics(x1, y1, rx, ry, phiDeg, largeArc, sweep, x2, y2, spans);
+        if (segs == 0) { b.LineTo(x2, y2); return; }   // degenerate radius (rx or ry == 0)
+
+        float px = x1, py = y1;
+        for (int seg = 0; seg < segs; seg++)
+        {
+            int o = seg * 6;
+            float c1x = spans[o], c1y = spans[o + 1], c2x = spans[o + 2], c2y = spans[o + 3];
+            float ex = spans[o + 4], ey = spans[o + 5];
+            FlattenCubic(b, px, py, c1x, c1y, c2x, c2y, ex, ey, 0);
+            px = ex; py = ey;
+        }
+    }
+
+    /// <summary>SVG endpoint-parameterization arc → up to 4 cubic Bézier spans (each ≤90°, SVG impl notes F.6), written
+    /// into <paramref name="out24"/> as (c1x,c1y,c2x,c2y,ex,ey) per span — 4 spans × 6 floats is the worst case, hence
+    /// the fixed 24-float output. Shared with <c>FluentGpu.Render.PathDataParser</c>, which calls this directly and
+    /// emits the spans as <c>CubicTo</c> verbs instead of flattening them, so the two parsers can never disagree on
+    /// arc shape. Returns the number of spans written; 0 means a degenerate radius (<paramref name="rx"/> or
+    /// <paramref name="ry"/> is 0) and the caller should treat the arc as a straight line to
+    /// (<paramref name="x2"/>, <paramref name="y2"/>).</summary>
+    internal static int ArcToCubics(float x1, float y1, float rx, float ry, float phiDeg,
+        bool largeArc, bool sweep, float x2, float y2, Span<float> out24)
+    {
+        if (rx == 0f || ry == 0f) return 0;
         rx = MathF.Abs(rx); ry = MathF.Abs(ry);
         double phi = phiDeg * Math.PI / 180.0;
         double cosP = Math.Cos(phi), sinP = Math.Sin(phi);
@@ -334,8 +366,6 @@ public static class IconPathParser
             double cosA2 = Math.Cos(a2), sinA2 = Math.Sin(a2);
 
             // Ellipse point + tangent, rotated by phi and translated to center.
-            double e1x = cx + (cosP * rx * cosA - sinP * ry * sinA);
-            double e1y = cy + (sinP * rx * cosA + cosP * ry * sinA);
             double e2x = cx + (cosP * rx * cosA2 - sinP * ry * sinA2);
             double e2y = cy + (sinP * rx * cosA2 + cosP * ry * sinA2);
 
@@ -344,14 +374,18 @@ public static class IconPathParser
             double d2x = -cosP * rx * sinA2 - sinP * ry * cosA2;
             double d2y = -sinP * rx * sinA2 + cosP * ry * cosA2;
 
-            float c1x = (float)(px + t * d1x);   // c1 = e1 + t·tangent(e1)
-            float c1y = (float)(py + t * d1y);
-            float c2x = (float)(e2x - t * d2x);
-            float c2y = (float)(e2y - t * d2y);
-            FlattenCubic(b, (float)px, (float)py, c1x, c1y, c2x, c2y, (float)e2x, (float)e2y, 0);
+            int o = seg * 6;
+            out24[o] = (float)(px + t * d1x);       // c1 = e1 + t·tangent(e1) (e1 == the running px,py by construction)
+            out24[o + 1] = (float)(py + t * d1y);
+            out24[o + 2] = (float)(e2x - t * d2x);
+            out24[o + 3] = (float)(e2y - t * d2y);
+            out24[o + 4] = (float)e2x;
+            out24[o + 5] = (float)e2y;
+
             px = e2x; py = e2y;
             a = a2;
         }
+        return segs;
     }
 
     private static double Angle(double ux, double uy, double vx, double vy)

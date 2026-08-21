@@ -180,7 +180,7 @@ public class DetailSkeletonGeometryTests
     }
 
     /// <summary>The row shimmer is the REAL row: the same <c>RowGrid</c> the list builds, at
-    /// <c>TrackRow.RowHeightFor(density)</c>, on the tier's own column set — so a loaded row replaces its placeholder
+    /// the active row style's density resolver, on the tier's own column set — so a loaded row replaces its placeholder
     /// in place. The reveal-ramp's placeholder is a BLANK grid of the same column tracks and row height (nothing
     /// painted — the crossing fades the real row in), so it needs no inset of its own.</summary>
     [Fact]
@@ -191,7 +191,7 @@ public class DetailSkeletonGeometryTests
         string tracks = Read(root, "Features", "Detail", "DetailTracks.cs");
 
         Assert.Contains("rows[i] = RowGrid(EmptyTrack", tracks);          // the shimmer IS the real row builder
-        Assert.Contains("float rowH = TrackRow.RowHeightFor(density);", tracks);   // …at the real density height
+        Assert.Contains("float rowH = DetailTrackTableRules.RowHeightFor(density, set.Classic);", tracks); // …at the style's real density height
         Assert.Contains("TrackRow.ColGapFor(set.Tier)", tracks);
         Assert.Contains("Columns = tracks, RowHeight = rowH, Grow = 1f,", tracks);   // the ramp placeholder: same tracks, same height, blank
     }

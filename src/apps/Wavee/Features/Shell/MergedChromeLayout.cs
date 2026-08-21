@@ -86,6 +86,7 @@ public readonly record struct MergedChromeLayout(
 
     public static float FixedBudget(bool name, bool friends, bool forward, bool back, bool newTab, bool trailing)
         => ShellResponsiveLayout.ChromeBarLeadW
+         + ShellResponsiveLayout.ChromeThemeToggleW
          + (back ? ShellResponsiveLayout.ChromeNavButtonW : 0f)
          + (forward ? ShellResponsiveLayout.ChromeNavButtonW : 0f)
          + (newTab ? ShellResponsiveLayout.ChromeAddSlotW : 0f)

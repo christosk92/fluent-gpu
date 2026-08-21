@@ -22,6 +22,16 @@ public interface IProtectedVideoPlayer : IDisposable
     ValueTask PlayAsync();
     ValueTask PauseAsync();
     ValueTask SeekAsync(long positionMs);
+    /// <summary>Request a video representation switch. Implementations apply it at the next segment/keyframe boundary.</summary>
+    ValueTask SelectVideoRepresentationAsync(string representationId) => ValueTask.CompletedTask;
+    /// <summary>Request a selectable audio/video track switch.</summary>
+    ValueTask SelectTrackAsync(int trackId) => ValueTask.CompletedTask;
+    /// <summary>The representation currently feeding the decoder, or null on legacy native backends.</summary>
+    string? ActiveVideoRepresentationId => null;
+    /// <summary>Bytes downloaded since open, for bounded-cadence ABR throughput estimation.</summary>
+    long BytesDownloaded => 0;
+    /// <summary>Forward buffered media in milliseconds, or zero when a legacy backend cannot report it.</summary>
+    long ForwardBufferedMs => 0;
     void SetVolume(float volume);
     void SetRate(float rate);
     void Stop();

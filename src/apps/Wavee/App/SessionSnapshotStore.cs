@@ -9,20 +9,29 @@ using FluentGpu.Controls;
 namespace Wavee;
 
 // ── session.json: reopen where you left off ───────────────────────────────────────────────────────────────────────────
-// Versioned document beside history.json / play-log.json. Nav is written by WaveeShell on Go/Back/Forward; playback is
-// SCHEMA ONLY here (a later consumer fills the write/consume paths). Persistence copies PlayLogStore: UI-thread scratch
+// Versioned document beside history.json / play-log.json. Nav and shell chrome are written by WaveeShell; playback is
+// written by PlaybackBridge. Persistence copies PlayLogStore: UI-thread scratch
 // copy into reused buffers (zero alloc on the nav call after warmup) → debounce 2 s → snapshot → atomic tmp→replace.
 //
 // Fail-soft: missing file → null (first run). Corrupt/unreadable → null, file LEFT IN PLACE, writes stay enabled so the
 // first successful save replaces it. Too-new Version → null AND writes blocked (a newer build owns the document).
 // Load never throws and never overwrites.
 
-/// <summary>v1 session document. <see cref="Playback"/> is optional — omit or null until a playback consumer writes it.</summary>
+/// <summary>v1 session document. Every section is additive and optional so older v1 snapshots remain readable.</summary>
 public sealed class SessionSnapshotDto
 {
     public int Version { get; set; } = SessionSnapshotStore.CurrentVersion;
     public SessionNavDto? Nav { get; set; }
     public SessionPlaybackDto? Playback { get; set; }
+    public SessionShellDto? Shell { get; set; }
+}
+
+/// <summary>Restorable shell chrome. Rail width remains a durable preference; this is the session-only presentation
+/// that must reopen exactly as it was when the app closed.</summary>
+public sealed class SessionShellDto
+{
+    public bool RailOpen { get; set; }
+    public int RailMode { get; set; }
 }
 
 /// <summary>Browser-style nav: active route, back/forward stacks (oldest first), and the shell's <c>OpenTab.Id</c>.</summary>
@@ -59,7 +68,8 @@ public sealed class SessionPlaybackDto
     public long CapturedAtUnixMs { get; set; }
 }
 
-/// <summary>Local session snapshot. UI thread for <see cref="UpdateNav"/> / <see cref="UpdatePlayback"/> / <see cref="Flush"/>;
+/// <summary>Local session snapshot. UI thread for <see cref="UpdateNav"/> / <see cref="UpdatePlayback"/> /
+/// <see cref="UpdateShell"/> / <see cref="Flush"/>;
 /// the pool task only ever touches a frozen DTO and the path string (the PlayLogStore contract).</summary>
 public sealed class SessionSnapshotStore
 {
@@ -81,6 +91,7 @@ public sealed class SessionSnapshotStore
     int _fwdCount;
     int _tabId = -1;
     SessionPlaybackDto? _playback;
+    SessionShellDto? _shell;
     Timer? _saveTimer;
     int _savePending;
     int _dirty;
@@ -123,6 +134,9 @@ public sealed class SessionSnapshotStore
     /// (PlaybackController via PlaybackBridge's seam) reads this on the empty-cluster launch path.</summary>
     public SessionPlaybackDto? PlaybackSection { get { lock (_gate) return _playback; } }
 
+    /// <summary>The shell section as last loaded/written (in-memory; no second disk read).</summary>
+    public SessionShellDto? ShellSection { get { lock (_gate) return _shell; } }
+
     /// <summary>Sync load. Never throws. Missing → null. Corrupt/unreadable → null, file untouched. Too-new → null + writes blocked.</summary>
     public SessionSnapshotDto? Load()
     {
@@ -153,6 +167,7 @@ public sealed class SessionSnapshotStore
             {
                 AdoptNav(dto.Nav);
                 _playback = dto.Playback;
+                _shell = dto.Shell;
             }
             return dto;
         }
@@ -190,6 +205,20 @@ public sealed class SessionSnapshotStore
     {
         if (_writesBlocked) return;
         lock (_gate) _playback = dto;
+        Interlocked.Exchange(ref _dirty, 1);
+        ScheduleSave();
+    }
+
+    /// <summary>Persist the session-only right-rail presentation. Equality-gated because the shell effect also runs
+    /// once at mount after adopting the saved values.</summary>
+    public void UpdateShell(bool railOpen, int railMode)
+    {
+        if (_writesBlocked) return;
+        lock (_gate)
+        {
+            if (_shell is { } current && current.RailOpen == railOpen && current.RailMode == railMode) return;
+            _shell = new SessionShellDto { RailOpen = railOpen, RailMode = railMode };
+        }
         Interlocked.Exchange(ref _dirty, 1);
         ScheduleSave();
     }
@@ -328,6 +357,7 @@ public sealed class SessionSnapshotStore
                     ActiveTabId = _tabId,
                 },
                 Playback = _playback,
+                Shell = _shell,
             };
         }
     }
@@ -381,6 +411,7 @@ public sealed class SessionSnapshotStore
 [JsonSerializable(typeof(SessionSnapshotDto))]
 [JsonSerializable(typeof(SessionNavDto))]
 [JsonSerializable(typeof(SessionPlaybackDto))]
+[JsonSerializable(typeof(SessionShellDto))]
 [JsonSerializable(typeof(SessionRouteDto))]
 [JsonSerializable(typeof(SessionRouteDto[]))]
 internal sealed partial class SessionSnapshotJsonCtx : JsonSerializerContext { }

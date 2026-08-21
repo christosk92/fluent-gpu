@@ -9,6 +9,40 @@ using System.Xml.Linq;
 
 namespace FluentGpu.WindowsApi.Media.PlayReady;
 
+/// <summary>One addressable CENC representation. The identity is stable for the lifetime of the manifest; switching
+/// representations never changes the PlayReady session or presentation clock.</summary>
+public sealed record ProtectedRepresentationDescriptor
+{
+    public required string Id { get; init; }
+    public required FluentGpu.Media.QualityVariant Quality { get; init; }
+    public required string InitUrl { get; init; }
+    public required string SegmentBaseUrl { get; init; }
+    public required string SegmentPrefix { get; init; }
+    public required string SegmentSuffix { get; init; }
+    public int StartNumber { get; init; } = 1;
+    public int SegmentCount { get; init; } = 1;
+    public int SegmentStride { get; init; } = 1;
+    public string? DefaultKid { get; init; }
+}
+
+/// <summary>One selectable protected media track and all of its compatible representations.</summary>
+public sealed record ProtectedTrackDescriptor
+{
+    public required int Id { get; init; }
+    public required FluentGpu.Media.TrackKind Kind { get; init; }
+    public string? Language { get; init; }
+    public required string Label { get; init; }
+    public FluentGpu.Media.TrackRole Role { get; init; } = FluentGpu.Media.TrackRole.Main;
+    public bool IsDefault { get; init; }
+    public required IReadOnlyList<ProtectedRepresentationDescriptor> Representations { get; init; }
+}
+
+/// <summary>The complete protected-media catalog discovered in a manifest.</summary>
+public sealed record ProtectedAdaptiveCatalog
+{
+    public required IReadOnlyList<ProtectedTrackDescriptor> Tracks { get; init; }
+}
+
 /// <summary>
 /// The parsed source descriptor an MPD yields for the native PlayReady open path (<c>FgPlayReadyOpenDesc</c>): an explicit
 /// init-segment URL plus the <c>base + prefix + number + suffix</c> media-segment template the native demuxer walks, the
@@ -19,6 +53,8 @@ namespace FluentGpu.WindowsApi.Media.PlayReady;
 /// </summary>
 public sealed record DashSourceDescriptor
 {
+    /// <summary>All selectable tracks and quality representations. Null preserves the legacy single-representation ABI.</summary>
+    public ProtectedAdaptiveCatalog? Catalog { get; init; }
     /// <summary>Absolute URL of the H.264 initialization segment.</summary>
     public required string InitUrl { get; init; }
     /// <summary>Base URL for the numbered media segments (the directory the segment names resolve against).</summary>

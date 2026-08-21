@@ -9302,6 +9302,8 @@ static class ControlsSuite
                 case DrawOp.DrawTabShape: pos += Unsafe.SizeOf<DrawTabShapeCmd>(); break;
                 case DrawOp.DrawIconMask: pos += Unsafe.SizeOf<DrawIconMaskCmd>(); break;
                 case DrawOp.EraseRoundRect: pos += Unsafe.SizeOf<EraseRoundRectCmd>(); break;
+                case DrawOp.FillPath: pos += Unsafe.SizeOf<FillPathCmd>(); break;
+                case DrawOp.StrokePath: pos += Unsafe.SizeOf<StrokePathCmd>(); break;
                 case DrawOp.PushLayer: pos += Unsafe.SizeOf<PushLayerCmd>(); layerBalance++; break;
                 case DrawOp.PopLayer: pos += Unsafe.SizeOf<PopLayerCmd>(); layerBalance--; break;
                 case DrawOp.DrawVideo:

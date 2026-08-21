@@ -193,23 +193,32 @@ sealed class ContextPivot : Component
     /// glance-and-aim affordance, and past a dozen words it is a menu. Also the stack budget the spy scans in.</summary>
     public const int MaxItems = 16;
 
-    /// <summary>Re-pushed per render. <paramref name="Visible"/> is what <see cref="ContextBandLayout.Resolve"/>
-    /// allowed at the current width; <paramref name="BandBottom"/> is the lower edge of the sticky chrome the spy
-    /// measures arrival against (and the gutter a click scrolls the section to).</summary>
-    public sealed record Props(ContextPivotItem[] Items, int Visible, float BandBottom, ColorF Accent);
+    /// <summary>Re-pushed per render. Every item stays mounted in the horizontally scrolling pivot;
+    /// <paramref name="BandBottom"/> is the lower edge of the sticky chrome (and the gutter a click scrolls to).</summary>
+    public sealed record Props(ContextPivotItem[] Items, float BandBottom, ColorF Accent);
 
     readonly SectionAnchors _anchors;
     readonly IReadSignal<float> _scroll;
+    readonly IReadSignal<float> _viewportHeight;
+    readonly IReadSignal<bool> _atScrollEnd;
 
     // The live props, read by the spy effect (which cannot subscribe to props). A plain render-local field write —
     // the same idiom DetailTracks uses to publish `_recsLive` to its bound slots.
     ContextPivotItem[] _items = [];
     float _bandBottom;
+    NodeHandle[] _tabNodes = [];
+    Action<NodeHandle>[] _tabRealized = [];
+    Action[] _tabClicks = [];
+    NodeHandle _tabViewport;
+    bool _scrollSelectionSeeded;
 
-    public ContextPivot(SectionAnchors anchors, IReadSignal<float> scroll)
+    public ContextPivot(SectionAnchors anchors, IReadSignal<float> scroll, IReadSignal<float> viewportHeight,
+                        IReadSignal<bool> atScrollEnd)
     {
         _anchors = anchors;
         _scroll = scroll;
+        _viewportHeight = viewportHeight;
+        _atScrollEnd = atScrollEnd;
     }
 
     public override Element Render()
@@ -225,6 +234,8 @@ sealed class ContextPivot : Component
         UseSignalEffect(() =>
         {
             _ = _scroll.Value;                       // subscribe (throttled by the page's own geometry projector)
+            _ = _viewportHeight.Value;               // resize changes the upper-quarter activation line
+            _ = _atScrollEnd.Value;                  // the final short section wins at the real scroll limit
             Reactive.Untrack(() => Resolve(active));
         });
 
@@ -233,22 +244,38 @@ sealed class ContextPivot : Component
         // first/last keys is enough: sections are appended and removed as whole units, never re-ordered in place.
         UseLayoutEffect(() => Resolve(active), DepKey.From(SetKey(p.Items)));
 
-        int shown = Math.Clamp(p.Visible, 0, Math.Min(p.Items.Length, MaxItems));
-        if (shown == 0) return new BoxEl { Width = 0f, Height = 0f, HitTestVisible = false };
+        int shown = Math.Min(p.Items.Length, MaxItems);
+        EnsureTabSlots(shown);
 
-        int current = Math.Clamp(active.Value, 0, shown - 1);   // subscribe → re-render only on a boundary crossing
+        int activeIndex = active.Value;   // subscribe → re-render only on a boundary crossing
+        int current = shown > 0 ? Math.Clamp(activeIndex, 0, shown - 1) : -1;
+        UseLayoutEffect(() => RevealActive(current), DepKey.From(HashCode.Combine(current, shown, SetKey(p.Items))));
+
+        if (shown == 0) return new BoxEl { Width = 0f, Height = 0f, HitTestVisible = false };
         var kids = new Element[shown];
         for (int i = 0; i < shown; i++)
-        {
-            int index = i;
-            kids[i] = Link(p.Items[i].Label, i == current, p.Accent, () => GoTo(index));
-        }
+            kids[i] = Link(p.Items[i].Label, i == current, p.Accent, _tabClicks[i], _tabRealized[i]);
 
-        return new BoxEl
+        var row = new BoxEl
         {
             Direction = 0, Gap = ContextBandLayout.PivotGap, Shrink = 0f,
             AlignItems = FlexAlign.Center,
             Children = kids,
+        };
+
+        return new ScrollEl
+        {
+            Horizontal = true,
+            ContentSized = true,
+            Grow = 1f,
+            Basis = 0f,
+            MinWidth = 0f,
+            Height = ContextBandLayout.Height,
+            SuppressScrollBar = true,
+            AutoEdgeFade = true,
+            EdgeCues = ScrollEdgeCues.None,
+            Content = row,
+            OnRealized = CaptureTabViewport,
         };
     }
 
@@ -258,14 +285,14 @@ sealed class ContextPivot : Component
     /// conditionally mounted: a mount/unmount would re-run the reconciler for a 2-DIP rect on every boundary, and a
     /// brush cross-fade is what makes the mark move as one gesture. No FLIP flight between items (a 2-DIP rule flying
     /// across a 56-DIP bar is a distraction, not wayfinding).</para></summary>
-    static Element Link(string label, bool isActive, ColorF accent, Action go) => new BoxEl
+    static Element Link(string label, bool isActive, ColorF accent, Action go, Action<NodeHandle> realized) => new BoxEl
     {
         Direction = 1, Shrink = 0f,
         AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
         Height = ContextBandLayout.Height - 2f * Spacing.M,
         Padding = new Edges4(ContextBandLayout.PivotPadX, 0f, ContextBandLayout.PivotPadX, 0f),
         Corners = Radii.ControlAll,
-        Role = AutomationRole.Tab, Focusable = true, Cursor = CursorId.Hand, OnClick = go,
+        Role = AutomationRole.Tab, Focusable = true, Cursor = CursorId.Hand, OnClick = go, OnRealized = realized,
         Children =
         [
             new TextEl(label)
@@ -286,6 +313,37 @@ sealed class ContextPivot : Component
             },
         ],
     };
+
+    /// <summary>Cache each tab's node capture and click delegate for the current item count.</summary>
+    void EnsureTabSlots(int count)
+    {
+        if (_tabNodes.Length == count) return;
+        int oldCount = _tabNodes.Length;
+        Array.Resize(ref _tabNodes, count);
+        Array.Resize(ref _tabRealized, count);
+        Array.Resize(ref _tabClicks, count);
+        for (int i = 0; i < count; i++)
+        {
+            if (i < oldCount) continue;
+            int index = i;
+            _tabRealized[i] = h => _tabNodes[index] = h;
+            _tabClicks[i] = () => GoTo(index);
+        }
+        _scrollSelectionSeeded = false;
+    }
+
+    void CaptureTabViewport(NodeHandle node) => _tabViewport = node;
+
+    void RevealActive(int index)
+    {
+        if ((uint)index >= (uint)_tabNodes.Length || _tabViewport.IsNull) return;
+        var node = _tabNodes[index];
+        var scene = Context.Scene;
+        if (node.IsNull || scene is null || !scene.IsLive(node) || !scene.IsLive(_tabViewport)) return;
+        ScrollIntoView.BringInto(Context, _tabViewport, node, Spacing.S,
+            animate: _scrollSelectionSeeded && !Motion.ReducedMotion);
+        _scrollSelectionSeeded = true;
+    }
 
     /// <summary>Click → scroll that section's top to just under the band. Through the engine's ONE programmatic
     /// bring-into-view seam against the EXPLICIT viewport the page registered, so a nested scroller deeper in the
@@ -315,7 +373,8 @@ sealed class ContextPivot : Component
 
         int n = Math.Min(_items.Length, MaxItems);
         if (n == 0) return;
-        float vpTop = scene.AbsoluteRect(vp).Y;
+        RectF vpRect = scene.AbsoluteRect(vp);
+        float vpTop = vpRect.Y;
         Span<float> tops = stackalloc float[MaxItems];
         for (int i = 0; i < n; i++)
         {
@@ -323,7 +382,9 @@ sealed class ContextPivot : Component
             tops[i] = node.IsNull || !scene.IsLive(node) ? float.NaN : scene.AbsoluteRect(node).Y - vpTop;
         }
 
-        int at = ContextBandLayout.ActiveSection(tops[..n], _bandBottom);
+        float viewportHeight = _viewportHeight.Peek();
+        if (viewportHeight <= 0f) viewportHeight = vpRect.H;
+        int at = ContextBandLayout.ActiveSection(tops[..n], _bandBottom, viewportHeight, _atScrollEnd.Peek());
         if (at >= 0) active.SetIfChanged(at);
     }
 

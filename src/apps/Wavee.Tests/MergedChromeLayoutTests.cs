@@ -14,6 +14,20 @@ public class MergedChromeLayoutTests
         return -1f;
     }
 
+    [Fact]
+    public void FixedBudget_AlwaysReservesTheHeaderThemeToggle()
+    {
+        float essential = MergedChromeLayout.FixedBudget(
+            name: false, friends: false, forward: false, back: false, newTab: false, trailing: false);
+        Assert.Equal(
+            ShellResponsiveLayout.ChromeBarLeadW
+            + ShellResponsiveLayout.ChromeThemeToggleW
+            + 2f * ShellResponsiveLayout.ChromeGutterMinW
+            + ShellResponsiveLayout.ChromeMinDragStripW
+            + ShellResponsiveLayout.ChromeCaptionClusterW,
+            essential);
+    }
+
     [Theory]
     [InlineData(0, 0, 110f)]
     [InlineData(1, 0, 110f)]
@@ -79,9 +93,17 @@ public class MergedChromeLayoutTests
         Assert.Equal(MergedSearchMode.Icon,
             MergedChromeLayout.Resolve(boundary + ShellResponsiveLayout.ChromePromotionHysteresisW - 1f,
                 extent, icon).SearchMode);
+
+        float promotedAt = -1f;
+        for (float width = boundary + ShellResponsiveLayout.ChromePromotionHysteresisW; width <= 4000f; width += 1f)
+        {
+            if (MergedChromeLayout.Resolve(width, extent, icon).SearchMode != MergedSearchMode.Field) continue;
+            promotedAt = width;
+            break;
+        }
+        Assert.True(promotedAt >= boundary + ShellResponsiveLayout.ChromePromotionHysteresisW);
         Assert.Equal(MergedSearchMode.Field,
-            MergedChromeLayout.Resolve(boundary + ShellResponsiveLayout.ChromePromotionHysteresisW,
-                extent, icon).SearchMode);
+            MergedChromeLayout.Resolve(promotedAt, extent, icon).SearchMode);
     }
 
     [Fact]

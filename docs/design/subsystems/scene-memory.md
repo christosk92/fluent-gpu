@@ -260,6 +260,7 @@ blocks as cheap insurance.
 | **VirtualState** (slab) | — | slab-backed column; per-range CTS, anchor `ItemKey`, extent table ref | layout (virtual list/grid), P2 scroll, P4 window realize | **virtualization** (`app-requirements` §3.2) |
 | **SelectionState** (sparse side-table) | 24 | tiny `Dictionary<NodeHandle,Handle>` index → `SlabAllocator<SelectionState>`; **NOT a NodePaint field** (keeps NodePaint at 64B); anchor/extent text-positions + affinity + bake-ticket | record (resolve→`DrawSelectionRectCmd`), input (drag), UIA `ITextRangeProvider` | this doc (placement) / **`text.md`** (semantics, L1) |
 | **`_borderBrushes`** (sparse side-table; SHIPPED) | — | sparse map MIRRORING the gradient side-table (`Set`/`TryGet`/`Clear` + `FreeSubtree` removal); holds the per-node `GradientSpec` for the gradient elevation border; `BorderWidth` stays in the dense `NodePaint` column | record (resolve→`DrawGradientStroke`) | this doc (placement) / **`gpu-renderer.md`** (`DrawGradientStrokeCmd` shape + raster) |
+| **`_paths`** (`ColdSlab<PathSpec>`; AS-BUILT 2026-08) | — | `ColdSlab<PathSpec>` indexed directly by the node's slot index (`SetPath`/`TryGetPath`/`ClearPath`, same shape as `_polylines`); sets `NodeFlags.SparsePaint`; **NOT a NodePaint field** (a `PathSpec`'s `PathData?`/`StrokeStyle`/trim/dash/viewbox fields do not fit the 64B cache line) | record (resolve→`DrawOp.FillPath`/`StrokePath`) | this doc (placement) / **`gpu-renderer.md`** §5 (`PathSpec` field semantics, `PathData`/`PathContentEpoch`, tessellation+realization) |
 | **FlowState** | 4 | flat POD column on the spine: `{Inherited:byte, Resolved:byte, _pad:ushort}`; written at `WriteLayout` | layout (logical→physical mirror), record (RTL overlay placement) | this doc (placement) / **`layout.md`** (resolution, L5) |
 | **A11yRel** (cold slab) | 24 | `SlabAllocator<A11yRel>`; `A11yRelRef:int` in `A11yInfo` (0 = shared none-row); `SetSize`/`PositionInSet`/`Level`/`DescribedBy`/`FullDescription`/`FlowsTo` | UIA only (when `UiaClientsAreListening`) | this doc (placement) / **`input-a11y.md`** (semantics, L6) |
 | **UpdateQueueSlab** (slab) | per-record 24 | `SlabAllocator<UpdateRecord>` + per-component `UpdateQueueHead:int` head-index; intrusive `NextInQueue` link; lane byte carried | phase 3 hook-flush (drain), phase 5 reconcile (consume) | this doc (placement) / **`reconciler-hooks.md`** (lane semantics, P1/P2a) |
@@ -370,7 +371,16 @@ owns the stop rule). Animation writes **Transform/PaintDirty only, never LayoutD
 
 ```csharp
 public enum VisualKind : byte {
-    Container, RoundRect, Text, Path, Image, Backdrop,
+    Container, RoundRect, Text,
+    Path,              \ AS-BUILT (2026-08): a tessellated vector path node. As-built storage is the
+                       //   `_paths` ColdSlab<PathSpec> side-table indexed directly by the node's slot
+                       \   (§2.2), NOT a NodePaint field — a PathSpec (geometry+fill+stroke) is
+                       //   authored-content-sized and does not fit the 64B cache line; the printed
+                       //   `Identity.PayloadRef`-tags-`PathHandle` rule below is the design sketch, not a
+                       \   separate handle the as-built column uses. Recorded as DrawOp.FillPath/StrokePath
+                       //   (payload+raster+realization cache: gpu-renderer.md §5/§5.1; enum registration:
+                       //   §4.1 above).
+    Image, Backdrop,
     ComponentAnchor,   // Passthrough zero-cost identity node (reconciler-hooks §5.2)
     Video,             // = 7 (AS-BUILT): the hole-punch node (media-pipeline). Like IconLayer it REUSES the Image
                        //   payload slot — the `ImageId` column doubles as the `VideoSurfaceRegistry` slot token — so
@@ -612,6 +622,13 @@ render-private arena (one set per DrawList arena slot; ring of ≥3, threading �
 ```
 
 ```csharp
+// DESIGN SKETCH — this 8-byte header is the ORIGINAL encoding-framework target, not the shipped wire
+// format. AS-BUILT (src/FluentGpu.Engine/Render/DrawList.cs): DrawOp is declared `enum DrawOp : int`
+// (below is printed as `byte` for the design shape), and there is NO DrawCmd struct in the real encoder —
+// WriteOp writes the 4-byte int Op tag directly into the byte arena, with the fixed-size POD payload for
+// that op immediately following it (no Flags/PayloadSz/reserved fields anywhere in the bitstream;
+// per-opcode dispatch already knows each op's fixed payload size, so PayloadSz was never needed to walk
+// the stream). gpu-renderer.md §3.1 carries the matching AS-BUILT correction for its own local reprint.
 namespace FluentGpu.Render;
 
 [StructLayout(LayoutKind.Sequential, Size = 8)]
@@ -657,7 +674,20 @@ public enum DrawOp : byte {
                           //   new shader/PSO/texture/RHI method. Deliberately NOT the FillPath/StrokePath tessellation
                           //   lane (same non-tessellation-sibling posture as DrawTabShape). Same POD-registration contract.
     // paths (payloads: gpu-renderer.md)
-    FillPath, StrokePath,
+    FillPath,             \ = 19 (AS-BUILT 2026-08): a tessellated path FILL. Payload shape + raster +
+                          //   realization cache: gpu-renderer.md §5/§5.1. Geometry is a triangle soup
+                          //   realized once by PathRealizationCache.Shared and referenced by
+                          //   (VtxStart,VtxCount,IdxStart,IdxCount) into its retained slab — pure geometry,
+                          \   exact under a span translation (patch Transform only). Scene-side storage:
+                          //   VisualKind.Path (§2.4, pre-existing enum member) + the `_paths` ColdSlab<PathSpec>
+                          //   column (§2.2). AS-BUILT NOTE: on the real int-tagged DrawOp (this enum's own
+                          \   printed byte form is the design sketch — see gpu-renderer.md §3.1), this
+                          //   value is 19.
+    StrokePath,           \ = 20 (AS-BUILT 2026-08): same realization-slab contract as FillPath, plus a
+                          //   per-frame TrimStart/TrimEnd/DashOn/DashOff/ArcLenPx uniform that DELIBERATELY
+                          \   never touches the realization key (gpu-renderer.md §5.1) — so a 60 Hz
+                          //   stroke-trim/dash draw-on still hits the SAME cached tessellation. Same
+                          //   POD-registration contract. Value 20 on the as-built int-tagged DrawOp.
     // clip / layer / transform stack (payloads: gpu-renderer.md; PushLayer{Effect}: backdrop)
     PushClipRect, PushClipRoundRect, PushStencilClip, PopStencilClip, PopClip,
     PushLayer, PopLayer, PushTransform, PopTransform,

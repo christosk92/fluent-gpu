@@ -119,15 +119,19 @@ sealed partial class ArtistPage : Component
 
         var compactInteractive = UseSignal(false);
         var pageScroll = UseSignal(0f);   // live page scroll offset → published so the in-page virtualized discography grids window against it
+        var pageViewportHeight = UseSignal(0f);   // live height → the context spy's upper-quarter line
+        var pageAtEnd = UseSignal(false);         // real lower limit → the final short section can still become current
         UseEffect(() =>
         {
             compactInteractive.Value = false;
             pageScroll.Value = 0f;
+            pageViewportHeight.Value = 0f;
+            pageAtEnd.Value = false;
         }, routeKey);
         // One tree: the boundary renders Body with the resource's pending value, derives its loading paint, then fills
         // the same Body with the loaded artist. The page does not author or pass a separate skeleton subtree.
         var scroll = ScrollView(Skel.Region(artist,
-            content: a => Body(a, fansList, svc, go, bridge, compactInteractive, pageScroll),
+            content: a => Body(a, fansList, svc, go, bridge, compactInteractive, pageScroll, pageViewportHeight, pageAtEnd),
             onFailed: () => ErrorState.Build(artist.Error),
             reveal: SkelReveal.FadeOnly,
             group: routeKey)
@@ -149,7 +153,19 @@ sealed partial class ArtistPage : Component
                 // OVER the pinned compact bar. The shy header itself is the occlusion cue on this page.
                 EdgeCues = ScrollEdgeCues.None,
                 // Publish the live offset (24px write-throttle floor; LazyGrid windowing is per-row inside the control).
-                OnScrollGeometryChanged = (g => (long)(g.OffsetY / 24f), g => pageScroll.Value = g.OffsetY),
+                OnScrollGeometryChanged =
+                (
+                    g => HashCode.Combine(
+                        (int)(g.OffsetY / 24f),
+                        (int)MathF.Round(g.ViewportH / Spacing.XS),
+                        ContextBandLayout.IsAtScrollEnd(g.OffsetY, g.ViewportH, g.ContentH)),
+                    g =>
+                    {
+                        pageScroll.Value = g.OffsetY;
+                        pageViewportHeight.SetIfChanged(g.ViewportH);
+                        pageAtEnd.SetIfChanged(ContextBandLayout.IsAtScrollEnd(g.OffsetY, g.ViewportH, g.ContentH));
+                    }
+                ),
             };
 
         // Provide the page scroll to the discography LazyGrids deeper in the body (the SwiftUI LazyVGrid-in-ScrollView wiring).
@@ -170,7 +186,8 @@ sealed partial class ArtistPage : Component
     }
 
     Element Body(Artist a, IReadOnlyList<Artist> fansAll, Services svc, Action<string, string?> go,
-                 PlaybackBridge? bridge, Signal<bool> compactInteractive, IReadSignal<float> pageScroll)
+                 PlaybackBridge? bridge, Signal<bool> compactInteractive, IReadSignal<float> pageScroll,
+                 IReadSignal<float> pageViewportHeight, IReadSignal<bool> pageAtEnd)
     {
         string uri = a.Uri;
         // Cover-extracted chrome accent (null ⇒ semantic default). Wash/veil accents are owned by CoverPaletteLeaves.
@@ -324,7 +341,8 @@ sealed partial class ArtistPage : Component
                     Direction = 1,
                     Children =
                     [
-                        Banner(a, uri, Play, Shuffle, Radio, compactInteractive.Value, pivot.ToArray(), pageScroll),
+                        Banner(a, uri, Play, Shuffle, Radio, compactInteractive.Value, pivot.ToArray(), pageScroll,
+                            pageViewportHeight, pageAtEnd),
                         sentinel,
                         magazine,
                     ],

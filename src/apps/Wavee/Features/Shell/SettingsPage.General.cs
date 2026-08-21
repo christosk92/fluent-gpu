@@ -6,6 +6,7 @@ using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Localization;
 using FluentGpu.Signals;
+using Wavee.Core;
 using Wavee.Features.Detail;
 using static FluentGpu.Dsl.Ui;
 
@@ -57,6 +58,12 @@ sealed partial class SettingsPage
         Loc.Get(Strings.Settings.Choice.Default),
         Loc.Get(Strings.Settings.Choice.Cozy),
         Loc.Get(Strings.Settings.Choice.Comfortable),
+    ];
+
+    static string[] TrackListStyleLabels() =>
+    [
+        Loc.Get(Strings.Settings.Appearance.TrackListModern),
+        Loc.Get(Strings.Settings.Appearance.TrackListClassic),
     ];
 
     static string[] PageLayoutLabels() =>
@@ -112,6 +119,7 @@ sealed partial class SettingsPage
         var settings = svc?.Settings;
         int themeMode = settings?.Get(WaveeSettings.ThemeMode) ?? 0;
         int density = Math.Clamp(_density.Value, 0, DensityLabels().Length - 1);
+        int trackListStyle = Math.Clamp(settings?.Get(WaveeSettings.TrackRowStyle) ?? 0, 0, TrackListStyleLabels().Length - 1);
         int pageLayout = Math.Clamp(settings?.Get(WaveeSettings.DetailPageLayout) ?? 0, 0, PageLayoutLabels().Length - 1);
         int lyricsSecondary = Math.Clamp(settings?.Get(WaveeSettings.LyricsSecondaryLine) ?? 0, 0, LyricsSecondaryLabels().Length - 1);
         int windowMaterial = (settings?.Get(WaveeSettings.WindowMaterialBaseMica) ?? true) ? 0 : 1;
@@ -128,6 +136,14 @@ sealed partial class SettingsPage
         {
             settings?.Set(WaveeSettings.RowDensity, i);
             _density.Value = i;
+            Bump();
+        }
+
+        void SetTrackListStyle(int i)
+        {
+            if (settings is null || (uint)i >= (uint)TrackListStyleLabels().Length) return;
+            settings.Set(WaveeSettings.TrackRowStyle, i);
+            AppearancePrefs.Bump();
             Bump();
         }
 
@@ -181,7 +197,8 @@ sealed partial class SettingsPage
             // their headers report the current answer, and their wireframes only have to exist while choosing.
             SettingsSectionHeader(Loc.Get(Strings.Settings.Layout.Title), Icons.List,
                 Loc.Get(Strings.Settings.Layout.Subtitle)),
-            DensityGroup(density, SetDensity),
+            DensityGroup(density, SetDensity, settings),
+            TrackListStyleGroup(trackListStyle, SetTrackListStyle),
             PageLayoutGroup(pageLayout, SetPageLayout, settings),
 
             // The sidebar design. A Component rather than an inline block: the card needs SidebarPreferences and the
@@ -212,7 +229,15 @@ sealed partial class SettingsPage
             SettingsSectionHeader(Loc.Get(Strings.Settings.Links.Title), Icons.Link,
                 Loc.Get(Strings.Settings.Links.Subtitle)),
             SettingsRow(Loc.Get(Strings.Settings.Links.Spotify), Loc.Get(Strings.Settings.Links.SpotifySub),
-                SpotifyLinksToggle(settings), Icons.Link));
+                SpotifyLinksToggle(settings), Icons.Link),
+
+            // The setup wizard's manual re-run entry point. This row never touches IOverlayService/SetupDialog
+            // itself: it only bumps SetupSession.OpenRequest, and SetupChrome (Features/Setup/SetupChrome.cs,
+            // mounted inside WaveeShell's shellWithOverlays ZStack — the component that owns the session's
+            // lifetime) is the one place that reacts, building a fresh EntryPoint.Rerun session
+            // (alreadyAuthenticated: true — reaching this row means the user is already signed in, so SkipSignIn
+            // skips the SignIn page) and opening the dialog.
+            SettingsRow(Loc.Get(Strings.Setup.RunAgain), null, isClickEnabled: true, onClick: () => SetupSession.Bump()));
     }
 
     // ── Appearance → Visual effects ───────────────────────────────────────────────────────────────────────────────────
@@ -248,7 +273,7 @@ sealed partial class SettingsPage
     /// <summary>The density picker, collapsed behind its own answer. <c>ItemsHeader</c> rather than an <c>Items</c> row:
     /// a wireframe strip is not a settings row, and an empty-header <c>SettingsCard</c> would reserve a phantom label
     /// column beside it.</summary>
-    static Element DensityGroup(int density, Action<int> setDensity)
+    Element DensityGroup(int density, Action<int> setDensity, IAppSettings? settings)
         => SettingsExpander.Create(new SettingsExpander.Options
         {
             Header = Loc.Get(Strings.Settings.Appearance.RowDensity),
@@ -256,7 +281,22 @@ sealed partial class SettingsPage
             HeaderIcon = Icons.List,
             Content = SettingsValueTag(DensityLabels()[density]),
             ItemsHeader = SettingsExpanderPanel(DensityCards(density, setDensity)),
+            Items =
+            [
+                SettingsItem(Loc.Get(Strings.Settings.Appearance.HideTrackArtwork),
+                    Loc.Get(Strings.Settings.Appearance.HideTrackArtworkSub),
+                    TrackArtworkCheckBox(settings), icon: Icons.MusicNote),
+            ],
         }) with { Key = "general.density" };
+
+    Element TrackArtworkCheckBox(IAppSettings? settings)
+        => CheckBox.Create("", new Signal<bool>(settings?.Get(WaveeSettings.HideTrackArtwork) ?? false), onChange: next =>
+        {
+            if (settings is null) return;
+            settings.Set(WaveeSettings.HideTrackArtwork, next);
+            AppearancePrefs.Bump();
+            Bump();
+        }, style: CheckBox.DefaultStyle with { MinWidth = Spacing.XXXL, MinHeight = Spacing.XXXL });
 
     // The preview card IS the radio (WaveePicker owns the shell, the ink pair and the group keyboard contract). The real
     // density ordering is compressed into each fixed-size wireframe, so the choice communicates row height before it is
@@ -285,6 +325,72 @@ sealed partial class SettingsPage
             return WaveePicker.Titled(
                 WaveePicker.Card(on, WaveePicker.Tile, MockRow(), MockRow(), MockRow())
                     with { Justify = FlexJustify.Center },
+                labels[value], on);
+        }
+
+        return WaveePicker.Strip(labels.Length, selected, Card, set);
+    }
+
+    // ── Layout & density → Track list style ──────────────────────────────────────────────────────────────────────────
+    Element TrackListStyleGroup(int style, Action<int> setStyle)
+        => SettingsExpander.Create(new SettingsExpander.Options
+        {
+            Header = Loc.Get(Strings.Settings.Appearance.TrackListStyle),
+            Description = Loc.Get(Strings.Settings.Appearance.TrackListStyleSub),
+            HeaderIcon = Icons.List,
+            Content = SettingsValueTag(TrackListStyleLabels()[style]),
+            ItemsHeader = SettingsExpanderPanel(TrackListStyleCards(style, setStyle)),
+        }) with { Key = "general.track-list-style" };
+
+    // These are UI-native miniature rows, not screenshots: the examples inherit the live theme and remain crisp at
+    // every scale. Modern shows the art-led stacked-row grammar; Classic shows three aligned text lanes + a hairline.
+    static Element TrackListStyleCards(int selected, Action<int> set)
+    {
+        var labels = TrackListStyleLabels();
+
+        Element Bar(float grow, WaveePicker.Ink ink, bool strong = false) => new BoxEl
+        {
+            Grow = grow, Basis = 0f, MinWidth = 0f, Height = Spacing.XXS,
+            Corners = Radii.Circle(Spacing.XXS), Fill = strong ? ink.Block : ink.Faint,
+        };
+
+        Element ModernRow(WaveePicker.Ink ink) => new BoxEl
+        {
+            Height = Spacing.XL, Direction = 0, Gap = Spacing.XS, AlignItems = FlexAlign.Center,
+            Padding = new Edges4(Spacing.XS, 0f, Spacing.XS, 0f),
+            Corners = Radii.ControlAll, Fill = ink.Faint,
+            Children =
+            [
+                new BoxEl { Width = Spacing.L, Height = Spacing.L, Shrink = 0f, Corners = Radii.ControlAll, Fill = ink.Block },
+                new BoxEl
+                {
+                    Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = Spacing.XXS,
+                    Children = [Bar(1f, ink, strong: true), Bar(0.65f, ink)],
+                },
+            ],
+        };
+
+        Element ClassicRow(WaveePicker.Ink ink) => new BoxEl
+        {
+            Height = Spacing.XL, Direction = 1,
+            Children =
+            [
+                new BoxEl
+                {
+                    Direction = 0, Grow = 1f, Gap = Spacing.S, AlignItems = FlexAlign.Center,
+                    Padding = new Edges4(Spacing.XS, 0f, Spacing.XS, 0f),
+                    Children = [Bar(1f, ink, strong: true), Bar(0.75f, ink), Bar(0.75f, ink)],
+                },
+                new BoxEl { Height = 1f, Fill = ink.Faint },
+            ],
+        };
+
+        Element Card(int value, bool on)
+        {
+            var ink = WaveePicker.Ink.For(on);
+            Element Row() => value == 0 ? ModernRow(ink) : ClassicRow(ink);
+            return WaveePicker.Titled(
+                WaveePicker.Card(on, WaveePicker.Tile, Row(), Row(), Row()) with { Justify = FlexJustify.Center },
                 labels[value], on);
         }
 

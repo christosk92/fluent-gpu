@@ -541,14 +541,18 @@ sealed class SearchAllList : Component
         var lib = UseContext(LibraryBridge.Slot);
         var acts = UseContext(ActionServices.Slot);      // row context menus (Menus.Card / Menus.TrackAttach)
         var menuOverlay = UseContext(Overlay.Service);
+        var svc = UseContext(Services.Slot);
         var goOrigin = UseContext(HistoryStore.GoWithOrigin);
+        bool hideTrackArtwork = AppearancePrefs.TrackArtworkHidden(svc?.Settings);
         string q = (UseContext(SearchQuery.Slot)?.Peek() ?? "").Trim();
         var origin = q.Length == 0 ? (NavOrigin?)null : new NavOrigin(q, "search", q);
         if (model.Hits is { } explicitHits)
-            return BuildHits(explicitHits, lib, model, model.EmptyTitle ?? Loc.Get(Strings.Search.NoResults), acts, menuOverlay, origin, goOrigin);
+            return BuildHits(explicitHits, lib, model, model.EmptyTitle ?? Loc.Get(Strings.Search.NoResults), acts, menuOverlay, origin, goOrigin,
+                hideTrackArtwork);
         return model.Filter is { } filter
-            ? BuildFiltered(model.Results, lib, model, filter, model.EmptyTitle ?? Loc.Get(Strings.Search.NoResults), acts, menuOverlay, origin, goOrigin)
-            : Build(model.Results, lib, model, acts, menuOverlay, origin, goOrigin);
+            ? BuildFiltered(model.Results, lib, model, filter, model.EmptyTitle ?? Loc.Get(Strings.Search.NoResults), acts, menuOverlay, origin,
+                goOrigin, hideTrackArtwork)
+            : Build(model.Results, lib, model, acts, menuOverlay, origin, goOrigin, hideTrackArtwork);
     }
 
     // A uri-only card menu (top hits carry uri + name, no domain object); null when the action system isn't provided.
@@ -590,7 +594,8 @@ sealed class SearchAllList : Component
 
     internal static Element Build(SearchResults r, LibraryBridge? lib, Model model,
                                   ActionServices? acts = null, IOverlayService? menuOverlay = null,
-                                  NavOrigin? origin = null, Action<string, string?, NavOrigin?>? goOrigin = null)
+                                  NavOrigin? origin = null, Action<string, string?, NavOrigin?>? goOrigin = null,
+                                  bool hideTrackArtwork = false)
     {
 
         // Spotify's unified "All" tab: render topResultsV2.itemsV2 IN ORDER — the FIRST item is the Top Result (the `large`
@@ -601,12 +606,13 @@ sealed class SearchAllList : Component
         if (hits is { Count: > 0 })
         {
             var rows = new List<Element>(hits.Count);
-            rows.Add(HitRow(hits[0], lib, model, large: true, acts, menuOverlay, origin, goOrigin));
-            for (int i = 1; i < hits.Count; i++) rows.Add(HitRow(hits[i], lib, model, large: false, acts, menuOverlay, origin, goOrigin));
+            rows.Add(HitRow(hits[0], lib, model, large: true, acts, menuOverlay, origin, goOrigin, hideTrackArtwork));
+            for (int i = 1; i < hits.Count; i++)
+                rows.Add(HitRow(hits[i], lib, model, large: false, acts, menuOverlay, origin, goOrigin, hideTrackArtwork));
             return new BoxEl { Direction = 1, Gap = Spacing.S, MinWidth = 0f, AlignSelf = FlexAlign.Stretch, Children = rows.ToArray() };
         }
 
-        var fallback = FallbackRows(r, lib, model, acts, menuOverlay);
+        var fallback = FallbackRows(r, lib, model, acts, menuOverlay, hideTrackArtwork);
         if (fallback.Count > 0)
             return new BoxEl { Direction = 1, Gap = Spacing.S, MinWidth = 0f, AlignSelf = FlexAlign.Stretch, Children = fallback.ToArray() };
 
@@ -616,26 +622,30 @@ sealed class SearchAllList : Component
 
     internal static Element BuildFiltered(SearchResults r, LibraryBridge? lib, Model model, Func<SearchTopHit, bool> include, string emptyTitle,
                                           ActionServices? acts = null, IOverlayService? menuOverlay = null,
-                                          NavOrigin? origin = null, Action<string, string?, NavOrigin?>? goOrigin = null)
-        => BuildHits(r.TopHits?.Where(include).ToArray() ?? Array.Empty<SearchTopHit>(), lib, model, emptyTitle, acts, menuOverlay, origin, goOrigin);
+                                          NavOrigin? origin = null, Action<string, string?, NavOrigin?>? goOrigin = null,
+                                          bool hideTrackArtwork = false)
+        => BuildHits(r.TopHits?.Where(include).ToArray() ?? Array.Empty<SearchTopHit>(), lib, model, emptyTitle, acts, menuOverlay,
+            origin, goOrigin, hideTrackArtwork);
 
     /// <summary>Render a hit list through the shared row factory — one code path for the All tab's filtered slice and
     /// for a dedicated facet's own results, so a podcast row is identical wherever it came from.</summary>
     internal static Element BuildHits(IReadOnlyList<SearchTopHit> hits, LibraryBridge? lib, Model model, string emptyTitle,
                                       ActionServices? acts = null, IOverlayService? menuOverlay = null,
-                                      NavOrigin? origin = null, Action<string, string?, NavOrigin?>? goOrigin = null)
+                                      NavOrigin? origin = null, Action<string, string?, NavOrigin?>? goOrigin = null,
+                                      bool hideTrackArtwork = false)
     {
         if (hits.Count == 0) return EmptyState.Build(emptyTitle);
         var rows = new Element[hits.Count];
         for (int i = 0; i < hits.Count; i++)
-            rows[i] = HitRow(hits[i], lib, model, large: false, acts, menuOverlay, origin, goOrigin);
+            rows[i] = HitRow(hits[i], lib, model, large: false, acts, menuOverlay, origin, goOrigin, hideTrackArtwork);
         return new BoxEl { Direction = 1, Gap = Spacing.S, MinWidth = 0f, AlignSelf = FlexAlign.Stretch, Children = rows };
     }
 
     // ── every row is MediaCard.Row (the shared factory); these supply the per-kind data + actions only ───────────────────
     internal static Element HitRow(SearchTopHit h, LibraryBridge? lib, Model model, bool large,
                           ActionServices? acts = null, IOverlayService? menuOverlay = null,
-                          NavOrigin? origin = null, Action<string, string?, NavOrigin?>? goOrigin = null)
+                          NavOrigin? origin = null, Action<string, string?, NavOrigin?>? goOrigin = null,
+                          bool hideTrackArtwork = false)
     {
         bool isTrack = h.Kind == SearchHitKind.Track;
         Element? trailing =
@@ -656,7 +666,8 @@ sealed class SearchAllList : Component
             onSubtitleNav: key => model.Go(key, null),   // artist/album names in the subtitle are individually clickable
             menu: HitMenu(acts, menuOverlay, model, h),
             drag: EntityDrag(acts, model, h),
-            plated: false);
+            plated: false,
+            showArtwork: !isTrack || !hideTrackArtwork);
     }
 
     /// <summary>The page's own results ARE the track resolver for a uri-only track hit: the same track that produced
@@ -673,7 +684,8 @@ sealed class SearchAllList : Component
     }
 
     static List<Element> FallbackRows(SearchResults r, LibraryBridge? lib, Model model,
-                                      ActionServices? acts = null, IOverlayService? menuOverlay = null)
+                                      ActionServices? acts = null, IOverlayService? menuOverlay = null,
+                                      bool hideTrackArtwork = false)
     {
         var rows = new List<Element>(Math.Min(r.Tracks.Count + r.Artists.Count + r.Albums.Count + r.Playlists.Count, 18));
 
@@ -689,7 +701,7 @@ sealed class SearchAllList : Component
         int trackCount = Math.Min(r.Tracks.Count, 8);
         for (int i = 0; i < trackCount; i++)
         {
-            rows.Add(TrackRowFb(r.Tracks[i], lib, model, acts, menuOverlay));
+            rows.Add(TrackRowFb(r.Tracks[i], lib, model, acts, menuOverlay, hideTrackArtwork));
             if ((i == 2 || i == 5) && artistIndex < r.Artists.Count)
                 rows.Add(ArtistRow(r.Artists[artistIndex++], lib, model, large: false, acts, menuOverlay));
         }
@@ -709,12 +721,13 @@ sealed class SearchAllList : Component
     }
 
     static Element TrackRowFb(Track t, LibraryBridge? lib, Model model,
-                              ActionServices? acts = null, IOverlayService? menuOverlay = null) => MediaCard.Row(
+                              ActionServices? acts = null, IOverlayService? menuOverlay = null,
+                              bool hideTrackArtwork = false) => MediaCard.Row(
         t.Image, t.Title, (VideoPresence.HasVideo(t) ? "Music video" : "Song") + " • " + Names(t.Artists), t.Uri, false,
         () => model.PlayKnownTrack(t), () => model.PlayKnownTrack(t),
         trailing: SaveButton(t.Uri.Length > 0 && (lib?.IsSaved(t.Uri) ?? false), () => { if (t.Uri.Length > 0) lib?.ToggleSaved(t.Uri, t.Title); }),
         menu: TrackMenu(acts, menuOverlay, t),
-        drag: TrackDrag(t), plated: false);
+        drag: TrackDrag(t), plated: false, showArtwork: !hideTrackArtwork);
 
     static Element ArtistRow(Artist a, LibraryBridge? lib, Model model, bool large,
                              ActionServices? acts = null, IOverlayService? menuOverlay = null) => MediaCard.Row(
@@ -791,6 +804,8 @@ sealed class SearchSongsGrid : Component
         var lib = UseContext(LibraryBridge.Slot);
         var acts = UseContext(ActionServices.Slot);
         var overlay = UseContext(Overlay.Service);
+        var svc = UseContext(Services.Slot);
+        bool hideTrackArtwork = AppearancePrefs.TrackArtworkHidden(svc?.Settings);
         if (model?.Hits is not { Count: > 0 } hits) return new BoxEl();
         var cells = new Element[hits.Count];
         for (int i = 0; i < hits.Count; i++)
@@ -798,7 +813,8 @@ sealed class SearchSongsGrid : Component
             cells[i] = new BoxEl
             {
                 Direction = 1, MinWidth = 0f, AlignSelf = FlexAlign.Stretch,
-                Children = [SearchAllList.HitRow(hits[i], lib, model, large: false, acts, overlay)],
+                Children = [SearchAllList.HitRow(hits[i], lib, model, large: false, acts, overlay,
+                    hideTrackArtwork: hideTrackArtwork)],
             };
         }
         return new BoxEl
@@ -827,6 +843,7 @@ sealed class SearchHitsGrid : Component
     LibraryBridge? _lib;
     ActionServices? _acts;
     IOverlayService? _overlay;
+    bool _hideTrackArtwork;
     ShelfPager _pager = ShelfPager.Chevrons | ShelfPager.Pips;
     bool _showHeader = true;
     int _cols = 2;
@@ -839,6 +856,8 @@ sealed class SearchHitsGrid : Component
         _lib = UseContext(LibraryBridge.Slot);
         _acts = UseContext(ActionServices.Slot);
         _overlay = UseContext(Overlay.Service);
+        var svc = UseContext(Services.Slot);
+        _hideTrackArtwork = AppearancePrefs.TrackArtworkHidden(svc?.Settings);
         _pager = p.Pager;
         _showHeader = p.ShowHeader;
         if (model?.Hits is not { Count: > 0 } hits) return new BoxEl();
@@ -873,7 +892,8 @@ sealed class SearchHitsGrid : Component
                         cardWidthAgnostic: true,
                         edgeFade: 16f,
                         keyOf: i => (uint)i < (uint)_hits.Count ? _hits[i].Uri : i.ToString())
-                        with { Key = "hits-shelf:" + n + ":" + maxCols + ":" + rows + ":" + (int)_pager + ":" + first };
+                        with { Key = "hits-shelf:" + n + ":" + maxCols + ":" + rows + ":" + (int)_pager + ":" +
+                            first + ":" + _hideTrackArtwork };
                 }, fallback: 0f),
             ],
         };
@@ -891,7 +911,8 @@ sealed class SearchHitsGrid : Component
     Element Card(int i, float _)
     {
         if (_model is null || (uint)i >= (uint)_hits.Count) return new BoxEl();
-        return SearchAllList.HitRow(_hits[i], _lib, _model, large: false, _acts, _overlay);
+        return SearchAllList.HitRow(_hits[i], _lib, _model, large: false, _acts, _overlay,
+            hideTrackArtwork: _hideTrackArtwork);
     }
 }
 

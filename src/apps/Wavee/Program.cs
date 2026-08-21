@@ -50,6 +50,10 @@ static class Program
         // "existing". Settings writes only; the one-time chooser is armed via WaveeSettings.SidebarOnboardingSeen and shown
         // later by SidebarOnboardingChrome, once the shell has painted.
         SidebarBootstrap.Run(settings);
+        // First-run setup wizard (App/SetupBootstrap.cs): same ordering rule as SidebarBootstrap above, and reuses its
+        // fresh-install probe so the two features can never disagree about whether this install is fresh. Settings
+        // writes only; the wizard itself is shown later by the shell once it has painted, gated on SetupPending.
+        SetupBootstrap.Run(settings);
         string logDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Wavee", "logs");
         string logPath = Path.Combine(logDir, "wavee.log");
 #if DEBUG
