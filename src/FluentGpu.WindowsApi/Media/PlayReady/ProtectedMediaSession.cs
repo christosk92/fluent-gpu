@@ -5,6 +5,7 @@ using FluentGpu.Foundation;
 using FluentGpu.Media;
 using FluentGpu.Media.Adaptive;
 using FluentGpu.Pal;
+using MediaTrackKind = FluentGpu.Media.TrackKind;
 
 namespace FluentGpu.WindowsApi.Media.PlayReady;
 
@@ -75,7 +76,7 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         _opts = opts;
         _playRequested = !opts.StartPaused;
         _locus = new MediaLocus(null, request.Source, null, null, null);
-        _videoTrack = FindDefaultTrack(request.Catalog, TrackKind.Video);
+        _videoTrack = FindDefaultTrack(request.Catalog, MediaTrackKind.Video);
         if (_videoTrack is { Representations.Count: > 0 })
         {
             _qualityVariants = new QualityVariant[_videoTrack.Representations.Count];
@@ -300,8 +301,8 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
                 _commandsPublished = true;
                 var commands = MediaCommandFlags.Play | MediaCommandFlags.Pause | MediaCommandFlags.Seek | MediaCommandFlags.Rate;
                 if (_videoTrack is { Representations.Count: > 1 }) commands |= MediaCommandFlags.SelectVideoQuality;
-                if (CountTracks(TrackKind.Audio) > 1) commands |= MediaCommandFlags.SelectAudioTrack;
-                if (CountTracks(TrackKind.Video) > 1) commands |= MediaCommandFlags.SelectVideoTrack;
+                if (CountTracks(MediaTrackKind.Audio) > 1) commands |= MediaCommandFlags.SelectAudioTrack;
+                if (CountTracks(MediaTrackKind.Video) > 1) commands |= MediaCommandFlags.SelectVideoTrack;
                 sink.Commands(commands);
             }
         }
@@ -398,7 +399,7 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         catch { if (string.Equals(_pendingRepresentationId, id, StringComparison.Ordinal)) _pendingRepresentationId = null; }
     }
 
-    private int CountTracks(TrackKind kind)
+    private int CountTracks(MediaTrackKind kind)
     {
         if (_request.Catalog is null) return 0;
         int count = 0;
@@ -407,7 +408,7 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         return count;
     }
 
-    private static ProtectedTrackDescriptor? FindDefaultTrack(ProtectedAdaptiveCatalog? catalog, TrackKind kind)
+    private static ProtectedTrackDescriptor? FindDefaultTrack(ProtectedAdaptiveCatalog? catalog, MediaTrackKind kind)
     {
         if (catalog is null) return null;
         ProtectedTrackDescriptor? first = null;

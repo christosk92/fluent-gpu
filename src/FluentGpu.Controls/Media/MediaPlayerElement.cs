@@ -600,10 +600,12 @@ public sealed class MediaPlayerElement : Component
         MediaCommandFlags commands = Player.Commands.Available.Value;
         TimelineInfo timeline = Player.Timeline.Value;
         _ = Player.Tracks.Audio.Version.Value;
+        _ = Player.Tracks.Video.Version.Value;
         _ = Player.Tracks.Text.Version.Value;
         _ = Player.Qualities.Variants.Version.Value;
         MediaTrack? text = Player.Tracks.SelectedText.Value;
         QualitySelection quality = Player.Qualities.Selected.Value;
+        QualityVariant? activeQuality = Player.Qualities.Active.Value;
         float rate = Player.Rate.Value;
         _ = areaWidth;                                         // the seek bar now Grows to fill; width is self-measured
 
@@ -632,7 +634,7 @@ public sealed class MediaPlayerElement : Component
             controls.Add(TextButton(text is null ? MediaStrings.CaptionsShort : MediaStrings.CaptionsFor(text.Language ?? text.Label),
                 () => OpenPicker(ccAnchor, CaptionItems()), text is not null) with { OnRealized = h => ccAnchor.Value = h });
         if (!compact && (commands & MediaCommandFlags.SelectVideoQuality) != 0 && Player.Qualities.Variants.Count > 0)
-            controls.Add(TextButton(QualityLabel(quality), () => OpenPicker(qualityAnchor, QualityItems()))
+            controls.Add(TextButton(QualityLabel(quality, activeQuality), () => OpenPicker(qualityAnchor, QualityItems()))
                 with { OnRealized = h => qualityAnchor.Value = h });
         if (!compact && (commands & MediaCommandFlags.Rate) != 0)
             controls.Add(TextButton(MediaStrings.RateLabel(rate), () => OpenPicker(rateAnchor, SpeedItems()))
@@ -746,6 +748,8 @@ public sealed class MediaPlayerElement : Component
             items.Add(MenuFlyoutItem.SubMenu(MediaStrings.Quality, QualityItems()));
         if ((commands & MediaCommandFlags.SelectAudioTrack) != 0 && Player.Tracks.Audio.Count > 1)
             items.Add(MenuFlyoutItem.SubMenu(MediaStrings.AudioTrack, AudioItems()));
+        if ((commands & MediaCommandFlags.SelectVideoTrack) != 0 && Player.Tracks.Video.Count > 1)
+            items.Add(MenuFlyoutItem.SubMenu(MediaStrings.VideoTrack, VideoItems()));
         if ((commands & MediaCommandFlags.SelectTextTrack) != 0 && Player.Tracks.Text.Count > 0)
             items.Add(MenuFlyoutItem.SubMenu(MediaStrings.Captions, CaptionItems()));
         if ((commands & MediaCommandFlags.Chapters) != 0)
@@ -795,6 +799,19 @@ public sealed class MediaPlayerElement : Component
             {
                 MediaTrack track = Player.Tracks.Audio[i];
                 result.Add(MenuFlyoutItem.RadioItem(track.Label ?? track.Language ?? MediaStrings.AudioIndexed(i + 1), audio?.Id == track.Id,
+                    () => _ = Player.SelectTrackAsync(track)));
+            }
+            return result;
+        }
+
+        System.Collections.Generic.List<MenuFlyoutItem> VideoItems()
+        {
+            var result = new System.Collections.Generic.List<MenuFlyoutItem>(Player.Tracks.Video.Count);
+            MediaTrack? video = Player.Tracks.SelectedVideo.Peek();
+            for (int i = 0; i < Player.Tracks.Video.Count; i++)
+            {
+                MediaTrack track = Player.Tracks.Video[i];
+                result.Add(MenuFlyoutItem.RadioItem(track.Label, video?.Id == track.Id,
                     () => _ = Player.SelectTrackAsync(track)));
             }
             return result;
@@ -895,9 +912,12 @@ public sealed class MediaPlayerElement : Component
         Children = [new TextEl(label) { Size = 12f, Color = Tok.OnMediaPrimary }],
     };
 
-    private string QualityLabel(QualitySelection selection)
+    private string QualityLabel(QualitySelection selection, QualityVariant? active)
     {
-        if (selection.IsAuto) return MediaStrings.Auto;
+        if (selection.IsAuto)
+            return active is { Resolution.Height: > 0 }
+                ? MediaStrings.Auto + " · " + MediaStrings.QualityHeight(active.Resolution.Height)
+                : MediaStrings.Auto;
         for (int i = 0; i < Player.Qualities.Variants.Count; i++)
         {
             QualityVariant q = Player.Qualities.Variants[i];
@@ -1142,6 +1162,7 @@ internal static class MediaStrings
     public static string PlaybackSpeed => Loc.Get(Strings.Media.PlaybackSpeed);
     public static string Quality => Loc.Get(Strings.Media.Quality);
     public static string AudioTrack => Loc.Get(Strings.Media.AudioTrack);
+    public static string VideoTrack => Loc.Get(Strings.Media.VideoTrack);
     public static string Captions => Loc.Get(Strings.Media.Captions);
     public static string PreviousChapter => Loc.Get(Strings.Media.PreviousChapter);
     public static string NextChapter => Loc.Get(Strings.Media.NextChapter);
