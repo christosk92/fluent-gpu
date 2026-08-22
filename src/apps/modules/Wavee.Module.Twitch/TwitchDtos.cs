@@ -66,7 +66,8 @@ public sealed record TwitchMetadataData(TwitchUser? User);
 /// <param name="LastBroadcast">The previous broadcast, used for a title when the current one has none.</param>
 /// <param name="BroadcastSettings">The channel's configured stream title.</param>
 /// <param name="Login">The channel login, when the query returned it.</param>
-/// <param name="ProfileImageURL">The channel's avatar — the page hero's art.</param>
+/// <param name="ProfileImageURL">The channel's avatar. It is the OWNER's picture, so on a live channel it goes to
+/// the hero's <c>AvatarUrl</c> and the stream preview takes the art slot; offline it is the hero's art.</param>
 public sealed record TwitchUser(
     string? DisplayName,
     TwitchStream? Stream,
@@ -78,7 +79,8 @@ public sealed record TwitchUser(
 /// <summary>The live broadcast.</summary>
 /// <param name="Id">Stream id.</param>
 /// <param name="Game">The category being streamed.</param>
-/// <param name="PreviewImageURL">Thumbnail url.</param>
+/// <param name="PreviewImageURL">Thumbnail url — the picture the watch stage posters. Often templated with
+/// <c>{width}</c>/<c>{height}</c>; see <c>TwitchModule.PreviewImage</c>.</param>
 /// <param name="ViewersCount">How many people are watching right now, when the query returned it.</param>
 public sealed record TwitchStream(string? Id, TwitchGame? Game, string? PreviewImageURL, int? ViewersCount = null);
 

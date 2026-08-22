@@ -60,6 +60,25 @@ public static class TwitchFixtures
     {"data":{"user":{"id":"123456789","login":"examplestreamer","displayName":"ExampleStreamer","primaryColorHex":"6441A4","profileImageURL":"https://static-cdn.jtvnw.net/user-default-pictures/300x300.png","lastBroadcast":{"id":"48000000000","title":"Yesterday's build stream","__typename":"Broadcast"},"broadcastSettings":{"id":"123456789","title":"Building a Rust parser","__typename":"BroadcastSettings"},"stream":{"id":"48000000001","type":"live","createdAt":"2026-08-22T10:00:00Z","game":{"id":"509658","name":"Science & Technology","displayName":"Science & Technology","__typename":"Game"},"previewImageURL":"https://static-cdn.jtvnw.net/previews-ttv/live_user_examplestreamer-1920x1080.jpg","viewersCount":1234,"__typename":"Stream"},"__typename":"User"}},"extensions":{"operationName":"StreamMetadata"}}
     """;
 
+    /// <summary>
+    /// <c>StreamMetadata</c> for a live channel whose <c>previewImageURL</c> still carries the
+    /// <c>{width}</c>/<c>{height}</c> placeholders — which is what Twitch returns whenever the query asked for no
+    /// explicit size, i.e. what the persisted query the module sends actually gets back most of the time.
+    /// </summary>
+    public const string StreamMetadataLiveTemplatedPreview = """
+    {"data":{"user":{"id":"123456789","login":"examplestreamer","displayName":"ExampleStreamer","profileImageURL":"https://static-cdn.jtvnw.net/user-default-pictures/300x300.png","broadcastSettings":{"id":"123456789","title":"Building a Rust parser","__typename":"BroadcastSettings"},"stream":{"id":"48000000001","type":"live","game":{"id":"509658","name":"Science & Technology","displayName":"Science & Technology","__typename":"Game"},"previewImageURL":"https://static-cdn.jtvnw.net/previews-ttv/live_user_examplestreamer-{width}x{height}.jpg","viewersCount":1234,"__typename":"Stream"},"__typename":"User"}},"extensions":{"operationName":"StreamMetadata"}}
+    """;
+
+    /// <summary>
+    /// <c>StreamMetadata</c> for a live channel whose <c>stream</c> block carries **no <c>previewImageURL</c> member at
+    /// all</c>. This is not a hypothetical: it is what a real live channel answered with when the module was run
+    /// against the live service, and it is why the page falls back to the login-derived preview path rather than to
+    /// the channel avatar (a 70x70 image has no business being a full-width 16:9 poster).
+    /// </summary>
+    public const string StreamMetadataLiveNoPreview = """
+    {"data":{"user":{"id":"123456789","login":"examplestreamer","displayName":"ExampleStreamer","profileImageURL":"https://static-cdn.jtvnw.net/jtv_user_pictures/abcdef-profile_image-70x70.png","broadcastSettings":{"id":"123456789","title":"Building a Rust parser","__typename":"BroadcastSettings"},"stream":{"id":"48000000001","type":"live","game":{"id":"509658","name":"Science & Technology","displayName":"Science & Technology","__typename":"Game"},"viewersCount":1234,"__typename":"Stream"},"__typename":"User"}},"extensions":{"operationName":"StreamMetadata"}}
+    """;
+
     /// <summary><c>StreamMetadata</c> for a channel that is offline (<c>stream</c> is null).</summary>
     public const string StreamMetadataOffline = """
     {"data":{"user":{"id":"123456789","login":"examplestreamer","displayName":"ExampleStreamer","lastBroadcast":{"id":"48000000000","title":"Yesterday's build stream","__typename":"Broadcast"},"broadcastSettings":{"id":"123456789","title":"Building a Rust parser","__typename":"BroadcastSettings"},"stream":null,"__typename":"User"}},"extensions":{"operationName":"StreamMetadata"}}

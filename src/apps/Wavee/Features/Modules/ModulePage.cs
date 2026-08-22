@@ -37,6 +37,19 @@ namespace Wavee;
 /// <para><b>No page-level entrance.</b> ContentHost's keep-alive boundary already slides the whole page in; a second
 /// entrance on the page root would double-animate the swap. The SECTIONS carry the motion instead
 /// (<c>DetailRail.FadeUp</c> + <c>DetailRail.Shove</c>), exactly like the detail surface's trailing blocks.</para>
+///
+/// <para><b>Two readings, one shell (<see cref="ModulePageDoc.TemplateWatch"/>).</b> A watch document is drawn as a
+/// YouTube-shaped page: a full-width 16:9 <see cref="WatchPageView.Stage"/> pinned above the scroller and
+/// <see cref="WatchPageView.Caption"/> inside it, instead of the square hero + fact tiles below. Everything ELSE on
+/// this class — the route parse, the fetch, the skeleton, the failed state, the retry, the whole entity layout — is
+/// shared verbatim, because the template asks for a different READING of the same document, never a second schema.
+/// The stage slot is an empty box for a non-watch document, so the container is structurally identical in both cases
+/// and nothing re-parents when a module starts (or stops) emitting the template.</para>
+///
+/// <para><b>Why the stage lives OUTSIDE the scroller.</b> It hosts a real composited video, which is a DestOut hole
+/// punched into the back buffer: an ancestor opacity, blur or edge-fade erases it silently. The page
+/// <c>ScrollView</c>, <c>Skel.Region</c>'s reveal and <c>Section</c>'s <c>DetailRail.FadeUp</c> are all exactly such
+/// ancestors — see <see cref="WatchPageView"/>'s class doc for the full three-hazard case.</para>
 /// </summary>
 sealed class ModulePage : Component
 {
@@ -68,6 +81,7 @@ sealed class ModulePage : Component
         var bridge = UseContext(PlaybackBridge.Slot);
         var lib = UseContext(LibraryBridge.Slot);
         var overlay = UseContext(Overlay.Service);
+        var ui = UseContext(ShellUi.Slot);   // the page-stage half of the video-host arbitration
 
         // The route carries BOTH halves (module id + module-private entity id) — `module:wavee:module:<id>:<b64>` — so
         // there is nothing to look up before the fetch and nothing to keep in step.
@@ -80,16 +94,63 @@ sealed class ModulePage : Component
         var reload = UseSignal(0);
         int gen = reload.Value;   // subscribe → Retry re-fires the load
 
+        // The SEED is the sync page cache when it holds this entity. A revisit then paints its stage on the first
+        // frame instead of measuring an empty box and reflowing the whole column when the fetch lands — and a cold
+        // page still gets the figure-space placeholder, so nothing ever flashes real copy it does not have.
         var page = UseResource(
             ct => host is null
                 ? System.Threading.Tasks.Task.FromException<ModulePageDoc>(
                     new ModuleException(ModuleErrorCode.Unsupported, "no module host"))
                 : host.PageAsync(pageUri, ct),
-            Seed, (pageUri, gen)).Loadable;
+            ModulePages.Get(pageUri) ?? Seed, (pageUri, gen)).Loadable;
+
+        // BOTH reads subscribe, and both must: the stage is derived from the document AND from what is playing, so a
+        // page that peeked would light its picture one navigation late (SubtitleRoute peeks for the opposite reason —
+        // it is a one-shot link frozen into the mounted span).
+        ModulePageDoc live = page.Value.Value;
+        string? nowUri = bridge?.CurrentTrack.Value?.Uri;
+        string stagePlayable = StagePlayableUri(moduleId, live);
+        var model = WatchPageModel.From(live, IsPlayingEntity(stagePlayable, nowUri));
+
+        // THE writer of ShellUi.ActiveStagePlayable, and it must be this class: only the page holds the DOCUMENT, and
+        // only the document names the playable behind an entity (a module's entity ids and its playable ids are
+        // different namespaces — see WatchPageModel.StagePlayableIdOf). ContentHost knows which route is attached but
+        // could never map it to a playable, which is exactly how the two terms of the arbitration ended up in
+        // different id spaces and the stage never lit.
+        //
+        // From an EFFECT, never during Render: a render-time write into a signal the shell reads is what the
+        // backwards-write guard exists to catch.
+        //
+        // Gated on UseIsActive so only the ATTACHED page writes. A UseSignalEffect is a runtime effect, NOT the
+        // component's render-effect — parking suspends the latter and leaves the former firing — so without this gate
+        // a keep-alive-parked watch page would happily re-claim the surface from behind the page the user is looking
+        // at. The gate also PEEKS the signal rather than reading it, so a parked page is never even woken by someone
+        // else's write. Inactive is a no-op, not a clear: window-minimize folds into the same signal, and clearing
+        // there would tear the surface down and rebuild it on every restore.
+        // Every value the effect decides on is read INSIDE the closure, never captured from the enclosing render.
+        // UseSignalEffect registers its callback exactly once, at mount (RenderContext.UseSignalEffect: `if (idx < 0)`),
+        // so a captured local is frozen at the FIRST render's value for the life of the component — and the first
+        // render of this page happens while the document is still the loading Seed, which names no play action at all.
+        // Capturing it therefore pinned the claim to "" forever: the page rendered its stage, the caption said
+        // "Playing", and the surface stayed in the rail because the claim never moved. Reading the loadable's signal
+        // here is also what SUBSCRIBES the effect to the document, so the claim is re-asserted the moment it lands.
+        var attached = UseIsActive();
+        UseSignalEffect(() =>
+        {
+            if (!attached.Value) return;   // subscribe → re-asserts the claim the moment this page is un-parked
+            if (ui is null) return;
+            string staged = StagePlayableUri(moduleId, page.Value.Value);   // subscribe → and when the document lands
+            if (string.Equals(ui.ActiveStagePlayable.Peek(), staged, StringComparison.Ordinal)) return;
+            ui.ActiveStagePlayable.Value = staged;
+        });
 
         var body = Skel.Region(
             page,
-            content: doc => BuildBody(doc, moduleId, entityId, go, acts, bridge, lib, overlay),
+            content: doc => WatchPageModel.From(doc, IsPlayingEntity(StagePlayableUri(moduleId, doc), nowUri)) is { } watch
+                ? WatchPageView.Caption(watch, moduleId, go,
+                    chip => ChipInvoke(chip, moduleId, watch, acts, bridge),
+                    watch.Stage == WatchStageKind.Live, acts, bridge, overlay)
+                : BuildBody(doc, moduleId, entityId, go, acts, bridge, lib, overlay),
             reveal: SkelReveal.Soft,
             onFailed: () => FailedBody(page.Error, () => reload.Value++),
             group: "module-page:" + pageUri);
@@ -97,10 +158,96 @@ sealed class ModulePage : Component
         var content = new BoxEl
         {
             Direction = 1,
-            Padding = new Edges4(32f, BrowseLayout.MastheadReserve + 40f, 32f, PlayerDock.Reserve + 40f),
+            // No masthead term here any more: the OUTER column reserves the overlay band so the stage clears it, and
+            // paying it twice would push the body a whole band down the page.
+            Padding = new Edges4(32f, 40f, 32f, PlayerDock.Reserve + 40f),
             Children = [body],
         };
-        return ScrollView(content) with { Grow = 1f, MinHeight = 0f, ScrollKey = "module-page:" + pageUri };
+
+        // ONE container shape for both readings — an EMPTY box in the stage slot for a non-watch document — so the
+        // scroller is never re-parented and never remounted by a template change.
+        return new BoxEl
+        {
+            Direction = 1, Grow = 1f, MinHeight = 0f,
+            Padding = new Edges4(0f, BrowseLayout.MastheadReserve, 0f, 0f),
+            Children =
+            [
+                model is null
+                    ? new BoxEl()
+                    : WatchPageView.Stage(model, stagePlayable, bridge, ui, StagePlay(model, moduleId, acts, bridge)),
+                ScrollView(content) with { Grow = 1f, MinHeight = 0f, ScrollKey = "module-page:" + pageUri },
+            ],
+        };
+    }
+
+    // ── the watch page's play verb ──────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>The PLAYABLE uri this page's stage would host, or <c>""</c> when it would host nothing (a non-watch
+    /// document, or one that names no play action).
+    ///
+    /// <para>The document does not state its own playable anywhere except on its play ACTION, and a module's entity id
+    /// is NOT its playable id: this page's route carries entity <c>video:tRsQsTMvPNg</c> while the thing that plays is
+    /// playable <c>tRsQsTMvPNg</c>. Everything that compares this page against the player bar — the stage's mount
+    /// gate, the rail's yield, the docked capability bit, and <see cref="IsPlayingEntity"/> — therefore speaks the ONE
+    /// id space <c>CurrentTrack.Uri</c> speaks, and this is where a page enters it.</para></summary>
+    static string StagePlayableUri(string moduleId, ModulePageDoc? doc)
+        => WatchPageModel.StagePlayableIdOf(doc) is { } playableId
+            ? ModuleUri.Encode(moduleId, playableId)
+            : "";
+
+    /// <summary>Is the item in the bar the very thing this page's stage would host? One ordinal compare, in the one id
+    /// space — see <see cref="StagePlayableUri"/>.</summary>
+    static bool IsPlayingEntity(string stagePlayable, string? nowUri)
+        => stagePlayable.Length > 0 && nowUri is { Length: > 0 }
+        && string.Equals(stagePlayable, nowUri, StringComparison.Ordinal);
+
+    /// <summary>What a watch CAPSULE does. Deliberately the page's job rather than the view's: the mapping from a
+    /// document action to an app verb is policy, and the view must stay a renderer.</summary>
+    static Action? ChipInvoke(WatchChip chip, string moduleId, WatchPageModel model,
+                              ActionServices? acts, PlaybackBridge? bridge)
+        => chip.Kind switch
+        {
+            PageAction.KindPlay => chip.PlayableId is { Length: > 0 } playableId
+                ? () => PlayWatch(moduleId, playableId, model, acts, bridge)
+                : null,
+            // The guard lives in ShellOpen; an action whose url it refuses simply has no capsule.
+            PageAction.KindOpenUrl => ShellOpen.IsWebUrl(chip.Url) ? () => ShellOpen.OpenUrl(chip.Url) : null,
+            PageAction.KindModuleAction => chip.Id is { Length: > 0 } actionId
+                ? () => ModuleActions.Invoke(moduleId, actionId)
+                : null,
+            _ => null,   // an unknown kind is skipped, exactly like an unknown section
+        };
+
+    /// <summary>The stage's own play affordance: the document's FIRST play action, or null when it offers none (the
+    /// CTA is then absent rather than dead).</summary>
+    static Action? StagePlay(WatchPageModel model, string moduleId, ActionServices? acts, PlaybackBridge? bridge)
+    {
+        for (int i = 0; i < model.Chips.Length; i++)
+        {
+            WatchChip chip = model.Chips[i];
+            if (!string.Equals(chip.Kind, PageAction.KindPlay, StringComparison.Ordinal)) continue;
+            if (chip.PlayableId is not { Length: > 0 } playableId) continue;
+            return () => PlayWatch(moduleId, playableId, model, acts, bridge);
+        }
+        return null;
+    }
+
+    /// <summary>Play a watch page's entity — and do it AS VIDEO, unconditionally.
+    ///
+    /// <para><see cref="PlayModule"/> reads the form from the resolve cache and falls back to
+    /// <see cref="SdkForm.Audio"/>, which is right for the entity layout's action row and WRONG here: on a COLD watch
+    /// page (opened by deep link, by search, by a shelf cell — nothing resolved yet) that fallback starts audio and
+    /// the stage never lights, which reads as a broken page rather than as a cache miss. On a watch page the play
+    /// button IS an explicit watch intent, so it states one. That intent is a ONE-PLAY scope
+    /// (<c>PlaybackBridge.PrimeVideoIntentFor</c> via <see cref="VideoActions.PlayAs"/>) that dies at the next track
+    /// boundary, so it cannot leak onto the rest of the queue; a playable that turns out to have no video degrades
+    /// through the existing availability path exactly as it does everywhere else.</para></summary>
+    static void PlayWatch(string moduleId, string playableId, WatchPageModel model,
+                          ActionServices? acts, PlaybackBridge? bridge)
+    {
+        Track track = LocalPlayables.ForModule(moduleId, playableId, model.Title, SdkForm.Video,
+            model.ChannelName is { Length: > 0 } channel ? new[] { channel } : null, model.PosterUrl);
+        VideoActions.PlayAs(acts?.Svc?.Player, bridge ?? acts?.Playback, track, PlayLinkActions.FormFor(SdkForm.Video));
     }
 
     // ── the failed state ────────────────────────────────────────────────────────────────────────────────────────────
@@ -230,8 +377,10 @@ sealed class ModulePage : Component
     }
 
     /// <summary>The LIVE word-mark. Same grammar as the player bar's pill — a hairline outline in the accent decor ink,
-    /// caps at caption scale — so "this is live" reads identically wherever the app says it.</summary>
-    static Element LiveBadge() => new BoxEl
+    /// caps at caption scale — so "this is live" reads identically wherever the app says it.
+    /// <para><c>internal</c> because the WATCH layout puts the SAME badge on its meta line: two spellings of "live"
+    /// on two readings of one document is exactly the drift the single-owner rule exists to stop.</para></summary>
+    internal static Element LiveBadge() => new BoxEl
     {
         Key = "hero:live", Shrink = 0f, Height = 18f,
         Padding = new Edges4(Spacing.XS, 0f, Spacing.XS, 0f),

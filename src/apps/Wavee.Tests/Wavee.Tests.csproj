@@ -293,6 +293,12 @@
     <Compile Include="..\Wavee\App\VideoUpgradeGate.cs" Link="VideoUpgradeGate.cs" />
     <!-- the pure rail<->docked-video coupling rules + the RailMode enum they're keyed on (System only) — RailVideoCouplingTests -->
     <Compile Include="..\Wavee\App\RailVideoCoupling.cs" Link="RailVideoCoupling.cs" />
+    <!-- which of the two docked HOSTS (the rail's card vs the watch page's in-page stage) owns the one live video
+         surface, + the DockedVideoFace enum it gates (System only) — DockedVideoHostingTests -->
+    <Compile Include="..\Wavee\App\DockedVideoHosting.cs" Link="DockedVideoHosting.cs" />
+    <!-- the pure watch-page projection: a ModulePageDoc + "is this the playing entity" -> what the page draws
+         (System + Wavee.Sdk only) — WatchPageModelTests -->
+    <Compile Include="..\Wavee\App\WatchPageModel.cs" Link="WatchPageModel.cs" />
     <!-- pure media host-swap decision rules (System + the PlayableKind enum only) — MediaSwitchLogicTests -->
     <Compile Include="..\Wavee\App\MediaSwitchLogic.cs" Link="MediaSwitchLogic.cs" />
     <Compile Include="..\Wavee\App\LyricsSyncGate.cs" Link="LyricsSyncGate.cs" />

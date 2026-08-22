@@ -102,6 +102,59 @@ public class ModulePageTests
         Assert.Null(resolved.SubtitleEntityId);
     }
 
+    // ---- the watch page ------------------------------------------------------------------------------------------
+
+    [Fact]
+    public void Hero_CarriesTheOwnerAvatarAndTheSubtitleEntity()
+    {
+        // The two pictures a watch page shows AT ONCE: ImageUrl is the entity's own artwork (a video thumbnail, which
+        // becomes the stage's poster) and AvatarUrl is the OWNER's face (the circle beside the channel name). One
+        // field could never have served both, which is why this is a real member rather than a convention.
+        var hero = new PageHero("Claude FM", "Live stream", "Anthropic",
+            "https://i.ytimg.com/vi/x/maxresdefault.jpg", "Live · 1,234 watching", IsLive: true,
+            AvatarUrl: "https://yt3.ggpht.com/avatar=s176", SubtitleEntityId: "channel:UC123");
+
+        string json = JsonSerializer.Serialize(hero, SdkJsonContext.Default.PageHero);
+        PageHero? back = JsonSerializer.Deserialize(json, SdkJsonContext.Default.PageHero);
+
+        Assert.Contains("\"avatarUrl\":\"https://yt3.ggpht.com/avatar=s176\"", json, StringComparison.Ordinal);
+        Assert.Contains("\"subtitleEntityId\":\"channel:UC123\"", json, StringComparison.Ordinal);
+        Assert.Equal(hero, back);
+    }
+
+    [Fact]
+    public void Hero_WithoutTheWatchFields_StaysExactlyAsItWasBefore()
+    {
+        // Both members are additive with null defaults, so a module built against the older SDK writes the very bytes
+        // it wrote before this pass — the same guarantee ResolvedPlayable's entity ids carry above. That is what lets
+        // the app ship the watch layout before every module knows about it.
+        var hero = new PageHero("Station", "Radio station", "Jazz", null, "128 kbps · MP3", IsLive: false);
+
+        string json = JsonSerializer.Serialize(hero, SdkJsonContext.Default.PageHero);
+
+        Assert.DoesNotContain("avatarUrl", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("subtitleEntityId", json, StringComparison.Ordinal);
+        Assert.Null(hero.AvatarUrl);
+        Assert.Null(hero.SubtitleEntityId);
+    }
+
+    [Fact]
+    public void WatchTemplate_IsJustAnotherTemplateString_AndSurvivesTheWire()
+    {
+        // Template is a plain string switched by the renderer, so "watch" is a REQUEST for the video-first layout and
+        // never a hard requirement: an app that does not know the value falls back to the entity layout and still
+        // draws every section. Nothing about the document's shape changes with it.
+        ModulePageDoc doc = SampleDoc() with { Template = ModulePageDoc.TemplateWatch };
+
+        string json = JsonSerializer.Serialize(doc, SdkJsonContext.Default.ModulePageDoc);
+        ModulePageDoc? back = JsonSerializer.Deserialize(json, SdkJsonContext.Default.ModulePageDoc);
+
+        Assert.Contains("\"template\":\"watch\"", json, StringComparison.Ordinal);
+        Assert.Equal(ModulePageDoc.TemplateWatch, back!.Template);
+        Assert.Equal(doc.Sections.Length, back.Sections.Length);
+        ModulePageBudget.Validate(back);   // a watch document is bound by exactly the same budgets
+    }
+
     // ---- unknown kinds -------------------------------------------------------------------------------------------
 
     [Fact]

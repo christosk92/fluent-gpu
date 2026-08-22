@@ -19,8 +19,11 @@ namespace Wavee.Features.Video;
 /// below is the mini player's own, carried over verbatim:
 ///
 /// <list type="bullet">
-/// <item>The mount gate — visible IFF <see cref="PlaybackBridge.VideoPlacementNow"/> resolves to
-///   <see cref="SurfacePlacement.Docked"/>, the ONE placement value, never a standalone flag.</item>
+/// <item>The mount gate — the ONE placement value, never a standalone flag. It is now
+///   <see cref="DockedVideoHosting.ShouldMount"/> rather than a bare <see cref="PlaybackBridge.VideoPlacementNow"/>
+///   test, because <see cref="SurfacePlacement.Docked"/> has TWO hosts (this rail card and a module watch page's
+///   in-page stage) and only one of them shows the app's one surface at a time. Still one gate, still derived, still
+///   no claim/release handshake — see that class for why a handshake would deadlock against a parked page.</item>
 /// <item>The <c>UseSignalEffect</c> reality report — <see cref="PlaybackBridge.SetVideoSurfaceLive"/> tells the model
 ///   whether THIS surface is actually mounted, scoped to Docked only (the mirror of the PiP's Floating report).</item>
 /// <item><see cref="BuildVideoArea"/>'s three-way branch: a live stage when a player exists, a Loading overlay stacked
@@ -77,7 +80,7 @@ namespace Wavee.Features.Video;
 /// translate composes on the <c>AbsoluteRect</c> the punch already reads from — nobody needs to animate the hole for
 /// the hole to move correctly.</para>
 ///
-/// <para><b>Two faces, one card (<see cref="Face"/>).</b> <see cref="DockedVideoFace.Cap"/> is a full-bleed rail-width
+/// <para><b>Three faces, one card (<see cref="Face"/>).</b> <see cref="DockedVideoFace.Cap"/> is a full-bleed rail-width
 /// tile whose height follows the playing content's own aspect (splitter-overridable, clamped to the rail's floor/ceiling).
 /// <see cref="DockedVideoFace.ArtTile"/> wraps the SAME card (identical
 /// <see cref="BuildVideoArea"/>/<see cref="BuildChrome"/> calls, identical stage-key prefix, identical reality report,
@@ -85,9 +88,14 @@ namespace Wavee.Features.Video;
 /// (<c>NowPlayingPanel.NowPlayingHeroTile</c>) never reflows when Art and Video swap. The card FILLS that square: the
 /// letterbox is the element's own (<see cref="MediaPlayerElement.ShowLetterboxBars"/>, computed from the real natural
 /// size), never a wrapper the element cannot see — which is what makes the Aspect-ratio menu real on this face too.
-/// BOTH faces mount the stock transport; the ONE gate is <c>PlaybackBridge.TransportOwnerNow</c>, and the two faces are
-/// mutually exclusive mounts (RightRail's Details arm vs every other arm). See <see cref="Render"/>'s tail for the
-/// geometry split and the plan's §2 "Art-tile face" for why the square, not the card, must be what is fixed.</para>
+/// <see cref="DockedVideoFace.PageStage"/> is the module watch page's in-page stage: the same card again, FULL-BLEED,
+/// with the PAGE owning the envelope (the 16:9 box, the rounded silhouette and the idle <see cref="PosterGround"/>
+/// ground under it) so the idle→live swap shows exactly ONE cross-fade — the element's own poster motion — instead of
+/// two layers fading past each other. EVERY face mounts the stock transport; the ONE gate is
+/// <c>PlaybackBridge.TransportOwnerNow</c>, and the faces are mutually exclusive by VALUE
+/// (<see cref="DockedVideoHosting.ShouldMount"/>), not merely by which site happened to mount them. See
+/// <see cref="Render"/>'s tail for the geometry split and the plan's §2 "Art-tile face" for why the square, not the
+/// card, must be what is fixed.</para>
 /// </summary>
 sealed class DockedVideoSurface : Component
 {
@@ -100,6 +108,19 @@ sealed class DockedVideoSurface : Component
     /// Art&lt;-&gt;Video never reflows the credits below it). Default is <see cref="DockedVideoFace.Cap"/> so the
     /// existing mount is unchanged; <c>NowPlayingPanel.NowPlayingHeroTile</c> is the one caller that sets ArtTile.</summary>
     public DockedVideoFace Face { get; init; }
+
+    /// <summary>The PLAYABLE uri the page that mounted THIS card would stage — the same id space as
+    /// <c>ShellUi.ActiveStagePlayable</c> and as <c>PlaybackBridge.CurrentTrack.Uri</c>, and
+    /// <see cref="DockedVideoFace.PageStage"/> only; the two rail faces leave it null because they have no page of
+    /// their own, they live in the shell.
+    ///
+    /// <para>This is the PARKED-PAGE discriminator, and it is the whole reason the host is derived rather than claimed.
+    /// Two keep-alive'd watch pages can be alive in the tree at once and only ONE of them is attached; a parked page —
+    /// or one exit-frozen mid-navigation — is skipped by <c>RunComponent</c> entirely, so it can never re-render to
+    /// hand a claimed surface back. Comparing its OWN value against the ACTIVE one makes its stage false without it
+    /// having to run at all. Frozen at mount, per the component-props contract: the playable a watch page stages never
+    /// changes without a remount (the route IS its key).</para></summary>
+    public string? OwnerStagePlayable { get; init; }
 
     /// <summary>The Activation.IsActive OVERRIDE for this card's own <see cref="MediaPlayerElement"/> — see the class
     /// doc's "park-but-keep-pumping" section for why this, and not an invented prop, is the real lever. A stable
@@ -118,6 +139,16 @@ sealed class DockedVideoSurface : Component
     static readonly WaveeLogger FitLog = new(WaveeLog.Instance, "video");
     (string Key, float RailW, int Nw, int Nh, float H, bool Pinned) _loggedFit;
     (VideoAspectMode Mode, double Custom, TransportOwner Owner) _loggedPolicy = ((VideoAspectMode)255, -1, (TransportOwner)255);
+
+    /// <summary>Dedupe for the host-arbitration line: every TERM of the mount decision, so the line fires when any one
+    /// of them moves and stays silent while the picture simply keeps playing where it is.</summary>
+    (SurfacePlacement Resolved, string? Playing, string Active, string? Owner, bool Mounts) _loggedHost =
+        ((SurfacePlacement)255, " ", " ", " ", false);
+
+    /// <summary>A module playable uri is 60+ characters of base64 that differs from its neighbours only in the tail, so
+    /// a log line carrying three of them in full is unreadable exactly where it has to be read. Keep the tail.</summary>
+    static string Show(string? uri)
+        => string.IsNullOrEmpty(uri) ? "(none)" : uri.Length <= 24 ? uri : "…" + uri[^24..];
 
     void LogFit(string key, float railW, SizeI natural, float height, bool pinned)
     {
@@ -182,18 +213,62 @@ sealed class DockedVideoSurface : Component
                         $"transportSuppressed={owner != TransportOwner.Docked}");
         });
 
+        // ALWAYS-ON host-arbitration report (no env switch), for the same reason as the policy line above: which of the
+        // two docked hosts owns the one surface is a decision with NO visible output of its own — you see only where the
+        // picture ended up, and "the rail kept it" looks identical whether the page never claimed it, claimed it with the
+        // wrong id, or was correctly outranked. That ambiguity cost a full debugging cycle when ActiveStagePlayable was
+        // still carrying the page ENTITY uri (`video:x`) while CurrentTrack carried the PLAYABLE uri (`x`), a mismatch
+        // that no pixel and no test could show. Logging every TERM of the decision — not just its outcome — is what makes
+        // that class of bug readable straight from the log.
+        UseSignalEffect(() =>
+        {
+            var resolved = b.VideoPlacementNow();
+            string? playing = b.CurrentTrack.Value?.Uri;
+            string active = ui.ActiveStagePlayable.Value;
+            bool mounts = DockedVideoHosting.ShouldMount(Face, resolved, OwnerStagePlayable, active, playing,
+                Face == DockedVideoFace.PageStage ? null
+                    : RailVideoCoupling.BodyModeFor(ui.Mode.Value, DockedVideoHosting.PageStageHosts(active, playing)));
+            var now = (resolved, playing, active, OwnerStagePlayable, mounts);
+            if (now == _loggedHost) return;
+            _loggedHost = now;
+            FitLog.Info($"docked host face={Face} mounts={mounts} placement={resolved} " +
+                        $"stageHosts={DockedVideoHosting.PageStageHosts(active, playing)} " +
+                        $"owner={Show(OwnerStagePlayable)} active={Show(active)} playing={Show(playing)}");
+        });
+
+        // ── THE mount decision, derived once and used twice ──────────────────────────────────────────────────────
+        // There are now TWO docked hosts for the app's ONE video surface — this rail card and a module watch page's
+        // in-page stage — so "the placement resolved to Docked" is no longer the same question as "THIS face is the
+        // one showing it". DockedVideoHosting.ShouldMount is that one question, asked identically by every face: at
+        // most one face is ever true, and exactly one is true iff Docked resolved.
+        //
+        // railBody separates the two RAIL faces from each other by VALUE rather than by which RightRail arm happened
+        // to mount us (Details ⇒ the Art-tile hero, every other body ⇒ the Cap). The PageStage face never reads rail
+        // state at all — its own staged playable vs the active one is what decides it, in the ONE id space both the
+        // signal and CurrentTrack.Uri speak: the PLAYABLE uri.
+        string? playingUri = b.CurrentTrack.Value?.Uri;             // subscribe → the stage's claim follows the playing item
+        string activeStage = ui.ActiveStagePlayable.Value;          // subscribe → and follows navigation
+        RailMode? railBody = Face == DockedVideoFace.PageStage
+            ? null
+            : RailVideoCoupling.BodyModeFor(ui.Mode.Value, DockedVideoHosting.PageStageHosts(activeStage, playingUri));
+        bool mount = DockedVideoHosting.ShouldMount(Face, b.VideoPlacementNow(),
+            OwnerStagePlayable, activeStage, playingUri, railBody);
+
         // Reality + reports, scoped to Docked only (the mirror of InWindowVideoPip's Floating report) — no layout
         // reservation to publish: a docked card is inline flex, not a free-floating overlay reserving space nobody
-        // else can see coming.
-        UseSignalEffect(() => b.SetVideoSurfaceLive(SurfacePlacement.Docked, b.VideoPlacementNow() == SurfacePlacement.Docked));
+        // else can see coming. It reports the DERIVED mount, never the placement alone: a rail face that has YIELDED
+        // to the page stage is not mounted, and a placement-only report would swear it was — a lie the model would act
+        // on, and the exact shape OneSurfacePerPlayerGuard exists to catch.
+        UseSignalEffect(() => b.SetVideoSurfaceLive(SurfacePlacement.Docked, mount));
         // Unmount discipline: if this whole surface goes away (logout / shell swap) while still reporting live, take
         // the report back — the model must not believe a card is mounted that no longer exists.
         UseEffect(() => () => b.SetVideoSurfaceLive(SurfacePlacement.Docked, false), DepKey.Empty);
 
-        // Subscribe → mount/unmount the card as the ONE resolved placement changes. RightRail embeds this
-        // unconditionally in both the Cap (Lyrics/Queue/Friends) and Takeover (Video) arms; THIS gate is what makes it
-        // invisible (and Shrink=0f collapsed, so nothing reflows) the moment the video is anywhere else.
-        if (b.VideoPlacementNow() != SurfacePlacement.Docked) return new BoxEl();
+        // Mount/unmount as the derivation above changes. Every host embeds this component UNCONDITIONALLY — RightRail
+        // in both the Cap (Lyrics/Queue/Friends) and Takeover (Video) arms, NowPlayingHeroTile in the Details hero, the
+        // watch page in its stage — and THIS gate is what makes it invisible (and Shrink=0f collapsed, so nothing
+        // reflows) the moment the video is anywhere else, or the moment another face owns it.
+        if (!mount) return new BoxEl();
 
         void EnterFullscreen()
         {
@@ -226,7 +301,7 @@ sealed class DockedVideoSurface : Component
                 if (p.IsPlayRequested.Peek()) _ = b.Player.PauseAsync(); else _ = b.Player.ResumeAsync();
             },
             Focusable = true,
-            Children = [ BuildVideoArea(b, EnterFullscreen, svc?.Settings), BuildChrome(b, EnterFullscreen, artTile: Face == DockedVideoFace.ArtTile) ],
+            Children = [ BuildVideoArea(b, EnterFullscreen, svc?.Settings), BuildChrome(b, EnterFullscreen, rounded: Face == DockedVideoFace.ArtTile) ],
         };
 
         if (Face == DockedVideoFace.ArtTile)
@@ -261,6 +336,17 @@ sealed class DockedVideoSurface : Component
                 Fill = Tok.MediaLetterbox,   // the ground under the element (its own letterbox paints the same token)
                 Children = [ card with { Grow = 1f, MinHeight = 0f } ],
             };
+        }
+
+        if (Face == DockedVideoFace.PageStage)
+        {
+            // Watch-page stage: FULL-BLEED. The page owns the envelope — the 16:9 aspect box, the rounded silhouette,
+            // the idle poster ground beneath it (PosterGround, so the idle→live swap is ONE cross-fade, the element's
+            // own PosterMotion, rather than two layers fading past each other) — so this face contributes no corners,
+            // no border and no height of its own. Grow=1f/MinHeight=0f is the whole geometry: fill whatever the page
+            // reserved. It must never touch ShellUi.DockedVideoHeight either; that is the RAIL's cap, and the
+            // height-fit effect above already early-returns for every face but Cap.
+            return card with { Grow = 1f, MinHeight = 0f, Fill = Tok.MediaLetterbox };
         }
 
         // Cap/Takeover face: full-bleed in the rail (the parent clips the top-left radius). Height is the SAME
@@ -350,11 +436,20 @@ sealed class DockedVideoSurface : Component
     static Element Poster(Track? track) => new BoxEl
     {
         Grow = 1f, MinHeight = 0f, ClipToBounds = true, ZStack = true, Fill = Tok.MediaLetterbox,
-        Children =
-        [
-            new BoxEl { Grow = 1f, Opacity = 0.4f, ClipToBounds = true, Children = [ Surfaces.ArtworkFill(track?.Image, 0f) ] },
-            LoadingOverlay(),
-        ],
+        Children = [ PosterGround(track?.Image), LoadingOverlay() ],
+    };
+
+    /// <summary>The poster's GROUND alone — dimmed artwork, no spinner, no letterbox fill of its own. Extracted so the
+    /// watch page can draw a BYTE-IDENTICAL idle layer under its stage while nothing is docked there.
+    ///
+    /// <para>Identical is the point, not merely convenient: if the page's idle layer differed from the card's own
+    /// poster, the moment video went live the viewer would see two cross-fades — the page swapping its idle art for the
+    /// card, and the card swapping its poster for the first frame. With the same pixels underneath, the only visible
+    /// transition is the element's OWN <c>PosterMotion</c>: exactly one cross-fade, from the art the user was already
+    /// looking at to the first decoded frame.</para></summary>
+    internal static Element PosterGround(Image? art) => new BoxEl
+    {
+        Grow = 1f, Opacity = 0.4f, ClipToBounds = true, Children = [ Surfaces.ArtworkFill(art, 0f) ],
     };
 
     static Element LoadingOverlay() => new BoxEl
@@ -373,7 +468,7 @@ sealed class DockedVideoSurface : Component
     };
 
     // ── chrome — the hover-revealed top strip: pop out · fullscreen · close, right-aligned, 30 DIP tall. ────────────
-    static Element BuildChrome(PlaybackBridge b, Action enterFullscreen, bool artTile) => new BoxEl
+    static Element BuildChrome(PlaybackBridge b, Action enterFullscreen, bool rounded) => new BoxEl
     {
         Grow = 1f, Direction = 1, HitTestPassThrough = true,
         Children =
@@ -384,7 +479,7 @@ sealed class DockedVideoSurface : Component
                 AlignItems = FlexAlign.Center, Justify = FlexJustify.End, Gap = Spacing.XXS,
                 Padding = new Edges4(Spacing.S, 0f, Spacing.S, 0f),
                 Gradient = Tok.ScrimTop,
-                Corners = artTile ? new CornerRadius4(Radii.Card, Radii.Card, 0f, 0f) : default,
+                Corners = rounded ? new CornerRadius4(Radii.Card, Radii.Card, 0f, 0f) : default,
                 Opacity = 0f, HoverOpacity = 1f,
                 HoverDurationMs = ChromeFadeMs, HoverEasing = Easing.FluentDecelerate,
                 Children =
@@ -425,21 +520,4 @@ sealed class DockedVideoSurface : Component
             },
         ],
     }, tip);
-}
-
-/// <summary>The two places a docked video can render (see <see cref="DockedVideoSurface.Face"/>). Both are the SAME
-/// placement value (<see cref="SurfacePlacement.Docked"/>) and the SAME mounted surface — this enum only picks which
-/// envelope wraps it, never a second gate on top of <see cref="PlaybackBridge.VideoPlacementNow"/>.</summary>
-enum DockedVideoFace
-{
-    /// <summary>RightRail's non-Details arm: a full-bleed cap, pinned above the header. The default — every
-    /// existing mount that does not set <see cref="DockedVideoSurface.Face"/> keeps this slot.</summary>
-    Cap,
-
-    /// <summary>The Details pinned hero (<c>NowPlayingPanel.NowPlayingHeroTile</c>): the same card FILLING a fixed
-    /// square (the rail's content width), so toggling Art&lt;-&gt;Video never changes the tile's own size and so never
-    /// reflows the credits scrolling beneath it. The bars are the element's own
-    /// <see cref="Tok.MediaLetterbox"/> fit — Fit frames a 16:9 stream with ~71-DIP bars top and bottom, and
-    /// Stretch/Crop fill the square edge to edge.</summary>
-    ArtTile,
 }

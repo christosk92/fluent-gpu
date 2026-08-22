@@ -393,14 +393,28 @@ serve right now.
 
 | Type | What it is |
 |---|---|
-| `ModulePageDoc(Version, Template, Hero?, Actions[], Sections[], ExpiresAtUnixMs?)` | `Template` is `"entity"` (hero + actions + sections) or `"custom"` (sections only). `ExpiresAtUnixMs` bounds the app's cache; `null` takes the 10-minute default. |
-| `PageHero(Title, Eyebrow?, Subtitle?, ImageUrl?, MetaLine?, IsLive)` | The identity block. `IsLive` draws the LIVE badge. |
+| `ModulePageDoc(Version, Template, Hero?, Actions[], Sections[], ExpiresAtUnixMs?)` | `Template` is `"entity"` (hero + actions + sections), `"custom"` (sections only) or `"watch"` (the video-first layout — see below). `ExpiresAtUnixMs` bounds the app's cache; `null` takes the 10-minute default. |
+| `PageHero(Title, Eyebrow?, Subtitle?, ImageUrl?, MetaLine?, IsLive, AvatarUrl?, SubtitleEntityId?)` | The identity block. `IsLive` draws the LIVE badge. `AvatarUrl` is the OWNER's picture (a channel avatar) — distinct from `ImageUrl`, the entity's own artwork, because a watch page shows both at once. `SubtitleEntityId` is the entity `Subtitle` navigates to. |
 | `PageAction(Id, Kind, Label, PlayableId?, Url?, Primary)` | `Kind` ∈ `play` (resolves `PlayableId` the normal way) / `openUrl` (http(s) only) / `moduleAction` (comes back as `module/action` with `Id`). At most one `Primary`. |
 | `PageSection(Kind, Title?, Text?, Rows?, Items?, Extra?)` | `Kind` ∈ `text` / `facts` (`Rows` = `[label, value]` pairs) / `playables` / `cards` / `links`. **An unknown kind is skipped, not an error** — and its unknown members survive in `Extra`, so a newer module can ship a section an older app cannot draw yet. |
 | `PageItem(Title, Subtitle?, ImageUrl?, PlayableId?, EntityId?, Url?, Form?, IsLive, Meta?)` | One entry. `PlayableId` plays it, `EntityId` navigates to another page **of the same module**, `Url` opens the browser. |
 
-`PageHero` carries no entity id of its own, so a page that wants to link onward to another page puts that link on a
-`PageItem.EntityId` — that is what the YouTube video page's one-card "Channel" shelf is.
+A page that wants to link onward to another page of the same module sets `PageHero.SubtitleEntityId`; before that
+field existed the only way was a one-card `cards` shelf carrying a `PageItem.EntityId`, which still works and is what
+an older module falls back to.
+
+**The watch template.** `Template = "watch"` says *this entity's identity IS its picture* — a video, a live stream.
+The app then draws the same document differently: a full-width 16:9 stage pinned at the top, showing the **live video
+itself** once that entity is the playing item and a poster plus one play affordance before that; then a caption column
+— title, the LIVE pill and meta line, a channel row built from `Subtitle`/`AvatarUrl`/`SubtitleEntityId`, the actions
+as capsule chips, a description card whose bold first line is the `facts` section's values, and a 16:9 shelf from the
+`playables` (or `cards`) section. While that stage is live the right rail gives its docked video card back and shows
+the queue instead, because the app has exactly **one** video surface.
+
+It is a REQUEST, not a requirement: `Template` is a plain string and an app that does not know `"watch"` falls back to
+the entity layout with every section still drawn, so a module may emit it before every app understands it. Emit it
+only when the entity really is video-first — a radio station with no picture reads better as an entity page, which is
+why the Radio module does not.
 
 **Budgets are rejections, not truncations.** `ModulePageBudget.Validate` runs on both sides of the wire and throws
 `ModuleException(Unsupported)` when a document exceeds **40 sections**, **500 items** (section entries plus fact
@@ -409,12 +423,20 @@ rendered half-way is a bug report nobody can diagnose, while a typed error names
 
 **Be honest about what you actually know.** The bundled modules are deliberately thin where the upstream API is:
 
-- **YouTube** builds `video:<id>` from the InnerTube player response — thumbnail, title, channel, LIVE badge, view
-  count, `shortDescription` — with actions *Play* and *Open on YouTube*. There is no channel endpoint for a JS-less
-  client, so `channel:<id>` shows only what a resolve happened to learn (the channel's name, and a "Live now" row
-  when that broadcast is on air) plus *Open on YouTube*, and says so in as many words. No invented shelves.
+- **YouTube** builds `video:<id>` as a `"watch"` page from two InnerTube calls made **concurrently on the page path
+  only** (never on resolve, so playback latency is untouched): `/player` gives the thumbnail, title, channel, LIVE
+  badge, lifetime view count and `shortDescription`; `/next` adds the owner **avatar**, the live **"N watching now"**
+  count (`videoDetails.viewCount` is lifetime only) and the related-videos shelf. `/next` uses the WEB client — it
+  returns metadata, never streams, so the SABR/JS bans that rule WEB out of `/player` do not apply — and **any
+  failure of it costs only the enrichment**: the page still renders everything `/player` knew. Counts and dates are
+  YouTube's own rendered strings, verbatim; nothing is computed or invented. There is still no channel endpoint for a
+  JS-less client, so `channel:<id>` shows only what a resolve happened to learn (its name, the cached avatar, and a
+  "Live now" row when that broadcast is on air) plus *Open on YouTube*, makes no extra request, and says so in as
+  many words. No invented shelves.
 - **Twitch** builds `channel:<login>` from the persisted `StreamMetadata` query: profile image, display name, stream
-  title, category and viewer count, *Play* when live (omitted when not) and *Open on Twitch*.
+  title, category and viewer count, *Play* when live (omitted when not) and *Open on Twitch*. When live it is a
+  `"watch"` page — the stream preview is the stage's poster and the profile image is the avatar, two pictures that
+  previously had to share one slot. Offline it stays an entity page: there is no picture to stage.
 - **Radio** builds `station:<url>` from the station's own ICY headers — name, genre, bitrate, format, description and
   the `icy-url` website. There is deliberately **no "now playing" row**: ICY titles arrive interleaved in the audio
   body, which only the *app* demuxes, so the module would be guessing. The app overlays the live title from its own

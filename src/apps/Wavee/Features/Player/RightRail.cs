@@ -32,8 +32,24 @@ sealed class RightRail : Component
         float railWidth = ui.RailWidth.Value;
         var mode = ui.Mode.Value;   // subscribe → swap the panel on a mode change
         bool floating = !ui.RailFits.Value;
-        bool nowPlaying = mode == RailMode.Details;
-        bool dockedVideo = b is not null && b.VideoPlacementNow() == SurfacePlacement.Docked;
+
+        // ── the rail YIELDS to the module watch page's in-page stage ─────────────────────────────────────────────────
+        // There is exactly ONE video surface per player, and two docked hosts now want it. The host is DERIVED
+        // (DockedVideoHosting.HostFor) — never claimed, never stored — because a page that is navigating away or parked
+        // in the keep-alive cache cannot re-render to hand a claim back, so a claim/release protocol would strand the
+        // surface on a dead page. Here that derivation costs two reads and splits into two independent answers:
+        //
+        //   dockedVideo — should the RAIL reserve the cap's height + splitter strip? Only when the rail is the host;
+        //                 while the stage hosts, the rail reserves nothing at all and the body gets the whole column.
+        //   railBody    — which body renders (RailVideoCoupling.BodyModeFor). A RENDER-time substitution, never a write
+        //                 to ShellUi.Mode: the user's chosen mode is untouched, so the instant the stage yields the
+        //                 rail is back exactly where it was, with nothing to restore and no ordering to get wrong.
+        var resolved = b?.VideoPlacementNow() ?? SurfacePlacement.None;
+        bool stageHosts = DockedVideoHosting.HostFor(resolved, ui.ActiveStagePlayable.Value, b?.CurrentTrack.Value?.Uri)
+                          == DockedVideoHost.PageStage;
+        bool dockedVideo = resolved == SurfacePlacement.Docked && !stageHosts;
+        var railBody = RailVideoCoupling.BodyModeFor(mode, stageHosts);
+        bool nowPlaying = railBody == RailMode.Details;
 
         // The shell keeps this panel at its final layout width. Animate the component host itself so open AND close retain
         // the fully-laid-out subtree while it slides through the shell's fixed clip; no width/layout writes occur per tick.
@@ -95,11 +111,11 @@ sealed class RightRail : Component
 
         // Lyrics only: promote the panel to the fullscreen immersive surface (WaveeShell mounts it off this signal).
         // The rail is left exactly as it is underneath — the surface covers the shell rather than replacing the panel.
-        Element[] headerKids = mode switch
+        Element[] headerKids = railBody switch
         {
             RailMode.Lyrics => LyricsHeaderKids(ui, svc?.Settings),
             RailMode.Video => VideoHeaderKids(ui, b),
-            _ => [TitleText(mode), CloseButton(() => ui.RailOpen.Value = false)],
+            _ => [TitleText(railBody), CloseButton(() => ui.RailOpen.Value = false)],
         };
 
         var header = new BoxEl
@@ -111,7 +127,7 @@ sealed class RightRail : Component
             Children = headerKids,
         };
 
-        Element body = mode switch
+        Element body = railBody switch
         {
             // PARK the rail's lyrics engine while the immersive surface is up: it is fully occluded, and two live
             // LyricsView documents would each run a 16 ms ticker, a DoF ramp and a handoff cascade for nothing. The
@@ -150,7 +166,7 @@ sealed class RightRail : Component
                         Direction = 1, Grow = 1f, MinHeight = 0f, ClipToBounds = true,
                         Children =
                         [
-                            PinnedHero(b),
+                            PinnedHero(b, stageHosts),
                             new BoxEl { Grow = 1f, MinHeight = 0f, ClipToBounds = true, Children = [body] },
                         ],
                     },
@@ -262,10 +278,17 @@ sealed class RightRail : Component
     // the video menu and PlayerBar's split button already read, so a track with no video (Available carries no
     // Docked bit at all, VideoUpgradeGate.AvailabilityFor) or a window too narrow to dock leaves the tile bare —
     // exactly how it looked before this phase.
-    static Element PinnedHero(PlaybackBridge? b)
+    static Element PinnedHero(PlaybackBridge? b, bool stageHosts)
     {
         Element tile = Embed.Comp(() => new NowPlayingHeroTile());
         if (b is null) return tile;
+
+        // While the watch page's stage hosts the one surface there is no video layer in this square to toggle — the
+        // Art|Video pair would offer to move a card that is already somewhere else, and the hero would reserve the
+        // video layer for a card that never mounts. Bare tile, exactly as it looks for a track with no video at all.
+        // (This arm is only reachable when the SUBSTITUTED body is Details, so it is belt-and-braces against the
+        // toggle ever outliving the card it drives.)
+        if (stageHosts) return tile;
 
         var state = b.VideoSurface.Value;   // subscribe: the toggle appears/relights with availability and placement
         if (!PlacementCore.Allows(state.Available, SurfacePlacement.Docked)) return tile;

@@ -41,6 +41,18 @@ public sealed record ModulePageDoc(
 
     /// <summary><see cref="Template"/> value for a sections-only page.</summary>
     public const string TemplateCustom = "custom";
+
+    /// <summary>
+    /// <see cref="Template"/> value for a WATCH page — an entity whose identity IS its picture (a video, a live
+    /// stream). The app draws the same document differently: a full-width 16:9 stage at the top (the live video
+    /// itself once that entity is playing, a poster and one play affordance before), then the title, the channel
+    /// row, the actions as capsules, the <see cref="PageSection.KindFacts"/> row folded into the top of the
+    /// description card, and <see cref="PageSection.KindPlayables"/> as a 16:9 shelf.
+    /// <para>It is a REQUEST, not a guarantee: an app that does not know this value falls back to
+    /// <see cref="TemplateEntity"/>, so a module may emit it before every app understands it. Emit it only when the
+    /// entity really is video-first — a radio station with no picture reads better as an entity page.</para>
+    /// </summary>
+    public const string TemplateWatch = "watch";
 }
 
 /// <summary>The identity block at the top of a page: art, a title, and the one line that says what this is.</summary>
@@ -51,13 +63,25 @@ public sealed record ModulePageDoc(
 /// <param name="ImageUrl">Absolute artwork url, or null.</param>
 /// <param name="MetaLine">A dot-separated facts line, e.g. <c>"Live · 12,345 watching"</c>.</param>
 /// <param name="IsLive">True to draw the LIVE badge next to the title.</param>
+/// <param name="AvatarUrl">Absolute url of the OWNER's picture — a channel avatar, a station logo — drawn as the
+/// circle beside <paramref name="Subtitle"/>. Distinct from <paramref name="ImageUrl"/>, which is the entity's own
+/// artwork (a video thumbnail); a watch page shows both at once, which is why one field cannot serve both.</param>
+/// <param name="SubtitleEntityId">The module-namespaced entity id <paramref name="Subtitle"/> navigates to, e.g.
+/// <c>channel:UC…</c>. Before this existed a page could only link onward through a one-card
+/// <see cref="PageSection.KindCards"/> shelf, because the hero carried no id of its own; that shelf still works and
+/// is what an older module falls back to.</param>
 public sealed record PageHero(
     string Title,
     string? Eyebrow,
     string? Subtitle,
     string? ImageUrl,
     string? MetaLine,
-    bool IsLive);
+    bool IsLive,
+    // Trailing + optional on purpose: `DefaultIgnoreCondition = WhenWritingNull` then keeps an older module's bytes
+    // byte-identical on the wire, exactly as ResolvedPlayable.PageEntityId was added. No SdkJsonContext change is
+    // needed either — no new TYPE appears, and [JsonSerializable(typeof(PageHero))] re-emits the metadata.
+    string? AvatarUrl = null,
+    string? SubtitleEntityId = null);
 
 /// <summary>One button on a page.</summary>
 /// <param name="Id">Module-private id; echoed back on <c>module/action</c> for <see cref="KindModuleAction"/>.</param>

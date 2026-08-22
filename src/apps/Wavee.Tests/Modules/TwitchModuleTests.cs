@@ -337,9 +337,24 @@ public class TwitchModuleTests
         ModulePageDoc? page = await host.PageAsync("channel:" + Login, TestContext.Current.CancellationToken);
 
         Assert.NotNull(page);
-        Assert.Equal("ExampleStreamer", page!.Hero!.Title);
-        Assert.Equal("Building a Rust parser", page.Hero.Subtitle);
-        Assert.Equal("https://static-cdn.jtvnw.net/user-default-pictures/300x300.png", page.Hero.ImageUrl);
+        // A watch page's title is WHAT IS ON and its channel row is WHO, which is the inverse of Twitch's own model
+        // (channel as the entity, stream title as one of its properties). The live arm swaps them so the caption does
+        // not name the wrong thing twice — a title reading "ExampleStreamer" over a channel row reading "Building a
+        // Rust parser". Offline keeps Twitch's own order, because there the channel IS the subject.
+        Assert.Equal("Building a Rust parser", page!.Hero!.Title);
+        Assert.Equal("ExampleStreamer", page.Hero.Subtitle);
+        Assert.Equal("Live stream", page.Hero.Eyebrow);
+
+        // A live channel is a WATCH page: the stream preview is the stage's poster (the hero's own art) and the
+        // channel's face moves to the avatar slot, instead of the two fighting over one image field.
+        Assert.Equal(ModulePageDoc.TemplateWatch, page.Template);
+        Assert.Equal("https://static-cdn.jtvnw.net/previews-ttv/live_user_examplestreamer-1920x1080.jpg",
+            page.Hero.ImageUrl);
+        Assert.Equal("https://static-cdn.jtvnw.net/user-default-pictures/300x300.png", page.Hero.AvatarUrl);
+
+        // On Twitch the thing and its owner are the same entity, so the subtitle has nowhere else to go.
+        Assert.Null(page.Hero.SubtitleEntityId);
+
         Assert.True(page.Hero.IsLive);
         Assert.Contains("1,234 watching", page.Hero.MetaLine!, StringComparison.Ordinal);
 
@@ -373,6 +388,73 @@ public class TwitchModuleTests
         Assert.Equal(PageAction.KindOpenUrl, only.Kind);
         Assert.Contains(page.Sections, x => x.Kind == PageSection.KindText &&
             x.Text!.Contains("not live right now", StringComparison.Ordinal));
+
+        // An offline channel has no picture to stage, so it stays the entity layout it has always been: the avatar
+        // is the hero's art, there is no separate avatar slot, and there is nothing to navigate the subtitle to.
+        Assert.Equal(ModulePageDoc.TemplateEntity, page.Template);
+        Assert.Null(page.Hero.Subtitle);
+        Assert.Null(page.Hero.AvatarUrl);
+        Assert.Null(page.Hero.SubtitleEntityId);
+        Assert.Contains(page.Sections, x => x.Kind == PageSection.KindFacts &&
+            Array.Exists(x.Rows!, r => r[0] == "Status" && r[1] == "Offline"));
+    }
+
+    [Fact]
+    public async Task Page_Channel_Live_SubstitutesThePreviewSizePlaceholders()
+    {
+        var http = new ScriptedHttpHandler()
+            .OnUrl("gql.twitch.tv", HttpStatusCode.OK, TwitchFixtures.StreamMetadataLiveTemplatedPreview);
+        ModuleTestHost host = Make(http);
+
+        ModulePageDoc? page = await host.PageAsync("channel:" + Login, TestContext.Current.CancellationToken);
+
+        // Braces are not valid in a url path: unsubstituted, the watch stage would poster nothing at all.
+        Assert.NotNull(page);
+        Assert.Equal(ModulePageDoc.TemplateWatch, page!.Template);
+        Assert.Equal(
+            $"https://static-cdn.jtvnw.net/previews-ttv/live_user_{Login}-" +
+            $"{TwitchModule.PreviewWidth}x{TwitchModule.PreviewHeight}.jpg",
+            page.Hero!.ImageUrl);
+        Assert.DoesNotContain("{", page.Hero.ImageUrl!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PreviewImage_LeavesAnAlreadySizedUrlAloneAndPassesNullThrough()
+    {
+        const string sized = "https://static-cdn.jtvnw.net/previews-ttv/live_user_x-640x360.jpg";
+
+        Assert.Equal(sized, TwitchModule.PreviewImage(sized));
+        Assert.Null(TwitchModule.PreviewImage(null));
+        Assert.Null(TwitchModule.PreviewImage("   "));
+    }
+
+    /// <summary>The persisted <c>StreamMetadata</c> query often answers with no <c>previewImageURL</c> member at all —
+    /// verified against a live channel — and before the login-derived fallback the watch stage then postered the 70x70
+    /// channel avatar across a full-width 16:9 box. The url is a convention built from the login, exactly like the
+    /// channel and usher urls, so it asserts nothing the module had not already learned.</summary>
+    [Fact]
+    public void PreviewFor_BuildsTheCanonicalLivePreviewPathAtStageSize()
+    {
+        Assert.Equal("https://static-cdn.jtvnw.net/previews-ttv/live_user_shroud-1920x1080.jpg",
+            TwitchModule.PreviewFor("shroud"));
+    }
+
+    /// <summary>A live channel whose metadata carries no preview must still stage a real picture, and it must NOT be
+    /// the avatar — the avatar belongs in the channel-row circle, where 70x70 is the right size.</summary>
+    [Fact]
+    public async Task Page_Channel_Live_WithoutAPreview_StagesTheCanonicalPreviewNotTheAvatar()
+    {
+        var http = new ScriptedHttpHandler()
+            .OnUrl("gql.twitch.tv", HttpStatusCode.OK, TwitchFixtures.StreamMetadataLiveNoPreview);
+        ModuleTestHost host = Make(http);
+
+        ModulePageDoc? page = await host.PageAsync("channel:examplestreamer");
+
+        Assert.NotNull(page);
+        Assert.Equal(ModulePageDoc.TemplateWatch, page!.Template);
+        Assert.Equal(TwitchModule.PreviewFor("examplestreamer"), page.Hero!.ImageUrl);
+        Assert.NotEqual(page.Hero.ImageUrl, page.Hero.AvatarUrl);
+        Assert.Contains("profile_image", page.Hero.AvatarUrl!, StringComparison.Ordinal);
     }
 
     [Fact]

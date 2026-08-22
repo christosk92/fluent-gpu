@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "_comment": "InnerTube client blocks in fallback order (snapshot 2026-08-22). YouTube retires client versions every few weeks: a same-named file dropped into the module's data dir replaces this one without rebuilding the module. Never add web/web_safari (SABR-only, needs the JS player), tv/tv_downgraded/web_embedded (signatureCipher) or android_vr (all formats 403 since 2026-08-17).",
+  "_comment": "InnerTube client blocks (snapshot 2026-08-22). YouTube retires client versions every few weeks: a same-named file dropped into the module's data dir replaces this one without rebuilding the module. `role` says what a block is FOR: absent or \"playback\" = tried by the /player fallback walk, in this order; \"metadata\" = used ONLY for /next, never for /player. The playback bans still stand: never give a playback role to web/web_safari (SABR-only, needs the JS player), tv/tv_downgraded/web_embedded (signatureCipher) or android_vr (all formats 403 since 2026-08-17). WEB appears below as a METADATA client only, which those bans do not reach: /next returns no streams at all, so there is no SABR session and no cipher to solve, and WEB is the one client that answers the twoColumnWatchNextResults shape the module reads (mobile clients answer singleColumnWatchNextResults).",
   "clients": [
     {
       "key": "visionos",
@@ -34,6 +34,16 @@
       "osVersion": "18.3.2.22D82",
       "userAgent": "com.google.ios.youtube/21.26.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)",
       "warning": "YouTube stops serving the iOS HLS manifest about 30 seconds in without a PO token; playback may cut out."
+    },
+    {
+      "key": "web",
+      "role": "metadata",
+      "clientName": "WEB",
+      "clientVersion": "2.20260822.01.00",
+      "clientId": 1,
+      "osName": "Windows",
+      "osVersion": "10.0",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36"
     }
   ]
 }

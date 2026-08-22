@@ -159,7 +159,10 @@ public sealed partial class TwitchModule : WaveeModule
             PlayableId: playableId,
             Title: title,
             Artists: artists,
-            ArtworkUrl: user?.Stream?.PreviewImageURL,
+            // Same fallback as the page's stage poster: without it a live resolve carries no artwork at all whenever
+            // the metadata query omits the preview, and the player bar falls back to a blank tile.
+            ArtworkUrl: PreviewImage(user?.Stream?.PreviewImageURL)
+                        ?? (kind is TwitchLinkKind.Live && login is not null ? PreviewFor(login) : null),
             DurationMs: 0,
             IsLive: kind is TwitchLinkKind.Live,
             Form: MediaForm.Video,
@@ -274,17 +277,85 @@ public sealed partial class TwitchModule : WaveeModule
         if (live) actions.Add(PageAction.Play(TwitchUrls.LivePrefix + login, "Play"));
         actions.Add(PageAction.OpenUrl(ChannelUrl(login), "Open on Twitch"));
 
-        var hero = new PageHero(
-            name,
-            "Channel",
-            live ? streamTitle : null,
-            Blank(user.ProfileImageURL) ?? Blank(stream?.PreviewImageURL),
-            MetaLine(live ? "Live" : "Offline", game, viewers is null ? null : viewers + " watching"),
-            live);
+        string? avatar = Blank(user.ProfileImageURL);
+        // The API's own preview when it sent one, else the CDN path for this login — see PreviewFor for why the
+        // fallback is needed at all (the persisted query often omits the member entirely). Only on the live arm: the
+        // path exists exactly while the channel is live.
+        string? preview = PreviewImage(stream?.PreviewImageURL) ?? (live ? PreviewFor(login) : null);
+        string? meta = MetaLine(live ? "Live" : "Offline", game, viewers is null ? null : viewers + " watching");
 
-        return new ModulePageDoc(ModulePageDoc.CurrentVersion, ModulePageDoc.TemplateEntity, hero,
+        // Live and offline are two different KINDS of page, not one page with a badge. A live channel's identity IS
+        // the picture moving on it, so it goes out as a WATCH document: the app stages the preview at 16:9 and swaps
+        // the live video in once this entity is playing, which is why the hero's own art must be the stream preview
+        // and the channel's face has to move to AvatarUrl instead of losing the fight for the single image slot.
+        // An offline channel has no such picture — a poster-less stage is worse than today's page — so it stays the
+        // entity layout, where the avatar is the right (and only) art. Both keep the same facts section: the watch
+        // layout folds that row into its description card, the entity layout draws it as tiles.
+        // A watch page's TITLE is what is on and its channel row is WHO — the shape the layout is built around, and the
+        // shape YouTube's document already has. Twitch's own model is the other way round (the channel is the entity;
+        // the stream title is a property of it), so the live arm swaps them. Without the swap the caption names the
+        // wrong thing twice: a title reading "shroud" over a channel row reading "going for apache". When there is no
+        // stream title the channel name carries the title instead, and the row is dropped rather than repeated.
+        string liveTitle = Blank(streamTitle) ?? name;
+        string? liveWho = string.Equals(liveTitle, name, StringComparison.Ordinal) ? null : name;
+
+        var hero = live
+            ? new PageHero(
+                liveTitle,
+                "Live stream",
+                liveWho,
+                preview ?? avatar,   // avatar only as a last resort: an empty stage reads as a broken page
+                meta,
+                IsLive: true,
+                AvatarUrl: avatar,
+                // Null on purpose. Per ResolveAsync above, on Twitch the thing and its owner are the SAME entity —
+                // `channel:<login>` is both the live playable's page and its channel — so a subtitle link would
+                // navigate to the page already on screen. There is no owner page to invent.
+                SubtitleEntityId: null)
+            : new PageHero(name, "Channel", null, avatar ?? preview, meta, IsLive: false);
+
+        string template = live ? ModulePageDoc.TemplateWatch : ModulePageDoc.TemplateEntity;
+        return new ModulePageDoc(ModulePageDoc.CurrentVersion, template, hero,
             [.. actions], [.. sections], ExpiresAtUnixMs: null);
     }
+
+    /// <summary>The width baked into a templated <c>previewImageURL</c>.</summary>
+    public const int PreviewWidth = 1920;
+
+    /// <summary>The height baked into a templated <c>previewImageURL</c> — 16:9, the aspect the watch stage draws.</summary>
+    public const int PreviewHeight = 1080;
+
+    /// <summary>
+    /// Substitutes the <c>{width}</c>/<c>{height}</c> placeholders Twitch leaves in <c>previewImageURL</c> whenever
+    /// the query asked for no explicit size — which the persisted <c>StreamMetadata</c> query does not, so the live
+    /// path sees them most of the time. Left in place the url is not fetchable at all (braces are not valid in a
+    /// path), and the watch stage would show an empty poster. 1920x1080 because the stage is full-width 16:9 and
+    /// the CDN re-encodes to whatever is asked; asking small and upscaling is the only way to make this look bad.
+    /// </summary>
+    /// <param name="url">The raw <c>previewImageURL</c>, possibly templated, possibly null.</param>
+    /// <returns>A fetchable absolute url, or null when there was no preview.</returns>
+    public static string? PreviewImage(string? url)
+    {
+        if (Blank(url) is not { } text) return null;
+        if (!text.Contains('{', StringComparison.Ordinal)) return text;
+        return text
+            .Replace("{width}", PreviewWidth.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal)
+            .Replace("{height}", PreviewHeight.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The CDN path Twitch serves a live channel's current frame from, built from the login the same way
+    /// <see cref="ChannelUrl"/> and the usher playlist url already are. It is needed because the persisted
+    /// <c>StreamMetadata</c> query frequently answers with **no** <c>previewImageURL</c> at all (verified against a
+    /// live channel: the member is simply absent), and without it the watch stage falls back to the channel avatar —
+    /// a 70x70 image stretched across a full-width 16:9 poster, which looks broken rather than merely plain.
+    /// <para>This is a url CONVENTION, not invented metadata: it asserts nothing about the channel that the module did
+    /// not already learn from the API (that this login is live). If the channel is not live the path 404s, which is
+    /// why it is only ever used on the live arm and why an image that fails to load degrades to the poster ground.</para>
+    /// </summary>
+    /// <param name="login">The lower-cased channel login.</param>
+    public static string PreviewFor(string login)
+        => $"https://static-cdn.jtvnw.net/previews-ttv/live_user_{login}-{PreviewWidth.ToString(CultureInfo.InvariantCulture)}x{PreviewHeight.ToString(CultureInfo.InvariantCulture)}.jpg";
 
     /// <summary>Joins the non-empty parts of a meta line with a middle dot.</summary>
     /// <param name="parts">The candidate parts, nulls and blanks skipped.</param>

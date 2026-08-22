@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using FluentGpu;
@@ -689,7 +689,15 @@ sealed class WaveeShell : Component
             {
                 bool detached = _inputHooks?.CanOpenDetachedWindow?.Invoke() ?? true;
                 bool fullscreen = _inputHooks?.WindowSetFullscreen is not null;
-                var cap = (fits ? PlacementSet.Docked : PlacementSet.None) | PlacementSet.Floating
+                // DOCKED has TWO independent suppliers, OR-ed (DockedVideoHosting.DockedHostAvailable): the RAIL can
+                // host a docked card when the rail fits — the `fits` test just above, unchanged — and a module WATCH
+                // PAGE can always host one, because its stage is full-width page content that needs no rail at all.
+                // Before the OR, narrowing the window demoted a watch page's in-page video to the floating mini
+                // player: an overlay to dismiss, over the very page whose purpose was to show that video.
+                bool pageStage = DockedVideoHosting.PageStageHosts(
+                    _shellUi.ActiveStagePlayable.Value, capBridge.CurrentTrack.Value?.Uri);   // subscribe → nav + track
+                var cap = (DockedVideoHosting.DockedHostAvailable(fits, pageStage) ? PlacementSet.Docked : PlacementSet.None)
+                        | PlacementSet.Floating
                         | (detached ? PlacementSet.Detached : PlacementSet.None)
                         | (fullscreen ? PlacementSet.Fullscreen : PlacementSet.None);
                 capBridge.HostPlacementCapability.SetIfChanged(cap);
@@ -703,6 +711,11 @@ sealed class WaveeShell : Component
         // this rule exists.
         var railOpenWas = UseRef(_shellUi.RailOpen.Peek());
         var videoStateWas = UseRef(_actions.Playback?.VideoSurface.Peek() ?? PlacementState.Initial(PlacementPolicy.Video));
+        // WHICH docked host owned the surface on the previous run. Kept as an edge like the two above rather than
+        // re-derived, because the rules that need it fire AFTER the video has already left the dock — at which point
+        // the derivation unconditionally reads Rail (nothing is docked, so the rail is the resting owner) and would
+        // answer a question about a body that was never on screen.
+        var hostWasRef = UseRef(DockedVideoHost.Rail);
         UseSignalEffect(() =>
         {
             if (_actions.Playback is not { } pb) return;
@@ -714,11 +727,20 @@ sealed class WaveeShell : Component
             railOpenWas.Value = railOpen;
             videoStateWas.Value = state;
 
+            // The ONE derived host (DockedVideoHosting.HostFor): the rail's card, or a module watch page's in-page
+            // stage. Never claimed and never stored — a page that is navigating away is exit-frozen in the same
+            // reconcile pass as the route change, and a parked keep-alive page is skipped outright, so neither can
+            // re-render to hand a claim back. Every rule below that used to assume "docked ⇒ the rail" now takes it.
+            var host = DockedVideoHosting.HostFor(
+                PlacementCore.Resolve(state), _shellUi.ActiveStagePlayable.Value, pb.CurrentTrack.Value?.Uri);
+            var hostBefore = hostWasRef.Value;
+            hostWasRef.Value = host;
+
             // B1 — docking was just requested (Requested transitioned INTO Docked, an explicit ShowVideoAt): open the
             // rail into Video mode, but only when it was closed — ModeOnDock's own null leaves an already-open rail
             // showing whatever it was showing.
             if (state.Requested == SurfacePlacement.Docked && prev.Requested != SurfacePlacement.Docked
-                && RailVideoCoupling.ModeOnDock(railOpen, _shellUi.Mode.Peek()) is { } dockMode)
+                && RailVideoCoupling.ModeOnDock(railOpen, _shellUi.Mode.Peek(), host) is { } dockMode)
             {
                 _shellUi.Mode.Value = dockMode;
                 _shellUi.RailOpen.Value = true;
@@ -728,7 +750,7 @@ sealed class WaveeShell : Component
             // Preferred stays untouched (Demote's whole point), so re-opening the rail re-docks (B7).
             if (!railOpen && wasOpen)
             {
-                var demoteTo = RailVideoCoupling.OnRailClosed(state);
+                var demoteTo = RailVideoCoupling.OnRailClosed(state, host);
                 if (demoteTo != SurfacePlacement.None) pb.DemoteVideoTo(demoteTo);
             }
 
@@ -742,7 +764,7 @@ sealed class WaveeShell : Component
             // Requested (not Resolve), so an AVAILABILITY-only drop — B10, this track simply has no video — leaves
             // the rail open per the empty-state precedent instead of thrashing it closed every track boundary.
             bool videoLeftDock = prev.Requested == SurfacePlacement.Docked && state.Requested != SurfacePlacement.Docked;
-            if (RailVideoCoupling.CloseRailOnVideoLeft(_shellUi.Mode.Peek(), videoLeftDock))
+            if (RailVideoCoupling.CloseRailOnVideoLeft(_shellUi.Mode.Peek(), videoLeftDock, hostBefore))
                 _shellUi.RailOpen.Value = false;
 
             // ── §5.4 — user-initiated vs automatic fullscreen entry (the focus-steal guard) ──────────────────────────

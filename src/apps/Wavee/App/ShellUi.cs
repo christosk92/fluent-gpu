@@ -35,6 +35,28 @@ public sealed class ShellUi
     /// on commit, and the next SOURCE clears it: an explicit drag is a decision about THIS video, not a standing one.</summary>
     public Signal<bool> DockedVideoHeightPinned { get; } = new(false);
 
+    /// <summary>The PLAYABLE uri the attached page's own stage would host — a module watch page's video — or
+    /// <c>""</c> when no attached page stages anything. NAVIGATION state, not rail state, which is why it lives here
+    /// next to the chrome the arbitration reads rather than on <c>PlaybackBridge</c>; and the empty string (not null)
+    /// is the resting value, so <c>DockedVideoHosting.PageStageHosts</c> can treat empty as "nothing staged" and never
+    /// accidentally match an empty playing uri.
+    ///
+    /// <para><b>A PLAYABLE uri, and that is the whole point.</b> This was once the page's OWN entity uri, which looked
+    /// equivalent and is not: a module's entity id space and its playable id space are deliberately different —
+    /// YouTube's video page is entity <c>video:tRsQsTMvPNg</c> while the thing that plays is playable
+    /// <c>tRsQsTMvPNg</c>. Compared against <c>PlaybackBridge.CurrentTrack.Uri</c> (always a PLAYABLE uri) the two
+    /// could never be equal, so the page stage never mounted and the rail never yielded, on the one module the feature
+    /// exists for. Both terms of that comparison now live in ONE id space: the playable uri.</para>
+    ///
+    /// <para><b>Two writers, disjoint by route kind, and no reader ever compares uris by hand.</b> The attached
+    /// <c>ModulePage</c> writes the playable its document's play action names (it is the only thing that HAS the
+    /// document, and therefore the only thing that can map a page to a playable), from an effect gated on
+    /// <c>UseIsActive</c> so a keep-alive-parked page never writes. <c>ContentHost</c> writes <c>""</c> on navigation
+    /// to any route that is NOT a module page, which is what stops a stale claim from surviving a trip to Home. Every
+    /// reader — the rail's yield, the docked capability bit, the page stage's own mount gate — goes through
+    /// <c>DockedVideoHosting</c>.</para></summary>
+    public Signal<string> ActiveStagePlayable { get; } = new("");
+
     /// <summary>
     /// Whether the rail can currently reserve inline layout width alongside the sidebar and content region. When false,
     /// the shell floats the rail over content instead of allocating row width for it.

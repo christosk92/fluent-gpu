@@ -1,4 +1,4 @@
-using System.Buffers;
+﻿using System.Buffers;
 using System.Collections.Concurrent;
 using System.Globalization;
 using System.Net;
@@ -18,6 +18,24 @@ public sealed partial class YouTubeModule : WaveeModule
 {
     /// <summary>The InnerTube player endpoint. No API key: JS-less clients do not need one.</summary>
     public const string PlayerEndpoint = "https://www.youtube.com/youtubei/v1/player?prettyPrint=false";
+
+    /// <summary>
+    /// The InnerTube watch-next endpoint. PAGE PATH ONLY — <see cref="ResolveAsync(string,CancellationToken)"/> never
+    /// touches it, because it returns no stream urls and playback latency must not pay for page copy.
+    /// </summary>
+    public const string NextEndpoint = "https://www.youtube.com/youtubei/v1/next?prettyPrint=false";
+
+    /// <summary>The cookie that skips the EU consent interstitial; sent by every www.youtube.com request.</summary>
+    public const string ConsentCookie = "SOCS=CAI;CONSENT=YES+1";
+
+    /// <summary>How many up-next entries one page carries. YouTube offers about twenty; this is the ceiling that
+    /// keeps a shelf inside <see cref="ModulePageBudget.MaxItems"/> however long the rail grows.</summary>
+    public const int MaxRelated = 24;
+
+    /// <summary>How long a LIVE page stays fresh (ms). A concurrent-viewer count is stale within the minute, and the
+    /// broadcast can end at any moment, so the page asks the app for a much shorter cache than the 10-minute
+    /// default. A finished video's page has nothing that rots, so it keeps the default.</summary>
+    public const int LivePageTtlMs = 60_000;
 
     /// <summary>The UA used for the channel-live HTML scrape and the manifest preflight.</summary>
     public const string DesktopUserAgent =
@@ -41,6 +59,12 @@ public sealed partial class YouTubeModule : WaveeModule
             DeviceMake: "Apple", DeviceModel: "iPhone16,2", OsName: "iPhone", OsVersion: "18.3.2.22D82",
             Warning: "YouTube stops serving the iOS HLS manifest about 30 seconds in without a PO token; " +
                      "playback may cut out."),
+        // Metadata only, and that is the whole point: WEB is permanently banned from /player (it answers a SABR-only
+        // session that needs the JS player), but /next hands back no streams at all, so the ban has nothing to bite
+        // on. WEB is also the only client that answers `twoColumnWatchNextResults`; the mobile blocks above answer
+        // `singleColumnWatchNextResults`, a different document this module does not read.
+        new("web", "WEB", "2.20260822.01.00", 1, DesktopUserAgent,
+            OsName: "Windows", OsVersion: "10.0", Role: YouTubeClient.RoleMetadata),
     ];
 
     /// <summary>The <c>video:&lt;id&gt;</c> entity-id prefix (see <see cref="ModulePageDoc"/>).</summary>
@@ -51,7 +75,9 @@ public sealed partial class YouTubeModule : WaveeModule
 
     private readonly HttpClient _http;
     private readonly ConcurrentDictionary<string, ChannelSnapshot> _channels = new(StringComparer.Ordinal);
-    private YouTubeClient[]? _clients;
+    private YouTubeClient[]? _table;
+    private YouTubeClient[]? _playbackClients;
+    private YouTubeClient? _metadataClient;
 
     /// <summary>The ctor <see cref="ModuleRunner"/> uses: a default handler with redirects and decompression on.</summary>
     public YouTubeModule() : this(null)
@@ -75,15 +101,61 @@ public sealed partial class YouTubeModule : WaveeModule
         _http = new HttpClient(handler, ownsHandler) { Timeout = TimeSpan.FromSeconds(20) };
     }
 
-    /// <summary>The client table actually in use (data file if present, built-in table otherwise).</summary>
-    public YouTubeClient[] Clients => _clients ??= LoadClients();
+    /// <summary>Every block of the client table actually in use, both roles, in file order.</summary>
+    public YouTubeClient[] ClientTable
+    {
+        get
+        {
+            EnsureClients();
+            return _table!;
+        }
+    }
+
+    /// <summary>The clients the <c>/player</c> fallback walk may try, in order. A
+    /// <see cref="YouTubeClient.RoleMetadata"/> block is deliberately absent.</summary>
+    public YouTubeClient[] Clients
+    {
+        get
+        {
+            EnsureClients();
+            return _playbackClients!;
+        }
+    }
+
+    /// <summary>The one client used for <c>/next</c>, or null when the table configures none — in which case pages
+    /// simply render without the watch-next enrichment.</summary>
+    public YouTubeClient? MetadataClient
+    {
+        get
+        {
+            EnsureClients();
+            return _metadataClient;
+        }
+    }
+
+    /// <summary>
+    /// Loads and splits the client table once. The two projections are computed BEFORE <c>_table</c> is published so
+    /// a second thread either sees the whole set or none of it: the page path starts <c>/player</c> and <c>/next</c>
+    /// concurrently, and they read different projections of the same table.
+    /// </summary>
+    private void EnsureClients()
+    {
+        if (_table is not null) return;
+
+        YouTubeClient[] table = LoadClients();
+        _playbackClients = [.. table.Where(c => c.IsPlayback)];
+        _metadataClient = Array.Find(table, c => c.IsMetadata);
+        _table = table;
+    }
 
     /// <inheritdoc/>
     public override ValueTask InitializeAsync(ModuleContext ctx, CancellationToken ct)
     {
-        _clients = LoadClients();
+        EnsureClients();
         Host.Log(ModuleLogLevel.Info,
-            $"YouTube module ready; {_clients.Length} InnerTube client(s): {string.Join(", ", _clients.Select(c => c.Key))}");
+            $"YouTube module ready; {_playbackClients!.Length} playback client(s): " +
+            $"{string.Join(", ", _playbackClients.Select(c => c.Key))}; metadata client: " +
+            $"{_metadataClient?.Key ?? "none"}");
         return default;
     }
 
@@ -124,7 +196,7 @@ public sealed partial class YouTubeModule : WaveeModule
         request.Headers.TryAddWithoutValidation("User-Agent", DesktopUserAgent);
         request.Headers.TryAddWithoutValidation("Accept-Language", "en-US,en;q=0.9");
         // Skips the consent interstitial that EU exit nodes get instead of the watch page.
-        request.Headers.TryAddWithoutValidation("Cookie", "SOCS=CAI;CONSENT=YES+1");
+        request.Headers.TryAddWithoutValidation("Cookie", ConsentCookie);
 
         using HttpResponseMessage response = await _http.SendAsync(request, ct).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
@@ -320,7 +392,7 @@ public sealed partial class YouTubeModule : WaveeModule
         // so remember what THIS video said about its channel and serve that, honestly labelled, on `channel:<id>`.
         if (channelId is not null)
         {
-            _channels[channelId] = new ChannelSnapshot(channelId, Blank(d?.Author), videoId, title, artwork, isLive);
+            RememberChannel(channelId, Blank(d?.Author), videoId, title, artwork, isLive, avatar: null);
         }
 
         return new ResolvedPlayable(
@@ -404,8 +476,31 @@ public sealed partial class YouTubeModule : WaveeModule
     /// <param name="VideoTitle">That video's title.</param>
     /// <param name="Thumbnail">That video's widest thumbnail.</param>
     /// <param name="IsLive">True when that video was on air at resolve time.</param>
+    /// <param name="Avatar">The channel's own picture, learned from a <c>/next</c> owner block on a page visit. Null
+    /// until some page taught us; a resolve alone never learns it, because the player response has no avatar.</param>
     private sealed record ChannelSnapshot(string ChannelId, string? Name, string VideoId, string VideoTitle,
-        string? Thumbnail, bool IsLive);
+        string? Thumbnail, bool IsLive, string? Avatar);
+
+    /// <summary>
+    /// Records what one video taught us about its channel, MERGING rather than replacing: the avatar only ever
+    /// arrives from a page visit and the rest only from the most recent visit of either kind, so a later resolve
+    /// must not erase a picture an earlier page learned. That merge is what keeps <see cref="ChannelPage"/> free of
+    /// http calls — the avatar is already in hand by the time the channel page is asked for.
+    /// </summary>
+    /// <param name="channelId">The channel id.</param>
+    /// <param name="name">The channel name, or null when unknown.</param>
+    /// <param name="videoId">The video that taught us.</param>
+    /// <param name="videoTitle">That video's title.</param>
+    /// <param name="thumbnail">That video's widest thumbnail.</param>
+    /// <param name="isLive">True when that video was on air.</param>
+    /// <param name="avatar">The channel avatar, or null to keep whatever is already known.</param>
+    private void RememberChannel(string channelId, string? name, string videoId, string videoTitle,
+        string? thumbnail, bool isLive, string? avatar)
+        => _channels.AddOrUpdate(
+            channelId,
+            _ => new ChannelSnapshot(channelId, name, videoId, videoTitle, thumbnail, isLive, avatar),
+            (_, old) => new ChannelSnapshot(channelId, name ?? old.Name, videoId, videoTitle,
+                thumbnail ?? old.Thumbnail, isLive, avatar ?? old.Avatar));
 
     /// <summary>The watch url for a video id.</summary>
     /// <param name="videoId">The 11-character video id.</param>
@@ -425,8 +520,15 @@ public sealed partial class YouTubeModule : WaveeModule
         {
             string videoId = id[VideoEntityPrefix.Length..];
             if (!YouTubeUrls.IsVideoId(videoId)) return null;
-            YtPlayerResponse player = await PlayerForPageAsync(videoId, ct).ConfigureAwait(false);
-            return VideoPage(videoId, player);
+
+            // Concurrent on purpose: /next describes the SAME video from a different endpoint, so serialising the two
+            // would add its whole round trip to every page open. /player is the one allowed to fail the page;
+            // WatchNextAsync answers null instead of throwing, so Task.WhenAll can only surface /player's verdict.
+            EnsureClients();
+            Task<YtPlayerResponse> player = PlayerForPageAsync(videoId, ct);
+            Task<WatchNextInfo?> next = WatchNextAsync(videoId, ct);
+            await Task.WhenAll(player, next).ConfigureAwait(false);
+            return VideoPage(videoId, player.Result, next.Result);
         }
 
         if (id.StartsWith(ChannelEntityPrefix, StringComparison.Ordinal))
@@ -493,20 +595,29 @@ public sealed partial class YouTubeModule : WaveeModule
         throw new ModuleException(lastCode, lastReason);
     }
 
-    /// <summary>Builds the <c>video:&lt;id&gt;</c> page out of a player response.</summary>
+    /// <summary>
+    /// Builds the <c>video:&lt;id&gt;</c> page: a WATCH document (<see cref="ModulePageDoc.TemplateWatch"/>), because
+    /// a video's identity IS its picture. The <c>facts</c> and <c>text</c> sections are exactly what they always were
+    /// — the watch layout folds them into its description card, and an app that does not know the template still
+    /// renders the same document the old way.
+    /// </summary>
     /// <param name="videoId">The video id.</param>
     /// <param name="player">The player response describing it.</param>
-    private ModulePageDoc VideoPage(string videoId, YtPlayerResponse player)
+    /// <param name="next">What <c>/next</c> added, or null when it did not answer. Null costs the page its avatar,
+    /// its concurrent-viewer count, its date line and its up-next shelf — and nothing else.</param>
+    private ModulePageDoc VideoPage(string videoId, YtPlayerResponse player, WatchNextInfo? next)
     {
         YtVideoDetails? d = player.VideoDetails;
-        YtLiveBroadcastDetails? broadcast = player.Microformat?.PlayerMicroformatRenderer?.LiveBroadcastDetails;
+        YtPlayerMicroformatRenderer? micro = player.Microformat?.PlayerMicroformatRenderer;
+        YtLiveBroadcastDetails? broadcast = micro?.LiveBroadcastDetails;
         bool isLive = (d?.IsLive ?? false) || (broadcast?.IsLiveNow ?? false);
 
         string title = string.IsNullOrWhiteSpace(d?.Title) ? videoId : d!.Title!;
-        string? author = Blank(d?.Author);
-        string? channelId = Blank(d?.ChannelId);
-        string? views = FormatCount(d?.ViewCount);
+        string? author = Blank(d?.Author) ?? Blank(micro?.OwnerChannelName) ?? next?.OwnerName;
+        string? channelId = Blank(d?.ChannelId) ?? Blank(micro?.ExternalChannelId) ?? next?.OwnerChannelId;
+        string? views = FormatCount(d?.ViewCount) ?? FormatCount(micro?.ViewCount);
         string? length = isLive ? null : FormatSeconds(d?.LengthSeconds);
+        string? thumbnail = WidestThumbnail(d?.Thumbnail?.Thumbnails);
 
         var facts = new List<string[]>(4);
         if (views is not null) facts.Add(["Views", views]);
@@ -517,41 +628,67 @@ public sealed partial class YouTubeModule : WaveeModule
             facts.Add(["Started", at.UtcDateTime.ToString("u", CultureInfo.InvariantCulture)]);
         }
 
-        var sections = new List<PageSection>(3);
+        var sections = new List<PageSection>(4);
         if (facts.Count > 0) sections.Add(PageSection.FromFacts([.. facts], "About"));
         if (Blank(d?.ShortDescription) is { } description)
         {
             sections.Add(PageSection.FromText(description, "Description"));
         }
 
-        // PageHero carries no entity id of its own, so the channel link rides a one-card shelf — the sanctioned
-        // way a page navigates to another page of the same module (PageItem.EntityId).
+        // The hero now carries SubtitleEntityId, but the one-card shelf stays: it is what an app that does not read
+        // the new hero member falls back to, and dropping it would silently strip the channel link from that app.
         if (channelId is not null)
         {
             sections.Add(PageSection.FromCards(
-                [new PageItem(author ?? "YouTube channel", "Channel", null, null, ChannelEntityPrefix + channelId,
-                    null, null, false, null)],
+                [new PageItem(author ?? "YouTube channel", "Channel", next?.OwnerAvatarUrl, null,
+                    ChannelEntityPrefix + channelId, null, null, false, null)],
                 "Channel"));
+        }
+
+        if (next?.Related is { Length: > 0 } related)
+        {
+            sections.Add(PageSection.FromPlayables(related, "Up next"));
+        }
+
+        // The date line is YouTube's own rendered string when /next answered ("Started streaming 3 hours ago"), and
+        // the microformat's own date otherwise. Never computed here: relative time is YouTube's arithmetic in the
+        // language the request asked for, or it is not shown at all.
+        string? dateText = next?.DateText ?? IsoDate(micro?.PublishDate ?? micro?.UploadDate);
+
+        // A live page quotes the CONCURRENT audience. `videoDetails.viewCount` on a broadcast is a lifetime total
+        // that climbs whether or not anyone is watching, so it is the wrong number to print beside a LIVE badge and
+        // only appears once /next says the count is not a live one.
+        string? audience = next is { ViewCountIsLive: true, ViewCountText: { Length: > 0 } watching }
+            ? watching
+            : views is null ? null : views + " views";
+
+        if (channelId is not null)
+        {
+            RememberChannel(channelId, author, videoId, title, thumbnail, isLive, next?.OwnerAvatarUrl);
         }
 
         var hero = new PageHero(
             title,
             isLive ? "Live stream" : "Video",
             author,
-            WidestThumbnail(d?.Thumbnail?.Thumbnails),
-            MetaLine(isLive ? "Live now" : length, views is null ? null : views + " views"),
-            isLive);
+            thumbnail,
+            MetaLine(isLive ? "Live now" : length, audience, dateText),
+            isLive,
+            AvatarUrl: next?.OwnerAvatarUrl,
+            SubtitleEntityId: channelId is null ? null : ChannelEntityPrefix + channelId);
 
         return new ModulePageDoc(
             ModulePageDoc.CurrentVersion,
-            ModulePageDoc.TemplateEntity,
+            ModulePageDoc.TemplateWatch,
             hero,
             [
                 PageAction.Play(videoId, "Play"),
                 PageAction.OpenUrl(WatchUrl(videoId), "Open on YouTube"),
             ],
             [.. sections],
-            ExpiresAtUnixMs: null);
+            ExpiresAtUnixMs: isLive
+                ? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + LivePageTtlMs
+                : null);
     }
 
     /// <summary>
@@ -580,13 +717,16 @@ public sealed partial class YouTubeModule : WaveeModule
                 "About this page"));
         }
 
+        // The avatar costs no request: it was cached by whichever video page last mentioned this channel, so a
+        // channel page still makes ZERO http calls of its own.
         var hero = new PageHero(
             snapshot?.Name ?? "YouTube channel",
             "Channel",
             null,
             null,
             null,
-            snapshot?.IsLive ?? false);
+            snapshot?.IsLive ?? false,
+            AvatarUrl: snapshot?.Avatar);
 
         return new ModulePageDoc(
             ModulePageDoc.CurrentVersion,
@@ -625,6 +765,13 @@ public sealed partial class YouTubeModule : WaveeModule
 
     private static bool TryInstant(string text, out DateTimeOffset at)
         => DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out at);
+
+    /// <summary>Renders an InnerTube ISO-8601 instant as a bare <c>yyyy-MM-dd</c>, or null when it is not one.</summary>
+    /// <param name="raw">The microformat value, e.g. <c>"2026-08-20T09:00:00-07:00"</c>.</param>
+    private static string? IsoDate(string? raw)
+        => Blank(raw) is { } text && TryInstant(text, out DateTimeOffset at)
+            ? at.UtcDateTime.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+            : null;
 
     // ---- transport ---------------------------------------------------------------------------------------------
 
@@ -675,20 +822,7 @@ public sealed partial class YouTubeModule : WaveeModule
 
             w.WritePropertyName("context");
             w.WriteStartObject();
-            w.WritePropertyName("client");
-            w.WriteStartObject();
-            w.WriteString("clientName", client.ClientName);
-            w.WriteString("clientVersion", client.ClientVersion);
-            if (client.DeviceMake is { Length: > 0 }) w.WriteString("deviceMake", client.DeviceMake);
-            if (client.DeviceModel is { Length: > 0 }) w.WriteString("deviceModel", client.DeviceModel);
-            if (client.OsName is { Length: > 0 }) w.WriteString("osName", client.OsName);
-            if (client.OsVersion is { Length: > 0 }) w.WriteString("osVersion", client.OsVersion);
-            if (client.AndroidSdkVersion is { } sdk) w.WriteNumber("androidSdkVersion", sdk);
-            w.WriteString("userAgent", client.UserAgent);
-            w.WriteString("hl", "en");
-            w.WriteString("timeZone", "UTC");
-            w.WriteNumber("utcOffsetMinutes", 0);
-            w.WriteEndObject();
+            WriteClient(w, client);
             w.WriteEndObject();
 
             w.WritePropertyName("playbackContext");
@@ -705,6 +839,284 @@ public sealed partial class YouTubeModule : WaveeModule
         }
 
         return buffer.WrittenSpan.ToArray();
+    }
+
+    /// <summary>
+    /// What <c>/next</c> added to a page, already flattened out of InnerTube's renderer nesting. Every member is
+    /// optional: this record existing means the endpoint answered with a shape we recognised, not that it told us
+    /// everything.
+    /// </summary>
+    /// <param name="OwnerName">The channel name from the owner row.</param>
+    /// <param name="OwnerChannelId">The owner row's browse id.</param>
+    /// <param name="OwnerAvatarUrl">The channel's widest avatar — the one thing no other endpoint gives us.</param>
+    /// <param name="SubscriberText">YouTube's rendered subscriber line, kept verbatim.</param>
+    /// <param name="ViewCountText">The rendered view/watching line, kept verbatim.</param>
+    /// <param name="ViewCountIsLive">True when <paramref name="ViewCountText"/> is a concurrent count.</param>
+    /// <param name="DateText">YouTube's rendered date line, kept verbatim.</param>
+    /// <param name="Related">The up-next shelf, already page items.</param>
+    private sealed record WatchNextInfo(
+        string? OwnerName,
+        string? OwnerChannelId,
+        string? OwnerAvatarUrl,
+        string? SubscriberText,
+        string? ViewCountText,
+        bool ViewCountIsLive,
+        string? DateText,
+        PageItem[] Related);
+
+    /// <summary>
+    /// Asks <c>/next</c> about a video and flattens the answer. NEVER throws for a YouTube-side problem: a transport
+    /// error, an unparseable body or a shape we no longer recognise all cost one log line and return null, and the
+    /// page then renders exactly as it did before this endpoint existed. Only the CALLER's cancellation propagates.
+    /// </summary>
+    /// <param name="videoId">The video to describe.</param>
+    /// <param name="ct">Cancels the fetch.</param>
+    private async Task<WatchNextInfo?> WatchNextAsync(string videoId, CancellationToken ct)
+    {
+        if (MetadataClient is not { } client) return null;
+
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, NextEndpoint);
+            request.Headers.TryAddWithoutValidation("User-Agent", client.UserAgent);
+            request.Headers.TryAddWithoutValidation("X-YouTube-Client-Name",
+                client.ClientId.ToString(CultureInfo.InvariantCulture));
+            request.Headers.TryAddWithoutValidation("X-YouTube-Client-Version", client.ClientVersion);
+            request.Headers.TryAddWithoutValidation("Origin", "https://www.youtube.com");
+            request.Headers.TryAddWithoutValidation("Accept-Language", "en-US,en;q=0.9");
+            // Same interstitial the channel scrape dodges: an EU exit node otherwise gets a consent page here too.
+            request.Headers.TryAddWithoutValidation("Cookie", ConsentCookie);
+            request.Content = new ByteArrayContent(NextBody(client, videoId));
+            request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json") { CharSet = "utf-8" };
+
+            using HttpResponseMessage response = await _http.SendAsync(request, ct).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                LogNextSkipped(videoId, $"the next endpoint answered {(int)response.StatusCode}");
+                return null;
+            }
+
+            byte[] body = await response.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
+            WatchNextInfo? info = Digest(JsonSerializer.Deserialize(body, YouTubeJsonContext.Default.YtNextResponse));
+            if (info is null) LogNextSkipped(videoId, "the next response carried no watch-next results");
+            return info;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            LogNextSkipped(videoId, ex.Message);
+            return null;
+        }
+    }
+
+    /// <summary>The single line a lost enrichment is allowed to cost.</summary>
+    /// <param name="videoId">The video the page is about.</param>
+    /// <param name="why">What went wrong, in YouTube's or the runtime's own words.</param>
+    private void LogNextSkipped(string videoId, string why)
+    {
+        if (HasHost) Host.Log(ModuleLogLevel.Warn, $"No watch-next enrichment for {videoId}: {why}");
+    }
+
+    /// <summary>
+    /// Flattens a <c>/next</c> response, or returns null when it carried nothing worth a page. Every step is
+    /// defensive by construction — an unknown renderer deserializes to all-null and is skipped rather than fatal,
+    /// which is how a shelf survives InnerTube reshuffling the document around it.
+    /// </summary>
+    /// <param name="response">The parsed response, possibly null.</param>
+    private static WatchNextInfo? Digest(YtNextResponse? response)
+    {
+        if (response?.Contents?.TwoColumnWatchNextResults is not { } two) return null;
+
+        YtVideoPrimaryInfoRenderer? primary = null;
+        YtVideoOwnerRenderer? owner = null;
+        foreach (YtWatchNextContent content in two.Results?.Results?.Contents ?? [])
+        {
+            primary ??= content.VideoPrimaryInfoRenderer;
+            owner ??= content.VideoSecondaryInfoRenderer?.Owner?.VideoOwnerRenderer;
+        }
+
+        YtVideoViewCountRenderer? counter = primary?.ViewCount?.VideoViewCountRenderer;
+        string? viewText = YtText.Plain(counter?.ViewCount) ?? YtText.Plain(counter?.ExtraShortViewCount);
+
+        // Lockup FIRST, renderer second. Both shapes are in flight upstream at once (see YtSecondaryResult), so an
+        // entry is read in whichever spelling it arrived in rather than the rail being classified as one or other.
+        var related = new List<PageItem>(MaxRelated);
+        foreach (YtSecondaryResult entry in two.SecondaryResults?.SecondaryResults?.Results ?? [])
+        {
+            if (related.Count == MaxRelated) break;
+            PageItem? item = FromLockup(entry.LockupViewModel) ?? FromCompactVideo(entry.CompactVideoRenderer);
+            if (item is not null) related.Add(item);
+        }
+
+        var info = new WatchNextInfo(
+            YtText.Plain(owner?.Title),
+            Blank(owner?.NavigationEndpoint?.BrowseEndpoint?.BrowseId),
+            WidestThumbnail(owner?.Thumbnail?.Thumbnails),
+            YtText.Plain(owner?.SubscriberCountText),
+            viewText,
+            counter?.IsLive ?? false,
+            YtText.Plain(primary?.DateText),
+            [.. related]);
+
+        // "The endpoint answered 200" is not the same as "the endpoint told us something": a document whose every
+        // recognised member came back empty is reported as a miss, so the log says so and the page stays honest.
+        bool anything = info.OwnerName is not null || info.OwnerAvatarUrl is not null ||
+                        info.ViewCountText is not null || info.DateText is not null || info.Related.Length > 0;
+        return anything ? info : null;
+    }
+
+    /// <summary>
+    /// Turns one <c>lockupViewModel</c> rail entry into a page item, or null when it is not a playable video.
+    /// <para>
+    /// The view-model surface is positional where the renderer surface was named: the title and every fact are plain
+    /// <c>{"content":"…"}</c> strings, the duration is an overlay BADGE on the thumbnail rather than a
+    /// <c>lengthText</c> member, and the channel is simply row 0 of a metadata grid. All of that is transcribed from
+    /// a real capture (2026-08-23); nothing here is reconstructed from the older shape by analogy.
+    /// </para>
+    /// </summary>
+    /// <param name="lockup">The lockup, possibly null.</param>
+    private static PageItem? FromLockup(YtLockupViewModel? lockup)
+    {
+        if (lockup is null) return null;
+
+        // A playlist or mix lockup carries a LIST id in contentId; handing that to the resolve path would fail, so
+        // anything that is not explicitly a video is skipped rather than guessed at.
+        if (!string.Equals(lockup.ContentType, YtLockupViewModel.VideoContentType, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        if (Blank(lockup.ContentId) is not { } id || !YouTubeUrls.IsVideoId(id)) return null;
+
+        YtThumbnailViewModel? thumbnail = lockup.ContentImage?.ThumbnailViewModel;
+        string? badge = null;
+        foreach (YtThumbnailOverlay overlay in thumbnail?.Overlays ?? [])
+        {
+            foreach (YtThumbnailBadge entry in overlay.ThumbnailBottomOverlayViewModel?.Badges ?? [])
+            {
+                badge ??= Blank(entry.ThumbnailBadgeViewModel?.Text);
+            }
+        }
+
+        YtLockupMetadataViewModel? meta = lockup.Metadata?.LockupMetadataViewModel;
+        YtMetadataRow[] rows = meta?.Metadata?.ContentMetadataViewModel?.MetadataRows ?? [];
+
+        string? channel = null;
+        string? watching = null;
+        for (int row = 0; row < rows.Length; row++)
+        {
+            foreach (YtMetadataPart part in rows[row].MetadataParts ?? [])
+            {
+                if (Blank(part.Text?.Content) is not { } text) continue;
+
+                // Row 0 was the channel name in every entry of the capture; the later rows are views and age.
+                if (row == 0) channel ??= text;
+                else if (watching is null && text.Contains("watching", StringComparison.OrdinalIgnoreCase))
+                {
+                    watching = text;
+                }
+            }
+        }
+
+        // INFERRED, not observed: the capture held no live entry, so the live test is the two things YouTube visibly
+        // does elsewhere — a badge reading LIVE instead of a duration, and a "watching" count in place of views. If
+        // the real shape turns out to be a style token instead, this reads false and the entry is simply not badged.
+        bool live = watching is not null ||
+                    (badge is not null && badge.Equals("LIVE", StringComparison.OrdinalIgnoreCase));
+
+        return new PageItem(
+            Blank(meta?.Title?.Content) ?? id,
+            channel,
+            WidestThumbnail(thumbnail?.Image?.Sources),
+            id,
+            VideoEntityPrefix + id,
+            null,
+            MediaForm.Video,
+            live,
+            live ? watching ?? badge : badge);
+    }
+
+    /// <summary>Turns one <c>compactVideoRenderer</c> rail entry into a page item, or null when it is not one. The
+    /// older shape, still served to some sessions.</summary>
+    /// <param name="video">The renderer, possibly null.</param>
+    private static PageItem? FromCompactVideo(YtCompactVideoRenderer? video)
+    {
+        if (video is null) return null;
+        if (Blank(video.VideoId) is not { } id || !YouTubeUrls.IsVideoId(id)) return null;
+
+        bool live = false;
+        foreach (YtBadge badge in video.Badges ?? [])
+        {
+            if (string.Equals(badge.MetadataBadgeRenderer?.Style, YtMetadataBadgeRenderer.LiveNowStyle,
+                    StringComparison.Ordinal))
+            {
+                live = true;
+                break;
+            }
+        }
+
+        // A live entry has no duration to show, so its trailing fact is the audience instead. Both strings are
+        // YouTube's own rendering ("1:01:12", "12K watching") and neither is recomputed here.
+        string? meta = live
+            ? YtText.Plain(video.ViewCountText)
+            : YtText.Plain(video.LengthText) ?? YtText.Plain(video.ViewCountText);
+
+        return new PageItem(
+            YtText.Plain(video.Title) ?? id,
+            YtText.Plain(video.LongBylineText),
+            WidestThumbnail(video.Thumbnail?.Thumbnails),
+            id,
+            VideoEntityPrefix + id,
+            null,
+            MediaForm.Video,
+            live,
+            meta);
+    }
+
+    /// <summary>
+    /// Builds the <c>/next</c> request body: a video id and a client context, nothing else. Same hand-written
+    /// <see cref="Utf8JsonWriter"/> style as <see cref="PlayerBody"/>, and deliberately WITHOUT the playback and
+    /// content-check members — this endpoint plays nothing, so asking it to is noise.
+    /// </summary>
+    /// <param name="client">The metadata client block to send.</param>
+    /// <param name="videoId">The video to ask about.</param>
+    public static byte[] NextBody(YouTubeClient client, string videoId)
+    {
+        var buffer = new ArrayBufferWriter<byte>(512);
+        using (var w = new Utf8JsonWriter(buffer))
+        {
+            w.WriteStartObject();
+            w.WriteString("videoId", videoId);
+            w.WritePropertyName("context");
+            w.WriteStartObject();
+            WriteClient(w, client);
+            w.WriteEndObject();
+            w.WriteEndObject();
+        }
+
+        return buffer.WrittenSpan.ToArray();
+    }
+
+    /// <summary>Writes the shared <c>"client"</c> block both InnerTube bodies carry.</summary>
+    /// <param name="w">The writer, positioned inside the <c>context</c> object.</param>
+    /// <param name="client">The client block to describe.</param>
+    private static void WriteClient(Utf8JsonWriter w, YouTubeClient client)
+    {
+        w.WritePropertyName("client");
+        w.WriteStartObject();
+        w.WriteString("clientName", client.ClientName);
+        w.WriteString("clientVersion", client.ClientVersion);
+        if (client.DeviceMake is { Length: > 0 }) w.WriteString("deviceMake", client.DeviceMake);
+        if (client.DeviceModel is { Length: > 0 }) w.WriteString("deviceModel", client.DeviceModel);
+        if (client.OsName is { Length: > 0 }) w.WriteString("osName", client.OsName);
+        if (client.OsVersion is { Length: > 0 }) w.WriteString("osVersion", client.OsVersion);
+        if (client.AndroidSdkVersion is { } sdk) w.WriteNumber("androidSdkVersion", sdk);
+        w.WriteString("userAgent", client.UserAgent);
+        // hl=en is load-bearing: every string this module shows verbatim ("Started streaming 3 hours ago",
+        // "12K watching") is rendered by YouTube in the language asked for here.
+        w.WriteString("hl", "en");
+        w.WriteString("timeZone", "UTC");
+        w.WriteNumber("utcOffsetMinutes", 0);
+        w.WriteEndObject();
     }
 
     private async Task<PreflightResult> PreflightAsync(string manifestUrl, CancellationToken ct)
@@ -738,9 +1150,10 @@ public sealed partial class YouTubeModule : WaveeModule
     // ---- client table ------------------------------------------------------------------------------------------
 
     /// <summary>
-    /// Loads the client fallback order: a <c>clients.json</c> in the module's data dir wins over the one shipped
-    /// beside the exe, which wins over the built-in table. YouTube retires client versions every few weeks, so this
-    /// is deliberately data the user (or an update) can replace without a new module build.
+    /// Loads the whole client table — both roles, in file order: a <c>clients.json</c> in the module's data dir wins
+    /// over the one shipped beside the exe, which wins over the built-in table. YouTube retires client versions every
+    /// few weeks, so this is deliberately data the user (or an update) can replace without a new module build.
+    /// <see cref="EnsureClients"/> is what splits the result into the <c>/player</c> walk and the <c>/next</c> client.
     /// </summary>
     private YouTubeClient[] LoadClients()
     {

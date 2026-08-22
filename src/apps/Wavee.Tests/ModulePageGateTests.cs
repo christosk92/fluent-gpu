@@ -9,8 +9,14 @@ namespace Wavee.Tests;
 /// <summary>
 /// The module page's two driven gates: the http(s)-only shell-launch guard (a module supplies the string it would
 /// launch, so it is exercised for real), and the loc-key parity check against the base catalog on disk.
+///
+/// <para>Both assert VALUES. The class was once called <c>ModulePageSourceGateTests</c> and read
+/// <c>ModulePage.cs</c>'s own text — pinning a comment banner and a set of identifiers — which passes for a file
+/// nobody edits and blocks every file anyone does: the watch-page rewrite would have failed it while changing nothing
+/// the user can see. The layout DECISIONS it was reaching for now live in the pure <c>WatchPageModel</c> and are
+/// asserted as answers in <c>WatchPageModelTests</c>, which is the shape this repo's gates take.</para>
 /// </summary>
-public class ModulePageSourceGateTests
+public class ModulePageGateTests
 {
     // ── the http(s)-only launch guard (driven, not scanned) ──────────────────────────────────────────────────────
 
@@ -57,6 +63,9 @@ public class ModulePageSourceGateTests
         foreach (string key in new[]
                  {
                      Strings.ModulePage.Title, Strings.ModulePage.Error, Strings.ModulePage.OpenInBrowser,
+                     // The WATCH layout's inert state capsule: the play capsule is REPLACED by it while this page's
+                     // entity is the item in the bar, so it is user-facing copy and needs a real key like any other.
+                     Strings.ModulePage.Playing,
                  })
         {
             Assert.StartsWith("modulePage.", key, StringComparison.Ordinal);
