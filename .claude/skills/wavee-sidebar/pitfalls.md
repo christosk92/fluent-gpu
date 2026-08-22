@@ -104,9 +104,9 @@ the slot was FIRST mounted with. Two shipped defects, one mechanism:
 the pane from `i` (the `PillState` discipline). Reading `Index` subscribes the binding to the recycle write; reading
 the row epoch covers a same-index re-plan. Anything that is not a live read — a height, a colour that folds selection —
 goes back to a **static** value the reconciler re-asserts every render. `DropCue` is deleted; the `Into` plate is the
-slot's own always-mounted `DropPlate()` under the row. Pinned by
-`SidebarPaneInvariantTests.ThePerRowDropCues_BindAgainstTheLiveSlotIndex` (a source scan over every `Prop.Of(` in
-`InsertionLine`/`DropPlate`) and `.TheEntityRow_KeepsItsFillsStatic_AndOwnsNoTreeDropCue`.
+slot's own always-mounted `DropPlate()` under the row. Rule: every `Prop.Of(` in
+`InsertionLine`/`DropPlate` reads `_scope.Index.Value`, and the entity row keeps its fills static and owns no tree
+drop cue (the source-scan tests that used to pin this were removed on 2026-08-22; tests never read source).
 
 ### A bound row is a frozen child — `SubscribeEpoch()` is load-bearing
 

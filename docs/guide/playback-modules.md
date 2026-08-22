@@ -140,7 +140,7 @@ looks like.
   "publisher": "wavee",
   "protocolVersion": 1,
   "entry": "Wavee.Module.YouTube.exe",
-  "capabilities": ["playback", "match", "metadata"],
+  "capabilities": ["playback", "match", "metadata", "pages"],
   "urlPatterns": ["youtube.com", "youtu.be"],
   "menu": { "label": "YouTube…", "placeholder": "Paste a YouTube link" }
 }
@@ -155,7 +155,7 @@ looks like.
 | `publisher` | `"wavee"` marks a first-party bundled module; anything else is third-party (untrusted-confirmation on install). |
 | `protocolVersion` | The wire version this module speaks. |
 | `entry` | Executable (publish) or `.dll` (dev) to launch, **relative to the module directory** and never escaping it. |
-| `capabilities` | Declared, not probed: `playback`, `match`, `metadata`, `fallback`, `search`, `browse`. `search`/`browse` are *declared only* in v1 — a later pass maps them onto `ICatalogSource`/`IOnlineCatalog` through `SourceRegistry`. |
+| `capabilities` | Declared, not probed: `playback`, `match`, `metadata`, `pages`, `fallback`, `search`, `browse`. `pages` means the module answers `module/page` (see [Pages](#pages)). `search`/`browse` are *declared only* in v1 — a later pass maps them onto `ICatalogSource`/`IOnlineCatalog` through `SourceRegistry`. |
 | `urlPatterns` | Host substrings used as a **cheap prefilter** before a process is spawned. A bare `http(s)` url with no pattern hit is offered to every module that declares `match`, with `fallback` modules (radio) last. |
 | `menu` | Optional row in the profile menu's **Play ▸** submenu: `label` (or `labelLocKey`) plus the dialog's `placeholder`. |
 
@@ -193,6 +193,7 @@ the **same code on both sides** — the app host and `ModuleRunner` share them.
 | host→mod | `stream/open` | `{streamId}` → `{handle, length?, seekable, contentType?}` |
 | host→mod | `stream/read` | `{handle, offset, count}` → **binary frame** (below) |
 | host→mod | `stream/close` | `{handle}` |
+| host→mod | `module/page` | `{entityId}` → `ModulePageDoc?` — the page for one of the module's entities (capability `pages`); `null` = nothing to show |
 | host→mod | `module/diagnostics` | — → `DiagnosticsReport {sections: [{title, rows: string[][]}]}` |
 | host→mod | `module/action` | `{id}` → `{ok, message?}` |
 | mod→host | `playback/metadata` (notification) | `{playableId, title?, artists?, artworkUrl?}` — live "now playing" corrections |
@@ -333,6 +334,7 @@ That is a complete, working module. Everything else is optional surface on `Wave
 | `ResolveAsync(playableId, prefs, ct)` | forwards to the above | honour quality / metered / crossfade preferences |
 | `WarmAsync(playableId, ct)` | no-op | pre-fetch on hover / prepared-next |
 | `OpenStreamAsync(streamId, ct)` | `null` | serve bytes yourself (`IModuleStream`) instead of handing over a url |
+| `GetPageAsync(entityId, ct)` | `null` | describe one of your entities as a page the app renders |
 | `GetDiagnosticsAsync(ct)` | empty | rows for the app's diagnostics page |
 | `InvokeActionAsync(actionId, ct)` | no-op | handle a button you offered through `ModuleStatus` |
 | `ShutdownAsync(ct)` | no-op | flush caches |
@@ -364,6 +366,59 @@ gainDb = 0, wire = null)`:
   `MediaProviderCaps`; absent = the simpler proven path.
 - `wire` (a `WireMeta`) feeds `PlaybackTrackMeta` → Connect / playback attribution. Only modules that declare
   `wireMeta` populate it.
+- `pageEntityId` / `subtitleEntityId` are the two link slots on the player bar and the stage: the **art tile and the
+  title** navigate to `pageEntityId` (the playable's own page), the **subtitle** to `subtitleEntityId` (its channel,
+  station or show). Both default to `null`, which leaves the link inert — exactly what a module without the `pages`
+  capability wants. See [Pages](#pages).
+
+### Pages
+
+A module can describe its own entities — a video, a channel, a station — as a **page the app renders**. Because
+modules are out-of-process and untrusted by construction, a page is never code and never markup: it is a small
+declarative document, the same posture the sidebar extension platform takes for contributed content.
+
+Declare the capability `pages` in the manifest, then override one method:
+
+```csharp
+public override ValueTask<ModulePageDoc?> GetPageAsync(string entityId, CancellationToken ct)
+```
+
+**Entity ids are yours.** They are module-namespaced strings and the app never parses them — YouTube uses
+`video:<id>` and `channel:<id>`, Twitch `channel:<login>`, Radio `station:<url>`. The app routes one as
+`module:` + `ModuleUri.Encode(moduleId, entityId)`, so two modules can both call something `channel:x` without
+colliding. Return `null` for an id you do not recognise; throw `ModuleException` for one you recognise but cannot
+serve right now.
+
+**The document.**
+
+| Type | What it is |
+|---|---|
+| `ModulePageDoc(Version, Template, Hero?, Actions[], Sections[], ExpiresAtUnixMs?)` | `Template` is `"entity"` (hero + actions + sections) or `"custom"` (sections only). `ExpiresAtUnixMs` bounds the app's cache; `null` takes the 10-minute default. |
+| `PageHero(Title, Eyebrow?, Subtitle?, ImageUrl?, MetaLine?, IsLive)` | The identity block. `IsLive` draws the LIVE badge. |
+| `PageAction(Id, Kind, Label, PlayableId?, Url?, Primary)` | `Kind` ∈ `play` (resolves `PlayableId` the normal way) / `openUrl` (http(s) only) / `moduleAction` (comes back as `module/action` with `Id`). At most one `Primary`. |
+| `PageSection(Kind, Title?, Text?, Rows?, Items?, Extra?)` | `Kind` ∈ `text` / `facts` (`Rows` = `[label, value]` pairs) / `playables` / `cards` / `links`. **An unknown kind is skipped, not an error** — and its unknown members survive in `Extra`, so a newer module can ship a section an older app cannot draw yet. |
+| `PageItem(Title, Subtitle?, ImageUrl?, PlayableId?, EntityId?, Url?, Form?, IsLive, Meta?)` | One entry. `PlayableId` plays it, `EntityId` navigates to another page **of the same module**, `Url` opens the browser. |
+
+`PageHero` carries no entity id of its own, so a page that wants to link onward to another page puts that link on a
+`PageItem.EntityId` — that is what the YouTube video page's one-card "Channel" shelf is.
+
+**Budgets are rejections, not truncations.** `ModulePageBudget.Validate` runs on both sides of the wire and throws
+`ModuleException(Unsupported)` when a document exceeds **40 sections**, **500 items** (section entries plus fact
+rows), **64 KiB per serialized section** or **2 MiB per serialized document**. It never trims: a page silently
+rendered half-way is a bug report nobody can diagnose, while a typed error names the module and the limit it blew.
+
+**Be honest about what you actually know.** The bundled modules are deliberately thin where the upstream API is:
+
+- **YouTube** builds `video:<id>` from the InnerTube player response — thumbnail, title, channel, LIVE badge, view
+  count, `shortDescription` — with actions *Play* and *Open on YouTube*. There is no channel endpoint for a JS-less
+  client, so `channel:<id>` shows only what a resolve happened to learn (the channel's name, and a "Live now" row
+  when that broadcast is on air) plus *Open on YouTube*, and says so in as many words. No invented shelves.
+- **Twitch** builds `channel:<login>` from the persisted `StreamMetadata` query: profile image, display name, stream
+  title, category and viewer count, *Play* when live (omitted when not) and *Open on Twitch*.
+- **Radio** builds `station:<url>` from the station's own ICY headers — name, genre, bitrate, format, description and
+  the `icy-url` website. There is deliberately **no "now playing" row**: ICY titles arrive interleaved in the audio
+  body, which only the *app* demuxes, so the module would be guessing. The app overlays the live title from its own
+  projection instead.
 
 ---
 
@@ -389,7 +444,8 @@ Assert.Empty(host.Logs.Where(l => l.Level == ModuleLogLevel.Error));
 
 `ModuleTestHost` also exposes `Metadata`, `Expired`, `Status`, `Progress`, `Logs` (all recorded lists) and lets a
 test stand in for the host services via `TokenProvider`, `AuthContextProvider`, `SecretReader`/`SecretWriter` /
-`Secrets`, and `CallHandler`.
+`Secrets`, and `CallHandler`. `host.PageAsync(entityId)` drives `GetPageAsync` and runs the answer through
+`ModulePageBudget.Validate`, so a fixture test trips the same ceiling the wire would.
 
 Network never happens in a module's unit tests: put the module's `HttpClient` behind an injectable
 `HttpMessageHandler` and drive it from **recorded JSON fixtures** (sanitized). The three bundled modules are tested
@@ -408,6 +464,7 @@ over the *same* code paths `ModuleTestHost` drives:
 ```powershell
 .\Wavee.Module.YouTube.exe match "https://www.youtube.com/watch?v=tRsQsTMvPNg"
 .\Wavee.Module.YouTube.exe resolve "tRsQsTMvPNg"
+.\Wavee.Module.YouTube.exe page "video:tRsQsTMvPNg"
 ```
 
 The JSON answer goes to **stdout**; logs and errors go to stderr. Exit code `0` = found, `1` = not found / failed,
@@ -500,6 +557,7 @@ script packs this repo's three modules and the playplay repo's Spotify module.
 |---|---|
 | The wire (a method, a DTO, framing) | `src/apps/Wavee.Sdk/Protocol/**` — and both sides at once; they share this code |
 | The author surface (`WaveeModule`, `IModuleHost`) | `src/apps/Wavee.Sdk/{WaveeModule,IModuleHost,ModuleRunner}.cs` |
+| The page document (a section kind, a budget) | `src/apps/Wavee.Sdk/ModulePage.cs` — and the app renderer in `src/apps/Wavee/Features/Modules/ModulePage.cs` |
 | Discovery / process lifecycle / routing | `src/apps/Wavee/Backend/Modules/**` |
 | A bundled module's behaviour | `src/apps/modules/Wavee.Module.<Name>/**` (+ fixtures in `src/apps/Wavee.Tests/Modules/`) |
 | The dev copy layout | `CopyBundledModules` in `src/apps/Wavee/Wavee.csproj` |

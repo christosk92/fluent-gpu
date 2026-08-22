@@ -46,6 +46,10 @@ public static partial class TwitchUrls
     [GeneratedRegex(@"^/(?:videos/|video/|[^/]+/v(?:ideo)?/)(?<id>\d+)/?$")]
     private static partial Regex VodPath();
 
+    /// <summary>True when <paramref name="text"/> has the shape of a channel login.</summary>
+    /// <param name="text">The candidate login.</param>
+    public static bool IsLogin(string? text) => text is not null && LoginShape().IsMatch(text);
+
     /// <summary>Parses a pasted link into a playable id.</summary>
     /// <param name="input">The user's text; already trimmed by the caller.</param>
     /// <param name="playableId">The <c>live:&lt;login&gt;</c> or <c>vod:&lt;id&gt;</c> id when matched.</param>

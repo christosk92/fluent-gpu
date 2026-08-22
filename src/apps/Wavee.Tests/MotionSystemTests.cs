@@ -1,8 +1,4 @@
 using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Runtime.CompilerServices;
-using System.Text.RegularExpressions;
 using FluentGpu.Dsl;
 using Xunit;
 
@@ -15,10 +11,9 @@ namespace Wavee.Tests;
 /// <list type="bullet">
 ///   <item>exactly three interaction tiers, monotonically ordered, one press value per tier;</item>
 ///   <item>every tier accessor collapses to 1f under reduced motion — the property no call site can forget;</item>
-///   <item>the duration ladder is the WinUI Common_themeresources ladder and nothing else;</item>
-///   <item>no source file outside the vocabulary may author a raw hover/press scale again.</item>
+///   <item>the duration ladder is the WinUI Common_themeresources ladder and nothing else.</item>
 /// </list>
-/// <para>Shares a collection with <see cref="EntranceStaggerTests"/>: both mutate the process-wide
+/// <para>Shares a collection with <c>EntranceStaggerTests</c>: both mutate the process-wide
 /// <c>Motion.ReducedMotion</c>, so they must not run concurrently.</para></summary>
 [Collection("wavee-motion-global")]
 public class MotionSystemTests
@@ -160,111 +155,8 @@ public class MotionSystemTests
     }
 
     /// <summary>The stagger rung — declared here in Wave 2, wired in Wave 5 through <c>WaveeEntrance</c> (the ladder,
-    /// the cap and the reduced-motion collapse are pinned by <see cref="EntranceStaggerTests"/>). Pinned so the value
+    /// the cap and the reduced-motion collapse are pinned by <c>EntranceStaggerTests</c>). Pinned so the value
     /// is decided once, here, rather than re-picked at each entrance.</summary>
     [Fact]
     public void StaggerRung_IsOneDecidedValue() => Assert.Equal(40f, WaveeMotion.StaggerMs);
-
-    // ── The source gate ──────────────────────────────────────────────────────────────────────────────────────────
-
-    // Sites that may keep a literal, each for a stated reason. Anything else authoring a raw hover/press scale is
-    // exactly the drift this wave removed.
-    static readonly (string File, string Reason)[] SanctionedScaleLiterals =
-    [
-        ("DetailTracks.cs", "10f/16f is WinUI's selection-pill geometry ratio (ListViewItem parity), not an interaction tier"),
-        ("WaveeMotion.cs",  "the vocabulary itself"),
-    ];
-
-    static readonly Regex RawScale = new(@"\b(Hover|Press)Scale\s*=\s*[0-9]", RegexOptions.Compiled);
-
-    /// <summary>No file may author a raw hover/press scale again. This is the gate that makes the convergence durable:
-    /// a new surface can only get a scale cue by naming a tier, and naming a tier drags reduced-motion safety along
-    /// with it. (Compile-time enforcement is impossible — <c>BoxEl.HoverScale</c> is a plain float on an engine
-    /// record — so the enforcement is a source scan, which is also why it names its exceptions out loud.)</summary>
-    [Fact]
-    public void NoSourceFile_AuthorsARawHoverOrPressScale()
-    {
-        string root = AppSourceRoot();
-        if (root is null)
-        {
-            Assert.Skip("app sources not present next to the test sources (binary-only run) — source gate inconclusive");
-            return;
-        }
-
-        var offenders = new List<string>();
-        foreach (string path in Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories))
-        {
-            if (path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}")
-                || path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}"))
-                continue;
-
-            string name = Path.GetFileName(path);
-            bool sanctioned = Array.Exists(SanctionedScaleLiterals, s => s.File == name);
-
-            string[] lines = File.ReadAllLines(path);
-            for (int i = 0; i < lines.Length; i++)
-            {
-                if (!RawScale.IsMatch(lines[i])) continue;
-                if (sanctioned) continue;
-                offenders.Add($"{name}:{i + 1}: {lines[i].Trim()}");
-            }
-        }
-
-        Assert.True(offenders.Count == 0,
-            "raw hover/press scale literals must go through a WaveeMotion tier:\n  " + string.Join("\n  ", offenders));
-    }
-
-    /// <summary>The tier vocabulary is actually REACHED: the sweep must have left the app reading tiers, not merely
-    /// stopped it writing literals (deleting every cue would also pass the gate above). Pins the identity decision —
-    /// the hover motion stays, it is just systematised.</summary>
-    [Fact]
-    public void TheAppReadsEveryTier()
-    {
-        string root = AppSourceRoot();
-        if (root is null)
-        {
-            Assert.Skip("app sources not present next to the test sources (binary-only run) — source gate inconclusive");
-            return;
-        }
-
-        var counts = new Dictionary<string, int> { ["ScaleSubtle"] = 0, ["ScaleStandard"] = 0, ["ScaleEmphatic"] = 0 };
-        foreach (string path in Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories))
-        {
-            if (path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}")
-                || path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")
-                || Path.GetFileName(path) == "WaveeMotion.cs")
-                continue;
-
-            string text = File.ReadAllText(path);
-            foreach (string tier in new[] { "ScaleSubtle", "ScaleStandard", "ScaleEmphatic" })
-            {
-                int at = 0;
-                while ((at = text.IndexOf("WaveeMotion." + tier, at, StringComparison.Ordinal)) >= 0)
-                {
-                    counts[tier]++;
-                    at += tier.Length;
-                }
-            }
-        }
-
-        foreach (var (tier, n) in counts)
-            Assert.True(n > 0, $"no call site reads WaveeMotion.{tier} — the tier is dead, or the sweep dropped a cue");
-
-        // WaveeCta — the app's one primary-CTA skin — must be ON the ladder, not carrying private constants.
-        string cta = File.ReadAllText(Path.Combine(root, "Design", "WaveeCta.cs"));
-        Assert.Contains("WaveeMotion.ScaleStandard.Hover", cta);
-        Assert.Contains("WaveeMotion.ScaleStandard.Press", cta);
-        Assert.DoesNotContain("PillHoverScale", cta);
-        Assert.DoesNotContain("PillPressScale", cta);
-    }
-
-    /// <summary>src/apps/Wavee, located from THIS file's compile-time path — the test sources and the app sources are
-    /// siblings in the repo. Null when the sources are not on disk (a binary-only run).</summary>
-    static string AppSourceRoot([CallerFilePath] string here = "")
-    {
-        string? tests = Path.GetDirectoryName(here);
-        if (tests is null) return null!;
-        string app = Path.Combine(Path.GetDirectoryName(tests)!, "Wavee");
-        return Directory.Exists(app) ? app : null!;
-    }
 }

@@ -107,6 +107,20 @@ public sealed class ModuleTestHost : IModuleHost
     public async Task<IModuleStream?> OpenStreamAsync(string streamId, CancellationToken ct = default)
         => await Module.OpenStreamAsync(streamId, ct).ConfigureAwait(false);
 
+    /// <summary>
+    /// Calls <see cref="WaveeModule.GetPageAsync"/> directly and runs the returned document through
+    /// <see cref="ModulePageBudget.Validate"/> — the same gate <see cref="ModuleRunner"/> applies on the wire, so a
+    /// fixture test catches an over-budget page exactly where the app would.
+    /// </summary>
+    /// <param name="entityId">The module-namespaced entity id.</param>
+    /// <param name="ct">Cancels the fetch.</param>
+    public async Task<ModulePageDoc?> PageAsync(string entityId, CancellationToken ct = default)
+    {
+        ModulePageDoc? doc = await Module.GetPageAsync(entityId, ct).ConfigureAwait(false);
+        if (doc is not null) ModulePageBudget.Validate(doc);
+        return doc;
+    }
+
     /// <summary>Calls <see cref="WaveeModule.GetDiagnosticsAsync"/> directly.</summary>
     /// <param name="ct">Cancels the call.</param>
     public async Task<DiagnosticsReport> GetDiagnosticsAsync(CancellationToken ct = default)

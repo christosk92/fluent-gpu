@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -35,6 +35,9 @@ internal sealed class FakeVideoEngine : IVideoEngine
     public int ErrorHr { get; set; }
     public string LastEventName { get; set; } = "<fake>";
     public uint ReadyState { get; set; }
+    /// <summary>The monotonic presentation epoch (IVideoEngine.PresentationEpoch). <see cref="RaiseFormatChange"/>
+    /// models MF's FORMATCHANGE/RESOURCELOST: bump it, then wake the session exactly as the real notify sink does.</summary>
+    public int PresentationEpoch { get; set; }
     public double DurationSeconds { get; set; }
     public double CurrentTimeSeconds { get; set; }
     // Live state the session latches/polls (IVideoEngine.IsLiveSource / SeekableRange / CanPlayHls). Settable so a
@@ -70,6 +73,10 @@ internal sealed class FakeVideoEngine : IVideoEngine
     public void SetLoop(bool loop) => LastLoop = loop;
     public void Dispose() => DisposeCalls++;
     public void RaiseStateChanged() => StateChanged?.Invoke();
+
+    /// <summary>Model a mid-stream variant switch: the engine's presentation epoch advances and it wakes its consumer.
+    /// Set <see cref="NativeW"/>/<see cref="NativeH"/> first to script the NEW decoded frame size.</summary>
+    public void RaiseFormatChange() { PresentationEpoch++; StateChanged?.Invoke(); }
 }
 
 /// <summary>A recording <see cref="IVideoPresenter"/> — no DComp. Captures the calls the registry drain makes so a test
@@ -81,6 +88,8 @@ internal sealed class FakeVideoPresenter : IVideoPresenter
     public VideoSurfaceId LastCreated;
     public nuint LastBoundHandle;
     public RectF LastPlaceRect;
+    public RectF LastViewport;
+    public uint LastContentW, LastContentH;
     public bool LastVisible;
     public int Commits;
 
@@ -104,6 +113,13 @@ internal sealed class FakeVideoPresenter : IVideoPresenter
         Calls.Add($"Place({id.Value})");
     }
 
+    public void SetContentSize(VideoSurfaceId id, uint width, uint height)
+    {
+        LastContentW = width; LastContentH = height;
+        Calls.Add($"Content({id.Value},{width}x{height})");
+    }
+
+    public void SetViewport(VideoSurfaceId id, RectF deviceRect) { LastViewport = deviceRect; Calls.Add($"Viewport({id.Value})"); }
     public void SetVisible(VideoSurfaceId id, bool visible) { LastVisible = visible; Calls.Add($"Visible({id.Value},{visible})"); }
     public void Destroy(VideoSurfaceId id) => Calls.Add($"Destroy({id.Value})");
     public void Commit() => Commits++;

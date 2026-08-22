@@ -97,6 +97,12 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IConnectCommandA
     /// all of Phase 1) publishes every uri VERBATIM.</summary>
     public Func<Track, string>? PublishUriMask { get; set; }
 
+    /// <summary>Optional Connect CONTEXT mask — the same rule as <see cref="PublishUriMask"/>, one level up. A context
+    /// the connect-state service cannot resolve (a playback module's, a local folder's) is rewritten before it goes on
+    /// the wire; without it the row masking is pointless, because the state as a whole is still unresolvable and the
+    /// service refuses to make us the cluster's active device. NULL (the default) publishes the context VERBATIM.</summary>
+    public Func<string?, string?>? PublishContextMask { get; set; }
+
     void OnConnectionId(string? id)
     {
         if (string.IsNullOrEmpty(id)) return;
@@ -334,7 +340,15 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IConnectCommandA
         var wirePrev = CapPrev(prev);
         var wireNext = CapNext(next);
 
-        return new LocalPlaybackSnapshot(current, _state.ContextUri, _state.PositionMs, _state.DurationMs,
+        string? wireContext = _state.ContextUri;
+        if (PublishContextMask is { } ctxMask)
+        {
+            // Fail-soft exactly like the row mask: a throwing/empty answer publishes the real context rather than nothing.
+            try { wireContext = ctxMask(wireContext) is { Length: > 0 } m ? m : _state.ContextUri; }
+            catch (Exception ex) { _log.Info("publish context mask failed for " + (_state.ContextUri ?? "-") + ": " + ex.Message); }
+        }
+
+        return new LocalPlaybackSnapshot(current, wireContext, _state.PositionMs, _state.DurationMs,
             wirePlaying, wirePaused, _state.IsShuffle, _state.Repeat,
             wirePrev, wireNext, metadata, currentIndex, iid, page, rev, sid, pid, hasBeen, started, _state.Volume);
     }

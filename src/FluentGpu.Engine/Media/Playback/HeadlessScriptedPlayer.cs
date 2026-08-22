@@ -74,6 +74,8 @@ public sealed class HeadlessScriptedPlayer : IMediaPlayer
     /// <inheritdoc/>
     public IReadSignal<VideoColorInfo> VideoColor => _core.VideoColor;
     /// <inheritdoc/>
+    public IReadSignal<VideoSurfaceGeometry> SurfaceGeometry => _core.SurfaceGeometry;
+    /// <inheritdoc/>
     public IReadSignal<PlaybackStatistics> Statistics => _core.Statistics;
     /// <inheritdoc/>
     public IReadSignal<TimedCue?> ActiveCue => _core.ActiveCue;

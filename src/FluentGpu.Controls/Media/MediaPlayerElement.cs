@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Threading;
 using FluentGpu.Animation;
 using FluentGpu.Dsl;
@@ -1094,13 +1094,26 @@ public sealed class MediaPlayerElement : Component
         {
             // Fallback while the hole is not (yet) realized — the first frame after the stream goes ready, or any frame
             // with no hole at all: recompute the fit so the pump never goes dark.
+            VideoAspectMode mode = _aspectForPump?.Peek() ?? VideoAspectMode.Uniform;
+            double customAspect = _customAspectForPump?.Peek() ?? (16.0 / 9.0);
             NodeHandle hole = _holeRef?.Value ?? default;
             bool live = !hole.IsNull && scene.IsLive(hole);
             videoRect = live ? scene.AbsoluteRect(hole) : default;
             if (live) geom = hole;
             if (!live || videoRect.W <= 0f || videoRect.H <= 0f)
-                videoRect = FitVideoRect(area, natural, _aspectForPump?.Peek() ?? VideoAspectMode.Uniform,
-                    _customAspectForPump?.Peek() ?? (16.0 / 9.0));
+                videoRect = FitVideoRect(area, natural, mode, customAspect);
+            else if (mode == VideoAspectMode.UniformToFill)
+            {
+                // CENTER-CROP is the one mode whose fitted rect deliberately OVERFLOWS the stage: the frame is scaled
+                // until it covers the area and the excess is clipped (by the viewport, below). The hole node carries
+                // that overflow as NEGATIVE margins (LetterboxInsets is signed for exactly this), but a layout that
+                // clamps a negative margin to zero hands back the stage rect itself — and placing the video at the
+                // stage rect scales the frame DOWN to fit instead of cropping it, which is the crop mode silently
+                // behaving like Fill. Recomputing the fit here is right either way: when the margins do survive
+                // layout this is the same rect the hole already has.
+                videoRect = FitVideoRect(area, natural, mode, customAspect);
+                geom = h;   // the rect now derives from the AREA, so follow the area's geometry
+            }
         }
         // Track geometry so a compositor-only move (a PiP drag, a page transition) re-places the DComp child on the
         // frame it moves, instead of waiting for an unrelated native/transport event to request the next pump.
@@ -1266,8 +1279,12 @@ public sealed class MediaPlayerElement : Component
         controls.Add(IconButton(presentingFullscreen ? Icons.BackToWindow : Icons.FullScreen, toggleFullscreen, interactive));
 
         var rows = new System.Collections.Generic.List<Element>(2);
-        // Never render a seek bar without a duration: a rail with no scale is a control that lies about what it does.
-        if (hasDuration)
+        // Never render a seek bar without a SCALE: a rail with nothing to map onto is a control that lies about what it
+        // does. For ordinary media the scale is the duration. A live source has none — it is unbounded — but a DVR
+        // window wide enough to aim inside (TimelineInfo.HasDvrWindow, the same 30 s threshold the backend uses to
+        // decide whether to offer Seek at all) IS a scale, and MediaSeekBar maps the rail onto that window with the
+        // live edge at its right end. Without this arm a rewindable live stream showed no rail at all.
+        if (hasDuration || timeline.HasDvrWindow)
             rows.Add(new BoxEl
             {
                 Key = "media-seek-row",
@@ -1626,6 +1643,9 @@ public sealed class MediaPlayerElement : Component
         public IReadSignal<float>? ScrubTargetSeconds { get; init; }
         private readonly Signal<int> _posSec = new(0);
         private readonly Signal<int> _durSec = new(-1);
+        /// <summary>Where the rail's scale STARTS, in seconds. Zero for ordinary media; the DVR window's start for a
+        /// live source, whose positions are absolute media times inside a window that does not begin at zero.</summary>
+        private readonly Signal<int> _originSec = new(0);
 
         public override Element Render()
         {
@@ -1638,10 +1658,18 @@ public sealed class MediaPlayerElement : Component
             UseSignalEffect(() =>
             {
                 var d = Player.Duration.Value;
-                int s = d > TimeSpan.Zero ? (int)d.TotalSeconds : -1;
+                TimelineInfo timeline = Player.Timeline.Value;
+                // A live source publishes NO duration, so "x / 0:00" is all this label could say — while the rail
+                // beside it is happily mapped to the DVR window. Read the same scale the rail does: elapsed WITHIN the
+                // window over the window's length. Both are whole seconds, so the sliding window (10 Hz) moves these
+                // signals at most once a second, which is the cadence this label already re-rendered at.
+                bool dvr = d <= TimeSpan.Zero && timeline.HasDvrWindow;
+                int s = d > TimeSpan.Zero ? (int)d.TotalSeconds : dvr ? (int)timeline.DvrWindow.TotalSeconds : -1;
+                int origin = dvr ? (int)timeline.SeekableStart.TotalSeconds : 0;
                 if (s != _durSec.Peek()) _durSec.Value = s;
+                if (origin != _originSec.Peek()) _originSec.Value = origin;
             });
-            int pos = _posSec.Value;
+            int pos = _posSec.Value - _originSec.Value;
             int dur = _durSec.Value;
             return new TextEl($"{FormatTime(TimeSpan.FromSeconds(Math.Max(0, pos)))} / {FormatTime(TimeSpan.FromSeconds(Math.Max(0, dur)))}")
             {

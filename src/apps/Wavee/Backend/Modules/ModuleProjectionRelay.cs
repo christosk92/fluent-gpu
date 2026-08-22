@@ -17,19 +17,24 @@ public sealed class ModuleProjectionRelay : IDisposable
 {
     readonly NowPlayingProjection _projection;
     readonly ModuleHost? _host;
+    readonly ModulePlayableCache? _cache;
     readonly IDisposable? _changesSub;
     readonly Action<string, MetadataUpdate>? _onMetadata;
     readonly Action<string>? _onExpired;
-    string? _lastUri;
     int _disposed;
 
-    ModuleProjectionRelay(NowPlayingProjection projection, ModuleHost? host)
+    ModuleProjectionRelay(NowPlayingProjection projection, ModuleHost? host, ModulePlayableCache? cache)
     {
         _projection = projection;
         _host = host;
+        _cache = cache;
 
-        // LIVE-ness follows the CURRENT track, and only changes when the track does — the guard is what keeps
-        // SetLiveOverride's own Changes fire from re-entering this subscription.
+        // LIVE-ness follows the CURRENT track, and it is RE-ASSERTED on every projection change — no "has it answered
+        // yet?" latch. Two defects came out of latching: the resolve lands AFTER the projection publishes the track
+        // (so a one-shot probe reads an empty cache and answers "not live" forever), and any later fold that drops the
+        // override — a momentary null current, a cluster echo — was never re-stated because the question was "already
+        // answered". A probe is one ordinal dictionary hit and SetLiveOverride is equality-gated, so re-asserting
+        // costs nothing and cannot loop: the re-entrant pass this fires finds nothing changed and does not fire again.
         _changesSub = projection.Changes.Subscribe(Observers.From<IPlaybackState>(OnProjectionChanged));
 
         if (host is null) return;
@@ -42,11 +47,18 @@ public sealed class ModuleProjectionRelay : IDisposable
     /// <summary>Attach the relay. The caller owns the returned handle and disposes it with the session.</summary>
     /// <param name="projection">The projection to publish onto.</param>
     /// <param name="host">The module host whose notifications to relay; null wires the live-ness half only.</param>
-    public static ModuleProjectionRelay Attach(NowPlayingProjection projection, ModuleHost? host)
+    /// <param name="cache">The resolve cache to probe. Null (the composition roots) reads the host's own cache, or the
+    /// process-wide <see cref="ModulePlayables.Cache"/> when no host was handed over — the pre-login relay is built with
+    /// whatever host existed at that moment. Tests pass their own so the probe never rides process-wide static state.</param>
+    public static ModuleProjectionRelay Attach(NowPlayingProjection projection, ModuleHost? host,
+        ModulePlayableCache? cache = null)
     {
         ArgumentNullException.ThrowIfNull(projection);
-        return new ModuleProjectionRelay(projection, host);
+        return new ModuleProjectionRelay(projection, host, cache);
     }
+
+    /// <summary>The cache this relay probes: the explicit one, else the host's, else the process-wide attachment.</summary>
+    ModulePlayableCache? Cache => _cache ?? _host?.Playables ?? ModulePlayables.Cache;
 
     /// <summary>Fired when a module says one of its locators expired AND that playable is the one playing — the app's
     /// cue to re-resolve and reload it (a YouTube url is IP-bound and dies after ~6 h; a Twitch token expires sooner).
@@ -61,17 +73,34 @@ public sealed class ModuleProjectionRelay : IDisposable
     public void OnLiveStreamTitle(string rawStreamTitle, string? stationName)
     {
         if (_projection.CurrentTrack?.Uri is not { Length: > 0 } uri) return;
-        if (!_projection.IsLive && !ModulePlayables.IsLive(uri)) return;
+        if (!_projection.IsLive && Cache?.IsLive(uri) is not true) return;
         (string title, string? artist) = Wavee.Backend.Audio.IcyMetadata.SplitStreamTitle(rawStreamTitle);
         _projection.SetMetadataOverride(uri, title, artist ?? stationName);
     }
 
     void OnProjectionChanged(IPlaybackState state)
     {
+        if (Volatile.Read(ref _disposed) != 0) return;
         string? uri = state.CurrentTrack?.Uri;
-        if (string.Equals(uri, _lastUri, StringComparison.Ordinal)) return;
-        _lastUri = uri;
-        _projection.SetLiveOverride(uri, ModulePlayables.IsLive(uri));
+        // A pending answer is NOT "no" — but it must still publish something, and false is the only honest placeholder
+        // (nothing has stated live-ness yet). The next projection change re-probes and turns it into the truth; the
+        // projection's own equality gate makes the repeated answer free.
+        _projection.SetLiveOverride(uri, LivenessOf(Cache, uri) ?? false);
+    }
+
+    /// <summary>Live-ness of one playable as the module cache knows it: <c>true</c>/<c>false</c> when the answer is IN,
+    /// <c>null</c> while it is still pending (a module uri whose resolve has not landed). Non-module uris answer false
+    /// immediately — no module will ever have an opinion about a Spotify track.
+    /// <para>Deliberately reads the cache INCLUDING expired entries: a signed url dying does not make a broadcast stop
+    /// being a broadcast, and dropping the LIVE chip while the app re-resolves would be a visible lie.</para></summary>
+    /// <param name="cache">The module resolve cache (<c>ModulePlayables.Cache</c>); null = no module host is wired.</param>
+    /// <param name="uri">The playable uri.</param>
+    public static bool? LivenessOf(ModulePlayableCache? cache, string? uri)
+    {
+        if (uri is not { Length: > 0 }) return false;
+        if (!uri.StartsWith(ModuleUri.Scheme, StringComparison.Ordinal)) return false;
+        if (cache is null) return null;                            // no host wired yet — the question is still open
+        return cache.GetIncludingExpired(uri) is { } resolved ? resolved.IsLive : null;
     }
 
     void OnModuleMetadata(string playableUri, MetadataUpdate update)
@@ -84,6 +113,8 @@ public sealed class ModuleProjectionRelay : IDisposable
     void OnModuleExpired(string playableUri)
     {
         if (!string.Equals(_projection.CurrentTrack?.Uri, playableUri, StringComparison.Ordinal)) return;
+        // The locator died and the app is about to re-resolve. Nothing to re-open any more — the live question is
+        // re-asked on every projection change — so this is purely the reload cue.
         CurrentPlayableExpired?.Invoke(playableUri);
     }
 

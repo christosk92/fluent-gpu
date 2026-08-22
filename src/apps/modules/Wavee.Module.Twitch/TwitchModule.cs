@@ -148,6 +148,13 @@ public sealed partial class TwitchModule : WaveeModule
             ? [display]
             : kind is TwitchLinkKind.Live ? [value] : [];
 
+        // On Twitch the thing and its owner are the same entity: a live playable IS the channel, and a VOD belongs
+        // to the channel the token was minted for. Both link slots therefore point at `channel:<login>`.
+        string? login = kind is TwitchLinkKind.Live
+            ? value
+            : Login(user?.Login) ?? Login(decoded.Channel);
+        string? entity = login is null ? null : ChannelEntityPrefix + login;
+
         return new ResolvedPlayable(
             PlayableId: playableId,
             Title: title,
@@ -158,8 +165,13 @@ public sealed partial class TwitchModule : WaveeModule
             Form: MediaForm.Video,
             Media: MediaLocator.FromUrl(primary, MediaLocator.ContainerHls, "application/vnd.apple.mpegurl"),
             ExpiresAtUnixMs: decoded.Expires > 0 ? decoded.Expires * 1000L : null,
-            Caps: []);
+            Caps: [],
+            PageEntityId: entity,
+            SubtitleEntityId: entity);
     }
+
+    private static string? Login(string? raw)
+        => TwitchUrls.IsLogin(raw) ? raw!.ToLowerInvariant() : null;
 
     private static ModuleException UsherFailure(UsherOutcome usher, TwitchLinkKind kind, TwitchUser? user)
     {
@@ -191,6 +203,98 @@ public sealed partial class TwitchModule : WaveeModule
 
     [GeneratedRegex(@"^(?:.+_)?(?:archives|live|chunked)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex RestrictedRendition();
+
+    // ---- pages -------------------------------------------------------------------------------------------------
+
+    /// <summary>The <c>channel:&lt;login&gt;</c> entity-id prefix (see <see cref="ModulePageDoc"/>).</summary>
+    public const string ChannelEntityPrefix = "channel:";
+
+    /// <summary>The public channel url for a login.</summary>
+    /// <param name="login">The channel login.</param>
+    public static string ChannelUrl(string login) => "https://www.twitch.tv/" + login;
+
+    /// <inheritdoc/>
+    public override async ValueTask<ModulePageDoc?> GetPageAsync(string entityId, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(entityId)) return null;
+        string id = entityId.Trim();
+        if (!id.StartsWith(ChannelEntityPrefix, StringComparison.Ordinal)) return null;
+
+        string login = id[ChannelEntityPrefix.Length..].ToLowerInvariant();
+        if (!TwitchUrls.IsLogin(login)) return null;
+
+        TwitchMetadataEnvelope? envelope;
+        try
+        {
+            envelope = await GqlAsync(StreamMetadataBody(login), TwitchJsonContext.Default.TwitchMetadataEnvelope, ct)
+                .ConfigureAwait(false);
+        }
+        catch (JsonException ex)
+        {
+            throw new ModuleException(ModuleErrorCode.Transient, "Twitch returned an unreadable channel document.")
+            {
+                Detail = ex.Message,
+            };
+        }
+
+        TwitchUser? user = envelope?.Data?.User;
+        return user is null ? null : ChannelPage(login, user);
+    }
+
+    /// <summary>Builds the <c>channel:&lt;login&gt;</c> page out of a <c>StreamMetadata</c> answer.</summary>
+    /// <param name="login">The channel login.</param>
+    /// <param name="user">What <c>StreamMetadata</c> said about it.</param>
+    private static ModulePageDoc ChannelPage(string login, TwitchUser user)
+    {
+        TwitchStream? stream = user.Stream;
+        bool live = stream is not null;
+        string name = user.DisplayName is { Length: > 0 } display ? display : login;
+        string? streamTitle = Blank(user.BroadcastSettings?.Title) ?? Blank(user.LastBroadcast?.Title);
+        string? game = Blank(stream?.Game?.DisplayName) ?? Blank(stream?.Game?.Name);
+        string? viewers = stream?.ViewersCount is { } n && n >= 0
+            ? n.ToString("N0", CultureInfo.InvariantCulture)
+            : null;
+
+        var facts = new List<string[]>(3);
+        facts.Add(["Status", live ? "Live" : "Offline"]);
+        if (game is not null) facts.Add(["Category", game]);
+        if (viewers is not null) facts.Add(["Viewers", viewers]);
+
+        var sections = new List<PageSection>(2) { PageSection.FromFacts([.. facts], "About") };
+        if (!live)
+        {
+            sections.Add(PageSection.FromText(
+                streamTitle is null
+                    ? "This channel is not live right now."
+                    : $"This channel is not live right now. Its last broadcast was “{streamTitle}”.",
+                "Offline"));
+        }
+
+        var actions = new List<PageAction>(2);
+        if (live) actions.Add(PageAction.Play(TwitchUrls.LivePrefix + login, "Play"));
+        actions.Add(PageAction.OpenUrl(ChannelUrl(login), "Open on Twitch"));
+
+        var hero = new PageHero(
+            name,
+            "Channel",
+            live ? streamTitle : null,
+            Blank(user.ProfileImageURL) ?? Blank(stream?.PreviewImageURL),
+            MetaLine(live ? "Live" : "Offline", game, viewers is null ? null : viewers + " watching"),
+            live);
+
+        return new ModulePageDoc(ModulePageDoc.CurrentVersion, ModulePageDoc.TemplateEntity, hero,
+            [.. actions], [.. sections], ExpiresAtUnixMs: null);
+    }
+
+    /// <summary>Joins the non-empty parts of a meta line with a middle dot.</summary>
+    /// <param name="parts">The candidate parts, nulls and blanks skipped.</param>
+    private static string? MetaLine(params string?[] parts)
+    {
+        string joined = string.Join(" · ", parts.Where(p => !string.IsNullOrWhiteSpace(p)));
+        return joined.Length == 0 ? null : joined;
+    }
+
+    private static string? Blank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     // ---- usher -------------------------------------------------------------------------------------------------
 

@@ -118,6 +118,13 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
     // track changes. Live-ness is a fact the SOURCE stated; a broadcast's current-song title is a fact about the
     // BROADCAST, which is why neither is written back onto the catalogue row.
     string? _liveUri;
+    // The ENGINE-AUTHORITATIVE half of live-ness: the media pipeline's own timeline (DVR window + live edge) for ONE
+    // playable, on exactly the same scoping terms. It is a SEPARATE field from _liveUri because the two answers arrive
+    // from different places at different times and neither may erase the other: a module states isLive at resolve
+    // (before a single frame decodes), the engine states the WINDOW once metadata loads. IsLive is their union; the
+    // window alone decides whether there is anything to scrub.
+    string? _liveWindowUri;
+    LiveWindow _liveWindow;
     string? _metaUri, _metaTitle, _metaArtist;
     double _speed = 1.0;   // playback rate folded from the cluster (remote) / 1.0 (local); applied in Pos()
     IReadOnlyList<QueueEntry> _queue = Array.Empty<QueueEntry>();
@@ -198,7 +205,12 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
     public bool IsPrebuffering { get { lock (_gate) return _isPrebuffering; } }
     public PlaybackRecoveryKind RecoveryKind { get { lock (_gate) return _recoveryKind; } }
     public long PositionMs { get { lock (_gate) return Pos(); } }
-    public long DurationMs { get { lock (_gate) return _durMs; } }
+    /// <summary>The playable's total length, or 0 when there isn't one. A LIVE broadcast never has one — a
+    /// broadcast has no end to count down to — so live-ness zeroes it on READ rather than by writing 0 into the
+    /// slab: the moment live-ness stops applying (the next track), the real length is still there. Without this a
+    /// stale length from the previous playable painted a remaining-time countdown over a stream that will never
+    /// reach it.</summary>
+    public long DurationMs { get { lock (_gate) return EffectiveDurationLocked(); } }
     public double Volume { get { lock (_gate) return _volume; } }
     public bool IsShuffle { get { lock (_gate) return _shuffle; } }
     public RepeatMode Repeat { get { lock (_gate) return _repeat; } }
@@ -208,12 +220,30 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
     // >3 s restart affordance, derived at read because the playhead moves without a structural publish. Viewer: the
     // cluster restriction alone (findings fix §2).
     public bool CanSkipPrev { get { lock (_gate) return _canSkipPrev || (_hasLocalContext && Pos() > 3000); } }
-    // A live broadcast has no seekable past in v1, so CanSeek must say so — the seek bar and every remote
-    // controller read this one answer.
-    public bool CanSeek { get { lock (_gate) return _canSeek && !LiveOverrideAppliesLocked(); } }
+    // A live broadcast is seekable EXACTLY as far as its DVR window reaches — so CanSeek while live is the window's own
+    // answer, not a blanket no. A station with no rewind (ICY radio, a low-latency channel) reports no window and the
+    // seek bar disarms; a YouTube/Twitch broadcast with a multi-hour window scrubs inside it. The seek bar and every
+    // remote controller read this one answer.
+    public bool CanSeek
+    {
+        get
+        {
+            lock (_gate)
+            {
+                if (!_canSeek) return false;
+                if (!IsLiveLocked()) return true;
+                return LiveWindowLocked().HasWindow;
+            }
+        }
+    }
 
-    /// <summary>Is the current playable a LIVE broadcast (see <see cref="SetLiveOverride"/>)?</summary>
-    public bool IsLive { get { lock (_gate) return LiveOverrideAppliesLocked(); } }
+    /// <summary>Is the current playable a LIVE broadcast? The UNION of the two facts that can state it: a source-level
+    /// override (<see cref="SetLiveOverride"/> — a module's <c>isLive</c>, an ICY stream) and the media pipeline's own
+    /// timeline (<see cref="SetLiveWindow"/>). Either alone is enough; neither can erase the other.</summary>
+    public bool IsLive { get { lock (_gate) return IsLiveLocked(); } }
+
+    /// <inheritdoc cref="IPlaybackState.Live"/>
+    public LiveWindow Live { get { lock (_gate) return LiveWindowLocked(); } }
     public IObservable<IPlaybackState> Changes => _changes;
     public IObservable<long> PositionTicks => _positionTicks;
 
@@ -222,9 +252,15 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
     public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
     static readonly System.ComponentModel.PropertyChangedEventArgs AllChanged = new(null);
 
-    long Pos() => _isPlaying && !_isBuffering && !_isPrebuffering
-        ? Math.Clamp(_posMs + (long)((_now() - _posAnchorWall) * _speed), 0, _durMs <= 0 ? long.MaxValue : _durMs)
-        : _posMs;
+    // The published length, folded: 0 while live (see DurationMs). Caller holds _gate.
+    long EffectiveDurationLocked() => IsLiveLocked() ? 0 : _durMs;
+
+    long Pos()
+    {
+        if (!_isPlaying || _isBuffering || _isPrebuffering) return _posMs;
+        long dur = EffectiveDurationLocked();   // a live broadcast has no ceiling to clamp the playhead against
+        return Math.Clamp(_posMs + (long)((_now() - _posAnchorWall) * _speed), 0, dur <= 0 ? long.MaxValue : dur);
+    }
 
     // Clamp a content playback rate to Spotify's spoken-word range; invalid/zero ⇒ normal speed.
     static double NormalizeSpeed(double v) => v <= 0 || double.IsNaN(v) || double.IsInfinity(v) ? 1.0 : Math.Clamp(v, 0.5, 3.5);
@@ -285,7 +321,60 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
             }
         }
 
-        if (changed) FireChanges();
+        if (!changed) return;
+        LogLiveFlip("module", isLive ? playableUri : null);
+        FireChanges();
+    }
+
+    /// <summary>One always-on Info line per live-ness flip, from BOTH sources — the whole point of the log is that a
+    /// live run can be diagnosed from the file alone ("did the source ever say live, and which one?"), which is exactly
+    /// what was missing when the LIVE pill stayed dark. Not gated on anything: a flip is rare and never per frame.</summary>
+    /// <param name="source">Which half stated it — <c>module</c> (the source's own <c>isLive</c>) or <c>window</c> (the
+    /// media pipeline's timeline).</param>
+    /// <param name="playableUri">The playable it is now on for, or null when the override was cleared.</param>
+    static void LogLiveFlip(string source, string? playableUri)
+        => WaveeLog.Instance.Info("playback", "live.override",
+            playableUri is { Length: > 0 } uri
+                ? "live override on for " + uri + " (source=" + source + ")"
+                : "live override off (source=" + source + ")",
+            WaveeLogField.Of("source", source),
+            WaveeLogField.Of("uri", playableUri ?? ""),
+            WaveeLogField.Of("on", playableUri is { Length: > 0 }));
+
+    /// <summary>Publish the MEDIA-AUTHORITATIVE live timeline for ONE playable — the DVR window, the live edge and the
+    /// playhead inside it, exactly as the media pipeline stated them. The structural twin of
+    /// <see cref="SetDurationOverride"/>: scoped to one uri, dropped the moment the current track changes, folded on
+    /// READ rather than written into <c>_durMs</c>.
+    /// <para>It ALSO states live-ness, and that is deliberate: the engine is the only party that can see a moving live
+    /// edge, so <see cref="IsLive"/> is the union of this and <see cref="SetLiveOverride"/> rather than either one
+    /// alone. A module can say "this is a broadcast" before a frame decodes; the engine can say "and here is its
+    /// four-hour window" a second later; neither answer may erase the other.</para>
+    /// <para>A window ≥ <see cref="LiveWindow.MinWindowMs"/> is also what re-ARMS <see cref="CanSeek"/> while live —
+    /// the DVR rail. Below that, live still means no scrubbing.</para></summary>
+    /// <param name="playableUri">The playable the timeline is about; null/empty clears it.</param>
+    /// <param name="window">The engine's timeline; <c>default</c> / <see cref="LiveWindow.None"/> clears it.</param>
+    public void SetLiveWindow(string? playableUri, LiveWindow window)
+    {
+        bool changed;
+        lock (_gate)
+        {
+            if (playableUri is not { Length: > 0 } || !window.IsLive)
+            {
+                changed = _liveWindowUri is not null;
+                _liveWindowUri = null;
+                _liveWindow = default;
+            }
+            else
+            {
+                changed = !string.Equals(_liveWindowUri, playableUri, StringComparison.Ordinal) || _liveWindow != window;
+                _liveWindowUri = playableUri;
+                _liveWindow = window;
+            }
+        }
+
+        if (!changed) return;
+        LogLiveFlip("window", window.IsLive ? playableUri : null);
+        FireChanges();
     }
 
     /// <summary>Publish a live NOW-PLAYING correction for ONE playable: the ICY <c>StreamTitle</c> a station pushes
@@ -331,6 +420,26 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
     bool LiveOverrideAppliesLocked()
         => _liveUri is not null && _track is { } t && string.Equals(t.Uri, _liveUri, StringComparison.Ordinal);
 
+    bool LiveWindowAppliesLocked()
+        => _liveWindowUri is not null && _track is { } t && string.Equals(t.Uri, _liveWindowUri, StringComparison.Ordinal);
+
+    // The two facts, folded. Caller holds _gate.
+    //
+    // The engine's window wins when there is one. When there ISN'T — an ICY radio station, or a broadcast whose module
+    // said "live" before a frame decoded — Live still reports IsLive, with no window. That synthesis is deliberate and
+    // load-bearing: without it Live.IsLive and IsLive would disagree for every audio-only live source, and a surface
+    // that (reasonably) branched on the richer value alone would silently drop the LIVE chip for internet radio. A
+    // source with no rewindable past has no broadcast clock to report either, so the positions stay 0 and the playhead
+    // is at the edge by definition — which is exactly what the bar renders as a breathing line rather than a rail.
+    LiveWindow LiveWindowLocked()
+    {
+        if (LiveWindowAppliesLocked() && _liveWindow.IsLive) return _liveWindow;
+        if (LiveOverrideAppliesLocked()) return new LiveWindow(true, 0, 0, 0, 0, IsAtLiveEdge: true);
+        return default;
+    }
+
+    bool IsLiveLocked() => LiveOverrideAppliesLocked() || (LiveWindowAppliesLocked() && _liveWindow.IsLive);
+
     bool MetadataOverrideAppliesLocked()
         => _metaUri is not null && _track is { } t && string.Equals(t.Uri, _metaUri, StringComparison.Ordinal);
 
@@ -339,6 +448,11 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
     void SyncPlayableOverridesLocked()
     {
         if (_liveUri is not null && _track is not null && !LiveOverrideAppliesLocked()) _liveUri = null;
+        if (_liveWindowUri is not null && _track is not null && !LiveWindowAppliesLocked())
+        {
+            _liveWindowUri = null;
+            _liveWindow = default;
+        }
         if (_metaUri is not null && _track is not null && !MetadataOverrideAppliesLocked())
         {
             _metaUri = null;
@@ -365,6 +479,27 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
     bool DurationOverrideAppliesLocked()
         => _durOverrideMs > 0 && _durOverrideUri is not null && _track is { } t
            && string.Equals(t.Uri, _durOverrideUri, StringComparison.Ordinal);
+
+    // THE duration fold. Every input that can state a length goes through here, with the previous playable's uri as the
+    // reference, because "how long is this?" and "is this still the same thing?" are one question:
+    //
+    //   • a stated length (> 0) always wins — the same "never regress to 0" rule as before;
+    //   • a stated UNKNOWN (0) on a REAL track change is adopted verbatim. This is the fix for the stale countdown: the
+    //     old rule ("write only when > 0") meant a playable whose length is unknown — a live broadcast, a module link
+    //     resolved with durationMs 0 — inherited the PREVIOUS track's number, so a 3:25 song left "-3:25" ticking down
+    //     over a stream that will never reach it. Unknown stays unknown until a duration override or a late duration
+    //     arrives;
+    //   • a stated unknown on a SAME-URI republish keeps what we already know (a queue mutation re-publishing a thin
+    //     row must not erase a duration that is already correct);
+    //   • <c>incomingMs &lt; 0</c> means the input stated nothing at all (a cluster with no track) — keep what we have.
+    //
+    // Caller holds _gate, and must call it AFTER the _track write, with the uri captured BEFORE it.
+    void FoldDurationLocked(string? previousUri, long incomingMs)
+    {
+        if (incomingMs > 0) { _durMs = incomingMs; return; }
+        if (incomingMs < 0) return;
+        if (!string.Equals(previousUri, _track?.Uri, StringComparison.Ordinal)) _durMs = 0;
+    }
 
     // Called immediately after every LOCAL _durMs write: either re-assert the override (it outranks the catalog length) or
     // drop it because the current track has moved on. Caller holds _gate.
@@ -412,8 +547,9 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
         IReadOnlyList<QueueEntry> windowed;
         lock (_gate)
         {
+            string? prevUri = _track?.Uri;
             _track = snap.Current?.Track ?? ev?.Track;   // the single source of "current" while we're active
-            if (_track is { DurationMs: > 0 } t) _durMs = t.DurationMs;
+            FoldDurationLocked(prevUri, _track?.DurationMs ?? -1);
             SyncDurationOverrideLocked();   // a media-authoritative length outranks the catalog one (and survives republishes)
             SyncPlayableOverridesLocked();  // …and a track change ends the live / now-playing overrides
             if (ev is { } e)
@@ -501,7 +637,8 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
         {
             _volume = Math.Clamp(volume01, 0, 1);
             _speed = 1.0;
-            _posMs = Math.Clamp(positionMs, 0, _durMs > 0 ? _durMs : long.MaxValue);
+            long dur = EffectiveDurationLocked();
+            _posMs = Math.Clamp(positionMs, 0, dur > 0 ? dur : long.MaxValue);
             _posAnchorWall = _now();
         }
         FireChanges();
@@ -516,6 +653,7 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
         lock (_gate)
         {
             _lastCluster = c;
+            string? prevUri = _track?.Uri;   // the duration fold's reference — captured BEFORE the track merge below
             // ANOTHER DEVICE TOOK OVER ⇒ we know nothing about what is decoding. This clear is the load-bearing half of
             // the whole feature: without it, transferring playback to a phone leaves the last LOCAL stream's badge on
             // screen describing a stream this machine is no longer playing — precisely the "plausible lie" that kept
@@ -526,6 +664,15 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
             _clusterPrev = c.PrevTracks ?? Array.Empty<RemoteTrack>();
             _clusterNext = c.NextTracks;   // the active device's up-next, kept verbatim (uid+provider) for a forwarded set_queue
             bool weActive = c.ActiveDeviceId == _ourDeviceId;
+            // …and NOBODY active is not a viewer either. The connect-state service does not always adopt us as the
+            // cluster's active device (it never does for a state whose context it cannot resolve — a playback module's
+            // link, a local folder), yet what comes back is still OUR OWN state, re-echoed with the row uris
+            // ConnectUriMask rewrote for remote controllers. Treating that as "the cluster is the truth" replaced the live
+            // local row with a `spotify:local:…` display uri, which every consumer downstream reads as a REAL track change:
+            // it took a playing music video's surface down, wrote the masked uri into session.json, and left the next
+            // launch recovering a track nothing can play. A local session owns its own state unless ANOTHER device is
+            // genuinely active.
+            bool localSessionOwns = _hasLocalContext && (weActive || string.IsNullOrEmpty(c.ActiveDeviceId));
             // Stale-cluster suppression: only when WE are active and a local command is still in flight do we refuse to let
             // a contradicting cluster revert our optimistic play-state. As a viewer, the cluster is always the truth.
             bool suppressPlayState = weActive && _lastLocalCmdWall != long.MinValue && (_now() - _lastLocalCmdWall) < LocalCmdWindowMs;
@@ -535,7 +682,7 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
             // F4: while WE are active WITH a live local session the local snapshot durably owns _track (the same gate the
             // context uses just below) — a stale cluster echo must NOT overwrite the just-issued current, not merely inside
             // the 2.5 s suppression window. Recovery (weActive but no local context yet) still takes the cluster's track.
-            bool localOwnsTrack = weActive && _hasLocalContext;
+            bool localOwnsTrack = localSessionOwns;
             if (c.HasTrack && !suppressPlayState && !localOwnsTrack)
             {
                 var mapped = MapTrack(c.Track);
@@ -543,25 +690,28 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
                     ? StoreEntityMerge.Track(cur, mapped)
                     : mapped;
             }
-            if (!weActive || !_hasLocalContext)
+            if (!localSessionOwns)
             {
                 _contextUri = c.ContextUri;
                 _hasLocalContext = false;
                 _contextMetadata = new Dictionary<string, string>();
             }
-            _durMs = c.DurationMs > 0 ? c.DurationMs : (c.HasTrack ? c.Track.DurationMs : _durMs);
+            FoldDurationLocked(prevUri, c.DurationMs > 0 ? c.DurationMs : (c.HasTrack ? c.Track.DurationMs : -1));
             SyncDurationOverrideLocked();   // …unless the media reported this playable's real length (a video is its own edit)
             SyncPlayableOverridesLocked();
-            if (!suppressPlayState)
+            if (!suppressPlayState && !localSessionOwns)
             {
                 // no-active-device Playing→Paused clamp (ported correctness): if nobody is active, we are not playing.
+                // Skipped while the local session owns the state: OUR OWN un-adopted echo would otherwise publish
+                // "not playing" over media this machine is decoding right now (observed as put-state playing=False one
+                // announce-response after starting a module video).
                 bool active = !string.IsNullOrEmpty(c.ActiveDeviceId);
                 _isPlaying = active && c.IsPlaying && !c.IsPaused;
                 _isBuffering = c.IsBuffering;
             }
             // Active WITH a local session: local owns shuffle/repeat (SetLocalOptions). A stale "we are active" echo with
             // NO local session (cold start — findings §9) must take the cluster's options like any viewer fold would.
-            if (!weActive || !_hasLocalContext) { _shuffle = c.Shuffle; _repeat = c.Repeat; }
+            if (!localSessionOwns) { _shuffle = c.Shuffle; _repeat = c.Repeat; }
             _canSkipNext = !c.DisallowSkipNext;
             _canSkipPrev = !c.DisallowSkipPrev;
             _canSeek = !c.DisallowSeeking;
@@ -584,7 +734,7 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
             // Viewer: cluster queue. Active WITH a local session: keep the local queue (ApplyLocalSnapshot). The stale
             // "we are active" fold without a local session (findings §9) falls through to MapQueue too — otherwise a cold
             // start shows the cluster's track over an empty queue panel until the user presses Play.
-            if (!weActive || !_hasLocalContext)
+            if (!localSessionOwns)
             {
                 viewerQueue = MapQueue(c.NextTracks, c.PrevTracks, c.HasTrack ? c.Track : null);
                 _queue = viewerQueue;
@@ -677,7 +827,7 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
                 // Publish only a REAL change. A row the ladder cannot lift (an episode, a track the catalogue has no
                 // better answer for) resolves to exactly what is already on the slab, and firing Changes for it woke
                 // every player-bar/queue consumer on every cluster push for as long as it played.
-                if (next != cur) { _track = next; changed = true; }
+                if (next != cur) { _track = next; changed = true; SyncPlayableOverridesLocked(); }
             }
         }
         if (changed) FireChanges();
@@ -690,12 +840,13 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
         {
             if (e.Track is not null)
             {
+                string? prevUri = _track?.Uri;
                 _track = e.Track;
                 // Local events are authoritative while we're the active device — fold the duration too. Without this,
                 // _durMs keeps the PREVIOUS track's length until a cluster echo arrives (never, when playing offline):
                 // the player-bar label shows the old duration AND the seek bar scales scrub fractions by the wrong
                 // length, so every committed seek targets the wrong millisecond.
-                if (e.Track.DurationMs > 0) _durMs = e.Track.DurationMs;
+                FoldDurationLocked(prevUri, e.Track.DurationMs);
                 SyncDurationOverrideLocked();   // …unless the media itself reported a length for this exact playable
                 SyncPlayableOverridesLocked();
             }

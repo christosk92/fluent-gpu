@@ -489,7 +489,8 @@ sealed class NowPlayingPanel : Component
 /// silhouette).
 ///
 /// <para>Shows the DOCKED video (<see cref="DockedVideoSurface"/>'s <see cref="DockedVideoFace.ArtTile"/> face — the
-/// SAME video, letterboxed into this identical 324x324 envelope) layered over the track's own artwork. The video
+/// SAME video, filling this identical square envelope, letterboxed by the element's OWN aspect fit rather than by a
+/// wrapper it cannot see) layered over the track's own artwork. The video
 /// layer mounts UNCONDITIONALLY, the same idiom <c>RightRail</c>'s own Cap-face slot already uses: its OWN mount gate
 /// (<c>VideoPlacementNow() != Docked</c> ⇒ an empty, zero-size <c>BoxEl</c>) is what makes it disappear with no
 /// reflow the instant the video is anywhere else, painting nothing over the artwork rather than this tile branching

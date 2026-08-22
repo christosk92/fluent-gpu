@@ -190,6 +190,14 @@ sealed class ContentHost : Component
             return new BoxEl { Key = "page:browse", Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
                 Children = [ Embed.Comp(() => new BrowsePageHost(r)) ] };
 
+        // A page a MODULE describes (Part 9). One page class for every module and every entity kind: the document is
+        // declarative and the app renders it, so there is nothing per-module to switch on here. Keyed by the whole
+        // route (the sidebar-customizer precedent above) so two module pages are two keep-alive slots rather than one
+        // page being re-pointed at a foreign entity.
+        if (Wavee.Backend.Modules.ModulePages.IsRoute(r.Name))
+            return new BoxEl { Key = "page:" + r.Name, Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
+                Children = [ Embed.Comp(() => new ModulePage(r)) with { Key = "module-page:" + r.Name } ] };
+
         if (ConcertRoutes.Is(r.Name))
             return new BoxEl { Key = "page:concert-route", Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
                 Children = [ Embed.Comp(() => new ConcertRoutePage(r)) ] };

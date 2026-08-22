@@ -23,6 +23,26 @@ public static class ConnectUriMask
 {
     public const string Prefix = "spotify:local:";
 
+    /// <summary>The context a masked row belongs to: Spotify's own Local Files context, which is exactly what a real
+    /// client publishes while playing a file off disk. A CONTEXT uri had to be masked too — the track mask alone left us
+    /// publishing <c>context_uri: wavee:module:…</c>, a uri the connect-state service cannot resolve. Everything
+    /// downstream then follows: the service never adopts us as the cluster's active device, the cluster we get back is
+    /// the SAME state re-echoed with our masked track uri in it, and (nobody being "active") the fold treats that echo as
+    /// a foreign track change. That is what turned a playing music video into audio and what wrote a masked uri into
+    /// <c>session.json</c> for the next launch to choke on.</summary>
+    public const string LocalFilesContext = "spotify:local-files";
+
+    /// <summary>The context mask the <see cref="DeviceStatePublisher"/> applies to <c>context_uri</c>. Pure (no registry:
+    /// a CONTEXT is not a playable and has no owning media provider) — a context Spotify can resolve goes verbatim,
+    /// everything else publishes as <see cref="LocalFilesContext"/>, the container the masked rows claim to come from.</summary>
+    public static string? MaskContext(string? contextUri)
+        => string.IsNullOrEmpty(contextUri) || ContextResolve.IsSpotifyContext(contextUri)
+            ? contextUri
+            : LocalFilesContext;
+
+    /// <summary>The <see cref="MaskContext"/> delegate, for wiring.</summary>
+    public static readonly Func<string?, string?> ContextMask = MaskContext;
+
     /// <summary>The mask for a live session: verbatim when the owning provider declares
     /// <see cref="MediaProviderCaps.ConnectPublish"/>, else Spotify's local-file shape. An UNOWNED uri is masked too —
     /// a uri no provider claims is certainly not one a remote controller can resolve.</summary>

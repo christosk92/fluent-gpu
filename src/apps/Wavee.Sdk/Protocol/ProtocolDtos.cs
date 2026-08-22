@@ -57,6 +57,10 @@ public sealed record StreamReadParams(string Handle, long Offset, int Count);
 /// <param name="Handle">The handle to release.</param>
 public sealed record StreamCloseParams(string Handle);
 
+/// <summary>Params of <see cref="ModuleMethods.Page"/>.</summary>
+/// <param name="EntityId">The module-namespaced entity id whose page is wanted, e.g. <c>video:tRsQsTMvPNg</c>.</param>
+public sealed record PageParams(string EntityId);
+
 /// <summary>Params of <see cref="ModuleMethods.Action"/>.</summary>
 /// <param name="Id">The <see cref="ModuleAction.Id"/> the user pressed.</param>
 public sealed record ModuleActionParams(string Id);

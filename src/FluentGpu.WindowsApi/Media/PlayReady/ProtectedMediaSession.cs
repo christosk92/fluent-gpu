@@ -458,6 +458,9 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
             binding.SetContentSize(_surfaceSize);   // physical swapchain size; representation resolution is metadata
             binding.Place(videoRect);
             binding.SetVisible(true);
+            // Same ALWAYS-ON placement report the clear path publishes (MfMediaSession §3) — one shape for both, so a
+            // geometry defect reads identically in the host log whether or not the source is protected.
+            sink.SurfaceGeometry(new VideoSurfaceGeometry(_surfaceSize, _surfaceSize, videoRect, scale <= 0f ? 1f : scale));
         }
 
         // 4. State + position. The play/pause LEVEL is reconciled natively (the MTA loop re-asserts Play until the clock

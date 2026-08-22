@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Threading.Tasks;
 using FluentGpu.Foundation;
 using FluentGpu.Media;
@@ -225,6 +225,10 @@ public sealed class MfMediaSessionTests
         var (s, core, eng) = NewSession();
         eng.MetadataLoaded = true; eng.DurationSeconds = 30; Pump(s);
         eng.CurrentTimeSeconds = 12.5;
+        // The pump reads the OFF-THREAD cache, never the engine directly (the blocking round-trip is what the cache
+        // exists to keep off the UI thread). Priming it via the engine's own state-changed callback is what the real
+        // engine does on every discrete transition; without it this test was racing the 100 ms poll timer and lost.
+        eng.RaiseStateChanged();
         Pump(s);
         Assert.Equal(12.5, core.Position.Peek().TotalSeconds, 3);
     }

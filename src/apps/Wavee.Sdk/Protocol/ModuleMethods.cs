@@ -29,6 +29,9 @@ public static class ModuleMethods
     /// <summary>Close a module-served byte stream.</summary>
     public const string StreamClose = "stream/close";
 
+    /// <summary>Fetch the declarative page a module describes for one of its entity ids.</summary>
+    public const string Page = "module/page";
+
     /// <summary>Generic diagnostics rows for the app's diagnostics page.</summary>
     public const string Diagnostics = "module/diagnostics";
 

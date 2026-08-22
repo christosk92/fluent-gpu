@@ -6,7 +6,7 @@
   "publisher": "wavee",
   "protocolVersion": 1,
   "entry": "Wavee.Module.Radio.dll",
-  "capabilities": ["playback", "match", "metadata", "fallback"],
+  "capabilities": ["playback", "match", "metadata", "fallback", "pages"],
   "urlPatterns": [],
   "menu": {
     "label": "Radio station\u2026",

@@ -27,6 +27,10 @@ public abstract record MediaSource
     /// <summary>Seeded now-playing metadata (avoids a round-trip), or null.</summary>
     public MediaMetadata? Metadata { get; init; }
 
+    /// <summary>Whether this source is live (<see cref="SourceLiveness.Auto"/> = let the backend infer). A host that
+    /// already resolved the locator KNOWS the answer; declaring it beats every platform probe.</summary>
+    public SourceLiveness Liveness { get; init; } = SourceLiveness.Auto;
+
     /// <summary>External subtitle/caption tracks attached to this source (rendered by the engine text stack).</summary>
     public IReadOnlyList<SubtitleSource> ExternalSubtitles { get; init; } = Array.Empty<SubtitleSource>();
 
@@ -78,6 +82,11 @@ public abstract record MediaSource
     public MediaSource WithExternalSubtitle(SubtitleSource sub) => this with { ExternalSubtitles = Append(ExternalSubtitles, sub) };
     /// <summary>Force the routing kind (e.g. PlayPlay → <see cref="MediaKind.PcmAudio"/>).</summary>
     public MediaSource WithKind(MediaKind kind) => this with { Kind = kind };
+    /// <summary>Declare whether this source is live (a resolved YouTube/Twitch live master playlist →
+    /// <see cref="SourceLiveness.Live"/>; a VOD/podcast file → <see cref="SourceLiveness.Vod"/>). The backend then
+    /// never publishes a duration for a live source (Media Foundation reports a sliding DVR window as a FINITE
+    /// duration) and never latches live-ness onto a VOD one.</summary>
+    public MediaSource WithLiveness(SourceLiveness liveness) => this with { Liveness = liveness };
 
     private static IReadOnlyList<SubtitleSource> Append(IReadOnlyList<SubtitleSource> existing, SubtitleSource add)
     {

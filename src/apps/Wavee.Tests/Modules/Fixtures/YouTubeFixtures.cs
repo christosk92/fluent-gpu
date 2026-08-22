@@ -47,7 +47,8 @@ public static class YouTubeFixtures
         "author": "Anthropic",
         "isPrivate": false,
         "isUnpluggedCorpus": false,
-        "isLiveContent": true
+        "isLiveContent": true,
+        "shortDescription": "A continuous broadcast, all day every day."
       },
       "microformat": {
         "playerMicroformatRenderer": {
@@ -71,6 +72,8 @@ public static class YouTubeFixtures
         "author": "Anthropic",
         "isLive": false,
         "isLiveContent": false,
+        "viewCount": "987654",
+        "shortDescription": "A recorded talk about parsers.",
         "thumbnail": { "thumbnails": [ { "url": "https://i.ytimg.com/vi/x/hq.jpg", "width": 480, "height": 360 } ] }
       },
       "microformat": { "playerMicroformatRenderer": { "liveBroadcastDetails": { "isLiveNow": false } } }

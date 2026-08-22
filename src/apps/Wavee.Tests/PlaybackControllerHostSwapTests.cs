@@ -97,9 +97,13 @@ public class PlaybackControllerHostSwapTests
         public readonly FakeVideoHost? Video;
         public readonly NowPlayingProjection Projection;
         public readonly PlaybackController Controller;
+        public readonly FakeContextResolver Contexts;
 
         /// <summary>The app-level "play this as video" intent the bridge would supply (PlaybackBridge.ShouldPlayAsVideo).</summary>
         public bool VideoIntent;
+        /// <summary>The app-level "this playable has NO audio form at all" answer (ModulePlayables.HasVideo →
+        /// PlaybackController.IsVideoOnlyPlayable). Only consulted when the harness wired that hook (<c>videoOnly: true</c>).</summary>
+        public bool VideoOnlyPlayable;
         /// <summary>Whether the video source resolve succeeds (false = the account isn't served a playable video).</summary>
         public bool VideoSourceAvailable = true;
         public int LoadVideoCalls;
@@ -108,13 +112,17 @@ public class PlaybackControllerHostSwapTests
         /// moment — so this, not a "video:seek:N" log entry, is where the carry is observable.</summary>
         public long LastVideoStartAtMs = -1;
 
-        public Harness(bool wireHooks = true, bool injectVideoHost = true, bool wireLoadHook = true)
+        public Harness(bool wireHooks = true, bool injectVideoHost = true, bool wireLoadHook = true,
+            string[]? contextTracks = null, bool videoOnly = false)
         {
             Audio = new FakeAudioHost(Log);
             Video = injectVideoHost ? new FakeVideoHost(Log) : null;
             Projection = new NowPlayingProjection("us", NotOwnedEntityHydrator.Instance, new InMemoryStore(), () => 0);
-            Controller = new PlaybackController(Audio, new StubTrackResolver(), Projection,
-                new FakeContextResolver("spotify:track:a", "spotify:track:b"), "us", videoHost: Video);
+            Contexts = new FakeContextResolver(contextTracks ?? ["spotify:track:a", "spotify:track:b"]);
+            Controller = new PlaybackController(Audio, new StubTrackResolver(), Projection, Contexts, "us", videoHost: Video);
+            VideoOnlyPlayable = videoOnly;
+            // Left NULL unless asked for, so every other test keeps the "every playable is choosable" default verbatim.
+            if (videoOnly) Controller.IsVideoOnlyPlayable = _ => VideoOnlyPlayable;
             if (!wireHooks) return;
             Controller.ShouldPlayAsVideo = _ => VideoIntent;
             if (!wireLoadHook) return;
@@ -486,5 +494,88 @@ public class PlaybackControllerHostSwapTests
         await h.Controller.RefreshCurrentMediaKindAsync();
 
         Assert.Contains("audio:seek:" + catalogMs, h.Log);
+    }
+
+    // ── (f) NO AUDIO FORM ⇒ NO CHOICE — the video→audio regression ────────────────────────────────────────────────────
+    const string ModuleContext = "wavee:module:wavee.youtube:tRsQsTMvPNg";
+    const string ModulePlayable = "wavee:module:wavee.youtube:track:tRsQsTMvPNg";
+
+    static bool IsAudioLoad(string call) =>
+        call.StartsWith("audio:load:", StringComparison.Ordinal) || call.StartsWith("audio:faststart:", StringComparison.Ordinal);
+
+    /// <summary>The BUG-2 regression. A module playable resolved as <c>MediaForm.Video</c> (a YouTube/Twitch stream) has no
+    /// second, audio-only body: the audio host can only ever answer "Restricted: video playable; use the video host". Three
+    /// re-entries into the load path used to re-host a playing video onto audio and stop it with an error toast —
+    /// <list type="number">
+    /// <item>the app's OWN masked Connect echo adopted as a track change, which cancelled the one-play video scope so
+    /// <c>ShouldPlayAsVideo</c> flipped to false (the surface went down silently, <c>refreshKind: false</c>),</item>
+    /// <item>the error toast's <b>Retry</b> (<c>LiveSessionHost</c> → <see cref="PlaybackController.RetryCurrentAsync"/>),</item>
+    /// <item>any availability refresh (<c>RecomputeHasVideo</c> → <c>RequestMediaKindRefresh</c>).</item>
+    /// </list>
+    /// <c>IsVideoOnlyPlayable</c> pins the kind to Video BEFORE every audio-first rule, so all three stay on the video host
+    /// and the audio host is never handed a body it cannot decode. The context is a module link, so the Spotify-only
+    /// autoplay station must not be asked for one either (that request is the observed <c>autoplay endpoint failed (400)</c>).</summary>
+    [Fact]
+    public async Task VideoOnlyPlayable_StaysOnTheVideoHost_AcrossTheSurfaceTeardown_TheRetry_AndARefresh()
+    {
+        using var h = new Harness(contextTracks: [ModulePlayable], videoOnly: true);
+        h.VideoIntent = true;
+
+        await h.Controller.PlayAsync(ModuleContext);
+        Assert.Equal(PlayableKind.Video, h.Controller.CurrentMediaKind);
+        Assert.True(h.Video!.IsPlaying);
+        Assert.Equal(1, h.LoadVideoCalls);
+
+        // 1 — the cluster echo took the one-play video scope down: the app no longer says "play this as video".
+        h.VideoIntent = false;
+        await h.Controller.RefreshCurrentMediaKindAsync();
+        Assert.Equal(PlayableKind.Video, h.Controller.CurrentMediaKind);
+
+        // 2 — the playback-error toast's Retry re-enters LoadAndPlayCurrentAsync with the intent still false.
+        await h.Controller.RetryCurrentAsync();
+        Assert.Equal(PlayableKind.Video, h.Controller.CurrentMediaKind);
+
+        // 3 — an availability refresh on the same (intent-less) state.
+        await h.Controller.RefreshCurrentMediaKindAsync();
+        Assert.Equal(PlayableKind.Video, h.Controller.CurrentMediaKind);
+
+        Assert.DoesNotContain(h.Log, IsAudioLoad);
+        Assert.DoesNotContain("play", h.Audio.Calls);      // the audio host was only ever stopped by the initial swap
+        Assert.False(h.Audio.IsPlaying);
+        Assert.True(h.Video.IsPlaying);
+        Assert.True(h.LoadVideoCalls >= 2, "the Retry must have re-run the VIDEO load: " + string.Join(" → ", h.Log));
+        AssertNeverTwoHostsPlaying(h.Log);
+        Assert.Equal(0, h.Contexts.AutoplayCalls);         // a module context has no Spotify autoplay station
+    }
+
+    /// <summary>The same sequence WITHOUT the hook is the bug itself, kept as the control: a choosable playable follows the
+    /// intent down to audio. This is what proves the test above is testing <c>IsVideoOnlyPlayable</c> and not the harness.</summary>
+    [Fact]
+    public async Task WithoutTheVideoOnlyHook_TheSameSequenceFallsToAudio()
+    {
+        using var h = new Harness(contextTracks: [ModulePlayable]);
+        h.VideoIntent = true;
+
+        await h.Controller.PlayAsync(ModuleContext);
+        Assert.Equal(PlayableKind.Video, h.Controller.CurrentMediaKind);
+
+        h.VideoIntent = false;
+        await h.Controller.RefreshCurrentMediaKindAsync();
+
+        Assert.Equal(PlayableKind.Audio, h.Controller.CurrentMediaKind);
+        Assert.Contains(h.Log, IsAudioLoad);
+        Assert.Equal(0, h.Contexts.AutoplayCalls);         // …and the non-Spotify context is still never autoplayed
+    }
+
+    /// <summary>A one-item SPOTIFY context does reach the autoplay station at the same point in the load — so the assertion
+    /// above is a property of the CONTEXT URI, not of "this harness never prefetches".</summary>
+    [Fact]
+    public async Task AOneItemSpotifyContext_StillAsksForItsAutoplayStation()
+    {
+        using var h = new Harness(contextTracks: ["spotify:track:a"]);
+
+        await h.Controller.PlayAsync("spotify:playlist:p");
+
+        Assert.True(h.Contexts.AutoplayCalls > 0, "a Spotify context at the end of its window must prefetch autoplay");
     }
 }

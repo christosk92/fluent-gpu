@@ -374,6 +374,144 @@ public class YouTubeModuleTests
         Assert.True(resolved.ExpiresAtUnixMs!.Value <= (1_767_225_600L - 600) * 1000L);
     }
 
+    // ---- pages -------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task Page_Video_BuildsTheHeroFactsDescriptionAndActions()
+    {
+        var http = Player(YouTubeFixtures.PlayerLiveOk);
+        (ModuleTestHost host, _) = Make(http);
+
+        ModulePageDoc? page = await host.PageAsync("video:" + Id, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(page);
+        Assert.Equal(ModulePageDoc.TemplateEntity, page!.Template);
+        Assert.Equal("Claude FM", page.Hero!.Title);
+        Assert.Equal("Anthropic", page.Hero.Subtitle);
+        Assert.True(page.Hero.IsLive);
+        Assert.Equal("https://i.ytimg.com/vi/tRsQsTMvPNg/maxresdefault.jpg", page.Hero.ImageUrl);
+
+        PageAction play = page.Actions.Single(a => a.Kind == PageAction.KindPlay);
+        Assert.Equal(Id, play.PlayableId);
+        Assert.True(play.Primary);
+
+        PageAction open = page.Actions.Single(a => a.Kind == PageAction.KindOpenUrl);
+        Assert.Equal("https://www.youtube.com/watch?v=" + Id, open.Url);
+        Assert.Equal("Open on YouTube", open.Label);
+
+        PageSection facts = page.Sections.Single(x => x.Kind == PageSection.KindFacts);
+        Assert.Contains(facts.Rows!, r => r[0] == "Views" && r[1] == "1,234");
+
+        PageSection text = page.Sections.Single(x => x.Kind == PageSection.KindText);
+        Assert.Contains("continuous broadcast", text.Text!, StringComparison.Ordinal);
+
+        // The channel link rides a card, because PageHero carries no entity id of its own.
+        PageItem channel = page.Sections.Single(x => x.Kind == PageSection.KindCards).Items!.Single();
+        Assert.Equal("channel:UCAAAAAAAAAAAAAAAAAAAAA", channel.EntityId);
+    }
+
+    [Fact]
+    public async Task Page_Video_NeedsNoPlayableManifest()
+    {
+        // A SABR-only session cannot play, but the page is still worth showing — so no HLS url and no preflight.
+        var http = Player(YouTubeFixtures.PlayerSabrOnly);
+        (ModuleTestHost host, _) = Make(http);
+
+        ModulePageDoc? page = await host.PageAsync("video:" + Id, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(page);
+        Assert.Equal("Claude FM", page!.Hero!.Title);
+        Assert.DoesNotContain(http.Requests, r => r.Url.Contains("manifest.googlevideo.com", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Page_Video_VodShowsItsLength()
+    {
+        var http = Player(YouTubeFixtures.PlayerVodOk);
+        (ModuleTestHost host, _) = Make(http);
+
+        ModulePageDoc? page = await host.PageAsync("video:" + Id, TestContext.Current.CancellationToken);
+
+        Assert.False(page!.Hero!.IsLive);
+        PageSection facts = page.Sections.Single(x => x.Kind == PageSection.KindFacts);
+        Assert.Contains(facts.Rows!, r => r[0] == "Length" && r[1] == "1:01:12");
+        Assert.Contains(facts.Rows!, r => r[0] == "Views" && r[1] == "987,654");
+    }
+
+    [Fact]
+    public async Task Page_Video_BlockedOnEveryClientIsATypedFailure()
+    {
+        var http = Player(YouTubeFixtures.PlayerVideoIdMismatch);
+        (ModuleTestHost host, _) = Make(http);
+
+        ModuleException ex = await Assert.ThrowsAsync<ModuleException>(
+            () => host.PageAsync("video:" + Id, TestContext.Current.CancellationToken));
+
+        Assert.Equal(ModuleErrorCode.Unavailable, ex.Code);
+    }
+
+    [Fact]
+    public async Task Page_Channel_WithNothingResolvedYetIsHonestAboutIt()
+    {
+        (ModuleTestHost host, ScriptedHttpHandler http) = Make(new ScriptedHttpHandler());
+
+        ModulePageDoc? page = await host.PageAsync("channel:UC123", TestContext.Current.CancellationToken);
+
+        Assert.NotNull(page);
+        Assert.Empty(http.Requests);                                  // there is no channel endpoint to call
+        Assert.False(page!.Hero!.IsLive);
+        PageAction open = Assert.Single(page.Actions);
+        Assert.Equal("https://www.youtube.com/channel/UC123", open.Url);
+        PageSection note = Assert.Single(page.Sections);
+        Assert.Equal(PageSection.KindText, note.Kind);
+        Assert.Contains("player response", note.Text!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Page_Channel_ShowsLiveNowOnceTheChannelsBroadcastWasResolved()
+    {
+        var http = Player(YouTubeFixtures.PlayerLiveOk).WithManifest();
+        (ModuleTestHost host, _) = Make(http);
+
+        ResolvedPlayable resolved = await host.ResolveAsync(Id, TestContext.Current.CancellationToken);
+        ModulePageDoc? page = await host.PageAsync(resolved.SubtitleEntityId!, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(page);
+        Assert.Equal("Anthropic", page!.Hero!.Title);
+        Assert.True(page.Hero.IsLive);
+        PageSection live = Assert.Single(page.Sections);
+        Assert.Equal(PageSection.KindPlayables, live.Kind);
+        PageItem item = Assert.Single(live.Items!);
+        Assert.Equal(Id, item.PlayableId);
+        Assert.Equal("video:" + Id, item.EntityId);
+        Assert.True(item.IsLive);
+        Assert.Equal(MediaForm.Video, item.Form);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("station:http://x/y")]
+    [InlineData("video:not-an-id")]
+    [InlineData("channel:")]
+    public async Task Page_ForeignOrMalformedEntityIdsAreNull(string entityId)
+    {
+        (ModuleTestHost host, _) = Make(new ScriptedHttpHandler());
+
+        Assert.Null(await host.PageAsync(entityId, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Resolve_CarriesThePageAndSubtitleEntityIds()
+    {
+        var http = Player(YouTubeFixtures.PlayerLiveOk).WithManifest();
+        (ModuleTestHost host, _) = Make(http);
+
+        ResolvedPlayable resolved = await host.ResolveAsync(Id, TestContext.Current.CancellationToken);
+
+        Assert.Equal("video:" + Id, resolved.PageEntityId);
+        Assert.Equal("channel:UCAAAAAAAAAAAAAAAAAAAAA", resolved.SubtitleEntityId);
+    }
+
     // ---- helpers -----------------------------------------------------------------------------------------------
 
     /// <summary>Answers every client's player request with the same body.</summary>

@@ -133,6 +133,53 @@ public static class Menus
         return rows;
     }
 
+    // ── A MODULE playable (a YouTube video, a Twitch channel, a radio station) ──────────────────────────────────────
+    /// <summary>The track menu for a playable a MODULE owns. Same grammar as <see cref="Tracks"/> — a module playable
+    /// IS a track, and giving it a parallel menu is exactly the "same kind, two subsets" defect D48 exists to stop —
+    /// with two deliberate differences:
+    ///
+    /// <list type="bullet">
+    ///   <item><b>No "Go to album".</b> A module playable has no album (<c>LocalPlayables.ForModule</c> builds an empty
+    ///   <c>AlbumRef</c>), so the row would open the route <c>album:</c> — a dead page. Passed as
+    ///   <c>showGoToAlbum: false</c> rather than left to fall through, so the reason is stated where a reader looks.</item>
+    ///   <item><b>An "Open on &lt;Module&gt;" extra</b>, when the module's page document for this playable carries an
+    ///   <c>openUrl</c> action whose url survives the <c>ShellOpen</c> http(s) guard. Absent otherwise — never a row
+    ///   that opens nothing.</item>
+    /// </list></summary>
+    /// <param name="ctx">The action context (target + services).</param>
+    public static ContextMenuModel ModuleTrack(in ActionContext ctx)
+        => Tracks(in ctx, showGoToAlbum: false, OpenOnModuleRows(in ctx));
+
+    static IReadOnlyList<MenuFlyoutItem>? OpenOnModuleRows(in ActionContext ctx)
+    {
+        if (ctx.Target.Single is not { } track) return null;
+        if (!Wavee.Sdk.ModuleUri.TryDecode(track.Uri, out string moduleId, out _)) return null;
+        if (ModulePage.OpenUrlOf(ModuleOpenPage(track.Uri)) is not { Length: > 0 } url) return null;
+
+        string name = ModuleDisplayName(moduleId);
+        return [new MenuFlyoutItem(Strings.ModulePage.OpenOn(name), Icons.OpenInNewWindow,
+            Invoke: () => ShellOpen.OpenUrl(url))];
+    }
+
+    /// <summary>The page document this playable's own page would render, from the sync cache — never a fetch: a menu is
+    /// built inside the open thunk, on the UI thread, and must not await a child process.</summary>
+    static Wavee.Sdk.ModulePageDoc? ModuleOpenPage(string playableUri)
+    {
+        if (Wavee.Backend.Modules.ModulePages.RouteFor(playableUri, LinkSlot.Title) is not { } route) return null;
+        return Wavee.Backend.Modules.ModulePages.Get(Wavee.Backend.Modules.ModulePages.UriOf(route));
+    }
+
+    static string ModuleDisplayName(string moduleId)
+    {
+        var installed = Wavee.Backend.Modules.ModuleHost.Current?.Installed;
+        if (installed is null) return moduleId;
+        for (int i = 0; i < installed.Count; i++)
+            if (string.Equals(installed[i].Id, moduleId, StringComparison.OrdinalIgnoreCase))
+                return string.IsNullOrWhiteSpace(installed[i].Manifest.DisplayName)
+                    ? moduleId : installed[i].Manifest.DisplayName;
+        return moduleId;
+    }
+
     /// <summary>The artists a menu can actually navigate to: those carrying a uri. Several producers hand back a display
     /// NAME with no uri (a projected sidebar row, a search row without an artist link) — navigating those would land on
     /// an empty <c>artist:</c> route. Returns null when none qualify, so the row is absent rather than dead.</summary>

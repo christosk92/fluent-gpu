@@ -65,6 +65,11 @@ public static class TwitchFixtures
     {"data":{"user":{"id":"123456789","login":"examplestreamer","displayName":"ExampleStreamer","lastBroadcast":{"id":"48000000000","title":"Yesterday's build stream","__typename":"Broadcast"},"broadcastSettings":{"id":"123456789","title":"Building a Rust parser","__typename":"BroadcastSettings"},"stream":null,"__typename":"User"}},"extensions":{"operationName":"StreamMetadata"}}
     """;
 
+    /// <summary><c>StreamMetadata</c> for a login that does not exist.</summary>
+    public const string StreamMetadataNoUser = """
+    {"data":{"user":null},"extensions":{"operationName":"StreamMetadata"}}
+    """;
+
     /// <summary>A usher v2 multivariant playlist (the shape twitch.tv has served since ~Feb 2026).</summary>
     public const string UsherMasterV2 = """
     #EXTM3U

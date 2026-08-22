@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.IO;
@@ -108,6 +108,11 @@ public sealed class FakeContextResolver : IContextResolver
     /// <summary>Counts ResolveAsync calls (the recovery-heal tests assert the background resolve happened).</summary>
     public int ResolveCalls;
 
+    /// <summary>Counts <see cref="ResolveAutoplayAsync"/> calls. Autoplay is a SPOTIFY station: a context outside its
+    /// catalog (a playback module's link, a local folder) has none, so asking is a guaranteed 400 + a warning at every
+    /// end-of-context. The module-playable tests assert this stays at 0.</summary>
+    public int AutoplayCalls;
+
     public FakeContextResolver(params string[] uris)
     {
         _tracks = new QueuedTrack[uris.Length];
@@ -133,21 +138,34 @@ public sealed class FakeContextResolver : IContextResolver
         => Task.FromResult(NextPage?.Invoke(nextPageUrl) ?? ContextPage.Empty);
 
     public Task<ResolvedContext> ResolveAutoplayAsync(string contextUri, IReadOnlyList<string> recentTrackUris, CancellationToken ct = default)
-        => Task.FromResult(ResolvedContext.Empty);
+    {
+        Interlocked.Increment(ref AutoplayCalls);
+        return Task.FromResult(ResolvedContext.Empty);
+    }
 
     public Task<ResolvedContext> ResolveAutopodcastAsync(string contextUri, IReadOnlyList<string> recentEpisodeUris, CancellationToken ct = default)
         => Task.FromResult(ResolvedContext.Empty);
 
     public Task<string?> ResolveRadioSeedAsync(string seedUri, CancellationToken ct = default) => Task.FromResult(RadioSeedResult);
 
+    /// <summary>When true, <see cref="HydrateAsync"/> answers with the URI-ONLY placeholder <c>LiveContextResolver</c>
+    /// mints for a uri no catalogue owns (title == uri, no artists, no art, duration 0). That is the exact shape a
+    /// restored playback-module playable used to come back as, so the owner-hydration tests can prove both halves: the
+    /// module answering, and the module declining and this row surviving.</summary>
+    public bool HydrateAsPlaceholder;
+
     public Task<IReadOnlyList<QueuedTrack>> HydrateAsync(IReadOnlyList<QueuedRef> refs, CancellationToken ct = default)
     {
         var arr = new QueuedTrack[refs.Count];
         for (int i = 0; i < refs.Count; i++)
-            arr[i] = new QueuedTrack(Trk(refs[i].Uri), refs[i].Uid, refs[i].Provider, refs[i].Metadata);
+            arr[i] = new QueuedTrack(HydrateAsPlaceholder ? Placeholder(refs[i].Uri) : Trk(refs[i].Uri),
+                refs[i].Uid, refs[i].Provider, refs[i].Metadata);
         return Task.FromResult<IReadOnlyList<QueuedTrack>>(arr);
     }
 
     static Track Trk(string uri) => new(uri[(uri.LastIndexOf(':') + 1)..], uri, "T:" + uri,
         Array.Empty<ArtistRef>(), new AlbumRef("", "", ""), 60000, false, null);
+
+    static Track Placeholder(string uri) => new(uri[(uri.LastIndexOf(':') + 1)..], uri, uri,
+        Array.Empty<ArtistRef>(), new AlbumRef("", "", ""), 0, false, null);
 }

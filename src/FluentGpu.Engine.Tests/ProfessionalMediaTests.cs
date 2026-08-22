@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentGpu.Media;
@@ -81,6 +81,63 @@ public sealed class ProfessionalMediaTests
         Assert.Same(AbrPolicy.Auto, backend.Options.Abr);
         Assert.Equal(LiveLatencyMode.LowLatency, backend.Options.LiveLatency);
         await player.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task Builder_CarriesTheSourceLivenessDeclarationToTheBackend()
+    {
+        // The host that RESOLVED the locator knows whether it is live; the backend must be told rather than left to
+        // infer (Media Foundation reports a sliding DVR window as a finite duration, and its live probe is a bounded
+        // read whose "false" can mean "not answered yet"). WithLiveness is the declaration; MediaOpenOptions.Liveness
+        // is how it reaches the backend.
+        var backend = new CaptureBackend();
+        var player = MediaPlayer.Build().WithBackend(MediaKind.MfVideoOrFile, backend).Build();
+
+        await player.OpenAsync(MediaSource.FromUri("https://example.test/live.m3u8").WithKind(MediaKind.MfVideoOrFile)
+            .WithLiveness(SourceLiveness.Live), TestContext.Current.CancellationToken);
+        Assert.Equal(SourceLiveness.Live, backend.Options!.Liveness);
+
+        await player.OpenAsync(MediaSource.FromUri("https://example.test/vod.mp4").WithKind(MediaKind.MfVideoOrFile)
+            .WithLiveness(SourceLiveness.Vod), TestContext.Current.CancellationToken);
+        Assert.Equal(SourceLiveness.Vod, backend.Options!.Liveness);
+
+        // Undeclared is Auto — every existing caller keeps the backend's own inference, unchanged.
+        await player.OpenAsync(MediaSource.FromUri("https://example.test/plain.mp4").WithKind(MediaKind.MfVideoOrFile),
+            TestContext.Current.CancellationToken);
+        Assert.Equal(SourceLiveness.Auto, backend.Options!.Liveness);
+
+        await player.DisposeAsync();
+    }
+
+    [Fact]
+    public void WithLiveness_IsAnImmutableBuilder_AndSurvivesTheSourceAlgebra()
+    {
+        MediaSource baseline = MediaSource.FromUri("https://example.test/live.m3u8");
+        Assert.Equal(SourceLiveness.Auto, baseline.Liveness);
+
+        MediaSource live = baseline.WithLiveness(SourceLiveness.Live);
+        Assert.Equal(SourceLiveness.Auto, baseline.Liveness);      // the original record is untouched
+        Assert.Equal(SourceLiveness.Live, live.Liveness);
+        Assert.Equal(SourceLiveness.Live, live.WithKind(MediaKind.MfVideoOrFile).Liveness);
+    }
+
+    [Fact]
+    public void TimelineInfo_HasDvrWindow_IsTheOneThresholdForOfferingARail()
+    {
+        // Under the threshold a "seek" is a jitter the sliding window invalidates before the pointer is released; the
+        // backend drops Seek there and the transport must not render a rail either. One constant, both decisions.
+        Assert.Equal(TimeSpan.FromSeconds(30), TimelineInfo.MinDvrWindow);
+        Assert.False(LiveTimeline(0, 6).HasDvrWindow);            // true-live, 3 segments
+        Assert.False(LiveTimeline(0, 29.999).HasDvrWindow);
+        Assert.True(LiveTimeline(0, 30).HasDvrWindow);
+        Assert.True(LiveTimeline(60, 240).HasDvrWindow);
+        // A VOD timeline with a wide seekable range is NOT a DVR window (it has a duration to map the rail onto).
+        Assert.False(new TimelineInfo(false, TimeSpan.Zero, TimeSpan.FromSeconds(600), TimeSpan.Zero,
+            TimeSpan.Zero, false, Array.Empty<MediaChapter>()).HasDvrWindow);
+
+        static TimelineInfo LiveTimeline(double start, double end) => new(true,
+            TimeSpan.FromSeconds(start), TimeSpan.FromSeconds(end), TimeSpan.FromSeconds(end),
+            TimeSpan.Zero, true, Array.Empty<MediaChapter>());
     }
 
     private sealed class CaptureBackend : IMediaBackend

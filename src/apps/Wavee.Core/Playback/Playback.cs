@@ -8,6 +8,51 @@ public enum PlaybackRecoveryKind { None, Network }
 
 public readonly record struct PlaybackContextTrack(string Uri, string Uid = "", IReadOnlyDictionary<string, string>? Metadata = null);
 
+/// <summary>
+/// The engine-authoritative shape of a LIVE broadcast's timeline: whether it is live at all, the seekable (DVR) window
+/// it exposes, where the live edge is, and where the playhead sits inside it.
+/// <para><b>Why a record and not three loose numbers.</b> "Live" is not one fact but four that must agree — a YouTube
+/// channel with a 4-hour DVR window and a SHOUTcast station with no rewind are both live, and the difference decides
+/// whether the rail scrubs or breathes. Publishing them together means the bar can never render a half-updated mix (a
+/// window from the previous variant against this one's edge), which is exactly what a set of independent signals
+/// produces at a variant switch.</para>
+/// <para><b>Not inferred.</b> Every field is what the media pipeline STATED. A zero duration is not evidence of
+/// live-ness (it is also what "unknown length" looks like), and a finite <c>GetDuration</c> is not evidence against it
+/// (Media Foundation reports a sliding DVR window as a finite number — that is the defect this type exists to end).</para>
+/// </summary>
+/// <param name="IsLive">Is this a broadcast with a moving live edge?</param>
+/// <param name="SeekableStartMs">The earliest position the source will accept, in ms.</param>
+/// <param name="SeekableEndMs">The latest position the source will accept, in ms (the DVR window's right end).</param>
+/// <param name="LiveEdgeMs">Where "now" is on the broadcast's own clock, in ms.</param>
+/// <param name="PositionMs">Where the playhead sits, in ms, on the same clock.</param>
+/// <param name="IsAtLiveEdge">Is the playhead riding the edge (as the source judges it)?</param>
+public readonly record struct LiveWindow(
+    bool IsLive,
+    long SeekableStartMs,
+    long SeekableEndMs,
+    long LiveEdgeMs,
+    long PositionMs,
+    bool IsAtLiveEdge)
+{
+    /// <summary>The narrowest DVR window worth offering a rail for. Below this a scrub is a worse affordance than no
+    /// scrub at all: the thumb would cover seconds per pixel and the window would slide out from under the gesture.</summary>
+    public const long MinWindowMs = 30_000;
+
+    /// <summary>Does this broadcast expose a REWINDABLE window (≥ <see cref="MinWindowMs"/>)? This — not
+    /// <see cref="IsLive"/> — is what decides whether the seek bar is a DVR rail or a breathing line, and it is the
+    /// whole of <c>CanSeek</c> while live.</summary>
+    public bool HasWindow => SeekableEndMs - SeekableStartMs >= MinWindowMs;
+
+    /// <summary>How far behind the live edge the playhead is, in ms (never negative).</summary>
+    public long BehindMs => Math.Max(0, LiveEdgeMs - PositionMs);
+
+    /// <summary>The window's span in ms (0 when there is none).</summary>
+    public long WindowMs => Math.Max(0, SeekableEndMs - SeekableStartMs);
+
+    /// <summary>"Not a live broadcast" — the honest default for every non-live playable.</summary>
+    public static LiveWindow None => default;
+}
+
 /// <summary>Seek fidelity, carried end-to-end from the seek bar to the media host. <see cref="Keyframe"/> is a SCRUB
 /// PREVIEW — the throttled seeks a drag issues while the thumb is moving: it snaps to the nearest keyframe (fast, cheap)
 /// and is NOT a committed transport event, so it never reaches the Connect cluster and never re-arms prepared-next.
@@ -121,6 +166,15 @@ public interface IPlaybackState : System.ComponentModel.INotifyPropertyChanged
     /// <para>Drives the LIVE chip, the disabled seek bar and the "a socket drop is a reconnect, not a track end"
     /// policy. Default false — every provider that has no live content keeps working unchanged.</para></summary>
     bool IsLive => false;
+
+    /// <summary>The live broadcast's TIMELINE — the DVR window, the live edge and where the playhead sits in it, as the
+    /// media pipeline stated them. <c>default</c> (<see cref="LiveWindow.None"/>) means "not a live broadcast", which is
+    /// the right answer for every ordinary track and the honest one for a provider that cannot tell.
+    /// <para>This is strictly richer than <see cref="IsLive"/> and does not replace it: a source can state live-ness
+    /// (a module's <c>isLive</c>, an ICY stream) long before — or without ever — knowing a window. Consumers that only
+    /// need the LIVE chip read <see cref="IsLive"/>; the ones that draw a rail read this and branch on
+    /// <see cref="LiveWindow.HasWindow"/>.</para></summary>
+    LiveWindow Live => LiveWindow.None;
     /// <summary>The Connect device currently active (null/empty = this device / nobody) — drives the "playing on X" label.</summary>
     string? ActiveDeviceId => null;
 

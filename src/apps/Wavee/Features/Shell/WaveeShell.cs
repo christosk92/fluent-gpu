@@ -1675,7 +1675,7 @@ sealed class WaveeShell : Component
         string key = route;
         string? a = arg.Length == 0 ? null : arg;
         if (a is not null && route.IndexOf(':') < 0
-            && (route is "album" or "pl" or "artist" or "show" or "prerelease"))
+            && (route is "album" or "pl" or "artist" or "show" or "prerelease" or "module"))
         {
             key = route + ":" + a;
             a = null;   // URI lives in the key; Arg is the display name, which a deep link does not carry

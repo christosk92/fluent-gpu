@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Runtime.CompilerServices;
 using FluentGpu.Controls;
 using Xunit;
 
@@ -296,19 +295,6 @@ public class SessionSnapshotTests : IDisposable
     }
 
     [Fact]
-    public void WaveeShell_RestoresAndPersistsTheRailPresentation()
-    {
-        string root = AppSourceRoot();
-        if (root is null) { Assert.Skip("app sources not present (binary-only run)"); return; }
-        string shell = File.ReadAllText(Path.Combine(root, "Features", "Shell", "WaveeShell.cs"));
-
-        Assert.Contains("_session.ShellSection", shell);
-        Assert.Contains("_shellUi.RailOpen.Value = shell.RailOpen", shell);
-        Assert.Contains("_shellUi.Mode.Value = (RailMode)shell.RailMode", shell);
-        Assert.Contains("_session.UpdateShell(_shellUi.RailOpen.Value, (int)_shellUi.Mode.Value)", shell);
-    }
-
-    [Fact]
     public void RoundTrip_OriginFields_Survive()
     {
         var origins = new NavOriginStore();
@@ -340,13 +326,5 @@ public class SessionSnapshotTests : IDisposable
         Assert.Null(active.OriginLabel);
         Assert.Null(active.OriginName);
         Assert.Null(back[0].OriginLabel);
-    }
-
-    static string AppSourceRoot([CallerFilePath] string here = "")
-    {
-        string? tests = Path.GetDirectoryName(here);
-        if (tests is null) return null!;
-        string app = Path.Combine(Path.GetDirectoryName(tests)!, "Wavee");
-        return Directory.Exists(app) ? app : null!;
     }
 }

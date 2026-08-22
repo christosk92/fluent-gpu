@@ -1,6 +1,7 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Threading;
 using FluentGpu.Foundation;
 using TerraFX.Interop.DirectX;
 using TerraFX.Interop.Windows;
@@ -72,6 +73,10 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
     private volatile bool _error;
     private volatile uint _errorCode;
     private volatile int _errorHr;
+    // Bumped on every PRESENTATION-affecting engine event (FORMATCHANGE / RESOURCELOST). See IVideoEngine.PresentationEpoch.
+    // Interlocked (not volatile): MF raises events from a pool of worker threads, so two format changes landing at
+    // once on a plain ++ would collapse into one and the session would never re-query.
+    private int _presentationEpoch;
     private readonly ConcurrentQueue<string> _trace = new();
 
     public bool MetadataLoaded => _metadataLoaded;
@@ -84,6 +89,8 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
     public int ErrorHr => _errorHr;
     public string EventTrace => string.Join(",", _trace);
     public string LastEventName => _lastEventRaw < 0 ? "<none>" : ((MF_MEDIA_ENGINE_EVENT)_lastEventRaw).ToString().Replace("MF_MEDIA_ENGINE_EVENT_", "");
+    /// <inheritdoc/>
+    public int PresentationEpoch => Volatile.Read(ref _presentationEpoch);
     /// <inheritdoc/>
     public event Action? StateChanged;
 
@@ -424,6 +431,16 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
             case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_SEEKED: _seeking = false; break;
             case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_ENDED: _ended = true; _playing = false; break;
             case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_ERROR: _error = true; _errorCode = (uint)p1; _errorHr = (int)p2; break;
+            // The PRESENTATION itself changed underneath the engine, with no transport transition to ride in on:
+            // FORMATCHANGE is an ABR variant switch (a NEW decoded frame size — the natural size read at first
+            // metadata is now stale, and with it the composited content size and every aspect fit), RESOURCELOST is
+            // the swap chain going away and being rebuilt (the bound handle and the stream rect must be re-asserted).
+            // Both bump a monotonic epoch the session compares against, and both wake a pump (this is exactly the
+            // "surface state changed" case the repaint flag exists for).
+            case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_FORMATCHANGE:
+            case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_RESOURCELOST:
+                Interlocked.Increment(ref _presentationEpoch);
+                break;
             default: affectsPresentation = false; break;
         }
         if (affectsPresentation)

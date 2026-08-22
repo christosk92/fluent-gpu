@@ -98,6 +98,11 @@ public sealed record ResolvePreferences(string Quality, bool Metered, int Crossf
 /// <param name="Caps">Per-playable capability tokens, e.g. <c>preparedNext</c>, <c>connectPublish</c>, <c>wireMeta</c>.</param>
 /// <param name="GainDb">Normalization gain in dB; 0 means "none".</param>
 /// <param name="Wire">Optional wire identity for republishing (see <see cref="WireMeta"/>).</param>
+/// <param name="PageEntityId">The playable's OWN page (see <see cref="ModulePageDoc"/>) — what the art tile and the
+/// title link navigate to. Null (the default) leaves both inert, which is what a module without the <c>pages</c>
+/// capability wants.</param>
+/// <param name="SubtitleEntityId">The page the subtitle links to — the channel, station or show this playable
+/// belongs to. Null leaves the subtitle inert.</param>
 public sealed record ResolvedPlayable(
     string PlayableId,
     string Title,
@@ -110,7 +115,9 @@ public sealed record ResolvedPlayable(
     long? ExpiresAtUnixMs,
     string[] Caps,
     float GainDb = 0f,
-    WireMeta? Wire = null);
+    WireMeta? Wire = null,
+    string? PageEntityId = null,
+    string? SubtitleEntityId = null);
 
 /// <summary>A live "now playing" correction pushed by a module (ICY titles, a stream's current show).</summary>
 /// <param name="PlayableId">The playable the update applies to.</param>

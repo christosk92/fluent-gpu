@@ -493,12 +493,15 @@ sealed class StageIdentity : Component
                         : album;
             if (line.Length == 0) return new BoxEl { Height = 0f, HitTestVisible = false };
 
-            // Resolve the route at INVOKE time: this node outlives every track change.
-            bool enabled = track.Artists.Count > 0 && track.Artists[0].Uri.Length > 0;
+            // Resolve the route at INVOKE time: this node outlives every track change. WHERE it goes is
+            // PlayableLinks' answer — a module playable's subtitle names a channel/station, not a credited artist, and
+            // the old `Artists[0].Uri.Length > 0` gate left every one of them dead.
+            bool enabled = PlayableLinks.RouteFor(track, LinkSlot.Artist) is { Length: > 0 };
             void Nav()
             {
-                if (b?.CurrentTrack.Peek() is { Artists.Count: > 0 } now && now.Artists[0].Uri.Length > 0)
-                    _go?.Invoke("artist:" + now.Artists[0].Uri, now.Artists[0].Name);
+                var now = b?.CurrentTrack.Peek();
+                if (PlayableLinks.RouteFor(now, LinkSlot.Artist) is { } route)
+                    _go?.Invoke(route, PlayableLinks.LabelFor(now, LinkSlot.Artist));
             }
 
             return new BoxEl

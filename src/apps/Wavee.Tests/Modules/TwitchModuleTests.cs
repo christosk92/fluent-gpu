@@ -324,4 +324,104 @@ public class TwitchModuleTests
     [Fact]
     public void ParseUsherError_IgnoresAPlaylistBody()
         => Assert.Equal((null, null), TwitchModule.ParseUsherError(TwitchFixtures.UsherMasterV2));
+
+    // ---- pages -------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task Page_Channel_Live_ComesStraightOutOfStreamMetadata()
+    {
+        var http = new ScriptedHttpHandler()
+            .OnUrl("gql.twitch.tv", HttpStatusCode.OK, TwitchFixtures.StreamMetadataLive);
+        ModuleTestHost host = Make(http);
+
+        ModulePageDoc? page = await host.PageAsync("channel:" + Login, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(page);
+        Assert.Equal("ExampleStreamer", page!.Hero!.Title);
+        Assert.Equal("Building a Rust parser", page.Hero.Subtitle);
+        Assert.Equal("https://static-cdn.jtvnw.net/user-default-pictures/300x300.png", page.Hero.ImageUrl);
+        Assert.True(page.Hero.IsLive);
+        Assert.Contains("1,234 watching", page.Hero.MetaLine!, StringComparison.Ordinal);
+
+        PageAction play = page.Actions.Single(a => a.Kind == PageAction.KindPlay);
+        Assert.Equal("live:" + Login, play.PlayableId);
+        Assert.True(play.Primary);
+        Assert.Equal("https://www.twitch.tv/" + Login,
+            page.Actions.Single(a => a.Kind == PageAction.KindOpenUrl).Url);
+
+        PageSection facts = page.Sections.Single(x => x.Kind == PageSection.KindFacts);
+        Assert.Contains(facts.Rows!, r => r[0] == "Category" && r[1] == "Science & Technology");
+        Assert.Contains(facts.Rows!, r => r[0] == "Viewers" && r[1] == "1,234");
+        Assert.Contains(facts.Rows!, r => r[0] == "Status" && r[1] == "Live");
+
+        // The persisted StreamMetadata query is what the page rides on.
+        Assert.Contains(TwitchModule.StreamMetadataHash, http.Requests[0].Body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Page_Channel_Offline_OffersNoPlayButton()
+    {
+        var http = new ScriptedHttpHandler()
+            .OnUrl("gql.twitch.tv", HttpStatusCode.OK, TwitchFixtures.StreamMetadataOffline);
+        ModuleTestHost host = Make(http);
+
+        ModulePageDoc? page = await host.PageAsync("channel:" + Login, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(page);
+        Assert.False(page!.Hero!.IsLive);
+        PageAction only = Assert.Single(page.Actions);
+        Assert.Equal(PageAction.KindOpenUrl, only.Kind);
+        Assert.Contains(page.Sections, x => x.Kind == PageSection.KindText &&
+            x.Text!.Contains("not live right now", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Page_Channel_ThatDoesNotExistIsNull()
+    {
+        var http = new ScriptedHttpHandler()
+            .OnUrl("gql.twitch.tv", HttpStatusCode.OK, TwitchFixtures.StreamMetadataNoUser);
+        ModuleTestHost host = Make(http);
+
+        Assert.Null(await host.PageAsync("channel:" + Login, TestContext.Current.CancellationToken));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("video:tRsQsTMvPNg")]
+    [InlineData("channel:")]
+    [InlineData("channel:not a login")]
+    public async Task Page_ForeignOrMalformedEntityIdsAreNull(string entityId)
+    {
+        ModuleTestHost host = Make(new ScriptedHttpHandler());
+
+        Assert.Null(await host.PageAsync(entityId, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Resolve_Live_PointsBothLinkSlotsAtTheChannel()
+    {
+        var http = new ScriptedHttpHandler()
+            .OnUrl("gql.twitch.tv", HttpStatusCode.OK, TwitchFixtures.LiveTokenEnvelope())
+            .OnUrl("usher.ttvnw.net", HttpStatusCode.OK, TwitchFixtures.UsherMasterV2);
+        ModuleTestHost host = Make(http);
+
+        ResolvedPlayable resolved = await host.ResolveAsync("live:" + Login, TestContext.Current.CancellationToken);
+
+        Assert.Equal("channel:" + Login, resolved.PageEntityId);
+        Assert.Equal("channel:" + Login, resolved.SubtitleEntityId);
+    }
+
+    [Fact]
+    public async Task Resolve_Vod_TakesItsChannelFromTheTokenDocument()
+    {
+        var http = new ScriptedHttpHandler()
+            .OnUrl("gql.twitch.tv", HttpStatusCode.OK, TwitchFixtures.VodTokenEnvelope())
+            .OnUrl("usher.ttvnw.net", HttpStatusCode.OK, TwitchFixtures.UsherMasterV2);
+        ModuleTestHost host = Make(http);
+
+        ResolvedPlayable resolved = await host.ResolveAsync("vod:1234567890", TestContext.Current.CancellationToken);
+
+        Assert.Equal("channel:" + Login, resolved.PageEntityId);
+        Assert.Equal("channel:" + Login, resolved.SubtitleEntityId);
+    }
 }

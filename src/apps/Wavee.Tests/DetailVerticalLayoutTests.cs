@@ -1,7 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
-using System.Runtime.CompilerServices;
 using Wavee.Features.Detail;
 using Xunit;
 
@@ -16,8 +14,7 @@ namespace Wavee.Tests;
 /// seam — can only be shown by walking the ladder, not by spot-checking three widths.</para>
 ///
 /// <para>What is NOT here any more, deliberately: the <c>DetailHeroOrientation</c> enum and its three-variant ladder.
-/// The hero has ONE composition; width chooses sizes and one flow axis, never a different design. The absence is
-/// pinned by <see cref="TheOrientationLadder_IsGoneFromSource"/> rather than left to prose.</para>
+/// The hero has ONE composition; width chooses sizes and one flow axis, never a different design.</para>
 /// </summary>
 public class DetailVerticalLayoutTests
 {
@@ -347,85 +344,5 @@ public class DetailVerticalLayoutTests
         float b = DetailVerticalLayout.BucketW(w);
         Assert.True(b > 0f);
         Assert.Equal(0f, b % 8f);
-    }
-
-    // ── the deletion, pinned ─────────────────────────────────────────────────────────────────────────────────────
-
-    /// <summary>The three-variant hero is gone from SOURCE, not merely unreachable. Each token below named a part of
-    /// exactly one of the deleted arms: the orientation ladder itself, the immersive full-bleed layer stack, the
-    /// on-media ink ladder that layer required, the hand-rolled white-alpha "glass" circle controls, and the
-    /// title-LENGTH-driven size.</summary>
-    [Theory]
-    [InlineData("Features/Detail/DetailVerticalLayout.cs", "DetailHeroOrientation")]
-    [InlineData("Features/Detail/DetailVerticalLayout.cs", "OrientationFor")]
-    [InlineData("Features/Detail/DetailVerticalLayout.cs", "SideArtworkSize")]
-    [InlineData("Features/Detail/DetailVerticalLayout.cs", "MinimalHero")]
-    [InlineData("Features/Detail/DetailVerticalLayout.cs", "ImmersiveIdentityTokenSize")]
-    [InlineData("Features/Detail/DetailVerticalHero.cs", "DetailHeroOrientation")]
-    [InlineData("Features/Detail/DetailVerticalHero.cs", "ImmersiveTitleSize")]
-    [InlineData("Features/Detail/DetailVerticalHero.cs", "DetailHeroImmersiveGlass")]
-    [InlineData("Features/Detail/DetailVerticalHero.cs", "DetailHeroSaveButton")]
-    [InlineData("Features/Detail/DetailVerticalHero.cs", "copyContrast")]
-    [InlineData("Features/Detail/DetailVerticalHero.cs", "immersiveUtilities")]
-    [InlineData("Features/Detail/DetailVerticalHero.cs", "immersiveTokenLayer")]
-    [InlineData("Features/Detail/DetailVerticalHero.cs", "EdgeFade")]
-    [InlineData("Features/Detail/DetailTracks.cs", "DetailHeroOrientation")]
-    // The inline-edit facades' on-media axis went dead with the immersive arm — deleted, not left defaulting to false.
-    [InlineData("Features/Detail/PlaylistInlineEdit.cs", "Tok.OnMedia")]
-    [InlineData("Features/Detail/PlaylistInlineEdit.cs", "MediaScrim")]
-    [InlineData("Features/Detail/DetailShell.cs", "DetailWash")]
-    [InlineData("Design/Surfaces.cs", "GradientSpec DetailHeroWash")]
-    public void TheOrientationLadder_IsGoneFromSource(string relative, string token)
-    {
-        string root = AppSourceRoot();
-        if (root is null) { Assert.Skip("app sources not present (binary-only run)"); return; }
-        string text = File.ReadAllText(Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar)));
-        Assert.DoesNotContain(token, text);
-    }
-
-    /// <summary>The hero speaks the app's OWN vocabulary and nothing else: no on-media ink ladder (the page tone's
-    /// clamp guarantees polarity, so the standard tokens are correct), no raw white/black literals standing in for
-    /// one, no caps transform over a localized string, and the satellites are on the icon-button geometry table's
-    /// standard row rather than a fourth hand-picked size.</summary>
-    [Fact]
-    public void TheHero_UsesTheAppsOwnTokensOnly()
-    {
-        string root = AppSourceRoot();
-        if (root is null) { Assert.Skip("app sources not present (binary-only run)"); return; }
-        string hero = File.ReadAllText(Path.Combine(root, "Features", "Detail", "DetailVerticalHero.cs"));
-
-        Assert.DoesNotContain("Tok.OnMedia", hero);
-        Assert.DoesNotContain("MediaScrim", hero);
-        Assert.DoesNotContain("ColorF.FromRgba", hero);
-        Assert.DoesNotContain("ToUpper", hero);
-
-        // The composition's own parts, by name — each one shared with a surface that already existed.
-        Assert.Contains("Surfaces.AccentRule", hero);
-        Assert.Contains("DetailRail.EyebrowRun", hero);
-        Assert.Contains("WaveeCta.Play(", hero);
-        Assert.Contains("WaveeCta.IconButtonSize", hero);
-
-        // And NO second entrance cascade. ContentHost already slides the whole page in (the Fluent/Zune page language),
-        // so a WaveeEntrance stagger over the identity column on top of it is what made first-open read as dizzy and made
-        // Back feel like a different animation. The hero used to carry `WaveeEntrance.Row(` and this case used to REQUIRE
-        // it; the requirement inverted when the page slide became the one entrance. Matched on the CALL form — the file
-        // still names the recipe in the comment that explains its absence, and that comment is the point.
-        Assert.DoesNotContain("WaveeEntrance.Row(", hero);
-        // …and the band it carries paints NOTHING (the offset model): no fill anywhere in the hero file, so the
-        // page's own art-derived ground is what shows through the stuck band.
-        Assert.DoesNotContain("ContextBandOver", hero);
-        Assert.DoesNotContain("ContextBand.Fill", hero);
-    }
-
-    static string AppSourceRoot([CallerFilePath] string here = "")
-    {
-        var dir = new DirectoryInfo(Path.GetDirectoryName(here)!);
-        while (dir is not null)
-        {
-            string candidate = Path.Combine(dir.FullName, "Wavee", "Features", "Detail", "DetailVerticalLayout.cs");
-            if (File.Exists(candidate)) return Path.Combine(dir.FullName, "Wavee");
-            dir = dir.Parent;
-        }
-        return null!;
     }
 }

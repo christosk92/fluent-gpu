@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Net;
 using System.Threading.Tasks;
 using Wavee.Module.Radio;
@@ -299,4 +300,110 @@ public class RadioModuleTests
     [Fact]
     public void IcyInfo_UnknownIsAnIcyStream()
         => Assert.Equal(MediaLocator.ContainerIcy, IcyInfo.Unknown.Container);
+
+    // ---- pages -------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task Page_Station_IsBuiltFromTheIcyHeaders()
+    {
+        var http = new ScriptedHttpHandler()
+            .On(_ => true, _ => ScriptedHttpHandler.Respond(HttpStatusCode.OK, "", "audio/mpeg",
+            [
+                ("icy-name", "Example Radio"),
+                ("icy-genre", "Ambient"),
+                ("icy-description", "Handpicked ambient, around the clock."),
+                ("icy-url", "https://example.org"),
+                ("icy-br", "128"),
+                ("icy-metaint", "16000"),
+            ]));
+        ModuleTestHost host = Make(http);
+
+        ModulePageDoc? page = await host.PageAsync(
+            RadioModule.StationEntityPrefix + StationUrl, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(page);
+        Assert.Equal("Example Radio", page!.Hero!.Title);
+        Assert.Equal("Radio station", page.Hero.Eyebrow);
+        Assert.Equal("Ambient", page.Hero.Subtitle);
+        Assert.True(page.Hero.IsLive);
+        Assert.Contains("128 kbit/s", page.Hero.MetaLine!, StringComparison.Ordinal);
+
+        PageAction play = Assert.Single(page.Actions);
+        Assert.Equal(PageAction.KindPlay, play.Kind);
+        Assert.Equal(StationUrl, play.PlayableId);
+
+        PageSection facts = page.Sections.Single(x => x.Kind == PageSection.KindFacts);
+        Assert.Contains(facts.Rows!, r => r[0] == "Bitrate" && r[1] == "128 kbit/s");
+        Assert.Contains(facts.Rows!, r => r[0] == "Genre" && r[1] == "Ambient");
+        Assert.Contains(facts.Rows!, r => r[0] == "Format" && r[1] == "audio/mpeg");
+
+        Assert.Contains("Handpicked ambient",
+            page.Sections.Single(x => x.Kind == PageSection.KindText).Text!, StringComparison.Ordinal);
+
+        PageItem link = page.Sections.Single(x => x.Kind == PageSection.KindLinks).Items!.Single();
+        Assert.Equal("https://example.org", link.Url);
+
+        // ICY titles are interleaved in the AUDIO body, which only the app demuxes - the module must not pretend.
+        Assert.DoesNotContain(page.Sections, x => x.Kind == PageSection.KindPlayables);
+    }
+
+    [Fact]
+    public async Task Page_Station_UnwrapsAPlaylistExactlyLikeResolveDoes()
+    {
+        var http = new ScriptedHttpHandler()
+            .OnUrl("station.pls", HttpStatusCode.OK, RadioFixtures.Pls, "audio/x-scpls")
+            .On(_ => true, _ => ScriptedHttpHandler.Respond(HttpStatusCode.OK, "", "audio/mpeg",
+                [("icy-name", "Example Radio")]));
+        ModuleTestHost host = Make(http);
+
+        ModulePageDoc? page = await host.PageAsync(
+            RadioModule.StationEntityPrefix + "https://example.org/station.pls",
+            TestContext.Current.CancellationToken);
+
+        Assert.NotNull(page);
+        Assert.Equal("Example Radio", page!.Hero!.Title);
+        Assert.Equal(StationUrl, Assert.Single(page.Actions).PlayableId);
+    }
+
+    [Fact]
+    public async Task Page_Station_WithoutAWebsiteHasNoLinksSection()
+    {
+        var http = new ScriptedHttpHandler()
+            .On(_ => true, _ => ScriptedHttpHandler.Respond(HttpStatusCode.OK, "", "audio/mpeg",
+                [("icy-name", "Example Radio"), ("icy-url", "not a url")]));
+        ModuleTestHost host = Make(http);
+
+        ModulePageDoc? page = await host.PageAsync(
+            RadioModule.StationEntityPrefix + StationUrl, TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain(page!.Sections, x => x.Kind == PageSection.KindLinks);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("video:tRsQsTMvPNg")]
+    [InlineData("station:")]
+    [InlineData("station:not a url")]
+    public async Task Page_ForeignOrMalformedEntityIdsAreNull(string entityId)
+    {
+        ModuleTestHost host = Make(new ScriptedHttpHandler());
+
+        Assert.Null(await host.PageAsync(entityId, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Resolve_PointsBothLinkSlotsAtTheStationsFinalUrl()
+    {
+        var http = new ScriptedHttpHandler()
+            .OnUrl("station.pls", HttpStatusCode.OK, RadioFixtures.Pls, "audio/x-scpls")
+            .On(_ => true, _ => ScriptedHttpHandler.Respond(HttpStatusCode.OK, "", "audio/mpeg",
+                [("icy-name", "Example Radio")]));
+        ModuleTestHost host = Make(http);
+
+        ResolvedPlayable resolved = await host.ResolveAsync("https://example.org/station.pls",
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(RadioModule.StationEntityPrefix + StationUrl, resolved.PageEntityId);
+        Assert.Equal(RadioModule.StationEntityPrefix + StationUrl, resolved.SubtitleEntityId);
+    }
 }

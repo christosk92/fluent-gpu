@@ -151,6 +151,26 @@ public class ShellResponsiveLayoutTests
     }
 
     [Fact]
+    public void DockedVideoHeight_FitsTheCONTENTSAspect_NotTheRailsLastSize()
+    {
+        // THE DEFECT: the cap was sized purely by the rail's persisted/dragged height, so a 16:9 stream in a taller
+        // card painted Tok.MediaLetterbox bars above and below it. The default is now the content's own shape.
+        Assert.Equal(191.25f, ShellResponsiveLayout.FitDockedVideoHeight(340f, 1920, 1080));   // 16:9 → exactly the floor
+        Assert.Equal(255f, ShellResponsiveLayout.FitDockedVideoHeight(340f, 640, 480));        // 4:3  → taller, no bars
+    }
+
+    [Fact]
+    public void DockedVideoHeight_FitFallsBackToSixteenByNine_AndClampsLikeEveryOtherWriter()
+    {
+        // Nothing reported yet (an audio-only player, a stage still resolving) — the 16:9 floor, so the tile never
+        // flashes at a wrong shape on the way in.
+        Assert.Equal(191.25f, ShellResponsiveLayout.FitDockedVideoHeight(340f, 0, 0));
+        // Wider than 16:9 cannot go below the rail's floor, and a very tall clip cannot exceed its ceiling.
+        Assert.Equal(191.25f, ShellResponsiveLayout.FitDockedVideoHeight(340f, 2560, 1080));
+        Assert.Equal(ShellResponsiveLayout.DockedVideoMaxH, ShellResponsiveLayout.FitDockedVideoHeight(340f, 1080, 1920));
+    }
+
+    [Fact]
     public void CanFitRail_UsesTheCallersRailWidth()
     {
         Assert.False(ShellResponsiveLayout.CanFitRail(1200f, 240f, railW: 500f));

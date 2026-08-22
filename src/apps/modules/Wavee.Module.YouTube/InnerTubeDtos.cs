@@ -36,6 +36,8 @@ public sealed record YtPlayabilityStatus(
 /// <param name="IsLowLatencyLiveStream">True for a low-latency broadcast.</param>
 /// <param name="IsPrivate">True for a private video.</param>
 /// <param name="Thumbnail">Thumbnail set; the widest entry becomes the artwork.</param>
+/// <param name="ShortDescription">The video's description, as plain text with real newlines. Page copy only.</param>
+/// <param name="ViewCount">Total views (live: concurrent-ish), as a string. Page copy only.</param>
 public sealed record YtVideoDetails(
     string? VideoId,
     string? Title,
@@ -48,7 +50,9 @@ public sealed record YtVideoDetails(
     bool IsPostLiveDvr,
     bool IsLowLatencyLiveStream,
     bool IsPrivate,
-    YtThumbnailSet? Thumbnail);
+    YtThumbnailSet? Thumbnail,
+    string? ShortDescription = null,
+    string? ViewCount = null);
 
 /// <summary>The thumbnail array wrapper.</summary>
 /// <param name="Thumbnails">Thumbnails, smallest first in practice.</param>

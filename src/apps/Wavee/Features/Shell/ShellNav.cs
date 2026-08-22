@@ -32,6 +32,12 @@ static class ShellNav
         // "Your Library" default, same as the "show:" regression this file already guards against.
         if (key.StartsWith(BrowseSectionRoutes.Prefix, StringComparison.Ordinal))
             return (arg ?? Loc.Get(Strings.Browse.HomeTitle), Icons.Globe);
+        // A page a playback MODULE describes. The label is whatever the navigating surface knew (the hero title, the
+        // channel name); with nothing to go on it says "Module" rather than falling through to "Your Library", which
+        // would name a place the route does not go. Spelled as a LITERAL prefix for the same reason as the arms above:
+        // this file is source-included by src/apps/Wavee.Tests, which cannot see the engine-bound page.
+        if (key.StartsWith("module:", StringComparison.Ordinal))
+            return (arg is { Length: > 0 } ? arg : Loc.Get(Strings.ModulePage.Title), Icons.Globe);
         if (ConcertRoutes.TryParse(key, out var concertRoute))
             return concertRoute.Kind switch
             {

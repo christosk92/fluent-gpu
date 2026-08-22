@@ -67,6 +67,17 @@ public abstract partial class WaveeModule
     public virtual ValueTask<IModuleStream?> OpenStreamAsync(string streamId, CancellationToken ct)
         => new((IModuleStream?)null);
 
+    /// <summary>
+    /// Describes one of this module's entities as a page the app renders (see <see cref="ModulePageDoc"/>). The
+    /// default serves nothing, which is what a module without the <c>pages</c> capability wants.
+    /// </summary>
+    /// <param name="entityId">A module-namespaced entity id, e.g. <c>video:tRsQsTMvPNg</c> or
+    /// <c>channel:examplestreamer</c> — the value a <see cref="ResolvedPlayable.PageEntityId"/>,
+    /// a <see cref="ResolvedPlayable.SubtitleEntityId"/> or a <see cref="PageItem.EntityId"/> carried.</param>
+    /// <param name="ct">Cancels the fetch.</param>
+    /// <returns>The page, or null when this module has nothing to show for that id.</returns>
+    public virtual ValueTask<ModulePageDoc?> GetPageAsync(string entityId, CancellationToken ct) => default;
+
     /// <summary>Rows for the app's diagnostics page. The default reports nothing.</summary>
     /// <param name="ct">Cancels the call.</param>
     public virtual ValueTask<DiagnosticsReport> GetDiagnosticsAsync(CancellationToken ct)

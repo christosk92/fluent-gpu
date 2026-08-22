@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -1101,6 +1101,186 @@ public class ConnectControllerTests
         Assert.DoesNotContain("play", host.Calls);
         Assert.True(proj.IsShuffle);
         Assert.Equal(RepeatMode.Context, proj.Repeat);
+    }
+
+    // ── the cluster echo of OUR OWN masked publish (ConnectUriMask) ──────────────────────────────────────────────────
+
+    [Fact]
+    public async Task SessionRecovery_ClusterCurrentNothingCanPlay_IsSkipped_AndTheLocalSnapshotWins()
+    {
+        // After a non-Spotify session (a playback-module link), what the cluster holds at the next launch is our own
+        // publish AFTER masking: context `wavee:module:…` with a `spotify:local:…` DISPLAY row where the playable was.
+        // Seeding that asked Spotify to resolve a track that does not exist ("Restricted: no TRACK_V4 extension") and to
+        // resolve a context it has never heard of (400) — two error lines before the user touched anything. The real
+        // playable is in the local snapshot, and that is what must be restored.
+        const string moduleUri = "wavee:module:wavee.youtube:dFJzUXNUTXZQTmc";
+        using var c = Make(out var host, out var proj, out _, ctx: Ctx(moduleUri));
+        var errors = new List<PlaybackErrorInfo>();
+        c.OnPlaybackError = errors.Add;
+        c.IsPlayableHere = uri => !uri.StartsWith("spotify:local:", StringComparison.Ordinal);
+        c.RestoreSnapshot = () => new PlaybackSessionSnapshot(
+            ContextUri: moduleUri, CurrentUri: moduleUri, CurrentUid: "", CurrentIndex: 0,
+            PositionMs: 0, Shuffle: false, Repeat: RepeatMode.Off,
+            UserQueue: Array.Empty<QueuedRef>(), AutoplayActive: false);
+
+        proj.OnCluster(Cluster("", Remote("spotify:local:Claude::Claude+FM:0"), pos: 5_000) with
+        {
+            ContextUri = moduleUri,
+        });
+
+        Assert.True(await Settle(() => proj.CurrentTrack?.Uri == moduleUri),
+            "the masked cluster row was seeded instead of the real playable; current = " + proj.CurrentTrack?.Uri);
+        Assert.False(proj.IsPlaying);                       // a restore is paused, always
+        Assert.Empty(errors);                               // and silent — no error toast at launch
+        Assert.DoesNotContain(host.Calls, x => x.Contains("spotify:local:", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task SessionRecovery_ClusterCurrentNothingCanPlay_AndNoSnapshot_StaysColdAndSilent()
+    {
+        using var c = Make(out var host, out var proj, out _);
+        var errors = new List<PlaybackErrorInfo>();
+        c.OnPlaybackError = errors.Add;
+        c.IsPlayableHere = uri => !uri.StartsWith("spotify:local:", StringComparison.Ordinal);
+
+        proj.OnCluster(Cluster("", Remote("spotify:local:Claude::Claude+FM:0"), pos: 5_000));
+        await Task.Delay(120);
+
+        Assert.False(c.HasLocalSession);
+        // "Cold" = nothing was loaded or started. The first cluster fold always echoes the ACTIVE device's volume down to
+        // the host (OnProjectionChanged, _lastVolume starts at -1), which is orthogonal to session recovery.
+        Assert.DoesNotContain(host.Calls, x => x.StartsWith("load:", StringComparison.Ordinal)
+                                            || x.StartsWith("faststart:", StringComparison.Ordinal)
+                                            || x == "play");
+        Assert.Empty(errors);
+    }
+
+    [Fact]
+    public async Task SessionRecovery_WithoutTheHook_StillSeedsEveryClusterCurrent()
+    {
+        // The seam is additive: an unwired IsPlayableHere (unit tests, the fake bootstrap) trusts every uri exactly as
+        // before, so nothing about the Spotify recovery path moved.
+        using var c = Make(out _, out var proj, out _);
+
+        proj.OnCluster(Cluster("", Remote("spotify:track:ghost"), pos: 42_000));
+
+        Assert.True(await Settle(() => proj.CurrentTrack?.Uri == "spotify:track:ghost"));
+    }
+
+    // ── re-hydrating a playable NO CATALOGUE OWNS through its owner (the module host) ─────────────────────────────────
+    // A restart used to bring a playing YouTube broadcast back as its own raw uri: no title, no artwork, no artists, a
+    // length left over from whatever the media engine last measured, and no live-ness. Nothing persisted or echoed by
+    // Connect can carry a module's display facts, so the only honest source is the module itself.
+
+    const string ModuleUri = "wavee:module:wavee.youtube:dFJzUXNUTXZQTmc";
+
+    /// <summary>What the module answers with — deliberately carrying a LENGTH, so the restore's "a module playable is
+    /// restored with no duration" rule is proved rather than accidentally satisfied.</summary>
+    static Track ModuleAnswer() => new(
+        "dFJzUXNUTXZQTmc", ModuleUri, "Claude FM — 24/7 lofi",
+        new[] { new ArtistRef("", "", "Anthropic") }, new AlbumRef("", "", ""),
+        DurationMs: 206_000, IsExplicit: false, Image: new Image("https://img.example/hq.jpg"),
+        Origin: TrackOrigin.Streamed, Availability: Availability.Playable, Source: "module:wavee.youtube");
+
+    [Fact]
+    public async Task SnapshotRestore_ModulePlayable_IsReHydratedThroughItsOwner_WithNoDuration()
+    {
+        // The context resolve misses (Spotify has never heard of a `wavee:module:` context) and the hydrator can only
+        // answer with the uri-only placeholder — so the OWNER is asked, and its answer becomes the restored row.
+        var ctx = new FakeContextResolver { HydrateAsPlaceholder = true };
+        using var c = Make(out var host, out var proj, out _, ctx: ctx);
+        var errors = new List<PlaybackErrorInfo>();
+        c.OnPlaybackError = errors.Add;
+        var asked = new List<string>();
+        c.HydratePlayable = (uri, _) => { asked.Add(uri); return Task.FromResult<Track?>(ModuleAnswer()); };
+        c.RestoreSnapshot = () => new PlaybackSessionSnapshot(
+            ContextUri: ModuleUri, CurrentUri: ModuleUri, CurrentUid: "", CurrentIndex: 0,
+            PositionMs: 0, Shuffle: false, Repeat: RepeatMode.Off,
+            UserQueue: Array.Empty<QueuedRef>(), AutoplayActive: false);
+
+        await c.ResumeAsync();   // nothing in the cluster → the snapshot path
+
+        Assert.True(await Settle(() => proj.CurrentTrack?.Uri == ModuleUri),
+            "the module playable was not restored; current = " + proj.CurrentTrack?.Uri);
+        Assert.Equal(new[] { ModuleUri }, asked.ToArray());
+        var restored = proj.CurrentTrack!;
+        Assert.Equal("Claude FM — 24/7 lofi", restored.Title);           // …not the raw uri
+        Assert.Equal("Anthropic", Assert.Single(restored.Artists).Name);
+        Assert.NotNull(restored.Image);
+        // THE STALE LENGTH. A broadcast has none, and the number the owner happened to state is not the restored row's
+        // business: a restored module playable always carries 0 (the LIVE rail's own contract).
+        Assert.Equal(0, restored.DurationMs);
+        Assert.False(proj.IsPlaying);                 // a restore is paused, always
+        Assert.DoesNotContain("play", host.Calls);
+        Assert.Empty(errors);
+    }
+
+    [Fact]
+    public async Task SnapshotRestore_OwnerCannotAnswer_DegradesToTheThinRow_SilentlyAndPaused()
+    {
+        // Offline, or the module was uninstalled between launches. That is not an error the user should see at launch:
+        // the placeholder survives, the session is still restored, and nothing plays.
+        var ctx = new FakeContextResolver { HydrateAsPlaceholder = true };
+        using var c = Make(out var host, out var proj, out _, ctx: ctx);
+        var errors = new List<PlaybackErrorInfo>();
+        c.OnPlaybackError = errors.Add;
+        c.HydratePlayable = (_, _) => throw new InvalidOperationException("module process is not running");
+        c.RestoreSnapshot = () => new PlaybackSessionSnapshot(
+            ContextUri: ModuleUri, CurrentUri: ModuleUri, CurrentUid: "", CurrentIndex: 0,
+            PositionMs: 0, Shuffle: false, Repeat: RepeatMode.Off,
+            UserQueue: Array.Empty<QueuedRef>(), AutoplayActive: false);
+
+        await c.ResumeAsync();
+
+        Assert.True(await Settle(() => proj.CurrentTrack?.Uri == ModuleUri),
+            "a declining owner took the restore down with it; current = " + proj.CurrentTrack?.Uri);
+        Assert.Equal(ModuleUri, proj.CurrentTrack!.Title);   // the thin row, exactly as before
+        Assert.False(proj.IsPlaying);
+        Assert.DoesNotContain("play", host.Calls);
+        Assert.Empty(errors);                                // Info, never a toast
+    }
+
+    [Fact]
+    public async Task SnapshotRestore_ASpotifyUri_NeverAsksTheOwner()
+    {
+        // The catalogue owns `spotify:` playables. Asking a module about one would be a guaranteed miss on every launch.
+        using var c = Make(out _, out var proj, out _, ctx: Ctx("spotify:track:a", "spotify:track:b"));
+        int asked = 0;
+        c.HydratePlayable = (_, _) => { Interlocked.Increment(ref asked); return Task.FromResult<Track?>(null); };
+        c.RestoreSnapshot = () => new PlaybackSessionSnapshot(
+            ContextUri: "spotify:playlist:saved", CurrentUri: "spotify:track:b", CurrentUid: "", CurrentIndex: 1,
+            PositionMs: 0, Shuffle: false, Repeat: RepeatMode.Off,
+            UserQueue: [new QueuedRef("spotify:track:queued", "")], AutoplayActive: false);
+
+        await c.ResumeAsync();
+
+        Assert.True(await Settle(() => proj.CurrentTrack?.Uri == "spotify:track:b"));
+        Assert.Equal(0, Volatile.Read(ref asked));
+    }
+
+    [Fact]
+    public async Task SessionRecovery_ClusterModulePlayable_IsReHydratedThroughItsOwner_WithNoDuration()
+    {
+        // The cluster half of the same defect: what a cluster row holds for a module uri is OUR OWN publish from a
+        // previous session — a title and a duration we wrote down once. The owner is re-asked before it becomes the
+        // restored now-playing, so the seeded row is never last session's stale display data.
+        using var c = Make(out var host, out var proj, out _, ctx: Ctx());
+        var errors = new List<PlaybackErrorInfo>();
+        c.OnPlaybackError = errors.Add;
+        c.IsPlayableHere = _ => true;
+        var asked = new List<string>();
+        c.HydratePlayable = (uri, _) => { asked.Add(uri); return Task.FromResult<Track?>(ModuleAnswer()); };
+
+        proj.OnCluster(Cluster("", Remote(ModuleUri, dur: 206_000), pos: 0) with { ContextUri = ModuleUri });
+
+        Assert.True(await Settle(() => proj.CurrentTrack?.Title == "Claude FM — 24/7 lofi"),
+            "the cluster row was seeded verbatim; title = " + proj.CurrentTrack?.Title);
+        Assert.Contains(ModuleUri, asked);
+        Assert.Equal(0, proj.CurrentTrack!.DurationMs);
+        Assert.Equal("Anthropic", Assert.Single(proj.CurrentTrack!.Artists).Name);
+        Assert.False(proj.IsPlaying);                 // seeded, never started
+        Assert.DoesNotContain("play", host.Calls);
+        Assert.Empty(errors);
     }
 
     [Fact]

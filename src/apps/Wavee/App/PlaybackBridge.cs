@@ -110,6 +110,9 @@ public sealed class PlaybackBridge
     IPlaybackPlayer? _restoreWiredTo;
     PlaybackController? _restoreController;
     bool _lastPushIsPlaying;   // pause-edge detector: play→pause is a snapshot write gate
+    bool _lastPushIsLive;      // rising-edge detector for live-ness — the tune-in anchor (see TunedInAtMs)
+    // The live-edge hysteresis machine's carried state (see IsBehindLive). Folded forward one window report at a time.
+    Wavee.Backend.Playback.LiveEdgeState _liveEdge;
 
     // ── UI signals (read by components) ─────────────────────────────────────────────────────────────────────────────
     public Signal<Track?> CurrentTrack { get; } = new(null);
@@ -141,9 +144,35 @@ public sealed class PlaybackBridge
     public Signal<bool> CanSeek { get; } = new(true);
     /// <summary>Is what is playing a LIVE broadcast (an internet radio station, a YouTube/Twitch live channel)?
     /// Mirrors <see cref="IPlaybackState.IsLive"/> — a fact the SOURCE stated, never inferred from a 0 duration, which
-    /// is also what an unknown length looks like. Drives the player bar's LIVE chip; <see cref="CanSeek"/> is already
-    /// false while it is true, so no surface has to combine the two.</summary>
+    /// is also what an unknown length looks like. Drives the player bar's LIVE chip; <see cref="CanSeek"/> already
+    /// folds the DVR window in (see <see cref="Live"/>), so no surface has to combine the two.</summary>
     public Signal<bool> IsLive { get; } = new(false);
+
+    /// <summary>The live broadcast's TIMELINE — the DVR window, the live edge and the playhead inside it. Mirrors
+    /// <see cref="IPlaybackState.Live"/>; <c>default</c> means "not a live broadcast".
+    /// <para>This is what turns the seek bar into a DVR rail: <see cref="LiveWindow.HasWindow"/> decides rail-vs-line,
+    /// <see cref="LiveWindow.BehindMs"/> decides LIVE-pill-vs-"GO LIVE −m:ss", and <c>LiveRail.Frac/Seek</c> do the
+    /// arithmetic. One record rather than four signals, so the bar can never draw a window from the previous variant
+    /// against this one's edge.</para></summary>
+    public Signal<LiveWindow> Live { get; } = new(default);
+
+    /// <summary>Has the playhead actually FALLEN BEHIND the live edge? The one stable answer every live surface reads
+    /// — the right-hand slot to choose the LIVE mark or the "GO LIVE −m:ss" action, the DVR rail to decide whether to
+    /// draw a measured position or snap full.
+    /// <para>It is NOT <c>Live.BehindMs &gt; someThreshold</c>. A healthy live playhead rides 5–8 s inside a window
+    /// that republishes several times a second, so a raw comparison anywhere in that band flips a few times a second
+    /// and takes the seek row's layout with it. <see cref="LiveEdgeState"/> owns the decision — wide enter line,
+    /// narrow return line, two consecutive reports to confirm — and this signal is the only thing the UI may read.
+    /// Computed in <c>PushState</c>, and reset outright by <see cref="GoLive"/>.</para></summary>
+    public Signal<bool> IsBehindLive { get; } = new(false);
+
+    /// <summary>Unix ms at the moment the CURRENT live broadcast was tuned in (0 = nothing live is playing).
+    /// <para>The left-hand time label reads <c>now − TunedInAtMs</c> while live, because "elapsed" for a broadcast can
+    /// only ever mean "how long you have been listening": the stream's own position is a wall-clock number that started
+    /// before the app did, and the ordinary 0-anchored elapsed would show a meaningless six-hour count. Anchored when
+    /// live-ness begins — the track boundary OR the moment a source states live-ness for a track already playing,
+    /// whichever comes first, because a module's <c>isLive</c> lands one push after the boundary.</para></summary>
+    public Signal<long> TunedInAtMs { get; } = new(0L);
     public Signal<string?> ActiveDeviceId { get; } = new(null);
     /// <summary>The bitrate of the stream ACTUALLY PLAYING (0 = unknown / not this device). See
     /// <see cref="StreamFormat"/> for the truthfulness envelope both of these live inside.</summary>
@@ -1173,6 +1202,29 @@ public sealed class PlaybackBridge
         CanSkipPrev.Value = s.CanSkipPrev;
         CanSeek.Value = s.CanSeek && s.RecoveryKind == PlaybackRecoveryKind.None;
         IsLive.Value = s.IsLive;
+        Live.Value = s.Live;
+        // The live-edge decision, folded ONCE here so `TimeText` and `SeekBar` read one stable fact instead of each
+        // re-deriving "behind" from the raw distance (which breathes either side of any single threshold — the flicker
+        // this machine exists to end). A track boundary starts the next playable from the settled AT-EDGE state.
+        // A seek in flight makes every window report STALE — it still describes the position the seek has already left
+        // — so the machine holds rather than folding fiction (the same suppression PushPosition applies to the raw
+        // position tick, applied to the same stale fact).
+        if (trackBoundary) _liveEdge = Wavee.Backend.Playback.LiveEdgeState.AtEdge;
+        if (!SeekLatchArmed)
+        {
+            _liveEdge = Wavee.Backend.Playback.LiveEdgeState.Next(_liveEdge, s.Live.BehindMs, s.Live.IsLive && s.Live.HasWindow);
+            IsBehindLive.Value = _liveEdge.IsBehind;
+        }
+        // The tune-in anchor. Set on the RISING edge of live-ness (not merely at a track boundary): a module states
+        // isLive at resolve, which lands one push AFTER the boundary, so anchoring only at the boundary would leave the
+        // elapsed label counting from zero-that-never-started. Cleared the moment nothing live is playing, so a stale
+        // anchor can never make an ordinary track read as a six-hour broadcast.
+        if (s.IsLive)
+        {
+            if (!_lastPushIsLive || trackBoundary) TunedInAtMs.Value = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        }
+        else TunedInAtMs.Value = 0L;
+        _lastPushIsLive = s.IsLive;
         ActiveDeviceId.Value = s.ActiveDeviceId;
         StreamBitrateKbps.Value = s.StreamBitrateKbps;
         StreamFormat.Value = s.StreamFormat;
@@ -1318,6 +1370,31 @@ public sealed class PlaybackBridge
     {
         _seekLatchTargetMs = targetMs;
         _seekLatchDeadlineTick = Environment.TickCount64 + SeekLatchWindowMs;
+    }
+
+    /// <summary>Is a committed seek still in flight (the latch armed and not yet expired)? While it is, every position
+    /// the source reports — including the one inside <see cref="LiveWindow"/> — describes where playback WAS.</summary>
+    bool SeekLatchArmed => _seekLatchTargetMs >= 0 && Environment.TickCount64 < _seekLatchDeadlineTick;
+
+    /// <summary>Jump to the live edge — the "GO LIVE −m:ss" button's whole verb.
+    /// <para>Expressed as the ordinary committed seek (to <see cref="LiveWindow.LiveEdgeMs"/>) rather than a new
+    /// transport command, which keeps ONE path through the controller: the local/remote routing, the Connect
+    /// <c>seek_to</c> forward and the seek latch all apply unchanged. The video host recognises a seek AT the live edge
+    /// and honours it with Media Foundation's own <c>GoLiveAsync</c> (which lands a few seconds inside the edge instead
+    /// of on top of it) — so the precise behaviour is the backend's, without a second verb to keep in sync.</para>
+    /// <para>A no-op when nothing live is playing, or when the source has no window to jump within: there is no
+    /// "behind" to leave.</para></summary>
+    public void GoLive()
+    {
+        LiveWindow w = Live.Peek();
+        if (!w.IsLive || w.LiveEdgeMs <= 0) return;
+        NoteSeek(w.LiveEdgeMs);
+        // The user asked to be AT the edge, so the machine is AT the edge from this instant — the in-flight seek's own
+        // pre-seek window reports still describe the position it has already left, and letting them answer "still
+        // behind" would leave the GO LIVE button on screen for the seconds it takes the edge to land.
+        _liveEdge = Wavee.Backend.Playback.LiveEdgeState.AtEdge;
+        IsBehindLive.Value = false;
+        _ = Player.SeekAsync(w.LiveEdgeMs, SeekMode.Accurate);
     }
 
     void PushPosition(long ms)

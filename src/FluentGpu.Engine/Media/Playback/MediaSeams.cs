@@ -383,6 +383,9 @@ public sealed record MediaOpenOptions
     public IAbrPolicy? Abr { get; init; }
     /// <summary>Live-latency target.</summary>
     public LiveLatencyMode LiveLatency { get; init; } = LiveLatencyMode.Standard;
+    /// <summary>Whether the source is live — the CALLER's declaration, which outranks the backend's own inference.
+    /// Carried here from <see cref="MediaSource.WithLiveness"/> by <c>MediaPlayer.OpenAsync</c>.</summary>
+    public SourceLiveness Liveness { get; init; } = SourceLiveness.Auto;
     /// <summary>The DRM license relay (spec §9.2), if the source is protected.</summary>
     public Func<LicenseRequest, ValueTask<LicenseResponse>>? LicenseRelay { get; init; }
 }

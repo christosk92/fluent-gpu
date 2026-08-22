@@ -52,15 +52,15 @@ public enum PlacementSet : byte
 public enum TransportOwner : byte
 {
     /// <summary>The global 72-DIP player bar (<c>Features/Shell/PlayerBar.cs</c>) — the DEFAULT owner, and the owner
-    /// for every in-window video placement (Docked / Floating): those surfaces sit in the SAME window as the bar, and
-    /// the bar is the app's primary, always-visible transport, so the video card suppresses its own.</summary>
+    /// whenever no video surface is mounted at all. It is the app's primary, always-visible transport and yields only
+    /// to a FULL-BLEED surface in its own window (<see cref="Fullscreen"/>), where the shell unmounts it outright.</summary>
     GlobalBar = 0,
     /// <summary>An IN-WINDOW video card's own transport — the docked rail card (<c>DockedVideoSurface</c>) and the
     /// floating mini player (<c>InWindowVideoPip</c>) both declare this identity so they can ASK whether they own the
-    /// transport. <see cref="PlacementCore.TransportOwnerFor"/> never answers yes — see <see cref="GlobalBar"/> for why
-    /// the bar keeps it. Keeping the value is what lets the single-transport gate enumerate every claimant, and what
-    /// makes flipping the policy a one-line change in <see cref="PlacementCore.TransportOwnerFor"/> rather than a hunt
-    /// through the surfaces.</summary>
+    /// transport. <see cref="PlacementCore.TransportOwnerFor"/> answers YES for both, so each card renders its own
+    /// auto-hiding hover chrome over the picture — the controls that only make sense on a video (aspect, fullscreen,
+    /// the live DVR rail). The global bar keeps rendering below it (see its owner test): an overlay inside a card is
+    /// not a second bar stacked in the same band, which is what the single-transport rule is about.</summary>
     Docked = 1,
     /// <summary>The detached pop-out window's stage. That window has NO player bar of its own, so the video's transport
     /// is the session transport while the video lives there.</summary>
@@ -437,14 +437,22 @@ public static class PlacementCore
     /// WINDOW, not per session: the main window's player bar keeps its own scrub row and play/pause while the video is
     /// popped out, because the two live in different windows and were never stacked. <c>PlayerBar</c> therefore treats
     /// <see cref="TransportOwner.PopOut"/> as "not my window's owner" and keeps rendering — see its remark.</item>
-    /// <item>Docked / Floating / None → <see cref="TransportOwner.GlobalBar"/>: those surfaces share the window with the
-    /// 72-DIP bar, and the bar — full-width, always visible, never scrolled away — is the better transport of the two.
-    /// The card suppresses its own instead (<c>MediaPlayerElement.SuppressTransport</c>).</item>
+    /// <item>Docked / Floating → <see cref="TransportOwner.Docked"/>: the docked rail card and the in-window mini
+    /// player carry their OWN auto-hiding hover chrome (play/pause · volume · LIVE chip · Go live · fullscreen · the
+    /// DVR rail when a live window exists). That chrome is an OVERLAY ON THE VIDEO, not a second bar stacked under it:
+    /// it is transient (3 s auto-hide), it sits inside the card's own bounds, and its controls are the ones that only
+    /// make sense over a picture. The 72-DIP bar keeps rendering underneath — see <c>PlayerBar</c>'s owner test, which
+    /// admits <see cref="TransportOwner.Docked"/> for exactly the reason it admits <see cref="TransportOwner.PopOut"/>:
+    /// the two were never stacked, and stripping the always-visible session transport because a video card is on screen
+    /// would be a regression, not a fix. The stacked-double-bar defect this whole model exists to prevent is the
+    /// FULLSCREEN one, where the bar and the video's chrome really did occupy the same band.</item>
+    /// <item>None → <see cref="TransportOwner.GlobalBar"/>: no video surface exists, so there is nothing else to own it.</item>
     /// </list></summary>
     public static TransportOwner TransportOwnerFor(SurfacePlacement resolved) => resolved switch
     {
         SurfacePlacement.Fullscreen => TransportOwner.Fullscreen,
         SurfacePlacement.Detached => TransportOwner.PopOut,
+        SurfacePlacement.Docked or SurfacePlacement.Floating => TransportOwner.Docked,
         _ => TransportOwner.GlobalBar,
     };
 

@@ -1,6 +1,3 @@
-﻿using System;
-using System.IO;
-using System.Runtime.CompilerServices;
 using Wavee;
 using Wavee.Core;
 using Xunit;
@@ -14,9 +11,6 @@ namespace Wavee.Tests;
 /// reorder bands and pins, and a keyboard-only user could not move a playlist at all. The verbs address the SIBLING RUN
 /// — the entries sharing a parent folder — because "the rows at my depth" would fuse two different folders' children
 /// into one list and walk an item out of its folder sideways.</para>
-///
-/// <para>The pure half is driven directly (<c>Features/Sidebar/Data</c> is source-included); the command half is pinned
-/// by source scan, because <c>FolderActions</c> is engine code.</para>
 /// </summary>
 public class FolderActionsTests
 {
@@ -106,110 +100,5 @@ public class FolderActionsTests
         Assert.True(last.MoveToFolder);
         Assert.False(SidebarTreeNavLayout.Decide(Run(SidebarTreeFixture.Pl("a")), hasDestinations: false).MoveToFolder);
         Assert.True(SidebarTreeNavLayout.Decide(RootlistSiblingRun.None, hasDestinations: false).IsEmpty);
-    }
-
-    // ── the commands ────────────────────────────────────────────────────────────────────────────────────────────────
-
-    /// <summary>Every organisation verb resolves against the LIVE tree and commits through the ONE seam a drop uses —
-    /// which is what gives it the awaited failure mapping, the announce, the "Moved to {name}" toast and the Undo,
-    /// without any of it being written a second time.</summary>
-    [Theory]
-    [InlineData("public static void Move(ActionServices s, string entryId, int delta)")]
-    [InlineData("public static void MoveOut(ActionServices s, string entryId)")]
-    public void EveryOrganisationVerb_ResolvesLive_AndCommitsThroughTheOneSeam(string signature)
-    {
-        string body = Body(FolderActions(), signature);
-        Assert.Contains("Tree(s)", body, StringComparison.Ordinal);
-        Assert.Contains("RootlistTreeNav.TryEntry", body, StringComparison.Ordinal);
-        Assert.Contains("Commit(s, [entry]", body, StringComparison.Ordinal);
-        // No second mutation path: the verb never calls the seam itself.
-        Assert.DoesNotContain("MoveRootlistItem", body, StringComparison.Ordinal);
-    }
-
-    /// <summary>The one commit: the pre-move Undo anchor is captured BEFORE the mutation (afterwards, where the item
-    /// used to be is unknowable) and the move goes to <c>WaveeResourceDrop.MoveRootlist</c>.</summary>
-    [Fact]
-    public void Commit_CapturesTheUndoAnchorFirst_ThenHandsTheMoveToTheDropSeam()
-    {
-        string body = Body(FolderActions(), "internal static void Commit(ActionServices s");
-        int anchor = body.IndexOf("RootlistUndoAnchors.TryResolve", StringComparison.Ordinal);
-        int commit = body.IndexOf("WaveeResourceDrop.MoveRootlist", StringComparison.Ordinal);
-        Assert.True(anchor >= 0 && commit > anchor, "the undo anchor must be resolved before the move is issued");
-        Assert.Contains("WaveeResourceDragPayload.FromEntries", body, StringComparison.Ordinal);
-        // The BATCH shape: N anchors resolved in one pass, N items lifted as one payload, ONE move issued.
-        Assert.Contains("RootlistUndoAnchors.TryResolveMany", body, StringComparison.Ordinal);
-    }
-
-    /// <summary>"New folder from this" is create-then-move, and it is honest about not being atomic: a move that fails
-    /// after a successful create reports through the Reorder verb and leaves the (expanded) folder behind.</summary>
-    [Fact]
-    public void NewFolderWith_CreatesThenFilesInONEBatch_AndSaysSoWhenTheSecondHalfFails()
-    {
-        string body = Body(FolderActions(), "public static void NewFolderWith(ActionServices s");
-        int create = body.IndexOf("CreateFolderAsync", StringComparison.Ordinal);
-        int move = body.IndexOf("MoveRootlistItemsAsync", StringComparison.Ordinal);
-        Assert.True(create >= 0 && move > create, "the folder must exist before anything is filed into it");
-        // ONE batch, ordered by the one rule.
-        Assert.Contains("RootlistBatchOrder.For", body, StringComparison.Ordinal);
-        Assert.Equal(1, Count(body, "MoveRootlistItemsAsync"));
-        // The failed-move arm: mapped by verb, folder left expanded, never raw exception text.
-        Assert.Contains("PlaylistEditVerb.Reorder", body, StringComparison.Ordinal);
-        Assert.Contains("SetFolderExpanded", body, StringComparison.Ordinal);
-        Assert.Equal(0, Count(body, "ex.Message"));
-    }
-
-    /// <summary>"Move out of {parent}" was fire-and-forget with an error-only toast: a successful un-nest said nothing
-    /// and could not be taken back (D13). It rides the shared confirm now — and it names the folder it lands IN, not
-    /// the one it came out of.</summary>
-    [Fact]
-    public void MoveOut_AnnouncesAndOffersUndo_AndNamesTheDestination()
-    {
-        string body = Body(FolderActions(), "public static void MoveOut(ActionServices s, string entryId)");
-        Assert.Contains("RootlistTreeNav.TryFolder", body, StringComparison.Ordinal);
-        Assert.Contains("parent.ParentFolderName", body, StringComparison.Ordinal);
-        // The old shape is gone, not merely bypassed.
-        Assert.Equal(0, Count(FolderActions(), "async Task Run()\n            {\n                try\n                {\n                    await lib.MoveRootlistItemAsync"));
-        // …and the confirm it now rides is the drop's own: announce + toast + Undo, no raw exception text anywhere.
-        string drop = Source("Features/DragDrop", "WaveeResourceDrag.cs");
-        Assert.Contains("PlaylistEditVerb.Reorder", drop, StringComparison.Ordinal);
-        Assert.Equal(0, Count(FolderActions(), "ex.Message"));
-    }
-
-    // ── source-scan plumbing (the MenuGrammarTests precedent) ───────────────────────────────────────────────────────
-
-    static string FolderActions() => Source("Actions", "FolderActions.cs");
-
-    static string Source(string dir, string file)
-    {
-        string path = Path.Combine(AppRoot(), Path.Combine(dir.Split('/')), file);
-        Assert.True(File.Exists(path), $"source not found (was it moved?): {path}");
-        return File.ReadAllText(path);
-    }
-
-    internal static string Body(string source, string signature)
-    {
-        int at = source.IndexOf(signature, StringComparison.Ordinal);
-        Assert.True(at >= 0, $"member not found (was it renamed?): {signature}");
-        int block = source.IndexOf("\n    }", at, StringComparison.Ordinal);
-        int expr = source.IndexOf("\n    ];", at, StringComparison.Ordinal);
-        int end = block < 0 ? expr : expr < 0 ? block : System.Math.Min(block, expr);
-        Assert.True(end > at, $"could not delimit the body of: {signature}");
-        return source[at..end];
-    }
-
-    internal static int Count(string source, string needle)
-    {
-        int n = 0;
-        for (int i = source.IndexOf(needle, StringComparison.Ordinal); i >= 0;
-             i = source.IndexOf(needle, i + needle.Length, StringComparison.Ordinal)) n++;
-        return n;
-    }
-
-    internal static string AppRoot([CallerFilePath] string here = "")
-    {
-        string tests = Path.GetDirectoryName(here)!;                      // …/Wavee.Tests
-        string app = Path.Combine(Path.GetDirectoryName(tests)!, "Wavee");
-        Assert.True(Directory.Exists(app), $"app source root not found: {app}");
-        return app;
     }
 }

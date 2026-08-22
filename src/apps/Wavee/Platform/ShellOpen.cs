@@ -6,6 +6,37 @@ namespace Wavee;
 
 static class ShellOpen
 {
+    /// <summary>Is this text a web link the shell may be handed? Absolute, <c>http</c>/<c>https</c> only, with a host —
+    /// nothing else.
+    ///
+    /// <para>This guard is the whole reason <see cref="OpenUrl"/> exists. The strings it opens come from a MODULE — a
+    /// full-trust child process, but one whose page document is data crossing a pipe — and
+    /// <c>UseShellExecute = true</c> on arbitrary text is a shell-execute injection: it happily launches
+    /// <c>file:</c>, a UNC path, an executable, or a registered protocol handler. So the answer is a whitelist of two
+    /// schemes rather than a blacklist of the bad ones, and a refused string opens NOTHING rather than falling back
+    /// to some other launch.</para></summary>
+    /// <param name="url">The candidate text (may be null).</param>
+    public static bool IsWebUrl(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url)) return false;
+        if (!Uri.TryCreate(url, UriKind.Absolute, out Uri? parsed)) return false;
+        if (parsed.Scheme != Uri.UriSchemeHttp && parsed.Scheme != Uri.UriSchemeHttps) return false;
+        return parsed.Host.Length > 0;
+    }
+
+    /// <summary>Open a web link in the user's browser. Silently refuses anything <see cref="IsWebUrl"/> rejects, and
+    /// is best-effort by design: a missing browser or a denied launch must never throw into the UI thread that invoked
+    /// a page action.</summary>
+    /// <param name="url">The link to open.</param>
+    /// <returns>True when the launch was attempted (the string passed the guard).</returns>
+    public static bool OpenUrl(string? url)
+    {
+        if (!IsWebUrl(url)) return false;
+        try { Process.Start(new ProcessStartInfo(url!) { UseShellExecute = true }); }
+        catch { }
+        return true;
+    }
+
     public static void OpenFolderOf(string path)
     {
         try

@@ -186,6 +186,15 @@ public static class ModuleRunner
                 return new ValueTask<RpcUnit>(RpcUnit.Value);
             });
 
+        connection.OnRequest(ModuleMethods.Page, SdkJsonContext.Default.PageParams,
+            SdkJsonContext.Default.ModulePageDoc, async (PageParams p, CancellationToken ct) =>
+            {
+                ModulePageDoc? doc = await module.GetPageAsync(p?.EntityId ?? string.Empty, ct).ConfigureAwait(false);
+                // Rejecting here is the point: an over-budget page must never reach the wire half-rendered.
+                if (doc is not null) ModulePageBudget.Validate(doc);
+                return doc!;
+            });
+
         connection.OnRequest(ModuleMethods.Diagnostics, SdkJsonContext.Default.RpcUnit,
             SdkJsonContext.Default.DiagnosticsReport,
             (RpcUnit _, CancellationToken ct) => module.GetDiagnosticsAsync(ct));
@@ -235,9 +244,10 @@ public static class ModuleRunner
 
         string command = args.Length > 0 ? args[0] : string.Empty;
         string argument = args.Length > 1 ? args[1] : string.Empty;
-        if (command is not ("match" or "resolve") || argument.Length == 0)
+        if (command is not ("match" or "resolve" or "page") || argument.Length == 0)
         {
-            Console.Error.WriteLine("usage: <module> match <input> | <module> resolve <playableId>");
+            Console.Error.WriteLine(
+                "usage: <module> match <input> | <module> resolve <playableId> | <module> page <entityId>");
             Console.Error.WriteLine($"       <module> {ModuleSwitch}   (spoken by the Wavee host over stdio)");
             return 2;
         }
@@ -253,6 +263,14 @@ public static class ModuleRunner
                 MatchResult? match = await module.MatchAsync(argument, ct).ConfigureAwait(false);
                 WriteJsonLine(stdout, match!, SdkJsonContext.Default.MatchResult);
                 return match is null ? 1 : 0;
+            }
+
+            if (command == "page")
+            {
+                ModulePageDoc? doc = await module.GetPageAsync(argument, ct).ConfigureAwait(false);
+                if (doc is not null) ModulePageBudget.Validate(doc);
+                WriteJsonLine(stdout, doc!, SdkJsonContext.Default.ModulePageDoc);
+                return doc is null ? 1 : 0;
             }
 
             ResolvedPlayable resolved = await module.ResolveAsync(argument, ct).ConfigureAwait(false);

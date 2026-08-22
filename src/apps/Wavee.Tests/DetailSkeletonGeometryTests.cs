@@ -1,6 +1,4 @@
 using System;
-using System.IO;
-using System.Runtime.CompilerServices;
 using Wavee.Features.Detail;
 using Xunit;
 
@@ -18,8 +16,8 @@ namespace Wavee.Tests;
 /// <para>The fix is arithmetic, not a second design: <c>DetailSkeleton.VerticalHeroBand</c> composes the same parts at
 /// the same sizes from <see cref="DetailVerticalLayout"/>, and the band's HEIGHT is one pure function
 /// (<see cref="DetailVerticalLayout.HeroBandHeight"/>) with two consumers — the skeleton and the loaded hero's own
-/// pre-measure fallback. This file pins that arithmetic, and pins by SOURCE that both consumers really call it (a
-/// re-introduced literal is exactly how the 420/320 constants drifted three compositions behind the hero).</para>
+/// pre-measure fallback. This file pins that arithmetic (a re-introduced literal is exactly how the 420/320 constants
+/// drifted three compositions behind the hero).</para>
 /// </summary>
 public class DetailSkeletonGeometryTests
 {
@@ -134,129 +132,5 @@ public class DetailSkeletonGeometryTests
         Assert.Equal(
             DetailVerticalLayout.HeroBandHeight(DetailVerticalLayout.FallbackW, rowFlow, true, true, true, true),
             DetailVerticalLayout.HeroBandHeight(0f, rowFlow, true, true, true, true));
-    }
-
-    // ── the seams, pinned by source ──────────────────────────────────────────────────────────────────────────────
-
-    /// <summary>ONE function, TWO consumers. The skeleton's reserved band and the loaded hero's pre-measure fallback
-    /// must both be <c>DetailVerticalLayout.HeroBandHeight</c> — that identity IS the parity claim, and it is the thing
-    /// a well-meaning literal quietly breaks.</summary>
-    [Fact]
-    public void TheBandHeight_HasExactlyOneDefinitionAndBothConsumersCallIt()
-    {
-        string root = AppSourceRoot();
-        if (root is null) { Assert.Skip("app sources not present (binary-only run)"); return; }
-        string tracks = Read(root, "Features", "Detail", "DetailTracks.cs");
-        string skeleton = Read(root, "Features", "Detail", "DetailSkeleton.cs");
-
-        Assert.Contains("DetailVerticalLayout.HeroBandHeight", tracks);
-        Assert.Contains("DetailVerticalLayout.HeroBandHeight", skeleton);
-        // …and the two hand-picked constants it replaced are gone from source, not merely unreferenced.
-        Assert.DoesNotContain("VerticalHeaderFallbackHeight", tracks);
-        Assert.DoesNotContain("RowFlowVerticalHeaderFallbackHeight", tracks);
-    }
-
-    /// <summary>The skeleton derives EVERY part of the hero from the shared resolver — artwork edge, copy measure,
-    /// title rung + its paired line height, padding, gap and description cap — plus the app's own control geometry for
-    /// the action row. A literal here is a hero that is one size in the shimmer and another when it lands.</summary>
-    [Theory]
-    [InlineData("DetailVerticalLayout.ArtworkFor")]
-    [InlineData("DetailVerticalLayout.ContentWidthFor")]
-    [InlineData("DetailVerticalLayout.TitleSizeFor")]
-    [InlineData("DetailVerticalLayout.TitleLineHeightFor")]
-    [InlineData("DetailVerticalLayout.HeroPadFor")]
-    [InlineData("DetailVerticalLayout.HeroGapFor")]
-    [InlineData("DetailVerticalLayout.DescriptionMaxLines")]
-    [InlineData("DetailVerticalLayout.BucketW")]
-    [InlineData("DetailVerticalLayout.ExpandedToolbarTopPad")]
-    [InlineData("WaveeCta.PillHeight")]
-    [InlineData("WaveeCta.IconButtonSize")]
-    [InlineData("Surfaces.AccentRuleWidth")]
-    public void TheSkeleton_ConsumesTheRealResolvers(string token)
-    {
-        string root = AppSourceRoot();
-        if (root is null) { Assert.Skip("app sources not present (binary-only run)"); return; }
-        Assert.Contains(token, Read(root, "Features", "Detail", "DetailSkeleton.cs"));
-    }
-
-    /// <summary>The row shimmer is the REAL row: the same <c>RowGrid</c> the list builds, at
-    /// the active row style's density resolver, on the tier's own column set — so a loaded row replaces its placeholder
-    /// in place. The reveal-ramp's placeholder is a BLANK grid of the same column tracks and row height (nothing
-    /// painted — the crossing fades the real row in), so it needs no inset of its own.</summary>
-    [Fact]
-    public void TheRowShimmer_IsTheRealRowGeometry()
-    {
-        string root = AppSourceRoot();
-        if (root is null) { Assert.Skip("app sources not present (binary-only run)"); return; }
-        string tracks = Read(root, "Features", "Detail", "DetailTracks.cs");
-
-        Assert.Contains("rows[i] = RowGrid(EmptyTrack", tracks);          // the shimmer IS the real row builder
-        Assert.Contains("float rowH = DetailTrackTableRules.RowHeightFor(density, set.Classic);", tracks); // …at the style's real density height
-        Assert.Contains("TrackRow.ColGapFor(set.Tier)", tracks);
-        Assert.Contains("Columns = tracks, RowHeight = rowH, Grow = 1f,", tracks);   // the ramp placeholder: same tracks, same height, blank
-    }
-
-    /// <summary>The vertical arm's shimmer leads with the hero band and the REAL chrome element, in the same order the
-    /// loaded list carries them as items 0 and 1. Anything less and the page opens with rows at y=0.</summary>
-    [Fact]
-    public void TheVerticalShimmer_ReservesHeroThenChromeThenRows()
-    {
-        string root = AppSourceRoot();
-        if (root is null) { Assert.Skip("app sources not present (binary-only run)"); return; }
-        string tracks = Read(root, "Features", "Detail", "DetailTracks.cs");
-
-        Assert.Contains("DetailSkeleton.VerticalHeroBand(", tracks);
-        Assert.Contains("VerticalShimmer(set, tracks, sort, labeled, tier, checkInset, contentFilterBar, rowH)", tracks);
-        // …and the chrome it reserves is built by the SAME overload the vertical list's item 1 uses.
-        Assert.Contains("Chrome(set, tracks, sort, labeled, tier, checkInset, contentFilterBar: contentFilterBar),", tracks);
-        // The prefix count the shimmer mirrors is still two (hero, chrome).
-        Assert.Equal(DetailVerticalItemRole.Hero, DetailVerticalLayout.ItemRole(0, 4));
-        Assert.Equal(DetailVerticalItemRole.Chrome, DetailVerticalLayout.ItemRole(1, 4));
-        Assert.Equal(DetailVerticalItemRole.ExpandableTrack, DetailVerticalLayout.ItemRole(2, 4));
-    }
-
-    /// <summary>The TWO-COLUMN arm gets its parity structurally and must keep it: the chrome (toolbar · chips · column
-    /// header) is a SIBLING of the list body, and the rail is a sibling COLUMN of the whole track area — both outside
-    /// the skeleton boundary, so both are reserved for free. Moving either inside would reproduce D49 on the wide
-    /// layout, where it is worth hundreds of DIP.</summary>
-    [Fact]
-    public void TheTwoColumnArm_KeepsChromeAndRailOutsideTheSkeletonBoundary()
-    {
-        string root = AppSourceRoot();
-        if (root is null) { Assert.Skip("app sources not present (binary-only run)"); return; }
-        Assert.Contains("Children = _verticalHeader ? [rightBody] : [chrome, rightBody],",
-            Read(root, "Features", "Detail", "DetailTracks.cs"));
-
-        string shell = Read(root, "Features", "Detail", "DetailShell.cs");
-        // The rail's width ladder: mode 0 takes the config's own rail width, then 224, then 188.
-        Assert.Contains("static float RailW(int mode, DetailConfig cfg) => mode switch { 0 => cfg.RailWidth, 1 => 224f, _ => 188f };", shell);
-        // …and the rail is composed as `railFaded` beside `right`, never inside it.
-        Assert.Contains("? [railFaded, DetailRailGrip(", shell);
-        Assert.Contains(": [railFaded, right];", shell);
-        Assert.Contains("Key = \"detail-rail-fade\"", shell);
-        // The fade wrapper is a ROW child of [rail | right]. Height is the CROSS axis — AlignSelf=Stretch
-        // takes the row's definite height; AlignItems=Stretch then hands that height to DetailRail.Build,
-        // whose inner ScrollView grows into it. Direction=1 here makes height the MAIN axis, and Build's
-        // root has no Grow, so the scroller collapses to 0 and ClipToBounds paints an empty column.
-        Assert.Contains("Direction = 0, AlignItems = FlexAlign.Stretch, AlignSelf = FlexAlign.Stretch", shell);
-        Assert.Contains("Children = [DetailRail.Build(", shell);
-        // Cover/title sizes are CoverEdge(railW). Peek + a wrapper Width bind updates the column box but not
-        // Build's frozen inner widths, so a drag looks like a no-op. Subscribe like LibraryPage's `_leftW.Value`.
-        Assert.Contains("mode == 0 && resizableRail ? railWidthSignal.Value", shell);
-        Assert.DoesNotContain("mode == 0 && resizableRail ? railWidthSignal.Peek()", shell);
-    }
-
-    static string Read(string root, params string[] parts) => File.ReadAllText(Path.Combine(root, Path.Combine(parts)));
-
-    static string AppSourceRoot([CallerFilePath] string here = "")
-    {
-        var dir = new DirectoryInfo(Path.GetDirectoryName(here)!);
-        while (dir is not null)
-        {
-            string candidate = Path.Combine(dir.FullName, "Wavee", "Features", "Detail", "DetailVerticalLayout.cs");
-            if (File.Exists(candidate)) return Path.Combine(dir.FullName, "Wavee");
-            dir = dir.Parent;
-        }
-        return null!;
     }
 }

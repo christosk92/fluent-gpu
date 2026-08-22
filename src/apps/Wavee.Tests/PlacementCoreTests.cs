@@ -862,14 +862,34 @@ public class PlacementCoreTests
         Assert.False(PlacementCore.OwnsTransport(TransportOwner.GlobalBar, SurfacePlacement.Fullscreen));
     }
 
-    /// <summary>In-window placements leave the transport with the bar — it is full-width, always visible and never
-    /// scrolled away, so the card suppresses its own rather than the other way round.</summary>
+    /// <summary>An in-window video card owns its OWN hover chrome — the controls that only make sense over a picture
+    /// (aspect, fullscreen, the live DVR rail), auto-hiding inside the card's bounds. The docked rail card and the
+    /// floating mini player both declare <see cref="TransportOwner.Docked"/>, so both get it.
+    /// <para>This is the change that turned the docked YouTube card from a picture with no controls into a real video
+    /// surface: <c>DockedVideoSurface</c> suppresses its transport iff it is NOT the owner, and the owner used to be
+    /// <see cref="TransportOwner.GlobalBar"/> for every in-window placement, i.e. always suppressed.</para></summary>
     [Fact]
-    public void SingleTransport_InWindowPlacementsLeaveItWithTheBar()
+    public void SingleTransport_InWindowVideoCardsOwnTheirOwnChrome()
     {
-        Assert.Equal(TransportOwner.GlobalBar, PlacementCore.TransportOwnerOf(At(SurfacePlacement.Docked)));
-        Assert.Equal(TransportOwner.GlobalBar, PlacementCore.TransportOwnerOf(At(SurfacePlacement.Floating)));
-        Assert.Equal(TransportOwner.GlobalBar, PlacementCore.TransportOwnerOf(Off()));
+        Assert.Equal(TransportOwner.Docked, PlacementCore.TransportOwnerOf(At(SurfacePlacement.Docked)));
+        Assert.Equal(TransportOwner.Docked, PlacementCore.TransportOwnerOf(At(SurfacePlacement.Floating)));
+    }
+
+    /// <summary>With no video surface mounted there is nothing else to own the transport, so it is the bar's.</summary>
+    [Fact]
+    public void SingleTransport_WithNoSurfaceItIsTheBars()
+        => Assert.Equal(TransportOwner.GlobalBar, PlacementCore.TransportOwnerOf(Off()));
+
+    /// <summary>The docked card's chrome does NOT disarm the global player bar. An overlay inside a card is not a
+    /// second bar stacked in the same band — the stacked-double-bar defect this model prevents is the FULLSCREEN one,
+    /// where the shell keeps the 72-DIP bar visible under a full-bleed surface's own transport.
+    /// <para>Pinned here because it is the one thing a reader of <c>TransportOwnerFor</c> alone would get wrong:
+    /// <c>PlayerBar</c> renders for GlobalBar, PopOut AND Docked, and yields only to Fullscreen.</para></summary>
+    [Fact]
+    public void SingleTransport_ADockedCardDoesNotDisarmTheGlobalBar()
+    {
+        foreach (var p in new[] { SurfacePlacement.Docked, SurfacePlacement.Floating })
+            Assert.NotEqual(TransportOwner.Fullscreen, PlacementCore.TransportOwnerFor(p));
     }
 
     /// <summary>The pop-out is a SEPARATE OS window, so it carries the transport for its own window while the main

@@ -33,6 +33,7 @@ public sealed class ModuleHost : IDisposable, IModuleHostSink
     readonly Dictionary<string, ModuleProcess> _processes = new(StringComparer.OrdinalIgnoreCase);
     readonly Dictionary<string, InstalledModule> _byId = new(StringComparer.OrdinalIgnoreCase);
     readonly ConcurrentDictionary<string, Task<ResolvedPlayable>> _inFlightResolves = new(StringComparer.Ordinal);
+    readonly ConcurrentDictionary<string, Task<ModulePageDoc>> _inFlightPages = new(StringComparer.Ordinal);
     readonly ModuleSpawn? _spawn;
     readonly Func<ResolvePreferences> _prefs;
     readonly IPlayableMediaProvider[] _providers;
@@ -70,6 +71,7 @@ public sealed class ModuleHost : IDisposable, IModuleHostSink
         _locale = locale ?? "en-US";
         Services = services ?? new ModuleHostServices();
         Playables = new ModulePlayableCache(nowUnixMs);
+        Pages = new ModulePageCache(nowUnixMs);
 
         var providers = new List<IPlayableMediaProvider>(catalog.Modules.Count);
         foreach (InstalledModule m in catalog.Modules)
@@ -97,6 +99,7 @@ public sealed class ModuleHost : IDisposable, IModuleHostSink
     {
         Current = host;
         ModulePlayables.Attach(host?.Playables);
+        ModulePages.Attach(host?.Pages);
     }
 
     /// <summary>The modules that were discovered and accepted.</summary>
@@ -110,6 +113,9 @@ public sealed class ModuleHost : IDisposable, IModuleHostSink
 
     /// <summary>The resolve cache — the sync, allocation-free has-video / is-live / locator answers.</summary>
     public ModulePlayableCache Playables { get; }
+
+    /// <summary>The page-document cache — the sync answers behind <see cref="ModulePages"/>.</summary>
+    public ModulePageCache Pages { get; }
 
     /// <summary>The permission-gated module→host services.</summary>
     public ModuleHostServices Services { get; }
@@ -216,6 +222,62 @@ public sealed class ModuleHost : IDisposable, IModuleHostSink
             ModuleTimeouts.Resolve, ct).ConfigureAwait(false);
         Playables.Put(playableUri, resolved);
         return resolved;
+    }
+
+    // ── pages ───────────────────────────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>How long a module gets to answer <c>module/page</c>. Longer than a match (a page is a second upstream
+    /// fetch) and shorter than a resolve (nothing is playing yet — a page that takes this long is a failure the user
+    /// should see as one).</summary>
+    public static readonly TimeSpan PageTimeout = TimeSpan.FromSeconds(15);
+
+    /// <summary>
+    /// Fetch the DECLARATIVE page document a module publishes for one of its entities. Cached until the document's own
+    /// <c>ExpiresAtUnixMs</c> (10 minutes when it states none); concurrent fetches of the SAME uri share one in-flight
+    /// task, exactly like <see cref="ResolveAsync"/> — a page opened from the art tile and from the subtitle in the
+    /// same breath must not become two upstream lookups.
+    /// </summary>
+    /// <param name="moduleUri">The <c>wavee:module:&lt;id&gt;:&lt;b64(entityId)&gt;</c> page uri.</param>
+    /// <param name="ct">Cancels the fetch.</param>
+    /// <exception cref="ModuleException">The uri is not a module uri, the module is not installed, or the module
+    /// refused — including <c>-32601</c>, which the process layer maps to "capability absent"
+    /// (<see cref="ModuleErrorCode.Unsupported"/>) rather than to a failure.</exception>
+    public Task<ModulePageDoc> PageAsync(string moduleUri, CancellationToken ct)
+    {
+        if (!ModuleUri.TryDecode(moduleUri, out string moduleId, out string entityId))
+            throw new ModuleException(ModuleErrorCode.NotOwned, "not a module uri: " + moduleUri);
+
+        if (Pages.Get(moduleUri) is { } cached) return Task.FromResult(cached);
+
+        Task<ModulePageDoc> task = _inFlightPages.GetOrAdd(moduleUri,
+            static (uri, state) => state.Host.PageCoreAsync(uri, state.ModuleId, state.EntityId, state.Ct),
+            (Host: this, ModuleId: moduleId, EntityId: entityId, Ct: ct));
+        string key = moduleUri;
+        _ = task.ContinueWith(_ => { _inFlightPages.TryRemove(key, out Task<ModulePageDoc>? _); },
+            CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        return task;
+    }
+
+    async Task<ModulePageDoc> PageCoreAsync(string moduleUri, string moduleId, string entityId, CancellationToken ct)
+    {
+        if (!_byId.TryGetValue(moduleId, out InstalledModule? module))
+            throw new ModuleException(ModuleErrorCode.NotOwned, "no module named '" + moduleId + "' is installed");
+
+        // Capabilities are DECLARED, never probed: a module that did not claim `pages` is not spawned to be told
+        // -32601. (A module that claims it and then answers -32601 still surfaces as Unsupported from the process
+        // layer, so both halves of "no pages here" are the same typed refusal.)
+        if (!ModuleCapabilities.Declares(module.Manifest, ModulePages.PagesCapability))
+            throw new ModuleException(ModuleErrorCode.Unsupported,
+                "module '" + moduleId + "' does not provide pages");
+
+        ModulePageDoc doc = await Process(module).RequestAsync(ModuleMethods.Page, new PageParams(entityId),
+            SdkJsonContext.Default.PageParams, SdkJsonContext.Default.ModulePageDoc,
+            PageTimeout, ct).ConfigureAwait(false);
+        // The budget is the module's contract, but the app re-checks it: a page arrives over a pipe from a full-trust
+        // child process, and "the SDK validated it" is only true for a module that used the SDK.
+        ModulePageBudget.Validate(doc);
+        Pages.Put(moduleUri, doc);
+        return doc;
     }
 
     /// <summary>Best-effort pre-warm of an upcoming playable (<c>playback/warm</c>). Never throws, never starts a

@@ -30,13 +30,15 @@ public sealed record TwitchGqlError(string? Message);
 /// <param name="Chansub">Subscriber-gating details.</param>
 /// <param name="ChannelId">The channel's numeric id.</param>
 /// <param name="UserIp">The IP the token is pinned to.</param>
+/// <param name="Channel">The channel login the token was minted for — the only place a VOD id reveals its channel.</param>
 public sealed record TwitchTokenValue(
     [property: JsonPropertyName("expires")] long Expires,
     [property: JsonPropertyName("authorization")] TwitchTokenAuthorization? Authorization,
     [property: JsonPropertyName("geoblock_reason")] string? GeoblockReason,
     [property: JsonPropertyName("chansub")] TwitchChansub? Chansub,
     [property: JsonPropertyName("channel_id")] long ChannelId,
-    [property: JsonPropertyName("user_ip")] string? UserIp);
+    [property: JsonPropertyName("user_ip")] string? UserIp,
+    [property: JsonPropertyName("channel")] string? Channel = null);
 
 /// <summary>The token's authorization verdict.</summary>
 /// <param name="Forbidden">True when Twitch refuses playback outright.</param>
@@ -63,17 +65,22 @@ public sealed record TwitchMetadataData(TwitchUser? User);
 /// <param name="Stream">The current broadcast; null means offline.</param>
 /// <param name="LastBroadcast">The previous broadcast, used for a title when the current one has none.</param>
 /// <param name="BroadcastSettings">The channel's configured stream title.</param>
+/// <param name="Login">The channel login, when the query returned it.</param>
+/// <param name="ProfileImageURL">The channel's avatar — the page hero's art.</param>
 public sealed record TwitchUser(
     string? DisplayName,
     TwitchStream? Stream,
     TwitchBroadcast? LastBroadcast,
-    TwitchBroadcast? BroadcastSettings);
+    TwitchBroadcast? BroadcastSettings,
+    string? Login = null,
+    string? ProfileImageURL = null);
 
 /// <summary>The live broadcast.</summary>
 /// <param name="Id">Stream id.</param>
 /// <param name="Game">The category being streamed.</param>
 /// <param name="PreviewImageURL">Thumbnail url.</param>
-public sealed record TwitchStream(string? Id, TwitchGame? Game, string? PreviewImageURL);
+/// <param name="ViewersCount">How many people are watching right now, when the query returned it.</param>
+public sealed record TwitchStream(string? Id, TwitchGame? Game, string? PreviewImageURL, int? ViewersCount = null);
 
 /// <summary>A Twitch category.</summary>
 /// <param name="Name">Category name, e.g. <c>Just Chatting</c>.</param>

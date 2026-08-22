@@ -6,6 +6,7 @@ using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Input;
 using FluentGpu.Localization;
+using FluentGpu.Media;
 using FluentGpu.Signals;
 using Wavee.Core;
 
@@ -42,9 +43,12 @@ namespace Wavee.Features.Video;
 /// rail's own layout already accounts for it), no <see cref="Elevation.Flyout"/> shadow (docked is a content-layer
 /// rung, never an elevated card — <c>RightRail.cs</c> states the identical rule for the rail itself), no pass-through
 /// overlay wrapper of its own (this card is a normal flex child, not a top-Z layer), and no viewport subscription
-/// (nothing here anchors to a corner). The Cap face's HEIGHT is the one exception: <c>RightRail</c> overlays the house
-/// <c>Splitter</c> on the card's bottom edge so the user can grow past 16:9. Position and width still move only through
-/// the placement ladder.</para>
+/// (nothing here anchors to a corner). The Cap face's HEIGHT is the one exception: at rest it FOLLOWS THE CONTENT —
+/// <c>ShellResponsiveLayout.FitDockedVideoHeight</c> of the player's <c>NaturalSize</c> at the rail's width, so a video
+/// fills the card edge to edge rather than sitting in letterbox bars (the Details arm mounts the ArtTile face instead,
+/// where the square is fixed by design and the ELEMENT'S own aspect fit decides what shows inside it) — and <c>RightRail</c> overlays the house
+/// <c>Splitter</c> on the card's bottom edge so the user can override that fit for the source that is playing. Position
+/// and width still move only through the placement ladder.</para>
 ///
 /// <para><b>Never builds a player.</b> <see cref="PlaybackBridge.VideoPlayer"/> is presented, never constructed — the
 /// same ownership inversion <see cref="InWindowVideoPip"/> and the pop-out window already rely on. Building our own
@@ -74,13 +78,16 @@ namespace Wavee.Features.Video;
 /// the hole to move correctly.</para>
 ///
 /// <para><b>Two faces, one card (<see cref="Face"/>).</b> <see cref="DockedVideoFace.Cap"/> is a full-bleed rail-width
-/// tile whose height <c>RightRail</c> owns (16:9 floor, user-growable) and whose <see cref="MediaPlayerElement"/> mounts
-/// the stock transport. <see cref="DockedVideoFace.ArtTile"/> wraps the SAME card (identical
+/// tile whose height follows the playing content's own aspect (splitter-overridable, clamped to the rail's floor/ceiling).
+/// <see cref="DockedVideoFace.ArtTile"/> wraps the SAME card (identical
 /// <see cref="BuildVideoArea"/>/<see cref="BuildChrome"/> calls, identical stage-key prefix, identical reality report,
-/// identical <see cref="_activeGate"/> narrowing) inside a fixed 324x324 square so the Details pinned hero
-/// (<c>NowPlayingPanel.NowPlayingHeroTile</c>) never reflows when Art and Video swap — transport stays off on that
-/// face. See <see cref="Render"/>'s tail for the geometry split and the plan's §2 "Art-tile face" for why the square,
-/// not the card, must be what is fixed.</para>
+/// identical <see cref="_activeGate"/> narrowing) inside a fixed SQUARE so the Details pinned hero
+/// (<c>NowPlayingPanel.NowPlayingHeroTile</c>) never reflows when Art and Video swap. The card FILLS that square: the
+/// letterbox is the element's own (<see cref="MediaPlayerElement.ShowLetterboxBars"/>, computed from the real natural
+/// size), never a wrapper the element cannot see — which is what makes the Aspect-ratio menu real on this face too.
+/// BOTH faces mount the stock transport; the ONE gate is <c>PlaybackBridge.TransportOwnerNow</c>, and the two faces are
+/// mutually exclusive mounts (RightRail's Details arm vs every other arm). See <see cref="Render"/>'s tail for the
+/// geometry split and the plan's §2 "Art-tile face" for why the square, not the card, must be what is fixed.</para>
 /// </summary>
 sealed class DockedVideoSurface : Component
 {
@@ -101,6 +108,26 @@ sealed class DockedVideoSurface : Component
     /// provided instance once and subscribes to ITS value stream for the life of the element.</summary>
     readonly Signal<bool> _activeGate = new(true);
 
+    /// <summary>The <c>PopOutVideoSource.Key</c> the cap height was last fitted for (Cap face only). A change means a
+    /// NEW source, which is what ends the previous splitter drag's override — see the height-fit effect in
+    /// <see cref="Render"/>.</summary>
+    string? _fittedFor;
+
+    /// <summary>The ALWAYS-ON fit report (no env switch) — the four numbers that decide whether the Cap card is the
+    /// content's own shape or a letterboxing box. Value-gated on the whole tuple so the effect can run freely.</summary>
+    static readonly WaveeLogger FitLog = new(WaveeLog.Instance, "video");
+    (string Key, float RailW, int Nw, int Nh, float H, bool Pinned) _loggedFit;
+    (VideoAspectMode Mode, double Custom, TransportOwner Owner) _loggedPolicy = ((VideoAspectMode)255, -1, (TransportOwner)255);
+
+    void LogFit(string key, float railW, SizeI natural, float height, bool pinned)
+    {
+        var now = (key, railW, natural.Width, natural.Height, height, pinned);
+        if (now == _loggedFit) return;
+        _loggedFit = now;
+        FitLog.Info($"docked cap fit face={Face} rail={railW:0.#} natural={natural.Width}x{natural.Height} " +
+                    $"height={height:0.##} pinned={pinned} key={(key.Length == 0 ? "(none)" : key)}");
+    }
+
     public override Element Render()
     {
         var b = UseContext(PlaybackBridge.Slot);
@@ -114,6 +141,46 @@ sealed class DockedVideoSurface : Component
         var windowVisible = UseContext(Activation.IsActive);
         UseSignalEffect(() =>
             _activeGate.Value = (windowVisible is null || windowVisible.Value) && !ui.ImmersiveLyrics.Value);
+
+        // ── the card follows the CONTENT'S aspect ────────────────────────────────────────────────────────────────
+        // The Cap face is full-bleed at the rail's width, so its HEIGHT is the only thing that decides whether a video
+        // fills it or sits in Tok.MediaLetterbox bars. Sizing it purely from the rail's persisted/dragged height made
+        // letterboxing the DEFAULT for anything that was not exactly as tall as whatever was left there — a 16:9
+        // YouTube stream in a taller card showed bars above and below. So at rest the height IS the content fit
+        // (16:9 until the player reports a natural size, so nothing flashes at the wrong shape), and an explicit
+        // splitter drag pins it — for THIS source only, because a decision about one video is not a standing one.
+        // Written from an effect, never during render; the ArtTile face is a fixed square and never participates.
+        UseSignalEffect(() =>
+        {
+            string sourceKey = b.PopOutVideoSource.Value?.Key ?? "";      // subscribe → a new source re-fits
+            var natural = b.VideoPlayer.Value.Player?.NaturalSize.Value ?? default;   // subscribe → fit when MF reports
+            float railW = ui.RailWidth.Value;                             // subscribe → re-fit as the rail resizes
+            if (Face != DockedVideoFace.Cap) return;
+            if (!string.Equals(sourceKey, _fittedFor, StringComparison.Ordinal))
+            {
+                _fittedFor = sourceKey;
+                if (ui.DockedVideoHeightPinned.Peek()) ui.DockedVideoHeightPinned.Value = false;
+            }
+            if (ui.DockedVideoHeightPinned.Peek()) { LogFit(sourceKey, railW, natural, ui.DockedVideoHeight.Peek(), true); return; }
+            float fitted = ShellResponsiveLayout.FitDockedVideoHeight(railW, natural.Width, natural.Height);
+            ui.DockedVideoHeight.Value = fitted;
+            LogFit(sourceKey, railW, natural, fitted, false);
+        });
+
+        // ALWAYS-ON aspect/transport report (no env switch): the two policy values whose effect on this card is
+        // otherwise only visible as pixels — the aspect mode the element is driven with, and who owns the transport
+        // (which is what decides whether the element mounts its hover chrome at all).
+        UseSignalEffect(() =>
+        {
+            var mode = b.VideoAspectPolicy.Value;
+            double custom = b.VideoCustomAspectRatio.Value;
+            var owner = b.TransportOwnerNow.Value;
+            var now = (mode, custom, owner);
+            if (now == _loggedPolicy) return;
+            _loggedPolicy = now;
+            FitLog.Info($"docked policy face={Face} aspect={mode} custom={custom:0.###} transportOwner={owner} " +
+                        $"transportSuppressed={owner != TransportOwner.Docked}");
+        });
 
         // Reality + reports, scoped to Docked only (the mirror of InWindowVideoPip's Floating report) — no layout
         // reservation to publish: a docked card is inline flex, not a free-floating overlay reserving space nobody
@@ -164,28 +231,43 @@ sealed class DockedVideoSurface : Component
 
         if (Face == DockedVideoFace.ArtTile)
         {
-            // Art-tile face (plan §2 "Art-tile face"): the SAME card, letterboxed inside a FIXED 324x324 square so
-            // switching Art<->Video carries ZERO reflow of whatever scrolls beneath it. The outer square's own
-            // AspectRatio never changes between states — only what paints in the fixed ~182-DIP middle band does —
-            // so THIS node must never gain a height animation or a LayoutTransition of its own: a BoundsAnimated
-            // outer here, or a SizeMode.Reveal/Reflow ancestor above it, is exactly the trap the class doc's motion
-            // paragraph and the plan's motion table warn about. `Justify = Center` on a Direction=1 column with one
-            // AspectRatio(16:9) child is what produces the two equal ~71-DIP bars for free, with no explicit spacer
-            // boxes to keep in sync if Radii.Card or the tile width ever changes.
+            // Art-tile face (plan §2 "Art-tile face"): the SAME card inside a FIXED square (the rail's content width)
+            // so switching Art<->Video carries ZERO reflow of whatever scrolls beneath it. The outer square's own
+            // AspectRatio never changes between states — only what paints inside it does — so THIS node must never
+            // gain a height animation or a LayoutTransition of its own: a BoundsAnimated outer here, or a
+            // SizeMode.Reveal/Reflow ancestor above it, is exactly the trap the class doc's motion paragraph and the
+            // plan's motion table warn about.
+            //
+            // THE CARD FILLS THE SQUARE, and the letterbox is the ELEMENT'S. This used to centre a `Shrink=0f` card
+            // with a hard-coded `AspectRatio = 16f/9f` inside a `Justify = Center` column and call the surrounding
+            // Tok.MediaLetterbox fill "the bars". Two defects came out of that, both observed on a 1920x1080 live
+            // stream in a 326-DIP rail:
+            //   (i)  the bars were OUTSIDE the MediaPlayerElement, so its Aspect-ratio menu could not reach them —
+            //        Stretch and Crop visibly did NOTHING because they only re-fitted the frame inside a box that was
+            //        already the frame's own shape;
+            //   (ii) the inner card's AspectRatio was not what sized it at all. Measured inside this ZStack it fell
+            //        back to its CONTENT, i.e. MediaPlayerElement's own `MinHeight = 160f` video-area floor, so the
+            //        card came out 326x160 (aspect 2.04, logged as `place=...,326,160`) — a frame stretched into the
+            //        wrong shape between 83-DIP bars, not the designed ~71.
+            // Handing the whole square to the element fixes both at once: at Fit it paints its own LetterboxColor
+            // (the same Tok.MediaLetterbox token) bars computed from the REAL natural size — so a 4:3 or a vertical
+            // video is framed correctly instead of against a hard-coded 16:9 — and Stretch/Crop fill the square edge
+            // to edge, which is what the menu has always promised.
             return new BoxEl
             {
                 Shrink = 0f, AspectRatio = 1f,
-                Direction = 1, Justify = FlexJustify.Center,
+                Direction = 1,
                 ClipToBounds = true, Corners = CornerRadius4.All(Radii.Card),
-                Fill = Tok.MediaLetterbox,   // the letterbox bars above/below the centred 16:9 card
-                Children = [ card with { AspectRatio = 16f / 9f, Shrink = 0f } ],
+                Fill = Tok.MediaLetterbox,   // the ground under the element (its own letterbox paints the same token)
+                Children = [ card with { Grow = 1f, MinHeight = 0f } ],
             };
         }
 
         // Cap/Takeover face: full-bleed in the rail (the parent clips the top-left radius). Height is the SAME
-        // FloatSignal RightRail's wrapper and the vertical splitter write — a declared size, not Grow=1 inside a
-        // NaN-height ZStack (that measured as 0 once AspectRatio came off). Stretch defaults to Uniform (Fit); Crop
-        // is a More-menu click when the user has grown the tile taller than 16:9.
+        // FloatSignal RightRail's wrapper, the vertical splitter and the content-fit effect above all write — a
+        // declared size, not Grow=1 inside a NaN-height ZStack (that measured as 0 once AspectRatio came off).
+        // Stretch stays Uniform (Fit): with the height fitted to the content there are no bars to fit INSIDE, and Crop
+        // remains a More-menu click for when the user has deliberately grown the tile past the content's own shape.
         return card with
         {
             Shrink = 0f, MinWidth = 0f,
@@ -212,7 +294,6 @@ sealed class DockedVideoSurface : Component
             // it. Read through the ONE derived signal, never a local bool: two independent visibility flags is exactly
             // how the fullscreen surface and the bar ended up rendering both at once.
             bool suppress = b.TransportOwnerNow.Value != TransportOwner.Docked;
-            bool cap = Face != DockedVideoFace.ArtTile;
             string stageKey = src?.Key ?? ("gen:" + binding.Generation.ToString(System.Globalization.CultureInfo.InvariantCulture));
             Element element = Embed.Comp(() => new MediaPlayerElement
             {
@@ -227,12 +308,20 @@ sealed class DockedVideoSurface : Component
                 CustomAspectRatio = b.VideoCustomAspectRatio,
                 AspectModeChanged = b.SetVideoAspect,
                 CornerRadius = Face == DockedVideoFace.ArtTile ? Radii.Card : 0f, // Cap is clipped by the rail; ArtTile keeps the inner round
-                AreTransportControlsEnabled = cap,         // Art-tile hero stays transport-off (too small, must not reflow)
+                // ONE gate, and it is the derived owner signal below. This was `Face != ArtTile`, a SECOND independent
+                // flag — and it is what made the Details hero a picture with no controls: hovering it revealed nothing
+                // because MediaPlayerElement only adds its chrome layer when
+                // `AreTransportControlsEnabled && !SuppressTransport`, and the first term was hard-false here. The
+                // chrome is an auto-hiding ZStack OVERLAY pinned to the card's bottom edge, so it reflows nothing (the
+                // reason the flag was introduced does not apply), and the two faces are mutually exclusive mounts —
+                // RightRail's Details arm mounts THIS face, its every other arm mounts the Cap — so the single
+                // transport per window still follows from PlacementCore.TransportOwnerFor alone.
+                AreTransportControlsEnabled = true,
                 SuppressTransport = suppress,
                 ShowLetterboxBars = true,
                 IsDecorative = false,                      // MUST stay false: decorative skips the pump while parked
                 PosterContent = Poster(track),
-                // ArtTile has no transport, but right-click/Menu-key still opens this same complete menu.
+                // The transport's More button, right-click and the Menu key all open this same complete menu.
                 MoreMenuItems = () => VideoPlacementMenu.Items(b, settings, includeFullscreen: false),
                 // E3: F11 / F / the transport fullscreen button / the ⋯ Fullscreen row delegate to us instead of
                 // opening MediaPlayerElement's own modal overlay fullscreen.
@@ -347,9 +436,10 @@ enum DockedVideoFace
     /// existing mount that does not set <see cref="DockedVideoSurface.Face"/> keeps this slot.</summary>
     Cap,
 
-    /// <summary>The Details pinned hero (<c>NowPlayingPanel.NowPlayingHeroTile</c>): the same card letterboxed into
-    /// a FIXED 324x324 square — 182 DIP of video framed by ~71-DIP <see cref="Tok.MediaLetterbox"/> bars top and
-    /// bottom — so toggling Art&lt;-&gt;Video never changes the tile's own size and so never reflows the credits
-    /// scrolling beneath it.</summary>
+    /// <summary>The Details pinned hero (<c>NowPlayingPanel.NowPlayingHeroTile</c>): the same card FILLING a fixed
+    /// square (the rail's content width), so toggling Art&lt;-&gt;Video never changes the tile's own size and so never
+    /// reflows the credits scrolling beneath it. The bars are the element's own
+    /// <see cref="Tok.MediaLetterbox"/> fit — Fit frames a 16:9 stream with ~71-DIP bars top and bottom, and
+    /// Stretch/Crop fill the square edge to edge.</summary>
     ArtTile,
 }

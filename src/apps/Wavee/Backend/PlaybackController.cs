@@ -241,6 +241,37 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     /// <c>PlaybackBridge.ShouldPlayAsVideo</c> (which folds the one pure <c>VideoPlacementLogic.VideoActive</c> rule).</summary>
     public Func<Track, bool>? ShouldPlayAsVideo { get; set; }
 
+    /// <summary>Source-agnostic seam — does this playable have NO audio form at all? A playback module resolves some
+    /// playables as <c>MediaForm.Video</c> (a YouTube/Twitch stream): there is no second, audio-only body behind them, so
+    /// the audio host can only ever refuse them ("Restricted: video playable; use the video host"). Every rule that
+    /// DOWNGRADES a playable to audio — Connect's audio-first preference, the launch restore's audio-first preference,
+    /// the user's video-surface intent — describes a CHOICE between two forms, and must not apply where there is no
+    /// choice. Wired by the live bootstrap to <c>ModulePlayables.HasVideo</c>; NULL (unit tests, audio-only builds) makes
+    /// every playable choosable, i.e. byte-for-byte today's behaviour.</summary>
+    public Func<string, bool>? IsVideoOnlyPlayable { get; set; }
+
+    /// <summary>Source-agnostic seam — can ANY local media provider play this uri? Wired by the live bootstrap to
+    /// <c>MediaProviderRegistry.OwnerOf(uri) is not null</c>. Used by the launch-recovery paths to refuse to seed a
+    /// current row nothing here can play — most importantly the Connect cluster's echo of OUR OWN masked publish
+    /// (<c>spotify:local:…</c>, see <c>ConnectUriMask</c>), which is not a playable at all but a display shape. NULL
+    /// (unit tests, the fake bootstrap) trusts every uri, exactly as before.</summary>
+    public Func<string, bool>? IsPlayableHere { get; set; }
+
+    /// <summary>Source-agnostic seam — "who OWNS this uri, and what does it say the playable is?". Consulted for every
+    /// playable outside Spotify's catalogue (<see cref="ContextResolve.IsSpotifyContext"/> answers false) BEFORE this
+    /// controller settles for the uri-only placeholder the catalogue hydration mints for a uri it has never heard of.
+    /// <para>THE DEFECT IT CLOSES: a restart restored a playback-module playable — a YouTube broadcast — as its own raw
+    /// uri. Nothing in the persisted session or in the Connect cluster carries a module's display facts (a cluster row
+    /// only ever carries what WE last published, masked), and no catalogue can be asked about a <c>wavee:module:…</c>
+    /// uri, so the restored row had the uri for a title, no artwork, no artists, a length that belonged to the last
+    /// thing the media engine measured, and no live-ness. Re-hydrating THROUGH the owner is the only honest answer:
+    /// the module re-resolves the playable, which also fills the resolve cache, so <c>HasVideo</c>/<c>IsLive</c> are
+    /// known at restore time instead of a moment too late.</para>
+    /// <para>Wired by the live bootstrap to the module host's resolve; NULL (unit tests, audio-only builds) leaves the
+    /// placeholder path byte-for-byte as it was. A failure (offline, the module was uninstalled, a dead locator) is
+    /// NOT an error: it degrades to the placeholder at INFO — a launch must never put a toast on screen.</para></summary>
+    public Func<string, CancellationToken, Task<Track?>>? HydratePlayable { get; set; }
+
     /// <summary>Milestone B / M0 — loads the given VIDEO playable onto the injected video host: the delegate resolves the
     /// track's <c>PopOutVideoSource</c> (PlaybackBridge.ResolveVideoSourceForPlaybackAsync) and calls
     /// <c>FluentVideoMediaHost.LoadVideo</c>, returning true once a source has started opening and FALSE when the track has no
@@ -294,6 +325,12 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     // a throwing predicate (it reads app signals) degrades to AUDIO rather than breaking playback.
     PlayableKind KindFor(Track t)
     {
+        // NO AUDIO FORM ⇒ NO CHOICE. A module video playable (a YouTube/Twitch stream) exists only on the video host;
+        // every "prefer audio" rule below — and the user's surface intent — is a preference BETWEEN two forms, so none of
+        // them may apply here. Without this, any re-entry into the load path (a Retry, a cluster echo that took the video
+        // surface down, a prepared-next probe) re-hosted a playing video onto the audio host, which answered
+        // "Restricted: video playable; use the video host" and stopped playback with an error toast.
+        if (IsVideoOnly(t)) return PlayableKind.Video;
         // Connect play/transfer is audio-first even when the user has a standing local video preference — and so is a
         // launch/ghost restore (§8: video restores placement only). Explicit local playback clears both latches before
         // resolving its media kind.
@@ -308,6 +345,75 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             catch (Exception ex) { _log.Info($"ShouldPlayAsVideo threw for {t.Uri}; treating as audio: {ex.GetType().Name}: {ex.Message}"); }
         }
         return MediaSwitchLogic.KindOf(isVideo, t.Origin == TrackOrigin.Local);
+    }
+
+    // Fail-soft, like every other app-facing hook: a throwing predicate answers "it has an audio form", which is the
+    // proven path. Never a bare flag — the answer belongs to whoever resolved the playable.
+    bool IsVideoOnly(Track t)
+    {
+        if (_videoHost is null || IsVideoOnlyPlayable is not { } probe) return false;
+        try { return probe(t.Uri); }
+        catch (Exception ex) { _log.Info($"IsVideoOnlyPlayable threw for {t.Uri}; treating as choosable: {ex.GetType().Name}: {ex.Message}"); return false; }
+    }
+
+    // "Can anything here play this uri?" — false ONLY when the hook is wired and says no, so an unwired build trusts
+    // every uri exactly as before.
+    bool PlayableHere(string uri)
+    {
+        if (IsPlayableHere is not { } probe) return true;
+        try { return probe(uri); }
+        catch (Exception ex) { _log.Info($"IsPlayableHere threw for {uri}; treating as playable: {ex.GetType().Name}: {ex.Message}"); return true; }
+    }
+
+    // "Ask whoever owns this uri what the playable actually is." Null on every path that must keep today's behaviour:
+    // no hook wired, a Spotify uri (the catalogue owns it — the hook is never even called for one), or an owner that
+    // could not answer. NEVER throws except on cancellation: an owner that is offline, uninstalled or out of date must
+    // degrade to the placeholder silently, because the only caller is a launch-time restore.
+    async Task<Track?> HydrateThroughOwnerAsync(string uri, CancellationToken ct)
+    {
+        if (HydratePlayable is not { } hydrate) return null;
+        if (string.IsNullOrEmpty(uri) || ContextResolve.IsSpotifyContext(uri)) return null;
+        try
+        {
+            var track = await hydrate(uri, ct).ConfigureAwait(false);
+            if (track is null || string.IsNullOrEmpty(track.Uri)) return null;
+            // A RESTORED playable carries NO length. The persisted/cluster length is whatever the media engine last
+            // measured — for a broadcast that is a sliding DVR window, i.e. a number that was never the playable's
+            // duration and is stale the instant it is written down. The owner states the length when (and if) it
+            // resolves; until then 0 is the honest answer and the one the LIVE rail is built on.
+            return track.DurationMs == 0 ? track : track with { DurationMs = 0 };
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            _log.Info($"owner hydrate declined for {uri}; keeping the catalogue row: {ex.GetType().Name}: {ex.Message}");
+            return null;
+        }
+    }
+
+    // The cluster/ghost half: the row the cluster handed us for a uri no catalogue owns is display data we published
+    // ourselves a session ago (title, duration and all). Re-ask the owner; keep the cluster row when it cannot answer.
+    async Task<Track> ReHydrateThroughOwnerAsync(Track track, CancellationToken ct)
+        => await HydrateThroughOwnerAsync(track.Uri, ct).ConfigureAwait(false) ?? track;
+
+    // …and the same for a RESTORED user queue: a module playable sitting in Next-up is the identical thin row, and the
+    // panel shows it long before anyone plays it. Allocation-free (and awaitless) for the overwhelmingly common case of
+    // a queue that is entirely Spotify: the array is only built once an owner has actually replaced something.
+    async Task<IReadOnlyList<QueuedTrack>> ReHydrateQueueThroughOwnersAsync(IReadOnlyList<QueuedTrack> rows, CancellationToken ct)
+    {
+        if (HydratePlayable is null || rows.Count == 0) return rows;
+        QueuedTrack[]? patched = null;
+        for (int i = 0; i < rows.Count; i++)
+        {
+            if (await HydrateThroughOwnerAsync(rows[i].Track.Uri, ct).ConfigureAwait(false) is not { } owned) continue;
+            if (patched is null)
+            {
+                patched = new QueuedTrack[rows.Count];
+                for (int k = 0; k < rows.Count; k++) patched[k] = rows[k];
+            }
+            patched[i] = rows[i] with { Track = owned };
+        }
+        return patched ?? rows;
     }
 
     // Point the current-media host at the given instance, stopping the outgoing one first (bug 1 — never two decoders at
@@ -1630,6 +1736,9 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
 
     async Task<QueuedTrack> HydrateOneAsync(string uri, CancellationToken ct)
     {
+        // NO CATALOGUE OWNS THIS URI. Asking the hydrator about a `wavee:module:…` playable can only ever come back as
+        // the uri-only placeholder, which is precisely the thin row a restart used to show. The owner speaks first.
+        if (await HydrateThroughOwnerAsync(uri, ct).ConfigureAwait(false) is { } owned) return new QueuedTrack(owned, "");
         try
         {
             var hydrated = await _contexts.HydrateAsync(new[] { new QueuedRef(uri, "") }, ct).ConfigureAwait(false);
@@ -1719,13 +1828,16 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     {
         if (RejectLocalPlay()) return;   // local audio unsupported → toast + abort (covers cold resume / self-transfer / bare inbound transfer)
         var track = _projection.CurrentTrack;
-        if (track is null)
+        // …and a cluster current nothing here can play is the same as no cluster current at all (see the recovery path:
+        // it is our own ConnectUriMask display shape echoed back). Fall through to the persisted local session.
+        if (track is null || !PlayableHere(track.Uri))
         {
             if (!await TryRestoreFromSnapshotAsync(ct).ConfigureAwait(false))
                 _log.Info("ghost resume: nothing in the cluster to resume");
             return;
         }
         var ctxUri = _projection.ContextUri ?? track.Uri;
+        track = await ReHydrateThroughOwnerAsync(track, ct).ConfigureAwait(false);   // a module playable is re-asked, not re-used
         long generation = SeedSessionFromCluster(track, ctxUri);
         _restorePendingLoad = false;   // this path loads immediately
         MintCommand("playbtn");
@@ -1787,10 +1899,14 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
                 if (_session.Current is not null) { seeded = true; return; }   // something started while we scheduled
                 var aid = _projection.ActiveDeviceId;
                 if (!string.IsNullOrEmpty(aid) && aid != _ourDeviceId) return;   // became a viewer meanwhile
-                if (_projection.LastCluster is { HasTrack: true } && _projection.CurrentTrack is { } track)
+                if (_projection.LastCluster is { HasTrack: true } && _projection.CurrentTrack is { } track
+                    && PlayableHere(track.Uri))
                 {
                     bool weAreStaleActive = aid == _ourDeviceId;
                     var ctxUri = _projection.ContextUri ?? track.Uri;
+                    // The cluster row for a uri no catalogue owns is OUR OWN publish from a previous session — a title
+                    // and a length we wrote down once. Re-ask the owner before it becomes the restored now-playing.
+                    track = await ReHydrateThroughOwnerAsync(track, default).ConfigureAwait(false);
                     long generation = SeedSessionFromCluster(track, ctxUri);
                     _restorePendingLoad = true;   // seeded, NOT loaded — the first Resume fast-starts (§1)
                     long pos = _projection.PositionMs;   // already extrapolated at the cluster fold
@@ -1812,7 +1928,21 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
                 }
                 else
                 {
-                    // Empty cluster at launch → the persisted local session (§8), restored PAUSED, never autoplayed.
+                    // Either the cluster is empty at launch, or its current row is not something this machine can play —
+                    // which is the normal shape after a non-Spotify session, because what the cluster holds is OUR OWN
+                    // publish AFTER ConnectUriMask rewrote the row into `spotify:local:…` for remote controllers. That
+                    // shape is a display uri, not a playable: seeding it asked Spotify to resolve a track that does not
+                    // exist and put an error toast on screen at launch. It is skipped at INFO (never an error), and the
+                    // persisted local session — which still holds the REAL playable — is the fallback (§8), restored
+                    // PAUSED, never autoplayed.
+                    if (_projection.LastCluster is { HasTrack: true } && _projection.CurrentTrack is { } unplayable)
+                        _log.Event(WaveeLogLevel.Info, "queue.recovery.skipped",
+                            "cluster current is not playable here; not seeding it",
+                            fields:
+                            [
+                                WaveeLogField.Of("current", WaveeLogRedaction.HashLike(unplayable.Uri)),
+                                WaveeLogField.Of("ctx", WaveeLogRedaction.HashLike(_projection.ContextUri ?? "")),
+                            ]);
                     seeded = await TryRestoreFromSnapshotAsync(default).ConfigureAwait(false);
                 }
             }
@@ -1828,6 +1958,15 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     {
         var snap = RestoreSnapshot?.Invoke();
         if (snap is null || string.IsNullOrEmpty(snap.CurrentUri)) return false;
+        // A snapshot written while a masked cluster echo owned the projection holds that display uri too. Nothing here
+        // can play it, so restoring it would only reproduce the launch-time error toast — skip at INFO and stay cold.
+        if (!PlayableHere(snap.CurrentUri))
+        {
+            _log.Event(WaveeLogLevel.Info, "queue.recovery.snapshot-skipped",
+                "persisted current is not playable here; not restoring it",
+                fields: [WaveeLogField.Of("current", WaveeLogRedaction.HashLike(snap.CurrentUri))]);
+            return false;
+        }
         long generation = Interlocked.Increment(ref _contextGeneration);
         string ctxUri = string.IsNullOrEmpty(snap.ContextUri) ? snap.CurrentUri : snap.ContextUri;
         ResolvedContext resolved = ResolvedContext.Empty;
@@ -1863,6 +2002,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         if (snap.UserQueue.Count > 0)
         {
             var queued = await _contexts.HydrateAsync(snap.UserQueue, ct).ConfigureAwait(false);
+            queued = await ReHydrateQueueThroughOwnersAsync(queued, ct).ConfigureAwait(false);
             if (queued.Count > 0) _snap = _session.EnqueueUser(queued);
         }
         _snap = _session.SetShuffle(snap.Shuffle);
@@ -1897,6 +2037,9 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     void ScheduleQueueHeal(string? contextUri, long generation)
     {
         if (string.IsNullOrEmpty(contextUri)) return;
+        // The heal IS a context-resolve. A context Spotify cannot resolve has nothing to heal from (and asking cost a 400
+        // + a warning at every launch of a module session) — the seeded rows are the whole session.
+        if (!ContextResolve.IsSpotifyContext(contextUri)) return;
         _ = HealQueueFromContextAsync(contextUri!, generation);
     }
 
@@ -2161,6 +2304,16 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
                 initiallyPaused: initiallyPaused).ConfigureAwait(false);
             return;
         }
+        // A PAUSED launch restore is not a play attempt — the user has asked for nothing yet, so a media that will not
+        // open right now (an expired module locator, an offline body, a playable whose form is only known after an
+        // out-of-process resolve) must not greet them with an error toast at startup. Keep the seeded session, re-arm the
+        // deferred-load latch so the first Resume runs the load through the ONE fast-start path, and report honestly THEN.
+        if (skipOnUnplayable && initiallyPaused)
+        {
+            _restorePendingLoad = true;
+            _log.Info($"restore: current not loadable yet ({ex.GetType().Name}: {ex.Message}); staying seeded — the first Resume will load it");
+            return;
+        }
         ReportPlaybackError(ex);
     }
 
@@ -2327,6 +2480,9 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
 
     bool CanAutoplay(string contextUri, bool ignoreLatch = false)
     {
+        // Autoplay is a SPOTIFY station. A context outside its catalog (a module link, a local folder) has none, so the
+        // request is a guaranteed 400 — refuse before the round trip. Its end is simply the end of the session.
+        if (!ContextResolve.IsSpotifyContext(contextUri)) return false;
         if (_contextIsInfinite || ContextResolve.IsInfinite(contextUri)) return false;
         if (!ignoreLatch && _autoplayLatchedFor == contextUri) return false;
         return AutoplayEnabled?.Invoke() ?? true;

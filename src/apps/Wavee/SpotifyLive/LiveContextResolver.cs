@@ -59,6 +59,18 @@ public sealed class LiveContextResolver : IContextResolver
 
     public async Task<ResolvedContext> ResolveAsync(ContextSpec spec, CancellationToken ct = default)
     {
+        // 0) NOT OURS TO ANSWER. A context outside Spotify's catalog (a playback module's `wavee:module:…`, a local
+        //    folder, a session playlist) and Spotify's own metadata-in-the-uri `spotify:local:*` namespace both resolve
+        //    to nothing here — the endpoint answers 400 and the caller logs a warning for a question that never had an
+        //    answer. Refuse LOCALLY, before the HTTP: an empty resolve is what "Spotify does not know this context"
+        //    means, and every caller already handles it. (Embedded pages are checked first: those rows travel INSIDE the
+        //    command, so a non-Spotify context that carries its own page is still playable.)
+        if (spec.EmbeddedPages is not { Count: > 0 } && !ContextResolve.IsSpotifyContext(spec.Uri))
+        {
+            _log.Info("context-resolve skipped (not a Spotify context): " + spec.Uri);
+            return ResolvedContext.Empty;
+        }
+
         // 1) The command embedded a custom-ordered page (a sorted/filtered playlist sent inline) → play it verbatim.
         if (spec.EmbeddedPages is { Count: > 0 } embedded)
         {
@@ -122,6 +134,13 @@ public sealed class LiveContextResolver : IContextResolver
         CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(contextUri)) return ResolvedContext.Empty;
+        // Spotify has no station for a uri it does not know (see ResolveAsync §0) — refuse locally instead of trading a
+        // 400 for the same empty answer. A module/local session simply ends when its context does.
+        if (!ContextResolve.IsSpotifyContext(contextUri))
+        {
+            _log.Info("autoplay skipped (not a Spotify context): " + contextUri);
+            return ResolvedContext.Empty;
+        }
         try
         {
             // Three wires, one per SEED SHAPE — this fork is deliberately NOT `IsPlayable`.
@@ -149,7 +168,7 @@ public sealed class LiveContextResolver : IContextResolver
     public async Task<ResolvedContext> ResolveAutopodcastAsync(string contextUri, IReadOnlyList<string> recentEpisodeUris,
         CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(contextUri)) return ResolvedContext.Empty;
+        if (string.IsNullOrWhiteSpace(contextUri) || !ContextResolve.IsSpotifyContext(contextUri)) return ResolvedContext.Empty;
         var request = new AutoplayContextRequest { ContextUri = contextUri, IsVideo = false };
         for (int i = 0; i < recentEpisodeUris.Count; i++)
             if (!string.IsNullOrEmpty(recentEpisodeUris[i])) request.RecentTrackUri.Add(recentEpisodeUris[i]);

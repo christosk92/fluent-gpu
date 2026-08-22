@@ -54,6 +54,10 @@ public interface IMediaPlayer : IAsyncDisposable
     IReadSignal<VideoGeometry> VideoGeometry { get; }
     /// <summary>Colorimetry/HDR metadata.</summary>
     IReadSignal<VideoColorInfo> VideoColor { get; }
+    /// <summary>The composited PLACEMENT geometry the backend last realized — the decoded size, the size it is
+    /// rendered at inside the backend's own swap chain, and the rect the compositor visual was placed at. This is
+    /// what a host reads (and logs) to answer "why is there a black bar" without guessing from pixels.</summary>
+    IReadSignal<VideoSurfaceGeometry> SurfaceGeometry { get; }
     /// <summary>Bounded-cadence playback diagnostics.</summary>
     IReadSignal<PlaybackStatistics> Statistics { get; }
     /// <summary>The selected subtitle/caption cue at the authoritative media position.</summary>

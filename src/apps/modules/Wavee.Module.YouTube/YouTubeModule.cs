@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
@@ -42,7 +43,14 @@ public sealed partial class YouTubeModule : WaveeModule
                      "playback may cut out."),
     ];
 
+    /// <summary>The <c>video:&lt;id&gt;</c> entity-id prefix (see <see cref="ModulePageDoc"/>).</summary>
+    public const string VideoEntityPrefix = "video:";
+
+    /// <summary>The <c>channel:&lt;id&gt;</c> entity-id prefix.</summary>
+    public const string ChannelEntityPrefix = "channel:";
+
     private readonly HttpClient _http;
+    private readonly ConcurrentDictionary<string, ChannelSnapshot> _channels = new(StringComparer.Ordinal);
     private YouTubeClient[]? _clients;
 
     /// <summary>The ctor <see cref="ModuleRunner"/> uses: a default handler with redirects and decompression on.</summary>
@@ -305,19 +313,32 @@ public sealed partial class YouTubeModule : WaveeModule
 
         string title = string.IsNullOrWhiteSpace(d?.Title) ? videoId : d!.Title!;
         string[] artists = string.IsNullOrWhiteSpace(d?.Author) ? [] : [d!.Author!];
+        string? artwork = WidestThumbnail(d?.Thumbnail?.Thumbnails);
+        string? channelId = Blank(d?.ChannelId);
+
+        // The channel page has no endpoint of its own — the player response is all YouTube gives a JS-less client —
+        // so remember what THIS video said about its channel and serve that, honestly labelled, on `channel:<id>`.
+        if (channelId is not null)
+        {
+            _channels[channelId] = new ChannelSnapshot(channelId, Blank(d?.Author), videoId, title, artwork, isLive);
+        }
 
         return new ResolvedPlayable(
             PlayableId: videoId,
             Title: title,
             Artists: artists,
-            ArtworkUrl: WidestThumbnail(d?.Thumbnail?.Thumbnails),
+            ArtworkUrl: artwork,
             DurationMs: durationMs,
             IsLive: isLive,
             Form: MediaForm.Video,
             Media: MediaLocator.FromUrl(hls, MediaLocator.ContainerHls, "application/vnd.apple.mpegurl"),
             ExpiresAtUnixMs: ExpiresAt(hls, player.StreamingData?.ExpiresInSeconds),
-            Caps: []);
+            Caps: [],
+            PageEntityId: VideoEntityPrefix + videoId,
+            SubtitleEntityId: channelId is null ? null : ChannelEntityPrefix + channelId);
     }
+
+    private static string? Blank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     /// <summary>
     /// When the app must re-resolve: the earlier of the signed <c>/expire/</c> instant and
@@ -372,6 +393,238 @@ public sealed partial class YouTubeModule : WaveeModule
 
         return best?.Url;
     }
+
+    // ---- pages -------------------------------------------------------------------------------------------------
+
+    /// <summary>What one resolve learned about a channel. The player response is the only channel data a JS-less
+    /// client gets, so this is deliberately a snapshot of one video, not a channel record.</summary>
+    /// <param name="ChannelId">The channel id.</param>
+    /// <param name="Name">The channel name, as the video's <c>author</c> reported it.</param>
+    /// <param name="VideoId">The video that taught us about the channel.</param>
+    /// <param name="VideoTitle">That video's title.</param>
+    /// <param name="Thumbnail">That video's widest thumbnail.</param>
+    /// <param name="IsLive">True when that video was on air at resolve time.</param>
+    private sealed record ChannelSnapshot(string ChannelId, string? Name, string VideoId, string VideoTitle,
+        string? Thumbnail, bool IsLive);
+
+    /// <summary>The watch url for a video id.</summary>
+    /// <param name="videoId">The 11-character video id.</param>
+    public static string WatchUrl(string videoId) => "https://www.youtube.com/watch?v=" + videoId;
+
+    /// <summary>The channel url for a channel id.</summary>
+    /// <param name="channelId">The <c>UC…</c> channel id.</param>
+    public static string ChannelUrl(string channelId) => "https://www.youtube.com/channel/" + channelId;
+
+    /// <inheritdoc/>
+    public override async ValueTask<ModulePageDoc?> GetPageAsync(string entityId, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(entityId)) return null;
+        string id = entityId.Trim();
+
+        if (id.StartsWith(VideoEntityPrefix, StringComparison.Ordinal))
+        {
+            string videoId = id[VideoEntityPrefix.Length..];
+            if (!YouTubeUrls.IsVideoId(videoId)) return null;
+            YtPlayerResponse player = await PlayerForPageAsync(videoId, ct).ConfigureAwait(false);
+            return VideoPage(videoId, player);
+        }
+
+        if (id.StartsWith(ChannelEntityPrefix, StringComparison.Ordinal))
+        {
+            string channelId = id[ChannelEntityPrefix.Length..];
+            return channelId.Length == 0 ? null : ChannelPage(channelId);
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Fetches a player response for the PAGE, which is a weaker ask than <see cref="ResolveAsync(string,CancellationToken)"/>:
+    /// no HLS manifest is required and no preflight runs, because a page is worth showing for a video that will not
+    /// play (offline broadcast, SABR-only session). Client fallback and the IP-block detection are the same.
+    /// </summary>
+    /// <param name="videoId">The video to describe.</param>
+    /// <param name="ct">Cancels the fetch.</param>
+    private async Task<YtPlayerResponse> PlayerForPageAsync(string videoId, CancellationToken ct)
+    {
+        ModuleErrorCode lastCode = ModuleErrorCode.Unavailable;
+        string lastReason = "YouTube would not describe this video to any of the configured clients.";
+
+        YouTubeClient[] clients = Clients;
+        for (int i = 0; i < clients.Length; i++)
+        {
+            YtPlayerResponse? player;
+            try
+            {
+                player = await PlayerAsync(clients[i], videoId, ct).ConfigureAwait(false);
+            }
+            catch (HttpRequestException ex)
+            {
+                lastCode = ModuleErrorCode.Transient;
+                lastReason = $"Could not reach YouTube ({ex.Message}).";
+                continue;
+            }
+            catch (JsonException)
+            {
+                lastCode = ModuleErrorCode.Transient;
+                lastReason = "YouTube returned an unreadable player response.";
+                continue;
+            }
+
+            if (player?.VideoDetails?.VideoId is not { Length: > 0 } got)
+            {
+                lastCode = ModuleErrorCode.Unavailable;
+                lastReason = string.IsNullOrWhiteSpace(player?.PlayabilityStatus?.Reason)
+                    ? "YouTube returned nothing about this video."
+                    : player!.PlayabilityStatus!.Reason!;
+                continue;
+            }
+
+            if (!string.Equals(got, videoId, StringComparison.Ordinal))
+            {
+                lastCode = ModuleErrorCode.Unavailable;
+                lastReason = "YouTube is blocking this network (it answered with a different video).";
+                continue;
+            }
+
+            return player;
+        }
+
+        throw new ModuleException(lastCode, lastReason);
+    }
+
+    /// <summary>Builds the <c>video:&lt;id&gt;</c> page out of a player response.</summary>
+    /// <param name="videoId">The video id.</param>
+    /// <param name="player">The player response describing it.</param>
+    private ModulePageDoc VideoPage(string videoId, YtPlayerResponse player)
+    {
+        YtVideoDetails? d = player.VideoDetails;
+        YtLiveBroadcastDetails? broadcast = player.Microformat?.PlayerMicroformatRenderer?.LiveBroadcastDetails;
+        bool isLive = (d?.IsLive ?? false) || (broadcast?.IsLiveNow ?? false);
+
+        string title = string.IsNullOrWhiteSpace(d?.Title) ? videoId : d!.Title!;
+        string? author = Blank(d?.Author);
+        string? channelId = Blank(d?.ChannelId);
+        string? views = FormatCount(d?.ViewCount);
+        string? length = isLive ? null : FormatSeconds(d?.LengthSeconds);
+
+        var facts = new List<string[]>(4);
+        if (views is not null) facts.Add(["Views", views]);
+        if (length is not null) facts.Add(["Length", length]);
+        if (author is not null) facts.Add(["Channel", author]);
+        if (isLive && broadcast?.StartTimestamp is { Length: > 0 } start && TryInstant(start, out DateTimeOffset at))
+        {
+            facts.Add(["Started", at.UtcDateTime.ToString("u", CultureInfo.InvariantCulture)]);
+        }
+
+        var sections = new List<PageSection>(3);
+        if (facts.Count > 0) sections.Add(PageSection.FromFacts([.. facts], "About"));
+        if (Blank(d?.ShortDescription) is { } description)
+        {
+            sections.Add(PageSection.FromText(description, "Description"));
+        }
+
+        // PageHero carries no entity id of its own, so the channel link rides a one-card shelf — the sanctioned
+        // way a page navigates to another page of the same module (PageItem.EntityId).
+        if (channelId is not null)
+        {
+            sections.Add(PageSection.FromCards(
+                [new PageItem(author ?? "YouTube channel", "Channel", null, null, ChannelEntityPrefix + channelId,
+                    null, null, false, null)],
+                "Channel"));
+        }
+
+        var hero = new PageHero(
+            title,
+            isLive ? "Live stream" : "Video",
+            author,
+            WidestThumbnail(d?.Thumbnail?.Thumbnails),
+            MetaLine(isLive ? "Live now" : length, views is null ? null : views + " views"),
+            isLive);
+
+        return new ModulePageDoc(
+            ModulePageDoc.CurrentVersion,
+            ModulePageDoc.TemplateEntity,
+            hero,
+            [
+                PageAction.Play(videoId, "Play"),
+                PageAction.OpenUrl(WatchUrl(videoId), "Open on YouTube"),
+            ],
+            [.. sections],
+            ExpiresAtUnixMs: null);
+    }
+
+    /// <summary>
+    /// Builds the <c>channel:&lt;id&gt;</c> page. YouTube's player endpoint describes a VIDEO, never a channel, so
+    /// this page says exactly what a resolve happened to learn and sends the user to the browser for the rest —
+    /// no invented follower counts, no scraped shelves.
+    /// </summary>
+    /// <param name="channelId">The channel id.</param>
+    private ModulePageDoc ChannelPage(string channelId)
+    {
+        _channels.TryGetValue(channelId, out ChannelSnapshot? snapshot);
+
+        var sections = new List<PageSection>(2);
+        if (snapshot is { IsLive: true })
+        {
+            sections.Add(PageSection.FromPlayables(
+                [new PageItem(snapshot.VideoTitle, snapshot.Name, snapshot.Thumbnail, snapshot.VideoId,
+                    VideoEntityPrefix + snapshot.VideoId, null, MediaForm.Video, true, "Live")],
+                "Live now"));
+        }
+        else
+        {
+            sections.Add(PageSection.FromText(
+                "Wavee builds this page from YouTube's player response, which only describes the video you played. " +
+                "Open the channel on YouTube for its videos, playlists and about page.",
+                "About this page"));
+        }
+
+        var hero = new PageHero(
+            snapshot?.Name ?? "YouTube channel",
+            "Channel",
+            null,
+            null,
+            null,
+            snapshot?.IsLive ?? false);
+
+        return new ModulePageDoc(
+            ModulePageDoc.CurrentVersion,
+            ModulePageDoc.TemplateEntity,
+            hero,
+            [PageAction.OpenUrl(ChannelUrl(channelId), "Open on YouTube")],
+            [.. sections],
+            ExpiresAtUnixMs: null);
+    }
+
+    /// <summary>Joins the non-empty parts of a meta line with a middle dot.</summary>
+    /// <param name="parts">The candidate parts, nulls and blanks skipped.</param>
+    private static string? MetaLine(params string?[] parts)
+    {
+        string joined = string.Join(" · ", parts.Where(p => !string.IsNullOrWhiteSpace(p)));
+        return joined.Length == 0 ? null : joined;
+    }
+
+    /// <summary>Formats an InnerTube count string with thousands separators, or null when it is not a number.</summary>
+    /// <param name="raw">The raw value, e.g. <c>"1234"</c>.</param>
+    public static string? FormatCount(string? raw)
+        => long.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out long n) && n >= 0
+            ? n.ToString("N0", CultureInfo.InvariantCulture)
+            : null;
+
+    /// <summary>Formats an InnerTube <c>lengthSeconds</c> as <c>h:mm:ss</c> / <c>m:ss</c>, or null when it is 0.</summary>
+    /// <param name="raw">The raw value, e.g. <c>"3672"</c>.</param>
+    public static string? FormatSeconds(string? raw)
+    {
+        if (!long.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out long s) || s <= 0) return null;
+        var span = TimeSpan.FromSeconds(s);
+        return span.TotalHours >= 1
+            ? string.Create(CultureInfo.InvariantCulture, $"{(int)span.TotalHours}:{span.Minutes:00}:{span.Seconds:00}")
+            : string.Create(CultureInfo.InvariantCulture, $"{span.Minutes}:{span.Seconds:00}");
+    }
+
+    private static bool TryInstant(string text, out DateTimeOffset at)
+        => DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out at);
 
     // ---- transport ---------------------------------------------------------------------------------------------
 

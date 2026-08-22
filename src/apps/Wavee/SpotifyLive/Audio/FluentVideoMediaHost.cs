@@ -75,11 +75,20 @@ public sealed class FluentVideoMediaHost : IMediaHost
     // duration at first LOADEDMETADATA, which for an adaptive/DASH manifest is commonly still 0, and a manifest can
     // later revise it — so a latch-on-first-positive would freeze the wrong length for the whole track.
     long _reportedDurMs;
+    // The live timeline last relayed for the CURRENT load, and whether anything has been relayed at all. Value-gated the
+    // same way the duration is: the engine republishes a TimelineInfo at 10 Hz and the window's two ends creep forward
+    // continuously, so an ungated relay would wake the projection (and every player-bar consumer) ten times a second
+    // forever. A flag flip or a > 250 ms move in any field is a real change; anything smaller is the edge drifting.
+    LiveWindow _reportedLive;
+    bool _liveReported;
     // Once-per-load diagnostics for the ONE state that makes a playing video look permanently stuck: an empty
     // NaturalSize. MediaPlayerElement reads that as audio-only, so it never punches a video hole and keeps the
     // "Starting playback…" spinner up over a session that is otherwise fine. Logged so the log alone tells the two
     // apart next time (see MfMediaSession's LATE NATURAL SIZE block, which is what keeps re-asking for it).
     bool _sizeLogged, _noSizeLogged;
+    // The last COMPOSITED PLACEMENT geometry logged (natural/content/place). Value-gated so the 10Hz tick logs only
+    // when the realized placement actually moves — which is exactly when a letterbox appears or disappears.
+    VideoSurfaceGeometry _loggedGeometry = VideoSurfaceGeometry.Empty;
     bool _disposed;
     int _lastAppliedAutoCap = -1;
     QualitySelection _lastObservedQuality;
@@ -104,6 +113,9 @@ public sealed class FluentVideoMediaHost : IMediaHost
     /// <summary>Re-relay <see cref="DurationKnown"/> only when the engine's duration moves more than this, so a
     /// jittering adaptive estimate does not spam the projection (and the seek bar) every tick.</summary>
     const long DurationRelayEpsilonMs = 250;
+    /// <summary>Re-relay <see cref="LiveWindowKnown"/> only when a window edge moves more than this. The live edge
+    /// advances continuously, so without a band the 10 Hz timeline signal would republish forever.</summary>
+    const long LiveRelayEpsilonMs = 250;
     /// <summary>A carried start position within this much of the end counts as "past the end" and is pulled back.</summary>
     const long StartClampGuardMs = 250;
     /// <summary>How far back from the end a clamped carried position lands — enough to see that playback resumed.</summary>
@@ -156,6 +168,16 @@ public sealed class FluentVideoMediaHost : IMediaHost
     /// a Spotify music video keeps publishing the catalog duration exactly as before.</summary>
     public event Action<string, long>? DurationKnown;
 
+    /// <summary>Fires on the ticker thread whenever the media engine's LIVE TIMELINE changes materially for the current
+    /// load, carrying <c>(sourceKey, window)</c>. The app routes it to <c>NowPlayingProjection.SetLiveWindow</c>.
+    /// <para>It exists because live-ness has a SHAPE, not just a flag. Media Foundation reports a broadcast's sliding
+    /// DVR window as an ordinary finite duration — which is precisely how a six-hour YouTube live stream rendered as
+    /// <c>0:03 / -3:22</c> — so the only honest reading of "how much of this can I rewind?" is the engine's own
+    /// seekable range, published as one atomic record so the bar can never mix a window from the previous variant with
+    /// this one's edge.</para>
+    /// <para>Value-gated (see <see cref="LiveRelayEpsilonMs"/>): the underlying signal republishes at 10 Hz.</para></summary>
+    public event Action<string, LiveWindow>? LiveWindowKnown;
+
     // ── IMediaHost common transport (forwarded to the routed MediaPlayer) ────────────────────────────────────────────
     public long PositionMs
     {
@@ -187,6 +209,7 @@ public sealed class FluentVideoMediaHost : IMediaHost
     public void Stop()
     {
         StopTicker();
+        RetractLiveWindow();   // a live window must never outlive the session it described (see TeardownAsync)
         MediaPlayer? old;
         lock (_gate)
         {
@@ -196,6 +219,8 @@ public sealed class FluentVideoMediaHost : IMediaHost
             _lastState = PlaybackState.Idle;
             _errorReported = false;
             _reportedDurMs = 0;
+            _reportedLive = default;
+            _liveReported = false;
             _sizeLogged = false;
             _noSizeLogged = false;
             _playIntent = false;
@@ -228,9 +253,69 @@ public sealed class FluentVideoMediaHost : IMediaHost
     void SeekPlayer(MediaPlayer? p, long positionMs, SeekMode mode)
     {
         if (p is null) return;
+        long target = Math.Max(0, positionMs);
+
+        // GO LIVE, without a second transport verb. A committed seek AT (or past) the live edge of a live source is the
+        // "GO LIVE" gesture by construction — that is exactly what PlaybackBridge.GoLive issues — and the right way to
+        // honour it is the engine's own GoLiveAsync, which lands a few seconds INSIDE the edge instead of on top of it.
+        // Seeking literally to the edge of a moving window is how a live session stalls waiting for segments that do not
+        // exist yet. Scrub previews are deliberately excluded: a drag that passes over the edge must not fire this.
+        if (mode == SeekMode.Accurate && IsAtOrPastLiveEdge(p, target))
+        {
+            try { _ = p.GoLiveAsync(); return; }
+            catch (Exception ex) { _log.Info($"video-host go-live failed, falling back to a seek: {ex.Message}"); }
+        }
+
         EngineSeekMode engineMode = mode == SeekMode.Keyframe ? EngineSeekMode.Keyframe : EngineSeekMode.Accurate;
-        try { _ = p.SeekAsync(TimeSpan.FromMilliseconds(Math.Max(0, positionMs)), engineMode); }
+        try { _ = p.SeekAsync(TimeSpan.FromMilliseconds(target), engineMode); }
         catch (Exception ex) { _log.Info($"video-host seek failed: {ex.Message}"); }
+    }
+
+    /// <summary>How close to the live edge a committed seek counts AS "go live". One tick of slack plus the engine's own
+    /// go-live backoff, so the button's target (the edge as the bar last saw it) still reads as the edge after the few
+    /// hundred milliseconds it took to travel through the controller.</summary>
+    const long GoLiveToleranceMs = 2_000;
+
+    static bool IsAtOrPastLiveEdge(MediaPlayer p, long targetMs)
+    {
+        TimelineInfo t;
+        try { t = p.Timeline.Peek(); } catch { return false; }
+        if (!t.IsLive) return false;
+        long edge = (long)t.LiveEdge.TotalMilliseconds;
+        return edge > 0 && targetMs >= edge - GoLiveToleranceMs;
+    }
+
+    /// <summary>Has the timeline moved enough to be worth waking the projection? A flag flip always has; a numeric drift
+    /// under <see cref="LiveRelayEpsilonMs"/> never has (the live edge advances continuously at 10 Hz).</summary>
+    static bool LiveWindowChanged(in LiveWindow a, in LiveWindow b)
+        => a.IsLive != b.IsLive
+        || a.IsAtLiveEdge != b.IsAtLiveEdge
+        || Math.Abs(a.SeekableStartMs - b.SeekableStartMs) > LiveRelayEpsilonMs
+        || Math.Abs(a.SeekableEndMs - b.SeekableEndMs) > LiveRelayEpsilonMs
+        || Math.Abs(a.LiveEdgeMs - b.LiveEdgeMs) > LiveRelayEpsilonMs
+        || Math.Abs(a.PositionMs - b.PositionMs) > LiveRelayEpsilonMs;
+
+    /// <summary>Publish "no longer a live broadcast" for the load that is going away, iff a live window was ever
+    /// published for it. Idempotent and silent when nothing was live.</summary>
+    void RetractLiveWindow()
+    {
+        if (!_reportedLive.IsLive) return;
+        string key;
+        lock (_gate) key = _sourceKey;
+        _reportedLive = default;
+        _liveReported = false;
+        try { LiveWindowKnown?.Invoke(key, default); }
+        catch (Exception ex) { _log.Info($"video-host live retract failed: {ex.Message}"); }
+    }
+
+    /// <summary>Is the session provably able to accept a seek yet? Readiness is the direct statement of what a positive
+    /// duration used to stand in for — and unlike a duration it exists on a live source, which has none.</summary>
+    static bool IsSeekReady(MediaPlayer p, long durMs)
+    {
+        if (durMs > 0) return true;
+        PlaybackState st;
+        try { st = p.State.Peek(); } catch { return false; }
+        return st is PlaybackState.Ready or PlaybackState.Playing or PlaybackState.Paused;
     }
 
     public void SetVolume(double volume01)
@@ -325,6 +410,10 @@ public sealed class FluentVideoMediaHost : IMediaHost
     async System.Threading.Tasks.Task TeardownAsync(long epoch)
     {
         StopTicker();
+        // The window dies WITH the session it described. The ticker stops here, so nothing else would ever retract a
+        // live window — and a stale one is not a cosmetic leak: it keeps CanSeek armed and the DVR rail on screen over
+        // whatever plays next.
+        RetractLiveWindow();
         MediaPlayer? old;
         lock (_gate)
         {
@@ -334,6 +423,8 @@ public sealed class FluentVideoMediaHost : IMediaHost
             _lastState = PlaybackState.Idle;
             _errorReported = false;
             _reportedDurMs = 0;
+            _reportedLive = default;
+            _liveReported = false;
             _sizeLogged = false;
             _noSizeLogged = false;
             _progressed = false;
@@ -466,6 +557,8 @@ public sealed class FluentVideoMediaHost : IMediaHost
             _lastState = PlaybackState.Idle;
             _errorReported = false;
             _reportedDurMs = 0;
+            _reportedLive = default;
+            _liveReported = false;
             _sizeLogged = false;
             _noSizeLogged = false;
             _playIntent = true;
@@ -488,7 +581,13 @@ public sealed class FluentVideoMediaHost : IMediaHost
                 ? MediaSource.FromFile(file)
                 : src.IsDrm
                 ? MediaSource.FromUri(src.DrmDescriptor!.InitUrl).With(new DrmConfig(DrmSystem.PlayReady, src.LicenseServerUri))
-                : MediaSource.FromUri(src.ClearUrl ?? "");
+                // A LIVE broadcast is opened as one. Without this the backend infers live-ness from the container, and
+                // Media Foundation simply cannot: it reports the sliding DVR window as a finite GetDuration, which the
+                // session then latches and publishes as the track's length. SourceLiveness.Live tells the session up
+                // front, so it never publishes a duration for this source at all and the bar reads the timeline
+                // instead. Auto keeps every finite source on exactly today's inference.
+                : MediaSource.FromUri(src.ClearUrl ?? "")
+                    .WithLiveness(src.IsLive ? SourceLiveness.Live : SourceLiveness.Auto);
         }
         catch (Exception ex)
         {
@@ -571,9 +670,19 @@ public sealed class FluentVideoMediaHost : IMediaHost
         // manifest is commonly still 0, and a manifest can revise it afterwards. Value-gated on a ~250ms band so a
         // jittering estimate does not spam the projection.
         {
+            TimelineInfo timeline;
+            try { timeline = p.Timeline.Peek(); } catch { timeline = TimelineInfo.Empty; }
+            bool isLive = timeline.IsLive;
+
             long durMs = 0;
             try { durMs = (long)p.Duration.Peek().TotalMilliseconds; } catch { }
-            if (durMs > 0 && Math.Abs(durMs - _reportedDurMs) > DurationRelayEpsilonMs)
+
+            // DURATION IS SUPPRESSED WHILE LIVE, unconditionally. A broadcast has no length, and every number the
+            // backend could offer here is a lie of a different kind: MF hands back the DVR window (the "-3:22 remaining"
+            // on a stream that has been running for six hours), an HLS source hands back the segment list so far. The
+            // projection's duration override is exactly the wrong home for that, because it also scales the seek bar.
+            // The window travels on LiveWindowKnown instead, where it is labelled as what it is.
+            if (!isLive && durMs > 0 && Math.Abs(durMs - _reportedDurMs) > DurationRelayEpsilonMs)
             {
                 _reportedDurMs = durMs;
                 string key;
@@ -581,16 +690,50 @@ public sealed class FluentVideoMediaHost : IMediaHost
                 try { DurationKnown?.Invoke(key, durMs); }
                 catch (Exception ex) { _log.Info($"video-host duration relay failed: {ex.Message}"); }
             }
-            // APPLY the position carried in from the audio edit. This is the earliest point the session is provably
-            // seekable: a positive duration means metadata loaded and the native session is running. Seeking at the open
-            // instead silently did nothing (see BuildAndOpenAsync). Runs at most once per load.
-            // Clamped here too, for free: a music video is a different — often shorter — edit, so a carried position can
-            // sit at or past its end, which would land on a dead frame or fire Ended immediately.
-            if (_startSeekPending && durMs > 0)
+
+            // THE LIVE TIMELINE. Relayed as one record on a material change (a flag flip, or any edge moving more than
+            // LiveRelayEpsilonMs), and relayed ONCE more when live-ness ends so a stale window cannot outlive the
+            // broadcast it described.
+            {
+                var window = new LiveWindow(
+                    IsLive: isLive,
+                    SeekableStartMs: (long)timeline.SeekableStart.TotalMilliseconds,
+                    SeekableEndMs: (long)timeline.SeekableEnd.TotalMilliseconds,
+                    LiveEdgeMs: (long)timeline.LiveEdge.TotalMilliseconds,
+                    PositionMs: pos,   // the tick's own reading, taken above — one Peek per tick, not two
+                    IsAtLiveEdge: timeline.IsAtLiveEdge);
+                // The FIRST relay only happens for a source that is actually live — an ordinary video would otherwise
+                // publish one "not live" record per load, which is noise the projection already assumes.
+                bool relay = _liveReported ? LiveWindowChanged(_reportedLive, window) : window.IsLive;
+                if (relay)
+                {
+                    bool firstLive = !_reportedLive.IsLive && window.IsLive;
+                    _liveReported = true;
+                    _reportedLive = window;
+                    string key;
+                    lock (_gate) key = _sourceKey;
+                    if (firstLive && window.IsLive)
+                        _log.Info($"video-host live timeline for key={key}: window {window.WindowMs}ms " +
+                                  $"({window.SeekableStartMs}..{window.SeekableEndMs}), edge {window.LiveEdgeMs}ms, " +
+                                  $"{(window.HasWindow ? "DVR rail" : "no rewind")}");
+                    try { LiveWindowKnown?.Invoke(key, window); }
+                    catch (Exception ex) { _log.Info($"video-host live relay failed: {ex.Message}"); }
+                }
+            }
+
+            // APPLY the position carried in from the audio edit, at the first moment the session is provably seekable.
+            // The PROOF is the engine's own readiness, not a positive duration: duration was only ever a proxy for
+            // "metadata loaded and the native session is running", and it is a proxy that a LIVE source never satisfies
+            // (there is no duration to publish), which would strand a carried position forever. Ready/Playing/Paused say
+            // the same thing directly, and say it for every source. Seeking at the open instead silently did nothing
+            // (see BuildAndOpenAsync). Runs at most once per load.
+            // Clamped against the duration when there IS one, for free: a music video is a different — often shorter —
+            // edit, so a carried position can sit at or past its end, which would land on a dead frame or fire Ended.
+            if (_startSeekPending && IsSeekReady(p, durMs))
             {
                 long start;
                 lock (_gate) { start = _startAtMs; _startSeekPending = false; _startAtMs = 0; }
-                if (start > durMs - StartClampGuardMs)
+                if (durMs > 0 && start > durMs - StartClampGuardMs)
                 {
                     long clamped = Math.Max(0, durMs - StartClampBackoffMs);
                     _log.Info($"video-host carried position {start}ms exceeds this edit ({durMs}ms) — clamping to {clamped}ms");
@@ -614,7 +757,7 @@ public sealed class FluentVideoMediaHost : IMediaHost
                 _sizeLogged = true;
                 _log.Info($"video-host natural size {natural.Width}x{natural.Height} for key={CurrentSourceKey}");
             }
-            else if (!_noSizeLogged && _reportedDurMs > 0)
+            else if (!_noSizeLogged && (_reportedDurMs > 0 || _reportedLive.IsLive))
             {
                 // Metadata is loaded (a duration exists) but the decoder still reports no picture size — the exact
                 // signature of a surface that will sit under the opening spinner. Still recoverable (the session re-asks
@@ -622,6 +765,23 @@ public sealed class FluentVideoMediaHost : IMediaHost
                 _noSizeLogged = true;
                 _log.Info($"video-host has NO natural size yet although duration is known ({_reportedDurMs}ms) " +
                           $"key={CurrentSourceKey} — the surface stays on the opening spinner until the decoder reports one");
+            }
+        }
+
+        // ALWAYS-ON video PLACEMENT geometry (no env switch). natural = what the decoder reports; content = the size the
+        // backend renders the frame at inside its own swap chain (its ASPECT must match natural's, or the backend
+        // letterboxes inside its own destination); place = the rect the compositor visual was put at. place/content per
+        // axis IS the compositor's stretch: equal ratios == uniform, unequal == a deliberate Fill.
+        {
+            VideoSurfaceGeometry geo = default;
+            try { geo = p.SurfaceGeometry.Peek(); } catch { }
+            if (geo.IsPlaced && geo != _loggedGeometry)
+            {
+                _loggedGeometry = geo;
+                float ca = geo.Content.Height > 0 ? (float)geo.Content.Width / geo.Content.Height : 0f;
+                float pa = geo.Place.H > 0f ? geo.Place.W / geo.Place.H : 0f;
+                _log.Info($"video geometry {geo} contentAspect={ca:0.###} placeAspect={pa:0.###} " +
+                          $"{(MathF.Abs(ca - pa) <= 0.01f ? "uniform" : "stretched")} key={CurrentSourceKey}");
             }
         }
 

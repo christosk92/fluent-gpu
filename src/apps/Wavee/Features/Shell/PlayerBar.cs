@@ -9,6 +9,7 @@ using FluentGpu.Hooks;
 using FluentGpu.Localization;
 using FluentGpu.Scene;
 using FluentGpu.Signals;
+using Wavee.Backend.Playback;
 using Wavee.Core;
 using Wavee.Features.Video;
 using static FluentGpu.Dsl.Ui;
@@ -157,7 +158,7 @@ sealed class PlayerBarContent : Component
         // and play/pause because a video is playing in another window would be a regression, not a fix. Read through
         // the ONE derived signal (PlaybackBridge.TransportOwnerNow); a local visibility bool here is exactly what let
         // two owners both render.
-        bool ownsTransport = b.TransportOwnerNow.Value is TransportOwner.GlobalBar or TransportOwner.PopOut;
+        bool ownsTransport = b.TransportOwnerNow.Value is TransportOwner.GlobalBar or TransportOwner.PopOut or TransportOwner.Docked;
 
         PlayerState st =
             err is not null ? PlayerState.Error :
@@ -226,22 +227,27 @@ sealed class PlayerBarContent : Component
         // Now-playing is clickable: art → the playback context; title → the album; artists are per-name links inside a
         // scrolling row. The context route matches QueuePanel's "Playing from" breadcrumb instead of assuming that the
         // track's album is also its playback source (it may be a playlist or Liked Songs).
-        bool contextNav = RichText.RouteForUri(b.CurrentContext.Value) is { Length: > 0 };
+        // Where each span goes is PlayableLinks' answer, not this file's: a MODULE playable carries artist names with
+        // no uri and an empty album, so the old `Uri.Length > 0` gates made every module title/subtitle/art tile inert
+        // even after the module had named exactly which page it wanted. The art tile keeps the CONTEXT fallback for a
+        // catalogue track (the playback source is not derivable from the track) and takes the module's own page when
+        // there is one.
+        bool contextNav = ArtRoute(b, track) is { Length: > 0 };
         void NavContext()
         {
             // Resolve at invoke time: the mounted click target survives context changes.
-            if (RichText.RouteForUri(b.CurrentContext.Peek()) is { } route)
-                go?.Invoke(route, null);
+            if (ArtRoute(b, b.CurrentTrack.Peek()) is { } route)
+                go?.Invoke(route, PlayableLinks.LabelFor(b.CurrentTrack.Peek(), LinkSlot.Art));
         }
 
-        var npAlbum = track?.Album;
-        bool albumNav = npAlbum is { Uri.Length: > 0 };
+        bool albumNav = PlayableLinks.RouteFor(track, LinkSlot.Title) is { Length: > 0 };
         void NavAlbum()
         {
             // Resolve at invoke time: the mounted click target survives track/metadata changes, so never navigate with
             // the render-time album capture (which can be the pre-hydration empty AlbumRef).
-            if (b.CurrentTrack.Peek()?.Album is { Uri.Length: > 0 } album)
-                go?.Invoke("album:" + album.Uri, album.Name);
+            var now = b.CurrentTrack.Peek();
+            if (PlayableLinks.RouteFor(now, LinkSlot.Title) is { } route)
+                go?.Invoke(route, PlayableLinks.LabelFor(now, LinkSlot.Title));
         }
 
         var titleLinkHover = UseSignal(false);
@@ -769,22 +775,34 @@ sealed class PlayerBarContent : Component
         _ => Icons.ThisPc,   // ThisDevice / Computer
     };
 
-    internal static string Fmt(long ms)
-    {
-        if (ms < 0) ms = 0;
-        long total = ms / 1000, m = total / 60, s = total % 60;
-        return m.ToString() + ":" + (s < 10 ? "0" + s : s.ToString());
-    }
+    /// <summary>The transport clock. The digits themselves live in the engine-free <see cref="TimeFormat.Clock"/> under
+    /// <c>Backend/</c> so they are source-included by <c>Wavee.Tests</c> and can be pinned — this file is engine-bound
+    /// and never is. Formatting hours matters here because a live broadcast's elapsed-since-tune-in has no duration to
+    /// bound it and will sit past 59:59 on any stream left running.</summary>
+    internal static string Fmt(long ms) => TimeFormat.Clock(ms);
 
-    static void AddArtistLinks(List<Element> into, IReadOnlyList<ArtistRef> artists, Action<string, string?>? go)
+    /// <summary>Where the ART TILE goes. A module playable opens its OWN page (the module named it); everything else
+    /// opens the playback CONTEXT, which the track cannot know — QueuePanel's "Playing from" breadcrumb, not the
+    /// track's album, because the source may be a playlist or Liked Songs.</summary>
+    static string? ArtRoute(PlaybackBridge b, Track? track)
+        => PlayableLinks.RouteFor(track, LinkSlot.Art) ?? RichText.RouteForUri(b.CurrentContext.Peek());
+
+    /// <summary>The subtitle's per-name links. A CATALOGUE track links each credited artist to their page; a MODULE
+    /// playable has one publisher (a channel, a station) rather than a credit list, so the whole line is ONE link to
+    /// the entity the module named — and stays inert, not styled-but-dead, when it named none.</summary>
+    static void AddArtistLinks(List<Element> into, IReadOnlyList<ArtistRef> artists, Action<string, string?>? go,
+                               Track? track = null)
     {
+        string? moduleRoute = PlayableLinks.RouteFor(track, LinkSlot.Artist);
+        bool isModule = PlayableLinks.IsModule(track);
         for (int i = 0; i < artists.Count; i++)
         {
             var a = artists[i];
             if (a.Name.Length == 0) continue;
             if (into.Count > 0) into.Add(new TextEl(", ") { Size = 12f, Color = Tok.TextSecondary });
-            bool enabled = a.Uri.Length > 0;
-            into.Add(NavSpan(a.Name, () => { if (enabled) go?.Invoke("artist:" + a.Uri, a.Name); }, enabled)
+            string? route = isModule ? moduleRoute : a.Uri.Length > 0 ? "artist:" + a.Uri : null;
+            bool enabled = route is { Length: > 0 };
+            into.Add(NavSpan(a.Name, () => { if (route is { Length: > 0 } r) go?.Invoke(r, a.Name); }, enabled)
                 with { Key = "artist:" + (a.Uri.Length > 0 ? a.Uri : a.Id + ":" + a.Name) });
         }
     }
@@ -801,21 +819,25 @@ sealed class PlayerBarContent : Component
         {
             var b = UseContext(PlaybackBridge.Slot);
             var go = UseContext(HistoryStore.NavCtx);
-            var artists = b?.CurrentTrack.Value?.Artists;
+            var track = b?.CurrentTrack.Value;
+            var artists = track?.Artists;
             if (artists is not { Count: > 0 })
                 return new BoxEl { Direction = 0 };
 
             if (_compact && artists.Count > 1)
             {
                 var a = artists[0];
-                bool enabled = a.Uri.Length > 0;
+                // Same rule as AddArtistLinks: a module playable's subtitle is ONE destination, the publisher.
+                string? route = PlayableLinks.RouteFor(track, LinkSlot.Artist)
+                    ?? (PlayableLinks.IsModule(track) ? null : a.Uri.Length > 0 ? "artist:" + a.Uri : null);
+                bool enabled = route is { Length: > 0 };
                 var all = artists;
                 return new BoxEl
                 {
                     Direction = 0, AlignItems = FlexAlign.Center, MinWidth = 0f, Gap = 4f,
                     Children =
                     [
-                        NavSpan(a.Name, () => { if (enabled) go?.Invoke("artist:" + a.Uri, a.Name); }, enabled, trim: true)
+                        NavSpan(a.Name, () => { if (route is { Length: > 0 } r) go?.Invoke(r, a.Name); }, enabled, trim: true)
                             with { Key = "artist:" + (a.Uri.Length > 0 ? a.Uri : a.Id + ":" + a.Name) },
                         Embed.Comp(() => new ArtistMoreButton(all, (u, n) => go?.Invoke(u, n)))
                             with { Key = "npmore:" + (a.Uri.Length > 0 ? a.Uri : a.Name) + ":" + all.Count },
@@ -824,7 +846,7 @@ sealed class PlayerBarContent : Component
             }
 
             var kids = new List<Element>(artists.Count * 2);
-            AddArtistLinks(kids, artists, go);
+            AddArtistLinks(kids, artists, go, track);
             return new BoxEl
             {
                 Direction = 0, AlignItems = FlexAlign.Center, Shrink = 0f,
@@ -1096,13 +1118,24 @@ sealed class TimeText : Component
         long pos = _b.PositionMs.Value;          // subscribe → 1 Hz tick
         long dur = _b.DurationMs.Value;
         bool rightDuration = _remaining;
-        // A live stream has no remaining time to count down (duration is 0 and stays 0), so the right slot states what
-        // IS true — LIVE — instead of a permanent "-0:00". Elapsed on the left keeps counting, because "how long have I
-        // been listening" is still a fact. Read as a signal so the chip arrives and leaves with the playable; the
-        // toggle-to-duration gesture goes with the label, since there is no duration to toggle to.
-        if (rightDuration && _b.IsLive.Value) return LivePill(_ink);
+        // LIVE. Both halves of the row change, and both changes are the same idea: state what IS true instead of
+        // dressing a broadcast up as a track.
+        //   • The DVR window (`Live`) is the engine-authoritative fact — read as a signal so the row arrives and leaves
+        //     WITH the playable. `IsLive` alone still counts (radio publishes liveness with no window at all).
+        //   • RIGHT: a broadcast has no remaining time to count down (duration is 0 and stays 0), so the slot carries
+        //     the live mark — or, once the playhead has fallen behind a rewindable window, the way back to the edge.
+        //     The toggle-to-duration gesture goes with the label, because there is no duration to toggle to.
+        //   • LEFT: position is a coordinate on the broadcast's clock, not "how long you have been here", so it counts
+        //     elapsed since TUNE-IN. That is the only elapsed a listener can act on, and it needs the hours rung.
+        var live = _b.Live.Value;
+        bool isLive = live.IsLive || _b.IsLive.Value;
+        // Read unconditionally (never inside the live arm) so the subscription set is the same in every render — and
+        // read it from the BRIDGE, which folds the hysteresis once, rather than comparing BehindMs to a threshold here.
+        bool behindLive = _b.IsBehindLive.Value;
+        if (rightDuration && isLive) return LiveSlot(_b, live, behindLive, _ink);
         bool remainingMode = rightDuration && showRemaining;
         long ms = rightDuration ? (remainingMode ? Math.Max(0, dur - pos) : dur) : pos;
+        if (!rightDuration && isLive) ms = ElapsedSinceTuneIn(_b, pos);
         string s = (remainingMode ? "-" : "") + PlayerBarContent.Fmt(ms);
         void ToggleDuration()
         {
@@ -1114,7 +1147,10 @@ sealed class TimeText : Component
         }
         return new BoxEl
         {
-            Width = 44f, Direction = 0, AlignItems = FlexAlign.Center,
+            // 44 DIPs is the slot at rest, so a track starting does not reflow the seek row around it. While live the
+            // elapsed label grows an hours field (1:04:22 does not fit 44) — the slot becomes a FLOOR, not a cage.
+            Width = isLive ? float.NaN : 44f, MinWidth = 44f, Shrink = 0f,
+            Direction = 0, AlignItems = FlexAlign.Center,
             Justify = _remaining ? FlexJustify.Start : FlexJustify.End,
             Fill = ColorF.Transparent,
             HoverFill = rightDuration ? (_ink is null ? Tok.FillSubtleSecondary : WaveeOnMedia.GlassHover) : ColorF.Transparent,
@@ -1131,23 +1167,115 @@ sealed class TimeText : Component
         };
     }
 
+    /// <summary>How long this listener has been tuned in, in ms — what "elapsed" means for a broadcast.
+    /// <para><see cref="PlaybackBridge.TunedInAtMs"/> is Unix ms stamped when live-ness began. Falls back to the
+    /// reported position when nothing has been stamped yet (the first tick of a stream whose live-ness has not landed),
+    /// so the label never blinks to 0:00 on the way in.</para></summary>
+    static long ElapsedSinceTuneIn(PlaybackBridge b, long positionMs)
+    {
+        long tunedIn = b.TunedInAtMs.Value;   // subscribe → re-anchor when the broadcast changes
+        if (tunedIn <= 0L) return positionMs;
+        long since = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - tunedIn;
+        return since > 0L ? since : 0L;
+    }
+
+    /// <summary>The right-hand slot while live. Two states, one question — "am I hearing what is happening now?".
+    /// <para>AT THE EDGE (or with nothing to rewind) it is a statement: the <see cref="LivePill"/>. BEHIND a rewindable
+    /// window it becomes an ACTION, because there is now something to do about it.</para>
+    /// <para><b>Which of the two is not decided here.</b> "Behind" is a hysteresis STATE, not a comparison —
+    /// <c>Wavee.Backend.Playback.LiveEdgeState</c> owns it and <see cref="PlaybackBridge.IsBehindLive"/> publishes it.
+    /// A threshold applied at this call site is the defect: a healthy live playhead rides 5–8 s inside a window that
+    /// republishes several times a second, so the slot flickered between the mark and "GO LIVE −0:06" a few times a
+    /// second and dragged the seek row's layout with it.</para></summary>
+    static Element LiveSlot(PlaybackBridge b, LiveWindow live, bool behindLive, ColorF? ink)
+        => new BoxEl
+        {
+            // ONE width for the slot's whole live life — see LiveSlotWidth. Both states are right-ALIGNED inside it,
+            // so the two of them share a trailing edge and the swap moves nothing in either direction.
+            Width = LiveSlotWidth, Shrink = 0f,
+            Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.End,
+            Fill = ColorF.Transparent,
+            Children =
+            [
+                live.HasWindow && behindLive
+                    ? GoLiveButton(b, live.BehindMs, ink)
+                    : LivePill(ink),
+            ],
+        };
+
+    /// <summary>The width the right-hand slot RESERVES for its whole live life, mark or action.
+    /// <para>The rail beside it is a compositor-bound fill inside a <c>Grow</c> slot carrying a bounds
+    /// <c>LayoutTransition</c>, so a slot that changes width does not merely reflow — it FLIPS, easing the entire rail
+    /// sideways. Sizing the slot once for the widest thing it can ever hold ("GO LIVE −99:59" at the row's 9/12
+    /// semibold caption face, with the button's own padding) means the mark↔action swap moves nothing at all.</para>
+    /// <para>Live only. A track keeps the 44-DIP time slot — the widest thing THAT can hold is "-59:59".</para></summary>
+    internal const float LiveSlotWidth = 104f;
+
+    /// <summary>"GO LIVE −1:20" — the way back to the edge, offered only when there is a window to be behind IN.
+    /// <para>It is a TEXT button, not a plate: the slot sits between the elapsed label and the scrub rail, and a filled
+    /// accent button there would read as the row's primary action over the transport itself. So it takes accent as
+    /// CONTENT (<see cref="WaveeAccent.Decor"/> ink — this one IS an action, unlike the pill's decorative mark) with
+    /// the app's subtle interaction tier, and the immersive stage's on-media ink still wins.</para>
+    /// <para>It is content-sized inside the reserved <see cref="LiveSlotWidth"/> slot, so its interaction plate hugs
+    /// the words instead of spanning a mostly-empty 104 DIPs, and the count is never clipped to "GO LIV…".
+    /// <c>MinWidth</c> keeps the row's rhythm when the count is short.</para></summary>
+    static Element GoLiveButton(PlaybackBridge b, long behindMs, ColorF? ink)
+    {
+        ColorF fg = ink ?? WaveeAccent.Decor;
+        string label = Loc.Get(Strings.Play.GoLive) + " " + Strings.Play.Behind(TimeFormat.Clock(behindMs));
+        return new BoxEl
+        {
+            MinWidth = 44f, Shrink = 0f,
+            Height = 20f, Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+            Padding = new Edges4(Spacing.XS, 0f, Spacing.XS, 0f),
+            Corners = CornerRadius4.All(Radii.Control),
+            Fill = ColorF.Transparent,
+            HoverFill = ink is null ? Tok.FillSubtleSecondary : WaveeOnMedia.GlassHover,
+            PressedFill = ink is null ? Tok.FillSubtleTertiary : WaveeOnMedia.GlassPressed,
+            HoverScale = WaveeMotion.ScaleSubtle.Hover,
+            PressScale = WaveeMotion.ScaleSubtle.Press,
+            Role = AutomationRole.Button,
+            Focusable = true,
+            Cursor = CursorId.Hand,
+            OnClick = b.GoLive,
+            Children =
+            [
+                new TextEl(label)
+                {
+                    Size = 9f, LineHeight = 12f, Weight = 600, Color = fg, Wrap = TextWrap.NoWrap,
+                },
+            ],
+        };
+    }
+
     /// <summary>The LIVE mark that replaces the remaining-time label. It is the app's ONE badge shape — the classic
     /// track table's content-rating word-mark (<c>TrackRow.ClassicExplicitBadge</c>: a 14px box, 2px corner, 1px
     /// stroke, 9/12 semibold caps-as-authored) — so the bar does not invent a second badge language for the same job.
     ///
     /// <para>It paints ACCENT INK (<see cref="WaveeAccent.Decor"/>): accent as CONTENT, which is the role that owns
     /// text, never accent as structure. On the immersive stage the caller's theme-invariant on-media ink wins, exactly
-    /// as it does for the time labels. The box keeps the time slot's 44 DIPs so the seek row does not reflow when a
-    /// live playable starts.</para></summary>
+    /// as it does for the time labels. It is content-sized inside the reserved <see cref="LiveSlotWidth"/> slot, which
+    /// is what keeps the seek row from reflowing when the mark becomes the GO LIVE action and back.</para></summary>
     static Element LivePill(ColorF? ink)
     {
         ColorF fg = ink ?? WaveeAccent.Decor;
         return new BoxEl
         {
-            Width = 44f, Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Start,
+            Shrink = 0f, Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.End,
+            Gap = Spacing.XXS,
             Fill = ColorF.Transparent,
             Children =
             [
+                // The broadcast dot — the one piece of the mark that is NOT accent. Every recording indicator ever
+                // built is red, so red is the fastest possible read of "this is happening now", and the critical fill
+                // is the app's ONE red. It is STATIC: a blinking dot in a bar that is always on screen is a permanent
+                // motion source in the corner of the eye, and it would keep the frame loop awake for its whole life.
+                new BoxEl
+                {
+                    Width = 6f, Height = 6f, Shrink = 0f,
+                    Corners = CornerRadius4.All(3f),
+                    Fill = Tok.SystemFillCritical,
+                },
                 new BoxEl
                 {
                     Height = 14f, Padding = new Edges4(Spacing.XXS, 0f, Spacing.XXS, 0f), Shrink = 0f,

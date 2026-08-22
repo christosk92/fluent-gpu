@@ -46,6 +46,9 @@ public sealed class SystemMediaControlsBridge : IDisposable
     // steady-state gate) so the burst latch and the per-second gate can't disagree. See SmtcTimelineCoalescer.
     SmtcTimelineCoalescer _timeline;
     readonly Action _flushTimeline;   // cached once: the per-tick path must not allocate a delegate
+    // Has the OS timeline already been zeroed for the current live broadcast? One cross-process COM call per transition
+    // into live, not one per position tick for the whole stream.
+    bool _liveTimelineCleared;
 
     public SystemMediaControlsBridge(PlaybackBridge bridge, IPlaybackPlayer player, Action<Action> post)
     {
@@ -155,6 +158,22 @@ public sealed class SystemMediaControlsBridge : IDisposable
     {
         var smtc = _smtc;
         long dur = smtc is null || _disposed ? 0 : _bridge.DurationMs.Peek();
+
+        // A LIVE broadcast has no timeline to publish, and the OS has no way to render one that is honest — the Win11
+        // flyout draws a fixed-length scrub bar or nothing. Leaving the PREVIOUS track's timeline up is the failure that
+        // matters: the coalescer already declines to push at duration 0, so without this the flyout would keep showing
+        // the last song's 3:47 with a thumb frozen mid-bar while a six-hour stream plays. Push one explicit zero
+        // timeline on the transition into live and then stay quiet.
+        if (dur <= 0 && _bridge.IsLive.Peek())
+        {
+            _timeline.TryTake(dur, out _);   // always consume the latch, so the scheduled-flush bit cannot wedge armed
+            if (_liveTimelineCleared || smtc is null || _disposed) return;
+            _liveTimelineCleared = true;
+            try { smtc.UpdateTimeline(TimeSpan.Zero, TimeSpan.Zero); } catch (Exception) { }
+            return;
+        }
+        _liveTimelineCleared = false;
+
         if (!_timeline.TryTake(dur, out long pos)) return;
         try { smtc!.UpdateTimeline(TimeSpan.FromMilliseconds(pos), TimeSpan.FromMilliseconds(dur)); } catch (Exception) { }
     }

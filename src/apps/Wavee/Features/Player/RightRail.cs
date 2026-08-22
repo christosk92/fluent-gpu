@@ -191,12 +191,17 @@ sealed class RightRail : Component
     // video keep working). Height is the SAME FloatSignal the splitter writes — a stable bind, not a new Prop.Of
     // thunk each render (that left LayoutInput.Height as NaN and the ZStack collapsed to the 16-DIP strip).
     // Floor = 16:9 of the live rail width (drag only grows); the lyrics/queue body remains the Grow=1 remainder.
+    // At REST the height is not the rail's business at all: DockedVideoSurface fits it to the playing content's own
+    // aspect (ShellResponsiveLayout.FitDockedVideoHeight), and this splitter is the user's override of that fit.
     static Element DockedCap(ShellUi ui, bool docked, IAppSettings? settings, float railWidth)
     {
         void Commit()
         {
             float h = ShellResponsiveLayout.ClampDockedVideoHeight(ui.DockedVideoHeight.Peek(), ui.RailWidth.Peek());
             ui.DockedVideoHeight.Value = h;
+            // A COMMITTED drag pins the height against the content fit for as long as this source plays (the surface
+            // clears the pin at the next source). Set after the write, so the fit effect can never race it back.
+            ui.DockedVideoHeightPinned.Value = true;
             settings?.Set(WaveeSettings.ShellDockedVideoHeight, h);
         }
 

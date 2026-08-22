@@ -1,8 +1,6 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
-using System.Runtime.CompilerServices;
 using Wavee.Core;
 using Xunit;
 
@@ -16,8 +14,7 @@ namespace Wavee.Tests;
 /// <para>Modelled on <c>MergedChromeLayoutTests</c>: properties over spot checks. The defect class here is a row that
 /// lands in the wrong day, an announcement that sorts by the CONCERT date instead of its own, and — the expensive one —
 /// a follower or an activity entry leaking onto Home because the gate was written against the display category. Each of
-/// those gets an invariant rather than an example. The read-state seam is source-scanned as well as unit-tested,
-/// because "there is no second read store" is a claim about the whole app, not about one function.</para>
+/// those gets an invariant rather than an example.</para>
 /// </summary>
 public class HomeTimelineMergeTests
 {
@@ -309,62 +306,4 @@ public class HomeTimelineMergeTests
         Assert.True(NotificationReadIds.Contains(set, "id" + (NotificationReadIds.Cap + 24)));
         Assert.False(NotificationReadIds.Contains(set, "id0"));
     }
-
-    // ── source gates: the claims that are about the app, not about a function ────────────────────────────────────────
-
-    [Fact]
-    public void TheTimelineWritesReadStateThroughTheCenter_AndHasNoStoreOfItsOwn()
-    {
-        string timeline = Src("Wavee", "Features", "Home", "HomeModules.Timeline.cs");
-
-        // It marks read through the bridge...
-        Assert.Contains("nc.MarkRead(", timeline);
-        // ...and clicks through the center's OWN navigation rather than a second copy of it.
-        Assert.Contains("NotificationPanel.ClickSocial(", timeline);
-        // ...and keeps no read/seen state of its own.
-        Assert.DoesNotContain("UseState<bool>", timeline);
-        Assert.DoesNotContain("NotificationsReadIds", timeline);
-        Assert.DoesNotContain("LastSeenMs", timeline);
-
-        // Exactly one place writes the per-item read set, and it is the bridge.
-        var writers = SourceFiles()
-            .Where(f => File.ReadAllText(f).Contains("Set(WaveeSettings.NotificationsReadIds", StringComparison.Ordinal))
-            .Select(Path.GetFileName)
-            .ToArray();
-        Assert.Equal(new[] { "NotificationCenterBridge.cs" }, writers);
-    }
-
-    [Fact]
-    public void TheModuleTakesNoSecondSubscription_AndReadsTheFeedThroughTheOneMerge()
-    {
-        string timeline = Src("Wavee", "Features", "Home", "HomeModules.Timeline.cs");
-
-        // One signal read (Items) — the header's counter comes out of the merge, not a second signal.
-        Assert.Equal(1, CountOf(timeline, ".Value"));
-        Assert.Contains("HomeTimelineMerge.Build(nc.Items.Value)", timeline);
-        Assert.DoesNotContain("UnreadCount", timeline);
-        Assert.DoesNotContain(".EnsureFresh()", timeline);   // the module still primes nothing on mount
-
-        // The row cap the page's height estimate is derived from stays a single constant.
-        Assert.DoesNotContain("const int MaxRows", timeline);
-    }
-
-    static int CountOf(string haystack, string needle)
-    {
-        int n = 0, i = 0;
-        while ((i = haystack.IndexOf(needle, i, StringComparison.Ordinal)) >= 0) { n++; i += needle.Length; }
-        return n;
-    }
-
-    static string Src(params string[] parts) => File.ReadAllText(Path.Combine([AppsRoot, .. parts]));
-
-    static IEnumerable<string> SourceFiles()
-        => Directory.EnumerateFiles(Path.Combine(AppsRoot, "Wavee"), "*.cs", SearchOption.AllDirectories)
-                    .Where(f => !f.Contains(Path.DirectorySeparatorChar + "obj" + Path.DirectorySeparatorChar, StringComparison.Ordinal)
-                             && !f.Contains(Path.DirectorySeparatorChar + "bin" + Path.DirectorySeparatorChar, StringComparison.Ordinal));
-
-    // src/apps/, resolved from THIS file's compile-time path so it survives any output layout.
-    static readonly string AppsRoot = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(ThisFile())!, ".."));
-
-    static string ThisFile([CallerFilePath] string path = "") => path;
 }

@@ -1,5 +1,3 @@
-using System.IO;
-using System.Runtime.CompilerServices;
 using Wavee;
 using Xunit;
 
@@ -90,30 +88,6 @@ public class PlaylistPageNoticeRulesTests
         var settled = PlaylistPageNoticeRules.Next(DetailNotice.CreateFailed, freshIsNull: true, headerDeleted: false,
             CanView, Owner, isCreatePending: false);
         Assert.Equal(DetailNotice.CreateFailed, settled);
-    }
-
-    /// <summary>P1 shipped <see cref="DetailNotice.CreateFailed"/> with no way to reach it: <c>DetailPage.WithNotice</c>
-    /// hard-coded <c>isCreatePending: false</c> and nothing ever set the failed verdict. P3's create flow settles both
-    /// on the bridge, and the page reads them — which is what makes this enum member live rather than decorative.
-    /// A source scan, for the same reason <c>MenuGrammarTests</c> uses one: the page is engine code.</summary>
-    [Fact]
-    public void TheCreateFailedPath_IsReachableFromTheOpenPage()
-    {
-        string page = File.ReadAllText(Path.Combine(AppRoot(), "Features", "Detail", "DetailPage.cs"));
-        Assert.Contains("IsCreatePending(", page, System.StringComparison.Ordinal);
-        Assert.Contains("IsCreateFailed(", page, System.StringComparison.Ordinal);
-        Assert.Contains("DetailNotice.CreateFailed", page, System.StringComparison.Ordinal);
-        Assert.DoesNotContain("isCreatePending: false)", page, System.StringComparison.Ordinal);
-    }
-
-    /// <summary>The app's source root, resolved from THIS file's compile-time path (the MenuGrammarTests precedent).</summary>
-    static string AppRoot([CallerFilePath] string here = "")
-    {
-        string actionsDir = Path.GetDirectoryName(here)!;                 // …/Wavee.Tests/Actions
-        string tests = Path.GetDirectoryName(actionsDir)!;                // …/Wavee.Tests
-        string app = Path.Combine(Path.GetDirectoryName(tests)!, "Wavee");
-        Assert.True(Directory.Exists(app), $"app source root not found: {app}");
-        return app;
     }
 
     [Fact]

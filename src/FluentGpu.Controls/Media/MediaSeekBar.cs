@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
@@ -79,6 +79,17 @@ public sealed class MediaSeekBar : Component
     private readonly FloatSignal _scrubTargetSec = new(-1f);
     // Low-frequency, render-visible: an in-flight seek that outlived SeekSpinnerDelayMs.
     private readonly Signal<bool> _slowSeek = new(false);
+    // ── THE RAIL DOMAIN. Every fraction on this control — fill, thumb, buffered, seekable shading, the scrub target,
+    // the pixel-dwell tick — is a fraction OF THIS interval, not of the duration. For ordinary media it IS
+    // [0, Duration] and nothing below changes behaviour. For a LIVE source with a DVR window there is no duration at
+    // all (an unbounded source has no length), and the meaningful interval is the seekable window — which slides
+    // forward continuously, so the rail's right end is the LIVE EDGE and both ends move with wall-clock time.
+    // Kept as plain fields (not signals): they are model state read by Peek-style math, and re-rendering the transport
+    // ten times a second because a live window slid is exactly what this control is built not to do.
+    private double _railStartSec;
+    private double _railSpanSec;
+    // Render-visible, and ONLY at the threshold crossing: whether the rail is mapped to a live window.
+    private readonly Signal<bool> _liveRail = new(false);
 
     private NodeHandle _self;
     private long _lastSeekWallMs = long.MinValue;   // WALL-CLOCK throttle anchor for live keyframe previews
@@ -121,8 +132,8 @@ public sealed class MediaSeekBar : Component
     internal void Recompute()
     {
         if (_scrubbing.Peek()) { _displayFrac.Value = _scrubFrac.Peek(); return; }   // scrub gate
-        double durSec = Player.Duration.Peek().TotalSeconds;
-        if (durSec <= 0.0) { if (_displayFrac.Peek() != 0f) _displayFrac.Value = 0f; return; }
+        double span = _railSpanSec;
+        if (span <= 0.0) { if (_displayFrac.Peek() != 0f) _displayFrac.Value = 0f; return; }
         float position = Player.PositionSeconds.Peek();
         if (Player.IsPlaying.Peek() && !Player.IsBuffering.Peek())
         {
@@ -130,13 +141,45 @@ public sealed class MediaSeekBar : Component
             float rate = Math.Max(0f, Player.Rate.Peek());
             position = _positionAnchorSeconds + elapsedMs * 0.001f * rate;
         }
-        float frac = (float)Math.Clamp(position / durSec, 0.0, 1.0);
+        float frac = FracOf(position);
         // Quantize to the live track's whole-pixel granularity: most ticker frames land on the same pixel, so the write
         // is a true no-op (no bind re-run, no redundant GPU submit); a real pixel step still advances smoothly.
         float w = _width.Peek();
         float q = w > 1f ? MathF.Round(frac * w) / w : frac;
         if (q != _displayFrac.Peek()) _displayFrac.Value = q;
     }
+
+    /// <summary>Recompute the rail domain from the player's CURRENT timeline + duration. Live with a wide-enough DVR
+    /// window (<see cref="TimelineInfo.HasDvrWindow"/>) ⇒ the rail IS the window; otherwise <c>[0, Duration]</c> as
+    /// before. Peeks, so each caller decides for itself what to subscribe to.</summary>
+    private void UpdateRail()
+    {
+        TimelineInfo timeline = Player.Timeline.Peek();
+        bool live = timeline.HasDvrWindow;
+        if (live)
+        {
+            _railStartSec = timeline.SeekableStart.TotalSeconds;
+            _railSpanSec = timeline.DvrWindow.TotalSeconds;
+        }
+        else
+        {
+            double dur = Player.Duration.Peek().TotalSeconds;
+            _railStartSec = 0.0;
+            _railSpanSec = dur > 0.0 ? dur : 0.0;
+        }
+        _liveRail.SetIfChanged(live);
+    }
+
+    /// <summary>Media time (seconds) at a rail fraction.</summary>
+    private double TimeAt(float frac) => _railStartSec + Math.Clamp(frac, 0f, 1f) * _railSpanSec;
+
+    /// <summary>Rail fraction of a media time (seconds), clamped into the rail.</summary>
+    private float FracOf(double seconds)
+        => _railSpanSec > 0.0 ? (float)Math.Clamp((seconds - _railStartSec) / _railSpanSec, 0.0, 1.0) : 0f;
+
+    /// <summary>Clamp a media time into the rail's interval.</summary>
+    private double ClampToRail(double seconds)
+        => Math.Clamp(seconds, _railStartSec, _railStartSec + _railSpanSec);
 
     public override Element Render()
     {
@@ -147,9 +190,14 @@ public sealed class MediaSeekBar : Component
         bool playing = Player.IsPlaying.Value;
         bool buffering = Player.IsBuffering.Value;
         double durSec = Player.Duration.Value.TotalSeconds;
+        // A live source publishes NO duration (an unbounded source has no length), so the duration alone cannot decide
+        // whether this control has a scale to map onto. The live rail's scale is its DVR window; the flag is a signal
+        // written by the timeline effect below, so crossing the 30 s threshold re-renders exactly once — the window
+        // sliding (10 Hz) does not.
+        bool liveRail = _liveRail.Value;
         bool slowSeek = _slowSeek.Value;
         bool chromeUp = ChromeVisible?.Value ?? true;
-        bool enabled = chromeUp && durSec > 0.0 && st is not (PlaybackState.Idle or PlaybackState.Failed);
+        bool enabled = chromeUp && (durSec > 0.0 || liveRail) && st is not (PlaybackState.Idle or PlaybackState.Failed);
 
         _post = UsePost();
 
@@ -175,32 +223,37 @@ public sealed class MediaSeekBar : Component
         UseSignalEffect(() =>
         {
             BufferHealth health = Player.Buffer.Value;
-            double dur = Player.Duration.Value.TotalSeconds;
+            _ = Player.Duration.Value;                    // the rail domain moves with it
             float end = 0f;
-            if (dur > 0.0)
+            if (_railSpanSec > 0.0)
             {
                 var ranges = health.Ranges;
                 for (int i = 0; i < ranges.Count; i++)
                 {
-                    float e = (float)Math.Clamp(ranges[i].End.TotalSeconds / dur, 0.0, 1.0);
+                    float e = FracOf(ranges[i].End.TotalSeconds);
                     if (e > end) end = e;
                 }
             }
             _bufferedFrac.SetIfChanged(end);
         });
+        // The rail domain lives here: this effect already subscribes to BOTH inputs that define it (the timeline and
+        // the duration), and it is the one that must re-run when a live window slides. Everything it writes is a bound
+        // signal or a plain field, so a sliding window re-places the shading without re-rendering anything.
         UseSignalEffect(() =>
         {
             TimelineInfo timeline = Player.Timeline.Value;
-            double dur = Player.Duration.Value.TotalSeconds;
+            _ = Player.Duration.Value;
+            UpdateRail();
             float start = 0f, span = 1f;
-            if (dur > 0.0 && timeline.SeekableEnd > timeline.SeekableStart)
+            if (_railSpanSec > 0.0 && timeline.SeekableEnd > timeline.SeekableStart)
             {
-                start = (float)Math.Clamp(timeline.SeekableStart.TotalSeconds / dur, 0.0, 1.0);
-                float e = (float)Math.Clamp(timeline.SeekableEnd.TotalSeconds / dur, 0.0, 1.0);
+                start = FracOf(timeline.SeekableStart.TotalSeconds);
+                float e = FracOf(timeline.SeekableEnd.TotalSeconds);
                 span = MathF.Max(e - start, 0f);
             }
             _seekableStartFrac.SetIfChanged(start);
             _seekableSpanFrac.SetIfChanged(span);
+            Recompute();                                  // the playhead's fraction moved with the window
         });
 
         // The slow-seek spinner arm/disarm pair. UseTimeout arms at mount, so disarm it once on the mount edge.
@@ -210,7 +263,7 @@ public sealed class MediaSeekBar : Component
 
         // Re-seed the resting display when the enabling inputs change (duration arrives, play/pause edge). Deliberately
         // NOT keyed on the reported position — that quantised-to-milliseconds key re-ran this effect on every publish.
-        int modelKey = HashCode.Combine(enabled, playing, buffering, (int)durSec);
+        int modelKey = HashCode.Combine(enabled, playing, buffering, (int)_railSpanSec, liveRail);
         UseEffect(() => Recompute(), modelKey);
 
         var s = Slider.DefaultStyle;
@@ -348,6 +401,7 @@ public sealed class MediaSeekBar : Component
     {
         _self = h;
         RefreshWidth();
+        UpdateRail();
         Recompute();
     }
 
@@ -383,7 +437,7 @@ public sealed class MediaSeekBar : Component
     private bool Enabled()
     {
         var st = Player.State.Peek();
-        return Player.Duration.Peek().TotalSeconds > 0.0 && st is not (PlaybackState.Idle or PlaybackState.Failed);
+        return _railSpanSec > 0.0 && st is not (PlaybackState.Idle or PlaybackState.Failed);
     }
 
     private void OnDown(Point2 local)
@@ -412,10 +466,9 @@ public sealed class MediaSeekBar : Component
 
     private void OnCommit()
     {
-        double durSec = Player.Duration.Peek().TotalSeconds;
-        if (!Enabled() || durSec <= 0.0) { OnCanceled(); return; }
+        if (!Enabled()) { OnCanceled(); return; }
         float f = _scrubFrac.Peek();
-        var target = TimeSpan.FromSeconds(Math.Clamp(f * durSec, 0.0, durSec));
+        var target = TimeSpan.FromSeconds(TimeAt(f));
         _displayFrac.Value = f;                    // hold the committed position
         _positionAnchorSeconds = (float)target.TotalSeconds;
         _positionAnchorWallMs = Environment.TickCount64;
@@ -449,10 +502,9 @@ public sealed class MediaSeekBar : Component
     /// this, so both land on the same accurate commit + confirm-gated hold).</summary>
     internal void SeekBy(float seconds)
     {
-        double durSec = Player.Duration.Peek().TotalSeconds;
-        if (durSec <= 0.0) return;
+        if (_railSpanSec <= 0.0) return;
         double from = _awaitingConfirm ? _confirmTargetSec : Player.PositionSeconds.Peek();
-        var target = TimeSpan.FromSeconds(Math.Clamp(from + seconds, 0.0, durSec));
+        var target = TimeSpan.FromSeconds(ClampToRail(from + seconds));
         SeekTo(target);
     }
 
@@ -460,9 +512,8 @@ public sealed class MediaSeekBar : Component
     /// wheel seek also paints its target immediately and does not let a stale report drag the playhead backwards.</summary>
     internal void SeekTo(TimeSpan target)
     {
-        double durSec = Player.Duration.Peek().TotalSeconds;
-        if (durSec <= 0.0) return;
-        float f = (float)Math.Clamp(target.TotalSeconds / durSec, 0.0, 1.0);
+        if (_railSpanSec <= 0.0) return;
+        float f = FracOf(target.TotalSeconds);
         SetScrub(f);
         _scrubbing.Value = true;
         _displayFrac.Value = f;
@@ -480,8 +531,7 @@ public sealed class MediaSeekBar : Component
     private void SetScrub(float frac)
     {
         _scrubFrac.Value = frac;
-        double durSec = Player.Duration.Peek().TotalSeconds;
-        _scrubTargetSec.SetIfChanged(durSec > 0.0 ? (float)(frac * durSec) : -1f);
+        _scrubTargetSec.SetIfChanged(_railSpanSec > 0.0 ? (float)TimeAt(frac) : -1f);
     }
 
     private void DisarmSpinnerOnMount()
@@ -507,8 +557,7 @@ public sealed class MediaSeekBar : Component
     // ONE seek — the "coalesce moves to one per frame" rule, enforced at the expensive end.
     private void QueueLiveSeek(bool force)
     {
-        double durSec = Player.Duration.Peek().TotalSeconds;
-        if (durSec <= 0.0) return;
+        if (_railSpanSec <= 0.0) return;
         _queuedFrac = _scrubFrac.Peek();
         if (_seekPostQueued) return;
         long now = Environment.TickCount64;
@@ -520,14 +569,13 @@ public sealed class MediaSeekBar : Component
     private void DrainSeek()
     {
         _seekPostQueued = false;
-        double durSec = Player.Duration.Peek().TotalSeconds;
-        if (durSec <= 0.0 || !_scrubbing.Peek()) return;
+        if (_railSpanSec <= 0.0 || !_scrubbing.Peek()) return;
         _lastSeekWallMs = Environment.TickCount64;
         // Keyframe previews go to the HOST path too. Suppressing them whenever SeekRequested was set (the previous
         // shape) is what left the picture frozen on the last decoded frame for the whole drag: the host is exactly the
         // path that can serve a cheap keyframe. The mode is carried, so a host that distinguishes fast previews from
         // accurate commits can act on it.
-        RequestSeek(TimeSpan.FromSeconds(Math.Clamp(_queuedFrac * durSec, 0.0, durSec)), SeekMode.Keyframe);
+        RequestSeek(TimeSpan.FromSeconds(TimeAt(_queuedFrac)), SeekMode.Keyframe);
     }
 
     private void RequestSeek(TimeSpan target, SeekMode mode)
@@ -545,10 +593,10 @@ public sealed class MediaSeekBar : Component
     /// <summary>Pixel dwell of the playhead: <c>durationMs / trackWidthPx</c>, clamped ~[33, 250] ms.</summary>
     internal float TickIntervalMs()
     {
-        double durSec = Player.Duration.Peek().TotalSeconds;
+        double span = _railSpanSec;
         float w = _width.Peek();
-        if (durSec <= 0.0 || w <= 1f) return 100f;
-        return Math.Clamp((float)(durSec * 1000.0 / w), 33f, 250f);
+        if (span <= 0.0 || w <= 1f) return 100f;
+        return Math.Clamp((float)(span * 1000.0 / w), 33f, 250f);
     }
 }
 

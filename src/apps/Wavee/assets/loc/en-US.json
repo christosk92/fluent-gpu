@@ -1756,7 +1756,17 @@
     "lookingUp": "Looking up…",
     "noOwner": "Nothing installed can play this link.",
     "failed": "That link couldn’t be played.",
-    "live": "LIVE"
+    "live": "LIVE",
+    "$comment2": "The two halves of the player bar's behind-the-edge button, kept separate because they are two different jobs: goLive is the VERB (a caps word-mark that matches the LIVE chip beside it), behind is the COUNT, whose leading character is U+2212 MINUS SIGN — the typographic minus, not a hyphen — so it lines up with the digits either side of it. `time` arrives already formatted as m:ss / h:mm:ss.",
+    "goLive": "GO LIVE",
+    "behind": "−{time}"
+  },
+  "modulePage": {
+    "$comment": "A page a playback module DESCRIBES and the app renders (Part 9). `title` is the destination's fallback label — used by the tab strip, the breadcrumb and a pinned row when the navigating surface carried no name of its own. `openOn` takes the module's display name ({name}), so the row reads 'Open on YouTube'. There is deliberately no `loading` and no `retry` here: the loading state is a shimmer DERIVED from the page itself and carries no copy at all, and the retry label is the app's one `common.retry` (ErrorState owns it) — a second spelling of either would be a dead key that drifts.",
+    "title": "Module",
+    "error": "This page couldn’t be loaded.",
+    "openInBrowser": "Open in browser",
+    "openOn": "Open on {name}"
   },
   "browse": {
     "eyebrow": "Browse all",

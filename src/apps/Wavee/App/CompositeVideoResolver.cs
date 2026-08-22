@@ -67,13 +67,16 @@ public sealed class CompositeVideoResolver
     }
 
     /// <summary>The module tier as a pure lookup: a cached, video-form module playable with a <c>url</c> locator, or
-    /// null. Public so the tier's rule is testable without a resolver or a host.</summary>
+    /// null. Public so the tier's rule is testable without a resolver or a host.
+    /// <para>The module's <c>isLive</c> travels onto the source here, at the ONE point that has both facts in hand. It
+    /// has to: the media backend cannot tell a live HLS master from a VOD one (it reports the DVR window as a finite
+    /// duration), so the answer must arrive with the locator or not at all.</para></summary>
     /// <param name="playableUri">The playable uri.</param>
     public static PopOutVideoSource? ModuleVideoSource(string? playableUri)
     {
         if (Wavee.Backend.Modules.ModulePlayables.Get(playableUri) is not { } resolved) return null;
         if (resolved.Form != Wavee.Sdk.MediaForm.Video) return null;
         if (resolved.Media is not { Kind: "url", Url: { Length: > 0 } url }) return null;
-        return PopOutVideoSource.Clear(url) with { Key = playableUri! };
+        return PopOutVideoSource.Clear(url) with { Key = playableUri!, IsLive = resolved.IsLive };
     }
 }

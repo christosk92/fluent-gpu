@@ -332,6 +332,13 @@
     <!-- the "Play ▸ Link…" decisions (Wavee.Sdk + Wavee.Core + BCL only; deliberately localization-free — it takes the
          localized strings it needs as arguments) — PlayLinkActionsTests pin the whole surface -->
     <Compile Include="..\Wavee\Actions\PlayLinkActions.cs" />
+    <!-- WHERE a now-playing span goes (title/subtitle/art → an album, an artist, or a module's own page). Wavee.Core +
+         Wavee.Sdk + the source-included Backend/Modules only — PlayableLinksTests drive the real table. Its `LinkSlot`
+         enum is a hard dependency of Backend/Modules/ModulePages.cs, which the Backend glob above already compiles. -->
+    <Compile Include="..\Wavee\Actions\PlayableLinks.cs" />
+    <!-- the http(s)-only launch guard in front of Process.Start (System.Diagnostics only) — ModulePageSourceGateTests
+         pin that a module-supplied string cannot become a shell-execute -->
+    <Compile Include="..\Wavee\Platform\ShellOpen.cs" />
     <Compile Include="..\..\FluentGpu.Controls\SelectionModel.cs" />
     <!-- the queue verbs + their batch cap (Wavee.Core + BCL only) — the PlayNext/AddToEnd/InsertAt routing tests -->
     <Compile Include="..\Wavee\Features\Detail\DetailQueueActions.cs" />

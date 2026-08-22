@@ -136,6 +136,18 @@ public static class ContextResolve
         return -1;
     }
 
+    /// <summary>May Spotify's own services (context-resolve, autoplay/radio, the queue heal) be asked about this uri?
+    /// <para>Two namespaces answer NO. A non-<c>spotify:</c> uri (a playback module's <c>wavee:module:…</c>, a local
+    /// file, a session playlist) is not in Spotify's catalog at all — asking is a guaranteed 400 and a user-visible
+    /// error toast behind it. And <c>spotify:local:*</c> — Spotify's OWN self-describing local-file namespace, which is
+    /// also what <c>ConnectUriMask</c> publishes non-publishable rows as — carries its metadata IN the uri precisely
+    /// because there is nothing on the server to resolve. Every caller that would reach the network tests this FIRST,
+    /// so a non-Spotify session simply has no continuation instead of a failed round trip.</para></summary>
+    public static bool IsSpotifyContext(string? uri) =>
+        uri is { Length: > 0 }
+        && uri.StartsWith("spotify:", StringComparison.Ordinal)
+        && !uri.StartsWith(MediaSources.ConnectUriMask.Prefix, StringComparison.Ordinal);
+
     /// <summary>True for algorithmic/endless contexts (station/radio/autoplay) — their end triggers autoplay, not Ended.</summary>
     public static bool IsInfinite(string uri) =>
         uri.Contains(":station:", StringComparison.Ordinal)

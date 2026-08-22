@@ -29,6 +29,12 @@ public sealed class ShellUi
     /// <see cref="RailWidth"/>; the vertical splitter only grows from there.</summary>
     public FloatSignal DockedVideoHeight { get; } = new(ShellResponsiveLayout.DockedVideoNaturalH(ShellResponsiveLayout.RailDefaultW));
 
+    /// <summary>Has the user DELIBERATELY sized the docked cap for what is playing right now? False (the default) means
+    /// <see cref="DockedVideoHeight"/> follows the content's own aspect — <c>ShellResponsiveLayout.FitDockedVideoHeight</c>
+    /// — so a 16:9 stream fills the card edge to edge instead of sitting in letterbox bars. The vertical splitter sets it
+    /// on commit, and the next SOURCE clears it: an explicit drag is a decision about THIS video, not a standing one.</summary>
+    public Signal<bool> DockedVideoHeightPinned { get; } = new(false);
+
     /// <summary>
     /// Whether the rail can currently reserve inline layout width alongside the sidebar and content region. When false,
     /// the shell floats the rail over content instead of allocating row width for it.

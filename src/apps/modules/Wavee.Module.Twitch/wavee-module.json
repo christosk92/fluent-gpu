@@ -6,7 +6,7 @@
   "publisher": "wavee",
   "protocolVersion": 1,
   "entry": "Wavee.Module.Twitch.exe",
-  "capabilities": ["playback", "match", "metadata"],
+  "capabilities": ["playback", "match", "metadata", "pages"],
   "urlPatterns": ["twitch.tv"],
   "menu": {
     "label": "Twitch\u2026",

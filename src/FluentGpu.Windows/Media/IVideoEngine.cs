@@ -55,6 +55,17 @@ internal interface IVideoEngine : IDisposable
     /// <summary>HTML/MF ready state (0 HAVE_NOTHING through 4 HAVE_ENOUGH_DATA).</summary>
     uint ReadyState { get; }
 
+    /// <summary>How many times the engine has reported that the PRESENTATION itself changed underneath it —
+    /// <c>MF_MEDIA_ENGINE_EVENT_FORMATCHANGE</c> (an ABR variant switch: a new decoded frame size) or
+    /// <c>MF_MEDIA_ENGINE_EVENT_RESOURCELOST</c> (the swap chain went away and is being rebuilt). Monotonic, so a
+    /// consumer that stores the last value it acted on can never miss or double-count one.
+    /// <para>Why a COUNTER and not a flag: the natural size is queried once, at first metadata, and is the input to
+    /// both the composited-surface content size and the aspect fit. When MF switches renditions mid-stream the frame
+    /// size changes and nothing re-asks — the video keeps compositing at the FIRST variant's size and the fit is
+    /// silently wrong for the rest of the session. The consumer compares this against what it last saw and re-runs
+    /// <see cref="QueryNativeVideoSize"/>.</para></summary>
+    int PresentationEpoch { get; }
+
     // ── metadata / geometry ────────────────────────────────────────────────────────────────────────────────────────
     /// <summary>Native decoded video size (px), valid once metadata has loaded. Returns
     /// <see cref="NativeSizeAnswer.NoAnswer"/> when the engine has not answered yet — the caller must ask again on a

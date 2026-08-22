@@ -70,6 +70,7 @@ public sealed partial class LiveConnect : IDisposable
     readonly WaveeLogger _playbackLog;
     Action<FluentGpu.Media.MediaPlayer?>? _onVideoPlayerChanged;   // the wired PlayerChanged relay (detached on Dispose)
     Action<string, long>? _onVideoDurationKnown;                   // the wired DurationKnown relay (detached on Dispose)
+    Action<string, Wavee.Core.LiveWindow>? _onVideoLiveWindow;     // the wired LiveWindowKnown relay (detached on Dispose)
     readonly SpotifyServerClock _clock;   // server-clock skew estimator → corrects remote-position aging
     readonly ApConnection? _apChannel;   // owned: the adopted login socket
     readonly AudioPlaybackStack? _audio; // optional local-audio stack (null = silent/stub resolver)
@@ -186,7 +187,23 @@ public sealed partial class LiveConnect : IDisposable
             // rewritten into Spotify's own self-describing local-file namespace. The mask touches ONLY the uri field —
             // the QueueEntry uid is untouched, so skip_to/remove from a controller still address the right row.
             _publisher.PublishUriMask = ConnectUriMask.For(media);
+            // …and the CONTEXT with it. A masked row under an unresolvable `context_uri` is still an unresolvable state:
+            // the connect-state service will not adopt us as the cluster's active device, and the state it echoes back
+            // then reads to us as somebody else's (see ConnectUriMask.LocalFilesContext).
+            _publisher.PublishContextMask = ConnectUriMask.ContextMask;
+            // "Can anything here play this uri?" — the launch-recovery paths ask before seeding a cluster/snapshot current,
+            // so our OWN masked publish (`spotify:local:…`, a display shape) is never handed to a resolver.
+            Controller.IsPlayableHere = uri => media.OwnerOf(uri) is not null;
         }
+        // A module playable resolved as VIDEO has no audio body at all: pin it to the video host so no audio-first rule
+        // (Connect, launch restore) and no surface-intent edge can re-host it onto a decoder that can only refuse it.
+        Controller.IsVideoOnlyPlayable = Wavee.Backend.Modules.ModulePlayables.HasVideo;
+        // …and the OWNER of a non-catalogue uri answers what the playable IS. A restart has nothing to restore a module
+        // playable from — no catalogue to ask, and the cluster only ever holds our own masked publish — so without this
+        // a YouTube broadcast came back as its raw uri with no art, no artists and a stale length. Re-resolving through
+        // the module restores the display facts AND fills ModulePlayables, so has-video / live-ness are known at restore
+        // time rather than one beat later (the ModuleProjectionRelay then states the live override).
+        Controller.HydratePlayable = HydrateModulePlayableAsync;
 
         // ── the MODULE facts on the now-playing projection ────────────────────────────────────────────────────────
         // LIVE-ness follows the current playable, a module's `playback/metadata` becomes the now-playing override, and
@@ -225,6 +242,21 @@ public sealed partial class LiveConnect : IDisposable
         };
         table.AddRange(modules);
         return table.ToArray();
+    }
+
+    /// <summary>The <c>PlaybackController.HydratePlayable</c> impl: re-hydrate a PLAYBACK-MODULE playable through the
+    /// module that owns it. Anything else (a local file, a generic media url, an unrecognised scheme) answers null and
+    /// keeps the caller's own row. Throwing is the contract for "the owner could not answer" — the controller logs it at
+    /// Info and falls back to the placeholder, so a launch while offline stays silent.</summary>
+    static async Task<Track?> HydrateModulePlayableAsync(string uri, CancellationToken ct)
+    {
+        if (Wavee.Backend.Modules.ModuleHost.Current is not { } host) return null;
+        if (!Wavee.Sdk.ModuleUri.TryDecode(uri, out string moduleId, out string playableId)) return null;
+        // force:false — a cache hit from earlier in this launch is exactly as good an answer, and a live locator that
+        // is still valid should not be thrown away to restore a paused session that nobody has pressed play on yet.
+        Wavee.Sdk.ResolvedPlayable resolved = await host.ResolveAsync(uri, force: false, ct).ConfigureAwait(false);
+        return LocalPlayables.ForModule(moduleId, playableId, resolved.Title, resolved.Form,
+            resolved.Artists, resolved.ArtworkUrl);
     }
 
     // ── M0 — "one media, one host, one player": the app-level video hooks ─────────────────────────────────────────────────
@@ -309,6 +341,18 @@ public sealed partial class LiveConnect : IDisposable
             _playbackLog.Info($"video duration adopted for {uri}: {ms} ms (source {key})");
         };
         _videoHost.DurationKnown += _onVideoDurationKnown;
+
+        // 5b. ENGINE-AUTHORITATIVE LIVE-NESS, the same handoff for the fact a duration cannot express. A broadcast has
+        //     no length, so the host suppresses DurationKnown for it entirely and publishes the media pipeline's own
+        //     seekable window instead: that window is what the DVR rail scrubs inside, what re-arms CanSeek, and what
+        //     tells the LIVE pill from the "GO LIVE −m:ss" button. Scoped to the CURRENT playable exactly like the
+        //     duration override, and cleared by the projection at the next track change.
+        _onVideoLiveWindow = (key, window) =>
+        {
+            if (Projection.CurrentTrack?.Uri is not { Length: > 0 } uri) return;
+            Projection.SetLiveWindow(uri, window);
+        };
+        _videoHost.LiveWindowKnown += _onVideoLiveWindow;
 
         // 6. OPEN-FAILURE RECOVERY. A local attachment that exists but cannot be decoded must not become a dead end: peek the
         //    source the host was playing, and if it is an override, quarantine that exact (uri, key) for the session, drop the
@@ -404,6 +448,7 @@ public sealed partial class LiveConnect : IDisposable
     {
         if (_onVideoPlayerChanged is { } relay) { try { _videoHost.PlayerChanged -= relay; } catch { } _onVideoPlayerChanged = null; }
         if (_onVideoDurationKnown is { } durRelay) { try { _videoHost.DurationKnown -= durRelay; } catch { } _onVideoDurationKnown = null; }
+        if (_onVideoLiveWindow is { } liveRelay) { try { _videoHost.LiveWindowKnown -= liveRelay; } catch { } _onVideoLiveWindow = null; }
         if (_onLiveMetadata is { } metaRelay && _host is ILiveMetadataSource liveMetaSource)
         { try { liveMetaSource.MetadataKnown -= metaRelay; } catch { } _onLiveMetadata = null; }
         try { _moduleRelay.CurrentPlayableExpired -= OnModulePlayableExpired; } catch { }

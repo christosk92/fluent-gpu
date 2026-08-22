@@ -127,6 +127,8 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable, IVideoPumpSour
     /// <inheritdoc/>
     public IReadSignal<VideoColorInfo> VideoColor => _core.VideoColor;
     /// <inheritdoc/>
+    public IReadSignal<VideoSurfaceGeometry> SurfaceGeometry => _core.SurfaceGeometry;
+    /// <inheritdoc/>
     public IReadSignal<PlaybackStatistics> Statistics => _core.Statistics;
     /// <inheritdoc/>
     public IReadSignal<TimedCue?> ActiveCue => _core.ActiveCue;
@@ -338,6 +340,9 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable, IVideoPumpSour
             Network = source.Network ?? _network,
             Abr = _abr,
             LiveLatency = source is AdaptiveSource adaptive ? adaptive.Options.LatencyMode : LiveLatencyMode.Standard,
+            // The caller's live-ness declaration (MediaSource.WithLiveness) outranks any backend inference — see
+            // SourceLiveness. Auto (the default) leaves every backend exactly as it was.
+            Liveness = source.Liveness,
             LicenseRelay = _licenseRelay
         };
         try
