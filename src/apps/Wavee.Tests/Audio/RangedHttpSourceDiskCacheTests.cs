@@ -6,6 +6,7 @@ using System.Net.Http.Headers;
 using System.Threading;
 using Wavee.Backend.Audio;
 using Xunit;
+using Wavee.Sdk.Streams;
 
 namespace Wavee.Tests.Audio;
 
@@ -15,7 +16,7 @@ public class RangedHttpSourceDiskCacheTests
     public void SecondStream_ServesFromDisk_ZeroAdditionalHttp()
     {
         var dir = Path.Combine(Path.GetTempPath(), "wavee-range-disk-" + Guid.NewGuid());
-        var disk = new AudioBodyDiskCache(dir, budgetBytes: 64 << 20);
+        var disk = new ChunkDiskCache(dir, budgetBytes: 64 << 20);
         int calls = 0;
         const long size = 200_000;
         const string fileId = "deadbeef";
@@ -48,7 +49,7 @@ public class RangedHttpSourceDiskCacheTests
     public void PartialCoverage_FetchesOnlyGap()
     {
         var dir = Path.Combine(Path.GetTempPath(), "wavee-range-gap-" + Guid.NewGuid());
-        var disk = new AudioBodyDiskCache(dir, budgetBytes: 64 << 20);
+        var disk = new ChunkDiskCache(dir, budgetBytes: 64 << 20);
         int calls = 0;
         const long size = AudioBodyDiskCache.ChunkBytes * 3;
         const string fileId = "partial";
@@ -80,7 +81,7 @@ public class RangedHttpSourceDiskCacheTests
     public void TailChunk_SecondStreamUsesDiskWithoutHttp()
     {
         var dir = Path.Combine(Path.GetTempPath(), "wavee-range-tail-" + Guid.NewGuid());
-        var disk = new AudioBodyDiskCache(dir, budgetBytes: 64 << 20);
+        var disk = new ChunkDiskCache(dir, budgetBytes: 64 << 20);
         int calls = 0;
         int size = AudioBodyDiskCache.ChunkBytes + 211;
         var body = A.Bytes(11, size);

@@ -3,10 +3,18 @@ using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentGpu.Media;
+using FluentGpu.Media.Windows;
 using FluentGpu.Windows.Wasapi;
 using Wavee.Backend;
 using Wavee.Backend.Audio;
 using Wavee.Core;
+using Wavee.Sdk.Streams;
+
+// Both namespaces declare a SeekMode: the app's transport enum (Wavee.Core, framework-neutral, what the IMediaHost seam
+// speaks) and the engine's (FluentGpu.Media, what the session's SeekAsync takes). Aliased rather than fully qualified so
+// every use below reads unambiguously.
+using SeekMode = Wavee.Core.SeekMode;
+using EngineSeekMode = FluentGpu.Media.SeekMode;
 
 namespace Wavee.SpotifyLive.Audio;
 
@@ -59,8 +67,8 @@ public sealed class WaveeAudioKeyProvider : IAudioKeyProvider
     }
 }
 
-/// <summary>The decoder kind for a Spotify/podcast file.</summary>
-internal enum WaveeDecoderKind { Vorbis, Flac, Mp3 }
+/// <summary>The decoder kind for a Spotify/podcast file or a live stream.</summary>
+internal enum WaveeDecoderKind { Vorbis, Flac, Mp3, Aac }
 
 /// <summary>The fast-start bridge (spec §5.1) — the engine's <see cref="IMediaByteSource"/> front door. Carries ONE kept
 /// <see cref="IAudioReadStream"/> (a <see cref="SpotifyAudioStream"/> whose clear head is present from <c>LoadFastStart</c>
@@ -149,6 +157,7 @@ internal sealed class SpotifyEngineAudioDecoder : IAudioDecoder
         {
             WaveeDecoderKind.Flac => new FlacSampleSource(stream),
             WaveeDecoderKind.Mp3 => new Mp3SampleSource(stream),
+            WaveeDecoderKind.Aac => new AacSampleSource(stream),
             _ => new VorbisSampleSource(stream),
         };
         _srcChannels = Math.Max(1, _reader.Channels);
@@ -166,6 +175,7 @@ internal sealed class SpotifyEngineAudioDecoder : IAudioDecoder
         {
             WaveeDecoderKind.Flac => new MediaContentType(Container.Flac, CodecId.None, CodecId.Flac),
             WaveeDecoderKind.Mp3 => new MediaContentType(Container.Mp3, CodecId.None, CodecId.Mp3),
+            WaveeDecoderKind.Aac => new MediaContentType(Container.Adts, CodecId.None, CodecId.Aac),
             _ => new MediaContentType(Container.Ogg, CodecId.None, CodecId.Vorbis),
         };
         var dur = _durationMs > 0 ? TimeSpan.FromMilliseconds(_durationMs) : TimeSpan.Zero;
@@ -299,12 +309,13 @@ internal sealed class SpotifyEngineAudioDecoder : IAudioDecoder
 /// prior one disposed) on each load. Crossfade/prepared-next (engine PlayQueue) and per-endpoint device selection are the
 /// documented follow-ups — this host delivers correct single-track decode→mix→output with graceful natural-end advance.
 /// </summary>
-public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioOutputDeviceControl, IPreparedAudioHost
+public sealed partial class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioOutputDeviceControl, IPreparedAudioHost,
+    ILiveMetadataSource
 {
     const int MaxCrossfadeMs = 12_000;
 
     readonly WaveeLogger _log;
-    readonly AudioBodyDiskCache? _bodyDisk;
+    readonly ChunkDiskCache? _bodyDisk;
     readonly System.Net.Http.HttpClient _http;
     readonly Func<string, byte[], CdnDecryptor?> _nativeDecryptorFactory;
 
@@ -325,6 +336,20 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
     long _loadEpoch;
     int _softReloading;                              // 1 while a mid-track device-rate soft-reload drain is queued/running (single-drainer token)
     int _softReloadPending;                          // 1 when a device-rate change awaits processing (set on coalesce / crossfade defer)
+
+    // -- the LIVE session (internet radio) ---------------------------------------------------------------------------
+    // Kept apart from _activeStream on purpose: a live transport is not a body that can be re-opened, ranged or seeked,
+    // and the two facts the rest of this class needs from it (is it reconnecting, has it died) are read from the poll
+    // tick on another thread.
+    LiveHttpAudioStream? _activeLive;
+    volatile bool _activeIsLive;
+    volatile bool _liveRecovering;
+    bool _liveDropReported;                          // one drop report per session - a repeat re-arms the retry ladder
+    Action<AudioNetworkRecoveryEvent>? _liveRecoveryHandler;
+    Action<string>? _liveTitleHandler;
+
+    /// <inheritdoc cref="ILiveMetadataSource.MetadataKnown"/>
+    public event Action<string, string?>? MetadataKnown;
 
     // intents (applied to the session as it becomes ready)
     bool _playIntent;
@@ -413,7 +438,7 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
 #pragma warning restore CS0067
 
     public FluentMediaAudioHost(Func<IPlayPlayCdnDecryptorFactory?> decryptors, System.Net.Http.HttpClient http,
-        WaveeLogger log = default, AudioBodyDiskCache? bodyDisk = null)
+        WaveeLogger log = default, ChunkDiskCache? bodyDisk = null)
     {
         _log = log;
         _bodyDisk = bodyDisk;
@@ -519,13 +544,18 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
         });
     }
 
-    public void Seek(long positionMs)
+    /// <summary>Reposition the PCM audio session. The PCM graph decodes from a container that has no keyframe grid, so
+    /// a <see cref="SeekMode.Keyframe"/> scrub preview and an <see cref="SeekMode.Accurate"/> commit resolve to the SAME
+    /// engine seek here — the parameter still exists (rather than being dropped at the boundary) so the fidelity survives
+    /// to a host that can honour it, and so the endgame bookkeeping below can tell a preview from a commit if it ever
+    /// needs to. What differs is upstream: the controller never emits a cluster event for a preview.</summary>
+    public void Seek(long positionMs, SeekMode mode)
     {
         long ms = Math.Max(0, positionMs);
         Enqueue(async () =>
         {
             if (_session is null) return;
-            await _session.SeekAsync(TimeSpan.FromMilliseconds(ms), SeekMode.Accurate).ConfigureAwait(false);
+            await _session.SeekAsync(TimeSpan.FromMilliseconds(ms), EngineSeekMode.Accurate).ConfigureAwait(false);
             if (_session is PcmAudioSession pcm)
             {
                 // W2: the seek moved the active track's natural-end FRAME, so a join scheduled at the old frame would butt
@@ -668,6 +698,56 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
             var extBytes = new SpotifyMediaByteSource(http, 0, kind, body.DurationMs, 1f);
             _activeStream = null;
             await OpenSessionAsync(extBytes, epoch).ConfigureAwait(false);
+            return;
+        }
+
+        // LIVE (internet radio, or any locator the resolver marked endless) - a forward-only ICY socket. This branch
+        // exists precisely because the ExternalPlain path above is built on a RANGED source whose "server ignored
+        // Range" fallback buffers the WHOLE body: on a stream with no end that is an OOM, not a fallback.
+        if (body.SourceKind == AudioSourceKind.LiveStream)
+        {
+            LiveHttpAudioStream live;
+            try
+            {
+                live = await LiveHttpAudioStream.OpenAsync(body.CdnUrl, _log).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                // ONE connect attempt, then a typed failure: a station that is down should say so immediately rather
+                // than spin for the reconnect budget the RUNNING stream is entitled to.
+                _log.Info($"live stream open failed url={body.CdnUrl}: {ex.GetType().Name}: {ex.Message}");
+                var reason = ex is IOException ? AudioKeyFailureReason.Network : AudioKeyFailureReason.Restricted;
+                _signals.OnNext(AudioHostSignal.Fault(0, reason, ex.Message));
+                return;
+            }
+            if (epoch != Volatile.Read(ref _loadEpoch)) { await live.DisposeAsync().ConfigureAwait(false); return; }
+
+            // Content-Type first (authoritative when the station bothers), then the first bytes (most do not bother).
+            var head = new byte[512];
+            int headLength = live.PeekHead(head);
+            var liveKind = SniffExternalKind(live.ContentType) ?? SniffLiveKind(head.AsSpan(0, headLength)) ?? WaveeDecoderKind.Mp3;
+            if (liveKind == WaveeDecoderKind.Aac && !MfAacDecoder.IsAvailable())
+            {
+                await live.DisposeAsync().ConfigureAwait(false);
+                _signals.OnNext(AudioHostSignal.Fault(0, AudioKeyFailureReason.ArchUnsupported,
+                    "this Windows edition has no AAC decoder (install the Media Feature Pack)"));
+                return;
+            }
+
+            AttachLive(live);
+            _activeStream = null;
+            // Duration 0 is load-bearing, not laziness: it keeps every ending-soon / gapless-join / prepared-next arm
+            // switched off for a stream that has no end to approach (LiveSessionRules.SessionDurationMs states it).
+            var liveBytes = new SpotifyMediaByteSource(live, 0, liveKind,
+                LiveSessionRules.SessionDurationMs(isLive: true, body.DurationMs), 1f);
+            await OpenSessionAsync(liveBytes, epoch).ConfigureAwait(false);
+            return;
+        }
+
+        // Module-served bytes (stream/open|read|close over the module RPC).
+        if (body.SourceKind == AudioSourceKind.ModuleStream)
+        {
+            await SupplyModuleStreamAsync(body, epoch).ConfigureAwait(false);
             return;
         }
 
@@ -935,7 +1015,8 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
             if (epoch == Volatile.Read(ref _loadEpoch))
             {
                 if (savedPos > 0)
-                    try { await reopened.SeekAsync(TimeSpan.FromMilliseconds(savedPos), SeekMode.Accurate).ConfigureAwait(false); } catch { }
+                    // Restoring the playhead after a device-format reload is a committed reposition, never a scrub.
+                    try { await reopened.SeekAsync(TimeSpan.FromMilliseconds(savedPos), EngineSeekMode.Accurate).ConfigureAwait(false); } catch { }
                 if (_playIntent) { try { await reopened.PlayAsync().ConfigureAwait(false); StartTicker(); } catch { } }
             }
         }
@@ -952,6 +1033,10 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
 
     async Task DisposeSessionAsync()
     {
+        // FIRST, before anything awaits: a live transport's reader may be parked inside the ring buffer's blocking Read
+        // on the feed thread, and AudioFeedThread.Stop only joins that worker for 500 ms. Disposing the live stream here
+        // wakes it (ObjectDisposedException reads as EOF at the decode edge) so the teardown below completes in time.
+        DetachLive();
         var old = _session;
         _session = null;
         _activeBytes = null;
@@ -1003,6 +1088,73 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
         _prepOverlap = false;
         if (item is not null) { try { await item.DisposeAsync().ConfigureAwait(false); } catch { } }
         if (stream is not null) { try { stream.Dispose(); } catch { } }
+    }
+
+    // -- the LIVE session: recovery state, in-band metadata, and the "Ended means dropped" re-reading ----------------
+    // A live transport reports two things no finite body ever does. It RECONNECTS - which has to reach the UI as
+    // "reconnecting" rather than as a stall or (worse) silence. And it can DIE - which has to reach the controller as an
+    // ERROR, because the controller's error arm retries the SAME playable (for a live stream that is reconnect-from-
+    // scratch) while its Ended arm auto-advances off the station the user chose.
+
+    void AttachLive(LiveHttpAudioStream live)
+    {
+        DetachLive();
+        _activeLive = live;
+        _activeIsLive = true;
+        _liveRecovering = false;
+        _liveDropReported = false;
+
+        _liveRecoveryHandler = e =>
+        {
+            if (!ReferenceEquals(_activeLive, live)) return;   // a superseded session's transport still finishing up
+            if (LiveSessionRules.IsTerminal(e.Stage)) { _liveRecovering = false; ReportLiveDrop(e.Error); return; }
+            bool recovering = LiveSessionRules.IsRecovering(e.Stage);
+            if (recovering == _liveRecovering) return;         // edge-triggered: Attempt after Started is not new news
+            _liveRecovering = recovering;
+            if (recovering)
+                _signals.OnNext(new AudioHostSignal(AudioHostSignalKind.Recovering, PositionMs, true, false, false,
+                    PlaybackRecoveryKind.Network));
+            else if (_playIntent)
+                // Recovered: clear the banner by re-asserting Playing. Gated on play intent so a reconnect that lands
+                // while the user has paused does not announce playback that is not happening.
+                _signals.OnNext(new AudioHostSignal(AudioHostSignalKind.Playing, PositionMs, true, false, false));
+        };
+        ((IAudioNetworkRecoverySource)live).NetworkRecovery += _liveRecoveryHandler;
+
+        _liveTitleHandler = title =>
+        {
+            if (!ReferenceEquals(_activeLive, live)) return;
+            MetadataKnown?.Invoke(title, live.StationName);
+        };
+        live.StreamTitleChanged += _liveTitleHandler;
+    }
+
+    /// <summary>Unwire and dispose the live transport. Idempotent, and safe to call for a non-live session.</summary>
+    void DetachLive()
+    {
+        var live = _activeLive;
+        _activeLive = null;
+        _activeIsLive = false;
+        _liveRecovering = false;
+        _liveDropReported = false;
+        if (live is null) { _liveRecoveryHandler = null; _liveTitleHandler = null; return; }
+        if (_liveRecoveryHandler is not null) ((IAudioNetworkRecoverySource)live).NetworkRecovery -= _liveRecoveryHandler;
+        if (_liveTitleHandler is not null) live.StreamTitleChanged -= _liveTitleHandler;
+        _liveRecoveryHandler = null;
+        _liveTitleHandler = null;
+        try { live.Dispose(); } catch { /* the socket is going away regardless */ }
+    }
+
+    /// <summary>Report a live drop as a typed ERROR. Once per session - a second report would re-arm the retry ladder
+    /// the first one already started.</summary>
+    void ReportLiveDrop(Exception? error)
+    {
+        if (!LiveSessionRules.ShouldReportDropInsteadOfEnded(_activeIsLive, _liveDropReported)) return;
+        _liveDropReported = true;
+        var reason = LiveSessionRules.DropReason(error);
+        _log.Info($"live stream dropped reason={reason}: {error?.GetType().Name}: {error?.Message}");
+        StopTicker();
+        _signals.OnNext(AudioHostSignal.Fault(PositionMs, reason, error?.Message ?? "the live stream dropped"));
     }
 
     // ── IPreparedAudioHost: prepared-next + real overlapping crossfade ───────────────────────────────────────────────
@@ -1396,6 +1548,15 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
         switch (state)
         {
             case PlaybackState.Playing:
+                if (LiveSessionRules.ShouldEmitRecoveringTick(_activeIsLive, _liveRecovering))
+                {
+                    // The 2-argument tick infers RecoveryKind.None, which the projection writes straight over the
+                    // "reconnecting" state - so while a live transport is actually reconnecting the tick must be the
+                    // 6-argument form that keeps carrying Network, or the banner flickers off every 200 ms.
+                    _signals.OnNext(new AudioHostSignal(AudioHostSignalKind.PositionTick, pos, true, false, false,
+                        LiveSessionRules.TickRecoveryKind(_activeIsLive, _liveRecovering)));
+                    break;
+                }
                 _signals.OnNext(_lastState == PlaybackState.Playing
                     ? new AudioHostSignal(AudioHostSignalKind.PositionTick, pos)
                     : new AudioHostSignal(AudioHostSignalKind.Playing, pos));
@@ -1412,6 +1573,12 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
             {
                 bool endedEdge = _lastState != PlaybackState.Ended;
                 if (!endedEdge && _endedHold <= 0) break;   // steady-state Ended, already reported
+
+                // A LIVE session can never legitimately end: an endless stream that stopped producing DROPPED. Report
+                // it as an error (the controller retries this playable = a fresh connect) instead of letting the Ended
+                // arm auto-advance off the station. Deliberately ahead of the W2 promote/hold logic - none of which can
+                // apply to a source with no duration and no prepared next.
+                if (_activeIsLive) { ReportLiveDrop(null); break; }
 
                 // W2 degraded path: a READY prepared voice at (or after) the boundary promotes INTO the live session —
                 // a bounded micro-gap, never a device teardown. The Started transition advances the controller instead
@@ -1452,6 +1619,7 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
     {
         AudioFormat.Flac or AudioFormat.Flac24 => WaveeDecoderKind.Flac,
         AudioFormat.Mp3 => WaveeDecoderKind.Mp3,
+        AudioFormat.Aac => WaveeDecoderKind.Aac,
         _ => WaveeDecoderKind.Vorbis,
     };
 
@@ -1459,9 +1627,34 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
     {
         if (string.IsNullOrEmpty(contentType)) return null;
         var ct = contentType.ToLowerInvariant();
+        // "aac" is tested FIRST and deliberately: it covers audio/aac, audio/aacp and audio/x-aac, and testing "mpeg"
+        // first would swallow nothing today but would the moment a station reports "audio/mpeg-aac". What is NEVER
+        // mapped here is audio/mp4 — that is an MP4 container, not the raw ADTS the AAC leaf reads.
+        // audio/mp4 (and mp4a-latm) is an MP4 CONTAINER, not the raw ADTS the AAC leaf reads - never route it here.
+        if (ct.Contains("mp4")) return null;
+        if (ct.Contains("aac")) return WaveeDecoderKind.Aac;
         if (ct.Contains("mpeg") || ct.Contains("mp3")) return WaveeDecoderKind.Mp3;
         if (ct.Contains("ogg") || ct.Contains("vorbis")) return WaveeDecoderKind.Vorbis;
         if (ct.Contains("flac")) return WaveeDecoderKind.Flac;
+        return null;
+    }
+
+    /// <summary>Second-chance codec detection for a LIVE stream from its first bytes, for the (common) station that
+    /// reports a useless Content-Type such as <c>application/octet-stream</c>. Only the two codecs radio actually uses
+    /// are recognised; anything else falls through to the caller's default.</summary>
+    internal static WaveeDecoderKind? SniffLiveKind(ReadOnlySpan<byte> head)
+    {
+        // An ID3v2 tag can precede MP3 frames on a stream that was pushed from files.
+        if (head.Length >= 3 && head[0] == (byte)'I' && head[1] == (byte)'D' && head[2] == (byte)'3')
+            return WaveeDecoderKind.Mp3;
+        for (int i = 0; i + 1 < head.Length && i < 4096; i++)
+        {
+            if (head[i] != 0xFF || (head[i + 1] & 0xE0) != 0xE0) continue;
+            // Both ADTS and MPEG audio start with a 11-bit sync; the LAYER field separates them (00 = ADTS/AAC).
+            int layer = (head[i + 1] >> 1) & 0x03;
+            if (layer == 0) return WaveeDecoderKind.Aac;
+            return WaveeDecoderKind.Mp3;
+        }
         return null;
     }
 

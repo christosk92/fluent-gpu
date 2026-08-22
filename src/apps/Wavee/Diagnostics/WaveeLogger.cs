@@ -52,6 +52,39 @@ public readonly struct WaveeLogger
         if (_log is not { } l || !l.IsEnabled(level)) return;
         l.Event(level, Category, eventId, message, operationId, elapsedMs, ex, fields.ToArray());
     }
+
+    /// <summary>Adapt this logger to the SDK's transport-agnostic <see cref="Wavee.Sdk.Streams.StreamLogger"/> so the
+    /// shared byte-stream building blocks (<c>RangedHttpSource</c>, <c>ChunkDiskCache</c>) log into WaveeLog without the
+    /// SDK depending on the app. <c>default</c> stays a no-op on both sides.</summary>
+    public static implicit operator Wavee.Sdk.Streams.StreamLogger(WaveeLogger log) =>
+        log._log is null ? default : new(new WaveeStreamLogSink(log));
+}
+
+/// <summary>The <see cref="WaveeLogger"/> side of the SDK stream-logging seam. Level checks stay upstream, so a
+/// filtered-out trace never builds its message.</summary>
+sealed class WaveeStreamLogSink(WaveeLogger log) : Wavee.Sdk.Streams.IStreamLogSink
+{
+    public bool IsEnabled(Wavee.Sdk.Streams.StreamLogLevel level) => log.IsEnabled(Map(level));
+
+    public void Log(Wavee.Sdk.Streams.StreamLogLevel level, string message) => log.Sink?.Log(Map(level), log.Category, message);
+
+    public void Event(Wavee.Sdk.Streams.StreamLogLevel level, string eventId, string message, long elapsedMs,
+        ReadOnlySpan<Wavee.Sdk.Streams.StreamLogField> fields)
+    {
+        var mapped = new WaveeLogField[fields.Length];
+        for (int i = 0; i < fields.Length; i++) mapped[i] = new WaveeLogField(fields[i].Name, fields[i].Value);
+        log.Event(Map(level), eventId, message, elapsedMs: elapsedMs, fields: mapped);
+    }
+
+    static WaveeLogLevel Map(Wavee.Sdk.Streams.StreamLogLevel level) => level switch
+    {
+        Wavee.Sdk.Streams.StreamLogLevel.Trace => WaveeLogLevel.Trace,
+        Wavee.Sdk.Streams.StreamLogLevel.Debug => WaveeLogLevel.Debug,
+        Wavee.Sdk.Streams.StreamLogLevel.Warning => WaveeLogLevel.Warning,
+        Wavee.Sdk.Streams.StreamLogLevel.Error => WaveeLogLevel.Error,
+        Wavee.Sdk.Streams.StreamLogLevel.Critical => WaveeLogLevel.Critical,
+        _ => WaveeLogLevel.Info,
+    };
 }
 
 /// <summary>Shared handler core: check the level up front; build over <see cref="DefaultInterpolatedStringHandler"/>

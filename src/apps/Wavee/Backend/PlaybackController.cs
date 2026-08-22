@@ -729,9 +729,19 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         await LocalPrevAsync(ct).ConfigureAwait(false);
     }
 
-    public Task SeekAsync(long positionMs, CancellationToken ct = default)
-        => RouteLocal() ? Local(() => EmitSeeked(positionMs))
-                        : Forward("seek_to", ct, ("value", positionMs));
+    /// <summary>Seek the current media, carrying the seek FIDELITY the seek bar computed.
+    /// <para><see cref="SeekMode.Keyframe"/> is a throttled scrub PREVIEW issued many times per drag. Locally it drives the
+    /// media host ONLY (see <see cref="EmitSeeked"/>) — no cluster <c>Seeked</c> event, no prepared-next re-arm, no
+    /// continuation fetch. Remotely it is DROPPED outright: <c>seek_to</c> is a committed action by definition and a scrub
+    /// stream over Connect would spam the cluster; only the <see cref="SeekMode.Accurate"/> commit is forwarded.</para></summary>
+    public Task SeekAsync(long positionMs, SeekMode mode, CancellationToken ct = default)
+    {
+        if (RouteLocal()) return Local(() => EmitSeeked(positionMs, mode));
+        // Remote device: previews are not sent. The gesture still commits — MediaSeekBar issues exactly one Accurate
+        // seek on release, and that is the one that crosses the wire.
+        if (mode == SeekMode.Keyframe) return Done;
+        return Forward("seek_to", ct, ("value", positionMs));
+    }
 
     public Task SetVolumeAsync(double volume01, CancellationToken ct = default)
     {
@@ -1016,7 +1026,8 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
                 case ConnectCmd.SkipPrev: await LocalPrevAsync(ct).ConfigureAwait(false); break;
                 case ConnectCmd.SeekTo:
                     await _lock.WaitAsync(ct).ConfigureAwait(false);
-                    try { EmitSeeked(cmd.SeekToMs); }
+                    // An inbound Connect seek_to is a COMMITTED remote action — always the accurate arm.
+                    try { EmitSeeked(cmd.SeekToMs, SeekMode.Accurate); }
                     finally { _lock.Release(); }
                     break;
                 case ConnectCmd.SetShufflingContext: await RemoteSetShuffleAsync(cmd.BoolArg).ConfigureAwait(false); break;
@@ -1684,7 +1695,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         {
             _projection.NoteLocalCommand();
             // Desktop semantics: >3 s into the track, "previous" restarts the current track instead of stepping back.
-            if (_currentHost.PositionMs > 3000) { _log.Info("queue back → restart current (>3s in)"); _currentHost.Seek(0); return; }
+            if (_currentHost.PositionMs > 3000) { _log.Info("queue back → restart current (>3s in)"); _currentHost.Seek(0, SeekMode.Accurate); return; }
             if (_session.Prev() is { } snap)
             {
                 _snap = snap;
@@ -1694,7 +1705,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             }
             // No history and no prior context row (a restored session, §2): into the track → restart; already at 0 → a
             // true no-op (the derived CanSkipPrev keeps the button disabled in exactly this state).
-            if (_currentHost.PositionMs > 0) { _log.Info("queue back → restart current (no history)"); _currentHost.Seek(0); return; }
+            if (_currentHost.PositionMs > 0) { _log.Info("queue back → restart current (no history)"); _currentHost.Seek(0, SeekMode.Accurate); return; }
             _log.Info("queue back ignored — no history and at position 0");
         }
         finally { _lock.Release(); }
@@ -1961,7 +1972,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         try
         {
             long micros = await fn(track.Uri, ct).ConfigureAwait(false);
-            if (micros > 0) _currentHost.Seek(micros / 1000);
+            if (micros > 0) _currentHost.Seek(micros / 1000, SeekMode.Accurate);
         }
         catch (Exception ex) { _log.Info("episode resume lookup failed: " + ex.Message); }
     }
@@ -2007,11 +2018,16 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             mediaId, bitrateKbps, audioFormat, durationMs, fileId, provider, true, seekToMs);
     }
 
-    void EmitSeeked(long targetMs)
+    /// <summary>Apply a seek locally. <see cref="SeekMode.Keyframe"/> is a SCRUB PREVIEW: it drives the media host and
+    /// nothing else. The rest of this method — the optimistic local-command note, the <c>Seeked</c> PlaybackEvent that
+    /// reaches the Connect cluster, and the prepared-next/continuation re-arm — is COMMIT-only behaviour; firing it for
+    /// every throttled preview would spam the cluster and thrash prepared-next several times a second during one drag.</summary>
+    void EmitSeeked(long targetMs, SeekMode mode)
     {
+        if (mode == SeekMode.Keyframe) { _currentHost.Seek(targetMs, SeekMode.Keyframe); return; }
         _projection.NoteLocalCommand();
         long fromMs = _currentHost.PositionMs;
-        _currentHost.Seek(targetMs);
+        _currentHost.Seek(targetMs, SeekMode.Accurate);
         Emit(BuildEvent(EvKind.Seeked, _snap.Current?.Track, fromMs, seekToMs: targetMs));
         // W2 (remaining-ms-keyed prepare): a seek that LANDS inside the ending-soon window re-arms prepared-next NOW —
         // the signature dedupe makes this free when the slot is already prepared for the unchanged (current, next) pair —
@@ -2101,7 +2117,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             var loadStartedTicks = Stopwatch.GetTimestamp();
             _audioHost.LoadFastStart(plan.Start);   // audio-specific loading (guarded: current kind is audio/local here)
             if (!initiallyPaused) _currentHost.Play();
-            if (resumePositionMs > 0) _currentHost.Seek(resumePositionMs);
+            if (resumePositionMs > 0) _currentHost.Seek(resumePositionMs, SeekMode.Accurate);
             else await MaybeSeekEpisodeResumeAsync(cur, ct).ConfigureAwait(false);
             WarmUpcomingFastTrack("after-start");
             Emit(BuildEvent(kind, cur, Math.Max(0, resumePositionMs), mediaId, bitrateKbps, audioFormat, durationMs, fileId));
@@ -2117,7 +2133,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         catch (Exception ex) { await HandleUnplayableCurrentAsync(ex, skipOnUnplayable, initiallyPaused, ct).ConfigureAwait(false); return; }   // no silent drop
         _audioHost.Load(handle);   // audio-specific loading (only reached when the current kind is audio/local)
         if (!initiallyPaused) _currentHost.Play();
-        if (resumePositionMs > 0) _currentHost.Seek(resumePositionMs);
+        if (resumePositionMs > 0) _currentHost.Seek(resumePositionMs, SeekMode.Accurate);
         else await MaybeSeekEpisodeResumeAsync(cur, ct).ConfigureAwait(false);
         WarmUpcomingFastTrack("after-start");
         Emit(BuildEvent(kind, cur, Math.Max(0, resumePositionMs), mediaId, bitrateKbps, audioFormat, durationMs, fileId));

@@ -306,27 +306,9 @@ sealed partial class SettingsPage
         var labels = DensityLabels();
 
         Element Card(int value, bool on)
-        {
-            var ink = WaveePicker.Ink.For(on);
-            float rowHeight = 8f + value * 3f;
-
-            Element MockRow() => new BoxEl
-            {
-                Height = rowHeight, Direction = 0, Gap = Spacing.XS, AlignItems = FlexAlign.Center,
-                Padding = new Edges4(Spacing.XS, 0f, Spacing.XS, 0f),
-                Corners = CornerRadius4.All(3f), Fill = ink.Faint,
-                Children =
-                [
-                    new BoxEl { Width = rowHeight - 2f, Height = rowHeight - 2f, Corners = CornerRadius4.All(2f), Fill = ink.Block },
-                    new BoxEl { Width = 42f, Height = 4f, Corners = CornerRadius4.All(2f), Fill = ink.Block },
-                ],
-            };
-
-            return WaveePicker.Titled(
-                WaveePicker.Card(on, WaveePicker.Tile, MockRow(), MockRow(), MockRow())
-                    with { Justify = FlexJustify.Center },
+            => WaveePicker.Titled(
+                WaveePicker.Card(on, WaveePicker.Tile, WaveePicker.DensityRows(value, on)),
                 labels[value], on);
-        }
 
         return WaveePicker.Strip(labels.Length, selected, Card, set);
     }

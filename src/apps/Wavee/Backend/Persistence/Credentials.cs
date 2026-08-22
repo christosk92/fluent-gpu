@@ -52,6 +52,11 @@ public sealed class LocalCredentialStore : ICredentialStore
     /// <summary>The at-rest protector's scheme tag (e.g. "dpapi" / "none"), surfaced for logging + the LoginResult.</summary>
     public string Scheme => _protector.Scheme;
 
+    /// <summary>The at-rest protector itself. Exposed so a second protected store (the per-module secret store the
+    /// playback-module host hands to <c>host/secrets/*</c>) reuses the ONE platform selection rather than repeating
+    /// the DPAPI / Keychain / NoOp ladder and drifting from it.</summary>
+    public ICredentialProtector Protector => _protector;
+
     public void Save(Credential c)
     {
         var dto = new CredentialDto(c.Kind.ToString(), c.Username, c.Secret, c.Refresh);

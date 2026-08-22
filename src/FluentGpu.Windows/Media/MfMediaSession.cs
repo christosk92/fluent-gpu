@@ -52,6 +52,10 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
     private nuint _handle;
     private int _streamW, _streamH;
     private PlaybackState _publishedState = PlaybackState.Opening;
+    // The last command bitset actually pushed to the sink. Commands are no longer a one-shot publish at first metadata:
+    // an engine-live source only reveals its DVR window a pump or two later (and that window keeps sliding), which is
+    // what decides GoLive/Seek. Value-gated here so re-computing every pump costs a comparison and publishes nothing.
+    private MediaCommandFlags _publishedCommands;
     private bool _errorPublished;
     private bool _seeking;
     // Native DComp auto-presents decoded frames. This flag asks RepaintCurrentFrame only for an initial/reconfigured
@@ -76,6 +80,12 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
     private uint _cachedReadyState;
     private double _cachedDurationSeconds;
     private double _cachedPositionSeconds;
+    // ── engine-reported live state (only consulted when there is no manifest — see the LIVE WITHOUT A MANIFEST note on
+    // PublishEngineLiveTimeline). Written by RefreshEngineStateCache off the UI thread, read by the pump; latched, never
+    // regressed, because IVideoEngine.IsLiveSource answering false can mean "the bounded read expired", not "VOD".
+    private volatile bool _engineLive;
+    private double _cachedSeekableStart;
+    private double _cachedSeekableEnd;
     private Timer? _pollTimer;
     // 10 Hz. MediaSeekBar already treats a native position report as a low-cadence anchor and interpolates between
     // reports on its own FrameClock ticker (see MediaSeekBar.cs) — the playhead needs nowhere near per-frame (60Hz+)
@@ -115,7 +125,16 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
             // Pumps are EVENT-driven (VideoSurfaceRegistry never pumps per host frame), so a session still waiting on an
             // answer from the engine has to ask for the pump that will re-ask the question — otherwise a read that lost
             // its bounded-Invoke race is never retried. Self-terminating: the engine always answers eventually.
-            if (self._naturalSizePending && !self._disposed) self.RequestPump();
+            //
+            // A live source needs the same nudge for a different reason, and permanently: its DVR window SLIDES, so the
+            // live edge and the distance to it change with wall-clock time and not with any engine event — without a
+            // pump at this cadence the "how far behind live am I" readout freezes at whatever the last discrete
+            // transport event left it. The pump it asks for here carries NO repaint (the repaint flag is for surface
+            // state, and windowless DComp presents decoded frames on its own): a 10 Hz RepaintCurrentFrame would be
+            // 10 marshaled round-trips per second onto the engine thread for nothing.
+            if (self._disposed) return;
+            if (self._naturalSizePending) self.RequestPump();
+            else if (self._engineLive) self.RequestPump(repaint: false);
         }, this, PositionPollMs, PositionPollMs);
     }
 
@@ -140,13 +159,27 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
         {
             double p = _engine.CurrentTimeSeconds;   // ditto: 0.0 == "unknown/not yet answered", not "reset to 0"
             if (p > 0 || _cachedPositionSeconds == 0) _cachedPositionSeconds = p;
+            // LIVE WITHOUT A MANIFEST. A manifest-driven source already carries its own live window (PublishLiveTimeline
+            // reads the segment list), so only ask the engine when there is no manifest: an HLS/live URL handed straight
+            // to MF (a YouTube/Twitch master playlist) has no parsed manifest here and MF is the only thing that knows.
+            // IsLiveSource false is inconclusive (bounded read) so it is LATCHED true and never cleared; the seekable
+            // window is re-read every tick because for a live source it slides forward continuously.
+            if (_manifest is null)
+            {
+                if (!_engineLive && _engine.IsLiveSource) _engineLive = true;
+                if (_engineLive)
+                {
+                    (double start, double end) = _engine.SeekableRange;
+                    if (end > 0) { _cachedSeekableStart = start; _cachedSeekableEnd = end; }
+                }
+            }
         }
     }
 
-    private void RequestPump()
+    private void RequestPump(bool repaint = true)
     {
         if (_disposed) return;
-        Volatile.Write(ref _repaintPending, 1);
+        if (repaint) Volatile.Write(ref _repaintPending, 1);
         try { PumpRequested?.Invoke(); } catch { }
     }
 
@@ -179,8 +212,15 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
     public ValueTask PlayAsync()
     {
         if (_disposed) return ValueTask.CompletedTask;
+        // RESUMING a live stream: jump to the live edge FIRST. A paused live source keeps its playhead where it was
+        // while the DVR window slides on without it, so a plain Play() resumes minutes behind — and on a source that
+        // does not retain that far back (Twitch) it resumes on bytes the server has already dropped and simply stalls.
+        // Only on a genuine resume (play after a pause we already served), never on the initial play, which must honor
+        // MediaOpenOptions.StartPosition.
+        bool resuming = !_playRequested && _everPlayed;
         _playRequested = true;
         _everPlayed = true;
+        if (resuming) SeekToLiveEdge();
         _engine.Play();
         _sink?.PlayRequested(true);
         RequestPump();
@@ -219,6 +259,27 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
         _sink?.SettleTransport();
         RequestPump();
         return ValueTask.CompletedTask;
+    }
+
+    /// <summary>Jump to the live edge of an engine-reported live source (the DVR window's end, minus a small backoff so
+    /// the playhead lands on a segment MF actually holds rather than on the not-yet-published boundary). A no-op for a
+    /// VOD source and for the manifest-driven live path, which computes its edge from the manifest and is untouched
+    /// here.</summary>
+    public ValueTask GoLiveAsync()
+    {
+        if (_disposed) return ValueTask.CompletedTask;
+        SeekToLiveEdge();
+        return ValueTask.CompletedTask;
+    }
+
+    private void SeekToLiveEdge()
+    {
+        if (!_engineLive) return;
+        double target = LiveSessionRules.GoLiveTarget(_cachedSeekableStart, _cachedSeekableEnd);
+        if (target <= 0) return;
+        _engine.SeekTo(target);   // exact (not approximate): landing behind the edge is the whole failure being fixed
+        if (Diag.Enabled)
+            Diag.Event("media.golive", $"target={target:0.000}s window=[{_cachedSeekableStart:0.000},{_cachedSeekableEnd:0.000}]");
     }
 
     /// <inheritdoc/>
@@ -380,7 +441,7 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
             _duration = dur > 0 ? TimeSpan.FromSeconds(dur) : TimeSpan.Zero;
             sink.Duration(_duration);
 
-            sink.Commands(sinkCoreCommands(_naturalSize) | AdaptiveCommands());
+            PublishCommands(sink);
 
             // Honor the accepted play/pause intent now that the source has resolved.
             if (_playRequested) _engine.Play(); else _engine.Pause();
@@ -420,7 +481,7 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
                 {
                     _naturalSize = new SizeI((int)lw, (int)lh);
                     sink.NaturalSize(_naturalSize);
-                    sink.Commands(sinkCoreCommands(_naturalSize) | AdaptiveCommands());
+                    PublishCommands(sink);
                     Volatile.Write(ref _repaintPending, 1);   // the hand-off below can now report a real surface
                 }
             }
@@ -472,6 +533,7 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
             }
         }
         if (_manifest is { IsLive: true }) PublishLiveTimeline(sink, TimeSpan.FromSeconds(_cachedPositionSeconds));
+        else if (_engineLive && _metaReady) PublishEngineLiveTimeline(sink, TimeSpan.FromSeconds(_cachedPositionSeconds));
     }
 
     /// <summary>The manifest-derived command bits (quality/track selection, GoLive), or <c>None</c> for a plain
@@ -556,6 +618,30 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
     private static string LabelOf(AdaptiveTrackGroup group)
         => string.IsNullOrWhiteSpace(group.Language) ? group.Id : $"{group.Language} · {group.Id}";
 
+    /// <summary>Publish the command bitset — core transport + the manifest's selection bits + (for an engine-reported
+    /// live source) GoLive and the seekability verdict for its DVR window. Value-gated on the last published set, so
+    /// the pump can call this every frame: an unchanged bitset publishes nothing and allocates nothing.</summary>
+    private void PublishCommands(MediaSignalSink sink)
+    {
+        MediaCommandFlags flags = sinkCoreCommands(_naturalSize) | AdaptiveCommands();
+        if (_engineLive) flags = LiveSessionRules.LiveCommands(flags, _cachedSeekableStart, _cachedSeekableEnd);
+        if (flags == _publishedCommands) return;
+        _publishedCommands = flags;
+        sink.Commands(flags);
+    }
+
+    /// <summary>LIVE WITHOUT A MANIFEST: the timeline for a live URL handed straight to Media Foundation (an HLS master
+    /// playlist), where the only thing that knows the window is MF itself — <see cref="PublishLiveTimeline"/>'s
+    /// manifest-driven twin. Duration stays <see cref="TimeSpan.Zero"/> (an unbounded source HAS no length, so the seek
+    /// bar correctly stays hidden) and the DVR window comes from the engine's seekable range, whose end is the live
+    /// edge. Also refreshes the commands, because the window's WIDTH is what decides whether seeking is offered and it
+    /// only becomes known — and then keeps sliding — after the one-shot first-metadata publish.</summary>
+    private void PublishEngineLiveTimeline(MediaSignalSink sink, TimeSpan position)
+    {
+        PublishCommands(sink);
+        sink.Timeline(LiveSessionRules.Timeline(_cachedSeekableStart, _cachedSeekableEnd, position.TotalSeconds));
+    }
+
     private void PublishLiveTimeline(MediaSignalSink sink, TimeSpan position)
     {
         if (_manifest is not { } manifest) return;
@@ -620,16 +706,22 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
     }
 
     /// <summary>Map an <c>MF_MEDIA_ENGINE_ERR</c> code (+ the raw HRESULT) to a typed <see cref="MediaError"/> — a DRM
-    /// shortfall (ENCRYPTED) is a Drm error with <see cref="MediaRecovery.NeedsLicense"/>, never a quiet black frame.</summary>
+    /// shortfall (ENCRYPTED) is a Drm error with <see cref="MediaRecovery.NeedsLicense"/>, never a quiet black frame.
+    /// <para>BOTH platform numbers survive the mapping: the <c>MF_MEDIA_ENGINE_ERR</c> value as
+    /// <see cref="MediaError.Kind"/> (whose values ARE that vocabulary) and the raw HRESULT as
+    /// <see cref="MediaError.UnderlyingCode"/>. A host that reloads live sources needs to tell an expired URL
+    /// (NETWORK → re-resolve the locator) from a mid-stream container switch (DECODE → reload the same locator) from
+    /// an unplayable format (SOURCE_NOT_SUPPORTED → terminal) — the category alone flattens that policy.</para></summary>
     internal static MediaError MapError(uint mfErr, int hr) => mfErr switch
     {
-        // MF_MEDIA_ENGINE_ERR: 1 ABORTED, 2 NETWORK, 3 DECODE, 4 SRC_NOT_SUPPORTED, 5 ENCRYPTED.
-        2 => new MediaError(MediaErrorCategory.Network, "The media download failed.", hr, null, MediaRecovery.NeedsNetwork),
-        3 => new MediaError(MediaErrorCategory.Decode, "The media could not be decoded.", hr, null, MediaRecovery.Retryable),
-        4 => new MediaError(MediaErrorCategory.UnsupportedCodec, "The media format is not supported.", hr, null, MediaRecovery.PickLowerQuality),
-        5 => new MediaError(MediaErrorCategory.Drm, "The media is encrypted and no license is available.", hr, null, MediaRecovery.NeedsLicense),
-        1 => new MediaError(MediaErrorCategory.Source, "Media loading was aborted.", hr, null, MediaRecovery.Retryable),
-        _ => new MediaError(MediaErrorCategory.Source, "The media source failed.", hr, null, MediaRecovery.Retryable),
+        // MF_MEDIA_ENGINE_ERR: 1 ABORTED, 2 NETWORK, 3 DECODE, 4 SRC_NOT_SUPPORTED, 5 ENCRYPTED — the same numbering
+        // MediaErrorKind carries (it is the HTML5 MediaError.code vocabulary MF implements).
+        2 => new MediaError(MediaErrorCategory.Network, "The media download failed.", hr, null, MediaRecovery.NeedsNetwork, MediaErrorKind.Network),
+        3 => new MediaError(MediaErrorCategory.Decode, "The media could not be decoded.", hr, null, MediaRecovery.Retryable, MediaErrorKind.Decode),
+        4 => new MediaError(MediaErrorCategory.UnsupportedCodec, "The media format is not supported.", hr, null, MediaRecovery.PickLowerQuality, MediaErrorKind.SourceNotSupported),
+        5 => new MediaError(MediaErrorCategory.Drm, "The media is encrypted and no license is available.", hr, null, MediaRecovery.NeedsLicense, MediaErrorKind.Encrypted),
+        1 => new MediaError(MediaErrorCategory.Source, "Media loading was aborted.", hr, null, MediaRecovery.Retryable, MediaErrorKind.Aborted),
+        _ => new MediaError(MediaErrorCategory.Source, "The media source failed.", hr, null, MediaRecovery.Retryable, MediaErrorKind.Unknown),
     };
 
     /// <inheritdoc/>
@@ -645,5 +737,71 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
         _pollTimer = null;
         // The engine tears down its MTA thread + COM on ITS thread (a blocking join); do it off the UI thread.
         await Task.Run(engine.Dispose).ConfigureAwait(false);
+    }
+}
+
+/// <summary>
+/// The pure decisions behind an ENGINE-reported live source (a live URL played by Media Foundation directly, with no
+/// parsed manifest): what timeline to publish, which commands the session can offer, and where "go live" lands. Split
+/// out of <see cref="MfMediaSession"/> because that class can only run against a real MF engine, while these are the
+/// parts that must be pinned by tests — every value here is a threshold someone will otherwise quietly re-tune.
+/// </summary>
+internal static class LiveSessionRules
+{
+    /// <summary>How close to the live edge still counts as AT the edge. 6 s is the standard-latency HLS figure (three
+    /// 2 s segments): a player that has just resumed sits about one target-duration behind and must not be reported as
+    /// late. The low-latency (2 s) figure is manifest-declared and belongs to the manifest path.</summary>
+    internal const double LiveEdgeToleranceSeconds = 6.0;
+
+    /// <summary>The narrowest DVR window worth offering a seek bar for. Under this a "seek" is a jitter of a few
+    /// seconds that the sliding window invalidates before the user releases the pointer — a control that lies about
+    /// what it does. True-live HLS commonly publishes a 3-segment window (about 6 s), so this drops Seek for it and
+    /// keeps it for a real DVR window.</summary>
+    internal const double MinSeekableWindowSeconds = 30.0;
+
+    /// <summary>How far BEHIND the reported edge "go live" actually lands. The end of the seekable range is the
+    /// boundary of the segment MF is still filling; seeking exactly onto it asks for bytes that do not exist yet and
+    /// stalls. One segment back is playable immediately and is still "live" by every tolerance above.</summary>
+    internal const double GoLiveBackoffSeconds = 3.0;
+
+    /// <summary>The timeline for an engine-live source: the seekable window, its end as the live edge, and how far the
+    /// playhead sits behind it. A window that has not been answered yet ((0,0) — see
+    /// <see cref="IVideoEngine.SeekableRange"/>) still publishes IsLive with a zero window rather than dropping the
+    /// live-ness the engine already confirmed.</summary>
+    internal static TimelineInfo Timeline(double seekableStart, double seekableEnd, double positionSeconds)
+    {
+        double start = double.IsFinite(seekableStart) && seekableStart > 0 ? seekableStart : 0;
+        double end = double.IsFinite(seekableEnd) && seekableEnd > start ? seekableEnd : start;
+        double position = double.IsFinite(positionSeconds) && positionSeconds > 0 ? positionSeconds : 0;
+        double offset = end > position ? end - position : 0;
+        return new TimelineInfo(
+            IsLive: true,
+            SeekableStart: TimeSpan.FromSeconds(start),
+            SeekableEnd: TimeSpan.FromSeconds(end),
+            LiveEdge: TimeSpan.FromSeconds(end),
+            LiveOffset: TimeSpan.FromSeconds(offset),
+            IsAtLiveEdge: offset <= LiveEdgeToleranceSeconds,
+            Chapters: Array.Empty<MediaChapter>());
+    }
+
+    /// <summary>The command bitset for an engine-live source: always GoLive (there is an edge to return to), and Seek
+    /// only while the DVR window is wide enough to aim inside.</summary>
+    internal static MediaCommandFlags LiveCommands(MediaCommandFlags core, double seekableStart, double seekableEnd)
+    {
+        MediaCommandFlags flags = core | MediaCommandFlags.GoLive;
+        double window = seekableEnd - seekableStart;
+        if (!double.IsFinite(window) || window < MinSeekableWindowSeconds) flags &= ~MediaCommandFlags.Seek;
+        return flags;
+    }
+
+    /// <summary>Where a "go live" seek lands: one segment back from the edge, never before the window's start. 0 when
+    /// no window has been answered yet — the caller must then not seek at all (a seek to 0 on a live source jumps to
+    /// the OLDEST retained bytes, the exact opposite of going live).</summary>
+    internal static double GoLiveTarget(double seekableStart, double seekableEnd)
+    {
+        if (!double.IsFinite(seekableEnd) || seekableEnd <= 0) return 0;
+        double start = double.IsFinite(seekableStart) && seekableStart > 0 ? seekableStart : 0;
+        double target = seekableEnd - GoLiveBackoffSeconds;
+        return target > start ? target : start;
     }
 }

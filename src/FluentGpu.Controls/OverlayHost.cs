@@ -221,6 +221,9 @@ internal sealed class OverlayEntry
     public int PopupWindowToken = -1; // host popup-window lease for an out-of-bounds popup (-1 = none/in-window)
     public OverlayPhase Phase;
     public bool OpenSeeded;
+    /// <summary>Stopwatch stamp of the Open() call — the start of the <c>media.flyout.open</c> first-paint budget probe
+    /// (DEBUG / FLUENTGPU_DIAG only; <see cref="FluentGpu.Hosting.RenderBudget.Probe"/> folds away in release).</summary>
+    public long OpenRequestTicks;
     public bool CloseSeeded;
     public OverlayCloseCause CloseCause;
     public Signal<OverlayPlacementInfo> PlacementInfo = new(default);
@@ -256,6 +259,7 @@ internal sealed class OverlayServiceImpl : IOverlayService
     public bool AnyOpen { get { foreach (var e in Entries) if (e.Phase != OverlayPhase.Closing) return true; return false; } }
     public bool AnyInputBlocking { get { foreach (var e in Entries) if (e.Phase != OverlayPhase.Closing && e.DismissBehavior != DismissBehavior.None) return true; return false; } }
     public bool AnyClosing { get { foreach (var e in Entries) if (e.Phase == OverlayPhase.Closing) return true; return false; } }
+    public bool HasAfterAnimationWork() => AnyClosing;
     public bool AnyModal { get { foreach (var e in Entries) if (e.Phase != OverlayPhase.Closing && e.DismissBehavior == DismissBehavior.Modal) return true; return false; } }
     public bool AnyModalVisual { get { foreach (var e in Entries) if (e.DismissBehavior == DismissBehavior.Modal) return true; return false; } }
     public bool TopCanLightDismiss
@@ -294,6 +298,13 @@ internal sealed class OverlayServiceImpl : IOverlayService
 
     private OverlayHandle OpenCore(Func<NodeHandle> anchor, Func<RectF>? anchorRect, Func<Element> content, FlyoutPlacement placement, PopupOptions options)
     {
+        int parentId = ResolveParentId(anchor);
+        // Flyouts are one active chain, not an accumulating collection. Opening a new root light-dismiss flyout closes
+        // the previous root (and its descendants); opening a nested flyout closes an existing sibling while preserving
+        // its ancestor. Modal dialogs and caller-owned transient overlays are independent layers.
+        if (options.DismissBehavior == DismissBehavior.LightDismiss)
+            CloseCompetingLightDismiss(parentId);
+
         var handle = new OverlayHandle { IsOpen = true };
         var entry = new OverlayEntry
         {
@@ -310,13 +321,27 @@ internal sealed class OverlayServiceImpl : IOverlayService
             AnchorOffsetX = options.AnchorOffsetX,
             Phase = OverlayPhase.Opening,
             SavedFocus = GetFocus?.Invoke() ?? NodeHandle.Null,   // capture pre-open focus → restore on close
-            ParentId = ResolveParentId(anchor),
+            ParentId = parentId,
+            // Start of the media.flyout.open first-paint budget (see the probe at the open-seed site). Const-gated, so
+            // the stamp itself is the only cost in a shipping build — and Stopwatch.GetTimestamp is a rdtsc-class read.
+            OpenRequestTicks = FluentGpu.Hosting.RenderBudget.CompiledIn ? System.Diagnostics.Stopwatch.GetTimestamp() : 0L,
         };
         handle.CloseAction = cause => BeginClose(entry, cause);
         Entries.Add(entry);
         if (entry.PinsAnchor) _pinEpoch.Value = _pinEpoch.Peek() + 1;
         Bump();
         return handle;
+    }
+
+    private void CloseCompetingLightDismiss(int parentId)
+    {
+        for (int i = Entries.Count - 1; i >= 0; i--)
+        {
+            var e = Entries[i];
+            if (e.Phase == OverlayPhase.Closing || e.DismissBehavior != DismissBehavior.LightDismiss) continue;
+            if ((parentId < 0 && e.ParentId < 0) || (parentId >= 0 && e.ParentId == parentId))
+                BeginClose(e, OverlayCloseCause.Programmatic);
+        }
     }
 
     // ── Anchor-liveness (WS3 P6 PopupOptions.PinsAnchor) ──────────────────────────────────────────────────────────────
@@ -572,6 +597,13 @@ internal sealed class OverlayServiceImpl : IOverlayService
             if ((surfaceSettled && scrimSettled) || deadline) Finalize(e);
         }
 
+        // Frosted-backdrop reconcile, EVERY frame and every entry (it is idempotent — a no-op write when nothing
+        // changed). Per-placement was enough while the only input was the popup-window lease, which cannot change under
+        // a still anchor; it is not enough for the video-hole state, which flips under a perfectly still popup whenever
+        // playback starts/stops, the video moves between the dock/PiP/fullscreen placements, or the window resizes. A
+        // stale answer there is not a wrong pixel, it is a full-window repaint per frame for as long as the menu is up.
+        for (int i = 0; i < Entries.Count; i++) OverlayHost.SyncWindowedMenuBackdrop(scene, Entries[i]);
+
         // Orphaned-owner prune (belt-and-braces for a control that forgets its unmount teardown — ToolTip's was the
         // reported case). An entry whose OWNER node was realized and is now gone from the scene has lost the component
         // that opened it: nothing will ever call Close(), the rect-thunk form is re-placed against a dead node on every
@@ -587,6 +619,17 @@ internal sealed class OverlayServiceImpl : IOverlayService
             var e = Entries[i];
             if (e.Phase == OverlayPhase.Closing) continue;
             if (e.Chrome == PopupChrome.Modal || e.DismissBehavior == DismissBehavior.Modal) continue;
+            // A rect thunk has no node owner to prune. Resolve it directly each lifecycle frame so a dynamic target
+            // that disappears (returns default) closes from its last placement instead of surviving until a coincidental
+            // OverlayHost re-render and then walking to the origin.
+            if (e.AnchorRect is not null)
+            {
+                if (ResolveAnchor(e, scene, out _) == AnchorResolve.Dead && !e.FreezeAtLastRect)
+                {
+                    BeginClose(e, OverlayCloseCause.Programmatic);
+                    continue;
+                }
+            }
             var owner = e.Anchor();
             if (owner.IsNull) continue;   // point-placed / no owner — never prune
             // Flow.KeepAlive intentionally leaves an inactive page's nodes live while marking the whole subtree Parked.
@@ -798,51 +841,87 @@ public sealed class OverlayHost : Component
     internal static float ClosedRatioFor(OverlayEntry e)
         => e.Chrome == PopupChrome.Flyout ? (e.ParentId >= 0 ? 0.67f : 0.5f) : 0f;
 
-    /// <summary>Reconcile the menu presenter plate to its placement: an OS-backed windowed flyout (a popup HWND was
-    /// leased) renders TRANSPARENT over DWM acrylic — clear the engine acrylic AND the engine drop shadow (the
-    /// transparent plate would otherwise reveal the shadow primitive drawn behind it, and DWM draws the window shadow),
-    /// keeping just the 1px border + content. A constrained / in-window flyout keeps the engine acrylic + drop shadow.
-    /// Idempotent: only mutates + marks paint-dirty when the state actually changes (no per-frame repaint churn).</summary>
+    /// <summary>The WinUI acrylic recipe painted as ONE FLAT FILL: the tint COLOR at the coverage the in-app
+    /// compositor's luminosity+tint layers apply over the blurred backdrop = 1 − (1−LuminosityOpacity)·(1−TintOpacity)
+    /// (the fraction of the result that is NOT see-through backdrop). Light FlyoutLight (Lum .85 / Tint 0) ⇒ #FCFCFC
+    /// @ .85 (Explorer near-opaque, kills the bleed-through); dark InAppDefault (Lum .96 / Tint .15) ⇒ #2C2C2C @ ~.97
+    /// (a dark, faintly-translucent card). Used wherever the engine acrylic LAYER cannot run but the surface must still
+    /// read as the same material: an OS-backed popup (DWM supplies the blur, but its system tint alone is far too weak
+    /// — in light theme the app content bleeds straight through the menu), and a plate over a video hole (below).
+    /// Matches the in-window acrylic, so all three states read the same.</summary>
+    private static ColorF FlatAcrylicFill()
+    {
+        var a = Tok.AcrylicFlyout;
+        float coverage = 1f - (1f - a.LuminosityOpacity) * (1f - a.TintOpacity);
+        return a.Tint with { A = coverage };
+    }
+
+    /// <summary>How much of a popup plate has to sit inside a video hole before its acrylic is dropped. Half: a plate
+    /// mostly over the video blurs mostly nothing, and the fraction that DOES overlap real content is what the flat
+    /// fill approximates. Deliberately not 1.0 — a plate that clears the hole by a few pixels would otherwise keep
+    /// costing the whole window.</summary>
+    private const float VideoHoleCoverage = 0.5f;
+
+    /// <summary>Which node carries a chrome's acrylic + drop shadow. MENU chrome carries them on its stretch PLATE;
+    /// every other frosted chrome is a single-card SURFACE (FlyoutSurface's non-menu branch). Raw / Modal / TeachingTip
+    /// are chrome-less (a transparent transform host) and have nothing to reconcile.</summary>
+    private static NodeHandle BackdropNodeOf(OverlayEntry e) => e.Chrome switch
+    {
+        PopupChrome.Flyout => e.PlateNode,
+        PopupChrome.Raw or PopupChrome.Modal or PopupChrome.TeachingTip => NodeHandle.Null,
+        _ => e.SurfaceNode,
+    };
+
+    /// <summary>Reconcile a popup's frosted backdrop to what its placement can actually support. THREE states, one
+    /// idempotent write (it only mutates + marks paint-dirty when something actually changed, so it is safe to run
+    /// every frame for every entry):
+    /// <list type="bullet">
+    /// <item><b>OS-backed</b> (a popup HWND was leased) — renders TRANSPARENT over DWM acrylic, so clear the engine
+    /// acrylic AND the engine drop shadow (the transparent plate would otherwise reveal the shadow primitive drawn
+    /// behind it, and DWM draws the window shadow) and paint <see cref="FlatAcrylicFill"/> over the DWM blur.</item>
+    /// <item><b>Over a video hole</b> — clear the acrylic, keep the shadow, paint <see cref="FlatAcrylicFill"/>. The
+    /// acrylic there is pure loss: <c>DrawOp.DrawVideo</c> is a DestOut erase and the video is a sibling DComp visual
+    /// z-BELOW the UI swapchain, so the backdrop the plate samples is premultiplied ZERO — it blurs NOTHING — while an
+    /// acrylic layer anywhere in the stream is <c>RepaintPolicy.Decide</c>'s FIRST hard disqualifier: it forces
+    /// <c>RepaintRoute.FullDirect</c> for the WHOLE window and invalidates the retained canvas, so the frame AFTER the
+    /// flyout closes pays a full rebuild too. Dropping it is a visual no-op and is the difference between a small
+    /// partial repaint and a full-window one on every frame a menu is up over playing video.</item>
+    /// <item><b>Ordinary in-window</b> — the engine acrylic + drop shadow, with the authored resting fill restored.</item>
+    /// </list></summary>
     internal static void SyncWindowedMenuBackdrop(SceneStore scene, OverlayEntry e)
     {
-        // Menu chrome carries the visuals on its stretch PLATE; the CommandBar chrome is a single-card surface
-        // (FlyoutSurface non-menu branch), so its acrylic/shadow live on the SURFACE node itself.
-        var target = e.Chrome switch
-        {
-            PopupChrome.Flyout => e.PlateNode,
-            PopupChrome.CommandBar => e.SurfaceNode,
-            _ => NodeHandle.Null,
-        };
+        var target = BackdropNodeOf(e);
         if (target.IsNull || !scene.IsLive(target)) return;
         bool osBacked = e.PopupWindowToken >= 0;
+        // Asked of the LAST completed record's hole set, which is exactly right here: this runs at host phase 7.1,
+        // before this frame is recorded, and the answer only ever picks between two visually equivalent paints.
+        bool overVideo = !osBacked
+            && FluentGpu.Render.SceneRecorder.RectOverVideoHole(scene.AbsoluteRect(target), VideoHoleCoverage);
+        bool wantAcrylic = !osBacked && !overVideo;
+        bool wantShadow = !osBacked;
         bool hasAcrylic = scene.TryGetAcrylic(target, out _);
         bool hasShadow = scene.TryGetShadow(target, out _);
         bool changed = false;
-        ColorF desiredFill;
-        if (osBacked)
+        if (wantAcrylic != hasAcrylic)
         {
-            if (hasAcrylic) { scene.ClearAcrylic(target); changed = true; }
-            if (hasShadow) { scene.ClearShadow(target); changed = true; }
-            // DWM supplies the BLUR (DWMSBT_TRANSIENTWINDOW), but its system tint alone is far too weak — in light
-            // theme the app content bleeds straight through the menu. Paint the WinUI acrylic recipe's TINT over the
-            // DWM blur as a single flat fill: the tint COLOR at the coverage the in-app compositor's luminosity+tint
-            // layers apply over the blurred backdrop = 1 − (1−LuminosityOpacity)·(1−TintOpacity) (the fraction of the
-            // result that is NOT see-through backdrop). Light FlyoutLight (Lum .85 / Tint 0) ⇒ #FCFCFC @ .85 (Explorer
-            // near-opaque, kills the bleed-through); dark InAppDefault (Lum .96 / Tint .15) ⇒ #2C2C2C @ ~.97 (stays a
-            // dark, faintly-translucent card — close to the DWM-only look it replaces). Matches the in-window acrylic,
-            // so a windowed and a constrained (fallback) menu read the same.
-            var a = Tok.AcrylicFlyout;
-            float coverage = 1f - (1f - a.LuminosityOpacity) * (1f - a.TintOpacity);
-            desiredFill = a.Tint with { A = coverage };
+            if (wantAcrylic) scene.SetAcrylic(target, Tok.AcrylicFlyout); else scene.ClearAcrylic(target);
+            changed = true;
         }
-        else
+        if (wantShadow != hasShadow)
         {
-            if (!hasAcrylic) { scene.SetAcrylic(target, Tok.AcrylicFlyout); changed = true; }
-            if (!hasShadow) { scene.SetShadow(target, Elevation.Flyout); changed = true; }
-            desiredFill = ColorF.Transparent;   // bg comes from the engine acrylic
+            if (wantShadow) scene.SetShadow(target, Elevation.Flyout); else scene.ClearShadow(target);
+            changed = true;
         }
-        // Idempotent: only write + mark dirty when the acrylic/shadow state flipped OR the fill actually differs
-        // (the method runs per placement frame — no per-frame repaint churn).
+        // The RESTING fill differs by chrome and must be restored exactly, because this now runs for EVERY frosted
+        // chrome and every frame, not just once per placement for the two windowed ones. The MENU plate and the
+        // CommandBar card are authored Transparent-over-acrylic by the host itself; every other frosted chrome authors
+        // Tok.AcrylicFlyout.Fallback so that a NON-PRIMARY swapchain (the pop-out video window), where the backend
+        // silently drops PushLayer, still gets a solid card instead of floating text. Overwriting that with Transparent
+        // would resurrect exactly that bug — see FlyoutSurface's fill comments.
+        ColorF restingFill = e.Chrome is PopupChrome.Flyout or PopupChrome.CommandBar
+            ? ColorF.Transparent
+            : Tok.AcrylicFlyout.Fallback;
+        ColorF desiredFill = wantAcrylic ? restingFill : FlatAcrylicFill();
         ref NodePaint tp = ref scene.Paint(target);
         if (changed || !tp.Fill.Equals(desiredFill))
         {
@@ -864,6 +943,7 @@ public sealed class OverlayHost : Component
         var hooks = UseContext(InputHooks.Current);
         hooks.KeyPreview = svc.PreviewKey;
         hooks.SetAfterAnimations(svc, svc.AfterAnimations);
+        hooks.HasAfterAnimationWork = svc.HasAfterAnimationWork;
         hooks.SetSubtreeDeactivatedListener(svc, svc.OnSubtreeDeactivated);
         svc.GetFocus = hooks.GetFocus;          // host-wired focus get/restore → flyout focus-restoration on close
         svc.RestoreFocus = hooks.RestoreFocus;
@@ -1006,6 +1086,8 @@ public sealed class OverlayHost : Component
 
                 if (e.SurfaceNode.IsNull || !scene.IsLive(e.SurfaceNode)) continue;
                 if (e.Phase == OverlayPhase.Closing) { svc.SeedCloseIfNeeded(e); continue; }
+
+                bool wasOpenSeeded = e.OpenSeeded;
 
                 if (!e.OpenSeeded && e.Chrome == PopupChrome.TeachingTip && e.MeasuredW > 0f && e.MeasuredH > 0f)
                 {
@@ -1159,6 +1241,15 @@ public sealed class OverlayHost : Component
                         anim.Animate(e.PlateNode, AnimChannel.ScaleY, 1f - closedRatio, 1f, OpenMs, Easing.FluentPopOpen);
                     }
                 }
+
+                // media.flyout.open — FIRST PAINT budget. The open seed fires on the first frame the popup has a real
+                // measure, inside the layout effect that runs immediately before this frame is recorded and presented,
+                // so it is the closest UI-thread proxy for "the user sees the menu". 100 ms is Nielsen's limit for an
+                // interaction that still feels instantaneous; past it a menu reads as laggy no matter how smooth its
+                // unfold then is. Compile-fenced by RenderBudget.CompiledIn (DEBUG / FLUENTGPU_DIAG) and runtime-gated
+                // by the tripwire's own switch — nothing here survives into a shipping AOT build.
+                if (!wasOpenSeeded && e.OpenSeeded)
+                    FluentGpu.Hosting.RenderBudget.Probe("media.flyout.open", e.OpenRequestTicks, 100.0);
             }
         }, DepKey.From(HashCode.Combine(ver, vp.Width, vp.Height)));
 
@@ -1174,9 +1265,9 @@ public sealed class OverlayHost : Component
             ColorF scrimFill = modalVisual ? Tok.FillSmoke : ColorF.Transparent;
             layers.Add(new BoxEl
             {
-                Width = vp.Width,
-                Height = vp.Height,
                 Grow = 1,
+                MinWidth = 0f,
+                MinHeight = 0f,
                 Fill = scrimFill,
                 HoverFill = scrimFill,
                 PressedFill = scrimFill,

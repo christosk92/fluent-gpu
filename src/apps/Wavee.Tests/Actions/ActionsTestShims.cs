@@ -66,7 +66,7 @@ namespace Wavee.Tests.Actions
         public Task ResumeAsync(CancellationToken ct = default) => Task.CompletedTask;
         public Task NextAsync(CancellationToken ct = default) => Task.CompletedTask;
         public Task PreviousAsync(CancellationToken ct = default) => Task.CompletedTask;
-        public Task SeekAsync(long positionMs, CancellationToken ct = default) => Task.CompletedTask;
+        public Task SeekAsync(long positionMs, SeekMode mode, CancellationToken ct = default) => Task.CompletedTask;
         public Task SetVolumeAsync(double volume01, CancellationToken ct = default) => Task.CompletedTask;
         public Task SetShuffleAsync(bool on, CancellationToken ct = default) => Task.CompletedTask;
         public Task SetRepeatAsync(RepeatMode mode, CancellationToken ct = default) => Task.CompletedTask;

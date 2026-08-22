@@ -1128,6 +1128,11 @@ public sealed class AppHost : IDisposable
     private const WakeReasons GovernorNeverPace =
         WakeReasons.Interact | WakeReasons.ScrollAnim | WakeReasons.Repeat |
         WakeReasons.DragActive | WakeReasons.DragDropWork | WakeReasons.GestureHold | WakeReasons.TouchPress |
+        // NOT PopupAnim. A popup open/close is the single most expensive frame class the engine produces (an acrylic
+        // plate inside a fading opacity group = a guaranteed backdrop-cache miss, and until the plate stops disqualifying
+        // partial repaint it is a whole-window rebuild). Exempting it from the GPU governor is backwards: that is exactly
+        // the frame class the governor exists to pace when the GPU cannot sustain the panel rate. PopupAnim stays in
+        // LatencySensitiveWake (a popup fade must not drop to the 30 Hz ambient cap) — that is the defensible half.
         WakeReasons.FrameClockPoller;
     private const WakeReasons LatencySensitiveWake =
         WakeReasons.Interact | WakeReasons.ScrollAnim | WakeReasons.Repeat |
@@ -1144,7 +1149,7 @@ public sealed class AppHost : IDisposable
         WakeReasons.ImageCrossfades | WakeReasons.ImagesPending | WakeReasons.ImageReady |
         // A mounted FrameClock consumer explicitly requested panel-rate UI work (the seek playhead uses this); native
         // DirectComposition video advances independently and instead posts a one-shot VideoPumpPending when needed.
-        WakeReasons.FrameClockPoller | WakeReasons.VideoPumpPending;
+        WakeReasons.FrameClockPoller | WakeReasons.VideoPumpPending | WakeReasons.PopupAnim;
     // The image bits of LatencySensitiveWake — display-rate ONLY while an interaction is live or just ended.
     private const WakeReasons ImageWake =
         WakeReasons.ImageCrossfades | WakeReasons.ImagesPending | WakeReasons.ImageReady;
@@ -1973,6 +1978,7 @@ public sealed class AppHost : IDisposable
         // menus) the loop idle-skips and the reveal freezes at its seed. O(popups) ≈ O(1) (typically 0–1 menus open).
         for (int i = 0; i < _popupWindows.Count; i++)
             if (_popupWindows[i].Swapchain?.PopupAnimating == true) { r |= WakeReasons.PopupAnim; break; }
+        if (_inputHooks.HasAfterAnimationWork?.Invoke() == true) r |= WakeReasons.PopupAnim;
         // Frame-clock timers: a DUE timer forces exactly the frame that fires it; a pending-but-future timer sets NO bit
         // (the loop still idles — RecommendedWaitMs shapes the wait to reach it). Warm-cadence keeps the loop rendering
         // for a bounded window after the last input. Read the clock once, and only when a timer is armed / a warm hold is
@@ -2156,6 +2162,7 @@ public sealed class AppHost : IDisposable
         _dispatcher.OnKeyPreview = _inputHooks.Preview;   // an open overlay/flyout can intercept Escape (registered via the InputHooks ambient)
         _inputHooks.PointerVelocity = () => _dispatcher.PointerVelocity;        // cross-axis swipe controls snap on real flick speed
         _inputHooks.GetPointerPosition = () => _dispatcher.PointerPosition;     // ToolTip safe-zone poll (bubble stays hit-test-invisible)
+        _inputHooks.SetCursorOverride = _dispatcher.SetCursorOverride;          // media idle chrome: hide until activity
         _inputHooks.GetFocus = () => _dispatcher.Focused;                       // an opening overlay captures focus to restore on close
         _inputHooks.RestoreFocus = h => _dispatcher.SetFocus(h, visual: false);
         _inputHooks.FocusNode = (h, visual) => _dispatcher.SetFocus(h, visual);

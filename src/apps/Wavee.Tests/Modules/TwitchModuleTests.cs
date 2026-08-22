@@ -1,0 +1,327 @@
+using System;
+using System.Linq;
+using System.Net;
+using System.Threading.Tasks;
+using Wavee.Module.Twitch;
+using Wavee.Sdk;
+using Wavee.Tests.Modules.Fixtures;
+using Xunit;
+
+namespace Wavee.Tests.Modules;
+
+/// <summary>
+/// The Twitch module, driven through <see cref="ModuleTestHost"/> over a scripted transport. Every GQL envelope,
+/// token document and usher body is a fixture; nothing here touches the network.
+/// </summary>
+public class TwitchModuleTests
+{
+    private const string Login = TwitchFixtures.Login;
+    private const int Slot = 1234567;
+
+    private static ModuleTestHost Make(ScriptedHttpHandler http)
+        => new(new TwitchModule(http, disposeHandler: false, playerSlot: () => Slot));
+
+    // ---- match -------------------------------------------------------------------------------------------------
+
+    [Theory]
+    [InlineData("https://www.twitch.tv/examplestreamer", "live:examplestreamer")]
+    [InlineData("https://twitch.tv/ExampleStreamer", "live:examplestreamer")]
+    [InlineData("https://m.twitch.tv/examplestreamer", "live:examplestreamer")]
+    [InlineData("https://go.twitch.tv/examplestreamer", "live:examplestreamer")]
+    [InlineData("twitch.tv/examplestreamer", "live:examplestreamer")]
+    [InlineData("https://player.twitch.tv/?channel=examplestreamer&parent=twitch.tv", "live:examplestreamer")]
+    [InlineData("https://www.twitch.tv/videos/1234567890", "vod:1234567890")]
+    [InlineData("https://www.twitch.tv/examplestreamer/v/1234567890", "vod:1234567890")]
+    [InlineData("https://www.twitch.tv/examplestreamer/video/1234567890", "vod:1234567890")]
+    [InlineData("https://player.twitch.tv/?video=v1234567890", "vod:1234567890")]
+    [InlineData("https://www.twitch.tv/examplestreamer/schedule?vodID=1234567890", "vod:1234567890")]
+    public async Task Match_MapsTheUrlTable(string input, string expected)
+    {
+        ModuleTestHost host = Make(new ScriptedHttpHandler());
+
+        MatchResult? match = await host.MatchAsync(input, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(match);
+        Assert.Equal(expected, match.PlayableId);
+        Assert.Equal(MediaForm.Video, match.Form);
+        Assert.Equal(expected.StartsWith("live:", StringComparison.Ordinal), match.IsLive);
+    }
+
+    [Theory]
+    [InlineData("https://clips.twitch.tv/SomeFunnyClipSlug")]
+    [InlineData("https://www.twitch.tv/examplestreamer/clip/SomeFunnyClipSlug")]
+    [InlineData("https://www.twitch.tv/directory")]
+    [InlineData("https://www.twitch.tv/")]
+    [InlineData("https://www.youtube.com/watch?v=tRsQsTMvPNg")]
+    [InlineData("https://example.org/stream.mp3")]
+    public async Task Match_DeclinesClipsAndForeignLinks(string input)
+    {
+        ModuleTestHost host = Make(new ScriptedHttpHandler());
+
+        Assert.Null(await host.MatchAsync(input, TestContext.Current.CancellationToken));
+    }
+
+    // ---- usher url construction --------------------------------------------------------------------------------
+
+    [Fact]
+    public void UsherLiveUrl_UsesTheV2EndpointWithTheRightParameters()
+    {
+        string url = TwitchModule.UsherLiveUrl(Login, "sig-value", "{\"a\":1}", Slot, legacy: false);
+
+        Assert.StartsWith($"https://usher.ttvnw.net/api/v2/channel/hls/{Login}.m3u8?", url, StringComparison.Ordinal);
+        Assert.Contains("sig=sig-value", url, StringComparison.Ordinal);
+        Assert.Contains("token=%7B%22a%22%3A1%7D", url, StringComparison.Ordinal);
+        Assert.Contains("&allow_source=true", url, StringComparison.Ordinal);
+        Assert.Contains("&allow_audio_only=true", url, StringComparison.Ordinal);
+        Assert.Contains("&playlist_include_framerate=true", url, StringComparison.Ordinal);
+        Assert.Contains("&supported_codecs=h264", url, StringComparison.Ordinal);
+        Assert.Contains("&platform=web", url, StringComparison.Ordinal);
+        Assert.Contains($"&p={Slot}", url, StringComparison.Ordinal);
+
+        // Low-latency prefetch tags and non-h264 renditions are exactly what Media Foundation cannot read.
+        Assert.DoesNotContain("fast_bread", url, StringComparison.Ordinal);
+        Assert.DoesNotContain("h265", url, StringComparison.Ordinal);
+        Assert.DoesNotContain("av1", url, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void UsherLiveUrl_LegacyDropsTheV2Segment()
+    {
+        string url = TwitchModule.UsherLiveUrl(Login, "s", "t", Slot, legacy: true);
+
+        Assert.StartsWith($"https://usher.ttvnw.net/api/channel/hls/{Login}.m3u8?", url, StringComparison.Ordinal);
+        Assert.Contains("&supported_codecs=h264", url, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void UsherVodUrl_UsesNauthOnV2AndSigOnLegacy()
+    {
+        string v2 = TwitchModule.UsherVodUrl("1234567890", "s", "t", Slot, legacy: false);
+        Assert.StartsWith("https://usher.ttvnw.net/vod/v2/1234567890.m3u8?nauthsig=s&nauth=t", v2,
+            StringComparison.Ordinal);
+
+        string legacy = TwitchModule.UsherVodUrl("1234567890", "s", "t", Slot, legacy: true);
+        Assert.StartsWith("https://usher.ttvnw.net/vod/1234567890.m3u8?sig=s&token=t", legacy, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Resolve_DefaultPlayerSlotIsSevenDigits()
+    {
+        var http = new ScriptedHttpHandler()
+            .OnBody("streamPlaybackAccessToken(channelName", HttpStatusCode.OK, TwitchFixtures.LiveTokenEnvelope())
+            .OnBody("StreamMetadata", HttpStatusCode.OK, TwitchFixtures.StreamMetadataLive)
+            .OnUrl("usher.ttvnw.net", HttpStatusCode.OK, TwitchFixtures.UsherMasterV2);
+        var host = new ModuleTestHost(new TwitchModule(http));
+
+        ResolvedPlayable resolved = await host.ResolveAsync("live:" + Login, TestContext.Current.CancellationToken);
+
+        Assert.Matches(@"&p=\d{7}$", resolved.Media.Url!);
+    }
+
+    // ---- resolve -----------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task Resolve_UsesTheInlineQueryFirstAndBuildsTheUsherUrl()
+    {
+        var http = new ScriptedHttpHandler()
+            .OnBody("streamPlaybackAccessToken(channelName", HttpStatusCode.OK, TwitchFixtures.LiveTokenEnvelope())
+            .OnBody("StreamMetadata", HttpStatusCode.OK, TwitchFixtures.StreamMetadataLive)
+            .OnUrl("usher.ttvnw.net", HttpStatusCode.OK, TwitchFixtures.UsherMasterV2,
+                "application/vnd.apple.mpegurl");
+        ModuleTestHost host = Make(http);
+
+        ResolvedPlayable resolved = await host.ResolveAsync("live:" + Login, TestContext.Current.CancellationToken);
+
+        RecordedRequest gql = http.Requests[0];
+        Assert.Equal("https://gql.twitch.tv/gql", gql.Url);
+        Assert.Equal(TwitchModule.ClientId, gql.Header("Client-ID"));
+        Assert.Equal(TwitchModule.DesktopUserAgent, gql.Header("User-Agent"));
+        Assert.Null(gql.Header("Authorization"));
+        Assert.Null(gql.Header("Device-Id"));
+        Assert.Null(gql.Header("Client-Integrity"));
+        Assert.DoesNotContain("persistedQuery", gql.Body, StringComparison.Ordinal);
+
+        Assert.Contains("usher.ttvnw.net/api/v2/channel/hls/", resolved.Media.Url!, StringComparison.Ordinal);
+        Assert.Equal(MediaLocator.ContainerHls, resolved.Media.Container);
+        Assert.Equal(MediaForm.Video, resolved.Form);
+        Assert.True(resolved.IsLive);
+        Assert.Equal(0, resolved.DurationMs);
+        Assert.Equal(1_767_225_600L * 1000L, resolved.ExpiresAtUnixMs!.Value);
+    }
+
+    [Fact]
+    public async Task Resolve_FallsBackToThePersistedHashOnPersistedQueryNotFound()
+    {
+        var http = new ScriptedHttpHandler()
+            .OnBody("\"query\"", HttpStatusCode.OK, TwitchFixtures.PersistedQueryNotFound)
+            .OnBody(TwitchModule.PlaybackAccessTokenHash, HttpStatusCode.OK, TwitchFixtures.LiveTokenEnvelope())
+            .OnBody("StreamMetadata", HttpStatusCode.OK, TwitchFixtures.StreamMetadataLive)
+            .OnUrl("usher.ttvnw.net", HttpStatusCode.OK, TwitchFixtures.UsherMasterV2);
+        ModuleTestHost host = Make(http);
+
+        ResolvedPlayable resolved = await host.ResolveAsync("live:" + Login, TestContext.Current.CancellationToken);
+
+        RecordedRequest persisted = http.Requests[1];
+        Assert.Contains("\"operationName\":\"PlaybackAccessToken\"", persisted.Body, StringComparison.Ordinal);
+        Assert.Contains(TwitchModule.PlaybackAccessTokenHash, persisted.Body, StringComparison.Ordinal);
+        Assert.Contains("\"playerType\":\"embed\"", persisted.Body, StringComparison.Ordinal);
+        Assert.Contains("\"isLive\":true", persisted.Body, StringComparison.Ordinal);
+        Assert.NotNull(resolved.Media.Url);
+    }
+
+    [Fact]
+    public async Task Resolve_NullTokenDataIsUnavailable()
+    {
+        var http = new ScriptedHttpHandler()
+            .OnUrl("gql.twitch.tv", HttpStatusCode.OK, TwitchFixtures.NullTokenEnvelope);
+        ModuleTestHost host = Make(http);
+
+        ModuleException ex = await Assert.ThrowsAsync<ModuleException>(() =>
+            host.ResolveAsync("live:" + Login, TestContext.Current.CancellationToken));
+
+        Assert.Equal(ModuleErrorCode.Unavailable, ex.Code);
+        Assert.Contains("requires a browser", ex.Message, StringComparison.Ordinal);
+        Assert.Equal(2, http.Requests.Count);   // inline, then the persisted retry
+    }
+
+    [Fact]
+    public async Task Resolve_ForbiddenAuthorizationShowsTheReason()
+    {
+        var http = new ScriptedHttpHandler()
+            .OnUrl("gql.twitch.tv", HttpStatusCode.OK,
+                TwitchFixtures.LiveTokenEnvelope(TwitchFixtures.TokenValueForbidden));
+        ModuleTestHost host = Make(http);
+
+        ModuleException ex = await Assert.ThrowsAsync<ModuleException>(() =>
+            host.ResolveAsync("live:" + Login, TestContext.Current.CancellationToken));
+
+        Assert.Equal(ModuleErrorCode.Unavailable, ex.Code);
+        Assert.Equal("This channel is temporarily unavailable.", ex.Message);
+    }
+
+    [Fact]
+    public async Task Resolve_GeoblockReasonIsGeoBlocked()
+    {
+        var http = new ScriptedHttpHandler()
+            .OnUrl("gql.twitch.tv", HttpStatusCode.OK,
+                TwitchFixtures.LiveTokenEnvelope(TwitchFixtures.TokenValueGeoblocked));
+        ModuleTestHost host = Make(http);
+
+        ModuleException ex = await Assert.ThrowsAsync<ModuleException>(() =>
+            host.ResolveAsync("live:" + Login, TestContext.Current.CancellationToken));
+
+        Assert.Equal(ModuleErrorCode.GeoBlocked, ex.Code);
+        Assert.Equal("blocked in your country", ex.Detail);
+    }
+
+    [Fact]
+    public async Task Resolve_RestrictedBitratesOnlyWarns()
+    {
+        var http = new ScriptedHttpHandler()
+            .OnBody("streamPlaybackAccessToken(channelName", HttpStatusCode.OK,
+                TwitchFixtures.LiveTokenEnvelope(TwitchFixtures.TokenValueRestrictedBitrates))
+            .OnBody("StreamMetadata", HttpStatusCode.OK, TwitchFixtures.StreamMetadataLive)
+            .OnUrl("usher.ttvnw.net", HttpStatusCode.OK, TwitchFixtures.UsherMasterV2);
+        ModuleTestHost host = Make(http);
+
+        ResolvedPlayable resolved = await host.ResolveAsync("live:" + Login, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(resolved.Media.Url);
+        Assert.Contains(host.Logs, l => l.Level == ModuleLogLevel.Warn &&
+                                        l.Message.Contains("subscriber-only", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Resolve_FallsBackToTheLegacyUsherEndpointOn4xx()
+    {
+        var http = new ScriptedHttpHandler()
+            .OnBody("streamPlaybackAccessToken(channelName", HttpStatusCode.OK, TwitchFixtures.LiveTokenEnvelope())
+            .OnBody("StreamMetadata", HttpStatusCode.OK, TwitchFixtures.StreamMetadataLive)
+            .OnUrl("/api/v2/channel/hls/", HttpStatusCode.BadRequest, "")
+            .OnUrl("/api/channel/hls/", HttpStatusCode.OK, TwitchFixtures.UsherMasterV2);
+        ModuleTestHost host = Make(http);
+
+        ResolvedPlayable resolved = await host.ResolveAsync("live:" + Login, TestContext.Current.CancellationToken);
+
+        Assert.Contains("usher.ttvnw.net/api/channel/hls/", resolved.Media.Url!, StringComparison.Ordinal);
+        Assert.DoesNotContain("/api/v2/", resolved.Media.Url!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Resolve_SubscriberOnlyManifestIsNeedsAuth()
+    {
+        var http = new ScriptedHttpHandler()
+            .OnBody("videoPlaybackAccessToken(id", HttpStatusCode.OK, TwitchFixtures.VodTokenEnvelope())
+            .OnUrl("usher.ttvnw.net", HttpStatusCode.Forbidden, TwitchFixtures.UsherRestricted,
+                "application/json");
+        ModuleTestHost host = Make(http);
+
+        ModuleException ex = await Assert.ThrowsAsync<ModuleException>(() =>
+            host.ResolveAsync("vod:1234567890", TestContext.Current.CancellationToken));
+
+        Assert.Equal(ModuleErrorCode.NeedsAuth, ex.Code);
+        Assert.Equal("vod_manifest_restricted", ex.Detail);
+    }
+
+    [Fact]
+    public async Task Resolve_UsherFailureWithNoStreamIsOffline()
+    {
+        var http = new ScriptedHttpHandler()
+            .OnBody("streamPlaybackAccessToken(channelName", HttpStatusCode.OK, TwitchFixtures.LiveTokenEnvelope())
+            .OnBody("StreamMetadata", HttpStatusCode.OK, TwitchFixtures.StreamMetadataOffline)
+            .OnUrl("usher.ttvnw.net", HttpStatusCode.NotFound, TwitchFixtures.UsherTransoceanic, "application/json");
+        ModuleTestHost host = Make(http);
+
+        ModuleException ex = await Assert.ThrowsAsync<ModuleException>(() =>
+            host.ResolveAsync("live:" + Login, TestContext.Current.CancellationToken));
+
+        Assert.Equal(ModuleErrorCode.Offline, ex.Code);
+    }
+
+    [Fact]
+    public async Task Resolve_ReadsTitleArtistAndArtworkFromStreamMetadata()
+    {
+        var http = new ScriptedHttpHandler()
+            .OnBody("streamPlaybackAccessToken(channelName", HttpStatusCode.OK, TwitchFixtures.LiveTokenEnvelope())
+            .OnBody("StreamMetadata", HttpStatusCode.OK, TwitchFixtures.StreamMetadataLive)
+            .OnUrl("usher.ttvnw.net", HttpStatusCode.OK, TwitchFixtures.UsherMasterV2);
+        ModuleTestHost host = Make(http);
+
+        ResolvedPlayable resolved = await host.ResolveAsync("live:" + Login, TestContext.Current.CancellationToken);
+
+        Assert.Equal("Building a Rust parser", resolved.Title);
+        Assert.Equal(new[] { "ExampleStreamer" }, resolved.Artists);
+        Assert.Equal(
+            "https://static-cdn.jtvnw.net/previews-ttv/live_user_examplestreamer-1920x1080.jpg",
+            resolved.ArtworkUrl);
+
+        RecordedRequest metadata = http.Requests.Single(r =>
+            r.Body.Contains("StreamMetadata", StringComparison.Ordinal));
+        Assert.Contains(TwitchModule.StreamMetadataHash, metadata.Body, StringComparison.Ordinal);
+        Assert.Contains("\"includeIsDJ\":true", metadata.Body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Resolve_RejectsAnIdThatIsNotATwitchPlayable()
+    {
+        ModuleTestHost host = Make(new ScriptedHttpHandler());
+
+        ModuleException ex = await Assert.ThrowsAsync<ModuleException>(() =>
+            host.ResolveAsync("https://example.org/x", TestContext.Current.CancellationToken));
+
+        Assert.Equal(ModuleErrorCode.NotOwned, ex.Code);
+    }
+
+    [Fact]
+    public void ParseUsherError_ReadsTheCodeOutOfTheArrayBody()
+    {
+        (string? error, string? code) = TwitchModule.ParseUsherError(TwitchFixtures.UsherRestricted);
+
+        Assert.Equal("Manifest is restricted", error);
+        Assert.Equal("vod_manifest_restricted", code);
+    }
+
+    [Fact]
+    public void ParseUsherError_IgnoresAPlaylistBody()
+        => Assert.Equal((null, null), TwitchModule.ParseUsherError(TwitchFixtures.UsherMasterV2));
+}

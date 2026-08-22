@@ -27,9 +27,11 @@ namespace Wavee.Features.Video;
 ///   round-trip is in flight), and a dimmed-artwork poster + spinner when there is no player at all.</item>
 /// <item>The hover-reveal chrome idiom: the top scrim strip is <c>Opacity = 0, HoverOpacity = 1</c> and the card earns
 ///   HOVER-CONTAINER status with a no-op <c>OnPointerExit</c> (the TrackRow / PiP idiom) — one pointer registration,
-///   the engine's hover cascade does the rest, no signal and no re-render. The Cap face ALSO mounts the stock
-///   <see cref="MediaPlayerElement"/> transport (seek + More, including Aspect ratio) — the three-glyph strip is
-///   placement chrome, not a replacement for that bar. The Art-tile face stays transport-off.</item>
+///   the engine's hover cascade does the rest, no signal and no re-render. The three-glyph strip is placement chrome;
+///   the TRANSPORT is the global 72-DIP player bar, which owns it for every in-window placement
+///   (<see cref="PlacementCore.TransportOwnerFor"/>) — so both faces pass
+///   <see cref="MediaPlayerElement.SuppressTransport"/> and the card never stacks a second scrub row above the bar.
+///   The Cap face still mounts the element's More (⋯) affordances (Aspect ratio + the placement ladder).</item>
 /// </list>
 ///
 /// <para><b>What is gone, and why.</b> A docked card is pinned inline layout, not a free-floating overlay: there is
@@ -154,7 +156,7 @@ sealed class DockedVideoSurface : Component
                 if (e.KeyCode != Keys.Space) return;
                 e.Handled = true;
                 if (b.VideoPlayer.Peek().Player is not { } p) return;
-                if (p.IsPlayRequested.Peek()) _ = p.PauseAsync(); else _ = p.PlayAsync();
+                if (p.IsPlayRequested.Peek()) _ = b.Player.PauseAsync(); else _ = b.Player.ResumeAsync();
             },
             Focusable = true,
             Children = [ BuildVideoArea(b, EnterFullscreen, svc?.Settings), BuildChrome(b, EnterFullscreen, artTile: Face == DockedVideoFace.ArtTile) ],
@@ -204,25 +206,38 @@ sealed class DockedVideoSurface : Component
         bool mount = VideoSurfaceMount.ShouldMountPlayerStage(binding.Player is not null);
         if (mount && binding.Player is { } player)
         {
+            // ONE transport per session. The docked card shares the window with the global 72-DIP player bar, and
+            // PlacementCore.TransportOwnerFor(Docked) hands the transport to the BAR — full-width, always visible,
+            // never scrolled away — so the card SUPPRESSES its own rather than stacking a second scrub row 30 DIP above
+            // it. Read through the ONE derived signal, never a local bool: two independent visibility flags is exactly
+            // how the fullscreen surface and the bar ended up rendering both at once.
+            bool suppress = b.TransportOwnerNow.Value != TransportOwner.Docked;
             bool cap = Face != DockedVideoFace.ArtTile;
             string stageKey = src?.Key ?? ("gen:" + binding.Generation.ToString(System.Globalization.CultureInfo.InvariantCulture));
             Element element = Embed.Comp(() => new MediaPlayerElement
             {
                 Player = player,
+                PlayRequested = () => _ = b.Player.ResumeAsync(),
+                PauseRequested = () => _ = b.Player.PauseAsync(),
+                // The seek MODE travels with the target (scrub-in-flight = Keyframe, commit = Accurate); dropping it
+                // forced every seek down the accurate path.
+                SeekRequested = (target, mode) => _ = b.Player.SeekAsync((long)target.TotalMilliseconds, mode),
                 Stretch = MediaStretch.Uniform,            // house Fit; Crop/Stretch live in the transport More menu
                 AspectMode = b.VideoAspectPolicy,
                 CustomAspectRatio = b.VideoCustomAspectRatio,
                 AspectModeChanged = b.SetVideoAspect,
                 CornerRadius = Face == DockedVideoFace.ArtTile ? Radii.Card : 0f, // Cap is clipped by the rail; ArtTile keeps the inner round
                 AreTransportControlsEnabled = cap,         // Art-tile hero stays transport-off (too small, must not reflow)
+                SuppressTransport = suppress,
                 ShowLetterboxBars = true,
                 IsDecorative = false,                      // MUST stay false: decorative skips the pump while parked
                 PosterContent = Poster(track),
                 // ArtTile has no transport, but right-click/Menu-key still opens this same complete menu.
                 MoreMenuItems = () => VideoPlacementMenu.Items(b, settings, includeFullscreen: false),
-                // E3: F11 and the transport fullscreen button delegate to us instead of opening a second overlay.
+                // E3: F11 / F / the transport fullscreen button / the ⋯ Fullscreen row delegate to us instead of
+                // opening MediaPlayerElement's own modal overlay fullscreen.
                 FullscreenRequested = enterFullscreen,
-            }) with { Key = "dockstage:" + stageKey };
+            }) with { Key = "dockstage:" + stageKey + (suppress ? ":t0" : ":t1") };
             // The Activation.IsActive override lives HERE, tight around the element that actually reads it — see the
             // class doc's park-but-keep-pumping paragraph for why this Ctx.Provide, and not a settable prop, is real.
             Element stage = Ctx.Provide<IReadSignal<bool>?>(FluentGpu.Hooks.Activation.IsActive, _activeGate, element);

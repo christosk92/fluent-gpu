@@ -96,21 +96,20 @@ public sealed class TrackArtworkPreferenceTests
     }
 
     [Fact]
-    public void DensityExamples_AreTheFourSuppliedRasterReferences()
+    public void DensityExamples_UseTheSharedNativeMiniature()
     {
         string root = AppSourceRoot();
         if (root is null) { Assert.Skip("app sources not present (binary-only run)"); return; }
 
-        string setup = Path.Combine(root, "assets", "setup");
-        foreach (string name in new[]
-                 {
-                     "density-compact.png", "density-default.png", "density-cozy.png", "density-comfortable.png",
-                 })
-        {
-            string path = Path.Combine(setup, name);
-            Assert.True(File.Exists(path), $"Missing setup density reference: {name}");
-            Assert.True(new FileInfo(path).Length > 0, $"Empty setup density reference: {name}");
-        }
+        string setup = File.ReadAllText(Path.Combine(root, "Features", "Setup", "SetupPage.Appearance.cs"));
+        string settings = File.ReadAllText(Path.Combine(root, "Features", "Shell", "SettingsPage.General.cs"));
+        string picker = File.ReadAllText(Path.Combine(root, "Design", "WaveePicker.cs"));
+
+        Assert.Contains("PreviewWindow(on, WaveePicker.DensityRows(value, on))", setup);
+        Assert.Contains("WaveePicker.Card(on, WaveePicker.Tile, WaveePicker.DensityRows(value, on))", settings);
+        Assert.Contains("TrackRow.RowHeightFor(density) * PreviewScale", picker);
+        Assert.Contains("TrackRow.ThumbSize * PreviewScale", picker);
+        Assert.DoesNotContain("density-compact.png", setup);
     }
 
     /// <summary><c>src/apps/Wavee</c>, located from this file's compile-time path.</summary>

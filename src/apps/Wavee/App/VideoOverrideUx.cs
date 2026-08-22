@@ -363,9 +363,14 @@ public static class VideoPresence
     public static bool HasVideo(Track t) => HasVideo(t.Uri);
 
     /// <summary>The same answer for a bare uri — for callers holding a playable rather than a hydrated row.</summary>
+    /// <remarks>Three planes, one answer: Spotify's kind-99 association, the user's own attachment, and — for a
+    /// playback-module playable — the module's own <c>form: video</c> verdict from its resolve. The third is a
+    /// dictionary probe on the module cache (<see cref="Wavee.Backend.Modules.ModulePlayables"/>), so this stays the
+    /// single allocation-free boolean every row indicator and the player-bar button already call.</remarks>
     public static bool HasVideo(string? playableUri)
         => (playableUri is { Length: > 0 } u && _store?.GetVideoAssociation(u) is { HasVideo: true })
-           || HasOverride(playableUri);
+           || HasOverride(playableUri)
+           || Wavee.Backend.Modules.ModulePlayables.HasVideo(playableUri);
 
     /// <summary>DIAGNOSTIC ONLY — the raw association record behind <see cref="HasVideo(string?)"/>, so an off-render-path
     /// sweep can tell "no row at all" (never asked / nothing came back) apart from "a row that says no" (a cached negative

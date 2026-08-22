@@ -4,6 +4,7 @@ using System.Threading;
 using System.Collections.Generic;
 using Wavee.Backend.Audio;
 using Xunit;
+using Wavee.Sdk.Streams;
 
 namespace Wavee.Tests.Audio;
 
@@ -15,7 +16,7 @@ public class AudioBodyDiskCacheTests
     public void WriteThenRead_RoundTripsChunk()
     {
         var dir = TempDir();
-        var cache = new AudioBodyDiskCache(dir);
+        var cache = new ChunkDiskCache(dir);
         var data = A.Bytes(3, AudioBodyDiskCache.ChunkBytes);
         cache.SetSize("fileA", data.Length);
         cache.WriteChunk("fileA", 0, data);
@@ -31,7 +32,7 @@ public class AudioBodyDiskCacheTests
     public void SparseChunks_MissesGap()
     {
         var dir = TempDir();
-        var cache = new AudioBodyDiskCache(dir);
+        var cache = new ChunkDiskCache(dir);
         cache.SetSize("f", AudioBodyDiskCache.ChunkBytes * 3L);
         cache.WriteChunk("f", 0, A.Bytes(1, AudioBodyDiskCache.ChunkBytes));
         cache.WriteChunk("f", 2, A.Bytes(2, AudioBodyDiskCache.ChunkBytes));
@@ -47,7 +48,7 @@ public class AudioBodyDiskCacheTests
     public void TornWrite_DataWithoutMapBit_IsMiss()
     {
         var dir = TempDir();
-        var cache = new AudioBodyDiskCache(dir);
+        var cache = new ChunkDiskCache(dir);
         string enc = Path.Combine(dir, "torn.enc");
         Directory.CreateDirectory(dir);
         File.WriteAllBytes(enc, A.Bytes(9, AudioBodyDiskCache.ChunkBytes));
@@ -60,8 +61,8 @@ public class AudioBodyDiskCacheTests
     public void SetSize_PersistsAcrossInstances()
     {
         var dir = TempDir();
-        new AudioBodyDiskCache(dir).SetSize("sz", 1_234_567);
-        Assert.Equal(1_234_567, new AudioBodyDiskCache(dir).KnownSize("sz"));
+        new ChunkDiskCache(dir).SetSize("sz", 1_234_567);
+        Assert.Equal(1_234_567, new ChunkDiskCache(dir).KnownSize("sz"));
         Directory.Delete(dir, true);
     }
 
@@ -71,7 +72,7 @@ public class AudioBodyDiskCacheTests
         var dir = TempDir();
         const int tail = 137;
         long size = AudioBodyDiskCache.ChunkBytes + tail;
-        var cache = new AudioBodyDiskCache(dir);
+        var cache = new ChunkDiskCache(dir);
         cache.SetSize("tail", size);
         var data = A.Bytes(7, tail);
         cache.WriteChunk("tail", 1, data);
@@ -86,7 +87,7 @@ public class AudioBodyDiskCacheTests
     public void CorruptCiphertext_IsRejectedByDigest()
     {
         var dir = TempDir();
-        var cache = new AudioBodyDiskCache(dir);
+        var cache = new ChunkDiskCache(dir);
         cache.SetSize("corrupt", AudioBodyDiskCache.ChunkBytes);
         cache.WriteChunk("corrupt", 0, A.Bytes(4, AudioBodyDiskCache.ChunkBytes));
         string enc = Directory.GetFiles(dir, "*.enc", SearchOption.AllDirectories).Single();
@@ -141,7 +142,7 @@ public class AudioBodyDiskCacheTests
         string badMap = Path.Combine(dir, "ab", "deadbeefdeadbeef.map");
         File.WriteAllBytes(badMap, new byte[8]);
 
-        var cache = new AudioBodyDiskCache(dir);
+        var cache = new ChunkDiskCache(dir);
         // Construction must stay CHEAP — the ctor-time sweep was the 16–31 s "Starting audio" login stall
         // (golive.audio_ms). The crashed-session leftovers are still on disk until the off-path WarmScan runs.
         Assert.True(File.Exists(staleTmp));
@@ -175,14 +176,14 @@ public class AudioBodyDiskCacheTests
     {
         var oldRoot = TempDir();
         var newParent = TempDir();
-        var cache = new AudioBodyDiskCache(oldRoot);
+        var cache = new ChunkDiskCache(oldRoot);
         var data = A.Bytes(12, AudioBodyDiskCache.ChunkBytes);
         cache.SetSize("move-me", data.Length);
         cache.WriteChunk("move-me", 0, data);
 
         Assert.True(await cache.PrepareRelocationAsync(newParent, AudioCacheRelocationMode.Move));
         Assert.Empty(Directory.GetFiles(oldRoot, "*.enc", SearchOption.AllDirectories));
-        var relocated = new AudioBodyDiskCache(AudioBodyDiskCache.ResolveDirectory(newParent));
+        var relocated = new ChunkDiskCache(AudioBodyDiskCache.ResolveDirectory(newParent));
         var read = new byte[data.Length];
         Assert.True(relocated.TryReadChunk("move-me", 0, read, out int length));
         Assert.Equal(data, read[..length]);

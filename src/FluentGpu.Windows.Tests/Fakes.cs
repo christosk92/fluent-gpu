@@ -37,6 +37,11 @@ internal sealed class FakeVideoEngine : IVideoEngine
     public uint ReadyState { get; set; }
     public double DurationSeconds { get; set; }
     public double CurrentTimeSeconds { get; set; }
+    // Live state the session latches/polls (IVideoEngine.IsLiveSource / SeekableRange / CanPlayHls). Settable so a
+    // test can script "the engine has not answered yet" (false / (0,0)) and then a real answer.
+    public bool IsLiveSource { get; set; }
+    public (double Start, double End) SeekableRange { get; set; }
+    public bool CanPlayHls { get; set; } = true;
 
     public uint NativeW = 1920, NativeH = 1080;
     // What the fake engine "answers" when asked for the native size. NoAnswer models the bounded-Invoke expiry the real
@@ -117,8 +122,12 @@ internal sealed class FakeProtectedVideoPlayer : IProtectedVideoPlayer
     public ProtectedVideoRequest? StartedWith;
     public int StartCalls, PlayCalls, PauseCalls, StopCalls, DisposeCalls;
     public long LastSeekMs = -1;
+    public SeekMode LastSeekMode = SeekMode.Accurate;
     public float LastVolume = 1f;
     public bool ReadyOnStart;
+    public bool SupportsAdaptiveSelection { get; set; }
+    public string? ActiveVideoRepresentationId { get; private set; }
+    public string? LastSelectedRepresentationId;
     public bool HasSurface { get; set; }
     public TaskCompletionSource<bool>? PlayAck, PauseAck, SeekAck;
 
@@ -139,16 +148,29 @@ internal sealed class FakeProtectedVideoPlayer : IProtectedVideoPlayer
     {
         StartCalls++;
         StartedWith = request;
+        if (request.Catalog is { } catalog)
+            for (int t = 0; t < catalog.Tracks.Count; t++)
+                for (int r = 0; r < catalog.Tracks[t].Representations.Count; r++)
+                    if (catalog.Tracks[t].Kind == FluentGpu.Media.TrackKind.Video &&
+                        catalog.Tracks[t].Representations[r].InitUrl == request.InitUrl)
+                        ActiveVideoRepresentationId = catalog.Tracks[t].Representations[r].Id;
         if (!request.StartPaused) PlayCalls++;
         if (ReadyOnStart) { HasSurface = true; _naturalSize.Value = new Size2(1280, 720); _state.Value = ProtectedVideoState.Playing; }
     }
 
     public ValueTask PlayAsync() { PlayCalls++; return PlayAck is { } ack ? new ValueTask(ack.Task) : ValueTask.CompletedTask; }
     public ValueTask PauseAsync() { PauseCalls++; return PauseAck is { } ack ? new ValueTask(ack.Task) : ValueTask.CompletedTask; }
-    public ValueTask SeekAsync(long positionMs)
+    public ValueTask SeekAsync(long positionMs, SeekMode mode)
     {
         LastSeekMs = positionMs;
+        LastSeekMode = mode;
         return SeekAck is { } ack ? new ValueTask(ack.Task) : ValueTask.CompletedTask;
+    }
+    public ValueTask SelectVideoRepresentationAsync(string representationId)
+    {
+        LastSelectedRepresentationId = representationId;
+        ActiveVideoRepresentationId = representationId;
+        return ValueTask.CompletedTask;
     }
     public void SetVolume(float volume) => LastVolume = volume;
     public void SetRate(float rate) { }

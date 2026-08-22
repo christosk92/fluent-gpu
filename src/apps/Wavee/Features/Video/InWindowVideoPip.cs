@@ -268,9 +268,15 @@ sealed class InWindowVideoPip : Component
             string stageKey = src?.Key ?? ("gen:" + binding.Generation.ToString(System.Globalization.CultureInfo.InvariantCulture));
             // Bridge/Settings put the placement ladder on the video's OWN ⋯ menu, so the mini player can be moved from
             // the surface the user is actually looking at instead of only from the player bar across the window.
+            // The mini player shares the window with the global 72-DIP player bar, so the BAR owns the transport
+            // (TransportOwnerFor(Floating) == GlobalBar) and this stage suppresses its own — one transport, never two
+            // stacked. Its fullscreen affordance ENTERS the app's fullscreen surface rather than the element's own
+            // overlay fullscreen.
             var stage = Embed.Comp(() => new PopOutVideoStage
             {
                 Source = src, Player = b.VideoPlayer, Bridge = b, Settings = settings,
+                Host = new VideoStageHost(TransportOwner.Docked, b.TransportOwnerNow,
+                    () => b.ShowVideoAt(SurfacePlacement.Fullscreen)),
             }) with { Key = "pipstage:" + stageKey };
             if (src is not null)
                 return new BoxEl

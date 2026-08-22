@@ -146,6 +146,18 @@ sealed class PlayerBarContent : Component
         var repeat = b.Repeat.Value;
         bool hasVideo = b.CurrentTrackHasVideo.Value;   // async-detected music video (VideoService) for the now-playing track
         var accent = Tok.AccentDefault;
+        // ONE TRANSPORT PER **WINDOW** — not per session. The stacked-transport defect is two live scrub rows for the
+        // same session IN ONE WINDOW, which is what the fullscreen surface produced (it reserved a band so this bar
+        // stayed visible under the video's own transport). So the bar is the DEFAULT owner and the owner for every
+        // in-window video placement (docked card, mini player) — those surfaces suppress their own — and it yields
+        // only to a full-bleed surface in THIS window, where WaveeShell unmounts this component outright anyway.
+        //
+        // Detached (PopOut) deliberately does NOT take the transport away from this bar: the pop-out is a separate OS
+        // window that carries its own transport, the two were never stacked, and stripping the main window's scrub row
+        // and play/pause because a video is playing in another window would be a regression, not a fix. Read through
+        // the ONE derived signal (PlaybackBridge.TransportOwnerNow); a local visibility bool here is exactly what let
+        // two owners both render.
+        bool ownsTransport = b.TransportOwnerNow.Value is TransportOwner.GlobalBar or TransportOwner.PopOut;
 
         PlayerState st =
             err is not null ? PlayerState.Error :
@@ -341,15 +353,17 @@ sealed class PlayerBarContent : Component
                 b.CurrentTrack.Peek() is { } nowTrack ? Menus.NowPlaying(nowActs, nowTrack) : (ContextMenuModel?)null);
 
         // ── CENTRE — transport group + seek (the SeekBar Grows to fill the remaining center width) ───
+        // Empty while a bar-less video surface owns the transport — see `ownsTransport` above.
         var transport = new List<Element>(3);
-        if (showPrevNext)
+        if (ownsTransport && showPrevNext)
             transport.Add(Transport(Icons.Previous, () => { _ = b.Player.PreviousAsync(); }, canTransport, false, accent, buttonBox, buttonGlyph)
                 with { Key = "prev", Animate = ItemMotion });
-        transport.Add(Primary(
-            st == PlayerState.Error ? Icons.Play : playing ? Icons.Pause : Icons.Play,
-            () => PrimaryClick(b, st), primaryEnabled, accent, primaryBox, primaryGlyph)
-            with { Key = "primary", Animate = MoveMotion });
-        if (showPrevNext)
+        if (ownsTransport)
+            transport.Add(Primary(
+                st == PlayerState.Error ? Icons.Play : playing ? Icons.Pause : Icons.Play,
+                () => PrimaryClick(b, st), primaryEnabled, accent, primaryBox, primaryGlyph)
+                with { Key = "primary", Animate = MoveMotion });
+        if (ownsTransport && showPrevNext)
             transport.Add(Transport(Icons.Next, () => { _ = b.Player.NextAsync(); }, canTransport, false, accent, buttonBox, buttonGlyph)
                 with { Key = "next", Animate = ItemMotion });
 
@@ -364,10 +378,11 @@ sealed class PlayerBarContent : Component
         // matched against the old TimeText node, a ComponentType mismatch that REMOUNTS SeekBar, losing its scrub state /
         // interpolation anchor / cached width on resize-during-playback).
         var seekKids = new List<Element>(3);
-        if (showTimesElapsed)
+        if (ownsTransport && showTimesElapsed)
             seekKids.Add(new BoxEl { Key = "elapsed", Animate = ItemMotion, Children = [Embed.Comp(() => new TimeText(b, remaining: false))] });
-        seekKids.Add(new BoxEl { Key = "seek", Grow = 1f, Shrink = 1f, MinWidth = 0f, Animate = MoveMotion, Children = [Embed.Comp(() => new SeekBar(b))] });
-        if (showTimesRemaining)
+        if (ownsTransport)
+            seekKids.Add(new BoxEl { Key = "seek", Grow = 1f, Shrink = 1f, MinWidth = 0f, Animate = MoveMotion, Children = [Embed.Comp(() => new SeekBar(b))] });
+        if (ownsTransport && showTimesRemaining)
             seekKids.Add(new BoxEl { Key = "remaining", Animate = ItemMotion, Children = [Embed.Comp(() => new TimeText(b, remaining: true))] });
 
         var seekRow = new BoxEl
@@ -397,7 +412,7 @@ sealed class PlayerBarContent : Component
 
         // ── RIGHT — shuffle/repeat · volume · queue/devices/expand ───────────────────────────────────
         var overflowCommands = new List<AppBarCommand>(8);
-        if (!showPrevNext)
+        if (ownsTransport && !showPrevNext)
         {
             overflowCommands.Add(new AppBarCommand(Icons.Previous, Loc.Get(Strings.Player.Previous), () => { _ = b.Player.PreviousAsync(); }, Enabled: canTransport));
             overflowCommands.Add(new AppBarCommand(Icons.Next, Loc.Get(Strings.Player.Next), () => { _ = b.Player.NextAsync(); }, Enabled: canTransport));
@@ -1081,6 +1096,11 @@ sealed class TimeText : Component
         long pos = _b.PositionMs.Value;          // subscribe → 1 Hz tick
         long dur = _b.DurationMs.Value;
         bool rightDuration = _remaining;
+        // A live stream has no remaining time to count down (duration is 0 and stays 0), so the right slot states what
+        // IS true — LIVE — instead of a permanent "-0:00". Elapsed on the left keeps counting, because "how long have I
+        // been listening" is still a fact. Read as a signal so the chip arrives and leaves with the playable; the
+        // toggle-to-duration gesture goes with the label, since there is no duration to toggle to.
+        if (rightDuration && _b.IsLive.Value) return LivePill(_ink);
         bool remainingMode = rightDuration && showRemaining;
         long ms = rightDuration ? (remainingMode ? Math.Max(0, dur - pos) : dur) : pos;
         string s = (remainingMode ? "-" : "") + PlayerBarContent.Fmt(ms);
@@ -1107,6 +1127,40 @@ sealed class TimeText : Component
                 _ink is { } ink
                     ? Caption(s) with { Color = ink, Wrap = TextWrap.NoWrap }
                     : Caption(s).Secondary() with { Wrap = TextWrap.NoWrap },
+            ],
+        };
+    }
+
+    /// <summary>The LIVE mark that replaces the remaining-time label. It is the app's ONE badge shape — the classic
+    /// track table's content-rating word-mark (<c>TrackRow.ClassicExplicitBadge</c>: a 14px box, 2px corner, 1px
+    /// stroke, 9/12 semibold caps-as-authored) — so the bar does not invent a second badge language for the same job.
+    ///
+    /// <para>It paints ACCENT INK (<see cref="WaveeAccent.Decor"/>): accent as CONTENT, which is the role that owns
+    /// text, never accent as structure. On the immersive stage the caller's theme-invariant on-media ink wins, exactly
+    /// as it does for the time labels. The box keeps the time slot's 44 DIPs so the seek row does not reflow when a
+    /// live playable starts.</para></summary>
+    static Element LivePill(ColorF? ink)
+    {
+        ColorF fg = ink ?? WaveeAccent.Decor;
+        return new BoxEl
+        {
+            Width = 44f, Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Start,
+            Fill = ColorF.Transparent,
+            Children =
+            [
+                new BoxEl
+                {
+                    Height = 14f, Padding = new Edges4(Spacing.XXS, 0f, Spacing.XXS, 0f), Shrink = 0f,
+                    Corners = CornerRadius4.All(2f), BorderWidth = 1f, BorderColor = fg,
+                    AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                    Children =
+                    [
+                        new TextEl(Loc.Get(Strings.Play.Live))
+                        {
+                            Size = 9f, LineHeight = 12f, Weight = 600, Color = fg, Wrap = TextWrap.NoWrap,
+                        },
+                    ],
+                },
             ],
         };
     }

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading;
@@ -292,7 +292,7 @@ public sealed class LiveSessionHost : IAsyncDisposable
             ? Math.Clamp(svc.Settings.Get(WaveeSettings.SavedVolume), 0f, 1f) : 0.7;
         var connect = new LiveConnect(transport, live.DeviceId, live.ApChannel, hydration, liveStore,
             contexts, log: connectLog, audio: audio,
-            initialVolume01: initialVolume, refreshTokens: live.TokenProvider);
+            initialVolume01: initialVolume, refreshTokens: live.TokenProvider, settings: svc.Settings);
         attempt.Connect(connect);   // …and the Connect stack, for the same window
         connect.Controller.AutoplayEnabled = () => svc.Settings.Get(WaveeSettings.AutoplayEnabled);
         // M0 — "one media, one host, one player": hand the controller the app-level video hooks (the per-track video predicate,
@@ -316,6 +316,19 @@ public sealed class LiveSessionHost : IAsyncDisposable
             // outlives it is the hook this installed ON THE BRIDGE, which would otherwise keep calling into a disposed
             // LiveConnect after logout.
             () => svc.Playback.RequestMediaKindRefresh = null);
+        // ── Part 7.3 — the module→host services the Spotify playback module needs ───────────────────────────────────
+        // host/auth/token, host/auth/context and spotify/audioKey answer from THIS session (the live spclient handle
+        // plus the AP socket LiveConnect owns), so they are installed here and taken back off at logout. Registered
+        // unconditionally — the conditional is inside the install — so the roster stays covered on a build with no
+        // module host at all.
+        var moduleHostServices = Wavee.Backend.Modules.ModuleHost.Current?.Services;
+        var spotifyHostSession = new SpotifyLiveHostSession(
+            (force, c) => force && live.ForceTokenProvider is { } forceMint ? forceMint(c) : live.TokenProvider(c),
+            () => SpotifyLiveHostSession.ContextOf(live.DeviceId, live.ClientToken, live.BaseUrl, live.Session),
+            live.ApChannel is { } ap ? ap.RequestAudioKeyAsync : SpotifyLiveHostSession.NoApChannel);
+        wiring.Set(Wavee.Backend.Wiring.LiveSeams.ModuleHostServices,
+            () => { if (moduleHostServices is not null) LiveConnect.RegisterModuleHostServices(moduleHostServices, spotifyHostSession); },
+            () => { if (moduleHostServices is not null) LiveConnect.UnregisterModuleHostServices(moduleHostServices); });
         transport.Start();
         // Profile (name + avatar) fetched before go-live so CurrentUser is complete on the first render (no refresh hook).
         // Best-effort — a failure just omits that field.

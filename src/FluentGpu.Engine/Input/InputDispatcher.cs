@@ -121,6 +121,8 @@ public sealed class InputDispatcher
     private PointerKind _pressKind;
     private byte _pressClickCount = 1;
     private CursorId _lastCursor = CursorId.Arrow;
+    private CursorId? _cursorOverride;
+    private object? _cursorOverrideOwner;
     // Read-only text selection (rtb-02 — WinUI TextSelectionManager, default-on for RichTextBlock,
     // RichTextBlock.cpp:1730): the SelectableTextBit node owning the current selection + the drag anchor index.
     private NodeHandle _selText;
@@ -1118,6 +1120,7 @@ public sealed class InputDispatcher
                     break;
 
                 case InputKind.WindowBlur:
+                    ClearCursorOverride();
                     CancelPointer();
                     CancelKeyArm(fire: false);
                     SetState(ref _hovered, NodeHandle.Null, NodeFlags.Hovered);
@@ -3224,6 +3227,32 @@ public sealed class InputDispatcher
     /// in the chain ⇒ system arrow — clickability does NOT imply the hand (WinUI: only HyperlinkButton shows it).</summary>
     private void UpdateCursor(NodeHandle hover) => PublishCursor(ResolveCursorWalk(hover));
 
+    /// <summary>Install/release a temporary window-cursor override. Ownership prevents an inactive sibling surface from
+    /// restoring Arrow over the player that currently owns the hidden cursor.</summary>
+    public void SetCursorOverride(object owner, CursorId? cursor)
+    {
+        ArgumentNullException.ThrowIfNull(owner);
+        if (cursor is null)
+        {
+            if (!ReferenceEquals(_cursorOverrideOwner, owner)) return;
+            _cursorOverrideOwner = null;
+            _cursorOverride = null;
+            PublishCursor(ResolveCursorWalk(_hovered));
+            return;
+        }
+        _cursorOverrideOwner = owner;
+        _cursorOverride = cursor;
+        PublishCursor(cursor.Value);
+    }
+
+    private void ClearCursorOverride()
+    {
+        if (_cursorOverride is null) return;
+        _cursorOverrideOwner = null;
+        _cursorOverride = null;
+        PublishCursor(CursorId.Arrow);
+    }
+
     private CursorId ResolveCursorWalk(NodeHandle hover)
     {
         for (var n = hover; !n.IsNull; n = _scene.Parent(n))
@@ -3237,6 +3266,7 @@ public sealed class InputDispatcher
 
     private void PublishCursor(CursorId resolved)
     {
+        resolved = _cursorOverride ?? resolved;
         if (resolved == _lastCursor) return;
         _lastCursor = resolved;
         OnCursorChanged?.Invoke(resolved);

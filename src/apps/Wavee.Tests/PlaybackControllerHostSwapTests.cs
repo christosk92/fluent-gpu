@@ -62,7 +62,7 @@ public class PlaybackControllerHostSwapTests
         public void Play() { IsPlaying = true; Note("play"); }
         public void Pause() { IsPlaying = false; Note("pause"); }
         public void Stop() { IsPlaying = false; Note("stop"); }
-        public void Seek(long ms) { PositionMs = ms; Note("seek:" + ms); }
+        public void Seek(long ms, SeekMode mode) { PositionMs = ms; Note("seek:" + ms); }
         public void SetVolume(double v) => Note("vol");
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
@@ -81,7 +81,7 @@ public class PlaybackControllerHostSwapTests
         public void Play() { IsPlaying = true; Note("play"); }
         public void Pause() { IsPlaying = false; Note("pause"); }
         public void Stop() { IsPlaying = false; Note("stop"); }
-        public void Seek(long ms) { PositionMs = ms; Note("seek:" + ms); }
+        public void Seek(long ms, SeekMode mode) { PositionMs = ms; Note("seek:" + ms); }
         public void SetVolume(double v) => Note("vol");
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
@@ -305,7 +305,7 @@ public class PlaybackControllerHostSwapTests
         int videoCallsAfterSwap = h.Video!.Calls.Count;
 
         await h.Controller.PauseAsync();
-        await h.Controller.SeekAsync(5000);
+        await h.Controller.SeekAsync(5000, SeekMode.Accurate);
         await h.Controller.ResumeAsync();
 
         // Every verb landed on the video host…

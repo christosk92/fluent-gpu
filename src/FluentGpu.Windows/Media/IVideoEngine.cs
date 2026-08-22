@@ -65,6 +65,19 @@ internal interface IVideoEngine : IDisposable
     /// <summary>Current presentation time in seconds (the authoritative clock).</summary>
     double CurrentTimeSeconds { get; }
 
+    /// <summary>True when the source is UNBOUNDED (live) — no end, so no duration and no fixed timeline. Answering
+    /// <see langword="false"/> is NOT proof of VOD: like every read here it is bounded and a busy engine answers
+    /// <c>default</c>. Callers LATCH a true and keep asking until they get one; they never latch a false.</summary>
+    bool IsLiveSource { get; }
+
+    /// <summary>The seekable window in seconds (for a live source: the DVR window, whose END is the live edge).
+    /// <c>(0, 0)</c> means "no window / not answered yet".</summary>
+    (double Start, double End) SeekableRange { get; }
+
+    /// <summary>Whether the platform can play an HLS master playlist at all (a static machine capability probed once at
+    /// engine creation) — so a live URL that cannot open reports the real reason, not a generic source failure.</summary>
+    bool CanPlayHls { get; }
+
     // ── composited-surface handoff ─────────────────────────────────────────────────────────────────────────────────
     /// <summary>The windowless swap-chain HANDLE (valid after metadata); 0 until ready. Bind via <c>IVideoPresenter.BindSurfaceHandle</c>.</summary>
     nuint GetSwapchainHandle();

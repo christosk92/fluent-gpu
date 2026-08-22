@@ -39,7 +39,7 @@ public class ConnectControllerTests
         public void Play() { IsPlaying = true; Calls.Add("play"); }
         public void Pause() { IsPlaying = false; Calls.Add("pause"); }
         public void Stop() { IsPlaying = false; Calls.Add("stop"); }
-        public void Seek(long ms) { PositionMs = ms; Calls.Add("seek:" + ms); }
+        public void Seek(long ms, SeekMode mode) { PositionMs = ms; Calls.Add("seek:" + ms); }
         public void SetVolume(double v) { Calls.Add("vol"); }
         public void Emit(AudioHostSignal s) => _sig.OnNext(s);
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
@@ -280,7 +280,7 @@ public class ConnectControllerTests
         using var c = Make(out var host, out var proj, out var outbound, extra: new[] { events });
         proj.OnCluster(Cluster("other-device"));
         await c.PauseAsync();
-        await c.SeekAsync(4242);
+        await c.SeekAsync(4242, SeekMode.Accurate);
         await c.SetVolumeAsync(0.5);
         await c.PlayAsync("spotify:playlist:p");
         Assert.DoesNotContain(host.Calls, x => x is "pause" or "play");   // nothing driven locally

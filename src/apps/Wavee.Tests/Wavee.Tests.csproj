@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <!-- Unit tests for the Wavee backend core. Source-includes src/apps/Wavee/Backend (which is engine-independent: deps =
        Wavee.Core + BCL only), so the test assembly stays lean — no FluentGpu/TerraFX/GPU. Honors "no separate backend
@@ -32,6 +32,7 @@
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.0" />
     <!-- the Backend source-include also contains ExtendedMetadataSource → compile the metadata protos here too -->
     <PackageReference Include="Google.Protobuf" Version="3.35.0" />
+    <PackageReference Include="NLayer" Version="1.15.0" />                  <!-- Mp3ForwardOnlyTests: the live MP3 path decodes over a non-seekable stream -->
     <PackageReference Include="Grpc.Tools" Version="2.81.0">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
@@ -81,6 +82,10 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Wavee.Core\Wavee.Core.csproj" />
+    <ProjectReference Include="..\Wavee.Sdk\Wavee.Sdk.csproj" />
+    <ProjectReference Include="..\modules\Wavee.Module.YouTube\Wavee.Module.YouTube.csproj" />
+    <ProjectReference Include="..\modules\Wavee.Module.Twitch\Wavee.Module.Twitch.csproj" />
+    <ProjectReference Include="..\modules\Wavee.Module.Radio\Wavee.Module.Radio.csproj" />
     <ProjectReference Include="..\..\FluentGpu.WindowsApi\FluentGpu.WindowsApi.csproj" />
     <!-- the vendored Ogg/Vorbis fork — OggContainerSeekTests drive its container-level seek paths directly -->
     <ProjectReference Include="..\vendor\NVorbis\NVorbis\NVorbis.csproj" />
@@ -324,6 +329,9 @@
     <Compile Include="..\Wavee\Actions\ActionRules.cs" />
     <Compile Include="..\Wavee\Actions\SpotifyLink.cs" />
     <Compile Include="..\Wavee\Actions\TrackTargetResolver.cs" />
+    <!-- the "Play ▸ Link…" decisions (Wavee.Sdk + Wavee.Core + BCL only; deliberately localization-free — it takes the
+         localized strings it needs as arguments) — PlayLinkActionsTests pin the whole surface -->
+    <Compile Include="..\Wavee\Actions\PlayLinkActions.cs" />
     <Compile Include="..\..\FluentGpu.Controls\SelectionModel.cs" />
     <!-- the queue verbs + their batch cap (Wavee.Core + BCL only) — the PlayNext/AddToEnd/InsertAt routing tests -->
     <Compile Include="..\Wavee\Features\Detail\DetailQueueActions.cs" />
@@ -416,6 +424,10 @@
     <Compile Include="..\Wavee\SpotifyLive\TransferStateDecoder.cs" />
     <Compile Include="..\Wavee\SpotifyLive\SpotifyClientIdentity.cs" />
     <Compile Include="..\Wavee\SpotifyLive\ConnectStateBuilder.cs" />
+    <!-- Part 7.3's module→host services (the LiveConnect partial): Wavee.Sdk + Backend\Modules + SessionContext only, by
+         construction — the session facts arrive through ISpotifyHostSession, so none of the login stack comes with it.
+         ModuleHostServicesSpotifyTests drive the REAL registration + permission gate over the in-memory module. -->
+    <Compile Include="..\Wavee\SpotifyLive\LiveConnect.HostServices.cs" />
   </ItemGroup>
 
   <ItemGroup>

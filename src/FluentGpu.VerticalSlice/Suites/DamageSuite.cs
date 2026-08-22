@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.InteropServices;
 using FluentGpu.Foundation;
 using FluentGpu.Hosting;
 using FluentGpu.Render;
@@ -30,6 +31,10 @@ static class DamageSuite
         PolicyChecks();
         StreamSafetyChecks();
         CullHaloChecks();
+        VideoRepaintChecks();
+        LayeredVideoRepaintChecks();
+        TwoHoleRepaintChecks();
+        SpanReuseEquivalenceChecks(strings);
     }
 
     // ── §5.1-B: the pure decision layer (RepaintPolicy / RepaintStreamSafety / RepaintCull) ──────────────────────────
@@ -752,6 +757,7 @@ static class DamageSuite
             scene.Bounds(viewport) = new RectF(20f, 30f, 200f, 100f);
             ref NodePaint vp = ref scene.Paint(viewport);
             vp.VisualKind = VisualKind.Box; vp.Fill = new ColorF(0.15f, 0.15f, 0.18f, 1f);
+            scene.Mark(viewport, NodeFlags.ClipsToBounds);
             scene.ScrollRef(viewport);   // get-or-create ⇒ marks NodeFlags.Scrollable
 
             var content = scene.CreateNode(1); scene.AppendChild(viewport, content);
@@ -935,6 +941,994 @@ static class DamageSuite
             $"later={later.RepaintDamage.FullReason}/{later.RepaintDamage.Count} cov={later.RepaintDamage.Coverage(480f, 320f):0.000} seq={later.PublishSequence} " +
             $"hash={hashStamped}/{hashTracksStream} carry={later.CarriedFromSeq}");
     }
+
+    // ── §5.1-A/§13.1, the STREAMING partial route around a video hole punch ──────────────────────────────────────────
+    static void VideoRepaintChecks()
+    {
+        // A 440x340 DIP target at scale 1 — one raster cell per DIP, so "pixel-exact" is literal, and big enough that
+        // a damage band can fit WHOLLY INSIDE the hole (the repaint-pad is 40 DIP on a plain fill, so a smaller hole
+        // would make every case a straddler and the interesting one would never be exercised).
+        const int TW = 440, TH = 340;
+
+        // ── the reference rasterizer ────────────────────────────────────────────────────────────────────────────────
+        // Premultiplied float RGBA, matching the engine's colour contract (premultiplied, linear blend). Two ops
+        // matter: a plain fill (src-over) and DrawVideo (DestOut: dst *= 1 - strength).
+        static void Blend(float[] c, int x, int y, float r, float g, float b, float a)
+        {
+            int i = (y * TW + x) * 4;
+            c[i] = r + c[i] * (1f - a); c[i + 1] = g + c[i + 1] * (1f - a);
+            c[i + 2] = b + c[i + 2] * (1f - a); c[i + 3] = a + c[i + 3] * (1f - a);
+        }
+        static void Erase(float[] c, int x, int y, float strength)
+        {
+            int i = (y * TW + x) * 4;
+            float k = 1f - strength;
+            c[i] *= k; c[i + 1] *= k; c[i + 2] *= k; c[i + 3] *= k;
+        }
+        static void ClearRect(float[] c, in PixelRect p, in ColorF col)
+        {
+            for (int y = Math.Max(0, p.Top); y < Math.Min(TH, p.Bottom); y++)
+                for (int x = Math.Max(0, p.Left); x < Math.Min(TW, p.Right); x++)
+                {
+                    int i = (y * TW + x) * 4;
+                    c[i] = col.R * col.A; c[i + 1] = col.G * col.A; c[i + 2] = col.B * col.A; c[i + 3] = col.A;
+                }
+        }
+
+        // Replay the stream into `canvas`, clamped to `scissor` and culled exactly as the backend culls. The byte
+        // framing goes through RepaintStreamSafety.TryBodySize — the ONE opcode→size table — so this walker can never
+        // disagree with the stream-safety scan about where an op ends.
+        static void Replay(float[] canvas, ReadOnlySpan<byte> cmds, PixelRect scissor, bool cullActive, RectF cullRect)
+        {
+            Span<RectF> clipStack = stackalloc RectF[32];
+            int depth = 0;
+            RectF clip = RectF.Infinite;
+            int pos = 0;
+            while (pos + sizeof(int) <= cmds.Length)
+            {
+                DrawOp op = (DrawOp)MemoryMarshal.Read<int>(cmds.Slice(pos));
+                pos += sizeof(int);
+                if (!RepaintStreamSafety.TryBodySize(op, out int body)) return;
+                switch (op)
+                {
+                    case DrawOp.PushClip:
+                    {
+                        var cc = MemoryMarshal.Read<ClipCmd>(cmds.Slice(pos));
+                        clipStack[depth++] = clip;
+                        clip = clip.Intersect(cc.DeviceRect);
+                        break;
+                    }
+                    case DrawOp.PopClip:
+                        clip = clipStack[--depth];
+                        break;
+                    case DrawOp.FillRoundRect:
+                    {
+                        var c = MemoryMarshal.Read<FillRoundRectCmd>(cmds.Slice(pos));
+                        if (Cull(c.Rect, c.Transform)) break;
+                        Paint(c.Rect, c.Transform, c.Fill, c.Opacity, strength: -1f);
+                        break;
+                    }
+                    case DrawOp.DrawVideo:
+                    {
+                        var c = MemoryMarshal.Read<DrawVideoCmd>(cmds.Slice(pos));
+                        if (c.VideoReady <= 0f || c.Opacity <= 0f) break;
+                        if (Cull(c.Dst, c.Transform)) break;
+                        Paint(c.Dst, c.Transform, default, c.Opacity, strength: c.VideoReady * c.Opacity);
+                        break;
+                    }
+                }
+                pos += body;
+
+                bool Cull(in RectF r, in Affine2D xf)
+                {
+                    if (!cullActive) return false;
+                    RepaintCull.Aabb(r.X, r.Y, r.W, r.H, xf.M11, xf.M12, xf.M21, xf.M22, xf.Dx, xf.Dy,
+                        out float l, out float t, out float rr, out float bb);
+                    return !RepaintCull.Keep(l, t, rr, bb, RepaintCull.AaHaloDip, in cullRect);
+                }
+
+                void Paint(in RectF r, in Affine2D xf, in ColorF fill, float opacity, float strength)
+                {
+                    RepaintCull.Aabb(r.X, r.Y, r.W, r.H, xf.M11, xf.M12, xf.M21, xf.M22, xf.Dx, xf.Dy,
+                        out float l, out float t, out float rr, out float bb);
+                    var box = new RectF(l, t, rr - l, bb - t).Intersect(in clip);
+                    int x0 = Math.Max(Math.Max(0, scissor.Left), (int)MathF.Round(box.X));
+                    int y0 = Math.Max(Math.Max(0, scissor.Top), (int)MathF.Round(box.Y));
+                    int x1 = Math.Min(Math.Min(TW, scissor.Right), (int)MathF.Round(box.Right));
+                    int y1 = Math.Min(Math.Min(TH, scissor.Bottom), (int)MathF.Round(box.Bottom));
+                    for (int y = y0; y < y1; y++)
+                        for (int x = x0; x < x1; x++)
+                        {
+                            if (strength >= 0f) Erase(canvas, x, y, strength);
+                            else
+                            {
+                                float a = fill.A * opacity;
+                                Blend(canvas, x, y, fill.R * a, fill.G * a, fill.B * a, a);
+                            }
+                        }
+                }
+            }
+        }
+
+        // ── the scene: a page of full-width rows + two left-hand cards, then a PiP video hole over the right half,
+        // then the PiP's own transport chrome INSIDE the hole (the damage source that only stays a small partial
+        // repaint if §5.1-A's inflation is narrowed). Painter order is the app's: page → hole → chrome. ─────────────
+        var scene = new SceneStore();
+        var root = scene.CreateNode(1); scene.Root = root;
+        scene.Bounds(root) = new RectF(0f, 0f, TW, TH);
+        ref NodePaint rootPaint = ref scene.Paint(root);
+        rootPaint.VisualKind = VisualKind.Box; rootPaint.Fill = new ColorF(0.05f, 0.05f, 0.06f, 1f);
+
+        var rows = new NodeHandle[14];
+        for (int i = 0; i < rows.Length; i++)
+        {
+            var n = scene.CreateNode(1); scene.AppendChild(root, n);
+            scene.Bounds(n) = new RectF(0f, 16f + i * 54f, TW, 36f);
+            ref NodePaint np = ref scene.Paint(n);
+            np.VisualKind = VisualKind.Box; np.Fill = new ColorF(0.30f, 0.32f, 0.36f, 1f);
+            rows[i] = n;
+        }
+        // Two cards at the FAR LEFT, inside the vertical band the hole occupies — the "album header text at the far
+        // left" of the reported defect. Nothing about the hole may touch them.
+        var leftCard = scene.CreateNode(1); scene.AppendChild(root, leftCard);
+        scene.Bounds(leftCard) = new RectF(12f, 140f, 84f, 26f);
+        ref NodePaint lcp = ref scene.Paint(leftCard);
+        lcp.VisualKind = VisualKind.Box; lcp.Fill = new ColorF(0.92f, 0.90f, 0.88f, 1f);
+        var midCard = scene.CreateNode(1); scene.AppendChild(root, midCard);
+        scene.Bounds(midCard) = new RectF(120f, 140f, 84f, 26f);
+        ref NodePaint mcp = ref scene.Paint(midCard);
+        mcp.VisualKind = VisualKind.Box; mcp.Fill = new ColorF(0.92f, 0.90f, 0.88f, 1f);
+
+        var video = scene.CreateNode(1); scene.AppendChild(root, video);
+        scene.Bounds(video) = new RectF(220f, 120f, 200f, 160f);
+        ref NodePaint vpaint = ref scene.Paint(video);
+        vpaint.VisualKind = VisualKind.Video; vpaint.ImageId = 9;
+
+        var chrome = scene.CreateNode(1); scene.AppendChild(root, chrome);      // playhead, INSIDE the hole
+        scene.Bounds(chrome) = new RectF(275f, 190f, 90f, 20f);
+        ref NodePaint chp = ref scene.Paint(chrome);
+        chp.VisualKind = VisualKind.Box; chp.Fill = new ColorF(0.10f, 0.85f, 0.45f, 1f);
+
+        var dl = new DrawList();
+        var spans = new SpanTable();
+        var clear = new ColorF(0f, 0f, 0f, 0f);        // the app's transparent clear: an unpainted band reads as a hole
+        var canvas = new float[TW * TH * 4];            // the RETAINED canvas the partial route paints into
+        var reference = new float[TW * TH * 4];         // what a full redraw of the same stream would produce
+        bool canvasValid = false;
+        var whole = new PixelRect(0, 0, TW, TH);
+        string worst = "";
+        long worstCells = 0;
+        bool everyTouchInflates = true;                 // §5.1-A, asserted on every frame that damages the hole at all
+        string inflateDetail = "";
+
+        // One frame of the real loop: record, decide, paint the partial result into `canvas`, paint the full result
+        // into `reference`, compare. `mutate` runs before the record, exactly where the app's writes land.
+        void Frame(string label, Action mutate)
+        {
+            mutate();
+            var st = SceneRecorder.Record(scene, dl, spans: spans);
+            scene.ClearRecordDirty();
+            scene.ClearTransformDirty();
+            ReadOnlySpan<byte> cmds = dl.Bytes;
+
+            // Reference: clear the whole target, replay the whole stream, cull nothing.
+            ClearRect(reference, in whole, in clear);
+            Replay(reference, cmds, whole, cullActive: false, default);
+
+            var dmg = st.RepaintDamage;
+
+            // §5.1-A: ANY repaint rect that overlaps a hole Dst must have inflated the region to cover the WHOLE Dst.
+            // The backend's DrawOp.DrawVideo decode declines to re-punch a hole outside the replay rect and names this
+            // rule as the reason it is allowed to. Read the hole's world rect back out of the stream so the assertion
+            // is against the geometry that was actually recorded, not a copy of the scene's.
+            if (!dmg.IsFull && TryReadHole(cmds, out RectF holeRect))
+            {
+                bool touches = false, covered = false;
+                for (int i = 0; i < dmg.Count; i++)
+                {
+                    if (dmg[i].Overlaps(holeRect)) touches = true;
+                    if (dmg[i].X <= holeRect.X && dmg[i].Y <= holeRect.Y
+                        && dmg[i].Right >= holeRect.Right && dmg[i].Bottom >= holeRect.Bottom) covered = true;
+                }
+                if (touches && !covered)
+                {
+                    everyTouchInflates = false;
+                    if (inflateDetail.Length == 0) inflateDetail = $"{label}: hole={holeRect} not covered by any of {dmg.Count} repaint rects";
+                }
+            }
+
+            var route = RepaintPolicy.Decide(in dmg, TW, TH, RepaintPolicy.LayerKindNone,
+                streamSafe: true, canvasValid: canvasValid, sizeMatches: true, out var replay);
+
+            if (route != RepaintRoute.Partial)
+            {
+                ClearRect(canvas, in whole, in clear);
+                Replay(canvas, cmds, whole, cullActive: false, default);
+                canvasValid = route == RepaintRoute.FullIntoCanvas;
+            }
+            else
+            {
+                Span<PixelRect> pix = stackalloc PixelRect[RepaintPolicy.MaxReplayRects];
+                int n = RepaintPolicy.ToPixelRects(replay.AsSpan(), 1f, TW, TH, pix);
+                for (int i = 0; i < n; i++) ClearRect(canvas, in pix[i], in clear);
+                for (int i = 0; i < n; i++)
+                {
+                    // BeginReplayRect derives the cull box back from the PHYSICAL rect, padded by CullSafetyDip.
+                    var cull = new RectF(pix[i].Left - 1f, pix[i].Top - 1f,
+                                         pix[i].Right - pix[i].Left + 2f, pix[i].Bottom - pix[i].Top + 2f);
+                    Replay(canvas, cmds, pix[i], cullActive: true, cull);
+                }
+                canvasValid = true;
+            }
+
+            long bad = 0;
+            for (int i = 0; i < canvas.Length; i++)
+                if (MathF.Abs(canvas[i] - reference[i]) > 0.002f) bad++;
+            if (bad > worstCells)
+            {
+                worstCells = bad;
+                worst = $"{label}: route={route} rects={replay.Count} badChannels={bad}";
+            }
+        }
+
+        Frame("f1 first paint", () => { });
+        Frame("f2 settled", () => { });
+        // The frame a narrowed §5.1-A would turn into a rect wholly INSIDE the hole: a playhead tick.
+        Frame("f3 chrome inside hole", () =>
+        {
+            scene.Paint(chrome).Fill = new ColorF(0.10f, 0.85f, 0.55f, 1f);
+            scene.Mark(chrome, NodeFlags.PaintDirty);
+        });
+        Frame("f4 chrome tick again", () =>
+        {
+            scene.Paint(chrome).Fill = new ColorF(0.12f, 0.80f, 0.50f, 1f);
+            scene.Mark(chrome, NodeFlags.PaintDirty);
+        });
+        // A full-width row that STRADDLES the hole edge. Its band unions with RepaintBand(hole) into ONE replay rect
+        // spanning the whole target at the hole's vertical extent — the exact geometry of the reported defect.
+        Frame("f5 straddling row", () =>
+        {
+            scene.Paint(rows[2]).Fill = new ColorF(0.36f, 0.30f, 0.34f, 1f);
+            scene.Mark(rows[2], NodeFlags.PaintDirty);
+        });
+        Frame("f6 row far below", () =>
+        {
+            scene.Paint(rows[5]).Fill = new ColorF(0.26f, 0.30f, 0.38f, 1f);
+            scene.Mark(rows[5], NodeFlags.PaintDirty);
+        });
+        Frame("f7 left card only", () =>
+        {
+            scene.Paint(leftCard).Fill = new ColorF(0.80f, 0.86f, 0.94f, 1f);
+            scene.Mark(leftCard, NodeFlags.PaintDirty);
+        });
+        // The PiP MOVES, then keeps ticking its playhead from the new position: the hole the retained canvas already
+        // holds is no longer where the stream says it is, which is the state every "the canvas still holds last
+        // frame's premultiplied-zero hole there" argument has to survive.
+        for (int step = 1; step <= 4; step++)
+        {
+            int k = step;
+            Frame($"f8.{k} video moves", () =>
+            {
+                scene.Paint(video).LocalTransform = Affine2D.Translation(-14f * k, 6f * k);
+                scene.Mark(video, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+                scene.Paint(chrome).LocalTransform = Affine2D.Translation(-14f * k, 6f * k);
+                scene.Mark(chrome, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+            });
+            Frame($"f9.{k} playhead tick", () =>
+            {
+                scene.Paint(chrome).Fill = new ColorF(0.10f, 0.80f + 0.02f * k, 0.45f, 1f);
+                scene.Mark(chrome, NodeFlags.PaintDirty);
+            });
+            Frame($"f10.{k} settled", () => { });
+        }
+
+        Check("gate.repaint.video-hole-partial-equals-full a PARTIAL repaint around a video hole punch paints EXACTLY what a full redraw of the same stream would have. Over a sequence of frames — a playhead tick wholly INSIDE the hole, a full-width row STRADDLING its edge (whose damage unions with RepaintBand(Dst) into one full-width band at the hole's vertical extent), a repaint far from the hole, and the hole MOVING — the retained canvas is compared cell-for-cell against a full replay of the same stream. This is the gate for the class where a damage rect is CLEARED and then something declines to repaint it: the reported defect was exactly that band, left empty, with page content at the far left (nowhere near the hole) missing",
+            worstCells == 0, worstCells == 0 ? "" : $"worst {worst}");
+
+        Check("gate.repaint.video-hole-touch-inflates-whole-dst ANY repaint rect that overlaps a DrawVideo Dst inflates the repaint region to cover the WHOLE Dst (SceneRecorder §5.1-A). This is not an optimization detail: the backend's DrawOp.DrawVideo decode declines to re-punch a hole that falls outside the replay rect — the canvas is supposed to still hold last frame's premultiplied-zero hole there — and names this rule as its licence to do so. Narrowing it to \"only a rect that STRADDLES the edge inflates\" removes that licence, so the rule is pinned here rather than left as a comment",
+            everyTouchInflates, inflateDetail);
+    }
+
+    // ── §5.1-A/§13.1, the LAYERED partial route ─────────────────────────────────────────────────────────────────────
+    // The sibling of VideoRepaintChecks for the route the app actually takes while a video plays with auto-hiding
+    // transport chrome: a plain (non-acrylic) opacity GROUP in the stream makes RepaintPolicy report LayerKindGroups,
+    // which caps the replay at ONE rect and sends the frame through SubmitWithLayers instead of SubmitStreaming.
+    static void LayeredVideoRepaintChecks()
+    {
+        const int TW = 440, TH = 340;
+        const int MaxGroups = 4;
+
+        var canvas = new float[TW * TH * 4];
+        var reference = new float[TW * TH * 4];
+        // The pooled group RTs. Each lease is CANVAS-SIZED and pre-filled with garbage before its Acquire clear, so a
+        // composite that reads a pixel the clear never reached shows up as pixel error rather than as luck.
+        var groupBufs = new float[MaxGroups][];
+        for (int i = 0; i < MaxGroups; i++) groupBufs[i] = new float[TW * TH * 4];
+        bool uncleared = false;
+        string unclearedDetail = "";
+
+        // ── the scene: the same page + PiP hole as VideoRepaintChecks, plus the auto-hiding transport chrome as a
+        // fractional-opacity GROUP (NodePaint.OpacityGroup) over the hole. ────────────────────────────────────────────
+        var scene = new SceneStore();
+        var root = scene.CreateNode(1); scene.Root = root;
+        scene.Bounds(root) = new RectF(0f, 0f, TW, TH);
+        ref NodePaint rootPaint = ref scene.Paint(root);
+        rootPaint.VisualKind = VisualKind.Box; rootPaint.Fill = new ColorF(0.05f, 0.05f, 0.06f, 1f);
+
+        // A clipping page container — the app's scroll host. Its ClipRect is what makes the group's CompositeClip
+        // narrower than the canvas, which is the whole point of the "composite inside the clear" assertion below.
+        var page = scene.CreateNode(1); scene.AppendChild(root, page);
+        scene.Bounds(page) = new RectF(0f, 8f, TW, 324f);
+        ref NodePaint pagePaint = ref scene.Paint(page);
+        pagePaint.VisualKind = VisualKind.Box; pagePaint.Fill = new ColorF(0.08f, 0.08f, 0.10f, 1f);
+        pagePaint.ClipRect = new RectF(0f, 0f, TW, 324f);
+
+        var rows = new NodeHandle[6];
+        for (int i = 0; i < rows.Length; i++)
+        {
+            var n = scene.CreateNode(1); scene.AppendChild(page, n);
+            scene.Bounds(n) = new RectF(0f, 16f + i * 54f, TW, 36f);
+            ref NodePaint np = ref scene.Paint(n);
+            np.VisualKind = VisualKind.Box; np.Fill = new ColorF(0.30f, 0.32f, 0.36f, 1f);
+            rows[i] = n;
+        }
+        var leftCard = scene.CreateNode(1); scene.AppendChild(page, leftCard);
+        scene.Bounds(leftCard) = new RectF(12f, 140f, 84f, 26f);
+        ref NodePaint lcp = ref scene.Paint(leftCard);
+        lcp.VisualKind = VisualKind.Box; lcp.Fill = new ColorF(0.92f, 0.90f, 0.88f, 1f);
+
+        var video = scene.CreateNode(1); scene.AppendChild(root, video);
+        scene.Bounds(video) = new RectF(220f, 120f, 200f, 160f);
+        ref NodePaint vpaint = ref scene.Paint(video);
+        vpaint.VisualKind = VisualKind.Video; vpaint.ImageId = 9;
+
+        // The transport chrome: MOUNTED and fading on the Opacity channel, as a flat group.
+        var chrome = scene.CreateNode(2); scene.AppendChild(root, chrome);
+        scene.Bounds(chrome) = new RectF(232f, 236f, 176f, 34f);
+        ref NodePaint chp = ref scene.Paint(chrome);
+        chp.VisualKind = VisualKind.Box; chp.Fill = new ColorF(0.06f, 0.06f, 0.08f, 0.85f);
+        chp.OpacityGroup = true; chp.Opacity = 0.5f;
+
+        var bar = scene.CreateNode(1); scene.AppendChild(chrome, bar);
+        scene.Bounds(bar) = new RectF(240f, 248f, 120f, 6f);
+        ref NodePaint barPaint = ref scene.Paint(bar);
+        barPaint.VisualKind = VisualKind.Box; barPaint.Fill = new ColorF(0.10f, 0.85f, 0.45f, 1f);
+
+        var knob = scene.CreateNode(1); scene.AppendChild(chrome, knob);
+        scene.Bounds(knob) = new RectF(240f, 258f, 22f, 22f);
+        ref NodePaint knobPaint = ref scene.Paint(knob);
+        knobPaint.VisualKind = VisualKind.Box; knobPaint.Fill = new ColorF(0.95f, 0.95f, 0.95f, 1f);
+
+        var dl = new DrawList();
+        var spans = new SpanTable();
+        var clear = new ColorF(0f, 0f, 0f, 0f);
+        bool canvasValid = false;
+        var whole = new PixelRect(0, 0, TW, TH);
+        string worst = "";
+        long worstCells = 0;
+        int layeredFrames = 0, partialFrames = 0;
+        bool sawGroup = false;
+
+        static void Blend(float[] c, int i, float r, float g, float b, float a)
+        {
+            c[i] = r + c[i] * (1f - a); c[i + 1] = g + c[i + 1] * (1f - a);
+            c[i + 2] = b + c[i + 2] * (1f - a); c[i + 3] = a + c[i + 3] * (1f - a);
+        }
+        static void ClearBox(float[] c, int l, int t, int r, int b, float cr, float cg, float cb, float ca)
+        {
+            for (int y = Math.Max(0, t); y < Math.Min(TH, b); y++)
+                for (int x = Math.Max(0, l); x < Math.Min(TW, r); x++)
+                {
+                    int i = (y * TW + x) * 4;
+                    c[i] = cr * ca; c[i + 1] = cg * ca; c[i + 2] = cb * ca; c[i + 3] = ca;
+                }
+        }
+        static void FillAll(float[] c, float r, float g, float b, float a)
+        {
+            for (int i = 0; i < c.Length; i += 4) { c[i] = r; c[i + 1] = g; c[i + 2] = b; c[i + 3] = a; }
+        }
+
+        // The layered replay: PushLayer leases a canvas-sized group buffer (garbage-filled, then cleared over exactly
+        // the box EdgeFadeLayerClear.Compute names), drawing redirects into it, and PopLayer composites it back over
+        // the parent target at GroupAlpha under (clip ∩ scissor ∩ CompositeClip).
+        void ReplayLayered(float[] target, ReadOnlySpan<byte> cmds, PixelRect scissor, bool cullActive, RectF cullRect)
+        {
+            Span<RectF> clipStack = stackalloc RectF[32];
+            int depth = 0;
+            RectF clip = RectF.Infinite;
+            Span<int> clearedL = stackalloc int[MaxGroups];
+            Span<int> clearedT = stackalloc int[MaxGroups];
+            Span<int> clearedR = stackalloc int[MaxGroups];
+            Span<int> clearedB = stackalloc int[MaxGroups];
+            Span<PushLayerCmd> groupCmds = stackalloc PushLayerCmd[MaxGroups];
+            int groups = 0;
+            int pos = 0;
+            while (pos + sizeof(int) <= cmds.Length)
+            {
+                DrawOp op = (DrawOp)MemoryMarshal.Read<int>(cmds.Slice(pos));
+                pos += sizeof(int);
+                if (!RepaintStreamSafety.TryBodySize(op, out int body)) break;
+                float[] dst = groups > 0 ? groupBufs[groups - 1] : target;
+                switch (op)
+                {
+                    case DrawOp.PushClip:
+                    {
+                        var cc = MemoryMarshal.Read<ClipCmd>(cmds.Slice(pos));
+                        clipStack[depth++] = clip;
+                        clip = clip.Intersect(cc.DeviceRect);
+                        break;
+                    }
+                    case DrawOp.PopClip:
+                        clip = clipStack[--depth];
+                        break;
+                    case DrawOp.PushLayer:
+                    {
+                        var layer = MemoryMarshal.Read<PushLayerCmd>(cmds.Slice(pos));
+                        if (groups < MaxGroups)
+                        {
+                            FillAll(groupBufs[groups], 1f, 0f, 1f, 1f);   // GARBAGE: any read past the clear is visible
+                            EdgeFadeLayerClear.Compute(in layer, 1f, TW, TH, out int cl, out int ct, out int cr, out int cb, out bool fullCanvas);
+                            if (layer.CompositeClip.W <= 0f || layer.CompositeClip.H <= 0f || fullCanvas || cr <= cl || cb <= ct)
+                            { cl = 0; ct = 0; cr = TW; cb = TH; }
+                            ClearBox(groupBufs[groups], cl, ct, cr, cb, 0f, 0f, 0f, 0f);
+                            clearedL[groups] = cl; clearedT[groups] = ct; clearedR[groups] = cr; clearedB[groups] = cb;
+                            groupCmds[groups] = layer;
+                            groups++;
+                        }
+                        break;
+                    }
+                    case DrawOp.PopLayer:
+                    {
+                        if (groups == 0) break;
+                        groups--;
+                        var layer = groupCmds[groups];
+                        float[] src = groupBufs[groups];
+                        float[] under = groups > 0 ? groupBufs[groups - 1] : target;
+                        PixelRect cp = RepaintPolicy.ToPixel(in clip, 1f, TW, TH);
+                        int l = Math.Max(cp.Left, scissor.Left), t = Math.Max(cp.Top, scissor.Top);
+                        int r = Math.Min(cp.Right, scissor.Right), b = Math.Min(cp.Bottom, scissor.Bottom);
+                        if (layer.CompositeClip.W > 0f && layer.CompositeClip.H > 0f)
+                        {
+                            PixelRect cc = RepaintPolicy.ToPixel(layer.CompositeClip, 1f, TW, TH);
+                            l = Math.Max(l, cc.Left); t = Math.Max(t, cc.Top);
+                            r = Math.Min(r, cc.Right); b = Math.Min(b, cc.Bottom);
+                        }
+                        if (r <= l || b <= t) break;
+                        if (l < clearedL[groups] || t < clearedT[groups] || r > clearedR[groups] || b > clearedB[groups])
+                        {
+                            if (!uncleared)
+                                unclearedDetail = $"composite ({l},{t},{r},{b}) outside cleared ({clearedL[groups]},{clearedT[groups]},{clearedR[groups]},{clearedB[groups]})";
+                            uncleared = true;
+                        }
+                        float ga = Math.Clamp(layer.GroupAlpha, 0f, 1f);
+                        for (int y = t; y < b; y++)
+                            for (int x = l; x < r; x++)
+                            {
+                                int i = (y * TW + x) * 4;
+                                Blend(under, i, src[i] * ga, src[i + 1] * ga, src[i + 2] * ga, src[i + 3] * ga);
+                            }
+                        break;
+                    }
+                    case DrawOp.FillRoundRect:
+                    {
+                        var c = MemoryMarshal.Read<FillRoundRectCmd>(cmds.Slice(pos));
+                        if (!Cull(c.Rect, c.Transform)) Paint(dst, c.Rect, c.Transform, c.Fill, c.Opacity, strength: -1f);
+                        break;
+                    }
+                    case DrawOp.DrawVideo:
+                    {
+                        var c = MemoryMarshal.Read<DrawVideoCmd>(cmds.Slice(pos));
+                        if (c.VideoReady > 0f && c.Opacity > 0f && !Cull(c.Dst, c.Transform))
+                            Paint(dst, c.Dst, c.Transform, default, c.Opacity, strength: c.VideoReady * c.Opacity);
+                        break;
+                    }
+                }
+                pos += body;
+            }
+
+            bool Cull(in RectF r, in Affine2D xf)
+            {
+                if (!cullActive) return false;
+                RepaintCull.Aabb(r.X, r.Y, r.W, r.H, xf.M11, xf.M12, xf.M21, xf.M22, xf.Dx, xf.Dy,
+                    out float l, out float t, out float rr, out float bb);
+                return !RepaintCull.Keep(l, t, rr, bb, RepaintCull.AaHaloDip, in cullRect);
+            }
+
+            void Paint(float[] c, in RectF r, in Affine2D xf, in ColorF fill, float opacity, float strength)
+            {
+                RepaintCull.Aabb(r.X, r.Y, r.W, r.H, xf.M11, xf.M12, xf.M21, xf.M22, xf.Dx, xf.Dy,
+                    out float l, out float t, out float rr, out float bb);
+                var box = new RectF(l, t, rr - l, bb - t).Intersect(in clip);
+                int x0 = Math.Max(Math.Max(0, scissor.Left), (int)MathF.Round(box.X));
+                int y0 = Math.Max(Math.Max(0, scissor.Top), (int)MathF.Round(box.Y));
+                int x1 = Math.Min(Math.Min(TW, scissor.Right), (int)MathF.Round(box.Right));
+                int y1 = Math.Min(Math.Min(TH, scissor.Bottom), (int)MathF.Round(box.Bottom));
+                for (int y = y0; y < y1; y++)
+                    for (int x = x0; x < x1; x++)
+                    {
+                        int i = (y * TW + x) * 4;
+                        if (strength >= 0f)
+                        {
+                            float k = 1f - strength;
+                            c[i] *= k; c[i + 1] *= k; c[i + 2] *= k; c[i + 3] *= k;
+                        }
+                        else
+                        {
+                            float a = fill.A * opacity;
+                            Blend(c, i, fill.R * a, fill.G * a, fill.B * a, a);
+                        }
+                    }
+            }
+        }
+
+        void Frame(string label, Action mutate)
+        {
+            mutate();
+            var st = SceneRecorder.Record(scene, dl, spans: spans);
+            scene.ClearRecordDirty();
+            scene.ClearTransformDirty();
+            ReadOnlySpan<byte> cmds = dl.Bytes;
+
+            if (dl.OpcodeStats.PushLayer > 0) sawGroup = true;
+            int layerKind = dl.OpcodeStats.PushLayer > 0 ? RepaintPolicy.LayerKindGroups : RepaintPolicy.LayerKindNone;
+            if (layerKind == RepaintPolicy.LayerKindGroups) layeredFrames++;
+            bool streamSafe = RepaintStreamSafety.Scan(cmds);
+
+            ClearBox(reference, 0, 0, TW, TH, clear.R, clear.G, clear.B, clear.A);
+            ReplayLayered(reference, cmds, whole, cullActive: false, default);
+
+            var dmg = st.RepaintDamage;
+            var route = RepaintPolicy.Decide(in dmg, TW, TH, layerKind,
+                streamSafe: streamSafe, canvasValid: canvasValid, sizeMatches: true, out var replay);
+
+            if (route != RepaintRoute.Partial)
+            {
+                ClearBox(canvas, 0, 0, TW, TH, clear.R, clear.G, clear.B, clear.A);
+                ReplayLayered(canvas, cmds, whole, cullActive: false, default);
+                canvasValid = route == RepaintRoute.FullIntoCanvas;
+            }
+            else
+            {
+                partialFrames++;
+                Span<PixelRect> pix = stackalloc PixelRect[RepaintPolicy.MaxReplayRects];
+                int n = RepaintPolicy.ToPixelRects(replay.AsSpan(), 1f, TW, TH, pix);
+                for (int i = 0; i < n; i++) ClearBox(canvas, pix[i].Left, pix[i].Top, pix[i].Right, pix[i].Bottom, clear.R, clear.G, clear.B, clear.A);
+                for (int i = 0; i < n; i++)
+                {
+                    var cull = new RectF(pix[i].Left - 1f, pix[i].Top - 1f,
+                                         pix[i].Right - pix[i].Left + 2f, pix[i].Bottom - pix[i].Top + 2f);
+                    ReplayLayered(canvas, cmds, pix[i], cullActive: true, cull);
+                }
+                canvasValid = true;
+            }
+
+            long bad = 0;
+            for (int i = 0; i < canvas.Length; i++)
+                if (MathF.Abs(canvas[i] - reference[i]) > 0.002f) bad++;
+            if (bad > worstCells)
+            {
+                worstCells = bad;
+                worst = $"{label}: route={route} layerKind={layerKind} rects={replay.Count} badChannels={bad}";
+            }
+        }
+
+        Frame("L1 first paint", () => { });
+        Frame("L2 settled", () => { });
+        for (int step = 1; step <= 5; step++)
+        {
+            float a = 0.5f - 0.08f * step;
+            Frame($"L3.{step} chrome fade a={a:0.00}", () =>
+            {
+                scene.Paint(chrome).Opacity = a;
+                scene.Mark(chrome, NodeFlags.PaintDirty);
+            });
+        }
+        Frame("L4 chrome back up", () =>
+        {
+            scene.Paint(chrome).Opacity = 0.5f;
+            scene.Mark(chrome, NodeFlags.PaintDirty);
+        });
+        Frame("L5 straddling row", () =>
+        {
+            scene.Paint(rows[2]).Fill = new ColorF(0.36f, 0.30f, 0.34f, 1f);
+            scene.Mark(rows[2], NodeFlags.PaintDirty);
+        });
+        Frame("L6 row + chrome fade", () =>
+        {
+            scene.Paint(rows[2]).Fill = new ColorF(0.34f, 0.31f, 0.33f, 1f);
+            scene.Mark(rows[2], NodeFlags.PaintDirty);
+            scene.Paint(chrome).Opacity = 0.34f;
+            scene.Mark(chrome, NodeFlags.PaintDirty);
+        });
+        Frame("L7 left card only", () =>
+        {
+            scene.Paint(leftCard).Fill = new ColorF(0.80f, 0.86f, 0.94f, 1f);
+            scene.Mark(leftCard, NodeFlags.PaintDirty);
+        });
+        Frame("L8 row far below", () =>
+        {
+            scene.Paint(rows[5]).Fill = new ColorF(0.26f, 0.30f, 0.38f, 1f);
+            scene.Mark(rows[5], NodeFlags.PaintDirty);
+        });
+        for (int step = 1; step <= 4; step++)
+        {
+            int k = step;
+            Frame($"L9.{k} video moves", () =>
+            {
+                var xf = Affine2D.Translation(-14f * k, 6f * k);
+                scene.Paint(video).LocalTransform = xf;
+                scene.Mark(video, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+                scene.Paint(chrome).LocalTransform = xf;
+                scene.Mark(chrome, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+            });
+            Frame($"L10.{k} chrome fade", () =>
+            {
+                scene.Paint(chrome).Opacity = 0.5f - 0.07f * k;
+                scene.Mark(chrome, NodeFlags.PaintDirty);
+            });
+            Frame($"L11.{k} settled", () => { });
+        }
+
+        Check("gate.repaint.video-hole-layered-partial-equals-full a PARTIAL repaint on the LAYERED route (a plain PushLayer Opacity group in the stream => RepaintPolicy.LayerKindGroups => ONE replay rect through SubmitWithLayers) paints EXACTLY what a full layered redraw of the same stream would have. The fixture is the shape the app took when MediaPlayerElement stopped UNMOUNTING its auto-hiding transport chrome and started fading it on the Opacity channel instead: a video hole punch, a fractional-opacity chrome group over it, a clipping page container, and full-width rows whose damage unions with RepaintBand(Dst) into one full-width band at the hole's vertical extent. Each group lease is pre-filled with GARBAGE so any composite that reads past its Acquire clear shows up as pixel error, and the retained canvas is compared cell-for-cell against the full replay every frame",
+            worstCells == 0 && sawGroup && layeredFrames > 0 && partialFrames > 0,
+            worstCells != 0 ? $"worst {worst}"
+                            : (sawGroup && layeredFrames > 0 && partialFrames > 0 ? ""
+                               : $"fixture never exercised the route: group={sawGroup} layered={layeredFrames} partial={partialFrames}"));
+
+        Check("gate.repaint.opacity-group-composite-inside-clear a plain opacity group's COMPOSITE box (CompositeClip intersect CurrentScissorRect) is always a subset of the box its Acquire cleared. The pooled lease is canvas-sized and holds a previous group's pixels everywhere the clear did not reach, so a composite that reaches past the clear samples another layer's content — the property every \"scissor is a subset of cleared\" claim in OpacityLayerCompositor rests on, asserted on the partial route as well as the full one",
+            !uncleared, unclearedDetail);
+    }
+
+    // ── §5.1-A with MORE THAN ONE hole: the inflation must reach a FIXPOINT ──────────────────────────────────────────
+    static void TwoHoleRepaintChecks()
+    {
+        var scene = new SceneStore();
+        var root = scene.CreateNode(1); scene.Root = root;
+        scene.Bounds(root) = new RectF(0f, 0f, 440f, 340f);
+        ref NodePaint rootPaint = ref scene.Paint(root);
+        rootPaint.VisualKind = VisualKind.Box; rootPaint.Fill = new ColorF(0.05f, 0.05f, 0.06f, 1f);
+
+        // Two holes close enough that inflating the SECOND grows a rect back over the FIRST — the state a single
+        // walk of the hole set leaves OVERLAPPED but not COVERED.
+        var holeA = scene.CreateNode(1); scene.AppendChild(root, holeA);
+        scene.Bounds(holeA) = new RectF(120f, 60f, 80f, 60f);
+        ref NodePaint ap = ref scene.Paint(holeA);
+        ap.VisualKind = VisualKind.Video; ap.ImageId = 7;
+
+        var holeB = scene.CreateNode(1); scene.AppendChild(root, holeB);
+        scene.Bounds(holeB) = new RectF(200f, 40f, 120f, 100f);
+        ref NodePaint bp = ref scene.Paint(holeB);
+        bp.VisualKind = VisualKind.Video; bp.ImageId = 8;
+
+        // A tiny playhead beside hole B: the ONE damage source, small enough that only the inflation can reach A.
+        var tick = scene.CreateNode(1); scene.AppendChild(root, tick);
+        scene.Bounds(tick) = new RectF(300f, 60f, 20f, 20f);
+        ref NodePaint tp = ref scene.Paint(tick);
+        tp.VisualKind = VisualKind.Box; tp.Fill = new ColorF(0.10f, 0.80f, 0.40f, 1f);
+
+        var dl = new DrawList();
+        var spans = new SpanTable();
+        SceneRecorder.Record(scene, dl, spans: spans);
+        scene.ClearRecordDirty(); scene.ClearTransformDirty();
+        SceneRecorder.Record(scene, dl, spans: spans);
+        scene.ClearRecordDirty(); scene.ClearTransformDirty();
+
+        scene.Paint(tick).Fill = new ColorF(0.10f, 0.85f, 0.45f, 1f);
+        scene.Mark(tick, NodeFlags.PaintDirty);
+        var st = SceneRecorder.Record(scene, dl, spans: spans);
+        scene.ClearRecordDirty(); scene.ClearTransformDirty();
+
+        var dmg = st.RepaintDamage;
+        Span<RectF> holes = stackalloc RectF[RepaintPolicy.MaxReplayRects];
+        int holeCount = ReadHoles(dl.Bytes, holes);
+        bool ok = !dmg.IsFull;
+        string detail = holeCount == 2 ? "" : $"expected 2 holes in the stream, got {holeCount}";
+        if (holeCount != 2) ok = false;
+        for (int i = 0; i < holeCount && ok; i++)
+        {
+            bool touches = false, covered = false;
+            for (int j = 0; j < dmg.Count; j++)
+            {
+                if (dmg[j].Overlaps(in holes[i])) touches = true;
+                if (dmg[j].X <= holes[i].X && dmg[j].Y <= holes[i].Y
+                    && dmg[j].Right >= holes[i].Right && dmg[j].Bottom >= holes[i].Bottom) covered = true;
+            }
+            if (touches && !covered)
+            {
+                ok = false;
+                detail = $"hole[{i}]={holes[i]} is OVERLAPPED but not COVERED by any of {dmg.Count} repaint rects";
+            }
+        }
+
+        Check("gate.repaint.video-hole-multi-inflation-is-a-fixpoint with MORE THAN ONE DrawVideo hole in the frame, §5.1-A holds for EVERY hole: inflating the repaint region for one hole UNIONS its band in, which grows a rect until it can reach a hole that was already tested and passed. A single walk of the hole set is therefore not a fixpoint, and the second hole ends up OVERLAPPED but not COVERED — precisely the state D3D12Device's DrawOp.DrawVideo decode is allowed to assume never happens (it skips a hole outside the replay rect because \"a hole that is repainted at all is repainted completely\"), so it re-erases only the sliver inside the rect and leaves a torn seam along the DComp visual's edge. Two holes in one frame is a real frame: a windowed popup's RecordSubtree pass APPENDS into the same hole set as the main pass",
+            ok, detail);
+    }
+
+    /// <summary>Every fully-erasing <c>DrawVideo</c> world rect in a stream, through the shared opcode→size table.</summary>
+    static int ReadHoles(ReadOnlySpan<byte> cmds, Span<RectF> dst)
+    {
+        int n = 0, pos = 0;
+        while (pos + sizeof(int) <= cmds.Length && n < dst.Length)
+        {
+            DrawOp op = (DrawOp)MemoryMarshal.Read<int>(cmds.Slice(pos));
+            pos += sizeof(int);
+            if (!RepaintStreamSafety.TryBodySize(op, out int body)) return n;
+            if (pos + body > cmds.Length) return n;
+            if (op == DrawOp.DrawVideo)
+            {
+                var v = MemoryMarshal.Read<DrawVideoCmd>(cmds.Slice(pos));
+                if (v.VideoReady > 0f && v.Opacity > 0f)
+                {
+                    RepaintCull.Aabb(v.Dst.X, v.Dst.Y, v.Dst.W, v.Dst.H,
+                        v.Transform.M11, v.Transform.M12, v.Transform.M21, v.Transform.M22,
+                        v.Transform.Dx, v.Transform.Dy, out float l, out float t, out float r, out float b);
+                    dst[n++] = new RectF(l, t, r - l, b - t);
+                }
+            }
+            pos += body;
+        }
+        return n;
+    }
+
+    /// <summary>The world rect of the first fully-erasing <c>DrawVideo</c> in a stream, read back through the shared
+    /// opcode→size table so the assertion is made against the geometry that was actually RECORDED.</summary>
+    static bool TryReadHole(ReadOnlySpan<byte> cmds, out RectF world)
+    {
+        world = default;
+        int pos = 0;
+        while (pos + sizeof(int) <= cmds.Length)
+        {
+            DrawOp op = (DrawOp)MemoryMarshal.Read<int>(cmds.Slice(pos));
+            pos += sizeof(int);
+            if (!RepaintStreamSafety.TryBodySize(op, out int body)) return false;
+            if (pos + body > cmds.Length) return false;
+            if (op == DrawOp.DrawVideo)
+            {
+                var v = MemoryMarshal.Read<DrawVideoCmd>(cmds.Slice(pos));
+                if (v.VideoReady > 0f && v.Opacity > 0f)
+                {
+                    RepaintCull.Aabb(v.Dst.X, v.Dst.Y, v.Dst.W, v.Dst.H,
+                        v.Transform.M11, v.Transform.M12, v.Transform.M21, v.Transform.M22,
+                        v.Transform.Dx, v.Transform.Dy, out float l, out float t, out float r, out float b);
+                    world = new RectF(l, t, r - l, b - t);
+                    return true;
+                }
+            }
+            pos += body;
+        }
+        return false;
+    }
+
+    // ── span reuse vs a forced FULL re-record ────────────────────────────────────────────────────────────────────────
+    /// <summary>
+    /// The clean-span reuse path (<c>SceneRecorder.CopySpanFromPrior</c> / <c>CopySpanFromPriorTranslated</c>) copies a
+    /// PRIOR frame's recorded bytes for a subtree the recorder believes is unchanged. Every OTHER repaint gate in this
+    /// file compares a partial paint against a full replay of the SAME stream, so a stream that is itself missing (or
+    /// carrying stale) commands — a span reused for a subtree whose content actually changed, or sliced at a byte range
+    /// the stream layout has moved out from under — is invisible to them: both sides of the comparison omit the same
+    /// bytes. This gate closes that hole by comparing the reused stream against a FORCED FULL RE-RECORD of the same
+    /// scene state (<c>spans: null</c> takes the reuse-free path), byte for byte, every frame.
+    /// <para>The fixture is the frame shape the in-window PiP defect lives in, and is deliberately NOT fills-only at
+    /// scale 1 (which is all the two sibling video gates model): shadows, gradient fills, images, glyph runs, borders,
+    /// rounded corners and a non-unit scale all ride through the same spans, and the sequence interleaves the three
+    /// reuse paths — exact copy, TRANSLATED copy (a scrolling viewport) and re-record.</para>
+    /// </summary>
+    static void SpanReuseEquivalenceChecks(StringTable strings)
+    {
+        int mismatchFrames = 0;
+        string firstMismatch = "";
+        long reusedTotal = 0, rebasedTotal = 0;
+
+        RunAt(1f);
+        RunAt(1.5f);
+
+        Check("gate.repaint.span-reuse-equals-full-record the SPAN-REUSED DrawList is byte-identical to a FORCED FULL RE-RECORD of the same scene state, every frame, over the shape the in-window PiP defect lives in: a DrawVideo hole inside a floating surface (rounded, bordered, SHADOWED), transport chrome that stays MOUNTED and mutates EVERY frame INSIDE the hole (seek geometry + elapsed glyph run + an Opacity-channel fade), and unchanged page content OUTSIDE it — a far-left album header and full-width rows carrying glyphs, images, gradients and shadows, all inside the hole's vertical band — while the page SCROLLS (translated-copy reuse), the PiP MOVES, and rows repaint on their own. Every other repaint gate here compares a partial paint against a full replay of the SAME stream, so a span reused for a subtree that actually changed is invisible to them; this one compares the stream itself against the reuse-free path, at scale 1 AND at a non-unit scale, and drives the exact-copy, TRANSLATED-copy and off-screen-subtree-cull paths in turn",
+            mismatchFrames == 0, mismatchFrames == 0 ? "" : $"{mismatchFrames} frame(s) diverged; first {firstMismatch}");
+
+        Check("gate.repaint.span-reuse-actually-engaged the equivalence fixture above is only meaningful while span reuse is doing work — a change that silently disabled reuse, or that stopped the scroll from producing TRANSLATED copies, would make it pass vacuously",
+            reusedTotal > 0 && rebasedTotal > 0, $"spansReused={reusedTotal} spansRebased={rebasedTotal}");
+
+        void RunAt(float scale)
+        {
+            const float TW = 520f, TH = 380f;
+
+            var scene = new SceneStore();
+            scene.DeviceScale = scale;
+            var root = scene.CreateNode(1); scene.Root = root;
+            scene.Bounds(root) = new RectF(0f, 0f, TW, TH);
+            { ref NodePaint p = ref scene.Paint(root); p = NodePaint.Default; p.VisualKind = VisualKind.Box; p.Fill = new ColorF(0.05f, 0.05f, 0.06f, 1f); p.LocalTransform = Affine2D.Scale(scale, scale); }
+
+            // The page: a scrolling viewport (ClipsToBounds + a ScrollState row) over a tall content node. Scrolling it
+            // is what drives CopySpanFromPriorTranslated for the stationary neighbourhood.
+            var viewport = scene.CreateNode(1); scene.AppendChild(root, viewport);
+            scene.Bounds(viewport) = new RectF(0f, 0f, TW, TH);
+            { ref NodePaint p = ref scene.Paint(viewport); p = NodePaint.Default; p.VisualKind = VisualKind.Box; p.Fill = new ColorF(0.07f, 0.07f, 0.09f, 1f); }
+            scene.ScrollRef(viewport);   // get-or-create ⇒ marks NodeFlags.Scrollable
+
+            var content = scene.CreateNode(1); scene.AppendChild(viewport, content);
+            scene.Bounds(content) = new RectF(0f, 0f, TW, 1400f);
+            { ref NodePaint p = ref scene.Paint(content); p = NodePaint.Default; p.VisualKind = VisualKind.Box; p.Fill = new ColorF(0.08f, 0.08f, 0.10f, 1f); }
+            scene.ScrollRef(viewport).ContentNode = content;
+
+            // The album header at the FAR LEFT, inside the vertical band the PiP hole occupies, and full-width rows
+            // through the middle of it: the content the reported defect loses.
+            AddText(scene, strings, content, new RectF(14f, 150f, 150f, 22f), "Album Header");
+            var rows = new NodeHandle[6];
+            for (int i = 0; i < rows.Length; i++)
+            {
+                var n = scene.CreateNode(1); scene.AppendChild(content, n);
+                scene.Bounds(n) = new RectF(0f, 24f + i * 46f, TW, 34f);
+                ref NodePaint np = ref scene.Paint(n); np = NodePaint.Default;
+                np.VisualKind = VisualKind.Box; np.Fill = new ColorF(0.30f, 0.32f, 0.36f, 1f);
+                np.BorderWidth = 1f; np.BorderColor = new ColorF(0.5f, 0.5f, 0.55f, 1f);
+                np.Corners = new CornerRadius4(4f, 4f, 4f, 4f);
+                rows[i] = n;
+                if ((i & 1) == 0) scene.SetShadow(n, new ShadowSpec(8f, 2f, 0f, new ColorF(0f, 0f, 0f, 0.4f)));
+                if (i == 3) scene.SetGradient(n, GradientSpec.Vertical(new ColorF(0.2f, 0.3f, 0.5f, 1f), new ColorF(0.4f, 0.2f, 0.3f, 1f)));
+
+                // an artwork thumbnail + a track title: image and glyph ops inside the same spans
+                var art = scene.CreateNode(1); scene.AppendChild(n, art);
+                scene.Bounds(art) = new RectF(6f, 4f, 26f, 26f);
+                ref NodePaint ap = ref scene.Paint(art); ap = NodePaint.Default;
+                ap.VisualKind = VisualKind.Image; ap.ImageId = 100 + i; ap.Fill = new ColorF(0.2f, 0.2f, 0.24f, 1f);
+                AddText(scene, strings, n, new RectF(40f, 6f, 220f, 20f), "track row " + i);
+            }
+
+            // Inset cards: unlike the full-width rows (whose shadow halo hangs off both edges of the viewport clip and
+            // therefore can never be clip-complete), these sit wholly inside it, so a scroll rebases them through
+            // CopySpanFromPriorTranslated — the payload-patching path — instead of re-recording them.
+            for (int i = 0; i < 4; i++)
+            {
+                var card = scene.CreateNode(1); scene.AppendChild(content, card);
+                scene.Bounds(card) = new RectF(60f, 40f + i * 60f, 160f, 30f);
+                ref NodePaint cp2 = ref scene.Paint(card); cp2 = NodePaint.Default;
+                cp2.VisualKind = VisualKind.Box; cp2.Fill = new ColorF(0.22f, 0.24f, 0.30f, 1f);
+                cp2.Corners = new CornerRadius4(6f, 6f, 6f, 6f);
+                scene.SetShadow(card, new ShadowSpec(6f, 2f, 0f, new ColorF(0f, 0f, 0f, 0.35f)));
+                AddText(scene, strings, card, new RectF(8f, 6f, 120f, 18f), "card " + i);
+            }
+
+            // The in-window floating PiP. The full-bleed pass-through layer is the app's: it paints nothing but its box
+            // is the WHOLE window, so it is the node whose reused span reports the video hole to §5.1-A.
+            var layer = scene.CreateNode(1); scene.AppendChild(root, layer);
+            scene.Bounds(layer) = new RectF(0f, 0f, TW, TH);
+            { ref NodePaint p = ref scene.Paint(layer); p = NodePaint.Default; p.VisualKind = VisualKind.Box; }
+
+            var surface = scene.CreateNode(1); scene.AppendChild(layer, surface);
+            scene.Bounds(surface) = new RectF(250f, 130f, 240f, 170f);
+            { ref NodePaint p = ref scene.Paint(surface); p = NodePaint.Default; p.VisualKind = VisualKind.Box; p.Fill = ColorF.Transparent; p.Corners = new CornerRadius4(8f, 8f, 8f, 8f); p.BorderWidth = 1f; p.BorderColor = new ColorF(1f, 1f, 1f, 0.2f); }
+            scene.Mark(surface, NodeFlags.ClipsToBounds);
+            scene.SetShadow(surface, new ShadowSpec(16f, 8f, 0f, new ColorF(0f, 0f, 0f, 0.5f)));
+
+            var video = scene.CreateNode(1); scene.AppendChild(surface, video);
+            scene.Bounds(video) = new RectF(0f, 0f, 240f, 170f);
+            { ref NodePaint p = ref scene.Paint(video); p = NodePaint.Default; p.VisualKind = VisualKind.Video; p.ImageId = 9; p.Corners = new CornerRadius4(8f, 8f, 8f, 8f); }
+
+            var chrome = scene.CreateNode(1); scene.AppendChild(surface, chrome);
+            scene.Bounds(chrome) = new RectF(0f, 130f, 240f, 40f);
+            { ref NodePaint p = ref scene.Paint(chrome); p = NodePaint.Default; p.VisualKind = VisualKind.Box; p.Fill = new ColorF(0f, 0f, 0f, 0.55f); }
+
+            var track = scene.CreateNode(1); scene.AppendChild(chrome, track);
+            scene.Bounds(track) = new RectF(10f, 18f, 220f, 4f);
+            { ref NodePaint p = ref scene.Paint(track); p = NodePaint.Default; p.VisualKind = VisualKind.Box; p.Fill = new ColorF(1f, 1f, 1f, 0.3f); }
+
+            var progress = scene.CreateNode(1); scene.AppendChild(chrome, progress);
+            scene.Bounds(progress) = new RectF(10f, 18f, 20f, 4f);
+            { ref NodePaint p = ref scene.Paint(progress); p = NodePaint.Default; p.VisualKind = VisualKind.Box; p.Fill = new ColorF(0.1f, 0.85f, 0.45f, 1f); }
+
+            var thumb = scene.CreateNode(1); scene.AppendChild(chrome, thumb);
+            scene.Bounds(thumb) = new RectF(28f, 14f, 12f, 12f);
+            { ref NodePaint p = ref scene.Paint(thumb); p = NodePaint.Default; p.VisualKind = VisualKind.Box; p.Fill = new ColorF(1f, 1f, 1f, 1f); p.Corners = new CornerRadius4(6f, 6f, 6f, 6f); }
+
+            var elapsed = AddText(scene, strings, chrome, new RectF(10f, 24f, 60f, 14f), "0:00");
+
+            var dlReuse = new DrawList();
+            var dlFull = new DrawList();
+            var spans = new SpanTable();
+            float scrollY = 0f;
+
+            void Frame(string label, Action mutate)
+            {
+                mutate();
+                var st = SceneRecorder.Record(scene, dlReuse, spans: spans);
+                reusedTotal += st.SpansReused;
+                rebasedTotal += st.SpansRebased;
+                // The same scene state, the same dirty bits, but the reuse-free path (spans: null ⇒ no SpanTable ⇒
+                // every node is walked and re-emitted). Ground truth for what this frame's stream should contain.
+                SceneRecorder.Record(scene, dlFull, spans: null);
+                scene.ClearRecordDirty();
+                scene.ClearTransformDirty();
+
+                ReadOnlySpan<byte> a = dlReuse.Bytes, b = dlFull.Bytes;
+                if (a.Length == b.Length && a.SequenceEqual(b)) return;
+                mismatchFrames++;
+                if (firstMismatch.Length != 0) return;
+                int at = -1, lim = Math.Min(a.Length, b.Length);
+                for (int i = 0; i < lim; i++) if (a[i] != b[i]) { at = i; break; }
+                firstMismatch = $"scale={scale} {label}: reuse={a.Length}B full={b.Length}B firstDiff@{at} reused={st.SpansReused} rebased={st.SpansRebased}";
+            }
+
+            Frame("f1 first paint", () => { });
+            Frame("f2 settled", () => { });
+            // The steady state of a playing PiP with MOUNTED chrome: the seek bar ticks EVERY frame inside the hole
+            // while the page outside it is unchanged and therefore span-reused. The page scrolls in CONSECUTIVE bursts
+            // on the SAME frames — a translated copy needs the node's span to have been stored on the IMMEDIATELY
+            // preceding frame (SpanTable's `_frame[i] != frameId - 1` recency test), and a settled frame reuses the
+            // whole viewport as ONE span without walking its descendants, so a scroll frame with a settled frame in
+            // front of it always finds a stale descendant span and re-records instead of rebasing.
+            for (int k = 0; k < 60; k++)
+            {
+                int i = k;
+                bool scrolling = i % 12 >= 4 && i % 12 <= 9;
+                bool pipMoves = i % 7 == 6;
+                bool rowRepaints = i % 9 == 8;
+                Frame($"f3.{i} tick{(scrolling ? "+scroll" : "")}{(pipMoves ? "+pip" : "")}{(rowRepaints ? "+row" : "")}", () =>
+                {
+                    float t = 20f + (i % 20) * 10f;
+                    scene.Bounds(progress) = new RectF(10f, 18f, t, 4f);
+                    scene.Bounds(thumb) = new RectF(4f + t, 14f, 12f, 12f);
+                    scene.Mark(progress, NodeFlags.PaintDirty);
+                    scene.Mark(thumb, NodeFlags.PaintDirty);
+                    scene.Paint(elapsed).Text = strings.Intern($"0:{(i % 60):00}");
+                    scene.Mark(elapsed, NodeFlags.PaintDirty);
+                    // the auto-hide fade on the Opacity channel — the chrome stays MOUNTED
+                    scene.Paint(chrome).Opacity = 0.55f + 0.4f * MathF.Abs(MathF.Sin(i * 0.21f));
+                    scene.Mark(chrome, NodeFlags.PaintDirty);
+
+                    if (scrolling)
+                    {
+                        // A SMALL offset: every card stays wholly inside the viewport clip, which is what lets the
+                        // stationary neighbourhood take the TRANSLATED-copy path instead of re-recording.
+                        scrollY -= 3f;
+                        if (scrollY < -24f) scrollY = 0f;
+                        scene.Paint(content).LocalTransform = Affine2D.Translation(0f, scrollY);
+                        scene.Mark(content, NodeFlags.TransformDirty);
+                    }
+                    if (pipMoves)
+                    {
+                        scene.Paint(surface).LocalTransform = Affine2D.Translation(-5f * (i / 7 + 1), 3f * (i / 7 + 1));
+                        scene.Mark(surface, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+                    }
+                    if (rowRepaints)
+                    {
+                        int r = (i / 9) % rows.Length;
+                        scene.Paint(rows[r]).Fill = new ColorF(0.30f + 0.02f * r, 0.32f, 0.36f, 1f);
+                        scene.Mark(rows[r], NodeFlags.PaintDirty);
+                    }
+                });
+                if (i % 13 == 12) Frame($"f4.{i} settled", () => { });
+            }
+
+            // A LONG scroll, on consecutive frames, far enough that rows leave the viewport entirely and come back:
+            // the off-screen subtree cull (SpanTable.StoreCulled / TryGetSubtree) and the clip-completeness
+            // transitions at the viewport edge, neither of which the small oscillation above reaches.
+            for (int step = 0; step < 40; step++)
+            {
+                int i = step;
+                Frame($"f5.{i} long scroll", () =>
+                {
+                    scrollY = -40f * (i < 20 ? i : 40 - i);
+                    scene.Paint(content).LocalTransform = Affine2D.Translation(0f, scrollY);
+                    scene.Mark(content, NodeFlags.TransformDirty);
+                    scene.Paint(elapsed).Text = strings.Intern($"1:{(i % 60):00}");
+                    scene.Mark(elapsed, NodeFlags.PaintDirty);
+                });
+            }
+        }
+    }
+
+    static NodeHandle AddText(SceneStore s, StringTable strings, NodeHandle parent, in RectF bounds, string text)
+    {
+        var n = s.CreateNode(1);
+        s.AppendChild(parent, n);
+        s.Bounds(n) = bounds;
+        ref NodePaint p = ref s.Paint(n);
+        p = NodePaint.Default;
+        p.VisualKind = VisualKind.Text;
+        p.Text = strings.Intern(text);
+        return n;
+    }
+
 }
 
 sealed class DamageProbe : FluentGpu.Hooks.Component

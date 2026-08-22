@@ -187,6 +187,45 @@ public static class SceneRecorder
         _videoRects[_videoRectCount++] = deviceRect;
     }
 
+    // The last COMPLETED main-window record's video Dst set, published so UI-thread code that runs BETWEEN records
+    // (host phase 7.1 - the overlay lifecycle/placement pass) can ask "is this rect sitting on top of a video hole?".
+    // Snapshotted at the end of Record rather than aliasing _videoRects, because RecordSubtree (a windowed popup's own
+    // pass) appends into _videoRects without resetting it and would otherwise pollute the answer. Fixed capacity, no
+    // allocation, UI-thread-only - identical discipline to the scratch it copies.
+    private static readonly RectF[] _publishedVideoRects = new RectF[VideoRectCap];
+    private static int _publishedVideoRectCount;
+
+    /// <summary>
+    /// Does <paramref name="worldRect"/> sit on top of a video hole punch? True when a single <c>DrawVideo</c> Dst from
+    /// the last completed record covers at least <paramref name="minCoveredFraction"/> of its area.
+    /// <para>
+    /// The point of the question is that a hole punch is a <b>DestOut erase</b> whose pixels are premultiplied ZERO, and
+    /// the video itself is a sibling DComp visual z-BELOW the UI swapchain - so an ACRYLIC plate placed over a hole
+    /// blurs nothing at all (it samples transparent black) while still costing the whole window: an acrylic layer is
+    /// <see cref="FluentGpu.Rhi.RepaintPolicy"/>'s first hard disqualifier, so one flyout plate over a playing video
+    /// turns every frame it is up into a full-window rebuild AND invalidates the retained canvas for the frame after it
+    /// closes. Callers use this to drop the acrylic for a flat fallback fill - a visual no-op there, and the difference
+    /// between a partial repaint and a full one.
+    /// </para>
+    /// <para>Answers from the PREVIOUS frame's geometry by construction (it is asked before this frame is recorded).
+    /// That is the correct latency: a hole that just appeared or moved costs one frame of the old answer, and the answer
+    /// only ever selects between two visually-equivalent paints, never between correct and incorrect pixels.</para>
+    /// </summary>
+    public static bool RectOverVideoHole(in RectF worldRect, float minCoveredFraction = 0.5f)
+    {
+        if (_publishedVideoRectCount == 0 || worldRect.W <= 0f || worldRect.H <= 0f) return false;
+        float area = worldRect.W * worldRect.H;
+        for (int i = 0; i < _publishedVideoRectCount; i++)
+        {
+            RectF hole = _publishedVideoRects[i];
+            float x0 = MathF.Max(worldRect.X, hole.X), y0 = MathF.Max(worldRect.Y, hole.Y);
+            float x1 = MathF.Min(worldRect.Right, hole.Right), y1 = MathF.Min(worldRect.Bottom, hole.Bottom);
+            if (x1 <= x0 || y1 <= y0) continue;
+            if ((x1 - x0) * (y1 - y0) >= area * minCoveredFraction) return true;
+        }
+        return false;
+    }
+
     // Render-thread fling-lease capture bookkeeping (scroll-v3-plan-2026-08-17.md §6.1/§10 Phase 4, WP-Q1): populated
     // once per scrollable-viewport-with-live-content-child visited during a Record() pass. Phase 6's lease grant logic
     // reads this (read-only, via LeaseCaptures below) instead of re-walking the tree to find a candidate's content span,
@@ -736,19 +775,60 @@ public static class SceneRecorder
                  1f, 1f, false, holdSelfBlurForAnyUserScroll, false, false, default, skipRoots, null, 0, true, false, ref stats);
         }
 
-        // Video hole punches (architecture-spec's deferred rule, now REQUIRED under partial repaint): the erase drives a
+        // Video hole punches (architecture-spec's deferred rule, REQUIRED under partial repaint): the erase drives a
         // DComp visual below the swapchain, so a repaint that covers only PART of a punch re-erases only part of it and
-        // the seam tears. Any repaint rect overlapping a Dst inflates to the whole Dst.
-        for (int v = 0; v < _videoRectCount && !stats.Repaint.IsFull; v++)
+        // the seam tears. ANY repaint rect overlapping a Dst inflates to the whole Dst.
+        //
+        // Narrowing this to "only a rect that STRADDLES the Dst edge inflates" was tried and REVERTED: it is what the
+        // backend's DrawOp.DrawVideo decode explicitly depends on ("the recorder inflates any damage overlapping Dst to
+        // the WHOLE Dst, so a hole that is repainted at all is repainted completely" — D3D12Device), and it was in the
+        // working set of a reported defect where a full-width band around a playing PiP was cleared and then left
+        // unpainted. The saving it bought (a playhead tick inside a fullscreen video staying a small partial repaint)
+        // is worth strictly less than the guarantee it removed; do not re-narrow it without a gate that can DISTINGUISH
+        // the two rules on real pixels (gate.repaint.video-hole-partial-equals-full is that harness, and today it
+        // passes under both — which is exactly why the conservative rule is the one that ships).
+        //
+        // ONE WALK OF THE HOLE SET IS NOT A FIXPOINT. AddRepaint UNIONS the new band into the region, and a union GROWS
+        // a rect — which can reach a hole that was already tested and passed. With a single hole that is unreachable;
+        // with two it is a real frame (a docked/PiP surface plus a windowed popup's own RecordSubtree pass, which
+        // APPENDS into this same set), and the earlier hole is left OVERLAPPED but not COVERED — exactly the state the
+        // backend decode is licenced to assume never happens, so it re-erases only the sliver inside the replay rect
+        // and leaves a torn seam. Re-walk until no hole is newly inflated. Each pass either covers at least one more
+        // hole or stops, so VideoRectCap passes is a hard bound; the per-hole COVERED test is what makes it terminate
+        // (an already-covered hole is never re-added, and RepaintBand pads outward so covering is what inflation
+        // achieves). Alloc-free — plain rect math over the same static scratch.
+        for (int pass = 0; pass < VideoRectCap && !stats.Repaint.IsFull; pass++)
         {
-            RectF dst = _videoRects[v];
-            bool touches = false;
+            bool inflated = false;
+            for (int v = 0; v < _videoRectCount && !stats.Repaint.IsFull; v++)
             {
-                var rects = stats.Repaint.AsSpan();
-                for (int i = 0; i < rects.Length && !touches; i++) touches = rects[i].Overlaps(in dst);
+                RectF dst = _videoRects[v];
+                if (dst.W <= 0f || dst.H <= 0f) continue;
+                // The termination test is coverage of the BAND, not of the bare Dst: adding RepaintBand(dst) is what a
+                // re-add would do, so "some rect already covers RepaintBand(dst)" is exactly "re-adding changes
+                // nothing". Testing the bare Dst instead would skip a re-add that WOULD still have grown the region by
+                // the AA pad — i.e. it would quietly inflate LESS than the single-pass rule did.
+                RectF band = RepaintBand(in dst);
+                bool touches = false, covered = false;
+                {
+                    var rects = stats.Repaint.AsSpan();
+                    for (int i = 0; i < rects.Length; i++)
+                    {
+                        if (rects[i].Overlaps(in dst)) touches = true;
+                        if (rects[i].X <= band.X && rects[i].Y <= band.Y
+                            && rects[i].Right >= band.Right && rects[i].Bottom >= band.Bottom) covered = true;
+                    }
+                }
+                if (!touches || covered) continue;
+                stats.AddRepaint(in band);
+                inflated = true;
             }
-            if (touches) stats.AddRepaint(RepaintBand(in dst));
+            if (!inflated) break;
         }
+
+        // Publish this record's hole set for the between-frames RectOverVideoHole query (see that method).
+        for (int v = 0; v < _videoRectCount; v++) _publishedVideoRects[v] = _videoRects[v];
+        _publishedVideoRectCount = _videoRectCount;
 
         // E9 own-subtree carve-out: now that every entry + every cached-acrylic own-subtree range is known, bake each
         // layer's EXTERNAL damage rect + this frame's epoch into its PushLayerCmd (before the DrawList is published).

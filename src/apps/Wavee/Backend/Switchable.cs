@@ -90,7 +90,7 @@ public sealed class SwitchablePlayer : IPlaybackPlayer
     public Task ResumeAsync(CancellationToken ct = default) => Cur.ResumeAsync(ct);
     public Task NextAsync(CancellationToken ct = default) => Cur.NextAsync(ct);
     public Task PreviousAsync(CancellationToken ct = default) => Cur.PreviousAsync(ct);
-    public Task SeekAsync(long positionMs, CancellationToken ct = default) => Cur.SeekAsync(positionMs, ct);
+    public Task SeekAsync(long positionMs, SeekMode mode, CancellationToken ct = default) => Cur.SeekAsync(positionMs, mode, ct);
     public Task SetVolumeAsync(double volume01, CancellationToken ct = default) => Cur.SetVolumeAsync(volume01, ct);
     public Task SetShuffleAsync(bool on, CancellationToken ct = default) => Cur.SetShuffleAsync(on, ct);
     public Task SetRepeatAsync(RepeatMode mode, CancellationToken ct = default) => Cur.SetRepeatAsync(mode, ct);

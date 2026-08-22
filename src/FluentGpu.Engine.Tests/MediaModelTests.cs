@@ -134,6 +134,31 @@ public sealed class MediaModelTests
     }
 
     [Fact]
+    public void MediaError_Kind_DefaultsToUnknown_AndCarriesThePlatformCodeAlongsideTheCategory()
+    {
+        // Kind is the SOURCE's own classification, preserved verbatim next to the engine's Category verdict — the two
+        // answer different questions (what the platform said vs. what kind of failure this is / how to recover), and a
+        // host that reloads live locators branches on the former. A backend that has no such code leaves it Unknown.
+        var noKind = new MediaError(MediaErrorCategory.Network, "offline");
+        Assert.Equal(MediaErrorKind.Unknown, noKind.Kind);
+
+        var kinded = new MediaError(MediaErrorCategory.Network, "the media download failed", 0x80072EE7,
+            null, MediaRecovery.NeedsNetwork, MediaErrorKind.Network);
+        Assert.Equal(MediaErrorKind.Network, kinded.Kind);
+        Assert.Equal(0x80072EE7, kinded.UnderlyingCode);        // the raw HRESULT still rides along
+        Assert.Equal(MediaErrorCategory.Network, kinded.Category);
+
+        // The values ARE the HTML5 MediaError.code / MF_MEDIA_ENGINE_ERR numbering — a backend maps by value, so the
+        // numbering is part of the contract, not an implementation detail.
+        Assert.Equal(0, (int)MediaErrorKind.Unknown);
+        Assert.Equal(1, (int)MediaErrorKind.Aborted);
+        Assert.Equal(2, (int)MediaErrorKind.Network);
+        Assert.Equal(3, (int)MediaErrorKind.Decode);
+        Assert.Equal(4, (int)MediaErrorKind.SourceNotSupported);
+        Assert.Equal(5, (int)MediaErrorKind.Encrypted);
+    }
+
+    [Fact]
     public void MediaError_NoBackend_IsLifecycleFatal()
     {
         var err = MediaError.NoBackend(MediaKind.MfVideoOrFile);

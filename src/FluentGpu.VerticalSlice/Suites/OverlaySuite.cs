@@ -1650,9 +1650,23 @@ static class OverlaySuite
         void Settle() { for (int i = 0; i < 16; i++) host.RunFrame(); }
 
         // Open → the popup (a MenuItem) appears in the scene.
-        svc.Open(() => root.Anchor, menu, FlyoutPlacement.BottomLeft);
+        var first = svc.Open(() => root.Anchor, menu, FlyoutPlacement.BottomLeft);
         host.RunFrame();
         bool opened = !FindRole(host.Scene, host.Scene.Root, AutomationRole.MenuItem).IsNull;
+        var impl = (OverlayServiceImpl)svc;
+        var scrimRect = host.Scene.AbsoluteRect(impl.ScrimNode);
+        bool scrimFillsRoot = Near(scrimRect.X, 0f) && Near(scrimRect.Y, 0f)
+            && Near(scrimRect.W, 480f) && Near(scrimRect.H, 360f);
+
+        // A flyout surface owns one light-dismiss chain. Opening another root flyout closes the prior root
+        // immediately (its short visual close may still be retained), leaving exactly one input-active popup.
+        var replacement = svc.Open(() => root.Anchor, menu, FlyoutPlacement.BottomLeft);
+        int active = 0;
+        foreach (var e in impl.Entries)
+            if (e.Phase != OverlayPhase.Closing && e.DismissBehavior == DismissBehavior.LightDismiss) active++;
+        bool exclusive = !first.IsOpen && replacement.IsOpen && active == 1;
+        replacement.Close();
+        Settle();
 
         // Escape closes it (via the dispatcher key-preview hook).
         window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Escape));
@@ -1710,8 +1724,8 @@ static class OverlaySuite
         bool clickAwayClears = host.Input.Focused.IsNull;
 
         Check("64. overlay: anchored flyout opens, Escape + light-dismiss close, item invokes",
-            opened && escClosed && lightDismissed && invoked && passiveDoesNotBlock && focused && escapeClears && clickAwayClears,
-            $"open={opened} esc={escClosed} dismiss={lightDismissed} invoke={invoked} passiveInput={passiveDoesNotBlock} focus={focused} escBlur={escapeClears} clickBlur={clickAwayClears}");
+            opened && scrimFillsRoot && exclusive && escClosed && lightDismissed && invoked && passiveDoesNotBlock && focused && escapeClears && clickAwayClears,
+            $"open={opened} scrim={scrimFillsRoot} exclusive={exclusive} esc={escClosed} dismiss={lightDismissed} invoke={invoked} passiveInput={passiveDoesNotBlock} focus={focused} escBlur={escapeClears} clickBlur={clickAwayClears}");
     }
 
     static void OverlayAnimationChecks(StringTable strings)
@@ -2218,6 +2232,14 @@ static class OverlaySuite
                 && HasGlyph(scratch, strings, "popup-exit-new")
                 && !HasGlyph(device, strings, "popup-exit-old");
 
+            // Close before opening the next root flyout: light-dismiss roots are one exclusive chain.
+            // A CLOSING entry retains its popup window through the fade, then releases the lease.
+            hWin.Close();
+            host.RunFrame();   // 16ms into the 83ms fade
+            bool keptWhileFading = host.PopupWindows.Count == 1 && pal is { IsShown: true };
+            for (int i = 0; i < 20; i++) host.RunFrame();
+            bool released = host.PopupWindows.Count == 0 && pal is { Disposed: true, IsShown: false };
+
             // A constrained ordinary FlyoutPresenter remains in-window — no new lease, content in the main DrawList.
             var hIn = svc.Open(() => root.Anchor,
                 () => new BoxEl { Width = 120, Height = 40, Children = [new TextEl("inwin-body") { Size = 12f }] },
@@ -2226,13 +2248,6 @@ static class OverlaySuite
             bool defaultInWindow = app.PopupWindows.Count == 1 && HasGlyph(device, strings, "inwin-body");
             hIn.Close();
             for (int i = 0; i < 20; i++) host.RunFrame();
-
-            // Close: a CLOSING entry keeps its popup window while it fades; the lease releases with the entry.
-            hWin.Close();
-            host.RunFrame();   // 16ms into the 83ms fade
-            bool keptWhileFading = host.PopupWindows.Count == 1 && pal is { IsShown: true };
-            for (int i = 0; i < 20; i++) host.RunFrame();
-            bool released = host.PopupWindows.Count == 0 && pal is { Disposed: true, IsShown: false };
 
             // An unconstrained ordinary FlyoutPresenter does NOT lease an HWND. WinUI would window it
             // (FlyoutBase_Partial.cpp:966), but a material-less popup window carries no CompositionBackdrop and the
@@ -2589,6 +2604,10 @@ static class OverlaySuite
             // KeepAlive parks the whole subtree, so model that real edge on the actual registered owner.
             var parkedOwner = host.Scene.Parent(root.Target);
             host.Scene.Flags(parkedOwner) |= NodeFlags.Parked;
+            // The real KeepAlive path invokes this lifecycle phase from its already-awake transition frame. This probe
+            // mutates the retained flag directly, so drive the same phase explicitly instead of relying on a leftover
+            // tooltip fade to keep the otherwise-idle host awake.
+            ((OverlayServiceImpl)root.Service!).AfterAnimations();
             host.RunFrame();
             bool closing = ((OverlayServiceImpl)root.Service!).Entries.Count == 1
                 && ((OverlayServiceImpl)root.Service!).Entries[0].Phase == OverlayPhase.Closing;

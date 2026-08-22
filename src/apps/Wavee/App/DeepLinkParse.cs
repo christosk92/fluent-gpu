@@ -8,7 +8,10 @@ namespace Wavee;
 // engine. The window-waking, scheme-registration and channel halves stay in DeepLink.cs.
 
 /// <summary>A parsed <c>wavee://</c> verb. Unknown or garbage input never produces one (the parser never throws).</summary>
-public readonly record struct DeepLinkVerb(DeepLinkKind Kind, string Route, string Arg, string Context);
+/// <param name="Link">A pasted link for the playback modules (<c>wavee://play?link=…</c>): a YouTube / Twitch /
+/// radio url the module router resolves, as opposed to <paramref name="Context"/>, a Spotify context uri. Exactly one
+/// of the two is set on a <see cref="DeepLinkKind.Play"/> verb.</param>
+public readonly record struct DeepLinkVerb(DeepLinkKind Kind, string Route, string Arg, string Context, string Link = "");
 
 /// <summary>The <c>wavee://</c> verbs. Navigation keys are opaque strings the shell owns — see the skill doc.</summary>
 public enum DeepLinkKind : byte { Open, Play, Resume, Pause }
@@ -35,7 +38,7 @@ public static partial class DeepLink
         }
         if (name.Length == 0) return false;
 
-        ReadQuery(uri.Query, out string route, out string arg, out string ctx);
+        ReadQuery(uri.Query, out string route, out string arg, out string ctx, out string link);
 
         if (name.Equals("open", StringComparison.OrdinalIgnoreCase))
         {
@@ -45,9 +48,11 @@ public static partial class DeepLink
         }
         if (name.Equals("play", StringComparison.OrdinalIgnoreCase))
         {
-            if (ctx.Length == 0) return false;
-            verb = new DeepLinkVerb(DeepLinkKind.Play, "", "", ctx);
-            return true;
+            if (ctx.Length > 0) { verb = new DeepLinkVerb(DeepLinkKind.Play, "", "", ctx); return true; }
+            // `link=` is the module path: the same intake the Play ▸ Link… dialog feeds (YouTube, Twitch, radio…).
+            if (link.Length > 0 && PlayLinkActions.LooksLikeUrl(link))
+            { verb = new DeepLinkVerb(DeepLinkKind.Play, "", "", "", link); return true; }
+            return false;
         }
         if (name.Equals("resume", StringComparison.OrdinalIgnoreCase))
         {
@@ -140,9 +145,9 @@ public static partial class DeepLink
         return i >= 0 ? i : raw.IndexOf("wavee:", StringComparison.OrdinalIgnoreCase);
     }
 
-    static void ReadQuery(string query, out string route, out string arg, out string ctx)
+    static void ReadQuery(string query, out string route, out string arg, out string ctx, out string link)
     {
-        route = arg = ctx = "";
+        route = arg = ctx = link = "";
         if (query.Length == 0) return;
         ReadOnlySpan<char> q = query;
         if (q[0] == '?') q = q[1..];
@@ -158,6 +163,7 @@ public static partial class DeepLink
             if (key.Equals("route", StringComparison.OrdinalIgnoreCase)) route = val;
             else if (key.Equals("arg", StringComparison.OrdinalIgnoreCase)) arg = val;
             else if (key.Equals("ctx", StringComparison.OrdinalIgnoreCase)) ctx = val;
+            else if (key.Equals("link", StringComparison.OrdinalIgnoreCase)) link = val;
         }
     }
 }

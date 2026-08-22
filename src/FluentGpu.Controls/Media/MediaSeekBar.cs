@@ -12,46 +12,112 @@ namespace FluentGpu.Controls.Media;
 /// The media transport's scrub bar — a bespoke, compositor-bound seek control that REPLACES a per-frame
 /// <c>Slider.Create</c> in <see cref="MediaPlayerElement"/>. It is an autonomous <see cref="Component"/> (embedded via
 /// <c>Embed.Comp</c>) so source/geometry video pumps never recreate it (which would destroy an in-flight drag and snap
-/// the thumb back). Three properties make it correct where a controlled slider was not:
+/// the thumb back). What makes it correct where a controlled slider was not:
 /// <list type="bullet">
-/// <item><b>Scrub gate.</b> While the user is dragging, the displayed fraction follows the finger and IGNORES the
-///   playhead, so the transport's position tick can't yank the thumb out from under the pointer.</item>
-/// <item><b>Compositor-bound playhead.</b> The fill/thumb positions are bound <c>Transform</c>s reading ONE
-///   <see cref="FloatSignal"/> (<c>_displayFrac</c>) — moving the playhead never re-renders/relayouts this component. A
-///   mounted frame-clock ticker advances that signal by interpolation while playing, between coarse reported positions.</item>
-/// <item><b>Live scrub + accurate commit.</b> Dragging issues fast <see cref="SeekMode.Keyframe"/> seeks for preview
-///   (throttled); releasing issues one <see cref="SeekMode.Accurate"/> seek — driving the native transport (DRM or
-///   clear) to the exact target.</item>
+/// <item><b>Scrub gate, held until the PLAYER confirms.</b> While the user is dragging — and afterwards, until the
+///   reported position actually reaches the committed target (or a bounded timeout expires) — the displayed fraction
+///   follows the finger and IGNORES the playhead. Releasing the gate at pointer-up is wrong on the DRM path:
+///   <c>ProtectedMediaSession</c> only publishes after the native ack (seconds), and every pump in between republishes
+///   the STALE position, which is exactly the "thumb snaps back, then jumps seconds later" report.</item>
+/// <item><b>Compositor-bound playhead.</b> The fill/thumb/buffered positions are bound <c>Transform</c>s reading
+///   <see cref="FloatSignal"/>s — moving the playhead never re-renders or relayouts this component. A mounted
+///   pixel-dwell ticker advances the display signal between coarse reported positions.</item>
+/// <item><b>No per-frame re-render.</b> Render subscribes to NOTHING that ticks with the video: the hot position signal
+///   is read inside a <c>UseSignalEffect</c> (which re-runs the effect, not the render), and buffered/seekable ranges
+///   drive bound transforms through their own signals. Render's dependency set is duration + play/enable state only.</item>
+/// <item><b>Live keyframe preview + one accurate commit.</b> Dragging issues fast <see cref="SeekMode.Keyframe"/>
+///   seeks (wall-clock throttled, at most one per posted turn) on BOTH the standalone and host-owned paths; releasing
+///   issues one <see cref="SeekMode.Accurate"/> seek to the exact target.</item>
+/// <item><b>The stall is explained, not guessed at.</b> Buffered and seekable ranges are shaded in the rail, and a
+///   seek that outlives <see cref="SeekSpinnerDelayMs"/> grows a small INLINE spinner at the playhead — never a
+///   full-surface overlay, and never a blanked frame.</item>
 /// </list>
-/// The Render body reads only LOW-frequency signals (play-state / duration) so it never re-renders per frame.
-/// TerraFX-free: Engine + Controls types only. Modeled on the app's proven player-bar SeekBar.
+/// TerraFX-free: Engine + Controls types only.
 /// </summary>
 public sealed class MediaSeekBar : Component
 {
     /// <summary>The player this bar seeks (headless contract).</summary>
     public required IMediaPlayer Player { get; init; }
+    /// <summary>Optional host-owned seek command. Null seeks <see cref="Player"/> directly.</summary>
+    public Action<TimeSpan, SeekMode>? SeekRequested { get; init; }
+    /// <summary>The owning chrome's visibility. A SIGNAL, not a bool: init props freeze at mount and this bar outlives
+    /// every hide/reveal cycle by design (unmounting it is what made a fresh bar flash an empty rail at fraction 0 on
+    /// every reveal). While the chrome is down the bar leaves the hit-test, focus and accessibility surfaces — hidden
+    /// chrome that still answers a click is worse than no chrome. Null = always interactive.</summary>
+    public IReadSignal<bool>? ChromeVisible { get; init; }
 
-    private const float HitHeight = 24f;           // the transport's scrub row height
-    private const long SeekThrottleMs = 200;       // min gap between live keyframe seeks while dragging
+    /// <summary>The scrub row's hit height (DIP). ≥ 20 px is the pointer-target floor for a 4 px rail.</summary>
+    public const float HitHeight = 24f;
+    /// <summary>Minimum WALL-CLOCK gap between live keyframe previews while dragging. This is a real throttle: the
+    /// value it guards is <see cref="Environment.TickCount64"/>, NOT two media positions — comparing media positions
+    /// (the previous shape) meant a 3-hour video issued a seek on every single pointer move while a 30-second clip
+    /// issued almost none, because the same pixel of travel is worth a different number of milliseconds.</summary>
+    public const long SeekThrottleMs = 100;
+    /// <summary>How long a seek may run before the inline spinner appears. Below this a seek reads as instant and a
+    /// spinner would only flash.</summary>
+    public const float SeekSpinnerDelayMs = 500f;
+    /// <summary>How close the reported position must come to the committed target before the scrub gate reopens.</summary>
+    private const float ConfirmToleranceSec = 0.75f;
+    /// <summary>Upper bound on holding the gate closed waiting for a confirm — a backend that never reports lands the
+    /// thumb on the target rather than freezing the control.</summary>
+    private const long ConfirmTimeoutMs = 5000;
 
-    // While scrubbing the fill follows _scrubFrac and ignores the reported position (no snap-back).
+    // While scrubbing (and until the commit is confirmed) the fill follows _scrubFrac and ignores the reported position.
     private readonly Signal<bool> _scrubbing = new(false);
     private readonly FloatSignal _scrubFrac = new(0f);
-    // The single value the fill/thumb compositor binds read. Advanced per frame by the ticker while playing; set from
-    // the reported position when paused; set to the finger position while scrubbing.
+    // The single value the fill/thumb compositor binds read. Advanced by the ticker while playing; set from the reported
+    // position when paused; set to the finger position while scrubbing.
     private readonly FloatSignal _displayFrac = new(0f);
     // Live track width (px) as a signal so the thumb's bound transform re-evaluates when the layout width changes.
     private readonly FloatSignal _width = new(0f);
+    // Buffered head (fraction of duration) and the seekable window — bound, never re-rendered.
+    private readonly FloatSignal _bufferedFrac = new(0f);
+    private readonly FloatSignal _seekableStartFrac = new(0f);
+    private readonly FloatSignal _seekableSpanFrac = new(1f);
+    // The target the user is scrubbing to, in seconds; < 0 when not scrubbing. The transport's time label reads this so
+    // it shows where the user is GOING, not the decoded position that has not moved yet.
+    private readonly FloatSignal _scrubTargetSec = new(-1f);
+    // Low-frequency, render-visible: an in-flight seek that outlived SeekSpinnerDelayMs.
+    private readonly Signal<bool> _slowSeek = new(false);
 
     private NodeHandle _self;
-    private long _lastSeekMs = long.MinValue;       // throttle anchor for live keyframe seeks
-    // A low-cadence native position report seeds this anchor. The mounted FrameClock ticker advances from it without
-    // re-rendering the player element or requiring the native video session to pump every display frame.
+    private long _lastSeekWallMs = long.MinValue;   // WALL-CLOCK throttle anchor for live keyframe previews
+    private bool _seekPostQueued;                   // one live seek per posted turn (≈ one per frame)
+    private float _queuedFrac;
+    private Action<Action>? _post;
+    private readonly Action _drainSeek;
+    // Commit confirmation: the gate stays closed until the reported position reaches this, or the timeout expires.
+    private bool _awaitingConfirm;
+    private float _confirmTargetSec;
+    private long _confirmSinceWallMs;
+    // The live slow-seek timer handle (a readonly struct wrapping the hook cell — stored by VALUE so arming it from an
+    // event handler costs no delegate allocation, which a `_arm = handle.Restart` method group would).
+    private TimerHandle _spinnerTimer;
+    // Bounded release: the confirm check rides the position signal, so a backend that stops publishing entirely would
+    // otherwise hold the gate forever. This fires it open.
+    private TimerHandle _confirmTimer;
+    // A low-cadence native position report seeds this anchor. The mounted ticker advances from it without re-rendering
+    // the player element or requiring the native video session to pump every display frame.
     private long _positionAnchorWallMs;
     private float _positionAnchorSeconds;
 
-    /// <summary>Re-derive <c>_displayFrac</c> from the current model — called by the ticker every frame while playing,
-    /// and from an effect so a paused bar still shows the right resting position. Zero alloc; value-gated writes.</summary>
+    /// <summary>Create the stable post-drain delegate once; every live seek reuses it (0 alloc per drag move).</summary>
+    public MediaSeekBar() => _drainSeek = DrainSeek;
+
+    /// <summary>TRUE while the user owns the playhead — from pointer-down until the committed seek is confirmed by the
+    /// player (or times out). This is the media chrome's canonical scrub suppressor: an auto-hide state machine must not
+    /// hide the transport out from under a drag, and a position readout must not fight the finger. Read-only by
+    /// contract: only this control opens and closes the gate.</summary>
+    public IReadSignal<bool> Scrubbing => _scrubbing;
+
+    /// <summary>The position the user is scrubbing TO, in seconds — or a negative value when no scrub is in flight.
+    /// The transport's elapsed/total label binds this so that, within 100 ms of pointer-down and regardless of decode,
+    /// the number under the finger is the TARGET time and not the decoded time (which may not move for seconds).</summary>
+    public IReadSignal<float> ScrubTargetSeconds => _scrubTargetSec;
+
+    /// <summary>Re-derive <c>_displayFrac</c> from the current model — called by the ticker every pixel-dwell while
+    /// playing, and from the position effect so a paused bar still shows the right resting position. Zero alloc;
+    /// value-gated writes.</summary>
     internal void Recompute()
     {
         if (_scrubbing.Peek()) { _displayFrac.Value = _scrubFrac.Peek(); return; }   // scrub gate
@@ -74,21 +140,77 @@ public sealed class MediaSeekBar : Component
 
     public override Element Render()
     {
-        // Low-frequency subscriptions ONLY. Position reports re-render this isolated leaf to re-anchor interpolation;
-        // they never re-render the player element or run every display frame.
+        // ── the render's dependency set: LOW-frequency only. The hot position signal is deliberately NOT read here —
+        //    it is read inside the effect below, which re-runs the EFFECT, not this render. Reading it here is what made
+        //    the bar re-render (and reallocate its bind closures, and relayout the transport row) on every video pump.
         var st = Player.State.Value;
         bool playing = Player.IsPlaying.Value;
         bool buffering = Player.IsBuffering.Value;
         double durSec = Player.Duration.Value.TotalSeconds;
-        float reportedPosition = Player.PositionSeconds.Value;
-        _positionAnchorSeconds = reportedPosition;
-        _positionAnchorWallMs = Environment.TickCount64;
-        bool enabled = durSec > 0.0 && st is not (PlaybackState.Idle or PlaybackState.Failed);
+        bool slowSeek = _slowSeek.Value;
+        bool chromeUp = ChromeVisible?.Value ?? true;
+        bool enabled = chromeUp && durSec > 0.0 && st is not (PlaybackState.Idle or PlaybackState.Failed);
 
-        // Re-seed the resting display when the enabling inputs change (duration arrives, play/pause edge). The playing
-        // ticker covers panel-rate interpolation; a seek-while-paused re-seeds in OnCommit.
-        int modelKey = HashCode.Combine(HashCode.Combine(enabled, playing, buffering), (int)(durSec * 1000),
-            (int)(reportedPosition * 1000));
+        _post = UsePost();
+
+        // The position anchor is MODEL state, not paint state: writing it from Render (the previous shape) made Render
+        // impure and re-seeded interpolation on any unrelated re-render. It belongs to an effect that tracks the hot
+        // signal without dragging the render along.
+        UseSignalEffect(() =>
+        {
+            float reported = Player.PositionSeconds.Value;    // subscribes the EFFECT (never the render)
+            _positionAnchorSeconds = reported;
+            _positionAnchorWallMs = Environment.TickCount64;
+            if (_awaitingConfirm)
+            {
+                bool reached = MathF.Abs(reported - _confirmTargetSec) <= ConfirmToleranceSec;
+                bool timedOut = Environment.TickCount64 - _confirmSinceWallMs > ConfirmTimeoutMs;
+                if (reached || timedOut) ReleaseGate();
+            }
+            Recompute();
+        });
+
+        // Buffered head + seekable window → bound signals. A stall is then EXPLAINED by the bar (the fill has run past
+        // the buffered shading) instead of being guessed at from a frozen frame.
+        UseSignalEffect(() =>
+        {
+            BufferHealth health = Player.Buffer.Value;
+            double dur = Player.Duration.Value.TotalSeconds;
+            float end = 0f;
+            if (dur > 0.0)
+            {
+                var ranges = health.Ranges;
+                for (int i = 0; i < ranges.Count; i++)
+                {
+                    float e = (float)Math.Clamp(ranges[i].End.TotalSeconds / dur, 0.0, 1.0);
+                    if (e > end) end = e;
+                }
+            }
+            _bufferedFrac.SetIfChanged(end);
+        });
+        UseSignalEffect(() =>
+        {
+            TimelineInfo timeline = Player.Timeline.Value;
+            double dur = Player.Duration.Value.TotalSeconds;
+            float start = 0f, span = 1f;
+            if (dur > 0.0 && timeline.SeekableEnd > timeline.SeekableStart)
+            {
+                start = (float)Math.Clamp(timeline.SeekableStart.TotalSeconds / dur, 0.0, 1.0);
+                float e = (float)Math.Clamp(timeline.SeekableEnd.TotalSeconds / dur, 0.0, 1.0);
+                span = MathF.Max(e - start, 0f);
+            }
+            _seekableStartFrac.SetIfChanged(start);
+            _seekableSpanFrac.SetIfChanged(span);
+        });
+
+        // The slow-seek spinner arm/disarm pair. UseTimeout arms at mount, so disarm it once on the mount edge.
+        _spinnerTimer = UseTimeout(() => _slowSeek.SetIfChanged(true), SeekSpinnerDelayMs, DepKey.Empty);
+        _confirmTimer = UseTimeout(ReleaseGate, ConfirmTimeoutMs, DepKey.Empty);
+        UseEffect(DisarmSpinnerOnMount, DepKey.Empty);   // both UseTimeouts arm at mount; nothing is seeking yet
+
+        // Re-seed the resting display when the enabling inputs change (duration arrives, play/pause edge). Deliberately
+        // NOT keyed on the reported position — that quantised-to-milliseconds key re-ran this effect on every publish.
+        int modelKey = HashCode.Combine(enabled, playing, buffering, (int)durSec);
         UseEffect(() => Recompute(), modelKey);
 
         var s = Slider.DefaultStyle;
@@ -106,8 +228,33 @@ public sealed class MediaSeekBar : Component
 
         // Fill grows from the LEFT edge by a bound ScaleX reading _displayFrac (TransformOriginX=0). No layout, no re-render.
         Func<Affine2D> fillBind = () => Affine2D.Scale(MathF.Max(Math.Clamp(_displayFrac.Value, 0f, 1f), 1e-4f), 1f);
+        // Buffered shading: same origin-0 scale, one signal behind the fill.
+        Func<Affine2D> bufferedBind = () => Affine2D.Scale(MathF.Max(Math.Clamp(_bufferedFrac.Value, 0f, 1f), 1e-4f), 1f);
+        // Seekable window (live/DVR): scale AND translate in one matrix — outside it, the rail reads as unreachable.
+        Func<Affine2D> seekableBind = () => SeekableTransform(_width.Value, _seekableStartFrac.Value, _seekableSpanFrac.Value);
         // Thumb slid to the value by a bound translation reading _displayFrac AND _width (so a width change re-evaluates it).
         Func<Affine2D> thumbBind = () => ThumbTransform(_width.Value, _displayFrac.Value, ringD);
+
+        // Painter order inside the rail: seekable window (dimmest) → buffered head → played fill.
+        var seekableShade = new BoxEl
+        {
+            Grow = 1f, Height = s.TrackHeight, AlignSelf = FlexAlign.Center,
+            Fill = Tok.OnMediaPrimary with { A = 0.10f },
+            Corners = CornerRadius4.All(0f),
+            HitTestVisible = false,
+            TransformOriginX = 0f,
+            Transform = seekableBind,
+        };
+
+        var buffered = new BoxEl
+        {
+            Grow = 1f, Height = s.TrackHeight, AlignSelf = FlexAlign.Center,
+            Fill = Tok.OnMediaPrimary with { A = 0.24f },
+            Corners = CornerRadius4.All(0f),
+            HitTestVisible = false,
+            TransformOriginX = 0f,
+            Transform = bufferedBind,
+        };
 
         var fill = new BoxEl
         {
@@ -125,7 +272,7 @@ public sealed class MediaSeekBar : Component
             Fill = railFill, HoverFill = railFill, PressedFill = railFill,
             Corners = CornerRadius4.All(s.TrackCornerRadius),
             ClipToBounds = true, ZStack = true, HitTestVisible = false,
-            Children = [fill],
+            Children = [seekableShade, buffered, fill],
         };
 
         var inner = new BoxEl
@@ -153,11 +300,25 @@ public sealed class MediaSeekBar : Component
             Children = [inner],
         };
 
+        // The slow-seek cue rides the THUMB's own translation, so it sits exactly at the playhead. It is small, inline
+        // and additive: the frame under it keeps playing/holding, which is the whole point — a full-surface overlay
+        // that blanks the picture turns a 600 ms seek into a visible outage.
+        Element? spinner = slowSeek && enabled
+            ? new BoxEl
+            {
+                Width = ringD, Height = ringD,
+                AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                HitTestVisible = false,
+                Transform = thumbBind,
+                Children = [ProgressRing.Indeterminate(14f)],
+            }
+            : null;
+
         var stack = new BoxEl
         {
             ZStack = true, Grow = 1f, Height = HitHeight, AlignItems = FlexAlign.Center,
             HitTestVisible = false,
-            Children = [rail, thumb],
+            Children = spinner is null ? [rail, thumb] : [rail, thumb, spinner],
         };
 
         // Pixel-due ticker (UseInterval — not FrameClock.Tick, which pins the host at panel rate via FrameClockPoller).
@@ -168,15 +329,17 @@ public sealed class MediaSeekBar : Component
         return new BoxEl
         {
             Grow = 1f, Height = HitHeight, Direction = 0, AlignItems = FlexAlign.Center,
-            Role = AutomationRole.Slider,
+            Role = enabled ? AutomationRole.Slider : default,
+            TabStop = enabled ? null : false,
             Cursor = enabled ? CursorId.Hand : (CursorId?)null,
             IsEnabled = enabled,
             OnRealized = OnRealizedCb,           // mount-only; captures the node for width refresh
             OnBoundsChanged = OnBoundsChangedCb,
-            OnPointerDown = enabled ? OnDown : null,
+            OnPointerDown = enabled ? OnDown : null,     // click-to-seek anywhere on the rail: the press IS the seek
             OnDrag = enabled ? OnDragMove : null,
-            OnClick = enabled ? OnCommit : null,             // drag-end → accurate commit (one SeekAsync)
+            OnClick = enabled ? OnCommit : null,             // drag-end → accurate commit (one seek)
             OnDragCanceled = enabled ? OnCanceled : null,
+            OnPointerWheel = enabled ? OnWheel : null,       // wheel over the seek bar = ±5 s
             Children = ticker is null ? [stack] : [stack, ticker],
         };
     }
@@ -212,6 +375,11 @@ public sealed class MediaSeekBar : Component
         return Affine2D.Translation(x, 0f);
     }
 
+    /// <summary>Scale + translate in ONE matrix: the seekable window starts at <paramref name="startFrac"/> of the rail
+    /// and spans <paramref name="spanFrac"/> of it (a live/DVR stream's reachable range).</summary>
+    private static Affine2D SeekableTransform(float width, float startFrac, float spanFrac)
+        => new(MathF.Max(Math.Clamp(spanFrac, 0f, 1f), 1e-4f), 0f, 0f, 1f, Math.Clamp(startFrac, 0f, 1f) * width, 0f);
+
     private bool Enabled()
     {
         var st = Player.State.Peek();
@@ -222,18 +390,24 @@ public sealed class MediaSeekBar : Component
     {
         if (!Enabled()) return;
         RefreshWidth();
+        // A new grab supersedes any confirm we were still waiting on — including its timers, which would otherwise fire
+        // mid-drag and reopen the gate under the finger.
+        _awaitingConfirm = false;
+        _confirmTimer.Cancel();
+        _spinnerTimer.Cancel();
+        _slowSeek.SetIfChanged(false);
         _scrubbing.Value = true;
-        _scrubFrac.Value = Frac(local.X);
-        _displayFrac.Value = _scrubFrac.Peek();   // paint the jump immediately
-        LiveSeek(force: true);
+        SetScrub(Frac(local.X));
+        _displayFrac.Value = _scrubFrac.Peek();   // paint the jump immediately (< 100 ms, regardless of decode)
+        QueueLiveSeek(force: true);
     }
 
     private void OnDragMove(Point2 local)
     {
         if (!Enabled()) return;
-        _scrubFrac.Value = Frac(local.X);
+        SetScrub(Frac(local.X));
         _displayFrac.Value = _scrubFrac.Peek();
-        LiveSeek(force: false);                    // fast keyframe preview (throttled)
+        QueueLiveSeek(force: false);              // fast keyframe preview (wall-clock throttled, ≤1 per posted turn)
     }
 
     private void OnCommit()
@@ -242,30 +416,124 @@ public sealed class MediaSeekBar : Component
         if (!Enabled() || durSec <= 0.0) { OnCanceled(); return; }
         float f = _scrubFrac.Peek();
         var target = TimeSpan.FromSeconds(Math.Clamp(f * durSec, 0.0, durSec));
-        _displayFrac.Value = f;                    // hold the committed position; the ticker/effect converges as the playhead catches up
+        _displayFrac.Value = f;                    // hold the committed position
         _positionAnchorSeconds = (float)target.TotalSeconds;
         _positionAnchorWallMs = Environment.TickCount64;
-        _scrubbing.Value = false;                  // release the gate; SeekAsync publishes the target position, so no snap-back
-        _lastSeekMs = (long)target.TotalMilliseconds;
-        _ = Player.SeekAsync(target, SeekMode.Accurate);
+        // HOLD the gate. The old shape released it here on the theory that "SeekAsync publishes the target position, so
+        // no snap-back" — false on the DRM path, where ProtectedMediaSession publishes only after the native ack (up to
+        // seconds) and every pump in between republishes the stale position. The gate now reopens on CONFIRMATION.
+        _awaitingConfirm = true;
+        _confirmTargetSec = (float)target.TotalSeconds;
+        _confirmSinceWallMs = Environment.TickCount64;
+        _spinnerTimer.Restart();
+        _confirmTimer.Restart();
+        _lastSeekWallMs = Environment.TickCount64;
+        RequestSeek(target, SeekMode.Accurate);
     }
 
     private void OnCanceled()
     {
-        _scrubbing.Value = false;
-        Recompute();
+        _awaitingConfirm = false;
+        ReleaseGate();
     }
 
-    // Live scrub preview: a fast keyframe seek to the current finger position, throttled so a pixel-per-move drag can't
-    // flood the native transport. `force` bypasses the throttle (the initial press jump).
-    private void LiveSeek(bool force)
+    private void OnWheel(WheelEventArgs e)
+    {
+        if (!Enabled()) return;
+        float step = e.Delta > 0f ? 5f : -5f;
+        SeekBy(step);
+        e.Handled = true;
+    }
+
+    /// <summary>Seek relative to the current position (the wheel-over-the-rail gesture and the element's key map share
+    /// this, so both land on the same accurate commit + confirm-gated hold).</summary>
+    internal void SeekBy(float seconds)
     {
         double durSec = Player.Duration.Peek().TotalSeconds;
         if (durSec <= 0.0) return;
-        long ms = (long)Math.Clamp(_scrubFrac.Peek() * durSec * 1000.0, 0.0, durSec * 1000.0);
-        if (!force && _lastSeekMs != long.MinValue && Math.Abs(ms - _lastSeekMs) < SeekThrottleMs) return;
-        _lastSeekMs = ms;
-        _ = Player.SeekAsync(TimeSpan.FromMilliseconds(ms), SeekMode.Keyframe);
+        double from = _awaitingConfirm ? _confirmTargetSec : Player.PositionSeconds.Peek();
+        var target = TimeSpan.FromSeconds(Math.Clamp(from + seconds, 0.0, durSec));
+        SeekTo(target);
+    }
+
+    /// <summary>Seek to an absolute position with the same confirm-gated hold the drag commit uses — so a keyboard or
+    /// wheel seek also paints its target immediately and does not let a stale report drag the playhead backwards.</summary>
+    internal void SeekTo(TimeSpan target)
+    {
+        double durSec = Player.Duration.Peek().TotalSeconds;
+        if (durSec <= 0.0) return;
+        float f = (float)Math.Clamp(target.TotalSeconds / durSec, 0.0, 1.0);
+        SetScrub(f);
+        _scrubbing.Value = true;
+        _displayFrac.Value = f;
+        _positionAnchorSeconds = (float)target.TotalSeconds;
+        _positionAnchorWallMs = Environment.TickCount64;
+        _awaitingConfirm = true;
+        _confirmTargetSec = (float)target.TotalSeconds;
+        _confirmSinceWallMs = Environment.TickCount64;
+        _spinnerTimer.Restart();
+        _confirmTimer.Restart();
+        _lastSeekWallMs = Environment.TickCount64;
+        RequestSeek(target, SeekMode.Accurate);
+    }
+
+    private void SetScrub(float frac)
+    {
+        _scrubFrac.Value = frac;
+        double durSec = Player.Duration.Peek().TotalSeconds;
+        _scrubTargetSec.SetIfChanged(durSec > 0.0 ? (float)(frac * durSec) : -1f);
+    }
+
+    private void DisarmSpinnerOnMount()
+    {
+        _spinnerTimer.Cancel();
+        _confirmTimer.Cancel();
+        _slowSeek.SetIfChanged(false);
+    }
+
+    private void ReleaseGate()
+    {
+        _awaitingConfirm = false;
+        _spinnerTimer.Cancel();
+        _confirmTimer.Cancel();
+        _slowSeek.SetIfChanged(false);
+        _scrubTargetSec.SetIfChanged(-1f);
+        if (_scrubbing.Peek()) _scrubbing.Value = false;
+        Recompute();
+    }
+
+    // Live scrub preview: a fast keyframe seek to the current finger position. `force` bypasses the wall-clock throttle
+    // (the initial press jump). The request itself is posted, so a burst of pointer moves inside one frame collapses to
+    // ONE seek — the "coalesce moves to one per frame" rule, enforced at the expensive end.
+    private void QueueLiveSeek(bool force)
+    {
+        double durSec = Player.Duration.Peek().TotalSeconds;
+        if (durSec <= 0.0) return;
+        _queuedFrac = _scrubFrac.Peek();
+        if (_seekPostQueued) return;
+        long now = Environment.TickCount64;
+        if (!force && _lastSeekWallMs != long.MinValue && now - _lastSeekWallMs < SeekThrottleMs) return;
+        _seekPostQueued = true;
+        if (_post is { } post) post(_drainSeek); else DrainSeek();
+    }
+
+    private void DrainSeek()
+    {
+        _seekPostQueued = false;
+        double durSec = Player.Duration.Peek().TotalSeconds;
+        if (durSec <= 0.0 || !_scrubbing.Peek()) return;
+        _lastSeekWallMs = Environment.TickCount64;
+        // Keyframe previews go to the HOST path too. Suppressing them whenever SeekRequested was set (the previous
+        // shape) is what left the picture frozen on the last decoded frame for the whole drag: the host is exactly the
+        // path that can serve a cheap keyframe. The mode is carried, so a host that distinguishes fast previews from
+        // accurate commits can act on it.
+        RequestSeek(TimeSpan.FromSeconds(Math.Clamp(_queuedFrac * durSec, 0.0, durSec)), SeekMode.Keyframe);
+    }
+
+    private void RequestSeek(TimeSpan target, SeekMode mode)
+    {
+        if (SeekRequested is { } request) request(target, mode);
+        else _ = Player.SeekAsync(target, mode);
     }
 
     private float Frac(float x)

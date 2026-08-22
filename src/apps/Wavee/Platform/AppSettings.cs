@@ -186,6 +186,11 @@ static class WaveeSettings
     // Cap applied WHEN the connection is metered (NetworkCostKind.Fixed / Variable). Same 0..2 ladder as PlaybackQuality.
     // Default 1 = High160 so a metered laptop does not silently stay on Very High.
     public static readonly SettingKey<int> MeteredQualityCap = new("playback.quality.meteredCap", 1);
+    // Protected video quality: 0 = true Auto; otherwise the preferred representation height. Manual preferences are
+    // pins and intentionally override viewport/metered caps. Auto is capped by the actual presentation height and, on a
+    // metered connection, by VideoMeteredMaxHeight (0 there means unlimited).
+    public static readonly SettingKey<int> VideoQuality = new("playback.video.quality", 0);
+    public static readonly SettingKey<int> VideoMeteredMaxHeight = new("playback.video.quality.meteredMaxHeight", 480);
     // ── Notifications ─────────────────────────────────────────────────────────────────────────────────────────────────
     // Two global gates + one LADDER per topic (Off / In-app / In-app + Windows — see Wavee.Core NotifyLevel).
     //

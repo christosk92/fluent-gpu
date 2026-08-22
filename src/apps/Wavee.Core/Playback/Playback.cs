@@ -8,6 +8,21 @@ public enum PlaybackRecoveryKind { None, Network }
 
 public readonly record struct PlaybackContextTrack(string Uri, string Uid = "", IReadOnlyDictionary<string, string>? Metadata = null);
 
+/// <summary>Seek fidelity, carried end-to-end from the seek bar to the media host. <see cref="Keyframe"/> is a SCRUB
+/// PREVIEW — the throttled seeks a drag issues while the thumb is moving: it snaps to the nearest keyframe (fast, cheap)
+/// and is NOT a committed transport event, so it never reaches the Connect cluster and never re-arms prepared-next.
+/// <see cref="Accurate"/> is the COMMIT — one per gesture, decoded to the exact PTS, emitted as a <c>Seeked</c> event.
+/// <para>Member order mirrors <c>FluentGpu.Media.SeekMode</c> deliberately, but this enum is declared HERE because
+/// Wavee.Core (and the source-included <c>Wavee/Backend</c>) are framework-neutral and must never reference the engine.
+/// The app maps between the two at its one boundary (<c>MediaSeekInterop</c>).</para></summary>
+public enum SeekMode : byte
+{
+    /// <summary>Snap to the nearest keyframe — a fast scrub PREVIEW; local host only, never a committed event.</summary>
+    Keyframe,
+    /// <summary>Decode to the exact requested position — the committed seek (one per gesture).</summary>
+    Accurate
+}
+
 /// <summary>Playback command surface. The real implementation marshals these to the out-of-process
 /// x64 AudioHost over a named pipe; the fake implementation is in-process. State is observed via
 /// <see cref="IPlaybackState"/>, never returned from commands.</summary>
@@ -22,7 +37,9 @@ public interface IPlaybackPlayer
     Task ResumeAsync(CancellationToken ct = default);
     Task NextAsync(CancellationToken ct = default);
     Task PreviousAsync(CancellationToken ct = default);
-    Task SeekAsync(long positionMs, CancellationToken ct = default);
+    /// <summary>Seek the current media. <paramref name="mode"/> decides whether this is a scrub PREVIEW
+    /// (<see cref="SeekMode.Keyframe"/> — local host only) or the committed seek (<see cref="SeekMode.Accurate"/>).</summary>
+    Task SeekAsync(long positionMs, SeekMode mode, CancellationToken ct = default);
     Task SetVolumeAsync(double volume01, CancellationToken ct = default);
     Task SetShuffleAsync(bool on, CancellationToken ct = default);
     Task SetRepeatAsync(RepeatMode mode, CancellationToken ct = default);
@@ -97,6 +114,13 @@ public interface IPlaybackState : System.ComponentModel.INotifyPropertyChanged
     bool CanSkipNext => true;
     bool CanSkipPrev => true;
     bool CanSeek => true;
+
+    /// <summary>Is what is playing a LIVE stream — a broadcast with no end and no seekable past (an internet radio
+    /// station, a YouTube/Twitch live channel)? Distinct from "<see cref="DurationMs"/> is 0", which is also what an
+    /// unknown length looks like: live-ness is a fact the SOURCE stated, not something inferred from a missing number.
+    /// <para>Drives the LIVE chip, the disabled seek bar and the "a socket drop is a reconnect, not a track end"
+    /// policy. Default false — every provider that has no live content keeps working unchanged.</para></summary>
+    bool IsLive => false;
     /// <summary>The Connect device currently active (null/empty = this device / nobody) — drives the "playing on X" label.</summary>
     string? ActiveDeviceId => null;
 

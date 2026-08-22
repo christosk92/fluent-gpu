@@ -161,6 +161,10 @@ public sealed class InputHooks
     /// hit-test-invisible — a real tooltip never intercepts pointer or wheel input.</summary>
     public Func<Point2?>? GetPointerPosition;
 
+    /// <summary>Temporarily override the window cursor for one owner. Passing null releases only that owner's override
+    /// and immediately restores the cursor resolved from the current hover chain.</summary>
+    public Action<object, CursorId?>? SetCursorOverride;
+
     /// <summary>The OverlayHost scrim's dismiss-and-reopen seam (host-wired to <c>InputDispatcher.RequestContextAt</c>):
     /// a right-click on the light-dismiss scrim closes the top overlay AND re-fires the context request at the same
     /// window point so the node underneath opens its own context menu in ONE gesture (WinUI outside-right-click). The
@@ -315,6 +319,10 @@ public sealed class InputHooks
 
     private readonly List<(object Owner, Action Action)> _afterAnimations = new();
     private readonly List<(object Owner, Action<NodeHandle> Action)> _subtreeDeactivated = new();
+
+    /// <summary>True while a registered tree lifecycle needs frame ticks even when its compositor tracks are parked.
+    /// Overlay close finalization uses this as a bounded watchdog wake; ordinary active tracks already wake the host.</summary>
+    public Func<bool>? HasAfterAnimationWork;
 
     /// <summary>
     /// Host phase 7 hook: after <c>AnimEngine.Tick</c>, before record/present. Tree-level systems with retained

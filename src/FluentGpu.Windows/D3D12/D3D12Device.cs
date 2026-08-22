@@ -260,6 +260,12 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // The canvas ledger — ONE state keyed to the canvas (R11), never a per-back-buffer pair (that shape belongs to
     // FLIP_SEQUENTIAL and would repaint every change twice). Reset wholesale by InitSwapChain / Resize / RecoverDevice.
     private bool _canvasValid;             // the persistent canvas holds a COMPLETE, coherent scene
+    // Did the submit that just ran actually PAINT the canvas? SubmitIntoCanvas has one bail (the layered route
+    // receiving >1 replay rect) that abandons the canvas mid-decision and finishes the frame straight on the back
+    // buffer. It sets _canvasValid = false, but its caller then overwrites that unconditionally from the dropped-
+    // instance count — resurrecting a canvas nothing painted, which the NEXT frame would replay a partial into.
+    // This carries the bail's answer past that assignment.
+    private bool _canvasPainted;
     private uint _canvasW, _canvasH;       // the size the canvas was last ensured at (a change invalidates it)
     private ulong _lastConsumedSequence;   // the last publish seq this device painted from (0 = none)
     private ColorF _lastClearColor;
@@ -1323,10 +1329,12 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         }
         else
         {
+            _canvasPainted = true;
             SubmitIntoCanvas(drawList, ctx, lw, lh, rtv, layerKind, route, replay);
             // Self-heal (R2): a frame that DROPPED primitives (an instance bank overflowed) did not paint what the
-            // stream said, so the canvas is not a coherent scene — never build the next partial on top of it.
-            _canvasValid = DroppedInstanceCount() == 0;
+            // stream said, so the canvas is not a coherent scene — never build the next partial on top of it. A submit
+            // that BAILED to the back buffer never painted the canvas at all, which is the same conclusion.
+            _canvasValid = _canvasPainted && DroppedInstanceCount() == 0;
             // I1: the canvas now represents THIS stream (a 0-rect blit-only frame just re-affirmed it). An incoherent
             // canvas represents nothing, so drop the fingerprint with it.
             _canvasDrawListHash = _canvasValid ? ctx.DrawListHash : 0;
@@ -2536,6 +2544,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 Diag.Count("d3d12", "dmgLayeredMultiRect");
                 System.Diagnostics.Debug.Assert(false, "layered partial route received >1 replay rect — it can only replay the stream ONCE");
                 _canvasValid = false;
+                _canvasPainted = false;   // the frame finishes on the BACK BUFFER — the canvas is untouched, not rebuilt
                 _lastRepaintFullReason = RepaintFullReason.BackendUnsupported;
                 _opacity!.EnsureSize(_w, _h);
                 ClearRootDamage();

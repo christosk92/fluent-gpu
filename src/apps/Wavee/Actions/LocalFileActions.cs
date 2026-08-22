@@ -22,9 +22,13 @@ public static class LocalFileActions
 {
     const string LogCategory = "ui";
 
-    /// <summary>Can this build play a file at all? False before go-live (the pre-login backend's player rejects every
-    /// play intent) and false on a build with no local-audio stack — the affordances are HIDDEN rather than disabled,
-    /// because an offer you cannot take is worse than no offer.</summary>
+    /// <summary>Can this build play a file at all? The question is "does an audio host exist", not "is there a Spotify
+    /// session" — the bridge's <c>LocalPlaybackSupported</c> answers it, and it is true as soon as the audio host is
+    /// composed, which the pre-login composition root now does. False only on a build with no local-audio stack. The
+    /// affordances are HIDDEN rather than disabled, because an offer you cannot take is worse than no offer.
+    ///
+    /// <para>The same gate governs the whole <c>Play ▸</c> submenu, not just its "File…" row: a build that cannot play
+    /// its own files cannot play a module's stream either, since both end at the same host.</para></summary>
     public static bool CanPlayFiles(ActionServices? s)
         => s?.Svc is not null && s.Playback is { } b && b.LocalPlaybackSupported.Value;
 

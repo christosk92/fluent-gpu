@@ -5,6 +5,7 @@ using FluentGpu.Localization;
 using FluentGpu.WindowsApi.Dialogs;
 using Wavee.Backend.Audio;
 using Wavee.Core;
+using Wavee.Sdk.Streams;
 
 namespace Wavee;
 

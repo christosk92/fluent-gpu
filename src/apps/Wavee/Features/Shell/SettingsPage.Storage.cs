@@ -13,6 +13,7 @@ using FluentGpu.WindowsApi.Dialogs;
 using Wavee.Backend.Audio;
 using Wavee.SpotifyLive.Audio;
 using static FluentGpu.Dsl.Ui;
+using Wavee.Sdk.Streams;
 
 namespace Wavee;
 

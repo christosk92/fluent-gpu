@@ -75,6 +75,14 @@ if (-not $useAot) { $pubArgs += @('-p:PublishAot=false', '--self-contained', 'tr
 if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed ($LASTEXITCODE)." }
 if (-not (Test-Path (Join-Path $pubDir 'Wavee.exe'))) { throw "Wavee.exe missing from $pubDir" }
 
+# Bundled playback modules into $pubDir\modules\<id>\ BEFORE the layout copy below, which is recursive - so the
+# child-process modules ship inside the package (a packaged full-trust Win32 app may launch exes from its own
+# package, which is exactly what the module host does). Shared with publish-wavee-aot.ps1 so the two layouts
+# cannot drift. See docs/guide/playback-modules.md.
+$modulePublish = @{ OutDir = $pubDir; Rid = $rid; Configuration = $Configuration }
+if (-not $useAot) { $modulePublish['NoAot'] = $true }
+& (Join-Path $PSScriptRoot 'publish-wavee-modules.ps1') @modulePublish
+
 Step "Staging package layout"
 New-Item -ItemType Directory -Force -Path $layout | Out-Null
 Copy-Item "$pubDir\*" $layout -Recurse -Force

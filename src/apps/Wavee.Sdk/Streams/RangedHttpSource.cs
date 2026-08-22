@@ -1,13 +1,48 @@
+using System.Diagnostics;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
-using System.Diagnostics;
 
-namespace Wavee.Backend.Audio;
+namespace Wavee.Sdk.Streams;
 
-internal enum AudioNetworkRecoveryStage { Started, Attempt, Recovered, Exhausted, Cancelled }
+/// <summary>Why a ranged byte fetch failed, in source-neutral terms. Hosts map this onto their own failure vocabulary.</summary>
+public enum StreamFailureReason
+{
+    /// <summary>No failure.</summary>
+    None = 0,
+    /// <summary>Transport-level: DNS, connect, reset, timeout, or a transient 5xx that outlived the budget.</summary>
+    Network,
+    /// <summary>The origin refused the request (401 / 403 / 404 / 416).</summary>
+    Restricted,
+    /// <summary>The response violated the ranged-HTTP contract (bad <c>Content-Range</c>, missing length, size change).</summary>
+    ProtocolFault,
+}
 
-internal readonly record struct AudioNetworkRecoveryEvent(
+/// <summary>Where a network-recovery lifecycle currently is.</summary>
+public enum AudioNetworkRecoveryStage
+{
+    /// <summary>Recovery became user-visible (a fetch outlived the visibility delay, or failed outright).</summary>
+    Started,
+    /// <summary>One attempt failed; another follows.</summary>
+    Attempt,
+    /// <summary>A later attempt succeeded.</summary>
+    Recovered,
+    /// <summary>The budget ran out — the fetch fails with <see cref="AudioRangeFetchException"/>.</summary>
+    Exhausted,
+    /// <summary>The caller cancelled while recovery was in flight.</summary>
+    Cancelled,
+}
+
+/// <summary>One observation of the network-recovery lifecycle of a single ranged fetch.</summary>
+/// <param name="Stage">Lifecycle stage.</param>
+/// <param name="SourceId">The source's name (a file id, a url — whatever the caller named it).</param>
+/// <param name="Host">The origin host being talked to.</param>
+/// <param name="RangeStart">First byte requested, inclusive.</param>
+/// <param name="RangeEnd">Last byte requested, exclusive.</param>
+/// <param name="Attempt">1-based attempt number.</param>
+/// <param name="ElapsedMs">Milliseconds since the fetch began.</param>
+/// <param name="Error">The failure that triggered this observation, if any.</param>
+public readonly record struct AudioNetworkRecoveryEvent(
     AudioNetworkRecoveryStage Stage,
     string SourceId,
     string Host,
@@ -17,16 +52,24 @@ internal readonly record struct AudioNetworkRecoveryEvent(
     long ElapsedMs,
     Exception? Error = null);
 
-internal sealed class AudioRangeFetchException : IOException
+/// <summary>A ranged fetch that exhausted its whole recovery budget.</summary>
+public sealed class AudioRangeFetchException : IOException
 {
-    public AudioKeyFailureReason Reason { get; }
+    /// <summary>Source-neutral failure reason (always <see cref="StreamFailureReason.Network"/> today).</summary>
+    public StreamFailureReason Reason { get; }
+    /// <summary>The source's name.</summary>
     public string SourceId { get; }
+    /// <summary>First byte requested, inclusive.</summary>
     public long RangeStart { get; }
+    /// <summary>Last byte requested, exclusive.</summary>
     public long RangeEnd { get; }
+    /// <summary>How many attempts were made.</summary>
     public int Attempts { get; }
+    /// <summary>Total milliseconds spent before giving up.</summary>
     public long ElapsedMs { get; }
 
-    public AudioRangeFetchException(AudioKeyFailureReason reason, string sourceId, long rangeStart, long rangeEnd,
+    /// <summary>Create the terminal fetch failure.</summary>
+    public AudioRangeFetchException(StreamFailureReason reason, string sourceId, long rangeStart, long rangeEnd,
         int attempts, long elapsedMs, Exception? inner)
         : base($"audio range recovery exhausted after {elapsedMs}ms ({attempts} attempts): {inner?.Message}", inner)
     {
@@ -39,19 +82,29 @@ internal sealed class AudioRangeFetchException : IOException
     }
 }
 
-internal sealed class CdnPermanentException : IOException
+/// <summary>A failure that retrying cannot fix: the origin refused the request or broke the ranged-HTTP contract.</summary>
+public sealed class CdnPermanentException : IOException
 {
-    public AudioKeyFailureReason Reason { get; }
-    public CdnPermanentException(string message, AudioKeyFailureReason reason = AudioKeyFailureReason.EmulationFault)
+    /// <summary>Source-neutral failure reason.</summary>
+    public StreamFailureReason Reason { get; }
+
+    /// <summary>Create a permanent failure.</summary>
+    public CdnPermanentException(string message, StreamFailureReason reason = StreamFailureReason.ProtocolFault)
         : base(message) => Reason = reason;
 }
 
-internal sealed record RangedHttpRecoveryPolicy(
+/// <summary>How hard a <see cref="RangedHttpSource"/> tries before a foreground fetch fails.</summary>
+/// <param name="VisibilityMs">How long a fetch may run before recovery is announced to the caller.</param>
+/// <param name="BudgetMs">Total wall-clock budget across every attempt.</param>
+/// <param name="AttemptTimeoutMs">Per-attempt timeout.</param>
+/// <param name="Jitter">Optional deterministic jitter hook (tests pass <c>_ =&gt; 0</c>); null = random ±20%.</param>
+public sealed record RangedHttpRecoveryPolicy(
     int VisibilityMs = 500,
     int BudgetMs = 90_000,
     int AttemptTimeoutMs = 8_000,
     Func<int, int>? Jitter = null)
 {
+    /// <summary>The shipping policy: announce after 500 ms, give up after 90 s, 8 s per attempt.</summary>
     public static RangedHttpRecoveryPolicy Default { get; } = new();
 }
 
@@ -59,20 +112,19 @@ internal sealed record RangedHttpRecoveryPolicy(
 /// Decrypt-agnostic ranged-HTTP byte source: HTTP Range GETs with mirror failover, a background read-ahead, and a
 /// buffered raw-chunk store tracked by a <see cref="RangeSet"/>. It stores RAW (untransformed) bytes only — any decrypt
 /// transform is applied by the CALLER on copy-out (see <see cref="ReadRaw"/>), which is what keeps range re-reads and
-/// clean-span reuse correct. Extracted verbatim from <see cref="SpotifyAudioStream"/> (Stage 1) so the plain-HTTP and
-/// Spotify-CDN paths can share one fetch layer. Knows nothing about clear heads, decrypt, or <see cref="Stream"/>.
+/// clean-span reuse correct. Knows nothing about clear heads, decrypt, or <see cref="Stream"/>.
 /// </summary>
-internal sealed class RangedHttpSource : IDisposable
+public sealed class RangedHttpSource : IDisposable
 {
     const int MinFetchBytes = 64 * 1024;
     const int MaxReadAheadBytes = 256 * 1024;
-    internal const int CdnChunkBytes = AudioBodyDiskCache.ChunkBytes;
-    static readonly bool RangeTrace = string.Equals(
-        Environment.GetEnvironmentVariable("WAVEE_AUDIO_RANGE_TRACE"), "1", StringComparison.Ordinal);
+
+    /// <summary>The chunk granularity of the in-memory raw store — the <see cref="ChunkDiskCache"/> chunk size.</summary>
+    public const int CdnChunkBytes = ChunkDiskCache.ChunkBytes;
 
     readonly HttpClient _http;
     readonly string _name;
-    readonly WaveeLogger _log;
+    readonly StreamLogger _log;
     readonly int _headFloor;                 // read-ahead never dips below this (the caller's clear-head length)
     readonly Action? _onRangeAvailable;      // wake the caller's readers after a fetch / resume (caller pulses its gate)
     readonly Action<AudioNetworkRecoveryEvent>? _onRecovery;
@@ -85,7 +137,7 @@ internal sealed class RangedHttpSource : IDisposable
     readonly object _sizeGate = new();
     readonly object _dataGate = new();
     readonly Dictionary<int, byte[]> _cdnChunks = new();
-    readonly AudioBodyDiskCache? _disk;
+    readonly ChunkDiskCache? _disk;
     readonly RangedHttpRecoveryPolicy _recoveryPolicy;
     int _foregroundFetches;
     int _mirrorCursor = -1;
@@ -98,9 +150,25 @@ internal sealed class RangedHttpSource : IDisposable
     volatile bool _stopped;
     Task? _readAheadTask;
 
-    public RangedHttpSource(HttpClient http, string name, WaveeLogger log, int headFloor,
+    // Per-range tracing is gated on the sink's Trace level (never an environment switch): at the default Info level
+    // nothing is emitted, and turning the host's logger down to Trace turns the whole range ledger on.
+    bool RangeTrace => _log.IsEnabled(StreamLogLevel.Trace);
+
+    /// <summary>Create a source. Call <see cref="Configure"/> before any fetch.</summary>
+    /// <param name="http">The client every range GET goes through (pooling/timeouts are the caller's).</param>
+    /// <param name="name">Diagnostic name AND the disk-cache key.</param>
+    /// <param name="log">Optional logger; <c>default</c> is a no-op.</param>
+    /// <param name="headFloor">Read-ahead never dips below this offset (the caller's clear-head length).</param>
+    /// <param name="onRangeAvailable">Pulsed after every successful fetch so the caller can wake blocked readers.</param>
+    /// <param name="requireRange">False tolerates a 200 (server ignored Range) by buffering the whole body once.</param>
+    /// <param name="maxRetries">Per-mirror attempts for transient 5xx / network faults.</param>
+    /// <param name="baseBackoffMs">Exponential backoff base for those retries.</param>
+    /// <param name="disk">Optional sparse chunk cache consulted before, and filled after, every fetch.</param>
+    /// <param name="onRecovery">Optional network-recovery telemetry sink.</param>
+    /// <param name="recoveryPolicy">Foreground recovery budget; null = <see cref="RangedHttpRecoveryPolicy.Default"/>.</param>
+    public RangedHttpSource(HttpClient http, string name, StreamLogger log, int headFloor,
         Action? onRangeAvailable, bool requireRange = true, int maxRetries = 1, int baseBackoffMs = 150,
-        AudioBodyDiskCache? disk = null, Action<AudioNetworkRecoveryEvent>? onRecovery = null,
+        ChunkDiskCache? disk = null, Action<AudioNetworkRecoveryEvent>? onRecovery = null,
         RangedHttpRecoveryPolicy? recoveryPolicy = null)
     {
         _http = http ?? throw new ArgumentNullException(nameof(http));
@@ -116,8 +184,13 @@ internal sealed class RangedHttpSource : IDisposable
         _recoveryPolicy = recoveryPolicy ?? RangedHttpRecoveryPolicy.Default;
     }
 
+    /// <summary>The total size once known (from a <c>Content-Range</c>, a buffered 200, or the disk cache); 0 until then.</summary>
     public long KnownSize => Volatile.Read(ref _size);
+
+    /// <summary>True when every byte of <c>[start, end)</c> is buffered.</summary>
     public bool ContainsRange(long start, long end) => _ranges.ContainsRange(start, end);
+
+    /// <summary>The contiguous buffered run starting at <paramref name="start"/>, or 0.</summary>
     public long ContainedLengthFrom(long start) => _ranges.ContainedLengthFrom(start);
 
     /// <summary>Set the mirror list (+ optional known size). Called once before <see cref="StartReadAhead"/>.</summary>
@@ -134,7 +207,7 @@ internal sealed class RangedHttpSource : IDisposable
         if (knownSize is > 0) SetSize(knownSize.Value);
     }
 
-    /// <summary>Eager priming for the non-lazy attach path: first <see cref="MinFetchBytes"/> + the head-boundary window.</summary>
+    /// <summary>Eager priming for the non-lazy attach path: first 64 KiB + the head-boundary window.</summary>
     public async Task PrimeAsync(CancellationToken ct)
     {
         var size = Volatile.Read(ref _size);
@@ -150,6 +223,7 @@ internal sealed class RangedHttpSource : IDisposable
         try { _disposeCts.Cancel(); } catch (ObjectDisposedException) { }
     }
 
+    /// <summary>Start (or restart) the background read-ahead loop.</summary>
     public void StartReadAhead()
     {
         if (_stopped || _disposeCts.IsCancellationRequested) return;
@@ -157,6 +231,7 @@ internal sealed class RangedHttpSource : IDisposable
         _readAheadTask = Task.Run(ReadAheadLoopAsync, CancellationToken.None);
     }
 
+    /// <summary>Tell the read-ahead where the reader is now.</summary>
     public void MarkProgress(long offset)
     {
         if (Volatile.Read(ref _readAheadPauseCount) > 0) return;
@@ -164,12 +239,14 @@ internal sealed class RangedHttpSource : IDisposable
         StartReadAhead();
     }
 
+    /// <summary>Suspend read-ahead until the returned lease is disposed (nestable).</summary>
     public IDisposable PauseReadAhead()
     {
         Interlocked.Increment(ref _readAheadPauseCount);
         return new ReadAheadPause(this);
     }
 
+    /// <summary>Resume read-ahead from an explicit offset (after a seek).</summary>
     public void ResumeReadAheadAt(long offset)
     {
         Volatile.Write(ref _readAheadOffset, Math.Max(offset, _headFloor));
@@ -196,10 +273,10 @@ internal sealed class RangedHttpSource : IDisposable
         if (_ranges.ContainsRange(start, end)) return;
 
         var sw = Stopwatch.StartNew();
-        if (RangeTrace) _log.Info($"stream {_name}: prefetch boundary start range=[{start},{end})");
+        if (RangeTrace) TraceLine($"stream {_name}: prefetch boundary start range=[{start},{end})");
         if (recover) await FetchRangeWithRecoveryAsync(start, end, ct).ConfigureAwait(false);
         else await FetchRangeAsync(start, end, ct).ConfigureAwait(false);
-        if (RangeTrace) _log.Info($"stream {_name}: prefetch boundary ok bytes={end - start} elapsed={sw.ElapsedMilliseconds}ms");
+        if (RangeTrace) TraceLine($"stream {_name}: prefetch boundary ok bytes={end - start} elapsed={sw.ElapsedMilliseconds}ms");
     }
 
     async Task ReadAheadLoopAsync()
@@ -241,7 +318,7 @@ internal sealed class RangedHttpSource : IDisposable
         }
     }
 
-    /// <summary>Blocking: ensure [start, start+length) is buffered, fetching synchronously on a miss. Throws on
+    /// <summary>Blocking: ensure <c>[start, start+length)</c> is buffered, fetching synchronously on a miss. Throws on
     /// unrecoverable fetch failure (the caller's read path surfaces it exactly as before).</summary>
     public void EnsureRange(long start, int length)
     {
@@ -250,10 +327,12 @@ internal sealed class RangedHttpSource : IDisposable
         if (start >= end) return;
         if (_ranges.ContainsRange(start, end)) return;
         var sw = Stopwatch.StartNew();
-        if (RangeTrace) _log.Info($"stream {_name}: decode range miss range=[{start},{end}) requested={length}B");
+        if (RangeTrace) TraceLine($"stream {_name}: decode range miss range=[{start},{end}) requested={length}B");
         FetchRangeWithRecoveryAsync(start, end, _disposeCts.Token).GetAwaiter().GetResult();
-        if (RangeTrace) _log.Info($"stream {_name}: decode range ready range=[{start},{end}) elapsed={sw.ElapsedMilliseconds}ms");
+        if (RangeTrace) TraceLine($"stream {_name}: decode range ready range=[{start},{end}) elapsed={sw.ElapsedMilliseconds}ms");
     }
+
+    void TraceLine(string message) => _log.Log(StreamLogLevel.Trace, message);
 
     async Task FetchRangeWithRecoveryAsync(long start, long end, CancellationToken ct)
     {
@@ -325,7 +404,7 @@ internal sealed class RangedHttpSource : IDisposable
             await Task.Delay(Math.Min(remaining, Math.Max(0, ladder + jitter)), ct).ConfigureAwait(false);
         }
 
-        var terminal = new AudioRangeFetchException(AudioKeyFailureReason.Network, _name, start, end,
+        var terminal = new AudioRangeFetchException(StreamFailureReason.Network, _name, start, end,
             round, sw.ElapsedMilliseconds, last);
         PublishRecovery(AudioNetworkRecoveryStage.Exhausted, host, start, end, round, sw.ElapsedMilliseconds, terminal);
         throw terminal;
@@ -346,7 +425,7 @@ internal sealed class RangedHttpSource : IDisposable
             or AudioNetworkRecoveryStage.Exhausted or AudioNetworkRecoveryStage.Cancelled)
             _log.Info($"audio.network_recovery.{stage.ToString().ToLowerInvariant()} source={_name} host={host} range=[{start},{end}) attempt={attempt} elapsed={elapsedMs}ms error={error?.GetType().Name}: {error?.Message}");
         else if (RangeTrace)
-            _log.Info($"audio.network_recovery.attempt source={_name} host={host} range=[{start},{end}) attempt={attempt} elapsed={elapsedMs}ms error={error?.GetType().Name}: {error?.Message}");
+            TraceLine($"audio.network_recovery.attempt source={_name} host={host} range=[{start},{end}) attempt={attempt} elapsed={elapsedMs}ms error={error?.GetType().Name}: {error?.Message}");
     }
 
     async Task FetchRangeAsync(long start, long end, CancellationToken ct)
@@ -390,7 +469,7 @@ internal sealed class RangedHttpSource : IDisposable
         var urls = _cdnUrls;
         int firstMirror = urls.Length == 0 ? 0 : (int)((uint)Interlocked.Increment(ref _mirrorCursor) % (uint)urls.Length);
         var sw = Stopwatch.StartNew();
-        if (RangeTrace) _log.Info($"stream {_name}: range fetch start range=[{start},{end}) bytes={end - start}");
+        if (RangeTrace) TraceLine($"stream {_name}: range fetch start range=[{start},{end}) bytes={end - start}");
 
         for (int mirrorOffset = 0; mirrorOffset < urls.Length; mirrorOffset++)
         {
@@ -409,7 +488,7 @@ internal sealed class RangedHttpSource : IDisposable
                         // Range-optional (plain-HTTP server ignored Range): buffer the whole body once and serve all reads from it.
                         await BufferFullBodyAsync(resp, ct).ConfigureAwait(false);
                         _onRangeAvailable?.Invoke();
-                        if (RangeTrace) _log.Info($"stream {_name}: full-body fetch ok (range ignored) size={Volatile.Read(ref _size)} elapsed={sw.ElapsedMilliseconds}ms");
+                        if (RangeTrace) TraceLine($"stream {_name}: full-body fetch ok (range ignored) size={Volatile.Read(ref _size)} elapsed={sw.ElapsedMilliseconds}ms");
                         return;
                     }
                     if (resp.StatusCode != HttpStatusCode.PartialContent)
@@ -418,8 +497,8 @@ internal sealed class RangedHttpSource : IDisposable
                             or HttpStatusCode.TooManyRequests || (int)resp.StatusCode >= 500;
                         var statusReason = resp.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden
                             or HttpStatusCode.NotFound or HttpStatusCode.RequestedRangeNotSatisfiable
-                            ? AudioKeyFailureReason.Restricted
-                            : AudioKeyFailureReason.EmulationFault;
+                            ? StreamFailureReason.Restricted
+                            : StreamFailureReason.ProtocolFault;
                         last = transientStatus
                             ? new HttpRequestException($"CDN {(int)resp.StatusCode}")
                             : new CdnPermanentException($"CDN {(int)resp.StatusCode}", statusReason);
@@ -461,7 +540,7 @@ internal sealed class RangedHttpSource : IDisposable
                     _ranges.AddRange(start, start + read);
                     FlushCompletedChunks(start, start + read);
                     _onRangeAvailable?.Invoke();
-                    if (RangeTrace) _log.Info($"stream {_name}: range fetch ok range=[{start},{start + read}) bytes={read} elapsed={sw.ElapsedMilliseconds}ms");
+                    if (RangeTrace) TraceLine($"stream {_name}: range fetch ok range=[{start},{start + read}) bytes={read} elapsed={sw.ElapsedMilliseconds}ms");
                     return;
                 }
                 catch (Exception ex) when (ex is HttpRequestException or IOException or TaskCanceledException)
@@ -475,7 +554,7 @@ internal sealed class RangedHttpSource : IDisposable
         }
 
         if (RangeTrace)
-            _log.Info($"stream {_name}: range fetch failed range=[{start},{end}) elapsed={sw.ElapsedMilliseconds}ms error={last?.GetType().Name}: {last?.Message}");
+            TraceLine($"stream {_name}: range fetch failed range=[{start},{end}) elapsed={sw.ElapsedMilliseconds}ms error={last?.GetType().Name}: {last?.Message}");
         throw last ?? new IOException($"all CDN mirrors failed for range [{start},{end})");
     }
 
@@ -495,7 +574,7 @@ internal sealed class RangedHttpSource : IDisposable
     }
 
     /// <summary>Copy buffered RAW (untransformed) bytes into <paramref name="destination"/>. The caller applies any
-    /// decrypt transform afterwards. Throws if the range is not buffered — same contract as the old ReadCdnBytes.</summary>
+    /// decrypt transform afterwards. Throws if the range is not buffered.</summary>
     public void ReadRaw(long start, byte[] destination, int destinationOffset, int count)
     {
         lock (_dataGate)
@@ -595,8 +674,10 @@ internal sealed class RangedHttpSource : IDisposable
         _disk?.SetSize(_name, size);
     }
 
+    /// <summary>Drop this source's entry from the disk cache (a key change invalidated the stored ciphertext).</summary>
     public void InvalidateDiskCache() => _disk?.Invalidate(_name);
 
+    /// <summary>Stop read-ahead, wait briefly for the loop, and release the fetch resources.</summary>
     public void Dispose()
     {
         Stop();
@@ -626,98 +707,4 @@ internal sealed class RangedHttpSource : IDisposable
             Interlocked.Exchange(ref _owner, null)?.ReleaseReadAheadPause();
         }
     }
-
-    sealed class RangeSet
-    {
-        readonly object _lock = new();
-        readonly List<ByteRange> _ranges = new();
-
-        public bool ContainsRange(long start, long end)
-        {
-            if (start >= end) return true;
-            lock (_lock)
-            {
-                var idx = FindRangeContaining(start);
-                return idx >= 0 && _ranges[idx].End >= end;
-            }
-        }
-
-        public long ContainedLengthFrom(long start)
-        {
-            lock (_lock)
-            {
-                var idx = FindRangeContaining(start);
-                return idx < 0 ? 0 : _ranges[idx].End - start;
-            }
-        }
-
-        public List<ByteRange> GetGaps(long start, long end)
-        {
-            var gaps = new List<ByteRange>();
-            if (start >= end) return gaps;
-            lock (_lock)
-            {
-                var cur = start;
-                foreach (var range in _ranges)
-                {
-                    if (range.End <= cur) continue;
-                    if (range.Start >= end) break;
-                    if (range.Start > cur) gaps.Add(new ByteRange(cur, Math.Min(range.Start, end)));
-                    cur = Math.Max(cur, range.End);
-                    if (cur >= end) break;
-                }
-                if (cur < end) gaps.Add(new ByteRange(cur, end));
-            }
-            return gaps;
-        }
-
-        public void AddRange(long start, long end)
-        {
-            if (start >= end) return;
-            lock (_lock)
-            {
-                var mergeStart = start;
-                var mergeEnd = end;
-                var first = -1;
-                var last = -1;
-                for (int i = 0; i < _ranges.Count; i++)
-                {
-                    var r = _ranges[i];
-                    if (r.End >= mergeStart && r.Start <= mergeEnd)
-                    {
-                        if (first < 0) first = i;
-                        last = i;
-                        mergeStart = Math.Min(mergeStart, r.Start);
-                        mergeEnd = Math.Max(mergeEnd, r.End);
-                    }
-                }
-
-                var merged = new ByteRange(mergeStart, mergeEnd);
-                if (first >= 0)
-                {
-                    _ranges.RemoveRange(first, last - first + 1);
-                    _ranges.Insert(first, merged);
-                }
-                else
-                {
-                    var insert = _ranges.FindIndex(r => r.Start > end);
-                    if (insert < 0) _ranges.Add(merged);
-                    else _ranges.Insert(insert, merged);
-                }
-            }
-        }
-
-        int FindRangeContaining(long position)
-        {
-            for (int i = 0; i < _ranges.Count; i++)
-            {
-                var r = _ranges[i];
-                if (position >= r.Start && position < r.End) return i;
-                if (r.Start > position) break;
-            }
-            return -1;
-        }
-    }
-
-    readonly record struct ByteRange(long Start, long End);
 }

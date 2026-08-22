@@ -41,6 +41,50 @@ public static class LocalPlayables
         return Build(uri, pathOrUrl, TrackOrigin.Streamed, "media", probeDurationMs);
     }
 
+    /// <summary>A PLAYBACK-MODULE playable as a Track: the synthetic row the queue carries for a YouTube/Twitch/radio
+    /// link the user pasted. The uri is the module's own namespace (<c>wavee:module:&lt;id&gt;:&lt;b64url(playableId)&gt;</c>),
+    /// so <c>ModuleMediaProvider.Owns</c> routes it and nothing between play-intent and the host names a source type.
+    /// <para><see cref="TrackOrigin.Streamed"/> (never Local — a module playable is not a file), and
+    /// <c>DurationMs = 0</c> because the length is only known after <c>playback/resolve</c>, and is 0 forever for a
+    /// live stream. The projection folds a duration only when it is &gt; 0, so 0 simply leaves the seek bar without a
+    /// total — which is exactly right for LIVE.</para></summary>
+    /// <param name="moduleId">The module that owns the playable (its manifest id).</param>
+    /// <param name="playableId">The module-private playable id.</param>
+    /// <param name="title">Display title; falls back to the playable id when the module did not supply one.</param>
+    /// <param name="form">Audio or video — the router carries it to <c>VideoActions.PlayAs</c>.</param>
+    /// <param name="artists">Display artists, or null.</param>
+    /// <param name="artworkUrl">Absolute artwork url, or null.</param>
+    public static Track ForModule(string moduleId, string playableId, string? title, Wavee.Sdk.MediaForm form,
+        IReadOnlyList<string>? artists = null, string? artworkUrl = null)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(moduleId);
+        ArgumentNullException.ThrowIfNull(playableId);
+        string uri = Wavee.Sdk.ModuleUri.Encode(moduleId, playableId);
+        var artistRefs = artists is { Count: > 0 }
+            ? BuildArtistRefs(artists)
+            : Array.Empty<ArtistRef>();
+        _ = form;   // stated on the wire + the cache; the Track itself stays media-kind-neutral (see VideoPresence)
+        return new Track(
+            Id: EntityUri.IdOf(uri),
+            Uri: uri,
+            Title: string.IsNullOrWhiteSpace(title) ? playableId : title!,
+            Artists: artistRefs,
+            Album: new AlbumRef("", "", ""),
+            DurationMs: 0,
+            IsExplicit: false,
+            Image: string.IsNullOrWhiteSpace(artworkUrl) ? null : new Image(artworkUrl!),
+            Origin: TrackOrigin.Streamed,
+            Availability: Availability.Playable,
+            Source: "module:" + moduleId);
+    }
+
+    static ArtistRef[] BuildArtistRefs(IReadOnlyList<string> names)
+    {
+        var refs = new ArtistRef[names.Count];
+        for (int i = 0; i < names.Count; i++) refs[i] = new ArtistRef("", "", names[i] ?? "");
+        return refs;
+    }
+
     static Track Build(string uri, string pathOrUrl, TrackOrigin origin, string source, Func<string, long>? probe)
     {
         long durationMs = 0;

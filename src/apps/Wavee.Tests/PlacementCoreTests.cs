@@ -836,4 +836,60 @@ public class PlacementCoreTests
             Assert.True(PlacementCore.Invariant(next));
         }
     }
+
+    // ── gate.media.single-transport ─────────────────────────────────────────────────────────────────────────────────
+    // The stacked-double-bar defect: Wavee's fullscreen surface reserved a band so the global 72-DIP PlayerBar stayed
+    // visible UNDER the video's own transport, and nothing suppressed either — two live scrub rows for one session in
+    // one window. The structural fix is that transport ownership is DERIVED from the resolved placement, so "both are
+    // visible" is unrepresentable rather than merely fixed. These pin that derivation.
+
+    /// <summary>Exactly ONE <see cref="TransportOwner"/> claims the transport for every placement value. Two
+    /// independent visibility flags is precisely what let two owners both render.</summary>
+    [Fact]
+    public void SingleTransport_ExactlyOneOwnerPerPlacement()
+    {
+        Assert.True(PlacementCore.SingleTransportInvariant());
+        foreach (var p in PlacementCore.AllPlacements)
+            Assert.Equal(1, PlacementCore.TransportClaimants(p));
+    }
+
+    /// <summary>The named regression: in fullscreen the transport belongs to the video surface, NOT the global bar, so
+    /// the bar unmounts its scrub row and play/pause instead of stacking a second one under the video's.</summary>
+    [Fact]
+    public void SingleTransport_FullscreenTakesItFromTheGlobalBar()
+    {
+        Assert.Equal(TransportOwner.Fullscreen, PlacementCore.TransportOwnerOf(At(SurfacePlacement.Fullscreen)));
+        Assert.False(PlacementCore.OwnsTransport(TransportOwner.GlobalBar, SurfacePlacement.Fullscreen));
+    }
+
+    /// <summary>In-window placements leave the transport with the bar — it is full-width, always visible and never
+    /// scrolled away, so the card suppresses its own rather than the other way round.</summary>
+    [Fact]
+    public void SingleTransport_InWindowPlacementsLeaveItWithTheBar()
+    {
+        Assert.Equal(TransportOwner.GlobalBar, PlacementCore.TransportOwnerOf(At(SurfacePlacement.Docked)));
+        Assert.Equal(TransportOwner.GlobalBar, PlacementCore.TransportOwnerOf(At(SurfacePlacement.Floating)));
+        Assert.Equal(TransportOwner.GlobalBar, PlacementCore.TransportOwnerOf(Off()));
+    }
+
+    /// <summary>The pop-out is a SEPARATE OS window, so it carries the transport for its own window while the main
+    /// window's bar keeps hers. The invariant is one transport per WINDOW, not per session — stripping the main
+    /// window's scrub row because a video plays in another window would be a regression, not a fix.</summary>
+    [Fact]
+    public void SingleTransport_PopOutDoesNotDisarmTheMainWindowBar()
+    {
+        Assert.Equal(TransportOwner.PopOut, PlacementCore.TransportOwnerOf(At(SurfacePlacement.Detached)));
+        // PlayerBar's cross-window exemption: it renders for GlobalBar and PopOut, and yields only to Fullscreen.
+        Assert.NotEqual(TransportOwner.Fullscreen, PlacementCore.TransportOwnerOf(At(SurfacePlacement.Detached)));
+    }
+
+    /// <summary>A placement that resolved AWAY (unavailable) hands the transport straight back to the bar — ownership
+    /// is derived from the RESOLVED placement, never from what was requested.</summary>
+    [Fact]
+    public void SingleTransport_DerivesFromResolvedNotRequested()
+    {
+        var stranded = At(SurfacePlacement.Fullscreen, PlacementSet.None);
+        Assert.Equal(SurfacePlacement.None, PlacementCore.Resolve(stranded));
+        Assert.Equal(TransportOwner.GlobalBar, PlacementCore.TransportOwnerOf(stranded));
+    }
 }

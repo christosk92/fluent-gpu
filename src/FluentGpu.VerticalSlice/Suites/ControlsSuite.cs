@@ -2087,8 +2087,16 @@ static class ControlsSuite
             // Row layout: plain 0–20 | field 30–80 (text 30–50, gap 50–60, affix 60–80) | link 90–110.
             disp.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(100, 10), 0, 0) });
             bool hand = last == CursorId.Hand;                  // explicit Hand (the HyperlinkButton case)
+            var cursorOwner = new object();
+            var wrongOwner = new object();
+            disp.SetCursorOverride(cursorOwner, CursorId.Hidden);
+            bool hidden = last == CursorId.Hidden;
             disp.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(10, 10), 0, 0) });
-            bool plainArrow = last == CursorId.Arrow;           // clickable WITHOUT a declared cursor → arrow, not hand
+            bool heldHidden = last == CursorId.Hidden;          // hover churn cannot reveal a player-owned hidden cursor
+            disp.SetCursorOverride(wrongOwner, null);
+            bool wrongOwnerHeld = last == CursorId.Hidden;      // an inactive sibling cannot release another owner
+            disp.SetCursorOverride(cursorOwner, null);
+            bool plainArrow = last == CursorId.Arrow;           // release resolves the current hover chain immediately
             disp.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(40, 10), 0, 0) });
             bool inherited = last == CursorId.IBeam;            // cursor-less child falls through to the field's I-beam
             disp.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(70, 10), 0, 0) });
@@ -2100,8 +2108,8 @@ static class ControlsSuite
             disp.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(300, 200), 0, 0) });
             bool offArrow = last == CursorId.Arrow;             // off-control: a REAL IBeam→Arrow transition must fire
             Check("E2.l hover resolves the cursor (no clickable hand; explicit inherits; Arrow masks ancestor I-beam; own surface; off→arrow)",
-                hand && plainArrow && inherited && masked && ownSurface && offArrow,
-                $"hand={hand} plain={plainArrow} inherit={inherited} mask={masked} own={ownSurface} off={offArrow}");
+                hand && hidden && heldHidden && wrongOwnerHeld && plainArrow && inherited && masked && ownSurface && offArrow,
+                $"hand={hand} hidden={hidden}/{heldHidden}/{wrongOwnerHeld} plain={plainArrow} inherit={inherited} mask={masked} own={ownSurface} off={offArrow}");
         }
     }
 
@@ -8559,7 +8567,9 @@ static class ControlsSuite
             window.Show();
             var device = new HeadlessGpuDevice();
             var fonts = new HeadlessFontSystem(strings);
-            var player = PlayingPlayer();
+            // A VIDEO player: auto-hide is suppressed outright for audio-only media (there is no picture to reveal, so
+            // taking the controls away would leave a blank rectangle), and this gate is about the PIN, not about S9.
+            var player = PlayingPlayer(new SizeI(640, 360));
             var probe = new MediaPlayerHostProbe { Player = player, HideMs = 200f };
             using var host = new AppHost(app, window, device, fonts, strings, probe);
             host.RunFrame();
@@ -8942,6 +8952,51 @@ static class ControlsSuite
             Check("gate.media.el.fullscreen-delegates",
                 invoked && overlaysBefore == 0 && host.Scene.OverlayCount == 0,
                 $"invoked={invoked} overlaysBefore={overlaysBefore} overlaysAfter={host.Scene.OverlayCount}");
+        }
+
+        // gate.media.el.host-commands — an app with an authoritative playback controller owns transport intent.
+        // Surface input must call that controller and leave the underlying player untouched until the owner reconciles it.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("g5g-mpe-host-cmd", new Size2(420, 280), 1f));
+            window.Show();
+            var player = PlayingPlayer();
+            int plays = 0, pauses = 0, seeks = 0;
+            TimeSpan target = default;
+            SeekMode seekMode = default;
+            var root = new FluentGpu.Controls.Media.MediaPlayerElement
+            {
+                Player = player,
+                PlayRequested = () => plays++,
+                PauseRequested = () => pauses++,
+                SeekRequested = (t, mode) => { seeks++; target = t; seekMode = mode; },
+            };
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, root);
+            host.RunFrame();
+            player.Pump(TimeSpan.FromMilliseconds(1)); host.RunFrame();
+            player.Pump(TimeSpan.FromMilliseconds(1)); host.RunFrame();
+
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Tab)); host.RunFrame();
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Space)); host.RunFrame();
+            bool pauseRouted = pauses == 1 && player.IsPlayRequested.Peek();
+            // Arrow keys are the FINE step (+/-5 s) and J/L the coarse one (+/-10 s) — the YouTube/mpv split every
+            // player ships. Both route through the owner, and both commit Accurate (a discrete jump is not a scrub).
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Right)); host.RunFrame();
+            bool seekRouted = seeks == 1 && target == TimeSpan.FromSeconds(5) && seekMode == SeekMode.Accurate;
+            // Repeated seeks CHAIN from the pending target, not from the stale reported playhead: a host-owned seek
+            // takes a network round-trip to confirm, so re-deriving from Position would make every tap after the first
+            // land on the same place. 5 s (arrow) + 10 s (L) = 15 s.
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.L)); host.RunFrame();
+            seekRouted &= seeks == 2 && target == TimeSpan.FromSeconds(15) && seekMode == SeekMode.Accurate;
+
+            player.PauseAsync().GetAwaiter().GetResult();
+            host.RunFrame();   // publish the owner's reconciled intent before the next surface command
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Space)); host.RunFrame();
+            bool playRouted = plays == 1 && !player.IsPlayRequested.Peek();
+
+            Check("gate.media.el.host-commands routes play/pause/seek through the authoritative owner",
+                pauseRouted && seekRouted && playRouted,
+                $"pause={pauses}/intentHeld={pauseRouted} seek={seeks}@{target.TotalSeconds:0}/{seekMode} play={plays}/intentHeld={playRouted}");
         }
 
         // gate.media.el.one-surface-per-player — E4: the registry enforces single-writer PER SLOT, not per PLAYER;

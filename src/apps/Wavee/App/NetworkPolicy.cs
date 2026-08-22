@@ -37,6 +37,8 @@ static class NetworkPolicy
 
     /// <summary>The persisted metered cap (0..2). Seeded at <see cref="Install"/>; the Settings combo writes it.</summary>
     public static Signal<int> MeteredQualityCap { get; } = new(WaveeSettings.MeteredQualityCap.Default);
+    /// <summary>Protected-video Auto cap on a metered connection. Zero means unlimited.</summary>
+    public static Signal<int> MeteredVideoMaxHeight { get; } = new(WaveeSettings.VideoMeteredMaxHeight.Default);
 
     /// <summary>True when prefetch/warm downloads should wait (metered). Unknown cost does not defer.</summary>
     public static bool ShouldDeferPrefetch => _cost.IsMetered;
@@ -57,6 +59,7 @@ static class NetworkPolicy
         try
         {
             MeteredQualityCap.Value = Math.Clamp(settings.Get(WaveeSettings.MeteredQualityCap), QualityMin, QualityMax);
+            MeteredVideoMaxHeight.Value = Math.Max(0, settings.Get(WaveeSettings.VideoMeteredMaxHeight));
         }
         catch { }
 
@@ -97,6 +100,14 @@ static class NetworkPolicy
     /// <summary>The <see cref="AudioQualityPreference"/> the resolver should aim at (Ogg rungs only — Lossless reserved).</summary>
     public static AudioQualityPreference EffectiveQualityPreference(IAppSettings settings)
         => (AudioQualityPreference)EffectiveQuality(settings);
+
+    /// <summary>Protected-video Auto height cap for the current connection. <see cref="int.MaxValue"/> means unlimited.</summary>
+    public static int EffectiveVideoMaxHeight(IAppSettings settings)
+    {
+        if (!_cost.IsMetered) return int.MaxValue;
+        int cap = Math.Max(0, settings.Get(WaveeSettings.VideoMeteredMaxHeight));
+        return cap == 0 ? int.MaxValue : cap;
+    }
 
     public static void Shutdown()
     {

@@ -19,7 +19,7 @@ namespace Wavee.SpotifyLive;
 //
 // ONE AP connection: the persistent AP channel for audio keys is the LOGIN socket, adopted by SpotifyLiveSpclient and
 // passed in here — there is NO second handshake. If it's null (couldn't be retained), the resolver falls back gracefully.
-public sealed class LiveConnect : IDisposable
+public sealed partial class LiveConnect : IDisposable
 {
     public NowPlayingProjection Projection { get; }
     public LiveConnectDevices Devices { get; }
@@ -56,6 +56,10 @@ public sealed class LiveConnect : IDisposable
     /// machine's device registration is gone even when the socket looks alive. Not the same as
     /// <see cref="RepublishPlayerState"/>, which only reports transport state.</summary>
     public void AnnounceNewConnection() => _publisher.AnnounceNewConnection();
+    /// <summary>Apply the global protected-video preference to the live session (and future loads).</summary>
+    public void SetVideoQualityPreference(int height) => _videoHost.SetPreferredQuality(height);
+    /// <summary>Re-evaluate the metered Auto cap for the live protected-video session.</summary>
+    public void RefreshVideoQualityPolicy() => _videoHost.RefreshQualityPolicy();
     readonly ConnectService _connect;
     readonly DeviceStatePublisher _publisher;
     readonly ConnectStateBuilder _stateBuilder;
@@ -72,6 +76,10 @@ public sealed class LiveConnect : IDisposable
     readonly RawCoreStreamProjection? _gabo;
     readonly ResumePointProjection? _resume;
     readonly GaboBatcher? _gaboBatcher;
+    readonly Wavee.Backend.Modules.ModuleHost? _modules;              // the app-level module host (pre-login composed)
+    readonly Wavee.Backend.Modules.ModuleProjectionRelay _moduleRelay;
+    readonly Wavee.Backend.Modules.ModuleReloadPolicy _moduleReload = new();
+    Action<string, string?>? _onLiveMetadata;                        // the ICY StreamTitle relay (detached on Dispose)
 
     /// <param name="hydrator">THE hydration façade the now-playing projection upgrades a thin cluster row through
     /// (design §1.5) — REQUIRED and POSITIONAL, never an optional tail parameter. The `?? NotOwnedEntityHydrator.Instance`
@@ -123,7 +131,8 @@ public sealed class LiveConnect : IDisposable
         // The video-media host: the VIDEO half of the ONE current media. Constructed regardless of the audio backend (it is
         // self-contained — a resolved PopOutVideoSource carries its own descriptor/relay), so the SilentAudioHost path still
         // has a real video host available for the swap.
-        _videoHost = new FluentVideoMediaHost(playbackLog);
+        settings ??= AppDataSettings.ForUnpackaged("Wavee", "Wavee");
+        _videoHost = new FluentVideoMediaHost(playbackLog, settings: settings);
         // Mute is a property of the CURRENT MEDIA, not of its audio half: the player bar / picker set it through
         // IAudioOutputDeviceControl, which only the audio host implements, so a mute set while (or before) a music video is
         // the current media used to be dropped on the floor. The composite routes it to both hosts; everything else is the
@@ -144,15 +153,16 @@ public sealed class LiveConnect : IDisposable
         // REGISTRATION ORDER IS THE ROUTING TABLE (first Owns wins): Spotify first because it is every hot playable, then the
         // two engine-free local sources. Those two are constructed UNCONDITIONALLY — they need no session, no network and no
         // credentials, which is precisely what makes them the validation cases for the seam.
+        //
+        // …and the PLAYBACK MODULES come last, with their provider instances taken VERBATIM from the app-level
+        // ModuleHost (composed pre-login in Services). Registration order is the routing table, so go-live is exactly
+        // "prepend Spotify to the table the app already had" — the same ModuleMediaProvider objects keep serving, and a
+        // module link that was playing before sign-in keeps routing to the very provider that resolved it.
         MediaProviderRegistry? media = audio?.TrackResolver is { } liveResolver && fast is not null
-            ? new MediaProviderRegistry(
-                new SpotifyMediaProvider(liveResolver, fast),
-                new LocalFileMediaProvider(probeDurationMs: LocalAudioDurationProbe.Probe),
-                new GenericMediaProvider(probeDurationMs: LocalAudioDurationProbe.Probe))
+            ? new MediaProviderRegistry(BuildProviderTable(new SpotifyMediaProvider(liveResolver, fast)))
             : null;
         var outbound = new LiveOutboundControl(transport, deviceId, () => _connect.CurrentConnectionId);
         var gaboCtx = GaboContextFactory.Create();
-        settings ??= AppDataSettings.ForUnpackaged("Wavee", "Wavee");
         var gaboSeq = settings.Get(WaveeSettings.GaboGlobalSequence);
         _gaboBatcher = new GaboBatcher(transport, gaboCtx, initialSequenceNumber: gaboSeq, refreshTokens: refreshTokens,
             persistSequence: seq => settings.Set(WaveeSettings.GaboGlobalSequence, seq), log: telemetryLog);
@@ -178,6 +188,21 @@ public sealed class LiveConnect : IDisposable
             _publisher.PublishUriMask = ConnectUriMask.For(media);
         }
 
+        // ── the MODULE facts on the now-playing projection ────────────────────────────────────────────────────────
+        // LIVE-ness follows the current playable, a module's `playback/metadata` becomes the now-playing override, and
+        // an expired locator asks for a reload. Identical wiring pre-login (Services) and live (here) — one relay.
+        _modules = Wavee.Backend.Modules.ModuleHost.Current;
+        _moduleRelay = Wavee.Backend.Modules.ModuleProjectionRelay.Attach(Projection, _modules);
+        _moduleRelay.CurrentPlayableExpired += OnModulePlayableExpired;
+
+        // The station's own in-band "now playing" line (the ICY StreamTitle block). The audio host discovers this
+        // capability by interface — the IAudioDspControl precedent — so a host without it simply never fires.
+        if (_host is ILiveMetadataSource liveMeta)
+        {
+            _onLiveMetadata = (raw, station) => _moduleRelay.OnLiveStreamTitle(raw, station);
+            liveMeta.MetadataKnown += _onLiveMetadata;
+        }
+
         _commands = new ConnectCommandRouter(
             transport,
             (cmd, ct) => Controller.HandleRemoteCommandAsync(cmd, ct),
@@ -185,6 +210,21 @@ public sealed class LiveConnect : IDisposable
             log);
         Devices.TransferHandler = (id, c) => Controller.TransferToAsync(id, c);
         _clock.Start();
+    }
+
+    /// <summary>The go-live routing table: Spotify first (every hot playable), then the two engine-free local sources,
+    /// then one provider per installed playback module — the SAME instances the app-level host owns.</summary>
+    static IPlayableMediaProvider[] BuildProviderTable(SpotifyMediaProvider spotify)
+    {
+        var modules = Wavee.Backend.Modules.ModuleHost.Current?.Providers ?? Array.Empty<IPlayableMediaProvider>();
+        var table = new List<IPlayableMediaProvider>(3 + modules.Count)
+        {
+            spotify,
+            new LocalFileMediaProvider(probeDurationMs: LocalAudioDurationProbe.Probe),
+            new GenericMediaProvider(probeDurationMs: LocalAudioDurationProbe.Probe),
+        };
+        table.AddRange(modules);
+        return table.ToArray();
     }
 
     // ── M0 — "one media, one host, one player": the app-level video hooks ─────────────────────────────────────────────────
@@ -274,18 +314,73 @@ public sealed class LiveConnect : IDisposable
         //    source the host was playing, and if it is an override, quarantine that exact (uri, key) for the session, drop the
         //    cached source, tell the user once, and answer TRUE so the controller re-runs the load — which now walks past the
         //    attachment to the official video, or to audio. Anything else answers FALSE, i.e. today's behavior byte-for-byte.
-        Controller.TryRecoverVideoAsync = (track, _) =>
+        Controller.TryRecoverVideoAsync = async (track, ct) =>
         {
-            if (overrides is null) return Task.FromResult(false);
-            var key = bridge.PopOutVideoSource.Peek()?.Key;
-            if (key is not { Length: > 0 } || !key.StartsWith(Wavee.Backend.VideoOverride.SourceKeyPrefix, StringComparison.Ordinal))
-                return Task.FromResult(false);
-            overrides.Quarantine(track.Uri, key);
-            bridge.InvalidateVideoSource(track.Uri);   // else the reload would hand the same broken source straight back
-            bridge.NotifyVideoOverrideUnplayable(track.Uri);
-            _playbackLog.Info($"attached video {key} failed to open for {track.Uri} — quarantined for this session; falling back");
-            return Task.FromResult(true);
+            // A MODULE playable's video failed to open. The overwhelmingly likely cause is a dead locator (signed,
+            // IP-bound, minutes-to-hours-lived), so the recovery is the same as the expiry path: re-resolve with
+            // `force`, drop the cached source, and answer TRUE so the controller re-runs the load against the fresh
+            // url. Bounded by ModuleReloadPolicy — after three tries the answer is FALSE and the controller faults
+            // honestly rather than looping on a broadcast that has genuinely ended.
+            if (_modules is { } host && Wavee.Sdk.ModuleUri.TryDecode(track.Uri, out _, out _))
+            {
+                if (!await _moduleReload.TryReResolveAsync(host, track.Uri, ct).ConfigureAwait(false))
+                {
+                    _playbackLog.Info($"module video for {track.Uri} could not be re-resolved - giving up");
+                    return false;
+                }
+
+                bridge.InvalidateVideoSource(track.Uri);
+                _playbackLog.Info($"module video for {track.Uri} re-resolved after a media failure - reloading");
+                return true;
+            }
+
+            return RecoverAttachedVideo(track, bridge, overrides);
         };
+    }
+
+    // The user-attached-file half of TryRecoverVideoAsync, unchanged: quarantine that exact (uri, key) for the session,
+    // drop the cached source, tell the user once, and answer TRUE so the controller walks past the attachment.
+    bool RecoverAttachedVideo(Track track, PlaybackBridge bridge, VideoOverrideService? overrides)
+    {
+        if (overrides is null) return false;
+        var key = bridge.PopOutVideoSource.Peek()?.Key;
+        if (key is not { Length: > 0 } || !key.StartsWith(Wavee.Backend.VideoOverride.SourceKeyPrefix, StringComparison.Ordinal))
+            return false;
+        overrides.Quarantine(track.Uri, key);
+        bridge.InvalidateVideoSource(track.Uri);   // else the reload would hand the same broken source straight back
+        bridge.NotifyVideoOverrideUnplayable(track.Uri);
+        _playbackLog.Info($"attached video {key} failed to open for {track.Uri} — quarantined for this session; falling back");
+        return true;
+    }
+
+    // ── module locator expiry / failure → RE-RESOLVE, then reload ────────────────────────────────────────────────────
+    // A module's media locator is short-lived by nature: a YouTube HLS url is signed, IP-bound and dies after ~6 h; a
+    // Twitch playback token expires sooner. Two things say so — the module's own `playback/expired` notification (the
+    // pre-emptive path, below) and a NETWORK failure from the media engine (the reactive path, folded into the video
+    // recovery hook in WireVideoMedia). Both do the same thing: re-resolve with `force`, drop the cached source, and
+    // let the controller reload — bounded to three attempts per playable so a genuinely dead broadcast faults honestly
+    // instead of looping.
+    void OnModulePlayableExpired(string playableUri) => _ = ReloadModulePlayableAsync(playableUri);
+
+    async Task ReloadModulePlayableAsync(string playableUri)
+    {
+        if (_modules is not { } host) return;
+        try
+        {
+            if (!await _moduleReload.TryReResolveAsync(host, playableUri).ConfigureAwait(false))
+            {
+                _playbackLog.Info($"module locator for {playableUri} expired and could not be re-resolved");
+                return;
+            }
+
+            _playbackLog.Info($"module locator for {playableUri} re-resolved after expiry - reloading");
+            await Controller.RefreshCurrentMediaKindAsync(forceReloadIfVideo: true, clearConnectAudioFirst: false)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _playbackLog.Info("module reload failed: " + ex.Message);
+        }
     }
 
     async Task RefreshMediaKindAsync(bool forceReloadIfVideo = false, bool clearConnectAudioFirst = true)
@@ -309,6 +404,10 @@ public sealed class LiveConnect : IDisposable
     {
         if (_onVideoPlayerChanged is { } relay) { try { _videoHost.PlayerChanged -= relay; } catch { } _onVideoPlayerChanged = null; }
         if (_onVideoDurationKnown is { } durRelay) { try { _videoHost.DurationKnown -= durRelay; } catch { } _onVideoDurationKnown = null; }
+        if (_onLiveMetadata is { } metaRelay && _host is ILiveMetadataSource liveMetaSource)
+        { try { liveMetaSource.MetadataKnown -= metaRelay; } catch { } _onLiveMetadata = null; }
+        try { _moduleRelay.CurrentPlayableExpired -= OnModulePlayableExpired; } catch { }
+        try { _moduleRelay.Dispose(); } catch { }
         try { Controller.DeactivateIfActiveOwner(); } catch { }   // best-effort clean is_active=false hand-off on logout
         _commands.Dispose();
         _publisher.Dispose();

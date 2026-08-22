@@ -121,6 +121,7 @@ Run it (host wiring): see **[getting-started.md](./getting-started.md)**.
 | Record → DrawList (the GPU command walk) | `src/FluentGpu.Engine/Render/SceneRecorder.cs` | composites transform/opacity without re-record |
 | Theming tokens / colors | `src/FluentGpu.Engine/Dsl/Tokens.cs` (`Tok`), `Theme.cs` | `Tok.Use(ThemeKind)` re-themes in one pointer write |
 | Tests / golden checks | `src/FluentGpu.VerticalSlice/Program.cs` | add a `Check(...)`; call it from `Main` |
+| Wavee **playback modules** (out-of-process sources: YouTube/Twitch/radio/Spotify) | SDK `src/apps/Wavee.Sdk/**`, host `src/apps/Wavee/Backend/Modules/**`, modules `src/apps/modules/**` | app-level, not engine — the wire, the manifest and the build/publish layout are **[playback-modules.md](./playback-modules.md)** |
 
 **Design corpus** (architecture source-of-truth, canon-gated) lives in `docs/design/`. The as-built reactive model is
 `docs/design/subsystems/reconciler-hooks.md §0bis`. After editing `docs/design/*`, run `powershell -File docs/design/check-canon.ps1`.
@@ -169,6 +170,14 @@ Run it (host wiring): see **[getting-started.md](./getting-started.md)**.
     WindowsApi-vs-PAL-vs-app ownership split, the threading table (which callback arrives on which thread), and what
     packaged identity is actually required for. Companions: **[shortcuts.md](./shortcuts.md)** (the user-facing key
     map) and **[startup-bench.md](./startup-bench.md)** (the `--startup-bench` probe + what the About receipts read).
+14. **[playback-modules.md](./playback-modules.md)** — the **Wavee app**'s playback-module system: a source
+    (YouTube, Twitch, internet radio, and next Spotify itself) ships as an independently updatable
+    **out-of-process exe** written against the public `Wavee.Sdk`, because a NativeAOT + `TrimMode full` app cannot
+    load a managed plugin. Carries the `wavee-module.json` manifest, the JSON-RPC-2.0-over-stdio wire (LSP framing,
+    binary frames for module-served audio bytes, version negotiation, permission-gated host services), a 20-line
+    author quick-start, `ModuleTestHost` + the CLI subcommands, the dev/publish/MSIX layouts, the diagnostics
+    surface, the update-store design, and the Spotify-migration plan — plus the verbatim research appendix the
+    three bundled modules were built from.
 
 ---
 

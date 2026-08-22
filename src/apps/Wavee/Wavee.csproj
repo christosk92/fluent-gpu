@@ -71,8 +71,52 @@
     <ProjectReference Include="..\..\FluentGpu.Windows\FluentGpu.Windows.csproj" />
     <ProjectReference Include="..\..\FluentGpu.WindowsApi\FluentGpu.WindowsApi.csproj" />
     <ProjectReference Include="..\Wavee.Core\Wavee.Core.csproj" />
+    <ProjectReference Include="..\Wavee.Sdk\Wavee.Sdk.csproj" />
     <ProjectReference Include="..\vendor\NVorbis\NVorbis\NVorbis.csproj" />
   </ItemGroup>
+
+  <!-- ── Bundled playback modules ─────────────────────────────────────────────────────────────────────────────
+       A playback module is an out-of-process exe that speaks the Wavee.Sdk JSON-RPC protocol over stdio; the app
+       discovers it at "<app dir>\modules\<id>\wavee-module.json" (docs/guide/playback-modules.md). The app NEVER
+       links a module: the ProjectReference exists only to order the build, hence ReferenceOutputAssembly=false +
+       Private=false, and UndefineProperties keeps the module a plain framework-dependent build even while Wavee
+       itself is being published for a RID (so the staged path below stays predictable). Each reference is
+       Exists()-guarded: a checkout without the module projects still builds, it just cannot play those sources.
+
+       Dev layout is staged by CopyBundledModules below; the PUBLISH layout (one NativeAOT exe per module) is
+       produced by ops/build/publish-wavee-modules.ps1, which publish-wavee-aot.ps1 and pack-wavee-msix.ps1 both
+       call. The dev manifest's entry is the .dll (host runs `dotnet <dll>`), the published one is the .exe -
+       one host code path, the manifest decides. -->
+  <ItemGroup>
+    <WaveeModule Include="YouTube" ModuleId="wavee.youtube"
+                 Condition="Exists('$(MSBuildProjectDirectory)\..\modules\Wavee.Module.YouTube\Wavee.Module.YouTube.csproj')" />
+    <WaveeModule Include="Twitch" ModuleId="wavee.twitch"
+                 Condition="Exists('$(MSBuildProjectDirectory)\..\modules\Wavee.Module.Twitch\Wavee.Module.Twitch.csproj')" />
+    <WaveeModule Include="Radio" ModuleId="wavee.radio"
+                 Condition="Exists('$(MSBuildProjectDirectory)\..\modules\Wavee.Module.Radio\Wavee.Module.Radio.csproj')" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="@(WaveeModule->'..\modules\Wavee.Module.%(Identity)\Wavee.Module.%(Identity).csproj')"
+                      ReferenceOutputAssembly="false" Private="false" PrivateAssets="all"
+                      UndefineProperties="RuntimeIdentifier;SelfContained;PublishAot;PublishTrimmed;PublishSingleFile" />
+  </ItemGroup>
+
+  <!-- Stage each module's framework-dependent build output next to Wavee.exe so `dotnet run` finds it at
+       $(TargetDir)modules\<id>\. Batched once per WaveeModule; ref\ holds reference assemblies the host never
+       loads. Published builds get the AOT layout from the script above instead. -->
+  <Target Name="CopyBundledModules" AfterTargets="Build" Condition="'@(WaveeModule)' != ''"
+          Outputs="%(WaveeModule.Identity)">
+    <PropertyGroup>
+      <_WaveeModuleBin>$(MSBuildProjectDirectory)\..\modules\Wavee.Module.%(WaveeModule.Identity)\bin\$(Configuration)\net10.0\</_WaveeModuleBin>
+      <_WaveeModuleDest>$(TargetDir)modules\%(WaveeModule.ModuleId)\</_WaveeModuleDest>
+    </PropertyGroup>
+    <ItemGroup>
+      <_WaveeModuleFile Include="$(_WaveeModuleBin)**\*" Exclude="$(_WaveeModuleBin)ref\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_WaveeModuleFile)"
+          DestinationFiles="@(_WaveeModuleFile->'$(_WaveeModuleDest)%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
 
   <!-- Gate on the client deriver, not just the sibling csproj: a partial PlayPlay junction (csproj only, no Client/)
        must not flip WAVEE_PLAYPLAY_LOCAL or AudioPlaybackStack references a type that never compiles. -->

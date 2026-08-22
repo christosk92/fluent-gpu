@@ -793,6 +793,16 @@ sealed class WaveeShell : Component
         chrome.Ui = _shellUi;
         chrome.Acts = _actions;
 
+        // FULLSCREEN VIDEO unmounts the shell's chrome. Not opacity-0, not off-screen: every layer left above a
+        // full-screen video costs GPU (it defeats the composition fast path the video hole relies on), and the docked
+        // player bar specifically is what STACKED a second transport under the video's own. Read as a Func (a
+        // Flow.Show predicate) rather than in this render body, so the enter/exit edge mounts and unmounts the two
+        // chrome bands WITHOUT re-rendering the whole shell — the same discipline the immersive-lyrics layer uses.
+        // The predicate reads PlaybackBridge.VideoFullscreenActive, the ONE derived value (resolved placement ==
+        // Fullscreen); there is deliberately no second "is fullscreen" flag anywhere in the shell.
+        var pbChrome = _actions.Playback;
+        bool ShellChromeMounted() => pbChrome is null || !pbChrome.VideoFullscreenActive.Value;
+
         var column = new BoxEl
         {
             Direction = 1, Grow = 1f, Height = Prop.Of(() => vpSig.Value.Height),   // window-tall → content yields, never overflows the player bar
@@ -842,7 +852,9 @@ sealed class WaveeShell : Component
                 // THE chrome row. One 48-DIP TitleBar in merged mode: the tabs island carries Wavee's nav cluster and
                 // the text-first strip, the flexible centre column carries the window-centred omnibar, and the trailing
                 // island carries identity. ContentVersion is mandatory here — see MergedChromeRow.ContentVersion.
-                Embed.Comp(() =>
+                // UNMOUNTED under fullscreen video (ShellChromeMounted): the OS window is borderless on its monitor,
+                // so a custom caption strip over the video would be chrome for a frame that no longer exists.
+                Flow.Show(ShellChromeMounted, Embed.Comp(() =>
                 {
                     var bar = new TitleBar
                     {
@@ -866,7 +878,7 @@ sealed class WaveeShell : Component
                     // so an expanding field can clamp itself without the bar re-rendering.
                     bar.CenterContent = _ => chrome.Center(bar.CenterAvail);
                     return bar;
-                }),
+                })),
                 // NO chrome↔content seam hairline here. Stock Win11 (WinUI NavigationView + the WinUI-Gallery shell) draws
                 // no bar-wide divider under the title bar: the separation IS the content region's own left+top stroke
                 // (see ContentRegionStroke below), which starts exactly where the page starts. A full-width hairline
@@ -1225,7 +1237,10 @@ sealed class WaveeShell : Component
                     OnRealized = h => { _contentRegionNode = h; PublishScrimClip(); },
                     OnBoundsChanged = _ => PublishScrimClip(),
                 },
-                Embed.Comp(() => new PlayerBar()),
+                // UNMOUNTED under fullscreen video (ShellChromeMounted) — the video surface's own auto-hiding transport
+                // is the ONLY transport for the duration. This is the double-bar fix's shell half: the surface stopped
+                // reserving a WaveeSize.PlayerBarH pass-through band, and the bar itself leaves the tree.
+                Flow.Show(ShellChromeMounted, Embed.Comp(() => new PlayerBar())),
             ],
         };
 
@@ -1338,7 +1353,9 @@ sealed class WaveeShell : Component
         // already sit, below. Enter/Exit terminals come from the surface itself; UNLIKE the lyrics stage's, they carry
         // NO opacity component — a cross-fade would wash the video hole out (see that surface's own remarks).
         var videoFullscreenLayer = Flow.Show(
-            () => _actions.Playback?.VideoPlacementNow() == SurfacePlacement.Fullscreen,
+            // The SAME derived value the chrome unmount reads (ShellChromeMounted) — one signal, so the surface
+            // mounting and the chrome leaving are the same edge and cannot disagree by a frame.
+            () => _actions.Playback?.VideoFullscreenActive.Value == true,
             new BoxEl
             {
                 // Same load-bearing Direction = 1 as the lyrics stage above — see its comment for why a row would let
@@ -1674,7 +1691,8 @@ sealed class WaveeShell : Component
         switch (verb.Kind)
         {
             case DeepLinkKind.Play:
-                _ = playback.Player.PlayAsync(verb.Context);
+                if (verb.Link.Length > 0) PlayLink.PlayDirect(_actions, verb.Link);   // the module path, same as Play ▸ Link…
+                else _ = playback.Player.PlayAsync(verb.Context);
                 break;
             case DeepLinkKind.Resume:
                 _ = playback.Player.ResumeAsync();
@@ -1929,6 +1947,13 @@ sealed class WaveeShell : Component
 
     // F11 toggles video fullscreen ONLY while a video is active (docked-video plan §5.4/B16-B18) — with no video
     // playing there is nothing to fill the screen with, so the chord is a no-op rather than opening an empty stage.
+    //
+    // NO DOUBLE-FIRE with MediaPlayerElement's own F11. The dispatcher runs FOCUSED routing first and only reaches
+    // FindAccelerator when nothing set Handled (InputDispatcher.OnKey — the WinUI ProcessKeyboardAccelerators order).
+    // With focus inside the player, the element consumes F11 and routes it to its FullscreenRequested delegate, which
+    // every Wavee surface wires to this same placement model; with focus anywhere else, this accelerator runs. Exactly
+    // one of the two fires, always — and both end at ShowVideoAt(Fullscreen)/ExitVideoFullscreen. The same holds for
+    // `F` and a double-click on the video, which the element handles and delegates identically.
     void ToggleVideoFullscreen()
     {
         if (_actions.Playback is not { } pb) return;

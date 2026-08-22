@@ -2,11 +2,18 @@ using System;
 using System.Collections.Concurrent;
 using System.Threading;
 using FluentGpu.Media;
+using FluentGpu.Media.Adaptive;
 using FluentGpu.Media.Windows;
 using FluentGpu.WindowsApi.Media.PlayReady;
 using Wavee.Backend;
 using Wavee.Backend.Audio;
 using Wavee.Core;
+
+// Both namespaces declare a SeekMode: the app's transport enum (Wavee.Core, framework-neutral, what the IMediaHost seam
+// speaks) and the engine's (FluentGpu.Media, what IMediaPlayer.SeekAsync takes). Aliased rather than fully qualified so
+// every use below reads unambiguously; this file is the boundary where one maps to the other.
+using SeekMode = Wavee.Core.SeekMode;
+using EngineSeekMode = FluentGpu.Media.SeekMode;
 
 namespace Wavee.SpotifyLive.Audio;
 
@@ -49,6 +56,7 @@ public sealed class FluentVideoMediaHost : IMediaHost
     readonly SimpleEvent<AudioHostSignal> _signals = new();
     readonly object _gate = new();
     readonly Timer _ticker;
+    readonly IAppSettings? _settings;
 
     // Every load/stop is serialized through ONE worker (teardown→build, latest-wins) so a predecessor's process-global
     // native Stop can never land on a successor session. See VideoLoadPump for the wedge this removes.
@@ -73,6 +81,9 @@ public sealed class FluentVideoMediaHost : IMediaHost
     // apart next time (see MfMediaSession's LATE NATURAL SIZE block, which is what keeps re-asking for it).
     bool _sizeLogged, _noSizeLogged;
     bool _disposed;
+    int _lastAppliedAutoCap = -1;
+    QualitySelection _lastObservedQuality;
+    bool _hasObservedQuality;
 
     // ── the per-load start watchdog (guarded by _gate; evaluated on the existing 200ms ticker, zero-alloc) ────────────
     VideoStartWatchdog _watchdog;
@@ -114,10 +125,11 @@ public sealed class FluentVideoMediaHost : IMediaHost
     static int DefaultStartWatchdogMs =>
         (int.TryParse(Environment.GetEnvironmentVariable("FG_VIDEO_START_TIMEOUT_MS"), out int t) && t > 0 ? t : 20_000) + 5_000;
 
-    public FluentVideoMediaHost(WaveeLogger log = default, int startWatchdogMs = 0)
+    public FluentVideoMediaHost(WaveeLogger log = default, int startWatchdogMs = 0, IAppSettings? settings = null)
     {
         if (startWatchdogMs <= 0) startWatchdogMs = DefaultStartWatchdogMs;
         _log = log;
+        _settings = settings;
         _watchdog = new VideoStartWatchdog(startWatchdogMs);
         _ticker = new Timer(_ => Tick(), null, Timeout.Infinite, Timeout.Infinite);
         _pump = new VideoLoadPump<VideoLoadRequest>(TeardownAsync, BuildAndOpenAsync, IsAlreadyLive, log);
@@ -206,14 +218,18 @@ public sealed class FluentVideoMediaHost : IMediaHost
         _pump.RequestClear();
     }
 
-    public void Seek(long positionMs) => SeekPlayer(CurrentPlayer, positionMs);
+    public void Seek(long positionMs, SeekMode mode) => SeekPlayer(CurrentPlayer, positionMs, mode);
 
     /// <summary>Seek one player instance, fail-soft. Shared by the transport <see cref="Seek"/> and by the load path, so
-    /// a repositioning request lands identically whether it arrives on the live session or with a fresh load.</summary>
-    void SeekPlayer(MediaPlayer? p, long positionMs)
+    /// a repositioning request lands identically whether it arrives on the live session or with a fresh load.
+    /// <para>The MODE is passed straight through to the engine: this is the one host that can actually honour it — a
+    /// keyframe seek skips the decode-to-exact-PTS pass, which is what makes a scrub preview cheap enough to issue
+    /// repeatedly during a drag (and what a DRM/CENC session needs to stay responsive while the thumb moves).</para></summary>
+    void SeekPlayer(MediaPlayer? p, long positionMs, SeekMode mode)
     {
         if (p is null) return;
-        try { _ = p.SeekAsync(TimeSpan.FromMilliseconds(Math.Max(0, positionMs)), SeekMode.Accurate); }
+        EngineSeekMode engineMode = mode == SeekMode.Keyframe ? EngineSeekMode.Keyframe : EngineSeekMode.Accurate;
+        try { _ = p.SeekAsync(TimeSpan.FromMilliseconds(Math.Max(0, positionMs)), engineMode); }
         catch (Exception ex) { _log.Info($"video-host seek failed: {ex.Message}"); }
     }
 
@@ -234,6 +250,23 @@ public sealed class FluentVideoMediaHost : IMediaHost
         var p = CurrentPlayer;
         if (p is not null) { try { p.SetMuted(_muted); } catch (Exception ex) { _log.Info($"video-host mute failed: {ex.Message}"); } }
     }
+
+    /// <summary>Apply and persist the app-wide protected-video preference. Zero selects true Auto; a height pins the
+    /// matching manifest rung. If no video is active, the preference is picked up by the next load.</summary>
+    public void SetPreferredQuality(int height)
+    {
+        height = Math.Max(0, height);
+        _settings?.Set(Wavee.WaveeSettings.VideoQuality, height);
+        var p = CurrentPlayer;
+        if (p is null) return;
+        if (height == 0) { _ = p.SelectQualityAsync(QualitySelection.Auto); return; }
+        for (int i = 0; i < p.Qualities.Variants.Count; i++)
+            if (p.Qualities.Variants[i].Resolution.Height == height)
+            { _ = p.SelectQualityAsync(QualitySelection.Pin(p.Qualities.Variants[i].Id)); return; }
+    }
+
+    /// <summary>Re-evaluate the metered Auto cap for the live player.</summary>
+    public void RefreshQualityPolicy() => ApplyQualityPolicy(CurrentPlayer);
 
     // ── video-specific load (called by the controller at the switch, NOT via IMediaHost) ─────────────────────────────
 
@@ -272,7 +305,8 @@ public sealed class FluentVideoMediaHost : IMediaHost
         if (req.StartAtMs > 0)
         {
             _log.Info($"video-host load ignored (already playing key={req.Source.Key}) — seeking live session to {req.StartAtMs}ms");
-            SeekPlayer(live, req.StartAtMs);
+            // A carried start position is a committed reposition, never a scrub.
+            SeekPlayer(live, req.StartAtMs, SeekMode.Accurate);
         }
         else _log.Info($"video-host load ignored — already playing key={req.Source.Key}");
         return true;
@@ -326,6 +360,65 @@ public sealed class FluentVideoMediaHost : IMediaHost
     /// inside the pump is the second half of the fix: a later teardown can then never land on a half-opened session whose
     /// <c>IMediaSession</c> had not been assigned yet (which would leak the native session and wedge every later video on
     /// the singleton latch).</summary>
+    MediaPlayer BuildProtectedPlayer(PopOutVideoSource src)
+    {
+        var descriptor = src.DrmDescriptor!;
+        int policyCap = _settings is null ? int.MaxValue : Wavee.NetworkPolicy.EffectiveVideoMaxHeight(_settings);
+        var abr = new AdaptiveBitrateController
+        {
+            MaxHeight = policyCap,
+        };
+        int preferredHeight = _settings?.Get(Wavee.WaveeSettings.VideoQuality) ?? 0;
+        if (preferredHeight > 0 && descriptor.Catalog is { } catalog)
+        {
+            for (int t = 0; t < catalog.Tracks.Count; t++)
+            {
+                var track = catalog.Tracks[t];
+                if (track.Kind != TrackKind.Video) continue;
+                for (int r = 0; r < track.Representations.Count; r++)
+                    if (track.Representations[r].Quality.Resolution.Height == preferredHeight)
+                    {
+                        abr.Selection = QualitySelection.Pin(track.Representations[r].Id);
+                        break;
+                    }
+                if (!abr.Selection.IsAuto) break;
+            }
+        }
+        return MediaPlayer.Build()
+            .WithBackend(MediaKind.MfVideoOrFile,
+                new MfMediaPlayer(new ProtectedMediaBackend(src.LicenseRelay!, descriptor)))
+            .WithAbr(abr)
+            .WithDrm(src.LicenseRelay!)
+            .Build();
+    }
+
+    void ApplyQualityPolicy(MediaPlayer? player)
+    {
+        if (player is null || _settings is null) return;
+        int cap = Wavee.NetworkPolicy.EffectiveVideoMaxHeight(_settings);
+        if (cap != _lastAppliedAutoCap)
+        {
+            _lastAppliedAutoCap = cap;
+            player.SetAdaptiveMaxHeight(cap == int.MaxValue ? 0 : cap);
+        }
+
+        QualitySelection selection = player.Qualities.Selected.Peek();
+        if (!_hasObservedQuality)
+        {
+            _lastObservedQuality = selection;
+            _hasObservedQuality = true;
+            return;
+        }
+        if (selection == _lastObservedQuality) return;
+        _lastObservedQuality = selection;
+        int height = 0;
+        if (!selection.IsAuto && selection.VariantId is { } id)
+            for (int i = 0; i < player.Qualities.Variants.Count; i++)
+                if (string.Equals(player.Qualities.Variants[i].Id, id, StringComparison.Ordinal))
+                { height = player.Qualities.Variants[i].Resolution.Height; break; }
+        _settings.Set(Wavee.WaveeSettings.VideoQuality, height);
+    }
+
     async System.Threading.Tasks.Task BuildAndOpenAsync(VideoLoadRequest req, long epoch)
     {
         PopOutVideoSource src = req.Source;
@@ -341,10 +434,7 @@ public sealed class FluentVideoMediaHost : IMediaHost
                 : src.IsDrm
                 // MfMediaPlayer routes a DrmConfig-carrying source to the injected DRM backend (native CDM); ProtectedMediaBackend
                 // carries the parsed Spotify descriptor (init/segment/stride/PSSH) and the relay POSTs the license challenge.
-                ? MediaPlayer.Build()
-                    .WithBackend(MediaKind.MfVideoOrFile, new MfMediaPlayer(new ProtectedMediaBackend(src.LicenseRelay!, src.DrmDescriptor!)))
-                    .WithDrm(src.LicenseRelay!)
-                    .Build()
+                ? BuildProtectedPlayer(src)
                 : MediaPlayer.Build()
                     .WithBackend(MediaKind.MfVideoOrFile, new MfMediaPlayer())
                     .Build();
@@ -384,6 +474,8 @@ public sealed class FluentVideoMediaHost : IMediaHost
             _startSeekPending = _startAtMs > 0;   // applied+clamped in Tick once the duration proves the session is seekable
             _playReassertsLeft = PlayReassertBudget;
             _watchdog.Arm(Environment.TickCount64);   // armed per load; disarmed by progress or by the next teardown
+            _lastAppliedAutoCap = -1;
+            _hasObservedQuality = false;
         }
         // Announce the new player so the mounted surface re-binds its MediaPlayerElement to THIS instance (the app marshals
         // this onto the UI thread; the event fires on the pump's worker thread).
@@ -469,6 +561,7 @@ public sealed class FluentVideoMediaHost : IMediaHost
         if (_disposed) return;
         var p = CurrentPlayer;
         if (p is null) return;
+        ApplyQualityPolicy(p);
 
         long pos = PositionMs;
 
@@ -506,7 +599,7 @@ public sealed class FluentVideoMediaHost : IMediaHost
                 if (start > 0)
                 {
                     _log.Info($"video-host applying carried position {start}ms (duration {durMs}ms, session now seekable)");
-                    SeekPlayer(p, start);
+                    SeekPlayer(p, start, SeekMode.Accurate);
                 }
             }
         }

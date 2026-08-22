@@ -117,6 +117,10 @@ public interface IMediaPlayer : IAsyncDisposable
     ValueTask SelectTrackAsync(MediaTrack? track);
     /// <summary>Enable automatic ABR or pin a representation.</summary>
     ValueTask SelectQualityAsync(QualitySelection selection);
+    /// <summary>Update the laid-out video height used to cap automatic ABR. Manual pins intentionally ignore this cap.</summary>
+    void SetAdaptiveViewportHeight(int height) { }
+    /// <summary>Update the policy/network height cap used by automatic ABR. Zero means unlimited.</summary>
+    void SetAdaptiveMaxHeight(int height) { }
     /// <summary>Seek to the current live edge.</summary>
     ValueTask GoLiveAsync();
     /// <summary>Seek to the previous chapter marker.</summary>

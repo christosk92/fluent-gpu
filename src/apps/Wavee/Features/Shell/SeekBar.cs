@@ -315,7 +315,7 @@ sealed class SeekBar : Component
         _b.PositionMs.Value = targetMs;                    // keep time labels + interpolation anchor in the same place
         _tickWallMs = Environment.TickCount64;
         _tickPosMs = targetMs;
-        _ = _b.Player.SeekAsync(targetMs);
+        _ = _b.Player.SeekAsync(targetMs, Wavee.Core.SeekMode.Accurate);   // drag-end commit: one exact seek
         _scrubbing.Value = false;                          // release the scrub gate (PositionFrac/interp resume)
         Recompute();
     }

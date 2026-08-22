@@ -573,7 +573,7 @@ public class LocalMediaProviderTests
         public void Play() => Playing = true;
         public void Pause() => Playing = false;
         public void Stop() => Playing = false;
-        public void Seek(long positionMs) { }
+        public void Seek(long positionMs, SeekMode mode) { }
         public void SetVolume(double volume01) { }
         public long PositionMs => 0;
         public bool IsPlaying => Playing;

@@ -113,6 +113,12 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
     // the next song; re-applied at BOTH _durMs write sites so a queue-mutation republish cannot revert it.
     string? _durOverrideUri;
     long _durOverrideMs;
+    // The LIVE-ness and NOW-PLAYING overrides, on exactly the duration override's terms: scoped to one playable uri,
+    // re-asserted nowhere (they are folded on READ, not written into _durMs/_track) and dropped the moment the current
+    // track changes. Live-ness is a fact the SOURCE stated; a broadcast's current-song title is a fact about the
+    // BROADCAST, which is why neither is written back onto the catalogue row.
+    string? _liveUri;
+    string? _metaUri, _metaTitle, _metaArtist;
     double _speed = 1.0;   // playback rate folded from the cluster (remote) / 1.0 (local); applied in Pos()
     IReadOnlyList<QueueEntry> _queue = Array.Empty<QueueEntry>();
     string? _lastLocalQueueDiagSig, _lastViewerQueueDiagSig, _lastRemoteClusterDiagSig;
@@ -183,7 +189,7 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
     public void NoteLocalCommand() { lock (_gate) { _lastLocalCmdWall = _now(); _inFlightSeq++; } }
 
     // ── IPlaybackState ────────────────────────────────────────────────────────────────────────────────────────────────
-    public Track? CurrentTrack { get { lock (_gate) return _track; } }
+    public Track? CurrentTrack { get { lock (_gate) return TrackWithOverridesLocked(); } }
     public string? ContextUri { get { lock (_gate) return _contextUri; } }
     public bool IsPlaying { get { lock (_gate) return _isPlaying; } }
     // Prebuffering (playing the clear head while key+body resolve) reads as "buffering" to the UI so the player-bar's
@@ -202,7 +208,12 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
     // >3 s restart affordance, derived at read because the playhead moves without a structural publish. Viewer: the
     // cluster restriction alone (findings fix §2).
     public bool CanSkipPrev { get { lock (_gate) return _canSkipPrev || (_hasLocalContext && Pos() > 3000); } }
-    public bool CanSeek { get { lock (_gate) return _canSeek; } }
+    // A live broadcast has no seekable past in v1, so CanSeek must say so — the seek bar and every remote
+    // controller read this one answer.
+    public bool CanSeek { get { lock (_gate) return _canSeek && !LiveOverrideAppliesLocked(); } }
+
+    /// <summary>Is the current playable a LIVE broadcast (see <see cref="SetLiveOverride"/>)?</summary>
+    public bool IsLive { get { lock (_gate) return LiveOverrideAppliesLocked(); } }
     public IObservable<IPlaybackState> Changes => _changes;
     public IObservable<long> PositionTicks => _positionTicks;
 
@@ -248,6 +259,108 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
 
     /// <summary>The duration override in effect right now (0 = none). Diagnostics / tests.</summary>
     public long DurationOverrideMs { get { lock (_gate) return DurationOverrideAppliesLocked() ? _durOverrideMs : 0; } }
+
+    /// <summary>Publish LIVE-ness for ONE playable — the structural twin of <see cref="SetDurationOverride"/>, and for
+    /// the same reason: whether a broadcast has an end is a fact the SOURCE states (a module's <c>isLive</c>, an engine
+    /// timeline's <c>IsLive</c>), not something the catalogue row carries. Scoped to one uri and dropped the moment the
+    /// current track changes, so it can never leak onto the next song; <paramref name="isLive"/> false clears it.
+    /// <para>While it applies, <see cref="CanSeek"/> reports false: there is no DVR window in v1, so a seek bar that
+    /// accepted a scrub would be lying about what it can do.</para></summary>
+    /// <param name="playableUri">The playable the fact is about; null/empty clears the override.</param>
+    /// <param name="isLive">True to mark it live; false clears.</param>
+    public void SetLiveOverride(string? playableUri, bool isLive)
+    {
+        bool changed;
+        lock (_gate)
+        {
+            if (playableUri is not { Length: > 0 } || !isLive)
+            {
+                changed = _liveUri is not null;
+                _liveUri = null;
+            }
+            else
+            {
+                changed = !string.Equals(_liveUri, playableUri, StringComparison.Ordinal);
+                _liveUri = playableUri;
+            }
+        }
+
+        if (changed) FireChanges();
+    }
+
+    /// <summary>Publish a live NOW-PLAYING correction for ONE playable: the ICY <c>StreamTitle</c> a station pushes
+    /// mid-stream, or a module's <c>playback/metadata</c>. Same scoping rules as the duration override — one uri,
+    /// dropped at the next track change — and folded into <see cref="CurrentTrack"/> on read rather than written into
+    /// the store, because it is a fact about the BROADCAST, not about a catalogue entity (the store has no row for it,
+    /// which is also why <c>MaybeEnrichCurrent</c> can never clobber it).</summary>
+    /// <param name="playableUri">The playable the correction is about; null/empty clears it.</param>
+    /// <param name="title">The new title, or null to leave the catalogue title alone.</param>
+    /// <param name="artist">The new artist/attribution line, or null to leave it alone.</param>
+    public void SetMetadataOverride(string? playableUri, string? title, string? artist)
+    {
+        bool changed;
+        lock (_gate)
+        {
+            if (playableUri is not { Length: > 0 } || (title is null && artist is null))
+            {
+                changed = _metaUri is not null;
+                _metaUri = null;
+                _metaTitle = null;
+                _metaArtist = null;
+            }
+            else
+            {
+                changed = !string.Equals(_metaUri, playableUri, StringComparison.Ordinal)
+                          || !string.Equals(_metaTitle, title, StringComparison.Ordinal)
+                          || !string.Equals(_metaArtist, artist, StringComparison.Ordinal);
+                _metaUri = playableUri;
+                _metaTitle = title;
+                _metaArtist = artist;
+            }
+        }
+
+        if (changed) FireChanges();
+    }
+
+    /// <summary>The metadata override in effect right now (both null = none). Diagnostics / tests.</summary>
+    public (string? Title, string? Artist) MetadataOverride
+    {
+        get { lock (_gate) return MetadataOverrideAppliesLocked() ? (_metaTitle, _metaArtist) : (null, null); }
+    }
+
+    bool LiveOverrideAppliesLocked()
+        => _liveUri is not null && _track is { } t && string.Equals(t.Uri, _liveUri, StringComparison.Ordinal);
+
+    bool MetadataOverrideAppliesLocked()
+        => _metaUri is not null && _track is { } t && string.Equals(t.Uri, _metaUri, StringComparison.Ordinal);
+
+    // Called immediately after every LOCAL _track write, exactly like SyncDurationOverrideLocked: a real track change
+    // ends both overrides. Caller holds _gate.
+    void SyncPlayableOverridesLocked()
+    {
+        if (_liveUri is not null && _track is not null && !LiveOverrideAppliesLocked()) _liveUri = null;
+        if (_metaUri is not null && _track is not null && !MetadataOverrideAppliesLocked())
+        {
+            _metaUri = null;
+            _metaTitle = null;
+            _metaArtist = null;
+        }
+    }
+
+    // The now-playing row as the UI must see it: the catalogue/cluster row with the broadcast's own title/artist folded
+    // over it. Caller holds _gate.
+    Track? TrackWithOverridesLocked()
+    {
+        if (_track is not { } t || !MetadataOverrideAppliesLocked()) return _track;
+        var artists = _metaArtist is { Length: > 0 } a
+            ? new[] { new ArtistRef("", "", a) }
+            : t.Artists;
+        return t with
+        {
+            Title = _metaTitle is { Length: > 0 } newTitle ? newTitle : t.Title,
+            Artists = artists,
+        };
+    }
 
     bool DurationOverrideAppliesLocked()
         => _durOverrideMs > 0 && _durOverrideUri is not null && _track is { } t
@@ -302,6 +415,7 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
             _track = snap.Current?.Track ?? ev?.Track;   // the single source of "current" while we're active
             if (_track is { DurationMs: > 0 } t) _durMs = t.DurationMs;
             SyncDurationOverrideLocked();   // a media-authoritative length outranks the catalog one (and survives republishes)
+            SyncPlayableOverridesLocked();  // …and a track change ends the live / now-playing overrides
             if (ev is { } e)
             {
                 switch (e.Kind)
@@ -437,6 +551,7 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
             }
             _durMs = c.DurationMs > 0 ? c.DurationMs : (c.HasTrack ? c.Track.DurationMs : _durMs);
             SyncDurationOverrideLocked();   // …unless the media reported this playable's real length (a video is its own edit)
+            SyncPlayableOverridesLocked();
             if (!suppressPlayState)
             {
                 // no-active-device Playing→Paused clamp (ported correctness): if nobody is active, we are not playing.
@@ -582,6 +697,7 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
                 // length, so every committed seek targets the wrong millisecond.
                 if (e.Track.DurationMs > 0) _durMs = e.Track.DurationMs;
                 SyncDurationOverrideLocked();   // …unless the media itself reported a length for this exact playable
+                SyncPlayableOverridesLocked();
             }
             switch (e.Kind)
             {

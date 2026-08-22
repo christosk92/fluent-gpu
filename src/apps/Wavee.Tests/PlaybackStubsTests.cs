@@ -39,7 +39,7 @@ public class PlaybackStubsTests
         await p.PauseAsync();
         await p.NextAsync();
         await p.PreviousAsync();
-        await p.SeekAsync(1000);
+        await p.SeekAsync(1000, SeekMode.Accurate);
         await p.SetVolumeAsync(0.5);
         await p.SetShuffleAsync(true);
         await p.SetRepeatAsync(RepeatMode.Context);

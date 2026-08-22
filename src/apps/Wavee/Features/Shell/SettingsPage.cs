@@ -69,6 +69,8 @@ sealed partial class SettingsPage : Component
             seeded.Value = true;
             _density.Value = svc.Settings.Get(WaveeSettings.RowDensity);
             _quality.Value = Math.Clamp(svc.Settings.Get(WaveeSettings.PlaybackQuality), 0, 2);
+            _videoQuality.Value = VideoQualityIndex(svc.Settings.Get(WaveeSettings.VideoQuality));
+            _meteredVideoQuality.Value = MeteredVideoQualityIndex(svc.Settings.Get(WaveeSettings.VideoMeteredMaxHeight));
             _eqPreset.Value = EqPresetIndex(svc.Settings.Get(WaveeSettings.EqualizerPreset));
             int crossMs = Math.Clamp(svc.Settings.Get(WaveeSettings.CrossfadeMs), 0, 12_000);
             _crossSecs.Value = crossMs / 1000.0;

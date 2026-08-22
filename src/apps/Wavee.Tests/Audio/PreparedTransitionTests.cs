@@ -126,7 +126,7 @@ public class PreparedTransitionTests
         public void Play() { }
         public void Pause() { }
         public void Stop() { }
-        public void Seek(long positionMs) { }
+        public void Seek(long positionMs, SeekMode mode) { }
         public void SetVolume(double volume01) { }
         public long PositionMs => 0;
         public bool IsPlaying => true;

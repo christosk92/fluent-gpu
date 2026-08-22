@@ -187,7 +187,8 @@ public sealed class SystemMediaControlsBridge : IDisposable
         long ms = (long)Math.Round(seconds * 1000.0);
         long dur = _bridge.DurationMs.Peek();
         ms = dur > 0 ? Math.Clamp(ms, 0, dur) : Math.Max(0, ms);
-        _ = _player.SeekAsync(ms);
+        // The OS scrub bar reports one position on release, not a scrub stream — a committed seek.
+        _ = _player.SeekAsync(ms, SeekMode.Accurate);
     }
 
     public void Dispose()

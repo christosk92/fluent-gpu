@@ -10,6 +10,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Wavee.Backend.Audio;
 using Xunit;
+using Wavee.Sdk.Streams;
 
 namespace Wavee.Tests.Audio;
 
@@ -108,7 +109,7 @@ public class SpotifyAudioStreamTests
             http, ReadOnlyMemory<byte>.Empty, 0, A.Key16(1), new[] { "https://cdn/a", "https://cdn/b" }, null,
             CancellationToken.None, policy));
 
-        Assert.Equal(AudioKeyFailureReason.Network, error.Reason);
+        Assert.Equal(StreamFailureReason.Network, error.Reason);
     }
 
     [Fact]

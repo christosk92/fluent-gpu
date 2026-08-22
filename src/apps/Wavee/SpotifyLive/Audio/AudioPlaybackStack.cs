@@ -11,6 +11,7 @@ using Wavee.Backend.Metadata;
 using Wavee.Backend.Spotify;
 using Wavee.Core;
 using Xm = Wavee.Protocol.ExtendedMetadata;
+using Wavee.Sdk.Streams;
 
 namespace Wavee.SpotifyLive.Audio;
 
@@ -23,7 +24,7 @@ public sealed class AudioPlaybackStack : IAsyncDisposable
     public HeadFileClient HeadClient { get; }
     public IAudioHost Host { get; }
     public LiveTrackResolver TrackResolver { get; }
-    public AudioBodyDiskCache? BodyDiskCache { get; }
+    public ChunkDiskCache? BodyDiskCache { get; }
     public LicenseKeyDiskCache? LicenseDiskCache { get; }
     public RuntimeAsset? RuntimeAsset { get; private set; }
     readonly WaveeLogger _log;

@@ -513,7 +513,7 @@ public class VideoOverrideTests
         public void Play() { IsPlaying = true; Note("play"); }
         public void Pause() { IsPlaying = false; Note("pause"); }
         public void Stop() { IsPlaying = false; Note("stop"); }
-        public void Seek(long ms) => Note("seek:" + ms);
+        public void Seek(long ms, SeekMode mode) => Note("seek:" + ms);
         public void SetVolume(double v) { }
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
@@ -528,7 +528,7 @@ public class VideoOverrideTests
         public void Play() { IsPlaying = true; Note("play"); }
         public void Pause() { IsPlaying = false; Note("pause"); }
         public void Stop() { IsPlaying = false; Note("stop"); }
-        public void Seek(long ms) => Note("seek:" + ms);
+        public void Seek(long ms, SeekMode mode) => Note("seek:" + ms);
         public void SetVolume(double v) { }
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }

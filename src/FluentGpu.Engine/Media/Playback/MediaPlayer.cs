@@ -274,6 +274,12 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable, IVideoPumpSour
     }
 
     /// <inheritdoc/>
+    public void SetAdaptiveViewportHeight(int height) => _session?.SetAdaptiveViewportHeight(height);
+
+    /// <inheritdoc/>
+    public void SetAdaptiveMaxHeight(int height) => _session?.SetAdaptiveMaxHeight(height);
+
+    /// <inheritdoc/>
     public ValueTask GoLiveAsync()
         => _disposed ? ValueTask.CompletedTask : (_session?.GoLiveAsync() ?? SeekAsync(_core.Timeline.Peek().LiveEdge));
 

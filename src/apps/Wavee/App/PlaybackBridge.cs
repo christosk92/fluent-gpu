@@ -139,6 +139,11 @@ public sealed class PlaybackBridge
     public Signal<bool> CanSkipNext { get; } = new(true);
     public Signal<bool> CanSkipPrev { get; } = new(true);
     public Signal<bool> CanSeek { get; } = new(true);
+    /// <summary>Is what is playing a LIVE broadcast (an internet radio station, a YouTube/Twitch live channel)?
+    /// Mirrors <see cref="IPlaybackState.IsLive"/> — a fact the SOURCE stated, never inferred from a 0 duration, which
+    /// is also what an unknown length looks like. Drives the player bar's LIVE chip; <see cref="CanSeek"/> is already
+    /// false while it is true, so no surface has to combine the two.</summary>
+    public Signal<bool> IsLive { get; } = new(false);
     public Signal<string?> ActiveDeviceId { get; } = new(null);
     /// <summary>The bitrate of the stream ACTUALLY PLAYING (0 = unknown / not this device). See
     /// <see cref="StreamFormat"/> for the truthfulness envelope both of these live inside.</summary>
@@ -192,6 +197,36 @@ public sealed class PlaybackBridge
     /// surface while the song kept playing underneath it).</para>
     /// </summary>
     public Signal<PlacementState> VideoSurface { get; } = new(PlacementState.Initial(PlacementPolicy.Video));
+
+    /// <summary>
+    /// WHO owns the playback transport right now — ONE derived signal, never a per-surface visibility flag. This is the
+    /// fix for the stacked double-bar: the fullscreen video surface and the global 72-DIP <c>PlayerBar</c> used to be
+    /// two independent owners, each rendering unconditionally, with nothing that could suppress either. Now every
+    /// transport-bearing component declares a <see cref="TransportOwner"/> identity and gates on this one value
+    /// (<c>if (TransportOwnerNow.Value != Mine) …</c>), so "both bars up at once" is unrepresentable — see
+    /// <see cref="PlacementCore.TransportOwnerFor"/> for the mapping and <c>gate.media.single-transport</c>
+    /// (<see cref="PlacementCore.SingleTransportInvariant"/>) for the assertion.
+    ///
+    /// <para>DERIVED, not stored: it reads <see cref="VideoSurface"/> through <see cref="PlacementCore.Resolve"/> on
+    /// every access, so it cannot drift from the placement the way a mirrored bool would. Reading <c>.Value</c> inside a
+    /// <c>Render</c>/effect subscribes to <see cref="VideoSurface"/> exactly as a direct read would.</para>
+    /// </summary>
+    public IReadSignal<TransportOwner> TransportOwnerNow { get; }
+
+    /// <summary>Whether the video is presenting FULLSCREEN right now — the same one derived value, in the shape the
+    /// shell needs. <c>WaveeShell</c> reads it to UNMOUNT (never hide) the title bar and the player bar, and
+    /// <c>VideoFullscreenSurface</c> drives real borderless OS fullscreen off the same edge. Deliberately derived from
+    /// the RESOLVED placement, not from <c>Requested</c>: a fullscreen request that could not resolve (no
+    /// <c>WindowSetFullscreen</c> hook, no video) must not strip the shell of its chrome.</summary>
+    public IReadSignal<bool> VideoFullscreenActive { get; }
+
+    /// <summary>A read-only PROJECTION of another signal (no stored value, no second write path, so it cannot drift).
+    /// Reading it reads the source, which is what subscribes the calling computation.</summary>
+    sealed class Derived<TSource, TValue>(IReadSignal<TSource> source, Func<TSource, TValue> map) : IReadSignal<TValue>
+    {
+        public TValue Value => map(source.Value);
+        public TValue Peek() => map(source.Peek());
+    }
 
     /// <summary>The global display policy shared by every video player mount (docked, floating, detached and
     /// fullscreen). Unlike playback intent, this is a durable preference and is seeded before the first frame.</summary>
@@ -688,6 +723,11 @@ public sealed class PlaybackBridge
         _state = player.State;
         _devices = devices;
         _session = session;
+        // The two DERIVED reads over the ONE placement state (see their doc comments). Built here rather than as
+        // property initializers only because a C# instance initializer cannot reach another instance member.
+        TransportOwnerNow = new Derived<PlacementState, TransportOwner>(VideoSurface, static s => PlacementCore.TransportOwnerOf(s));
+        VideoFullscreenActive = new Derived<PlacementState, bool>(VideoSurface,
+            static s => PlacementCore.Resolve(s) == SurfacePlacement.Fullscreen);
     }
 
     /// <summary>Subscribe Core observables → signals. Idempotent. Call once from a mount effect with <c>Context.UsePost()</c>.</summary>
@@ -974,6 +1014,10 @@ public sealed class PlaybackBridge
             // A user attachment makes ANY playable a video playable — including one the source serves no video for, and
             // including on a backend with no store at all (overrides work without Spotify).
             if (!has && _overrides is { } ov) has = ov.Has(uri);
+            // A module playable the module resolved as VIDEO (YouTube, Twitch): the same answer VideoPresence gives,
+            // read here too because this recompute is what mounts the surface — without it the video host loads the
+            // HLS session but no surface ever pumps it, and the start watchdog fires (observed 2026-08-22).
+            if (!has) has = Wavee.Backend.Modules.ModulePlayables.HasVideo(uri);
         }
         bool rawHas = has;
         has = HasVideoLatch.Apply(has, uri, ref _hasVideoLatchedUri);
@@ -1128,6 +1172,7 @@ public sealed class PlaybackBridge
         CanSkipNext.Value = s.CanSkipNext;
         CanSkipPrev.Value = s.CanSkipPrev;
         CanSeek.Value = s.CanSeek && s.RecoveryKind == PlaybackRecoveryKind.None;
+        IsLive.Value = s.IsLive;
         ActiveDeviceId.Value = s.ActiveDeviceId;
         StreamBitrateKbps.Value = s.StreamBitrateKbps;
         StreamFormat.Value = s.StreamFormat;

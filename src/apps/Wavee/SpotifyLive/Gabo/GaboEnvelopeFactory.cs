@@ -57,7 +57,7 @@ public static class GaboEnvelopeFactory
             Id = MonotonicClockId,
             Value = Monotonic.ElapsedMilliseconds,
         }.ToByteArray()));
-        envelope.EventFragment.Add(Fragment("context_sdk", new Sdk { VersionName = SdkVersionName, Type = SdkType }.ToByteArray()));
+        envelope.EventFragment.Add(Fragment("context_sdk", new Wavee.Protocol.EventSender.Sdk { VersionName = SdkVersionName, Type = SdkType }.ToByteArray()));
         envelope.EventFragment.Add(new EventEnvelope.Types.EventFragment { Name = "context_client_context_id", Data = ByteString.Empty });
         return envelope;
     }

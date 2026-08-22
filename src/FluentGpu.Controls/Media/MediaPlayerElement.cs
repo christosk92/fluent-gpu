@@ -1,5 +1,6 @@
 using System;
 using System.Threading;
+using FluentGpu.Animation;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
@@ -9,6 +10,17 @@ using FluentGpu.Scene;
 using FluentGpu.Signals;
 
 namespace FluentGpu.Controls.Media;
+
+/// <summary>When the pointer cursor may hide together with the transport chrome.</summary>
+public enum CursorAutoHidePolicy : byte
+{
+    /// <summary>Never hide the cursor (accessibility-safe; the chrome still hides).</summary>
+    Never,
+    /// <summary>Hide it only in fullscreen presentation — mpv's <c>--cursor-autohide-fs-only</c> and the default.</summary>
+    FullscreenOnly,
+    /// <summary>Hide it whenever the chrome hides and the pointer is over the video rect (kiosk / dedicated player).</summary>
+    Always,
+}
 
 /// <summary>How the video frame is scaled into the element's video area (WinUI <c>Stretch</c>).</summary>
 public enum MediaStretch : byte
@@ -37,8 +49,12 @@ public enum MediaStretch : byte
 /// <item><b>First-class fullscreen hand-off.</b> The fullscreen presentation shares the inline surface via an explicit
 ///   single-writer ownership transfer on the registry (<see cref="VideoSurfaceRegistry.TransferOwnership"/>) — a
 ///   non-owner pump is a no-op, so the two views never fight over the shared slot.</item>
-/// <item><b>Declarative idle-hide.</b> Auto-hide is a <see cref="Component.UseTimeout"/> restarted on pointer activity
-///   that consults <see cref="IOverlayService.IsAnchorPinned"/> — an open picker pins the chrome, no hand-rolled counter.</item>
+/// <item><b>One auto-hide chokepoint.</b> Eleven suppressors live in ONE pure predicate (<c>CanHide</c>) and every
+///   event — pointer, key, focus, menu, scrub, seek, state change — funnels into ONE method (<c>Reevaluate</c>) that
+///   owns the dwell timer. Nothing else may cancel or arm it, which is what retires the whole "flyout closed but the
+///   timer never restarted" bug class. The chrome stays MOUNTED across the cycle (a stable Key): visibility rides the
+///   opacity + hit-test + focusability channel, so hidden chrome is out of the hit-test, focus and accessibility trees
+///   and a re-reveal never rebuilds the seek bar at width 0.</item>
 /// <item><b>Controlled inputs + tokens.</b> Aspect/fullscreen are concrete signals (auto-materialized when absent); all
 ///   on-media ink/scrim/stage reads a <c>Tok.*</c> media token — no hardcoded colors.</item>
 /// </list>
@@ -53,6 +69,39 @@ public sealed class MediaPlayerElement : Component
         Enter: new EnterExit(Dy: 12f, Opacity: 0f, Active: true),
         Exit: new EnterExit(Dy: 12f, Opacity: 0f, Active: true),
         ExitDynamics: TransitionDynamics.Tween(140f, Easing.EaseInOut));
+    /// <summary>The poster cross-fades OUT as the first frame lands — 150 ms, the shortest fade that still reads as a
+    /// hand-off rather than a cut.</summary>
+    private const float PosterCrossFadeMs = 150f;
+    /// <summary>Nothing at all is drawn over the poster for this long. A spinner that flashes for 200 ms is worse than
+    /// no spinner: it reports trouble that did not happen.</summary>
+    private const float StartupSpinnerDelayMs = 500f;
+    /// <summary>Only past this may a DETERMINATE readout appear — before it, a percentage is noise with a number on it.</summary>
+    private const float StartupDetailDelayMs = 10_000f;
+    /// <summary>Upper bound on the S2 buffering suppressor. Buffering must suppress hiding; it must not LATCH it (a
+    /// stale 250 ms native sample used as a permanent force-show is what pinned the chrome forever on a hung start).</summary>
+    private const float BufferingSuppressMaxMs = 8_000f;
+    /// <summary>Force-show window after entering <see cref="PlaybackState.Opening"/> — the user gets the controls while
+    /// the stream starts, and then the normal machine takes over rather than pinning forever.</summary>
+    private const float OpeningForceShowMs = 3_000f;
+    /// <summary>Caption baseline inset from the bottom of the video area with the chrome DOWN.</summary>
+    private const float CaptionBottomMargin = 28f;
+    /// <summary>Volume nudge for the Up/Down keys and the wheel (5 points, the universal player step).</summary>
+    private const float VolumeStep = 0.05f;
+    /// <summary>Transport compaction threshold (DIP): below it, the chips fold into the ⋯ menu.</summary>
+    private const float CompactTransportWidth = 420f;
+
+    /// <summary>The poster's hand-off to the first video frame: a straight cross-fade, no scale, no slide. Anything
+    /// more is a transition ON TOP of a transition — the picture is already changing.</summary>
+    private static readonly LayoutTransition PosterMotion = new(
+        TransitionChannels.Opacity,
+        TransitionDynamics.Tween(PosterCrossFadeMs, Easing.FluentStandard),
+        Exit: new EnterExit(Opacity: 0f, Active: true),
+        ExitDynamics: TransitionDynamics.Tween(PosterCrossFadeMs, Easing.FluentStandard));
+    /// <summary>The caption lift. Transform-only (a FLIP), on the chrome's own clock: captions MOVE out of the
+    /// transport's way, the controls never move out of the captions' way.</summary>
+    private static readonly LayoutTransition CaptionMotion = new(
+        TransitionChannels.Position,
+        TransitionDynamics.Tween(MotionTok.MediaChromeFadeOutMs, Easing.FluentStandard));
     private static readonly LayoutTransition LoadingMotion = new(
         TransitionChannels.Opacity,
         TransitionDynamics.Tween(220f, Easing.SmoothOut),
@@ -68,6 +117,14 @@ public sealed class MediaPlayerElement : Component
 
     /// <summary>The player this element presents (headless contract; the MF backend drives real video).</summary>
     public required IMediaPlayer Player { get; init; }
+    /// <summary>Optional host-owned play command. Apps with an authoritative playback controller should provide this so
+    /// a local surface cannot bypass the controller's play-intent state. Null keeps the standalone player behavior.</summary>
+    public Action? PlayRequested { get; init; }
+    /// <summary>Optional host-owned pause command; see <see cref="PlayRequested"/>.</summary>
+    public Action? PauseRequested { get; init; }
+    /// <summary>Optional host-owned seek command. The requested mode is preserved for hosts that distinguish fast
+    /// keyframe previews from accurate commits. Null seeks <see cref="Player"/> directly.</summary>
+    public Action<TimeSpan, SeekMode>? SeekRequested { get; init; }
     /// <summary>Round the composited video's corners (DIP; 0 = square, the default). The frame composites in its own
     /// DirectComposition visual OUTSIDE the UI back buffer, so a rounded parent with ClipToBounds cannot clip it — the
     /// radius has to reach the compositor, which is what this does. Half the shorter side gives a circle.</summary>
@@ -99,8 +156,8 @@ public sealed class MediaPlayerElement : Component
     public bool AreTransportControlsEnabled { get; init; } = true;
     /// <summary>Hide overlay chrome after inactivity while playback advances. Pointer/focus/touch reveal it.</summary>
     public bool AutoHideTransportControls { get; init; } = true;
-    /// <summary>Idle time before playing chrome fades away. Defaults to 2.5 seconds.</summary>
-    public float TransportControlsHideDelayMs { get; init; } = 2500f;
+    /// <summary>Idle time before playing chrome fades away.</summary>
+    public float TransportControlsHideDelayMs { get; init; } = MotionTok.MediaChromeIdleDelayMs;
     /// <summary>How the frame scales into the video area. Default <see cref="MediaStretch.Uniform"/>.</summary>
     public MediaStretch Stretch { get; init; } = MediaStretch.Uniform;
     /// <summary>Optional controlled aspect policy (the G5b controlled-input contract). When present it overrides
@@ -120,8 +177,41 @@ public sealed class MediaPlayerElement : Component
     public bool ShowLetterboxBars { get; init; } = true;
     /// <summary>Shown over the video area until the first frame / when audio-only. Null → a default poster.</summary>
     public Element? PosterContent { get; init; }
-    /// <summary>Bring-your-own transport (still reads the same bound player). Null → the default FluentGpu transport.</summary>
-    public Element? TransportOverride { get; init; }
+    /// <summary>The host owns the transport for this session; render none. Used by Wavee's single-TransportOwner rule.
+    ///
+    /// <para>Distinct from <see cref="AreTransportControlsEnabled"/> = false, which says "this surface has no transport
+    /// at all" (a decorative clip, a preview). This says "the transport exists, it just lives somewhere else" — so the
+    /// element still runs its full keyboard map, its cursor policy and its fullscreen hand-off, it simply draws no
+    /// chrome of its own. Two surfaces bound to one player must never both draw a transport: the second one is a second
+    /// authority over the same playhead, and the two disagree the moment either issues a seek.</para></summary>
+    public bool SuppressTransport { get; init; }
+    /// <summary>Raised when this element enters (true) or leaves (false) fullscreen presentation. Fires on the SAME edge
+    /// that flips the fullscreen signal, including the host-delegated path (<see cref="FullscreenRequested"/>) and the
+    /// Escape/F11 key paths — a host that mirrors fullscreen into its own layout can drive off this alone.</summary>
+    public Action<bool>? FullscreenChanged { get; init; }
+    /// <summary>Optional host-owned picture-in-picture command (the transport's PiP affordance). The button renders only
+    /// when this is set AND the player advertises <see cref="MediaCommandFlags.PictureInPicture"/> — the element never
+    /// invents a window, it only asks.</summary>
+    public Action? PictureInPictureRequested { get; init; }
+    /// <summary>Assistive-technology probe (S11). When it returns true the chrome NEVER auto-hides: a screen-reader or
+    /// switch-access user is navigating controls that a dwell timer would delete out from under them. Null (the default)
+    /// reads as "no AT attached" — the engine currently exposes no UIA-client seam to poll (the Windows provider gates
+    /// its own raises on <c>UiaClientsAreListening</c> internally), so a host that knows better supplies this.</summary>
+    public Func<bool>? IsAccessibilityActive { get; init; }
+    /// <summary>When the pointer cursor is allowed to hide with the chrome. Default <see cref="CursorAutoHidePolicy.FullscreenOnly"/>,
+    /// which is mpv's <c>--cursor-autohide-fs-only</c> and what every windowed player does: hiding the cursor over a
+    /// small inline video steals it from the page around it, and the user cannot tell whether the app has hung.</summary>
+    public CursorAutoHidePolicy CursorAutoHide { get; init; } = CursorAutoHidePolicy.FullscreenOnly;
+    /// <summary>The host is presenting this element fullscreen (its own surface, not the element's overlay path).
+    /// Drives the transport glyph, the ⋯ row label and Esc handling so a host-owned fullscreen does not render a
+    /// control named for the state the user is already in. Distinct from the internal overlay-owned
+    /// <see cref="IsFullscreenPresentation"/>; the two are OR-ed everywhere the presentation state is consulted.</summary>
+    public bool IsHostFullscreen { get; init; }
+
+    /// <summary>The element is being PRESENTED fullscreen, by either route (its own overlay, or a host surface that set
+    /// <see cref="IsHostFullscreen"/>). Every label, glyph, Escape guard and cursor-policy decision reads this, never
+    /// the overlay-only flag — a control named for the state the user is already in reads as a dead button.</summary>
+    private bool PresentingFullscreen => IsFullscreenPresentation || IsHostFullscreen;
     /// <summary>When set, F11 and the transport's fullscreen button DELEGATE instead of opening this element's own
     /// overlay — the host app owns where fullscreen lives. Unset keeps the standalone behaviour verbatim.</summary>
     public Action? FullscreenRequested { get; init; }
@@ -165,7 +255,12 @@ public sealed class MediaPlayerElement : Component
     private int _pumpPostQueued;
 
     /// <summary>Create the control's stable UI-post drain delegate once; it is reused by every native media event.</summary>
-    public MediaPlayerElement() => _drainPumpRequest = DrainPumpRequest;
+    public MediaPlayerElement()
+    {
+        _drainPumpRequest = DrainPumpRequest;
+        _clearMoveBurst = ClearMoveBurst;
+        _resolveFocusOut = ResolveFocusOut;
+    }
 
     private void QueuePumpRequest()
     {
@@ -182,30 +277,338 @@ public sealed class MediaPlayerElement : Component
 
     private void RequestBindingPump() => _binding.RequestPump();
 
+    // -----------------------------------------------------------------------------------------------------------
+    //  The auto-hide state machine (Task 1).
+    //
+    //  ChromeState = Hidden | Visible. There is NO "Pinned" state: pinned is the DERIVED condition
+    //  `Visible && !CanHide()`. CursorState is a strict SLAVE of ChromeState - it never has an opinion of its own, it
+    //  only trails the chrome by MediaChromeCursorExtraDelayMs so the two disappearances do not read as one glitch.
+    //
+    //  Every suppressor lives in ONE pure predicate (CanHide) and every event - pointer move/press/release/enter/exit,
+    //  key, focus in/out, menu open/close, scrub start/end, seek issued/settled, playback state change - funnels into
+    //  ONE chokepoint (Reevaluate). That is the fix for the entire "flyout closed but the timer never restarted" bug
+    //  class: there is no code path that cancels the timer without a matching path that re-arms it, because there is
+    //  only one path.
+    //
+    //  These are FIELDS, not render locals: the timer callbacks and the element's stable event delegates must reach the
+    //  same state without re-creating a closure per render, and most of the state (pointer, focus, menu) is not
+    //  render-visible at all - writing it to a signal would re-render the player for a pointer move.
+    // -----------------------------------------------------------------------------------------------------------
+
+    private Signal<bool>? _chromeVisible;
+    private InputHooks? _hooks;
+    private Signal<bool>? _fullscreenState;
+    private MediaSeekBar? _seekBar;
+    private TimerHandle _hideFast, _hideSlow, _cursorTimer;
+    private bool _hideArmed;
+
+    // S10/S11 - settings + assistive tech.
+    private bool _autoHideEnabled, _accessibilityActive;
+    // S1/S2/S9 - model state (written from Render, which already reads these signals).
+    private bool _notPlaying, _buffering, _seekInFlight, _audioOnlyOrError, _forceShow;
+    // S3/S4 - pointer.
+    private bool _pointerOverChrome, _pointerDown, _pointerInVideo;
+    // S6/S7/S8 - menu, focus, move burst.
+    private bool _menuOpen, _focusInChrome, _moveBurstActive, _focusOutPending;
+    // Pointer de-duplication + the move threshold (NaN = no previous sample).
+    private float _lastMoveX = float.NaN, _lastMoveY = float.NaN;
+    // Which dwell applies: touch and focus reveals get the longer one (neither can re-arm by hovering).
+    private bool _revealedByTouchOrFocus;
+    private bool _cursorHidden;
+    private bool _moveBurstPostQueued;
+    private NodeHandle _playerRoot;
+    private readonly Action _clearMoveBurst;
+    private readonly Action _resolveFocusOut;
+
+    /// <summary>The ONE predicate. Eleven clauses, no side effects, no allocation - WinUI's
+    /// <c>ShouldHideControlPanel</c> and Chromium's <c>ShouldHideMediaControls</c> are the same shape and the same
+    /// length, because a player really does have this many reasons not to take its controls away.</summary>
+    private bool CanHide()
+        => _autoHideEnabled && !_accessibilityActive                           // S10 setting, S11 UIA client attached
+        && !_notPlaying && !_buffering && !_seekInFlight && !_audioOnlyOrError  // S1, S2, S9
+        && !_forceShow
+        && !_pointerOverChrome && !_pointerDown && !Scrubbing()                // S3, S4, S5
+        && !_menuOpen && !_focusInChrome && !_moveBurstActive;                 // S6, S7, S8
+
+    /// <summary>S5 - the scrub gate, owned by <see cref="MediaSeekBar.Scrubbing"/>: closed from pointer-down until the
+    /// player CONFIRMS the committed seek, not merely until pointer-up.</summary>
+    private bool Scrubbing() => _seekBar is { } bar && bar.Scrubbing.Peek();
+
+    /// <summary>THE chokepoint. Not-hideable then cancel + show (chrome AND cursor). Hideable and visible with no timer
+    /// running then start the dwell. Idempotent, so any event may call it - and every event does.</summary>
+    private void Reevaluate()
+    {
+        if (!CanHide())
+        {
+            CancelHide();
+            ShowChrome();
+            ShowCursor();
+            return;
+        }
+        if (_chromeVisible is { } v && v.Peek() && !_hideArmed) ArmHide();
+    }
+
+    /// <summary>Idempotent reveal. Deliberately does NOT start the timer - that is <see cref="Reevaluate"/>'s job, and
+    /// splitting them is what lets the timer path call "show" without re-arming itself.</summary>
+    private void ShowChrome()
+    {
+        if (!AreTransportControlsEnabled || SuppressTransport) return;
+        if (_chromeVisible is { } v) v.Value = true;   // value-gated: no re-render when already visible
+    }
+
+    private void CancelHide()
+    {
+        _hideArmed = false;
+        _hideFast.Cancel();
+        _hideSlow.Cancel();
+        _cursorTimer.Cancel();
+    }
+
+    private void ArmHide()
+    {
+        _hideArmed = true;
+        // Exactly one of the two dwells is live at a time. Two hooks rather than one variable-delay hook because
+        // TimerHandle.Restart() re-arms from the hook's DECLARED duration - a runtime delay would need a re-render.
+        if (_revealedByTouchOrFocus) { _hideFast.Cancel(); _hideSlow.Restart(); }
+        else { _hideSlow.Cancel(); _hideFast.Restart(); }
+    }
+
+    private void OnHideDue()
+    {
+        _hideArmed = false;
+        if (!CanHide()) { Reevaluate(); return; }        // a suppressor appeared while the dwell ran
+        if (_chromeVisible is { } v) v.Value = false;
+        _cursorTimer.Restart();                          // the cursor trails the chrome, it does not race it
+    }
+
+    private void OnCursorDue()
+    {
+        if (_chromeVisible is { } v && v.Peek()) return;   // chrome came back - the cursor follows it
+        if (!_pointerInVideo || !CursorHidingAllowed()) return;
+        HideCursor();
+    }
+
+    private bool CursorHidingAllowed() => CursorAutoHide switch
+    {
+        CursorAutoHidePolicy.Always => true,
+        CursorAutoHidePolicy.FullscreenOnly => IsFullscreenNow(),
+        _ => false,
+    };
+
+    private bool IsFullscreenNow() => PresentingFullscreen || (_fullscreenState is { } f && f.Peek());
+
+    private void HideCursor()
+    {
+        if (_cursorHidden) return;
+        _cursorHidden = true;
+        _hooks?.SetCursorOverride?.Invoke(this, CursorId.Hidden);
+    }
+
+    private void ShowCursor()
+    {
+        if (!_cursorHidden) return;
+        _cursorHidden = false;
+        _hooks?.SetCursorOverride?.Invoke(this, null);
+    }
+
+    private void ClearMoveBurst()
+    {
+        _moveBurstPostQueued = false;
+        if (!_moveBurstActive) return;
+        _moveBurstActive = false;
+        Reevaluate();
+    }
+
+    /// <summary>LostFocus fires BEFORE the next GotFocus, so a Tab between two transport buttons momentarily reports
+    /// "focus left the chrome". Deferring one dispatcher tick lets the paired GotFocus cancel the departure.</summary>
+    private void ResolveFocusOut()
+    {
+        if (!_focusOutPending) return;
+        _focusOutPending = false;
+        _focusInChrome = false;
+        Reevaluate();
+    }
+
+    /// <summary>S7 - KEYBOARD focus inside the chrome suppresses hiding. Revealing on focus (the previous behaviour)
+    /// without suppressing is a WCAG 2.4.7 failure: the focused control fades out from under the keyboard user.
+    /// <para>But only KEYBOARD focus may pin. Focus also arrives here by pointer activation and, more importantly, by
+    /// the overlay service RESTORING focus to the invoking button when a picker closes - and treating that as a
+    /// keyboard user would pin the chrome open forever after any mouse trip through the quality menu, which is the
+    /// opposite of what every shipped player does. <see cref="NodeFlags.FocusVisual"/> is exactly this distinction
+    /// (<c>InputDispatcher.SetFocus</c>'s <c>visual</c> argument: true for Tab/arrow navigation, false for pointer and
+    /// programmatic moves) and its doc names reading it from a GotFocus handler as the sanctioned use.</para></summary>
+    private void OnChromeFocusChanged(bool focused)
+    {
+        if (focused)
+        {
+            _focusOutPending = false;
+            _focusInChrome = IsKeyboardFocus();
+            // A keyboard user gets the longer dwell: no pointer motion is coming to re-arm it. A pointer or restored
+            // focus keeps the normal one, so the chrome still collapses after a mouse trip through a picker.
+            if (_focusInChrome) _revealedByTouchOrFocus = true;
+            ShowChrome();
+            ShowCursor();
+            Reevaluate();
+            return;
+        }
+        _focusOutPending = true;
+        if (_postToUi is { } post) post(_resolveFocusOut); else ResolveFocusOut();
+    }
+
+    /// <summary>Whether the CURRENTLY focused node carries the engine's keyboard-focus visual. False when nothing is
+    /// focused, when the scene is unavailable, or when focus arrived by pointer/programmatic move.</summary>
+    private bool IsKeyboardFocus()
+    {
+        if (_hooks?.GetFocus?.Invoke() is not { } node || node.IsNull) return false;
+        var scene = _scene;
+        if (scene is null || !scene.IsLive(node)) return false;
+        return (scene.Flags(node) & NodeFlags.FocusVisual) != 0;
+    }
+
+    /// <summary>Pointer move over the player. De-duplicates identical coordinates FIRST (the video.js phantom-mousemove
+    /// fix: the platform re-delivers the last position on unrelated events, which alone keeps a player's chrome up
+    /// forever), then applies the movement threshold - but only while HIDDEN. Once the chrome is up, any move re-arms.</summary>
+    private void OnPointerMoved(Point2 p)
+    {
+        _pointerInVideo = true;
+        if (p.X == _lastMoveX && p.Y == _lastMoveY) return;              // phantom move - drop the event entirely
+        bool hidden = _chromeVisible is { } v && !v.Peek();
+        if (hidden && !float.IsNaN(_lastMoveX))
+        {
+            float dx = p.X - _lastMoveX, dy = p.Y - _lastMoveY;
+            const float th = MotionTok.MediaChromeMoveThresholdDip;
+            if (dx * dx + dy * dy < th * th) { _lastMoveX = p.X; _lastMoveY = p.Y; return; }
+        }
+        _lastMoveX = p.X; _lastMoveY = p.Y;
+        _revealedByTouchOrFocus = false;
+        _moveBurstActive = true;                                          // WinUI m_isPointerMove
+        ShowCursor();
+        ShowChrome();
+        Reevaluate();
+        if (_moveBurstPostQueued) return;
+        _moveBurstPostQueued = true;
+        if (_postToUi is { } post) post(_clearMoveBurst); else ClearMoveBurst();
+    }
+
+    private Signal<bool>? _releaseBufferSuppress;
+    private Signal<bool>? _openingGrace;
+    private Signal<int>? _startupPhase;
+
+    private bool ChromeIsVisible() => _chromeVisible is { } v && v.Peek();
+
+    /// <summary>The S2 suppressor's own release. Buffering is allowed to hold the chrome, but only for a bounded time —
+    /// after that the machine goes back to asking CanHide() like everything else.</summary>
+    private void OnSuppressorExpired()
+    {
+        if (_releaseBufferSuppress is { } sig) sig.SetIfChanged(false);
+        _buffering = false;
+        _seekInFlight = false;
+        Reevaluate();
+    }
+
+    private void OnOpeningGraceExpired()
+    {
+        if (_openingGrace is { } sig) sig.SetIfChanged(false);
+        _forceShow = false;
+        Reevaluate();
+    }
+
+    private void OnStartupSpinnerDue() => _startupPhase?.SetIfChanged(1);
+    private void OnStartupDetailDue() => _startupPhase?.SetIfChanged(2);
+
+    /// <summary>Mount: every UseTimeout arms itself when its cell is created, so hand the machine a clean slate and let
+    /// it decide. Nothing else in the element is allowed to start or stop a dwell.</summary>
+    private void OnMounted()
+    {
+        CancelHide();
+        _startupPhase?.SetIfChanged(0);
+        Reevaluate();
+    }
+
+    private void ReleaseCursorOverride() => _hooks?.SetCursorOverride?.Invoke(this, null);
+
+    /// <summary>S6 — "is ANY input-blocking overlay up right now". The overlay service knows; the interface does not yet
+    /// surface it, and <c>OverlayServiceImpl</c> is internal to this very assembly, so the kit reads it directly. A
+    /// host-less tree (the null service) answers false, which is the right answer there.</summary>
+    private static bool AnyInputBlockingOverlay(IOverlayService service)
+        => service is OverlayServiceImpl impl && impl.AnyInputBlocking;
+
+    private void AdjustVolume(float delta)
+    {
+        float v = Math.Clamp(Player.Volume.Peek() + delta, 0f, 1f);
+        Player.SetVolume(v);
+        if (delta > 0f && Player.Muted.Peek()) Player.SetMuted(false);   // raising the volume un-mutes (WinUI/YouTube)
+    }
+
+    /// <summary>Rule 1 of the transport's input contract, and the single most preventable anger class in a video UI
+    /// (Jellyfin #1079 / #2376 / #2058): a transport button must NEVER keep keyboard focus after a MOUSE activation, or
+    /// the next Space re-activates the last-clicked button instead of toggling play. <c>AllowFocusOnInteraction = false</c>
+    /// stops the button TAKING focus; this hands focus BACK to the video surface, so a click on the chrome leaves the
+    /// keyboard pointed at the player even when focus was somewhere else in the app entirely.</summary>
+    private void OnChromePointerPressed(PointerEventArgs e)
+    {
+        if (e.Button != 0) return;
+        if (_playerRoot.IsNull) return;
+        _hooks?.FocusNode?.Invoke(_playerRoot, false);
+    }
+
+    private void OnChromePointerMove(Point2 _)
+    {
+        if (_pointerOverChrome) return;
+        _pointerOverChrome = true;    // S3 - over the CONTROL PANEL, not merely over the element
+        Reevaluate();
+    }
+
+    private void OnChromePointerExit()
+    {
+        if (!_pointerOverChrome) return;
+        _pointerOverChrome = false;
+        Reevaluate();
+    }
+
     public override Element Render()
     {
         // IsFullscreenPresentation freezes at mount, so this conditional hook is stable for the instance's lifetime.
-        // The DEFECT the rebuild fixes was never the conditional hook (call-site keying makes it legal) — it was the
-        // "exactly one instance pumps" convention; that is replaced by explicit registry ownership transfer below.
         var binding = IsFullscreenPresentation ? PresentationBinding : UseVideoSurface();
         _postToUi = UsePost();
         var hooks = UseContext(InputHooks.Current);
         var overlayService = UseContext(Overlay.Service);
+        _hooks = hooks;
         var areaRef = UseRef<NodeHandle>(default);
         var holeRef = UseRef<NodeHandle>(default);
         var playerRoot = UseRef<NodeHandle>(default);
+        var chromeRef = UseRef<NodeHandle>(default);
         var ccAnchor = UseRef<NodeHandle>(default);
         var qualityAnchor = UseRef<NodeHandle>(default);
         var rateAnchor = UseRef<NodeHandle>(default);
+        var audioAnchor = UseRef<NodeHandle>(default);
         var fullscreenHandle = UseRef<OverlayHandle?>(null);
         var localFullscreen = UseSignal(false);
         var fullscreen = FullscreenState ?? localFullscreen;
+        _fullscreenState = fullscreen;
         var localAspect = UseSignal(ToAspectMode(Stretch));
         var localCustomAspect = UseSignal(16.0 / 9.0);
         var aspectSig = AspectMode ?? localAspect;                 // materialized controlled signals (no write-sniffing)
         var customAspectSig = CustomAspectRatio ?? localCustomAspect;
         var chromeVisible = UseSignal(true);
-        var areaBounds = UseSignal<RectF>(default);                // video-area bounds (bounds-changed column → letterbox recompute)
+        var chromeHeight = UseSignal(0f);
+        var volumeExpanded = UseSignal(false);
+        var shortcutsOpen = UseSignal(false);
+        var areaBounds = UseSignal<RectF>(default);                // video-area bounds (bounds-changed column -> letterbox recompute)
+        _chromeVisible = chromeVisible;
+
+        // The seek bar is OWNED by this element rather than conjured inside an Embed factory: the auto-hide machine has
+        // to read its scrub gate (S5) and the time label has to read its scrub target, and neither can reach an instance
+        // that only exists inside a closure. Created once, reused for the element's whole life.
+        var seekBarRef = UseRef<MediaSeekBar?>(null);
+        seekBarRef.Value ??= new MediaSeekBar
+        {
+            Player = Player,
+            SeekRequested = SeekRequested,
+            ChromeVisible = chromeVisible,
+        };
+        MediaSeekBar seekBar = seekBarRef.Value!;
+        _seekBar = seekBar;
 
         var natural = Player.NaturalSize.Value;
         var state = Player.State.Value;
@@ -216,9 +619,6 @@ public sealed class MediaPlayerElement : Component
         double customAspect = customAspectSig.Value;
         bool audioOnly = IsAudioOnly(natural);
         bool videoReady = !audioOnly && state is not (PlaybackState.Idle or PlaybackState.Opening);
-        int pinEpoch = overlayService.PinEpoch.Value;              // subscribe: re-render when a picker opens/closes
-        bool pinned = !playerRoot.Value.IsNull && overlayService.IsAnchorPinned(playerRoot.Value);
-        _ = pinEpoch;
 
         // ── the video pump lives OUTSIDE Render (fix: pure Render). Publish the inputs it reads, register it once. ──
         _binding = binding;
@@ -265,10 +665,114 @@ public sealed class MediaPlayerElement : Component
         RectF area = areaBounds.Value;
         RectF videoRect = (audioOnly || area.W <= 0f) ? area : FitVideoRect(area, natural, aspect, customAspect);
 
+        // ── S2/S9: bounded buffering suppression ─────────────────────────────────────────────────────────────────────
+        // A rebuffer must suppress hiding, but it must NOT LATCH it. The protected session maps both Licensed and
+        // Buffering onto PlaybackState.Buffering and samples native state only every 250 ms, so a stale sample used as a
+        // permanent force-show pinned the chrome forever on any hung start. The suppressor is therefore time-bounded:
+        // it holds while buffering is reported and for at most BufferingSuppressMaxMs, then releases on its own.
+        bool bufferingNow = bufferingInfo.IsBuffering || state is PlaybackState.Buffering or PlaybackState.Stalled;
+        var bufferSuppress = UseSignal(false);
+        var bufferTimer = UseTimeout(OnSuppressorExpired, BufferingSuppressMaxMs, DepKey.Empty);
+        _releaseBufferSuppress = bufferSuppress;
+        UseEffect(() =>
+        {
+            if (bufferingNow) { bufferSuppress.Value = true; bufferTimer.Restart(); }
+            else { bufferTimer.Cancel(); bufferSuppress.Value = false; Reevaluate(); }
+            return (Action?)null;
+        }, bufferingNow ? 1 : 0);
+
+        // ── S1 force-show grace: the first OpeningForceShowMs after Opening. Force-showing for the WHOLE of a slow open
+        //    is what made a stuck stream pin its chrome; a bounded grace gives the user the controls while the stream
+        //    starts and then lets the normal machine take over.
+        var openingGrace = UseSignal(false);
+        var openingTimer = UseTimeout(OnOpeningGraceExpired, OpeningForceShowMs, DepKey.Empty);
+        _openingGrace = openingGrace;
+        UseEffect(() =>
+        {
+            if (state == PlaybackState.Opening) { openingGrace.Value = true; openingTimer.Restart(); }
+            // LEAVING Opening must RELEASE the grace, exactly as the buffering suppressor above releases its own.
+            // Letting it lapse on the timer alone pinned the chrome for the full OpeningForceShowMs after playback had
+            // already started — so on a fast open (the common case) the controls sat there for three seconds no matter
+            // what the user did, which is the "auto-collapse does not work" report in its purest form.
+            else { openingTimer.Cancel(); openingGrace.Value = false; Reevaluate(); }
+            return (Action?)null;
+        }, state == PlaybackState.Opening ? 1 : 0);
+
+        // ── the eleven suppressors, published to the state machine ───────────────────────────────────────────────────
+        // gate.media.el.transport-suppressed reads this exact spelling: auto-hide is gated on the transport existing.
+        bool autoHideArmed = AreTransportControlsEnabled && AutoHideTransportControls && !SuppressTransport && !IsDecorative;
+        _autoHideEnabled = autoHideArmed;
+        _accessibilityActive = IsAccessibilityActive?.Invoke() ?? false;
+        // S1 is a REAL, user-visible stop — not "anything that is not Playing". Buffering is S2, Opening is the grace.
+        _notPlaying = !playIntent || IsStoppedState(state);
+        _buffering = bufferSuppress.Value;
+        _seekInFlight = bufferSuppress.Value && bufferingInfo.Reason == BufferingReason.Seeking;
+        _audioOnlyOrError = audioOnly || state == PlaybackState.Failed;
+        _forceShow = openingGrace.Value;
+        bool forceChrome = ShouldForceChrome(playIntent, state) || _forceShow;
+        bool showChrome = AreTransportControlsEnabled && !SuppressTransport && (forceChrome || chromeVisible.Value);
+
+        // ONE chokepoint, re-entered whenever a render-visible suppressor changes. A pin FLAP inside a single flush is
+        // harmless now: the machine is level-triggered (it asks CanHide()), never edge-triggered on a Cancel/Restart pair.
+        UseEffect(Reevaluate, HashCode.Combine(
+            HashCode.Combine(_autoHideEnabled, _accessibilityActive, _notPlaying, _buffering),
+            HashCode.Combine(_seekInFlight, _audioOnlyOrError, _forceShow, showChrome)));
+
+        // The scrub gate (S5) lives in the seek bar and changes without re-rendering this element: track it in an
+        // EFFECT so a scrub start/end re-evaluates the machine at zero render cost.
+        UseSignalEffect(() => { _ = seekBar.Scrubbing.Value; Reevaluate(); });
+
+        // S6 — menu. Two fixes in one: (i) suppress while ANY input-blocking overlay is up, because such an overlay
+        // mounts a full-bleed scrim that becomes the topmost hit target, so OnPointerMoveWithin stops firing while
+        // IsAnchorPinned(playerRoot) stays false and the dwell fires UNDER the menu; (ii) the epoch drives an EFFECT,
+        // never the render — subscribing to the host-global PinEpoch in Render re-rendered the whole player twice for
+        // every menu opened anywhere in the shell. Nothing here re-renders; it only re-evaluates.
+        UseSignalEffect(() =>
+        {
+            _ = overlayService.PinEpoch.Value;      // the change signal (not the decision)
+            bool blocking = AnyInputBlockingOverlay(overlayService);
+            if (blocking == _menuOpen) return;
+            _menuOpen = blocking;
+            Reevaluate();
+        });
+
+        // The two dwells + the cursor trail. Exactly one dwell is armed at a time (see ArmHide).
+        _hideFast = UseTimeout(OnHideDue, MathF.Max(MotionTok.MediaChromeFadeOutMs, TransportControlsHideDelayMs), DepKey.Empty);
+        _hideSlow = UseTimeout(OnHideDue, MathF.Max(TransportControlsHideDelayMs,
+            MathF.Max(MotionTok.MediaChromeIdleDelayTouchMs, MotionTok.MediaChromeIdleDelayAfterFocusMs)), DepKey.Empty);
+        _cursorTimer = UseTimeout(OnCursorDue, MotionTok.MediaChromeCursorExtraDelayMs, DepKey.Empty);
+        // UseTimeout arms at mount; the machine, not the hook, decides whether a dwell should be running.
+        UseEffect(OnMounted, DepKey.Empty);
+        UseEffect(() => (Action?)ReleaseCursorOverride, DepKey.Empty);
+
+        // Entering fullscreen applies the cursor policy IMMEDIATELY — waiting for a move means the cursor sits on top of
+        // a fullscreen frame until the user jiggles it, which is exactly when they are least likely to.
+        bool presentedFullscreen = PresentingFullscreen || fullscreen.Value;   // subscribe: the policy edge must re-render
+        UseEffect(() => { if (!ChromeIsVisible()) _cursorTimer.Restart(); else ShowCursor(); return (Action?)null; },
+            presentedFullscreen ? 1 : 0);
+
+        // ── startup / first frame (Task 5) ───────────────────────────────────────────────────────────────────────────
+        // 0 ms poster. 0-500 ms NOTHING (a spinner that flashes for 200 ms is worse than no spinner). 500 ms an animated
+        // indeterminate ring. Past 10 s a determinate readout may appear. A mid-play REBUFFER is not a startup: it never
+        // reaches this ladder, never shows the poster, and never resets the chrome.
+        var startupPhase = UseSignal(0);
+        _startupPhase = startupPhase;
+        var startupSpinner = UseTimeout(OnStartupSpinnerDue, StartupSpinnerDelayMs, DepKey.Empty);
+        var startupDetail = UseTimeout(OnStartupDetailDue, StartupDetailDelayMs, DepKey.Empty);
+        bool startingUp = !IsDecorative && !videoReady && (playIntent || state is PlaybackState.Opening or PlaybackState.Buffering);
+        UseEffect(() =>
+        {
+            if (startingUp) { startupSpinner.Restart(); startupDetail.Restart(); }
+            else { startupSpinner.Cancel(); startupDetail.Cancel(); startupPhase.SetIfChanged(0); }
+            return (Action?)null;
+        }, startingUp ? 1 : 0);
+        int phase = startupPhase.Value;
+
         void RevealChrome()
         {
-            if (!AreTransportControlsEnabled) return;
-            chromeVisible.Value = true;   // value-gated: no re-render if already visible
+            ShowChrome();
+            ShowCursor();
+            Reevaluate();
         }
 
         void SetAspect(VideoAspectMode mode, double ratio = 0)
@@ -287,13 +791,15 @@ public sealed class MediaPlayerElement : Component
             var h = fullscreenHandle.Value;
             fullscreenHandle.Value = null;
             if (h is { IsOpen: true }) h.Close();
+            FullscreenChanged?.Invoke(false);
+            ShowCursor();                                          // windowed default policy never hides the cursor
             RevealChrome();
         }
 
         void ToggleFullscreen()
         {
             if (IsFullscreenPresentation) { ExitFullscreen?.Invoke(); return; }
-            if (FullscreenRequested is { } request) { request(); return; }
+            if (FullscreenRequested is { } request) { request(); FullscreenChanged?.Invoke(!(PresentingFullscreen || fullscreen.Peek())); return; }
             if (fullscreen.Peek()) { LeaveFullscreen(); return; }
             fullscreen.Value = true;
             hooks?.WindowSetFullscreen?.Invoke(true);
@@ -302,6 +808,9 @@ public sealed class MediaPlayerElement : Component
                 () => Embed.Comp(() => new FullscreenMediaView
                 {
                     Player = Player,
+                    PlayRequested = PlayRequested,
+                    PauseRequested = PauseRequested,
+                    SeekRequested = SeekRequested,
                     Binding = binding,
                     AspectMode = aspectSig,
                     CustomAspectRatio = customAspectSig,
@@ -309,36 +818,35 @@ public sealed class MediaPlayerElement : Component
                     FullscreenState = fullscreen,
                     Exit = LeaveFullscreen,
                     LetterboxColor = LetterboxColor,
+                    CursorAutoHide = CursorAutoHide,
                 }),
                 FlyoutPlacement.BottomLeft,
                 new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss, Chrome: PopupChrome.Modal));
             fullscreenHandle.Value = h;
             h.ClosedAction = LeaveFullscreen;
+            FullscreenChanged?.Invoke(true);
         }
 
-        bool forceChrome = ShouldForceChrome(playIntent, state);
-        bool showChrome = AreTransportControlsEnabled && (forceChrome || pinned || chromeVisible.Value);
-
-        // ── declarative idle-hide (replaces the ToolTipClock borrow + the overlayPin counter): a one-shot timer that
-        // hides the chrome after inactivity, RESTARTED on pointer activity, armed only while actively playing and not
-        // pinned/force-shown. An open picker pins the anchor (PinEpoch above) ⇒ armed=false ⇒ timer cancelled ⇒ chrome
-        // stays; closing the picker re-arms it.
-        bool autoHideArmed = AreTransportControlsEnabled && AutoHideTransportControls && !pinned && !forceChrome
-            && playIntent && state == PlaybackState.Playing;
-        var hideTimer = UseTimeout(() => chromeVisible.Value = false, MathF.Max(100f, TransportControlsHideDelayMs), DepKey.Empty);
-        UseEffect(() => { if (autoHideArmed) hideTimer.Restart(); else hideTimer.Cancel(); return (Action?)null; }, autoHideArmed ? 1 : 0);
-        void RevealAndRearm() { RevealChrome(); hideTimer.Restart(); }
+        // Only exits. Escape must NEVER enter fullscreen and must never quit the app: on every shipped player it is the
+        // one key a panicking user reaches for, and the only thing it is allowed to do is give the window back.
+        void ExitFullscreenOnly()
+        {
+            if (IsFullscreenPresentation) { ExitFullscreen?.Invoke(); return; }
+            // Host-owned fullscreen leaves through the HOST, never through the element's overlay path: the host put us
+            // there and only it knows how to put us back.
+            if (IsHostFullscreen) { FullscreenRequested?.Invoke(); FullscreenChanged?.Invoke(false); return; }
+            if (fullscreen.Peek()) LeaveFullscreen();
+        }
 
         // A terminal failure wins over the opening spinner: otherwise a Failed state with a lingering play intent would
         // keep showing "Starting playback…" forever (the DRM-license-rejected infinite-spinner bug).
-        // Decoration never reports status: a spinner or an error card inside an artist portrait is worse than the still
-        // the caller already has underneath. Failures stay observable through Player.Error/State for the caller to log.
+        // Decoration never reports status.
         Element? statusOverlay = IsDecorative
             ? null
             : state == PlaybackState.Failed
             ? FailedOverlay(Player.Error.Value?.Message)
-            : !videoReady && (state is PlaybackState.Opening or PlaybackState.Buffering || playIntent)
-                ? OpeningOverlay(playIntent)
+            : startingUp
+                ? (phase == 0 ? null : OpeningOverlay(playIntent, phase == 2 ? bufferingInfo.Percent : -1.0))
                 : bufferingInfo.IsBuffering || state is PlaybackState.Buffering or PlaybackState.Stalled
                     ? BufferingOverlay(bufferingInfo)
                     : null;
@@ -348,21 +856,12 @@ public sealed class MediaPlayerElement : Component
         //   [0] the OPAQUE LetterboxColor stage fill across the WHOLE video area. This fill IS the letterbox — there
         //       are no separate bar elements any more.
         //   [1] the VIDEO HOLE PUNCH (DrawOp.DrawVideo, gpu-renderer.md §7.3), laid out at EXACTLY the fitted video
-        //       rect. It paints nothing — it ERASES everything already recorded beneath it (this stage fill, the
-        //       translucent page behind an inline/PiP player, the shell) toward premultiplied zero, so the DComp video
-        //       visual composited z-BELOW the premultiplied UI swapchain shows through at full strength instead of
-        //       blending with what stayed in the back buffer. VideoSurfaceId carries the registry slot token
-        //       (diagnostic at replay — the presenter places the visual itself via PumpNow).
-        //   [2…] status / caption / transport overlays — LATER siblings, so they repaint over the video and stay
-        //       visible on top of it.
+        //       rect. It paints nothing — it ERASES everything already recorded beneath it toward premultiplied zero,
+        //       so the DComp video visual composited z-BELOW the premultiplied UI swapchain shows through at full
+        //       strength instead of blending with what stayed in the back buffer.
+        //   [2…] status / caption / transport overlays — LATER siblings, so they repaint over the video.
         // ONE SOURCE OF TRUTH: PumpNow places the DComp visual from scene.AbsoluteRect of the HOLE node, so the erased
-        // region and the presented video are the same rect BY CONSTRUCTION. The old shape (a hole across the WHOLE
-        // area, then letterbox bars painted around an independently recomputed fit, with the presenter placed at a
-        // THIRD, pump-time fit) left sub-pixel slivers at fractional device scale: pixels the hole erased that neither
-        // the video visual nor a bar covered, revealing the DWM Mica backdrop as a grey edge. Any residual sub-pixel AA
-        // edge now falls on the OPAQUE stage fill — worst case a faint black hairline, never grey.
-        // Not yet ready: while a loading/buffering overlay is up, show a plain dark stage — the poster's play glyph
-        // underneath the spinner reads as two competing affordances.
+        // region and the presented video are the same rect BY CONSTRUCTION.
         var videoChildren = new System.Collections.Generic.List<Element>(8);
         if (videoReady)
         {
@@ -379,13 +878,21 @@ public sealed class MediaPlayerElement : Component
             });
         }
         else if (IsDecorative)
-            // Transparent until the first frame lands, so the caller's own still stays visible underneath rather than
-            // being covered by a dark stage or a default poster.
+            // Transparent until the first frame lands, so the caller's own still stays visible underneath.
             videoChildren.Add(new BoxEl { Grow = 1f, HitTestVisible = false });
         else
-            videoChildren.Add(statusOverlay is not null
-                ? new BoxEl { Grow = 1f, Fill = Tok.MediaStage }
-                : PosterContent ?? DefaultPoster());
+            // The poster stays up for the WHOLE start — including the quiet first 500 ms and the spinner phase. It is
+            // never replaced by a black rect: in a music app the poster IS the album art already on screen, and
+            // swapping it for darkness to host a spinner is a visible regression, not a loading state. It cross-fades
+            // out over PosterCrossFadeMs when the first frame lands (its Exit terminal).
+            videoChildren.Add(new BoxEl
+            {
+                Key = "media-poster",
+                Grow = 1f, ZStack = true, Direction = 1,
+                HitTestVisible = false,
+                Animate = PosterMotion,
+                Children = [PosterContent ?? DefaultPoster()],
+            });
 
         if (statusOverlay is not null)
             videoChildren.Add(new BoxEl
@@ -396,7 +903,10 @@ public sealed class MediaPlayerElement : Component
                 Animate = LoadingMotion,
                 Children = [statusOverlay],
             });
-        if (videoReady && activeCue is { } cue) videoChildren.Add(CaptionOverlay(cue));
+        // Captions MOVE, controls do not: the caption baseline lifts by the chrome's measured height while the chrome
+        // is up and settles back when it hides, animated on the same clock (a transform-only FLIP — no relayout churn).
+        if (videoReady && activeCue is { } cue)
+            videoChildren.Add(CaptionOverlay(cue, CaptionBottomMargin + (showChrome ? chromeHeight.Value : 0f)));
 
         var videoArea = new BoxEl
         {
@@ -417,7 +927,14 @@ public sealed class MediaPlayerElement : Component
         };
 
         var layers = new System.Collections.Generic.List<Element>(4) { videoArea };
-        if (showChrome)
+        if (AreTransportControlsEnabled && !SuppressTransport)
+        {
+            // The chrome stays MOUNTED across the whole hide cycle, with a STABLE Key. Toggling it in and out of the
+            // layer list unmounted the entire subtree — including the MediaSeekBar — so every re-reveal built a FRESH
+            // bar with width 0 and fraction 0: the thumb sat at the far left and an empty rail flashed for at least one
+            // frame on EVERY auto-hide cycle. Visibility now rides the opacity + hit-test + focusability channel, which
+            // is also what keeps hidden chrome out of the hit-test, focus and accessibility trees rather than merely
+            // transparent (an invisible-but-hittable control panel eats clicks meant for the video).
             layers.Add(new BoxEl
             {
                 Key = "media-chrome",
@@ -425,29 +942,74 @@ public sealed class MediaPlayerElement : Component
                 Direction = 1,
                 Justify = FlexJustify.End,
                 HitTestPassThrough = true,
-                Animate = ChromeMotion,
-                Children = [TransportOverride ?? BuildTransport(area.W, ToggleFullscreen,
-                    ccAnchor, qualityAnchor, rateAnchor, overlayService)],
+                HitTestVisible = showChrome,
+                Opacity = showChrome ? 1f : 0f,
+                OnRealized = h => chromeRef.Value = h,
+                Children = [BuildTransport(area.W, showChrome, seekBar, chromeHeight, volumeExpanded,
+                    ToggleFullscreen, ccAnchor, qualityAnchor, rateAnchor, audioAnchor, overlayService)],
             });
+        }
+        if (shortcutsOpen.Value) layers.Add(ShortcutOverlay(() => shortcutsOpen.Value = false));
 
-        void HandleKey(KeyEventArgs e)
+        // The fade itself: asymmetric by token (reveal 100 ms, conceal 200 ms), reduced-motion resolved as a VALUE by
+        // MotionTokenDef.EffectiveDurationMs — never as a branch here. Seeding FROM the live composited opacity means a
+        // reveal that interrupts a conceal starts where the pixels actually are.
+        UseLayoutEffect(() =>
         {
-            RevealAndRearm();
-            switch (e.KeyCode)
-            {
-                case Keys.Space:
-                    if (playIntent) _ = Player.PauseAsync(); else _ = Player.PlayAsync();
-                    e.Handled = true;
-                    break;
-                case Keys.Left:
-                    _ = Player.SeekAsync(Player.Position.Peek() - TimeSpan.FromSeconds(10)); e.Handled = true; break;
-                case Keys.Right:
-                    _ = Player.SeekAsync(Player.Position.Peek() + TimeSpan.FromSeconds(10)); e.Handled = true; break;
-                case Keys.F11:
-                    ToggleFullscreen(); e.Handled = true; break;
-                case Keys.Escape when IsFullscreenPresentation:
-                    ExitFullscreen?.Invoke(); e.Handled = true; break;
-            }
+            var node = chromeRef.Value;
+            var scene = Context.Scene;
+            if (Context.Anim is not { } anim || scene is null || node.IsNull || !scene.IsLive(node)) return;
+            var tok = showChrome ? MotionTok.MediaChromeReveal : MotionTok.MediaChromeConceal;
+            float ms = tok.EffectiveDurationMs(AnimChannel.Opacity);
+            if (ms <= 0f) return;    // reduced motion: the static Opacity above already IS the terminal value
+            anim.SeedEased(node, AnimChannel.Opacity, scene.Paint(node).Opacity, showChrome ? 1f : 0f, ms, tok.Easing);
+        }, showChrome ? 1 : 0);
+
+        void HandleKey(KeyEventArgs e) => HandleKeyCore(e, seekBar, ToggleFullscreen, ExitFullscreenOnly, shortcutsOpen);
+
+        void HandlePress(PointerEventArgs e)
+        {
+            _pointerDown = e.Button == 0;
+            _pointerInVideo = true;
+            _revealedByTouchOrFocus = e.Kind == PointerKind.Touch;
+            ShowCursor();
+            // Middle-button = mute (delivered on release with Button == 2, the WinUI commit-on-release shape).
+            if (e.Button == 2) { Player.SetMuted(!Player.Muted.Peek()); ShowChrome(); Reevaluate(); return; }
+            // A DOUBLE click toggles fullscreen. A SINGLE click deliberately does NOT toggle play: the alternative is a
+            // delayed single-click that costs GetDoubleClickTime() (500 ms on Windows) on EVERY play/pause and produces
+            // the notorious "video toggles state while going fullscreen" bug. YouTube, Netflix and Vimeo all chose
+            // reveal-only; play/pause lives on the button, Space and K.
+            if (e.ClickCount >= 2) { ToggleFullscreen(); e.Handled = true; return; }
+            ShowChrome();
+            Reevaluate();
+        }
+
+        void HandleRelease(PointerEventArgs e)
+        {
+            if (!_pointerDown) return;
+            _pointerDown = false;
+            Reevaluate();
+        }
+
+        void HandleExit()
+        {
+            _pointerInVideo = false;
+            _pointerDown = false;
+            _pointerOverChrome = false;
+            _lastMoveX = float.NaN; _lastMoveY = float.NaN;
+            ShowCursor();          // the cursor must never stay hidden outside the video rect
+            Reevaluate();
+        }
+
+        void HandleWheel(WheelEventArgs e)
+        {
+            // Wheel over the VIDEO is volume (the universal player gesture); Shift+wheel seeks. The seek bar consumes
+            // its own wheel first, so a wheel over the rail never reaches here.
+            if ((e.Mods & KeyModifiers.Shift) != 0) seekBar.SeekBy(e.Delta > 0f ? 10f : -10f);
+            else AdjustVolume(e.Delta > 0f ? VolumeStep : -VolumeStep);
+            ShowChrome();
+            Reevaluate();
+            e.Handled = true;
         }
 
         var frame = new BoxEl
@@ -459,16 +1021,19 @@ public sealed class MediaPlayerElement : Component
             BorderColor = IsFullscreenPresentation || IsDecorative ? ColorF.Transparent : Tok.StrokeFlyoutDefault,
             BorderWidth = IsFullscreenPresentation || IsDecorative ? 0f : 1f,
             Focusable = true,
-            OnRealized = h => playerRoot.Value = h,
+            OnRealized = h => { playerRoot.Value = h; _playerRoot = h; },
             OnKeyDown = HandleKey,
-            OnPointerMoveWithin = _ => RevealAndRearm(),
-            OnPointerPressed = _ => RevealAndRearm(),
-            OnFocusChanged = focused => { if (focused) RevealAndRearm(); },
+            OnPointerMoveWithin = OnPointerMoved,
+            OnPointerPressed = HandlePress,
+            OnPointerReleased = HandleRelease,
+            OnPointerExit = HandleExit,
+            OnPointerWheel = HandleWheel,
+            OnFocusChanged = focused => { if (focused) RevealChrome(); },
             Children = layers.ToArray(),
         };
         // One menu, every gesture. The context-request event supplies the LIVE source/owner node, so the More button
         // never depends on an OnRealized handle that can go stale across a transport re-render (the origin-flyout bug).
-        // Pointer/hold opens at the requested point; ClickRequestsContext/Menu-key anchors to the invoking node rect.
+        // A right-click opens THIS menu and never pauses — there is no click-to-pause to trip over.
         // Decorative clips are not operable players and deliberately expose no playback menu.
         return IsDecorative
             ? frame
@@ -476,6 +1041,7 @@ public sealed class MediaPlayerElement : Component
                 () => new ContextMenuModel(BuildMoreMenuItems(aspectSig, customAspectSig, SetAspect, ToggleFullscreen)),
                 MoreMenuOptions);
     }
+
 
     /// <summary>The engine-invoked on-demand video pump (registered at mount; see <see cref="VideoPump"/>). Reads the
     /// live laid-out video-area rect + the current scale and drives <see cref="IMediaPlayer.PumpVideo"/> — NO side
@@ -550,6 +1116,7 @@ public sealed class MediaPlayerElement : Component
         // radii that overlap and degenerate. CornerRadius freezes at mount, so this is a constant per element.
         if (CornerRadius > 0f)
             b.SetCornerRadius(MathF.Min(CornerRadius, MathF.Min(videoRect.W, videoRect.H) * 0.5f));
+        Player.SetAdaptiveViewportHeight((int)MathF.Ceiling(videoRect.H * MathF.Max(1f, s)));
         Player.PumpVideo(b, videoRect, s);
         if (audioOnly) b.SetVisible(false);
     }
@@ -586,10 +1153,20 @@ public sealed class MediaPlayerElement : Component
         return rect;
     }
 
-    // ── default transport (pure FluentGpu: play/pause, scrub Slider, GPU time text, mute) ────────────────────────────
 
-    private Element BuildTransport(float areaWidth, Action toggleFullscreen,
-        Ref<NodeHandle> ccAnchor, Ref<NodeHandle> qualityAnchor, Ref<NodeHandle> rateAnchor,
+    // ── default transport (pure FluentGpu: two rows — a full-width seek row above a control row) ─────────────────────
+    //
+    // The two-row shape is WinUI MediaTransportControls' own recommendation and it is not negotiable here: NOTHING is
+    // interleaved into the seek row. A control sitting beside the rail steals horizontal travel from the one gesture
+    // whose precision matters most, and it puts a click target inside the strip the user sweeps blind.
+    //
+    // Left cluster:  play/pause · -10 s · +10 s · volume (icon + slider on hover) · elapsed / total
+    // Right cluster: speed chip · quality chip · captions chip · audio track · PiP · ⋯ · FULLSCREEN LAST
+    // Fullscreen sits at the extreme corner deliberately: in fullscreen that corner is a SCREEN corner, which is an
+    // infinite-width Fitts target — the user can throw the pointer at it without aiming.
+    private Element BuildTransport(float areaWidth, bool interactive, MediaSeekBar seekBar,
+        Signal<float> chromeHeight, Signal<bool> volumeExpanded, Action toggleFullscreen,
+        Ref<NodeHandle> ccAnchor, Ref<NodeHandle> qualityAnchor, Ref<NodeHandle> rateAnchor, Ref<NodeHandle> audioAnchor,
         IOverlayService overlayService)
     {
         // The transport render reads only LOW-frequency signals (play-state + muted) so it does NOT re-render each frame
@@ -604,45 +1181,104 @@ public sealed class MediaPlayerElement : Component
         _ = Player.Tracks.Text.Version.Value;
         _ = Player.Qualities.Variants.Version.Value;
         MediaTrack? text = Player.Tracks.SelectedText.Value;
+        MediaTrack? audio = Player.Tracks.SelectedAudio.Value;
         QualitySelection quality = Player.Qualities.Selected.Value;
         QualityVariant? activeQuality = Player.Qualities.Active.Value;
         float rate = Player.Rate.Value;
-        _ = areaWidth;                                         // the seek bar now Grows to fill; width is self-measured
+        bool hasDuration = Player.Duration.Value > TimeSpan.Zero;
+        bool volumeOpen = volumeExpanded.Value;
+
+        // Width-dependent decisions wait for a MEASURE. On the first layout pass areaWidth is 0, so treating "unknown"
+        // as "wide" rendered all three chips and then deleted them one frame later — the flash the compaction rule was
+        // supposed to prevent. Unknown now means "not yet", for the time label and the chips alike.
+        bool measured = areaWidth > 0f;
+        bool compact = IsCompactTransport(areaWidth);
+        bool presentingFullscreen = PresentingFullscreen;
 
         var playPause = IconButton(playIntent ? Icons.Pause : Icons.Play, () =>
         {
-            if (playIntent) _ = Player.PauseAsync(); else _ = Player.PlayAsync();
-        });
+            if (playIntent) RequestPause(); else RequestPlay();
+        }, interactive);
 
-        var muteBtn = IconButton(muted ? Icons.Mute : Icons.Volume, () => Player.SetMuted(!muted));
+        var back10 = IconButton(Icons.Back, () => seekBar.SeekBy(-10f), interactive);
+        var fwd10 = IconButton(Icons.Forward, () => seekBar.SeekBy(10f), interactive);
 
-        var seek = new BoxEl
+        // Volume: an icon that is a real mute toggle, plus a slider that expands on hover/focus. A bare mute toggle with
+        // no slider is the one control users cannot substitute with anything else on the surface.
+        var volumeChildren = new System.Collections.Generic.List<Element>(2)
         {
-            Grow = 1f, Shrink = 1f, MinWidth = 0f, AlignItems = FlexAlign.Center,
-            Children = new Element[] { Embed.Comp(() => new MediaSeekBar { Player = Player }) },
+            IconButton(muted || Player.Volume.Peek() <= 0f ? Icons.Mute : Icons.Volume,
+                () => Player.SetMuted(!muted), interactive),
+        };
+        if (volumeOpen && interactive)
+            volumeChildren.Add(new BoxEl
+            {
+                Width = 84f, AlignItems = FlexAlign.Center,
+                Children = [Slider.Create(Player.Volume, v => Player.SetVolume(v), length: 84f, thickness: 24f)],
+            });
+        var volume = new BoxEl
+        {
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = 2f,
+            OnPointerMoveWithin = _ => { volumeExpanded.Value = true; OnChromePointerMove(default); },
+            OnPointerExit = () => volumeExpanded.Value = false,
+            Children = volumeChildren.ToArray(),
         };
 
-        bool compact = IsCompactTransport(areaWidth);
-        var controls = new System.Collections.Generic.List<Element>(12) { playPause, muteBtn };
-        if (areaWidth <= 0f || areaWidth >= 420f)
-            controls.Add(Embed.Comp(() => new MediaTransportTime { Player = Player }));
+        var controls = new System.Collections.Generic.List<Element>(14) { playPause, back10, fwd10, volume };
+        if (measured && areaWidth >= CompactTransportWidth)
+            controls.Add(Embed.Comp(() => new MediaTransportTime { Player = Player, ScrubTargetSeconds = seekBar.ScrubTargetSeconds }));
         controls.Add(new BoxEl { Grow = 1f, MinWidth = 0f });
+        // A live source says so on the surface, next to the control that acts on it. The chip is a STATUS READOUT, not a
+        // button: it is what answers "is this stream live or a recording" while the transport is showing no duration and
+        // no seek bar at all — the state the user would otherwise have to infer from an absence. The Go-Live button
+        // beside it stays the only interactive element (and reads "● LIVE" once the playhead is at the edge, so the two
+        // never claim different things: the chip states the SOURCE is live, the button states where the PLAYHEAD is).
+        if (timeline.IsLive)
+            controls.Add(LiveChip());
         if ((commands & MediaCommandFlags.GoLive) != 0)
-            controls.Add(TextButton(timeline.IsAtLiveEdge ? MediaStrings.LiveEdge : MediaStrings.GoLive, () => _ = Player.GoLiveAsync(), timeline.IsAtLiveEdge));
-        // Each inline button opens a PICKER flyout at its own anchor (never blind-cycles through the options).
-        if (!compact && (commands & MediaCommandFlags.SelectTextTrack) != 0 && Player.Tracks.Text.Count > 0)
-            controls.Add(TextButton(text is null ? MediaStrings.CaptionsShort : MediaStrings.CaptionsFor(text.Language ?? text.Label),
-                () => OpenPicker(ccAnchor, CaptionItems()), text is not null) with { OnRealized = h => ccAnchor.Value = h });
-        if (!compact && (commands & MediaCommandFlags.SelectVideoQuality) != 0 && Player.Qualities.Variants.Count > 0)
-            controls.Add(TextButton(QualityLabel(quality, activeQuality), () => OpenPicker(qualityAnchor, QualityItems()))
-                with { OnRealized = h => qualityAnchor.Value = h });
-        if (!compact && (commands & MediaCommandFlags.Rate) != 0)
-            controls.Add(TextButton(MediaStrings.RateLabel(rate), () => OpenPicker(rateAnchor, SpeedItems()))
+            controls.Add(TextButton(timeline.IsAtLiveEdge ? MediaStrings.LiveEdge : MediaStrings.GoLive,
+                () => _ = Player.GoLiveAsync(), interactive, timeline.IsAtLiveEdge));
+        // Each chip renders its CURRENT VALUE, never a category label: "1×" not "Speed", "1080p" not "Quality",
+        // "CC EN" not "Subtitles". A chip that names its category makes the user open it to find out what it is set to.
+        // Each opens a PICKER flyout at its own anchor (never blind-cycles through the options).
+        if (measured && !compact && (commands & MediaCommandFlags.Rate) != 0)
+            controls.Add(TextButton(MediaStrings.RateLabel(rate), () => OpenPicker(rateAnchor, SpeedItems()), interactive)
                 with { OnRealized = h => rateAnchor.Value = h });
+        // The quality chip SURVIVES compaction. It is the readout for the "why am I watching 240p" question, and the
+        // one chip whose value the user cannot infer from anything else on screen.
+        if (measured && (commands & MediaCommandFlags.SelectVideoQuality) != 0 && Player.Qualities.Variants.Count > 0)
+            controls.Add(TextButton(QualityLabel(quality, activeQuality), () => OpenPicker(qualityAnchor, QualityItems()), interactive)
+                with { OnRealized = h => qualityAnchor.Value = h });
+        if (measured && !compact && (commands & MediaCommandFlags.SelectTextTrack) != 0 && Player.Tracks.Text.Count > 0)
+            controls.Add(TextButton(text is null ? MediaStrings.CaptionsShort : MediaStrings.CaptionsFor(text.Language ?? text.Label),
+                () => OpenPicker(ccAnchor, CaptionItems()), interactive, text is not null)
+                with { OnRealized = h => ccAnchor.Value = h });
+        if (measured && !compact && (commands & MediaCommandFlags.SelectAudioTrack) != 0 && Player.Tracks.Audio.Count > 1)
+            controls.Add(TextButton(audio?.Language ?? audio?.Label ?? MediaStrings.AudioTrack,
+                () => OpenPicker(audioAnchor, AudioItems()), interactive)
+                with { OnRealized = h => audioAnchor.Value = h });
+        if (PictureInPictureRequested is { } pip && (commands & MediaCommandFlags.PictureInPicture) != 0)
+            controls.Add(IconButton(Icons.OpenInNewWindow, pip, interactive));
         // The button raises the SAME context request as right-click / long-press / Menu-key. ContextMenu.Attach reads
         // args.Source at invoke time, so placement follows this live button without a captured realization handle.
-        controls.Add(IconButton(Icons.More, static () => { }) with { OnClick = null, ClickRequestsContext = true });
-        controls.Add(IconButton(IsFullscreenPresentation ? Icons.BackToWindow : Icons.FullScreen, toggleFullscreen));
+        controls.Add(IconButton(Icons.More, static () => { }, interactive) with { OnClick = null, ClickRequestsContext = interactive });
+        // LAST, at the extreme corner. See the cluster note above.
+        controls.Add(IconButton(presentingFullscreen ? Icons.BackToWindow : Icons.FullScreen, toggleFullscreen, interactive));
+
+        var rows = new System.Collections.Generic.List<Element>(2);
+        // Never render a seek bar without a duration: a rail with no scale is a control that lies about what it does.
+        if (hasDuration)
+            rows.Add(new BoxEl
+            {
+                Key = "media-seek-row",
+                Grow = 1f, Shrink = 1f, MinWidth = 0f, AlignItems = FlexAlign.Center,
+                Children = [Embed.Comp(() => seekBar)],
+            });
+        rows.Add(new BoxEl
+        {
+            Key = "media-control-row",
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = 6f, Children = controls.ToArray(),
+        });
 
         return new BoxEl
         {
@@ -652,11 +1288,17 @@ public sealed class MediaPlayerElement : Component
             // The canonical media footer scrim (Tok.ScrimBottom): controls sit on darkness that dissolves into the
             // video, the YouTube/Netflix-style overlay read.
             Gradient = Tok.ScrimBottom,
-            Children =
-            [
-                seek,
-                new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Gap = 6f, Children = controls.ToArray() },
-            ],
+            // S3 — pointer over the CONTROL PANEL, not merely over the element. Resting the pointer on the play button
+            // used to hide the bar out from under it (and the cursor with it), because the only tracker was a
+            // whole-element MOVE handler and a resting pointer emits no moves.
+            OnPointerMoveWithin = OnChromePointerMove,
+            OnPointerExit = OnChromePointerExit,
+            OnBoundsChanged = b =>
+            {
+                float h = MathF.Round(b.H);
+                if (h != chromeHeight.Peek()) chromeHeight.Value = h;   // captions lift by exactly this
+            },
+            Children = rows.ToArray(),
         };
 
         void OpenPicker(Ref<NodeHandle> anchor, System.Collections.Generic.List<MenuFlyoutItem> items)
@@ -665,11 +1307,14 @@ public sealed class MediaPlayerElement : Component
             var scene = Context.Scene;
             if (node.IsNull || scene is null || !scene.IsLive(node)) return;
             OverlayHandle? m = null;
-            m = overlayService.Open(() => node,
+            // The anchor is a THUNK, not a snapshot. A transport re-render recreates the button and the captured handle
+            // goes dead; the pin then drops, the chrome hides, and OverlayHost's dead-anchor prune closes the picker
+            // under the user's hand. The More button was fixed for exactly this — so is every picker now.
+            m = overlayService.Open(() => anchor.Value,
                 () => MenuFlyout.Build(items, () => m?.Close()), FlyoutPlacement.TopEdgeAlignedRight,
                 new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss) { ConstrainToRootBounds = false });
-            // PopupOptions.PinsAnchor defaults true → the open flyout PINS the player's auto-hide scope; the chrome's
-            // idle-hide consults IsAnchorPinned/PinEpoch and stays put. No hand-rolled counter, no ClosedAction unpin.
+            _menuOpen = true;      // S6, immediately — the epoch effect confirms it and clears it on close
+            Reevaluate();
         }
 
         System.Collections.Generic.List<MenuFlyoutItem> CaptionItems()
@@ -680,6 +1325,18 @@ public sealed class MediaPlayerElement : Component
             {
                 MediaTrack track = Player.Tracks.Text[i];
                 items.Add(MenuFlyoutItem.RadioItem(track.Label ?? track.Language ?? MediaStrings.CaptionsIndexed(i + 1), text?.Id == track.Id,
+                    () => _ = Player.SelectTrackAsync(track)));
+            }
+            return items;
+        }
+
+        System.Collections.Generic.List<MenuFlyoutItem> AudioItems()
+        {
+            var items = new System.Collections.Generic.List<MenuFlyoutItem>(Player.Tracks.Audio.Count);
+            for (int i = 0; i < Player.Tracks.Audio.Count; i++)
+            {
+                MediaTrack track = Player.Tracks.Audio[i];
+                items.Add(MenuFlyoutItem.RadioItem(track.Label ?? track.Language ?? MediaStrings.AudioIndexed(i + 1), audio?.Id == track.Id,
                     () => _ = Player.SelectTrackAsync(track)));
             }
             return items;
@@ -707,7 +1364,138 @@ public sealed class MediaPlayerElement : Component
 
         MenuFlyoutItem Speed(double value) => MenuFlyoutItem.RadioItem(MediaStrings.RateLabel((float)value), Math.Abs(rate - value) < 0.01,
             () => Player.SetRate(value));
+    }
 
+    // ── keyboard (Task 2) ────────────────────────────────────────────────────────────────────────────────────────────
+    // Two rules run through the whole map and they are the single most preventable anger class in a video UI
+    // (Jellyfin #1079 / #2376 / #2058):
+    //   1. A transport button must NEVER keep keyboard focus after a MOUSE activation, or the next Space re-activates
+    //      the last-clicked button instead of toggling play. IconButton/TextButton therefore carry
+    //      AllowFocusOnInteraction = false — a pointer press never moves focus onto them, so focus stays on the video
+    //      surface where Space belongs. Tab still reaches every one of them.
+    //   2. Every binding works identically windowed and fullscreen, and stays LIVE while the chrome is HIDDEN — the
+    //      handler is on the player frame, which never unmounts, not on the chrome, which fades.
+    private const int VkComma = 188, VkPeriod = 190, VkOpenBracket = 219, VkCloseBracket = 221, VkSlash = 191;
+
+    private void HandleKeyCore(KeyEventArgs e, MediaSeekBar seekBar, Action toggleFullscreen, Action exitFullscreenOnly,
+        Signal<bool> shortcutsOpen)
+    {
+        bool shift = (e.Mods & KeyModifiers.Shift) != 0;
+        if ((e.Mods & (KeyModifiers.Ctrl | KeyModifiers.Alt | KeyModifiers.Win)) != 0) return;   // leave app chords alone
+
+        switch (e.KeyCode)
+        {
+            case Keys.Space:
+            case Keys.K:
+                TogglePlay(); e.Handled = true; break;
+            case Keys.Left:
+                seekBar.SeekBy(shift ? -1f : -5f); e.Handled = true; break;
+            case Keys.Right:
+                seekBar.SeekBy(shift ? 1f : 5f); e.Handled = true; break;
+            case Keys.J:
+                seekBar.SeekBy(-10f); e.Handled = true; break;
+            case Keys.L:
+                seekBar.SeekBy(10f); e.Handled = true; break;
+            case Keys.Up:
+                AdjustVolume(VolumeStep); e.Handled = true; break;
+            case Keys.Down:
+                AdjustVolume(-VolumeStep); e.Handled = true; break;
+            case Keys.M:
+                Player.SetMuted(!Player.Muted.Peek()); e.Handled = true; break;
+            case >= Keys.D0 and <= Keys.D9:
+                JumpToPercent((e.KeyCode - Keys.D0) * 10); e.Handled = true; break;
+            case VkComma:
+                StepFrame(-1); e.Handled = true; break;
+            case VkPeriod:
+                StepFrame(1); e.Handled = true; break;
+            case VkOpenBracket:
+                ScaleRate(0.9f); e.Handled = true; break;
+            case VkCloseBracket:
+                ScaleRate(1f / 0.9f); e.Handled = true; break;
+            case Keys.Back:
+                Player.SetRate(1.0); e.Handled = true; break;
+            case Keys.C:
+                CycleCaptions(); e.Handled = true; break;
+            case Keys.F:
+            case Keys.F11:
+                toggleFullscreen(); e.Handled = true; break;
+            case VkSlash when shift:
+                shortcutsOpen.Value = !shortcutsOpen.Peek(); e.Handled = true; break;
+            // Escape EXITS fullscreen and does nothing else. It never enters it, and it never falls through to a
+            // window-close: with IsHostFullscreen set it leaves through the host delegate, exactly as F11 does.
+            case Keys.Escape when PresentingFullscreen:
+                exitFullscreenOnly(); e.Handled = true; break;
+            case Keys.Escape when shortcutsOpen.Peek():
+                shortcutsOpen.Value = false; e.Handled = true; break;
+            default:
+                return;   // unhandled: no reveal, no re-arm — an unrelated key is not activity on this surface
+        }
+        ShowChrome();
+        ShowCursor();
+        Reevaluate();
+    }
+
+    private void TogglePlay()
+    {
+        if (Player.IsPlayRequested.Peek()) RequestPause(); else RequestPlay();
+    }
+
+    private void JumpToPercent(int percent)
+    {
+        var dur = Player.Duration.Peek();
+        if (dur <= TimeSpan.Zero) return;
+        RequestSeekVia(TimeSpan.FromSeconds(dur.TotalSeconds * (percent / 100.0)));
+    }
+
+    private void RequestSeekVia(TimeSpan target)
+    {
+        if (_seekBar is { } bar) bar.SeekTo(target);       // keeps the confirm-gated hold + the target readout
+        else RequestSeek(target, SeekMode.Accurate);
+    }
+
+    /// <summary>Frame step with AUTO-PAUSE: stepping while playing is meaningless, so the step implies the pause the
+    /// user was about to press anyway.</summary>
+    private void StepFrame(int delta)
+    {
+        if (Player.IsPlayRequested.Peek()) RequestPause();
+        _ = Player.StepFrame(delta);
+    }
+
+    private void ScaleRate(float factor)
+        => Player.SetRate(Math.Clamp(Player.Rate.Peek() * factor, MinRate, MaxRate));
+
+    private const float MinRate = 0.25f, MaxRate = 2.0f;
+
+    /// <summary>C cycles Off → track 1 → … → Off. A cycle (not a picker) is right for a KEY: the user is not looking at
+    /// the screen when they press it, and the menu is one right-click away when they are.</summary>
+    private void CycleCaptions()
+    {
+        var tracks = Player.Tracks.Text;
+        if (tracks.Count == 0) return;
+        MediaTrack? current = Player.Tracks.SelectedText.Peek();
+        int index = -1;
+        for (int i = 0; i < tracks.Count; i++) if (tracks[i].Id == current?.Id) { index = i; break; }
+        int next = index + 1;
+        _ = Player.SelectTrackAsync(next >= tracks.Count ? null : tracks[next]);
+    }
+
+
+    private void RequestPlay()
+    {
+        if (PlayRequested is { } request) request();
+        else _ = Player.PlayAsync();
+    }
+
+    private void RequestPause()
+    {
+        if (PauseRequested is { } request) request();
+        else _ = Player.PauseAsync();
+    }
+
+    private void RequestSeek(TimeSpan target, SeekMode mode)
+    {
+        if (SeekRequested is { } request) request(target, mode);
+        else _ = Player.SeekAsync(target, mode);
     }
 
     /// <summary>Build the complete More/context menu against LIVE state. This is invoked once per open by
@@ -759,8 +1547,8 @@ public sealed class MediaPlayerElement : Component
             items.Add(new MenuFlyoutItem(MediaStrings.NextChapter, Icons.Next, Invoke: () => _ = Player.NextChapterAsync()));
         }
         items.Add(MenuFlyoutItem.Separator);
-        items.Add(new MenuFlyoutItem(IsFullscreenPresentation ? MediaStrings.ExitFullscreen : MediaStrings.Fullscreen,
-            IsFullscreenPresentation ? Icons.BackToWindow : Icons.FullScreen, Invoke: toggleFullscreen) { AcceleratorText = MediaStrings.F11 });
+        items.Add(new MenuFlyoutItem(PresentingFullscreen ? MediaStrings.ExitFullscreen : MediaStrings.Fullscreen,
+            PresentingFullscreen ? Icons.BackToWindow : Icons.FullScreen, Invoke: toggleFullscreen) { AcceleratorText = MediaStrings.F11 });
         return items;
 
         System.Collections.Generic.List<MenuFlyoutItem> CaptionItems()
@@ -832,12 +1620,21 @@ public sealed class MediaPlayerElement : Component
     private sealed class MediaTransportTime : Component
     {
         public required IMediaPlayer Player { get; init; }
+        /// <summary>The seek bar's live scrub target (negative = none). While a scrub is in flight this label shows
+        /// where the user is GOING within 100 ms of pointer-down, regardless of decode — the decoded position may not
+        /// move for seconds on the DRM path, and a readout that sits still under a moving thumb reads as a freeze.</summary>
+        public IReadSignal<float>? ScrubTargetSeconds { get; init; }
         private readonly Signal<int> _posSec = new(0);
         private readonly Signal<int> _durSec = new(-1);
 
         public override Element Render()
         {
-            UseSignalEffect(() => { int s = (int)Player.PositionSeconds.Value; if (s != _posSec.Peek()) _posSec.Value = s; });
+            UseSignalEffect(() =>
+            {
+                float target = ScrubTargetSeconds?.Value ?? -1f;
+                int s = target >= 0f ? (int)target : (int)Player.PositionSeconds.Value;
+                if (s != _posSec.Peek()) _posSec.Value = s;
+            });
             UseSignalEffect(() =>
             {
                 var d = Player.Duration.Value;
@@ -856,6 +1653,9 @@ public sealed class MediaPlayerElement : Component
     private sealed class FullscreenMediaView : Component
     {
         public required IMediaPlayer Player { get; init; }
+        public Action? PlayRequested { get; init; }
+        public Action? PauseRequested { get; init; }
+        public Action<TimeSpan, SeekMode>? SeekRequested { get; init; }
         public required VideoBinding Binding { get; init; }
         public required Signal<VideoAspectMode> AspectMode { get; init; }
         public required Signal<double> CustomAspectRatio { get; init; }
@@ -863,6 +1663,7 @@ public sealed class MediaPlayerElement : Component
         public required Action Exit { get; init; }
         public Action<VideoAspectMode, double>? AspectModeChanged { get; init; }
         public ColorF LetterboxColor { get; init; }
+        public CursorAutoHidePolicy CursorAutoHide { get; init; } = CursorAutoHidePolicy.FullscreenOnly;
 
         public override Element Render()
         {
@@ -877,6 +1678,9 @@ public sealed class MediaPlayerElement : Component
                     Embed.Comp(() => new MediaPlayerElement
                     {
                         Player = Player,
+                        PlayRequested = PlayRequested,
+                        PauseRequested = PauseRequested,
+                        SeekRequested = SeekRequested,
                         PresentationBinding = Binding,
                         AspectMode = AspectMode,
                         CustomAspectRatio = CustomAspectRatio,
@@ -885,38 +1689,78 @@ public sealed class MediaPlayerElement : Component
                         FullscreenState = FullscreenState,
                         IsFullscreenPresentation = true,
                         ExitFullscreen = Exit,
+                        CursorAutoHide = CursorAutoHide,
                     }),
                 ],
             };
         }
     }
 
-    private static BoxEl IconButton(string glyph, Action onClick) => new()
+    // Hidden chrome is NOT merely transparent: `interactive` strips the Role (so it leaves the accessibility surface),
+    // forces TabStop off (so it leaves the tab order) and disables the node (so it takes no activation) — on top of the
+    // chrome root's HitTestVisible = false, which removes the whole subtree from hit-testing. A control panel that is
+    // invisible but still hittable/focusable eats clicks meant for the video and traps Tab in nothing.
+    //
+    // AllowFocusOnInteraction = false is the fix for the Jellyfin class of bug: a MOUSE press never moves focus onto a
+    // transport button, so focus stays on the video surface and the next Space toggles play instead of re-activating
+    // the last-clicked button. Tab still reaches every button (keyboard focus is unaffected).
+    private BoxEl IconButton(string glyph, Action onClick, bool interactive) => new()
     {
         Width = 40f, Height = 40f, Corners = Radii.ControlAll,
         AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
         HoverFill = Tok.OnMediaPrimary with { A = 0.09f }, PressedFill = Tok.OnMediaPrimary with { A = 0.16f },
-        Role = AutomationRole.Button,
+        Role = interactive ? AutomationRole.Button : default,
+        TabStop = interactive ? null : false,
+        IsEnabled = interactive,
+        AllowFocusOnInteraction = false,
         OnClick = onClick,
+        OnPointerPressed = OnChromePointerPressed,
+        OnFocusChanged = OnChromeFocusChanged,
         Children = new Element[] { new TextEl(glyph) { Size = 16f, Color = Tok.OnMediaPrimary, FontFamily = Theme.IconFont } },
     };
 
-    private static BoxEl TextButton(string label, Action onClick, bool active = false) => new()
+    /// <summary>The LIVE status chip. Deliberately NOT a button: no Role, no TabStop, no hover/press fill and no click —
+    /// a chip that looks pressable but does nothing is worse than no chip. It carries the critical-fill dot the whole
+    /// system uses for "on air" plus the word, because the dot alone is not a label and color alone is not an
+    /// accessible signal.</summary>
+    private BoxEl LiveChip() => new()
+    {
+        Height = 34f, Padding = new Edges4(8f, 0f, 8f, 0f), Corners = Radii.ControlAll,
+        Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Gap = 6f,
+        Children =
+        [
+            new BoxEl { Width = 6f, Height = 6f, Corners = Radii.Circle(6f), Fill = Tok.SystemFillCritical },
+            new TextEl(MediaStrings.Live) { Size = 12f, Color = Tok.OnMediaPrimary },
+        ],
+    };
+
+    private BoxEl TextButton(string label, Action onClick, bool interactive, bool active = false) => new()
     {
         Height = 34f, MinWidth = 42f, Padding = new Edges4(8f, 0f, 8f, 0f), Corners = Radii.ControlAll,
         AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
         Fill = active ? Tok.AccentDefault : ColorF.Transparent,
         HoverFill = active ? Tok.AccentSecondary : Tok.OnMediaPrimary with { A = 0.09f },
         PressedFill = active ? Tok.AccentTertiary : Tok.OnMediaPrimary with { A = 0.16f },
-        Role = AutomationRole.Button, OnClick = onClick,
+        Role = interactive ? AutomationRole.Button : default,
+        TabStop = interactive ? null : false,
+        IsEnabled = interactive,
+        AllowFocusOnInteraction = false,
+        OnClick = onClick,
+        OnPointerPressed = OnChromePointerPressed,
+        OnFocusChanged = OnChromeFocusChanged,
         Children = [new TextEl(label) { Size = 12f, Color = Tok.OnMediaPrimary }],
     };
 
     private string QualityLabel(QualitySelection selection, QualityVariant? active)
     {
+        // "240p (Auto)", never "Auto · 240p". The NUMBER is what the user is looking for — it is the answer to "why
+        // does this look like that" — and the mode is the parenthetical. Putting Auto first buries the readout behind a
+        // word that is the same on every stream, which is precisely how a silent ABR downshift goes unnoticed. An
+        // UPSHIFT changes this label exactly as visibly as a downshift does; the label follows Qualities.Active, so it
+        // moves on the acknowledged rung and not on the request.
         if (selection.IsAuto)
             return active is { Resolution.Height: > 0 }
-                ? MediaStrings.Auto + " · " + MediaStrings.QualityHeight(active.Resolution.Height)
+                ? MediaStrings.QualityHeight(active.Resolution.Height) + " (" + MediaStrings.Auto + ")"   // loc-allow: parenthesis punctuation around two localized parts
                 : MediaStrings.Auto;
         for (int i = 0; i < Player.Qualities.Variants.Count; i++)
         {
@@ -946,15 +1790,19 @@ public sealed class MediaPlayerElement : Component
         },
     };
 
-    private static Element OpeningOverlay(bool playIntent) => new BoxEl
+    /// <summary>The startup cue. It is ANIMATED and indeterminate by default — a static glyph is indistinguishable
+    /// from a hang, which is the one thing a loading state must never be. A DETERMINATE readout appears only once the
+    /// start has been slow enough (10 s) for a number to be information rather than noise, and only when the backend
+    /// actually knows one (<paramref name="percent"/> in 0..1).</summary>
+    private static Element OpeningOverlay(bool playIntent, double percent) => new BoxEl
     {
-        // No card, no border: a quiet centered spinner over the dark stage (the WinUI/streaming-player loading read).
+        // No card, no border: a quiet centered spinner over the poster (the WinUI/streaming-player loading read).
         Direction = 1,
         Gap = 14f,
         AlignItems = FlexAlign.Center,
         Children =
         [
-            ProgressRing.Indeterminate(40f),
+            percent is >= 0 and <= 1 ? ProgressRing.Determinate((float)percent, 40f) : ProgressRing.Indeterminate(40f),
             new TextEl(playIntent ? MediaStrings.StartingPlayback : MediaStrings.Loading)
             { Size = 13f, Color = Tok.OnMediaSecondary },
         ],
@@ -994,10 +1842,23 @@ public sealed class MediaPlayerElement : Component
         return count;
     }
 
+    /// <summary>UNCONDITIONAL force-show: no play intent at all, or a TERMINAL failure. Deliberately NOT "anything that
+    /// is not Playing" any more. The old predicate treated every non-Playing state as a force-show, and the protected
+    /// session maps both Licensed and Buffering onto <see cref="PlaybackState.Buffering"/> while sampling native state
+    /// only every 250 ms — so one rebuffer blip re-pinned the chrome and a hung start pinned it forever. A transient
+    /// buffer is S2 (bounded, see <c>BufferingSuppressMaxMs</c>) and a slow open is the S1 grace
+    /// (<c>OpeningForceShowMs</c>); neither belongs here.</summary>
     internal static bool ShouldForceChrome(bool playIntent, PlaybackState state)
-        => !playIntent || state is not PlaybackState.Playing;
+        => !playIntent || state == PlaybackState.Failed;
 
-    internal static bool IsCompactTransport(float width) => width > 0f && width < 760f;
+    /// <summary>S1 — a REAL, user-visible stop: paused, idle, ended, or opened-but-not-yet-started. A transient
+    /// buffer/stall is NOT a stop (that is S2) and must not be confused for one.</summary>
+    internal static bool IsStoppedState(PlaybackState state)
+        => state is PlaybackState.Idle or PlaybackState.Ready or PlaybackState.Paused or PlaybackState.Ended;
+
+    /// <summary>Below <c>CompactTransportWidth</c> the chips fold into the ⋯ menu. Unknown width (0, the first layout
+    /// pass) is NOT compact and NOT wide — callers wait for a measure rather than rendering chips that vanish.</summary>
+    internal static bool IsCompactTransport(float width) => width > 0f && width < CompactTransportWidth;
 
     private static bool Near(double a, double b) => Math.Abs(a - b) < 0.01;
 
@@ -1040,11 +1901,68 @@ public sealed class MediaPlayerElement : Component
         ],
     };
 
-    private static Element CaptionOverlay(TimedCue cue) => new BoxEl
+    /// <summary>The "?" reference sheet. It is a light-dismiss LAYER inside the player, not a flyout: the bindings it
+    /// documents must stay live while it is up (pressing Space with the sheet open should still toggle play), and a
+    /// focus-trapping popup would swallow exactly the keys the sheet is teaching.
+    ///
+    /// <para>The action labels are deliberate literals: the control kit's loc table (<c>assets/loc/en-US.json</c>) has
+    /// no keys for a shortcut sheet yet, and inventing <c>Strings.Media.*</c> members that resolve to nothing would
+    /// render an empty sheet. They are marked so the extraction pass can find them in one grep.</para></summary>
+    private static Element ShortcutOverlay(Action close)
     {
+        var rows = new System.Collections.Generic.List<Element>(16);
+        Row("Space  K", "Play / pause");           // loc-allow: shortcut sheet — kit loc keys pending
+        Row("← →", "Seek 5 s");                    // loc-allow: shortcut sheet — kit loc keys pending
+        Row("J  L", "Seek 10 s");                  // loc-allow: shortcut sheet — kit loc keys pending
+        Row("Shift ← →", "Seek 1 s");              // loc-allow: shortcut sheet — kit loc keys pending
+        Row("↑ ↓", "Volume");                      // loc-allow: shortcut sheet — kit loc keys pending
+        Row("M", "Mute");                          // loc-allow: shortcut sheet — kit loc keys pending
+        Row("0 – 9", "Jump to 0-90 %");            // loc-allow: shortcut sheet — kit loc keys pending
+        Row(",  .", "Frame step");                 // loc-allow: shortcut sheet — kit loc keys pending
+        Row("[  ]", "Speed");                      // loc-allow: shortcut sheet — kit loc keys pending
+        Row("F  F11", MediaStrings.Fullscreen);
+        Row("Esc", MediaStrings.ExitFullscreen);
+        Row("C", MediaStrings.Captions);
+
+        return new BoxEl
+        {
+            Key = "media-shortcuts",
+            Grow = 1f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+            Fill = Tok.MediaScrim,
+            OnClick = close,
+            Animate = LoadingMotion,
+            Children =
+            [
+                new BoxEl
+                {
+                    Direction = 1, Gap = 6f,
+                    Padding = new Edges4(22f, 20f, 22f, 20f),
+                    Corners = Radii.OverlayAll,
+                    Fill = Tok.MediaScrim,
+                    HitTestVisible = false,
+                    Children = rows.ToArray(),
+                },
+            ],
+        };
+
+        void Row(string keys, string action) => rows.Add(new BoxEl
+        {
+            Direction = 0, Gap = 16f, AlignItems = FlexAlign.Center,
+            Children =
+            [
+                new BoxEl { Width = 110f, Children = [new TextEl(keys) { Size = 12f, Color = Tok.OnMediaSecondary }] },
+                new TextEl(action) { Size = 12f, Color = Tok.OnMediaPrimary },
+            ],
+        });
+    }
+
+    private static Element CaptionOverlay(TimedCue cue, float bottomMargin) => new BoxEl
+    {
+        Key = "media-caption",
         AlignSelf = FlexAlign.Center,
         MaxWidth = 880f,
-        Margin = new Edges4(24f, 0f, 24f, 28f),
+        Animate = CaptionMotion,
+        Margin = new Edges4(24f, 0f, 24f, bottomMargin),
         Padding = new Edges4(10f, 5f, 10f, 6f),
         Corners = Radii.ControlAll,
         Fill = Tok.MediaScrim with { A = 0.72f },
@@ -1147,6 +2065,7 @@ internal static class MediaStrings
     public static string Loading => Loc.Get(Strings.Media.Loading);
     public static string Off => Loc.Get(Strings.Media.Off);
     public static string Auto => Loc.Get(Strings.Media.Auto);
+    public static string Live => Loc.Get(Strings.Media.Live);
     public static string GoLive => Loc.Get(Strings.Media.GoLive);
     public static string LiveEdge => Loc.Get(Strings.Media.LiveEdge);
     public static string CaptionsShort => Loc.Get(Strings.Media.CaptionsShort);

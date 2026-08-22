@@ -1,5 +1,6 @@
 using System.Net.Http;
 using System.Runtime.InteropServices;
+using Wavee.Sdk.Streams;
 
 namespace Wavee.Backend.Audio;
 
@@ -24,7 +25,7 @@ public sealed class SpotifyAudioStream : Stream, IAsyncDisposable, IAudioReadStr
     readonly WaveeLogger _log;
     readonly byte[] _head;
     readonly int _headLen;
-    readonly AudioBodyDiskCache? _bodyDisk;
+    readonly ChunkDiskCache? _bodyDisk;
     readonly RangedHttpRecoveryPolicy? _recoveryPolicy;
     readonly object _stateGate = new();
 
@@ -47,7 +48,7 @@ public sealed class SpotifyAudioStream : Stream, IAsyncDisposable, IAudioReadStr
     }
 
     SpotifyAudioStream(HttpClient http, ReadOnlyMemory<byte> head, int headBoundary, string name = "", WaveeLogger log = default,
-        AudioBodyDiskCache? bodyDisk = null, RangedHttpRecoveryPolicy? recoveryPolicy = null)
+        ChunkDiskCache? bodyDisk = null, RangedHttpRecoveryPolicy? recoveryPolicy = null)
     {
         _http = http ?? throw new ArgumentNullException(nameof(http));
         _name = string.IsNullOrWhiteSpace(name) ? "unknown" : name;
@@ -64,7 +65,7 @@ public sealed class SpotifyAudioStream : Stream, IAsyncDisposable, IAudioReadStr
 
     /// <summary>Create a stream that can serve clear head bytes immediately. Call <see cref="AttachBodyAsync"/> later.</summary>
     public static SpotifyAudioStream CreateHeadOnly(HttpClient http, ReadOnlyMemory<byte> head, int headBoundary, string name = "", WaveeLogger log = default,
-        AudioBodyDiskCache? bodyDisk = null) =>
+        ChunkDiskCache? bodyDisk = null) =>
         new(http, head, headBoundary, name, log, bodyDisk);
 
     /// <summary>Create and attach the ranged CDN body before returning. Kept for the non-fast/full-load path and tests.</summary>

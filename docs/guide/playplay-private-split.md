@@ -67,6 +67,26 @@ support is compiled into this build at all, every directory that was searched wi
 presence, the locate outcome + reason, and the verify result. That page is the first thing to read
 before guessing.
 
+## Next: Spotify as a module
+
+The split above is the *first* half of a bigger move. Wavee now has a **playback-module system**
+([playback-modules.md](./playback-modules.md)): a source ships as an independently updatable
+out-of-process exe written against the public `Wavee.Sdk`, and the app reaches it through the ordinary
+`MediaProviderRegistry` seam. Spotify playback is the migration that system was designed for — see
+[playback-modules.md § Spotify as a module](./playback-modules.md#10-spotify-as-a-module) for the cut line
+(what leaves, what stays), the byte flow across the process boundary (`stream/open|read|close` + binary frames,
+so instant start survives), the host services the module calls back into (`host/auth/token`, `host/auth/context`,
+`spotify/audioKey`, `host/secrets/*` — the AP socket stays app-side), and the M0/M1/M2 phasing.
+
+The practical consequence for this document: in **M1** the private repo grows a `Wavee.Module.Spotify` that
+references the `Wavee.Sdk` NuGet and absorbs the resolver, the head client, the key resolver, the cipher, the
+audio stream and the PlayPlay deriver/provisioner/license client — the runtime store moves to
+`WAVEE_MODULE_DATA_DIR\runtimes\…` and `module/status` drives the setup card generically. In **M2** the public
+tree deletes its in-proc Spotify playback path outright (no fallback), and the `WAVEE_PLAYPLAY_LOCAL`
+source-link plus `link-playplay.ps1` described above **go away with it** — the module ships as a zip
+(`ops/build/pack-module.ps1`) that the app publish bundles like any other module. Until then, everything on this
+page stands exactly as written.
+
 ## `playplay-runtime.json` field schema
 
 The manifest sits beside a bare `Spotify.dll` and pins one build/arch. It is **never committed** —

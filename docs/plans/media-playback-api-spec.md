@@ -1061,8 +1061,14 @@ branching in the control.
 public sealed record MediaError(
     MediaErrorCategory Category, string Message /* always populated, no nil-error */,
     long? UnderlyingCode /* raw HRESULT / CoreMedia int, preserved */,
-    MediaLocus? Locus /* WHICH item/segment/sample */, MediaRecovery Recovery);
+    MediaLocus? Locus /* WHICH item/segment/sample */, MediaRecovery Recovery,
+    MediaErrorKind Kind = MediaErrorKind.Unknown /* the PLATFORM's own code, verbatim */);
 public enum MediaErrorCategory : byte { Network, Decode, Drm, UnsupportedCodec, Quota, Source, Lifecycle, Output }
+// The HTML5 MediaError.code vocabulary, which MF_MEDIA_ENGINE_ERR implements 1:1. Category is the ENGINE's verdict
+// (what kind of failure this is, which recovery applies); Kind is the SOURCE's (what the platform actually said) — a
+// live host branches on it: Network => re-resolve an expired locator, Decode => reload the same one,
+// SourceNotSupported => terminal, explainable fault.
+public enum MediaErrorKind : byte { Unknown = 0, Aborted = 1, Network = 2, Decode = 3, SourceNotSupported = 4, Encrypted = 5 }
 public readonly record struct MediaLocus(int? QueueIndex, MediaSource? Item, TimeSpan? Position, int? StreamIndex, long? ByteOffset);
 public enum MediaRecovery : byte { None, Retryable, NeedsUserGesture, NeedsNetwork, NeedsLicense, PickLowerQuality, Fatal }
 ```

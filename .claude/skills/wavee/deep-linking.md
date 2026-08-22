@@ -12,6 +12,7 @@ Source: `src/apps/Wavee/App/DeepLink.cs`. Boot wiring: `src/apps/Wavee/Program.c
 |---|---|---|
 | `wavee://open?route=<name>&arg=<value>` | `DeepLinkKind.Open` | `Route`, optional `Arg` |
 | `wavee://play?ctx=<spotify-context-uri>` | `DeepLinkKind.Play` | `Context` |
+| `wavee://play?link=<http(s)-url>` | `DeepLinkKind.Play` | `Link` — the playback-module intake (YouTube / Twitch / radio), same router as Play ▸ Link… |
 | `wavee://resume` | `DeepLinkKind.Resume` | (none) |
 | `wavee://pause` | `DeepLinkKind.Pause` | (none) |
 | `spotify:` album / playlist / artist / show | `DeepLinkKind.Open` | translated to the shell's route names (`album` / `pl` / `artist` / `show`) |

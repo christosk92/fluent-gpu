@@ -301,7 +301,7 @@ public class VideoLoadSupersessionTests
         public void Play() => IsPlaying = true;
         public void Pause() => IsPlaying = false;
         public void Stop() => IsPlaying = false;
-        public void Seek(long ms) { }
+        public void Seek(long ms, SeekMode mode) { }
         public void SetVolume(double v) { }
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
@@ -315,7 +315,7 @@ public class VideoLoadSupersessionTests
         public void Play() => IsPlaying = true;
         public void Pause() => IsPlaying = false;
         public void Stop() => IsPlaying = false;
-        public void Seek(long ms) { }
+        public void Seek(long ms, SeekMode mode) { }
         public void SetVolume(double v) { }
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }

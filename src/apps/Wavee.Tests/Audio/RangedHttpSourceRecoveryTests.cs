@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using Wavee.Backend.Audio;
 using Xunit;
+using Wavee.Sdk.Streams;
 
 namespace Wavee.Tests.Audio;
 
@@ -44,7 +45,7 @@ public class RangedHttpSourceRecoveryTests
 
         var error = Assert.Throws<AudioRangeFetchException>(() => source.EnsureRange(0, 1024));
 
-        Assert.Equal(AudioKeyFailureReason.Network, error.Reason);
+        Assert.Equal(StreamFailureReason.Network, error.Reason);
         Assert.Contains(events, e => e.Stage == AudioNetworkRecoveryStage.Exhausted);
     }
 
