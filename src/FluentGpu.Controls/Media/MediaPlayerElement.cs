@@ -113,6 +113,10 @@ public sealed class MediaPlayerElement : Component
         MinWidth = MenuFlyout.ThemeMinWidth,
         PointerPlacement = FlyoutPlacement.BottomEdgeAlignedLeft,
         KeyboardPlacement = FlyoutPlacement.TopEdgeAlignedRight,
+        // The transport's More menu opens OVER the video by construction, and a video hole is a DestOut erase whose
+        // backdrop is premultiplied zero — an acrylic plate there blurs nothing while forcing RepaintRoute.FullDirect
+        // for the whole window on every frame it is up. Flat from frame one, the same opt-out OpenPicker takes.
+        OpaqueSurface = true,
     };
 
     /// <summary>The player this element presents (headless contract; the MF backend drives real video).</summary>
@@ -1327,9 +1331,18 @@ public sealed class MediaPlayerElement : Component
             // The anchor is a THUNK, not a snapshot. A transport re-render recreates the button and the captured handle
             // goes dead; the pin then drops, the chrome hides, and OverlayHost's dead-anchor prune closes the picker
             // under the user's hand. The More button was fixed for exactly this — so is every picker now.
+            //
+            // OpaqueSurface: every menu this transport raises — quality, speed, captions, audio track — is anchored to
+            // a button that sits ON the video, so the plate is over the hole BY CONSTRUCTION. A hole is a DestOut erase
+            // and the video is a sibling DComp visual below the UI swapchain, so there is nothing there for an acrylic
+            // layer to blur: it would composite premultiplied zero and leave the menu as floating text. Declaring it
+            // here instead of letting OverlayHost discover it geometrically makes the plate solid from frame ONE — no
+            // query, no frame of latency, and no per-frame full-window repaint from the answer flipping (an acrylic
+            // layer is RepaintPolicy.Decide's first hard disqualifier).
             m = overlayService.Open(() => anchor.Value,
                 () => MenuFlyout.Build(items, () => m?.Close()), FlyoutPlacement.TopEdgeAlignedRight,
-                new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss) { ConstrainToRootBounds = false });
+                new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss)
+                { ConstrainToRootBounds = false, OpaqueSurface = true });
             _menuOpen = true;      // S6, immediately — the epoch effect confirms it and clears it on close
             Reevaluate();
         }

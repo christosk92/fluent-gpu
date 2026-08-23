@@ -2,25 +2,26 @@ using System;
 
 namespace Wavee;
 
-/// <summary>The three places a DOCKED video can render (<c>DockedVideoSurface.Face</c>). All three are the SAME
-/// placement value (<see cref="SurfacePlacement.Docked"/>) and the SAME single mounted surface — this enum only picks
-/// which envelope wraps it, never a second gate on top of <c>PlaybackBridge.VideoPlacementNow</c>.
+/// <summary>The two places a DOCKED video can render (<c>DockedVideoSurface.Face</c>). Both are the SAME placement
+/// value (<see cref="SurfacePlacement.Docked"/>) and the SAME single mounted surface — this enum only picks which
+/// envelope wraps it, never a second gate on top of <c>PlaybackBridge.VideoPlacementNow</c>.
+///
+/// <para>There is exactly ONE face per host, which is what makes the ≤1-mounted invariant a VALUE rather than a
+/// coincidence of mount sites — see <see cref="DockedVideoHosting.ShouldMount"/>. The rail used to carry a SECOND
+/// face, a fixed SQUARE art tile for the Details body, and it was a defect rather than a design: the same 16:9 stream
+/// changed shape and width the moment the user switched rail bodies, sitting in fat letterbox bars in Details and
+/// full-bleed everywhere else. The video now always follows its own aspect at the rail's width, in every body.</para>
 ///
 /// <para>Declared here (rather than next to the component) for the reason <see cref="RailMode"/> moved into
 /// <c>RailVideoCoupling.cs</c>: it is System-only, so it travels with the pure arbitration rules below into the
 /// engine-free test project, which cannot compile the engine-bound component the faces belong to.</para></summary>
 public enum DockedVideoFace : byte
 {
-    /// <summary><c>RightRail</c>'s non-Details arm: a full-bleed cap, pinned above the rail header. The default —
-    /// every mount that does not set <c>DockedVideoSurface.Face</c> keeps this slot. Its HEIGHT follows the playing
-    /// content's own aspect (<c>ShellResponsiveLayout.FitDockedVideoHeight</c>), splitter-overridable.</summary>
+    /// <summary><c>RightRail</c>'s ONE card, pinned above the rail header in EVERY body (Details included): full-bleed
+    /// at the rail's width. The default — every mount that does not set <c>DockedVideoSurface.Face</c> keeps this slot.
+    /// Its HEIGHT follows the playing content's own aspect (<c>ShellResponsiveLayout.FitDockedVideoHeight</c>),
+    /// splitter-overridable.</summary>
     Cap = 0,
-
-    /// <summary>The Details pinned hero (<c>NowPlayingPanel.NowPlayingHeroTile</c>): the same card FILLING a fixed
-    /// square (the rail's content width), so toggling Art&lt;-&gt;Video never changes the tile's own size and so never
-    /// reflows the credits scrolling beneath it. The bars are the element's own <c>Tok.MediaLetterbox</c> fit — Fit
-    /// frames a 16:9 stream with ~71-DIP bars top and bottom, and Stretch/Crop fill the square edge to edge.</summary>
-    ArtTile = 1,
 
     /// <summary>The module watch page's IN-PAGE stage: a full-width 16:9 surface owned by the page itself, the
     /// YouTube-style watch layout. FULL-BLEED — the page draws the envelope, the rounded silhouette and the idle
@@ -34,8 +35,8 @@ public enum DockedVideoFace : byte
 /// deadlock-prone.</summary>
 public enum DockedVideoHost : byte
 {
-    /// <summary>The right rail's docked card (<see cref="DockedVideoFace.Cap"/> or
-    /// <see cref="DockedVideoFace.ArtTile"/>). The RESTING owner: whenever nothing else is hosting, the rail is.</summary>
+    /// <summary>The right rail's ONE docked card (<see cref="DockedVideoFace.Cap"/>), the same card in every rail
+    /// body. The RESTING owner: whenever nothing else is hosting, the rail is.</summary>
     Rail = 0,
 
     /// <summary>The module watch page's in-page stage (<see cref="DockedVideoFace.PageStage"/>). Owns the surface only
@@ -123,20 +124,18 @@ public static class DockedVideoHosting
     /// one of them is attached and only the attached one is ever mounted-and-rendering — the parked twin's stage node
     /// is inside a parked subtree, so "both true" is not reachable, and even if it were, both would be pointing the
     /// one surface at the one playing item rather than at two different things.</item>
-    /// <item>The two RAIL faces require that the stage is NOT hosting. They pass <c>null</c> for
-    /// <paramref name="ownerStagePlayable"/>: they have no page of their own, they live in the shell.</item>
+    /// <item>The RAIL face requires that the stage is NOT hosting. It passes <c>null</c> for
+    /// <paramref name="ownerStagePlayable"/>: it has no page of its own, it lives in the shell.</item>
     /// </list>
     ///
-    /// <para><paramref name="railBody"/> is what separates the two rail faces from each other. Pass
-    /// <c>RailVideoCoupling.BodyModeFor(ShellUi.Mode, stageHosts)</c>: the Details body mounts the
-    /// <see cref="DockedVideoFace.ArtTile"/> hero, every other body mounts the <see cref="DockedVideoFace.Cap"/>. It
-    /// is optional only so a PageStage caller — for which it is irrelevant — need not read rail state to ask this
-    /// question; <c>null</c> means "the mount site is what separates them", which is true of the shipping mount sites
-    /// (RightRail's Details arm vs its every other arm are mutually exclusive) but is a coincidence of structure rather
-    /// than a value, and <b>the ≤1 invariant above only holds as a VALUE when it is supplied</b>.</para></summary>
+    /// <para><b>The ≤1 bound holds unconditionally, as a VALUE.</b> No rail-body term is needed — and none is
+    /// accepted — because the rail has exactly ONE card now, mounted in every body. It used to have two competing
+    /// faces (a full-bleed cap and a fixed square art tile for Details), and separating them meant threading the
+    /// substituted rail body through this gate purely so that "two faces are never both true" was a value rather than
+    /// a coincidence of which <c>RightRail</c> arm happened to mount which. With one rail face and one page face the
+    /// two questions are disjoint by construction: the stage hosts, or the rail does.</para></summary>
     public static bool ShouldMount(DockedVideoFace face, SurfacePlacement resolved,
-                                   string? ownerStagePlayable, string? activeStagePlayable, string? playingUri,
-                                   RailMode? railBody = null)
+                                   string? ownerStagePlayable, string? activeStagePlayable, string? playingUri)
     {
         if (resolved != SurfacePlacement.Docked) return false;
         bool stage = PageStageHosts(activeStagePlayable, playingUri);
@@ -144,11 +143,7 @@ public static class DockedVideoHosting
             return stage
                 && !string.IsNullOrEmpty(ownerStagePlayable)
                 && string.Equals(ownerStagePlayable, activeStagePlayable, StringComparison.Ordinal);
-        if (stage) return false;                                   // the rail yields, whole
-        if (railBody is not { } body) return true;                 // mount site separates Cap from ArtTile
-        return face == DockedVideoFace.ArtTile
-            ? body == RailMode.Details
-            : body != RailMode.Details;
+        return !stage;                                             // the rail's ONE card; the rail yields whole
     }
 
     /// <summary>Is the DOCKED capability bit available at all right now — the input <c>WaveeShell</c> folds into
@@ -168,6 +163,6 @@ public static class DockedVideoHosting
     /// <c>PlacementCore.AllPlacements</c> precedent).</summary>
     public static readonly DockedVideoFace[] AllFaces =
     [
-        DockedVideoFace.Cap, DockedVideoFace.ArtTile, DockedVideoFace.PageStage,
+        DockedVideoFace.Cap, DockedVideoFace.PageStage,
     ];
 }

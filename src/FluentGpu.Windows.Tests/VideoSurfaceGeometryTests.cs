@@ -48,9 +48,9 @@ public sealed class VideoSurfaceGeometryTests
     [InlineData(VideoAspectMode.UniformToFill)]
     public void PublishedGeometry_AlwaysKeepsTheFramesAspectInTheContentSize(VideoAspectMode mode)
     {
-        // A 16:9 stream in a SQUARE card — the Details pinned hero's shape, and the case every mode used to render
-        // identically.
-        var area = new RectF(0, 0, 326, 326);
+        // A 16:9 stream in a card that is NOT the frame's shape — a splitter-grown rail cap — which is the case every
+        // mode used to render identically back when a wrapper, not the element, owned the box.
+        var area = new RectF(0, 0, 326, 300);
         var natural = new SizeI(1920, 1080);
         RectF fitted = MediaPlayerElement.FitVideoRect(area, natural, mode, 16.0 / 9.0);
 
@@ -98,41 +98,49 @@ public sealed class VideoSurfaceGeometryTests
         Assert.Equal(1920.0 / 1080.0, (double)geo.Content.Width / geo.Content.Height, 2);
     }
 
-    /// <summary>THE ART-TILE FIX, as geometry. When the player element owns the WHOLE square tile, the aspect mode is
-    /// the only thing that decides whether there are bars — which is the behaviour the Aspect-ratio menu promises.
-    /// When a wrapper centres a hard-coded 16:9 child inside that square instead, the element's area IS 16:9 and every
-    /// mode produces the identical rect: the menu is inert and the bars are the wrapper's, permanently.</summary>
+    /// <summary>THE RULE, at the rail cap's envelope: the player element must own its WHOLE box, or the Aspect-ratio
+    /// menu is inert. The docked card is full-bleed at the rail's width and its height is the content fit, which the
+    /// user can then GROW with the rail splitter — and a grown card is exactly the case where the box is no longer the
+    /// frame's shape, so it is where the three aspect modes have to differ. When a wrapper centres a hard-coded 16:9
+    /// child inside that box instead, the element's area IS 16:9 and every mode produces the identical rect: the menu
+    /// provably cannot move a pixel and the bars are the wrapper's, permanently.
+    ///
+    /// <para>This rule outlived the fixed SQUARE art tile it was first written against (the Details body's own
+    /// letterboxing face, deleted — the video follows its own aspect at the rail's width in every body now). It is the
+    /// wrapper that was ever the defect, not the shape of the box.</para></summary>
     [Fact]
-    public void SquareTile_TheElementMustOwnTheWholeSquareOrTheAspectMenuIsInert()
+    public void RailCap_TheElementMustOwnTheWholeCard_OrTheAspectMenuIsInert()
     {
         var natural = new SizeI(1920, 1080);
-        var square = new RectF(0, 0, 326, 326);
+        const float RailW = 326f, GrownH = 300f;           // a splitter-grown cap: taller than the 183.4 content fit
+        var card = new RectF(0, 0, RailW, GrownH);
+        const float BandH = RailW * 9f / 16f;              // the 16:9 band the frame actually occupies at Fit
 
-        // (a) The element owns the square — the fix.
-        RectF fit = MediaPlayerElement.FitVideoRect(square, natural, VideoAspectMode.Uniform, 16.0 / 9.0);
-        RectF fill = MediaPlayerElement.FitVideoRect(square, natural, VideoAspectMode.Fill, 16.0 / 9.0);
-        RectF crop = MediaPlayerElement.FitVideoRect(square, natural, VideoAspectMode.UniformToFill, 16.0 / 9.0);
+        // (a) The element owns the whole card — the shipping shape.
+        RectF fit = MediaPlayerElement.FitVideoRect(card, natural, VideoAspectMode.Uniform, 16.0 / 9.0);
+        RectF fill = MediaPlayerElement.FitVideoRect(card, natural, VideoAspectMode.Fill, 16.0 / 9.0);
+        RectF crop = MediaPlayerElement.FitVideoRect(card, natural, VideoAspectMode.UniformToFill, 16.0 / 9.0);
 
-        // Fit: a 16:9 band centred in the square, with EQUAL bars top and bottom.
-        Assert.Equal(326f, fit.W, P);
-        Assert.Equal(326f * 9f / 16f, fit.H, P);
-        Edges4 bars = MediaPlayerElement.LetterboxInsets(square, fit);
+        // Fit: a 16:9 band centred in the card, with EQUAL bars top and bottom.
+        Assert.Equal(RailW, fit.W, P);
+        Assert.Equal(BandH, fit.H, P);
+        Edges4 bars = MediaPlayerElement.LetterboxInsets(card, fit);
         Assert.Equal(bars.Top, bars.Bottom, P);
-        Assert.Equal((326f - 326f * 9f / 16f) * 0.5f, bars.Top, P);
+        Assert.Equal((GrownH - BandH) * 0.5f, bars.Top, P);
         Assert.Equal(0f, bars.Left, P);
 
-        // Stretch and Crop both cover the square edge to edge — NO bars. This is what "selecting Stretch changes
-        // nothing" was really reporting: with the wrapper in place these two rects could never be reached.
-        Assert.Equal(square, fill);
-        Assert.Equal(default, MediaPlayerElement.LetterboxInsets(square, fill));
-        Assert.Equal(326f, crop.H, P);
-        Assert.True(crop.W >= 326f);
-        Assert.Equal(0f, MediaPlayerElement.LetterboxInsets(square, crop).Top, P);
+        // Stretch and Crop both cover the card edge to edge — NO bars. This is what "selecting Stretch changes
+        // nothing" was really reporting: with a wrapper in place these two rects could never be reached.
+        Assert.Equal(card, fill);
+        Assert.Equal(default, MediaPlayerElement.LetterboxInsets(card, fill));
+        Assert.Equal(GrownH, crop.H, P);
+        Assert.True(crop.W >= RailW);
+        Assert.Equal(0f, MediaPlayerElement.LetterboxInsets(card, crop).Top, P);
 
-        // (b) The pre-fix wrapper: a 16:9 box centred inside the square. The element's area is already the frame's
-        // shape, so all three modes collapse onto the same rect — the menu provably cannot move a pixel, and the bars
-        // above/below live outside the element entirely.
-        var inner = new RectF(0, (326f - 326f * 9f / 16f) * 0.5f, 326f, 326f * 9f / 16f);
+        // (b) The wrapper shape: a 16:9 box centred inside the card. The element's area is already the frame's shape,
+        // so all three modes collapse onto the same rect — the menu cannot move a pixel, and the bars above/below live
+        // outside the element entirely, where no aspect mode can reach them.
+        var inner = new RectF(0, (GrownH - BandH) * 0.5f, RailW, BandH);
         RectF innerFit = MediaPlayerElement.FitVideoRect(inner, natural, VideoAspectMode.Uniform, 16.0 / 9.0);
         RectF innerFill = MediaPlayerElement.FitVideoRect(inner, natural, VideoAspectMode.Fill, 16.0 / 9.0);
         RectF innerCrop = MediaPlayerElement.FitVideoRect(inner, natural, VideoAspectMode.UniformToFill, 16.0 / 9.0);
@@ -140,24 +148,35 @@ public sealed class VideoSurfaceGeometryTests
         Assert.Equal(innerFit.H, innerFill.H, P);
         Assert.Equal(innerFit.W, innerCrop.W, P);
         Assert.Equal(innerFit.H, innerCrop.H, P);
+
+        // (c) And at REST the card IS the content fit, so Fit/Stretch/Crop all cover it with no bars at all — which is
+        // the whole reason the docked card follows the content's own aspect instead of a fixed envelope.
+        var fitted = new RectF(0, 0, RailW, BandH);
+        Assert.Equal(default, MediaPlayerElement.LetterboxInsets(
+            fitted, MediaPlayerElement.FitVideoRect(fitted, natural, VideoAspectMode.Uniform, 16.0 / 9.0)));
     }
 
     /// <summary>The other half of the same defect: a card that falls back to <see cref="MediaPlayerElement"/>'s own
-    /// 160-DIP video-area floor instead of its declared aspect renders the frame into a 2.04 box — visibly the wrong
-    /// shape under Stretch, and 83-DIP bars (not the designed ~71) under Fit. Handing the element the whole square is
-    /// what removes the dependency on a declared child aspect surviving measure.</summary>
+    /// 160-DIP video-area floor instead of the height it was handed renders the frame into a 2.04 box — visibly the
+    /// wrong shape under Stretch, and bars nothing like the ones the real box would produce under Fit. Handing the
+    /// element the whole card removes the dependency on a declared child size surviving measure.</summary>
     [Fact]
-    public void SquareTile_A160DipFloorDistortsTheFrame_WhereTheFullSquareDoesNot()
+    public void RailCap_A160DipFloorDistortsTheFrame_WhereTheWholeCardDoesNot()
     {
         var natural = new SizeI(1920, 1080);
-        var floored = new RectF(0, 83f, 326f, 160f);       // what the pre-fix tree actually laid out
+        const float RailW = 326f, GrownH = 300f;
+        var floored = new RectF(0, 70f, RailW, 160f);      // the MinHeight=160 floor becoming the measured height
         RectF stretched = MediaPlayerElement.FitVideoRect(floored, natural, VideoAspectMode.Fill, 16.0 / 9.0);
-        Assert.Equal(326f / 160f, stretched.W / stretched.H, P);
+        Assert.Equal(RailW / 160f, stretched.W / stretched.H, P);
         Assert.True(stretched.W / stretched.H > 2.0f);      // 2.04 — nothing like the frame's 1.78
 
-        var square = new RectF(0, 0, 326f, 326f);
-        RectF honest = MediaPlayerElement.FitVideoRect(square, natural, VideoAspectMode.Uniform, 16.0 / 9.0);
-        Edges4 bars = MediaPlayerElement.LetterboxInsets(square, honest);
-        Assert.InRange(bars.Top, 70f, 72f);                 // the designed ~71, not 83
+        // The honest card: the element gets the height the rail declared, so Stretch fills THAT and Fit's bars are the
+        // real remainder above and below the 16:9 band.
+        var card = new RectF(0, 0, RailW, GrownH);
+        RectF honestFill = MediaPlayerElement.FitVideoRect(card, natural, VideoAspectMode.Fill, 16.0 / 9.0);
+        Assert.Equal(RailW / GrownH, honestFill.W / honestFill.H, P);
+        RectF honest = MediaPlayerElement.FitVideoRect(card, natural, VideoAspectMode.Uniform, 16.0 / 9.0);
+        Edges4 bars = MediaPlayerElement.LetterboxInsets(card, honest);
+        Assert.Equal((GrownH - RailW * 9f / 16f) * 0.5f, bars.Top, P);
     }
 }

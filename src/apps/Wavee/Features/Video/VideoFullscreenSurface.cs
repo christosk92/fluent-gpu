@@ -234,6 +234,12 @@ sealed class VideoFullscreenSurface : Component
             {
                 Source = src, Player = b.VideoPlayer, Bridge = b,
                 Host = new VideoStageHost(OwnedTransport, b.TransportOwnerNow, b.ExitVideoFullscreen),
+                // This surface IS the fullscreen presentation — constant true, never keyed (it cannot change while this
+                // surface is mounted; the surface unmounts instead). Without it the element's PresentingFullscreen stays
+                // false here, so the transport drew the ENTER-fullscreen glyph while already fullscreen, the ⋯ row said
+                // "Full screen" instead of "Exit full screen", and Escape missed its
+                // `case Keys.Escape when PresentingFullscreen` arm — i.e. Escape did not leave.
+                IsHostFullscreen = true,
             }) with { Key = "fsstage:" + stageKey };
             if (src is not null)
                 return new BoxEl

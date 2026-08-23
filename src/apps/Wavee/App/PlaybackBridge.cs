@@ -228,6 +228,28 @@ public sealed class PlaybackBridge
     public Signal<PlacementState> VideoSurface { get; } = new(PlacementState.Initial(PlacementPolicy.Video));
 
     /// <summary>
+    /// Whether the DETACHED pop-out window is presenting itself borderless-fullscreen on ITS OWN monitor. Orthogonal to
+    /// <see cref="VideoSurface"/> by design: while this is true the resolved placement is still
+    /// <see cref="SurfacePlacement.Detached"/> — the pop-out did not move anywhere, it just grew.
+    ///
+    /// <para><b>This is NOT <see cref="SurfacePlacement.Fullscreen"/>.</b> That placement is the MAIN window's
+    /// full-bleed surface (<c>VideoFullscreenSurface</c>), which fullscreens the app window through
+    /// <c>InputHooks.WindowSetFullscreen</c>. Two different OS windows, two different states, deliberately not folded
+    /// into one enum: a single "fullscreen" placement would have to carry WHICH window it means, and every consumer of
+    /// the placement (the transport-owner map, the ladder, the persisted preference) would grow a branch for it. Worse,
+    /// routing the pop-out's fullscreen glyph through <c>ShowVideoAt(Fullscreen)</c> resolves the placement AWAY from
+    /// Detached, so the owner closes the pop-out and the main window goes fullscreen instead — on the MAIN window's
+    /// monitor. A pop-out dragged to a second display then jumps back to the laptop screen on a keypress. Keeping the
+    /// two states separate is what makes that monitor hop unrepresentable.</para>
+    ///
+    /// <para>Cleared at ONE chokepoint — <see cref="CommitVideoSurface"/>, the single write path for
+    /// <see cref="VideoSurface"/> — via <see cref="DetachedFullscreenRule.After"/>, so every edge that leaves Detached
+    /// (the ✕, an availability loss, a placement move, turn-off) drops it together. A pop-out closed while fullscreen
+    /// therefore cannot reopen fullscreen.</para>
+    /// </summary>
+    public Signal<bool> DetachedFullscreen { get; } = new(false);
+
+    /// <summary>
     /// WHO owns the playback transport right now — ONE derived signal, never a per-surface visibility flag. This is the
     /// fix for the stacked double-bar: the fullscreen video surface and the global 72-DIP <c>PlayerBar</c> used to be
     /// two independent owners, each rendering unconditionally, with nothing that could suppress either. Now every
@@ -437,6 +459,12 @@ public sealed class PlaybackBridge
         if (after.Equals(before)) return;
         bool wasActive = PlacementCore.IsActive(before), isActive = PlacementCore.IsActive(after);
         VideoSurface.Value = after;
+        // THE chokepoint for the pop-out's own fullscreen mode. Every placement edge lands here (this is the single
+        // write path for VideoSurface), so one line covers the ✕, Alt+F4, an availability loss, a move to another
+        // placement and turn-off: the moment the resolved placement stops being Detached there is no pop-out window for
+        // the bit to describe, and a stale true would reopen the next pop-out already fullscreen. Signal writes are
+        // equality-gated, so this is free on the overwhelming majority of commits (the bit is false).
+        DetachedFullscreen.Value = DetachedFullscreenRule.After(DetachedFullscreen.Peek(), PlacementCore.Resolve(after));
         // Remember where the user likes to watch (only when it actually changed — this runs on availability edges and
         // track changes too, and those must not rewrite the preference).
         if (after.Preferred != before.Preferred && Settings is { } settings)

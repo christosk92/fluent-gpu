@@ -64,6 +64,7 @@ static class OverlaySuite
         E4PopupWindowingChecks(strings);
         G5fPopupToastChecks(strings);
         FlyoutAcrylicChecks(strings);
+        VideoHoleBackdropChecks(strings);
         AcrylicBackdropMathChecks();
         ContentDialogChromeChecks(strings);
         TeachingTipPlacementChecks(strings);
@@ -2901,6 +2902,179 @@ static class OverlaySuite
             }
         }
         finally { Tok.Use(ThemeKind.Dark); }
+    }
+
+    // OverlayHost.SyncWindowedMenuBackdrop reconciles a popup's frosted backdrop EVERY frame for EVERY entry, and it
+    // has three inputs: an OS popup-window lease, the caller's OpaqueSurface declaration, and the geometric question
+    // "is this plate over a video hole?". These gates pin the two things that shipped broken:
+    //   (a) the RESTING fill. FlyoutSurface authors Tok.AcrylicFlyout.Fallback under the acrylic on both shapes it
+    //       builds, precisely so a surface stays solid wherever the acrylic LAYER does not run. The sync used to
+    //       "restore" Transparent for the Flyout/CommandBar chromes on a false premise about how they were authored,
+    //       which over a video hole (backdrop = premultiplied zero, so the layer composites nothing) left the menu as
+    //       a 1px ring and floating text. The old FlyoutAcrylicChecks could not see it: they run with no video, where
+    //       a Transparent plate over a real acrylic composite looks identical to a correct one.
+    //   (b) STABILITY. SceneRecorder's published hole rect is the exact DrawVideo Dst on a fresh walk but the coarser
+    //       span.SubtreeBounds on a clean-span reuse, so the answer flips frame to frame for a plate near the Dst's
+    //       edge — and every flip re-mutates the plate and costs a full-window repaint. The host latches the first
+    //       affirmative; these gates assert the latch, not the recorder.
+    static void VideoHoleBackdropChecks(StringTable strings)
+    {
+        ColorF fallback = Tok.AcrylicFlyout.Fallback;
+
+        // gate.overlay.flyout-resting-fill-solid — the MENU plate's resting (acrylic-on) fill is the acrylic FALLBACK,
+        // never Transparent. This is the branch the bug lived in: with acrylic on, a Transparent plate is invisible
+        // exactly where the layer cannot run, and the sync rewrites this fill on every frame of every entry.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("video-hole-resting", new Size2(480, 400), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new OverlayProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.PopupWindowsEnabled = false;   // the shipping configuration: in-window plate, engine acrylic
+            host.RunFrame();
+            var svc = (OverlayServiceImpl)root.Service!;
+            svc.Open(() => root.Anchor, () => new BoxEl { Width = 220f, Height = 80f, Fill = Tok.FillCardDefault },
+                FlyoutPlacement.BottomLeft, new PopupOptions(Chrome: PopupChrome.Flyout));
+            for (int i = 0; i < 3; i++) host.RunFrame();
+
+            bool opened = svc.Entries.Count == 1 && !svc.Entries[0].PlateNode.IsNull;
+            var plate = opened ? svc.Entries[0].PlateNode : default;
+            bool acrylicOn = opened && host.Scene.TryGetAcrylic(plate, out _);
+            ColorF fill = opened ? host.Scene.Paint(plate).Fill : default;
+            bool solid = opened && fill.A > 0f && ColorClose(fill, fallback, 0.004f);
+            // The lease latch: PopupWindowsEnabled is off, so the host refuses — and must be asked exactly once, not
+            // once per frame for as long as the menu is up.
+            bool refusedLatched = opened && svc.Entries[0].PopupWindowRefused && svc.Entries[0].PopupWindowToken < 0;
+
+            Check("gate.overlay.flyout-resting-fill-solid the menu plate's acrylic-on resting fill is the acrylic fallback, not Transparent",
+                opened && acrylicOn && solid && refusedLatched,
+                $"opened={opened} acrylicOn={acrylicOn} fillA={fill.A:0.000} rgb=({fill.R:0.00},{fill.G:0.00},{fill.B:0.00}) refusedLatched={refusedLatched}");
+        }
+
+        // gate.overlay.video-hole-plate-opaque — a Flyout plate over a full-bleed video hole drops the (useless)
+        // acrylic and keeps a VISIBLE fill on every recorded frame. Two frames, because the defect was an alternation.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("video-hole-plate", new Size2(480, 400), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new VideoOverlayProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.PopupWindowsEnabled = false;
+            host.RunFrame();
+            var svc = (OverlayServiceImpl)root.Service!;
+            svc.Open(() => root.Anchor, () => new BoxEl { Width = 220f, Height = 80f, Fill = Tok.FillCardDefault },
+                FlyoutPlacement.BottomLeft, new PopupOptions(Chrome: PopupChrome.Flyout));
+            for (int i = 0; i < 3; i++) host.RunFrame();
+
+            bool opened = svc.Entries.Count == 1 && !svc.Entries[0].PlateNode.IsNull;
+            var plate = opened ? svc.Entries[0].PlateNode : default;
+            // The hole must actually be in the record, or this gate proves nothing about video at all.
+            RectF plateRect = opened ? host.Scene.AbsoluteRect(plate) : default;
+            bool holeSeen = opened && SceneRecorder.RectOverVideoHole(plateRect, 0.5f);
+
+            host.RunFrame();
+            ColorF f1 = opened ? host.Scene.Paint(plate).Fill : default;
+            bool acrylic1 = opened && host.Scene.TryGetAcrylic(plate, out _);
+            host.RunFrame();
+            ColorF f2 = opened ? host.Scene.Paint(plate).Fill : default;
+            bool acrylic2 = opened && host.Scene.TryGetAcrylic(plate, out _);
+            // The shadow stays (only an OS-backed popup drops it) — a flat plate over video still needs its elevation.
+            bool shadowKept = opened && host.Scene.TryGetShadow(plate, out _);
+            bool visibleBoth = f1.A > 0f && f2.A > 0f;
+            bool flatBoth = !acrylic1 && !acrylic2;
+
+            root.ShowVideo.Value = false;   // retract the hole so the process-static published set ends up empty
+            for (int i = 0; i < 2; i++) host.RunFrame();
+
+            Check("gate.overlay.video-hole-plate-opaque a flyout plate over a video hole stays visibly filled and acrylic-free on every frame",
+                opened && holeSeen && visibleBoth && flatBoth && shadowKept,
+                $"opened={opened} holeSeen={holeSeen} f1A={f1.A:0.000} f2A={f2.A:0.000} acrylic=({acrylic1},{acrylic2}) shadow={shadowKept}");
+        }
+
+        // gate.overlay.opaque-surface-never-acrylic — the DECLARED opt-out. No video in this scene at all: the host
+        // must take the caller's word from frame one and never set acrylic on the backdrop node.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("video-hole-declared", new Size2(480, 400), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new OverlayProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.PopupWindowsEnabled = false;
+            host.RunFrame();
+            var svc = (OverlayServiceImpl)root.Service!;
+            svc.Open(() => root.Anchor, () => new BoxEl { Width = 220f, Height = 80f, Fill = Tok.FillCardDefault },
+                FlyoutPlacement.BottomLeft, new PopupOptions(Chrome: PopupChrome.Flyout) { OpaqueSurface = true });
+
+            bool everAcrylic = false, everInvisible = false;
+            bool opened = false;
+            for (int i = 0; i < 6; i++)
+            {
+                host.RunFrame();
+                if (svc.Entries.Count != 1 || svc.Entries[0].PlateNode.IsNull) continue;
+                opened = true;
+                var plate = svc.Entries[0].PlateNode;
+                if (host.Scene.TryGetAcrylic(plate, out _)) everAcrylic = true;
+                if (host.Scene.Paint(plate).Fill.A <= 0f) everInvisible = true;
+            }
+            // The declaration must survive the trip through PopupOptions onto the entry.
+            bool carried = opened && svc.Entries[0].OpaqueSurface;
+
+            Check("gate.overlay.opaque-surface-never-acrylic a popup opened with OpaqueSurface never takes the acrylic path",
+                opened && carried && !everAcrylic && !everInvisible,
+                $"opened={opened} carried={carried} everAcrylic={everAcrylic} everInvisible={everInvisible}");
+        }
+
+        // gate.overlay.video-hole-latch-stable — the recorder's answer is per-rect and edge-sensitive (a rect
+        // straddling the Dst answers differently from one inside it, and which rect gets published depends on whether
+        // the video's subtree was span-reused). The host must latch: once the plate has been over the hole, retracting
+        // the hole entirely — the strongest possible flip of the recorder's answer — must not flip the plate back.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("video-hole-latch", new Size2(480, 400), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new VideoOverlayProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.PopupWindowsEnabled = false;
+            host.RunFrame();
+            var svc = (OverlayServiceImpl)root.Service!;
+            svc.Open(() => root.Anchor, () => new BoxEl { Width = 220f, Height = 80f, Fill = Tok.FillCardDefault },
+                FlyoutPlacement.BottomLeft, new PopupOptions(Chrome: PopupChrome.Flyout));
+            for (int i = 0; i < 3; i++) host.RunFrame();
+
+            bool opened = svc.Entries.Count == 1 && !svc.Entries[0].PlateNode.IsNull;
+            var plate = opened ? svc.Entries[0].PlateNode : default;
+            bool latched = opened && svc.Entries[0].VideoHoleLatched;
+            ColorF beforeFill = opened ? host.Scene.Paint(plate).Fill : default;
+
+            // The published hole is the full 480x400 stage. Coverage is measured PER HOLE against the QUERY rect, so a
+            // rect hanging 3/4 of the way off the bottom edge answers false while one inside answers true — the exact
+            // sensitivity that makes a Dst-vs-SubtreeBounds swap flip the answer for an edge-straddling plate.
+            bool insideTrue = SceneRecorder.RectOverVideoHole(new RectF(100f, 100f, 100f, 40f), 0.5f);
+            bool straddleFalse = !SceneRecorder.RectOverVideoHole(new RectF(100f, 380f, 100f, 80f), 0.5f);
+
+            root.ShowVideo.Value = false;   // the recorder's answer for this plate is now unambiguously FALSE
+            for (int i = 0; i < 4; i++) host.RunFrame();
+            bool recorderFlipped = opened && !SceneRecorder.RectOverVideoHole(host.Scene.AbsoluteRect(plate), 0.5f);
+            bool stillLatched = opened && svc.Entries[0].VideoHoleLatched;
+            bool stillFlat = opened && !host.Scene.TryGetAcrylic(plate, out _);
+            ColorF afterFill = opened ? host.Scene.Paint(plate).Fill : default;
+            bool fillUnchanged = ColorClose(afterFill, beforeFill, 0.001f) && afterFill.A > 0f;
+
+            Check("gate.overlay.video-hole-latch-stable the over-video answer latches, so a flipped recorder answer never re-mutates the plate",
+                opened && latched && insideTrue && straddleFalse
+                    && recorderFlipped && stillLatched && stillFlat && fillUnchanged,
+                $"opened={opened} latched={latched} insideTrue={insideTrue} straddleFalse={straddleFalse} "
+                + $"recorderFlipped={recorderFlipped} stillLatched={stillLatched} stillFlat={stillFlat} "
+                + $"fill {beforeFill.A:0.000}->{afterFill.A:0.000} unchanged={fillUnchanged}");
+        }
     }
 
     static void AcrylicBackdropMathChecks()

@@ -120,6 +120,17 @@ public readonly record struct PopupOptions(
     /// <summary>When the anchor dies (generation-dead, parked, or deactivated KeepAlive page), keep the last placed
     /// rect instead of closing. Default false closes the overlay with its usual fade the frame the anchor dies.</summary>
     public bool FreezeAtLastRect { get; init; }
+
+    /// <summary>DECLARE: this popup sits over content the acrylic compositor cannot sample (a video hole) — paint the
+    /// flat plate and never take the acrylic path. It is the deterministic form of the geometric question
+    /// <c>SceneRecorder.RectOverVideoHole</c> answers: a caller that KNOWS its popup is over the video (a media
+    /// transport's own quality/speed/captions pickers) states it once at open time, so the plate is solid from frame
+    /// ONE with no geometry query, no frame of latency, and no chance of the answer flipping under it.
+    /// <para>No inverted backing field here (unlike <see cref="ConstrainToRootBounds"/>/<see cref="PinsAnchor"/>, whose
+    /// storage is inverted only because their DEFAULT is true): this flag defaults FALSE, so a plain auto-property
+    /// leaves <c>default(PopupOptions)</c> — and the <c>options.Equals(default)</c> "caller configured nothing" probes
+    /// in Popup.cs — behaving exactly as before.</para></summary>
+    public bool OpaqueSurface { get; init; }
 }
 
 public interface IOverlayService
@@ -214,6 +225,14 @@ internal sealed class OverlayEntry
     public bool ConstrainToRootBounds = true;
     public bool PinsAnchor = true;    // WS3 P6 anchor-liveness: pins the anchor's auto-hide scope while open
     public bool FreezeAtLastRect;     // opt-in: dead-anchor holds last rect instead of BeginClose
+    public bool OpaqueSurface;        // PopupOptions.OpaqueSurface: declared over a video hole — flat plate, never acrylic
+    /// <summary>One-way latch: <c>SceneRecorder.RectOverVideoHole</c> has answered TRUE for this entry's backdrop node
+    /// at least once. Once set it never clears — see the reasoning at the query site in SyncWindowedMenuBackdrop.</summary>
+    public bool VideoHoleLatched;
+    /// <summary>One-way latch: the host declined a popup-window lease for this entry, so stop asking. The refusal is a
+    /// property of the HOST (its device/async-render-loop configuration), not of this popup's placement, so it cannot
+    /// become a grant later in this entry's life — see the lease site.</summary>
+    public bool PopupWindowRefused;
     public bool OwnerWasLive;         // latch: this entry's owner node has been observed live at least once
     public bool AnchorDeathNotified;  // one-shot: don't re-BeginClose every frame after a vetoed dead-anchor close
     public long CloseStartTicks;      // BeginClose stamp; AfterAnimations force-finalizes past ClosingDeadlineMs
@@ -316,6 +335,7 @@ internal sealed class OverlayServiceImpl : IOverlayService
             ConstrainToRootBounds = options.ConstrainToRootBounds,
             PinsAnchor = options.PinsAnchor,
             FreezeAtLastRect = options.FreezeAtLastRect,
+            OpaqueSurface = options.OpaqueSurface,
             SeamOffsetY = options.SeamOffsetY,
             PassThrough = options.PassThrough,
             AnchorOffsetX = options.AnchorOffsetX,
@@ -895,8 +915,24 @@ public sealed class OverlayHost : Component
         bool osBacked = e.PopupWindowToken >= 0;
         // Asked of the LAST completed record's hole set, which is exactly right here: this runs at host phase 7.1,
         // before this frame is recorded, and the answer only ever picks between two visually equivalent paints.
-        bool overVideo = !osBacked
-            && FluentGpu.Render.SceneRecorder.RectOverVideoHole(scene.AbsoluteRect(target), VideoHoleCoverage);
+        //
+        // The answer is LATCHED, one-way, per entry, because the recorder's published hole rect is NOT stable
+        // frame-to-frame: SceneRecorder publishes the exact DrawVideo Dst on a fresh walk, but the whole
+        // `span.SubtreeBounds` — letterbox floor, transport chrome and shadow halos folded in — whenever the video's
+        // subtree is served by a clean-span reuse. A plate straddling the Dst's bottom edge therefore fails the
+        // coverage test against one rect and passes against the other, and flips with NO scene change at all. Each
+        // flip mutates the plate (paint-dirty), which changes which subtrees are span-reused next frame, which flips
+        // the answer back: self-sustaining, and each acrylic-on frame costs a FULL-WINDOW repaint (an acrylic layer is
+        // RepaintPolicy.Decide's first hard disqualifier ⇒ RepaintRoute.FullDirect + retained-canvas invalidation).
+        // Latching kills the loop, and it is also the CORRECT answer: the hole does not move under a pinned anchor for
+        // the popup's lifetime, so the first affirmative is the right one for the whole life of the entry. The latch
+        // dies with the entry — a re-open re-asks.
+        if (!osBacked && !e.VideoHoleLatched
+            && FluentGpu.Render.SceneRecorder.RectOverVideoHole(scene.AbsoluteRect(target), VideoHoleCoverage))
+            e.VideoHoleLatched = true;
+        // OpaqueSurface is the caller's DECLARED form of the same fact (a media transport knows its pickers are over
+        // the video), so it wins from frame one without waiting for a geometry answer.
+        bool overVideo = !osBacked && (e.OpaqueSurface || e.VideoHoleLatched);
         bool wantAcrylic = !osBacked && !overVideo;
         bool wantShadow = !osBacked;
         bool hasAcrylic = scene.TryGetAcrylic(target, out _);
@@ -912,16 +948,21 @@ public sealed class OverlayHost : Component
             if (wantShadow) scene.SetShadow(target, Elevation.Flyout); else scene.ClearShadow(target);
             changed = true;
         }
-        // The RESTING fill differs by chrome and must be restored exactly, because this now runs for EVERY frosted
-        // chrome and every frame, not just once per placement for the two windowed ones. The MENU plate and the
-        // CommandBar card are authored Transparent-over-acrylic by the host itself; every other frosted chrome authors
-        // Tok.AcrylicFlyout.Fallback so that a NON-PRIMARY swapchain (the pop-out video window), where the backend
-        // silently drops PushLayer, still gets a solid card instead of floating text. Overwriting that with Transparent
-        // would resurrect exactly that bug — see FlyoutSurface's fill comments.
-        ColorF restingFill = e.Chrome is PopupChrome.Flyout or PopupChrome.CommandBar
-            ? ColorF.Transparent
-            : Tok.AcrylicFlyout.Fallback;
-        ColorF desiredFill = wantAcrylic ? restingFill : FlatAcrylicFill();
+        // The RESTING fill is Tok.AcrylicFlyout.Fallback for EVERY frosted chrome — there is no per-chrome exception,
+        // and this runs for every entry every frame, so getting it wrong is not a one-off placement bug but a fill
+        // rewritten under the user on every flip. FlyoutSurface authors that same fallback on BOTH shapes it builds
+        // (the menu PLATE and the single-card surface — see its two fill comments), for one reason: the plate's visible
+        // body is the engine acrylic LAYER, and the layer is not guaranteed to run.
+        //   • Where it DOES run, the acrylic composites opaquely inside the plate, so the solid fill underneath is
+        //     invisible — it costs a pixel of nothing.
+        //   • Where it does NOT run, it is the only thing between the user and floating text: a non-primary swapchain
+        //     (the detached video pop-out window) where the D3D12 backend silently drops PushLayer, or a video hole
+        //     whose backdrop is premultiplied ZERO so the layer composites nothing at all.
+        // Restoring Transparent here — as this line used to, on the false premise that the host authored those two
+        // chromes transparent-over-acrylic — stripped exactly the fallback FlyoutSurface's comment says must never be
+        // stripped, and over a fullscreen video hole produced a menu that was nothing but its 1px ring and its item
+        // text. Combined with the frame-to-frame flip above, that is the flyout that alternated solid/invisible.
+        ColorF desiredFill = wantAcrylic ? Tok.AcrylicFlyout.Fallback : FlatAcrylicFill();
         ref NodePaint tp = ref scene.Paint(target);
         if (changed || !tp.Fill.Equals(desiredFill))
         {
@@ -1027,8 +1068,18 @@ public sealed class OverlayHost : Component
                             // Lease a platform popup window for this subtree (host records it into its own DrawList +
                             // swapchain; the subtree is skipped from the main-window record). -1 = the platform/device
                             // can't (WinUI's DoesPlatformSupportWindowedPopup == false) → constrained fallback.
-                            if (e.PopupWindowToken < 0)
+                            //
+                            // A refusal LATCHES. This block runs on every placement pass, i.e. every frame the popup is
+                            // open, and the refusal is a property of the HOST — AppHost gates PopupWindowsEnabled off
+                            // wholesale under the async render loop and when the device has no secondary swapchains —
+                            // not of this popup's geometry, so it can never turn into a grant later in this entry's
+                            // life. Without the latch every open popup buys one guaranteed-failing host call per frame
+                            // for as long as it is up. The latch dies with the entry; a re-open re-asks once.
+                            if (e.PopupWindowToken < 0 && !e.PopupWindowRefused)
+                            {
                                 e.PopupWindowToken = svc.Hooks!.OpenPopupWindow!(e.WrapperNode, WindowMaterialFor(e));
+                                if (e.PopupWindowToken < 0) e.PopupWindowRefused = true;
+                            }
                             if (e.PopupWindowToken >= 0)
                                 // closedRatio drives the composition open-slide: menus 0.5, cascaded sub-menus 0.67
                                 // (MenuFlyout_Partial.cpp:253 / MenuFlyoutSubItem_Partial.cpp:741); the CommandBar

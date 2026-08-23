@@ -210,6 +210,22 @@ public static class SceneRecorder
     /// <para>Answers from the PREVIOUS frame's geometry by construction (it is asked before this frame is recorded).
     /// That is the correct latency: a hole that just appeared or moved costs one frame of the old answer, and the answer
     /// only ever selects between two visually-equivalent paints, never between correct and incorrect pixels.</para>
+    /// <para><b>Limitation 1 — the published rect is not the same rect every frame, so the answer can FLIP with no
+    /// scene change.</b> The hole set is fed by three <c>NoteVideoRect</c> sites that do not agree on granularity: a
+    /// fresh walk publishes the exact <c>DrawVideo</c> Dst (the <c>VisualKind.Video</c> case below), while a clean-span
+    /// reuse publishes the whole <c>span.SubtreeBounds</c> of the span that CONTAINED the DrawVideo — letterbox floor,
+    /// transport chrome and shadow halos folded in — and a rebased reuse publishes that same coarse box translated.
+    /// For a query rect well inside the Dst the two agree; for one straddling the Dst's edge they do not, and which
+    /// path serves the video's subtree changes frame to frame (a paint-dirty write anywhere in it disables reuse).
+    /// A caller that cannot tolerate an answer flipping under it must LATCH the first affirmative rather than re-ask
+    /// — which is what <c>OverlayHost.SyncWindowedMenuBackdrop</c> does, because each flip there costs a full-window
+    /// repaint. Not fixed by aligning the sites: the coarse box is the correct repaint-damage extent for a reused span,
+    /// which is what <c>NoteVideoRect</c> primarily exists to feed.</para>
+    /// <para><b>Limitation 2 — coverage is tested PER RECT and never unioned.</b> The loop returns true only when a
+    /// SINGLE hole covers <paramref name="minCoveredFraction"/> of the query rect, so two adjacent holes each covering
+    /// 40% of it answer <c>false</c> even though 80% of the rect is over video. Deliberate for the sizes involved (a
+    /// frame has at most a handful of holes and a popup plate normally straddles one), but a caller placing a plate
+    /// across a multi-video wall must not read a <c>false</c> as "no video underneath".</para>
     /// </summary>
     public static bool RectOverVideoHole(in RectF worldRect, float minCoveredFraction = 0.5f)
     {

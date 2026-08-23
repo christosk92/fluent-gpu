@@ -101,14 +101,28 @@ sealed class VideoPlacementHost : Component
                     // longer resolved is inert); this guards the handle half, which the model cannot see.
                     if (!ReferenceEquals(handle.Value, win)) return;
                     handle.Value = null;
+                    // Drop the pop-out's fullscreen mode BEFORE reporting the close: the window it describes is already
+                    // gone, and the report below may resolve the placement to something that is not Detached at all.
+                    // (CommitVideoSurface clears it too — this is the one ordering where "before" matters, because the
+                    // fullscreen-applying effect must never see a live-looking true against a dead handle.)
+                    b.DetachedFullscreen.Value = false;
                     b.SetVideoSurfaceLive(Owned, mounted: false);
                     b.NotifyVideoSurfaceClosed(Owned);
                 };
                 // Persist the window's SETTLED position (the host debounces — one call per move/resize gesture, not one
                 // per pixel), so "where I put it" survives a restart.
+                //
+                // …but NEVER while the pop-out is presenting fullscreen. Entering borderless fullscreen is a move+resize
+                // to the whole monitor rect, and the host reports it here like any other settled geometry change. Saving
+                // it would overwrite the position the USER chose with a full-screen rect, so the next launch would open a
+                // monitor-sized "pop-out" they never asked for — and exiting fullscreen would have nothing to restore to.
+                // The window must reopen where the user PUT it, not where it happened to be borderless at.
                 if (Settings is { } save)
-                    win.BoundsChanged = r => save.Set(WaveeSettings.VideoWindowRect,
-                        PlacementPersistence.SaveRect(r.X, r.Y, r.W, r.H));
+                    win.BoundsChanged = r =>
+                    {
+                        if (b.DetachedFullscreen.Peek()) return;   // Peek: a persistence guard is not a subscription
+                        save.Set(WaveeSettings.VideoWindowRect, PlacementPersistence.SaveRect(r.X, r.Y, r.W, r.H));
+                    };
                 b.SetVideoSurfaceLive(Owned, mounted: true);
             }
             else if (action == MountAction.Close)
@@ -116,8 +130,25 @@ sealed class VideoPlacementHost : Component
                 live!.OnClosed = null;   // a state-driven close is not a user-close → it must not trigger the fallback
                 live.Close();
                 handle.Value = null;
+                b.DetachedFullscreen.Value = false;   // the window is gone; the mode it described goes with it
                 b.SetVideoSurfaceLive(Owned, mounted: false);
             }
+        });
+
+        // Apply the pop-out's own fullscreen mode to the LIVE window. This is the whole monitor fix: the request goes to
+        // the DETACHED window's handle, so the backend resolves the target display from THAT window — a pop-out dragged
+        // to a second monitor fullscreens there. Routing it through InputHooks.WindowSetFullscreen instead would
+        // fullscreen the MAIN window, on the MAIN window's display, which is the picture visibly jumping screens.
+        // handle is a UseRef (not reactive), so this effect subscribes to exactly one thing: the signal. That is correct
+        // — a freshly opened window is never fullscreen (the state is cleared on every exit from Detached), so there is
+        // nothing to re-apply at open time.
+        UseSignalEffect(() =>
+        {
+            // Read the signal FIRST and unconditionally. Guarding on the handle before the read would leave the effect
+            // subscribed to NOTHING on the pass where no window is open, and a signal-effect with no dependencies never
+            // runs again — the toggle would be dead for the rest of the session.
+            bool fullscreen = b.DetachedFullscreen.Value;
+            if (handle.Value is { IsOpen: true } live) live.SetFullscreen(fullscreen);
         });
 
         // Keep the OS window title on the CONTENT: a pop-out that still says the previous song in the taskbar and Alt+Tab
@@ -147,6 +178,10 @@ sealed class VideoPlacementHost : Component
         {
             var h = handle.Value;
             handle.Value = null;
+            // The ONLY route out of Detached that does NOT go through CommitVideoSurface: the component is being torn
+            // down with the placement state untouched, so the chokepoint never runs and the bit would survive into the
+            // next mount — which would open the next pop-out already fullscreen.
+            b.DetachedFullscreen.Value = false;
             if (h is not null)
             {
                 h.OnClosed = null;

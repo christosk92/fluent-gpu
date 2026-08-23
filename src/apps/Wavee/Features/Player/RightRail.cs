@@ -157,16 +157,16 @@ sealed class RightRail : Component
                     surface,
                     new BoxEl
                     {
-                        // Wrapped in a column (was a bare Grow=1f box): the pinned Art-tile hero (docked-video design
-                        // Phase 3) sits ABOVE the scrolled sections here, Shrink=0f, the same "Shrink=0f pinned,
-                        // Grow=1f scrolls" shape the non-Details arm below already uses for the Cap-face docked video
-                        // card. PinnedHero wraps NowPlayingHeroTile (NowPlayingPanel.cs) — the 324x324 cover-art tile
-                        // hoisted OUT of NowPlayingPanel's own ScrollView — with the Art|Video toggle laid over its
-                        // top-right corner.
+                        // Wrapped in a column (was a bare Grow=1f box): the pinned hero sits ABOVE the scrolled
+                        // sections here, Shrink=0f, the SAME "Shrink=0f pinned, Grow=1f scrolls" shape the non-Details
+                        // arm below uses. The two arms now agree on the hero slot's contents too: PinnedHero hands back
+                        // the very same DockedCap card the other arm mounts whenever the video is docked here, and the
+                        // cover-art tile (NowPlayingPanel.NowPlayingHeroTile, hoisted OUT of that panel's own
+                        // ScrollView) with the Art|Video toggle over its top-right corner otherwise.
                         Direction = 1, Grow = 1f, MinHeight = 0f, ClipToBounds = true,
                         Children =
                         [
-                            PinnedHero(b, stageHosts),
+                            PinnedHero(ui, b, stageHosts, svc?.Settings, railWidth),
                             new BoxEl { Grow = 1f, MinHeight = 0f, ClipToBounds = true, Children = [body] },
                         ],
                     },
@@ -209,6 +209,12 @@ sealed class RightRail : Component
     // Floor = 16:9 of the live rail width (drag only grows); the lyrics/queue body remains the Grow=1 remainder.
     // At REST the height is not the rail's business at all: DockedVideoSurface fits it to the playing content's own
     // aspect (ShellResponsiveLayout.FitDockedVideoHeight), and this splitter is the user's override of that fit.
+    //
+    // This is the rail's ONE card, reached from BOTH arms — the Details arm through PinnedHero, every other body
+    // through the cap slot below the header — which is what makes the video the same shape and the same width no
+    // matter which body is showing. The single-surface invariant is unaffected: the two arms are mutually exclusive
+    // (RightRail.Render returns from one or the other), so only ever one of them is mounted, and DockedVideoSurface's
+    // own gate (DockedVideoHosting.ShouldMount) is a VALUE that does not mention the rail body at all.
     static Element DockedCap(ShellUi ui, bool docked, IAppSettings? settings, float railWidth)
     {
         void Commit()
@@ -272,38 +278,48 @@ sealed class RightRail : Component
             CloseButton(() => ui.RailOpen.Value = false),
         ];
 
-    // The Details arm's pinned hero: NowPlayingHeroTile alone (art, or the docked video — that class's own concern),
-    // plus, laid over its top-right corner, the 2-state Art|Video toggle — but ONLY while video is docked OR
-    // dockable here. `dockable` reuses PlacementCore.Allows against the ONE resolved availability set, the same gate
-    // the video menu and PlayerBar's split button already read, so a track with no video (Available carries no
-    // Docked bit at all, VideoUpgradeGate.AvailabilityFor) or a window too narrow to dock leaves the tile bare —
-    // exactly how it looked before this phase.
-    static Element PinnedHero(PlaybackBridge? b, bool stageHosts)
+    // The Details arm's pinned hero — the ONE slot, two possible occupants, never both:
+    //
+    //   docked  ⇒ THE DOCKED CARD, byte for byte the DockedCap the non-Details arm mounts (same splitter, same
+    //             content-fit height, same rail width). This is the whole point of the change: the video follows its
+    //             own aspect, full-bleed at the rail's width, in EVERY body. It used to be squeezed into a fixed
+    //             square inset 8 DIP per side here — so a 16:9 stream that filled the card in Queue/Lyrics/Friends/
+    //             Video sat in fat letterbox bars the moment the user switched to Details, silently changing both its
+    //             shape and its width with the body.
+    //   otherwise ⇒ the cover-art tile, with the 2-state Art|Video toggle laid over its top-right corner — but ONLY
+    //             while video is dockable here. That reuses PlacementCore.Allows against the ONE resolved
+    //             availability set, the same gate the video menu and PlayerBar's split button already read, so a
+    //             track with no video (Available carries no Docked bit at all, VideoUpgradeGate.AvailabilityFor) or a
+    //             window too narrow to dock leaves the tile bare.
+    //
+    // While the watch page's stage hosts the one surface, the rail hosts nothing at all: the bare art tile, exactly as
+    // it looks for a track with no video. (This arm is only reachable when the SUBSTITUTED body is Details, so that is
+    // belt-and-braces against the hero ever outliving the card it stands in for.)
+    static Element PinnedHero(ShellUi ui, PlaybackBridge? b, bool stageHosts,
+                              IAppSettings? settings, float railWidth)
     {
-        Element tile = Embed.Comp(() => new NowPlayingHeroTile());
-        if (b is null) return tile;
-
-        // While the watch page's stage hosts the one surface there is no video layer in this square to toggle — the
-        // Art|Video pair would offer to move a card that is already somewhere else, and the hero would reserve the
-        // video layer for a card that never mounts. Bare tile, exactly as it looks for a track with no video at all.
-        // (This arm is only reachable when the SUBSTITUTED body is Details, so it is belt-and-braces against the
-        // toggle ever outliving the card it drives.)
-        if (stageHosts) return tile;
-
-        var state = b.VideoSurface.Value;   // subscribe: the toggle appears/relights with availability and placement
-        if (!PlacementCore.Allows(state.Available, SurfacePlacement.Docked)) return tile;
-
+        Element art = Embed.Comp(() => new NowPlayingHeroTile());
+        if (b is null || stageHosts) return art;
+        var state = b.VideoSurface.Value;   // subscribe: follows availability + placement
         bool docked = PlacementCore.Resolve(state) == SurfacePlacement.Docked;
-        // ZStack, not a Margin trick on the tile itself: NowPlayingHeroTile's own layout (its S-inset padding, its
-        // art/video ZStack) is untouched by having a sibling layer overlaid on top of it.
-        return new BoxEl { ZStack = true, Children = [tile, ArtVideoToggle(b, docked)] };
+        if (docked) return DockedCap(ui, docked: true, settings, railWidth);
+        if (!PlacementCore.Allows(state.Available, SurfacePlacement.Docked)) return art;
+        // ZStack, not a Margin trick on the tile itself: NowPlayingHeroTile's own layout (its S-inset padding) is
+        // untouched by having a sibling layer overlaid on top of it.
+        return new BoxEl { ZStack = true, Children = [art, ArtVideoToggle(b)] };
     }
 
-    // `docked` picks which half is lit — NOT which half's tooltip is shown; each half's tooltip is the action IT
-    // performs, unconditionally, the same "name of record" idiom DockedVideoSurface's own glyph strip uses. "Art"
-    // is the sticky-off path (NotifyVideoSurfaceClosed, never TurnVideoOff — see that method's own doc for why the
-    // stale-close identity guard matters), "Video" docks it; both are scoped to THIS surface only.
-    static Element ArtVideoToggle(PlaybackBridge b, bool docked) => new BoxEl
+    // Rendered over the ART only — never over the docked card. While the video is docked here, the card's own
+    // hover glyph strip already owns the way out (Icons.Cancel → NotifyVideoSurfaceClosed(Docked), the same sticky-off
+    // path this toggle's Art half takes) and it occupies the very same top-right corner, so a second control stacked
+    // there would be two overlapping affordances for one action. That is also why there is no `docked` parameter: the
+    // Art half is always the unlit one here, because this control only exists in the un-docked state.
+    //
+    // Each half's tooltip is the action IT performs, unconditionally — the same "name of record" idiom
+    // DockedVideoSurface's own glyph strip uses. "Art" is the sticky-off path (NotifyVideoSurfaceClosed, never
+    // TurnVideoOff — see that method's own doc for why the stale-close identity guard matters), "Video" docks it;
+    // both are scoped to THIS surface only.
+    static Element ArtVideoToggle(PlaybackBridge b) => new BoxEl
     {
         Height = 24f, Shrink = 0f,
         AlignSelf = FlexAlign.Start, JustifySelf = FlexAlign.End,
@@ -312,9 +328,9 @@ sealed class RightRail : Component
         Fill = WaveeOnMedia.GlassHover,
         Children =
         [
-            ToggleHalf(Icons.Picture, !docked, Loc.Get(Strings.Player.SwitchToAudio),
+            ToggleHalf(Icons.Picture, selected: true, Loc.Get(Strings.Player.SwitchToAudio),
                 () => b.NotifyVideoSurfaceClosed(SurfacePlacement.Docked)),
-            ToggleHalf(Icons.Movie, docked, Loc.Get(Strings.Player.SwitchToVideo),
+            ToggleHalf(Icons.Movie, selected: false, Loc.Get(Strings.Player.SwitchToVideo),
                 () => b.ShowVideoAt(SurfacePlacement.Docked)),
         ],
     };

@@ -1464,6 +1464,13 @@ public sealed class AppHost : IDisposable
         // Reads/writes the child host's field so the parent's reaper (which holds the child, not the handle) fires it.
         public Action? OnClosed { get => _child.OnClosed; set => _child.OnClosed = value; }
         public RectF BoundsPx => _window.OuterBoundsPx;
+        // Fullscreen goes to the CHILD window's own PAL window, never the parent's: the backend resolves the target
+        // monitor from THAT window's handle, which is what keeps a pop-out dragged to a second display fullscreening
+        // where it already is instead of hopping back to the app's monitor (see IDetachedVideoWindow.SetFullscreen).
+        // Guarded on !IsClosed the same way IsOpen is — the reaper runs a frame after the OS destroyed the window, so a
+        // late toggle from a still-mounted owner must be inert rather than a call against a dead handle.
+        public void SetFullscreen(bool fullscreen) { if (!_window.IsClosed) _window.SetFullscreen(fullscreen); }
+        public bool IsFullscreen => !_window.IsClosed && _window.IsFullscreen;
         public void SetTitle(string title) => _window.SetTitle(_child._strings.Intern(title));
         // Same indirection as OnClosed: the reaper samples the CHILD, so the callback must live on the child host.
         public Action<RectF>? BoundsChanged { get => _child.BoundsChanged; set => _child.BoundsChanged = value; }

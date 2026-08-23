@@ -3842,6 +3842,59 @@ sealed class OverlayProbeInner : Component
     }
 }
 
+// Like OverlayProbe, but the anchor sits on top of a full-bleed VIDEO HOLE — the fullscreen-player geometry, where a
+// flyout plate is over a DestOut erase whose backdrop is premultiplied zero and an acrylic layer therefore blurs
+// nothing. ShowVideo is a SIGNAL so a gate can retract the hole mid-run and watch what the overlay host does with an
+// answer that just changed under it (and so the last frame a gate records leaves an EMPTY published hole set behind —
+// SceneRecorder publishes that set process-statically and the next host's first phase-7.1 pass would otherwise read it).
+sealed class VideoOverlayProbe : Component
+{
+    public IOverlayService? Service;
+    public NodeHandle Anchor;
+    public NodeHandle Hole;
+    public readonly Signal<bool> ShowVideo = new(true);
+    public float StageW = 480f, StageH = 400f;
+    public override Element Render() => Embed.Comp(() => new OverlayHost { Child = Embed.Comp(() => new VideoOverlayProbeInner(this)) });
+}
+
+sealed class VideoOverlayProbeInner : Component
+{
+    readonly VideoOverlayProbe _p;
+    public VideoOverlayProbeInner(VideoOverlayProbe p) => _p = p;
+    public override Element Render()
+    {
+        _p.Service = UseContext(Overlay.Service);
+        bool video = _p.ShowVideo.Value;   // reading the signal subscribes this render → retraction re-renders
+        return new BoxEl
+        {
+            ZStack = true, Width = _p.StageW, Height = _p.StageH, TabStop = false,
+            Children =
+            [
+                // The hole is the FIRST child (painter order: everything after it paints back over the video).
+                // Keyed so the retracted form reconciles as the same slot instead of remounting the anchor.
+                video
+                    ? new BoxEl { Key = "hole", Width = _p.StageW, Height = _p.StageH, VideoHole = true, OnRealized = h => _p.Hole = h }
+                    : new BoxEl { Key = "hole", Width = _p.StageW, Height = _p.StageH },
+                // The transport-button analogue: near the TOP of the stage, so a BottomLeft-placed flyout opens
+                // downward and lands wholly inside the hole.
+                new BoxEl
+                {
+                    Key = "chrome", Padding = new Edges4(20, 16, 20, 16),
+                    Children =
+                    [
+                        new BoxEl
+                        {
+                            Width = 120, Height = 32, Role = AutomationRole.Button, OnClick = () => { },
+                            OnRealized = h => _p.Anchor = h,
+                            Children = [Text("video-anchor")],
+                        },
+                    ],
+                },
+            ],
+        };
+    }
+}
+
 // KeepAlive page swap + an overlay anchored on page A: BeginKeepAliveExit must close the overlay the frame the
 // swap starts (OnSubtreeDeactivated), so a tooltip cannot walk to the origin over the incoming page.
 sealed class OverlayKeepAliveDeathProbe : Component

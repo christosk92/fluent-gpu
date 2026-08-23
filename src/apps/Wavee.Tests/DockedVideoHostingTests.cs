@@ -5,11 +5,17 @@ using Xunit;
 namespace Wavee.Tests;
 
 /// <summary>
-/// The pure arbitration between the app's TWO docked video hosts — the right rail's card and a module watch page's
+/// The pure arbitration between the app's TWO docked video hosts — the right rail's ONE card and a module watch page's
 /// in-page stage (<see cref="DockedVideoHosting"/>). There is exactly ONE video surface per player
 /// (<c>VideoSurfaceRegistry</c>'s <c>OneSurfacePerPlayerGuard</c>), so the whole point of these tests is the structural
 /// analogue of <see cref="PlacementCoreTests"/>' single-transport gate: at most one FACE ever mounts, and exactly one
 /// mounts whenever the docked placement is resolved. Values only — no signal, no window, no GPU.
+///
+/// <para>The rail body is NOT a term of that decision any more, and the tests still sweep every
+/// <see cref="RailMode"/> to pin that: the rail used to carry two competing faces (a full-bleed cap and a fixed square
+/// art tile for Details) and needed the substituted body threaded through the gate to keep them apart. One rail card
+/// in every body means the mount answer must be INVARIANT under the body — which is exactly the user-visible defect
+/// the change fixes, since a body-dependent answer is what made the same video change shape and width.</para>
 /// </summary>
 public class DockedVideoHostingTests
 {
@@ -21,27 +27,15 @@ public class DockedVideoHostingTests
 
     static readonly RailMode[] AllModes = (RailMode[])Enum.GetValues(typeof(RailMode));
 
-    /// <summary>The call site's own railBody derivation, replayed verbatim: <c>DockedVideoSurface</c> passes
-    /// <see cref="RailVideoCoupling.BodyModeFor"/> for the two rail faces and <c>null</c> for the page stage (for which
-    /// rail state is irrelevant). Folded here so every test below exercises the SHIPPING argument shape.</summary>
-    static bool Mounts(DockedVideoFace face, SurfacePlacement resolved,
-                       string? ownerPageUri, string? activePageUri, string? playingUri, RailMode mode)
-    {
-        RailMode? railBody = face == DockedVideoFace.PageStage
-            ? null
-            : RailVideoCoupling.BodyModeFor(mode, DockedVideoHosting.PageStageHosts(activePageUri, playingUri));
-        return DockedVideoHosting.ShouldMount(face, resolved, ownerPageUri, activePageUri, playingUri, railBody);
-    }
-
     static int MountingFaces(SurfacePlacement resolved, string? ownerPageUri,
-                             string? activePageUri, string? playingUri, RailMode mode)
+                             string? activePageUri, string? playingUri)
     {
         int n = 0;
         foreach (var face in DockedVideoHosting.AllFaces)
         {
-            // Only the page stage carries an owner; the two rail faces have no page of their own.
+            // Only the page stage carries an owner; the rail's card has no page of its own.
             string? owner = face == DockedVideoFace.PageStage ? ownerPageUri : null;
-            if (Mounts(face, resolved, owner, activePageUri, playingUri, mode)) n++;
+            if (DockedVideoHosting.ShouldMount(face, resolved, owner, activePageUri, playingUri)) n++;
         }
         return n;
     }
@@ -67,18 +61,17 @@ public class DockedVideoHostingTests
         foreach (var resolved in PlacementCore.AllPlacements)
         foreach (var active in actives)
         foreach (var playing in playings)
-        foreach (var mode in AllModes)
         {
             foreach (var owner in owners)
-                Assert.True(MountingFaces(resolved, owner, active, playing, mode) <= 1,
+                Assert.True(MountingFaces(resolved, owner, active, playing) <= 1,
                     $"two faces mounted at once: resolved={resolved} owner={owner ?? "(null)"} " +
-                    $"active={active ?? "(null)"} playing={playing ?? "(null)"} mode={mode}");
+                    $"active={active ?? "(null)"} playing={playing ?? "(null)"}");
 
             // The ATTACHED page's own instance — the one whose OwnerStagePlayable IS the active staged playable.
-            int attached = MountingFaces(resolved, active, active, playing, mode);
+            int attached = MountingFaces(resolved, active, active, playing);
             Assert.True(attached == (resolved == SurfacePlacement.Docked ? 1 : 0),
                 $"expected {(resolved == SurfacePlacement.Docked ? 1 : 0)} mounted face, got {attached}: " +
-                $"resolved={resolved} active={active ?? "(null)"} playing={playing ?? "(null)"} mode={mode}");
+                $"resolved={resolved} active={active ?? "(null)"} playing={playing ?? "(null)"}");
         }
     }
 
@@ -90,46 +83,63 @@ public class DockedVideoHostingTests
     {
         // The stage IS hosting (the attached page is the playing item) — and the parked page still mounts nothing.
         Assert.True(DockedVideoHosting.PageStageHosts(Watch, Watch));
-        Assert.False(Mounts(DockedVideoFace.PageStage, SurfacePlacement.Docked, Other, Watch, Watch, RailMode.Queue));
-        Assert.True(Mounts(DockedVideoFace.PageStage, SurfacePlacement.Docked, Watch, Watch, Watch, RailMode.Queue));
+        Assert.False(DockedVideoHosting.ShouldMount(DockedVideoFace.PageStage, SurfacePlacement.Docked, Other, Watch, Watch));
+        Assert.True(DockedVideoHosting.ShouldMount(DockedVideoFace.PageStage, SurfacePlacement.Docked, Watch, Watch, Watch));
 
         // And the parked page whose OWN entity is the playing one, while a DIFFERENT page is attached: still false —
         // "is my entity playing" is not the question, "am I the attached page" is.
-        Assert.False(Mounts(DockedVideoFace.PageStage, SurfacePlacement.Docked, Watch, Other, Watch, RailMode.Queue));
+        Assert.False(DockedVideoHosting.ShouldMount(DockedVideoFace.PageStage, SurfacePlacement.Docked, Watch, Other, Watch));
     }
 
     // ── the yield ───────────────────────────────────────────────────────────────────────────────────────────────────
 
-    /// <summary>When the stage hosts, BOTH rail faces yield — whole. Not the Cap only: the Details hero's Art-tile face
-    /// is the same one surface, and leaving it armed would put two mounted cards on one player.</summary>
+    /// <summary>When the stage hosts, the rail's card yields — whole. It is the same one surface, and leaving the rail
+    /// armed would put two mounted cards on one player.</summary>
     [Fact]
-    public void RailFacesYield_WhenTheStageHosts()
+    public void RailCardYields_WhenTheStageHosts()
     {
-        foreach (var mode in AllModes)
-        {
-            Assert.False(Mounts(DockedVideoFace.Cap, SurfacePlacement.Docked, null, Watch, Watch, mode));
-            Assert.False(Mounts(DockedVideoFace.ArtTile, SurfacePlacement.Docked, null, Watch, Watch, mode));
-        }
+        Assert.False(DockedVideoHosting.ShouldMount(DockedVideoFace.Cap, SurfacePlacement.Docked, null, Watch, Watch));
         Assert.Equal(DockedVideoHost.PageStage,
             DockedVideoHosting.HostFor(SurfacePlacement.Docked, Watch, Watch));
     }
 
     /// <summary>When the stage does NOT host — no watch page attached, or the attached page is not the playing item —
-    /// the rail is the resting owner and exactly one of its two faces mounts: Details takes the Art-tile hero, every
-    /// other body takes the Cap.</summary>
+    /// the rail is the resting owner and its ONE card mounts.</summary>
     [Fact]
-    public void RailFacesHost_WhenItDoesNot()
+    public void RailCardHosts_WhenTheStageDoesNot()
     {
         foreach (var (active, playing) in new (string?, string?)[] { (null, Song), ("", Song), (Watch, Song), (Watch, null) })
         {
             Assert.Equal(DockedVideoHost.Rail, DockedVideoHosting.HostFor(SurfacePlacement.Docked, active, playing));
-            foreach (var mode in AllModes)
-            {
-                bool details = mode == RailMode.Details;
-                Assert.Equal(!details, Mounts(DockedVideoFace.Cap, SurfacePlacement.Docked, null, active, playing, mode));
-                Assert.Equal(details, Mounts(DockedVideoFace.ArtTile, SurfacePlacement.Docked, null, active, playing, mode));
-                Assert.False(Mounts(DockedVideoFace.PageStage, SurfacePlacement.Docked, active, active, playing, mode));
-            }
+            Assert.True(DockedVideoHosting.ShouldMount(DockedVideoFace.Cap, SurfacePlacement.Docked, null, active, playing));
+            Assert.False(DockedVideoHosting.ShouldMount(DockedVideoFace.PageStage, SurfacePlacement.Docked, active, active, playing));
+        }
+    }
+
+    /// <summary>THE new rule, and the user-visible defect it fixes: the rail's card mounts for a resolved Docked
+    /// placement REGARDLESS of which body the rail is showing. The rail used to answer this question differently per
+    /// body — Details got a fixed square art tile inset 8 DIP per side, every other body got the full-bleed cap — so
+    /// the identical 16:9 stream changed both its shape and its width as the user switched bodies. One card, one
+    /// answer, in every body; sweeping <see cref="RailVideoCoupling.BodyModeFor"/>'s SUBSTITUTED body too, since that
+    /// is the value the rail actually renders.</summary>
+    [Fact]
+    public void RailCardMounts_InEveryBody_WhenDockedResolves()
+    {
+        foreach (var mode in AllModes)
+        {
+            // The body the rail actually RENDERS (chosen mode, or the substitution while the stage hosts) — asserted
+            // to be irrelevant to the mount answer in both directions.
+            RailMode chosen = RailVideoCoupling.BodyModeFor(mode, stageHostsVideo: false);
+            RailMode substituted = RailVideoCoupling.BodyModeFor(mode, stageHostsVideo: true);
+            Assert.Equal(mode, chosen);   // no substitution while the rail is the host: the user's body stands
+
+            // No watch page in play: the rail's card mounts, under Details exactly as under Queue/Lyrics/Friends/Video.
+            Assert.True(DockedVideoHosting.ShouldMount(DockedVideoFace.Cap, SurfacePlacement.Docked, null, "", Song));
+            Assert.True(DockedVideoHosting.ShouldMount(DockedVideoFace.Cap, SurfacePlacement.Docked, null, Watch, Song));
+
+            // ...and while the stage hosts, no body brings it back — including the ones BodyModeFor leaves alone.
+            Assert.False(DockedVideoHosting.ShouldMount(DockedVideoFace.Cap, SurfacePlacement.Docked, null, Watch, Watch));
+            Assert.True(substituted is RailMode.Queue or RailMode.Lyrics or RailMode.Friends);
         }
     }
 
@@ -143,10 +153,9 @@ public class DockedVideoHostingTests
         {
             if (resolved == SurfacePlacement.Docked) continue;
             foreach (var face in DockedVideoHosting.AllFaces)
-            foreach (var mode in AllModes)
             {
-                Assert.False(Mounts(face, resolved, Watch, Watch, Watch, mode));
-                Assert.False(Mounts(face, resolved, null, "", Song, mode));
+                Assert.False(DockedVideoHosting.ShouldMount(face, resolved, Watch, Watch, Watch));
+                Assert.False(DockedVideoHosting.ShouldMount(face, resolved, null, "", Song));
             }
             // ...and the host derivation hands the surface straight back to the rail, its resting owner.
             Assert.Equal(DockedVideoHost.Rail, DockedVideoHosting.HostFor(resolved, Watch, Watch));
@@ -179,19 +188,17 @@ public class DockedVideoHostingTests
 
     /// <summary>Faces belong to hosts statically; the DECISION is <see cref="DockedVideoHosting.HostFor"/>.</summary>
     [Fact]
-    public void HostOf_MapsTheThreeFaces()
+    public void HostOf_MapsBothFaces()
     {
         Assert.Equal(DockedVideoHost.Rail, DockedVideoHosting.HostOf(DockedVideoFace.Cap));
-        Assert.Equal(DockedVideoHost.Rail, DockedVideoHosting.HostOf(DockedVideoFace.ArtTile));
         Assert.Equal(DockedVideoHost.PageStage, DockedVideoHosting.HostOf(DockedVideoFace.PageStage));
 
         // Every mounting face belongs to the host the derivation names — the two answers can never disagree.
         foreach (var face in DockedVideoHosting.AllFaces)
         foreach (var (active, playing) in new (string?, string?)[] { (Watch, Watch), (Watch, Song), ("", Song) })
-        foreach (var mode in AllModes)
         {
             string? owner = face == DockedVideoFace.PageStage ? active : null;
-            if (!Mounts(face, SurfacePlacement.Docked, owner, active, playing, mode)) continue;
+            if (!DockedVideoHosting.ShouldMount(face, SurfacePlacement.Docked, owner, active, playing)) continue;
             Assert.Equal(DockedVideoHosting.HostFor(SurfacePlacement.Docked, active, playing),
                 DockedVideoHosting.HostOf(face));
         }
@@ -269,18 +276,20 @@ public class DockedVideoHostingTests
 
                 // ≤1 for EVERY instance in the tree, parked ones included.
                 foreach (var owner in new[] { active, Other, null, "" })
-                    Assert.True(MountingFaces(resolved, owner, active, playing, mode) <= 1, why);
+                    Assert.True(MountingFaces(resolved, owner, active, playing) <= 1, why);
 
                 // The attached instance agrees with Resolve, exactly.
-                int attached = MountingFaces(resolved, active, active, playing, mode);
+                int attached = MountingFaces(resolved, active, active, playing);
                 Assert.Equal(resolved == SurfacePlacement.Docked ? 1 : 0, attached);
 
-                // ...and it mounts for the host the derivation names.
+                // ...and it mounts for the host the derivation names. `mode` rides along unread by the gate on
+                // purpose: the mount answer must be INVARIANT under the rail body, which is the whole point of the
+                // rail having one card instead of a per-body pair.
                 var host = DockedVideoHosting.HostFor(resolved, active, playing);
                 foreach (var face in DockedVideoHosting.AllFaces)
                 {
                     string? owner = face == DockedVideoFace.PageStage ? active : null;
-                    if (Mounts(face, resolved, owner, active, playing, mode))
+                    if (DockedVideoHosting.ShouldMount(face, resolved, owner, active, playing))
                         Assert.Equal(host, DockedVideoHosting.HostOf(face));
                 }
             }
