@@ -39,6 +39,37 @@ public enum PlacementSet : byte
     Fullscreen = 8,
 }
 
+/// <summary>
+/// WHO draws the playback transport (scrub row + play/pause) right now. There is exactly ONE owner at any instant, and
+/// it is DERIVED from the resolved <see cref="SurfacePlacement"/> — never a second visibility flag per surface, because
+/// two independent flags is precisely how the shipping build ended up stacking the full-screen video transport ON TOP
+/// of the global 72-DIP player bar (both owners rendered, nothing suppressed either).
+///
+/// <para>Every transport-bearing component declares its own identity from this enum and gates on
+/// <c>PlaybackBridge.TransportOwnerNow</c>: <c>if (owner != Mine) render none</c>. A video surface that is not the owner
+/// passes <c>MediaPlayerElement.SuppressTransport = true</c> rather than reaching into the element's internals.</para>
+/// </summary>
+public enum TransportOwner : byte
+{
+    /// <summary>The global 72-DIP player bar (<c>Features/Shell/PlayerBar.cs</c>) — the DEFAULT owner, and the owner
+    /// whenever no video surface is mounted at all. It is the app's primary, always-visible transport and yields only
+    /// to a FULL-BLEED surface in its own window (<see cref="Fullscreen"/>), where the shell unmounts it outright.</summary>
+    GlobalBar = 0,
+    /// <summary>An IN-WINDOW video card's own transport — the docked rail card (<c>DockedVideoSurface</c>) and the
+    /// floating mini player (<c>InWindowVideoPip</c>) both declare this identity so they can ASK whether they own the
+    /// transport. <see cref="PlacementCore.TransportOwnerFor"/> answers YES for both, so each card renders its own
+    /// auto-hiding hover chrome over the picture — the controls that only make sense on a video (aspect, fullscreen,
+    /// the live DVR rail). The global bar keeps rendering below it (see its owner test): an overlay inside a card is
+    /// not a second bar stacked in the same band, which is what the single-transport rule is about.</summary>
+    Docked = 1,
+    /// <summary>The detached pop-out window's stage. That window has NO player bar of its own, so the video's transport
+    /// is the session transport while the video lives there.</summary>
+    PopOut = 2,
+    /// <summary>The full-bleed fullscreen video surface's transport — the ONLY transport while fullscreen (the shell
+    /// unmounts the title bar and the global player bar for the duration).</summary>
+    Fullscreen = 3,
+}
+
 /// <summary>What a given surface allows and where it opens by default.</summary>
 /// <param name="Allowed">The placements this surface can ever occupy.</param>
 /// <param name="Default">The initial <see cref="PlacementState.Preferred"/> — where an unlit primary click opens it.</param>
@@ -380,6 +411,81 @@ public static class PlacementCore
         return next == SurfacePlacement.None ? TurnOff(s) : OpenAt(s, next);
     }
 
+    // ── transport ownership (gate.media.single-transport) ───────────────────────────────────────────────────────────
+
+    /// <summary>Every value <see cref="TransportOwner"/> can take, in one place, so the single-transport gate can
+    /// enumerate the claimants without reflection (this file stays <see cref="System"/>-only).</summary>
+    public static readonly TransportOwner[] AllTransportOwners =
+    [
+        TransportOwner.GlobalBar, TransportOwner.Docked, TransportOwner.PopOut, TransportOwner.Fullscreen,
+    ];
+
+    /// <summary>Every value <see cref="SurfacePlacement"/> can take — the gate's domain.</summary>
+    public static readonly SurfacePlacement[] AllPlacements =
+    [
+        SurfacePlacement.None, SurfacePlacement.Docked, SurfacePlacement.Floating,
+        SurfacePlacement.Detached, SurfacePlacement.Fullscreen,
+    ];
+
+    /// <summary>THE derived transport owner, from the RESOLVED placement (never from <c>Requested</c>: a placement that
+    /// resolved away to None must hand the transport straight back to the bar).
+    /// <list type="bullet">
+    /// <item><see cref="SurfacePlacement.Fullscreen"/> → <see cref="TransportOwner.Fullscreen"/>: the shell unmounts the
+    /// title bar and the player bar, so the video's own auto-hiding transport is the only one left.</item>
+    /// <item><see cref="SurfacePlacement.Detached"/> → <see cref="TransportOwner.PopOut"/>: a separate OS window with no
+    /// bar of its own, so the pop-out carries the transport for ITS window. Note the invariant is one transport per
+    /// WINDOW, not per session: the main window's player bar keeps its own scrub row and play/pause while the video is
+    /// popped out, because the two live in different windows and were never stacked. <c>PlayerBar</c> therefore treats
+    /// <see cref="TransportOwner.PopOut"/> as "not my window's owner" and keeps rendering — see its remark.</item>
+    /// <item>Docked / Floating → <see cref="TransportOwner.Docked"/>: the docked rail card and the in-window mini
+    /// player carry their OWN auto-hiding hover chrome (play/pause · volume · LIVE chip · Go live · fullscreen · the
+    /// DVR rail when a live window exists). That chrome is an OVERLAY ON THE VIDEO, not a second bar stacked under it:
+    /// it is transient (3 s auto-hide), it sits inside the card's own bounds, and its controls are the ones that only
+    /// make sense over a picture. The 72-DIP bar keeps rendering underneath — see <c>PlayerBar</c>'s owner test, which
+    /// admits <see cref="TransportOwner.Docked"/> for exactly the reason it admits <see cref="TransportOwner.PopOut"/>:
+    /// the two were never stacked, and stripping the always-visible session transport because a video card is on screen
+    /// would be a regression, not a fix. The stacked-double-bar defect this whole model exists to prevent is the
+    /// FULLSCREEN one, where the bar and the video's chrome really did occupy the same band.</item>
+    /// <item>None → <see cref="TransportOwner.GlobalBar"/>: no video surface exists, so there is nothing else to own it.</item>
+    /// </list></summary>
+    public static TransportOwner TransportOwnerFor(SurfacePlacement resolved) => resolved switch
+    {
+        SurfacePlacement.Fullscreen => TransportOwner.Fullscreen,
+        SurfacePlacement.Detached => TransportOwner.PopOut,
+        SurfacePlacement.Docked or SurfacePlacement.Floating => TransportOwner.Docked,
+        _ => TransportOwner.GlobalBar,
+    };
+
+    /// <summary><see cref="TransportOwnerFor"/> against a whole state (resolves first).</summary>
+    public static TransportOwner TransportOwnerOf(in PlacementState s) => TransportOwnerFor(Resolve(s));
+
+    /// <summary>The ONE question every transport-bearing component asks: "am I the owner right now?".</summary>
+    public static bool OwnsTransport(TransportOwner claimant, SurfacePlacement resolved)
+        => claimant == TransportOwnerFor(resolved);
+
+    /// <summary>How many of <see cref="AllTransportOwners"/> claim the transport for <paramref name="resolved"/>.
+    /// <b>gate.media.single-transport</b> asserts this is exactly 1 for every placement — the structural statement that
+    /// the stacked-double-bar defect is unrepresentable rather than merely fixed. This counts SESSION owners; the
+    /// per-window reading (which is what the defect was about) is that no two claimants in the SAME window can both
+    /// render, which follows from this plus <c>PlayerBar</c>'s cross-window exemption for
+    /// <see cref="TransportOwner.PopOut"/>.</summary>
+    public static int TransportClaimants(SurfacePlacement resolved)
+    {
+        int n = 0;
+        for (int i = 0; i < AllTransportOwners.Length; i++)
+            if (OwnsTransport(AllTransportOwners[i], resolved)) n++;
+        return n;
+    }
+
+    /// <summary>The gate assertion itself: exactly one transport owner for EVERY placement value. Pure and
+    /// engine-free, so the harness can call it without a scene.</summary>
+    public static bool SingleTransportInvariant()
+    {
+        for (int i = 0; i < AllPlacements.Length; i++)
+            if (TransportClaimants(AllPlacements[i]) != 1) return false;
+        return true;
+    }
+
     // ── owner helpers ───────────────────────────────────────────────────────────────────────────────────────────────
 
     /// <summary>What the owner of ALL placements must do to reconcile <paramref name="live"/> with
@@ -429,6 +535,9 @@ public static class PlacementCore
         if (r != SurfacePlacement.None && !Allows(s.Available, r)) return false;
         if (s.Preferred == SurfacePlacement.None || s.Preferred == SurfacePlacement.Fullscreen) return false;
         if (s.Requested == SurfacePlacement.None && r != SurfacePlacement.None) return false;
+        // (4) exactly ONE transport owner, always — gate.media.single-transport, folded in here so every existing
+        // arbitrary-command-sequence property test covers it too.
+        if (TransportClaimants(r) != 1) return false;
         return true;
     }
 }

@@ -29,6 +29,10 @@ sealed partial class SettingsPage
     ];
 
     readonly Signal<int> _quality = new(2);
+    readonly Signal<int> _videoQuality = new(0);
+    readonly Signal<int> _meteredVideoQuality = new(1);
+    static readonly int[] s_videoQualityHeights = [0, 180, 240, 320, 480, 720, 1080];
+    static readonly int[] s_meteredVideoHeights = [0, 480, 720, 1080];
     readonly Signal<int> _eqPreset = new(0);
     readonly Signal<double> _crossSecs = new(5.0);
     // The unified Slider.Create takes a FloatSignal; mirror _crossSecs (a Signal<double>, shared with the NumberBox)
@@ -89,6 +93,10 @@ sealed partial class SettingsPage
             EqualizerGroup(svc, settings, eqOn, gains, preset),
             CrossfadeGroup(svc, settings, crossOn),
             SettingsSectionHeader(Loc.Get(Strings.VideoOverride.SettingsTitle), Icons.Movie),
+            SettingsRow(Loc.Get(Strings.Settings.Playback.VideoQuality), Loc.Get(Strings.Settings.Playback.VideoQualitySub),
+                VideoQualityCombo(svc), Icons.Movie),
+            SettingsRow(Loc.Get(Strings.Settings.Playback.VideoMeteredQuality), Loc.Get(Strings.Settings.Playback.VideoMeteredQualitySub),
+                MeteredVideoQualityCombo(svc), Icons.Globe),
             VideoOverridesGroup(svc),
             SettingsSectionHeader(Loc.Get(Strings.Settings.Playback.PlayerBar), Icons.Pin),
             SettingsRow(Loc.Get(Strings.Settings.Playback.ShowRemaining), Loc.Get(Strings.Settings.Playback.ShowRemainingSub),
@@ -352,6 +360,56 @@ sealed partial class SettingsPage
                 settings.Set(WaveeSettings.MeteredQualityCap, i);
                 Bump();
             });
+    }
+
+    Element VideoQualityCombo(Services? svc)
+    {
+        var settings = svc?.Settings;
+        string[] labels =
+        [
+            Loc.Get(Strings.Settings.Playback.VideoQualityAuto), "180p", "240p", "320p", "480p", "720p", "1080p",
+        ];
+        return ComboBox.Create(labels, _videoQuality, width: 280f,
+            isEnabled: settings is not null,
+            onChange: i =>
+            {
+                if (settings is null || (uint)i >= (uint)s_videoQualityHeights.Length) return;
+                int height = s_videoQualityHeights[i];
+                settings.Set(WaveeSettings.VideoQuality, height);
+                svc?.LiveHost?.Connect.SetVideoQualityPreference(height);
+                Bump();
+            });
+    }
+
+    Element MeteredVideoQualityCombo(Services? svc)
+    {
+        var settings = svc?.Settings;
+        string[] labels = [Loc.Get(Strings.Settings.Playback.VideoQualityUnlimited), "480p", "720p", "1080p"];
+        return ComboBox.Create(labels, _meteredVideoQuality, width: 280f,
+            isEnabled: settings is not null,
+            onChange: i =>
+            {
+                if (settings is null || (uint)i >= (uint)s_meteredVideoHeights.Length) return;
+                int height = s_meteredVideoHeights[i];
+                settings.Set(WaveeSettings.VideoMeteredMaxHeight, height);
+                NetworkPolicy.MeteredVideoMaxHeight.Value = height;
+                svc?.LiveHost?.Connect.RefreshVideoQualityPolicy();
+                Bump();
+            });
+    }
+
+    static int VideoQualityIndex(int height)
+    {
+        for (int i = 0; i < s_videoQualityHeights.Length; i++)
+            if (s_videoQualityHeights[i] == height) return i;
+        return 0;
+    }
+
+    static int MeteredVideoQualityIndex(int height)
+    {
+        for (int i = 0; i < s_meteredVideoHeights.Length; i++)
+            if (s_meteredVideoHeights[i] == height) return i;
+        return 1;
     }
 
 

@@ -132,14 +132,45 @@ public sealed class AdaptiveMediaTests
     }
 
     [Fact]
-    public void AbrDownshiftsImmediatelyAndRequiresTwoBufferedUpgradeVotes()
+    public void AbrDownshiftsImmediatelyAndGatesClimbsOnOneVoteThenTwo()
     {
-        var abr = new AdaptiveBitrateController { UpgradeBuffer = TimeSpan.FromSeconds(10), SafetyFactor = 0.8 };
+        var abr = new AdaptiveBitrateController { UpgradeBuffer = TimeSpan.FromSeconds(10) };
         int[] bitrates = [300_000, 1_000_000, 3_000_000];
+
+        // The FIRST climb after startup lands on ONE vote. The two-vote gate exists to damp steady-state
+        // oscillation; applying it at startup is what left Auto parked on the opening rung for seconds after the
+        // estimate had already justified moving off it.
+        Assert.Equal(2, abr.Choose(bitrates, TimeSpan.FromSeconds(20), 5_000));
+        Assert.Equal(AbrDecisionReason.Throughput, abr.LastDecisionReason);
+
+        // A downswitch is immediate and unconditional — a stall is worse than any resolution.
+        Assert.Equal(0, abr.Choose(bitrates, TimeSpan.FromSeconds(20), 500));
+        Assert.Equal(AbrDecisionReason.Throughput, abr.LastDecisionReason);
+
+        // Having climbed once, a further climb needs two consecutive votes for the same candidate.
         Assert.Equal(0, abr.Choose(bitrates, TimeSpan.FromSeconds(20), 5_000));
         Assert.Equal(2, abr.Choose(bitrates, TimeSpan.FromSeconds(20), 5_000));
+
+        // A starved forward buffer blocks any climb regardless of throughput.
         Assert.Equal(0, abr.Choose(bitrates, TimeSpan.FromSeconds(20), 500));
         Assert.Equal(0, abr.Choose(bitrates, TimeSpan.FromSeconds(3), 5_000));
+        Assert.Equal(AbrDecisionReason.Buffer, abr.LastDecisionReason);
+    }
+
+    [Fact]
+    public void AbrForcedProbeClimbsOffARungTheEstimateCannotJustify()
+    {
+        // The estimate is derived from what the CURRENT rung downloads, so a low rendition self-reinforces: it never
+        // transfers enough per segment to justify climbing off itself. Without the forced probe this is how Auto sits
+        // on the bottom rung over a fast link forever — the "Auto - 240p" report.
+        var abr = new AdaptiveBitrateController { UpgradeBuffer = TimeSpan.Zero, ForcedProbeSegments = 3 };
+        int[] bitrates = [300_000, 1_000_000];
+        const double justBelowTheNextRung = 1_000.0;   // kbps: 1 Mbps, so 1_000_000 bps never clears the 0.85 climb budget
+
+        Assert.Equal(0, abr.Choose(bitrates, TimeSpan.FromSeconds(20), justBelowTheNextRung));
+        Assert.Equal(0, abr.Choose(bitrates, TimeSpan.FromSeconds(20), justBelowTheNextRung));
+        Assert.Equal(1, abr.Choose(bitrates, TimeSpan.FromSeconds(20), justBelowTheNextRung));
+        Assert.Equal(AbrDecisionReason.ForcedProbe, abr.LastDecisionReason);
     }
 
     [Fact]
@@ -153,10 +184,33 @@ public sealed class AdaptiveMediaTests
             new("720", 1_000_000, new SizeI(1280, 720), 30, codec),
         ];
         var abr = new AdaptiveBitrateController { MaxHeight = 720, UpgradeBuffer = TimeSpan.Zero };
-        abr.RecordDownload(2_000_000, TimeSpan.FromSeconds(1));
+        abr.RecordDownload(2_000_000, TimeSpan.FromSeconds(1));   // 16 Mbps — the first sample REPLACES the 2 Mbps prior
 
-        Assert.Equal(0, abr.Choose(variants, TimeSpan.FromSeconds(20)));
+        // Filtering happens in local coordinates but the answer is a FULL-list index: 720p is index 2, not index 1.
         Assert.Equal(2, abr.Choose(variants, TimeSpan.FromSeconds(20)));
+        // The 2160p rung is above the cap and must never be selected however fast the link is.
+        Assert.NotEqual(1, abr.Choose(variants, TimeSpan.FromSeconds(20)));
+    }
+
+    [Fact]
+    public void AbrHeightCapBelowEveryRungTakesTheSmallestRungNotIndexZero()
+    {
+        // THE "Auto - 240p" BUG. A real video viewport (191 DIP docked rail, 202 DIP pop-out, 135 DIP minimum) sits
+        // BELOW every rung a manifest offers, so every variant fails the MaxHeight filter and this is the COMMON
+        // path, not a corner case. Returning index 0 pinned Auto to whatever happened to be first in the list.
+        var codec = new MediaContentType(Container.Dash, CodecId.H264, CodecId.None);
+        QualityVariant[] variants =
+        [
+            new("1080", 4_000_000, new SizeI(1920, 1080), 30, codec),
+            new("240", 200_000, new SizeI(426, 240), 30, codec),
+            new("720", 1_000_000, new SizeI(1280, 720), 30, codec),
+        ];
+        var abr = new AdaptiveBitrateController { MaxHeight = 191, UpgradeBuffer = TimeSpan.Zero };
+        abr.RecordDownload(4_000_000, TimeSpan.FromSeconds(1));
+
+        // The smallest rung by HEIGHT, addressed in full-list coordinates — index 1, not index 0.
+        Assert.Equal(1, abr.Choose(variants, TimeSpan.FromSeconds(20)));
+        Assert.Equal(AbrDecisionReason.Capped, abr.LastDecisionReason);
     }
 
     [Fact]

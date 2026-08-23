@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 
 namespace Wavee.Backend.Wiring;
 
@@ -72,6 +72,11 @@ public static class LiveSeams
     public const string PlaylistMutationsHttp = "RealPlaylistMutations.Http";
     public const string PlaylistMutationsScheduleDrain = "RealPlaylistMutations.ScheduleDrain";
     public const string SpclientBaseUrl = "SpclientBaseUrl";
+    /// <summary>The Spotify half of the module→host services (<c>host/auth/token</c>, <c>host/auth/context</c>,
+    /// <c>spotify/audioKey</c>, all gated on <c>permission:auth.spotify</c>). Session-scoped by construction: they
+    /// answer from the live spclient handle and the AP socket, so logout must take them back off the registry — a
+    /// module asking afterwards gets "not offered", never a dead session.</summary>
+    public const string ModuleHostServices = "ModuleHostServices";
 
     // ── the local-audio stack's app-level handles ──
     public const string PlayPlayProvisioner = "PlayPlayProvisioner";
@@ -91,6 +96,7 @@ public static class LiveSeams
         CoverColorFiller, HomeBaselinePreviews,
         LiveHost, LiveHttp, MutTransport, SessionAccount, RealSync, PlaylistTuning,
         MutationScheduleDrain, PlaylistMutationsHttp, PlaylistMutationsScheduleDrain, SpclientBaseUrl,
+        ModuleHostServices,
         PlayPlayProvisioner, AudioBodyCache, AudioLicenseCache, AudioBodyDiskArena,
     ];
 }

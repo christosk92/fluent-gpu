@@ -51,6 +51,7 @@ sealed class PlaybackRuntimeDiagnosticsPage : Component
             body.Add(CandidatesSection(d));
             body.Add(VerifySection(d));
         }
+        body.Add(ModulesSection(svc?.Modules, () => _refresh.Value = _refresh.Peek() + 1));
         body.Add(Actions(hooks, diag, status));
         body.Add(Caption("This report is what the provisioner already computed while resolving a runtime — reading it "
                        + "changes nothing. Attach it (or the log folder) to a bug report."));
@@ -152,6 +153,84 @@ sealed class PlaybackRuntimeDiagnosticsPage : Component
             rows.Add(Row("File", sig.FilePath));
         }
         return Card("Verify", rows.ToArray());
+    }
+
+    /// <summary>The PLAYBACK MODULES section: one block per installed module (state, PID, directory, version, protocol,
+    /// counters and the last error) plus every directory that was probed and REFUSED, with the reason — the same
+    /// "nothing happened is never an answer" discipline the runtime locator's Candidates block follows. A module that
+    /// is <c>Faulted</c> gets a Retry button; everything else is read-only.</summary>
+    static Element ModulesSection(Wavee.Backend.Modules.ModuleHost? host, Action refresh)
+    {
+        if (host is null)
+            return Card("Playback modules", Body("This build has no playback-module host (the fake backend)."));
+
+        var rows = new List<Element>(16);
+        var installed = host.Installed;
+        if (installed.Count == 0)
+        {
+            rows.Add(Body("No playback modules are installed. Bundled modules live in "
+                        + host.Catalog.BundledRoot + "; installed ones in " + host.Catalog.UserRoot + "."));
+        }
+
+        for (int i = 0; i < installed.Count; i++)
+        {
+            var m = installed[i];
+            var process = host.ProcessFor(m.Id);
+            var stats = process?.Stats.Snapshot();
+            if (i > 0) rows.Add(new BoxEl { Height = 1f, Fill = Tok.StrokeCardDefault, Margin = new Edges4(0, 6f, 0, 6f) });
+            rows.Add(new BoxEl
+            {
+                Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center,
+                Children =
+                [
+                    new TextEl(m.Manifest.DisplayName) { Size = 12f, Weight = 600, Color = Tok.TextPrimary },
+                    Chip(m.Bundled ? "bundled" : "installed", present: true),
+                    Chip(process is null ? "Stopped" : process.State.ToString(),
+                        present: process is null || process.State is Wavee.Backend.Modules.ModuleProcessState.Ready
+                                                 or Wavee.Backend.Modules.ModuleProcessState.Stopped
+                                                 or Wavee.Backend.Modules.ModuleProcessState.Starting),
+                ],
+            });
+            rows.Add(Row("Id", m.Id));
+            rows.Add(Row("Version", m.Version + "  ·  protocol " + m.Manifest.ProtocolVersion.ToString(CultureInfo.InvariantCulture)));
+            rows.Add(Row("Publisher", m.Manifest.Publisher));
+            rows.Add(Row("Directory", m.Dir));
+            rows.Add(Row("Process", process?.ProcessId is { } pid
+                ? "pid " + pid.ToString(CultureInfo.InvariantCulture)
+                : "not running"));
+            rows.Add(Row("Capabilities", string.Join(", ", m.Manifest.Capabilities ?? [])));
+            if (stats is { } s)
+            {
+                rows.Add(Row("Requests", s.Requests.ToString(CultureInfo.InvariantCulture)
+                    + "  ·  " + s.Failures.ToString(CultureInfo.InvariantCulture) + " failed"
+                    + "  ·  " + s.Restarts.ToString(CultureInfo.InvariantCulture) + " restarts"));
+                rows.Add(Row("Latency", "p50 " + s.P50Ms.ToString(CultureInfo.InvariantCulture)
+                    + " ms  ·  p95 " + s.P95Ms.ToString(CultureInfo.InvariantCulture) + " ms"));
+                if (s.LastError is { Length: > 0 })
+                    rows.Add(Row("Last error", (s.LastErrorMethod ?? "") + ": " + s.LastError));
+            }
+
+            if (process?.Status is { } card) rows.Add(Row("Status", card.State + (card.Message is { Length: > 0 } msg ? " — " + msg : "")));
+            if (process?.State is Wavee.Backend.Modules.ModuleProcessState.Faulted
+                              or Wavee.Backend.Modules.ModuleProcessState.Crashed)
+            {
+                rows.Add(HStack(8f, Button.Standard("Retry", () => { host.Retry(m.Id); refresh(); })));
+            }
+        }
+
+        var rejections = host.Catalog.Rejections;
+        if (rejections.Count > 0)
+        {
+            rows.Add(new BoxEl { Height = 1f, Fill = Tok.StrokeCardDefault, Margin = new Edges4(0, 8f, 0, 6f) });
+            rows.Add(new TextEl("Refused") { Size = 12f, Weight = 600, Color = Tok.TextSecondary });
+            for (int i = 0; i < rejections.Count; i++)
+            {
+                rows.Add(new TextEl(rejections[i].Dir) { Size = 12f, Color = Tok.TextPrimary, Wrap = TextWrap.Wrap });
+                rows.Add(new TextEl(rejections[i].Reason) { Size = 12f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap });
+            }
+        }
+
+        return Card("Playback modules", rows.ToArray());
     }
 
     Element Actions(InputHooks hooks, PlaybackRuntimeDiagnostics? diag, PlaybackRuntimeStatus? status) => HStack(8f,

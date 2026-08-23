@@ -57,6 +57,30 @@ sealed class PopOutVideoWindow : Component
         OverlayHost.Create(Embed.Comp(() => new PopOutVideoContent { Source = Source, Player = Player, Bridge = Bridge, Settings = Settings }));
 }
 
+/// <summary>The bundle a HOST hands the shared <see cref="PopOutVideoStage"/> so the stage never has to guess which
+/// surface it is inside. Three surfaces present the same stage — the fullscreen surface, the in-window mini player, and
+/// the detached pop-out window — and they differ in exactly two ways, both of which live here rather than in a branch
+/// inside the stage:
+/// <list type="bullet">
+/// <item><b>Who draws the transport.</b> <see cref="Identity"/> is this host's <see cref="TransportOwner"/>; the stage
+/// compares it against the ONE derived <see cref="Owner"/> signal and passes
+/// <c>MediaPlayerElement.SuppressTransport</c> when it loses. Never a second per-surface visibility flag — two
+/// independent flags is exactly how the fullscreen transport and the global player bar ended up stacked.</item>
+/// <item><b>What the fullscreen affordance does.</b> <see cref="FullscreenRequested"/> is wired by EVERY host, which is
+/// what makes <c>MediaPlayerElement</c>'s own overlay fullscreen unreachable from Wavee — that path opened a modal
+/// light-dismiss popup over the app's own fullscreen surface, exited on Alt-Tab (OverlayHost closes light-dismiss
+/// entries on window blur), and called <c>WindowSetFullscreen(false)</c> unconditionally on the way out.</item>
+/// </list></summary>
+/// <param name="Identity">This host's transport identity.</param>
+/// <param name="Owner">The one derived owner signal (<see cref="PlaybackBridge.TransportOwnerNow"/>). A frozen SIGNAL
+/// instance, so it crosses the detached window's AppHost boundary intact and still re-renders the stage on change.</param>
+/// <param name="FullscreenRequested">What the fullscreen glyph / ⋯ row / F11 / F / double-click must do here: ENTER
+/// fullscreen from an inline surface, EXIT it from the fullscreen surface itself.</param>
+readonly record struct VideoStageHost(
+    TransportOwner Identity,
+    IReadSignal<TransportOwner> Owner,
+    Action FullscreenRequested);
+
 /// <summary>The pop-out's actual content, as a COMPONENT so it re-renders when the source/player signals change (see
 /// the note on <see cref="PopOutVideoWindow.Render"/> for why this cannot be an inline element tree). Both props are
 /// FROZEN signal instances — freezing a <c>Signal</c> is correct; freezing the values read out of one is not.</summary>
@@ -71,6 +95,22 @@ sealed class PopOutVideoContent : Component
     /// <inheritdoc cref="PopOutVideoWindow.Settings"/>
     public IAppSettings? Settings { get; init; }
 
+    /// <summary>This window's stage host bundle — see <see cref="VideoStageHost"/>. Built here (not by the caller)
+    /// because it needs the bridge, which crosses the AppHost boundary as a frozen instance.
+    ///
+    /// <para>The fullscreen affordance is a TOGGLE of <see cref="PlaybackBridge.DetachedFullscreen"/> — deliberately
+    /// NOT <c>ShowVideoAt(SurfacePlacement.Fullscreen)</c>. That call resolves the placement away from
+    /// <see cref="SurfacePlacement.Detached"/>, so <see cref="VideoPlacementHost"/> CLOSES this window and the shell
+    /// mounts <c>VideoFullscreenSurface</c> in the MAIN window, which fullscreens the main window — on the MAIN
+    /// window's monitor. Since a pop-out is routinely dragged to a second display precisely so it can be watched there,
+    /// the fullscreen glyph would move the picture to the wrong screen. Toggling the bit instead keeps the resolved
+    /// placement at Detached and fullscreens THIS window in place, on the display it is already on (the owner forwards
+    /// it to this window's own <see cref="IDetachedVideoWindow.SetFullscreen"/>).</para></summary>
+    VideoStageHost? Host => Bridge is { } b
+        ? new VideoStageHost(TransportOwner.PopOut, b.TransportOwnerNow,
+            () => b.DetachedFullscreen.Value = !b.DetachedFullscreen.Peek())
+        : null;
+
     public override Element Render()
     {
         // Size the root to THIS window's viewport (the AppHost does NOT auto-stretch a scene root — a bare Grow=1 hugs to
@@ -80,6 +120,11 @@ sealed class PopOutVideoContent : Component
         var binding = Player.Value;             // subscribe → repaint the plate when the player arrives
         // Mount whenever a player exists — a brief source null must not unmount the only MF pump.
         bool live = VideoSurfaceMount.ShouldMountPlayerStage(binding.Player is not null);
+        // THIS window's own fullscreen mode (never SurfacePlacement.Fullscreen — see PlaybackBridge.DetachedFullscreen).
+        // Read as .Value so this content SUBSCRIBES: it is what makes the transport's glyph, the ⋯ row label
+        // ("Exit full screen") and MediaPlayerElement's `case Keys.Escape when PresentingFullscreen` reflect the REAL
+        // state instead of permanently reading "not fullscreen" and offering to enter a mode we are already in.
+        bool hostFullscreen = Bridge is { } fsBridge && fsBridge.DetachedFullscreen.Value;
         string stageKey = src?.Key ?? ("gen:" + binding.Generation.ToString(System.Globalization.CultureInfo.InvariantCulture));
         return new BoxEl
         {
@@ -97,7 +142,11 @@ sealed class PopOutVideoContent : Component
             // DESKTOP shows through. That was the wallpaper-coloured strip under the titlebar.
             Fill = Tok.MediaLetterbox,
             Children = live
-                ? [new BoxEl { Grow = 1, Children = [Embed.Comp(() => new PopOutVideoStage { Source = src, Player = Player, Bridge = Bridge, Settings = Settings }) with { Key = "stage:" + stageKey }] }]
+                // The stage's props FREEZE AT MOUNT (component-props-contract.md), and IsHostFullscreen is one of them,
+                // so the fullscreen bit has to be part of the KEY — exactly the way PopOutVideoStage folds `suppress`
+                // into its own element key as ":t0"/":t1". Without it the stage would keep whatever value it was born
+                // with and the toggle would change nothing on screen.
+                ? [new BoxEl { Grow = 1, Children = [Embed.Comp(() => new PopOutVideoStage { Source = src, Player = Player, Bridge = Bridge, Settings = Settings, Host = Host, IsHostFullscreen = hostFullscreen }) with { Key = "stage:" + stageKey + (hostFullscreen ? ":f1" : ":f0") }] }]
                 : Array.Empty<Element>(),
         };
     }
@@ -120,12 +169,28 @@ sealed class PopOutVideoStage : Component
     public required IReadSignal<PlaybackBridge.VideoPlayerBinding> Player { get; init; }
 
     /// <summary>OPTIONAL — when present, wires <see cref="MediaPlayerElement.MoreMenuItems"/> with the shared
-    /// <see cref="VideoPlacementMenu"/> rows (Fullscreen omitted: the element already has its own Fullscreen row,
-    /// which delegates to the app, so including ours would duplicate it). All Wavee placement hosts thread this
-    /// instance through; null remains a safe standalone fallback with only the element's playback rows.</summary>
+    /// <see cref="VideoPlacementMenu"/> rows (Fullscreen omitted: the element has its own Fullscreen row, and with
+    /// <see cref="VideoStageHost.FullscreenRequested"/> wired that row delegates to the app — so including ours would
+    /// duplicate it). All Wavee placement hosts thread this instance through; null remains a safe standalone fallback
+    /// with only the element's playback rows.</summary>
     public PlaybackBridge? Bridge { get; init; }
     /// <summary>OPTIONAL, paired with <see cref="Bridge"/> — needed only for the Always-on-top row.</summary>
     public IAppSettings? Settings { get; init; }
+
+    /// <summary>Which surface this stage is inside — see <see cref="VideoStageHost"/>. Decides whether this stage draws
+    /// the transport at all and what its fullscreen affordance does. Null = the standalone fallback (the element keeps
+    /// its own transport AND its own overlay fullscreen); every Wavee surface passes one.</summary>
+    public VideoStageHost? Host { get; init; }
+
+    /// <summary>Whether the SURFACE this stage sits in is already presenting fullscreen — the app's own fullscreen
+    /// surface (always true there), or the detached pop-out window while it is borderless-fullscreen on its own monitor.
+    /// Passed straight through to <see cref="MediaPlayerElement.IsHostFullscreen"/>, which ORs it into the element's
+    /// notion of "presenting fullscreen": that one value drives the transport glyph, the ⋯ row label
+    /// ("Exit full screen") and the Escape handler's <c>PresentingFullscreen</c> arm, so a host that forgets to set it
+    /// renders an "enter fullscreen" affordance while already fullscreen and swallows Escape. FROZEN at mount like every
+    /// prop here — a host whose value CHANGES must fold it into this stage's key (see
+    /// <see cref="PopOutVideoContent.Render"/>).</summary>
+    public bool IsHostFullscreen { get; init; }
 
     public override Element Render()
     {
@@ -134,14 +199,41 @@ sealed class PopOutVideoStage : Component
         if (binding.Player is not { } player) return new BoxEl { Grow = 1f, MinHeight = 0f };
         var bridge = Bridge;
         var settings = Settings;
+        // ONE transport, and the decision is the ONE derived owner value — never a per-surface bool. Reading .Value
+        // subscribes, so an ownership change re-renders this stage; the key below then remounts the element, which is
+        // required because MediaPlayerElement's props FREEZE AT MOUNT (component-props-contract.md). In practice a
+        // surface's ownership is constant for its whole mount (the surfaces themselves mount/unmount with the
+        // placement), so the remount arm is a safety net rather than a routine path.
+        bool suppress = Host is { } h && h.Owner.Value != h.Identity;
+        var fullscreen = Host?.FullscreenRequested;
         return Embed.Comp(() => new MediaPlayerElement
             {
                 Player = player, Stretch = MediaStretch.Uniform,
+                PlayRequested = bridge is null ? null : () => _ = bridge.Player.ResumeAsync(),
+                PauseRequested = bridge is null ? null : () => _ = bridge.Player.PauseAsync(),
+                // The seek MODE travels with the target: a scrub-in-flight asks for Keyframe (cheap, snappy) and the
+                // commit asks for Accurate. Dropping it here forced every seek through the accurate path.
+                SeekRequested = bridge is null ? null : (target, mode) => _ = bridge.Player.SeekAsync((long)target.TotalMilliseconds, mode),
                 AspectMode = bridge?.VideoAspectPolicy,
                 CustomAspectRatio = bridge?.VideoCustomAspectRatio,
                 AspectModeChanged = bridge is null ? null : bridge.SetVideoAspect,
                 MoreMenuItems = bridge is null ? null : () => VideoPlacementMenu.Items(bridge, settings, includeFullscreen: false),
+                SuppressTransport = suppress,
+                // Wired on EVERY Wavee surface: MediaPlayerElement.ToggleFullscreen prefers this over its own overlay
+                // path, so the engine's modal light-dismiss fullscreen (and with it "Alt-Tab leaves fullscreen" and the
+                // unconditional WindowSetFullscreen(false) on close) is unreachable from the app.
+                FullscreenRequested = fullscreen,
+                // "This surface is ALREADY fullscreen" — the element ORs it into PresentingFullscreen, which is what
+                // makes the glyph, the ⋯ label and Escape agree with reality instead of always offering to enter.
+                IsHostFullscreen = IsHostFullscreen,
             })
-            with { Key = "player:" + binding.Generation.ToString(System.Globalization.CultureInfo.InvariantCulture) };
+            with
+            {
+                // The key carries EVERY frozen prop of the element that can change under a live stage — the generation,
+                // the transport-ownership bit, and the host-fullscreen bit — because that is the only mechanism that
+                // remounts a component whose props froze at mount.
+                Key = "player:" + binding.Generation.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                    + (suppress ? ":t0" : ":t1") + (IsHostFullscreen ? ":f1" : ":f0"),
+            };
     }
 }

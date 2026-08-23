@@ -399,6 +399,7 @@ public enum MediaKind : byte { Auto, PcmAudio, MfVideoOrFile }   // routing hint
 public abstract record MediaSource
 {
     public MediaKind Kind { get; init; } = MediaKind.Auto;
+    public SourceLiveness Liveness { get; init; } = SourceLiveness.Auto;   // the caller's live-ness declaration (§9.1a)
 
     // ---- factories: all yield ONE player code path ----
     public static MediaSource FromFile(string path);
@@ -425,6 +426,7 @@ public abstract record MediaSource
     public MediaSource WithMetadata(MediaMetadata meta);               // seeds NowPlaying without a round-trip
     public MediaSource WithExternalSubtitle(SubtitleSource sub);
     public MediaSource WithKind(MediaKind kind);                      // force routing (e.g. PlayPlay → PcmAudio)
+    public MediaSource WithLiveness(SourceLiveness liveness);         // declare live/VOD; outranks backend inference (§9.1a)
 }
 ```
 
@@ -953,6 +955,52 @@ public abstract record VideoDelivery
 }
 ```
 
+#### 9.1a `MediaOpenOptions` + `SourceLiveness` (OWNER of both)
+
+`MediaOpenOptions` is what `MediaPlayer.OpenAsync` hands every `IMediaBackend.OpenAsync`. It is defined here and
+nowhere else:
+
+```csharp
+public sealed record MediaOpenOptions
+{
+    public bool StartPaused { get; init; } = true;
+    public TimeSpan StartPosition { get; init; } = TimeSpan.Zero;
+    public BufferPolicy? Buffering { get; init; }
+    public NetworkOptions? Network { get; init; }
+    public IAbrPolicy? Abr { get; init; }
+    public LiveLatencyMode LiveLatency { get; init; } = LiveLatencyMode.Standard;
+    public SourceLiveness Liveness { get; init; } = SourceLiveness.Auto;   // carried from MediaSource.WithLiveness
+    public Func<LicenseRequest, ValueTask<LicenseResponse>>? LicenseRelay { get; init; }
+}
+
+public enum SourceLiveness : byte { Auto, Live, Vod }
+```
+
+**Why live-ness is DECLARED, not inferred.** Media Foundation reports a live HLS master playlist's sliding DVR
+window as a **finite** `GetDuration` (a YouTube live stream answers ~3:22 — the window, not a length), and its
+live-ness probe is a bounded read whose `false` can equally mean "has not answered yet". Inference alone therefore
+produces a plausible, wrong duration and a seek rail mapped onto a length that does not exist. A host that resolved
+the locator already knows the answer and states it:
+
+- `Auto` — the backend's own inference. The default; every existing caller is unchanged.
+- `Live` — live from session construction: **no `Duration > 0` is ever published** (neither the first-metadata
+  publish nor the late-duration re-read consults the engine's value), the live timeline publishes from the first
+  metadata, and the live command bitset applies immediately (`GoLive` always; `Seek` only across a DVR window of at
+  least `TimelineInfo.MinDvrWindow`).
+- `Vod` — live inference is **off**, so a bounded probe can never latch live-ness onto a declared recording.
+
+`TimelineInfo.MinDvrWindow` (30 s) + `TimelineInfo.HasDvrWindow` are the ONE threshold shared by the backend (does
+this session offer `Seek`?) and the transport UI (does `MediaPlayerElement` render a rail, and does `MediaSeekBar`
+map its fractions onto the window instead of a duration?).
+
+**Presentation geometry (the composited-surface contract, both backends).** The session hands the compositor the
+**decoded frame size** as the content size and the **fitted rect** as the placement; DirectComposition performs the
+fit (scale per axis + clip). The platform decoder is never asked to fit — an MF `UpdateVideoStream` dst-rect fit
+would letterbox inside the placed rect and make every `MediaStretch` look identical. Backends cap the frame size at
+what the destination can show, scaling both axes by one factor so the ratio survives, and re-query the natural size
+whenever the platform reports the presentation changed (MF: `FORMATCHANGE` / `RESOURCELOST`, surfaced through
+`IVideoEngine.PresentationEpoch`).
+
 Path A is the current shipping spine (no `IVideoPresenter` change). Path B is the forward hook: the compositor
 asks "give me the frame for THIS present time" and gets a shared D3D texture + PTS + explicit `ColorSpace`/HDR
 pulled into the 13-phase loop at zero per-frame managed alloc (**FIX:** WinUI frame-server HDR wash-out /
@@ -1061,8 +1109,14 @@ branching in the control.
 public sealed record MediaError(
     MediaErrorCategory Category, string Message /* always populated, no nil-error */,
     long? UnderlyingCode /* raw HRESULT / CoreMedia int, preserved */,
-    MediaLocus? Locus /* WHICH item/segment/sample */, MediaRecovery Recovery);
+    MediaLocus? Locus /* WHICH item/segment/sample */, MediaRecovery Recovery,
+    MediaErrorKind Kind = MediaErrorKind.Unknown /* the PLATFORM's own code, verbatim */);
 public enum MediaErrorCategory : byte { Network, Decode, Drm, UnsupportedCodec, Quota, Source, Lifecycle, Output }
+// The HTML5 MediaError.code vocabulary, which MF_MEDIA_ENGINE_ERR implements 1:1. Category is the ENGINE's verdict
+// (what kind of failure this is, which recovery applies); Kind is the SOURCE's (what the platform actually said) — a
+// live host branches on it: Network => re-resolve an expired locator, Decode => reload the same one,
+// SourceNotSupported => terminal, explainable fault.
+public enum MediaErrorKind : byte { Unknown = 0, Aborted = 1, Network = 2, Decode = 3, SourceNotSupported = 4, Encrypted = 5 }
 public readonly record struct MediaLocus(int? QueueIndex, MediaSource? Item, TimeSpan? Position, int? StreamIndex, long? ByteOffset);
 public enum MediaRecovery : byte { None, Retryable, NeedsUserGesture, NeedsNetwork, NeedsLicense, PickLowerQuality, Fatal }
 ```

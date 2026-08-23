@@ -54,6 +54,7 @@ public static class RenderBudget
         public double MaxMs;
         public double WorstFrameMs;         // worst single-frame total for this type
         public long TotalCalls;
+        public double BudgetMs = -1.0;      // named-probe budget; < 0 = a component entry, judged by SlowRenderMs
     }
 
     private static readonly Dictionary<string, Entry> s_byType = new(StringComparer.Ordinal);
@@ -125,13 +126,34 @@ public static class RenderBudget
         foreach (var kv in s_byType)
         {
             var e = kv.Value;
-            if (e.MaxStreak >= StreakFlagFrames || e.MaxMs >= SlowRenderMs)
+            if (e.MaxStreak >= StreakFlagFrames || e.MaxMs >= (e.BudgetMs >= 0.0 ? e.BudgetMs : SlowRenderMs))
             {
                 any = true;
                 s_sb.Append(CultureInfo.InvariantCulture, $" | {kv.Key} maxStreak={e.MaxStreak} maxMs={e.MaxMs:0.0}");
             }
         }
         if (any) Report(s_sb.ToString());
+    }
+
+    /// <summary>
+    /// A NAMED LATENCY probe: "this user-visible thing must happen within <paramref name="budgetMs"/> of that user-visible
+    /// thing". Same discipline as <see cref="End"/> — keyed into the same table (so <see cref="MaxMsOf"/> reads it back
+    /// as a gate), reported the same way, and folded away wholesale in a shipping build by <see cref="CompiledIn"/>.
+    /// Unlike <see cref="End"/> it carries its OWN budget rather than <see cref="SlowRenderMs"/>, because a perception
+    /// budget (Nielsen's 100 ms "feels instantaneous") is two orders of magnitude off a per-component render budget.
+    /// <paramref name="startTimestamp"/> is a <see cref="Stopwatch.GetTimestamp"/> stamp; 0 means "never started" and is
+    /// silently ignored, so the call site needs no gate of its own.
+    /// </summary>
+    public static void Probe(string name, long startTimestamp, double budgetMs)
+    {
+        if (!Enabled || startTimestamp == 0L) return;
+        double ms = (Stopwatch.GetTimestamp() - startTimestamp) * 1000.0 / Stopwatch.Frequency;
+        if (!s_byType.TryGetValue(name, out var e)) { e = new Entry(); s_byType[name] = e; }
+        e.BudgetMs = budgetMs;
+        e.TotalCalls++;
+        if (ms > e.MaxMs) e.MaxMs = ms;
+        if (ms > budgetMs)
+            Report($"[renderbudget] OVER BUDGET: {name} took {ms:0.0}ms (> {budgetMs:0.0}ms) — first paint missed the interaction budget.");
     }
 
     /// <summary>Test/gate accessor: the largest consecutive-render streak observed for <paramref name="typeName"/>

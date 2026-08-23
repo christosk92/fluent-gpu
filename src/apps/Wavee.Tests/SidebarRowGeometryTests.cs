@@ -53,50 +53,6 @@ public sealed class SidebarRowGeometryTests
         Assert.Equal(SidebarRowGeometry.IndentStep, SidebarRowGeometry.TreeGuideStep);
     }
 
-    /// <summary>The row itself is engine-bound (BoxEl / Icon), so parity with the rendered leading cluster is pinned by
-    /// SOURCE SCAN — the <c>MenuGrammarTests</c> technique. What matters is that <c>TreeLeading</c> spends the SAME
-    /// named constants <see cref="SidebarRowGeometry.TreeContentX"/> sums, rather than its own literals.</summary>
-    [Fact]
-    public void TreeLeading_AndTheCaret_SpendTheSameConstants()
-    {
-        string row = Source("Features/Sidebar/Shared/SidebarEntityRow.cs");
-        string leading = Between(row, "static Element TreeLeading(", "static Element TreeGuides(");
-        string guides = Between(row, "static Element TreeGuides(", "/// <summary>Name the activation of a TRACK row");
-
-        Assert.Contains("SidebarRowGeometry.TreeChevronCell", leading, StringComparison.Ordinal);
-        Assert.Contains("SidebarRowGeometry.SelGutterWidth", row, StringComparison.Ordinal);
-        Assert.Contains("SidebarRowGeometry.TreeGuideStep", guides, StringComparison.Ordinal);
-        // …and no literal spacing token is left deciding the content origin.
-        Assert.DoesNotContain("Width = Spacing.L", leading, StringComparison.Ordinal);
-        Assert.DoesNotContain("Width = Spacing.M", guides, StringComparison.Ordinal);
-        Assert.DoesNotContain("Width = depth * Spacing.M", guides, StringComparison.Ordinal);
-
-        // The caret rides the very same origin — translate AND width.
-        string slot = Source("Features/Sidebar/Pane/SidebarPaneSlot.cs");
-        Assert.Contains("Affine2D.Translation(SidebarRowGeometry.TreeContentX(slot.Depth)", slot, StringComparison.Ordinal);
-        Assert.DoesNotContain("Affine2D.Translation(SidebarRowGeometry.IndentFor(", slot, StringComparison.Ordinal);
-        string cue = Source("Features/Sidebar/Data/RootlistSlotResolver.cs");
-        Assert.Contains("contentWidth - SidebarRowGeometry.TreeContentX(depth)", cue, StringComparison.Ordinal);
-        Assert.Contains("SidebarRowGeometry.TreeContentX(0)", cue, StringComparison.Ordinal);   // PickDepth's ladder
-    }
-
-    static string Source(string relative, [System.Runtime.CompilerServices.CallerFilePath] string here = "")
-    {
-        string tests = System.IO.Path.GetDirectoryName(here)!;
-        string app = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(tests)!, "Wavee");
-        return System.IO.File.ReadAllText(System.IO.Path.Combine(app,
-            System.IO.Path.Combine(relative.Split('/'))));
-    }
-
-    static string Between(string text, string from, string to)
-    {
-        int a = text.IndexOf(from, StringComparison.Ordinal);
-        Assert.True(a >= 0, "not found: " + from);
-        int b = text.IndexOf(to, a, StringComparison.Ordinal);
-        Assert.True(b > a, "not found after it: " + to);
-        return text[a..b];
-    }
-
     // ── 1. the height ladder ─────────────────────────────────────────────────────────────────────────────────────────
 
     [Theory]

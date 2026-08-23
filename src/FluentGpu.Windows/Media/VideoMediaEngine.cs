@@ -1,6 +1,7 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Threading;
 using FluentGpu.Foundation;
 using TerraFX.Interop.DirectX;
 using TerraFX.Interop.Windows;
@@ -39,6 +40,10 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
     // Cap on how long a UI-thread Invoke<T> will wait for the engine thread to answer before giving up and
     // returning default(T) (see the Invoke<T> doc comment). Tens of ms is never worth freezing a frame for.
     private const int InvokeTimeoutMs = 50;
+    // The MIME type MF names an HLS master playlist by (Apple's registered type).
+    private const string HlsMimeType = "application/vnd.apple.mpegurl";
+    // MFMEDIASOURCE_CHARACTERISTICS.MFMEDIASOURCE_IS_LIVE.
+    private const uint MediaSourceIsLive = 0x1;
 
     // ── Owned only on the engine (MTA) thread ──────────────────────────────────────────────────────────────────────
     private ID3D11Device* _d3d;
@@ -48,6 +53,9 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
     private MediaEngineNotifyCcw* _notify;
     private GCHandle _selfHandle;
     private bool _mfStarted;
+    // Probed ONCE on the engine thread right after the engine exists (a static capability of this machine's Media
+    // Foundation install — it cannot change per source), so callers never pay an Invoke round-trip to ask.
+    private volatile bool _canPlayHls;
 
     // ── Engine-thread marshaling ───────────────────────────────────────────────────────────────────────────────────
     private Thread? _thread;
@@ -65,6 +73,10 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
     private volatile bool _error;
     private volatile uint _errorCode;
     private volatile int _errorHr;
+    // Bumped on every PRESENTATION-affecting engine event (FORMATCHANGE / RESOURCELOST). See IVideoEngine.PresentationEpoch.
+    // Interlocked (not volatile): MF raises events from a pool of worker threads, so two format changes landing at
+    // once on a plain ++ would collapse into one and the session would never re-query.
+    private int _presentationEpoch;
     private readonly ConcurrentQueue<string> _trace = new();
 
     public bool MetadataLoaded => _metadataLoaded;
@@ -77,6 +89,8 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
     public int ErrorHr => _errorHr;
     public string EventTrace => string.Join(",", _trace);
     public string LastEventName => _lastEventRaw < 0 ? "<none>" : ((MF_MEDIA_ENGINE_EVENT)_lastEventRaw).ToString().Replace("MF_MEDIA_ENGINE_EVENT_", "");
+    /// <inheritdoc/>
+    public int PresentationEpoch => Volatile.Read(ref _presentationEpoch);
     /// <inheritdoc/>
     public event Action? StateChanged;
 
@@ -158,6 +172,16 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
         bool windowless = !noDxgi && Environment.GetEnvironmentVariable("FG_VIDEO_NOWINDOWLESS") != "1";
         if (windowless && (hr = _engineEx->EnableWindowlessSwapchainMode(true)) < 0)
             return Log("EnableWindowlessSwapchainMode(TRUE)", hr);
+
+        // Capability probe (once): can this machine's MF play an HLS master playlist at all? An MF install without the
+        // HLS byte-stream handler answers NOT_SUPPORTED here, and an actual live URL would then fail as a generic
+        // "the media source failed" — the app can show the honest reason instead.
+        fixed (char* pHls = HlsMimeType)
+        {
+            MF_MEDIA_ENGINE_CANPLAY answer;
+            _canPlayHls = _engine->CanPlayType(pHls, &answer) >= 0
+                          && answer != MF_MEDIA_ENGINE_CANPLAY.MF_MEDIA_ENGINE_CANPLAY_NOT_SUPPORTED;
+        }
 
         fixed (char* pUrl = url)
             if ((hr = _engineEx->SetSource(pUrl)) < 0) return Log("SetSource", hr);
@@ -277,6 +301,65 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
         return double.IsFinite(d) && d > 0 ? d : 0.0;
     });
 
+    /// <summary>
+    /// True when the source has NO end: an unbounded (live) stream. Two independent signals, either of which is
+    /// conclusive — MF reports live-ness through whichever one its source implements:
+    /// <list type="bullet">
+    /// <item><c>GetDuration()</c> is non-finite (+∞/NaN) — what an HLS live playlist (no <c>EXT-X-ENDLIST</c>)
+    ///   reports. Note <see cref="DurationSeconds"/> deliberately folds that to 0 ("unknown") for its own callers, so
+    ///   the raw value has to be re-read here.</item>
+    /// <item><c>IMFMediaEngineEx::GetResourceCharacteristics</c> carries <c>MFMEDIASOURCE_IS_LIVE</c>.</item>
+    /// </list>
+    /// <para>Like every read on this class the answer is BOUNDED: a busy engine thread returns <c>default</c> =
+    /// <see langword="false"/>, which means "not answered yet", NOT "this is VOD". A caller must LATCH a true and keep
+    /// asking until it gets one (<see cref="MfMediaSession"/> does exactly that) and must never latch a false.</para>
+    /// </summary>
+    public bool IsLiveSource => Invoke(() =>
+    {
+        if (_engine == null) return false;
+        double d = _engine->GetDuration();
+        if (!double.IsFinite(d)) return true;
+        if (_engineEx != null)
+        {
+            uint characteristics;
+            if (_engineEx->GetResourceCharacteristics(&characteristics) >= 0 && (characteristics & MediaSourceIsLive) != 0)
+                return true;
+        }
+        return false;
+    });
+
+    /// <summary>
+    /// The seekable window in seconds. For a live stream this is the DVR window that slides forward as the source
+    /// publishes segments, and its END is the live edge. Reads <c>IMFMediaEngineEx::GetSeekable</c> and takes the LAST
+    /// range (MF reports ranges in time order; a live source normally publishes exactly one). <c>(0, 0)</c> when there
+    /// is no range, no engine, or the bounded wait expired — i.e. "not answered", ask again.
+    /// <para>The <c>IMFMediaTimeRange</c> that call creates is released on the engine thread before returning: per the
+    /// threading model in the class doc comment, no ComPtr may cross off that thread or outlive the call.</para>
+    /// </summary>
+    public (double Start, double End) SeekableRange => Invoke(() =>
+    {
+        if (_engineEx == null) return (0.0, 0.0);
+        IMFMediaTimeRange* range = null;
+        if (_engineEx->GetSeekable(&range) < 0 || range == null) return (0.0, 0.0);
+        try
+        {
+            uint count = range->GetLength();
+            if (count == 0) return (0.0, 0.0);
+            double start, end;
+            if (range->GetStart(count - 1, &start) < 0 || range->GetEnd(count - 1, &end) < 0) return (0.0, 0.0);
+            if (!double.IsFinite(start) || start < 0) start = 0;
+            if (!double.IsFinite(end) || end < start) return (0.0, 0.0);
+            return (start, end);
+        }
+        finally { range->Release(); }
+    });
+
+    /// <summary>Whether this machine's Media Foundation can play an HLS master playlist at all
+    /// (<c>CanPlayType("application/vnd.apple.mpegurl")</c> != NOT_SUPPORTED), probed once at engine creation; false
+    /// until <see cref="Initialize"/> has created the engine. Lets a caller report the real reason a live URL will not
+    /// open instead of a generic source failure.</summary>
+    public bool CanPlayHls => _canPlayHls;
+
     /// <summary>Current presentation time in seconds (the authoritative clock).</summary>
     public double CurrentTimeSeconds => Invoke(() =>
     {
@@ -348,6 +431,16 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
             case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_SEEKED: _seeking = false; break;
             case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_ENDED: _ended = true; _playing = false; break;
             case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_ERROR: _error = true; _errorCode = (uint)p1; _errorHr = (int)p2; break;
+            // The PRESENTATION itself changed underneath the engine, with no transport transition to ride in on:
+            // FORMATCHANGE is an ABR variant switch (a NEW decoded frame size — the natural size read at first
+            // metadata is now stale, and with it the composited content size and every aspect fit), RESOURCELOST is
+            // the swap chain going away and being rebuilt (the bound handle and the stream rect must be re-asserted).
+            // Both bump a monotonic epoch the session compares against, and both wake a pump (this is exactly the
+            // "surface state changed" case the repaint flag exists for).
+            case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_FORMATCHANGE:
+            case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_RESOURCELOST:
+                Interlocked.Increment(ref _presentationEpoch);
+                break;
             default: affectsPresentation = false; break;
         }
         if (affectsPresentation)

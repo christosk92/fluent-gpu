@@ -85,6 +85,79 @@ static class WaveePicker
         Trim = TextTrim.CharacterEllipsis,
     };
 
+    /// <summary>The one row-density miniature used by Settings and fresh setup. Its proportions come from the real
+    /// <see cref="TrackRow"/> geometry, compressed by one scale factor; the two surfaces therefore cannot drift into
+    /// different explanations of Compact / Default / Cozy / Comfortable. The bars stay native so they inherit the
+    /// live theme and the card's selected-state ink instead of embedding a screenshot.</summary>
+    public static Element DensityRows(int density, bool on)
+    {
+        const float PreviewScale = 0.25f;
+        var ink = Ink.For(on);
+        float rowHeight = TrackRow.RowHeightFor(density) * PreviewScale;
+        float artworkEdge = TrackRow.ThumbSize * PreviewScale;
+
+        Element Bar(float grow, bool strong = false) => new BoxEl
+        {
+            Grow = grow,
+            Basis = 0f,
+            MinWidth = 0f,
+            Height = Spacing.XXS,
+            Corners = Radii.PillAll,
+            Fill = strong ? ink.Block : ink.Faint,
+        };
+
+        Element Row() => new BoxEl
+        {
+            Height = rowHeight,
+            Shrink = 0f,
+            Direction = 0,
+            Gap = Spacing.XS,
+            AlignItems = FlexAlign.Center,
+            Padding = new Edges4(Spacing.XS, 0f, Spacing.XS, 0f),
+            Children =
+            [
+                new BoxEl
+                {
+                    Width = artworkEdge,
+                    Height = artworkEdge,
+                    Shrink = 0f,
+                    Corners = Radii.ControlAll,
+                    Fill = ink.Block,
+                },
+                Bar(1f, strong: true),
+                new BoxEl
+                {
+                    Width = Spacing.XXL,
+                    Height = Spacing.XXS,
+                    Shrink = 0f,
+                    Corners = Radii.PillAll,
+                    Fill = ink.Faint,
+                },
+                new BoxEl
+                {
+                    Width = Spacing.L,
+                    Height = Spacing.XXS,
+                    Shrink = 0f,
+                    Corners = Radii.PillAll,
+                    Fill = ink.Faint,
+                },
+            ],
+        };
+
+        return new BoxEl
+        {
+            Direction = 1,
+            Gap = Spacing.XXS,
+            Grow = 1f,
+            Basis = 0f,
+            MinWidth = 0f,
+            MinHeight = 0f,
+            AlignSelf = FlexAlign.Stretch,
+            Justify = FlexJustify.Center,
+            Children = [Row(), Row(), Row()],
+        };
+    }
+
     /// <summary>A card (or swatch) over its label — the shape three of the four pickers want. Returns a
     /// <see cref="BoxEl"/> so a caller can <c>with</c>-adjust it (the palette column pins its own width).</summary>
     public static BoxEl Titled(Element card, string label, bool on, float gap = Spacing.S, float labelSize = 12f) => new()

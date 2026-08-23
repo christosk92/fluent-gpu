@@ -64,4 +64,55 @@ static class PageNavMotion
         ExitDynamics: TransitionDynamics.Tween(FadeThroughExitMs, Easing.FluentAccelerate),
         DelayMs: FadeThroughEnterDelayMs,
         ExitDelayMs: 0f);
+
+    // ── the VIDEO-SAFE pair ─────────────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>The recipe for a page swap where either side can be hosting a live composited video — today, a module
+    /// watch page. <b>Position only.</b>
+    ///
+    /// <para>A composited video is a DestOut hole punched into the real back buffer by a descendant. An ancestor
+    /// <c>TransitionChannels.Opacity</c> multiplies straight into the video command's own opacity (a washed-out,
+    /// see-through video), and an opacity GROUP pushes an offscreen render target the punch can never reach the back
+    /// buffer from — so the hole vanishes entirely and silently. Since the reconciler keeps the OUTGOING page's root
+    /// attached and drawing for the whole exit, the page being navigated AWAY from is just as exposed as the one being
+    /// navigated to, which is why the caller classifies BOTH sides.</para>
+    ///
+    /// <para>A TRANSLATE is the one ancestor motion a hole rides correctly: it composes on the <c>AbsoluteRect</c> the
+    /// punch already reads from, so nobody has to animate the hole for the hole to move. Hence a symmetric slide —
+    /// enter from the travel direction, exit the opposite way — with the same dynamics on both halves and
+    /// <c>Exit.Active</c> still TRUE (a stripped Exit detaches the outgoing page in the same frame and the card
+    /// flashes empty).</para>
+    ///
+    /// <para><b>The honest degradation:</b> a module-page swap SLIDES instead of cross-fading. Two full-bleed pages
+    /// therefore share the card at full opacity for the length of the travel, which is the double-exposure
+    /// fade-through was introduced to shrink — and it is still the better trade, because the alternative is a video
+    /// that disappears mid-navigation.</para></summary>
+    /// <param name="motion">The direction the swap travels.</param>
+    /// <returns>The slide for Forward/Back; <b>null</b> for <see cref="NavTransitionKind.Neutral"/> — an honest CUT.
+    /// Neutral's only recipe is <see cref="MotionRecipes.PageFade"/>, which is opacity and nothing else, so there is
+    /// no video-safe form of it to hand back: a hard cut is what "no motion this page can survive" looks like.</returns>
+    public static LayoutTransition? RecipeForVideoSafe(NavTransitionKind motion) => motion switch
+    {
+        NavTransitionKind.Back => PageSlideSafeBack,
+        NavTransitionKind.Neutral => null,
+        _ => PageSlideSafeForward,
+    };
+
+    public static LayoutTransition PageSlideSafeForward => new(
+        TransitionChannels.Position,
+        TransitionDynamics.Tween(Expressive.Fast, Easing.SmoothOut),
+        Enter: new EnterExit(Dx: Expressive.DistLarge, Active: true),
+        Exit: new EnterExit(Dx: -Expressive.DistLarge, Active: true),
+        ExitDynamics: TransitionDynamics.Tween(Expressive.Fast, Easing.SmoothOut),
+        DelayMs: 0f,
+        ExitDelayMs: 0f);
+
+    public static LayoutTransition PageSlideSafeBack => new(
+        TransitionChannels.Position,
+        TransitionDynamics.Tween(Expressive.Fast, Easing.SmoothOut),
+        Enter: new EnterExit(Dx: -Expressive.DistLarge, Active: true),
+        Exit: new EnterExit(Dx: Expressive.DistLarge, Active: true),
+        ExitDynamics: TransitionDynamics.Tween(Expressive.Fast, Easing.SmoothOut),
+        DelayMs: 0f,
+        ExitDelayMs: 0f);
 }

@@ -12,14 +12,30 @@ namespace Wavee.Backend;
 // position clock + Ended. Implementations handle AES/native CDN decrypt, PCM decode, mixer/DSP, WASAPI output, and
 // optional PlayPlay key derivation. The default impl in this scope is SilentAudioHost.
 
-public enum AudioFormat { OggVorbis96, OggVorbis160, OggVorbis320, Flac, Flac24, Mp3 }
+public enum AudioFormat { OggVorbis96, OggVorbis160, OggVorbis320, Flac, Flac24, Mp3, Aac }
 
 /// <summary>How the host fetches/decrypts a body: the Spotify encrypted CDN path (AES-CTR / native PlayPlay), an
 /// external plain-HTTP source (RSS/podcast, no decrypt), or a file on this device. Explicit so we never overload an
 /// empty <c>Key</c> as a discriminator (empty Key still means "derive the PlayPlay key" on the Spotify path).
 /// <para><see cref="LocalFile"/> carries its absolute path in <see cref="AudioStreamHandle.CdnUrl"/> — the same field
 /// <see cref="ExternalPlain"/> uses for its URL — because both are "the one string that locates the bytes".</para></summary>
-public enum AudioSourceKind { SpotifyEncrypted = 0, ExternalPlain = 1, LocalFile = 2 }
+public enum AudioSourceKind
+{
+    /// <summary>Spotify's encrypted CDN body (AES-CTR / native PlayPlay decrypt).</summary>
+    SpotifyEncrypted = 0,
+    /// <summary>A plain-HTTP body of KNOWN, FINITE length (an RSS/podcast episode) — ranged, seekable.</summary>
+    ExternalPlain = 1,
+    /// <summary>A file on this device; the absolute path travels in <see cref="AudioStreamHandle.CdnUrl"/>.</summary>
+    LocalFile = 2,
+    /// <summary>An ENDLESS stream (internet radio / an ICY or otherwise live locator). Its URL travels in
+    /// <see cref="AudioStreamHandle.CdnUrl"/> and its <c>DurationMs</c> is 0. Deliberately NOT
+    /// <see cref="ExternalPlain"/>: that path assumes a finite, rangeable body and would buffer an endless one into
+    /// memory. Live bodies are read forward-only, cannot seek, and a socket drop is a RECONNECT, not an end.</summary>
+    LiveStream = 3,
+    /// <summary>Bytes served by a playback MODULE over its <c>stream/open|read|close</c> RPC; the stream id travels in
+    /// <see cref="AudioStreamHandle.CdnUrl"/>. Seekability and length come from the module's <c>stream/open</c> answer.</summary>
+    ModuleStream = 4,
+}
 
 /// <summary>The user-facing streaming-quality preference (persisted as <c>playback.quality</c>) — the Spotify tier
 /// ladder. The resolver aims at the chosen rung and falls back to the nearest available file (lower first), never to
@@ -111,7 +127,12 @@ public interface IMediaHost : IAsyncDisposable
     void Play();
     void Pause();
     void Stop();
-    void Seek(long positionMs);
+    /// <summary>Reposition the current media. <paramref name="mode"/> carries the seek FIDELITY end-to-end:
+    /// <see cref="SeekMode.Keyframe"/> is a throttled scrub PREVIEW (snap to the nearest keyframe, cheap, repeated many
+    /// times per drag) and <see cref="SeekMode.Accurate"/> is the single committed seek at the end of the gesture. A host
+    /// whose backend has no keyframe fast path (the PCM audio host) may treat both identically — but it must ACCEPT the
+    /// mode rather than have the caller drop it, so the distinction survives to whichever host CAN honour it.</summary>
+    void Seek(long positionMs, SeekMode mode);
     void SetVolume(double volume01);                  // realtime, host-side (buffered-PCM-independent)
     long PositionMs { get; }
     bool IsPlaying { get; }
@@ -133,6 +154,17 @@ public interface IAudioDspControl
 {
     void SetEqualizer(bool enabled, ReadOnlySpan<float> gainsDb, float preampDb = 0f);
     void SetCrossfade(bool enabled, int durationMs);
+}
+
+/// <summary>Optional host capability (the <see cref="IAudioDspControl"/> precedent — discovered by interface, never a
+/// new member on the core <see cref="IAudioHost"/> seam): a source whose NOW-PLAYING metadata arrives in-band, after the
+/// track is already loaded. Internet radio is the case that forces it — the ICY <c>StreamTitle</c> block that names the
+/// current song only appears mid-stream and changes every few minutes, so there is no resolve-time answer to project.
+/// <para>Arguments are <c>(streamTitle, stationName)</c>: the raw title exactly as the station wrote it (split with
+/// <c>IcyMetadata.SplitStreamTitle</c>), and the station's own name as the fallback attribution.</para></summary>
+public interface ILiveMetadataSource
+{
+    event Action<string, string?>? MetadataKnown;
 }
 
 /// <summary>A stable, controller-minted description of the exact session item prepared after the active track.</summary>
@@ -245,7 +277,9 @@ public sealed class SilentAudioHost : IAudioHost
         StopTicker();
     }
 
-    public void Seek(long ms)
+    // A silent host has no decoder, so keyframe and accurate are the same wall-clock anchor move; the mode is still
+    // accepted at the seam so it is never dropped at the boundary.
+    public void Seek(long ms, SeekMode mode)
     {
         lock (_gate) { _anchorPos = _durationMs > 0 ? Math.Clamp(ms, 0, _durationMs) : Math.Max(0, ms); _anchorWall = _now(); }
         _signals.OnNext(new AudioHostSignal(AudioHostSignalKind.PositionTick, PositionMs));

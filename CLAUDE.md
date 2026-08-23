@@ -123,4 +123,11 @@ The engine is built and the minimum vertical slice (`architecture-spec.md §11`:
 
 Two invariants the structure encodes, easy to break: keep `FluentGpu.Controls` (and the whole `FluentGpu.VerticalSlice` transitive closure) **TerraFX-free** — TerraFX enters only through `FluentGpu.Windows`; and keep code in its subsystem folder so the namespace stays its historical `FluentGpu.*` (the folders carry the old project names verbatim).
 
+**No source-text tests, ever.** A test must never read, grep, or regex production source (`File.ReadAllText` on a
+`.cs`, `Directory.EnumerateFiles("*.cs")`, `[CallerFilePath]`-derived source roots, `Assert.Contains("<code snippet>")`
+against a file). Such "source gates" pin code shapes, not behaviour, and were all removed on 2026-08-22. When an
+engine-bound component cannot be instantiated headlessly, extract the decision into an engine-free pure class and
+unit-test that (`LiveEdgeState`, `LiveRail`, `TimeFormat`, `PlayableLinks` are the pattern); otherwise the
+VerticalSlice/golden gates or a live run cover it.
+
 **Component props freeze at mount.** Components are autonomous: `Embed.Comp(() => new T { Field = value })` runs the factory once and freezes `Field` — a parent re-render does NOT re-run it. Changing data must reach a child via a `Signal`/`Func` it reads, `Ctx.Provide`+`UseContext`, or a remount forced by a changed `Key` (never a plain field/ctor arg). See `docs/design/subsystems/component-props-contract.md` before passing data into `Embed.Comp`; the `ReuseGuard` DEBUG tripwire (`FG_REUSE_GUARD=1`) and `gate.reuse.*` catch the mistake.

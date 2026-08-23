@@ -20,7 +20,21 @@ public static class VideoPlacementMenu
 {
     /// <summary>Build the rows for the current resolved placement. <paramref name="includeFullscreen"/> omits ONLY
     /// the Full screen row — used by a host that already offers its own Fullscreen affordance (the video element's
-    /// built-in row, which delegates to the app via <c>FullscreenRequested</c>), so the two rows never duplicate.</summary>
+    /// built-in row), so the two rows never duplicate.
+    ///
+    /// <para><b>Verified:</b> that built-in row really does delegate to the app on EVERY Wavee surface. All four
+    /// (docked card, mini player, detached window, fullscreen surface) now set
+    /// <c>MediaPlayerElement.FullscreenRequested</c> — the docked card directly, the other three through
+    /// <see cref="VideoStageHost.FullscreenRequested"/> — and <c>ToggleFullscreen</c> prefers that delegate over its own
+    /// overlay path. Nothing in Wavee can reach the element's modal fullscreen popup any more, which is also what
+    /// removes "Alt-Tab leaves fullscreen" (the popup was light-dismiss, and window blur closed it into
+    /// <c>LeaveFullscreen</c>) and its unconditional <c>WindowSetFullscreen(false)</c>.</para>
+    ///
+    /// <para><b>Known label wart</b> on the fullscreen surface only: there the delegate EXITS, but the element still
+    /// labels its row "Full screen" and draws the enter glyph, because <c>MediaPlayerElement.IsFullscreenPresentation</c>
+    /// is <c>internal</c> to FluentGpu.Controls and Wavee is not an InternalsVisibleTo friend. It needs a public knob on
+    /// the element (engine-side) to read "Exit full screen" / <c>Icons.BackToWindow</c>; the behaviour is already
+    /// correct.</para></summary>
     public static List<MenuFlyoutItem> Items(PlaybackBridge b, IAppSettings? settings, bool includeFullscreen)
     {
         var state = b.VideoSurface.Value;

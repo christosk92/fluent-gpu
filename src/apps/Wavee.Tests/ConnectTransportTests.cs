@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Text;
 using Wavee.Backend;
 using Wavee.Backend.Realtime;
+using Wavee.Core;
 using Xunit;
 
 namespace Wavee.Tests;
@@ -104,7 +105,7 @@ public class ConnectTransportTests
         now = 3000;
         Assert.Equal(2000, host.PositionMs);   // 0 + (3000-1000)
 
-        host.Seek(4000);             // anchorPos=4000, anchorWall=3000
+        host.Seek(4000, SeekMode.Accurate);             // anchorPos=4000, anchorWall=3000
         now = 3500;
         Assert.Equal(4500, host.PositionMs);   // 4000 + (3500-3000)
 

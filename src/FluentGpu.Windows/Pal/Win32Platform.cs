@@ -877,7 +877,12 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
             RECT r = _windowedRect;
             SetWindowPos(_hwnd, HWND.NULL, r.left, r.top, r.right - r.left, r.bottom - r.top,
                 SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
-            if (_windowedWasZoomed) ShowWindow(_hwnd, SW_MAXIMIZE);
+            // Entering fullscreen never un-maximized the window (only its STYLE and rect changed), so in the common case
+            // it is still WS_MAXIMIZE-flagged and _windowedRect already IS the maximized geometry — the restore above is
+            // the whole job and a second SW_MAXIMIZE is a redundant geometry change (another WM_NCCALCSIZE +
+            // WM_WINDOWPOSCHANGED + swapchain resize, i.e. a guaranteed RepaintFullReason.TargetInvalidated frame).
+            // Only re-maximize when the zoomed state was genuinely lost while fullscreen.
+            if (_windowedWasZoomed && !IsZoomed(_hwnd)) ShowWindow(_hwnd, SW_MAXIMIZE);
         }
         _queue.Enqueue(new InputEvent(InputKind.WindowStateChanged, default, 0, 0, TimestampMs: Now()));
     }
@@ -1083,6 +1088,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
 
     private HCURSOR CursorFor(CursorId id)
     {
+        if (id == CursorId.Hidden) return HCURSOR.NULL;
         int slot = id.Value is >= 0 and < 11 ? id.Value : 0;
         HCURSOR h = _cursorCache[slot];
         if (h != HCURSOR.NULL) return h;
@@ -1743,14 +1749,10 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                 _inMoveSizeLoop = true;
                 _sizedInMoveSizeLoop = false;
                 _lastModalPaintMs = 0;
-                if (Diag.EnvFlag("FG_MOVE_DIAG"))
-                    Console.Error.WriteLine("[FG_MOVE_DIAG] enter modal move/size");
                 SetTimer(hWnd, MoveLoopTimerId, 8, null);
                 return true;
             case WM_EXITSIZEMOVE:
                 KillTimer(hWnd, MoveLoopTimerId);
-                if (Diag.EnvFlag("FG_MOVE_DIAG"))
-                    Console.Error.WriteLine($"[FG_MOVE_DIAG] exit modal move/size sized={_sizedInMoveSizeLoop}");
                 _inMoveSizeLoop = false;
                 _sizedInMoveSizeLoop = false;
                 PaintRequested?.Invoke();   // one settle frame at the final position
@@ -1762,7 +1764,6 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                     // keep-alives so ambient animation can advance without flooding the modal loop.
                     if (_composited && _inMoveSizeLoop && _sizedInMoveSizeLoop && !_hasLiveVideo) return true;
                     if (_inMoveSizeLoop && ThrottleModalTickPaint()) return true;
-                    if (Diag.EnvFlag("FG_MOVE_DIAG")) Console.Error.WriteLine($"[FG_MOVE_DIAG t={Environment.TickCount64}] timer paint");
                     PaintRequested?.Invoke();
                     return true;
                 }
@@ -1783,7 +1784,6 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                 // WM_ENTERSIZEMOVE 8 ms timer keeps animations/caret live mid-drag and WM_EXITSIZEMOVE paints one settle
                 // frame at the final position — both unchanged. Non-composited / redirection-bitmap windows still repaint
                 // per step so their content doesn't trail the cursor.
-                if (Diag.EnvFlag("FG_MOVE_DIAG")) Console.Error.WriteLine($"[FG_MOVE_DIAG t={Environment.TickCount64}] WM_MOVE composited={_composited}");
                 if (!_composited) PaintRequested?.Invoke();
                 return true;
             // ── pointer input (mouse-in-pointer: PT_MOUSE/PT_TOUCH/PT_PEN all arrive here) ──────────────────────────────

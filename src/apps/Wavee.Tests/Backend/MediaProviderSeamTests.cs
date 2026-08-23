@@ -110,6 +110,30 @@ public class MediaProviderSeamTests
     }
 
     [Fact]
+    public async Task SpotifyProvider_RefusesSpotifysOwnLocalFileNamespace()
+    {
+        // `spotify:local:artist:album:title:sec` parses as Spotify but is a file on somebody's disk: no id, no TRACK_V4
+        // extension, no audio file. It is ALSO what ConnectUriMask publishes every non-publishable row as — so the
+        // Connect cluster hands one back to us as the echo of our own state. Owning it turned that echo into a real
+        // resolve attempt and a "Restricted: no TRACK_V4 extension for spotify:local:…" error toast at launch.
+        var registry = new MediaProviderRegistry(new SpotifyMediaProvider(DummyLiveResolver(), new RecordingFast()));
+        const string masked = "spotify:local:Claude::Claude+FM:0";
+
+        Assert.Null(registry.OwnerOf(masked));
+        Assert.False(registry.SupportsPreparedNext(masked));
+        Assert.False(registry.IsConnectPublishable(masked));
+
+        var ex = await Assert.ThrowsAsync<AudioPlaybackException>(() => registry.ResolveFastAsync(T(masked)));
+        Assert.Equal(AudioKeyFailureReason.Restricted, ex.Reason);
+        Assert.Contains("no media source owns " + masked, ex.Message);
+
+        // …and the rest of the namespace is untouched.
+        Assert.NotNull(registry.OwnerOf("spotify:track:abc"));
+        Assert.NotNull(registry.OwnerOf("spotify:episode:abc"));
+        Assert.NotNull(registry.OwnerOf("spotify:local-files"));   // the CONTEXT shape is not the row shape
+    }
+
+    [Fact]
     public async Task Registry_CapabilityQueries_FollowOwnership()
     {
         var registry = new MediaProviderRegistry(
@@ -314,7 +338,7 @@ public class MediaProviderSeamTests
         public void Play() { }
         public void Pause() { }
         public void Stop() { }
-        public void Seek(long positionMs) { }
+        public void Seek(long positionMs, SeekMode mode) { }
         public void SetVolume(double volume01) { }
         public long PositionMs => 0;
         public bool IsPlaying => true;

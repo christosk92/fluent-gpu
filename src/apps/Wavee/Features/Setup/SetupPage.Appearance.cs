@@ -1,5 +1,4 @@
 using System;
-using System.IO;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
@@ -22,14 +21,6 @@ sealed class SetupAppearancePage : Component
     const float PreviewDividerHeight = 1f;
     const float PreviewRailWidth = Spacing.XXL;
     const float PreviewStageInset = Spacing.XS;
-
-    static readonly string[] s_densityPreviewFiles =
-    [
-        "density-compact.png",
-        "density-default.png",
-        "density-cozy.png",
-        "density-comfortable.png",
-    ];
 
     static string[] ThemeLabels() =>
     [
@@ -379,15 +370,10 @@ sealed class SetupAppearancePage : Component
         };
     }
 
+    // The density choices use the same theme-aware wireframe language as the page-layout choices below. Keeping the
+    // miniature native avoids a raster-inside-a-window look and lets both pickers share one selected-state ink ramp.
     static Element DensityPreview(int value, bool on)
-    {
-        float width = WaveePicker.Pane.Width - 2f * (WaveePicker.Pane.Inset + PreviewStageInset)
-            - PreviewRailWidth - PreviewDividerHeight;
-        string path = Path.Combine(AppContext.BaseDirectory, "assets", "setup", s_densityPreviewFiles[value]);
-        var screenshot = Image(path, width, PreviewBodyHeight, Radii.Control, Tok.FillSolidBase,
-            transition: ImageTransition.None) with { Fit = ImageFit.Contain };
-        return PreviewWindow(on, screenshot);
-    }
+        => PreviewWindow(on, WaveePicker.DensityRows(value, on));
 
     static Element PageLayoutPreview(int value, bool on)
     {

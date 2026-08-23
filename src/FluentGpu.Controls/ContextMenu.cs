@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
@@ -41,6 +41,10 @@ public sealed record ContextMenuOptions
     public FlyoutPlacement KeyboardPlacement { get; init; } = FlyoutPlacement.BottomEdgeAlignedLeft;
     /// <summary>Invoked when the menu closes, with the close cause (light-dismiss / Escape / programmatic).</summary>
     public Action<OverlayCloseCause>? OnClosed { get; init; }
+    /// <summary>Forwarded to <see cref="PopupOptions.OpaqueSurface"/>: this menu opens over content the acrylic
+    /// compositor cannot sample (a video hole), so it paints the flat plate from frame ONE instead of waiting for the
+    /// recorder's between-frames hole query to say so. See that property for the whole reason it exists.</summary>
+    public bool OpaqueSurface { get; init; }
 
     internal static readonly ContextMenuOptions Default = new();
 }
@@ -108,6 +112,9 @@ public static class ContextMenu
             ConstrainToRootBounds = false,
             // Pointer/invoke menus preserve the invoker's focus. Keyboard menus still focus the first command.
             PreserveFocusOnOpen = !keyboard,
+            // Straight through from the attach site — a context menu raised over a video hole is exactly as unable to
+            // blur its backdrop as a flyout is, and the caller is the only thing that can know that in advance.
+            OpaqueSurface = opts.OpaqueSurface,
         };
 
         // The anchor node, value-copied from the reused args. Rect-anchored triggers use args.Source: Keyboard sets

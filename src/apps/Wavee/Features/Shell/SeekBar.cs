@@ -1,13 +1,30 @@
 using System;
+using FluentGpu.Animation;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Scene;
 using FluentGpu.Signals;
+using Wavee.Backend.Playback;
+using Wavee.Core;
 using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
+
+/// <summary>What the centre rail IS right now. Three shapes, decided by the source's own timeline rather than by
+/// whether a duration happened to be reported — the defect this enum exists to end is a sliding DVR window drawn as a
+/// 3-minute track because Media Foundation answered <c>GetDuration</c> with the window's width.</summary>
+enum SeekRailMode : byte
+{
+    /// <summary>An ordinary track: 0 → duration.</summary>
+    Track,
+    /// <summary>A live broadcast with a rewindable window: the rail maps the WINDOW, its right end IS the live edge.</summary>
+    Dvr,
+    /// <summary>A live broadcast with nothing to rewind (radio): there is no position to draw, so the rail stops
+    /// pretending to be one and becomes a breathing line.</summary>
+    Line,
+}
 
 // The center scrub bar — a bespoke media-seek control that REPLACES the old signal-bound Slider seek in the player bar. Three
 // reasons it isn't a Slider:
@@ -26,7 +43,8 @@ namespace Wavee;
 // in Render (playing/enabled), never per move or per frame.
 sealed class SeekBar : Component
 {
-    const float HitHeight = 32f;     // WinUI SliderHorizontalHeight
+    internal const float HitHeight = 32f;     // WinUI SliderHorizontalHeight
+    internal const float LiveLineHeight = 2f; // the radio line's stroke — a rule, not a rail
     static readonly bool DiagEnabled = Diag.EnvFlag("WAVEE_PLAYERBAR_DIAG");
     static int s_renderCount;
     static int s_boundsCount;
@@ -56,22 +74,49 @@ sealed class SeekBar : Component
     internal void Recompute()
     {
         if (_scrubbing.Peek()) { _displayFrac.Value = _scrubFrac.Peek(); return; }   // scrub gate: ignore PositionFrac
-        if (_b.IsPlaying.Peek() && !_b.IsBuffering.Peek())
+        // A live broadcast's rail is anchored to its WINDOW, not to zero-and-a-duration — see LiveRail for why the
+        // ordinary formula is meaningless there. Peeked (never .Value): this runs from the ticker and from effects,
+        // never from Render, so it must not subscribe anything.
+        LiveWindow live = _b.Live.Peek();
+        bool dvr = live.IsLive && live.HasWindow;
+        bool advancing = _b.IsPlaying.Peek() && !_b.IsBuffering.Peek();
+        // The smooth playhead: the transport reports position ~1 Hz, so between ticks we extrapolate from the wall-clock
+        // anchor. ONE playhead for both rails — a DVR window's fraction is computed from the same interpolated number a
+        // track's is, so the fill advances at the playhead's rate and not at the window's republish rate.
+        long est = advancing ? _tickPosMs + (Environment.TickCount64 - _tickWallMs) : live.PositionMs;
+        if (dvr)
+        {
+            // AT EDGE the rail SNAPS FULL (LiveRail.DisplayFrac): the honest measurement against two ends that both keep
+            // moving is a fill that never fills and slides a little on every window report, which reads as easing under a
+            // playhead that is not moving. The edge state is the bridge's ONE hysteresis fact — never a threshold here.
+            bool behind = _b.IsBehindLive.Peek();
+            Publish((float)LiveRail.DisplayFrac(live.SeekableStartMs, live.SeekableEndMs, est, behind));
+            return;
+        }
+        if (advancing)
         {
             long dur = _b.DurationMs.Peek();
             if (dur <= 0L) { _displayFrac.Value = 0f; return; }
-            long est = _tickPosMs + (Environment.TickCount64 - _tickWallMs);   // interpolate between 1 Hz ticks
-            float frac = Math.Clamp(est / (float)dur, 0f, 1f);
-            // Quantize to whole-pixel granularity of the live track: a multi-minute track's playhead moves a few px/s, so
-            // most ticker frames land on the SAME pixel. Snapping _displayFrac to that pixel makes those frames write no
-            // transform → a byte-identical DrawList → the host's skip-submit gate elides the redundant GPU submit+present
-            // (the dominant at-rest cost), while a real pixel step still advances smoothly. Raw fraction when width unknown.
-            float w = _width;
-            float q = w > 1f ? MathF.Round(frac * w) / w : frac;
-            if (q != _displayFrac.Peek()) _displayFrac.Value = q;   // value-gate: an unmoved pixel is a true no-op (no bind re-run)
+            Publish(Math.Clamp(est / (float)dur, 0f, 1f));
             return;
         }
-        _displayFrac.Value = _b.PositionFrac.Peek();   // paused/stopped: static, the reported position
+        // Paused/stopped on an ordinary track: static, the reported fraction.
+        _displayFrac.Value = _b.PositionFrac.Peek();
+    }
+
+    /// <summary>Write the ONE value the fill/thumb binds read — a plain value SET, never a tween. The fill is a
+    /// compositor <c>Transform</c> bind with no <c>Animate</c>, no <c>BrushTransition</c> and no motion tier on it, so
+    /// what is written here is what is drawn on the next frame.
+    /// <para>Quantized to the live track's whole-pixel granularity: a multi-minute track's playhead moves a few px/s, so
+    /// most ticker frames land on the SAME pixel. Snapping to that pixel makes those frames write no transform → a
+    /// byte-identical DrawList → the host's skip-submit gate elides the redundant GPU submit+present (the dominant
+    /// at-rest cost), while a real pixel step still advances smoothly. It is also what keeps a DVR window's sub-pixel
+    /// republish jitter from moving the thumb at all. Raw fraction when the width is not known yet.</para></summary>
+    void Publish(float frac)
+    {
+        float w = _width;
+        float q = w > 1f ? MathF.Round(frac * w) / w : frac;
+        if (q != _displayFrac.Peek()) _displayFrac.Value = q;   // value-gate: an unmoved pixel is a true no-op (no bind re-run)
     }
 
     public override Element Render()
@@ -84,6 +129,18 @@ sealed class SeekBar : Component
         // Reading the signals here re-renders the bar on the enabling transition, which re-installs the interaction
         // handlers (OnClick/OnPointerDown/OnDrag run on every reconcile). Mirrors PlayerBar's `active`.
         bool enabled = b.CurrentTrack.Value != null && b.Error.Value == null && !b.IsLoading.Value && b.CanSeek.Value;
+
+        // WHAT the rail is. Derived through a MEMO, not read straight off `Live`: the host republishes the window
+        // several times a second (the positions inside it move), and this component only cares about the three-way
+        // SHAPE. A memo's equality cut-off means a moving window re-renders nothing — the fill is a compositor bind and
+        // the Dvr↔Line↔Track flip is the only thing that changes structure.
+        var railMode = UseComputed(() =>
+        {
+            LiveWindow live = b.Live.Value;
+            if (!live.IsLive && !b.IsLive.Value) return SeekRailMode.Track;
+            return live.HasWindow ? SeekRailMode.Dvr : SeekRailMode.Line;
+        }).Value;
+        bool dvr = railMode == SeekRailMode.Dvr;
 
         // Subscribe to the LOW-frequency signals that change the bar's STRUCTURE (mount/unmount the ticker) only.
         bool playing = b.IsPlaying.Value;
@@ -152,6 +209,29 @@ sealed class SeekBar : Component
             Transform = fillBind,
         };
 
+        // The DVR rail's right end IS the live edge, so it is marked. Without the tick the rail reads as a track whose
+        // end is "the end", and a viewer riding the edge sees a full bar with no way to tell that full MEANS now.
+        Element[] railKids;
+        if (dvr)
+        {
+            var edgeTick = new BoxEl
+            {
+                Grow = 1f, Height = s.TrackHeight, Direction = 0, Justify = FlexJustify.End,
+                HitTestVisible = false,
+                Children =
+                [
+                    new BoxEl
+                    {
+                        Width = LiveLineHeight, Height = s.TrackHeight, Shrink = 0f,
+                        Fill = Tok.AccentDefault,
+                        HitTestVisible = false,
+                    },
+                ],
+            };
+            railKids = [fill, edgeTick];
+        }
+        else railKids = [fill];
+
         var rail = new BoxEl
         {
             Height = s.TrackHeight, Grow = 1f, AlignSelf = FlexAlign.Center,
@@ -161,7 +241,7 @@ sealed class SeekBar : Component
             ClipToBounds = true,
             ZStack = true,
             HitTestVisible = false,
-            Children = [fill],
+            Children = railKids,
         };
 
         var inner = new BoxEl
@@ -195,6 +275,11 @@ sealed class SeekBar : Component
             HitTestVisible = false,
             Children = [rail, thumb],
         };
+
+        // NOTHING TO REWIND (radio, and any broadcast whose window is under LiveWindow.MinWindowMs): there is no
+        // position to draw, so the rail stops pretending to be one. Returned AFTER every hook above, so the hook order
+        // is identical in all three modes — the mode is a value the render branches on, never a hook branch.
+        if (railMode == SeekRailMode.Line) return Embed.Comp(() => new LiveLine(b));
 
         // While playing, mount the pixel-due ticker (UseInterval — NOT FrameClock.Tick, which would pin the host at
         // panel rate via FrameClockPoller). Unmounts when paused/stopped so the frame loop idles. NEVER re-renders us.
@@ -306,16 +391,23 @@ sealed class SeekBar : Component
     {
         // Always release the scrub gate — bailing out with _scrubbing still true would freeze
         // _displayFrac at the abandoned finger position until the next successful commit.
-        long dur;
-        if (!Enabled() || (dur = _b.DurationMs.Peek()) <= 0) { OnCanceled(); return; }
+        if (!Enabled()) { OnCanceled(); return; }
+        LiveWindow live = _b.Live.Peek();
+        bool dvr = live.IsLive && live.HasWindow;
+        long dur = _b.DurationMs.Peek();
+        if (!dvr && dur <= 0) { OnCanceled(); return; }
         float f = _scrubFrac.Peek();
-        long targetMs = Math.Clamp((long)(f * dur), 0, dur);
+        // A DVR commit is a position INSIDE the window, not a fraction of a duration — LiveRail clamps it into the
+        // window at both ends, because a seek even a millisecond past the moving edge is one the source rejects.
+        long targetMs = dvr
+            ? LiveRail.Seek(live.SeekableStartMs, live.SeekableEndMs, f)
+            : Math.Clamp((long)(f * dur), 0, dur);
         _b.NoteSeek(targetMs);                             // arm the seek latch: suppress stale pre-seek position ticks (#2)
         _b.PositionFrac.Value = f;                         // optimistic: paint the new position immediately
         _b.PositionMs.Value = targetMs;                    // keep time labels + interpolation anchor in the same place
         _tickWallMs = Environment.TickCount64;
         _tickPosMs = targetMs;
-        _ = _b.Player.SeekAsync(targetMs);
+        _ = _b.Player.SeekAsync(targetMs, Wavee.Core.SeekMode.Accurate);   // drag-end commit: one exact seek
         _scrubbing.Value = false;                          // release the scrub gate (PositionFrac/interp resume)
         Recompute();
     }
@@ -336,7 +428,9 @@ sealed class SeekBar : Component
     /// long tracks don't oversample (~44× at panel rate for a multi-minute bar).</summary>
     internal float TickIntervalMs()
     {
-        long dur = _b.DurationMs.Peek();
+        // The rail's span, whichever kind of rail it is: a track's duration, or a DVR window's width.
+        LiveWindow live = _b.Live.Peek();
+        long dur = live.IsLive && live.HasWindow ? live.WindowMs : _b.DurationMs.Peek();
         float w = _width;
         if (dur <= 0L || w <= 1f) return 100f;
         return Math.Clamp(dur / w, 33f, 250f);
@@ -355,5 +449,65 @@ sealed class SeekTicker : Component
         // Parent SeekBar re-renders ~1 Hz on PositionMs — refreshes the interval when duration/width settle.
         UseInterval(() => Owner.Recompute(), Owner.TickIntervalMs());
         return new BoxEl { HitTestVisible = false, Width = 0f, Height = 0f };
+    }
+}
+
+/// <summary>The rail for a live broadcast with NOTHING TO REWIND — internet radio, and any stream whose seekable window
+/// is under <see cref="Wavee.Core.LiveWindow.MinWindowMs"/>. A 2px full-width accent line that breathes.
+///
+/// <para><b>Why not a rail.</b> There is no position: the source starts where you tuned in and ends when you stop, so
+/// every fraction a rail could draw would be a fiction, and every scrub a request the source refuses. The line says
+/// "sound is arriving" and nothing else — <c>HitTestVisible = false</c> and <see cref="AutomationRole.None"/> so it is
+/// not a slider a pointer or a screen reader can try to drag.</para>
+///
+/// <para><b>The breathe obeys the no-forever-loop rule.</b> A looping track keeps the frame loop awake for as long as it
+/// is seeded, so this one is seeded ONLY while something is audibly live AND someone can see it:</para>
+/// <list type="bullet">
+/// <item>playing — a paused stream is not arriving, so the line goes flat,</item>
+/// <item>the window is ACTIVE (<c>Component.UseIsActive</c> — the engine's <c>Activation.IsActive</c> ambient, false
+/// while the app is minimized or power-suspended, AND-folded with this component's own KeepAlive-parked state), so a
+/// minimized Wavee is not animating a line nobody is looking at,</item>
+/// <item>and motion is not reduced.</item>
+/// </list>
+/// <para>All three fold into ONE value that picks the keyframe track and the loop flag. Reduced motion is a VALUE here,
+/// never a hook branch: <see cref="Component.UseKeyframes"/> is called unconditionally, in the same order, every render
+/// — only its keys, duration, loop flag and <see cref="DepKey"/> change. On any of the three flipping, the dep changes
+/// and the looping pulse is REPLACED IN PLACE by a finite flat track (opacity → 1), which is what lets the loop-track
+/// count fall to zero and the frame loop quiesce. The <c>CoverShimmer</c> pattern, at the slower 3 s cadence a "this is
+/// alive" cue wants (a 1 s pulse reads as loading).</para></summary>
+sealed class LiveLine : Component
+{
+    // 0.55 → 1.0 → 0.55: symmetric, so the loop has no seam. Held in statics so a re-seed allocates nothing.
+    static readonly Keyframe[] Breathe = [new(0f, 0.55f), new(0.5f, 1f), new(1f, 0.55f)];
+    static readonly Keyframe[] Flat = [new(0f, 1f), new(1f, 1f)];
+    const float BreatheMs = 3000f;
+
+    readonly PlaybackBridge _b;
+    public LiveLine(PlaybackBridge b) { _b = b; }
+
+    public override Element Render()
+    {
+        bool playing = _b.IsPlaying.Value;          // subscribe → stop breathing the moment the stream is paused
+        bool windowActive = UseIsActive().Value;    // subscribe → stop breathing while minimized / suspended / parked
+        bool breathe = playing && windowActive && !Motion.ReducedMotion;
+        UseKeyframes(AnimChannel.Opacity, breathe ? Breathe : Flat, breathe ? BreatheMs : 1f, breathe,
+            DepKey.From(breathe));
+
+        return new BoxEl
+        {
+            Grow = 1f, Height = SeekBar.HitHeight, Direction = 0, AlignItems = FlexAlign.Center,
+            HitTestVisible = false,
+            Role = AutomationRole.None,
+            Children =
+            [
+                new BoxEl
+                {
+                    Grow = 1f, MinWidth = 0f, Height = SeekBar.LiveLineHeight,
+                    Corners = CornerRadius4.All(SeekBar.LiveLineHeight * 0.5f),
+                    Fill = Tok.AccentDefault,
+                    HitTestVisible = false,
+                },
+            ],
+        };
     }
 }

@@ -383,6 +383,9 @@ public sealed record MediaOpenOptions
     public IAbrPolicy? Abr { get; init; }
     /// <summary>Live-latency target.</summary>
     public LiveLatencyMode LiveLatency { get; init; } = LiveLatencyMode.Standard;
+    /// <summary>Whether the source is live — the CALLER's declaration, which outranks the backend's own inference.
+    /// Carried here from <see cref="MediaSource.WithLiveness"/> by <c>MediaPlayer.OpenAsync</c>.</summary>
+    public SourceLiveness Liveness { get; init; } = SourceLiveness.Auto;
     /// <summary>The DRM license relay (spec §9.2), if the source is protected.</summary>
     public Func<LicenseRequest, ValueTask<LicenseResponse>>? LicenseRelay { get; init; }
 }
@@ -419,6 +422,11 @@ public interface IMediaSession : IAsyncDisposable
     ValueTask PauseAsync();
     /// <summary>Seek.</summary>
     ValueTask SeekAsync(TimeSpan to, SeekMode mode);
+    /// <summary>Publish the seek TARGET immediately, before the backend acknowledges. Idempotent.
+    /// <para>A backend whose seek ack is a multi-second native round-trip (the protected/CDM path) must move the
+    /// transport UI NOW, on the calling thread, or the scrubber snaps back to the stale playhead for the whole
+    /// round-trip. Default: a no-op, so a session that acknowledges synchronously is unaffected.</para></summary>
+    void PublishSeekIntent(TimeSpan target) { }
     /// <summary>Set the playback rate.</summary>
     void SetRate(double rate);
     /// <summary>Set the volume (0..1).</summary>
@@ -429,6 +437,10 @@ public interface IMediaSession : IAsyncDisposable
     ValueTask SelectTrackAsync(MediaTrack? track) => ValueTask.CompletedTask;
     /// <summary>Select automatic quality or pin a representation.</summary>
     ValueTask SelectQualityAsync(QualitySelection selection) => ValueTask.CompletedTask;
+    /// <summary>Update the current viewport height used by automatic quality selection.</summary>
+    void SetAdaptiveViewportHeight(int height) { }
+    /// <summary>Update the current network/policy height cap. Zero means unlimited.</summary>
+    void SetAdaptiveMaxHeight(int height) { }
     /// <summary>Seek to the current live edge.</summary>
     ValueTask GoLiveAsync() => ValueTask.CompletedTask;
     /// <summary>How this session delivers video.</summary>

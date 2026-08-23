@@ -59,6 +59,14 @@ Read [wiring-discipline.md](wiring-discipline.md) before any seam/composition-ro
 - [audio-handoff.md](audio-handoff.md) — gapless & crossfade: one `IAudioClient` per queue, the 0 ms butt-join vs the
   overlap path, prepared-next timing, codec pre-roll trim, and how to read the `[gapless]` log. Read before touching
   `SpotifyLive/Audio/**` or prepared-next scheduling.
+- [playback-modules.md](playback-modules.md) — **playback modules**: sources that ship as independently updatable
+  out-of-process exes (YouTube, Twitch, radio; Spotify next) speaking JSON-RPC over stdio. The three layers (SDK in
+  `Wavee.Sdk`, host in `Backend/Modules`, modules in `src/apps/modules`), the `wavee-module.json` manifest and the
+  two discovery roots, the rules that are easy to break (dev `.dll` vs published `.exe` entry, stdout is the wire,
+  `-32601` = capability absent, declared-never-probed caps), `ModuleTestHost` testing, the diagnostics section, and
+  the dev/publish/MSIX layouts. Read before touching `Backend/Modules/**`, `src/apps/Wavee.Sdk/**`,
+  `src/apps/modules/**`, or the module bits of `Wavee.csproj` / `ops/build`. Full doc:
+  `docs/guide/playback-modules.md`.
 - [notifications.md](notifications.md) — the two channels (bell / Windows), the Off→In-app→Windows ladder, the 8 topic
   dials, quiet hours, the live-escalation watermark and the scheduled-toast reconcile rules. Read before adding a
   notification of any kind.

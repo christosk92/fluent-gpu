@@ -34,6 +34,10 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
     private readonly int _defaultNativeMode;
 
     private Thread? _thread;
+    // Set by Stop()/Dispose(): wakes the BUSY-retry backoff and every bounded transport-ack wait IMMEDIATELY, so a
+    // video→video skip abandons them instead of running their whole budget out. Never disposed — Wait(timeout) uses
+    // spin + Monitor, so no kernel handle is ever allocated and a late waiter can never hit an ObjectDisposedException.
+    private readonly ManualResetEventSlim _shutdown = new(false);
     private ulong _boundHandle;
     private bool _disposed;
     private readonly bool _available;   // native DLL loadable? checked ONCE — every P/Invoke site is gated so a missing
@@ -43,32 +47,33 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
     private volatile bool _runCompleted;
     private volatile string? _runError;
     private volatile bool _playRequested;
+    private ProtectedVideoRequest? _request;
+    private string? _activeVideoRepresentationId;
+    private long _bytesDownloaded;
+    private long _downloadElapsedMs;
+    private long _forwardBufferedMs;
+    private bool _adaptiveAbiAvailable = true;
 
     // Watchdog: an OLD native DLL that only LOGS a rejected license (never sets the Error snapshot state) must not leave
     // the UI spinning forever. If play was requested and the native backend is still merely "loading" (state ≤1, no
-    // surface, no natural size) past this budget, surface a typed DRM failure. Overridable via FG_VIDEO_START_TIMEOUT_MS.
-    private const int DefaultStartTimeoutMs = 20_000;
-    private static readonly int StartTimeoutMs =
-        int.TryParse(Environment.GetEnvironmentVariable("FG_VIDEO_START_TIMEOUT_MS"), out int t) && t > 0
-            ? t : DefaultStartTimeoutMs;
+    // surface, no natural size) past this budget, surface a typed TIMEOUT failure.
+    //
+    // The budget is a CONSTANT 90s and deliberately sits ABOVE every native ceiling it supervises (30s licence
+    // acquisition + 45s CANPLAY + 12s surface handle = 87s worst case). The old 20s fired DURING a slow-but-healthy
+    // start and reported it as a licence rejection, which sent every investigation down the wrong path. There is no
+    // environment override: a diagnostic budget only the person who knows the variable name can change is not one.
+    private const int StartTimeoutMs = 90_000;
     private long _startTicks;
     private bool _watchdogFired;
     private int _lastLoggedState = -1;
     private bool _loggedSize, _loggedHandle;
 
-    // [video] diagnostics only (behind VideoLogEnabled): the slowest single Native.FgPlayReadyGetSnapshot call seen
-    // this load, in Stopwatch ticks (a duration, not a timestamp — reported via GetElapsedTime(0, ticks)). Updated in
-    // Pump ONLY inside an `if (VideoLogEnabled)` branch, so with logging off this is neither timed nor written —
-    // a true no-op on the per-frame pump path. Reported once, piggybacked on the existing state-change log, the
-    // first time native leaves the Idle/Loading states for this load.
-    private long _maxSnapshotTicks;
-    private bool _loggedMaxSnapshot;
-
-    // [video] lifecycle diagnostics are gated on the app's file-log verbosity (WAVEE_LOG_FILE_LEVEL=Debug|Trace) and
-    // APPENDED to the SAME desktop-playready.log the native backend writes, so native + managed lines share one timeline.
-    private static readonly bool VideoLogEnabled =
-        Environment.GetEnvironmentVariable("WAVEE_LOG_FILE_LEVEL") is { } lvl
-        && (lvl.Equals("Debug", StringComparison.OrdinalIgnoreCase) || lvl.Equals("Trace", StringComparison.OrdinalIgnoreCase));
+    // [video] lifecycle diagnostics are ALWAYS ON and APPENDED to the SAME desktop-playready.log the native backend
+    // writes, so native + managed lines share ONE timeline. Every line is event-driven — open, the first native call,
+    // native state transitions, the watchdog, transport acks, and the ABR decision line at ≤1Hz — never per frame, so
+    // "always on" costs nothing on the steady path and a field report carries the whole trail with no repro build.
+    // It used to be gated on WAVEE_LOG_FILE_LEVEL, which meant the one log that explains a stuck video was missing
+    // from exactly the reports that needed it.
 
     // The active session's license bridge + a background-thread-recorded typed relay error (mirrored on the UI pump).
     private DrmLicenseBridge? _bridge;
@@ -108,6 +113,11 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
     public IReadSignal<Size2> NaturalSize => _naturalSize;
     public IReadSignal<string?> Error => _error;
     public bool HasSurface => _boundHandle != 0;
+    public string? ActiveVideoRepresentationId => _activeVideoRepresentationId;
+    public long BytesDownloaded => Interlocked.Read(ref _bytesDownloaded);
+    public long DownloadElapsedMs => Interlocked.Read(ref _downloadElapsedMs);
+    public long ForwardBufferedMs => Interlocked.Read(ref _forwardBufferedMs);
+    public bool SupportsAdaptiveSelection => _available && _adaptiveAbiAvailable;
 
     /// <inheritdoc/>
     public void Start(ProtectedVideoRequest request)
@@ -123,24 +133,33 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
             return;
         }
         Directory.CreateDirectory(_dataRoot);
+        _shutdown.Reset();
         _error.Value = null;
         _relayError = null;
         _state.Value = ProtectedVideoState.Loading;
+        _request = request;
+        _activeVideoRepresentationId = FindInitialRepresentationId(request);
+        Interlocked.Exchange(ref _bytesDownloaded, 0);
+        Interlocked.Exchange(ref _downloadElapsedMs, 0);
+        Interlocked.Exchange(ref _forwardBufferedMs, 0);
+        _runCompleted = false;
+        _runHr = 0;
+        _runError = null;
         _playRequested = !request.StartPaused;
         _startTicks = Environment.TickCount64;
         _watchdogFired = false;
         _lastLoggedState = -1;
         _loggedSize = _loggedHandle = false;
-        _maxSnapshotTicks = 0;
-        _loggedMaxSnapshot = false;
-        if (VideoLogEnabled)
+        try { Native.FgPlayReadyResetAdaptive(); }
+        catch (EntryPointNotFoundException) { _adaptiveAbiAvailable = false; }
+
         {
             string host = "";
             try { if (!string.IsNullOrEmpty(request.InitUrl)) host = new Uri(request.InitUrl).Host; } catch { }
             LogVideo($"open requested isDrm={request.Drm is not null} system={request.Drm?.System.ToString() ?? "-"} " +
                      $"initHost={host} segs={request.SegmentCount} stride={request.SegmentStride} pssh={request.Pssh.Length}B " +
                      $"audio={(string.IsNullOrEmpty(request.AudioInitUrl) ? "none" : request.AudioCodecs ?? "yes")} " +
-                     $"mode={request.Mode ?? "-"} startPaused={request.StartPaused} timeoutMs={StartTimeoutMs}");
+                     $"mode={request.Mode ?? "-"} startPaused={request.StartPaused} startTimeoutMs={StartTimeoutMs}");
         }
 
         // Seed the process-global native transport level BEFORE the worker enters FgPlayReadyRunEx. MediaPlayer opens
@@ -150,7 +169,6 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
         // for LoadLibrary of that DLL plus its whole MF/PlayReady dependency chain. Runs on whatever thread called
         // Start() (i.e. NOT the "fgpu-playready-desktop" worker below, which does not exist yet) — logged so a slow
         // load can distinguish "first-call DLL load" from the worker's own FgPlayReadyRunEx cost.
-        if (VideoLogEnabled)
         {
             long t0 = Stopwatch.GetTimestamp();
             if (_playRequested) Native.FgPlayReadyPlay(); else Native.FgPlayReadyPause();
@@ -158,10 +176,6 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
                      $"'{Thread.CurrentThread.Name ?? "(unnamed)"}' (managed id={Environment.CurrentManagedThreadId}) " +
                      $"took {Stopwatch.GetElapsedTime(t0).TotalMilliseconds:F1}ms " +
                      "(implicit LoadLibrary of FluentGpu.PlayReady.Native.dll + its MF/PlayReady dependency chain)");
-        }
-        else
-        {
-            if (_playRequested) Native.FgPlayReadyPlay(); else Native.FgPlayReadyPause();
         }
 
         var system = request.Drm?.System ?? DrmSystem.PlayReady;
@@ -222,34 +236,37 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
 
             // Timed on the "fgpu-playready-desktop" MTA thread: this is the phase that does CDM init + licence
             // acquisition (a network round-trip), so it is the prime suspect for whatever stalls the app during a
-            // DRM load. `t0` stays a plain default(long) when logging is off — no Stopwatch call, no cost.
-            long t0 = VideoLogEnabled ? Stopwatch.GetTimestamp() : 0;
+            // DRM load.
+            long t0 = Stopwatch.GetTimestamp();
             _runHr = Native.FgPlayReadyRunEx(_dataRoot, ref desc, callback, ctx);
-            if (VideoLogEnabled)
-                LogVideo($"FgPlayReadyRunEx returned 0x{unchecked((uint)_runHr):X8} after " +
-                         $"{Stopwatch.GetElapsedTime(t0).TotalMilliseconds:F1}ms (CDM init + licence acquisition)");
+            LogVideo($"FgPlayReadyRunEx returned 0x{unchecked((uint)_runHr):X8} after " +
+                     $"{Stopwatch.GetElapsedTime(t0).TotalMilliseconds:F1}ms (CDM init + licence acquisition)");
 
             // BUSY self-heal: the native session is a process-global singleton (a CAS latch inside FgPlayReadyRunEx),
             // so a previous session that was never stopped — any missed-stop bug, or a teardown still in its bounded
             // 3s join — wedges EVERY later video with ERROR_BUSY. Rather than surfacing that as a permanent typed
             // failure, signal whatever stale session holds the latch (FgPlayReadyStop sets its shutdown flag; its
-            // keep-alive exits within one 80ms tick) and retry on a bounded poll. This thread is the dedicated native
-            // run thread, so sleeping here blocks nothing else. Template: the transport-ack bounded wait below.
+            // keep-alive exits within one 80ms tick) and retry on a bounded backoff.
+            //
+            // The backoff is an EVENT WAIT, not a sleep: `_shutdown` is set by Stop()/Dispose(), so a video→video skip
+            // that abandons this attempt wakes the loop immediately instead of burning the rest of a 200ms tick, and
+            // the whole retry is bounded at 5s. Re-entering FgPlayReadyRunEx must happen on THIS thread (the native
+            // session is MTA-affine and this thread exists solely to host that blocking call), so the wait cannot be
+            // hoisted onto a continuation — but it never touches a thread-pool or UI thread either.
             const int ErrorBusy = unchecked((int)0x800700AA);   // HRESULT_FROM_WIN32(ERROR_BUSY)
             if (_runHr == ErrorBusy && !_disposed)
             {
                 LogVideo("native session BUSY (a stale session holds the singleton latch) — signaling stop + retrying");
                 long deadline = Environment.TickCount64 + 5_000;
-                long retryT0 = VideoLogEnabled ? Stopwatch.GetTimestamp() : 0;
+                long retryT0 = Stopwatch.GetTimestamp();
                 while (_runHr == ErrorBusy && !_disposed && Environment.TickCount64 < deadline)
                 {
                     try { Native.FgPlayReadyStop(); } catch { }
-                    Thread.Sleep(200);
+                    if (_shutdown.Wait(200)) break;   // Stop/Dispose asked us to abandon this open — do not retry
                     _runHr = Native.FgPlayReadyRunEx(_dataRoot, ref desc, callback, ctx);
                 }
-                if (VideoLogEnabled)
-                    LogVideo($"BUSY retry loop took {Stopwatch.GetElapsedTime(retryT0).TotalMilliseconds:F1}ms, " +
-                             $"final result 0x{unchecked((uint)_runHr):X8}");
+                LogVideo($"BUSY retry loop took {Stopwatch.GetElapsedTime(retryT0).TotalMilliseconds:F1}ms, " +
+                         $"final result 0x{unchecked((uint)_runHr):X8}");
                 if (_runHr == ErrorBusy)
                     LogVideo("native session still BUSY after 5s of stop+retry — surfacing the failure");
             }
@@ -329,39 +346,65 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
         return _available ? AwaitAppliedAsync(Native.FgPlayReadyPause(), TransportAck.PlayPause) : ValueTask.CompletedTask;
     }
 
-    public ValueTask SeekAsync(long positionMs)
-        => _available ? AwaitAppliedAsync(Native.FgPlayReadySeek(positionMs), TransportAck.Seek) : ValueTask.CompletedTask;
+    /// <inheritdoc/>
+    public ValueTask SeekAsync(long positionMs, SeekMode mode)
+    {
+        if (!_available) return ValueTask.CompletedTask;
+        // The native seek entry point takes an approximate-vs-exact mode: 0 = APPROXIMATE (snap to the nearest
+        // keyframe — what a drag wants; no decode-to-PTS, so the picture comes back in one segment) and 1 = EXACT
+        // (decode to the requested PTS — the commit on release). Dragging used to issue exact seeks, which is why a
+        // scrub cost seconds per step.
+        int nativeMode = mode == SeekMode.Keyframe ? NativeSeekApproximate : NativeSeekExact;
+        LogVideo($"seek {positionMs}ms mode={mode} (native {nativeMode})");
+        return AwaitAppliedAsync(Native.FgPlayReadySeekEx(positionMs, nativeMode), TransportAck.Seek);
+    }
+
+    public ValueTask SelectVideoRepresentationAsync(string representationId)
+    {
+        if (!_available || !_adaptiveAbiAvailable || _request?.Catalog is null) return ValueTask.CompletedTask;
+        var video = FindDefaultVideoTrack(_request.Catalog);
+        if (video is null) return ValueTask.CompletedTask;
+        for (int i = 0; i < video.Representations.Count; i++)
+        {
+            var rep = video.Representations[i];
+            if (!string.Equals(rep.Id, representationId, StringComparison.Ordinal)) continue;
+            try
+            {
+                ulong seq = Native.FgPlayReadySelectVideoRepresentation(i, rep.InitUrl, rep.SegmentBaseUrl,
+                    rep.SegmentPrefix, rep.SegmentSuffix);
+                return AwaitRepresentationAppliedAsync(seq, i, representationId);
+            }
+            catch (EntryPointNotFoundException)
+            {
+                _adaptiveAbiAvailable = false;
+                return ValueTask.CompletedTask;
+            }
+        }
+        throw new ArgumentOutOfRangeException(nameof(representationId));
+    }
 
     public void SetVolume(float volume) { if (_available) _ = Native.FgPlayReadySetVolume(volume); }
     public void SetRate(float rate) { if (_available) _ = Native.FgPlayReadySetRate(rate); }
-    public void Stop() { if (_available) Native.FgPlayReadyStop(); }
+    public void Stop()
+    {
+        _shutdown.Set();
+        if (_available) Native.FgPlayReadyStop();
+    }
+
+    /// <inheritdoc/>
+    public void LogDiagnostic(string message) => LogVideo(message);
 
     private enum TransportAck : byte { PlayPause, Seek }
 
+    // The two bounded acknowledgement waits live in the SAFE partial part (DesktopProtectedVideoPlayer.Waits.cs) —
+    // this part is `unsafe` because it owns the native licence callback, and C# forbids `await` in an unsafe context.
     private ValueTask AwaitAppliedAsync(ulong sequence, TransportAck kind)
-    {
-        if (sequence == 0 || _disposed) return ValueTask.CompletedTask;
-        // This type is unsafe because it owns the native callback. C# forbids await in an unsafe context, so the cold
-        // transport acknowledgement wait runs on a worker. It never blocks the UI/render/native-MTA threads.
-        return new ValueTask(Task.Run(() =>
-        {
-            long deadline = Environment.TickCount64 + 5_000;
-            while (!_disposed && Environment.TickCount64 < deadline)
-            {
-                if (Native.FgPlayReadyGetSnapshot(out var snapshot) >= 0)
-                {
-                    ulong applied = kind == TransportAck.PlayPause ? snapshot.PlayAppliedSeq : snapshot.SeekAppliedSeq;
-                    if (applied >= sequence) return;
-                    if (snapshot.State == 5)
-                        throw new InvalidOperationException(
-                            $"PlayReady transport failed while applying {kind} (0x{unchecked((uint)snapshot.ErrorHr):X8}).");
-                }
-                Thread.Sleep(10);
-            }
-            if (!_disposed)
-                throw new TimeoutException($"PlayReady transport did not acknowledge {kind} sequence {sequence}.");
-        }));
-    }
+        => sequence == 0 || _disposed ? ValueTask.CompletedTask
+                                      : new ValueTask(AwaitTransportAckAsync(sequence, kind));
+
+    private ValueTask AwaitRepresentationAppliedAsync(ulong sequence, int index, string representationId)
+        => sequence == 0 || _disposed ? ValueTask.CompletedTask
+                                      : new ValueTask(AwaitRepresentationAckAsync(sequence, index, representationId));
 
     public void Pump(in VideoBinding binding)
     {
@@ -386,51 +429,46 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
             _state.Value = ProtectedVideoState.Error;
         }
 
-        // The snapshot call itself is timed ONLY when VideoLogEnabled — with logging off this is exactly the original
-        // single unconditional call, no Stopwatch, no extra branch cost on the per-frame UI-thread pump path.
-        NativeSnapshot s;
-        if (VideoLogEnabled)
-        {
-            long snapT0 = Stopwatch.GetTimestamp();
-            bool ok = Native.FgPlayReadyGetSnapshot(out s) >= 0;
-            long elapsedTicks = Stopwatch.GetTimestamp() - snapT0;
-            if (elapsedTicks > _maxSnapshotTicks) _maxSnapshotTicks = elapsedTicks;
-            if (!ok) return;
-        }
-        else
-        {
-            if (Native.FgPlayReadyGetSnapshot(out s) < 0) return;
-        }
+        // One unconditional snapshot read. (The old "slowest snapshot call this load" Stopwatch instrumentation was a
+        // diagnostic OF a diagnostic that cost two timestamp reads on the per-frame pump; deleted with its gate.)
+        if (!TryGetSnapshot(out NativeSnapshot s)) return;
+
+        Interlocked.Exchange(ref _bytesDownloaded, unchecked((long)s.BytesDownloaded));
+        Interlocked.Exchange(ref _downloadElapsedMs, unchecked((long)s.DownloadElapsedMs));
+        Interlocked.Exchange(ref _forwardBufferedMs, Math.Max(0, s.ForwardBufferedMs));
+        if (s.ActiveVideoRepresentation >= 0 && _request?.Catalog is { } catalog
+            && FindDefaultVideoTrack(catalog) is { } video && s.ActiveVideoRepresentation < video.Representations.Count)
+            _activeVideoRepresentationId = video.Representations[s.ActiveVideoRepresentation].Id;
 
         // Low-volume [video] transition log (never per-frame: only when the native state integer actually changes).
-        if (VideoLogEnabled && s.State != _lastLoggedState)
+        if (s.State != _lastLoggedState)
         {
-            // One-shot "slowest snapshot call this load" line, piggybacked here rather than a new log site: reported
-            // the first time native leaves Idle(0)/Loading(1) for this load (i.e. reaches a terminal/ready state).
-            string maxSnap = "";
-            if (s.State >= 2 && !_loggedMaxSnapshot)
-            {
-                _loggedMaxSnapshot = true;
-                maxSnap = $" maxSnapshotMs={Stopwatch.GetElapsedTime(0, _maxSnapshotTicks).TotalMilliseconds:F2}";
-            }
             LogVideo($"native state {_lastLoggedState} -> {s.State} ({NativeStateName(s.State)}) at " +
                      $"{Environment.TickCount64 - _startTicks}ms handle=0x{s.Handle:X} size={s.Width}x{s.Height} " +
-                     $"err=0x{unchecked((uint)s.ErrorHr):X8}{maxSnap}");
+                     $"err=0x{unchecked((uint)s.ErrorHr):X8}");
             _lastLoggedState = s.State;
         }
 
         // Managed watchdog — the failure-surfacing safety net for an OLD native DLL that never reports Error. When play was
         // requested and native is still only "loading" (state ≤1, no surface, no natural size) past the budget, surface a
-        // typed DRM error so the layers above stop spinning. A NEW DLL sets state=5 first (mapped below) and pre-empts this.
+        // typed error so the layers above stop spinning. A NEW DLL sets state=5 first (mapped below) and pre-empts this.
+        //
+        // The message says TIMED OUT, and says so explicitly, because this watchdog cannot distinguish a slow start
+        // from a refused licence — it only knows nothing arrived. The old wording ("license was rejected or no key
+        // became usable") ASSERTED a licence rejection on every slow start and sent every investigation down the wrong
+        // path. A genuine rejection is reported separately and precisely by the licence relay (see LastRelayError,
+        // mirrored into this same error signal above, which pre-empts this branch).
         if (!_watchdogFired && _playRequested && _error.Peek() is null
             && s.State <= 1 && s.Handle == 0 && s.Width == 0
             && Environment.TickCount64 - _startTicks > StartTimeoutMs)
         {
             _watchdogFired = true;
-            _error.Value = "PlayReady license was rejected or no key became usable — video cannot start " +
-                           "(see %LOCALAPPDATA%\\FluentGpu\\PlayReady\\desktop-playready.log).";
+            _error.Value = $"Protected video TIMED OUT after {StartTimeoutMs / 1000}s: the native backend never " +
+                           "reported a decode surface or a natural size. This is a timeout, not a licence rejection " +
+                           "(a rejected licence is reported by the licence relay). " +
+                           "See %LOCALAPPDATA%\\FluentGpu\\PlayReady\\desktop-playready.log.";
             _state.Value = ProtectedVideoState.Error;
-            LogVideo($"watchdog FIRED after {Environment.TickCount64 - _startTicks}ms " +
+            LogVideo($"watchdog TIMED OUT after {Environment.TickCount64 - _startTicks}ms of a {StartTimeoutMs}ms budget " +
                      $"(state={s.State} handle=0x{s.Handle:X} size={s.Width}x{s.Height}) — surfacing Error");
             return;
         }
@@ -454,7 +492,7 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
         var size = new Size2(s.Width, s.Height);
         if (s.Width > 0 && !_naturalSize.Peek().Equals(size))
         {
-            if (VideoLogEnabled && !_loggedSize)
+            if (!_loggedSize)
             { _loggedSize = true; LogVideo($"first natural size {s.Width}x{s.Height} at {Environment.TickCount64 - _startTicks}ms"); }
             _naturalSize.Value = size;
         }
@@ -468,7 +506,7 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
         // presence for HasSurface.
         if (s.Handle != 0)
         {
-            if (VideoLogEnabled && !_loggedHandle)
+            if (!_loggedHandle)
             { _loggedHandle = true; LogVideo($"first surface handle=0x{s.Handle:X} at {Environment.TickCount64 - _startTicks}ms"); }
             binding.Bind((nuint)s.Handle);
             _boundHandle = s.Handle;
@@ -484,7 +522,6 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
     // Best-effort: a transient sharing violation with the native writer is swallowed so diagnostics never disrupt the pump.
     private void LogVideo(string message)
     {
-        if (!VideoLogEnabled) return;
         try { File.AppendAllText(Path.Combine(_dataRoot, "desktop-playready.log"), "[video] " + message + "\r\n"); }
         catch { }
     }
@@ -492,10 +529,58 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
     /// <summary>The typed error recorded by the license relay (if any) — richer than the string error signal.</summary>
     public MediaError? LastRelayError => _relayError;
 
+    private bool TryGetSnapshot(out NativeSnapshot snapshot)
+    {
+        if (_adaptiveAbiAvailable)
+        {
+            var v2 = new NativeSnapshotV2 { StructSize = (uint)sizeof(NativeSnapshotV2), ActiveVideoRepresentation = -1 };
+            try
+            {
+                if (Native.FgPlayReadyGetSnapshotV2(ref v2, v2.StructSize) >= 0)
+                {
+                    snapshot = v2.Legacy;
+                    snapshot.BytesDownloaded = v2.BytesDownloaded;
+                    snapshot.DownloadElapsedMs = v2.DownloadElapsedMs;
+                    snapshot.ForwardBufferedMs = v2.ForwardBufferedMs;
+                    snapshot.ActiveVideoRepresentation = v2.ActiveVideoRepresentation;
+                    snapshot.RepresentationAppliedSeq = v2.RepresentationAppliedSeq;
+                    return true;
+                }
+            }
+            catch (EntryPointNotFoundException) { _adaptiveAbiAvailable = false; }
+        }
+        return Native.FgPlayReadyGetSnapshot(out snapshot) >= 0;
+    }
+
+    private static ProtectedTrackDescriptor? FindDefaultVideoTrack(ProtectedAdaptiveCatalog catalog)
+    {
+        ProtectedTrackDescriptor? first = null;
+        for (int i = 0; i < catalog.Tracks.Count; i++)
+        {
+            var track = catalog.Tracks[i];
+            if (track.Kind != FluentGpu.Media.TrackKind.Video) continue;
+            first ??= track;
+            if (track.IsDefault) return track;
+        }
+        return first;
+    }
+
+    private static string? FindInitialRepresentationId(ProtectedVideoRequest request)
+    {
+        if (request.Catalog is null) return null;
+        var video = FindDefaultVideoTrack(request.Catalog);
+        if (video is null) return null;
+        for (int i = 0; i < video.Representations.Count; i++)
+            if (string.Equals(video.Representations[i].InitUrl, request.InitUrl, StringComparison.Ordinal))
+                return video.Representations[i].Id;
+        return video.Representations.Count > 0 ? video.Representations[0].Id : null;
+    }
+
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
+        _shutdown.Set();   // wake the BUSY backoff + every pending transport-ack wait now, do not run their budgets out
         try { Native.FgPlayReadyStop(); } catch { }
         _thread?.Join(3_000);
         _thread = null;
@@ -515,6 +600,49 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
         public ulong SeekAppliedSeq;
         public ulong VolumeAppliedSeq;
         public ulong RateAppliedSeq;
+        // Populated only by TryGetSnapshot's V2 projection; not part of the legacy native struct.
+        public ulong BytesDownloaded;
+        public ulong DownloadElapsedMs;
+        public long ForwardBufferedMs;
+        public int ActiveVideoRepresentation;
+        public ulong RepresentationAppliedSeq;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeSnapshotV2
+    {
+        public uint StructSize;
+        public NativeSnapshotLegacy Legacy;
+        public ulong BytesDownloaded;
+        public long ForwardBufferedMs;
+        public int ActiveVideoRepresentation;
+        public ulong RepresentationAppliedSeq;
+        public ulong DownloadElapsedMs;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeSnapshotLegacy
+    {
+        public int State;
+        public int ErrorHr;
+        public ulong Handle;
+        public int Width;
+        public int Height;
+        public long PositionMs;
+        public long DurationMs;
+        public ulong PlayAppliedSeq;
+        public ulong SeekAppliedSeq;
+        public ulong VolumeAppliedSeq;
+        public ulong RateAppliedSeq;
+
+        public static implicit operator NativeSnapshot(NativeSnapshotLegacy value) => new()
+        {
+            State = value.State, ErrorHr = value.ErrorHr, Handle = value.Handle,
+            Width = value.Width, Height = value.Height, PositionMs = value.PositionMs, DurationMs = value.DurationMs,
+            PlayAppliedSeq = value.PlayAppliedSeq, SeekAppliedSeq = value.SeekAppliedSeq,
+            VolumeAppliedSeq = value.VolumeAppliedSeq, RateAppliedSeq = value.RateAppliedSeq,
+            ActiveVideoRepresentation = -1,
+        };
     }
 
     /// <summary>Blittable mirror of the native <c>FgPlayReadyOpenDesc</c> (all pointer fields are hand-marshaled to
@@ -551,10 +679,17 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
         [LibraryImport(NativeLibraryName, StringMarshalling = StringMarshalling.Utf16)]
         internal static partial int FgPlayReadyRunEx(string baseDir, ref FgOpenDescNative desc, IntPtr licenseCallback, IntPtr licenseCtx);
         [LibraryImport(NativeLibraryName)] internal static partial int FgPlayReadyGetSnapshot(out NativeSnapshot value);
+        [LibraryImport(NativeLibraryName)] internal static partial int FgPlayReadyGetSnapshotV2(ref NativeSnapshotV2 value, uint size);
+        [LibraryImport(NativeLibraryName)] internal static partial void FgPlayReadyResetAdaptive();
+        [LibraryImport(NativeLibraryName, StringMarshalling = StringMarshalling.Utf16)]
+        internal static partial ulong FgPlayReadySelectVideoRepresentation(int index, string initUrl,
+            string segmentBaseUrl, string segmentPrefix, string segmentSuffix);
         [LibraryImport(NativeLibraryName)] internal static partial ulong FgPlayReadyPlay();
         [LibraryImport(NativeLibraryName)] internal static partial ulong FgPlayReadyPause();
         [LibraryImport(NativeLibraryName)] internal static partial void FgPlayReadyStop();
-        [LibraryImport(NativeLibraryName)] internal static partial ulong FgPlayReadySeek(long positionMs);
+        // mode: 0 = exact (decode to the requested PTS), 1 = approximate (nearest keyframe). See NativeSeekExact.
+        // The single-argument FgPlayReadySeek export is retained natively and forwards with mode 0; we always pass a mode.
+        [LibraryImport(NativeLibraryName)] internal static partial ulong FgPlayReadySeekEx(long positionMs, int mode);
         [LibraryImport(NativeLibraryName)] internal static partial ulong FgPlayReadySetVolume(double volume);
         [LibraryImport(NativeLibraryName)] internal static partial ulong FgPlayReadySetRate(double rate);
     }

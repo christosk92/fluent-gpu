@@ -103,6 +103,25 @@ public interface IDetachedVideoWindow
     /// rect, physical px). Debounced by the host — one call per gesture, not one per pixel — so an owner can persist
     /// geometry directly from it.</summary>
     Action<FluentGpu.Foundation.RectF>? BoundsChanged { get; set; }
+
+    /// <summary>Borderless-fullscreen THIS window, on the monitor it is currently sitting on.
+    /// <para>That last clause is the whole reason this member exists rather than the owner reusing
+    /// <c>InputHooks.WindowSetFullscreen</c>. A detached video window is routinely dragged onto a DIFFERENT display from
+    /// the app that opened it — that is most of the point of popping it out — and <c>WindowSetFullscreen</c> is bound to
+    /// the OWNER window, whose backend resolves the target monitor from the OWNER's HWND. Fullscreening through it would
+    /// therefore yank the picture back to the app's monitor, which reads as the video "jumping screens" on a keypress.
+    /// Routed here it lands on the child window's own HWND, so the existing
+    /// <c>MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)</c> in the backend picks the right display for free — no
+    /// monitor plumbing anywhere in the seam.</para>
+    /// <para>Fullscreen here is a MODE OF THIS WINDOW, orthogonal to whatever placement model the owner runs: the window
+    /// stays the same window, keeps its content mounted, and returns to its previous rect on <c>false</c>. Defaulted to a
+    /// no-op so headless and any backend without borderless fullscreen are unaffected.</para></summary>
+    void SetFullscreen(bool fullscreen) { }
+
+    /// <summary>Whether this window is presenting borderless-fullscreen right now — the read side of
+    /// <see cref="SetFullscreen"/>. False for a closed window and for any implementation that cannot do it (the default),
+    /// so a caller that asks never has to special-case "unsupported" separately from "not fullscreen".</summary>
+    bool IsFullscreen => false;
 }
 
 public sealed class InputHooks
@@ -160,6 +179,10 @@ public sealed class InputHooks
     /// poll reads it (WinUI IsToolTipInSafeZone's global pointer test) so the tooltip bubble itself stays
     /// hit-test-invisible — a real tooltip never intercepts pointer or wheel input.</summary>
     public Func<Point2?>? GetPointerPosition;
+
+    /// <summary>Temporarily override the window cursor for one owner. Passing null releases only that owner's override
+    /// and immediately restores the cursor resolved from the current hover chain.</summary>
+    public Action<object, CursorId?>? SetCursorOverride;
 
     /// <summary>The OverlayHost scrim's dismiss-and-reopen seam (host-wired to <c>InputDispatcher.RequestContextAt</c>):
     /// a right-click on the light-dismiss scrim closes the top overlay AND re-fires the context request at the same
@@ -315,6 +338,10 @@ public sealed class InputHooks
 
     private readonly List<(object Owner, Action Action)> _afterAnimations = new();
     private readonly List<(object Owner, Action<NodeHandle> Action)> _subtreeDeactivated = new();
+
+    /// <summary>True while a registered tree lifecycle needs frame ticks even when its compositor tracks are parked.
+    /// Overlay close finalization uses this as a bounded watchdog wake; ordinary active tracks already wake the host.</summary>
+    public Func<bool>? HasAfterAnimationWork;
 
     /// <summary>
     /// Host phase 7 hook: after <c>AnimEngine.Tick</c>, before record/present. Tree-level systems with retained

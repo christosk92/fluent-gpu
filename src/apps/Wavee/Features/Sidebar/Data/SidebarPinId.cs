@@ -66,6 +66,11 @@ public static class SidebarPinId
     [
         PlaylistPrefix, AlbumPrefix, ArtistPrefix, ShowPrefix, FolderPrefix,
         "prerelease:", "home-section:", "browse:", "disco:", "artist-concerts:",
+        // A page a playback MODULE describes (`module:wavee:module:<id>:<b64(entityId)>`). Durable in exactly the way
+        // this list requires: the id is the module's own stable entity id, not a session handle, so a pinned YouTube
+        // channel or radio station still opens the same page tomorrow. The pin wears the route's fallback title and
+        // image like any other entity route.
+        "module:",
     ];
 
     /// <summary>Real pages that are never pins. The first three are tooling/editor surfaces (a pinned "Settings" row is

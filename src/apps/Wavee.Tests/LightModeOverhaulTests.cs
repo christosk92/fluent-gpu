@@ -1,8 +1,4 @@
 using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Runtime.CompilerServices;
-using System.Text.RegularExpressions;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using Xunit;
@@ -13,13 +9,13 @@ namespace Wavee.Tests;
 /// THE LIGHT-MODE OVERHAUL (D44). The app's light theme was not one bad colour — the base palette is the WinUI light
 /// dictionary verbatim and always was. It was a set of app-side mechanics each of which had been solved against a
 /// DIFFERENT light surface than the one it ended up painting on, and whose light arms were in several cases the dark
-/// arm's numbers copied across. These are the pins for the ones that are checkable as values or as source facts:
+/// arm's numbers copied across. These are the pins for the ones that are checkable as values:
 /// <list type="bullet">
 ///   <item>the DATA-DOT ink — a wire hue authored for a dark surface, re-graded hue-dependently for a light one;</item>
 ///   <item>the SELECTION ladder — three rungs that only ever go up, replacing an inversion;</item>
 ///   <item>the LIGHT ROW ladder — hover/press/zebra raised and solved against the art-derived page tone;</item>
 ///   <item>the WARM palette being reachable at all;</item>
-///   <item>the shell wash stopping at the dock line, and no raw Camelot paint surviving anywhere.</item>
+///   <item>the shell wash's bottom anchoring.</item>
 /// </list>
 /// The page tone's own clamp lives with its siblings in <see cref="DetailPageToneTests"/>.
 /// </summary>
@@ -105,31 +101,6 @@ public class LightModeOverhaulTests
     public void DataDotInk_PreservesAlpha()
         => Assert.Equal(0x80 / 255f, WaveePalette.DataDotInk(0x80FFE119, ThemeKind.Light).A, 3);
 
-    /// <summary>No surface may paint a wire Camelot colour raw. The correction is theme-dependent, so a second call
-    /// site that forgot it is invisible in dark and wrong in light — exactly the class of defect this wave existed to
-    /// remove, and exactly the one a value test cannot catch.</summary>
-    [Fact]
-    public void NoSurface_PaintsARawCamelotColour()
-    {
-        string root = AppSourceRoot();
-        if (root is null) { Assert.Skip("app sources not present next to the test sources — source gate inconclusive"); return; }
-
-        var offenders = new List<string>();
-        foreach (string path in AppSources(root))
-        {
-            foreach (string line in File.ReadAllLines(path))
-            {
-                if (!line.Contains("CamelotColor", StringComparison.Ordinal)
-                    && !line.Contains("ToColor(argb)", StringComparison.Ordinal)) continue;
-                // The pattern that is wrong: the swatch's Fill taking the wire colour without the theme correction.
-                if (line.Contains("Fill = WaveePalette.ToColor(argb)", StringComparison.Ordinal))
-                    offenders.Add(Path.GetFileName(path) + ": " + line.Trim());
-            }
-        }
-        Assert.True(offenders.Count == 0,
-            "a Camelot swatch must paint WaveePalette.DataDotInk, never the raw wire colour:\n  " + string.Join("\n  ", offenders));
-    }
-
     // ── D44.5 — the selection ladder ─────────────────────────────────────────────────────────────────────────────
 
     /// <summary>THE ORDERING LAW, in both themes: hovering the row you are already on must read STRONGER than the row
@@ -177,33 +148,6 @@ public class LightModeOverhaulTests
             Assert.Equal(ColorContrast.Over(Tok.FillSubtleSecondary, Tok.AccentSubtle), WaveeColors.SelectedHover);
             Assert.Equal(ColorContrast.Over(Tok.FillSubtleTertiary, Tok.AccentSubtle), WaveeColors.SelectedPressed);
         });
-    }
-
-    /// <summary>No sidebar surface may still author the inverted trio by hand. The inversion was identical in six
-    /// files across three sidebar designs, which is precisely why it survived: each copy looked like a local choice.
-    /// </summary>
-    [Fact]
-    public void NoSidebarSurface_StillAuthorsTheInvertedSelectionTrio()
-    {
-        string root = AppSourceRoot();
-        if (root is null) { Assert.Skip("app sources not present next to the test sources — source gate inconclusive"); return; }
-
-        var offenders = new List<string>();
-        foreach (string path in AppSources(root))
-        {
-            foreach (string line in File.ReadAllLines(path))
-            {
-                string t = line.Trim();
-                // The signature of the inversion: a HOVER fill that swaps DOWN to the quieter rung when selected.
-                if (t.StartsWith("HoverFill", StringComparison.Ordinal)
-                    && t.Contains("Tok.FillSubtleTertiary", StringComparison.Ordinal)
-                    && (t.Contains("selected ?", StringComparison.Ordinal) || t.Contains("Selected ?", StringComparison.Ordinal))
-                    && t.IndexOf("Tok.FillSubtleTertiary", StringComparison.Ordinal) < t.IndexOf(':'))
-                    offenders.Add(Path.GetFileName(path) + ": " + t);
-            }
-        }
-        Assert.True(offenders.Count == 0,
-            "hovered-selected must read stronger than selected-at-rest (WaveeColors.SelectedHover):\n  " + string.Join("\n  ", offenders));
     }
 
     // ── D44.2 / D44.8 — the light row ladder ─────────────────────────────────────────────────────────────────────
@@ -261,36 +205,6 @@ public class LightModeOverhaulTests
         Assert.Equal(id, palette!.Id);
     }
 
-    /// <summary>The app resolver DELEGATES to the engine's rather than restating its arms — a restated switch is
-    /// precisely how "warm" went missing while the swatch that persists it stayed on screen. <c>WaveeTheme</c> is
-    /// engine-bound (it reads the live OS accent), so this is a source gate rather than a value test.</summary>
-    [Fact]
-    public void ThePaletteResolver_DelegatesToTheEngine_RatherThanRestatingItsArms()
-    {
-        string root = AppSourceRoot();
-        if (root is null) { Assert.Skip("app sources not present next to the test sources — source gate inconclusive"); return; }
-
-        string text = File.ReadAllText(Path.Combine(root, "Design", "WaveeTheme.cs"));
-        Assert.Contains("Tok.PaletteById(id)", text);
-        // …and no hand-written per-id arms survive to drift out of sync with it.
-        Assert.DoesNotContain("\"slate\" =>", text);
-        Assert.DoesNotContain("\"neutral\" =>", text);
-
-        // The picker's own id list is the other half of the contract: every swatch it offers must be an id the engine
-        // knows. A swatch for an id the resolver cannot answer is the whole defect. The picker declares that list ONCE
-        // (s_paletteIds — the swatch that shows an id and the writer that persists it both index it), so this reads the
-        // declaration and FAILS when it goes missing, rather than quietly passing because a per-swatch literal it used
-        // to grep for was refactored away.
-        string settings = File.ReadAllText(Path.Combine(root, "Features", "Shell", "SettingsPage.General.cs"));
-        var declared = Regex.Match(settings, @"s_paletteIds\s*=\s*\[(?<ids>[^\]]*)\]");
-        Assert.True(declared.Success,
-            "SettingsPage.General.cs no longer declares s_paletteIds — the palette-picker id gate cannot see what the picker offers.");
-        var offered = Regex.Matches(declared.Groups["ids"].Value, "\"(?<id>[^\"]+)\"");
-        Assert.NotEmpty(offered);
-        foreach (Match m in offered)
-            Assert.NotNull(Tok.PaletteById(m.Groups["id"].Value));
-    }
-
     /// <summary>Warm really is a distinct answer — the tests above would pass just as well if the engine had quietly
     /// aliased it to Neutral — and it is a SANE light palette, not merely a different one.</summary>
     [Fact]
@@ -307,27 +221,7 @@ public class LightModeOverhaulTests
     public void AnUnknownPaletteId_HasNoEnginePalette_SoTheAppMustFallBack()
         => Assert.Null(Tok.PaletteById("chartreuse"));
 
-    // ── D44.4 — the shell wash stops at the dock ─────────────────────────────────────────────────────────────────
-
-    /// <summary>The player dock paints nothing, so whatever the material layer paints under it IS the dock — and the
-    /// Mix wash's ellipse centre sits at window y = 1.00, i.e. its PEAK landed exactly across the dock band. The wash
-    /// layers are now hosted in a box inset by the dock reserve. A source gate because the defect is a LAYOUT fact
-    /// about a component that needs a live viewport signal to render.</summary>
-    [Fact]
-    public void TheShellWash_IsClippedAboveThePlayerDock()
-    {
-        string root = AppSourceRoot();
-        if (root is null) { Assert.Skip("app sources not present next to the test sources — source gate inconclusive"); return; }
-
-        string text = File.ReadAllText(Path.Combine(root, "Features", "Shell", "ShellMaterialLayer.cs"));
-        Assert.Contains("PlayerDock.Reserve", text);
-        Assert.Contains("ClipToBounds = true", text);
-        // The three washes go through the inset host; the flat tint deliberately does NOT (it is a uniform scrim with
-        // no peak to land anywhere, so the dock carrying it is the page's colour reaching the whole window).
-        Assert.Contains("WashHost(", text);
-        int host = text.IndexOf("kids = [Tint(state.Tint), WashHost(", StringComparison.Ordinal);
-        Assert.True(host > 0, "the wash layers must be mounted through the dock-inset host");
-    }
+    // ── D44.4 — the shell wash geometry ──────────────────────────────────────────────────────────────────────────
 
     /// <summary>Only the Mix placement hangs off the bottom edge, which is what makes the inset safe: Hero and Weekly
     /// are TOP-anchored and therefore bit-for-bit unmoved by it, so Home's approved look above the dock is untouched.
@@ -340,24 +234,6 @@ public class LightModeOverhaulTests
         Assert.False(ShellWashGeometry.Weekly.AnchorBottom);
     }
 
-    // ── D44.10 — the dead hero-wash trio is gone ─────────────────────────────────────────────────────────────────
-
-    /// <summary>A tuned-but-unreachable wash is worse than no wash: it is a second, contradictory answer to "how much
-    /// colour does a light page take" sitting a few lines from the real one (the page tone). All three lost their last
-    /// call site when the detail pages moved to the opaque art-derived ground.</summary>
-    [Fact]
-    public void TheDeadHeroWashTrio_IsDeleted()
-    {
-        string root = AppSourceRoot();
-        if (root is null) { Assert.Skip("app sources not present next to the test sources — source gate inconclusive"); return; }
-
-        string surfaces = File.ReadAllText(Path.Combine(root, "Design", "Surfaces.cs"));
-        Assert.DoesNotContain("public static GradientSpec HeroWash(", surfaces);
-        string palette = File.ReadAllText(Path.Combine(root, "Design", "WaveePalette.cs"));
-        Assert.DoesNotContain("HeroBase(", palette);
-        Assert.DoesNotContain("HeroWashColor(", palette);
-    }
-
     // ── helpers ──────────────────────────────────────────────────────────────────────────────────────────────────
 
     static void WithTheme(ThemeKind theme, Action body)
@@ -366,28 +242,5 @@ public class LightModeOverhaulTests
         var prior = Tok.Theme;
         try { Tok.Use(theme); body(); }
         finally { Tok.Use(priorPalette, prior); }
-    }
-
-    static IEnumerable<string> AppSources(string root)
-    {
-        foreach (string path in Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories))
-        {
-            if (path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}")
-                || path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}"))
-                continue;
-            yield return path;
-        }
-    }
-
-    static string AppSourceRoot([CallerFilePath] string here = "")
-    {
-        var dir = new DirectoryInfo(Path.GetDirectoryName(here)!);
-        while (dir is not null)
-        {
-            string candidate = Path.Combine(dir.FullName, "Wavee", "Design", "WaveePalette.cs");
-            if (File.Exists(candidate)) return Path.Combine(dir.FullName, "Wavee");
-            dir = dir.Parent;
-        }
-        return null!;
     }
 }

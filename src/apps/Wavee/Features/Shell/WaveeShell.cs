@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using FluentGpu;
@@ -689,7 +689,15 @@ sealed class WaveeShell : Component
             {
                 bool detached = _inputHooks?.CanOpenDetachedWindow?.Invoke() ?? true;
                 bool fullscreen = _inputHooks?.WindowSetFullscreen is not null;
-                var cap = (fits ? PlacementSet.Docked : PlacementSet.None) | PlacementSet.Floating
+                // DOCKED has TWO independent suppliers, OR-ed (DockedVideoHosting.DockedHostAvailable): the RAIL can
+                // host a docked card when the rail fits — the `fits` test just above, unchanged — and a module WATCH
+                // PAGE can always host one, because its stage is full-width page content that needs no rail at all.
+                // Before the OR, narrowing the window demoted a watch page's in-page video to the floating mini
+                // player: an overlay to dismiss, over the very page whose purpose was to show that video.
+                bool pageStage = DockedVideoHosting.PageStageHosts(
+                    _shellUi.ActiveStagePlayable.Value, capBridge.CurrentTrack.Value?.Uri);   // subscribe → nav + track
+                var cap = (DockedVideoHosting.DockedHostAvailable(fits, pageStage) ? PlacementSet.Docked : PlacementSet.None)
+                        | PlacementSet.Floating
                         | (detached ? PlacementSet.Detached : PlacementSet.None)
                         | (fullscreen ? PlacementSet.Fullscreen : PlacementSet.None);
                 capBridge.HostPlacementCapability.SetIfChanged(cap);
@@ -703,6 +711,11 @@ sealed class WaveeShell : Component
         // this rule exists.
         var railOpenWas = UseRef(_shellUi.RailOpen.Peek());
         var videoStateWas = UseRef(_actions.Playback?.VideoSurface.Peek() ?? PlacementState.Initial(PlacementPolicy.Video));
+        // WHICH docked host owned the surface on the previous run. Kept as an edge like the two above rather than
+        // re-derived, because the rules that need it fire AFTER the video has already left the dock — at which point
+        // the derivation unconditionally reads Rail (nothing is docked, so the rail is the resting owner) and would
+        // answer a question about a body that was never on screen.
+        var hostWasRef = UseRef(DockedVideoHost.Rail);
         UseSignalEffect(() =>
         {
             if (_actions.Playback is not { } pb) return;
@@ -714,11 +727,20 @@ sealed class WaveeShell : Component
             railOpenWas.Value = railOpen;
             videoStateWas.Value = state;
 
+            // The ONE derived host (DockedVideoHosting.HostFor): the rail's card, or a module watch page's in-page
+            // stage. Never claimed and never stored — a page that is navigating away is exit-frozen in the same
+            // reconcile pass as the route change, and a parked keep-alive page is skipped outright, so neither can
+            // re-render to hand a claim back. Every rule below that used to assume "docked ⇒ the rail" now takes it.
+            var host = DockedVideoHosting.HostFor(
+                PlacementCore.Resolve(state), _shellUi.ActiveStagePlayable.Value, pb.CurrentTrack.Value?.Uri);
+            var hostBefore = hostWasRef.Value;
+            hostWasRef.Value = host;
+
             // B1 — docking was just requested (Requested transitioned INTO Docked, an explicit ShowVideoAt): open the
             // rail into Video mode, but only when it was closed — ModeOnDock's own null leaves an already-open rail
             // showing whatever it was showing.
             if (state.Requested == SurfacePlacement.Docked && prev.Requested != SurfacePlacement.Docked
-                && RailVideoCoupling.ModeOnDock(railOpen, _shellUi.Mode.Peek()) is { } dockMode)
+                && RailVideoCoupling.ModeOnDock(railOpen, _shellUi.Mode.Peek(), host) is { } dockMode)
             {
                 _shellUi.Mode.Value = dockMode;
                 _shellUi.RailOpen.Value = true;
@@ -728,7 +750,7 @@ sealed class WaveeShell : Component
             // Preferred stays untouched (Demote's whole point), so re-opening the rail re-docks (B7).
             if (!railOpen && wasOpen)
             {
-                var demoteTo = RailVideoCoupling.OnRailClosed(state);
+                var demoteTo = RailVideoCoupling.OnRailClosed(state, host);
                 if (demoteTo != SurfacePlacement.None) pb.DemoteVideoTo(demoteTo);
             }
 
@@ -742,7 +764,7 @@ sealed class WaveeShell : Component
             // Requested (not Resolve), so an AVAILABILITY-only drop — B10, this track simply has no video — leaves
             // the rail open per the empty-state precedent instead of thrashing it closed every track boundary.
             bool videoLeftDock = prev.Requested == SurfacePlacement.Docked && state.Requested != SurfacePlacement.Docked;
-            if (RailVideoCoupling.CloseRailOnVideoLeft(_shellUi.Mode.Peek(), videoLeftDock))
+            if (RailVideoCoupling.CloseRailOnVideoLeft(_shellUi.Mode.Peek(), videoLeftDock, hostBefore))
                 _shellUi.RailOpen.Value = false;
 
             // ── §5.4 — user-initiated vs automatic fullscreen entry (the focus-steal guard) ──────────────────────────
@@ -793,6 +815,16 @@ sealed class WaveeShell : Component
         chrome.Ui = _shellUi;
         chrome.Acts = _actions;
 
+        // FULLSCREEN VIDEO unmounts the shell's chrome. Not opacity-0, not off-screen: every layer left above a
+        // full-screen video costs GPU (it defeats the composition fast path the video hole relies on), and the docked
+        // player bar specifically is what STACKED a second transport under the video's own. Read as a Func (a
+        // Flow.Show predicate) rather than in this render body, so the enter/exit edge mounts and unmounts the two
+        // chrome bands WITHOUT re-rendering the whole shell — the same discipline the immersive-lyrics layer uses.
+        // The predicate reads PlaybackBridge.VideoFullscreenActive, the ONE derived value (resolved placement ==
+        // Fullscreen); there is deliberately no second "is fullscreen" flag anywhere in the shell.
+        var pbChrome = _actions.Playback;
+        bool ShellChromeMounted() => pbChrome is null || !pbChrome.VideoFullscreenActive.Value;
+
         var column = new BoxEl
         {
             Direction = 1, Grow = 1f, Height = Prop.Of(() => vpSig.Value.Height),   // window-tall → content yields, never overflows the player bar
@@ -842,7 +874,9 @@ sealed class WaveeShell : Component
                 // THE chrome row. One 48-DIP TitleBar in merged mode: the tabs island carries Wavee's nav cluster and
                 // the text-first strip, the flexible centre column carries the window-centred omnibar, and the trailing
                 // island carries identity. ContentVersion is mandatory here — see MergedChromeRow.ContentVersion.
-                Embed.Comp(() =>
+                // UNMOUNTED under fullscreen video (ShellChromeMounted): the OS window is borderless on its monitor,
+                // so a custom caption strip over the video would be chrome for a frame that no longer exists.
+                Flow.Show(ShellChromeMounted, Embed.Comp(() =>
                 {
                     var bar = new TitleBar
                     {
@@ -866,7 +900,7 @@ sealed class WaveeShell : Component
                     // so an expanding field can clamp itself without the bar re-rendering.
                     bar.CenterContent = _ => chrome.Center(bar.CenterAvail);
                     return bar;
-                }),
+                })),
                 // NO chrome↔content seam hairline here. Stock Win11 (WinUI NavigationView + the WinUI-Gallery shell) draws
                 // no bar-wide divider under the title bar: the separation IS the content region's own left+top stroke
                 // (see ContentRegionStroke below), which starts exactly where the page starts. A full-width hairline
@@ -1225,7 +1259,10 @@ sealed class WaveeShell : Component
                     OnRealized = h => { _contentRegionNode = h; PublishScrimClip(); },
                     OnBoundsChanged = _ => PublishScrimClip(),
                 },
-                Embed.Comp(() => new PlayerBar()),
+                // UNMOUNTED under fullscreen video (ShellChromeMounted) — the video surface's own auto-hiding transport
+                // is the ONLY transport for the duration. This is the double-bar fix's shell half: the surface stopped
+                // reserving a WaveeSize.PlayerBarH pass-through band, and the bar itself leaves the tree.
+                Flow.Show(ShellChromeMounted, Embed.Comp(() => new PlayerBar())),
             ],
         };
 
@@ -1338,7 +1375,9 @@ sealed class WaveeShell : Component
         // already sit, below. Enter/Exit terminals come from the surface itself; UNLIKE the lyrics stage's, they carry
         // NO opacity component — a cross-fade would wash the video hole out (see that surface's own remarks).
         var videoFullscreenLayer = Flow.Show(
-            () => _actions.Playback?.VideoPlacementNow() == SurfacePlacement.Fullscreen,
+            // The SAME derived value the chrome unmount reads (ShellChromeMounted) — one signal, so the surface
+            // mounting and the chrome leaving are the same edge and cannot disagree by a frame.
+            () => _actions.Playback?.VideoFullscreenActive.Value == true,
             new BoxEl
             {
                 // Same load-bearing Direction = 1 as the lyrics stage above — see its comment for why a row would let
@@ -1658,7 +1697,7 @@ sealed class WaveeShell : Component
         string key = route;
         string? a = arg.Length == 0 ? null : arg;
         if (a is not null && route.IndexOf(':') < 0
-            && (route is "album" or "pl" or "artist" or "show" or "prerelease"))
+            && (route is "album" or "pl" or "artist" or "show" or "prerelease" or "module"))
         {
             key = route + ":" + a;
             a = null;   // URI lives in the key; Arg is the display name, which a deep link does not carry
@@ -1674,7 +1713,8 @@ sealed class WaveeShell : Component
         switch (verb.Kind)
         {
             case DeepLinkKind.Play:
-                _ = playback.Player.PlayAsync(verb.Context);
+                if (verb.Link.Length > 0) PlayLink.PlayDirect(_actions, verb.Link);   // the module path, same as Play ▸ Link…
+                else _ = playback.Player.PlayAsync(verb.Context);
                 break;
             case DeepLinkKind.Resume:
                 _ = playback.Player.ResumeAsync();
@@ -1929,6 +1969,13 @@ sealed class WaveeShell : Component
 
     // F11 toggles video fullscreen ONLY while a video is active (docked-video plan §5.4/B16-B18) — with no video
     // playing there is nothing to fill the screen with, so the chord is a no-op rather than opening an empty stage.
+    //
+    // NO DOUBLE-FIRE with MediaPlayerElement's own F11. The dispatcher runs FOCUSED routing first and only reaches
+    // FindAccelerator when nothing set Handled (InputDispatcher.OnKey — the WinUI ProcessKeyboardAccelerators order).
+    // With focus inside the player, the element consumes F11 and routes it to its FullscreenRequested delegate, which
+    // every Wavee surface wires to this same placement model; with focus anywhere else, this accelerator runs. Exactly
+    // one of the two fires, always — and both end at ShowVideoAt(Fullscreen)/ExitVideoFullscreen. The same holds for
+    // `F` and a double-click on the video, which the element handles and delegates identically.
     void ToggleVideoFullscreen()
     {
         if (_actions.Playback is not { } pb) return;

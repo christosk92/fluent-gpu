@@ -30,7 +30,15 @@ public sealed class SpotifyMediaProvider : IPlayableMediaProvider
     public MediaProviderCaps Caps =>
         MediaProviderCaps.PreparedNext | MediaProviderCaps.ConnectPublish | MediaProviderCaps.WireMeta;
 
-    public bool Owns(string playableUri) => EntityUri.Parse(playableUri).Provider == EntityProviders.Spotify;
+    /// <summary>The whole <c>spotify:</c> namespace EXCEPT <c>spotify:local:*</c>. That namespace parses as Spotify (it
+    /// is Spotify's own self-describing local-file shape) but there is nothing behind it on the server: no track id, no
+    /// TRACK_V4 extension, no audio file — a file on somebody's disk. It is also what <c>ConnectUriMask</c> publishes
+    /// every non-publishable row as, so a cluster echo of OUR OWN masked state hands one straight back. Owning it made
+    /// that echo resolve as a Spotify track and fail with "Restricted: no TRACK_V4 extension" — a user-visible error for
+    /// a uri we minted ourselves. Unowned is the honest answer: no local provider can play a stranger's file.</summary>
+    public bool Owns(string playableUri) =>
+        EntityUri.Parse(playableUri).Provider == EntityProviders.Spotify
+        && !playableUri.StartsWith(ConnectUriMask.Prefix, StringComparison.Ordinal);
 
     public Task<FastStartPlan> ResolveFastAsync(Track track, CancellationToken ct = default)
         => _fast.ResolveFastAsync(track, ct);

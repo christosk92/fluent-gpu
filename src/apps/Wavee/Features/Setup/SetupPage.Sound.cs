@@ -8,6 +8,7 @@ using FluentGpu.Localization;
 using FluentGpu.Signals;
 using Wavee.Backend.Audio;
 using static FluentGpu.Dsl.Ui;
+using Wavee.Sdk.Streams;
 
 namespace Wavee;
 

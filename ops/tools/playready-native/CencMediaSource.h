@@ -728,13 +728,91 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
         m_queue->QueueEventParamVar(MEStreamStopped, GUID_NULL, S_OK, nullptr);
     }
 
+    /// How much already-delivered history stays resident behind the playhead. Without a bound the vector grows for the
+    /// whole track AND for every seek (the memory half of the feeder wedge). What is retained is also exactly what a
+    /// short backward scrub can be served from without a refetch.
+    static constexpr size_t kRetainBehind = 300;
+
+    /// Insert a freshly demuxed run so the buffer stays MONOTONIC in presentation time.
+    ///
+    /// The feeder rewinds its cursor on a seek and on a representation switch, so an incoming run can overlap what is
+    /// already buffered. Appending it at the tail (what this used to do) left the vector non-monotonic and duplicated:
+    /// Ahead()/AheadDurationMs() then over-reported and the feeder parked in its backpressure sleep. Instead, drop
+    /// everything at or after the incoming start time first — but NEVER anything already handed to Media Foundation,
+    /// which owns those samples. Returns the index the run landed at.
+    size_t SpliceLocked(std::vector<cenc::Sample>&& incoming)
+    {
+        const uint64_t startTicks = incoming.front().timeTicks;
+        size_t cut = m_samples.size();
+        for (size_t i = m_next; i < m_samples.size(); i++)
+            if (m_samples[i].timeTicks >= startTicks) { cut = i; break; }
+        if (cut < m_samples.size())
+            m_samples.erase(m_samples.begin() + (ptrdiff_t)cut, m_samples.end());
+        m_samples.insert(m_samples.end(), std::make_move_iterator(incoming.begin()),
+                         std::make_move_iterator(incoming.end()));
+        return cut;
+    }
+
+    /// Drop history beyond the retention window, keeping m_next pointing at the same sample.
+    void TrimBehindLocked()
+    {
+        if (m_next <= kRetainBehind) return;
+        const size_t drop = m_next - kRetainBehind;
+        m_samples.erase(m_samples.begin(), m_samples.begin() + (ptrdiff_t)drop);
+        m_next -= drop;
+    }
+
     /// Append freshly demuxed samples (the background fetcher) and release any request that was parked on starvation.
     /// Called from the fetch thread; the stream lock serialises it against RequestSample.
     void AppendSamples(std::vector<cenc::Sample>&& more)
     {
         std::lock_guard<std::mutex> g(m_mx);
         if (m_shutdown || more.empty()) return;
-        m_samples.insert(m_samples.end(), std::make_move_iterator(more.begin()), std::make_move_iterator(more.end()));
+        SpliceLocked(std::move(more));
+        TrimBehindLocked();
+        ReleaseStarvedLocked();
+    }
+
+    /// Splice the target representation's segment into the timeline at ITS OWN presentation time, then announce the new
+    /// H.264 geometry. The feeder calls this at a segment boundary at-or-after the playhead, so everything between the
+    /// playhead and the splice point stays in the OLD representation and the timeline remains contiguous. (Erasing from
+    /// m_next unconditionally — what this used to do — deleted every buffered sample under the playhead and refilled
+    /// from the feeder's stale cursor, which is what punched a multi-second hole in the video while audio kept running:
+    /// the frozen frame.) Already delivered samples remain owned by Media Foundation.
+    void SwitchVideoRepresentation(const cenc::InitInfo& nextInfo, std::vector<cenc::Sample>&& replacement)
+    {
+        std::lock_guard<std::mutex> g(m_mx);
+        if (m_shutdown || nextInfo.kind != cenc::TrackKind::Video || replacement.empty()) return;
+        const uint64_t spliceTicks = replacement.front().timeTicks;
+        const size_t at = SpliceLocked(std::move(replacement));
+        m_info = nextInfo;
+        // Only the sample delivered NEXT may be flagged discontinuous. When the splice lands ahead of the playhead the
+        // next sample is still old-representation continuous video; flagging it would make the decoder drop frames all
+        // the way to the new keyframe.
+        if (at <= m_next) m_discontinuity = true;
+        m_complete = false;
+
+        // The protected wrapper remains the same stream type; update its display/config attributes and publish the
+        // standard format-change event. The first replacement access unit also carries the new SPS/PPS, which is the
+        // decoder-authoritative configuration for H.264 dynamic resolution changes.
+        winrt::com_ptr<IMFMediaTypeHandler> handler;
+        winrt::com_ptr<IMFMediaType> current;
+        if (m_sd && SUCCEEDED(m_sd->GetMediaTypeHandler(handler.put())) && handler &&
+            SUCCEEDED(handler->GetCurrentMediaType(current.put())) && current)
+        {
+            MFSetAttributeSize(current.get(), MF_MT_FRAME_SIZE, nextInfo.width, nextInfo.height);
+            if (!nextInfo.spspps.empty())
+                current->SetBlob(MF_MT_MPEG_SEQUENCE_HEADER, nextInfo.spspps.data(), (UINT32)nextInfo.spspps.size());
+            m_queue->QueueEventParamUnk(MEStreamFormatChanged, GUID_NULL, S_OK, current.get());
+        }
+        const int64_t spliceMs = m_info.timescale ? (int64_t)((spliceTicks * 1000ULL) / m_info.timescale) : 0;
+        const int64_t playheadMs = (m_info.timescale && m_next < m_samples.size())
+            ? (int64_t)((m_samples[m_next].timeTicks * 1000ULL) / m_info.timescale) : 0;
+        LogLine("[cenc-src] video switched to " + std::to_string(nextInfo.width) + "x" +
+                std::to_string(nextInfo.height) + " spliced at sample " + std::to_string(at) +
+                " (t=" + std::to_string((long long)spliceMs) + "ms) with the playhead at sample " +
+                std::to_string(m_next) + " (t=" + std::to_string((long long)playheadMs) + "ms), buffer=" +
+                std::to_string(m_samples.size()) + " sample(s)");
         ReleaseStarvedLocked();
     }
 
@@ -756,6 +834,61 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
         std::lock_guard<std::mutex> g(m_mx);
         return m_samples.size() > m_next ? m_samples.size() - m_next : 0;
     }
+    int64_t AheadDurationMs()
+    {
+        std::lock_guard<std::mutex> g(m_mx);
+        if (m_info.timescale == 0 || m_next >= m_samples.size()) return 0;
+        uint64_t start = m_samples[m_next].timeTicks;
+        auto const& last = m_samples.back();
+        uint64_t end = last.timeTicks + last.durTicks;
+        return end > start ? (int64_t)(((end - start) * 1000ULL) / m_info.timescale) : 0;
+    }
+    int64_t NextSampleTimeMs()
+    {
+        std::lock_guard<std::mutex> g(m_mx);
+        return m_info.timescale > 0 && m_next < m_samples.size()
+            ? (int64_t)((m_samples[m_next].timeTicks * 1000ULL) / m_info.timescale)
+            : 0;
+    }
+
+    /// Can a seek to `targetMs` be served from what is ALREADY buffered? This is what turns a backward scrub into an
+    /// instant reposition instead of three serial TLS-handshaking GETs. Video needs a KEYFRAME at or before the target
+    /// (that is what Start() repositions to); audio only needs coverage. Both need CONTIGUOUS coverage past the target
+    /// — a buffer with a hole in it (left by an earlier forward seek) must not report the far side as seekable.
+    bool CanSeekTo(int64_t targetMs, bool requireKeyframe)
+    {
+        std::lock_guard<std::mutex> g(m_mx);
+        if (m_shutdown || m_info.timescale == 0 || m_samples.empty()) return false;
+        if (targetMs < 0) targetMs = 0;
+        const uint64_t target = ((uint64_t)targetMs * m_info.timescale) / 1000ULL;
+        size_t anchor = m_samples.size();
+        for (size_t i = 0; i < m_samples.size(); i++)
+        {
+            if (m_samples[i].timeTicks > target) break;
+            if (!requireKeyframe || m_samples[i].keyframe) anchor = i;
+        }
+        if (anchor == m_samples.size()) return false;
+        uint64_t reach = m_samples[anchor].timeTicks;
+        for (size_t i = anchor; i < m_samples.size(); i++)
+        {
+            if (m_samples[i].timeTicks > reach) break;   // gap in the buffer — coverage ends here
+            const uint64_t end = m_samples[i].timeTicks + m_samples[i].durTicks;
+            if (end > reach) reach = end;
+        }
+        return reach > target;
+    }
+
+    /// The buffered presentation range, for the always-on log.
+    void BufferedRangeMs(int64_t& startMs, int64_t& endMs)
+    {
+        std::lock_guard<std::mutex> g(m_mx);
+        startMs = endMs = 0;
+        if (m_info.timescale == 0 || m_samples.empty()) return;
+        startMs = (int64_t)((m_samples.front().timeTicks * 1000ULL) / m_info.timescale);
+        auto const& last = m_samples.back();
+        endMs = (int64_t)(((last.timeTicks + last.durTicks) * 1000ULL) / m_info.timescale);
+    }
+
     bool IsShutdown() { std::lock_guard<std::mutex> g(m_mx); return m_shutdown; }
 
     void ReleaseStarvedLocked()

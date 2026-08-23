@@ -74,13 +74,17 @@ public static class RichText
         };
     }
 
-    /// <summary>A Spotify uri → the app's route key (matches ContentHost): playlist → "pl:…", album → "album:…",
-    /// prerelease → "prerelease:…", artist → "artist:…", show → "show:…", saved-tracks → "liked". Null when it's not a
-    /// navigable uri.</summary>
+    /// <summary>An entity uri → the app's route key (matches ContentHost): playlist → "pl:…", album → "album:…",
+    /// prerelease → "prerelease:…", artist → "artist:…", show → "show:…", saved-tracks → "liked", and a playback
+    /// module's own entity → "module:wavee:module:…". Null when it's not a navigable uri.</summary>
     public static string? RouteForUri(string? uri)
     {
         if (string.IsNullOrEmpty(uri)) return null;
         if (uri == "spotify:collection:tracks") return "liked";
+        // A playback MODULE's own namespace. It is checked before the Spotify parser because it is a different scheme
+        // entirely (`wavee:module:<id>:<b64(entityId)>`) and because the route is the uri with the family prefix in
+        // front of it — the same `album:spotify:album:…` shape, so pins/tabs/history need no new identity rules.
+        if (Wavee.Sdk.ModuleUri.TryDecode(uri, out _, out _)) return Backend.Modules.ModulePages.RoutePrefix + uri;
         // The route TABLE is unchanged; only the discrimination moved to the ONE parser (hydration-facade-design.md §1.1).
         // A prerelease is its own kind, so "the more specific scheme wins" is structural rather than an ordering rule; the
         // prerelease route still resolves to the album's own DetailPage (kind 138, inside the load).

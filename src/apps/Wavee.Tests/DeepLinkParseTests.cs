@@ -50,4 +50,19 @@ public class DeepLinkParseTests
         Assert.Equal(DeepLinkKind.Play, verb.Kind);
         Assert.Equal("spotify:episode:e1", verb.Context);
     }
+
+    /// <summary>`play?link=` is the module intake (YouTube / Twitch / radio) — it never touches Context, and a bare
+    /// scheme or a non-url is refused like any other malformed verb.</summary>
+    [Fact]
+    public void PlayLink_IsTheModulePath()
+    {
+        Assert.True(DeepLink.TryParse("wavee://play?link=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3DtRsQsTMvPNg", out var verb));
+        Assert.Equal(DeepLinkKind.Play, verb.Kind);
+        Assert.Equal("https://www.youtube.com/watch?v=tRsQsTMvPNg", verb.Link);
+        Assert.Equal("", verb.Context);
+
+        Assert.False(DeepLink.TryParse("wavee://play?link=https%3A%2F%2F", out _));
+        Assert.False(DeepLink.TryParse("wavee://play?link=not%20a%20link", out _));
+        Assert.False(DeepLink.TryParse("wavee://play", out _));
+    }
 }

@@ -21,4 +21,7 @@ public readonly record struct CursorId(int Value)
     public static CursorId Cross => new(8);      // precision select (ColorPicker spectrum)
     public static CursorId No => new(9);         // drop-forbidden
     public static CursorId Wait => new(10);
+    /// <summary>No cursor. Media surfaces use this while playback chrome is idle; pointer activity restores the
+    /// resolved scene cursor immediately.</summary>
+    public static CursorId Hidden => new(11);
 }

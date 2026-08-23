@@ -285,6 +285,62 @@ public sealed class DrmTests
         await session.DisposeAsync().AsTask().WaitAsync(Bound);
     }
 
+    [Fact]
+    public async Task ProtectedSession_PublishesCatalog_AndForwardsStableQualityId()
+    {
+        var codec = new MediaContentType(Container.Mp4, CodecId.H264, CodecId.None);
+        ProtectedRepresentationDescriptor Rep(string id, int height) => new()
+        {
+            Id = id,
+            Quality = new QualityVariant(id, height * 2_000, new SizeI(height * 16 / 9, height), 30, codec),
+            InitUrl = "https://media/" + id + "/init.mp4",
+            SegmentBaseUrl = "https://media/" + id + "/",
+            SegmentPrefix = "seg-",
+            SegmentSuffix = ".m4s",
+            SegmentCount = 10,
+        };
+        var low = Rep("spotify-5", 180);
+        var high = Rep("spotify-0", 1080);
+        var descriptor = new DashSourceDescriptor
+        {
+            InitUrl = low.InitUrl,
+            SegmentBaseUrl = low.SegmentBaseUrl,
+            SegmentPrefix = low.SegmentPrefix,
+            SegmentSuffix = low.SegmentSuffix,
+            SegmentCount = 10,
+            Catalog = new ProtectedAdaptiveCatalog
+            {
+                Tracks = [new ProtectedTrackDescriptor
+                {
+                    Id = 1, Kind = FluentGpu.Media.TrackKind.Video, Label = "Video", IsDefault = true,
+                    Representations = [low, high],
+                }],
+            },
+        };
+        var native = new FakeProtectedVideoPlayer { SupportsAdaptiveSelection = true };
+        var backend = new ProtectedMediaBackend(() => native, descriptor: descriptor);
+        var source = MediaSource.FromUri("https://media/manifest").With(new DrmConfig(DrmSystem.PlayReady));
+        var session = await backend.OpenAsync(source, new MediaOpenOptions(), CancellationToken.None);
+        var core = new MediaPlayerCore();
+        session.ConnectSignals(new MediaSignalSink(core));
+        native.SetNaturalSize(320, 180);
+        native.HasSurface = true;
+        Assert.IsAssignableFrom<IVideoSurfaceSession>(session).PumpVideo(default, default, 1f);
+
+        Assert.Equal(2, core.Qualities.Variants.Count);
+        Assert.True(core.Commands.Can(MediaCommandFlags.SelectVideoQuality));
+        await session.SelectQualityAsync(QualitySelection.Pin("spotify-0"));
+        Assert.Equal("spotify-0", native.LastSelectedRepresentationId);
+        Assert.IsAssignableFrom<IVideoSurfaceSession>(session).PumpVideo(default, default, 1f);
+        Assert.Equal(new SizeI(1920, 1080), core.NaturalSize.Peek());
+        // The display metadata switches to 1080p, but the DComp swapchain was created at 320x180 and keeps that physical
+        // size. Lying to the presenter with 1920x1080 here scales the visual independently from the video hole.
+        var delivery = Assert.IsType<VideoDelivery.CompositedSurface>(session.Video);
+        Assert.Equal(new SizeI(320, 180), delivery.NaturalSize);
+
+        await session.DisposeAsync();
+    }
+
     // ── IPreparableBackend on the protected path ─────────────────────────────────────────────────────────────────────
 
     [Fact]

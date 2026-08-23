@@ -44,6 +44,10 @@
 #include <cmath>
 #include <cstdio>
 #include <atomic>
+#include <mutex>
+#include <new>        // placement-new for the never-destroyed session HttpClient
+#include <functional>   // the feeder's cancel predicate (a seek/shutdown must not wait out an in-flight segment GET)
+#include <algorithm>
 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -132,13 +136,50 @@ static std::atomic<int64_t>  g_desktopPositionMs{0}, g_desktopDurationMs{0};
 // slots (-1 = none) drained independently. This removes the need for the managed 60Hz Play re-assert entirely.
 static std::atomic<int>      g_desktopDesiredPlay{1};   // 1 = playing, 0 = paused (managed writes; loop reconciles)
 static std::atomic<int64_t>  g_desktopSeekMs{0};
+// 0 = exact (SetCurrentTime), 1 = approximate (SetCurrentTimeEx + MF_MEDIA_ENGINE_SEEK_MODE_APPROXIMATE). The UI asks
+// for approximate while the thumb is moving and exact on the commit; there is still ONE seek slot (latest-wins),
+// because MF queues seeks FIFO and the UI runs far ahead of the pipeline.
+static std::atomic<int32_t>  g_desktopSeekMode{0};
 static std::atomic<int64_t>  g_desktopVolMilli{1000000};
 static std::atomic<int64_t>  g_desktopRateMilli{1000000};
 static std::atomic<uint64_t> g_desktopPlayRequestSeq{0}, g_desktopPlayAppliedSeq{0};
 static std::atomic<uint64_t> g_desktopSeekRequestSeq{0}, g_desktopSeekAppliedSeq{0};
+// A streaming CENC seek may target a segment the bounded feeder has not downloaded yet. The media-engine thread must
+// not call SetCurrentTime until the feeder has appended the target video/audio segment, otherwise the source can only
+// choose the last buffered keyframe and playback spends tens of seconds catching up to the requested position.
+static std::atomic<uint64_t> g_desktopSeekBufferedSeq{0};
 static std::atomic<uint64_t> g_desktopVolumeRequestSeq{0}, g_desktopVolumeAppliedSeq{0};
 static std::atomic<uint64_t> g_desktopRateRequestSeq{0}, g_desktopRateAppliedSeq{0};
 static std::atomic<bool>     g_desktopRunning{false};
+static std::atomic<uint64_t> g_desktopBytesDownloaded{0};
+static std::atomic<uint64_t> g_desktopDownloadElapsedMs{0};
+static std::atomic<int64_t>  g_desktopForwardBufferedMs{0};
+static std::atomic<int32_t>  g_desktopActiveVideoRepresentation{-1};
+
+// V2 is a separate export: extending the original snapshot in place would make a new DLL overwrite an old managed
+// caller's smaller buffer. Every field is copied only when the caller-provided size contains it.
+struct FgPlayReadySnapshotV2
+{
+    uint32_t structSize;
+    FgPlayReadySnapshot legacy;
+    uint64_t bytesDownloaded;
+    int64_t forwardBufferedMs;
+    int32_t activeVideoRepresentation;
+    uint64_t representationAppliedSeq;
+    uint64_t downloadElapsedMs;
+};
+
+#define FG_SNAPSHOT_HAS(value, size, field) \
+    ((size) >= (uint32_t)(offsetof(FgPlayReadySnapshotV2, field) + sizeof((value)->field)))
+
+struct FgVideoSwitchRequest
+{
+    int32_t index = -1;
+    std::wstring initUrl, segmentBaseUrl, segmentPrefix, segmentSuffix;
+};
+static std::mutex            g_videoSwitchMx;
+static FgVideoSwitchRequest  g_videoSwitch;
+static std::atomic<uint64_t> g_videoSwitchRequestSeq{0}, g_videoSwitchAppliedSeq{0};
 
 // ── M5 generalized open ABI ─────────────────────────────────────────────────────────────────────────────────────────
 // The managed host hands native a SOURCE DESCRIPTOR (a DASH init+segment URI template and/or an explicit PSSH + HTTP
@@ -475,16 +516,37 @@ struct MediaEngineNotify : public IMFMediaEngineNotify
 // slot, so the old
 // single-command clobbering (a Play overwriting a Seek in the same 80ms window) is gone. Runs on the owning MTA loop
 // thread only. The custom CENC source implements the corresponding pause/resume/seek events in CencMediaSource.h.
-static void ReconcileTransport(IMFMediaEngine* engine)
+static void ReconcileTransport(IMFMediaEngine* engine, IMFMediaEngineEx* engineEx, bool waitForSeekBuffer = false)
 {
     auto hrText = [](HRESULT h) { std::stringstream ss; ss << "0x" << std::hex << (uint32_t)h; return ss.str(); };
     uint64_t seekSeq = g_desktopSeekRequestSeq.load(std::memory_order_acquire);
-    if (seekSeq != g_desktopSeekAppliedSeq.load(std::memory_order_acquire))
+    if (seekSeq != g_desktopSeekAppliedSeq.load(std::memory_order_acquire) &&
+        (!waitForSeekBuffer || g_desktopSeekBufferedSeq.load(std::memory_order_acquire) == seekSeq))
     {
         int64_t seekMs = g_desktopSeekMs.load(std::memory_order_acquire);
-        HRESULT hr = engine->SetCurrentTime((double)seekMs / 1000.0);
-        LogLine("[transport] SEEK ms=" + std::to_string((long long)seekMs) + " hr=" + hrText(hr));
-        if (SUCCEEDED(hr)) g_desktopSeekAppliedSeq.store(seekSeq, std::memory_order_release);
+        // Scrub/preview seeks ask for APPROXIMATE: the engine lands on the nearest keyframe instead of decoding a
+        // preroll to the exact frame, which is the difference between a scrub that tracks the thumb and one that
+        // lurches. The commit seek is exact. NOTE the surface is never blanked here — in windowless swapchain mode
+        // UpdateVideoStream(nullptr,nullptr,nullptr) on the keep-alive tick repaints the latest frame, so the old
+        // picture simply holds until the new one decodes.
+        const bool approximate = g_desktopSeekMode.load(std::memory_order_acquire) != 0;
+        HRESULT hr = (approximate && engineEx)
+            ? engineEx->SetCurrentTimeEx((double)seekMs / 1000.0, MF_MEDIA_ENGINE_SEEK_MODE_APPROXIMATE)
+            : engine->SetCurrentTime((double)seekMs / 1000.0);
+        LogLine("[transport] SEEK ms=" + std::to_string((long long)seekMs) +
+                (approximate ? " mode=approximate" : " mode=exact") + " hr=" + hrText(hr));
+        if (SUCCEEDED(hr))
+        {
+            g_desktopSeekAppliedSeq.store(seekSeq, std::memory_order_release);
+            // At rate 0 the MF video renderer does not pre-roll, so a seek issued while PAUSED decodes nothing and the
+            // surface keeps showing the pre-seek frame forever. One frame step forces the new frame out (Chromium's
+            // shipped workaround for the same renderer behaviour).
+            if (engineEx && engine->IsPaused())
+            {
+                HRESULT hrStep = engineEx->FrameStep(TRUE);
+                LogLine("[transport] paused seek -> FrameStep hr=" + hrText(hrStep));
+            }
+        }
     }
     uint64_t volumeSeq = g_desktopVolumeRequestSeq.load(std::memory_order_acquire);
     if (volumeSeq != g_desktopVolumeAppliedSeq.load(std::memory_order_acquire))
@@ -655,7 +717,7 @@ static int RunClear(const std::wstring& url)
         engine->OnVideoStreamTick(&pts);
         engineEx->UpdateVideoStream(nullptr, nullptr, nullptr);   // repaint latest frame
 #ifdef FG_DESKTOP_DLL
-        ReconcileTransport(engine);
+        ReconcileTransport(engine, engineEx);
         g_desktopDurationMs.store((int64_t)(engine->GetDuration() * 1000.0), std::memory_order_release);
 #else
         PollCommands(engine);
@@ -1523,35 +1585,39 @@ struct EmeNeedKeyNotify : public IMFMediaEngineNeedKeyNotify
 //  -> USABLE). Same windowless swapchain as RunClear -> GetVideoSwapchainHandle -> the shareable DComp handle.
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 
-// Synchronous HTTP GET -> bytes (runs on the MTA worker thread; WinRT HttpClient with .get()).
-static std::vector<uint8_t> HttpGetBytes(const std::wstring& url, int& status, const std::wstring& extraHeaders = L"")
+// ONE HttpClient for the whole process. A per-request client (what this used to construct) gets no connection pool and
+// no TLS session cache, so every segment paid a fresh connect + full handshake — six serial handshakes before the first
+// frame. WinRT's HttpClient is agile and safe to share across the feeder and the MTA loop. Deliberately leaked: a
+// static WinRT object destroyed during DLL/CRT teardown would run its release on an already-torn-down apartment.
+static WWH::HttpClient& SessionHttpClient()
+{
+    // Constructed once into static storage and never destroyed: a WinRT projection object released during CRT/DLL
+    // teardown would call into an apartment that no longer exists.
+    alignas(WWH::HttpClient) static unsigned char storage[sizeof(WWH::HttpClient)];
+    static WWH::HttpClient* client = ::new (static_cast<void*>(storage)) WWH::HttpClient();
+    return *client;
+}
+
+// One media-segment fetch, as the ABR estimator should see it: BODY bytes and BODY transfer time only. Connect + TLS +
+// time-to-first-byte are excluded (they are RTT, not throughput — dash.js excludes them for exactly this reason), and
+// so are init segments, which are small and RTT-dominated and would otherwise depress the estimate at startup.
+struct HttpFetchTiming
+{
+    uint64_t headerMs = 0;    // connect + TLS + TTFB (diagnostic only; never folded into the throughput estimate)
+    uint64_t transferMs = 0;  // response-body transfer
+    uint64_t bytes = 0;
+};
+
+// Synchronous HTTP GET -> bytes (runs on the MTA worker thread). `mediaSegment` opts the transfer into the ABR
+// telemetry; `cancel`, when supplied, is polled while the request is in flight so a seek or a shutdown does not have to
+// wait out a whole segment download.
+static std::vector<uint8_t> HttpGetBytes(const std::wstring& url, int& status, const std::wstring& extraHeaders = L"",
+                                         bool mediaSegment = false, HttpFetchTiming* timing = nullptr,
+                                         const std::function<bool()>& cancel = nullptr)
 {
     status = 0;
-    // Desktop proof can be driven from deterministic cached test vectors (FG_ASSET_DIR) so source/demux/decode can be
-    // verified independently of the agent host's outbound-network policy. Production simply leaves it unset.
-    wchar_t assetDir[32768]{};
-    DWORD assetLen = GetEnvironmentVariableW(L"FG_ASSET_DIR", assetDir, (DWORD)std::size(assetDir));
-    if (assetLen && assetLen < std::size(assetDir))
-    {
-        size_t slash = url.find_last_of(L"/\\");
-        std::wstring name = slash == std::wstring::npos ? url : url.substr(slash + 1);
-        std::wstring path = std::wstring(assetDir, assetLen) + L"\\" + name;
-        std::ifstream file(path, std::ios::binary | std::ios::ate);
-        if (file)
-        {
-            auto size = file.tellg();
-            file.seekg(0, std::ios::beg);
-            std::vector<uint8_t> bytes((size_t)size);
-            if (!bytes.empty()) file.read((char*)bytes.data(), size);
-            status = 200;
-            LogLine("[http] local asset " + winrt::to_string(winrt::hstring(path)) +
-                    " (" + std::to_string(bytes.size()) + "B)");
-            return bytes;
-        }
-    }
     try
     {
-        WWH::HttpClient http;
         WWH::HttpRequestMessage req{ WWH::HttpMethod::Get(), Uri{ winrt::hstring(url) } };
         // Optional app-supplied request headers ("Name: Value\n" lines) — e.g. auth for a real CDN (M6).
         for (size_t p = 0; p < extraHeaders.size(); )
@@ -1566,14 +1632,63 @@ static std::vector<uint8_t> HttpGetBytes(const std::wstring& url, int& status, c
             while (!name.empty() && iswspace(name.back())) name.pop_back();
             if (!name.empty()) try { req.Headers().TryAppendWithoutValidation(winrt::hstring(name), winrt::hstring(value)); } catch (...) {}
         }
-        auto resp = http.SendRequestAsync(req).get();
+
+        // ResponseHeadersRead (not the default ResponseContentRead) is what splits the two phases apart: this call
+        // returns once the response line + headers are in, so everything after it is pure body transfer.
+        const uint64_t headerStartMs = GetTickCount64();
+        auto sendOp = SessionHttpClient().SendRequestAsync(req, WWH::HttpCompletionOption::ResponseHeadersRead);
+        if (cancel)
+        {
+            while (sendOp.Status() == winrt::Windows::Foundation::AsyncStatus::Started)
+            {
+                if (cancel()) { sendOp.Cancel(); status = -1; return {}; }
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+        }
+        auto resp = sendOp.get();
+        const uint64_t headerMs = GetTickCount64() - headerStartMs;
         status = (int)resp.StatusCode();
-        auto buf = resp.Content().ReadAsBufferAsync().get();
+
+        const uint64_t bodyStartMs = GetTickCount64();
+        auto readOp = resp.Content().ReadAsBufferAsync();
+        if (cancel)
+        {
+            while (readOp.Status() == winrt::Windows::Foundation::AsyncStatus::Started)
+            {
+                if (cancel()) { readOp.Cancel(); status = -1; return {}; }
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+        }
+        auto buf = readOp.get();
+        const uint64_t transferMs = GetTickCount64() - bodyStartMs;
+
         std::vector<uint8_t> out(buf.Length());
         if (buf.Length()) winrt::Windows::Storage::Streams::DataReader::FromBuffer(buf).ReadBytes(winrt::array_view<uint8_t>(out.data(), out.data() + out.size()));
+        if (timing) { timing->headerMs = headerMs; timing->transferMs = transferMs; timing->bytes = out.size(); }
+#ifdef FG_DESKTOP_DLL
+        if (mediaSegment && status == 200 && !out.empty())
+        {
+            g_desktopBytesDownloaded.fetch_add((uint64_t)out.size(), std::memory_order_relaxed);
+            g_desktopDownloadElapsedMs.fetch_add(std::max<uint64_t>(1, transferMs), std::memory_order_relaxed);
+        }
+#else
+        (void)mediaSegment;
+#endif
         return out;
     }
     catch (hresult_error const& e) { status = -(int)(uint32_t)e.code().value; return {}; }
+}
+
+// The always-on per-segment ABR ledger: every input the throughput estimate is built from, in one line, so a bad
+// estimate can be read straight out of desktop-playready.log instead of inferred from a stalled picture. bytes*8/ms is
+// exactly kbit/s. `rep` is -1 during the initial burst (before a representation has been selected).
+static void LogAbrSegment(const char* track, int rep, int seg, const HttpFetchTiming& t, int64_t aheadMs)
+{
+    const uint64_t ms = t.transferMs ? t.transferMs : 1;
+    LogLine(std::string("[cenc-abr] ") + track + " rep=" + std::to_string(rep) + " seg=" + std::to_string(seg) +
+            " bytes=" + std::to_string(t.bytes) + " transferMs=" + std::to_string(t.transferMs) +
+            " headerMs=" + std::to_string(t.headerMs) + " kbps=" + std::to_string((t.bytes * 8ULL) / ms) +
+            " aheadMs=" + std::to_string((long long)aheadMs));
 }
 
 // MSE-level notify (MF_MSE_CALLBACK): source open/ended/close transitions.
@@ -2081,7 +2196,10 @@ static bool RunCustomSourceAttempt(const std::wstring& storePath)
     // ── 1c. Fetch a SHORT initial burst, then let the rest stream in behind playback. Downloading the whole track first
     //        (~50 serial requests for a 3.5-minute video, doubled once audio joins) is what made "watch video" sit on a
     //        spinner for tens of seconds and would now trip the managed start watchdog outright. ─────────────────────
-    constexpr int kInitialBurstSegments = 2;    // ~8s of media at Spotify's 4s segments — enough to reach first frame
+    // ~16s of media at Spotify's 4s segments. Two segments (~8s) sat BELOW the managed ABR's 12s upgrade gate, so the
+    // session could never accumulate the headroom that authorises an upshift and stayed pinned at the conservative
+    // starting representation forever.
+    constexpr int kInitialBurstSegments = 4;
     constexpr size_t kMaxSamplesAhead   = 900;  // fetch-ahead ceiling per track (~30s of video) so memory stays bounded
 
     std::vector<cenc::Sample> samples, audioSamples;
@@ -2092,18 +2210,24 @@ static bool RunCustomSourceAttempt(const std::wstring& storePath)
     {
         int num = startNumber + i * segStride;
         std::wstring url = segBase + segPrefix + std::to_wstring(num) + segSuffix;
-        auto seg = HttpGetBytes(url, st, segHeaders);
+        HttpFetchTiming timing;
+        auto seg = HttpGetBytes(url, st, segHeaders, true, &timing);
         if (st != 200 || seg.empty()) { LogLine("[cenc] media #" + std::to_string(num) + " HTTP " + std::to_string(st) + " — stop"); break; }
         int n = cenc::ParseSegment(seg, info, samples, decodeTicks);
+        LogAbrSegment("video", -1, i, timing,
+                      info.timescale ? (int64_t)((decodeTicks * 1000ULL) / info.timescale) : 0);
         LogLine("[cenc] seg#" + std::to_string(num) + " " + std::to_string(seg.size()) + "B -> " + std::to_string(n) + " sample(s)");
         if (haveAudio)
         {
             int ast = 0;
             std::wstring aUrl = aSegBase + aSegPrefix + std::to_wstring(num) + aSegSuffix;
-            auto aSeg = HttpGetBytes(aUrl, ast, segHeaders);
+            HttpFetchTiming aTiming;
+            auto aSeg = HttpGetBytes(aUrl, ast, segHeaders, true, &aTiming);
             if (ast == 200 && !aSeg.empty())
             {
                 int an = cenc::ParseSegment(aSeg, audioInfo, audioSamples, audioDecodeTicks);
+                LogAbrSegment("audio", -1, i, aTiming,
+                              audioInfo.timescale ? (int64_t)((audioDecodeTicks * 1000ULL) / audioInfo.timescale) : 0);
                 LogLine("[cenc] aseg#" + std::to_string(num) + " " + std::to_string(aSeg.size()) + "B -> " + std::to_string(an) + " sample(s)");
             }
             else
@@ -2172,6 +2296,9 @@ static bool RunCustomSourceAttempt(const std::wstring& storePath)
                 std::to_string(nextSegment) + "/" + std::to_string(segCount) + " segments)");
     winrt::com_ptr<CencMediaSource> source =
         BuildCencSource(info, std::move(samples), haveAudio ? &audioFeed : nullptr, streaming, total100ns);
+#ifdef FG_DESKTOP_DLL
+    g_desktopForwardBufferedMs.store(source->m_streams[0]->AheadDurationMs(), std::memory_order_release);
+#endif
 
     // ── 4b. The background feeder: keeps fetching + demuxing behind the playhead, bounded so memory does not grow with
     //        the whole track. It owns strong refs to the streams, and the joiner below guarantees it is stopped and
@@ -2193,46 +2320,279 @@ static bool RunCustomSourceAttempt(const std::wstring& storePath)
             int hrInit = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
             uint64_t vTicks = decodeTicks, aTicks = audioDecodeTicks;
             int i = nextSegment;
-            for (; i < segCount; i++)
+            int audioNextSegment = nextSegment;
+            auto aborting = [&]() -> bool
             {
+                return feedStop.load(std::memory_order_acquire) || StopRequested() || videoStream->IsShutdown();
+            };
+#ifdef FG_DESKTOP_DLL
+            uint64_t seenSwitch = g_videoSwitchAppliedSeq.load(std::memory_order_acquire);
+            uint64_t seenSeek = g_desktopSeekAppliedSeq.load(std::memory_order_acquire);
+            uint64_t servingSeek = seenSeek;   // the newest seek this iteration has already retargeted for
+            uint64_t segmentDurationMs = nextSegment > 0 && info.timescale > 0
+                ? ((decodeTicks * 1000ULL) / info.timescale) / (uint64_t)nextSegment
+                : (uint64_t)(segStride > 1 ? segStride : 1) * 1000ULL;
+            if (segmentDurationMs == 0) segmentDurationMs = 1000;
+            // Polled WHILE an HTTP request is in flight. Without it a seek — or a session teardown — had to wait out the
+            // whole in-flight segment before the feeder even looked at it, then serially fetch the target video and
+            // target audio segments: three round trips of latency on every scrub, and a stop that could not be
+            // acknowledged until the current GET finished.
+            auto cancelFetch = [&]() -> bool
+            {
+                return aborting() || g_desktopSeekRequestSeq.load(std::memory_order_acquire) > servingSeek;
+            };
+            // A seek is "already buffered" only when BOTH tracks can serve it — video from a keyframe at or before the
+            // target, audio from any sample — with contiguous coverage past it.
+            auto bufferedSeekTarget = [&](int64_t targetMs) -> bool
+            {
+                return videoStream->CanSeekTo(targetMs, true) &&
+                       (!audioStream || audioStream->CanSeekTo(targetMs, false));
+            };
+#else
+            auto cancelFetch = [&]() -> bool { return aborting(); };
+#endif
+            while (i < segCount)
+            {
+                bool switching = false;
+                bool seeking = false;
+#ifdef FG_DESKTOP_DLL
+                int feederIndex = i;
+                uint64_t requestedSeek = g_desktopSeekRequestSeq.load(std::memory_order_acquire);
+                servingSeek = requestedSeek;
+                if (requestedSeek > seenSeek)
+                {
+                    int64_t targetMs = g_desktopSeekMs.load(std::memory_order_acquire);
+                    if (bufferedSeekTarget(targetMs))
+                    {
+                        // The fast path: release the transport gate NOW and keep feeding sequentially. Rewinding the
+                        // feeder for a target that is already in memory is what turned a backward scrub into a fresh
+                        // download and left the sample vector duplicated and non-monotonic.
+                        seenSeek = requestedSeek;
+                        g_desktopSeekBufferedSeq.store(requestedSeek, std::memory_order_release);
+                        int64_t bufStart = 0, bufEnd = 0; videoStream->BufferedRangeMs(bufStart, bufEnd);
+                        LogLine("[cenc-feed] seek ms=" + std::to_string((long long)targetMs) +
+                                " served from buffer [" + std::to_string((long long)bufStart) + ".." +
+                                std::to_string((long long)bufEnd) + "]ms — no fetch (seq=" +
+                                std::to_string(requestedSeek) + ")");
+                    }
+                    else
+                    {
+                        int boundary = (int)((uint64_t)(targetMs > 0 ? targetMs : 0) / segmentDurationMs);
+                        i = std::clamp(boundary, 0, segCount - 1);
+                        audioNextSegment = i;
+                        seeking = true;
+                        LogLine("[cenc-feed] seek prefetch requested ms=" + std::to_string((long long)targetMs) +
+                                " at segment index " + std::to_string(i));
+                    }
+                }
+                uint64_t requestedSwitch = g_videoSwitchRequestSeq.load(std::memory_order_acquire);
+                FgVideoSwitchRequest requestedRepresentation;
+                cenc::InitInfo requestedInfo;
+                if (!seeking && requestedSwitch > seenSwitch)
+                {
+                    {
+                        std::lock_guard<std::mutex> lock(g_videoSwitchMx);
+                        requestedRepresentation = g_videoSwitch;
+                    }
+                    int initStatus = 0;
+                    auto nextInitBytes = HttpGetBytes(requestedRepresentation.initUrl, initStatus, segHeaders,
+                                                      false, nullptr, cancelFetch);
+                    cenc::InitInfo nextInfo;
+                    if (initStatus == 200 && cenc::ParseInit(nextInitBytes, nextInfo) &&
+                        nextInfo.kind == cenc::TrackKind::Video && nextInfo.timescale == info.timescale &&
+                        memcmp(nextInfo.kid, info.kid, sizeof(info.kid)) == 0)
+                    {
+                        // THE SWITCH BOUNDARY — at or before the segment the PLAYHEAD is in, NEVER forward of it.
+                        // This used to clamp UP to `nextSegment`, the initial-burst count captured before playback
+                        // started: a second in, the boundary computed 0, clamped up to 2, and the replacement segment
+                        // landed ~8s ahead. SwitchVideoRepresentation then erased every buffered sample under the
+                        // playhead and refilled from there, so video had a multi-second hole while audio (never
+                        // repositioned) and the clock ran on — the frozen picture.
+                        // CEIL, not floor: the splice must land at a boundary at or AFTER the next undelivered sample
+                        // so everything between the playhead and the splice stays continuous in the old representation
+                        // (no hole). And never past the feeder's own cursor, which is where the buffer ends.
+                        const int64_t nextTimeMs = videoStream->NextSampleTimeMs();
+                        int boundary = videoStream->Ahead() == 0
+                            ? i   // the buffer is drained — the feeder cursor IS the playhead
+                            : (int)(((uint64_t)std::max<int64_t>(nextTimeMs, 0) + segmentDurationMs - 1) / segmentDurationMs);
+                        i = std::clamp(boundary, 0, i);
+                        requestedInfo = std::move(nextInfo);
+                        switching = true;
+                        LogLine("[cenc-feed] quality switch at segment index " + std::to_string(i) +
+                                " (playhead t=" + std::to_string((long long)nextTimeMs) + "ms, segment=" +
+                                std::to_string(segmentDurationMs) + "ms, cursor was " + std::to_string(feederIndex) +
+                                ") -> representation " + std::to_string(requestedRepresentation.index));
+                    }
+                    else if (initStatus == -1 && cancelFetch())
+                    {
+                        // Cancelled in flight by a newer seek (or teardown) — the switch stays PENDING, not rejected.
+                        LogLine("[cenc-feed] quality switch init fetch cancelled — switch still pending");
+                        if (aborting()) break;
+                        continue;
+                    }
+                    else
+                    {
+                        LogLine("[cenc-feed] quality switch rejected: init/KID/timescale incompatible (HTTP " +
+                                std::to_string(initStatus) + ")");
+                        seenSwitch = requestedSwitch;
+                        g_videoSwitchAppliedSeq.store(requestedSwitch, std::memory_order_release);
+                    }
+                }
+#endif
                 // Backpressure: stay a bounded distance ahead of the playhead. While paused the playhead stops, so this
                 // naturally stops fetching too instead of racing to download the rest of the track.
-                while (!feedStop.load(std::memory_order_acquire) && !StopRequested() &&
-                       !videoStream->IsShutdown() && videoStream->Ahead() > kMaxSamplesAhead)
+                while (!switching && !seeking && !aborting() && videoStream->Ahead() > kMaxSamplesAhead
+#ifdef FG_DESKTOP_DLL
+                       && g_desktopSeekRequestSeq.load(std::memory_order_acquire) <= seenSeek
+                       && g_videoSwitchRequestSeq.load(std::memory_order_acquire) <= seenSwitch
+#endif
+                       )
                     std::this_thread::sleep_for(std::chrono::milliseconds(50));
-                if (feedStop.load(std::memory_order_acquire) || StopRequested() || videoStream->IsShutdown()) break;
+                if (aborting()) break;
+#ifdef FG_DESKTOP_DLL
+                // A seek or a quality switch arrived while backpressure was sleeping (a switch parked here used to wait
+                // out the whole 30s buffer). Re-enter the top of the loop so it is handled before the next sequential
+                // segment is fetched.
+                if (!seeking && !switching &&
+                    (g_desktopSeekRequestSeq.load(std::memory_order_acquire) > seenSeek ||
+                     g_videoSwitchRequestSeq.load(std::memory_order_acquire) > seenSwitch))
+                    continue;
+#endif
 
                 int num = startNumber + i * segStride;
                 int status = 0;
-                auto seg = HttpGetBytes(segBase + segPrefix + std::to_wstring(num) + segSuffix, status, segHeaders);
+                HttpFetchTiming timing;
+                std::wstring videoUrl =
+#ifdef FG_DESKTOP_DLL
+                    switching
+                        ? requestedRepresentation.segmentBaseUrl + requestedRepresentation.segmentPrefix +
+                            std::to_wstring(num) + requestedRepresentation.segmentSuffix
+                        :
+#endif
+                    segBase + segPrefix + std::to_wstring(num) + segSuffix;
+                auto seg = HttpGetBytes(videoUrl, status, segHeaders, true, &timing, cancelFetch);
+                if (aborting()) break;
+#ifdef FG_DESKTOP_DLL
+                // Cancelled mid-flight because a NEWER seek landed: drop this segment and let the loop top retarget.
+                if (g_desktopSeekRequestSeq.load(std::memory_order_acquire) > servingSeek) continue;
+                if (switching && (status != 200 || seg.empty()))
+                {
+                    LogLine("[cenc-feed] quality switch rejected: target segment HTTP " + std::to_string(status));
+                    i = feederIndex;
+                    num = startNumber + i * segStride;
+                    seg = HttpGetBytes(segBase + segPrefix + std::to_wstring(num) + segSuffix, status, segHeaders,
+                                       true, &timing, cancelFetch);
+                    switching = false;
+                    seenSwitch = requestedSwitch;
+                    g_videoSwitchAppliedSeq.store(requestedSwitch, std::memory_order_release);
+                }
+#endif
                 if (status != 200 || seg.empty())
                 { LogLine("[cenc-feed] video seg#" + std::to_string(num) + " HTTP " + std::to_string(status) + " — stopping feed"); break; }
                 std::vector<cenc::Sample> more;
-                cenc::ParseSegment(seg, info, more, vTicks);
-                videoStream->AppendSamples(std::move(more));
-
-                if (audioStream)
+                cenc::ParseSegment(seg,
+#ifdef FG_DESKTOP_DLL
+                    switching ? requestedInfo :
+#endif
+                    info, more, vTicks);
+#ifdef FG_DESKTOP_DLL
+                if (switching && !more.empty() && more[0].keyframe)
                 {
+                    initUrl = requestedRepresentation.initUrl;
+                    segBase = requestedRepresentation.segmentBaseUrl;
+                    segPrefix = requestedRepresentation.segmentPrefix;
+                    segSuffix = requestedRepresentation.segmentSuffix;
+                    info = std::move(requestedInfo);
+                    videoStream->SwitchVideoRepresentation(info, std::move(more));
+                    seenSwitch = requestedSwitch;
+                    g_desktopActiveVideoRepresentation.store(requestedRepresentation.index, std::memory_order_release);
+                    g_videoSwitchAppliedSeq.store(requestedSwitch, std::memory_order_release);
+                }
+                else
+                {
+                    if (switching)
+                    {
+                        LogLine("[cenc-feed] quality switch rejected: target segment did not begin with a keyframe");
+                        // Keep the current representation continuous. The target boundary may be behind the feeder's
+                        // current cursor, so fetch the original cursor rather than appending target samples or skipping
+                        // an old-representation segment.
+                        i = feederIndex;
+                        num = startNumber + i * segStride;
+                        int fallbackStatus = 0;
+                        auto fallback = HttpGetBytes(segBase + segPrefix + std::to_wstring(num) + segSuffix,
+                                                     fallbackStatus, segHeaders, true, &timing, cancelFetch);
+                        more.clear();
+                        if (fallbackStatus != 200 || fallback.empty())
+                        {
+                            LogLine("[cenc-feed] video fallback seg#" + std::to_string(num) + " HTTP " +
+                                    std::to_string(fallbackStatus) + " — stopping feed");
+                            break;
+                        }
+                        cenc::ParseSegment(fallback, info, more, vTicks);
+                        seenSwitch = requestedSwitch;
+                        g_videoSwitchAppliedSeq.store(requestedSwitch, std::memory_order_release);
+                    }
+                    videoStream->AppendSamples(std::move(more));
+                }
+                g_desktopForwardBufferedMs.store(videoStream->AheadDurationMs(), std::memory_order_release);
+                LogAbrSegment("video", g_desktopActiveVideoRepresentation.load(std::memory_order_acquire), i, timing,
+                              videoStream->AheadDurationMs());
+#else
+                videoStream->AppendSamples(std::move(more));
+#endif
+
+                if (audioStream && audioNextSegment >= segCount)
+                {
+                    audioStream->MarkComplete();
+                    audioStream = nullptr;
+                }
+                else if (audioStream)
+                {
+                    int audioNum = startNumber + audioNextSegment * segStride;
                     int aStatus = 0;
-                    auto aSeg = HttpGetBytes(aSegBase + aSegPrefix + std::to_wstring(num) + aSegSuffix, aStatus, segHeaders);
+                    HttpFetchTiming aTiming;
+                    auto aSeg = HttpGetBytes(aSegBase + aSegPrefix + std::to_wstring(audioNum) + aSegSuffix, aStatus,
+                                             segHeaders, true, &aTiming, cancelFetch);
+                    if (aborting()) break;
                     if (aStatus == 200 && !aSeg.empty())
                     {
                         std::vector<cenc::Sample> aMore;
                         cenc::ParseSegment(aSeg, audioInfo, aMore, aTicks);
                         audioStream->AppendSamples(std::move(aMore));
+#ifdef FG_DESKTOP_DLL
+                        LogAbrSegment("audio", -1, audioNextSegment, aTiming, audioStream->AheadDurationMs());
+#endif
+                        audioNextSegment++;
                     }
+#ifdef FG_DESKTOP_DLL
+                    else if (aStatus == -1 && g_desktopSeekRequestSeq.load(std::memory_order_acquire) > servingSeek)
+                    {
+                        // Cancelled by a newer seek, not a real failure — retarget instead of ending the audio track.
+                        continue;
+                    }
+#endif
                     else
                     {
                         // Audio ran out but video has not: end the audio stream cleanly so the presentation still ends
                         // on the video, rather than leaving a stream that can never satisfy another request.
-                        LogLine("[cenc-feed] audio seg#" + std::to_string(num) + " HTTP " + std::to_string(aStatus) + " — ending audio feed");
+                        LogLine("[cenc-feed] audio seg#" + std::to_string(audioNum) + " HTTP " + std::to_string(aStatus) + " — ending audio feed");
                         audioStream->MarkComplete();
                         audioStream = nullptr;
                     }
                 }
+#ifdef FG_DESKTOP_DLL
+                if (seeking)
+                {
+                    seenSeek = requestedSeek;
+                    g_desktopSeekBufferedSeq.store(requestedSeek, std::memory_order_release);
+                    LogLine("[cenc-feed] seek target buffered seq=" + std::to_string(requestedSeek) +
+                            " segment=" + std::to_string(i));
+                }
+#endif
                 if ((i % 10) == 0)
                     LogLine("[cenc-feed] seg#" + std::to_string(num) + " fed (" + std::to_string(i + 1) + "/" +
                             std::to_string(segCount) + ", ahead=" + std::to_string(videoStream->Ahead()) + ")");
+                i++;
             }
             // Whatever the reason we stopped, both streams must be told: a stream left incomplete would park requests
             // forever instead of reporting end-of-stream.
@@ -2376,17 +2736,33 @@ static bool RunCustomSourceAttempt(const std::wstring& storePath)
     {
         engineEx->GetNativeVideoSize(&nvw, &nvh); if (!nvw) { nvw = info.width ? info.width : 1280; nvh = info.height ? info.height : 720; }
         RECT dst = { 0, 0, (LONG)nvw, (LONG)nvh }; MFARGB border = { 0, 0, 0, 255 };
+        // MF only creates the windowless swap chain once UpdateVideoStream has given it a NON-ZERO destination
+        // rectangle, so the rect is logged before the first handle query: a {0,0,0,0} or 1x1 dst here is the bug, not
+        // the handle. An invalid handle on a SUCCEEDED (typically S_FALSE) hr means "not ready yet", never "done".
+        LogLine("[cenc] swapchain handle query: dst={" + std::to_string(dst.left) + "," + std::to_string(dst.top) +
+                "," + std::to_string(dst.right) + "," + std::to_string(dst.bottom) + "} native=" +
+                std::to_string(nvw) + "x" + std::to_string(nvh));
+        auto handleUsable = [](HRESULT h, HANDLE v) { return SUCCEEDED(h) && v != nullptr && v != INVALID_HANDLE_VALUE; };
         auto hdlDl = std::chrono::steady_clock::now() + std::chrono::seconds(12);
+        bool firstQuery = true;
         while (std::chrono::steady_clock::now() < hdlDl && !notify->error)
         {
             LONGLONG pts; engine->OnVideoStreamTick(&pts);
             engineEx->UpdateVideoStream(nullptr, &dst, &border);
             hr = engineEx->GetVideoSwapchainHandle(&swHandle);
-            if (SUCCEEDED(hr) && swHandle) break;
+            if (firstQuery)
+            {
+                firstQuery = false;
+                LogLine("[cenc] first GetVideoSwapchainHandle hr=" + hx(hr) + " handle=" +
+                        std::to_string((uint64_t)(uintptr_t)swHandle) +
+                        (handleUsable(hr, swHandle) ? " (usable)" : " (not ready)"));
+            }
+            if (handleUsable(hr, swHandle)) break;
+            swHandle = nullptr;   // S_FALSE hands back a null/invalid handle; never publish one
             std::this_thread::sleep_for(std::chrono::milliseconds(60));
         }
         LogLine("[cenc] " + std::to_string(nvw) + "x" + std::to_string(nvh) + " GetVideoSwapchainHandle hr=" + hx(hr) + " handle=" + std::to_string((uint64_t)(uintptr_t)swHandle));
-        ok = SUCCEEDED(hr) && swHandle != nullptr;
+        ok = handleUsable(hr, swHandle);
     }
     else
     {
@@ -2422,10 +2798,33 @@ static bool RunCustomSourceAttempt(const std::wstring& storePath)
             LONGLONG pts; engine->OnVideoStreamTick(&pts);
             engineEx->UpdateVideoStream(nullptr, nullptr, nullptr);
 #ifdef FG_DESKTOP_DLL
+            // The seek gate, re-evaluated against the CURRENT buffer every tick (never a range sampled when the seek
+            // was issued). If the target already lies in both tracks' buffers the gate opens here with no download at
+            // all, so SetCurrentTime fires on this same 80ms tick instead of waiting for the feeder to finish a fetch
+            // it does not need. The feeder opens the same gate for a target it had to fetch.
+            {
+                uint64_t pendingSeek = g_desktopSeekRequestSeq.load(std::memory_order_acquire);
+                if (pendingSeek != g_desktopSeekBufferedSeq.load(std::memory_order_acquire) &&
+                    pendingSeek != g_desktopSeekAppliedSeq.load(std::memory_order_acquire))
+                {
+                    int64_t targetMs = g_desktopSeekMs.load(std::memory_order_acquire);
+                    bool videoReady = source->m_streams[0]->CanSeekTo(targetMs, true);
+                    bool audioReady = source->m_streams.size() < 2 ||
+                                      source->m_streams[1]->CanSeekTo(targetMs, false);
+                    if (videoReady && audioReady)
+                    {
+                        g_desktopSeekBufferedSeq.store(pendingSeek, std::memory_order_release);
+                        LogLine("[transport] seek ms=" + std::to_string((long long)targetMs) +
+                                " already buffered — gate opened without a fetch (seq=" +
+                                std::to_string(pendingSeek) + ")");
+                    }
+                }
+            }
             // Transport crosses no process boundary: managed publishes the desired level + one-shot seek/volume slots
             // and this owning MTA thread reconciles the media engine (no single-slot clobbering, no managed re-assert).
-            ReconcileTransport(engine);
+            ReconcileTransport(engine, engineEx, true);
             g_desktopDurationMs.store((int64_t)(engine->GetDuration() * 1000.0), std::memory_order_release);
+            g_desktopForwardBufferedMs.store(source->m_streams[0]->AheadDurationMs(), std::memory_order_release);
 #else
             PollCommands(engine);
             if (g_sawAnyCmd && (GetTickCount64() - g_lastCmdActivityMs) > 15000)
@@ -2480,6 +2879,8 @@ extern "C" __declspec(dllexport) int __stdcall FgPlayReadyRunEx(const wchar_t* b
     // Ignore one-shot controls left by a prior session. Play is intentionally not acknowledged here: Start pre-seeds
     // the new session's level before this blocking entry point begins, and the MTA loop must reach that level first.
     g_desktopSeekAppliedSeq.store(g_desktopSeekRequestSeq.load(std::memory_order_acquire), std::memory_order_release);
+    g_desktopSeekBufferedSeq.store(g_desktopSeekRequestSeq.load(std::memory_order_acquire), std::memory_order_release);
+    g_desktopSeekMode.store(0, std::memory_order_release);
     g_desktopVolumeAppliedSeq.store(g_desktopVolumeRequestSeq.load(std::memory_order_acquire), std::memory_order_release);
     g_desktopRateAppliedSeq.store(g_desktopRateRequestSeq.load(std::memory_order_acquire), std::memory_order_release);
     g_desktopPlayAppliedSeq.store(0, std::memory_order_release);
@@ -2487,6 +2888,8 @@ extern "C" __declspec(dllexport) int __stdcall FgPlayReadyRunEx(const wchar_t* b
     g_desktopHandle.store(0);
     g_desktopWidth.store(0); g_desktopHeight.store(0);
     g_desktopPositionMs.store(0); g_desktopDurationMs.store(0);
+    g_desktopBytesDownloaded.store(0); g_desktopDownloadElapsedMs.store(0); g_desktopForwardBufferedMs.store(0);
+    g_desktopActiveVideoRepresentation.store(-1);
     g_desktopState.store(1, std::memory_order_release);
 
     // Deep-copy the descriptor into the active-open globals (the caller's pointers may not outlive this call).
@@ -2529,7 +2932,7 @@ extern "C" __declspec(dllexport) int __stdcall FgPlayReadyRunEx(const wchar_t* b
     g_logPath = root + L"\\desktop-playready.log";
     g_stopPath.clear(); g_evtPath.clear(); g_cmdPath.clear();
     { std::ofstream f(g_logPath, std::ios::binary | std::ios::trunc); }
-    LogLine("[desktop] BUILD=desktop-cdm-20260725-endedstate-v16 root=" +
+    LogLine("[desktop] BUILD=desktop-cdm-20260822-abrseek-v17 root=" +
             std::string(root.begin(), root.end()));
     // Proof that the audio representation crossed the ABI (the M2 acceptance line, and the first thing to check when the
     // M3 two-stream demux misbehaves). "none" is a legitimate outcome: a manifest without AAC audio plays video only.
@@ -2609,6 +3012,51 @@ extern "C" __declspec(dllexport) int __stdcall FgPlayReadyGetSnapshot(FgPlayRead
     return S_OK;
 }
 
+static uint64_t NextTransportSeq(std::atomic<uint64_t>& seq);
+
+extern "C" __declspec(dllexport) int __stdcall FgPlayReadyGetSnapshotV2(FgPlayReadySnapshotV2* value, uint32_t size)
+{
+    if (!value || size < sizeof(uint32_t)) return E_POINTER;
+    value->structSize = size;
+    if (FG_SNAPSHOT_HAS(value, size, legacy)) FgPlayReadyGetSnapshot(&value->legacy);
+    if (FG_SNAPSHOT_HAS(value, size, bytesDownloaded))
+        value->bytesDownloaded = g_desktopBytesDownloaded.load(std::memory_order_acquire);
+    if (FG_SNAPSHOT_HAS(value, size, forwardBufferedMs))
+        value->forwardBufferedMs = g_desktopForwardBufferedMs.load(std::memory_order_acquire);
+    if (FG_SNAPSHOT_HAS(value, size, activeVideoRepresentation))
+        value->activeVideoRepresentation = g_desktopActiveVideoRepresentation.load(std::memory_order_acquire);
+    if (FG_SNAPSHOT_HAS(value, size, representationAppliedSeq))
+        value->representationAppliedSeq = g_videoSwitchAppliedSeq.load(std::memory_order_acquire);
+    if (FG_SNAPSHOT_HAS(value, size, downloadElapsedMs))
+        value->downloadElapsedMs = g_desktopDownloadElapsedMs.load(std::memory_order_acquire);
+    return S_OK;
+}
+
+extern "C" __declspec(dllexport) void __stdcall FgPlayReadyResetAdaptive()
+{
+    std::lock_guard<std::mutex> lock(g_videoSwitchMx);
+    g_videoSwitch = {};
+    g_videoSwitchRequestSeq.store(0, std::memory_order_release);
+    g_videoSwitchAppliedSeq.store(0, std::memory_order_release);
+    g_desktopActiveVideoRepresentation.store(-1, std::memory_order_release);
+}
+
+extern "C" __declspec(dllexport) uint64_t __stdcall FgPlayReadySelectVideoRepresentation(
+    int32_t index, const wchar_t* initUrl, const wchar_t* segmentBaseUrl,
+    const wchar_t* segmentPrefix, const wchar_t* segmentSuffix)
+{
+    if (index < 0 || !initUrl || !*initUrl || !segmentBaseUrl || !segmentPrefix || !segmentSuffix) return 0;
+    {
+        std::lock_guard<std::mutex> lock(g_videoSwitchMx);
+        g_videoSwitch.index = index;
+        g_videoSwitch.initUrl = initUrl;
+        g_videoSwitch.segmentBaseUrl = segmentBaseUrl;
+        g_videoSwitch.segmentPrefix = segmentPrefix;
+        g_videoSwitch.segmentSuffix = segmentSuffix;
+    }
+    return NextTransportSeq(g_videoSwitchRequestSeq);
+}
+
 static uint64_t NextTransportSeq(std::atomic<uint64_t>& seq)
 {
     return seq.fetch_add(1, std::memory_order_acq_rel) + 1;
@@ -2631,10 +3079,18 @@ extern "C" __declspec(dllexport) void __stdcall FgPlayReadyStop()
     g_desktopDesiredPlay.store(0, std::memory_order_release);
     g_shutdownRequested = true;
 }
-extern "C" __declspec(dllexport) uint64_t __stdcall FgPlayReadySeek(int64_t positionMs)
+// mode: 0 = exact (frame-accurate; the commit of a scrub, or a direct jump), 1 = approximate (nearest keyframe; what a
+// scrub/preview wants — no preroll decode). ONE latest-wins slot either way: seeks are never queued, because MF applies
+// queued seeks FIFO and a dragging thumb would leave the pipeline chasing positions the user has already left.
+extern "C" __declspec(dllexport) uint64_t __stdcall FgPlayReadySeekEx(int64_t positionMs, int32_t mode)
 {
     g_desktopSeekMs.store(positionMs < 0 ? 0 : positionMs, std::memory_order_release);
+    g_desktopSeekMode.store(mode != 0 ? 1 : 0, std::memory_order_release);
     return NextTransportSeq(g_desktopSeekRequestSeq);
+}
+extern "C" __declspec(dllexport) uint64_t __stdcall FgPlayReadySeek(int64_t positionMs)
+{
+    return FgPlayReadySeekEx(positionMs, 0);
 }
 extern "C" __declspec(dllexport) uint64_t __stdcall FgPlayReadySetVolume(double volume)
 {

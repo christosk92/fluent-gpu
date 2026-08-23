@@ -27,7 +27,7 @@ public class SessionVolumeSyncTests
         public void Play() { IsPlaying = true; Calls.Add("play"); }
         public void Pause() { IsPlaying = false; Calls.Add("pause"); }
         public void Stop() { IsPlaying = false; Calls.Add("stop"); }
-        public void Seek(long ms) { PositionMs = ms; }
+        public void Seek(long ms, SeekMode mode) { PositionMs = ms; }
         public void SetVolume(double v) { Calls.Add("vol"); }
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }

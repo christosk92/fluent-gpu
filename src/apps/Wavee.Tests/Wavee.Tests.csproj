@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <!-- Unit tests for the Wavee backend core. Source-includes src/apps/Wavee/Backend (which is engine-independent: deps =
        Wavee.Core + BCL only), so the test assembly stays lean — no FluentGpu/TerraFX/GPU. Honors "no separate backend
@@ -32,6 +32,7 @@
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.0" />
     <!-- the Backend source-include also contains ExtendedMetadataSource → compile the metadata protos here too -->
     <PackageReference Include="Google.Protobuf" Version="3.35.0" />
+    <PackageReference Include="NLayer" Version="1.15.0" />                  <!-- Mp3ForwardOnlyTests: the live MP3 path decodes over a non-seekable stream -->
     <PackageReference Include="Grpc.Tools" Version="2.81.0">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
@@ -81,6 +82,10 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Wavee.Core\Wavee.Core.csproj" />
+    <ProjectReference Include="..\Wavee.Sdk\Wavee.Sdk.csproj" />
+    <ProjectReference Include="..\modules\Wavee.Module.YouTube\Wavee.Module.YouTube.csproj" />
+    <ProjectReference Include="..\modules\Wavee.Module.Twitch\Wavee.Module.Twitch.csproj" />
+    <ProjectReference Include="..\modules\Wavee.Module.Radio\Wavee.Module.Radio.csproj" />
     <ProjectReference Include="..\..\FluentGpu.WindowsApi\FluentGpu.WindowsApi.csproj" />
     <!-- the vendored Ogg/Vorbis fork — OggContainerSeekTests drive its container-level seek paths directly -->
     <ProjectReference Include="..\vendor\NVorbis\NVorbis\NVorbis.csproj" />
@@ -91,6 +96,9 @@
          satisfied by VirtualCollectionSignalShim.cs — so we test the real reconciliation code without referencing the
          FluentGpu.Engine assembly (which would shadow the source-included Backend's Channel / DealerRouter). -->
     <Compile Include="..\..\FluentGpu.Controls\VirtualCollection.cs" />
+    <!-- The toast de-duplication RULE (pure value function, zero dependencies), source-included so
+         ToastCoalescingTests pins "two Shows that mean the same thing are one card" without standing up a window. -->
+    <Compile Include="..\..\FluentGpu.Controls\ToastCoalescing.cs" />
     <!-- the pure (FluentGpu-free) QR encoder, source-included so QrTests can round-trip-decode its output -->
     <Compile Include="..\Wavee\Features\Auth\Qr.cs" />
     <!-- the pure keyed tracklist diff (Wavee.Core + BCL only) behind the §4.6 choreography — MembershipDiffTests -->
@@ -286,8 +294,17 @@
     <Compile Include="..\Wavee\App\VideoAspectPersistence.cs" Link="VideoAspectPersistence.cs" />
     <!-- the pure "no mid-track auto-swap" rule over that machine (System only) — PlacementCoreTests' deferred-upgrade section -->
     <Compile Include="..\Wavee\App\VideoUpgradeGate.cs" Link="VideoUpgradeGate.cs" />
+    <!-- the pure "the pop-out's own fullscreen mode lives only while the placement is Detached" rule (System only) —
+         DetachedFullscreenRuleTests -->
+    <Compile Include="..\Wavee\App\DetachedFullscreenRule.cs" Link="DetachedFullscreenRule.cs" />
     <!-- the pure rail<->docked-video coupling rules + the RailMode enum they're keyed on (System only) — RailVideoCouplingTests -->
     <Compile Include="..\Wavee\App\RailVideoCoupling.cs" Link="RailVideoCoupling.cs" />
+    <!-- which of the two docked HOSTS (the rail's card vs the watch page's in-page stage) owns the one live video
+         surface, + the DockedVideoFace enum it gates (System only) — DockedVideoHostingTests -->
+    <Compile Include="..\Wavee\App\DockedVideoHosting.cs" Link="DockedVideoHosting.cs" />
+    <!-- the pure watch-page projection: a ModulePageDoc + "is this the playing entity" -> what the page draws
+         (System + Wavee.Sdk only) — WatchPageModelTests -->
+    <Compile Include="..\Wavee\App\WatchPageModel.cs" Link="WatchPageModel.cs" />
     <!-- pure media host-swap decision rules (System + the PlayableKind enum only) — MediaSwitchLogicTests -->
     <Compile Include="..\Wavee\App\MediaSwitchLogic.cs" Link="MediaSwitchLogic.cs" />
     <Compile Include="..\Wavee\App\LyricsSyncGate.cs" Link="LyricsSyncGate.cs" />
@@ -324,6 +341,16 @@
     <Compile Include="..\Wavee\Actions\ActionRules.cs" />
     <Compile Include="..\Wavee\Actions\SpotifyLink.cs" />
     <Compile Include="..\Wavee\Actions\TrackTargetResolver.cs" />
+    <!-- the "Play ▸ Link…" decisions (Wavee.Sdk + Wavee.Core + BCL only; deliberately localization-free — it takes the
+         localized strings it needs as arguments) — PlayLinkActionsTests pin the whole surface -->
+    <Compile Include="..\Wavee\Actions\PlayLinkActions.cs" />
+    <!-- WHERE a now-playing span goes (title/subtitle/art → an album, an artist, or a module's own page). Wavee.Core +
+         Wavee.Sdk + the source-included Backend/Modules only — PlayableLinksTests drive the real table. Its `LinkSlot`
+         enum is a hard dependency of Backend/Modules/ModulePages.cs, which the Backend glob above already compiles. -->
+    <Compile Include="..\Wavee\Actions\PlayableLinks.cs" />
+    <!-- the http(s)-only launch guard in front of Process.Start (System.Diagnostics only) — ModulePageSourceGateTests
+         pin that a module-supplied string cannot become a shell-execute -->
+    <Compile Include="..\Wavee\Platform\ShellOpen.cs" />
     <Compile Include="..\..\FluentGpu.Controls\SelectionModel.cs" />
     <!-- the queue verbs + their batch cap (Wavee.Core + BCL only) — the PlayNext/AddToEnd/InsertAt routing tests -->
     <Compile Include="..\Wavee\Features\Detail\DetailQueueActions.cs" />
@@ -416,6 +443,10 @@
     <Compile Include="..\Wavee\SpotifyLive\TransferStateDecoder.cs" />
     <Compile Include="..\Wavee\SpotifyLive\SpotifyClientIdentity.cs" />
     <Compile Include="..\Wavee\SpotifyLive\ConnectStateBuilder.cs" />
+    <!-- Part 7.3's module→host services (the LiveConnect partial): Wavee.Sdk + Backend\Modules + SessionContext only, by
+         construction — the session facts arrive through ISpotifyHostSession, so none of the login stack comes with it.
+         ModuleHostServicesSpotifyTests drive the REAL registration + permission gate over the in-memory module. -->
+    <Compile Include="..\Wavee\SpotifyLive\LiveConnect.HostServices.cs" />
   </ItemGroup>
 
   <ItemGroup>

@@ -110,6 +110,9 @@ public sealed class PlaybackBridge
     IPlaybackPlayer? _restoreWiredTo;
     PlaybackController? _restoreController;
     bool _lastPushIsPlaying;   // pause-edge detector: play→pause is a snapshot write gate
+    bool _lastPushIsLive;      // rising-edge detector for live-ness — the tune-in anchor (see TunedInAtMs)
+    // The live-edge hysteresis machine's carried state (see IsBehindLive). Folded forward one window report at a time.
+    Wavee.Backend.Playback.LiveEdgeState _liveEdge;
 
     // ── UI signals (read by components) ─────────────────────────────────────────────────────────────────────────────
     public Signal<Track?> CurrentTrack { get; } = new(null);
@@ -139,6 +142,37 @@ public sealed class PlaybackBridge
     public Signal<bool> CanSkipNext { get; } = new(true);
     public Signal<bool> CanSkipPrev { get; } = new(true);
     public Signal<bool> CanSeek { get; } = new(true);
+    /// <summary>Is what is playing a LIVE broadcast (an internet radio station, a YouTube/Twitch live channel)?
+    /// Mirrors <see cref="IPlaybackState.IsLive"/> — a fact the SOURCE stated, never inferred from a 0 duration, which
+    /// is also what an unknown length looks like. Drives the player bar's LIVE chip; <see cref="CanSeek"/> already
+    /// folds the DVR window in (see <see cref="Live"/>), so no surface has to combine the two.</summary>
+    public Signal<bool> IsLive { get; } = new(false);
+
+    /// <summary>The live broadcast's TIMELINE — the DVR window, the live edge and the playhead inside it. Mirrors
+    /// <see cref="IPlaybackState.Live"/>; <c>default</c> means "not a live broadcast".
+    /// <para>This is what turns the seek bar into a DVR rail: <see cref="LiveWindow.HasWindow"/> decides rail-vs-line,
+    /// <see cref="LiveWindow.BehindMs"/> decides LIVE-pill-vs-"GO LIVE −m:ss", and <c>LiveRail.Frac/Seek</c> do the
+    /// arithmetic. One record rather than four signals, so the bar can never draw a window from the previous variant
+    /// against this one's edge.</para></summary>
+    public Signal<LiveWindow> Live { get; } = new(default);
+
+    /// <summary>Has the playhead actually FALLEN BEHIND the live edge? The one stable answer every live surface reads
+    /// — the right-hand slot to choose the LIVE mark or the "GO LIVE −m:ss" action, the DVR rail to decide whether to
+    /// draw a measured position or snap full.
+    /// <para>It is NOT <c>Live.BehindMs &gt; someThreshold</c>. A healthy live playhead rides 5–8 s inside a window
+    /// that republishes several times a second, so a raw comparison anywhere in that band flips a few times a second
+    /// and takes the seek row's layout with it. <see cref="LiveEdgeState"/> owns the decision — wide enter line,
+    /// narrow return line, two consecutive reports to confirm — and this signal is the only thing the UI may read.
+    /// Computed in <c>PushState</c>, and reset outright by <see cref="GoLive"/>.</para></summary>
+    public Signal<bool> IsBehindLive { get; } = new(false);
+
+    /// <summary>Unix ms at the moment the CURRENT live broadcast was tuned in (0 = nothing live is playing).
+    /// <para>The left-hand time label reads <c>now − TunedInAtMs</c> while live, because "elapsed" for a broadcast can
+    /// only ever mean "how long you have been listening": the stream's own position is a wall-clock number that started
+    /// before the app did, and the ordinary 0-anchored elapsed would show a meaningless six-hour count. Anchored when
+    /// live-ness begins — the track boundary OR the moment a source states live-ness for a track already playing,
+    /// whichever comes first, because a module's <c>isLive</c> lands one push after the boundary.</para></summary>
+    public Signal<long> TunedInAtMs { get; } = new(0L);
     public Signal<string?> ActiveDeviceId { get; } = new(null);
     /// <summary>The bitrate of the stream ACTUALLY PLAYING (0 = unknown / not this device). See
     /// <see cref="StreamFormat"/> for the truthfulness envelope both of these live inside.</summary>
@@ -192,6 +226,58 @@ public sealed class PlaybackBridge
     /// surface while the song kept playing underneath it).</para>
     /// </summary>
     public Signal<PlacementState> VideoSurface { get; } = new(PlacementState.Initial(PlacementPolicy.Video));
+
+    /// <summary>
+    /// Whether the DETACHED pop-out window is presenting itself borderless-fullscreen on ITS OWN monitor. Orthogonal to
+    /// <see cref="VideoSurface"/> by design: while this is true the resolved placement is still
+    /// <see cref="SurfacePlacement.Detached"/> — the pop-out did not move anywhere, it just grew.
+    ///
+    /// <para><b>This is NOT <see cref="SurfacePlacement.Fullscreen"/>.</b> That placement is the MAIN window's
+    /// full-bleed surface (<c>VideoFullscreenSurface</c>), which fullscreens the app window through
+    /// <c>InputHooks.WindowSetFullscreen</c>. Two different OS windows, two different states, deliberately not folded
+    /// into one enum: a single "fullscreen" placement would have to carry WHICH window it means, and every consumer of
+    /// the placement (the transport-owner map, the ladder, the persisted preference) would grow a branch for it. Worse,
+    /// routing the pop-out's fullscreen glyph through <c>ShowVideoAt(Fullscreen)</c> resolves the placement AWAY from
+    /// Detached, so the owner closes the pop-out and the main window goes fullscreen instead — on the MAIN window's
+    /// monitor. A pop-out dragged to a second display then jumps back to the laptop screen on a keypress. Keeping the
+    /// two states separate is what makes that monitor hop unrepresentable.</para>
+    ///
+    /// <para>Cleared at ONE chokepoint — <see cref="CommitVideoSurface"/>, the single write path for
+    /// <see cref="VideoSurface"/> — via <see cref="DetachedFullscreenRule.After"/>, so every edge that leaves Detached
+    /// (the ✕, an availability loss, a placement move, turn-off) drops it together. A pop-out closed while fullscreen
+    /// therefore cannot reopen fullscreen.</para>
+    /// </summary>
+    public Signal<bool> DetachedFullscreen { get; } = new(false);
+
+    /// <summary>
+    /// WHO owns the playback transport right now — ONE derived signal, never a per-surface visibility flag. This is the
+    /// fix for the stacked double-bar: the fullscreen video surface and the global 72-DIP <c>PlayerBar</c> used to be
+    /// two independent owners, each rendering unconditionally, with nothing that could suppress either. Now every
+    /// transport-bearing component declares a <see cref="TransportOwner"/> identity and gates on this one value
+    /// (<c>if (TransportOwnerNow.Value != Mine) …</c>), so "both bars up at once" is unrepresentable — see
+    /// <see cref="PlacementCore.TransportOwnerFor"/> for the mapping and <c>gate.media.single-transport</c>
+    /// (<see cref="PlacementCore.SingleTransportInvariant"/>) for the assertion.
+    ///
+    /// <para>DERIVED, not stored: it reads <see cref="VideoSurface"/> through <see cref="PlacementCore.Resolve"/> on
+    /// every access, so it cannot drift from the placement the way a mirrored bool would. Reading <c>.Value</c> inside a
+    /// <c>Render</c>/effect subscribes to <see cref="VideoSurface"/> exactly as a direct read would.</para>
+    /// </summary>
+    public IReadSignal<TransportOwner> TransportOwnerNow { get; }
+
+    /// <summary>Whether the video is presenting FULLSCREEN right now — the same one derived value, in the shape the
+    /// shell needs. <c>WaveeShell</c> reads it to UNMOUNT (never hide) the title bar and the player bar, and
+    /// <c>VideoFullscreenSurface</c> drives real borderless OS fullscreen off the same edge. Deliberately derived from
+    /// the RESOLVED placement, not from <c>Requested</c>: a fullscreen request that could not resolve (no
+    /// <c>WindowSetFullscreen</c> hook, no video) must not strip the shell of its chrome.</summary>
+    public IReadSignal<bool> VideoFullscreenActive { get; }
+
+    /// <summary>A read-only PROJECTION of another signal (no stored value, no second write path, so it cannot drift).
+    /// Reading it reads the source, which is what subscribes the calling computation.</summary>
+    sealed class Derived<TSource, TValue>(IReadSignal<TSource> source, Func<TSource, TValue> map) : IReadSignal<TValue>
+    {
+        public TValue Value => map(source.Value);
+        public TValue Peek() => map(source.Peek());
+    }
 
     /// <summary>The global display policy shared by every video player mount (docked, floating, detached and
     /// fullscreen). Unlike playback intent, this is a durable preference and is seeded before the first frame.</summary>
@@ -373,6 +459,12 @@ public sealed class PlaybackBridge
         if (after.Equals(before)) return;
         bool wasActive = PlacementCore.IsActive(before), isActive = PlacementCore.IsActive(after);
         VideoSurface.Value = after;
+        // THE chokepoint for the pop-out's own fullscreen mode. Every placement edge lands here (this is the single
+        // write path for VideoSurface), so one line covers the ✕, Alt+F4, an availability loss, a move to another
+        // placement and turn-off: the moment the resolved placement stops being Detached there is no pop-out window for
+        // the bit to describe, and a stale true would reopen the next pop-out already fullscreen. Signal writes are
+        // equality-gated, so this is free on the overwhelming majority of commits (the bit is false).
+        DetachedFullscreen.Value = DetachedFullscreenRule.After(DetachedFullscreen.Peek(), PlacementCore.Resolve(after));
         // Remember where the user likes to watch (only when it actually changed — this runs on availability edges and
         // track changes too, and those must not rewrite the preference).
         if (after.Preferred != before.Preferred && Settings is { } settings)
@@ -688,6 +780,11 @@ public sealed class PlaybackBridge
         _state = player.State;
         _devices = devices;
         _session = session;
+        // The two DERIVED reads over the ONE placement state (see their doc comments). Built here rather than as
+        // property initializers only because a C# instance initializer cannot reach another instance member.
+        TransportOwnerNow = new Derived<PlacementState, TransportOwner>(VideoSurface, static s => PlacementCore.TransportOwnerOf(s));
+        VideoFullscreenActive = new Derived<PlacementState, bool>(VideoSurface,
+            static s => PlacementCore.Resolve(s) == SurfacePlacement.Fullscreen);
     }
 
     /// <summary>Subscribe Core observables → signals. Idempotent. Call once from a mount effect with <c>Context.UsePost()</c>.</summary>
@@ -766,6 +863,11 @@ public sealed class PlaybackBridge
             Toast.Show(message, new ToastOptions
             {
                 Severity = InfoBarSeverity.Error,
+                // One failed play is ONE card. This lane and the paste-a-link card can both answer for the same
+                // failure with different sentences, so only a key they SHARE can collapse them — see
+                // PlayLinkActions.FailureToastKey. Coalescing keeps the first (more specific) sentence and adopts this
+                // call's retry, so the merged card is still actionable.
+                DedupeKey = PlayLinkActions.FailureToastKey,
                 ActionLabel = retryLabel,
                 OnAction = retry is null ? null : () => InvokePlaybackErrorAction(token),
             });
@@ -974,6 +1076,10 @@ public sealed class PlaybackBridge
             // A user attachment makes ANY playable a video playable — including one the source serves no video for, and
             // including on a backend with no store at all (overrides work without Spotify).
             if (!has && _overrides is { } ov) has = ov.Has(uri);
+            // A module playable the module resolved as VIDEO (YouTube, Twitch): the same answer VideoPresence gives,
+            // read here too because this recompute is what mounts the surface — without it the video host loads the
+            // HLS session but no surface ever pumps it, and the start watchdog fires (observed 2026-08-22).
+            if (!has) has = Wavee.Backend.Modules.ModulePlayables.HasVideo(uri);
         }
         bool rawHas = has;
         has = HasVideoLatch.Apply(has, uri, ref _hasVideoLatchedUri);
@@ -1128,6 +1234,30 @@ public sealed class PlaybackBridge
         CanSkipNext.Value = s.CanSkipNext;
         CanSkipPrev.Value = s.CanSkipPrev;
         CanSeek.Value = s.CanSeek && s.RecoveryKind == PlaybackRecoveryKind.None;
+        IsLive.Value = s.IsLive;
+        Live.Value = s.Live;
+        // The live-edge decision, folded ONCE here so `TimeText` and `SeekBar` read one stable fact instead of each
+        // re-deriving "behind" from the raw distance (which breathes either side of any single threshold — the flicker
+        // this machine exists to end). A track boundary starts the next playable from the settled AT-EDGE state.
+        // A seek in flight makes every window report STALE — it still describes the position the seek has already left
+        // — so the machine holds rather than folding fiction (the same suppression PushPosition applies to the raw
+        // position tick, applied to the same stale fact).
+        if (trackBoundary) _liveEdge = Wavee.Backend.Playback.LiveEdgeState.AtEdge;
+        if (!SeekLatchArmed)
+        {
+            _liveEdge = Wavee.Backend.Playback.LiveEdgeState.Next(_liveEdge, s.Live.BehindMs, s.Live.IsLive && s.Live.HasWindow);
+            IsBehindLive.Value = _liveEdge.IsBehind;
+        }
+        // The tune-in anchor. Set on the RISING edge of live-ness (not merely at a track boundary): a module states
+        // isLive at resolve, which lands one push AFTER the boundary, so anchoring only at the boundary would leave the
+        // elapsed label counting from zero-that-never-started. Cleared the moment nothing live is playing, so a stale
+        // anchor can never make an ordinary track read as a six-hour broadcast.
+        if (s.IsLive)
+        {
+            if (!_lastPushIsLive || trackBoundary) TunedInAtMs.Value = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        }
+        else TunedInAtMs.Value = 0L;
+        _lastPushIsLive = s.IsLive;
         ActiveDeviceId.Value = s.ActiveDeviceId;
         StreamBitrateKbps.Value = s.StreamBitrateKbps;
         StreamFormat.Value = s.StreamFormat;
@@ -1273,6 +1403,31 @@ public sealed class PlaybackBridge
     {
         _seekLatchTargetMs = targetMs;
         _seekLatchDeadlineTick = Environment.TickCount64 + SeekLatchWindowMs;
+    }
+
+    /// <summary>Is a committed seek still in flight (the latch armed and not yet expired)? While it is, every position
+    /// the source reports — including the one inside <see cref="LiveWindow"/> — describes where playback WAS.</summary>
+    bool SeekLatchArmed => _seekLatchTargetMs >= 0 && Environment.TickCount64 < _seekLatchDeadlineTick;
+
+    /// <summary>Jump to the live edge — the "GO LIVE −m:ss" button's whole verb.
+    /// <para>Expressed as the ordinary committed seek (to <see cref="LiveWindow.LiveEdgeMs"/>) rather than a new
+    /// transport command, which keeps ONE path through the controller: the local/remote routing, the Connect
+    /// <c>seek_to</c> forward and the seek latch all apply unchanged. The video host recognises a seek AT the live edge
+    /// and honours it with Media Foundation's own <c>GoLiveAsync</c> (which lands a few seconds inside the edge instead
+    /// of on top of it) — so the precise behaviour is the backend's, without a second verb to keep in sync.</para>
+    /// <para>A no-op when nothing live is playing, or when the source has no window to jump within: there is no
+    /// "behind" to leave.</para></summary>
+    public void GoLive()
+    {
+        LiveWindow w = Live.Peek();
+        if (!w.IsLive || w.LiveEdgeMs <= 0) return;
+        NoteSeek(w.LiveEdgeMs);
+        // The user asked to be AT the edge, so the machine is AT the edge from this instant — the in-flight seek's own
+        // pre-seek window reports still describe the position it has already left, and letting them answer "still
+        // behind" would leave the GO LIVE button on screen for the seconds it takes the edge to land.
+        _liveEdge = Wavee.Backend.Playback.LiveEdgeState.AtEdge;
+        IsBehindLive.Value = false;
+        _ = Player.SeekAsync(w.LiveEdgeMs, SeekMode.Accurate);
     }
 
     void PushPosition(long ms)

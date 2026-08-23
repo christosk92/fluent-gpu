@@ -108,18 +108,28 @@ public sealed class MediaPlayerElementLogicTests
         Assert.Equal(0, MediaPlayerElement.CalculateLetterboxBars(area, crop, bars));
     }
 
+    // ShouldForceChrome is now the NARROW clause: a real, user-visible stop, or a terminal failure. It is no longer
+    // "anything that is not Playing". Buffering became a time-bounded suppressor (S2) and Opening a bounded grace,
+    // because the protected session maps both Licensed and Buffering onto PlaybackState.Buffering and samples native
+    // state only every 250 ms — so a stale sample used as a permanent force-show pinned the chrome open forever on
+    // any slow or hung start, which is exactly the reported "auto-collapse doesn't work".
     [Theory]
-    [InlineData(true, PlaybackState.Opening, true)]
-    [InlineData(true, PlaybackState.Buffering, true)]
+    [InlineData(true, PlaybackState.Opening, false)]
+    [InlineData(true, PlaybackState.Buffering, false)]
     [InlineData(true, PlaybackState.Playing, false)]
+    [InlineData(true, PlaybackState.Failed, true)]
     [InlineData(false, PlaybackState.Playing, true)]
-    public void ChromePolicy_KeepsEarlyPlayAndPausedStatesVisible(bool playIntent, PlaybackState state, bool forced)
+    public void ChromePolicy_ForcesOnlyOnStopOrFailure(bool playIntent, PlaybackState state, bool forced)
         => Assert.Equal(forced, MediaPlayerElement.ShouldForceChrome(playIntent, state));
 
+    // The compaction threshold dropped 760 -> 420 DIP. At 760 the transport had room for the full right cluster and
+    // was collapsing chips into the ellipsis for no reason; 420 is where the left cluster and the time actually stop
+    // fitting alongside it. Width 0 (the first layout pass, before the area is measured) must NOT read as compact —
+    // that is what made all three chips render and then vanish a frame later.
     [Theory]
     [InlineData(0, false)]
-    [InlineData(420, true)]
-    [InlineData(759, true)]
+    [InlineData(419, true)]
+    [InlineData(420, false)]
     [InlineData(760, false)]
     public void ResponsiveChrome_CollapsesAdvancedCommandsIntoEllipsis(float width, bool compact)
         => Assert.Equal(compact, MediaPlayerElement.IsCompactTransport(width));

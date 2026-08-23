@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -35,8 +35,16 @@ internal sealed class FakeVideoEngine : IVideoEngine
     public int ErrorHr { get; set; }
     public string LastEventName { get; set; } = "<fake>";
     public uint ReadyState { get; set; }
+    /// <summary>The monotonic presentation epoch (IVideoEngine.PresentationEpoch). <see cref="RaiseFormatChange"/>
+    /// models MF's FORMATCHANGE/RESOURCELOST: bump it, then wake the session exactly as the real notify sink does.</summary>
+    public int PresentationEpoch { get; set; }
     public double DurationSeconds { get; set; }
     public double CurrentTimeSeconds { get; set; }
+    // Live state the session latches/polls (IVideoEngine.IsLiveSource / SeekableRange / CanPlayHls). Settable so a
+    // test can script "the engine has not answered yet" (false / (0,0)) and then a real answer.
+    public bool IsLiveSource { get; set; }
+    public (double Start, double End) SeekableRange { get; set; }
+    public bool CanPlayHls { get; set; } = true;
 
     public uint NativeW = 1920, NativeH = 1080;
     // What the fake engine "answers" when asked for the native size. NoAnswer models the bounded-Invoke expiry the real
@@ -65,6 +73,10 @@ internal sealed class FakeVideoEngine : IVideoEngine
     public void SetLoop(bool loop) => LastLoop = loop;
     public void Dispose() => DisposeCalls++;
     public void RaiseStateChanged() => StateChanged?.Invoke();
+
+    /// <summary>Model a mid-stream variant switch: the engine's presentation epoch advances and it wakes its consumer.
+    /// Set <see cref="NativeW"/>/<see cref="NativeH"/> first to script the NEW decoded frame size.</summary>
+    public void RaiseFormatChange() { PresentationEpoch++; StateChanged?.Invoke(); }
 }
 
 /// <summary>A recording <see cref="IVideoPresenter"/> — no DComp. Captures the calls the registry drain makes so a test
@@ -76,6 +88,8 @@ internal sealed class FakeVideoPresenter : IVideoPresenter
     public VideoSurfaceId LastCreated;
     public nuint LastBoundHandle;
     public RectF LastPlaceRect;
+    public RectF LastViewport;
+    public uint LastContentW, LastContentH;
     public bool LastVisible;
     public int Commits;
 
@@ -99,6 +113,13 @@ internal sealed class FakeVideoPresenter : IVideoPresenter
         Calls.Add($"Place({id.Value})");
     }
 
+    public void SetContentSize(VideoSurfaceId id, uint width, uint height)
+    {
+        LastContentW = width; LastContentH = height;
+        Calls.Add($"Content({id.Value},{width}x{height})");
+    }
+
+    public void SetViewport(VideoSurfaceId id, RectF deviceRect) { LastViewport = deviceRect; Calls.Add($"Viewport({id.Value})"); }
     public void SetVisible(VideoSurfaceId id, bool visible) { LastVisible = visible; Calls.Add($"Visible({id.Value},{visible})"); }
     public void Destroy(VideoSurfaceId id) => Calls.Add($"Destroy({id.Value})");
     public void Commit() => Commits++;
@@ -117,8 +138,12 @@ internal sealed class FakeProtectedVideoPlayer : IProtectedVideoPlayer
     public ProtectedVideoRequest? StartedWith;
     public int StartCalls, PlayCalls, PauseCalls, StopCalls, DisposeCalls;
     public long LastSeekMs = -1;
+    public SeekMode LastSeekMode = SeekMode.Accurate;
     public float LastVolume = 1f;
     public bool ReadyOnStart;
+    public bool SupportsAdaptiveSelection { get; set; }
+    public string? ActiveVideoRepresentationId { get; private set; }
+    public string? LastSelectedRepresentationId;
     public bool HasSurface { get; set; }
     public TaskCompletionSource<bool>? PlayAck, PauseAck, SeekAck;
 
@@ -139,16 +164,29 @@ internal sealed class FakeProtectedVideoPlayer : IProtectedVideoPlayer
     {
         StartCalls++;
         StartedWith = request;
+        if (request.Catalog is { } catalog)
+            for (int t = 0; t < catalog.Tracks.Count; t++)
+                for (int r = 0; r < catalog.Tracks[t].Representations.Count; r++)
+                    if (catalog.Tracks[t].Kind == FluentGpu.Media.TrackKind.Video &&
+                        catalog.Tracks[t].Representations[r].InitUrl == request.InitUrl)
+                        ActiveVideoRepresentationId = catalog.Tracks[t].Representations[r].Id;
         if (!request.StartPaused) PlayCalls++;
         if (ReadyOnStart) { HasSurface = true; _naturalSize.Value = new Size2(1280, 720); _state.Value = ProtectedVideoState.Playing; }
     }
 
     public ValueTask PlayAsync() { PlayCalls++; return PlayAck is { } ack ? new ValueTask(ack.Task) : ValueTask.CompletedTask; }
     public ValueTask PauseAsync() { PauseCalls++; return PauseAck is { } ack ? new ValueTask(ack.Task) : ValueTask.CompletedTask; }
-    public ValueTask SeekAsync(long positionMs)
+    public ValueTask SeekAsync(long positionMs, SeekMode mode)
     {
         LastSeekMs = positionMs;
+        LastSeekMode = mode;
         return SeekAck is { } ack ? new ValueTask(ack.Task) : ValueTask.CompletedTask;
+    }
+    public ValueTask SelectVideoRepresentationAsync(string representationId)
+    {
+        LastSelectedRepresentationId = representationId;
+        ActiveVideoRepresentationId = representationId;
+        return ValueTask.CompletedTask;
     }
     public void SetVolume(float volume) => LastVolume = volume;
     public void SetRate(float rate) { }

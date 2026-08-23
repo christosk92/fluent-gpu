@@ -480,21 +480,19 @@ sealed class NowPlayingPanel : Component
 }
 
 /// <summary>
-/// The pinned Details hero — the 324x324 cover-art tile HOISTED OUT of <see cref="NowPlayingPanel"/>'s own
+/// The pinned Details hero — the square cover-art tile HOISTED OUT of <see cref="NowPlayingPanel"/>'s own
 /// <c>ScrollView</c>, where it used to be the first scrolled child (<see cref="NowPlayingPanel.HeroArt"/> is that
 /// same tile, moved verbatim). <c>RightRail</c> mounts this component separately, Shrink=0f, ABOVE
-/// <see cref="NowPlayingPanel"/>'s own scrolled body, in the Details arm only — see this class's own doc comment for
-/// why a composited video cannot live inside that scroller (<c>AutoEdgeFade</c> erases the hole, a scrolled
-/// <c>DrawVideo</c> disqualifies the fling lease, and ancestor clipping is rect-only against the rail's rounded
-/// silhouette).
+/// <see cref="NowPlayingPanel"/>'s own scrolled body, in the Details arm only. The hoist is what makes that slot
+/// usable by the DOCKED VIDEO CARD, which cannot live inside a scroller at all: <c>AutoEdgeFade</c> erases the
+/// composited hole, a scrolled <c>DrawVideo</c> disqualifies the fling lease, and ancestor clipping is rect-only
+/// against the rail's rounded silhouette.
 ///
-/// <para>Shows the DOCKED video (<see cref="DockedVideoSurface"/>'s <see cref="DockedVideoFace.ArtTile"/> face — the
-/// SAME video, letterboxed into this identical 324x324 envelope) layered over the track's own artwork. The video
-/// layer mounts UNCONDITIONALLY, the same idiom <c>RightRail</c>'s own Cap-face slot already uses: its OWN mount gate
-/// (<c>VideoPlacementNow() != Docked</c> ⇒ an empty, zero-size <c>BoxEl</c>) is what makes it disappear with no
-/// reflow the instant the video is anywhere else, painting nothing over the artwork rather than this tile branching
-/// on placement itself. That keeps exactly one place — <see cref="DockedVideoSurface"/> — deciding whether the video
-/// is live here, instead of two copies of the same check drifting apart.</para>
+/// <para><b>This is the ART tile, and only the art tile.</b> It carries no video layer at all: while video is docked,
+/// <c>RightRail.PinnedHero</c> mounts the rail's ONE docked card (<c>RightRail.DockedCap</c>) in this slot INSTEAD of
+/// this component — a sibling that REPLACES the tile, never a layer over it. That is what lets the video keep its own
+/// aspect at the full rail width in the Details body exactly as it does in every other body; a video layer inside this
+/// tile could only ever be this tile's shape, which is a square inset <c>Spacing.S</c> per side.</para>
 /// </summary>
 sealed class NowPlayingHeroTile : Component
 {
@@ -513,22 +511,10 @@ sealed class NowPlayingHeroTile : Component
             // top padding (see that method's comment) — this tile does not own the space between itself and the
             // scrolled content, so RightRail's two pinned tiles (this one and the Cap-face card) stay symmetric.
             Padding = new Edges4(Spacing.S, Spacing.S, Spacing.S, 0f),
-            Children =
-            [
-                // A ZStack's OWN size is the max of its children's measured sizes (AspectRatio on the ZStack node
-                // itself is not read at measure time) — so the square comes from HeroArt's own AspectRatio=1f
-                // ImageEl and, when it is the live layer, DockedVideoSurface.ArtTile's own AspectRatio=1f outer box;
-                // both already resolve to the same width-derived square independently.
-                new BoxEl
-                {
-                    ZStack = true,
-                    Children =
-                    [
-                        NowPlayingPanel.HeroArt(track),
-                        Embed.Comp(() => new DockedVideoSurface { Face = DockedVideoFace.ArtTile }) with { Key = "npv-hero-video" },
-                    ],
-                },
-            ],
+            // HeroArt alone — its own AspectRatio=1f ImageEl is what makes the tile square, at the rail's content
+            // width. No ZStack and no video layer: see the class doc — the docked card REPLACES this whole component
+            // in RightRail's hero slot rather than painting inside it.
+            Children = [NowPlayingPanel.HeroArt(track)],
         };
     }
 }

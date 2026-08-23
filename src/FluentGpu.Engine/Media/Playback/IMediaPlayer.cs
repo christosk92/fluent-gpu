@@ -54,6 +54,10 @@ public interface IMediaPlayer : IAsyncDisposable
     IReadSignal<VideoGeometry> VideoGeometry { get; }
     /// <summary>Colorimetry/HDR metadata.</summary>
     IReadSignal<VideoColorInfo> VideoColor { get; }
+    /// <summary>The composited PLACEMENT geometry the backend last realized — the decoded size, the size it is
+    /// rendered at inside the backend's own swap chain, and the rect the compositor visual was placed at. This is
+    /// what a host reads (and logs) to answer "why is there a black bar" without guessing from pixels.</summary>
+    IReadSignal<VideoSurfaceGeometry> SurfaceGeometry { get; }
     /// <summary>Bounded-cadence playback diagnostics.</summary>
     IReadSignal<PlaybackStatistics> Statistics { get; }
     /// <summary>The selected subtitle/caption cue at the authoritative media position.</summary>
@@ -117,6 +121,10 @@ public interface IMediaPlayer : IAsyncDisposable
     ValueTask SelectTrackAsync(MediaTrack? track);
     /// <summary>Enable automatic ABR or pin a representation.</summary>
     ValueTask SelectQualityAsync(QualitySelection selection);
+    /// <summary>Update the laid-out video height used to cap automatic ABR. Manual pins intentionally ignore this cap.</summary>
+    void SetAdaptiveViewportHeight(int height) { }
+    /// <summary>Update the policy/network height cap used by automatic ABR. Zero means unlimited.</summary>
+    void SetAdaptiveMaxHeight(int height) { }
     /// <summary>Seek to the current live edge.</summary>
     ValueTask GoLiveAsync();
     /// <summary>Seek to the previous chapter marker.</summary>

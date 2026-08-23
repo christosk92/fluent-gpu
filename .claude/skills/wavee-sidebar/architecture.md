@@ -259,7 +259,7 @@ the route→node registry (a recycled slot keeps its node live while drawing a d
 a node the row called dark simply stuck, which is how **two** pills were on screen at once — the open route plus the
 previously-opened route, or the now-playing row that inherited its node. The pill means *"this is the open route"*;
 playback is the `|||` glyph and is never an input to it (`RowSelectsRoute` is route-only). Pinned by
-`SidebarChurnTests` §F3d + the source scans in `SidebarPaneInvariantTests`.
+`SidebarChurnTests` §F3d.
 
 ### Shared primitives (`Features/Sidebar/Shared/`)
 
@@ -395,9 +395,8 @@ properties delegate to them, so there is one rule) and the pure geometry.
   beside it (keyed by the row's key) genuinely remounts — and the reconciler wires a node's bound `Prop<T>` thunks at
   **mount only**. A thunk that captured `index`/`height` therefore kept answering for the row the slot was FIRST
   mounted with: after an auto-scrolled drag two carets were lit at once, and the slot holding index 0's stale binding
-  could never draw "before the first row". Pinned by `SidebarPaneInvariantTests
-  .ThePerRowDropCues_BindAgainstTheLiveSlotIndex` (a source scan: every `Prop.Of(` in `InsertionLine`/`DropPlate`
-  must read `_scope.Index.Value`).
+  could never draw "before the first row". Rule: every `Prop.Of(` in `InsertionLine`/`DropPlate`
+  must read `_scope.Index.Value` (the source-scan test that pinned this was removed on 2026-08-22).
 
   2-DIP `Tok.AccentDefault`, corner 1, a 6-DIP terminal dot at the left cap (what
   makes a hairline read as an insertion caret rather than as a divider); it translates to

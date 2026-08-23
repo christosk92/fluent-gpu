@@ -33,7 +33,29 @@ sealed class ContentHost : Component
         // reservation. The wrapper is UNCONDITIONAL — padding 0 when nothing is reserved — because appearing and
         // disappearing from the tree would remount the KeepAlive subtree and cold-restart every cached page.
         var bridge = UseContext(PlaybackBridge.Slot);
+        var ui = UseContext(ShellUi.Slot);
         float reserve = bridge?.FloatingSurfaceReserve.Value ?? 0f;   // subscribe → re-inset as the surface comes and goes
+
+        // The CLEARING half of ShellUi.ActiveStagePlayable (ModulePage writes the claim; its doc-comment states the
+        // whole contract). This boundary is the only thing that knows a navigation happened AT ALL when the
+        // destination is a page that will never write the signal — Home, a playlist, settings — so without this a
+        // watch page's claim would outlive the watch page and the rail would keep yielding to a stage that is no
+        // longer on screen.
+        //
+        // Deliberately NOT an unconditional clear on every route change. Two module pages in a row are handed over by
+        // the PAGES: the incoming one writes its own playable from an effect, and this effect and that one are two
+        // subscribers of the same flush with no guaranteed order — an unconditional clear could therefore land AFTER
+        // the new page's claim and silently erase it. Restricting the clear to routes that no ModulePage will mount
+        // for makes it order-independent: the two writers touch disjoint sets of navigations.
+        //
+        // TryParseRoute, not IsRoute: a malformed module route mounts a page that returns before its hooks run, so
+        // nothing would write the signal and a stale claim would survive. That is a clear case too.
+        UseSignalEffect(() =>
+        {
+            if (Wavee.Backend.Modules.ModulePages.TryParseRoute(_route.Value.Name, out _, out _)) return;
+            if (ui is null || ui.ActiveStagePlayable.Peek().Length == 0) return;   // value-gated: no idle wake-ups
+            ui.ActiveStagePlayable.Value = "";
+        });
         return new BoxEl
         {
             Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1, ZStack = true,
@@ -87,8 +109,21 @@ sealed class ContentHost : Component
     // spot. The masthead now lives in ShellMastheadBand, mounted ONCE as an overlay on this boundary (ContentHost.Render)
     // — bodies underneath slide like every other page swap, the band never consumes KeepAlive height, and it fades
     // opacity on family↔non-family instead of snapping Height 0.
+    //
+    // VIDEO SAFETY (the watch page). A module page can host a live composited video, which is a DestOut hole punched
+    // into the real back buffer — an ancestor opacity washes it out and an opacity GROUP erases it entirely. The
+    // fade-through recipes above are opacity recipes, so a swap touching a module page takes the translate-only pair
+    // instead. BOTH sides are classified because the outgoing page's root is still attached and DRAWING for the whole
+    // length of its exit: navigating away from a watch page is exactly as exposed as navigating to one. The
+    // classification lives HERE and not in PageNavMotion because that file is source-included into Wavee.Tests, which
+    // cannot compile ModulePages — the motion stays pure, the route knowledge stays in the shell.
     LayoutTransition? PageTransition(object oldToken, object newToken)
-        => newToken is PageSlot ? PageNavMotion.RecipeFor(_motion.Peek()) : null;
+    {
+        if (newToken is not PageSlot slot) return null;
+        bool videoSafe = Wavee.Backend.Modules.ModulePages.IsRoute(slot.Route.Name)
+            || (oldToken is PageSlot prev && Wavee.Backend.Modules.ModulePages.IsRoute(prev.Route.Name));
+        return videoSafe ? PageNavMotion.RecipeForVideoSafe(_motion.Peek()) : PageNavMotion.RecipeFor(_motion.Peek());
+    }
 
     // Detail/artist pages still use their existing signal-based internals, but each route owns its signal and cached
     // subtree. Returning via Back reactivates that destination's preserved page; opening another entity activates a new
@@ -189,6 +224,14 @@ sealed class ContentHost : Component
         if (BrowseRoutes.Is(r.Name))
             return new BoxEl { Key = "page:browse", Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
                 Children = [ Embed.Comp(() => new BrowsePageHost(r)) ] };
+
+        // A page a MODULE describes (Part 9). One page class for every module and every entity kind: the document is
+        // declarative and the app renders it, so there is nothing per-module to switch on here. Keyed by the whole
+        // route (the sidebar-customizer precedent above) so two module pages are two keep-alive slots rather than one
+        // page being re-pointed at a foreign entity.
+        if (Wavee.Backend.Modules.ModulePages.IsRoute(r.Name))
+            return new BoxEl { Key = "page:" + r.Name, Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
+                Children = [ Embed.Comp(() => new ModulePage(r)) with { Key = "module-page:" + r.Name } ] };
 
         if (ConcertRoutes.Is(r.Name))
             return new BoxEl { Key = "page:concert-route", Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,

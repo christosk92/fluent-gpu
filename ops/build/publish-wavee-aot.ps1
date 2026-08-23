@@ -75,6 +75,13 @@ if ($Diag) {
 if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed ($LASTEXITCODE)." }
 
 if (-not (Test-Path $exe)) { throw "Expected output not found: $exe" }
+
+# Bundled playback modules: one self-contained exe per module under $outDir\modules\<id>\, next to its
+# wavee-module.json (whose entry is that .exe). The app discovers them there; a dev build instead gets the
+# framework-dependent copy staged by Wavee.csproj's CopyBundledModules target. The same helper is called by
+# pack-wavee-msix.ps1, so the loose publish and the MSIX layout cannot drift. See docs/guide/playback-modules.md.
+& (Join-Path $PSScriptRoot 'publish-wavee-modules.ps1') -OutDir $outDir -Rid $rid -Configuration $Configuration
+
 $info = Get-Item $exe
 Write-Host ""
 $ver = (Select-String -Path $csproj -Pattern '<InformationalVersion>([^<]+)</InformationalVersion>').Matches[0].Groups[1].Value

@@ -39,7 +39,7 @@ public class PlaybackAttributionTests
         public void Play() { IsPlaying = true; Calls.Add("play"); }
         public void Pause() { IsPlaying = false; Calls.Add("pause"); }
         public void Stop() { IsPlaying = false; Calls.Add("stop"); }
-        public void Seek(long ms) { PositionMs = ms; Calls.Add("seek:" + ms); }
+        public void Seek(long ms, SeekMode mode) { PositionMs = ms; Calls.Add("seek:" + ms); }
         public void SetVolume(double v) => Calls.Add("vol");
         public void Emit(AudioHostSignal s) { IsBuffering = s.IsBuffering; _sig.OnNext(s); }
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
@@ -56,7 +56,7 @@ public class PlaybackAttributionTests
         public void Play() { IsPlaying = true; Calls.Add("play"); }
         public void Pause() { IsPlaying = false; Calls.Add("pause"); }
         public void Stop() { IsPlaying = false; Calls.Add("stop"); }
-        public void Seek(long ms) => Calls.Add("seek:" + ms);
+        public void Seek(long ms, SeekMode mode) => Calls.Add("seek:" + ms);
         public void SetVolume(double v) => Calls.Add("vol");
         public void Emit(AudioHostSignal s) => _sig.OnNext(s);
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;

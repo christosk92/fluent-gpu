@@ -401,6 +401,49 @@ public class LocalMediaProviderTests
         Assert.Equal("u-n1", snap.NextTracks[1].Uid);
     }
 
+    [Fact]
+    public void ConnectContextMask_RewritesEveryContextSpotifyCannotResolve_IntoItsLocalFilesContext()
+    {
+        // The row mask alone was not enough: a masked row under `context_uri: wavee:module:…` is still a state the
+        // connect-state service cannot resolve, so it never adopts us as the cluster's active device — and the state it
+        // echoes back then reads to us as somebody ELSE's, masked uris and all.
+        Assert.Equal("spotify:playlist:p", ConnectUriMask.MaskContext("spotify:playlist:p"));
+        Assert.Equal("spotify:album:a", ConnectUriMask.MaskContext("spotify:album:a"));
+        Assert.Equal(ConnectUriMask.LocalFilesContext, ConnectUriMask.MaskContext("wavee:module:wavee.youtube:dFJz"));
+        Assert.Equal(ConnectUriMask.LocalFilesContext, ConnectUriMask.MaskContext("wavee:local:file:zzz"));
+        // Spotify's own metadata-in-the-uri local shape is not resolvable either — as a row OR as a context.
+        Assert.Equal(ConnectUriMask.LocalFilesContext, ConnectUriMask.MaskContext("spotify:local:Claude::Claude+FM:0"));
+        // Absent stays absent (nothing is playing) — the mask never invents a context.
+        Assert.Null(ConnectUriMask.MaskContext(null));
+        Assert.Equal("", ConnectUriMask.MaskContext(""));
+    }
+
+    [Fact]
+    public async Task ConnectContextMask_ReachesTheWire_AlongsideTheMaskedRow()
+    {
+        var h = new MaskHarness();
+        h.Publisher.PublishUriMask = ConnectUriMask.For(ThreeProviderRegistry(out _));
+        h.Publisher.PublishContextMask = ConnectUriMask.ContextMask;
+
+        const string moduleUri = "wavee:module:wavee.youtube:dFJzUXNUTXZQTmc";
+        var moduleTrack = new Track("dFJzUXNUTXZQTmc", moduleUri, "Claude FM", [new ArtistRef("", "", "Claude")],
+            new AlbumRef("", "", ""), 0, false, null);
+
+        // The context arrives the way a real one does — through the projection.
+        h.Proj.OnCluster(new ClusterDelta("", true, new RemoteTrack(moduleUri, "Claude FM", "Claude", "", "", "", null, 0),
+            moduleUri, false, true, false, 0, 0, 0, 0, false, RepeatMode.Off,
+            Array.Empty<ConnectDeviceRow>(), Array.Empty<RemoteTrack>()));
+        h.Connect("c1");
+        h.SetQueue(new QueueEntry(QueueItemId.None, "now", moduleTrack, QueueBucket.NowPlaying, QueueProvider.Context, false, "u-now"));
+        h.Play(moduleTrack);
+        await Task.Delay(20);
+
+        var snap = Assert.IsType<LocalPlaybackSnapshot>(h.LastSnapshot);
+        Assert.Equal(ConnectUriMask.LocalFilesContext, snap.ContextUri);
+        Assert.Equal("spotify:local:Claude::Claude+FM:0", snap.Track.Uri);
+        Assert.Equal("u-now", snap.Track.Uid);
+    }
+
     // ── Prepared-next closes for a local next ─────────────────────────────────────────────────────────────────────────
 
     [Fact]
@@ -573,7 +616,7 @@ public class LocalMediaProviderTests
         public void Play() => Playing = true;
         public void Pause() => Playing = false;
         public void Stop() => Playing = false;
-        public void Seek(long positionMs) { }
+        public void Seek(long positionMs, SeekMode mode) { }
         public void SetVolume(double volume01) { }
         public long PositionMs => 0;
         public bool IsPlaying => Playing;

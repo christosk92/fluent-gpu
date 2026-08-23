@@ -135,7 +135,7 @@ sealed class RecordingAudioHost : IAudioHost
     public void Play() => PlayCalled = true;
     public void Pause() { }
     public void Stop() { StopCalled = true; PlayCalled = false; StopSignaled.TrySetResult(); }
-    public void Seek(long ms) { PositionMs = ms; Seeks.Add(ms); }
+    public void Seek(long ms, SeekMode mode) { PositionMs = ms; Seeks.Add(ms); }
     public void SetVolume(double v) { }
     public long PositionMs { get; set; }
     public bool IsPlaying => PlayCalled;

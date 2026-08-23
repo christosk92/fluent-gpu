@@ -1926,7 +1926,7 @@ sealed class LyricsView : Component
         _scrollSnapped = false;   // the next follow is the HARD first-landing jump, with the cascade left at rest
         ZeroCascade(Context.Scene);
         ResetWipeThrottle();
-        _ = b.Player.SeekAsync(ms);
+        _ = b.Player.SeekAsync(ms, SeekMode.Accurate);   // a line tap is a commit, never a scrub preview
     }
 
     internal void OnFrame(bool forceVisual = false, long probeNowMs = long.MinValue)

@@ -251,6 +251,18 @@ same provider hydrator → per-kind ladder → store. Design: `hydration-facade-
   owning source's `IPlaybackSource`; expose a **unified active state** to `PlaybackBridge`; merge devices; route
   transfer to the active source. With one real source today there is nothing to federate yet — these are the
   hooks Connect/playback attach to without touching the UI.
+- **Playback federation now exists — as modules.** A source no longer has to live in this repo to be playable: a
+  **playback module** is an out-of-process exe (JSON-RPC over stdio, written against `Wavee.Sdk`) that owns the
+  uri namespace `wavee:module:<id>:<b64url(playableId)>` and enters the app the ordinary way — one
+  `ModuleMediaProvider : IPlayableMediaProvider` per installed module, appended to `MediaProviderRegistry` after
+  the built-ins, so the registry order still *is* the routing table and nothing between play-intent and a host
+  names a source type. The manifest's `capabilities` become `MediaProviderCaps` (declared, never probed; absent =
+  the simpler path), and the paste-a-link entry point is a `ModuleRouter.MatchAsync` prefilter over the manifests,
+  not a hard-coded list. YouTube, Twitch and internet radio ship this way today; Spotify playback migrates to the
+  same seam next (the *session* stays here — Connect, catalog, search and library need it, and the module reaches
+  it through permission-gated host services). v1 module facets are **playback + paste-url ownership + metadata**;
+  `search`/`browse` are declared in the manifest but not yet mapped onto `ICatalogSource`/`IOnlineCatalog`.
+  How-to: `docs/guide/playback-modules.md`.
 
 ### 4.4 Anti-Corruption Layer
 

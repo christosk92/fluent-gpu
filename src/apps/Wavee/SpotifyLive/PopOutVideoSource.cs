@@ -32,6 +32,16 @@ public sealed record PopOutVideoSource
     /// <summary>Stable identity for player remount (manifest id or clear URL).</summary>
     public string Key { get; init; } = "";
 
+    /// <summary>Is this source a LIVE broadcast — a YouTube/Twitch channel, not a finite video?
+    /// <para>Carried on the SOURCE rather than inferred by the host, because by the time Media Foundation is open it is
+    /// too late to tell: MF reports a sliding DVR window as a perfectly ordinary finite <c>GetDuration</c>, which is
+    /// exactly how a six-hour broadcast came to render as <c>0:03 / -3:22</c>. The module that resolved the locator is
+    /// the one party that KNOWS, so its answer rides along and the host opens the source with
+    /// <c>SourceLiveness.Live</c> — after which the engine never publishes a finite duration for it at all.</para>
+    /// <para>False for every clear/DRM Spotify video and every local attachment, which is correct: those are finite
+    /// edits with a real end.</para></summary>
+    public bool IsLive { get; init; }
+
     public bool IsDrm => DrmDescriptor is not null && LicenseRelay is not null;
 
     public static PopOutVideoSource Clear(string url) => new() { ClearUrl = url, Key = url };

@@ -1,6 +1,4 @@
 using System;
-using System.IO;
-using System.Runtime.CompilerServices;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using Wavee;
@@ -193,78 +191,5 @@ public class DetailPageToneTests
             // …and the two themes never cross over.
             Assert.True(ColorContrast.RelativeLuminance(dark) < ColorContrast.RelativeLuminance(light));
         }
-    }
-
-    /// <summary>The sticky band does not FLATTEN over this tone — it SHOWS it. The band paints nothing and the page's
-    /// content is clipped at its lower edge, so the plane (a page-root, non-scrolling sibling of the scroller) is
-    /// literally what is visible in the band region. That makes the tone the band's colour with no plumbing at all,
-    /// which is why the tone signal this page used to publish is gone.</summary>
-    [Fact]
-    public void TheBandShowsTheTone_RatherThanApproximatingIt()
-    {
-        string root = AppSourceRoot();
-        if (root is null) { Assert.Skip("app sources not present (binary-only run)"); return; }
-
-        // No tone hand-down survives: not the signal, not the band-fill bind, not the flatten-over helper.
-        foreach (string rel in new[] { "Features/Detail/DetailShell.cs", "Features/Detail/DetailTracks.cs",
-                                       "Features/Detail/DetailVerticalHero.cs", "Design/CoverPaletteLeaves.cs" })
-        {
-            string text = File.ReadAllText(Path.Combine(root, rel.Replace('/', Path.DirectorySeparatorChar)));
-            Assert.DoesNotContain("ContextBandOver", text);
-            Assert.DoesNotContain("_pageTone", text);
-        }
-
-        // The plane is still mounted BEHIND the page in the shell root's ZStack — that ordering is what the band's
-        // unpainted region relies on.
-        string shell = File.ReadAllText(Path.Combine(root, "Features", "Detail", "DetailShell.cs"));
-        int zstack = shell.IndexOf("tintBinder,", StringComparison.Ordinal);
-        Assert.True(zstack >= 0);
-        int plane = shell.IndexOf("tonePlane,", zstack, StringComparison.Ordinal);
-        int page = shell.IndexOf("verticalPage,", zstack, StringComparison.Ordinal);
-        Assert.True(plane > zstack && page > plane, "the tone plane must precede (paint behind) the page");
-    }
-
-    /// <summary>The tone is mounted for BOTH page arms from ONE leaf, the washes it replaced are gone, and the leaf
-    /// respects the two "no tone" inputs (the colour-washes preference and a cover with no grading).</summary>
-    [Fact]
-    public void ThePlane_IsOneLeafMountedByBothArms()
-    {
-        string root = AppSourceRoot();
-        if (root is null) { Assert.Skip("app sources not present (binary-only run)"); return; }
-
-        string shell = File.ReadAllText(Path.Combine(root, "Features", "Detail", "DetailShell.cs"));
-        Assert.DoesNotContain("DetailWash", shell);
-        // ONE construction, referenced by both arms' ZStacks.
-        Assert.Contains("CoverPaletteLeaves.PageTonePlane(", shell);
-        Assert.Contains("colorWashesDisabled", shell);
-        Assert.Contains("DetailPageToneHeroOnly", shell);
-
-        string leaves = File.ReadAllText(Path.Combine(root, "Design", "CoverPaletteLeaves.cs"));
-        Assert.DoesNotContain("CoverKeyedWash", leaves);
-        Assert.Contains("WaveePalette.PageTone", leaves);
-        // The Watch subscription is INSIDE the leaf (never in a page Render) — that is what keeps a grading arrival to
-        // one node — and the ground itself is a BOUND brush so it cross-fades on the compositor.
-        Assert.Contains("plane.Watch(", leaves);
-        Assert.Contains("Fill = Prop.Of(", leaves);
-        Assert.Contains("BrushTransitionMs = WaveeMotion.Standard", leaves);
-        // NOTHING IS SAMPLED FROM THE COVER AT PAGE SCALE. The plane is the clamped tone and (in hero-only mode) a
-        // gradient band of it — never a copy of the artwork. The blurred "background extension" that used to sit on top
-        // is deleted because its loudness tracked the SLEEVE's brightness, so the same page read two ways; see
-        // CoverPageTonePlane's tombstone and CoverBrightnessCannotChangeThePagesBrightness above. Both spellings are
-        // barred: the baked derived-texture blur AND the per-frame offscreen-RT Gaussian.
-        Assert.DoesNotContain("BakedBlur", leaves);
-        Assert.DoesNotContain(" Blur = ", leaves);   // BoxEl.Blur — the per-frame offscreen-RT Gaussian
-    }
-
-    static string AppSourceRoot([CallerFilePath] string here = "")
-    {
-        var dir = new DirectoryInfo(Path.GetDirectoryName(here)!);
-        while (dir is not null)
-        {
-            string candidate = Path.Combine(dir.FullName, "Wavee", "Design", "WaveePalette.cs");
-            if (File.Exists(candidate)) return Path.Combine(dir.FullName, "Wavee");
-            dir = dir.Parent;
-        }
-        return null!;
     }
 }

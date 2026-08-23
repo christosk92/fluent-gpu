@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using FluentGpu.Foundation;
 using FluentGpu.Signals;
 
 namespace FluentGpu.Media;
@@ -25,6 +26,25 @@ public enum AdaptiveManifestKind : byte { Auto, Dash, Hls }
 /// <summary>Latency target for adaptive live playback.</summary>
 public enum LiveLatencyMode : byte { Standard, LowLatency, Custom }
 
+/// <summary>
+/// Whether a source is UNBOUNDED (live) — the caller's declaration, which outranks any platform inference.
+/// <para>Inference is genuinely ambiguous on the plain-URL path: Media Foundation reports a sliding DVR window as a
+/// FINITE <c>GetDuration</c> (a YouTube live master playlist answers "3:22", which is the window, not a length), and
+/// its live-ness probe is a bounded read whose <see langword="false"/> can mean "not answered yet". A host that
+/// already KNOWS what it resolved (a module that returned <c>isLive</c>) says so here instead of letting the backend
+/// guess, and a host that knows the opposite pins VOD so a slow probe can never latch a false positive.</para>
+/// </summary>
+public enum SourceLiveness : byte
+{
+    /// <summary>Let the backend decide (the platform's own live probe). The default; unchanged behaviour.</summary>
+    Auto,
+    /// <summary>The source IS live: no duration is ever published, the timeline is the DVR window from the first
+    /// metadata, and the live commands (GoLive, Seek only across a wide-enough window) apply immediately.</summary>
+    Live,
+    /// <summary>The source is NOT live: live inference is off, so a platform probe can never flip it live.</summary>
+    Vod,
+}
+
 /// <summary>Adaptive-source policy. The portable scheduler consumes this; platform decoders never parse policy.</summary>
 public sealed record AdaptiveSourceOptions
 {
@@ -46,6 +66,19 @@ public readonly record struct TimelineInfo(
     public static TimelineInfo Empty { get; } = new(false, TimeSpan.Zero, TimeSpan.Zero, TimeSpan.Zero,
         TimeSpan.Zero, false, Array.Empty<MediaChapter>());
     public TimeSpan DvrWindow => SeekableEnd > SeekableStart ? SeekableEnd - SeekableStart : TimeSpan.Zero;
+
+    /// <summary>The narrowest DVR window worth offering a rail for — the ONE canonical threshold, shared by the
+    /// backend (which decides whether to offer <c>Seek</c> at all) and by the transport UI (which decides whether to
+    /// render a rail with no duration behind it). Under this a "seek" is a jitter of a few seconds that the sliding
+    /// window invalidates before the pointer is released: a control that lies about what it does. True-live HLS
+    /// commonly publishes a 3-segment (~6 s) window, so this drops the rail for it and keeps it for a real DVR
+    /// window.</summary>
+    public static TimeSpan MinDvrWindow => TimeSpan.FromSeconds(30);
+
+    /// <summary>True when this is a live timeline whose DVR window is wide enough to aim inside
+    /// (<see cref="MinDvrWindow"/>) — i.e. a rail mapped to the WINDOW is meaningful even though
+    /// <c>Duration</c> is zero.</summary>
+    public bool HasDvrWindow => IsLive && DvrWindow >= MinDvrWindow;
 }
 
 /// <summary>Rational pixel/sample aspect ratio. <c>1/1</c> means square pixels.</summary>
@@ -69,6 +102,33 @@ public readonly record struct VideoGeometry(
 {
     public static VideoGeometry Empty => new(SizeI.Zero, default, PixelAspectRatio.Square, 0, SizeI.Zero);
     public bool HasVideo => !DisplaySize.IsEmpty || !CodedSize.IsEmpty;
+}
+
+/// <summary>The COMPOSITED PLACEMENT geometry a video session last realized — the three numbers that decide whether a
+/// frame fills its card or sits in letterbox bars, published so a host can SEE them instead of inferring them from
+/// pixels. Distinct from <see cref="VideoGeometry"/>, which describes the DECODED frame (aperture/SAR/rotation) and
+/// says nothing about where it was put.
+/// <list type="bullet">
+/// <item><see cref="Natural"/> — the decoded frame size the session was told to render.</item>
+/// <item><see cref="Content"/> — the size the frame is rendered at inside the backend's own swap chain, which is also
+///   the content size handed to the compositor. Its ASPECT must equal the frame's, or the backend letterboxes inside
+///   its own destination and no compositor fit can undo it.</item>
+/// <item><see cref="Place"/> — the device-independent rect the compositor visual is placed at (the fitted video rect
+///   the element computed). <c>Place</c> ÷ <see cref="Content"/> is the per-axis scale the compositor applies, so
+///   equal ratios == uniform, unequal == a deliberate stretch (Fill).</item>
+/// </list></summary>
+public readonly record struct VideoSurfaceGeometry(SizeI Natural, SizeI Content, RectF Place, float Scale)
+{
+    /// <summary>Nothing placed yet.</summary>
+    public static VideoSurfaceGeometry Empty => new(SizeI.Zero, SizeI.Zero, default, 1f);
+
+    /// <summary>True when a real placement has been realized (a non-degenerate destination rect).</summary>
+    public bool IsPlaced => Place.W > 0f && Place.H > 0f;
+
+    /// <summary>A stable one-line rendering for a host log — the exact shape a geometry defect is read from.</summary>
+    public override string ToString()
+        => $"natural={Natural.Width}x{Natural.Height} content={Content.Width}x{Content.Height} " +
+           $"place={Place.X:0.#},{Place.Y:0.#},{Place.W:0.#},{Place.H:0.#} scale={Scale:0.##}";
 }
 
 public enum VideoColorPrimaries : byte { Unknown, Bt601, Bt709, Bt2020, DisplayP3 }

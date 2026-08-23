@@ -156,4 +156,58 @@ public class ContentHostPageTransitionTests
     [Fact]
     public void MastheadFadeSharesThePageExitWindow()
         => Assert.Equal(120f, PageNavMotion.FadeThroughExitMs);
+
+    // ── 5. the VIDEO-SAFE pair ──────────────────────────────────────────────────────────────────────────────────────
+    // A module watch page hosts a live composited video, which is a DestOut hole punched into the real back buffer. An
+    // ancestor opacity channel multiplies straight into the video command's own opacity (a see-through video), and an
+    // opacity GROUP pushes an offscreen RT the punch can never reach the back buffer from — the hole then vanishes
+    // entirely and silently. Every recipe above animates opacity, so ContentHost swaps in this pair whenever EITHER
+    // side of the swap is a module route (the outgoing page's root is still attached and drawing for its whole exit).
+
+    [Fact]
+    public void NoVideoSafeRecipeTouchesOpacity()
+    {
+        foreach (var motion in new[] { NavTransitionKind.Forward, NavTransitionKind.Back })
+        {
+            var recipe = PageNavMotion.RecipeForVideoSafe(motion)!.Value;
+            Assert.False(recipe.Channels.HasFlag(TransitionChannels.Opacity),
+                $"{motion}: an opacity channel washes out (or erases) a composited video hole");
+            Assert.Equal(1f, recipe.Enter.Opacity);
+            Assert.Equal(1f, recipe.Exit.Opacity);
+            Assert.Equal(0f, recipe.Enter.Blur);   // a blur is the same offscreen RT by another name
+            Assert.Equal(0f, recipe.Exit.Blur);
+        }
+    }
+
+    [Fact]
+    public void TheVideoSafeRecipesAreASymmetricTranslate_WithAnActiveExit()
+    {
+        var fwd = PageNavMotion.RecipeForVideoSafe(NavTransitionKind.Forward)!.Value;
+        var back = PageNavMotion.RecipeForVideoSafe(NavTransitionKind.Back)!.Value;
+
+        foreach (var recipe in new[] { fwd, back })
+        {
+            Assert.True(recipe.Channels.HasFlag(TransitionChannels.Position),
+                "a translate is the ONE ancestor motion a video hole rides correctly");
+            Assert.True(recipe.Enter.Active);
+            Assert.True(recipe.Exit.Active,
+                "a stripped Exit detaches the outgoing page in the same frame — the card flashes empty");
+            Assert.True(recipe.Dynamics.DurationMs > 0f || recipe.Dynamics.Kind == DynamicsKind.Spring);
+        }
+
+        // Symmetric: the pages travel together, the outgoing one leaving the way the incoming one arrives from.
+        Assert.True(fwd.Enter.Dx > 0f);
+        Assert.True(back.Enter.Dx < 0f);
+        Assert.Equal(fwd.Enter.Dx, -back.Enter.Dx);
+        Assert.Equal(fwd.Enter.Dx, -fwd.Exit.Dx);
+        Assert.Equal(back.Enter.Dx, -back.Exit.Dx);
+        Assert.Equal(PageNavMotion.PageSlideSafeForward, fwd);
+        Assert.Equal(PageNavMotion.PageSlideSafeBack, back);
+    }
+
+    /// <summary>Neutral's only recipe is opacity and nothing else, so there is no video-safe form of it to hand back.
+    /// Null is an honest CUT — the alternative is inventing a motion the design never asked for.</summary>
+    [Fact]
+    public void NeutralHasNoVideoSafeRecipe()
+        => Assert.Null(PageNavMotion.RecipeForVideoSafe(NavTransitionKind.Neutral));
 }

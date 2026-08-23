@@ -46,6 +46,12 @@ public sealed class SwitchableState : IPlaybackState, IDisposable
     public string? ContextUri => Cur.ContextUri;
     public bool IsPlaying => Cur.IsPlaying;
     public bool IsBuffering => Cur.IsBuffering;
+    // EVERY IPlaybackState member is forwarded, including the ones the interface gives a DEFAULT body. A default is
+    // what a provider with no answer reports; a FACADE has no answers of its own, so inheriting one here silently
+    // replaces the live projection's truth with "no". That is exactly what happened to live-ness: the projection said
+    // IsLive, the bridge read this facade, and the LIVE pill never lit for any broadcast. Never add a member to
+    // IPlaybackState without adding its forward here.
+    public PlaybackRecoveryKind RecoveryKind => Cur.RecoveryKind;
     public long PositionMs => Cur.PositionMs;
     public long DurationMs => Cur.DurationMs;
     public double Volume => Cur.Volume;
@@ -57,6 +63,10 @@ public sealed class SwitchableState : IPlaybackState, IDisposable
     public bool CanSkipNext => Cur.CanSkipNext;
     public bool CanSkipPrev => Cur.CanSkipPrev;
     public bool CanSeek => Cur.CanSeek;
+    public bool IsLive => Cur.IsLive;
+    public LiveWindow Live => Cur.Live;
+    public int StreamBitrateKbps => Cur.StreamBitrateKbps;
+    public string? StreamFormat => Cur.StreamFormat;
     public string? ActiveDeviceId => Cur.ActiveDeviceId;
     public IObservable<IPlaybackState> Changes => _changes;
     public IObservable<long> PositionTicks => _ticks;
@@ -90,7 +100,7 @@ public sealed class SwitchablePlayer : IPlaybackPlayer
     public Task ResumeAsync(CancellationToken ct = default) => Cur.ResumeAsync(ct);
     public Task NextAsync(CancellationToken ct = default) => Cur.NextAsync(ct);
     public Task PreviousAsync(CancellationToken ct = default) => Cur.PreviousAsync(ct);
-    public Task SeekAsync(long positionMs, CancellationToken ct = default) => Cur.SeekAsync(positionMs, ct);
+    public Task SeekAsync(long positionMs, SeekMode mode, CancellationToken ct = default) => Cur.SeekAsync(positionMs, mode, ct);
     public Task SetVolumeAsync(double volume01, CancellationToken ct = default) => Cur.SetVolumeAsync(volume01, ct);
     public Task SetShuffleAsync(bool on, CancellationToken ct = default) => Cur.SetShuffleAsync(on, ct);
     public Task SetRepeatAsync(RepeatMode mode, CancellationToken ct = default) => Cur.SetRepeatAsync(mode, ct);

@@ -365,39 +365,49 @@ public static class RepaintStreamSafety
         {
             DrawOp op = (DrawOp)MemoryMarshal.Read<int>(cmds.Slice(pos));
             pos += sizeof(int);
-            int body;
-            switch (op)
-            {
-                case DrawOp.FillRoundRect: body = Unsafe.SizeOf<FillRoundRectCmd>(); break;
-                case DrawOp.DrawGlyphRun: body = Unsafe.SizeOf<DrawGlyphRunCmd>(); break;
-                case DrawOp.DrawGlyphRunGradient: body = Unsafe.SizeOf<DrawGlyphRunGradientCmd>(); break;
-                case DrawOp.PushClip: body = Unsafe.SizeOf<ClipCmd>(); break;
-                case DrawOp.PopClip: body = 0; break;
-                case DrawOp.DrawImage: body = Unsafe.SizeOf<DrawImageCmd>(); break;
-                case DrawOp.DrawRoundRectStroke: body = Unsafe.SizeOf<DrawRoundRectStrokeCmd>(); break;
-                case DrawOp.DrawShadow: body = Unsafe.SizeOf<DrawShadowCmd>(); break;
-                case DrawOp.DrawArc: body = Unsafe.SizeOf<DrawArcCmd>(); break;
-                case DrawOp.DrawPolylineStroke: body = Unsafe.SizeOf<DrawPolylineStrokeCmd>(); break;
-                case DrawOp.DrawGradientRect: body = Unsafe.SizeOf<DrawGradientRectCmd>(); break;
-                case DrawOp.DrawGradientStroke: body = Unsafe.SizeOf<DrawGradientStrokeCmd>(); break;
-                case DrawOp.DrawTabShape: body = Unsafe.SizeOf<DrawTabShapeCmd>(); break;
-                case DrawOp.DrawIconMask: body = Unsafe.SizeOf<DrawIconMaskCmd>(); break;
-                case DrawOp.DrawVideo: body = Unsafe.SizeOf<DrawVideoCmd>(); break;
-                case DrawOp.EraseRoundRect: body = Unsafe.SizeOf<EraseRoundRectCmd>(); break;
-                // Pure geometry (a retained triangle-soup fill/stroke, like FillRoundRect): every read is inside the
-                // node's own device box, so a damage-clamped scissor replay is safe.
-                case DrawOp.FillPath: body = Unsafe.SizeOf<FillPathCmd>(); break;
-                case DrawOp.StrokePath: body = Unsafe.SizeOf<StrokePathCmd>(); break;
-                case DrawOp.PopLayer: body = Unsafe.SizeOf<PopLayerCmd>(); break;
-                case DrawOp.PushLayer:
-                    body = Unsafe.SizeOf<PushLayerCmd>();
-                    if (pos + body > cmds.Length) return false;
-                    if (MemoryMarshal.Read<PushLayerCmd>(cmds.Slice(pos)).Kind != (int)LayerKind.Opacity) return false;
-                    break;
-                default: return false;   // an op this scanner cannot size — never guess
-            }
-            if (pos + body > cmds.Length) return false;   // truncated payload: a malformed run
+            if (!TryBodySize(op, out int body)) return false;   // an op this scanner cannot size — never guess
+            if (pos + body > cmds.Length) return false;         // truncated payload: a malformed run
+            // Only a plain Opacity group survives a clamped replay; Acrylic / Blur / EdgeFade do not (see the remarks).
+            if (op == DrawOp.PushLayer
+                && MemoryMarshal.Read<PushLayerCmd>(cmds.Slice(pos)).Kind != (int)LayerKind.Opacity) return false;
             pos += body;
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// The ONE opcode→payload-size table. Every stream walk that must FRAME the byte stream — <see cref="Scan"/>, and
+    /// the validation harness's reference replay — goes through this, so a new opcode can never be sized two ways in
+    /// two walkers (the drift class the ownership map exists to prevent). Returns false for an opcode this table does
+    /// not know, which every caller must treat as "stop, and fall back to the safe route".
+    /// </summary>
+    public static bool TryBodySize(DrawOp op, out int body)
+    {
+        switch (op)
+        {
+            case DrawOp.FillRoundRect: body = Unsafe.SizeOf<FillRoundRectCmd>(); break;
+            case DrawOp.DrawGlyphRun: body = Unsafe.SizeOf<DrawGlyphRunCmd>(); break;
+            case DrawOp.DrawGlyphRunGradient: body = Unsafe.SizeOf<DrawGlyphRunGradientCmd>(); break;
+            case DrawOp.PushClip: body = Unsafe.SizeOf<ClipCmd>(); break;
+            case DrawOp.PopClip: body = 0; break;
+            case DrawOp.DrawImage: body = Unsafe.SizeOf<DrawImageCmd>(); break;
+            case DrawOp.DrawRoundRectStroke: body = Unsafe.SizeOf<DrawRoundRectStrokeCmd>(); break;
+            case DrawOp.DrawShadow: body = Unsafe.SizeOf<DrawShadowCmd>(); break;
+            case DrawOp.DrawArc: body = Unsafe.SizeOf<DrawArcCmd>(); break;
+            case DrawOp.DrawPolylineStroke: body = Unsafe.SizeOf<DrawPolylineStrokeCmd>(); break;
+            case DrawOp.DrawGradientRect: body = Unsafe.SizeOf<DrawGradientRectCmd>(); break;
+            case DrawOp.DrawGradientStroke: body = Unsafe.SizeOf<DrawGradientStrokeCmd>(); break;
+            case DrawOp.DrawTabShape: body = Unsafe.SizeOf<DrawTabShapeCmd>(); break;
+            case DrawOp.DrawIconMask: body = Unsafe.SizeOf<DrawIconMaskCmd>(); break;
+            case DrawOp.DrawVideo: body = Unsafe.SizeOf<DrawVideoCmd>(); break;
+            case DrawOp.EraseRoundRect: body = Unsafe.SizeOf<EraseRoundRectCmd>(); break;
+            // Pure geometry (a retained triangle-soup fill/stroke, like FillRoundRect): every read is inside the
+            // node's own device box, so a damage-clamped scissor replay is safe.
+            case DrawOp.FillPath: body = Unsafe.SizeOf<FillPathCmd>(); break;
+            case DrawOp.StrokePath: body = Unsafe.SizeOf<StrokePathCmd>(); break;
+            case DrawOp.PopLayer: body = Unsafe.SizeOf<PopLayerCmd>(); break;
+            case DrawOp.PushLayer: body = Unsafe.SizeOf<PushLayerCmd>(); break;
+            default: body = 0; return false;
         }
         return true;
     }

@@ -33,6 +33,8 @@ public enum MotionTokenId : ushort
     // Feature motions
     ConnectedFly, ContentResize, ItemPlacement, ScrollFade,
     DisclosureExpand, DisclosureCollapse, DisclosureChevron,
+    // Media transport chrome — deliberately ASYMMETRIC (reveal must feel instant, conceal must not blink out).
+    MediaChromeReveal, MediaChromeConceal,
 }
 
 /// <summary>A resolved motion recipe: dynamics (eased OR spring) + the reduced-motion policy. 24B-ish POD.</summary>
@@ -70,6 +72,19 @@ public readonly struct MotionTokenDef : System.IEquatable<MotionTokenDef>
         }
         return TransitionDynamics.Tween(DurationMs, Easing);
     }
+
+    /// <summary>This token's duration with REDUCED MOTION already resolved as a VALUE (design §5.10) — 0 when the
+    /// policy says snap for <paramref name="channel"/>, the authored duration otherwise. Call sites that seed a channel
+    /// by hand (<c>AnimEngine.SeedEased</c>, which takes a raw duration and therefore cannot consult the token) use this
+    /// instead of branching on <c>Motion.ReducedMotion</c> — a branch in authoring code is a hook-order hazard AND
+    /// re-litigates the policy per site. Mirrors <c>AnimScheduler.ReducedSnap</c> exactly: <see cref="ReducedMotionPolicy.Exempt"/>
+    /// always runs, <see cref="ReducedMotionPolicy.KeepFade"/> keeps an opacity cross-fade, everything else snaps.</summary>
+    public float EffectiveDurationMs(AnimChannel channel)
+        => Mode == IntegrationMode.Spring ? 0f
+         : FluentGpu.Dsl.Motion.ReducedMotion
+           && Reduced != ReducedMotionPolicy.Exempt
+           && !(Reduced == ReducedMotionPolicy.KeepFade && channel == AnimChannel.Opacity)
+           ? 0f : DurationMs;
 
     // IEquatable so the base Element.Transition (Prop-adjacent: a `MotionTokenDef?` on EVERY node) diffs through the
     // no-box GenericEqualityComparer/NullableEqualityComparer path, not ObjectEqualityComparer's boxing + reflection
@@ -109,6 +124,34 @@ public readonly record struct MotionTarget
 /// <summary>The default motion-token table + convenience accessors (mirrors theming's <c>Tok.*</c> surface).</summary>
 public static class MotionTok
 {
+    // ── Media transport chrome: the auto-hide timing table ───────────────────────────────────────────────────────────
+    // Every value here is a SHIPPED-PLAYER value, not a taste call. The previous 1800 ms sat below every player that
+    // ships: WinUI MediaTransportControls' ControlPanelDisplayTimeoutInSecs is 3 s, Chromium's media controls 2.5 s,
+    // video.js / Plyr 2 s, Android Media3 5 s. A dwell shorter than the shortest shipped one reads as the chrome
+    // "running away" from a user who is still deciding.
+
+    /// <summary>Idle dwell before an actively-playing media surface hides its transport chrome — MOUSE input.
+    /// WinUI <c>ControlPanelDisplayTimeoutInSecs</c> parity (3 s).</summary>
+    public const float MediaChromeIdleDelayMs = 3000f;
+    /// <summary>Idle dwell after a TOUCH reveal. Longer than the mouse dwell because a touch user has no hover to keep
+    /// the chrome alive and must re-tap to get it back — the same split Media3/YouTube make.</summary>
+    public const float MediaChromeIdleDelayTouchMs = 4000f;
+    /// <summary>Idle dwell after the chrome was revealed by FOCUS entering it (keyboard/AT reveal). Longer for the same
+    /// reason as touch: there is no pointer motion to keep re-arming it while the user reads the controls.</summary>
+    public const float MediaChromeIdleDelayAfterFocusMs = 4000f;
+    /// <summary>The cursor hides this long AFTER the chrome does, so it does not blink out in the middle of the chrome's
+    /// fade (two simultaneous disappearances read as a glitch, not as one idle transition).</summary>
+    public const float MediaChromeCursorExtraDelayMs = 400f;
+    /// <summary>Squared-distance gate (DIP) a pointer move must cross to count as ACTIVITY while the chrome is HIDDEN.
+    /// Zero while the chrome is VISIBLE: once it is up, every move should re-arm the dwell. (Identical coordinates are
+    /// de-duplicated and dropped BEFORE this test — the video.js phantom-mousemove fix.)</summary>
+    public const float MediaChromeMoveThresholdDip = 3f;
+    /// <summary>Chrome conceal duration (ms) — see <see cref="MotionTokenId.MediaChromeConceal"/>.</summary>
+    public const float MediaChromeFadeOutMs = 200f;
+    /// <summary>Chrome reveal duration (ms) — HALF the conceal, deliberately: a reveal answers a user action and must
+    /// feel instant, a conceal happens unattended and must not flicker. See <see cref="MotionTokenId.MediaChromeReveal"/>.</summary>
+    public const float MediaChromeFadeInMs = 100f;
+
     public static MotionTokenDef Get(MotionTokenId id) => id switch
     {
         // Control interaction — fades keep their cross-fade under reduced motion.
@@ -131,6 +174,10 @@ public static class MotionTok
         MotionTokenId.DisclosureExpand => MotionTokenDef.Eased(333f, Easing.FluentPopOpen),
         MotionTokenId.DisclosureCollapse => MotionTokenDef.Eased(167f, Easing.FluentDisclosureCollapse),
         MotionTokenId.DisclosureChevron => MotionTokenDef.Eased(167f, Easing.FluentDisclosureChevron),
+        // Media chrome — SnapEnd (not KeepFade): under reduced motion the transport must appear/disappear instantly.
+        // "Chrome that fades" IS the motion here; there is no orientation cue in it worth keeping.
+        MotionTokenId.MediaChromeReveal => MotionTokenDef.Eased(MediaChromeFadeInMs, Easing.FluentDecelerate),
+        MotionTokenId.MediaChromeConceal => MotionTokenDef.Eased(MediaChromeFadeOutMs, Easing.FluentAccelerate),
         _ => MotionTokenDef.SpringOf(SpringParams.Default),
     };
 
@@ -150,4 +197,6 @@ public static class MotionTok
     public static MotionTokenDef DisclosureExpand => Get(MotionTokenId.DisclosureExpand);
     public static MotionTokenDef DisclosureCollapse => Get(MotionTokenId.DisclosureCollapse);
     public static MotionTokenDef DisclosureChevron => Get(MotionTokenId.DisclosureChevron);
+    public static MotionTokenDef MediaChromeReveal => Get(MotionTokenId.MediaChromeReveal);
+    public static MotionTokenDef MediaChromeConceal => Get(MotionTokenId.MediaChromeConceal);
 }

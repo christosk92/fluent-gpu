@@ -32,6 +32,7 @@ public sealed class MediaPlayerCore
     private readonly Signal<SizeI> _naturalSize = new(SizeI.Zero);
     private readonly Signal<VideoGeometry> _videoGeometry = new(global::FluentGpu.Media.VideoGeometry.Empty);
     private readonly Signal<VideoColorInfo> _videoColor = new(VideoColorInfo.Sdr);
+    private readonly Signal<VideoSurfaceGeometry> _surfaceGeometry = new(VideoSurfaceGeometry.Empty);
     private readonly Signal<PlaybackStatistics> _statistics = new(PlaybackStatistics.Empty);
     private readonly Signal<TimedCue?> _activeCue = new(null);
     private readonly Signal<MediaError?> _error = new(null);
@@ -83,6 +84,8 @@ public sealed class MediaPlayerCore
     public IReadSignal<VideoGeometry> VideoGeometry => _videoGeometry;
     /// <summary>Colorimetry and HDR metadata.</summary>
     public IReadSignal<VideoColorInfo> VideoColor => _videoColor;
+    /// <summary>The composited PLACEMENT geometry the backend last realized (natural/content/place).</summary>
+    public IReadSignal<VideoSurfaceGeometry> SurfaceGeometry => _surfaceGeometry;
     /// <summary>Bounded-cadence playback diagnostics.</summary>
     public IReadSignal<PlaybackStatistics> Statistics => _statistics;
     /// <summary>The currently-active engine-rendered subtitle/caption cue.</summary>
@@ -177,6 +180,9 @@ public sealed class MediaPlayerCore
         if (!display.IsEmpty) _naturalSize.Value = display;
     }
     public void SetVideoColor(VideoColorInfo color) => _videoColor.Value = color;
+    /// <summary>Publish the composited placement geometry. Value-gated by the signal itself (a record struct), so a
+    /// backend may call this every pump and an unchanged placement publishes nothing.</summary>
+    public void SetSurfaceGeometry(VideoSurfaceGeometry geometry) => _surfaceGeometry.Value = geometry;
     public void SetStatistics(PlaybackStatistics statistics) => _statistics.Value = statistics;
     public void SetActiveCue(TimedCue? cue) => _activeCue.Value = cue;
     /// <summary>Set (or clear with null) the typed error.</summary>
@@ -309,6 +315,8 @@ public sealed class MediaSignalSink
     public void NaturalSize(SizeI size) => _core.SetNaturalSize(size);
     /// <summary>Push display geometry.</summary>
     public void VideoGeometry(VideoGeometry geometry) => _core.SetVideoGeometry(geometry);
+    /// <summary>Push the composited PLACEMENT geometry (natural/content/place) the session just realized.</summary>
+    public void SurfaceGeometry(VideoSurfaceGeometry geometry) => _core.SetSurfaceGeometry(geometry);
     /// <summary>Push colorimetry/HDR metadata.</summary>
     public void VideoColor(VideoColorInfo color) => _core.SetVideoColor(color);
     /// <summary>Push bounded-cadence playback statistics.</summary>

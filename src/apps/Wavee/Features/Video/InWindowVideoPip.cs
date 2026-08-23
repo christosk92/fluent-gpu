@@ -77,6 +77,11 @@ sealed class InWindowVideoPip : Component
     // user has dragged it somewhere specific, which is them opting into a free-floating overlay. A signal because the
     // reservation effect must re-run on that edge.
     readonly Signal<bool> _placed = new(false);
+    // Has the user DELIBERATELY sized this surface — a resize gesture, or a rect remembered from a previous session?
+    // False (the default) means the HEIGHT follows the playing content's own aspect, so the mini player is exactly the
+    // shape of what it is showing instead of a fixed ~16:9 box that letterboxes everything else. A plain field, not a
+    // signal: only the height effect reads it, and it is written from gesture/seed code that runs outside render.
+    bool _sized;
 
     // Captured nodes for window-space pointer reconstruction (the grips move with the surface). The bands are indexed
     // by their build slot (see BuildResizeBands) — allocated ONCE, never per render.
@@ -110,6 +115,7 @@ sealed class InWindowVideoPip : Component
                 _x.Value = px; _y.Value = py;
                 _w.Value = Math.Max(MinW, pw); _h.Value = Math.Max(MinH, ph);
                 _placed.Value = true;
+                _sized = true;   // a remembered rect IS a deliberate size — never re-fit it to the content
             }
         }
 
@@ -130,6 +136,20 @@ sealed class InWindowVideoPip : Component
         // Give the reservation back on unmount (logout / shell swap), or the page would keep a hole for a surface that
         // no longer exists.
         UseEffect(() => () => b.FloatingSurfaceReserve.Value = 0f, DepKey.Empty);
+
+        // The card is ALL video, so its default HEIGHT is the content's own — not a fixed 16:9 box that letterboxes
+        // anything else (the same defect the docked cap had). Width stays the user's/default one; only the height is
+        // derived, so a resize still behaves exactly as before. 16:9 until the player reports a natural size, and never
+        // taller than the free window height. A deliberate size (a resize gesture, a remembered rect) opts out for good.
+        UseSignalEffect(() =>
+        {
+            var natural = b.VideoPlayer.Value.Player?.NaturalSize.Value ?? default;   // subscribe → fit when MF reports
+            float w = _w.Value;
+            float free = vp.Value.Height - WaveeSize.PlayerBarH - (2f * Margin);
+            if (_sized) return;
+            float ratio = natural.Width > 0 && natural.Height > 0 ? (float)natural.Height / natural.Width : DefaultH / DefaultW;
+            _h.Value = Math.Max(MinH, Math.Min(w * ratio, Math.Max(MinH, free)));
+        });
 
         // Subscribe → mount/unmount the whole surface as the ONE resolved placement changes.
         if (b.VideoPlacementNow() != SurfacePlacement.Floating) return new BoxEl();
@@ -268,9 +288,15 @@ sealed class InWindowVideoPip : Component
             string stageKey = src?.Key ?? ("gen:" + binding.Generation.ToString(System.Globalization.CultureInfo.InvariantCulture));
             // Bridge/Settings put the placement ladder on the video's OWN ⋯ menu, so the mini player can be moved from
             // the surface the user is actually looking at instead of only from the player bar across the window.
+            // The mini player shares the window with the global 72-DIP player bar, so the BAR owns the transport
+            // (TransportOwnerFor(Floating) == GlobalBar) and this stage suppresses its own — one transport, never two
+            // stacked. Its fullscreen affordance ENTERS the app's fullscreen surface rather than the element's own
+            // overlay fullscreen.
             var stage = Embed.Comp(() => new PopOutVideoStage
             {
                 Source = src, Player = b.VideoPlayer, Bridge = b, Settings = settings,
+                Host = new VideoStageHost(TransportOwner.Docked, b.TransportOwnerNow,
+                    () => b.ShowVideoAt(SurfacePlacement.Fullscreen)),
             }) with { Key = "pipstage:" + stageKey };
             if (src is not null)
                 return new BoxEl
@@ -431,6 +457,7 @@ sealed class InWindowVideoPip : Component
         float y = _placed.Peek() ? _y.Peek() : DefaultY(vp, h);
         _x.Value = ClampX(x, vp, w); _y.Value = ClampY(y, vp, h);
         _placed.Value = true;   // resizing is also deliberate placement → release the layout reservation
+        _sized = true;          // …and it ends the content-aspect fit: the user's size is the size now
         _startX = _x.Peek(); _startY = _y.Peek(); _startW = w; _startH = h;
         var abs = scene.AbsoluteRect(band);
         _startPx = local.X + abs.X; _startPy = local.Y + abs.Y;

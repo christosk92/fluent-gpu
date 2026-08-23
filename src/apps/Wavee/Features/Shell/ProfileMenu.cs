@@ -99,6 +99,47 @@ sealed class ProfileMenu : Component
                 new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.Modal, Chrome: PopupChrome.Modal));
         }
 
+        // "Play ▸" — the GLOBAL play utilities (they belong to no track), so they live here rather than in the
+        // per-track menu, and the whole submenu is absent (not disabled) when the backend cannot play anything of its
+        // own: an offer you cannot take is worse than no offer, which is the rule "Play file…" already followed.
+        //
+        // The rows past the separator are contributed, not hard-coded: one per INSTALLED module that declares the
+        // `match` capability, labelled and placeholdered by its own manifest. That is composition rule 2 — the menu is
+        // built from ModuleHost.Installed, so a module the user installs later shows up here without a code change,
+        // and a component still names no source type.
+        MenuFlyoutItem[]? PlayItems()
+        {
+            if (!LocalFileActions.CanPlayFiles(actions)) return null;
+            string genericPlaceholder = Loc.Get(Strings.Play.Placeholder);
+            var items = new List<MenuFlyoutItem>(6)
+            {
+                new(Loc.Get(Strings.Play.File), Icons.Document,
+                    Invoke: () => { Close(); LocalFileActions.PickAndPlay(actions); }),
+                // No module pinned: the router decides who owns the text, so this row takes ANY link.
+                new(Loc.Get(Strings.Play.Link), Icons.Link,
+                    Invoke: () => { Close(); PlayLink.Open(overlay, actions, null, genericPlaceholder); }),
+            };
+
+            var installed = actions?.Svc?.Modules?.Installed;
+            if (installed is not null)
+            {
+                bool separated = false;
+                for (int i = 0; i < installed.Count; i++)
+                {
+                    var module = installed[i];
+                    if (!PlayLinkActions.DeclaresMatch(module.Manifest)) continue;
+                    if (!separated) { items.Add(MenuFlyoutItem.Separator); separated = true; }
+                    // Captured by value: the invoke runs long after this loop, and a captured loop variable would
+                    // otherwise pin whatever the last iteration left behind.
+                    string id = module.Id;
+                    string placeholder = PlayLinkActions.PlaceholderFor(module.Manifest, genericPlaceholder);
+                    items.Add(new MenuFlyoutItem(PlayLinkActions.MenuLabel(module.Manifest), Icons.Globe,
+                        Invoke: () => { Close(); PlayLink.Open(overlay, actions, id, placeholder); }));
+                }
+            }
+            return items.ToArray();
+        }
+
         void SetPalette(string id)
         {
             WaveeTheme.ApplyPalette(id, services?.Settings);
@@ -120,11 +161,7 @@ sealed class ProfileMenu : Component
                     onFriends: () => { Close(); _toggleFriends(); },
                     onTheme: () => { Close(); _toggleTheme(); },
                     onPalette: SetPalette,
-                    // "Play file…" is a GLOBAL utility (it belongs to no track), so it lives here rather than in the
-                    // per-track menu — and it is absent, not disabled, when the backend cannot play anything locally.
-                    onPlayFile: LocalFileActions.CanPlayFiles(actions)
-                        ? () => { Close(); LocalFileActions.PickAndPlay(actions); }
-                        : null,
+                    playItems: PlayItems(),
                     onLogout: () => { Close(); ConfirmLogout(); }),
                 FlyoutPlacement.BottomEdgeAlignedRight,
                 // MENU chrome, not FlyoutPresenter: the body IS a MenuFlyout (an account header over
@@ -177,7 +214,7 @@ sealed class ProfileMenu : Component
     // The dropdown: a compact account header over stock WinUI menu rows.
     static Element MenuContent(string name, bool premium, string avatar, string? email, int unread, bool showFriends,
         Action close, Action onAccount, Action onSettings, Action? onNotifications, Action onFriends, Action onTheme,
-        Action<string> onPalette, Action? onPlayFile, Action onLogout)
+        Action<string> onPalette, IReadOnlyList<MenuFlyoutItem>? playItems, Action onLogout)
     {
         string active = Tok.Palette.Id;
         var paletteItems = new MenuFlyoutItem[]
@@ -192,8 +229,8 @@ sealed class ProfileMenu : Component
             new(Loc.Get(Strings.Auth.Account), Icons.Contact, Invoke: onAccount),
             new(Loc.Get(Strings.Auth.Settings), Icons.Settings, Invoke: onSettings),
         };
-        if (onPlayFile is not null)
-            rows.Add(new MenuFlyoutItem(Loc.Get(Strings.LocalFile.PlayFile), Icons.MusicNote, Invoke: onPlayFile));
+        if (playItems is { Count: > 0 })
+            rows.Add(MenuFlyoutItem.SubMenu(Loc.Get(Strings.Play.Menu), playItems, Icons.MusicNote));
 
         // The two ex-buttons that ALWAYS live here, in their own band. Notifications carries the count in its label
         // exactly as the "⋯" spillover row used to (the badge on the avatar is the glanceable half of the same fact);
