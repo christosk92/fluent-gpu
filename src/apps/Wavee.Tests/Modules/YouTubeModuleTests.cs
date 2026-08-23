@@ -13,15 +13,58 @@ namespace Wavee.Tests.Modules;
 /// The YouTube module, driven through <see cref="ModuleTestHost"/> over a scripted transport. Nothing here touches
 /// the network: every InnerTube response, channel page and HLS master is a fixture.
 /// </summary>
-public class YouTubeModuleTests
+public class YouTubeModuleTests : IDisposable
 {
     private const string Id = YouTubeFixtures.VideoId;
 
-    private static (ModuleTestHost Host, ScriptedHttpHandler Http) Make(ScriptedHttpHandler http)
+    private readonly List<string> _dataDirs = [];
+
+    private (ModuleTestHost Host, ScriptedHttpHandler Http) Make(ScriptedHttpHandler http)
         => (new ModuleTestHost(new YouTubeModule(http), TestDataDir()), http);
 
-    /// <summary>A data dir that exists but holds no clients.json, so the built-in table is what runs.</summary>
-    private static string TestDataDir() => System.IO.Path.Combine(System.IO.Path.GetTempPath(), "wavee-yt-tests-empty");
+    /// <summary>
+    /// A data dir that holds no clients.json (so the built-in table runs) and, crucially, no <c>session.json</c> from
+    /// any other test.
+    /// <para>
+    /// ISOLATION: the module now PERSISTS a preferred client, a visitor id and a wall cooldown per data dir. A shared
+    /// dir would make this suite order-dependent in the worst way — one test's cooldown would make the next test's
+    /// resolve fail before it sent anything, and one test's preferred client would silently reorder the next test's
+    /// client walk. So each host gets its own fresh directory (xUnit builds one instance of this class per test, so
+    /// the list below is per-test) and the class deletes them on the way out. The alternative — injecting a store and
+    /// a clock — was rejected because it would test a seam instead of the file the module actually writes.
+    /// </para>
+    /// </summary>
+    private string TestDataDir()
+    {
+        string dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "wavee-yt-tests",
+            Guid.NewGuid().ToString("n"));
+        System.IO.Directory.CreateDirectory(dir);
+        _dataDirs.Add(dir);
+        return dir;
+    }
+
+    /// <summary>Removes the per-test data dirs. Best effort: a leaked temp dir is not worth failing a test over.</summary>
+    public void Dispose()
+    {
+        GC.SuppressFinalize(this);
+        foreach (string dir in _dataDirs)
+        {
+            try
+            {
+                System.IO.Directory.Delete(dir, recursive: true);
+            }
+            catch (System.IO.IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+    /// <summary>The session file the module writes into a data dir.</summary>
+    private static string SessionFile(string dataDir)
+        => System.IO.Path.Combine(dataDir, YouTubeSessionStore.FileName);
 
     // ---- match -------------------------------------------------------------------------------------------------
 
@@ -212,10 +255,13 @@ public class YouTubeModuleTests
         Assert.Equal(3, PlayerCalls(http).Length);
     }
 
-    /// <summary>The bot wall is per CLIENT (verified 2026-08-22: VISIONOS was walled for a live stream ANDROID then
-    /// served from the same IP), so it is the verdict only when every configured client says it.</summary>
+    /// <summary>
+    /// The wall costs AT MOST TWO <c>/player</c> calls, not three. It used to <c>continue</c> through the whole
+    /// table, so one press of Play spent three flagged requests — which is how the 2026-08-23 session made its own
+    /// address hot. The wall is still worth one alternate client (it was per-CLIENT on 2026-08-22), and no more.
+    /// </summary>
     [Fact]
-    public async Task Resolve_BotWallOnEveryClientIsUnavailable()
+    public async Task Resolve_BotWallCostsAtMostTwoPlayerCalls()
     {
         var http = Player(YouTubeFixtures.PlayerBotWall);
         (ModuleTestHost host, _) = Make(http);
@@ -223,9 +269,82 @@ public class YouTubeModuleTests
         ModuleException ex = await Assert.ThrowsAsync<ModuleException>(() =>
             host.ResolveAsync(Id, TestContext.Current.CancellationToken));
 
+        Assert.Equal(2, PlayerCalls(http).Length);
+        Assert.Equal("101", PlayerCalls(http)[0].Header("X-YouTube-Client-Name"));
+        Assert.Equal("3", PlayerCalls(http)[1].Header("X-YouTube-Client-Name"));
+
+        // Every client asked was walled, so this is the blocked verdict — and the message asserts nothing about the
+        // user's network and promises nothing about signing in.
         Assert.Equal(ModuleErrorCode.Unavailable, ex.Code);
-        Assert.Contains("blocking this network", ex.Message, StringComparison.Ordinal);
-        Assert.Equal(3, PlayerCalls(http).Length);
+        Assert.Equal(
+            "YouTube is challenging this device as a bot. This usually clears on its own; a VPN or shared " +
+            "connection makes it more likely.",
+            ex.Message);
+        Assert.DoesNotContain("datacenter", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("signed-in", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Once walled, a user mashing Play must cost YouTube NOTHING: the cooldown is checked before any
+    /// request is built, and the second resolve adds no <c>/player</c> call at all.</summary>
+    [Fact]
+    public async Task Resolve_InsideTheCooldownIssuesNoRequestAtAll()
+    {
+        var http = Player(YouTubeFixtures.PlayerBotWall);
+        (ModuleTestHost host, _) = Make(http);
+
+        await Assert.ThrowsAsync<ModuleException>(() =>
+            host.ResolveAsync(Id, TestContext.Current.CancellationToken));
+        int afterTheWall = http.Requests.Count;
+
+        ModuleException again = await Assert.ThrowsAsync<ModuleException>(() =>
+            host.ResolveAsync(Id, TestContext.Current.CancellationToken));
+
+        Assert.Equal(afterTheWall, http.Requests.Count);
+        Assert.Equal(ModuleErrorCode.Transient, again.Code);
+        Assert.Equal("YouTube is rate-limiting this device. Try again in a minute.", again.Message);
+    }
+
+    /// <summary>The cooldown is persisted, not just held in memory: restarting the module (a new instance over the
+    /// same data dir) must not be a way to keep hammering.</summary>
+    [Fact]
+    public async Task Resolve_TheCooldownSurvivesAModuleRestart()
+    {
+        string dataDir = TestDataDir();
+        var first = Player(YouTubeFixtures.PlayerBotWall);
+        var firstHost = new ModuleTestHost(new YouTubeModule(first), dataDir);
+
+        await Assert.ThrowsAsync<ModuleException>(() =>
+            firstHost.ResolveAsync(Id, TestContext.Current.CancellationToken));
+        Assert.True(System.IO.File.Exists(SessionFile(dataDir)));
+
+        var restarted = Player(YouTubeFixtures.PlayerBotWall);
+        var restartedHost = new ModuleTestHost(new YouTubeModule(restarted), dataDir);
+
+        ModuleException ex = await Assert.ThrowsAsync<ModuleException>(() =>
+            restartedHost.ResolveAsync(Id, TestContext.Current.CancellationToken));
+
+        Assert.Empty(restarted.Requests);
+        Assert.Equal(ModuleErrorCode.Transient, ex.Code);
+    }
+
+    /// <summary>
+    /// A bare <c>LOGIN_REQUIRED</c> — no age marker, no age wording, no "bot" — used to be silently terminal: the age
+    /// predicate ended in an unguarded <c>status == LOGIN_REQUIRED</c> and only the accident of being tested second
+    /// kept it off the real bot wall. It is a wall, so it costs one alternate client and a retryable/blocked verdict,
+    /// never <c>NeedsAuth</c>.
+    /// </summary>
+    [Fact]
+    public async Task Resolve_BareLoginRequiredIsAWallAndNotAnAgeGate()
+    {
+        var http = Player(YouTubeFixtures.PlayerLoginRequiredBare);
+        (ModuleTestHost host, _) = Make(http);
+
+        ModuleException ex = await Assert.ThrowsAsync<ModuleException>(() =>
+            host.ResolveAsync(Id, TestContext.Current.CancellationToken));
+
+        Assert.NotEqual(ModuleErrorCode.NeedsAuth, ex.Code);
+        Assert.Equal(ModuleErrorCode.Unavailable, ex.Code);
+        Assert.Equal(2, PlayerCalls(http).Length);
     }
 
     [Fact]
@@ -249,6 +368,72 @@ public class YouTubeModuleTests
         Assert.Equal(2, PlayerCalls(http).Length);
         Assert.Equal("101", PlayerCalls(http)[0].Header("X-YouTube-Client-Name"));
         Assert.Equal("3", PlayerCalls(http)[1].Header("X-YouTube-Client-Name"));
+    }
+
+    // ---- resolve: the session identity ---------------------------------------------------------------------------
+
+    /// <summary>
+    /// A2, the highest-value change in this workstream: the client that last produced a playable manifest is asked
+    /// FIRST next time. The table order put VISIONOS first, and on 2026-08-23 VISIONOS was walled on 9 of 9 attempts
+    /// before ANDROID served — so every play burned one flagged request before it started. It no longer does.
+    /// </summary>
+    [Fact]
+    public async Task Resolve_AsksTheClientThatLastWorkedFirst()
+    {
+        var http = new ScriptedHttpHandler()
+            .OnBody("\"clientName\":\"VISIONOS\"", HttpStatusCode.OK, YouTubeFixtures.PlayerBotWall)
+            .OnBody("\"clientName\":\"ANDROID\"", HttpStatusCode.OK, YouTubeFixtures.PlayerLiveOk)
+            .WithManifest();
+        (ModuleTestHost host, _) = Make(http);
+
+        await host.ResolveAsync(Id, TestContext.Current.CancellationToken);
+        Assert.Equal(2, PlayerCalls(http).Length);           // walled on visionos, served by android
+
+        await host.ResolveAsync(Id, TestContext.Current.CancellationToken);
+
+        // The second play costs ONE request, and it is the client that is known to work.
+        Assert.Equal(3, PlayerCalls(http).Length);
+        Assert.Equal("3", PlayerCalls(http)[2].Header("X-YouTube-Client-Name"));
+        Assert.Contains("\"clientName\":\"ANDROID\"", PlayerCalls(http)[2].Body, StringComparison.Ordinal);
+    }
+
+    /// <summary>A1: InnerTube hands back a visitor id on every response and expects it echoed on the next request, as
+    /// BOTH the header and the client block. Until it was read, every single call presented as a brand-new anonymous
+    /// client — which is exactly the shape an anti-bot system is looking for.</summary>
+    [Fact]
+    public async Task Resolve_EchoesTheVisitorIdItWasGivenOnTheNextRequest()
+    {
+        var http = Player(YouTubeFixtures.PlayerLiveOk).WithManifest();
+        (ModuleTestHost host, _) = Make(http);
+
+        await host.ResolveAsync(Id, TestContext.Current.CancellationToken);
+        await host.ResolveAsync(Id, TestContext.Current.CancellationToken);
+
+        // Nothing to present as on the very first call of a session.
+        Assert.Null(PlayerCalls(http)[0].Header("X-Goog-Visitor-Id"));
+        Assert.DoesNotContain("visitorData", PlayerCalls(http)[0].Body, StringComparison.Ordinal);
+
+        Assert.Equal(YouTubeFixtures.VisitorData, PlayerCalls(http)[1].Header("X-Goog-Visitor-Id"));
+        Assert.Contains("\"visitorData\":\"" + YouTubeFixtures.VisitorData + "\"", PlayerCalls(http)[1].Body,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>A burned visitor id is worse than none: re-presenting the identity YouTube just refused is the one
+    /// thing guaranteed to be refused again.</summary>
+    [Fact]
+    public async Task Resolve_DropsTheVisitorIdThatGotWalled()
+    {
+        var http = new ScriptedHttpHandler()
+            .OnBody("\"clientName\":\"VISIONOS\"", HttpStatusCode.OK, YouTubeFixtures.PlayerBotWall)
+            .OnBody("\"clientName\":\"ANDROID\"", HttpStatusCode.OK, YouTubeFixtures.PlayerLiveOk)
+            .WithManifest();
+        (ModuleTestHost host, _) = Make(http);
+
+        await host.ResolveAsync(Id, TestContext.Current.CancellationToken);
+
+        // The walled response carried a visitorData; the alternate client must NOT wear it.
+        Assert.Null(PlayerCalls(http)[1].Header("X-Goog-Visitor-Id"));
+        Assert.DoesNotContain("visitorData", PlayerCalls(http)[1].Body, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -830,6 +1015,168 @@ public class YouTubeModuleTests
 
     private static RecordedRequest[] NextCalls(ScriptedHttpHandler http)
         => http.Requests.Where(r => r.Url.Contains("youtubei/v1/next", StringComparison.Ordinal)).ToArray();
+}
+
+/// <summary>
+/// <see cref="YouTubeWallPolicy"/> and <see cref="YouTubeSessionStore"/> as pure values: no module, no transport, no
+/// host. The classification used to live in two boolean predicates whose CORRECTNESS depended on the order the caller
+/// happened to ask them in, so the point of these tests is that the order is now a value you can assert.
+/// </summary>
+public class YouTubeWallPolicyTests
+{
+    private const string Bot = "Sign in to confirm you're not a bot";
+
+    [Theory]
+    // Playable, and the two non-wall refusals.
+    [InlineData("OK", null, false, 0, 1, 0, PlayabilityVerdict.Ok)]
+    [InlineData("LIVE_STREAM_OFFLINE", "This live event will begin in a few moments.", false, 0, 1, 0,
+        PlayabilityVerdict.Offline)]
+    [InlineData("UNPLAYABLE", "This video is not available on this app.", false, 0, 1, 0,
+        PlayabilityVerdict.Unplayable)]
+    [InlineData(null, null, false, 0, 1, 0, PlayabilityVerdict.Unplayable)]
+    // The wall, at both escalations.
+    [InlineData("LOGIN_REQUIRED", Bot, false, 0, 1, 0, PlayabilityVerdict.BotWallRetryable)]
+    [InlineData("LOGIN_REQUIRED", Bot, false, 1, 2, 0, PlayabilityVerdict.BotWallBlocked)]
+    [InlineData("LOGIN_REQUIRED", Bot, false, 0, 1, 2, PlayabilityVerdict.BotWallBlocked)]
+    // clientsTried 0 = describing a cooldown, no request made. The streak alone words it.
+    [InlineData("LOGIN_REQUIRED", Bot, false, 0, 0, 0, PlayabilityVerdict.BotWallRetryable)]
+    [InlineData("LOGIN_REQUIRED", Bot, false, 0, 0, 2, PlayabilityVerdict.BotWallBlocked)]
+    // THE A5 CASE. A bare LOGIN_REQUIRED with neither age evidence nor the word "bot" was silently an AGE GATE —
+    // terminal NeedsAuth, no next client — and only stayed off the real bot wall because the bot predicate happened
+    // to be tested first. It is a wall.
+    [InlineData("LOGIN_REQUIRED", "Sign in", false, 0, 1, 0, PlayabilityVerdict.BotWallRetryable)]
+    [InlineData("LOGIN_REQUIRED", null, false, 0, 1, 0, PlayabilityVerdict.BotWallRetryable)]
+    [InlineData("LOGIN_REQUIRED", "Please sign in to continue.", false, 0, 1, 0,
+        PlayabilityVerdict.BotWallRetryable)]
+    // The age gate, on each of its three positive markers — and NEVER on LOGIN_REQUIRED alone.
+    [InlineData("LOGIN_REQUIRED", "Sign in to confirm your age", false, 0, 1, 0, PlayabilityVerdict.AgeGate)]
+    [InlineData("LOGIN_REQUIRED", null, true, 0, 1, 0, PlayabilityVerdict.AgeGate)]
+    [InlineData("AGE_CHECK_REQUIRED", null, false, 0, 1, 0, PlayabilityVerdict.AgeGate)]
+    [InlineData("AGE_VERIFICATION_REQUIRED", null, false, 0, 1, 0, PlayabilityVerdict.AgeGate)]
+    [InlineData("UNPLAYABLE", "This video may be inappropriate for some users.", false, 0, 1, 0,
+        PlayabilityVerdict.AgeGate)]
+    // The ordering, stated rather than incidental: the age MARKER outranks bot wording, and bot wording never
+    // outranks an age marker. Both directions are asserted so a reorder cannot pass.
+    [InlineData("LOGIN_REQUIRED", Bot, true, 0, 1, 0, PlayabilityVerdict.AgeGate)]
+    [InlineData("LOGIN_REQUIRED", "confirm your age", false, 1, 2, 0, PlayabilityVerdict.AgeGate)]
+    public void Classify_IsExplicitAboutTheOrderItAsksIn(string? status, string? reason, bool ageFlag,
+        int clientsWalled, int clientsTried, long recentWalls, PlayabilityVerdict expected)
+        => Assert.Equal(expected,
+            YouTubeWallPolicy.Classify(status, reason, ageFlag, clientsWalled, clientsTried, recentWalls));
+
+    [Theory]
+    [InlineData(-3, 0L)]
+    [InlineData(0, 0L)]
+    [InlineData(1, 30_000L)]
+    [InlineData(2, 120_000L)]
+    [InlineData(3, 300_000L)]
+    [InlineData(50, 300_000L)]
+    public void CooldownMsFor_EscalatesThenCaps(int consecutiveWalls, long expected)
+        => Assert.Equal(expected, YouTubeWallPolicy.CooldownMsFor(consecutiveWalls));
+
+    /// <summary>The cooldown never runs away: even an absurd streak stays inside the ~38-minute window the
+    /// 2026-08-23 session spent walled, so the module always comes back on its own.</summary>
+    [Fact]
+    public void CooldownMsFor_NeverExceedsFiveMinutes()
+    {
+        for (int walls = 0; walls < 100; walls++)
+        {
+            Assert.InRange(YouTubeWallPolicy.CooldownMsFor(walls), 0L, 300_000L);
+        }
+    }
+
+    [Fact]
+    public void SessionStore_RoundTripsEveryMember()
+    {
+        string dir = TempDir();
+        try
+        {
+            var session = new YouTubeSession("CgtBQUFBQUFBQUFBQQ%3D%3D", "android", 1_767_225_600_000L);
+            YouTubeSessionStore.Save(dir, session);
+
+            Assert.Equal(session, YouTubeSessionStore.Load(dir));
+        }
+        finally
+        {
+            Cleanup(dir);
+        }
+    }
+
+    /// <summary>Save creates the directory it is given: a module's data dir need not exist yet on first run.</summary>
+    [Fact]
+    public void SessionStore_SaveCreatesTheDataDir()
+    {
+        string root = TempDir();
+        string dir = System.IO.Path.Combine(root, "not-created-yet");
+        try
+        {
+            YouTubeSessionStore.Save(dir, new YouTubeSession("v", "ios", 7));
+
+            Assert.Equal(new YouTubeSession("v", "ios", 7), YouTubeSessionStore.Load(dir));
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    /// <summary>A session file is a cache of conveniences: nothing about it — missing, truncated, not JSON at all, or
+    /// a path that is not a directory — is worth failing a play for, so every one of them is the empty session.</summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("{ not json at all")]
+    [InlineData("[]")]
+    [InlineData("{\"visitorData\": 17}")]
+    public void SessionStore_LoadNeverThrowsAndDefaultsInstead(string? fileContent)
+    {
+        string dir = TempDir();
+        try
+        {
+            if (fileContent is not null)
+            {
+                System.IO.File.WriteAllText(
+                    System.IO.Path.Combine(dir, YouTubeSessionStore.FileName), fileContent);
+            }
+
+            Assert.Equal(YouTubeSession.Empty, YouTubeSessionStore.Load(dir));
+        }
+        finally
+        {
+            Cleanup(dir);
+        }
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void SessionStore_TreatsAnAbsentDataDirAsNoSession(string dataDir)
+    {
+        Assert.Equal(YouTubeSession.Empty, YouTubeSessionStore.Load(dataDir));
+        YouTubeSessionStore.Save(dataDir, new YouTubeSession("v", "android", 1));   // must not throw
+    }
+
+    private static string TempDir()
+    {
+        string dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "wavee-yt-session",
+            Guid.NewGuid().ToString("n"));
+        System.IO.Directory.CreateDirectory(dir);
+        return dir;
+    }
+
+    private static void Cleanup(string dir)
+    {
+        try
+        {
+            System.IO.Directory.Delete(dir, recursive: true);
+        }
+        catch (System.IO.IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
 }
 
 /// <summary>Small script builders shared by the YouTube tests.</summary>

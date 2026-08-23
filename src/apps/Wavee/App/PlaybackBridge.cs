@@ -835,6 +835,11 @@ public sealed class PlaybackBridge
             Toast.Show(message, new ToastOptions
             {
                 Severity = InfoBarSeverity.Error,
+                // One failed play is ONE card. This lane and the paste-a-link card can both answer for the same
+                // failure with different sentences, so only a key they SHARE can collapse them — see
+                // PlayLinkActions.FailureToastKey. Coalescing keeps the first (more specific) sentence and adopts this
+                // call's retry, so the merged card is still actionable.
+                DedupeKey = PlayLinkActions.FailureToastKey,
                 ActionLabel = retryLabel,
                 OnAction = retry is null ? null : () => InvokePlaybackErrorAction(token),
             });

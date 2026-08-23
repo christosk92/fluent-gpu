@@ -9,11 +9,25 @@ namespace Wavee.Module.YouTube;
 /// <param name="VideoDetails">Title/author/live flags.</param>
 /// <param name="StreamingData">Where the HLS master lives and when it dies.</param>
 /// <param name="Microformat">Carries the live-broadcast schedule.</param>
+/// <param name="ResponseContext">The session identity InnerTube hands back on EVERY response.</param>
 public sealed record YtPlayerResponse(
     YtPlayabilityStatus? PlayabilityStatus,
     YtVideoDetails? VideoDetails,
     YtStreamingData? StreamingData,
-    YtMicroformat? Microformat);
+    YtMicroformat? Microformat,
+    YtResponseContext? ResponseContext = null);
+
+/// <summary>
+/// The identity block on every InnerTube response, <c>/player</c> and <c>/next</c> alike. The module reads exactly one
+/// member of it and echoes that back on the next request; until it did, every single call presented as a brand-new
+/// anonymous client, which is the shape an anti-bot system is looking for.
+/// <para>The same block also carries <c>mainAppWebResponseContext.loggedOut: true</c> on every response this module
+/// has ever seen. It is deliberately NOT modelled: it only ever says what we already know (a JS-less client cannot
+/// sign in), so reading it would add a DTO that can never change a decision.</para>
+/// </summary>
+/// <param name="VisitorData">The opaque, unauthenticated visitor id. Sent back as <c>X-Goog-Visitor-Id</c> and as
+/// <c>context.client.visitorData</c>.</param>
+public sealed record YtResponseContext(string? VisitorData);
 
 /// <summary>Why (or whether) YouTube will serve this video to the requesting client.</summary>
 /// <param name="Status"><c>OK</c>, <c>LOGIN_REQUIRED</c>, <c>UNPLAYABLE</c>, <c>ERROR</c>, <c>LIVE_STREAM_OFFLINE</c>, …</param>
@@ -212,7 +226,9 @@ public sealed record YtTextRun(string? Text);
 
 /// <summary>The subset of <c>youtubei/v1/next</c> this module reads.</summary>
 /// <param name="Contents">The layout wrapper; WEB answers <c>twoColumnWatchNextResults</c>.</param>
-public sealed record YtNextResponse(YtNextContents? Contents);
+/// <param name="ResponseContext">The same identity block <c>/player</c> answers with. Read here too because a page
+/// open is often the FIRST request of a session, so this is where the visitor id is usually learned.</param>
+public sealed record YtNextResponse(YtNextContents? Contents, YtResponseContext? ResponseContext = null);
 
 /// <summary>The layout wrapper.</summary>
 /// <param name="TwoColumnWatchNextResults">The desktop watch layout. A mobile client would answer
@@ -449,4 +465,5 @@ public sealed record YtMetadataBadgeRenderer(string? Style, string? Label)
 [JsonSerializable(typeof(YtPlayerResponse))]
 [JsonSerializable(typeof(YtNextResponse))]
 [JsonSerializable(typeof(YouTubeClientTable))]
+[JsonSerializable(typeof(YouTubeSession))]
 public sealed partial class YouTubeJsonContext : JsonSerializerContext;

@@ -243,7 +243,7 @@ A failure is a JSON-RPC error `{ code, message, data: { kind, retryAfterMs?, det
 | `NotOwned` (1001) | This module does not own the input | router moves on |
 | `Unavailable` | Geo-blocked shape aside: private, removed, SABR-only, offline service | typed failure, message shown |
 | `NeedsAuth` | Sign-in / subscription required | typed failure, message shown |
-| `Transient` | Try again shortly | retried with backoff |
+| `Transient` | Try again shortly | typed failure, message shown — the user retries (the 1 s/4 s/16 s ladder above restarts the PROCESS; no request is auto-retried) |
 | `Offline` | The thing exists but is not live right now | typed failure ("stream offline") |
 | `GeoBlocked` | Not available in this region | typed failure |
 | `Unsupported` | The module cannot do this at all | typed failure |
@@ -821,6 +821,17 @@ Do **not** use: `web`/`web_safari` (SABR-only, need JS + GVS POT), `tv`/`tv_down
 | `UNPLAYABLE` / `ERROR` (incl. "made for kids", "not available on this app") | try next client; final → show `reason` verbatim |
 | `videoDetails.videoId != id` | invalid response → next client; final → "IP blocked by YouTube" |
 | HTTP 403 on manifest/segments after play started | if past `expire` → reload with cached fresh URL; else next client |
+
+> **Superseded by what shipped (2026-08-23).** Two rows above are wrong and the module does not implement them.
+> *(a)* "do not retry other clients, same result" was falsified the same day it was written — VISIONOS walled while
+> ANDROID served the same stream from the same IP — so a wall is a next-client row. It is now capped at **one**
+> alternate, because a wall that walks the whole table spends three flagged requests on one user action. *(b)* The
+> "VPN/datacenter IP" wording was deleted outright: measured over a real session, VISIONOS walled on **9 of 9**
+> attempts on an ordinary connection, and all three clients walled together only under load, recovering on their own.
+> The shipped classification (`YouTubeWallPolicy`) is therefore two verdicts — *rate-limited, try again* (`Transient`)
+> and *challenged as a bot* (`Unavailable`) — neither of which claims the user's network is a datacenter, and neither
+> of which promises that signing in helps, because nothing here has ever tested that. *(c)* A bare `LOGIN_REQUIRED`
+> with no age wording is a wall, **not** an age gate; the old row made it terminal `NeedsAuth`.
 
 ### 6. Risks (ranked)
 1. **Client table volatility** — all version strings and the "visionos needs no PO token" claim are a 2026-08-22 snapshot; maintainers expect visionos to get PO-token enforcement like android_vr did (2026-07 → 2026-08-17). Keep client blocks in a data table, not code, so they can be updated out-of-band.

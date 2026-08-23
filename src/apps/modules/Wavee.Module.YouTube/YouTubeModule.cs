@@ -73,11 +73,26 @@ public sealed partial class YouTubeModule : WaveeModule
     /// <summary>The <c>channel:&lt;id&gt;</c> entity-id prefix.</summary>
     public const string ChannelEntityPrefix = "channel:";
 
-    private readonly HttpClient _http;
     private readonly ConcurrentDictionary<string, ChannelSnapshot> _channels = new(StringComparer.Ordinal);
     private YouTubeClient[]? _table;
     private YouTubeClient[]? _playbackClients;
     private YouTubeClient? _metadataClient;
+
+    /// <summary>True when this module BUILT its transport and may therefore throw it away. An injected handler (the
+    /// test seam) is never recycled: it is the caller's object and the caller's assertions depend on it.</summary>
+    private readonly bool _canRecycleTransport;
+
+    private readonly Lock _transportGate = new();
+    private HttpClient _http;
+    private HttpClient? _retiredHttp;
+
+    private readonly Lock _sessionGate = new();
+    private YouTubeSession _session = YouTubeSession.Empty;
+    private bool _sessionLoaded;
+
+    /// <summary>How many walks in a row have ended walled. In memory on purpose: it drives the ESCALATION, and a
+    /// fresh process genuinely has no evidence of a streak — only the cooldown instant itself outlives the run.</summary>
+    private int _consecutiveWalls;
 
     /// <summary>The ctor <see cref="ModuleRunner"/> uses: a default handler with redirects and decompression on.</summary>
     public YouTubeModule() : this(null)
@@ -89,16 +104,60 @@ public sealed partial class YouTubeModule : WaveeModule
     /// <param name="disposeHandler">True to dispose <paramref name="handler"/> with the module.</param>
     public YouTubeModule(HttpMessageHandler? handler, bool disposeHandler = false)
     {
-        bool ownsHandler = handler is null || disposeHandler;
-        handler ??= new SocketsHttpHandler
+        _canRecycleTransport = handler is null;
+        _http = handler is null
+            ? NewOwnedTransport()
+            : new HttpClient(handler, disposeHandler) { Timeout = TimeSpan.FromSeconds(20) };
+    }
+
+    /// <summary>Builds the module's own transport. Its own method because <see cref="RecycleTransport"/> builds a
+    /// second one: a <see cref="SocketsHttpHandler"/>'s knobs are frozen after its first request, so "start over" is
+    /// the only way to stop reusing a connection.</summary>
+    private static HttpClient NewOwnedTransport()
+        => new(new SocketsHttpHandler
         {
             AutomaticDecompression = DecompressionMethods.All,
             AllowAutoRedirect = true,
             MaxAutomaticRedirections = 5,
             ConnectTimeout = TimeSpan.FromSeconds(10),
             PooledConnectionLifetime = TimeSpan.FromMinutes(5),
-        };
-        _http = new HttpClient(handler, ownsHandler) { Timeout = TimeSpan.FromSeconds(20) };
+        }, disposeHandler: true) { Timeout = TimeSpan.FromSeconds(20) };
+
+    /// <summary>The transport to send on right now. Read once per request: <see cref="RecycleTransport"/> can swap
+    /// the field between two calls of the same walk.</summary>
+    private HttpClient Transport => Volatile.Read(ref _http);
+
+    /// <summary>
+    /// Throws the connection pool away after a walk ended walled, so the retry does not present on the same TCP/TLS
+    /// connection YouTube just refused.
+    /// <para>
+    /// HONESTY: this rests on ONE observation, not an experiment. On 2026-08-23 a freshly started CLI process was
+    /// served at 00:59:56 while the app's long-lived module child stayed walled at 01:02 and 01:14 — which is
+    /// consistent with connection affinity and equally consistent with the two processes simply drawing different
+    /// dice. It is cheap, so it is here; A1 (visitor identity), A2 (preferred client) and A3 (one alternate + a
+    /// cooldown) are the changes that must carry this workstream, and they stand whether or not this matters.
+    /// </para>
+    /// <para>
+    /// Retirement rather than immediate disposal: disposing a client cancels its in-flight requests, and the page
+    /// path runs <c>/player</c> and <c>/next</c> concurrently. The previous transport is kept one generation and
+    /// dropped at the NEXT recycle, which a cooldown guarantees is at least 30 s later — longer than the 20 s request
+    /// timeout, so nothing can still be using it.
+    /// </para>
+    /// </summary>
+    private void RecycleTransport()
+    {
+        if (!_canRecycleTransport) return;
+
+        HttpClient replacement = NewOwnedTransport();
+        HttpClient? drop;
+        lock (_transportGate)
+        {
+            drop = _retiredHttp;
+            _retiredHttp = _http;
+            _http = replacement;
+        }
+
+        drop?.Dispose();
     }
 
     /// <summary>Every block of the client table actually in use, both roles, in file order.</summary>
@@ -146,6 +205,151 @@ public sealed partial class YouTubeModule : WaveeModule
         _playbackClients = [.. table.Where(c => c.IsPlayback)];
         _metadataClient = Array.Find(table, c => c.IsMetadata);
         _table = table;
+    }
+
+    // ---- session identity --------------------------------------------------------------------------------------
+
+    /// <summary>The persisted session, loaded from the data dir on first read. Without a host there is no data dir,
+    /// so the module runs on an empty session and simply learns nothing between calls.</summary>
+    private YouTubeSession Session
+    {
+        get
+        {
+            lock (_sessionGate)
+            {
+                if (!_sessionLoaded)
+                {
+                    _session = HasHost ? YouTubeSessionStore.Load(Host.DataDir) : YouTubeSession.Empty;
+                    _sessionLoaded = true;
+                }
+
+                return _session;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Applies a change to the session and writes it back, doing NOTHING when the change is a no-op. That short
+    /// circuit is what keeps this off the hot path: a visitor id is stable for the life of a session, so the file is
+    /// written once and every later response re-adopts the same value for free.
+    /// </summary>
+    /// <param name="change">Maps the current session to the wanted one; must return the same instance to skip.</param>
+    private void UpdateSession(Func<YouTubeSession, YouTubeSession> change)
+    {
+        YouTubeSession updated;
+        lock (_sessionGate)
+        {
+            if (!_sessionLoaded)
+            {
+                _session = HasHost ? YouTubeSessionStore.Load(Host.DataDir) : YouTubeSession.Empty;
+                _sessionLoaded = true;
+            }
+
+            updated = change(_session);
+            if (updated == _session) return;
+            _session = updated;
+        }
+
+        if (HasHost) YouTubeSessionStore.Save(Host.DataDir, updated);
+    }
+
+    /// <summary>Remembers the visitor id InnerTube just handed back, so the next request is not a stranger.</summary>
+    /// <param name="visitorData">The <c>responseContext.visitorData</c> value, or null when the response had none.</param>
+    private void AdoptVisitor(string? visitorData)
+    {
+        if (string.IsNullOrWhiteSpace(visitorData)) return;
+        UpdateSession(s => string.Equals(s.VisitorData, visitorData, StringComparison.Ordinal)
+            ? s
+            : s with { VisitorData = visitorData });
+    }
+
+    /// <summary>Forgets the visitor id the moment a request carrying it was walled: a burned id is worse than none,
+    /// because it re-presents the same flagged identity on every retry.</summary>
+    private void DropVisitor()
+        => UpdateSession(s => s.VisitorData is null ? s : s with { VisitorData = null });
+
+    /// <summary>Records the client that actually produced a playable manifest, and clears the wall state — a served
+    /// stream is proof the device is not blocked, whatever the last walk said.</summary>
+    /// <param name="clientKey">The client key that worked.</param>
+    private void RememberSuccess(string clientKey)
+    {
+        Volatile.Write(ref _consecutiveWalls, 0);
+        UpdateSession(s => s.PreferredClientKey == clientKey && s.WalledUntilUnixMs == 0
+            ? s
+            : s with { PreferredClientKey = clientKey, WalledUntilUnixMs = 0 });
+    }
+
+    /// <summary>
+    /// Records a walk that ended walled: escalates the streak, arms the cooldown, forgets the burned visitor id and
+    /// recycles the transport. This is the only place any of those happen, so "how expensive is a wall" is one
+    /// function rather than four scattered decisions.
+    /// </summary>
+    private void RecordWalledWalk()
+    {
+        int walls = Interlocked.Increment(ref _consecutiveWalls);
+        long until = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + YouTubeWallPolicy.CooldownMsFor(walls);
+        UpdateSession(s => s with { VisitorData = null, WalledUntilUnixMs = until });
+        RecycleTransport();
+
+        if (HasHost)
+        {
+            Host.Log(ModuleLogLevel.Warn,
+                $"YouTube walled this device ({walls} walk(s) in a row); holding off for " +
+                $"{YouTubeWallPolicy.CooldownMsFor(walls) / 1000}s.");
+        }
+    }
+
+    /// <summary>True while the module is inside a cooldown and must issue no request at all.</summary>
+    private bool IsWalledNow()
+    {
+        long until = Session.WalledUntilUnixMs;
+        return until > 0 && DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() < until;
+    }
+
+    /// <summary>
+    /// Fails a walk BEFORE it sends anything when the device is inside a cooldown. This is the whole point of A3: a
+    /// user mashing Play during a wall must cost YouTube zero requests, not three per press.
+    /// </summary>
+    private void ThrowIfWalled()
+    {
+        if (!IsWalledNow()) return;
+
+        // clientsTried: 0 — no request was made. The streak alone decides how the cooldown is worded.
+        throw WallFailure(YouTubeWallPolicy.Classify(YouTubeWallPolicy.LoginRequiredStatus,
+            YouTubeWallPolicy.BotWallReason, hasAgeGateFlag: false, clientsWalled: 0, clientsTried: 0,
+            recentWallsInWindow: Volatile.Read(ref _consecutiveWalls)));
+    }
+
+    /// <summary>Turns a wall verdict into the typed failure the app shows. The two strings are the entire user-facing
+    /// vocabulary for a wall; neither claims to know the user's network nor promises that signing in helps.</summary>
+    /// <param name="verdict">The wall verdict, retryable or blocked.</param>
+    private static ModuleException WallFailure(PlayabilityVerdict verdict)
+        => verdict == PlayabilityVerdict.BotWallBlocked
+            ? new ModuleException(ModuleErrorCode.Unavailable, YouTubeWallPolicy.BlockedMessage)
+            : new ModuleException(ModuleErrorCode.Transient, YouTubeWallPolicy.RetryableMessage);
+
+    /// <summary>
+    /// The playback clients in the order to actually ask them: whichever one last produced a playable manifest first,
+    /// then the table order for everything else. The table order is still the fallback — this only moves the client
+    /// that is KNOWN to work to the front, which removes the one flagged request every play used to burn.
+    /// </summary>
+    private YouTubeClient[] OrderedClients()
+    {
+        YouTubeClient[] clients = Clients;
+        if (clients.Length < 2 || Session.PreferredClientKey is not { Length: > 0 } preferred) return clients;
+
+        int at = Array.FindIndex(clients, c => string.Equals(c.Key, preferred, StringComparison.Ordinal));
+        if (at <= 0) return clients;                       // unknown key, or already first: nothing to reorder.
+
+        var ordered = new YouTubeClient[clients.Length];
+        ordered[0] = clients[at];
+        int write = 1;
+        for (int i = 0; i < clients.Length; i++)
+        {
+            if (i != at) ordered[write++] = clients[i];
+        }
+
+        return ordered;
     }
 
     /// <inheritdoc/>
@@ -198,7 +402,7 @@ public sealed partial class YouTubeModule : WaveeModule
         // Skips the consent interstitial that EU exit nodes get instead of the watch page.
         request.Headers.TryAddWithoutValidation("Cookie", ConsentCookie);
 
-        using HttpResponseMessage response = await _http.SendAsync(request, ct).ConfigureAwait(false);
+        using HttpResponseMessage response = await Transport.SendAsync(request, ct).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
             throw new ModuleException(ModuleErrorCode.Transient,
@@ -224,12 +428,22 @@ public sealed partial class YouTubeModule : WaveeModule
             throw new ModuleException(ModuleErrorCode.NotOwned, $"'{playableId}' is not a YouTube video id.");
         }
 
+        ThrowIfWalled();
+
         ModuleErrorCode lastCode = ModuleErrorCode.Unavailable;
         string lastReason = "YouTube would not serve this video to any of the configured clients.";
 
-        YouTubeClient[] clients = Clients;
+        int walls = 0;
+        int firstWallIndex = -1;
+        PlayabilityVerdict wallVerdict = PlayabilityVerdict.BotWallRetryable;
+
+        YouTubeClient[] clients = OrderedClients();
         for (int i = 0; i < clients.Length; i++)
         {
+            // A3: a wall buys exactly ONE alternate client. Walking the whole table turned one user action into
+            // three flagged requests, which is how a single bad play made the address hot for the next 38 minutes.
+            if (walls > 0 && i > firstWallIndex + 1) break;
+
             YouTubeClient client = clients[i];
             YtPlayerResponse? player;
             try
@@ -263,18 +477,24 @@ public sealed partial class YouTubeModule : WaveeModule
                 continue;
             }
 
-            // The bot wall is per CLIENT, not per network: verified 2026-08-22 — VISIONOS answered LOGIN_REQUIRED
-            // "confirm you're not a bot" for a live stream that ANDROID then served with an hlsManifestUrl from the
-            // same IP. So it is a next-client row; it only becomes the verdict when every client says it.
-            if (IsBotWall(status, reason))
+            PlayabilityVerdict verdict = YouTubeWallPolicy.Classify(status, reason,
+                player?.PlayabilityStatus?.DesktopLegacyAgeGateReason is not null,
+                clientsWalled: walls, clientsTried: i + 1,
+                recentWallsInWindow: Volatile.Read(ref _consecutiveWalls));
+
+            if (verdict is PlayabilityVerdict.BotWallRetryable or PlayabilityVerdict.BotWallBlocked)
             {
-                lastCode = ModuleErrorCode.Unavailable;
-                lastReason = "YouTube is blocking this network (VPN or datacenter IP): it wants a signed-in browser.";
-                Host.Log(ModuleLogLevel.Warn, $"{client.Key}: bot wall ({reason}); trying the next client.");
+                // The wall was per CLIENT on 2026-08-22 (VISIONOS walled, ANDROID served the same stream from the
+                // same IP) and per DEVICE on 2026-08-23 (all three walled together for ~38 minutes). One alternate
+                // covers the first shape without paying three flagged requests for the second.
+                if (walls++ == 0) firstWallIndex = i;
+                wallVerdict = verdict;
+                DropVisitor();
+                Host.Log(ModuleLogLevel.Warn, $"{client.Key}: sign-in wall ({reason}).");
                 continue;
             }
 
-            if (IsAgeGate(status, reason, player))
+            if (verdict == PlayabilityVerdict.AgeGate)
             {
                 throw new ModuleException(ModuleErrorCode.NeedsAuth,
                     "This video is age-restricted and Wavee cannot sign in to YouTube.") { Detail = reason };
@@ -282,12 +502,14 @@ public sealed partial class YouTubeModule : WaveeModule
 
             string? hls = player?.StreamingData?.HlsManifestUrl;
 
-            if (string.Equals(status, "LIVE_STREAM_OFFLINE", StringComparison.Ordinal) && hls is null)
+            // Offline is only the verdict without a manifest: the DVR window right after a broadcast ends still
+            // answers LIVE_STREAM_OFFLINE and still hands back an HLS master, and that plays.
+            if (verdict == PlayabilityVerdict.Offline && hls is null)
             {
                 throw new ModuleException(ModuleErrorCode.Offline, OfflineMessage(player)) { Detail = reason };
             }
 
-            if (status is not ("OK" or "LIVE_STREAM_OFFLINE"))
+            if (verdict == PlayabilityVerdict.Unplayable)
             {
                 lastCode = ModuleErrorCode.Unavailable;
                 lastReason = string.IsNullOrWhiteSpace(reason)
@@ -333,7 +555,16 @@ public sealed partial class YouTubeModule : WaveeModule
 
             if (client.Warning is { Length: > 0 } warning) Host.Log(ModuleLogLevel.Warn, warning);
             Host.Log(ModuleLogLevel.Info, $"Resolved {playableId} through the {client.Key} client.");
+            RememberSuccess(client.Key);
             return Build(playableId, player!, hls);
+        }
+
+        // A walk that ENDED walled is the only thing that arms the cooldown. A wall another client recovered from
+        // proved the device is still being served, so it costs the burned visitor id and nothing else.
+        if (walls > 0)
+        {
+            RecordWalledWalk();
+            throw WallFailure(wallVerdict);
         }
 
         throw new ModuleException(lastCode, lastReason);
@@ -350,22 +581,6 @@ public sealed partial class YouTubeModule : WaveeModule
 
         return "This stream is offline.";
     }
-
-    private static bool IsBotWall(string? status, string? reason)
-        => string.Equals(status, "LOGIN_REQUIRED", StringComparison.Ordinal) &&
-           reason is not null && reason.Contains("bot", StringComparison.OrdinalIgnoreCase);
-
-    private static bool IsAgeGate(string? status, string? reason, YtPlayerResponse? player)
-    {
-        if (player?.PlayabilityStatus?.DesktopLegacyAgeGateReason is not null) return true;
-        if (status is "AGE_CHECK_REQUIRED" or "AGE_VERIFICATION_REQUIRED") return true;
-        if (reason is not null && AgeReason().IsMatch(reason)) return true;
-        return string.Equals(status, "LOGIN_REQUIRED", StringComparison.Ordinal);
-    }
-
-    [GeneratedRegex("confirm your age|age-restricted|age restricted|inappropriate",
-        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
-    private static partial Regex AgeReason();
 
     [GeneratedRegex(@"[/?&]expire[/=](\d+)")]
     private static partial Regex ExpireParam();
@@ -545,16 +760,30 @@ public sealed partial class YouTubeModule : WaveeModule
     /// no HLS manifest is required and no preflight runs, because a page is worth showing for a video that will not
     /// play (offline broadcast, SABR-only session). Client fallback and the IP-block detection are the same.
     /// </summary>
+    /// <para>
+    /// The wall policy applies here too — a page open spends the same flagged requests a resolve does. It differs in
+    /// one deliberate way: a walled response usually still carries <c>videoDetails</c>, and a page built from it
+    /// costs no further request, so it is RETURNED rather than retried. Only a wall that also says nothing about the
+    /// video pays for an alternate client, and only a page walk that ends with nothing arms the cooldown.
+    /// </para>
     /// <param name="videoId">The video to describe.</param>
     /// <param name="ct">Cancels the fetch.</param>
     private async Task<YtPlayerResponse> PlayerForPageAsync(string videoId, CancellationToken ct)
     {
+        ThrowIfWalled();
+
         ModuleErrorCode lastCode = ModuleErrorCode.Unavailable;
         string lastReason = "YouTube would not describe this video to any of the configured clients.";
 
-        YouTubeClient[] clients = Clients;
+        int walls = 0;
+        int firstWallIndex = -1;
+        PlayabilityVerdict wallVerdict = PlayabilityVerdict.BotWallRetryable;
+
+        YouTubeClient[] clients = OrderedClients();
         for (int i = 0; i < clients.Length; i++)
         {
+            if (walls > 0 && i > firstWallIndex + 1) break;
+
             YtPlayerResponse? player;
             try
             {
@@ -570,6 +799,25 @@ public sealed partial class YouTubeModule : WaveeModule
             {
                 lastCode = ModuleErrorCode.Transient;
                 lastReason = "YouTube returned an unreadable player response.";
+                continue;
+            }
+
+            bool describesIt = player?.VideoDetails?.VideoId is { Length: > 0 } id &&
+                               string.Equals(id, videoId, StringComparison.Ordinal);
+
+            PlayabilityVerdict verdict = YouTubeWallPolicy.Classify(
+                player?.PlayabilityStatus?.Status, player?.PlayabilityStatus?.Reason,
+                player?.PlayabilityStatus?.DesktopLegacyAgeGateReason is not null,
+                clientsWalled: walls, clientsTried: i + 1,
+                recentWallsInWindow: Volatile.Read(ref _consecutiveWalls));
+
+            if (verdict is PlayabilityVerdict.BotWallRetryable or PlayabilityVerdict.BotWallBlocked)
+            {
+                if (walls++ == 0) firstWallIndex = i;
+                wallVerdict = verdict;
+                DropVisitor();                              // the id that request carried is burned either way.
+                if (describesIt) return player!;
+                Host.Log(ModuleLogLevel.Warn, $"{clients[i].Key}: sign-in wall while describing {videoId}.");
                 continue;
             }
 
@@ -590,6 +838,12 @@ public sealed partial class YouTubeModule : WaveeModule
             }
 
             return player;
+        }
+
+        if (walls > 0)
+        {
+            RecordWalledWalk();
+            throw WallFailure(wallVerdict);
         }
 
         throw new ModuleException(lastCode, lastReason);
@@ -786,6 +1040,8 @@ public sealed partial class YouTubeModule : WaveeModule
 
     private async Task<YtPlayerResponse?> PlayerAsync(YouTubeClient client, string videoId, CancellationToken ct)
     {
+        string? visitor = Session.VisitorData;
+
         using var request = new HttpRequestMessage(HttpMethod.Post, PlayerEndpoint);
         request.Headers.TryAddWithoutValidation("User-Agent", client.UserAgent);
         request.Headers.TryAddWithoutValidation("X-YouTube-Client-Name",
@@ -793,17 +1049,22 @@ public sealed partial class YouTubeModule : WaveeModule
         request.Headers.TryAddWithoutValidation("X-YouTube-Client-Version", client.ClientVersion);
         request.Headers.TryAddWithoutValidation("Origin", "https://www.youtube.com");
         request.Headers.TryAddWithoutValidation("Accept-Language", "en-US,en;q=0.9");
-        request.Content = new ByteArrayContent(PlayerBody(client, videoId));
+        // BOTH spellings, because InnerTube reads both and a real client sends both. Header alone leaves the body
+        // saying "new client"; body alone leaves the transport saying it.
+        if (visitor is { Length: > 0 }) request.Headers.TryAddWithoutValidation("X-Goog-Visitor-Id", visitor);
+        request.Content = new ByteArrayContent(PlayerBody(client, videoId, visitor));
         request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json") { CharSet = "utf-8" };
 
-        using HttpResponseMessage response = await _http.SendAsync(request, ct).ConfigureAwait(false);
+        using HttpResponseMessage response = await Transport.SendAsync(request, ct).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
             throw new HttpRequestException($"the player endpoint answered {(int)response.StatusCode}");
         }
 
         byte[] body = await response.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
-        return JsonSerializer.Deserialize(body, YouTubeJsonContext.Default.YtPlayerResponse);
+        YtPlayerResponse? parsed = JsonSerializer.Deserialize(body, YouTubeJsonContext.Default.YtPlayerResponse);
+        AdoptVisitor(parsed?.ResponseContext?.VisitorData);
+        return parsed;
     }
 
     /// <summary>
@@ -812,7 +1073,9 @@ public sealed partial class YouTubeModule : WaveeModule
     /// </summary>
     /// <param name="client">The client block to send.</param>
     /// <param name="videoId">The video to ask about.</param>
-    public static byte[] PlayerBody(YouTubeClient client, string videoId)
+    /// <param name="visitorData">The visitor id learned from an earlier response, or null on the very first call of
+    /// a session (and immediately after one was burned by a wall).</param>
+    public static byte[] PlayerBody(YouTubeClient client, string videoId, string? visitorData = null)
     {
         var buffer = new ArrayBufferWriter<byte>(512);
         using (var w = new Utf8JsonWriter(buffer))
@@ -822,7 +1085,7 @@ public sealed partial class YouTubeModule : WaveeModule
 
             w.WritePropertyName("context");
             w.WriteStartObject();
-            WriteClient(w, client);
+            WriteClient(w, client, visitorData);
             w.WriteEndObject();
 
             w.WritePropertyName("playbackContext");
@@ -875,6 +1138,16 @@ public sealed partial class YouTubeModule : WaveeModule
     {
         if (MetadataClient is not { } client) return null;
 
+        // Inside a cooldown this endpoint is just another request to youtube.com, and the enrichment is optional by
+        // construction — so it is skipped rather than sent. "Issue no request" has to mean all of them.
+        if (IsWalledNow())
+        {
+            LogNextSkipped(videoId, "the module is holding off after a YouTube sign-in wall");
+            return null;
+        }
+
+        string? visitor = Session.VisitorData;
+
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Post, NextEndpoint);
@@ -886,10 +1159,11 @@ public sealed partial class YouTubeModule : WaveeModule
             request.Headers.TryAddWithoutValidation("Accept-Language", "en-US,en;q=0.9");
             // Same interstitial the channel scrape dodges: an EU exit node otherwise gets a consent page here too.
             request.Headers.TryAddWithoutValidation("Cookie", ConsentCookie);
-            request.Content = new ByteArrayContent(NextBody(client, videoId));
+            if (visitor is { Length: > 0 }) request.Headers.TryAddWithoutValidation("X-Goog-Visitor-Id", visitor);
+            request.Content = new ByteArrayContent(NextBody(client, videoId, visitor));
             request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json") { CharSet = "utf-8" };
 
-            using HttpResponseMessage response = await _http.SendAsync(request, ct).ConfigureAwait(false);
+            using HttpResponseMessage response = await Transport.SendAsync(request, ct).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
             {
                 LogNextSkipped(videoId, $"the next endpoint answered {(int)response.StatusCode}");
@@ -897,7 +1171,9 @@ public sealed partial class YouTubeModule : WaveeModule
             }
 
             byte[] body = await response.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
-            WatchNextInfo? info = Digest(JsonSerializer.Deserialize(body, YouTubeJsonContext.Default.YtNextResponse));
+            YtNextResponse? parsed = JsonSerializer.Deserialize(body, YouTubeJsonContext.Default.YtNextResponse);
+            AdoptVisitor(parsed?.ResponseContext?.VisitorData);
+            WatchNextInfo? info = Digest(parsed);
             if (info is null) LogNextSkipped(videoId, "the next response carried no watch-next results");
             return info;
         }
@@ -1079,7 +1355,8 @@ public sealed partial class YouTubeModule : WaveeModule
     /// </summary>
     /// <param name="client">The metadata client block to send.</param>
     /// <param name="videoId">The video to ask about.</param>
-    public static byte[] NextBody(YouTubeClient client, string videoId)
+    /// <param name="visitorData">The visitor id learned from an earlier response, or null when none is held.</param>
+    public static byte[] NextBody(YouTubeClient client, string videoId, string? visitorData = null)
     {
         var buffer = new ArrayBufferWriter<byte>(512);
         using (var w = new Utf8JsonWriter(buffer))
@@ -1088,7 +1365,7 @@ public sealed partial class YouTubeModule : WaveeModule
             w.WriteString("videoId", videoId);
             w.WritePropertyName("context");
             w.WriteStartObject();
-            WriteClient(w, client);
+            WriteClient(w, client, visitorData);
             w.WriteEndObject();
             w.WriteEndObject();
         }
@@ -1099,12 +1376,16 @@ public sealed partial class YouTubeModule : WaveeModule
     /// <summary>Writes the shared <c>"client"</c> block both InnerTube bodies carry.</summary>
     /// <param name="w">The writer, positioned inside the <c>context</c> object.</param>
     /// <param name="client">The client block to describe.</param>
-    private static void WriteClient(Utf8JsonWriter w, YouTubeClient client)
+    /// <param name="visitorData">The visitor id to present as, or null to present as a new anonymous client.</param>
+    private static void WriteClient(Utf8JsonWriter w, YouTubeClient client, string? visitorData)
     {
         w.WritePropertyName("client");
         w.WriteStartObject();
         w.WriteString("clientName", client.ClientName);
         w.WriteString("clientVersion", client.ClientVersion);
+        // The identity YouTube itself issued on an earlier response. Absent on the first call of a session, and
+        // absent again right after a wall burned the last one.
+        if (visitorData is { Length: > 0 }) w.WriteString("visitorData", visitorData);
         if (client.DeviceMake is { Length: > 0 }) w.WriteString("deviceMake", client.DeviceMake);
         if (client.DeviceModel is { Length: > 0 }) w.WriteString("deviceModel", client.DeviceModel);
         if (client.OsName is { Length: > 0 }) w.WriteString("osName", client.OsName);
@@ -1127,7 +1408,7 @@ public sealed partial class YouTubeModule : WaveeModule
         HttpResponseMessage response;
         try
         {
-            response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct)
+            response = await Transport.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct)
                 .ConfigureAwait(false);
         }
         catch (HttpRequestException)
@@ -1184,7 +1465,18 @@ public sealed partial class YouTubeModule : WaveeModule
     /// <inheritdoc/>
     public override ValueTask ShutdownAsync(CancellationToken ct)
     {
-        _http.Dispose();
+        // Both generations: the live transport and whatever a wall retired but has not dropped yet.
+        HttpClient live;
+        HttpClient? retired;
+        lock (_transportGate)
+        {
+            live = _http;
+            retired = _retiredHttp;
+            _retiredHttp = null;
+        }
+
+        live.Dispose();
+        retired?.Dispose();
         return default;
     }
 }

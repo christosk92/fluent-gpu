@@ -1756,6 +1756,8 @@
     "lookingUp": "Looking up…",
     "noOwner": "Nothing installed can play this link.",
     "failed": "That link couldn’t be played.",
+    "tryAgain": "Try again",
+    "openInBrowser": "Open in browser",
     "live": "LIVE",
     "$comment2": "The two halves of the player bar's behind-the-edge button, kept separate because they are two different jobs: goLive is the VERB (a caps word-mark that matches the LIVE chip beside it), behind is the COUNT, whose leading character is U+2212 MINUS SIGN — the typographic minus, not a hyphen — so it lines up with the digits either side of it. `time` arrives already formatted as m:ss / h:mm:ss.",
     "goLive": "GO LIVE",

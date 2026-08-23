@@ -96,6 +96,9 @@
          satisfied by VirtualCollectionSignalShim.cs — so we test the real reconciliation code without referencing the
          FluentGpu.Engine assembly (which would shadow the source-included Backend's Channel / DealerRouter). -->
     <Compile Include="..\..\FluentGpu.Controls\VirtualCollection.cs" />
+    <!-- The toast de-duplication RULE (pure value function, zero dependencies), source-included so
+         ToastCoalescingTests pins "two Shows that mean the same thing are one card" without standing up a window. -->
+    <Compile Include="..\..\FluentGpu.Controls\ToastCoalescing.cs" />
     <!-- the pure (FluentGpu-free) QR encoder, source-included so QrTests can round-trip-decode its output -->
     <Compile Include="..\Wavee\Features\Auth\Qr.cs" />
     <!-- the pure keyed tracklist diff (Wavee.Core + BCL only) behind the §4.6 choreography — MembershipDiffTests -->

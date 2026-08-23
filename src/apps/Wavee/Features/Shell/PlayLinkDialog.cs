@@ -79,8 +79,16 @@ static class PlayLink
             }
             catch (Exception ex)
             {
+                // Same card as the dialog's failure (the shared FailureToastKey), and the same recoverable shape: the
+                // deep link is still in hand, so "Try again" is literally this call again rather than a dead sentence.
                 post(() => Toast.Show(PlayLinkActions.ErrorText(ex, Loc.Get(Strings.Play.Failed)),
-                    new ToastOptions { Severity = InfoBarSeverity.Error }));
+                    new ToastOptions
+                    {
+                        Severity = InfoBarSeverity.Error,
+                        DedupeKey = PlayLinkActions.FailureToastKey,
+                        ActionLabel = Loc.Get(Strings.Play.TryAgain),
+                        OnAction = () => PlayDirect(actions, link),
+                    }));
             }
         });
     }
@@ -106,6 +114,10 @@ sealed class PlayLinkDialog : Component
     {
         var text = UseSignal(Seed);
         var status = UseSignal("");
+        // The input that FAILED, kept so the card can offer the browser escape hatch for it. It is a separate signal
+        // from `text` on purpose: the user is free to edit the field after a failure, and the escape hatch must open
+        // the link that actually failed — not whatever half-typed text is in the box when they reach for it.
+        var failedInput = UseSignal("");
         // Cancel-on-unmount: closing the card withdraws the question. The command's own UI-thread post is the shell's
         // (UsePost is what ActionServices.Post is wired from), so the completion lands on the thread that owns the
         // signals below.
@@ -131,6 +143,7 @@ sealed class PlayLinkDialog : Component
             }
 
             status.Value = "";
+            failedInput.Value = "";     // a new attempt retires the previous failure's escape hatch
             string? pinned = PinnedModuleId;
             lookup.Restart(
                 async ct =>
@@ -167,11 +180,35 @@ sealed class PlayLinkDialog : Component
             if (PlayLinkActions.IsCancelled(ex)) return;
             if (PlayLinkActions.IsNotOwned(ex)) { status.Value = Loc.Get(Strings.Play.NoOwner); return; }
             status.Value = "";
+            failedInput.Value = PlayLinkActions.Normalize(text.Peek());
             // The module wrote the message ("YouTube is blocking this network", "subscriber-only"), so it is shown
             // verbatim; anything else falls back to the surface's own sentence rather than leaking an exception shape.
+            //
+            // A failure the user can do nothing about is half a message, so the card carries the retry: the dialog
+            // still holds the input, so "Try again" is the SAME Submit, one re-entry guard and all. The shared
+            // FailureToastKey is what stops this card and PlaybackBridge's generic one from stacking two cards for one
+            // failed play — and what makes a second failed attempt refresh this card rather than pile onto it.
             Toast.Show(PlayLinkActions.ErrorText(ex, Loc.Get(Strings.Play.Failed)),
-                new ToastOptions { Severity = InfoBarSeverity.Error });
+                new ToastOptions
+                {
+                    Severity = InfoBarSeverity.Error,
+                    DedupeKey = PlayLinkActions.FailureToastKey,
+                    ActionLabel = Loc.Get(Strings.Play.TryAgain),
+                    OnAction = Submit,
+                });
         }
+
+        // The escape hatch: when the thing that failed was a web link, the user's next move is usually "just open it".
+        // ShellOpen.IsWebUrl is the whitelist guard (http/https + a host, nothing else) — the input is untrusted text
+        // the user pasted, so it never reaches the shell without passing it, and a refused string simply has no button.
+        string escape = failedInput.Value;
+        bool canOpenExternally = ShellOpen.IsWebUrl(escape);
+
+        Element cancelButton = Button.Standard(Loc.Get(Strings.Auth.Cancel), Close) with { MinWidth = 96f };
+        Element playButton = Button.Accent(Loc.Get(Strings.Play.Start), Submit, isEnabled: canPlay) with { MinWidth = 96f };
+        Element[] buttons = canOpenExternally
+            ? [Button.Standard(Loc.Get(Strings.Play.OpenInBrowser), () => ShellOpen.OpenUrl(escape)), cancelButton, playButton]
+            : [cancelButton, playButton];
 
         return new BoxEl
         {
@@ -206,11 +243,7 @@ sealed class PlayLinkDialog : Component
                 new BoxEl
                 {
                     Direction = 0, Gap = Spacing.S, Justify = FlexJustify.End, Margin = new Edges4(0, Spacing.S, 0, 0),
-                    Children =
-                    [
-                        Button.Standard(Loc.Get(Strings.Auth.Cancel), Close) with { MinWidth = 96f },
-                        Button.Accent(Loc.Get(Strings.Play.Start), Submit, isEnabled: canPlay) with { MinWidth = 96f },
-                    ],
+                    Children = buttons,
                 },
             ],
         };

@@ -37,6 +37,14 @@ public sealed record ToastOptions
     /// <summary>Custom body — when set, replaces the standard severity/title/message card (rendered inside the shadowed,
     /// tinted toast frame).</summary>
     public Func<Element>? CustomContent { get; init; }
+    /// <summary>Optional identity for de-duplication. A <see cref="Toast.Show"/> whose effective key
+    /// (<c>DedupeKey ?? message</c> — see <see cref="ToastCoalescing"/>) matches a toast already on the strip REFRESHES
+    /// that card instead of stacking a second one: the countdown restarts and the newer action (if any) is adopted.
+    ///
+    /// <para>Leave it null and the message text is the key, which is what stops the accidental double-<c>Show</c>.
+    /// Set it when several independent lanes each raise a card for ONE event and their sentences differ — a shared key
+    /// is the only thing that can say "these are the same notification".</para></summary>
+    public string? DedupeKey { get; init; }
 }
 
 /// <summary>Options for an explicit <see cref="ToastHost.Create"/> (multi-window / non-default placement). The
@@ -131,6 +139,7 @@ internal sealed class ToastController
     public ToastHandle Show(string message, ToastOptions? options)
     {
         var opts = options ?? new ToastOptions();
+        if (Coalesce(message, opts) is { } refreshed) return refreshed;
         var item = new ToastItem
         {
             Id = _nextId++,
@@ -146,6 +155,43 @@ internal sealed class ToastController
         Bump();
         ReconcileTimers();
         return item.Handle;
+    }
+
+    /// <summary>The de-duplication half of <see cref="Show"/>: when an enqueued toast has the same effective key
+    /// (<see cref="ToastCoalescing.IsDuplicate"/>), REFRESH it and hand back its live handle instead of stacking a
+    /// second identical card.
+    ///
+    /// <para>Refresh means exactly two things. (1) The dismiss countdown restarts from the card's own
+    /// <c>DurationMs</c> — the second call is fresh news, so the user gets the full read time from now, whether the
+    /// card was mid-countdown, paused under the pointer, or still waiting in the overflow queue. (2) The newer ACTION
+    /// is adopted when it carries one, so a second raise can add a "Try again" to a card that started without one.
+    /// The MESSAGE is deliberately NOT overwritten: with an explicit key the lanes disagree on wording by design, and
+    /// the first sentence is the specific one (a module's own words) while a later lane's is the generic fallback —
+    /// letting the newest write win would degrade the card the user is already reading.</para>
+    ///
+    /// <para>Matching spans the whole queue, not just the visible window: a duplicate parked in the overflow queue is
+    /// a second identical card that WILL appear, which is the same defect one frame later.</para></summary>
+    /// <returns>The existing toast's handle when this call was a duplicate; null when it is a new toast.</returns>
+    private ToastHandle? Coalesce(string message, ToastOptions opts)
+    {
+        for (int i = 0; i < _items.Count; i++)
+        {
+            var it = _items[i];
+            if (!ToastCoalescing.IsDuplicate(it.Options.DedupeKey, it.Message, opts.DedupeKey, message)) continue;
+
+            if (opts.ActionLabel is { Length: > 0 } && opts.OnAction is not null)
+                it.Options = it.Options with { ActionLabel = opts.ActionLabel, OnAction = opts.OnAction };
+
+            // Restart the countdown: drop any pending fire (Gen++ invalidates it), re-bank the FULL duration, and let
+            // ReconcileTimers re-arm it if it should currently be running.
+            it.Gen++;
+            it.Armed = false;
+            it.Remaining = MathF.Max(0f, it.Options.DurationMs);
+            Bump();
+            ReconcileTimers();
+            return it.Handle;
+        }
+        return null;
     }
 
     public void Close(ToastItem item)

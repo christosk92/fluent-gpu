@@ -104,6 +104,16 @@ public static class PlayLinkActions
 
     // ── Failure ──────────────────────────────────────────────────────────────────────────────────────────────────
 
+    /// <summary>The toast <c>DedupeKey</c> every "this play failed" card shares, whichever lane raised it.
+    ///
+    /// <para>One failed play is ONE card. Several lanes can each answer for the same failure — the paste-a-link card's
+    /// <c>Failed</c> (the module's own words), the deep-link path, and <c>PlaybackBridge.NotifyPlaybackError</c> (the
+    /// player's generic sentence) — and before this key they stacked two identical-looking error cards with nothing to
+    /// act on. The key is the LANE and deliberately not the input: only one of those callers even knows the input, so
+    /// a per-link key could never make them collapse. Coalescing keeps the FIRST (most specific) sentence and adopts
+    /// the newer action, so the retry survives the merge.</para></summary>
+    public const string FailureToastKey = "wavee.play.failed";
+
     /// <summary>Did the router come back with "nobody owns this"? That is not an error the user should see as a toast —
     /// it is the status line's own answer, so the dialog stays open and says so in place.</summary>
     public static bool IsNotOwned(Exception? ex)

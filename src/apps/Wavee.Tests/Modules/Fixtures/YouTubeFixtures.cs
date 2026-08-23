@@ -13,6 +13,10 @@ public static class YouTubeFixtures
     /// <summary>The channel id every fixture attributes its video to.</summary>
     public const string ChannelId = "UCAAAAAAAAAAAAAAAAAAAAA";
 
+    /// <summary>The <c>responseContext.visitorData</c> the InnerTube fixtures hand back. InnerTube returns one on
+    /// EVERY response and expects it echoed on the next request; the module used to read neither.</summary>
+    public const string VisitorData = "CgtBQUFBQUFBQUFBQQ%3D%3D";
+
     /// <summary>The channel avatar only <c>/next</c> knows about; the player response never pictures a channel.</summary>
     public const string ChannelAvatarUrl = "https://yt3.ggpht.com/ytc/AAAAAAAAAAAAAAAAAAAAAAAA=s176-c-k-c0x00ffffff-no-rj";
 
@@ -132,14 +136,34 @@ public static class YouTubeFixtures
     }
     """;
 
-    /// <summary>"Sign in to confirm you're not a bot" — the datacenter/VPN wall. Terminal for every client.</summary>
+    /// <summary>
+    /// "Sign in to confirm you're not a bot" — the sign-in wall. Observed per-CLIENT on 2026-08-22 (VISIONOS walled,
+    /// ANDROID served the same stream from the same IP) and per-DEVICE on 2026-08-23 (all three clients walled
+    /// together for ~38 minutes), which is why the module now spends at most one alternate client on it.
+    /// </summary>
     public const string PlayerBotWall = """
     {
+      "responseContext": { "visitorData": "CgtBQUFBQUFBQUFBQQ%3D%3D" },
       "playabilityStatus": {
         "status": "LOGIN_REQUIRED",
         "reason": "Sign in to confirm you're not a bot",
         "errorScreen": { "playerErrorMessageRenderer": { "reason": { "simpleText": "Sign in to confirm you're not a bot" } } }
       },
+      "videoDetails": { "videoId": "tRsQsTMvPNg", "title": "Claude FM", "author": "Anthropic",
+                        "lengthSeconds": "0", "isLive": true, "isLiveContent": true }
+    }
+    """;
+
+    /// <summary>
+    /// A bare <c>LOGIN_REQUIRED</c>: no age marker, no age wording, and no "bot" in the reason either. The old
+    /// predicate pair read this as an AGE GATE — terminal <c>NeedsAuth</c>, no next client — purely because the bot
+    /// test was written above the age test and the age test ended in an unguarded <c>status == LOGIN_REQUIRED</c>.
+    /// It belongs to the wall family: YouTube has reworded this demand repeatedly and an unfamiliar wording must not
+    /// promote it to the one verdict nothing can recover from.
+    /// </summary>
+    public const string PlayerLoginRequiredBare = """
+    {
+      "playabilityStatus": { "status": "LOGIN_REQUIRED", "reason": "Sign in" },
       "videoDetails": { "videoId": "tRsQsTMvPNg", "title": "Claude FM", "author": "Anthropic",
                         "lengthSeconds": "0", "isLive": true, "isLiveContent": true }
     }
