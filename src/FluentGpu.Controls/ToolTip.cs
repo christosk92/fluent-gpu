@@ -69,8 +69,10 @@ public sealed class ToolTip : Component
 
     public Element Target = new BoxEl();
     public string Text = "";
-    /// <inheritdoc cref="Wrap(Element, string, float)"/>
+    /// <inheritdoc cref="Wrap(Element, string, float, float)"/>
     public float Grow;
+    /// <inheritdoc cref="Wrap(Element, string, float, float)"/>
+    public float ShowDelayMs = float.NaN;
     public bool OpenOnMount;   // deterministic visual-shot hook: open the real tooltip after first mount
     /// <summary>Lightweight per-part styling (CSS ::part): modifiers keyed by the <c>PartXxx</c> consts; see
     /// <see cref="TemplateParts"/> for the contract.</summary>
@@ -113,13 +115,27 @@ public sealed class ToolTip : Component
     /// the bubble closes once the pointer has been outside owner ∪ bubble for one full check interval.</summary>
     public const float SafeZoneCheckMs = 1000f;
 
+    // ── ONE bubble at a time (WinUI's s_pToolTipServiceMetadata single open tooltip) ─────────────────────────────────
+    // WinUI's ToolTipService keeps ONE automatic tooltip open per thread and closes it before opening the next
+    // (ToolTipService_Partial.cpp CloseAutomaticToolTip / s_tpCurrentToolTip). We had no such rule: every wrapper owned
+    // an independent timer and an independent overlay entry, so a pointer sweeping a row of small targets could leave
+    // several bubbles on screen at once — each one still inside its own 5s dwell or its 1s safe-zone grace while the
+    // next had already opened. Two tooltips are never right (there is one pointer and one question), so this is a
+    // blanket rule rather than an opt-in.
+    //
+    // The owner is the COMPONENT INSTANCE (stable across re-renders — props are re-pushed, the component is reused) and
+    // the closer is that render's CloseNow, whose captured cells are the same UseRef/UseSignal cells whatever render
+    // installed it. UI thread only, like every other field the reconciler touches.
+    private static ToolTip? s_openOwner;
+    private static Action? s_openCloser;
+
     /// <summary>LIVE target+text slots RE-PUSHED to the core (<c>Embed.Comp(slots, …)</c>; the SelectorBar/RadioButtons
     /// idiom). <see cref="Target"/> and <see cref="Text"/> are plain fields, so via a propless <c>Embed.Comp</c> they
     /// freeze at first mount — a re-rendering parent's new wrapped element or new tooltip text would be silently
     /// dropped (the toggle-tooltip staleness bug). <see cref="Wrap"/> routes them through re-pushed props instead; when
     /// present they WIN over the fields and the ToolTip re-renders reactively (props are signal-backed). Read with
     /// <c>UsePropsOrDefault</c>.</summary>
-    public sealed record ToolTipSlots(Element Target, string Text, float Grow = 0f)
+    public sealed record ToolTipSlots(Element Target, string Text, float Grow = 0f, float ShowDelayMs = float.NaN)
     {
         // The compiler-generated record equality walks the whole wrapped Element tree, field by field, EVERY time the
         // parent re-pushes props — and the delivery seam compares props on every parent render. For a shell that wraps
@@ -129,10 +145,13 @@ public sealed class ToolTip : Component
         // safe direction — a rebuilt target is unequal, so it still re-renders; only a genuinely identical instance
         // (the parent handed back the same element) short-circuits.
         public bool Equals(ToolTipSlots? other)
-            => other is not null && ReferenceEquals(Target, other.Target) && Text == other.Text && Grow == other.Grow;
+            => other is not null && ReferenceEquals(Target, other.Target) && Text == other.Text && Grow == other.Grow
+               // float.Equals, not ==: the default is NaN ("use the service delay") and NaN == NaN is false, so a plain
+               // == would report every default-delay re-push as a CHANGE and re-render every tooltip in the shell.
+               && ShowDelayMs.Equals(other.ShowDelayMs);
 
         public override int GetHashCode()
-            => HashCode.Combine(RuntimeHelpers.GetHashCode(Target), Text, Grow);
+            => HashCode.Combine(RuntimeHelpers.GetHashCode(Target), Text, Grow, ShowDelayMs);
     }
 
     /// <summary>DEFERRED target slots: the wrapped element as a FACTORY instead of a built tree, so a parent that
@@ -147,15 +166,16 @@ public sealed class ToolTip : Component
     /// <para>The factory is invoked INSIDE the ToolTip's own render, which is what makes this safe rather than stale:
     /// any signal it reads subscribes the ToolTip, so live data still reaches the target with no re-push at all
     /// (component-props-contract.md — a frozen VALUE would be the bug; a delegate re-read each render is the fix).</para></summary>
-    public sealed record ToolTipStableSlots(Func<Element> Target, string Text, float Grow = 0f)
+    public sealed record ToolTipStableSlots(Func<Element> Target, string Text, float Grow = 0f, float ShowDelayMs = float.NaN)
     {
         // Identity on the FACTORY, exactly like ToolTipSlots' reference compare on the built element — a delegate has no
         // meaningful value equality, and two lambdas with the same body are still different instances.
         public bool Equals(ToolTipStableSlots? other)
-            => other is not null && ReferenceEquals(Target, other.Target) && Text == other.Text && Grow == other.Grow;
+            => other is not null && ReferenceEquals(Target, other.Target) && Text == other.Text && Grow == other.Grow
+               && ShowDelayMs.Equals(other.ShowDelayMs);   // see ToolTipSlots.Equals for why float.Equals
 
         public override int GetHashCode()
-            => HashCode.Combine(RuntimeHelpers.GetHashCode(Target), Text, Grow);
+            => HashCode.Combine(RuntimeHelpers.GetHashCode(Target), Text, Grow, ShowDelayMs);
     }
 
     /// <summary>Wrap <paramref name="target"/> with the hover/focus/press tooltip mechanics.
@@ -166,9 +186,20 @@ public sealed class ToolTip : Component
     /// the cross one — see the wrapper's own comment in <c>Render</c> for the bug it exists to cure (a wrapped ROW in a
     /// column shrink-wrapped to its own title, so the sidebar's track / missing / unavailable rows painted narrower
     /// fill plates than their unwrapped neighbours). Use it only where the target genuinely owns its parent's width; a
-    /// target that declares its own <c>Width</c> is left alone regardless.</para></summary>
-    public static Element Wrap(Element target, string text, float grow = 0f)
-        => Embed.Comp(new ToolTipSlots(target, text, grow), () => new ToolTip());
+    /// target that declares its own <c>Width</c> is left alone regardless.</para>
+    ///
+    /// <para><paramref name="showDelayMs"/> is the PER-ELEMENT initial-show override — WinUI's
+    /// <c>ToolTipService.InitialShowDelay</c> attached property, which is likewise per-element and likewise defaults to
+    /// the service value. <c>NaN</c> (the default) is exactly today's behaviour at every existing call site: the mouse
+    /// delay ladder, <see cref="MouseShowDelayMs"/> normally and <see cref="MouseReshowDelayMs"/> inside the
+    /// <see cref="BetweenShowDelayMs"/> re-show window. A number replaces BOTH mouse legs — a surface that wants an
+    /// instant bubble wants it on the FIRST hover too, not only on the re-show. It does NOT touch
+    /// <see cref="KeyboardShowDelayMs"/>: a focus-driven tooltip firing the instant Tab lands would strobe down a tab
+    /// order, and WinUI keeps the keyboard leg on its own clock for the same reason
+    /// (ToolTipService_Partial.cpp:1777-1779). 0 is honoured literally, and literally means "the next frame": the
+    /// countdown is <see cref="ToolTipClock"/>, which seeds its track on one frame and polls it on the next.</summary>
+    public static Element Wrap(Element target, string text, float grow = 0f, float showDelayMs = float.NaN)
+        => Embed.Comp(new ToolTipSlots(target, text, grow, showDelayMs), () => new ToolTip());
 
     /// <summary>Wrap a target that is built LAZILY, inside the ToolTip's render — the churn-free form of
     /// <see cref="Wrap"/> (see <see cref="ToolTipStableSlots"/>).
@@ -177,8 +208,8 @@ public sealed class ToolTip : Component
     /// in a <c>UseMemo</c>/<c>UseRef</c>. A lambda allocated per render is a fresh instance every time, which makes the
     /// props compare unequal and reintroduces exactly the churn this overload exists to remove (it stays CORRECT — just
     /// pointless). The factory runs on every ToolTip render, so it must be cheap and side-effect-free.</para></summary>
-    public static Element WrapStable(Func<Element> target, string text, float grow = 0f)
-        => Embed.Comp(new ToolTipStableSlots(target, text, grow), () => new ToolTip());
+    public static Element WrapStable(Func<Element> target, string text, float grow = 0f, float showDelayMs = float.NaN)
+        => Embed.Comp(new ToolTipStableSlots(target, text, grow, showDelayMs), () => new ToolTip());
 
     public override Element Render()
     {
@@ -189,6 +220,7 @@ public sealed class ToolTip : Component
         Element target = stable is not null ? stable.Target() : (slots?.Target ?? Target);
         string text = stable?.Text ?? slots?.Text ?? Text;
         float grow = stable?.Grow ?? slots?.Grow ?? Grow;
+        float showDelayOverride = stable?.ShowDelayMs ?? slots?.ShowDelayMs ?? ShowDelayMs;
         if (grow > 0f) target = Fill(target, grow);
         var svc = UseContext(Overlay.Service);
         var hooks = UseContext(InputHooks.Current);
@@ -205,6 +237,14 @@ public sealed class ToolTip : Component
         // backwards write — and the thunk reads the CURRENT value.
         var textRef = UseRef("");
         textRef.Value = text;
+        // TRANSIENT posture — set by the same per-element override that makes the bubble open immediately (see Wrap).
+        // Instant show and instant hide are one decision, not two: a bubble that appears the moment the pointer lands
+        // is a DATA TIP (a sparkline bar's week, a blend slice's share) rather than a delayed reminder about a button.
+        // A data tip is never travelled into, so it must not keep the safe-zone's 1s grace on the way out — with the
+        // 800ms delay gone, that grace is what leaves four or five bubbles stacked behind a fast sweep. Held in a Ref
+        // because the leave handler must read the CURRENT posture, not whichever render happened to install it.
+        var transient = UseRef(false);
+        transient.Value = !float.IsNaN(showDelayOverride);
         var openedAtMs = UseRef<long>(0);                 // monotonic ms at open → the 5s dwell survives 2↔3 phase flips
         var safePoll = UseSignal(0);                      // bumped per in-zone safe-zone elapse → remounts the 1s poll clock
 
@@ -224,10 +264,19 @@ public sealed class ToolTip : Component
         {
             phase.Value = 2;   // bubble open → arm the auto-dismiss countdown
             if (h.Value is { IsOpen: true }) return;
+            // One bubble at a time: whoever owns the screen loses it here, before this one is placed (see s_openOwner).
+            if (!ReferenceEquals(s_openOwner, this)) s_openCloser?.Invoke();
+            s_openOwner = this;
+            s_openCloser = CloseNow;
             openedAtMs.Value = Environment.TickCount64;   // dwell epoch (m_tpCloseTimer is armed once per open)
             // A tooltip never traps focus and never light-dismisses on outside click — it is transient and dismissal
             // is driven by hover/focus-leave + press + the auto-dismiss timer (ToolTipService owns close, not the user).
-            var options = new PopupOptions(FocusTrap: false, DismissBehavior: DismissBehavior.None, Chrome: PopupChrome.Raw);
+            //
+            // Chrome: the fade (Raw) for a normal tooltip; NONE (Static) for a transient one. A 167ms fade-out is a
+            // ghost the next bubble's fade-in overlaps, which is precisely what "instant" must not look like — a data
+            // tip that re-anchors as the pointer crosses a strip has to be exactly one bubble on every frame.
+            var options = new PopupOptions(FocusTrap: false, DismissBehavior: DismissBehavior.None,
+                                           Chrome: transient.Value ? PopupChrome.Static : PopupChrome.Raw);
             if (placementMode == ToolTipPlacementMode.Mouse && !keyboardMode.Value)
             {
                 // PlacementMode.Mouse: top-left at the pointer, 11px below it (ToolTip_Partial.cpp:976-977
@@ -280,6 +329,7 @@ public sealed class ToolTip : Component
             bool wasOpen = phase.Peek() is 2 or 3;
             if (h.Value is { IsOpen: true } o) o.Close();
             h.Value = null;
+            if (ReferenceEquals(s_openOwner, this)) { s_openOwner = null; s_openCloser = null; }
             bubbleNode.Value = default;   // the bubble unmounts — its rect leaves the safe zone
             if (wasOpen) lastClosedAtMs.Value = Environment.TickCount64;   // mark close start for the re-show window
             keyboardMode.Value = false;
@@ -311,6 +361,9 @@ public sealed class ToolTip : Component
         void OnLeave()
         {
             dismissedUntilLeave.Value = false;
+            // A transient (instant-show) bubble is hit-test-invisible chrome over a data surface: there is nothing in
+            // it to travel INTO, which is the only thing the safe zone protects. It closes on the leave edge, full stop.
+            if (transient.Value) { CloseNow(); return; }
             if (phase.Peek() == 2) { phase.Value = 3; return; }   // arm the 1s safe-zone poll (the bubble rect keeps it open via geometry)
             if (phase.Peek() != 3) CloseNow();   // pending open → cancel
         }
@@ -386,6 +439,9 @@ public sealed class ToolTip : Component
             {
                 if (h.Value is { IsOpen: true } o) o.Close();
                 h.Value = null;
+                // Release the single-bubble latch too: a torn-down owner's closer writes into cells that no longer have
+                // a subscriber, and worse, would leave the NEXT tooltip believing something else still owns the screen.
+                if (ReferenceEquals(s_openOwner, this)) { s_openOwner = null; s_openCloser = null; }
             };
         }, DepKey.Empty);
 
@@ -393,7 +449,13 @@ public sealed class ToolTip : Component
         int poll = safePoll.Value;   // subscribe → an in-zone safe-zone elapse remounts a fresh 1s poll clock
         // GetInitialShowDelay: Mouse ×2 normal / ×1 reshow (truncated 1.5 — see MouseReshowDelayMs); Keyboard ×2 always.
         bool isReshow = Environment.TickCount64 - lastClosedAtMs.Value < (long)BetweenShowDelayMs;
-        float delay = keyboardMode.Value ? KeyboardShowDelayMs : (isReshow ? MouseReshowDelayMs : MouseShowDelayMs);
+        // The per-element override (see Wrap) replaces both MOUSE legs and leaves the keyboard leg alone. Clamped at 0
+        // rather than passed raw: the value reaches the AnimEngine as a track duration, and a negative span is not a
+        // shorter delay, it is a malformed track. (0 itself is safe — the timeline reads a non-positive duration as 1ms,
+        // and the clock needs its seed frame regardless.)
+        float delay = keyboardMode.Value ? KeyboardShowDelayMs
+                    : !float.IsNaN(showDelayOverride) ? MathF.Max(0f, showDelayOverride)
+                    : (isReshow ? MouseReshowDelayMs : MouseShowDelayMs);
         // The REMAINING show-duration dwell: WinUI's m_tpCloseTimer is armed once per open and keeps running while the
         // safe-zone monitor watches (ToolTipService_Partial.h:54; OpenAutomaticToolTip arms it, cpp:429-459), so the
         // 2↔3 phase flips must not restart the 5s — the remount re-arms with whatever dwell is left.

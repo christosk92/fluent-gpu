@@ -794,7 +794,9 @@ public sealed class LiveSessionHost : IAsyncDisposable
             // a freshness rule per service — all of it is now either a ladder (per kind) or a policy table
             // (OpenPolicy / TraitPolicy / HydrationPolicy).
             var pump = new Wavee.Backend.Hydration.HydrationPump(cts.Token, metadataLog.With("hydration"));
-            var traitPolicy = new Wavee.Backend.Hydration.TraitPolicy(() => svc.Settings.Get(WaveeSettings.PlaysColumn));
+            // A pure surface → trait-set table with no setting to read: play counts hydrate for every list surface, and
+            // the Plays column setting only shows or hides the lane that renders them.
+            var traitPolicy = new Wavee.Backend.Hydration.TraitPolicy();
             // THE trait door (design §2.4): one plan → one ExtensionEtagCache POST per ≤300 uris carrying every wanted
             // kind → one lazy bulk write per page. The four services it replaced each owned a cap, a memo, an etag
             // decision and a client-feature-id; the projector registry owns the projection and nothing else.

@@ -40,6 +40,11 @@ internal sealed unsafe class ImagePipeline : IDisposable
     private ID3D12RootSignature* _rootSig;
     private readonly float[] _vpConstants = new float[2];
     private ID3D12PipelineState* _pso;
+    // Tier-3 stencil path clip (gpu-renderer.md S6): the EQUAL-tested clone, built lazily on the first stencil scope.
+    // This is THE pipeline the tier exists for — an album-art grid clipped to a silhouette.
+    private ID3D12PipelineState* _psoStencilTest;
+    private bool _stencilTried;
+    private ID3D12Device* _device;   // non-owning; the device outlives every pipeline
     private ID3D12Resource* _quad;
     private readonly ID3D12Resource*[] _instances = new ID3D12Resource*[FrameCount];
     private readonly ImageInstance*[] _mapped = new ImageInstance*[FrameCount];
@@ -135,6 +140,7 @@ float4 PSMain(VSOut i) : SV_Target
 
     public void Init(ID3D12Device* device)
     {
+        _device = device;
         BuildRootSignature(device);
         BuildPipeline(device);
         BuildBuffers(device);
@@ -255,11 +261,14 @@ float4 PSMain(VSOut i) : SV_Target
     /// <summary>Bind the shared image-pass state ONCE (descriptor heap, root sig, PSO, viewport, topology, quad VB) — so
     /// the per-image draws don't re-bind the descriptor heap N times (the per-image churn that the acrylic scroll path
     /// turned into flicker). Call once per image pass, then <see cref="Draw"/> each image.</summary>
-    public void Begin(ID3D12GraphicsCommandList* cmd, ID3D12DescriptorHeap* heap, float vpW, float vpH)
+    public void Begin(ID3D12GraphicsCommandList* cmd, ID3D12DescriptorHeap* heap, float vpW, float vpH, bool stencilTest = false)
     {
         cmd->SetDescriptorHeaps(1, &heap);
         cmd->SetGraphicsRootSignature(_rootSig);
-        cmd->SetPipelineState(_pso);
+        // Inside a tier-3 stencil scope, bind the EQUAL-tested clone (the device has set OMSetStencilRef to the live
+        // nesting depth). Null ⇒ the clone failed to build and the scope degrades to its plain scissor.
+        ID3D12PipelineState* stencil = stencilTest ? StencilTestPso() : null;
+        cmd->SetPipelineState(stencil != null ? stencil : _pso);
         _vpConstants[0] = vpW;
         _vpConstants[1] = vpH;
         fixed (float* vp = _vpConstants)
@@ -294,12 +303,23 @@ float4 PSMain(VSOut i) : SV_Target
         return count;
     }
 
+    private ID3D12PipelineState* StencilTestPso()
+    {
+        if (!_stencilTried)
+        {
+            _stencilTried = true;
+            _psoStencilTest = StencilPso.TryBuildQuadEqualTest(_device, _rootSig, Hlsl, "VSMain", "PSMain", "image", depthClip: true);
+        }
+        return _psoStencilTest;
+    }
+
     public void Dispose()
     {
         for (int f = 0; f < FrameCount; f++)
             if (_instances[f] != null) { _instances[f]->Unmap(0, null); D3D12MemoryDiagnostics.Release(_instances[f], "Image.InstanceUpload"); _instances[f]->Release(); _instances[f] = null; }
         if (_quad != null) { D3D12MemoryDiagnostics.Release(_quad, "Image.QuadUpload"); _quad->Release(); _quad = null; }
         if (_pso != null) _pso->Release();
+        if (_psoStencilTest != null) { _psoStencilTest->Release(); _psoStencilTest = null; }
         if (_rootSig != null) _rootSig->Release();
     }
 }

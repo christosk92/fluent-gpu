@@ -141,9 +141,14 @@ static class HomeCards
     // Art, always through the app's one artwork slot — never a hand-rolled ImageEl. decodePx is the SQUARE decode target
     // so several sizes of one cover share a texture.
     static Element Art(HomeCard c, float w, float h, float corners, int decodePx = 0)
-        => c.Image is null && LikedSongsArtwork.IsLikedUri(c.Uri) && MathF.Abs(w - h) < 0.5f
-            ? LikedSongsArtwork.Cover(w, corners)
-            : Surfaces.Artwork(c.Image, SpotifyExportMapper.Hash(c.Uri), w, h, corners,
+        // The liked card gets the DYNAMIC cover — the treatment the user picked, built from their own newest likes —
+        // and never the picker: Home shows the collection, the collection's page owns its settings. The gate lives
+        // here, at the render site, and not in StoreLibrarySource: a catalog source can neither read the appearance
+        // setting cleanly nor react to AppearancePrefs.Bump, so its tiles would be stale until the next Home fetch.
+        // The URI is the whole gate — a card that arrived WITH the provider's stock liked artwork must still take the
+        // user's treatment (LikedSongsArtwork.For), and a letterbox slot centre-crops it rather than falling back.
+        => LikedSongsArtwork.For(c.Uri, w, h, corners)
+            ?? Surfaces.Artwork(c.Image, SpotifyExportMapper.Hash(c.Uri), w, h, corners,
                 decodePx: decodePx > 0 ? decodePx : (int)MathF.Max(w, h));
 
     /// <summary>`.chip` — a FILLED seed chip: `--subtle-2`, control radius, Caption 12/16, 8-by-2 padding. Used for a

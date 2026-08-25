@@ -200,7 +200,7 @@ public class HydrationRouterTests
         Assert.Equal(new[] { TraitSurface.PlaylistOpen }, sp.Surfaces);
         Assert.Equal(new[] { "spotify", "local" }, log);
 
-        await router.EnsureTraitsAsync(uris, TraitSet.Video, TraitSurface.PlaysToggle);
+        await router.EnsureTraitsAsync(uris, TraitSet.Video, TraitSurface.NowPlaying);
         Assert.Equal(new[] { TraitSet.Video }, sp.TraitSets);
         Assert.Equal(new[] { TraitSet.Video }, lo.TraitSets);
         Assert.Equal(new[] { "spotify:track:a", "spotify:track:a" }, sp.Asked);

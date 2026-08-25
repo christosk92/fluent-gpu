@@ -33,6 +33,10 @@ public sealed class HeadlessGpuDevice : IGpuDevice
     private readonly List<FillPathCmd> _fillPaths = new(16);
     private readonly List<StrokePathCmd> _strokePaths = new(16);
     private readonly List<int> _videoClipDepth = new(4);
+    private readonly List<PushStencilClipCmd> _stencilClips = new(4);
+    private readonly List<PopStencilClipCmd> _stencilPops = new(4);
+    private readonly List<int> _imageStencilDepth = new(32);
+    private readonly List<int> _rectStencilDepth = new(64);
     private readonly List<(int id, int w, int h)> _uploads = new(32);
     private readonly Dictionary<int, (int w, int h)> _resident = new(32);
     private readonly List<int> _evictions = new(16);
@@ -123,11 +127,27 @@ public sealed class HeadlessGpuDevice : IGpuDevice
     /// <summary>Clip-stack depth at each <see cref="LastVideos"/> command (parallel list) — a PiP hole records INSIDE
     /// its rounded container's clip, which is where its corner rounding actually comes from.</summary>
     public IReadOnlyList<int> LastVideoClipDepths => _videoClipDepth;
+    /// <summary>Tier-3 STENCIL path clips pushed this frame (DrawOp.PushStencilClip — gpu-renderer.md §6). VtxStart/
+    /// VtxCount/IdxStart/IdxCount index <see cref="FluentGpu.Render.PathRealizationCache.Shared"/>'s retained slab, the
+    /// same refs the mask pre-pass would draw; <see cref="PushStencilClipCmd.DeviceRect"/> doubles as the scope's
+    /// tier-1 scissor. Headless models the STRUCTURE (nesting, balance, per-command depth) — geometry semantics are
+    /// gated by <c>PathHitTest</c> against the recorded transform, not by a second rasterizer.</summary>
+    public IReadOnlyList<PushStencilClipCmd> LastStencilClips => _stencilClips;
+    /// <summary>The matching pops (DrawOp.PopStencilClip), in stream order — each re-carries its push's geometry.</summary>
+    public IReadOnlyList<PopStencilClipCmd> LastStencilPops => _stencilPops;
+    /// <summary>Stencil-scope nesting depth at each <see cref="LastImages"/> command (parallel list): 0 = outside every
+    /// stencil scope, N = inside N nested ones.</summary>
+    public IReadOnlyList<int> LastImageStencilDepths => _imageStencilDepth;
+    /// <summary>Stencil-scope nesting depth at each <see cref="LastRects"/> command (parallel list).</summary>
+    public IReadOnlyList<int> LastRectStencilDepths => _rectStencilDepth;
     /// <summary>Push/pop balance check — must be 0 at end of a well-formed frame. Rounded (tier-2) clips are visible
     /// on <see cref="LastClips"/> entries via <see cref="ClipCmd.CornerRadius"/>/<c>RoundedRect</c>.</summary>
     public int ClipBalance { get; private set; }
     /// <summary>PushLayer/PopLayer balance check — must be 0 at end of a well-formed frame.</summary>
     public int LayerBalance { get; private set; }
+    /// <summary>PushStencilClip/PopStencilClip balance check — must be 0 at end of a well-formed frame. A stencil clip
+    /// IS also a clip level, so it moves <see cref="ClipBalance"/> too (the scope's DeviceRect is the scissor).</summary>
+    public int StencilClipBalance { get; private set; }
 
     /// <summary>Every <see cref="UploadImage"/> this run (one entry per decode completion) — for upload assertions.</summary>
     public IReadOnlyList<(int id, int w, int h)> Uploads => _uploads;
@@ -186,11 +206,16 @@ public sealed class HeadlessGpuDevice : IGpuDevice
         _fillPaths.Clear();
         _strokePaths.Clear();
         _videoClipDepth.Clear();
+        _stencilClips.Clear();
+        _stencilPops.Clear();
+        _imageStencilDepth.Clear();
+        _rectStencilDepth.Clear();
         LastClear = ctx.Clear;
         LastFrameInfo = ctx;
         FrameCount++;
         int balance = 0;
         int layerBalance = 0;
+        int stencilBalance = 0;
 
         int pos = 0;
         while (pos + sizeof(int) <= drawList.Length)
@@ -202,6 +227,7 @@ public sealed class HeadlessGpuDevice : IGpuDevice
                 case DrawOp.FillRoundRect:
                     _rects.Add(MemoryMarshal.Read<FillRoundRectCmd>(drawList.Slice(pos)));
                     _rectClipDepth.Add(balance);
+                    _rectStencilDepth.Add(stencilBalance);
                     pos += Unsafe.SizeOf<FillRoundRectCmd>();
                     break;
                 case DrawOp.DrawGlyphRun:
@@ -222,6 +248,7 @@ public sealed class HeadlessGpuDevice : IGpuDevice
                     break;
                 case DrawOp.DrawImage:
                     _imageDraws.Add(MemoryMarshal.Read<DrawImageCmd>(drawList.Slice(pos)));
+                    _imageStencilDepth.Add(stencilBalance);
                     pos += Unsafe.SizeOf<DrawImageCmd>();
                     break;
                 case DrawOp.DrawRoundRectStroke:
@@ -283,12 +310,27 @@ public sealed class HeadlessGpuDevice : IGpuDevice
                     _strokePaths.Add(MemoryMarshal.Read<StrokePathCmd>(drawList.Slice(pos)));
                     pos += Unsafe.SizeOf<StrokePathCmd>();
                     break;
+                // A stencil clip IS a clip level (its DeviceRect is the scope's scissor), so it moves `balance` too —
+                // that keeps ClipBalance honest for every existing gate that asserts on it.
+                case DrawOp.PushStencilClip:
+                    _stencilClips.Add(MemoryMarshal.Read<PushStencilClipCmd>(drawList.Slice(pos)));
+                    pos += Unsafe.SizeOf<PushStencilClipCmd>();
+                    balance++;
+                    stencilBalance++;
+                    break;
+                case DrawOp.PopStencilClip:
+                    _stencilPops.Add(MemoryMarshal.Read<PopStencilClipCmd>(drawList.Slice(pos)));
+                    pos += Unsafe.SizeOf<PopStencilClipCmd>();
+                    balance--;
+                    stencilBalance--;
+                    break;
                 default:
                     return; // unknown opcode — stop (corrupt stream guard)
             }
         }
         ClipBalance = balance;
         LayerBalance = layerBalance;
+        StencilClipBalance = stencilBalance;
     }
 
     public void SubmitDrawList(ReadOnlySpan<byte> drawList, ReadOnlySpan<ulong> sortKeys, in FrameInfo ctx, ISwapchain target)

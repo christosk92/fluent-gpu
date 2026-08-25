@@ -261,6 +261,7 @@ blocks as cheap insurance.
 | **SelectionState** (sparse side-table) | 24 | tiny `Dictionary<NodeHandle,Handle>` index → `SlabAllocator<SelectionState>`; **NOT a NodePaint field** (keeps NodePaint at 64B); anchor/extent text-positions + affinity + bake-ticket | record (resolve→`DrawSelectionRectCmd`), input (drag), UIA `ITextRangeProvider` | this doc (placement) / **`text.md`** (semantics, L1) |
 | **`_borderBrushes`** (sparse side-table; SHIPPED) | — | sparse map MIRRORING the gradient side-table (`Set`/`TryGet`/`Clear` + `FreeSubtree` removal); holds the per-node `GradientSpec` for the gradient elevation border; `BorderWidth` stays in the dense `NodePaint` column | record (resolve→`DrawGradientStroke`) | this doc (placement) / **`gpu-renderer.md`** (`DrawGradientStrokeCmd` shape + raster) |
 | **`_paths`** (`ColdSlab<PathSpec>`; AS-BUILT 2026-08) | — | `ColdSlab<PathSpec>` indexed directly by the node's slot index (`SetPath`/`TryGetPath`/`ClearPath`, same shape as `_polylines`); sets `NodeFlags.SparsePaint`; **NOT a NodePaint field** (a `PathSpec`'s `PathData?`/`StrokeStyle`/trim/dash/viewbox fields do not fit the 64B cache line) | record (resolve→`DrawOp.FillPath`/`StrokePath`) | this doc (placement) / **`gpu-renderer.md`** §5 (`PathSpec` field semantics, `PathData`/`PathContentEpoch`, tessellation+realization) |
+| **`_clipPaths`** (`ColdSlab<ClipPathSpec>`; AS-BUILT 2026-08) | — | `ColdSlab<ClipPathSpec>` indexed directly by the node's slot index (`SetClipPath`/`TryGetClipPath`/`ClearClipPath`, the `_paths` row's shape exactly); sets `NodeFlags.SparsePaint`, and the reconciler additionally marks `NodeFlags.ClipsToBounds` (setting a clip path IMPLIES it — all 32 flag bits are taken, so the tier is discriminated by this column, not a flag); **NOT a NodePaint field** (a `PathData?` + rule + viewbox do not fit the 64B cache line) | record (resolve→`DrawOp.PushStencilClip`/`PopStencilClip`), input (hit-test rejects outside the geometry) | this doc (placement) / **`gpu-renderer.md`** §6.1 (`ClipPathSpec` field semantics, the stencil tier, hard-edge contract) |
 | **FlowState** | 4 | flat POD column on the spine: `{Inherited:byte, Resolved:byte, _pad:ushort}`; written at `WriteLayout` | layout (logical→physical mirror), record (RTL overlay placement) | this doc (placement) / **`layout.md`** (resolution, L5) |
 | **A11yRel** (cold slab) | 24 | `SlabAllocator<A11yRel>`; `A11yRelRef:int` in `A11yInfo` (0 = shared none-row); `SetSize`/`PositionInSet`/`Level`/`DescribedBy`/`FullDescription`/`FlowsTo` | UIA only (when `UiaClientsAreListening`) | this doc (placement) / **`input-a11y.md`** (semantics, L6) |
 | **UpdateQueueSlab** (slab) | per-record 24 | `SlabAllocator<UpdateRecord>` + per-component `UpdateQueueHead:int` head-index; intrusive `NextInQueue` link; lane byte carried | phase 3 hook-flush (drain), phase 5 reconcile (consume) | this doc (placement) / **`reconciler-hooks.md`** (lane semantics, P1/P2a) |
@@ -689,7 +690,19 @@ public enum DrawOp : byte {
                           //   stroke-trim/dash draw-on still hits the SAME cached tessellation. Same
                           //   POD-registration contract. Value 20 on the as-built int-tagged DrawOp.
     // clip / layer / transform stack (payloads: gpu-renderer.md; PushLayer{Effect}: backdrop)
-    PushClipRect, PushClipRoundRect, PushStencilClip, PopStencilClip, PopClip,
+    PushClipRect, PushClipRoundRect,
+    PushStencilClip,      \ = 21 (AS-BUILT 2026-08): tier-3 arbitrary-path clip. A mask pre-pass from a
+                          //   PathRealizationCache fill realization (the FillPath contract, same slab refs);
+                          //   every draw until the matching pop is stencil-ref tested. Payload shape + the
+                          \   D3D12 sub-protocol + the honest per-pipeline coverage scope: gpu-renderer.md
+                          //   §6.1. Scene-side storage: the `_clipPaths` ColdSlab<ClipPathSpec> column
+                          \   (§2.2), implied by BoxEl.ClipPath. Its DeviceRect doubles as the scope's
+                          //   tier-1 scissor, so it moves the clip balance too. Same POD-registration contract.
+    PopStencilClip,       \ = 22 (AS-BUILT 2026-08): closes the scope and RE-CARRIES the push's realization
+                          //   refs + transform, so the backend can DECR_SAT-erase an inner nesting level with
+                          \   no geometry stack of its own (nesting is STREAM nesting — there is no
+                          //   ClipTable/Parent handle as-built). Value 22 on the as-built int-tagged DrawOp.
+    PopClip,
     PushLayer, PopLayer, PushTransform, PopTransform,
     // overlays (payloads: input-a11y.md / text.md)
     DrawFocusRect, DrawAccessKeyBadge,

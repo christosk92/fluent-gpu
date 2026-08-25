@@ -1,4 +1,4 @@
-using FluentGpu.Animation;
+﻿using FluentGpu.Animation;
 using FluentGpu.Foundation;
 using FluentGpu.Pal;
 using FluentGpu.Render;
@@ -2827,7 +2827,8 @@ public sealed class InputDispatcher
         float hitW = float.IsNaN(np.PresentedW) ? b.W : np.PresentedW;
         float hitH = float.IsNaN(np.PresentedH) ? b.H : np.PresentedH;
         bool inside = local.X >= 0f && local.X < hitW && local.Y >= 0f && local.Y < hitH;
-        if ((flags & NodeFlags.ClipsToBounds) != 0 && !inside) return;
+        if ((flags & NodeFlags.ClipsToBounds) != 0
+            && (!inside || !ClipPathAdmits(node, flags, local, hitW, hitH))) return;
         if (!ClipRectAdmits(in np, local)) return;
 
         if (inside && (flags & NodeFlags.Scrollable) != 0 && _scene.HasScroll(node))
@@ -3966,6 +3967,35 @@ public sealed class InputDispatcher
         return PathHitTest.Contains(pts, starts, counts, ps.Rule, gx, gy);
     }
 
+    /// <summary>The INPUT dual of the tier-3 STENCIL path clip (gpu-renderer.md §6, <c>BoxEl.ClipPath</c>): a point
+    /// inside the node's box but OUTSIDE the clip silhouette is outside every pixel this node and its subtree drew, so
+    /// it takes no hit — exactly what <see cref="NodeFlags.ClipsToBounds"/> already does for the rectangle. Unlike
+    /// <see cref="PathGeometryAdmits"/> (an opt-in on the node's own PAINT) this is a CLIP, and input has always
+    /// followed clips — see <see cref="ClipRectAdmits"/>'s doc for that distinction.
+    ///
+    /// <para>Same flatten/tolerance/fit discipline as <see cref="PathGeometryAdmits"/>, and it mirrors the recorder's
+    /// ViewBox min-fit mapping (<c>fit = min(hitW/ViewBoxW, hitH/ViewBoxH)</c>, anchored at the node origin) so the
+    /// clickable silhouette and the painted one agree. True (admits) for every node without a clip path, which is
+    /// every node but the handful that authored one — the flag pair is checked first, so this costs nothing.</para></summary>
+    private bool ClipPathAdmits(NodeHandle node, NodeFlags flags, Point2 local, float hitW, float hitH)
+    {
+        if ((flags & (NodeFlags.ClipsToBounds | NodeFlags.SparsePaint))
+            != (NodeFlags.ClipsToBounds | NodeFlags.SparsePaint)) return true;
+        if (!_scene.TryGetClipPath(node, out var cps) || cps.IsNone) return true;
+        var geometry = cps.Geometry;
+        if (geometry is null || geometry.VerbCount == 0) return true;   // IsNone already implies this; narrow for the analyzer
+
+        float gx = local.X, gy = local.Y;
+        if (cps.ViewBoxW > 0f && cps.ViewBoxH > 0f && hitW > 0f && hitH > 0f)
+        {
+            float fit = MathF.Min(hitW / cps.ViewBoxW, hitH / cps.ViewBoxH);
+            if (fit > 1e-6f) { gx /= fit; gy /= fit; }
+        }
+
+        PathFlatten.Flatten(geometry, PathHitTestTolerance, 1f, out var pts, out var starts, out var counts, out _);
+        return PathHitTest.Contains(pts, starts, counts, cps.Rule, gx, gy);
+    }
+
     // Both walks descend the POINT through each node's inverse transform (scale-aware — WinUI hit-tests the rendered
     // geometry, so a button inside a 2× Viewbox is clickable across its whole rendered extent), mirroring the
     // recorder's world composition exactly. q is the point in the node's PARENT-content space.
@@ -3994,7 +4024,8 @@ public sealed class InputDispatcher
         float hitW = float.IsNaN(np.PresentedW) ? b.W : np.PresentedW;
         float hitH = float.IsNaN(np.PresentedH) ? b.H : np.PresentedH;
         bool inside = local.X >= 0f && local.X < hitW && local.Y >= 0f && local.Y < hitH;
-        if ((flags & NodeFlags.ClipsToBounds) != 0 && !inside) return NodeHandle.Null;
+        if ((flags & NodeFlags.ClipsToBounds) != 0
+            && (!inside || !ClipPathAdmits(node, flags, local, hitW, hitH))) return NodeHandle.Null;
         if (!ClipRectAdmits(in np, local)) return NodeHandle.Null;
 
         var childLocal = new Point2(local.X - np.ChildShiftX, local.Y - np.ChildShiftY);
@@ -4048,7 +4079,8 @@ public sealed class InputDispatcher
         float hitW = float.IsNaN(np.PresentedW) ? b.W : np.PresentedW;
         float hitH = float.IsNaN(np.PresentedH) ? b.H : np.PresentedH;
         bool inside = local.X >= 0f && local.X < hitW && local.Y >= 0f && local.Y < hitH;
-        if ((flags & NodeFlags.ClipsToBounds) != 0 && !inside) return NodeHandle.Null;
+        if ((flags & NodeFlags.ClipsToBounds) != 0
+            && (!inside || !ClipPathAdmits(node, flags, local, hitW, hitH))) return NodeHandle.Null;
         if (!ClipRectAdmits(in np, local)) return NodeHandle.Null;
 
         var childLocal = new Point2(local.X - np.ChildShiftX, local.Y - np.ChildShiftY);

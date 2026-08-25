@@ -33,6 +33,77 @@ public class SpotifyHomeComposerTests
 
     static HomeGroup Single(HomeContribution c, HomeGroupKind kind) => Assert.Single(c.Groups, g => g.Kind == kind);
 
+    // -- the recents shelf's liked entry ------------------------------------------------------------------------
+
+    /// <summary>Spotify's stock purple-heart PNG, served off the CDN. This is the exact url the measured
+    /// <c>HomeRecentlyPlayedSectionData</c> section carries for the liked collection (assets/spotify/home.json).</summary>
+    const string LikedStockCoverUrl = "https://misc.scdn.co/liked-songs/liked-songs-300.png";
+
+    /// <summary>A recents section: its sectionItems array holds ONE `List` wrapper whose own items page carries the
+    /// entities (the shape RecentsTotal's remarks describe).</summary>
+    static string RecentsSection(string title, params string[] entities) =>
+        $$"""
+        { "data": { "__typename": "HomeRecentlyPlayedSectionData", "title": { "transformedLabel": "{{title}}" } },
+          "sectionItems": { "items": [ { "content": { "data": {
+              "__typename": "List",
+              "items": { "totalCount": {{entities.Length}}, "items": [ {{string.Join(",", entities)}} ] } } } } ] } }
+        """;
+
+    static string RecentEntity(string uri, string name, string type, string? imageUrl)
+    {
+        string visual = imageUrl is null ? "" : $$"""
+            , "visualIdentityTrait": { "squareCoverImage": { "image": { "data": {
+                "sources": [ { "url": "{{imageUrl}}" } ] } } } }
+            """;
+        return $$"""
+        { "entity": { "__typename": "EntityResponseWrapper", "_uri": "{{uri}}", "data": {
+            "uri": "{{uri}}",
+            "entityTypeTrait": { "type": "{{type}}" },
+            "identityTrait": { "name": "{{name}}", "type": "Playlist",
+              "contributors": { "items": [ { "name": "Spotify", "uri": "spotify:user:spotify" } ], "totalCount": 1 } }
+            {{visual}} } } }
+        """;
+    }
+
+    /// <summary>Liked Songs arrives in the recents shelf as a PLAYLIST entity carrying the stock cover, and both facts
+    /// used to survive into the card: the rail therefore rendered a "Playlist"-captioned tile painting a CDN copy of
+    /// the very PNG the user's chosen collection treatment replaces.
+    ///
+    /// <para>The mapping is now the honest one - the canonical uri, <c>HomeCardKind.Liked</c>, and NO image, so the
+    /// render sites compose the collection cover instead of blitting the provider's stock art. The image assertion is
+    /// the load-bearing one: the kind alone would not have stopped the purple heart.</para></summary>
+    [Fact]
+    public void RecentsShelf_MapsLikedSongsAsTheCollection_AndDropsTheProvidersStockCover()
+    {
+        var c = Compose(Home(RecentsSection("Recents",
+            RecentEntity("spotify:collection:tracks", "Liked Songs", "ENTITY_TYPE_PLAYLIST", LikedStockCoverUrl),
+            RecentEntity("spotify:playlist:p1", "A Playlist", "ENTITY_TYPE_PLAYLIST", "https://i.scdn.co/image/p1"))));
+
+        var recents = Single(c, HomeGroupKind.Recents);
+        var liked = Assert.Single(recents.Cards, x => x.Kind == HomeCardKind.Liked);
+        Assert.Equal("spotify:collection:tracks", liked.Uri);
+        Assert.Null(liked.Image);
+
+        // The ordinary playlist beside it is untouched - this is a liked-only correction, not a recents-wide one.
+        var plain = Assert.Single(recents.Cards, x => x.Kind == HomeCardKind.Playlist);
+        Assert.Equal("spotify:playlist:p1", plain.Uri);
+        Assert.Equal("https://i.scdn.co/image/p1", plain.Image?.Url);
+    }
+
+    /// <summary>The user-namespaced spelling is the SAME entity and must fold to the canonical uri, or the card, the
+    /// nav route and the now-playing match end up comparing three different strings for one collection.</summary>
+    [Fact]
+    public void RecentsShelf_FoldsTheUserNamespacedCollectionSpelling()
+    {
+        var c = Compose(Home(RecentsSection("Recents",
+            RecentEntity("spotify:user:abc123:collection", "Liked Songs", "ENTITY_TYPE_PLAYLIST", LikedStockCoverUrl))));
+
+        var liked = Assert.Single(Single(c, HomeGroupKind.Recents).Cards);
+        Assert.Equal(HomeCardKind.Liked, liked.Kind);
+        Assert.Equal("spotify:collection:tracks", liked.Uri);
+        Assert.Null(liked.Image);
+    }
+
     [Fact]
     public void LiveShapedPayload_AccountsForEveryCardAndEverySectionTitle()
     {

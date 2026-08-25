@@ -4116,8 +4116,22 @@ public sealed class TreeReconciler
                 li.Margin = b.Margin;
                 // Like the TransformBind/OpacityBind guards above: a bound dimension is owned by its bind effect — a
                 // re-render must not clobber it back to the static prop (the bind re-fires only when its signal changes).
-                if (!b.Width.IsBound) li.Width = b.Width.Value;
-                if (!b.Height.IsBound) li.Height = b.Height.Value;
+                // A live SizeMode.Reflow track owns LayoutInput.Width/Height the same way, one layer down: it writes the
+                // eased extent into that very field every tick. So hand the declared value to the TRACK instead of
+                // stomping the interp — RecordDeclaredSize files it as the row's RestoreTo (the declared shadow that
+                // SettleRestore writes back when the row settles), and retargets the track when a genuinely changed
+                // non-NaN declared value arrives mid-flight. Leaving `li` alone is also what keeps the LayoutDirty gate
+                // at the tail of WriteColumns honest: the interp→declared excursion this used to write read as a
+                // layout-shape change on EVERY re-render during an animation. RecordDeclaredSize's first check is an
+                // O(1) no-rows probe, so an unanimated node pays ~nothing for the detour.
+                if (!b.Width.IsBound)
+                {
+                    if (Anim is null || !Anim.RecordDeclaredSize(node, AnimChannel.LayoutW, b.Width.Value)) li.Width = b.Width.Value;
+                }
+                if (!b.Height.IsBound)
+                {
+                    if (Anim is null || !Anim.RecordDeclaredSize(node, AnimChannel.LayoutH, b.Height.Value)) li.Height = b.Height.Value;
+                }
                 li.MinW = b.MinWidth; li.MinH = b.MinHeight; li.MaxW = b.MaxWidth; li.MaxH = b.MaxHeight;
                 li.FlexGrow = b.Grow;
                 li.FlexShrink = b.Shrink;
@@ -4129,7 +4143,30 @@ public sealed class TreeReconciler
                 li.MeasureUnboundedWidth = b.MeasureUnboundedWidth;
                 li.AspectRatio = b.AspectRatio;   // CSS aspect-ratio: FlexLayout.Measure derives the missing extent (Ui.AspectRatio)
                 if (b.ZStack) _scene.Mark(node, NodeFlags.ZStack); else _scene.Unmark(node, NodeFlags.ZStack);
-                if (b.ClipToBounds) _scene.Mark(node, NodeFlags.ClipsToBounds); else _scene.Unmark(node, NodeFlags.ClipsToBounds);
+                // The clip may not be the AUTHOR's: a SizeMode.Reflow track adds ClipsToBounds for its own lifetime
+                // (AnimFlags.ClipAdded) because it drives the node's LAYOUT size while the CONTENT is still arranged at
+                // its natural size — without it, eased content paints straight over the sibling below. A mid-flight
+                // re-render must not strip that; the row-teardown sink (FreeSlot → ReleaseReflowClip) is the ONE place
+                // that releases it, at settle. The flags read short-circuits, so an already-unclipped node — every node
+                // that never animates — pays no row walk.
+                if (b.ClipToBounds)
+                {
+                    // Author takes (or keeps) the clip. If a reflow row added it first, transfer ownership
+                    // (drop ClipAdded) so the row's teardown doesn't strip a clip the author now declares.
+                    _scene.Mark(node, NodeFlags.ClipsToBounds);
+                    Anim?.AdoptEngineClip(node);
+                }
+                else if ((_scene.Flags(node) & NodeFlags.ClipsToBounds) == 0 || Anim is null || !Anim.HasEngineOwnedClip(node))
+                    _scene.Unmark(node, NodeFlags.ClipsToBounds);
+                // A ClipPath IMPLIES ClipsToBounds (all 32 NodeFlags bits are taken, so the tier is discriminated by
+                // the cold column, not a flag): Mark AFTER the line above so it wins over a ClipToBounds=false author.
+                if (b.ClipPath is not null)
+                {
+                    _scene.SetClipPath(node, new ClipPathSpec(b.ClipPath, b.ClipPathRule, b.ClipPathViewBoxW, b.ClipPathViewBoxH));
+                    _scene.Mark(node, NodeFlags.ClipsToBounds);
+                }
+                else if (old is BoxEl oldBoxClipPath && oldBoxClipPath.ClipPath is not null)
+                    _scene.ClearClipPath(node);
                 if (b.IsolateLayout) _scene.Mark(node, NodeFlags.LayoutBoundary); else _scene.Unmark(node, NodeFlags.LayoutBoundary);
                 if (b.CounterScale) _scene.Mark(node, NodeFlags.CounterScaled); else _scene.Unmark(node, NodeFlags.CounterScaled);
                 // sticky + overscroll-stretch are now generic ScrollBinds (baked in WriteColumns' common section above).

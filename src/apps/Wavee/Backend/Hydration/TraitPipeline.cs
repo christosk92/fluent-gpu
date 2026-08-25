@@ -104,7 +104,7 @@ public sealed class TraitPipeline : ITraitPipeline
 
             var e = EntityUri.Parse(uri);
             // spotify: ONLY. Trait surfaces carry MIXED uris — the queue holds `wavee:local:file:<b64url(path)>` rows
-            // whenever a local import is playing, and the Plays toggle asks for whatever the open list holds. A kind
+            // whenever a local import is playing, and list surfaces ask for whatever the open list holds. A kind
             // test alone admits those (a local playable is a Track too), which both wastes the round trip and ships a
             // local file path to spclient. Episodes are deliberately KEPT: they are the ask-once case, not an excluded one.
             if (!e.IsSpotify || e.Kind == CoreKind.Unknown) continue;

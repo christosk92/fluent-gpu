@@ -83,4 +83,79 @@ public class ContentFilterTagsTests
         // Equal counts fall back to name order, so an enrichment pass cannot visibly shuffle the bar.
         Assert.Equal(["Alpha", "Mid", "Zeta"], ContentFilterTags.Derive(tracks));
     }
+
+    // ── DeriveCounted: the same answer with the numbers kept ────────────────────────────────────────────────────────
+
+    /// <summary>Derive is now a projection of DeriveCounted, so the two can never disagree about which chips exist, in
+    /// what order, or where the cap falls. Pinned as a PARITY property over several shapes rather than as one example,
+    /// because the risk is a divergence introduced later, not today's output.</summary>
+    [Fact]
+    public void DeriveIsExactlyDeriveCountedWithoutTheNumbers()
+    {
+        var shapes = new List<IReadOnlyList<Track>>
+        {
+            Array.Empty<Track>(),
+            Many(10),                                                  // no tags at all
+            new List<Track> { T("a", "K-Pop"), T("b", "K-Pop") },       // below the floor
+            Many(3, "K-Pop"),                                          // exactly at the floor
+            Many(4, "Pop", "Chill"),                                   // multi-tag rows
+        };
+
+        var mixed = new List<Track>();
+        for (int i = 0; i < 3; i++) mixed.Add(T("rare" + i, "Chill"));
+        for (int i = 0; i < 9; i++) mixed.Add(T("common" + i, "Pop"));
+        for (int i = 0; i < 5; i++) mixed.Add(T("mid" + i, "Dance"));
+        shapes.Add(mixed);
+
+        var capped = new List<Track>();
+        for (int tag = 0; tag < 30; tag++)
+            for (int i = 0; i < 3 + tag; i++) capped.Add(T($"t{tag}_{i}", "tag" + tag));
+        shapes.Add(capped);
+
+        foreach (var tracks in shapes)
+        {
+            var chips = ContentFilterTags.Derive(tracks);
+            var counted = ContentFilterTags.DeriveCounted(tracks);
+
+            Assert.Equal(chips.Count, counted.Count);
+            for (int i = 0; i < chips.Count; i++) Assert.Equal(chips[i], counted[i].Title);
+        }
+    }
+
+    /// <summary>The counts are the real carrier counts — the numbers the old path computed and threw away.</summary>
+    [Fact]
+    public void DeriveCountedReportsTheCarrierCounts()
+    {
+        var tracks = new List<Track>();
+        for (int i = 0; i < 3; i++) tracks.Add(T("rare" + i, "Chill"));
+        for (int i = 0; i < 9; i++) tracks.Add(T("common" + i, "Pop"));
+        for (int i = 0; i < 5; i++) tracks.Add(T("mid" + i, "Dance"));
+
+        var counted = ContentFilterTags.DeriveCounted(tracks);
+        Assert.Equal([("Pop", 9), ("Dance", 5), ("Chill", 3)], Pairs(counted));
+    }
+
+    /// <summary>Casing variants collapse into one chip, and their carriers are SUMMED rather than split — a legend
+    /// that reported 1+1+1 for one concept would be worse than no legend.</summary>
+    [Fact]
+    public void CountsSumAcrossCasingVariants()
+    {
+        var tracks = new List<Track> { T("a", "K-Pop"), T("b", "k-pop"), T("c", "K-POP") };
+        var counted = ContentFilterTags.DeriveCounted(tracks);
+
+        Assert.Single(counted);
+        Assert.Equal(3, counted[0].Count);
+    }
+
+    /// <summary>The floor is public because the Liked facts blend bar gates on the same number; if it moved, both
+    /// surfaces would have to move together.</summary>
+    [Fact]
+    public void TheEvidenceFloorIsThree() => Assert.Equal(3, ContentFilterTags.MinTrackCount);
+
+    static (string Title, int Count)[] Pairs(IReadOnlyList<TagCount> counted)
+    {
+        var pairs = new (string, int)[counted.Count];
+        for (int i = 0; i < counted.Count; i++) pairs[i] = (counted[i].Title, counted[i].Count);
+        return pairs;
+    }
 }

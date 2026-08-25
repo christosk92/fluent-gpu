@@ -117,7 +117,8 @@ public class AlbumHydrationTests
         release.Set();
         await h.DrainAsync();
         var call = Assert.Single(h.Traits.Calls);
-        Assert.Equal(TraitSet.RowBundle, call.Traits);
+        // PlayCount rides the Open post-step too: kind 185 has no retry surface, so the Open rung is its one shot.
+        Assert.Equal(TraitSet.RowBundle | TraitSet.PlayCount, call.Traits);
         Assert.Equal(TraitSurface.AlbumOpen, call.Surface);
         Assert.Equal(["spotify:track:t1"], call.Uris);
     }

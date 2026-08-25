@@ -36,6 +36,10 @@ internal sealed unsafe class GradientPipeline : IDisposable
 
     private SdfSharedResources _shared = null!;
     private ID3D12PipelineState* _pso;
+    // Tier-3 stencil path clip (gpu-renderer.md S6): the EQUAL-tested clone, built lazily on the first stencil scope.
+    private ID3D12PipelineState* _psoStencilTest;
+    private bool _stencilTried;
+    private ID3D12Device* _device;   // non-owning; the device outlives every pipeline
     private readonly ID3D12Resource*[] _instances = new ID3D12Resource*[FrameCount];
     private readonly GradientInstance*[] _mapped = new GradientInstance*[FrameCount];
     private int _cursor;
@@ -115,6 +119,7 @@ float4 PSMain(VSOut i) : SV_Target
     public void Init(ID3D12Device* device, SdfSharedResources shared)
     {
         _shared = shared;
+        _device = device;
         BuildPipeline(device);
         BuildBuffers(device);
     }
@@ -200,7 +205,7 @@ float4 PSMain(VSOut i) : SV_Target
     /// <summary>Record one run; shared SDF state and this pipeline's PSO can be rebound independently. Returns false
     /// when full (state untouched).</summary>
     public bool Record(ID3D12GraphicsCommandList* cmd, ReadOnlySpan<GradientInstance> instances, float vpW, float vpH,
-                       bool bindSharedState = true, bool bindPipelineState = true)
+                       bool bindSharedState = true, bool bindPipelineState = true, bool stencilTest = false)
     {
         int start = _cursor;
         int count = Math.Min(instances.Length, MaxInstances - start);
@@ -216,11 +221,23 @@ float4 PSMain(VSOut i) : SV_Target
             var qv = _shared.QuadView;
             cmd->IASetVertexBuffers(0, 1, &qv);
         }
-        if (bindPipelineState)
-            cmd->SetPipelineState(_pso);
+        // See RoundRectPipeline.Record: the stencil clone is bound unconditionally, never through the _boundPipe skip.
+        ID3D12PipelineState* want = stencilTest ? StencilTestPso() : null;
+        if (want != null) cmd->SetPipelineState(want);
+        else if (bindPipelineState) cmd->SetPipelineState(_pso);
         cmd->SetGraphicsRootShaderResourceView(1, _activeGva + (ulong)(start * sizeof(GradientInstance)));
         cmd->DrawInstanced(4, (uint)count, 0, 0);
         return true;
+    }
+
+    private ID3D12PipelineState* StencilTestPso()
+    {
+        if (!_stencilTried)
+        {
+            _stencilTried = true;
+            _psoStencilTest = StencilPso.TryBuildQuadEqualTest(_device, _shared.RootSignature, Hlsl, "VSMain", "PSMain", "gradient", depthClip: true);
+        }
+        return _psoStencilTest;
     }
 
     public void Dispose()
@@ -228,5 +245,6 @@ float4 PSMain(VSOut i) : SV_Target
         for (int f = 0; f < FrameCount; f++)
             if (_instances[f] != null) { _instances[f]->Unmap(0, null); D3D12MemoryDiagnostics.Release(_instances[f], "Gradient.InstanceUpload"); _instances[f]->Release(); _instances[f] = null; }
         if (_pso != null) _pso->Release();
+        if (_psoStencilTest != null) { _psoStencilTest->Release(); _psoStencilTest = null; }
     }
 }

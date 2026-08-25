@@ -76,6 +76,14 @@ internal sealed unsafe class RoundRectPipeline : IDisposable
     // erased toward premultiplied zero and the DComp video visual below the swapchain shows through. Unlike the opaque
     // fast path this is CORRECTNESS, not an optimization: there is no equivalent fallback, so its build throws.
     private ID3D12PipelineState* _psoDestOut;
+    // Tier-3 stencil path clip (gpu-renderer.md S6): the EQUAL-tested clone of the BLENDED arm only. The opaque
+    // no-blend fast path deliberately gets NO variant — the device forces opaque plates onto the blended arm inside a
+    // stencil scope (D6), because an unmasked opaque plate would paint straight over the clip silhouette. Built lazily
+    // on the first stencil scope; null (build failed) simply means those runs fall back to the scope's scissor.
+    private ID3D12PipelineState* _psoStencilTest;
+    private bool _stencilTried;
+    // Non-owning: D3D12Device disposes every pipeline before releasing the device.
+    private ID3D12Device* _device;
     /// <summary>True when the opaque fast-path PSO built successfully; the device segments rect runs by opacity only then.</summary>
     public bool HasOpaquePso => _psoOpaque != null;
     private readonly ID3D12Resource*[] _instances = new ID3D12Resource*[FrameCount];   // structured buffer of RectInstance per frame-in-flight (upload heap, persistently mapped)
@@ -287,6 +295,7 @@ float4 PSMain(VSO i) : SV_Target
     public void Init(ID3D12Device* device, SdfSharedResources shared)
     {
         _shared = shared;
+        _device = device;
         BuildPipeline(device);
         TryBuildOpaquePipeline(device);   // best-effort; leaves _psoOpaque null (fall back to _pso) on any failure
         BuildBuffers(device);
@@ -463,7 +472,8 @@ float4 PSMain(VSO i) : SV_Target
     /// <paramref name="pass"/>. When both are false, only the per-run instance SRV offset + draw are recorded. Returns
     /// false when the instance buffer is full and nothing was recorded (the command-list state is then untouched).</summary>
     public bool Record(ID3D12GraphicsCommandList* cmd, ReadOnlySpan<RectInstance> instances, float vpW, float vpH,
-                       bool bindSharedState = true, bool bindPipelineState = true, RectPass pass = RectPass.Blended)
+                       bool bindSharedState = true, bool bindPipelineState = true, RectPass pass = RectPass.Blended,
+                       bool stencilTest = false)
     {
         int start = _cursor;
         int count = Math.Min(instances.Length, MaxInstances - start);
@@ -480,7 +490,14 @@ float4 PSMain(VSO i) : SV_Target
             var qv = _shared.QuadView;
             cmd->IASetVertexBuffers(0, 1, &qv);
         }
-        if (bindPipelineState)
+        // Inside a stencil scope the tested clone must be (re)bound UNCONDITIONALLY: _boundPipe tracks WHICH pipe is
+        // bound, not whether it is the stencil variant, so trusting the cross-segment skip here would draw a masked run
+        // with the unmasked PSO. The device invalidates that cache at every scope boundary anyway, so this costs nothing
+        // outside a scope.
+        ID3D12PipelineState* want = null;
+        if (stencilTest && pass == RectPass.Blended) want = StencilTestPso();
+        if (want != null) cmd->SetPipelineState(want);
+        else if (bindPipelineState)
             cmd->SetPipelineState(pass switch
             {
                 RectPass.Opaque when _psoOpaque != null => _psoOpaque,   // absent ⇒ the blended PSO draws it identically
@@ -492,6 +509,17 @@ float4 PSMain(VSO i) : SV_Target
         return true;
     }
 
+    /// <summary>The lazily-built EQUAL-tested clone of the blended PSO (null ⇒ unavailable, caller falls back).</summary>
+    private ID3D12PipelineState* StencilTestPso()
+    {
+        if (!_stencilTried)
+        {
+            _stencilTried = true;
+            _psoStencilTest = StencilPso.TryBuildQuadEqualTest(_device, _shared.RootSignature, Hlsl, "VSMain", "PSMain", "roundrect", depthClip: true);
+        }
+        return _psoStencilTest;
+    }
+
     public void Dispose()
     {
         for (int f = 0; f < FrameCount; f++)
@@ -499,5 +527,6 @@ float4 PSMain(VSO i) : SV_Target
         if (_pso != null) _pso->Release();
         if (_psoOpaque != null) { _psoOpaque->Release(); _psoOpaque = null; }
         if (_psoDestOut != null) { _psoDestOut->Release(); _psoDestOut = null; }
+        if (_psoStencilTest != null) { _psoStencilTest->Release(); _psoStencilTest = null; }
     }
 }

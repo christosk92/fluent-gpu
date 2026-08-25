@@ -1185,6 +1185,12 @@ public static class SpotifyExportMapper
                 // when there is one), and Meta.OwnerName always carries the owner — so a meta line can say "by Spotify"
                 // instead of "by <the whole description>".
                 var owner = StrAt(data, "ownerV2", "data", "name");
+                // Liked Songs also arrives here — the collection is a Playlist entity on the wire. Same correction as
+                // CardFromRecentEntity's: canonical uri, the Liked kind, and NO image (the provider's is the stock
+                // purple heart the user's chosen collection treatment replaces).
+                if (EntityUri.IsLikedCollection(uri))
+                    return new HomeCard(EntityUri.LikedCollection, name, description ?? owner, null,
+                        HomeCardKind.Liked, Meta: new HomeCardMeta(Accent: accent, OwnerName: owner));
                 return new HomeCard(uri, name, description ?? owner,
                     ImagesCover(data) ?? EntityImage(data), HomeCardKind.Playlist,
                     Meta: new HomeCardMeta(format, accent, (int)LongAt(data, "content", "totalCount"), seeds,
@@ -1464,6 +1470,22 @@ public static class SpotifyExportMapper
         var entityType = StrAt(data, "entityTypeTrait", "type") ?? "";
         var contributors = RecentContributors(identity);
         var image = RecentImage(data);
+
+        // ── Liked Songs ───────────────────────────────────────────────────────────────────────────────────────────
+        // The recents feed sends the collection as an ordinary PLAYLIST entity (measured: `entityTypeTrait.type ==
+        // "ENTITY_TYPE_PLAYLIST"`, `_uri == "spotify:collection:tracks"`, contributor "Spotify") carrying
+        // `visualIdentityTrait.squareCoverImage = misc.scdn.co/liked-songs/liked-songs-300.png` — the STOCK purple
+        // heart, served from the CDN. Mapped as written that produced a Playlist card with a non-null cover, and both
+        // halves were wrong: the app routes Liked by kind (HomeCardKind.Liked → the "liked" route, no Save affordance,
+        // its own drag identity), and the cover is the one image in the feed the app deliberately REPLACES with the
+        // user's chosen collection treatment. A card that arrives with the stock PNG paints the stock PNG.
+        //
+        // So: the canonical uri, the Liked kind, and a NULL image — the same shape StoreLibrarySource's own liked
+        // quick-pick has always had. The render sites gate on the uri, not on the null, so this is belt and braces —
+        // but it is also the honest mapping, and it is what makes nav and the menu grammar right here.
+        if (EntityUri.IsLikedCollection(uri))
+            return new HomeCard(EntityUri.LikedCollection, title,
+                contributors.Count > 0 ? contributors[0].Name : null, null, HomeCardKind.Liked);
 
         if (entityType == "ENTITY_TYPE_TRACK" || EntityUri.KindOf(uri) == EntityKind.Track)
             return new HomeCard(uri, title, JoinNames("Song", contributors), image, HomeCardKind.Track);

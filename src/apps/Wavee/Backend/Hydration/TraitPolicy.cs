@@ -1,5 +1,4 @@
-using System;
-using Wavee.Core;
+﻿using Wavee.Core;
 
 namespace Wavee.Backend.Hydration;
 
@@ -9,23 +8,23 @@ namespace Wavee.Backend.Hydration;
 // asked for kind 185 twice and the show page asked for nothing at all. Making it a table means one POST can carry a
 // surface's whole bundle, and adding a surface is one line rather than four call sites.
 
-/// <summary>THE surface → <see cref="TraitSet"/> table.</summary>
-/// <param name="playsColumnOn">Whether the user's Plays column is switched on. A Func, not a bool, because the setting
-/// flips at runtime and the policy is constructed once at go-live.</param>
-public sealed class TraitPolicy(Func<bool> playsColumnOn)
+/// <summary>THE surface → <see cref="TraitSet"/> table. A pure function of the surface: nothing here reads a user
+/// setting, because a trait ask is a DATA decision and a setting is a DISPLAY one.</summary>
+public sealed class TraitPolicy
 {
-    readonly Func<bool> _playsColumnOn = playsColumnOn;
-
     public TraitSet For(TraitSurface surface) => surface switch
     {
-        // An album page paints the ©/℗ line (183, album-only) and the Plays star unconditionally — the star IS the
-        // album surface's identity, so it does not wait for the column setting.
+        // An album page paints the ©/℗ line (183, album-only) and the Plays star — the star IS the album surface's
+        // identity.
         TraitSurface.AlbumOpen => TraitSet.RowBundle | TraitSet.PlayCount | TraitSet.Publishing,
 
-        // A list of arbitrary playables: the row bundle always, counts only when the column is actually rendered
-        // (asking for 185 across a 10k playlist nobody is showing counts for is the waste this replaces).
-        TraitSurface.PlaylistOpen or TraitSurface.LikedSongs =>
-            TraitSet.RowBundle | (_playsColumnOn() ? TraitSet.PlayCount : TraitSet.None),
+        // A list of arbitrary playables: the row bundle AND the counts, always. This used to be gated on the Plays
+        // column setting, and that gate STARVED the lane: the trait pass is a post-step of the OPEN rung, and a list
+        // already at Open is short-circuited as "reached" (SpotifyProviderHydrator) — ContinueAsync never runs again,
+        // so a bundle chosen while the column was off is the only bundle that list ever gets for the session. Kind 185
+        // has no retry surface of its own, so the lane painted "—" no matter how many times the user reopened the page.
+        // The setting now controls COLUMN VISIBILITY only; the data is always there when it is switched on.
+        TraitSurface.PlaylistOpen or TraitSurface.LikedSongs => TraitSet.RowBundle | TraitSet.PlayCount,
 
         // Episodes have no play count (185 is a TRACK trait) — the row bundle's ask-once kinds are the whole story.
         TraitSurface.ShowOpen => TraitSet.RowBundle,
@@ -41,9 +40,6 @@ public sealed class TraitPolicy(Func<bool> playsColumnOn)
 
         // Now playing wants exactly one thing the row bundle would over-fetch for: does this playable have a video?
         TraitSurface.NowPlaying => TraitSet.Video,
-
-        // The toggle path: the column just came on for rows that already have their bundle.
-        TraitSurface.PlaysToggle => TraitSet.PlayCount,
 
         // Everything else asks for no traits. TrackExpansion/Credits/PreRelease/UserProfiles are DISPLAY-ONLY extension
         // reads (P2's IExtensionReader owns them — they decorate a drawer, not a row); Prefetch/Context/None are

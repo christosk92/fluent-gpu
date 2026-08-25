@@ -2,6 +2,7 @@ using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Forms;
 using FluentGpu.Foundation;
+using FluentGpu.Render;
 using FluentGpu.Hooks;
 using FluentGpu.Scene;
 using FluentGpu.Signals;
@@ -52,6 +53,18 @@ sealed class ShotScene : Component
                 ],
             },
         }),
+        // Tier-3 STENCIL PATH CLIP (gpu-renderer.md §6) — the needs-pixels proof for BoxEl.ClipPath. A 3x3 grid of
+        // deliberately MIXED content (opaque plates, a gradient, a real bundled image, a glyph run) clipped to a heart
+        // silhouette over the dark page. What to look for: the heart shape, the page background showing at the grid's
+        // four corners, and a HARD (non-anti-aliased) edge — that last one is the CORRECT v1 appearance, not a defect
+        // (the mask pre-pass discards below coverage 0.5; AA path clipping stays the S7.1 PushLayer route).
+        // The opaque plates are the load-bearing cells: there is no stencil-tested clone of the no-blend opaque PSO, so
+        // if the device ever forgets to force them onto the blended arm inside a scope they escape the heart as squares.
+        "stencilclip" => CenterShot(StencilClipShot()),
+        // The documented v1 COVERAGE HOLE, made visible: a drop shadow and an arc inside the same heart scope. Neither
+        // pipeline has an EQUAL-tested clone, so both are clipped by the scope's SCISSOR only and spill past the
+        // silhouette into the box's rectangle. That spill is EXPECTED here; `Diag "d3d12"/"stencilFallback"` counts it.
+        "stencilclip-fallback" => CenterShot(StencilFallbackShot()),
         // Edge-fade subsystem: alpha feather (+ optional blur) following the rounded corners (the curve).
         "edgefade" => new BoxEl
         {
@@ -220,6 +233,96 @@ sealed class ShotScene : Component
         Padding = new Edges4(48, 48, 48, 48),
         Children = [child],
     };
+
+    // ── Tier-3 stencil path clip (gpu-renderer.md §6) ────────────────────────────────────────────────────────────
+    // The same 32-unit heart the headless PathSuite.StencilClipChecks gates use, so the pixels and the gates describe
+    // ONE silhouette. Minted ONCE: a fresh PathContentEpoch would key a fresh PathRealizationCache entry every frame.
+    const string HeartD = "M16 29 C7 21 2 15.5 2 10 A6.5 6.5 0 0 1 16 6.5 A6.5 6.5 0 0 1 30 10 C30 15.5 25 21 16 29 Z";
+    static readonly PathData s_heart = PathDataParser.Parse(HeartD, PathContentEpoch.Mint(), FillRule.NonZero);
+    const float HeartViewBox = 32f;
+    const float ClipBox = 384f;   // 3 x 128 — the grid exactly fills the clipping box
+    const float Cell = 128f;
+
+    static BoxEl HeartClip(params Element[] children) => new()
+    {
+        Width = ClipBox, Height = ClipBox,
+        ClipPath = s_heart, ClipPathRule = FillRule.NonZero,
+        ClipPathViewBoxW = HeartViewBox, ClipPathViewBoxH = HeartViewBox,
+        Children = children,
+    };
+
+    // Nine distinct cells, one per covered pipeline class: six opaque plates (the Rect blended arm, forced), a linear
+    // gradient (Gradient), a bundled PNG (Image), and a glyph run (Glyph). Row 2 centre carries the image so the crop
+    // lands in the widest part of the heart.
+    static Element StencilClipShot()
+    {
+        ColorF[] tints =
+        [
+            ColorF.FromRgba(0xE8, 0x3A, 0x59), ColorF.FromRgba(0xF2, 0x8C, 0x28), ColorF.FromRgba(0xF7, 0xD3, 0x2C),
+            ColorF.FromRgba(0x3C, 0xC8, 0x6E), ColorF.FromRgba(0x22, 0xA8, 0xD8), ColorF.FromRgba(0x6A, 0x5A, 0xE0),
+            ColorF.FromRgba(0xC8, 0x46, 0xC8), ColorF.FromRgba(0x1E, 0x8E, 0x9E), ColorF.FromRgba(0xD8, 0x60, 0x2C),
+        ];
+        var rows = new Element[3];
+        for (int r = 0; r < 3; r++)
+        {
+            var cells = new Element[3];
+            for (int c = 0; c < 3; c++)
+            {
+                int i = r * 3 + c;
+                cells[c] = i switch
+                {
+                    4 => new ImageEl { Width = Cell, Height = Cell, Source = Assets.ControlImage("ColorPicker.png"), Placeholder = tints[i] },
+                    1 => new BoxEl { Width = Cell, Height = Cell, Gradient = GradientSpec.Vertical(tints[1], tints[6]) },
+                    // A tessellated PathEl (the Path lane's own EQUAL-tested clone) that deliberately OVERFLOWS the
+                    // silhouette on the right — a path draw inside a stencil scope must be masked like everything else.
+                    5 => new BoxEl
+                    {
+                        Width = Cell, Height = Cell, Fill = tints[5], ZStack = true,
+                        AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                        Children =
+                        [
+                            new PathEl
+                            {
+                                Geometry = s_heart, Rule = FillRule.NonZero,
+                                ViewBoxW = HeartViewBox, ViewBoxH = HeartViewBox,
+                                Width = Cell, Height = Cell,
+                                Fill = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0xF0),
+                            },
+                        ],
+                    },
+                    7 => new BoxEl
+                    {
+                        Width = Cell, Height = Cell, Fill = tints[7],
+                        AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                        Children = [new TextEl("CLIP") { Size = 26f, Weight = 700, Color = ColorF.FromRgba(0xFF, 0xFF, 0xFF) }],
+                    },
+                    _ => new BoxEl { Width = Cell, Height = Cell, Fill = tints[i] },
+                };
+            }
+            rows[r] = new BoxEl { Direction = 0, Children = cells };
+        }
+        return HeartClip(new BoxEl { Direction = 1, Children = rows });
+    }
+
+    // The honest coverage hole: Shadow and Arc have no EQUAL-tested PSO clone, so inside the scope they are bounded by
+    // the scissor (the clip's device AABB) and NOT by the heart. A white plate marks the heart for comparison.
+    static Element StencilFallbackShot() => HeartClip(new BoxEl
+    {
+        ZStack = true, Width = ClipBox, Height = ClipBox,
+        AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+        Children =
+        [
+            // The COVERED reference: a plain rect fill, correctly heart-shaped.
+            new BoxEl { Width = ClipBox, Height = ClipBox, Fill = ColorF.FromRgba(0x2E, 0x2E, 0x36) },
+            // The UNCOVERED classes. The shadow's yellow halo and the arc's ring both spill to the box's rectangle.
+            new BoxEl
+            {
+                Width = 140f, Height = 140f, Corners = Radii.OverlayAll,
+                Fill = ColorF.FromRgba(0x3C, 0xC8, 0x6E),
+                Shadow = new ShadowSpec(Blur: 80f, OffsetY: 0f, OffsetX: 0f, Color: ColorF.FromRgba(0xFF, 0xD0, 0x20, 0xFF)),
+            },
+        ],
+    });
 
     // Edge-fade demo card: a bright rounded card whose content alpha dissolves at its edges, following the rounded
     // corners (the curve) — over the dark page so the feather is unmistakable.

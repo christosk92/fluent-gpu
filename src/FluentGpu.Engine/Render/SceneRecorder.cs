@@ -1672,7 +1672,43 @@ public static class SceneRecorder
         if (!p.ClipRect.IsInfinite)
             childClip = childClip.Intersect(world.TransformBounds(p.ClipRect));
         bool childClipEmpty = wantClip && childClip.IsEmpty;
-        if (wantClip && !childClipEmpty)
+
+        // Tier-3 (stencil) path clip (gpu-renderer.md §6): a ClipPath node clips its whole subtree to an arbitrary
+        // silhouette instead of the rectangle. Emitted BEFORE the tier-2/tier-1 emission below and INSTEAD of it — the
+        // push's DeviceRect IS the scope's scissor, so the two never both fire for one node. A realize FAILURE falls
+        // through to the plain scissor push (a conservative rectangle): a clip is never silently dropped.
+        // Steady state is zero-alloc: TryGetClipPath is a slab read and TryRealizeFill is a cache hit (the FillPath
+        // lane's contract, same key). SetClipPath -> MarkRecordDirty invalidates spans exactly like SetPath does, so
+        // ComputeSpanInputSig needs no new input.
+        bool pushedStencil = false;
+        PathRef stencilClipRef = default;      // valid iff pushedStencil
+        Affine2D stencilClipWorld = default;
+        if (!childClipEmpty && (flags & (NodeFlags.ClipsToBounds | NodeFlags.SparsePaint))
+                               == (NodeFlags.ClipsToBounds | NodeFlags.SparsePaint)
+            && scene.TryGetClipPath(node, out var cps) && !cps.IsNone)
+        {
+            var cg = cps.Geometry!;
+            Affine2D clipWorld = world;
+            if (cps.ViewBoxW > 0f && cps.ViewBoxH > 0f && pw > 0f && ph > 0f)
+            {
+                float cfit = MathF.Min(pw / cps.ViewBoxW, ph / cps.ViewBoxH);
+                clipWorld = world.Multiply(Affine2D.Scale(cfit, cfit));
+            }
+            float cScaleQ = MathF.Abs(clipWorld.M11 != 0f ? clipWorld.M11 : 1f)
+                            * (scene.DeviceScale > 0f ? scene.DeviceScale : 1f);
+            if (PathRealizationCache.Shared.TryRealizeFill(cg, cps.Rule, cScaleQ, out var cfr) && cfr.VtxCount > 0)
+            {
+                childClip = childClip.Intersect(clipWorld.TransformBounds(cfr.Bounds));
+                childClipEmpty = childClip.IsEmpty;
+                if (!childClipEmpty)
+                {
+                    dl.PushStencilClip(childClip, cfr, (byte)cps.Rule, clipWorld, key);
+                    pushedClip = true; pushedStencil = true;
+                    stencilClipRef = cfr; stencilClipWorld = clipWorld;
+                }
+            }
+        }
+        if (wantClip && !childClipEmpty && !pushedStencil)
         {
             // Tier-2 rounded clip (E9): a clipping node WITH rounded corners (an Expander/CommandBarFlyout surface
             // running an AnimChannel.ClipL/T/R/B reveal, or a plain rounded ClipsToBounds) clips RoundRect-pipeline
@@ -2353,7 +2389,11 @@ public static class SceneRecorder
         }
 
         // ── auto-hiding scrollbar thumb (overlay; over content, within the viewport bounds) ──
-        if (pushedClip) dl.PopClip(key);
+        if (pushedClip)
+        {
+            if (pushedStencil) dl.PopStencilClip(childClip, stencilClipRef, stencilClipWorld, key);
+            else dl.PopClip(key);
+        }
 
         // ── focus ring: keyboard focus only (FocusVisual), drawn last so it overlays children. Emitted AFTER the
         // node's own clip pops — the WinUI ring lives OUTSIDE the bounds (FocusVisualMargin −3), so a ClipsToBounds

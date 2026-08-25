@@ -81,6 +81,7 @@ static class AnimSuite
         SizeModeChecks(strings);
         ReflowChecks(strings);
         SkelReflowClipChecks(strings);
+        ReflowRetargetChecks(strings);
         AnimRegressionChecks(strings);
         StyleChecks();
         ButtonAxesChecks();
@@ -2667,6 +2668,318 @@ static class AnimSuite
         }
     }
 
+    // ── 23r.d–g + 23s.a — the reflow REWORK gates (they sit on top of 23r.a/b/c + 23x, which prove the base runtime) ──
+    // Five behaviours a seed-once-and-forget reflow row structurally cannot have, each observable only mid-flight:
+    //   d  a row seeded at "the solved auto size" RETARGETS when content lands late (the shelf that fills in), instead
+    //      of easing to the empty-shell height and snapping the remainder on the settle frame;
+    //   e  a mid-flight reconcile is INERT — the declared size is filed on the row (RestoreTo) instead of stomping the
+    //      interp into LayoutInput, and the clip the reflow itself added survives the re-render;
+    //   f  a mid-flight RE-DECLARATION is ground truth: it becomes both the row's RestoreTo and its target, so an
+    //      interrupted open→close can never restore the OLD row's NaN and flash a full-height frame;
+    //   g  a sibling SHOVED by an active reflow gets no position FLIP — the reflow's own per-tick re-solve IS the
+    //      animation, and a FLIP translate on top of it is stale double-compensation (a genuine LOCAL move still FLIPs);
+    //   23s.a a tween position reframe RETARGETS IN PLACE, keeping the original deadline (repeated deltas decay instead
+    //      of restarting a full tween each time — the "knob perpetually a drawer-height behind" desync).
+    // Same headless shape as ReflowChecks/SkelReflowClipChecks (no GPU, no window): HeadlessPlatformApp + HeadlessWindow
+    // + HeadlessGpuDevice + HeadlessFontSystem, driven by host.RunFrame() at the deterministic 16ms headless step.
+    static void ReflowRetargetChecks(StringTable strings)
+    {
+        const float StepMs = 16f;   // FixedFrameTimeSource default — the headless frame clock every gate below counts in
+
+        // 23r.d + 23r.e share ONE host: two INDEPENDENT keyed entrants (A grows mid-flight, B is re-rendered
+        // mid-flight), so neither gate has to reset the other's signals across a host boundary.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("reflow-grow", new Size2(360, 480), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            using var host = new AppHost(app, window, device, fonts, strings, new ReflowGrowProbe());
+            var s = host.Scene;
+
+            host.RunFrame();                                   // mount WITHOUT either entrant (a first frame never captures)
+            ReflowGrowProbe.MountedA.Value = true;
+            host.RunFrame();                                   // A mounts → PendingEnterReflow → SeedEnterReflow(0 → BaseH)
+            var grow = Child(s, s.Root, 0);
+            bool seeded = host.Animation.TryGetLiveReflow(grow, AnimChannel.LayoutH, out float to0, out bool nat0, out float rest0);
+            bool seedShape = seeded && nat0 && float.IsNaN(rest0) && Near(to0, ReflowGrowProbe.BaseH, 1f);
+
+            // Per-tick ease bound: a Linear 333ms tween over the largest range this node ever flies (FullH) moves
+            // FullH*(16/333) ≈ 4.8 per tick. 4x slack + 1 keeps the bound honest about the retarget re-bake, while a
+            // SNAP (the whole remaining ~87 in one frame — what an un-retargeted row does at settle, and what a stomped
+            // LayoutInput does on the growth frame) is an order of magnitude over it.
+            float stepBound = ReflowGrowProbe.FullH * (StepMs / 333f) * 4f + 1f;
+            float prevH = s.AbsoluteRect(grow).H, maxStep = 0f;
+            bool monotone = true;
+            void SampleGrow()
+            {
+                float h = s.AbsoluteRect(grow).H;
+                if (h < prevH - 0.25f) monotone = false;
+                float step = MathF.Abs(h - prevH);
+                if (step > maxStep) maxStep = step;
+                prevH = h;
+            }
+            for (int i = 0; i < 4; i++) { host.RunFrame(); SampleGrow(); }
+            float hBeforeGrow = prevH;
+
+            ReflowGrowProbe.Grown.Value = true;                // an extra fixed-height child mounts INSIDE the flying node
+            host.RunFrame(); SampleGrow();                     // ...and RunReflowLayout retargets the live row THIS frame
+            bool retargeted = host.Animation.TryGetLiveReflow(grow, AnimChannel.LayoutH, out float toGrow, out bool natGrow, out float restGrow)
+                              && natGrow && float.IsNaN(restGrow) && Near(toGrow, ReflowGrowProbe.FullH, 1f);
+
+            // Alloc tripwire on the frames that RUN the retarget machinery (RunReflowLayout's per-root TryGetLiveReflow
+            // + the natural-extent walk) with no reconcile of their own. First 4 skipped for per-host list capacity /
+            // JIT warm-up, exactly like gate.icon.alloc and 46n4.
+            long worstTickAlloc = 0;
+            for (int i = 0; i < 14; i++)
+            {
+                var f = host.RunFrame();
+                SampleGrow();
+                if (i >= 4 && f.HotPhaseAllocBytes > worstTickAlloc) worstTickAlloc = f.HotPhaseAllocBytes;
+            }
+            for (int i = 0; i < 40; i++) { host.RunFrame(); SampleGrow(); }   // settle
+            bool growSettled = !host.Animation.TryGetLiveReflow(grow, AnimChannel.LayoutH, out _, out _, out _);
+            bool growDeclared = float.IsNaN(s.Layout(grow).Height);            // declared (auto) restored, not the ease
+            float growFinal = s.AbsoluteRect(grow).H;
+            bool growFull = Near(growFinal, ReflowGrowProbe.FullH, 1f);        // the FINAL natural height, reached BY the ease
+
+            Check("23r.d Reflow content growth mid-flight: the live row retargets to the new natural extent, the ease stays monotonic and jump-free, and the settle solves at the final natural height",
+                seedShape && retargeted && monotone && maxStep <= stepBound && growSettled && growDeclared && growFull
+                && hBeforeGrow > 0.5f && hBeforeGrow < ReflowGrowProbe.BaseH - 1f,
+                $"seedTo={to0:0.0} natural={nat0} beforeGrow={hBeforeGrow:0.0} retargetTo={toGrow:0.0} (want {ReflowGrowProbe.FullH:0}) "
+                + $"monotone={monotone} maxStep={maxStep:0.00} bound={stepBound:0.00} final={growFinal:0.0} liNaN={growDeclared} settled={growSettled}");
+
+            Check("23r.d2 Reflow retarget machinery is 0-alloc: every mid-flight tick frame keeps hot-phase (6–13) alloc at 0",
+                worstTickAlloc == 0, $"worstTickAlloc={worstTickAlloc}B");
+
+            // 23r.e — the SECOND entrant: a same-props re-render on every mid-flight frame must change nothing the row owns.
+            ReflowGrowProbe.MountedB.Value = true;
+            host.RunFrame();                                   // B mounts → its own enter reflow 0 → BaseH
+            var inert = Child(s, s.Root, 1);
+            // The element declares NO ClipToBounds, so a clip on it can only be the ROW's (AnimFlags.ClipAdded) — the
+            // release at settle below is what proves the ownership, and the mid-flight samples prove a re-render can no
+            // longer strip it (the reconciler's `else if` now defers to HasEngineOwnedClip).
+            bool rowClip = (s.Flags(inert) & NodeFlags.ClipsToBounds) != 0 && host.Animation.HasEngineOwnedClip(inert);
+            bool midClipped = true, midInterp = true, midEngineOwned = true;
+            int midSamples = 0;
+            float midLi = 0f, midSolved = 0f;
+            for (int i = 0; i < 8; i++)
+            {
+                ReflowGrowProbe.Bump.Value = i + 1;            // an ordinary same-props re-render, mid-flight
+                host.RunFrame();
+                if (!host.Animation.TryGetLiveReflow(inert, AnimChannel.LayoutH, out _, out _, out _)) break;
+                midSamples++;
+                midLi = s.Layout(inert).Height;
+                midSolved = s.AbsoluteRect(inert).H;
+                if (float.IsNaN(midLi) || !Near(midLi, midSolved, 1f)) midInterp = false;   // the INTERP, not the declared NaN
+                if ((s.Flags(inert) & NodeFlags.ClipsToBounds) == 0) midClipped = false;    // the reconcile did not strip it
+                if (!host.Animation.HasEngineOwnedClip(inert)) midEngineOwned = false;
+            }
+            for (int i = 0; i < 40; i++) host.RunFrame();      // settle
+            bool inertRestored = float.IsNaN(s.Layout(inert).Height);
+            bool inertUnclipped = (s.Flags(inert) & NodeFlags.ClipsToBounds) == 0 && !host.Animation.HasEngineOwnedClip(inert);
+            bool inertOpen = Near(s.AbsoluteRect(inert).H, ReflowGrowProbe.BaseH, 1f);
+
+            Check("23r.e Reflow mid-flight reconcile is inert: LayoutInput keeps the interp (the declared value is filed on the row), the engine-added clip survives the re-render, and settle restores declared + releases the clip",
+                rowClip && midSamples >= 2 && midInterp && midClipped && midEngineOwned
+                && inertRestored && inertUnclipped && inertOpen,
+                $"rowClip={rowClip} samples={midSamples} midLi={midLi:0.0} midSolved={midSolved:0.0} "
+                + $"midInterp={midInterp} midClipped={midClipped} settleLiNaN={inertRestored} unclipped={inertUnclipped} open={inertOpen}");
+        }
+
+        // 23r.f — a mid-flight RE-DECLARATION, both directions: a declared-height node re-declared LARGER (the target and
+        // the settle value must both follow), and the interrupted open→close (an auto-height drawer told to close
+        // mid-open) which is where the OLD row's stale RestoreTo used to flash the full natural height for one frame.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("reflow-declared", new Size2(360, 560), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            using var host = new AppHost(app, window, device, fonts, strings, new ReflowDeclaredProbe());
+            var s = host.Scene;
+
+            host.RunFrame();
+            ReflowDeclaredProbe.MountedDeclared.Value = true;
+            host.RunFrame();                                   // mounts DECLARED at H1 → enter reflow 0 → H1
+            var declared = Child(s, s.Root, 0);
+            bool declSeeded = host.Animation.TryGetLiveReflow(declared, AnimChannel.LayoutH, out float dTo0, out _, out float dRest0)
+                              && Near(dTo0, ReflowDeclaredProbe.DeclaredH1, 1f) && Near(dRest0, ReflowDeclaredProbe.DeclaredH1, 1f);
+            for (int i = 0; i < 4; i++) host.RunFrame();
+            float dMid = s.AbsoluteRect(declared).H;
+
+            ReflowDeclaredProbe.Declared.Value = ReflowDeclaredProbe.DeclaredH2;   // re-declare mid-flight
+            host.RunFrame();
+            bool declRetargeted = host.Animation.TryGetLiveReflow(declared, AnimChannel.LayoutH, out float dTo1, out _, out float dRest1)
+                                  && Near(dTo1, ReflowDeclaredProbe.DeclaredH2, 1f) && Near(dRest1, ReflowDeclaredProbe.DeclaredH2, 1f);
+            for (int i = 0; i < 40; i++) host.RunFrame();      // settle
+            float dFinal = s.AbsoluteRect(declared).H;
+            float dLi = s.Layout(declared).Height;
+            bool declSettled = Near(dFinal, ReflowDeclaredProbe.DeclaredH2, 1f) && Near(dLi, ReflowDeclaredProbe.DeclaredH2, 1f)
+                               && !host.Animation.TryGetLiveReflow(declared, AnimChannel.LayoutH, out _, out _, out _);
+
+            Check("23r.f Reflow declared retarget: a mid-flight re-declaration becomes the row's RestoreTo AND its target, and the settle solves at the new declared size",
+                declSeeded && declRetargeted && declSettled && dMid > 0.5f && dMid < ReflowDeclaredProbe.DeclaredH1 - 1f,
+                $"seed(to={dTo0:0.0} restore={dRest0:0.0}) mid={dMid:0.0} retarget(to={dTo1:0.0} restore={dRest1:0.0} want={ReflowDeclaredProbe.DeclaredH2:0}) "
+                + $"final={dFinal:0.0} li={dLi:0.0}");
+
+            // The interrupt: an AUTO-height drawer opening 0 → natural, told to close (declared 0) three ticks in. No
+            // frame between the close and the settle may solve at the full natural height — that one frame IS the flash.
+            ReflowDeclaredProbe.MountedDrawer.Value = true;
+            host.RunFrame();                                   // mounts AUTO → enter reflow 0 → NaturalH
+            var drawer = Child(s, s.Root, 1);
+            bool drawerSeeded = host.Animation.TryGetLiveReflow(drawer, AnimChannel.LayoutH, out float wTo0, out bool wNat0, out float wRest0)
+                                && wNat0 && float.IsNaN(wRest0) && Near(wTo0, ReflowDeclaredProbe.NaturalH, 1.5f);
+            for (int i = 0; i < 3; i++) host.RunFrame();
+            float wOpenPeak = s.AbsoluteRect(drawer).H;
+
+            ReflowDeclaredProbe.DrawerH.Value = 0f;            // the CLOSE lands mid-open
+            float worstFlash = 0f;
+            for (int i = 0; i < 45; i++)
+            {
+                host.RunFrame();
+                float h = s.AbsoluteRect(drawer).H;
+                if (h > worstFlash) worstFlash = h;
+                if (float.IsNaN(s.Layout(drawer).Height)) worstFlash = ReflowDeclaredProbe.NaturalH;   // auto restored = the bug
+            }
+            bool noFlash = worstFlash < ReflowDeclaredProbe.NaturalH - 5f;
+            float wFinal = s.AbsoluteRect(drawer).H;
+            float wLi = s.Layout(drawer).Height;
+            bool closed = Near(wFinal, 0f, 0.5f) && wLi == 0f
+                          && !host.Animation.TryGetLiveReflow(drawer, AnimChannel.LayoutH, out _, out _, out _);
+
+            Check("23r.f2 interrupted open→close: the close retargets the LIVE row (no frame solves at the full natural height) and settles at the declared 0",
+                drawerSeeded && noFlash && closed && wOpenPeak > 0.5f && wOpenPeak < ReflowDeclaredProbe.NaturalH - 5f,
+                $"seed(to={wTo0:0.0} natural={wNat0}) openPeak={wOpenPeak:0.0} worstAfterClose={worstFlash:0.0} (natural={ReflowDeclaredProbe.NaturalH:0}) "
+                + $"final={wFinal:0.0} li={wLi:0.0} closed={closed}");
+        }
+
+        // 23r.g — shove suppression. The sibling BELOW the reflowing entrant moves on every commit frame of the reveal,
+        // but that move is CAUSED by the reflow: it must ride layout, not a FLIP translate. Every ride frame here is a
+        // real commit frame (a trivial signal bump) so ApplyProjections runs with a live reflow every single time.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("reflow-shove", new Size2(360, 480), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            using var host = new AppHost(app, window, device, fonts, strings, new ReflowShoveProbe());
+            var s = host.Scene;
+
+            host.RunFrame();
+            ReflowShoveProbe.Mounted.Value = true;
+            host.RunFrame();                                   // the entrant mounts; the seed runs BEFORE ApplyProjections,
+                                                               // so even this frame's shove must already be suppressed
+            var entrant = Child(s, s.Root, 0);
+            var sib = Child(s, s.Root, 2);
+            bool flying = host.Animation.TryGetLiveReflow(entrant, AnimChannel.LayoutH, out float sTo, out _, out _);
+            bool noFlip = true, monotoneY = true;
+            float prevY = s.AbsoluteRect(sib).Y, startY = prevY, worstDy = 0f;
+            int rideFrames = 0;
+            for (int i = 0; i < 14; i++)
+            {
+                ReflowShoveProbe.Noise.Value = i + 1;          // every ride frame is a COMMIT frame
+                host.RunFrame();
+                if (!host.Animation.TryGetLiveReflow(entrant, AnimChannel.LayoutH, out _, out _, out _)) break;
+                rideFrames++;
+                if (host.Animation.TryGetTrackValue(sib, AnimChannel.TranslateY, out float ty)) { noFlip = false; worstDy = MathF.Max(worstDy, MathF.Abs(ty)); }
+                float dy = MathF.Abs(s.Paint(sib).LocalTransform.Dy);
+                if (dy > 0.01f) { noFlip = false; worstDy = MathF.Max(worstDy, dy); }
+                float y = s.AbsoluteRect(sib).Y;
+                if (y < prevY - 0.25f) monotoneY = false;
+                prevY = y;
+            }
+            bool rode = prevY > startY + 4f;                   // it genuinely moved WITH the reveal (layout did it)
+
+            // The suppression bookkeeping itself is pure POD reads — a commit frame's own reconcile allocates, so the
+            // tripwire goes around the API the way the virtual-collection / lazy-grid gates in this suite do, plus the
+            // tick frames inside the same suppression window.
+            var reflowScratch = new List<NodeHandle>(8);
+            host.Animation.CollectLiveReflowNodes(reflowScratch);
+            _ = host.Animation.TryGetLiveReflow(entrant, AnimChannel.LayoutH, out _, out _, out _);
+            _ = host.Animation.HasEngineOwnedClip(entrant);
+            long a0 = GC.GetAllocatedBytesForCurrentThread();
+            for (int i = 0; i < 200; i++)
+            {
+                host.Animation.CollectLiveReflowNodes(reflowScratch);
+                _ = host.Animation.TryGetLiveReflow(entrant, AnimChannel.LayoutH, out _, out _, out _);
+                _ = host.Animation.HasEngineOwnedClip(entrant);
+            }
+            long apiAlloc = GC.GetAllocatedBytesForCurrentThread() - a0;
+            long worstShoveAlloc = 0;
+            for (int i = 0; i < 8; i++)
+            {
+                var f = host.RunFrame();                       // tick frames INSIDE the suppression window
+                if (i >= 2 && f.HotPhaseAllocBytes > worstShoveAlloc) worstShoveAlloc = f.HotPhaseAllocBytes;
+                float y = s.AbsoluteRect(sib).Y;
+                if (y < prevY - 0.25f) monotoneY = false;
+                prevY = y;
+            }
+            for (int i = 0; i < 45; i++) host.RunFrame();      // settle the reveal (no reflow → no suppression)
+            float restY = s.AbsoluteRect(sib).Y;
+
+            // Counter-assertion (the 23x contract): with no reflow in flight, a genuine LOCAL move still FLIPs.
+            ReflowShoveProbe.Shifted.Value = true;             // the spacer above the sibling grows 0 → 40
+            host.RunFrame();
+            bool localSeeded = host.Animation.TryGetTrackValue(sib, AnimChannel.TranslateY, out float localDy) && localDy < -30f;
+            bool localHeld = Near(s.AbsoluteRect(sib).Y, restY, 1.5f);          // presented Y holds (FLIP "Invert")
+            for (int i = 0; i < 45; i++) host.RunFrame();
+            bool localLanded = Near(s.AbsoluteRect(sib).Y, restY + 40f, 0.5f)
+                               && !host.Animation.TryGetTrackValue(sib, AnimChannel.TranslateY, out _);
+
+            Check("23r.g Reflow shove suppression: a sibling moved BY an active reflow gets NO position FLIP (no TranslateY row, no transform) and rides layout monotonically; a genuine local move still FLIPs",
+                flying && rideFrames >= 4 && noFlip && monotoneY && rode && localSeeded && localHeld && localLanded,
+                $"seedTo={sTo:0.0} rideFrames={rideFrames} noFlip={noFlip} worstDy={worstDy:0.00} monotoneY={monotoneY} rode={rode} "
+                + $"sibY {startY:0.0}→{prevY:0.0}→{restY:0.0} localSeeded={localSeeded} localDy={localDy:0.0} held={localHeld} landed={localLanded}");
+
+            Check("23r.g2 shove-suppression bookkeeping is 0-alloc (CollectLiveReflowNodes/TryGetLiveReflow/HasEngineOwnedClip + the suppression-window tick frames)",
+                apiAlloc == 0 && worstShoveAlloc == 0, $"apiAlloc={apiAlloc}B worstTickAlloc={worstShoveAlloc}B");
+        }
+
+        // 23s.a — the tween position reframe. Three stacked deltas ~60ms apart: a retarget-in-place keeps the FIRST
+        // delta's deadline (250ms), so the node is home by then; a full restart (the old ReframePosition tween arm) would
+        // still be flying 128ms later. The peaks must also DECAY across deltas, not accumulate.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("reframe-retarget", new Size2(320, 400), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            using var host = new AppHost(app, window, device, fonts, strings, new ReframeRetargetProbe());
+            var s = host.Scene;
+
+            host.RunFrame();
+            var mover = Child(s, s.Root, 1);
+            float y0 = s.AbsoluteRect(mover).Y;
+
+            ReframeRetargetProbe.Spacer.Value = 60f;           // delta 1 — t = 0 of the 250ms deadline
+            host.RunFrame();
+            float peak1 = MathF.Abs(s.Paint(mover).LocalTransform.Dy);
+            int frames = 0;
+            for (int i = 0; i < 3; i++) { host.RunFrame(); frames++; }
+            ReframeRetargetProbe.Spacer.Value = 76f;           // delta 2 — t ≈ 64ms
+            host.RunFrame(); frames++;
+            float peak2 = MathF.Abs(s.Paint(mover).LocalTransform.Dy);
+            for (int i = 0; i < 3; i++) { host.RunFrame(); frames++; }
+            ReframeRetargetProbe.Spacer.Value = 84f;           // delta 3 — t ≈ 128ms
+            host.RunFrame(); frames++;
+            bool flyingAt3 = host.Animation.TryGetTrackValue(mover, AnimChannel.TranslateY, out float dy3) && MathF.Abs(dy3) > 1f;
+
+            // The first delta's ORIGINAL deadline (250ms) + one tick of epsilon. A restart at delta 3 would run to
+            // 128 + 250 = 378ms — six ticks past this window, with a live (not Done) row.
+            int deadlineFrames = (int)MathF.Ceiling(250f / StepMs) + 1;
+            while (frames < deadlineFrames) { host.RunFrame(); frames++; }
+            bool settledOnFirstDeadline = !host.Animation.TryGetTrackValue(mover, AnimChannel.TranslateY, out float dyEnd)
+                                          && MathF.Abs(s.Paint(mover).LocalTransform.Dy) < 0.5f;
+            bool landed = Near(s.AbsoluteRect(mover).Y, y0 + 84f, 0.5f);
+
+            Check("23s.a tween reframe retargets in place: three stacked position deltas settle by the FIRST delta's original deadline (no per-delta 250ms restart) and the residual decays instead of accumulating",
+                Near(peak1, 60f, 1.5f) && peak2 < peak1 - 1f && flyingAt3 && settledOnFirstDeadline && landed,
+                $"peak1={peak1:0.0} peak2={peak2:0.0} dyAtDelta3={dy3:0.0} frames={frames} deadlineFrames={deadlineFrames} "
+                + $"dyEnd={dyEnd:0.00} settled={settledOnFirstDeadline} landed={landed}");
+        }
+    }
+
     static void StyleChecks()
     {
         var s = new Button.Style
@@ -4810,6 +5123,151 @@ sealed class SkelOverpaintProbe : Component
         [
             Embed.Comp(() => new RegionHost()),      // [0] the layout-transparent component anchor
             new BoxEl { Height = 40f },              // [1] the sibling the region must not paint over
+        ],
+    };
+}
+
+// 23r.d / 23r.e probe — TWO independent auto-height SizeMode.Reflow ENTRANTS (keyed, so each is a genuine MOUNT and the
+// reconciler routes it through PendingEnterReflow → SeedEnterReflow: the only shape that carries AnimFlags.NaturalTarget,
+// i.e. the row whose destination IS "whatever the content turns out to be"). `Grown` mounts an extra fixed-height child
+// INSIDE entrant A mid-flight (23r.d); `Bump` re-renders the whole tree with identical props while entrant B is in
+// flight (23r.e). Deliberately declares NO ClipToBounds: the clip 23r.e asserts survives the re-render is the one
+// ReflowSize adds for the life of the row, which is observable in this shape and nowhere else.
+sealed class ReflowGrowProbe : Component
+{
+    public const float BaseH = 40f, ExtraH = 60f, FullH = BaseH + ExtraH;
+    public static readonly Signal<bool> MountedA = new(false);
+    public static readonly Signal<bool> MountedB = new(false);
+    public static readonly Signal<bool> Grown = new(false);
+    public static readonly Signal<int> Bump = new(0);
+
+    // Linear + a long duration keeps the per-tick ease delta flat, so "no frame-over-frame jump" is a clean bound
+    // rather than a curve-shape argument. Enter carries no terminal (an all-default EnterExit) — `Active` alone is what
+    // enrols the mount in the reflow reveal, so the reflow row is the ONLY row on the node.
+    static readonly LayoutTransition ReflowEnter = new(
+        TransitionChannels.Size,
+        TransitionDynamics.Tween(333f, Easing.Linear),
+        Size: SizeMode.Reflow,
+        Enter: new EnterExit(Active: true));
+
+    public override Element Render()
+    {
+        _ = Bump.Value;   // an ordinary same-props re-render driver (23r.e)
+        var kids = new List<Element>(3);
+        if (MountedA.Value)
+            kids.Add(new BoxEl
+            {
+                Key = "grow", Direction = 1, Width = 120f, Animate = ReflowEnter,
+                Children = Grown.Value
+                    ? [new BoxEl { Width = 120f, Height = BaseH }, new BoxEl { Width = 120f, Height = ExtraH }]
+                    : [new BoxEl { Width = 120f, Height = BaseH }],
+            });
+        if (MountedB.Value)
+            kids.Add(new BoxEl
+            {
+                Key = "inert", Direction = 1, Width = 120f, Animate = ReflowEnter,
+                Children = [new BoxEl { Width = 120f, Height = BaseH }],
+            });
+        kids.Add(new BoxEl { Key = "tail", Width = 120f, Height = 24f });
+        return new BoxEl { Direction = 1, AlignItems = FlexAlign.Start, Children = kids.ToArray() };
+    }
+}
+
+// 23r.f probe — the two RE-DECLARATION shapes, as two independent keyed entrants: `declared` mounts with an explicit
+// height (so its row's RestoreTo is a NUMBER and the natural-extent retarget must keep its hands off) and is re-declared
+// LARGER mid-flight; `drawer` mounts AUTO (RestoreTo NaN) and is told to CLOSE (declared 0) mid-open — the interrupt that
+// used to restore the outgoing row's NaN and flash one full-natural-height frame.
+sealed class ReflowDeclaredProbe : Component
+{
+    public const float NaturalH = 90f;            // 3 x 30 — the auto height both nodes solve at
+    public const float DeclaredH1 = 120f, DeclaredH2 = 200f;
+    public static readonly Signal<bool> MountedDeclared = new(false);
+    public static readonly Signal<float> Declared = new(DeclaredH1);
+    public static readonly Signal<bool> MountedDrawer = new(false);
+    public static readonly Signal<float> DrawerH = new(float.NaN);
+
+    static readonly LayoutTransition ReflowEnter = new(
+        TransitionChannels.Size,
+        TransitionDynamics.Tween(333f, Easing.Linear),
+        Size: SizeMode.Reflow,
+        Enter: new EnterExit(Active: true));
+
+    public override Element Render()
+    {
+        var kids = new List<Element>(3);
+        if (MountedDeclared.Value)
+            kids.Add(new BoxEl
+            {
+                Key = "declared", Direction = 1, Width = 100f, Height = Declared.Value, Animate = ReflowEnter,
+                Children = [new BoxEl { Width = 100f, Height = 30f }, new BoxEl { Width = 100f, Height = 30f },
+                            new BoxEl { Width = 100f, Height = 30f }],
+            });
+        if (MountedDrawer.Value)
+            kids.Add(new BoxEl
+            {
+                Key = "drawer", Direction = 1, Width = 100f, Height = DrawerH.Value, Animate = ReflowEnter,
+                Children = [new BoxEl { Width = 100f, Height = 30f }, new BoxEl { Width = 100f, Height = 30f },
+                            new BoxEl { Width = 100f, Height = 30f }],
+            });
+        kids.Add(new BoxEl { Key = "tail", Width = 100f, Height = 24f });
+        return new BoxEl { Direction = 1, AlignItems = FlexAlign.Start, Children = kids.ToArray() };
+    }
+}
+
+// 23r.g probe — a column of: the reflowing entrant, a spacer, and a BoundsAnimated sibling BELOW them. While the
+// entrant's reveal runs, the sibling's parent-relative Y changes every frame — but the CAUSE is the reflow, so the
+// sibling must ride the reflow's own re-solve and never seed a position FLIP. `Noise` makes each ride frame a genuine
+// COMMIT frame (ApplyProjections runs with a live reflow); `Shifted` grows the spacer AFTER the reveal settles, which is
+// the counter-case: a genuine LOCAL move with no reflow in flight, which must still FLIP (the 23x contract).
+sealed class ReflowShoveProbe : Component
+{
+    public const float EntrantH = 90f;
+    public static readonly Signal<bool> Mounted = new(false);
+    public static readonly Signal<int> Noise = new(0);
+    public static readonly Signal<bool> Shifted = new(false);
+
+    static readonly LayoutTransition ReflowEnter = new(
+        TransitionChannels.Size,
+        TransitionDynamics.Tween(333f, Easing.Linear),
+        Size: SizeMode.Reflow,
+        Enter: new EnterExit(Active: true));
+    static readonly LayoutTransition Slide = new(TransitionChannels.Position,
+        TransitionDynamics.Tween(167f, Easing.FluentPopOpen));
+
+    public override Element Render()
+    {
+        _ = Noise.Value;   // an unrelated state commit — every ride frame is a real reconcile
+        var kids = new List<Element>(3);
+        if (Mounted.Value)
+            kids.Add(new BoxEl
+            {
+                Key = "entrant", Direction = 1, Width = 120f, Animate = ReflowEnter,
+                Children = [new BoxEl { Width = 120f, Height = EntrantH }],
+            });
+        kids.Add(new BoxEl { Key = "spacer", Width = 120f, Height = Shifted.Value ? 40f : 0f });
+        kids.Add(new BoxEl { Key = "sib", Width = 120f, Height = 30f, Animate = Slide });
+        return new BoxEl { Direction = 1, AlignItems = FlexAlign.Start, Children = kids.ToArray() };
+    }
+}
+
+// 23s.a probe — a BoundsAnimated mover under a spacer whose height the gate steps three times in quick succession.
+// Each step is a pure POSITION delta on the mover (a tween reframe), which is the channel the retarget-in-place fix
+// owns: the three deltas must fold into ONE flight that keeps the first delta's deadline.
+sealed class ReframeRetargetProbe : Component
+{
+    public const float MoverH = 30f;
+    public static readonly Signal<float> Spacer = new(0f);
+
+    static readonly LayoutTransition Slide = new(TransitionChannels.Position,
+        TransitionDynamics.Tween(250f, Easing.FluentPopOpen));
+
+    public override Element Render() => new BoxEl
+    {
+        Direction = 1, AlignItems = FlexAlign.Start,
+        Children =
+        [
+            new BoxEl { Key = "spacer", Width = 100f, Height = Spacer.Value },
+            new BoxEl { Key = "mover", Width = 100f, Height = MoverH, Animate = Slide },
         ],
     };
 }

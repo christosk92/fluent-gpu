@@ -101,6 +101,8 @@ public static class BlurPinKey
                 case DrawOp.FillPath:            { var c = MemoryMarshal.Read<FillPathCmd>(cmds.Slice(bodyOff));            FoldStruct(ref h, c with { Transform = Reb(c.Transform, ox, oy) }); pos = bodyOff + Unsafe.SizeOf<FillPathCmd>(); break; }
                 case DrawOp.StrokePath:          { var c = MemoryMarshal.Read<StrokePathCmd>(cmds.Slice(bodyOff));          FoldStruct(ref h, c with { Transform = Reb(c.Transform, ox, oy) }); pos = bodyOff + Unsafe.SizeOf<StrokePathCmd>(); break; }
                 case DrawOp.PushClip:            { var c = MemoryMarshal.Read<ClipCmd>(cmds.Slice(bodyOff));               FoldStruct(ref h, RebClip(in c, ox, oy)); pos = bodyOff + Unsafe.SizeOf<ClipCmd>(); break; }
+                case DrawOp.PushStencilClip:     { var c = MemoryMarshal.Read<PushStencilClipCmd>(cmds.Slice(bodyOff));  FoldStruct(ref h, RebStencilPush(in c, ox, oy)); pos = bodyOff + Unsafe.SizeOf<PushStencilClipCmd>(); break; }
+                case DrawOp.PopStencilClip:      { var c = MemoryMarshal.Read<PopStencilClipCmd>(cmds.Slice(bodyOff));   FoldStruct(ref h, RebStencilPop(in c, ox, oy)); pos = bodyOff + Unsafe.SizeOf<PopStencilClipCmd>(); break; }
                 case DrawOp.PopClip:             { pos = bodyOff; break; }   // no payload; the op code is already folded
                 default:                         return false;               // nested PushLayer or unknown ⇒ don't cache
             }
@@ -127,6 +129,21 @@ public static class BlurPinKey
     {
         DeviceRect  = new RectF(RoundGrid(c.DeviceRect.X  - ox), RoundGrid(c.DeviceRect.Y  - oy), c.DeviceRect.W,  c.DeviceRect.H),
         RoundedRect = new RectF(RoundGrid(c.RoundedRect.X - ox), RoundGrid(c.RoundedRect.Y - oy), c.RoundedRect.W, c.RoundedRect.H),
+    };
+
+    // A stencil clip carries BOTH kinds of position at once — a device-space scope rect (like ClipCmd) and an
+    // authored-space mask transform (like FillPath) — so its rebase is exactly those two patches combined. The
+    // realization refs (Vtx/Idx) and the rule fold verbatim: they identify the silhouette, not where it sits.
+    private static PushStencilClipCmd RebStencilPush(in PushStencilClipCmd c, float ox, float oy) => c with
+    {
+        DeviceRect = new RectF(RoundGrid(c.DeviceRect.X - ox), RoundGrid(c.DeviceRect.Y - oy), c.DeviceRect.W, c.DeviceRect.H),
+        Transform = Reb(c.Transform, ox, oy),
+    };
+
+    private static PopStencilClipCmd RebStencilPop(in PopStencilClipCmd c, float ox, float oy) => c with
+    {
+        DeviceRect = new RectF(RoundGrid(c.DeviceRect.X - ox), RoundGrid(c.DeviceRect.Y - oy), c.DeviceRect.W, c.DeviceRect.H),
+        Transform = Reb(c.Transform, ox, oy),
     };
 
     private static void FoldSeed(ref ulong h, in PushLayerCmd L)

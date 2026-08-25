@@ -27,7 +27,7 @@ public class PlaylistHydrationTests
         public readonly FakeCatalogFetch Catalog;
         public readonly SpotifyProviderHydrator Hydrator;
 
-        public Harness(bool playsColumn = false)
+        public Harness()
         {
             Catalog = new FakeCatalogFetch(Store, (uris, store) =>
             {
@@ -35,7 +35,7 @@ public class PlaylistHydrationTests
                     if (u.Kind == EntityKind.Playlist)
                         store.UpsertPlaylist(new Playlist(u.Id, u.Uri, "List " + u.Id, null, "me", null, 0));
             });
-            var policy = new TraitPolicy(() => playsColumn);
+            var policy = new TraitPolicy();
             Hydrator = HydrationTestSupport.Hydrator(Store, Catalog, Traits, Pump,
                 [new PlaylistHydration(Store, Opener, policy)], traitPolicy: policy);
         }
@@ -117,7 +117,7 @@ public class PlaylistHydrationTests
     [Fact]
     public async Task Open_AsksTraitsForEveryMember_EpisodesIncluded()
     {
-        using var h = new Harness(playsColumn: true);
+        using var h = new Harness();
         Seed(h.Store, "spotify:track:t1", "spotify:episode:e1");
 
         await h.Hydrator.EnsureAsync(Uri, HydrationLevel.Open);
@@ -150,7 +150,7 @@ public class PlaylistHydrationTests
         using var pump = new HydrationPump(CancellationToken.None);
         var opener = new FakePlaylistOpener();
         var catalog = new FakeCatalogFetch(store);   // projects nothing — the 205 miss
-        var policy = new TraitPolicy(() => false);
+        var policy = new TraitPolicy();
         var hydrator = HydrationTestSupport.Hydrator(store, catalog, new RecordingTraitPipeline(), pump,
             [new PlaylistHydration(store, opener, policy)], traitPolicy: policy);
         store.SetRootlist([new RootlistEntry(0, 0, Uri, null, 0)]);

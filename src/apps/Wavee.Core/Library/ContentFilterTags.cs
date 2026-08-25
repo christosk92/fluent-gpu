@@ -23,6 +23,11 @@ public readonly record struct ContentFilterChipSet(IReadOnlyList<string> Titles,
     public bool IsEvidenced(int index) => index < EvidencedCount;
 }
 
+/// <summary>A derived chip together with how many of the tracks in view carry it — <see cref="ContentFilterTags.Derive"/>
+/// with the numbers kept. <paramref name="Title"/> is the descriptor's presentation form, exactly as the chip renders
+/// it.</summary>
+public readonly record struct TagCount(string Title, int Count);
+
 /// <summary>Derives the Liked Songs content-filter chip set from the tracks themselves.
 ///
 /// Chips are DERIVED rather than fetched from <c>content-filter/v1/liked-songs</c>: extension kind 6 already carries
@@ -38,14 +43,32 @@ public static class ContentFilterTags
     const int MaxChips = 10;
 
     /// <summary>A tag must appear on at least this many tracks to earn a chip. A concept carried by one track out of
-    /// several hundred is not a lens, it is trivia — and tapping it would leave a one-row list.</summary>
-    const int MinTrackCount = 3;
+    /// several hundred is not a lens, it is trivia — and tapping it would leave a one-row list.
+    ///
+    /// <para>Public because it is the app's one EVIDENCE FLOOR for descriptor-derived UI: the Liked facts blend bar
+    /// gates on the same number rather than inventing a second threshold, so the two surfaces can never disagree about
+    /// when there is enough evidence to say anything.</para></summary>
+    public const int MinTrackCount = 3;
 
     /// <summary>The chip set for a track list, most-common first. Empty when nothing is enriched yet (the bar then
-    /// renders nothing at all rather than an empty rail).</summary>
+    /// renders nothing at all rather than an empty rail). A projection of <see cref="DeriveCounted"/> — same filter,
+    /// same order, same cap, with the numbers dropped.</summary>
     public static IReadOnlyList<string> Derive(IReadOnlyList<Track> tracks)
     {
-        if (tracks.Count == 0) return Array.Empty<string>();
+        var counted = DeriveCounted(tracks);
+        if (counted.Count == 0) return Array.Empty<string>();
+
+        var titles = new string[counted.Count];
+        for (int i = 0; i < counted.Count; i++) titles[i] = counted[i].Title;
+        return titles;
+    }
+
+    /// <summary>The same chip set with the carrier counts KEPT. The counts were always computed and then discarded;
+    /// the Liked facts legend needs them, and re-deriving them at the call site would be a second copy of this
+    /// filter/order/cap that could drift out of step with the chips it is labelling.</summary>
+    public static IReadOnlyList<TagCount> DeriveCounted(IReadOnlyList<Track> tracks)
+    {
+        if (tracks.Count == 0) return Array.Empty<TagCount>();
 
         // Case-insensitive so "K-Pop" and "k-pop" (display name absent → the lowercase token) collapse to one chip.
         var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
@@ -59,12 +82,12 @@ public static class ContentFilterTags
                 counts[tags[t]] = n + 1;
             }
         }
-        if (counts.Count == 0) return Array.Empty<string>();
+        if (counts.Count == 0) return Array.Empty<TagCount>();
 
         var ordered = new List<KeyValuePair<string, int>>(counts.Count);
         foreach (var kv in counts)
             if (kv.Value >= MinTrackCount) ordered.Add(kv);
-        if (ordered.Count == 0) return Array.Empty<string>();
+        if (ordered.Count == 0) return Array.Empty<TagCount>();
 
         // Count descending, then name, so the bar is stable across re-derives (a tie that reorders on every enrichment
         // pass would make the chips visibly shuffle while the list loads).
@@ -75,8 +98,8 @@ public static class ContentFilterTags
         });
 
         int take = Math.Min(MaxChips, ordered.Count);
-        var result = new string[take];
-        for (int i = 0; i < take; i++) result[i] = ordered[i].Key;
+        var result = new TagCount[take];
+        for (int i = 0; i < take; i++) result[i] = new TagCount(ordered[i].Key, ordered[i].Value);
         return result;
     }
 

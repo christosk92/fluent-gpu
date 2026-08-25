@@ -80,7 +80,8 @@ public static class RichText
     public static string? RouteForUri(string? uri)
     {
         if (string.IsNullOrEmpty(uri)) return null;
-        if (uri == "spotify:collection:tracks") return "liked";
+        // Every liked spelling (the user-namespaced form included) — see EntityUri.IsLikedCollection.
+        if (EntityUri.IsLikedCollection(uri)) return "liked";
         // A playback MODULE's own namespace. It is checked before the Spotify parser because it is a different scheme
         // entirely (`wavee:module:<id>:<b64(entityId)>`) and because the route is the uri with the family prefix in
         // front of it — the same `album:spotify:album:…` shape, so pins/tabs/history need no new identity rules.

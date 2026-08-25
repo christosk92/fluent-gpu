@@ -1,4 +1,4 @@
-using FluentGpu.Foundation;
+﻿using FluentGpu.Foundation;
 using FluentGpu.Signals;
 
 namespace FluentGpu.Dsl;
@@ -353,6 +353,22 @@ public sealed record BoxEl : Element
     /// (last on top) — for overlays, scrims, flyouts, the NavigationView Minimal pane. (A flexbox container otherwise.)</summary>
     public bool ZStack { get; init; }
     public bool ClipToBounds { get; init; }
+
+    /// <summary>Clip this node AND its whole subtree to an arbitrary <c>PathData</c> silhouette (gpu-renderer.md §6's
+    /// tier-3 stencil clip) instead of the rectangle <see cref="ClipToBounds"/> gives. Setting it IMPLIES
+    /// <see cref="ClipToBounds"/> — the node's device box still bounds the scope as the scissor, and the geometry's
+    /// AABB narrows it further. Null (the default) leaves clipping exactly as it was.
+    /// <para>HARD EDGE in v1 (the mask discards coverage below 0.5) — an anti-aliased path clip is the offscreen-layer
+    /// route (§7.1), not this one. It also clips HIT-TESTING: a point inside the box but outside the geometry takes no
+    /// hit on this node or anything under it, so click and pixels agree.</para></summary>
+    public PathData? ClipPath { get; init; }
+    /// <summary>Winding rule for <see cref="ClipPath"/> (mirrors <c>PathEl.Rule</c>). Ignored when ClipPath is null.</summary>
+    public FillRule ClipPathRule { get; init; } = FillRule.NonZero;
+    /// <summary>0 (default) = <see cref="ClipPath"/> is already node-local DIP. Paired with
+    /// <see cref="ClipPathViewBoxH"/> &gt; 0, bakes the uniform-fit (min-axis) scale into the clip at record time —
+    /// the same contract <c>PathEl.ViewBoxW/H</c> has, so one authored silhouette clips any box size.</summary>
+    public float ClipPathViewBoxW { get; init; }
+    public float ClipPathViewBoxH { get; init; }
 
     /// <summary>Paint-order opt-in (the declarative <c>z-index</c> of a hovered card): while the pointer hover path
     /// passes through this element (it is hovered, or hover-within, or its hover fade is still decaying), it paints

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using FluentGpu.Animation;
@@ -36,13 +36,15 @@ sealed class TrackList : Component
     const float PadX = TrackRow.PadX;               // shared horizontal inset (header chrome padding == row grid padding)
     const float RowInset = TrackRow.RowInset;       // rounded row-highlight inset (rows pad PadX−RowInset so columns stay header-aligned)
     const float ThumbSize = TrackRow.ThumbSize;
-    const float ActionsColWidth = 40f;              // trailing "..." overflow column (28px button + breathing room)
-    // The two FLEXIBLE lanes, as star weights: Title : Album = 1 : 0.75. Album is the weaker fact, so it never gets more
-    // width than the song title, and the pair splits the space left by the fixed columns rather than one of them
-    // absorbing every squeeze. (Playlist/Liked only — album pages have no Album column.)
-    const float TitleStar = 1f;
-    const float ArtistStar = 0.75f;
-    const float AlbumStar = 0.75f;
+    const float ActionsColWidth = TrackLane.Actions;   // trailing "..." overflow column (28px button + breathing room)
+    // The FLEXIBLE lanes, as star weights: Title : Artist : Album = 1 : 0.75 : 0.75. Artist and Album are the weaker
+    // facts, so neither ever gets more width than the song title, and the group splits the space left by the fixed
+    // columns rather than one of them absorbing every squeeze. (Album is playlist/Liked only — album pages have no
+    // Album column; Artist is Classic's dedicated lane.) Their readable FLOORS live beside the weights in TrackLane and
+    // are what the relief ladder defends — see DetailTrackTableRules.ReliefFor.
+    const float TitleStar = TrackLane.TitleStar;
+    const float ArtistStar = TrackLane.ArtistStar;
+    const float AlbumStar = TrackLane.AlbumStar;
     const int VerticalHeroIndex = 0;
     const int VerticalChromeIndex = 1;
     const int VerticalTrackStart = 2;
@@ -90,6 +92,16 @@ sealed class TrackList : Component
     readonly Signal<bool> _tierMeasured = new(false);          // false until the FIRST real (>0) width measure: while false the
                                                                // seed governs, and the flip is what invalidates a seeded render
                                                                // even when the measured tier equals _tier (see ClampTier)
+    // Identity-first width relief: how many trailing lanes the CURRENT width forces the table to give up before Title
+    // (and Classic's Artist) fall below their readable floor. A second, FINER ladder under the tier — the tier decides
+    // which lanes a width may admit at all, relief decides which of those the star tracks can actually afford. Written
+    // by OnBoundsChanged exactly like _tier, and value-gated the same way, so a drag only re-renders on the frames
+    // where a lane genuinely changes hands.
+    readonly Signal<int> _relief = new(0);
+    // The lane geometry the shape memo last measured, so the bounds callback can re-run the SAME ladder without
+    // rebuilding a ColumnSet out of this component's mutable fields (the snapshot contract on SetFor).
+    DetailTrackTableRules.TrackTableLanes _reliefLanes;
+    float _reliefGap = TrackRow.ColGap, _reliefPad = TrackRow.PadX;
     readonly Signal<int> _visibleCount = new(0);
     readonly Signal<int> _verticalItemCount = new(VerticalTrackStart + 1);
 
@@ -456,7 +468,7 @@ sealed class TrackList : Component
     TrackSize[] TracksFor(in ColumnSet s)
     {
         if (_tracksBySet.TryGetValue(s, out var cached)) return cached;
-        var t = new List<TrackSize>(10) { TrackSize.Px(36f) };
+        var t = new List<TrackSize>(10) { TrackSize.Px(TrackLane.Num) };
         if (s.Heart) t.Add(TrackSize.Px(TrackRow.HeartCol));  // ♥ in the LEFT cluster — between # and the art thumb
         if (s.Thumb) t.Add(TrackSize.Px(ThumbSize));   // dedicated art column: the Title header aligns over the title text, not the art
         t.Add(TrackSize.Star(TitleStar));
@@ -467,19 +479,64 @@ sealed class TrackList : Component
         // zero — the "Title starved to two characters at the widest tier" shape, where # + ♥ + thumb + Album + Added-by
         // + Date + Plays + Tempo + Duration + the trailing lanes could consume the whole tier-0 minimum.
         if (s.Album) t.Add(TrackSize.Star(AlbumStar));
-        if (s.By) t.Add(TrackSize.Px(132f));
-        if (s.Date) t.Add(TrackSize.Px(88f));
-        if (s.Plays) t.Add(TrackSize.Px(84f));
+        if (s.By) t.Add(TrackSize.Px(TrackLane.By));
+        if (s.Date) t.Add(TrackSize.Px(TrackLane.Date));
+        if (s.Plays) t.Add(TrackSize.Px(TrackLane.Plays));
         // Tempo · key — swatch + BPM + one key token (Camelot preferred). Gated by the SAME ShowTempo the row uses,
         // so the width track and the cell can never disagree (a mismatch shifts every later column).
-        if (TrackRow.ShowTempo(s)) t.Add(TrackSize.Px(80f));
-        t.Add(TrackSize.Px(52f));
-        if (s.Video) t.Add(TrackSize.Px(28f));                 // trailing film / hover "…" (after Duration, before Expand)
+        if (TrackRow.ShowTempo(s)) t.Add(TrackSize.Px(TrackLane.Tempo));
+        t.Add(TrackSize.Px(TrackLane.Duration));
+        if (s.Video) t.Add(TrackSize.Px(TrackLane.Video));     // trailing film / hover "…" (after Duration, before Expand)
         if (s.Actions) t.Add(TrackSize.Px(ActionsColWidth));   // trailing "..." when Video is off
-        if (s.Expand) t.Add(TrackSize.Px(26f));                // the expand chevron, last — matches ExpandChevron hit target
+        if (s.Expand) t.Add(TrackSize.Px(TrackLane.Expand));   // the expand chevron, last — matches ExpandChevron hit target
         var arr = t.ToArray();
         _tracksBySet[s] = arr;
         return arr;
+    }
+
+    // ── identity-first width relief ──────────────────────────────────────────────────────────────────────────────────
+    // The tier ladder answers "which lanes may this WIDTH admit"; it cannot answer "which of them can the identity
+    // lanes AFFORD", because it never looks at what the star tracks have left once the fixed lanes have taken theirs.
+    // That gap is why a 650-DIP list still kept Date added + Plays + BPM·Key and paid for them with a one-glyph Title.
+    // The relief ladder (DetailTrackTableRules) closes it: it re-measures the tier's own column set against the
+    // identity floors and hands back the lanes the table can actually pay for. Applied in ONE place — the shape memo,
+    // beside ClampTier — so the header, the rows and the shimmer can never disagree about which lanes are up.
+
+    /// <summary>The set's lane presence as the pure geometry the ladder reasons about. Tempo goes through
+    /// <see cref="TrackRow.ShowTempo"/> so the metric sees the lane the grid will actually build.</summary>
+    static DetailTrackTableRules.TrackTableLanes LanesOf(in ColumnSet s) => new(
+        Heart: s.Heart, Thumb: s.Thumb, Artist: s.Artist, Album: s.Album, By: s.By, Date: s.Date,
+        Plays: s.Plays, Tempo: TrackRow.ShowTempo(s), Video: s.Video, Actions: s.Actions, Expand: s.Expand);
+
+    /// <summary>How many lanes the last measured width forces this set to give up. Also publishes the lane geometry the
+    /// bounds callback re-runs the ladder from: that callback has a fresh width but no snapshot, and this has the
+    /// snapshot but a width that only ever changes underneath it.</summary>
+    int ReliefStepFor(in ColumnSet s)
+    {
+        var lanes = LanesOf(in s);
+        // The grid's own horizontal inset, as the ROWS pay it: the row skin's RowInset margin plus the grid's
+        // padX−RowInset padding is exactly padX, and the header's chrome padding is that same padX (the alignment
+        // invariant). The multi-select check lane is deliberately NOT counted — it is a transient mode, and the floors
+        // are a guarantee about the resting table.
+        float gap = TrackRow.ColGapFor(s.Tier), pad = TrackRow.PadXFor(s.Tier);
+        _reliefLanes = lanes; _reliefGap = gap; _reliefPad = pad;
+        return DetailTrackTableRules.ReliefFor(in lanes, _lastRightW, gap, pad, _relief.Value, _tierMeasured.Value);
+    }
+
+    /// <summary>The set with <paramref name="step"/> lanes yielded. Relief only ever REMOVES a lane the tier already
+    /// admitted, so every downstream consumer — header, rows, shimmer, width tracks, the Classic artist fold in
+    /// <c>RowGrid</c> — follows for free. Tempo is cleared only where the lane was actually up: that flag also means
+    /// "this surface wants BPM·Key at all", and clearing it where the tier had already hidden the lane would fork the
+    /// ColumnSet cache for no visible difference.</summary>
+    static ColumnSet ApplyRelief(in ColumnSet s, int step)
+    {
+        if (step <= 0) return s;
+        var r = DetailTrackTableRules.Relieve(LanesOf(in s), step);
+        return s with
+        {
+            Heart = r.Heart, Thumb = r.Thumb, Artist = r.Artist, Album = r.Album, By = r.By, Date = r.Date,
+            Plays = r.Plays, Tempo = s.Tempo && (r.Tempo || !TrackRow.ShowTempo(s)),
+        };
     }
 
     /// <summary>The x of the parent row's ARTWORK CENTRE, in DIP from the row skin's left edge — the leading fixed
@@ -490,13 +547,15 @@ sealed class TrackList : Component
     /// starting under the title. It also reclaims the dead band to the left of the drawer that a title-aligned indent
     /// left empty.
     ///
-    /// It has to be DERIVED, not constant: the leading cluster is 36 / 76 / 108 wide depending on which columns the
-    /// tier kept, so the original hard-coded <c>PadX + ThumbSize</c> (52) landed mid-♥-column at every wide tier.</summary>
+    /// It has to be DERIVED, not constant: the leading cluster is <c>TrackLane.Num</c> alone, or that plus ♥, or that
+    /// plus ♥ plus half the art column — three different widths depending on which columns the tier kept — so the
+    /// original hard-coded <c>PadX + ThumbSize</c> (52) landed mid-♥-column at every wide tier. It is derived from the
+    /// SAME lane table the width tracks are built from, so shrinking a lane moves the rail with it.</summary>
     static float ArtCentreIndent(in ColumnSet s)
     {
         float gap = TrackRow.ColGapFor(s.Tier);
         float x = TrackRow.PadXFor(s.Tier) - (s.Classic ? 0f : TrackRow.RowInset);   // the grid's own left pad
-        x += 36f;                                                 // the # column
+        x += TrackLane.Num;                                       // the # column
         if (s.Heart) x += gap + TrackRow.HeartCol;
         // Land on the MIDDLE of the art so the rail drops from the centre of the cover, not its edge.
         return s.Thumb ? x + gap + TrackRow.ThumbSize / 2f : x + gap;
@@ -583,7 +642,10 @@ sealed class TrackList : Component
         var rowShape = UseComputed(() =>
         {
             var snap = rowsSnapshot.Value;
-            var set = SetFor(in snap, ClampTier(_tier.Value));
+            // Two ladders, in order: the tier admits the lanes this WIDTH allows, then relief takes back the ones the
+            // identity lanes cannot pay for. Relief is strictly subtractive, so this can never widen the table.
+            var admitted = SetFor(in snap, ClampTier(_tier.Value));
+            var set = ApplyRelief(in admitted, ReliefStepFor(in admitted));
             return new RowShape(set, TracksFor(in set));
         });
         _rowsSnapshot = rowsSnapshot;
@@ -726,16 +788,23 @@ sealed class TrackList : Component
         // mid-control. Icon-only + the tiered search width below always fit each tier's minimum.
         bool labeled = tier <= 1;
         Element? contentFilterBar = ContentFilterBar();
+        Element? lensHeader = LensHeader();
         bool verticalHasContentFilter = _verticalHeader && contentFilterBar is not null;
+        bool verticalHasLens = _verticalHeader && lensHeader is not null;
+        // Both rows are part of the STICKY chrome, so both have to be in the inset the item band is clipped by — a
+        // lens header that was not counted here would leave the rows sliding under it (LikedLens.HeaderExtent is a
+        // constant for exactly this reason: the header must not change height with its content).
         float verticalStickyInset = DetailVerticalLayout.StickyClipInset(
-            verticalHasContentFilter ? ContentFilterChips.VerticalExtent : 0f);
+            (verticalHasContentFilter ? ContentFilterChips.VerticalExtent : 0f)
+            + (verticalHasLens ? LikedLens.HeaderExtent : 0f));
         // ItemsView options are frozen at mount, but the Liked filter rail can arrive after enrichment. Patch the live
         // viewport's shared suffix band in a layout effect so 93→141 DIP updates in place without remounting the list
         // (a remount would race ScrollMemory and can restore a stale offset).
         UseLayoutEffect(() => ApplyVerticalItemBand(verticalStickyInset),
-            DepKey.From(HashCode.Combine(verticalStickyInset, verticalHasContentFilter, _route.Value.Name, _resetEpoch)));
+            DepKey.From(HashCode.Combine(verticalStickyInset, verticalHasContentFilter, verticalHasLens,
+                                         _route.Value.Name, _resetEpoch)));
         Element chrome = Chrome(set, tracks, sort, labeled, tier, checkInset,
-            padX: TrackRow.PadXFor(tier), contentFilterBar: contentFilterBar);
+            padX: TrackRow.PadXFor(tier), contentFilterBar: contentFilterBar, lensHeader: lensHeader);
         int visible = View().Length;
         // "Recommended songs": owned/collaborative playlists only, non-embedded, non-vertical, live edits available. When
         // ON, the header (+ rec rows) are appended AFTER the track rows in the SAME bound list — the list TOTAL is a
@@ -941,6 +1010,11 @@ sealed class TrackList : Component
                 bool measured = _tierMeasured.Peek();
                 int t = TierFor(r.W, _tier.Peek(), measured);
                 if (t != _tier.Peek()) _tier.Value = t;
+                // …then the finer relief ladder, over the lane geometry the shape memo published for the set the tier
+                // admitted. Same value-gate, same first-measure rule: a width that changes no lane costs no re-render.
+                int relief = DetailTrackTableRules.ReliefFor(
+                    in _reliefLanes, r.W, _reliefGap, _reliefPad, _relief.Peek(), measured);
+                if (relief != _relief.Peek()) _relief.Value = relief;
                 if (!measured) _tierMeasured.Value = true;
             },
             Children = _verticalHeader ? [rightBody] : [chrome, rightBody],
@@ -1618,7 +1692,8 @@ sealed class TrackList : Component
     // bar doesn't carry them. Keyed by the labeled state so a tier cross rebuilds cleanly. (Composed from ToolFx, not the
     // CommandBar control, which only does the classic labels-on-open mode.)
     Element Chrome(ColumnSet set, TrackSize[] tracks, DetailTrackSort sort, bool labeled, int tier, bool checkInset,
-                   float padX = PadX, float? padRight = null, Element? contentFilterBar = null)
+                   float padX = PadX, float? padRight = null, Element? contentFilterBar = null,
+                   Element? lensHeader = null)
     {
         Element header = Header(set, tracks, sort, checkInset);
         Element[] chromeChildren;
@@ -1627,7 +1702,11 @@ sealed class TrackList : Component
             // The vertical hero owns the toolbar, but the chip bar still belongs to the LIST — it changes what the
             // rows below contain. Without this the Liked content-filter bar was unreachable in the vertical/hero
             // layout (and with DetailPageLayout=Hero, unreachable at every width) while its fetch still ran.
-            chromeChildren = contentFilterBar is { } verticalChips ? [verticalChips, header] : [header];
+            var verticalStack = new List<Element>(3);
+            if (contentFilterBar is { } verticalChips) verticalStack.Add(verticalChips);
+            if (lensHeader is { } verticalLens) verticalStack.Add(verticalLens);
+            verticalStack.Add(header);
+            chromeChildren = verticalStack.ToArray();
         }
         else if (_showToolbar)
         {
@@ -1635,8 +1714,11 @@ sealed class TrackList : Component
             // TrackRow). Chromeless — no fill/border — so the bar floats on the page backdrop.
             // The content-filter chips sit BETWEEN the command toolbar and the column header: they change what the
             // header's rows contain, so they must read as belonging to the list rather than to the page chrome.
-            var stack = new List<Element>(3) { Toolbar(labeled, tier) };
+            // The lens header sits BELOW the chips and directly above the column header, because it does not offer a
+            // choice — it states what the rows already are, which is the column header's own register.
+            var stack = new List<Element>(4) { Toolbar(labeled, tier) };
             if (contentFilterBar is { } chipBar) stack.Add(chipBar);
+            if (lensHeader is { } lens) stack.Add(lens);
             stack.Add(header);
             chromeChildren =
             [
@@ -1651,7 +1733,7 @@ sealed class TrackList : Component
         }
         else
         {
-            chromeChildren = [header];
+            chromeChildren = lensHeader is { } bareLens ? [bareLens, header] : [header];
         }
 
         Element content = new BoxEl
@@ -1959,6 +2041,21 @@ sealed class TrackList : Component
             scrollKey: "contentfilter:" + _route.Value.Name);
     }
 
+    /// <summary>The Liked Songs LENS header — the row that says which rail fact is currently filtering the list, with a
+    /// per-facet clear. Null everywhere else and null whenever no lens is on, exactly like <see cref="ContentFilterBar"/>
+    /// above; the wording and the elements are <c>LikedLens.Header</c>'s (one file owns both halves of the feature).
+    ///
+    /// <para>The count is <c>View().Length</c> — the visible rows, read through the cached view rather than through
+    /// <c>_visibleCount</c>. The signal is written in a LAYOUT EFFECT, i.e. after this render, so reading it here would
+    /// print the previous filter's count for one frame; <c>View()</c> peeks its snapshot and is already exact.</para></summary>
+    Element? LensHeader()
+    {
+        var model = _full.Value.Value;
+        if (!LikedSongsArtwork.IsLikedUri(model.ContextUri)) return null;
+        var filters = _h.Filters.Value;   // subscribe: the header IS the filter state, so it re-renders with it
+        return LikedLens.Header(in filters, View().Length, _h, CultureInfo.CurrentCulture);
+    }
+
     Element CompactSelectionToolbar()
     {
         int trackStart = TrackStart;
@@ -2231,14 +2328,16 @@ sealed class TrackList : Component
             Color = Tok.TextTertiary, MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis }],
     };
 
-    // The row number lives at the exact centre of its 36-DIP lane. Reserve the same 9-DIP slot on both sides and put
-    // the descending caret only in the right slot, so enabling the indicator never nudges # away from the row numbers.
+    // The row number lives at the exact centre of its TrackLane.Num lane. Reserve the SAME TrackLane.NumCaretSlot on
+    // both sides and put the descending caret only in the right slot, so enabling the indicator never nudges # away
+    // from the row numbers. Both numbers come from the lane table — the header's reservation and the width track the
+    // grid builds from must be one arithmetic, or the "#" drifts off the digits under it.
     Element IndexSortCell(DetailTrackSort sort)
     {
         bool showCaret = sort.Column == SortColumn.Index && sort.Descending;
         Element side(bool trailing) => new BoxEl
         {
-            Width = 9f, Shrink = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+            Width = TrackLane.NumCaretSlot, Shrink = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
             Children = trailing && showCaret ? [Embed.Comp(() => new SortCaret(_h.Sort))] : [],
         };
         return new BoxEl
@@ -2592,7 +2691,8 @@ sealed class TrackList : Component
                 case DetailVerticalItemRole.Chrome:
                     Element? filterBar = _o.ContentFilterBar();
                     child = _o.Chrome(shape.Set, shape.Tracks, _o._h.Sort.Value, labeled, tier,
-                        _o._checksVisible?.Value ?? false, contentFilterBar: filterBar) with { Key = "vitem:chrome" };
+                        _o._checksVisible?.Value ?? false, contentFilterBar: filterBar,
+                        lensHeader: _o.LensHeader()) with { Key = "vitem:chrome" };
                     break;
                 case DetailVerticalItemRole.ExpandableTrack:
                     // The vertical viewport has two persistent prefix slots, but its track suffix must use the SAME
@@ -2900,6 +3000,35 @@ sealed class TrackList : Component
     void ToggleExpanded(string rowKey)
         => _expandedRow.Value = _expandedRow.Peek() == rowKey ? "" : rowKey;
 
+    /// <summary>Everything the expanded row's facts strip needs that a <see cref="Track"/> does not carry.
+    ///
+    /// <para>The two PENDING gates are the surface's own column gating minus the tier — the same expressions
+    /// <see cref="SetFor"/> uses to decide whether the table reserves a Plays / BPM·key lane. That is deliberate: the
+    /// drawer's honest "asked, not answered yet" dash must appear exactly where the table would have shown a lane for
+    /// the same fact, and never on a surface that does not ask for the enrichment at all (search, artist Popular).
+    /// The tier is excluded because a lane the WIDTH dropped is precisely what the drawer exists to restore.</para>
+    ///
+    /// <para>Culture + zone are read HERE, once per open, and injected — the rules file itself reads no ambient clock
+    /// or locale, which is what makes the exact-date format unit-testable.</para></summary>
+    TrackFactsOptions FactsOptionsFor(Track track)
+    {
+        var snap = _rowsSnapshot!.Peek();
+        bool asksTempo = snap.Config.ShowTempo && snap.TempoColumn;
+        bool asksPlays = snap.Config.ShowPlays || (snap.Config.PlaysColumnOptIn && snap.PlaysColumn);
+        var by = AddedByProfile(snap.Model, track);
+        return new TrackFactsOptions(
+            TempoPending: asksTempo && track.TempoBpm is null,
+            PlaysPending: asksPlays && track.PlayCount <= 0,
+            // "Has a music video" is a property of the CATALOGUE ENTRY (the kind-99 association plane) and never a
+            // field on Track — the SAME probe the trailing film lane uses, so a row and its drawer agree.
+            HasVideo: VideoPresence.HasVideo(track),
+            AddedByName: by?.Name is { Length: > 0 } name ? name : track.AddedBy,
+            Culture: CultureInfo.CurrentCulture,
+            Zone: TimeZoneInfo.Local,
+            MajorWord: Loc.Get(Strings.Detail.TrackFacts.Major),
+            MinorWord: Loc.Get(Strings.Detail.TrackFacts.Minor));
+    }
+
     /// <summary>The expandable list slot. A Component (not a plain element) so it re-renders on ITS OWN
     /// subscriptions: the expanded-uri signal and the slot's bound item. That keeps expansion off the parent's render
     /// path — opening a drawer must not re-render the whole list.</summary>
@@ -2924,14 +3053,38 @@ sealed class TrackList : Component
         // destination to seed from: the GIF showed the whole drawer appearing in one 40ms frame. A newly-mounted,
         // keyed body takes the engine's proven PendingEnterReflow path (the same path stock Expander uses), while its
         // exit orphan preserves the painted drawer until the measured row has eased closed.
+        //
+        // TWO specs on TWO nodes — the split is load-bearing, and it is the same one the artist page's album drawer
+        // already uses (DiscoGrid.DrawerResize / DrawerPresence):
+        //
+        //   OUTER (DrawerReveal, the CLIPPING box) — SIZE ONLY. A Position/Opacity terminal here moved
+        //   the clip WINDOW itself, so the drawer's entrance painted Spacing.S ABOVE its own box, over the row it
+        //   hangs from. The window must never move; only its height eases. Enter/Exit stay Active with NO Dx/Dy/
+        //   Opacity because Enter.Active && Size == Reflow is what enrolls the node in PendingEnterReflow — the flag
+        //   IS the mount-reflow opt-in, not a request for a translate. SuppressDescendantTransitions stops the
+        //   drawer's own late-mounting content (version rows that arrive after the expansion fetch) from starting a
+        //   SECOND wave of geometry motion inside a surface that is already projecting: descendants still get their
+        //   final layout, their structural tracks are simply snapped onto it.
+        //
+        //   INNER (DrawerPresence) — the fade + drop-in, and nothing structural. It lives INSIDE the
+        //   clip, so the translate slides the CONTENT under a stationary window instead of dragging the window with
+        //   it. No Size channel: the outer owns height.
         static readonly LayoutTransition DrawerReveal = new(
-            TransitionChannels.Size | TransitionChannels.Opacity | TransitionChannels.Position,
+            TransitionChannels.Size,
+            MotionTok.ControlNormal.ToDynamics(),
+            Enter: new EnterExit(Active: true),
+            Exit: new EnterExit(Active: true),
+            ExitDynamics: MotionTok.ControlFast.ToDynamics(),
+            Size: SizeMode.Reflow,
+            Anchor: SizeAnchor.Leading,
+            SuppressDescendantTransitions: true);
+
+        static readonly LayoutTransition DrawerPresence = new(
+            TransitionChannels.Opacity | TransitionChannels.Position,
             MotionTok.ControlNormal.ToDynamics(),
             Enter: new EnterExit(Dy: -Spacing.S, Opacity: 0f, Active: true),
             Exit: new EnterExit(Dy: -Spacing.XS, Opacity: 0f, Active: true),
-            ExitDynamics: MotionTok.ControlFast.ToDynamics(),
-            Size: SizeMode.Reflow,
-            Anchor: SizeAnchor.Leading);
+            ExitDynamics: MotionTok.ControlFast.ToDynamics());
 
         public override Element Render()
         {
@@ -2984,7 +3137,8 @@ sealed class TrackList : Component
                     OnOpen: (route, arg) => _o._rowsSnapshot?.Peek().Handlers.Go(route, arg),
                     // Minus the rail's own offset inside the gutter, so the RAIL — not the gutter's left edge — is what
                     // lands on the artwork centre.
-                    Indent: Math.Max(0f, ArtCentreIndent(shape.Set) - TrackVersionsPanel.RailOffset));
+                    Indent: Math.Max(0f, ArtCentreIndent(shape.Set) - TrackVersionsPanel.RailOffset),
+                    Facts: _o.FactsOptionsFor(track!));
                 drawer = new BoxEl
                 {
                     Key = "drawer:" + rowKey,
@@ -3006,8 +3160,21 @@ sealed class TrackList : Component
                         : new CornerRadius4(0f, 0f, 6f, 6f),
                     Children =
                     [
-                        Ctx.Provide(TrackVersionsPanel.Props, model,
-                            Embed.Comp(() => new TrackVersionsPanel()) with { Key = "drawer-body:" + rowKey }),
+                        // The presence layer, INSIDE the clip (see DrawerReveal/DrawerPresence above). Stable key so
+                        // it is one node for the drawer's whole life — it enters and exits with the drawer, and never
+                        // re-mounts when the panel's own content grows underneath it.
+                        new BoxEl
+                        {
+                            Key = "drawer-presence:" + rowKey,
+                            Direction = 1,
+                            MinWidth = 0f,
+                            Animate = DrawerPresence,
+                            Children =
+                            [
+                                Ctx.Provide(TrackVersionsPanel.Props, model,
+                                    Embed.Comp(() => new TrackVersionsPanel()) with { Key = "drawer-body:" + rowKey }),
+                            ],
+                        },
                     ],
                 };
             }
@@ -3261,24 +3428,28 @@ sealed class TrackList : Component
         // layouts at once — all three go through this skin.
         if (_acts is { } acts && _menuOverlay is { } menuSvc)
         {
-            IReadOnlyList<MenuFlyoutItem>? ClassicTrackExtras(Track track)
+            // The drawer's FALLBACK verb, in either skin. The chevron is the affordance; this exists only for the
+            // ultra-compact tier, where the table has no room for the chevron lane at all and the drawer would
+            // otherwise be unreachable. Whenever the lane IS up, ShowVersionsMenuItem returns false and the menu
+            // carries nothing — one action must not have two visible controls.
+            IReadOnlyList<MenuFlyoutItem>? TrackDetailsExtras(Track track)
             {
                 bool musicTrack = track.Uri.Length > 0 && EntityUri.KindOf(track.Uri) == EntityKind.Track;
                 bool showVersions = _rowsSnapshot?.Peek().Config.ShowVersions ?? _cfg.ShowVersions;
-                if (!DetailTrackTableRules.ShowClassicVersionsMenu(classic, showVersions, musicTrack)) return null;
+                if (!DetailTrackTableRules.ShowVersionsMenuItem(showVersions, set.Expand, musicTrack)) return null;
 
                 int displayIndex = index.Peek() - trackStart;
                 string rowKey = MembershipDiff.RowKey(track, displayIndex);
                 return
                 [
                     new MenuFlyoutItem(
-                        Loc.Get(Strings.Detail.Versions.VersionsAndFormats),
+                        Loc.Get(Strings.Detail.TrackFacts.ShowDetails),
                         Icons.List,
                         Invoke: () => ToggleExpanded(rowKey)),
                 ];
             }
 
-            Func<Track, IReadOnlyList<MenuFlyoutItem>?>? extras = classic ? ClassicTrackExtras : null;
+            Func<Track, IReadOnlyList<MenuFlyoutItem>?>? extras = TrackDetailsExtras;
             return skin.WithContextMenu(menuSvc, () => TrackContextMenu.Build(
                 acts, _selection, i => DisplayTrack(i, trackStart), index.Peek(), HostInfo,
                 showGoToAlbum: _rowsSnapshot?.Peek().Config.ShowAlbumColumn ?? _cfg.ShowAlbumColumn,

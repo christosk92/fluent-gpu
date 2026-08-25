@@ -698,6 +698,10 @@ float4 PSMain(V i) : SV_Target
         if (_canvas != null) Barrier(cmd, _canvas, ref _canvasState, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
     }
 
+    /// <summary>The canvas RTV. Exposed for the tier-3 stencil clip, which must re-issue OMSetRenderTargets with the
+    /// depth-stencil view attached WITHOUT disturbing the viewport (<see cref="BindCanvas"/> resets it).</summary>
+    public D3D12_CPU_DESCRIPTOR_HANDLE CanvasRtv => Rtv(0);
+
     /// <summary>Re-bind the canvas RTV + full viewport (after the blur passes switched targets), to continue scene drawing.</summary>
     public void BindCanvas(ID3D12GraphicsCommandList* cmd)
     {

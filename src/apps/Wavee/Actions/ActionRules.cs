@@ -65,7 +65,9 @@ public static class ActionRules
     public static string? RouteFor(in ActionTarget target)
     {
         if (target.Uri is not { Length: > 0 } uri) return null;
-        if (uri == "spotify:collection:tracks") return "liked";
+        // Every liked spelling, through THE parser — a card built from a Home/recents section item can carry
+        // `spotify:user:<u>:collection`, and that used to route to a playlist page instead of Liked Songs.
+        if (EntityUri.IsLikedCollection(uri)) return "liked";
         return target.Kind switch
         {
             TargetKind.Album => "album:" + uri,
