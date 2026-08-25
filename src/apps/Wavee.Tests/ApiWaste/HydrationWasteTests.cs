@@ -121,7 +121,7 @@ public class HydrationWasteTests
         var traits = new RecordingTraitPipeline();
         var envelopes = new FakeEnvelopeFetch();
         var pump = new HydrationPump(CancellationToken.None);
-        var policy = new TraitPolicy(() => true);
+        var policy = new TraitPolicy();
         var hydrator = new SpotifyProviderHydrator(store, () => Ctx, new XmCatalogFetch(cache, store), traits, policy,
             HydrationPolicy.Default,
             [
@@ -345,7 +345,7 @@ public class HydrationWasteTests
         var envelopes = new FakeEnvelopeFetch();
         var pump = new HydrationPump(CancellationToken.None);
         var hydrator = new SpotifyProviderHydrator(store, () => Ctx, new XmCatalogFetch(cache, store), traits,
-            new TraitPolicy(() => true), HydrationPolicy.Default,
+            new TraitPolicy(), HydrationPolicy.Default,
             [
                 new AlbumHydration(store, envelopes),
                 new PlayableHydration(Wavee.Core.EntityKind.Track, store, envelopes),

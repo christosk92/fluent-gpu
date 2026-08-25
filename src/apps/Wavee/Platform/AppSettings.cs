@@ -71,6 +71,14 @@ static class WaveeSettings
     // App-wide policy for artwork inside TRACK cells only. TRUE removes the thumbnail lane and returns its width to the
     // title; page heroes, media cards, sidebar covers and the player's identity artwork are deliberately unaffected.
     public static readonly SettingKey<bool> HideTrackArtwork = new("appearance.trackArtwork.hidden", false);
+    // The Liked Songs collection cover treatment, as a LikedCoverStyle int (the ThemeMode / RowDensity / DetailPageLayout
+    // convention — AppDataSettings has no enum arm). The enum's VALUES are the wire, so a treatment added later appends
+    // and a stored int never re-means; anything this build does not define clamps to Stock (LikedCoverRules.FromSetting).
+    // DEFAULT = Lens, not Stock: the point of the feature is that the collection cover is made of the user's own music,
+    // and "replace outright" beats shipping the replacement switched off. It costs a fresh install nothing, because
+    // LikedCoverRules.Effective degrades every treatment to the bundled PNG until the library actually owns enough
+    // distinct artwork to feed it — so first launch still paints exactly what it painted before, with no setting write.
+    public static readonly SettingKey<int> LikedCoverStyle = new("appearance.likedCover.style", (int)Wavee.LikedCoverStyle.Lens);
     // BPM · Key as its own track-list COLUMN. Off by default: tempo/key is enrichment most listeners never scan for, and
     // a permanent column costs width on every row. It is always available inside a row's expander, so this setting only
     // promotes it to a column for the users who do want to scan it (DJ-adjacent use). App-wide, like RowDensity.
@@ -78,8 +86,9 @@ static class WaveeSettings
     // Stream counts as their own track-list COLUMN on the surfaces that do not already have one (playlists, Liked).
     // Off by default for the same reason as TempoColumn: it is enrichment most listeners never scan for, it costs width
     // on every row, and — unlike the album page, whose profile always shows the lane — a playlist's counts are not part
-    // of what the page is FOR. Turning it on is also what authorises the whole-list kind-185 fill for those surfaces,
-    // so an off column costs no network at all. App-wide, like RowDensity and TempoColumn.
+    // of what the page is FOR. VISIBILITY ONLY: kind 185 rides every list surface's trait bundle regardless (see
+    // TraitPolicy), because gating the fetch on this setting permanently starved lists opened while it was off — 185
+    // has no retry surface. App-wide, like RowDensity and TempoColumn.
     public static readonly SettingKey<bool> PlaysColumn = new("detail.playsColumn", false);
     // Track-detail page layout: 0 Automatic (metadata rail on wide windows, the hero on narrow) · 1 Hero (the hero
     // composition at every width — the rail is never composed for track pages; podcasts keep the automatic layout).

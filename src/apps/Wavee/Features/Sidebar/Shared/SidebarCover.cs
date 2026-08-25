@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
@@ -50,12 +51,32 @@ static class SidebarCover
     /// <see cref="SidebarLibraryEntry.Kind"/>: folders get the folder tile, app routes get their <c>ShellNav</c> glyph
     /// tile, tracks and entities get cover art (circular when the entry says so).</summary>
     public static Element ForEntry(in SidebarLibraryEntry e, float size)
-        => e.Kind switch
+        => IsLiked(e.Id, e.Uri) ? Liked(size)
+        : e.Kind switch
         {
             SidebarEntryKind.Folder => Folder(size),
             SidebarEntryKind.AppRoute => RouteGlyph(e.Id, size),
             _ => Art(e.Cover, e.MosaicTiles, e.Id, size, e.Circular || e.Kind == SidebarEntryKind.Artist),
         };
+
+    /// <summary>The liked collection, in either of the two shapes a sidebar entry spells it: the <c>"liked"</c> ROUTE
+    /// id the pin store canonicalizes to (<c>SidebarPinId</c>), or the collection uri itself on a projected entry.</summary>
+    static bool IsLiked(string? id, string? uri)
+        => string.Equals(id, "liked", StringComparison.Ordinal) || LikedSongsArtwork.IsLikedUri(uri);
+
+    /// <summary>Liked Songs' art slot: the user's chosen treatment, at sidebar scale.
+    ///
+    /// <para>This is the ONE place the file's "pure static factory, no component per art slot" rule bends, and
+    /// deliberately: a sidebar shows Liked Songs at most once or twice (a pin, a recently-played row), so this costs a
+    /// bounded couple of mounts, not one per virtualized row. It is worth them — a heart GLYPH tile in a list where
+    /// every neighbour shows cover art made the collection the odd row out, and it ignored the treatment the user
+    /// picked. Sidebar sizes are 20–64, all below the treatment floor, so what actually paints is the flat 2x2 mosaic
+    /// of their newest likes (or the stock PNG when the library cannot feed even that).</para>
+    ///
+    /// <para>The <c>Route(… "Heart")</c> row in <c>SidebarBuiltInDocuments</c> is unaffected: an authored
+    /// <c>IconOverride</c> is resolved by <c>SidebarPaneSlot.LeadingArt</c> BEFORE this factory is asked, so the
+    /// built-in Liked NAV row keeps its heart mark and only library-list appearances take the cover.</para></summary>
+    public static Element Liked(float size) => LikedSongsArtwork.Dynamic(size, Radius(size, false));
 
     /// <summary>The art slot for a PIN. A pin carries only a display cache (name + uri), so the live cover/mosaic are
     /// passed in from the entry projection when it knows the entity and left null when it does not — a pin whose entity

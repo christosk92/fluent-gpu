@@ -85,7 +85,7 @@ public static class SidebarPinId
 
     /// <summary>Liked Songs is a ROUTE pin, not a playlist pin — matching <c>ActionRules.RouteFor</c>'s existing special
     /// case, so a pin made from the detail page and a pin made from a sidebar row are the SAME pin.</summary>
-    public const string LikedSongsUri = "spotify:collection:tracks";
+    public const string LikedSongsUri = EntityUri.LikedCollection;
 
     /// <summary>The one pin identity a store / menu / drop must use. Accepts a pin id, a bare entity uri, or a route
     /// key and returns the canonical id — so a card drop that carried <c>spotify:playlist:…</c> and a menu that looks
@@ -115,7 +115,9 @@ public static class SidebarPinId
     public static string? FromUri(string? uri) => uri switch
     {
         null or "" => null,
-        LikedSongsUri => "liked",                                                       // a ROUTE pin
+        // Every liked spelling collapses to the ONE route pin — a pin made from a recents card that carried
+        // `spotify:user:<u>:collection` must be the same pin as one made from the detail page.
+        var u when EntityUri.IsLikedCollection(u) => "liked",                           // a ROUTE pin
         // Kind comes from the ONE parser (hydration-facade-design.md §1.1). Playlists are pinnable from either provider
         // (spotify AND the session-local `wavee:playlist:*`); album/artist/show stay Spotify-only, as the schemes were.
         var u when EntityUri.KindOf(u) == EntityKind.Playlist => PlaylistPrefix + u,

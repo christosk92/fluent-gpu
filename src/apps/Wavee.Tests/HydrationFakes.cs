@@ -125,6 +125,6 @@ public static class HydrationTestSupport
     public static SpotifyProviderHydrator Hydrator(IStore store, ICatalogFetch catalog, ITraitPipeline traits,
         HydrationPump pump, IReadOnlyList<IKindHydration> ladders, HydrationPolicy? policy = null,
         TraitPolicy? traitPolicy = null)
-        => new(store, Session, catalog, traits, traitPolicy ?? new TraitPolicy(() => false),
+        => new(store, Session, catalog, traits, traitPolicy ?? new TraitPolicy(),
                policy ?? HydrationPolicy.Default, ladders, pump);
 }

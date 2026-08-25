@@ -23,14 +23,14 @@ public class CollectionHydrationTests
         public readonly FakeCatalogFetch Catalog;
         public readonly SpotifyProviderHydrator Hydrator;
 
-        public Harness(bool playsColumn = false)
+        public Harness()
         {
             Catalog = new FakeCatalogFetch(Store, (uris, store) =>
             {
                 foreach (var u in uris)
                     if (u.Kind == EntityKind.Track) store.UpsertTrack(TrackAt(u.Uri, HydrationLevel.Open));
             });
-            var policy = new TraitPolicy(() => playsColumn);
+            var policy = new TraitPolicy();
             Hydrator = HydrationTestSupport.Hydrator(Store, Catalog, Traits, Pump,
                 [new CollectionHydration(Store, policy), new PlayableHydration(EntityKind.Track, Store, new FakeEnvelopeFetch())],
                 traitPolicy: policy);
@@ -69,7 +69,7 @@ public class CollectionHydrationTests
     [Fact]
     public async Task Open_AsksTheLikedTraitBundle()
     {
-        using var h = new Harness(playsColumn: true);
+        using var h = new Harness();
         h.Store.SetSaved("liked", "spotify:track:t1", true, SyncState.Confirmed);
 
         await h.Hydrator.EnsureAsync("spotify:collection:tracks", HydrationLevel.Open);
@@ -83,7 +83,7 @@ public class CollectionHydrationTests
     [Fact]
     public async Task SavedAlbums_GetNoRowTraits()
     {
-        using var h = new Harness(playsColumn: true);
+        using var h = new Harness();
         h.Store.SetSaved("albums", "spotify:album:al1", true, SyncState.Confirmed);
 
         await h.Hydrator.EnsureAsync("spotify:collection:albums", HydrationLevel.Open);

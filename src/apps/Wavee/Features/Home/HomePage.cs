@@ -213,7 +213,9 @@ sealed class HomePage : Component
             HomeCardKind.Podcast or HomeCardKind.Audiobook => Loc.Get(Strings.Podcast.Show),
             HomeCardKind.Episode => Loc.Get(Strings.Podcast.Episodes),
             HomeCardKind.Track => Loc.Get(Strings.Detail.Column.Song),
-            HomeCardKind.Liked => Loc.Get(Strings.Detail.LikedSongs),
+            // Liked deliberately falls through to "Playlist": this caption names the entity TYPE under a title that
+            // already reads "Liked Songs", and the arm that answered LikedSongs here made the tile say its own name
+            // twice. (It was unreachable until the recents mapper started classifying the collection correctly.)
             _ => Loc.Get(Strings.Nav.Playlist),
         };
 

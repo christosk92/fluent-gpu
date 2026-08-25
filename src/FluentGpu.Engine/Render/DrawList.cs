@@ -45,7 +45,21 @@ public enum DrawOp : int
     StrokePath = 20,           // tessellated path stroke (gpu-renderer.md §5): same realization-cache contract as
                                // FillPath, plus a per-frame TrimStart/TrimEnd/dash uniform that never touches the
                                // realization key — so a 60 Hz stroke-trim draw-on still hits the SAME cached tessellation.
+    PushStencilClip = 21,      // tier-3 STENCIL PATH CLIP (gpu-renderer.md §6): a mask pre-pass from a
+                               // PathRealizationCache fill realization; every draw until the matching pop is
+                               // stencil-ref tested against it. DeviceRect is ALSO the tier-1 scissor for the whole
+                               // scope, so damage/headless-balance/scissor machinery keeps working unchanged.
+    PopStencilClip = 22,       // closes the scope; RE-CARRIES the same realization so the backend can DECR_SAT-erase
+                               // an inner nesting level without keeping a geometry stack of its own.
 }
+
+/// <summary>Which CLIP TIER a scope in the command stream establishes (gpu-renderer.md §6's three-tier table). The
+/// as-built stand-in for the spec's <c>ClipEntry.Kind</c> field: there is no ClipTable slab as-built — clips are
+/// stream-scoped push/pop ops — so this exists for DIAGNOSTICS and headless modelling, naming the tier a given scope
+/// belongs to. <see cref="ScissorRect"/> = a plain <see cref="DrawOp.PushClip"/>; <see cref="SdfRoundRect"/> = the
+/// same op carrying a non-zero <see cref="ClipCmd.CornerRadius"/>; <see cref="StencilPath"/> = a
+/// <see cref="DrawOp.PushStencilClip"/> scope.</summary>
+public enum ClipKind : byte { ScissorRect = 0, SdfRoundRect = 1, StencilPath = 2 }
 
 /// <summary>Per-opcode command counts for the current <see cref="DrawList"/>. Stored as scalar fields so the host can
 /// log the failed frame's shape after device loss without reparsing the command stream or retaining payload bytes.</summary>
@@ -55,6 +69,7 @@ public struct DrawListOpcodeStats
     public int DrawGradientRect, PushLayer, PopLayer, DrawGradientStroke, DrawArc, DrawPolylineStroke, DrawTabShape, DrawGlyphRunGradient;
     public int DrawIconMask, DrawVideo, EraseRoundRect;
     public int FillPath, StrokePath;
+    public int PushStencilClip, PopStencilClip;
     /// <summary>PushLayer commands specifically of <see cref="LayerKind.Acrylic"/> (a subset of <see cref="PushLayer"/>,
     /// which does not discriminate kind). Incremented only by the raw <see cref="DrawList.PushLayer"/> emitter — the
     /// Opacity/Blur/EdgeFade convenience methods pass a different <c>Kind</c> and do not touch this field. Lets a caller
@@ -86,6 +101,8 @@ public struct DrawListOpcodeStats
             case DrawOp.EraseRoundRect: EraseRoundRect++; break;
             case DrawOp.FillPath: FillPath++; break;
             case DrawOp.StrokePath: StrokePath++; break;
+            case DrawOp.PushStencilClip: PushStencilClip++; break;
+            case DrawOp.PopStencilClip: PopStencilClip++; break;
         }
     }
 
@@ -111,6 +128,8 @@ public struct DrawListOpcodeStats
         EraseRoundRect += other.EraseRoundRect;
         FillPath += other.FillPath;
         StrokePath += other.StrokePath;
+        PushStencilClip += other.PushStencilClip;
+        PopStencilClip += other.PopStencilClip;
         Acrylic += other.Acrylic;
     }
 
@@ -136,11 +155,13 @@ public struct DrawListOpcodeStats
         EraseRoundRect = EraseRoundRect - other.EraseRoundRect,
         FillPath = FillPath - other.FillPath,
         StrokePath = StrokePath - other.StrokePath,
+        PushStencilClip = PushStencilClip - other.PushStencilClip,
+        PopStencilClip = PopStencilClip - other.PopStencilClip,
         Acrylic = Acrylic - other.Acrylic,
     };
 
     public override readonly string ToString()
-        => $"fill={FillRoundRect} glyph={DrawGlyphRun} glyphGrad={DrawGlyphRunGradient} clip={PushClip}/{PopClip} img={DrawImage} stroke={DrawRoundRectStroke} shadow={DrawShadow} grad={DrawGradientRect}/{DrawGradientStroke} layer={PushLayer}/{PopLayer} arc={DrawArc} poly={DrawPolylineStroke} tab={DrawTabShape} icon={DrawIconMask} video={DrawVideo} erase={EraseRoundRect} fillPath={FillPath} strokePath={StrokePath} acrylic={Acrylic}";
+        => $"fill={FillRoundRect} glyph={DrawGlyphRun} glyphGrad={DrawGlyphRunGradient} clip={PushClip}/{PopClip} img={DrawImage} stroke={DrawRoundRectStroke} shadow={DrawShadow} grad={DrawGradientRect}/{DrawGradientStroke} layer={PushLayer}/{PopLayer} arc={DrawArc} poly={DrawPolylineStroke} tab={DrawTabShape} icon={DrawIconMask} video={DrawVideo} erase={EraseRoundRect} fillPath={FillPath} strokePath={StrokePath} stencil={PushStencilClip}/{PopStencilClip} acrylic={Acrylic}";
 }
 
 /// <summary>How a <see cref="FillRoundRectCmd"/> fills its interior.</summary>
@@ -225,6 +246,26 @@ public readonly record struct DrawGlyphRunGradientCmd(RectF Bounds, StringId Tex
 // scissor; axis-aligned transforms only (the
 // same caveat the tier-1 scissor already has).
 public readonly record struct ClipCmd(RectF DeviceRect, RectF RoundedRect = default, float CornerRadius = 0f);
+// Tier-3 (stencil) path clip — the PUSH (gpu-renderer.md §6). A mask pre-pass draws the realization referenced by
+// VtxStart/VtxCount/IdxStart/IdxCount (PathRealizationCache.Shared's retained slab, the FillPathCmd contract exactly,
+// with the same slab-eviction posture: quarantine window + BeginFrame-only compaction) into the stencil buffer through
+// <see cref="Transform"/>; every draw until the matching PopStencilClip is stencil-ref tested against it.
+// <see cref="DeviceRect"/> is the clip's device-space AABB ALREADY intersected with the enclosing clip by the recorder,
+// so it doubles as the tier-1 SCISSOR for the whole scope — a stencil clip IS also a scissor push, which is why every
+// existing scissor/damage/headless-balance mechanism keeps working with no special case.
+// HARD EDGE BY DESIGN: the mask pass discards fringe pixels below coverage 0.5 (the tessellator's AA fringe must not
+// smear the mask), so the silhouette lands on the half-coverage line at device-pixel resolution. Anti-aliased path
+// clipping is §7.1's PushLayer route, deliberately not this tier.
+// <see cref="RealizationId"/> mirrors <see cref="FillPathCmd.RealizationId"/> (reserved, 0). <see cref="Rule"/> is
+// metadata — the winding is already baked into the triangle soup by tessellation — kept for parity with FillPathCmd
+// and for headless/hit-test validation.
+public readonly record struct PushStencilClipCmd(RectF DeviceRect, int RealizationId,
+    int VtxStart, int VtxCount, int IdxStart, int IdxCount, byte Rule, Affine2D Transform);
+// Tier-3 (stencil) path clip — the POP. RE-CARRIES the push's geometry so the backend can DECR_SAT-erase an INNER
+// nesting level without keeping a geometry stack of its own (a self-describing stream, this file's idiom).
+// <see cref="DeviceRect"/> is the same scope rect the push carried, so the scissor pop is symmetric.
+public readonly record struct PopStencilClipCmd(RectF DeviceRect, int RealizationId,
+    int VtxStart, int VtxCount, int IdxStart, int IdxCount, Affine2D Transform);
 // An image quad. <see cref="ImageId"/> is the ImageCache handle; <see cref="Ready"/>==0 ⇒ draw <see cref="Placeholder"/>
 // (decode in flight). The GPU leaf samples the uploaded texture for the handle when ready (needs-pixels).
 // <see cref="UvRect"/> is the content-fit sub-rect in 0..1 source space ((0,0,1,1) = whole texture): the recorder
@@ -525,6 +566,30 @@ public sealed class DrawList
     public void PopClip(ulong sortKey = 0)
     {
         WriteOp(DrawOp.PopClip);
+        PushSort(sortKey);
+    }
+
+    /// <summary>Push a tier-3 STENCIL PATH CLIP (see <see cref="PushStencilClipCmd"/>): <paramref name="deviceRect"/>
+    /// is the clip's device-space AABB already intersected with the enclosing clip (it doubles as the scope's tier-1
+    /// scissor), and <paramref name="clipPath"/> is the <c>PathRealizationCache.Shared</c> fill realization the mask
+    /// pre-pass draws. <paramref name="rule"/> is the <c>FillRule</c> byte the realization was keyed with
+    /// (diagnostic/replay parity — the triangle soup already bakes it). Pair with <see cref="PopStencilClip"/>.</summary>
+    public void PushStencilClip(in RectF deviceRect, in PathRef clipPath, byte rule, in Affine2D transform, ulong sortKey = 0)
+    {
+        WriteOp(DrawOp.PushStencilClip);
+        WritePayload(new PushStencilClipCmd(deviceRect, 0, clipPath.VtxStart, clipPath.VtxCount,
+            clipPath.IdxStart, clipPath.IdxCount, rule, transform));
+        PushSort(sortKey);
+    }
+
+    /// <summary>Close a tier-3 stencil scope. Re-carries the push's <paramref name="clipPath"/>/
+    /// <paramref name="transform"/> so the backend can DECR_SAT-erase an inner nesting level without a geometry stack
+    /// (see <see cref="PopStencilClipCmd"/>).</summary>
+    public void PopStencilClip(in RectF deviceRect, in PathRef clipPath, in Affine2D transform, ulong sortKey = 0)
+    {
+        WriteOp(DrawOp.PopStencilClip);
+        WritePayload(new PopStencilClipCmd(deviceRect, 0, clipPath.VtxStart, clipPath.VtxCount,
+            clipPath.IdxStart, clipPath.IdxCount, transform));
         PushSort(sortKey);
     }
 
@@ -887,6 +952,24 @@ public sealed class DrawList
                     break;
                 case DrawOp.PopClip:
                     break;   // zero payload — nothing to advance, nothing to patch
+                case DrawOp.PushStencilClip:
+                    // EXACT under translation — the two patches this file already proves, combined: the mask geometry
+                    // is authored-space (only Transform.Dx/Dy carries absolute position, like FillPath) and DeviceRect
+                    // is device space (like ClipCmd). Soundness rests on the same eligibility test the PushClip case
+                    // relies on: SceneRecorder requires ClipComplete at BOTH ends for a span containing clips.
+                    if (!TranslatePayload<PushStencilClipCmd>(ref p, end, dx, dy, static (c, x, y) => c with
+                    {
+                        DeviceRect = OffsetRect(c.DeviceRect, x, y),
+                        Transform = Translate(c.Transform, x, y),
+                    })) return false;
+                    break;
+                case DrawOp.PopStencilClip:
+                    if (!TranslatePayload<PopStencilClipCmd>(ref p, end, dx, dy, static (c, x, y) => c with
+                    {
+                        DeviceRect = OffsetRect(c.DeviceRect, x, y),
+                        Transform = Translate(c.Transform, x, y),
+                    })) return false;
+                    break;
                 case DrawOp.PushLayer:
                     if (!TranslatePushLayer(ref p, end, dx, dy)) return false;
                     break;
@@ -987,6 +1070,21 @@ public sealed class DrawList
                     break;
                 case DrawOp.PopClip:
                     break;   // zero payload — nothing to advance, nothing to patch
+                case DrawOp.PushStencilClip:
+                    // Exact under translation (see TranslateCopiedSpan's PushStencilClip case).
+                    if (!TranslatePayloadStatic<PushStencilClipCmd>(dst, ref p, end, dx, dy, static (c, x, y) => c with
+                    {
+                        DeviceRect = OffsetRect(c.DeviceRect, x, y),
+                        Transform = Translate(c.Transform, x, y),
+                    })) return false;
+                    break;
+                case DrawOp.PopStencilClip:
+                    if (!TranslatePayloadStatic<PopStencilClipCmd>(dst, ref p, end, dx, dy, static (c, x, y) => c with
+                    {
+                        DeviceRect = OffsetRect(c.DeviceRect, x, y),
+                        Transform = Translate(c.Transform, x, y),
+                    })) return false;
+                    break;
                 case DrawOp.PushLayer:
                     if (!TranslatePushLayerStatic(dst, ref p, end, dx, dy)) return false;
                     break;

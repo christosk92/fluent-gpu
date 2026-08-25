@@ -372,6 +372,8 @@ public sealed class AppHost : IDisposable
     private readonly ImageCache _images;
     private readonly Dictionary<NodeHandle, ProjCapture> _projectBefore = new();   // captured presented rects of BoundsAnimated nodes (FLIP "First")
     private readonly List<NodeHandle> _projectionSuppressionRoots = new();          // changed projected containers that own descendant motion this commit
+    private readonly List<NodeHandle> _liveReflowScratch = new(8);                  // nodes with a live LayoutW/H reflow row this commit (ApplyProjections shove suppression)
+    private readonly Dictionary<int, int> _reflowShoveFrames = new(16);             // parent idx → the child idx on a reflowing node's ancestor path ("the reflow-carrying child under this parent")
     private readonly List<RenderContext> _pendingLayoutEffectContexts = new();
     private readonly List<RenderContext> _pendingPassiveEffectContexts = new();
     // Nonzero monotonic per-record epoch (§2.3/E9): baked into each freshly-walked cached-acrylic PushLayerCmd and carried
@@ -4020,6 +4022,24 @@ public sealed class AppHost : IDisposable
             }
         }
 
+        // Reflow-shove suppression: a node whose commit-time position delta is CAUSED by an active reflow (its ancestor
+        // hop crosses a reflowing sibling, so the reflow's growing/shrinking main-axis extent is what moved it) must NOT
+        // position-FLIP. The reflow's per-tick layout re-solve IS the animation — a FLIP translate on top of it is stale
+        // double-compensation, and because every commit during the reflow re-seeds the projection (ReframePosition
+        // restarts), the translate stays perpetually a drawer-height behind and the shoved sibling paints over the rows
+        // underneath it. Map every live reflow node's ancestor path to "the child index that carries the reflow" so the
+        // per-node loop below can tell a shove apart from an independent move.
+        // Cleared FIRST (not just at the tail) so an early-out on any path can never leave a stale frame map behind.
+        _reflowShoveFrames.Clear();
+        _anim.CollectLiveReflowNodes(_liveReflowScratch);   // clears the list itself
+        for (int i = 0; i < _liveReflowScratch.Count; i++)
+        {
+            NodeHandle carrier = _liveReflowScratch[i];
+            if (!_scene.IsLive(carrier)) continue;
+            for (NodeHandle c = carrier, p = _scene.Parent(c); !p.IsNull && _scene.IsLive(p); c = p, p = _scene.Parent(p))
+                _reflowShoveFrames.TryAdd((int)p.Raw.Index, (int)c.Raw.Index);   // first writer wins (nested reflows: the innermost path claims the shared hops)
+        }
+
         foreach (var kv in _projectBefore)
         {
             var n = kv.Key;
@@ -4051,6 +4071,21 @@ public sealed class AppHost : IDisposable
                 }
                 continue;
             }
+            // Reflow-shoved (see the frame map above): drop any in-flight position row, land the node on the geometry the
+            // reflow's own re-solve just wrote, and zero the position delta so nothing re-seeds a translate. Size/opacity
+            // still animate — POSITION is the one channel the reflow owns. Accepted edge: a sibling that genuinely made an
+            // independent move on the SAME commit gets snapped for that one commit; a rare coincidence, bounded to one
+            // frame, and far preferable to the overlap artifact.
+            if (_liveReflowScratch.Count > 0 && IsReflowShoved(n))
+            {
+                _anim.SnapPositionToLayout(n);
+                from = @from with { X = to.X, Y = to.Y };
+                if (MathF.Abs(from.W - to.W) < SizeEps && MathF.Abs(from.H - to.H) < SizeEps)
+                {
+                    if (s_motionDiag) LogMotionNode(n.Raw.Index, "reflow-shove-snap", from, to);
+                    continue;
+                }
+            }
             if (!_anim.TryGetTransition(n, out var spec)) { if (s_motionDiag) LogMotionNode(n.Raw.Index, "no-transition", from, to); continue; }
             if (reduced) spec = spec with { Dynamics = TransitionDynamics.Tween(1f, Easing.Linear) };
             if (s_motionDiag) LogMotionNode(n.Raw.Index, "animate", from, to);
@@ -4059,7 +4094,22 @@ public sealed class AppHost : IDisposable
             _anim.AnimateBounds(n, from, to, spec);
         }
         _projectionSuppressionRoots.Clear();
+        _liveReflowScratch.Clear();
+        _reflowShoveFrames.Clear();
         _projectBefore.Clear();
+    }
+
+    /// <summary>True when <paramref name="n"/>'s commit-time move was CAUSED by an active reflow: some hop of its
+    /// ancestor chain has a reflow-carrying child that is NOT the child we came up through — i.e. the reflowing subtree
+    /// is a SIBLING that shoved us along the main axis. When the carrier IS our own hop we are INSIDE the reflow subtree
+    /// and pass straight through: the reflow's own target/echo guards already own that case.</summary>
+    private bool IsReflowShoved(NodeHandle n)
+    {
+        if (_reflowShoveFrames.Count == 0) return false;
+        for (NodeHandle a = n, p = _scene.Parent(a); !p.IsNull && _scene.IsLive(p); a = p, p = _scene.Parent(p))
+            if (_reflowShoveFrames.TryGetValue((int)p.Raw.Index, out int carrier) && carrier != (int)a.Raw.Index)
+                return true;
+        return false;
     }
 
     private bool TryProjectionRects(NodeHandle n, in ProjCapture captured, float posEps, float sizeEps,
@@ -4107,7 +4157,9 @@ public sealed class AppHost : IDisposable
     /// <summary>SizeMode.Reflow (phase 7): a reflow track just wrote its interpolated size into LayoutInput and dirtied
     /// the PARENT — re-solve those scopes through the standard boundary firewall so siblings reflow at the eased size
     /// before record, then refresh each Trailing-anchored node's child-shift from the fresh bounds (the content's end
-    /// edge rides the animated edge). Runs only on frames where a reflow track wrote — zero work otherwise.</summary>
+    /// edge rides the animated edge). The re-solve also re-exposes each enter-reflow node's NATURAL child extent, so a row
+    /// aimed at "the solved auto size" retargets when async content lands mid-animation instead of snapping at settle.
+    /// Runs only on frames where a reflow track wrote — zero work otherwise.</summary>
     private void RunReflowLayout(Size2 layoutSize)
     {
         var roots = _anim.ReflowRoots;
@@ -4116,6 +4168,54 @@ public sealed class AppHost : IDisposable
         {
             _invalidator.RunDirty(layoutSize);
             _scene.ClearLayoutDirty();
+        }
+        // Natural-extent retarget: a reflow row PINS LayoutInput.Width/Height to its interp every tick, so layout can
+        // never expose a changed natural size — but the node's CHILDREN are still arranged at their natural size inside
+        // that pinned box, so the re-solve just above hands us the real main-axis extent for free. Async content that
+        // lands mid-animation (an image, a fetched list) therefore retargets the row instead of snapping the moment it
+        // settles onto a now-stale target.
+        // The gates are deliberately narrow:
+        //  • NaturalTarget only — enter-reflow rows whose destination WAS "the solved auto size"; a row aimed at an
+        //    explicit number is aimed there on purpose.
+        //  • RestoreTo NaN only — a declared-height node clips below its natural content INTENTIONALLY, and growing the
+        //    target to the natural extent would fight the author's declaration (and SettleRestore's writeback).
+        //  • The 0.5 guard is self-limiting for Grow-filled content: there the child extent IS the interp, so |to - extent|
+        //    stays at the current gap and only a genuine content change clears the threshold. RetargetReflow adds its own
+        //    target guard on top, so a no-op retarget can never restart the tween.
+        for (int i = 0; i < roots.Count; i++)
+        {
+            var r = roots[i];
+            if (!_scene.IsLive(r)) continue;
+            if (_anim.TryGetLiveReflow(r, AnimChannel.LayoutH, out float toH, out bool natH, out float restH)
+                && natH && float.IsNaN(restH))
+            {
+                float extentH = 0f;
+                for (var c = _scene.FirstChild(r); !c.IsNull; c = _scene.NextSibling(c))
+                {
+                    if (_scene.IsOrphan(c)) continue;
+                    ref readonly RectF cb = ref _scene.Bounds(c);   // parent-relative — the same space the Trailing walk below reads
+                    extentH = MathF.Max(extentH, cb.Y + cb.H);
+                }
+                if (extentH > 0f) extentH += _scene.Layout(r).Padding.Bottom;
+                if (extentH > 0.5f && MathF.Abs(toH - extentH) >= 0.5f)
+                    _anim.RetargetReflow(r, AnimChannel.LayoutH, extentH);
+            }
+            // Mirror for the horizontal axis. A node has at most one MAIN-axis reflow row in practice, so the second
+            // TryGetLiveReflow is a miss on every real frame — cheap enough not to need a direction lookup.
+            if (_anim.TryGetLiveReflow(r, AnimChannel.LayoutW, out float toW, out bool natW, out float restW)
+                && natW && float.IsNaN(restW))
+            {
+                float extentW = 0f;
+                for (var c = _scene.FirstChild(r); !c.IsNull; c = _scene.NextSibling(c))
+                {
+                    if (_scene.IsOrphan(c)) continue;
+                    ref readonly RectF cb = ref _scene.Bounds(c);
+                    extentW = MathF.Max(extentW, cb.X + cb.W);
+                }
+                if (extentW > 0f) extentW += _scene.Layout(r).Padding.Right;
+                if (extentW > 0.5f && MathF.Abs(toW - extentW) >= 0.5f)
+                    _anim.RetargetReflow(r, AnimChannel.LayoutW, extentW);
+            }
         }
         for (int i = 0; i < roots.Count; i++)
         {

@@ -46,6 +46,10 @@ static class WaveePicker
     public static readonly Shell PaneCompact = new(200f, float.NaN, 10f, 7f);
     /// <summary>The sidebar design card at full size — the fresh-install chooser.</summary>
     public static readonly Shell Pane = new(224f, float.NaN, 10f, 7f);
+    /// <summary>The Liked Songs cover-style thumbnail: a 76-DIP square miniature inside the shared card shell (92
+    /// wide, 8 of resting inset on each side). Content-sized in height — the miniature IS the card's content, and the
+    /// label sits under the card rather than in it (<see cref="Titled"/>).</summary>
+    public static readonly Shell CoverMini = new(92f, float.NaN, 8f, 5f);
 
     /// <summary>The card shell: fill, radius, the accent border that grows inward on selection, the subtle
     /// hover/press scale. Deliberately carries NO <c>Role</c>/<c>Focusable</c>/<c>OnClick</c> — inside
@@ -193,8 +197,18 @@ static class WaveePicker
 
     /// <summary>Mount <paramref name="count"/> cards as ONE radio group. <paramref name="item"/>(index, isSelected)
     /// builds each card; <paramref name="onChange"/> is the single apply path and fires on click AND on a keyboard
-    /// rove (selection follows focus — the WinUI RadioButtons contract), so it must be safe to call repeatedly.</summary>
-    public static Element Strip(int count, int selected, Func<int, bool, Element> item, Action<int> onChange)
+    /// rove (selection follows focus — the WinUI RadioButtons contract), so it must be safe to call repeatedly.
+    ///
+    /// <para><paramref name="maxColumns"/> defaults to <paramref name="count"/> — ONE row, which is what every
+    /// settings-page picker wants and what this method did unconditionally before. Pass a smaller number for a picker
+    /// whose cards do not fit on a line (the Liked cover flyout's 3-wide grid). Note what that actually arranges:
+    /// RadioButtons is COLUMN-MAJOR (WinUI's ColumnMajorUniformToLargestGridLayout), so the items fill the first
+    /// column top-to-bottom before starting the second — and the keyboard follows the same geometry, Up/Down stepping
+    /// ±1 in DATA order (i.e. down a column) while Left/Right jump column to column at the same row. The default of
+    /// one-item-per-column is the degenerate case of exactly that, which is why the two consumers cannot
+    /// disagree.</para></summary>
+    public static Element Strip(int count, int selected, Func<int, bool, Element> item, Action<int> onChange,
+                                int? maxColumns = null)
         => RadioButtons.Create(
             count,
             i => item(i, i == selected),
@@ -204,8 +218,9 @@ static class WaveePicker
             // same contract the SelectorBar/ComboBox settings rows already rely on.
             selectedIndex: new Signal<int>(selected),
             onChange: onChange,
-            // One item per column ⇒ a single horizontal strip, so Left/Right and Up/Down both move ±1 in data order.
-            maxColumns: Math.Max(1, count),
+            // Default: one item per column ⇒ a single horizontal strip, so Left/Right and Up/Down both move ±1 in
+            // data order. A caller-supplied count is clamped the same way, so 0 or a negative can never reach the grid.
+            maxColumns: Math.Max(1, maxColumns ?? count),
             style: s_bare,
             parts: s_strip);
 }

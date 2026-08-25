@@ -1,4 +1,4 @@
-namespace FluentGpu.Foundation;
+﻿namespace FluentGpu.Foundation;
 
 /// <summary>
 /// A drop shadow / elevation descriptor (CSS box-shadow shape). Lives in Foundation so Scene/Render/Reconciler can
@@ -58,6 +58,30 @@ public readonly record struct PathSpec(
             var g = Geometry;   // local narrowing — a property access (not a local/parameter) isn't reliably
                                  // null-narrowed by the nullable analyzer across `||` the way a local is.
             return g is null || g.VerbCount == 0 || (Fill.A <= 0f && (StrokeColor.A <= 0f || Stroke.IsNone));
+        }
+    }
+}
+
+/// <summary>
+/// An arbitrary-path CLIP applied to a node and its whole subtree (gpu-renderer.md §6's tier-3 stencil clip). Carried
+/// by a <c>BoxEl</c> whose <c>ClipPath</c> is set — which also implies <c>NodeFlags.ClipsToBounds</c>, so the node's
+/// device box still bounds the scope as the tier-1 scissor and the clip's AABB narrows it further.
+/// <para>HARD-EDGE tier by design: the mask pre-pass discards coverage below 0.5, giving a device-pixel silhouette.
+/// Anti-aliased path clipping is §7.1's offscreen-layer route, not this one.</para>
+/// <para><see cref="ViewBoxW"/>/<see cref="ViewBoxH"/> semantics are identical to <see cref="PathSpec"/>'s: 0 (the
+/// default) means <see cref="Geometry"/> is already node-local DIP; non-zero bakes the same uniform-fit (min-axis)
+/// scale into the clip's world transform at record time — and <c>InputDispatcher</c> mirrors it, so the clickable
+/// silhouette and the painted one agree.</para>
+/// </summary>
+public readonly record struct ClipPathSpec(PathData? Geometry, FillRule Rule = FillRule.NonZero,
+    float ViewBoxW = 0f, float ViewBoxH = 0f)
+{
+    public bool IsNone
+    {
+        get
+        {
+            var g = Geometry;   // local narrowing — see PathSpec.IsNone for why a property access isn't enough
+            return g is null || g.VerbCount == 0;
         }
     }
 }

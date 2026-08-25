@@ -40,6 +40,6 @@ public enum TraitSurface : byte
 {
     None,
     AlbumOpen, PlaylistOpen, LikedSongs, ShowOpen, ArtistPopular,
-    Queue, Search, Recents, NowPlaying, PlaysToggle, TrackExpansion,
+    Queue, Search, Recents, NowPlaying, TrackExpansion,
     Credits, PreRelease, UserProfiles, Prefetch, Context,
 }

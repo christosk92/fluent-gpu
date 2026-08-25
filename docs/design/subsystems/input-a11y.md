@@ -241,6 +241,7 @@ HitTest(ptDip, out HitResult result, Span<NodeHandle> routeBuf) -> int routeLen
   return miss
 ```
 
+- **A `ClipPath` node narrows that same early-out to its GEOMETRY** (AS-BUILT 2026-08): with `BoxEl.ClipPath` set, `ClipContains` additionally requires the point to land inside the authored silhouette under its own `FillRule` — same flatten/tolerance and the same ViewBox min-fit mapping the recorder bakes, so click and pixels agree. Still a CLIP culling the subtree, not paint-derived hit-testing (see `gpu-renderer.md` §6.1 and §5.1's one licensed paint-derived exception).
 - **`ReverseChildren` via `LastChild → PrevSibling`** — O(children), zero alloc, uses the doubly-linked Topology column (foundations §4.4 has `LastChild`/`PrevSibling`).
 - **Route captured into a `stackalloc Span<NodeHandle>`** during the descent: the descent is recursive but bounded by tree depth; the route (root→hit) is written into a caller-supplied `stackalloc NodeHandle[MaxDepth]` (typical UI depth ≤ 64; overflow falls back to an arena slice, never the heap). The route is the spine for tunnel/bubble (§6).
 

@@ -81,6 +81,18 @@ static class DetailRail
                 morphKey ?? (connected ? m.MorphKey : null), decodePx: decodePx, saturation: saturation,
                 preferLargest: preferLargest);
 
+    /// <summary>Whether this page's cover is the Liked collection's — i.e. the slot the DYNAMIC treatment
+    /// (<see cref="LikedSongsArtwork.Dynamic"/>) owns instead of the bundled PNG. <c>Cover is null</c> is the router,
+    /// exactly as it is in <see cref="HeroArtwork"/> above (<c>DetailPage.MapLiked</c> sets it null on purpose).
+    ///
+    /// <para>The branch lives at the CALL SITES rather than inside <see cref="HeroArtwork"/> for one deliberate
+    /// reason: <c>DetailTracks.PreviewHeroArt</c> also routes through <see cref="HeroArtwork"/>, and the loading
+    /// skeleton must keep painting the stock PNG (E2). The skeleton deriver walks a STATIC element tree, and a
+    /// hook-bearing component inside it is untested territory; the liked skeleton is cold-open-only, so a one-frame
+    /// stock→treatment cross on the first ever open is honest where a blank hero would not be.</para></summary>
+    internal static bool IsDynamicLikedCover(DetailModel m)
+        => LikedSongsArtwork.IsLikedUri(m.ContextUri) && m.Cover is null;
+
     // The side rail: the cover STRETCHES to fill the column width (a big hero — the image is NEVER shrunk for height).
     // The height fit comes from the TEXT — titleSize (the shell lowers it on a short rail; auto-fits down to 18px) and
     // the description's line cap (descMaxLines) — and only then the rail's own scrollbar (last resort).
@@ -115,7 +127,15 @@ static class DetailRail
             // The cover drags the whole entity. On the FRAMING box, not on the editable cover inside it, so the
             // file-drop target that cover owns stays untouched (see WaveeDetailDrag.Hero).
             Draggable = WaveeDetailDrag.Hero(m, acts),
-            Children = [editable ? PlaylistInlineEdit.Cover(modelSource, cover, saturation: 1.18f) : HeroArtwork(m, cover, saturation: 1.18f)],
+            // Three arms, in precedence order: an editable playlist cover, the LIKED collection's dynamic treatment
+            // with its style picker, and every other page's static art. Only the detail surfaces carry the picker —
+            // the Home/shelf/sidebar liked cards get the bare Dynamic (see LikedCoverPicker's note).
+            Children =
+            [
+                editable ? PlaylistInlineEdit.Cover(modelSource, cover, saturation: 1.18f)
+                : IsDynamicLikedCover(m) ? LikedCoverPicker.Cover(cover, Radii.Card, m.MorphKey)
+                : HeroArtwork(m, cover, saturation: 1.18f),
+            ],
         });
 
         // Identity eyebrow — the type/year fact as ONE tracked-out run, occupying exactly the row the type/year pills
@@ -208,6 +228,13 @@ static class DetailRail
                 : RichText.Of(m.Description!, 12f, Tok.TextSecondary, h.Accent, cover, descMaxLines,
                     u => { if (RichText.RouteForUri(u) is { } k) h.Go(k, null); })));
 
+        // Liked Songs' facts bento — the one page whose rail is otherwise mostly dead space below the CTA cluster.
+        // `Row`, not `LateRow`: the panel owns its own entrance (AlbumTrailing.ReleasePanel's documented contract, and
+        // the same call shape three rows above). `LikedFacts.Has` is the honesty gate — an empty or unstamped library
+        // mounts NOTHING rather than a stack of empty cards (E1).
+        if (LikedFacts.Has(m))
+            kids.Add(Row("rail:likedfacts", LikedFacts.Panel(m, h, outerPadding: false)));
+
         var rail = new BoxEl
         {
             Direction = 1, Gap = 14f, Width = railW, Shrink = 0f,
@@ -216,8 +243,23 @@ static class DetailRail
         };
         // Own vertical scroller (hidden bar by default) — the LAST resort once the TEXT has shrunk and it still overflows
         // (the image stays full-width; the text gave first).
+        //
+        // Liked Songs takes the SAME scroller as everything else, minus the layer fill (below): its rail now carries the
+        // facts bento and is genuinely taller than the shell. The arm this replaces was `Grow = 0, Shrink = 0` with no
+        // `MinHeight = 0` — a scroller that cannot be given a height smaller than its content, i.e. one that grows the
+        // rail instead of scrolling inside it. That was invisible while the liked rail was short; it is a clipped stack
+        // the moment it is not.
         if (LikedSongsArtwork.IsLikedUri(m.ContextUri))
-            return ScrollView(rail) with { Grow = 0f, Shrink = 0f, Width = railW };
+            return new BoxEl
+            {
+                // Fill DELIBERATELY unset — see the note on the general arm below: Liked keeps its established
+                // unlayered treatment, and that is the ONLY difference between the two arms.
+                Direction = 1, Width = railW, Shrink = 0f, ClipToBounds = true,
+                Children =
+                [
+                    ScrollView(rail) with { Grow = 1f, Shrink = 1f, MinHeight = 0f, Width = railW },
+                ],
+            };
 
         // Match LibraryPage.NavPanel exactly: the contextual left column recedes on FillLayerDefault while the detail
         // rows remain on the base content surface. Liked Songs intentionally keeps its established unlayered treatment.
@@ -247,7 +289,12 @@ static class DetailRail
             Key = "compact:cover",
             Width = cover, Height = cover, Corners = CornerRadius4.All(Radii.Card),
             Shadow = Elevation.Card, ClipToBounds = true, Shrink = 0f, OnClick = expand,
-            Children = [HeroArtwork(m, cover, saturation: 1.18f)],
+            // The dynamic liked cover, but NO picker: the whole compact cover is the expand gesture, and a second hit
+            // target inside 48–80 DIP would be a coin flip. LikedCoverArt's own <140 collapse decides what it paints
+            // there (the flat 2x2 collection mosaic, or the stock PNG below four distinct covers).
+            Children = [IsDynamicLikedCover(m)
+                ? LikedSongsArtwork.Dynamic(cover, Radii.Card, m.MorphKey)
+                : HeroArtwork(m, cover, saturation: 1.18f)],
         };
         Element title = new TextEl(m.Title)
         {
@@ -342,7 +389,14 @@ static class DetailRail
                     Width = coverSz, Height = coverSz, Corners = CornerRadius4.All(Radii.Card),
                     Shadow = Elevation.Card, ClipToBounds = true,
                     Draggable = WaveeDetailDrag.Hero(m, acts),
-                    Children = [editable ? PlaylistInlineEdit.Cover(modelSource, coverSz) : HeroArtwork(m, coverSz)],
+                    // The rail's three arms verbatim (the narrow layout is a detail surface too, so it keeps the
+                    // picker); the header cover is 140, which is exactly LikedCoverArt's treatment floor.
+                    Children =
+                    [
+                        editable ? PlaylistInlineEdit.Cover(modelSource, coverSz)
+                        : IsDynamicLikedCover(m) ? LikedCoverPicker.Cover(coverSz, Radii.Card, m.MorphKey)
+                        : HeroArtwork(m, coverSz),
+                    ],
                 },
                 new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, Gap = Spacing.XS, Children = info.ToArray() },
             ],

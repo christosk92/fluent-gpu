@@ -14,13 +14,18 @@ using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
 
-/// <summary>The expanded track drawer: every version of a track, plus the audio format each one plays in.
+/// <summary>The expanded track drawer, in two sections: the track's FACTS (<see cref="TrackFactsStrip"/>) and then
+/// every version of it, with the audio format each one plays in.
 ///
-/// Grouping follows the WIRE, not a guess — kind 99 associations are music videos, kind 98 are alternate audio — and
-/// the thumbnail aspect carries that distinction (16:9 vs square) exactly as the payloads do, so no icon is needed.
+/// <para>The facts come first and are unconditional. The table above this drawer decides its lanes by WIDTH — the tier
+/// ladder and the identity-first relief ladder both yield Plays, BPM·key, Added by and Date added as the list narrows
+/// — so at the widths where a reader most needs the row explained, the row says the least. Opening it must therefore
+/// answer with everything the track carries, not with whatever the current column set happens to have left.</para>
 ///
-/// The track itself is the FIRST entry. That is what gives its own format a home: without it, "play this track as
-/// FLAC" would have nowhere to live, and the drawer would only ever be about other recordings.</summary>
+/// <para>Version grouping follows the WIRE, not a guess — kind 99 associations are music videos, kind 98 are alternate
+/// audio — and the thumbnail aspect carries that distinction (16:9 vs square) exactly as the payloads do, so no icon is
+/// needed. The track itself is the FIRST entry. That is what gives its own format a home: without it, "play this track
+/// as FLAC" would have nowhere to live, and the drawer would only ever be about other recordings.</para></summary>
 sealed class TrackVersionsPanel : Component
 {
     /// <param name="Indent">Where the parent row's TITLE starts, so the drawer lines up under the text rather than
@@ -29,11 +34,16 @@ sealed class TrackVersionsPanel : Component
     /// <param name="OnPlay">Takes the VERSION, not a uri: a music video and its song are the same playable, so a uri
     /// alone cannot say which of them the user asked for — which is precisely why this drawer's video row used to
     /// start the audio track. The host maps the version's kind to a <c>MediaForm</c>.</param>
+    /// <param name="Facts">Everything the facts strip needs that <see cref="Track"/> does not carry — the resolved
+    /// "added by" display name, the kind-99 video presence, the two enrichment-pending gates, and the reader's culture
+    /// + time zone. Resolved by the HOST (which owns the page snapshot and the profile map); this panel only forwards
+    /// it, so the rule that decides which facts appear stays in one engine-free, unit-tested place.</param>
     internal sealed record Model(
         Track Track,
         Action<TrackVersion> OnPlay,
         Action<string, string?> OnOpen,
-        float Indent);
+        float Indent,
+        TrackFactsOptions Facts = default);
     internal static readonly Context<Model?> Props = new(null);
 
     const float VideoThumbW = 76f, VideoThumbH = 43f, AudioThumb = 43f;
@@ -47,6 +57,22 @@ sealed class TrackVersionsPanel : Component
     internal const float RailOffset = RailX;
     /// <summary>Version row height — thumb + its padding + the hairline the rail's stub must meet at mid-height.</summary>
     const float RowH = AudioThumb + 2f * Spacing.XS;
+
+    /// <summary>The stable identity of a version ROW — which is deliberately NOT always its uri.
+    ///
+    /// <para>The music-video row is RESERVED before the expansion fetch answers (see <see cref="Render"/>), and at that
+    /// moment its target uri is precisely the thing not yet known. So the video row is keyed by its KIND instead: kind
+    /// 99 yields at most ONE counterpart, so the kind is a complete identity for it. The pending placeholder and the
+    /// hydrated row therefore mint the SAME key, and data landing reconciles that row IN PLACE — no remove+insert, no
+    /// remount flicker, and no height step for the drawer's reflow to chase.</para>
+    ///
+    /// <para>Every other row keeps its uri key, which is what tells several alternate-audio entries apart.</para></summary>
+    const string VideoRowKey = "v:video";
+    static string RowKey(TrackVersion v) => v.Kind == TrackVersionKind.Video ? VideoRowKey : v.Uri;
+
+    /// <summary>The reserved music-video row while the fetch is in flight. The empty uri IS the placeholder flag: it is
+    /// what <see cref="ConnectedRow"/> routes on, and it keeps the reserved row out of the now-playing comparison.</summary>
+    static readonly TrackVersion PendingVideo = new("", TrackVersionKind.Video, "", null);
 
     readonly Signal<TrackExpansion?> _data = new(null);
 
@@ -72,20 +98,41 @@ sealed class TrackVersionsPanel : Component
 
         var data = _data.Value;
 
-        // Flat, in order: the GUARANTEED self row renders immediately while the fetch is pending, then a proven video
-        // and/or alternate audio joins it when data lands. This keeps the drawer's first presented height truthful:
-        // there is no speculative "video row" to flash for 1–2 frames and collapse when an empty response arrives.
-        // NO group headings — each association kind yields at most one row and the thumbnail aspect says which is which.
+        // Flat, in order: the GUARANTEED self row, then the music video, then any alternate audio. NO group headings —
+        // each association kind yields at most one row and the thumbnail aspect says which is which.
+        //
+        // The video row is RESERVED up front rather than waited for. This inverts the rule this panel used to state
+        // ("never speculate a row that might collapse"), and the reason is the DRAWER, not the panel: the drawer's
+        // height now animates (SizeMode.Reflow), so a row that mounts 200ms into an opening reflow grows the target
+        // by a whole RowH mid-flight — the animation chases a moving destination and the rows below it jump. A row
+        // whose existence is KNOWABLE before the fetch must therefore be reserved, so the first solved height is the
+        // final height. And it is knowable: `Facts.HasVideo` is the same kind-99 association plane this fetch reads
+        // and folds back (the row's own film lane asks it too), so reserving it is repeating a verdict, not guessing.
+        //
+        // Only the genuinely UNKNOWABLE rows may still arrive late — alternate audio has no pre-fetch predicate at all
+        // — and those the engine now eases into the settled height instead of snapping.
         var versions = new List<TrackVersion>(3) { SelfVersion(model.Track) };
         if (data is not null)
         {
             foreach (var v in data.Versions) if (v.Kind == TrackVersionKind.Video) versions.Add(v);
             foreach (var v in data.Versions) if (v.Kind == TrackVersionKind.Audio) versions.Add(v);
         }
+        else if (model.Facts.HasVideo) versions.Add(PendingVideo);
 
-        var rows = new List<Element>(versions.Count);
+        // The facts strip, then a labelled versions section. Two sections, one drawer: the strip states the track and
+        // the rows state its FORMS, and the eyebrow is what stops a lone "This track" row reading as a stray list item
+        // under a wall of tiles.
+        var body = new List<Element>(versions.Count + 2)
+        {
+            TrackFactsStrip.Build(model.Track, model.Facts, model.OnOpen) with { Key = "facts" },
+            WaveeType.Eyebrow(Loc.Get(Strings.Detail.Versions.VersionsAndFormats)) with
+            {
+                Key = "versions-head", Color = Tok.TextTertiary,
+                Margin = new Edges4(0f, Spacing.XS, 0f, 2f),
+            },
+        };
         for (int i = 0; i < versions.Count; i++)
-            rows.Add(ConnectedRow(versions[i], model, svc, isSelf: i == 0, isLast: i == versions.Count - 1,
+            body.Add(ConnectedRow(versions[i], model, svc, isSelf: i == 0, isLast: i == versions.Count - 1,
                                   waveform: i == 0 ? data?.Waveform : null,
                                   isNow: nowUri is { Length: > 0 } && versions[i].Uri == nowUri));
 
@@ -96,7 +143,7 @@ sealed class TrackVersionsPanel : Component
             // 0 (the row's own bottom edge is the separation) and the bottom is one small step, so an expanded row
             // reads as one taller row rather than a panel wedged into the list.
             Padding = new Edges4(model.Indent, 0f, TrackRow.PadX, Spacing.S),
-            Children = rows.ToArray(),
+            Children = body.ToArray(),
         };
     }
 
@@ -121,7 +168,7 @@ sealed class TrackVersionsPanel : Component
     static Element ConnectedRow(TrackVersion v, Model model, Services? svc, bool isSelf, bool isLast,
                                 TrackWaveform? waveform, bool isNow) => new BoxEl
     {
-        Key = "cv:" + v.Uri,
+        Key = "cv:" + RowKey(v),
         Direction = 0, AlignItems = FlexAlign.Stretch, MinWidth = 0f,
         Children =
         [
@@ -156,8 +203,49 @@ sealed class TrackVersionsPanel : Component
                     },
                 ],
             },
-            VersionRow(v, model, svc, isSelf, waveform, isNow),
+            // The rail and the stub are geometry — they are the same whether the entry is hydrated or reserved, which
+            // is exactly why the reserved row can be drawn as a body swap under an unchanged connector.
+            v.Uri.Length == 0 ? PendingVersionRow() : VersionRow(v, model, svc, isSelf, waveform, isNow),
         ],
+    };
+
+    /// <summary>The RESERVED music-video row: the hydrated row's geometry with its content replaced by placeholder
+    /// blocks. Same <c>Height = RowH</c>, same 16:9 thumb slot, same key (<see cref="VideoRowKey"/>) — so when the
+    /// expansion lands this node is PATCHED into the real row rather than swapped for it, and the drawer's height
+    /// never moves. Deliberately inert: no <c>Interactive</c> recipe, no play affordance, no format button, because a
+    /// row that cannot say which video it is must not offer to play one.</summary>
+    static Element PendingVersionRow() => new BoxEl
+    {
+        Key = "ver:" + VideoRowKey,
+        Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S, MinWidth = 0f, Grow = 1f,
+        Height = RowH,
+        Padding = new Edges4(Spacing.XS, 0f, Spacing.XS, 0f),
+        Corners = CornerRadius4.All(Radii.Control),
+        HitTestPassThrough = true,
+        Children =
+        [
+            new BoxEl
+            {
+                Width = VideoThumbW, Height = VideoThumbH, Shrink = 0f,
+                Corners = CornerRadius4.All(Radii.Control), Fill = Tok.FillSubtleSecondary,
+            },
+            new BoxEl
+            {
+                Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = 6f,
+                Children =
+                [
+                    PendingBar(132f, 11f),   // where the video's title will be
+                    PendingBar(84f, 9f),     // where "Music video · 3:44" will be
+                ],
+            },
+        ],
+    };
+
+    /// <summary>One placeholder block, at the token the rest of the app's static placeholders use.</summary>
+    static Element PendingBar(float w, float h) => new BoxEl
+    {
+        Width = w, Height = h, Shrink = 0f, AlignSelf = FlexAlign.Start,
+        Corners = CornerRadius4.All(h / 2f), Fill = Tok.FillSubtleSecondary,
     };
 
     // The row's own track, projected as a version so ONE row factory renders every entry.
@@ -186,7 +274,7 @@ sealed class TrackVersionsPanel : Component
                     Width = 6f, Height = 6f, Corners = CornerRadius4.All(1.5f), Opacity = 0.85f,
                     Fill = WaveePalette.DataDotInk(argb, Tok.Theme), AlignSelf = FlexAlign.Center, Shrink = 0f,
                 });
-            meta.Add(new TextEl(DetailFormat.Bpm(bpm)) { Size = 12f, Color = Tok.TextSecondary });
+            meta.Add(new TextEl(TrackExpandedFacts.Bpm(bpm)) { Size = 12f, Color = Tok.TextSecondary });
             if (KeyLabel(v) is { Length: > 0 } key)
             {
                 meta.Add(new TextEl("·") { Size = 12f, Color = Tok.TextTertiary });
@@ -194,11 +282,11 @@ sealed class TrackVersionsPanel : Component
             }
         }
         if (v.DurationMs > 0)
-            meta.Add(new TextEl(DetailFormat.TrackTime(v.DurationMs)) { Size = 12f, Color = Tok.TextTertiary });
+            meta.Add(new TextEl(TrackExpandedFacts.TrackTime(v.DurationMs)) { Size = 12f, Color = Tok.TextTertiary });
 
         return new BoxEl
         {
-            Key = "ver:" + v.Uri,
+            Key = "ver:" + RowKey(v),
             Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S, MinWidth = 0f, Grow = 1f,
             Height = RowH,
             Padding = new Edges4(Spacing.XS, 0f, Spacing.XS, 0f),
@@ -331,11 +419,9 @@ sealed class TrackVersionsPanel : Component
         _ => Loc.Get(Strings.Detail.Versions.ThisTrack),
     };
 
-    /// <summary>One key notation: Camelot when present, else standard MusicalKey. Mirrors TrackRow.KeyLabel so a row
-    /// and its drawer never spell the same fact two ways.</summary>
-    static string? KeyLabel(TrackVersion v) =>
-        v.CamelotCode is { Length: > 0 } c ? c
-        : v.MusicalKey is { Length: > 0 } k ? k
-        : null;
+    /// <summary>One key notation: Camelot when present, else standard MusicalKey. Forwards to the SHARED formatter
+    /// (<see cref="TrackExpandedFacts.KeyLabel"/>) that the row lane and the facts strip also call, so a row, its
+    /// drawer and its facts can never spell the same fact three ways.</summary>
+    static string? KeyLabel(TrackVersion v) => TrackExpandedFacts.KeyLabel(v.CamelotCode, v.MusicalKey);
 
 }

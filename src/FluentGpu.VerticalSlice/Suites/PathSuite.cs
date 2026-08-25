@@ -1,5 +1,6 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using FluentGpu.Animation;
 using FluentGpu.Dsl;
@@ -38,6 +39,7 @@ static class PathSuite
         StreamSizeGate();
         RecordChecks(strings);
         HitTestChecks(strings);
+        StencilClipChecks(strings);
         HeroChecks(strings);
     }
 
@@ -870,6 +872,8 @@ static class PathSuite
         dl.EraseRoundRect(rect, radii, 1f, identity, 1f);
         dl.FillPath(rect, color, pathRef, (byte)FillRule.NonZero, identity, 1f);
         dl.StrokePath(rect, color, pathRef, 0f, 1f, 0f, 0f, 0, identity, 1f);
+        dl.PushStencilClip(rect, pathRef, (byte)FillRule.NonZero, identity);
+        dl.PopStencilClip(rect, pathRef, identity);
         dl.PopLayer(rect);
         dl.PopClip();
 
@@ -902,7 +906,8 @@ static class PathSuite
             && dev.LastArcs.Count == 1 && dev.LastPolylines.Count == 1 && dev.LastTabShapes.Count == 1
             && dev.LastGlyphGradients.Count == 1 && dev.LastIconMasks.Count == 1 && dev.LastVideos.Count == 1
             && dev.LastErases.Count == 1 && dev.LastFillPaths.Count == 1 && dev.LastStrokePaths.Count == 1
-            && dev.ClipBalance == 0 && dev.LayerBalance == 0;
+            && dev.LastStencilClips.Count == 1 && dev.LastStencilPops.Count == 1
+            && dev.ClipBalance == 0 && dev.LayerBalance == 0 && dev.StencilClipBalance == 0;
         Check("gate.path.stream.sizes [headless-decode]", decodedAll,
             $"rects={dev.LastRects.Count} glyphs={dev.LastGlyphs.Count} clips={dev.LastClips.Count} images={dev.LastImages.Count} "
             + $"strokes={dev.LastStrokes.Count} shadows={dev.LastShadows.Count} gradients={dev.LastGradients.Count} "
@@ -910,7 +915,8 @@ static class PathSuite
             + $"polylines={dev.LastPolylines.Count} tabs={dev.LastTabShapes.Count} glyphGrad={dev.LastGlyphGradients.Count} "
             + $"icons={dev.LastIconMasks.Count} videos={dev.LastVideos.Count} erases={dev.LastErases.Count} "
             + $"fillPaths={dev.LastFillPaths.Count} strokePaths={dev.LastStrokePaths.Count} "
-            + $"clipBal={dev.ClipBalance} layerBal={dev.LayerBalance}");
+            + $"stencil={dev.LastStencilClips.Count}/{dev.LastStencilPops.Count} "
+            + $"clipBal={dev.ClipBalance} layerBal={dev.LayerBalance} stencilBal={dev.StencilClipBalance}");
     }
 
     // ── §1.4 element/scene/reconciler/recorder gates ────────────────────────────────
@@ -1271,6 +1277,327 @@ static class PathSuite
         long after = GC.GetAllocatedBytesForCurrentThread();
 
         Check("gate.path.hit.alloc-zero", after - before == 0, $"allocDelta={after - before}B warm={warm} any={any}");
+    }
+
+    // ── §6 tier-3 stencil path-clip gates (BoxEl.ClipPath -> PushStencilClip/PopStencilClip) ────────
+    // The proving scenario from the design: a 3x3 grid of album-cover-shaped ImageEl leaves clipped to a HEART. These
+    // gates are the headless half — structure (one balanced scope, the payload parity a DECR-erasing backend depends
+    // on, per-command nesting depth), the recorder's ViewBox min-fit + clip intersection, the geometry semantics
+    // (checked with PathHitTest against the RECORDED transform, so no second rasterizer is written for this suite),
+    // input parity, the v1 partial-repaint veto, and zero steady-state allocation. GPU pixels are the separate
+    // `--shot stencilclip` screenshot check.
+    private const string StencilHeartD =
+        "M16 29 C7 21 2 15.5 2 10 A6.5 6.5 0 0 1 16 6.5 A6.5 6.5 0 0 1 30 10 C30 15.5 25 21 16 29 Z";
+    private const float StencilViewBox = 32f;
+    private const float StencilBox = 330f;    // 3 x 110 — the grid exactly fills the clipping box
+    private const float StencilCell = 110f;
+    // ONE minted geometry for the whole lane: a fresh PathContentEpoch would key a fresh realization per fixture, and
+    // the alloc gate needs the cache warm and stable across frames (the FillPath lane's own discipline).
+    private static readonly PathData s_stencilHeart =
+        PathDataParser.Parse(StencilHeartD, PathContentEpoch.Mint(), FillRule.NonZero);
+
+    private static void StencilClipChecks(StringTable strings)
+    {
+        StencilBalanceGate(strings);
+        StencilPayloadParityGate(strings);
+        StencilSubtreeDepthGate(strings);
+        StencilDeviceRectGate(strings);
+        StencilGeometryGate(strings);
+        StencilHitParityGate(strings);
+        StencilNestingGate(strings);
+        StencilFramingGate();
+        StencilAllocZeroGate(strings);
+    }
+
+    // A 3-per-row grid of nine distinctly-tinted ImageEl leaves (no Source: every one records with Ready == 0 and its
+    // placeholder tint, which is all these structural gates need).
+    private static Element StencilImageGrid()
+    {
+        var rows = new Element[3];
+        for (int r = 0; r < 3; r++)
+        {
+            var cells = new Element[3];
+            for (int c = 0; c < 3; c++)
+                cells[c] = new ImageEl
+                {
+                    Width = StencilCell, Height = StencilCell,
+                    Placeholder = ColorF.FromRgba((byte)(30 + 25 * (r * 3 + c)), 70, 190, 255),
+                };
+            rows[r] = new BoxEl { Direction = 0, Children = cells };
+        }
+        return new BoxEl { Direction = 1, Children = rows };
+    }
+
+    private static BoxEl StencilClipBox(params Element[] children) => new()
+    {
+        Width = StencilBox, Height = StencilBox,
+        ClipPath = s_stencilHeart, ClipPathRule = FillRule.NonZero,
+        ClipPathViewBoxW = StencilViewBox, ClipPathViewBoxH = StencilViewBox,
+        Children = children,
+    };
+
+    // Reconcile + lay out + record the heart-clipped nine-cell grid, then decode it on the real headless device.
+    private static HeadlessGpuDevice RecordStencilFixture(StringTable strings, out DrawList dl)
+    {
+        var scene = Asserts.LayoutTree(strings, StencilClipBox(StencilImageGrid()));
+        dl = new DrawList();
+        SceneRecorder.Record(scene, dl);
+        var dev = new HeadlessGpuDevice();
+        dev.SubmitDrawList(dl.Bytes, dl.SortKeys, new FrameInfo(new Size2(400, 400), 1f, ColorF.Transparent));
+        return dev;
+    }
+
+    // gate.path.stencil.balance — ONE scope, opened and closed, with every balance back at zero. A stencil clip is
+    // also a clip level (its DeviceRect is the scope's scissor), so ClipBalance must settle at 0 too.
+    private static void StencilBalanceGate(StringTable strings)
+    {
+        var dev = RecordStencilFixture(strings, out _);
+        bool ok = dev.LastStencilClips.Count == 1 && dev.LastStencilPops.Count == 1
+            && dev.StencilClipBalance == 0 && dev.ClipBalance == 0 && dev.LayerBalance == 0;
+        Check("gate.path.stencil.balance", ok,
+            $"pushes={dev.LastStencilClips.Count} pops={dev.LastStencilPops.Count} "
+            + $"stencilBal={dev.StencilClipBalance} clipBal={dev.ClipBalance} layerBal={dev.LayerBalance}");
+    }
+
+    // gate.path.stencil.payload-parity — the pop RE-CARRIES the push's realization refs, transform and scope rect.
+    // Load-bearing, not cosmetic: that is exactly what lets a backend DECR_SAT-erase an inner nesting level without
+    // keeping a geometry stack of its own (the self-describing-stream contract on PopStencilClipCmd).
+    private static void StencilPayloadParityGate(StringTable strings)
+    {
+        var dev = RecordStencilFixture(strings, out _);
+        bool have = dev.LastStencilClips.Count == 1 && dev.LastStencilPops.Count == 1;
+        var push = have ? dev.LastStencilClips[0] : default;
+        var pop = have ? dev.LastStencilPops[0] : default;
+        bool refsMatch = have
+            && push.VtxStart == pop.VtxStart && push.VtxCount == pop.VtxCount
+            && push.IdxStart == pop.IdxStart && push.IdxCount == pop.IdxCount
+            && push.DeviceRect == pop.DeviceRect
+            && push.Transform == pop.Transform;
+        bool realized = have && push.VtxCount > 0 && push.IdxCount > 0;
+        bool ruleOk = have && push.Rule == (byte)FillRule.NonZero;
+        Check("gate.path.stencil.payload-parity", refsMatch && realized && ruleOk,
+            $"refsMatch={refsMatch} vtx={push.VtxStart}+{push.VtxCount} idx={push.IdxStart}+{push.IdxCount} "
+            + $"rule={push.Rule} (expected {(byte)FillRule.NonZero})");
+    }
+
+    // gate.path.stencil.subtree-depth — every one of the nine leaves records INSIDE the scope (depth 1). The whole
+    // point of the tier is that the clip reaches the SUBTREE, not just the clipping node.
+    private static void StencilSubtreeDepthGate(StringTable strings)
+    {
+        var dev = RecordStencilFixture(strings, out _);
+        bool count = dev.LastImages.Count == 9 && dev.LastImageStencilDepths.Count == 9;
+        bool allInside = count;
+        int firstBad = -1;
+        for (int i = 0; count && i < dev.LastImageStencilDepths.Count; i++)
+            if (dev.LastImageStencilDepths[i] != 1) { allInside = false; firstBad = i; break; }
+        Check("gate.path.stencil.subtree-depth", count && allInside,
+            $"images={dev.LastImages.Count} depths={dev.LastImageStencilDepths.Count} "
+            + $"firstBadIndex={firstBad}");
+    }
+
+    // gate.path.stencil.devicerect — the recorder bakes the ViewBox MIN-FIT into the clip transform (fit = box/viewBox)
+    // and narrows the scope rect to the enclosing clip INTERSECT the node's device box INTERSECT the realized mask's
+    // transformed bounds. Recomputed here through PathRealizationCache.Shared, which also proves cache determinism:
+    // the independent realize must hand back the SAME slab refs the recorder emitted.
+    private static void StencilDeviceRectGate(StringTable strings)
+    {
+        var dev = RecordStencilFixture(strings, out _);
+        bool have = dev.LastStencilClips.Count == 1;
+        var push = have ? dev.LastStencilClips[0] : default;
+
+        const float fit = StencilBox / StencilViewBox;
+        bool fitBaked = have && Near(push.Transform.M11, fit, 0.001f) && Near(push.Transform.M22, fit, 0.001f);
+
+        bool realized = PathRealizationCache.Shared.TryRealizeFill(s_stencilHeart, FillRule.NonZero,
+            MathF.Abs(push.Transform.M11 != 0f ? push.Transform.M11 : 1f), out var fr);
+        bool sameRealization = have && realized && fr.VtxStart == push.VtxStart && fr.VtxCount == push.VtxCount
+            && fr.IdxStart == push.IdxStart && fr.IdxCount == push.IdxCount;
+
+        // The root clip is infinite and the clipping node is the root at the origin, so the enclosing intersection
+        // reduces to the node's own device box.
+        var expected = new RectF(0f, 0f, StencilBox, StencilBox)
+            .Intersect(push.Transform.TransformBounds(fr.Bounds));
+        bool rectOk = have && realized
+            && Near(push.DeviceRect.X, expected.X, 0.01f) && Near(push.DeviceRect.Y, expected.Y, 0.01f)
+            && Near(push.DeviceRect.W, expected.W, 0.01f) && Near(push.DeviceRect.H, expected.H, 0.01f)
+            && push.DeviceRect.W > 0f && push.DeviceRect.W < StencilBox;   // genuinely NARROWED by the silhouette
+
+        Check("gate.path.stencil.devicerect", fitBaked && sameRealization && rectOk,
+            $"fitBaked={fitBaked} (M11={push.Transform.M11:0.####} expected {fit:0.####}) sameRealization={sameRealization} "
+            + $"rect=({push.DeviceRect.X:0.##},{push.DeviceRect.Y:0.##},{push.DeviceRect.W:0.##},{push.DeviceRect.H:0.##}) "
+            + $"expected=({expected.X:0.##},{expected.Y:0.##},{expected.W:0.##},{expected.H:0.##})");
+    }
+
+    // gate.path.stencil.geometry — semantics WITHOUT a rasterizer: map two device points back through the RECORDED
+    // clip transform and ask PathHitTest whether the mask admits them. The box centre (inside the heart) must admit;
+    // the box's top-left corner (inside the box, outside the heart) must not — i.e. the emitted mask really is the
+    // silhouette and not the rectangle.
+    private static void StencilGeometryGate(StringTable strings)
+    {
+        var dev = RecordStencilFixture(strings, out _);
+        bool have = dev.LastStencilClips.Count == 1;
+        var t = have ? dev.LastStencilClips[0].Transform : Affine2D.Identity;
+
+        PathFlatten.Flatten(s_stencilHeart, 0.25f, 1f, out var pts, out var starts, out var counts, out _);
+        var ptsArr = pts.ToArray();
+        var startsArr = starts.ToArray();
+        var countsArr = counts.ToArray();
+
+        bool centreAdmits = have && StencilMaskAdmits(ptsArr, startsArr, countsArr, in t, StencilBox * 0.5f, StencilBox * 0.5f);
+        bool cornerRejects = have && !StencilMaskAdmits(ptsArr, startsArr, countsArr, in t, 4f, 4f);
+
+        Check("gate.path.stencil.geometry", centreAdmits && cornerRejects,
+            $"centre({StencilBox * 0.5f:0.#},{StencilBox * 0.5f:0.#}) admits={centreAdmits}; corner(4,4) rejects={cornerRejects}");
+    }
+
+    // Map a DEVICE point back through the recorded clip transform (axis-aligned, the only shape the recorder bakes)
+    // and test it against the flattened silhouette.
+    private static bool StencilMaskAdmits(Point2[] pts, int[] starts, int[] counts, in Affine2D t, float devX, float devY)
+    {
+        float sx = t.M11 != 0f ? t.M11 : 1f;
+        float sy = t.M22 != 0f ? t.M22 : 1f;
+        return PathHitTest.Contains(pts, starts, counts, FillRule.NonZero, (devX - t.Dx) / sx, (devY - t.Dy) / sy);
+    }
+
+    // gate.path.stencil.hit-parity — the INPUT dual (D7): a point inside the clipping box but outside the heart takes
+    // no hit on the node OR its subtree and falls through to what is beneath; a point inside the heart still resolves
+    // into the clipped subtree. Click and pixels agree.
+    private static void StencilHitParityGate(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("stencil-hit", new Size2(400, 400), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        using var host = new AppHost(app, window, device, fonts, strings, new StencilHitProbe());
+        host.RunFrame();
+
+        var beneath = Child(host.Scene, host.Scene.Root, 0);
+        var clipBox = Child(host.Scene, host.Scene.Root, 1);
+        var inner = Child(host.Scene, clipBox, 0);
+
+        var centreHit = host.Input.DiagHitTest(new Point2(StencilBox * 0.5f, StencilBox * 0.5f));
+        var cornerHit = host.Input.DiagHitTest(new Point2(4f, 4f));
+
+        bool centreOk = !inner.IsNull && centreHit == inner;
+        bool cornerOk = !beneath.IsNull && cornerHit == beneath;
+        Check("gate.path.stencil.hit-parity", centreOk && cornerOk,
+            $"centre resolves into the clipped subtree={centreOk}; corner falls through to what's beneath={cornerOk}");
+    }
+
+    private sealed class StencilHitProbe : Component
+    {
+        public override Element Render() => new BoxEl
+        {
+            Width = StencilBox, Height = StencilBox, ZStack = true,
+            Children =
+            [
+                new BoxEl { Width = StencilBox, Height = StencilBox, Fill = ColorF.FromRgba(10, 200, 10, 255) },   // "beneath"
+                StencilClipBox(new BoxEl { Width = StencilBox, Height = StencilBox, Fill = ColorF.FromRgba(200, 40, 40, 255) }),
+            ],
+        };
+    }
+
+    // gate.path.stencil.nesting — nesting is STREAM nesting (there is no ClipTable/Parent handle as-built): a clip
+    // inside a clip records at depth 2, the pops unwind inner-first, and every balance still lands on zero. The inner
+    // box is deliberately a DIFFERENT size so its scope rect and realization are distinguishable from the outer one.
+    private static void StencilNestingGate(StringTable strings)
+    {
+        const float innerBox = 200f;
+        var tree = StencilClipBox(new BoxEl
+        {
+            Width = innerBox, Height = innerBox,
+            ClipPath = s_stencilHeart, ClipPathRule = FillRule.NonZero,
+            ClipPathViewBoxW = StencilViewBox, ClipPathViewBoxH = StencilViewBox,
+            Children = [new ImageEl { Width = 120f, Height = 120f, Placeholder = ColorF.FromRgba(90, 70, 190, 255) }],
+        });
+        var scene = Asserts.LayoutTree(strings, tree);
+        var dl = new DrawList();
+        SceneRecorder.Record(scene, dl);
+        var dev = new HeadlessGpuDevice();
+        dev.SubmitDrawList(dl.Bytes, dl.SortKeys, new FrameInfo(new Size2(400, 400), 1f, ColorF.Transparent));
+
+        bool counts = dev.LastStencilClips.Count == 2 && dev.LastStencilPops.Count == 2
+            && dev.LastImages.Count == 1 && dev.LastImageStencilDepths.Count == 1;
+        bool balanced = dev.StencilClipBalance == 0 && dev.ClipBalance == 0 && dev.LayerBalance == 0;
+        bool depth2 = counts && dev.LastImageStencilDepths[0] == 2;
+        // Push order is outer-then-inner (the outer fit is larger), pop order is the mirror: the FIRST pop must carry
+        // the INNER push's realization refs.
+        bool outerFirst = counts
+            && Near(dev.LastStencilClips[0].Transform.M11, StencilBox / StencilViewBox, 0.001f)
+            && Near(dev.LastStencilClips[1].Transform.M11, innerBox / StencilViewBox, 0.001f);
+        bool innerPopsFirst = counts
+            && dev.LastStencilPops[0].VtxStart == dev.LastStencilClips[1].VtxStart
+            && dev.LastStencilPops[1].VtxStart == dev.LastStencilClips[0].VtxStart;
+
+        Check("gate.path.stencil.nesting", counts && balanced && depth2 && outerFirst && innerPopsFirst,
+            $"pushes={dev.LastStencilClips.Count} pops={dev.LastStencilPops.Count} images={dev.LastImages.Count} "
+            + $"imageDepth={(counts ? dev.LastImageStencilDepths[0] : -1)} balanced={balanced} "
+            + $"outerFirst={outerFirst} innerPopsFirst={innerPopsFirst}");
+    }
+
+    // gate.path.stencil.framing — the registration/veto surface every stream walker shares. TryBodySize must SIZE both
+    // ops (it is the ONE opcode->payload-size table, and framing is not safety) and agree with Asserts.DrawPayloadSize;
+    // RepaintStreamSafety.Scan must return FALSE on a stream containing a stencil push (the v1 partial-repaint veto is
+    // load-bearing — the clamped-replay x mask-clear-rect interaction is excluded, not relied on); and the opcode stats
+    // must count the pair.
+    private static void StencilFramingGate()
+    {
+        bool pushSized = RepaintStreamSafety.TryBodySize(DrawOp.PushStencilClip, out int pushBody);
+        bool popSized = RepaintStreamSafety.TryBodySize(DrawOp.PopStencilClip, out int popBody);
+        bool sizesAgree = pushSized && popSized
+            && pushBody == DrawPayloadSize(DrawOp.PushStencilClip)
+            && popBody == DrawPayloadSize(DrawOp.PopStencilClip)
+            && pushBody == Unsafe.SizeOf<PushStencilClipCmd>() && popBody == Unsafe.SizeOf<PopStencilClipCmd>();
+
+        var rect = new RectF(0f, 0f, 24f, 24f);
+        var pathRef = new PathRef(0, 3, 0, 3, rect, 0f);
+        var plain = new DrawList();
+        plain.FillRoundRect(rect, default, ColorF.FromRgba(10, 10, 10, 255), Affine2D.Identity, 1f);
+        bool plainSafe = RepaintStreamSafety.Scan(plain.Bytes);
+
+        var stencil = new DrawList();
+        stencil.PushStencilClip(rect, pathRef, (byte)FillRule.NonZero, Affine2D.Identity);
+        stencil.FillRoundRect(rect, default, ColorF.FromRgba(10, 10, 10, 255), Affine2D.Identity, 1f);
+        stencil.PopStencilClip(rect, pathRef, Affine2D.Identity);
+        bool stencilVetoed = !RepaintStreamSafety.Scan(stencil.Bytes);
+        var stats = stencil.OpcodeStats;
+        bool counted = stats.PushStencilClip == 1 && stats.PopStencilClip == 1;
+
+        Check("gate.path.stencil.framing", sizesAgree && plainSafe && stencilVetoed && counted,
+            $"sizesAgree={sizesAgree} (push={pushBody}B pop={popBody}B) plainStreamSafe={plainSafe} "
+            + $"stencilStreamVetoed={stencilVetoed} stats={stats.PushStencilClip}/{stats.PopStencilClip}");
+    }
+
+    // gate.path.stencil.alloc-zero — a settled frame carrying a stencil scope allocates NOTHING on the UI thread and
+    // re-tessellates nothing: the realization is a cache hit and the clip spec is a slab read (phases 6-13 contract).
+    private static void StencilAllocZeroGate(StringTable strings)
+    {
+        var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("stencil-alloc", new Size2(400, 400), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        using var host = new AppHost(app, window, device, fonts, strings, new StencilAllocProbe());
+
+        for (int i = 0; i < 5; i++) host.RunFrame();   // warm: mount + first tessellation + JIT
+
+        int tessBefore = PathRealizationCache.Shared.TessellationCount;
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        for (int i = 0; i < 60; i++) host.RunFrame();
+        long after = GC.GetAllocatedBytesForCurrentThread();
+        int tessAfter = PathRealizationCache.Shared.TessellationCount;
+
+        bool scoped = device.LastStencilClips.Count == 1 && device.StencilClipBalance == 0;
+        Check("gate.path.stencil.alloc-zero", after - before == 0 && tessAfter == tessBefore && scoped,
+            $"allocDelta={after - before}B tessBefore={tessBefore} tessAfter={tessAfter} "
+            + $"stencilScopes={device.LastStencilClips.Count} bal={device.StencilClipBalance}");
+        app.Dispose();
+    }
+
+    private sealed class StencilAllocProbe : Component
+    {
+        public override Element Render() => StencilClipBox(StencilImageGrid());
     }
 
     // ── setup-wizard hero-animation gates (Wavee's nine onboarding heroes, src/apps/Wavee/Features/Setup/Hero*.cs) ──

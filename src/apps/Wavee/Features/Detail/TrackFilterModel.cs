@@ -44,7 +44,24 @@ public readonly record struct TrackFilterState(
     string? CamelotCode = null,
     // Liked Songs content-filter chip: a descriptor tag (kind 6 display name, e.g. "K-Pop"). Exclusive by design —
     // one chip at a time — because the chips are a lens on the list, not a set of accumulating constraints.
-    string? Tag = null)
+    string? Tag = null,
+    // ── The rail's facts, as lenses (Liked Songs) ────────────────────────────────────────────────────────────────
+    // An ARBITRARY saved-date window, in Unix ms, half-open as (After, Before]. 0/0 = off; either endpoint alone is a
+    // valid open-ended half. This is what a sparkline bar means when you click it: the bar counts a rolling 7-day
+    // window anchored on the moment the panel read its clock, which no <see cref="TrackAddedRange"/> preset can name.
+    // MUTUALLY EXCLUSIVE with Added (they answer the same question, "when did I save this?") — use
+    // WithAddedWindow / WithAddedRange rather than a bare `with`, which is what keeps that true.
+    long AddedAfterMs = 0L,
+    long AddedBeforeMs = 0L,
+    // An EXACT artist, keyed by the same identity LikedFactsRules.TopArtists ranks by (uri, else id, else name). Not a
+    // TrackSearchScope.Artist text query: a lens must mean "these songs credit THIS artist", not "these songs contain
+    // this substring somewhere in a credit", and it must not put text the user did not type into the search box.
+    string? ArtistId = null,
+    // The display name for the lens header. Carried WITH the id rather than looked up: the header must be able to name
+    // an artist whose rows the current filter has excluded, and re-deriving the name from the visible rows is exactly
+    // how a header ends up disagreeing with the face that was clicked. Display only — it filters nothing and is NOT
+    // counted in ActiveCount (a name without an id is inert).
+    string? ArtistName = null)
 {
     public static readonly TrackFilterState Default = new();
 
@@ -68,9 +85,31 @@ public readonly record struct TrackFilterState(
             if (Tempo != TrackTempoBand.Any) n++;
             if (!string.IsNullOrEmpty(CamelotCode)) n++;
             if (!string.IsNullOrEmpty(Tag)) n++;
+            // One window is ONE facet however many endpoints it names — "(Aug 11, Aug 18]" is a single answer to a
+            // single question, and counting the two halves separately would put a 2 on the funnel for one bar click.
+            if (AddedAfterMs != 0L || AddedBeforeMs != 0L) n++;
+            if (!string.IsNullOrEmpty(ArtistId)) n++;
             return n;
         }
     }
+
+    /// <summary>Set the coarse saved-date preset, clearing any explicit window. The two are one facet wearing two
+    /// faces; leaving both set would AND a preset against a window and quietly return fewer rows than either lens
+    /// promised.</summary>
+    public TrackFilterState WithAddedRange(TrackAddedRange range)
+        => this with { Added = range, AddedAfterMs = 0L, AddedBeforeMs = 0L };
+
+    /// <summary>Set (or, with 0/0, clear) the explicit saved-date window, clearing the coarse preset. See
+    /// <see cref="WithAddedRange"/>.</summary>
+    public TrackFilterState WithAddedWindow(long afterMs, long beforeMs)
+        => this with { AddedAfterMs = afterMs, AddedBeforeMs = beforeMs, Added = TrackAddedRange.Any };
+
+    /// <summary>Set (or, with a null id, clear) the exact-artist lens. The display name travels with the id and is
+    /// dropped with it, so a stale name can never outlive the filter it described.</summary>
+    public TrackFilterState WithArtist(string? artistId, string? displayName = null)
+        => artistId is { Length: > 0 } id
+            ? this with { ArtistId = id, ArtistName = displayName }
+            : this with { ArtistId = null, ArtistName = null };
 }
 
 /// <summary>Pure filter predicate shared by production and headless tests.</summary>
@@ -100,6 +139,8 @@ public static class TrackFilterModel
         if (filter.Origin == TrackOriginFilter.Local && track.Origin != TrackOrigin.Local) return false;
 
         if (filter.Tag is { Length: > 0 } tag && !HasTag(track.Tags, tag)) return false;
+        if (filter.ArtistId is { Length: > 0 } artistId && !HasArtist(track.Artists, artistId)) return false;
+        if (!MatchesAddedWindow(track.AddedAt, filter.AddedAfterMs, filter.AddedBeforeMs)) return false;
         if (!MatchesTempo(track.TempoBpm, filter.Tempo)) return false;
         if (filter.CamelotCode is { Length: > 0 } key
             && !string.Equals(track.CamelotCode, key, StringComparison.OrdinalIgnoreCase)) return false;
@@ -134,6 +175,47 @@ public static class TrackFilterModel
         for (int i = 0; i < tags.Count; i++)
             if (string.Equals(tags[i], tag, StringComparison.OrdinalIgnoreCase)) return true;
         return false;
+    }
+
+    /// <summary>Exact credited-artist match, against the same identity ladder <c>LikedFactsRules.TopArtists</c> keys by
+    /// (uri, else id, else name) — the two must agree or the face you clicked and the rows you get are two different
+    /// artists. EVERY credit counts, not just the primary: a feature credit is a real reason a track is in the library,
+    /// and the fact that produced this lens counted it that way too.</summary>
+    static bool HasArtist(IReadOnlyList<ArtistRef>? artists, string key)
+    {
+        if (artists is null) return false;
+        for (int i = 0; i < artists.Count; i++)
+        {
+            var a = artists[i];
+            if (a is null) continue;
+            if (string.Equals(a.Uri, key, StringComparison.Ordinal)) return true;
+            if (string.Equals(a.Id, key, StringComparison.Ordinal)) return true;
+            // Name only as the LAST rung, and only when the credit carries no identifier at all — otherwise two
+            // different artists who share a display name would collapse into one lens.
+            if (string.IsNullOrEmpty(a.Uri) && string.IsNullOrEmpty(a.Id)
+                && string.Equals(a.Name, key, StringComparison.OrdinalIgnoreCase)) return true;
+        }
+        return false;
+    }
+
+    /// <summary>The explicit saved-date window, half-open as <c>(after, before]</c>. 0 on an endpoint means "unbounded
+    /// on that side", so the window can be a single half; 0/0 is the whole filter off.
+    ///
+    /// <para>A track with NO saved date never matches a window that is on. That is the same rule
+    /// <see cref="MatchesAdded"/> applies to the coarse presets, and it is the honest one: the sparkline bar this lens
+    /// came from counted stamped likes only, so an unstamped row was never part of the number the user clicked.</para>
+    ///
+    /// <para>Half-open, and in that direction, because the buckets are ROLLING windows laid end to end — bucket k ends
+    /// exactly where bucket k+1 begins. A closed-both-ends test would count a like that landed on the seam in two bars,
+    /// and the twelve lenses would sum to more than the twelve bars do.</para></summary>
+    static bool MatchesAddedWindow(DateTimeOffset? addedAt, long afterMs, long beforeMs)
+    {
+        if (afterMs == 0L && beforeMs == 0L) return true;
+        if (addedAt is not { } at) return false;
+        long ms = at.ToUnixTimeMilliseconds();
+        if (afterMs != 0L && ms <= afterMs) return false;
+        if (beforeMs != 0L && ms > beforeMs) return false;
+        return true;
     }
 
     static bool MatchesTempo(double? bpm, TrackTempoBand band)

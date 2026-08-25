@@ -55,6 +55,39 @@ public readonly record struct EntityUri(string Uri, string Provider, EntityKind 
             : new EntityUri(uri, provider, kind, IdOf(uri));
     }
 
+    /// <summary>The canonical Liked Songs uri — the one spelling routes, pin ids, now-playing matches and the
+    /// collection cover are all written with.</summary>
+    public const string LikedCollection = "spotify:collection:tracks";
+
+    /// <summary>Is this uri the Liked Songs collection, in ANY of the spellings the wire uses? THE predicate — the
+    /// canonical form, the user-namespaced <c>spotify:user:&lt;u&gt;:collection</c> that Home and recents section items
+    /// carry, and the facet-suffixed <c>spotify:user:&lt;u&gt;:collection:tracks</c>.
+    ///
+    /// <para>Sibling collections must answer NO: <c>spotify:collection:{albums|artists|shows|episodes}</c> are separate
+    /// surfaces. So the tail after <c>:collection</c> has to be absent or literally <c>tracks</c>.</para>
+    ///
+    /// <para>Here rather than at the call sites because the app had FOUR copies of
+    /// <c>uri == "spotify:collection:tracks"</c>, all of them blind to the user-namespaced form — which is how a
+    /// recents card could carry the collection and be classified as an ordinary playlist.</para></summary>
+    public static bool IsLikedCollection(string? uri)
+    {
+        if (string.IsNullOrEmpty(uri)) return false;
+        if (string.Equals(uri, LikedCollection, StringComparison.Ordinal)) return true;
+        if (KindOf(uri) != EntityKind.Collection) return false;
+        // LAST occurrence, not the first: the segment we want is the trailing one, and a username that happens to
+        // start with "collection" (`spotify:user:collectionX:collection`) would otherwise match the wrong span.
+        int at = uri.LastIndexOf(":collection", StringComparison.Ordinal);
+        if (at < 0) return false;
+        var tail = uri.AsSpan(at + ":collection".Length);
+        return tail.Length == 0 || tail.SequenceEqual(":tracks");
+    }
+
+    /// <summary>Every liked spelling folded to <see cref="LikedCollection"/>; anything else passed through untouched.
+    /// A producer hands this to the card so the artwork, the nav dispatcher and the now-playing match all compare one
+    /// string.</summary>
+    public static string CanonicalLiked(string? uri)
+        => IsLikedCollection(uri) ? LikedCollection : uri ?? "";
+
     /// <summary>The kind alone — the allocation-free routing primitive.</summary>
     public static EntityKind KindOf(string uri)
     {

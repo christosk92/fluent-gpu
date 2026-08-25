@@ -44,7 +44,7 @@ public class ShowHydrationTests
                             break;
                     }
             });
-            var policy = new TraitPolicy(() => false);
+            var policy = new TraitPolicy();
             Hydrator = HydrationTestSupport.Hydrator(Store, Catalog, Traits, Pump,
                 [new ShowHydration(Store, policy), new PlayableHydration(EntityKind.Episode, Store, new FakeEnvelopeFetch())],
                 traitPolicy: policy);

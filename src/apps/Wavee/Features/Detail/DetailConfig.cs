@@ -218,26 +218,16 @@ internal static class DetailFormat
             : local.ToString("d MMM yyyy", System.Globalization.CultureInfo.CurrentCulture);
     }
 
-    /// <summary>Per-track duration "m:ss" (or "h:mm:ss").</summary>
-    public static string TrackTime(long ms)
-    {
-        var t = TimeSpan.FromMilliseconds(ms);
-        return t.TotalHours >= 1
-            ? $"{(int)t.TotalHours}:{t.Minutes:00}:{t.Seconds:00}"
-            : $"{t.Minutes}:{t.Seconds:00}";
-    }
+    /// <summary>Per-track duration "m:ss" (or "h:mm:ss"). Forwards to <see cref="TrackExpandedFacts.TrackTime"/>, the
+    /// engine-free copy Wavee.Tests source-includes: the duration LANE and the expanded row's Duration fact are one
+    /// formatter, so a row and its own drawer can never disagree about a track's length.</summary>
+    public static string TrackTime(long ms) => TrackExpandedFacts.TrackTime(ms);
 
     /// <summary>Tempo readout — "101" for a whole BPM, "101.5" when the fraction is meaningful. Spotify reports tempo
     /// as a double (101.0099…), and a full-precision figure in a narrow lane is noise; one decimal is the most a
     /// listener can act on. Invariant culture: this is a technical figure, not a localised quantity, and a comma
     /// decimal separator next to the key label reads as a list.</summary>
-    public static string Bpm(double bpm)
-    {
-        double rounded = Math.Round(bpm, 1, MidpointRounding.AwayFromZero);
-        return Math.Abs(rounded - Math.Round(rounded)) < 0.05
-            ? ((int)Math.Round(rounded)).ToString(System.Globalization.CultureInfo.InvariantCulture)
-            : rounded.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);
-    }
+    public static string Bpm(double bpm) => TrackExpandedFacts.Bpm(bpm);
 
     /// <summary>Total-duration phrase "2 hr 59 min" / "47 min".</summary>
     public static string TotalTime(long ms)

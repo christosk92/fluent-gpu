@@ -73,6 +73,24 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // rect nested inside a rounded surface keeps clipping the surface's corners. RoundRect-pipeline instances carry
     // the current entry; other pipelines stay scissor-only (the honest scope documented on ClipCmd).
     private readonly List<(RectF Rect, float Radius)> _roundedClipStack = new(16);
+    // ── Tier-3 STENCIL PATH CLIP (gpu-renderer.md §6) ────────────────────────────────────────────────────────────────
+    // ONE lazily-created, swapchain-sized D24_UNORM_S8_UINT surface, kept in DEPTH_WRITE for its whole life (no
+    // barriers, ever) and ATTACHED ONLY INSIDE a scope — so every existing PSO keeps DSVFormat = UNKNOWN and every
+    // frame that never clips to a path is byte-identical to before. Single-sample, like every pipeline here, which is
+    // how S6's "sample-count-matched DSV" requirement is met.
+    private ID3D12Resource* _stencilDsv;
+    private ID3D12DescriptorHeap* _dsvHeap;
+    private int _stencilW, _stencilH;
+    // The live MASKED nesting depth == the stencil ref value programmed with OMSetStencilRef. A scope that could not be
+    // masked (degenerate geometry, an unsupported target, a PSO that would not build) does NOT advance it — it is a
+    // plain scissor scope nested inside whatever mask already applies, which is exactly the conservative answer.
+    private int _stencilDepth;
+    // Per-scope: did THIS scope write a mask level? Popping an unmasked scope must not DECR a level it never INCR'd.
+    private readonly List<bool> _stencilScopeMasked = new(8);
+    // Is the DSV attached to the currently bound render target? Stencil-testing a draw with no DSV bound is invalid, so
+    // every "did the target change under us" path clears this and the two bind chokepoints re-establish it.
+    private bool _stencilDsvBound;
+    private int _frameStencilClips, _frameStencilFallback;
     private AcrylicCompositor? _acrylic;
     private OpacityLayerCompositor? _opacity;
     // ALL layered primary-stream frames composite DIRECTLY on the back buffer (no full-window offscreen canvas + blit).
@@ -318,6 +336,36 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     private void ClearRootDamage() { _rootDamageActive = false; _cullActive = false; }
 
     private void InvalidateCmdState() { _boundPipe = BoundPipe.None; _sharedSdfStateBound = false; _scissorValid = false; }
+
+#if DEBUG
+    // Non-null only when FG_D3D12_DEBUG enabled the debug layer at device creation (see InitDevice).
+    private ID3D12InfoQueue* _infoQueue;
+    private byte[]? _infoMsgScratch;   // allocated on the first drain — a DEBUG run without the layer holds nothing
+
+    /// <summary>Mirror the debug layer's stored messages to stderr, once per submit, then clear the queue. No-op (and
+    /// no allocation) when the layer was never enabled — which is every normal run, and every Release build.</summary>
+    private void DrainDebugLayerMessages()
+    {
+        if (_infoQueue == null) return;
+        ulong n = _infoQueue->GetNumStoredMessages();
+        if (n == 0) return;
+        byte[] scratch = _infoMsgScratch ??= new byte[16384];
+        for (ulong i = 0; i < n; i++)
+        {
+            nuint len = 0;
+            if ((int)_infoQueue->GetMessage(i, null, &len) < 0 || len == 0 || len > (nuint)scratch.Length) continue;
+            fixed (byte* buf = scratch)
+            {
+                var msg = (D3D12_MESSAGE*)buf;
+                if ((int)_infoQueue->GetMessage(i, msg, &len) < 0) continue;
+                int chars = msg->DescriptionByteLength > 0 ? (int)msg->DescriptionByteLength - 1 : 0;
+                string text = chars > 0 ? (Marshal.PtrToStringAnsi((nint)msg->pDescription, chars) ?? "") : "";
+                Console.Error.WriteLine($"[d3d12.debug] {msg->Severity} #{(int)msg->ID}: {text}");
+            }
+        }
+        _infoQueue->ClearStoredMessages();
+    }
+#endif
 
     // DirectComposition (Mica path): the swapchain is composed onto the HWND so DWM's Mica shows through transparent pixels.
     private IDCompositionDevice* _dcomp;
@@ -754,11 +802,17 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         if (Diag.EnvFlag("FG_D3D12_DEBUG"))
         {
             ID3D12Debug* dbg = null;
-            if ((int)D3D12GetDebugInterface(__uuidof<ID3D12Debug>(), (void**)&dbg) >= 0 && dbg != null)
+            bool armed = (int)D3D12GetDebugInterface(__uuidof<ID3D12Debug>(), (void**)&dbg) >= 0 && dbg != null;
+            if (armed)
             {
                 dbg->EnableDebugLayer();
                 dbg->Release();
             }
+            // Say so out loud. D3D12GetDebugInterface FAILS unless the "Graphics Tools" optional feature is installed,
+            // and a silent failure here is how "the debug layer was clean" becomes a claim about a layer that never ran.
+            Console.Error.WriteLine(armed
+                ? "[d3d12.debug] debug layer ENABLED (validation messages will be mirrored to stderr)"
+                : "[d3d12.debug] debug layer UNAVAILABLE — install the Windows 'Graphics Tools' optional feature");
             flags |= DXGI.DXGI_CREATE_FACTORY_DEBUG;
         }
 #endif
@@ -781,6 +835,36 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         }
         _device = device;
         SetName(_device, "FluentGpu.Device");
+#if DEBUG
+        // FG_D3D12_DEBUG armed the debug layer above; grab its message queue so the validation output actually reaches
+        // a human. Without this the layer writes only to the Win32 debug output, which a console/AOT run never shows —
+        // i.e. "the debug layer is clean" would be an assertion nobody in this repo could check.
+        if (Diag.EnvFlag("FG_D3D12_DEBUG"))
+        {
+            ID3D12InfoQueue* iq;
+            if ((int)_device->QueryInterface(__uuidof<ID3D12InfoQueue>(), (void**)&iq) >= 0 && iq != null) _infoQueue = iq;
+            Console.Error.WriteLine($"[d3d12.debug] info queue {(_infoQueue != null ? "attached" : "UNAVAILABLE")}");
+            // The default storage filter DENIES storage (messages only go to the Win32 debug output), so an explicit
+            // allow-list is what makes the queue readable at all — without it GetNumStoredMessages is always 0 and
+            // "no validation errors" would be vacuously true. INFO/MESSAGE are excluded deliberately: the runtime emits
+            // hundreds of them per frame and they would bury an actual ERROR.
+            if (_infoQueue != null)
+            {
+                _infoQueue->ClearStorageFilter();
+                _infoQueue->SetMuteDebugOutput(BOOL.FALSE);
+                D3D12_MESSAGE_SEVERITY* sev = stackalloc D3D12_MESSAGE_SEVERITY[3]
+                {
+                    D3D12_MESSAGE_SEVERITY.D3D12_MESSAGE_SEVERITY_CORRUPTION,
+                    D3D12_MESSAGE_SEVERITY.D3D12_MESSAGE_SEVERITY_ERROR,
+                    D3D12_MESSAGE_SEVERITY.D3D12_MESSAGE_SEVERITY_WARNING,
+                };
+                D3D12_INFO_QUEUE_FILTER filter = default;
+                filter.AllowList.NumSeverities = 3;
+                filter.AllowList.pSeverityList = sev;
+                _infoQueue->PushStorageFilter(&filter);
+            }
+        }
+#endif
 
         // Publish a coarse GPU power tier (GpuProfile) so UI quality defaults can scale to the hardware WITHOUT a render-
         // hardware seam contract. UMA == integrated/APU (and WARP) — shares system RAM, a fraction of a discrete GPU's
@@ -1167,6 +1251,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _framePipeBinds = 0; _framePipeBindsSkipped = 0;
         _frameScissorSets = 0; _frameScissorSkipped = 0;
         _frameSegments = 0; _frameRuns = 0; _frameClipOps = 0; _frameLayerOps = 0;
+        _frameStencilClips = 0; _frameStencilFallback = 0;
         _sceneCurCat = CatNone; _sceneMarkCount = 0; _sceneCatCount[_frameIndex] = 0;   // reset the per-category scene-split timeline (FG_GPU_TIMING)
         _blurCacheHit = 0; _blurCacheMiss = 0; _blurHoldHit = 0; _blurHoldFallback = 0; _blurHoldStale = 0;
         _edgeFadeStripFallbacks = 0;   // reset HERE (not only in SubmitWithLayers) so a layer-free frame reports 0, not the last layered frame's count
@@ -1318,7 +1403,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                     _cmdList->ClearRenderTargetView(rtv, clear, 0, null);
                 StampGpuSceneMid();   // scene-execution block starts after transition+clear
                 SetFullViewport();
-                SubmitStreaming(drawList, lw, lh);
+                SubmitStreaming(drawList, lw, lh, rtv);
             }
             // The back buffer now holds the scene; the canvas holds whatever it held before (and an ACRYLIC frame has
             // actively clobbered it with snapshot scratch). Either way it is not a scene — the next partial-eligible
@@ -1380,6 +1465,12 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         Diag.Set("d3d12", "segments", _frameSegments);                        // non-empty FlushSegment calls (clips flush only when pending draws need the old scissor)
         Diag.Set("d3d12", "runs", _frameRuns);                                // painter-order runs replayed across all segments
         Diag.Set("d3d12", "clipOps", _frameClipOps);                          // Push/PopClip ops decoded this frame
+        // Tier-3 stencil path clips (gpu-renderer.md §6). ALWAYS ON — `stencilFallback` is the honesty counter: draws
+        // recorded INSIDE a scope by a pipeline with no EQUAL-tested clone (Shadow / Arc / Polyline / the DestOut video
+        // hole / an acrylic composite / a region-local blur subtree), which are clipped by the scope's SCISSOR only.
+        // A scope that could not mask at all (degenerate geometry, unsupported target, PSO build failure) counts once.
+        Diag.Set("d3d12", "stencilClips", _frameStencilClips);
+        Diag.Set("d3d12", "stencilFallback", _frameStencilFallback);
         Diag.Set("d3d12", "layerOps", _frameLayerOps);                        // Push/PopLayer ops decoded this frame
         Diag.Set("d3d12", "pipeBinds", _framePipeBinds);                      // PSO/shared-state binds recorded
         Diag.Set("d3d12", "pipeBindsSkipped", _framePipeBindsSkipped);        // runs that reused the cross-segment bound state
@@ -1458,6 +1549,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             _gpuTsPending[_frameIndex] = true;
             _gpuTsOwner[_frameIndex] = sc;
         }
+#if DEBUG
+        DrainDebugLayerMessages();
+#endif
         sc.PublishRectSubmittedArea(_frameRectOpaqueInsts, _frameRectBlendedInsts, s_rectAreaDiag,
             _frameRectOpaqueSubmittedPx2, _frameRectBlendedSubmittedPx2,
             _frameBlendedTop.AsSpan(0, _frameBlendedTopCount));
@@ -1572,6 +1666,14 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                     pos += Unsafe.SizeOf<ClipCmd>();
                     break;
                 case DrawOp.PopClip:
+                    break;
+                // Tier-3 stencil path clip: both live WALKS intercept these BEFORE DecodeOne (they are scope ops, not
+                // primitives). This arm exists only so the legacy whole-stream Decode() path stays byte-aligned.
+                case DrawOp.PushStencilClip:
+                    pos += Unsafe.SizeOf<PushStencilClipCmd>();
+                    break;
+                case DrawOp.PopStencilClip:
+                    pos += Unsafe.SizeOf<PopStencilClipCmd>();
                     break;
                 case DrawOp.DrawImage:
                 {
@@ -2127,6 +2229,224 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         if (_roundedClipStack.Count > 0) _roundedClipStack.RemoveAt(_roundedClipStack.Count - 1);
     }
 
+    // ── Tier-3 stencil path clip: the D3D12 sub-protocol (gpu-renderer.md §6) ────────────────────────────────────────
+    // A scope is: FlushSegment (the non-reorderable pass boundary S3.3 rule 5) → push DeviceRect as a plain scissor →
+    // clear this rect's stencil on the OUTERMOST push → attach the DSV → draw the mask with INCR_SAT → bump the ref.
+    // Draws until the matching pop bind a StencilFunc = EQUAL clone of their pipeline. The pop re-carries the push's
+    // realization byte-identically, so an INNER pop erases its own level with DECR_SAT and no geometry stack exists.
+
+    private int TargetW => _targetWidth > 0 ? _targetWidth : (int)_w;
+    private int TargetH => _targetHeight > 0 ? _targetHeight : (int)_h;
+
+    /// <summary>True when the CURRENT scene target is 1:1 with the swapchain-sized DSV: the back buffer, the canvas, or
+    /// a canvas-sized pooled group RT (<c>OpacityLayerCompositor.Acquire</c> only ever creates those at the canvas
+    /// size). A REGION-LOCAL self-blur surface is smaller AND entered under a shifted viewport, so a stencil scope
+    /// there degrades to its plain scissor — counted on <c>stencilFallback</c>, never silently wrong.</summary>
+    private bool StencilTargetSupported
+        => _opacityGroups.Count == 0 || _opacityGroups[^1].LocalBlur.UsedW == 0;
+
+    /// <summary>Create the stencil surface + its 1-slot DSV heap on the FIRST stencil scope of the process (an app that
+    /// never clips to a path allocates nothing). Sized to the swapchain and never grown in place: <see cref="Resize"/>
+    /// releases it behind its own WaitForGpu, so the next scope recreates it at the new size.</summary>
+    private bool EnsureStencilDsv(int w, int h)
+    {
+        if (_stencilDsv != null) return _stencilW >= w && _stencilH >= h;
+        if (_device == null || w <= 0 || h <= 0) return false;
+        int cw = Math.Max(w, (int)_w), ch = Math.Max(h, (int)_h);
+
+        D3D12_HEAP_PROPERTIES hp = default;
+        hp.Type = D3D12_HEAP_TYPE.D3D12_HEAP_TYPE_DEFAULT;
+        D3D12_RESOURCE_DESC rd = default;
+        rd.Dimension = D3D12_RESOURCE_DIMENSION.D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        rd.Width = (ulong)cw;
+        rd.Height = (uint)ch;
+        rd.DepthOrArraySize = 1;
+        rd.MipLevels = 1;
+        rd.Format = StencilPso.DsvFormat;
+        rd.SampleDesc.Count = 1;
+        rd.Layout = D3D12_TEXTURE_LAYOUT.D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        rd.Flags = D3D12_RESOURCE_FLAGS.D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+
+        D3D12_CLEAR_VALUE cv = default;
+        cv.Format = StencilPso.DsvFormat;
+        cv.Anonymous.DepthStencil.Depth = 1f;
+        cv.Anonymous.DepthStencil.Stencil = 0;
+
+        ID3D12Resource* res;
+        // PERMANENT DEPTH_WRITE: nothing ever reads this as an SRV or copies it, so it needs no barrier for its whole
+        // life — which is what keeps a stencil scope free of the barrier cost a transient attachment would carry.
+        if ((int)_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_NONE, &rd,
+                D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_DEPTH_WRITE, &cv,
+                __uuidof<ID3D12Resource>(), (void**)&res) < 0)
+            return false;
+
+        if (_dsvHeap == null)
+        {
+            D3D12_DESCRIPTOR_HEAP_DESC hd = default;
+            hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE.D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
+            hd.NumDescriptors = 1;
+            ID3D12DescriptorHeap* heap;
+            if ((int)_device->CreateDescriptorHeap(&hd, __uuidof<ID3D12DescriptorHeap>(), (void**)&heap) < 0)
+            {
+                res->Release();
+                return false;
+            }
+            _dsvHeap = heap;
+        }
+        _device->CreateDepthStencilView(res, null, _dsvHeap->GetCPUDescriptorHandleForHeapStart());
+        D3D12MemoryDiagnostics.Track(res, "StencilClip.Dsv", (uint)(cw * ch * 4));
+        _stencilDsv = res;
+        _stencilW = cw; _stencilH = ch;
+        return true;
+    }
+
+    private void ReleaseStencilDsv()
+    {
+        if (_stencilDsv != null)
+        {
+            D3D12MemoryDiagnostics.Release(_stencilDsv, "StencilClip.Dsv");
+            _stencilDsv->Release();
+            _stencilDsv = null;
+        }
+        if (_dsvHeap != null) { _dsvHeap->Release(); _dsvHeap = null; }
+        _stencilW = 0; _stencilH = 0;
+        _stencilDepth = 0;
+        _stencilScopeMasked.Clear();
+        _stencilDsvBound = false;
+    }
+
+    /// <summary>Re-attach (or drop) the stencil DSV on the CURRENT scene render target. OMSetRenderTargets disturbs
+    /// neither viewport, scissor, PSO nor root bindings, so this is safe to issue mid-segment.</summary>
+    private void RebindCurrentTarget(bool withDsv, D3D12_CPU_DESCRIPTOR_HANDLE rtv)
+    {
+        if (withDsv && StencilTargetSupported && EnsureStencilDsv(TargetW, TargetH))
+        {
+            var dsv = _dsvHeap->GetCPUDescriptorHandleForHeapStart();
+            _cmdList->OMSetRenderTargets(1, &rtv, BOOL.FALSE, &dsv);
+            _stencilDsvBound = true;
+            return;
+        }
+        _cmdList->OMSetRenderTargets(1, &rtv, BOOL.FALSE, null);
+        _stencilDsvBound = false;
+    }
+
+    // The RTV of the target the scene is currently drawing into — the innermost open group, else the top-level target.
+    private D3D12_CPU_DESCRIPTOR_HANDLE CurrentTargetRtv(bool directToBackBuffer, D3D12_CPU_DESCRIPTOR_HANDLE backRtv)
+    {
+        if (_opacityGroups.Count > 0 && _opacity is { } op) return op.TargetRtv(_opacityGroups[^1].Slot);
+        return directToBackBuffer ? backRtv : _acrylic!.CanvasRtv;
+    }
+
+    // The mask draw reuses the FillPath lane verbatim: the SAME PathRealizationCache realization, the same instance
+    // record shape. Color is irrelevant (the mask PSO masks colour writes off entirely) and trim/dash carry the
+    // full-cover window, exactly like a fill.
+    private static PathDrawItem StencilMaskItem(int vtxStart, int vtxCount, int idxStart, int idxCount, in Affine2D t)
+        => new()
+        {
+            VtxStart = vtxStart, VtxCount = vtxCount, IdxStart = idxStart, IdxCount = idxCount,
+            Inst = new PathInstance
+            {
+                R = 0f, G = 0f, B = 0f, A = 1f,
+                M11 = t.M11, M12 = t.M12, M21 = t.M21, M22 = t.M22, Dx = t.Dx, Dy = t.Dy,
+                Opacity = 1f, ArcLenPx = 0f, TrimStart = 0f, TrimEnd = 1f, DashOn = 0f, DashOff = 0f,
+            },
+        };
+
+    // Clear the stencil over exactly the pixels this scope can paint. _lastScissor is already target-relative and
+    // clamped by SetScissorRect (the same arithmetic the scissor itself uses), so the clear and the scope agree by
+    // construction rather than by two copies of the conversion.
+    private void ClearStencilRect()
+    {
+        RECT r = _lastScissor;
+        if (r.right <= r.left || r.bottom <= r.top) return;
+        _cmdList->ClearDepthStencilView(_dsvHeap->GetCPUDescriptorHandleForHeapStart(),
+            D3D12_CLEAR_FLAGS.D3D12_CLEAR_FLAG_STENCIL, 1f, 0, 1, &r);
+    }
+
+    private void BeginStencilScope(in PushStencilClipCmd c, float lw, float lh, D3D12_CPU_DESCRIPTOR_HANDLE rtv)
+    {
+        _frameStencilClips++;
+        FlushSegment(lw, lh);                                   // (1) the non-reorderable pass boundary
+        // (2) a stencil clip IS ALSO a tier-1 scissor push. Routing DeviceRect through PushScissor is what keeps
+        //     _clipStack and _roundedClipStack index-parallel — and a plain ClipCmd inherits the enclosing ROUNDED
+        //     entry, so a heart nested inside a rounded card keeps the card's corner clamp too.
+        PushScissor(new ClipCmd(c.DeviceRect));
+        EnsureDesiredScissor(CurrentScissorRect(), lw, lh);
+        SetScissorRect(_desiredScissor);                        // nothing is pending after the flush ⇒ applies now
+
+        bool masked = c.VtxCount > 0 && c.IdxCount > 0
+                      && StencilTargetSupported
+                      && (_pathPipe?.EnsureStencilReady() ?? false)
+                      && EnsureStencilDsv(TargetW, TargetH);
+        if (!masked)
+        {
+            // Honest degradation, never a dropped clip: the scope's scissor still bounds it to the geometry's AABB,
+            // and whatever mask already applies keeps applying. Counted so a live session can SEE it happen.
+            _frameStencilFallback++;
+            _stencilScopeMasked.Add(false);
+            return;
+        }
+
+        if (_stencilDepth == 0) ClearStencilRect();             // (3) outermost push owns the clear of its own rect
+        RebindCurrentTarget(withDsv: true, rtv);                // (4) viewport/scissor untouched
+        Affine2D maskXf = c.Transform;   // a positional record's member is a PROPERTY — bind it so `in` is legal
+        var item = StencilMaskItem(c.VtxStart, c.VtxCount, c.IdxStart, c.IdxCount, in maskXf);
+        _pathPipe!.RecordStencilMask(_cmdList, in item, lw, lh, decr: false);   // (5)
+        InvalidateCmdState();                                   // the mask bound its own PSO + IA state
+        _stencilDepth++;                                        // (6)
+        _stencilScopeMasked.Add(true);
+        _cmdList->OMSetStencilRef((uint)_stencilDepth);
+    }
+
+    private void EndStencilScope(in PopStencilClipCmd c, float lw, float lh, D3D12_CPU_DESCRIPTOR_HANDLE rtv)
+    {
+        FlushSegment(lw, lh);                                   // (1) land the scope's draws while its mask is live
+        bool masked = _stencilScopeMasked.Count > 0 && _stencilScopeMasked[^1];
+        if (_stencilScopeMasked.Count > 0) _stencilScopeMasked.RemoveAt(_stencilScopeMasked.Count - 1);
+        if (masked)
+        {
+            _stencilDepth--;                                    // (2)
+            if (_stencilDepth > 0)
+            {
+                // (3) erase THIS level by re-drawing the push's geometry with DECR_SAT. A nested PushLayer may have
+                //     detached the DSV on its way back out; re-attach before the erase or the outer scope inherits a
+                //     mask level that was never removed.
+                if (!_stencilDsvBound) RebindCurrentTarget(withDsv: true, rtv);
+                if (c.VtxCount > 0 && c.IdxCount > 0 && _stencilDsvBound)
+                {
+                    Affine2D maskXf = c.Transform;   // ditto — the pop re-carries the push's transform byte-identically
+                    var item = StencilMaskItem(c.VtxStart, c.VtxCount, c.IdxStart, c.IdxCount, in maskXf);
+                    _pathPipe!.RecordStencilMask(_cmdList, in item, lw, lh, decr: true);
+                    InvalidateCmdState();
+                }
+                _cmdList->OMSetStencilRef((uint)_stencilDepth);
+            }
+            else
+            {
+                // Back to depth 0: skip the erase entirely — the NEXT outermost push clears its own rect — and drop the
+                // DSV so the rest of the frame runs on the untouched, DSV-free path.
+                RebindCurrentTarget(withDsv: false, rtv);
+                InvalidateCmdState();
+            }
+        }
+        PopScissor();                                           // (4)
+        EnsureDesiredScissor(CurrentScissorRect(), lw, lh);
+    }
+
+    // End-of-submit safety net for an UNBALANCED stream (mirrors _clipStack.Clear()): clamp the depth back to 0 and
+    // detach the DSV so nothing after the scene inherits a stencil test or a bound attachment.
+    private void EndStencilScopesAtSubmitEnd(D3D12_CPU_DESCRIPTOR_HANDLE rtv)
+    {
+        _stencilScopeMasked.Clear();
+        if (_stencilDepth != 0 || _stencilDsvBound)
+        {
+            _stencilDepth = 0;
+            _cmdList->OMSetStencilRef(0);
+            RebindCurrentTarget(withDsv: false, rtv);
+            InvalidateCmdState();
+        }
+    }
+
     /// <summary>Stamp the innermost rounded clip (if any) onto a RoundRect-pipeline instance (the PS multiplies its
     /// coverage by the rounded-box SDF — the tier-2 path for animated clips on rounded surfaces). Skip the stamp when
     /// the instance's axis-aligned device AABB lies inside the clip deflated by <c>radius + aaSlack</c> — the SDF would
@@ -2265,7 +2585,12 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
            (_gradPipe?.DroppedInstances ?? 0) + (_glyphs?.DroppedInstances ?? 0) +
            (_imagePipe?.DroppedInstances ?? 0) + (_pathPipe?.DroppedInstances ?? 0);
 
-    private void RecordAll(float lw, float lh)
+    // <paramref name="stencilTest"/> ⇒ every COVERED pipeline binds its EQUAL-tested clone (the device has already
+    // programmed OMSetStencilRef with the live scope depth). The uncovered arms — Shadow, Arc, Polyline and the DestOut
+    // video-hole punch — record exactly as they always did and are counted on `stencilFallback`: inside a scope they are
+    // clipped by the scope's SCISSOR only. That is the honest v1 coverage scope (D6), the same posture the tier-2
+    // rounded clip already documents on ClipCmd.
+    private void RecordAll(float lw, float lh, bool stencilTest)
     {
         // Replay non-glyph primitives in painter (stream) order so a shadow sits OVER the background drawn before it and
         // UNDER its own element. Consecutive same-kind ops are still one batched draw. A run whose pipeline is ALREADY
@@ -2292,6 +2617,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                         SceneCat(CatShadow);
                         bool bindShadowShared = !_sharedSdfStateBound;
                         bool bindShadowPso = _boundPipe != BoundPipe.Shadow;
+                        if (stencilTest) _frameStencilFallback += count;   // uncovered pipeline: scissor-clipped only
                         NoteSdfPipeBind(_shadowPipe!.Record(_cmdList, shadowSpan.Slice(sc, count), lw, lh, bindShadowShared, bindShadowPso),
                             bindShadowShared, bindShadowPso, BoundPipe.Shadow);
                         sc += count; break;
@@ -2299,6 +2625,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                         SceneCat(CatFill);
                         bool bindArcShared = !_sharedSdfStateBound;
                         bool bindArcPso = _boundPipe != BoundPipe.Arc;
+                        if (stencilTest) _frameStencilFallback += count;   // uncovered pipeline: scissor-clipped only
                         NoteSdfPipeBind(_arcPipe!.Record(_cmdList, arcSpan.Slice(ac, count), lw, lh, bindArcShared, bindArcPso),
                             bindArcShared, bindArcPso, BoundPipe.Arc);
                         ac += count; break;
@@ -2306,6 +2633,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                         SceneCat(CatFill);
                         bool bindPolylineShared = !_sharedSdfStateBound;
                         bool bindPolylinePso = _boundPipe != BoundPipe.Polyline;
+                        if (stencilTest) _frameStencilFallback += count;   // uncovered pipeline: scissor-clipped only
                         NoteSdfPipeBind(_polylinePipe!.Record(_cmdList, polylineSpan.Slice(pc, count), lw, lh, bindPolylineShared, bindPolylinePso),
                             bindPolylineShared, bindPolylinePso, BoundPipe.Polyline);
                         pc += count; break;
@@ -2313,7 +2641,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                         SceneCat(CatFill);
                         bool bindGradientShared = !_sharedSdfStateBound;
                         bool bindGradientPso = _boundPipe != BoundPipe.Gradient;
-                        NoteSdfPipeBind(_gradPipe!.Record(_cmdList, gradSpan.Slice(gc, count), lw, lh, bindGradientShared, bindGradientPso),
+                        NoteSdfPipeBind(_gradPipe!.Record(_cmdList, gradSpan.Slice(gc, count), lw, lh, bindGradientShared, bindGradientPso, stencilTest),
                             bindGradientShared, bindGradientPso, BoundPipe.Gradient);
                         gc += count; break;
                     case PrimKind.Rect:
@@ -2323,13 +2651,16 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                         // Opaque fast path: split the run into maximal same-class (opaque plain vs everything-else) sub-runs
                         // IN PAINTER ORDER (never reordered) and draw each with its PSO — opaque fills skip alpha blend +
                         // the SDF shader (the dominant background/panel pixels). Disabled ⇒ one blended run, exactly as before.
-                        if (!_rectPipe!.HasOpaquePso)
+                        // Inside a stencil scope the opaque fast path is DISABLED: there is no stencil-tested clone of the
+                        // no-blend PSO (D6), and an untested opaque plate would paint straight over the clip silhouette.
+                        // One blended, stencil-tested run instead — pixel-identical output, just without the fast path.
+                        if (!_rectPipe!.HasOpaquePso || stencilTest)
                         {
                             bool bindRectShared = !_sharedSdfStateBound;
                             bool bindRectPso = _boundPipe != BoundPipe.Rect;
                             _frameRectBlendedInsts += rectRun.Length;   // opaque PSO unavailable ⇒ every instance blends
                             NoteRectSubmitted(rectRun, opaque: false);
-                            NoteSdfPipeBind(_rectPipe!.Record(_cmdList, rectRun, lw, lh, bindRectShared, bindRectPso),
+                            NoteSdfPipeBind(_rectPipe!.Record(_cmdList, rectRun, lw, lh, bindRectShared, bindRectPso, RectPass.Blended, stencilTest),
                                 bindRectShared, bindRectPso, BoundPipe.Rect);
                             break;
                         }
@@ -2356,14 +2687,16 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                         rc += count;
                         bool bindHoleShared = !_sharedSdfStateBound;
                         bool bindHolePso = _boundPipe != BoundPipe.RectDestOut;
+                        if (stencilTest) _frameStencilFallback += count;   // DestOut has no tested clone: scissor only
                         NoteSdfPipeBind(_rectPipe!.Record(_cmdList, holeRun, lw, lh, bindHoleShared, bindHolePso, RectPass.DestOut),
                             bindHoleShared, bindHolePso, BoundPipe.RectDestOut);
                         break;
                     case PrimKind.Image:
                         SceneCat(CatImage);
-                        if (_boundPipe != BoundPipe.Image)
+                        // stencilTest forces the rebind: _boundPipe tracks WHICH pipe is bound, not which VARIANT.
+                        if (_boundPipe != BoundPipe.Image || stencilTest)
                         {
-                            _imagePipe!.Begin(_cmdList, _imageTextures!.Heap, lw, lh);   // (re)bind heap/PSO/root-sig/VB for this image run
+                            _imagePipe!.Begin(_cmdList, _imageTextures!.Heap, lw, lh, stencilTest);   // (re)bind heap/PSO/root-sig/VB for this image run
                             _boundPipe = BoundPipe.Image;
                             _sharedSdfStateBound = false;
                             _framePipeBinds++;
@@ -2409,9 +2742,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                         // TRIANGLESTRIP topology and draw with Path's VB/IB/topology still bound — silent,
                         // intermittent corruption that no headless gate can catch (needs real GPU pixels to see).
                         SceneCat(CatFill);
-                        if (_boundPipe != BoundPipe.Path)
+                        if (_boundPipe != BoundPipe.Path || stencilTest)
                         {
-                            _pathPipe!.Begin(_cmdList, lw, lh);
+                            _pathPipe!.Begin(_cmdList, lw, lh, stencilTest);
                             _boundPipe = BoundPipe.Path;
                             _sharedSdfStateBound = false;
                             _framePipeBinds++;
@@ -2427,13 +2760,13 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         {
             SceneCat(CatGlyph);
             bool rb = _boundPipe != BoundPipe.Glyph;
-            NotePipeBind(_glyphs!.Record(_cmdList, _glyphInsts, lw, lh, rb), rb, BoundPipe.Glyph);
+            NotePipeBind(_glyphs!.Record(_cmdList, _glyphInsts, lw, lh, rb, stencilTest), rb, BoundPipe.Glyph);
         }
         if (_gradGlyphInsts.Count > 0)   // sub-glyph wipe, same RT/z as glyphs
         {
             SceneCat(CatGlyph);
             bool rb = _boundPipe != BoundPipe.GradGlyph;
-            NotePipeBind(_glyphs!.RecordGradient(_cmdList, _gradGlyphInsts, lw, lh, rb), rb, BoundPipe.GradGlyph);
+            NotePipeBind(_glyphs!.RecordGradient(_cmdList, _gradGlyphInsts, lw, lh, rb, stencilTest), rb, BoundPipe.GradGlyph);
         }
     }
 
@@ -2444,11 +2777,18 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         if (_desiredScissorValid) SetScissorRect(_desiredScissor);
         else ResetDesiredScissor();
         _glyphs!.UploadIfDirty(_cmdList);
-        RecordAll(lw, lh);
+        // A tier-3 stencil scope only tests when a DSV is actually attached — a nested PushLayer subtree renders into a
+        // target that has none, and is documented + counted as scissor-only there (D6).
+        bool stencilTest = _stencilDepth > 0 && _stencilDsvBound;
+        if (stencilTest) _cmdList->OMSetStencilRef((uint)_stencilDepth);   // idempotent safety across compositor passes
+        RecordAll(lw, lh, stencilTest);
         ClearInsts();
     }
 
-    private void SubmitStreaming(ReadOnlySpan<byte> drawList, float lw, float lh)
+    // <paramref name="targetRtv"/> is the RTV this walk is painting into (the back buffer on the FullDirect route,
+    // the canvas on the §13.1 canvas routes). A tier-3 stencil scope needs it in order to re-attach the target WITH the
+    // depth-stencil view — the only reason a streaming walk needs to know its own target at all.
+    private void SubmitStreaming(ReadOnlySpan<byte> drawList, float lw, float lh, D3D12_CPU_DESCRIPTOR_HANDLE targetRtv)
     {
         ClearInsts();
         _clipStack.Clear();
@@ -2476,9 +2816,28 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 EnsureDesiredScissor(CurrentScissorRect(), lw, lh);
                 continue;
             }
+            if (op == DrawOp.PushStencilClip)
+            {
+                pos += sizeof(int);
+                var sc = MemoryMarshal.Read<PushStencilClipCmd>(drawList.Slice(pos));
+                pos += Unsafe.SizeOf<PushStencilClipCmd>();
+                _frameClipOps++;
+                BeginStencilScope(in sc, lw, lh, targetRtv);
+                continue;
+            }
+            if (op == DrawOp.PopStencilClip)
+            {
+                pos += sizeof(int);
+                var sc = MemoryMarshal.Read<PopStencilClipCmd>(drawList.Slice(pos));
+                pos += Unsafe.SizeOf<PopStencilClipCmd>();
+                _frameClipOps++;
+                EndStencilScope(in sc, lw, lh, targetRtv);
+                continue;
+            }
             pos = DecodeOne(drawList, pos);
         }
         FlushSegment(lw, lh);
+        EndStencilScopesAtSubmitEnd(targetRtv);
         _clipStack.Clear();
         _roundedClipStack.Clear();
         _desiredScissor = FullScissorRect();
@@ -2564,7 +2923,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             StampGpuSceneMid();
             InvalidateCmdState();
             SetFullViewport();
-            SubmitStreaming(drawList, lw, lh);
+            SubmitStreaming(drawList, lw, lh, _acrylic!.CanvasRtv);
         }
         else
         {
@@ -2575,7 +2934,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             for (int i = 0; i < n; i++)
             {
                 BeginReplayRect(in phys[i]);
-                SubmitStreaming(drawList, lw, lh);
+                SubmitStreaming(drawList, lw, lh, _acrylic!.CanvasRtv);
             }
         }
         ClearRootDamage();       // the blit is FULL-SURFACE — nothing may narrow it
@@ -2658,6 +3017,24 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 _frameClipOps++;
                 PopScissor();
                 EnsureDesiredScissor(CurrentScissorRect(), lw, lh);
+                continue;
+            }
+            if (op == DrawOp.PushStencilClip)
+            {
+                pos += sizeof(int);
+                var sc = MemoryMarshal.Read<PushStencilClipCmd>(drawList.Slice(pos));
+                pos += Unsafe.SizeOf<PushStencilClipCmd>();
+                _frameClipOps++;
+                BeginStencilScope(in sc, lw, lh, CurrentTargetRtv(directToBackBuffer, backRtv));
+                continue;
+            }
+            if (op == DrawOp.PopStencilClip)
+            {
+                pos += sizeof(int);
+                var sc = MemoryMarshal.Read<PopStencilClipCmd>(drawList.Slice(pos));
+                pos += Unsafe.SizeOf<PopStencilClipCmd>();
+                _frameClipOps++;
+                EndStencilScope(in sc, lw, lh, CurrentTargetRtv(directToBackBuffer, backRtv));
                 continue;
             }
             if (op == DrawOp.PushLayer)
@@ -2916,6 +3293,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                         dmgX * _frameScale, dmgY * _frameScale, dmgW * _frameScale, dmgH * _frameScale,
                         acrylicClip, backdropSourceId, acrylicTarget, acrylicRtv, ctx.ScrollHold);
                     InvalidateCmdState();   // the acrylic passes bound their own PSOs/heap + viewport/scissor
+                    // The frosted surface is composited by AcrylicCompositor's own PSOs, which carry no stencil state:
+                    // inside a tier-3 scope it is clipped by the SCISSOR only (documented + counted, never silent).
+                    if (_stencilDepth > 0) _frameStencilFallback++;
                     if (_opacityGroups.Count > 0) BindOpacityGroupTarget(_opacityGroups[^1]);   // back to the open group RT
                     ApplyCurrentScissor();
                     _layerKinds.Add((int)LayerKind.Acrylic);
@@ -2975,6 +3355,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             pos = DecodeOne(drawList, pos);
         }
         FlushSegment(lw, lh);
+        EndStencilScopesAtSubmitEnd(CurrentTargetRtv(directToBackBuffer, backRtv));
         // Defensive drain, STRIPS FIRST: a strip fade may now be open INSIDE a full-canvas blur group, and its restore
         // targets that group's pooled slot. Draining groups first would release (and composite) that slot out from
         // under the pending restore. The reverse nesting (a group left open inside a strip) is unaffected — EndStripFade
@@ -3030,6 +3411,11 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     {
         if (directToBackBuffer) { _cmdList->OMSetRenderTargets(1, &backRtv, BOOL.FALSE, null); SetFullViewport(); }
         else { _acrylic!.BindCanvas(_cmdList); SetFullViewport(); }
+        _stencilDsvBound = false;
+        // Tier-3: control has returned to the enclosing target while a stencil scope is still open — re-attach the DSV
+        // so the remainder of the scope keeps drawing stencil-tested. SetFullViewport ran first, so TargetW/H describe
+        // this target (the DSV is 1:1 with it).
+        if (_stencilDepth > 0) RebindCurrentTarget(withDsv: true, directToBackBuffer ? backRtv : _acrylic!.CanvasRtv);
     }
 
     // ── PURE edge fade: the strip path (no offscreen intermediate) ───────────────────────────────────────────────────
@@ -3196,6 +3582,16 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         OpacityLayerCompositor.LocalBlurSurface localSurface = group.LocalBlur;
         if (localSurface.UsedW > 0) SetLocalBlurViewport(in localSurface);
         else SetFullViewport();
+        _stencilDsvBound = false;
+        // Tier-3: a FULL-CANVAS group lease is created at exactly the canvas size (OpacityLayerCompositor.Acquire) and
+        // bound 1:1, so the swapchain-sized DSV describes the same pixels and the open scope keeps masking inside the
+        // group. A REGION-LOCAL self-blur surface is smaller and entered under a SHIFTED viewport — no valid mapping,
+        // so that subtree renders scissor-clipped only, counted (the honest D6 restriction).
+        if (_stencilDepth > 0)
+        {
+            if (localSurface.UsedW == 0) RebindCurrentTarget(withDsv: true, _opacity!.TargetRtv(group.Slot));
+            else _frameStencilFallback++;
+        }
     }
 
     // Open a self-blur group on a REGION-LOCAL target: a small bucketed scratch sized to the layer's clip-aware work box
@@ -3263,6 +3659,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 case DrawOp.EraseRoundRect: pos += Unsafe.SizeOf<EraseRoundRectCmd>(); break;
                 case DrawOp.FillPath: pos += Unsafe.SizeOf<FillPathCmd>(); break;
                 case DrawOp.StrokePath: pos += Unsafe.SizeOf<StrokePathCmd>(); break;
+                case DrawOp.PushStencilClip: pos += Unsafe.SizeOf<PushStencilClipCmd>(); break;
+                case DrawOp.PopStencilClip: pos += Unsafe.SizeOf<PopStencilClipCmd>(); break;
                 case DrawOp.PushLayer:
                     var L = MemoryMarshal.Read<PushLayerCmd>(cmds.Slice(pos));
                     pos += Unsafe.SizeOf<PushLayerCmd>();
@@ -3312,6 +3710,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 case DrawOp.EraseRoundRect: pos += Unsafe.SizeOf<EraseRoundRectCmd>(); break;
                 case DrawOp.FillPath: pos += Unsafe.SizeOf<FillPathCmd>(); break;
                 case DrawOp.StrokePath: pos += Unsafe.SizeOf<StrokePathCmd>(); break;
+                case DrawOp.PushStencilClip: pos += Unsafe.SizeOf<PushStencilClipCmd>(); break;
+                case DrawOp.PopStencilClip: pos += Unsafe.SizeOf<PopStencilClipCmd>(); break;
                 case DrawOp.PushLayer: pos += Unsafe.SizeOf<PushLayerCmd>(); depth++; break;
                 case DrawOp.PopLayer:
                     pos += Unsafe.SizeOf<PopLayerCmd>();
@@ -4014,6 +4414,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         Activate(target);
         WaitForGpu();   // §13.1 relies on this: it is the fence that makes the canvas EnsureSize's unfenced release safe
         ResetRepaintLedger();   // the canvas is about to be recreated at a new size — retained content is void
+        ReleaseStencilDsv();    // swapchain-sized; recreated lazily at the new size on the next stencil scope
         D3D12MemoryDiagnostics.Resize("Swapchain", w, h);
         for (uint i = 0; i < FRAME_COUNT; i++)
         {
@@ -4118,6 +4519,10 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         for (uint i = 0; i < FRAME_COUNT; i++) _backBuffers[i] = null;
         // 2. Release device-level ComPtrs + pipelines (null the pipe fields so EnsurePipelines re-runs). NO WaitForGpu.
         ReleaseGpuTimingResources();
+        ReleaseStencilDsv();
+#if DEBUG
+        if (_infoQueue != null) { _infoQueue->Release(); _infoQueue = null; }
+#endif
         if (_dcomp != null) { _dcomp->Release(); _dcomp = null; }
         _glyphs?.Dispose(); _glyphs = null;
         _imagePipe?.Dispose(); _imagePipe = null;
@@ -4197,6 +4602,10 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _sdf?.Dispose();
         for (uint i = 0; i < FRAME_COUNT; i++) _backBuffers[i] = null;
         ReleaseGpuTimingResources();
+        ReleaseStencilDsv();
+#if DEBUG
+        if (_infoQueue != null) { _infoQueue->Release(); _infoQueue = null; }
+#endif
         D3D12MemoryDiagnostics.Snapshot("D3D12Device.Dispose");
         // GEN-COM (wired): COM teardown via the generated IUnknown.Release calli (vtable slot 2, universal to every COM ptr).
         if (_cmdList != null) global::FluentGpu.Interop.Generated.IUnknownVtbl.Release(_cmdList);

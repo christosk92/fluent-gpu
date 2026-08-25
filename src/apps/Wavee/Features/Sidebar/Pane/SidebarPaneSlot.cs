@@ -779,7 +779,10 @@ sealed class SidebarPaneSlot : Component
             : item?.EntityKind == SidebarEntityKind.Artist;
 
         Element art = resolved
-            ? SidebarCover.Art(entry.Cover, entry.MosaicTiles, entry.Id, cover, circular)
+            // ForEntry for the same reason GridCell takes it: a spotlight card embeds an ENTRY, so it owes that
+            // entry's kind dispatch — a folder tile, a route glyph, and the liked collection's own dynamic cover.
+            // The unresolved arm keeps the raw factory: there is no entry to dispatch on yet.
+            ? SidebarCover.ForEntry(in entry, cover)
             : SidebarCover.Art(SidebarPaneText.FallbackImage(item), null, row.Key, cover, circular);
 
         string uri = resolved ? entry.Uri : "";
@@ -905,7 +908,6 @@ sealed class SidebarPaneSlot : Component
 
     Element GridCell(SidebarSectionSpec section, SidebarLibraryEntry entry, float edge, string sel)
     {
-        bool circular = entry.Circular || entry.Kind == SidebarEntryKind.Artist;
         string? route = entry.RouteKey;
         // A grid CELL is not a plan row (one strip row draws several), so it asks the resolver about the ENTRY — the
         // same predicate the row-level sweep ORs across the strip's range.
@@ -916,7 +918,10 @@ sealed class SidebarPaneSlot : Component
 
         var kids = new List<Element>(3)
         {
-            SidebarCover.Art(entry.Cover, entry.MosaicTiles, entry.Id, artEdge, circular),
+            // ForEntry, not Art: a grid cell is an art slot like every other one, and calling the raw cover factory
+            // skipped the KIND dispatch — so an app-route entry (Liked Songs, Albums, Podcasts) lost its glyph tile
+            // and painted a bare seeded tint, and Liked lost its dynamic cover with it.
+            SidebarCover.ForEntry(in entry, artEdge),
             new TextEl(label)
             {
                 Size = 12f, Weight = (ushort)(selected ? 600 : 400), Color = selected ? Tok.AccentTextPrimary : Tok.TextPrimary,

@@ -46,6 +46,12 @@ public enum AnimFlags : ushort
                               // declare it), so the row's teardown must take it off again — and only then. While a
                               // reflow writes an EASED LayoutInput.Height the content is still arranged at its natural
                               // height, so without the clip the node paints straight over the sibling below it.
+    NaturalTarget = 1 << 12,  // SizeMode.Reflow: the row's `To` is the node's NATURAL (auto) main-axis size, not a value
+                              // the author declared — so the host may RETARGET it from the solved child extent on every
+                              // reflow tick. Without this bit an enter-reflow seeded before its async children mounted
+                              // flies to a stale target and SettleRestore snaps the rest of the way; with it the target
+                              // tracks the content as it arrives. Cleared the moment the author declares a size
+                              // (AnimEngine.RecordDeclaredSize) — a declared value is ground truth, not a projection.
 }
 
 /// <summary>The 16-byte tagged-union generator law. The owning <see cref="AnimValue.Kind"/> selects the reading.

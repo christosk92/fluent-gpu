@@ -196,6 +196,7 @@ public enum DrawOp : byte {
 // STRUCT SHAPES (§3.6) and their RASTERIZATION (§4.4). The enum reprinted here is for local readability and
 // must stay in lockstep. DrawFocusRect is the superseded rectangular placeholder; DrawFocusRing is production.
 // AS-BUILT: FillPath = 19, StrokePath = 20 on the real `int`-tagged DrawOp (src/FluentGpu.Engine/Render/DrawList.cs).
+// AS-BUILT: PushStencilClip = 21, PopStencilClip = 22 on that same enum (§6's AS-BUILT block owns the tier).
 ```
 
 Representative payloads (POD; handle/index refs only; never GC pointers):
@@ -748,9 +749,10 @@ different content; that misuse is not caught here.
 `PathAaMode.Msaa4` (the enum member exists and falls back to `Fringe` with a `Diag` counter, above);
 the `IPrimitiveFallback` D2D implementation (only the seam survives — see above); off-thread tessellation
 (already §15-descoped); `FillGradient` on paths; stroke boolean-union for translucent self-overlap (the
-known v1 gap above); path clipping (§6's stencil tier); animatable dash offset as an `AnimChannel`; and
-round-capped trim tips (the PS-discard trim in `PathPipeline`'s shader gives a butt tip at the cut even
-when `StrokeStyle.Cap == LineCap.Round`).
+known v1 gap above); ~~path clipping (§6's stencil tier)~~ — **SHIPPED 2026-08**, see §6.1's AS-BUILT block
+(a HARD-EDGE tier; an anti-aliased path clip is still the §7.1 layer route and remains descoped); animatable
+dash offset as an `AnimChannel`; and round-capped trim tips (the PS-discard trim in `PathPipeline`'s shader
+gives a butt tip at the cut even when `StrokeStyle.Cap == LineCap.Round`).
 
 ### 5.1 Geometry realization cache (AS-BUILT 2026-08)
 
@@ -831,6 +833,102 @@ public struct ClipEntry {                  // ClipTable slab (Foundation), consu
 - **Why not stencil-for-everything** (WinUI's heavier approach): stencil forces a mask pass + breaks every
   batch + binds a DSV all frame. We pay that only for genuine path clips; 99% of UI clipping (panels, list
   viewports, rounded cards) is scissor or SDF.
+
+### 6.1 Stencil tier — AS-BUILT 2026-08
+
+The tier above is BUILT. The design's shape survives; four things about it are different as-built, and the
+differences are the point of this block.
+
+**Opcodes + payloads.** `PushStencilClip = 21` / `PopStencilClip = 22` on the real `int`-tagged `DrawOp`
+(`src/FluentGpu.Engine/Render/DrawList.cs`; the enum LIST is `scene-memory.md` §4.1's, the payload SHAPES are
+this doc's — already registered in §0's ownership row):
+
+```csharp
+public readonly record struct PushStencilClipCmd(RectF DeviceRect, int RealizationId,
+    int VtxStart, int VtxCount, int IdxStart, int IdxCount, byte Rule, Affine2D Transform);
+public readonly record struct PopStencilClipCmd(RectF DeviceRect, int RealizationId,
+    int VtxStart, int VtxCount, int IdxStart, int IdxCount, Affine2D Transform);
+```
+
+- `Vtx*`/`Idx*` index `PathRealizationCache.Shared`'s retained slab — the SAME realization the `FillPath`
+  lane uses (§5.1's content-epoch + quantized-scale + rule key), so a clip re-tessellates exactly as often
+  as a fill does: never, in steady state. It inherits §5.1's eviction posture unchanged (quarantine window +
+  `BeginFrame`-only compaction); the exposure class is byte-for-byte `FillPathCmd`'s, not a new one.
+- `RealizationId` mirrors `FillPathCmd.RealizationId` (reserved, 0). `Rule` is METADATA — the winding is
+  already baked into the triangle soup — kept for parity and for headless/hit-test validation.
+- The POP **re-carries** the push's geometry so the backend can `DECR_SAT`-erase an inner nesting level with
+  no geometry stack of its own: a self-describing stream, this engine's idiom.
+
+**No ClipTable, no ClipHandle, no `Parent`.** The `ClipEntry` slab printed above does not exist as-built —
+clips are stream-scoped push/pop ops (§3.1's `ClipCmd` for tiers 1–2) plus per-instance SDF stamps. The
+stencil tier follows suit: **nesting IS stream nesting**, and `StencilRef` is the executor's LIVE nesting
+depth via `OMSetStencilRef` rather than a field. `ClipKind { ScissorRect, SdfRoundRect, StencilPath }` is
+introduced as a plain enum for diagnostics + headless modelling, not as a `ClipEntry` field.
+
+**`DeviceRect` doubles as the scope's tier-1 scissor.** The recorder pre-intersects it with the enclosing
+clip AND the node's device box AND the realized mask's transformed bounds, then the backend pushes it as an
+ordinary scissor. A stencil clip IS also a scissor push — which is why every existing scissor, damage and
+headless-balance mechanism keeps working with no special case, and why a stencil clip nested under a rounded
+card still inherits that card's corner clamp.
+
+**No ClipBucket / batcher.** §3.3 rule 5's "non-reorderable pass boundary" maps onto the as-built device's
+segment flush (`FlushSegment` → `RecordAll`) at the push and at the pop — see §3.2–§3.4's as-built callout.
+
+**D3D12 sub-protocol as-built.** One lazily-created, swapchain-sized `D24_UNORM_S8_UINT` DSV kept in
+`DEPTH_WRITE` for its whole life (no barriers), bound ONLY inside scopes — every existing PSO keeps
+`DSVFormat = UNKNOWN` and is untouched outside them. The renderer is single-sample everywhere
+(`SampleDesc.Count = 1`), so the "sample-count-matched DSV" requirement is met trivially. Each OUTERMOST push
+clears the stencil over its own AABB rect; the mask writes `INCR_SAT`; an INNER pop re-draws the popped
+geometry `DECR_SAT`; a pop to depth 0 skips the erase (the next outermost push re-clears its own rect).
+Draws inside a scope test `EQUAL` at ref = depth. **Documented max depth: 255** — `INCR_SAT` saturates, so
+deeper nesting degrades conservatively and can never corrupt.
+
+**HARD EDGE by design.** The mask pixel shader is the path fill shader with `clip(cov - 0.5)` and colour
+writes masked off (`clip_stencil`, §4's shader table), because the tessellator's AA fringe must not smear the
+mask. The silhouette therefore lands on the half-coverage line at device-pixel resolution. Anti-aliased path
+clipping stays §7.1's layer route ("a clip-to-path applied to a whole subtree with its own AA" is already
+named there as a `PushLayer` reason) — deliberately NOT this tier.
+
+**Honest coverage scope** (the tier-2 `ClipCmd` precedent: stencil-testing is per-pipeline). Stencil-TESTED
+in v1: RoundRect (the blended arm — the opaque fast path is forced to the blended arm inside a scope),
+Image, Gradient, Path, Glyph (which also covers `DrawIconMask`, riding the glyph atlas/PSO). Scissor-only
+fallback inside a scope, counted by an always-on `Diag.Set("d3d12","stencilFallback",…)`: Shadow, Arc,
+Polyline, and the DestOut pipeline (`DrawVideo`/`EraseRoundRect`). A `PushLayer` nested inside a stencil
+scope renders its offscreen subtree un-stencil-tested and composites clipped by the scissor only (counted the
+same way); the DSV is re-bound when control returns to the enclosing target at depth > 0.
+`Diag.Set("d3d12","stencilClips",…)` counts the scopes themselves.
+
+**DSL + scene surface.** `BoxEl.ClipPath` (+ `ClipPathRule`, `ClipPathViewBoxW`/`ClipPathViewBoxH`) carried by
+a `ClipPathSpec(PathData? Geometry, FillRule Rule, float ViewBoxW, float ViewBoxH)` cold column on
+`SceneStore` (`_clipPaths` — placement is `scene-memory.md` §2.2's, field semantics are this doc's, exactly
+like `PathSpec`). ViewBox semantics are `PathSpec`'s verbatim (0 = node-local DIP; > 0 = uniform min-axis
+fit baked into the clip transform at record time). Setting `ClipPath` **implies** `NodeFlags.ClipsToBounds`
+(all 32 flag bits are taken, so the tier is discriminated by the column, not a flag) — the recorder's and the
+hit-test's gate is `ClipsToBounds && SparsePaint && TryGetClipPath`, which costs nothing on every node that
+does not clip. `SetClipPath` marks the record dirty like every paint column, so a changed silhouette
+invalidates the clean spans that copied the old scope.
+
+**Hit-testing follows the clip** (`InputDispatcher.ClipPathAdmits`, next to `PathGeometryAdmits`): a point
+inside the box but outside the geometry hits neither the node nor its subtree, mirroring the `ClipsToBounds`
+early-out and reusing `PathFlatten` + `PathHitTest.Contains` with the same ViewBox fit mapping the recorder
+bakes, so click and pixels agree. This is a CLIP, not paint-derived hit-testing — input has always followed
+clips (see §5.1's licensed-exception note for the one opt-in that IS paint-derived).
+
+**Partial repaint (§13.1): v1 VETO.** `RepaintStreamSafety.Scan` returns false on `PushStencilClip`, so any
+frame containing a stencil clip takes the full-repaint route — the clamped-replay × mask-clear-rect
+interaction is untested and therefore EXCLUDED, not relied on (the `EdgeFade` "stream-UNSAFE" precedent).
+`RepaintPolicy.TryBodySize` still frames BOTH ops (it is the ONE opcode→payload-size table; framing is not
+safety). **Marked follow-up:** admitting stencil frames to clamped replay.
+
+**Span reuse.** A stencil push/pop inside a copied span is EXACT under translation — the `ClipCmd` patch and
+the `FillPathCmd` patch combined (`DeviceRect` is device space, the mask geometry is authored-space with all
+absolute position in `Transform.Dx/Dy`). The lease patcher never records a stencil push as its viewport-clip
+offset (it expects a `ClipCmd`).
+
+**Gates.** `PathSuite.StencilClipChecks` (`src/FluentGpu.VerticalSlice`) covers balance, push/pop payload
+parity, per-command subtree depth, the ViewBox-fit + intersected `DeviceRect`, geometry semantics via
+`PathHitTest` against the recorded transform, input parity, nesting, the framing/veto surface, and zero
+steady-state allocation. GPU pixels are the separate `--shot stencilclip` screenshot check.
 
 ---
 

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using FluentGpu.Animation;
 using FluentGpu.Controls;
@@ -109,8 +109,9 @@ internal static class TrackRow
     /// 40px thumb would fill it edge to edge with no breathing room at all.</summary>
     internal const float ThumbSize = WaveeSize.Thumb32;
     /// <summary>The ♥ column. Sized to the 28 DIP like hit-target so the left cluster (# · ♥ · art) stays tight —
-    /// a wider lane used to read as empty gutter, worse on every unsaved row when the outline was hover-only.</summary>
-    internal const float HeartCol = 28f;
+    /// a wider lane used to read as empty gutter, worse on every unsaved row when the outline was hover-only.
+    /// One number with <see cref="TrackLane.Heart"/>, which the relief ladder measures the squeeze from.</summary>
+    internal const float HeartCol = TrackLane.Heart;
     internal const float CompactListItemExtent = ItemsView.ListItemExtent;
 
     // Track row height by density (0 Compact · 1 Default · 2 Cozy · 3 Comfortable).
@@ -589,14 +590,17 @@ internal static class TrackRow
     }
 
     /// <summary>One key notation: Camelot code when present (matches the swatch + filter), else standard MusicalKey.
-    /// Never both — dual tokens bloated the Tempo lane and fought the narrowed track.</summary>
-    static string? KeyLabel(Track t) =>
-        t.CamelotCode is { Length: > 0 } c ? c
-        : t.MusicalKey is { Length: > 0 } k ? k
-        : null;
+    /// Never both — dual tokens bloated the Tempo lane and fought the narrowed track. Forwards to the SHARED formatter
+    /// (<see cref="TrackExpandedFacts.KeyLabel"/>) that the drawer and the expanded row's facts strip also call.</summary>
+    static string? KeyLabel(Track t) => TrackExpandedFacts.KeyLabel(t.CamelotCode, t.MusicalKey);
 
-    /// <summary>The row's expand affordance. Rotates 90° when open, so the control states its own state rather than
-    /// relying on the drawer below being visible (which it is not, once the row scrolls to the viewport edge).</summary>
+    /// <summary>The row's expand affordance — ONE control, both skins. Classic and Modern build the same chevron, in
+    /// the same trailing lane, on the same width gate; nothing about the disclosure is skin-specific, because what it
+    /// opens (the track's facts, then its versions) is a property of the TRACK.
+    ///
+    /// The glyph swaps rather than rotates when open, so the control states its own state rather than relying on the
+    /// drawer below being visible (which it is not, once the row scrolls to the viewport edge). Focusable + Button
+    /// role: Tab reaches it and Space/Enter toggles it, which is the keyboard path in either skin.</summary>
     internal static Element ExpandChevron(bool expanded, Action onToggle) => new BoxEl
     {
         Width = Spacing.XXL, Height = Spacing.XXL, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,

@@ -171,9 +171,11 @@ public static class MediaCard
 
     static Element ArtworkOrLiked(Image? cover, string uri, float width, float height, float radius, string? morphKey = null, int decodePx = 0, Element? diagnostics = null)
     {
-        var art = cover is null && LikedSongsArtwork.IsLikedUri(uri) && MathF.Abs(width - height) < 0.5f
-            ? LikedSongsArtwork.Cover(width, radius, morphKey)
-            : Surfaces.Artwork(cover, Seed(uri), width, height, radius, morphKey, decodePx);
+        // The DYNAMIC liked cover, never the picker: a card is not the place to change a collection's artwork, and
+        // below 140 DIP the component collapses to the flat 2x2 collection mosaic (or the stock PNG) by itself.
+        // The URI decides, and the caller's `cover` is deliberately not consulted — see LikedSongsArtwork.For.
+        var art = LikedSongsArtwork.For(uri, width, height, radius, morphKey)
+            ?? Surfaces.Artwork(cover, Seed(uri), width, height, radius, morphKey, decodePx);
         return diagnostics is null
             ? art
             : new BoxEl
@@ -231,7 +233,11 @@ public static class MediaCard
             ZStack = true, ClipToBounds = !circular, Corners = CornerRadius4.All(r),
             Children =
             [
-                Surfaces.ArtworkFill(cover, r),
+                // The liked collection takes the user's treatment here too. This cell is width-agnostic, so it goes
+                // through the responsive arm rather than Fitted — see LikedSongsArtwork.Fill. Before it, a drill-in
+                // from "Jump back in" painted Liked Songs as a bare tinted square (ArtworkFill's null path), i.e. not
+                // even the stock PNG, two clicks away from the quick tile that showed the full treatment.
+                LikedSongsArtwork.Fill(uri, r) ?? Surfaces.ArtworkFill(cover, r),
                 LazyOverlay(hovered, uri, onPlay, FabSize, cover: true, 0f, onNavigate),
                 MoreCorner(menu is not null),
             ],
@@ -1110,8 +1116,13 @@ sealed class ShelfCard : Component
             // A missing artist photo must still be an intentional card, not a blank gray rectangle. PersonPicture gives
             // us WinUI initials/contact fallback and the same circular crop when a real URL is present.
             ? PersonPicture.Create("", inner, displayName: p.Title, imageSourcePath: p.Cover?.Url)
-            : p.Cover is null && LikedSongsArtwork.IsLikedUri(p.Uri)
-                ? LikedSongsArtwork.Cover(inner, r, p.MorphKey)
+            // Same gating as ArtworkOrLiked above: the dynamic treatment, no picker, self-collapsing when small.
+            // This is the RECENTS RAIL's card. Its liked tile used to arrive WITH a cover — Spotify's recents feed
+            // serves misc.scdn.co/liked-songs/liked-songs-300.png, i.e. a CDN copy of the very stock PNG the user's
+            // chosen treatment replaces — so the old `p.Cover is null` half of this test was false and the tile kept
+            // painting the purple heart. The uri alone decides now.
+            : LikedSongsArtwork.For(p.Uri, inner, inner, r, p.MorphKey) is { } liked
+                ? liked
                 : p.Cover?.MosaicTiles is { Count: >= 4 } mtiles
                     ? Surfaces.Mosaic(mtiles, inner, inner, r)
                     : ZStack(

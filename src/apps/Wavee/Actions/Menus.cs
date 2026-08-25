@@ -551,7 +551,10 @@ public static class Menus
         if (kind == EntityKind.Track) return TrackUriCard(s, uri, name, image, subtitle);
         if (kind == EntityKind.Show) return ShowCard(s, uri, name, image, subtitle);
 
-        bool liked = uri == "spotify:collection:tracks";
+        // Every liked spelling, not just the canonical one: a card built from a Home/recents section item can carry
+        // `spotify:user:<u>:collection`, whose EntityKind is Collection — so the ladder below fell through to
+        // TargetKind.None and the card got NO MENU AT ALL, not merely the wrong Save verb.
+        bool liked = LikedSongsArtwork.IsLikedUri(uri);
         ActionTarget target =
             kind == EntityKind.Album ? ActionTarget.ForAlbum(uri, name)
             : kind == EntityKind.Artist ? ActionTarget.ForArtist(uri, name)
@@ -1142,8 +1145,13 @@ public static class Menus
     /// links.</para></summary>
     static ContextMenuHeader Header(Image? image, string key, string title, string? subtitle, bool circular = false)
     {
-        Element? leading = image is null ? null : Surfaces.Artwork(
-            image, key.GetHashCode() & 0x7fffffff, 38f, 38f, circular ? 19f : 6f, decodePx: 76);
+        // The liked collection's header art comes from the user's chosen treatment, not from the producer: every
+        // producer passes `image: null` for it (there is no store cover), which is why the one container in the app
+        // whose menu is reachable from four surfaces used to open with NO header art at all. 38 DIP is below the
+        // treatment floor, so what actually paints is the flat 2x2 mosaic of the newest likes (or the stock PNG).
+        Element? leading = LikedSongsArtwork.For(key, 38f, 38f, circular ? 19f : 6f)
+            ?? (image is null ? null : Surfaces.Artwork(
+                image, key.GetHashCode() & 0x7fffffff, 38f, 38f, circular ? 19f : 6f, decodePx: 76));
         return new ContextMenuHeader(leading, PlainHeaderText(title) ?? title, PlainHeaderText(subtitle));
     }
 

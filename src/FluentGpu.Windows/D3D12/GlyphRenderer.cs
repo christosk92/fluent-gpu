@@ -1,4 +1,4 @@
-﻿using System.Buffers;
+using System.Buffers;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -231,6 +231,11 @@ internal sealed unsafe class GlyphRenderer : IDisposable
     // Sub-glyph gradient-wipe path: a second PSO (per-pixel before→after fill) with its own instance buffers. Only the
     // active lyric line + its glow feed it (~tens of glyphs), so a small cap; normal text never touches it.
     private ID3D12PipelineState* _psoGrad;
+    // Tier-3 stencil path clip (gpu-renderer.md S6): EQUAL-tested clones of BOTH glyph passes, built lazily on the
+    // first stencil scope. Glyph coverage also covers DrawIconMask, which rides this atlas/PSO.
+    private ID3D12PipelineState* _psoStencilTest, _psoGradStencilTest;
+    private bool _stencilTried;
+    private ID3D12Device* _device;   // non-owning; the device outlives every pipeline
     private const int MaxGradGlyphs = 1024;
     private readonly ID3D12Resource*[] _gradInstances = new ID3D12Resource*[FrameCount];
     private readonly GradGlyphInstance*[] _mappedGrad = new GradGlyphInstance*[FrameCount];
@@ -347,6 +352,7 @@ float4 PSMain(VSOutG i) : SV_Target
 
     public void Init(ID3D12Device* device)
     {
+        _device = device;
         InitDWrite();
         _engine = new TextLayoutEngine();
         InitAtlasTexture(device);
@@ -1338,7 +1344,7 @@ float4 PSMain(VSOutG i) : SV_Target
     /// <summary>Record one glyph run; <paramref name="rebind"/> false skips the static state (heap, root signature,
     /// PSO, viewport constants, atlas table, topology, quad VB — still bound from a previous glyph run this frame;
     /// see RoundRectPipeline.Record). Returns false when full (state untouched).</summary>
-    public bool Record(ID3D12GraphicsCommandList* cmd, List<GlyphInstance> instances, float vpW, float vpH, bool rebind = true)
+    public bool Record(ID3D12GraphicsCommandList* cmd, List<GlyphInstance> instances, float vpW, float vpH, bool rebind = true, bool stencilTest = false)
     {
         int start = _cursor;
         int count = Math.Min(instances.Count, MaxGlyphs - start);
@@ -1347,12 +1353,16 @@ float4 PSMain(VSOutG i) : SV_Target
         for (int i = 0; i < count; i++) _mapped[_active][start + i] = instances[i];
         _cursor += count;
 
-        if (rebind)
+        // A tier-3 stencil scope needs the EQUAL-tested clone, and it must be bound whether or not `rebind` says the
+        // glyph pipe is already current (that flag tracks WHICH pipe is bound, not which VARIANT) — so bind the whole
+        // static block when the variant is in play. Null clone ⇒ the scope degrades to its plain scissor.
+        ID3D12PipelineState* stencil = stencilTest ? StencilTestPso(grad: false) : null;
+        if (rebind || stencil != null)
         {
             ID3D12DescriptorHeap* heap = _srvHeap;
             cmd->SetDescriptorHeaps(1, &heap);
             cmd->SetGraphicsRootSignature(_rootSig);
-            cmd->SetPipelineState(_pso);
+            cmd->SetPipelineState(stencil != null ? stencil : _pso);
             _vpConstants[0] = vpW;
             _vpConstants[1] = vpH;
             fixed (float* vp = _vpConstants)
@@ -1369,7 +1379,7 @@ float4 PSMain(VSOutG i) : SV_Target
     /// <summary>Draw the sub-glyph gradient-wipe instances (active lyric line + glow) with the gradient PSO — same atlas,
     /// viewport, quad and double-buffering as <see cref="Record"/>, into whatever RT is bound (so a blur layer captures the
     /// glow's gradient glyphs exactly like normal glyphs).</summary>
-    public bool RecordGradient(ID3D12GraphicsCommandList* cmd, List<GradGlyphInstance> instances, float vpW, float vpH, bool rebind = true)
+    public bool RecordGradient(ID3D12GraphicsCommandList* cmd, List<GradGlyphInstance> instances, float vpW, float vpH, bool rebind = true, bool stencilTest = false)
     {
         int start = _gradCursor;
         int count = Math.Min(instances.Count, MaxGradGlyphs - start);
@@ -1379,12 +1389,13 @@ float4 PSMain(VSOutG i) : SV_Target
         _gradCursor += count;
         NoteGradBudget(instances.Count - count, _gradCursor);
 
-        if (rebind)
+        ID3D12PipelineState* stencilGrad = stencilTest ? StencilTestPso(grad: true) : null;
+        if (rebind || stencilGrad != null)
         {
             ID3D12DescriptorHeap* heap = _srvHeap;
             cmd->SetDescriptorHeaps(1, &heap);
             cmd->SetGraphicsRootSignature(_rootSig);
-            cmd->SetPipelineState(_psoGrad);
+            cmd->SetPipelineState(stencilGrad != null ? stencilGrad : _psoGrad);
             _vpConstants[0] = vpW;
             _vpConstants[1] = vpH;
             fixed (float* vp = _vpConstants)
@@ -1429,6 +1440,20 @@ float4 PSMain(VSOutG i) : SV_Target
         return res;
     }
 
+    /// <summary>The lazily-built EQUAL-tested clone of the plain (or gradient-wipe) glyph PSO. Both are built on the
+    /// first stencil scope of the process; null ⇒ the build failed and glyph runs inside the scope fall back to the
+    /// scissor (counted on <c>Diag "d3d12"/"stencilFallback"</c> by the device).</summary>
+    private ID3D12PipelineState* StencilTestPso(bool grad)
+    {
+        if (!_stencilTried)
+        {
+            _stencilTried = true;
+            _psoStencilTest = StencilPso.TryBuildQuadEqualTest(_device, _rootSig, Hlsl, "VSMain", "PSMain", "glyph", depthClip: false);
+            _psoGradStencilTest = StencilPso.TryBuildQuadEqualTest(_device, _rootSig, HlslGrad, "VSMain", "PSMain", "glyphGrad", depthClip: false);
+        }
+        return grad ? _psoGradStencilTest : _psoStencilTest;
+    }
+
     public void Dispose()
     {
         _engine?.Dispose();
@@ -1439,6 +1464,8 @@ float4 PSMain(VSOutG i) : SV_Target
         }
         if (_quad != null) { D3D12MemoryDiagnostics.Release(_quad, "Glyph.QuadUpload"); _quad->Release(); _quad = null; }
         if (_psoGrad != null) { _psoGrad->Release(); _psoGrad = null; }
+        if (_psoStencilTest != null) { _psoStencilTest->Release(); _psoStencilTest = null; }
+        if (_psoGradStencilTest != null) { _psoGradStencilTest->Release(); _psoGradStencilTest = null; }
         if (_pso != null) _pso->Release();
         if (_rootSig != null) _rootSig->Release();
         if (_srvHeap != null) { D3D12MemoryDiagnostics.Release(_srvHeap, "Glyph.SrvHeap"); _srvHeap->Release(); }

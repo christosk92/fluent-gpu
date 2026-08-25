@@ -1,4 +1,4 @@
-using System.Diagnostics.CodeAnalysis;
+﻿using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using FluentGpu.Foundation;
@@ -370,6 +370,11 @@ public static class RepaintStreamSafety
             // Only a plain Opacity group survives a clamped replay; Acrylic / Blur / EdgeFade do not (see the remarks).
             if (op == DrawOp.PushLayer
                 && MemoryMarshal.Read<PushLayerCmd>(cmds.Slice(pos)).Kind != (int)LayerKind.Opacity) return false;
+            // Tier-3 stencil scopes are stream-UNSAFE in v1: the clamped-replay x mask-clear-rect interaction (the
+            // outermost push clears the stencil over its own AABB, which a damage-clamped scissor would narrow) is
+            // untested and therefore EXCLUDED, not relied on — the EdgeFade precedent above. Admitting stencil frames
+            // to clamped replay is a marked follow-up, not a silent omission.
+            if (op == DrawOp.PushStencilClip) return false;
             pos += body;
         }
         return true;
@@ -405,6 +410,11 @@ public static class RepaintStreamSafety
             // node's own device box, so a damage-clamped scissor replay is safe.
             case DrawOp.FillPath: body = Unsafe.SizeOf<FillPathCmd>(); break;
             case DrawOp.StrokePath: body = Unsafe.SizeOf<StrokePathCmd>(); break;
+            // Framed here (this is "the ONE opcode->payload-size table" — framing is not safety) even though a
+            // stencil scope is stream-UNSAFE in v1: Scan below vetoes the frame explicitly, and it must be able to
+            // SIZE the op to reach that veto rather than fall out of the walk as an unknown.
+            case DrawOp.PushStencilClip: body = Unsafe.SizeOf<PushStencilClipCmd>(); break;
+            case DrawOp.PopStencilClip: body = Unsafe.SizeOf<PopStencilClipCmd>(); break;
             case DrawOp.PopLayer: body = Unsafe.SizeOf<PopLayerCmd>(); break;
             case DrawOp.PushLayer: body = Unsafe.SizeOf<PushLayerCmd>(); break;
             default: body = 0; return false;

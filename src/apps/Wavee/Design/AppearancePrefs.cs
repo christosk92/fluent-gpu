@@ -16,4 +16,15 @@ static class AppearancePrefs
         _ = Epoch.Value;
         return settings?.Get(WaveeSettings.HideTrackArtwork) ?? WaveeSettings.HideTrackArtwork.Default;
     }
+
+    /// <summary>Reactive read of the Liked Songs cover treatment (the <see cref="TrackArtworkHidden"/> pattern: Epoch is
+    /// the update edge, the settings store is the truth). The persisted int is clamped through
+    /// <see cref="LikedCoverRules.FromSetting"/>, so a hand-edited registry value or a downgrade from a build that
+    /// shipped more treatments reads as Stock rather than as nothing at all.</summary>
+    public static LikedCoverStyle LikedCover(IAppSettings? settings)
+    {
+        _ = Epoch.Value;
+        return LikedCoverRules.FromSetting(
+            settings?.Get(WaveeSettings.LikedCoverStyle) ?? WaveeSettings.LikedCoverStyle.Default);
+    }
 }

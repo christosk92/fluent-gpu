@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
@@ -347,7 +347,9 @@ sealed class TrackFilterFlyout : Component
                     Loc.Get(Strings.Detail.Filter.LastSixMonths),
                     Loc.Get(Strings.Detail.Filter.LastYear),
                 ],
-                value => _setFilters(_filters.Peek() with { Added = (TrackAddedRange)value })));
+                // WithAddedRange, not a bare `with`: the rail's sparkline can set an explicit (after, before] window
+                // for the SAME question, and picking a preset here has to retire it rather than AND the two.
+                value => _setFilters(_filters.Peek().WithAddedRange((TrackAddedRange)value))));
         // Tempo sits with the other "more filters" facets rather than as a chip: it is a refinement you reach for, not
         // a mode you toggle. Key is deliberately NOT exposed as a 24-way picker here — a Camelot code is set from a
         // track's own row (the versions drawer), where you have a reference to match against, which is the only moment

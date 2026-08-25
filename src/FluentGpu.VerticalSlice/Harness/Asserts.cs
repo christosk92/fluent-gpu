@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
@@ -204,6 +204,8 @@ public static class Asserts
         DrawOp.EraseRoundRect => Unsafe.SizeOf<EraseRoundRectCmd>(),
         DrawOp.FillPath => Unsafe.SizeOf<FillPathCmd>(),
         DrawOp.StrokePath => Unsafe.SizeOf<StrokePathCmd>(),
+        DrawOp.PushStencilClip => Unsafe.SizeOf<PushStencilClipCmd>(),
+        DrawOp.PopStencilClip => Unsafe.SizeOf<PopStencilClipCmd>(),
         _ => 0,
     };
     public static void ClickNode(AppHost host, HeadlessWindow window, NodeHandle n)

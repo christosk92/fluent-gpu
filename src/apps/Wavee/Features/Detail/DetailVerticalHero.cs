@@ -119,11 +119,16 @@ static class DetailVerticalHero
             Draggable = WaveeDetailDrag.Hero(m, acts),
             Children =
             [
+                // The rail's three arms verbatim (DetailRail.Build): editable playlist cover, the Liked collection's
+                // dynamic treatment with its style picker, static art. morphKey stays null here — this hero does not
+                // participate in the connected fly, exactly as before.
                 editable
                     ? PlaylistInlineEdit.Cover(full, artSize, Radii.Card, shadow: true,
                         morphKey: null, decodePx: heroDecodePx, saturation: 1.18f)
-                    : DetailRail.HeroArtwork(m, artSize, Radii.Card, connected: false,
-                        saturation: 1.18f, morphKey: null, decodePx: heroDecodePx)
+                    : DetailRail.IsDynamicLikedCover(m)
+                        ? LikedCoverPicker.Cover(artSize, Radii.Card, morphKey: null)
+                        : DetailRail.HeroArtwork(m, artSize, Radii.Card, connected: false,
+                            saturation: 1.18f, morphKey: null, decodePx: heroDecodePx)
             ],
         };
 

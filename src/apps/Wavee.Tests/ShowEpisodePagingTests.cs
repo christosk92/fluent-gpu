@@ -50,7 +50,7 @@ public class ShowEpisodePagingTests
                             break;
                     }
             });
-            var policy = new TraitPolicy(() => false);
+            var policy = new TraitPolicy();
             Hydrator = HydrationTestSupport.Hydrator(Store, Catalog, new RecordingTraitPipeline(), Pump,
                 [new ShowHydration(Store, policy), new PlayableHydration(EntityKind.Episode, Store, new FakeEnvelopeFetch())],
                 traitPolicy: policy);
@@ -231,7 +231,7 @@ public class ShowEpisodePagingTests
                 }
                 else if (u.Kind == EntityKind.Episode) s.UpsertEpisode(EpisodeAt(u.Uri, HydrationLevel.Open));
         });
-        var policy = new TraitPolicy(() => false);
+        var policy = new TraitPolicy();
         var hydrator = HydrationTestSupport.Hydrator(store, catalog, new RecordingTraitPipeline(), pump,
             [new ShowHydration(store, policy), new PlayableHydration(EntityKind.Episode, store, new FakeEnvelopeFetch())],
             traitPolicy: policy);

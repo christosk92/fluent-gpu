@@ -12,6 +12,11 @@ namespace FluentGpu.Animation;
 //  default to SPRING (the rework's default + AnimEngine's), which carries velocity through interruption; the tween
 //  path uses the dynamics duration + the named default curve.
 //
+//  Both position paths are RETARGETS, never restarts: AnimateBounds is re-entered on every geometry commit, and a node
+//  can be shoved once per tick for the whole length of a neighbour's reflow. The spring rebases (keeps velocity); the
+//  tween re-aims over the time its ORIGINAL deadline has left. Restarting either would make repeated shoves accumulate
+//  rather than decay — the moved node would never catch up with the layout it is chasing.
+//
 //  WIRED: SizeMode.Relayout + SizeMode.Reflow (the host RunReflowLayout/Incremental worklists) + the Trailing child-shift
 //  (recorder ChildShiftY). Residual: the 0-alloc Eased generator stores only a NAMED EaseId, so a custom cubic-bezier on
 //  that path falls back via EasingSpec.NamedOr — a non-issue in practice (the fades that use SeedEased pass named curves;
@@ -210,7 +215,8 @@ public sealed partial class AnimEngine
     }
 
     // Position FLIP. Spring: shift a running spring's frame by the layout delta (keep velocity — analytical rebase),
-    // or start a fresh spring at +delta springing to 0. Tween: restart from current+delta → 0.
+    // or start a fresh spring at +delta springing to 0. Tween: retarget IN PLACE over the time the original tween has
+    // left (a fresh tween only when no row is flying).
     private void ReframePosition(NodeHandle node, AnimChannel ch, float delta, in TransitionDynamics dyn, float delayMs = 0f)
     {
         if (s_motionDiag) Console.Error.WriteLine($"[motion-diag]   Reframe node={node.Raw.Index} ch={ch} delta={delta:0.0} found={Find(node, ch) >= 0}");
@@ -231,8 +237,37 @@ public sealed partial class AnimEngine
         }
         else
         {
-            float cur = CurrentValue(node, ch);
-            Animate(node, ch, cur + delta, 0f, dyn.DurationMs, dyn.Easing, delayMs: delayMs);
+            // DEADLINE-PRESERVING RETARGET. The spring branch above rebases without restarting; the tween branch used
+            // to hand `Animate` a FULL dyn.DurationMs every time, which is only correct for a one-off move. A node
+            // being shoved CONTINUOUSLY — every sibling of a SizeMode.Reflow drawer is, once per tick for the whole
+            // open/close — got a brand-new full-length tween each frame: elapsed reset to 0, the deadline pushed out
+            // again, and the displacement re-injected from the top. It never converged, so the sibling trailed the
+            // drawer by roughly a full drawer-height for the entire animation and painted over the rows beside it.
+            // Retargeting over what the ORIGINAL tween has LEFT keeps the deadline fixed, so successive shoves fold
+            // into a decaying tail instead of accumulating. Gen.DurationMs is the duration for both non-driven eased
+            // shapes (BakeEased writes it for two-point; Keyframes writes it for multi-key — Animate produces the
+            // latter), so the remaining-time read is valid across both; a Driven row's DurationMs is a DOMAIN SPAN,
+            // not a time, hence the flag check.
+            int ex = Find(node, ch);
+            bool retargetable = ex >= 0
+                && _slab.At(ex).Kind is GenKind.Eased or GenKind.Keyframes
+                && !_slab.At(ex).Has(AnimFlags.Driven);
+            if (retargetable)
+            {
+                float start = _slab.At(ex).Position + delta;   // shift the coordinate frame by the move, as the spring does
+                float remaining = MathF.Max(1f, _slab.At(ex).Gen.DurationMs - _slab.At(ex).ElapsedMs);
+                Animate(node, ch, start, 0f, remaining, dyn.Easing);   // no delay: the entry stagger was already served
+                int s = Find(node, ch);
+                // A retarget keeps MOVING — clear the seed-frame hold, exactly as Spring's rebase branch does. Leaving
+                // it set would freeze the row outright here, because a per-tick shove would re-seed the hold every
+                // frame and ElapsedMs would never advance past 0.
+                if (s >= 0) _slab.At(s).Flags &= ~AnimFlags.JustSeeded;
+            }
+            else
+            {
+                float cur = CurrentValue(node, ch);
+                Animate(node, ch, cur + delta, 0f, dyn.DurationMs, dyn.Easing, delayMs: delayMs);
+            }
         }
     }
 

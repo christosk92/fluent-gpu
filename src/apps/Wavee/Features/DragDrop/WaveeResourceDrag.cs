@@ -300,6 +300,9 @@ static class WaveeResourceDrag
             || Unwrap(state.Payload) is not { } payload) return null;
         var model = payload.ChipModel();
         return new DragChipSpec(
+            // Liked Songs travels wearing its own cover, not the generic playlist glyph. See LikedChipArt for why it
+            // is a pre-built element rather than a call.
+            Art: LikedSongsArtwork.IsLikedUri(payload.Uri) ? LikedChipArt : null,
             ArtSource: model.ArtUrl, Title: model.Title, Subtitle: model.Subtitle,
             Count: model.Count, Glyph: GlyphFor(payload.Kind),
             // The RESTING verb — what the chip says while travelling, before anything accepts. Reported as part of
@@ -319,6 +322,18 @@ static class WaveeResourceDrag
 
     /// <summary>The one preview mounted at the shell root (<c>DragPreviewLayer.Of</c>).</summary>
     public static readonly Func<DragState, Element?> Preview = DragChip.Resolve(Chip);
+
+    /// <summary>The liked collection's chip artwork, BUILT ONCE at type init.
+    ///
+    /// <para><see cref="Chip"/> runs inside the 0-alloc frame region while a drag is live (the same constraint that
+    /// makes <c>RestingCaption</c> a table lookup and never an interpolation), and
+    /// <c>LikedSongsArtwork.Dynamic</c> allocates a factory closure and a key string per call. The chip's art box is a
+    /// fixed 40 DIP, so there is exactly one element to build and it can be built ahead of the gesture; an immutable
+    /// Element re-handed to the reconciler unchanged is a no-op, and only one drag chip exists at a time.</para>
+    ///
+    /// <para>40 is below the treatment floor, so this paints the flat 2x2 mosaic of the newest likes (or the stock PNG)
+    /// — which is still the collection's own art, where the alternative was a generic music-note tile.</para></summary>
+    static readonly Element LikedChipArt = LikedSongsArtwork.Dynamic(DragChip.ArtSize, Radii.Control);
 
     /// <summary>The art-less fallback tile: the same kind glyphs the sidebar uses, so a cover-less drag still reads as
     /// "a playlist" / "an album" rather than as a generic note.</summary>

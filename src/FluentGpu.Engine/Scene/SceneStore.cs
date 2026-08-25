@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Runtime.InteropServices;
 using FluentGpu.Foundation;
 
@@ -144,6 +144,7 @@ public sealed class SceneStore : ISceneBackend
     private readonly ColdSlab<ArcSpec> _arcs = new();
     private readonly ColdSlab<PolylineStrokeSpec> _polylines = new();   // GEN-17 (wired)
     private readonly ColdSlab<PathSpec> _paths = new();   // GEN-17 (wired) — VisualKind.Path's geometry/fill/stroke
+    private readonly ColdSlab<ClipPathSpec> _clipPaths = new();   // tier-3 stencil path clip (gpu-renderer.md §6) — implies ClipsToBounds
     private readonly ColdSlab<GradientSpec> _gradients = new();   // GEN-17 (wired)
     private readonly ColdSlab<Point2> _radialGradientCenters = new(); // bindable normalized override for radial fills
     private readonly ColdSlab<GradientSpec> _borderBrushes = new();   // GEN-17 (wired) — gradient border stroke (elevation edge)
@@ -437,6 +438,7 @@ public sealed class SceneStore : ISceneBackend
             _arcs.Remove(idx);
             _polylines.Remove(idx);
             _paths.Remove(idx);
+            _clipPaths.Remove(idx);
             _gradients.Remove(idx);
             _radialGradientCenters.Remove(idx);
             _borderBrushes.Remove(idx);
@@ -1492,6 +1494,21 @@ public sealed class SceneStore : ISceneBackend
     }
     public bool TryGetPath(NodeHandle h, out PathSpec ps) => _paths.TryGet((int)h.Raw.Index, out ps);
     public void ClearPath(NodeHandle h) { int idx = (int)h.Raw.Index; _paths.Remove(idx); MarkRecordDirty(idx); }
+
+    /// <summary>The tier-3 STENCIL path clip for this node (gpu-renderer.md §6). Setting it marks SparsePaint and
+    /// dirties the record exactly like <see cref="SetPath"/> does for the FillPath lane, so a changed silhouette
+    /// invalidates any clean span that copied the old push/pop pair. The caller (the reconciler) also marks
+    /// <see cref="NodeFlags.ClipsToBounds"/> — the recorder's gate is
+    /// <c>ClipsToBounds &amp;&amp; SparsePaint &amp;&amp; TryGetClipPath</c>, which costs nothing on non-clipping nodes.</summary>
+    public void SetClipPath(NodeHandle h, in ClipPathSpec cs)
+    {
+        int idx = (int)h.Raw.Index;
+        _flags[idx] |= NodeFlags.SparsePaint;
+        _clipPaths.GetOrAdd(idx) = cs;
+        MarkRecordDirty(idx);
+    }
+    public bool TryGetClipPath(NodeHandle h, out ClipPathSpec cs) => _clipPaths.TryGet((int)h.Raw.Index, out cs);
+    public void ClearClipPath(NodeHandle h) { int idx = (int)h.Raw.Index; _clipPaths.Remove(idx); MarkRecordDirty(idx); }
 
     public void SetGradient(NodeHandle h, in GradientSpec g)
     {

@@ -39,8 +39,9 @@ readonly record struct DetailHandlers(
     IReadSignal<bool>? MultiSelect = null, Action<bool>? SetMultiSelect = null,
     // Plays (stream-count) column opt-in — the same app-wide/persisted shape as TempoColumn, but only offered by
     // surfaces whose profile does NOT already carry a Plays lane (playlist / Liked; see DetailConfig.PlaysColumnOptIn).
-    // Turning it on also authorises the whole-list kind-185 fill for the open page. Optional so the embedded library
-    // list — which has no overflow menu to toggle it — constructs unchanged and simply never shows the column.
+    // Purely visibility: kind 185 hydrates for every list surface regardless (TraitPolicy), so the counts are already
+    // there. Optional so the embedded library list — which has no overflow menu to toggle it — constructs unchanged
+    // and simply never shows the column.
     IReadSignal<bool>? PlaysColumn = null, Action<bool>? SetPlaysColumn = null);
 
 // ── DIAGNOSTIC ONLY: the detail cover trace ───────────────────────────────────────────────────────────────────────
@@ -240,9 +241,17 @@ sealed class DetailShell : Component
         // first real track cover instead of waiting forever on an endpoint request that cannot succeed.
         string? coverUrl = m.Cover?.Url;
         var coverArt = Surfaces.SchemeFor(coverUrl);
-        string? paletteUrl = coverArt is not null || SpotifyLive.CoverColorPlane.CanGrade(coverUrl)
-            ? coverUrl
-            : FirstGradeableTrackCover(m.Tracks) ?? coverUrl;
+        // LIKED SONGS: the page ground follows the COVER above it. When a dynamic treatment is composing, the anchor is
+        // the treatment's own lead tile — the newest liked cover, the record the artwork actually leads with — instead
+        // of whichever track happened to be the first gradeable one in the list. The two are usually the same record;
+        // "usually" is how a page ends up toned by a sleeve that appears nowhere on the cover it sits under.
+        // Stock composes nothing, so it keeps the generic answer byte for byte. (The style read is safe at page scope:
+        // this Render already takes AppearancePrefs.Epoch above, and nothing here is behind an equality-gated memo that
+        // would have to carry the value in a snapshot.)
+        string? paletteUrl = LikedToneAnchor(m, settings)
+            ?? (coverArt is not null || SpotifyLive.CoverColorPlane.CanGrade(coverUrl)
+                ? coverUrl
+                : FirstGradeableTrackCover(m.Tracks) ?? coverUrl);
         if (!string.Equals(paletteUrl, coverUrl, StringComparison.Ordinal))
             coverArt = Surfaces.SchemeFor(paletteUrl);
         var coverChrome = Surfaces.ChromeSchemeFor(paletteUrl);
@@ -335,18 +344,14 @@ sealed class DetailShell : Component
         }
         void SetDensity(int d) { _density.Value = d; settings?.Set(WaveeSettings.RowDensity, d); }   // app-wide
         void SetTempoColumn(bool on) { _tempoColumn.Value = on; settings?.Set(WaveeSettings.TempoColumn, on); }   // app-wide
-        // Turning the Plays column ON is also the authorisation to FILL it: playlist/Liked rows carry no play count
-        // until kind 185 is asked for them, and the on-open hook (LiveSessionHost) only fires for a list that is opened
-        // while the setting is already on. Without this the first toggle would paint a lane of dashes until a reopen.
-        // Fire-and-forget and best-effort by contract — the hydrator skips resident counts, so a re-toggle is free.
+        // Purely a VISIBILITY switch. Kind 185 rides every list surface's trait bundle unconditionally (TraitPolicy),
+        // so an open page's counts are already asked for — there is nothing left to backfill. The toggle-time
+        // hydration that used to live here existed only because the bundle was gated on this very setting, and it was
+        // a poor patch for it: page-local and fire-and-forget, it could not reach the other lists that gate starved.
         void SetPlaysColumn(bool on)
         {
             _playsColumn.Value = on;
             settings?.Set(WaveeSettings.PlaysColumn, on);   // app-wide
-            if (!on || svc is null || m.Tracks.Count == 0) return;
-            var uris = new List<string>(m.Tracks.Count);
-            foreach (var t in m.Tracks) uris.Add(t.Uri);
-            _ = svc.Hydrator.EnsureTraitsAsync(uris, TraitSurface.PlaysToggle);
         }
 
         // SetSort / SetDensity are hoisted local functions; the rail + chrome toolbars read all list-view controls off here.
@@ -397,7 +402,7 @@ sealed class DetailShell : Component
             p => live.Current.OpenPlaylist(p),
             playAllOverride,
             MultiSelect: _multiSelect, SetMultiSelect: v => _multiSelect.Value = v,
-            // Trampolined: SetPlaysColumn closes over THIS render's svc + model (it fires the fill for the open list).
+            // Trampolined like its siblings: SetPlaysColumn closes over THIS render's `settings`.
             PlaysColumn: _playsColumn, SetPlaysColumn: on => live.Current.SetPlaysColumn?.Invoke(on)), accentKey);
         // TrackList is retained across preview→palette hydration and route reuse. Publish AFTER render (never write a
         // signal from Render) so its accent and context-closing actions arrive through the supported signal path
@@ -768,5 +773,29 @@ sealed class DetailShell : Component
             if (SpotifyLive.CoverColorPlane.CanGrade(url)) return url;
         }
         return null;
+    }
+
+    /// <summary>The page-tone anchor for the Liked collection when a DYNAMIC cover treatment is composing, or null —
+    /// "null" meaning "this page has no opinion, use the generic answer".
+    ///
+    /// <para>Null covers three cases, and all three are the same statement: this is not the liked page; or the liked
+    /// page is painting the stock PNG (no style chosen, or the library is still below the style's minimum art — E1/E3),
+    /// in which case today's tone is exactly right; or the lead tile is a url the colour service cannot grade, in
+    /// which case naming it would leave the page permanently neutral where the generic scan still finds a colour.</para>
+    ///
+    /// <para>The tile list is the SAME <c>LikedCoverRules.Tiles</c> the cover composes from, so the ground and the
+    /// artwork above it can never disagree about which record they are keyed to. It caps at sixteen and stops early,
+    /// so a 10k liked list costs a short prefix scan on a page render (never a frame).</para></summary>
+    static string? LikedToneAnchor(DetailModel m, IAppSettings? settings)
+    {
+        if (!DetailRail.IsDynamicLikedCover(m)) return null;
+        var requested = AppearancePrefs.LikedCover(settings);
+        // Cheap reject first: a style that composes no art at ALL (Stock) never reaches Tiles.
+        if (LikedCoverRules.Effective(requested, int.MaxValue) == LikedCoverStyle.Stock) return null;
+
+        var tiles = LikedCoverRules.Tiles(m.Tracks);
+        if (LikedCoverRules.Effective(requested, tiles.Count) == LikedCoverStyle.Stock) return null;
+        var anchor = LikedCoverRules.ToneAnchorUrl(tiles);
+        return SpotifyLive.CoverColorPlane.CanGrade(anchor) ? anchor : null;
     }
 }

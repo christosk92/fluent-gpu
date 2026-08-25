@@ -157,7 +157,12 @@ public sealed class AlbumHydration : IKindHydration
             if (rowUris.Count > 0)
                 ctx.Pump.Enqueue(opts.Priority, async pct =>
                 {
-                    await ctx.Traits.EnsureAsync(rowUris, TraitSet.RowBundle, TraitSurface.AlbumOpen, pct).ConfigureAwait(false);
+                    // PlayCount rides along for the same reason the Rich path (c) asks for it: the album profile ALWAYS
+                    // paints a Plays lane and a top-track star, both off kind 185. Omitting it here left an album that
+                    // only ever reached Open with a lane of dashes — this post-step is the one trait pass that rung
+                    // gets, and re-opening short-circuits on the resident level rather than re-running it.
+                    await ctx.Traits.EnsureAsync(rowUris, TraitSet.RowBundle | TraitSet.PlayCount,
+                        TraitSurface.AlbumOpen, pct).ConfigureAwait(false);
                     RebuildTracklists(uris);   // same re-join as the Rich path — the facets land on the ROWS
                 });
         }

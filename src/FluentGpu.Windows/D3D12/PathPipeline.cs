@@ -71,6 +71,18 @@ internal sealed unsafe class PathPipeline : IDisposable
 
     private SdfSharedResources _shared = null!;
     private ID3D12PipelineState* _pso;
+    // Non-owning; the device outlives every pipeline (D3D12Device.Dispose releases the pipes first). Kept so the three
+    // STENCIL PSOs below can be built LAZILY — on the first stencil scope of the process, not at bring-up — which is why
+    // the startup PSO count (and the cold-start compile budget) is unchanged for an app that never clips to a path.
+    private ID3D12Device* _device;
+    // Tier-3 stencil path clip (gpu-renderer.md S6). All three are clones of the fill PSO above:
+    //  _psoStencilIncr/_psoStencilDecr — the MASK PRE-PASS: color writes masked off entirely, blend off, stencil ALWAYS
+    //    with INCR_SAT (push) / DECR_SAT (inner pop), PS = PSStencilMask (clip(cov - 0.5) => the HARD device-pixel edge
+    //    the tier is defined to have; the tessellated AA fringe must not smear the mask).
+    //  _psoStencilTest — the NORMAL blended fill/stroke PSO + StencilFunc EQUAL / all ops KEEP / write mask 0, so path
+    //    draws INSIDE a scope are masked by the live nesting depth (OMSetStencilRef).
+    private ID3D12PipelineState* _psoStencilIncr, _psoStencilDecr, _psoStencilTest;
+    private bool _stencilPsosTried;
 
     private readonly ID3D12Resource*[] _vb = new ID3D12Resource*[FrameCount];
     private readonly PathVertex*[] _vbMapped = new PathVertex*[FrameCount];
@@ -156,11 +168,23 @@ float4 PSMain(VSOut i) : SV_Target
     float a = i.color.a * i.opacityArc.x * saturate(i.covS.x);
     return float4(i.color.rgb * a, a);
 }
+
+// clip_stencil (gpu-renderer.md S4's shader table): the MASK pre-pass for a tier-3 stencil path clip. Same VS, same
+// geometry; the ONLY job is to decide, per sample, in-or-out. The half-coverage line is the boundary — the tessellator's
+// AA fringe (Cov ramping 0..1 across ~a pixel) must NOT smear into the mask, or a nested DECR_SAT would leave a fringe
+// of stuck stencil values. That is exactly why this tier is HARD-EDGE by design (S7.1 keeps the AA'd route on PushLayer).
+// Color writes are masked off at the PSO (RenderTargetWriteMask = 0), so the return value never reaches the RTV.
+float4 PSStencilMask(VSOut i) : SV_Target
+{
+    clip(i.covS.x - 0.5);
+    return float4(0.0, 0.0, 0.0, 0.0);
+}
 """;
 
     public void Init(ID3D12Device* device, SdfSharedResources shared)
     {
         _shared = shared;
+        _device = device;
         BuildPipeline(device);
         BuildBuffers(device);
     }
@@ -228,6 +252,135 @@ float4 PSMain(VSOut i) : SV_Target
         }
         vs->Release();
         ps->Release();
+    }
+
+    /// <summary>Build the three tier-3 stencil PSOs on FIRST USE (a process that never clips to a path pays nothing at
+    /// bring-up). Shaders come back from <see cref="ShaderCompiler"/>'s content-hashed DXBC disk cache, so this is a
+    /// file read on a warm machine, not three D3DCompile calls. Failure is recorded once and never retried — the caller
+    /// then degrades the scope to a plain scissor (the honest tier-1 fallback), exactly like a missing opaque PSO
+    /// degrades the rect fast path.</summary>
+    private void EnsureStencilPsos()
+    {
+        if (_stencilPsosTried) return;
+        _stencilPsosTried = true;
+        if (_device == null) return;
+
+        ID3DBlob* vs = null, psMask = null, psFill = null;
+        try
+        {
+            vs = Compile("VSMain", "vs_5_1");
+            psMask = Compile("PSStencilMask", "ps_5_1");
+            psFill = Compile("PSMain", "ps_5_1");
+            byte[] posSem = Encoding.ASCII.GetBytes("POSITION\0");
+            byte[] texSem = Encoding.ASCII.GetBytes("TEXCOORD\0");
+            fixed (byte* pos = posSem)
+            fixed (byte* tex = texSem)
+            {
+                D3D12_INPUT_ELEMENT_DESC* elems = stackalloc D3D12_INPUT_ELEMENT_DESC[2];
+                elems[0] = default;
+                elems[0].SemanticName = (sbyte*)pos;
+                elems[0].Format = DXGI_FORMAT.DXGI_FORMAT_R32G32_FLOAT;
+                elems[0].AlignedByteOffset = 0;
+                elems[0].InputSlotClass = D3D12_INPUT_CLASSIFICATION.D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
+                elems[1] = default;
+                elems[1].SemanticName = (sbyte*)tex;
+                elems[1].Format = DXGI_FORMAT.DXGI_FORMAT_R32G32_FLOAT;
+                elems[1].AlignedByteOffset = 8;
+                elems[1].InputSlotClass = D3D12_INPUT_CLASSIFICATION.D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
+
+                D3D12_GRAPHICS_PIPELINE_STATE_DESC pd = default;
+                pd.pRootSignature = _shared.RootSignature;
+                pd.VS = new D3D12_SHADER_BYTECODE { pShaderBytecode = vs->GetBufferPointer(), BytecodeLength = vs->GetBufferSize() };
+                pd.InputLayout = new D3D12_INPUT_LAYOUT_DESC { pInputElementDescs = elems, NumElements = 2 };
+                pd.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE.D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+                pd.NumRenderTargets = 1;
+                pd.RTVFormats[0] = DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM;
+                pd.DSVFormat = StencilPso.DsvFormat;
+                pd.SampleDesc.Count = 1;
+                pd.SampleMask = uint.MaxValue;
+                pd.RasterizerState.FillMode = D3D12_FILL_MODE.D3D12_FILL_MODE_SOLID;
+                // CullMode is already NONE on the fill PSO — the tessellator makes no front-face guarantee, so INCR_SAT
+                // must fire for BOTH windings or half the mask would be missing.
+                pd.RasterizerState.CullMode = D3D12_CULL_MODE.D3D12_CULL_MODE_NONE;
+                pd.RasterizerState.DepthClipEnable = BOOL.TRUE;
+
+                // -- mask pre-pass (INCR_SAT): no color, no blend, stencil ALWAYS. -----------------------------------
+                pd.PS = new D3D12_SHADER_BYTECODE { pShaderBytecode = psMask->GetBufferPointer(), BytecodeLength = psMask->GetBufferSize() };
+                pd.BlendState.RenderTarget[0].BlendEnable = BOOL.FALSE;
+                pd.BlendState.RenderTarget[0].RenderTargetWriteMask = 0;   // the mask writes stencil ONLY
+                pd.DepthStencilState = StencilPso.Mask(D3D12_STENCIL_OP.D3D12_STENCIL_OP_INCR_SAT);
+                ID3D12PipelineState* incr;
+                if ((int)_device->CreateGraphicsPipelineState(&pd, __uuidof<ID3D12PipelineState>(), (void**)&incr) < 0) return;
+                _psoStencilIncr = incr;
+
+                pd.DepthStencilState = StencilPso.Mask(D3D12_STENCIL_OP.D3D12_STENCIL_OP_DECR_SAT);
+                ID3D12PipelineState* decr;
+                if ((int)_device->CreateGraphicsPipelineState(&pd, __uuidof<ID3D12PipelineState>(), (void**)&decr) < 0) return;
+                _psoStencilDecr = decr;
+
+                // -- the stencil-TESTED draw PSO: the normal blended fill/stroke arm + EQUAL/KEEP/write-mask-0. ------
+                pd.PS = new D3D12_SHADER_BYTECODE { pShaderBytecode = psFill->GetBufferPointer(), BytecodeLength = psFill->GetBufferSize() };
+                pd.BlendState.RenderTarget[0].BlendEnable = BOOL.TRUE;
+                pd.BlendState.RenderTarget[0].SrcBlend = D3D12_BLEND.D3D12_BLEND_ONE;
+                pd.BlendState.RenderTarget[0].DestBlend = D3D12_BLEND.D3D12_BLEND_INV_SRC_ALPHA;
+                pd.BlendState.RenderTarget[0].BlendOp = D3D12_BLEND_OP.D3D12_BLEND_OP_ADD;
+                pd.BlendState.RenderTarget[0].SrcBlendAlpha = D3D12_BLEND.D3D12_BLEND_ONE;
+                pd.BlendState.RenderTarget[0].DestBlendAlpha = D3D12_BLEND.D3D12_BLEND_INV_SRC_ALPHA;
+                pd.BlendState.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP.D3D12_BLEND_OP_ADD;
+                pd.BlendState.RenderTarget[0].RenderTargetWriteMask = (byte)D3D12_COLOR_WRITE_ENABLE.D3D12_COLOR_WRITE_ENABLE_ALL;
+                pd.DepthStencilState = StencilPso.EqualTest();
+                ID3D12PipelineState* test;
+                if ((int)_device->CreateGraphicsPipelineState(&pd, __uuidof<ID3D12PipelineState>(), (void**)&test) < 0) return;
+                _psoStencilTest = test;
+            }
+        }
+        catch { /* a stencil PSO is an ENHANCEMENT: on failure the device falls back to the scope's plain scissor */ }
+        finally
+        {
+            if (vs != null) vs->Release();
+            if (psMask != null) psMask->Release();
+            if (psFill != null) psFill->Release();
+        }
+    }
+
+    /// <summary>True once the stencil PSOs exist (or could be built) — the device asks BEFORE opening a scope so a PSO
+    /// build failure degrades the whole scope to a plain scissor instead of leaving an unmasked subtree.</summary>
+    public bool EnsureStencilReady()
+    {
+        EnsureStencilPsos();
+        return _psoStencilIncr != null && _psoStencilDecr != null && _psoStencilTest != null;
+    }
+
+    /// <summary>Draw ONE stencil mask pre-pass for a tier-3 clip: the same
+    /// <see cref="PathRealizationCache.Shared"/> realization <c>FillPath</c> would draw, through the INCR_SAT
+    /// (<paramref name="decr"/> = false, a push) or DECR_SAT (<paramref name="decr"/> = true, an inner pop) PSO, with
+    /// color writes masked off. Binds root signature / VB / IB / topology itself (this pipeline owns its own IA state —
+    /// see the type doc's trap), so the caller MUST invalidate its command-state cache afterwards.</summary>
+    public bool RecordStencilMask(ID3D12GraphicsCommandList* cmd, in PathDrawItem item, float vpW, float vpH, bool decr)
+    {
+        if (item.VtxCount <= 0 || item.IdxCount <= 0) return false;
+        if (!EnsureStencilReady()) return false;
+        if (_drawCursor >= MaxDraws) { _dropped++; return false; }
+        if (!TryResolveOrUpload(item.VtxStart, item.VtxCount, item.IdxStart, item.IdxCount, out int vtxBase, out int idxBase))
+        {
+            _dropped++;
+            return false;
+        }
+
+        cmd->SetGraphicsRootSignature(_shared.RootSignature);
+        _shared.SetViewportConstants(cmd, vpW, vpH);
+        cmd->SetPipelineState(decr ? _psoStencilDecr : _psoStencilIncr);
+        cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY.D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        var vbv = _vbView[_active];
+        cmd->IASetVertexBuffers(0, 1, &vbv);
+        var ibv = _ibView[_active];
+        cmd->IASetIndexBuffer(&ibv);
+
+        int slot = _drawCursor++;
+        _instMapped[_active][slot] = item.Inst;
+        cmd->SetGraphicsRootShaderResourceView(1, _instGva + (ulong)(slot * sizeof(PathInstance)));
+        cmd->DrawIndexedInstanced((uint)item.IdxCount, 1, (uint)idxBase, vtxBase, 0);
+        return true;
     }
 
     private void BuildBuffers(ID3D12Device* device)
@@ -300,11 +453,14 @@ float4 PSMain(VSOut i) : SV_Target
     /// MUST treat this exactly like <c>ImagePipeline.Begin</c> — an explicit, un-deduped rebind whenever the bound
     /// pipe transitions into Path — and must clear <c>_sharedSdfStateBound</c> afterward (see this type's doc for
     /// why <c>NoteSdfPipeBind</c> would be wrong here).</summary>
-    public void Begin(ID3D12GraphicsCommandList* cmd, float vpW, float vpH)
+    public void Begin(ID3D12GraphicsCommandList* cmd, float vpW, float vpH, bool stencilTest = false)
     {
         cmd->SetGraphicsRootSignature(_shared.RootSignature);
         _shared.SetViewportConstants(cmd, vpW, vpH);
-        cmd->SetPipelineState(_pso);
+        // Inside a tier-3 stencil scope the path lane draws through the EQUAL-tested clone (the device has already set
+        // OMSetStencilRef to the live nesting depth). A missing clone means the scope degraded to a plain scissor, in
+        // which case the normal PSO is exactly the right thing to bind.
+        cmd->SetPipelineState(stencilTest && _psoStencilTest != null ? _psoStencilTest : _pso);
         cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY.D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         var vbv = _vbView[_active];
         cmd->IASetVertexBuffers(0, 1, &vbv);
@@ -404,5 +560,8 @@ float4 PSMain(VSOut i) : SV_Target
             if (_inst[f] != null) { _inst[f]->Unmap(0, null); D3D12MemoryDiagnostics.Release(_inst[f], "Path.InstanceUpload"); _inst[f]->Release(); _inst[f] = null; }
         }
         if (_pso != null) _pso->Release();
+        if (_psoStencilIncr != null) { _psoStencilIncr->Release(); _psoStencilIncr = null; }
+        if (_psoStencilDecr != null) { _psoStencilDecr->Release(); _psoStencilDecr = null; }
+        if (_psoStencilTest != null) { _psoStencilTest->Release(); _psoStencilTest = null; }
     }
 }
