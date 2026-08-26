@@ -13,12 +13,15 @@ static class WaveeEqualizerCurve
 {
     public static readonly string[] FrequencyLabels = ["31", "62", "125", "250", "500", "1k", "2k", "4k", "8k", "16k"];
 
-    internal sealed record Props(float[] Gains, Action<int, float> OnBandChanged, bool IsEnabled);
+    internal sealed record Props(float[] Gains, Action<int, float> OnBandChanged, bool IsEnabled, float? Height = null);
 
-    public static Element Create(float[] gains, Action<int, float> onBandChanged, bool isEnabled = true)
+    /// <param name="height">Explicit surface height (null = the original width-derived heuristic,
+    /// <c>Math.Clamp(width * 0.38f, 252f, 360f)</c>). The setup wizard's Sound stage card fixes this to fit its own
+    /// budget rather than letting the curve claim whatever the card's width would otherwise imply.</param>
+    public static Element Create(float[] gains, Action<int, float> onBandChanged, bool isEnabled = true, float? height = null)
         // Re-pushed live props (the G4 channel) — replaces the deleted Ctx.Provide(Props.Channel, …) pattern; the
-        // record-equality gate re-renders the core only when Gains/OnBandChanged/IsEnabled actually change.
-        => Embed.Comp(new Props(gains, onBandChanged, isEnabled), () => new WaveeEqualizerCurveCore());
+        // record-equality gate re-renders the core only when Gains/OnBandChanged/IsEnabled/Height actually change.
+        => Embed.Comp(new Props(gains, onBandChanged, isEnabled, height), () => new WaveeEqualizerCurveCore());
 }
 
 sealed class WaveeEqualizerCurveCore : Component
@@ -57,7 +60,7 @@ sealed class WaveeEqualizerCurveCore : Component
 
     Element BuildSurface(WaveeEqualizerCurve.Props p, float width, int active, int hover)
     {
-        float height = Math.Clamp(width * 0.38f, 252f, 360f);
+        float height = p.Height ?? Math.Clamp(width * 0.38f, 252f, 360f);
         float plotW = MathF.Max(120f, width - PadLeft - PadRight);
         float plotH = MathF.Max(120f, height - PadTop - PadBottom);
         float zeroY = PadTop + GainToY(0f, plotH);

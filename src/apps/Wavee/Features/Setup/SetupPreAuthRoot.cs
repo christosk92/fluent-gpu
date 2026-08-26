@@ -55,9 +55,10 @@ sealed class SetupPreAuthRoot : Component
 /// <summary>Zero-size opener, mounted ONCE inside <see cref="SetupPreAuthRoot"/>'s own overlay host — a component,
 /// per the <c>[MountOnceContent]</c> contract <see cref="OverlayHost.Create"/> demands of its child (a raw element
 /// there would freeze at first render, exactly the bug <c>PopOutVideoWindow.Render</c>'s remarks describe). Opens the
-/// wizard BARE (no scrim — there is no live shell behind it to dim) exactly once per mount, after this root's first
-/// painted frame. <see cref="SetupDialog.Open"/> owns every close-path cleanup (the marker, <c>Covering</c>,
-/// <c>SetupSession.Current</c>) — this opener only guards against opening a second dialog concurrently.</summary>
+/// wizard BARE (the engine's own popup scrim paints instead — there is no live shell behind it to cover) exactly
+/// once per mount, after this root's first painted frame. <see cref="SetupDialog.Open"/> owns every close-path
+/// cleanup (the marker, resetting <c>Covering</c> to <c>SetupCover.None</c>, <c>SetupSession.Current</c>) — this
+/// opener only guards against opening a second dialog concurrently.</summary>
 sealed class SetupPreAuthOpener : Component
 {
     readonly SetupSession _session;

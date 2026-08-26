@@ -219,9 +219,17 @@
          — SetupGatingTests / SetupCommandsTests / SetupSignInProjectionTests drive the REAL decisions, exactly like
          SidebarBootstrap/SidebarDesignGating above. SetupBootstrap reuses SidebarBootstrap.IsFreshInstall directly. -->
     <Compile Include="..\Wavee\App\SetupGating.cs" Link="SetupGating.cs" />
+    <!-- the shared step-state vocabulary for SetupDecision.StepCard and the Done checklist (System-only enum) -->
+    <Compile Include="..\Wavee\App\SetupStepState.cs" Link="SetupStepState.cs" />
     <Compile Include="..\Wavee\App\SetupCommands.cs" Link="SetupCommands.cs" />
     <Compile Include="..\Wavee\App\SetupBootstrap.cs" Link="SetupBootstrap.cs" />
     <Compile Include="..\Wavee\App\SetupRuntimePresentation.cs" Link="SetupRuntimePresentation.cs" />
+    <Compile Include="..\Wavee\App\SetupSignInPresentation.cs" Link="SetupSignInPresentation.cs" />
+    <Compile Include="..\Wavee\App\SetupSoundFacts.cs" Link="SetupSoundFacts.cs" />
+    <Compile Include="..\Wavee\App\SetupNotificationSummary.cs" Link="SetupNotificationSummary.cs" />
+    <Compile Include="..\Wavee\App\SetupDoneSteps.cs" Link="SetupDoneSteps.cs" />
+    <Compile Include="..\Wavee\Features\Setup\AppearanceStageModel.cs" Link="AppearanceStageModel.cs" />
+    <Compile Include="..\Wavee\Features\Shell\PlaybackRuntimeSetupModel.Phase.cs" Link="PlaybackRuntimeSetupModel.Phase.cs" />
     <Compile Include="..\Wavee\Features\Setup\SetupLayout.cs" Link="SetupLayout.cs" />
     <!-- factory-reset wipe (System + WindowsApi storage only) — FactoryResetTests drive it against TEMP trees, never the real %LOCALAPPDATA% -->
     <Compile Include="..\Wavee\App\FactoryReset.cs" Link="FactoryReset.cs" />

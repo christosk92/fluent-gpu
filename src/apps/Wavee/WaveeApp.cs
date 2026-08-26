@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using FluentGpu;          // FluentApp (OS theme facade + SystemColorsChanged relay)
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;   // Diag.CompiledIn (debug-build gate for the FPS HUD)
@@ -258,6 +258,9 @@ sealed class WaveeApp : Component
             setupSession.StartBrowser = Services.UseRealBackend ? StartBrowser : FakeSignIn;
             setupSession.RestartCode = Services.UseRealBackend ? RestartCode : SeedDemoChallenge;
             setupSession.QuitApp = CloseApp;
+            // "Not me" on the Is-this-you confirmation: the same sign-out the profile menu uses (credential wiped, gate
+            // flips to LoggedOut, the wizard re-mints a pairing code). Fake backend: Switchable.LogoutAsync flips its stub.
+            setupSession.SwitchAccount = () => _ = _services.LogoutAsync();
         }
 
         // Remember a successful fake/demo authentication so a later logout enters the re-auth wizard. Challenge startup

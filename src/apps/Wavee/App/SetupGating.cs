@@ -119,4 +119,39 @@ static class SetupGating
         SetupPage.Done => 1f,
         _ => (int)page / 7f,
     };
+
+    /// <summary>The seven middle pages, in enum (== display) order — the ONE list <see cref="SetupStage.Roadmap"/>
+    /// walks to draw the Welcome page's "seven steps" rail. Deliberately the same seven <see cref="StepNumber"/> counts
+    /// (Welcome/Done are the two bookends, never roadmap rows themselves).</summary>
+    public static readonly SetupPage[] RoadmapPages =
+    [
+        SetupPage.Terms, SetupPage.SignIn, SetupPage.LocalPlayback, SetupPage.Appearance,
+        SetupPage.Sidebar, SetupPage.Sound, SetupPage.Notifications,
+    ];
+
+    /// <summary>The loc KEY (not the resolved string — callers <c>Loc.Get</c> it, same contract as
+    /// <see cref="StepLabelKey"/>) for a roadmap row's short label. Throws for Welcome/Done: neither is ever a roadmap
+    /// ROW, only the thing <see cref="RoadmapIndexFor"/> points AT one from.</summary>
+    public static string RoadmapLabelKey(SetupPage page) => page switch
+    {
+        SetupPage.Terms => Strings.Setup.Roadmap.Terms,
+        SetupPage.SignIn => Strings.Setup.Roadmap.SignIn,
+        SetupPage.LocalPlayback => Strings.Setup.Roadmap.LocalPlayback,
+        SetupPage.Appearance => Strings.Setup.Roadmap.Appearance,
+        SetupPage.Sidebar => Strings.Setup.Roadmap.Sidebar,
+        SetupPage.Sound => Strings.Setup.Roadmap.Sound,
+        SetupPage.Notifications => Strings.Setup.Roadmap.Notifications,
+        _ => throw new ArgumentOutOfRangeException(nameof(page), page, "not a roadmap page"),
+    };
+
+    /// <summary>Which <see cref="RoadmapPages"/> row reads as "current" for <paramref name="page"/>. Welcome maps to 0
+    /// (Terms, the very next step, reads as "up next" before the wizard has moved at all); Done maps to 7 — one past
+    /// the last row, a deliberate sentinel so nothing highlights once every step is behind you. Every middle page maps
+    /// to its own position in the list (<c>(int)page − 1</c>, since <see cref="SetupPage.Welcome"/> is 0).</summary>
+    public static int RoadmapIndexFor(SetupPage page) => page switch
+    {
+        SetupPage.Welcome => 0,
+        SetupPage.Done => 7,
+        _ => (int)page - 1,
+    };
 }

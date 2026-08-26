@@ -1405,6 +1405,12 @@ sealed class WaveeShell : Component
             Embed.Comp(() => new Wavee.Features.Video.InWindowVideoPip { Settings = _settings }),
             Embed.Comp(() => new Wavee.Features.Video.VideoPlacementHost { Settings = _settings }),
             videoFullscreenLayer,
+            // The setup wizard's shell-side scrim (work package I) — after every full-bleed content layer above (so
+            // it covers PiP too, per videoFullscreenLayer's own remarks). This whole ZStack becomes OverlayHost's
+            // Child (OverlayHost.Create(shellWithOverlays) below), and the host paints its own popups — including
+            // the wizard's plate itself — ON TOP of that Child, so living inside it (however late) still keeps this
+            // scrim under the wizard.
+            Embed.Comp(() => new SetupCoverScrim()),
             DragPreviewLayer.Of(WaveeResourceDrag.Preview)) with { Grow = 1f };
 
         return Ctx.Provide(ShellUi.Slot, _shellUi,
@@ -2158,6 +2164,34 @@ sealed class ShellNarrowDrawerScrim : Component
         {
             Grow = 1f, Fill = ColorF.FromRgba(0, 0, 0, 0x33), Opacity = target,
             HitTestVisible = open, OnClick = () => _open.Value = false,
+        };
+    }
+}
+
+/// <summary>The shell's half of the setup wizard's scrim (work package I — see <see cref="SetupSession.Covering"/>
+/// and <c>SetupLayout.CoverFor</c>). The engine's own popup scrim only ever paints for the BARE pre-auth mount
+/// (<c>SetupDialog.Open</c> sets <c>PopupOptions.ScrimVisual = bare</c>); post-auth the shell paints this instead,
+/// because only the shell knows whether the current setup page wants an ordinary dim (<see cref="SetupCover.Dim"/>)
+/// or a lifted, live-preview look (<see cref="SetupCover.Live"/> — Appearance/Sidebar, where the wizard's own
+/// promise is "this window IS the preview"). No ctor args — always mounted, reading <see cref="SetupSession.Covering"/>
+/// itself instead of taking a signal in, since (unlike <see cref="ShellNarrowDrawerScrim"/>'s per-shell drawer state)
+/// this one static signal is shared by every mount — modelled on <see cref="ShellNarrowDrawerScrim"/> down to the
+/// cross-fade idiom.</summary>
+sealed class SetupCoverScrim : Component
+{
+    public override Element Render()
+    {
+        bool dim = SetupSession.Covering.Value == SetupCover.Dim;
+        var mounted = UseRef(false);
+        float ms = Motion.ReducedMotion ? 0f : WaveeMotion.Standard;
+        float target = dim ? 1f : 0f;
+        UseTransition(AnimChannel.Opacity, mounted.Value ? 1f - target : target, target,
+            ms, Easing.Linear, dim);
+        mounted.Value = true;
+        return new BoxEl
+        {
+            Grow = 1f, Fill = Prop.Of(() => Tok.FillSmoke), Opacity = target,
+            HitTestVisible = false,
         };
     }
 }

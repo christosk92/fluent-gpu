@@ -4,39 +4,31 @@ using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
-using FluentGpu.Signals;
 
 namespace Wavee;
 
-/// <summary>One row of an "applying" step list — a near-copy of <c>LoginView.LoginStepRow</c> generalized off a
-/// plain int <paramref name="mine"/>/<paramref name="stage"/> pair rather than the login takeover's own
-/// <c>LoginStep</c>/<c>LoginSnapshot</c>, so the SAME row shape drives the Done page's four-row "Applying"
-/// checklist. Reads SIGNALS rather than taking the stage as a prop (props freeze at mount) — this row's own
-/// <paramref name="mine"/>/<paramref name="label"/> are constants, which is exactly what a frozen prop is for.
+/// <summary>One row of a step list — a near-copy of <c>LoginView.LoginStepRow</c> generalized off the shared
+/// <see cref="SetupStepState"/> vocabulary rather than the login takeover's own <c>LoginStep</c>/<c>LoginSnapshot</c>,
+/// so the SAME row shape drives the Done page's four-row checklist. State arrives as a RE-PUSHED prop
+/// (<see cref="Props"/> via <c>Embed.Comp</c> + <c>UseProps</c>) — not a signal this row owns, and not a frozen
+/// constructor field either: <see cref="SetupStepList.Column"/> rebuilds the props tuple on every caller render (the
+/// checklist's row states change as library sync/runtime provisioning settle), and a reused <c>ComponentEl</c> never
+/// re-runs its factory, so a ctor field would freeze the row's very first state forever.
 ///
-/// <para>Marks: pending = a dim bullet; current = <c>ProgressRing.Indeterminate</c>; done = a
-/// checkmark with the same ~320ms <c>ScaleX</c>/<c>ScaleY</c> pop keyframes <c>LoginStepRow</c> fires from a
-/// <c>UseEffect</c> keyed on <c>done</c>;
-/// <paramref name="failed"/> (current step only) swaps the mark for a critical X — a step in this list is not
-/// expected to fail in practice (every one either completes or lands "done on arrival"), but the row carries the
-/// same failure vocabulary <c>LoginStepRow</c> does rather than silently dropping it.</para></summary>
+/// <para>Marks: <see cref="SetupStepState.Pending"/> = a dim bullet; <see cref="SetupStepState.Current"/> =
+/// <c>ProgressRing.Indeterminate</c>; <see cref="SetupStepState.Done"/> = a checkmark with the same ~320ms
+/// <c>ScaleX</c>/<c>ScaleY</c> pop keyframes <c>LoginStepRow</c> fires, keyed on the row's OWN transition into
+/// <c>Done</c> (not a global animation flag); <see cref="SetupStepState.Attention"/> = a caution glyph;
+/// <see cref="SetupStepState.Failed"/> = a critical X.</para></summary>
 sealed class SetupStepRow : Component
 {
-    readonly Signal<int> _stage;
-    readonly int _mine;
-    readonly string _label;
-    readonly Signal<bool> _failed;
-
-    public SetupStepRow(Signal<int> stage, int mine, string label, Signal<bool> failed)
-    { _stage = stage; _mine = mine; _label = label; _failed = failed; }
+    internal sealed record Props(string Label, SetupStepState State);
 
     public override Element Render()
     {
-        int cur = _stage.Value;         // subscribe → re-render as the apply step advances
-        bool failed = _failed.Value;    // subscribe
-        bool current = cur == _mine;
-        bool failedNow = current && failed;
-        bool done = cur > _mine;
+        var p = UseProps<Props>();
+        bool current = p.State == SetupStepState.Current;
+        bool done = p.State == SetupStepState.Done;
 
         var iconRef = UseRef<NodeHandle>(default);
         UseEffect(() =>
@@ -50,14 +42,14 @@ sealed class SetupStepRow : Component
             anim.Keyframes(iconRef.Value, AnimChannel.ScaleY, pop, 320f, loop: false);
         }, done);
 
-        Element mark = current && !failedNow
-            ? ProgressRing.Indeterminate(16f)
-            : new TextEl(failedNow ? Icons.Cancel : done ? Icons.Accept : Icons.RadioBullet)
-            {
-                Size = failedNow || done ? 15f : 11f,
-                FontFamily = Theme.IconFont,
-                Color = failedNow ? Tok.SystemFillCritical : done ? Tok.AccentDefault : Tok.TextTertiary,
-            };
+        Element mark = p.State switch
+        {
+            SetupStepState.Current => ProgressRing.Indeterminate(16f),
+            SetupStepState.Failed => new TextEl(Icons.Cancel) { Size = 15f, FontFamily = Theme.IconFont, Color = Tok.SystemFillCritical },
+            SetupStepState.Attention => new TextEl(Icons.StatusWarning) { Size = 15f, FontFamily = Theme.IconFont, Color = Tok.SystemFillCaution },
+            SetupStepState.Done => new TextEl(Icons.Accept) { Size = 15f, FontFamily = Theme.IconFont, Color = Tok.AccentDefault },
+            _ => new TextEl(Icons.RadioBullet) { Size = 11f, FontFamily = Theme.IconFont, Color = Tok.TextTertiary },
+        };
 
         return new BoxEl
         {
@@ -70,7 +62,7 @@ sealed class SetupStepRow : Component
                     Width = 18f, Height = 18f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
                     OnRealized = h => iconRef.Value = h, Children = [mark],
                 },
-                new TextEl(_label)
+                new TextEl(p.Label)
                 {
                     Size = 12f, LineHeight = 16f,
                     Weight = current ? (ushort)600 : (ushort)400,
@@ -81,14 +73,18 @@ sealed class SetupStepRow : Component
     }
 }
 
-/// <summary>The <c>Stagger = 55f</c> column of <see cref="SetupStepRow"/>s — the Done page's "Applying" checklist.</summary>
+/// <summary>The <c>Stagger = 55f</c> column of <see cref="SetupStepRow"/>s — the Done page's checklist, both in the
+/// stage column (Wide) and appended under the chips (Compact/Narrow).</summary>
 static class SetupStepList
 {
-    public static Element Column(Signal<int> stage, Signal<bool> failed, IReadOnlyList<(int Stage, string Label)> steps)
+    public static Element Column(IReadOnlyList<(string Label, SetupStepState State)> steps)
     {
         var kids = new List<Element>(steps.Count);
-        foreach (var step in steps)
-            kids.Add(Embed.Comp(() => new SetupStepRow(stage, step.Stage, step.Label, failed)) with { Key = "step:" + step.Stage });
+        for (int i = 0; i < steps.Count; i++)
+        {
+            var step = steps[i];
+            kids.Add(Embed.Comp(new SetupStepRow.Props(step.Label, step.State), () => new SetupStepRow()) with { Key = "step:" + i });
+        }
         return new BoxEl
         {
             Direction = 1, Gap = Spacing.XS, AlignSelf = FlexAlign.Stretch,

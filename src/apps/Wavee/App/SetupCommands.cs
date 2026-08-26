@@ -100,7 +100,7 @@ static class SetupCommands
     {
         SetupSignInPhase.Idle => new SetupCommandRow(Strings.Auth.LogIn, Strings.Auth.Close, SetupButtonKind.Spotify, true, true, false, false),
         SetupSignInPhase.Busy => new SetupCommandRow(Strings.Auth.SigningIn, Strings.Auth.Cancel, SetupButtonKind.Spotify, false, true, false, false),
-        SetupSignInPhase.Done => new SetupCommandRow(Strings.Setup.Continue, null, SetupButtonKind.Accent, true, false, false, false),
+        SetupSignInPhase.Done => new SetupCommandRow(Strings.Setup.SignIn.YesContinue, Strings.Setup.SignIn.NotMe, SetupButtonKind.Accent, true, true, false, false),
         SetupSignInPhase.Failed => new SetupCommandRow(Strings.Auth.TryAgain, Strings.Auth.Close, SetupButtonKind.Spotify, true, true, false, false),
         SetupSignInPhase.Expired => new SetupCommandRow(Strings.Auth.GetNewCode, Strings.Auth.Close, SetupButtonKind.Spotify, true, true, false, false),
         SetupSignInPhase.Premium => new SetupCommandRow(Strings.Auth.Upgrade, Strings.Auth.UseAnotherAccount, SetupButtonKind.Accent, true, true, false, false),

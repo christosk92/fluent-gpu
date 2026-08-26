@@ -27,20 +27,30 @@ namespace Wavee;
 //     nothing legible and would put three N-cover working sets behind a dialog the user sees once.
 sealed class SidebarDesignPicker : Component
 {
+    /// <summary>The two shapes this ONE picker renders as: <c>Cards</c> is the original square-card strip (Settings'
+    /// compact column, the fresh-install chooser); <c>Rows</c> is the setup wizard's tall full-width radio row (see
+    /// the static <c>Rows(...)</c> host method below) — same selection/apply machinery, a different
+    /// <see cref="RowCard"/> body instead of <see cref="Card"/>.</summary>
+    internal enum Variant { Cards, Rows }
+
     readonly Func<int> _selected;
     readonly Action<int> _onChange;
     readonly bool _compact;
     readonly bool _allowCustom;
+    readonly Variant _variant;
 
     /// <param name="selected">The live selection, read on every render (0 Classic · 1 Library · 2 Wavee Curated — the
     /// persisted <c>WaveeSettings.SidebarDesign</c> numbering, via <see cref="SidebarDesignGating.IndexOf"/>).</param>
     /// <param name="onChange">Applied IMMEDIATELY on click — no confirmation, no restart (§C6.1).</param>
-    /// <param name="compact">The 200×168 card (Settings, where the picker shares a page column) instead of 224×196.</param>
+    /// <param name="compact">The 200×168 card (Settings, where the picker shares a page column) instead of 224×196.
+    /// Ignored when <paramref name="variant"/> is <see cref="Variant.Rows"/> (rows have their own fixed metrics).</param>
     /// <param name="allowCustom">Temporary feature gate for the unfinished Custom design. When false, its preview is
     /// still visible for discoverability but is disabled and labelled “Coming soon”.</param>
-    public SidebarDesignPicker(Func<int> selected, Action<int> onChange, bool compact = false, bool allowCustom = false)
+    /// <param name="variant">Cards (default) or Rows — see <see cref="Variant"/>.</param>
+    public SidebarDesignPicker(Func<int> selected, Action<int> onChange, bool compact = false, bool allowCustom = false,
+                                Variant variant = Variant.Cards)
     {
-        _selected = selected; _onChange = onChange; _compact = compact; _allowCustom = allowCustom;
+        _selected = selected; _onChange = onChange; _compact = compact; _allowCustom = allowCustom; _variant = variant;
     }
 
     // ── hosts ─────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -60,6 +70,20 @@ sealed class SidebarDesignPicker : Component
             // KEYED BY THE FROZEN LAYOUT/AVAILABILITY PROPS. `prefs`/`settings` are reference-stable for the process,
             // but compact can change at a viewport tier and the temporary availability gate will eventually flip.
             with { Key = $"sidebar.design.picker:{(compact ? "compact" : "full")}:{allowCustom}" };
+
+    /// <summary>The setup wizard's own shape: one column of tall (100-DIP) full-width radio rows instead of a
+    /// wrapped strip of square cards — <see cref="SetupSidebarPage"/>'s decision-column body. Same apply path, same
+    /// selection source, same "Custom stays outside the radio group while unavailable" treatment as <see cref="Row"/>.</summary>
+    public static Element Rows(SidebarPreferences? prefs, IAppSettings? settings, bool allowCustom = false)
+        => Embed.Comp(() => new SidebarDesignPicker(
+            () => prefs is not null
+                ? SidebarDesignGating.IndexOf(prefs.Design.Value)
+                : SidebarDesignGating.IndexOf(SidebarDesignGating.ActiveDesign(settings)),
+            value => Apply(prefs, settings, value),
+            compact: false,
+            allowCustom,
+            Variant.Rows))
+            with { Key = $"sidebar.design.picker:rows:{allowCustom}" };
 
     /// <summary>Apply a card's value. Goes through <c>SwitchDesign</c> (state snapshot/restore + the settings write +
     /// the design signal bump) whenever the service exists; falls back to a bare settings write when it does not, so an
@@ -103,9 +127,44 @@ sealed class SidebarDesignPicker : Component
 
     // ── render ────────────────────────────────────────────────────────────────────────────────────────────────────────
 
+    /// <summary>Container styling for <see cref="Variant.Rows"/>'s items grid — the single-column vertical LIST a
+    /// tall full-width row reads as, unlike <see cref="WaveePicker.Strip"/>'s own default wrapped horizontal strip.
+    /// Non-wrapping (there is only ever one column at <c>maxColumns: 1</c>, but a narrow window must not start
+    /// wrapping fixed-width rows into a second column either) and a 4-DIP column gap
+    /// (<see cref="SetupLayout.RowGap"/>) — the same rhythm the disabled Custom row below sits one gap away from.</summary>
+    static readonly TemplateParts s_rows = new()
+    {
+        [RadioButtons.PartGrid] = g => g with { Wrap = false },
+        [RadioButtons.PartColumn] = c => c with { Gap = SetupLayout.RowGap },
+    };
+
     public override Element Render()
     {
         int sel = _selected();
+
+        if (_variant == Variant.Rows)
+        {
+            // Same shape as the Cards branch below (a real 2-item radio group + Custom kept OUTSIDE it while
+            // unavailable), just laid out as one vertical column of rows instead of a wrapped strip of cards.
+            var unavailableRow = RowCard(SidebarDesign.Curated, sel == (int)SidebarDesign.Curated, comingSoon: true);
+            return new BoxEl
+            {
+                Direction = 1, Gap = SetupLayout.RowGap, AlignItems = FlexAlign.Stretch,
+                Children =
+                [
+                    WaveePicker.Strip(2, sel < 2 ? sel : -1,
+                        (i, on) => RowCard(SidebarDesignGating.FromIndex(i), on), _onChange,
+                        maxColumns: 1, parts: s_rows),
+                    unavailableRow with
+                    {
+                        IsEnabled = false, Focusable = false, TabStop = false,
+                        Role = AutomationRole.RadioButton, Cursor = CursorId.No,
+                        Opacity = 0.62f, HoverScale = 1f, PressScale = 1f,
+                    },
+                ],
+            };
+        }
+
         var m = Metrics.For(_compact);
 
         // The two available choices remain one real radio group. Custom is kept OUTSIDE it while unavailable so it is
@@ -134,6 +193,61 @@ sealed class SidebarDesignPicker : Component
         return WaveePicker.Strip(3, sel, (i, on) => Card(SidebarDesignGating.FromIndex(i), on, in m), _onChange);
     }
 
+    /// <summary>One tall (100-DIP, <see cref="WaveePicker.WideRow"/>) full-width radio row — the setup wizard's own
+    /// card body: a 120×84 thumbnail beside a title(+status pill)/subtitle column, instead of <see cref="Card"/>'s
+    /// stacked thumbnail-over-title-over-subtitle. Shares <see cref="Preview"/> (fed <see cref="Metrics.Thumb"/>),
+    /// <see cref="StatusTag"/> and the loc-key lookups with <see cref="Card"/> — only the shell and the arrangement
+    /// differ.</summary>
+    static BoxEl RowCard(SidebarDesign design, bool on, bool comingSoon = false)
+    {
+        var ink = WaveePicker.Ink.For(on);
+        var m = Metrics.Thumb;
+
+        Element thumb = new BoxEl
+        {
+            Width = SetupLayout.SidebarThumbW, Height = SetupLayout.SidebarThumbH, Shrink = 0f,
+            Direction = 1, Gap = m.Gap, ClipToBounds = true,
+            Padding = new Edges4(8f, 7f, 8f, 0f),   // no bottom pad: the miniature CONTINUES past the fold, like a pane
+            Corners = CornerRadius4.All(6f),
+            Fill = on ? Tok.AccentSubtle : Tok.FillLayerDefault,
+            BorderWidth = 1f,
+            BorderColor = on ? Tok.AccentDefault : Tok.StrokeCardDefault,
+            Children = Preview(design, in m, ink),
+        };
+
+        var title = WaveePicker.Label(Loc.Get(SidebarDesignGating.TitleKey(design)), on, 14f);
+        Element titleRow = new BoxEl
+        {
+            Direction = 0, Gap = 6f, AlignItems = FlexAlign.Center, AlignSelf = FlexAlign.Stretch,
+            Children = comingSoon
+                ? [title with { Shrink = 1f }, StatusTag(Loc.Get(Strings.Sidebar.Design.ComingSoon), in m, active: false)]
+                : on ? [title with { Shrink = 1f }, StatusTag(Loc.Get(Strings.Sidebar.Design.Active), in m, active: true)] : [title],
+        };
+
+        Element textCol = new BoxEl
+        {
+            Direction = 1, Gap = 2f, Grow = 1f, Basis = 0f, Shrink = 1f, MinWidth = 0f, Justify = FlexJustify.Center,
+            Children =
+            [
+                titleRow,
+                new TextEl(Loc.Get(SidebarDesignGating.SubtitleKey(design)))
+                {
+                    Size = 12f, LineHeight = 16f, Color = Tok.TextTertiary,
+                    Wrap = TextWrap.Wrap, MaxLines = 2, Trim = TextTrim.WordEllipsis,
+                    MinWidth = 0f,
+                },
+            ],
+        };
+
+        Element content = new BoxEl
+        {
+            Direction = 0, Gap = 12f, AlignItems = FlexAlign.Center, AlignSelf = FlexAlign.Stretch, Grow = 1f,
+            Children = [thumb, textCol],
+        };
+
+        return WaveePicker.Card(on, WaveePicker.WideRow, content) with { Key = SidebarDesignInfo.Slug(design) + ":row" };
+    }
+
     BoxEl Card(SidebarDesign design, bool on, in Metrics m, bool comingSoon = false)
     {
         // WaveePicker owns the card shell, the accent ink pair and the selected-label treatment — the same three things
@@ -149,12 +263,7 @@ sealed class SidebarDesignPicker : Component
             Fill = on ? Tok.AccentSubtle : Tok.FillLayerDefault,
             BorderWidth = 1f,
             BorderColor = on ? Tok.AccentDefault : Tok.StrokeCardDefault,
-            Children = design switch
-            {
-                SidebarDesign.LibraryV3 => LibraryPreview(in m, ink.Block, ink.Faint),
-                SidebarDesign.Curated => CuratedPreview(in m, ink.Block, ink.Faint),
-                _ => ClassicPreview(in m, ink.Block, ink.Faint),
-            },
+            Children = Preview(design, in m, ink),
         };
 
         var title = WaveePicker.Label(Loc.Get(SidebarDesignGating.TitleKey(design)), on, m.TitleSize);
@@ -193,6 +302,18 @@ sealed class SidebarDesignPicker : Component
     };
 
     // ── the three miniatures ──────────────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>Design → its wireframe children, sized off <paramref name="m"/> and tinted with <paramref name="ink"/>
+    /// — the one dispatch <see cref="Card"/> and <see cref="RowCard"/> both call (and, via <see cref="Metrics.Stage"/>,
+    /// the setup wizard's own live-preview stage miniature: <c>SetupSidebarPage.SidebarStageView</c>). Extracted from
+    /// <see cref="Card"/>'s own preview box so a caller that wants ONLY the wireframe (no card shell) can still get an
+    /// on-brand, on-theme diagram of the selected design instead of hand-rolling a second copy.</summary>
+    internal static Element[] Preview(SidebarDesign design, in Metrics m, WaveePicker.Ink ink) => design switch
+    {
+        SidebarDesign.LibraryV3 => LibraryPreview(in m, ink.Block, ink.Faint),
+        SidebarDesign.Curated => CuratedPreview(in m, ink.Block, ink.Faint),
+        _ => ClassicPreview(in m, ink.Block, ink.Faint),
+    };
 
     /// <summary>Classic: the Library icon shortcuts, a divider, then the flat playlist list (§C6.1).</summary>
     static Element[] ClassicPreview(in Metrics m, ColorF block, ColorF faint)
@@ -315,13 +436,26 @@ sealed class SidebarDesignPicker : Component
 
     /// <summary>What this picker owns: the MINIATURE's proportions and its type ramp. The card's own footprint (width,
     /// resting inset, child gap) is <see cref="WaveePicker.Shell"/>'s — shared with the Settings wireframe pickers, so a
-    /// change to the selected-border mechanic lands in one place.</summary>
-    readonly record struct Metrics(bool Compact, WaveePicker.Shell Shell, float PreviewH, float Gap, float RowH,
+    /// change to the selected-border mechanic lands in one place. <c>internal</c> (not private) so a caller outside this
+    /// class can feed <see cref="Preview"/> a metrics preset without going through a whole <see cref="Card"/>/
+    /// <see cref="RowCard"/> — the setup wizard's live-preview stage miniature (<c>SetupSidebarPage.SidebarStageView</c>)
+    /// is exactly that caller.</summary>
+    internal readonly record struct Metrics(bool Compact, WaveePicker.Shell Shell, float PreviewH, float Gap, float RowH,
                                    float TitleSize, float SubSize, float TagSize)
     {
         public static Metrics For(bool compact) => compact
             ? new Metrics(true, WaveePicker.PaneCompact, 96f, 3f, 10f, 12f, 10.5f, 9f)
             : new Metrics(false, WaveePicker.Pane, 116f, 3f, 11f, 13f, 11f, 9.5f);
+
+        /// <summary>The <see cref="RowCard"/> thumbnail's own preview metrics (120×84, compact-style icon/art counts —
+        /// the same density <see cref="For"/>'s compact arm uses).</summary>
+        public static readonly Metrics Thumb = new(true, WaveePicker.PaneCompact, 84f, 3f, 10f, 14f, 12f, 9f);
+
+        /// <summary>The setup wizard's own 112-wide live-preview stage pane (non-compact icon/art counts — the fuller
+        /// wireframe reads better at that width than the thumbnail's compact one). Title/sub/tag sizes are unused there
+        /// (the stage draws no title/subtitle/tag of its own), so they're zeroed rather than borrowed from an unrelated
+        /// preset.</summary>
+        public static readonly Metrics Stage = new(false, WaveePicker.Pane, 0f, 5f, 18f, 0f, 0f, 0f);
     }
 
 }

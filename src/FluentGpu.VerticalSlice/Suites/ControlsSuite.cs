@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
@@ -1053,6 +1053,46 @@ static class ControlsSuite
             Check("gate.ctl.bind.segmented-options Segmented.Create(items, signal, onChange, options): auto-select is quiet; user writes then notifies; programmatic write has no echo; indicator remains centered",
                 initializedQuietly && userWrote && programmaticQuiet && initialPillCentered && movedPillCentered,
                 $"init={initializedQuietly} selected={selected.Value} changes={changes} centered={initialPillCentered}/{movedPillCentered}");
+        }
+
+        // gate.ctl.bind.segmented-weight — Segmented.Style.SelectedFontWeight is an additive knob (default 400 ⇒
+        // byte-identical output for every existing caller): with the default style the auto-selected label renders at
+        // the default 400; with SelectedFontWeight=600 only the selected item's label goes heavier, unselected labels
+        // stay at 400.
+        {
+            var weightFonts = new HeadlessFontSystem(strings);
+            var scene = new SceneStore();
+            new TreeReconciler(scene, strings).ReconcileRoot(new BoxEl
+            {
+                Direction = 1,
+                Children =
+                [
+                    Segmented.Create([new SegmentedItem("A"), new SegmentedItem("B"), new SegmentedItem("C")]),
+                    Segmented.Create(
+                        [new SegmentedItem("X"), new SegmentedItem("Y"), new SegmentedItem("Z")],
+                        options: new Segmented.SegmentedOptions
+                        {
+                            Style = Segmented.DefaultStyle with { SelectedFontWeight = 600 },
+                        }),
+                ],
+            }, null);
+            new FlexLayout(scene, weightFonts).Run(scene.Root);
+            var dl = new DrawList();
+            SceneRecorder.Record(scene, dl);
+            var dev = new HeadlessGpuDevice();
+            dev.SubmitDrawList(dl.Bytes, dl.SortKeys, new FrameInfo(new Size2(400, 300), 1f, ColorF.Transparent));
+            int wA = -1, wX = -1, wY = -1, wZ = -1;
+            foreach (var g in dev.LastGlyphs)
+            {
+                string t = strings.Resolve(g.Text);
+                if (t == "A") wA = g.Weight;
+                else if (t == "X") wX = g.Weight;
+                else if (t == "Y") wY = g.Weight;
+                else if (t == "Z") wZ = g.Weight;
+            }
+            Check("gate.ctl.bind.segmented-weight Segmented.Style.SelectedFontWeight: default style keeps the auto-selected label at 400; SelectedFontWeight=600 heavies only the selected label, unselected stay 400",
+                wA == 400 && wX == 600 && wY == 400 && wZ == 400,
+                $"default-selected(A)={wA} weighted-selected(X)={wX} unselected(Y,Z)={wY}/{wZ}");
         }
 
         // gate.ctl.bind.naming — the closed callback-name set is enforced: NO public control factory (Create/Group)

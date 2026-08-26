@@ -50,6 +50,10 @@ static class WaveePicker
     /// wide, 8 of resting inset on each side). Content-sized in height — the miniature IS the card's content, and the
     /// label sits under the card rather than in it (<see cref="Titled"/>).</summary>
     public static readonly Shell CoverMini = new(92f, float.NaN, 8f, 5f);
+    /// <summary>A wide horizontal row card — the setup wizard's sidebar-design chooser
+    /// (<c>SidebarDesignPicker.Rows</c>), where the picker reads as a vertical LIST of full-width rows rather than a
+    /// strip of square cards.</summary>
+    public static readonly Shell WideRow = new(480f, 100f, 8f, 0f);
 
     /// <summary>The card shell: fill, radius, the accent border that grows inward on selection, the subtle
     /// hover/press scale. Deliberately carries NO <c>Role</c>/<c>Focusable</c>/<c>OnClick</c> — inside
@@ -162,6 +166,56 @@ static class WaveePicker
         };
     }
 
+    /// <summary>A tinted bar segment for a wireframe row — <paramref name="strong"/> picks the identity ink
+    /// (<see cref="Ink.Block"/>) over the skeleton ink (<see cref="Ink.Faint"/>), <paramref name="height"/> the bar's
+    /// thickness (and, via <see cref="Radii.Circle"/>, its pill radius). Promoted out of
+    /// <c>SettingsPage.General.TrackListStyleCards</c> so <see cref="ModernRow"/>/<see cref="ClassicRow"/> can share it
+    /// with any other row-wireframe miniature (the setup wizard's Appearance stage) instead of a second hand-copy.</summary>
+    public static Element Bar(float grow, Ink ink, bool strong = false, float height = Spacing.XXS) => new BoxEl
+    {
+        Grow = grow, Basis = 0f, MinWidth = 0f, Height = height,
+        Corners = Radii.Circle(height), Fill = strong ? ink.Block : ink.Faint,
+    };
+
+    /// <summary>The "Modern" track-row wireframe: a square art tile beside a title+subtitle bar pair (or, with
+    /// <paramref name="twoLine"/> false, a single bar) — the art-led stacked-row grammar every Modern-style track list
+    /// uses. <paramref name="art"/> is the tile's edge; <paramref name="height"/> the row's own height (both default
+    /// to the Settings-tab miniature's original 20/16 so existing callers are pixel-identical).</summary>
+    public static Element ModernRow(Ink ink, float height = Spacing.XL, float art = Spacing.L, bool twoLine = true) => new BoxEl
+    {
+        Height = height, Direction = 0, Gap = Spacing.XS, AlignItems = FlexAlign.Center,
+        Padding = new Edges4(Spacing.XS, 0f, Spacing.XS, 0f),
+        Corners = Radii.ControlAll, Fill = ink.Faint,
+        Children =
+        [
+            new BoxEl { Width = art, Height = art, Shrink = 0f, Corners = Radii.ControlAll, Fill = ink.Block },
+            twoLine
+                ? new BoxEl
+                {
+                    Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = Spacing.XXS,
+                    Children = [Bar(1f, ink, strong: true), Bar(0.65f, ink)],
+                }
+                : Bar(1f, ink, strong: true),
+        ],
+    };
+
+    /// <summary>The "Classic" track-row wireframe: three aligned text-lane bars over a hairline — the three-lane grid
+    /// + divider grammar every Classic-style track list uses.</summary>
+    public static Element ClassicRow(Ink ink, float height = Spacing.XL) => new BoxEl
+    {
+        Height = height, Direction = 1,
+        Children =
+        [
+            new BoxEl
+            {
+                Direction = 0, Grow = 1f, Gap = Spacing.S, AlignItems = FlexAlign.Center,
+                Padding = new Edges4(Spacing.XS, 0f, Spacing.XS, 0f),
+                Children = [Bar(1f, ink, strong: true), Bar(0.75f, ink), Bar(0.75f, ink)],
+            },
+            new BoxEl { Height = 1f, Fill = ink.Faint },
+        ],
+    };
+
     /// <summary>A card (or swatch) over its label — the shape three of the four pickers want. Returns a
     /// <see cref="BoxEl"/> so a caller can <c>with</c>-adjust it (the palette column pins its own width).</summary>
     public static BoxEl Titled(Element card, string label, bool on, float gap = Spacing.S, float labelSize = 12f) => new()
@@ -207,8 +261,11 @@ static class WaveePicker
     /// ±1 in DATA order (i.e. down a column) while Left/Right jump column to column at the same row. The default of
     /// one-item-per-column is the degenerate case of exactly that, which is why the two consumers cannot
     /// disagree.</para></summary>
+    /// <param name="parts">Container template-part overrides — defaults to <see cref="s_strip"/> (wrap + gap, no
+    /// column shrink). A caller whose picker reads as a vertical LIST rather than a wrapped horizontal strip (the
+    /// setup wizard's sidebar-design chooser, one column of full-width rows) passes its own.</param>
     public static Element Strip(int count, int selected, Func<int, bool, Element> item, Action<int> onChange,
-                                int? maxColumns = null)
+                                int? maxColumns = null, TemplateParts? parts = null)
         => RadioButtons.Create(
             count,
             i => item(i, i == selected),
@@ -222,5 +279,5 @@ static class WaveePicker
             // data order. A caller-supplied count is clamped the same way, so 0 or a negative can never reach the grid.
             maxColumns: Math.Max(1, maxColumns ?? count),
             style: s_bare,
-            parts: s_strip);
+            parts: parts ?? s_strip);
 }

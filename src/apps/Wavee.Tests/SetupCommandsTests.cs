@@ -23,7 +23,7 @@ public class SetupCommandsTests
 
             (SignInCtx(SetupSignInPhase.Idle), Strings.Auth.LogIn, SetupButtonKind.Spotify, true, Strings.Auth.Close, true, false),
             (SignInCtx(SetupSignInPhase.Busy), Strings.Auth.SigningIn, SetupButtonKind.Spotify, false, Strings.Auth.Cancel, true, false),
-            (SignInCtx(SetupSignInPhase.Done), Strings.Setup.Continue, SetupButtonKind.Accent, true, null, false, false),
+            (SignInCtx(SetupSignInPhase.Done), Strings.Setup.SignIn.YesContinue, SetupButtonKind.Accent, true, Strings.Setup.SignIn.NotMe, true, false),
             (SignInCtx(SetupSignInPhase.Failed), Strings.Auth.TryAgain, SetupButtonKind.Spotify, true, Strings.Auth.Close, true, false),
             (SignInCtx(SetupSignInPhase.Expired), Strings.Auth.GetNewCode, SetupButtonKind.Spotify, true, Strings.Auth.Close, true, false),
             (SignInCtx(SetupSignInPhase.Premium), Strings.Auth.Upgrade, SetupButtonKind.Accent, true, Strings.Auth.UseAnotherAccount, true, false),

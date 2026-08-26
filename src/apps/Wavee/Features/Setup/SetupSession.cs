@@ -21,10 +21,12 @@ sealed class SetupSession
     public static readonly Signal<int> OpenRequest = new(0);
     public static void Bump() => OpenRequest.Value++;
 
-    /// <summary>The shell reads this to blur/dim behind the dialog while it is open. Flipped by
-    /// <see cref="SetupDialog.Open"/> — true only for a <c>bare: false</c> mount (there IS a live shell behind it
-    /// to dim); cleared on every close path from the same method's <c>ClosedAction</c>.</summary>
-    public static readonly Signal<bool> Covering = new(false);
+    /// <summary>The shell reads this to dim (<see cref="SetupCover.Dim"/>) or to stay a genuine live preview
+    /// (<see cref="SetupCover.Live"/>); <see cref="SetupCover.None"/> = nothing to cover (pre-auth) or not covering.
+    /// Set by <see cref="SetupDialog.Open"/> — only a <c>bare: false</c> mount ever leaves <c>None</c> (there IS a
+    /// live shell behind it to cover); cleared back to <c>None</c> on every close path from the same method's
+    /// <c>ClosedAction</c>.</summary>
+    public static readonly Signal<SetupCover> Covering = new(SetupCover.None);
 
     /// <summary>Monotonic "the wizard's pending/completed marker may just have changed" signal, bumped by
     /// <see cref="SetupDialog.Open"/>'s <c>ClosedAction</c> on every close path (defer OR complete). Exists because
@@ -47,9 +49,8 @@ sealed class SetupSession
     public readonly Signal<NavTransitionKind> Dir = new(NavTransitionKind.Neutral);
     public readonly Signal<SetupApplyState> Apply = new(SetupApplyState.Idle);
 
-    /// <summary>Which of the four applying rows (<c>SetupStepList</c>) is current, for the Done page's own
-    /// determinate step list. Driven by <c>SetupDonePage</c> off real observables (settings flush / sidebar rebuild
-    /// / library load / runtime ready) while <see cref="Apply"/> is Running — never a progress-theatre timer.</summary>
+    /// <summary>Written only by <see cref="PrimaryDone"/> (jumps straight to 4). The Done page derives its
+    /// checklist from real observables (<c>SetupDoneSteps</c>) — this stage is not a progress source.</summary>
     public readonly Signal<int> ApplyStage = new(0);
 
     public readonly EntryPoint Entry;
@@ -63,6 +64,10 @@ sealed class SetupSession
     public Action? StartBrowser { get; set; }
     /// <summary>Wired by <c>WaveeApp.Render</c>: request a fresh device-code pairing after Expired.</summary>
     public Action? RestartCode { get; set; }
+    /// <summary>"Not me" on the Done ("Is this you?") phase: sign this PC out so a different account can sign in —
+    /// <c>Services.LogoutAsync</c> in the real app (clears the stored credential, flips the gate; the page drops back to
+    /// Idle and mints a fresh code).</summary>
+    public Action? SwitchAccount { get; set; }
     /// <summary>Wired by <c>WaveeApp.Render</c>: quit the app (the Terms "Decline" exit).</summary>
     public Action? QuitApp { get; set; }
     /// <summary>Set by <see cref="SetupDialog.Open"/> to the overlay handle's <c>Close</c> — the session can close its

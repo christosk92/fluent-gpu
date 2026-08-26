@@ -25,7 +25,10 @@ sealed class LoginView : Component
 {
     internal const string CodeFont = "Consolas";   // a monospace face for the pairing code (Windows-resident; the app is Win-only)
     internal static readonly ColorF SpotifyGreen = ColorF.FromRgba(0x1D, 0xB9, 0x54);
-    static readonly ColorF GoldTint = ColorF.FromRgba(0xE9, 0xC4, 0x6A);
+    // internal (not private/static-only-here): the setup wizard's sign-in page (Work package C) reuses this exact
+    // tint for its own Premium terminal-stage GlyphBadge, so the two Premium glyphs (takeover + wizard) can never
+    // drift apart into two slightly different golds.
+    internal static readonly ColorF GoldTint = ColorF.FromRgba(0xE9, 0xC4, 0x6A);
 
     readonly Action _onLoginBrowser;
     readonly Action _onRetry;
@@ -131,15 +134,28 @@ sealed class LoginView : Component
     internal static Element FullAccent(string label, Action onClick) =>
         Button.Accent(label, onClick) with { AlignSelf = FlexAlign.Stretch, MinHeight = 44f };
 
-    internal static Element SpotifyBrand() => new BoxEl
-    {
-        Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center,
-        Children =
-        [
-            new TextEl(Icons.MusicNote) { Size = 30f, FontFamily = Theme.IconFont, Color = SpotifyGreen },
-            new TextEl("Spotify") { Size = 26f, Weight = 700, Color = SpotifyGreen },
-        ],
-    };
+    // `compact`: the setup wizard's decision column (Work package C) needs a much smaller brand row (a 28-DIP row,
+    // not the takeover's full 56-DIP wordmark) — an ADDITIVE overload rather than a second method so every existing
+    // no-arg call site (the takeover itself) keeps compiling against the exact same default output.
+    internal static Element SpotifyBrand(bool compact = false) => compact
+        ? new BoxEl
+        {
+            Direction = 0, Gap = Spacing.XS, AlignItems = FlexAlign.Center, Height = 28f, Shrink = 0f,
+            Children =
+            [
+                new TextEl(Icons.MusicNote) { Size = 20f, FontFamily = Theme.IconFont, Color = SpotifyGreen },
+                new TextEl("Spotify") { Size = 18f, Weight = 700, Color = SpotifyGreen },
+            ],
+        }
+        : new BoxEl
+        {
+            Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center,
+            Children =
+            [
+                new TextEl(Icons.MusicNote) { Size = 30f, FontFamily = Theme.IconFont, Color = SpotifyGreen },
+                new TextEl("Spotify") { Size = 26f, Weight = 700, Color = SpotifyGreen },
+            ],
+        };
 
     internal static Element BrowserLoginButton(Action onClick) => new BoxEl
     {
@@ -252,7 +268,10 @@ sealed class LoginView : Component
     /// <summary>The setup wizard's deliberately lean 196-DIP pairing lane: the approved prototype's 138-DIP QR,
     /// pairing link, code, expiry and waiting state. Copy/Open remain on <see cref="RightPane"/>, the standalone
     /// takeover surface with enough room for them.</summary>
-    internal static BoxEl CompactRightPane(LoginChallenge c) => new BoxEl
+    // `interactive = true` keeps every existing call site (the setup wizard's own pairing pane at Idle) byte-identical;
+    // the wizard passes `false` while the pane is faded to a 22% Busy reminder — it stays MOUNTED (the cross-fade needs
+    // it there to fade FROM) but must stop being a Tab stop / hit-test target at that opacity (SetupPage.SignIn.cs).
+    internal static BoxEl CompactRightPane(LoginChallenge c, bool interactive = true) => new BoxEl
     {
         Direction = 1, Width = SetupLayout.CompactPairingWidth, Shrink = 0f,
         Gap = Spacing.S, AlignItems = FlexAlign.Center, Justify = FlexJustify.Start,
@@ -268,7 +287,7 @@ sealed class LoginView : Component
                 Children =
                 [
                     Caption(Loc.Get(Strings.Auth.OrGoTo)).Secondary(),
-                    CompactPairingLink(Loc.Get(Strings.Auth.PairUrl), c.VerificationUri),
+                    CompactPairingLink(Loc.Get(Strings.Auth.PairUrl), c.VerificationUri, interactive),
                     Caption(Loc.Get(Strings.Auth.EnterCodeColon)).Secondary(),
                 ],
             },
@@ -286,10 +305,11 @@ sealed class LoginView : Component
         ],
     };
 
-    static Element CompactPairingLink(string text, string url) => new BoxEl
+    static Element CompactPairingLink(string text, string url, bool interactive = true) => new BoxEl
     {
         Padding = new Edges4(Spacing.XXS, 0f, Spacing.XXS, 0f), Corners = CornerRadius4.All(Radii.Control),
-        Role = AutomationRole.Hyperlink, Focusable = true, Cursor = CursorId.Hand, OnClick = () => OpenUrl(url),
+        Role = AutomationRole.Hyperlink, Focusable = interactive, HitTestVisible = interactive,
+        Cursor = CursorId.Hand, OnClick = () => OpenUrl(url),
         Children = [new TextEl(text) { Size = 12.5f, Weight = 600, Color = Tok.AccentTextPrimary, MaxLines = 1 }],
     }.Interactive(Interaction.Subtle);
 
@@ -513,7 +533,12 @@ sealed class LoginStepRow : Component
     readonly Signal<LoginSnapshot> _login;
     readonly LoginStep _step;
     readonly string _label;
-    public LoginStepRow(Signal<LoginSnapshot> login, LoginStep step, string label) { _login = login; _step = step; _label = label; }
+    readonly float _width;
+    // `width = NaN` (BoxEl.Width's own "unconstrained" default) keeps every existing call site (the takeover's own
+    // Finalizing splash) byte-identical; the setup wizard's Busy approve card (Work package C) passes a fixed width
+    // so four rows wrap into a tidy 2×2 grid instead of a single tall column.
+    public LoginStepRow(Signal<LoginSnapshot> login, LoginStep step, string label, float width = float.NaN)
+    { _login = login; _step = step; _label = label; _width = width; }
 
     public override Element Render()
     {
@@ -543,6 +568,7 @@ sealed class LoginStepRow : Component
         return new BoxEl
         {
             Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center, Height = 26f,
+            Width = _width, Shrink = 0f,
             Enter = new EnterExit(Dx: -6f, Opacity: 0f, Active: true), Transition = MotionTok.ControlNormal,
             Children =
             [

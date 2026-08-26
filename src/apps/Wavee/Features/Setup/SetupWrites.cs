@@ -56,6 +56,15 @@ static class SetupWrites
         AppearancePrefs.Bump();
     }
 
+    /// <summary>Mirrors <c>SettingsPage.GeneralTab</c>'s <c>SetTrackListStyle</c> (0 Modern · 1 Classic) — the choice
+    /// Appearance never asked before this pass (<c>SetupWrites.SetPalette</c> had the same gap, fixed alongside it).</summary>
+    public static void SetTrackRowStyle(int index, IAppSettings settings)
+    {
+        if ((uint)index >= 2u) return;
+        settings.Set(WaveeSettings.TrackRowStyle, index);
+        AppearancePrefs.Bump();
+    }
+
     /// <summary>Mirrors <c>SettingsPage.AppearanceToggle</c> — every boolean appearance flag (DisableMarquee,
     /// DisableColorWashes, DetailPageToneHeroOnly, LyricsAnimatedBackdrop) goes through this one writer.</summary>
     public static void SetAppearanceFlag(SettingKey<bool> key, bool value, IAppSettings settings)
@@ -245,6 +254,8 @@ static class SetupWrites
                 SetThemeMode(0, settings, requestTheme);                          // System
                 settings.Set(WaveeSettings.WindowMaterialBaseMica, true);
                 FluentApp.SetWindowMaterialAlt(false);                            // base Mica
+                SetPalette("neutral", settings, requestTheme);
+                SetTrackRowStyle(0, settings);                                    // Modern
                 SetRowDensity(1, settings);                                       // Default ("cozy" per the prototype's copy)
                 SetAppearanceFlag(WaveeSettings.HideTrackArtwork, false, settings);
                 // Visual effects: every flag already defaults to "on" (DisableMarquee/DisableColorWashes default

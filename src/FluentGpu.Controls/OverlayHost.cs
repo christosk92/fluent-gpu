@@ -131,6 +131,17 @@ public readonly record struct PopupOptions(
     /// leaves <c>default(PopupOptions)</c> — and the <c>options.Equals(default)</c> "caller configured nothing" probes
     /// in Popup.cs — behaving exactly as before.</para></summary>
     public bool OpaqueSurface { get; init; }
+
+    private readonly bool _noScrim;
+
+    /// <summary>Modal only: false keeps the input-blocking/focus-trapping scrim but paints it transparent, so the app
+    /// can own the dimming (or leave the content behind as a live preview). Default true. Stored inverted so
+    /// <c>default(PopupOptions)</c> keeps the scrim.</summary>
+    public bool ScrimVisual
+    {
+        get => !_noScrim;
+        init => _noScrim = !value;
+    }
 }
 
 public interface IOverlayService
@@ -226,6 +237,7 @@ internal sealed class OverlayEntry
     public bool PinsAnchor = true;    // WS3 P6 anchor-liveness: pins the anchor's auto-hide scope while open
     public bool FreezeAtLastRect;     // opt-in: dead-anchor holds last rect instead of BeginClose
     public bool OpaqueSurface;        // PopupOptions.OpaqueSurface: declared over a video hole — flat plate, never acrylic
+    public bool ScrimVisual = true;   // PopupOptions.ScrimVisual: Modal only — false keeps blocking/trap but paints the scrim transparent
     /// <summary>One-way latch: <c>SceneRecorder.RectOverVideoHole</c> has answered TRUE for this entry's backdrop node
     /// at least once. Once set it never clears — see the reasoning at the query site in SyncWindowedMenuBackdrop.</summary>
     public bool VideoHoleLatched;
@@ -280,7 +292,7 @@ internal sealed class OverlayServiceImpl : IOverlayService
     public bool AnyClosing { get { foreach (var e in Entries) if (e.Phase == OverlayPhase.Closing) return true; return false; } }
     public bool HasAfterAnimationWork() => AnyClosing;
     public bool AnyModal { get { foreach (var e in Entries) if (e.Phase != OverlayPhase.Closing && e.DismissBehavior == DismissBehavior.Modal) return true; return false; } }
-    public bool AnyModalVisual { get { foreach (var e in Entries) if (e.DismissBehavior == DismissBehavior.Modal) return true; return false; } }
+    public bool AnyModalVisual { get { foreach (var e in Entries) if (e.DismissBehavior == DismissBehavior.Modal && e.ScrimVisual) return true; return false; } }
     public bool TopCanLightDismiss
     {
         get
@@ -336,6 +348,7 @@ internal sealed class OverlayServiceImpl : IOverlayService
             PinsAnchor = options.PinsAnchor,
             FreezeAtLastRect = options.FreezeAtLastRect,
             OpaqueSurface = options.OpaqueSurface,
+            ScrimVisual = options.ScrimVisual,
             SeamOffsetY = options.SeamOffsetY,
             PassThrough = options.PassThrough,
             AnchorOffsetX = options.AnchorOffsetX,

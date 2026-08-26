@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using Xunit;
 
 namespace Wavee.Tests;
@@ -283,4 +284,45 @@ public class SetupGatingTests : IDisposable
     [InlineData(SetupPage.Done, 1f)]
     public void Progress_MatchesTheLadder(SetupPage page, float expected)
         => Assert.Equal(expected, SetupGating.Progress(page), precision: 5);
+
+    // ── RoadmapPages / RoadmapLabelKey / RoadmapIndexFor (work package A) ─────────────────────────────────────────────
+
+    [Fact]
+    public void RoadmapPages_IsExactlyTheSevenMiddlePages_InEnumOrder()
+    {
+        SetupPage[] expected =
+        [
+            SetupPage.Terms, SetupPage.SignIn, SetupPage.LocalPlayback, SetupPage.Appearance,
+            SetupPage.Sidebar, SetupPage.Sound, SetupPage.Notifications,
+        ];
+        Assert.Equal(expected, SetupGating.RoadmapPages);
+    }
+
+    [Fact]
+    public void RoadmapLabelKey_IsDistinctPerPage()
+    {
+        var keys = SetupGating.RoadmapPages.Select(SetupGating.RoadmapLabelKey).ToList();
+        Assert.Equal(keys.Distinct().Count(), keys.Count);
+        Assert.All(keys, k => Assert.False(string.IsNullOrWhiteSpace(k)));
+    }
+
+    [Fact]
+    public void RoadmapLabelKey_ThrowsForNonRoadmapPages()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => SetupGating.RoadmapLabelKey(SetupPage.Welcome));
+        Assert.Throws<ArgumentOutOfRangeException>(() => SetupGating.RoadmapLabelKey(SetupPage.Done));
+    }
+
+    [Theory]
+    [InlineData(SetupPage.Welcome, 0)]
+    [InlineData(SetupPage.Terms, 0)]
+    [InlineData(SetupPage.SignIn, 1)]
+    [InlineData(SetupPage.LocalPlayback, 2)]
+    [InlineData(SetupPage.Appearance, 3)]
+    [InlineData(SetupPage.Sidebar, 4)]
+    [InlineData(SetupPage.Sound, 5)]
+    [InlineData(SetupPage.Notifications, 6)]
+    [InlineData(SetupPage.Done, 7)]
+    public void RoadmapIndexFor_MapsPagesOntoTheirRoadmapRow(SetupPage page, int expected)
+        => Assert.Equal(expected, SetupGating.RoadmapIndexFor(page));
 }

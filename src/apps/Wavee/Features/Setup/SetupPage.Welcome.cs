@@ -59,7 +59,13 @@ sealed class SetupWelcomePage : Component
             ],
         };
 
-        return SetupPageHost.Frame(SetupPage.Welcome, "", "", body, pinnedHeader: false);
+        Element stage = SetupStage.Column(
+            SetupStage.Rail(SetupPage.Welcome, SetupLayout.HeroArtSize),
+            SetupStage.Roadmap(SetupGating.RoadmapIndexFor(SetupPage.Welcome), Loc.Get(Strings.Setup.Welcome.RoadmapTotal)),
+            SetupStage.Spacer(),
+            SetupStage.Caption(Loc.Get(Strings.Setup.Welcome.StageCaptionTitle), Loc.Get(Strings.Setup.Welcome.StageCaptionSub)));
+
+        return SetupPageHost.Frame(SetupPage.Welcome, "", "", body, pinnedHeader: false, stage: stage);
     }
 
     static Element MetaRow() => new BoxEl
