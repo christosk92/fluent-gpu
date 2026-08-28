@@ -159,12 +159,21 @@ public sealed class ResumePointProjection : IPlaybackProjection
                     Enqueue(HerodotusClient.PlayHistoryHead(e.Track.Uri, now));
                 break;
             case EvKind.Paused:
-            case EvKind.Seeked:
                 _lastPositionMs = e.AtMs;
                 if (IsEpisode(_currentUri))
                     QueueEpisodeLeave(_currentUri!, _lastPositionMs, now);
                 break;
+            case EvKind.Seeked:
+                // AtMs is the PRE-seek playhead (Gabo's segment-close is the one consumer that wants that — see
+                // RawCoreStreamProjection.cs:72); a resume-point wants where the seek LANDED.
+                _lastPositionMs = e.SeekToMs >= 0 ? e.SeekToMs : e.AtMs;
+                if (IsEpisode(_currentUri))
+                    QueueEpisodeLeave(_currentUri!, _lastPositionMs, now);
+                break;
             case EvKind.Ended:
+                // AtMs > 0 is a fresher sample than the last Paused/Seeked position; prefer it over the stale
+                // _lastPositionMs when the source actually reported one.
+                if (e.AtMs > 0) _lastPositionMs = e.AtMs;
                 if (IsEpisode(_currentUri))
                     QueueEpisodeLeave(_currentUri!, _lastPositionMs, now);
                 _currentUri = null;

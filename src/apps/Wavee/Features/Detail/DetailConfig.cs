@@ -223,6 +223,11 @@ internal static class DetailFormat
     /// formatter, so a row and its own drawer can never disagree about a track's length.</summary>
     public static string TrackTime(long ms) => TrackExpandedFacts.TrackTime(ms);
 
+    /// <summary>Duration cell: a real length, or an em dash when the row has none yet. Forwards to
+    /// <see cref="TrackExpandedFacts.DurationCell"/> so the table, the art card and Popular cannot spell unknown as
+    /// <c>0:00</c>.</summary>
+    public static string DurationCell(long ms) => TrackExpandedFacts.DurationCell(ms);
+
     /// <summary>Tempo readout — "101" for a whole BPM, "101.5" when the fraction is meaningful. Spotify reports tempo
     /// as a double (101.0099…), and a full-precision figure in a narrow lane is noise; one decimal is the most a
     /// listener can act on. Invariant culture: this is a technical figure, not a localised quantity, and a comma

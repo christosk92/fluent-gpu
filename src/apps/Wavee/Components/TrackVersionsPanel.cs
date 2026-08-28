@@ -121,14 +121,19 @@ sealed class TrackVersionsPanel : Component
 
         // The facts strip, then a labelled versions section. Two sections, one drawer: the strip states the track and
         // the rows state its FORMS, and the eyebrow is what stops a lone "This track" row reading as a stray list item
-        // under a wall of tiles.
+        // hanging off the facts above it.
+        //
+        // A WHOLE STEP of top margin, not the old hairline. The strip is now flat typography with no fills or edges of
+        // its own (TrackFactsStrip), so nothing draws the boundary between its last line and this label — and this
+        // eyebrow is the only caption left in the drawer, which makes it read as heading whatever text it is nearest.
+        // The air is what makes it head the ROWS.
         var body = new List<Element>(versions.Count + 2)
         {
             TrackFactsStrip.Build(model.Track, model.Facts, model.OnOpen) with { Key = "facts" },
             WaveeType.Eyebrow(Loc.Get(Strings.Detail.Versions.VersionsAndFormats)) with
             {
                 Key = "versions-head", Color = Tok.TextTertiary,
-                Margin = new Edges4(0f, Spacing.XS, 0f, 2f),
+                Margin = new Edges4(0f, Spacing.M, 0f, 2f),
             },
         };
         for (int i = 0; i < versions.Count; i++)
@@ -282,7 +287,7 @@ sealed class TrackVersionsPanel : Component
             }
         }
         if (v.DurationMs > 0)
-            meta.Add(new TextEl(TrackExpandedFacts.TrackTime(v.DurationMs)) { Size = 12f, Color = Tok.TextTertiary });
+            meta.Add(new TextEl(TrackExpandedFacts.DurationCell(v.DurationMs)) { Size = 12f, Color = Tok.TextTertiary });
 
         return new BoxEl
         {
@@ -329,35 +334,14 @@ sealed class TrackVersionsPanel : Component
     {
         if (w is null || w.IsEmpty) return new BoxEl();
 
-        // One bar per column, at the width the strip can actually show. Bars are mirrored about the centre line, which
-        // is what makes a waveform read as a waveform rather than as a bar chart.
-        var bars = new Element[Math.Min(w.Peaks.Count, WaveBars)];
-        for (int i = 0; i < bars.Length; i++)
-        {
-            // Sample across the whole set so a shorter strip still shows the WHOLE track, not its first seconds.
-            float p = w.Peaks[(int)((long)i * w.Peaks.Count / bars.Length)];
-            bars[i] = new BoxEl
-            {
-                Width = WaveBarW, Shrink = 0f,
-                // A floor so silence is still a visible baseline rather than a gap in the strip.
-                Height = MathF.Max(2f, p * WaveHeight),
-                Corners = CornerRadius4.All(WaveBarW / 2f),
-                Fill = Tok.TextTertiary,
-                AlignSelf = FlexAlign.Center,
-            };
-        }
-
-        return new BoxEl
-        {
-            Direction = 0, Gap = 1f, Height = WaveHeight, Shrink = 0f,
-            AlignItems = FlexAlign.Center, HitTestPassThrough = true,
-            Children = bars,
-        };
+        // The kit's Waveform (FluentGpu.Controls/Charts): 64 mirrored 2 px bars resampled across the WHOLE peak set,
+        // silence kept at a 2 px floor, TextTertiary ink — the strip this drawer drew by hand before the lift.
+        var peaks = new float[w.Peaks.Count];
+        for (int i = 0; i < peaks.Length; i++) peaks[i] = w.Peaks[i];
+        return FluentGpu.Controls.Waveform.Create(new WaveformModel(peaks, WaveBars), key: "waveform");
     }
 
     const int WaveBars = 64;
-    const float WaveBarW = 2f;
-    const float WaveHeight = 24f;
 
     /// <summary>The entry's thumbnail. A video gets a 16:9 slot with a play badge over it: the cover we resolve for a
     /// music video is the TRACK's square album art (kinds 98/99 ship only DASH file ids, so the art comes from the

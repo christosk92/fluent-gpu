@@ -43,6 +43,19 @@ public class XmCatalogFetchTests
         return resp.ToByteArray();
     }
 
+    static byte[] PlaylistHeaderResponse(string uri, string name)
+    {
+        var array = new Xm.EntityExtensionDataArray { ExtensionKind = Xm.ExtensionKind.ListMetadataV2 };
+        array.ExtensionData.Add(new Xm.EntityExtensionData
+        {
+            EntityUri = uri,
+            ExtensionData = Any.Pack(new Xm.ListMetadataV2 { Name = name }),
+        });
+        var resp = new Xm.BatchedExtensionResponse();
+        resp.ExtendedMetadata.Add(array);
+        return resp.ToByteArray();
+    }
+
     static (XmCatalogFetch Fetch, InMemoryStore Store, FakeExchange Http, List<HttpReq> Sent) Harness(
         Func<HttpReq, int, byte[]> body)
     {
@@ -187,5 +200,33 @@ public class XmCatalogFetchTests
         // exactly this, and the raw-fallback arm that skipped it is what re-downloaded payloads already held.
         Assert.Equal(1, http.Calls);
         Assert.Equal(projected, Assert.Single(landed));
+    }
+
+    // Cause (5) of the stale-daylist-header defect: a user-initiated open (Revalidate:true) must not be answered from
+    // a cached body that is well inside its own 6h TTL — a rolling-identity playlist (a daylist) can roll to a new
+    // edition server-side while its cached LIST_METADATA_V2 row still looks perfectly fresh from here.
+    [Fact]
+    public async Task RevalidateTrue_ForcesAFreshGet_EvenInsideTheEtagTtl()
+    {
+        const string uri = "spotify:playlist:p1";
+        int call = 0;
+        var (fetch, store, http, _) = Harness((_, _) =>
+        {
+            call++;
+            return PlaylistHeaderResponse(uri, call == 1 ? "Old Edition" : "New Edition");
+        });
+
+        await fetch.FetchAsync([EntityUri.Parse(uri)], null, TraitSurface.None, TestContext.Current.CancellationToken);
+        Assert.Equal("Old Edition", store.GetPlaylist(uri)!.Name);
+
+        // Without revalidate, a second ask inside the TTL is the ordinary cache hit — no second POST.
+        await fetch.FetchAsync([EntityUri.Parse(uri)], null, TraitSurface.None, TestContext.Current.CancellationToken);
+        Assert.Equal(1, http.Calls);
+        Assert.Equal("Old Edition", store.GetPlaylist(uri)!.Name);
+
+        // revalidate:true marks the cached row stale first, so this ask goes back to the wire and adopts the new body.
+        await fetch.FetchAsync([EntityUri.Parse(uri)], null, TraitSurface.None, TestContext.Current.CancellationToken, revalidate: true);
+        Assert.Equal(2, http.Calls);
+        Assert.Equal("New Edition", store.GetPlaylist(uri)!.Name);
     }
 }

@@ -1,6 +1,9 @@
 # Detail-page ↔ hydration refresh livelock — handoff
 
-Self-contained. Diagnosis is **verified**; the fix is **planned, not implemented**. Date: 2026-08-16.
+Self-contained. Diagnosis is **verified**; the fix is **Implemented** — `src/apps/Wavee/Features/Detail/DetailLiveRefresh.cs`
+(the trailing-settle refresh, `SettleMs`) replaced the cancel-and-restart debounce in `DetailPage.cs`, and the parked-page
+bump is released by `LibrarySync.ClearOpenContext` (`Backend/Sync/LibrarySync.cs`, called from `DetailPage.cs` on close).
+Date: 2026-08-16. The out-of-scope items in §5 and the residual-memory note in §6 are still open follow-ups.
 
 | Field | Value |
 |---|---|

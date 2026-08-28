@@ -386,10 +386,13 @@ public sealed class SidebarProjectionBinder : ISidebarProjectionSnapshot
         SidebarBinderPipeline.ResolveExtensions(prefs.Layout, _host, _extEntries, _slices, _cache, search);
         ObserveExtensionSources(prefs.Layout);
 
-        // 9 — publish the cell. ONE version bump per rebuild, never per entry.
+        // 9 — publish the cell. ONE version bump per rebuild, never per entry. `_all` is also passed as the FULL
+        //     projection gate: it is the planner's `Library` slice and, content-wise, a superset of `_tree` (both
+        //     project the same `tree` with `includeFolderChildren: true`), so comparing it alone covers both of the
+        //     planner's inputs — a change invisible to the published (collapsed-folder-filtered) rows still trips it.
         bool anyPending = AnyContributingKindPending(filter);
         var (state, error) = PublishState(filter, shape.Count, anyPending);
-        prefs.Entries.Publish(state, error, anyPending, qualifiers, shape.PinCount);
+        prefs.Entries.Publish(state, error, anyPending, qualifiers, shape.PinCount, _all);
 
         // 10 — commit point #9: persist the document only when this pass actually observed something new.
         int newStamps = full.NewFirstSeenStamps + v3Result.NewFirstSeenStamps;

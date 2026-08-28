@@ -33,6 +33,7 @@ public class PlaybackAttributionTests
         public long PositionMs { get; set; }
         public bool IsPlaying { get; private set; }
         public bool IsBuffering { get; private set; }
+        public bool ClockValid => true;
         public void Load(in AudioStreamHandle s) => Calls.Add("load:" + s.TrackUri);
         public void LoadFastStart(in AudioFastStart s) => Calls.Add("faststart:" + s.TrackUri);
         public void SupplyBody(in AudioStreamHandle s) => Calls.Add("body:" + s.TrackUri);
@@ -53,6 +54,7 @@ public class PlaybackAttributionTests
         public IObservable<AudioHostSignal> Signals => _sig;
         public long PositionMs => 0;
         public bool IsPlaying { get; private set; }
+        public bool ClockValid => true;
         public void Play() { IsPlaying = true; Calls.Add("play"); }
         public void Pause() { IsPlaying = false; Calls.Add("pause"); }
         public void Stop() { IsPlaying = false; Calls.Add("stop"); }
@@ -312,7 +314,7 @@ public class PlaybackAttributionTests
             => Task.FromResult(new OutboundResult(true, "ack", 200));
         public Task<OutboundResult> SetVolumeAsync(string t, int v, CancellationToken ct = default)
             => Task.FromResult(new OutboundResult(true, "ack", 200));
-        public Task<OutboundResult> TransferAsync(string f, string t, CancellationToken ct = default)
+        public Task<OutboundResult> TransferAsync(string f, string t, CancellationToken ct = default, bool hostingVideo = false)
             => Task.FromResult(new OutboundResult(true, "ack", 200));
     }
 }

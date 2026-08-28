@@ -214,23 +214,22 @@ sealed class SetupSoundPage : Component
 
     Element QualityCombo(IAppSettings? settings, Signal<int> sig)
     {
+        // THREE rungs — the same offer Settings ▸ Playback makes. Lossless stays in AudioQualityPreference (the stored
+        // int is persisted) but is not offered here either; the wizard must not promise a tier the app cannot play.
         string[] labels =
         [
             Loc.Get(Strings.Settings.Playback.QualityNormal),
             Loc.Get(Strings.Settings.Playback.QualityHigh),
             Loc.Get(Strings.Settings.Playback.QualityVeryHigh),
-            Loc.Get(Strings.Settings.Playback.QualityLossless),
         ];
         string[] descriptions =
         [
             Loc.Get(Strings.Settings.Playback.QualityNormalSub),
             Loc.Get(Strings.Settings.Playback.QualityHighSub),
             Loc.Get(Strings.Settings.Playback.QualityVeryHighSub),
-            Loc.Get(Strings.Settings.Playback.QualityLosslessSub),
         ];
-        bool[] enabled = [true, true, true, false];
         return ComboBox.Create(labels, sig, width: 200f,
-            itemDescriptions: descriptions, itemEnabled: enabled, isEnabled: settings is not null,
+            itemDescriptions: descriptions, isEnabled: settings is not null,
             onChange: i =>
             {
                 if (settings is null) return;

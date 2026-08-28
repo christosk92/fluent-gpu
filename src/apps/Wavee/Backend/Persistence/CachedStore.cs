@@ -478,11 +478,19 @@ public sealed class CachedStore : IStore, ILibraryCandidateStore, IDisposable
     // The six chokepoints keep their signatures, so no caller changes: the gate is entirely inside them. A non-pinned
     // write is memory-only and bounded by the existing 4000-entity governor arena + the 12k→8k upsert backstop, which is
     // exactly the intent — transient queue/radio/autoplay/browse hydration stops reaching disk from this wave on.
+    // THE STUB GATE (on top of the pin gate above): a PINNED row that is still a synthetic placeholder — no title at
+    // all — used to be serialized and restored VERBATIM, which made a blank row durable across restarts. This is not
+    // hypothetical: a playlist-member / saved / recent write races ahead of the real hydration wave carrying nothing
+    // but a uri, so the FIRST write for a newly-pinned playable is very often exactly that stub. `ColdPresent` already
+    // self-pins ("already a cold row" counts as pinned, PinnedTrack line ~558/571/etc.), so skipping the stub loses
+    // nothing: the FIRST NAMED write persists, and every later write refreshes it same as before. Gate on
+    // TitleMissing, not TrackUnnamed — a row whose ARTISTS lack names is still worth persisting (a link/queue label
+    // still needs the row on disk); only a title-less row is the placeholder with nothing to show for it.
     public void UpsertTrack(Track t)
     {
         _hot.UpsertTrack(t);
         var merged = _hot.GetTrack(t.Uri) ?? t;
-        if (PinnedTrack(merged)) PersistTrack(merged);
+        if (PinnedTrack(merged) && !HydrationLevels.TitleMissing(merged.Title, merged.Uri)) PersistTrack(merged);
     }
     // Persist the entity HEADER thin: a container's hydrated tracklist is a read-model (joined from membership × shared
     // entities at read), never baked into the entity blob — that would re-serialize a multi-MB LOH blob per edit and
@@ -491,31 +499,31 @@ public sealed class CachedStore : IStore, ILibraryCandidateStore, IDisposable
     {
         _hot.UpsertAlbum(a);
         var merged = _hot.GetAlbum(a.Uri) ?? a;
-        if (PinnedAlbum(a.Uri, merged.Artists)) PersistAlbum(merged);
+        if (PinnedAlbum(a.Uri, merged.Artists) && merged.Name.Length > 0) PersistAlbum(merged);
     }
     public void UpsertArtist(Artist a)
     {
         _hot.UpsertArtist(a);
         var merged = _hot.GetArtist(a.Uri) ?? a;
-        if (PinnedArtist(a.Uri)) PersistArtist(merged);
+        if (PinnedArtist(a.Uri) && merged.Name.Length > 0) PersistArtist(merged);
     }
     public void UpsertPlaylist(Playlist p)
     {
         _hot.UpsertPlaylist(p);
         var merged = _hot.GetPlaylist(p.Uri) ?? p;
-        if (PinnedPlaylist(merged.Uri)) PersistPlaylist(merged);
+        if (PinnedPlaylist(merged.Uri) && merged.Name.Length > 0) PersistPlaylist(merged);
     }
     public void UpsertShow(Show s)
     {
         _hot.UpsertShow(s);
         var merged = _hot.GetShow(s.Uri) ?? s;
-        if (PinnedShowOrEpisode(s.Uri)) PersistShow(merged);
+        if (PinnedShowOrEpisode(s.Uri) && merged.Name.Length > 0) PersistShow(merged);
     }
     public void UpsertEpisode(Episode e)
     {
         _hot.UpsertEpisode(e);
         var merged = _hot.GetEpisode(e.Uri) ?? e;
-        if (PinnedShowOrEpisode(e.Uri)) PersistEpisode(merged);
+        if (PinnedShowOrEpisode(e.Uri) && !HydrationLevels.TitleMissing(merged.Title, merged.Uri)) PersistEpisode(merged);
     }
     // OWNERS ARE ALWAYS PERSISTED — the one entity kind that bypasses the pin-reachability gate (decision, P4-C).
     // Three reasons: an owner row is ~150 B (the whole resolvable set for a real library is well under a megabyte, i.e.
@@ -529,6 +537,11 @@ public sealed class CachedStore : IStore, ILibraryCandidateStore, IDisposable
         _hot.UpsertOwner(o);
         if (UserProfileIds.Normalize(o?.Id) is not { } key) return;
         var merged = _hot.GetOwner(key) ?? o!;
+        // Owners still bypass the PIN gate above (P4-C), but not the STUB gate: a nameless owner row is exactly the
+        // synthetic placeholder every other kind now skips, and it renders nothing an unresolved base62 id doesn't
+        // already render — so there is no offline win to persisting it, only a write that gets clobbered the moment
+        // a real display name resolves.
+        if (merged.Name.Length == 0) return;
         PersistEntity(key, EntityKind.User, JsonSerializer.SerializeToUtf8Bytes(merged, EntityJson.Default.Owner));
     }
     public void UpsertVideoAssociation(VideoAssociation a) { _hot.UpsertVideoAssociation(a); _cold.UpsertVideoAssociation(a.Uri, JsonSerializer.SerializeToUtf8Bytes(a, EntityJson.Default.VideoAssociation)); }
@@ -733,8 +746,14 @@ public sealed class CachedStore : IStore, ILibraryCandidateStore, IDisposable
     void FlushPinned(string uri)
     {
         if (ColdPresent(uri)) return;
+        // Same STUB GATE as the Upsert* chokepoints (§ around UpsertTrack): this bypasses the PIN gate deliberately
+        // (the caller already established the pin) but a title-less/nameless hot row is still just the placeholder a
+        // pin-transition (a like landing before the real hydration wave) can race ahead of — falling through here
+        // leaves it unresident, and the hydration that follows the pin writes the named row through the normal
+        // Upsert* gate, same as the "not resident" case below.
         if (_hot.GetTrack(uri) is { } t)
         {
+            if (HydrationLevels.TitleMissing(t.Title, t.Uri)) return;
             PersistTrack(t);
             // A pinned track drags its album + artists onto disk with it (the §A.3 P1 closure) — otherwise the restored
             // row renders with no album art and no artist link until an online refetch.
@@ -742,14 +761,15 @@ public sealed class CachedStore : IStore, ILibraryCandidateStore, IDisposable
             for (int i = 0; i < t.Artists.Count; i++) EnqueueFlush(t.Artists[i].Uri);
             return;
         }
-        if (_hot.GetAlbum(uri) is { } al) { PersistAlbum(al); return; }
-        if (_hot.GetArtist(uri) is { } ar) { PersistArtist(ar); return; }
-        if (_hot.GetPlaylist(uri) is { } p) { PersistPlaylist(p); return; }
-        if (_hot.GetShow(uri) is { } sh) { PersistShow(sh); return; }
-        if (_hot.GetEpisode(uri) is { } ep) { PersistEpisode(ep); return; }
+        if (_hot.GetAlbum(uri) is { } al) { if (al.Name.Length > 0) PersistAlbum(al); return; }
+        if (_hot.GetArtist(uri) is { } ar) { if (ar.Name.Length > 0) PersistArtist(ar); return; }
+        if (_hot.GetPlaylist(uri) is { } p) { if (p.Name.Length > 0) PersistPlaylist(p); return; }
+        if (_hot.GetShow(uri) is { } sh) { if (sh.Name.Length > 0) PersistShow(sh); return; }
+        if (_hot.GetEpisode(uri) is { } ep) { if (!HydrationLevels.TitleMissing(ep.Title, ep.Uri)) PersistEpisode(ep); return; }
         if (_hot.GetOwner(uri) is { } ow)
         {
-            PersistEntity(uri, EntityKind.User, JsonSerializer.SerializeToUtf8Bytes(ow, EntityJson.Default.Owner));
+            if (ow.Name.Length > 0)
+                PersistEntity(uri, EntityKind.User, JsonSerializer.SerializeToUtf8Bytes(ow, EntityJson.Default.Owner));
             return;
         }
         // Not resident: nothing to flush. Either it is already cold (a later ColdFallback marks presence) or it will be

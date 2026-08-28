@@ -13,7 +13,11 @@ namespace Wavee.Tests;
 // Comfortable+no-subtitle for the glyph bands (⇒ 44). A change to either silently changes Classic's row height.
 public sealed class SidebarBuiltInDocumentTests
 {
+    /// <summary>The document a NORMAL user gets: every section open, developer mode OFF (so no Tools section).</summary>
     static SidebarCustomLayout Classic() => SidebarBuiltInDocuments.Classic(true, true, true);
+
+    /// <summary>The document a DEVELOPER gets — the same thing plus the Tools section and its leading divider.</summary>
+    static SidebarCustomLayout ClassicDev() => SidebarBuiltInDocuments.Classic(true, true, true, devTools: true);
 
     static SidebarSectionSpec Section(SidebarCustomLayout l, string id)
     {
@@ -22,12 +26,17 @@ public sealed class SidebarBuiltInDocumentTests
         return s!;
     }
 
+    static SidebarSectionKind[] Kinds(SidebarCustomLayout doc)
+    {
+        var kinds = new SidebarSectionKind[doc.Sections.Count];
+        for (int i = 0; i < kinds.Length; i++) kinds[i] = doc.Sections[i].Kind;
+        return kinds;
+    }
+
     [Fact]
     public void Classic_ReproducesTodaysInformationArchitecture()
     {
-        var doc = Classic();
-        var kinds = new SidebarSectionKind[doc.Sections.Count];
-        for (int i = 0; i < kinds.Length; i++) kinds[i] = doc.Sections[i].Kind;
+        var doc = ClassicDev();
 
         // Pinned · rule · Your Library · rule · Playlists · rule · DevTools — the retired WaveeSidebar.ExpandedBody order.
         Assert.Equal(new[]
@@ -39,11 +48,59 @@ public sealed class SidebarBuiltInDocumentTests
             SidebarSectionKind.PlaylistTree,
             SidebarSectionKind.Divider,
             SidebarSectionKind.StaticLinks,
-        }, kinds);
+        }, Kinds(doc));
 
         // Pinned is FIRST, so the planner emits no leading divider before it (Classic's `rule: false`).
         Assert.Equal(SidebarSectionKind.Pinned, doc.Sections[0].Kind);
     }
+
+    // ── developer mode gates the API console (and takes its divider with it) ──────────────────────────────────────────
+
+    /// <summary>The API console is DEVELOPER surface. Off — the product default — Classic ends at Playlists, and the
+    /// divider that used to separate Playlists from Tools goes too: a trailing rule under the last real section, with
+    /// nothing after it, is exactly how a reader spots that something was removed rather than never offered.</summary>
+    [Fact]
+    public void Classic_WithoutDeveloperMode_EndsAtPlaylistsAndCarriesNoToolsDivider()
+    {
+        var doc = Classic();
+
+        Assert.Equal(new[]
+        {
+            SidebarSectionKind.Pinned,
+            SidebarSectionKind.Divider,
+            SidebarSectionKind.CollectionShortcuts,
+            SidebarSectionKind.Divider,
+            SidebarSectionKind.PlaylistTree,
+        }, Kinds(doc));
+
+        Assert.Null(doc.Find(SidebarBuiltInDocuments.ToolsId));
+        Assert.Equal(SidebarSectionKind.PlaylistTree, doc.Sections[^1].Kind);
+    }
+
+    /// <summary>Turning developer mode on is PURELY ADDITIVE: every section the plain document had is still there, in
+    /// the same order, with the same ids — Tools is appended, nothing is rearranged to make room for it.</summary>
+    [Fact]
+    public void Classic_DeveloperMode_OnlyAppendsTheToolsBand()
+    {
+        var plain = Classic();
+        var dev = ClassicDev();
+
+        Assert.Equal(plain.Sections.Count + 2, dev.Sections.Count);   // the divider AND the section
+        for (int i = 0; i < plain.Sections.Count; i++)
+            Assert.Equal(plain.Sections[i].Id, dev.Sections[i].Id);
+        Assert.Equal(SidebarBuiltInDocuments.ToolsId, dev.Sections[^1].Id);
+    }
+
+    /// <summary>The RULE the three sidebar offer sites share (Classic's document, the Curated palette's destination
+    /// group, the static-links picker). Pinned here so "hidden in two of the three" cannot happen quietly.</summary>
+    [Theory]
+    [InlineData("api-console", false, false)]
+    [InlineData("api-console", true, true)]
+    [InlineData("settings", false, true)]
+    [InlineData("home", false, true)]
+    [InlineData(null, false, true)]
+    public void ShowsRoute_HidesOnlyTheDeveloperRoutes(string? route, bool devMode, bool shown)
+        => Assert.Equal(shown, DeveloperMode.ShowsRoute(route, devMode));
 
     [Fact]
     public void Classic_LibraryShortcutsKeepTodaysOrderAndIcons()
@@ -61,7 +118,7 @@ public sealed class SidebarBuiltInDocumentTests
     [Fact]
     public void Classic_DensityIntentYields44DipRowsEverywhere()
     {
-        var doc = Classic();
+        var doc = ClassicDev();   // the Tools band only exists in developer mode, and its density is pinned below
 
         // Glyph bands: Comfortable + no subtitle ⇒ HeightFor == 44 (Cozy would be 40 and would shrink Classic's rows).
         foreach (string id in new[] { SidebarBuiltInDocuments.LibraryId, SidebarBuiltInDocuments.ToolsId })
@@ -85,7 +142,7 @@ public sealed class SidebarBuiltInDocumentTests
     [Fact]
     public void Classic_DevToolsSectionIsHeaderlessAndBadgeless()
     {
-        var tools = Section(Classic(), SidebarBuiltInDocuments.ToolsId);
+        var tools = Section(ClassicDev(), SidebarBuiltInDocuments.ToolsId);
         // No Title and no TitleLocKey ⇒ the planner emits NO SectionHeader row, which is how the landed DevToolsRow
         // rendered: a flat row outside every section.
         Assert.Null(tools.Title);
@@ -117,8 +174,8 @@ public sealed class SidebarBuiltInDocumentTests
     {
         // NOT SidebarIds.NewSection(): the pane keys its reorder bands, collapse routing and section identity off these,
         // so a fresh id per rebuild would reset all three on every toggle.
-        var a = Classic();
-        var b = SidebarBuiltInDocuments.Classic(false, false, false);
+        var a = ClassicDev();
+        var b = SidebarBuiltInDocuments.Classic(false, false, false, devTools: true);
         for (int i = 0; i < a.Sections.Count; i++) Assert.Equal(a.Sections[i].Id, b.Sections[i].Id);
 
         Assert.Equal(ClassicSection.Pinned, SidebarBuiltInDocuments.ClassicSectionOf(SidebarBuiltInDocuments.PinnedId));

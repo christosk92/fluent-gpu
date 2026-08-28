@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
@@ -23,6 +24,9 @@ sealed class ContentHost : Component
     readonly Signal<NavTransitionKind> _motion;
     readonly Func<int> _activeTabId;
     readonly IAppSettings? _settings;   // seeds LibraryPage's persisted per-kind state (widths/sort/view/selection)
+    // The shell's Go, refreshed from context on every render. PageFor runs inside the keep-alive boundary's own
+    // computation, where a hook (UseContext) cannot be called — so the value is parked here by Render instead.
+    Action<string, string?> _go = static (_, _) => { };
     public ContentHost(Signal<Route> route, Signal<NavTransitionKind> motion, Func<int> activeTabId, IAppSettings? settings = null)
     { _route = route; _motion = motion; _activeTabId = activeTabId; _settings = settings; }
 
@@ -34,6 +38,7 @@ sealed class ContentHost : Component
         // disappearing from the tree would remount the KeepAlive subtree and cold-restart every cached page.
         var bridge = UseContext(PlaybackBridge.Slot);
         var ui = UseContext(ShellUi.Slot);
+        _go = UseContext(HistoryStore.NavCtx);
         float reserve = bridge?.FloatingSurfaceReserve.Value ?? 0f;   // subscribe → re-inset as the surface comes and goes
 
         // The CLEARING half of ShellUi.ActiveStagePlayable (ModulePage writes the claim; its doc-comment states the
@@ -190,7 +195,10 @@ sealed class ContentHost : Component
             return new BoxEl { Key = "page:settings", Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
                 Children = [ Embed.Comp(() => new SettingsPage()) ] };
 
-        if (r.Name == "api-console")
+        // Developer-only. Gated HERE, at the one place a route becomes a page, so every way in — the palette, a tab
+        // restored from the last session, a deep link — obeys the same switch. With developer mode off the route falls
+        // through to the not-found page below rather than being special-cased into a second "you can't see this" state.
+        if (r.Name == DeveloperMode.ApiConsoleRoute && DeveloperMode.Enabled.Value)
             return new BoxEl { Key = "page:api-console", Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
                 Children = [ Embed.Comp(() => new ApiConsolePage()) ] };
 
@@ -240,7 +248,14 @@ sealed class ContentHost : Component
         if (IsArtist(r)) return ArtistHost(r);
         if (IsDetail(r)) return DetailHost(r);
 
-        var (title, glyph) = ShellNav.Dest(r);
+        // ── Not found ────────────────────────────────────────────────────────────────────────────────────────────
+        // Nothing above claimed the route. It is NOT "coming soon" — that copy promised a page that in every real
+        // case does not and will not exist (a retired destination, a stale restored tab, a hand-typed deep link, a
+        // developer route with developer mode off). Say so, keep the destination's own glyph so the page still reads
+        // as the thing the user asked for, and give the one action that always works.
+        var (_, glyph) = ShellNav.Dest(r);
+        var go = _go;
+        WarnUnknownRouteOnce(r.Name);
         return new BoxEl
         {
             Key = "page:" + r.Name,
@@ -249,9 +264,20 @@ sealed class ContentHost : Component
             Children =
             [
                 Icon(glyph, 40f, Tok.TextTertiary),
-                WaveeType.PageHero(title),
-                Caption(Loc.Get(Strings.Nav.ComingSoon)).Secondary(),
+                WaveeType.PageHero(Loc.Get(Strings.Nav.PageNotFound)),
+                Button.Standard(Loc.Get(Strings.Nav.GoHome), () => go("home", null)),
             ],
         };
+    }
+
+    // One warning per route key per process. PageFor runs on every activation of a keep-alive slot, so an unguarded
+    // log here would write a line every time the user tabbed back to the same dead tab — the noise would bury the
+    // first, informative occurrence.
+    static readonly HashSet<string> s_warnedUnknown = new(StringComparer.Ordinal);
+
+    static void WarnUnknownRouteOnce(string routeName)
+    {
+        if (!s_warnedUnknown.Add(routeName)) return;
+        WaveeLog.Instance.Warn("nav", "route.unknown: " + routeName);
     }
 }

@@ -21,8 +21,8 @@ static class SetupBootstrap
     /// null.</param>
     public static void Run(IAppSettings settings, string? localAppDataOverride = null, IWaveeLog? log = null)
     {
-        if (settings.Get(WaveeSettings.SetupBootstrapVersion) >= TargetVersion) return;
         log ??= WaveeLog.Instance;
+        if (settings.Get(WaveeSettings.SetupBootstrapVersion) >= TargetVersion) { RearmForTerms(settings, log); return; }
 
         bool fresh = SidebarBootstrap.IsFreshInstall(settings, localAppDataOverride, log);
         if (fresh)
@@ -46,5 +46,30 @@ static class SetupBootstrap
         log.Info("setup", "setup.bootstrap",
             fresh ? "Fresh install: first-run setup wizard armed." : "Existing install: first-run setup wizard suppressed.",
             WaveeLogField.Of("fresh", fresh));
+
+        RearmForTerms(settings, log);
+    }
+
+    /// <summary>Re-arm a COMPLETED install whose recorded terms acceptance predates this build
+    /// (<see cref="SetupGating.TermsVersion"/>). Runs on EVERY launch — not once per <see cref="TargetVersion"/> — because
+    /// the trigger is a shipped terms revision, not a one-time migration: bumping the terms version has to reach installs
+    /// that already burned <c>SetupBootstrapVersion</c> long ago. The wizard's own Terms page writes the new version on
+    /// Accept, which is what stops this from re-arming again on the next launch. Idempotent: a pending wizard stays
+    /// pending, and an up-to-date acceptance writes nothing at all.</summary>
+    static void RearmForTerms(IAppSettings settings, IWaveeLog log)
+    {
+        int accepted = settings.Get(WaveeSettings.TermsAcceptedVersion);
+        if (SetupGating.GrandfathersTerms(settings.Get(WaveeSettings.SetupCompleted), accepted))
+        {
+            settings.Set(WaveeSettings.TermsAcceptedVersion, SetupGating.TermsVersion);   // completed before versioning existed
+            return;
+        }
+        if (!SetupGating.NeedsTermsRearm(settings.Get(WaveeSettings.SetupCompleted), accepted, SetupGating.TermsVersion)) return;
+        if (settings.Get(WaveeSettings.SetupPending)) return;   // already armed — nothing to say or write
+
+        settings.Set(WaveeSettings.SetupPending, true);
+        log.Info("setup", "setup.terms.rearm",
+            "Terms revision changed since this install accepted; re-arming the setup wizard.",
+            WaveeLogField.Of("accepted", accepted), WaveeLogField.Of("required", SetupGating.TermsVersion));
     }
 }

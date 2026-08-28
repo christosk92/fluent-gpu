@@ -7,6 +7,7 @@ using Wavee.Backend;
 using Wavee.Backend.Playlists;
 using Wavee.Backend.Spotify;
 using Wavee.Backend.Sync;
+using Wavee.Core;
 using Xunit;
 using Pl = Wavee.Protocol.Playlist;
 
@@ -168,6 +169,29 @@ public class PlaylistDiffFetchTests
         }
     }
 
+    // ── a ROLLING-IDENTITY playlist (a daylist) still needs its header re-read on an UpToDate verdict (cause 4 of the
+    // stale-daylist-header defect): the server can swap the whole edition without a single op a /diff would carry, so
+    // "nothing changed" per the diff body is not "the header is current" for this shape of playlist. ─────────────────
+    [Fact]
+    public async Task Diff_UpToDate_OnARollingIdentityPlaylist_StillRefreshesTheHeader()
+    {
+        var rev = Rev(7, 0x01);
+        var header = new Pl.SelectedListContent { Length = 1, OwnerUsername = "spotify" };
+        header.Attributes = new Pl.ListAttributes { Name = "New Edition", Format = "daylist" };
+        var (f, store, _, reqs) = Rig((req, _) =>
+            req.Url.Contains("/diff?") ? Ok(new Pl.SelectedListContent { UpToDate = true }.ToByteArray()) : Ok(header.ToByteArray()));
+        Seed(store, rev, "spotify:track:t1");
+        store.UpsertPlaylist(new Playlist("x", Uri, "Old Edition", null, "spotify", null, 1) { Format = "daylist" });
+
+        var outcome = await f.FetchPlaylistDiffAsync(Uri, Ct);
+
+        Assert.Equal(DiffOutcome.UpToDate, outcome);
+        // Diff_304_And_UpToDate_LeaveStoreUntouched (above) pins the NON-rolling half: one request, store untouched.
+        // This playlist rolls, so the same UpToDate verdict still costs the header GET and adopts its new name.
+        Assert.Equal(2, reqs.Count);
+        Assert.Equal("New Edition", store.GetPlaylist(Uri)!.Name);
+    }
+
     // ── 509 (revision too stale) falls back to the full fetch ─────────────────────────────────────────────────────────
     [Fact]
     public async Task Diff_509_FallsBackToFullFetch()
@@ -277,5 +301,57 @@ public class PlaylistDiffFetchTests
         // a second immediate open is inside the 5-min freshness window → no request at all.
         await h.Sync.OpenPlaylistAsync(Uri, Ct);
         Assert.Equal(1, diffs);
+    }
+
+    // ── cause 3 of the stale-daylist-header defect: the 5-minute open-revalidate window must not veto a re-open of a
+    // ROLLING-IDENTITY playlist. Two opens back-to-back (well inside the window) still both revalidate, and the
+    // second one's fresh name/description/cover — the server having rolled the edition between the two opens —
+    // actually lands. ──────────────────────────────────────────────────────────────────────────────────────────────
+    [Fact]
+    public async Task LibrarySync_RollingIdentityPlaylist_RevalidatesInsideTheWindow_AndAdoptsTheNewHeader()
+    {
+        int headerCalls = 0;
+        await using var h = new SyncHarness(req =>
+        {
+            if (req.Url.Contains("/diff?")) return SyncHarness.Ok(new Pl.SelectedListContent { UpToDate = true }.ToByteArray());
+            headerCalls++;
+            bool second = headerCalls > 1;
+            // Capabilities.CanView must ride every header response — an absent one reads back as default(PlaylistCapabilities)
+            // and would (rightly, but not what THIS test is pinning) also trip the unrelated header-heal gate on the next open.
+            var header = new Pl.SelectedListContent
+            { Length = 1, OwnerUsername = "spotify", Capabilities = new Pl.Capabilities { CanView = true, CanEditItems = true } };
+            header.Attributes = new Pl.ListAttributes
+            {
+                Name = second ? "New Edition" : "Old Edition",
+                Description = second ? "Fresh picks for you" : "Yesterday's picks",
+                Format = "daylist",
+            };
+            header.Attributes.PictureSize.Add(new Pl.PictureSize
+            { Url = second ? "https://i.scdn.co/image/new" : "https://i.scdn.co/image/old" });
+            return SyncHarness.Ok(header.ToByteArray());
+        });
+        Seed(h.Store, Rev(1, 0x01), "spotify:track:t1");
+        // Capabilities set to something other than default so the header-heal gate (a SEPARATE, unrelated repair) does
+        // not also fire here and confuse what is under test.
+        h.Store.UpsertPlaylist(new Playlist("x", Uri, "Old Edition", "Yesterday's picks", "spotify",
+            new Image("https://i.scdn.co/image/old"), 1)
+        {
+            Format = "daylist",
+            Capabilities = new PlaylistCapabilities(CanView: true, CanEditItems: true, CanEditMetadata: false,
+                IsCollaborative: false, IsOwner: false),
+        });
+
+        await h.Sync.OpenPlaylistAsync(Uri, Ct);
+        Assert.Equal("Old Edition", h.Store.GetPlaylist(Uri)!.Name);
+
+        // Immediately again — well inside OpenRevalidateWindow. A non-rolling playlist would be skipped outright
+        // (LibrarySync_OpenStalePlaylist_RevalidatesViaDiff, above, pins exactly that).
+        await h.Sync.OpenPlaylistAsync(Uri, Ct);
+
+        Assert.Equal(2, headerCalls);
+        var adopted = h.Store.GetPlaylist(Uri)!;
+        Assert.Equal("New Edition", adopted.Name);
+        Assert.Equal("Fresh picks for you", adopted.Description);
+        Assert.Equal("https://i.scdn.co/image/new", adopted.Cover?.Url);
     }
 }

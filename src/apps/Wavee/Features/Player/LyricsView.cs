@@ -1920,13 +1920,11 @@ sealed class LyricsView : Component
         if (b is null || doc is null || (uint)index >= (uint)doc.Lines.Count) return;
         ResetFollowState(Context.Scene);   // a deliberate lyric click returns to live before the new active index resolves
         long ms = doc.Lines[index].StartMs;
-        b.NoteSeek(ms);     // arm the seek latch: suppress stale pre-seek position ticks (#2)
-        b.PositionMs.Value = ms;
+        b.CommitSeek(ms);   // arms the latch, optimistically publishes PositionMs, issues the accurate seek — a line tap is a commit, never a scrub preview
         RebaseClock(ms);    // seed all clock fields; _lastAuthMs=ms keeps OnFrame from re-treating our own jump as a seek
         _scrollSnapped = false;   // the next follow is the HARD first-landing jump, with the cascade left at rest
         ZeroCascade(Context.Scene);
         ResetWipeThrottle();
-        _ = b.Player.SeekAsync(ms, SeekMode.Accurate);   // a line tap is a commit, never a scrub preview
     }
 
     internal void OnFrame(bool forceVisual = false, long probeNowMs = long.MinValue)

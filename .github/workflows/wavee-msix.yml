@@ -1,0 +1,142 @@
+# Build, sign, and publish the WAVEE app MSIX (NativeAOT, packaged Win32 full-trust).
+#
+# WHY A SEPARATE WORKFLOW AND A SEPARATE TAG PREFIX:
+#   This repo ships TWO products out of one tree — the FluentGpu **gallery** (`.github/workflows/msix.yml`, tag `v*`,
+#   package identity `MarTeco.FluentGpu`) and the **Wavee** music client (this file, tag `wavee-v*`, package identity
+#   `cproducts.Wavee`). They version independently: a gallery release must not force a Wavee release and vice versa.
+#   `v*` and `wavee-v*` are disjoint glob-wise, so pushing `wavee-v0.2.0` runs ONLY this workflow.
+#
+# Everything else mirrors msix.yml: arm64 + x64 built natively (AOT can't cross-compile), one packaging script shared
+# by local dev and CI (ops/build/pack-wavee-msix.ps1), optional Azure Trusted Signing, and a per-arch .appinstaller
+# for one-click sideload auto-update.
+#
+# Trigger: push a tag `wavee-v*` (release), or run manually (workflow_dispatch).
+name: wavee-msix
+
+on:
+  push:
+    tags: ['wavee-v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'SemVer (e.g. 0.2.0). 4th part is the CI run number.'
+        required: false
+        default: '0.2.0'
+
+permissions:
+  contents: write   # create the GitHub release
+
+env:
+  DOTNET_NOLOGO: 'true'
+  DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}      # 4-part MSIX version, e.g. 0.2.0.42
+      semver:  ${{ steps.v.outputs.semver }}       # 0.2.0
+    steps:
+      - id: v
+        shell: bash
+        run: |
+          # Strip the `wavee-v` prefix (NOT `v` — the tag is `wavee-v0.2.0`, so `${REF#refs/tags/v}` would leave "wavee-…").
+          if [[ "${GITHUB_REF}" == refs/tags/wavee-v* ]]; then SEMVER="${GITHUB_REF#refs/tags/wavee-v}"; else SEMVER="${{ github.event.inputs.version }}"; fi
+          SEMVER="${SEMVER:-0.2.0}"
+          echo "semver=$SEMVER"            >> "$GITHUB_OUTPUT"
+          echo "version=$SEMVER.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"   # X.Y.Z.<run> - monotonic for .appinstaller
+
+  build:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-latest      # AOT must build on a matching-arch runner
+          - arch: arm64
+            runner: windows-11-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '11.0.x'       # repo targets net10.0 but builds on the 11.x preview SDK
+          dotnet-quality: preview
+      # CI leaves the package UNSIGNED (-NoSign); the sign job re-signs with Trusted Signing if the secrets exist.
+      # The script also stamps /p:InformationalVersion from -Version and emits THIRD-PARTY-NOTICES.txt into the payload.
+      # WaveeSkipPrivateSources is the csproj default on a CI checkout (the Wavee.PlayPlay junction is gitignored and
+      # absent here) — the packaged app is the public-only build.
+      - name: Pack Wavee MSIX (NativeAOT)
+        shell: pwsh
+        # -Publisher must match the signing cert subject (Trusted Signing) - set repo variable RELEASE_PUBLISHER.
+        run: ./ops/build/pack-wavee-msix.ps1 -Arch ${{ matrix.arch }} -Version ${{ needs.version.outputs.version }} -NoSign -Publisher "${{ vars.RELEASE_PUBLISHER || 'CN=MarTeco Dev, O=MarTeco, C=NL' }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wavee-msix-${{ matrix.arch }}
+          # THIRD-PARTY-NOTICES.txt is committed at the repo root (the same file the packaging script stages into the
+          # payload); shipping it as a release asset makes the attribution readable without unpacking the .msix.
+          path: |
+            artifacts/Wavee_*.msix
+            THIRD-PARTY-NOTICES.txt
+          retention-days: 14
+
+  # Optional: sign with Azure Trusted Signing IF the secrets are configured; otherwise this job is skipped and the
+  # release ships unsigned packages (install with a local dev cert via ops/build/pack-wavee-msix.ps1 -Install).
+  sign:
+    needs: [version, build]
+    runs-on: windows-latest
+    if: ${{ vars.TRUSTED_SIGNING_ACCOUNT != '' }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { pattern: 'wavee-msix-*', path: artifacts, merge-multiple: true }
+      - name: Azure Trusted Signing
+        uses: azure/trusted-signing-action@v0
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ vars.TRUSTED_SIGNING_ENDPOINT }}
+          trusted-signing-account-name: ${{ vars.TRUSTED_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.TRUSTED_SIGNING_PROFILE }}
+          files-folder: artifacts
+          files-folder-filter: msix
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+      - uses: actions/upload-artifact@v4
+        with: { name: wavee-msix-signed, path: artifacts/Wavee_*.msix }
+
+  release:
+    needs: [version, build, sign]
+    if: ${{ always() && startsWith(github.ref, 'refs/tags/wavee-v') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { pattern: 'wavee-msix-*', path: artifacts, merge-multiple: true }
+      - name: Generate .appinstaller (per arch)
+        shell: bash
+        run: |
+          REPO="${{ github.server_url }}/${{ github.repository }}"
+          PUBLISHER="${{ vars.RELEASE_PUBLISHER || 'CN=MarTeco Dev, O=MarTeco, C=NL' }}"
+          for ARCH in x64 arm64; do
+            # __APPINSTALLER_URI__ points at releases/latest so an installed app keeps checking the SAME stable URL;
+            # __MSIX_URI__ pins THIS tag's asset.
+            sed -e "s#__VERSION__#${{ needs.version.outputs.version }}#g" \
+                -e "s#__ARCH__#${ARCH}#g" \
+                -e "s#__PUBLISHER__#${PUBLISHER}#g" \
+                -e "s#__APPINSTALLER_URI__#${REPO}/releases/latest/download/Wavee.${ARCH}.appinstaller#g" \
+                -e "s#__MSIX_URI__#${REPO}/releases/download/wavee-v${{ needs.version.outputs.semver }}/Wavee_${{ needs.version.outputs.version }}_${ARCH}.msix#g" \
+                ops/build/Wavee.AppInstaller.template.xml > "artifacts/Wavee.${ARCH}.appinstaller"
+          done
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: wavee-v${{ needs.version.outputs.semver }}
+          files: |
+            artifacts/Wavee_*.msix
+            artifacts/Wavee.*.appinstaller
+            THIRD-PARTY-NOTICES.txt
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(needs.version.outputs.semver, '-') }}

@@ -186,6 +186,10 @@ public sealed class FluentVideoMediaHost : IMediaHost
 
     public bool IsPlaying { get { var p = CurrentPlayer; return p is not null && p.IsPlaying.Peek(); } }
 
+    // No player loaded → no clock to trust; PositionMs's own null branch already reports 0 in that case, and this is
+    // the seam-level signal that the 0 is unknown, not a real position (see IMediaHost.ClockValid).
+    public bool ClockValid => CurrentPlayer is not null;
+
     public IObservable<AudioHostSignal> Signals => _signals;
 
     public void Play()

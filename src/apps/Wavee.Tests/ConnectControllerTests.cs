@@ -33,12 +33,17 @@ public class ConnectControllerTests
         public long PositionMs { get; set; }
         public bool IsPlaying { get; private set; }
         public bool IsBuffering => false;
-        public void Load(in AudioStreamHandle s) { Calls.Add("load:" + s.TrackUri); }
-        public void LoadFastStart(in AudioFastStart s) { Calls.Add("faststart:" + s.TrackUri); }
+        // Stateful, unlike the other fakes: teardown tests (BecameInactive/DeactivateIfActiveOwner) need a host whose
+        // clock actually goes stale on Stop() and recovers on the next Load, so they exercise the ClockValid fallback
+        // path (PlaybackController.PublishPositionMs) rather than trivially always reading true. Starts false, like
+        // the real FluentMediaAudioHost: a never-opened host has no honest clock either.
+        public bool ClockValid { get; private set; }
+        public void Load(in AudioStreamHandle s) { Calls.Add("load:" + s.TrackUri); ClockValid = true; }
+        public void LoadFastStart(in AudioFastStart s) { Calls.Add("faststart:" + s.TrackUri); ClockValid = true; }
         public void SupplyBody(in AudioStreamHandle s) { Calls.Add("body:" + s.TrackUri); }
         public void Play() { IsPlaying = true; Calls.Add("play"); }
         public void Pause() { IsPlaying = false; Calls.Add("pause"); }
-        public void Stop() { IsPlaying = false; Calls.Add("stop"); }
+        public void Stop() { IsPlaying = false; ClockValid = false; Calls.Add("stop"); }
         public void Seek(long ms, SeekMode mode) { PositionMs = ms; Calls.Add("seek:" + ms); }
         public void SetVolume(double v) { Calls.Add("vol"); }
         public void Emit(AudioHostSignal s) => _sig.OnNext(s);
@@ -67,7 +72,7 @@ public class ConnectControllerTests
     {
         public readonly List<(string Target, string Json)> Sent = new();
         public readonly List<(string Target, int Volume)> Volumes = new();
-        public readonly List<(string From, string Target)> Transfers = new();
+        public readonly List<(string From, string Target, bool HostingVideo)> Transfers = new();
         public bool TransferOk { get; set; } = true;
         public string? LastTarget => Sent.Count > 0 ? Sent[^1].Target : null;
         public string? LastJson => Sent.Count > 0 ? Sent[^1].Json : null;
@@ -76,9 +81,9 @@ public class ConnectControllerTests
         { Sent.Add((targetDeviceId, commandJson)); return Task.FromResult(new OutboundResult(true, "ack-test", 200)); }
         public Task<OutboundResult> SetVolumeAsync(string targetDeviceId, int volume0_65535, CancellationToken ct = default)
         { Volumes.Add((targetDeviceId, volume0_65535)); return Task.FromResult(new OutboundResult(true, "ack-test", 200)); }
-        public Task<OutboundResult> TransferAsync(string fromDeviceId, string targetDeviceId, CancellationToken ct = default)
+        public Task<OutboundResult> TransferAsync(string fromDeviceId, string targetDeviceId, CancellationToken ct = default, bool hostingVideo = false)
         {
-            Transfers.Add((fromDeviceId, targetDeviceId));
+            Transfers.Add((fromDeviceId, targetDeviceId, hostingVideo));
             return Task.FromResult(new OutboundResult(TransferOk, TransferOk ? "ack-test" : null, TransferOk ? 200 : 500));
         }
     }
@@ -213,6 +218,68 @@ public class ConnectControllerTests
         Assert.Contains("play", host.Calls);
     }
 
+    // A skip forward publishes the NEW track's own start (0), never the OUTGOING track's carried-forward position —
+    // "b" had played 0 ms, and must never be stamped with "a"'s 2578 ms on the wire (the phone-inherits-a-stale-
+    // position defect).
+    [Fact]
+    public async Task Next_PublishesNewTrack_NeverCarriesPreviousTrackPosition()
+    {
+        var recording = new RecordingProjection();
+        using var c = Make(out var host, out _, out _, extra: new IPlaybackProjection[] { recording });
+        await c.PlayAsync("spotify:playlist:p");   // a
+        host.PositionMs = 2578;                    // "a" had played 2578 ms by the time the user skips
+        recording.Events.Clear();
+
+        await c.NextAsync();
+
+        var trackChanged = recording.Events.Single(e => e.Kind == EvKind.TrackChanged);
+        Assert.Equal("spotify:track:b", trackChanged.Track?.Uri);
+        Assert.Equal(0, trackChanged.AtMs);
+    }
+
+    // TransferToAsync must publish our LIVE position/play-state before forwarding — the target device otherwise
+    // inherits whatever we last happened to PUT, which can be seconds behind the user's actual position (nothing
+    // re-announces on a timer).
+    [Fact]
+    public async Task TransferToAsync_PublishesFreshState_BeforeForwarding()
+    {
+        using var c = Make(out var host, out _, out var outbound);
+        await c.PlayAsync("spotify:playlist:p");
+        host.PositionMs = 4200;   // the live position has moved on since our last PUT
+
+        var publishedAt = new List<long>();
+        int transferCountAtPublish = -1;
+        c.PublishFreshStateOnWire = () =>
+        {
+            publishedAt.Add(host.PositionMs);
+            transferCountAtPublish = outbound.Transfers.Count;   // must fire BEFORE the forward, not after
+        };
+
+        await c.TransferToAsync("phone-1");
+
+        Assert.Equal(new[] { 4200L }, publishedAt);   // published, carrying the live position
+        Assert.Equal(0, transferCountAtPublish);      // nothing had been forwarded yet at publish time
+        Assert.Single(outbound.Transfers);
+        Assert.Equal(("us", "phone-1", false), outbound.Transfers[0]);   // audio session → no video_persistence
+    }
+
+    // Not the active owner (another device already plays) — there is no local truth to give the target, so the fresh
+    // publish must not fire; only the forward happens.
+    [Fact]
+    public async Task TransferToAsync_WhileNotActiveOwner_DoesNotPublishFreshState()
+    {
+        using var c = Make(out _, out var proj, out var outbound);
+        proj.OnCluster(Cluster("other-device"));   // somebody else already owns the cluster
+
+        int publishCount = 0;
+        c.PublishFreshStateOnWire = () => publishCount++;
+
+        await c.TransferToAsync("phone-1");
+
+        Assert.Equal(0, publishCount);
+        Assert.Single(outbound.Transfers);
+    }
+
     [Fact]
     public async Task Ended_AutoAdvances_ToNextTrack()
     {
@@ -221,6 +288,50 @@ public class ConnectControllerTests
         host.Calls.Clear();
         host.Emit(new AudioHostSignal(AudioHostSignalKind.Ended, 60000));
         await Task.Delay(60);
+        Assert.Contains("load:spotify:track:b", host.Calls);
+    }
+
+    // A RESUMED reopen (a nonzero seek target — the takeover/regain-ownership reload) whose Ended lands BEHIND that
+    // target (here, at 0) never actually played what it opened — a natural end lands at/after where it started. This
+    // is a FAILED REOPEN wearing an end-of-track costume (a reopen racing a just-attached, still-streaming body), and
+    // auto-advancing on it is exactly the "pressed play 4-5 times before a song actually played" defect: every failed
+    // reopen silently skips the queue forward instead of reporting. This must report a failure and leave the current
+    // track selected.
+    [Fact]
+    public async Task Ended_BehindAResumedLoadsOwnTarget_DoesNotAdvance_AndReportsFailure()
+    {
+        using var c = Make(out var host, out _, out _);
+        var errors = new List<PlaybackErrorInfo>();
+        c.OnPlaybackError = errors.Add;
+        await c.PlayAsync("spotify:playlist:p");   // a, playing
+        host.PositionMs = 3000;                    // "a" is 3 s in when ownership is taken away
+        c.DeactivateIfActiveOwner();                // simulates the takeover teardown (arms the reload latch)
+        host.Calls.Clear();
+
+        await c.ResumeAsync();                      // ownership-regain-style reload: resumes "a" at 3000 ms
+        Assert.Contains("seek:3000", host.Calls);   // the reopen really did ask to resume at 3000
+        host.Calls.Clear();
+
+        host.Emit(new AudioHostSignal(AudioHostSignalKind.Ended, 0));   // …but the reopen instantly "ended" at 0
+        await Task.Delay(60);
+
+        Assert.DoesNotContain(host.Calls, x => x.StartsWith("load:", StringComparison.Ordinal));   // queue not advanced
+        Assert.Single(errors);
+    }
+
+    // The mirror-image guard: an ORDINARY fresh play (target 0) that ends at 0 still advances normally — the guard
+    // only ever suppresses an Ended that lands BEHIND a genuinely resumed (nonzero) target, never a plain short/empty
+    // playable starting from the top.
+    [Fact]
+    public async Task Ended_AtPositionZero_AfterAFreshStart_StillAdvances()
+    {
+        using var c = Make(out var host, out _, out _);
+        await c.PlayAsync("spotify:playlist:p");   // a, starts fresh at 0 — not a resume
+        host.Calls.Clear();
+
+        host.Emit(new AudioHostSignal(AudioHostSignalKind.Ended, 0));
+        await Task.Delay(60);
+
         Assert.Contains("load:spotify:track:b", host.Calls);
     }
 
@@ -322,6 +433,35 @@ public class ConnectControllerTests
         Assert.Equal("other-device", outbound.LastTarget);
     }
 
+    // ── bug 5: EnqueueAsync(Track) forwards a real Track — the remote row must carry the SAME display + video
+    // metadata a set_queue row gets, not an erased {}.
+    [Fact]
+    public async Task RemoteActive_EnqueueTrack_SendsFullMetadata_IncludingVideoAssociation()
+    {
+        var track = new Track("v", "spotify:track:v", "A Video Song",
+            new[] { new ArtistRef("ar1", "spotify:artist:ar1", "Some Artist") },
+            new AlbumRef("al1", "spotify:album:al1", "Some Album"), 210_000, false, null);
+        var store = new InMemoryStore();
+        store.UpsertVideoAssociation(new VideoAssociation(track.Uri, true, "spotify:track:v-video",
+            VideoAssociation.NoFiles, null, DateTimeOffset.UtcNow, 0));
+        try
+        {
+            VideoPresence.Attach(null, store);
+            using var c = Make(out _, out var proj, out var outbound);
+            proj.OnCluster(Cluster("other-device"));
+            await c.EnqueueAsync(track);
+
+            using var doc = JsonDocument.Parse(outbound.LastJson!);
+            var meta = doc.RootElement.GetProperty("command").GetProperty("track").GetProperty("metadata");
+            Assert.Equal("A Video Song", meta.GetProperty("title").GetString());
+            Assert.Equal("Some Artist", meta.GetProperty("artist_name").GetString());
+            Assert.Equal("video", meta.GetProperty("track_player").GetString());
+            Assert.Equal("video", meta.GetProperty("media.type").GetString());
+            Assert.Equal("spotify:track:v-video", meta.GetProperty("video_association").GetString());
+        }
+        finally { VideoPresence.Attach(null); }
+    }
+
     [Fact]
     public async Task RemoteActive_PlayOrdered_EmbedsVisibleOrder_AndSkipTo()
     {
@@ -345,6 +485,37 @@ public class ConnectControllerTests
         Assert.Equal("spotify:track:a", skip.GetProperty("track_uri").GetString());  // startIndex 1
         Assert.Equal("ua", skip.GetProperty("track_uid").GetString());
         Assert.Equal(1, skip.GetProperty("track_index").GetInt32());
+    }
+
+    // ── bug 4: a forwarded play whose selected row carries a live video intent must tell the target so, or it opens
+    // the video-capable context/track in plain audio.
+    [Fact]
+    public async Task RemoteActive_PlayOrdered_SelectedRowIsVideo_CarriesModesMedia()
+    {
+        using var c = Make(out _, out var proj, out var outbound);
+        proj.OnCluster(Cluster("other-device"));
+        var videoMeta = new Dictionary<string, string> { ["track_player"] = "video" };
+        await c.PlayOrderedAsync("spotify:playlist:p", new[]
+        {
+            new PlaybackContextTrack("spotify:track:a", "ua", videoMeta),
+        }, startIndex: 0);
+
+        using var doc = JsonDocument.Parse(outbound.LastJson!);
+        var modes = doc.RootElement.GetProperty("command").GetProperty("prepare_play_options")
+            .GetProperty("player_options_override").GetProperty("modes");
+        Assert.Equal("VIDEO", modes.GetProperty("media").GetString());
+    }
+
+    [Fact]
+    public async Task RemoteActive_PlayOrdered_PlainTrack_CarriesNoModesOverride()
+    {
+        using var c = Make(out _, out var proj, out var outbound);
+        proj.OnCluster(Cluster("other-device"));
+        await c.PlayOrderedAsync("spotify:playlist:p", new[] { new PlaybackContextTrack("spotify:track:a", "ua") }, startIndex: 0);
+
+        using var doc = JsonDocument.Parse(outbound.LastJson!);
+        var playerOptions = doc.RootElement.GetProperty("command").GetProperty("prepare_play_options").GetProperty("player_options_override");
+        Assert.False(playerOptions.TryGetProperty("modes", out _));
     }
 
     [Fact]
@@ -436,17 +607,28 @@ public class ConnectControllerTests
         Assert.Equal(0, events.Count(EvKind.BecameInactive));
     }
 
+    // An empty active-device id is our OWN echo (a put-state announcing active=False), never a takeover: the host
+    // keeps playing and the LOCAL projection hears nothing (no BecameInactive fold, which would poison the local
+    // position/play-state for a transition that never touched the host) — only the wire is told, through the new
+    // PublishInactiveOnWire seam (mirroring LiveConnect's real DeviceStatePublisher.PublishInactive wiring), so a
+    // remote controller still sees us go inactive. Ownership release itself is exercised by that seam firing at
+    // all: PublishInactiveOnWire is invoked from the one branch that also releases ownership (see OnProjectionChanged).
     [Fact]
     public async Task ActiveOwner_ActiveDeviceClears_PublishesInactiveOnce()
     {
         var events = new RecordingProjection();
-        using var c = Make(out _, out var proj, out _, extra: new[] { events });
+        using var c = Make(out var host, out var proj, out _, extra: new[] { events });
+        int wireInactiveCalls = 0;
+        c.PublishInactiveOnWire = () => wireInactiveCalls++;
         await c.PlayAsync("spotify:playlist:p");
         proj.OnCluster(Cluster("us", Remote("spotify:track:a"), playing: true));
+        host.Calls.Clear();
 
         proj.OnCluster(Cluster(""));
 
-        Assert.Equal(1, events.Count(EvKind.BecameInactive));
+        Assert.DoesNotContain("stop", host.Calls);
+        Assert.Equal(0, events.Count(EvKind.BecameInactive));
+        Assert.Equal(1, wireInactiveCalls);
     }
 
     [Fact]
@@ -635,6 +817,107 @@ public class ConnectControllerTests
         Assert.Contains("seek:30000", host.Calls);
         Assert.DoesNotContain("play", host.Calls);
         Assert.False(projection.IsPlaying);
+    }
+
+    // An inbound transfer's current track carrying the wire's music-video association keys (track_player: "video",
+    // media.type, media.manifest_id — the SAME shape a cluster row uses) must restore on the VIDEO host even though
+    // HandleInboundPlayOrTransferAsync marks this Connect-originated (audio-first) and no ShouldPlayAsVideo hook is
+    // wired at all — the forced kind bypasses that gate exactly like an inbound modes.media override would.
+    [Fact]
+    public async Task InboundTransfer_CurrentTrackCarriesVideoMetadata_RestoresOnVideoHost()
+    {
+        var audio = new RecordingAudioHost();
+        var video = new RecordingAudioHost();
+        var projection = new NowPlayingProjection("us", NotOwnedEntityHydrator.Instance, new InMemoryStore(), () => 0);
+        using var controller = new PlaybackController(
+            audio, new StubTrackResolver(), projection, Ctx("spotify:track:other"), "us",
+            videoHost: video, transferDecoder: new ProtoTransferStateDecoder());
+        controller.LoadCurrentVideoAsync = (_, _, _) => Task.FromResult(true);
+
+        var currentTrack = new TransferContextTrack { Uri = "spotify:track:vid1", Uid = "current" };
+        currentTrack.Metadata["track_player"] = "video";
+        currentTrack.Metadata["media.type"] = "video";
+        currentTrack.Metadata["media.manifest_id"] = "b0d0cccc2fe240de8d6c94b3746af402";
+        var transfer = new TransferState
+        {
+            Options = new TransferPlayerOptions(),
+            Playback = new TransferPlayback
+            {
+                Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                PositionAsOfTimestamp = 5000,
+                Speed = 1.0,
+                Paused = false,
+                CurrentTrack = currentTrack,
+            },
+            CurrentSession = new TransferSession
+            {
+                CurrentUid = "current",
+                Context = new TransferContext { Uri = "spotify:playlist:transfer", Url = "context://transfer" },
+            },
+            Queue = new TransferQueue(),
+        };
+        string body = "{\"message_id\":78,\"sent_by_device_id\":\"desktop\",\"command\":{" +
+            "\"endpoint\":\"transfer\",\"data\":\"" + Convert.ToBase64String(transfer.ToByteArray()) + "\"," +
+            "\"options\":{\"restore_paused\":\"restore\",\"restore_position\":\"extrapolate\"," +
+            "\"restore_track\":\"always_play_something\",\"retain_session\":\"do_not_retain\"}}}";
+
+        ConnectCommand.TryParse(new WireRequest("transfer", "hm://connect-state/v1/player/command",
+            Encoding.UTF8.GetBytes(body), NoHeaders), out var command);
+        var outcome = await controller.HandleRemoteCommandAsync(command);
+
+        Assert.Equal(ConnectCommandOutcome.Applied, outcome);
+        Assert.Equal(PlayableKind.Video, controller.CurrentMediaKind);
+        Assert.DoesNotContain(audio.Calls, x => x.StartsWith("load:", StringComparison.Ordinal));
+        Assert.Contains("play", video.Calls);
+    }
+
+    // bug 8: TransferPlayerOptions.modes["video_persistence"]=="VIDEO" forces the video host even when the CURRENT
+    // track's own metadata carries no video markers at all — the sender's hand-off-level claim, honored the same way
+    // the per-track metadata check already is.
+    [Fact]
+    public async Task InboundTransfer_VideoPersistenceMode_ForcesVideoHost_WithoutPerTrackMetadata()
+    {
+        var audio = new RecordingAudioHost();
+        var video = new RecordingAudioHost();
+        var projection = new NowPlayingProjection("us", NotOwnedEntityHydrator.Instance, new InMemoryStore(), () => 0);
+        using var controller = new PlaybackController(
+            audio, new StubTrackResolver(), projection, Ctx("spotify:track:other"), "us",
+            videoHost: video, transferDecoder: new ProtoTransferStateDecoder());
+        controller.LoadCurrentVideoAsync = (_, _, _) => Task.FromResult(true);
+
+        var options = new TransferPlayerOptions();
+        options.Modes.Add(new Wavee.Protocol.Player.ModeEntry { Key = "video_persistence", Value = "VIDEO" });
+        var transfer = new TransferState
+        {
+            Options = options,
+            Playback = new TransferPlayback
+            {
+                Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                PositionAsOfTimestamp = 5000,
+                Speed = 1.0,
+                Paused = false,
+                CurrentTrack = new TransferContextTrack { Uri = "spotify:track:vid2", Uid = "current" },   // no per-track video metadata
+            },
+            CurrentSession = new TransferSession
+            {
+                CurrentUid = "current",
+                Context = new TransferContext { Uri = "spotify:playlist:transfer", Url = "context://transfer" },
+            },
+            Queue = new TransferQueue(),
+        };
+        string body = "{\"message_id\":79,\"sent_by_device_id\":\"desktop\",\"command\":{" +
+            "\"endpoint\":\"transfer\",\"data\":\"" + Convert.ToBase64String(transfer.ToByteArray()) + "\"," +
+            "\"options\":{\"restore_paused\":\"restore\",\"restore_position\":\"extrapolate\"," +
+            "\"restore_track\":\"always_play_something\",\"retain_session\":\"do_not_retain\"}}}";
+
+        ConnectCommand.TryParse(new WireRequest("transfer", "hm://connect-state/v1/player/command",
+            Encoding.UTF8.GetBytes(body), NoHeaders), out var command);
+        var outcome = await controller.HandleRemoteCommandAsync(command);
+
+        Assert.Equal(ConnectCommandOutcome.Applied, outcome);
+        Assert.Equal(PlayableKind.Video, controller.CurrentMediaKind);
+        Assert.DoesNotContain(audio.Calls, x => x.StartsWith("load:", StringComparison.Ordinal));
+        Assert.Contains("play", video.Calls);
     }
 
     // ── Phase B: the queue verbs (add_to_queue / set_queue / set_options) + prev<3s ──────────────────────────────────
@@ -1008,6 +1291,29 @@ public class ConnectControllerTests
         Assert.DoesNotContain("play", host.Calls);
         Assert.DoesNotContain(host.Calls, x => x.StartsWith("load:", StringComparison.Ordinal));
         Assert.False(c.HasLocalSession);   // the cluster owns the session; we mirror it
+    }
+
+    // ── bug 2: IsActiveOwner() — the ONE predicate the Connect state builder gates the CURRENT track's authoritative
+    // track_player/media.* overwrite on. A Wavee that has never played must answer false here even though the
+    // projection mirrors another device's now-playing row (proj.CurrentTrack is not null); otherwise a viewer echo's
+    // idle "Audio" CurrentMediaKind gets stamped over the wire's own (possibly "video") claim.
+    [Fact]
+    public async Task IsActiveOwner_FalseWhilePassivelyViewingAnotherDevice_EvenThoughATrackMirrors()
+    {
+        using var c = Make(out _, out var proj, out _);
+        proj.OnCluster(Cluster("other-device", Remote("spotify:track:remote"), pos: 5_000, playing: true));
+        await Task.Delay(20);
+
+        Assert.NotNull(proj.CurrentTrack);   // the viewer DOES mirror a track…
+        Assert.False(c.IsActiveOwner());     // …but never claims ownership of it
+    }
+
+    [Fact]
+    public async Task IsActiveOwner_TrueOnceWePlayLocally()
+    {
+        using var c = Make(out _, out _, out _);
+        await c.PlayAsync("spotify:playlist:p");
+        Assert.True(c.IsActiveOwner());
     }
 
     [Fact]

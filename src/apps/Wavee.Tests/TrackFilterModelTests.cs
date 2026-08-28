@@ -232,4 +232,20 @@ public class TrackFilterModelTests
 
         Assert.Equal(expected, filter.ActiveCount);
     }
+
+    [Fact]
+    public void ReleaseYearWindowIsInclusiveAndIgnoresUnknownYears()
+    {
+        var song = Song();
+        var dated = new Track("1", "spotify:track:1", "Blue Monday",
+            [new ArtistRef("a", "spotify:artist:a", "New Order")],
+            new AlbumRef("b", "spotify:album:b", "Power, Corruption & Lies"),
+            450_000, false, null, Year: 1983);
+        var filter = TrackFilterState.Default.WithReleaseYear(1980, 1989);
+
+        Assert.False(TrackFilterModel.Matches(song, "", filter, false, false, DateTimeOffset.UtcNow));
+        Assert.True(TrackFilterModel.Matches(dated, "", filter, false, false, DateTimeOffset.UtcNow));
+        Assert.Equal(1, filter.ActiveCount);
+        Assert.Equal(0, filter.WithReleaseYear(0, 0).ActiveCount);
+    }
 }

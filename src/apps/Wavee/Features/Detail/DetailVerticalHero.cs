@@ -168,9 +168,8 @@ static class DetailVerticalHero
         // CharSpacing override: the alias publishes the tracking with the size and the line height.
         Element title = editable
             ? PlaylistInlineEdit.Title(full, contentW, titleSize, displayFace: true, lineHeight: titleLineHeight)
-            : WaveeType.PageHero(m.Title) with
+            : WaveeType.DetailHero(m.Title) with
             {
-                FontFamily = "Segoe UI Variable Display",
                 Size = titleSize, MinSize = 18f, Weight = 600, LineHeight = titleLineHeight,
                 Width = contentW, MaxWidth = contentW,
                 Wrap = TextWrap.WrapWholeWords, MaxLines = 2, Trim = TextTrim.CharacterEllipsis,
@@ -232,6 +231,9 @@ static class DetailVerticalHero
                 contentW, descLines, m.ContextUri ?? m.Title,
                 u => { if (RichText.RouteForUri(u) is { } k) h.Go(k, null); });
         Add("hero-description", description, late: true);
+
+        if (LikedFacts.Has(m, cfg.Badges))
+            Add("hero-facts", LikedFacts.Panel(m, h, outerPadding: false), late: true);
 
         // AlignItems = Stretch (plus an explicit width in stacked flow) is load-bearing, not tidiness: the action row
         // is a WRAPPING flex row, and a wrap needs a DEFINITE width to wrap against. Left to its intrinsic size it

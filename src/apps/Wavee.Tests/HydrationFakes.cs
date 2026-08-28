@@ -32,8 +32,10 @@ public sealed class FakeCatalogFetch : ICatalogFetch
     /// <summary>Every uri ever asked for, across all passes.</summary>
     public HashSet<string> Asked { get; } = new(StringComparer.Ordinal);
 
+    public List<bool> Revalidates { get; } = new();
+
     public Task<IReadOnlyCollection<string>> FetchAsync(IReadOnlyList<EntityUri> uris,
-        IReadOnlyList<(string Uri, int Kind)>? extraKinds, TraitSurface surface, CancellationToken ct)
+        IReadOnlyList<(string Uri, int Kind)>? extraKinds, TraitSurface surface, CancellationToken ct, bool revalidate = false)
     {
         var landed = new List<string>(uris.Count);
         lock (_gate)
@@ -43,6 +45,7 @@ public sealed class FakeCatalogFetch : ICatalogFetch
             for (int i = 0; i < uris.Count; i++) { batch.Add(uris[i].Uri); Asked.Add(uris[i].Uri); landed.Add(uris[i].Uri); }
             Batches.Add(batch);
             Surfaces.Add(surface);
+            Revalidates.Add(revalidate);
             if (extraKinds is not null) Extras.AddRange(extraKinds);
         }
         _project?.Invoke(uris, _store);

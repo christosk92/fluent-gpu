@@ -114,6 +114,31 @@ public class NowPlayingDurationFoldTests
         Assert.Equal(0, p.DurationMs);
     }
 
+    // bug 9: a QueueChanged/OptionsChanged/VolumeChanged event folds NO play-state — but the snapshot's Current can
+    // already have advanced to a NEW track while the OUTGOING track's Ended fold (is_playing=false) is the last thing
+    // that touched it. That must not get echoed as the new track's own state — a track transition can never publish
+    // "not playing" over a track that is starting.
+    [Fact]
+    public void QueueChangedMidTransition_DoesNotEchoStalePlayState()
+    {
+        using var p = New();
+        var song = Row(1, SongUri, 205_000);
+        var next = Row(2, StreamUri, 0);
+
+        p.ApplyLocalSnapshot(Snap(song), new PlaybackEvent(EvKind.Started, song.Track, 0));
+        Assert.True(p.IsPlaying);
+
+        p.ApplyLocalSnapshot(Snap(song), new PlaybackEvent(EvKind.Ended, song.Track, 205_000));
+        Assert.False(p.IsPlaying);   // correct FOR THE OUTGOING track
+
+        // The next track's OWN Started/TrackChanged fold hasn't landed yet — only a queue mutation whose snapshot
+        // already points Current at it (e.g. autoplay reshaping up-next the instant the new track becomes current).
+        p.ApplyLocalSnapshot(Snap(next), new PlaybackEvent(EvKind.QueueChanged, next.Track, 0));
+
+        Assert.Equal(StreamUri, p.CurrentTrack?.Uri);
+        Assert.True(p.IsPlaying);   // must NOT still say "not playing" for a track that is starting
+    }
+
     static QueueEntry Row(ulong id, string uri, long durationMs) => new(
         new QueueItemId(id), "i" + id, TrackFor(uri, durationMs), QueueBucket.NowPlaying, QueueProvider.Context, false);
 

@@ -35,6 +35,31 @@ sealed class SetupSignInPage : Component
         var snap = bridge?.Login.Value ?? new LoginSnapshot(LoginPhase.LoggedOut);   // subscribe → re-render on phase change
         var auth = bridge?.Auth.Value ?? AuthStatus.LoggedOut;                       // subscribe → re-render on the auth flip
         var facet = SetupCommands.Project(snap.Phase, snap.Step, auth);
+
+        // Screen-reader live region (UIA): announce the actionable state changes — the pairing code SPELLED OUT (a
+        // run of characters, not "WZY5Q6TX", which no synthesizer reads back usefully), and the two terminal errors.
+        // Keyed on the raw LoginPhase, not the folded facet: Failed and ChallengeExpired carry different copy, and
+        // AwaitingApproval must re-announce when a fresh code replaces an expired one. The announcer is wired by the
+        // Windows backend (InputHooks.Announce); null elsewhere → a silent no-op.
+        var announce = InputHooks.Current.Default.Announce;
+        UseEffect(() =>
+        {
+            if (announce is null) return;
+            switch (snap.Phase)
+            {
+                case LoginPhase.AwaitingApproval when snap.Challenge is { } c:
+                    announce(Loc.Get(Strings.Auth.ScanToLogIn) + ". " + Loc.Get(Strings.Auth.OrGoTo) + " spotify.com/pair, " +
+                             Loc.Get(Strings.Auth.EnterCodeColon) + " " + string.Join(" ", c.UserCode.Replace("-", "").ToCharArray()), false);
+                    break;
+                case LoginPhase.Failed:
+                    announce(string.IsNullOrWhiteSpace(snap.Error) ? Loc.Get(Strings.Auth.NetworkError) : snap.Error!, true);
+                    break;
+                case LoginPhase.ChallengeExpired:
+                    announce(Loc.Get(Strings.Auth.CodeExpired), true);
+                    break;
+            }
+        }, (int)snap.Phase);
+
         var session = SetupSession.Current;
         var activePage = session?.Page.Value ?? SetupPage.SignIn;
         bool needsChallenge = SetupCommands.NeedsPairingChallenge(
@@ -193,6 +218,13 @@ sealed class SetupSignInPage : Component
         {
             kids.Add(BrowserOptionCard(startBrowser));
             kids.Add(ScanOptionCard());
+            // The dead end this closes: both option cards assume an account already exists, so someone without one had
+            // nothing to click and no way forward — the wizard is Wavee's ONLY sign-in surface, and it cannot be
+            // dismissed on a first run. Spotify owns sign-up, so this hands off to spotify.com/signup, and the note
+            // says the part that would otherwise be discovered only after signing up: Free accounts cannot stream here
+            // (LoginPhase.PremiumRequired is the wall they'd hit).
+            kids.Add(SignUpLink());
+            kids.Add(PremiumNote());
         }
 
         if (facet == SetupSignInPhase.Busy)
@@ -213,6 +245,18 @@ sealed class SetupSignInPage : Component
             { Size = 11.5f, LineHeight = 17f, Color = Tok.TextTertiary, Wrap = TextWrap.Wrap, MaxLines = 3, Trim = TextTrim.WordEllipsis };
         return SetupDecision.Column(wide: true, kids: kids, pinnedBottom: disclaimer, leadLines: 2);
     }
+
+    /// <summary>"Don't have a Spotify account? Sign up" — the way OUT of the sign-in page for someone who has no
+    /// account yet. <c>AlignSelf.Start</c> because the decision column stretches its children and a full-width
+    /// hyperlink reads as a button.</summary>
+    static Element SignUpLink() =>
+        HyperlinkButton.Create(Loc.Get(Strings.Setup.SignIn.NoAccount), () => LoginView.OpenUrl("https://www.spotify.com/signup"))
+            with { AlignSelf = FlexAlign.Start };
+
+    /// <summary>The Premium requirement, stated BEFORE sign-up rather than after — same treatment as the column's
+    /// pinned trademark disclaimer (11.5/17 tertiary), because it is fine print, not a warning.</summary>
+    static Element PremiumNote() => new TextEl(Loc.Get(Strings.Setup.SignIn.PremiumNote))
+        { Size = 11.5f, LineHeight = 17f, Color = Tok.TextTertiary, Wrap = TextWrap.Wrap, MaxLines = 2, Trim = TextTrim.WordEllipsis };
 
     static Element BrowserOptionCard(Action? startBrowser) => SetupDecision.OptionCard(
         Loc.Get(Strings.Setup.SignIn.BrowserCardTitle),

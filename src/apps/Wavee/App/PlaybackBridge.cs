@@ -815,6 +815,12 @@ public sealed class PlaybackBridge
             _jumpList = new JumpListBridge(this, _player, post);
             _jumpList.Activate();
             WaveeNativeBoot.Install(post);
+            // The app-update poll (30 s after launch, then daily). Started from here rather than from the composition
+            // root so it never runs in a headless/CLI process: Activate is the moment a real UI session exists.
+            // The updater is app-scoped (one per process) and `Settings` was seeded by the composition root before
+            // this bridge was ever activated.
+            if (AppInstallerUpdateService.Instance is { } updater && Settings is { } updateSettings)
+                AppUpdateScheduler.Start(updater, updateSettings);
         }
         PlaybackBucketDiagnostics.Startup("bridge", "activated");
         PlaybackBucketDiagnostics.QueueIfChanged(ref _lastQueueDiagSig, "bridge.activate.initial",
@@ -1306,8 +1312,63 @@ public sealed class PlaybackBridge
             for (int i = 0; i < queue.Count; i++)
                 if (queue[i].Track?.Uri is { Length: > 0 } u) uris.Add(u);
             if (uris.Count > 0) { try { _ = _hydrator.EnsureTraitsAsync(uris, TraitSurface.Queue); } catch { } }
+
+            // TraitPolicy.For(Queue) is RowBundle-only (saved/explicit/video/colour) — it never asks for a name, so a
+            // row an inbound set_queue rebuilt as a bare-uri placeholder (PlaybackSession.ApplySetQueue's Synthetic
+            // fallback for a uri we never held before) would sit unhydrated forever; this is the missing Identity ask.
+            // Capped, and gated on the same content-CHANGED branch as the traits ask above (never a volume/position
+            // heartbeat), so a big wire set_queue costs one bounded POST here, not one per push.
+            List<string>? thin = null;
+            for (int i = 0; i < queue.Count && (thin is null || thin.Count < QueueIdentityAskCap); i++)
+            {
+                var t = queue[i].Track;
+                if (HydrationLevels.TitleMissing(t.Title, t.Uri)) (thin ??= new List<string>()).Add(t.Uri);
+            }
+            if (thin is { Count: > 0 }) _ = ResolveQueueIdentityAsync(thin);
         }
         return true;
+    }
+
+    /// <summary>Bound on how many still-unnamed queue rows one queue-content change asks to identify. Not a display
+    /// cap (the published <c>queue</c> here is already <c>WindowQueue</c>'s bounded shape) — it exists so a large wire
+    /// set_queue turns into one modestly-sized catalogue POST instead of an upfront burst; anything past the cap picks
+    /// up on the NEXT content change (a page-in, a skip) the same way.</summary>
+    const int QueueIdentityAskCap = 50;
+
+    // Best-effort identity pass for the queue rows a set_queue rebuilt thin. Fire-and-forget, same shape as the traits
+    // ask above; failure just leaves the row thin for the next content change to retry.
+    async System.Threading.Tasks.Task ResolveQueueIdentityAsync(List<string> uris)
+    {
+        try
+        {
+            await _hydrator.EnsureManyAsync(uris, HydrationLevel.Identity, new HydrationOptions(Surface: TraitSurface.Queue))
+                .ConfigureAwait(false);
+        }
+        catch { return; }
+        if (_post is not { } post) return;
+        post(ReprojectQueueIdentity);
+    }
+
+    // Nothing else re-reads the store for queue rows, so an identity hit sitting there would go unseen until some
+    // UNRELATED structural push happened to rebuild the same uri fresh. Patch resolved titles onto the CURRENTLY
+    // published queue by uri (not the snapshot ResolveQueueIdentityAsync was fired for — the queue may have moved on);
+    // only rows still thin are touched, so a re-publish in between costs nothing here.
+    void ReprojectQueueIdentity()
+    {
+        if (_store is not { } store) return;
+        var current = Queue.Peek();
+        List<QueueEntry>? next = null;
+        for (int i = 0; i < current.Count; i++)
+        {
+            var row = current[i];
+            if (!HydrationLevels.TitleMissing(row.Track.Title, row.Track.Uri)) continue;
+            var resolved = store.GetTrack(row.Track.Uri) ?? EpisodeAsTrack.From(store.GetEpisode(row.Track.Uri));
+            if (resolved is not { } r || HydrationLevels.TitleMissing(r.Title, r.Uri)) continue;
+            (next ??= new List<QueueEntry>(current))[i] = row with { Track = r };
+        }
+        // A NEW QueueEntry per enriched row is exactly what QueueListIdentityComparer (its own remarks) treats as a
+        // real change — this is the "metadata enrichment … a NEW instance" case it was built to republish.
+        if (next is not null) Queue.Value = next;
     }
 
     /// <summary>THE hydration façade — never null (the fake backend gets <see cref="CompleteEntityHydrator"/>, the real
@@ -1403,6 +1464,21 @@ public sealed class PlaybackBridge
     {
         _seekLatchTargetMs = targetMs;
         _seekLatchDeadlineTick = Environment.TickCount64 + SeekLatchWindowMs;
+    }
+
+    /// <summary>THE single commit path for a real (non-preview) seek: arms the latch, optimistically publishes the
+    /// new position, and issues the accurate <see cref="SeekAsync"/>. Every committed seek — the seek bar's drag-end,
+    /// SMTC's OS scrub bar, a lyrics line tap — must route through this one method rather than calling
+    /// <c>Player.SeekAsync</c> directly, or it silently drops the latch and a paused scrub snaps back to the pre-seek
+    /// position for the ~1 s it takes the next authoritative tick to arrive (the SMTC defect this closes).
+    /// <para>Deliberately narrow: only <see cref="NoteSeek"/> + the optimistic <see cref="PositionMs"/> write + the
+    /// call. A caller with a richer optimistic paint (the seek bar's own scrub fraction, which is not always
+    /// <c>ms / DurationMs</c> — see the DVR rail) still writes that itself, right after calling this.</para></summary>
+    public void CommitSeek(long ms)
+    {
+        NoteSeek(ms);
+        PositionMs.Value = ms;
+        _ = Player.SeekAsync(ms, SeekMode.Accurate);
     }
 
     /// <summary>Is a committed seek still in flight (the latch armed and not yet expired)? While it is, every position

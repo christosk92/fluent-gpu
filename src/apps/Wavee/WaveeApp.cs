@@ -1,8 +1,9 @@
 using System;
 using FluentGpu;          // FluentApp (OS theme facade + SystemColorsChanged relay)
 using FluentGpu.Dsl;
-using FluentGpu.Foundation;   // Diag.CompiledIn (debug-build gate for the FPS HUD)
+using FluentGpu.Foundation;   // Diag.EnvFlag (the screenshot/probe harness switches)
 using FluentGpu.Hooks;
+using FluentGpu.Localization;   // Loc.Get (the login-failure copy is localized, never a literal)
 using Wavee.Core;             // AuthStatus / LoginSnapshot / LoginPhase (the login gate + takeover)
 
 namespace Wavee;
@@ -90,7 +91,7 @@ sealed class WaveeApp : Component
                 {
                     _services.Log.Event(WaveeLogLevel.Warning, "connect", "login.code.failed",
                         "Code login failed", ex: ex, fields: [WaveeLogField.Of("phase", bridge.Login.Peek().Phase.ToString())]);
-                    post(() => { if (loginSession.Value == cts) bridge.Login.Value = new LoginSnapshot(LoginPhase.Failed, Error: "Something went wrong signing in."); });
+                    post(() => { if (loginSession.Value == cts) bridge.Login.Value = new LoginSnapshot(LoginPhase.Failed, Error: Loc.Get(Strings.Auth.GenericError)); });
                 }
             });
         }
@@ -107,8 +108,34 @@ sealed class WaveeApp : Component
                     var host = await Wavee.SpotifyLive.LiveSessionHost.StartAsync(_services, new WaveeLogger(_services.Log, "connect"), cts.Token, bridge.Progress(post), uiPost: post, interactive: true, useBrowser: true, quietPhases: true).ConfigureAwait(false);
                     if (host is not null) { post(() => { if (loginSession.Value == cts) loginSession.Value = null; }); cts.Cancel(); }
                 }
-                catch { }   // a browser failure is silent — the device-code two-pane keeps going
+                catch (OperationCanceledException) { }   // the device-code sibling won the race, or a newer attempt superseded this one
+                catch (Exception ex)
+                {
+                    // NOT silent any more. The old empty catch meant a browser hand-off that failed outright (no default
+                    // browser, a blocked loopback port, a refused redirect) left the user staring at a pairing pane with
+                    // no idea their click had died — and the log had nothing to explain it afterwards either. The device
+                    // code IS still polling, so this reports rather than aborts: the message names the browser as the
+                    // thing that failed, so "scan the code instead" reads as the obvious next move.
+                    _services.Log.Event(WaveeLogLevel.Warning, "connect", "login.browser.failed",
+                        "Browser login failed", ex: ex, fields: [WaveeLogField.Of("phase", bridge.Login.Peek().Phase.ToString())]);
+                    post(() =>
+                    {
+                        if (loginSession.Value == cts)
+                            bridge.Login.Value = new LoginSnapshot(LoginPhase.Failed, Error: Strings.Auth.BrowserFailed(ex.Message));
+                    });
+                }
             });
+        }
+
+        // The Busy footer's "Cancel": stop waiting, WITHOUT quitting. Cancels the shared session CTS (both racers bail),
+        // drops the session reference so a later restart mints a clean one, and resets the login snapshot to LoggedOut —
+        // which folds to SetupSignInPhase.Idle, so the sign-in page lands back on its two option cards rather than on a
+        // frozen "Signing in…". Wired onto the session below beside RestartCode/QuitApp.
+        void CancelSignIn()
+        {
+            loginSession.Value?.Cancel();
+            loginSession.Value = null;
+            bridge.Login.Value = new LoginSnapshot(LoginPhase.LoggedOut);
         }
 
         void CloseApp()
@@ -224,11 +251,9 @@ sealed class WaveeApp : Component
                    && (authState == AuthStatus.Authenticated || (!Services.UseRealBackend && !wasAuthed.Value));
 
         // ── The first-run setup wizard's PRE-AUTH mount ──────────────────────────────────────────────────────────────
-        // Armed (SetupGating.IsPending) and not yet authenticated ⇒ SetupPreAuthRoot takes the takeover's place below.
-        // Reads SetupSession.MarkerEpoch (subscribing) so a defer/complete burned by SetupDialog.Open's ClosedAction —
-        // the marker discipline, see that method — makes THIS re-evaluate immediately: without it, closing the bare
-        // pre-auth dialog would leave SetupPreAuthRoot's empty titlebar-only chrome mounted forever, with no way back
-        // to LoginView.
+        // Not yet authenticated ⇒ SetupPreAuthRoot is the whole window (it IS the sign-in surface). Reads
+        // SetupSession.MarkerEpoch (subscribing) so a completion burned by SetupDialog.Open's ClosedAction — the marker
+        // discipline, see that method — makes THIS re-evaluate immediately rather than waiting on an unrelated re-render.
         _ = SetupSession.MarkerEpoch.Value;   // subscribe
         SetupSession? setupSession = null;
         if (!authed)
@@ -243,13 +268,6 @@ sealed class WaveeApp : Component
             setupSession = SetupSession.Current ??= completed
                 ? new SetupSession(SetupSession.EntryPoint.Reauth, alreadyAuthenticated: false, SetupPage.SignIn)
                 : new SetupSession(SetupSession.EntryPoint.FirstRun, alreadyAuthenticated: false);
-            // TEMP (hero-animation screenshot validation, see the WAVEE_FAKE_CHALLENGE precedent just above): jump the
-            // fresh wizard straight to an arbitrary page for `--screenshot`, e.g. WAVEE_SETUP_START_PAGE=3. Not a
-            // shipped feature — revert with the rest of this task's throwaway validation aids if it outlives them.
-            if (setupSession.Page.Value == SetupPage.Welcome
-                && Environment.GetEnvironmentVariable("WAVEE_SETUP_START_PAGE") is { Length: > 0 } sp
-                && int.TryParse(sp, out int spOrd) && spOrd is >= 0 and <= (int)SetupPage.Done)
-                setupSession.Page.Value = (SetupPage)spOrd;
             // Publish this run's real intents into the session's auto-properties so they are non-null wherever it is
             // mounted (pre-auth here, or post-auth in SetupChrome after SignIn completes — same instance, carried via
             // SetupSession.Current). Re-assigning every render is harmless: plain fields, not signals.
@@ -257,6 +275,7 @@ sealed class WaveeApp : Component
             // mapped onto its stubs, so the wizard's sign-in page works there too now that it is the only surface.
             setupSession.StartBrowser = Services.UseRealBackend ? StartBrowser : FakeSignIn;
             setupSession.RestartCode = Services.UseRealBackend ? RestartCode : SeedDemoChallenge;
+            setupSession.CancelSignIn = CancelSignIn;
             setupSession.QuitApp = CloseApp;
             // "Not me" on the Is-this-you confirmation: the same sign-out the profile menu uses (credential wiped, gate
             // flips to LoggedOut, the wizard re-mints a pairing code). Fake backend: Switchable.LogoutAsync flips its stub.
@@ -275,13 +294,11 @@ sealed class WaveeApp : Component
         this.UseSoftReveal(); // app entrance (compositor-only, reduced-motion-aware)
 
         // ── The login GATE ───────────────────────────────────────────────────────────────────────────────────────────
-        // Providers stay ABOVE the gate so the bridges' subscriptions survive the takeover ↔ shell swap (and back, on
-        // logout) — and now also survive the pre-auth-wizard ↔ shell swap the same way. Setup-pending-and-not-authed wins
-        // over the plain takeover; authed wins over both; otherwise today's LoginView takeover.
-        // TWO leaves, not three: signed in ⇒ the shell; otherwise ⇒ the setup wizard, which owns sign-in. The old
-        // standalone `LoginView` takeover is no longer mounted anywhere (its two-pane parts live on as the shared
-        // building blocks the wizard's SignIn page composes — QrGrid, LoginStepRow/Bar, CopyButton, WaitingDots,
-        // LoginCountdown, RightPane, OrDivider).
+        // Providers stay ABOVE the gate so the bridges' subscriptions survive the pre-auth-wizard ↔ shell swap (and
+        // back, on logout). TWO leaves, not three: signed in ⇒ the shell; otherwise ⇒ the setup wizard, which owns
+        // sign-in. The old standalone LoginView takeover component is DELETED — only its shared building blocks
+        // survive, as the statics the wizard's SignIn page composes (LoginView.cs: CompactRightPane, OrDivider,
+        // BrowserLoginButton, GlyphBadge, LoginStepRow/Bar, WaitingDots, LoginCountdown, OpenUrl).
         Element leaf = authed
             ? Embed.Comp(() => new WaveeShell(_services.Settings, _services.Sidebar))
             : Embed.Comp(() => new SetupPreAuthRoot(setupSession!, _services.Settings));
@@ -299,12 +316,16 @@ sealed class WaveeApp : Component
             Ctx.Provide(HomePreferences.Slot, _services.Home,
                 leaf))))))));
 
-        // Debug-build FPS HUD on top (const-folds out of Release; subscribes to the host's per-frame stats). The HUD pill is
-        // pinned top-right by a full-bleed PASS-THROUGH positioner (a PLAIN BoxEl — its HitTestPassThrough IS honoured, unlike
-        // a component wrapper's mirrored-but-not-passthrough node, which would swallow every hit and silently kill scrolling).
-        // ZStack carries Grow=1 to fill the window + stretch the shell exactly like the OverlayHost stack.
-        // FPS HUD is OPT-IN now (hidden by default in every build); set WAVEE_FPS=1 to show it.
-        if (!Diag.EnvFlag("WAVEE_FPS")) return root;
+        // The FPS HUD, pinned top-right by a full-bleed PASS-THROUGH positioner (a PLAIN BoxEl — its HitTestPassThrough
+        // IS honoured, unlike a component wrapper's mirrored-but-not-passthrough node, which would swallow every hit and
+        // silently kill scrolling). ZStack carries Grow=1 to fill the window + stretch the shell exactly like the
+        // OverlayHost stack.
+        //
+        // Two SETTINGS gate it, not an environment variable: Developer mode has to be on AND the overlay toggled on
+        // (Settings › Diagnostics). A relaunch-with-an-env-var is not a feature a user can find, and it cannot be turned
+        // back off without another relaunch. Both reads happen inside Render, so the DeveloperMode signal subscribes
+        // this component and flipping the switch re-renders the root immediately.
+        if (!(DeveloperMode.Enabled.Value && DeveloperMode.FpsOverlay.Value)) return root;
         var hud = new BoxEl
         {
             Grow = 1f, HitTestPassThrough = true,

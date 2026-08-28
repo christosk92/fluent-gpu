@@ -33,7 +33,7 @@ public sealed class XmCatalogFetch : ICatalogFetch
     }
 
     public async Task<IReadOnlyCollection<string>> FetchAsync(IReadOnlyList<EntityUri> uris,
-        IReadOnlyList<(string Uri, int Kind)>? extraKinds, TraitSurface surface, CancellationToken ct)
+        IReadOnlyList<(string Uri, int Kind)>? extraKinds, TraitSurface surface, CancellationToken ct, bool revalidate = false)
     {
         if (uris is null || uris.Count == 0) return Array.Empty<string>();
 
@@ -68,6 +68,14 @@ public sealed class XmCatalogFetch : ICatalogFetch
                 for (int k = 0; k < fused.Count; k++) reqs.Add((e.Uri, fused[k], null));
         }
         if (reqs.Count == 0) return Array.Empty<string>();
+
+        // A user-initiated revalidate must not be quietly served the TTL-fresh cached row underneath (§2.4's own
+        // etag cache runs a multi-hour window independent of the hydration ledger this bypassed). MarkStale forces
+        // the batch below through a real conditional GET per (uri, kind) instead of re-projecting the cached body —
+        // the fix for a rolling-identity playlist (a daylist) whose LIST_METADATA_V2 (205) sits inside that window
+        // while the edition it names has already rolled over server-side.
+        if (revalidate)
+            for (int i = 0; i < reqs.Count; i++) _cache.MarkStale(reqs[i].Uri, reqs[i].Kind);
 
         string? clientFeatureId = surface.ClientFeatureId();
         var landed = new HashSet<string>(StringComparer.Ordinal);

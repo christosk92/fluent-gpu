@@ -82,7 +82,12 @@ public static class DealerFrameParser
         return map.Count == 0 ? null : map;
     }
 
-    // MESSAGE frames: a `payloads` array of base64 chunks → decode each → concatenate the BYTES (multi-chunk cluster pushes).
+    // MESSAGE frames: a `payloads` array of base64 chunks → decode each → concatenate the BYTES (multi-chunk cluster
+    // pushes). NOT every payloads[] entry is a base64 chunk, though: social-connect/v2/broadcast_status_update ships a
+    // plain JSON OBJECT there instead. Letting either shape throw out of here used to propagate to Parse's outer catch
+    // (:59), which discards the type/uri already read off the earlier "type"/"uri" properties and reports the WHOLE
+    // frame as Unknown with no uri — visible in the dealer archive as a broadcast push with its topic lost. Skip just
+    // the offending entry so the router still gets something to classify the frame by, even with an empty payload.
     static byte[]? ReadPayloads(ref Utf8JsonReader reader)
     {
         if (reader.TokenType != JsonTokenType.StartArray) return null;
@@ -93,9 +98,17 @@ public static class DealerFrameParser
             if (reader.TokenType == JsonTokenType.EndArray) break;
             if (reader.TokenType == JsonTokenType.String)
             {
-                var chunk = reader.GetBytesFromBase64();
-                ms.Write(chunk, 0, chunk.Length);
-                any = true;
+                try
+                {
+                    var chunk = reader.GetBytesFromBase64();
+                    ms.Write(chunk, 0, chunk.Length);
+                    any = true;
+                }
+                catch (FormatException) { /* a non-base64 string entry — skip it, keep scanning the array */ }
+            }
+            else if (reader.TokenType is JsonTokenType.StartObject or JsonTokenType.StartArray)
+            {
+                reader.Skip();   // an object/array entry (broadcast_status_update) — nothing to decode, skip the value
             }
         }
         return any ? ms.ToArray() : null;

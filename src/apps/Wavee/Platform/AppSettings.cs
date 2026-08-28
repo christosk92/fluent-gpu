@@ -274,6 +274,30 @@ static class WaveeSettings
     // WAVEE_LOG_LEVEL / WAVEE_LOG_FILE_LEVEL still win over these (resolved inside WaveeLog.Configure).
     public static readonly SettingKey<int> LogMinLevel = new("diagnostics.log.minLevel", -1);
     public static readonly SettingKey<int> LogFileMinLevel = new("diagnostics.log.fileMinLevel", -1);
+    // ── Release-readiness keys (2026-08-26) ──────────────────────────────────────────────────────────────
+    // Developer mode gates every developer-only surface (API console, lyrics inspector, test notifications, FPS HUD,
+    // home image diagnostics). Off by default; Settings › Diagnostics. See App/DeveloperMode.cs.
+    public static readonly SettingKey<bool> DeveloperMode = new("diag.developerMode", false);
+    public static readonly SettingKey<bool> FpsOverlay = new("diag.fpsOverlay", false);
+    // Dealer WebSocket frame archive (Diagnostics/DealerArchive.cs). Off by default — it is a debugging capture.
+    public static readonly SettingKey<bool> DealerArchiveEnabled = new("diag.dealerArchive", false);
+    // The terms version the user accepted in the setup wizard (0 = never). A bump in SetupTermsPage.CurrentVersion
+    // re-arms the Terms page on the next launch.
+    public static readonly SettingKey<int> TermsAcceptedVersion = new("setup.terms.acceptedVersion", 0);
+    // Spotify Connect private session (published on the device state; profile-menu toggle).
+    public static readonly SettingKey<bool> PrivateSession = new("session.private", false);
+    // The normalized username of the last account that went live — a change resets the local library projection.
+    public static readonly SettingKey<string> LastAccount = new("session.lastAccount", "");
+    // Loudness normalization on/off (the per-track gain is applied when true; applies from the next track start).
+    public static readonly SettingKey<bool> NormalizationEnabled = new("playback.normalization", true);
+    // Start Wavee at Windows sign-in (unpackaged: HKCU Run value; packaged: manifest StartupTask).
+    public static readonly SettingKey<bool> StartOnLogin = new("app.startOnLogin", false);
+    // App-update bookkeeping (App/AppInstallerUpdateService.cs): the version that last ran (→ "updated to" notice)
+    // and the last successful feed check.
+    public static readonly SettingKey<string> LastRunVersion = new("app.lastRunVersion", "");
+    public static readonly SettingKey<long> UpdateLastCheckedMs = new("app.update.lastCheckedMs", 0L);
+    // A crash report written by the previous run that the shell has not yet surfaced (cleared after the toast).
+    public static readonly SettingKey<string> PendingCrashReport = new("crash.pendingReport", "");
 }
 
 // The LibraryPage's per-kind persisted state (the "Your Library" master–detail: albums/artists/podcasts). Keys are built

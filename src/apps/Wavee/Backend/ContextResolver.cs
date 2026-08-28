@@ -49,12 +49,17 @@ public readonly record struct QueuedRef(
     IReadOnlyDictionary<string, string>? Metadata = null);
 
 /// <summary>One entry in an outbound set_queue snapshot. <c>IsQueued</c> ⇒ provider:"queue" + metadata{is_queued:"true"}
-/// (a user-queued row); otherwise provider:"context" + metadata{} (a context-continuation row).</summary>
+/// (a user-queued row); otherwise provider:"context" + metadata{} (a context-continuation row).
+/// <para><see cref="Track"/> is the richer domain track an INBOUND set_queue row can be parsed into (title, artists,
+/// album, duration, image, explicit — every live capture carries these inline on the row, not just uri/uid), so a row
+/// the session has never held before doesn't have to fall back to a bare uri placeholder. Null for an outbound row
+/// (we always have the real Track already) and for an inbound row too thin to build one from.</para></summary>
 public readonly record struct QueueWireEntry(
     string Uri,
     string Uid,
     bool IsQueued,
-    IReadOnlyDictionary<string, string>? Metadata = null);
+    IReadOnlyDictionary<string, string>? Metadata = null,
+    Track? Track = null);
 
 public readonly record struct ContextPage(IReadOnlyList<QueuedTrack> Tracks, string? NextPageUrl)
 {

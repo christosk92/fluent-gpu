@@ -112,6 +112,61 @@ public class StoreLibrarySourceTests
         Assert.Equal("Show1", Assert.Single(await src.GetShowsAsync()).Name);
     }
 
+    // ── the same background collection ask Liked already had (StoreLibrarySource.cs 4a) ──────────────────────────────
+    // GetLikedSongsAsync fires a background Open on its own collection uri so members that never got named through
+    // any OTHER surface still hydrate; GetAlbumsAsync/GetArtistsAsync/GetShowsAsync now do the same, on their own
+    // saved-set uris (CollectionHydration.SetOf).
+    [Fact]
+    public async Task GetAlbumsAsync_AsksCollectionAlbumsSetInBackground()
+    {
+        var store = new InMemoryStore();
+        store.UpsertAlbum(new Album("a1", "spotify:album:a1", "Album1", null, [], 2020, 1));
+        store.SetSaved("albums", "spotify:album:a1", true, SyncState.Confirmed);
+        var rec = new RecordingHydrator(store);
+        var src = new StoreLibrarySource(store, Recording(rec), OfflineOnlineCatalog.Instance);
+
+        Assert.Single(await src.GetAlbumsAsync());
+
+        var (uris, level, _) = Assert.Single(rec.Batches);
+        Assert.Equal("spotify:collection:albums", Assert.Single(uris));
+        Assert.Equal(HydrationLevel.Open, level);
+        Assert.Equal(HydrationMode.Background, Assert.Single(rec.Options).Mode);   // a read never blocks on its members
+    }
+
+    [Fact]
+    public async Task GetArtistsAsync_AsksCollectionArtistsSetInBackground()
+    {
+        var store = new InMemoryStore();
+        store.UpsertArtist(new Artist("ar1", "spotify:artist:ar1", "Artist1", null));
+        store.SetSaved("artists", "spotify:artist:ar1", true, SyncState.Confirmed);
+        var rec = new RecordingHydrator(store);
+        var src = new StoreLibrarySource(store, Recording(rec), OfflineOnlineCatalog.Instance);
+
+        Assert.Single(await src.GetArtistsAsync());
+
+        var (uris, level, _) = Assert.Single(rec.Batches);
+        Assert.Equal("spotify:collection:artists", Assert.Single(uris));
+        Assert.Equal(HydrationLevel.Open, level);
+        Assert.Equal(HydrationMode.Background, Assert.Single(rec.Options).Mode);
+    }
+
+    [Fact]
+    public async Task GetShowsAsync_AsksCollectionShowsSetInBackground()
+    {
+        var store = new InMemoryStore();
+        store.UpsertShow(new Show("s1", "spotify:show:s1", "Show1", "Pub", null));
+        store.SetSaved("shows", "spotify:show:s1", true, SyncState.Confirmed);
+        var rec = new RecordingHydrator(store);
+        var src = new StoreLibrarySource(store, Recording(rec), OfflineOnlineCatalog.Instance);
+
+        Assert.Single(await src.GetShowsAsync());
+
+        var (uris, level, _) = Assert.Single(rec.Batches);
+        Assert.Equal("spotify:collection:shows", Assert.Single(uris));
+        Assert.Equal(HydrationLevel.Open, level);
+        Assert.Equal(HydrationMode.Background, Assert.Single(rec.Options).Mode);
+    }
+
     [Fact]
     public async Task GetPlaylist_JoinsMembershipWithTracks_AndStampsMembershipAddedAt()
     {
@@ -412,6 +467,27 @@ public class StoreLibrarySourceTests
         Assert.Equal(TraitSurface.None, surface);   // an artist's traits ride its chart step, not its page open
     }
 
+    // TopTracks is a denormalized snapshot ArtistHydration's chart pass writes on its own ~12h cadence
+    // (StoreLibrarySource.cs 4b); a Track row healed by ANY other surface in between (TrackV4 identity, traits) would
+    // otherwise not reach ArtistPopular until that stamp expires. GetArtistAsync now re-joins each TopTracks row
+    // against the store at read — same shape as AlbumHydration.RebuildTracklists — and never writes the healed copy
+    // back (the chart pass still owns the stored shape).
+    [Fact]
+    public async Task GetArtistAsync_TopTracksReJoinedFromStore()
+    {
+        const string artistUri = "spotify:artist:ar1";
+        var store = new InMemoryStore();
+        var staleTop = new Track("t1", "spotify:track:t1", "", [], new AlbumRef("", "", ""), 1000, false, null);
+        store.UpsertArtist(new Artist("ar1", artistUri, "Artist1", null, TopTracks: new[] { staleTop }));
+        store.UpsertTrack(Trk("t1"));   // healed elsewhere: same uri, a named row
+        var src = new StoreLibrarySource(store, Offline(store), OfflineOnlineCatalog.Instance);
+
+        var artist = await src.GetArtistAsync(artistUri, HydrationLevel.None);
+
+        Assert.Equal("Tt1", artist!.TopTracks![0].Title);                          // re-joined from the store row
+        Assert.Equal("", store.GetArtist(artistUri)!.TopTracks![0].Title);         // the store's own record is untouched
+    }
+
     // The album read carries the AlbumOpen surface -- that tag is what picks the trait bundle the album rung awaits
     // (RowBundle | PlayCount | Publishing), so it is part of the contract, not a log field.
     [Fact]
@@ -428,6 +504,89 @@ public class StoreLibrarySourceTests
         Assert.Equal(uri, Assert.Single(uris));
         Assert.Equal(HydrationLevel.Full, level);
         Assert.Equal(TraitSurface.AlbumOpen, surface);
+    }
+
+    // Fix 3: an album with no ©/℗ facet at all can never reach Rich (HydrationLevels.Of), so it seals Exhausted for a
+    // day (HydrationPolicy.ExhaustedAlbumRichTtl) — and that seal skips AlbumHydration.ContinueAsync as a whole, its
+    // OWN PlayCount/RowBundle trait step included, for the same day. GetAlbumAsync's companion trait ask keeps that
+    // bundle alive on a RE-open regardless of the seal — gated to "already open, still short of Rich" so it never
+    // duplicates the ladder's own ask on the FIRST (cold) open (see the sibling test below).
+    [Fact]
+    public async Task GetAlbum_ReOpen_FiresATraitAsk_WhenTheAlbumIsStuckBelowRich()
+    {
+        const string uri = "spotify:album:a1";
+        var store = new InMemoryStore();
+        // Already at Open from an earlier pass, but no ©/℗ facet at all — a real ledger would have sealed Rich
+        // Exhausted for this album a day ago, and RecordingHydrator's no-op ensure stands in for that skip.
+        store.UpsertAlbum(new Album("a1", uri, "A1", null, [], 2020, 1, [Trk("t1")], Hydration: AlbumHydrationLevel.Tracks));
+        var rec = new RecordingHydrator(store);
+        var src = new StoreLibrarySource(store, Recording(rec), OfflineOnlineCatalog.Instance);
+
+        _ = await src.GetAlbumAsync(uri, HydrationLevel.Rich);
+
+        var call = Assert.Single(rec.TraitCalls);
+        Assert.Equal(TraitSurface.AlbumOpen, call.Surface);
+        Assert.Contains(uri, call.Uris);
+        Assert.Contains("spotify:track:t1", call.Uris);
+    }
+
+    [Fact]
+    public async Task GetAlbum_ColdOpen_DoesNotDuplicateTheLaddersOwnTraitAsk()
+    {
+        // Nothing resident yet — this IS the ladder's first-ever pass over the album, which is what
+        // AlbumHydrationTests.Rich_AwaitsOneTraitPassCarryingRowBundlePlayCountAndPublishing already covers. The
+        // companion ask must not ALSO fire just because the (fake) ensure made no progress, or a cold Rich open would
+        // cost two trait passes instead of one (HydrationWasteTests.AlbumOpenCold_IsOneCataloguePost_OneTraitPass_...).
+        const string uri = "spotify:album:a1";
+        var store = new InMemoryStore();
+        store.UpsertAlbum(new Album("a1", uri, "A1", null, [], 2020, 1, [Trk("t1")]));   // Hydration: Summary — not yet Open
+        var rec = new RecordingHydrator(store);
+        var src = new StoreLibrarySource(store, Recording(rec), OfflineOnlineCatalog.Instance);
+
+        _ = await src.GetAlbumAsync(uri, HydrationLevel.Rich);
+
+        Assert.Empty(rec.TraitCalls);
+    }
+
+    [Fact]
+    public async Task GetAlbum_NoneRead_NeverFiresTheCompanionTraitAsk()
+    {
+        // The None (pure resident, no-I/O) read must not turn into a network ask of its own — DetailPage.RefreshAsync
+        // relies on that to repaint off a store signal without closing a refresh loop.
+        const string uri = "spotify:album:a1";
+        var store = new InMemoryStore();
+        store.UpsertAlbum(new Album("a1", uri, "A1", null, [], 2020, 1, [Trk("t1")], Hydration: AlbumHydrationLevel.Tracks));
+        var rec = new RecordingHydrator(store);
+        var src = new StoreLibrarySource(store, Recording(rec), OfflineOnlineCatalog.Instance);
+
+        _ = await src.GetAlbumAsync(uri, HydrationLevel.None);
+
+        Assert.Empty(rec.Batches);
+        Assert.Empty(rec.TraitCalls);
+    }
+
+    // Fix 4: AlbumHydration.RebuildTracklists only re-joins Album.Tracks from INSIDE its own Rich/Open post-steps, so
+    // a play count/tempo that lands on the shared Track row from ANY other surface (a playlist trait pass, this
+    // class's own Fix-3 companion ask) stayed invisible on the album page until that ladder step ran again — which
+    // the Rich-exhausted seal can delay a full day. GetAlbumAsync now re-joins Album.Tracks against the store at
+    // READ, the same shape as GetArtistAsync's TopTracks re-join.
+    [Fact]
+    public async Task GetAlbumAsync_TracksReJoinedFromStore()
+    {
+        const string uri = "spotify:album:a1";
+        var store = new InMemoryStore();
+        var staleTrack = new Track("t1", "spotify:track:t1", "T1", [], new AlbumRef("a1", uri, "A1"), 180_000, false, null);
+        store.UpsertAlbum(new Album("a1", uri, "A1", null, [], 2020, 1, [staleTrack]));
+        // A play count landed on the shared Track row from ANOTHER surface (a playlist trait pass) in the meantime —
+        // the album's OWN denormalized Tracks snapshot above never saw it.
+        store.UpsertTrack(staleTrack with { PlayCount = 4_200, TempoBpm = 128 });
+        var src = new StoreLibrarySource(store, Offline(store), OfflineOnlineCatalog.Instance);
+
+        var album = await src.GetAlbumAsync(uri, HydrationLevel.None);
+
+        Assert.Equal(4_200, album!.Tracks![0].PlayCount);                    // re-joined from the store row
+        Assert.Equal(128, album.Tracks![0].TempoBpm);
+        Assert.Equal(0, store.GetAlbum(uri)!.Tracks![0].PlayCount);          // the store's own denormalized copy is untouched
     }
 
     // The PLAY path never waits on Rich: an ordered, named tracklist is Open, and that is all a context needs.

@@ -1,6 +1,9 @@
 # Volume: perceptual taper + put-state storm — detailed technical plan
 
-Status: **planned, not implemented** (2026-07-06)
+Status: **Implemented** — the perceptual taper is `src/apps/Wavee/Backend/Audio/VolumeTaper.cs` (covered by
+`src/apps/Wavee.Tests/Audio/VolumeTaperTests.cs`) and the put-state coalescing is
+`src/apps/Wavee/Backend/TrailingCoalescer.cs`. The deferred polish in §1.5 (gain ramp, mute-with-memory) is still open.
+(Planned 2026-07-06.)
 
 Two independent defects, one slider:
 

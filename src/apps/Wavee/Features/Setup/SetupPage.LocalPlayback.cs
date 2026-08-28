@@ -142,9 +142,14 @@ sealed class SetupLocalPlaybackPage : Component
 
         if (SetupRuntimePresentation.ShowsStepCards(phase))
             kids.AddRange(StepCards(phase));
+        // Both lines belong to the predicate: the label and the chip row are ONE disclosure. Without the braces the
+        // chip row escaped the `if` and rendered on every phase — a "Choose a folder / Use installed Spotify / Choose
+        // a version" row sitting under a live download, offering to start a second, competing install.
         if (SetupRuntimePresentation.ShowsAdvancedChips(phase))
+        {
             kids.Add(SetupCompact.SectionLabel(Loc.Get(Strings.Setup.LocalPlayback.Advanced)));
             kids.Add(AdvancedChipRow(model, phase == PlaybackRuntimeSetupModel.Phase.Failed ? go : null));
+        }
         if (SetupRuntimePresentation.ShowsLocalSourceChips(phase))
             kids.Add(LocalSourceChipRow(model));
 

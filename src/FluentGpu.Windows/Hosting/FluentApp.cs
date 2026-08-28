@@ -243,7 +243,8 @@ public static class FluentApp
         BootStamp("d3d12device-ctor");
 
         // Real image pipeline: WIC constrained decode on a worker pool, behind a disk-cached HTTP/2 fetcher.
-        using var imageFetcher = new DefaultImageFetcher(diskCache: new DiskImageCache());
+        if (o.ImageCacheDirectory is { Length: > 0 }) SweepLegacyImageCache();
+        using var imageFetcher = new DefaultImageFetcher(diskCache: new DiskImageCache(o.ImageCacheDirectory));
         // ONE bounded CPU pixel pool for the whole pipeline: decode BGRA buffers (workers) + async-upload copies (UI)
         // share the DefaultRetainedCapBytes budget (media-pipeline.md §3 staging blocks, as built).
         var pixelPool = new PixelBufferPool();
@@ -670,6 +671,21 @@ public static class FluentApp
         catch { /* best-effort diagnostic: a half-written marker is skipped, never fatal to the run */ }
     }
 
+    /// <summary>One best-effort delete of the engine's legacy default image cache (<c>%TEMP%\fluent-gpu\imgcache</c>),
+    /// run only when the app supplied its own <see cref="AppOptions.ImageCacheDirectory"/>. An app that moved its cache
+    /// under its own data root would otherwise leave the TEMP copy behind forever — bytes it no longer reads, does not
+    /// account for in its storage page, and cannot clear from its own UI. Failure is silence: the directory may be in
+    /// use by another FluentGpu process that has NOT moved its cache, and losing a cache is never worth a crash.</summary>
+    private static void SweepLegacyImageCache()
+    {
+        try
+        {
+            string legacy = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "fluent-gpu", "imgcache");
+            if (System.IO.Directory.Exists(legacy)) System.IO.Directory.Delete(legacy, recursive: true);
+        }
+        catch { /* locked / partially removed / read-only — the stale cache is harmless, a throw here is not */ }
+    }
+
     private static long ImageCacheBudgetBytes()
     {
         const long DefaultBytes = 64L * 1024 * 1024;
@@ -712,6 +728,13 @@ public sealed record AppOptions
     /// quiesce so a follow-up interaction pays no cold-start ramp (G1b / research #10). 0 disables the hold. Maps to
     /// <see cref="AppHost.WarmCadenceHoldMs"/>.</summary>
     public float WarmCadenceMs { get; init; } = 1000f;
+    /// <summary>Where the disk image cache (decoded-once album art / remote images) lives. Null keeps the engine
+    /// default, <c>%TEMP%\fluent-gpu\imgcache</c>, which is fine for a sample but wrong for a shipping app: it is
+    /// outside the app's own data root, so it survives an uninstall, escapes the app's storage accounting, and can be
+    /// swept by disk-cleanup mid-session. An app that owns a data folder should point this at it (Wavee uses
+    /// <c>%LOCALAPPDATA%\Wavee\cache\images</c>). When set, the engine deletes the legacy TEMP directory once,
+    /// best-effort, so an upgrading install does not leave the old cache stranded.</summary>
+    public string? ImageCacheDirectory { get; init; }
 }
 
 /// <summary>

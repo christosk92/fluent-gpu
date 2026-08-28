@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+
 namespace Wavee;
 
 /// <summary>The kind of playable the app's ONE current media is. Milestone B makes the current media host swappable by
@@ -78,4 +80,33 @@ public static class MediaSwitchLogic
     /// <param name="next">The incoming playable's kind.</param>
     public static bool HostChanges(PlayableKind current, PlayableKind next)
         => (current == PlayableKind.Video) != (next == PlayableKind.Video);
+
+    /// <summary>Whether a wire metadata dictionary — a cluster row's, or an inbound Connect transfer's per-track
+    /// metadata — carries a music-video association: an explicit <c>track_player == "video"</c>, a
+    /// <c>media.type</c> of <c>"video"</c>/<c>"mixed"</c>, or the presence of <c>media.manifest_id</c> /
+    /// <c>save_track.uri</c> (both stamped only on a video row). Shared so every reader of this shape (the cluster
+    /// mapper's viewer rows, an inbound transfer's video restore) checks the SAME key list instead of a
+    /// separately-drifting copy.</summary>
+    public static bool HasVideoMetadata(IReadOnlyDictionary<string, string>? metadata)
+    {
+        if (metadata is null) return false;
+        if (metadata.TryGetValue("track_player", out var player) && player == "video") return true;
+        if (metadata.TryGetValue("media.type", out var media) && (media == "video" || media == "mixed")) return true;
+        return metadata.ContainsKey("media.manifest_id") || metadata.ContainsKey("save_track.uri");
+    }
+
+    /// <summary>The metadata a track we are inserting into a queue — locally, or a remote device's via
+    /// <c>add_to_queue</c>/<c>set_queue</c> — must carry when it is genuinely video-associated: an honest
+    /// <c>track_player</c> ("video", never a blanket "audio"), <c>media.type</c>, and — when the association names one
+    /// — <c>video_association</c> (the paired video entity's uri). Shared by <c>DetailQueueActions.BuildMetadata</c>
+    /// (the UI insert path) and <c>PlaybackController.ForwardAddToQueueAsync</c> (remote add_to_queue) so neither
+    /// asserts "audio" on a track whose video the app already knows about: the target has no reason to doubt an
+    /// explicit claim.</summary>
+    public static void StampVideoAssociation(IDictionary<string, string> metadata, bool hasVideo, string? counterpartUri)
+    {
+        metadata["track_player"] = hasVideo ? "video" : "audio";
+        if (!hasVideo) return;
+        metadata["media.type"] = "video";
+        if (!string.IsNullOrEmpty(counterpartUri)) metadata["video_association"] = counterpartUri;
+    }
 }

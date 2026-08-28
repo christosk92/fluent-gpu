@@ -621,6 +621,7 @@ public class LocalMediaProviderTests
         public long PositionMs => 0;
         public bool IsPlaying => Playing;
         public bool IsBuffering => false;
+        public bool ClockValid => true;
         public IObservable<AudioHostSignal> Signals => _signals;
         public IObservable<AudioTransitionSignal> Transitions => _transitions;
 

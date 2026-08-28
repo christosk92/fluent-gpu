@@ -45,9 +45,14 @@ static class SetupDialog
             new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.Modal, Chrome: PopupChrome.Modal)
                 { ScrimVisual = bare });
 
-        // Escape / light-dismiss / programmatic veto while a long-running step is in flight — the raw-overlay
-        // equivalent of ContentDialog's Closing.Cancel (FluentGpu.Controls/ContentDialog.cs: VetoClosing).
-        handle.ClosingAction = _ => !session.IsBusy;
+        // Escape / light-dismiss / programmatic veto — the raw-overlay equivalent of ContentDialog's Closing.Cancel
+        // (FluentGpu.Controls/ContentDialog.cs: VetoClosing). TWO vetoes, both in SetupGating.CanDismiss:
+        //   • a long-running step is in flight (Apply, or a catalog/download/verify), and
+        //   • this is not a RERUN. Escape on a FirstRun/Reauth wizard used to close it and leave the user staring at
+        //     SetupPreAuthRoot's bare titlebar over Mica — no dialog, no shell, no way back in, on a fresh install.
+        //     The wizard is Wavee's only sign-in surface, so "there is nothing behind it" is literal; the honest exit
+        //     is "Not now" → SetupSession.Secondary → QuitApp, which is still offered on every page.
+        handle.ClosingAction = _ => SetupGating.CanDismiss(session.IsRerun, session.IsBusy);
 
         // Close teardown — structural, not per-button: EVERY close path (Escape, "Not now", a shutdown-time close,
         // a stray dismiss nobody anticipated) funnels through this ONE action.
@@ -57,9 +62,8 @@ static class SetupDialog
         // simply resumes on the next launch. That is the opposite of SidebarDesignPicker's discipline, and the
         // difference is the point: its chooser is OPTIONAL, so "a one-time dialog that comes back is a failure mode"
         // holds there. Applying that reasoning here (an earlier revision did) was a real bug — clearing the marker
-        // dropped the user into the OLD standalone LoginView takeover, i.e. a SECOND, different sign-in surface,
-        // which is exactly the duplication this whole wizard exists to remove — and made it permanent, because the
-        // wizard then never returned. MarkDeferred survives only for a deliberate navigation away (see
+        // dropped the user out of the only sign-in surface Wavee has, permanently, because the wizard then never
+        // returned. MarkDeferred survives only for a deliberate navigation away (see
         // PlaybackRuntimeSetupModel.OpenDiagnostics), where the user is already signed in and has somewhere to be.
         handle.ClosedAction = () =>
         {

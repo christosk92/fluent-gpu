@@ -1,8 +1,10 @@
 using System.IO;
-using FluentGpu;             // FluentApp
-using FluentGpu.Dsl;         // Theme (startup theme seed)
-using FluentGpu.Foundation;  // Diag
+using FluentGpu;               // FluentApp
+using FluentGpu.Dsl;           // Theme (startup theme seed)
+using FluentGpu.Foundation;    // Diag
+using FluentGpu.Localization;  // Loc (the crash dialog's copy)
 using FluentGpu.WindowsApi.Activation;
+using FluentGpu.WindowsApi.Packaging;   // PackageIdentity (packaged builds get protocol/startup from the manifest)
 
 namespace Wavee;
 
@@ -30,6 +32,36 @@ static class Program
     [STAThread]
     static void Main(string[] args)
     {
+        // ── `--relaunch-after <pid>` — the restart broker (spawned by AppRelaunch.RestartAfterExit) ─────────────────
+        // This arm is FIRST on purpose, ahead of FactoryReset.ApplyIfPending: the broker is a courier, not an app
+        // instance. It waits for the process that spawned it to exit (which is what drops the single-instance mutex and
+        // unlocks library.db), starts a fresh Wavee, and exits. Applying the pending wipe here would consume the marker
+        // that the real relaunch has to act on, and would run the wipe while the old process still holds those files.
+        int relaunchIdx = Array.IndexOf(args, "--relaunch-after");
+        if (relaunchIdx >= 0)
+        {
+            if (relaunchIdx + 1 < args.Length && int.TryParse(args[relaunchIdx + 1], out int parentPid))
+            {
+                // 15 s ceiling: a hung parent must not strand the user without a window. ArgumentException = the pid is
+                // already gone (the common case — it exited while we were starting), which is exactly what we waited for.
+                try { System.Diagnostics.Process.GetProcessById(parentPid).WaitForExit(15_000); }
+                catch (ArgumentException) { }
+                catch (InvalidOperationException) { }
+            }
+            try
+            {
+                if (PackageIdentity.IsPackaged && PackageIdentity.ApplicationUserModelId is { Length: > 0 } aumid)
+                    // A packaged build must be re-activated through the shell by AUMID; starting the exe directly gives
+                    // the new process no package identity (no MSIX activation, no manifest protocol/startup registration).
+                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(
+                        "explorer.exe", "shell:AppsFolder\\" + aumid) { UseShellExecute = true });
+                else if (Environment.ProcessPath is { Length: > 0 } selfExe)
+                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(selfExe) { UseShellExecute = true });
+            }
+            catch { /* a factory-reset marker (if any) is on disk — a manual launch still applies the wipe */ }
+            Environment.Exit(0);
+        }
+
         // Factory-reset wipe MUST run before settings / logs / library.db open. The previous process only armed a
         // marker (files were still locked); this process is a clean first launch afterwards.
         FactoryReset.ApplyIfPending();
@@ -54,6 +86,9 @@ static class Program
         // fresh-install probe so the two features can never disagree about whether this install is fresh. Settings
         // writes only; the wizard itself is shown later by the shell once it has painted, gated on SetupPending.
         SetupBootstrap.Run(settings);
+        // Developer mode (App/DeveloperMode.cs) is a process-wide latch read by the diagnostic surfaces. Load it here,
+        // before anything can ask, so a single settings read decides it for the whole launch.
+        DeveloperMode.Load(settings);
         string logDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Wavee", "logs");
         string logPath = Path.Combine(logDir, "wavee.log");
 #if DEBUG
@@ -74,7 +109,10 @@ static class Program
             minLevel: minSetting >= 0 ? (WaveeLogLevel)minSetting : defaultLevel,
             fileMinLevel: fileSetting >= 0 ? (WaveeLogLevel)fileSetting : defaultFileLevel,
             dailyRolling: true);
-        DealerArchive.Instance.Configure(Path.Combine(logDir, "dealer"));
+        // The dealer firehose archive is opt-in (Settings › Diagnostics): it writes every dealer frame to disk, which is
+        // invaluable when reproducing a sync bug and pure cost otherwise. The directory is always configured so turning
+        // the setting on mid-session has somewhere to write.
+        DealerArchive.Instance.Configure(Path.Combine(logDir, "dealer"), settings.Get(WaveeSettings.DealerArchiveEnabled));
         Diag.Sink = WaveeLog.DiagSink;                 // fold engine diagnostics (FG_DIAG) into the app log stream
         WaveeLog.Instance.Info("app", "startup", "Wavee starting",
             WaveeLogField.Of("pid", Environment.ProcessId),
@@ -90,6 +128,17 @@ static class Program
             WaveeLog.Instance.Critical("crash", $"Unhandled exception (terminating={e.IsTerminating})", e.ExceptionObject as Exception);
             WaveeLog.Instance.Flush();
             DealerArchive.Instance.Flush();
+            // Same treatment as the app-loop catch below: a crash on ANY thread leaves a report on disk and arms the
+            // pending-report key, so the NEXT launch can offer it. Everything here is best-effort — we are terminating.
+            try
+            {
+                if (e.ExceptionObject is Exception fatal)
+                {
+                    string report = CrashReport.Write(fatal, logPath);
+                    if (report.Length > 0) settings.Set(WaveeSettings.PendingCrashReport, report);
+                }
+            }
+            catch { }
         };
         TaskScheduler.UnobservedTaskException += (_, e) =>
         {
@@ -283,15 +332,9 @@ static class Program
         // --fake for the offline FakeData demo (populated UI with no login/network — used by --screenshot and UI iteration).
         Services.UseRealBackend = Array.IndexOf(args, "--fake") < 0;
 
-        // Premium-only gate: Wavee requires a Spotify Premium account for now. A Free account is refused OUTRIGHT — we do
-        // NOT bring up the window; we show a nice warning and exit. (No real login yet, so this defaults to Premium; pass
-        // --free or set WAVEE_FORCE_FREE=1 to exercise the refusal.)
-        if (!Wavee.Backend.SessionGate.IsAllowed(ResolveAccountTier(args)))
-        {
-            WaveeLog.Instance.Info("auth", "Refusing to launch on a Spotify Free account (Wavee requires Premium).");
-            PremiumGate.ShowWarning();
-            return;
-        }
+        // NOTE: there is no pre-window premium gate. The account tier is a LOGIN-TIME fact (ProductInfo), so the tier
+        // check lives where the tier is actually known — Backend/Seam.cs (GoLive), SpotifyAuthSession, SpotifyLiveLogin —
+        // and a Free account gets a window and an in-app explanation rather than a message box before anything paints.
 
         // Single-instance + wavee:// protocol — normal windowed path only. Probes already returned above;
         // --screenshot / --frames (harness) skip the gate so a visual-diff loop can spawn freely.
@@ -309,18 +352,26 @@ static class Program
                 instanceGate.Dispose();
                 return;
             }
-            try
+            // Unpackaged only. A packaged (MSIX) build declares its protocols AND its startup task in the manifest, and
+            // the OS owns both: writing the same HKCU keys from here would fight the manifest registration and leave a
+            // stale association pointing at an install path that moves on every update.
+            if (!PackageIdentity.IsPackaged)
             {
-                string? exe = Environment.ProcessPath;
-                if (exe is { Length: > 0 })
-                    ProtocolRegistrar.RegisterProtocol("wavee", exe, "Wavee", iconPath: WaveeAppIcon.Path());
-                // The opt-in spotify: handler follows the setting in both directions, so turning it off in a previous
-                // session actually gives the scheme back rather than leaving a stale HKCU association behind.
-                DeepLink.SyncSpotifySchemeRegistration(settings.Get(WaveeSettings.HandleSpotifyLinks));
-            }
-            catch (Exception ex)
-            {
-                WaveeLog.Instance.Warn("app", "wavee:// protocol registration failed", ex);
+                try
+                {
+                    string? exe = Environment.ProcessPath;
+                    if (exe is { Length: > 0 })
+                        ProtocolRegistrar.RegisterProtocol("wavee", exe, "Wavee", iconPath: WaveeAppIcon.Path());
+                    // The opt-in spotify: handler follows the setting in both directions, so turning it off in a previous
+                    // session actually gives the scheme back rather than leaving a stale HKCU association behind.
+                    DeepLink.SyncSpotifySchemeRegistration(settings.Get(WaveeSettings.HandleSpotifyLinks));
+                    // Same both-directions contract for "start Wavee when I sign in".
+                    DeepLink.SyncStartupRegistration(settings.Get(WaveeSettings.StartOnLogin));
+                }
+                catch (Exception ex)
+                {
+                    WaveeLog.Instance.Warn("app", "wavee:// protocol registration failed", ex);
+                }
             }
             if (activation.Kind is ActivationKind.Protocol or ActivationKind.File or ActivationKind.ToastActivated)
                 DeepLinkChannel.Post(activation.Argument);
@@ -380,6 +431,10 @@ static class Program
                     Title = "Wavee Music", Width = winW, Height = winH,
                     MinWidth = 300, CustomFrame = true,
                     MicaAlt = !settings.Get(WaveeSettings.WindowMaterialBaseMica),
+                    // The engine's decoded-image disk cache lands under Wavee's own app data (next to logs/ and the
+                    // library), not in the engine's default location — one folder for "everything Wavee wrote", which is
+                    // what the Storage settings tab measures and what factory reset wipes.
+                    ImageCacheDirectory = Path.Combine(SettingsShared.AppDataRoot, "cache", "images"),
                 },
                 new HarnessOptions { Frames = frames, Screenshot = screenshot });
             // Process-exit flush for session.json (nav + the playback restore section): the shell's unmount cleanup never
@@ -393,13 +448,17 @@ static class Program
             string reportPath = "";
             try { reportPath = CrashReport.Write(ex, WaveeLog.Instance.FilePath); }
             catch { }
+            // Arm the report for the NEXT launch too: the message box below only reaches a user who is still sitting in
+            // front of the machine, and a crash the user walked away from should still be offered when they come back.
+            try { if (reportPath.Length > 0) settings.Set(WaveeSettings.PendingCrashReport, reportPath); }
+            catch { }
             try
             {
-                var body = "Wavee crashed.\n\n"
-                         + (reportPath.Length > 0 ? "Crash report: " + reportPath + "\n" : "")
-                         + (WaveeLog.Instance.FilePath is { Length: > 0 } lp ? "Log: " + lp + "\n" : "")
-                         + "\nOpen the report folder now?";
-                if (StartupNotice.ErrorYesNo("Oops! Wavee crashed", body) && reportPath.Length > 0)
+                var body = Loc.Get(Strings.Crash.Body) + "\n\n"
+                         + (reportPath.Length > 0 ? Strings.Crash.ReportLine(reportPath) + "\n" : "")
+                         + (WaveeLog.Instance.FilePath is { Length: > 0 } lp ? Strings.Crash.LogLine(lp) + "\n" : "")
+                         + "\n" + Loc.Get(Strings.Crash.OpenFolderQuestion);
+                if (StartupNotice.ErrorYesNo(Loc.Get(Strings.Crash.Title), body) && reportPath.Length > 0)
                     ShellOpen.OpenFolderOf(reportPath);
             }
             catch { }
@@ -411,15 +470,6 @@ static class Program
         }
         WaveeLog.Instance.Info("app", "Wavee exiting");
         WaveeLog.Instance.Flush();
-    }
-
-    // For now there is no real login, so the account tier defaults to Premium (the app launches normally). The refusal
-    // path is exercisable via --free or WAVEE_FORCE_FREE=1, and wires to the real session tier when login lands.
-    static Wavee.Backend.Tier ResolveAccountTier(string[] args)
-    {
-        if (Array.IndexOf(args, "--free") >= 0) return Wavee.Backend.Tier.Free;
-        if (Environment.GetEnvironmentVariable("WAVEE_FORCE_FREE") == "1") return Wavee.Backend.Tier.Free;
-        return Wavee.Backend.Tier.Premium;
     }
 
     static Action<string>? DebugEcho()

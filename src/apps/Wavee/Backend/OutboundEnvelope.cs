@@ -22,7 +22,11 @@ public static class OutboundEnvelope
         int? skipToIndex, string? skipToTrackUri, string? skipToTrackUid,
         IReadOnlyList<QueuedRef>? pageTracks, bool shuffle,
         string featureIdentifier, string featureVersion,
-        string commandId, string intentId, long initiatedTimeMs)
+        string commandId, string intentId, long initiatedTimeMs,
+        // bug 4: mirrors the shape our OWN inbound parser reads (PlaybackController's
+        // options.player_options_override.modes.media) — a forwarded play carries no video intent today, so a target
+        // resolving a video-capable context/track had no reason to open it in video mode.
+        bool preferVideo = false)
     {
         bool isCollection = ContextResolve.IsCollection(contextUri);
         var buf = new ArrayBufferWriter<byte>(512);
@@ -74,6 +78,12 @@ public static class OutboundEnvelope
             w.WriteString("license", "premium");
             w.WriteStartObject("player_options_override");
             w.WriteBoolean("shuffling_context", shuffle);
+            if (preferVideo)
+            {
+                w.WriteStartObject("modes");
+                w.WriteString("media", "VIDEO");
+                w.WriteEndObject();
+            }
             w.WriteEndObject();
             w.WriteEndObject();   // prepare_play_options
 
@@ -124,7 +134,11 @@ public static class OutboundEnvelope
     // sends uid:"" + metadata:{} for a fresh add. Replaces the legacy flat command.uri form.
     public static string AddToQueue(string fromDeviceId, string trackUri, string trackUid,
         bool overrideRestrictions, bool onlyForLocalDevice, bool systemInitiated,
-        string commandId, string intentId, long initiatedTimeMs, string interactionId = "")
+        string commandId, string intentId, long initiatedTimeMs, string interactionId = "",
+        // bug 5: the same metadata map a set_queue row gets. Null/empty keeps today's honest explicit {} — an
+        // add_to_queue forwarded with no richer Track available (EnqueueAsync(string uri)) still erases nothing it
+        // never had.
+        IReadOnlyDictionary<string, string>? metadata = null)
     {
         var buf = new ArrayBufferWriter<byte>(256);
         using (var w = new Utf8JsonWriter(buf))
@@ -135,7 +149,11 @@ public static class OutboundEnvelope
             w.WriteStartObject("track");
             w.WriteString("uri", trackUri);
             w.WriteString("uid", trackUid ?? "");          // ALWAYS written, even ""
-            w.WriteStartObject("metadata"); w.WriteEndObject();   // explicit {}
+            w.WriteStartObject("metadata");
+            if (metadata is { Count: > 0 })
+                foreach (var (k, v) in metadata)
+                    if (!string.IsNullOrEmpty(k)) w.WriteString(k, v ?? "");
+            w.WriteEndObject();   // metadata
             w.WriteEndObject();   // track
             w.WriteStartObject("options");
             w.WriteBoolean("override_restrictions", overrideRestrictions);
@@ -297,7 +315,14 @@ public static class OutboundEnvelope
     // with a protobuf SetVolumeCommand body. That message is a fixed 3-field wire spec (volume / empty logging_params /
     // connection_type), hand-encoded here so the outbound path stays proto-free. Round-trips to the captured bytes
     // (volume 19496 → 08 a8 98 01 1a 00 22 04 'wlan').
-    public static string Transfer(string transferIntentId, string commandId, string interactionId, string license)
+    // bug 8: video_persistence's wire field number is capture-verified only for TransferPlayerOptions.modes (the
+    // protobuf blob a dealer "transfer" push carries to the TARGET — see transfer_state.proto). THIS JSON body is a
+    // different hop (our own HTTP request asking the server to move the cluster's active device), and no captured
+    // transfer-away body proves it carries a "modes" object at all — this mirrors the same key/value shape as a
+    // best effort so a target picks up video mode, not a verified wire fact. Flag for confirmation if a genuine
+    // video-hosting transfer-away is ever captured.
+    public static string Transfer(string transferIntentId, string commandId, string interactionId, string license,
+        bool hostingVideo = false)
     {
         var buf = new ArrayBufferWriter<byte>(256);
         using (var w = new Utf8JsonWriter(buf))
@@ -308,6 +333,12 @@ public static class OutboundEnvelope
             w.WriteString("restore_position", "extrapolate");
             w.WriteString("restore_track", "only_current");
             w.WriteString("license", license);
+            if (hostingVideo)
+            {
+                w.WriteStartObject("modes");
+                w.WriteString("video_persistence", "VIDEO");
+                w.WriteEndObject();
+            }
             w.WriteEndObject();
             w.WriteString("transfer_intent_id", transferIntentId);
             w.WriteString("command_id", commandId);

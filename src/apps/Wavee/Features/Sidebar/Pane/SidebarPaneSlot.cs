@@ -19,9 +19,10 @@ namespace Wavee;
 //
 // WHY A COMPONENT PER SLOT. `ItemsView.CreateBound` builds each slot ONCE and recycles it by writing the slot's index
 // signal. A Component whose Render reads `scope.Index.Value` therefore re-renders exactly on a recycle — which is how a
-// heterogeneous plan (13 row kinds) rides a signals-first list at all. It additionally subscribes the document /
-// projection / pin / folder / MODE epochs (`SidebarPane.SubscribeEpoch`) and the live ROUTE, so a customizer edit, a
-// library refresh, a pin mutation, a section toggle or a navigation re-skins only the realized window — never the list.
+// heterogeneous plan (13 row kinds) rides a signals-first list at all. It additionally subscribes THIS row's epoch
+// (`SidebarPane.SubscribeRowEpoch` — bumped by a publish for the document / projection / pin / folder / MODE edges the
+// diff found changed) and the live ROUTE, so a customizer edit, a library refresh, a pin mutation, a section toggle or a
+// navigation re-skins only the realized window — never the list.
 //
 // SELECTION lives inside the item container, matching WinUI NavigationViewItem: the shared row ramp plus a permanently
 // mounted 3×16 SelectionIndicator. The previous and next realized rows run the exact paired NavigationView timeline.
@@ -240,7 +241,7 @@ sealed class SidebarPaneSlot : Component
     }
 
     /// <summary>The header chevron's live open state. Captures only the SLOT, so it survives every recycle: it re-reads the
-    /// plan row at the slot's current index and the section behind it, and its <c>SubscribeEpoch</c> read is what
+    /// plan row at the slot's current index and the section behind it, and its <c>SubscribeRowEpoch</c> read is what
     /// re-renders the chevron on a toggle.</summary>
     bool HeaderOpenLive()
     {

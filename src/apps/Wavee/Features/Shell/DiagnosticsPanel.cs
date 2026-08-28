@@ -103,19 +103,88 @@ sealed class DiagnosticsPanel(IAppSettings? settings = null) : Component
 
         return new BoxEl
         {
-            Grow = 1f, Shrink = 1f, MinHeight = 0f, Direction = 1,
-            Corners = CornerRadius4.All(Radii.Card), Fill = Tok.FillCardSecondary,
-            BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault, ClipToBounds = true,
+            Grow = 1f, Shrink = 1f, MinHeight = 0f, Direction = 1, Gap = Spacing.M,
             Children =
             [
-                Toolbar(hooks, entries, visible, liveSession, post),
-                Divider(),
-                LogBody(entries, visible, logLayout),
-                Divider(),
-                Footer(entries, visible, liveSession),
+                DiagnosticSwitches(),
+                new BoxEl
+                {
+                    Grow = 1f, Shrink = 1f, MinHeight = 0f, Direction = 1,
+                    Corners = CornerRadius4.All(Radii.Card), Fill = Tok.FillCardSecondary,
+                    BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault, ClipToBounds = true,
+                    Children =
+                    [
+                        Toolbar(hooks, entries, visible, liveSession, post),
+                        Divider(),
+                        LogBody(entries, visible, logLayout),
+                        Divider(),
+                        Footer(entries, visible, liveSession),
+                    ],
+                },
             ],
         };
     }
+
+    // ── the switches: the app's THREE diagnostic dials, above the log ────────────────────────────────────────────────
+    //
+    // These sit ABOVE the log viewer rather than inside its toolbar because they are settings, not filters: they change
+    // what the APP does, not what this list shows. The log card keeps Grow=1 below them, so the viewer still owns every
+    // pixel the three rows do not.
+    //
+    // Developer mode is the app's ONE switch for developer surface (App/DeveloperMode.cs): the sidebar's API console,
+    // Library V3's overflow entry, the lyrics inspector, the per-topic "Send event" rows and the home image tracer all
+    // read it. The other two are independently expensive things a developer turns on deliberately, so they are their
+    // own rows rather than riders on the first — but the FPS overlay is meaningless without the developer surface it
+    // belongs to, so it is disabled (not hidden) while developer mode is off: a greyed row with its own subtitle says
+    // "turn the switch above on", where a vanished row would just look like a missing feature.
+    Element DiagnosticSwitches()
+    {
+        // `.Value`, so flipping developer mode re-renders this tab: the FPS row's enabled state follows it, and every
+        // OTHER developer surface in the app is following the same signal at the same moment. The toggles below write
+        // settings and then bump `_diagVersion`, which Render already reads — that is what re-seeds their signals.
+        bool dev = DeveloperMode.Enabled.Value;
+
+        return new BoxEl
+        {
+            Direction = 1, Gap = Spacing.XS, Shrink = 0f, AlignSelf = FlexAlign.Stretch,
+            Children =
+            [
+                SwitchRow(Strings.Settings.Diag.DeveloperMode, Strings.Settings.Diag.DeveloperModeSub,
+                    Icons.Code, dev, isEnabled: true, on => DeveloperMode.Set(settings, on)),
+
+                SwitchRow(Strings.Settings.Diag.FpsOverlay, Strings.Settings.Diag.FpsOverlaySub,
+                    Icons.Clock, DeveloperMode.FpsOverlay.Value, isEnabled: dev,
+                    on => DeveloperMode.SetFpsOverlay(settings, on)),
+
+                SwitchRow(Strings.Settings.Diag.DealerArchive, Strings.Settings.Diag.DealerArchiveSub,
+                    Icons.RadioTower, settings?.Get(WaveeSettings.DealerArchiveEnabled) ?? false, isEnabled: true,
+                    on =>
+                    {
+                        settings?.Set(WaveeSettings.DealerArchiveEnabled, on);
+                        // The archive keeps the directory Program.cs gave it, so the toggle only has to say on/off —
+                        // and it applies to the LIVE dealer connection, which is the whole point of it being a setting.
+                        DealerArchive.Instance.SetEnabled(on);
+                    }),
+            ],
+        };
+    }
+
+    /// <summary>One diagnostic on/off row. The toggle is fed a FRESH signal seeded from the current value and re-read
+    /// on every render (the <c>SettingsPage</c> appearance-toggle pattern): the truth lives in settings, never in a
+    /// mirror signal that could drift from it.</summary>
+    Element SwitchRow(string labelKey, string subKey, string icon, bool value, bool isEnabled, Action<bool> onSet)
+        => SettingsCard.Create(new SettingsCard.Options
+        {
+            Header = Loc.Get(labelKey),
+            Description = Loc.Get(subKey),
+            HeaderIcon = icon,
+            IsEnabled = isEnabled,
+            Content = ToggleSwitch.Create(new Signal<bool>(value), onChange: _ =>
+            {
+                onSet(!value);
+                _diagVersion.Value = _diagVersion.Peek() + 1;
+            }, style: SettingsCard.CompactToggleStyle()),
+        });
 
     void RefreshSessions(Action<Action> post, bool force = false)
     {

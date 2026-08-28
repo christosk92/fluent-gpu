@@ -1013,6 +1013,61 @@ own, see input-a11y.md's root-only-provider note).
 Observed gates: `gate.media.el.docked-corners`, `gate.media.el.fullscreen-delegates`,
 `gate.media.el.context-menu-live-anchor`.
 
+### 8.5 As built (2026-08) — Charts: the shared Cartesian frame, the Line/Area/Bar families, and three distribution primitives
+
+`FluentGpu.Controls/Charts/` is the kit's data-visualization layer — the first control-kit consumer of `PathEl`. It has
+no WinUI peer (WinUI ships no chart control); the contract is a native port of the shadcn/ui `chart.tsx` model
+(`ChartConfig` → `ChartSeries`, `ChartTooltipContent` → `ChartTooltip`, `ChartLegendContent` → `ChartLegend`) over the
+engine's own primitives. Composition only — no new opcode or scene column: series are `PathEl` fills/strokes, bars are
+`BoxEl` rounded rects, axes are `TextEl` cells, hit regions are `BoxEl`s (a `PathEl` cannot own a click).
+
+- **Contract types:** `ChartSeries(Key, Label, Color, Glyph?)` (colour follows the ENTITY — hiding a series never
+  recolours the survivors), `CartesianData(Categories, Series, float[][] Values)` (NaN = gap), `ChartPalette`
+  (DEFAULT = a single-hue ramp off the live accent, alternating light/dark steps, theme-safe by construction; a fixed-
+  order multi-hue `Categorical` palette is an app opt-in), `ChartTooltipOptions` (Dot/Line/Dashed indicator,
+  HideLabel/HideIndicator, label/value formatters, DefaultIndex, Footer) with shadcn's nested-label rule (one series +
+  non-dot indicator folds the header into the row), `ChartAxisOptions`, `CartesianChartOptions`, `LineChartOptions`
+  (Natural/Monotone/Step/Linear curves, dots, labels), `AreaChartOptions` (None/Stacked/Expand stacking, flat fill),
+  `BarChartOptions` (Vertical/Horizontal, grouped/stacked, per-cell colour, labels, active highlight).
+- **Composition — `CartesianChart` (internal frame shared by `LineChart`/`AreaChart`/`BarChart`, each ONE public
+  `Create(data, options, frameOptions, style, key)`):** measured plot rect (finite `Width`/`Height` pin; NaN stretches
+  via `UseMeasuredBounds`, 16:9 when only the width is known), value axis lane + category axis row, dashed grid
+  (`StrokeStyle` dash 3/6), the series layer, a marks layer, the `ActiveOverlay` (crosshair or active-slot wash,
+  active dots, tooltip) and a hover layer. Series geometry is memoised on (data, plot size, options) and minted as
+  `PathData` exactly once per key; ONLY `ActiveOverlay` subscribes to the active-index signal, so a hover never
+  re-renders the series (`gate.ctl.charts.cartesian.line` asserts the stroke count is unchanged while hovered).
+- **Distribution primitives:** `DensityPlot` (Gaussian-KDE ridge + rug of the values, stacked dots ≤ 80 else ticks,
+  per-value colours, marker, hairlines, axis captions, and clickable BANDS as lenses; geometry keyed on the values
+  array + `UseMeasuredWidth(4)`, so a lit-band change re-inks without re-tessellating —
+  `gate.ctl.charts.density.layers` checks the realization id survives), `SparkBars` (the N-column stat-card strip
+  lifted from the Wavee facts rail: full-height Button columns, peak in accent, empty buckets keep a floor) and
+  `Waveform` (mirrored bars with a `FloatSignal`-bound played clip, lifted from the Wavee track drawer). Pure maths in
+  `ChartMath` (KDE, rug stacking, extent/stack/expand, d3 `nice()` ticks, Fritsch–Carlson monotone and natural cubic
+  spline controls, nearest slot, tick-collision thinning) — gated without a scene (`gate.ctl.charts.math.*`).
+- **UIA:** the plot is a focusable group; category bands / spark columns are `Button`s named by their tooltips;
+  tooltip and series layers are non-interactive (`HitTestVisible = false`). **Keyboard:** ←/→ step the active index,
+  Home/End jump, Esc clears (the `accessibilityLayer` idiom); Tab reaches every band/column. **Name/role:** series
+  names come from `ChartSeries.Label`; values format through the culture (`N0`, tabular digits). **Motion/cursor/RTL:**
+  hover/press through `MotionTok.ControlFaster`, hand cursor on clickable marks; RTL is the caller's (reverse the
+  categories) — stated, not automatic.
+- **Styling:** every control has a `Style` record whose `DefaultStyle` reads `Tok.*` only, with the kit's
+  `StyleOverride` hook (`gate.ctl.charts.style`). Gallery page: `Charts` under *Status & info*.
+- **Geometry cost rules (2026-08, after the Wavee playlist-open lag):** a chart's geometry memo is keyed on its
+  VALUES ARRAY, so the CALLER must key that array on content, not on list identity — a page that rebuilds its model
+  list on every hydration pass would otherwise re-mint and re-tessellate the paths per pass (tessellation is
+  synchronous in the record segment with no per-frame cap). `DensityPlot.GeometryBuilds` counts rebuilds for exactly
+  this diagnosis; the tick rug is de-duplicated per device pixel column so its contour count is bounded by the stage
+  width, not the value count (`gate.ctl.charts.density.rug-cap`); the stage width is snapped DOWN to
+  `DensityPlot.WidthQuantum` so a layer is never authored wider than the stage.
+- **Roadmap (not built):** Pie/Donut (arc → cubic, centroid labels, centre text), Radial bars (annular sectors with
+  rounded caps + background track), Radar (polar grid polygon/circle + spokes), gradient PATH fill (`PathEl` has one
+  flat fill — a `FillPathGradient` opcode is an engine contract owned by gpu-renderer/scene-memory), brush/zoom,
+  three-band waveform (`Bands` overload), live-region announcements for the active index.
+
+Observed gates: `gate.ctl.charts.math.{kde,rug,share,extent,nice,stack,curve,ticks}`, `gate.ctl.charts.style`,
+`gate.ctl.charts.{spark,waveform}.layout`, `gate.ctl.charts.density.layers`,
+`gate.ctl.charts.cartesian.{line,area,bar}`, `gate.ctl.charts.tooltip`.
+
 ---
 
 ## 9. Cross-cutting wiring summary (the seam matrix)
@@ -1124,6 +1179,10 @@ generational handles, and the portable seam interfaces.
   `ProgressBar`/`ProgressRing`, `TextField`/`TextBox`, `ComboBox`, `ListView`/`GridView`, `TreeView`, `Tabs`,
   `Menu`/`MenuBar`/`ContextMenu`/`MenuItem`, `Dialog`/`Flyout`/`Popup`, `ToolTip`, `Scrollbar`, `Expander`, `InfoBar`,
   `AnnotatedScrollBar`, `SemanticZoom`, `Splitter`, plus their props structs and default templates.
+- **Charts (§8.5):** `ChartMath`, `ChartSeries`/`CartesianData`/`ChartPalette`, `ChartTooltip`/`ChartTooltipOptions`,
+  `ChartLegend`, `ChartAxisOptions`/`CartesianChartOptions`, `CartesianChart` + `LineChart`/`AreaChart`/`BarChart`
+  (+ their options records), `DensityPlot`/`DensityPlotModel`/`PlotBand`/`PlotTick`, `SparkBars`/`SparkBar`,
+  `Waveform`/`WaveformModel`, and every chart `Style` record.
 - **The per-control five-tuple contract** (composition / UIA pattern+ControlType / keyboard / name-role / motion-
   cursor-RTL) and the universal control contract (§4) that validation.md gates.
 

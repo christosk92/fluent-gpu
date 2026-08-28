@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using FluentGpu.WindowsApi.Storage;
 using Microsoft.Win32;
@@ -25,10 +24,12 @@ static class FactoryReset
         Path.Combine(Path.GetTempPath(), "Wavee"),
     ];
 
-    /// <summary>Call as the first line of <c>Program.Main</c>, before settings / logs / <c>library.db</c> open.</summary>
+    /// <summary>Call at the top of <c>Program.Main</c>, before settings / logs / <c>library.db</c> open. (Only the
+    /// <c>--relaunch-after</c> broker arm runs ahead of it — that process is a courier and must NOT consume the marker.)</summary>
     public static void ApplyIfPending() => ApplyPending(MarkerPath, DefaultDataRoots(), wipeRegistry: true);
 
-    /// <summary>Arm a reset and exit this process. The delayed relaunch is what beats the single-instance mutex.</summary>
+    /// <summary>Arm a reset and exit this process. <see cref="AppRelaunch"/>'s broker waits for this pid to die before
+    /// starting the replacement, which is what beats the single-instance mutex and the <c>library.db</c> lock.</summary>
     public static void RequestAndRelaunch(IEnumerable<string>? extraRoots = null)
     {
         WriteMarker(MarkerPath, extraRoots, DefaultDataRoots());
@@ -92,34 +93,12 @@ static class FactoryReset
         catch { }
     }
 
+    // The relaunch is AppRelaunch's job: it spawns a broker that waits for THIS pid to exit (which is what releases the
+    // single-instance mutex and unlocks library.db) and then starts a fresh Wavee, which finds the marker and wipes.
+    // If the spawn fails the marker is still on disk, so a manual relaunch applies the wipe anyway.
     static void RelaunchAndExit()
     {
-        string? exe = Environment.ProcessPath;
-        if (string.IsNullOrEmpty(exe))
-        {
-            try { exe = Process.GetCurrentProcess().MainModule?.FileName; }
-            catch { exe = null; }
-        }
-
-        if (!string.IsNullOrEmpty(exe) && File.Exists(exe))
-        {
-            // ping -n 3 ≈ 2s: long enough for this process to drop the single-instance mutex and unlock library.db.
-            // `start ""` is required — cmd treats the first quoted token as the window title.
-            string quoted = "\"" + exe.Replace("\"", "\\\"", StringComparison.Ordinal) + "\"";
-            try
-            {
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = "cmd.exe",
-                    Arguments = "/c ping 127.0.0.1 -n 3 >nul & start \"\" " + quoted,
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    WindowStyle = ProcessWindowStyle.Hidden,
-                });
-            }
-            catch { /* marker is on disk — a manual relaunch still applies the wipe */ }
-        }
-
+        AppRelaunch.RestartAfterExit();
         Environment.Exit(0);
     }
 

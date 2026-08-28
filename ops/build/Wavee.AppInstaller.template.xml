@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Wavee's one-click sideload auto-update manifest. The CI release job substitutes __VERSION__ / __ARCH__ /
+     __PUBLISHER__ / __APPINSTALLER_URI__ / __MSIX_URI__. Publisher MUST match the signed package's manifest Publisher
+     exactly, and Name MUST match its Identity Name (cproducts.Wavee) or Windows refuses the update.
+
+     Update policy, deliberately more aggressive than the gallery's:
+       OnLaunch HoursBetweenUpdateChecks="0"  - check every launch (Wavee ships often; a stale client desyncs from the
+                                               Spotify wire faster than the gallery ever does).
+       ShowPrompt="true" + UpdateBlocksActivation="false" - the user is told, and can dismiss and keep using the app;
+                                               the update lands on the next launch instead of holding the app hostage.
+       AutomaticBackgroundTask                - the OS also polls in the background (~8 h cadence) so a long-running
+                                               install still finds updates.
+       ForceUpdateFromAnyVersion              - allows a downgrade/sidegrade to whatever this feed points at, which is
+                                               what makes "roll the release back" actually reach installed clients.
+
+     The in-app checker (src/apps/Wavee/App/AppInstallerUpdateService.cs) reads the SAME feed's root Version attribute,
+     so the toast and the OS agree on what "available" means. -->
+<AppInstaller
+  xmlns="http://schemas.microsoft.com/appx/appinstaller/2018"
+  Version="__VERSION__"
+  Uri="__APPINSTALLER_URI__">
+
+  <MainPackage
+    Name="cproducts.Wavee"
+    Publisher="__PUBLISHER__"
+    Version="__VERSION__"
+    ProcessorArchitecture="__ARCH__"
+    Uri="__MSIX_URI__" />
+
+  <UpdateSettings>
+    <OnLaunch HoursBetweenUpdateChecks="0" ShowPrompt="true" UpdateBlocksActivation="false" />
+    <AutomaticBackgroundTask />
+    <ForceUpdateFromAnyVersion>true</ForceUpdateFromAnyVersion>
+  </UpdateSettings>
+</AppInstaller>

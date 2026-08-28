@@ -41,9 +41,11 @@ static class ShellNav
         if (ConcertRoutes.TryParse(key, out var concertRoute))
             return concertRoute.Kind switch
             {
-                ConcertRouteKind.ArtistSchedule => (arg is { Length: > 0 } ? arg + " concerts" : "Artist concerts", Icons.Calendar),
-                ConcertRouteKind.Detail => (arg is { Length: > 0 } ? arg : "Concert details", Icons.Calendar),
-                _ => ("Concerts", Icons.Calendar),
+                ConcertRouteKind.ArtistSchedule => (arg is { Length: > 0 }
+                    ? Strings.Nav.ArtistConcerts(arg)
+                    : Loc.Get(Strings.Nav.ArtistConcertsGeneric), Icons.Calendar),
+                ConcertRouteKind.Detail => (arg is { Length: > 0 } ? arg : Loc.Get(Strings.Nav.ConcertDetails), Icons.Calendar),
+                _ => (Loc.Get(Strings.Nav.Concerts), Icons.Calendar),
             };
         return key switch
         {
@@ -61,12 +63,12 @@ static class ShellNav
             // glyph in the tab strip and the sidebar would read as the same place. Spelled as a LITERAL like the two
             // arms below — this file is source-included by src/apps/Wavee.Tests, which cannot see the engine-bound page.
             "recents"  => (Loc.Get(Strings.Nav.Recents), Icons.Headphones),
-            "settings" => ("Settings", Icons.Settings),
-            "api-console" => ("API Console", Icons.Code),
+            "settings" => (Loc.Get(Strings.Nav.Settings), Icons.Settings),
+            "api-console" => (Loc.Get(Strings.Nav.ApiConsole), Icons.Code),
             // The local-playback ("Spotify.dll") locate/verify report. Spelled as a LITERAL for the same reason as
             // "sidebar-customize" below: this file is source-included by src/apps/Wavee.Tests, which cannot see the
             // engine-bound page class that owns the route constant.
-            "playback-diagnostics" => ("Playback runtime", Icons.MusicNote),
+            "playback-diagnostics" => (Loc.Get(Strings.Nav.PlaybackRuntime), Icons.MusicNote),
             // The full-page sidebar customizer (§C4.1) — a real destination, so the tab strip / breadcrumb need its label
             // and glyph here like any other page. The key is `SidebarLayoutMenu.CustomizeRoute`, spelled as a LITERAL
             // because this file is source-included by src/apps/Wavee.Tests and that engine-bound file is not.

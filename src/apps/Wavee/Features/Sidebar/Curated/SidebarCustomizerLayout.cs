@@ -13,8 +13,14 @@ namespace Wavee;
 // ENGINE-FREE BY CONSTRUCTION (System + System.Text.Json + Wavee.Core + the engine-free Data/ contract types only), for
 // the same reason as Features/Sidebar/Data/*: src/apps/Wavee.Tests source-includes THIS file, so SidebarCustomizerLayout
 // Tests drive the REAL palette filter, the REAL destination table and the REAL config rewriter rather than copies of
-// them. Nothing here may reference Signal<T>, Element, Icons, Loc or Tok — glyph NAMES travel as strings
+// them. Nothing here may reference Element, Icons, Loc or Tok — glyph NAMES travel as strings
 // (SidebarCustomizerPalette maps them app-side) and every label is a loc KEY resolved at the UI edge.
+//
+// THE ONE ENGINE TYPE ALLOWED IS `Signal<T>`, and only through `DeveloperMode.Enabled` in `SidebarPalette.Filter` (the
+// developer-only destination gate). That is the SidebarPinStore precedent, and it does not cost the property this file
+// actually needs: Wavee.Tests has no FluentGpu.Engine reference, but it does supply `FluentGpu.Signals.Signal<T>`
+// (VirtualCollectionSignalShim), so the file still compiles — and the test drives the REAL gate. A mirrored plain bool
+// would be a second source of truth for one switch, which is the drift this whole corpus exists to prevent.
 //
 // PHASE 3 DELETIONS, recorded so nobody re-adds them: the four-tier region ladder (`SidebarCustomizerTier` +
 // `SidebarCustomizerLayout`), the command-fit table (`SidebarCustomizerCommandLayout` and friends) and the outline
@@ -178,6 +184,11 @@ public static class SidebarPalette
     /// (<c>SidebarPinId.AlsoPinnableRoutes</c>) but deliberately absent from the curated PIN picker. Neither is a reason
     /// to hide a real page from a shortcut list — a shortcut and a pin are different offers.
     ///
+    /// <para>The API console is developer surface: the table still CONTAINS it (this is a static, process-wide array —
+    /// it cannot be reactive, and rebuilding it per render would defeat the reference-stable palette rows every
+    /// consumer keys on), and <see cref="Filter"/> drops it while developer mode is off. That is why the gate lives at
+    /// the one read path rather than at the table.</para>
+    ///
     /// <para>DECLARED ABOVE <see cref="Destinations"/> ON PURPOSE: C# runs static field initializers in TEXTUAL order,
     /// so declaring this below the field that reads it would leave it null inside <c>BuildDestinations</c> and ship an
     /// empty Destinations group — a defect a reader would blame on the palette rather than on line order.</para></summary>
@@ -329,9 +340,14 @@ public static class SidebarPalette
         ArgumentNullException.ThrowIfNull(into);
         into.Clear();
         string q = NormalizeQuery(query);
+        // The one gate for developer-only destinations (the API console). `Peek`, not `Value`: the palette is filtered
+        // per keystroke inside a render that is ALREADY subscribed to the switch through the pane, and a second
+        // subscription here would only widen what a keystroke invalidates.
+        bool devMode = DeveloperMode.Enabled.Peek();
         for (int i = 0; i < All.Length; i++)
         {
             var e = All[i];
+            if (!DeveloperMode.ShowsRoute(e.RouteKey, devMode)) continue;
             if (!Matches(q, labelOf(e), descriptionOf?.Invoke(e))) continue;
             into.Add(e);
         }

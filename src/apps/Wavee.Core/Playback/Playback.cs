@@ -128,6 +128,13 @@ public interface IPlaybackPlayer
     /// toast), or <c>null</c> when no radio is available. Never interrupts the current track.</summary>
     Task<string?> StartRadioAsync(string seedUri, string? displayName = null, CancellationToken ct = default);
     IPlaybackState State { get; }
+
+    /// <summary>Whether an OS suspend should pause THIS player right now (PowerBridge's suspend handler). True only
+    /// for a session that is both routing locally AND has audible media (a live host clock) — a viewer session (some
+    /// OTHER Connect device is active) must never forward a pause to that device just because this machine's OS is
+    /// about to sleep. Default true preserves the old unconditional-pause behavior for any implementation with no
+    /// local/remote distinction of its own (the logged-out stub, test shims).</summary>
+    bool ShouldPauseOnSuspend => true;
 }
 
 /// <summary>Observable playback state. Position is authoritative-frame + 1 Hz interpolation

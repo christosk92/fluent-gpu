@@ -378,8 +378,11 @@ public sealed partial class FluentMediaAudioHost : IAudioHost, IAudioDspControl,
     // reader in that window — the Connect PutState snapshot, an EmitSnap/EmitState publish, this class's own diagnostics —
     // would report the previous track's position for the track that is starting (observed: a track restarting at 0 was
     // announced at 190488 ms). Load/Stop are synchronous entry points, so setting the gate there closes the window
-    // completely; OpenSessionAsync clears it at the one place a session becomes live.
-    volatile bool _clockStale;
+    // completely; OpenSessionAsync clears it at the one place a session becomes live. Starts true: a fresh host that
+    // has never opened a session has no honest clock either (ClockValid must read false, not "true until the first
+    // Stop"), which matters to callers gating a host-level call on "does this host actually hold something" before
+    // it has ever been loaded.
+    volatile bool _clockStale = true;
     // the CURRENTLY-PLAYING (active) track's mixer state, so PositionMs reports active-relative time
     long _activeStartMs;          // raw session ms at which the active track's frame-0 played (0 for a fresh load)
     long _activeDurMs;            // the active track's duration (drives the fade-window trigger)
@@ -485,6 +488,10 @@ public sealed partial class FluentMediaAudioHost : IAudioHost, IAudioDspControl,
     long RawPositionMs => _clockStale ? 0L : (long)_core.Position.Peek().TotalMilliseconds;
     public long PositionMs => Math.Max(0, RawPositionMs - _activeStartMs);
     public bool IsPlaying => _core.IsPlaying.Peek();
+    // The inverse of RawPositionMs's own short-circuit: while the clock is stale, PositionMs is reporting 0 as a LIE
+    // (unknown), not a real position — a caller (PlaybackController.EmitState/EmitSnap) must fall back to its own
+    // projected position instead of publishing that 0 as fact.
+    public bool ClockValid => !_clockStale;
     public bool IsBuffering => _core.IsBuffering.Peek();
     public IObservable<AudioHostSignal> Signals => _signals;
     public IObservable<AudioTransitionSignal> Transitions => _transitions;
@@ -515,7 +522,7 @@ public sealed partial class FluentMediaAudioHost : IAudioHost, IAudioDspControl,
         Enqueue(() => SupplyBodyAsync(b, epoch));
     }
 
-    public void Play() { _playIntent = true; _log.Info($"[posdiag] play-intent raw={RawPositionMs} pos={PositionMs} activeStart={_activeStartMs} lastState={_lastState}"); _diagResumeTicks = 12; Enqueue(async () => { if (_session is not null) await _session.PlayAsync().ConfigureAwait(false); StartTicker(); }); }
+    public void Play() { _playIntent = true; _log.Info($"[posdiag] play-intent raw={RawPositionMs} pos={PositionMs} activeStart={_activeStartMs} lastState={_lastState}"); _diagResumeTicks = 12; Enqueue(async () => { if (_session is null) { _log.Warn("play() arrived over an empty session — nothing loaded, ticker not started"); return; } await _session.PlayAsync().ConfigureAwait(false); StartTicker(); }); }
     // Stop the poll tick once paused: position is frozen and no crossfade commit / Ended / Error can occur while paused
     // (all Playing-only), and the paused UI state is driven by the controller's optimistic EmitState — not this tick — so
     // quiescing the 200ms wakeups here is free idle CPU. StartTicker resumes it on the next Play.
@@ -627,7 +634,15 @@ public sealed partial class FluentMediaAudioHost : IAudioHost, IAudioDspControl,
             _tail = _tail.ContinueWith(async _ =>
             {
                 try { await op().ConfigureAwait(false); }
-                catch (Exception ex) { _log.Info($"fluent-audio-host op failed: {ex.GetType().Name}: {ex.Message}"); }
+                catch (Exception ex)
+                {
+                    // The serialized session pump is the last line of defense: a failed body attach or decryptor build
+                    // here otherwise leaves playback "on" (no session, no signal) with nothing but this log line to
+                    // find it by. Surface it typed too, so the UI/controller can react instead of silently sitting on
+                    // a dead host.
+                    _log.Info($"fluent-audio-host op failed: {ex.GetType().Name}: {ex.Message}");
+                    _signals.OnNext(AudioHostSignal.Fault(PositionMs, AudioKeyFailureReason.None, ex.Message));
+                }
             }, TaskScheduler.Default).Unwrap();
         }
     }
@@ -1067,6 +1082,7 @@ public sealed partial class FluentMediaAudioHost : IAudioHost, IAudioDspControl,
         _activeStartMs = 0;
         _activeDurMs = 0;
         _gaplessArmed = 0;
+        _lastState = PlaybackState.Idle;   // a later legitimate session must never inherit a stale Playing/Ended edge
         if (old is not null) { try { await old.DisposeAsync().ConfigureAwait(false); } catch { } }
         if (stream is not null) { try { stream.Dispose(); } catch { } }
         if (retiring is not null) { try { retiring.Dispose(); } catch { } }
@@ -1453,6 +1469,11 @@ public sealed partial class FluentMediaAudioHost : IAudioHost, IAudioDspControl,
     void Tick()
     {
         if (_disposed) return;
+        // No session → nothing to poll. Without this guard a session torn down between ticks (DisposeSessionAsync nulls
+        // _session before the async Stop/Load continuation reaches StopTicker) would keep firing a zombie pos=0,
+        // IsPlaying=true tick off the stale _core state below — the ticker is the one thing that must never outlive
+        // the session it was reporting on. Mirrors FluentVideoMediaHost.Tick's CurrentPlayer-null guard.
+        if (_session is null) { StopTicker(); return; }
         var state = _core.State.Peek();
         if (_promotePending && state == PlaybackState.Playing)
         {

@@ -116,6 +116,13 @@ sealed class DetailPage : Component
                 loaded = loaded with { ExpiresAtMs = preview.ExpiresAtMs, CreatedAtMs = preview.CreatedAtMs };
             if (loaded.Accent == 0 && preview is { Accent: not 0u })
                 loaded = loaded with { Accent = preview.Accent };
+            // A ROLLING-IDENTITY container (a daylist and friends) can already have rolled to a NEW edition by the
+            // time this call's own store composition catches up: `loaded` is whatever the LAST revalidation wrote,
+            // and THIS open's own revalidation (LibrarySync's dirty/stale gates, the /diff header re-read, the 205
+            // catalogue cache — all fixed to actually run, but still asynchronous) has not landed yet. The pure rule
+            // (DetailHeaderMergeRules) trusts the independently-fresh preview for Title/Cover in that case only.
+            bool rollingIdentity = DetailHeaderMergeRules.IsRollingIdentity(loaded.ExpiresAtMs, preview?.ExpiresAtMs ?? 0);
+            loaded = loaded with { Title = DetailHeaderMergeRules.ResolveTitle(rollingIdentity, loaded.Title, preview?.Title) };
             // THE cover latch, at the point the model is published — not in one arm of one renderer. The card preview
             // painted a 300px CDN rendition; the detail payload names the same art by its 640px hash. A different url
             // is a different ImageCache key ⇒ Pending ⇒ placeholder ⇒ a 220ms fade of the picture already on screen —
@@ -127,7 +134,13 @@ sealed class DetailPage : Component
             // No preview (deep link / search hit)? Fall back to the last cover THIS instance actually published
             // (_lastCover) — mirrors the live-refresh latch below — so a route-reused instance's later load still has
             // something to latch a same-art cover against instead of always taking whatever the wire just named.
-            loaded = loaded with { Cover = ImageSource.PreferVisible(loaded.Cover, preview?.Cover ?? _lastCover) };
+            Image? visibleCover = preview?.Cover ?? _lastCover;
+            // Same rollingIdentity rule for the cover: a rolled-over daylist's stale store row names the PREVIOUS
+            // edition's (generic editorial) art, which is different-art from the correct preview cover and would
+            // otherwise win PreferVisible's "different art ⇒ take incoming" branch below — backwards for this case.
+            Image? incomingCover = DetailHeaderMergeRules.ResolveIncomingCover(rollingIdentity, loaded.Cover, preview?.Cover);
+            loaded = loaded with { Cover = ImageSource.PreferVisible(incomingCover, visibleCover) };
+            LogCoverLatch(preview?.Title, loaded.Title, incomingCover, visibleCover, loaded.Cover);
             _lastCover = loaded.Cover;
             // DIAGNOSTIC ONLY (see DetailCoverTrace): the handoff the whole "flash" question turns on — the nav-preview
             // cover the page opened with vs the cover the full load brought. `same=false` with two ids that share their
@@ -185,7 +198,10 @@ sealed class DetailPage : Component
                     // Same latch on the live path: a bulk refresh (music-video detection, hydration) re-maps the
                     // model and can name the cover by a different size hash again; a genuine cover change (an
                     // edit, a daylist rollover) is DIFFERENT art and still wins.
-                    next = next with { Cover = ImageSource.PreferVisible(next.Cover, model.Value.Peek().Cover) };
+                    var current = model.Value.Peek();
+                    var incomingCover = next.Cover;
+                    next = next with { Cover = ImageSource.PreferVisible(next.Cover, current.Cover) };
+                    LogCoverLatch(current.Title, next.Title, incomingCover, current.Cover, next.Cover);
                     // Reorder-in-flight (§P1.11): while a SAME-LIST drag session is live over THIS playlist the
                     // rows under the pointer are the ones being aimed with. Committing a re-projection now
                     // yanks the insertion geometry out from under the gesture (the list re-keys, the gap moves,
@@ -193,6 +209,10 @@ sealed class DetailPage : Component
                     // ends. A foreign session (a drag from another list, a file drag) is not deferred — it has
                     // no stake in this list's order.
                     if (k == DetailKind.Playlist && PlaylistReorderDefer.TryHold(model, next, pid)) return;
+                    // A pass that landed nothing for THIS list republishes the SAME Tracks instance: hydration bulks
+                    // arrive several per chunk and per trait kind, and every consumer keyed on the list reference (the
+                    // facts rail and its cards, the track list's props) would otherwise re-render for a no-op.
+                    if (LikedFactsRules.TracksEquivalent(current.Tracks, next.Tracks)) next = next with { Tracks = current.Tracks };
                     model.SetReady(next);
                     _lastCover = next.Cover;   // the no-preview latch's fallback (see the initial load above)
                 });
@@ -521,6 +541,47 @@ sealed class DetailPage : Component
     // relinked/alternative track uris are the expected way for those to differ. The app persists no alias→canonical map
     // (only the VideoProjector's canonical recovery derives one, transiently), so an "an alternate uri HAS a video"
     // count cannot be computed here without inventing a resolver — read `video.assoc.recover*` for that half instead.
+    /// <summary>Info-level daylist-stale signature: PreferVisible kept the already-shown cover while the loaded title
+    /// changed, OR took a new cover at all while a previous title was known — title-unchanged-with-a-new-cover is the
+    /// ordinary same-identity re-decode; title-CHANGED-with-a-new-cover is the interesting case this used to miss
+    /// entirely (the predicate excluded `tookIncoming && titleChanged`, so the exact moment a rolled-over identity's
+    /// header and cover land TOGETHER — the daylist-rollover fix actually working — never got a log line). The Debug
+    /// <c>DetailCoverTrace</c> path still owns the same-art CDN-size flash; this line is the identity mismatch.</summary>
+    static void LogCoverLatch(string? previousTitle, string loadedTitle, Image? incoming, Image? visible, Image? chosen)
+    {
+        if (!WaveeLog.Instance.IsEnabled(WaveeLogLevel.Info)) return;
+        bool sameArt = ImageSource.SameArt(incoming, visible);
+        bool keptVisible = sameArt && ImageSource.IsUsable(visible);
+        bool tookIncoming = ImageSource.IsUsable(incoming) && !sameArt;
+        bool titleChanged = previousTitle is { Length: > 0 }
+            && !string.Equals(previousTitle, loadedTitle, StringComparison.Ordinal);
+        if (!((keptVisible && titleChanged) || (tookIncoming && previousTitle is { Length: > 0 })))
+            return;
+
+        static string CoverId(Image? image)
+        {
+            string? url = ImageSource.UrlFor(image, preferLargest: false);
+            if (string.IsNullOrEmpty(url)) return "-";
+            var id = ImageSource.ImageIdSpan(url);
+            return id.Length == 0 ? "-" : id.ToString();
+        }
+
+        WaveeLog.Instance.Event(WaveeLogLevel.Info, "detail", "detail.cover.latch",
+            "PreferVisible kept a cover/title that does not match the loaded identity",
+            fields:
+            [
+                WaveeLogField.Of("keptCover", keptVisible),
+                WaveeLogField.Of("tookIncoming", tookIncoming),
+                WaveeLogField.Of("titleChanged", titleChanged),
+                WaveeLogField.Of("title.prev", previousTitle ?? ""),
+                WaveeLogField.Of("title.loaded", loadedTitle ?? ""),
+                WaveeLogField.Of("cover.visible", CoverId(visible)),
+                WaveeLogField.Of("cover.incoming", CoverId(incoming)),
+                WaveeLogField.Of("cover.chosen", CoverId(chosen)),
+                WaveeLogField.Of("sameArt", sameArt),
+            ]);
+    }
+
     static void LogVideoSweep(string kind, string contextUri, IReadOnlyList<Track> tracks)
     {
         var log = WaveeLog.Instance;

@@ -42,8 +42,28 @@ public static class FakeData
         long dur = 138_000 + (i * 37 % 150) * 1000L;       // 2:18 – ~4:50
         // No has-video here: it is not a property of the row. The fake backend has no association plane, so a fake
         // track honestly reports "no video" — which is also what the real app shows before a detect pass lands.
-        return new Track($"tr{i}", $"spotify:track:tr{i}", s.Title, [ArtistRef(i)], album, dur, i % 6 == 0, Cover(i, 64));
+        //
+        // Facts data, deterministic per index, so the detail rail's years / tempo / blend facts (and the perf bench that
+        // opens a fake playlist) run their full path offline: a release year over 17 years, a tempo in three humps
+        // (~96 / 128 / 172 bpm — what real kind-222 payloads look like across a mixed list), a Camelot slot with the
+        // wire's per-slot colour, and one primary descriptor.
+        int hump = i % 3;
+        double bpm = (hump == 0 ? 96 : hump == 1 ? 128 : 172) + (i % 7) - 3;
+        int slot = 1 + i % 12;
+        string ring = i % 5 < 3 ? "B" : "A";
+        return new Track($"tr{i}", $"spotify:track:tr{i}", s.Title, [ArtistRef(i)], album, dur, i % 6 == 0, Cover(i, 64),
+            TempoBpm: bpm, MusicalKey: CamelotKeys[slot - 1], CamelotCode: slot + ring, CamelotColor: CamelotColors[slot - 1],
+            Tags: [Descriptors[i % Descriptors.Length]], Year: 2008 + i % 17);
     }
+
+    static readonly string[] Descriptors = ["Pop", "Dance", "Indie", "Hip Hop", "Rock", "Electronic"];
+    // The Camelot B ring's key names (1B = B … 12B = E) and one opaque colour per slot (the wire's own hue family).
+    static readonly string[] CamelotKeys = ["B", "F#", "Db", "Ab", "Eb", "Bb", "F", "C", "G", "D", "A", "E"];
+    static readonly uint[] CamelotColors =
+    [
+        0xFF05ECCBu, 0xFF14D7F0u, 0xFF56D9F8u, 0xFF8FB8FFu, 0xFFB8A0FFu, 0xFFE08CFFu,
+        0xFFFF80B4u, 0xFFFF8C8Cu, 0xFFFFA860u, 0xFFF5CE4Eu, 0xFFC8E45Au, 0xFF7EE787u,
+    ];
 
     public static Track[] Tracks(int count, int offset = 0)
     {

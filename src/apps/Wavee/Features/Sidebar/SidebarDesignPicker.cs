@@ -44,8 +44,10 @@ sealed class SidebarDesignPicker : Component
     /// <param name="onChange">Applied IMMEDIATELY on click — no confirmation, no restart (§C6.1).</param>
     /// <param name="compact">The 200×168 card (Settings, where the picker shares a page column) instead of 224×196.
     /// Ignored when <paramref name="variant"/> is <see cref="Variant.Rows"/> (rows have their own fixed metrics).</param>
-    /// <param name="allowCustom">Temporary feature gate for the unfinished Custom design. When false, its preview is
-    /// still visible for discoverability but is disabled and labelled “Coming soon”.</param>
+    /// <param name="allowCustom">Temporary feature gate for the unfinished Wavee Curated design. When false the card is
+    /// simply NOT OFFERED — it used to render disabled and labelled “Coming soon”, which advertised a design nobody
+    /// could pick and cost a column of the picker on every surface that hosts it. Flipping this back to true restores
+    /// the third card; nothing else about Curated changed.</param>
     /// <param name="variant">Cards (default) or Rows — see <see cref="Variant"/>.</param>
     public SidebarDesignPicker(Func<int> selected, Action<int> onChange, bool compact = false, bool allowCustom = false,
                                 Variant variant = Variant.Cards)
@@ -73,7 +75,7 @@ sealed class SidebarDesignPicker : Component
 
     /// <summary>The setup wizard's own shape: one column of tall (100-DIP) full-width radio rows instead of a
     /// wrapped strip of square cards — <see cref="SetupSidebarPage"/>'s decision-column body. Same apply path, same
-    /// selection source, same "Custom stays outside the radio group while unavailable" treatment as <see cref="Row"/>.</summary>
+    /// selection source, same availability rule as <see cref="Row"/>.</summary>
     public static Element Rows(SidebarPreferences? prefs, IAppSettings? settings, bool allowCustom = false)
         => Embed.Comp(() => new SidebarDesignPicker(
             () => prefs is not null
@@ -142,55 +144,22 @@ sealed class SidebarDesignPicker : Component
     {
         int sel = _selected();
 
+        // The picker OFFERS exactly the designs that are available. While Wavee Curated is gated off it is ABSENT, not
+        // present-and-greyed: a disabled card labelled "Coming soon" is an advert for something the user cannot have,
+        // it costs a column (or a whole row) of the chooser and of Settings forever, and it is the one card people
+        // clicked and then had to be told no. The Curated code is untouched — only the offer is withheld — so flipping
+        // `allowCustom` back to true brings the third card back with no other change. `sel` is clamped rather than
+        // passed raw so an install already ON Curated shows nothing selected instead of selecting the wrong card.
+        int count = _allowCustom ? 3 : 2;
+        int pick = sel < count ? sel : -1;
+
         if (_variant == Variant.Rows)
-        {
-            // Same shape as the Cards branch below (a real 2-item radio group + Custom kept OUTSIDE it while
-            // unavailable), just laid out as one vertical column of rows instead of a wrapped strip of cards.
-            var unavailableRow = RowCard(SidebarDesign.Curated, sel == (int)SidebarDesign.Curated, comingSoon: true);
-            return new BoxEl
-            {
-                Direction = 1, Gap = SetupLayout.RowGap, AlignItems = FlexAlign.Stretch,
-                Children =
-                [
-                    WaveePicker.Strip(2, sel < 2 ? sel : -1,
-                        (i, on) => RowCard(SidebarDesignGating.FromIndex(i), on), _onChange,
-                        maxColumns: 1, parts: s_rows),
-                    unavailableRow with
-                    {
-                        IsEnabled = false, Focusable = false, TabStop = false,
-                        Role = AutomationRole.RadioButton, Cursor = CursorId.No,
-                        Opacity = 0.62f, HoverScale = 1f, PressScale = 1f,
-                    },
-                ],
-            };
-        }
+            return WaveePicker.Strip(count, pick,
+                (i, on) => RowCard(SidebarDesignGating.FromIndex(i), on), _onChange,
+                maxColumns: 1, parts: s_rows);
 
         var m = Metrics.For(_compact);
-
-        // The two available choices remain one real radio group. Custom is kept OUTSIDE it while unavailable so it is
-        // absent from arrow-key selection and cannot be invoked accidentally; its disabled card stays in the same
-        // wrapping row to communicate that the design exists without pretending it is usable.
-        if (!_allowCustom)
-        {
-            var unavailable = Card(SidebarDesign.Curated, sel == (int)SidebarDesign.Curated, in m, comingSoon: true);
-            return new BoxEl
-            {
-                Direction = 0, Wrap = true, Gap = Spacing.M, AlignItems = FlexAlign.Start,
-                Children =
-                [
-                    WaveePicker.Strip(2, sel < 2 ? sel : -1,
-                        (i, on) => Card(SidebarDesignGating.FromIndex(i), on, in m), _onChange),
-                    unavailable with
-                    {
-                        IsEnabled = false, Focusable = false, TabStop = false,
-                        Role = AutomationRole.RadioButton, Cursor = CursorId.No,
-                        Opacity = 0.62f, HoverScale = 1f, PressScale = 1f,
-                    },
-                ],
-            };
-        }
-
-        return WaveePicker.Strip(3, sel, (i, on) => Card(SidebarDesignGating.FromIndex(i), on, in m), _onChange);
+        return WaveePicker.Strip(count, pick, (i, on) => Card(SidebarDesignGating.FromIndex(i), on, in m), _onChange);
     }
 
     /// <summary>One tall (100-DIP, <see cref="WaveePicker.WideRow"/>) full-width radio row — the setup wizard's own

@@ -345,7 +345,7 @@ public sealed class Services
         Recents = new SwitchableRecentsService();                            // ditto — the Null source until go-live
         HomeSections = new SwitchableHomeSectionService();                   // ditto — Home's "Show all" paging axis
         Geolocation = new FluentGpu.WindowsApi.Location.WindowsGeolocationProvider();   // OS one-shot; no prompt until used
-        AppUpdate = new NullAppUpdateService();
+        AppUpdate = new AppInstallerUpdateService(settings, Wavee.Backend.Spotify.HttpPools.Get(Wavee.Backend.Spotify.HttpPool.ThirdParty), AppVersion.Current, System.Runtime.InteropServices.RuntimeInformation.OSArchitecture == System.Runtime.InteropServices.Architecture.Arm64 ? "arm64" : "x64", Log);
         Notifications = new NotificationCenterBridge(Activity, SpotifyNotifications, WhatsNew, AppUpdate, settings,
             new ActivityUndoExecutor(LibraryBridge, library, Activity));
         LibraryStore = new LibraryStore(library, mutations, userPlaylists, library as ICollectionEvents);

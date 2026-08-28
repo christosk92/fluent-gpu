@@ -287,9 +287,11 @@ internal static class TrackRow
         // A pending track states WHEN rather than a dash, when the metadata plane gave us a live instant in the future
         // (TrackV4.earliest_live_timestamp). "Fri 4 Sep" answers the question the row actually raises; "—" only says
         // the duration is unknown, which the reader can already see.
+        // A hydrated-looking row with DurationMs == 0 is the same unknown: formatting that as "0:00" would claim a
+        // zero-second track (the Plays cell already dashes 0). DurationCell is the 0-is-unknown rule.
         string durationText = notYetOut
             ? (t.AvailableAt is { } live && live > DateTimeOffset.UtcNow ? DetailFormat.ShortDate(live) : Dash)
-            : DetailFormat.TrackTime(t.DurationMs);
+            : DetailFormat.DurationCell(t.DurationMs);
         // Every secondary COLUMN in the row (album, added-by, date, plays, tempo, duration, the resting number) sits on
         // ONE rung — Caption 12/16 — instead of the old 13/12.5/13/13/12.5/13/13 spread. The row therefore carries
         // exactly two type steps: BodyStrong 14/20/600 for the title and Caption 12/16 for everything factual.
@@ -431,7 +433,7 @@ internal static class TrackRow
                 Padding = new Edges4(Spacing.S, 0f, Spacing.S, 0f),
                 AlignItems = FlexAlign.Center,
                 Justify = FlexJustify.Center,
-                Children = [Caption(DetailFormat.TrackTime(t.DurationMs)) with { Color = Tok.TextSecondary }],
+                Children = [Caption(DetailFormat.DurationCell(t.DurationMs)) with { Color = Tok.TextSecondary }],
             });
         // Trailing "…" overflow — opens the card's ancestor context menu on click (ClickRequestsContext), revealed on
         // card hover exactly like a track row. The card must carry a .WithContextMenu ancestor (ArtistPopular does).

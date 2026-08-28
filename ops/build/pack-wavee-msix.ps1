@@ -18,7 +18,9 @@ param(
     $a = $env:PROCESSOR_ARCHITEW6432
     if (-not $a) { $a = $env:PROCESSOR_ARCHITECTURE }
     if ("$a" -match 'ARM64') { 'arm64' } else { 'x64' }),
-  [string]$Version = '0.1.1.0',
+  # Default: derive from <Version>X.Y.Z</Version> in Wavee.csproj + '.0' (MSIX wants 4 parts). Passing -Version wins,
+  # which is what CI does (it appends the run number as the 4th part so package versions stay monotonic).
+  [string]$Version = '',
   [string]$Configuration = 'Release',
   [string]$Publisher = 'CN=cproducts, O=cproducts, L=Utrecht, S=Utrecht, C=NL',
   [string]$OutputDir = 'artifacts',
@@ -30,6 +32,12 @@ param(
   [string]$Subscription = 'Azure subscription 1'
 )
 $ErrorActionPreference = 'Stop'
+if (-not $Version) {
+  $verCsproj = Join-Path $PSScriptRoot '..\..\src\apps\Wavee\Wavee.csproj'
+  $m = (Select-String -Path $verCsproj -Pattern '<Version>([^<]+)</Version>').Matches
+  if (-not $m -or $m.Count -eq 0) { throw "No <Version> element found in $verCsproj; pass -Version explicitly." }
+  $Version = $m[0].Groups[1].Value.Trim() + '.0'
+}
 if ($Version -notmatch '^\d+\.\d+\.\d+\.\d+$') { throw "Version must be 4-part numeric (e.g. 0.1.1.0); got '$Version'." }
 if ($TrustedSigning -and -not $PSBoundParameters.ContainsKey('Publisher')) {
   $Publisher = 'CN=cproducts, O=cproducts, L=Utrecht, S=Utrecht, C=NL'
@@ -69,7 +77,11 @@ $useAot = -not $NoAot
 Step "Publishing $rid ($(if ($useAot) { 'NativeAOT' } else { 'self-contained JIT' }))"
 Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $pubDir, $outRoot | Out-Null
-$pubArgs = @($csproj, '-c', $Configuration, '-r', $rid, '-o', $pubDir, '--nologo', '-v', 'm', '/p:NuGetAudit=false')
+# InformationalVersion is what the app reports as its own version (AppVersion.Current) and what the in-app update
+# checker compares against the .appinstaller feed. Stamp it from the package version so a packaged build never claims
+# the csproj's '-dev' string and never mistakes itself for out of date.
+$pubArgs = @($csproj, '-c', $Configuration, '-r', $rid, '-o', $pubDir, '--nologo', '-v', 'm', '/p:NuGetAudit=false',
+             "/p:InformationalVersion=$Version")
 if (-not $useAot) { $pubArgs += @('-p:PublishAot=false', '--self-contained', 'true') }
 & dotnet publish @pubArgs
 if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed ($LASTEXITCODE)." }
@@ -82,6 +94,10 @@ if (-not (Test-Path (Join-Path $pubDir 'Wavee.exe'))) { throw "Wavee.exe missing
 $modulePublish = @{ OutDir = $pubDir; Rid = $rid; Configuration = $Configuration }
 if (-not $useAot) { $modulePublish['NoAot'] = $true }
 & (Join-Path $PSScriptRoot 'publish-wavee-modules.ps1') @modulePublish
+
+# Third-party notices next to Wavee.exe (Settings > About reads it from AppContext.BaseDirectory). Generated AFTER the
+# modules so a module package reference is in scope; staged before the recursive layout copy below so it ships.
+& (Join-Path $PSScriptRoot 'generate-third-party-notices.ps1') -OutFile (Join-Path $pubDir 'THIRD-PARTY-NOTICES.txt')
 
 Step "Staging package layout"
 New-Item -ItemType Directory -Force -Path $layout | Out-Null

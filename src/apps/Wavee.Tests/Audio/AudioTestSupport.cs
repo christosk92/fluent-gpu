@@ -140,6 +140,7 @@ sealed class RecordingAudioHost : IAudioHost
     public long PositionMs { get; set; }
     public bool IsPlaying => PlayCalled;
     public bool IsBuffering => false;
+    public bool ClockValid => true;
     public IObservable<AudioHostSignal> Signals => _sig;
     public void Emit(AudioHostSignal signal) => _sig.OnNext(signal);
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;

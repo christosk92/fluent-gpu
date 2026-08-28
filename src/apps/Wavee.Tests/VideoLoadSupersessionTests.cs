@@ -294,6 +294,7 @@ public class VideoLoadSupersessionTests
         public long PositionMs { get; set; }
         public bool IsPlaying { get; private set; }
         public bool IsBuffering => false;
+        public bool ClockValid => true;
         public void Load(in AudioStreamHandle s) { }
         public void LoadFastStart(in AudioFastStart s) { }
         public void SupplyBody(in AudioStreamHandle s) { }
@@ -311,6 +312,7 @@ public class VideoLoadSupersessionTests
         public IObservable<AudioHostSignal> Signals => Sig;
         public long PositionMs { get; set; }
         public bool IsPlaying { get; private set; }
+        public bool ClockValid => true;
         public void Play() => IsPlaying = true;
         public void Pause() => IsPlaying = false;
         public void Stop() => IsPlaying = false;

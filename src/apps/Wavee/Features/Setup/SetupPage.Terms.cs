@@ -16,6 +16,19 @@ namespace Wavee;
 /// scrollable) body instead.</summary>
 sealed class SetupTermsPage : Component
 {
+    /// <summary>The revision of the agreement THIS page presents. Accepting writes it to
+    /// <c>WaveeSettings.TermsAcceptedVersion</c> (<see cref="SetupSession.Primary"/>), and a launch that finds an older
+    /// recorded acceptance re-arms the wizard (<see cref="SetupGating.NeedsTermsRearm"/>). Bump it in ONE place —
+    /// <see cref="SetupGating.TermsVersion"/>, which this aliases — whenever the four sections below change materially;
+    /// the constant lives over there because the gate and <c>SetupBootstrap</c> are engine-free and source-included by
+    /// the test assembly, which cannot see this component at all.</summary>
+    public const int CurrentVersion = SetupGating.TermsVersion;
+
+    /// <summary>Wavee's own privacy statement — deliberately a link to the repository's <c>PRIVACY.md</c> rather than a
+    /// fifth agreement section: it describes what the APP does with local data, which is a different document from the
+    /// terms the user is accepting here, and it must stay readable/greppable outside the running app.</summary>
+    const string PrivacyUrl = "https://github.com/christosk92/fluent-gpu/blob/main/PRIVACY.md";
+
     public override Element Render()
     {
         var viewport = UseContextSignal(Viewport.Size);
@@ -33,9 +46,19 @@ sealed class SetupTermsPage : Component
         void Open() => agreementOpen.Value = true;
         void Close() => agreementOpen.Value = false;
 
-        Element LinkRow() => HyperlinkButton.Create(
-            Loc.Get(Strings.Setup.Terms.ReadFull) + " · " + Strings.Setup.Terms.SectionsCount(4), Open)
-            with { AlignSelf = FlexAlign.Center };
+        // Two links, one row: the agreement (opens IN PLACE, see AgreementDoc) and the privacy statement (leaves for the
+        // browser). Side by side because a user asked to accept has exactly two things they might want to read first,
+        // and burying one of them under the other is how "I never saw a privacy policy" happens.
+        Element LinkRow() => new BoxEl
+        {
+            Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center, AlignSelf = FlexAlign.Center, Shrink = 0f,
+            Children =
+            [
+                HyperlinkButton.Create(Loc.Get(Strings.Setup.Terms.ReadFull) + " · " + Strings.Setup.Terms.SectionsCount(4), Open),
+                new BoxEl { Width = 1f, Height = 12f, Fill = Tok.StrokeDividerDefault },
+                HyperlinkButton.Create(Loc.Get(Strings.Setup.Terms.PrivacyLink), () => LoginView.OpenUrl(PrivacyUrl)),
+            ],
+        };
 
         Element[] needCards =
         [

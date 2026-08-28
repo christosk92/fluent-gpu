@@ -159,6 +159,64 @@ public class CachedStoreTests
         Assert.Equal("Artist", t.Artists[0].Name);        // full record round-trips
     }
 
+    // ── the stub gate (Phase 5a): a PINNED but title-less row is a synthetic placeholder, not a durable row ─────────────
+    // A playlist-member/saved/recent write races ahead of the real hydration wave carrying nothing but a uri, so the
+    // FIRST write for a newly-pinned playable is very often exactly that placeholder. Persisting it verbatim used to
+    // make a blank row durable across restarts; skipping it costs nothing because `ColdPresent` self-pins, so the
+    // first NAMED write still persists (below) and every later write still refreshes it.
+    [Fact]
+    public void UpsertTrack_PinnedButUnnamed_NotPersisted()
+    {
+        var cold = new MemCold();
+        using var store = new CachedStore(cold);
+        store.SetSaved("liked", "spotify:track:t1", true, SyncState.Confirmed);   // pin-reachable
+        store.UpsertTrack(new Track("t1", "spotify:track:t1", "", [], new AlbumRef("", "", ""), 0, false, null));
+        store.Flush();
+
+        Assert.NotNull(store.GetTrack("spotify:track:t1"));           // hot: the caller's row is always resident
+        Assert.False(cold.Entities.ContainsKey("spotify:track:t1"));  // cold: a title-less stub is not worth a durable row
+    }
+
+    [Fact]
+    public void UpsertTrack_NamedAfterStub_Persisted()
+    {
+        var cold = new MemCold();
+        using var store = new CachedStore(cold);
+        store.SetSaved("liked", "spotify:track:t1", true, SyncState.Confirmed);
+        store.UpsertTrack(new Track("t1", "spotify:track:t1", "", [], new AlbumRef("", "", ""), 0, false, null));   // stub: skipped
+        store.Flush();
+        Assert.False(cold.Entities.ContainsKey("spotify:track:t1"));
+
+        store.UpsertTrack(Trk("t1"));   // the real metadata lands — the FIRST named write persists
+        store.Flush();
+        Assert.True(cold.Entities.ContainsKey("spotify:track:t1"));
+
+        var restarted = new CachedStore(cold);
+        Assert.Equal("Title t1", restarted.GetTrack("spotify:track:t1")!.Title);   // the persisted row is the NAMED one, not the stub
+    }
+
+    [Fact]
+    public void UpsertPlaylist_EmptyName_NotPersisted()
+    {
+        var cold = new MemCold();
+        using var store = new CachedStore(cold);
+        store.SetSaved("playlists", "spotify:playlist:p", true, SyncState.Confirmed);   // pin-reachable
+        store.UpsertPlaylist(new Playlist("p", "spotify:playlist:p", "", null, "Me", null, 0));
+        store.Flush();
+
+        Assert.False(cold.Entities.ContainsKey("spotify:playlist:p"));
+    }
+
+    [Fact]
+    public void UpsertOwner_EmptyName_NotPersisted()
+    {
+        var cold = new MemCold();
+        using var store = new CachedStore(cold);
+        store.UpsertOwner(new Owner("alice", "", null));   // owners bypass the PIN gate (P4-C) but not the STUB gate
+
+        Assert.False(cold.Entities.ContainsKey("spotify:user:alice"));
+    }
+
     // The deferred ctor (§B step 4): NO entity replay, but the saved sets are loaded eagerly so IsSaved/SavedUris/counts
     // are correct at first render. The entity itself arrives via the warm pass (or the cold fallback, whichever is first).
     [Fact]

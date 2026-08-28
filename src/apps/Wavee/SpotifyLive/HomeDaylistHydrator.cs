@@ -138,6 +138,8 @@ internal sealed class HomeDaylistHydrator
         ct.ThrowIfCancellationRequested();
 
         var exact = new Dictionary<string, HomePlaylistHeader>(shallow.Count, StringComparer.Ordinal);
+        var resident = new HashSet<string>(StringComparer.Ordinal);
+        var fetched = new HashSet<string>(StringComparer.Ordinal);
         List<KeyValuePair<string, HomeCard>>? pending = null;
         foreach (var pair in shallow)
         {
@@ -145,8 +147,11 @@ internal sealed class HomeDaylistHydrator
             // Residency is trusted IFF the revision the composed body reflects is still the server's. Otherwise the URI
             // joins the header batch exactly as a miss would — which is also what a never-resolved URI does, so a cold
             // start reads today's header instead of overlaying yesterday's, still-resident one onto today's feed.
-            if (IsCurrent(pair.Key, probes[pair.Key]) && TryExact(pair.Value, _readHeader(pair.Key), out var resident))
-                exact.Add(pair.Key, resident);
+            if (IsCurrent(pair.Key, probes[pair.Key]) && TryExact(pair.Value, _readHeader(pair.Key), out var residentHeader))
+            {
+                exact.Add(pair.Key, residentHeader);
+                resident.Add(pair.Key);
+            }
             else (pending ??= new List<KeyValuePair<string, HomeCard>>(shallow.Count)).Add(pair);
         }
 
@@ -169,18 +174,27 @@ internal sealed class HomeDaylistHydrator
 
             ct.ThrowIfCancellationRequested();
             for (int i = 0; i < pending.Count; i++)
-                if (TryExact(pending[i].Value, _readHeader(pending[i].Key), out var fetched))
-                    exact.Add(pending[i].Key, fetched);
+                if (TryExact(pending[i].Value, _readHeader(pending[i].Key), out var fetchedHeader))
+                {
+                    exact.Add(pending[i].Key, fetchedHeader);
+                    fetched.Add(pending[i].Key);
+                }
         }
 
-        if (exact.Count == 0) return source;
+        if (exact.Count == 0)
+        {
+            LogResolve(shallow, probes, exact, resident, fetched, 0);
+            return source;
+        }
 
         LiveHomeResult basis = source;
+        List<string>? claimed = null;
         // A resident header is already enough to RENDER the card; the Home requery only gives the transport body its own
         // chance to carry the exact identity. Because it invalidates and refetches UNCACHED, it must never ride the read
         // cadence: Home is polled on a 60 s timer, and firing per read pinned Home permanently off the Pathfinder TTL.
-        if (ClaimRequery(exact, probes) is { } claimed)
+        if (ClaimRequery(exact, probes) is { } newlyClaimed)
         {
+            claimed = newlyClaimed;
             try
             {
                 var refreshed = await _refreshHome(ct).ConfigureAwait(false);
@@ -188,7 +202,7 @@ internal sealed class HomeDaylistHydrator
             }
             catch (OperationCanceledException)
             {
-                Unclaim(claimed);   // the attempt never completed; do not spend this rollover's one requery on it
+                Unclaim(newlyClaimed);   // the attempt never completed; do not spend this rollover's one requery on it
                 throw;
             }
             catch
@@ -199,7 +213,43 @@ internal sealed class HomeDaylistHydrator
             }
         }
 
-        return Overlay(basis, exact);
+        LiveHomeResult overlaid = Overlay(basis, exact);
+        LogResolve(shallow, probes, exact, resident, fetched, claimed?.Count ?? 0);
+        return overlaid;
+    }
+
+    void LogResolve(IReadOnlyDictionary<string, HomeCard> shallow,
+                    Dictionary<string, RevisionProbe> probes,
+                    Dictionary<string, HomePlaylistHeader> exact,
+                    HashSet<string> resident, HashSet<string> fetched, int claimed)
+    {
+        if (!WaveeLog.Instance.IsEnabled(WaveeLogLevel.Info)) return;
+
+        foreach (var pair in shallow)
+        {
+            string uri = pair.Key;
+            var probe = probes.TryGetValue(uri, out var p) ? p : RevisionProbe.Unknown;
+            byte[]? reflected;
+            lock (_reflected) _reflected.TryGetValue(uri, out reflected);
+            exact.TryGetValue(uri, out var header);
+            string path = resident.Contains(uri) ? "resident" : fetched.Contains(uri) ? "fetched" : "overlay";
+            WaveeLog.Instance.Event(WaveeLogLevel.Info, "home", "home.daylist.resolve",
+                "daylist identity resolved",
+                fields:
+                [
+                    WaveeLogField.Of("uri", uri),
+                    WaveeLogField.Of("probe.ok", probe.Ok),
+                    WaveeLogField.Of("rev.reflected", DaylistIdentity.ShortRev(reflected)),
+                    WaveeLogField.Of("rev.probe", DaylistIdentity.ShortRev(probe.Revision)),
+                    WaveeLogField.Of("path", path),
+                    WaveeLogField.Of("title.home", pair.Value.Title ?? ""),
+                    WaveeLogField.Of("title.header", header.Title ?? ""),
+                    WaveeLogField.Of("cover.home", DaylistIdentity.CoverId(pair.Value.Image)),
+                    WaveeLogField.Of("cover.header", DaylistIdentity.CoverId(header.Cover)),
+                    WaveeLogField.Of("sameArt", ImageSource.SameArt(pair.Value.Image, header.Cover)),
+                    WaveeLogField.Of("claimedRequery", claimed),
+                ]);
+        }
     }
 
     async Task FetchQuietAsync(string uri, CancellationToken ct)
@@ -384,4 +434,27 @@ internal sealed class HomeDaylistHydrator
             },
         };
     }
+}
+
+/// <summary>Engine-free field helpers for <c>home.daylist.resolve</c> so tests can table-drive the log shape without
+/// a feed or a logger. Cover identity uses <see cref="ImageSource.ImageIdSpan"/> — the same span
+/// <c>CoverColorPlane.IdSpan</c> wraps — so this file never takes a UI dependency on <c>DetailCoverTrace</c>.</summary>
+internal static class DaylistIdentity
+{
+    public static string ShortRev(byte[]? rev)
+    {
+        if (rev is null || rev.Length == 0) return "-";
+        int n = Math.Min(2, rev.Length);
+        return Convert.ToHexStringLower(rev.AsSpan(0, n));
+    }
+
+    public static string CoverId(Image? image)
+    {
+        string? url = image?.Url;
+        if (string.IsNullOrEmpty(url)) return "-";
+        var id = ImageSource.ImageIdSpan(url);
+        return id.Length == 0 ? "-" : id.ToString();
+    }
+
+    public static string Path(bool resident, bool fetched) => resident ? "resident" : fetched ? "fetched" : "overlay";
 }

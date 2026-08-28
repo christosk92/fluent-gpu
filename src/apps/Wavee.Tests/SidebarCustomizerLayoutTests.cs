@@ -114,10 +114,17 @@ public class SidebarCustomizerLayoutTests
     {
         var into = new List<SidebarPaletteEntry>();
 
-        Assert.Equal(SidebarPalette.All.Length,
-            SidebarPalette.Filter("", Label, Description, into));
-        Assert.Equal(SidebarPalette.All.Length,
-            SidebarPalette.Filter("   ", Label, Description, into));
+        // The API console is DEVELOPER surface: the table still contains it (it is a static array — see the comment on
+        // ExtraDestinationRoutes) and Filter is the one read path that drops it while developer mode is off, which is
+        // what a test run always is. So "everything" is one row short of the table, and the missing row is that one.
+        int offered = SidebarPalette.All.Length - 1;
+
+        Assert.Equal(offered, SidebarPalette.Filter("", Label, Description, into));
+        Assert.DoesNotContain(into, e => e.RouteKey == "api-console");
+        Assert.Equal(offered, SidebarPalette.Filter("   ", Label, Description, into));
+
+        // …and it is still offered to a developer — the gate is the switch, not a deletion.
+        Assert.True(DeveloperMode.ShowsRoute("api-console", enabled: true));
 
         SidebarPalette.Filter("QUEUE", Label, Description, into);
         Assert.Single(into);

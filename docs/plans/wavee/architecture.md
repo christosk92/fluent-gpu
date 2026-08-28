@@ -5,18 +5,16 @@
 > playlist/album/**artist**/**show** detail, **search**, **library grids**) from real Spotify export JSON + synthesized
 > peers, plus **mutations** (save/like/follow with an optimistic+persisted outbox), a **local-files** peer source, and
 > **podcasts**. The **session** facet registers in the source list; **playback / Connect-remote / lyrics** are NOT
-> in-process sources anymore — local playback is unsupported (a play intent shows a "choose a remote device" toast), so
-> playback happens only on a live Connect device after login and the device roster comes from the live cluster. Per-facet
-> **federation** (`Federated*`) stays the documented `registry.OfCapability` hook, deferred until a 2nd real source (§4.3).
-> Keep this file honest: when a capability moves, update the matrix (§9).
+> in-process sources anymore — local in-process audio plays through `AudioPlaybackStack` once a live session exists (§9);
+> `UnsupportedPlaybackPlayer` is only the pre-login stub, and the Connect device roster comes from the live cluster.
+> Per-facet **federation** (`Federated*`) stays the documented `registry.OfCapability` hook, deferred until a 2nd real
+> source (§4.3). Keep this file honest: when a capability moves, update the matrix (§9).
 >
-> **Two pointer notes.** (1) This file — `docs/plans/wavee/architecture.md` — is the **seam canon**, and the one the
+> **Pointer note.** This file — `docs/plans/wavee/architecture.md` — is the **seam canon**, and the one the
 > `wavee` skill points at. Production comments across `Wavee.Core/Sources/**`, `App/**` and `Features/**` cite a
 > `docs/architecture.md` that does not exist; they mean this file, and the §-numbers still line up.
 > `docs/plans/wavee-native-backend-architecture.md` is a *different* doc (the live Spotify backend: transport,
-> dealer, audio) and does not supersede this one. (2) The playback sentence above is stale and kept only for
-> context: local in-process audio **is** implemented for a live session (§9) — `UnsupportedPlaybackPlayer` is the
-> pre-login stub, not the shipping answer.
+> dealer, audio) and does not supersede this one.
 
 This design is grounded in a 14-domain, 292-capability functional inventory of the production **WaveeMusic**
 client (full report archived alongside the planning session) and in industry best practice:
@@ -370,9 +368,9 @@ provider, so geo/tier/region checks are baked in rather than re-derived in the U
 | **Online catalog seam** | `IOnlineCatalog` | **Implemented (P3)** | search / suggest / home lifted out of `LiveSessionHost` statics and off `StoreLibrarySource`'s mutable hooks into a constructor dependency (`SpotifyOnlineCatalog`) |
 | Video (music videos / canvas / PiP) | `VideoProjector` + `CompositeVideoResolver` | **Implemented** | detection is a trait (99 + 182, TRACK_V4/212 canonical recovery on the reader's shared load); playback surfaces are `Features/Video/*` (in-window PiP + pop-out) plus user `VideoOverrideService` overrides that work with no Spotify session |
 | Row adornments (tempo / key / tags / cover tint) | `TraitSet.RowBundle` | **Implemented** | was `SpotifyTrackAdornmentService`; now four projectors on the shared trait POST — no separate service, cap or memo |
-| **LiveWiring symmetric install/uninstall** | `Backend/Wiring/LiveWiring.cs` | **P3 (in progress)** | every go-live install registers its teardown; `GoOffline` = `Uninstall()` in reverse order, `AssertCovers(Services.LiveSeams)` names any seam that was installed without one |
-| **Multi-source hydration router** | `HydrationRouter` over `SourceRegistry` | **P4 (pending)** | group a batch by `OwnerOf(uri)` → that source's `ICatalogSource.Hydrator`; unowned = `NotOwnedEntityHydrator`. Today `Services.Hydrator` is the Spotify `SwitchableEntityHydrator` directly (§4.3) |
-| **Episodes as playables in playlists** | `EpisodeAsTrack` + `JoinMembership` | **P4 / P5 (pending)** | data join + show paging + owners in the store (P4), episode rows rendering and playing in playlist lists (P5). The `spotify:track:`-only gating that dropped episodes is already gone — the hydration ladders treat Track and Episode as one kind pair |
+| **LiveWiring symmetric install/uninstall** | `Backend/Wiring/LiveWiring.cs` | **Implemented** | landed with P3 (`hydration-facade-plan.md`, 2026-08-16) — `Backend/Wiring/LiveWiring.cs` + `Backend/Wiring/LiveSeams.cs`: every go-live install registers its teardown; `GoOffline` = `Uninstall()` in reverse order (`App/Services.cs`), `AssertCovers(Services.LiveSeams)` names any seam that was installed without one |
+| **Multi-source hydration router** | `HydrationRouter` over `SourceRegistry` | **Implemented** | landed with P4 (`hydration-facade-plan.md`, 2026-08-16) — `Wavee.Core/Hydration/HydrationRouter.cs` groups a batch by `SourceRegistry.OwnerOf(uri)` → that source's `ICatalogSource.Hydrator`; unowned = `NotOwnedEntityHydrator`, and `Services.Hydrator` is the router in both Create paths |
+| **Episodes as playables in playlists** | `EpisodeAsTrack` + `JoinMembership` | **Implemented** | landed with P4/P5 (`hydration-facade-plan.md`, 2026-08-16) — `Wavee.Core/Domain/EpisodeAsTrack.cs` joined in `StoreLibrarySource.JoinMembership` and `Backend/PlaybackProjection.cs`, show paging + owners in the store, and episode rows render and play in playlist lists (show-name subtitle → `show:` route, EPISODE token, "Go to podcast" in `Actions/Menus.cs`) |
 | Library collection pages (albums / artists / podcasts) | collection reads | **Implemented** | `LibraryGridPage` over `GetAlbums/Artists/ShowsAsync` (these routes were "Coming soon") |
 | Mutations: save / like / follow | `IMutationSource` | **Implemented** | `LocalMutationSource` (optimistic + persisted outbox) + `LibraryBridge`; hearts/follow wired everywhere, capability-gated |
 | Local files as a source | `LocalSource` | **Implemented** | owns `local:` / `wavee:local:*`; `TrackOrigin.Local`; opens via the sidebar Local row through the shared detail surface |
@@ -383,7 +381,7 @@ provider, so geo/tier/region checks are baked in rather than re-derived in the U
 | Lyrics | `ILyricsProvider` | **Live-only** | pre-login `NoLyricsProvider`; the live `AggregatingLyricsProvider` swaps in on login (no in-process `ILyricsSource`) |
 | Provider-mappings / dedup / fallback | `ProviderRef` / `ProviderPolicy` | **Model + hooks** | `ProviderRef`/`ProviderMapping`/`ProviderPolicy`/`PlayableTrack` groundwork; federation = `registry.OfCapability` |
 | Mutations: playlist create / add / queue | `UserPlaylistSource` + `EnqueueAsync` | **Implemented** | create (sidebar +), add-to-playlist (default target), add-to-queue, batch selection actions — all wired with toasts; add-to-queue / play-next forward to the active remote device (else the "choose a remote device" toast) |
-| Mutations: playlist picker / reorder / folders | `IMutationSource` | **Seam** | the remaining increment — a "choose which playlist" flyout, drag-reorder, the folder tree, and durable persistence of user playlists |
+| Mutations: playlist picker / reorder / folders | `IMutationSource` | **Implemented** | the "choose which playlist" flyout is `Features/Detail/PlaylistPicker.cs` (+ the "More playlists…" dialog in `Actions/Menus.cs`); drag-reorder and folder CRUD are `Backend/Playlists/RootlistOps.cs` (`TryBuildMove`/`TryBuildMoves`/`BuildCreateFolder`) driven through `PlaylistMutationSource` |
 | Federated playback / remote / session | `Federated*` | **Seam (deferred)** | per §4.3, deferred until a 2nd real source; the hook is `registry.OfCapability(cap)`, now exercised by the registered facet sources |
 
 ---

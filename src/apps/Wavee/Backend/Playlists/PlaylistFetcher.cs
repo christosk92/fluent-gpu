@@ -28,14 +28,20 @@ public sealed class PlaylistFetcher
     readonly Func<string> _account;
     readonly IStore _store;
     readonly Func<IReadOnlyList<string>, CancellationToken, Task> _hydrate;
+    readonly Action<string>? _onRevisionChanged;
 
-    public PlaylistFetcher(IHttpExchange http, Func<string> baseUrl, IStore store, Func<IReadOnlyList<string>, CancellationToken, Task> hydrate, Func<string> account)
+    /// <param name="onRevisionChanged">Fired after a snapshot/diff apply actually ADVANCES the stored revision (never
+    /// on a no-op re-adopt of the same one). Optional: today's one caller is the playlist save-count cache, which has
+    /// no invalidation hook of its own and otherwise only ages out on its 6h TTL.</param>
+    public PlaylistFetcher(IHttpExchange http, Func<string> baseUrl, IStore store, Func<IReadOnlyList<string>, CancellationToken, Task> hydrate, Func<string> account,
+        Action<string>? onRevisionChanged = null)
     {
         _http = http;
         _baseUrl = baseUrl;
         _store = store;
         _hydrate = hydrate;
         _account = account;
+        _onRevisionChanged = onRevisionChanged;
     }
 
     public async Task FetchPlaylistAsync(string playlistUri, CancellationToken ct = default)
@@ -120,7 +126,11 @@ public sealed class PlaylistFetcher
         using (var resp = await _http.SendAsync(new HttpReq("GET", url, headers, null), ct).ConfigureAwait(false))
         {
             status = resp.Status;
-            if (status == 304) return DiffOutcome.UpToDate;   // Not Modified = our revision is current
+            if (status == 304)   // Not Modified = our revision is current
+            {
+                await RefreshRollingHeaderAsync(playlistUri, ct).ConfigureAwait(false);
+                return DiffOutcome.UpToDate;
+            }
             if (status != 200)                                // 509 (revision too stale — editorial mixes) or anything else
             {
                 await FetchPlaylistAsync(playlistUri, ct).ConfigureAwait(false);
@@ -139,7 +149,11 @@ public sealed class PlaylistFetcher
             return DiffOutcome.FellBackToFull;
         }
 
-        if (slc.HasUpToDate && slc.UpToDate) return DiffOutcome.UpToDate;
+        if (slc.HasUpToDate && slc.UpToDate)
+        {
+            await RefreshRollingHeaderAsync(playlistUri, ct).ConfigureAwait(false);
+            return DiffOutcome.UpToDate;
+        }
 
         if (slc.Diff is { } diff)
         {
@@ -166,10 +180,22 @@ public sealed class PlaylistFetcher
             if (added.Count > 0) { await HydrateUrisAsync(added, ct).ConfigureAwait(false); _store.Bump(playlistUri); }
             if (ContainsUpdateList(mappedOps))
             {
+                // Best-effort: the ops already applied to the resident membership above, so a failed header re-fetch
+                // leaves a stale name/description/cover — annoying, not wrong — rather than losing the diff apply.
+                // Swallowing it SILENTLY (the old bare catch) hid exactly that staleness from every diagnostic; logging
+                // it here costs nothing on the happy path and gives support a trail when a playlist's header lags.
                 try { await FetchPlaylistHeaderAsync(playlistUri, ct).ConfigureAwait(false); }
-                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-                catch { }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    WaveeLog.Instance.Event(WaveeLogLevel.Warning, "playlist", "playlist.header.refetch.fail",
+                        "header re-fetch after diff failed", ex: ex, fields: [WaveeLogField.Of("uri", playlistUri)]);
+                }
             }
+            // No UPDATE_LIST op does not mean the header is current for a ROLLING-IDENTITY playlist (cause 4): the
+            // server can swap the whole edition without ever emitting one.
+            else await RefreshRollingHeaderAsync(playlistUri, ct).ConfigureAwait(false);
+            if (!PlaylistRevisions.Equal(rev, _store.PlaylistRevision(playlistUri))) _onRevisionChanged?.Invoke(playlistUri);
             return DiffOutcome.Applied;
         }
 
@@ -178,10 +204,35 @@ public sealed class PlaylistFetcher
             var members = AdoptSnapshot(playlistUri, slc, rev);
             await HydrateAsync(members, ct).ConfigureAwait(false);
             _store.Bump(playlistUri);
+            // AdoptSnapshot only wrote the header when this body carried Attributes — a rolling-identity playlist still
+            // needs the real header GET when it did not.
+            if (slc.Attributes is null) await RefreshRollingHeaderAsync(playlistUri, ct).ConfigureAwait(false);
             return DiffOutcome.FellBackToFull;
         }
 
-        return DiffOutcome.UpToDate;   // 200 with nothing actionable — nothing changed that we can see
+        // 200 with nothing actionable — nothing changed that we can see, EXCEPT possibly a rolling-identity header.
+        await RefreshRollingHeaderAsync(playlistUri, ct).ConfigureAwait(false);
+        return DiffOutcome.UpToDate;
+    }
+
+    /// <summary>Cause (4) of the stale-daylist-header defect: a rolling-identity playlist (<see
+    /// cref="PlaylistSnapshotFacts.IsRollingIdentity"/> — a daylist and its future siblings) can swap its entire
+    /// header (name, description, cover) for a new edition without a single op a <c>/diff</c> response would ever
+    /// carry. So every outcome above that did NOT just land a fresh header itself (a 304, an up-to-date verdict, an
+    /// APPLIED diff with no <c>UPDATE_LIST</c> op) asks for one here, unconditionally, for exactly this shape of
+    /// playlist. Best-effort and logged, mirroring the UPDATE_LIST re-fetch above it: a failed GET here must never
+    /// lose the diff/membership outcome the caller already has.</summary>
+    async Task RefreshRollingHeaderAsync(string playlistUri, CancellationToken ct)
+    {
+        var header = _store.GetPlaylist(playlistUri);
+        if (!PlaylistSnapshotFacts.IsRollingIdentity(header?.Format, header?.DaylistExpiresAtMs ?? 0)) return;
+        try { await FetchPlaylistHeaderAsync(playlistUri, ct).ConfigureAwait(false); }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            WaveeLog.Instance.Event(WaveeLogLevel.Warning, "playlist", "playlist.header.refetch.fail",
+                "rolling-identity header refresh failed", ex: ex, fields: [WaveeLogField.Of("uri", playlistUri)]);
+        }
     }
 
     /// <summary>The playlist4 revision wire string: 4-byte big-endian counter + the remaining bytes as lowercase hex,
@@ -210,13 +261,41 @@ public sealed class PlaylistFetcher
         byte[]? fallbackRevision = null)
     {
         var (members, revision) = PlaylistWireMapper.ParseContents(slc);
+        var previous = _store.GetPlaylist(playlistUri);
+        var priorRevision = _store.PlaylistRevision(playlistUri);
+        byte[]? storedRevision;
         using (_store.BeginBulk())
         {
             if (slc.Attributes is { } attr) _store.UpsertPlaylist(HeaderOf(playlistUri, attr, slc));
-            _store.SetMembership(playlistUri, members, StorableRevision(playlistUri, revision ?? fallbackRevision, "full-get"));
+            storedRevision = StorableRevision(playlistUri, revision ?? fallbackRevision, "full-get");
+            _store.SetMembership(playlistUri, members, storedRevision);
             _store.Bump(playlistUri);
         }
+        LogSnapshot(playlistUri, previous, _store.GetPlaylist(playlistUri), members, revision ?? fallbackRevision);
+        // A genuinely NEW revision — never a same-uri re-adopt of the one already resident — is the "this playlist's
+        // identity may have moved" signal the save-count cache has no other hook for.
+        if (!PlaylistRevisions.Equal(priorRevision, storedRevision)) _onRevisionChanged?.Invoke(playlistUri);
         return members;
+    }
+
+    static void LogSnapshot(string uri, Playlist? previous, Playlist? next,
+        IReadOnlyList<PlaylistMember> members, byte[]? revision)
+    {
+        if (!WaveeLog.Instance.IsEnabled(WaveeLogLevel.Info)) return;
+        WaveeLog.Instance.Event(WaveeLogLevel.Info, "playlist", "playlist.snapshot",
+            "playlist header and membership adopted",
+            fields:
+            [
+                WaveeLogField.Of("uri", uri),
+                WaveeLogField.Of("format", next?.Format ?? ""),
+                WaveeLogField.Of("rev", PlaylistSnapshotFacts.ShortRev(revision)),
+                WaveeLogField.Of("name", next?.Name ?? ""),
+                WaveeLogField.Of("nameChanged", PlaylistSnapshotFacts.NameChanged(previous?.Name, next?.Name)),
+                WaveeLogField.Of("cover", PlaylistSnapshotFacts.CoverId(next?.Cover)),
+                WaveeLogField.Of("sameArt", ImageSource.SameArt(previous?.Cover, next?.Cover)),
+                WaveeLogField.Of("members", members.Count),
+                WaveeLogField.Of("headUid", PlaylistSnapshotFacts.HeadUid(members)),
+            ]);
     }
 
     /// <summary>I1 — the gate every membership-revision write passes through. A candidate that is not the 24-byte

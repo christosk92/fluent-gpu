@@ -9,10 +9,12 @@ namespace Wavee;
 ///
 /// <para>Two deliberate constraints, both honesty rather than convenience:</para>
 /// <list type="bullet">
-/// <item><description>Every fact is derived from <c>Track.AddedAt</c> / <c>Artists</c> / <c>Tags</c> ONLY. There is no
-/// play-recency fact — <c>PlayLogStore</c> is a 200-entry FIFO ring, so "you have not played this in a year" cannot be
-/// answered truthfully and is therefore not asked. The rediscover angle is served by
-/// <see cref="ThisWeekLastYearWindow"/>, which is a pure <c>AddedAt</c> question.</description></item>
+/// <item><description>Time facts (the week spark, the since-line, the save decade) are derived from
+/// <c>Track.AddedAt</c> only. Artist and blend facts count every track — a bulk-republished editorial list still has
+/// artists and tags. Release-year facts key on <c>Track.Year</c>. There is no play-recency fact —
+/// <c>PlayLogStore</c> is a 200-entry FIFO ring, so "you have not played this in a year" cannot be answered truthfully
+/// and is therefore not asked. The rediscover angle is served by <see cref="ThisWeekLastYearWindow"/>, which is a
+/// pure <c>AddedAt</c> question.</description></item>
 /// <item><description>Every function that needs a clock TAKES one. Nothing here reads
 /// <c>DateTimeOffset.Now</c>/<c>UtcNow</c>; the component is the single clock reader, which is what makes the week
 /// bucketing, the DST/leap-year boundaries and the future-stamp clamp testable at all.</description></item>
@@ -26,8 +28,9 @@ public static class LikedFactsRules
     public static readonly DateTimeOffset UnknownStampFloor = DateTimeOffset.UnixEpoch;
 
     /// <summary>True when this track carries an <c>AddedAt</c> we can actually reason about (present, and past the
-    /// epoch sentinel). A track that fails this is excluded from every fact in this file rather than being counted
-    /// with a guessed date.</summary>
+    /// epoch sentinel). A track that fails this is excluded from TIME facts (week, since, save decade) rather than
+    /// being counted with a guessed date. Artist and blend facts do not use this gate — every credit and tag still
+    /// ranks.</summary>
     public static bool TryStamp(Track track, out DateTimeOffset addedAt)
     {
         addedAt = default;
@@ -179,9 +182,9 @@ public static class LikedFactsRules
     /// independent facets and DO combine (a week and an artist is a perfectly sensible question), so the list header
     /// has to be able to describe — and clear — each of them on its own.</summary>
     [Flags]
-    public enum LikedLens : byte { None = 0, Week = 1, Artist = 2, Tag = 4 }
+    public enum LikedLens : byte { None = 0, Week = 1, Artist = 2, Tag = 4, Year = 8, Tempo = 16 }
 
-    /// <summary>The lenses active in <paramref name="filter"/>. Only the three the rail can set: the flyout's own
+    /// <summary>The lenses active in <paramref name="filter"/>. Only the four the rail can set: the flyout's own
     /// facets are the flyout's to describe, and folding them in here would make the header claim a lens the rail never
     /// offered.</summary>
     public static LikedLens ActiveLenses(in TrackFilterState filter)
@@ -190,6 +193,8 @@ public static class LikedFactsRules
         if (filter.AddedAfterMs != 0L || filter.AddedBeforeMs != 0L) lenses |= LikedLens.Week;
         if (!string.IsNullOrEmpty(filter.ArtistId)) lenses |= LikedLens.Artist;
         if (!string.IsNullOrEmpty(filter.Tag)) lenses |= LikedLens.Tag;
+        if (filter.ReleaseYearMin != 0 || filter.ReleaseYearMax != 0) lenses |= LikedLens.Year;
+        if (filter.Tempo != TrackTempoBand.Any) lenses |= LikedLens.Tempo;
         return lenses;
     }
 
@@ -201,8 +206,19 @@ public static class LikedFactsRules
         LikedLens.Week => filter.WithAddedWindow(0L, 0L),
         LikedLens.Artist => filter.WithArtist(null),
         LikedLens.Tag => filter with { Tag = null },
+        LikedLens.Year => filter.WithReleaseYear(0, 0),
+        LikedLens.Tempo => filter with { Tempo = TrackTempoBand.Any },
         _ => filter,
     };
+
+    /// <summary>Is THIS tempo band the one currently lensing the list? <see cref="TrackTempoBand.Any"/> is never a lens.</summary>
+    public static bool IsTempoLens(in TrackFilterState filter, TrackTempoBand band)
+        => band != TrackTempoBand.Any && filter.Tempo == band;
+
+    /// <summary>Is THIS year bar the one currently lensing the list? Compared on the inclusive range itself, so a
+    /// one-year bar and a wide bin cannot light each other.</summary>
+    public static bool IsYearLens(in TrackFilterState filter, in YearBucket bucket)
+        => filter.ReleaseYearMin == bucket.YearMin && filter.ReleaseYearMax == bucket.YearMax;
 
     /// <summary>Distinct credited artists by liked-track count descending, ties broken by name (the
     /// <c>ContentFilterTags</c> stable-order rule — a tie that reshuffles on every refresh makes the face pile
@@ -221,7 +237,6 @@ public static class LikedFactsRules
         var reps = new Dictionary<string, ArtistRef>(StringComparer.Ordinal);
         for (int i = 0; i < tracks.Count; i++)
         {
-            if (!TryStamp(tracks[i], out _)) continue;
             var artists = tracks[i].Artists;
             if (artists is null) continue;
             for (int a = 0; a < artists.Count; a++)
@@ -389,7 +404,6 @@ public static class LikedFactsRules
         int tagged = 0;
         for (int i = 0; i < tracks.Count; i++)
         {
-            if (!TryStamp(tracks[i], out _)) continue;
             var tags = tracks[i].Tags;
             if (tags is not { Count: > 0 }) continue;               // null = not fetched, empty = genuinely none
             string primary = tags[0];
@@ -445,9 +459,9 @@ public static class LikedFactsRules
     /// <summary>The decade most of your likes were SAVED in (2010 reads as "the 2010s"), or null under
     /// <see cref="MinDecadeEvidence"/> stamped likes.
     ///
-    /// <para>Saved, not released: <c>Track</c> carries no release year, and the play log is a 200-entry ring, so this
-    /// is the only decade the data can honestly speak to. Ties go to the more recent decade — a library split evenly
-    /// across two decades is better described by the one it is still growing into.</para></summary>
+    /// <para>Saved, not released: <see cref="DominantReleaseDecade"/> is the catalogue-year analogue. Ties go to the
+    /// more recent decade — a library split evenly across two decades is better described by the one it is still
+    /// growing into.</para></summary>
     public static int? DominantDecade(IReadOnlyList<Track> tracks)
     {
         if (tracks is null || tracks.Count == 0) return null;
@@ -469,5 +483,505 @@ public static class LikedFactsRules
             if (kv.Value > bestCount || (kv.Value == bestCount && kv.Key > bestDecade))
                 (bestDecade, bestCount) = (kv.Key, kv.Value);
         return bestCount > 0 ? bestDecade : null;
+    }
+
+    // ── Stamp spread / release years ────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>True when usable <c>AddedAt</c> stamps land on at least two distinct UTC calendar days. A single
+    /// republish or copy instant is one timestamp on every row — that is not activity, and must not light a week
+    /// sparkline.</summary>
+    public static bool StampsSpread(IReadOnlyList<Track> tracks)
+    {
+        if (tracks is null || tracks.Count == 0) return false;
+
+        DateOnly first = default;
+        bool have = false;
+        for (int i = 0; i < tracks.Count; i++)
+        {
+            if (!TryStamp(tracks[i], out var at)) continue;
+            var day = DateOnly.FromDateTime(at.UtcDateTime);
+            if (!have) { first = day; have = true; }
+            else if (day != first) return true;
+        }
+        return false;
+    }
+
+    /// <summary>One bar of the release-year sparkline: an inclusive year range and how many tracks fall inside it.
+    /// A one-year bar has <c>YearMin == YearMax</c>; a wide bin (span &gt; 12) covers several years.</summary>
+    public readonly record struct YearBucket(int YearMin, int YearMax, int Count);
+
+    /// <summary>Twelve bars over the dated tracks' release years. Span ≤ 12: consecutive years covering
+    /// <c>[min, max]</c>, padded to twelve and centred (<c>start = Max(1, min - extra/2)</c>). Span &gt; 12: twelve
+    /// equal-width bins that partition <c>[min, max]</c>. Empty when nothing carries <c>Year &gt; 0</c>.
+    ///
+    /// <para>The peak bar is the mode — the bucket with the most tracks, ties going to the more recent bucket — so the
+    /// big numeral and the tallest bar cannot disagree.</para></summary>
+    public static IReadOnlyList<YearBucket> YearHistogram(IReadOnlyList<Track> tracks, int bars = 12)
+    {
+        if (tracks is null || tracks.Count == 0 || bars <= 0) return Array.Empty<YearBucket>();
+
+        int minY = 0, maxY = 0, dated = 0;
+        for (int i = 0; i < tracks.Count; i++)
+        {
+            int y = tracks[i].Year;
+            if (y <= 0) continue;
+            if (dated == 0) minY = maxY = y;
+            else { if (y < minY) minY = y; if (y > maxY) maxY = y; }
+            dated++;
+        }
+        if (dated == 0) return Array.Empty<YearBucket>();
+
+        var buckets = new YearBucket[bars];
+        int span = maxY - minY + 1;
+        if (span <= bars)
+        {
+            int extra = bars - span;
+            int start = Math.Max(1, minY - extra / 2);
+            for (int i = 0; i < bars; i++)
+            {
+                int year = start + i;
+                buckets[i] = new YearBucket(year, year, 0);
+            }
+        }
+        else
+        {
+            for (int i = 0; i < bars; i++)
+            {
+                int lo = minY + (int)((long)i * span / bars);
+                int hi = minY + (int)((long)(i + 1) * span / bars) - 1;
+                buckets[i] = new YearBucket(lo, hi, 0);
+            }
+        }
+
+        for (int i = 0; i < tracks.Count; i++)
+        {
+            int y = tracks[i].Year;
+            if (y <= 0) continue;
+            int idx = IndexOfYear(buckets, y);
+            if (idx < 0) continue;
+            var b = buckets[idx];
+            buckets[idx] = b with { Count = b.Count + 1 };
+        }
+        return buckets;
+    }
+
+    static int IndexOfYear(YearBucket[] buckets, int year)
+    {
+        for (int i = 0; i < buckets.Length; i++)
+            if (year >= buckets[i].YearMin && year <= buckets[i].YearMax) return i;
+        return -1;
+    }
+
+    /// <summary>The year the big numeral should name for <paramref name="bucket"/>: the bar itself when it is one
+    /// year, otherwise the modal year inside the bin (tie → more recent).</summary>
+    public static int PeakYear(IReadOnlyList<Track> tracks, in YearBucket bucket)
+    {
+        if (bucket.YearMin == bucket.YearMax) return bucket.YearMin;
+        if (tracks is null || tracks.Count == 0) return bucket.YearMax;
+
+        int bestYear = bucket.YearMax, bestCount = 0;
+        for (int y = bucket.YearMin; y <= bucket.YearMax; y++)
+        {
+            int n = 0;
+            for (int i = 0; i < tracks.Count; i++) if (tracks[i].Year == y) n++;
+            if (n > bestCount || (n == bestCount && y > bestYear)) { bestYear = y; bestCount = n; }
+        }
+        return bestYear;
+    }
+
+    /// <summary>True when at least <see cref="MinDecadeEvidence"/> tracks carry a known release year. Below that the
+    /// year sparkline is trivia, not a pattern — the same floor the save-decade fact uses.</summary>
+    public static bool HasReleaseYears(IReadOnlyList<Track> tracks)
+    {
+        if (tracks is null) return false;
+        int n = 0;
+        for (int i = 0; i < tracks.Count; i++)
+            if (tracks[i].Year > 0 && ++n >= MinDecadeEvidence) return true;
+        return false;
+    }
+
+    /// <summary>The decade most of the dated tracks were RELEASED in (2010 reads as "the 2010s"), or null under
+    /// <see cref="MinDecadeEvidence"/> tracks with <c>Year &gt; 0</c>. Ignores <c>AddedAt</c> — a 2024 add of a 2011
+    /// track is a 2010s release. Ties go to the more recent decade.</summary>
+    public static int? DominantReleaseDecade(IReadOnlyList<Track> tracks)
+    {
+        if (tracks is null || tracks.Count == 0) return null;
+
+        var counts = new Dictionary<int, int>();
+        int dated = 0;
+        for (int i = 0; i < tracks.Count; i++)
+        {
+            int y = tracks[i].Year;
+            if (y <= 0) continue;
+            dated++;
+            int decade = y / 10 * 10;
+            counts.TryGetValue(decade, out int n);
+            counts[decade] = n + 1;
+        }
+        if (dated < MinDecadeEvidence) return null;
+
+        int bestDecade = 0, bestCount = 0;
+        foreach (var kv in counts)
+            if (kv.Value > bestCount || (kv.Value == bestCount && kv.Key > bestDecade))
+                (bestDecade, bestCount) = (kv.Key, kv.Value);
+        return bestCount > 0 ? bestDecade : null;
+    }
+
+    /// <summary>The dated track with the oldest release year, or null when nothing carries <c>Year &gt; 0</c>. Ties
+    /// keep the first such row — input order is the list's own.</summary>
+    public static Track? OldestRelease(IReadOnlyList<Track> tracks)
+    {
+        if (tracks is null || tracks.Count == 0) return null;
+
+        Track? oldest = null;
+        int best = 0;
+        for (int i = 0; i < tracks.Count; i++)
+        {
+            int y = tracks[i].Year;
+            if (y <= 0) continue;
+            if (oldest is null || y < best) { oldest = tracks[i]; best = y; }
+        }
+        return oldest;
+    }
+
+    // ── Which facts EARN a card ─────────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>How a distribution fact renders: <see cref="Absent"/> (it cannot be answered honestly), a one-line
+    /// <see cref="Label"/> pill (one value dominates, or the values are too few for a shape), or the full
+    /// <see cref="Graph"/> card. ONE rule for every distribution, measured over the categories the card's own lens
+    /// offers — the twelve year buckets, the four tempo bands, the primary descriptors — so a label always names exactly
+    /// the filter that clicking it applies.</summary>
+    public enum FactShape : byte { Absent = 0, Label = 1, Graph = 2 }
+
+    /// <summary>Fewer known values than this and twelve bars are noise: 10–19 known is LABEL at most.</summary>
+    public const int MinGraphEvidence = 20;
+    /// <summary>A graph needs at least this many non-empty categories (the years card; the tempo card has only four
+    /// bands and asks for two — a bimodal 124/174 list IS a shape).</summary>
+    public const int MinGraphCategories = 3;
+    public const int MinTempoGraphCategories = 2;
+    /// <summary>Share of the tracks that must carry the value (tempo, years) for the fact to exist at all.</summary>
+    public const float MinCoverage = 0.60f;
+    /// <summary>Top-category share at or above which the fact collapses to a pill.</summary>
+    public const float YearsCap = 0.50f;
+    /// <summary>Tempo bands are 20–30 bpm wide, so a band has to hold more before the shape stops mattering.</summary>
+    public const float TempoCap = 0.70f;
+    public const float BlendCap = 0.85f;
+    /// <summary>Under this top share no style leads at all — "12 styles, none over 15 %" is a label, not a bar that is
+    /// 65 % "Other".</summary>
+    public const float BlendFlat = 0.15f;
+
+    /// <summary>THE resolver. <paramref name="known"/> = values present, <paramref name="total"/> = tracks,
+    /// <paramref name="categories"/> = non-empty lens categories, <paramref name="topShare"/> = the largest category's
+    /// share of the known values, <paramref name="cap"/> = the fact's dominance cap.</summary>
+    public static FactShape Shape(int known, int total, int categories, float topShare, float cap, int minCategories = MinGraphCategories)
+    {
+        if (known < MinDecadeEvidence || total <= 0) return FactShape.Absent;
+        if (known / (float)total < MinCoverage) return FactShape.Absent;
+        if (known < MinGraphEvidence || categories < minCategories || topShare >= cap) return FactShape.Label;
+        return FactShape.Graph;
+    }
+
+    /// <summary>How concentrated a distribution is over its categories: values known, non-empty categories, the
+    /// largest category (ties → the LATER index, so a year tie goes to the more recent bucket like the card's peak
+    /// rule) and its share of the known values.</summary>
+    public readonly record struct Dominance(int Known, int Categories, int TopIndex, float TopShare);
+
+    /// <summary>Years dominance measured over the histogram's OWN buckets — so a 1965–2024 list binned into twelve
+    /// five-year bars with most tracks in the last bar reads as dominated, exactly as its chart would look.</summary>
+    public static Dominance YearsDominance(IReadOnlyList<YearBucket> buckets)
+    {
+        if (buckets is null || buckets.Count == 0) return default;
+        int known = 0, cats = 0, top = -1, topCount = -1;
+        for (int i = 0; i < buckets.Count; i++)
+        {
+            int c = buckets[i].Count;
+            known += c;
+            if (c > 0) cats++;
+            if (c >= topCount) { topCount = c; top = i; }
+        }
+        return new Dominance(known, cats, top, known > 0 ? topCount / (float)known : 0f);
+    }
+
+    public static FactShape YearsShape(IReadOnlyList<Track> tracks, IReadOnlyList<YearBucket> buckets)
+    {
+        var d = YearsDominance(buckets);
+        return Shape(d.Known, tracks?.Count ?? 0, d.Categories, d.TopShare, YearsCap);
+    }
+
+    /// <summary>The four filter bands in <c>TrackTempoBand</c> order (Under90, 90–119, 120–139, 140+).</summary>
+    public const int TempoBandCount = 4;
+
+    /// <summary>Tracks per tempo band (<paramref name="counts"/> needs <see cref="TempoBandCount"/> slots), using the
+    /// filter's own boundary table (<c>TrackFilterModel.BandOf</c>). Returns how many tracks carry a tempo.</summary>
+    public static int TempoBandCounts(IReadOnlyList<Track> tracks, Span<int> counts)
+    {
+        counts.Clear();
+        int known = 0;
+        if (tracks is null) return 0;
+        for (int i = 0; i < tracks.Count; i++)
+        {
+            if (tracks[i].TempoBpm is not { } bpm || bpm <= 0d) continue;
+            var band = TrackFilterModel.BandOf(bpm);
+            if (band == TrackTempoBand.Any) continue;
+            counts[(int)band - 1]++;
+            known++;
+        }
+        return known;
+    }
+
+    public static Dominance TempoDominance(IReadOnlyList<Track> tracks) => TempoSummarize(tracks).Dominance;
+
+    public static FactShape TempoShape(IReadOnlyList<Track> tracks) => TempoSummarize(tracks).Shape;
+
+    /// <summary>Tempo summary: known / total counts, the LOWER median (an even count picks the lower middle — a real
+    /// track's tempo, never an average of two), and the range.</summary>
+    public readonly record struct TempoStats(int Known, int Total, double Median, double Min, double Max);
+
+    public static TempoStats TempoStatistics(IReadOnlyList<Track> tracks) => TempoSummarize(tracks).Stats;
+
+    /// <summary>A content fingerprint of the tempos in a list — <see cref="Known"/> plus an order-independent hash of
+    /// the rounded tempos. Two lists with the same tempos fingerprint equal even when they are different list
+    /// INSTANCES, which is what lets a card key its geometry on the tempos themselves: the detail page rebuilds its
+    /// track list on every hydration pass (descriptors, play counts, identity…), and a plot keyed on the list would
+    /// re-mint its paths every time although no tempo changed.</summary>
+    public readonly record struct TempoFingerprint(int Known, long Hash);
+
+    /// <summary>Everything the rail wants to know about tempo, from ONE pass over the list: the statistics (median
+    /// from an integer-bpm histogram — no sort, no allocation), the four band counts, the dominance/shape decision and
+    /// the content fingerprint.</summary>
+    public readonly record struct TempoSummary(TempoStats Stats, int Under90, int From90To119, int From120To139, int From140AndUp,
+                                               Dominance Dominance, FactShape Shape, TempoFingerprint Fingerprint)
+    {
+        /// <summary>The band count by <c>(int)TrackTempoBand - 1</c> index.</summary>
+        public int Count(int bandIndex) => bandIndex switch { 0 => Under90, 1 => From90To119, 2 => From120To139, 3 => From140AndUp, _ => 0 };
+    }
+
+    const int MaxBpmBin = 400;
+
+    public static TempoSummary TempoSummarize(IReadOnlyList<Track> tracks)
+    {
+        int total = tracks?.Count ?? 0;
+        if (total == 0) return new TempoSummary(default, 0, 0, 0, 0, new Dominance(0, 0, -1, 0f), FactShape.Absent, default);
+
+        Span<int> bins = stackalloc int[MaxBpmBin + 1];
+        Span<int> bands = stackalloc int[TempoBandCount];
+        int known = 0;
+        double min = double.MaxValue, max = double.MinValue;
+        long hash = 0;
+        for (int i = 0; i < total; i++)
+        {
+            if (tracks![i].TempoBpm is not { } bpm || bpm <= 0d || double.IsNaN(bpm)) continue;
+            var band = TrackFilterModel.BandOf(bpm);
+            if (band == TrackTempoBand.Any) continue;
+            bands[(int)band - 1]++;
+            bins[Math.Clamp((int)Math.Round(bpm), 0, MaxBpmBin)]++;
+            if (bpm < min) min = bpm;
+            if (bpm > max) max = bpm;
+            hash += Mix((long)Math.Round(bpm * 10d));
+            known++;
+        }
+
+        int cats = 0, top = -1, topCount = -1;
+        for (int i = 0; i < bands.Length; i++)
+        {
+            if (bands[i] > 0) cats++;
+            if (bands[i] > topCount) { topCount = bands[i]; top = i; }   // first wins a tie: the slower band
+        }
+        var dominance = new Dominance(known, cats, top, known > 0 ? topCount / (float)known : 0f);
+        var shape = Shape(known, total, cats, dominance.TopShare, TempoCap, MinTempoGraphCategories);
+        var fingerprint = new TempoFingerprint(known, hash);
+        if (known == 0)
+            return new TempoSummary(new TempoStats(0, total, 0d, 0d, 0d), 0, 0, 0, 0, dominance, shape, fingerprint);
+
+        // Lower median off the histogram: the first bin whose cumulative count reaches the lower-middle rank.
+        int rank = (known + 1) / 2, seen = 0, median = 0;
+        for (int b = 0; b <= MaxBpmBin; b++) { seen += bins[b]; if (seen >= rank) { median = b; break; } }
+        var stats = new TempoStats(known, total, median, min, max);
+        return new TempoSummary(stats, bands[0], bands[1], bands[2], bands[3], dominance, shape, fingerprint);
+    }
+
+    public static TempoFingerprint FingerprintTempo(IReadOnlyList<Track> tracks) => TempoSummarize(tracks).Fingerprint;
+
+    static long Mix(long v)
+    {
+        ulong x = (ulong)v * 0x9E3779B97F4A7C15UL;
+        x ^= x >> 29; x *= 0xBF58476D1CE4E5B9UL; x ^= x >> 32;
+        return (long)x;
+    }
+
+    /// <summary>The plot's inputs, in list order: every known tempo into <paramref name="bpm"/> and its Camelot colour
+    /// (ARGB, 0 = none) into <paramref name="argb"/>. Returns the count written (≤ both spans' lengths).</summary>
+    public static int TempoValues(IReadOnlyList<Track> tracks, Span<float> bpm, Span<uint> argb)
+    {
+        int n = 0;
+        if (tracks is null) return 0;
+        for (int i = 0; i < tracks.Count && n < bpm.Length && n < argb.Length; i++)
+        {
+            if (tracks[i].TempoBpm is not { } t || t <= 0d) continue;
+            bpm[n] = (float)t;
+            argb[n] = tracks[i].CamelotColor ?? 0u;
+            n++;
+        }
+        return n;
+    }
+
+    /// <summary>The blend's concentration over primary descriptors: how many tracks are tagged, how many descriptors
+    /// clear the evidence floor, how many distinct descriptors there are, and the leading one with its share.
+    /// <see cref="Flat"/> = no style leads (top share under <see cref="BlendFlat"/>).</summary>
+    public readonly record struct BlendDominance(int Tagged, int AboveFloor, int Styles, string? TopTitle, int TopCount, float TopShare, bool Flat);
+
+    public static BlendDominance BlendsDominance(IReadOnlyList<Track> tracks)
+    {
+        if (tracks is null || tracks.Count == 0) return default;
+        var (ranked, tagged, aboveFloor) = Partition(tracks);
+        return DominanceOf(ranked, tagged, aboveFloor);
+    }
+
+    static BlendDominance DominanceOf(List<KeyValuePair<string, int>> ranked, int tagged, int aboveFloor)
+    {
+        if (aboveFloor == 0 || tagged == 0) return new BlendDominance(tagged, aboveFloor, ranked.Count, null, 0, 0f, false);
+        float share = ranked[0].Value / (float)tagged;
+        return new BlendDominance(tagged, aboveFloor, ranked.Count, ranked[0].Key, ranked[0].Value, share, share < BlendFlat);
+    }
+
+    /// <summary>The blend keeps its existing evidence floor (a descriptor needs <c>ContentFilterTags.MinTrackCount</c>
+    /// carriers to be named at all); on top of it, one descriptor at or above <see cref="BlendCap"/> — or none reaching
+    /// <see cref="BlendFlat"/> — collapses the bar to a pill.</summary>
+    public static FactShape BlendShape(IReadOnlyList<Track> tracks) => ShapeOf(BlendsDominance(tracks));
+
+    static FactShape ShapeOf(in BlendDominance d)
+    {
+        if (d.AboveFloor == 0) return FactShape.Absent;
+        return d.TopShare >= BlendCap || d.Flat ? FactShape.Label : FactShape.Graph;
+    }
+
+    /// <summary>The per-page shape latch: a fact may upgrade (Absent → Label → Graph) while a page is open, never
+    /// downgrade — a straggler hydration batch cannot fold a card back into a pill.</summary>
+    public static FactShape Latch(FactShape previous, FactShape current) => current > previous ? current : previous;
+
+    /// <summary>True when two track lists are the same rows — the same instance, or the same count with every row
+    /// reference-equal or value-equal (<c>Track</c> is a record over reused store rows). The detail page uses it to
+    /// republish the PREVIOUS list instance after a refresh pass that landed nothing for this list, so every consumer
+    /// keyed on the list reference skips the pass.</summary>
+    public static bool TracksEquivalent(IReadOnlyList<Track>? a, IReadOnlyList<Track>? b)
+    {
+        if (ReferenceEquals(a, b)) return true;
+        if (a is null || b is null || a.Count != b.Count) return false;
+        for (int i = 0; i < a.Count; i++)
+        {
+            var x = a[i];
+            var y = b[i];
+            if (ReferenceEquals(x, y)) continue;
+            if (x is null || y is null || !x.Equals(y)) return false;
+        }
+        return true;
+    }
+
+    // ── The week card earns its card ────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>Fewer adds than this in the whole 12-week window and the strip is a flat line with one blip.</summary>
+    public const int MinWeekEvidence = 3;
+
+    /// <summary>ABSENT when nothing was added in the window (the strip would be all baseline and the numeral "+0"),
+    /// LABEL when the adds are too few or all in one bucket to make a shape, GRAPH otherwise.</summary>
+    public static FactShape WeekShape(IReadOnlyList<WeekBucket> weeks)
+    {
+        if (weeks is null || weeks.Count == 0) return FactShape.Absent;
+        int adds = 0, active = 0;
+        for (int i = 0; i < weeks.Count; i++)
+        {
+            int c = weeks[i].Count;
+            adds += c;
+            if (c > 0) active++;
+        }
+        if (adds == 0) return FactShape.Absent;
+        return adds < MinWeekEvidence || active < 2 ? FactShape.Label : FactShape.Graph;
+    }
+
+    /// <summary>The newest usable stamp in the list — "last add Jul 12" when the week card has no shape to show.</summary>
+    public static DateTimeOffset? LatestStamp(IReadOnlyList<Track> tracks)
+    {
+        if (tracks is null) return null;
+        DateTimeOffset? latest = null;
+        for (int i = 0; i < tracks.Count; i++)
+            if (TryStamp(tracks[i], out var at) && (latest is null || at > latest)) latest = at;
+        return latest;
+    }
+
+    /// <summary>True when any track carries a keyed artist credit — the allocation-free "would the artists card mount"
+    /// question (<see cref="TopArtists"/> answers it too, with two dictionaries and a sort).</summary>
+    public static bool AnyArtistCredit(IReadOnlyList<Track> tracks)
+    {
+        if (tracks is null) return false;
+        for (int i = 0; i < tracks.Count; i++)
+        {
+            var artists = tracks[i].Artists;
+            if (artists is null) continue;
+            for (int a = 0; a < artists.Count; a++)
+                if (ArtistKey(artists[a]).Length > 0) return true;
+        }
+        return false;
+    }
+
+    // ── One pass per list ───────────────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>Every list-level fact the rail draws, computed ONCE per track-list instance (the panel memoises it on
+    /// the list reference): the year histogram and its shape, the tempo summary, the blend partition (shares, dominance,
+    /// shape — one <c>Partition</c>, not three) and the ranked artists. The standalone rule functions stay for the
+    /// tests and for callers that want one answer; this is the rail's bulk path.</summary>
+    public sealed class FactsSummary
+    {
+        public required IReadOnlyList<YearBucket> YearBuckets { get; init; }
+        public required Dominance YearsDominance { get; init; }
+        public required FactShape YearsShape { get; init; }
+        public required TempoSummary Tempo { get; init; }
+        public required IReadOnlyList<TagShare> BlendShares { get; init; }
+        public required BlendDominance BlendDominance { get; init; }
+        public required FactShape BlendShape { get; init; }
+        public required IReadOnlyList<ArtistCount> Artists { get; init; }
+        public required bool AnyStamped { get; init; }
+        public required bool StampsSpread { get; init; }
+    }
+
+    public static FactsSummary Summarize(IReadOnlyList<Track> tracks, int yearBars = 12, int blendSlices = 5, int artistCap = 40)
+    {
+        tracks ??= Array.Empty<Track>();
+        var buckets = YearHistogram(tracks, yearBars);
+        var yd = YearsDominance(buckets);
+
+        IReadOnlyList<TagShare> shares = Array.Empty<TagShare>();
+        BlendDominance bd = default;
+        if (tracks.Count > 0)
+        {
+            var (ranked, tagged, aboveFloor) = Partition(tracks);
+            bd = DominanceOf(ranked, tagged, aboveFloor);
+            if (aboveFloor > 0 && blendSlices > 0)
+            {
+                int slices = Math.Min(blendSlices, aboveFloor);
+                var s = new TagShare[slices];
+                for (int i = 0; i < slices; i++) s[i] = new TagShare(ranked[i].Key, ranked[i].Value, ranked[i].Value / (float)tagged);
+                shares = s;
+            }
+        }
+
+        return new FactsSummary
+        {
+            YearBuckets = buckets,
+            YearsDominance = yd,
+            YearsShape = Shape(yd.Known, tracks.Count, yd.Categories, yd.TopShare, YearsCap),
+            Tempo = TempoSummarize(tracks),
+            BlendShares = shares,
+            BlendDominance = bd,
+            BlendShape = ShapeOf(bd),
+            Artists = TopArtists(tracks, artistCap),
+            AnyStamped = AnyStampedTrack(tracks),
+            StampsSpread = StampsSpread(tracks),
+        };
+    }
+
+    static bool AnyStampedTrack(IReadOnlyList<Track> tracks)
+    {
+        for (int i = 0; i < tracks.Count; i++) if (TryStamp(tracks[i], out _)) return true;
+        return false;
     }
 }

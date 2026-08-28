@@ -2,8 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
-using System.Reflection;
+using System.IO;
 using System.Runtime.InteropServices;
+using System.Threading;
+using System.Threading.Tasks;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
@@ -12,6 +14,7 @@ using FluentGpu.Localization;
 using FluentGpu.Rhi.D3D12;
 using FluentGpu.Signals;
 using Wavee.Backend.Audio;
+using Wavee.Core;
 using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
@@ -20,7 +23,18 @@ sealed partial class SettingsPage
 {
     const string FeedbackUrl = "https://github.com/christosk92/fluent-gpu/issues";
     const string WebsiteUrl = "https://github.com/christosk92/fluent-gpu";
+    const string PrivacyUrl = "https://github.com/christosk92/fluent-gpu/blob/main/PRIVACY.md";
 
+    /// <summary>The generated notices file, staged next to Wavee.exe by ops/build/generate-third-party-notices.ps1
+    /// (called from both publish-wavee-aot.ps1 and pack-wavee-msix.ps1). A plain `dotnet run` has no such file, which
+    /// is exactly what <c>Strings.Settings.About.NoticesMissing</c> says.</summary>
+    const string NoticesFileName = "THIRD-PARTY-NOTICES.txt";
+
+    static string NoticesPath => Path.Combine(AppContext.BaseDirectory, NoticesFileName);
+
+    /// <summary>Wavee's OWN license. Everything else — every package, every vendored component — is enumerated by the
+    /// generated notices file rather than by a hand-maintained list here: a list in code drifts the moment a
+    /// PackageReference changes, and the drift is invisible until someone audits it.</summary>
     static readonly (string Name, string Kind, string Body)[] s_licenses =
     [
         ("Wavee", "MIT",
@@ -36,16 +50,6 @@ sealed partial class SettingsPage
             "AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF " +
             "CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER " +
             "DEALINGS IN THE SOFTWARE."),
-        ("Google.Protobuf 3.35.0", "BSD-3-Clause",
-            "Protocol Buffers runtime for C#. Copyright © Google LLC. Used for the Spotify wire protocol."),
-        ("Microsoft.Data.Sqlite 10.0.8 · SQLitePCLRaw 3.0.0", "MIT",
-            "SQLite data provider used for the library database. Copyright © .NET Foundation and contributors. " +
-            "SQLite itself is public domain."),
-        ("NVorbis (vendored)", "MIT",
-            "Pure-managed Ogg Vorbis decoder. Copyright © Andrew Ward and contributors."),
-        ("ZstdSharp.Port 0.8.6 · FlacBox 1.0.0 · ProtectedData 9.0", "MIT / BSD",
-            "Zstandard decompression (© Oleg Stepanischev), FLAC decoding, and Windows DPAPI credential protection " +
-            "(© .NET Foundation)."),
     ];
 
     static SettingsExpander.Style LicenseExpanderStyle => new()
@@ -60,21 +64,9 @@ sealed partial class SettingsPage
         },
     };
 
-    static string AppVersion
-    {
-        get
-        {
-            string? v = typeof(SettingsPage).Assembly
-                .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
-            if (string.IsNullOrEmpty(v)) return "dev";
-            int plus = v.IndexOf('+');
-            return plus > 0 ? v[..plus] : v;
-        }
-    }
-
     Element AboutTab(Services? svc, InputHooks hooks)
     {
-        string version = AppVersion;
+        string version = AppVersion.Current;
         string os = RuntimeInformation.OSDescription + " (" + RuntimeInformation.OSArchitecture + ")";
         string dotnet = ".NET " + Environment.Version;
 
@@ -92,29 +84,38 @@ sealed partial class SettingsPage
                 isClosable: false),
             SettingsSectionHeader("Wavee right now", Icons.Info),
             Embed.Comp(() => new WaveeNowReceipts()),
-            AboutLinksCard(hooks, DiagInfo, os),
+            AboutLinksCard(svc, hooks, DiagInfo, os),
             SettingsSectionHeader(Loc.Get(Strings.Settings.About.Licenses), Icons.Document),
         };
         kids.AddRange(LicenseExpanders());
         return SettingsTabStack(kids.ToArray());
     }
 
-    static Element AboutHero(string version) => new BoxEl
+    static Element AboutHero(string version)
     {
-        Direction = 1, Gap = Spacing.S, AlignItems = FlexAlign.Center,
-        Padding = new Edges4(Spacing.XL, Spacing.L, Spacing.XL, Spacing.L),
-        Corners = CornerRadius4.All(Radii.Card),
-        Fill = Tok.FillCardSecondary, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
-        Children =
-        [
+        var kids = new List<Element>
+        {
             Icon(Icons.MusicNote, 48f, Tok.AccentDefault),
             new TextEl("Wavee") { Size = 28f, Weight = 700, Color = Tok.TextPrimary },
             new TextEl(Strings.Settings.About.Version(version)) { Size = 13f, Weight = 600, Color = Tok.TextSecondary },
-            new TextEl("© 2026 Christos Karapasias") { Size = 12f, Color = Tok.TextTertiary },
-        ],
-    };
+        };
+        // An unstamped build is captioned so a screenshot of it is never mistaken for a shipped version.
+        if (AppVersion.IsDev)
+            kids.Add(new TextEl(Loc.Get(Strings.Settings.About.DevBuild))
+                { Size = 12f, Weight = 600, Color = Tok.TextTertiary, Wrap = TextWrap.Wrap });
+        kids.Add(new TextEl("© 2026 Christos Karapasias") { Size = 12f, Color = Tok.TextTertiary });
 
-    static Element AboutLinksCard(InputHooks hooks, Func<string> diagInfo, string os) => SettingsCard.Create(new SettingsCard.Options
+        return new BoxEl
+        {
+            Direction = 1, Gap = Spacing.S, AlignItems = FlexAlign.Center,
+            Padding = new Edges4(Spacing.XL, Spacing.L, Spacing.XL, Spacing.L),
+            Corners = CornerRadius4.All(Radii.Card),
+            Fill = Tok.FillCardSecondary, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
+            Children = kids.ToArray(),
+        };
+    }
+
+    static Element AboutLinksCard(Services? svc, InputHooks hooks, Func<string> diagInfo, string os) => SettingsCard.Create(new SettingsCard.Options
     {
         Alignment = SettingsCard.ContentAlignment.Left,
         Content = new BoxEl
@@ -122,8 +123,11 @@ sealed partial class SettingsPage
             Direction = 1, Gap = 4f, Margin = new Edges4(-12f, 0f, 0f, 0f),
             Children =
             [
+                HyperlinkButton.Create(Loc.Get(Strings.Settings.About.CheckForUpdates), () => CheckForUpdates(svc)),
                 HyperlinkButton.Create(Loc.Get(Strings.Settings.About.SendFeedback), FeedbackUrl),
                 HyperlinkButton.Create(Loc.Get(Strings.Settings.About.Website), WebsiteUrl),
+                HyperlinkButton.Create(Loc.Get(Strings.Settings.About.PrivacyPolicy), PrivacyUrl),
+                HyperlinkButton.Create(Loc.Get(Strings.Settings.About.ThirdPartyNotices), OpenThirdPartyNotices),
                 HyperlinkButton.Create(Loc.Get(Strings.Settings.About.CopyDiagnostics), () =>
                 {
                     hooks.Clipboard?.SetText(diagInfo());
@@ -131,18 +135,98 @@ sealed partial class SettingsPage
                 }),
                 HyperlinkButton.Create(Loc.Get(Strings.Settings.About.OpenDataFolder),
                     () => SettingsShared.OpenFolder(SettingsShared.AppDataRoot)),
+                new TextEl(Loc.Get(Strings.Settings.About.Unofficial)) { Size = 12f, Color = Tok.TextTertiary, Wrap = TextWrap.Wrap },
                 new TextEl(os) { Size = 12f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap },
                 new TextEl(SettingsShared.AppDataRoot) { Size = 12f, Color = Tok.TextSecondary, FontFamily = "Cascadia Code", Wrap = TextWrap.Wrap },
             ],
         },
     });
 
+    /// <summary>Runs one feed check and reports its OUTCOME (never its progress: the state machine lives in the
+    /// service). The await happens off the UI thread, so the report hops back through the host poster —
+    /// <c>HostDispatch.Current</c> is null only headlessly, where running inline is correct.</summary>
+    static void CheckForUpdates(Services? svc)
+    {
+        if (svc?.AppUpdate is not { } upd)
+        {
+            Toast.Show(Loc.Get(Strings.Settings.About.UpdateCheckFailed), new ToastOptions { Severity = InfoBarSeverity.Error });
+            return;
+        }
+
+        Toast.Show(Loc.Get(Strings.Settings.About.Checking), new ToastOptions { Severity = InfoBarSeverity.Informational });
+        _ = Task.Run(async () =>
+        {
+            try { await upd.CheckAsync(CancellationToken.None).ConfigureAwait(false); }
+            catch { /* the seam swallows its own failures; a throwing impl still lands on the Failed branch below */ }
+
+            void Report()
+            {
+                switch (upd.Current)
+                {
+                    case AppUpdateState.Available:
+                        Toast.Show(Strings.Settings.About.UpdateAvailable(upd.Version ?? ""), new ToastOptions
+                        {
+                            Severity = InfoBarSeverity.Success,
+                            ActionLabel = Loc.Get(Strings.Notifications.Update.Download),
+                            OnAction = () => _ = upd.DownloadAsync(CancellationToken.None),
+                        });
+                        break;
+                    case AppUpdateState.Failed:
+                        Toast.Show(Loc.Get(Strings.Settings.About.UpdateCheckFailed), new ToastOptions { Severity = InfoBarSeverity.Error });
+                        break;
+                    default:
+                        Toast.Show(Loc.Get(Strings.Settings.About.UpToDate), new ToastOptions { Severity = InfoBarSeverity.Success });
+                        break;
+                }
+            }
+
+            var post = FluentGpu.Hooks.HostDispatch.Current;
+            if (post is null) Report(); else post(Report);
+        });
+    }
+
+    /// <summary>Open the shipped notices file with the shell. Absent in a dev run (it is generated at publish/pack
+    /// time), which the toast says plainly rather than opening nothing.</summary>
+    static void OpenThirdPartyNotices()
+    {
+        string path = NoticesPath;
+        if (!File.Exists(path))
+        {
+            Toast.Show(Loc.Get(Strings.Settings.About.NoticesMissing), new ToastOptions { Severity = InfoBarSeverity.Informational });
+            return;
+        }
+        try { Process.Start(new ProcessStartInfo(path) { UseShellExecute = true }); }
+        catch
+        {
+            Toast.Show(Loc.Get(Strings.Settings.About.NoticesMissing), new ToastOptions { Severity = InfoBarSeverity.Warning });
+        }
+    }
+
+    // Read once per process: the file is stamped at publish time and cannot change under a running build, and the
+    // About tab re-renders on every theme/tab tick — a File.ReadAllText per render would be disk I/O on the UI thread.
+    static string? s_notices;
+
+    static string ReadThirdPartyNotices()
+    {
+        if (s_notices is not null) return s_notices;
+        string text;
+        try
+        {
+            string path = NoticesPath;
+            text = File.Exists(path) ? File.ReadAllText(path) : Loc.Get(Strings.Settings.About.NoticesMissing);
+        }
+        catch { text = Loc.Get(Strings.Settings.About.NoticesMissing); }   // unreadable reads the same as absent
+        s_notices = text;
+        return text;
+    }
+
     static Element[] LicenseExpanders()
     {
         var style = LicenseExpanderStyle;
-        return
-        [
-            ..s_licenses.Select(lic => SettingsExpander.Create(new SettingsExpander.Options
+        var items = new List<Element>();
+        foreach (var lic in s_licenses)
+        {
+            items.Add(SettingsExpander.Create(new SettingsExpander.Options
             {
                 Header = lic.Name,
                 Description = lic.Kind,
@@ -155,8 +239,24 @@ sealed partial class SettingsPage
                         alignment: SettingsCard.ContentAlignment.Left,
                         style: style),
                 ],
-            })),
-        ];
+            }));
+        }
+        // ONE expander for everything third-party, read from the generated file rather than restated in code.
+        items.Add(SettingsExpander.Create(new SettingsExpander.Options
+        {
+            Header = Loc.Get(Strings.Settings.About.ThirdPartyNotices),
+            Description = NoticesFileName,
+            InitiallyExpanded = false,
+            Style = style,
+            Items =
+            [
+                SettingsExpander.Item("", null,
+                    new TextEl(ReadThirdPartyNotices()) { Size = 12f, Color = Tok.TextTertiary, FontFamily = "Cascadia Code", Wrap = TextWrap.Wrap },
+                    alignment: SettingsCard.ContentAlignment.Left,
+                    style: style),
+            ],
+        }));
+        return items.ToArray();
     }
 
     /// <summary>

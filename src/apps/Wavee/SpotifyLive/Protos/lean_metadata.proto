@@ -29,9 +29,10 @@ message LeanArtistRef {          // an embedded artist: just gid + name
     optional string name = 2;
 }
 
-message LeanAlbumRef {           // a track's embedded album: gid + name + cover
+message LeanAlbumRef {           // a track's embedded album: gid + name + cover + date (same field numbers as metadata.Album)
     optional bytes gid = 1;
     optional string name = 2;
+    optional LeanDate date = 6;  // album.date — TrackV4 always carries year; we used to skip it
     optional LeanImageGroup cover_group = 17;
 }
 

@@ -9,7 +9,8 @@ namespace Wavee.Backend.Spotify;
 // SpotifyRuntimeIdentity until manifest-driven pins land.
 public static class SpotifyHeaders
 {
-    public const string ClientId = "65b708073fc0480ea92a077233ca87bd";     // Spotify's public desktop client id
+    /// <summary>Spotify's public desktop client id. Single owner: <see cref="SpotifyRuntimeIdentity.KeymasterClientId"/>.</summary>
+    public const string ClientId = SpotifyRuntimeIdentity.KeymasterClientId;
     public static string ClientVersion => SpotifyRuntimeIdentityHost.Current.ClientVersion;
     public static string AppPlatform => SpotifyRuntimeIdentity.AppPlatform;
     public static string AppVersion => SpotifyRuntimeIdentityHost.Current.AppVersion;

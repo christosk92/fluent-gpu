@@ -135,10 +135,16 @@ sealed class LibraryV3Header : Component
             rows.Add(new MenuFlyoutItem(Loc.Get(Strings.Sidebar.V3.Collapse), Icons.ChevronLeft, prefs is not null,
                                         _session.Collapse));
 
-        rows.Add(MenuFlyoutItem.Separator);
-        // Deliberately unlocalized, matching Classic's DevToolsRow: this exists so the dev entry point stays reachable in
-        // V3, and it is not product surface.
-        rows.Add(new MenuFlyoutItem("API Console", Icons.Code, true, () => _session.Go("api-console", null)));
+        // DEVELOPER SURFACE, hidden unless developer mode is on (Settings ▸ Diagnostics) — the same gate Classic's
+        // Tools section rides. Deliberately unlocalized, matching Classic's DevToolsRow: it is a dev entry point, not
+        // product surface. `Peek`, not `Value`: this list is built at OPEN time (a click handler), not inside a render,
+        // so there is nothing to subscribe — the next open simply reads the switch again.
+        if (DeveloperMode.Enabled.Peek())
+        {
+            rows.Add(MenuFlyoutItem.Separator);
+            rows.Add(new MenuFlyoutItem("API Console", Icons.Code, true,
+                                        () => _session.Go(DeveloperMode.ApiConsoleRoute, null)));
+        }
         return rows;
     }
 }

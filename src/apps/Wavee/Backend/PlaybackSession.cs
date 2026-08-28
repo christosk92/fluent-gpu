@@ -586,13 +586,41 @@ public sealed class PlaybackSession
 
     /// <summary>Apply an inbound set_queue: replace the user queue (provider:"queue" rows, uid-preserving; uid:"" mints)
     /// and the upcoming context/autoplay/marker rows. Local history is untouched (not driven by wire prev_tracks).
-    /// Current is untouched (set_queue never changes the playing track).</summary>
+    /// Current is untouched (set_queue never changes the playing track).
+    /// <para>A wire set_queue carries uri/uid only — never metadata — so a row that survives the rebuild (the common
+    /// reorder case) is matched against what we already hold (by uid, then uri) and reuses its resolved
+    /// <see cref="Track"/> instead of falling back to <see cref="ContextResolve.Synthetic"/>, which is what used to turn
+    /// every rebuilt row into its own bare uri. A row we genuinely never held before still synthesizes.</para>
+    /// <para>Separately, when the incoming context/autoplay rows are a PERMUTATION of the ones already in
+    /// <see cref="_naturalOrder"/> (same identity set, just reordered — a shuffle toggle or a Connect-side reorder),
+    /// the existing <see cref="SessionItem"/> instances are reused verbatim and <see cref="_naturalOrder"/> is left
+    /// untouched, so a later shuffle-off (<see cref="RestoreOriginalOrder"/>) still restores the true pre-shuffle
+    /// order instead of re-deriving one from whatever order this set_queue happened to carry. Only a genuinely new
+    /// row set (a row added or dropped) rebuilds it.</para></summary>
     public QueueSnapshot ApplySetQueue(IReadOnlyList<QueueWireEntry> prev, IReadOnlyList<QueueWireEntry> next, string revision)
     {
         _clusterRevision = revision ?? "";
+
+        // Index every row we already hold (by uid, then by uri) BEFORE anything is cleared.
+        var byUid = new Dictionary<string, Track>();
+        var byUri = new Dictionary<string, Track>();
+        foreach (var it in _userQueue) IndexExistingTrack(it, byUid, byUri);
+        foreach (var it in _context) IndexExistingTrack(it, byUid, byUri);
+
+        // A row we've never held before still doesn't have to fall back to ContextResolve.Synthetic: the wire itself
+        // carries display metadata inline (title/artist/album/duration/image), and the controller has already parsed
+        // it into a real Track on the QueueWireEntry. Seed the SAME lookup maps ResolveExistingTrack falls back to —
+        // via TryAdd, so a Track we already hold (resolved through the catalogue, possibly richer still) always wins
+        // over the wire's own copy — rather than widen ResolveExistingTrack's signature for it.
+        foreach (var e in prev) IndexWireTrack(e, byUid, byUri);
+        foreach (var e in next) IndexWireTrack(e, byUid, byUri);
+
+        var naturalByKey = KeyByIdentity(_naturalOrder);
+        bool keepNaturalOrder = naturalByKey.Count > 0 && IsPermutationOfNaturalOrder(next, naturalByKey);
+
         _userQueue.Clear();
         _context.Clear();
-        _naturalOrder.Clear();
+        if (!keepNaturalOrder) _naturalOrder.Clear();
         _autoplayContextUri = null;
 
         foreach (var e in next)
@@ -603,7 +631,8 @@ public sealed class PlaybackSession
                 string uid = e.Uid;
                 if (string.IsNullOrEmpty(uid)) uid = "q" + (_nextQueueUid++);
                 else BumpQueueCursor(uid);
-                _userQueue.Add(new SessionItem(MintId(), ContextResolve.Synthetic(e.Uri), uid, QueueProvider.Queue, kind, null, e.Metadata));
+                var track = ResolveExistingTrack(e.Uid, e.Uri, byUid, byUri);
+                _userQueue.Add(new SessionItem(MintId(), track, uid, QueueProvider.Queue, kind, null, e.Metadata));
             }
             else
             {
@@ -611,13 +640,72 @@ public sealed class PlaybackSession
                     : IsAutoplayMeta(e.Metadata) ? QueueProvider.Autoplay : QueueProvider.Context;
                 if (provider == QueueProvider.Autoplay && _autoplayContextUri is null && e.Metadata is { } m && m.TryGetValue("context_uri", out var cu))
                     _autoplayContextUri = cu;
-                var it = new SessionItem(MintId(), ContextResolve.Synthetic(e.Uri), e.Uid, provider, kind, _contextUri, e.Metadata);
-                _naturalOrder.Add(it);
+
+                SessionItem it;
+                if (keepNaturalOrder && naturalByKey.TryGetValue(IdentityKey(e.Uid, e.Uri), out var reused))
+                {
+                    it = reused;   // same instance as in _naturalOrder — keeps their ids in lockstep (§ MoveItem/Reshuffle)
+                }
+                else
+                {
+                    var track = ResolveExistingTrack(e.Uid, e.Uri, byUid, byUri);
+                    it = new SessionItem(MintId(), track, e.Uid, provider, kind, _contextUri, e.Metadata);
+                    if (!keepNaturalOrder) _naturalOrder.Add(it);
+                }
                 _context.Add(it);
             }
         }
         _cursor = -1;
         return Bump();
+    }
+
+    static void IndexExistingTrack(SessionItem it, Dictionary<string, Track> byUid, Dictionary<string, Track> byUri)
+    {
+        if (!string.IsNullOrEmpty(it.Uid)) byUid[it.Uid] = it.Track;
+        if (!string.IsNullOrEmpty(it.Track.Uri)) byUri.TryAdd(it.Track.Uri, it.Track);
+    }
+
+    // TryAdd only — never overwrite an entry IndexExistingTrack already placed. A row we already held wins on its own
+    // (possibly catalogue-hydrated) Track; the wire's inline copy is strictly a fallback for a row we've never seen.
+    static void IndexWireTrack(in QueueWireEntry e, Dictionary<string, Track> byUid, Dictionary<string, Track> byUri)
+    {
+        if (e.Track is not { } track) return;
+        if (!string.IsNullOrEmpty(e.Uid)) byUid.TryAdd(e.Uid, track);
+        if (!string.IsNullOrEmpty(e.Uri)) byUri.TryAdd(e.Uri, track);
+    }
+
+    static Track ResolveExistingTrack(string uid, string uri, Dictionary<string, Track> byUid, Dictionary<string, Track> byUri)
+    {
+        if (!string.IsNullOrEmpty(uid) && byUid.TryGetValue(uid, out var t1)) return t1;
+        if (!string.IsNullOrEmpty(uri) && byUri.TryGetValue(uri, out var t2)) return t2;
+        return ContextResolve.Synthetic(uri);
+    }
+
+    static Dictionary<string, SessionItem> KeyByIdentity(List<SessionItem> items)
+    {
+        var d = new Dictionary<string, SessionItem>(items.Count);
+        foreach (var it in items) d[IdentityKey(it.Uid, it.Track.Uri)] = it;
+        return d;
+    }
+
+    static string IdentityKey(string uid, string uri) => string.IsNullOrEmpty(uid) ? "r:" + uri : "u:" + uid;
+
+    // A permutation iff every incoming context/autoplay row (skipping user-queue rows, which _naturalOrder never
+    // holds) resolves to a DISTINCT key already present in naturalByKey, with none left over on either side — i.e. the
+    // same rows, only reordered. A duplicate key, an added row or a dropped one all fail this and fall back to a full
+    // rebuild below.
+    static bool IsPermutationOfNaturalOrder(IReadOnlyList<QueueWireEntry> next, Dictionary<string, SessionItem> naturalByKey)
+    {
+        var incoming = new HashSet<string>();
+        foreach (var e in next)
+        {
+            var kind = RowKindOfUri(e.Uri);
+            if (kind == QueueRowKind.Playable && e.IsQueued) continue;
+            if (!incoming.Add(IdentityKey(e.Uid, e.Uri))) return false;
+        }
+        if (incoming.Count != naturalByKey.Count) return false;
+        foreach (var key in incoming) if (!naturalByKey.ContainsKey(key)) return false;
+        return true;
     }
 
     // ── the ONLY read ────────────────────────────────────────────────────────────────────────────────────────────────

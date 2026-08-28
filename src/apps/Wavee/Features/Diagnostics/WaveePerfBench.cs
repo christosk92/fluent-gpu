@@ -87,6 +87,11 @@ internal static class WaveePerfBench
         Nav("artist:spotify:artist:soakbench", "Bench Artist"); Settle(50);
         results.Add(RunFrames(host, "artist-detail", 120, FrameFast));
         Nav("home", null); Settle(20);
+        // NOTE: at the bench window size the fake playlist's fact cards are not reached by layout within the hop
+        // frames (densityGeometryBuilds reads 0), so this scenario times the page + rail mount, not the tempo ridge; the
+        // ridge's own cost rules are gated headlessly (gate.ctl.charts.density.*). Kept as the open-latency number.
+        results.Add(RunPlaylistOpen(host, nav, FrameFast));
+        Nav("home", null); Settle(20);
         results.Add(RunNavBurst(host, nav, FrameFast));
 
         string outDir = BenchOutDir();
@@ -193,6 +198,39 @@ internal static class WaveePerfBench
             samples.Add(CaptureSample(proc, cpu0, tick0, host, frameMs));
         }
         return Aggregate("nav-burst", frameMs.Count, sw.Elapsed.TotalSeconds, samples, frameMs);
+    }
+
+    // Playlist OPEN: the detail page + its facts rail mounting, then the store's refresh passes as the (fake) list
+    // settles. Each hop leaves for Home and re-enters the SAME playlist, so every hop pays the full open; FrameMsMax is
+    // the "it lags when I open a playlist" number. The path-tessellation delta is logged alongside: geometry that is
+    // re-minted on every refresh pass shows up here as hundreds of tessellations per open.
+    static ScenarioResult RunPlaylistOpen(AppHost host, Action<string, string?> nav, Action frameFast)
+    {
+        int hops = EnvInt("WAVEE_BENCH_OPEN_HOPS", 8, 2, 40);
+        var proc = Process.GetCurrentProcess();
+        var samples = new List<Sample>();
+        var frameMs = new List<double>();
+        var sw = Stopwatch.StartNew();
+        TimeSpan cpu0 = proc.TotalProcessorTime;
+        long tick0 = Stopwatch.GetTimestamp();
+        var paths = FluentGpu.Render.PathRealizationCache.Shared;
+        int tess0 = paths.TessellationCount, real0 = paths.RealizationCount;
+        int builds0 = FluentGpu.Controls.DensityPlot.GeometryBuilds;   // the rail's tempo ridge: geometry rebuilds per open
+
+        for (int i = 0; i < hops; i++)
+        {
+            nav("pl:spotify:playlist:pl1", "Playlist 1");
+            for (int f = 0; f < 12; f++) { frameFast(); frameMs.Add(host.LastStats.FrameMs); }
+            nav("home", null);
+            for (int f = 0; f < 4; f++) { frameFast(); frameMs.Add(host.LastStats.FrameMs); }
+            samples.Add(CaptureSample(proc, cpu0, tick0, host, frameMs));
+        }
+        int tess = paths.TessellationCount - tess0, real = paths.RealizationCount - real0;
+        int builds = FluentGpu.Controls.DensityPlot.GeometryBuilds - builds0;
+        // Realizations/tessellations count only what was RECORDED — a rail card below the window's fold is culled, so
+        // the geometry-build count is the honest measure of how often the tempo ridge re-minted its paths.
+        Log.Info($"[perf-bench] playlist-open: {hops} opens, densityGeometryBuilds={builds} ({(double)builds / hops:0.0} per open), path realizations={real} tessellations={tess}, slabBytes={paths.SlabBytes}, window={host.Scene.Bounds(host.Scene.Root).W:0}x{host.Scene.Bounds(host.Scene.Root).H:0}");
+        return Aggregate("playlist-open", frameMs.Count, sw.Elapsed.TotalSeconds, samples, frameMs);
     }
 
     static Sample CaptureSample(Process proc, TimeSpan cpu0, long tick0, AppHost host, List<double> frameMs)

@@ -40,10 +40,12 @@ public sealed class SessionContextHost
 }
 
 // ── Premium-only gate ────────────────────────────────────────────────────────────────────────────────────────────────
-// Wavee requires a Spotify Premium account for now: a Free account is refused OUTRIGHT — the app does not launch; the user
-// gets a nice warning. On-demand playback on a third-party client requires Premium, so Free can't be supported yet.
+// Wavee requires a Spotify Premium account for now: on-demand playback on a third-party client requires Premium, so Free
+// can't be supported yet. The refusal is a LOGIN-TIME decision (Seam.GoLive / SpotifyAuthSession / SpotifyLiveLogin read
+// the real tier from ProductInfo) — there is no pre-window gate: the window comes up and the refusal surfaces in-app.
 public static class SessionGate
 {
+    // The refusal copy. Still consumed by the live-login path (SpotifyLiveLogin) and the in-app premium-required surface.
     public const string WarningTitle = "Wavee needs Spotify Premium";
     public const string WarningBody =
         "Wavee doesn't support Spotify Free accounts yet.\n\n" +

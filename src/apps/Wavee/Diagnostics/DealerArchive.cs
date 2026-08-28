@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.Globalization;
@@ -11,10 +11,16 @@ using Wavee.Backend.Realtime;
 namespace Wavee;
 
 /// <summary>
-/// Always-on (Release + Debug) archival of inbound Spotify dealer WebSocket frames. The receive loop copies a frame
-/// into an ArrayPool buffer and returns immediately; a dedicated writer thread batches to a greppable index plus a
-/// raw payload blob. Ping/pong are counted into a 5-minute keepalive summary rather than stored per-frame.
-/// Opt out with <c>WAVEE_DEALER_ARCHIVE=0</c>.
+/// Opt-in archival of inbound Spotify dealer WebSocket frames. The receive loop copies a frame into an ArrayPool
+/// buffer and returns immediately; a dedicated writer thread batches to a greppable index plus a raw payload blob.
+/// Ping/pong are counted into a 5-minute keepalive summary rather than stored per-frame.
+///
+/// <para>OFF BY DEFAULT, and switched from ONE place: Settings ▸ Diagnostics ▸ "Archive Spotify realtime traffic"
+/// (<c>WaveeSettings.DealerArchiveEnabled</c>). It can write up to 2 GB and retains 90 days, which is not something to
+/// leave running for a listener — and it is a capture a user has to be able to turn on mid-session while reproducing a
+/// bug, which is exactly what an environment variable cannot do. The composition root calls
+/// <see cref="Configure(string?, bool)"/> once with the log directory and the persisted flag; the settings toggle calls
+/// <see cref="SetEnabled(bool)"/>, which re-applies against that same directory.</para>
 /// </summary>
 public sealed class DealerArchive : IDisposable
 {
@@ -91,15 +97,17 @@ public sealed class DealerArchive : IDisposable
 
     public static bool IsHandled(in DealerFrame frame) => IsHandled(frame.Type, frame.Uri, frame.MessageIdent);
 
-    public void Configure(string? directory, bool? enabled = null)
+    /// <summary>Point the archive at <paramref name="directory"/> and switch it <paramref name="enabled"/>. The
+    /// directory is REMEMBERED, so <see cref="SetEnabled"/> can start and stop the writer later without the caller
+    /// having to hold onto the path.</summary>
+    public void Configure(string? directory, bool enabled)
     {
-        bool on = enabled ?? EnvEnabled();
         lock (_writeGate)
         {
             if (!string.Equals(_dir, directory, StringComparison.OrdinalIgnoreCase))
                 CloseStream();
             _dir = directory;
-            _enabled = on && !string.IsNullOrWhiteSpace(directory);
+            _enabled = enabled && !string.IsNullOrWhiteSpace(directory);
             if (_enabled)
             {
                 try { Directory.CreateDirectory(_dir!); } catch { }
@@ -110,6 +118,12 @@ public sealed class DealerArchive : IDisposable
         if (_enabled && !SyncDrainForTests) EnsureWriter();
         else StopWriter();
     }
+
+    /// <summary>Start or stop archiving against the directory <see cref="Configure(string?, bool)"/> was last given —
+    /// the Settings ▸ Diagnostics toggle's one call. Re-applying the SAME directory means the live file is left open on
+    /// a re-enable and the writer thread is torn down on a disable, exactly as <c>Configure</c> does; there is no second
+    /// start/stop path to keep in step.</summary>
+    public void SetEnabled(bool on) => Configure(_dir, on);
 
     /// <summary>Copy <paramref name="utf8"/> off the receive buffer and enqueue. Never waits on disk. Never throws.</summary>
     public void RecordInbound(ReadOnlySpan<byte> utf8, in DealerFrame frame)
@@ -577,14 +591,6 @@ public sealed class DealerArchive : IDisposable
     }
 
     static string DateStamp(DateTime now) => now.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
-
-    static bool EnvEnabled()
-    {
-        var raw = Environment.GetEnvironmentVariable("WAVEE_DEALER_ARCHIVE");
-        if (string.IsNullOrWhiteSpace(raw)) return true;
-        raw = raw.Trim();
-        return raw is not "0" and not "false" and not "FALSE" and not "off" and not "OFF";
-    }
 
     readonly record struct Pending(
         long UnixMs, DealerFrameType Type, string? Uri, string? Ident, string? Key,

@@ -11,7 +11,8 @@ public sealed record LiveSpclient(HttpPipeline Pipeline, string BaseUrl, Session
 
 public static class SpotifyLiveSpclient
 {
-    const string ClientId = "65b708073fc0480ea92a077233ca87bd";
+    // Spotify's public desktop client id. Single owner: Wavee.Backend.Audio.SpotifyRuntimeIdentity.KeymasterClientId.
+    const string ClientId = Wavee.Backend.Audio.SpotifyRuntimeIdentity.KeymasterClientId;
 
     public static async Task<LiveSpclient?> ConnectAsync(WaveeLogger log, CancellationToken ct, bool retainApChannel = false,
         bool allowDeviceCode = true, IObserver<AuthState>? authObserver = null, Action? onCredentialAcquired = null,

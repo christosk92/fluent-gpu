@@ -2051,9 +2051,10 @@ sealed class TrackList : Component
     Element? LensHeader()
     {
         var model = _full.Value.Value;
-        if (!LikedSongsArtwork.IsLikedUri(model.ContextUri)) return null;
+        if (!LikedSongsArtwork.IsLikedUri(model.ContextUri) && _cfg.Badges != BadgeStyle.OwnerRow) return null;
         var filters = _h.Filters.Value;   // subscribe: the header IS the filter state, so it re-renders with it
-        return LikedLens.Header(in filters, View().Length, _h, CultureInfo.CurrentCulture);
+        return LikedLens.Header(in filters, View().Length, _h, CultureInfo.CurrentCulture,
+            LikedSongsArtwork.IsLikedUri(model.ContextUri));
     }
 
     Element CompactSelectionToolbar()
@@ -2224,14 +2225,6 @@ sealed class TrackList : Component
 
     // A no-op OnRealized for the plain action buttons (Play / Shuffle) — they open no flyout, so they need no anchor.
     static readonly Action<NodeHandle> NoAnchor = static _ => { };
-
-    static Element ToolBtn(string glyph) => new BoxEl
-    {
-        Width = 32f, Height = 32f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-        Corners = CornerRadius4.All(Radii.Control),
-        OnClick = () => { /* TODO: search-in-list / sort / view (visual stubs in v1) */ },
-        Children = [Icon(glyph, 14f, Tok.TextSecondary)],
-    }.Interactive(Interaction.Subtle);
 
     Element Header(ColumnSet set, TrackSize[] tracks, DetailTrackSort sort, bool checkInset)
     {

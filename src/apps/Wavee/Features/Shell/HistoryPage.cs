@@ -68,20 +68,23 @@ public sealed class HistoryStore
             // No _version bump here — no listeners exist yet at startup time
         }
         catch { /* corrupt or unreadable file — start empty */ }
+
+        // One-time purge of the demo seed the shell used to write on a fresh install (routes under "pl:local:"):
+        // those playlist uris address nothing, so every such row is a dead destination the page would still offer.
+        // Rewriting the file here — rather than filtering at render time — means the log stops carrying them at all.
+        int before = _entries.Count;
+        _entries.RemoveAll(static e => e.Route.Name.StartsWith(DeadSeedPrefix, StringComparison.Ordinal));
+        if (_entries.Count != before) SaveToDisk();
     }
+
+    /// <summary>Route prefix of the removed fake-history seed. Nothing legitimate mints it: a real playlist route is
+    /// <c>pl:spotify:playlist:…</c>.</summary>
+    const string DeadSeedPrefix = "pl:local:";
 
     public void Add(Route r)
     {
         _entries.Add(new HistoryEntry(r, DateTime.Now));
         if (_entries.Count > MaxEntries) _entries.RemoveAt(0);   // FIFO evict oldest
-        _version.Value++;
-        SaveToDisk();
-    }
-
-    public void AddAt(Route r, DateTime at)
-    {
-        _entries.Add(new HistoryEntry(r, at));
-        if (_entries.Count > MaxEntries) _entries.RemoveAt(0);
         _version.Value++;
         SaveToDisk();
     }
@@ -174,8 +177,10 @@ sealed class HistoryPage : Component
 
     public override Element Render()
     {
-        var store = UseContext(HistoryStore.Slot);
-        var go    = UseContext(HistoryStore.NavCtx);
+        var store   = UseContext(HistoryStore.Slot);
+        var go      = UseContext(HistoryStore.NavCtx);
+        // Read BEFORE the null-store early return: hooks run in stable call order.
+        var overlay = UseContext(Overlay.Service);
         if (store is null) return new BoxEl { Grow = 1f };
 
         _ = store.Version.Value;                           // subscribe → re-render when entries change
@@ -240,7 +245,7 @@ sealed class HistoryPage : Component
             Grow = 1f, Direction = 1,
             Children =
             [
-                PageHeader(store, search, filterIndex, totalVisits, uniqueRoutes),
+                PageHeader(store, overlay, search, filterIndex, totalVisits, uniqueRoutes),
                 ScrollView(new BoxEl
                 {
                     Direction = 1, Gap = Spacing.L,
@@ -406,6 +411,11 @@ sealed class HistoryPage : Component
         var (title, glyph) = ShellNav.Dest(e.Route);
         string ts         = FormatTimestamp(e.VisitedAt, now);
         bool isPlaylist   = e.Kind == "playlist";
+        // A log entry outlives the routes that wrote it — a destination can be retired, and an older file can still
+        // carry keys this build has no page for. ShellNav.Dest would happily label such a row ("Your Library") and the
+        // row would then navigate to the not-found page. Render it dimmed and inert instead: still a record of where
+        // the user went, no longer an offer to go back there. The DELETE button stays live, so the row is removable.
+        bool reachable    = ShellRoutes.IsKnown(e.Route.Name);
 
         // Kind label + color
         string kindLabel = e.Kind switch
@@ -474,9 +484,12 @@ sealed class HistoryPage : Component
         {
             Direction = 0, Height = 56f, AlignItems = FlexAlign.Center,
             Gap = Spacing.M, Padding = new Edges4(Spacing.M, 0f, Spacing.S, 0f),
-            OnClick = () => go(e.Route.Name, e.Route.Arg),
+            Opacity = reachable ? 1f : 0.6f,
+            OnClick = reachable ? (Action)(() => go(e.Route.Name, e.Route.Arg)) : null,
             Children = rowChildren.ToArray(),
-        }.Interactive(Interaction.Subtle);
+            // isEnabled goes THROUGH Interactive: the recipe writes IsEnabled itself (and picks the disabled resting
+            // fill from the StateBrush), so setting it in the initializer above would be silently overwritten.
+        }.Interactive(Interaction.Subtle, isEnabled: reachable);
 
         if (!showDivider) return row;
 
@@ -523,7 +536,7 @@ sealed class HistoryPage : Component
     }
 
     // ── Page header (title + stats + search + SelectorBar filter + ComboBox sort) ─────────────────
-    Element PageHeader(HistoryStore store, string search, int filterIndex,
+    Element PageHeader(HistoryStore store, IOverlayService? overlay, string search, int filterIndex,
                        int totalVisits, int uniqueRoutes)
     {
         return new BoxEl
@@ -551,7 +564,14 @@ sealed class HistoryPage : Component
                                 StatPill($"{uniqueRoutes}", Loc.Get(Strings.Nav.History.Stat.Unique)),
                             ],
                         },
-                        Button.Standard(Loc.Get(Strings.Nav.History.ClearAll), () => store.Clear()),
+                        // Destructive and unrecoverable (Clear also DELETES the log file), so it asks first — the
+                        // same ContentDialog confirmation the Settings storage tab puts in front of a cache wipe.
+                        Button.Standard(Loc.Get(Strings.Nav.History.ClearAll), () => SettingsShared.Confirm(
+                            overlay,
+                            Loc.Get(Strings.Nav.History.ClearAllConfirm),
+                            Loc.Get(Strings.Nav.History.ClearAllConfirmBody),
+                            Loc.Get(Strings.Nav.History.ClearAll),
+                            store.Clear)),
                     ],
                 },
                 // ── Search box — fills the header width on its own (grow self-measures + cross-stretches). ──

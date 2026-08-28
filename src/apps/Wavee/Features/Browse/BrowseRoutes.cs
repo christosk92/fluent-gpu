@@ -26,11 +26,16 @@ public static class BrowseRoutes
     public static string UriOf(string routeName)
         => Is(routeName) ? routeName.Substring(Prefix.Length) : "";
 
-    /// <summary>Map a BrowseClientFeature uri onto the client surface that owns it. Only Spotify's Live Events tile is
-    /// known to appear here; anything else falls back to the entity route so a new feature opens *something* rather
-    /// than silently doing nothing.</summary>
-    public static string FeatureRoute(string featureUri)
+    /// <summary>Map a BrowseClientFeature uri onto the client surface that owns it, or <c>null</c> when this client
+    /// has no surface for it.
+    ///
+    /// <para>This used to fall back to the feature uri itself, on the theory that a new feature should open
+    /// <em>something</em>. It could not: a client-feature uri (<c>spotify:concerts</c>) is not a route key, so the
+    /// fallback navigated to a key no page renders — a tab on the not-found page, plus a permanent entry in the
+    /// navigation log. Null is the honest answer, and it lets the caller decline to offer the destination at all.</para>
+    /// </summary>
+    public static string? FeatureRoute(string featureUri)
         => string.Equals(featureUri, "spotify:concerts", StringComparison.Ordinal)
             ? ConcertRoutes.Hub
-            : featureUri;
+            : null;
 }

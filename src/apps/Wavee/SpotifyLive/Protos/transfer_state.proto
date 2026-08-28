@@ -2,6 +2,9 @@
 syntax = "proto3";
 
 package transfer;
+
+import "player.proto";
+
 option optimize_for = CODE_SIZE;
 option csharp_namespace = "Wavee.Protocol.Transfer";
 
@@ -16,6 +19,13 @@ message TransferPlayerOptions {
   bool shuffling_context = 1;
   bool repeating_context = 2;
   bool repeating_track = 3;
+  // Capture-verified (dealer-20260828.bin, an inbound "transfer" command's base64 data blob): field 5 here is the
+  // SAME wire-identical map-entry shape as connectstate.ContextPlayerOptions.modes (player.proto) — same field
+  // number, same {key,value} encoding, an explicit empty "media" value round-tripping the same way. The captured
+  // entries were context_enhancement/jam/media/video_persistence — i.e. our own PutState's ContextPlayerOptions.modes,
+  // carried straight through into the TransferState the server hands the target on a Connect hand-off. Reuses
+  // connectstate.ModeEntry rather than a proto3 map for the same reason player.proto's own modes field does.
+  repeated connectstate.ModeEntry modes = 5;
 }
 
 message TransferPlayback {

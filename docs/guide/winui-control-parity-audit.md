@@ -170,6 +170,7 @@ was found under `controls/dev/Generated`; framework controls may still have plat
 | `OverlayHost.cs` | Related to Popup/Flyout hosting. | Needs focus trapping/restoration, z-order, dismiss policy, screen/viewport collision handling, nested overlay stacking, and transition inputs. |
 | `Navigation.cs` | FluentGpu app navigation helper, not a WinUI `NavigationView` source peer. | Keep separate from control parity. |
 | `Virtual.cs` | FluentGpu virtualization helper, related to ItemsRepeater/ListView/ItemsView. | Useful primitive, but not WinUI ItemsRepeater parity until recycle pool, viewport manager, and item events exist. |
+| `Charts/*.cs` (`LineChart`, `AreaChart`, `BarChart`, `DensityPlot`, `SparkBars`, `Waveform`, `ChartTooltip`, `ChartLegend`, `ChartMath`) | No WinUI peer — WinUI ships no chart control. The contract is a native port of shadcn/ui's `chart.tsx` (config / tooltip / legend) over `PathEl` + `BoxEl`; see controls.md §8.5. | Not a parity item. Shared rules still apply (hover/press via `ControlFaster`, tokens not literals, one `Create`, `Style` + `StyleOverride`). Roadmap: pie/donut, radial, radar, gradient path fill. |
 | `Icons.cs` | Glyph constants, not a WinUI control. | Needs periodic glyph validation against Segoe Fluent Icons if exact glyph names/codes matter. |
 
 ## Priority implementation plan after the audit

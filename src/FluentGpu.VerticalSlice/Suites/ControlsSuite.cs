@@ -33,7 +33,7 @@ using static FluentGpu.VerticalSlice.Harness.Asserts;
 
 
 
-static class ControlsSuite
+static partial class ControlsSuite
 {
     public static void Run(StringTable strings)
     {
@@ -86,6 +86,7 @@ static class ControlsSuite
         ToolTipStableWrapChecks(strings);
         SemanticZoomChecks(strings);
         AutoSuggestProgrammaticFocusChecks(strings);
+        ChartsChecks(strings);
     }
 
     static void SemanticZoomChecks(StringTable strings)

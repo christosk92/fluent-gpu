@@ -23,7 +23,13 @@ sealed class BrowseDirectoryPage : Component
 
         var browseModel = new BrowseDirectory.Model(
             OnOpenCategory: (uri, title) => go(BrowseRoutes.Page(uri), title),
-            OnOpenFeature: uri => go(BrowseRoutes.FeatureRoute(uri), null));
+            // A client feature this build has no surface for resolves to null — the tile declines rather than
+            // navigating to a key no page renders. See BrowseRoutes.FeatureRoute.
+            OnOpenFeature: uri =>
+            {
+                if (BrowseRoutes.FeatureRoute(uri) is { } route) go(route, null);
+                else WaveeLog.Instance.Warn("nav", "browse.feature.unsupported: " + uri);
+            });
 
         return Ctx.Provide(LazyScroll.Slot, (IReadSignal<float>)pageScroll,
             Ctx.Provide(BrowseDirectory.Props, browseModel,

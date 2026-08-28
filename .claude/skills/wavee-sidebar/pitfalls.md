@@ -36,7 +36,7 @@ pattern; do not "fix" it to the generated members.
 ### Loc file mechanics
 
 - Three files, and only three: `src/apps/Wavee/assets/loc/{en-US.json, nl.json, ko-KR.json}`.
-- `nl` and `ko-KR` are **partial overrides** — 495 keys each against en-US's 1278 — resolved by the engine's
+- `nl` and `ko-KR` are **partial overrides** — 591 keys each against en-US's 1953 (recount 2026-08-26) — resolved by the engine's
   per-key fallback chain (active → parent → default → the key itself, `FluentGpu.Engine/Localization/Localization.cs:212-224`).
   A key missing from `nl`/`ko` is legal; a key missing from **en-US** renders visibly as `[key]`.
 - The files are **CRLF, UTF-8 without BOM**. Keep it that way — an editor that "helpfully" adds a BOM or converts
@@ -84,6 +84,11 @@ writes in the pane are: `_rowCount` from a `UseLayoutEffect`; a single `_countSe
 exists* (provably not a backwards write — nothing has read it yet); and `_dispVersion` from `Choreograph`, which
 runs inside the plan memo and is read only by the `ItemsView` child that renders after it.
 
+`Entries.Version` (`SidebarPreferences.cs`, `SidebarEntries.Publish`) now folds TWO gates, not one: the published,
+collapsed-folder-filtered rows, AND the binder's full flattened projection (`SidebarProjectionBinder`'s `_all`). A
+hydration that only touches a playlist inside a collapsed folder never shows up in the published rows, but the
+planner reads the full projection — without the second gate the pane would keep drawing that row's stale content.
+
 ### Bind wiring is MOUNT-ONLY — a per-row bound thunk must read `_scope.Index.Value`, never a captured index
 
 The reconciler registers a node's bound `Prop<T>` thunks when the node **mounts** and never again: `Update` rewrites
@@ -108,12 +113,14 @@ slot's own always-mounted `DropPlate()` under the row. Rule: every `Prop.Of(` in
 `InsertionLine`/`DropPlate` reads `_scope.Index.Value`, and the entity row keeps its fills static and owns no tree
 drop cue (the source-scan tests that used to pin this were removed on 2026-08-22; tests never read source).
 
-### A bound row is a frozen child — `SubscribeEpoch()` is load-bearing
+### A bound row is a frozen child — `SubscribeRowEpoch(index)` is load-bearing
 
-Re-planning in `SidebarPane` does **not** re-render a realized slot. `SidebarPane.SubscribeEpoch()` reads the
-search text, `ModeEpoch`, `LayoutVersion`, `Entries.Version`, `PinsVersion` and `FolderVersion` and returns their
-fold so the call cannot be optimised away. Delete it and realized rows keep drawing the previous plan's content
-after a library refresh, a customizer edit, a section toggle or a keystroke.
+Re-planning in `SidebarPane` does **not** re-render a realized slot. Each realized slot reads
+`_o.SubscribeRowEpoch(index)` in its render prologue, which subscribes it to ONE row's epoch. `SidebarPane.PublishStage`
+bumps `_planVersion` and the per-row epochs (`BumpChangedRowEpochs` for a diffed publish, `BumpAllRowEpochs` for a
+wholesale one), and the pane's own plan re-runs off `PlanDep` (`LayoutVersion`, `Entries.Version`, `PinsVersion`,
+`FolderVersion`, `ModeEpoch`, the edit fold, search). Delete the row-epoch read and realized rows keep drawing the
+previous plan's content after a library refresh, a customizer edit, a section toggle or a keystroke.
 
 ---
 

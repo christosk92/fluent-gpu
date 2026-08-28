@@ -27,13 +27,21 @@ namespace Wavee;
 //     so Comfortable's larger ART size is never reached.)
 // A section's height is deliberately its SUBTITLE INTENT, not per row, because a Reorderable's slot pitch and the
 // virtualizing host's extent both assume one height per section (see SidebarPaneMetrics.RowHeight).
+//
+// DEVELOPER SURFACE. The trailing Tools band (the API console) is emitted only in developer mode. `Classic` takes that
+// as a plain BOOL so the document builder stays a pure function of its arguments — `ClassicDocumentCache` below is the
+// one place that reads `DeveloperMode.Enabled`, because that read has to happen inside the pane's render to be the
+// pane's subscription. That single `Signal<bool>` is the only engine type this file touches, and Wavee.Tests supplies
+// it through VirtualCollectionSignalShim, so the file still source-includes without an engine reference.
 public static class SidebarBuiltInDocuments
 {
     /// <summary>The stable template id Classic's document reports. It is NOT one of <c>SidebarTemplates.All</c>: Classic is
     /// not offered in the customizer's template palette, and a Curated document must never claim this id.</summary>
     public const string ClassicId = "classic.builtin";
 
-    /// <summary>Classic's DevTools entry — the route the retired <c>WaveeSidebar.DevToolsRow</c> pointed at.</summary>
+    /// <summary>Classic's DevTools entry — the route the retired <c>WaveeSidebar.DevToolsRow</c> pointed at.
+    /// DEVELOPER SURFACE: the whole Tools section is emitted only when developer mode is on (see the
+    /// <c>devTools</c> parameter of <see cref="Classic"/>).</summary>
     public const string DevToolsRoute = "api-console";
 
     /// <summary>Build Classic's locked document with the three section-collapse flags applied.
@@ -48,13 +56,19 @@ public static class SidebarBuiltInDocuments
     /// Pinned, by <see cref="SidebarShortcutsSection.Prepend"/>. Null/empty ⇒ nothing is added and Pinned stays first
     /// (which also keeps the quick layout menu on the Pinned header, per §3.1.7). This document is never persisted, so
     /// the sentinel-id section can never reach the wire.</param>
+    /// <param name="devTools">Developer mode (<c>DeveloperMode.Enabled</c>). FALSE — the product default — omits the
+    /// Tools section AND its leading divider entirely, so a listener's Classic sidebar ends at Playlists. The flag is a
+    /// PARAMETER rather than a read of the signal in here on purpose: this file is engine-free and source-included by
+    /// Wavee.Tests, and a document that silently depended on process-wide state would make every sidebar test order-
+    /// dependent. <see cref="ClassicDocumentCache"/> is the one place that turns the signal into this bool.</param>
     public static SidebarCustomLayout Classic(bool pinnedOpen, bool libraryOpen, bool playlistsOpen,
-        IReadOnlyList<SidebarItemSpec>? topBar = null)
-        => SidebarShortcutsSection.Prepend(ClassicSections(pinnedOpen, libraryOpen, playlistsOpen), topBar);
+        IReadOnlyList<SidebarItemSpec>? topBar = null, bool devTools = false)
+        => SidebarShortcutsSection.Prepend(ClassicSections(pinnedOpen, libraryOpen, playlistsOpen, devTools), topBar);
 
-    static SidebarCustomLayout ClassicSections(bool pinnedOpen, bool libraryOpen, bool playlistsOpen)
-        => new(ClassicId,
-        [
+    static SidebarCustomLayout ClassicSections(bool pinnedOpen, bool libraryOpen, bool playlistsOpen, bool devTools)
+    {
+        var sections = new List<SidebarSectionSpec>(7)
+        {
             // The FIRST group, so it keeps Classic's `rule: false` (no leading divider). Its header hosts the quick layout
             // menu (the pane picks the first header automatically) and never disappears — even with zero pins — so that
             // entry point is always reachable (§3.1.7).
@@ -87,12 +101,17 @@ public static class SidebarBuiltInDocuments
                 Title: null, TitleLocKey: "sidebar.playlists",
                 Hidden: false, Collapsed: !playlistsOpen,
                 Display: SidebarDisplayOptions.Entities),
+        };
 
-            Divider(DividerToolsId),
-
+        // The API console is DEVELOPER SURFACE, not product surface: it is hidden — divider and all — unless developer
+        // mode is on. The divider goes with it deliberately; a trailing rule under Playlists separating nothing from
+        // nothing is the tell that something used to be there.
+        if (devTools)
+        {
+            sections.Add(Divider(DividerToolsId));
             // Classic's flat DevTools row — deliberately header-less (a StaticLinks section with no title plans no
             // SectionHeader row), exactly as `DevToolsRow` rendered outside every section.
-            new SidebarSectionSpec(ToolsId, SidebarSectionKind.StaticLinks,
+            sections.Add(new SidebarSectionSpec(ToolsId, SidebarSectionKind.StaticLinks,
                 Title: null, TitleLocKey: null,
                 Hidden: false, Collapsed: false,
                 // ShowInRail off: the 56-DIP rail is a shortcut strip for places you NAVIGATE to, and a bare
@@ -107,8 +126,11 @@ public static class SidebarBuiltInDocuments
                 {
                     Density = SidebarDensity.Comfortable, ShowInRail = false,
                 },
-                Items: [Route(ToolsId + ":devtools", DevToolsRoute, "Code")]),
-        ]);
+                Items: [Route(ToolsId + ":devtools", DevToolsRoute, "Code")]));
+        }
+
+        return new SidebarCustomLayout(ClassicId, sections);
+    }
 
     // ── stable section ids ───────────────────────────────────────────────────────────────────────────────────────────
     public const string PinnedId = "classic.pinned";
@@ -156,27 +178,43 @@ public sealed class ClassicDocumentCache
 {
     SidebarCustomLayout? _doc;
     int _flags = -1;
+    /// <summary>The developer-mode answer the cached document was built from — see <see cref="Get"/>.</summary>
+    bool _devTools;
     /// <summary>The band the cached document was built from, compared by REFERENCE. Every band edit rebuilds the list
     /// in the reducer and replaces the layout record, so a reference match proves the content matches; a value walk
     /// would run on every pane render for no extra truth.</summary>
     IReadOnlyList<SidebarItemSpec>? _topBar;
 
     /// <summary>Classic's collapse flags folded into one int — bit 0 pinned, bit 1 library, bit 2 playlists. This IS the
-    /// mode epoch's bitmask; the two must not drift, or a toggle would re-plan without rebuilding the document.</summary>
+    /// mode epoch's bitmask; the two must not drift, or a toggle would re-plan without rebuilding the document.
+    ///
+    /// <para>Developer mode is deliberately NOT a bit here. The epoch and this bitmask have to agree, and developer mode
+    /// is not part of the epoch: flipping it mints a NEW document instance, which <c>SidebarPane.PublishStage</c>
+    /// already treats as a wholesale re-skin via its <c>!ReferenceEquals(stage.Document, Doc)</c> test. Adding a bit
+    /// would only re-plan a second time for the same change. <see cref="Get"/> keys on it separately.</para></summary>
     public static int FlagsOf(bool pinnedOpen, bool libraryOpen, bool playlistsOpen)
         => (pinnedOpen ? 1 : 0) | (libraryOpen ? 2 : 0) | (playlistsOpen ? 4 : 0);
 
-    /// <summary>The document for these flags AND this shortcut band: the SAME instance while both are unchanged, a
-    /// fresh one on any flip. The band is part of the key because it is part of the document now (Phase 1) — without
-    /// it a shortcut edit would bump <c>LayoutVersion</c>, re-plan, and re-plan the STALE cached document.</summary>
+    /// <summary>The document for these flags, this shortcut band AND the live developer-mode switch: the SAME instance
+    /// while all three are unchanged, a fresh one on any flip. The band is part of the key because it is part of the
+    /// document now (Phase 1) — without it a shortcut edit would bump <c>LayoutVersion</c>, re-plan, and re-plan the
+    /// STALE cached document.
+    ///
+    /// <para>The <c>DeveloperMode.Enabled.Value</c> read below is UNCONDITIONAL and comes first, for exactly the reason
+    /// <c>WaveeSidebar.BuildDocument</c>'s three flag reads are: this runs inside <c>SidebarPane</c>'s own render, so
+    /// that read IS the pane's subscription to the switch. Short-circuiting it behind the cache would leave the API
+    /// console row on screen until something else happened to re-render the pane.</para></summary>
     public SidebarCustomLayout Get(bool pinnedOpen, bool libraryOpen, bool playlistsOpen,
         IReadOnlyList<SidebarItemSpec>? topBar = null)
     {
+        bool devTools = DeveloperMode.Enabled.Value;
         int flags = FlagsOf(pinnedOpen, libraryOpen, playlistsOpen);
-        if (_doc is { } cached && _flags == flags && ReferenceEquals(_topBar, topBar)) return cached;
+        if (_doc is { } cached && _flags == flags && _devTools == devTools && ReferenceEquals(_topBar, topBar))
+            return cached;
         _flags = flags;
+        _devTools = devTools;
         _topBar = topBar;
-        _doc = SidebarBuiltInDocuments.Classic(pinnedOpen, libraryOpen, playlistsOpen, topBar);
+        _doc = SidebarBuiltInDocuments.Classic(pinnedOpen, libraryOpen, playlistsOpen, topBar, devTools);
         return _doc;
     }
 }

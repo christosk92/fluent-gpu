@@ -21,6 +21,7 @@ public class SessionVolumeSyncTests
         public long PositionMs { get; set; }
         public bool IsPlaying { get; private set; }
         public bool IsBuffering => false;
+        public bool ClockValid => true;
         public void Load(in AudioStreamHandle s) { }
         public void LoadFastStart(in AudioFastStart s) { }
         public void SupplyBody(in AudioStreamHandle s) { }
@@ -39,7 +40,7 @@ public class SessionVolumeSyncTests
         public int? LastVolume => Volumes.Count > 0 ? Volumes[^1].Volume : null;
         public Task<OutboundResult> SendAsync(string t, string j, CancellationToken ct = default) { Sent.Add((t, j)); return Task.FromResult(new OutboundResult(true, "ack", 200)); }
         public Task<OutboundResult> SetVolumeAsync(string t, int v, CancellationToken ct = default) { Volumes.Add((t, v)); return Task.FromResult(new OutboundResult(true, "ack", 200)); }
-        public Task<OutboundResult> TransferAsync(string f, string t, CancellationToken ct = default) => Task.FromResult(new OutboundResult(true, "ack", 200));
+        public Task<OutboundResult> TransferAsync(string f, string t, CancellationToken ct = default, bool hostingVideo = false) => Task.FromResult(new OutboundResult(true, "ack", 200));
     }
 
     sealed class RecProj : IPlaybackProjection

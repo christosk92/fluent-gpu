@@ -127,6 +127,59 @@ internal static class TrackExpandedFacts
         return facts;
     }
 
+    // ── the hero partition ───────────────────────────────────────────────────────────────────────────────────────────
+    // The strip draws the same ordered list two ways: four facts as big display-face numbers, the rest as prose. WHICH
+    // four is a RULE, not a renderer preference, so it lives here beside For() where Wavee.Tests can pin it — the same
+    // reason LabelKey does. A renderer that owned this list would drift the moment a new kind landed.
+
+    /// <summary>Is this fact one the reader came to READ AS A NUMBER? Plays · BPM · Key · Duration and nothing else.
+    ///
+    /// <para>WHY THESE FOUR. Three of them (Plays · BPM · Key) are exactly what the table's relief ladder yields first
+    /// as the list narrows — the strip exists to say them back — and Duration is the one measure every row carries, so
+    /// it is the fact that is always there to anchor the group. Everything else is a SENTENCE, not a figure: a date, a
+    /// name, an album title and an ISRC all read worse at display size than in a line of prose, and a flag has no value
+    /// at all (its label IS the fact).</para>
+    ///
+    /// <para>Deliberately a switch over kinds rather than a test on <see cref="TrackFactForm"/>: form says how a fact
+    /// RENDERS, this says how big it reads, and the two are independent — a Pending Plays is still a hero slot holding
+    /// a dash, and a Link is prose even though it is a value.</para></summary>
+    internal static bool IsHeroFact(TrackFactKind kind) => kind switch
+    {
+        TrackFactKind.Plays or TrackFactKind.Bpm or TrackFactKind.Key or TrackFactKind.Duration => true,
+        _ => false,
+    };
+
+    /// <summary>Split one fact into the big part and the small part a hero slot draws under/beside it.
+    ///
+    /// <para>Only <see cref="TrackFactKind.Key"/> has two parts, and only when the track carries a Camelot slot: the
+    /// wheel code is the FIGURE (it matches the swatch and the filter and is two glyphs wide, which is what a display
+    /// face wants) and the spelled key is the gloss — "2B" over "F♯ major". With no wheel slot there is no figure to
+    /// promote, so the spelled key IS the value and the unit is null; the strip then draws one line, not a line with an
+    /// empty second row.</para>
+    ///
+    /// <para>Every other kind is one part. That INCLUDES a value with an obvious unit — BPM's label already says "BPM"
+    /// and a "min" under a duration is noise — so this method invents nothing: <c>Unit</c> is a real second half or it
+    /// is null.</para>
+    ///
+    /// <para>PENDING needs no branch here, and that is deliberate. <see cref="For"/> already writes <see cref="Dash"/>
+    /// into <c>Value</c> for the two enrichment planes, so a pending fact splits like any other and yields
+    /// <c>("—", null)</c> — the em dash stays ONE decision made in one place (For), and the strip never has to ask
+    /// "is this pending?" to know what glyph to draw.</para>
+    ///
+    /// <para>The Key case inverts <see cref="PrettyKey"/> across the same <see cref="KeySeparator"/> that joined it,
+    /// and <see cref="KeySplit"/> is the shared source of truth both directions answer to — <c>HeroSplit</c> of a
+    /// <c>PrettyKey</c> string is pinned equal to <c>KeySplit</c> of the same inputs, so the two forms cannot
+    /// drift.</para></summary>
+    internal static TrackFactSplit HeroSplit(in TrackFact f)
+    {
+        if (f.Kind != TrackFactKind.Key) return new TrackFactSplit(f.Value, null);
+
+        int cut = f.Value.IndexOf(KeySeparator, StringComparison.Ordinal);
+        return cut < 0
+            ? new TrackFactSplit(f.Value, null)
+            : new TrackFactSplit(f.Value.Substring(0, cut), f.Value.Substring(cut + KeySeparator.Length));
+    }
+
     /// <summary>The loc KEY for a fact's label. Kept here, beside the ordering, so the renderer owns no copy of the
     /// vocabulary and a new kind cannot ship label-less.</summary>
     internal static string LabelKey(TrackFactKind kind) => kind switch
@@ -152,7 +205,9 @@ internal static class TrackExpandedFacts
     // source-includes. Those three forward to them, so the row lane, the drawer's version rows and the facts strip are
     // one implementation and can never spell the same number two ways.
 
-    /// <summary>Per-track duration "m:ss" (or "h:mm:ss" once it crosses an hour — a podcast episode in a playlist).</summary>
+    /// <summary>Per-track duration "m:ss" (or "h:mm:ss" once it crosses an hour — a podcast episode in a playlist).
+    /// This is a CLOCK formatter: 0 ms spells "0:00". The duration <em>cell</em> must not use it for an unknown
+    /// length — that is <see cref="DurationCell"/>.</summary>
     internal static string TrackTime(long ms)
     {
         var t = TimeSpan.FromMilliseconds(ms);
@@ -160,6 +215,11 @@ internal static class TrackExpandedFacts
             ? $"{(int)t.TotalHours}:{t.Minutes:00}:{t.Seconds:00}"
             : $"{t.Minutes}:{t.Seconds:00}";
     }
+
+    /// <summary>The duration CELL, not the clock. 0 ms is "not known yet", never a zero-second track — the same
+    /// 0-is-unknown rule Plays already uses. A thin album disc row that still has no length must dash, not claim
+    /// <c>0:00</c>.</summary>
+    internal static string DurationCell(long ms) => ms > 0 ? TrackTime(ms) : Dash;
 
     /// <summary>Tempo readout — "101" for a whole BPM, "101.5" when the fraction is meaningful. Spotify reports tempo
     /// as a double (101.0099…) and full precision in a narrow lane is noise; one decimal is the most a listener can act
@@ -201,8 +261,30 @@ internal static class TrackExpandedFacts
     /// <item><description>neither ⇒ null, and the caller emits nothing</description></item>
     /// </list>
     /// The mode words are INJECTED (<paramref name="major"/>/<paramref name="minor"/>) so this file stays free of the
-    /// localization runtime — the same contract <c>PlayableLinks</c> uses.</summary>
+    /// localization runtime — the same contract <c>PlayableLinks</c> uses.
+    ///
+    /// <para>This is the JOIN of <see cref="KeySplit"/> and nothing more. The two halves are decided once, there, so
+    /// the prose form ("8B · C major") and the hero form (<see cref="HeroSplit"/>'s "8B" over "C major") are the same
+    /// two strings arranged two ways rather than two formatters that agree by luck.</para></summary>
     internal static string? PrettyKey(string? camelotCode, string? musicalKey, string? major = null, string? minor = null)
+        => KeySplit(camelotCode, musicalKey, major, minor) is { } s
+            ? s.Unit is null ? s.Value : s.Value + KeySeparator + s.Unit
+            : null;
+
+    /// <summary>The token that joins the wheel slot to the spelled key. A const, not a literal, because
+    /// <see cref="HeroSplit"/> cuts on exactly this — one glyph, one meaning, one place to change it.</summary>
+    internal const string KeySeparator = " · ";
+
+    /// <summary>The key's two halves, decided ONCE: the wheel slot (the figure) and the spelled key (the gloss).
+    /// <c>null</c> when the track carries neither, which is what makes <see cref="For"/>'s "emit nothing" case fall
+    /// out rather than be tested for.
+    ///
+    /// <para>Every partial state degrades instead of inventing the missing half — Camelot only ⇒ ("8B", null); tonic
+    /// only ⇒ ("C", null), because with no wheel slot there is no figure to promote and no honest mode word either
+    /// (<see cref="ModeOf"/>); Camelot + tonic ⇒ ("8B", "C major"), or ("8B", "C") when no mode words were
+    /// injected.</para></summary>
+    internal static TrackFactSplit? KeySplit(
+        string? camelotCode, string? musicalKey, string? major = null, string? minor = null)
     {
         string? camelot = camelotCode is { Length: > 0 } c ? c : null;
         string? tonic = musicalKey is { Length: > 0 } k ? k : null;
@@ -214,9 +296,9 @@ internal static class TrackExpandedFacts
             KeyMode.Minor => minor is { Length: > 0 } ? minor : null,
             _ => null,
         };
-        string spelled = tonic is null ? "" : mode is null ? tonic : tonic + " " + mode;
-        if (camelot is null) return spelled;
-        return spelled.Length == 0 ? camelot : camelot + " · " + spelled;
+        string? spelled = tonic is null ? null : mode is null ? tonic : tonic + " " + mode;
+        // No wheel slot ⇒ the spelled key is the whole fact and rides in Value; the hero slot then draws one line.
+        return camelot is null ? new TrackFactSplit(spelled!, null) : new TrackFactSplit(camelot, spelled);
     }
 
     /// <summary>The exact "when": full date plus the time of day, in the reader's culture and zone. <c>"f"</c> is the
@@ -253,6 +335,13 @@ public enum KeyMode : byte { Unknown, Major, Minor }
 internal readonly record struct TrackFact(
     TrackFactKind Kind, TrackFactForm Form, string Value,
     string? LinkUri = null, IReadOnlyList<string>? Chips = null);
+
+/// <summary>One hero fact's two halves — see <see cref="TrackExpandedFacts.HeroSplit"/>. <paramref name="Value"/> is
+/// the FIGURE the display face draws and is never null or empty for a hero fact (a pending one carries
+/// <see cref="TrackExpandedFacts.Dash"/>); <paramref name="Unit"/> is the small gloss beneath it and is null far more
+/// often than not — today only a Camelot-coded key has a real second half, and a unit is never INVENTED to fill the
+/// slot ("min" under a duration, "BPM" under a tempo whose label already says BPM).</summary>
+internal readonly record struct TrackFactSplit(string Value, string? Unit);
 
 /// <summary>Everything the fact list needs that a <see cref="Track"/> does not carry.
 /// <para><paramref name="TempoPending"/> / <paramref name="PlaysPending"/>: "this surface ASKED for the column".

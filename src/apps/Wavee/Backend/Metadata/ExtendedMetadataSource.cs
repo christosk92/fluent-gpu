@@ -229,7 +229,17 @@ public sealed class ExtendedMetadataSource
                     }
                     if (data.EntityUri is { Length: > 0 } uri) landed.Add(uri);
                 }
-                catch (InvalidProtocolBufferException) { /* skip one malformed entity, keep the rest of the batch */ }
+                // Skip one malformed entity, keep the rest of the batch — but log it: a silent swallow here used to
+                // make a corrupt/truncated payload indistinguishable from "the server simply had nothing for this
+                // uri", so a persistently malformed row never surfaced anywhere. ProjectParsed is static (no instance
+                // logger to thread through), so WaveeLog.Instance is the door — PlaylistFetcher.LogSnapshot uses the
+                // same static-context pattern for the same reason.
+                catch (InvalidProtocolBufferException ex)
+                {
+                    WaveeLog.Instance.Event(WaveeLogLevel.Warning, "hydration", "hydration.project.malformed",
+                        "extended-metadata entity did not parse; skipped", ex: ex,
+                        fields: [WaveeLogField.Of("kind", array.ExtensionKind.ToString()), WaveeLogField.Of("uri", data.EntityUri)]);
+                }
             }
         }
     }
@@ -241,13 +251,20 @@ public sealed class ExtendedMetadataSource
         foreach (var a in t.Artist) artists.Add(proj.Artist(a.Gid, a.Name));   // memoized: artists recur across tracks
         AlbumRef album = new("", "", "");
         Image? image = null;
-        if (t.Album is { } al) { var (aref, cover) = proj.Album(al.Gid, al.Name, al.CoverGroup); album = aref; image = cover; }
+        int year = 0;
+        if (t.Album is { } al)
+        {
+            var (aref, cover) = proj.Album(al.Gid, al.Name, al.CoverGroup);
+            album = aref;
+            image = cover;
+            if (al.Date is { Year: > 0 } d) year = d.Year;
+        }
         string? isrc = null;   // Track.external_id (field 10) — the ISRC drives the lyrics exact-recording fast-path
         foreach (var x in t.ExternalId)
             if (string.Equals(x.Type, "isrc", StringComparison.OrdinalIgnoreCase)) { isrc = x.Id; break; }
         store.UpsertTrack(new Track(id, "spotify:track:" + id, t.Name, artists, album, t.Duration, t.Explicit, image,
             Availability: PlayabilityOf(t), AvailableAt: LiveAtOf(t), Isrc: isrc,
-            CanonicalUri: CanonicalUriOf(t, id)));
+            CanonicalUri: CanonicalUriOf(t, id), Year: year));
     }
 
     /// <summary>THE canonical decoder over a raw TrackV4 payload — the shape the video projector's alias recovery
@@ -258,7 +275,16 @@ public sealed class ExtendedMetadataSource
     {
         if (payload is null || payload.IsEmpty) return null;
         try { return CanonicalUriOf(TrackParser.ParseFrom(payload), Core.EntityUri.IdOf(selfUri)); }
-        catch (InvalidProtocolBufferException) { return null; }
+        catch (InvalidProtocolBufferException ex)
+        {
+            // Debug, not Warning: this is the RECOVERY reader over an already-cached CachedExtension payload (video
+            // alias recovery), not the primary projection — a malformed cache entry here is expected to self-heal on
+            // the next fetch, so it does not deserve the same visibility as ProjectParsed's swallow above.
+            WaveeLog.Instance.Event(WaveeLogLevel.Debug, "hydration", "hydration.project.canonical.malformed",
+                "canonical_uri payload did not parse", ex: ex,
+                fields: [WaveeLogField.Of("uri", selfUri), WaveeLogField.Of("id", Core.EntityUri.IdOf(selfUri))]);
+            return null;
+        }
     }
 
     /// <summary>LeanTrack.canonical_uri when it names a different playable than self; null = unknown-or-self.</summary>
@@ -321,7 +347,8 @@ public sealed class ExtendedMetadataSource
                     foreach (var a in t.Artist) list.Add(proj.Artist(a.Gid, a.Name));
                     tArtists = list;
                 }
-                var track = new Track(tid, "spotify:track:" + tid, t.Name, tArtists, albumRef, t.Duration, t.Explicit, cover);
+                var track = new Track(tid, "spotify:track:" + tid, t.Name, tArtists, albumRef, t.Duration, t.Explicit, cover,
+                    Year: year);
                 tracks.Add(track);
                 store.UpsertTrack(track);
             }

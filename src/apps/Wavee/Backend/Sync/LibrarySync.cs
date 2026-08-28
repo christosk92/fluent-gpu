@@ -874,7 +874,13 @@ public sealed class LibrarySync : IPlaylistTuningSource, IAsyncDisposable
         }
         bool dirty = IsDirty(uri);
         bool stale = !TryGetLastRevalidated(uri, out var last) || (DateTime.UtcNow - last) > OpenRevalidateWindow;
-        if (dirty || stale) await PlaylistRevalidateAsync(uri).ConfigureAwait(false);
+        // A ROLLING-IDENTITY playlist (a daylist and its future siblings) can roll to a wholly new edition well inside
+        // this 5-minute window — every entry into this method is itself an "open" (OpenPlaylistAsync/Revalidate are
+        // the only two callers), so there is no separate "is this a real user gesture" question to ask; the window
+        // just must not veto one for a container whose identity moves on its own clock (cause 3 of the stale-daylist
+        // defect — see PlaylistSnapshotFacts.IsRollingIdentity).
+        bool rolling = PlaylistSnapshotFacts.IsRollingIdentity(header?.Format, header?.DaylistExpiresAtMs ?? 0);
+        if (dirty || stale || rolling) await PlaylistRevalidateAsync(uri).ConfigureAwait(false);
     }
 
     // Revision-gated /diff (§2.6, fixes RC5): an unchanged playlist costs one up-to-date round-trip (usually a 304); a

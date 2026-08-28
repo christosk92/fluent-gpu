@@ -50,7 +50,7 @@ public sealed class ArtistHydration : IKindHydration
     {
         if (uris.Count == 0 || level < HydrationLevel.Open) return;   // Identity is step 0 (ArtistV4) and nothing else.
 
-        var sub = new HydrationOptions(HydrationMode.Blocking, opts.Revalidate, TraitSurface.None, opts.Priority);
+        var sub = new HydrationOptions(HydrationMode.Blocking, opts.Revalidate, TraitSurface.None, opts.Priority, SubAsk: true);
 
         // ── Open: upgrade the discography stubs, then assemble ───────────────────────────────────────────────────────
         // ArtistV4 carries the whole discography as gid-only stubs; AlbumV4 turns each into a resident card. Batched

@@ -19,12 +19,18 @@ public interface IPlaylistPopcountService
     /// <summary>The save count for <paramref name="playlistUri"/>, or <c>null</c> when unknown/unavailable/suppressed.
     /// Never throws for a network or parse failure — an absent badge is the correct degradation.</summary>
     Task<long?> GetSaveCountAsync(string playlistUri, CancellationToken ct = default);
+
+    /// <summary>Drop any cached count for <paramref name="playlistUri"/> so the next ask re-fetches instead of
+    /// serving the 6h-TTL row. The one hook this cache has for "this playlist's identity just moved" — a rolling
+    /// edition (a daylist) rolling over is exactly that, and otherwise ages out only on the TTL.</summary>
+    void Invalidate(string playlistUri);
 }
 
 public sealed class NullPlaylistPopcountService : IPlaylistPopcountService
 {
     public static readonly NullPlaylistPopcountService Instance = new();
     public Task<long?> GetSaveCountAsync(string playlistUri, CancellationToken ct = default) => Task.FromResult<long?>(null);
+    public void Invalidate(string playlistUri) { }
 }
 
 // ── Playlist save count ──────────────────────────────────────────────────────────────────────────────────────────────
@@ -125,6 +131,11 @@ sealed class SpotifyPlaylistPopcountService : IPlaylistPopcountService
         _cache[id] = (count, DateTimeOffset.UtcNow);
         return count;
     }
+
+    public void Invalidate(string playlistUri)
+    {
+        if (IdOf(playlistUri) is { Length: > 0 } id) _cache.TryRemove(id, out _);
+    }
 }
 
 /// <summary>Stable wrapper so the composition root can hand out one instance before login and swap the live provider
@@ -136,4 +147,5 @@ public sealed class SwitchablePlaylistPopcountService : IPlaylistPopcountService
     public void SetInner(IPlaylistPopcountService inner) => _inner = inner ?? throw new ArgumentNullException(nameof(inner));
     public Task<long?> GetSaveCountAsync(string playlistUri, CancellationToken ct = default)
         => _inner.GetSaveCountAsync(playlistUri, ct);
+    public void Invalidate(string playlistUri) => _inner.Invalidate(playlistUri);
 }

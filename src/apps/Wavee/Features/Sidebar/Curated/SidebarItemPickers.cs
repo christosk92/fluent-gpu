@@ -155,14 +155,17 @@ sealed class SidebarItemPickerBody : Component
     {
         var routes = SidebarPinId.PinnableRoutes;
         for (int i = 0; i < routes.Length; i++) AppendRoute(into, routes[i], q);
-        // Not pinnable, but legitimate STATIC LINK destinations (§C1.8: hand-picked app routes).
+        // Not pinnable, but legitimate STATIC LINK destinations (§C1.8: hand-picked app routes). The API console is
+        // developer surface and AppendRoute drops it while developer mode is off — the same rule the palette's own
+        // destination group rides (SidebarPalette.Filter), so the two offers cannot disagree.
         AppendRoute(into, "settings", q);
-        AppendRoute(into, "api-console", q);
+        AppendRoute(into, DeveloperMode.ApiConsoleRoute, q);
         AppendRoute(into, "concerts", q);
     }
 
     void AppendRoute(List<Element> into, string routeKey, string q)
     {
+        if (!DeveloperMode.ShowsRoute(routeKey, DeveloperMode.Enabled.Peek())) return;
         var (title, glyph) = ShellNav.Dest(routeKey, null);
         if (!SidebarPalette.Matches(q, title, routeKey)) return;
         into.Add(PickerRow(glyph, title, routeKey, () => _pick(new SidebarItemSpec(

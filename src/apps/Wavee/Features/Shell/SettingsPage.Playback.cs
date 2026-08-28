@@ -302,23 +302,23 @@ sealed partial class SettingsPage
     Element QualityCombo(Services? svc)
     {
         var settings = svc?.Settings;
+        // THREE rungs, not four. Lossless (AudioQualityPreference.Lossless = 3) still exists in the enum because the
+        // stored int is persisted, but it is not OFFERED: a permanently-disabled fourth row labelled "Coming soon" is
+        // an advert, and the picker is the wrong place to make a promise. Re-offering it later is one entry per array.
         string[] labels =
         [
             Loc.Get(Strings.Settings.Playback.QualityNormal),
             Loc.Get(Strings.Settings.Playback.QualityHigh),
             Loc.Get(Strings.Settings.Playback.QualityVeryHigh),
-            Loc.Get(Strings.Settings.Playback.QualityLossless),
         ];
         string[] descriptions =
         [
             Loc.Get(Strings.Settings.Playback.QualityNormalSub),
             Loc.Get(Strings.Settings.Playback.QualityHighSub),
             Loc.Get(Strings.Settings.Playback.QualityVeryHighSub),
-            Loc.Get(Strings.Settings.Playback.QualityLosslessSub),
         ];
-        bool[] enabled = [true, true, true, false];
         return ComboBox.Create(labels, _quality, width: 280f,
-            itemDescriptions: descriptions, itemEnabled: enabled,
+            itemDescriptions: descriptions,
             isEnabled: settings is not null,
             onChange: i =>
             {

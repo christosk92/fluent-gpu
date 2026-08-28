@@ -40,12 +40,23 @@ public sealed class ProtoTransferStateDecoder : ITransferStateDecoder
                 playback?.Paused ?? false,
                 options?.ShufflingContext ?? false,
                 options?.RepeatingTrack == true ? RepeatMode.Track
-                    : options?.RepeatingContext == true ? RepeatMode.Context : RepeatMode.Off);
+                    : options?.RepeatingContext == true ? RepeatMode.Context : RepeatMode.Off,
+                VideoPersistenceOf(options));
             return !string.IsNullOrEmpty(state.ContextUri)
                 || !string.IsNullOrEmpty(state.CurrentTrack.Uri)
                 || state.CurrentTrack.Gid.Length > 0;
         }
         catch { return false; }
+    }
+
+    // bug 8: TransferPlayerOptions.modes["video_persistence"] == "VIDEO" (capture-verified; see transfer_state.proto).
+    static bool VideoPersistenceOf(TransferPlayerOptions? options)
+    {
+        if (options is null) return false;
+        foreach (var entry in options.Modes)
+            if (entry.Key == "video_persistence" && string.Equals(entry.Value, "VIDEO", StringComparison.OrdinalIgnoreCase))
+                return true;
+        return false;
     }
 
     static TransferTrackRef Map(TransferContextTrack? track) =>
