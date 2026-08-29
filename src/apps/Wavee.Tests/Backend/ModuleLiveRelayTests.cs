@@ -48,6 +48,7 @@ public class ModuleLiveRelayTests
         public long PositionMs { get; set; }
         public bool IsPlaying { get; private set; }
         public bool IsBuffering => false;
+        public bool ClockValid => true;
         public IObservable<AudioHostSignal> Signals => _signals;
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }

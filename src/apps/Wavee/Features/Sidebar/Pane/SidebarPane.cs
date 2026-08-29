@@ -780,7 +780,9 @@ sealed class SidebarPane : Component
         int entriesVer = prefs?.Entries.Version.Value ?? 0;
         int pinsVer = prefs?.PinsVersion.Value ?? 0;
         int folderVer = prefs?.FolderVersion.Value ?? 0;
-        // NOT a signal (the binder is a plain service); it moves in lockstep with Entries.Version, which IS one.
+        // `Revision` is NOT a signal (the binder is a plain service); the signal that carries the binder's projection
+        // changes is `Entries.Version`, which `SidebarEntries.Publish` bumps whenever the published rows OR the full
+        // flattened projection changed (see its doc comment) — so a hydration inside a collapsed folder still re-plans.
         int revision = prefs?.Binder?.Revision ?? 0;
         int mode = Config.ModeEpoch?.Invoke() ?? 0;
         // PHASE 2: entering/leaving edit mode, expanding another card and flipping "Show section contents" all change
@@ -1298,26 +1300,15 @@ sealed class SidebarPane : Component
 
     // ── reads the bound row slots make ───────────────────────────────────────────────────────────────────────────────
 
-    /// <summary>Subscribe the CALLING computation (a row slot's render, a chevron's render) to every epoch that can change
-    /// what a row draws: the document, the projection, the pin list, folder expansion, the live search text and the MODE
-    /// epoch. Returns their fold so the call cannot be optimised away.
+    /// <summary>What every bound slot actually reads: subscribe the CALLING computation (a bound row slot's render) to
+    /// ONE row's epoch instead of to the pane-wide plan version, so a publish re-renders only the rows the diff found
+    /// changed.
     ///
-    /// <para>This is load-bearing, not defensive. A bound row is a FROZEN child: re-planning in this component does not
-    /// re-render it. Without these reads a realized row would keep drawing the previous plan's content after a library
-    /// refresh, a customizer edit, a section toggle or a keystroke in the search box.</para></summary>
-    internal int SubscribeEpoch()
-    {
-        unchecked
-        {
-            int h = _planVersion.Value;
-            h = h * 31 + _disclosureVersion.Value;
-            return h;
-        }
-    }
-
-    /// <summary>The per-row form of <see cref="SubscribeEpoch"/>, and what every bound slot actually reads: it subscribes
-    /// the caller to ONE row's epoch instead of to the pane-wide plan version, so a publish re-renders only the rows the
-    /// diff found changed.
+    /// <para>This is load-bearing, not defensive: a bound row is a FROZEN child — re-planning in this component does
+    /// not re-render it. Without this read a realized row would keep drawing the previous plan's content after a
+    /// library refresh, a customizer edit, a section toggle or a keystroke in the search box. <see cref="PublishStage"/>
+    /// bumps exactly the rows the diff found changed (<see cref="BumpChangedRowEpochs"/>) or all of them on a wholesale
+    /// publish (<see cref="BumpAllRowEpochs"/>).</para>
     ///
     /// <para>Out-of-range falls back to the pane-wide version. That is the safety valve for the transient window where a
     /// slot addresses an index the epoch array has not grown to cover yet: it subscribes to something guaranteed to be

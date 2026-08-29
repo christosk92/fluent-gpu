@@ -16,11 +16,16 @@ namespace Wavee.Backend.Hydration;
 /// (<see cref="Wavee.Backend.Metadata.MetadataChunking"/> — 300 entities / body bytes) — ONE POST per chunk regardless
 /// of how many kinds ride it. <paramref name="extraKinds"/> are (uri, ExtensionKind) pairs a ladder wants FUSED under
 /// the same uri group in the same POST (album Rich adds kind 183). Returns the uris whose PROJECTION wrote an entity —
-/// never merely "requested" — so the ledger seals on outcome (the contract the deleted IMetadataSource seam had).</summary>
+/// never merely "requested" — so the ledger seals on outcome (the contract the deleted IMetadataSource seam had).
+/// <param name="revalidate">Mirrors <see cref="HydrationOptions.Revalidate"/>: a user-initiated open, not merely a
+/// batch the ledger happened to miss. The ledger bypass alone is not enough — the etag cache underneath this call has
+/// its own multi-hour TTL and would otherwise silently re-project a stale cached body (a rolling-identity playlist's
+/// LIST_METADATA_V2 sitting inside its 6h window while the edition it names already rolled over server-side). True
+/// forces every (uri, kind) this call touches through a real conditional GET instead.</param></summary>
 public interface ICatalogFetch
 {
     Task<IReadOnlyCollection<string>> FetchAsync(IReadOnlyList<EntityUri> uris, IReadOnlyList<(string Uri, int Kind)>? extraKinds,
-                                                TraitSurface surface, CancellationToken ct);
+                                                TraitSurface surface, CancellationToken ct, bool revalidate = false);
 }
 
 /// <summary>Pathfinder envelopes. Each returns the MAPPED domain object (or null on a miss); the ladder decides what

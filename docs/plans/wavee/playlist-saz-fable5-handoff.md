@@ -9,12 +9,12 @@ This is a complete research handoff of two official-Spotify-desktop playlist-edi
 | Field | Value |
 |---|---|
 | Date | 2026-08-15 |
-| Owner / user id | `31unjfmo3oefvlz36ef3eb6kj5tq` |
+| Owner / user id | `<user-id>` |
 | Official desktop | Spotify 1.2.95.453 (`spotify-app-version` 129500453), pid **10160**, UA `Spotify/129500453 Win32_ARM64/Windows 10 (10.0.26300; ARM)` plus xpui CEF `Chrome/146.0.7680.179 Spotify/1.2.95.453` |
 | Wavee | spoofed `Spotify/129300667 Win32_ARM64/Windows 10 (10.0.26300.0; ARM)`, pid **13440** |
 | Capture A | `playlist_operations.saz` — 14:20:41–14:22:17 +02 (~96s), **481 sessions**, file prefixes **048–528** |
 | Capture B | `somemoreplaylists.saz` — 14:34:21–14:35:28 +02 (~67s), **134 sessions**, file prefixes **001–134** |
-| Dealer archive (parallel) | `c:\Users\ChristosKarapasias\AppData\Local\Wavee\Logs\dealer\dealer-20260815.idx.ndjson` (27 484 B, 206 rows) + sibling `dealer-20260815.bin` (219 037 B). Decoded vs both HTTP windows — see §9. |
+| Dealer archive (parallel) | `c:\Users\<user>\AppData\Local\Wavee\Logs\dealer\dealer-20260815.idx.ndjson` (27 484 B, 206 rows) + sibling `dealer-20260815.bin` (219 037 B). Decoded vs both HTTP windows — see §9. |
 
 Wavee traffic in both captures is almost entirely **reads** (gzip rootlist GETs, JSON permission/base on `284sizy9BLThJBjc0JQypw` / P2, audio 206, melody/time, one proto gabo). **All 29 writes** (25 in A + 4 in B) are official desktop pid 10160.
 
@@ -30,8 +30,8 @@ A `.saz` is a zip. After extract:
 
 **File prefix ≠ Fiddler SID.** Capture A starts at prefix `048` / SID `100` and ends at prefix `528` / SID `939`. Always cite **both**. Catalogs live at:
 
-- `C:\Users\ChristosKarapasias\AppData\Local\Temp\playlist_operations_saz\catalog.json` (+ `catalog.txt`)
-- `C:\Users\ChristosKarapasias\AppData\Local\Temp\somemoreplaylists_saz\catalog.json`
+- `C:\Users\<user>\AppData\Local\Temp\playlist_operations_saz\catalog.json` (+ `catalog.txt`)
+- `C:\Users\<user>\AppData\Local\Temp\somemoreplaylists_saz\catalog.json`
 
 Do not invent IDs. §4.Z / §5.Z list every catalog row.
 
@@ -278,11 +278,11 @@ Every row from `playlist_operations_saz/catalog.json`. Semantic one-liner only w
 049 sid=103 GET 200 gew4-spclient.spotify.com /popcount/v2/playlist/6EVbQZBiAg9zHzMjChxvRd/count req=empty/0b resp=protobuf/6b enc=- role=playlist-read proc=spotify:10160 — popcount P1 count=0 (f7)
 050 sid=104 GET 200 gew4-spclient.spotify.com /playlist-permission/v1/playlist/6EVbQZBiAg9zHzMjChxvRd/permission/base req=empty/0b resp=protobuf/11b enc=- role=playlist-read proc=spotify:10160 — perm proto P1 Viewer/default
 051 sid=105 POST 200 gew4-spclient.spotify.com /extended-metadata/v0/extended-metadata req=protobuf/95b resp=protobuf/858b enc=resp-ce:zstd role=other proc=spotify:10160 — XM batch
-052 sid=106 GET 200 gew4-spclient.spotify.com /playlist/v2/user/31unjfmo3oefvlz36ef3eb6kj5tq/rootlist??decorate=revision,attributes,length,owner,capabilities,picture req=empty/0b resp=protobuf/7156b enc=resp-ce:gzip,resp-te:chunked role=playlist-read proc=wavee:13440 — Wavee gzip full rootlist GET (rev ~71)
+052 sid=106 GET 200 gew4-spclient.spotify.com /playlist/v2/user/<user-id>/rootlist??decorate=revision,attributes,length,owner,capabilities,picture req=empty/0b resp=protobuf/7156b enc=resp-ce:gzip,resp-te:chunked role=playlist-read proc=wavee:13440 — Wavee gzip full rootlist GET (rev ~71)
 053 sid=107 GET 200 gew4-spclient.spotify.com /playlist-permission/v1/playlist/284sizy9BLThJBjc0JQypw/permission/base req=empty/0b resp=json/216b enc=resp-ce:gzip,resp-te:chunked role=playlist-read proc=wavee:13440 — Wavee JSON perm 우울해 VIEWER/o5umTmROwTQ=
 054 sid=110 GET 200 gew4-spclient.spotify.com /popcount/v2/playlist/6EVbQZBiAg9zHzMjChxvRd/count req=empty/0b resp=protobuf/6b enc=- role=playlist-read proc=spotify:10160
 055 sid=111 GET 200 gew4-spclient.spotify.com /playlist-permission/v1/playlist/6EVbQZBiAg9zHzMjChxvRd/permission/members req=empty/0b resp=empty/0b enc=- role=playlist-read proc=spotify:10160 — perm members empty
-056 sid=112 GET 200 gew4-spclient.spotify.com /socialgraph/v4/31unjfmo3oefvlz36ef3eb6kj5tq/is-following??limit=1000 req=empty/0b resp=empty/0b enc=- role=other proc=spotify:10160 — socialgraph is-following
+056 sid=112 GET 200 gew4-spclient.spotify.com /socialgraph/v4/<user-id>/is-following??limit=1000 req=empty/0b resp=empty/0b enc=- role=other proc=spotify:10160 — socialgraph is-following
 057 sid=113 GET 200 gew4-spclient.spotify.com /playlist-permission/v1/playlist/6EVbQZBiAg9zHzMjChxvRd/permission/base req=empty/0b resp=protobuf/11b enc=- role=playlist-read proc=spotify:10160
 058 sid=114 GET 200 gew4-spclient.spotify.com /playlist/v2/playlist/6EVbQZBiAg9zHzMjChxvRd req=empty/0b resp=protobuf/1775b enc=resp-ce:zstd role=playlist-read proc=spotify:10160 — full GET P1 Daily Mix 1 (2) len=50
 059 sid=115 CONNECT 200 gew4-spclient.spotify.com:443 (tunnel) req=protobuf/6504b resp=protobuf/709b enc=- role=tls-tunnel proc=spotify:10160
@@ -390,16 +390,16 @@ Every row from `playlist_operations_saz/catalog.json`. Semantic one-liner only w
 161 sid=332 POST 200 gew4-spclient.spotify.com /gabo-receiver-service/v3/events req=json/22493b resp=json/13b enc=- role=telemetry proc=spotify:10160
 162 sid=372 POST 200 gew4-spclient.spotify.com /gabo-receiver-service/v3/events req=json/26375b resp=json/13b enc=- role=telemetry proc=spotify:10160
 163 sid=373 POST 200 gew4-spclient.spotify.com /gabo-receiver-service/v3/events req=json/18144b resp=json/13b enc=- role=telemetry proc=spotify:10160
-164 sid=464 POST 200 gew4-spclient.spotify.com /playlist/v2/user/31unjfmo3oefvlz36ef3eb6kj5tq/rootlist/changes req=other/197b resp=protobuf/113b enc=- role=playlist-mutation proc=spotify:10160 — WRITE rootlist folder create start+end edb339e10aebcf38:New+Folder
-165 sid=467 GET 200 gew4-spclient.spotify.com /playlist/v2/user/31unjfmo3oefvlz36ef3eb6kj5tq/rootlist??decorate=revision,attributes,length,owner,capabilities,picture req=empty/0b resp=protobuf/7202b enc=resp-ce:gzip,resp-te:chunked role=playlist-read proc=wavee:13440 — Wavee gzip rootlist GET (tracks new folder)
+164 sid=464 POST 200 gew4-spclient.spotify.com /playlist/v2/user/<user-id>/rootlist/changes req=other/197b resp=protobuf/113b enc=- role=playlist-mutation proc=spotify:10160 — WRITE rootlist folder create start+end edb339e10aebcf38:New+Folder
+165 sid=467 GET 200 gew4-spclient.spotify.com /playlist/v2/user/<user-id>/rootlist??decorate=revision,attributes,length,owner,capabilities,picture req=empty/0b resp=protobuf/7202b enc=resp-ce:gzip,resp-te:chunked role=playlist-read proc=wavee:13440 — Wavee gzip rootlist GET (tracks new folder)
 166 sid=478 GET 200 gew4-spclient.spotify.com /playlist-permission/v1/playlist/284sizy9BLThJBjc0JQypw/permission/base req=empty/0b resp=json/118b enc=resp-ce:gzip,resp-te:chunked role=playlist-read proc=wavee:13440
 167 sid=498 POST 200 gew4-spclient.spotify.com /gabo-receiver-service/v3/events req=json/1559b resp=json/13b enc=- role=telemetry proc=spotify:10160
-168 sid=499 POST 200 gew4-spclient.spotify.com /playlist/v2/user/31unjfmo3oefvlz36ef3eb6kj5tq/rootlist/changes req=other/85b resp=protobuf/113b enc=- role=playlist-mutation proc=spotify:10160 — WRITE rootlist MOV into folder
-169 sid=503 GET 200 gew4-spclient.spotify.com /playlist/v2/user/31unjfmo3oefvlz36ef3eb6kj5tq/rootlist??decorate=revision,attributes,length,owner,capabilities,picture req=empty/0b resp=protobuf/7130b enc=resp-ce:gzip,resp-te:chunked role=playlist-read proc=wavee:13440 — Wavee gzip rootlist GET
+168 sid=499 POST 200 gew4-spclient.spotify.com /playlist/v2/user/<user-id>/rootlist/changes req=other/85b resp=protobuf/113b enc=- role=playlist-mutation proc=spotify:10160 — WRITE rootlist MOV into folder
+169 sid=503 GET 200 gew4-spclient.spotify.com /playlist/v2/user/<user-id>/rootlist??decorate=revision,attributes,length,owner,capabilities,picture req=empty/0b resp=protobuf/7130b enc=resp-ce:gzip,resp-te:chunked role=playlist-read proc=wavee:13440 — Wavee gzip rootlist GET
 170 sid=505 GET 200 gew4-spclient.spotify.com /playlist-permission/v1/playlist/284sizy9BLThJBjc0JQypw/permission/base req=empty/0b resp=json/187b enc=resp-ce:gzip,resp-te:chunked role=playlist-read proc=wavee:13440
-171 sid=507 GET 200 gew4-spclient.spotify.com /playlist/v2/user/31unjfmo3oefvlz36ef3eb6kj5tq/rootlist/diff??revision=73%2Ce179565cd45ac2d11d45be22fd162b16e465c245&handlesContent=&hint_revision=72%2Cf9465fcd9b6c740300ae010e4492fdf7436edad8 req=empty/0b resp=protobuf/80b enc=- role=playlist-read proc=spotify:10160 — official rootlist /diff 73 hint 72 200 0 ops
-172 sid=510 POST 200 gew4-spclient.spotify.com /playlist/v2/user/31unjfmo3oefvlz36ef3eb6kj5tq/rootlist/changes req=other/197b resp=protobuf/113b enc=- role=playlist-mutation proc=spotify:10160 — WRITE rootlist second folder 3dd9e795c88ae3e4
-173 sid=511 GET 200 gew4-spclient.spotify.com /playlist/v2/user/31unjfmo3oefvlz36ef3eb6kj5tq/rootlist??decorate=revision,attributes,length,owner,capabilities,picture req=empty/0b resp=protobuf/7212b enc=resp-ce:gzip,resp-te:chunked role=playlist-read proc=wavee:13440 — Wavee gzip rootlist GET
+171 sid=507 GET 200 gew4-spclient.spotify.com /playlist/v2/user/<user-id>/rootlist/diff??revision=73%2Ce179565cd45ac2d11d45be22fd162b16e465c245&handlesContent=&hint_revision=72%2Cf9465fcd9b6c740300ae010e4492fdf7436edad8 req=empty/0b resp=protobuf/80b enc=- role=playlist-read proc=spotify:10160 — official rootlist /diff 73 hint 72 200 0 ops
+172 sid=510 POST 200 gew4-spclient.spotify.com /playlist/v2/user/<user-id>/rootlist/changes req=other/197b resp=protobuf/113b enc=- role=playlist-mutation proc=spotify:10160 — WRITE rootlist second folder 3dd9e795c88ae3e4
+173 sid=511 GET 200 gew4-spclient.spotify.com /playlist/v2/user/<user-id>/rootlist??decorate=revision,attributes,length,owner,capabilities,picture req=empty/0b resp=protobuf/7212b enc=resp-ce:gzip,resp-te:chunked role=playlist-read proc=wavee:13440 — Wavee gzip rootlist GET
 174 sid=512 GET 200 gew4-spclient.spotify.com /playlist-permission/v1/playlist/284sizy9BLThJBjc0JQypw/permission/base req=empty/0b resp=json/127b enc=resp-ce:gzip,resp-te:chunked role=playlist-read proc=wavee:13440
 175 sid=516 POST 200 spclient.wg.spotify.com /gabo-receiver-service/v3/events/ req=protobuf/675b resp=empty/0b enc=req-ce:gzip role=telemetry proc=spotify:10160
 176 sid=525 POST 200 gew4-spclient.spotify.com /gabo-receiver-service/v3/events req=json/16747b resp=json/13b enc=- role=telemetry proc=spotify:10160
@@ -413,8 +413,8 @@ Every row from `playlist_operations_saz/catalog.json`. Semantic one-liner only w
 184 sid=533 POST 200 gew4-spclient.spotify.com /extended-metadata/v0/extended-metadata req=protobuf/81b resp=protobuf/173b enc=resp-ce:zstd role=other proc=spotify:10160
 185 sid=534 POST 200 gew4-spclient.spotify.com /extended-metadata/v0/extended-metadata req=protobuf/81b resp=protobuf/173b enc=resp-ce:zstd role=other proc=spotify:10160
 186 sid=535 POST 200 gew4-spclient.spotify.com /extended-metadata/v0/extended-metadata req=protobuf/81b resp=protobuf/173b enc=resp-ce:zstd role=other proc=spotify:10160
-187 sid=536 POST 200 gew4-spclient.spotify.com /playlist/v2/user/31unjfmo3oefvlz36ef3eb6kj5tq/rootlist/changes req=other/135b resp=protobuf/113b enc=- role=playlist-mutation proc=spotify:10160 — WRITE rootlist ADD P2 idx 2
-188 sid=537 GET 200 gew4-spclient.spotify.com /playlist/v2/user/31unjfmo3oefvlz36ef3eb6kj5tq/rootlist??decorate=revision,attributes,length,owner,capabilities,picture req=empty/0b resp=protobuf/7403b enc=resp-ce:gzip,resp-te:chunked role=playlist-read proc=wavee:13440 — Wavee gzip rootlist GET (P2 visible)
+187 sid=536 POST 200 gew4-spclient.spotify.com /playlist/v2/user/<user-id>/rootlist/changes req=other/135b resp=protobuf/113b enc=- role=playlist-mutation proc=spotify:10160 — WRITE rootlist ADD P2 idx 2
+188 sid=537 GET 200 gew4-spclient.spotify.com /playlist/v2/user/<user-id>/rootlist??decorate=revision,attributes,length,owner,capabilities,picture req=empty/0b resp=protobuf/7403b enc=resp-ce:gzip,resp-te:chunked role=playlist-read proc=wavee:13440 — Wavee gzip rootlist GET (P2 visible)
 189 sid=538 GET 200 gew4-spclient.spotify.com /playlist-permission/v1/playlist/6QbD3n4hCF6uP8jqyiDsS5/permission/base req=empty/0b resp=protobuf/11b enc=- role=playlist-read proc=spotify:10160
 190 sid=539 GET 200 gew4-spclient.spotify.com /playlist-permission/v1/playlist/284sizy9BLThJBjc0JQypw/permission/base req=empty/0b resp=json/198b enc=resp-ce:gzip,resp-te:chunked role=playlist-read proc=wavee:13440
 191 sid=540 GET 200 gew4-spclient.spotify.com /playlist/v2/playlist/6QbD3n4hCF6uP8jqyiDsS5/diff??revision=1%2C70fc7b826aa18d65848b077b3dcf80ff1fb8eb8f&handlesContent= req=empty/0b resp=protobuf/202b enc=resp-ce:zstd role=playlist-read proc=spotify:10160 — P2 /diff rev=1 200 from==to 0 ops
@@ -454,52 +454,52 @@ Every row from `playlist_operations_saz/catalog.json`. Semantic one-liner only w
 225 sid=588 POST 200 gew4-spclient.spotify.com /extended-metadata/v0/extended-metadata req=protobuf/81b resp=protobuf/173b enc=resp-ce:zstd role=other proc=spotify:10160
 226 sid=589 POST 200 gew4-spclient.spotify.com /extended-metadata/v0/extended-metadata req=protobuf/81b resp=protobuf/173b enc=resp-ce:zstd role=other proc=spotify:10160
 227 sid=590 GET 200 gew4-spclient.spotify.com /popcount/v2/playlist/4vkIrispQ6gcMNIojGPd0L/count req=empty/0b resp=protobuf/6b enc=- role=playlist-read proc=spotify:10160
-228 sid=591 POST 200 gew4-spclient.spotify.com /playlist/v2/user/31unjfmo3oefvlz36ef3eb6kj5tq/rootlist/changes req=other/135b resp=protobuf/113b enc=- role=playlist-mutation proc=spotify:10160 — WRITE rootlist ADD P3
+228 sid=591 POST 200 gew4-spclient.spotify.com /playlist/v2/user/<user-id>/rootlist/changes req=other/135b resp=protobuf/113b enc=- role=playlist-mutation proc=spotify:10160 — WRITE rootlist ADD P3
 229 sid=592 GET 200 gew4-spclient.spotify.com /playlist-permission/v1/playlist/4vkIrispQ6gcMNIojGPd0L/permission/base req=empty/0b resp=protobuf/11b enc=- role=playlist-read proc=spotify:10160
 230 sid=593 GET 200 gew4-spclient.spotify.com /playlist-permission/v1/playlist/4vkIrispQ6gcMNIojGPd0L/permission/members req=empty/0b resp=empty/0b enc=- role=playlist-read proc=spotify:10160
 231 sid=594 POST 200 gew4-spclient.spotify.com /extended-metadata/v0/extended-metadata req=protobuf/95b resp=protobuf/311b enc=resp-ce:zstd role=other proc=spotify:10160
 232 sid=595 GET 200 gew4-spclient.spotify.com /playlist-permission/v1/playlist/4vkIrispQ6gcMNIojGPd0L/permission/base req=empty/0b resp=protobuf/11b enc=- role=playlist-read proc=spotify:10160
 233 sid=596 GET 200 gew4-spclient.spotify.com /playlist-permission/v1/playlist/4vkIrispQ6gcMNIojGPd0L/permission/members req=empty/0b resp=empty/0b enc=- role=playlist-read proc=spotify:10160
 234 sid=597 GET 200 gew4-spclient.spotify.com /playlist-permission/v1/playlist/4vkIrispQ6gcMNIojGPd0L/permission/base req=empty/0b resp=protobuf/11b enc=- role=playlist-read proc=spotify:10160
-235 sid=598 GET 200 gew4-spclient.spotify.com /playlist/v2/user/31unjfmo3oefvlz36ef3eb6kj5tq/rootlist??decorate=revision,attributes,length,owner,capabilities,picture req=empty/0b resp=protobuf/7238b enc=resp-ce:gzip,resp-te:chunked role=playlist-read proc=wavee:13440 — Wavee gzip rootlist GET (P3 visible)
+235 sid=598 GET 200 gew4-spclient.spotify.com /playlist/v2/user/<user-id>/rootlist??decorate=revision,attributes,length,owner,capabilities,picture req=empty/0b resp=protobuf/7238b enc=resp-ce:gzip,resp-te:chunked role=playlist-read proc=wavee:13440 — Wavee gzip rootlist GET (P3 visible)
 236 sid=599 GET 200 gew4-spclient.spotify.com /playlist-permission/v1/playlist/4vkIrispQ6gcMNIojGPd0L/permission/base req=empty/0b resp=protobuf/11b enc=- role=playlist-read proc=spotify:10160
 237 sid=600 GET 200 gew4-spclient.spotify.com /playlist-permission/v1/playlist/284sizy9BLThJBjc0JQypw/permission/base req=empty/0b resp=json/156b enc=resp-ce:gzip,resp-te:chunked role=playlist-read proc=wavee:13440
 238 sid=601 POST 200 gew4-spclient.spotify.com /extended-metadata/v0/extended-metadata req=protobuf/80b resp=protobuf/147b enc=- role=other proc=spotify:10160
 239 sid=603 GET 200 gew4-spclient.spotify.com /playlist/v2/playlist/4vkIrispQ6gcMNIojGPd0L/diff??revision=1%2C398040e2a19d84cb2f13ecf75a8c320527fa0965&handlesContent= req=empty/0b resp=protobuf/202b enc=resp-ce:zstd role=playlist-read proc=spotify:10160 — P3 /diff rev=1 200 from==to 0 ops
-240 sid=604 POST 200 gew4-spclient.spotify.com /playlist/v2/user/31unjfmo3oefvlz36ef3eb6kj5tq/rootlist/changes req=other/85b resp=protobuf/113b enc=- role=playlist-mutation proc=spotify:10160 — WRITE rootlist MOV
-241 sid=605 GET 200 gew4-spclient.spotify.com /playlist/v2/user/31unjfmo3oefvlz36ef3eb6kj5tq/rootlist??decorate=revision,attributes,length,owner,capabilities,picture req=empty/0b resp=protobuf/7432b enc=resp-ce:gzip,resp-te:chunked role=playlist-read proc=wavee:13440 — Wavee gzip rootlist GET
+240 sid=604 POST 200 gew4-spclient.spotify.com /playlist/v2/user/<user-id>/rootlist/changes req=other/85b resp=protobuf/113b enc=- role=playlist-mutation proc=spotify:10160 — WRITE rootlist MOV
+241 sid=605 GET 200 gew4-spclient.spotify.com /playlist/v2/user/<user-id>/rootlist??decorate=revision,attributes,length,owner,capabilities,picture req=empty/0b resp=protobuf/7432b enc=resp-ce:gzip,resp-te:chunked role=playlist-read proc=wavee:13440 — Wavee gzip rootlist GET
 242 sid=606 GET 200 gew4-spclient.spotify.com /playlist-permission/v1/playlist/284sizy9BLThJBjc0JQypw/permission/base req=empty/0b resp=json/296b enc=resp-ce:gzip,resp-te:chunked role=playlist-read proc=wavee:13440
-243 sid=607 GET 200 gew4-spclient.spotify.com /playlist/v2/user/31unjfmo3oefvlz36ef3eb6kj5tq/rootlist/diff??revision=77%2Cc35279bf16caccd018522af367764acb519b987a&handlesContent=&hint_revision=76%2C605874b0fcc3798802bf347eadb37594b816fc2a req=empty/0b resp=protobuf/80b enc=- role=playlist-read proc=spotify:10160 — official rootlist /diff 77 hint 76
+243 sid=607 GET 200 gew4-spclient.spotify.com /playlist/v2/user/<user-id>/rootlist/diff??revision=77%2Cc35279bf16caccd018522af367764acb519b987a&handlesContent=&hint_revision=76%2C605874b0fcc3798802bf347eadb37594b816fc2a req=empty/0b resp=protobuf/80b enc=- role=playlist-read proc=spotify:10160 — official rootlist /diff 77 hint 76
 244 sid=608 GET 200 gew4-spclient.spotify.com /popcount/v2/playlist/6EVbQZBiAg9zHzMjChxvRd/count req=empty/0b resp=protobuf/6b enc=- role=playlist-read proc=spotify:10160
 245 sid=609 GET 200 gew4-spclient.spotify.com /playlist-permission/v1/playlist/6EVbQZBiAg9zHzMjChxvRd/permission/members req=empty/0b resp=empty/0b enc=- role=playlist-read proc=spotify:10160
 246 sid=610 GET 200 gew4-spclient.spotify.com /playlist-permission/v1/playlist/6EVbQZBiAg9zHzMjChxvRd/permission/base req=empty/0b resp=protobuf/11b enc=- role=playlist-read proc=spotify:10160
 247 sid=611 GET 200 gew4-spclient.spotify.com /playlist/v2/playlist/6EVbQZBiAg9zHzMjChxvRd/diff??revision=7%2C12606d674a28d18595f85d73b0ae39aafd6f0eba&handlesContent= req=empty/0b resp=protobuf/202b enc=resp-ce:zstd role=playlist-read proc=spotify:10160
 248 sid=612 GET 200 gew4-spclient.spotify.com /playlist-permission/v1/playlist/6EVbQZBiAg9zHzMjChxvRd/permission/base req=empty/0b resp=protobuf/11b enc=- role=playlist-read proc=spotify:10160
-249 sid=615 POST 200 gew4-spclient.spotify.com /playlist/v2/user/31unjfmo3oefvlz36ef3eb6kj5tq/rootlist/changes req=other/85b resp=protobuf/113b enc=- role=playlist-mutation proc=spotify:10160 — WRITE rootlist MOV
-250 sid=616 GET 200 gew4-spclient.spotify.com /playlist/v2/user/31unjfmo3oefvlz36ef3eb6kj5tq/rootlist??decorate=revision,attributes,length,owner,capabilities,picture req=empty/0b resp=protobuf/7460b enc=resp-ce:gzip,resp-te:chunked role=playlist-read proc=wavee:13440 — Wavee gzip rootlist GET
+249 sid=615 POST 200 gew4-spclient.spotify.com /playlist/v2/user/<user-id>/rootlist/changes req=other/85b resp=protobuf/113b enc=- role=playlist-mutation proc=spotify:10160 — WRITE rootlist MOV
+250 sid=616 GET 200 gew4-spclient.spotify.com /playlist/v2/user/<user-id>/rootlist??decorate=revision,attributes,length,owner,capabilities,picture req=empty/0b resp=protobuf/7460b enc=resp-ce:gzip,resp-te:chunked role=playlist-read proc=wavee:13440 — Wavee gzip rootlist GET
 251 sid=617 GET 200 gew4-spclient.spotify.com /playlist-permission/v1/playlist/284sizy9BLThJBjc0JQypw/permission/base req=empty/0b resp=json/136b enc=resp-ce:gzip,resp-te:chunked role=playlist-read proc=wavee:13440
-252 sid=619 POST 200 gew4-spclient.spotify.com /playlist/v2/user/31unjfmo3oefvlz36ef3eb6kj5tq/rootlist/changes req=other/85b resp=protobuf/113b enc=- role=playlist-mutation proc=spotify:10160 — WRITE rootlist MOV
-253 sid=620 GET 200 gew4-spclient.spotify.com /playlist/v2/user/31unjfmo3oefvlz36ef3eb6kj5tq/rootlist??decorate=revision,attributes,length,owner,capabilities,picture req=empty/0b resp=protobuf/7479b enc=resp-ce:gzip,resp-te:chunked role=playlist-read proc=wavee:13440 — Wavee gzip rootlist GET
+252 sid=619 POST 200 gew4-spclient.spotify.com /playlist/v2/user/<user-id>/rootlist/changes req=other/85b resp=protobuf/113b enc=- role=playlist-mutation proc=spotify:10160 — WRITE rootlist MOV
+253 sid=620 GET 200 gew4-spclient.spotify.com /playlist/v2/user/<user-id>/rootlist??decorate=revision,attributes,length,owner,capabilities,picture req=empty/0b resp=protobuf/7479b enc=resp-ce:gzip,resp-te:chunked role=playlist-read proc=wavee:13440 — Wavee gzip rootlist GET
 254 sid=622 GET 200 gew4-spclient.spotify.com /playlist-permission/v1/playlist/284sizy9BLThJBjc0JQypw/permission/base req=empty/0b resp=json/206b enc=resp-ce:gzip,resp-te:chunked role=playlist-read proc=wavee:13440
-255 sid=623 GET 200 gew4-spclient.spotify.com /playlist/v2/user/31unjfmo3oefvlz36ef3eb6kj5tq/rootlist/diff??revision=79%2C1f8ab625b253bfb66359e2390c363c89c66bb50d&handlesContent=&hint_revision=78%2C7f8aded1664ab5a6b3714d529b22faf5ffb37ef9 req=empty/0b resp=protobuf/80b enc=- role=playlist-read proc=spotify:10160 — official rootlist /diff 79 hint 78
+255 sid=623 GET 200 gew4-spclient.spotify.com /playlist/v2/user/<user-id>/rootlist/diff??revision=79%2C1f8ab625b253bfb66359e2390c363c89c66bb50d&handlesContent=&hint_revision=78%2C7f8aded1664ab5a6b3714d529b22faf5ffb37ef9 req=empty/0b resp=protobuf/80b enc=- role=playlist-read proc=spotify:10160 — official rootlist /diff 79 hint 78
 256 sid=624 POST 200 gew4-spclient.spotify.com /gabo-receiver-service/v3/events req=json/12867b resp=json/13b enc=- role=telemetry proc=spotify:10160
-257 sid=625 POST 200 gew4-spclient.spotify.com /playlist/v2/user/31unjfmo3oefvlz36ef3eb6kj5tq/rootlist/changes req=other/85b resp=protobuf/113b enc=- role=playlist-mutation proc=spotify:10160 — WRITE rootlist MOV 363ms
-258 sid=627 GET 200 gew4-spclient.spotify.com /playlist/v2/user/31unjfmo3oefvlz36ef3eb6kj5tq/rootlist??decorate=revision,attributes,length,owner,capabilities,picture req=empty/0b resp=protobuf/7376b enc=resp-ce:gzip,resp-te:chunked role=playlist-read proc=wavee:13440 — Wavee gzip rootlist GET
+257 sid=625 POST 200 gew4-spclient.spotify.com /playlist/v2/user/<user-id>/rootlist/changes req=other/85b resp=protobuf/113b enc=- role=playlist-mutation proc=spotify:10160 — WRITE rootlist MOV 363ms
+258 sid=627 GET 200 gew4-spclient.spotify.com /playlist/v2/user/<user-id>/rootlist??decorate=revision,attributes,length,owner,capabilities,picture req=empty/0b resp=protobuf/7376b enc=resp-ce:gzip,resp-te:chunked role=playlist-read proc=wavee:13440 — Wavee gzip rootlist GET
 259 sid=628 GET 200 gew4-spclient.spotify.com /playlist-permission/v1/playlist/284sizy9BLThJBjc0JQypw/permission/base req=empty/0b resp=json/203b enc=resp-ce:gzip,resp-te:chunked role=playlist-read proc=wavee:13440
 260 sid=630 GET 200 pickasso.spotifycdn.com /image/ab67c0de0000deef/dt/v1/img/artistmix/4SpbR6yFEvexJuaBpgAU5p/en req=empty/0b resp=image/35628b enc=resp-ce:gzip role=cdn proc=spotify:10160
 261 sid=631 CONNECT 200 seed-mix-image.spotifycdn.com:443 (tunnel) req=protobuf/6411b resp=protobuf/668b enc=- role=tls-tunnel proc=spotify:10160
 262 sid=632 GET 200 pickasso.spotifycdn.com /image/ab67c0de0000deef/dt/v1/img/artistmix/7hr9W3IjXcm3UlLY7guLk5/en req=empty/0b resp=image/31277b enc=resp-ce:gzip role=cdn proc=spotify:10160
 263 sid=633 GET 200 pickasso.spotifycdn.com /image/ab67c0de0000deef/dt/v1/img/daily/2/ab6761610000e5ebe2e8e7ff002a4afda1c7147e/en req=empty/0b resp=image/27136b enc=resp-ce:gzip role=cdn proc=spotify:10160
 264 sid=635 GET 200 seed-mix-image.spotifycdn.com /v6/img/desc/Nostalgia%202000s/en/default req=empty/0b resp=image/15919b enc=resp-ce:gzip role=cdn proc=spotify:10160
-265 sid=642 POST 200 gew4-spclient.spotify.com /playlist/v2/user/31unjfmo3oefvlz36ef3eb6kj5tq/rootlist/changes req=other/191b resp=protobuf/106b enc=resp-ce:zstd role=playlist-mutation proc=spotify:10160 — WRITE rootlist MOV (3 deltas)
-266 sid=643 GET 200 gew4-spclient.spotify.com /playlist/v2/user/31unjfmo3oefvlz36ef3eb6kj5tq/rootlist??decorate=revision,attributes,length,owner,capabilities,picture req=empty/0b resp=protobuf/7497b enc=resp-ce:gzip,resp-te:chunked role=playlist-read proc=wavee:13440 — Wavee gzip rootlist GET
+265 sid=642 POST 200 gew4-spclient.spotify.com /playlist/v2/user/<user-id>/rootlist/changes req=other/191b resp=protobuf/106b enc=resp-ce:zstd role=playlist-mutation proc=spotify:10160 — WRITE rootlist MOV (3 deltas)
+266 sid=643 GET 200 gew4-spclient.spotify.com /playlist/v2/user/<user-id>/rootlist??decorate=revision,attributes,length,owner,capabilities,picture req=empty/0b resp=protobuf/7497b enc=resp-ce:gzip,resp-te:chunked role=playlist-read proc=wavee:13440 — Wavee gzip rootlist GET
 267 sid=644 GET 200 gew4-spclient.spotify.com /playlist-permission/v1/playlist/284sizy9BLThJBjc0JQypw/permission/base req=empty/0b resp=json/175b enc=resp-ce:gzip,resp-te:chunked role=playlist-read proc=wavee:13440
-268 sid=645 GET 200 gew4-spclient.spotify.com /playlist/v2/user/31unjfmo3oefvlz36ef3eb6kj5tq/rootlist/diff??revision=83%2C920547bffb13ba50af58aa7e655891b604914abe&handlesContent=&hint_revision=80%2Cec59b9646cd6752ae524c326577e339642fa3cf0 req=empty/0b resp=protobuf/80b enc=- role=playlist-read proc=spotify:10160 — official rootlist /diff 83 hint 80
+268 sid=645 GET 200 gew4-spclient.spotify.com /playlist/v2/user/<user-id>/rootlist/diff??revision=83%2C920547bffb13ba50af58aa7e655891b604914abe&handlesContent=&hint_revision=80%2Cec59b9646cd6752ae524c326577e339642fa3cf0 req=empty/0b resp=protobuf/80b enc=- role=playlist-read proc=spotify:10160 — official rootlist /diff 83 hint 80
 269 sid=646 GET 200 gew4-spclient.spotify.com /playlist/v2/playlist/4vkIrispQ6gcMNIojGPd0L/diff??revision=1%2C398040e2a19d84cb2f13ecf75a8c320527fa0965&handlesContent= req=empty/0b resp=protobuf/202b enc=resp-ce:zstd role=playlist-read proc=spotify:10160
 270 sid=647 GET 200 gew4-spclient.spotify.com /popcount/v2/playlist/4vkIrispQ6gcMNIojGPd0L/count req=empty/0b resp=protobuf/6b enc=- role=playlist-read proc=spotify:10160
 271 sid=648 GET 200 gew4-spclient.spotify.com /playlist-permission/v1/playlist/4vkIrispQ6gcMNIojGPd0L/permission/base req=empty/0b resp=protobuf/11b enc=- role=playlist-read proc=spotify:10160
-272 sid=651 POST 200 gew4-spclient.spotify.com /playlist/v2/user/31unjfmo3oefvlz36ef3eb6kj5tq/rootlist/changes req=other/85b resp=protobuf/113b enc=- role=playlist-mutation proc=spotify:10160 — WRITE rootlist MOV
-273 sid=652 GET 200 gew4-spclient.spotify.com /playlist/v2/user/31unjfmo3oefvlz36ef3eb6kj5tq/rootlist??decorate=revision,attributes,length,owner,capabilities,picture req=empty/0b resp=protobuf/7393b enc=resp-ce:gzip,resp-te:chunked role=playlist-read proc=wavee:13440 — Wavee gzip rootlist GET
+272 sid=651 POST 200 gew4-spclient.spotify.com /playlist/v2/user/<user-id>/rootlist/changes req=other/85b resp=protobuf/113b enc=- role=playlist-mutation proc=spotify:10160 — WRITE rootlist MOV
+273 sid=652 GET 200 gew4-spclient.spotify.com /playlist/v2/user/<user-id>/rootlist??decorate=revision,attributes,length,owner,capabilities,picture req=empty/0b resp=protobuf/7393b enc=resp-ce:gzip,resp-te:chunked role=playlist-read proc=wavee:13440 — Wavee gzip rootlist GET
 274 sid=653 GET 200 gew4-spclient.spotify.com /playlist-permission/v1/playlist/284sizy9BLThJBjc0JQypw/permission/base req=empty/0b resp=json/341b enc=resp-ce:gzip,resp-te:chunked role=playlist-read proc=wavee:13440
 275 sid=654 POST 200 spclient.wg.spotify.com /gabo-receiver-service/v3/events/ req=protobuf/515b resp=empty/0b enc=req-ce:gzip role=telemetry proc=spotify:10160
 276 sid=657 POST 200 gew4-spclient.spotify.com /gabo-receiver-service/v3/events req=json/9193b resp=json/13b enc=- role=telemetry proc=spotify:10160
@@ -507,8 +507,8 @@ Every row from `playlist_operations_saz/catalog.json`. Semantic one-liner only w
 278 sid=661 GET 200 gew4-spclient.spotify.com /playlist-permission/v1/playlist/4vkIrispQ6gcMNIojGPd0L/permission/base req=empty/0b resp=protobuf/11b enc=- role=playlist-read proc=spotify:10160
 279 sid=662 GET 200 gew4-spclient.spotify.com /popcount/v2/playlist/4vkIrispQ6gcMNIojGPd0L/count req=empty/0b resp=protobuf/6b enc=- role=playlist-read proc=spotify:10160
 280 sid=663 GET 200 gew4-spclient.spotify.com /playlist-permission/v1/playlist/4vkIrispQ6gcMNIojGPd0L/permission/base req=empty/0b resp=protobuf/11b enc=- role=playlist-read proc=spotify:10160
-281 sid=665 POST 200 gew4-spclient.spotify.com /playlist/v2/user/31unjfmo3oefvlz36ef3eb6kj5tq/rootlist/changes req=other/126b resp=protobuf/113b enc=- role=playlist-mutation proc=spotify:10160 — WRITE rootlist index REM delete P3 (uri present)
-282 sid=666 GET 200 gew4-spclient.spotify.com /playlist/v2/user/31unjfmo3oefvlz36ef3eb6kj5tq/rootlist??decorate=revision,attributes,length,owner,capabilities,picture req=empty/0b resp=protobuf/7384b enc=resp-ce:gzip,resp-te:chunked role=playlist-read proc=wavee:13440 — Wavee gzip rootlist GET (P3 gone)
+281 sid=665 POST 200 gew4-spclient.spotify.com /playlist/v2/user/<user-id>/rootlist/changes req=other/126b resp=protobuf/113b enc=- role=playlist-mutation proc=spotify:10160 — WRITE rootlist index REM delete P3 (uri present)
+282 sid=666 GET 200 gew4-spclient.spotify.com /playlist/v2/user/<user-id>/rootlist??decorate=revision,attributes,length,owner,capabilities,picture req=empty/0b resp=protobuf/7384b enc=resp-ce:gzip,resp-te:chunked role=playlist-read proc=wavee:13440 — Wavee gzip rootlist GET (P3 gone)
 283 sid=667 GET 200 gew4-spclient.spotify.com /playlist-permission/v1/playlist/284sizy9BLThJBjc0JQypw/permission/base req=empty/0b resp=json/295b enc=resp-ce:gzip,resp-te:chunked role=playlist-read proc=wavee:13440
 284 sid=668 GET 200 gew4-spclient.spotify.com /playlist/v2/list/recents/main/diff??revision=0%2C00000000b29bd9095cf55330191db7f497e0411f&handlesContent= req=empty/0b resp=protobuf/1569b enc=resp-ce:zstd role=playlist-read proc=spotify:10160 — official recents /list/recents/main/diff (Wavee uses /page)
 285 sid=669 OPTIONS 200 gew4-spclient.spotify.com /quicksilver/v2/messages??ctv_type=web-modal&trigger=spotify%3Ahome&action=DISMISS&action=URL&action=EXTERNAL_URL&locale=en&trig_type=URI req=empty/0b resp=empty/0b enc=- role=other proc=spotify:10160
@@ -692,8 +692,8 @@ Every row from `playlist_operations_saz/catalog.json`. Semantic one-liner only w
 463 sid=849 GET 304 gew4-spclient.spotify.com /playlist/v2/playlist/37i9dQZF1EIdDn5P759aRj/diff??revision=0%2C105c5386b3b66481a13055f60d51c8ccda9d0099&handlesContent= req=empty/0b resp=empty/0b enc=- role=playlist-read proc=spotify:10160
 464 sid=850 GET 200 gew4-spclient.spotify.com /playlist/v2/playlist/37i9dQZF1EIguyCzHJlUGq/diff??revision=0%2C0d93cf7918286c3c3c9868a670a087b13d51c73c&handlesContent= req=empty/0b resp=protobuf/2098b enc=resp-ce:zstd role=playlist-read proc=spotify:10160
 465 sid=851 GET 304 gew4-spclient.spotify.com /playlist/v2/playlist/37i9dQZF1EIgG2NEOhqsD7/diff??revision=0%2C805aa02a03dd99758969c349f1ba5e78c6f88761&handlesContent= req=empty/0b resp=empty/0b enc=- role=playlist-read proc=spotify:10160
-466 sid=852 POST 200 gew4-spclient.spotify.com /playlist/v2/user/31unjfmo3oefvlz36ef3eb6kj5tq/rootlist/changes req=other/191b resp=protobuf/106b enc=resp-ce:zstd role=playlist-mutation proc=spotify:10160 — WRITE rootlist MOV (3 deltas)
-467 sid=853 GET 200 gew4-spclient.spotify.com /playlist/v2/user/31unjfmo3oefvlz36ef3eb6kj5tq/rootlist??decorate=revision,attributes,length,owner,capabilities,picture req=empty/0b resp=protobuf/7349b enc=resp-ce:gzip,resp-te:chunked role=playlist-read proc=wavee:13440 — Wavee gzip rootlist GET
+466 sid=852 POST 200 gew4-spclient.spotify.com /playlist/v2/user/<user-id>/rootlist/changes req=other/191b resp=protobuf/106b enc=resp-ce:zstd role=playlist-mutation proc=spotify:10160 — WRITE rootlist MOV (3 deltas)
+467 sid=853 GET 200 gew4-spclient.spotify.com /playlist/v2/user/<user-id>/rootlist??decorate=revision,attributes,length,owner,capabilities,picture req=empty/0b resp=protobuf/7349b enc=resp-ce:gzip,resp-te:chunked role=playlist-read proc=wavee:13440 — Wavee gzip rootlist GET
 468 sid=862 POST 200 gew4-spclient.spotify.com /extended-metadata/v0/extended-metadata req=protobuf/77b resp=protobuf/697b enc=resp-ce:zstd role=other proc=spotify:10160
 469 sid=863 POST 200 gew4-spclient.spotify.com /extended-metadata/v0/extended-metadata req=protobuf/259b resp=protobuf/884b enc=req-ce:gzip,resp-ce:zstd role=other proc=spotify:10160
 470 sid=864 POST 200 gew4-spclient.spotify.com /extended-metadata/v0/extended-metadata req=protobuf/95b resp=protobuf/90b enc=- role=other proc=spotify:10160
@@ -703,8 +703,8 @@ Every row from `playlist_operations_saz/catalog.json`. Semantic one-liner only w
 474 sid=869 GET 200 gew4-spclient.spotify.com /playlist/v2/playlist/6EVbQZBiAg9zHzMjChxvRd/diff??revision=7%2C12606d674a28d18595f85d73b0ae39aafd6f0eba&handlesContent= req=empty/0b resp=protobuf/202b enc=resp-ce:zstd role=playlist-read proc=spotify:10160
 475 sid=870 GET 200 gew4-spclient.spotify.com /playlist-permission/v1/playlist/6EVbQZBiAg9zHzMjChxvRd/permission/base req=empty/0b resp=protobuf/11b enc=- role=playlist-read proc=spotify:10160
 476 sid=871 POST 200 gew4-spclient.spotify.com /gabo-receiver-service/v3/events req=json/9875b resp=json/13b enc=- role=telemetry proc=spotify:10160
-477 sid=872 POST 200 gew4-spclient.spotify.com /playlist/v2/user/31unjfmo3oefvlz36ef3eb6kj5tq/rootlist/changes req=other/85b resp=protobuf/113b enc=- role=playlist-mutation proc=spotify:10160 — WRITE rootlist MOV
-478 sid=873 GET 200 gew4-spclient.spotify.com /playlist/v2/user/31unjfmo3oefvlz36ef3eb6kj5tq/rootlist??decorate=revision,attributes,length,owner,capabilities,picture req=empty/0b resp=protobuf/7390b enc=resp-ce:gzip,resp-te:chunked role=playlist-read proc=wavee:13440 — Wavee gzip rootlist GET
+477 sid=872 POST 200 gew4-spclient.spotify.com /playlist/v2/user/<user-id>/rootlist/changes req=other/85b resp=protobuf/113b enc=- role=playlist-mutation proc=spotify:10160 — WRITE rootlist MOV
+478 sid=873 GET 200 gew4-spclient.spotify.com /playlist/v2/user/<user-id>/rootlist??decorate=revision,attributes,length,owner,capabilities,picture req=empty/0b resp=protobuf/7390b enc=resp-ce:gzip,resp-te:chunked role=playlist-read proc=wavee:13440 — Wavee gzip rootlist GET
 479 sid=874 GET 200 gew4-spclient.spotify.com /playlist-permission/v1/playlist/284sizy9BLThJBjc0JQypw/permission/base req=empty/0b resp=json/341b enc=resp-ce:gzip,resp-te:chunked role=playlist-read proc=wavee:13440
 480 sid=875 POST 200 gew4-spclient.spotify.com /gabo-receiver-service/public/v3/events req=json/1717b resp=json/13b enc=- role=telemetry proc=spotify:10160
 481 sid=876 POST 200 gew4-spclient.spotify.com /gabo-receiver-service/v3/events req=json/30768b resp=json/13b enc=- role=telemetry proc=spotify:10160
@@ -823,9 +823,9 @@ Every row from `somemoreplaylists_saz/catalog.json`. Includes CONNECT, CDN audio
 034 sid=41 GET 206 audio-ak.spotifycdn.com /audio/b8bc1f56ce9b88dfc07ea33450c20fd5705a9a0f req=empty/0b resp=application/octet-stream/65536b enc=- role=cdn proc=wavee:13440
 035 sid=45 GET 206 audio-cf.spotifycdn.com /audio/b8bc1f56ce9b88dfc07ea33450c20fd5705a9a0f req=empty/0b resp=application/octet-stream/65536b enc=- role=cdn proc=wavee:13440
 036 sid=46 POST 200 gew4-spclient.spotify.com /extended-metadata/v0/extended-metadata req=application/protobuf/109b resp=application/protobuf/102b enc=zstd-header-or-magic role=XM proc=spotify:10160
-037 sid=47 POST 200 gew4-spclient.spotify.com /playlist/v2/user/31unjfmo3oefvlz36ef3eb6kj5tq/rootlist/changes req=application/x-www-form-urlencoded/160b resp=application/x-protobuf/113b enc=zstd-header-or-magic role=rootlist proc=spotify:10160 — WRITE folder rename INNER: REM from=2 len=1 + ADD start-group edb339e1…:named+folder+update (keep create ts). rev 89→90 nonce=16
+037 sid=47 POST 200 gew4-spclient.spotify.com /playlist/v2/user/<user-id>/rootlist/changes req=application/x-www-form-urlencoded/160b resp=application/x-protobuf/113b enc=zstd-header-or-magic role=rootlist proc=spotify:10160 — WRITE folder rename INNER: REM from=2 len=1 + ADD start-group edb339e1…:named+folder+update (keep create ts). rev 89→90 nonce=16
 038 sid=48 CONNECT 200 Tunnel to (tunnel gew4-spclient.spotify.com) req=-/3443b resp=-/709b enc=- role=tls proc=wavee:13440
-039 sid=49 GET 200 gew4-spclient.spotify.com /playlist/v2/user/31unjfmo3oefvlz36ef3eb6kj5tq/rootlist req=empty/0b resp=application/octet-stream/9761b enc=resp-ce:gzip,resp-te:chunked,chunked,gzip role=rootlist proc=wavee:13440 — Wavee gzip rootlist GET
+039 sid=49 GET 200 gew4-spclient.spotify.com /playlist/v2/user/<user-id>/rootlist req=empty/0b resp=application/octet-stream/9761b enc=resp-ce:gzip,resp-te:chunked,chunked,gzip role=rootlist proc=wavee:13440 — Wavee gzip rootlist GET
 040 sid=50 GET 200 gew4-spclient.spotify.com /playlist-permission/v1/playlist/6QbD3n4hCF6uP8jqyiDsS5/permission/base req=empty/0b resp=application/json; charset=utf-8/159b enc=resp-ce:gzip,resp-te:chunked,chunked,gzip role=permission proc=wavee:13440 — Wavee JSON perm P2 VIEWER/ZGVmYXVsdA==
 041 sid=51 CONNECT 200 Tunnel to (tunnel gew4-spclient.spotify.com) req=-/2771b resp=-/709b enc=- role=tls proc=wavee:13440
 042 sid=52 GET 200 gew4-spclient.spotify.com /playlist-permission/v1/playlist/6QbD3n4hCF6uP8jqyiDsS5/permission/base req=empty/0b resp=application/json; charset=utf-8/156b enc=resp-ce:gzip,resp-te:chunked,chunked,gzip role=permission proc=wavee:13440
@@ -835,14 +835,14 @@ Every row from `somemoreplaylists_saz/catalog.json`. Includes CONNECT, CDN audio
 046 sid=60 GET 200 gew4-spclient.spotify.com /playlist-permission/v1/playlist/6EVbQZBiAg9zHzMjChxvRd/permission/base req=empty/0b resp=application/x-protobuf/11b enc=zstd-header-or-magic role=permission proc=spotify:10160
 047 sid=61 GET 200 gew4-spclient.spotify.com /playlist/v2/playlist/6EVbQZBiAg9zHzMjChxvRd/diff req=empty/0b resp=application/x-protobuf/202b enc=resp-ce:zstd,resp-zstd-magic,zstd-header-or-magic role=playlist-read proc=spotify:10160
 048 sid=62 GET 206 audio-cf.spotifycdn.com /audio/b8bc1f56ce9b88dfc07ea33450c20fd5705a9a0f req=empty/0b resp=application/octet-stream/65536b enc=- role=cdn proc=wavee:13440
-049 sid=63 POST 200 gew4-spclient.spotify.com /playlist/v2/user/31unjfmo3oefvlz36ef3eb6kj5tq/rootlist/changes req=application/x-www-form-urlencoded/85b resp=application/x-protobuf/113b enc=zstd-header-or-magic role=rootlist proc=spotify:10160 — WRITE rootlist MOV from=0 len=1 to=3 (P1 into inner folder). 90→91 nonce=17
-050 sid=64 GET 200 gew4-spclient.spotify.com /playlist/v2/user/31unjfmo3oefvlz36ef3eb6kj5tq/rootlist req=empty/0b resp=application/octet-stream/9850b enc=resp-ce:gzip,resp-te:chunked,chunked,gzip role=rootlist proc=wavee:13440 — Wavee gzip rootlist GET
+049 sid=63 POST 200 gew4-spclient.spotify.com /playlist/v2/user/<user-id>/rootlist/changes req=application/x-www-form-urlencoded/85b resp=application/x-protobuf/113b enc=zstd-header-or-magic role=rootlist proc=spotify:10160 — WRITE rootlist MOV from=0 len=1 to=3 (P1 into inner folder). 90→91 nonce=17
+050 sid=64 GET 200 gew4-spclient.spotify.com /playlist/v2/user/<user-id>/rootlist req=empty/0b resp=application/octet-stream/9850b enc=resp-ce:gzip,resp-te:chunked,chunked,gzip role=rootlist proc=wavee:13440 — Wavee gzip rootlist GET
 051 sid=65 GET 200 gew4-spclient.spotify.com /playlist-permission/v1/playlist/6QbD3n4hCF6uP8jqyiDsS5/permission/base req=empty/0b resp=application/json; charset=utf-8/201b enc=resp-ce:gzip,resp-te:chunked,chunked,gzip role=permission proc=wavee:13440
 052 sid=66 CONNECT 200 Tunnel to (tunnel gew4-spclient.spotify.com) req=-/2771b resp=-/709b enc=- role=tls proc=wavee:13440
 053 sid=67 GET 200 gew4-spclient.spotify.com /playlist/v2/playlist/6QbD3n4hCF6uP8jqyiDsS5/diff req=empty/0b resp=application/x-protobuf/429b enc=resp-ce:gzip,resp-te:chunked,chunked,gzip role=playlist-read proc=wavee:13440
 054 sid=68 GET 200 gew4-spclient.spotify.com /playlist/v2/playlist/37i9dQZF1E8RrQBpL2fW7p/diff req=empty/0b resp=application/x-protobuf/2445b enc=resp-ce:gzip,resp-te:chunked,chunked,gzip role=playlist-read proc=wavee:13440
 055 sid=69 GET 200 gew4-spclient.spotify.com /playlist-permission/v1/playlist/6QbD3n4hCF6uP8jqyiDsS5/permission/base req=empty/0b resp=application/json; charset=utf-8/256b enc=resp-ce:gzip,resp-te:chunked,chunked,gzip role=permission proc=wavee:13440
-056 sid=70 GET 200 gew4-spclient.spotify.com /playlist/v2/user/31unjfmo3oefvlz36ef3eb6kj5tq/rootlist/diff req=empty/0b resp=application/x-protobuf/80b enc=zstd-header-or-magic role=rootlist proc=spotify:10160 — official rootlist /diff
+056 sid=70 GET 200 gew4-spclient.spotify.com /playlist/v2/user/<user-id>/rootlist/diff req=empty/0b resp=application/x-protobuf/80b enc=zstd-header-or-magic role=rootlist proc=spotify:10160 — official rootlist /diff
 057 sid=71 GET 206 audio-ak.spotifycdn.com /audio/b8bc1f56ce9b88dfc07ea33450c20fd5705a9a0f req=empty/0b resp=application/octet-stream/65536b enc=- role=cdn proc=wavee:13440
 058 sid=74 GET 206 audio-cf.spotifycdn.com /audio/b8bc1f56ce9b88dfc07ea33450c20fd5705a9a0f req=empty/0b resp=application/octet-stream/65536b enc=- role=cdn proc=wavee:13440
 059 sid=75 GET 206 audio-ak.spotifycdn.com /audio/b8bc1f56ce9b88dfc07ea33450c20fd5705a9a0f req=empty/0b resp=application/octet-stream/65536b enc=- role=cdn proc=wavee:13440
@@ -914,8 +914,8 @@ Every row from `somemoreplaylists_saz/catalog.json`. Includes CONNECT, CDN audio
 125 sid=176 GET 206 audio-cf.spotifycdn.com /audio/b8bc1f56ce9b88dfc07ea33450c20fd5705a9a0f req=empty/0b resp=application/octet-stream/65536b enc=- role=cdn proc=wavee:13440
 126 sid=178 POST 200 gew4-spclient.spotify.com /gabo-receiver-service/v3/events req=application/json/3976b resp=application/json/13b enc=zstd-header-or-magic role=telemetry proc=spotify:10160
 127 sid=179 GET 206 audio-ak.spotifycdn.com /audio/b8bc1f56ce9b88dfc07ea33450c20fd5705a9a0f req=empty/0b resp=application/octet-stream/65536b enc=- role=cdn proc=wavee:13440
-128 sid=180 POST 200 gew4-spclient.spotify.com /playlist/v2/user/31unjfmo3oefvlz36ef3eb6kj5tq/rootlist/changes req=application/x-www-form-urlencoded/166b resp=application/x-protobuf/113b enc=zstd-header-or-magic role=rootlist proc=spotify:10160 — WRITE folder rename OUTER: REM from=0 + ADD 3dd9e795…:root+folder+updated+name. 91→92 nonce=18
-129 sid=181 GET 200 gew4-spclient.spotify.com /playlist/v2/user/31unjfmo3oefvlz36ef3eb6kj5tq/rootlist req=empty/0b resp=application/octet-stream/9772b enc=resp-ce:gzip,resp-te:chunked,chunked,gzip role=rootlist proc=wavee:13440 — Wavee gzip rootlist GET
+128 sid=180 POST 200 gew4-spclient.spotify.com /playlist/v2/user/<user-id>/rootlist/changes req=application/x-www-form-urlencoded/166b resp=application/x-protobuf/113b enc=zstd-header-or-magic role=rootlist proc=spotify:10160 — WRITE folder rename OUTER: REM from=0 + ADD 3dd9e795…:root+folder+updated+name. 91→92 nonce=18
+129 sid=181 GET 200 gew4-spclient.spotify.com /playlist/v2/user/<user-id>/rootlist req=empty/0b resp=application/octet-stream/9772b enc=resp-ce:gzip,resp-te:chunked,chunked,gzip role=rootlist proc=wavee:13440 — Wavee gzip rootlist GET
 130 sid=182 GET 200 gew4-spclient.spotify.com /playlist-permission/v1/playlist/6QbD3n4hCF6uP8jqyiDsS5/permission/base req=empty/0b resp=application/json; charset=utf-8/104b enc=resp-ce:gzip,resp-te:chunked,chunked,gzip role=permission proc=wavee:13440
 131 sid=183 CONNECT 200 Tunnel to (tunnel gew4-spclient.spotify.com) req=-/2771b resp=-/709b enc=- role=tls proc=wavee:13440
 132 sid=184 GET 200 gew4-spclient.spotify.com /playlist/v2/playlist/37i9dQZF1EP6YuccBxUcC1/diff req=empty/0b resp=application/x-protobuf/101b enc=- role=playlist-read proc=wavee:13440
@@ -963,17 +963,17 @@ Do **not** implement unless asked. When asked, the proto edits are:
 
 ### SAZs (do not modify)
 
-- `c:\Users\ChristosKarapasias\Documents\Fiddler2\Captures\playlist_operations.saz`
-- `c:\Users\ChristosKarapasias\Documents\Fiddler2\Captures\somemoreplaylists.saz`
+- `c:\Users\<user>\Documents\Fiddler2\Captures\playlist_operations.saz`
+- `c:\Users\<user>\Documents\Fiddler2\Captures\somemoreplaylists.saz`
 
 ### Extracts + catalogs
 
-- `C:\Users\ChristosKarapasias\AppData\Local\Temp\playlist_operations_saz\catalog.json`
-- `C:\Users\ChristosKarapasias\AppData\Local\Temp\playlist_operations_saz\catalog.txt`
-- `C:\Users\ChristosKarapasias\AppData\Local\Temp\playlist_operations_saz\extracted`
-- `C:\Users\ChristosKarapasias\AppData\Local\Temp\somemoreplaylists_saz\catalog.json`
-- `C:\Users\ChristosKarapasias\AppData\Local\Temp\somemoreplaylists_saz\extracted`
-- Dealer: `c:\Users\ChristosKarapasias\AppData\Local\Wavee\Logs\dealer\dealer-20260815.idx.ndjson`
+- `C:\Users\<user>\AppData\Local\Temp\playlist_operations_saz\catalog.json`
+- `C:\Users\<user>\AppData\Local\Temp\playlist_operations_saz\catalog.txt`
+- `C:\Users\<user>\AppData\Local\Temp\playlist_operations_saz\extracted`
+- `C:\Users\<user>\AppData\Local\Temp\somemoreplaylists_saz\catalog.json`
+- `C:\Users\<user>\AppData\Local\Temp\somemoreplaylists_saz\extracted`
+- Dealer: `c:\Users\<user>\AppData\Local\Wavee\Logs\dealer\dealer-20260815.idx.ndjson`
 
 ### Protos
 
@@ -1009,7 +1009,7 @@ Decoded from Wavee's own archive against both SAZ windows. Do not soften the roo
 
 | Fact | Value |
 |---|---|
-| Index | `c:\Users\ChristosKarapasias\AppData\Local\Wavee\Logs\dealer\dealer-20260815.idx.ndjson` (27 484 B, **206** rows) |
+| Index | `c:\Users\<user>\AppData\Local\Wavee\Logs\dealer\dealer-20260815.idx.ndjson` (27 484 B, **206** rows) |
 | Frames | sibling `dealer-20260815.bin` (219 037 B) |
 | `t` | **UTC unix-ms** (not local) |
 | Filename date | **local** (`20260815`). First row `t=1786784909948` = 2026-08-15 **09:08:29.948 UTC** = **11:08:29.948 +02**. Last `t=1786798372340`. |
@@ -1066,14 +1066,14 @@ All-day playlist-ish topic counts in this file: 18 rootlist v2 + 18 rootlist non
 
 ### 9.4 CRITICAL — rootlist proto mismatch
 
-**Every rootlist push in this archive is 78 B `PlaylistModificationInfo` fields 1–2 only** (`uri` = `spotify:user:31unjfmo3oefvlz36ef3eb6kj5tq:rootlist`, `new_revision` = 24 B head). **No `parent_revision`. No `ops`.**
+**Every rootlist push in this archive is 78 B `PlaylistModificationInfo` fields 1–2 only** (`uri` = `spotify:user:<user-id>:rootlist`, `new_revision` = 24 B head). **No `parent_revision`. No `ops`.**
 
 Each head arrives **twice in the same millisecond**:
 
 | Topic | idx `n` (JSON wrapper) | Payload |
 |---|---|---|
-| `hm://playlist/v2/user/31unjfmo3oefvlz36ef3eb6kj5tq/rootlist` | 219 | 78 B PMI |
-| `hm://playlist/user/31unjfmo3oefvlz36ef3eb6kj5tq/rootlist` | 216 | **identical** 78 B PMI |
+| `hm://playlist/v2/user/<user-id>/rootlist` | 219 | 78 B PMI |
+| `hm://playlist/user/<user-id>/rootlist` | 216 | **identical** 78 B PMI |
 
 Wavee keys the branch on `EndsWith("/rootlist")` and parses **both** as `RootlistModificationInfo`:
 
@@ -1132,7 +1132,7 @@ Create-via-`/changes` **does** produce a dealer `PlaylistModificationInfo` on `h
 
 Delete is **not** a playlist `/changes`. HTTP 281 is a **rootlist** index REM (uri present). Dealer announces the tombstone on the playlist topic as `UPDATE_LIST deleted_by_owner=true`. Wavee `PatchOf` **drops the flag**. The sidebar tree drops P3 only if the subsequent rootlist GET (A 282) omits the URI.
 
-#### Rootlist `spotify:user:31unjfmo3oefvlz36ef3eb6kj5tq:rootlist`
+#### Rootlist `spotify:user:<user-id>:rootlist`
 
 Every row: 78 B PMI, no ops, v2+non-v2 pair, Wavee RMI-misparse as in §9.4.
 

@@ -12,8 +12,10 @@ Grounding evidence:
   Stored at `Wavee.Tests/Fixtures/cluster-complex-queue.json`.
 
 > All fixtures are already decoded and stored under `Wavee.Tests/Fixtures/` (2026-07-08).
-> ⚠ Before the branch is pushed, sanitize them: they contain the real `public_ip`, username
-> (`queued_by`), device ids, and Bluetooth device name from the captures.
+> ✅ **Sanitized** (2026-08-26): `public_ip` → `2001:db8::1`, the username (`queued_by`) →
+> `31testuser000000000000000000`, every device id → a synthetic `deadbeef…` hex of the same length
+> (distinct ids stay distinct), and the captured device name → `Test Laptop`. Structure, field lengths
+> and row identity are unchanged, so the golden assertions still hold.
 - Fiddler capture `C:\Users\ChristosKarapasias\Documents\Fiddler2\Captures\que.saz` (**FIXTURE-B**):
   what the official desktop client sends when clicking a queue row targeting another device.
   Decoded copies for tests: `Wavee.Tests/Fixtures/next-track-queue-row.json` (uid `q2`) and
@@ -35,7 +37,7 @@ Grounding evidence:
 | Remote-device queue click | Match FIXTURE-B: forward **`next_track` with the full target row** (`track{uri,uid,metadata}`), uid-first identity — NOT `play`+`skip_to` |
 | Identity | **Full session model**: stable per-item ids minted at insertion; one atomic snapshot carrying revision + current + rows; one id scheme for local and viewer |
 | Startup recovery | **Full session restore** from the cluster (context + cursor + user queue + autoplay tail + options), shown paused, resumable instantly |
-| Drag-to-reorder | **Design for it now** (ids + `MoveUserItem` op), ship the drag UI in a follow-up |
+| Drag-to-reorder | **Design for it now** (ids + `MoveUserItem` op), ship the drag UI in a follow-up — **shipped**: `QueuePanel.cs` mounts a `Reorderable` over the panel body |
 | Landing | **One rework branch** (no interim hotfix stage) |
 
 ---

@@ -123,6 +123,27 @@ public class ConnectPublisherTests
         Assert.StartsWith("NewConnection|", Encoding.UTF8.GetString(h.Transport.LastPublishBody!));
     }
 
+    // ── bug 2: OwnsSession() must not answer true off a bare "CurrentTrack is not null" — that is also what a passive
+    // VIEWER's mirrored fold of another device's row looks like. Without the ActiveDeviceId check, a Wavee that never
+    // played still announced isActive=true (and a player_state built from the phone's track) the moment a dealer
+    // connection landed.
+    [Fact]
+    public async Task NewConnection_ViewerEcho_PublishesInactive_NeverClaimsOwnership()
+    {
+        var h = new Harness();
+        var remote = new RemoteTrack("spotify:track:remote", "Title", "Artist", "spotify:artist:a",
+            "Album", "spotify:album:al", null, 200_000);
+        h.Proj.OnCluster(new ClusterDelta("phone", true, remote, "spotify:playlist:p",
+            true, false, false, 5_000, 0, 0, remote.DurationMs, false, RepeatMode.Off,
+            Array.Empty<ConnectDeviceRow>(), Array.Empty<RemoteTrack>()));
+
+        h.Connect("c1");
+        await Task.Delay(20);
+
+        Assert.Equal(1, h.Transport.PublishCount);
+        Assert.StartsWith("NewConnection|False|", Encoding.UTF8.GetString(h.Transport.LastPublishBody!));
+    }
+
     [Fact]
     public async Task BeforeConnectionId_DoesNotPublish()
     {
@@ -299,6 +320,27 @@ public class ConnectPublisherTests
         h.Connect("c1"); h.Play("spotify:track:a"); h.Emit(EvKind.BecameInactive);
         await Task.Delay(20);
         Assert.StartsWith("BecameInactive|False|", Encoding.UTF8.GetString(h.Transport.LastPublishBody!));
+    }
+
+    // ── bug 6: the change-gate key must fold the live media kind — an audio↔video toggle on the SAME track, same
+    // wall-second, with an EMPTY up-next queue (NextSig too returns its "0" constant either way) must not be
+    // swallowed by the steady-state dedup, or the wire never learns the host flipped.
+    [Fact]
+    public async Task MediaKindToggle_WithEmptyQueue_StillPublishes()
+    {
+        var h = new Harness();
+        h.Connect("c1");
+        var kind = PlayableKind.Audio;
+        h.Publisher.CurrentMediaKind = () => kind;
+
+        h.Play("spotify:track:a");   // NewConnection + PlayerStateChanged(Audio)
+        await Task.Delay(20);
+        Assert.Equal(2, h.Transport.PublishCount);
+
+        kind = PlayableKind.Video;   // same track/position/shuffle/repeat/queue — ONLY the media kind changed
+        h.Emit(EvKind.OptionsChanged);
+        await Task.Delay(20);
+        Assert.Equal(3, h.Transport.PublishCount);
     }
 
     [Fact]

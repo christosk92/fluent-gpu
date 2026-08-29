@@ -18,7 +18,8 @@ namespace Wavee.SpotifyLive;
 // Proto-building lives in SpotifyLive (the wire boundary); the proto-free ConnectService orchestrates the PUT.
 public sealed class ConnectStateBuilder
 {
-    const string KeymasterClientId = "65b708073fc0480ea92a077233ca87bd";
+    // Single owner: Wavee.Backend.Audio.SpotifyRuntimeIdentity.KeymasterClientId.
+    const string KeymasterClientId = Wavee.Backend.Audio.SpotifyRuntimeIdentity.KeymasterClientId;
     public const int MaxVolume = 65535;
     public const int DefaultVolumeSteps = 64;
 
@@ -227,7 +228,8 @@ public sealed class ConnectStateBuilder
             SessionId = s.SessionId,
             QueueRevision = s.QueueRevision ?? "",
             // Only the CURRENT track carries the live media kind — prev/next are not the current media.
-            Track = ToProvided(s.Track, contextUri, s.InteractionId, s.PageInstanceId, currentKind, videoGid),
+            Track = ToProvided(s.Track, contextUri, s.InteractionId, s.PageInstanceId, currentKind, videoGid,
+                isCurrentTrack: true, currentPositionMs: s.PositionMs),
             Index = new ContextIndex { Track = (uint)Math.Max(0, s.ContextIndex) },
             Options = new ContextPlayerOptions
             {
@@ -361,7 +363,8 @@ public sealed class ConnectStateBuilder
     }
 
     static ProvidedTrack ToProvided(in SnapshotTrack t, string contextUri, string interactionId, string pageInstanceId,
-        PlayableKind? currentKind = null, string? associatedVideoGid = null)
+        PlayableKind? currentKind = null, string? associatedVideoGid = null,
+        bool isCurrentTrack = false, long? currentPositionMs = null)
     {
         var pt = new ProvidedTrack
         {
@@ -380,7 +383,15 @@ public sealed class ConnectStateBuilder
         AddIfMissing(meta, "album_uri", t.AlbumUri);
         AddIfMissing(meta, "artist_uri", t.ArtistUri);
 
-        bool isVideo = IsVideoTrack(t);
+        // bug 3: video-ness for entity_uri/view_index/iteration suppression + the track_player fallback below. When the
+        // CALLER knows the live kind (currentKind supplied), that is authoritative — full stop, never overridden by a
+        // stale/absent wire claim. Otherwise (prev/next rows always; the current row on the rare caller that genuinely
+        // doesn't know the kind) fall back to the wire's OWN claim (MediaSwitchLogic.HasVideoMetadata) plus — for the
+        // CURRENT row only — the legacy has-video-badge heuristic (isCurrentTrack). prev/next rows never get that
+        // heuristic: a next-up row's mere video AVAILABILITY is not "playing as video", so it must not claim one.
+        bool isVideo = currentKind is { } knownKind
+            ? knownKind == PlayableKind.Video
+            : (isCurrentTrack && t.HasVideo) || IsVideoTrack(t);
         bool isAutoplay = pt.Provider == "autoplay";
         bool isQueue = pt.Provider == "queue";
         if (!string.IsNullOrEmpty(contextUri) && pt.Provider == "context")
@@ -415,11 +426,22 @@ public sealed class ConnectStateBuilder
         if (!string.IsNullOrEmpty(associatedVideoGid)) meta["associated_video_id"] = associatedVideoGid;
         if (currentKind is { } kind) meta["track_player"] = MediaSwitchLogic.TrackPlayer(kind);
         else AddIfMissing(meta, "track_player", MediaSwitchLogic.TrackPlayer(isVideo ? PlayableKind.Video : PlayableKind.Audio));
-        // A video also carries media.manifest_id so remotes know which manifest is playing. The resolved id
-        // (PopOutVideoSource.Key) rides in the queue-entry metadata (copied wholesale into `meta` above) once attached.
-        // TODO(M1+): nothing stamps the resolved PopOutVideoSource.Key into QueueEntry.Metadata as "media.manifest_id" yet, so
-        // this forwards only a manifest id the resolver already put on the entry. Kept as-is (forward-if-present) by M0.
-        if (isVideo && t.Metadata is { } vm && vm.TryGetValue("media.manifest_id", out var manifestId) && !string.IsNullOrEmpty(manifestId))
+        // bug 7: while WE genuinely host video for the CURRENT track, stamp the fields a hand-off needs to land on the
+        // video's own start point — media.type, media.manifest_id (the SAME gid as associated_video_id: the resolver's
+        // own comment on the kind-212 gid is that it IS the manifest id), and media.start_position (our live position —
+        // the only honest "where this video begins" fact we have; inbound already treats it as the video's start point
+        // and wins with it over the transferred/extrapolated audio position — PlaybackController.cs ~1632).
+        if (currentKind == PlayableKind.Video)
+        {
+            meta["media.type"] = "video";
+            if (!string.IsNullOrEmpty(associatedVideoGid)) meta["media.manifest_id"] = associatedVideoGid;
+            if (currentPositionMs is { } pos && pos >= 0)
+                meta["media.start_position"] = pos.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+        // No confirmed live kind (prev/next rows; a caller that genuinely doesn't know) — forward only what the wire
+        // snapshot already carried, never fabricate a fresh manifest id from a bare availability/heuristic guess.
+        else if (currentKind is null && isVideo && t.Metadata is { } vm
+            && vm.TryGetValue("media.manifest_id", out var manifestId) && !string.IsNullOrEmpty(manifestId))
             AddIfMissing(meta, "media.manifest_id", manifestId);
         AddIfMissing(meta, "interaction_id", interactionId);
         AddIfMissing(meta, "page_instance_id", pageInstanceId);
@@ -436,15 +458,10 @@ public sealed class ConnectStateBuilder
         if (!string.IsNullOrEmpty(value) && !metadata.ContainsKey(key)) metadata[key] = value;
     }
 
-    static bool IsVideoTrack(in SnapshotTrack t)
-    {
-        if (t.HasVideo) return true;
-        var metadata = t.Metadata;
-        if (metadata is null) return false;
-        if (metadata.TryGetValue("track_player", out var player) && player == "video") return true;
-        if (metadata.TryGetValue("media.type", out var media) && (media == "video" || media == "mixed")) return true;
-        return metadata.ContainsKey("media.manifest_id") || metadata.ContainsKey("save_track.uri");
-    }
+    // bug 3: the WIRE's own claim only — never a bare has-video/availability flag. t.HasVideo is folded in separately
+    // (and only for the CURRENT row) at the call site, so a next-up row's mere video AVAILABILITY can no longer make
+    // this true; it takes an actual wire signal (MediaSwitchLogic's shared key list) instead.
+    static bool IsVideoTrack(in SnapshotTrack t) => MediaSwitchLogic.HasVideoMetadata(t.Metadata);
 
     static string FeatureOf(string contextUri, IReadOnlyDictionary<string, string> metadata)
     {

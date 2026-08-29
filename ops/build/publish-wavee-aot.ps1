@@ -82,9 +82,22 @@ if (-not (Test-Path $exe)) { throw "Expected output not found: $exe" }
 # pack-wavee-msix.ps1, so the loose publish and the MSIX layout cannot drift. See docs/guide/playback-modules.md.
 & (Join-Path $PSScriptRoot 'publish-wavee-modules.ps1') -OutDir $outDir -Rid $rid -Configuration $Configuration
 
+# Third-party notices next to Wavee.exe: Settings > About reads THIRD-PARTY-NOTICES.txt from AppContext.BaseDirectory,
+# so a loose publish gets the same file the MSIX layout does (pack-wavee-msix.ps1 makes the identical call).
+& (Join-Path $PSScriptRoot 'generate-third-party-notices.ps1') -OutFile (Join-Path $outDir 'THIRD-PARTY-NOTICES.txt')
+
 $info = Get-Item $exe
 Write-Host ""
-$ver = (Select-String -Path $csproj -Pattern '<InformationalVersion>([^<]+)</InformationalVersion>').Matches[0].Groups[1].Value
+# Read the version the binary actually carries (InformationalVersion → ProductVersion). Parsing the csproj for a
+# bare <InformationalVersion>…</InformationalVersion> tag broke when that element grew a Condition (local builds
+# stamp "$(Version)-dev"; CI passes /p:InformationalVersion). Empty ProductVersion falls back to <Version>.
+$ver = $info.VersionInfo.ProductVersion
+if ([string]::IsNullOrWhiteSpace($ver)) {
+  $verMatch = Select-String -Path $csproj -Pattern '<Version>([^<]+)</Version>' | Select-Object -First 1
+  $ver = if ($verMatch -and $verMatch.Matches.Count -gt 0) { $verMatch.Matches[0].Groups[1].Value } else { '?' }
+}
+$plus = $ver.IndexOf('+')
+if ($plus -gt 0) { $ver = $ver.Substring(0, $plus) }
 Write-Host "Done: $($info.FullName)" -ForegroundColor Green
 Write-Host "      v$ver  $([math]::Round($info.Length / 1MB, 2)) MB"
 if ($Diag) {

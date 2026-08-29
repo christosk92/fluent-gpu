@@ -305,8 +305,60 @@
       "weekRange": "{start} – {end}",
       "lensWeek": "Liked {range}",
       "lensClear": "Clear this filter",
-      "artistTip": "{artist} · {count, plural, one {# liked song} other {# liked songs}}"
-    }
+      "artistTip": "{artist} · {count, plural, one {# liked song} other {# liked songs}}",
+      "songsAdded": "{count, plural, one {song added} other {songs added}}",
+      "topArtists": "Top artists",
+      "theYears": "The years",
+      "mostTracks": "most tracks",
+      "yearRange": "{start} – {end}",
+      "yearTip": "{start} – {end} · {count, plural, one {# track} other {# tracks}}",
+      "yearTipOne": "{year} · {count, plural, one {# track} other {# tracks}}",
+      "weekTipAdded": "{start} – {end} · {count, plural, one {# song added} other {# songs added}}",
+      "collectingSince": "Collecting since {date}",
+      "oldestAdd": "oldest add {title}",
+      "oldestTrack": "oldest track {title}",
+      "oldestTrackYear": "oldest track {title} ({year})",
+      "lensAdded": "Added {range}",
+      "lensYear": "{year}",
+      "lensYears": "{start} – {end}",
+      "artistTipAdded": "{artist} · {count, plural, one {# song} other {# songs}}",
+      "moreArtists": "{count, plural, one {# more} other {# more}}",
+      "allArtists": "All artists",
+      "$comment4": "Which facts EARN a card (LikedFactsRules.Shape): a distribution renders as the GRAPH card when it has a shape, as a one-line LABEL pill when one value dominates or the evidence is thin, and not at all when it cannot be answered honestly. Pills are lenses too — a pill names exactly the filter it applies. Tempo is Spotify's kind-222 BPM; half/double-time reporting (87 vs 174) is real, so a tempo pill names the BAND it filters and never says 'steady'.",
+      "tempo": "Tempo",
+      "bpmMedian": "bpm · median",
+      "tempoRange": "{min} – {max} bpm",
+      "tempoCoverage": "{known} of {total}",
+      "tempoBandTip": "{range} · {name} · {count, plural, one {# track} other {# tracks}}",
+      "bandUnder90": "under 90 bpm",
+      "band90": "90 – 119 bpm",
+      "band120": "120 – 139 bpm",
+      "band140": "140 bpm and up",
+      "bandNameUnder90": "Slow",
+      "bandName90": "Medium",
+      "bandName120": "Fast",
+      "bandName140": "Very fast",
+      "pillMostly": "mostly",
+      "pillCount": "{count} of {known}",
+      "pillTempoTip": "median {median} bpm · {known} of {total} tracks have a tempo",
+      "pillYearsTip": "{range} · {count, plural, one {# track} other {# tracks}} of {known} dated",
+      "pillBlendFlat": "{count} styles, none over {share}",
+      "lastAdd": "last add {date}",
+      "lastLike": "last like {date}"
+    },
+    "aboutRelease": "About this release",
+    "factSongs": "Songs",
+    "factLength": "Length",
+    "factLabel": "Label",
+    "factOfCount": "{n} of {total}",
+    "otherVersions": "Other versions",
+    "recommended": "Recommended songs",
+    "noSuggestions": "No suggestions right now",
+    "viewAllArtists": "View all artists",
+    "goToAlbum": "Go to album",
+    "collabOpen": "Open to collaboration",
+    "collabCount": "{n, plural, one {# collaborator} other {# collaborators}}",
+    "collabView": "View collaborators"
   },
   "artist": {
     "popular": "Popular",
@@ -347,7 +399,20 @@
       "singles": "Singles & EPs",
       "concerts": "Upcoming concerts",
       "related": "Related artists"
-    }
+    },
+    "discoReleases": "Releases",
+    "discoCountAlbum": "{n, plural, one {# album} other {# albums}}",
+    "discoCountSingle": "{n, plural, one {# single} other {# singles}}",
+    "discoCountCompilation": "{n, plural, one {# compilation} other {# compilations}}",
+    "discoCountRelease": "{n, plural, one {# release} other {# releases}}",
+    "fallbackName": "Artist",
+    "galleryExport": "Export image",
+    "galleryExporting": "Exporting…",
+    "galleryExportTitle": "Export gallery image",
+    "galleryImages": "Images",
+    "galleryAllFiles": "All files",
+    "galleryExported": "Image exported",
+    "galleryExportFailed": "Image export failed: {error}"
   },
   "concerts": {
     "liveMusic": "Live music",
@@ -426,7 +491,13 @@
       "artistCount": "{count, plural, one {# artist} other {# artists}}",
       "artistFallback": "Artist",
       "relatedConcerts": "Related concerts"
-    }
+    },
+    "setLocation": "Set location",
+    "nearApproximate": "Near {place} (approximate)",
+    "genre": "Genre",
+    "available": "Available",
+    "soldOut": "Sold out or unavailable",
+    "fallbackTitle": "Concert"
   },
   "home": {
     "goodMorning": "Good morning",
@@ -547,7 +618,9 @@
     "relatedSearches": "Related searches",
     "matchedTitle": "Matched title",
     "lyricsMatch": "Lyrics match",
-    "openPage": "Open page"
+    "openPage": "Open page",
+    "subtitleMusicVideo": "Music video",
+    "subtitleSong": "Song"
   },
   "podcast": {
     "episodes": "Episodes",
@@ -569,7 +642,8 @@
     "sort": {
       "newest": "Newest",
       "oldest": "Oldest"
-    }
+    },
+    "minutes": "{n} min"
   },
   "recents": {
     "itemCount": "{count, plural, one {# item} other {# items}}",
@@ -733,10 +807,6 @@
       "materialMicaAlt": "Mica Alt",
       "rowDensity": "Row density",
       "rowDensitySub": "Choose how much music fits on screen; the miniature rows preview the real spacing.",
-      "densityCompactSub": "Fits the most tracks on screen with tight rows.",
-      "densityDefaultSub": "Balanced spacing for everyday browsing.",
-      "densityCozySub": "Adds breathing room while keeping lists efficient.",
-      "densityComfortableSub": "Largest targets and the most relaxed spacing.",
       "trackListStyle": "Track list style",
       "trackListStyleSub": "Choose artwork-forward rows or a classic column table.",
       "trackListModern": "Modern",
@@ -804,7 +874,11 @@
       "autoplaySub": "Continue with similar songs when the current context ends",
       "playerBar": "Player bar",
       "showRemaining": "Show remaining time",
-      "showRemainingSub": "Count down time left instead of showing the track duration"
+      "showRemainingSub": "Count down time left instead of showing the track duration",
+      "outputDevice": "Output device",
+      "outputDeviceSub": "Where local playback is heard",
+      "normalization": "Audio normalization",
+      "normalizationSub": "Play every track at a similar loudness (applies from the next song)"
     },
     "sound": {
       "title": "Sound",
@@ -925,7 +999,17 @@
       "openDataFolder": "Open data folder",
       "diagnosticsCopied": "Diagnostics info copied",
       "version": "Version {version}",
-      "build": "Wavee {version}"
+      "build": "Wavee {version}",
+      "checkForUpdates": "Check for updates",
+      "checking": "Checking…",
+      "upToDate": "You're up to date",
+      "updateAvailable": "Wavee {version} is available",
+      "updateCheckFailed": "Couldn't check for updates",
+      "devBuild": "Development build — not for distribution",
+      "privacyPolicy": "Privacy policy",
+      "thirdPartyNotices": "Third-party notices",
+      "unofficial": "Wavee is an independent client and is not affiliated with or endorsed by Spotify AB.",
+      "noticesMissing": "Third-party notices are generated at packaging time."
     },
     "diagnostics": {
       "filterPlaceholder": "Filter logs",
@@ -961,6 +1045,20 @@
       "manage": "Manage...",
       "retrySetup": "Retry setup",
       "problem": "Problem"
+    },
+    "diag": {
+      "developerMode": "Developer mode",
+      "developerModeSub": "Shows the API console, lyrics inspector, test notifications and the FPS overlay",
+      "fpsOverlay": "FPS overlay",
+      "fpsOverlaySub": "Frame timing in the corner of the window",
+      "dealerArchive": "Archive Spotify realtime traffic",
+      "dealerArchiveSub": "Writes every dealer frame to disk (up to 2 GB, 90 days). Leave off unless you are debugging."
+    },
+    "general": {
+      "startOnLogin": "Open Wavee when you sign in to Windows",
+      "startOnLoginSub": "Starts in the background so playback is ready",
+      "spotifyLinksPackagedSub": "Managed by Windows for installed apps",
+      "restartForLanguage": "Language changes apply after Wavee restarts"
     }
   },
   "shell": {
@@ -1108,7 +1206,9 @@
     "logoutConfirmTitle": "Log out of Wavee?",
     "logoutConfirmBody": "You'll need to authorize Wavee again to stream your library.",
     "premiumBadge": "Spotify Premium",
-    "freeBadge": "Spotify Free"
+    "freeBadge": "Spotify Free",
+    "genericError": "Something went wrong signing in.",
+    "browserFailed": "Browser sign-in failed: {error}"
   },
   "player": {
     "nothingPlaying": "Nothing playing",
@@ -1177,7 +1277,12 @@
     "deviceLost": "{device} disconnected — playback paused",
     "deviceSwitched": "Audio moved to {device}",
     "deviceRestored": "Reconnected to {device}",
-    "outputFailed": "Couldn’t open an audio output"
+    "outputFailed": "Couldn’t open an audio output",
+    "showNext": "Show next {n}",
+    "moreCount": "{n} more",
+    "queueSectionNext": "Next in queue",
+    "queueSectionAutoplay": "Autoplay",
+    "queueSectionNextUp": "Next up"
   },
   "playback": {
     "runtime": {
@@ -1302,8 +1407,19 @@
         "noMatch": "No history matches \"{query}\"",
         "tryAll": "Try switching to \"All\" to see your full history.",
         "startNavigating": "Start navigating — your history will appear here."
-      }
-    }
+      },
+      "clearAllConfirm": "Clear all history?",
+      "clearAllConfirmBody": "This removes every entry from your navigation history."
+    },
+    "pageNotFound": "Page not found",
+    "goHome": "Go home",
+    "settings": "Settings",
+    "apiConsole": "API Console",
+    "playbackRuntime": "Playback runtime",
+    "concerts": "Concerts",
+    "artistConcerts": "{artist} concerts",
+    "artistConcertsGeneric": "Artist concerts",
+    "concertDetails": "Concert details"
   },
   "sidebar": {
     "pinned": "Pinned",
@@ -1717,7 +1833,14 @@
     "emptyTitle": "Nothing here yet",
     "emptySubtitle": "When there's something to show, it'll appear here.",
     "errorTitle": "Something went wrong.",
-    "errorSubtitle": "Check your connection and try again."
+    "errorSubtitle": "Check your connection and try again.",
+    "offlineBanner": "You're offline. Cached content still works; playback and edits resume when you're back.",
+    "controlledByDevice": "Controlled by {device}",
+    "restartNow": "Restart now",
+    "restartToApply": "Applies after restart",
+    "crashLastRun": "Wavee crashed last time",
+    "openReportFolder": "Open report folder",
+    "developerOnly": "Developer mode"
   },
   "menu": {
     "playNextN": "Play {count} next",
@@ -1763,7 +1886,14 @@
     "openRadioPlaylist": "Open playlist",
     "radioUnavailable": "Couldn't start radio",
     "artistUnavailable": "Couldn’t find this album’s artist",
-    "radio": "Radio"
+    "radio": "Radio",
+    "kindAlbum": "Album",
+    "kindArtist": "Artist",
+    "kindPlaylist": "Playlist",
+    "kindPodcast": "Podcast",
+    "kindSong": "Song",
+    "moreCount": "+{n} more",
+    "songsSelected": "{n, plural, one {# song selected} other {# songs selected}}"
   },
   "videoOverride": {
     "menuTitle": "Video",
@@ -1876,6 +2006,15 @@
       "sound": "Step 6 · Playback",
       "notifications": "Step 7 · Reach"
     },
+    "roadmap": {
+      "terms": "Terms",
+      "signIn": "Your account",
+      "localPlayback": "Local playback",
+      "appearance": "Appearance",
+      "sidebar": "Navigation",
+      "sound": "Playback",
+      "notifications": "Reach"
+    },
     "welcome": {
       "kicker": "Wavee for Windows",
       "headlinePrefix": "Let's get you ",
@@ -1886,7 +2025,10 @@
       "metaPremiumValue": "Premium",
       "metaPremiumLabel": "Required to stream",
       "metaDownloadValue": "One download",
-      "metaDownloadLabel": "Local playback runtime"
+      "metaDownloadLabel": "Local playback runtime",
+      "roadmapTotal": "~2 min total",
+      "stageCaptionTitle": "Seven steps",
+      "stageCaptionSub": "About two minutes, all changeable later"
     },
     "terms": {
       "title": "Terms & what Wavee is",
@@ -1898,7 +2040,6 @@
       "runtimeBody": "Downloaded from Spotify's own CDN, verified by fingerprint and signature, and stored per-machine. Nothing else is installed and nothing is bundled with Wavee.",
       "dataTitle": "Local data on this PC",
       "dataBody": "Login, library, metadata cache, settings and logs live under %LOCALAPPDATA%\\Wavee. Factory reset erases all of it.",
-      "trademarksGroup": "Trademarks",
       "fine": "Spotify® and the Spotify logo are registered trademarks of Spotify AB. All trademarks, logos and brand names are the property of their respective owners; their use here is nominative only. Wavee itself ships under its own licence — the full text is in Settings → About → Licences.",
       "readFull": "Read the full agreement",
       "sectionsCount": "{count} sections",
@@ -1909,40 +2050,108 @@
       "section3Title": "3 · Streaming & online services",
       "section3Body": "Using Spotify through Wavee means Spotify's own terms of service still apply to your account and your listening.",
       "section4Title": "4 · Local files & caches",
-      "section4Body": "Encrypted audio bodies and licence keys are cached locally to avoid re-downloading. You control the budget and the location, and can clear both at any time."
+      "section4Body": "Encrypted audio bodies and licence keys are cached locally to avoid re-downloading. You control the budget and the location, and can clear both at any time.",
+      "agreementTitle": "Full agreement",
+      "stageCaptionTitle": "Independent, on purpose",
+      "stageCaptionSub": "Your account, Spotify’s own API — nothing else.",
+      "privacyLink": "Privacy policy"
     },
     "appearance": {
-      "lead": "Choose how Wavee looks and how much content fits. Every change previews live in the shell behind this window.",
-      "rowsTitle": "Track list density",
-      "rowsSub": "Choose the rhythm that makes long lists comfortable to scan.",
-      "detailTitle": "Detail page shell",
-      "detailSub": "Choose where artwork and identity sit around the track list.",
-      "pageLayoutAutomaticSub": "Adapts between a side rail and a hero as the window changes.",
-      "pageLayoutHeroSub": "Keeps artwork and identity above the track list at every size.",
-      "otherTitle": "Other appearance",
-      "otherSub": "Theme, window material and optional visual effects."
+      "lead": "Everything here applies live to the window behind.",
+      "title": "Make it yours",
+      "palette": "Color palette",
+      "pages": "Album & playlist pages",
+      "pagesSub": "Layout · keep page color to the hero",
+      "extras": "Extras",
+      "chipArtwork": "Artwork",
+      "chipWashes": "Color washes",
+      "chipMarquee": "Marquee",
+      "chipLyricsMotion": "Lyrics motion",
+      "stageCaptionTitle": "Live preview",
+      "stageCaptionSub": "A miniature drawn from your choices"
     },
     "sidebar": {
-      "templateGroup": "Starting point for Custom",
-      "useThisTemplate": "Use this"
+      "lead": "Pick the left-hand navigation. It applies live behind this window.",
+      "alsoFromMenu": "Also switchable later from the sidebar's own layout menu.",
+      "stageCaptionTitle": "Live preview",
+      "stageCaptionSub": "The shell with the selected sidebar"
     },
     "sound": {
-      "lead": "Streaming quality, transitions, and how much of it Wavee keeps on disk. Skip and we'll keep every default."
+      "lead": "Streaming quality, transitions, and how much of it Wavee keeps on disk. Skip and we'll keep every default.",
+      "title": "Sound & storage",
+      "choose": "Choose…",
+      "streamingTitle": "Streaming at {kbps} kbps · {quality}",
+      "streamingPerHour": "About {gb} GB per hour",
+      "streamingMetered": "{quality} ({gb} GB/h) on metered Wi-Fi",
+      "cacheTitle": "Audio cache",
+      "cacheDriveShare": "Drive share · {percent}% of {drive}",
+      "cacheFixed": "Fixed size · {size} on {drive}",
+      "cacheUnlimited": "Unlimited · only the free-space reserve on {drive}",
+      "thisDrive": "this drive",
+      "stageCaptionTitle": "Everything here applies live",
+      "stageCaptionSub": "Change any of it later in Settings."
     },
     "notifications": {
       "moreTopics": "More topics & quiet hours",
-      "moreCount": "{count} more",
-      "linksLanguageGroup": "Links & language"
+      "lead": "Each topic: off, the bell in Wavee, or a Windows banner too.",
+      "newAlbumsSub": "From artists you follow",
+      "concertsSub": "Announced near you, plus reminders",
+      "moreSummaryQuietOff": "{count} topics · Quiet hours off",
+      "moreSummaryQuietOn": "{count} topics · Quiet {from}–{to}",
+      "masterOffTitle": "Windows notifications are off",
+      "masterOnTitle": "Windows notifications are on",
+      "masterOnSub": "{count, plural, one {# topic can reach the Action Center} other {# topics can reach the Action Center}}",
+      "stageCaptionTitle": "The bell keeps everything",
+      "stageCaptionSub": "Banners are optional; the bell never misses a thing.",
+      "toastNow": "now",
+      "toastPlay": "Play",
+      "toastSave": "Save"
     },
     "signIn": {
       "title": "Sign in to Spotify",
       "busyNote": "This happens on the same page on purpose — the step list is the page's own state, not a second dialog on top of it.",
-      "doneLead": "You're signed in. Wavee is now reading your library in the background — the rest of setup doesn't wait for it."
+      "doneLead": "You're signed in. Wavee is now reading your library in the background — the rest of setup doesn't wait for it.",
+      "lead": "Sign in with your Spotify® account on the Spotify® website — or scan the code with your phone.",
+      "browserCardTitle": "Continue in your browser",
+      "browserCardSub": "Opens accounts.spotify.com in your default browser. Come back when it says you're done.",
+      "scanCardTitle": "Scan the code on the left",
+      "scanCardTitleNeutral": "Scan the code with your phone",
+      "scanCardSub": "Signed in on your phone already? This is the fastest way.",
+      "afterApprove": "After you approve",
+      "stageTitle": "Pair from your phone",
+      "stageBody": "Approve on your phone and this PC signs in.",
+      "stageDoneTitle": "Signed in",
+      "isThisYou": "Is this you?",
+      "confirmLead": "You're signed in on this PC. Continue as this account, or switch to another.",
+      "confirmHint": "Not you? “Not me” signs this PC out so a different account can sign in.",
+      "yesContinue": "Yes, continue",
+      "notMe": "Not me",
+      "noAccount": "Don't have a Spotify account? Sign up",
+      "premiumNote": "Wavee needs Spotify Premium."
     },
     "localPlayback": {
-      "advancedSub": "Supply a Spotify.dll yourself — Wavee recognizes supported builds by fingerprint and configures the rest automatically.",
-      "chooseVersionCaption": "By default Wavee picks the recommended build for your architecture",
-      "diagnosticsCaption": "Every path Wavee searched, and why each one was rejected"
+      "offerLead": "One small download, verified before it runs — nothing else is installed.",
+      "readyLead": "Downloaded, verified and stored. Every Wavee checkout on this PC reuses it.",
+      "step1Title": "Download",
+      "step1Body": "Fetched from Spotify’s CDN. Size and progress are shown before anything is written.",
+      "step2Title": "Verify",
+      "step2Body": "Fingerprint and publisher signature are checked. An unsigned build stops here and asks you first.",
+      "step3Title": "Ready",
+      "step3Body": "Stored once per machine and reused by every Wavee checkout — no re-download on update.",
+      "chipChooseVersion": "Choose a version",
+      "finePrint": "Wavee recognizes supported builds by fingerprint and configures the rest automatically.",
+      "factSource": "Source",
+      "factSourceValue": "Spotify’s own CDN",
+      "factChecked": "Checked",
+      "factCheckedValue": "Fingerprint + signature",
+      "factLivesIn": "Lives in",
+      "factLivesInValue": "Per-machine store",
+      "factFor": "For",
+      "factForValue": "This PC · {arch}",
+      "stageTitle": "What gets installed",
+      "stageBody": "One component from Spotify’s CDN, checked before use.",
+      "untrustedStageBody": "Fingerprint matches — the signature couldn’t be verified.",
+      "advanced": "Advanced"
     },
     "done": {
       "headlinePrefix": "You're ",
@@ -1951,14 +2160,131 @@
       "headlineSuffixPlain": ".",
       "lead": "Your part is finished. Wavee just needs to finish reading your library and apply what you chose — that runs on its own, and you can start listening while it does.",
       "fine": "Everything here can be changed later in Settings. If you picked Custom, the sidebar's layout menu opens the full customizer.",
-      "applyingKicker": "Almost there",
-      "applyingHeadlinePrefix": "Setting ",
-      "applyingHeadlineBold": "up",
-      "applyingFine": "Depending on how large your library is this can take a few minutes. It keeps going in the background — nothing here blocks the window opening.",
       "stepSettings": "Applying your settings",
       "stepSidebar": "Refreshing your sidebar",
       "stepLibrary": "Starting library sync",
-      "stepRuntime": "Checking local playback"
+      "stepRuntime": "Checking local playback",
+      "stageCaptionTitle": "Keeps going in the background",
+      "stageCaptionSub": "Nothing here blocks the window opening."
+    }
+  },
+  "profile": {
+    "privateSession": "Private session",
+    "privateSessionOn": "Private session — nothing you play is shared",
+    "palette": "Palette",
+    "paletteWarm": "Warm",
+    "paletteSlate": "Slate",
+    "paletteNeutral": "Neutral",
+    "paletteAccent": "Accent"
+  },
+  "palette": {
+    "title": "Command palette",
+    "noMatches": "No matching commands",
+    "matches": "{n, plural, one {# matching command} other {# matching commands}}",
+    "enter": "Enter",
+    "placeholder": "Search commands — type > for commands only",
+    "searchFor": "Search for “{q}”",
+    "shortcuts": "Keyboard shortcuts"
+  },
+  "shortcuts": {
+    "title": "Keyboard shortcuts",
+    "playback": "Playback",
+    "navigation": "Navigation",
+    "playPause": "Play / pause",
+    "next": "Next track",
+    "previous": "Previous track",
+    "seekBack": "Seek back 5 s",
+    "seekForward": "Seek forward 5 s",
+    "volumeUp": "Volume up",
+    "volumeDown": "Volume down",
+    "mute": "Mute / unmute",
+    "shuffle": "Toggle shuffle",
+    "repeat": "Cycle repeat",
+    "like": "Like current song",
+    "newTab": "New tab",
+    "palette": "Command palette",
+    "find": "Focus search",
+    "back": "Back",
+    "forward": "Forward",
+    "fullscreen": "Video full screen",
+    "thisDialog": "This dialog"
+  },
+  "toast": {
+    "moreUpdates": "{n, plural, one {1 more update in Wavee} other {# more updates in Wavee}}",
+    "openToSee": "Open Wavee to see them.",
+    "newEpisode": "New episode — {creator}",
+    "newRelease": "New release — {creator}",
+    "outNow": "{artist} — out now",
+    "outNowGeneric": "Out now",
+    "play": "Play",
+    "updateAvailable": "Wavee {version} is available",
+    "updateReady": "Wavee {version} is ready to install",
+    "updated": "Wavee updated to {version}"
+  },
+  "jumplist": {
+    "pause": "Pause",
+    "resume": "Resume",
+    "pausePlayback": "Pause playback",
+    "resumePlayback": "Resume playback",
+    "search": "Search",
+    "jumpBackIn": "Jump back in",
+    "kindAlbum": "Album",
+    "kindPlaylist": "Playlist",
+    "kindArtist": "Artist",
+    "kindShow": "Show",
+    "kindApp": "Wavee"
+  },
+  "taskbar": {
+    "paused": "Paused",
+    "previous": "Previous",
+    "play": "Play",
+    "pause": "Pause",
+    "next": "Next"
+  },
+  "runtime": {
+    "sig": {
+      "publisher": "Publisher",
+      "issuer": "Issuer",
+      "trust": "Trust",
+      "reason": "Reason",
+      "validFrom": "Valid from",
+      "validTo": "Valid to",
+      "thumbprint": "Thumbprint",
+      "pinned": "Pinned fingerprint",
+      "file": "File",
+      "yes": "Yes",
+      "no": "No",
+      "trusted": "Trusted",
+      "notTrusted": "Not trusted",
+      "unsupportedPlatform": "Unsupported platform",
+      "unknown": "Unknown",
+      "signedBy": "Digitally signed by {subject}",
+      "signedByPinned": "Signed by {subject}; trusted by pinned fingerprint",
+      "signedByTrust": "Signed by {subject}; {trust}",
+      "trustedByFingerprint": "Trusted by pinned runtime fingerprint",
+      "verifiedFingerprint": "Verified runtime fingerprint",
+      "notTrustedOverride": "Signature not trusted; manual override",
+      "checkUnavailable": "Signature check unavailable on this platform",
+      "signatureUnknown": "Signature unknown",
+      "packLabel": "Spotify {version} · {arch}"
+    }
+  },
+  "crash": {
+    "title": "Oops! Wavee crashed",
+    "body": "Wavee crashed.",
+    "reportLine": "Crash report: {path}",
+    "logLine": "Log: {path}",
+    "openFolderQuestion": "Open the report folder now?"
+  },
+  "lyrics": {
+    "inspector": {
+      "reportCopied": "Lyrics report copied",
+      "evidenceSaved": "Lyrics evidence bundle saved",
+      "parsedCopied": "Parsed lyrics copied",
+      "refetchNote": "Re-fetch drops this track from the memory and disk lyric caches and runs the provider fan-out again.",
+      "raw": "Raw ({n})",
+      "rawNone": "Raw (none)",
+      "payloadsNote": "Payloads are only captured when a fan-out actually runs; cached answers have none."
     }
   }
 }

@@ -352,12 +352,12 @@ sealed class RightRail : Component
         ],
     }, tip);
 
-    // The lyrics header: title · (secondary-line toggle) · inspect · expand · close.
+    // The lyrics header: title · (secondary-line toggle) · (inspect) · expand · close.
     //
-    // The inspector is its own component (LyricsInspectorButton) rather than a HeaderButton call here, because it needs
-    // the overlay service and the playing track id — reading either from this header would subscribe the WHOLE rail to
-    // track identity, re-rendering the panel chrome on every song change for a button that only needs the id at click
-    // time.
+    // The inspector is DEVELOPER-ONLY and is its own component (LyricsInspectorButton) rather than a HeaderButton call
+    // here, because it needs the overlay service and the playing track id — reading either from this header would
+    // subscribe the WHOLE rail to track identity, re-rendering the panel chrome on every song change for a button that
+    // only needs the id at click time.
     //
     // The secondary-line toggle is rendered ONLY when the document on screen actually carries a translation or a
     // romanization (LyricsPrefs.Available, published once per doc by LyricsView) — a permanently-present control that
@@ -370,25 +370,28 @@ sealed class RightRail : Component
         _ = LyricsPrefs.Epoch.Value;
         int secondary = LyricsPrefs.Clamp(settings?.Get(WaveeSettings.LyricsSecondaryLine) ?? LyricsPrefs.None);
 
-        Element inspect = Embed.Comp(() => new LyricsInspectorButton());
+        // The inspector is DEVELOPER SURFACE (Settings ▸ Diagnostics ▸ Developer mode): a listener has no use for a
+        // "which source won, and what did it carry" dump. The `.Value` read subscribes the header, so the button
+        // appears and disappears with the switch; null means it is not composed at all, not composed-and-hidden.
+        Element? inspect = DeveloperMode.Enabled.Value ? Embed.Comp(() => new LyricsInspectorButton()) : null;
         Element expand = HeaderButton(Icons.FullScreen, Loc.Get(Strings.Player.ExpandLyrics),
             () => ui.ImmersiveLyrics.Value = true);
         Element close = CloseButton(() => ui.RailOpen.Value = false);
-        if (available == 0) return [TitleText(RailMode.Lyrics), inspect, expand, close];
+        if (available == 0)
+        {
+            if (inspect is null) return [TitleText(RailMode.Lyrics), expand, close];
+            return [TitleText(RailMode.Lyrics), inspect, expand, close];
+        }
 
-        return
-        [
-            TitleText(RailMode.Lyrics),
-            // `active` is "a second line is actually on screen", not merely "the mode is non-zero": a persisted
-            // romanization preference over a document that only carries a translation renders nothing, and an accented
-            // glyph claiming otherwise would be the misleading half of the state.
-            HeaderButton(Icons.Globe, LyricsPrefs.Tooltip(secondary),
-                () => LyricsPrefs.Set(settings, LyricsPrefs.Next(secondary, available)),
-                active: (available & LyricsPrefs.BitFor(secondary)) != 0),
-            inspect,
-            expand,
-            close,
-        ];
+        // `active` is "a second line is actually on screen", not merely "the mode is non-zero": a persisted
+        // romanization preference over a document that only carries a translation renders nothing, and an accented
+        // glyph claiming otherwise would be the misleading half of the state.
+        Element secondaryToggle = HeaderButton(Icons.Globe, LyricsPrefs.Tooltip(secondary),
+            () => LyricsPrefs.Set(settings, LyricsPrefs.Next(secondary, available)),
+            active: (available & LyricsPrefs.BitFor(secondary)) != 0);
+
+        if (inspect is null) return [TitleText(RailMode.Lyrics), secondaryToggle, expand, close];
+        return [TitleText(RailMode.Lyrics), secondaryToggle, inspect, expand, close];
     }
 
     // The rail's own title takes the shared rail-header alias (Subtitle 20/28/600) — the same run NowPlayingPanel's

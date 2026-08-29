@@ -206,7 +206,7 @@ public class SpotifyProviderHydratorTests
     {
         public int Calls;
         public Task<IReadOnlyCollection<string>> FetchAsync(IReadOnlyList<EntityUri> uris,
-            IReadOnlyList<(string Uri, int Kind)>? extraKinds, TraitSurface surface, CancellationToken ct)
+            IReadOnlyList<(string Uri, int Kind)>? extraKinds, TraitSurface surface, CancellationToken ct, bool revalidate = false)
         {
             Interlocked.Increment(ref Calls);
             throw new InvalidOperationException("extended-metadata fetch failed (503)");
@@ -228,7 +228,7 @@ public class SpotifyProviderHydratorTests
         public int Calls;
 
         public async Task<IReadOnlyCollection<string>> FetchAsync(IReadOnlyList<EntityUri> uris,
-            IReadOnlyList<(string Uri, int Kind)>? extraKinds, TraitSurface surface, CancellationToken ct)
+            IReadOnlyList<(string Uri, int Kind)>? extraKinds, TraitSurface surface, CancellationToken ct, bool revalidate = false)
         {
             Interlocked.Increment(ref Calls);
             await gate.ConfigureAwait(false);

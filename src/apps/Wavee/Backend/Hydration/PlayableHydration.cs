@@ -86,7 +86,15 @@ public sealed class PlayableHydration : IKindHydration
             repaired++;
             try
             {
-                if (await _envelopes.TrackAsync(uri, ct).ConfigureAwait(false) is { } full) _store.UpsertTrack(full);
+                if (await _envelopes.TrackAsync(uri, ct).ConfigureAwait(false) is { } full)
+                {
+                    _store.UpsertTrack(full);
+                    // There was previously only a FAILURE line below — a repair that ran and landed but left the row
+                    // thin anyway (getTrack answered, but the envelope itself was thin) was indistinguishable from a
+                    // repair that never ran at all. This is the positive half of that signal.
+                    _log.Event(WaveeLogLevel.Debug, "hydration.playable.envelope.ok", "getTrack repair landed",
+                        fields: [WaveeLogField.Of("uri", uri), WaveeLogField.Of("level", level.ToString())]);
+                }
             }
             catch (OperationCanceledException) { throw; }
             catch (Exception ex)
@@ -125,7 +133,7 @@ public sealed class PlayableHydration : IKindHydration
 
         // Identity for the album refs (a name is all a denormalized ref needs); Open for the thin rows (which is what
         // buys them the getTrack repair above). Both Background — nothing is watching.
-        var background = new HydrationOptions(HydrationMode.Background, Priority: ClosurePriority);
+        var background = new HydrationOptions(HydrationMode.Background, Priority: ClosurePriority, SubAsk: true);
         if (albums is not null)
             foreach (var page in Pages(albums))
                 await ctx.Hydrator.EnsureManyAsync(page, HydrationLevel.Identity, background, ct).ConfigureAwait(false);

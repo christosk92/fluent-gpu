@@ -37,6 +37,7 @@ public sealed class LiveSessionHost : IAsyncDisposable
     SpotifyNotificationsService? _notifications;
     SpotifyWhatsNewService? _whatsNew;
     IDisposable? _homeCache;
+    IDisposable? _rootlistWatch;
     Wavee.Backend.Hydration.HydrationPump? _hydrationPump;
 
     LiveSessionHost(LiveDealerTransport transport, LiveConnect connect, CancellationTokenSource cts,
@@ -66,6 +67,10 @@ public sealed class LiveSessionHost : IAsyncDisposable
     /// feed epoch's second publisher) does not outlive the session that created it and accumulate one subscription per
     /// login.</summary>
     internal void AttachHomeCache(IDisposable homeCache) => _homeCache = homeCache;
+
+    /// <summary>Register the session-scoped rootlist hydration watch, disposed on logout so its store-change
+    /// subscription does not outlive the session / accumulate one per login.</summary>
+    internal void AttachRootlistWatch(IDisposable watch) => _rootlistWatch = watch;
 
     /// <summary>Register the hydration background lane. Its token is already linked to this session's, so disposing it
     /// on logout is belt-and-braces — but it is what makes "no install without a teardown" true for the façade too.</summary>
@@ -579,11 +584,16 @@ public sealed class LiveSessionHost : IAsyncDisposable
             // (a) fetch playlist/album TRACKS the first time a detail page opens (the sync stored headers only). The
             //     hydration façade replaces the no-op that left lists empty. em + the etag cache were built above for
             //     the context resolver — reuse them so the whole session shares one cache.
-            // The fetchers' hydrate delegate is the façade at IDENTITY: a membership diff needs its new rows to exist
-            // (title / duration / image), not a page open. One catalogue POST per 300, deduped by the ledger.
-            Task HydrateIdentity(IReadOnlyList<string> uris, CancellationToken c)
-                => hydration.EnsureManyAsync(uris, HydrationLevel.Identity, HydrationOptions.Default, c);
-            var fetcher = new PlaylistFetcher(live.Pipeline, () => live.BaseUrl, store, HydrateIdentity, () => live.Username);
+            // The fetchers' hydrate delegate is Wavee.Backend.Hydration.MembershipHydration — the façade at IDENTITY
+            // for rows a membership diff/snapshot just adopted, PLUS a companion trait ask for those SAME rows,
+            // attributed to THIS caller's real surface (never TraitSurface.None — see that type's remarks for why a
+            // shared None surface here silently starved PLAYS/BPM·KEY for every playlist and saved set).
+            var hydratePlaylistMembers = Wavee.Backend.Hydration.MembershipHydration.For(hydration, TraitSurface.PlaylistOpen);
+            var hydrateCollectionMembers = Wavee.Backend.Hydration.MembershipHydration.For(hydration, TraitSurface.LikedSongs);
+            // onRevisionChanged: the save-count cache's only invalidation hook — a genuinely new revision landing on
+            // the OPEN playlist plane is the "this playlist's identity may have moved" signal it has none of its own.
+            var fetcher = new PlaylistFetcher(live.Pipeline, () => live.BaseUrl, store, hydratePlaylistMembers, () => live.Username,
+                onRevisionChanged: svc.PlaylistPopcount.Invalidate);
             // The recents page's list read (/playlist/v2/list/recents/page[/diff]) — the same pipeline + baseUrl seam as
             // the playlist fetcher, installed into the switchable identity the page binds to for the whole session. It is
             // STATELESS (no revision, no rows), so nothing here has to be torn down beyond the GoOffline Reset().
@@ -598,7 +608,7 @@ public sealed class LiveSessionHost : IAsyncDisposable
             var collections = new Wavee.Backend.Collections.CollectionFetcher(live.Pipeline, () => live.BaseUrl, () => live.Username, store,
                 s => cold.GetCollectionRevision(s),
                 (s, r) => cold.SetCollectionRevision(s, r, DateTimeOffset.UtcNow.ToUnixTimeSeconds()),
-                HydrateIdentity,   // the ladder's own ref-closure post-step closes blank AlbumRefs / thin tracks (design §2.3)
+                hydrateCollectionMembers,   // the ladder's own ref-closure post-step closes blank AlbumRefs / thin tracks (design §2.3)
                 (s, u) => svc.RealMutations!.HasPending(s, u));
             var signalClient = new Wavee.Backend.Playlists.PlaylistSignalsClient(
                 live.Pipeline, () => live.BaseUrl, () => live.Session.Locale);
@@ -859,9 +869,15 @@ public sealed class LiveSessionHost : IAsyncDisposable
             //     saved header, even when it had no membership baseline; that left Classic showing "0 songs" and no
             //     mosaic until the user opened the playlist. Open asks LibrarySync for the authoritative membership and
             //     its member metadata. The plan treats a known empty baseline as complete, so real empty lists stay cheap.
-            var rootlistPlaylists = Wavee.Backend.Hydration.PlaylistHydration.RootlistOpenPlan(store);
-            if (rootlistPlaylists.Count > 0)
-                _ = hydrator.EnsureManyAsync(rootlistPlaylists, HydrationLevel.Open, HydrationOptions.Prefetch, cts.Token);
+            //
+            //     This is a store WATCH, not a one-shot plan — the plan used to be computed here, synchronously, before
+            //     InitialHydrate (enqueued above, and deferred behind CachedStore.WarmComplete) had landed the cold
+            //     rootlist, so on the first launch after the setup wizard it planned against an empty rootlist and never
+            //     ran again: the sidebar showed raw `spotify:playlist:` uris until the user opened each list by hand.
+            //     The watch re-plans on every rootlist/Bulk store change, which also covers dealer rootlist pushes and
+            //     ReconnectResync convergence.
+            var rootlistWatch = new Wavee.Backend.Hydration.RootlistHydrationWatch(store, hydrator, cts.Token, syncLog.With("hydration.rootlist"));
+            host.AttachRootlistWatch(rootlistWatch);
         }
 
         // Friend-activity (presence) feed — session-scoped, display-only (never touches the Store). Seeds on the dealer
@@ -974,6 +990,7 @@ public sealed class LiveSessionHost : IAsyncDisposable
         _notifications?.Dispose();   // stop the gander in-flight fetch
         _whatsNew?.Dispose();        // stop the what's-new in-flight fetch
         _homeCache?.Dispose();       // stop publishing the Home feed epoch off this session's store
+        _rootlistWatch?.Dispose();   // stop re-planning rootlist hydration off this session's store
         _hydrationPump?.Dispose();   // drop every queued prefetch/post-step with the session
         _router?.Dispose();      // stop decoding pushes
         if (_sync is not null) await _sync.DisposeAsync().ConfigureAwait(false);   // drain the loop to a stop before the transport

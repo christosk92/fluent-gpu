@@ -67,6 +67,7 @@ static class OverlaySuite
         VideoHoleBackdropChecks(strings);
         AcrylicBackdropMathChecks();
         ContentDialogChromeChecks(strings);
+        ScrimVisualChecks(strings);
         TeachingTipPlacementChecks(strings);
         MenuFlyoutStyleChecks(strings);
         SplitButtonStyleChecks(strings);
@@ -3358,6 +3359,48 @@ static class OverlaySuite
         Check("64g. ContentDialog chrome: real outer border; square internal content/command layers",
             realOuterBorder && topOverlay && separator && commandRow,
             $"outer={realOuterBorder} top={topOverlay} sep={separator} cmd={commandRow}");
+    }
+
+    // gate.overlay.scrim-visual — PopupOptions.ScrimVisual (Modal only): false keeps input-blocking/focus-trapping
+    // intact (AnyInputBlocking, AnyModal) but hides the shared scrim's fill (AnyModalVisual), so the app can own the
+    // dimming or leave the content behind as a live preview. Default true still dims via the shared scrim.
+    static void ScrimVisualChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("scrimvisual", new Size2(480, 360), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        var root = new OverlayProbe();
+        using var host = new AppHost(app, window, device, fonts, strings, root);
+        host.RunFrame();
+        var svc = (OverlayServiceImpl)root.Service!;
+
+        Func<Element> body = () => new BoxEl { Width = 120, Height = 40, Children = [new TextEl("scrim-body") { Size = 12f }] };
+
+        // Modal opened with ScrimVisual = false: still blocks input and reads AnyModal, but the shared scrim is not visual.
+        var clear = svc.Open(() => root.Anchor, body, FlyoutPlacement.BottomLeft,
+            new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.Modal, Chrome: PopupChrome.Modal) { ScrimVisual = false });
+        host.RunFrame();
+        bool clearBlocking = svc.AnyInputBlocking;
+        bool clearModal = svc.AnyModal;
+        bool clearVisual = svc.AnyModalVisual;
+        clear.Close();
+        for (int i = 0; i < 20; i++) host.RunFrame();   // settle the close fade → entry finalized
+
+        // Default Modal (ScrimVisual defaults true): all three read true.
+        var opaque = svc.Open(() => root.Anchor, body, FlyoutPlacement.BottomLeft,
+            new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.Modal, Chrome: PopupChrome.Modal));
+        host.RunFrame();
+        bool opaqueBlocking = svc.AnyInputBlocking;
+        bool opaqueModal = svc.AnyModal;
+        bool opaqueVisual = svc.AnyModalVisual;
+        opaque.Close();
+        for (int i = 0; i < 20; i++) host.RunFrame();
+
+        Check("gate.overlay.scrim-visual PopupOptions.ScrimVisual=false keeps Modal blocking but hides the shared scrim fill",
+            clearBlocking && clearModal && !clearVisual && opaqueBlocking && opaqueModal && opaqueVisual,
+            $"clear: blocking={clearBlocking} modal={clearModal} visual={clearVisual} | default: blocking={opaqueBlocking} modal={opaqueModal} visual={opaqueVisual}");
     }
 
     static void TeachingTipPlacementChecks(StringTable strings)

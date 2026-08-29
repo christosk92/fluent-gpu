@@ -88,7 +88,7 @@ public sealed class TraitPipeline : ITraitPipeline
         for (int start = 0; start < plan.Count; start += MetadataChunking.MaxEntitiesPerRequest)
         {
             int count = Math.Min(MetadataChunking.MaxEntitiesPerRequest, plan.Count - start);
-            await RunPageAsync(plan, start, count, wanted, surface, clientFeatureId, now, ct).ConfigureAwait(false);
+            await RunPageAsync(plan, start, count, wanted, traits, surface, clientFeatureId, now, ct).ConfigureAwait(false);
         }
     }
 
@@ -124,7 +124,7 @@ public sealed class TraitPipeline : ITraitPipeline
     }
 
     // ── One page: one request, one projection sweep, one bulk window ────────────────────────────────────────────────
-    async Task RunPageAsync(List<PlanRow> plan, int start, int count, List<ITraitProjector> wanted,
+    async Task RunPageAsync(List<PlanRow> plan, int start, int count, List<ITraitProjector> wanted, TraitSet traits,
                             TraitSurface surface, string? clientFeatureId, DateTimeOffset now, CancellationToken ct)
     {
         var reqs = new List<(string Uri, Xm.ExtensionKind Kind)>(count * 2);
@@ -149,6 +149,9 @@ public sealed class TraitPipeline : ITraitPipeline
         }
 
         int applied = 0, unchanged = 0, negative = 0, notResident = 0, unanswered = 0;
+        int pcUnans = 0, pcNeg = 0, pcNr = 0;
+        int tempoUnans = 0, tempoNeg = 0, tempoNr = 0;
+        int tagUnans = 0, tagNeg = 0, tagNr = 0;
         Dictionary<Xm.ExtensionKind, int>? negByKind = null;
         Dictionary<CoreKind, int>? negByEntity = null;
         int touched = 0;   // bitmask of the wanted projectors that saw at least one uri on this page
@@ -166,7 +169,12 @@ public sealed class TraitPipeline : ITraitPipeline
 
                 // ABSENT IS NOT AN OUTCOME — the same rule ExtensionEtagCache enforces one layer down. A key the
                 // response simply omitted stays unmemoized so the next pass retries it.
-                if (!payloads.HasAnswer(p.Kind)) { unanswered++; continue; }
+                if (!payloads.HasAnswer(p.Kind))
+                {
+                    unanswered++;
+                    TallyTrait(p.Trait, ref pcUnans, ref tempoUnans, ref tagUnans);
+                    continue;
+                }
 
                 TraitOutcome outcome;
                 try { outcome = p.Project(batch, row.Uri, payloads); }
@@ -186,6 +194,7 @@ public sealed class TraitPipeline : ITraitPipeline
                         break;
                     case TraitOutcome.Negative:
                         negative++;
+                        TallyTrait(p.Trait, ref pcNeg, ref tempoNeg, ref tagNeg);
                         _negatives.Add(row.Uri, p.Kind);
                         (negByKind ??= new Dictionary<Xm.ExtensionKind, int>()).TryGetValue(p.Kind, out int k);
                         negByKind[p.Kind] = k + 1;
@@ -194,7 +203,10 @@ public sealed class TraitPipeline : ITraitPipeline
                         break;
                     // NotResident: the row is not in the store, so there was nothing to decorate. NEVER memoized — the
                     // answer is wanted the moment the row lands, and a trait never mints one.
-                    default: notResident++; break;
+                    default:
+                        notResident++;
+                        TallyTrait(p.Trait, ref pcNr, ref tempoNr, ref tagNr);
+                        break;
                 }
             }
         }
@@ -232,6 +244,11 @@ public sealed class TraitPipeline : ITraitPipeline
                      WaveeLogField.Of("writes", batch.Writes),
                      WaveeLogField.Of("negByKind", Tally(negByKind)),
                      WaveeLogField.Of("negByEntity", Tally(negByEntity))]);
+
+        LogTrackCensus(plan, start, count, traits, surface,
+            new TrackHydrationCensus.TraitTallies(pcUnans, pcNeg, pcNr),
+            new TrackHydrationCensus.TraitTallies(tempoUnans, tempoNeg, tempoNr),
+            new TrackHydrationCensus.TraitTallies(tagUnans, tagNeg, tagNr));
     }
 
     /// <summary>Flatten the page into the (uri, kind) query list. A uri's kinds MUST be CONTIGUOUS:
@@ -274,5 +291,38 @@ public sealed class TraitPipeline : ITraitPipeline
             sb.Append(key).Append('=').Append(n);
         }
         return sb.ToString();
+    }
+
+    static void TallyTrait(TraitSet trait, ref int playcount, ref int tempo, ref int tags)
+    {
+        if (trait == TraitSet.PlayCount) playcount++;
+        else if (trait == TraitSet.AudioAttributes) tempo++;
+        else if (trait == TraitSet.Descriptors) tags++;
+    }
+
+    void LogTrackCensus(List<PlanRow> plan, int start, int count, TraitSet traits, TraitSurface surface,
+        TrackHydrationCensus.TraitTallies playcount, TrackHydrationCensus.TraitTallies tempo,
+        TrackHydrationCensus.TraitTallies tags)
+    {
+        if (!_log.IsEnabled(WaveeLogLevel.Info)) return;
+
+        Track?[]? rows = null;
+        int n = 0;
+        for (int i = start; i < start + count; i++)
+        {
+            if (plan[i].Kind != CoreKind.Track) continue;
+            rows ??= new Track?[count];
+            rows[n++] = _store.GetTrack(plan[i].Uri);
+        }
+        if (rows is null || n == 0) return;
+        if (n < rows.Length)
+        {
+            var trimmed = new Track?[n];
+            Array.Copy(rows, trimmed, n);
+            rows = trimmed;
+        }
+
+        var report = TrackHydrationCensus.Scan(rows, traits, playcount, tempo, tags);
+        TrackHydrationCensus.LogIfNeeded(_log, report, surface, HydrationLevel.Open);
     }
 }

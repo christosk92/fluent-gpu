@@ -39,7 +39,9 @@ public enum AudioSourceKind
 
 /// <summary>The user-facing streaming-quality preference (persisted as <c>playback.quality</c>) — the Spotify tier
 /// ladder. The resolver aims at the chosen rung and falls back to the nearest available file (lower first), never to
-/// silence. <see cref="Lossless"/> is reserved: the picker shows it disabled ("Coming soon") and nothing selects it yet.</summary>
+/// silence. <see cref="Lossless"/> is reserved, not offered in the picker: the value stays in the enum because the
+/// preference persists as an int and must never re-mean, but Settings ▸ Playback and the setup wizard both offer three
+/// rungs and nothing selects it.</summary>
 public enum AudioQualityPreference { Normal96 = 0, High160 = 1, VeryHigh320 = 2, Lossless = 3 }
 
 /// <summary>Pure POD crossing the seam. An EMPTY <see cref="Key"/> means the host must derive it (PlayPlay path).</summary>
@@ -136,6 +138,12 @@ public interface IMediaHost : IAsyncDisposable
     void SetVolume(double volume01);                  // realtime, host-side (buffered-PCM-independent)
     long PositionMs { get; }
     bool IsPlaying { get; }
+    /// <summary>Whether <see cref="PositionMs"/> is a real reading right now. A host with no loaded session (or a
+    /// session it just tore down) reports <c>0</c> from <see cref="PositionMs"/> for lack of anything else to say — that
+    /// 0 means UNKNOWN, never "at the top of the track". Callers that publish position as fact (the controller's
+    /// EmitState/EmitSnap, the volume paths that stamp the projection's timeline) must check this first and fall back
+    /// to their own projected position instead of trusting a stale/absent clock.</summary>
+    bool ClockValid { get; }
     IObservable<AudioHostSignal> Signals { get; }     // the clock + Ended report
 }
 
@@ -234,6 +242,8 @@ public sealed class SilentAudioHost : IAudioHost
     public long PositionMs { get { lock (_gate) return Pos(); } }
     public bool IsPlaying { get { lock (_gate) return _playing; } }
     public bool IsBuffering { get { lock (_gate) return _buffering; } }
+    // The synthetic clock is never stale — it has no real session to lose, so 0 here is always a genuine position.
+    public bool ClockValid => true;
     public IObservable<AudioHostSignal> Signals => _signals;
 
     long Pos() => _playing ? Math.Min(_durationMs <= 0 ? long.MaxValue : _durationMs, _anchorPos + (_now() - _anchorWall)) : _anchorPos;

@@ -176,6 +176,9 @@ public sealed class SpotifyProviderHydrator : IEntityHydrator
                      WaveeLogField.Of("fetched", work?.Count ?? 0), WaveeLogField.Of("reached", reached.Count),
                      WaveeLogField.Of("surface", opts.Surface.ToString())]);
 
+        if (!mixed && batchKind == EntityKind.Track)
+            LogTrackCensus(seen, level, opts);
+
         return new HydrationBatchOutcome(reached,
             (IReadOnlyCollection<string>?)missing ?? Array.Empty<string>(), status);
     }
@@ -252,7 +255,7 @@ public sealed class SpotifyProviderHydrator : IEntityHydrator
             extra ??= new List<(string, int)>();
             ladder.ExtraCatalogKinds(work[i], level, extra);
         }
-        await _catalog.FetchAsync(work, extra is { Count: > 0 } ? extra : null, opts.Surface, ct).ConfigureAwait(false);
+        await _catalog.FetchAsync(work, extra is { Count: > 0 } ? extra : null, opts.Surface, ct, opts.Revalidate).ConfigureAwait(false);
 
         // ── per-kind continuations ───────────────────────────────────────────────────────────────────────────────────
         // Sequential: a page open is single-kind anyway, and serializing keeps a mixed batch from firing several second
@@ -293,6 +296,24 @@ public sealed class SpotifyProviderHydrator : IEntityHydrator
     }
 
     public void Invalidate(string uri) => _ledger.Invalidate(uri);
+
+    void LogTrackCensus(HashSet<string> uris, HydrationLevel level, HydrationOptions opts)
+    {
+        if (!_log.IsEnabled(WaveeLogLevel.Info) || uris.Count == 0) return;
+
+        var rows = new Track?[uris.Count];
+        int i = 0, exhausted = 0;
+        foreach (var uri in uris)
+        {
+            rows[i++] = _ctx.Store.GetTrack(uri);
+            var e = EntityUri.Parse(uri);
+            if (_ledger.TryPeek(e, level, out var sealedOutcome) && sealedOutcome.Status == HydrationStatus.Partial)
+                exhausted++;
+        }
+
+        var report = TrackHydrationCensus.Scan(rows, _policy.For(opts.Surface), exhausted: exhausted, subAsk: opts.SubAsk);
+        TrackHydrationCensus.LogIfNeeded(_log, report, opts.Surface, level);
+    }
 
     static string KindName(EntityKind kind, bool mixed) => mixed ? "mixed" : kind.ToString();
 }

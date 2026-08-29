@@ -236,16 +236,86 @@ public class AlbumHydrationTests
     [Fact]
     public async Task RepairFailure_FallsThroughToGetAlbum()
     {
-        // Exactly what the old procedure did: a failed TrackV4 batch is the getAlbum fallback's trigger.
+        // Exactly what the old procedure did: a failed TrackV4 batch is the getAlbum fallback's trigger. The fallback
+        // envelope here is the SAME LENGTH as the (blank) resident row, so FetchEnvelopeAsync's adopt-gate withholds
+        // the wholesale tracklist replacement (§2a) — the named row lands instead through the ordinary re-join, which
+        // for an Open-only ask is the row-facets POST STEP on the pump, not something ContinueAsync itself awaits.
         using var h = new LadderHarness();
         h.Store.UpsertAlbum(Tracklist(Row("t1", title: "")));
         h.Hydrator.Throw = true;
         h.Envelopes.OnAlbum = _ => Tracklist(Row("t1", "One"));
 
         await Ladder(h).ContinueAsync(LadderHarness.Batch(AlbumUri), HydrationLevel.Open, default, h.Ctx, CancellationToken.None);
+        await h.DrainAsync();
 
         Assert.Single(h.Envelopes.AlbumCalls);
         Assert.Equal(HydrationLevel.Open, HydrationLevels.Of(h.Store.GetAlbum(AlbumUri)));
+    }
+
+    /// <summary>getAlbum PINS limit=50 (PathfinderEnvelopeFetch.AlbumAsync:28) — its tracklist is a WINDOW onto the
+    /// release, not necessarily the whole thing. A resident tracklist that is already at least as long as the window
+    /// must survive the fetch intact: <see cref="AlbumHydration.RebuildTracklists"/> re-joins field-level facets, it
+    /// cannot heal a list whose rows are simply GONE.</summary>
+    [Fact]
+    public async Task Full_EnvelopeWithFiftyRows_DoesNotTruncateAHundredRowAlbum()
+    {
+        using var h = new LadderHarness();
+        var rows = new Track[100];
+        for (int i = 0; i < 100; i++) rows[i] = Row($"t{i}");
+        h.Store.UpsertAlbum(Tracklist(rows));                     // a 100-row, fully-named (Open) tracklist
+        h.Envelopes.OnAlbum = _ => Tracklist(rows[..50]) with { Hydration = AlbumHydrationLevel.Full };
+
+        await Ladder(h).ContinueAsync(LadderHarness.Batch(AlbumUri), HydrationLevel.Full, default, h.Ctx, CancellationToken.None);
+
+        Assert.Equal([AlbumUri], h.Envelopes.AlbumCalls);          // the envelope really was asked for…
+        Assert.Equal(100, h.Store.GetAlbum(AlbumUri)!.Tracks!.Count);   // …but it did not shrink the resident list
+    }
+
+    /// <summary>A same-length getAlbum response that regresses to blank/zeroed rows must not blank what
+    /// <c>StoreEntityMerge.Track</c> already protects (Title/DurationMs/PlayCount never go backwards). The adopt-gate
+    /// leaves the album's OWN Tracks alone on a same-length response, and the Full re-join then reads the TRACK
+    /// plane's merge answer back — which already kept the richer values — so nothing regresses either way.</summary>
+    [Fact]
+    public async Task Full_EnvelopeRowsBlank_TracklistKeepsRepairedNames()
+    {
+        using var h = new LadderHarness();
+        var t1 = Row("t1", title: "One") with { PlayCount = 111 };
+        var t2 = Row("t2", title: "Two") with { PlayCount = 222 };
+        h.Store.UpsertTrack(t1);
+        h.Store.UpsertTrack(t2);
+        h.Store.UpsertAlbum(Tracklist(t1, t2));
+        var before = HydrationLevels.Of(h.Store.GetAlbum(AlbumUri));
+        h.Envelopes.OnAlbum = _ => Tracklist(
+                Row("t1", title: "") with { DurationMs = 0 },
+                Row("t2", title: "") with { DurationMs = 0 })
+            with { Hydration = AlbumHydrationLevel.Full };
+
+        await Ladder(h).ContinueAsync(LadderHarness.Batch(AlbumUri), HydrationLevel.Full, default, h.Ctx, CancellationToken.None);
+
+        var tracks = h.Store.GetAlbum(AlbumUri)!.Tracks!;
+        Assert.Equal("One", tracks[0].Title);
+        Assert.Equal("Two", tracks[1].Title);
+        Assert.Equal(180_000, tracks[0].DurationMs);
+        Assert.Equal(180_000, tracks[1].DurationMs);
+        Assert.Equal(111, tracks[0].PlayCount);
+        Assert.Equal(222, tracks[1].PlayCount);
+        Assert.True(HydrationLevels.Of(h.Store.GetAlbum(AlbumUri)) >= before);
+    }
+
+    /// <summary>The V4-empty case: there is nothing resident to protect, so the adopt-gate must not withhold the
+    /// envelope's own tracklist just because the comparison is against an empty list.</summary>
+    [Fact]
+    public async Task Full_EnvelopeOnEmptyAlbum_AdoptsTracks()
+    {
+        using var h = new LadderHarness();
+        h.Store.UpsertAlbum(new Album("a1", AlbumUri, "A1", null, Array.Empty<ArtistRef>(), 2020, 0));
+        h.Envelopes.OnAlbum = _ => Tracklist(Row("t1", "One"), Row("t2", "Two")) with { Hydration = AlbumHydrationLevel.Full };
+
+        await Ladder(h).ContinueAsync(LadderHarness.Batch(AlbumUri), HydrationLevel.Full, default, h.Ctx, CancellationToken.None);
+
+        var tracks = h.Store.GetAlbum(AlbumUri)!.Tracks;
+        Assert.Equal(2, tracks?.Count);
+        Assert.Equal(HydrationLevel.Full, HydrationLevels.Of(h.Store.GetAlbum(AlbumUri)));
     }
 
     [Fact]

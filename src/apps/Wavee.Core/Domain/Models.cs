@@ -310,7 +310,8 @@ public sealed record Track(
     IReadOnlyList<ArtistRef> Artists, AlbumRef Album,
     long DurationMs, bool IsExplicit, Image? Image,
     // Per-playlist membership metadata (null outside a user playlist): when a track was added, and by whom. The detail
-    // page surfaces these as optional columns — curated/editorial playlists carry neither.
+    // page surfaces these as optional columns. Editorial lists DO stamp AddedAt (a bulk republish instant); they omit
+    // AddedBy. 0/missing membership timestamps stay null via JoinMembership.
     DateTimeOffset? AddedAt = null, string? AddedBy = null,
     // NOTE: "has a music video" is deliberately NOT a field here. It is a property of the CATALOGUE ENTRY, answered by
     // the VideoAssociation plane (extended-metadata kind 99) and read through VideoPresence. A row is written by half a
@@ -351,6 +352,9 @@ public sealed record Track(
     // Linked-URI canonical playable (TrackV4 canonical_uri). Null = unknown-or-self. Null-coalesce merge like Isrc;
     // EntityJson omit-null → free persist. Video miss-bridge + recovery promotion stamp it.
     string? CanonicalUri = null,
+    // Album release year from TrackV4 nested album.date.year. 0 = unknown (lean used to drop field 6). Same 0-is-unknown
+    // merge as Album.Year: a later thin upsert must not blank a year the catalogue already wrote.
+    int Year = 0,
     // Chart-playlist rank movement (playlist4 ItemAttributes.format_attributes on a format=="chart" list). READ-MODEL
     // ONLY, exactly like ContextUid: stamped by StoreLibrarySource.JoinMembership from the owning PlaylistMember, never
     // passed to UpsertTrack. Null = not a chart row (or chart facts not yet joined).

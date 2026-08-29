@@ -461,6 +461,9 @@ sealed class QueuePanel : Component
         var t = entry.Track;
         int bucketCount = section.Count;
         var st = TrackRow.StateOf(b, lib, t);
+        // A row this thin (ApplySetQueue's Synthetic fallback for a uri we didn't already hold, or a set_queue that
+        // outran BumpQueueRevision's identity pass) has a bare spotify:track:… uri sitting in Title — never paint that.
+        bool titleThin = HydrationLevels.TitleMissing(t.Title, t.Uri);
         Action? like = t.Uri.Length > 0 && lib is not null ? () => lib.ToggleSaved(t.Uri, t.Title) : null;
 
         void Remove()
@@ -513,19 +516,28 @@ sealed class QueuePanel : Component
                     : new BoxEl
                     {
                         Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Justify = FlexJustify.Center,
-                        Children =
-                        [
-                            new TextEl(t.Title)
-                            {
-                                Size = 14f, LineHeight = 20f, Weight = 600,
-                                Color = st.IsNow ? Tok.AccentTextPrimary : Tok.TextPrimary,
-                                Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
-                            },
-                            go is null
-                                ? new TextEl(DetailFormat.ArtistNames(t.Artists))
-                                { Size = 12f, LineHeight = 16f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f }
-                                : TrackRow.ArtistLinks(t.Artists, (r, n) => go(r, n)),
-                        ],
+                        Gap = titleThin ? 4f : 0f,
+                        Children = titleThin
+                            ?
+                            [
+                                // The same title+subtitle two-bar shape SidebarSkeletons.Row draws for a pending list
+                                // row — this row IS mounted (it has a real ItemId/slot), only its metadata isn't in yet.
+                                new BoxEl { Width = 120f, Height = 14f, Corners = CornerRadius4.All(4f), Fill = Tok.FillSubtleSecondary },
+                                new BoxEl { Width = 80f, Height = 11f, Corners = CornerRadius4.All(4f), Fill = Tok.FillSubtleSecondary },
+                            ]
+                            :
+                            [
+                                new TextEl(t.Title)
+                                {
+                                    Size = 14f, LineHeight = 20f, Weight = 600,
+                                    Color = st.IsNow ? Tok.AccentTextPrimary : Tok.TextPrimary,
+                                    Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
+                                },
+                                go is null
+                                    ? new TextEl(DetailFormat.ArtistNames(t.Artists))
+                                    { Size = 12f, LineHeight = 16f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f }
+                                    : TrackRow.ArtistLinks(t.Artists, (r, n) => go(r, n)),
+                            ],
                     },
                 // Hover-revealed "…" overflow beside the ✕ (kept): opens the SAME queue-entry menu the row shows on
                 // right-click, anchored at the button — the engine's ClickRequestsContext re-enters the context-request
@@ -624,26 +636,39 @@ sealed class QueuePanel : Component
     {
         ColorF primary = nowPlaying ? Tok.AccentTextPrimary : Tok.TextPrimary;
         ColorF secondary = nowPlaying ? Tok.AccentTextPrimary : Tok.TextSecondary;
-        var spans = new List<TextSpan>(t.Artists.Count * 2 + 2)
+
+        Element identity;
+        if (HydrationLevels.TitleMissing(t.Title, t.Uri))
         {
-            new(t.Title, Weight: 600, Color: primary),
-        };
-        if (t.Artists.Count > 0) spans.Add(new TextSpan("  ·  ", Color: secondary));
-        for (int i = 0; i < t.Artists.Count; i++)
+            // Classic folds title+artist into one span run — there is no separate slot to skeletonize, so the whole
+            // identity becomes one placeholder bar (same fill as the modern row's two-bar shape above) instead of
+            // laying spans over a bare uri.
+            identity = new BoxEl { Width = 160f, Height = 14f, Corners = CornerRadius4.All(4f), Fill = Tok.FillSubtleSecondary };
+        }
+        else
         {
-            if (i > 0) spans.Add(new TextSpan(", ", Color: secondary));
-            var artist = t.Artists[i];
-            string route = RichText.RouteForUri(artist.Uri) ?? ("artist:" + artist.Uri);
-            spans.Add(new TextSpan(artist.Name, Color: secondary,
-                OnClick: go is null ? null : () => go(route, artist.Name)));
+            var spans = new List<TextSpan>(t.Artists.Count * 2 + 2)
+            {
+                new(t.Title, Weight: 600, Color: primary),
+            };
+            if (t.Artists.Count > 0) spans.Add(new TextSpan("  ·  ", Color: secondary));
+            for (int i = 0; i < t.Artists.Count; i++)
+            {
+                if (i > 0) spans.Add(new TextSpan(", ", Color: secondary));
+                var artist = t.Artists[i];
+                string route = RichText.RouteForUri(artist.Uri) ?? ("artist:" + artist.Uri);
+                spans.Add(new TextSpan(artist.Name, Color: secondary,
+                    OnClick: go is null ? null : () => go(route, artist.Name)));
+            }
+
+            identity = new SpanTextEl(spans.ToArray())
+            {
+                Size = 14f, LineHeight = 20f, Color = primary,
+                Wrap = TextWrap.NoWrap, Trim = TextTrim.CharacterEllipsis, MaxLines = 1,
+                Shrink = 1f, MinWidth = 0f,
+            };
         }
 
-        var identity = new SpanTextEl(spans.ToArray())
-        {
-            Size = 14f, LineHeight = 20f, Color = primary,
-            Wrap = TextWrap.NoWrap, Trim = TextTrim.CharacterEllipsis, MaxLines = 1,
-            Shrink = 1f, MinWidth = 0f,
-        };
         var kids = new List<Element>(2)
         {
             new BoxEl

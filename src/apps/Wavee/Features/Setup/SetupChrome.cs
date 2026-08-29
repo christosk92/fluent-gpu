@@ -70,14 +70,12 @@ sealed class SetupChrome : Component
             // e.g. a fast silent-resume that never showed SetupPreAuthRoot at all) start a fresh one. Either way
             // `alreadyAuthenticated: true` here only matters for the FRESH case — a carried-over session already
             // froze its own SkipSignIn at construction.
-            bool carriedFromPreAuth = SetupSession.Current is not null;
             var session = SetupSession.Current ??= new SetupSession(SetupSession.EntryPoint.FirstRun, alreadyAuthenticated: true);
-            // Auth swaps the entire pre-auth overlay host out immediately, before SignIn's delayed auto-advance can
-            // fire. Resume the carried first-run session on the next page before opening the post-auth overlay.
-            if (carriedFromPreAuth
-                && session.Entry == SetupSession.EntryPoint.FirstRun
-                && session.Page.Peek() == SetupPage.SignIn)
-                session.Advance(SetupGating.NextPage(SetupPage.SignIn, session.SkipSignIn));
+            // Resume the carried session exactly where it was. Auth swaps the pre-auth overlay host out the moment a
+            // token lands, so the SignIn page's Done phase — the "Is this you?" confirmation — is only ever SEEN here,
+            // post-auth. The user's "Yes, continue" advances; the auth flip itself must not (an earlier revision jumped
+            // straight to LocalPlayback here, which is exactly the silent wrong-account sign-in the confirmation
+            // exists to catch).
             OpenBare(session);
         }, DepKey.Empty);
 

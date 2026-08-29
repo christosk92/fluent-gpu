@@ -285,6 +285,138 @@ public class TrackExpandedFactsTests
     public void KeyLabel_IsOneTokenForTheLane(string? camelot, string? tonic, string? expected)
         => Assert.Equal(expected, TrackExpandedFacts.KeyLabel(camelot, tonic));
 
+    // ── the hero partition ───────────────────────────────────────────────────────────────────────────────────────────
+    // The strip draws the same ordered list two ways — four facts at display size, the rest as prose — and WHICH four
+    // is a rule of the fact list, not a renderer preference. Pinned here for the same reason the order is: a renderer
+    // that owned the list would drift the first time a kind landed, silently and only on screen.
+
+    /// <summary>The injected trio every hero test needs at once: culture, zone AND the two mode words, because a key
+    /// with no mode word spells "C" rather than "C major" and that is the half the hero slot glosses with.</summary>
+    static readonly TrackFactsOptions Injected = new(
+        Culture: CultureInfo.InvariantCulture, Zone: TimeZoneInfo.Utc, MajorWord: "major", MinorWord: "minor");
+
+    /// <summary>Exactly four facts read as FIGURES: the three the relief ladder yields first (Plays · BPM · Key) plus
+    /// Duration, the one measure every row carries. Everything else is a sentence — a date, a name, an album title, an
+    /// ISRC — and a flag has no value to enlarge at all.
+    ///
+    /// <para>The enum roster is asserted alongside deliberately. A new kind defaults to prose, which is the right
+    /// default and therefore the silent one; pinning the roster makes adding a kind FAIL here, so the classification
+    /// is made on purpose rather than inherited.</para></summary>
+    [Fact]
+    public void IsHeroFact_IsExactlyPlaysBpmKeyAndDuration()
+    {
+        Assert.Equal(new[]
+        {
+            TrackFactKind.Plays, TrackFactKind.Bpm, TrackFactKind.Key, TrackFactKind.Added, TrackFactKind.Duration,
+            TrackFactKind.Album, TrackFactKind.Released, TrackFactKind.AddedBy, TrackFactKind.Isrc,
+            TrackFactKind.Descriptors, TrackFactKind.Explicit, TrackFactKind.Video, TrackFactKind.LocalFile,
+            TrackFactKind.Unavailable,
+        }, Enum.GetValues<TrackFactKind>());
+
+        var hero = new HashSet<TrackFactKind>
+        {
+            TrackFactKind.Plays, TrackFactKind.Bpm, TrackFactKind.Key, TrackFactKind.Duration,
+        };
+        foreach (TrackFactKind kind in Enum.GetValues<TrackFactKind>())
+            Assert.Equal(hero.Contains(kind), TrackExpandedFacts.IsHeroFact(kind));
+    }
+
+    /// <summary>The key is the ONE fact with two halves: the wheel slot is the figure (two glyphs, and it matches the
+    /// swatch and the filter) and the spelling is the gloss beneath it. Every partial state degrades rather than
+    /// inventing the missing half — no wheel slot means no figure to promote, so the spelling itself becomes the value
+    /// and the slot draws one line instead of a line over a blank.</summary>
+    [Theory]
+    [InlineData("2B", "F♯", "2B", "F♯ major")]
+    [InlineData("11A", "A", "11A", "A minor")]
+    [InlineData("8B", null, "8B", null)]
+    [InlineData(null, "C", "C", null)]
+    public void HeroSplit_PromotesTheWheelSlotAndGlossesItWithTheSpelling(
+        string? camelot, string? tonic, string expectedValue, string? expectedUnit)
+    {
+        var split = TrackExpandedFacts.HeroSplit(
+            Pick(TrackExpandedFacts.For(T(camelot: camelot, musicalKey: tonic), Injected), TrackFactKind.Key));
+
+        Assert.Equal(expectedValue, split.Value);
+        Assert.Equal(expectedUnit, split.Unit);
+    }
+
+    /// <summary>Every other fact is ONE part, hero or not. No unit is invented to fill the second line: "min" under a
+    /// duration and "BPM" under a tempo whose own label already says BPM are noise, and the value is the fact.</summary>
+    [Theory]
+    [InlineData(TrackFactKind.Plays, "1,847,392")]
+    [InlineData(TrackFactKind.Bpm, "128")]
+    [InlineData(TrackFactKind.Duration, "3:34")]
+    [InlineData(TrackFactKind.Album, "Rumours")]
+    [InlineData(TrackFactKind.Isrc, "USRC17607839")]
+    public void HeroSplit_LeavesEveryOtherFactWhole(TrackFactKind kind, string expected)
+    {
+        var facts = TrackExpandedFacts.For(
+            T(playCount: 1_847_392, bpm: 128d, durationMs: 214_000,
+              albumName: "Rumours", albumUri: "spotify:album:a1", isrc: "USRC17607839"),
+            Injected);
+
+        var split = TrackExpandedFacts.HeroSplit(Pick(facts, kind));
+        Assert.Equal(expected, split.Value);
+        Assert.Null(split.Unit);
+    }
+
+    /// <summary>A pending hero slot needs no special case, and that is the point: <c>For</c> already wrote the em dash
+    /// into the fact's Value, so the split is the ordinary one and the "asked, not answered yet" glyph stays ONE
+    /// decision made in one place. The strip never has to ask "is this pending?" to know what to draw.</summary>
+    [Fact]
+    public void HeroSplit_PendingFactsCarryTheEmDashThatForAlreadyWrote()
+    {
+        var facts = TrackExpandedFacts.For(T(playCount: 0),
+            Injected with { PlaysPending = true, TempoPending = true });
+
+        foreach (var kind in new[] { TrackFactKind.Plays, TrackFactKind.Bpm, TrackFactKind.Key })
+        {
+            var f = Pick(facts, kind);
+            Assert.Equal(TrackFactForm.Pending, f.Form);
+
+            var split = TrackExpandedFacts.HeroSplit(f);
+            Assert.Equal(TrackExpandedFacts.Dash, split.Value);
+            Assert.Null(split.Unit);
+        }
+    }
+
+    /// <summary>The prose form and the hero form are the SAME two strings arranged two ways. Pinned as a round trip
+    /// through <c>KeySplit</c> — the one place the halves are decided — so the join and the cut can never drift into
+    /// two formatters that agree only by luck. The last assert re-pins the combined literal: "8B · C major", separator
+    /// and all, is exactly what <c>PrettyKey</c> said before the split existed.</summary>
+    [Theory]
+    [InlineData("8B", "C")]
+    [InlineData("11A", "A")]
+    [InlineData("2B", "F♯")]
+    [InlineData("8B", null)]
+    [InlineData(null, "C")]
+    [InlineData("8", "C")]   // an unrecognised ring carries no mode, so the gloss is the bare tonic
+    public void HeroSplit_IsTheExactInverseOfPrettyKeysJoin(string? camelot, string? tonic)
+    {
+        string combined = TrackExpandedFacts.PrettyKey(camelot, tonic, "major", "minor")!;
+        var split = TrackExpandedFacts.HeroSplit(new TrackFact(TrackFactKind.Key, TrackFactForm.Value, combined));
+        var halves = TrackExpandedFacts.KeySplit(camelot, tonic, "major", "minor")!.Value;
+
+        Assert.Equal(halves.Value, split.Value);
+        Assert.Equal(halves.Unit, split.Unit);
+        Assert.Equal(combined, split.Unit is null ? split.Value : split.Value + " · " + split.Unit);
+    }
+
+    /// <summary>Three surfaces, three notations, one pair of halves: the 88-DIP lane keeps the single token, the prose
+    /// line keeps the joined pair, the hero slot keeps them apart. <c>KeyLabel</c>'s behaviour is unchanged by the
+    /// split — <c>TrackRow</c> and <c>TrackVersionsPanel</c> both call it and neither wants the spelling.</summary>
+    [Fact]
+    public void KeyNotation_LaneProseAndHeroAllSpeakOfTheSameKey()
+    {
+        Assert.Equal("2B", TrackExpandedFacts.KeyLabel("2B", "F♯"));
+        Assert.Equal("2B · F♯ major", TrackExpandedFacts.PrettyKey("2B", "F♯", "major", "minor"));
+
+        var split = TrackExpandedFacts.HeroSplit(
+            Pick(TrackExpandedFacts.For(T(camelot: "2B", musicalKey: "F♯"), Injected), TrackFactKind.Key));
+        Assert.Equal("2B", split.Value);
+        Assert.Equal("F♯ major", split.Unit);
+    }
+
     // ── the shared formatters ────────────────────────────────────────────────────────────────────────────────────────
 
     [Theory]
@@ -295,6 +427,16 @@ public class TrackExpandedFactsTests
     [InlineData(7_199_000L, "1:59:59")]
     public void TrackTime_IsMinutesUntilItIsHours(long ms, string expected)
         => Assert.Equal(expected, TrackExpandedFacts.TrackTime(ms));
+
+    /// <summary>The clock formatter will happily spell 0 ms as "0:00". The duration CELL must not: 0 is "not known
+    /// yet", the same 0-is-unknown rule Plays already uses. A thin album disc row that still has no length must dash,
+    /// not claim a zero-second track.</summary>
+    [Theory]
+    [InlineData(0L, "—")]
+    [InlineData(-1L, "—")]
+    [InlineData(214_000L, "3:34")]
+    public void DurationCell_DashesUnknownLength(long ms, string expected)
+        => Assert.Equal(expected, TrackExpandedFacts.DurationCell(ms));
 
     /// <summary>One decimal at most, and invariant: a comma decimal separator next to the key label reads as a list,
     /// and 101.0099… is noise a listener cannot act on.</summary>

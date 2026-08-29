@@ -56,6 +56,11 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
 {
     // After a local command, a contradicting cluster push within this window is merged (play-state not reverted).
     const long LocalCmdWindowMs = 2500;
+    // After NoteLocalPlaybackStarted (a transfer-in just started local playback), the local session is treated as
+    // owning the fold even though no cluster push has named us active yet — a transport verb pressed right after
+    // "transfer to this computer" must land on the audibly-local playback, not the phone that hasn't heard the
+    // transfer request. Cleared the instant a fold does name us active.
+    const long PendingOwnershipWindowMs = 5000;
 
     readonly string _ourDeviceId;
     readonly Func<long> _now;
@@ -135,6 +140,13 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
     // reconciliation
     long _lastLocalCmdWall = long.MinValue;
     int _inFlightSeq;
+    // The last cluster server-timestamp actually FOLDED (not merely received) — guards monotonicity. Announce-response
+    // echoes are re-injected as if they were dealer pushes (DeviceStatePublisher.cs -> ClusterMapper.cs), so a slow
+    // PUT's stale echo could otherwise land after a newer push and regress the active-device id / play-state back to
+    // what it was before adoption.
+    long _lastFoldedServerTs;
+    // Set by NoteLocalPlaybackStarted; long.MinValue = no pending window. See PendingOwnershipWindowMs.
+    long _localOwnershipPendingWall = long.MinValue;
 
     /// <param name="hydrator">THE metadata façade. REQUIRED and positional (wiring-discipline: no nullable seams, no
     /// defaulted ones either). A default was worse than a null check: "no backend" is a real, nameable configuration —
@@ -194,6 +206,25 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
     /// <summary>The controller calls this the instant it issues a local optimistic command, so a stale cluster echo
     /// arriving just after does not revert the optimistic play-state.</summary>
     public void NoteLocalCommand() { lock (_gate) { _lastLocalCmdWall = _now(); _inFlightSeq++; } }
+
+    /// <summary>Stamps the pending-ownership window (see <see cref="LocalOwnershipPending"/>). Called from
+    /// <see cref="ApplyLocalSnapshot"/> the instant local playback actually starts (Started, or TrackChanged with a
+    /// track) — the moment a transfer-in becomes audible here, before the cluster has had a chance to fold us in as
+    /// the active device.</summary>
+    void NoteLocalPlaybackStartedLocked() => _localOwnershipPendingWall = _now();
+
+    /// <summary>True for <see cref="PendingOwnershipWindowMs"/> after local playback started without the cluster
+    /// having named us active yet. OR'd into the controller's RouteLocal() so a transport verb pressed right after
+    /// "transfer to this computer" controls the playback that is actually making sound, not the device it came from.
+    /// Cleared the instant a fold DOES name us active (see OnCluster).</summary>
+    public bool LocalOwnershipPending
+    {
+        get
+        {
+            lock (_gate)
+                return _localOwnershipPendingWall != long.MinValue && (_now() - _localOwnershipPendingWall) < PendingOwnershipWindowMs;
+        }
+    }
 
     // ── IPlaybackState ────────────────────────────────────────────────────────────────────────────────────────────────
     public Track? CurrentTrack { get { lock (_gate) return TrackWithOverridesLocked(); } }
@@ -501,6 +532,16 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
         if (!string.Equals(previousUri, _track?.Uri, StringComparison.Ordinal)) _durMs = 0;
     }
 
+    // Shared by the Paused/Ended/BecameInactive arms below (ApplyLocalSnapshot's local fold and OnEvent's twin): true
+    // when the event names a DIFFERENT track than the one this projection is showing right now — the signature of a
+    // late completion signal for a track the session has already advanced past (a stale Ended/Paused for the
+    // OUTGOING track arriving after the incoming track's own Started). Null on either side is never a disagreement:
+    // an event with no Track opinion, or a projection with none yet, has nothing to contradict. Folding such an
+    // event's position/play-state anyway is exactly the observed corruption — pos=7271 playing=False stamped on a
+    // track that had been playing for 0 ms, standing as the app's published truth for 59 s. Fold nothing instead.
+    static bool DescribesAnotherTrack(Track? eventTrack, Track? currentTrack)
+        => eventTrack is { } et && currentTrack is { } cur && !string.Equals(et.Uri, cur.Uri, StringComparison.Ordinal);
+
     // Called immediately after every LOCAL _durMs write: either re-assert the override (it outranks the catalog length) or
     // drop it because the current track has moved on. Caller holds _gate.
     void SyncDurationOverrideLocked()
@@ -566,19 +607,48 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
                         // >3 s restart affordance folds in at the property read (position moves without a publish).
                         _canSkipPrev = snap.History.Length > 0 || snap.ContextCursor > 0;
                         _speed = 1.0; _posMs = e.AtMs; _posAnchorWall = _now();
+                        // A transfer-in (Started) or a fresh track lands here BEFORE the cluster has a chance to fold
+                        // us in as the active device — Resumed is excluded, it isn't a new local-ownership event.
+                        if (e.Kind == EvKind.Started || (e.Kind == EvKind.TrackChanged && e.Track is not null))
+                            NoteLocalPlaybackStartedLocked();
                         break;
                     case EvKind.Paused:
                     case EvKind.Ended:
                     case EvKind.BecameInactive:
+                        // A late Paused/Ended/BecameInactive for the track that just finished can race the snap
+                        // (snap.Current, above) that already advanced past it — e.Track then names the OUTGOING
+                        // track and e.AtMs is ITS playhead, not the one _track was just set to. See
+                        // DescribesAnotherTrack. Fold nothing rather than stamping the new track with a stale
+                        // position/play-state.
+                        if (DescribesAnotherTrack(e.Track, _track)) break;
                         _canSkipPrev = snap.History.Length > 0 || snap.ContextCursor > 0;   // same derivation (recovery publishes Paused)
                         _isPlaying = false; _speed = 1.0; _posMs = e.AtMs; _posAnchorWall = _now();
                         break;
                     case EvKind.Seeked:
+                        // AtMs is the PRE-seek playhead (Gabo's segment-close reads it for exactly that reason —
+                        // RawCoreStreamProjection.cs:72). A TIMELINE fold wants the seek's TARGET, or a seek while
+                        // paused snaps the published position back to where you were.
+                        _posMs = e.SeekToMs >= 0 ? e.SeekToMs : e.AtMs; _posAnchorWall = _now();
+                        break;
                     case EvKind.VolumeChanged:
                         _posMs = e.AtMs; _posAnchorWall = _now();
                         break;
                     // OptionsChanged / QueueChanged: no play-state fold — options ride in the snapshot below.
                 }
+            }
+            // bug 9: a QueueChanged/OptionsChanged/VolumeChanged event (or no event at all — the pure queue/options
+            // overload) folds NO play-state above — but `_track` can already have advanced to a NEW current row by
+            // then (a queue mutation firing between the outgoing track's Ended and the new track's own Started, which
+            // hasn't reached us yet). Echoing whatever play-state the OUTGOING track left behind — typically
+            // is_playing=false, straight from its own Ended fold — under the NEW track's identity is exactly the
+            // mid-transition "not playing" lie a track that is actually starting must never publish. Only a genuine
+            // play-state event (the switch above) may report NOT playing for the CURRENT track; a track change
+            // reaching us any other way is assumed still playing until told otherwise.
+            if (!string.Equals(prevUri, _track?.Uri, StringComparison.Ordinal) && _track is not null && ev is not
+                { Kind: EvKind.Started or EvKind.Resumed or EvKind.TrackChanged or EvKind.Paused or EvKind.Ended or EvKind.BecameInactive })
+            {
+                _isPlaying = true; _isBuffering = false; _canSkipNext = _canSeek = true; _speed = 1.0;
+                _canSkipPrev = snap.History.Length > 0 || snap.ContextCursor > 0;
             }
             _contextUri = snap.ContextUri;
             _hasLocalContext = !string.IsNullOrEmpty(snap.ContextUri);
@@ -652,6 +722,17 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
         string? ctxForLog = null, currentForLog = null;
         lock (_gate)
         {
+            // Monotonic fold guard, first thing: announce-response echoes are re-injected as if they were dealer
+            // pushes (DeviceStatePublisher.cs -> ClusterMapper.cs), so a slow PUT's stale echo could otherwise land
+            // after a newer push and regress the active-device id — re-emptying it right after adoption.
+            if (c.ServerTimestampMs > 0 && c.ServerTimestampMs < _lastFoldedServerTs)
+            {
+                WaveeLog.Instance.Info("playback", "cluster.stale",
+                    "dropped stale cluster fold: serverTs=" + c.ServerTimestampMs + " < lastFolded=" + _lastFoldedServerTs,
+                    WaveeLogField.Of("serverTs", c.ServerTimestampMs), WaveeLogField.Of("lastFolded", _lastFoldedServerTs));
+                return;
+            }
+            _lastFoldedServerTs = Math.Max(_lastFoldedServerTs, c.ServerTimestampMs);
             _lastCluster = c;
             string? prevUri = _track?.Uri;   // the duration fold's reference — captured BEFORE the track merge below
             // ANOTHER DEVICE TOOK OVER ⇒ we know nothing about what is decoding. This clear is the load-bearing half of
@@ -664,6 +745,10 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
             _clusterPrev = c.PrevTracks ?? Array.Empty<RemoteTrack>();
             _clusterNext = c.NextTracks;   // the active device's up-next, kept verbatim (uid+provider) for a forwarded set_queue
             bool weActive = c.ActiveDeviceId == _ourDeviceId;
+            // A fold has now named us active — the transfer-in window (NoteLocalPlaybackStarted) is moot from here on.
+            if (weActive) _localOwnershipPendingWall = long.MinValue;
+            bool withinPendingWindow = _localOwnershipPendingWall != long.MinValue
+                                        && (_now() - _localOwnershipPendingWall) < PendingOwnershipWindowMs;
             // …and NOBODY active is not a viewer either. The connect-state service does not always adopt us as the
             // cluster's active device (it never does for a state whose context it cannot resolve — a playback module's
             // link, a local folder), yet what comes back is still OUR OWN state, re-echoed with the row uris
@@ -672,7 +757,9 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
             // it took a playing music video's surface down, wrote the masked uri into session.json, and left the next
             // launch recovering a track nothing can play. A local session owns its own state unless ANOTHER device is
             // genuinely active.
-            bool localSessionOwns = _hasLocalContext && (weActive || string.IsNullOrEmpty(c.ActiveDeviceId));
+            // The pending-ownership window (§ NoteLocalPlaybackStarted) counts as owning too: a transfer-in that just
+            // started audible local playback must not be reverted by the ONE cluster fold that hasn't caught up yet.
+            bool localSessionOwns = _hasLocalContext && (weActive || string.IsNullOrEmpty(c.ActiveDeviceId) || withinPendingWindow);
             // Stale-cluster suppression: only when WE are active and a local command is still in flight do we refuse to let
             // a contradicting cluster revert our optimistic play-state. As a viewer, the cluster is always the truth.
             bool suppressPlayState = weActive && _lastLocalCmdWall != long.MinValue && (_now() - _lastLocalCmdWall) < LocalCmdWindowMs;
@@ -724,13 +811,23 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
             //   serverSideAge — pure server-domain Δ (sample→emit); correct with NO clock sync, even fully offline.
             //   networkAge    — transit since the server emitted the cluster; needs a synced server clock (<=0 ⇒ skipped).
             // No aging while paused (position is frozen) or on a fresh near-zero track (its Timestamp may lag).
-            _speed = NormalizeSpeed(c.PlaybackSpeed);
-            long serverSideAge = c.ServerTimestampMs > 0 && c.TimestampMs > 0 ? Math.Max(0, c.ServerTimestampMs - c.TimestampMs) : 0;
-            long serverNow = _serverNow();
-            long networkAge = serverNow > 0 && c.ServerTimestampMs > 0 ? Math.Max(0, serverNow - c.ServerTimestampMs) : 0;
-            long age = !_isPlaying || (isNewTrack && c.PositionAsOfMs <= 1000) ? 0 : serverSideAge + networkAge;
-            _posMs = c.PositionAsOfMs + (long)Math.Round(age * _speed);
-            _posAnchorWall = _now();
+            //
+            // Position/speed ownership: the SAME gate _track/play-state/options/queue fold under above — a local
+            // session (or a command still in flight) owns the timeline too, so a remote snapshot can never yank the
+            // seek bar backwards under a just-issued local seek/play.
+            if (!localSessionOwns && !suppressPlayState)
+            {
+                _speed = NormalizeSpeed(c.PlaybackSpeed);
+                long serverSideAge = c.ServerTimestampMs > 0 && c.TimestampMs > 0 ? Math.Max(0, c.ServerTimestampMs - c.TimestampMs) : 0;
+                long serverNow = _serverNow();
+                long networkAge = serverNow > 0 && c.ServerTimestampMs > 0 ? Math.Max(0, serverNow - c.ServerTimestampMs) : 0;
+                // Age against the CLUSTER's own play flag, not the just-folded local _isPlaying: a paused remote
+                // snapshot must never be aged forward, whatever this machine's play-state happens to read right now.
+                bool clusterPlaying = c.IsPlaying && !c.IsPaused;
+                long age = !clusterPlaying || (isNewTrack && c.PositionAsOfMs <= 1000) ? 0 : serverSideAge + networkAge;
+                _posMs = c.PositionAsOfMs + (long)Math.Round(age * _speed);
+                _posAnchorWall = _now();
+            }
             // Viewer: cluster queue. Active WITH a local session: keep the local queue (ApplyLocalSnapshot). The stale
             // "we are active" fold without a local session (findings §9) falls through to MapQueue too — otherwise a cold
             // start shows the cluster's track over an empty queue panel until the user presses Play.
@@ -838,7 +935,13 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
     {
         lock (_gate)
         {
-            if (e.Track is not null)
+            // Computed against _track BEFORE this event's own track fold below, and reused by the Paused/Ended/
+            // BecameInactive arm further down — see DescribesAnotherTrack. Only those three kinds are late-signal
+            // candidates (Started/TrackChanged/Resumed/Seeked describe what IS current by definition).
+            bool staleForCurrentTrack = e.Kind is EvKind.Paused or EvKind.Ended or EvKind.BecameInactive
+                && DescribesAnotherTrack(e.Track, _track);
+
+            if (e.Track is not null && !staleForCurrentTrack)
             {
                 string? prevUri = _track?.Uri;
                 _track = e.Track;
@@ -866,14 +969,24 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
                     break;
                 case EvKind.Ended:
                 case EvKind.BecameInactive:
+                    // A late signal for the track we've already left (see staleForCurrentTrack, top of method) — the
+                    // stream it names stopped decoding before we even got here, not just now. Fold nothing: in
+                    // particular, do NOT clear the stream identity for what is actually still playing.
+                    if (staleForCurrentTrack) break;
                     // Nothing is decoding any more — the badge must go with it. (Paused does NOT clear: the stream is
                     // still the stream, it is simply not advancing.)
                     ClearStreamIdentityLocked();
                     goto case EvKind.Paused;
                 case EvKind.Paused:
+                    if (staleForCurrentTrack) break;
                     _isPlaying = false; _speed = 1.0; _posMs = e.AtMs; _posAnchorWall = _now();
                     break;
                 case EvKind.Seeked:
+                    // See ApplyLocalSnapshot's Seeked arm: AtMs is the PRE-seek playhead (Gabo's segment-close is the
+                    // one consumer that wants that — RawCoreStreamProjection.cs:72); the published timeline wants
+                    // the seek's TARGET.
+                    _posMs = e.SeekToMs >= 0 ? e.SeekToMs : e.AtMs; _posAnchorWall = _now();
+                    break;
                 case EvKind.VolumeChanged:
                     _posMs = e.AtMs; _posAnchorWall = _now();
                     break;
@@ -962,7 +1075,13 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
 
     static Track MapTrack(in RemoteTrack r)
     {
-        var artists = new ArtistRef[] { new(EntityUri.IdOf(r.ArtistUri), r.ArtistUri, r.ArtistName) };
+        // An ArtistRef with BOTH name and uri empty isn't an artist — it's the absence of one. Cluster next_tracks
+        // routinely carry no artist at all, and allocating one anyway made the classic queue row paint
+        // "" + "  ·  " + "": a stray dot with nothing on either side (visible in screenshots). An empty Artists list
+        // instead lets HydrationLevels.TitleMissing (Wavee.Core/Hydration/HydrationLevel.cs) skeletonise the row.
+        var artists = r.ArtistName.Length == 0 && r.ArtistUri.Length == 0
+            ? Array.Empty<ArtistRef>()
+            : new ArtistRef[] { new(EntityUri.IdOf(r.ArtistUri), r.ArtistUri, r.ArtistName) };
         var album = new AlbumRef(EntityUri.IdOf(r.AlbumUri), r.AlbumUri, r.AlbumName);
         Image? img = string.IsNullOrEmpty(r.ImageUrl) ? null : new Image(r.ImageUrl!);
         return new Track(EntityUri.IdOf(r.Uri), r.Uri, r.Title, artists, album, r.DurationMs, HasVideoMetadata(r), img);
@@ -1010,14 +1129,9 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
         return entry;
     }
 
-    static bool HasVideoMetadata(in RemoteTrack r)
-    {
-        var metadata = r.Metadata;
-        if (metadata is null) return false;
-        if (metadata.TryGetValue("track_player", out var player) && player == "video") return true;
-        if (metadata.TryGetValue("media.type", out var media) && (media == "video" || media == "mixed")) return true;
-        return metadata.ContainsKey("media.manifest_id") || metadata.ContainsKey("save_track.uri");
-    }
+    // Shared with the inbound-transfer video restore (PlaybackController.HandleInboundTransferAsync) — see
+    // MediaSwitchLogic.HasVideoMetadata for the one key list both readers check.
+    static bool HasVideoMetadata(in RemoteTrack r) => MediaSwitchLogic.HasVideoMetadata(r.Metadata);
 
 
     public void Dispose() { _disposed = true; _ticker?.Dispose(); _ticker = null; }

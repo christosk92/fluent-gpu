@@ -250,6 +250,37 @@ value it can't honor (a small per-control table, Radix precedent): `IconButton` 
 square glyph box sane, and `HyperlinkButton` doesn't expose the appearance axis at all (it is link text with no fill
 chrome, so Subtle/Outline are meaningless).
 
+### Charts (`src/FluentGpu.Controls/Charts/`)
+
+Data-visualization primitives with one shared contract (the native port of shadcn/ui's `chart.tsx`): a `ChartSeries`
+per series (key, label, colour, optional glyph — colour follows the entity, never its rank), a `CartesianData` table
+(`Values[series][point]`, NaN = gap), and a frame (`CartesianChartOptions`) that owns the measured plot, axes, dashed
+grid, hover crosshair + `ChartTooltip`, and keyboard stepping (←/→/Home/End/Esc). Every chart has `Style` +
+`DefaultStyle` (tokens only) + `StyleOverride`. Default colours are a single-hue ramp off the accent
+(`ChartPalette.Ramp`); a multi-hue palette is an app opt-in (`ChartPalette.Categorical`, fixed order, validated).
+
+```csharp
+var series = ChartPalette.Series([("desktop", "Desktop"), ("mobile", "Mobile")]);
+var data = new CartesianData(months, series, [desktopValues, mobileValues]);
+
+LineChart.Create(data, new LineChartOptions { Curve = ChartCurve.Monotone, Dots = ChartDotMode.Active },
+                 new CartesianChartOptions { Width = 560, Height = 240, YAxis = new ChartAxisOptions { Show = true } });
+AreaChart.Create(data, new AreaChartOptions { Stacking = ChartStacking.Stacked });        // NaN size = stretch (16:9)
+BarChart.Create(data, new BarChartOptions { Orientation = ChartOrientation.Horizontal, Stacking = ChartStacking.Stacked,
+                                            CellColor = (s, i, v) => v < 0 ? Tok.SystemFillCritical : null });
+ChartLegend.Create(series, isActive: k => visible.Contains(k), toggleSeries: k => Flip(k));  // toggling is APP state
+ChartTooltip.Content(data, index, new ChartTooltipOptions { Indicator = ChartTooltipIndicator.Line });
+
+// Distribution primitives (the Wavee facts rail):
+DensityPlot.Create(new DensityPlotModel(bpmValues, 60, 200) { Bands = bands, Marker = median, Ticks = ticks });   // KDE ridge + rug + clickable bands
+SparkBars.Create(new SparkBarsModel(bars));                                                   // the 12-column stat-card strip
+Waveform.Create(new WaveformModel(peaks, 64), progressSignal);                                // mirrored bars, bound played clip
+```
+
+Hover never re-renders series geometry (only the small active overlay subscribes to the index); pass your own
+`Signal<int>` as `ActiveIndex` when the active category must persist or drive other UI. Pure maths is `ChartMath`
+(KDE, nice ticks, stacking, curve controls, tick thinning) — gated in `ControlsSuite` (`gate.ctl.charts.*`).
+
 ### The controlled-input contract (every stateful control)
 
 One uniform contract, so binding any stateful control is the same everywhere:

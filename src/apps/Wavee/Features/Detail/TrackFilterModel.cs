@@ -61,7 +61,11 @@ public readonly record struct TrackFilterState(
     // an artist whose rows the current filter has excluded, and re-deriving the name from the visible rows is exactly
     // how a header ends up disagreeing with the face that was clicked. Display only — it filters nothing and is NOT
     // counted in ActiveCount (a name without an id is inert).
-    string? ArtistName = null)
+    string? ArtistName = null,
+    // Inclusive release-year window. 0/0 = off. A one-year sparkline bar sets min == max; a wide bin sets the bin's
+    // range. Year 0 on a track (unknown) never matches a window that is on — the histogram counted dated tracks only.
+    int ReleaseYearMin = 0,
+    int ReleaseYearMax = 0)
 {
     public static readonly TrackFilterState Default = new();
 
@@ -89,6 +93,7 @@ public readonly record struct TrackFilterState(
             // single question, and counting the two halves separately would put a 2 on the funnel for one bar click.
             if (AddedAfterMs != 0L || AddedBeforeMs != 0L) n++;
             if (!string.IsNullOrEmpty(ArtistId)) n++;
+            if (ReleaseYearMin != 0 || ReleaseYearMax != 0) n++;
             return n;
         }
     }
@@ -110,6 +115,11 @@ public readonly record struct TrackFilterState(
         => artistId is { Length: > 0 } id
             ? this with { ArtistId = id, ArtistName = displayName }
             : this with { ArtistId = null, ArtistName = null };
+
+    /// <summary>Set (or, with 0/0, clear) the inclusive release-year window. One facet: a bin is one answer however
+    /// many years it spans.</summary>
+    public TrackFilterState WithReleaseYear(int min, int max)
+        => this with { ReleaseYearMin = min, ReleaseYearMax = max };
 }
 
 /// <summary>Pure filter predicate shared by production and headless tests.</summary>
@@ -141,6 +151,7 @@ public static class TrackFilterModel
         if (filter.Tag is { Length: > 0 } tag && !HasTag(track.Tags, tag)) return false;
         if (filter.ArtistId is { Length: > 0 } artistId && !HasArtist(track.Artists, artistId)) return false;
         if (!MatchesAddedWindow(track.AddedAt, filter.AddedAfterMs, filter.AddedBeforeMs)) return false;
+        if (!MatchesReleaseYear(track.Year, filter.ReleaseYearMin, filter.ReleaseYearMax)) return false;
         if (!MatchesTempo(track.TempoBpm, filter.Tempo)) return false;
         if (filter.CamelotCode is { Length: > 0 } key
             && !string.Equals(track.CamelotCode, key, StringComparison.OrdinalIgnoreCase)) return false;
@@ -218,18 +229,33 @@ public static class TrackFilterModel
         return true;
     }
 
+    /// <summary>Inclusive release-year window. 0/0 is off. A track with no year (0) never matches a window that is
+    /// on — the year sparkline this lens came from counted dated tracks only.</summary>
+    static bool MatchesReleaseYear(int year, int min, int max)
+    {
+        if (min == 0 && max == 0) return true;
+        if (year <= 0) return false;
+        if (min != 0 && year < min) return false;
+        if (max != 0 && year > max) return false;
+        return true;
+    }
+
+    /// <summary>The half-open tempo band a BPM falls in — THE one boundary table: the filter predicate below, the
+    /// rail's tempo facts (<c>LikedFactsRules.TempoBandCounts</c>) and the flyout's labels all read it, so a pill and
+    /// the rows it lenses cannot disagree by a boundary. A non-positive or unknown tempo has no band
+    /// (<see cref="TrackTempoBand.Any"/>).</summary>
+    public static TrackTempoBand BandOf(double bpm)
+        => double.IsNaN(bpm) || bpm <= 0d ? TrackTempoBand.Any
+         : bpm < 90d ? TrackTempoBand.Under90
+         : bpm < 120d ? TrackTempoBand.From90To119
+         : bpm < 140d ? TrackTempoBand.From120To139
+         : TrackTempoBand.From140AndUp;
+
     static bool MatchesTempo(double? bpm, TrackTempoBand band)
     {
         if (band == TrackTempoBand.Any) return true;
         if (bpm is not { } t || t <= 0d) return false;   // unknown tempo cannot satisfy an explicit band
-        return band switch
-        {
-            TrackTempoBand.Under90 => t < 90d,
-            TrackTempoBand.From90To119 => t >= 90d && t < 120d,
-            TrackTempoBand.From120To139 => t >= 120d && t < 140d,
-            TrackTempoBand.From140AndUp => t >= 140d,
-            _ => true,
-        };
+        return BandOf(t) == band;
     }
 
     static bool MatchesDuration(long durationMs, TrackDurationRange range) => range switch

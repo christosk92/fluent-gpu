@@ -112,21 +112,32 @@ public sealed partial class LiveConnect : IDisposable
         Devices = new LiveConnectDevices();
         _ingest = new ClusterIngest(transport, Projection, Devices, deviceId, log, _clock.ObservePassive);
 
-        var builder = new ConnectStateBuilder(deviceId, "Wavee", isPrivateSession: () => Projection.IsPrivateSession);
+        // The NewConnection announce (OnConnectionId, below) fires with no snapshot yet, so BuildPutState falls back to
+        // whatever DeviceInfo.Volume the builder was CONSTRUCTED with — leaving the ctor default (MaxVolume/2) meant an
+        // idle Wavee always announced 50% until the first real volume publish overwrote it.
+        var builder = new ConnectStateBuilder(deviceId, "Wavee",
+            volume: (int)Math.Round(Math.Clamp(initialVolume01, 0, 1) * ConnectStateBuilder.MaxVolume),
+            isPrivateSession: () => Projection.IsPrivateSession);
         _stateBuilder = builder;
         _connect = new ConnectService(transport);   // connection-id capture only
         // bug 6 / M0: the current track's Connect `track_player` must come from the controller's LIVE media kind (the ONE
         // truth about which host is playing), not from a bare has-video flag on the wire snapshot. The controller does not
         // exist yet here, so the publisher's build delegate reads it through this late-bound thunk (Audio until then).
-        Func<PlayableKind>? currentMediaKind = null;
+        // bug 2: gated on IsActiveOwner() — null (not Audio) while we are merely a passive VIEWER mirroring another
+        // device's row, so BuildPutState falls back to the wire's own track_player instead of stamping our idle
+        // "Audio" over an explicit remote claim of "video". Only a device that is ACTUALLY decoding is authoritative.
+        Func<PlayableKind?>? mediaKind = null;
         // The SINGLE PutState writer: NewConnection announce on the connection-id + our local player_state on playback
         // changes (so other devices/controllers see us as the active player). Re-injects the response cluster.
         _publisher = new DeviceStatePublisher(transport, deviceId, Projection, _connect.ConnectionId, () => _connect.CurrentConnectionId,
             (reason, snap, mid, isActive, attribution) => builder.BuildPutState(reason, snap, mid, isActive,
-                currentKind: currentMediaKind is null ? PlayableKind.Audio : currentMediaKind(),
+                currentKind: mediaKind?.Invoke(),
                 lastCommandSentByDeviceId: attribution.SenderDeviceId,
                 lastCommandMessageId: attribution.MessageId),
-            onCluster: _ingest.OnAnnounceResponse, log: log);
+            onCluster: _ingest.OnAnnounceResponse, log: log)
+        {
+            CurrentMediaKind = () => mediaKind?.Invoke(),
+        };
 
         _host = audio is not null ? audio.Host : new SilentAudioHost();
         // The video-media host: the VIDEO half of the ONE current media. Constructed regardless of the audio backend (it is
@@ -176,8 +187,14 @@ public sealed partial class LiveConnect : IDisposable
             SpotifyClientIdentity.XpuiSnapshotVersion,   // play_origin.feature_version
             fast: (IFastTrackResolver?)media ?? fast, videoHost: _videoHost,
             transferDecoder: new ProtoTransferStateDecoder());
-        currentMediaKind = () => Controller.CurrentMediaKind;   // close the late-bound `track_player` loop (see above)
+        // close the late-bound `track_player` loop (see above): null while merely viewing another device's session.
+        mediaKind = () => Controller.IsActiveOwner() ? Controller.CurrentMediaKind : (PlayableKind?)null;
         Controller.EpisodeResumeMicros = (uri, ct) => herodotus.TryGetEpisodeResumeMicrosAsync(uri, ct);
+        // Same corrected clock the projection's own remote-position aging reads — an inbound transfer ages its
+        // restored position against it too, rather than our own (possibly unsynced/skewed) wall clock.
+        Controller.ServerNowUnixMs = _clock.ServerNowUnixMs;
+        Controller.PublishInactiveOnWire = _publisher.PublishInactive;
+        Controller.PublishFreshStateOnWire = _publisher.PublishStateChanged;
         if (media is not null)
         {
             Controller.MetaResolver = media.ResolveWireMetaAsync;
@@ -224,7 +241,12 @@ public sealed partial class LiveConnect : IDisposable
             transport,
             (cmd, ct) => Controller.HandleRemoteCommandAsync(cmd, ct),
             (volume, ct) => Controller.HandleInboundVolumeAsync(volume, ct),
-            log);
+            log,
+            // findings §9: an inbound connect/volume MESSAGE carries only ITS OWN message_id (no sender device id on
+            // that wire, unlike a JSON command) — note it on the publisher before the dispatch above applies the
+            // volume and emits VolumeChanged, so the resulting PutState's LastCommandMessageId credits the sender
+            // that actually moved the slider instead of publishing with none.
+            onVolumeMessageId: mid => _publisher.NoteCommand(new ConnectCommandAttribution("", mid, "")));
         Devices.TransferHandler = (id, c) => Controller.TransferToAsync(id, c);
         _clock.Start();
     }

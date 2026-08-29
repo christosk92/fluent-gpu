@@ -127,6 +127,16 @@ public static class WaveeType
     /// <summary>Page hero (playlist / album name). → Ui.Title (28 / 36 / 600).</summary>
     public static TextEl PageHero(string s) => Ui.Title(s);
 
+    /// <summary>The two-column detail rail's identity title — and the vertical hero's. <see cref="PageHero"/>'s
+    /// 28/36/600 engine-ramp metrics, in the DISPLAY face with −20/1000 em tracking (−0.8px at the shell's 40px
+    /// TitleLarge override). One alias so playlist, liked, and album rails share a voice; the shell still swaps
+    /// Size/LineHeight to 40/52 when the window is tall.</summary>
+    public static TextEl DetailHero(string s) => Ui.Title(s) with
+    {
+        FontFamily = "Segoe UI Variable Display",
+        CharSpacing = -20f,
+    };
+
     /// <summary>A LIBRARY SURFACE's masthead — the name of a place rather than of a record ("Recents"). One rung above
     /// <see cref="PageHero"/> on the SAME engine ramp (Ui.TitleLarge, 40 / 52), set in the display face at the LIGHT
     /// weight so the word reads as typography over a Mica wash instead of as one more bold UI label.
@@ -223,4 +233,51 @@ public static class WaveeType
         Weight = 350,
         CharSpacing = -6f,
     };
+
+    /// <summary>A GLANCEABLE STAT — one number the reader is meant to take in without reading: a play count, a tempo,
+    /// a key, a duration. → Ui.Title's ramp pair (28 / 36) in the display face at SemiLight <b>350</b>, the THIRD and
+    /// last use of the sanctioned 350 cut (see the class header; <see cref="PivotLabel"/> and <see cref="NpvLyric"/>
+    /// are the other two). A stat is the same register those already occupy — Zune numerals, not a UI label — so it
+    /// borrows their weight rather than opening a fourth divergence.
+    ///
+    /// <para>WHY THE TITLE RUNG AND NOT SUBTITLE. The stat has no heading above it: it IS the heading, sitting over
+    /// its own sentence-case caption, and the whole point of dropping the tiles that used to box these values is that
+    /// the numerals must now carry the section by themselves. At Subtitle's 20/28 a play count and the 13.5px version
+    /// rows below it are close enough to read as one undifferentiated column of text — which is the wall the tiles
+    /// were there to break up. 28/36 is the smallest rung that still reads as a display figure at this density, and it
+    /// is a rung, so the line height comes with it (the three-part contract above).</para>
+    ///
+    /// <para><paramref name="unit"/> is the small run that shares the numeral's BASELINE — "2B" big, "F♯ major" small —
+    /// built as ONE paragraph for the same reason <see cref="ModuleHeader(string,string)"/> is: FlexAlign has no
+    /// Baseline member, so two side-by-side nodes can only bottom-align, which drops the small run a few pixels and
+    /// reads as a mistake at a 16px size difference. Null (the common case) yields the numeral alone.</para></summary>
+    public static SpanTextEl StatHero(string value, string? unit)
+    {
+        var heading = Ui.Title("");
+        var caption = Ui.Caption("");
+        TextSpan[] spans = unit is { Length: > 0 }
+            ? new TextSpan[]
+              {
+                  new(value),
+                  // Two spaces, not a separator glyph — the same gap-as-a-run trick ModuleHeader uses, because a run
+                  // break cannot carry margin.
+                  new("  " + unit, Weight: caption.ResolvedWeight, Color: Tok.TextSecondary, Size: caption.Size),
+              }
+            : new TextSpan[] { new(value) };
+        return new SpanTextEl(spans)
+        {
+            FontFamily = "Segoe UI Variable Display",
+            CharSpacing = -6f,
+            Size = heading.Size,
+            Weight = 350,
+            LineHeight = heading.LineHeight,
+            LineStacking = heading.LineStacking,
+            LineBounds = heading.LineBounds,
+            Wrap = TextWrap.NoWrap,
+            Trim = TextTrim.CharacterEllipsis,
+            MaxLines = 1,
+            MinWidth = 0f,
+            Shrink = 1f,
+        };
+    }
 }

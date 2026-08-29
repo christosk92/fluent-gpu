@@ -940,6 +940,10 @@ public sealed class PcmAudioSession : IMediaSession
         _pumpThread = null;
         try { _out.Stop(); } catch { /* teardown never throws */ }
         try { _endpoint?.Dispose(); } catch { /* teardown never throws */ }
+        // Publish the terminal state BEFORE severing the sink — without this, a torn-down session leaves
+        // MediaPlayerCore.State pinned at whatever it last was (often Playing) forever, because nothing else ever
+        // writes to it again once _sink goes null.
+        Publish(PlaybackState.Idle);
         _sink = null;
         _voice = null;
         return ValueTask.CompletedTask;

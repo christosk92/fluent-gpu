@@ -20,7 +20,7 @@ namespace Wavee;
 sealed partial class SettingsPage
 {
     sealed record StorageSnapshot(long LibraryDb, long Runtime, long Logs, int LogFiles, long Store,
-        long AudioBody, long LicenseDb, long Total);
+        long AudioBody, long LicenseDb, long ImageCache, long Total);
 
     enum StorageLoadPhase : byte { NotStarted, Loading, Ready, Failed }
 
@@ -39,6 +39,10 @@ sealed partial class SettingsPage
     static readonly ColorF StorageColorStore = ColorF.FromRgba(0x27, 0xAE, 0x60);
     static readonly ColorF StorageColorAudio = ColorF.FromRgba(0x1A, 0xBC, 0x9C);
     static readonly ColorF StorageColorKeys = ColorF.FromRgba(0x95, 0xA5, 0xA6);
+    static readonly ColorF StorageColorImages = ColorF.FromRgba(0xE7, 0x4C, 0x3C);
+
+    // No loc key: this row was added with the release-readiness pass and the string is not yet in assets/loc.
+    const string ImageCacheLabel = "Image cache";
 
     readonly Signal<StorageLoadPhase> _storageLoad = new(StorageLoadPhase.NotStarted);
     StorageSnapshot? _storage;
@@ -176,8 +180,11 @@ sealed partial class SettingsPage
         var cacheSettings = AppDataSettings.ForUnpackaged("Wavee", "Wavee");
         long audioBody = DirSize(AudioBodyDiskCache.ResolveDirectory(cacheSettings.Get(WaveeSettings.AudioBodyCacheBasePath)));
         long licenseDb = FileSize(LicenseKeyDiskCache.DefaultDbPath());
-        return new StorageSnapshot(library, runtime, logs, logFiles, store, audioBody, licenseDb,
-            library + runtime + logs + store + audioBody + licenseDb);
+        // Album art and other remote images, decoded once and kept on disk. Under the app root since the shipping build
+        // sets AppOptions.ImageCacheDirectory — before that it lived in %TEMP% and was invisible to this page.
+        long imageCache = DirSize(Path.Combine(root, "cache", "images"));
+        return new StorageSnapshot(library, runtime, logs, logFiles, store, audioBody, licenseDb, imageCache,
+            library + runtime + logs + store + audioBody + licenseDb + imageCache);
     }
 
     static long FileSize(string path)
@@ -363,6 +370,8 @@ sealed partial class SettingsPage
                         () => DeleteOldLogs(post)))),
             StorageRowCard(Loc.Get(Strings.Settings.Storage.LocalStore), Loc.Get(Strings.Settings.Storage.LocalStoreSub),
                 s?.Store, root, StorageColorStore, Icons.Document),
+            StorageRowCard(ImageCacheLabel, "cache\\images - album art and other remote images",
+                s?.ImageCache, Path.Combine(root, "cache", "images"), StorageColorImages, Icons.Folder),
             SettingsSectionHeader(Loc.Get(Strings.Settings.Storage.PlaybackCache), Icons.Download),
             SettingsRow(Loc.Get(Strings.Settings.Storage.CacheAudio), Loc.Get(Strings.Settings.Storage.CacheAudioSub),
                 Toggle(WaveeSettings.AudioBodyCacheEnabled), Icons.Download),
@@ -439,6 +448,7 @@ sealed partial class SettingsPage
             (Loc.Get(Strings.Settings.Storage.LocalStore), s.Store, StorageColorStore),
             (Loc.Get(Strings.Settings.Storage.AudioBodies), s.AudioBody, StorageColorAudio),
             (Loc.Get(Strings.Settings.Storage.LicenseKeys), s.LicenseDb, StorageColorKeys),
+            (ImageCacheLabel, s.ImageCache, StorageColorImages),
         ];
 
         var barKids = new List<Element>();

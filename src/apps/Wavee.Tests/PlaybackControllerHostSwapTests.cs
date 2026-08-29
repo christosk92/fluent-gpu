@@ -56,6 +56,7 @@ public class PlaybackControllerHostSwapTests
         public long PositionMs { get; set; }
         public bool IsPlaying { get; private set; }
         public bool IsBuffering => false;
+        public bool ClockValid => true;
         public void Load(in AudioStreamHandle s) => Note("load:" + s.TrackUri);
         public void LoadFastStart(in AudioFastStart s) => Note("faststart:" + s.TrackUri);
         public void SupplyBody(in AudioStreamHandle s) => Note("body:" + s.TrackUri);
@@ -78,6 +79,7 @@ public class PlaybackControllerHostSwapTests
         public IObservable<AudioHostSignal> Signals => Sig;
         public long PositionMs { get; set; }
         public bool IsPlaying { get; private set; }
+        public bool ClockValid => true;
         public void Play() { IsPlaying = true; Note("play"); }
         public void Pause() { IsPlaying = false; Note("pause"); }
         public void Stop() { IsPlaying = false; Note("stop"); }

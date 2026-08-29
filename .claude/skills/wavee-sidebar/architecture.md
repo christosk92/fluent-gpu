@@ -182,7 +182,7 @@ source that raises `Changed` mid-rebuild only marks the binder dirty.
    keyed on their fold (`PlanDep`). The planner is pure and reuses ONE caller-owned `SidebarPlanBuffers` **per
    pane** — the expanded pane and the rail each own their own instance, because a plan *aliases* its buffers.
 2. The plan is published to the bound slots as a **plain field** (never a signal write from `Render` — the
-   render-purity rule). Each slot re-reads it at *its* render time and calls `SidebarPane.SubscribeEpoch()` so a
+   render-purity rule). Each slot re-reads it at *its* render time and calls `SidebarPane.SubscribeRowEpoch(index)` so a
    projection rebuild / customizer edit / section toggle / keystroke re-skins the realized window without the list
    rebuilding.
 3. The row **count** is the one thing the frozen-at-mount `ItemsView` cannot read from a field: it rides

@@ -18,10 +18,12 @@ public class LikedFactsRulesTests
     static readonly DateTimeOffset Now = new(2026, 3, 15, 12, 0, 0, TimeSpan.Zero);
 
     static Track T(DateTimeOffset? addedAt, string id = "t", IReadOnlyList<ArtistRef>? artists = null,
-                   IReadOnlyList<string>? tags = null)
+                   IReadOnlyList<string>? tags = null, int year = 0, double? bpm = null, string? camelot = null,
+                   uint? color = null)
         => new(id, "spotify:track:" + id, "Title " + id,
             artists ?? Array.Empty<ArtistRef>(), new AlbumRef("", "", ""),
-            180_000, false, null, AddedAt: addedAt, Tags: tags);
+            180_000, false, null, AddedAt: addedAt, Tags: tags, Year: year,
+            TempoBpm: bpm, CamelotCode: camelot, CamelotColor: color);
 
     static ArtistRef A(string name) => new(name, "spotify:artist:" + name, name);
 
@@ -157,22 +159,27 @@ public class LikedFactsRulesTests
         DateTimeOffset.UnixEpoch - TimeSpan.FromDays(3650),
     };
 
-    /// <summary>A like we cannot date is excluded from EVERY fact — not defaulted to today, not to 1970. Half of these
-    /// would otherwise put the since-line in the Nixon administration.</summary>
+    /// <summary>A like we cannot date is excluded from TIME facts — not defaulted to today, not to 1970. Artist and
+    /// blend still count the row: a bulk-republished editorial list has no usable spread but still has credits.</summary>
     [Theory]
     [MemberData(nameof(UnusableStamps))]
-    public void AnUndatableLikeIsExcludedFromEveryFact(DateTimeOffset? addedAt)
+    public void AnUndatableLikeIsExcludedFromTimeFacts(DateTimeOffset? addedAt)
     {
         IReadOnlyList<Track> tracks = [T(addedAt, "x", [A("Aphex")], ["Ambient"])];
 
         Assert.Equal(-1, SoleBucket(addedAt, Now));
         Assert.Empty(LikedFactsRules.LikedInWindow(tracks, Now - TimeSpan.FromDays(4000), Now + TimeSpan.FromDays(1)));
-        Assert.Empty(LikedFactsRules.TopArtists(tracks));
-        Assert.Empty(LikedFactsRules.BlendShares(tracks));
         Assert.Null(LikedFactsRules.LikingSince(tracks));
         Assert.Null(LikedFactsRules.OldestLike(tracks));
         Assert.Null(LikedFactsRules.DominantDecade(tracks));
         Assert.False(LikedFactsRules.TryStamp(tracks[0], out _));
+        Assert.False(LikedFactsRules.StampsSpread(tracks));
+
+        var top = LikedFactsRules.TopArtists(tracks);
+        Assert.Single(top);
+        Assert.Equal("Aphex", top[0].Artist.Name);
+        // One tagged row is below the blend evidence floor — empty is the floor, not the stamp skip.
+        Assert.Empty(LikedFactsRules.BlendShares(tracks));
     }
 
     /// <summary>The epoch floor is a floor, not a year filter: a like genuinely saved the day after the epoch is still
@@ -199,8 +206,8 @@ public class LikedFactsRulesTests
 
         Assert.Equal("b", LikedFactsRules.OldestLike(tracks)!.Id);
         var top = LikedFactsRules.TopArtists(tracks);
-        Assert.Single(top);
-        Assert.Equal("Boards", top[0].Artist.Name);
+        Assert.Equal(3, top.Count);
+        Assert.Equal(["Aphex", "Boards", "Clark"], Names(top));
     }
 
     // ── This week, last year ────────────────────────────────────────────────────────────────────────────────────────
@@ -823,6 +830,358 @@ public class LikedFactsRulesTests
         Assert.Equal(1_000L, noArtist.AddedAfterMs);
 
         Assert.Null(LikedFactsRules.ClearLens(all, LikedFactsRules.LikedLens.Tag).Tag);
+        Assert.Equal(0, LikedFactsRules.ClearLens(all.WithReleaseYear(2010, 2014), LikedFactsRules.LikedLens.Year).ReleaseYearMin);
         Assert.Equal(all, LikedFactsRules.ClearLens(all, LikedFactsRules.LikedLens.None));
+    }
+
+    [Fact]
+    public void UnstampedTracksStillRankInArtistsAndBlend()
+    {
+        var tracks = Repeat(ContentFilterTags.MinTrackCount, i => T(null, "t" + i, [A("Aphex")], ["Ambient"]));
+        var top = LikedFactsRules.TopArtists(tracks);
+        Assert.Single(top);
+        Assert.Equal("Aphex", top[0].Artist.Name);
+        Assert.Equal(ContentFilterTags.MinTrackCount, top[0].Count);
+
+        var shares = LikedFactsRules.BlendShares(tracks);
+        Assert.Single(shares);
+        Assert.Equal("Ambient", shares[0].Title);
+    }
+
+    [Fact]
+    public void OneSharedTimestampIsNotStampSpread()
+    {
+        var at = new DateTimeOffset(2026, 3, 15, 12, 0, 0, TimeSpan.Zero);
+        var tracks = Repeat(20, i => T(at, "t" + i));
+        Assert.False(LikedFactsRules.StampsSpread(tracks));
+        Assert.False(LikedFactsRules.StampsSpread([T(at, "a"), T(at, "b")]));
+    }
+
+    [Fact]
+    public void TwoDistinctUtcDaysAreStampSpread()
+    {
+        var a = new DateTimeOffset(2026, 3, 15, 23, 0, 0, TimeSpan.Zero);
+        var b = new DateTimeOffset(2026, 3, 16, 1, 0, 0, TimeSpan.Zero);
+        Assert.True(LikedFactsRules.StampsSpread([T(a, "a"), T(b, "b")]));
+        // Same UTC calendar day is not spread, even an hour apart.
+        Assert.False(LikedFactsRules.StampsSpread([T(a, "a"), T(a.AddHours(-1), "b")]));
+    }
+
+    [Fact]
+    public void YearHistogramIsConsecutiveWhenTheSpanFitsTwelveBars()
+    {
+        var tracks = new List<Track>();
+        for (int y = 2010; y <= 2021; y++)
+            tracks.Add(T(null, "t" + y, year: y));
+
+        var bars = LikedFactsRules.YearHistogram(tracks);
+        Assert.Equal(12, bars.Count);
+        Assert.Equal(2010, bars[0].YearMin);
+        Assert.Equal(2010, bars[0].YearMax);
+        Assert.Equal(2021, bars[11].YearMin);
+        Assert.Equal(2021, bars[11].YearMax);
+        for (int i = 0; i < bars.Count; i++)
+        {
+            Assert.Equal(1, bars[i].Count);
+            Assert.Equal(bars[i].YearMin, bars[i].YearMax);
+        }
+    }
+
+    [Fact]
+    public void YearHistogramBinsAWideSpanRatherThanPickingTwelveRandomYears()
+    {
+        var tracks = new List<Track>();
+        for (int y = 1960; y <= 2020; y++)
+            tracks.Add(T(null, "t" + y, year: y));
+
+        var bars = LikedFactsRules.YearHistogram(tracks);
+        Assert.Equal(12, bars.Count);
+        Assert.Equal(1960, bars[0].YearMin);
+        Assert.Equal(2020, bars[11].YearMax);
+        Assert.True(bars[0].YearMax > bars[0].YearMin, "a 61-year span must bin, not lie as 12 consecutive years");
+        int covered = 0;
+        for (int i = 0; i < bars.Count; i++)
+        {
+            Assert.True(bars[i].YearMax >= bars[i].YearMin);
+            covered += bars[i].Count;
+            if (i > 0) Assert.Equal(bars[i - 1].YearMax + 1, bars[i].YearMin);
+        }
+        Assert.Equal(61, covered);
+    }
+
+    [Fact]
+    public void DominantReleaseDecadeIgnoresAddedAt()
+    {
+        var added = new DateTimeOffset(2024, 6, 1, 0, 0, 0, TimeSpan.Zero);
+        var tracks = Repeat(10, i => T(added, "t" + i, year: 2011));
+        Assert.Equal(2010, LikedFactsRules.DominantReleaseDecade(tracks));
+        Assert.Equal(2020, LikedFactsRules.DominantDecade(tracks)); // saved in the 2020s
+        Assert.Equal("t0", LikedFactsRules.OldestRelease(tracks)!.Id);
+    }
+
+    [Fact]
+    public void HasReleaseYearsUsesTheDecadeEvidenceFloor()
+    {
+        Assert.False(LikedFactsRules.HasReleaseYears(Repeat(9, i => T(null, "t" + i, year: 2014))));
+        Assert.True(LikedFactsRules.HasReleaseYears(Repeat(10, i => T(null, "t" + i, year: 2014))));
+    }
+
+    [Fact]
+    public void YearLensIsAnInclusiveWindow()
+    {
+        var filter = TrackFilterState.Default.WithReleaseYear(2010, 2014);
+        Assert.Equal(LikedFactsRules.LikedLens.Year, LikedFactsRules.ActiveLenses(filter));
+        Assert.True(LikedFactsRules.IsYearLens(filter, new LikedFactsRules.YearBucket(2010, 2014, 3)));
+        Assert.False(LikedFactsRules.IsYearLens(filter, new LikedFactsRules.YearBucket(2010, 2010, 1)));
+        Assert.Equal(1, filter.ActiveCount);
+        Assert.True(TrackFilterModel.Matches(
+            T(null, "in", year: 2012), "", filter, false, false, Now));
+        Assert.False(TrackFilterModel.Matches(
+            T(null, "out", year: 2009), "", filter, false, false, Now));
+        Assert.False(TrackFilterModel.Matches(
+            T(null, "unknown", year: 0), "", filter, false, false, Now));
+    }
+
+    // ── Which facts earn a card ─────────────────────────────────────────────────────────────────────────────────────
+
+    [Theory]
+    [InlineData(9, 10, 5, 0.3f, 0.5f, LikedFactsRules.FactShape.Absent)]     // under the evidence floor
+    [InlineData(10, 20, 5, 0.3f, 0.5f, LikedFactsRules.FactShape.Absent)]    // 50 % coverage < 60 %
+    [InlineData(12, 20, 5, 0.3f, 0.5f, LikedFactsRules.FactShape.Label)]     // 60 % coverage but < 20 known
+    [InlineData(19, 20, 5, 0.3f, 0.5f, LikedFactsRules.FactShape.Label)]
+    [InlineData(20, 20, 2, 0.3f, 0.5f, LikedFactsRules.FactShape.Label)]     // too few categories
+    [InlineData(20, 20, 3, 0.5f, 0.5f, LikedFactsRules.FactShape.Label)]     // exactly at the cap → label
+    [InlineData(20, 20, 3, 0.49f, 0.5f, LikedFactsRules.FactShape.Graph)]
+    public void ShapeBoundaryTable(int known, int total, int cats, float top, float cap, LikedFactsRules.FactShape expected)
+        => Assert.Equal(expected, LikedFactsRules.Shape(known, total, cats, top, cap));
+
+    [Fact]
+    public void YearsDominanceMeasuresHistogramBins()
+    {
+        // 1965–2024 → twelve five-year bins; 45 of 64 tracks in the last bin. Measured per YEAR this would look spread
+        // (the single-year top share is small); measured per BIN — what the chart draws — it is dominated.
+        var tracks = new List<Track>();
+        int[] early = [1965, 1968, 1971, 1972, 1974, 1975, 1977, 1980, 1984, 1995, 1997, 2000, 2005, 2012, 2015, 2016, 2017, 2018, 2019];
+        for (int i = 0; i < early.Length; i++) tracks.Add(T(null, "e" + i, year: early[i]));
+        for (int i = 0; i < 45; i++) tracks.Add(T(null, "l" + i, year: 2020 + i % 5));
+        var buckets = LikedFactsRules.YearHistogram(tracks);
+        var d = LikedFactsRules.YearsDominance(buckets);
+        Assert.Equal(64, d.Known);
+        Assert.Equal(buckets.Count - 1, d.TopIndex);
+        Assert.InRange(d.TopShare, 0.69f, 0.71f);
+        Assert.Equal(LikedFactsRules.FactShape.Label, LikedFactsRules.YearsShape(tracks, buckets));
+
+        // 2010–2021, two per year: spread across twelve one-year bars → a real shape.
+        var spread = Repeat(24, i => T(null, "s" + i, year: 2010 + i / 2));
+        var sb = LikedFactsRules.YearHistogram(spread);
+        Assert.Equal(LikedFactsRules.FactShape.Graph, LikedFactsRules.YearsShape(spread, sb));
+
+        // 41 of 50 in one year (the screenshot) → label.
+        var one = Repeat(50, i => T(null, "o" + i, year: i < 41 ? 2024 : 2012 + i % 7));
+        Assert.Equal(LikedFactsRules.FactShape.Label, LikedFactsRules.YearsShape(one, LikedFactsRules.YearHistogram(one)));
+    }
+
+    [Theory]
+    [InlineData(89.9, TrackTempoBand.Under90)]
+    [InlineData(90.0, TrackTempoBand.From90To119)]
+    [InlineData(119.9, TrackTempoBand.From90To119)]
+    [InlineData(120.0, TrackTempoBand.From120To139)]
+    [InlineData(139.9, TrackTempoBand.From120To139)]
+    [InlineData(140.0, TrackTempoBand.From140AndUp)]
+    [InlineData(0.0, TrackTempoBand.Any)]
+    public void TempoBandOfIsHalfOpen(double bpm, TrackTempoBand expected)
+        => Assert.Equal(expected, TrackFilterModel.BandOf(bpm));
+
+    [Fact]
+    public void TempoBandCountsUseTheFilterBoundaries()
+    {
+        var tracks = new List<Track> { T(null, "a", bpm: 89.9), T(null, "b", bpm: 90), T(null, "c", bpm: 139.9), T(null, "d", bpm: 140), T(null, "e"), T(null, "f", bpm: 0) };
+        var counts = new int[LikedFactsRules.TempoBandCount];
+        int known = LikedFactsRules.TempoBandCounts(tracks, counts);
+        Assert.Equal(4, known);
+        Assert.Equal(new[] { 1, 1, 1, 1 }, counts);
+        // The lens the pill applies filters exactly those rows.
+        var filter = TrackFilterState.Default with { Tempo = TrackTempoBand.From120To139 };
+        Assert.True(TrackFilterModel.Matches(tracks[2], "", filter, false, false, Now));
+        Assert.False(TrackFilterModel.Matches(tracks[3], "", filter, false, false, Now));
+    }
+
+    [Fact]
+    public void TempoShapeIsAbsentUnderCoverage()
+    {
+        // 22 of 40 (55 %) carry a tempo, spread over the bands → still absent: the fact cannot be claimed for the list.
+        var thin = Repeat(40, i => T(null, "t" + i, bpm: i < 22 ? 80 + (i * 9) % 100 : null));
+        Assert.Equal(LikedFactsRules.FactShape.Absent, LikedFactsRules.TempoShape(thin));
+        // 30 of 40 (75 %) → eligible; spread across three bands, no band over the cap → graph.
+        var ok = Repeat(40, i => T(null, "t" + i, bpm: i < 30 ? 80 + (i * 9) % 100 : null));
+        Assert.Equal(LikedFactsRules.FactShape.Graph, LikedFactsRules.TempoShape(ok));
+    }
+
+    [Fact]
+    public void HalfTimeSplitIsALabelAndBimodalIsAGraph()
+    {
+        // Spotify reports a fifth of a drum-and-bass list at half time: 32 @ 174, 8 @ 87 → 80 % in one band → a pill
+        // that names "140 bpm and up", never "steady".
+        var dnb = Repeat(40, i => T(null, "d" + i, bpm: i < 32 ? 174 : 87));
+        var d = LikedFactsRules.TempoDominance(dnb);
+        Assert.Equal(3, d.TopIndex);
+        Assert.InRange(d.TopShare, 0.79f, 0.81f);
+        Assert.Equal(LikedFactsRules.FactShape.Label, LikedFactsRules.TempoShape(dnb));
+
+        // A 50/50 house / rollers set is two humps — an IQR rule would call it "tight"; the band share says 50 % → graph.
+        var split = Repeat(40, i => T(null, "s" + i, bpm: i < 20 ? 124 : 174));
+        Assert.Equal(LikedFactsRules.FactShape.Graph, LikedFactsRules.TempoShape(split));
+    }
+
+    [Fact]
+    public void TempoStatisticsUseTheLowerMedianAndSkipUnknown()
+    {
+        var tracks = new List<Track> { T(null, "a", bpm: 170), T(null, "b", bpm: 100), T(null, "c"), T(null, "d", bpm: 130), T(null, "e", bpm: 120, color: 0xFF56D9F8u) };
+        var s = LikedFactsRules.TempoStatistics(tracks);
+        Assert.Equal(4, s.Known);
+        Assert.Equal(5, s.Total);
+        Assert.Equal(120d, s.Median);      // lower middle of 100,120,130,170 — a real track's tempo
+        Assert.Equal(100d, s.Min);
+        Assert.Equal(170d, s.Max);
+
+        var bpm = new float[4]; var argb = new uint[4];
+        Assert.Equal(4, LikedFactsRules.TempoValues(tracks, bpm, argb));
+        Assert.Equal(new[] { 170f, 100f, 130f, 120f }, bpm);        // list order, the unknown row skipped
+        Assert.Equal(0xFF56D9F8u, argb[3]);
+        Assert.Equal(0u, argb[0]);
+    }
+
+    [Fact]
+    public void BlendShapeCollapsesDominantAndFlatBlends()
+    {
+        var kpop = Repeat(50, i => T(null, "k" + i, tags: [i < 49 ? "K-Pop" : "Pop"]));
+        var d = LikedFactsRules.BlendsDominance(kpop);
+        Assert.Equal("K-Pop", d.TopTitle);
+        Assert.InRange(d.TopShare, 0.97f, 0.99f);
+        Assert.False(d.Flat);
+        Assert.Equal(LikedFactsRules.FactShape.Label, LikedFactsRules.BlendShape(kpop));
+
+        var flat = Repeat(60, i => T(null, "f" + i, tags: ["Style " + i % 15]));   // 15 styles × 4 tracks, none over 7 %
+        var fd = LikedFactsRules.BlendsDominance(flat);
+        Assert.True(fd.Flat);
+        Assert.Equal(15, fd.Styles);
+        Assert.Equal(LikedFactsRules.FactShape.Label, LikedFactsRules.BlendShape(flat));
+
+        var rock = Repeat(60, i => T(null, "r" + i, tags: [i < 40 ? "Classic Rock" : i < 52 ? "Hard Rock" : "Arena Rock"]));   // 67 %
+        Assert.Equal(LikedFactsRules.FactShape.Graph, LikedFactsRules.BlendShape(rock));
+
+        var thin = Repeat(4, i => T(null, "n" + i, tags: ["Tag " + i]));        // every descriptor under the floor
+        Assert.Equal(LikedFactsRules.FactShape.Absent, LikedFactsRules.BlendShape(thin));
+        Assert.Equal(LikedFactsRules.FactShape.Absent, LikedFactsRules.BlendShape(Repeat(5, i => T(null, "u" + i))));   // not fetched
+    }
+
+    [Theory]
+    [InlineData(new[] { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, LikedFactsRules.FactShape.Absent)]   // "+0" — nothing to show
+    [InlineData(new[] { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 }, LikedFactsRules.FactShape.Label)]    // one lonely add
+    [InlineData(new[] { 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0 }, LikedFactsRules.FactShape.Label)]    // one bucket, however tall
+    [InlineData(new[] { 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1 }, LikedFactsRules.FactShape.Label)]    // two adds < MinWeekEvidence
+    [InlineData(new[] { 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 1 }, LikedFactsRules.FactShape.Graph)]    // 3 adds over 2 buckets
+    public void WeekShapeTable(int[] counts, LikedFactsRules.FactShape expected)
+    {
+        var weeks = new LikedFactsRules.WeekBucket[counts.Length];
+        for (int i = 0; i < counts.Length; i++) weeks[i] = new LikedFactsRules.WeekBucket(Now.AddDays(-7 * (counts.Length - i)), counts[i]);
+        Assert.Equal(expected, LikedFactsRules.WeekShape(weeks));
+    }
+
+    [Fact]
+    public void LatestStampIsTheNewestUsableStamp()
+    {
+        var tracks = new List<Track> { T(Now.AddDays(-40)), T(Now.AddDays(-3), "new"), T(null, "unstamped"), T(DateTimeOffset.UnixEpoch, "epoch") };
+        Assert.Equal(Now.AddDays(-3), LikedFactsRules.LatestStamp(tracks));
+        Assert.Null(LikedFactsRules.LatestStamp(new List<Track> { T(null), T(DateTimeOffset.UnixEpoch) }));
+    }
+
+    [Fact]
+    public void TempoFingerprintIsContentNotIdentity()
+    {
+        var a = new List<Track> { T(null, "a", bpm: 128), T(null, "b", bpm: 96.4), T(null, "c", bpm: 172) };
+        var b = new List<Track> { T(null, "c", bpm: 172), T(null, "a", bpm: 128), T(null, "b", bpm: 96.4), T(null, "d") };   // new instance, reordered, one unknown
+        var c = new List<Track> { T(null, "a", bpm: 128), T(null, "b", bpm: 96.4), T(null, "c", bpm: 173) };                // one tempo changed
+        Assert.Equal(LikedFactsRules.FingerprintTempo(a), LikedFactsRules.FingerprintTempo(b));
+        Assert.NotEqual(LikedFactsRules.FingerprintTempo(a), LikedFactsRules.FingerprintTempo(c));
+        Assert.Equal(3, LikedFactsRules.FingerprintTempo(a).Known);
+    }
+
+    [Fact]
+    public void TempoStatisticsMatchTheSortedLowerMedian()
+    {
+        var rng = new Random(7);
+        var tracks = Repeat(101, i => T(null, "t" + i, bpm: 60 + rng.Next(0, 140)));
+        var sorted = new List<double>();
+        foreach (var t in tracks) sorted.Add(t.TempoBpm!.Value);
+        sorted.Sort();
+        var s = LikedFactsRules.TempoStatistics(tracks);
+        Assert.Equal(sorted[(sorted.Count - 1) / 2], s.Median);
+        Assert.Equal(sorted[0], s.Min);
+        Assert.Equal(sorted[^1], s.Max);
+        Assert.Equal(101, s.Known);
+    }
+
+    [Fact]
+    public void SummarizeAgreesWithTheStandaloneRules()
+    {
+        var tracks = Repeat(60, i => T(null, "t" + i, year: 2010 + i % 12, bpm: i % 3 == 0 ? 96 : i % 3 == 1 ? 128 : 172,
+                                        tags: [i % 5 == 0 ? "Dance" : i % 5 == 1 ? "Pop" : "House"],
+                                        artists: [A("Artist " + i % 7)]));
+        var s = LikedFactsRules.Summarize(tracks);
+        Assert.Equal(LikedFactsRules.YearHistogram(tracks), s.YearBuckets);
+        Assert.Equal(LikedFactsRules.YearsShape(tracks, s.YearBuckets), s.YearsShape);
+        Assert.Equal(LikedFactsRules.TempoShape(tracks), s.Tempo.Shape);
+        Assert.Equal(LikedFactsRules.TempoStatistics(tracks), s.Tempo.Stats);
+        Assert.Equal(LikedFactsRules.BlendShares(tracks), s.BlendShares);
+        Assert.Equal(LikedFactsRules.BlendsDominance(tracks), s.BlendDominance);
+        Assert.Equal(LikedFactsRules.BlendShape(tracks), s.BlendShape);
+        Assert.Equal(LikedFactsRules.TopArtists(tracks, 40).Count, s.Artists.Count);
+        Assert.True(LikedFactsRules.AnyArtistCredit(tracks));
+        Assert.False(LikedFactsRules.AnyArtistCredit(Repeat(3, i => T(null, "n" + i))));
+        var counts = new int[4];
+        LikedFactsRules.TempoBandCounts(tracks, counts);
+        Assert.Equal(counts, new[] { s.Tempo.Under90, s.Tempo.From90To119, s.Tempo.From120To139, s.Tempo.From140AndUp });
+    }
+
+    [Fact]
+    public void LatchOnlyUpgrades()
+    {
+        var a = LikedFactsRules.FactShape.Absent; var l = LikedFactsRules.FactShape.Label; var g = LikedFactsRules.FactShape.Graph;
+        Assert.Equal(l, LikedFactsRules.Latch(a, l));
+        Assert.Equal(g, LikedFactsRules.Latch(l, g));
+        Assert.Equal(g, LikedFactsRules.Latch(g, l));      // a straggler cannot fold a card back into a pill
+        Assert.Equal(l, LikedFactsRules.Latch(l, a));
+        Assert.Equal(a, LikedFactsRules.Latch(a, a));
+    }
+
+    [Fact]
+    public void TracksEquivalentIsRowEqualityNotListIdentity()
+    {
+        var row = T(null, "a", bpm: 128);
+        var a = new List<Track> { row, T(null, "b", year: 2020) };
+        var sameRows = new List<Track> { row, T(null, "b", year: 2020) };          // new list, a new-but-equal record for row 2
+        var changed = new List<Track> { row, T(null, "b", year: 2020, bpm: 96) };  // a tempo landed
+        var shorter = new List<Track> { row };
+        Assert.True(LikedFactsRules.TracksEquivalent(a, a));
+        Assert.True(LikedFactsRules.TracksEquivalent(a, sameRows));
+        Assert.False(LikedFactsRules.TracksEquivalent(a, changed));
+        Assert.False(LikedFactsRules.TracksEquivalent(a, shorter));
+        Assert.False(LikedFactsRules.TracksEquivalent(a, null));
+        Assert.True(LikedFactsRules.TracksEquivalent(null, null));
+    }
+
+    [Fact]
+    public void TempoLensRoundTrips()
+    {
+        var filter = TrackFilterState.Default with { Tempo = TrackTempoBand.From120To139 };
+        Assert.Equal(LikedFactsRules.LikedLens.Tempo, LikedFactsRules.ActiveLenses(filter));
+        Assert.True(LikedFactsRules.IsTempoLens(filter, TrackTempoBand.From120To139));
+        Assert.False(LikedFactsRules.IsTempoLens(filter, TrackTempoBand.Under90));
+        Assert.False(LikedFactsRules.IsTempoLens(TrackFilterState.Default, TrackTempoBand.Any));
+        Assert.Equal(1, filter.ActiveCount);
+        var cleared = LikedFactsRules.ClearLens(filter, LikedFactsRules.LikedLens.Tempo);
+        Assert.Equal(TrackTempoBand.Any, cleared.Tempo);
+        Assert.Equal(LikedFactsRules.LikedLens.None, LikedFactsRules.ActiveLenses(cleared));
     }
 }

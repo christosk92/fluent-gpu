@@ -11,7 +11,8 @@ namespace Wavee.SpotifyLive;
 // transient + single-use and the user must enter it). In-app, the challenge surfaces via AuthState in the UI, not the log.
 public static class SpotifyLiveLogin
 {
-    const string ClientId = "65b708073fc0480ea92a077233ca87bd";   // Spotify's public desktop client id
+    // Spotify's public desktop client id. Single owner: Wavee.Backend.Audio.SpotifyRuntimeIdentity.KeymasterClientId.
+    const string ClientId = Wavee.Backend.Audio.SpotifyRuntimeIdentity.KeymasterClientId;
     static readonly string[] Scopes =
     [
         "streaming", "app-remote-control", "user-read-playback-state", "user-modify-playback-state",

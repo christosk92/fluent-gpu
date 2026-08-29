@@ -44,7 +44,7 @@ public class HydrationSharedRunTests
         }
 
         public async Task<IReadOnlyCollection<string>> FetchAsync(IReadOnlyList<EntityUri> uris,
-            IReadOnlyList<(string Uri, int Kind)>? extraKinds, TraitSurface surface, CancellationToken ct)
+            IReadOnlyList<(string Uri, int Kind)>? extraKinds, TraitSurface surface, CancellationToken ct, bool revalidate = false)
         {
             lock (_lock) Passes.Add(uris.Select(u => u.Uri).ToList());
             FirstPassStarted.TrySetResult();
@@ -144,7 +144,7 @@ public class HydrationSharedRunTests
         public void Release() => _gate.TrySetResult();
 
         public async Task<IReadOnlyCollection<string>> FetchAsync(IReadOnlyList<EntityUri> uris,
-            IReadOnlyList<(string Uri, int Kind)>? extraKinds, TraitSurface surface, CancellationToken ct)
+            IReadOnlyList<(string Uri, int Kind)>? extraKinds, TraitSurface surface, CancellationToken ct, bool revalidate = false)
         {
             Interlocked.Increment(ref Calls);
             await _gate.Task.ConfigureAwait(false);

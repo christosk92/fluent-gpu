@@ -31,72 +31,89 @@ public readonly record struct ConnectCommand(
     public static bool TryParse(in WireRequest req, out ConnectCommand cmd)
     {
         cmd = default;
+        var parts = req.MessageIdent.Split('/');
+        if (parts.Length < 5 || req.Command is null || req.Command.Length == 0) return false;
+
+        // The URL's own last segment, known before the body is ever parsed. Stashed on `cmd` even on a later
+        // failure so OnRequest can still ask "was this at least a known endpoint?" (findings §3) without redoing
+        // this parse — a garbled BODY on a real endpoint must not read the same as a genuinely unsupported one.
+        string urlEndpoint = parts[^1].ToLowerInvariant();
+        cmd = cmd with { Endpoint = urlEndpoint };
         try
         {
-            var parts = req.MessageIdent.Split('/');
-            if (parts.Length < 5 || req.Command is null || req.Command.Length == 0) return false;
-
             using var doc = JsonDocument.Parse(req.Command);
             var root = doc.RootElement;
             int messageId = root.TryGetProperty("message_id", out var mid) ? IntLoose(mid) : 0;
-            string sender = root.TryGetProperty("sent_by_device_id", out var sd) ? sd.GetString() ?? "" : "";
+            string sender = root.TryGetProperty("sent_by_device_id", out var sd) && sd.ValueKind == JsonValueKind.String
+                ? sd.GetString() ?? "" : "";
 
             JsonElement inner = root;
-            string urlEndpoint = parts[^1];
             string endpoint;
             if (urlEndpoint == "command" && parts.Length >= 6 && parts[^2] == "player")
             {
-                if (!root.TryGetProperty("command", out inner) || !inner.TryGetProperty("endpoint", out var ep)) return false;
+                if (!root.TryGetProperty("command", out inner) || !inner.TryGetProperty("endpoint", out var ep)
+                    || ep.ValueKind != JsonValueKind.String) return false;
                 endpoint = ep.GetString()?.ToLowerInvariant() ?? "";
             }
-            else endpoint = urlEndpoint.ToLowerInvariant();
+            else endpoint = urlEndpoint;
 
             var kind = Map(endpoint);
+            cmd = cmd with { Endpoint = endpoint };
+            if (kind == ConnectCmd.Unknown) return false;
+
+            // From here the endpoint is KNOWN — a malformed inner field (a float where a string was expected, a
+            // nested object gone missing) must skip just that field, not the whole command: a phone that sends one
+            // odd payload must not have this reply DeviceDoesNotSupportCommand and get itself cached out of ever
+            // sending the endpoint again (OnRequest). So this second try is scoped tightly around the optional
+            // per-kind reads, and swallows into the safe defaults already declared below rather than aborting.
             long seekMs = 0;
             bool boolArg = false;
             string trackUri = "", trackUid = "";
-            switch (kind)
+            string sessionId = "", commandId = "";
+            try
             {
-                case ConnectCmd.SeekTo:
-                    if (inner.TryGetProperty("position", out var pos)) seekMs = LongLoose(pos);
-                    else if (inner.TryGetProperty("value", out var val)) seekMs = LongLoose(val);
-                    break;
-                case ConnectCmd.SetShufflingContext:
-                case ConnectCmd.SetRepeatingContext:
-                case ConnectCmd.SetRepeatingTrack:
-                    if (inner.TryGetProperty("value", out var bv) &&
-                        bv.ValueKind is JsonValueKind.True or JsonValueKind.False)
-                        boolArg = bv.GetBoolean();
-                    break;
-                case ConnectCmd.SkipNext:
-                    if (inner.TryGetProperty("track", out var trk) && trk.ValueKind == JsonValueKind.Object)
-                    {
-                        if (trk.TryGetProperty("uri", out var tu)) trackUri = tu.GetString() ?? "";
-                        if (trk.TryGetProperty("uid", out var td)) trackUid = td.GetString() ?? "";
-                    }
-                    break;
+                switch (kind)
+                {
+                    case ConnectCmd.SeekTo:
+                        if (inner.TryGetProperty("position", out var pos)) seekMs = LongLoose(pos);
+                        else if (inner.TryGetProperty("value", out var val)) seekMs = LongLoose(val);
+                        break;
+                    case ConnectCmd.SetShufflingContext:
+                    case ConnectCmd.SetRepeatingContext:
+                    case ConnectCmd.SetRepeatingTrack:
+                        if (inner.TryGetProperty("value", out var bv) &&
+                            bv.ValueKind is JsonValueKind.True or JsonValueKind.False)
+                            boolArg = bv.GetBoolean();
+                        break;
+                    case ConnectCmd.SkipNext:
+                        if (inner.TryGetProperty("track", out var trk) && trk.ValueKind == JsonValueKind.Object)
+                        {
+                            if (trk.TryGetProperty("uri", out var tu) && tu.ValueKind == JsonValueKind.String) trackUri = tu.GetString() ?? "";
+                            if (trk.TryGetProperty("uid", out var td) && td.ValueKind == JsonValueKind.String) trackUid = td.GetString() ?? "";
+                        }
+                        break;
+                }
+
+                if (inner.TryGetProperty("session_id", out var sid) && sid.ValueKind == JsonValueKind.String)
+                    sessionId = sid.GetString() ?? "";
+                else if (inner.TryGetProperty("options", out var options) && options.ValueKind == JsonValueKind.Object
+                         && options.TryGetProperty("session_id", out sid) && sid.ValueKind == JsonValueKind.String)
+                    sessionId = sid.GetString() ?? "";
+
+                if (inner.TryGetProperty("logging_params", out var logging) && logging.ValueKind == JsonValueKind.Object
+                    && logging.TryGetProperty("command_id", out var cid) && cid.ValueKind == JsonValueKind.String)
+                    commandId = cid.GetString() ?? "";
             }
-
-            string sessionId = "";
-            if (inner.TryGetProperty("session_id", out var sid) && sid.ValueKind == JsonValueKind.String)
-                sessionId = sid.GetString() ?? "";
-            else if (inner.TryGetProperty("options", out var options) && options.ValueKind == JsonValueKind.Object
-                     && options.TryGetProperty("session_id", out sid) && sid.ValueKind == JsonValueKind.String)
-                sessionId = sid.GetString() ?? "";
-
-            string commandId = "";
-            if (inner.TryGetProperty("logging_params", out var logging) && logging.ValueKind == JsonValueKind.Object
-                && logging.TryGetProperty("command_id", out var cid) && cid.ValueKind == JsonValueKind.String)
-                commandId = cid.GetString() ?? "";
+            catch { /* known endpoint, odd field — fall through with whatever defaults above were already collected */ }
 
             cmd = new ConnectCommand(kind, endpoint, req.RequestId, messageId, sender, seekMs, boolArg, req.Command,
                 trackUri, trackUid, sessionId, commandId);
-            return kind != ConnectCmd.Unknown;
+            return true;
         }
-        catch { return false; }
+        catch { return false; }   // the envelope itself (JSON, url shape) is structurally unusable
     }
 
-    static ConnectCmd Map(string endpoint) => endpoint switch
+    internal static ConnectCmd Map(string endpoint) => endpoint switch
     {
         "play" => ConnectCmd.Play,
         "pause" => ConnectCmd.Pause,
@@ -115,13 +132,27 @@ public readonly record struct ConnectCommand(
         _ => ConnectCmd.Unknown,
     };
 
-    static int IntLoose(JsonElement element) =>
-        element.ValueKind == JsonValueKind.Number ? element.GetInt32()
-        : int.TryParse(element.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) ? value : 0;
+    // message_id is uint32 ON THE WIRE (up to ~4.29B) and routinely exceeds int.MaxValue — GetInt32() threw for
+    // those, discarding the whole command via the outer catch. Read wide, then clamp; a genuinely non-numeric shape
+    // (a float text token, whatever) falls back to the string parse, and failing that, 0.
+    static int IntLoose(JsonElement element)
+    {
+        if (element.ValueKind == JsonValueKind.Number)
+        {
+            long wide = element.TryGetInt64(out var l) ? l : (long)element.GetDouble();
+            return (int)Math.Clamp(wide, int.MinValue, int.MaxValue);
+        }
+        return int.TryParse(element.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) ? value : 0;
+    }
 
-    static long LongLoose(JsonElement element) =>
-        element.ValueKind == JsonValueKind.Number ? element.GetInt64()
-        : long.TryParse(element.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) ? value : 0;
+    // `position` has been observed as a JSON float (e.g. a phone that serializes ms as a double) — GetInt64() throws
+    // on that shape, so try the integer read first and round a float rather than discarding the whole seek.
+    static long LongLoose(JsonElement element)
+    {
+        if (element.ValueKind == JsonValueKind.Number)
+            return element.TryGetInt64(out var l) ? l : (long)Math.Round(element.GetDouble());
+        return long.TryParse(element.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) ? value : 0;
+    }
 }
 
 /// <summary>
@@ -136,6 +167,7 @@ public sealed class ConnectCommandRouter : IDisposable
     readonly ITransport _transport;
     readonly Func<ConnectCommand, CancellationToken, Task<ConnectCommandOutcome>> _dispatch;
     readonly Func<int, CancellationToken, Task<ConnectCommandOutcome>>? _volumeDispatch;
+    readonly Action<uint>? _onVolumeMessageId;
     readonly WaveeLogger _log;
     readonly IDisposable _requestSub;
     readonly IDisposable _volumeSub;
@@ -160,11 +192,18 @@ public sealed class ConnectCommandRouter : IDisposable
         Func<ConnectCommand, CancellationToken, Task<ConnectCommandOutcome>> dispatch,
         Func<int, CancellationToken, Task<ConnectCommandOutcome>>? volumeDispatch = null,
         WaveeLogger log = default,
-        int capacity = 256)
+        int capacity = 256,
+        // Fires (synchronously, before volumeDispatch is awaited) with the sender's OWN message_id off an inbound
+        // connect/volume MESSAGE — a separate hook rather than widening volumeDispatch's signature, so existing
+        // callers/tests that only care about the plain (volume, ct) shape keep compiling untouched. Wired by the
+        // composition root to attribute the resulting PutState to that message id (findings §9), so the phone that
+        // sent the slider move sees its own id echoed back instead of fighting an unattributed optimistic update.
+        Action<uint>? onVolumeMessageId = null)
     {
         _transport = transport;
         _dispatch = dispatch;
         _volumeDispatch = volumeDispatch;
+        _onVolumeMessageId = onVolumeMessageId;
         _log = log;
         _queue = System.Threading.Channels.Channel.CreateBounded<ConnectWork>(new BoundedChannelOptions(Math.Max(1, capacity))
         {
@@ -184,8 +223,14 @@ public sealed class ConnectCommandRouter : IDisposable
         RequestResult result;
         if (!ConnectCommand.TryParse(request, out var command))
         {
-            result = RequestResult.DeviceDoesNotSupportCommand;
-            _log.Info("connect command unsupported: " + request.MessageIdent);
+            // TryParse still stashes its best-effort Endpoint even on failure (a garbled BODY on a real endpoint,
+            // vs. an endpoint the wire never taught us). Only the latter is truly DeviceDoesNotSupportCommand —
+            // controllers cache that reply per device, so misreporting the former makes one malformed frame turn
+            // off an otherwise-working command for the rest of the session (findings §3).
+            bool knownEndpoint = ConnectCommand.Map(command.Endpoint) != ConnectCmd.Unknown;
+            result = knownEndpoint ? RequestResult.UpstreamError : RequestResult.DeviceDoesNotSupportCommand;
+            _log.Info((knownEndpoint ? "connect command parse failed on known endpoint: " : "connect command unsupported: ")
+                + request.MessageIdent);
         }
         else
         {
@@ -201,8 +246,14 @@ public sealed class ConnectCommandRouter : IDisposable
                         WaveeLogField.Of("sender", Fingerprint(command.SenderDeviceId)),
                     ]);
             }
-            else if (_queue.Writer.TryWrite(ConnectWork.ForCommand(command, Stopwatch.GetTimestamp())))
+            else if (_queue.Writer.TryWrite(ConnectWork.ForCommand(command, Stopwatch.GetTimestamp(), dedupeKey)))
             {
+                // Remembered right here at admission — an exact replay arriving before the worker has drained this
+                // one must still be caught by IsDuplicate above (findings §1's replay window). WorkerAsync forgets
+                // the key on a Failed outcome instead, so a command that goes on to FAIL is not permanently poisoned
+                // as "already seen": the controller's own retry for the same (sender, message_id, endpoint) still
+                // dispatches. ACK semantics are untouched: admission still ACKs Success regardless of how the
+                // handler later resolves.
                 if (dedupeKey.Length > 0) Remember(dedupeKey);
                 result = RequestResult.Success;
                 _log.Event(WaveeLogLevel.Info, "connect.command.received", "Connect command accepted",
@@ -228,12 +279,12 @@ public sealed class ConnectCommandRouter : IDisposable
     void OnVolume(WireEvent wire)
     {
         if (_volumeDispatch is null) return;
-        if (!TryParseSetVolume(wire.Payload, out int volume))
+        if (!TryParseSetVolume(wire.Payload, out int volume, out uint messageId))
         {
             _log.Warn("connect volume MESSAGE had an invalid SetVolumeCommand body");
             return;
         }
-        if (!_queue.Writer.TryWrite(ConnectWork.ForVolume(volume, Stopwatch.GetTimestamp())))
+        if (!_queue.Writer.TryWrite(ConnectWork.ForVolume(volume, messageId, Stopwatch.GetTimestamp())))
             _log.Warn("connect command queue full: inbound volume dropped");
     }
 
@@ -247,6 +298,7 @@ public sealed class ConnectCommandRouter : IDisposable
                 Exception? error = null;
                 try
                 {
+                    if (work.IsVolume && work.VolumeMessageId != 0) _onVolumeMessageId?.Invoke(work.VolumeMessageId);
                     outcome = work.IsVolume
                         ? (_volumeDispatch is null ? ConnectCommandOutcome.NoOp
                             : await _volumeDispatch(work.Volume, _cts.Token).ConfigureAwait(false))
@@ -254,6 +306,13 @@ public sealed class ConnectCommandRouter : IDisposable
                 }
                 catch (OperationCanceledException) when (_cts.IsCancellationRequested) { break; }
                 catch (Exception ex) { outcome = ConnectCommandOutcome.Failed; error = ex; }
+
+                // Admission already Remember()ed the key so a replay racing in before this drains is still caught
+                // (findings §1's replay window). A Failed handler must not leave that Remember() standing, or the
+                // controller's own retry for the same (sender, message_id, endpoint) would be dropped as an "exact
+                // replay" of a command that never actually applied — so undo it here, on the one outcome that means
+                // the command needs to be retriable.
+                if (work.DedupeKey.Length > 0 && outcome == ConnectCommandOutcome.Failed) Forget(work.DedupeKey);
 
                 long durationMs = (long)Stopwatch.GetElapsedTime(work.ReceivedAt).TotalMilliseconds;
                 if (work.IsVolume)
@@ -263,6 +322,7 @@ public sealed class ConnectCommandRouter : IDisposable
                         fields:
                         [
                             WaveeLogField.Of("volume", work.Volume),
+                            WaveeLogField.Of("messageId", work.VolumeMessageId),
                             WaveeLogField.Of("outcome", outcome.ToString()),
                         ]);
                 }
@@ -311,6 +371,13 @@ public sealed class ConnectCommandRouter : IDisposable
         }
     }
 
+    // Undoes admission's Remember() for a command whose handler FAILED — the stale entry left in _seenOrder is
+    // harmless (its own eventual dequeue is a no-op once _seen no longer has the key, same as any pruned entry).
+    void Forget(string key)
+    {
+        lock (_dedupeGate) _seen.Remove(key);
+    }
+
     void PruneSeen(long now)
     {
         while (_seenOrder.TryPeek(out var first) && now - first.At > DedupeTicks)
@@ -320,30 +387,69 @@ public sealed class ConnectCommandRouter : IDisposable
         }
     }
 
+    // Endpoint is part of the key: message_id is a small per-sender counter that a phone recycles across DIFFERENT
+    // endpoints (a fresh set_shuffling_context can land on the same id as an earlier seek_to), and without the
+    // endpoint term that recycled id looked like an exact replay of the unrelated command and got silently dropped.
     static string DedupeKey(in ConnectCommand command) =>
         command.MessageId == 0 || string.IsNullOrEmpty(command.SenderDeviceId)
             ? ""
-            : command.SenderDeviceId + "\n" + command.MessageId.ToString(CultureInfo.InvariantCulture);
+            : command.SenderDeviceId + "\n" + command.MessageId.ToString(CultureInfo.InvariantCulture) + "\n" + command.Endpoint;
 
     static string Fingerprint(string value) =>
         string.IsNullOrEmpty(value) ? "-" : WaveeLogRedaction.HashLike(value);
 
-    internal static bool TryParseSetVolume(ReadOnlySpan<byte> payload, out int volume)
+    /// <summary>SetVolumeCommand field 1 (varint) is the level; field 2 is the nested CommandOptions message whose own
+    /// field 1 (varint) is the sender's message_id (findings §9) — reading it lets an inbound Connect volume
+    /// attribute its resulting PutState the same way a JSON command does, instead of leaving the field blank and
+    /// making the sending phone's slider fight its own un-attributed echo. Scans the WHOLE payload (rather than
+    /// returning the instant field 1 is found, as before) so a message_id that follows the volume field is not
+    /// missed — 24/24 captured bodies had it that way.</summary>
+    internal static bool TryParseSetVolume(ReadOnlySpan<byte> payload, out int volume, out uint messageId)
     {
         volume = 0;
+        messageId = 0;
+        bool haveVolume = false;
         int offset = 0;
         while (offset < payload.Length)
         {
-            if (!TryReadVarint(payload, ref offset, out ulong key)) return false;
+            if (!TryReadVarint(payload, ref offset, out ulong key)) break;
             int field = (int)(key >> 3);
             int wire = (int)(key & 7);
             if (field == 1 && wire == 0)
             {
-                if (!TryReadVarint(payload, ref offset, out ulong raw) || raw > int.MaxValue) return false;
+                if (!TryReadVarint(payload, ref offset, out ulong raw) || raw > int.MaxValue) break;
                 volume = Math.Clamp((int)raw, 0, 65535);
+                haveVolume = true;
+            }
+            else if (field == 2 && wire == 2)
+            {
+                if (!TryReadVarint(payload, ref offset, out ulong length) || length > int.MaxValue || offset + (int)length > payload.Length)
+                    break;
+                int end = offset + (int)length;
+                TryReadNestedMessageId(payload[offset..end], out messageId);
+                offset = end;
+            }
+            else if (!SkipField(payload, ref offset, wire)) break;
+        }
+        return haveVolume;
+    }
+
+    static bool TryReadNestedMessageId(ReadOnlySpan<byte> bytes, out uint messageId)
+    {
+        messageId = 0;
+        int offset = 0;
+        while (offset < bytes.Length)
+        {
+            if (!TryReadVarint(bytes, ref offset, out ulong key)) return false;
+            int field = (int)(key >> 3);
+            int wire = (int)(key & 7);
+            if (field == 1 && wire == 0)
+            {
+                if (!TryReadVarint(bytes, ref offset, out ulong raw)) return false;
+                messageId = unchecked((uint)raw);
                 return true;
             }
-            if (!SkipField(payload, ref offset, wire)) return false;
+            if (!SkipField(bytes, ref offset, wire)) return false;
         }
         return false;
     }
@@ -392,9 +498,11 @@ public sealed class ConnectCommandRouter : IDisposable
         _cts.Dispose();
     }
 
-    readonly record struct ConnectWork(ConnectCommand Command, int Volume, bool IsVolume, long ReceivedAt)
+    // DedupeKey rides along so Remember(...) can happen in WorkerAsync, after the outcome is known, rather than at
+    // admission (findings §1) — "" for volume work, which has no message_id-based dedupe.
+    readonly record struct ConnectWork(ConnectCommand Command, int Volume, uint VolumeMessageId, bool IsVolume, long ReceivedAt, string DedupeKey)
     {
-        public static ConnectWork ForCommand(ConnectCommand command, long at) => new(command, 0, false, at);
-        public static ConnectWork ForVolume(int volume, long at) => new(default, volume, true, at);
+        public static ConnectWork ForCommand(ConnectCommand command, long at, string dedupeKey) => new(command, 0, 0, false, at, dedupeKey);
+        public static ConnectWork ForVolume(int volume, uint messageId, long at) => new(default, volume, messageId, true, at, "");
     }
 }

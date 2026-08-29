@@ -37,9 +37,9 @@ static class PlaylistInlineEdit
     /// (the unified detail hero). It replaced an <c>onMedia</c> axis that went dead with the immersive hero: both arms
     /// of one title have to agree on the FACE for the same reason they have to agree on the rung.</para></summary>
     internal static Element Title(Loadable<DetailModel> full, float width, float titleSize, ushort weight = 600,
-                                  bool displayFace = false, float lineHeight = float.NaN)
-        => Embed.Comp(() => new EditableTitle(full, width, titleSize, weight, displayFace, lineHeight))
-            with { Key = $"pl-edit-title:{(int)width}:{(int)titleSize}:{weight}:{displayFace}:{(int)lineHeight}" };
+                                  bool displayFace = false, float lineHeight = float.NaN, int maxLines = 0)
+        => Embed.Comp(() => new EditableTitle(full, width, titleSize, weight, displayFace, lineHeight, maxLines))
+            with { Key = $"pl-edit-title:{(int)width}:{(int)titleSize}:{weight}:{displayFace}:{(int)lineHeight}:{maxLines}" };
 
     internal static Element Description(Loadable<DetailModel> full, float width, int maxLines, DetailHandlers h)
         => Embed.Comp(() => new EditableDescription(full, width, maxLines, h))
@@ -441,6 +441,7 @@ static class PlaylistInlineEdit
         readonly ushort _weight;
         readonly bool _displayFace;
         readonly float _lineHeight;
+        readonly int _maxLines;
         readonly Signal<string> _draft = new("");
         readonly Signal<bool> _editing = new(false);
         readonly Signal<bool> _hovered = new(false);
@@ -454,8 +455,12 @@ static class PlaylistInlineEdit
         string _titleAtEditStart = "";
 
         public EditableTitle(Loadable<DetailModel> full, float width, float titleSize, ushort weight, bool displayFace,
-                             float lineHeight)
-        { _full = full; _width = width; _titleSize = titleSize; _weight = weight; _displayFace = displayFace; _lineHeight = lineHeight; }
+                             float lineHeight, int maxLines)
+        {
+            _full = full; _width = width; _titleSize = titleSize; _weight = weight; _displayFace = displayFace;
+            _lineHeight = lineHeight;
+            _maxLines = maxLines > 0 ? maxLines : (displayFace ? 2 : 3);
+        }
 
         public override Element Render()
         {
@@ -481,12 +486,11 @@ static class PlaylistInlineEdit
             {
                 // The type ramp's paired line height, handed in by the caller — not a multiple of the size, which
                 // produced a different leading for every title size on the page.
-                return WaveeType.PageHero(m.Title) with
+                return (_displayFace ? WaveeType.DetailHero(m.Title) : WaveeType.PageHero(m.Title)) with
                 {
-                    FontFamily = _displayFace ? "Segoe UI Variable Display" : null,
                     Size = _titleSize, MinSize = 18f, Weight = _weight, Width = _width, LineHeight = _lineHeight,
                     MaxWidth = _width,
-                    Wrap = TextWrap.WrapWholeWords, MaxLines = _displayFace ? 2 : 3, Trim = TextTrim.CharacterEllipsis,
+                    Wrap = TextWrap.WrapWholeWords, MaxLines = _maxLines, Trim = TextTrim.CharacterEllipsis,
                     Color = Tok.TextPrimary,
                 };
             }
@@ -532,12 +536,11 @@ static class PlaylistInlineEdit
                 Enter = new EnterExit(Opacity: 0f, Active: true),
                 Children =
                 [
-                    WaveeType.PageHero(title) with
+                    (_displayFace ? WaveeType.DetailHero(title) : WaveeType.PageHero(title)) with
                     {
-                        FontFamily = _displayFace ? "Segoe UI Variable Display" : null,
                         Size = _titleSize, MinSize = 18f, Weight = _weight, Grow = 1f,
                         LineHeight = _lineHeight,
-                        Wrap = TextWrap.WrapWholeWords, MaxLines = _displayFace ? 2 : 3, Trim = TextTrim.CharacterEllipsis,
+                        Wrap = TextWrap.WrapWholeWords, MaxLines = _maxLines, Trim = TextTrim.CharacterEllipsis,
                         Color = string.IsNullOrWhiteSpace(m.Title) ? Tok.TextTertiary : Tok.TextPrimary,
                     },
                     // Always-mounted pencil — fades via a bound-opacity transition (no discrete pop).

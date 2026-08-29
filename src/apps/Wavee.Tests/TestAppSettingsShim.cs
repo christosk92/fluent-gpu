@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 
 namespace Wavee;
 
@@ -23,6 +23,19 @@ static class WaveeSettings
     public static readonly SettingKey<long> AudioBodyCacheBudgetBytes = new("audio.cache.body.budgetBytes", 32L << 30);
     public static readonly SettingKey<int> AudioBodyCacheBudgetPercent = new("audio.cache.body.budgetPercent", 0);
     public static readonly SettingKey<string> AudioBodyCacheBasePath = new("audio.cache.body.basePath", "");
+    // ── diagnostics — MIRRORS src/apps/Wavee/Platform/AppSettings.cs VERBATIM (same rule as the sidebar keys below).
+    // DeveloperMode is read by the source-included App\DeveloperMode.cs; the default MUST stay false.
+    public static readonly SettingKey<bool> DeveloperMode = new("diag.developerMode", false);
+    public static readonly SettingKey<bool> FpsOverlay = new("diag.fpsOverlay", false);
+    public static readonly SettingKey<bool> DealerArchiveEnabled = new("diag.dealerArchive", false);
+    public static readonly SettingKey<int> TermsAcceptedVersion = new("setup.terms.acceptedVersion", 0);
+    public static readonly SettingKey<bool> PrivateSession = new("session.private", false);
+    public static readonly SettingKey<string> LastAccount = new("session.lastAccount", "");
+    public static readonly SettingKey<bool> NormalizationEnabled = new("playback.normalization", true);
+    public static readonly SettingKey<bool> StartOnLogin = new("app.startOnLogin", false);
+    public static readonly SettingKey<string> LastRunVersion = new("app.lastRunVersion", "");
+    public static readonly SettingKey<long> UpdateLastCheckedMs = new("app.update.lastCheckedMs", 0L);
+    public static readonly SettingKey<string> PendingCrashReport = new("crash.pendingReport", "");
     public static readonly SettingKey<string> LastSeenCrashDumpPath = new("diagnostics.crash.lastDumpPath", "");
     public static readonly SettingKey<long> LastSeenCrashDumpTicksUtc = new("diagnostics.crash.lastDumpTicksUtc", 0L);
 

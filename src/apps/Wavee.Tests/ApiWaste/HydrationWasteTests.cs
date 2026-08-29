@@ -181,6 +181,32 @@ public class HydrationWasteTests
         Assert.Equal(traitPasses, rig.Traits.Calls.Count);
     }
 
+    // Fix 3: an album with NO ©/℗ facet at all (the trait pass answers, but never sets Copyright/ReleaseDate) can
+    // never reach Rich, so a real ledger seals it Exhausted for a day and every later open used to short-circuit
+    // AlbumHydration.ContinueAsync wholesale — its own PlayCount/RowBundle trait step included. StoreLibrarySource's
+    // companion trait ask keeps that bundle alive on a re-open regardless of the seal, WITHOUT doubling the very
+    // first (cold) open's own trait pass.
+    [Fact]
+    public async Task AlbumWithNoPublishingFacet_ReOpenStillAsksForPlayCountAndRowBundle_ButNotTwiceOnTheFirstOpen()
+    {
+        using var rig = Build((_, _) => AlbumResponse(0x01, rows: 1, named: true));
+        // Deliberately does NOT set Copyright/ReleaseDate — the genuine "this release carries no publishing facet" album.
+
+        _ = await rig.Library.GetAlbumAsync(AlbumUri(0x01), HydrationLevel.Rich);
+
+        Assert.Single(rig.Traits.Calls);   // the ladder's own Rich-branch ask — exactly one, on the first open
+        Assert.Equal(HydrationLevel.Open, HydrationLevels.Of(rig.Store.GetAlbum(AlbumUri(0x01))));   // never reaches Rich
+
+        _ = await rig.Library.GetAlbumAsync(AlbumUri(0x01), HydrationLevel.Rich);
+
+        Assert.Equal(1, rig.Http.Calls);            // the catalogue seal still holds — no second AlbumV4 POST
+        Assert.Equal(2, rig.Traits.Calls.Count);     // …but the companion ask fired on the RE-open, not starved by it
+        var (uris, set, surface) = rig.Traits.Calls[1];
+        Assert.Equal(TraitSurface.AlbumOpen, surface);
+        Assert.Equal(TraitSet.RowBundle | TraitSet.PlayCount | TraitSet.Publishing, set);
+        Assert.Contains(AlbumUri(0x01), uris);
+    }
+
     // Gid-only disc rows (how AlbumV4 lands a tracklist the album entity carried no names for) cost exactly ONE extra
     // POST: the repair is a single TrackV4 batch for every unnamed row in the wave, never one request per row.
     [Fact]

@@ -206,8 +206,10 @@ public sealed class SystemMediaControlsBridge : IDisposable
         long ms = (long)Math.Round(seconds * 1000.0);
         long dur = _bridge.DurationMs.Peek();
         ms = dur > 0 ? Math.Clamp(ms, 0, dur) : Math.Max(0, ms);
-        // The OS scrub bar reports one position on release, not a scrub stream — a committed seek.
-        _ = _player.SeekAsync(ms, SeekMode.Accurate);
+        // The OS scrub bar reports one position on release, not a scrub stream — a committed seek. Route through
+        // CommitSeek (not a bare _player.SeekAsync) so the seek latch is armed here too — without it, a scrub from
+        // the lock screen while paused snapped back to the pre-seek position until the next authoritative tick.
+        _bridge.CommitSeek(ms);
     }
 
     public void Dispose()

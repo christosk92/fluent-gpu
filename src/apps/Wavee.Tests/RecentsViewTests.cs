@@ -844,7 +844,7 @@ public class RecentsViewTests
 
     // ── owner display names ───────────────────────────────────────────────────────────────────────────────────────────
 
-    const string RawOwnerId = "31unjfmo3oefvlz36ef3eb6kj5tq";
+    const string RawOwnerId = "31testuser000000000000000000";
 
     [Fact]
     public void OwnerSubtitle_AResolvedProfileNameAlwaysWins()

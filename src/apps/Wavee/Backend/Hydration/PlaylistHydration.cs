@@ -28,13 +28,46 @@ public sealed class PlaylistHydration : IKindHydration
 
     public EntityKind Kind => EntityKind.Playlist;
 
+    /// <summary>The header/baseline rung, THEN a member scan — the same shape <c>CollectionHydration.LevelOf</c> and
+    /// <c>ShowHydration</c>'s residency count use: a container is only as hydrated as its thinnest row. Without this a
+    /// playlist read back Full the instant a baseline landed even when every member was still a gid-only stub (a cold
+    /// restore, or a member that resolved AFTER this playlist's own hydrate ran), so nothing ever asked for it again.
+    /// Reporting Identity here is what makes every subsequent Open re-ask the thin members through the ledger — a
+    /// Reached seal only skips the ladder when the RESIDENT level is already ≥ what was asked, and a Partial one only
+    /// brakes for its own TTL (10 min), so a caller asking for Open keeps re-driving <see cref="ContinueAsync"/> until
+    /// the rows actually resolve. This cannot wedge: per <see cref="HydrationLevels.Of(Playlist?, bool)"/> the ledger
+    /// never TTL-seals a playlist Open (LibrarySync stays the freshness authority for the plane itself), so a member
+    /// scan reporting Identity forever just means the ladder keeps trying forever, not that it gives up.</summary>
     public HydrationLevel LevelOf(string uri)
-        => HydrationLevels.Of(_store.GetPlaylist(uri), _store.HasMembership(uri));
+    {
+        var level = HydrationLevels.Of(_store.GetPlaylist(uri), _store.HasMembership(uri));
+        if (level < HydrationLevel.Open) return level;
+        var members = _store.Membership(uri);
+        for (int i = 0; i < members.Count; i++)
+        {
+            var item = members[i].ItemUri;
+            if (item.Length == 0) continue;
+            HydrationLevel rowLevel = EntityUri.KindOf(item) switch
+            {
+                EntityKind.Track => HydrationLevels.Of(_store.GetTrack(item)),
+                EntityKind.Episode => HydrationLevels.Of(_store.GetEpisode(item)),
+                _ => HydrationLevel.Full,   // a member no row ladder owns cannot hold the container back
+            };
+            // A missing row (never hydrated at all) reads back None here, which is < Identity like any other thin row.
+            if (rowLevel < HydrationLevel.Identity) return HydrationLevel.Identity;
+        }
+        return level;
+    }
 
     /// <summary>The root-list playlists that still need an Open pass before their sidebar rows are authoritative.
     /// A header alone is not enough: without a membership baseline the projected count is only a thin metadata hint and
     /// a cover-less playlist cannot derive its track mosaic. Conversely, <see cref="IStore.HasMembership"/> keeps a
-    /// genuinely empty playlist complete, so it is not fetched again on every login.</summary>
+    /// genuinely empty playlist complete, so it is not fetched again on every login.
+    /// <para>The third clause (<see cref="HydrationLevels.Of(Playlist?, bool)"/> reporting below Identity) exists for a
+    /// header the first two clauses miss entirely: a RESTORED header can carry <c>Name == ""</c> while still having a
+    /// membership baseline (persistence rejoin order, a torn cold-store row) — <c>GetPlaylist</c> is non-null and
+    /// <c>HasMembership</c> is true, so the presence-only test above skipped it forever even though the row is unnamed
+    /// and can never paint a sidebar label. Testing the LEVEL instead of raw presence is what catches that.</para></summary>
     public static IReadOnlyList<string> RootlistOpenPlan(IStore store)
     {
         ArgumentNullException.ThrowIfNull(store);
@@ -45,7 +78,10 @@ public sealed class PlaylistHydration : IKindHydration
         {
             var e = root[i];
             if (e.Kind != 0 || EntityUri.KindOf(e.Uri) != EntityKind.Playlist || !seen.Add(e.Uri)) continue;
-            if (store.GetPlaylist(e.Uri) is null || !store.HasMembership(e.Uri)) result.Add(e.Uri);
+            var p = store.GetPlaylist(e.Uri);
+            bool hasMembership = store.HasMembership(e.Uri);
+            if (p is null || !hasMembership || HydrationLevels.Of(p, hasMembership) < HydrationLevel.Identity)
+                result.Add(e.Uri);
         }
         return result;
     }
@@ -86,6 +122,49 @@ public sealed class PlaylistHydration : IKindHydration
             }
             catch (OperationCanceledException) { throw; }
             catch (Exception ex) { Warn("hydration.playlist.open", "playlist open failed", uri, ex); }
+
+            // ── Open: thin-member repair — ask Identity for every member LevelOf found unnamed ───────────────────────────
+            // PlaylistFetcher's hydrate delegate is ONE-SHOT: it only fires for a cold OpenAsync's full snapshot or for the
+            // uris a diff just ADDED (PlaylistFetcher.HydrateAsync / HydrateUrisAsync). A row that stayed thin from an
+            // earlier pass — a partial batch, a restore that never re-joined persisted rows, a member that resolved after
+            // THIS playlist's own hydrate ran — was never re-asked: LevelOf saw it every time (the scan above) but nothing
+            // acted on what it saw. This closes that gap with the same scan, turned into a blocking Identity ask, paged at
+            // the transport's per-POST ceiling so a 10k-track cold-restored playlist becomes ~34 requests, not one giant one.
+            List<string>? thin = null;
+            {
+                var members0 = _store.Membership(uri);
+                for (int m = 0; m < members0.Count; m++)
+                {
+                    var item = members0[m].ItemUri;
+                    if (item.Length == 0) continue;
+                    HydrationLevel rowLevel = EntityUri.KindOf(item) switch
+                    {
+                        EntityKind.Track => HydrationLevels.Of(_store.GetTrack(item)),
+                        EntityKind.Episode => HydrationLevels.Of(_store.GetEpisode(item)),
+                        _ => HydrationLevel.Full,
+                    };
+                    if (rowLevel < HydrationLevel.Identity) (thin ??= new List<string>()).Add(item);
+                }
+            }
+            if (thin is { Count: > 0 })
+            {
+                // Sub-asks inherit the caller's priority but never its surface (AlbumHydration:54's precedent) — a thin-
+                // member repair is identity work, not a PlaylistOpen trait ask.
+                var sub = new HydrationOptions(HydrationMode.Blocking, opts.Revalidate, TraitSurface.None, opts.Priority, SubAsk: true);
+                try
+                {
+                    for (int start = 0; start < thin.Count; start += Metadata.MetadataChunking.MaxEntitiesPerRequest)
+                    {
+                        int count = Math.Min(Metadata.MetadataChunking.MaxEntitiesPerRequest, thin.Count - start);
+                        await ctx.Hydrator.EnsureManyAsync(thin.GetRange(start, count), HydrationLevel.Identity, sub, ct)
+                            .ConfigureAwait(false);
+                    }
+                    _log.Event(WaveeLogLevel.Debug, "hydration.playlist.members", "thin member identity ask",
+                        fields: [WaveeLogField.Of("uri", uri), WaveeLogField.Of("thin", thin.Count)]);
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex) { Warn("hydration.playlist.members", "thin member identity ask failed", uri, ex); }
+            }
 
             // ── post-step: the members' traits, on the pump ───────────────────────────────────────────────────────────
             // EVERY member, episodes included — that is the whole reason the trait door is addressed by uri rather than

@@ -53,9 +53,8 @@ static class PlaybackRuntimeSetupCard
 
 /// <summary>Owns all setup state + the async provisioning work; shared by the body and the footer. Background tasks
 /// marshal every signal write through <c>post</c> so the UI thread is the only writer.</summary>
-sealed class PlaybackRuntimeSetupModel
+sealed partial class PlaybackRuntimeSetupModel
 {
-    public enum Phase { Offer, FetchingCatalog, Downloading, Verifying, Untrusted, Ready, Failed, Advanced }
     public enum CatalogState { NotFetched, Fetching, Loaded, Failed }
 
     public readonly Signal<Phase> PhaseSig;
@@ -585,21 +584,23 @@ sealed class SetupBody : Component
     const float RuntimeProgressWidth = 412f;
 
     /// <summary>The prototype's catalog phase: one calm status line and the real indeterminate ProgressBar animation,
-    /// with the process architecture visible so the wait explains what is being selected.</summary>
-    internal static Element CatalogWaiting() => Column(
+    /// with the process architecture visible so the wait explains what is being selected. <paramref name="barWidth"/>
+    /// defaults to the standalone dialog's own width — the setup wizard's local-playback page (Work package D) passes
+    /// its own tier-scaled <c>SetupLayout.RuntimeBarWidth</c>/<c>StageInnerWidth</c> instead.</summary>
+    internal static Element CatalogWaiting(float barWidth = RuntimeProgressWidth) => Column(
         Lead(Loc.Get(Strings.Playback.Runtime.CheckingSupport)),
         ProgressMetricRow(
             Loc.Get(Strings.Playback.Runtime.ReachingCatalog),
             RuntimeInformation.ProcessArchitecture.ToString()),
-        ProgressBar.Indeterminate(width: RuntimeProgressWidth));
+        ProgressBar.Indeterminate(width: barWidth));
 
-    internal Element Downloading()
+    internal Element Downloading(float barWidth = RuntimeProgressWidth)
     {
         long received = _m.Received.Value;
         long total = _m.Total.Value;
         Element bar = total > 0
-            ? ProgressBar.Determinate(SetupRuntimePresentation.ProgressFraction(received, total), width: RuntimeProgressWidth)
-            : ProgressBar.Indeterminate(width: RuntimeProgressWidth);
+            ? ProgressBar.Determinate(SetupRuntimePresentation.ProgressFraction(received, total), width: barWidth)
+            : ProgressBar.Indeterminate(width: barWidth);
         string bytes = DownloadBytes(received, total);
         return Column(
             Lead(Loc.Get(Strings.Playback.Runtime.Downloading)),
@@ -611,34 +612,41 @@ sealed class SetupBody : Component
 
     /// <summary>Verification remains indeterminate because the provisioner reports one real Verifying stage, not
     /// invented sub-percentages. The selected catalog entry still lets the page name exactly what is being checked.</summary>
-    internal Element Verifying()
+    internal Element Verifying(float barWidth = RuntimeProgressWidth)
     {
-        var entry = _m.ActiveEntry;
         long total = _m.Total.Value;
-        string version = entry?.SpotifyVersion ?? "—";
-        string arch = entry?.Arch ?? RuntimeInformation.ProcessArchitecture.ToString();
-        string hash = entry is null ? "—" : SetupRuntimePresentation.ShortHash(entry.DllSha256);
-
         return Column(
             Lead(Loc.Get(Strings.Playback.Runtime.Verifying)),
             ProgressMetricRow(
                 Loc.Get(Strings.Playback.Runtime.VerifyingCaption),
                 total > 0 ? $"{total / 1_000_000.0:0.0} MB" : "—"),
-            ProgressBar.Indeterminate(width: RuntimeProgressWidth),
-            new BoxEl
-            {
-                Direction = 1, Gap = Spacing.XS,
-                Padding = Edges4.All(Spacing.S),
-                Fill = Tok.FillLayerAlt,
-                Corners = CornerRadius4.All(Radii.Control),
-                BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
-                Children =
-                [
-                    RuntimeDetailRow(Loc.Get(Strings.Playback.Runtime.DetailVersion), version),
-                    RuntimeDetailRow(Loc.Get(Strings.Playback.Runtime.DetailArch), arch),
-                    RuntimeDetailRow(Loc.Get(Strings.Playback.Runtime.DetailSha256), hash),
-                ],
-            });
+            ProgressBar.Indeterminate(width: barWidth),
+            VerifyDetailBox());
+    }
+
+    /// <summary>The version/arch/SHA-256 fact box promoted out of <see cref="Verifying"/> so the setup wizard's
+    /// Untrusted facet (which shows this SAME box under a different caption, without the lead/metric-row/bar above
+    /// it) can reuse it verbatim instead of re-deriving the same three fields.</summary>
+    internal Element VerifyDetailBox()
+    {
+        var entry = _m.ActiveEntry;
+        string version = entry?.SpotifyVersion ?? "—";
+        string arch = entry?.Arch ?? RuntimeInformation.ProcessArchitecture.ToString();
+        string hash = entry is null ? "—" : SetupRuntimePresentation.ShortHash(entry.DllSha256);
+        return new BoxEl
+        {
+            Direction = 1, Gap = Spacing.XS,
+            Padding = Edges4.All(Spacing.S),
+            Fill = Tok.FillLayerAlt,
+            Corners = CornerRadius4.All(Radii.Control),
+            BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
+            Children =
+            [
+                RuntimeDetailRow(Loc.Get(Strings.Playback.Runtime.DetailVersion), version),
+                RuntimeDetailRow(Loc.Get(Strings.Playback.Runtime.DetailArch), arch),
+                RuntimeDetailRow(Loc.Get(Strings.Playback.Runtime.DetailSha256), hash),
+            ],
+        };
     }
 
     static Element ProgressMetricRow(string label, string value) => new BoxEl
@@ -666,57 +674,61 @@ sealed class SetupBody : Component
 
     internal Element Ready(PlaybackRuntimeStatus status, IOverlayService overlay)
     {
-        string sig = status.SignatureTrust switch
-        {
-            SignatureTrust.Trusted => "Verified",
-            SignatureTrust.Untrusted => "Not trusted (loaded by your choice)",
-            _ => "Unknown",
-        };
-        var kids = new List<Element>
-        {
-            new BoxEl
-            {
-                Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center,
-                Children =
-                [
-                    InfoBadge.Icon(InfoBadgeSeverity.Success),
-                    new TextEl(Loc.Get(Strings.Playback.Runtime.Ready)) { Size = 14f, Weight = 600, Color = Tok.TextPrimary },
-                ],
-            },
-        };
+        var kids = new List<Element> { ReadyBadge() };
         if (_m.UpToDate.Value)
             kids.Add(Body(Loc.Get(Strings.Playback.Runtime.UpToDate)));
-        kids.Add(new BoxEl
-        {
-            Direction = 1, Gap = 6f, Padding = Edges4.All(12f),
-            Fill = Tok.FillLayerAlt, Corners = CornerRadius4.All(Radii.Control),
-            BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
-            Children =
-            [
-                RuntimeDetailRow(Loc.Get(Strings.Playback.Runtime.DetailVersion), status.SpotifyVersion),
-                RuntimeDetailRow(Loc.Get(Strings.Playback.Runtime.DetailArch), status.Arch?.ToString()),
-                SignatureRow(status, overlay),
-                RuntimeDetailRow(Loc.Get(Strings.Playback.Runtime.DetailLocation), status.RuntimePath),
-            ],
-        });
-        kids.Add(new BoxEl
-        {
-            Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center,
-            Children =
-            [
-                HyperlinkButton.Create(Loc.Get(Strings.Playback.Runtime.Replace), _m.ShowAdvanced),
-                HyperlinkButton.Create(Loc.Get(Strings.Playback.Runtime.Remove), _m.Remove),
-            ],
-        });
+        kids.Add(ReadyDetailBox(status, overlay));
+        kids.Add(ReadyLinks());
         return new BoxEl { Direction = 1, Gap = Spacing.M, Children = kids.ToArray() };
     }
 
-    internal static Element RuntimeDetailRow(string label, string? value) => new BoxEl
+    /// <summary>The "✓ Ready" badge row, promoted out of <see cref="Ready"/> so the setup wizard's stage panel can
+    /// show it standalone (its own <c>ReadyDetailBox</c>/<c>ReadyLinks</c> sit in the wizard's decision column
+    /// instead, per the stage/decision split).</summary>
+    internal static Element ReadyBadge() => new BoxEl
     {
         Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center,
         Children =
         [
-            new TextEl(label) { Size = 12f, Color = Tok.TextSecondary, Width = 92f, Shrink = 0f },
+            InfoBadge.Icon(InfoBadgeSeverity.Success),
+            new TextEl(Loc.Get(Strings.Playback.Runtime.Ready)) { Size = 14f, Weight = 600, Color = Tok.TextPrimary },
+        ],
+    };
+
+    /// <summary>The Version/Arch/Signature/Location fact box, promoted out of <see cref="Ready"/>.
+    /// <paramref name="labelWidth"/> defaults to the standalone dialog's own 92-DIP label lane; the setup wizard's
+    /// narrower 296-DIP stage panel passes a tighter one.</summary>
+    internal Element ReadyDetailBox(PlaybackRuntimeStatus status, IOverlayService overlay, float labelWidth = 92f) => new BoxEl
+    {
+        Direction = 1, Gap = 6f, Padding = Edges4.All(12f),
+        Fill = Tok.FillLayerAlt, Corners = CornerRadius4.All(Radii.Control),
+        BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
+        Children =
+        [
+            RuntimeDetailRow(Loc.Get(Strings.Playback.Runtime.DetailVersion), status.SpotifyVersion, labelWidth),
+            RuntimeDetailRow(Loc.Get(Strings.Playback.Runtime.DetailArch), status.Arch?.ToString(), labelWidth),
+            SignatureRow(status, overlay, labelWidth),
+            RuntimeDetailRow(Loc.Get(Strings.Playback.Runtime.DetailLocation), status.RuntimePath, labelWidth),
+        ],
+    };
+
+    /// <summary>The Replace/Remove link row, promoted out of <see cref="Ready"/>.</summary>
+    internal Element ReadyLinks() => new BoxEl
+    {
+        Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center,
+        Children =
+        [
+            HyperlinkButton.Create(Loc.Get(Strings.Playback.Runtime.Replace), _m.ShowAdvanced),
+            HyperlinkButton.Create(Loc.Get(Strings.Playback.Runtime.Remove), _m.Remove),
+        ],
+    };
+
+    internal static Element RuntimeDetailRow(string label, string? value, float labelWidth = 92f) => new BoxEl
+    {
+        Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center,
+        Children =
+        [
+            new TextEl(label) { Size = 12f, Color = Tok.TextSecondary, Width = labelWidth, Shrink = 0f },
             new TextEl(value ?? "—")
                 { Size = 12f, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, Grow = 1f, MinWidth = 0f },
         ],
@@ -727,12 +739,12 @@ sealed class SetupBody : Component
         Loc.Get(Strings.Playback.Runtime.Missing),
         _m.Error.Value ?? Loc.Get(Strings.Playback.Runtime.NoPack));
 
-    internal Element SignatureRow(PlaybackRuntimeStatus status, IOverlayService overlay)
+    internal Element SignatureRow(PlaybackRuntimeStatus status, IOverlayService overlay, float labelWidth = 92f)
     {
         var kids = new List<Element>(3)
         {
             new TextEl(Loc.Get(Strings.Playback.Runtime.DetailSignature))
-                { Size = 12f, Color = Tok.TextSecondary, Width = 92f, Shrink = 0f },
+                { Size = 12f, Color = Tok.TextSecondary, Width = labelWidth, Shrink = 0f },
             new TextEl(SignatureSummary(status))
                 { Size = 12f, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, Grow = 1f },
         };
@@ -848,18 +860,8 @@ sealed class SetupBody : Component
                 kids.Add(BusyRow(Loc.Get(Strings.Playback.Runtime.CheckingSupport), null));
                 break;
             case PlaybackRuntimeSetupModel.CatalogState.Loaded when _m.SupportedPacks.Count > 0:
-            {
-                var packs = _m.SupportedPacks;
-                var labels = new string[packs.Count];
-                for (int i = 0; i < packs.Count; i++)
-                {
-                    labels[i] = $"Spotify {packs[i].SpotifyVersion} · {packs[i].Arch}";
-                    if (i == 0) labels[i] += $"  ({Loc.Get(Strings.Playback.Runtime.Recommended)})";
-                }
-                kids.Add(RadioButtons.Create(labels, _m.SelectedPackIndex,
-                    header: Loc.Get(Strings.Playback.Runtime.ChooseVersion)));
+                kids.Add(VersionPicker(Loc.Get(Strings.Playback.Runtime.ChooseVersion)));
                 break;
-            }
             case PlaybackRuntimeSetupModel.CatalogState.Loaded:
                 kids.Add(Body(Loc.Get(Strings.Playback.Runtime.NoPack)));
                 break;
@@ -869,16 +871,40 @@ sealed class SetupBody : Component
         }
 
         kids.Add(new BoxEl { Height = 1f, Fill = Tok.StrokeCardDefault, Margin = new Edges4(0, 4f, 0, 4f) });
-        kids.Add(SettingRow(Icons.Folder,
-            Loc.Get(Strings.Playback.Runtime.InstallFromFolder),
-            Loc.Get(Strings.Playback.Runtime.InstallFromFolderCaption),
-            _m.PickFolder));
-        kids.Add(SettingRow(Icons.MusicNote,
-            Loc.Get(Strings.Playback.Runtime.UseInstalled),
-            Loc.Get(Strings.Playback.Runtime.UseInstalledCaption),
-            _m.UseInstalled));
+        kids.AddRange(LocalSourceRows());
         return new BoxEl { Direction = 1, Gap = Spacing.S, Children = kids.ToArray() };
     }
+
+    /// <summary>The RadioButtons version list, promoted out of <see cref="Advanced"/> so the setup wizard's own
+    /// Advanced facet (which wraps this in its own <c>ScrollView</c> inside a 480-DIP decision column, with no
+    /// header — the page already shows "Choose a version" as its own title) can reuse the exact same label
+    /// formatting/recommended-tag/selection-signal wiring. <paramref name="header"/> null omits the RadioButtons
+    /// group header entirely.</summary>
+    internal Element VersionPicker(string? header)
+    {
+        var packs = _m.SupportedPacks;
+        var labels = new string[packs.Count];
+        for (int i = 0; i < packs.Count; i++)
+        {
+            labels[i] = $"Spotify {packs[i].SpotifyVersion} · {packs[i].Arch}";
+            if (i == 0) labels[i] += $"  ({Loc.Get(Strings.Playback.Runtime.Recommended)})";
+        }
+        return RadioButtons.Create(labels, _m.SelectedPackIndex, header: header);
+    }
+
+    /// <summary>The two offline-fallback rows ("Choose a Spotify.dll…" / "Use installed Spotify"), promoted out of
+    /// <see cref="Advanced"/>.</summary>
+    internal Element[] LocalSourceRows() =>
+    [
+        SettingRow(Icons.Folder,
+            Loc.Get(Strings.Playback.Runtime.InstallFromFolder),
+            Loc.Get(Strings.Playback.Runtime.InstallFromFolderCaption),
+            _m.PickFolder),
+        SettingRow(Icons.MusicNote,
+            Loc.Get(Strings.Playback.Runtime.UseInstalled),
+            Loc.Get(Strings.Playback.Runtime.UseInstalledCaption),
+            _m.UseInstalled),
+    ];
 
     /// <summary>A clickable settings-card row: leading glyph, title + caption stack, trailing chevron — the
     /// ProfileMenu.MenuRow chrome (hover/pressed fills) + the LibraryPage two-line stack.</summary>

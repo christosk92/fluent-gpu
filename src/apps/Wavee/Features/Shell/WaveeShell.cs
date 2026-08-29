@@ -327,8 +327,6 @@ sealed class WaveeShell : Component
         _historyStore.LoadFromDisk();
 
         _historyStore.Add(_route.Peek());   // record this session's first visit
-        if (_historyStore.Entries.Count == 1)   // only seed fake data on a fresh install (nothing loaded from disk)
-            SeedFakeHistory();
     }
 
     void RestorePinnedWorkspace()
@@ -453,38 +451,6 @@ sealed class WaveeShell : Component
             presented ? 1f : 0f,
             ExpandedHitTestVisible: !presented,
             RailHitTestVisible: presented);
-    }
-
-    void SeedFakeHistory()
-    {
-        var now = DateTime.Now;
-        void At(Route r, int daysAgo, int hour, int min)
-            => _historyStore.AddAt(r, now.Date.AddDays(-daysAgo).AddHours(hour).AddMinutes(min));
-
-        // Earlier (5-7 days ago)
-        At(new Route("artists"),                     7, 14, 23);
-        At(new Route("albums"),                      7, 14, 45);
-        At(new Route("pl:local:1", "Deep Focus"),    6,  9, 30);
-        At(new Route("search", "Daft Punk"),         5, 20, 12);
-        At(new Route("liked"),                       5, 18,  5);
-        // This week (2-3 days ago)
-        At(new Route("podcasts"),                    3,  8, 45);
-        At(new Route("pl:local:2", "Morning Run"),   3,  7, 15);
-        At(new Route("search", "Taylor Swift"),      2, 16, 30);
-        At(new Route("home"),                        2, 16, 35);
-        At(new Route("artists"),                     2, 16, 40);
-        At(new Route("albums"),                      2, 17,  0);
-        // Yesterday
-        At(new Route("pl:local:3", "Chill Vibes"),   1, 10, 20);
-        At(new Route("liked"),                       1, 11,  5);
-        At(new Route("search", "Radiohead"),         1, 14, 33);
-        At(new Route("home"),                        1, 19,  0);
-        At(new Route("podcasts"),                    1, 21, 10);
-        // Today
-        At(new Route("albums"),                      0,  9, 15);
-        At(new Route("pl:local:1", "Deep Focus"),    0,  9, 30);
-        At(new Route("artists"),                     0, 10,  0);
-        At(new Route("search", "Stromae"),           0, 10, 20);
     }
 
     // widthUserSet is the DRAG-COMMIT edge only: it pins the width as a preference so the responsive tier ladder stops
@@ -646,6 +612,25 @@ sealed class WaveeShell : Component
         });
         // Best-effort session flush on shell unmount. Process-exit Flush lives in Program.cs.
         UseEffect(() => (Action?)(() => _session.Flush()), DepKey.Empty);
+        // The crash notice. A previous run that died wrote the report path into settings; the shell is the first
+        // surface that can TELL anyone, so it raises one warning toast on mount and clears the setting immediately —
+        // the notice is about the LAST run, so it must not survive into the next one whether or not it was read.
+        UseEffect(() =>
+        {
+            if (_settings.Get(WaveeSettings.PendingCrashReport) is { Length: > 0 } report)
+            {
+                _settings.Set(WaveeSettings.PendingCrashReport, "");
+                string folder = Path.GetDirectoryName(report) ?? SettingsShared.AppDataRoot;
+                Toast.Show(Loc.Get(Strings.Common.CrashLastRun), new ToastOptions
+                {
+                    Severity = InfoBarSeverity.Warning,
+                    DurationMs = 0f,                   // sticky: a crash report the user never saw is not a transient
+                    ActionLabel = Loc.Get(Strings.Common.OpenReportFolder),
+                    OnAction = () => SettingsShared.OpenFolder(folder),
+                    DedupeKey = "crash.pendingReport",
+                });
+            }
+        }, DepKey.Empty);
         // Mouse side buttons / keyboard Back-Forward keys arrive as an OS COMMAND (WM_APPCOMMAND), not as a click at a
         // position, so they cannot be an Accelerator box like Alt+Left/Right — they come in through the PAL seam and land
         // on the same Back()/Forward() the chord boxes use. Subscribed once for the shell's lifetime.
@@ -1405,6 +1390,12 @@ sealed class WaveeShell : Component
             Embed.Comp(() => new Wavee.Features.Video.InWindowVideoPip { Settings = _settings }),
             Embed.Comp(() => new Wavee.Features.Video.VideoPlacementHost { Settings = _settings }),
             videoFullscreenLayer,
+            // The setup wizard's shell-side scrim (work package I) — after every full-bleed content layer above (so
+            // it covers PiP too, per videoFullscreenLayer's own remarks). This whole ZStack becomes OverlayHost's
+            // Child (OverlayHost.Create(shellWithOverlays) below), and the host paints its own popups — including
+            // the wizard's plate itself — ON TOP of that Child, so living inside it (however late) still keeps this
+            // scrim under the wizard.
+            Embed.Comp(() => new SetupCoverScrim()),
             DragPreviewLayer.Of(WaveeResourceDrag.Preview)) with { Grow = 1f };
 
         return Ctx.Provide(ShellUi.Slot, _shellUi,
@@ -1691,7 +1682,11 @@ sealed class WaveeShell : Component
     }
 
     /// <summary>Compose the shell's opaque nav key. Entity verbs arrive as <c>route=album&amp;arg=spotify:album:…</c>
-    /// and become <c>album:spotify:album:…</c>; a already-full key is passed through.</summary>
+    /// and become <c>album:spotify:album:…</c>; a already-full key is passed through.
+    ///
+    /// <para>A deep link is UNTRUSTED input — it arrives from the OS, a browser, another app — so the composed key is
+    /// checked against <see cref="ShellRoutes"/> before it can become a tab. Without that, a typo'd or hostile verb
+    /// opened a real tab on the not-found page and wrote it into the persisted history log.</para></summary>
     void GoDeepLinkOpen(string route, string arg)
     {
         string key = route;
@@ -1701,6 +1696,19 @@ sealed class WaveeShell : Component
         {
             key = route + ":" + a;
             a = null;   // URI lives in the key; Arg is the display name, which a deep link does not carry
+        }
+        if (!ShellRoutes.IsKnown(key))
+        {
+            WaveeLog.Instance.Warn("nav", "deeplink.route.unknown: " + key);
+            return;
+        }
+        // The developer surfaces are not part of the app's public verb map: they are reachable from Settings once the
+        // user has turned developer mode on, and a link from outside the app must not be what turns them on.
+        if ((DeveloperMode.IsDeveloperRoute(key) || key == PlaybackRuntimeDiagnosticsPage.Route)
+            && !DeveloperMode.Enabled.Peek())
+        {
+            WaveeLog.Instance.Warn("nav", "deeplink.route.developerOnly: " + key);
+            return;
         }
         GoNav(key, a);
     }
@@ -2158,6 +2166,34 @@ sealed class ShellNarrowDrawerScrim : Component
         {
             Grow = 1f, Fill = ColorF.FromRgba(0, 0, 0, 0x33), Opacity = target,
             HitTestVisible = open, OnClick = () => _open.Value = false,
+        };
+    }
+}
+
+/// <summary>The shell's half of the setup wizard's scrim (work package I — see <see cref="SetupSession.Covering"/>
+/// and <c>SetupLayout.CoverFor</c>). The engine's own popup scrim only ever paints for the BARE pre-auth mount
+/// (<c>SetupDialog.Open</c> sets <c>PopupOptions.ScrimVisual = bare</c>); post-auth the shell paints this instead,
+/// because only the shell knows whether the current setup page wants an ordinary dim (<see cref="SetupCover.Dim"/>)
+/// or a lifted, live-preview look (<see cref="SetupCover.Live"/> — Appearance/Sidebar, where the wizard's own
+/// promise is "this window IS the preview"). No ctor args — always mounted, reading <see cref="SetupSession.Covering"/>
+/// itself instead of taking a signal in, since (unlike <see cref="ShellNarrowDrawerScrim"/>'s per-shell drawer state)
+/// this one static signal is shared by every mount — modelled on <see cref="ShellNarrowDrawerScrim"/> down to the
+/// cross-fade idiom.</summary>
+sealed class SetupCoverScrim : Component
+{
+    public override Element Render()
+    {
+        bool dim = SetupSession.Covering.Value == SetupCover.Dim;
+        var mounted = UseRef(false);
+        float ms = Motion.ReducedMotion ? 0f : WaveeMotion.Standard;
+        float target = dim ? 1f : 0f;
+        UseTransition(AnimChannel.Opacity, mounted.Value ? 1f - target : target, target,
+            ms, Easing.Linear, dim);
+        mounted.Value = true;
+        return new BoxEl
+        {
+            Grow = 1f, Fill = Prop.Of(() => Tok.FillSmoke), Opacity = target,
+            HitTestVisible = false,
         };
     }
 }

@@ -1,17 +1,21 @@
-using System;
+using System.Collections.Generic;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Localization;
 using FluentGpu.Signals;
+using Wavee.Backend.Audio;
 using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
 
-/// <summary>Page 8 · Done (<c>data-step="8"</c>) — the second Zune bookend. The summary is the normal state; the
-/// applying pane remains as an honest fallback for a restored in-flight session, but opening Wavee never waits on it.
-/// Every required choice was persisted on its own page, and background sidebar/library/playback work continues behind
-/// the shell, so <see cref="SetupSession.Primary"/> completes and closes synchronously.</summary>
+/// <summary>Page 8 · Done (<c>data-step="8"</c>) — the second Zune bookend, and now the ONLY body it has. The old
+/// "Applying" pane (a step list gated on <c>SetupSession.Apply</c>, which in practice never leaves <c>Idle</c>
+/// before jumping straight to <c>Done</c> — see <c>SetupSession.PrimaryDone</c>) is gone. Every required choice was
+/// persisted on its own page, and background sidebar/library/playback work continues behind the shell regardless of
+/// what this page shows, so the summary — kicker, headline, lead, the six confirmation chips, fine print — is simply
+/// always what's on screen. The stage-column (or, narrower than Wide, chip-adjacent) checklist reports the SAME real
+/// observables honestly (<see cref="SetupDoneSteps"/>) instead of a synthetic four-stage apply counter.</summary>
 sealed class SetupDonePage : Component
 {
     public override Element Render()
@@ -21,9 +25,21 @@ sealed class SetupDonePage : Component
         var settings = svc?.Settings;
         var bridge = UseContext(PlaybackBridge.Slot);
         var viewport = UseContextSignal(Viewport.Size);
-        var applyState = session?.Apply.Value ?? SetupApplyState.Idle;   // subscribe → re-render on Idle→Running→Done
-        bool applying = applyState != SetupApplyState.Idle;
-        var failedSig = UseSignal(false);   // never flips true today — see SetupStepList's own doc comment
+        var post = UsePost();
+
+        // Library sync idleness: no real sync service at all counts as already idle (nothing to wait for);
+        // otherwise wait — once — for the one real signal that means "caught up".
+        var libraryIdle = UseSignal(svc?.RealSync is null);
+        UseEffect(() =>
+        {
+            if (svc?.RealSync is { } sync && !libraryIdle.Peek())
+                sync.WaitForIdleAsync().ContinueWith(_ => post(() => libraryIdle.Value = true));
+            return null;
+        }, default);
+
+        var outcome = bridge?.RuntimeStatus.Value.Outcome ?? ProvisioningOutcome.NeverAttempted;   // subscribes
+        bool runtimeDeclined = session?.RuntimeDeclined ?? false;
+        var stepStates = SetupDoneSteps.Compute(svc?.RealSync is not null, libraryIdle.Value, runtimeDeclined, outcome);
 
         float plateW = SetupLayout.PlateWidth(viewport.Value.Width);
         var tierSig = UseSignal(SetupLayout.NominalTierFor(plateW));
@@ -35,21 +51,37 @@ sealed class SetupDonePage : Component
         }, plateW);
         bool wide = SetupLayout.ShowsHero(tierSig.Value);
 
-        Element pane = applying
-            ? ApplyingPane(session, failedSig)
-            : SummaryPane(settings, session, bridge, wide);
-        pane = pane with
+        var stepRows = new (string Label, SetupStepState State)[]
         {
-            Key = "done:" + (applying ? "applying" : "summary"),
+            (Loc.Get(Strings.Setup.Done.StepSettings), stepStates[0]),
+            (Loc.Get(Strings.Setup.Done.StepSidebar), stepStates[1]),
+            (Loc.Get(Strings.Setup.Done.StepLibrary), stepStates[2]),
+            (Loc.Get(Strings.Setup.Done.StepRuntime), stepStates[3]),
+        };
+
+        Element pane = SummaryPane(settings, session, bridge, wide, wide ? null : stepRows) with
+        {
+            Key = "done:summary",
             Enter = new EnterExit(Dy: 6f, Opacity: 0f, Active: true),
             Exit = new EnterExit(Dy: -4f, Opacity: 0f, Active: true),
         };
 
-        return SetupPageHost.Frame(SetupPage.Done, "", "", pane, pinnedHeader: false);
+        Element? stage = wide
+            ? SetupStage.Column(
+                SetupStage.Rail(SetupPage.Done, 220f),
+                SetupStepList.Column(stepRows),
+                SetupStage.Spacer(),
+                SetupStage.Caption(Loc.Get(Strings.Setup.Done.StageCaptionTitle), Loc.Get(Strings.Setup.Done.StageCaptionSub)))
+            : null;
+
+        return SetupPageHost.Frame(SetupPage.Done, "", "", pane, pinnedHeader: false, stage: stage, scrollBody: false);
     }
 
-    // ── Summary — the Zune bookend: kicker, "You're **in**." (mixed weight), a lead, then the chip row. ────────────
-    static Element SummaryPane(IAppSettings? settings, SetupSession? session, PlaybackBridge? bridge, bool wide)
+    // ── Summary — the Zune bookend: kicker, "You're **in**." (mixed weight), a lead, the chip row, fine print. ───────
+    // `narrowSteps` is non-null only below Wide (no stage column to host the checklist), appended right under the
+    // chips so nothing becomes unreachable once the stage drops.
+    static Element SummaryPane(IAppSettings? settings, SetupSession? session, PlaybackBridge? bridge, bool wide,
+        (string Label, SetupStepState State)[]? narrowSteps)
     {
         System.Func<TextSpan[], SpanTextEl> headlineBuilder = wide ? SetupType.Display : SetupType.Small;
 
@@ -69,22 +101,27 @@ sealed class SetupDonePage : Component
             new TextSpan(suffix),
         ]) with { MaxWidth = 480f };
 
+        var children = new List<Element>
+        {
+            new TextEl(Loc.Get(Strings.Setup.Complete))
+            {
+                Size = 11f, Weight = 600, CharSpacing = WaveeType.EyebrowTracking, Color = Tok.AccentTextPrimary,
+                Margin = new Edges4(0f, 0f, 0f, 14f),
+            },
+            headline,
+            SetupRows.Lead(Loc.Get(Strings.Setup.Done.Lead)) with { MaxWidth = 480f, Margin = new Edges4(0f, 0f, 0f, 18f) },
+            new BoxEl { Direction = 0, Wrap = true, Gap = Spacing.S, Children = BuildChips(settings, session, bridge) },
+        };
+
+        if (narrowSteps is { Length: > 0 })
+            children.Add(new BoxEl { Margin = new Edges4(14f, 0f, 0f, 0f), Children = [SetupStepList.Column(narrowSteps)] });
+
+        children.Add(SetupCompact.FinePrint(Loc.Get(Strings.Setup.Done.Fine)) with { Margin = new Edges4(14f, 0f, 0f, 0f) });
+
         return new BoxEl
         {
             Direction = 1, Grow = 1f, Shrink = 1f, MinHeight = 0f, Justify = FlexJustify.Center,
-            Children =
-            [
-                new TextEl(Loc.Get(Strings.Setup.Complete))
-                {
-                    Size = 11f, Weight = 600, CharSpacing = WaveeType.EyebrowTracking, Color = Tok.AccentTextPrimary,
-                    Margin = new Edges4(0f, 0f, 0f, 14f),
-                },
-                headline,
-                SetupRows.Lead(Loc.Get(Strings.Setup.Done.Lead)) with { MaxWidth = 480f, Margin = new Edges4(0f, 0f, 0f, 18f) },
-                new BoxEl { Direction = 0, Wrap = true, Gap = Spacing.S, Children = BuildChips(settings, session, bridge) },
-                new TextEl(Loc.Get(Strings.Setup.Done.Fine))
-                    { Size = 11.5f, LineHeight = 17f, Color = Tok.TextTertiary, Wrap = TextWrap.Wrap, Margin = new Edges4(14f, 0f, 0f, 0f) },
-            ],
+            Children = children.ToArray(),
         };
     }
 
@@ -136,42 +173,4 @@ sealed class SetupDonePage : Component
             new TextEl(label) { Size = 12.5f, Color = Tok.TextSecondary },
         ],
     };
-
-    // ── Applying — the same Zune kicker/headline treatment, then the SetupStepList checklist. ───────────────────────
-    static Element ApplyingPane(SetupSession? session, Signal<bool> failed)
-    {
-        Element headline = SetupType.Small(
-        [
-            new TextSpan(Loc.Get(Strings.Setup.Done.ApplyingHeadlinePrefix)),
-            new TextSpan(Loc.Get(Strings.Setup.Done.ApplyingHeadlineBold), Weight: 600),
-            new TextSpan("."),
-        ]);
-
-        Element steps = session is not null
-            ? SetupStepList.Column(session.ApplyStage, failed,
-              [
-                  (0, Loc.Get(Strings.Setup.Done.StepSettings)),
-                  (1, Loc.Get(Strings.Setup.Done.StepSidebar)),
-                  (2, Loc.Get(Strings.Setup.Done.StepLibrary)),
-                  (3, Loc.Get(Strings.Setup.Done.StepRuntime)),
-              ])
-            : new BoxEl();
-
-        return new BoxEl
-        {
-            Direction = 1, Gap = Spacing.M,
-            Children =
-            [
-                new TextEl(Loc.Get(Strings.Setup.Done.ApplyingKicker))
-                {
-                    Size = 11f, Weight = 600, CharSpacing = WaveeType.EyebrowTracking, Color = Tok.AccentTextPrimary,
-                    Margin = new Edges4(0f, 0f, 0f, 14f),
-                },
-                headline,
-                new BoxEl { Margin = new Edges4(18f, 0f, 0f, 0f), Children = [steps] },
-                new TextEl(Loc.Get(Strings.Setup.Done.ApplyingFine))
-                    { Size = 11.5f, LineHeight = 17f, Color = Tok.TextTertiary, Wrap = TextWrap.Wrap, Margin = new Edges4(16f, 0f, 0f, 0f) },
-            ],
-        };
-    }
 }

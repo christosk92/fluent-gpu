@@ -402,7 +402,7 @@ sealed class ArtistPopular : Component
         var trail = new Element[showDuration ? 2 : 1];
         trail[0] = TrackRow.Heart(st.Saved, onLike, classic: classic);
         if (showDuration)
-            trail[1] = new TextEl(DetailFormat.TrackTime(t.DurationMs))
+            trail[1] = new TextEl(DetailFormat.DurationCell(t.DurationMs))
             { Size = 13f, Color = classicNow ? Tok.AccentTextPrimary : Tok.TextSecondary };
 
         var rowChildren = new Element[showArtwork ? 4 : 3];

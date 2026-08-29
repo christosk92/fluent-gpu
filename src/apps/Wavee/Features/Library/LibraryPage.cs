@@ -1154,7 +1154,7 @@ sealed class LibraryDetailPane : Component
                         Children =
                         [
                             new TextEl(e.Title) { Size = 14f, LineHeight = 20f, Weight = 600, Color = Tok.TextPrimary, MaxLines = 2, Wrap = TextWrap.Wrap, Trim = TextTrim.CharacterEllipsis },
-                            new TextEl(DetailFormat.TrackTime(e.DurationMs)) { Size = 12f, LineHeight = 16f, Color = Tok.TextTertiary },
+                            new TextEl(DetailFormat.DurationCell(e.DurationMs)) { Size = 12f, LineHeight = 16f, Color = Tok.TextTertiary },
                         ] },
                 ],
             }.Interactive(Interaction.Subtle);

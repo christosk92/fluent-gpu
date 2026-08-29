@@ -132,7 +132,14 @@ static class StoreEntityMerge
             // Title == Uri is the synthetic placeholder every thin writer seeds — treat it as missing so a resolved
             // name can never be blanked by a cluster/library echo (lifted from the old MergeClusterTrack).
             Title = TitleMissing(incoming.Title, incoming.Uri) ? current.Title : incoming.Title,
-            Artists = Has(incoming.Artists) ? incoming.Artists : current.Artists,
+            // Name-aware, not blanket-Has: a lean TrackV4 upsert carries uri-only ArtistRefs (Name==""), and Has() alone
+            // would let that thin row clobber names a richer earlier write already resolved. Same discipline as
+            // MergeNamedByUri (album cards / discography stubs) — a named incoming artist still replaces, so a real
+            // featured-artist correction (or a name fix) lands; only the uri-only stub is protected against.
+            Artists = MergeNamedByUri(current.Artists, incoming.Artists, static a => a.Uri, static a => a.Name,
+                static (rich, _) => rich) ?? incoming.Artists,   // Track.Artists is non-nullable; MergeNamedByUri can
+                                                                  // only return null if BOTH sides were, which can't
+                                                                  // happen here — the ?? is belt-and-suspenders.
             Album = MergeAlbumRef(current.Album, incoming.Album),
             DurationMs = incoming.DurationMs > 0 ? incoming.DurationMs : current.DurationMs,
             IsExplicit = incoming.IsExplicit || current.IsExplicit,
@@ -166,6 +173,7 @@ static class StoreEntityMerge
             CamelotCode = incoming.CamelotCode ?? current.CamelotCode,
             CamelotColor = incoming.CamelotColor ?? current.CamelotColor,
             CanonicalUri = incoming.CanonicalUri ?? current.CanonicalUri,
+            Year = incoming.Year > 0 ? incoming.Year : current.Year,
         };
     }
 
@@ -185,7 +193,7 @@ static class StoreEntityMerge
             Artists = Has(incoming.Artists) ? incoming.Artists : current.Artists,
             Year = incoming.Year > 0 ? incoming.Year : current.Year,
             TrackCount = incoming.TrackCount > 0 ? incoming.TrackCount : current.TrackCount,
-            Tracks = Has(incoming.Tracks) ? incoming.Tracks : current.Tracks,
+            Tracks = MergeTrackRows(current.Tracks, incoming.Tracks),
             MoreByArtist = Has(incoming.MoreByArtist) ? incoming.MoreByArtist : current.MoreByArtist,
             Label = incoming.Label ?? current.Label,
             Copyright = incoming.Copyright ?? current.Copyright,
@@ -202,6 +210,43 @@ static class StoreEntityMerge
             PreReleaseEnd = incoming.PreReleaseEnd ?? current.PreReleaseEnd,
             Hydration = incoming.Hydration > current.Hydration ? incoming.Hydration : current.Hydration,
         };
+    }
+
+    /// <summary>Album.Tracks per-uri fold, never shrink. Two writers both used to replace the list wholesale under a
+    /// blanket <c>Has(incoming) ? incoming : current</c>: an AlbumV4 disc-stub pass (rows named "" / DurationMs==0 next
+    /// to a fully-named album+artists) and the getAlbum envelope, which caps at 50 rows — either one landing after a
+    /// richer 100-row list used to truncate or blank it outright. This is the same stub discipline
+    /// <see cref="MergeNamedByUri{T}"/> already gives album cards / discography stubs, applied per ROW instead of per
+    /// card: fold each incoming row against its prior (a blank/thin incoming row keeps the richer current row's
+    /// Title/DurationMs/PlayCount/etc via <see cref="Track"/>), then re-append any current row incoming didn't mention
+    /// so a shorter incoming page can never drop rows a fuller earlier write already resolved.</summary>
+    public static IReadOnlyList<Track>? MergeTrackRows(IReadOnlyList<Track>? current, IReadOnlyList<Track>? incoming)
+    {
+        if (!Has(incoming)) return current;
+        if (!Has(current)) return incoming;
+        var prior = new Dictionary<string, Track>(StringComparer.Ordinal);
+        for (int i = 0; i < current!.Count; i++)
+        {
+            var row = current[i];
+            if (row.Uri.Length > 0) prior[row.Uri] = row;
+        }
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var merged = new List<Track>(Math.Max(current.Count, incoming!.Count));
+        for (int i = 0; i < incoming.Count; i++)
+        {
+            var row = incoming[i];
+            if (row.Uri.Length == 0) { merged.Add(row); continue; }
+            seen.Add(row.Uri);
+            merged.Add(prior.TryGetValue(row.Uri, out var priorRow) ? Track(priorRow, row) : row);
+        }
+        // Tail: current rows incoming never mentioned — order preserved — so a shorter incoming page (the getAlbum
+        // envelope's first 50 of a 100-row AlbumV4 list) never truncates the album.
+        for (int i = 0; i < current.Count; i++)
+        {
+            var row = current[i];
+            if (row.Uri.Length > 0 && !seen.Contains(row.Uri)) merged.Add(row);
+        }
+        return merged;
     }
 
     public static Artist Artist(Artist? current, Artist incoming)
@@ -258,10 +303,12 @@ static class StoreEntityMerge
     }
 
     /// <summary>Playlist merge is NOT blanket-NonEmpty. The header writer
-    /// (<c>OpRebaseStrategy.ApplyHeaderPatch</c>) is AUTHORITATIVE for Name/Description/Cover/Capabilities — absence
-    /// means clear (ClearDescription / ClearPicture / dead-letter rollback). IsPublic adopts only when the permission
-    /// writer stamped <see cref="Playlist.BasePermissionRevision"/> (both fields always travel together). Everything
-    /// else is per-field NonEmpty / null-coalesce / Has.</summary>
+    /// (<c>OpRebaseStrategy.ApplyHeaderPatch</c>) is AUTHORITATIVE for Description/Cover/Capabilities — absence
+    /// means clear (ClearDescription / ClearPicture / dead-letter rollback). Name is the one exception to "absence
+    /// clears": Spotify playlists cannot legitimately have an empty name, so a playlist4 header patch that omits it
+    /// (producing incoming.Name == "") must not blank an already-resolved name — NonEmpty, not blanket-authoritative.
+    /// IsPublic adopts only when the permission writer stamped <see cref="Playlist.BasePermissionRevision"/> (both
+    /// fields always travel together). Everything else is per-field NonEmpty / null-coalesce / Has.</summary>
     public static Playlist Playlist(Playlist? current, Playlist incoming)
     {
         if (current is null) return incoming;
@@ -269,14 +316,19 @@ static class StoreEntityMerge
         return incoming with
         {
             Id = NonEmpty(incoming.Id, current.Id),
-            Name = incoming.Name,                                    // header writer authoritative ("" clears)
+            Name = NonEmpty(incoming.Name, current.Name),            // "" cannot blank a resolved name (see above)
             Description = incoming.Description,                      // null = ClearDescription
             Cover = incoming.Cover,                                  // null = ClearPicture
             Capabilities = incoming.Capabilities,                    // header writer authoritative
             OwnerName = NonEmpty(incoming.OwnerName, current.OwnerName),
             Owner = incoming.Owner ?? current.Owner,
-            Collaborators = Has(incoming.Collaborators) ? incoming.Collaborators : current.Collaborators,
-            Tracks = Has(incoming.Tracks) ? incoming.Tracks : current.Tracks,
+            // Collaborators and Tracks are READ-MODEL lists joined at compose time (StoreLibrarySource.ComposePlaylist
+            // → BuildCollaborators / JoinMembership) — no writer ever stamps them onto the stored entity. Always keep
+            // current rather than the Album.Tracks-style per-uri fold: a non-empty incoming here would mean a caller
+            // upserted a composed read-model BACK into the store, which is a bug the merge should refuse, not paper
+            // over by adopting a possibly-partial list.
+            Collaborators = current.Collaborators,
+            Tracks = current.Tracks,
             TrackCount = incoming.TrackCount > 0 ? incoming.TrackCount : current.TrackCount,
             Format = incoming.Format ?? current.Format,
             Source = incoming.Source ?? current.Source,
@@ -299,8 +351,11 @@ static class StoreEntityMerge
             Publisher = NonEmpty(incoming.Publisher, current.Publisher),
             Cover = incoming.Cover ?? current.Cover,
             Description = incoming.Description ?? current.Description,
-            // Episodes land via membership (S3); until then protect a present list from a thin header rewrite.
-            Episodes = Has(incoming.Episodes) ? incoming.Episodes : current.Episodes,
+            // Episodes is a READ-MODEL list joined at compose time (StoreLibrarySource.ComposeShow, from the show's
+            // ordered membership) — no writer ever stamps it onto the stored entity, same discipline as
+            // Playlist.Tracks/Collaborators above. Always keep current: a non-empty incoming would mean a composed
+            // read-model got upserted back into the store, which the merge refuses rather than adopting.
+            Episodes = current.Episodes,
             // A READ-MODEL count (0 = this writer doesn't know) — no store writer stamps it, but the same
             // 0-is-unknown discipline keeps a hypothetical one from blanking a known total.
             TotalEpisodes = incoming.TotalEpisodes > 0 ? incoming.TotalEpisodes : current.TotalEpisodes,

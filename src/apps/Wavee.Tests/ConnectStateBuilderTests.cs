@@ -206,6 +206,60 @@ public class ConnectStateBuilderTests
         Assert.Equal("audio", ps.NextTracks[0].Metadata["track_player"]);   // next-up is not the current media
     }
 
+    // ── bug 3: an up-next row's bare HasVideo (availability, not "playing as video") must not over-claim ────────────
+    [Fact]
+    public void BuildPutState_NextTrack_HasVideoAvailabilityAlone_DoesNotClaimVideo()
+    {
+        var snap = Snap(hasVideo: false) with
+        {
+            NextTracks = new[]
+            {
+                // HasVideo=true (mere availability), no wire metadata at all — never "playing as video".
+                new SnapshotTrack("spotify:track:next-video", "un", "context", "Next", "Album",
+                    "spotify:artist:a", "Artist", "spotify:album:al", "", true, 4,
+                    new Dictionary<string, string>(StringComparer.Ordinal)),
+            },
+        };
+        var builder = new ConnectStateBuilder("device", "Wavee");
+        var ps = PutStateRequest.Parser.ParseFrom(builder.BuildPutState(
+            PutStateReasonKind.PlayerStateChanged, snap, 1, true, nowMs: 10_000, currentKind: PlayableKind.Audio))
+            .Device.PlayerState;
+
+        var next = ps.NextTracks[0].Metadata;
+        Assert.Equal("audio", next["track_player"]);          // availability alone is not enough
+        Assert.True(next.ContainsKey("entity_uri"));           // …so the ordinary context-row shape is not suppressed
+        Assert.True(next.ContainsKey("view_index"));
+        Assert.True(next.ContainsKey("iteration"));
+    }
+
+    // ── bug 7: while genuinely hosting video, stamp media.type/media.manifest_id/media.start_position ───────────────
+    [Fact]
+    public void BuildPutState_VideoHost_StampsMediaTypeManifestIdAndStartPosition()
+    {
+        var snap = Snap(hasVideo: true) with { PositionMs = 4200 };
+        var builder = new ConnectStateBuilder("device", "Wavee") { AssociatedVideoGid = _ => Gid };
+        var ps = PutStateRequest.Parser.ParseFrom(builder.BuildPutState(
+            PutStateReasonKind.PlayerStateChanged, snap, 1, true, nowMs: 10_000, currentKind: PlayableKind.Video))
+            .Device.PlayerState;
+
+        var meta = ps.Track.Metadata;
+        Assert.Equal("video", meta["media.type"]);
+        Assert.Equal(Gid, meta["media.manifest_id"]);          // same gid as associated_video_id (verified equivalence)
+        Assert.Equal(Gid, meta["associated_video_id"]);
+        Assert.Equal("4200", meta["media.start_position"]);
+    }
+
+    [Fact]
+    public void BuildPutState_AudioHost_NeverStampsMediaType()
+    {
+        // Hosting audio (even for a video-capable track) must not fabricate media.* — those fields name a video session
+        // that is not actually running.
+        var ps = PlayerStateOf(Snap(hasVideo: true), PlayableKind.Audio, _ => Gid);
+        Assert.False(ps.Track.Metadata.ContainsKey("media.type"));
+        Assert.False(ps.Track.Metadata.ContainsKey("media.manifest_id"));
+        Assert.False(ps.Track.Metadata.ContainsKey("media.start_position"));
+    }
+
     // ── Connect-state video parity: `associated_video_id` + the switch-to-video/switch-to-audio signal/disallow pair ──
     // Wire shape proven against captured desktop PUT bodies: while hosting audio with a known music video the state carries
     // the 32-hex gid on the CURRENT track, offers "switch-to-video" in `signals`, and disallows only "switch-to-audio"

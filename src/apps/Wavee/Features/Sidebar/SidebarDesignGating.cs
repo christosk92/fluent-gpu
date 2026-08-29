@@ -20,8 +20,8 @@ static class SidebarDesignGating
 {
     /// <summary>The chooser gate (F.4.3): exactly one boolean read, no cross-referencing. <c>SidebarBootstrap</c> already
     /// decided the marker at startup — an EXISTING install has it true (never sees the chooser, stays Classic) and a
-    /// FRESH install has it false (and was already defaulted to Curated). Nothing else may gate the chooser; adding a
-    /// second condition here is how a fresh install ends up never seeing it.</summary>
+    /// FRESH install has it false (and was written Classic explicitly; <c>SidebarBootstrap.Run</c>). Nothing else may
+    /// gate the chooser; adding a second condition here is how a fresh install ends up never seeing it.</summary>
     public static bool ShouldShowChooser(IAppSettings? settings)
         => settings is not null && !settings.Get(WaveeSettings.SidebarOnboardingSeen);
 
@@ -29,7 +29,7 @@ static class SidebarDesignGating
     /// light-of-modal · a shutdown-time close), so there is no path that leaves it false and the dialog can never appear
     /// twice. Idempotent; returns true only on the transition, for the log line / a test's "flipped once" assertion.
     /// Deliberately does NOT touch <c>sidebar.design</c>: whatever design is applied when the dialog closes is the
-    /// user's answer (Curated unless they clicked another card).</summary>
+    /// user's answer (Classic — what <c>SidebarBootstrap</c> wrote — unless they clicked another card).</summary>
     public static bool MarkChooserSeen(IAppSettings? settings)
     {
         if (settings is null || settings.Get(WaveeSettings.SidebarOnboardingSeen)) return false;
@@ -38,7 +38,7 @@ static class SidebarDesignGating
     }
 
     /// <summary>The design the chooser (and the Settings picker) starts on: the persisted selection, coerced. On a fresh
-    /// install <c>SidebarBootstrap</c> has already written Curated, so the chooser opens with Curated selected and the
+    /// install <c>SidebarBootstrap</c> has already written Classic, so the chooser opens with Classic selected and the
     /// pane behind it already showing it — the dialog never disagrees with the live sidebar.</summary>
     public static SidebarDesign ActiveDesign(IAppSettings? settings)
         => settings is null ? SidebarDesign.Classic

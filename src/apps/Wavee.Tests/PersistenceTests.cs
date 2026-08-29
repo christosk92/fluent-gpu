@@ -70,7 +70,7 @@ public class CredentialStoreTests
         public void Remove(string k) => _d.Remove(k);
     }
 
-    static Credential Sample => new(CredentialKind.ReusableBlob, "31unjfmo3oefvlz36ef3eb6kj5tq", Convert.ToBase64String([1, 2, 3, 4]), null, "rt");
+    static Credential Sample => new(CredentialKind.ReusableBlob, "31testuser000000000000000000", Convert.ToBase64String([1, 2, 3, 4]), null, "rt");
 
     [Fact]
     public void Save_Load_RoundTrips()

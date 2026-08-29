@@ -18,11 +18,17 @@ public enum HydrationMode : byte { Blocking, Background }
 /// <param name="Revalidate">Ignore a fresh ledger seal and re-ask the transport (the "known-better" path).</param>
 /// <param name="Surface">Which screen asked — picks the trait bundle AND the <c>client-feature-id</c> attribution.</param>
 /// <param name="Priority">Pump ordering; negative = prefetch (yield to anything a user is looking at).</param>
+/// <param name="SubAsk">Diagnostics only — never read by any ladder or the trait pipeline. True marks a ladder's OWN
+/// internal identity/ref repair (a thin-member scan, a stub batch, an album's disc-row fix-up) that deliberately never
+/// carries its caller's <see cref="TraitSurface"/>: the repair is identity work, not that surface's trait ask. Left
+/// false, a <see cref="TraitSurface.None"/> ask is a REAL caller's own surface, and the census logs it distinctly —
+/// see <c>TrackHydrationCensus.TraitNotAsked</c> vs <c>TrackHydrationCensus.TraitSurfaceEmpty</c>.</param>
 public readonly record struct HydrationOptions(
     HydrationMode Mode = HydrationMode.Blocking,
     bool Revalidate = false,
     TraitSurface Surface = TraitSurface.None,
-    int Priority = 0)
+    int Priority = 0,
+    bool SubAsk = false)
 {
     public static readonly HydrationOptions Default = new();
 

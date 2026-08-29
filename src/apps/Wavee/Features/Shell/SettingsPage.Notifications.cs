@@ -76,6 +76,14 @@ sealed partial class SettingsPage
             Bump();
         });
 
+        // "Send event" is DEVELOPER SURFACE (Settings ▸ Diagnostics ▸ Developer mode): firing a fake notification to
+        // watch which pipeline stage consumes it is a debugging affordance, not something a listener does to their own
+        // app. With it gone there is nothing to reveal, so the topic goes back to being a PLAIN CARD — an expander
+        // whose chevron opens onto an empty panel is worse than no chevron. The `.Value` read subscribes this row, so
+        // the switch lands without a relaunch.
+        if (!DeveloperMode.Enabled.Value)
+            return SettingsRow(Label(topic), Sub(topic), dial, Glyph(topic));
+
         // An expander, not a wider row: SettingsCard has ONE content slot and starts reflowing at 476 DIP, so a button
         // beside three segments would stack the dial under its own label for every user, to serve a button most never
         // press. The chevron keeps the dial exactly where it is and reveals the test affordance on demand — the shape

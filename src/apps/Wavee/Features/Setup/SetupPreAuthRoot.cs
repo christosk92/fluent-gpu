@@ -5,8 +5,10 @@ using FluentGpu.Hooks;
 
 namespace Wavee;
 
-/// <summary>The setup wizard's PRE-AUTH mount. <c>WaveeApp</c>'s login gate substitutes this for <c>LoginView</c>
-/// whenever the wizard is armed (<see cref="SetupGating.IsPending"/>) and the user is not yet authenticated.
+/// <summary>The setup wizard's PRE-AUTH mount — <c>WaveeApp</c>'s login gate mounts this for every unauthenticated
+/// launch. It is the whole window until sign-in completes: the wizard is Wavee's only sign-in surface, so there is no
+/// second takeover to fall back to and nothing here may be dismissed into an empty window
+/// (<see cref="SetupGating.CanDismiss"/>).
 ///
 /// <para><b>Why this exists (do not "simplify" it away).</b> <see cref="OverlayHost.Create"/> is called in exactly
 /// ONE other place in this app, <c>WaveeShell.cs</c> — and <c>WaveeShell</c> only mounts once authed, so in the
@@ -19,8 +21,7 @@ namespace Wavee;
 ///
 /// <para>So this root is its own tiny app shell: a minimal <see cref="TitleBar"/> (<c>Program.cs</c> asks for
 /// <c>CustomFrame = true</c> globally, so nothing else will ever draw the OS min/max/close affordance a logged-out
-/// window needs — today's <c>LoginView</c> has none at all, a real gap this closes), a transparent Mica body (the
-/// <c>LoginView</c> backdrop convention: paint nothing, so the live DWM Mica reads straight through), and its OWN
+/// window needs), a transparent Mica body (paint nothing, so the live DWM Mica reads straight through), and its OWN
 /// <see cref="OverlayHost.Create"/> wrapping a component (never a raw element — the same <c>[MountOnceContent]</c>
 /// contract <c>PopOutVideoWindow</c> already has to honor) that opens the wizard once, bare.</para></summary>
 sealed class SetupPreAuthRoot : Component
@@ -40,7 +41,7 @@ sealed class SetupPreAuthRoot : Component
             [
                 titleBar,
                 // The transparent Mica body: paints nothing itself, so the window's live DWM Mica material (Program.cs)
-                // reads straight through underneath the wizard dialog — exactly the LoginView convention.
+                // reads straight through underneath the wizard dialog.
                 new BoxEl
                 {
                     Grow = 1f, Fill = ColorF.Transparent,
@@ -55,9 +56,10 @@ sealed class SetupPreAuthRoot : Component
 /// <summary>Zero-size opener, mounted ONCE inside <see cref="SetupPreAuthRoot"/>'s own overlay host — a component,
 /// per the <c>[MountOnceContent]</c> contract <see cref="OverlayHost.Create"/> demands of its child (a raw element
 /// there would freeze at first render, exactly the bug <c>PopOutVideoWindow.Render</c>'s remarks describe). Opens the
-/// wizard BARE (no scrim — there is no live shell behind it to dim) exactly once per mount, after this root's first
-/// painted frame. <see cref="SetupDialog.Open"/> owns every close-path cleanup (the marker, <c>Covering</c>,
-/// <c>SetupSession.Current</c>) — this opener only guards against opening a second dialog concurrently.</summary>
+/// wizard BARE (the engine's own popup scrim paints instead — there is no live shell behind it to cover) exactly
+/// once per mount, after this root's first painted frame. <see cref="SetupDialog.Open"/> owns every close-path
+/// cleanup (the marker, resetting <c>Covering</c> to <c>SetupCover.None</c>, <c>SetupSession.Current</c>) — this
+/// opener only guards against opening a second dialog concurrently.</summary>
 sealed class SetupPreAuthOpener : Component
 {
     readonly SetupSession _session;

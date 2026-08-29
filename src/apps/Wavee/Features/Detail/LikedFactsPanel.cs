@@ -7,6 +7,7 @@ using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Localization;
+using FluentGpu.Render;
 using FluentGpu.Signals;
 using Wavee.Backend;
 using Wavee.Core;
@@ -19,17 +20,30 @@ namespace Wavee;
 /// component below can change shape without touching the rail.</summary>
 internal static class LikedFacts
 {
-    /// <summary>True when this is the Liked collection AND at least one track carries a stamp we can reason about.
-    /// Every card in the panel is derived from <c>AddedAt</c>, so "no usable stamps" means "no panel" — not a stack of
-    /// empty cards, and not a zero-height row the rail's keying has to carry (E1).
+    /// <summary>True when this collection is Liked or a playlist (<see cref="BadgeStyle.OwnerRow"/>) AND at least one
+    /// card would actually mount. Albums stay on <c>ReleasePanel</c> (<see cref="BadgeStyle.TypeYear"/>).
     ///
-    /// <para>Returns on the FIRST usable stamp: on a 10k liked list the common answer costs one iteration, and the
-    /// worst case (a completely unstamped list) is one pass of a struct predicate.</para></summary>
-    internal static bool Has(DetailModel m)
+    /// <para>Honesty, not occupancy: an editorial list with one bulk stamp and no years yet mounts nothing; Liked
+    /// with a stamp always has the week card; artists and blend count every track, stamps or not.</para></summary>
+    internal static bool Has(DetailModel m, BadgeStyle badges = BadgeStyle.None)
     {
-        if (m is null || !LikedSongsArtwork.IsLikedUri(m.ContextUri)) return false;
+        if (m is null) return false;
+        bool liked = LikedSongsArtwork.IsLikedUri(m.ContextUri);
+        if (!liked && badges != BadgeStyle.OwnerRow) return false;
         var tracks = m.Tracks;
-        if (tracks is null) return false;
+        if (tracks is null || tracks.Count == 0) return false;
+
+        // Runs before Panel on EVERY rail render, so it must stay allocation-free early-exit scans — the artists card
+        // (any keyed credit) is what practically every list has; the rest are the same floors the cards use. The
+        // rankings/partitions themselves are computed once per list inside the panel (LikedFactsRules.Summarize).
+        if (LikedFactsRules.AnyArtistCredit(tracks)) return true;
+        if (AnyStamped(tracks)) return true;
+        if (LikedFactsRules.HasReleaseYears(tracks)) return true;
+        return LikedFactsRules.OldestRelease(tracks) is not null;
+    }
+
+    internal static bool AnyStamped(IReadOnlyList<Track> tracks)
+    {
         for (int i = 0; i < tracks.Count; i++)
             if (LikedFactsRules.TryStamp(tracks[i], out _)) return true;
         return false;
@@ -70,10 +84,13 @@ sealed class LikedFactsPanel : Component
 
     // ── The prototype's numbers (docs/plans/wavee/liked-songs-cover-mica.html, `.fact` / `.spark` / `.bar`) ──────────
     const int SparkWeeks = 12;
-    const float SparkHeight = 38f;
-    const float SparkBarFloor = 3f;      // a silent week is still a visible baseline, never a gap in the strip
-    const float SparkGap = 3f;
-    const int TopArtistCount = 5;
+    /// <summary>The strips are the kit's <see cref="SparkBars"/> (38 DIP, gap 3, 3 DIP floor — the prototype's numbers
+    /// are its defaults); the only local wish is the facts' immediate tooltip.</summary>
+    static SparkBars.Style SparkStyle => SparkBars.DefaultStyle with { TipDelayMs = LikedLens.TipDelayMs };
+    internal const int TopArtistCount = 5;
+    /// <summary>How many ranked credits the artists flyout will name. The card itself still shows
+    /// <see cref="TopArtistCount"/>; this is the "see more" census, not a second ranking.</summary>
+    internal const int ArtistFlyoutCap = 40;
     const int BlendSlices = 5;
 
     public override Element Render()
@@ -94,36 +111,51 @@ sealed class LikedFactsPanel : Component
         // repaints the selected bar / face / slice when the list's filter changes from anywhere — the chip bar, the
         // filter flyout's Clear all, the list header's clear affordance, or a click in this very panel.
         var filters = p.Handlers.Filters?.Value ?? TrackFilterState.Default;
+        bool liked = LikedSongsArtwork.IsLikedUri(p.ContextUri);
 
-        var cards = new List<Element>(5);
+        // NAVIGATION FIRST. The detail page hands the rail a NEW track list on every hydration pass (up to 20/s while a
+        // playlist opens), and the facts are decisions over the WHOLE list. So this render computes nothing: the list
+        // goes into a mount-stable box, a timer restarts on every list change, and 250 ms after the LAST change — five
+        // refresh cooldowns of quiet, i.e. the list is complete — the summary is produced OFF the render path and
+        // published as a Loadable. Until then the region below shows a shimmer derived from the cards' own shells; on
+        // Ready the real cards blur-reveal ONCE. A straggler batch republishes Ready→Ready (no shimmer), and the shape
+        // latch keeps a card from folding back into a pill.
+        var box = UseRef<IReadOnlyList<Track>>(tracks);
+        box.Value = tracks;
+        var facts = UseLoadable<LikedFactsRules.FactsSummary>();
+        var latch = UseRef(new ShapeLatch(p.ContextUri));
+        if (!string.Equals(latch.Value.ContextUri, p.ContextUri, StringComparison.Ordinal)) latch.Value = new ShapeLatch(p.ContextUri);
+        UseTimeout(() => facts.SetReady(LikedFactsRules.Summarize(box.Value, SparkWeeks, BlendSlices, ArtistFlyoutCap)),
+                   SettleMs, DepKey.FromRef(tracks));
 
-        // (a) This week — present as soon as ANY like is stamped. A quiet week is a real answer ("+0"), which is why
-        // this card, unlike the others, has no evidence floor beyond "the data exists at all".
-        if (AnyStamped(tracks))
-            cards.Add(ThisWeekCard(LikedFactsRules.LikesPerWeek(tracks, now, SparkWeeks), culture, in filters, p.Handlers));
+        // The Content thunk is rebuilt on every panel render, so the lit lens states (filters, read above) stay live
+        // without re-summarising; the shimmer source is the SAME card shells with placeholder rows — one UI, not two.
+        var handlers = p.Handlers;
+        var contextUri = p.ContextUri;
+        bool outerPadding = p.OuterPadding;
+        var shapes = latch.Value;
+        var f = filters;
+        return Skel.Region(facts,
+            shimmerSource: () => Stack(SkeletonCards(liked), outerPadding),
+            content: s => Stack(Cards(s, box.Value, now, culture, in f, handlers, liked, svc, contextUri, shapes), outerPadding));
+    }
 
-        // (b) Most liked.
-        var top = LikedFactsRules.TopArtists(tracks, TopArtistCount);
-        if (top.Count > 0) cards.Add(MostLikedCard(top, svc?.RealStore, p.Handlers, culture, in filters));
+    /// <summary>Five refresh cooldowns (<c>DetailLiveRefresh.SettleMs</c> = 50) of quiet before the facts are decided —
+    /// every hydration batch of a normal open lands well inside it.</summary>
+    const float SettleMs = 250f;
 
-        // (c) Your blend — BlendShares self-gates on ContentFilterTags.MinTrackCount and returns empty when the
-        // descriptors were never fetched, so "empty ⇒ no card" is the whole of E14 (no fabricated percentages).
-        var shares = LikedFactsRules.BlendShares(tracks, BlendSlices);
-        // Its OWN component: the card owns an open/closed state, and a hook declared under this `if` would shift every
-        // later hook slot the first time the descriptors land. (It reads the filter signal itself, so a lens click
-        // repaints 8 DIP of bar instead of the whole bento.)
-        if (shares.Count > 0) cards.Add(LikedBlendCard.Create(tracks, shares, p.Handlers));
+    /// <summary>Per-page shape memory: a fact may UPGRADE while the page is open (Absent → Label → Graph), never
+    /// downgrade — a straggler batch after the settle window cannot fold a card back into a pill.</summary>
+    sealed class ShapeLatch
+    {
+        public readonly string? ContextUri;
+        public LikedFactsRules.FactShape Week, Years, Tempo, Blend;
+        public ShapeLatch(string? contextUri) => ContextUri = contextUri;
+    }
 
-        // (d) Rediscover — the same seven weekdays a year ago. Mounted only when that window actually holds something.
-        var (start, end) = LikedFactsRules.ThisWeekLastYearWindow(now);
-        var lastYear = LikedFactsRules.LikedInWindow(tracks, start, end);
-        if (lastYear.Count > 0) cards.Add(RediscoverCard(lastYear, svc, p.ContextUri));
-
-        // (e) The since-line.
-        if (SinceLine(tracks, culture) is { } since) cards.Add(since);
-
-        if (cards.Count == 0) return new BoxEl();
-
+    static Element Stack(Element[] cards, bool outerPadding)
+    {
+        if (cards.Length == 0) return new BoxEl { Key = "liked-facts-panel" };
         // Reduced motion is a VALUE (DetailTrailing.cs:214), never a branch that changes what is authored: the stagger
         // goes to zero, the cards still fade through the engine's KeepFade policy.
         float stagger = Motion.ReducedMotion ? 0f : WaveeMotion.MastheadStaggerMs;
@@ -131,107 +163,167 @@ sealed class LikedFactsPanel : Component
         {
             Key = "liked-facts-panel", Enter = DetailRail.FadeUp, Layout = DetailRail.Shove,
             Direction = 1, Gap = Spacing.S, MinWidth = 0f, Stagger = stagger,
-            Padding = p.OuterPadding ? new Edges4(Spacing.L, Spacing.S, Spacing.L, Spacing.L) : Edges4.All(0f),
-            Children = cards.ToArray(),
+            Padding = outerPadding ? new Edges4(Spacing.L, Spacing.S, Spacing.L, Spacing.L) : Edges4.All(0f),
+            Children = cards,
         };
+    }
+
+    /// <summary>The real cards, all decided from ONE settled summary.</summary>
+    static Element[] Cards(LikedFactsRules.FactsSummary s, IReadOnlyList<Track> tracks, DateTimeOffset now, CultureInfo culture,
+        in TrackFilterState filters, DetailHandlers h, bool liked, Services? svc, string? contextUri, ShapeLatch latch)
+    {
+        var cards = new List<Element>(7);
+        bool spread = s.StampsSpread;
+
+        // (a) The time slot: the week card on Liked (stamps exist) and on playlists whose adds actually spread — but
+        // only when the last twelve weeks have a SHAPE (LikedFactsRules.WeekShape): "+0 songs added" over a flat strip
+        // is not a fact, it is an empty card. Else the years card, when the years have a shape (YearsShape) — a list
+        // that is 41/50 one year collapses to a pill below instead of spending a card on one tall bar. Never both.
+        bool stamped = liked ? s.AnyStamped : spread;
+        var weeks = stamped ? LikedFactsRules.LikesPerWeek(tracks, now, SparkWeeks) : Array.Empty<LikedFactsRules.WeekBucket>();
+        var weekShape = latch.Week = LikedFactsRules.Latch(latch.Week, stamped ? LikedFactsRules.WeekShape(weeks) : LikedFactsRules.FactShape.Absent);
+        var yearsShape = latch.Years = LikedFactsRules.Latch(latch.Years, s.YearsShape);
+        var tempoShape = latch.Tempo = LikedFactsRules.Latch(latch.Tempo, s.Tempo.Shape);
+        var blendShape = latch.Blend = LikedFactsRules.Latch(latch.Blend, s.BlendShape);
+        bool weekSlot = weekShape == LikedFactsRules.FactShape.Graph;
+        if (weekSlot)
+            cards.Add(ThisWeekCard(weeks, culture, in filters, h, liked));
+        else if (yearsShape == LikedFactsRules.FactShape.Graph)
+            cards.Add(YearCard(tracks, s.YearBuckets, culture, in filters, h));
+        // Years the slot could not show — a pill-worthy dominance, or the week card holding the slot — fall to a pill.
+        bool yearsPill = yearsShape == LikedFactsRules.FactShape.Label
+            || (weekSlot && yearsShape != LikedFactsRules.FactShape.Absent);
+        // A week that had a little activity but no shape becomes a since-line clause ("last add Jul 12"), not a pill.
+        var lastActivity = weekShape == LikedFactsRules.FactShape.Label ? LikedFactsRules.LatestStamp(tracks) : null;
+
+        // (a′) Tempo — its own slot. GRAPH when the four filter bands have a shape (kind-222 tempo on ≥ 60 % of the rows
+        // and no band holding ≥ 70 %); LABEL falls to a pill; ABSENT says nothing.
+        if (tempoShape == LikedFactsRules.FactShape.Graph && s.Tempo.Stats.Known > 0)
+            cards.Add(TempoCard.Create(s.Tempo, tracks, h));
+
+        // (b) Most liked / top artists — every credit counts, stamps or not. Own component: ArtistV4 Identity for
+        // portraits is a hook, and a hook under this `if` would shift every later slot the first time credits land.
+        if (s.Artists.Count > 0) cards.Add(LikedArtistsCard.Create(s.Artists, h, liked));
+
+        // (c) Your blend — the shares self-gate on ContentFilterTags.MinTrackCount and are empty when the descriptors
+        // were never fetched, so "empty ⇒ no card" is the whole of E14 (no fabricated percentages). Its OWN component:
+        // the card owns an open/closed state. A blend one descriptor owns ("K-Pop 98 %") — or one that no descriptor
+        // leads — is a pill, not a bar with one colour.
+        if (s.BlendShares.Count > 0 && blendShape == LikedFactsRules.FactShape.Graph)
+            cards.Add(LikedBlendCard.Create(tracks, s.BlendShares, h));
+
+        // (d) Rediscover — Liked URI only. The same seven weekdays a year ago; mounted only when that window holds.
+        if (liked)
+        {
+            var (start, end) = LikedFactsRules.ThisWeekLastYearWindow(now);
+            var lastYear = LikedFactsRules.LikedInWindow(tracks, start, end);
+            if (lastYear.Count > 0) cards.Add(RediscoverCard(lastYear, svc, contextUri));
+        }
+
+        // (e) The pills — the facts that did not earn a card, still lenses (a pill names exactly the filter it applies).
+        if (FactPills.Row(s, yearsPill, tempoShape == LikedFactsRules.FactShape.Label && s.Tempo.Stats.Known > 0,
+                          blendShape == LikedFactsRules.FactShape.Label, culture, in filters, h) is { } pills)
+            cards.Add(pills);
+
+        // (f) The since-line. Its decade clause yields to a years pill, which says the same thing more precisely; a
+        // week without a shape adds its last stamp here instead of a card.
+        if (SinceLine(tracks, culture, liked, spread, suppressDecade: yearsPill, lastActivity) is { } since) cards.Add(since);
+
+        return cards.ToArray();
+    }
+
+    // ── The shimmer source: the cards' own shells with placeholder rows (the deriver turns the fills into shimmer) ──
+
+    static Element[] SkeletonCards(bool liked)
+    {
+        static Element Bar(float w, float h) => new BoxEl { Width = w, Height = h, Corners = CornerRadius4.All(3f), Fill = Tok.FillControlDefault, Shrink = 0f };
+        static Element Column(float h) => new BoxEl { Grow = 1f, Basis = 0f, MinWidth = 0f, Direction = 1, Justify = FlexJustify.End, Height = 38f, Children = [new BoxEl { Height = h, Corners = new CornerRadius4(2f, 2f, 1f, 1f), Fill = Tok.FillControlDefault }] };
+
+        // Time / tempo shaped: eyebrow, a numeral block, a twelve-column strip at plausible heights.
+        float[] heights = [10f, 18f, 8f, 26f, 14f, 6f, 22f, 12f, 30f, 16f, 24f, 38f];
+        var columns = new Element[heights.Length];
+        for (int i = 0; i < heights.Length; i++) columns[i] = Column(heights[i]);
+        var time = Card("fact:week", Head(" ", " "), new BoxEl
+        {
+            Direction = 0, Gap = Spacing.M, AlignItems = FlexAlign.End, MinWidth = 0f,
+            Children =
+            [
+                new BoxEl { Direction = 1, Gap = Spacing.XS, Shrink = 0f, Children = [Bar(56f, 30f), Bar(72f, 12f)] },
+                new BoxEl { Direction = 0, Gap = 3f, Height = 38f, Grow = 1f, Basis = 0f, MinWidth = 0f, AlignItems = FlexAlign.End, Children = columns },
+            ],
+        });
+
+        // Artists shaped: a face row and five name rows.
+        var faces = new Element[6];
+        for (int i = 0; i < faces.Length; i++)
+            faces[i] = new BoxEl { Width = 28f, Height = 28f, Corners = CornerRadius4.All(14f), Fill = Tok.FillControlDefault, Shrink = 0f, Margin = new Edges4(i == 0 ? 0f : -12f, 0f, 0f, 0f) };
+        var names = new Element[5];
+        float[] widths = [120f, 96f, 132f, 88f, 150f];
+        for (int i = 0; i < names.Length; i++) names[i] = Bar(widths[i], 12f);
+        var artists = Card("fact:artists", Head(" ", null), new BoxEl
+        {
+            Direction = 1, Gap = Spacing.S, MinWidth = 0f,
+            Children = [new BoxEl { Direction = 0, Children = faces }, new BoxEl { Direction = 1, Gap = 6f, Children = names }],
+        });
+
+        // Blend shaped: the 8 px bar and a legend row.
+        var blend = Card("fact:blend", Head(" ", " "), new BoxEl
+        {
+            Direction = 1, Gap = Spacing.S, MinWidth = 0f,
+            Children =
+            [
+                new BoxEl { Height = 8f, Corners = CornerRadius4.All(4f), Fill = Tok.FillControlDefault },
+                new BoxEl { Direction = 0, Gap = Spacing.M, Children = [Bar(64f, 12f), Bar(52f, 12f), Bar(70f, 12f)] },
+            ],
+        });
+        // Liked and playlists share the same three silhouettes (Rediscover is too data-bound to fake honestly).
+        _ = liked;
+        return [time, artists, blend];
     }
 
     // ── This week ───────────────────────────────────────────────────────────────────────────────────────────────────
 
-    /// <summary>The same first-usable-stamp scan <see cref="LikedFacts.Has"/> runs, asked again here because the panel
-    /// must be correct when mounted directly (a caller that skipped the gate) and because a list can lose its stamps
-    /// between the gate and this render.</summary>
-    static bool AnyStamped(IReadOnlyList<Track> tracks)
-    {
-        for (int i = 0; i < tracks.Count; i++)
-            if (LikedFactsRules.TryStamp(tracks[i], out _)) return true;
-        return false;
-    }
-
     static Element ThisWeekCard(IReadOnlyList<LikedFactsRules.WeekBucket> weeks, CultureInfo culture,
-        in TrackFilterState filters, DetailHandlers h)
+        in TrackFilterState filters, DetailHandlers h, bool liked)
     {
         int thisWeek = weeks.Count > 0 ? weeks[weeks.Count - 1].Count : 0;
-        // Scale to the tallest bucket, floor 1: twelve bars against a fixed ceiling would render most libraries as a
-        // flat line, and the strip's job is the SHAPE of the last twelve weeks, not their absolute rate.
-        int peak = 1;
-        for (int i = 0; i < weeks.Count; i++) if (weeks[i].Count > peak) peak = weeks[i].Count;
-
-        var bars = new Element[weeks.Count];
+        // The kit strip scales to the tallest bucket (floor 1): twelve bars against a fixed ceiling would render most
+        // libraries as a flat line, and the strip's job is the SHAPE of the last twelve weeks, not their absolute rate.
+        var bars = new SparkBar[weeks.Count];
         for (int i = 0; i < weeks.Count; i++)
         {
             var week = weeks[i];
             bool newest = i == weeks.Count - 1;
             bool lit = LikedFactsRules.IsWeekLens(filters, week);
-            Element bar = new BoxEl
-            {
-                Height = MathF.Max(SparkBarFloor, SparkHeight * week.Count / peak),
-                Corners = new CornerRadius4(2f, 2f, 1f, 1f),
-                // Full accent for the newest week (it is "this week", the number beside the strip) and for the LENSED
-                // week (it is what the list is showing). Everything else keeps the recessive shade.
-                Fill = newest || lit ? Tok.AccentDefault : (Tok.AccentDefault with { A = 0.38f }),
-                // The bar answers the hover its COLUMN caught: the column authors HoverFill of its own, so it owns an
-                // InteractionAnim row and the recorder hands that eased progress down to this non-interactive child
-                // (SceneRecorder.ResolveSurface). The accent's bright shade says which of the twelve the bubble is about.
-                HoverFill = Tok.AccentTextPrimary,
-                HoverDurationMs = MotionTok.ControlFaster.DurationMs, HoverEasing = MotionTok.ControlFaster.Easing,
-                HitTestVisible = false,
-            };
-            // A 2-DIP-wide, 3-DIP-tall bar is not a hit target. The column is: full strip height, its share of the
-            // strip's width, bottom-aligned so the bar keeps sitting on the baseline — hovering the EMPTY air above a
-            // quiet week is still hovering that week, which is the only way twelve of these are reachable by mouse.
-            //
-            // The column is also the LENS: clicking it filters the list to exactly the interval this bar counted, and
-            // clicking the lit one clears it (the chip bar's "a second tap means switch, or off" grammar). So it paints
-            // its own hover/selected plate — a chart's hover band — rather than being an invisible hit box. Without a
-            // cursor change and a plate the strip read as decoration, which is exactly what it used to be.
             void Toggle()
             {
-                // Decided against the LIVE state, not this render's snapshot: the filter can have moved under us (the
-                // list header's clear, the flyout's Clear all) between the render that drew this bar and the click.
                 var live = h.Filters?.Peek() ?? TrackFilterState.Default;
                 var (after, before) = LikedFactsRules.WeekWindowMs(week);
                 h.SetFilters?.Invoke(LikedFactsRules.IsWeekLens(live, week)
                     ? live.WithAddedWindow(0L, 0L)
                     : live.WithAddedWindow(after, before));
             }
-            Element column = new BoxEl
-            {
-                Direction = 1, Justify = FlexJustify.End, Height = SparkHeight, Basis = 0f, MinWidth = 0f,
-                Role = AutomationRole.Button, Focusable = true, Cursor = CursorId.Hand,
-                FocusVisualMargin = new Edges4(1f, 1f, 1f, 1f),
-                Corners = CornerRadius4.All(3f),
-                Fill = lit ? Tok.AccentSubtle : ColorF.Transparent,
-                HoverFill = lit ? Tok.AccentSecondary : Tok.FillSubtleSecondary,
-                PressedFill = Tok.FillSubtleTertiary,
-                HoverDurationMs = MotionTok.ControlFaster.DurationMs, HoverEasing = MotionTok.ControlFaster.Easing,
-                OnClick = Toggle,
-                Children = [bar],
-            };
-            bars[i] = ToolTip.Wrap(column, WeekTip(week, culture), grow: 1f, showDelayMs: LikedLens.TipDelayMs)
-                with { Key = "wk:" + i };
+            bars[i] = new SparkBar(week.Count, WeekTip(week, culture, liked), Lit: lit, Accent: newest || lit, OnClick: Toggle);
         }
 
-        var spark = new BoxEl
-        {
-            Direction = 0, Gap = SparkGap, Height = SparkHeight, Grow = 1f, Basis = 0f, MinWidth = 0f,
-            AlignItems = FlexAlign.End, HitTestPassThrough = true, Children = bars,
-        };
+        var spark = SparkBars.Create(new SparkBarsModel(bars), SparkStyle, key: "spark");
+        string delta = Strings.Detail.LikedFacts.LikedDelta(thisWeek);
+        string caption = liked
+            ? Strings.Detail.LikedFacts.SongsLiked(thisWeek)
+            : Strings.Detail.LikedFacts.SongsAdded(thisWeek);
 
         var big = new BoxEl
         {
             Direction = 1, Gap = Spacing.XS, Shrink = 0f,
             Children =
             [
-                // The changing number is a value-KEYED box inside a ZStack (CompactStatTile's idiom): a like landing
-                // while the page is open swaps "+11" for "+12" as a rise-and-blur, never an in-place relabel (E10).
                 ZStack(new BoxEl
                 {
                     Key = "v:" + thisWeek,
                     Animate = MotionRecipes.TextSwap,
-                    Children = [Title(Strings.Detail.LikedFacts.LikedDelta(thisWeek)) with { MaxLines = 1 }],
+                    Children = [Title(delta) with { MaxLines = 1 }],
                 }),
-                Caption(Strings.Detail.LikedFacts.SongsLiked(thisWeek)) with { Color = Tok.TextTertiary, MaxLines = 1 },
+                Caption(caption) with { Color = Tok.TextTertiary, MaxLines = 1 },
             ],
         };
 
@@ -244,81 +336,85 @@ sealed class LikedFactsPanel : Component
             });
     }
 
-    /// <summary>"Aug 11 – Aug 18 · 3 songs liked" — what one bar of the strip stands for.
-    ///
-    /// <para>BOTH endpoints are named, and the second one is <c>start + 7d</c> rather than <c>start + 6d</c>: the
-    /// buckets are ROLLING windows anchored on the moment the panel read its clock (<c>LikesPerWeek</c>), not calendar
-    /// weeks, so <c>(Aug 11 12:00, Aug 18 12:00]</c> is literally the interval counted. Printing "Aug 11–17" would name
-    /// a calendar span the histogram does not use and would misplace every like saved after noon on the 17th.</para>
-    ///
-    /// <para>Local time, like the since-line: the week the user is living through is the local one. The month/day
-    /// pattern is the culture's own ("MMM d"), so the order and the abbreviation follow the locale.</para></summary>
-    static string WeekTip(in LikedFactsRules.WeekBucket week, CultureInfo culture)
+    static string WeekTip(in LikedFactsRules.WeekBucket week, CultureInfo culture, bool liked)
     {
         var (after, before) = LikedFactsRules.WeekWindowMs(week);
-        // ONE range formatter, shared with the list's lens header (LikedLens.RangeParts): the bubble and the header
-        // describe the same filter, so a second copy of this wording is a second chance for them to disagree.
         var (start, end) = LikedLens.RangeParts(after, before, culture);
-        return Strings.Detail.LikedFacts.WeekTip(start, end, week.Count);
+        return liked
+            ? Strings.Detail.LikedFacts.WeekTip(start, end, week.Count)
+            : Strings.Detail.LikedFacts.WeekTipAdded(start, end, week.Count);
     }
 
-    // ── Most liked ──────────────────────────────────────────────────────────────────────────────────────────────────
+    // ── The years ───────────────────────────────────────────────────────────────────────────────────────────────────
 
-    static Element MostLikedCard(IReadOnlyList<LikedFactsRules.ArtistCount> top, IStore? store, DetailHandlers h,
-        CultureInfo culture, in TrackFilterState filters)
+    static Element YearCard(IReadOnlyList<Track> tracks, IReadOnlyList<LikedFactsRules.YearBucket> years,
+        CultureInfo culture, in TrackFilterState filters, DetailHandlers h)
     {
-        // The face and the name are the SAME affordance: they lens the list to that artist's liked songs, and a second
-        // click clears it. They deliberately no longer NAVIGATE to the artist page — a statistic about this collection
-        // should answer itself here, and the rail sits beside the list precisely so the answer is one click away with
-        // no page change. (The artist page stays a click away from any of that artist's rows.)
-        void Toggle(ArtistRef who)
+        int peak = 0, peakIdx = 0;
+        for (int i = 0; i < years.Count; i++)
+            if (years[i].Count > peak || (years[i].Count == peak && years[i].YearMax >= years[peakIdx].YearMax))
+            { peak = years[i].Count; peakIdx = i; }
+        if (peak < 1) peak = 1;
+
+        int modeYear = years.Count > 0 ? LikedFactsRules.PeakYear(tracks, years[peakIdx]) : 0;
+        int spanLo = 0, spanHi = 0;
+        for (int i = 0; i < years.Count; i++)
         {
-            var live = h.Filters?.Peek() ?? TrackFilterState.Default;
-            h.SetFilters?.Invoke(LikedFactsRules.IsArtistLens(live, who)
-                ? live.WithArtist(null)
-                : live.WithArtist(LikedFactsRules.ArtistKey(who), who.Name));
+            if (years[i].Count <= 0) continue;
+            if (spanLo == 0) spanLo = years[i].YearMin;
+            spanHi = years[i].YearMax;
         }
 
-        var faces = new FacePiles.Face[top.Count];
-        // One run of spans, not a row of boxes: "TOTO 8 · Billy Idol 6" has to WRAP as a sentence, and a flex row of
-        // per-artist boxes wraps as blocks with a ragged right edge. Each name is a hyperlink span (TextSpan.OnClick →
-        // hand cursor + click, resolved by the engine over the span's own laid rects).
-        var spans = new List<TextSpan>(top.Count * 3);
-        for (int i = 0; i < top.Count; i++)
+        var bars = new SparkBar[years.Count];
+        for (int i = 0; i < years.Count; i++)
         {
-            var artist = top[i].Artist;
-            string name = artist.Name;
-            // A credit with no uri, no id and no name cannot be a lens — there is nothing to match rows against — so it
-            // stays inert rather than becoming a click that empties the list.
-            bool lensable = LikedFactsRules.ArtistKey(artist).Length > 0;
-            bool lit = LikedFactsRules.IsArtistLens(filters, artist);
-            Action? click = lensable ? () => Toggle(artist) : null;
-            // Portrait: RESIDENT ONLY. A facts card does not get to fire a hydration batch — the initials fallback is
-            // an honest answer, a network round trip from a statistic is not. (Bounded to `top.Count` lookups, and the
-            // panel re-renders only when its props actually change.)
-            faces[i] = new FacePiles.Face(name, store?.GetArtist(artist.Uri)?.Image?.Url, click, lit,
-                                          Strings.Detail.LikedFacts.ArtistTip(name, top[i].Count));
-
-            if (i > 0) spans.Add(new TextSpan(Sep, Color: Tok.TextTertiary));
-            spans.Add(new TextSpan(name, Weight: 600, Color: lit ? Tok.AccentTextPrimary : Tok.TextPrimary,
-                OnClick: click));
-            spans.Add(new TextSpan(" " + top[i].Count.ToString(culture), Color: Tok.TextTertiary));
+            var bucket = years[i];
+            bool lit = LikedFactsRules.IsYearLens(filters, bucket);
+            bool accent = i == peakIdx || lit;
+            void Toggle()
+            {
+                var live = h.Filters?.Peek() ?? TrackFilterState.Default;
+                h.SetFilters?.Invoke(LikedFactsRules.IsYearLens(live, bucket)
+                    ? live.WithReleaseYear(0, 0)
+                    : live.WithReleaseYear(bucket.YearMin, bucket.YearMax));
+            }
+            bars[i] = new SparkBar(bucket.Count, YearTip(bucket, culture), Lit: lit, Accent: accent, OnClick: Toggle);
         }
 
-        var who = new SpanTextEl(spans.ToArray())
+            string trailing = spanLo > 0 && spanHi > 0 && spanLo != spanHi
+                ? Strings.Detail.LikedFacts.YearRange(spanLo.ToString(culture), spanHi.ToString(culture))
+                : (spanLo > 0 ? spanLo.ToString(culture) : "");
+
+        var big = new BoxEl
         {
-            Size = 12f, LineHeight = 16f, Color = Tok.TextSecondary,
-            Wrap = TextWrap.Wrap, MaxLines = 3, Trim = TextTrim.CharacterEllipsis,
-            Grow = 1f, Basis = 0f, MinWidth = 0f,
+            Direction = 1, Gap = Spacing.XS, Shrink = 0f,
+            Children =
+            [
+                ZStack(new BoxEl
+                {
+                    Key = "v:" + modeYear,
+                    Animate = MotionRecipes.TextSwap,
+                    Children = [Title(modeYear.ToString(culture)) with { MaxLines = 1 }],
+                }),
+                Caption(Loc.Get(Strings.Detail.LikedFacts.MostTracks)) with { Color = Tok.TextTertiary, MaxLines = 1 },
+            ],
         };
 
-        return Card("fact:artists",
-            Head(Loc.Get(Strings.Detail.LikedFacts.MostLiked), null),
+        return Card("fact:years",
+            Head(Loc.Get(Strings.Detail.LikedFacts.TheYears), trailing),
             new BoxEl
             {
-                Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center, MinWidth = 0f,
-                Children = [FacePiles.Strip(faces, TopArtistCount), who],
+                Direction = 0, Gap = Spacing.M, AlignItems = FlexAlign.End, MinWidth = 0f,
+                Children = [big, SparkBars.Create(new SparkBarsModel(bars), SparkStyle, key: "spark")],
             });
+    }
+
+    static string YearTip(in LikedFactsRules.YearBucket bucket, CultureInfo culture)
+    {
+        if (bucket.YearMin == bucket.YearMax)
+            return Strings.Detail.LikedFacts.YearTipOne(bucket.YearMin.ToString(culture), bucket.Count);
+        return Strings.Detail.LikedFacts.YearTip(
+            bucket.YearMin.ToString(culture), bucket.YearMax.ToString(culture), bucket.Count);
     }
 
     // ── Rediscover ──────────────────────────────────────────────────────────────────────────────────────────────────
@@ -364,20 +460,46 @@ sealed class LikedFactsPanel : Component
 
     // ── The since-line ──────────────────────────────────────────────────────────────────────────────────────────────
 
-    /// <summary>"Liking since March 2019 · mostly the 2010s · oldest like Africa" — each clause PRESENT-ONLY, so a
-    /// young library says only what it can (the decade needs ten stamped likes; the whole line needs one).</summary>
-    static Element? SinceLine(IReadOnlyList<Track> tracks, CultureInfo culture)
+    /// <summary>Present-only clauses. Liked = save since / save decade / oldest like. Playlist with spread =
+    /// collecting since / release decade / oldest add. Editorial = release decade / oldest track with year. Never
+    /// "collecting since yesterday" off a bulk stamp.</summary>
+    static Element? SinceLine(IReadOnlyList<Track> tracks, CultureInfo culture, bool liked, bool spread, bool suppressDecade,
+                              DateTimeOffset? lastActivity)
     {
         var clauses = new List<string>(3);
-        if (LikedFactsRules.LikingSince(tracks) is { } since)
-            clauses.Add(Strings.Detail.LikedFacts.Since(since.ToLocalTime().ToString("MMMM yyyy", culture)));
-        if (LikedFactsRules.DominantDecade(tracks) is { } decade)
-            clauses.Add(Strings.Detail.LikedFacts.Decade(decade.ToString(culture)));
-        // Title only. The prototype's "Africa (1982)" is a RELEASE year, and Track carries none — the only year this
-        // model owns is the year it was saved, which the since-clause has already said. Printing it again would either
-        // repeat that year or, worse, be read as the release year the data cannot answer.
-        if (LikedFactsRules.OldestLike(tracks) is { Title.Length: > 0 } oldest)
-            clauses.Add(Strings.Detail.LikedFacts.Oldest(oldest.Title));
+        if (liked)
+        {
+            if (LikedFactsRules.LikingSince(tracks) is { } since)
+                clauses.Add(Strings.Detail.LikedFacts.Since(since.ToLocalTime().ToString("MMMM yyyy", culture)));
+            if (!suppressDecade && LikedFactsRules.DominantDecade(tracks) is { } decade)
+                clauses.Add(Strings.Detail.LikedFacts.Decade(decade.ToString(culture)));
+            if (LikedFactsRules.OldestLike(tracks) is { Title.Length: > 0 } oldest)
+                clauses.Add(Strings.Detail.LikedFacts.Oldest(oldest.Title));
+        }
+        else if (spread)
+        {
+            if (LikedFactsRules.LikingSince(tracks) is { } since)
+                clauses.Add(Strings.Detail.LikedFacts.CollectingSince(since.ToLocalTime().ToString("MMMM yyyy", culture)));
+            if (!suppressDecade && LikedFactsRules.DominantReleaseDecade(tracks) is { } decade)
+                clauses.Add(Strings.Detail.LikedFacts.Decade(decade.ToString(culture)));
+            if (LikedFactsRules.OldestLike(tracks) is { Title.Length: > 0 } oldest)
+                clauses.Add(Strings.Detail.LikedFacts.OldestAdd(oldest.Title));
+        }
+        else
+        {
+            if (!suppressDecade && LikedFactsRules.DominantReleaseDecade(tracks) is { } decade)
+                clauses.Add(Strings.Detail.LikedFacts.Decade(decade.ToString(culture)));
+            if (LikedFactsRules.OldestRelease(tracks) is { Title.Length: > 0 } oldest)
+                clauses.Add(oldest.Year > 0
+                    ? Strings.Detail.LikedFacts.OldestTrackYear(oldest.Title, oldest.Year)
+                    : Strings.Detail.LikedFacts.OldestTrack(oldest.Title));
+        }
+        // The week card's LABEL form: a little activity, no shape — "last add Jul 12" says what the strip would have.
+        if (lastActivity is { } last)
+        {
+            string date = last.ToLocalTime().ToString("MMM d", culture);
+            clauses.Add(liked ? Strings.Detail.LikedFacts.LastLike(date) : Strings.Detail.LikedFacts.LastAdd(date));
+        }
         if (clauses.Count == 0) return null;
 
         return new BoxEl
@@ -429,6 +551,287 @@ sealed class LikedFactsPanel : Component
             Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S, MinWidth = 0f,
             Children = kids,
         };
+    }
+}
+
+
+/// <summary>Most liked / top artists. Own component for the same reason <see cref="LikedBlendCard"/> is: ArtistV4
+/// Identity (portraits) and the overflow flyout are hooks, and a hook under the panel's <c>if (ranked.Count > 0)</c>
+/// would shift every later slot the first time credits land. The face and the name are the SAME affordance: they lens
+/// the list to that artist; a second click clears it. They do not navigate — a statistic about this collection should
+/// answer itself here.</summary>
+sealed class LikedArtistsCard : Component
+{
+    internal sealed record Props(IReadOnlyList<LikedFactsRules.ArtistCount> Ranked, DetailHandlers Handlers, bool Liked);
+
+    internal static Element Create(IReadOnlyList<LikedFactsRules.ArtistCount> ranked, DetailHandlers h, bool liked)
+        => Embed.Comp(new Props(ranked, h, liked), static () => new LikedArtistsCard()) with { Key = "fact:artists" };
+
+    public override Element Render()
+    {
+        var p = UseProps<Props>();
+        var svc = UseContext(Services.Slot);
+        var overlay = UseContext(Overlay.Service);
+        var anchor = UseRef<NodeHandle>(default);
+        var handle = UseRef<OverlayHandle?>(null);
+        var moreOpen = UseSignal(false);
+        var measuredW = UseMeasuredWidth(FacePiles.Step);
+        var ranked = p.Ranked ?? Array.Empty<LikedFactsRules.ArtistCount>();
+        var culture = CultureInfo.CurrentCulture;
+        var filters = p.Handlers.Filters?.Value ?? TrackFilterState.Default;
+        var store = svc?.RealStore;
+
+        string faceKey = UriKey(ranked);
+        var portraits = UseResource(async ct =>
+        {
+            var seed = Resolve(ranked, store);
+            if (svc is null) return 0;
+            var uris = UrisNeedingPortrait(seed);
+            if (uris.Count == 0) return 0;
+            // A name-only artist stub already satisfies Identity, so a default Ensure no-ops and the pile stays on
+            // initials. Revalidate is the designed "ignore the seal" path — ArtistV4 is where PortraitGroup lives.
+            await svc.Hydrator.EnsureManyAsync(uris, HydrationLevel.Identity,
+                    new HydrationOptions(Revalidate: true), ct)
+                .ConfigureAwait(false);
+            return 1;
+        }, 0, faceKey);
+        _ = portraits.Loadable.Value.Value;
+
+        var resolved = Resolve(ranked, store);
+        int nameCount = Math.Min(LikedFactsPanel.TopArtistCount, ranked.Count);
+        float inner = measuredW.Value > 0f
+            ? MathF.Max(0f, measuredW.Value - Spacing.M * 2f)
+            : 0f;
+        // First frame is unmeasured (width 0); keep the named five so the pile doesn't flash a single face.
+        int faceCount = inner >= FacePiles.Outer
+            ? FacePiles.VisibleFaces(inner, ranked.Count)
+            : nameCount;
+        int pileExtra = Math.Max(0, ranked.Count - faceCount);
+        int nameExtra = Math.Max(0, ranked.Count - nameCount);
+
+        void Toggle(ArtistRef who)
+        {
+            var live = p.Handlers.Filters?.Peek() ?? TrackFilterState.Default;
+            p.Handlers.SetFilters?.Invoke(LikedFactsRules.IsArtistLens(live, who)
+                ? live.WithArtist(null)
+                : live.WithArtist(LikedFactsRules.ArtistKey(who), who.Name));
+        }
+
+        void ToggleMore()
+        {
+            if (overlay is null) return;
+            if (handle.Value is { IsOpen: true } open) { open.Close(); return; }
+            moreOpen.Value = true;
+            handle.Value = overlay.Open(
+                () => anchor.Value,
+                () => Flyout(ranked, Resolve(ranked, svc?.RealStore), culture,
+                    p.Handlers.Filters?.Peek() ?? TrackFilterState.Default, p.Handlers,
+                    () => handle.Value?.Close()),
+                FlyoutPlacement.BottomEdgeAlignedLeft,
+                new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss, Chrome: PopupChrome.Popup)
+                { ConstrainToRootBounds = false });
+            handle.Value.ClosedAction = () => { handle.Value = null; moreOpen.Value = false; };
+        }
+
+        void MoreKey(KeyEventArgs e)
+        {
+            if (e.KeyCode is not (Keys.Down or Keys.F4)) return;
+            ToggleMore();
+            e.Handled = true;
+        }
+
+        var faces = new FacePiles.Face[faceCount];
+        var rows = new List<Element>(nameCount + (nameExtra > 0 ? 1 : 0));
+        int painted = Math.Max(faceCount, nameCount);
+        for (int i = 0; i < painted; i++)
+        {
+            var artist = ranked[i].Artist;
+            string name = resolved[i].Name.Length > 0 ? resolved[i].Name : artist.Name;
+            bool lensable = LikedFactsRules.ArtistKey(artist).Length > 0;
+            bool lit = LikedFactsRules.IsArtistLens(filters, artist);
+            Action? click = lensable ? () => Toggle(artist) : null;
+            string tip = p.Liked
+                ? Strings.Detail.LikedFacts.ArtistTip(name, ranked[i].Count)
+                : Strings.Detail.LikedFacts.ArtistTipAdded(name, ranked[i].Count);
+            if (i < faceCount) faces[i] = new FacePiles.Face(name, resolved[i].Image?.Url, click, lit, tip);
+            if (i < nameCount) rows.Add(NameRow(name, ranked[i].Count.ToString(culture), lit, click, tip, "who:" + i));
+        }
+        if (nameExtra > 0) rows.Add(MoreRow(nameExtra, () => moreOpen.Value, ToggleMore, MoreKey));
+
+        return LikedFactsPanel.Card("fact:artists",
+            LikedFactsPanel.Head(Loc.Get(p.Liked ? Strings.Detail.LikedFacts.MostLiked : Strings.Detail.LikedFacts.TopArtists), null),
+            new BoxEl
+            {
+                Direction = 1, Gap = Spacing.S, MinWidth = 0f,
+                Children =
+                [
+                    new BoxEl
+                    {
+                        Shrink = 0f, OnRealized = h => anchor.Value = h,
+                        Children =
+                        [
+                            FacePiles.Strip(faces, faceCount, pileExtra,
+                                pileExtra > 0 ? ToggleMore : null,
+                                pileExtra > 0 ? Strings.Detail.LikedFacts.MoreArtists(pileExtra) : null),
+                        ],
+                    },
+                    new BoxEl
+                    {
+                        Direction = 1, Gap = Spacing.XXS, MinWidth = 0f,
+                        Children = rows.ToArray(),
+                    },
+                ],
+            });
+    }
+
+    static Element NameRow(string name, string count, bool lit, Action? onClick, string tip, string key)
+    {
+        bool live = onClick is not null;
+        Element row = new BoxEl
+        {
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.XS, MinWidth = 0f,
+            Padding = new Edges4(2f, 1f, 2f, 1f), Corners = CornerRadius4.All(4f),
+            Role = live ? AutomationRole.Button : AutomationRole.None,
+            Focusable = live, Cursor = live ? CursorId.Hand : CursorId.Arrow,
+            FocusVisualMargin = live ? new Edges4(1f, 1f, 1f, 1f) : default,
+            Fill = lit ? Tok.AccentSubtle : ColorF.Transparent,
+            HoverFill = !live ? ColorF.Transparent : lit ? Tok.AccentSecondary : Tok.FillSubtleSecondary,
+            PressedFill = live ? Tok.FillSubtleTertiary : ColorF.Transparent,
+            HoverScale = live ? WaveeMotion.ScaleSubtle.Hover : 1f,
+            PressScale = live ? WaveeMotion.ScaleSubtle.Press : 1f,
+            HoverDurationMs = MotionTok.ControlFaster.DurationMs, HoverEasing = MotionTok.ControlFaster.Easing,
+            OnClick = onClick,
+            Children =
+            [
+                Caption(name) with
+                {
+                    Weight = 600, Color = lit ? Tok.AccentTextPrimary : Tok.TextPrimary,
+                    Shrink = 1f, MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
+                },
+                Caption("·") with { Color = Tok.TextTertiary, Shrink = 0f },
+                Caption(count) with { Color = Tok.TextTertiary, Shrink = 0f, MaxLines = 1 },
+            ],
+        };
+        return ToolTip.Wrap(row, tip, showDelayMs: LikedLens.TipDelayMs, grow: 1f) with { Key = key };
+    }
+
+    static Element MoreRow(int extra, Func<bool> open, Action toggle, Action<KeyEventArgs> key)
+        => new BoxEl
+        {
+            Key = "who:more", Direction = 0, AlignItems = FlexAlign.Center, Gap = 6f, Shrink = 0f,
+            Padding = new Edges4(2f, 1f, 2f, 1f), Corners = CornerRadius4.All(4f),
+            Role = AutomationRole.Button, Focusable = true, Cursor = CursorId.Hand,
+            FocusVisualMargin = new Edges4(1f, 1f, 1f, 1f),
+            HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+            HoverScale = WaveeMotion.ScaleSubtle.Hover, PressScale = WaveeMotion.ScaleSubtle.Press,
+            HoverDurationMs = MotionTok.ControlFaster.DurationMs, HoverEasing = MotionTok.ControlFaster.Easing,
+            OnClick = toggle, OnKeyDown = key,
+            Children =
+            [
+                SidebarChevron.Disclosure(open),
+                Caption(Strings.Detail.LikedFacts.MoreArtists(extra)) with
+                {
+                    Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
+                },
+            ],
+        };
+
+    static Element Flyout(IReadOnlyList<LikedFactsRules.ArtistCount> ranked, IReadOnlyList<Artist> resolved,
+        CultureInfo culture, in TrackFilterState filters, DetailHandlers h, Action close)
+    {
+        var rows = new Element[ranked.Count];
+        for (int i = 0; i < ranked.Count; i++)
+        {
+            var artist = ranked[i].Artist;
+            var a = resolved[i];
+            string name = a.Name.Length > 0 ? a.Name : artist.Name;
+            bool lensable = LikedFactsRules.ArtistKey(artist).Length > 0;
+            bool lit = LikedFactsRules.IsArtistLens(filters, artist);
+            int count = ranked[i].Count;
+            Action? click = lensable
+                ? () =>
+                {
+                    var live = h.Filters?.Peek() ?? TrackFilterState.Default;
+                    h.SetFilters?.Invoke(LikedFactsRules.IsArtistLens(live, artist)
+                        ? live.WithArtist(null)
+                        : live.WithArtist(LikedFactsRules.ArtistKey(artist), artist.Name));
+                    close();
+                }
+                : null;
+            BoxEl row = new BoxEl
+            {
+                Key = "all:" + i, Direction = 0, Height = 44f, AlignItems = FlexAlign.Center, Gap = Spacing.M,
+                Padding = new Edges4(Spacing.S, 0f, Spacing.S, 0f),
+                Corners = CornerRadius4.All(6f),
+                Fill = lit ? Tok.AccentSubtle : ColorF.Transparent,
+                Role = lensable ? AutomationRole.MenuItem : AutomationRole.None,
+                Focusable = lensable, Cursor = lensable ? CursorId.Hand : (CursorId?)null,
+                OnClick = click,
+                Children =
+                [
+                    PersonPicture.Create("", 32f, displayName: name, imageSourcePath: a.Image?.Url),
+                    Caption(name) with
+                    {
+                        Weight = 600, Color = lit ? Tok.AccentTextPrimary : Tok.TextPrimary,
+                        Grow = 1f, Basis = 0f, MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
+                    },
+                    Caption(count.ToString(culture)) with { Color = Tok.TextTertiary, Shrink = 0f },
+                ],
+            };
+            rows[i] = lensable ? row.Interactive(Interaction.Subtle) : row;
+        }
+
+        var list = new BoxEl { Direction = 1, Gap = Spacing.XXS, Width = 264f, Children = rows };
+        return new BoxEl
+        {
+            Direction = 1, Width = 280f, MaxHeight = 360f,
+            Padding = Edges4.All(Spacing.S), Gap = Spacing.S,
+            Children =
+            [
+                WaveeType.Eyebrow(Loc.Get(Strings.Detail.LikedFacts.AllArtists)) with { Color = Tok.TextTertiary },
+                ScrollView(list) with { Width = 264f, MaxHeight = 320f, ContentSized = true, AutoEdgeFade = true, Grow = 0f },
+            ],
+        };
+    }
+
+    static IReadOnlyList<Artist> Resolve(IReadOnlyList<LikedFactsRules.ArtistCount> ranked, IStore? store)
+    {
+        var result = new Artist[ranked.Count];
+        for (int i = 0; i < ranked.Count; i++)
+        {
+            var ar = ranked[i].Artist;
+            var fromStore = ar.Uri.Length > 0 ? store?.GetArtist(ar.Uri) : null;
+            string name = ar.Name.Length > 0 ? ar.Name : fromStore?.Name ?? "";
+            result[i] = fromStore is not null
+                ? fromStore with { Name = name.Length > 0 ? name : fromStore.Name }
+                : new Artist(ar.Id, ar.Uri, name, null);
+        }
+        return result;
+    }
+
+    static List<string> UrisNeedingPortrait(IReadOnlyList<Artist> billed)
+    {
+        var uris = new List<string>(billed.Count);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        for (int i = 0; i < billed.Count; i++)
+        {
+            string uri = billed[i].Uri;
+            if (billed[i].Image is null && uri.Length > 0 && seen.Add(uri)) uris.Add(uri);
+        }
+        return uris;
+    }
+
+    static string UriKey(IReadOnlyList<LikedFactsRules.ArtistCount> ranked)
+    {
+        if (ranked.Count == 0) return "";
+        var sb = new System.Text.StringBuilder();
+        for (int i = 0; i < ranked.Count; i++)
+        {
+            if (i > 0) sb.Append('\n');
+            string uri = ranked[i].Artist.Uri;
+            sb.Append(uri.Length > 0 ? uri : ranked[i].Artist.Name);
+        }
+        return sb.ToString();
     }
 }
 
@@ -968,6 +1371,21 @@ internal static class LikedLens
         return Strings.Detail.LikedFacts.LensWeek(Strings.Detail.LikedFacts.WeekRange(start, end));
     }
 
+    /// <summary>"Added Jul 27 – Aug 3" — the playlist week lens, named the same way its bar's tooltip names it.</summary>
+    internal static string AddedLabel(long afterMs, long beforeMs, CultureInfo culture)
+    {
+        var (start, end) = RangeParts(afterMs, beforeMs, culture);
+        return Strings.Detail.LikedFacts.LensAdded(Strings.Detail.LikedFacts.WeekRange(start, end));
+    }
+
+    internal static string YearLabel(int min, int max, CultureInfo culture)
+    {
+        if (min != 0 && min == max) return Strings.Detail.LikedFacts.LensYear(min.ToString(culture));
+        string a = min == 0 ? "\u2026" : min.ToString(culture);
+        string b = max == 0 ? "\u2026" : max.ToString(culture);
+        return Strings.Detail.LikedFacts.LensYears(a, b);
+    }
+
     /// <summary>The group header the track list shows while a rail fact is lensing it: one pill per active lens, each
     /// with its own clear, and the count of what survived.
     ///
@@ -980,21 +1398,30 @@ internal static class LikedLens
     /// <para>The Tag pill appears for a chip click too, and that is deliberate: the blend slice and the chip write the
     /// SAME facet, so a header that appeared for one and not the other would be describing the click rather than the
     /// state.</para></summary>
-    internal static Element? Header(in TrackFilterState filter, int visibleCount, DetailHandlers h, CultureInfo culture)
+    internal static Element? Header(in TrackFilterState filter, int visibleCount, DetailHandlers h, CultureInfo culture,
+        bool liked = true)
     {
         var lenses = LikedFactsRules.ActiveLenses(filter);
         if (lenses == LikedFactsRules.LikedLens.None) return null;
 
-        var kids = new List<Element>(4);
+        var kids = new List<Element>(5);
         if ((lenses & LikedFactsRules.LikedLens.Week) != 0)
-            kids.Add(Pill("lens:week", WeekLabel(filter.AddedAfterMs, filter.AddedBeforeMs, culture),
-                          LikedFactsRules.LikedLens.Week, h));
+            kids.Add(Pill("lens:week",
+                liked ? WeekLabel(filter.AddedAfterMs, filter.AddedBeforeMs, culture)
+                      : AddedLabel(filter.AddedAfterMs, filter.AddedBeforeMs, culture),
+                LikedFactsRules.LikedLens.Week, h));
         if ((lenses & LikedFactsRules.LikedLens.Artist) != 0)
             // The display name when we have it, the id when we do not — a lens must always be able to say what it is.
             kids.Add(Pill("lens:artist", filter.ArtistName is { Length: > 0 } n ? n : filter.ArtistId ?? "",
                           LikedFactsRules.LikedLens.Artist, h));
         if ((lenses & LikedFactsRules.LikedLens.Tag) != 0)
             kids.Add(Pill("lens:tag", filter.Tag ?? "", LikedFactsRules.LikedLens.Tag, h));
+        if ((lenses & LikedFactsRules.LikedLens.Year) != 0)
+            kids.Add(Pill("lens:year", YearLabel(filter.ReleaseYearMin, filter.ReleaseYearMax, culture),
+                          LikedFactsRules.LikedLens.Year, h));
+        if ((lenses & LikedFactsRules.LikedLens.Tempo) != 0)
+            // Named by the same table the tempo card's bands and the tempo pill use, so the header cannot disagree.
+            kids.Add(Pill("lens:tempo", TempoBandText.Range(filter.Tempo), LikedFactsRules.LikedLens.Tempo, h));
 
         // The count is the VISIBLE row count, so it answers "and how much is that?" for whatever combination of lenses
         // is on — including zero, which is a real and useful answer ("that week, nothing by this artist").
@@ -1054,5 +1481,276 @@ internal static class LikedLens
                 ToolTip.Wrap(close, Loc.Get(Strings.Detail.LikedFacts.LensClear), showDelayMs: TipDelayMs),
             ],
         };
+    }
+}
+
+/// <summary>The ONE wording table for the four tempo bands — the card's band tooltips, the tempo pill and the list
+/// header all read it, so a pill can never name a band the rows it lenses do not match. Boundaries come from
+/// <see cref="TrackFilterModel.BandOf"/>; these are only their words and their domain intervals on the plot.</summary>
+internal static class TempoBandText
+{
+    internal static string Range(TrackTempoBand band) => Loc.Get(band switch
+    {
+        TrackTempoBand.Under90 => Strings.Detail.LikedFacts.BandUnder90,
+        TrackTempoBand.From90To119 => Strings.Detail.LikedFacts.Band90,
+        TrackTempoBand.From120To139 => Strings.Detail.LikedFacts.Band120,
+        _ => Strings.Detail.LikedFacts.Band140,
+    });
+
+    internal static string Name(TrackTempoBand band) => Loc.Get(band switch
+    {
+        TrackTempoBand.Under90 => Strings.Detail.LikedFacts.BandNameUnder90,
+        TrackTempoBand.From90To119 => Strings.Detail.LikedFacts.BandName90,
+        TrackTempoBand.From120To139 => Strings.Detail.LikedFacts.BandName120,
+        _ => Strings.Detail.LikedFacts.BandName140,
+    });
+
+    internal static string Tip(TrackTempoBand band, int count)
+        => Strings.Detail.LikedFacts.TempoBandTip(Range(band), Name(band), count);
+
+    /// <summary>The band's interval on the 60–200 bpm plot (the open ends clamp to the plot's edges).</summary>
+    internal static (float Lo, float Hi) Domain(TrackTempoBand band) => band switch
+    {
+        TrackTempoBand.Under90 => (TempoCard.DomainMin, 90f),
+        TrackTempoBand.From90To119 => (90f, 120f),
+        TrackTempoBand.From120To139 => (120f, 140f),
+        _ => (140f, TempoCard.DomainMax),
+    };
+}
+
+/// <summary>"Tempo" — the kind-222 BPM distribution of the list as the kit's <see cref="DensityPlot"/>: a KDE ridge
+/// over 60–200 bpm, a rug of the actual tempos coloured by their Camelot key (the row's swatch convention,
+/// <c>WaveePalette.DataDotInk</c>), the median as the numeral and a marker, and the FOUR FILTER BANDS as the plot's
+/// lenses — a band click writes <c>TrackFilterState.Tempo</c>, the facet the filter flyout already owns, so the list,
+/// the flyout and the header agree without a new filter. Mounted only when <c>LikedFactsRules.TempoShape</c> is
+/// GRAPH (see the pills for LABEL).
+///
+/// <para>Its own component so the lit band follows the filter signal without re-rendering the whole bento, and so the
+/// plot's value arrays stay reference-stable across a lit change (the plot's geometry memo keys on them).</para></summary>
+sealed class TempoCard : Component
+{
+    /// <summary>The list's tempo summary comes in PRE-COMPUTED (one pass per list, in the panel); the tracks are here
+    /// only to fill the plot's value array when the tempos actually change.</summary>
+    internal sealed record Props(LikedFactsRules.TempoSummary Tempo, IReadOnlyList<Track> Tracks, DetailHandlers Handlers);
+
+    internal static Element Create(in LikedFactsRules.TempoSummary tempo, IReadOnlyList<Track> tracks, DetailHandlers h)
+        => Embed.Comp(new Props(tempo, tracks, h), static () => new TempoCard()) with { Key = "fact:tempo" };
+
+    internal const float DomainMin = 60f, DomainMax = 200f;
+    /// <summary>Fixed so the plot's width — and therefore its measured geometry — does not move when the numeral
+    /// changes from "98" to "128".</summary>
+    const float NumeralColumnWidth = 72f;
+    // Three captions, not six: at 140 DIP of plot every second label was touching its neighbour.
+    static readonly PlotTick[] Ticks = [new(80f, "80"), new(120f, "120"), new(160f, "160")];
+    static readonly TrackTempoBand[] Bands = [TrackTempoBand.Under90, TrackTempoBand.From90To119, TrackTempoBand.From120To139, TrackTempoBand.From140AndUp];
+
+    /// <summary>The rail's calm variant of the kit plot: ridge + line, the median marker behind the line, captions —
+    /// no rug (the row's BPM · Key column already carries each track's tempo and key colour; on a 38 DIP ridge the
+    /// dots read as noise) and no hairlines (the band you hover washes itself). Four things, one hue.</summary>
+    static DensityPlot.Style PlotStyle => DensityPlot.DefaultStyle with
+    {
+        TipDelayMs = LikedLens.TipDelayMs, LineWidth = 1.25f, AxisFontSize = 10f,
+        Marker = Tok.AccentTextPrimary with { A = 0.45f },
+    };
+
+    public override Element Render()
+    {
+        var p = UseProps<Props>();
+        var tracks = p.Tracks;
+        var t = p.Tempo;
+        var stats = t.Stats;
+        var culture = CultureInfo.CurrentCulture;
+        // Subscribe: the lit band is the list's filter, wherever it was set from (the flyout, the header's ×, a pill).
+        var filters = p.Handlers.Filters?.Value ?? TrackFilterState.Default;
+
+        // The plot's value array, memoised on the tempo CONTENT (the fingerprint), never on the list instance: the
+        // detail page rebuilds its list on every hydration pass (descriptors, play counts, identity…), and the plot's
+        // own geometry memo is keyed on this array — a new array per pass would re-mint and re-tessellate the ridge up
+        // to twenty times a second while a playlist opens. Same tempos ⇒ same array ⇒ same paths.
+        var bpm = UseMemo(() =>
+        {
+            var b = new float[stats.Known];
+            Span<uint> unused = stats.Known <= 512 ? stackalloc uint[stats.Known] : new uint[stats.Known];
+            LikedFactsRules.TempoValues(tracks, b, unused);
+            return b;
+        }, DepKey.From(t.Fingerprint.Hash, (long)t.Fingerprint.Known));
+
+        var bands = new PlotBand[Bands.Length];
+        for (int i = 0; i < Bands.Length; i++)
+        {
+            var band = Bands[i];
+            var (lo, hi) = TempoBandText.Domain(band);
+            bool lit = LikedFactsRules.IsTempoLens(filters, band);
+            void Toggle()
+            {
+                var live = p.Handlers.Filters?.Peek() ?? TrackFilterState.Default;
+                p.Handlers.SetFilters?.Invoke(live with { Tempo = LikedFactsRules.IsTempoLens(live, band) ? TrackTempoBand.Any : band });
+            }
+            bands[i] = new PlotBand(lo, hi, TempoBandText.Tip(band, t.Count(i)), lit, Toggle);
+        }
+
+        var model = new DensityPlotModel(bpm, DomainMin, DomainMax)
+        {
+            Bands = bands, Ticks = Ticks, Marker = (float)stats.Median, RugDotMax = 0,
+        };
+
+        string median = Math.Round(stats.Median).ToString(culture);
+        string trailing = stats.Known < stats.Total
+            ? Strings.Detail.LikedFacts.TempoCoverage(stats.Known, stats.Total)
+            : Strings.Detail.LikedFacts.TempoRange(Math.Round(stats.Min).ToString(culture), Math.Round(stats.Max).ToString(culture));
+
+        var big = new BoxEl
+        {
+            Direction = 1, Gap = Spacing.XS, Shrink = 0f, Width = NumeralColumnWidth,
+            Children =
+            [
+                ZStack(new BoxEl
+                {
+                    Key = "v:" + median,
+                    Animate = MotionRecipes.TextSwap,
+                    Children = [Title(median) with { MaxLines = 1 }],
+                }),
+                Caption(Loc.Get(Strings.Detail.LikedFacts.BpmMedian)) with { Color = Tok.TextTertiary, MaxLines = 1 },
+            ],
+        };
+
+        return LikedFactsPanel.Card("fact:tempo",
+            LikedFactsPanel.Head(Loc.Get(Strings.Detail.LikedFacts.Tempo), trailing),
+            new BoxEl
+            {
+                Direction = 0, Gap = Spacing.M, AlignItems = FlexAlign.End, MinWidth = 0f,
+                Children = [big, DensityPlot.Create(model, PlotStyle, key: "tempo-plot")],
+            });
+    }
+}
+
+/// <summary>The pill row — the distribution facts that did NOT earn a card (<c>LikedFactsRules.FactShape.Label</c>),
+/// each a one-line label that is still a LENS: "mostly 2024 · 41 of 50" filters to 2024 exactly as the years bar would
+/// have, "mostly 120 – 139 bpm" writes the same tempo band the card's band would, "K-Pop 98 %" is the blend slice's
+/// tag lens. A lit pill takes the accent-subtle wash a lit bar takes; an idle pill sits on the card surface with a fact
+/// glyph so it never reads as an active filter chip. A flat blend ("12 styles, none over 15 %") has no one tag to
+/// open and is the one plain (non-button) pill. Wording: a pill names the BAND/RANGE it filters — the median tempo is
+/// in its tooltip, and there is no "steady"/"varied" prose (half/double-time reporting would make it a lie).</summary>
+internal static class FactPills
+{
+    // 24-unit stroke glyphs (interned once — the string is the identity).
+    static readonly PathData CalendarGlyph = PathDataParser.Parse("M4 5h16v15H4zM4 10h16M8 3v4M16 3v4", PathContentEpoch.Mint(), FillRule.NonZero);
+    static readonly PathData MetronomeGlyph = PathDataParser.Parse("M9 4h6l3 16H6zM12 15l5-9", PathContentEpoch.Mint(), FillRule.NonZero);
+    static readonly PathData TagGlyph = PathDataParser.Parse("M4 4h7l9 9-7 7-9-9zM8.5 8.5h.01", PathContentEpoch.Mint(), FillRule.NonZero);
+
+    internal static Element? Row(LikedFactsRules.FactsSummary s, bool yearsPill, bool tempoPill, bool blendPill,
+        CultureInfo culture, in TrackFilterState filters, DetailHandlers h)
+    {
+        var pills = new List<Element>(3);
+        string mostly = Loc.Get(Strings.Detail.LikedFacts.PillMostly);
+
+        if (yearsPill && s.YearBuckets.Count > 0)
+        {
+            var d = s.YearsDominance;
+            if (d.Known > 0 && d.TopIndex >= 0)
+            {
+                var b = s.YearBuckets[d.TopIndex];
+                string range = b.YearMin == b.YearMax
+                    ? b.YearMin.ToString(culture)
+                    : Strings.Detail.LikedFacts.YearRange(b.YearMin.ToString(culture), b.YearMax.ToString(culture));
+                bool lit = LikedFactsRules.IsYearLens(filters, b);
+                void Toggle()
+                {
+                    var live = h.Filters?.Peek() ?? TrackFilterState.Default;
+                    h.SetFilters?.Invoke(LikedFactsRules.IsYearLens(live, b)
+                        ? live.WithReleaseYear(0, 0)
+                        : live.WithReleaseYear(b.YearMin, b.YearMax));
+                }
+                pills.Add(Pill("pill:years", CalendarGlyph, mostly, range, Strings.Detail.LikedFacts.PillCount(b.Count, d.Known),
+                               lit, Toggle, Strings.Detail.LikedFacts.PillYearsTip(range, b.Count, d.Known)));
+            }
+        }
+
+        if (tempoPill)
+        {
+            var d = s.Tempo.Dominance;
+            if (d.Known > 0 && d.TopIndex >= 0)
+            {
+                var band = (TrackTempoBand)(d.TopIndex + 1);
+                var stats = s.Tempo.Stats;
+                int count = s.Tempo.Count(d.TopIndex);
+                bool lit = LikedFactsRules.IsTempoLens(filters, band);
+                void Toggle()
+                {
+                    var live = h.Filters?.Peek() ?? TrackFilterState.Default;
+                    h.SetFilters?.Invoke(live with { Tempo = LikedFactsRules.IsTempoLens(live, band) ? TrackTempoBand.Any : band });
+                }
+                pills.Add(Pill("pill:tempo", MetronomeGlyph, mostly, TempoBandText.Range(band),
+                               Strings.Detail.LikedFacts.PillCount(count, d.Known), lit, Toggle,
+                               Strings.Detail.LikedFacts.PillTempoTip(Math.Round(stats.Median).ToString(culture), stats.Known, stats.Total)));
+            }
+        }
+
+        if (blendPill)
+        {
+            var d = s.BlendDominance;
+            if (d.AboveFloor > 0 && d.TopTitle is { } title)
+            {
+                string share = d.TopShare.ToString("P0", culture);
+                if (d.Flat)
+                {
+                    string flatShare = LikedFactsRules.BlendFlat.ToString("P0", culture);
+                    pills.Add(Pill("pill:blend", TagGlyph, "", Strings.Detail.LikedFacts.PillBlendFlat(d.Styles, flatShare), null,
+                                   lit: false, toggle: null, Strings.Detail.LikedFacts.PillBlendFlat(d.Styles, flatShare)));
+                }
+                else
+                {
+                    bool lit = LikedFactsRules.IsTagLens(filters, title);
+                    void Toggle()
+                    {
+                        var live = h.Filters?.Peek() ?? TrackFilterState.Default;
+                        h.SetFilters?.Invoke(live with { Tag = LikedFactsRules.IsTagLens(live, title) ? null : title });
+                    }
+                    pills.Add(Pill("pill:blend", TagGlyph, "", title, share, lit, Toggle,
+                                   Strings.Detail.LikedFacts.ShareTip(title, d.TopCount, share)));
+                }
+            }
+        }
+
+        if (pills.Count == 0) return null;
+        return new BoxEl
+        {
+            Key = "fact:pills", Direction = 0, Wrap = true, Gap = 6f, MinWidth = 0f,
+            Enter = DetailRail.FadeUp, Layout = DetailRail.Shove,
+            Children = pills.ToArray(),
+        };
+    }
+
+    static Element Pill(string key, PathData glyph, string lead, string strong, string? trailing, bool lit, Action? toggle, string tip)
+    {
+        bool live = toggle is not null;
+        var ink = lit ? Tok.AccentTextPrimary : Tok.TextTertiary;
+        var kids = new List<Element>(4)
+        {
+            new PathEl
+            {
+                Geometry = glyph, Width = 13f, Height = 13f, ViewBoxW = 24f, ViewBoxH = 24f, Shrink = 0f,
+                StrokeColor = ink, Stroke = new StrokeStyle(2.4f, LineCap.Round, LineJoin.Round),
+            },
+        };
+        if (lead.Length > 0) kids.Add(Caption(lead) with { Color = lit ? Tok.AccentTextPrimary : Tok.TextSecondary, MaxLines = 1 });
+        kids.Add(Caption(strong) with { Weight = 600, Color = lit ? Tok.AccentTextPrimary : Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, Shrink = 1f, MinWidth = 0f });
+        if (trailing is { Length: > 0 }) kids.Add(Caption(trailing) with { Color = Tok.TextTertiary, MaxLines = 1 });
+
+        var pill = new BoxEl
+        {
+            Key = key, Direction = 0, AlignItems = FlexAlign.Center, Gap = 6f, Height = 26f, MinWidth = 0f,
+            Padding = new Edges4(8f, 0f, 10f, 0f), Corners = CornerRadius4.All(13f),
+            Fill = lit ? Tok.AccentSubtle : Tok.FillCardDefault,
+            BorderWidth = 1f, BorderColor = lit ? Tok.AccentSecondary : Tok.StrokeCardDefault, Shadow = Elevation.Card,
+            Role = live ? AutomationRole.Button : AutomationRole.None, Focusable = live,
+            Cursor = live ? CursorId.Hand : null, FocusVisualMargin = new Edges4(1f, 1f, 1f, 1f),
+            HoverFill = live ? (lit ? Tok.AccentSecondary : Tok.FillSubtleSecondary) : (lit ? Tok.AccentSubtle : Tok.FillCardDefault),
+            PressedFill = live ? Tok.FillSubtleTertiary : (lit ? Tok.AccentSubtle : Tok.FillCardDefault),
+            HoverDurationMs = MotionTok.ControlFaster.DurationMs, HoverEasing = MotionTok.ControlFaster.Easing,
+            OnClick = toggle,
+            Children = kids.ToArray(),
+        };
+        return ToolTip.Wrap(pill, tip, showDelayMs: LikedLens.TipDelayMs) with { Key = key };
     }
 }

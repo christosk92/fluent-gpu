@@ -27,11 +27,6 @@ sealed partial class SettingsPage
     readonly Signal<int> _density = new(1);
     readonly Signal<int> _language = new(0);
 
-    /// <summary>The palette ids the picker offers, in card order. ONE list: the swatch that shows an id and the writer
-    /// that persists it both index it, so the picker can never offer an id <c>Tok.PaletteById</c> cannot answer — the
-    /// defect <c>LightModeOverhaulTests</c> pins as a source gate.</summary>
-    static readonly string[] s_paletteIds = ["warm", "slate", "neutral", "accent"];
-
     static (string[] Codes, string[] Labels) LanguageOptions()
     {
         return (
@@ -330,47 +325,10 @@ sealed partial class SettingsPage
     {
         var labels = TrackListStyleLabels();
 
-        Element Bar(float grow, WaveePicker.Ink ink, bool strong = false) => new BoxEl
-        {
-            Grow = grow, Basis = 0f, MinWidth = 0f, Height = Spacing.XXS,
-            Corners = Radii.Circle(Spacing.XXS), Fill = strong ? ink.Block : ink.Faint,
-        };
-
-        Element ModernRow(WaveePicker.Ink ink) => new BoxEl
-        {
-            Height = Spacing.XL, Direction = 0, Gap = Spacing.XS, AlignItems = FlexAlign.Center,
-            Padding = new Edges4(Spacing.XS, 0f, Spacing.XS, 0f),
-            Corners = Radii.ControlAll, Fill = ink.Faint,
-            Children =
-            [
-                new BoxEl { Width = Spacing.L, Height = Spacing.L, Shrink = 0f, Corners = Radii.ControlAll, Fill = ink.Block },
-                new BoxEl
-                {
-                    Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = Spacing.XXS,
-                    Children = [Bar(1f, ink, strong: true), Bar(0.65f, ink)],
-                },
-            ],
-        };
-
-        Element ClassicRow(WaveePicker.Ink ink) => new BoxEl
-        {
-            Height = Spacing.XL, Direction = 1,
-            Children =
-            [
-                new BoxEl
-                {
-                    Direction = 0, Grow = 1f, Gap = Spacing.S, AlignItems = FlexAlign.Center,
-                    Padding = new Edges4(Spacing.XS, 0f, Spacing.XS, 0f),
-                    Children = [Bar(1f, ink, strong: true), Bar(0.75f, ink), Bar(0.75f, ink)],
-                },
-                new BoxEl { Height = 1f, Fill = ink.Faint },
-            ],
-        };
-
         Element Card(int value, bool on)
         {
             var ink = WaveePicker.Ink.For(on);
-            Element Row() => value == 0 ? ModernRow(ink) : ClassicRow(ink);
+            Element Row() => value == 0 ? WaveePicker.ModernRow(ink) : WaveePicker.ClassicRow(ink);
             return WaveePicker.Titled(
                 WaveePicker.Card(on, WaveePicker.Tile, Row(), Row(), Row()) with { Justify = FlexJustify.Center },
                 labels[value], on);
@@ -478,7 +436,7 @@ sealed partial class SettingsPage
     Element PaletteRow(IAppSettings? settings, Action<float>? requestTheme)
     {
         string activeId = Tok.Palette.Id;
-        int active = Array.IndexOf(s_paletteIds, activeId);
+        int active = Array.IndexOf(AppearanceStageModel.PaletteIds, activeId);
         if (active < 0) active = 0;
 
         BoxEl Swatch(string label, ColorF fill, bool on) => WaveePicker.Titled(
@@ -494,7 +452,7 @@ sealed partial class SettingsPage
             },
             label, on, gap: 5f) with { Width = 56f };
 
-        // Ordered to match s_paletteIds — the writer below indexes the same list, so a swatch cannot show one palette
+        // Ordered to match AppearanceStageModel.PaletteIds — the writer below indexes the same list, so a swatch cannot show one palette
         // and persist another.
         Element Card(int i, bool on) => i switch
         {
@@ -504,10 +462,10 @@ sealed partial class SettingsPage
             _ => Swatch(Loc.Get(Strings.Settings.Appearance.PaletteWarm), WaveeColors.PresetSwatch(Tok.WarmPalette), on),
         };
 
-        return WaveePicker.Strip(s_paletteIds.Length, active, Card, i =>
+        return WaveePicker.Strip(AppearanceStageModel.PaletteIds.Length, active, Card, i =>
         {
-            if ((uint)i >= (uint)s_paletteIds.Length) return;
-            WaveeTheme.ApplyPalette(s_paletteIds[i], settings);
+            if ((uint)i >= (uint)AppearanceStageModel.PaletteIds.Length) return;
+            WaveeTheme.ApplyPalette(AppearanceStageModel.PaletteIds[i], settings);
             requestTheme?.Invoke(250f);
             Bump();
         });

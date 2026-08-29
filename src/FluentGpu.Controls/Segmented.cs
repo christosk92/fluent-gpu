@@ -45,6 +45,7 @@ public static class Segmented
         public ColorF SelectedForeground { get; init; }
         public ColorF DisabledForeground { get; init; }
         public ColorF SelectionPill { get; init; }
+        public ushort SelectedFontWeight { get; init; } = 400;
     }
 
     public sealed record SegmentedOptions
@@ -186,6 +187,7 @@ internal sealed class SegmentedCore : Component
                 HoverColor = isSelected ? p.Style.SelectedForeground : Tok.TextPrimary,
                 PressedColor = foreground,
                 DisabledColor = p.Style.DisabledForeground,
+                Weight = (ushort)(isSelected ? p.Style.SelectedFontWeight : 400),
             });
 
             var content = p.Parts.Apply(Segmented.PartContent, new BoxEl

@@ -55,7 +55,7 @@ public class DealerReplayTests
         var slc = Pl.SelectedListContent.Parser.ParseFrom(Slc(rev, uris));
         slc.Attributes = new Pl.ListAttributes { Name = name };
         slc.Capabilities = new Pl.Capabilities { CanView = true };
-        slc.OwnerUsername = "31unjfmo3oefvlz36ef3eb6kj5tq";
+        slc.OwnerUsername = "31testuser000000000000000000";
         return slc.ToByteArray();
     }
 
@@ -262,7 +262,7 @@ public class DealerReplayTests
         await using var r = await ReplayAllAsync(seed: h =>
         {
             h.Store.UpsertPlaylist(new Playlist("4vkIrispQ6gcMNIojGPd0L", P3, "Doomed", null,
-                "31unjfmo3oefvlz36ef3eb6kj5tq", null, 1));
+                "31testuser000000000000000000", null, 1));
             h.Store.SetMembership(P3, new[] { new PlaylistMember("i1", "spotify:track:t1", null, 0) }, Rev24(1));
             h.Store.SetSaved("playlists", P3, true, SyncState.Confirmed);
         });
@@ -279,7 +279,7 @@ public class DealerReplayTests
     {
         await using var r = await ReplayAllAsync(seed: h =>
             h.Store.UpsertPlaylist(new Playlist("6EVbQZBiAg9zHzMjChxvRd", P1, "Daily Mix 1 (2)", null,
-                "31unjfmo3oefvlz36ef3eb6kj5tq", null, 0, IsPublic: false)));
+                "31testuser000000000000000000", null, 0, IsPublic: false)));
 
         Assert.Equal(0, r.Server.PermissionGets);                 // the pushes alone carry the state
         Assert.True(r.H.Store.GetPlaylist(P1)!.IsPublic);         // BLOCKED then VIEWER: the LAST push wins

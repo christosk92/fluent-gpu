@@ -29,6 +29,19 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
 
     /// <summary>Liked Songs' canonical collection uri — the entity the Liked surface's rung is measured on.</summary>
     const string LikedCollectionUri = "spotify:collection:tracks";
+    // The OTHER saved sets' collection uris (CollectionHydration.SetOf — design §2.3): same background-ask shape as
+    // Liked, so GetAlbumsAsync/GetArtistsAsync/GetShowsAsync stop being the one library read that never asks the
+    // façade for its own collection rung.
+    const string SavedAlbumsCollectionUri = "spotify:collection:albums";
+    const string SavedArtistsCollectionUri = "spotify:collection:artists";
+    const string SavedShowsCollectionUri = "spotify:collection:shows";
+
+    /// <summary>The one background ask every saved-set read fires after its join: Background mode so nothing on
+    /// screen ever waits on it, tagged <see cref="TraitSurface.LikedSongs"/> because that is
+    /// <see cref="CollectionHydration"/>'s only row-trait surface (its trait pass is gated to the "liked"/"episodes"
+    /// sets — <c>CollectionHydration.ContinueAsync</c>) — inert rather than misleading for albums/artists/shows,
+    /// which this options value only ever pages at Identity, never decorates with a row bundle.</summary>
+    static readonly HydrationOptions BackgroundCollectionAsk = new(HydrationMode.Background, Surface: TraitSurface.LikedSongs);
     readonly SimpleSubject<CollectionKind> _collections = new();
     readonly IDisposable _sub;
 
@@ -133,19 +146,94 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
 
     public async Task<Album?> GetAlbumAsync(string uri, HydrationLevel level = HydrationLevel.Open, CancellationToken ct = default)
     {
-        if (level == HydrationLevel.None) return _store.GetAlbum(uri);
+        if (level == HydrationLevel.None) return ReJoinTracks(_store.GetAlbum(uri));
+
+        // Captured BEFORE the ensure: was this album already past Open — i.e. is this a RE-open, not the ladder's
+        // first-ever pass over it? AlbumHydration's own Rich branch already fires ONE trait pass on that first pass
+        // (Rich_AwaitsOneTraitPassCarryingRowBundlePlayCountAndPublishing); the companion ask below exists for every
+        // ask AFTER that one, so it must not fire on a cold open or it would simply duplicate the ladder's own ask.
+        bool wasAlreadyOpen = _hydration.LevelOf(uri) >= HydrationLevel.Open;
+
         // Ensure THEN read: the ladder writes the store, the store is the single read model. The surface tag is what
         // picks the trait bundle the album rung awaits (RowBundle|PlayCount|Publishing) — see TraitPolicy.
         await _hydration.EnsureAsync(uri, level, new HydrationOptions(Surface: TraitSurface.AlbumOpen), ct).ConfigureAwait(false);
-        return _store.GetAlbum(uri);
+        var album = ReJoinTracks(_store.GetAlbum(uri));
+
+        // An album with no ©/℗ facet at all can never reach Rich (HydrationLevels.Of), so it seals Exhausted for a
+        // full day (HydrationPolicy.ExhaustedAlbumRichTtl) — and THAT seal skips AlbumHydration.ContinueAsync
+        // WHOLESALE on every later open, its own PlayCount/RowBundle trait step included, for the same day, even
+        // though a play count changing has nothing to do with why the album has no publishing facet. Firing the same
+        // bundle again here, beside the ladder rather than only from inside it, keeps PLAYS/BPM·KEY alive on a re-open
+        // regardless of the seal: EnsureTraitsAsync never consults the ledger (only the trait pipeline's own per-row
+        // AlreadyHas mark + the session NegativeMemo), so a warm row costs nothing and a genuinely absent facet costs
+        // one request per SESSION, never one per day. Gated to "still short of Rich after an already-open album" so a
+        // cold open (where the ladder's own pass is what is running right now) or an album that DID reach Rich never
+        // sees a duplicate ask.
+        if (level >= HydrationLevel.Rich && wasAlreadyOpen && album is { Uri.Length: > 0 }
+            && HydrationLevels.Of(album) < HydrationLevel.Rich)
+            _ = _hydration.EnsureTraitsAsync(AlbumTraitUris(album), TraitSet.RowBundle | TraitSet.PlayCount | TraitSet.Publishing,
+                TraitSurface.AlbumOpen);
+        return album;
+    }
+
+    static List<string> AlbumTraitUris(Album album)
+    {
+        var uris = new List<string>((album.Tracks?.Count ?? 0) + 1) { album.Uri };
+        if (album.Tracks is { Count: > 0 } tracks)
+            for (int i = 0; i < tracks.Count; i++)
+                if (tracks[i].Uri.Length > 0) uris.Add(tracks[i].Uri);
+        return uris;
+    }
+
+    /// <summary>Re-join <see cref="Album.Tracks"/> against the store at read — the album equivalent of
+    /// <see cref="ReJoinTopTracks"/> below, for the same reason: <c>AlbumHydration.RebuildTracklists</c> only re-joins
+    /// from INSIDE its own Rich/Open post-steps, so a play count or tempo that landed on the shared Track row from any
+    /// OTHER surface (a playlist trait pass, this class's own <see cref="AlbumTraitUris"/> companion ask above) stays
+    /// invisible on the album page until that ladder step runs again — which the Rich-exhausted seal can delay a full
+    /// day. Read-only: never writes back through <c>UpsertAlbum</c>, exactly like <see cref="ReJoinTopTracks"/>.</summary>
+    Album? ReJoinTracks(Album? a)
+    {
+        if (a?.Tracks is not { Count: > 0 } tracks) return a;
+        var rebuilt = new List<Track>(tracks.Count);
+        bool changed = false;
+        for (int i = 0; i < tracks.Count; i++)
+        {
+            var row = _store.GetTrack(tracks[i].Uri);
+            if (row is not null && !ReferenceEquals(row, tracks[i])) changed = true;
+            rebuilt.Add(row ?? tracks[i]);
+        }
+        return changed ? a with { Tracks = rebuilt } : a;
     }
 
     public async Task<Artist?> GetArtistAsync(string uri, HydrationLevel level = HydrationLevel.Open, CancellationToken ct = default)
     {
-        if (level == HydrationLevel.None) return _store.GetArtist(uri);
+        if (level == HydrationLevel.None) return ReJoinTopTracks(_store.GetArtist(uri));
         // No trait surface: an artist rung's own traits ride the chart step inside ArtistHydration (ArtistPopular).
         await _hydration.EnsureAsync(uri, level, HydrationOptions.Default, ct).ConfigureAwait(false);
-        return _store.GetArtist(uri);
+        return ReJoinTopTracks(_store.GetArtist(uri));
+    }
+
+    /// <summary>Re-join <see cref="Artist.TopTracks"/> against the store at read — the same re-join shape as
+    /// <c>AlbumHydration.RebuildTracklists</c> (AlbumHydration.cs:174-189). TopTracks is a denormalized snapshot
+    /// written by ArtistHydration's chart pass on its own cadence (<c>HydrationPolicy.ArtistRichTtl</c>, ~12h — see
+    /// ArtistHydration.cs's <c>ChartFetchedAt</c> gate); a Track row healed by any OTHER surface in the meantime (a
+    /// TrackV4 identity landing, a trait pass) would otherwise not reach ArtistPopular until that stamp expires and
+    /// the chart re-fetches. Only allocates the rebuilt list's replacement (the <c>with</c>) when at least one row
+    /// instance actually differs — never writes back through <c>UpsertArtist</c>: this is a read-model copy, and the
+    /// chart pass owns the stored shape (its own PlayCount-authoritative merge, ArtistHydration.cs §"stats rewrote
+    /// TopTracks").</summary>
+    Artist? ReJoinTopTracks(Artist? a)
+    {
+        if (a?.TopTracks is not { Count: > 0 } top) return a;
+        var rebuilt = new List<Track>(top.Count);
+        bool changed = false;
+        for (int i = 0; i < top.Count; i++)
+        {
+            var row = _store.GetTrack(top[i].Uri);
+            if (row is not null && !ReferenceEquals(row, top[i])) changed = true;
+            rebuilt.Add(row ?? top[i]);
+        }
+        return changed ? a with { TopTracks = rebuilt } : a;
     }
 
     // Discography paging — now a pure in-memory slice. TopAlbums holds the WHOLE discography (ArtistV4 groups → stubs,
@@ -231,8 +319,21 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
         }
     }
 
-    public Task<IReadOnlyList<Album>> GetAlbumsAsync(CancellationToken ct = default) => Task.FromResult(JoinSet("albums", _store.GetAlbum));
-    public Task<IReadOnlyList<Artist>> GetArtistsAsync(CancellationToken ct = default) => Task.FromResult(JoinSet("artists", _store.GetArtist));
+    public Task<IReadOnlyList<Album>> GetAlbumsAsync(CancellationToken ct = default)
+    {
+        var albums = JoinSet("albums", _store.GetAlbum);
+        // Saved albums are a COLLECTION too (CollectionHydration, design §2.3): the same background ask Liked fires
+        // in GetLikedSongsAsync, so a member that never got named through some OTHER surface still reaches Open.
+        _ = _hydration.EnsureAsync(SavedAlbumsCollectionUri, HydrationLevel.Open, BackgroundCollectionAsk, ct);
+        return Task.FromResult(albums);
+    }
+
+    public Task<IReadOnlyList<Artist>> GetArtistsAsync(CancellationToken ct = default)
+    {
+        var artists = JoinSet("artists", _store.GetArtist);
+        _ = _hydration.EnsureAsync(SavedArtistsCollectionUri, HydrationLevel.Open, BackgroundCollectionAsk, ct);
+        return Task.FromResult(artists);
+    }
 
     // Liked Songs is an ADD-ORDERED collection (newest first — the Spotify default) with the add date a first-class,
     // sortable column: join the timestamped set and stamp AddedAt onto the read-model copy (same shape JoinMembership
@@ -251,8 +352,7 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
         // hooks this used to fan out (paged member hydrate + video/adornment detect). CollectionHydration pages the
         // saved set at 300 and asks for the LikedSongs trait bundle itself — see design §2.3.
         if (level != HydrationLevel.None)
-            _ = _hydration.EnsureAsync(LikedCollectionUri, HydrationLevel.Open,
-                new HydrationOptions(HydrationMode.Background, Surface: TraitSurface.LikedSongs), ct);
+            _ = _hydration.EnsureAsync(LikedCollectionUri, HydrationLevel.Open, BackgroundCollectionAsk, ct);
         return Task.FromResult<IReadOnlyList<Track>>(list);
     }
 
@@ -472,7 +572,13 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
             _store.SavedUris("liked").Count, _store.SavedUris("shows").Count));
 
     // ── IPodcastSource ──
-    public Task<IReadOnlyList<Show>> GetShowsAsync(CancellationToken ct = default) => Task.FromResult(JoinSet("shows", _store.GetShow));
+    public Task<IReadOnlyList<Show>> GetShowsAsync(CancellationToken ct = default)
+    {
+        var shows = JoinSet("shows", _store.GetShow);
+        _ = _hydration.EnsureAsync(SavedShowsCollectionUri, HydrationLevel.Open, BackgroundCollectionAsk, ct);
+        return Task.FromResult(shows);
+    }
+
     public async Task<Show?> GetShowAsync(string uri, HydrationLevel level = HydrationLevel.Open, CancellationToken ct = default)
     {
         if (level == HydrationLevel.None) return ComposeShow(uri);

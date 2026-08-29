@@ -143,6 +143,40 @@ public class ActionRulesTests
         Assert.Equal(new[] { "spotify:track:a" }, p.Enqueued);
     }
 
+    // ── bug 1: an inserted row for a video-capable track must not assert "audio" — the target has no reason to doubt
+    // an explicit claim, so a hardcoded downgrade actively lies. ──────────────────────────────────────────────────────
+    [Fact]
+    public void PlayNext_VideoAssociatedTrack_DoesNotClaimAudio()
+    {
+        var track = T.Mk("v");
+        var store = new Wavee.Backend.InMemoryStore();
+        store.UpsertVideoAssociation(new VideoAssociation(track.Uri, true, "spotify:track:v-video",
+            VideoAssociation.NoFiles, null, DateTimeOffset.UtcNow, 0));
+        try
+        {
+            VideoPresence.Attach(null, store);
+            var p = new RecordingPlayer();
+            DetailQueueActions.PlayNext(p, new[] { track });
+
+            var meta = p.PlayNextCalls[0][0].Metadata!;
+            Assert.Equal("video", meta["track_player"]);
+            Assert.Equal("video", meta["media.type"]);
+            Assert.Equal("spotify:track:v-video", meta["video_association"]);
+        }
+        finally { VideoPresence.Attach(null); }
+    }
+
+    [Fact]
+    public void PlayNext_PlainTrack_StillReportsAudio()
+    {
+        VideoPresence.Attach(null);   // nothing attached → every track answers "no video"
+        var p = new RecordingPlayer();
+        DetailQueueActions.PlayNext(p, new[] { T.Mk("a") });
+
+        Assert.Equal("audio", p.PlayNextCalls[0][0].Metadata!["track_player"]);
+        Assert.False(p.PlayNextCalls[0][0].Metadata!.ContainsKey("media.type"));
+    }
+
     // ── the drag-drop slot insert: the queue-relative index rides the call, and the batch cap is reported ──────────
     [Fact]
     public void InsertAt_PassesSlotAndCapsTheBatch()

@@ -158,8 +158,8 @@ static class DetailRail
         // this the only 900 in the app.
         // The title exists in BOTH models — it is the run that must never be rewritten, only moved.
         kids.Add(Row("rail:title", editable
-            ? PlaylistInlineEdit.Title(modelSource, cover, titleSize, lineHeight: titleLineHeight)
-            : WaveeType.PageHero(m.Title) with
+            ? PlaylistInlineEdit.Title(modelSource, cover, titleSize, displayFace: true, lineHeight: titleLineHeight, maxLines: 3)
+            : WaveeType.DetailHero(m.Title) with
             {
                 Size = titleSize, MinSize = 18f, Weight = 600, Width = cover, LineHeight = titleLineHeight,
                 Wrap = TextWrap.WrapWholeWords, MaxLines = 3, Trim = TextTrim.CharacterEllipsis,
@@ -232,7 +232,7 @@ static class DetailRail
         // `Row`, not `LateRow`: the panel owns its own entrance (AlbumTrailing.ReleasePanel's documented contract, and
         // the same call shape three rows above). `LikedFacts.Has` is the honesty gate — an empty or unstamped library
         // mounts NOTHING rather than a stack of empty cards (E1).
-        if (LikedFacts.Has(m))
+        if (LikedFacts.Has(m, cfg.Badges))
             kids.Add(Row("rail:likedfacts", LikedFacts.Panel(m, h, outerPadding: false)));
 
         var rail = new BoxEl

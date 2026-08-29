@@ -43,8 +43,21 @@ public class PlaylistHydrationTests
         public void Dispose() => Pump.Dispose();
     }
 
+    // Seeds a baseline AND resident member rows: since PlaylistHydration.LevelOf now scans membership for thinness
+    // (design §2.3 — a container is only as hydrated as its thinnest row), a member left resident-less would read the
+    // playlist back at Identity instead of Full/Open and flip an EnsureAsync outcome from Reached to Partial — a
+    // correct result for a THIN member, but not what these open/revalidate-mechanics tests are exercising. The
+    // dedicated thin-member coverage (Open_WithBaselineAndThinMember_AsksIdentityForThatMemberOnly and neighbors,
+    // below) seeds membership WITHOUT a resident row on purpose.
     static void Seed(InMemoryStore store, params string[] members)
-        => store.SetMembership(Uri, members.Select((m, i) => new PlaylistMember("i" + i, m, null, 0)).ToArray(), null);
+    {
+        store.SetMembership(Uri, members.Select((m, i) => new PlaylistMember("i" + i, m, null, 0)).ToArray(), null);
+        foreach (var m in members)
+        {
+            if (EntityUri.KindOf(m) == EntityKind.Track) store.UpsertTrack(TrackAt(m, HydrationLevel.Full));
+            else if (EntityUri.KindOf(m) == EntityKind.Episode) store.UpsertEpisode(EpisodeAt(m, HydrationLevel.Full));
+        }
+    }
 
     [Fact]
     public void RootlistOpenPlan_IncludesThinRows_ButNotKnownEmptyPlaylists()
@@ -212,5 +225,126 @@ public class PlaylistHydrationTests
         await DrainAsync(h.Pump);
 
         Assert.Equal(after, h.Catalog.Calls);
+    }
+
+    // ── LevelOf: the container is only as hydrated as its thinnest member (design parity with CollectionHydration /
+    // ShowHydration) ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void LevelOf_MemberRowUnnamed_ReportsIdentity()
+    {
+        var store = new InMemoryStore();
+        store.UpsertPlaylist(new Playlist("p1", Uri, "List", null, "me", null, 1));
+        store.SetMembership(Uri, [new PlaylistMember("i0", "spotify:track:t1", null, 0)], null);
+        // The row is RESIDENT but unnamed (Title == uri placeholder) — a real header/body split, not a missing row.
+        store.UpsertTrack(TrackAt("spotify:track:t1", HydrationLevel.None));
+        var ladder = new PlaylistHydration(store, new FakePlaylistOpener(), new TraitPolicy());
+
+        Assert.Equal(HydrationLevel.Identity, ladder.LevelOf(Uri));
+    }
+
+    [Fact]
+    public void LevelOf_AllMembersNamed_ReportsFull()
+    {
+        var store = new InMemoryStore();
+        store.UpsertPlaylist(new Playlist("p1", Uri, "List", null, "me", null, 1));
+        store.SetMembership(Uri, [new PlaylistMember("i0", "spotify:track:t1", null, 0)], null);
+        store.UpsertTrack(TrackAt("spotify:track:t1", HydrationLevel.Identity));
+        var ladder = new PlaylistHydration(store, new FakePlaylistOpener(), new TraitPolicy());
+        // Bringing the row up to Identity (named) is enough — the scan only brakes below Identity, so the container's
+        // own rung (Full, since a baseline is resident) is what comes back.
+        Assert.Equal(HydrationLevel.Full, ladder.LevelOf(Uri));
+    }
+
+    [Fact]
+    public void LevelOf_MissingMemberRow_ReportsIdentity()
+    {
+        var store = new InMemoryStore();
+        store.UpsertPlaylist(new Playlist("p1", Uri, "List", null, "me", null, 1));
+        // The row was never joined at all — GetTrack answers null, which HydrationLevels.Of reads as None.
+        store.SetMembership(Uri, [new PlaylistMember("i0", "spotify:track:missing", null, 0)], null);
+        var ladder = new PlaylistHydration(store, new FakePlaylistOpener(), new TraitPolicy());
+
+        Assert.Equal(HydrationLevel.Identity, ladder.LevelOf(Uri));
+    }
+
+    // ── ContinueAsync's Open step: the thin-member repair (design gap — the fetcher's hydrate delegate is one-shot,
+    // so a row that stayed thin across an earlier pass was never re-asked until this closed it) ────────────────────────
+    // These drive PlaylistHydration.ContinueAsync directly against a RecordingHydrator (LadderHarness, the same shape
+    // AlbumHydrationTests/ArtistHydrationTests use) so the exact EnsureManyAsync batch shape is assertable, independent
+    // of the full SpotifyProviderHydrator façade the rest of this file exercises.
+
+    [Fact]
+    public async Task Open_WithBaselineAndThinMember_AsksIdentityForThatMemberOnly()
+    {
+        using var h = new LadderHarness();
+        var opener = new FakePlaylistOpener();
+        h.Store.UpsertPlaylist(new Playlist("p1", Uri, "List", null, "me", null, 2));
+        h.Store.SetMembership(Uri, [
+            new PlaylistMember("i0", "spotify:track:t1", null, 0),
+            new PlaylistMember("i1", "spotify:track:t2", null, 0),
+        ], null);
+        h.Store.UpsertTrack(TrackAt("spotify:track:t1", HydrationLevel.Full));   // t2 stays unresident — the thin one
+
+        var ladder = new PlaylistHydration(h.Store, opener, new TraitPolicy());
+        await ladder.ContinueAsync(LadderHarness.Batch(Uri), HydrationLevel.Open, default, h.Ctx, CancellationToken.None);
+        await h.DrainAsync();
+
+        var batch = Assert.Single(h.Hydrator.Batches);
+        Assert.Equal(HydrationLevel.Identity, batch.Level);
+        Assert.Equal(["spotify:track:t2"], batch.Uris);
+        // The member-traits post-step still ran on the pump — the repair does not replace it.
+        Assert.Single(h.Hydrator.TraitCalls);
+    }
+
+    [Fact]
+    public async Task Open_AllMembersNamed_NoMemberAsk()
+    {
+        using var h = new LadderHarness();
+        var opener = new FakePlaylistOpener();
+        h.Store.UpsertPlaylist(new Playlist("p1", Uri, "List", null, "me", null, 1));
+        h.Store.SetMembership(Uri, [new PlaylistMember("i0", "spotify:track:t1", null, 0)], null);
+        h.Store.UpsertTrack(TrackAt("spotify:track:t1", HydrationLevel.Full));
+
+        var ladder = new PlaylistHydration(h.Store, opener, new TraitPolicy());
+        await ladder.ContinueAsync(LadderHarness.Batch(Uri), HydrationLevel.Open, default, h.Ctx, CancellationToken.None);
+        await h.DrainAsync();
+
+        Assert.Empty(h.Hydrator.Batches);
+    }
+
+    [Fact]
+    public async Task Open_ThinMembersOver300_PagedAt300()
+    {
+        using var h = new LadderHarness();
+        var opener = new FakePlaylistOpener();
+        h.Store.UpsertPlaylist(new Playlist("p1", Uri, "List", null, "me", null, 301));
+        var members = new List<PlaylistMember>(301);
+        for (int i = 0; i < 301; i++) members.Add(new PlaylistMember("i" + i, "spotify:track:t" + i, null, 0));
+        h.Store.SetMembership(Uri, members, null);   // every row is thin — none was ever upserted
+
+        var ladder = new PlaylistHydration(h.Store, opener, new TraitPolicy());
+        await ladder.ContinueAsync(LadderHarness.Batch(Uri), HydrationLevel.Open, default, h.Ctx, CancellationToken.None);
+        await h.DrainAsync();
+
+        Assert.Equal(2, h.Hydrator.Batches.Count);
+        Assert.Equal(300, h.Hydrator.Batches[0].Uris.Count);
+        Assert.Equal(1, h.Hydrator.Batches[1].Uris.Count);
+    }
+
+    // ── RootlistOpenPlan: a restored header can be non-null AND have a baseline while still reading back below
+    // Identity (design §2.3 — see the doc comment on RootlistOpenPlan) ───────────────────────────────────────────────
+
+    [Fact]
+    public void RootlistOpenPlan_NamelessHeaderWithMembership_IsPlanned()
+    {
+        const string nameless = "spotify:playlist:nameless";
+        var store = new InMemoryStore();
+        store.SetRootlist([new RootlistEntry(0, 0, nameless, null, 0)]);
+        // Both presence tests pass (a header row exists, a baseline exists) — only the LEVEL check catches this.
+        store.UpsertPlaylist(new Playlist("nameless", nameless, "", null, "me", null, 1));
+        store.SetMembership(nameless, [new PlaylistMember("i0", "spotify:track:t1", null, 0)], null);
+
+        Assert.Equal([nameless], PlaylistHydration.RootlistOpenPlan(store));
     }
 }

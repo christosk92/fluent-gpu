@@ -12,9 +12,27 @@ Wavee keyboard chords. The command palette (Ctrl+K) is the fastest way to jump t
 | **Alt+Left** | Back |
 | **Alt+Right** | Forward |
 | **Space** | Play / pause (not while typing in a text field) |
+| **F11** | Toggle video full screen (only while a video is playing; otherwise a no-op) |
 | **Escape** | Close the palette, a flyout, or the sidebar drawer |
 
-Mouse back/forward buttons (XButton1/2) are not wired — the engine does not currently deliver those extra mouse buttons.
+Mouse back/forward buttons (XButton1/2) **are** wired. The OS delivers them as `WM_APPCOMMAND` rather than as a click,
+so they arrive through the PAL seam: `WaveeShell` subscribes `FluentApp.AppNavigationCommand` and routes it to the same
+`Back()` / `Forward()` that Alt+Left / Alt+Right use. The same path covers keyboards with dedicated Back/Forward keys.
+
+## Planned in the next batch
+
+Not wired yet — listed so the chords are not claimed twice.
+
+| Shortcut | Action |
+|---|---|
+| **Ctrl+Right** / **Ctrl+Left** | Next / previous track |
+| **Shift+Right** / **Shift+Left** | Seek ±5 s |
+| **Ctrl+Up** / **Ctrl+Down** | Volume up / down |
+| **Ctrl+Shift+Down** | Mute |
+| **Ctrl+S** | Toggle shuffle |
+| **Ctrl+R** | Toggle repeat |
+| **Alt+Shift+B** | Like / unlike the current track |
+| **Ctrl+/** | Open this shortcuts dialog |
 
 ## Command palette (Ctrl+K)
 

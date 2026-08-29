@@ -21,18 +21,20 @@ sealed class SetupSession
     public static readonly Signal<int> OpenRequest = new(0);
     public static void Bump() => OpenRequest.Value++;
 
-    /// <summary>The shell reads this to blur/dim behind the dialog while it is open. Flipped by
-    /// <see cref="SetupDialog.Open"/> — true only for a <c>bare: false</c> mount (there IS a live shell behind it
-    /// to dim); cleared on every close path from the same method's <c>ClosedAction</c>.</summary>
-    public static readonly Signal<bool> Covering = new(false);
+    /// <summary>The shell reads this to dim (<see cref="SetupCover.Dim"/>) or to stay a genuine live preview
+    /// (<see cref="SetupCover.Live"/>); <see cref="SetupCover.None"/> = nothing to cover (pre-auth) or not covering.
+    /// Set by <see cref="SetupDialog.Open"/> — only a <c>bare: false</c> mount ever leaves <c>None</c> (there IS a
+    /// live shell behind it to cover); cleared back to <c>None</c> on every close path from the same method's
+    /// <c>ClosedAction</c>.</summary>
+    public static readonly Signal<SetupCover> Covering = new(SetupCover.None);
 
     /// <summary>Monotonic "the wizard's pending/completed marker may just have changed" signal, bumped by
     /// <see cref="SetupDialog.Open"/>'s <c>ClosedAction</c> on every close path (defer OR complete). Exists because
     /// <c>WaveeApp</c>'s login gate reads <see cref="SetupGating.IsPending"/> off plain <c>IAppSettings</c> — not a
     /// signal — so without this, closing the wizard's <c>bare: true</c> pre-auth mount would leave
-    /// <c>SetupPreAuthRoot</c> mounted forever (a titlebar and a transparent body, no dialog, no way back to
-    /// <c>LoginView</c>): <c>WaveeApp</c> subscribes to this so the gate re-evaluates immediately instead of
-    /// waiting for some unrelated re-render.</summary>
+    /// <c>SetupPreAuthRoot</c> mounted forever — a titlebar over a transparent body, no dialog, and nothing behind it
+    /// to fall back to: <c>WaveeApp</c> subscribes to this so the gate re-evaluates immediately instead of waiting for
+    /// some unrelated re-render.</summary>
     public static readonly Signal<int> MarkerEpoch = new(0);
     public static void BumpMarker() => MarkerEpoch.Value++;
 
@@ -47,12 +49,16 @@ sealed class SetupSession
     public readonly Signal<NavTransitionKind> Dir = new(NavTransitionKind.Neutral);
     public readonly Signal<SetupApplyState> Apply = new(SetupApplyState.Idle);
 
-    /// <summary>Which of the four applying rows (<c>SetupStepList</c>) is current, for the Done page's own
-    /// determinate step list. Driven by <c>SetupDonePage</c> off real observables (settings flush / sidebar rebuild
-    /// / library load / runtime ready) while <see cref="Apply"/> is Running — never a progress-theatre timer.</summary>
+    /// <summary>Written only by <see cref="PrimaryDone"/> (jumps straight to 4). The Done page derives its
+    /// checklist from real observables (<c>SetupDoneSteps</c>) — this stage is not a progress source.</summary>
     public readonly Signal<int> ApplyStage = new(0);
 
     public readonly EntryPoint Entry;
+
+    /// <summary>Is there a live shell behind this wizard? True only for <see cref="EntryPoint.Rerun"/> — the one run
+    /// that has somewhere to go back to, which is why it is also the only one Escape/light-dismiss may close
+    /// (<see cref="SetupGating.CanDismiss"/>) and the only one whose Welcome "Not now" closes instead of quitting.</summary>
+    public bool IsRerun => Entry == EntryPoint.Rerun;
 
     /// <summary>Whether <see cref="SetupPage.SignIn"/> is skipped because the user is already authenticated (the
     /// Settings → "Run setup again" rerun path). Computed once at construction via <see cref="SetupGating.SkipSignIn"/>.</summary>
@@ -63,6 +69,15 @@ sealed class SetupSession
     public Action? StartBrowser { get; set; }
     /// <summary>Wired by <c>WaveeApp.Render</c>: request a fresh device-code pairing after Expired.</summary>
     public Action? RestartCode { get; set; }
+    /// <summary>Wired by <c>WaveeApp.Render</c>: abandon the in-flight sign-in attempt (cancel the shared session CTS,
+    /// drop the login snapshot back to <c>LoggedOut</c>) WITHOUT quitting. This is what the Busy footer's "Cancel"
+    /// means — the button says Cancel, so it must cancel; routing it to <see cref="QuitApp"/> (as it did) killed the
+    /// app out from under a user who only wanted to stop waiting on a pairing code.</summary>
+    public Action? CancelSignIn { get; set; }
+    /// <summary>"Not me" on the Done ("Is this you?") phase: sign this PC out so a different account can sign in —
+    /// <c>Services.LogoutAsync</c> in the real app (clears the stored credential, flips the gate; the page drops back to
+    /// Idle and mints a fresh code).</summary>
+    public Action? SwitchAccount { get; set; }
     /// <summary>Wired by <c>WaveeApp.Render</c>: quit the app (the Terms "Decline" exit).</summary>
     public Action? QuitApp { get; set; }
     /// <summary>Set by <see cref="SetupDialog.Open"/> to the overlay handle's <c>Close</c> — the session can close its
@@ -153,7 +168,7 @@ sealed class SetupSession
             ? SetupCommands.Project(b.Login.Value.Phase, b.Login.Value.Step, b.Auth.Value)
             : SetupSignInPhase.Idle;
         var runtime = Runtime is { } m ? RuntimeFacetFor(m.PhaseSig.Value) : SetupRuntimeFacet.Offer;
-        return new SetupCtx(Page.Value, signIn, runtime, Apply.Value, SkipSignIn, Entry == EntryPoint.Rerun);
+        return new SetupCtx(Page.Value, signIn, runtime, Apply.Value, SkipSignIn, IsRerun);
     }
 
     /// <summary>Move to <paramref name="to"/>, writing <see cref="Dir"/> BEFORE <see cref="Page"/> in the same
@@ -178,14 +193,26 @@ sealed class SetupSession
             case SetupPage.SignIn: PrimarySignIn(); break;
             case SetupPage.LocalPlayback: PrimaryLocalPlayback(); break;
             case SetupPage.Done: PrimaryDone(); break;
+
+            // "Accept" is a CONSENT, so it has to leave a durable record: without this write the wizard asked, the
+            // user answered, and nothing anywhere remembered it — a re-consent when the terms change (see
+            // SetupBootstrap.RearmForTerms / SetupGating.NeedsTermsRearm) would then be impossible to target, because
+            // every install looks equally un-asked. Written BEFORE the advance so a crash between the two pages
+            // cannot lose an acceptance the user already gave.
+            case SetupPage.Terms:
+                if (Settings is { } termsSettings)
+                    termsSettings.Set(WaveeSettings.TermsAcceptedVersion, SetupTermsPage.CurrentVersion);
+                Advance(SetupGating.NextPage(page, SkipSignIn));
+                break;
+
             default: Advance(SetupGating.NextPage(page, SkipSignIn)); break;
         }
     }
 
-    /// <summary>Mirrors <c>LoginView</c>'s own callback wiring (<c>StartBrowser</c>/<c>RestartCode</c>): the SignIn
-    /// page carries no state of its own, so its primary is exactly the takeover's own per-phase action, minus the
-    /// Idle/AwaitingApproval screen's own always-live "Log in" (that button lives ON the QR pane too, but the
-    /// footer's primary is the one <see cref="SetupCommands.Resolve"/> already gates).</summary>
+    /// <summary>The SignIn page carries no state of its own, so its primary is exactly the per-phase login action
+    /// (<see cref="StartBrowser"/>/<see cref="RestartCode"/>), minus the Idle/AwaitingApproval screen's own always-live
+    /// "Log in" (that affordance lives ON the browser option card too, but the footer's primary is the one
+    /// <see cref="SetupCommands.Resolve"/> already gates).</summary>
     void PrimarySignIn()
     {
         switch (SignInPhase())
@@ -251,13 +278,12 @@ sealed class SetupSession
         switch (page)
         {
             case SetupPage.Welcome:
-                // "Not now" on the FIRST page quits, and must not simply close. Closing here used to drop the user
-                // into the old standalone LoginView takeover — a second, different sign-in surface, which is the
-                // exact duplication this wizard exists to remove. Wavee cannot be used without signing in, so there
-                // is nothing behind this dialog to fall back to: the honest options are "start setup" or "quit", and
+                // "Not now" on the FIRST page quits, and must not simply close. Wavee cannot be used without signing
+                // in, and this wizard is the only place to do it, so there is nothing behind this dialog to fall back
+                // to — closing would leave a bare titlebar over Mica. The honest options are "start setup" or "quit", and
                 // the setup marker stays armed so the next launch resumes here (see SetupDialog.Open's ClosedAction).
                 // On a RERUN there IS a live shell behind, so closing is the right move instead of quitting.
-                if (Entry == EntryPoint.Rerun) RequestClose?.Invoke();
+                if (IsRerun) RequestClose?.Invoke();
                 else QuitApp?.Invoke();
                 break;
 
@@ -290,14 +316,26 @@ sealed class SetupSession
         }
     }
 
-    /// <summary>Pre-auth, "giving up" on any of Idle/Busy/Failed/Expired means quitting — exactly what the login
-    /// takeover's own Close already does (there is no shell to fall back to without an account), and exactly why
-    /// this session already carries <see cref="QuitApp"/> wired to the same intent. Premium's "Use a different
-    /// account" is the one exception — it restarts the device code, matching <c>LoginView.Premium</c>'s own button.</summary>
+    /// <summary>Pre-auth, "giving up" on Idle/Failed/Expired means quitting — there is no shell to fall back to
+    /// without an account, which is exactly why this session carries <see cref="QuitApp"/>. The two exceptions read
+    /// off the button's OWN label, which is the whole point:
+    /// <list type="bullet">
+    /// <item>BUSY says "Cancel" (<c>SetupCommands.SignInRow</c>) — so it cancels the attempt
+    /// (<see cref="CancelSignIn"/>) and lands back on Idle with the two option cards. It must never quit: the label
+    /// promises to stop the sign-in, not to stop Wavee.</item>
+    /// <item>PREMIUM says "Use a different account" — so it re-mints the device code.</item>
+    /// <item>DONE says "Not me" on the "Is this you?" confirmation — so it signs this PC out
+    /// (<see cref="SwitchAccount"/>) and the page drops back to Idle with a fresh code.</item>
+    /// </list></summary>
     void SecondarySignIn()
     {
-        if (SignInPhase() == SetupSignInPhase.Premium) RestartCode?.Invoke();
-        else QuitApp?.Invoke();
+        switch (SignInPhase())
+        {
+            case SetupSignInPhase.Busy: CancelSignIn?.Invoke(); break;
+            case SetupSignInPhase.Premium: RestartCode?.Invoke(); break;
+            case SetupSignInPhase.Done: SwitchAccount?.Invoke(); break;
+            default: QuitApp?.Invoke(); break;
+        }
     }
 
     /// <summary>"Not now"/"Cancel"/"Back" per <see cref="PlaybackRuntimeSetupModel.Phase"/> — "Not now" ALSO burns

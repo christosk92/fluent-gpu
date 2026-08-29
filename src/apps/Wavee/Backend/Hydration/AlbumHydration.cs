@@ -51,7 +51,7 @@ public sealed class AlbumHydration : IKindHydration
 
         // Sub-asks inherit the caller's priority (a prefetch's repair must not jump an open's queue) but never its
         // surface: a TrackV4 repair is identity work, not an AlbumOpen trait ask.
-        var sub = new HydrationOptions(HydrationMode.Blocking, opts.Revalidate, TraitSurface.None, opts.Priority);
+        var sub = new HydrationOptions(HydrationMode.Blocking, opts.Revalidate, TraitSurface.None, opts.Priority, SubAsk: true);
         var fetched = level >= HydrationLevel.Open ? new HashSet<string>(StringComparer.Ordinal) : null;
 
         // ── (a) TrackV4 repair: ONE batched call for every unnamed disc row in the whole batch ───────────────────────
@@ -146,6 +146,13 @@ public sealed class AlbumHydration : IKindHydration
                 if (LevelOf(uris[i].Uri) >= HydrationLevel.Full) continue;
                 await FetchEnvelopeAsync(uris[i].Uri, "full", ctx, ct).ConfigureAwait(false);
             }
+
+            // Same re-join as (a)/(c): the envelope's rows were routed through UpsertTrack onto the shared TRACK
+            // plane (merge keeps whatever richer Title/Duration/PlayCount was already resident — see
+            // StoreEntityMerge.Track), so the album's OWN denormalized `Tracks` list has to be rebuilt from those rows
+            // to actually pick up the merge's answer rather than whatever FetchEnvelopeAsync wrote verbatim (which, per
+            // the tracksAdopted gate above, may deliberately have been withheld).
+            RebuildTracklists(uris);
         }
 
         // ── (e) Post-step: an Open-only ask still wants its row facets, just not on the critical path ────────────────
@@ -165,6 +172,44 @@ public sealed class AlbumHydration : IKindHydration
                         TraitSurface.AlbumOpen, pct).ConfigureAwait(false);
                     RebuildTracklists(uris);   // same re-join as the Rich path — the facets land on the ROWS
                 });
+        }
+
+        // ── Diagnostic-only tripwire: did any album finish this rung still carrying rows the ladder could not name? ────
+        // Every earlier step re-joins from the Track plane on the assumption that a repair/envelope/trait pass already
+        // landed real names there; if one didn't (repair failed AND no getAlbum ran, or getAlbum was withheld by the
+        // tracksAdopted gate above while a row inside it is STILL unnamed) the album silently ships thin rows with
+        // nothing surfacing why. This never blocks or retries — it is eyes-on for a live session, not a gate.
+        if (level >= HydrationLevel.Open) LogThinRows(uris);
+    }
+
+    /// <summary>Emit <c>hydration.album.rows.thin</c> for every album in the batch whose <c>Tracks</c> still has a row
+    /// <see cref="HydrationLevels.TrackUnnamed"/> flags. Gated on <see cref="WaveeLogger.IsEnabled"/> up front so a
+    /// shipping run with the level filtered out never pays to walk every row of every album in the batch.</summary>
+    void LogThinRows(IReadOnlyList<EntityUri> uris)
+    {
+        if (!_log.IsEnabled(WaveeLogLevel.Info)) return;
+        for (int i = 0; i < uris.Count; i++)
+        {
+            if (_store.GetAlbum(uris[i].Uri) is not { Tracks: { Count: > 0 } tracks }) continue;
+            List<string>? sample = null;
+            int unnamed = 0;
+            for (int t = 0; t < tracks.Count; t++)
+            {
+                if (!HydrationLevels.TrackUnnamed(tracks[t])) continue;
+                unnamed++;
+                if (sample is null) sample = new List<string>(3);
+                if (sample.Count < 3) sample.Add(tracks[t].Uri);
+            }
+            if (unnamed == 0) continue;
+            _log.Event(WaveeLogLevel.Info, "hydration.album.rows.thin", "album finished its rung with unnamed rows",
+                uris[i].Uri,
+                fields:
+                [
+                    WaveeLogField.Of("uri", uris[i].Uri),
+                    WaveeLogField.Of("rows", tracks.Count),
+                    WaveeLogField.Of("unnamed", unnamed),
+                    WaveeLogField.Of("sample", sample is null ? "" : string.Join(',', sample)),
+                ]);
         }
     }
 
@@ -208,15 +253,25 @@ public sealed class AlbumHydration : IKindHydration
         }
         if (album is null) return false;
 
+        // getAlbum PINS limit=50 (PathfinderEnvelopeFetch.AlbumAsync:28) — its tracklist is a WINDOW onto the release,
+        // not necessarily the whole thing. A resident tracklist that is already AT LEAST as long (a prior Full fetch, a
+        // TrackV4 disc-row read, or a deeper earlier getAlbum) must not be replaced by this shorter one: unlike a
+        // regular field, RebuildTracklists cannot heal a list that has already been truncated — there is nothing left
+        // to re-join it from once the rows themselves are gone. Read the resident album BEFORE any of the upserts
+        // below, so "resident" means "what was here before this fetch landed", not this fetch's own writes.
+        var resident = _store.GetAlbum(uri);
+        bool adoptTracks = !(resident?.Tracks is { Count: > 0 } r && album.Tracks is { Count: > 0 } e && r.Count >= e.Count);
+
         if (album.ArtistsDetailed is { Count: > 0 } detailed)
             for (int i = 0; i < detailed.Count; i++) _store.UpsertArtist(detailed[i]);
         if (album.Tracks is { Count: > 0 } rows)
             for (int i = 0; i < rows.Count; i++)
                 if (rows[i].Uri.Length > 0) _store.UpsertTrack(rows[i]);
-        _store.UpsertAlbum(album);
+        _store.UpsertAlbum(adoptTracks ? album : album with { Tracks = null });
 
         _log.Event(WaveeLogLevel.Info, "hydration.album.envelope", "getAlbum landed", uri,
-            fields: [WaveeLogField.Of("why", why), WaveeLogField.Of("tracks", album.Tracks?.Count ?? 0)]);
+            fields: [WaveeLogField.Of("why", why), WaveeLogField.Of("tracks", album.Tracks?.Count ?? 0),
+                WaveeLogField.Of("tracksAdopted", adoptTracks)]);
         return true;
     }
 

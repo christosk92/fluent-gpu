@@ -103,4 +103,40 @@ public class CollectionHydrationTests
         // A collection has no catalogue kind of its own, and no members — so nothing was ever asked for.
         Assert.DoesNotContain(h.Catalog.Asked, u => u.StartsWith("spotify:track:", StringComparison.Ordinal));
     }
+
+    // ── MemberLevel dispatch for the non-track saved sets (StoreLibrarySource.cs 4a) ────────────────────────────────
+    // LevelOf walks the SAVED URIS and asks MemberLevel(uri) for each — a member below Identity (unnamed / no row at
+    // all) holds the whole collection at Identity, exactly the same "not every member is even named yet" gate the
+    // liked/track set already had. These pin that the same gate fires for the album/artist/show member kinds, which
+    // MemberLevel dispatches through HydrationLevels.Of(_store.GetAlbum/GetArtist/GetShow(uri)) (CollectionHydration.cs
+    // 56-64) — no production change was needed here; the switch already covered Album/Artist/Show.
+    [Fact]
+    public void LevelOf_SavedAlbumsSet_UnnamedAlbum_ReportsIdentity()
+    {
+        var store = new InMemoryStore();
+        store.SetSaved("albums", "spotify:album:a1", true, SyncState.Confirmed);   // no album row landed yet
+        var hydration = new CollectionHydration(store, new TraitPolicy());
+
+        Assert.Equal(HydrationLevel.Identity, hydration.LevelOf("spotify:collection:albums"));
+    }
+
+    [Fact]
+    public void LevelOf_SavedArtistsSet_UnnamedArtist_ReportsIdentity()
+    {
+        var store = new InMemoryStore();
+        store.SetSaved("artists", "spotify:artist:ar1", true, SyncState.Confirmed);   // no artist row landed yet
+        var hydration = new CollectionHydration(store, new TraitPolicy());
+
+        Assert.Equal(HydrationLevel.Identity, hydration.LevelOf("spotify:collection:artists"));
+    }
+
+    [Fact]
+    public void LevelOf_SavedShowsSet_UnnamedShow_ReportsIdentity()
+    {
+        var store = new InMemoryStore();
+        store.SetSaved("shows", "spotify:show:s1", true, SyncState.Confirmed);   // no show row landed yet
+        var hydration = new CollectionHydration(store, new TraitPolicy());
+
+        Assert.Equal(HydrationLevel.Identity, hydration.LevelOf("spotify:collection:shows"));
+    }
 }

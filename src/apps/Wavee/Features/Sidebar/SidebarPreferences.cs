@@ -887,6 +887,13 @@ public sealed class SidebarEntries
     /// visible.</summary>
     readonly SidebarEntriesShadow _shadow = new();
 
+    /// <summary>The SECOND content gate, over the binder's FULL flattened projection (its <c>_all</c>) rather than the
+    /// published rows above. The planner (<c>SidebarPane.PlanDep</c>) reads the full projection, but a collapsed
+    /// folder's children are excluded from the published buffer by design (V3-list concern) — so a hydration that
+    /// changes only a playlist inside a collapsed folder would never flip the published shadow, and the pane would
+    /// keep drawing a stale row for it. This shadow catches exactly that case.</summary>
+    readonly SidebarEntriesShadow _fullShadow = new();
+
     /// <summary>Publish a completed rebuild: at most one version bump per rebuild, never per entry — and NO bump at all
     /// when the rebuild landed on byte-identical content.
     ///
@@ -895,11 +902,19 @@ public sealed class SidebarEntries
     /// 3 per navigation) for nothing. The compare is EXACT — meta + count + elementwise — never a fingerprint: a hash
     /// collision would freeze the sidebar on stale content.</para>
     ///
+    /// <para>The version now means "the binder's projection changed" — either the published rows changed, OR the
+    /// binder's full flattened projection changed (<paramref name="fullProjection"/>). The two can disagree: a
+    /// hydration that only touches a playlist inside a collapsed folder never appears in the published rows (the
+    /// V3 list omits a collapsed folder's children) but does appear in the full projection the planner reads, so
+    /// without the second gate the pane would keep drawing that row's stale raw-URI/"0 songs" content. Both shadows
+    /// are evaluated unconditionally — each must capture its own snapshot regardless of the other's result.</para>
+    ///
     /// <para>The meta fields are set either way, so a consumer that peeks them without the version still reads the
     /// truth; <see cref="Current"/> is the live buffer the producer just refilled, so it is correct across a skipped
     /// bump by construction (identical content is identical content).</para></summary>
     public void Publish(FluentGpu.Signals.LoadState state, Exception? error, bool anyContributingKindPending,
-                        bool qualifiersAvailable, int pinCount)
+                        bool qualifiersAvailable, int pinCount,
+                        IReadOnlyList<SidebarLibraryEntry>? fullProjection = null)
     {
         State = state;
         Error = error;
@@ -907,7 +922,9 @@ public sealed class SidebarEntries
         QualifiersAvailable = qualifiersAvailable;
         PinCount = pinCount < 0 ? 0 : pinCount;
         var meta = new SidebarEntriesMeta((int)state, error, anyContributingKindPending, qualifiersAvailable, PinCount);
-        if (!_shadow.Publish(_entries, in meta)) return;
+        bool published = _shadow.Publish(_entries, in meta);
+        bool full = fullProjection is not null && _fullShadow.Publish(fullProjection, default);
+        if (!published && !full) return;
         _version.Value = _version.Peek() + 1;
     }
 }

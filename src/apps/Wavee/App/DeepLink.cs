@@ -37,6 +37,28 @@ public static partial class DeepLink
         }
     }
 
+    /// <summary>Register or unregister the logon-startup entry (the HKCU <c>Run</c> value) to match
+    /// <c>WaveeSettings.StartOnLogin</c>. Same both-directions contract as
+    /// <see cref="SyncSpotifySchemeRegistration"/>: called at boot and again whenever the setting is toggled, so
+    /// switching it off actually removes the <c>Run</c> value instead of leaving a stale entry pointing at an exe the
+    /// user has since moved. Unpackaged only — a packaged build declares its startup task in the manifest and the OS
+    /// owns it; Program.cs gates the call. Never throws: a registry write we are not allowed to make must not stop the
+    /// app from starting.</summary>
+    public static void SyncStartupRegistration(bool on)
+    {
+        try
+        {
+            if (!on) { ProtocolRegistrar.UnregisterStartup("Wavee"); return; }
+            string? exe = Environment.ProcessPath;
+            if (exe is { Length: > 0 })
+                ProtocolRegistrar.RegisterStartup("Wavee", exe);
+        }
+        catch (Exception ex)
+        {
+            WaveeLog.Instance.Warn("app", "startup (run-at-logon) registration sync failed", ex);
+        }
+    }
+
     /// <summary>Restore (if minimized) and foreground the FluentApp window. No-op when the HWND is not up yet.
     /// App-side P/Invoke — <c>FluentGpu.Windows</c> has no public wake/activate helper.</summary>
     public static void WakeWindow()

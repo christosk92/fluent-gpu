@@ -37,15 +37,21 @@ static class SetupGating
         => settings is not null && settings.Get(WaveeSettings.SetupCompleted);
 
     /// <summary>Reaching Done. Sets <c>SetupCompleted</c> and clears <c>SetupPending</c>. Idempotent; returns true only
-    /// on the transition (the log line / a test's "flipped once" assertion). Completed beats a later
+    /// on the Completed transition (the log line / a test's "flipped once" assertion). Completed beats a later
     /// <see cref="MarkDeferred"/> call by construction — deferring never un-sets Completed, so calling this first and
-    /// deferring afterward (which should not happen, but must not corrupt state if it does) leaves Completed true.</summary>
+    /// deferring afterward (which should not happen, but must not corrupt state if it does) leaves Completed true.
+    ///
+    /// <para>The two writes are INDEPENDENT, and that is load-bearing: an already-completed install can be re-armed
+    /// (<see cref="NeedsTermsRearm"/>), and it reaches Done with <c>SetupCompleted</c> already true. Short-circuiting on
+    /// Completed — as an earlier revision did — would then leave <c>SetupPending</c> set forever, so the wizard would
+    /// re-open on every single launch with no way to satisfy it.</para></summary>
     public static bool MarkCompleted(IAppSettings? settings)
     {
-        if (settings is null || settings.Get(WaveeSettings.SetupCompleted)) return false;
-        settings.Set(WaveeSettings.SetupCompleted, true);
-        settings.Set(WaveeSettings.SetupPending, false);
-        return true;
+        if (settings is null) return false;
+        bool firstCompletion = !settings.Get(WaveeSettings.SetupCompleted);
+        if (firstCompletion) settings.Set(WaveeSettings.SetupCompleted, true);
+        if (settings.Get(WaveeSettings.SetupPending)) settings.Set(WaveeSettings.SetupPending, false);
+        return firstCompletion;
     }
 
     /// <summary>Deferring — "Not now", Escape, light-of-modal, a shutdown-time close. Clears <c>SetupPending</c> only;
@@ -64,6 +70,35 @@ static class SetupGating
     /// <summary>Skip the SignIn page when the user is already authenticated — re-showing a login screen to someone
     /// already logged in (the "run the wizard again from Settings" path) would be nonsensical.</summary>
     public static bool SkipSignIn(bool authed) => authed;
+
+    /// <summary>May Escape / light-dismiss / a programmatic close actually dismiss the wizard right now?
+    ///
+    /// <para>Only a RERUN may be dismissed. A first-run or re-auth wizard is Wavee's ONLY sign-in surface and there is
+    /// nothing behind it — dismissing one strands the user on <c>SetupPreAuthRoot</c>'s bare titlebar-over-Mica with no
+    /// way back in. "Not now" is still offered on those runs; it routes through <c>SetupSession.Secondary</c> to
+    /// <c>QuitApp</c>, which is an honest exit rather than an empty window. A rerun DOES have a live shell behind it,
+    /// so Escape means "put me back in the app".</para>
+    ///
+    /// <para><paramref name="busy"/> vetoes even a rerun: a running Apply, or a live catalog/download/verify
+    /// (<c>PlaybackRuntimeSetupModel.IsBusy</c>), must not be torn out from under itself.</para></summary>
+    public static bool CanDismiss(bool isRerun, bool busy) => isRerun && !busy;
+
+    /// <summary>The terms-acceptance revision this build requires. Lives HERE, not on the page component, because
+    /// <see cref="NeedsTermsRearm"/> and <see cref="SetupBootstrap"/> are engine-free and source-included by the test
+    /// assembly; <c>SetupTermsPage.CurrentVersion</c> aliases this so the page and the gate can never disagree.</summary>
+    public const int TermsVersion = 1;
+
+    /// <summary>Must a COMPLETED install be re-armed because the terms it accepted are older than this build's
+    /// (<see cref="TermsVersion"/>)? Deliberately gated on <paramref name="completed"/>: a wizard that has never
+    /// finished is already pending, and re-arming it would be a no-op that muddies the "why is this pending" answer.
+    /// The re-arm re-shows the wizard, whose Terms page writes the new version on Accept; SignIn is skipped for an
+    /// already-authenticated user (<see cref="SkipSignIn"/>), so the re-consent is Terms and nothing else.</summary>
+    public static bool NeedsTermsRearm(bool completed, int accepted, int current) => completed && accepted < current;
+
+    /// <summary>A completed install that predates terms versioning (accepted == 0) accepted the terms as part of the
+    /// wizard it already finished; it is stamped with <paramref name="current"/> rather than re-shown the wizard. Only a
+    /// LATER bump of <see cref="TermsVersion"/> re-arms.</summary>
+    public static bool GrandfathersTerms(bool completed, int accepted) => completed && accepted == 0;
 
     /// <summary>Whether closing the PRE-auth overlay is an auth-gate handoff rather than a real wizard dismissal.
     /// All three witnesses are required: a post-auth dialog close must clean up normally; a pending logged-out wizard
@@ -118,5 +153,40 @@ static class SetupGating
         SetupPage.Welcome => 0f,
         SetupPage.Done => 1f,
         _ => (int)page / 7f,
+    };
+
+    /// <summary>The seven middle pages, in enum (== display) order — the ONE list <see cref="SetupStage.Roadmap"/>
+    /// walks to draw the Welcome page's "seven steps" rail. Deliberately the same seven <see cref="StepNumber"/> counts
+    /// (Welcome/Done are the two bookends, never roadmap rows themselves).</summary>
+    public static readonly SetupPage[] RoadmapPages =
+    [
+        SetupPage.Terms, SetupPage.SignIn, SetupPage.LocalPlayback, SetupPage.Appearance,
+        SetupPage.Sidebar, SetupPage.Sound, SetupPage.Notifications,
+    ];
+
+    /// <summary>The loc KEY (not the resolved string — callers <c>Loc.Get</c> it, same contract as
+    /// <see cref="StepLabelKey"/>) for a roadmap row's short label. Throws for Welcome/Done: neither is ever a roadmap
+    /// ROW, only the thing <see cref="RoadmapIndexFor"/> points AT one from.</summary>
+    public static string RoadmapLabelKey(SetupPage page) => page switch
+    {
+        SetupPage.Terms => Strings.Setup.Roadmap.Terms,
+        SetupPage.SignIn => Strings.Setup.Roadmap.SignIn,
+        SetupPage.LocalPlayback => Strings.Setup.Roadmap.LocalPlayback,
+        SetupPage.Appearance => Strings.Setup.Roadmap.Appearance,
+        SetupPage.Sidebar => Strings.Setup.Roadmap.Sidebar,
+        SetupPage.Sound => Strings.Setup.Roadmap.Sound,
+        SetupPage.Notifications => Strings.Setup.Roadmap.Notifications,
+        _ => throw new ArgumentOutOfRangeException(nameof(page), page, "not a roadmap page"),
+    };
+
+    /// <summary>Which <see cref="RoadmapPages"/> row reads as "current" for <paramref name="page"/>. Welcome maps to 0
+    /// (Terms, the very next step, reads as "up next" before the wizard has moved at all); Done maps to 7 — one past
+    /// the last row, a deliberate sentinel so nothing highlights once every step is behind you. Every middle page maps
+    /// to its own position in the list (<c>(int)page − 1</c>, since <see cref="SetupPage.Welcome"/> is 0).</summary>
+    public static int RoadmapIndexFor(SetupPage page) => page switch
+    {
+        SetupPage.Welcome => 0,
+        SetupPage.Done => 7,
+        _ => (int)page - 1,
     };
 }

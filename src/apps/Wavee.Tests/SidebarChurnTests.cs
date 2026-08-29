@@ -186,6 +186,40 @@ public sealed class SidebarChurnTests
         Assert.False(shadow.Publish(new List<SidebarLibraryEntry> { Playlist("a"), Playlist("b") }, Meta()));
     }
 
+    static SidebarLibraryEntry Folder(string id, string name = "n")
+        => new(id, SidebarEntryKind.Folder, "", name, "", null, null, 0, 0, 0, 0, 0, 0, false,
+              SidebarPlaylistFlavor.None);
+
+    [Fact]
+    public void HiddenFolderChildHydration_ChangesTheFullProjection_NotThePublishedRows()
+    {
+        // The published buffer is folder-collapse-filtered (a collapsed folder's children are omitted), but the
+        // planner reads the binder's FULL flattened projection, which always includes them. A hydration that only
+        // touches a child living inside a collapsed folder must therefore trip the FULL shadow even though the
+        // published shadow — the ONLY gate before this change — sees no difference at all. This is exactly the
+        // decision `SidebarEntries.Publish` now ORs together: the published gate alone would have left the pane
+        // un-re-planned, drawing the child's stale raw-URI/"0 songs" row forever.
+        var folder = Folder("f1");
+        var childBefore = Playlist("c1", name: "spotify:playlist:c1", childCount: 0);
+        var childAfter = Playlist("c1", name: "Road Trip", childCount: 42);
+
+        var published = new List<SidebarLibraryEntry> { folder };                    // collapsed → child omitted
+        var full = new List<SidebarLibraryEntry> { folder, childBefore };
+
+        var publishedShadow = new SidebarEntriesShadow();
+        var fullShadow = new SidebarEntriesShadow();
+        Assert.True(publishedShadow.Publish(published, Meta()));   // first publish always counts
+        Assert.True(fullShadow.Publish(full, default));
+
+        // Hydrate the child inside the collapsed folder. The published rows don't change at all…
+        var publishedAgain = new List<SidebarLibraryEntry> { folder };
+        Assert.False(publishedShadow.Publish(publishedAgain, Meta()));
+
+        // …but the full projection does, which is exactly what the pane needs to re-plan.
+        var fullAgain = new List<SidebarLibraryEntry> { folder, childAfter };
+        Assert.True(fullShadow.Publish(fullAgain, default));
+    }
+
     // ── F3c: the selection sweep ──────────────────────────────────────────────────────────────────────────────────────
 
     const string Sec = "sec";

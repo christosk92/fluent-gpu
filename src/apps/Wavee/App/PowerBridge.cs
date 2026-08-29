@@ -150,8 +150,11 @@ static class PowerBridge
         try
         {
             DropKeepAwake();
-            // Pause first so a later playback-snapshot writer sees Paused; then fsync the session document.
-            if (_player is { } player)
+            // Pause first so a later playback-snapshot writer sees Paused; then fsync the session document. Gated on
+            // ShouldPauseOnSuspend (RouteLocal() && the local host's clock is valid, i.e. audible LOCAL media): a
+            // sleeping laptop must pause the playback this machine is actually making sound with, never forward a
+            // pause to a phone or speaker that happens to be the Connect-active device right now.
+            if (_player is { ShouldPauseOnSuspend: true } player)
             {
                 try { _ = player.PauseAsync(); }
                 catch { }

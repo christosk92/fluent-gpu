@@ -21,8 +21,9 @@ static class SetupDialog
     /// <param name="settings">The store <see cref="SetupGating.MarkDeferred"/> burns the one-time marker into, from
     /// <c>handle.ClosedAction</c> below — the ONE close funnel every exit path lands on.</param>
     /// <param name="bare">True for the pre-auth mount (no real shell exists yet), false post-auth. Both use
-    /// <see cref="PopupChrome.Modal"/>; this only selects whether the SHELL behind gets dimmed via
-    /// <see cref="SetupSession.Covering"/> — pre-auth there is nothing behind to dim.</param>
+    /// <see cref="PopupChrome.Modal"/>; this selects whether the engine's own popup scrim paints (bare — nothing
+    /// behind it but Mica) or the shell paints its own via <see cref="SetupSession.Covering"/> (post-auth, where the
+    /// cover can be a plain dim OR a lifted, live-preview page).</param>
     public static OverlayHandle Open(IOverlayService overlay, Action<Action> post, IAppSettings settings,
         SetupSession session, bool bare)
     {
@@ -33,15 +34,25 @@ static class SetupDialog
             // PopupChrome.Modal for BOTH mounts, exactly like SidebarDesignPicker.Open. An earlier revision used
             // PopupChrome.Raw for the pre-auth mount to avoid a scrim — that was wrong twice over: `Raw` means no
             // chrome AT ALL, so it also dropped the modal CENTERING (the plate rendered pinned to the window's
-            // top-left) and the WinUI dialog open/close motion (scale 1.05→1.0 + fade). And the scrim it was avoiding
-            // is a non-issue: pre-auth there is no shell behind the dialog, just the Mica backdrop, so the scrim only
-            // tints an empty window and hides nothing. (`bare` still selects whether the SHELL gets dimmed — see
-            // Covering below — it just has no business choosing the chrome.)
-            new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.Modal, Chrome: PopupChrome.Modal));
+            // top-left) and the WinUI dialog open/close motion (scale 1.05→1.0 + fade). (`bare` still selects whether
+            // the SHELL gets dimmed — see Covering below — it just has no business choosing the chrome.)
+            //
+            // ScrimVisual = bare: pre-auth (bare) keeps the engine's own smoke painted over the bare Mica backdrop —
+            // there is no live shell behind the dialog, just an empty window, so the built-in scrim tints that and
+            // nothing else. Post-auth (!bare) turns the engine scrim OFF: the shell paints its own smoke instead
+            // (SetupCoverScrim, Features/Shell/WaveeShell.cs), because it — not the popup host — is the one that
+            // knows whether the current page wants a live, un-dimmed preview (Appearance/Sidebar) or the ordinary dim.
+            new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.Modal, Chrome: PopupChrome.Modal)
+                { ScrimVisual = bare });
 
-        // Escape / light-dismiss / programmatic veto while a long-running step is in flight — the raw-overlay
-        // equivalent of ContentDialog's Closing.Cancel (FluentGpu.Controls/ContentDialog.cs: VetoClosing).
-        handle.ClosingAction = _ => !session.IsBusy;
+        // Escape / light-dismiss / programmatic veto — the raw-overlay equivalent of ContentDialog's Closing.Cancel
+        // (FluentGpu.Controls/ContentDialog.cs: VetoClosing). TWO vetoes, both in SetupGating.CanDismiss:
+        //   • a long-running step is in flight (Apply, or a catalog/download/verify), and
+        //   • this is not a RERUN. Escape on a FirstRun/Reauth wizard used to close it and leave the user staring at
+        //     SetupPreAuthRoot's bare titlebar over Mica — no dialog, no shell, no way back in, on a fresh install.
+        //     The wizard is Wavee's only sign-in surface, so "there is nothing behind it" is literal; the honest exit
+        //     is "Not now" → SetupSession.Secondary → QuitApp, which is still offered on every page.
+        handle.ClosingAction = _ => SetupGating.CanDismiss(session.IsRerun, session.IsBusy);
 
         // Close teardown — structural, not per-button: EVERY close path (Escape, "Not now", a shutdown-time close,
         // a stray dismiss nobody anticipated) funnels through this ONE action.
@@ -51,15 +62,14 @@ static class SetupDialog
         // simply resumes on the next launch. That is the opposite of SidebarDesignPicker's discipline, and the
         // difference is the point: its chooser is OPTIONAL, so "a one-time dialog that comes back is a failure mode"
         // holds there. Applying that reasoning here (an earlier revision did) was a real bug — clearing the marker
-        // dropped the user into the OLD standalone LoginView takeover, i.e. a SECOND, different sign-in surface,
-        // which is exactly the duplication this whole wizard exists to remove — and made it permanent, because the
-        // wizard then never returned. MarkDeferred survives only for a deliberate navigation away (see
+        // dropped the user out of the only sign-in surface Wavee has, permanently, because the wizard then never
+        // returned. MarkDeferred survives only for a deliberate navigation away (see
         // PlaybackRuntimeSetupModel.OpenDiagnostics), where the user is already signed in and has somewhere to be.
         handle.ClosedAction = () =>
         {
             // A bare pre-auth overlay never set Covering. Leaving it untouched also prevents its teardown callback
-            // from clearing the post-auth overlay's freshly-set shell blur if the two hosts overlap for one frame.
-            if (!bare) SetupSession.Covering.Value = false;
+            // from clearing the post-auth overlay's freshly-set shell cover if the two hosts overlap for one frame.
+            if (!bare) SetupSession.Covering.Value = SetupCover.None;
             // An Authenticated flip replaces SetupPreAuthRoot with WaveeShell, which necessarily destroys this bare
             // overlay. That is a host handoff, not a dismissal: preserve the unfinished session so SetupChrome can
             // remount it on LocalPlayback. Every ordinary/post-auth close still clears the session exactly once.
@@ -71,9 +81,10 @@ static class SetupDialog
             SetupSession.BumpMarker();   // let WaveeApp's login gate re-evaluate IsPending right now (see MarkerEpoch)
         };
 
-        // Only a `bare: false` mount covers a live shell — the shell reads Covering to blur/dim behind it. A bare
-        // (pre-auth) mount has no shell behind it to dim, so Covering never flips true for one.
-        if (!bare) SetupSession.Covering.Value = true;
+        // Only a `bare: false` mount covers a live shell — the shell reads Covering to dim (or, on Appearance/
+        // Sidebar, stay a live preview) behind it. A bare (pre-auth) mount has no shell behind it to cover, so
+        // Covering stays None for one.
+        if (!bare) SetupSession.Covering.Value = SetupLayout.CoverFor(session.Page.Peek(), shellBehind: true);
 
         session.RequestClose = handle.Close;
         return handle;
@@ -96,6 +107,17 @@ sealed class SetupPlate : Component
         float plateH = SetupLayout.PlateHeight(viewport.Value.Height);
 
         var row = SetupCommands.Resolve(_session.BuildCtx());
+
+        // Post-auth only (a bare pre-auth mount never sets Covering away from None — see SetupDialog.Open): the page
+        // the user is looking at can change what "cover the shell" means (a plain dim vs. lifting it entirely for a
+        // live-preview page like Appearance/Sidebar), so re-derive it on every page change. Write in an effect, never
+        // in render.
+        var page = _session.Page.Value;
+        UseEffect(() =>
+        {
+            if (SetupSession.Covering.Peek() != SetupCover.None)
+                SetupSession.Covering.Value = SetupLayout.CoverFor(page, shellBehind: true);
+        }, (int)page);
 
         void OnPlateKey(KeyEventArgs e)
         {

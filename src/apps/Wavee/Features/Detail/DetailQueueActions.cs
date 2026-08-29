@@ -65,7 +65,6 @@ static class DetailQueueActions
             ["duration"] = t.DurationMs.ToString(System.Globalization.CultureInfo.InvariantCulture),
             ["image_url"] = t.Image?.Url ?? "",
             ["is_explicit"] = t.IsExplicit ? "true" : "false",
-            ["track_player"] = "audio",
         };
         if (t.Artists.Count > 0)
         {
@@ -74,6 +73,11 @@ static class DetailQueueActions
             m["artist_uri"] = a.Uri ?? "";
             m["album_artist_name"] = a.Name ?? "";
         }
+        // The target has no reason to doubt an explicit claim: an unconditional "audio" here downgraded every
+        // video-capable track we insert into a remote device's queue. Derive it from the association plane the app
+        // already reads for the row indicator / player-bar offer (VideoPresence), not a hardcoded constant.
+        var assoc = VideoPresence.Association(t.Uri);
+        MediaSwitchLogic.StampVideoAssociation(m, assoc?.HasVideo == true, assoc?.CounterpartUri);
         return m;
     }
 

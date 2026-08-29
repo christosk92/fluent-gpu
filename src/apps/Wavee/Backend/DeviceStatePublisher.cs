@@ -57,7 +57,17 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IConnectCommandA
     bool _transportPaused;
     bool _ownershipRetired;
     ConnectCommandAttribution _lastCommand;
+    long _lastCommandAtMs;
     string _lastPublishKey = "";
+    long _lastReannounceMs;
+    // The track a Started/TrackChanged/Resumed event last told us we're on — kept independent of _state.CurrentTrack
+    // because a belated Paused/Ended for the OUTGOING track can (and does) arrive after that state already moved on,
+    // and by then _state's own transport fields may already carry that stale event's fold too (see the OnEvent guard).
+    string? _currentTrackUri;
+    // Our OWN volume, cached the moment a genuine VolumeChanged fires — never read live off _state.Volume for the wire,
+    // because PlaybackProjection.OnCluster overwrites _state.Volume with the ACTIVE device's volume while we are not
+    // it (the slider-follows-active-device rule), and DeviceInfo.Volume must never publish somebody else's level as ours.
+    double _localVolume01;
     readonly TrailingCoalescer _volumeTx;
 
     public DeviceStatePublisher(
@@ -87,6 +97,7 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IConnectCommandA
         _onCluster = onCluster;
         _log = log;
         _now = clock ?? (() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        _localVolume01 = state.Volume;   // seed from whatever the projection knows before the first VolumeChanged fires
         _volumeTx = new TrailingCoalescer(volumePublishWindowMs, _now, delay);
         _connSub = connectionId.Subscribe(Observers.From<string?>(OnConnectionId));
     }
@@ -103,10 +114,17 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IConnectCommandA
     /// service refuses to make us the cluster's active device. NULL (the default) publishes the context VERBATIM.</summary>
     public Func<string?, string?>? PublishContextMask { get; set; }
 
+    /// <summary>Optional — the CURRENT track's live media kind, gated to null while we are not the device actually
+    /// decoding it (see <see cref="ConnectStateBuilder.BuildPutState"/>'s <c>currentKind</c> parameter, which this
+    /// mirrors). Folded into the steady-state change-gate key (bug 6) so an audio↔video toggle on the SAME track at
+    /// the same wall-second with an empty up-next queue still produces a real key change — without this the toggle
+    /// was silently swallowed by the dedup gate below. Wired at go-live to the same thunk the builder reads.</summary>
+    public Func<PlayableKind?>? CurrentMediaKind { get; set; }
+
     void OnConnectionId(string? id)
     {
         if (string.IsNullOrEmpty(id)) return;
-        _ = PublishAsync(PutStateReasonKind.NewConnection, IsLocallyPlaying());
+        _ = PublishAsync(PutStateReasonKind.NewConnection, OwnsSession());
     }
 
     public void OnEvent(in PlaybackEvent e)
@@ -118,8 +136,31 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IConnectCommandA
                 bool startsNewOwnership = (e.Kind is EvKind.Started or EvKind.TrackChanged or EvKind.Resumed)
                     && _state.CurrentTrack is not null;
                 if (startsNewOwnership) _ownershipRetired = false;
-                else if (e.Kind is not EvKind.BecameInactive) return;
+                // A per-device volume must still reach the cluster from a retired (inactive) Wavee — only the
+                // isActive flag on that publish says we don't own the session, never a dropped volume message.
+                else if (e.Kind is not (EvKind.BecameInactive or EvKind.VolumeChanged)) return;
             }
+        }
+
+        // Latch "what track are we on" from the ordered forward stream only (never from a terminal Paused/Ended,
+        // which is exactly the kind that arrives late — see the guard below). Read straight off the event, not
+        // _state.CurrentTrack, so this stays correct even if _state has not folded the same event yet.
+        if (e.Track is { Uri.Length: > 0 } fwdTrack && e.Kind is not (EvKind.Paused or EvKind.Ended or EvKind.BecameInactive))
+            _currentTrackUri = fwdTrack.Uri;
+
+        // Ordering guard (findings §4): an outgoing host's belated stop/end notification can arrive AFTER the next
+        // track has already started (a proactive advance that doesn't wait for the old decoder's confirmed EOF).
+        // Its AtMs/Kind describe the OUTGOING track, not the one we are on now — folding it blindly is exactly how a
+        // stale tail position (e.g. pos=7271 for a track that just started at pos=0) gets published as CURRENT for
+        // up to a minute, because the steady-state gate then latches on that wrong key and swallows the correction.
+        // Detected only when the event carries its own track and it disagrees with our latch above; a context-end
+        // Ended (Track == null) is unaffected and falls through to the normal path below.
+        if (e.Kind is EvKind.Paused or EvKind.Ended && e.Track is { } endingTrack
+            && _currentTrackUri is { Length: > 0 } && !string.Equals(endingTrack.Uri, _currentTrackUri, StringComparison.Ordinal))
+        {
+            _log.Info($"put-state: dropped stale {e.Kind} for {endingTrack.Uri} (current is {_currentTrackUri}) — forcing a fresh republish");
+            _ = PublishAsync(PutStateReasonKind.PlayerStateChanged, OwnsSession(), force: true);
+            return;
         }
 
         if (e.Kind is EvKind.Paused)
@@ -158,6 +199,9 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IConnectCommandA
             }
         }
 
+        if (e.Kind == EvKind.VolumeChanged)
+            lock (_gate) _localVolume01 = _state.Volume;
+
         bool isActive = _state.CurrentTrack is not null && e.Kind is not (EvKind.Ended or EvKind.BecameInactive);
         var reason = e.Kind switch
         {
@@ -166,7 +210,9 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IConnectCommandA
             _ => PutStateReasonKind.PlayerStateChanged,
         };
         if (reason == PutStateReasonKind.VolumeChanged)
-            _volumeTx.Post(() => _ = PublishAsync(PutStateReasonKind.VolumeChanged, _state.CurrentTrack is not null));
+            // OwnsSession(), not isActive above: a retired Wavee still owns none of the transport facts isActive
+            // folds in, but its OWN volume must still reach the cluster — with isActive correctly false on the wire.
+            _volumeTx.Post(() => _ = PublishAsync(PutStateReasonKind.VolumeChanged, OwnsSession()));
         else
             _ = PublishAsync(reason, isActive);
     }
@@ -200,15 +246,36 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IConnectCommandA
     public void AnnounceNewConnection()
     {
         lock (_gate) { if (_ownershipRetired) return; }
-        _ = PublishAsync(PutStateReasonKind.NewConnection, IsLocallyPlaying());
+        _ = PublishAsync(PutStateReasonKind.NewConnection, OwnsSession());
     }
 
     public void NoteCommand(in ConnectCommandAttribution attribution)
     {
-        lock (_gate) _lastCommand = attribution;
+        lock (_gate) { _lastCommand = attribution; _lastCommandAtMs = _now(); }
     }
 
-    bool IsLocallyPlaying() => _state.CurrentTrack is not null && _state.IsPlaying;
+    /// <summary>Ownership, not audibility: true iff we hold a session (a current track is loaded), the cluster does
+    /// not already name a DIFFERENT device active, and we have not retired it — the wire's <c>is_active</c> must
+    /// never depend on whether audio happens to be flowing right now. A paused-but-active Wavee answering false here
+    /// is exactly what self-demoted us on every dealer reconnect / OS resume, emptying the cluster's active-device id
+    /// and triggering a bogus "another device became active" teardown downstream. The ordinary event path already
+    /// applies this same rule inline (OnEvent's isActive, above); this is the one predicate the announce paths (which
+    /// run before any event exists) share with it.
+    /// <para>The ActiveDeviceId check (bug 2) matters because <see cref="_state"/>.CurrentTrack is not "a track WE are
+    /// playing" — it is whatever the projection currently shows, including a passive VIEWER's mirrored fold of some
+    /// OTHER device's cluster row (a Wavee that has never played still folds the phone's now-playing track). Without
+    /// this, a fresh dealer connection captured while merely viewing someone else's session announced NewConnection
+    /// with <c>is_active=true</c> and a player_state built from THEIR track — a lie no amount of it being "just an
+    /// announce" excuses.</para></summary>
+    bool OwnsSession()
+    {
+        lock (_gate)
+        {
+            if (_ownershipRetired || _state.CurrentTrack is null) return false;
+            var aid = _state.ActiveDeviceId;
+            return string.IsNullOrEmpty(aid) || aid == _deviceId;
+        }
+    }
 
     async Task PublishAsync(PutStateReasonKind reason, bool isActive, bool force = false)
     {
@@ -216,18 +283,24 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IConnectCommandA
         if (string.IsNullOrEmpty(connId)) return;
 
         var snap = BuildSnapshot();
+        string key = reason + "|" + isActive + "|" + (snap?.Track.Uri ?? "") + "|" + (snap?.Track.Uid ?? "")
+            + "|" + (snap?.IsPlaying ?? false) + "|" + (snap?.IsPaused ?? false) + "|" + (snap?.Shuffle ?? false) + "|" + (snap?.Repeat ?? RepeatMode.Off)
+            + "|" + ((snap?.PositionMs ?? 0) / 1000) + "|" + (int)Math.Round((snap?.Volume01 ?? 0) * 100) + "|" + NextSig(snap)
+            + "|" + (CurrentMediaKind?.Invoke()?.ToString() ?? "-");
         uint mid;
         ConnectCommandAttribution attribution;
         lock (_gate)
         {
-            string key = reason + "|" + isActive + "|" + (snap?.Track.Uri ?? "") + "|" + (snap?.Track.Uid ?? "")
-                + "|" + (snap?.IsPlaying ?? false) + "|" + (snap?.IsPaused ?? false) + "|" + (snap?.Shuffle ?? false) + "|" + (snap?.Repeat ?? RepeatMode.Off)
-                + "|" + ((snap?.PositionMs ?? 0) / 1000) + "|" + (int)Math.Round((snap?.Volume01 ?? 0) * 100) + "|" + NextSig(snap);
             if (!force && reason is PutStateReasonKind.PlayerStateChanged or PutStateReasonKind.VolumeChanged
                 && key == _lastPublishKey) return;
-            _lastPublishKey = key;
+            // NOTE: _lastPublishKey is NOT latched here any more — only once the PUT actually succeeds, below. Latching
+            // it before the transport call meant a failed/thrown PUT still gated out the identical next attempt, so a
+            // rejected state was never retried until something ELSE happened to change it.
             mid = ++_messageId;
-            attribution = _lastCommand;
+            // A command attribution older than ~10s almost certainly belongs to a DIFFERENT change than the one we are
+            // about to publish (a purely local edit, or a later command that already superseded it) — crediting this
+            // PUT to it would blame/credit the wrong sender. Age it out rather than let a stale id ride forever.
+            attribution = _now() - _lastCommandAtMs < 10_000 ? _lastCommand : default;
         }
 
         await _publishGate.WaitAsync().ConfigureAwait(false);
@@ -237,6 +310,7 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IConnectCommandA
             var resp = await _transport.Publish(_deviceId, connId!, bytes).ConfigureAwait(false);
             if (resp.Ok)
             {
+                lock (_gate) _lastPublishKey = key;   // commit the change-gate key ONLY on a PUT the server actually accepted
                 // Info, not Debug: this is the ONLY record of what we told the connect-state service, and the PUT's
                 // RESPONSE is a Cluster we immediately re-inject as if it were a remote push (onCluster below). The
                 // change-gate above (_lastPublishKey) already collapses steady-state republishes, so this is ~1 line per
@@ -248,9 +322,12 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IConnectCommandA
             }
             else
             {
+                // A rejected PUT never gets to be "the last thing we told the server" — reset the gate so the very
+                // next identical event (a retry, or the reannounce below) is not swallowed by the key match above.
+                lock (_gate) _lastPublishKey = "";
                 bool inactiveSoftAck = resp.Status == 422 && reason == PutStateReasonKind.BecameInactive;
                 if (inactiveSoftAck)
-                    _log.Debug("put-state 422 after BecameInactive (soft acknowledgement)");
+                    _log.Debug($"put-state 422 after BecameInactive (soft acknowledgement) msgId={mid}");
                 else
                     _log.Warn($"put-state failed ({resp.Status})");
                 var fields = new[]
@@ -264,10 +341,20 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IConnectCommandA
                     WaveeLog.Instance.Debug("connect", "put-state.rejected", "inactive state already superseded server-side", fields);
                 else
                     WaveeLog.Instance.Warn("connect", "put-state.rejected", "connect-state PUT rejected by server", fields);
+
+                // Rejection recovery (findings §3): the connect-state service answers non-OK — 422 above all, its code
+                // for "I no longer have your device registration" — for exactly the PlayerStateChanged/VolumeChanged
+                // PUTs that assume we're still registered. Without a re-announce here the device silently drops off
+                // every remote picker until something unrelated happens to trigger one. Rate-limited so a hard-down
+                // server can't turn this into a hot loop; BecameInactive's soft-ack is deliberately excluded (it is
+                // not a registration problem — see above).
+                if (reason is PutStateReasonKind.PlayerStateChanged or PutStateReasonKind.VolumeChanged)
+                    MaybeReannounce();
             }
         }
         catch (Exception ex)
         {
+            lock (_gate) _lastPublishKey = "";   // same reasoning as the non-OK branch: a throw is not a committed PUT
             // Structured + full exception (type + stack) so a future null/serialization fault in the builder is
             // diagnosable at a glance — the bare ex.Message alone made the Restrictions NRE cryptic.
             _log.Info("put-state error: " + ex.Message);
@@ -277,6 +364,20 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IConnectCommandA
                 WaveeLogField.Of("track", snap?.Track.Uri ?? "-"));
         }
         finally { _publishGate.Release(); }
+    }
+
+    /// <summary>Re-announce at most once every 30s (findings §3). Runs OUTSIDE <c>_publishGate</c> (fire-and-forget,
+    /// like every other publish trigger here) — the caller is already inside the gate's <c>finally</c>-protected
+    /// scope by the time this is reachable, so awaiting our own gate here would deadlock.</summary>
+    void MaybeReannounce()
+    {
+        long now = _now();
+        lock (_gate)
+        {
+            if (now - _lastReannounceMs < 30_000) return;
+            _lastReannounceMs = now;
+        }
+        _ = PublishAsync(PutStateReasonKind.NewConnection, OwnsSession());
     }
 
     LocalPlaybackSnapshot? BuildSnapshot()
@@ -324,13 +425,14 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IConnectCommandA
             ? p.ContextMetadata
             : new Dictionary<string, string>();
 
-        long started, hasBeen; string sid, pid, iid, page, rev; bool transportPaused;
+        long started, hasBeen; string sid, pid, iid, page, rev; bool transportPaused; double localVolume;
         lock (_gate)
         {
             started = _startedPlayingAtMs; sid = _sessionId; pid = _playbackId;
             iid = _interactionId; page = _pageInstanceId; rev = _queueRevision;
             transportPaused = _transportPaused;
             hasBeen = started > 0 && _state.IsPlaying ? Math.Max(0, _now() - started) : 0;
+            localVolume = _localVolume01;
         }
 
         // Connect wire: paused is a sub-state of playing (transport engaged, audio stopped). Ended/stopped ⇒ both false.
@@ -350,7 +452,7 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IConnectCommandA
 
         return new LocalPlaybackSnapshot(current, wireContext, _state.PositionMs, _state.DurationMs,
             wirePlaying, wirePaused, _state.IsShuffle, _state.Repeat,
-            wirePrev, wireNext, metadata, currentIndex, iid, page, rev, sid, pid, hasBeen, started, _state.Volume);
+            wirePrev, wireNext, metadata, currentIndex, iid, page, rev, sid, pid, hasBeen, started, localVolume);
     }
 
     static IReadOnlyList<SnapshotTrack> CapPrev(List<SnapshotTrack> tracks)
@@ -389,8 +491,11 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IConnectCommandA
 
     static bool IsContextProvider(string provider) => provider is "context" or "autoplay";
 
+    // Includes the queue revision (findings §5): count+head alone is blind to a deep reorder that keeps the same
+    // count and the same head row — QueueRevision bumps exactly when the queue changes (BumpQueueRevision), so
+    // folding it in here is enough to make the steady-state gate above see a reorder as a real change again.
     static string NextSig(LocalPlaybackSnapshot? snap) =>
-        snap is { } s && s.NextTracks.Count > 0 ? s.NextTracks.Count + ":" + s.NextTracks[0].Uri : "0";
+        snap is { } s && s.NextTracks.Count > 0 ? s.QueueRevision + ":" + s.NextTracks.Count + ":" + s.NextTracks[0].Uri : "0";
 
     static string NewId() => Guid.NewGuid().ToString("N");
     static string NewDashedUuid() => Guid.NewGuid().ToString();

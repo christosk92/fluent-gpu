@@ -1,6 +1,6 @@
 ---
 name: releasing
-description: Use when cutting, publishing, or troubleshooting a FluentGpu MSIX release — tagging a version, building/signing the NativeAOT MSIX locally or in CI, Azure Trusted Signing failures (Invalid tenant id, SignerSign 0x80004005, publisher 0x8007000B), the GitHub release, or the .appinstaller.
+description: Use when cutting, publishing, or troubleshooting a FluentGpu or Wavee MSIX release — tagging a version (`v*` for the gallery, `wavee-v*` for Wavee), building/signing the NativeAOT MSIX locally or in CI, Azure Trusted Signing failures (Invalid tenant id, SignerSign 0x80004005, publisher 0x8007000B), the GitHub release, or the .appinstaller.
 ---
 
 # Releasing FluentGpu (signed MSIX)
@@ -37,6 +37,28 @@ Local Trusted Signing needs `az login` as an identity with the **Artifact Signin
 | CI service principal | app `fluentgpu-ci-signing` (`ad16e7be-55d9-4a60-9446-3e2f58b5688c`) |
 | GitHub secrets / vars | `AZURE_TENANT_ID/CLIENT_ID/CLIENT_SECRET`; `TRUSTED_SIGNING_ACCOUNT/ENDPOINT/PROFILE`, `RELEASE_PUBLISHER` |
 | Files | `ops/build/pack-msix.ps1`, `ops/build/AppxManifest.xml`, `ops/build/AppInstaller.template.xml`, `ops/build/signing/metadata.json` (gitignored), `.github/workflows/msix.yml` |
+
+## Wavee (the second product in this tree)
+
+Wavee releases **independently** of the gallery — different tag prefix, workflow, script, manifest, and package
+identity. Everything below reuses the same signing account/secrets and the same gotchas.
+
+| Thing | Gallery | **Wavee** |
+|---|---|---|
+| Tag | `v*` | **`wavee-v*`** (`git tag wavee-vX.Y.Z && git push origin wavee-vX.Y.Z`) |
+| Workflow | `.github/workflows/msix.yml` | `.github/workflows/wavee-msix.yml` |
+| Script | `ops/build/pack-msix.ps1` | `ops/build/pack-wavee-msix.ps1` |
+| Manifest | `ops/build/AppxManifest.xml` | `ops/build/Wavee.AppxManifest.xml` |
+| `.appinstaller` template | `ops/build/AppInstaller.template.xml` | `ops/build/Wavee.AppInstaller.template.xml` |
+| Package identity | `MarTeco.FluentGpu` | **`cproducts.Wavee`** |
+| Assets | `FluentGpu.WindowsApp_<ver>_<arch>.msix` | `Wavee_<ver>_<arch>.msix`, `Wavee.<arch>.appinstaller`, `THIRD-PARTY-NOTICES.txt` |
+| Version source | — | `<Version>`/`<InformationalVersion>` in `src/apps/Wavee/Wavee.csproj` (bump before tagging) |
+
+`v*` and `wavee-v*` are disjoint globs, so a Wavee tag never triggers a gallery release. Verify with
+`gh run list --workflow=wavee-msix.yml -L1` and `gh release view wavee-vX.Y.Z --json assets`.
+
+**Full runbook — preflight checklist, install smoke, update-path check, rollback: `docs/guide/releasing-wavee.md`.**
+(Rollback is roll-*forward*: App Installer never downgrades, so ship the next patch tag.)
 
 ## Gotchas (every one of these actually happened)
 - **CI sign job `Invalid tenant id` / `SignerSign() failed 0x80004005`** → a GitHub secret has a stray `\r`. **NEVER pipe to `gh secret set` from PowerShell** (CRLF leaves a trailing `\r`). Use `gh secret set NAME --body "value"`. Re-mint: `az ad app credential reset --id ad16e7be-… --years 1 --query password -o tsv`, set all three with `--body`, then `gh run rerun <id> --failed`.

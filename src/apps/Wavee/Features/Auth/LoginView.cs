@@ -13,107 +13,30 @@ using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
 
-// ── The full-screen LOGIN TAKEOVER (two-pane) ────────────────────────────────────────────────────────────────────────
-// Mounted by WaveeApp's gate when logged out (real backend only). It PROJECTS the rich bridge.Login snapshot: the marquee
-// AwaitingApproval state renders the two-pane "OR" card (browser Log in on the left, QR + pairing code on the right, both
-// live at once — the device code polls in the background while the browser button races alongside); the other phases render
-// a narrow status card. The coarse bridge.Auth flip to Authenticated swaps the whole takeover for the shell.
+// ── The login SIGN-IN PARTS (a static holder, not a screen) ──────────────────────────────────────────────────────────
+// This file used to BE the full-screen login takeover: a Component that projected bridge.Login into a two-pane
+// AwaitingApproval card plus four narrow status cards. That component is DELETED. The setup wizard
+// (Features/Setup/SetupPage.SignIn.cs) is now Wavee's one and only sign-in surface, and WaveeApp's gate mounts exactly
+// two leaves — WaveeShell when authed, SetupPreAuthRoot otherwise — so nothing could reach the takeover any more.
+// Shipping both meant the same action looked different in two places, which is the duplication the wizard exists to end.
 //
-// Intents flow back to WaveeApp: onLoginBrowser (race the browser-loopback), onRetry (restart the device code), onClose
-// (quit — the takeover is the whole window when logged out).
-sealed class LoginView : Component
+// What survives is what the wizard actually composes: the Spotify brand tints, the pairing lane (CompactRightPane), the
+// OR divider, the browser-login button, the terminal glyph badge, the OpenUrl hop, and the four live sub-components
+// below (LoginStepRow/LoginStepBar for the Finalizing ladder, WaitingDots, LoginCountdown).
+//
+// The name stays `LoginView` deliberately: it is referenced as `LoginView.OpenUrl` / `LoginView.SpotifyGreen` from
+// Home, the notification panel, the profile menu, Settings and the wizard, and renaming it would churn a dozen call
+// sites in other people's files to say nothing new.
+static class LoginView
 {
     internal const string CodeFont = "Consolas";   // a monospace face for the pairing code (Windows-resident; the app is Win-only)
     internal static readonly ColorF SpotifyGreen = ColorF.FromRgba(0x1D, 0xB9, 0x54);
-    static readonly ColorF GoldTint = ColorF.FromRgba(0xE9, 0xC4, 0x6A);
-
-    readonly Action _onLoginBrowser;
-    readonly Action _onRetry;
-    readonly Action _onClose;
-    public LoginView(Action onLoginBrowser, Action onRetry, Action onClose)
-    { _onLoginBrowser = onLoginBrowser; _onRetry = onRetry; _onClose = onClose; }
-
-    public override Element Render()
-    {
-        var bridge = UseContext(PlaybackBridge.Slot);
-        var snap = bridge?.Login.Value ?? new LoginSnapshot(LoginPhase.LoggedOut);   // subscribe → re-render on phase change
-
-        // Screen-reader live region (UIA): announce the actionable state changes — the pairing code SPELLED OUT, and errors.
-        // The announcer is wired by the Windows backend (InputHooks.Announce); null elsewhere → a silent no-op.
-        var announce = InputHooks.Current.Default.Announce;
-        Context.UseEffect(() =>
-        {
-            if (announce is null) return;
-            switch (snap.Phase)
-            {
-                case LoginPhase.AwaitingApproval when snap.Challenge is { } c:
-                    announce(Loc.Get(Strings.Auth.ScanToLogIn) + ". " + Loc.Get(Strings.Auth.OrGoTo) + " spotify.com/pair, " +
-                             Loc.Get(Strings.Auth.EnterCodeColon) + " " + string.Join(" ", c.UserCode.Replace("-", "").ToCharArray()), false);
-                    break;
-                case LoginPhase.Failed:
-                    announce(string.IsNullOrWhiteSpace(snap.Error) ? Loc.Get(Strings.Auth.NetworkError) : snap.Error!, true);
-                    break;
-                case LoginPhase.ChallengeExpired:
-                    announce(Loc.Get(Strings.Auth.CodeExpired), true);
-                    break;
-            }
-        }, (int)snap.Phase);
-
-        Element card = snap.Phase switch
-        {
-            LoginPhase.AwaitingApproval when snap.Challenge is { } c
-                                        => Embed.Comp(() => new TwoPaneLogin(c, _onLoginBrowser, _onClose)),
-            LoginPhase.ChallengeExpired => Expired(),
-            LoginPhase.Failed           => Failed(snap.Error),
-            LoginPhase.PremiumRequired  => Premium(),
-            // Finalizing is the LONG one (dealer → metadata → audio → profile). It gets the step list instead of a single
-            // frozen line: the phase — and therefore the card Key — never changes across those steps, so the card updates
-            // in place and the rows animate rather than the whole screen remounting.
-            LoginPhase.Finalizing       => FinalizingSplash(bridge),
-            _                           => Splash(Loc.Get(Strings.Auth.GettingCode), null),   // LoggedOut/SilentResume/RequestingCode/AwaitingBrowser
-        };
-
-        // Keyed cross-fade between screens (rise + fade); reduced-motion → instant (the engine honors Motion.ReducedMotion).
-        string key = snap.Phase == LoginPhase.AwaitingApproval && snap.Challenge is { } ch ? "pair:" + ch.UserCode : "screen:" + snap.Phase;
-        card = card with
-        {
-            Key = key,
-            Enter = new EnterExit(Dy: 8f, Opacity: 0f, Active: true),
-            Exit = new EnterExit(Dy: -4f, Opacity: 0f, Active: true),
-            Transition = MotionTok.StandardEnter,
-        };
-
-        // Full-window Mica backdrop (the shell root runs Mica passthrough) → the centered card.
-        return new BoxEl
-        {
-            Grow = 1f, Direction = 1, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-            Padding = Edges4.All(Spacing.XXL),
-            Children = [card],
-        };
-    }
+    // internal (not private/static-only-here): the setup wizard's sign-in page (Work package C) reuses this exact
+    // tint for its own Premium terminal-stage GlyphBadge, so the two Premium glyphs (takeover + wizard) can never
+    // drift apart into two slightly different golds.
+    internal static readonly ColorF GoldTint = ColorF.FromRgba(0xE9, 0xC4, 0x6A);
 
     // ── shared chrome ────────────────────────────────────────────────────────────────────────────────────────────────
-    internal static BoxEl Card(params Element[] kids) => new BoxEl
-    {
-        Direction = 1, Width = 440f, MaxWidth = 440f, AlignItems = FlexAlign.Center, Gap = Spacing.L,
-        Padding = Edges4.All(32f), Corners = CornerRadius4.All(Radii.Card), Shadow = Elevation.Card,
-        // FloatingPane, not Content: the login view REPLACES the whole shell, so nothing is painted behind this card —
-        // a translucent pane fill would let bare Mica read straight through it (login is the one surface that still
-        // sits directly on the DWM backdrop). FloatingPane IS ContentSurface: opaque, identical to the docked pane.
-        // Kept a STATIC read (not Prop.Of): a static token read inside Render() gets the theme cross-fade, whereas a
-        // bind snaps.
-        Fill = WaveeColors.FloatingPane, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
-        Enter = new EnterExit(Dy: 8f, Opacity: 0f, Active: true),
-        Exit = new EnterExit(Dy: -6f, Sx: 0.98f, Sy: 0.98f, Opacity: 0f, Active: true),   // success/dismiss: dissolve out as the shell rises
-        Children = kids,
-    };
-
-    internal static Element Brand() => new BoxEl
-    {
-        Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center,
-        Children = [new TextEl(Icons.MusicNote) { Size = 30f, FontFamily = Theme.IconFont, Color = Tok.AccentDefault }, WaveeType.PageHero("Wavee")],
-    };
-
     internal static Element GlyphBadge(string glyph, ColorF tint) => new BoxEl
     {
         Width = 52f, Height = 52f, Corners = CornerRadius4.All(16f),
@@ -122,24 +45,28 @@ sealed class LoginView : Component
         Children = [new TextEl(glyph) { Size = 26f, FontFamily = Theme.IconFont, Color = tint }],
     };
 
-    internal static Element CenteredText(TextEl t, float maxW = 330f) => new BoxEl
-    {
-        AlignSelf = FlexAlign.Stretch, AlignItems = FlexAlign.Center,
-        Children = [t with { MaxWidth = maxW, Wrap = TextWrap.Wrap }],
-    };
-
-    internal static Element FullAccent(string label, Action onClick) =>
-        Button.Accent(label, onClick) with { AlignSelf = FlexAlign.Stretch, MinHeight = 44f };
-
-    internal static Element SpotifyBrand() => new BoxEl
-    {
-        Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center,
-        Children =
-        [
-            new TextEl(Icons.MusicNote) { Size = 30f, FontFamily = Theme.IconFont, Color = SpotifyGreen },
-            new TextEl("Spotify") { Size = 26f, Weight = 700, Color = SpotifyGreen },
-        ],
-    };
+    // `compact`: the wizard's decision column wants a 28-DIP brand row; the no-arg default is the full 56-DIP wordmark
+    // the wizard's own wider sign-in body still uses. One method with an overload, not two, so the two wordmarks cannot
+    // drift into slightly different greens.
+    internal static Element SpotifyBrand(bool compact = false) => compact
+        ? new BoxEl
+        {
+            Direction = 0, Gap = Spacing.XS, AlignItems = FlexAlign.Center, Height = 28f, Shrink = 0f,
+            Children =
+            [
+                new TextEl(Icons.MusicNote) { Size = 20f, FontFamily = Theme.IconFont, Color = SpotifyGreen },
+                new TextEl("Spotify") { Size = 18f, Weight = 700, Color = SpotifyGreen },
+            ],
+        }
+        : new BoxEl
+        {
+            Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center,
+            Children =
+            [
+                new TextEl(Icons.MusicNote) { Size = 30f, FontFamily = Theme.IconFont, Color = SpotifyGreen },
+                new TextEl("Spotify") { Size = 26f, Weight = 700, Color = SpotifyGreen },
+            ],
+        };
 
     internal static Element BrowserLoginButton(Action onClick) => new BoxEl
     {
@@ -158,9 +85,8 @@ sealed class LoginView : Component
 
     internal static void OpenUrl(string url) => InputHooks.Current.Default.OpenUri?.Invoke(url);
 
-    // ── the QR pane + OR divider, extracted for reuse by the setup wizard's SignIn page (page 2) — a second full
-    // two-pane login card there would duplicate this column pixel-for-pixel, which is exactly the drift this repo
-    // keeps catching. TwoPaneLogin (below) composes these two the same way it always did.
+    // ── the QR pane + OR divider the setup wizard's SignIn page composes. Re-authoring either one over there would
+    // duplicate this column pixel-for-pixel, which is exactly the drift this repo keeps catching.
 
     internal static Element OrDivider(float width = 48f, bool horizontal = false) => horizontal
         ? new BoxEl
@@ -196,63 +122,13 @@ sealed class LoginView : Component
         ],
     };
 
-    /// <summary>The QR + pairing-code column. <paramref name="copied"/>/<paramref name="onCopy"/> are the caller's own
-    /// "copied" feedback signal + writer (each mount scopes its own, per <see cref="CopyButton"/>'s doc comment).</summary>
-    // Returns BoxEl, not Element: the setup wizard's sign-in page re-sizes this pane with a `with` expression, and
-    // layout props (Grow/Basis/Width/Shrink) live on BoxEl — a declared `Element` return makes that a CS0117.
-    internal static BoxEl RightPane(LoginChallenge c, Signal<bool> copied, Action onCopy) => new BoxEl
-    {
-        Direction = 1, Grow = 1f, Basis = 0f, Gap = Spacing.M, AlignItems = FlexAlign.Center, Justify = FlexJustify.Start,
-        Padding = new Edges4(36f, 0f, 4f, 0f),
-        Children =
-        [
-            Embed.Comp(() => new QrGrid(c.VerificationUriComplete ?? c.VerificationUri, 220f)),
-            BodyStrong(Loc.Get(Strings.Auth.ScanToLogIn)),
-            // "Go to [spotify.com/pair ↗] and enter this code:" — the link carries the external-open glyph + tight padding.
-            new BoxEl
-            {
-                Direction = 0, Gap = 6f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, AlignSelf = FlexAlign.Center,
-                Children =
-                [
-                    Caption(Loc.Get(Strings.Auth.OrGoTo)).Secondary(),
-                    LinkWithIcon(Loc.Get(Strings.Auth.PairUrl), c.VerificationUri),
-                    Caption(Loc.Get(Strings.Auth.EnterCodeColon)).Secondary(),
-                ],
-            },
-            new BoxEl
-            {
-                Direction = 1, Gap = Spacing.S, AlignItems = FlexAlign.Center, AlignSelf = FlexAlign.Center,
-                Children =
-                [
-                    new TextEl(c.UserCode) { Size = 32f, Weight = 700, CharSpacing = 70f, FontFamily = CodeFont, Color = Tok.TextPrimary },
-                    new BoxEl
-                    {
-                        Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center,
-                        Children = [Embed.Comp(() => new CopyButton(copied, onCopy)), OpenButton(c.VerificationUriComplete ?? c.VerificationUri)],
-                    },
-                ],
-            },
-            // Live "Waiting for you to authorize…" (animated dots) + the 1 Hz expiry countdown — replaces the static status.
-            new BoxEl
-            {
-                Direction = 1, Gap = Spacing.S, AlignItems = FlexAlign.Center, AlignSelf = FlexAlign.Center, Margin = new Edges4(0, Spacing.S, 0, 0),
-                Children =
-                [
-                    new BoxEl
-                    {
-                        Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center,
-                        Children = [Embed.Comp(() => new WaitingDots()), Caption(Loc.Get(Strings.Auth.WaitingApproval)).Secondary()],
-                    },
-                    Embed.Comp(() => new LoginCountdown(c.Expiry)),
-                ],
-            },
-        ],
-    };
-
     /// <summary>The setup wizard's deliberately lean 196-DIP pairing lane: the approved prototype's 138-DIP QR,
-    /// pairing link, code, expiry and waiting state. Copy/Open remain on <see cref="RightPane"/>, the standalone
-    /// takeover surface with enough room for them.</summary>
-    internal static BoxEl CompactRightPane(LoginChallenge c) => new BoxEl
+    /// pairing link, code, expiry and waiting state. No Copy/Open buttons — the wide takeover pane that had room for
+    /// them is gone, and the code is short enough to type from the screen it is shown on.</summary>
+    // `interactive = true` keeps every existing call site (the setup wizard's own pairing pane at Idle) byte-identical;
+    // the wizard passes `false` while the pane is faded to a 22% Busy reminder — it stays MOUNTED (the cross-fade needs
+    // it there to fade FROM) but must stop being a Tab stop / hit-test target at that opacity (SetupPage.SignIn.cs).
+    internal static BoxEl CompactRightPane(LoginChallenge c, bool interactive = true) => new BoxEl
     {
         Direction = 1, Width = SetupLayout.CompactPairingWidth, Shrink = 0f,
         Gap = Spacing.S, AlignItems = FlexAlign.Center, Justify = FlexJustify.Start,
@@ -268,7 +144,7 @@ sealed class LoginView : Component
                 Children =
                 [
                     Caption(Loc.Get(Strings.Auth.OrGoTo)).Secondary(),
-                    CompactPairingLink(Loc.Get(Strings.Auth.PairUrl), c.VerificationUri),
+                    CompactPairingLink(Loc.Get(Strings.Auth.PairUrl), c.VerificationUri, interactive),
                     Caption(Loc.Get(Strings.Auth.EnterCodeColon)).Secondary(),
                 ],
             },
@@ -286,218 +162,13 @@ sealed class LoginView : Component
         ],
     };
 
-    static Element CompactPairingLink(string text, string url) => new BoxEl
+    static Element CompactPairingLink(string text, string url, bool interactive = true) => new BoxEl
     {
         Padding = new Edges4(Spacing.XXS, 0f, Spacing.XXS, 0f), Corners = CornerRadius4.All(Radii.Control),
-        Role = AutomationRole.Hyperlink, Focusable = true, Cursor = CursorId.Hand, OnClick = () => OpenUrl(url),
+        Role = AutomationRole.Hyperlink, Focusable = interactive, HitTestVisible = interactive,
+        Cursor = CursorId.Hand, OnClick = () => OpenUrl(url),
         Children = [new TextEl(text) { Size = 12.5f, Weight = 600, Color = Tok.AccentTextPrimary, MaxLines = 1 }],
     }.Interactive(Interaction.Subtle);
-
-    // A compact inline link with a trailing external-open glyph (tight padding so it sits flush between the words).
-    internal static Element LinkWithIcon(string text, string url) => new BoxEl
-    {
-        Direction = 0, Gap = 4f, AlignItems = FlexAlign.Center, Padding = new Edges4(3, 1, 3, 1), Corners = CornerRadius4.All(Radii.Control),
-        Role = AutomationRole.Hyperlink, Focusable = true, OnClick = () => OpenUrl(url),
-        Children =
-        [
-            new TextEl(text) { Size = 13f, Weight = 600, Color = Tok.AccentTextPrimary },
-            new TextEl(Icons.OpenInNewWindow) { Size = 11f, FontFamily = Theme.IconFont, Color = Tok.AccentTextPrimary },
-        ],
-    }.Interactive(Interaction.Subtle);
-
-    // Open the pairing page (pre-filled with the code via VerificationUriComplete) in the system browser.
-    static Element OpenButton(string url) => new BoxEl
-    {
-        Direction = 0, Gap = Spacing.XS, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-        Height = 34f, MinWidth = 96f, Padding = new Edges4(10, 0, 12, 0), Corners = CornerRadius4.All(Radii.Control),
-        Fill = Tok.FillControlDefault, HoverFill = Tok.FillControlSecondary, PressedFill = Tok.FillControlTertiary,
-        BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault, BrushTransitionMs = Motion.ControlFaster,
-        Role = AutomationRole.Button, Focusable = true, OnClick = () => OpenUrl(url),
-        Children =
-        [
-            new TextEl(Icons.OpenInNewWindow) { Size = 14f, FontFamily = Theme.IconFont, Color = Tok.TextSecondary },
-            new TextEl(Loc.Get(Strings.Auth.Open)) { Size = 12f, LineHeight = 16f, Color = Tok.TextSecondary },
-        ],
-    };
-
-    // ── narrow status screens ────────────────────────────────────────────────────────────────────────────────────────
-    Element Splash(string status, string? sub) => Card(
-        Brand(),
-        new BoxEl { Margin = new Edges4(0, Spacing.S, 0, Spacing.S), AlignSelf = FlexAlign.Center, Children = [ProgressBar.Indeterminate(220f)] },
-        BodyStrong(status),
-        sub is null ? new BoxEl() : Caption(sub).Secondary());
-
-    // The Finalizing splash: the same brand + status, but the bar is DETERMINATE off the step count and the old
-    // (untrue) "Setting up your library." subtitle is replaced by the actual steps. Rows read the login signal
-    // themselves — a component cannot take a changing prop, since props freeze at mount.
-    static Element FinalizingSplash(PlaybackBridge? bridge)
-    {
-        if (bridge is null) return Card(Brand(), BodyStrong(Loc.Get(Strings.Auth.SigningIn)));
-        Element Row(LoginStep step, string label) => Embed.Comp(() => new LoginStepRow(bridge.Login, step, label));
-        return Card(
-            Brand(),
-            new BoxEl { Margin = new Edges4(0, Spacing.S, 0, Spacing.XS), AlignSelf = FlexAlign.Center, Children = [Embed.Comp(() => new LoginStepBar(bridge.Login))] },
-            BodyStrong(Loc.Get(Strings.Auth.SigningIn)),
-            new BoxEl
-            {
-                Direction = 1, Gap = Spacing.XS, AlignSelf = FlexAlign.Stretch,
-                Padding = new Edges4(Spacing.S, Spacing.XS, Spacing.S, 0),
-                Stagger = Motion.ReducedMotion ? 0f : WaveeMotion.StaggerMs,
-                Children =
-                [
-                    Row(LoginStep.Connecting, Loc.Get(Strings.Auth.StepConnecting)),
-                    Row(LoginStep.Metadata,   Loc.Get(Strings.Auth.StepMetadata)),
-                    Row(LoginStep.Audio,      Loc.Get(Strings.Auth.StepAudio)),
-                    Row(LoginStep.Profile,    Loc.Get(Strings.Auth.StepProfile)),
-                ],
-            });
-    }
-
-    Element Expired() => Card(
-        GlyphBadge(Icons.Important, Tok.SystemFillCaution),
-        Subtitle(Loc.Get(Strings.Auth.CodeExpired)),
-        CenteredText(Body(Loc.Get(Strings.Auth.CodeExpiredBody)).Secondary()),
-        FullAccent(Loc.Get(Strings.Auth.GetNewCode), _onRetry),
-        HyperlinkButton.Create(Loc.Get(Strings.Auth.Close), _onClose));
-
-    Element Failed(string? error) => Card(
-        GlyphBadge(Icons.Cancel, Tok.SystemFillCritical),
-        Subtitle(Loc.Get(Strings.Auth.CouldntSignIn)),
-        CenteredText(Body(string.IsNullOrWhiteSpace(error) ? Loc.Get(Strings.Auth.NetworkError) : error!).Secondary(), 350f),
-        FullAccent(Loc.Get(Strings.Auth.TryAgain), _onRetry),
-        HyperlinkButton.Create(Loc.Get(Strings.Auth.Close), _onClose));
-
-    Element Premium() => Card(
-        GlyphBadge(Icons.Important, GoldTint),
-        Subtitle(Loc.Get(Strings.Auth.PremiumTitle)),
-        CenteredText(Body(Loc.Get(Strings.Auth.PremiumBody)).Secondary(), 360f),
-        new BoxEl
-        {
-            AlignSelf = FlexAlign.Stretch, Direction = 0, Gap = Spacing.M, Justify = FlexJustify.Center,
-            Children =
-            [
-                Button.Accent(Loc.Get(Strings.Auth.Upgrade), () => OpenUrl("https://www.spotify.com/premium")),
-                Button.Standard(Loc.Get(Strings.Auth.UseAnotherAccount), _onRetry),
-            ],
-        },
-        HyperlinkButton.Create(Loc.Get(Strings.Auth.Close), _onClose));
-}
-
-// ── The two-pane marquee (state 3 / AwaitingApproval) — image-7 layout ───────────────────────────────────────────────
-// Left: the official Spotify browser login + the trademark disclaimer. Right: the QR + the pairing code + a copy button.
-// An "OR" divider between. A bottom bar: a thin indeterminate poll bar (the device code is polling) + a Close (quit) button.
-// Own component so the "copied" feedback is scoped (a fresh code remounts it via the Key on the parent).
-sealed class TwoPaneLogin : Component
-{
-    const float CardW = 900f;
-
-    readonly LoginChallenge _c;
-    readonly Action _onLoginBrowser;
-    readonly Action _onClose;
-    public TwoPaneLogin(LoginChallenge c, Action onLoginBrowser, Action onClose)
-    { _c = c; _onLoginBrowser = onLoginBrowser; _onClose = onClose; }
-
-    public override Element Render()
-    {
-        var copied = UseSignal(false);
-
-        var content = new BoxEl
-        {
-            Direction = 0, AlignItems = FlexAlign.Stretch, AlignSelf = FlexAlign.Stretch,
-            Children = [LeftPane(), LoginView.OrDivider(), LoginView.RightPane(_c, copied, () =>
-            {
-                InputHooks.Current.Default.Clipboard?.SetText(_c.UserCode);
-                InputHooks.Current.Default.Announce?.Invoke(Loc.Get(Strings.Auth.Copied), false);   // screen-reader confirm
-                copied.Value = true;
-            })],
-        };
-
-        var bottom = new BoxEl
-        {
-            Direction = 0, AlignItems = FlexAlign.Center, AlignSelf = FlexAlign.Stretch, Gap = Spacing.L,
-            Margin = new Edges4(0, Spacing.L, 0, 0), Padding = new Edges4(0, Spacing.L, 0, 0),
-            BorderColor = Tok.StrokeDividerDefault, BorderWidth = 0f,
-            Children =
-            [
-                new BoxEl { Grow = 1f },
-                Button.Standard(Loc.Get(Strings.Auth.Close), _onClose) with { MinWidth = 96f },
-            ],
-        };
-
-        // A top hairline above the bottom bar (the card's footer separator).
-        var footerSep = new BoxEl { Height = 1f, AlignSelf = FlexAlign.Stretch, Margin = new Edges4(0, Spacing.L, 0, 0), Fill = Tok.StrokeDividerDefault };
-
-        return new BoxEl
-        {
-            Direction = 1, Width = CardW, MaxWidth = CardW, AlignItems = FlexAlign.Stretch,
-            Padding = new Edges4(36f, 32f, 36f, 24f), Gap = 0f,
-            Corners = CornerRadius4.All(Radii.Card), Shadow = Elevation.Card,
-            // FloatingPane (see LoginView.Card): no shell behind the login view — just Mica — so the card must be opaque.
-            Fill = WaveeColors.FloatingPane, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
-            Enter = new EnterExit(Dy: 8f, Opacity: 0f, Active: true),
-            Exit = new EnterExit(Dy: -6f, Sx: 0.98f, Sy: 0.98f, Opacity: 0f, Active: true),   // success: dissolve out as the shell rises in
-            Children = [content, footerSep, bottom],
-        };
-    }
-
-    Element LeftPane() => new BoxEl
-    {
-        Direction = 1, Grow = 1f, Basis = 0f, Gap = Spacing.L, Justify = FlexJustify.Start,
-        Padding = new Edges4(4f, 8f, 36f, 8f),
-        Children =
-        [
-            // Spotify wordmark (green) — identification use; the disclaimer below states the trademark.
-            LoginView.SpotifyBrand(),
-            new TextEl(Loc.Get(Strings.Auth.SpotifySignInWeb)) { Size = 14f, LineHeight = 20f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap, MaxWidth = 330f },
-            // The primary: open the official Spotify login in the system browser (PKCE loopback races the device code).
-            LoginView.BrowserLoginButton(_onLoginBrowser),
-            new TextEl(Loc.Get(Strings.Auth.Disclaimer)) { Size = 11.5f, LineHeight = 17f, Color = Tok.TextTertiary, Wrap = TextWrap.Wrap, MaxWidth = 360f },
-        ],
-    };
-
-}
-
-// ── The copy button — an explicit scale-POP on the checkmark when copied (the proven anim-keyframe path, not a keyed Enter
-// that the positional reconciler can update-in-place). Reads the `copied` SIGNAL (a component can't take a changing bool prop).
-sealed class CopyButton : Component
-{
-    readonly Signal<bool> _copied;
-    readonly Action _onClick;
-    public CopyButton(Signal<bool> copied, Action onClick) { _copied = copied; _onClick = onClick; }
-
-    public override Element Render()
-    {
-        bool copied = _copied.Value;   // subscribe → re-render on copy
-        var iconRef = UseRef<NodeHandle>(default);
-        UseEffect(() =>
-        {
-            if (!copied || Motion.ReducedMotion) return;
-            var anim = Context.Anim;
-            var scene = Context.Scene;
-            if (anim is null || scene is null || iconRef.Value.IsNull || !scene.IsLive(iconRef.Value)) return;
-            var pop = new Keyframe[] { new(0f, 0.3f, Easing.EaseOut), new(0.55f, 1.18f, Easing.EaseOut), new(1f, 1f, Easing.EaseInOut) };
-            anim.Keyframes(iconRef.Value, AnimChannel.ScaleX, pop, 340f, loop: false);
-            anim.Keyframes(iconRef.Value, AnimChannel.ScaleY, pop, 340f, loop: false);
-        }, copied);
-
-        return new BoxEl
-        {
-            Direction = 0, Gap = Spacing.XS, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-            Height = 34f, MinWidth = 116f, Padding = new Edges4(10, 0, 12, 0), Corners = CornerRadius4.All(Radii.Control),
-            Fill = Tok.FillControlDefault, HoverFill = Tok.FillControlSecondary, PressedFill = Tok.FillControlTertiary,
-            BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault, BrushTransitionMs = Motion.ControlFaster,
-            Role = AutomationRole.Button, Focusable = true, OnClick = _onClick,
-            Children =
-            [
-                new BoxEl
-                {
-                    AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, OnRealized = h => iconRef.Value = h,
-                    Children = [new TextEl(copied ? Icons.Accept : Icons.Copy) { Size = 15f, FontFamily = Theme.IconFont, Color = copied ? Tok.AccentDefault : Tok.TextSecondary }],
-                },
-                new TextEl(copied ? Loc.Get(Strings.Auth.Copied) : Loc.Get(Strings.Auth.CopyCode)) { Size = 12f, LineHeight = 16f, Color = Tok.TextSecondary },
-            ],
-        };
-    }
 }
 
 // ── One row of the Finalizing step list ──────────────────────────────────────────────────────────────────────────────
@@ -507,13 +178,17 @@ sealed class CopyButton : Component
 //
 // Marks: pending = a dim bullet; current = the shipped indeterminate ProgressRing (reduced-motion aware, compositor
 // driven — no Lottie in this engine and none needed); done = a checkmark with an explicit scale-POP, the same
-// anim-keyframe path CopyButton uses rather than a keyed Enter the positional reconciler can update in place.
+// anim-keyframe path WaitingDots uses rather than a keyed Enter the positional reconciler can update in place.
 sealed class LoginStepRow : Component
 {
     readonly Signal<LoginSnapshot> _login;
     readonly LoginStep _step;
     readonly string _label;
-    public LoginStepRow(Signal<LoginSnapshot> login, LoginStep step, string label) { _login = login; _step = step; _label = label; }
+    readonly float _width;
+    // `width = NaN` (BoxEl.Width's own "unconstrained" default) = an unconstrained row in a single tall column; the
+    // setup wizard's Busy approve card passes a fixed width so four rows wrap into a tidy 2×2 grid instead.
+    public LoginStepRow(Signal<LoginSnapshot> login, LoginStep step, string label, float width = float.NaN)
+    { _login = login; _step = step; _label = label; _width = width; }
 
     public override Element Render()
     {
@@ -543,6 +218,7 @@ sealed class LoginStepRow : Component
         return new BoxEl
         {
             Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center, Height = 26f,
+            Width = _width, Shrink = 0f,
             Enter = new EnterExit(Dx: -6f, Opacity: 0f, Active: true), Transition = MotionTok.ControlNormal,
             Children =
             [

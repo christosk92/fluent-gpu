@@ -10,6 +10,18 @@ public sealed record SpotifyRuntimeIdentity(string AppVersion, string ClientVers
     // "1.2.94.583.g60394bd5" client-version string, so the .g suffix is captured, not invented).
     public const string DefaultAppVersion = "129400583";
     public const string DefaultClientVersion = "1.2.94.583.g60394bd5";
+
+    /// <summary>Spotify's public desktop ("keymaster") client id — the ONE definition. Every caller (spclient headers,
+    /// the OAuth/device-code login, login5, the connect-state PutStateRequest) references this rather than repeating the
+    /// literal: they must all present the SAME id or the account sees mismatched clients.</summary>
+    public const string KeymasterClientId = "65b708073fc0480ea92a077233ca87bd";
+
+    /// <summary>The web-player build token the captured desktop client sends on the two operations it serves from the
+    /// web-player bundle (queryArtistOverview / getAlbum). NOT a semver and NOT the spclient packed
+    /// <see cref="DefaultAppVersion"/> — a distinct identifier, observed verbatim, and it does NOT move when the desktop
+    /// version pin moves. Lives here so all client-identity pins are in one file.</summary>
+    public const string WebPlayerAppVersion = "896000000";
+
     public const string DefaultPlayPlayTokenHex = "025614bf92a6c95e922e466523da4f96";
     public const int DefaultPlayPlayRequestVersion = 5;
 

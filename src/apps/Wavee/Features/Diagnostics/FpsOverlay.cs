@@ -5,8 +5,10 @@ using FluentGpu.Hosting;
 
 namespace Wavee;
 
-// A tiny debug HUD: live FPS + frame time, pinned top-right under the chrome. Mounted by WaveeApp only when
-// Diag.CompiledIn (DEBUG / FLUENTGPU_DIAG); in a Release build the const folds the branch out entirely. Hit-test
+// A tiny debug HUD: live FPS + frame time, pinned top-right under the chrome. Mounted by WaveeApp when TWO SETTINGS
+// are on — Settings › Diagnostics: Developer mode AND the FPS overlay toggle (`DeveloperMode.Enabled` &&
+// `WaveeSettings.FpsOverlay`, read inside WaveeApp.Render so flipping either re-renders immediately). It is NOT gated on
+// Diag.CompiledIn, so a Release build ships it too — a user can find and un-find it without a relaunch. Hit-test
 // pass-through so it never steals input.
 //
 // IMPORTANT — this renders EXACTLY ONCE. The numbers are RETAINED dynamic-text slots (Element.DynamicText): the host

@@ -5,7 +5,9 @@
   xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
   xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
-  IgnorableNamespaces="uap rescap">
+  xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
+  xmlns:com="http://schemas.microsoft.com/appx/manifest/com/windows10"
+  IgnorableNamespaces="uap rescap desktop com">
 
   <Identity Name="cproducts.Wavee"
             Publisher="__PUBLISHER__"
@@ -41,6 +43,38 @@
           Square71x71Logo="Assets\Square71x71Logo.png"
           Square310x310Logo="Assets\Square310x310Logo.png" />
       </uap:VisualElements>
+
+      <Extensions>
+        <!-- wavee:// deep links. Packaged identity owns the protocol registration outright: ProtocolRegistrar
+             (the HKCU writer) must NOT run when packaged (E_ILLEGAL_METHOD_CALL). -->
+        <uap:Extension Category="windows.protocol">
+          <uap:Protocol Name="wavee" DisplayName="Wavee" />
+        </uap:Extension>
+
+        <!-- Toast activation. The CLSID is the app's toast activator; the same GUID is registered by the process at
+             startup with CoRegisterClassObject, and is what the manifest hands the Action Center. -->
+        <desktop:Extension Category="windows.toastNotificationActivation">
+          <desktop:ToastNotificationActivation ToastActivatorCLSID="C8E4A91B-3D52-4F07-9B6A-1E7C4D8F2A30" />
+        </desktop:Extension>
+
+        <!-- The COM server the Shell cold-launches for a toast click. Arguments MUST be the sentinel the app's own
+             parser matches: ActivationArgs.ToastActivatedSentinel = "----AppNotificationActivated:"
+             (src/FluentGpu.WindowsApi/Activation/ActivationArgs.cs) — the classifier strips the prefix and treats the
+             remainder as the toast args string. Changing one without the other silently breaks cold-launch toasts. -->
+        <com:Extension Category="windows.comServer">
+          <com:ComServer>
+            <com:ExeServer Executable="Wavee.exe" Arguments="----AppNotificationActivated:" DisplayName="Wavee">
+              <com:Class Id="C8E4A91B-3D52-4F07-9B6A-1E7C4D8F2A30" DisplayName="Wavee" />
+            </com:ExeServer>
+          </com:ComServer>
+        </com:Extension>
+
+        <!-- Start at sign-in. Declared disabled: WaveeSettings.StartOnLogin (app.startOnLogin) is the user-facing
+             switch, and when packaged it flips this task rather than writing the HKCU Run value. -->
+        <desktop:Extension Category="windows.startupTask" Executable="Wavee.exe" EntryPoint="Windows.FullTrustApplication">
+          <desktop:StartupTask TaskId="WaveeStartup" Enabled="false" DisplayName="Wavee" />
+        </desktop:Extension>
+      </Extensions>
     </Application>
   </Applications>
 

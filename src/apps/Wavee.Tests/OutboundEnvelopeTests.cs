@@ -124,6 +124,32 @@ public class OutboundEnvelopeTests
         Assert.False(cmd.TryGetProperty("options", out _));          // honest-shape guard
     }
 
+    // ── bug 4: a forwarded play carries the video intent, when known ────────────────────────────────────────────────
+    [Fact]
+    public void Play_PreferVideo_AddsModesMediaVideoOverride()
+    {
+        var json = OutboundEnvelope.Play(
+            "dev1", "spotify:track:t", null, null, null, null, null, false,
+            "harmony", "v", "c", "i", 1, preferVideo: true);
+
+        using var doc = JsonDocument.Parse(json);
+        var modes = doc.RootElement.GetProperty("command").GetProperty("prepare_play_options")
+            .GetProperty("player_options_override").GetProperty("modes");
+        Assert.Equal("VIDEO", modes.GetProperty("media").GetString());
+    }
+
+    [Fact]
+    public void Play_NoPreferVideo_OmitsModesEntirely()
+    {
+        var json = OutboundEnvelope.Play(
+            "dev1", "spotify:track:t", null, null, null, null, null, false,
+            "harmony", "v", "c", "i", 1);
+
+        using var doc = JsonDocument.Parse(json);
+        var playerOptions = doc.RootElement.GetProperty("command").GetProperty("prepare_play_options").GetProperty("player_options_override");
+        Assert.False(playerOptions.TryGetProperty("modes", out _));
+    }
+
     [Fact]
     public void AddToQueue_SingleTrack_MatchesDesktopEnvelopeShape()
     {
@@ -167,6 +193,20 @@ public class OutboundEnvelopeTests
         var json = OutboundEnvelope.AddToQueue("us", "spotify:track:x", "q1", false, false, false, "c", "i", 1);
         using var doc = JsonDocument.Parse(json);
         Assert.Equal("q1", doc.RootElement.GetProperty("command").GetProperty("track").GetProperty("uid").GetString());
+    }
+
+    // ── bug 5: a richer caller (EnqueueAsync(Track)) writes the full display + video metadata map ─────────────────────
+    [Fact]
+    public void AddToQueue_WithMetadata_WritesTheFullMap()
+    {
+        var json = OutboundEnvelope.AddToQueue("us", "spotify:track:x", "", false, false, false, "c", "i", 1,
+            metadata: new Dictionary<string, string> { ["title"] = "T", ["track_player"] = "video", ["media.type"] = "video" });
+
+        using var doc = JsonDocument.Parse(json);
+        var meta = doc.RootElement.GetProperty("command").GetProperty("track").GetProperty("metadata");
+        Assert.Equal("T", meta.GetProperty("title").GetString());
+        Assert.Equal("video", meta.GetProperty("track_player").GetString());
+        Assert.Equal("video", meta.GetProperty("media.type").GetString());
     }
 
     [Fact]
@@ -365,6 +405,24 @@ public class OutboundEnvelopeTests
         Assert.Equal("transfer-id", root.GetProperty("transfer_intent_id").GetString());
         Assert.Equal("command-id", root.GetProperty("command_id").GetString());
         Assert.Equal("interaction-id", root.GetProperty("interaction_id").GetString());
+    }
+
+    // ── bug 8: a transfer-away that hands over a locally-hosted video says so ───────────────────────────────────────
+    [Fact]
+    public void Transfer_HostingVideo_AddsVideoPersistenceMode()
+    {
+        var json = OutboundEnvelope.Transfer("transfer-id", "command-id", "interaction-id", "premium", hostingVideo: true);
+        using var doc = JsonDocument.Parse(json);
+        var modes = doc.RootElement.GetProperty("options").GetProperty("modes");
+        Assert.Equal("VIDEO", modes.GetProperty("video_persistence").GetString());
+    }
+
+    [Fact]
+    public void Transfer_NotHostingVideo_OmitsModesEntirely()
+    {
+        var json = OutboundEnvelope.Transfer("transfer-id", "command-id", "interaction-id", "premium");
+        using var doc = JsonDocument.Parse(json);
+        Assert.False(doc.RootElement.GetProperty("options").TryGetProperty("modes", out _));
     }
 
     [Fact]

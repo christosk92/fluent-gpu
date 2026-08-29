@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using Xunit;
 
 namespace Wavee.Tests;
@@ -34,22 +35,88 @@ public class SetupGatingTests : IDisposable
         Assert.Equal(SetupBootstrap.TargetVersion, settings.Get(WaveeSettings.SetupBootstrapVersion));
     }
 
+    /// <summary>An existing install is marked COMPLETED (the wizard is never retro-fitted onto someone mid-use) — but
+    /// it has still never recorded a terms acceptance, so the terms re-arm fires once and brings it back for that one
+    /// page. The two rules compose: "don't re-onboard existing users" and "nobody streams without accepting the terms".</summary>
     [Fact]
-    public void ExistingInstall_DoesNotArmPending()
+    public void ExistingInstall_MarksCompleted_AndGrandfathersTerms()
     {
         // library.db existing is SidebarBootstrap.IsFreshInstall's own first witness — SetupBootstrap reuses it verbatim.
-        string waveeDir = Path.Combine(_local, "Wavee");
-        Directory.CreateDirectory(waveeDir);
-        File.WriteAllText(Path.Combine(waveeDir, "library.db"), "sqlite");
-
-        var settings = new MemoryAppSettings();
+        var settings = ExistingInstall();
         SetupBootstrap.Run(settings, _local);
 
-        Assert.False(settings.Get(WaveeSettings.SetupPending));
         Assert.True(settings.Get(WaveeSettings.SetupCompleted));
+        Assert.False(settings.Get(WaveeSettings.SetupPending));   // never retro-fit the wizard onto a finished install
+        Assert.Equal(SetupGating.TermsVersion, settings.Get(WaveeSettings.TermsAcceptedVersion));   // stamped, not re-shown
         // An existing install must not be affected by the setup wizard arming the sidebar chooser suppression either
         // way — SidebarBootstrap (not SetupBootstrap) owns that key for existing installs.
         Assert.False(settings.WasWritten(WaveeSettings.SidebarOnboardingSeen));
+    }
+
+    [Fact]
+    public void ExistingInstall_WithCurrentTermsAccepted_IsNotArmed()
+    {
+        var settings = ExistingInstall();
+        settings.Set(WaveeSettings.TermsAcceptedVersion, SetupGating.TermsVersion);
+
+        SetupBootstrap.Run(settings, _local);
+
+        Assert.True(settings.Get(WaveeSettings.SetupCompleted));
+        Assert.False(settings.Get(WaveeSettings.SetupPending));
+    }
+
+    /// <summary>The re-arm must reach installs that burned <c>SetupBootstrapVersion</c> long ago — the trigger is a
+    /// shipped terms revision, not a one-time migration, so <see cref="SetupBootstrap.Run"/>'s early return still has
+    /// to evaluate it.</summary>
+    [Fact]
+    public void AlreadyBootstrapped_GrandfathersUnversionedAcceptance_AndReArmsOnlyForALaterBump()
+    {
+        var settings = new MemoryAppSettings();
+        settings.Set(WaveeSettings.SetupBootstrapVersion, SetupBootstrap.TargetVersion);
+        settings.Set(WaveeSettings.SetupCompleted, true);
+        settings.Set(WaveeSettings.SetupPending, false);
+        settings.Set(WaveeSettings.TermsAcceptedVersion, 0);   // completed before terms were versioned
+
+        SetupBootstrap.Run(settings, _local);
+
+        Assert.False(settings.Get(WaveeSettings.SetupPending));
+        Assert.Equal(SetupGating.TermsVersion, settings.Get(WaveeSettings.TermsAcceptedVersion));
+
+        // The pure rules the bootstrap composes: a later TermsVersion bump re-arms; unversioned acceptance never does.
+        Assert.True(SetupGating.NeedsTermsRearm(completed: true, accepted: SetupGating.TermsVersion, current: SetupGating.TermsVersion + 1));
+        Assert.False(SetupGating.NeedsTermsRearm(completed: true, accepted: SetupGating.TermsVersion, current: SetupGating.TermsVersion));
+        Assert.True(SetupGating.GrandfathersTerms(completed: true, accepted: 0));
+        Assert.False(SetupGating.GrandfathersTerms(completed: false, accepted: 0));
+        Assert.False(SetupGating.GrandfathersTerms(completed: true, accepted: 1));
+    }
+
+    /// <summary>Accepting the terms is what STOPS the re-arm: the wizard's Terms page writes the current version, and
+    /// the next launch must then leave the install alone instead of re-opening the wizard forever.</summary>
+    [Fact]
+    public void AcceptingTheTerms_StopsTheReArm()
+    {
+        // Simulate a pending re-arm (a later terms bump) the way the bootstrap would leave it, then the wizard accepting.
+        var settings = ExistingInstall();
+        settings.Set(WaveeSettings.SetupCompleted, true);
+        settings.Set(WaveeSettings.SetupPending, true);
+
+        // What SetupSession.Primary()'s Terms case does, then the wizard completing.
+        settings.Set(WaveeSettings.TermsAcceptedVersion, SetupGating.TermsVersion);
+        SetupGating.MarkCompleted(settings);
+        Assert.False(settings.Get(WaveeSettings.SetupPending));
+
+        SetupBootstrap.Run(settings, _local);   // the next launch
+
+        Assert.False(settings.Get(WaveeSettings.SetupPending));
+        Assert.Equal(SetupGating.TermsVersion, settings.Get(WaveeSettings.TermsAcceptedVersion));
+    }
+
+    MemoryAppSettings ExistingInstall()
+    {
+        string waveeDir = Path.Combine(_local, "Wavee");
+        Directory.CreateDirectory(waveeDir);
+        File.WriteAllText(Path.Combine(waveeDir, "library.db"), "sqlite");
+        return new MemoryAppSettings();
     }
 
     [Fact]
@@ -155,6 +222,45 @@ public class SetupGatingTests : IDisposable
         Assert.True(SetupGating.MarkDeferred(settings));
         Assert.False(SetupGating.MarkDeferred(settings));   // already cleared — no second transition
     }
+
+    /// <summary>An already-completed install that is re-armed for new terms reaches Done with <c>SetupCompleted</c>
+    /// already true. <see cref="SetupGating.MarkCompleted"/> must STILL clear <c>SetupPending</c>, or the wizard
+    /// re-opens on every launch with no way to satisfy it.</summary>
+    [Fact]
+    public void MarkCompleted_ClearsPending_EvenWhenAlreadyCompleted()
+    {
+        var settings = new MemoryAppSettings();
+        settings.Set(WaveeSettings.SetupCompleted, true);
+        settings.Set(WaveeSettings.SetupPending, true);   // the terms re-arm
+
+        Assert.False(SetupGating.MarkCompleted(settings));   // not a Completed transition — it was already completed
+        Assert.False(settings.Get(WaveeSettings.SetupPending));
+        Assert.True(settings.Get(WaveeSettings.SetupCompleted));
+    }
+
+    // ── CanDismiss ─────────────────────────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>Escape / light-dismiss may close ONLY a rerun, and only while nothing long-running is in flight. A
+    /// first-run or re-auth wizard dismissed this way leaves a bare titlebar over Mica with no way back in — the
+    /// wizard is Wavee's only sign-in surface, so there is genuinely nothing behind it.</summary>
+    [Theory]
+    [InlineData(true, false, true)]    // rerun, idle → the one dismissible case
+    [InlineData(true, true, false)]    // rerun, but busy
+    [InlineData(false, false, false)]  // first-run / re-auth: never
+    [InlineData(false, true, false)]
+    public void CanDismiss_OnlyARerunThatIsNotBusy(bool isRerun, bool busy, bool expected)
+        => Assert.Equal(expected, SetupGating.CanDismiss(isRerun, busy));
+
+    // ── NeedsTermsRearm ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    [Theory]
+    [InlineData(true, 0, 1, true)]    // completed, never accepted → re-arm
+    [InlineData(true, 1, 1, false)]   // accepted this revision → leave it alone
+    [InlineData(true, 2, 1, false)]   // a downgrade must not re-ask
+    [InlineData(false, 0, 1, false)]  // never completed → already pending; re-arming says nothing new
+    public void NeedsTermsRearm_OnlyForACompletedInstallBehindTheCurrentRevision(
+        bool completed, int accepted, int current, bool expected)
+        => Assert.Equal(expected, SetupGating.NeedsTermsRearm(completed, accepted, current));
 
     // ── SkipSignIn ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -283,4 +389,45 @@ public class SetupGatingTests : IDisposable
     [InlineData(SetupPage.Done, 1f)]
     public void Progress_MatchesTheLadder(SetupPage page, float expected)
         => Assert.Equal(expected, SetupGating.Progress(page), precision: 5);
+
+    // ── RoadmapPages / RoadmapLabelKey / RoadmapIndexFor (work package A) ─────────────────────────────────────────────
+
+    [Fact]
+    public void RoadmapPages_IsExactlyTheSevenMiddlePages_InEnumOrder()
+    {
+        SetupPage[] expected =
+        [
+            SetupPage.Terms, SetupPage.SignIn, SetupPage.LocalPlayback, SetupPage.Appearance,
+            SetupPage.Sidebar, SetupPage.Sound, SetupPage.Notifications,
+        ];
+        Assert.Equal(expected, SetupGating.RoadmapPages);
+    }
+
+    [Fact]
+    public void RoadmapLabelKey_IsDistinctPerPage()
+    {
+        var keys = SetupGating.RoadmapPages.Select(SetupGating.RoadmapLabelKey).ToList();
+        Assert.Equal(keys.Distinct().Count(), keys.Count);
+        Assert.All(keys, k => Assert.False(string.IsNullOrWhiteSpace(k)));
+    }
+
+    [Fact]
+    public void RoadmapLabelKey_ThrowsForNonRoadmapPages()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => SetupGating.RoadmapLabelKey(SetupPage.Welcome));
+        Assert.Throws<ArgumentOutOfRangeException>(() => SetupGating.RoadmapLabelKey(SetupPage.Done));
+    }
+
+    [Theory]
+    [InlineData(SetupPage.Welcome, 0)]
+    [InlineData(SetupPage.Terms, 0)]
+    [InlineData(SetupPage.SignIn, 1)]
+    [InlineData(SetupPage.LocalPlayback, 2)]
+    [InlineData(SetupPage.Appearance, 3)]
+    [InlineData(SetupPage.Sidebar, 4)]
+    [InlineData(SetupPage.Sound, 5)]
+    [InlineData(SetupPage.Notifications, 6)]
+    [InlineData(SetupPage.Done, 7)]
+    public void RoadmapIndexFor_MapsPagesOntoTheirRoadmapRow(SetupPage page, int expected)
+        => Assert.Equal(expected, SetupGating.RoadmapIndexFor(page));
 }

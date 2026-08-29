@@ -116,6 +116,9 @@ public sealed class SwitchablePlayer : IPlaybackPlayer
     // player's exact slot insert.
     public Task InsertIntoQueueAsync(IReadOnlyList<PlaybackContextTrack> tracks, int index, CancellationToken ct = default) => Cur.InsertIntoQueueAsync(tracks, index, ct);
     public Task<string?> StartRadioAsync(string seedUri, string? displayName = null, CancellationToken ct = default) => Cur.StartRadioAsync(seedUri, displayName, ct);
+    // Forwarded explicitly for the same reason as InsertIntoQueueAsync above: the interface's default (true) would
+    // resolve HERE and PowerBridge's suspend handler would always pause, even a viewer session, if this weren't wired.
+    public bool ShouldPauseOnSuspend => Cur.ShouldPauseOnSuspend;
 }
 
 public sealed class SwitchableDevices : IConnectDevices, IDisposable

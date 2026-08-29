@@ -402,12 +402,10 @@ sealed class SeekBar : Component
         long targetMs = dvr
             ? LiveRail.Seek(live.SeekableStartMs, live.SeekableEndMs, f)
             : Math.Clamp((long)(f * dur), 0, dur);
-        _b.NoteSeek(targetMs);                             // arm the seek latch: suppress stale pre-seek position ticks (#2)
-        _b.PositionFrac.Value = f;                         // optimistic: paint the new position immediately
-        _b.PositionMs.Value = targetMs;                    // keep time labels + interpolation anchor in the same place
+        _b.CommitSeek(targetMs);                            // arms the latch, optimistically publishes PositionMs, issues the accurate seek
+        _b.PositionFrac.Value = f;                         // optimistic: paint the new position immediately (the DVR-rail fraction, not ms/dur)
         _tickWallMs = Environment.TickCount64;
         _tickPosMs = targetMs;
-        _ = _b.Player.SeekAsync(targetMs, Wavee.Core.SeekMode.Accurate);   // drag-end commit: one exact seek
         _scrubbing.Value = false;                          // release the scrub gate (PositionFrac/interp resume)
         Recompute();
     }

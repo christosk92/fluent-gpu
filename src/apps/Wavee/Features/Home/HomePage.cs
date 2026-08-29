@@ -1056,8 +1056,12 @@ sealed class HomeQuickImageProbe : Component
 
 static class HomeImageDiagnostics
 {
-    public static readonly bool Enabled =
-        Environment.GetEnvironmentVariable("WAVEE_HOME_IMAGE_DIAG") is "1" or "true" or "TRUE";
+    /// <summary>The home image tracer rides the app's ONE developer switch (Settings ▸ Diagnostics ▸ Developer mode)
+    /// instead of the <c>WAVEE_HOME_IMAGE_DIAG</c> environment variable it used to read. An env var can only be set
+    /// before launch, which is precisely the wrong moment: the tracer exists for "this card's art is missing RIGHT
+    /// NOW", and the answer to that must be reachable from inside the running app. Peek, not Value — this is read from
+    /// logging call sites, not from a render, so there is nothing to subscribe.</summary>
+    public static bool Enabled => DeveloperMode.Enabled.Peek();
     static readonly object Gate = new();
     static readonly HashSet<string> Seen = new(StringComparer.Ordinal);
 

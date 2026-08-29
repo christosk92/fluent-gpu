@@ -32,8 +32,13 @@ sealed class BrowsePageHost : Component
             PageUri: pageUri,
             OnOpenCategory: (uri, title) => go(BrowseRoutes.Page(uri), title),
             // A client feature is not a browse page: Live Events carries featureUri "spotify:concerts" and routes into
-            // the Concerts hub Wavee already has.
-            OnOpenFeature: uri => go(BrowseRoutes.FeatureRoute(uri), null),
+            // the Concerts hub Wavee already has. Any OTHER feature resolves to null — this client has no surface for
+            // it, so the tile declines instead of opening a route no page renders (BrowseRoutes.FeatureRoute).
+            OnOpenFeature: uri =>
+            {
+                if (BrowseRoutes.FeatureRoute(uri) is { } route) go(route, null);
+                else WaveeLog.Instance.Warn("nav", "browse.feature.unsupported: " + uri);
+            },
             Go: go,
             Play: uri => { if (svc is not null) _ = svc.Player.PlayAsync(uri, 0); },
             OnExploreAll: () => go(BrowseRoutes.Home, null),
