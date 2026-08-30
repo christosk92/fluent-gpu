@@ -37,11 +37,12 @@ namespace FluentGpu.WindowsApi.Network;
 /// from a thread that has not yet initialized COM (e.g. the <c>--windowsapi-smoke</c> harness). They are safe to call
 /// from any thread — but because the read can block on the OS NCSI probe, UI code must NOT call them inline; use
 /// <see cref="ReadAsync"/>, which runs them on the pillar's dedicated long-lived MTA reader and returns a snapshot.</item>
-/// <item><see cref="Subscribe"/> returns a live subscription whose connection point holds the manager for the
-/// subscription's lifetime, so it does NOT balance the apartment. Call it from a thread that stays COM-initialized for
-/// the subscription's life (the gallery's UI thread). The agile object delivers <c>ConnectivityChanged</c> on a
-/// COM-supplied thread (an RPC worker when the subscription lives in the MTA — which the gallery UI thread is); the sink
-/// does no marshalling (see <see cref="NetworkListManagerEventSink"/>), so the subscriber hops to its own UI thread.</item>
+/// <item><see cref="Subscribe"/> and <see cref="SubscribeCost"/> return a live subscription whose connection point holds
+/// the manager for the subscription's lifetime, so they do NOT balance the apartment. Call them from a thread that stays
+/// COM-initialized for the subscription's life (the gallery's UI thread). The agile object delivers
+/// <c>ConnectivityChanged</c>/<c>CostChanged</c> on a COM-supplied thread (an RPC worker when the subscription lives in
+/// the MTA — which the gallery UI thread is); the sinks do no marshalling (see <see cref="NetworkListManagerEventSink"/>
+/// and <see cref="NetworkCostManagerEventSink"/>), so the subscriber hops to its own UI thread.</item>
 /// </list>
 /// </para>
 /// <para>
@@ -146,10 +147,12 @@ public static unsafe class NetworkStatus
         => MtaReader.Run(static () => ReadCost());
 
     /// <summary>
-    /// One-shot <c>INetworkCostManager::GetCost(null dest)</c> on the calling thread (the MTA reader invokes this).
-    /// Fail-soft to <see cref="NetworkCost.Unknown"/> on any failure.
+    /// One-shot <c>INetworkCostManager::GetCost(null dest)</c> on the calling thread (the MTA reader invokes this; so does
+    /// the cost sink's <c>DataPlanStatusChanged</c>, whose event carries no cost payload). Fail-soft to
+    /// <see cref="NetworkCost.Unknown"/> on any failure. The caller's thread must be COM-usable (the apartment scope
+    /// tolerates an already-MTA thread such as an NLM RPC callback worker).
     /// </summary>
-    private static NetworkCost ReadCost()
+    internal static NetworkCost ReadCost()
     {
         using var com = ComApartment.Enter();
         INetworkListManager* mgr = TryCreateManager();
@@ -282,7 +285,35 @@ public static unsafe class NetworkStatus
     public static IDisposable Subscribe(Action<bool> onlineChanged)
     {
         ArgumentNullException.ThrowIfNull(onlineChanged);
-        return NetworkStatusSubscription.Create(onlineChanged);
+        return NlmConnectionPointSubscription.Create(
+            new NetworkListManagerEventSink(onlineChanged),
+            NetworkListManagerComConstants.IID_INetworkListManagerEvents);
+    }
+
+    /// <summary>
+    /// Subscribe to connection-cost changes via the NLM connection point for <c>INetworkCostManagerEvents</c> — the push
+    /// counterpart of <see cref="ReadCostAsync"/>, so a "Set as metered connection" flip in Windows settings reaches the
+    /// subscriber immediately instead of on its next poll. <paramref name="costChanged"/> receives the machine
+    /// connection's new <see cref="NetworkCost"/> on every <c>CostChanged</c> (its payload is the same flags word
+    /// <c>GetCost</c> returns) and <c>DataPlanStatusChanged</c> (no payload — the cost is re-read). Dispose the returned
+    /// object to <c>Unadvise</c> and release everything.
+    /// </summary>
+    /// <param name="costChanged">Handler invoked on cost change. <b>Invoked on the NLM callback thread</b> (an RPC worker
+    /// for an MTA subscriber, the pump thread for an STA one — see the type remarks); marshal to your UI thread yourself.
+    /// Must not be <see langword="null"/>.</param>
+    /// <returns>An <see cref="IDisposable"/> that, when disposed, unsubscribes. Disposing is idempotent.</returns>
+    /// <remarks>
+    /// Same contract as <see cref="Subscribe"/>: call from a thread that stays COM-initialized for the subscription's life;
+    /// if the manager cannot be created, the cost connection point is missing (pre-Windows 8) or <c>Advise</c> fails, a
+    /// non-throwing inert subscription is returned, so the caller's poll fallback remains the only cost source there.
+    /// </remarks>
+    /// <exception cref="ArgumentNullException"><paramref name="costChanged"/> is <see langword="null"/>.</exception>
+    public static IDisposable SubscribeCost(Action<NetworkCost> costChanged)
+    {
+        ArgumentNullException.ThrowIfNull(costChanged);
+        return NlmConnectionPointSubscription.Create(
+            new NetworkCostManagerEventSink(costChanged),
+            NetworkCostManagerEventSink.IID_INetworkCostManagerEvents);
     }
 
     /// <summary>
@@ -338,32 +369,34 @@ public static unsafe class NetworkStatus
 }
 
 /// <summary>
-/// The live connectivity subscription returned by <see cref="NetworkStatus.Subscribe"/>: it holds the NLM object, its
-/// <c>IConnectionPoint</c>, the Advise cookie, and the AddRef-owned CCW pointer for the managed sink, releasing them all
-/// on <see cref="Dispose"/> (<c>Unadvise</c> first). Created on, and intended to live and die on, the caller's
-/// COM-initialized pump thread.
+/// A live NLM connection-point subscription — what <see cref="NetworkStatus.Subscribe"/> (outgoing interface
+/// <c>INetworkListManagerEvents</c>) and <see cref="NetworkStatus.SubscribeCost"/> (<c>INetworkCostManagerEvents</c>)
+/// both return. The same <c>NetworkListManager</c> coclass exposes both connection points, so one class parameterized by
+/// the outgoing IID + the managed sink covers both: it holds the NLM object, its <c>IConnectionPoint</c>, the Advise
+/// cookie, and the AddRef-owned CCW pointer for the sink, releasing them all on <see cref="Dispose"/> (<c>Unadvise</c>
+/// first). Created on, and intended to live and die on, the caller's COM-initialized pump thread.
 /// </summary>
 [SupportedOSPlatform("windows6.0.6000")]
-internal sealed unsafe class NetworkStatusSubscription : IDisposable
+internal sealed unsafe class NlmConnectionPointSubscription : IDisposable
 {
     /// <summary>The shared generated-COM marshaller used to realize the sink's native <c>IUnknown</c> (the sanctioned
     /// non-subclassed <see cref="StrategyBasedComWrappers"/> — same instance idiom as the toast activator).</summary>
     private static readonly StrategyBasedComWrappers ComWrappers = new();
 
-    private readonly NetworkListManagerEventSink _sink;   // kept alive so the CCW target is not collected.
+    private readonly object _sink;                // the [GeneratedComClass] sink, kept alive so the CCW target is not collected.
     private INetworkListManager* _manager;        // held for the subscription's lifetime (see Create remarks).
     private IConnectionPoint* _connectionPoint;
     private nint _sinkUnknown;   // the IUnknown* passed to Advise (we own one ref for the subscription's lifetime).
     private uint _cookie;
     private bool _advised;
 
-    private NetworkStatusSubscription(NetworkListManagerEventSink sink) => _sink = sink;
+    private NlmConnectionPointSubscription(object sink) => _sink = sink;
 
     /// <summary>
-    /// Build the subscription: create the manager, QI its <c>IConnectionPointContainer</c>, find the
-    /// <c>INetworkListManagerEvents</c> connection point, and <c>Advise</c> the sink. On any failure an inert (already
-    /// disposed) subscription is returned so <see cref="NetworkStatus.Subscribe"/> never throws on a host that lacks
-    /// NLM event support.
+    /// Build the subscription: create the manager, QI its <c>IConnectionPointContainer</c>, find the connection point for
+    /// <paramref name="outgoingIid"/>, and <c>Advise</c> <paramref name="sink"/> (a <c>[GeneratedComClass]</c>
+    /// implementing that outgoing interface). On any failure an inert (already disposed) subscription is returned so the
+    /// public Subscribe* entry points never throw on a host that lacks NLM event support.
     /// <para>
     /// <b>Manager lifetime.</b> The manager reference is held for the whole subscription (released in
     /// <see cref="Dispose"/>), NOT dropped once the connection point is obtained: a connection point is a sub-object of
@@ -372,10 +405,9 @@ internal sealed unsafe class NetworkStatusSubscription : IDisposable
     /// immediately (it is only needed to reach the connection point).
     /// </para>
     /// </summary>
-    internal static NetworkStatusSubscription Create(Action<bool> onlineChanged)
+    internal static NlmConnectionPointSubscription Create(object sink, Guid outgoingIid)
     {
-        var sink = new NetworkListManagerEventSink(onlineChanged);
-        var sub = new NetworkStatusSubscription(sink);
+        var sub = new NlmConnectionPointSubscription(sink);
 
         INetworkListManager* mgr = NetworkStatus.TryCreateManager();
         if (mgr == null)
@@ -390,8 +422,7 @@ internal sealed unsafe class NetworkStatusSubscription : IDisposable
                 return sub;
 
             IConnectionPoint* cp = null;
-            Guid iidEvents = NetworkListManagerComConstants.IID_INetworkListManagerEvents;
-            if (cpc->FindConnectionPoint(&iidEvents, &cp) < 0 || cp == null)
+            if (cpc->FindConnectionPoint(&outgoingIid, &cp) < 0 || cp == null)
                 return sub;
 
             // Realize the sink's IUnknown via the generated ComWrappers (one ref we hold until Unadvise), then Advise.

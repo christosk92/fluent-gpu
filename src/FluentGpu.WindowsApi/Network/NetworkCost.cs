@@ -21,8 +21,10 @@ public enum NetworkCostKind
 
 /// <summary>
 /// A snapshot of the current connection's cost flags from <c>INetworkCostManager::GetCost</c>
-/// (<c>netlistmgr.h</c>). Produced by <see cref="NetworkStatus.ReadCostAsync"/>. Fail-soft: a COM failure yields
-/// <see cref="Unknown"/> (unmetered-conservative — do not throttle the user on a probe failure).
+/// (<c>netlistmgr.h</c>). Produced by the <see cref="NetworkStatus.ReadCostAsync"/> poll and pushed by
+/// <see cref="NetworkStatus.SubscribeCost"/> on <c>CostChanged</c> — both go through the same flag mapping, so a pushed
+/// and a polled snapshot of the same moment are equal. Fail-soft: a COM failure yields <see cref="Unknown"/>
+/// (unmetered-conservative — do not throttle the user on a probe failure).
 /// </summary>
 /// <param name="Kind">Unrestricted / Fixed / Variable / Unknown.</param>
 /// <param name="OverDataLimit">The plan is past its cap (<c>NLM_CONNECTION_COST_OVERDATALIMIT</c> 0x10000).</param>

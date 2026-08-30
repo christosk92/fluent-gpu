@@ -498,7 +498,13 @@ internal static partial class WindowsApiSmoke
         try { using IDisposable sub = NetworkStatus.Subscribe(_ => { }); }
         catch (Exception ex) { subOk = false; Check("5.4 NetworkStatus.Subscribe construction + dispose", false, ex.Message); }
         if (subOk) Check("5.4 NetworkStatus.Subscribe construction + dispose (no pump → inert)", true);
-        Manual("5.5 live ConnectivityChanged delivery", "needs a message-pumping STA + a real connectivity change; see the gallery Network card");
+
+        // Same construction-only contract for the cost connection point (INetworkCostManagerEvents): inert, never throwing.
+        bool costSubOk = true;
+        try { using IDisposable sub = NetworkStatus.SubscribeCost(_ => { }); }
+        catch (Exception ex) { costSubOk = false; Check("5.5 NetworkStatus.SubscribeCost construction + dispose", false, ex.Message); }
+        if (costSubOk) Check("5.5 NetworkStatus.SubscribeCost construction + dispose (no pump → inert)", true);
+        Manual("5.6 live ConnectivityChanged / CostChanged delivery", "needs a message-pumping STA + a real connectivity change or a 'Set as metered connection' flip; see the gallery Network card");
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────

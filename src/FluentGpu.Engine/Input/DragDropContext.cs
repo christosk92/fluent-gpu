@@ -290,6 +290,18 @@ public sealed class DragDropContext
             // resolved at promotion and the drag visual is the DragPreviewLayer chip, so the gesture must still be able
             // to reach a drop. Reparent onto the live scene root — exactly what ExternalBegin does for an OS drag
             // (:141), which is the same "no in-tree source" shape. Ghost lift keeps aborting: its visual is the corpse.
+            //
+            // What the reparent does NOT do — and cannot — is restore the source's lift visuals (the Stationary dim +
+            // hit-test opt-out DragController.ApplyPresented wrote). Those live on the dead handle: the L1 controller
+            // skips RestoreVisuals for a source that is no longer live (Complete/Cancel/PruneDead all guard on IsLive),
+            // and nothing here may write through the handle either — SceneStore.Paint is index-addressed without a
+            // generation check, so a "restore" would land on whatever node has since been created in that slot. That
+            // slot is safe by construction: CreateNode resets the paint column and the reconciler's ApplyBox re-asserts
+            // the authored opacity on every commit, so a fresh row in the freed index never inherits the dim. The one
+            // thing the dead source really strands is the gesture's own L1 completion — OnDragCompleted/OnDragCanceled
+            // are columns of the freed node and cannot fire — which is why a sortable list whose rows can be re-keyed
+            // mid-gesture must reconcile its own lift state against the live session (the host's GetDragState seam)
+            // on its next render rather than wait for a completion that will never arrive.
             if (_lift == DragLift.Stationary && !_scene.Root.IsNull) _session.Source = _scene.Root;
             else { Cancel(); return; }
         }
