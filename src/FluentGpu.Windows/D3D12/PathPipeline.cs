@@ -46,7 +46,7 @@ internal struct PathDrawItem
 ///
 /// <para><b>Deliberately v1-simple:</b> two <see cref="FrameCount"/>-deep, persistently-mapped UPLOAD buffers (VB +
 /// IB) sized for a fixed worst case, plus the SRV instance bank, all following
-/// <see cref="PolylineStrokePipeline.BuildBuffers"/>'s double-buffer-by-frame-index + <c>_dropped</c>-on-overflow
+/// <see cref="PolylineStrokePipeline.BuildBuffers"/>'s bank-by-frame-index + <c>_dropped</c>-on-overflow
 /// discipline verbatim — never a resize mid-frame. The GPU-resident-slab + per-vertex-PathIdx follow-up (one
 /// <c>DrawIndexed</c> per RUN instead of per path) is intentionally descoped; <see cref="DrawsThisFrame"/> /
 /// <see cref="UploadBytesThisFrame"/> exist so that decision is data-driven.</para>
@@ -63,7 +63,7 @@ internal struct PathDrawItem
 /// </summary>
 internal sealed unsafe class PathPipeline : IDisposable
 {
-    private const int FrameCount = 2;      // double-buffered per frame-in-flight, same rationale as every sibling pipe
+    private const int FrameCount = D3D12Device.FrameBankDepth;      // banked per frame-in-flight (depth = D3D12Device.FrameBankDepth), same rationale as every sibling pipe
     private const int MaxVertices = 16384; // 16 B/vtx ⇒ 256 KiB/frame worst case (a "few thousand vertices" per hero × headroom)
     private const int MaxIndices = 32768;  // 4 B/idx ⇒ 128 KiB/frame worst case
     private const int MaxDraws = 512;      // instance records per frame (~40 draws/dialog per the design brief × headroom)

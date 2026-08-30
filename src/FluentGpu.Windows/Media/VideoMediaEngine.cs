@@ -196,10 +196,43 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
         bool noVidSup = Environment.GetEnvironmentVariable("FG_VIDEO_NOVIDSUP") == "1";
         uint flags = (uint)D3D11_CREATE_DEVICE_FLAG.D3D11_CREATE_DEVICE_BGRA_SUPPORT;
         if (!noVidSup) flags |= (uint)D3D11_CREATE_DEVICE_FLAG.D3D11_CREATE_DEVICE_VIDEO_SUPPORT;
+
+        // Land decode on the SAME adapter the D3D12 renderer chose (GpuAdapterInfo, published at device init). On a
+        // hybrid machine the D3D11 default adapter can be the OTHER GPU. No texture sharing (DComp surface handle
+        // only) — this is decode/present locality, not interop correctness. Cold path on the MTA engine thread.
+        // Fallbacks: LUID unset or enum failure ⇒ the historical default-adapter path, unchanged.
+        IDXGIAdapter1* adapter = null;
+        if (FluentGpu.Rhi.D3D12.GpuAdapterInfo.TryGetAdapterLuid(out LUID renderLuid))
+        {
+            IDXGIFactory4* factory = null;
+            if ((int)CreateDXGIFactory2(0, __uuidof<IDXGIFactory4>(), (void**)&factory) >= 0 && factory != null)
+            {
+                if ((int)factory->EnumAdapterByLuid(renderLuid, __uuidof<IDXGIAdapter1>(), (void**)&adapter) < 0)
+                    adapter = null;
+                factory->Release();
+            }
+        }
+
+        // Explicit adapter REQUIRES D3D_DRIVER_TYPE_UNKNOWN (HARDWARE + adapter is E_INVALIDARG).
         ID3D11Device* d3d = null;
-        int hr = D3D11CreateDevice(null, D3D_DRIVER_TYPE.D3D_DRIVER_TYPE_HARDWARE, HMODULE.NULL, flags,
+        int hr = D3D11CreateDevice((IDXGIAdapter*)adapter,
+                                   adapter != null ? D3D_DRIVER_TYPE.D3D_DRIVER_TYPE_UNKNOWN : D3D_DRIVER_TYPE.D3D_DRIVER_TYPE_HARDWARE,
+                                   HMODULE.NULL, flags, null, 0, 7 /*D3D11_SDK_VERSION*/, &d3d, null, &ctx);
+        if (adapter != null && (hr < 0 || d3d == null))
+        {
+            // Pinned adapter refused a D3D11 device (driver quirk / feature gap): fall back rather than fail video —
+            // decode on the wrong GPU beats no decode.
+            Diag.Line($"[video.d3d11] adapter-pinned D3D11CreateDevice failed hr=0x{(uint)hr:X8}; falling back to default adapter");
+            hr = D3D11CreateDevice(null, D3D_DRIVER_TYPE.D3D_DRIVER_TYPE_HARDWARE, HMODULE.NULL, flags,
                                    null, 0, 7 /*D3D11_SDK_VERSION*/, &d3d, null, &ctx);
+            adapter->Release(); adapter = null;
+        }
+        bool pinned = adapter != null;
+        if (adapter != null) adapter->Release();
         if (hr < 0 || d3d == null) return Log("D3D11CreateDevice", hr);
+        // ALWAYS-ON line (once per engine creation, never per frame): WHICH GPU decodes — the field evidence that
+        // a hybrid machine decodes and renders on the same adapter.
+        Diag.Line($"[video.d3d11] decodeAdapter={(pinned ? $"pinned-to-render-luid 0x{renderLuid.HighPart:X8}:{renderLuid.LowPart:X8}" : "default")}");
         _d3d = d3d;
         if (ctx != null) ctx->Release();
 

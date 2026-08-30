@@ -27,7 +27,7 @@ internal struct ArcInstance
 internal sealed unsafe class ArcPipeline : IDisposable
 {
     private const int MaxInstances = 1024;
-    private const int FrameCount = 2;   // double-buffered per frame-in-flight so frame N's CPU writes never race frame N-1's GPU reads
+    private const int FrameCount = D3D12Device.FrameBankDepth;   // banked per frame-in-flight (depth = D3D12Device.FrameBankDepth) so frame N's CPU writes never race the GPU reads of the frames still in flight
 
     private SdfSharedResources _shared = null!;
     private ID3D12PipelineState* _pso;

@@ -167,7 +167,11 @@ internal sealed unsafe class GlyphRenderer : IDisposable
 
     private readonly byte[] _cpu = new byte[ATLAS * ATLAS];
     private ID3D12Resource* _tex;
-    private ID3D12Resource* _texUpload;
+    // Atlas staging, BANKED per frame-in-flight (FrameCount deep). WaitForFrame only proves frame
+    // N−FrameCount retired, never N−1, so consecutive dirty-atlas frames raced a single shared staging buffer —
+    // latent at frame latency 1, live at 2. The copy is a FULL-atlas re-record on every dirty frame, so the other
+    // banks' staleness is irrelevant and _atlasDirty semantics are unchanged.
+    private readonly ID3D12Resource*[] _texUpload = new ID3D12Resource*[FrameCount];
     private ID3D12DescriptorHeap* _srvHeap;
     private D3D12_GPU_DESCRIPTOR_HANDLE _srvGpu;
     private bool _atlasDirty = true;
@@ -219,7 +223,7 @@ internal sealed unsafe class GlyphRenderer : IDisposable
     private ID3D12PipelineState* _pso;
     private ID3D12Resource* _quad;
     private D3D12_VERTEX_BUFFER_VIEW _quadView;
-    private const int FrameCount = 2;   // double-buffered per frame-in-flight so frame N's CPU writes never race frame N-1's GPU reads
+    private const int FrameCount = D3D12Device.FrameBankDepth;   // banked per frame-in-flight (depth = D3D12Device.FrameBankDepth) so frame N's CPU writes never race the GPU reads of the frames still in flight
     private readonly ID3D12Resource*[] _instances = new ID3D12Resource*[FrameCount];
     private readonly GlyphInstance*[] _mapped = new GlyphInstance*[FrameCount];
     private const int MaxGlyphs = 8192;
@@ -1169,7 +1173,8 @@ float4 PSMain(VSOutG i) : SV_Target
         _tex = tex;
         D3D12MemoryDiagnostics.Track(_tex, $"Glyph.AtlasTexture {ATLAS}x{ATLAS} R8", (ulong)ATLAS * ATLAS);
 
-        _texUpload = CreateUpload(device, ATLAS * ATLAS, "Glyph.AtlasUpload");
+        for (int f = 0; f < FrameCount; f++)
+            _texUpload[f] = CreateUpload(device, ATLAS * ATLAS, $"Glyph.AtlasUpload[{f}]");
 
         D3D12_DESCRIPTOR_HEAP_DESC hd = default;
         hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE.D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
@@ -1194,16 +1199,17 @@ float4 PSMain(VSOutG i) : SV_Target
     {
         if (!_atlasDirty && _texInitialized) return;
 
-        void* p; _texUpload->Map(0, null, &p);
+        ID3D12Resource* up = _texUpload[_active];   // THIS frame's staging bank (BeginFrame set _active)
+        void* p; up->Map(0, null, &p);
         fixed (byte* src = _cpu) Buffer.MemoryCopy(src, p, ATLAS * ATLAS, ATLAS * ATLAS);
-        _texUpload->Unmap(0, null);
+        up->Unmap(0, null);
 
         if (_texInitialized) Transition(cmd, _tex, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST);
 
         D3D12_TEXTURE_COPY_LOCATION dst = default;
         dst.pResource = _tex; dst.Type = D3D12_TEXTURE_COPY_TYPE.D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX; dst.Anonymous.SubresourceIndex = 0;
         D3D12_TEXTURE_COPY_LOCATION srcLoc = default;
-        srcLoc.pResource = _texUpload; srcLoc.Type = D3D12_TEXTURE_COPY_TYPE.D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+        srcLoc.pResource = up; srcLoc.Type = D3D12_TEXTURE_COPY_TYPE.D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
         srcLoc.Anonymous.PlacedFootprint.Offset = 0;
         srcLoc.Anonymous.PlacedFootprint.Footprint.Format = DXGI_FORMAT.DXGI_FORMAT_R8_UNORM;
         srcLoc.Anonymous.PlacedFootprint.Footprint.Width = ATLAS;
@@ -1377,7 +1383,7 @@ float4 PSMain(VSOutG i) : SV_Target
     }
 
     /// <summary>Draw the sub-glyph gradient-wipe instances (active lyric line + glow) with the gradient PSO — same atlas,
-    /// viewport, quad and double-buffering as <see cref="Record"/>, into whatever RT is bound (so a blur layer captures the
+    /// viewport, quad and per-frame banking as <see cref="Record"/>, into whatever RT is bound (so a blur layer captures the
     /// glow's gradient glyphs exactly like normal glyphs).</summary>
     public bool RecordGradient(ID3D12GraphicsCommandList* cmd, List<GradGlyphInstance> instances, float vpW, float vpH, bool rebind = true, bool stencilTest = false)
     {
@@ -1461,6 +1467,7 @@ float4 PSMain(VSOutG i) : SV_Target
         {
             if (_instances[f] != null) { _instances[f]->Unmap(0, null); D3D12MemoryDiagnostics.Release(_instances[f], "Glyph.InstanceUpload"); _instances[f]->Release(); _instances[f] = null; }
             if (_gradInstances[f] != null) { _gradInstances[f]->Unmap(0, null); D3D12MemoryDiagnostics.Release(_gradInstances[f], "Glyph.GradInstanceUpload"); _gradInstances[f]->Release(); _gradInstances[f] = null; }
+            if (_texUpload[f] != null) { D3D12MemoryDiagnostics.Release(_texUpload[f], $"Glyph.AtlasUpload[{f}]"); _texUpload[f]->Release(); _texUpload[f] = null; }
         }
         if (_quad != null) { D3D12MemoryDiagnostics.Release(_quad, "Glyph.QuadUpload"); _quad->Release(); _quad = null; }
         if (_psoGrad != null) { _psoGrad->Release(); _psoGrad = null; }
@@ -1469,7 +1476,6 @@ float4 PSMain(VSOutG i) : SV_Target
         if (_pso != null) _pso->Release();
         if (_rootSig != null) _rootSig->Release();
         if (_srvHeap != null) { D3D12MemoryDiagnostics.Release(_srvHeap, "Glyph.SrvHeap"); _srvHeap->Release(); }
-        if (_texUpload != null) { D3D12MemoryDiagnostics.Release(_texUpload, "Glyph.AtlasUpload"); _texUpload->Release(); _texUpload = null; }
         if (_tex != null) { D3D12MemoryDiagnostics.Release(_tex, "Glyph.AtlasTexture"); _tex->Release(); _tex = null; }
         foreach (var f in _faces.Values) if (f != 0) ((IDWriteFontFace*)f)->Release();
         _faces.Clear();

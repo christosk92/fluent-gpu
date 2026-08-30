@@ -32,7 +32,7 @@ namespace FluentGpu.Rhi.D3D12;
 /// the free list (zero resource creation per frame). Reusing an RT on the same DIRECT queue needs no fence (execution
 /// is queue-ordered and barriers carry the state), but DESTRUCTION is fence-gated: evicted/idle-trimmed entries are
 /// retired and released only once the frame fence passes their last use (the ImageTextureStore deferred-reclaim
-/// convention). Shader-visible SRV descriptors are parity-banked per frame so recreating a slot never rewrites a
+/// convention). Shader-visible SRV descriptors are banked per frame-in-flight so recreating a slot never rewrites a
 /// descriptor an in-flight frame still references. All RTs + ComPtrs are owned here on the render thread (per the
 /// threading-render-seam contract); device-lost ⇒ the whole device (and this compositor) is torn down and rebuilt.
 /// WARP-safe: ps_5_1, inline fixed-tap Kawase kernels (no dynamic indexing), no UAVs, no typed-load requirements.
@@ -81,11 +81,11 @@ internal sealed unsafe class AcrylicCompositor : IDisposable
     private readonly List<Retired> _retired = new();   // fence-gated deferred release (eviction/trim/resize)
 
     private ID3D12DescriptorHeap* _rtvHeap;   // 1 + MaxPool RTVs: slot 0 = canvas, 1+i = pool entry i
-    private ID3D12DescriptorHeap* _srvHeap;   // 1 + 2·MaxPool shader-visible SRVs: slot 0 = canvas; pool SRVs are
-                                              // parity-banked (1 + parity·MaxPool + i) — frame N never rewrites a
-                                              // descriptor the in-flight frame N−1 references
+    private ID3D12DescriptorHeap* _srvHeap;   // SrvHeapDescriptorCount shader-visible SRVs: slot 0 = canvas; pool SRVs
+                                              // are banked per frame-in-flight (1 + bank·MaxPool + i) — frame N never
+                                              // rewrites a descriptor a frame still in flight references
     private uint _rtvInc, _srvInc;
-    private int _parity;                      // this frame's SRV bank (frameIndex & 1), set by BeginCanvas
+    private int _bank;                        // this frame's SRV bank (frameIndex % D3D12Device.FrameBankDepth), set by BeginCanvas
     private readonly float[] _scratch4 = new float[4];
     private readonly float[] _scratchK = new float[8];      // dual-Kawase pass consts: p0(srcTexel.xy, offset, 0) + p1(usedFrac.xy, maxUv.xy)
     private readonly float[] _scratch28 = new float[28];
@@ -255,6 +255,10 @@ float4 PSMain(V i) : SV_Target
 
     private static void Check(HRESULT hr, string what) { if ((int)hr < 0) throw new InvalidOperationException($"{what} failed: 0x{(uint)hr:X8}"); }
 
+    /// <summary>Shader-visible SRV heap width: slot 0 = canvas, then ONE bank of <see cref="MaxPool"/> pool SRVs per
+    /// frame-in-flight, so the depth follows <see cref="D3D12Device.FrameBankDepth"/> instead of a baked-in 2.</summary>
+    internal static int SrvHeapDescriptorCount => 1 + D3D12Device.FrameBankDepth * MaxPool;
+
     private void BuildHeaps()
     {
         D3D12_DESCRIPTOR_HEAP_DESC rh = default;
@@ -267,7 +271,7 @@ float4 PSMain(V i) : SV_Target
 
         D3D12_DESCRIPTOR_HEAP_DESC sh = default;
         sh.Type = D3D12_DESCRIPTOR_HEAP_TYPE.D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-        sh.NumDescriptors = 1 + 2 * MaxPool;   // canvas + two parity banks of pool SRVs (see _srvHeap comment)
+        sh.NumDescriptors = (uint)SrvHeapDescriptorCount;   // canvas + one bank of pool SRVs per frame-in-flight (see _srvHeap comment)
         sh.Flags = D3D12_DESCRIPTOR_HEAP_FLAGS.D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         ID3D12DescriptorHeap* shp; Check(_device->CreateDescriptorHeap(&sh, __uuidof<ID3D12DescriptorHeap>(), (void**)&shp), "Acrylic.SrvHeap");
         _srvHeap = shp;
@@ -429,12 +433,12 @@ float4 PSMain(V i) : SV_Target
         state = to;
     }
 
-    // Descriptor slot maps — RTV: 0 = canvas, 1+i = pool entry i. SRV: 0 = canvas, 1 + parity·MaxPool + i = pool
-    // entry i in THIS frame's bank (rewritten on every acquire; the other bank belongs to the in-flight frame).
+    // Descriptor slot maps — RTV: 0 = canvas, 1+i = pool entry i. SRV: 0 = canvas, 1 + bank·MaxPool + i = pool
+    // entry i in THIS frame's bank (rewritten on every acquire; the other banks belong to the frames still in flight).
     private D3D12_CPU_DESCRIPTOR_HANDLE Rtv(int slot) { var h = _rtvHeap->GetCPUDescriptorHandleForHeapStart(); h.ptr += (nuint)slot * _rtvInc; return h; }
     private D3D12_CPU_DESCRIPTOR_HANDLE SrvCpu(int slot) { var h = _srvHeap->GetCPUDescriptorHandleForHeapStart(); h.ptr += (nuint)slot * _srvInc; return h; }
     private D3D12_GPU_DESCRIPTOR_HANDLE SrvGpu(int slot) { var h = _srvHeap->GetGPUDescriptorHandleForHeapStart(); h.ptr += (ulong)slot * _srvInc; return h; }
-    private int PoolSrvSlot(int i) => 1 + _parity * MaxPool + i;
+    private int PoolSrvSlot(int i) => 1 + _bank * MaxPool + i;
 
     private void SetViewport(ID3D12GraphicsCommandList* cmd, uint w, uint h)
     {
@@ -480,13 +484,13 @@ float4 PSMain(V i) : SV_Target
         LayersThisFrame = 0; CacheHitsThisFrame = 0; ScrollHoldsThisFrame = 0;
     }
 
-    /// <summary>Direct-to-back-buffer frame setup: set THIS frame's SRV parity bank + run pool upkeep, WITHOUT binding or
+    /// <summary>Direct-to-back-buffer frame setup: set THIS frame's SRV bank + run pool upkeep, WITHOUT binding or
     /// clearing the full-window canvas (the directBB path renders the scene straight to the back buffer). The canvas is
     /// retained only as the region-copy scratch for <see cref="SnapshotTargetRegion"/>. Replaces <see cref="TickIdle"/>
-    /// on the directBB path so the retained-backdrop cache's parity-banked SRVs stay correct when an acrylic is present.</summary>
-    public void BeginFrameDirect(ulong completedFence, int parity)
+    /// on the directBB path so the retained-backdrop cache's banked SRVs stay correct when an acrylic is present.</summary>
+    public void BeginFrameDirect(ulong completedFence, int bank)
     {
-        _parity = parity & 1;
+        _bank = bank % D3D12Device.FrameBankDepth;
         if (_retired.Count > 0 || PooledRtCount > 0) TickPool(completedFence);
         LayersThisFrame = 0; CacheHitsThisFrame = 0; ScrollHoldsThisFrame = 0;
     }
@@ -508,7 +512,7 @@ float4 PSMain(V i) : SV_Target
         if (best < 0)
         {
             // 2) empty slot → cold growth; 3) no slot → evict the LRU FREE entry (resource release deferred behind
-            // its fence; its SRV descriptor is parity-banked so the rewrite can't race the in-flight frame).
+            // its fence; its SRV descriptor is banked per frame-in-flight so the rewrite can't race a frame in flight).
             int slot = -1;
             for (int i = 0; i < MaxPool; i++) if (_pool[i].Res == null) { slot = i; break; }
             if (slot < 0)
@@ -551,7 +555,7 @@ float4 PSMain(V i) : SV_Target
     /// <summary>Lease the RETAINED cache slot for <paramref name="layerId"/> at ≥ (w,h): reuse its existing RT if it
     /// still fits, else (re)allocate. Unlike <see cref="Acquire"/> the slot is NOT released after the composite — it
     /// survives across frames so a stationary acrylic surface skips passes A/B/C. Its SRV is refreshed in this frame's
-    /// parity bank; eviction of any displaced RT is fence-gated (deferred-reclaim), same as the transient pool.</summary>
+    /// bank; eviction of any displaced RT is fence-gated (deferred-reclaim), same as the transient pool.</summary>
     private int AcquirePinned(ulong layerId, int w, int h, ulong frameFence)
     {
         int bw = AcrylicBackdropMath.BucketDim(w), bh = AcrylicBackdropMath.BucketDim(h);
@@ -627,10 +631,11 @@ float4 PSMain(V i) : SV_Target
     // ── frame passes ────────────────────────────────────────────────────────────────────────────────────────────────
 
     /// <summary>Bind the canvas as the render target, clear it, set the full viewport, and run pool upkeep.
-    /// Call once before drawing the scene. <paramref name="parity"/> = frameIndex &amp; 1 selects this frame's SRV bank.</summary>
-    public void BeginCanvas(ID3D12GraphicsCommandList* cmd, in ColorF clear, ulong completedFence, int parity)
+    /// Call once before drawing the scene. <paramref name="bank"/> = frameIndex % <see cref="D3D12Device.FrameBankDepth"/>
+    /// selects this frame's SRV bank.</summary>
+    public void BeginCanvas(ID3D12GraphicsCommandList* cmd, in ColorF clear, ulong completedFence, int bank)
     {
-        _parity = parity & 1;
+        _bank = bank % D3D12Device.FrameBankDepth;
         LayersThisFrame = 0; CacheHitsThisFrame = 0; ScrollHoldsThisFrame = 0;
         TickPool(completedFence);
         Barrier(cmd, _canvas, ref _canvasState, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
@@ -650,10 +655,10 @@ float4 PSMain(V i) : SV_Target
     /// (<c>NumRects = 0</c> keeps the TBDR fast-clear path).
     /// <para>Every state change goes through the TRACKED <c>_canvasState</c> barrier — a raw "assume RENDER_TARGET"
     /// transition here would desync every later barrier including <see cref="BlitToBackBuffer"/>'s.</para></summary>
-    public void BeginCanvasPartial(ID3D12GraphicsCommandList* cmd, in ColorF clear, ulong completedFence, int parity,
+    public void BeginCanvasPartial(ID3D12GraphicsCommandList* cmd, in ColorF clear, ulong completedFence, int bank,
         ReadOnlySpan<RECT> rects)
     {
-        _parity = parity & 1;
+        _bank = bank % D3D12Device.FrameBankDepth;
         LayersThisFrame = 0; CacheHitsThisFrame = 0; ScrollHoldsThisFrame = 0;
         TickPool(completedFence);
         Barrier(cmd, _canvas, ref _canvasState, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
@@ -795,7 +800,7 @@ float4 PSMain(V i) : SV_Target
                     ref var hit = ref _pool[pin];
                     hit.InUse = true; hit.IdleFrames = 0; hit.LastUseFence = frameFence;
                     hit.HeldFrames = hold ? hit.HeldFrames + 1 : 0;
-                    CreateSrv(hit.Res, SrvCpu(PoolSrvSlot(pin)));     // refresh THIS frame's parity bank for the composite sample
+                    CreateSrv(hit.Res, SrvCpu(PoolSrvSlot(pin)));     // refresh THIS frame's bank for the composite sample
                     Composite(cmd, in L, lw, lh, rx, ry, rw, rh, pin, dw, dh, compTarget, !external, compositeScissor);
                     hit.InUse = false;
                     LayersThisFrame++; CacheHitsThisFrame++;

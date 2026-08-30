@@ -8,11 +8,13 @@ using static TerraFX.Interop.Windows.Windows;
 
 namespace FluentGpu.Rhi.D3D12;
 
-/// <summary>One-shot render-thread image blur. Two fixed 512² scratch targets implement the same
-/// downsample/separable-Gaussian/upsample schedule as self blur; only the final output is persistent.</summary>
+/// <summary>One-shot render-thread image blur. A fixed 512² scratch PAIR per frame-in-flight bank (depth =
+/// <see cref="D3D12Device.FrameBankDepth"/>) implements the same downsample/separable-Gaussian/upsample schedule as
+/// self blur; only the final output is persistent.</summary>
 internal sealed unsafe class BakedBlurCompositor : IDisposable
 {
     private const int ScratchSize = 512;
+    private const int Banks = D3D12Device.FrameBankDepth;   // one scratch pair + one timestamp pair per frame-in-flight
     private ID3D12Device* _device;
     private ID3D12DescriptorHeap* _srvHeap;
     private ID3D12DescriptorHeap* _rtvHeap;
@@ -24,18 +26,25 @@ internal sealed unsafe class BakedBlurCompositor : IDisposable
     private ID3D12Resource* _timestampReadback;
     private ulong* _timestampData;
     private ulong _timestampFrequency;
-    private readonly bool[] _timestampPending = new bool[2];
-    private ID3D12Resource* _scratchA0;
-    private ID3D12Resource* _scratchB0;
-    private ID3D12Resource* _scratchA1;
-    private ID3D12Resource* _scratchB1;
-    private D3D12_RESOURCE_STATES _stateA0 = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-    private D3D12_RESOURCE_STATES _stateB0 = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-    private D3D12_RESOURCE_STATES _stateA1 = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-    private D3D12_RESOURCE_STATES _stateB1 = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    private readonly bool[] _timestampPending = new bool[Banks];
+    // Per-bank ping-pong scratch pair. Bank b owns SRV slots {b*3 = the bake source, b*3+1 = A, b*3+2 = B} and RTV
+    // slots {b*3 = A, b*3+1 = B} — the third RTV slot per bank is deliberately unused so DrainOne's Rtv(slot) /
+    // Rtv(slot+1) arithmetic stays identical to the SRV stride. Banking (not double-buffering) is what keeps frame N's
+    // recorded copy/blur passes off the scratch the frames still in flight are reading.
+    private readonly ID3D12Resource*[] _scratchA = new ID3D12Resource*[Banks];
+    private readonly ID3D12Resource*[] _scratchB = new ID3D12Resource*[Banks];
+    private readonly D3D12_RESOURCE_STATES[] _stateA = new D3D12_RESOURCE_STATES[Banks];
+    private readonly D3D12_RESOURCE_STATES[] _stateB = new D3D12_RESOURCE_STATES[Banks];
     private readonly float[] _constants = new float[24];
     private BakedBlurQueue.Result _recordedResult;
     private bool _hasRecordedResult;
+
+    /// <summary>How many per-frame-in-flight scratch banks exist — tracks <see cref="D3D12Device.FrameBankDepth"/> by
+    /// construction (FrameBankingTests asserts the depths cannot drift apart).</summary>
+    internal int ScratchBankCount => _scratchA.Length;
+
+    /// <summary>How many frame-in-flight timestamp banks exist — same depth, same guard.</summary>
+    internal int TimestampBankCount => _timestampPending.Length;
 
     private const string CopyHlsl = """
 cbuffer C : register(b0) { float4 p0; float4 p1; float4 o0; float4 o1; float4 w0; float4 w1; };
@@ -70,14 +79,16 @@ float4 BlurPS(V i) : SV_Target {
         BuildRoot();
         _copyPso = BuildPso(CopyHlsl, "CopyPS", "BakedBlur.Copy");
         _blurPso = BuildPso(BlurHlsl, "BlurPS", "BakedBlur.Gaussian");
-        _scratchA0 = CreateTarget(ScratchSize, ScratchSize, "BakedBlur.ScratchA0");
-        _scratchB0 = CreateTarget(ScratchSize, ScratchSize, "BakedBlur.ScratchB0");
-        _scratchA1 = CreateTarget(ScratchSize, ScratchSize, "BakedBlur.ScratchA1");
-        _scratchB1 = CreateTarget(ScratchSize, ScratchSize, "BakedBlur.ScratchB1");
-        CreateSrv(_scratchA0, SrvCpu(1)); CreateSrv(_scratchB0, SrvCpu(2));
-        CreateSrv(_scratchA1, SrvCpu(4)); CreateSrv(_scratchB1, SrvCpu(5));
-        _device->CreateRenderTargetView(_scratchA0, null, Rtv(0)); _device->CreateRenderTargetView(_scratchB0, null, Rtv(1));
-        _device->CreateRenderTargetView(_scratchA1, null, Rtv(3)); _device->CreateRenderTargetView(_scratchB1, null, Rtv(4));
+        for (int b = 0; b < Banks; b++)
+        {
+            _scratchA[b] = CreateTarget(ScratchSize, ScratchSize, $"BakedBlur.ScratchA{b}");
+            _scratchB[b] = CreateTarget(ScratchSize, ScratchSize, $"BakedBlur.ScratchB{b}");
+            _stateA[b] = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;   // CreateTarget's initial state
+            _stateB[b] = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            CreateSrv(_scratchA[b], SrvCpu(b * 3 + 1)); CreateSrv(_scratchB[b], SrvCpu(b * 3 + 2));
+            _device->CreateRenderTargetView(_scratchA[b], null, Rtv(b * 3));
+            _device->CreateRenderTargetView(_scratchB[b], null, Rtv(b * 3 + 1));
+        }
     }
 
     public bool DrainOne(ID3D12GraphicsCommandList* cmd, ImageTextureStore images, BakedBlurQueue queue, int frameIndex)
@@ -96,11 +107,11 @@ float4 BlurPS(V i) : SV_Target {
         int down = AcrylicBackdropMath.DownsampleFactor(job.SigmaTexels, 1f);
         int blurW = Math.Max(1, (outW + down - 1) / down), blurH = Math.Max(1, (outH + down - 1) / down);
         float texelSigma = AcrylicBackdropMath.EffectiveTexelSigma(job.SigmaTexels, 1f, down);
-        int bank = frameIndex & 1, slot = bank * 3;
-        ID3D12Resource* scratchA = bank == 0 ? _scratchA0 : _scratchA1;
-        ID3D12Resource* scratchB = bank == 0 ? _scratchB0 : _scratchB1;
-        ref D3D12_RESOURCE_STATES stateA = ref (bank == 0 ? ref _stateA0 : ref _stateA1);
-        ref D3D12_RESOURCE_STATES stateB = ref (bank == 0 ? ref _stateB0 : ref _stateB1);
+        int bank = frameIndex % Banks, slot = bank * 3;
+        ID3D12Resource* scratchA = _scratchA[bank];
+        ID3D12Resource* scratchB = _scratchB[bank];
+        ref D3D12_RESOURCE_STATES stateA = ref _stateA[bank];
+        ref D3D12_RESOURCE_STATES stateB = ref _stateB[bank];
         int query = bank * 2;
         if (_timestampHeap != null) cmd->EndQuery(_timestampHeap, D3D12_QUERY_TYPE.D3D12_QUERY_TYPE_TIMESTAMP, (uint)query);
 
@@ -159,7 +170,7 @@ float4 BlurPS(V i) : SV_Target {
         _timestampFrequency = frequency;
         D3D12_QUERY_HEAP_DESC qd = default;
         qd.Type = D3D12_QUERY_HEAP_TYPE.D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
-        qd.Count = 4;
+        qd.Count = 2u * (uint)Banks;   // begin+end timestamp per frame-in-flight bank
         ID3D12QueryHeap* heap;
         if (_device->CreateQueryHeap(&qd, __uuidof<ID3D12QueryHeap>(), (void**)&heap) < 0) return;
         _timestampHeap = heap;
@@ -168,7 +179,7 @@ float4 BlurPS(V i) : SV_Target {
         hp.Type = D3D12_HEAP_TYPE.D3D12_HEAP_TYPE_READBACK;
         D3D12_RESOURCE_DESC rd = default;
         rd.Dimension = D3D12_RESOURCE_DIMENSION.D3D12_RESOURCE_DIMENSION_BUFFER;
-        rd.Width = 4 * sizeof(ulong); rd.Height = 1; rd.DepthOrArraySize = 1; rd.MipLevels = 1;
+        rd.Width = 2UL * Banks * sizeof(ulong); rd.Height = 1; rd.DepthOrArraySize = 1; rd.MipLevels = 1;
         rd.Format = DXGI_FORMAT.DXGI_FORMAT_UNKNOWN; rd.SampleDesc.Count = 1;
         rd.Layout = D3D12_TEXTURE_LAYOUT.D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
         ID3D12Resource* readback;
@@ -179,14 +190,14 @@ float4 BlurPS(V i) : SV_Target {
             _timestampHeap->Release(); _timestampHeap = null; return;
         }
         _timestampReadback = readback;
-        D3D12MemoryDiagnostics.Track(readback, "BakedBlur.TimestampReadback", 4 * sizeof(ulong));
+        D3D12MemoryDiagnostics.Track(readback, "BakedBlur.TimestampReadback", 2UL * Banks * sizeof(ulong));
         void* mapped;
         if (readback->Map(0, null, &mapped) >= 0) _timestampData = (ulong*)mapped;
     }
 
     private void CollectGpuTime(BakedBlurQueue queue, int frameIndex)
     {
-        int bank = frameIndex & 1;
+        int bank = frameIndex % Banks;
         if (!_timestampPending[bank] || _timestampData == null || _timestampFrequency == 0) return;
         int query = bank * 2;
         ulong begin = _timestampData[query], end = _timestampData[query + 1];
@@ -240,14 +251,14 @@ float4 BlurPS(V i) : SV_Target {
     private void BuildHeaps()
     {
         D3D12_DESCRIPTOR_HEAP_DESC sh = default; sh.Type=D3D12_DESCRIPTOR_HEAP_TYPE.D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-        sh.NumDescriptors=6; sh.Flags=D3D12_DESCRIPTOR_HEAP_FLAGS.D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+        sh.NumDescriptors=(uint)(3*Banks); sh.Flags=D3D12_DESCRIPTOR_HEAP_FLAGS.D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;   // source+A+B per bank
         ID3D12DescriptorHeap* s; Check(_device->CreateDescriptorHeap(&sh,__uuidof<ID3D12DescriptorHeap>(),(void**)&s),"BakedBlur.SrvHeap"); _srvHeap=s;
-        D3D12_DESCRIPTOR_HEAP_DESC rh = default; rh.Type=D3D12_DESCRIPTOR_HEAP_TYPE.D3D12_DESCRIPTOR_HEAP_TYPE_RTV; rh.NumDescriptors=6;
+        D3D12_DESCRIPTOR_HEAP_DESC rh = default; rh.Type=D3D12_DESCRIPTOR_HEAP_TYPE.D3D12_DESCRIPTOR_HEAP_TYPE_RTV; rh.NumDescriptors=(uint)(3*Banks);   // A+B per bank, stride 3 to mirror the SRV slots
         ID3D12DescriptorHeap* r; Check(_device->CreateDescriptorHeap(&rh,__uuidof<ID3D12DescriptorHeap>(),(void**)&r),"BakedBlur.RtvHeap"); _rtvHeap=r;
         _srvInc=_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE.D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
         _rtvInc=_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE.D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
-        D3D12MemoryDiagnostics.Track(_srvHeap,"BakedBlur.SrvHeap",6UL*_srvInc);
-        D3D12MemoryDiagnostics.Track(_rtvHeap,"BakedBlur.RtvHeap",6UL*_rtvInc);
+        D3D12MemoryDiagnostics.Track(_srvHeap,"BakedBlur.SrvHeap",(ulong)(3*Banks)*_srvInc);
+        D3D12MemoryDiagnostics.Track(_rtvHeap,"BakedBlur.RtvHeap",(ulong)(3*Banks)*_rtvInc);
     }
 
     private void BuildRoot()
@@ -314,10 +325,11 @@ float4 BlurPS(V i) : SV_Target {
     {
         if(_timestampReadback!=null){if(_timestampData!=null)_timestampReadback->Unmap(0,null);_timestampData=null;D3D12MemoryDiagnostics.Release(_timestampReadback,"BakedBlur.TimestampReadback");_timestampReadback->Release();_timestampReadback=null;}
         if(_timestampHeap!=null){_timestampHeap->Release();_timestampHeap=null;}
-        if(_scratchA0!=null){D3D12MemoryDiagnostics.Release(_scratchA0,"BakedBlur.ScratchA0");_scratchA0->Release();_scratchA0=null;}
-        if(_scratchB0!=null){D3D12MemoryDiagnostics.Release(_scratchB0,"BakedBlur.ScratchB0");_scratchB0->Release();_scratchB0=null;}
-        if(_scratchA1!=null){D3D12MemoryDiagnostics.Release(_scratchA1,"BakedBlur.ScratchA1");_scratchA1->Release();_scratchA1=null;}
-        if(_scratchB1!=null){D3D12MemoryDiagnostics.Release(_scratchB1,"BakedBlur.ScratchB1");_scratchB1->Release();_scratchB1=null;}
+        for(int b=0;b<Banks;b++)
+        {
+            if(_scratchA[b]!=null){D3D12MemoryDiagnostics.Release(_scratchA[b],$"BakedBlur.ScratchA{b}");_scratchA[b]->Release();_scratchA[b]=null;}
+            if(_scratchB[b]!=null){D3D12MemoryDiagnostics.Release(_scratchB[b],$"BakedBlur.ScratchB{b}");_scratchB[b]->Release();_scratchB[b]=null;}
+        }
         if(_copyPso!=null){_copyPso->Release();_copyPso=null;} if(_blurPso!=null){_blurPso->Release();_blurPso=null;}
         if(_root!=null){_root->Release();_root=null;}
         if(_srvHeap!=null){D3D12MemoryDiagnostics.Release(_srvHeap,"BakedBlur.SrvHeap");_srvHeap->Release();_srvHeap=null;}

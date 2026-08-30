@@ -21,9 +21,21 @@ namespace FluentGpu.Rhi.D3D12;
 /// </summary>
 public sealed unsafe partial class D3D12Device : IGpuDevice
 {
-    // Back buffers == per-frame allocators == frames-in-flight. Canon (budgets.md): 2 (FLIP_DISCARD); configurable 2–3.
-    // Every site below keys off this, so 3 (more CPU run-ahead slack, +1 frame latency, +VRAM) is a one-line change.
-    internal const uint FRAME_COUNT = 2;   // double-buffer (FLIP_DISCARD). Reverted from 3: triple-buffering correlated with a DXGI_ERROR_DEVICE_HUNG on the Adreno after sustained load (~6.5 min). The image-upload throttle (DecodeScheduler) is the safer spike fix.
+    // Back buffers == per-frame command allocators == CPU-written GPU banks (pipelines' instance uploads, compositor
+    // SRV banks, query banks). 3 buffers + SetMaximumFrameLatency(2) buy ONE frame of CPU/GPU pipelining slack so a
+    // frame that costs slightly over one refresh stops quantizing to half rate at 144/165 Hz; the extra latency is
+    // bounded at one refresh and only materializes under backpressure (see threading-render-seam.md §latency).
+    // HISTORY: a working-tree triple-buffering EXPERIMENT (never landed — the const was never 3 in any commit)
+    // correlated with a DXGI_ERROR_DEVICE_HUNG on the Adreno after ~6.5 min of then-UNTHROTTLED image-upload bursts;
+    // verdict circumstantial (docs/plans/gpu-robustness-implementation.md §Adreno). The DecodeScheduler scroll-time
+    // upload throttle (the actual burst bound) landed since and STAYS ON; async device-lost recovery (also landed
+    // since) turns any recurrence into a logged reset, not a dead app. NOT every bank keys off this constant
+    // automatically: the formerly parity-banked
+    // compositors (Acrylic/OpacityLayer/BakedBlur) index by frameIndex % FRAME_COUNT and size heaps from FrameBankDepth —
+    // FrameBankingTests (FluentGpu.Windows.Tests) asserts the derived values so the depths cannot drift apart.
+    internal const uint FRAME_COUNT = 3;
+    internal const int FrameBankDepth = (int)FRAME_COUNT;       // CPU-written per-frame bank depth
+    internal const uint MAX_FRAME_LATENCY = FRAME_COUNT - 1;    // DXGI SetMaximumFrameLatency argument (= 2)
     private const uint INFINITE = 0xFFFFFFFF;
 
     private ID3D12Device* _device;
@@ -589,6 +601,15 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     private static void SetName(ID3D12GraphicsCommandList* obj, string name) { if (obj != null) { fixed (char* p = name) _ = obj->SetName(p); } }
     private static void SetName(ID3D12Fence* obj, string name) { if (obj != null) { fixed (char* p = name) _ = obj->SetName(p); } }
 
+    // DXGI_ADAPTER_DESC1.Description is WCHAR[128] — in TerraFX 10.0.26100.6 an [InlineArray(128)] char buffer
+    // (verified against the pinned package source), which converts implicitly to ReadOnlySpan<char>.
+    private static string AdapterDescription(ref DXGI_ADAPTER_DESC1 desc)
+    {
+        ReadOnlySpan<char> s = desc.Description;
+        int n = s.IndexOf('\0');
+        return new string(n >= 0 ? s[..n] : s);
+    }
+
     private static void ConfigureDred()
     {
         if (!s_dred) return;
@@ -685,6 +706,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         uint reason = _device == null ? 0u : (uint)_device->GetDeviceRemovedReason();
         var (bytes, count) = D3D12MemoryDiagnostics.LiveTotals();
         write($"[d3d12] device-lost recorded=0x{(uint)recorded:X8} currentReason=0x{reason:X8} backend={BackendName} liveResources={count} liveBytes={bytes}");
+        write($"[d3d12] present dwmGlitchTotals dropped={_glitchDroppedTotal} missed={_glitchMissedTotal} late={_glitchLateTotal}" +
+              $" sampledSeconds={_glitchSampledSeconds} topology={(_primarySwapchain?.PresentTopologyState ?? TopologyUnknown)}" +
+              " (main-monitor-global; sampled only while presenting)");
         DumpDred(write);
     }
 
@@ -821,18 +845,57 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         Check(CreateDXGIFactory2(flags, __uuidof<IDXGIFactory4>(), (void**)&factory), "CreateDXGIFactory2");
         _factory = factory;
 
+        // ── Adapter selection (pal-rhi.md §3, as-built): IDXGIFactory6.EnumAdapterByGpuPreference walks adapters in
+        // HIGH_PERFORMANCE order (1803+). Cold path ⇒ raw TerraFX __uuidof QI per com-interop.md. Software adapters are
+        // SKIPPED (WARP is the explicit terminal fallback, not a "winner"); a candidate whose device create fails falls
+        // out of the loop — which is what makes the RecoverDevice re-run land on the next-best adapter when the previous
+        // one is truly gone (§6). Pre-1803 (Factory6 QI fails) keeps the historical null-adapter default; terminal ⇒ WARP.
         ID3D12Device* device = null;
-        HRESULT hr = D3D12CreateDevice(null, D3D_FEATURE_LEVEL.D3D_FEATURE_LEVEL_11_0, __uuidof<ID3D12Device>(), (void**)&device);
-        if ((int)hr < 0)
+        DXGI_ADAPTER_DESC1 chosenDesc = default;
+        bool haveDesc = false;
+        string selectionMode = "default";
+
+        IDXGIFactory6* f6 = null;
+        if ((int)_factory->QueryInterface(__uuidof<IDXGIFactory6>(), (void**)&f6) >= 0 && f6 != null)
         {
-            // WARP fallback (VMs / RDP / no hardware GPU) — per pal-rhi.md §3b.1.
-            IDXGIAdapter* warp;
-            Check(_factory->EnumWarpAdapter(__uuidof<IDXGIAdapter>(), (void**)&warp), "EnumWarpAdapter");
-            Check(D3D12CreateDevice((IUnknown*)warp, D3D_FEATURE_LEVEL.D3D_FEATURE_LEVEL_11_0, __uuidof<ID3D12Device>(), (void**)&device),
-                "D3D12CreateDevice(WARP)");
-            warp->Release();
-            BackendNameSuffix = " (WARP)";
+            for (uint i = 0; ; i++)
+            {
+                IDXGIAdapter1* candidate = null;
+                if ((int)f6->EnumAdapterByGpuPreference(i, DXGI_GPU_PREFERENCE.DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE,
+                        __uuidof<IDXGIAdapter1>(), (void**)&candidate) < 0 || candidate == null)
+                    break;   // DXGI_ERROR_NOT_FOUND — list exhausted
+                DXGI_ADAPTER_DESC1 desc = default;
+                bool usable = (int)candidate->GetDesc1(&desc) >= 0
+                              && (desc.Flags & (uint)DXGI_ADAPTER_FLAG.DXGI_ADAPTER_FLAG_SOFTWARE) == 0;
+                if (usable && (int)D3D12CreateDevice((IUnknown*)candidate, D3D_FEATURE_LEVEL.D3D_FEATURE_LEVEL_11_0,
+                        __uuidof<ID3D12Device>(), (void**)&device) >= 0 && device != null)
+                {
+                    chosenDesc = desc; haveDesc = true; selectionMode = "high-performance";
+                    candidate->Release();
+                    break;
+                }
+                candidate->Release();
+            }
+            f6->Release();
         }
+
+        if (device == null)
+        {
+            HRESULT hr = D3D12CreateDevice(null, D3D_FEATURE_LEVEL.D3D_FEATURE_LEVEL_11_0, __uuidof<ID3D12Device>(), (void**)&device);
+            if ((int)hr < 0)
+            {
+                // WARP fallback (VMs / RDP / no hardware GPU) — per pal-rhi.md §3b.1.
+                IDXGIAdapter* warp;
+                Check(_factory->EnumWarpAdapter(__uuidof<IDXGIAdapter>(), (void**)&warp), "EnumWarpAdapter");
+                Check(D3D12CreateDevice((IUnknown*)warp, D3D_FEATURE_LEVEL.D3D_FEATURE_LEVEL_11_0, __uuidof<ID3D12Device>(), (void**)&device),
+                    "D3D12CreateDevice(WARP)");
+                warp->Release();
+                selectionMode = "warp";
+            }
+        }
+        // BUG FIX (was WARP-sticky): assign on EVERY path. RecoverDevice re-runs InitDevice; a recovery that lands back
+        // on hardware must drop " (WARP)" — previously the suffix was only ever SET, never reset.
+        BackendNameSuffix = selectionMode == "warp" ? " (WARP)" : "";
         _device = device;
         SetName(_device, "FluentGpu.Device");
 #if DEBUG
@@ -866,20 +929,53 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         }
 #endif
 
+        // Resolve the chosen adapter's identity by the DEVICE's own LUID — covers the default/WARP paths (which never
+        // held a DXGI_ADAPTER_DESC1) and is definitionally consistent with EnsureAdapter3's resolution.
+        LUID adapterLuid = _device->GetAdapterLuid();
+        if (!haveDesc)
+        {
+            IDXGIAdapter1* byLuid = null;
+            if ((int)_factory->EnumAdapterByLuid(adapterLuid, __uuidof<IDXGIAdapter1>(), (void**)&byLuid) >= 0 && byLuid != null)
+            {
+                haveDesc = (int)byLuid->GetDesc1(&chosenDesc) >= 0;
+                byLuid->Release();
+            }
+        }
+
         // Publish a coarse GPU power tier (GpuProfile) so UI quality defaults can scale to the hardware WITHOUT a render-
         // hardware seam contract. UMA == integrated/APU (and WARP) — shares system RAM, a fraction of a discrete GPU's
         // fill rate / bandwidth ⇒ Weak; a GPU with dedicated VRAM ⇒ Strong. Best-effort: any failure leaves the tier
         // Unknown, which callers treat as the balanced default. This is what lets the lyrics depth-of-field stay smooth
-        // on a weak iGPU (it auto-selects the cheap path) while a discrete GPU keeps the full effect.
+        // on a weak iGPU (it auto-selects the cheap path) while a discrete GPU keeps the full effect. Kept — but now LOGGED.
+        bool uma = false;
         try
         {
             D3D12_FEATURE_DATA_ARCHITECTURE arch = default;
             if ((int)_device->CheckFeatureSupport(D3D12_FEATURE.D3D12_FEATURE_ARCHITECTURE, &arch, (uint)sizeof(D3D12_FEATURE_DATA_ARCHITECTURE)) >= 0)
-                FluentGpu.Foundation.GpuProfile.Tier = arch.UMA != 0
+            {
+                uma = arch.UMA != 0;
+                FluentGpu.Foundation.GpuProfile.Tier = uma
                     ? FluentGpu.Foundation.GpuPowerTier.Weak
                     : FluentGpu.Foundation.GpuPowerTier.Strong;
+            }
         }
         catch { /* detection is best-effort; Unknown ⇒ balanced default */ }
+
+        bool software = selectionMode == "warp"
+            || (haveDesc && (chosenDesc.Flags & (uint)DXGI_ADAPTER_FLAG.DXGI_ADAPTER_FLAG_SOFTWARE) != 0);
+        string adapterName = haveDesc ? AdapterDescription(ref chosenDesc)
+                           : selectionMode == "warp" ? "Microsoft Basic Render Driver (WARP)" : "<unknown>";
+        FluentGpu.Foundation.GpuProfile.AdapterName = adapterName;
+        FluentGpu.Foundation.GpuProfile.IsSoftwareAdapter = software;
+        GpuAdapterInfo.Publish(adapterLuid);   // sibling device creators (D3D11 video decode) pin to this GPU
+
+        // ALWAYS-ON identity line (one per device init/recovery — the Release-build evidence of WHICH GPU ran).
+        FluentGpu.Foundation.Diag.Line(
+            $"[d3d12.adapter] mode={selectionMode} desc=\"{adapterName}\"" +
+            $" vendorId=0x{chosenDesc.VendorId:X4} deviceId=0x{chosenDesc.DeviceId:X4}" +
+            $" vramMB={(long)(chosenDesc.DedicatedVideoMemory / (1024 * 1024))} sharedMB={(long)(chosenDesc.SharedSystemMemory / (1024 * 1024))}" +
+            $" luid=0x{adapterLuid.HighPart:X8}:{adapterLuid.LowPart:X8} uma={uma} software={software}" +
+            $" tier={FluentGpu.Foundation.GpuProfile.Tier}");
 
         D3D12_COMMAND_QUEUE_DESC qd = default;
         qd.Type = D3D12_COMMAND_LIST_TYPE.D3D12_COMMAND_LIST_TYPE_DIRECT;
@@ -954,7 +1050,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         target.SwapChain = sc3;
 
         // IDXGISwapChain3 : IDXGISwapChain2 — cap the queued frames and grab the latency waitable (created above via the flag).
-        Check(target.SwapChain->SetMaximumFrameLatency(FRAME_COUNT - 1), "SetMaximumFrameLatency");
+        Check(target.SwapChain->SetMaximumFrameLatency(MAX_FRAME_LATENCY), "SetMaximumFrameLatency");
         target.FrameLatencyWaitable = target.SwapChain->GetFrameLatencyWaitableObject();
         target.HasLatencyWaitable = target.FrameLatencyWaitable != HANDLE.NULL;
 
@@ -990,6 +1086,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
 
         CreateRtvs(target);
         target.FrameIndex = target.SwapChain->GetCurrentBackBufferIndex();
+        SamplePresentTopology(target);
     }
 
     private void EnsureDComp()
@@ -2863,7 +2960,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         D3D12_CPU_DESCRIPTOR_HANDLE backRtv, int layerKind, FluentGpu.Rhi.RepaintRoute route, ReplayRects replay)
     {
         ulong completed = global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.GetCompletedValue(_fence);
-        int parity = (int)(_frameIndex & 1);
+        int bank = (int)(_frameIndex % FRAME_COUNT);
         ReadOnlySpan<RectF> rectsDip = replay.AsSpan();
 
         // DIP → physical, rounding OUT at the RHI leaf (canon §13.1), and then RE-DISJOINTED IN PIXEL SPACE (C1). The
@@ -2919,7 +3016,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _opacity?.TickIdle(completed);   // no groups this frame; the acrylic pool is ticked by BeginCanvas* below
         if (n == 0)
         {
-            _acrylic!.BeginCanvas(_cmdList, ctx.Clear, completed, parity);   // whole-target clear (TBDR fast-clear path)
+            _acrylic!.BeginCanvas(_cmdList, ctx.Clear, completed, bank);   // whole-target clear (TBDR fast-clear path)
             StampGpuSceneMid();
             InvalidateCmdState();
             SetFullViewport();
@@ -2927,7 +3024,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         }
         else
         {
-            _acrylic!.BeginCanvasPartial(_cmdList, ctx.Clear, completed, parity, phys.Slice(0, n));
+            _acrylic!.BeginCanvasPartial(_cmdList, ctx.Clear, completed, bank, phys.Slice(0, n));
             StampGpuSceneMid();   // R10: the scene-execution block starts AFTER the canvas transition + the rect clears
             InvalidateCmdState();
             SetFullViewport();
@@ -2952,16 +3049,16 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     private void SubmitWithLayers(ReadOnlySpan<byte> drawList, in FrameInfo ctx, float lw, float lh, D3D12_CPU_DESCRIPTOR_HANDLE backRtv, bool directToBackBuffer,
         ReadOnlySpan<RECT> canvasClearRects = default)
     {
-        // completed fence gates pool retire/drain; (frameIndex & 1) selects this frame's parity-banked SRV slots.
+        // completed fence gates pool retire/drain; (frameIndex % FRAME_COUNT) selects this frame's banked SRV slots.
         ulong completed = global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.GetCompletedValue(_fence);
         if (directToBackBuffer)
         {
             // Composite all layer groups straight onto the back buffer. Blur/opacity/edge-fade blend OVER it (the blur
             // samples its own offscreen group RT); an ACRYLIC snapshots only its small back-buffer region into the canvas
             // (BlurAndComposite below). Bind + clear the back buffer like the streaming path — the full-window scene→canvas
-            // render + blit are skipped. BeginFrameDirect sets the acrylic pool's SRV parity bank + runs upkeep WITHOUT the
-            // full-window canvas clear, so a stationary acrylic's retained-backdrop cache stays parity-correct.
-            _acrylic!.BeginFrameDirect(completed, (int)(_frameIndex & 1));
+            // render + blit are skipped. BeginFrameDirect sets the acrylic pool's SRV frame bank + runs upkeep WITHOUT the
+            // full-window canvas clear, so a stationary acrylic's retained-backdrop cache stays bank-correct.
+            _acrylic!.BeginFrameDirect(completed, (int)(_frameIndex % FRAME_COUNT));
             _cmdList->OMSetRenderTargets(1, &backRtv, BOOL.FALSE, null);
             _clearScratch4[0] = ctx.Clear.R; _clearScratch4[1] = ctx.Clear.G;
             _clearScratch4[2] = ctx.Clear.B; _clearScratch4[3] = ctx.Clear.A;
@@ -2975,17 +3072,17 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             // §13.1 PARTIAL: clear only the replay rects (R1 — the DrawList assumes a cleared base; the clear is not an
             // opcode, so replaying over last frame's final pixels would double-blend). Everything else keeps last
             // frame's presented content, which the full-surface blit then carries to the back buffer verbatim.
-            _acrylic!.BeginCanvasPartial(_cmdList, ctx.Clear, completed, (int)(_frameIndex & 1), canvasClearRects);
+            _acrylic!.BeginCanvasPartial(_cmdList, ctx.Clear, completed, (int)(_frameIndex % FRAME_COUNT), canvasClearRects);
             StampGpuSceneMid();   // R10: after the canvas transition + the rect clears
             SetFullViewport();    // the compositor set the GPU viewport; this also resets the device's target bookkeeping
         }
         else
         {
-            _acrylic!.BeginCanvas(_cmdList, ctx.Clear, completed, (int)(_frameIndex & 1));
+            _acrylic!.BeginCanvas(_cmdList, ctx.Clear, completed, (int)(_frameIndex % FRAME_COUNT));
             StampGpuSceneMid();
             SetFullViewport();    // ── ditto: _targetOrigin/_targetWidth must describe the CANVAS, not a stale local-blur surface
         }
-        _opacity!.BeginFrame(completed, (int)(_frameIndex & 1));
+        _opacity!.BeginFrame(completed, (int)(_frameIndex % FRAME_COUNT));
         InvalidateCmdState();   // canvas/back-buffer setup may have touched viewport/scissor outside the cache
         ClearInsts();
         _clipStack.Clear();
@@ -3891,6 +3988,15 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     private ulong _dwmFramesDropped, _dwmFramesMissed, _dwmFramesLate;
     private bool _dwmBaselined;   // the DWM counters are only meaningful as deltas — the first sample is a baseline, not data
 
+    // Always-on PLAIN counters (deliberately NOT Diag.Count — Diag.* is [Conditional] and compiles out of Release,
+    // Diag.cs:64-84; budgets.md "always-on plain counter" precedent). Accumulated ONLY in the 1 Hz DWM branch
+    // (fresh deltas) ⇒ per-present cost zero; nothing allocates outside the 1 Hz / 60 s branches.
+    private ulong _glitchDroppedTotal, _glitchMissedTotal, _glitchLateTotal;
+    private long _glitchSampledSeconds;   // 1 Hz samples folded in ≈ seconds of PRESENTED time observed
+    private long _lastGlitchReportQpc;
+    private ulong _glitchDroppedAtReport, _glitchMissedAtReport, _glitchLateAtReport;
+    private long _glitchSecondsAtReport;
+
     /// <inheritdoc/>
     public PresentStats LastPresentStats => _lastPresentStats;
 
@@ -3929,11 +4035,17 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                     missed = unchecked((uint)(ti.cFramesMissed - _dwmFramesMissed));
                     late = unchecked((uint)(ti.cFramesLate - _dwmFramesLate));
                     dwmOk = true;
+                    _glitchDroppedTotal += dropped;
+                    _glitchMissedTotal += missed;
+                    _glitchLateTotal += late;
+                    _glitchSampledSeconds++;
                 }
                 _dwmFramesDropped = ti.cFramesDropped;
                 _dwmFramesMissed = ti.cFramesMissed;
                 _dwmFramesLate = ti.cFramesLate;
                 _dwmBaselined = true;
+                if (_primarySwapchain is { } psc) SamplePresentTopology(psc);
+                MaybeReportGlitches(now);
             }
         }
         else
@@ -3957,6 +4069,72 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             DwmFramesLateDelta = late,
             LatencyWaitMs = _lastLatencyWaitMs,
         };
+    }
+
+    // Does the RENDER adapter own a DXGI output containing the window's monitor? When not, every present crosses
+    // adapters (DWM cross-adapter scan-out): correct output, but an extra compositor copy + latency — the classic
+    // "high FPS, bad feel" confound this line names. A dGPU with ZERO outputs presenting through the iGPU is the
+    // designed-in shape of a hybrid laptop: a CONDITION to record, not an error. Runs at InitSwapChain and inside
+    // the existing 1 Hz DWM branch only; HMONITOR early-out ⇒ steady state is one user32 call/s, zero DXGI calls.
+    // Emits [d3d12.present] on a state CHANGE only — never per present.
+    internal const int TopologyUnknown = 0, TopologyOwned = 1, TopologyCross = 2, TopologyNoOutputs = 3;
+    private const uint MonitorDefaultToNearest = 2;   // MONITOR_DEFAULTTONEAREST — same local-const shape as Win32Platform.cs:380
+
+    private void SamplePresentTopology(D3D12Swapchain target)
+    {
+        if (_device == null || _factory == null || target.Hwnd == HWND.NULL) return;
+        HMONITOR mon = MonitorFromWindow(target.Hwnd, MonitorDefaultToNearest);
+        if (mon == HMONITOR.NULL) return;
+        if (mon == target.TopologyMonitor && target.PresentTopologyState != TopologyUnknown) return;   // steady state
+
+        LUID luid = _device->GetAdapterLuid();
+        IDXGIAdapter1* adapter = null;
+        if ((int)_factory->EnumAdapterByLuid(luid, __uuidof<IDXGIAdapter1>(), (void**)&adapter) < 0 || adapter == null)
+            return;   // stale factory mid-topology-change: keep old state; the next 1 Hz sample retries
+        bool sawOutput = false, owns = false;
+        for (uint i = 0; ; i++)
+        {
+            IDXGIOutput* output = null;
+            if ((int)adapter->EnumOutputs(i, &output) < 0 || output == null) break;
+            DXGI_OUTPUT_DESC od = default;
+            if ((int)output->GetDesc(&od) >= 0)
+            {
+                sawOutput = true;
+                if (od.Monitor == mon) owns = true;
+            }
+            output->Release();
+            if (owns) break;
+        }
+        adapter->Release();
+
+        int state = owns ? TopologyOwned : sawOutput ? TopologyCross : TopologyNoOutputs;
+        target.TopologyMonitor = mon;
+        if (state == target.PresentTopologyState) return;
+        target.PresentTopologyState = state;
+        Diag.Line($"[d3d12.present] topology={(state == TopologyOwned ? "render-adapter-owns-output"
+                : state == TopologyCross ? "cross-adapter" : "render-adapter-has-no-outputs")}" +
+            $" hwnd=0x{(nint)target.Hwnd:X}" +
+            (state == TopologyOwned
+                ? " note=direct-scan-out-path-available"
+                : " note=presents-cross-adapters-via-DWM-(expected-on-hybrid-laptops;-adds-a-compositor-copy)"));
+    }
+
+    // Once per minute, ONLY when nonzero: silence is the healthy steady state. Normalized to PRESENTED time —
+    // skip-submit idle frames never reach SamplePresentStats, so "sampled" seconds are the honest denominator.
+    private void MaybeReportGlitches(long nowQpc)
+    {
+        if (_lastGlitchReportQpc == 0) { _lastGlitchReportQpc = nowQpc; return; }
+        if (nowQpc - _lastGlitchReportQpc < 60 * System.Diagnostics.Stopwatch.Frequency) return;
+        _lastGlitchReportQpc = nowQpc;
+        ulong d = _glitchDroppedTotal - _glitchDroppedAtReport;
+        ulong m = _glitchMissedTotal - _glitchMissedAtReport;
+        ulong l = _glitchLateTotal - _glitchLateAtReport;
+        long s = _glitchSampledSeconds - _glitchSecondsAtReport;
+        _glitchDroppedAtReport = _glitchDroppedTotal; _glitchMissedAtReport = _glitchMissedTotal;
+        _glitchLateAtReport = _glitchLateTotal; _glitchSecondsAtReport = _glitchSampledSeconds;
+        if (d == 0 && m == 0 && l == 0) return;
+        Diag.Line($"[d3d12.present] dwmGlitches dropped={d} missed={m} late={l} presentedSeconds={s}" +
+                  " note=main-monitor-global-counters;-sampled-only-while-presenting");
     }
 
     private void SignalFrame(uint frameIndex)
@@ -4006,6 +4184,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     /// <summary>Diagnostic: of <see cref="LastFenceWaitMs"/>, the frame-latency-waitable portion alone — compositor/present
     /// backpressure rather than command execution. Always measured (no env gate); the <c>[fps]</c> line's <c>latW</c> token.</summary>
     public double LastLatencyWaitMs => _lastLatencyWaitMs;
+
+    /// <inheritdoc/>
+    public int MaxFrameLatency => (int)MAX_FRAME_LATENCY;
 
     // ── Always-on whole-frame GPU execution timer ────────────────────────────────────────────────────────────────────
     // Exactly two TIMESTAMP queries per submitted command list, banked by back-buffer index. Their resolve is read only
@@ -4643,6 +4824,9 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
     internal readonly ColorF AcrylicTint;
     internal readonly float CornerRadiusPx;
     internal bool Disposed;
+    // ── Present-topology attribution (WS-B) ── cached per swapchain so [d3d12.present] emits on CHANGE only.
+    internal HMONITOR TopologyMonitor;     // monitor at last check (NULL = never checked)
+    internal int PresentTopologyState;     // D3D12Device.Topology* — 0 unknown / 1 owned / 2 cross-adapter / 3 no-outputs
     // Whole-frame execution samples are TARGET state, not device state. Main + popup/child hosts share one command queue;
     // publishing here prevents a heavy popup submit from steering the main host's adaptive governor (or vice versa).
     private long _gpuSampleVersion;        // seqlock: odd while any field below changes

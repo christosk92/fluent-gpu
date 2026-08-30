@@ -22,8 +22,8 @@ namespace FluentGpu.Rhi.D3D12;
 /// duplicated here rather than shared because that pool is bucket-quantized + private to the acrylic leaf and this
 /// unit does not own AcrylicCompositor.cs: same-queue REUSE needs no fence (DIRECT-queue execution is ordered and
 /// barriers carry the state); DESTRUCTION is fence-gated (retired entries release only once the frame fence passes
-/// their last use); shader-visible SRV descriptors are parity-banked per frame so a slot recreation never rewrites a
-/// descriptor the in-flight frame still references; free entries idle past the trim window are retired so a closed
+/// their last use); shader-visible SRV descriptors are banked per frame-in-flight so a slot recreation never rewrites a
+/// descriptor a frame still in flight references; free entries idle past the trim window are retired so a closed
 /// fading surface stops pinning VRAM. All ComPtrs live here on the render thread (threading-render-seam contract).
 ///
 /// Known limitation (documented honestly): an Acrylic layer NESTED INSIDE an open opacity group composites into the
@@ -69,12 +69,13 @@ internal sealed unsafe class OpacityLayerCompositor : IDisposable
         // present another node's pixels as this node's.
         public ulong PinLayerId;
         public ulong PinMintFence;
-        // What resource each parity bank's SRV descriptor for this slot currently DESCRIBES (null = never written).
-        // Lets Acquire/FindPin skip the per-frame CreateShaderResourceView when the slot's resource is unchanged —
-        // the descriptor write was pure per-acquire overhead. Every retire/recreate path clears the whole entry
-        // (`= default`), so a recreated resource can never alias stale tracking.
-        public ID3D12Resource* SrvResParity0;
-        public ID3D12Resource* SrvResParity1;
+        // What resource each frame-in-flight bank's SRV descriptor for this slot currently DESCRIBES, held as the
+        // raw ID3D12Resource* bit pattern (0 = never written — a fixed buffer cannot hold pointers). Lets Acquire/FindPin
+        // skip the per-frame CreateShaderResourceView when the slot's resource is unchanged — the descriptor write was
+        // pure per-acquire overhead. Every retire/recreate path clears the whole entry (`= default`), which zeroes the
+        // WHOLE buffer exactly as it did the two fields this replaced, so a recreated resource can never alias stale
+        // tracking. KEEP that invariant on any new eviction path.
+        public fixed ulong SrvResByBank[D3D12Device.FrameBankDepth];
     }
     private readonly PoolEntry[] _pool = new PoolEntry[MaxPool];
 
@@ -88,15 +89,15 @@ internal sealed unsafe class OpacityLayerCompositor : IDisposable
     private readonly List<Retired> _retired = new();
 
     private ID3D12DescriptorHeap* _rtvHeap;   // MaxPool RTVs (slot i)
-    private ID3D12DescriptorHeap* _srvHeap;   // 2·MaxPool shader-visible SRVs, parity-banked (parity·MaxPool + i)
+    private ID3D12DescriptorHeap* _srvHeap;   // FrameBankDepth·MaxPool shader-visible SRVs, banked (bank·MaxPool + i)
     private ID3D12QueryHeap* _timestampHeap;
     private ID3D12Resource* _timestampReadback;
     private ulong* _timestampData;
     private ulong _timestampFrequency;
-    private readonly bool[] _timestampPending = new bool[2];
+    private readonly bool[] _timestampPending = new bool[D3D12Device.FrameBankDepth];
     private bool _blurTimingOpen;
     private uint _rtvInc, _srvInc;
-    private int _parity;
+    private int _bank;                        // this frame's SRV/query bank (frameIndex % D3D12Device.FrameBankDepth)
     // Heap-backed constant scratch — safe when NativeAOT inlines these callees into SubmitWithLayers' draw-list loop.
     private readonly float[] _scratch4 = new float[4];
     private readonly float[] _scratch8 = new float[8];
@@ -465,7 +466,7 @@ float4 BlurPS(V i) : SV_Target
         _timestampFrequency = frequency;
         D3D12_QUERY_HEAP_DESC qd = default;
         qd.Type = D3D12_QUERY_HEAP_TYPE.D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
-        qd.Count = 4;
+        qd.Count = 2u * D3D12Device.FRAME_COUNT;   // begin+end timestamp per frame-in-flight bank
         ID3D12QueryHeap* heap;
         if (_device->CreateQueryHeap(&qd, __uuidof<ID3D12QueryHeap>(), (void**)&heap) < 0) return;
         _timestampHeap = heap;
@@ -474,7 +475,7 @@ float4 BlurPS(V i) : SV_Target
         hp.Type = D3D12_HEAP_TYPE.D3D12_HEAP_TYPE_READBACK;
         D3D12_RESOURCE_DESC rd = default;
         rd.Dimension = D3D12_RESOURCE_DIMENSION.D3D12_RESOURCE_DIMENSION_BUFFER;
-        rd.Width = 4 * sizeof(ulong); rd.Height = 1; rd.DepthOrArraySize = 1; rd.MipLevels = 1;
+        rd.Width = 2UL * D3D12Device.FRAME_COUNT * sizeof(ulong); rd.Height = 1; rd.DepthOrArraySize = 1; rd.MipLevels = 1;
         rd.Format = DXGI_FORMAT.DXGI_FORMAT_UNKNOWN; rd.SampleDesc.Count = 1;
         rd.Layout = D3D12_TEXTURE_LAYOUT.D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
         ID3D12Resource* readback;
@@ -485,17 +486,21 @@ float4 BlurPS(V i) : SV_Target
             _timestampHeap->Release(); _timestampHeap = null; return;
         }
         _timestampReadback = readback;
-        D3D12MemoryDiagnostics.Track(readback, "OpacityLayer.TimestampReadback", 4 * sizeof(ulong));
+        D3D12MemoryDiagnostics.Track(readback, "OpacityLayer.TimestampReadback", 2UL * D3D12Device.FRAME_COUNT * sizeof(ulong));
         void* mapped;
         if (readback->Map(0, null, &mapped) >= 0) _timestampData = (ulong*)mapped;
     }
 
-    private void CollectGpuTime(int parity)
+    /// <summary>How many frame-in-flight timestamp banks this compositor carries — tracks
+    /// <see cref="D3D12Device.FrameBankDepth"/> by construction (FrameBankingTests asserts they cannot drift).</summary>
+    internal int TimestampBankCount => _timestampPending.Length;
+
+    private void CollectGpuTime(int bank)
     {
-        if (!_timestampPending[parity] || _timestampData == null || _timestampFrequency == 0) return;
-        int query = parity * 2;
+        if (!_timestampPending[bank] || _timestampData == null || _timestampFrequency == 0) return;
+        int query = bank * 2;
         ulong begin = _timestampData[query], end = _timestampData[query + 1];
-        _timestampPending[parity] = false;
+        _timestampPending[bank] = false;
         if (end >= begin) LastBlurGpuMs = (end - begin) * 1000.0 / _timestampFrequency;
     }
 
@@ -511,7 +516,7 @@ float4 BlurPS(V i) : SV_Target
 
         D3D12_DESCRIPTOR_HEAP_DESC sh = default;
         sh.Type = D3D12_DESCRIPTOR_HEAP_TYPE.D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-        sh.NumDescriptors = 2 * MaxPool;   // two parity banks (see _srvHeap comment)
+        sh.NumDescriptors = (uint)(D3D12Device.FrameBankDepth * MaxPool);   // one bank per frame-in-flight (see _srvHeap comment)
         sh.Flags = D3D12_DESCRIPTOR_HEAP_FLAGS.D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         ID3D12DescriptorHeap* shp; Check(_device->CreateDescriptorHeap(&sh, __uuidof<ID3D12DescriptorHeap>(), (void**)&shp), "OpacityLayer.SrvHeap");
         _srvHeap = shp;
@@ -748,21 +753,21 @@ float4 BlurPS(V i) : SV_Target
         }
     }
 
-    /// <summary>Write the CURRENT parity bank's SRV for this slot only if that descriptor doesn't already describe the
+    /// <summary>Write the CURRENT bank's SRV for this slot only if that descriptor doesn't already describe the
     /// slot's resource. Acquire/FindPin run per group per frame — for a stable slot the descriptor write is redundant
-    /// after the first two frames (one per parity bank), and on layer-heavy frames those writes were measurable.</summary>
-    private void EnsureParitySrv(ref PoolEntry e, int slot)
+    /// after the first <see cref="D3D12Device.FrameBankDepth"/> frames (one per bank), and on layer-heavy frames those
+    /// writes were measurable.</summary>
+    private void EnsureBankSrv(ref PoolEntry e, int slot)
     {
-        ref ID3D12Resource* described = ref (_parity == 0 ? ref e.SrvResParity0 : ref e.SrvResParity1);
-        if (described == e.Res) return;
+        if (e.SrvResByBank[_bank] == (ulong)e.Res) return;
         CreateSrv(e.Res, SrvCpu(PoolSrvSlot(slot)));
-        described = e.Res;
+        e.SrvResByBank[_bank] = (ulong)e.Res;
     }
 
     private D3D12_CPU_DESCRIPTOR_HANDLE Rtv(int slot) { var h = _rtvHeap->GetCPUDescriptorHandleForHeapStart(); h.ptr += (nuint)slot * _rtvInc; return h; }
     private D3D12_CPU_DESCRIPTOR_HANDLE SrvCpu(int slot) { var h = _srvHeap->GetCPUDescriptorHandleForHeapStart(); h.ptr += (nuint)slot * _srvInc; return h; }
     private D3D12_GPU_DESCRIPTOR_HANDLE SrvGpu(int slot) { var h = _srvHeap->GetGPUDescriptorHandleForHeapStart(); h.ptr += (ulong)slot * _srvInc; return h; }
-    private int PoolSrvSlot(int i) => _parity * MaxPool + i;
+    private int PoolSrvSlot(int i) => _bank * MaxPool + i;
 
     private void DrainRetired(ulong completedFence)
     {
@@ -789,11 +794,12 @@ float4 BlurPS(V i) : SV_Target
         DrainRetired(completedFence);
     }
 
-    /// <summary>Per-frame upkeep on the layered (canvas) path. <paramref name="parity"/> = frameIndex &amp; 1.</summary>
-    public void BeginFrame(ulong completedFence, int parity)
+    /// <summary>Per-frame upkeep on the layered (canvas) path. <paramref name="bank"/> = the frame index; it is
+    /// folded here to frameIndex % <see cref="D3D12Device.FrameBankDepth"/>.</summary>
+    public void BeginFrame(ulong completedFence, int bank)
     {
-        _parity = parity & 1;
-        CollectGpuTime(_parity);
+        _bank = bank % D3D12Device.FrameBankDepth;
+        CollectGpuTime(_bank);
         _blurTimingOpen = false;
         ResetGroupCounts();
         BlurLayersThisFrame = 0;
@@ -808,20 +814,20 @@ float4 BlurPS(V i) : SV_Target
     private void BeginBlurTiming(ID3D12GraphicsCommandList* cmd)
     {
         if (_blurTimingOpen || _timestampHeap == null) return;
-        cmd->EndQuery(_timestampHeap, D3D12_QUERY_TYPE.D3D12_QUERY_TYPE_TIMESTAMP, (uint)(_parity * 2));
+        cmd->EndQuery(_timestampHeap, D3D12_QUERY_TYPE.D3D12_QUERY_TYPE_TIMESTAMP, (uint)(_bank * 2));
         _blurTimingOpen = true;
     }
 
-    /// <summary>Resolve this frame's blur span into a parity-banked readback buffer. The value is consumed only after
+    /// <summary>Resolve this frame's blur span into THIS frame's bank of the readback buffer. The value is consumed only after
     /// that back-buffer bank is fenced and reused, so diagnostics never introduce a GPU wait.</summary>
     public void EndFrame(ID3D12GraphicsCommandList* cmd)
     {
         if (!_blurTimingOpen || _timestampHeap == null || _timestampReadback == null) return;
-        uint query = (uint)(_parity * 2);
+        uint query = (uint)(_bank * 2);
         cmd->EndQuery(_timestampHeap, D3D12_QUERY_TYPE.D3D12_QUERY_TYPE_TIMESTAMP, query + 1);
         cmd->ResolveQueryData(_timestampHeap, D3D12_QUERY_TYPE.D3D12_QUERY_TYPE_TIMESTAMP,
             query, 2, _timestampReadback, (ulong)query * sizeof(ulong));
-        _timestampPending[_parity] = true;
+        _timestampPending[_bank] = true;
         _blurTimingOpen = false;
     }
 
@@ -877,7 +883,7 @@ float4 BlurPS(V i) : SV_Target
         entry.InUse = true;
         entry.IdleFrames = 0;
         entry.LastUseFence = frameFence;
-        EnsureParitySrv(ref entry, best);   // refresh THIS frame's parity bank (skipped when it already describes this resource)
+        EnsureBankSrv(ref entry, best);   // refresh THIS frame's bank (skipped when it already describes this resource)
 
         Barrier(cmd, entry.Res, ref entry.State, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
         var rtv = Rtv(best);
@@ -1314,7 +1320,7 @@ float4 BlurPS(V i) : SV_Target
             if (e.Res == null || e.InUse || e.PinHash != hash || !e.BlurReady || e.W != rw || e.H != rh) continue;
             e.IdleFrames = 0;
             e.LastUseFence = frameFence;                // G1: a hit makes the pin MRU
-            EnsureParitySrv(ref e, i);                  // refresh THIS frame's parity bank for the composite (deduped)
+            EnsureBankSrv(ref e, i);                    // refresh THIS frame's bank for the composite (deduped)
             return i;
         }
         return -1;
@@ -1464,7 +1470,7 @@ float4 BlurPS(V i) : SV_Target
         ref var b = ref _pool[best];
         b.IdleFrames = 0;
         b.LastUseFence = frameFence;   // a stale hit is a USE (MRU) — see the summary
-        EnsureParitySrv(ref b, best);
+        EnsureBankSrv(ref b, best);
         return best;
     }
 
@@ -1691,7 +1697,7 @@ float4 BlurPS(V i) : SV_Target
         entry.InUse = true;
         entry.IdleFrames = 0;
         entry.LastUseFence = frameFence;
-        EnsureParitySrv(ref entry, best);
+        EnsureBankSrv(ref entry, best);
         return best;
     }
 

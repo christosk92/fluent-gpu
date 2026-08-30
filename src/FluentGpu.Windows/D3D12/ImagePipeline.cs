@@ -35,7 +35,7 @@ internal struct ImageInstance
 internal sealed unsafe class ImagePipeline : IDisposable
 {
     private const int MaxDraws = 1024;
-    private const int FrameCount = 2;   // double-buffered per frame-in-flight so frame N's CPU writes never race frame N-1's GPU reads
+    private const int FrameCount = D3D12Device.FrameBankDepth;   // banked per frame-in-flight (depth = D3D12Device.FrameBankDepth) so frame N's CPU writes never race the GPU reads of the frames still in flight
 
     private ID3D12RootSignature* _rootSig;
     private readonly float[] _vpConstants = new float[2];
