@@ -121,7 +121,7 @@ Run it (host wiring): see **[getting-started.md](./getting-started.md)**.
 | Record → DrawList (the GPU command walk) | `src/FluentGpu.Engine/Render/SceneRecorder.cs` | composites transform/opacity without re-record |
 | Theming tokens / colors | `src/FluentGpu.Engine/Dsl/Tokens.cs` (`Tok`), `Theme.cs` | `Tok.Use(ThemeKind)` re-themes in one pointer write |
 | Tests / golden checks | `src/FluentGpu.VerticalSlice/Program.cs` | add a `Check(...)`; call it from `Main` |
-| Wavee **playback modules** (out-of-process sources: YouTube/Twitch/radio/Spotify) | SDK `src/apps/Wavee.Sdk/**`, host `src/apps/Wavee/Backend/Modules/**`, modules `src/apps/modules/**` | app-level, not engine — the wire, the manifest and the build/publish layout are **[playback-modules.md](./playback-modules.md)** |
+| Wavee **playback modules** (out-of-process sources: YouTube/Twitch/radio/Spotify) | SDK `src/apps/Wavee.Sdk/**`, host `src/apps/Wavee/Backend/Modules/**`, modules `src/apps/modules/**` | app-level, not engine — the wire, the manifest and the build/publish layout are **[playback-modules.md](https://github.com/christosk92/WaveeMusic/blob/main/docs/guide/playback-modules.md)** |
 
 **Design corpus** (architecture source-of-truth, canon-gated) lives in `docs/design/`. The as-built reactive model is
 `docs/design/subsystems/reconciler-hooks.md §0bis`. After editing `docs/design/*`, run `powershell -File docs/design/check-canon.ps1`.
@@ -153,7 +153,7 @@ Run it (host wiring): see **[getting-started.md](./getting-started.md)**.
    swaps to real on load. `Loadable<T>` + `Skel.Region` + `UseResource` (SWR); incremental per-field, onFailed, groups.
 10. **[professional-media-lab.md](./professional-media-lab.md)** — the public DASH/HLS/PlayReady fixture catalog,
     behavior-coverage matrix, live diagnostics and on-device media verification pass.
-11. **[sidebar-extension-platform.md](./sidebar-extension-platform.md)** — the **Wavee app**'s sidebar as a
+11. **[sidebar-extension-platform.md](https://github.com/christosk92/WaveeMusic/blob/main/docs/guide/sidebar-extension-platform.md)** — the **Wavee app**'s sidebar as a
     platform: three designs (Classic / Library V3 / Wavee Curated) as three *documents* over ONE `SidebarPane`
     renderer, the full-page live customizer + its command/undo pipeline, the versioned local `sidebar-layout.json`
     v2 wire format (with a real example and the preserve-don't-destroy rules), and the extension contracts as they
@@ -169,8 +169,8 @@ Run it (host wiring): see **[getting-started.md](./getting-started.md)**.
     closed, power keep-awake/suspend, metered-network policy, mouse Back/Forward). Carries the
     WindowsApi-vs-PAL-vs-app ownership split, the threading table (which callback arrives on which thread), and what
     packaged identity is actually required for. Companions: **[shortcuts.md](./shortcuts.md)** (the user-facing key
-    map) and **[startup-bench.md](./startup-bench.md)** (the `--startup-bench` probe + what the About receipts read).
-14. **[playback-modules.md](./playback-modules.md)** — the **Wavee app**'s playback-module system: a source
+    map) and **[startup-bench.md](https://github.com/christosk92/WaveeMusic/blob/main/docs/guide/startup-bench.md)** (the `--startup-bench` probe + what the About receipts read).
+14. **[playback-modules.md](https://github.com/christosk92/WaveeMusic/blob/main/docs/guide/playback-modules.md)** — the **Wavee app**'s playback-module system: a source
     (YouTube, Twitch, internet radio, and next Spotify itself) ships as an independently updatable
     **out-of-process exe** written against the public `Wavee.Sdk`, because a NativeAOT + `TrimMode full` app cannot
     load a managed plugin. Carries the `wavee-module.json` manifest, the JSON-RPC-2.0-over-stdio wire (LSP framing,
@@ -178,7 +178,7 @@ Run it (host wiring): see **[getting-started.md](./getting-started.md)**.
     author quick-start, `ModuleTestHost` + the CLI subcommands, the dev/publish/MSIX layouts, the diagnostics
     surface, the update-store design, and the Spotify-migration plan — plus the verbatim research appendix the
     three bundled modules were built from.
-15. **[releasing-wavee.md](./releasing-wavee.md)** — the **Wavee app**'s release runbook: what a release is (the
+15. **[releasing-wavee.md](https://github.com/christosk92/WaveeMusic/blob/main/docs/guide/releasing-wavee.md)** — the **Wavee app**'s release runbook: what a release is (the
     `wavee-vX.Y.Z` tag, the rolling `wavee-stable` feed, the codename, the `M.m.p.WaveeBuild` quad), the three hand
     edits, the one local command (`ops/release/wavee-release.ps1` — there is no CI release job), the `-DryRun`
     rehearsal, the phase + preflight-gate tables, failure recovery (`-Resume` / `-Abort`), rollback

@@ -14,18 +14,8 @@
     <Project Path="FluentGpu.SourceGen/FluentGpu.SourceGen.csproj" />
   </Folder>
   <Folder Name="/Apps/">
-    <Project Path="apps/Wavee.Core/Wavee.Core.csproj" />
-    <Project Path="apps/Wavee.ReleaseTool/Wavee.ReleaseTool.csproj" />
-    <Project Path="apps/Wavee.Sdk/Wavee.Sdk.csproj" />
-    <Project Path="apps/Wavee.Tests/Wavee.Tests.csproj" />
-    <Project Path="apps/Wavee/Wavee.csproj" />
     <Project Path="FluentGpu.VerticalSlice/FluentGpu.VerticalSlice.csproj" />
     <Project Path="FluentGpu.WindowsApp/FluentGpu.WindowsApp.csproj" />
-  </Folder>
-  <Folder Name="/Apps/Playback-Modules/">
-    <Project Path="apps/modules/Wavee.Module.YouTube/Wavee.Module.YouTube.csproj" />
-    <Project Path="apps/modules/Wavee.Module.Twitch/Wavee.Module.Twitch.csproj" />
-    <Project Path="apps/modules/Wavee.Module.Radio/Wavee.Module.Radio.csproj" />
   </Folder>
   <Folder Name="/Packaging/">
     <Project Path="FluentGpu.Package/FluentGpu.Package.csproj" />

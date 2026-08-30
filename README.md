@@ -140,7 +140,7 @@ WinUI 3 is slow in ways that are *structural*, not tunable: every `DependencyPro
 
 fluent-gpu attacks the *causes*: unmanaged SoA columns instead of dependency properties; generational handles + arenas + slabs instead of GC objects on the hot path; hand-vtable `calli` instead of COM RCW churn; a single render tree; fine-grained signals so updates are surgical, not tree-wide; and a GPU-batched paint path that enforces **zero per-frame managed allocation** across the hot frame phases — as a tripwire gate in CI, not an aspiration. The honest grades (see [the painpoints assessment](./docs/design/winui-painpoints-assessment.md)): **GC pressure — largely solved; over-rendering — solved (granular re-render + a compositor bypass for hot values); slow UI thread — decoupled (not invincible); footprint + startup — substantially better.** It is *not* a risk-free engine — it trades GC-correctness for hand-rolled COM and renderer correctness, made safe-by-construction where it can and CI-gated everywhere else.
 
-The proof workload is [**Wavee**](./src/apps/), a Spotify desktop client that lives in this repo — media-heavy, list-heavy (10k+ track lists), theming-heavy (album-art dynamic color, Mica), with video and synced lyrics. It builds on exactly the public API you get, with no private escape hatches.
+The proof workload is [**Wavee**](https://github.com/christosk92/WaveeMusic), a Spotify desktop client in its own repo (a sibling checkout that references this engine by path) — media-heavy, list-heavy (10k+ track lists), theming-heavy (album-art dynamic color, Mica), with video and synced lyrics. It builds on exactly the public API you get, with no private escape hatches.
 
 ## How it works (one diagram)
 
@@ -204,7 +204,6 @@ The solution (`src/FluentGpu.slnx`) is **five libraries + tooling + apps + tests
 | `FluentGpu.SourceGen` | The analyzer/generator assembly: `[Props]`, `[Route]`, loc keys, token accessors, glyph tables, sample extraction, FGRP lints. |
 | `FluentGpu.VerticalSlice` | The headless acceptance harness (the 800+ checks + alloc gates). Its transitive closure must stay TerraFX-free. |
 | `FluentGpu.WindowsApp` | The gallery — composition root, screenshot/audit harness. |
-| `src/apps/Wavee*` | The driving app: a full Spotify desktop client on the public API. |
 | `*.Tests` ×3 | xUnit projects: engine (incl. media playback), Windows backend, source generators/analyzers. |
 
 `FluentGpu.Package` assembles all of it into the single `FluentGpu` NuGet package. Details: [`src/README.md`](./src/README.md).

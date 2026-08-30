@@ -32,12 +32,12 @@ jobs:
           dotnet-version: '11.0.x'   # repo targets net10.0 but builds on the 11.x preview SDK (matches nuget.yml/msix.yml)
           dotnet-quality: preview
 
-      # The solution covers all 15 projects including the Wavee app and its tests. WaveeSkipPrivateSources
-      # excludes the gitignored Wavee.PlayPlay junction, which is absent on a CI checkout (the csprojs already
-      # guard on Exists(); passing it makes the intent explicit). See docs/guide/playplay-private-split.md.
+      # The solution covers the engine, the control kit, the Windows backends, the source generator, the gallery,
+      # the VerticalSlice harness and the three test projects. The Wavee app lives in christosk92/WaveeMusic
+      # (a sibling checkout that references this repo by path) and builds nowhere on GitHub.
       - name: Build (${{ matrix.configuration }})
         shell: pwsh
-        run: dotnet build src/FluentGpu.slnx -c ${{ matrix.configuration }} --no-incremental -v:m -p:WaveeSkipPrivateSources=true
+        run: dotnet build src/FluentGpu.slnx -c ${{ matrix.configuration }} --no-incremental -v:m
 
       - name: Tests (${{ matrix.configuration }})
         shell: pwsh
@@ -45,74 +45,14 @@ jobs:
           $projects = @(
             'src/FluentGpu.Engine.Tests/FluentGpu.Engine.Tests.csproj',
             'src/FluentGpu.Windows.Tests/FluentGpu.Windows.Tests.csproj',
-            'src/FluentGpu.SourceGen.Tests/FluentGpu.SourceGen.Tests.csproj',
-            'src/apps/Wavee.Tests/Wavee.Tests.csproj'
+            'src/FluentGpu.SourceGen.Tests/FluentGpu.SourceGen.Tests.csproj'
           )
           $failed = @()
           foreach ($p in $projects) {
-            dotnet test $p -c ${{ matrix.configuration }} --no-build -v:q -p:WaveeSkipPrivateSources=true
+            dotnet test $p -c ${{ matrix.configuration }} --no-build -v:q
             if ($LASTEXITCODE -ne 0) { $failed += $p }
           }
           if ($failed) { throw "test failures in: $($failed -join ', ')" }
-
-      # ── Wavee app smoke gates ────────────────────────────────────────────────────────────────────────────────────
-      # Debug only: these run the real composition root, and the alloc/diag arms they exercise are the Debug ones.
-      #
-      # --fake selects the offline FakeData backend (no login, no network). --frames 30 runs exactly 30 frames and
-      # exits, and --screenshot writes a PNG; Program.cs skips the single-instance gate whenever either flag
-      # is present, so the harness can spawn freely on a shared runner. A window IS created (FluentAppHarness.Run
-      # brings up the D3D12 device + DirectComposition), but D3D12Device falls back to the WARP software adapter on a
-      # machine with no hardware GPU (D3D12Device.cs, per pal-rhi.md §3b.1) — which is what a GitHub runner is.
-      # If this ever proves unreliable on the hosted image, drop --screenshot and keep --frames: the liveness signal
-      # is "30 frames rendered and the process exited 0", not the pixels.
-      #
-      # The PNG is a crash/hang tripwire, NOT a visual gate: Wavee's composited FLIP_DISCARD swapchain + whole-frame
-      # skip-submit currently make CaptureBgra read a discarded back buffer, so the capture is uniformly black even
-      # when the shell renders correctly on screen. Visual fidelity is verified on-screen, not here.
-      - name: Wavee smoke (fake backend)
-        if: matrix.configuration == 'Debug'
-        shell: pwsh
-        timeout-minutes: 10
-        run: |
-          New-Item -ItemType Directory -Force artifacts | Out-Null   # artifacts/ is gitignored, so absent on a CI checkout
-          dotnet run --project src/apps/Wavee -c Debug --no-build -p:WaveeSkipPrivateSources=true -- --fake --frames 30 --screenshot artifacts/wavee-smoke.png
-
-      # Headless (no window): exercises the five backend engines and exits 0 pass / 1 fail (Program.cs, --backend-selftest).
-      - name: Wavee backend self-test
-        if: matrix.configuration == 'Debug'
-        shell: pwsh
-        timeout-minutes: 10
-        run: dotnet run --project src/apps/Wavee -c Debug --no-build -p:WaveeSkipPrivateSources=true -- --backend-selftest
-
-      - name: Upload Wavee smoke screenshot
-        if: ${{ always() && matrix.configuration == 'Debug' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: wavee-smoke
-          path: artifacts/wavee-smoke.png
-          if-no-files-found: ignore
-          retention-days: 7
-
-      # Release only: the trim/AOT break detector. `dotnet build` never runs ILC, so a reflection-only code path, an
-      # un-rooted generic instantiation, or a newly added trim-unsafe dependency is invisible to every other step here
-      # and only explodes at release-packaging time. Publishing once per push turns that into a normal build failure.
-      # NativeAOT's native link needs MSVC link.exe; windows-latest carries VS Build Tools, and the PATH step below
-      # mirrors what ops/build/pack-wavee-msix.ps1 does so ILC can find it via vswhere.
-      - name: NativeAOT toolchain (vswhere on PATH)
-        if: matrix.configuration == 'Release'
-        shell: pwsh
-        run: |
-          $vsInstaller = 'C:\Program Files (x86)\Microsoft Visual Studio\Installer'
-          if ((Test-Path "$vsInstaller\vswhere.exe") -and ($env:PATH -notlike "*$vsInstaller*")) {
-            # GITHUB_PATH prepends for subsequent steps (safer than rewriting PATH wholesale via GITHUB_ENV).
-            $vsInstaller | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
-          }
-
-      - name: Wavee AOT publish (trim/AOT break detector)
-        if: matrix.configuration == 'Release'
-        shell: pwsh
-        continue-on-error: false      # an AOT/trim break must fail the build, not warn
-        run: dotnet publish src/apps/Wavee/Wavee.csproj -c Release -r win-x64 -p:PublishAot=true -p:WaveeSkipPrivateSources=true -o artifacts/aot-smoke -v:m
 
       # The standing acceptance test: headless golden checks + the zero-alloc tripwire (no GPU/window needed).
       # Debug only — the alloc gates are calibrated against the Debug build that CLAUDE.md names canonical.

@@ -56,7 +56,7 @@
        per-component re-render roster, the FG_OPAQUE_WINDOW A/B, Diag's console sink. A plain Release publish erases all
        of them; `dotnet publish /p:FluentGpuDiag=true` (or ops/build/publish-wavee-aot.ps1 -Diag) keeps them.
        NOT the same as FGGUARD: this deliberately does NOT arm ThreadGuard, so the render-seam asserts stay erased and
-       the diag build's threading behaviour matches Release. Mirrored verbatim in src/apps/Directory.Build.props, which
+       the diag build's threading behaviour matches Release. Mirrored verbatim in WaveeMusic's root Directory.Build.props (the app repo), which
        does not inherit this file. See ops/diag/README.md. -->
   <PropertyGroup Condition="'$(FluentGpuDiag)' == 'true'">
     <DefineConstants>$(DefineConstants);FLUENTGPU_DIAG</DefineConstants>
