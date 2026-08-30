@@ -95,7 +95,10 @@ static class NotificationSimulator
             NotifyTopic.NewEpisodes => SimulatedNotifications.NewRelease(ShowSeed(svc), episode: true, ts, seq),
             NotifyTopic.Concerts => SimulatedNotifications.Concert(ArtistSeed(svc), ts, seq),
             NotifyTopic.Followers => SimulatedNotifications.Follower(ts, seq),
-            _ => SimulatedNotifications.AppUpdate(AppVersion, ts),
+            // The app-update row is a SNAPSHOT, not a version string: the panel, the toast planner and the OS
+            // escalator all read the whole observation. Available specifically — Failed renders no OS toast title and
+            // would silently never banner, which reads as a broken test.
+            _ => new AppUpdateNotification(ts, IsUnread: true, SimulatedUpdateSnapshot(ts)),
         };
 
         int raised = svc.Notifications.Simulate(n);
@@ -181,17 +184,10 @@ static class NotificationSimulator
     /// sends look like a feed rather than one row arriving eight times.</summary>
     static int Pick(int count) => count <= 1 ? 0 : (int)(Volatile.Read(ref _seq) % count);
 
-    static string? AppVersion
-    {
-        get
-        {
-            try
-            {
-                return System.Reflection.CustomAttributeExtensions
-                    .GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>(
-                        typeof(NotificationSimulator).Assembly)?.InformationalVersion;
-            }
-            catch (Exception) { return null; }
-        }
-    }
+    /// <summary>The synthetic observation behind a simulated update row. Deliberately a version this build could never
+    /// actually be offered, so a screenshot of a simulation is never mistaken for a real release; the codename is what
+    /// every string interpolates, which is the half worth exercising.</summary>
+    static AppUpdateSnapshot SimulatedUpdateSnapshot(long ts)
+        => new(AppUpdateState.Available, "99.9.9.999", "99.9.9", "Simulated", 0, null,
+            AutoUpdateAssociated: true, LastCheckedMs: ts);
 }

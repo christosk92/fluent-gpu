@@ -36,7 +36,7 @@ public class HomeTimelineMergeTests
                SocialActionType.Navigate, null, new[] { "someone" }, "stor-" + id);
 
     static AppUpdateNotification Update(long ts)
-        => new(ts, true, AppUpdateState.Available, "9.9.9", null, null);
+        => new(ts, true, AppUpdateSnapshot.Idle with { State = AppUpdateState.Available, TargetQuad = "9.9.9" });
 
     static ActivityNotification Activity(long id, long ts)
         => new(new ActivityEntry(id, ActivityKind.Save, "spotify:track:t" + id, "A song", null, ts, ActivityStatus.Done, false));

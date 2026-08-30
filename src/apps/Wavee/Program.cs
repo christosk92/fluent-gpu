@@ -118,9 +118,21 @@ static class Program
             WaveeLogField.Of("pid", Environment.ProcessId),
             WaveeLogField.Of("args", args.Length),
             WaveeLogField.Of("log", logPath),
+            // Where that path REALLY lands (MSIX redirects %LOCALAPPDATA% into the package's LocalCache; an unpackaged
+            // run, or a real folder that already exists, writes the literal path). The two look identical above and
+            // differ in every consequence — a split settings/log store reads as "the app forgot everything".
+            WaveeLogField.Of("logResolved", FluentGpu.WindowsApi.Storage.FinalPath.Resolve(logDir) ?? "?"),
             WaveeLogField.Of("dealerArchive", Path.Combine(logDir, "dealer")),
             WaveeLogField.Of("framework", System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription),
             WaveeLogField.Of("os", System.Runtime.InteropServices.RuntimeInformation.OSDescription));
+        // `--relaunched-after-update` is appended to the restart command line PackageUpdater hands
+        // RegisterApplicationRestart, so the process Windows brings back after a deployment can say so. It is otherwise
+        // INERT: nothing branches on it. (RegisterApplicationRestart(null, 0) reuses the original command line, which
+        // made the relaunched process indistinguishable from a normal launch — you could not tell from the log whether
+        // an update had just been applied.) It parses as neither a URI nor a path, so ActivationArgs.Classify still
+        // reports ActivationKind.Launch and the single-instance / deep-link path is unaffected.
+        if (Array.IndexOf(args, AppRelaunch.RelaunchedAfterUpdateFlag) >= 0)
+            WaveeLog.Instance.Info("app", "startup", "relaunched by Windows after an update");
 
         // ── Global crash net (the two process-level handlers; the UI-thread one lives in the engine loop) ─────────────
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>
@@ -440,6 +452,8 @@ static class Program
             // Process-exit flush for session.json (nav + the playback restore section): the shell's unmount cleanup never
             // runs on shutdown (AppHost.Dispose doesn't unmount the tree), so a pending debounced save would be lost.
             SessionSnapshotStore.FlushActive();
+            // ...then, only if the user asked for it, stage a waiting update before the process goes away.
+            InstallPendingUpdateOnQuit(settings);
         }
         catch (Exception ex)
         {
@@ -470,6 +484,98 @@ static class Program
         }
         WaveeLog.Instance.Info("app", "Wavee exiting");
         WaveeLog.Instance.Flush();
+    }
+
+    /// <summary>
+    /// "Install a waiting update when I quit Wavee" (<c>app.update.installOnQuit</c>, off by default), honoured HERE —
+    /// after the app loop has returned and the session snapshot is durable, before the process actually goes away.
+    ///
+    /// <para>This is the ONE place that reads the setting; the decision itself is the pure, unit-tested
+    /// <see cref="Wavee.Core.ShutdownUpdatePolicy.ShouldApply"/> (on = true AND the updater is sitting on an
+    /// <c>Available</c>/<c>Snoozed</c> target — a Failed attempt is never retried silently).</para>
+    ///
+    /// <para>It WAITS, deliberately and with a bound — but it does NOT block the thread: the apply runs on the thread
+    /// pool while this thread pumps Win32 messages (<see cref="MessagePump.RunUntil"/>). A blocked GUI thread is what
+    /// made Windows kill every in-app-quit update as a hung app; see the comment in the body. The whole point of "when I quit" is that the download happens
+    /// while the user is done with the app, so returning immediately and letting the process exit would stage nothing
+    /// at all. Ten minutes is the ceiling: a link too slow to finish in ten minutes leaves the update exactly where it
+    /// was — still offered, still applied on the next launch — which is the same outcome as never having asked. The
+    /// deployment may terminate this process itself (<c>ForceTargetApplicationShutdown</c>) partway through, and at
+    /// quit time that is a perfectly good ending.</para>
+    ///
+    /// <para>And it STOPS waiting the moment Windows asks us to leave (<see cref="PumpOutcome.ShutdownRequested"/>):
+    /// the deployment's Restart Manager pass waits for this process to exit before it can finish, so continuing to
+    /// wait is a deadlock the OS resolves by killing us and filing a hang report. Leaving costs nothing — the package
+    /// is staged and <c>RegisterApplicationRestart</c> has already been called, so Windows brings Wavee back.</para>
+    /// </summary>
+    static void InstallPendingUpdateOnQuit(IAppSettings settings)
+    {
+        try
+        {
+            var updater = AppInstallerUpdateService.Instance;
+            if (updater is null) return;
+            if (!Wavee.Core.ShutdownUpdatePolicy.ShouldApply(settings.Get(WaveeSettings.UpdateInstallOnQuit), updater.Current.State))
+                return;
+
+            // Read ONCE: the two lines this method can write about the target must name the same quad, and Current is
+            // republished by every progress tick of the apply below.
+            string targetQuad = updater.Current.TargetQuad ?? "?";
+            WaveeLog.Instance.Info("update", "install-on-quit: staging " + targetQuad);
+            using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(10));
+
+            // The apply runs OFF this thread and this thread becomes a message pump for the duration. It must not
+            // simply block: the deployment ends in ForceTargetApplicationShutdown, which runs the Restart Manager
+            // against our process — WM_QUERYENDSESSION (ENDSESSION_CLOSEAPP) → WM_ENDSESSION → WM_CLOSE to the
+            // top-level windows — and then waits ~30 s for us to EXIT before killing us. A thread parked in
+            // GetAwaiter().GetResult() answers nothing, so Windows declared the process hung (WER MoAppHang +
+            // Application event 1002 "Wavee.exe stopped interacting with Windows and was closed") and killed it.
+            //
+            // Pumping alone did NOT fix that, and the measurement is unambiguous: a pumped run took the same ~32 s and
+            // filed the same hang report (deployment started 23:23:07.6, event 1002 at 23:23:40.05, package registered
+            // 23:23:40.5 — the instant the OS killed us). The shutdown request is not a question, it is an eviction
+            // notice: the deployment is waiting for US to go away while we wait for the deployment. So the pump owns a
+            // hidden top-level sentinel window (message-only windows never see the broadcast) and reports
+            // ShutdownRequested, and this method's answer to that is to RETURN and let Main fall through to its exit.
+            // Nothing is lost by leaving: the package is already staged, and PackageUpdater.Deploy calls
+            // RegisterApplicationRestart BEFORE the deployment starts, so the Restart Manager brings Wavee back with
+            // --relaunched-after-update once the registration lands.
+            Task apply = Task.Run(() => updater.ApplyAsync(cts.Token));
+            // A slightly longer pump ceiling than the token's: let the cancellation land and settle the state, so the
+            // ordinary "gave up in state X" line below is what the user (and the E2E harness) sees.
+            var outcome = MessagePump.RunUntil(apply, TimeSpan.FromMinutes(10.5));
+            if (outcome == PumpOutcome.ShutdownRequested)
+            {
+                // NOT Environment.Exit: the normal path out of Main still has work to do (the single-instance mutex,
+                // the "Wavee exiting" line, the log flush) and none of it blocks. Returning is the fastest correct exit.
+                WaveeLog.Instance.Info("update", "install-on-quit: Windows asked us to exit "
+                    + "(the deployment is taking over); staged " + targetQuad);
+                WaveeLog.Instance.Flush();
+                return;
+            }
+            if (outcome == PumpOutcome.TimedOut)
+            {
+                WaveeLog.Instance.Warn("update", "install-on-quit gave up in state " + updater.Current.State
+                    + " (the update is still offered and applies on the next launch)");
+                return;
+            }
+            apply.GetAwaiter().GetResult();   // observe faults so the catch below logs them
+
+            var state = updater.Current.State;
+            if (Wavee.Core.ShutdownUpdatePolicy.IsSettled(state))
+                WaveeLog.Instance.Info("update", "install-on-quit finished: " + state);
+            else
+                WaveeLog.Instance.Warn("update", "install-on-quit gave up in state " + state
+                    + " (the update is still offered and applies on the next launch)");
+        }
+        catch (Exception ex)
+        {
+            // Never turn a quit into a crash. The update is still pending; the next launch offers it again.
+            WaveeLog.Instance.Warn("update", "install-on-quit failed", ex);
+        }
+        finally
+        {
+            WaveeLog.Instance.Flush();
+        }
     }
 
     static Action<string>? DebugEcho()

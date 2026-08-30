@@ -149,7 +149,7 @@ sealed class NotificationPanel : Component
     static Element RowFor(WaveeNotification n, long now, NotificationCenterBridge nc, Action<string, string?>? go,
         Services? svc, Signal<long> expanded, long expandedId, Action? close) => n switch
     {
-        AppUpdateNotification u => Card("ntf:" + u.Id, UpdateRow(u, svc), n.IsUnread, null),
+        AppUpdateNotification u => Card("ntf:" + u.Id, UpdateRow(u, svc, go, close), n.IsUnread, null),
         SocialNotification s    => Card("ntf:" + s.Id, SocialRow(s, now, go), n.IsUnread, () => ClickSocial(s, go, close)),
         NewReleaseNotification r => Card("ntf:" + r.Id, NewReleaseRow(r), n.IsUnread, () => ClickRelease(r, go, close)),
         ActivityNotification a  => ActivityCard(a, now, nc, expanded, expandedId, go, close),
@@ -179,40 +179,80 @@ sealed class NotificationPanel : Component
         : new BoxEl { Width = 8f, Shrink = 0f };
 
     // ── app update ───────────────────────────────────────────────────────────────────────────────────────────────────
-    static Element UpdateRow(AppUpdateNotification u, Services? svc)
+    // ONE row per state, and the state is the WHOLE snapshot the service published (never a torn read of four
+    // properties). The sentence under the title is the same one Settings › About prints — a second phrasing of
+    // "Wavee 0.3 Crest is available" is a second thing to keep in step for no gain.
+    static Element UpdateRow(AppUpdateNotification u, Services? svc, Action<string, string?>? go, Action? close)
     {
-        var (glyph, tint, title, body) = u.State switch
+        var s = u.Snapshot;
+        var (glyph, tint, title) = s.State switch
         {
-            AppUpdateState.Available  => (Icons.Download, Tok.AccentDefault, Loc.Get(Strings.Notifications.Update.AvailableTitle), Strings.Notifications.Update.AvailableBody(u.Version ?? "")),
-            AppUpdateState.Downloaded => (Icons.Refresh, Tok.AccentDefault, Loc.Get(Strings.Notifications.Update.DownloadedTitle), Loc.Get(Strings.Notifications.Update.DownloadedBody)),
-            AppUpdateState.Completed  => (Icons.StatusSuccess, Tok.SystemFillSuccess, Loc.Get(Strings.Notifications.Update.CompletedTitle), Strings.Notifications.Update.CompletedBody(u.Version ?? "")),
-            AppUpdateState.Failed     => (Icons.StatusError, Tok.SystemFillCritical, Loc.Get(Strings.Notifications.Update.FailedTitle), u.Error ?? ""),
-            _ => (Icons.StatusInfo, Tok.TextSecondary, "", ""),
+            AppUpdateState.Available or AppUpdateState.Snoozed =>
+                (Icons.Download, Tok.AccentDefault, Loc.Get(Strings.Notifications.Update.AvailableTitle)),
+            AppUpdateState.Downloading or AppUpdateState.Installing =>
+                (Icons.Refresh, Tok.AccentDefault, Loc.Get(Strings.Update.Os.Downloading)),
+            AppUpdateState.Completed =>
+                (Icons.StatusSuccess, Tok.SystemFillSuccess, Loc.Get(Strings.Notifications.Update.CompletedTitle)),
+            AppUpdateState.Failed =>
+                (Icons.StatusError, Tok.SystemFillCritical, Loc.Get(Strings.Notifications.Update.FailedTitle)),
+            _ => (Icons.StatusInfo, Tok.TextSecondary, ""),
         };
 
-        var actions = new List<Element>(2);
-        var up = svc?.AppUpdate;
-        switch (u.State)
+        // The SIMULATOR when a developer-mode walk is running, else the live updater. This row is the one a
+        // simulation injects, so binding its buttons to the real (Idle) service left "Update now" / "Later" / "Retry"
+        // doing nothing at all during exactly the scenario they exist to exercise.
+        var up = AppUpdateSurface.Resolve(svc);
+        // The release the actions talk about: the TARGET while one is pending, the running build once it landed.
+        string notesVersion = s.State == AppUpdateState.Completed
+            ? AppVersion.Info.Core
+            : s.TargetSemVer is { Length: > 0 } sem ? sem : AppUpdateVersion.ReleaseTagVersion(s.TargetQuad);
+
+        void OpenNotes()
+        {
+            go?.Invoke("whatsnew", notesVersion.Length == 0 ? null : notesVersion);
+            close?.Invoke();
+        }
+
+        var actions = new List<Element>(3);
+        switch (s.State)
         {
             case AppUpdateState.Available:
-                actions.Add(PillButton(Loc.Get(Strings.Notifications.Update.Download), () => { if (up is not null) _ = up.DownloadAsync(CancellationToken.None); }, accent: true));
-                break;
-            case AppUpdateState.Downloaded:
-                actions.Add(PillButton(Loc.Get(Strings.Notifications.Update.Restart), () => up?.RestartToApply(), accent: true));
+            case AppUpdateState.Snoozed:
+                actions.Add(PillButton(Loc.Get(Strings.Update.Action.UpdateNow),
+                    () => { if (up is not null) _ = up.ApplyAsync(CancellationToken.None); }, accent: true));
+                actions.Add(PillButton(Loc.Get(Strings.Update.Action.WhatsNew), OpenNotes, accent: false));
+                if (s.State == AppUpdateState.Available)
+                    actions.Add(PillButton(Loc.Get(Strings.Update.Action.Later), () => up?.Snooze(), accent: false));
                 break;
             case AppUpdateState.Completed:
-                actions.Add(PillButton(Loc.Get(Strings.Notifications.Update.SeeWhatsNew), () =>
-                {
-                    if (u.ReleaseNotesUrl is { Length: > 0 } url) LoginView.OpenUrl(url);
-                    up?.Acknowledge();
-                }, accent: true));
-                actions.Add(PillButton(Loc.Get(Strings.Notifications.Update.Dismiss), () => up?.Acknowledge(), accent: false));
+                actions.Add(PillButton(Loc.Get(Strings.Update.Action.WhatsNew), () => { OpenNotes(); up?.Acknowledge(); }, accent: true));
+                actions.Add(PillButton(Loc.Get(Strings.Update.Action.Dismiss), () => up?.Acknowledge(), accent: false));
                 break;
             case AppUpdateState.Failed:
-                actions.Add(PillButton(Loc.Get(Strings.Notifications.Update.Retry), () => { if (up is not null) _ = up.CheckAsync(CancellationToken.None); }, accent: true));
-                actions.Add(PillButton(Loc.Get(Strings.Notifications.Update.Dismiss), () => up?.Acknowledge(), accent: false));
+                actions.Add(PillButton(Loc.Get(Strings.Update.Action.Retry),
+                    () => { if (up is not null) _ = up.ApplyAsync(CancellationToken.None); }, accent: true));
+                actions.Add(PillButton(Loc.Get(Strings.Update.Action.Dismiss), () => up?.Acknowledge(), accent: false));
                 break;
         }
+
+        // While a download runs the row shows PROGRESS instead of buttons: there is exactly one thing happening and
+        // nothing useful to press (cancelling mid-stage is the deployment API's business, not a notification's).
+        Element trailing = s.State is AppUpdateState.Downloading or AppUpdateState.Installing
+            ? new BoxEl
+            {
+                Direction = 0, Gap = 8f, AlignItems = FlexAlign.Center, Margin = new Edges4(0f, 6f, 0f, 0f),
+                Children =
+                [
+                    ProgressBar.Determinate(s.ProgressPercent / 100f, 200f),
+                    new TextEl(s.ProgressPercent.ToString(System.Globalization.CultureInfo.InvariantCulture) + "%")
+                        { Size = 11f, Color = Tok.TextTertiary, FontFamily = "Cascadia Code" },
+                ],
+            }
+            : actions.Count > 0
+                ? new BoxEl { Direction = 0, Gap = 6f, Wrap = true, Margin = new Edges4(0f, 4f, 0f, 0f), Children = actions.ToArray() }
+                : new BoxEl();
+
+        string body = AboutUpdatePanel.StateSentence(s);
 
         return new BoxEl
         {
@@ -222,12 +262,12 @@ sealed class NotificationPanel : Component
                 GlyphChip(glyph, tint),
                 new BoxEl
                 {
-                    Direction = 1, Grow = 1f, Basis = 0f, Gap = 3f,
+                    Direction = 1, Grow = 1f, Basis = 0f, Gap = 3f, MinWidth = 0f,
                     Children =
                     [
                         new TextEl(title) { Size = 13.5f, Weight = 700, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
                         body.Length > 0 ? new TextEl(body) { Size = 12f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap, MaxLines = 3 } : new BoxEl(),
-                        actions.Count > 0 ? new BoxEl { Direction = 0, Gap = 6f, Margin = new Edges4(0f, 4f, 0f, 0f), Children = actions.ToArray() } : new BoxEl(),
+                        trailing,
                     ],
                 },
             ],

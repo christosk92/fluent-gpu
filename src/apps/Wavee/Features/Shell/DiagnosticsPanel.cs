@@ -54,6 +54,9 @@ sealed class DiagnosticsPanel(IAppSettings? settings = null) : Component
     bool _sessionLoadBusy;
     readonly ItemsViewController _listCtrl = new();
     IOverlayService? _overlay;
+    // The notification bridge the developer-mode update simulator injects snapshots into. Captured UNCONDITIONALLY in
+    // Render (a context read behind the developer-mode branch would be a conditional hook).
+    NotificationCenterBridge? _nc;
 
     readonly record struct LogRowData(WaveeLogEntry Entry, int Repeat);
 
@@ -63,6 +66,7 @@ sealed class DiagnosticsPanel(IAppSettings? settings = null) : Component
         var post = UsePost();
         var lastVersion = UseRef(-1L);
         _overlay = UseContext(Overlay.Service);
+        _nc = UseContext(NotificationCenterBridge.Slot);
 
         UseEffect(() => RefreshSessions(post), DepKey.Empty);
 
@@ -144,28 +148,44 @@ sealed class DiagnosticsPanel(IAppSettings? settings = null) : Component
         // settings and then bump `_diagVersion`, which Render already reads — that is what re-seeds their signals.
         bool dev = DeveloperMode.Enabled.Value;
 
+        var rows = new List<Element>(4)
+        {
+            SwitchRow(Strings.Settings.Diag.DeveloperMode, Strings.Settings.Diag.DeveloperModeSub,
+                Icons.Code, dev, isEnabled: true, on => DeveloperMode.Set(settings, on)),
+
+            SwitchRow(Strings.Settings.Diag.FpsOverlay, Strings.Settings.Diag.FpsOverlaySub,
+                Icons.Clock, DeveloperMode.FpsOverlay.Value, isEnabled: dev,
+                on => DeveloperMode.SetFpsOverlay(settings, on)),
+
+            SwitchRow(Strings.Settings.Diag.DealerArchive, Strings.Settings.Diag.DealerArchiveSub,
+                Icons.RadioTower, settings?.Get(WaveeSettings.DealerArchiveEnabled) ?? false, isEnabled: true,
+                on =>
+                {
+                    settings?.Set(WaveeSettings.DealerArchiveEnabled, on);
+                    // The archive keeps the directory Program.cs gave it, so the toggle only has to say on/off —
+                    // and it applies to the LIVE dealer connection, which is the whole point of it being a setting.
+                    DealerArchive.Instance.SetEnabled(on);
+                }),
+        };
+
+        // Developer surface only: walk the whole update state machine (available → downloading → installing →
+        // completed → failed) with no network and no package deployment, so every toast, notification-centre row and
+        // About-tab state can be SEEN rather than reasoned about. Composed away entirely when developer mode is off.
+        if (dev)
+            rows.Add(SettingsCard.Create(new SettingsCard.Options
+            {
+                Header = Loc.Get(Strings.Settings.Diag.SimulateUpdate),
+                Description = Loc.Get(Strings.Settings.Diag.SimulateUpdateSub),
+                HeaderIcon = Icons.Download,
+                Content = Button.Standard(Loc.Get(Strings.Settings.Diag.SimulateUpdateButton),
+                    () => { if (_nc is { } nc) FakeAppUpdateService.Start(nc); }),
+                IsEnabled = _nc is not null,
+            }));
+
         return new BoxEl
         {
             Direction = 1, Gap = Spacing.XS, Shrink = 0f, AlignSelf = FlexAlign.Stretch,
-            Children =
-            [
-                SwitchRow(Strings.Settings.Diag.DeveloperMode, Strings.Settings.Diag.DeveloperModeSub,
-                    Icons.Code, dev, isEnabled: true, on => DeveloperMode.Set(settings, on)),
-
-                SwitchRow(Strings.Settings.Diag.FpsOverlay, Strings.Settings.Diag.FpsOverlaySub,
-                    Icons.Clock, DeveloperMode.FpsOverlay.Value, isEnabled: dev,
-                    on => DeveloperMode.SetFpsOverlay(settings, on)),
-
-                SwitchRow(Strings.Settings.Diag.DealerArchive, Strings.Settings.Diag.DealerArchiveSub,
-                    Icons.RadioTower, settings?.Get(WaveeSettings.DealerArchiveEnabled) ?? false, isEnabled: true,
-                    on =>
-                    {
-                        settings?.Set(WaveeSettings.DealerArchiveEnabled, on);
-                        // The archive keeps the directory Program.cs gave it, so the toggle only has to say on/off —
-                        // and it applies to the LIVE dealer connection, which is the whole point of it being a setting.
-                        DealerArchive.Instance.SetEnabled(on);
-                    }),
-            ],
+            Children = rows.ToArray(),
         };
     }
 

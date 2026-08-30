@@ -8,6 +8,7 @@ using FluentGpu.Hooks;
 using FluentGpu.Localization;
 using FluentGpu.Signals;
 using Wavee.Core;
+using Wavee.Features.Home;
 using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
@@ -136,16 +137,24 @@ sealed class HomeArtistRow : Component
     // pills.
     static float ArtSize(int i) => i == 0 ? 76f : i < 3 ? 60f : 46f;
 
-    /// <summary>`.expander` — a `1fr 342px` grid: top tracks on the left, Mixview on the right, stacking under ~900px.</summary>
+    /// <summary>`.expander` — a `1fr 342px` grid: top tracks on the left, Mixview on the right, stacking under ~900px.
+    /// <para>The 900 boundary is <see cref="HomeArtistRowLayout"/>'s, not a literal: the same tier decides BOTH this
+    /// row's split AND which Mixview graph the panel draws (ring vs spine), so the two cannot drift apart.</para></summary>
     static Element Disclosure(Loadable<Artist?> loadable, Artist? warm, RelatedArtist picked,
                               Action<string, string?>? go, Services svc, PlaybackBridge? bridge, LibraryBridge? lib,
                               IReadOnlySet<string> userTopUris, int userTopCount)
     {
         Element Content(Artist? artist) => Responsive.Of(width =>
         {
+            int tier = HomeArtistRowLayout.NominalTierFor(width);
             Element left = TopTracks(artist, picked, svc, go, bridge, lib, userTopUris, userTopCount);
-            Element right = Mixview(artist, picked, go);
-            return width >= 900f
+            // Props are RE-PUSHED (Embed.Comp(props, …)) rather than captured in the factory: a width change re-renders
+            // this responsive box but REUSES the panel instance, and a reused ComponentEl never re-runs its factory —
+            // a plain field would freeze `Tier` at whatever the first measured frame happened to be.
+            Element right = Embed.Comp(
+                new MixviewProps(picked, artist?.Extras?.Related ?? (IReadOnlyList<RelatedArtist>)Array.Empty<RelatedArtist>(), tier),
+                static () => new MixviewPanel()) with { Key = "mixview:" + picked.Uri };
+            return tier == HomeArtistRowLayout.TierWide
                 ? new BoxEl
                 {
                     Direction = 0, MinWidth = 0f, AlignItems = FlexAlign.Stretch,
@@ -297,10 +306,59 @@ sealed class HomeArtistRow : Component
              : listeners.Length > 0 ? listeners : rank;
     }
 
-    // `.exp-r` — padding 12/14/14, a head, then the node graph.
-    static Element Mixview(Artist? a, RelatedArtist picked, Action<string, string?>? go)
+    static string Mmss(long ms)
     {
-        var related = a?.Extras?.Related ?? (IReadOnlyList<RelatedArtist>)Array.Empty<RelatedArtist>();
+        if (ms <= 0) return "";
+        int total = (int)Math.Round(ms / 1000d);
+        return (total / 60).ToString(System.Globalization.CultureInfo.CurrentCulture) + ":" + (total % 60).ToString("00");
+    }
+}
+
+/// <summary>Mixview's re-pushed props. A record so a fresh-but-equal push (the common case: a re-render at the same
+/// width) is coalesced and never re-renders the panel.</summary>
+sealed record MixviewProps(RelatedArtist Picked, IReadOnlyList<RelatedArtist> InitialRelated, int Tier);
+
+/// <summary>`.exp-r` — a head, then the node graph. Stateful because the graph RECENTERS: clicking a related artist
+/// makes it the new hub instead of navigating away, which needs a hub of its own plus that hub's related list.
+///
+/// <para>Two graphs, one panel: the <see cref="HomeArtistRowLayout.TierWide"/> arm keeps the radial ring, and the
+/// narrow arm draws a vertical spine list instead of a ring the pane can only clip. The tier is DECIDED BY THE
+/// DISCLOSURE and pushed down — the panel's own width (342 DIP in the wide arm) says nothing about which arm the row
+/// is in.</para></summary>
+sealed class MixviewPanel : Component
+{
+    const float SpineHubD = 40f;
+    const float SpineNodeD = 32f;
+
+    public override Element Render()
+    {
+        var p = UseProps<MixviewProps>();
+        var svc = UseContext(Services.Slot);
+        // The hub is LOCAL: the podium's pick only seeds it. The mount Key carries picked.Uri, so choosing a different
+        // top artist remounts this panel and the seed re-applies — no manual reset.
+        var (hub, setHub) = UseState(p.Picked);
+
+        // The seeded hub needs no fetch at all: the disclosure's own overview already carried its related list. Any
+        // OTHER hub goes through the same warm-seed + Rich read the disclosure uses, so a resident artist recenters on
+        // the same frame and revalidates underneath.
+        string? fetchUri = hub.Uri == p.Picked.Uri ? null : hub.Uri;
+        Artist? warm = fetchUri is null ? null : svc?.RealStore?.GetArtist(fetchUri);
+        if (HydrationLevels.Of(warm) < HydrationLevel.Rich) warm = null;
+        var hubDetail = UseResource(
+            async ct => fetchUri is null || svc is null ? null
+                      : await svc.Library.GetArtistAsync(fetchUri, HydrationLevel.Rich, ct).ConfigureAwait(false),
+            seed: warm, deps: DepKey.From(StringComparer.Ordinal.GetHashCode(fetchUri ?? "")));
+
+        var related = fetchUri is null
+            ? p.InitialRelated
+            : hubDetail.Loadable.Value.Value?.Extras?.Related ?? (IReadOnlyList<RelatedArtist>)Array.Empty<RelatedArtist>();
+
+        Element graph = related.Count > 0
+            ? (p.Tier == HomeArtistRowLayout.TierWide
+                ? MixGraphRing(hub, related, setHub)
+                : MixGraphSpine(hub, related, setHub))
+            : new BoxEl { Height = 120f, MinWidth = 0f, Children = [Body(" ")] }.Skeletonized(true);
+
         return new BoxEl
         {
             Direction = 1, Gap = Spacing.M, MinWidth = 0f,
@@ -324,9 +382,7 @@ sealed class HomeArtistRow : Component
                             : new BoxEl(),
                     ],
                 },
-                related.Count > 0
-                    ? MixGraph(picked, related, go)
-                    : new BoxEl { Height = 120f, MinWidth = 0f, Children = [Body(" ")] }.Skeletonized(true),
+                graph,
             ],
         };
     }
@@ -336,7 +392,7 @@ sealed class HomeArtistRow : Component
     /// graph is a ZStack whose children carry normalized JustifySelf/AlignSelf offsets via Margin. Connectors are
     /// <c>PolylineStrokeEl</c> — solid, because the leaf carries no dash pattern (the prototype's are dashed; flagged
     /// rather than faked).</para></summary>
-    static Element MixGraph(RelatedArtist hub, IReadOnlyList<RelatedArtist> related, Action<string, string?>? go)
+    static Element MixGraphRing(RelatedArtist hub, IReadOnlyList<RelatedArtist> related, Action<RelatedArtist> setHub)
         => Responsive.Of(width =>
         {
             float w = width > 1f ? width : 314f;
@@ -368,11 +424,93 @@ sealed class HomeArtistRow : Component
                 float ang = -MathF.PI / 2f + i * (MathF.Tau / n);
                 var r = related[i];
                 float x = cx + MathF.Cos(ang) * ringR, y = cy + MathF.Sin(ang) * ringR;
-                layers.Add(Node(r, x, y, nodeR, false, () => go?.Invoke("artist:" + r.Uri, r.Name)));
+                // Recenter, don't navigate: the click keeps you on Home and re-hubs the graph on the artist you picked.
+                layers.Add(Node(r, x, y, nodeR, false, () => setHub(r)));
                 layers.Add(NodeCap(r.Name, x, y, nodeR, isHub: false));
             }
             return new BoxEl { ZStack = true, Width = w, Height = h, MinWidth = 0f, Children = [.. layers] };
         }, fallback: 314f);
+
+    /// <summary>The narrow arm: the hub, then its related artists as a vertical list hanging off one rule. Same six-node
+    /// cap as the ring, same recenter click — only the geometry changes, so the panel reads as the same object at both
+    /// widths instead of a shrunken ring the pane clips.
+    ///
+    /// <para>No <c>Responsive.Of</c>, no ZStack, no trig: a column of rows is exactly what flex expresses. The rule is
+    /// ONE full-height 1-DIP fill behind the whole list rather than a <c>PolylineStrokeEl</c> per row — a stroke element
+    /// is what the ring needs for its diagonal edges; a vertical line is just a box the row cross-stretches, and one box
+    /// beats six strokes that would each have to be told their own height.</para></summary>
+    static Element MixGraphSpine(RelatedArtist hub, IReadOnlyList<RelatedArtist> related, Action<RelatedArtist> setHub)
+    {
+        int n = Math.Min(related.Count, 6);
+        var rows = new List<Element>(n);
+        for (int i = 0; i < n; i++)
+        {
+            var r = related[i];
+            rows.Add(SpineRow(r, setHub));
+        }
+
+        return new BoxEl
+        {
+            Direction = 1, Gap = Spacing.S, MinWidth = 0f,
+            Children =
+            [
+                SpineHub(hub),
+                new BoxEl
+                {
+                    Direction = 0, Gap = Spacing.S, MinWidth = 0f, AlignItems = FlexAlign.Stretch,
+                    // Inset so the rule falls under the hub avatar's CENTRE — the edge it stands in for.
+                    Padding = new Edges4(SpineHubD * 0.5f, 0f, 0f, 0f),
+                    Children =
+                    [
+                        new BoxEl
+                        {
+                            Width = 1f, Shrink = 0f, AlignSelf = FlexAlign.Stretch,
+                            Fill = Tok.TextTertiary with { A = 0.26f },
+                        },
+                        new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Children = [.. rows] },
+                    ],
+                },
+            ],
+        };
+    }
+
+    static Element SpineHub(RelatedArtist hub) => new BoxEl
+    {
+        Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center, MinWidth = 0f,
+        Children =
+        [
+            new BoxEl
+            {
+                Width = SpineHubD, Height = SpineHubD, Shrink = 0f,
+                Corners = Radii.Circle(SpineHubD),
+                // The ring's hub treatment, unchanged: the accent halo is what says "everything below hangs off this".
+                BorderWidth = 3f, BorderColor = Tok.AccentDefault,
+                Children = [Surfaces.Artwork(hub.Image, SpotifyExportMapper.Hash(hub.Uri), SpineHubD, SpineHubD, Radii.Full, decodePx: 128)],
+            },
+            BodyStrong(hub.Name) with { MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f, Shrink = 1f },
+        ],
+    };
+
+    static Element SpineRow(RelatedArtist r, Action<RelatedArtist> setHub) => new BoxEl
+    {
+        Key = "mixview-spine:" + r.Uri,
+        Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center, MinWidth = 0f,
+        Padding = new Edges4(Spacing.S, Spacing.XS, Spacing.XS, Spacing.XS),
+        OnClick = () => setHub(r), Cursor = CursorId.Hand, Role = AutomationRole.Button,
+        Children =
+        [
+            new BoxEl
+            {
+                Width = SpineNodeD, Height = SpineNodeD, Shrink = 0f,
+                Corners = Radii.Circle(SpineNodeD),
+                Children = [Surfaces.Artwork(r.Image, SpotifyExportMapper.Hash(r.Uri), SpineNodeD, SpineNodeD, Radii.Full, decodePx: 128)],
+            },
+            Caption(r.Name) with
+            {
+                Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f, Shrink = 1f,
+            },
+        ],
+    };
 
     // A node placed by its CENTRE: the ZStack anchors top-left, so the margin carries centre-minus-radius.
     static Element Node(RelatedArtist a, float cx, float cy, float r, bool isHub, Action? onClick)
@@ -414,11 +552,4 @@ sealed class HomeArtistRow : Component
             },
         ],
     };
-
-    static string Mmss(long ms)
-    {
-        if (ms <= 0) return "";
-        int total = (int)Math.Round(ms / 1000d);
-        return (total / 60).ToString(System.Globalization.CultureInfo.CurrentCulture) + ":" + (total % 60).ToString("00");
-    }
 }

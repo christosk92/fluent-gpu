@@ -333,7 +333,8 @@ internal sealed class ToastController
                 it.Message,
                 onClose: o.Closable ? () => it.Handle.Close() : null,
                 isClosable: o.Closable,
-                actionButton: action);
+                actionButton: action,
+                availableWidth: 380f);   // the card's MaxWidth below — lets the InfoBar pick WinUI's vertical layout when the row would not fit
 
         // Column + default AlignItems=Stretch so the InfoBar/custom body fills the MinWidth frame. A row frame
         // (Direction default 0) only stretches children on the VERTICAL cross-axis — short messages then left a
@@ -346,6 +347,14 @@ internal sealed class ToastController
             MinWidth = 300f,
             MaxWidth = 380f,
             Corners = Radii.ControlAll,
+            // The card is a floating SURFACE, so it carries its own solid plate (TeachingTip's: SolidBackgroundFill
+            // Tertiary + SurfaceStroke). The InfoBar body composes its severity tint ON TOP of this. Without it the
+            // only fill was that tint, and the Informational one (SystemFillColorAttentionBackground) is a translucent
+            // accent wash meant for a solid host — the toast read as see-through, whatever was under it showing
+            // through the text. Error's tint is dense enough that it hid the gap.
+            Fill = Tok.FillSolidTertiary,
+            BorderWidth = 1f, BorderColor = Tok.StrokeSurfaceDefault,
+            ClipToBounds = true,
             Shadow = Elevation.Flyout,          // toast card elevation
             Enter = new EnterExit(Dx: dx, Dy: dy, Opacity: 0f, Active: true),
             Exit = new EnterExit(Dx: dx, Dy: dy, Opacity: 0f, Active: true),

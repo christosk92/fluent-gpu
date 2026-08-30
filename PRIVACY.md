@@ -37,9 +37,12 @@ Only these, and only to the parties named:
   with the track title, artist, and duration — not your account. The providers are: `lrclib.net`,
   the AMLL TTML database on `raw.githubusercontent.com`, `apic-desktop.musixmatch.com` (Musixmatch),
   `lyrics.kugou.com` (KuGou), `music.163.com` (NetEase), and `y.qq.com` / `c.y.qq.com` (QQ Music).
-- **GitHub**, for update checks. Wavee fetches a static `.appinstaller` file from
-  `github.com/christosk92/fluent-gpu/releases`. It sends no identifiers; GitHub sees an ordinary anonymous
-  file download (your IP and user agent, as with any download).
+- **GitHub**, for update checks and release notes. Wavee fetches a static `.appinstaller` file from the
+  `wavee-stable` release at `github.com/christosk92/fluent-gpu/releases/download/wavee-stable/`, reads the
+  version number in it, and — when you choose to update — asks Windows to download and install that release's
+  `.msix` package. It also fetches the "What's new" notes (and the public issue titles they reference) from the
+  same repository. It sends no identifiers; GitHub sees ordinary anonymous file downloads (your IP and user
+  agent, as with any download).
 - **Spotify's image CDN**, to fetch album art.
 
 Nothing else. In particular: no data goes to the author of Wavee, and there is no third-party analytics,

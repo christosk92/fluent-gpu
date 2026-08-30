@@ -296,6 +296,24 @@ static class WaveeSettings
     // and the last successful feed check.
     public static readonly SettingKey<string> LastRunVersion = new("app.lastRunVersion", "");
     public static readonly SettingKey<long> UpdateLastCheckedMs = new("app.update.lastCheckedMs", 0L);
+    // The quad the user pressed "Later" on. Cleared by a successful apply; a NEWER feed version is never snoozed by it.
+    public static readonly SettingKey<string> UpdateSnoozedVersion = new("app.update.snoozedVersion", "");
+    // On: the orderly-shutdown path (Program.Main, after the app loop returns) downloads and stages a waiting update
+    // as Wavee closes. Off (the default) means updates apply on the next launch, which is what the OS does anyway.
+    public static readonly SettingKey<bool> UpdateInstallOnQuit = new("app.update.installOnQuit", false);
+    // Off: an in-app "Update now" on a metered link refuses and says it is waiting for an unmetered network.
+    public static readonly SettingKey<bool> UpdateOnMetered = new("app.update.onMetered", false);
+    // Show the "What's new" plate the first time a new version opens.
+    public static readonly SettingKey<bool> ReleaseNotesAutoShow = new("app.whatsnew.autoShow", true);
+    // The newest release-notes semver the user has actually looked at (drives the "unread" dot on About/links).
+    public static readonly SettingKey<string> ReleaseNotesLastSeen = new("app.whatsnew.lastSeenVersion", "");
+    // Set by AppInstallerUpdateService's ctor when this launch followed an update (the version that ran BEFORE);
+    // AfterUpdateDialog reads it once and clears it.
+    public static readonly SettingKey<string> ReleaseNotesPendingFrom = new("app.whatsnew.pendingFrom", "");
+    // The same from-version as a durable FACT: written beside pendingFrom by the updater's ctor and NEVER cleared.
+    // pendingFrom is a one-shot the plate consumes; Settings › About's "Show the update summary again" needs the
+    // from-quad long after that, so it reads this instead (falling back to the running quad on a never-updated install).
+    public static readonly SettingKey<string> ReleaseNotesPreviousVersion = new("app.whatsnew.previousVersion", "");
     // A crash report written by the previous run that the shell has not yet surfaced (cleared after the toast).
     public static readonly SettingKey<string> PendingCrashReport = new("crash.pendingReport", "");
 }

@@ -12,14 +12,14 @@ public class AppUpdateSeamTests
     public async Task Null_IsInert()
     {
         var svc = new NullAppUpdateService();
-        Assert.Equal(AppUpdateState.None, svc.Current);
-        Assert.Null(svc.Version);
-        Assert.Null(svc.ReleaseNotesUrl);
-        Assert.Null(svc.Error);
-        await svc.CheckAsync(CancellationToken.None);
-        await svc.DownloadAsync(CancellationToken.None);
-        svc.RestartToApply();
+        Assert.Equal(AppUpdateSnapshot.Idle, svc.Current);
+        Assert.Equal(AppUpdateState.None, svc.Current.State);
+        Assert.Equal("", svc.FeedUrl);
+        await svc.CheckAsync(UpdateCheckOrigin.User, CancellationToken.None);
+        await svc.ApplyAsync(CancellationToken.None);
+        svc.Snooze();
         svc.Acknowledge();   // no throw
+        Assert.Equal(AppUpdateState.None, svc.Current.State);
     }
 
     [Fact]
@@ -32,8 +32,11 @@ public class AppUpdateSeamTests
     }
 
     [Theory]
+    [InlineData(AppUpdateState.Checking)]
     [InlineData(AppUpdateState.Available)]
-    [InlineData(AppUpdateState.Downloaded)]
+    [InlineData(AppUpdateState.Snoozed)]
+    [InlineData(AppUpdateState.Downloading)]
+    [InlineData(AppUpdateState.Installing)]
     [InlineData(AppUpdateState.Completed)]
     [InlineData(AppUpdateState.Failed)]
     public void EachState_MapsToPinnedUnreadNotification(AppUpdateState state)
@@ -41,22 +44,42 @@ public class AppUpdateSeamTests
         var fake = new FakeAppUpdateService();
         int changes = 0;
         using var sub = fake.Changed.Subscribe(Obs<int>(_ => Interlocked.Increment(ref changes)));
-        fake.Set(state, "9.9.9", "https://notes.example/9.9.9", state == AppUpdateState.Failed ? "network" : null);
+        fake.Set(AppUpdateSnapshot.Idle with
+        {
+            State = state,
+            TargetQuad = "9.9.9.9",
+            TargetSemVer = "9.9.9",
+            Failure = state == AppUpdateState.Failed ? new AppUpdateFailure(AppUpdateFailureKind.Network, 0, "network") : null,
+        });
         Assert.True(changes >= 1);
 
         var (items, unread) = NotificationMerge.Build(UpdateNotification(fake),
             Array.Empty<SocialNotification>(), 0, Array.Empty<NewReleaseNotification>(), 0, Array.Empty<ActivityEntry>());
         var n = Assert.IsType<AppUpdateNotification>(Assert.Single(items));
-        Assert.Equal(state, n.State);
-        Assert.Equal("9.9.9", n.Version);
+        Assert.Equal(state, n.Snapshot.State);
+        Assert.Equal("9.9.9.9", n.Snapshot.TargetQuad);
         Assert.True(n.IsUnread);
         Assert.Equal(1, unread);
     }
 
+    // The snapshot is published WHOLE: a reader that captured it never sees a later value bleed into it.
+    [Fact]
+    public void Snapshot_IsImmutable_AcrossPublishes()
+    {
+        var fake = new FakeAppUpdateService();
+        fake.Set(AppUpdateSnapshot.Idle with { State = AppUpdateState.Downloading, ProgressPercent = 37, TargetQuad = "1.0.0.5" });
+        var captured = fake.Current;
+        fake.Set(captured with { ProgressPercent = 91 });
+
+        Assert.Equal(37, captured.ProgressPercent);
+        Assert.Equal(91, fake.Current.ProgressPercent);
+        Assert.Equal("1.0.0.5", fake.Current.TargetQuad);
+    }
+
     static AppUpdateNotification? UpdateNotification(IAppUpdateService svc)
-        => svc.Current == AppUpdateState.None
+        => svc.Current.State == AppUpdateState.None
             ? null
-            : new AppUpdateNotification(long.MaxValue, true, svc.Current, svc.Version, svc.ReleaseNotesUrl, svc.Error);
+            : new AppUpdateNotification(long.MaxValue, true, svc.Current);
 
     static IObserver<T> Obs<T>(Action<T> onNext) => new Ob<T>(onNext);
     sealed class Ob<T>(Action<T> onNext) : IObserver<T>
@@ -71,21 +94,29 @@ public class AppUpdateSeamTests
     {
         readonly SimpleEvent<int> _changed = new();
         int _rev;
-        public AppUpdateState Current { get; private set; } = AppUpdateState.None;
-        public string? Version { get; private set; }
-        public string? ReleaseNotesUrl { get; private set; }
-        public string? Error { get; private set; }
+        public AppUpdateSnapshot Current { get; private set; } = AppUpdateSnapshot.Idle;
         public IObservable<int> Changed => _changed;
+        public string FeedUrl => "https://example.invalid/Wavee.arm64.appinstaller";
 
-        public void Set(AppUpdateState state, string? version = null, string? notes = null, string? error = null)
+        public void Set(AppUpdateSnapshot snapshot)
         {
-            Current = state; Version = version; ReleaseNotesUrl = notes; Error = error;
+            Current = snapshot;
             _changed.OnNext(Interlocked.Increment(ref _rev));
         }
 
-        public Task CheckAsync(CancellationToken ct) { Set(AppUpdateState.Available, "9.9.9"); return Task.CompletedTask; }
-        public Task DownloadAsync(CancellationToken ct) { Set(AppUpdateState.Downloaded, Version); return Task.CompletedTask; }
-        public void RestartToApply() => Set(AppUpdateState.Completed, Version);
-        public void Acknowledge() => Set(AppUpdateState.None);
+        public Task CheckAsync(UpdateCheckOrigin origin, CancellationToken ct)
+        {
+            Set(AppUpdateSnapshot.Idle with { State = AppUpdateState.Available, TargetQuad = "9.9.9.9", TargetSemVer = "9.9.9" });
+            return Task.CompletedTask;
+        }
+
+        public Task ApplyAsync(CancellationToken ct)
+        {
+            Set(Current with { State = AppUpdateState.Installing, ProgressPercent = 100 });
+            return Task.CompletedTask;
+        }
+
+        public void Snooze() => Set(Current with { State = AppUpdateState.Snoozed });
+        public void Acknowledge() => Set(AppUpdateSnapshot.Idle);
     }
 }

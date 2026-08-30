@@ -231,8 +231,12 @@ public sealed class Services
     /// <summary>One-shot OS geolocation (the "Use my location" concert flow). App/OS-scoped → hand-wired here like the other
     /// OS services (never switchable). Requested ONLY on an explicit user action; constructing it prompts nothing.</summary>
     public FluentGpu.Pal.IGeolocationProvider Geolocation { get; }
-    /// <summary>The app-update seam. App-scoped → no switchable; the Null stub is permanent until a real updater ships.</summary>
+    /// <summary>The app-update seam (feed poll + packaged deployment). App-scoped → one per process, no switchable.</summary>
     public IAppUpdateService AppUpdate { get; }
+    /// <summary>The release-notes ("What's new") document store: embedded → cache → release asset, plus the rolling
+    /// index. App-scoped like the updater, and constructed BEFORE it — the update check names the version it is
+    /// offering out of this store's index.</summary>
+    public ReleaseNotesStore ReleaseNotes { get; }
     /// <summary>The notification-center bridge (four categories → one aggregated feed + bell badge). Read via <see cref="NotificationCenterBridge.Slot"/>.</summary>
     public NotificationCenterBridge Notifications { get; }
     /// <summary>The root library cache (collections + per-entity detail caches) for instant, off-page-fresh navigation.</summary>
@@ -345,7 +349,23 @@ public sealed class Services
         Recents = new SwitchableRecentsService();                            // ditto — the Null source until go-live
         HomeSections = new SwitchableHomeSectionService();                   // ditto — Home's "Show all" paging axis
         Geolocation = new FluentGpu.WindowsApi.Location.WindowsGeolocationProvider();   // OS one-shot; no prompt until used
-        AppUpdate = new AppInstallerUpdateService(settings, Wavee.Backend.Spotify.HttpPools.Get(Wavee.Backend.Spotify.HttpPool.ThirdParty), AppVersion.Current, System.Runtime.InteropServices.RuntimeInformation.OSArchitecture == System.Runtime.InteropServices.Architecture.Arm64 ? "arm64" : "x64", Log);
+        string updateArch = System.Runtime.InteropServices.RuntimeInformation.OSArchitecture == System.Runtime.InteropServices.Architecture.Arm64 ? "arm64" : "x64";
+        var githubHttp = Wavee.Backend.Spotify.HttpPools.Get(Wavee.Backend.Spotify.HttpPool.GitHub);
+        // The notes ride the SAME stamped download root as the update feed (AppVersion.Info.UpdateBaseUrl): a build
+        // packed against a loopback feed must not silently fall back to reading its documents off GitHub.
+        ReleaseNotes = new ReleaseNotesStore(githubHttp, SettingsShared.AppDataRoot, AppVersion.Info.FeedRelease, Log,
+            releasesRoot: AppVersion.Info.UpdateBaseUrl);
+        AppUpdate = new AppInstallerUpdateService(settings, githubHttp, AppVersion.Info, updateArch,
+            FluentGpu.WindowsApi.Packaging.PackageIdentity.IsPackaged
+                // RestartArgument: Windows relaunches us after the deployment terminates us, and without an explicit
+                // command line it reuses the original one — so the process that comes back cannot tell it came back.
+                // The flag is inert (Program.Main logs one line for it); it exists so a log/E2E run can see the seam.
+                ? new FluentGpu.WindowsApi.Packaging.PackageUpdater { RestartArgument = AppRelaunch.RelaunchedAfterUpdateFlag }
+                : new FluentGpu.WindowsApi.Packaging.NullPackageUpdater(),
+            Log,
+            isMetered: static () => NetworkPolicy.IsMetered,
+            openUrl: static url => ShellOpen.OpenUrl(url),
+            notes: ReleaseNotes);
         Notifications = new NotificationCenterBridge(Activity, SpotifyNotifications, WhatsNew, AppUpdate, settings,
             new ActivityUndoExecutor(LibraryBridge, library, Activity));
         LibraryStore = new LibraryStore(library, mutations, userPlaylists, library as ICollectionEvents);
@@ -416,12 +436,6 @@ public sealed class Services
 
     System.Func<PreLoginMedia>? _preLoginFactory;
     PreLoginMedia? _preLogin;
-
-    /// <summary>The app's informational version, as sent to a module in its <c>module/initialize</c> handshake.</summary>
-    internal static string HostVersion =>
-        System.Reflection.Assembly.GetExecutingAssembly()
-            .GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false) is
-            [System.Reflection.AssemblyInformationalVersionAttribute a, ..] ? a.InformationalVersion : "0.0.0";
 
     /// <summary>The app's current playback preferences, as a module sees them on <c>playback/resolve</c>: the effective
     /// quality (the user's rung, capped on a metered link), whether the link IS metered, and the crossfade setting.
@@ -679,7 +693,7 @@ public sealed class Services
             prefs: () => ResolvePrefs(settings),
             services: new Wavee.Backend.Modules.ModuleHostServices(moduleSecrets),
             spawn: null,
-            hostVersion: HostVersion,
+            hostVersion: AppVersion.Info.SemVer,
             locale: locale.SpotifyLanguage);
         Wavee.Backend.Modules.ModuleHost.Attach(modules);
         Wavee.Backend.Modules.ChildProcessChannel.Job ??= FluentGpu.WindowsApi.Shell.ChildProcessJob.CreateKillOnClose();

@@ -38,6 +38,7 @@ static class ShellRoutes
         "settings",
         "api-console",
         "playback-diagnostics",
+        "whatsnew",
         "sidebar-customize",
         "home-customize",
     ];

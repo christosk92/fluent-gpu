@@ -178,6 +178,11 @@ Run it (host wiring): see **[getting-started.md](./getting-started.md)**.
     author quick-start, `ModuleTestHost` + the CLI subcommands, the dev/publish/MSIX layouts, the diagnostics
     surface, the update-store design, and the Spotify-migration plan — plus the verbatim research appendix the
     three bundled modules were built from.
+15. **[releasing-wavee.md](./releasing-wavee.md)** — the **Wavee app**'s release runbook: what a release is (the
+    `wavee-vX.Y.Z` tag, the rolling `wavee-stable` feed, the codename, the `M.m.p.WaveeBuild` quad), the three hand
+    edits, the one local command (`ops/release/wavee-release.ps1` — there is no CI release job), the `-DryRun`
+    rehearsal, the phase + preflight-gate tables, failure recovery (`-Resume` / `-Abort`), rollback
+    (`-RepointFeed … -AllowDowngrade`), and the scratch-feed end-to-end test of the tooling itself.
 
 ---
 

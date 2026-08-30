@@ -13,9 +13,8 @@ public abstract record WaveeNotification(string Id, long Timestamp, bool IsUnrea
     public abstract NotificationCategory Category { get; }
 }
 
-/// <summary>An app-update notification — the state its action button maps to. (No updater ships yet; the seam is a stub.)</summary>
-public sealed record AppUpdateNotification(long Timestamp, bool IsUnread,
-        AppUpdateState State, string? Version, string? ReleaseNotesUrl, string? Error)
+/// <summary>An app-update notification — the whole <see cref="AppUpdateSnapshot"/> its action button maps to.</summary>
+public sealed record AppUpdateNotification(long Timestamp, bool IsUnread, AppUpdateSnapshot Snapshot)
     : WaveeNotification("update", Timestamp, IsUnread)
 {
     public override NotificationCategory Category => NotificationCategory.AppUpdate;

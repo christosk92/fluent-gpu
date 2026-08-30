@@ -1052,7 +1052,10 @@
       "fpsOverlay": "FPS overlay",
       "fpsOverlaySub": "Frame timing in the corner of the window",
       "dealerArchive": "Archive Spotify realtime traffic",
-      "dealerArchiveSub": "Writes every dealer frame to disk (up to 2 GB, 90 days). Leave off unless you are debugging."
+      "dealerArchiveSub": "Writes every dealer frame to disk (up to 2 GB, 90 days). Leave off unless you are debugging.",
+      "simulateUpdate": "Simulate an update",
+      "simulateUpdateSub": "Walks the update state machine locally — toast, notification centre and About — with no network and nothing installed.",
+      "simulateUpdateButton": "Run simulation"
     },
     "general": {
       "startOnLogin": "Open Wavee when you sign in to Windows",
@@ -1115,18 +1118,11 @@
       "offline": "Sign in to see notifications from Spotify."
     },
     "update": {
+      "$comment": "Only the ROW TITLES live here. The buttons under them are update.action.* \u2014 the row used to carry its own retry/dismiss strings beside identical ones in update.action, which is two owners for one label.",
       "availableTitle": "An update is available",
-      "availableBody": "Version {version} is ready to download.",
-      "downloadedTitle": "Update ready to install",
-      "downloadedBody": "Restart Wavee to finish updating.",
       "completedTitle": "Wavee was updated",
-      "completedBody": "Now running version {version}.",
       "failedTitle": "Update failed",
-      "download": "Download",
-      "restart": "Restart to update",
-      "seeWhatsNew": "See what's new",
-      "retry": "Retry",
-      "dismiss": "Dismiss"
+      "seeWhatsNew": "See what's new"
     },
     "status": {
       "failed": "Failed",
@@ -2043,18 +2039,19 @@
       "fine": "Spotify® and the Spotify logo are registered trademarks of Spotify AB. All trademarks, logos and brand names are the property of their respective owners; their use here is nominative only. Wavee itself ships under its own licence — the full text is in Settings → About → Licences.",
       "readFull": "Read the full agreement",
       "sectionsCount": "{count} sections",
-      "section1Title": "1 · Base software & copyright",
+      "section1Title": "Base software & copyright",
       "section1Body": "Wavee's own source is licensed to you under the terms shipped in the About tab. You may not redistribute a build that removes the attribution above.",
-      "section2Title": "2 · Your account & your library",
+      "section2Title": "Your account & your library",
       "section2Body": "Signing in lets Wavee read and modify your Spotify library — saves, follows, playlist edits, playback state — on your behalf, using Spotify's own APIs.",
-      "section3Title": "3 · Streaming & online services",
+      "section3Title": "Streaming & online services",
       "section3Body": "Using Spotify through Wavee means Spotify's own terms of service still apply to your account and your listening.",
-      "section4Title": "4 · Local files & caches",
+      "section4Title": "Local files & caches",
       "section4Body": "Encrypted audio bodies and licence keys are cached locally to avoid re-downloading. You control the budget and the location, and can clear both at any time.",
       "agreementTitle": "Full agreement",
       "stageCaptionTitle": "Independent, on purpose",
       "stageCaptionSub": "Your account, Spotify’s own API — nothing else.",
-      "privacyLink": "Privacy policy"
+      "privacyLink": "Privacy policy",
+      "close": "Close"
     },
     "appearance": {
       "lead": "Everything here applies live to the window behind.",
@@ -2275,6 +2272,166 @@
     "reportLine": "Crash report: {path}",
     "logLine": "Log: {path}",
     "openFolderQuestion": "Open the report folder now?"
+  },
+  "whatsNew": {
+    "$comment": "The What's-new page, its rail and the after-update dialog. Wavee already uses \"whatsNew\" for Spotify's new-releases feed in the notification centre (notifications.filter.new); these keys are the APP's own release notes.",
+    "title": "What's new",
+    "headline": "Wavee {version} \u201C{name}\u201D",
+    "headlineBare": "Wavee {version}",
+    "dateFormat": "d MMM yyyy",
+    "since": "Since you last looked: {count} releases — {from} → {to}. Showing everything new.",
+    "onlyLatest": "Only the latest",
+    "highlights": "Highlights",
+    "tryIt": "Try it →",
+    "showAll": "Show all {count}",
+    "asOf": "Issue states as of {date}",
+    "releases": "Releases",
+    "railFoot": "Notes are fetched once per release and cached offline. Older releases load on demand.",
+    "you": "YOU",
+    "latest": "Latest",
+    "stable": "Stable",
+    "beta": "Beta",
+    "openOnGitHub": "Open on GitHub",
+    "copyLink": "Copy link",
+    "linkCopied": "Release link copied",
+    "released": "Released",
+    "requires": "Requires",
+    "tag": "Tag",
+    "empty": "No release notes were found for this version.",
+    "firstContribution": "{login} · first contribution",
+    "kind": {
+      "new": "New",
+      "improved": "Improved",
+      "rebuilt": "Rebuilt"
+    },
+    "section": {
+      "added": "Added",
+      "changed": "Changed",
+      "fixed": "Fixed",
+      "removed": "Removed",
+      "deprecated": "Deprecated",
+      "security": "Security",
+      "known": "Known limitations"
+    },
+    "issue": {
+      "open": "open",
+      "closed": "closed",
+      "notPlanned": "not planned",
+      "merged": "merged"
+    },
+    "dialog": {
+      "updated": "Updated",
+      "welcome": "Welcome to {product}",
+      "dontShow": "Don't show this after updates",
+      "full": "Full release notes",
+      "gotIt": "Got it"
+    }
+  },
+  "update": {
+    "$comment": "The app updater: Settings › About, the notification-centre row, the in-app toasts and the Windows toasts. One sentence per state, reused by every surface.",
+    "status": {
+      "title": "Update status"
+    },
+    "state": {
+      "upToDate": "You're on the latest release.",
+      "checking": "Checking…",
+      "available": "Wavee {name} is available.",
+      "snoozed": "{version} is waiting — it installs the next time Wavee starts.",
+      "downloading": "Downloading {name} in the background. Playback continues.",
+      "installing": "Restarting to finish updating…",
+      "justUpdated": "Updated to {name} just now."
+    },
+    "action": {
+      "check": "Check for updates",
+      "updateNow": "Update now",
+      "later": "Later",
+      "retry": "Retry",
+      "dismiss": "Dismiss",
+      "openReleasePage": "Open release page",
+      "whatsNew": "What's new"
+    },
+    "installOnQuit": {
+      "title": "Install a waiting update when I quit Wavee",
+      "hint": "Wavee downloads it as it closes; Windows restarts nothing \u2014 the new version opens next time."
+    },
+    "metered": {
+      "title": "Download on metered connections",
+      "hint": "Off: waits for an unmetered network."
+    },
+    "autoShow": {
+      "title": "Show “What's new” after an update",
+      "hint": "A short summary the first time the new version opens."
+    },
+    "channel": {
+      "title": "Release channel",
+      "hint": "Beta installs side by side with Wavee and gets features a few weeks early.",
+      "beta": "Get Wavee Beta"
+    },
+    "failure": {
+      "packagesInUse": "Close other Wavee windows and try again.",
+      "versionConflict": "This version can't be installed over the current one.",
+      "sideloadPolicy": "Sideloading is turned off on this PC.",
+      "network": "Couldn't reach GitHub. Try again later.",
+      "appInstallerOutdated": "Windows App Installer needs an update from the Microsoft Store.",
+      "notAssociated": "This install isn't linked to the update feed. Use Repair auto-update in diagnostics.",
+      "metered": "Waiting for an unmetered network.",
+      "unknown": "Update failed ({code})."
+    },
+    "toast": {
+      "available": "Wavee {name} is available",
+      "updated": "Updated to Wavee {name}",
+      "downloading": "Downloading {name}…"
+    },
+    "os": {
+      "downloading": "Updating Wavee",
+      "updated": "Wavee updated to {name}",
+      "seeWhatsNew": "See what's new"
+    },
+    "about": {
+      "built": "Built {date}",
+      "lastChecked": "last checked {when}",
+      "neverChecked": "not checked yet",
+      "display": "Wavee {version} \u201C{name}\u201D",
+      "displayBeta": "Wavee {version} \u201C{name}\u201D \u00B7 Beta {beta}",
+      "displayBare": "Wavee {version}",
+      "whatsNewIn": "What’s new in {name}",
+      "openWhatsNew": "Open What's new",
+      "showSummaryAgain": "Show the update summary again",
+      "channelStable": "Stable",
+      "channelBeta": "Beta",
+      "channelDev": "Dev",
+      "pillUpToDate": "Up to date",
+      "pillChecking": "Checking",
+      "pillAvailable": "Update available",
+      "pillSnoozed": "Waiting",
+      "pillDownloading": "Downloading",
+      "pillInstalling": "Restarting",
+      "pillUpdated": "Just updated",
+      "pillFailed": "Update failed"
+    }
+  },
+  "diagnostics": {
+    "updates": {
+      "title": "Updates",
+      "feed": "Feed URL",
+      "channel": "Channel",
+      "version": "Package version",
+      "state": "State",
+      "associated": "Auto-update association",
+      "associatedYes": "associated — Windows polls this feed",
+      "associatedNo": "not associated — Windows will not poll this feed",
+      "lastChecked": "Last checked",
+      "lastFailure": "Last failure",
+      "notesSource": "Notes resolved from",
+      "notesCache": "Notes cache folder",
+      "notesEmbedded": "Notes shipped with this build",
+      "notesFeed": "Notes feed release",
+      "notesLastFetch": "Notes last fetch",
+      "notesBudget": "GitHub issue budget",
+      "notesBudgetValue": "{spent} lookups this session · {remaining} requests left on this IP (−1 = unknown)",
+      "repair": "Repair auto-update",
+      "repairHint": "Downloads the .appinstaller file through your browser. Open it once it has downloaded \u2014 Windows App Installer takes it from there, and installing from the feed is what re-registers the auto-update association."
+    }
   },
   "lyrics": {
     "inspector": {

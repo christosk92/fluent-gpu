@@ -83,6 +83,10 @@ sealed class SetupSession
     /// <summary>Set by <see cref="SetupDialog.Open"/> to the overlay handle's <c>Close</c> — the session can close its
     /// own shell without ever referencing an overlay type itself.</summary>
     public Action? RequestClose { get; set; }
+    /// <summary>A page's in-place disclosure that Escape should close BEFORE the plate is ever asked to (the Terms
+    /// page's full agreement). Set while the disclosure is open, cleared when it closes/unmounts; consumed by
+    /// <see cref="SetupDialog"/>'s close veto via <see cref="SetupGating.EscapeClosesPlate"/>. Null = nothing nested.</summary>
+    public Action? EscapeConsumer { get; set; }
 
     // ── Ambient plumbing, attached lazily by whichever page renders first (SetupPagePlaceholders.SetupPageCapture,
     // mounted around EVERY page) ─────────────────────────────────────────────────────────────────────────────────────

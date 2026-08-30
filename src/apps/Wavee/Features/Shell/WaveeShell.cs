@@ -578,6 +578,8 @@ sealed class WaveeShell : Component
         _actions.Clipboard = UseContext(InputHooks.Current).Clipboard;
         _actions.Go = GoNav;
         _actions.Post = post;
+        // The update toast's "What's new" action navigates through the shell; the bridge has no nav of its own.
+        if (_actions.Svc?.Notifications is { } notificationCenter) notificationCenter.Navigate = GoNav;
         _actions.VideoOverrides = _actions.Svc?.VideoOverrides;
         _actions.Sidebar = _sidebar;   // the pin store behind Pin/Unpin to sidebar (reference-stable → never churns consumers)
         _actions.CurrentRoute ??= () => _route.Peek().Name;   // the ActiveRoute target-mode resolver (Peek: invoke-time read, not a render dep)
@@ -617,7 +619,12 @@ sealed class WaveeShell : Component
         // the notice is about the LAST run, so it must not survive into the next one whether or not it was read.
         UseEffect(() =>
         {
-            if (_settings.Get(WaveeSettings.PendingCrashReport) is { Length: > 0 } report)
+            string pendingReport = _settings.Get(WaveeSettings.PendingCrashReport);
+            // Latch it for AfterUpdateChrome, whose effect drains AFTER this one and would otherwise find the setting
+            // already cleared: one launch raises either the crash notice or the "welcome to the new version" plate,
+            // never both. The deferred plate stays armed for the next launch.
+            AfterUpdateDialog.CrashNoticeThisLaunch = pendingReport.Length > 0;
+            if (pendingReport is { Length: > 0 } report)
             {
                 _settings.Set(WaveeSettings.PendingCrashReport, "");
                 string folder = Path.GetDirectoryName(report) ?? SettingsShared.AppDataRoot;
@@ -1384,6 +1391,10 @@ sealed class WaveeShell : Component
             // setup wizard can come up (a manual "Run setup again" re-run, or continuing a first-run wizard that
             // was still pending when auth completed). See Features/Setup/SetupChrome.cs.
             Embed.Comp(() => new SetupChrome(_settings)),
+            // Zero-size chrome, same reason as the two above (the real Overlay.Service resolves only inside the
+            // OverlayHost subtree): raises the after-update "What's new" plate once, on the first launch that follows
+            // an update. See Features/ReleaseNotes/AfterUpdateDialog.cs for the three deferrals.
+            Embed.Comp(() => new AfterUpdateChrome(_settings)),
             // The sidebar projection binder's pump — zero-size, always-mounted, BELOW the HistoryStore provide so the
             // visited feed resolves (see SidebarProjectionBinder remarks). Nothing rebuilds the projection without it.
             _actions.Svc?.SidebarBinder.MountPoint() ?? new BoxEl { HitTestVisible = false, Shrink = 0f },
