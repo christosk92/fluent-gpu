@@ -110,9 +110,13 @@ public static class SimulatedNotifications
     /// <para>Note this row's id is fixed by <see cref="AppUpdateNotification"/> itself ("update"), so repeated sends
     /// REPLACE the banner rather than stacking — unavoidable, and correct for a state-driven notification.</para></summary>
     public static AppUpdateNotification AppUpdate(string? version, long timestampMs)
-        => new(timestampMs, IsUnread: true, AppUpdateState.Available,
-            Version: version is { Length: > 0 } v ? v : "0.0.0-simulated",
-            ReleaseNotesUrl: null, Error: null);
+        => new(timestampMs, IsUnread: true, AppUpdateSnapshot.Idle with
+        {
+            State = AppUpdateState.Available,
+            TargetQuad = version is { Length: > 0 } v ? v : "0.0.0.0",
+            TargetSemVer = version is { Length: > 0 } s ? AppUpdateVersion.ReleaseTagVersion(s) : "0.0.0",
+            LastCheckedMs = timestampMs,
+        });
 
     /// <summary>The target uri a simulated LIBRARY-ACTIVITY entry records against. Deliberately unresolvable: the undo
     /// path for a real save calls <c>SetSaved(uri, false)</c>, and a simulated entry must never be able to unsave

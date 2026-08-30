@@ -202,6 +202,12 @@ sealed class ContentHost : Component
             return new BoxEl { Key = "page:api-console", Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
                 Children = [ Embed.Comp(() => new ApiConsolePage()) ] };
 
+        // What's new. Keyed by the ARG as well as the name, so opening 0.2.1 from the rail is a NEW keep-alive slot
+        // rather than the same page re-pointed at a foreign release (the sidebar-customizer precedent above).
+        if (r.Name == "whatsnew")
+            return new BoxEl { Key = "page:whatsnew:" + (r.Arg ?? ""), Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
+                Children = [ Embed.Comp(() => new ReleaseNotesPage(r.Arg)) ] };
+
         if (r.Name == PlaybackRuntimeDiagnosticsPage.Route)
             return new BoxEl { Key = "page:" + PlaybackRuntimeDiagnosticsPage.Route, Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
                 Children = [ Embed.Comp(() => new PlaybackRuntimeDiagnosticsPage()) ] };

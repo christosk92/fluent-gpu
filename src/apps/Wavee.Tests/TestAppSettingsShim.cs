@@ -35,6 +35,15 @@ static class WaveeSettings
     public static readonly SettingKey<bool> StartOnLogin = new("app.startOnLogin", false);
     public static readonly SettingKey<string> LastRunVersion = new("app.lastRunVersion", "");
     public static readonly SettingKey<long> UpdateLastCheckedMs = new("app.update.lastCheckedMs", 0L);
+    // ── app update + release notes — MIRRORS src/apps/Wavee/Platform/AppSettings.cs VERBATIM (same rule as the sidebar
+    // keys below): AppInstallerUpdateServiceTests assert against these exact names and defaults.
+    public static readonly SettingKey<string> UpdateSnoozedVersion = new("app.update.snoozedVersion", "");
+    public static readonly SettingKey<bool> UpdateInstallOnQuit = new("app.update.installOnQuit", false);
+    public static readonly SettingKey<bool> UpdateOnMetered = new("app.update.onMetered", false);
+    public static readonly SettingKey<bool> ReleaseNotesAutoShow = new("app.whatsnew.autoShow", true);
+    public static readonly SettingKey<string> ReleaseNotesLastSeen = new("app.whatsnew.lastSeenVersion", "");
+    public static readonly SettingKey<string> ReleaseNotesPendingFrom = new("app.whatsnew.pendingFrom", "");
+    public static readonly SettingKey<string> ReleaseNotesPreviousVersion = new("app.whatsnew.previousVersion", "");
     public static readonly SettingKey<string> PendingCrashReport = new("crash.pendingReport", "");
     public static readonly SettingKey<string> LastSeenCrashDumpPath = new("diagnostics.crash.lastDumpPath", "");
     public static readonly SettingKey<long> LastSeenCrashDumpTicksUtc = new("diagnostics.crash.lastDumpTicksUtc", 0L);

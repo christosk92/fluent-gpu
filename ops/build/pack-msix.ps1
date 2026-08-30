@@ -36,6 +36,9 @@ if ($Version -notmatch '^\d+\.\d+\.\d+\.\d+$') { throw "Version must be 4-part n
 if ($TrustedSigning -and -not $PSBoundParameters.ContainsKey('Publisher')) { $Publisher = 'CN=cproducts, O=cproducts, L=Utrecht, S=Utrecht, C=NL' }
 
 $buildDir = $PSScriptRoot
+# Imported here, not just before signing: Invoke-Native (and the tool discovery below) come from this module and
+# are used from the resource step onwards.
+Import-Module (Join-Path $buildDir 'Wavee.Build.psm1') -Force -DisableNameChecking
 if (-not $Metadata) { $Metadata = Join-Path $buildDir 'signing\metadata.json' }
 $root     = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $csproj   = Join-Path $root 'src\FluentGpu.WindowsApp\FluentGpu.WindowsApp.csproj'
@@ -90,73 +93,57 @@ foreach ($logo in 'StoreLogo','Square44x44Logo','Square71x71Logo','Square150x150
   $scaled = Join-Path $iconDir "$logo.scale-200.png"; if (Test-Path $scaled) { Copy-Item $scaled $assets -Force }
 }
 
-# manifest with substituted identity
-$mf = (Get-Content $manifestTemplate -Raw).Replace('__PUBLISHER__',$Publisher).Replace('__VERSION__',$Version).Replace('__ARCH__',$Arch)
-Set-Content -Path (Join-Path $layout 'AppxManifest.xml') -Value $mf -Encoding UTF8
+# manifest with substituted identity. ReadAllText with an explicit UTF-8 decoder, NOT Get-Content -Raw: under
+# Windows PowerShell 5.1 Get-Content defaults to the ANSI codepage and mangles any non-ASCII character in the
+# template (the Description's em dash). Written back as UTF-8 WITHOUT a BOM, which is what makeappx expects.
+$mf = [IO.File]::ReadAllText($manifestTemplate, [Text.Encoding]::UTF8).Replace('__PUBLISHER__',$Publisher).Replace('__VERSION__',$Version).Replace('__ARCH__',$Arch)
+$leftover = [regex]::Matches($mf, '__[A-Z0-9_]+__')
+if ($leftover.Count -gt 0) {
+  $names = (($leftover | ForEach-Object { $_.Value }) | Sort-Object -Unique) -join ', '
+  throw "AppxManifest template has unsubstituted placeholders ($names): $manifestTemplate"
+}
+[IO.File]::WriteAllText((Join-Path $layout 'AppxManifest.xml'), $mf, (New-Object System.Text.UTF8Encoding $false))
 
 # 3. makepri - index the scaled/localized resources (the .scale-200 logos resolve via resources.pri)
 Step "Generating resources.pri (makepri)"
+# Through Invoke-Native: it captures stdout+stderr and judges the exit code, so a tool that merely warns on
+# stderr cannot raise a terminating NativeCommandError under $ErrorActionPreference = 'Stop'.
 $priConfig = Join-Path $work 'priconfig.xml'
-& $makepri createconfig /cf $priConfig /dq en-US /pv 10.0.0 /o | Out-Null
+Invoke-Native $makepri @('createconfig','/cf',$priConfig,'/dq','en-US','/pv','10.0.0','/o') | Out-Null
 Push-Location $layout
-try { & $makepri new /pr $layout /cf $priConfig /of (Join-Path $layout 'resources.pri') /o | Out-Null }
+try { Invoke-Native $makepri @('new','/pr',$layout,'/cf',$priConfig,'/of',(Join-Path $layout 'resources.pri'),'/o') | Out-Null }
 finally { Pop-Location }
-if ($LASTEXITCODE -ne 0) { throw "makepri failed ($LASTEXITCODE)." }
 
 # 4. makeappx pack
 Step "Packing $outMsix (makeappx)"
 Remove-Item $outMsix -Force -ErrorAction SilentlyContinue
-& $makeappx pack /o /d $layout /p $outMsix | Out-Null
-if ($LASTEXITCODE -ne 0) { throw "makeappx pack failed ($LASTEXITCODE)." }
+$pack = Invoke-Native $makeappx @('pack','/o','/d',$layout,'/p',$outMsix) -AllowFailure
+if ($pack.ExitCode -ne 0) { throw ("makeappx pack failed ($($pack.ExitCode)):`n" + ($pack.Output -join "`n")) }
 
 # 5. sign: Azure Trusted Signing (publicly trusted) OR a self-signed dev cert. CI passes -NoSign and re-signs.
+#    Both paths live in ops/build/Wavee.Build.psm1 (imported at the top) so this script and pack-wavee-msix.ps1
+#    sign identically.
 if (-not $NoSign) {
  if ($TrustedSigning) {
   Step "Signing with Azure Trusted Signing"
-  if (-not (Test-Path $Metadata)) { throw "Trusted Signing metadata not found: $Metadata  (copy build/signing/metadata.template.json -> metadata.json)." }
-  $dlib = @(
-    "$env:LOCALAPPDATA\Microsoft\MicrosoftArtifactSigningClientTools\Azure.CodeSigning.Dlib.dll",
-    'C:\Program Files (x86)\Microsoft\ArtifactSigningClientTools\bin\Azure.CodeSigning.Dlib.dll',
-    'C:\Program Files\Microsoft\ArtifactSigningClientTools\bin\Azure.CodeSigning.Dlib.dll',
-    'C:\Program Files (x86)\Microsoft\TrustedSigningClientTools\bin\Azure.CodeSigning.Dlib.dll'
-  ) | Where-Object { Test-Path $_ } | Select-Object -First 1
-  if (-not $dlib) { throw "Azure.CodeSigning.Dlib.dll not found. Install: winget install -e --id Microsoft.Azure.ArtifactSigningClientTools" }
   if (-not ($env:AZURE_CLIENT_ID -and $env:AZURE_TENANT_ID -and $env:AZURE_CLIENT_SECRET)) {
     Write-Host "    no AZURE_* SPN env vars - relying on an existing 'az login' session" -ForegroundColor Yellow
-    # The signing account ('Wavee') lives in a specific subscription; select it so DefaultAzureCredential's token has access.
-    if ($Subscription) { & az account set --subscription $Subscription 2>$null }
   }
-  & $signtool sign /v /fd SHA256 /tr http://timestamp.acs.microsoft.com /td SHA256 /dlib $dlib /dmdf $Metadata $outMsix
-  if ($LASTEXITCODE -ne 0) { throw "Trusted Signing failed ($LASTEXITCODE). Check az login / AZURE_*, and that Publisher '$Publisher' matches the cert subject." }
+  Invoke-TrustedSigning -Path @($outMsix) -Metadata $Metadata -Subscription $Subscription -SignTool $signtool
   Write-Host "    signed via Azure Trusted Signing (publicly trusted - no cert import needed)" -ForegroundColor Green
   if ($Install) { Step "Installing (Add-AppxPackage)"; Add-AppxPackage -Path $outMsix }
  }
  else {
   Step "Signing with a self-signed dev cert ($Publisher)"
-  $cert = Get-ChildItem Cert:\CurrentUser\My | Where-Object { $_.Subject -eq $Publisher -and $_.NotAfter -gt (Get-Date) } | Select-Object -First 1
-  if (-not $cert) {
-    Write-Host "    creating self-signed cert $Publisher (3y)"
-    $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject $Publisher `
-              -KeyUsage DigitalSignature -FriendlyName 'FluentGpu Dev Signing' `
-              -CertStoreLocation Cert:\CurrentUser\My -NotAfter (Get-Date).AddYears(3) `
-              -TextExtension @('2.5.29.37={text}1.3.6.1.5.5.7.3.3','2.5.29.19={text}')
-  }
-  & $signtool sign /fd SHA256 /sha1 $cert.Thumbprint /tr http://timestamp.digicert.com /td SHA256 $outMsix
-  if ($LASTEXITCODE -ne 0) { throw "signtool sign failed ($LASTEXITCODE)." }
-  # Verify the chain. A self-signed dev cert legitimately fails /pa (chain not rooted in a trusted CA) until it's
-  # installed, so this is informational only. NB: do NOT merge native stderr (2>&1) under ErrorActionPreference=Stop -
-  # PS 5.1 wraps it in a NativeCommandError that would terminate the script. Discard stderr + soften EAP instead.
-  $eap = $ErrorActionPreference; $ErrorActionPreference = 'SilentlyContinue'
-  & $signtool verify /pa $outMsix 1>$null 2>$null
-  $trusted = ($LASTEXITCODE -eq 0)
-  $ErrorActionPreference = $eap
-  if ($trusted) { Write-Host "    signature chain verified + trusted" -ForegroundColor Green }
+  # Creates the cert on first use, signs, and drops the .cer next to the .msix.
+  Invoke-DevCertSigning -Path @($outMsix) -Publisher $Publisher -FriendlyName 'FluentGpu Dev Signing' -SignTool $signtool | Out-Null
+  $cerPath = [IO.Path]::ChangeExtension($outMsix, '.cer')
+  # Chain check is informational here: a self-signed dev cert legitimately fails /pa until its .cer is trusted.
+  if (Test-MsixSignature $outMsix $signtool) { Write-Host "    signature chain verified + trusted" -ForegroundColor Green }
   else { Write-Host "    signed OK - chain NOT yet trusted (expected for a self-signed dev cert; use -Install or trust '$Publisher')" -ForegroundColor Yellow }
 
   if ($Install) {
     Step "Trusting the dev cert + installing"
-    $cerPath = Join-Path $work 'devcert.cer'
-    Export-Certificate -Cert $cert -FilePath $cerPath | Out-Null
     try { Import-Certificate -FilePath $cerPath -CertStoreLocation Cert:\LocalMachine\TrustedPeople | Out-Null }
     catch { Write-Warning "Could not add the cert to LocalMachine\TrustedPeople (run elevated). Sideload may prompt." }
     Add-AppxPackage -Path $outMsix

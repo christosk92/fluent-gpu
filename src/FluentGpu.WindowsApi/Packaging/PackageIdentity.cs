@@ -110,6 +110,20 @@ public static class PackageIdentity
         get { EnsureProbed(); return _version; }
     }
 
+    /// <summary>
+    /// The Windows OS build number of the running system (e.g. <c>19041</c> for Windows 10 2004, <c>22621</c> for
+    /// Windows 11 22H2) — the third component of <see cref="Environment.OSVersion"/>'s version.
+    /// </summary>
+    /// <remarks>
+    /// This is the version gate the packaging pillar branches on: deployment features are introduced by build, not by
+    /// major version (<c>AddPackageByAppInstallerFileAsync</c> at 16299, <c>CheckUpdateAvailabilityAsync</c> at 17763,
+    /// <c>.appinstaller</c> URIs for <c>AddPackageByUriAsync</c> at 22556). On .NET on Windows,
+    /// <see cref="Environment.OSVersion"/> reports the true build (it is not subject to Win32 manifest shimming), so
+    /// no <c>RtlGetVersion</c> P/Invoke is needed. Returns <c>0</c> on a non-Windows host.
+    /// </remarks>
+    public static int OsBuild
+        => OperatingSystem.IsWindows() ? Environment.OSVersion.Version.Build : 0;
+
     private static unsafe void EnsureProbed()
     {
         if (_probed)

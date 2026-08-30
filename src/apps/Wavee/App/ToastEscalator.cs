@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using FluentGpu.Localization;
 using FluentGpu.WindowsApi.Notifications;
 using Wavee.Core;
 
@@ -51,6 +53,13 @@ static class ToastEscalator
             if (ts > newest) newest = ts;
         }
 
+        // A download's progress is not an event: the toast is raised ONCE when Downloading starts and then updated in
+        // place through the notifier's data path. Doing this before the escalation loop is what stops a 5%-per-tick
+        // stream of twenty identical banners.
+        for (int i = 0; i < items.Count; i++)
+            if (items[i] is AppUpdateNotification { Snapshot.State: AppUpdateState.Downloading } d)
+            { UpdateProgressToast(d); break; }
+
         int raised = 0;
         bool firstRun = watermark <= 0;
         if (!firstRun && policy.WindowsEnabled)
@@ -86,18 +95,57 @@ static class ToastEscalator
     static long TimestampOf(WaveeNotification n) =>
         n.Timestamp == long.MaxValue ? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() : n.Timestamp;
 
-    /// <summary>The (state, version) of the app update last raised as a banner. Process-lifetime, because that is the
+    /// <summary>The (state, target) of the app update last raised as a banner. Process-lifetime, because that is the
     /// lifetime of the condition it describes.</summary>
     static string s_lastUpdateRaised = "";
 
+    /// <summary>The last download percentage pushed into the live toast, or -1 when no download toast is up.</summary>
+    static int s_lastProgressPushed = -1;
+
+    /// <summary>Progress is pushed at this granularity. Windows throttles live toast updates, and a 1%-per-tick stream
+    /// is invisible to the user anyway.</summary>
+    const int ProgressStepPercent = 5;
+
     /// <summary>True when this update row differs from the one already banner-ed — the transition test that makes an
-    /// app update fire once per change rather than once per rebuild.</summary>
+    /// app update fire once per change rather than once per rebuild. PROGRESS is deliberately not part of the identity:
+    /// a moving bar updates the live toast (see <see cref="UpdateProgressToast"/>) instead of raising a new one.</summary>
     static bool UpdateChanged(AppUpdateNotification u)
     {
-        string id = u.State.ToString() + ":" + (u.Version ?? "");
+        string id = u.Snapshot.State.ToString() + ":" + (u.Snapshot.TargetQuad ?? "");
         if (string.Equals(id, s_lastUpdateRaised, StringComparison.Ordinal)) return false;
         s_lastUpdateRaised = id;
+        if (u.Snapshot.State != AppUpdateState.Downloading) s_lastProgressPushed = -1;
         return true;
+    }
+
+    /// <summary>Push the current percentage into the already-showing download toast via
+    /// <see cref="ToastNotifier.Update"/> (the data-bound <c>&lt;progress&gt;</c> placeholders). A no-op until the
+    /// toast has actually been raised, and throttled to <see cref="ProgressStepPercent"/>. An expired or dismissed
+    /// toast answers <see cref="ToastUpdateResult.NotificationNotFound"/> — not an error, and not worth re-raising.</summary>
+    static void UpdateProgressToast(AppUpdateNotification u)
+    {
+        int pct = Math.Clamp(u.Snapshot.ProgressPercent, 0, 100);
+        if (s_lastProgressPushed < 0) return;                       // no live download toast to update
+        if (pct != 100 && pct - s_lastProgressPushed < ProgressStepPercent) return;
+        s_lastProgressPushed = pct;
+        PushProgress(u, pct);
+    }
+
+    static void PushProgress(AppUpdateNotification u, int pct)
+    {
+        try
+        {
+            ToastNotifier.Default.Update(
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["progressValue"] = (pct / 100.0).ToString("0.###", CultureInfo.InvariantCulture),
+                    ["progressStatus"] = pct >= 100
+                        ? Loc.Get(Strings.Update.State.Installing)
+                        : Strings.Update.Toast.Downloading(AppUpdateToasts.ReleaseName(u.Snapshot)),
+                },
+                TagFor(u), Group);
+        }
+        catch (Exception) { /* a live update that fails is never worth failing a feed refresh over */ }
     }
 
     static bool TryRaise(WaveeNotification n, NotifyTopic topic, in NotificationPolicy policy)
@@ -109,6 +157,13 @@ static class ToastEscalator
 
             var toast = ToastBuilder.Create().Title(title);
             if (body.Length > 0) toast.Body(body);
+            if (n is AppUpdateNotification { Snapshot.State: AppUpdateState.Downloading } d)
+            {
+                // Data-bound so the bar can be driven in place; Show carries no initial data, so the first values are
+                // pushed immediately after the raise.
+                toast.Progress(dataBound: true);
+                s_lastProgressPushed = Math.Clamp(d.Snapshot.ProgressPercent, 0, 100);
+            }
             if (launch is { Length: > 0 }) toast.Launch(launch);
             if (!policy.Sound) toast.Silent();
             toast.Tag(TagFor(n)).Group(Group);
@@ -118,7 +173,10 @@ static class ToastEscalator
                 try { toast.AppLogo(ToastImageCache.Default.Localize(image), circle: topic == NotifyTopic.Followers); }
                 catch (Exception) { /* art is optional; the text still says what happened */ }
             }
-            return ToastNotifier.Default.Show(toast);
+            bool shown = ToastNotifier.Default.Show(toast);
+            if (shown && n is AppUpdateNotification { Snapshot.State: AppUpdateState.Downloading } start)
+                PushProgress(start, s_lastProgressPushed);
+            return shown;
         }
         catch (Exception)
         {
@@ -162,18 +220,36 @@ static class ToastEscalator
                 : null,
             s.ImageUrl),
 
-        AppUpdateNotification u => (
-            u.State switch
-            {
-                AppUpdateState.Available => "Wavee " + (u.Version ?? "update") + " is available",
-                AppUpdateState.Downloaded => "Wavee " + (u.Version ?? "update") + " is ready to install",
-                AppUpdateState.Completed => "Wavee updated to " + (u.Version ?? "the latest version"),
-                _ => "",
-            },
-            "", "wavee://open?route=settings", null),
+        // Available deliberately raises NO OS toast: the in-app strip already offers it, and an unprompted Action
+        // Center banner for something the user has not started is the noisiest possible version of this feature.
+        // Downloading and Installing narrate work already in flight; Completed is the one the user genuinely missed
+        // (Windows restarted the app), and it deep-links straight at the notes for the version that just landed.
+        AppUpdateNotification u => u.Snapshot.State switch
+        {
+            AppUpdateState.Downloading => (
+                Loc.Get(Strings.Update.Os.Downloading), "", null, null),
+            AppUpdateState.Installing => (
+                Loc.Get(Strings.Update.State.Installing), "", null, null),
+            AppUpdateState.Completed => (
+                Strings.Update.Os.Updated(AppUpdateToasts.ReleaseName(u.Snapshot)),
+                Loc.Get(Strings.Update.Os.SeeWhatsNew),
+                "wavee://open?route=whatsnew" + WhatsNewArg(u.Snapshot),
+                null),
+            _ => ("", "", null, null),
+        },
 
         _ => ("", "", null, null),   // library activity never becomes a banner
     };
 
     static string TagFor(WaveeNotification n) => "live:" + n.Id;
+
+    /// <summary>The <c>&amp;arg=</c> the "Updated" toast deep-links with — the semver whose notes to open. Omitted
+    /// entirely when we do not know it, so the route lands on the newest release rather than on nothing.</summary>
+    static string WhatsNewArg(AppUpdateSnapshot s)
+    {
+        string semver = s.TargetSemVer is { Length: > 0 } v
+            ? v
+            : AppUpdateVersion.ReleaseTagVersion(s.TargetQuad ?? "");
+        return semver.Length > 0 ? "&arg=" + Uri.EscapeDataString(semver) : "";
+    }
 }

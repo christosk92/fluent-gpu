@@ -835,6 +835,12 @@ sealed class SearchHitsGrid : Component
     const float CellGap = Spacing.M;
     const float MinCellW = 280f;
     const float RowH = 64f;
+    // The audiobook variant of MediaCard.Row (detailBelowArt: true, SearchAllList.HitRow below) stacks a header
+    // (art + title/subtitle) above a meta+detail block instead of beside it, so it auto-sizes well past the flat
+    // 64px every other hit kind fits in. PagedShelf's grid reserves ONE row height for every cell (it measures
+    // nothing — see cardHeight below), so a page holding an audiobook hit needs the taller reservation or the
+    // card's real content bleeds into the row beneath it.
+    const float AudiobookRowH = 128f;
     const int MaxCols = 3;
     const int SingleColRows = 3;
 
@@ -877,10 +883,16 @@ sealed class SearchHitsGrid : Component
                     int rows = cols <= 1 ? SingleColRows : cols;
                     int maxCols = Math.Min(cols, Math.Max(1, (n + rows - 1) / rows));
                     string first = n > 0 ? _hits[0].Uri : "";
+                    // One reservation for the whole page (PagedShelf grids don't measure per cell — see AudiobookRowH
+                    // above), so a single audiobook hit anywhere on the page raises every cell's height on it.
+                    bool hasAudiobook = false;
+                    for (int i = 0; i < _hits.Count; i++)
+                        if (_hits[i].Kind == SearchHitKind.Audiobook) { hasAudiobook = true; break; }
+                    float rowH = hasAudiobook ? AudiobookRowH : RowH;
                     return PagedShelf.Create(
                         n,
                         cardAt: Card,
-                        cardHeight: static _ => RowH,
+                        cardHeight: _ => rowH,
                         header: _showHeader ? SearchChrome.TickHeader(Loc.Get(Strings.Search.BestMatches)) : null,
                         pager: _pager,
                         minCardW: MinCellW,

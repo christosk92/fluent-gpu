@@ -105,6 +105,8 @@
     <Compile Include="..\Wavee\Components\MembershipDiff.cs" />
     <!-- detail layout breakpoint hysteresis (Wavee.Core + BCL only) — DetailLayoutBreakpointTests -->
     <Compile Include="..\Wavee\Features\Detail\DetailLayoutBreakpoints.cs" />
+    <!-- home artist-row Mixview width tier + hysteresis (BCL only) — HomeArtistRowLayoutTests -->
+    <Compile Include="..\Wavee\Features\Home\HomeArtistRowLayout.cs" />
     <!-- pure Classic/Modern track-table column + sort grammar — TrackRowStyleRulesTests -->
     <Compile Include="..\Wavee\Features\Detail\DetailTrackTableRules.cs" />
     <!-- the expanded row's fact list: which facts a Track states, in what order, and how the exact stamp / BPM / key /
@@ -478,6 +480,19 @@
          construction — the session facts arrive through ISpotifyHostSession, so none of the login stack comes with it.
          ModuleHostServicesSpotifyTests drive the REAL registration + permission gate over the in-memory module. -->
     <Compile Include="..\Wavee\SpotifyLive\LiveConnect.HostServices.cs" />
+    <!-- The app-update + release-notes services. All four are engine-free by construction: the updater takes its
+         metered probe and its url-opener as delegates, the notes store's only FluentGpu type is Signal<T> (the shim
+         above), and the toast decision table's is the InfoBarSeverity shim. AppInstallerUpdateServiceTests /
+         ReleaseNotesStoreTests / AppUpdateToastsTests drive the REAL services over ScriptedHttpHandler + a fake
+         IPackageUpdater. AppVersion comes along because Backend\Spotify\HttpPools.cs stamps its user-agent from it. -->
+    <Compile Include="..\Wavee\App\AppVersion.cs" />
+    <Compile Include="..\Wavee\App\ReleaseNotesStore.cs" />
+    <Compile Include="..\Wavee\App\AppInstallerUpdateService.cs" />
+    <Compile Include="..\Wavee\App\AppUpdateToasts.cs" />
+    <!-- The engine-free half of ReleaseNotesText (repo, release-page/tag URLs, the one date format). The updater and
+         the notes store both link through it, so the test compilation needs it too; its engine-bound sibling
+         (ReleaseNotesText.cs, span runs over FluentGpu.Controls) is deliberately NOT here. -->
+    <Compile Include="..\Wavee\Features\ReleaseNotes\ReleaseNotesLinks.cs" />
   </ItemGroup>
 
   <ItemGroup>

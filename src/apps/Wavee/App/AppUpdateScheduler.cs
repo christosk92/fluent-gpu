@@ -42,8 +42,9 @@ static class AppUpdateScheduler
         long sinceMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - lastChecked;
         if (lastChecked <= 0 || sinceMs < 0 || sinceMs >= LaunchCheckCooldownMs)
         {
-            try { await svc.CheckAsync(CancellationToken.None).ConfigureAwait(false); }
+            try { await svc.CheckAsync(UpdateCheckOrigin.Scheduled, CancellationToken.None).ConfigureAwait(false); }
             catch (Exception ex) { log.Warn("update", "initial update check failed", ex); }
+            WarmReleaseNotes(svc);
         }
 
         using var timer = new PeriodicTimer(Interval);
@@ -51,11 +52,26 @@ static class AppUpdateScheduler
         {
             while (await timer.WaitForNextTickAsync(CancellationToken.None).ConfigureAwait(false))
             {
-                try { await svc.CheckAsync(CancellationToken.None).ConfigureAwait(false); }
+                try { await svc.CheckAsync(UpdateCheckOrigin.Scheduled, CancellationToken.None).ConfigureAwait(false); }
                 catch (OperationCanceledException) { return; }
                 catch (Exception ex) { log.Warn("update", "periodic update check failed", ex); }
+                WarmReleaseNotes(svc);
             }
         }
         catch (OperationCanceledException) { }
+    }
+
+    /// <summary>Pull the release-notes index + the offered version's document into the cache after a check that found
+    /// something, so the after-update plate and the "What's new" page open instantly — and open OFFLINE, which is the
+    /// state the machine is in right after Windows restarts it into the new build.
+    /// <para>Only when an update is actually pending, and never on a metered link: pre-fetching a document (plus its
+    /// media) the user may never look at is exactly the kind of background traffic a metered connection is metered
+    /// for. Best-effort and fire-and-forget — the cadence must not wait on GitHub.</para></summary>
+    static void WarmReleaseNotes(IAppUpdateService svc)
+    {
+        if (svc.Current.State is not (AppUpdateState.Available or AppUpdateState.Snoozed)) return;
+        if (NetworkPolicy.IsMetered) return;
+        if (ReleaseNotesStore.Instance is not { } store) return;
+        _ = store.PrefetchAsync(svc.Current.TargetQuad, CancellationToken.None);
     }
 }

@@ -15,6 +15,7 @@
   </Folder>
   <Folder Name="/Apps/">
     <Project Path="apps/Wavee.Core/Wavee.Core.csproj" />
+    <Project Path="apps/Wavee.ReleaseTool/Wavee.ReleaseTool.csproj" />
     <Project Path="apps/Wavee.Sdk/Wavee.Sdk.csproj" />
     <Project Path="apps/Wavee.Tests/Wavee.Tests.csproj" />
     <Project Path="apps/Wavee/Wavee.csproj" />

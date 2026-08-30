@@ -83,6 +83,14 @@ static class SetupGating
     /// (<c>PlaybackRuntimeSetupModel.IsBusy</c>), must not be torn out from under itself.</para></summary>
     public static bool CanDismiss(bool isRerun, bool busy) => isRerun && !busy;
 
+    /// <summary>What an Escape on the wizard plate does when a page has an IN-PLACE disclosure open (the Terms page's
+    /// full agreement, grown out of its summary card). The overlay host offers Escape to the top input-blocking
+    /// overlay BEFORE any focused node sees it, so a nested closer can never catch the key itself; the plate's close
+    /// veto is the one seam that runs first. Returns <c>true</c> when the plate itself may close; <c>false</c> when the
+    /// Escape is spent on the nested disclosure instead (the caller closes it) — or vetoed outright by
+    /// <see cref="CanDismiss"/>.</summary>
+    public static bool EscapeClosesPlate(bool nestedOpen, bool isRerun, bool busy) => !nestedOpen && CanDismiss(isRerun, busy);
+
     /// <summary>The terms-acceptance revision this build requires. Lives HERE, not on the page component, because
     /// <see cref="NeedsTermsRearm"/> and <see cref="SetupBootstrap"/> are engine-free and source-included by the test
     /// assembly; <c>SetupTermsPage.CurrentVersion</c> aliases this so the page and the gate can never disagree.</summary>

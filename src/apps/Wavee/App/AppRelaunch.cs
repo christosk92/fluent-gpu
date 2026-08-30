@@ -20,6 +20,17 @@ namespace Wavee;
 /// </remarks>
 static class AppRelaunch
 {
+    /// <summary>
+    /// The token appended to the command line Wavee registers with <c>RegisterApplicationRestart</c> before an MSIX
+    /// deployment (<c>PackageUpdater.RestartArgument</c>), so the process Windows brings back AFTER the update can say
+    /// so in its log. <c>RegisterApplicationRestart(null, 0)</c> reuses the original command line verbatim, which left
+    /// the relaunched process indistinguishable from a plain launch.
+    /// <para>It is deliberately INERT: <c>Program.Main</c> logs one line for it and nothing else branches on it. It
+    /// parses as neither an absolute URI nor a file path, so <c>ActivationArgs.Classify</c> still reports
+    /// <c>ActivationKind.Launch</c> and the single-instance / deep-link path never sees it.</para>
+    /// </summary>
+    public const string RelaunchedAfterUpdateFlag = "--relaunched-after-update";
+
     /// <summary>Spawn the broker that restarts Wavee once this process ends. The caller MUST then end the process —
     /// <c>Environment.Exit(0)</c> — because the broker is blocked on this pid. Never throws: if the spawn fails the user
     /// is left to relaunch by hand, which is strictly better than taking down the shutdown path.</summary>

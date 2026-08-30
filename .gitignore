@@ -3,6 +3,7 @@
 [Oo]bj/
 [Dd]ebug/
 [Rr]elease/
+!ops/release/
 artifacts/
 benchmarks/FrameworkComparison/results/
 *.user

@@ -251,6 +251,16 @@ public class SetupGatingTests : IDisposable
     public void CanDismiss_OnlyARerunThatIsNotBusy(bool isRerun, bool busy, bool expected)
         => Assert.Equal(expected, SetupGating.CanDismiss(isRerun, busy));
 
+    /// <summary>An in-place disclosure (the Terms agreement) spends the Escape: the plate never closes while one is
+    /// open, on ANY entry point; with nothing nested the answer is exactly <see cref="SetupGating.CanDismiss"/>.</summary>
+    [Theory]
+    [InlineData(true, true, false, false)]    // nested open on a dismissible rerun → the disclosure closes, not the plate
+    [InlineData(true, false, false, false)]   // nested open on a first run → same
+    [InlineData(false, true, false, true)]    // nothing nested, dismissible rerun → the plate closes
+    [InlineData(false, false, false, false)]  // nothing nested, first run → vetoed as before
+    public void EscapeClosesPlate_NestedDisclosureSpendsTheKey(bool nestedOpen, bool isRerun, bool busy, bool expected)
+        => Assert.Equal(expected, SetupGating.EscapeClosesPlate(nestedOpen, isRerun, busy));
+
     // ── NeedsTermsRearm ────────────────────────────────────────────────────────────────────────────────────────────────
 
     [Theory]

@@ -87,6 +87,97 @@ static partial class ControlsSuite
         SemanticZoomChecks(strings);
         AutoSuggestProgrammaticFocusChecks(strings);
         ChartsChecks(strings);
+        InfoBarClosePlateChecks(strings);
+    }
+
+    // ── InfoBar / toast: the close button must stay INSIDE the painted plate ─────────────────────────────────────────
+    // The shipped defect: an error toast ("Couldn't reach GitHub. Try again later." + a Retry action) on the 380 DIP
+    // toast card arranged its X past the card's right edge. The InfoBarPanel column declared Grow but no Shrink, and
+    // FlexLayout only spreads NEGATIVE free space across children that can shrink (FlexLayout.cs:527 requires
+    // totalShrinkScaled > 0) — so the row's 38 DIP overflow was discarded, the panel kept its measured width, and the
+    // close column was pushed outside the plate. This check pins the geometry that the Shrink = 1 / MinWidth = 0 fix
+    // restores: the close button inside the plate, the message wrapped to a second line, and the panel column bounded
+    // by what the icon and close columns leave behind.
+    static void InfoBarClosePlateChecks(StringTable strings)
+    {
+        // The message is 39 chars — BELOW InfoBar's 60-char "flip to vertical" heuristic, so this is the horizontal
+        // panel branch (the one that used to overflow).
+        const string Message = "Couldn't reach GitHub. Try again later.";
+        const float CardWidth = 380f;      // Toast.Card MaxWidth
+        const float MessageSize = 14f;     // InfoBarMessageFontSize
+        const float HeadlessLineH = MessageSize * 1.4f;   // HeadlessFontSystem line model: size x 1.4
+
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("infobar-close-plate", new Size2(640, 480), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var probe = new W0fStaticProbe
+        {
+            // Toast.Card's frame shape: a COLUMN wrapper, so the default AlignItems = Stretch hands the InfoBar the
+            // full 380 DIP. A row wrapper would shrink-wrap the bar to its content instead (skill rule 11).
+            Build = () => new BoxEl
+            {
+                Direction = 1,
+                Width = CardWidth,
+                Children =
+                [
+                    InfoBar.Create(
+                        InfoBarSeverity.Error,
+                        "",
+                        Message,
+                        isClosable: true,
+                        actionButton: Button.Standard("Retry", () => { }),
+                        availableWidth: CardWidth),   // the toast passes its card width — the width-aware orientation switch
+                ],
+            },
+        };
+        using var host = new AppHost(app, window, device, new HeadlessFontSystem(strings), strings, probe);
+        host.RunFrame();
+
+        var scene = host.Scene;
+        var bars = Roles(scene, AutomationRole.InfoBar);
+        var bar = bars.Count == 1 ? bars[0] : NodeHandle.Null;
+
+        // The close button is the one Button-role node under the bar that carries the Cancel glyph (the action button
+        // carries "Retry"); the ToolTip wrapper around it declares no role, so this match is unique.
+        var close = NodeHandle.Null;
+        if (!bar.IsNull)
+        {
+            var buttons = new List<NodeHandle>();
+            CollectRole(scene, bar, AutomationRole.Button, buttons);
+            foreach (var b in buttons)
+                if (!FindTextNode(scene, strings, b, Icons.Cancel).IsNull) { close = b; break; }
+        }
+        // The message TextEl is a DIRECT child of the InfoBarPanel, so its parent is the panel column itself.
+        var msg = bar.IsNull ? NodeHandle.Null : FindTextNode(scene, strings, bar, Message);
+        var panel = msg.IsNull ? NodeHandle.Null : scene.Parent(msg);
+        var icon = bar.IsNull ? NodeHandle.Null : Child(scene, bar, 0);
+
+        bool found = !bar.IsNull && !close.IsNull && !msg.IsNull && !panel.IsNull && !icon.IsNull;
+        var barR = found ? scene.AbsoluteRect(bar) : default;
+        var closeR = found ? scene.AbsoluteRect(close) : default;
+        var msgR = found ? scene.AbsoluteRect(msg) : default;
+        var panelR = found ? scene.AbsoluteRect(panel) : default;
+
+        // (a) the X is inside the plate it is painted on.
+        bool closeInside = found && closeR.X + closeR.W <= barR.X + barR.W + 0.5f && closeR.X >= barR.X - 0.5f;
+        // (b) the message is never wider than its panel AND never clipped by the plate: its bottom (plus the 14 DIP the
+        // WinUI margins/padding owe it) stays inside the bar. This is the toast defect that shipped: a message that
+        // wrapped in the horizontal branch sat on the plate's bottom edge because that branch has no bottom room.
+        int lines = found && HeadlessLineH > 0f ? (int)MathF.Round(msgR.H / HeadlessLineH) : 0;
+        bool notClipped = found && msgR.W <= panelR.W + 0.5f && msgR.Y + msgR.H + 14f <= barR.Y + barR.H + 0.5f;
+        bool wrapped = notClipped;
+        // (c) the panel column fits in what the fixed columns leave: 380 - 16 content padding - (16 icon + 14 icon
+        // margin) - (38 close button + 2x5 close margin) = 286 DIP (InfoBar_themeresources.xaml values).
+        float slot = barR.W - 16f - 30f - 48f;
+        bool panelBounded = found && panelR.W <= slot + 0.5f;
+
+        Check("gate.infobar.close-inside-plate",
+            found && closeInside && wrapped && panelBounded,
+            found
+                ? $"bar={barR.X:0}+{barR.W:0} close={closeR.X:0}+{closeR.W:0} panel={panelR.X:0}+{panelR.W:0} slot={slot:0} " +
+                  $"msg={msgR.X:0},{msgR.Y:0} {msgR.W:0}x{msgR.H:0} lines={lines} barH={barR.H:0} inside={closeInside} notClipped={notClipped} bounded={panelBounded}"
+                : $"nodes not found (bars={bars.Count} close={!close.IsNull} msg={!msg.IsNull} panel={!panel.IsNull} icon={!icon.IsNull})");
     }
 
     static void SemanticZoomChecks(StringTable strings)

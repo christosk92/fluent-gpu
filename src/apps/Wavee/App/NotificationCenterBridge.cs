@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentGpu.Controls;
+using FluentGpu.Dsl;
+using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Localization;
 using FluentGpu.Signals;
@@ -46,6 +48,15 @@ public sealed class NotificationCenterBridge
     /// <summary>The what's-new feed's coarse state (same purpose as <see cref="SocialState"/>).</summary>
     public Signal<NotificationFeedState> WhatsNewState { get; } = new(NotificationFeedState.Idle);
 
+    /// <summary>How an update toast's "What's new" action navigates: <c>(route, arg)</c>. Set once by the shell (which
+    /// owns the history store); null before the shell mounts, and a null navigator simply offers no such action.</summary>
+    public Action<string, string?>? Navigate { get; set; }
+
+    /// <summary>0..1 download progress for the sticky update toast's bar. A <see cref="FloatSignal"/> rather than a
+    /// re-render: the toast card is mounted once and its indicator width binds to this, so twenty progress ticks cost
+    /// twenty float writes instead of twenty reconciles.</summary>
+    public FloatSignal UpdateProgress { get; } = new(0f);
+
     public NotificationCenterBridge(ActivityLog log, ISpotifyNotificationsService social, IWhatsNewService whatsNew,
         IAppUpdateService update, IAppSettings settings, ActivityUndoExecutor undo)
     {
@@ -67,8 +78,18 @@ public sealed class NotificationCenterBridge
         _subs.Add(_log.Changed.Subscribe(_ => post(Rebuild)));
         _subs.Add(_social.Changed.Subscribe(_ => post(Rebuild)));
         _subs.Add(_whatsNew.Changed.Subscribe(_ => post(Rebuild)));
-        _subs.Add(_update.Changed.Subscribe(_ => post(Rebuild)));
+        _subs.Add(_update.Changed.Subscribe(_ => post(() => { ConsiderUpdateToast(_update.Current); Rebuild(); })));
         Rebuild();
+    }
+
+    /// <summary>Run <paramref name="action"/> on the UI thread through the same post delegate the feeds use. The
+    /// developer-mode update simulator drives the bridge from a timer thread and needs exactly this and nothing more.
+    /// Before <see cref="Activate"/> it runs inline (a headless/CLI process has no UI thread to hop to).</summary>
+    public void Post(Action action)
+    {
+        if (action is null) return;
+        if (_post is { } post) post(action);
+        else action();
     }
 
     /// <summary>Panel opened: refetch the remote feeds if stale + advance the last-seen keys (clears remote unread).</summary>
@@ -161,8 +182,8 @@ public sealed class NotificationCenterBridge
 
         // App update pinned at the top (state-driven, unread until acknowledged). A SIMULATED update stands in when the
         // real service reports None — there is no other way to exercise that topic (the service is a get-only Null impl).
-        AppUpdateNotification? update = _update.Current != AppUpdateState.None
-            ? new AppUpdateNotification(long.MaxValue, IsUnread: true, _update.Current, _update.Version, _update.ReleaseNotesUrl, _update.Error)
+        AppUpdateNotification? update = _update.Current.State != AppUpdateState.None
+            ? new AppUpdateNotification(long.MaxValue, IsUnread: true, _update.Current)
             : _injectedUpdate;
 
         var (items, unread) = NotificationMerge.Build(
@@ -182,6 +203,87 @@ public sealed class NotificationCenterBridge
         _lastEscalated = ToastEscalator.Consider(_settings, items);
         SocialState.Value = _social.State;
         WhatsNewState.Value = _whatsNew.State;
+    }
+
+    // ── the in-app update toast ──────────────────────────────────────────────────────────────────────────────────────
+    // ONE card, keyed "update", refreshed in place for the whole lifecycle: available → downloading (sticky, with a
+    // live bar) → restarting → updated / failed. The DECISION is AppUpdateToasts.Plan (pure, unit-tested); this method
+    // only owns the side effects — the progress signal, the dedupe key and which action the single button carries.
+
+    AppUpdateSnapshot _lastUpdateSnapshot = AppUpdateSnapshot.Idle;
+    string _updateProgressTitle = "";
+
+    void ConsiderUpdateToast(AppUpdateSnapshot next)
+    {
+        if (next is null) return;
+        var previous = _lastUpdateSnapshot;
+        _lastUpdateSnapshot = next;
+
+        // The bar binds to the signal, so progress must land even when the transition plans no new card.
+        UpdateProgress.Value = Math.Clamp(next.ProgressPercent / 100f, 0f, 1f);
+
+        if (AppUpdateToasts.Plan(previous, next) is not { } plan) return;
+        // A silenced App-updates dial means the centre never shows the row; the toast must not shout past it either.
+        if (NotificationPrefs.Level(_settings, NotifyTopic.AppUpdates) == NotifyLevel.Off) return;
+
+        var action = plan.Actions.Length > 0 ? plan.Actions[0] : (ToastActionKind?)null;
+        bool downloading = next.State == AppUpdateState.Downloading;
+        if (downloading) _updateProgressTitle = plan.Title;
+        Toast.Show(plan.Body, new ToastOptions
+        {
+            Title = plan.Title.Length > 0 ? plan.Title : null,
+            Severity = plan.Severity,
+            DurationMs = plan.Sticky ? 0f : 5000f,
+            DedupeKey = "update",
+            ActionLabel = action is { } a ? AppUpdateToasts.Label(a) : null,
+            OnAction = action is { } k ? () => Invoke(k, next) : null,
+            CustomContent = downloading ? UpdateProgressCard : null,
+        });
+    }
+
+    /// <summary>The sticky download card: the planned line plus a live bar. Mounted once per toast; the bar tracks
+    /// <see cref="UpdateProgress"/> without a re-render.</summary>
+    Element UpdateProgressCard() => new BoxEl
+    {
+        Direction = 1,
+        Gap = 8f,
+        Padding = new Edges4(16f, 14f, 16f, 14f),
+        Children =
+        [
+            new TextEl(_updateProgressTitle) { Size = 13f, Weight = 600 },
+            ProgressBar.Create(UpdateProgress, 240f),
+        ],
+    };
+
+    void Invoke(ToastActionKind kind, AppUpdateSnapshot snapshot)
+    {
+        // The SIMULATOR when one is walking, else the live updater. A toast raised BY a simulation whose button then
+        // asked the real (Idle) service to apply an update did nothing at all, which is the one outcome a simulation
+        // must never produce. AppUpdateSurface is the single owner of that choice; the panel row and About share it.
+        var update = AppUpdateSurface.Resolve(_update);
+        if (update is null) return;
+        switch (kind)
+        {
+            case ToastActionKind.UpdateNow:
+                _ = update.ApplyAsync(CancellationToken.None);
+                break;
+            case ToastActionKind.Retry:
+                // Retry re-does what FAILED: a check failure has no target yet (nothing to apply), an apply failure
+                // has one. Re-applying after a failed check used to be a no-op with a fresh error.
+                if (snapshot.TargetQuad is null) _ = update.CheckAsync(UpdateCheckOrigin.User, CancellationToken.None);
+                else _ = update.ApplyAsync(CancellationToken.None);
+                break;
+            case ToastActionKind.Later:
+                update.Snooze();
+                break;
+            case ToastActionKind.WhatsNew:
+                Navigate?.Invoke("whatsnew", snapshot.TargetSemVer);
+                break;
+            case ToastActionKind.OpenReleasePage:
+                // One owner for the tag URL: ReleaseNotesText. This method used to carry its own copy.
+                ShellOpen.OpenUrl(ReleaseNotesText.ReleasePageUrl(snapshot));
+                break;
+        }
     }
 
     // ── simulated events (Settings → Notifications ▸ Send event) ─────────────────────────────────────────────────────
@@ -213,7 +315,9 @@ public sealed class NotificationCenterBridge
         {
             case SocialNotification s: Add(_injectedSocial, s); break;
             case NewReleaseNotification r: Add(_injectedNew, r); break;
-            case AppUpdateNotification u: _injectedUpdate = u; break;
+            // A simulated update must reach the toast planner too — the strip is half of what the simulation exists to
+            // exercise, and the real path plans its card from the service's Changed stream, which a simulation never fires.
+            case AppUpdateNotification u: _injectedUpdate = u; ConsiderUpdateToast(u.Snapshot); break;
             default: return 0;      // ActivityNotification arrives via ActivityLog.Record, its own real path
         }
         _lastEscalated = 0;

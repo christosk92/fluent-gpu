@@ -11,7 +11,7 @@
 .NOTES
   -Diag defines FLUENTGPU_DIAG solution-wide (src/Directory.Build.props + src/apps/Directory.Build.props). It is a
   DIFFERENT BINARY from the shipping one: BindContract and BackwardsWriteGuard become default-ON once compiled in, so a
-  feel-measurement session must clear them explicitly (FG_BIND_CONTRACT=0 FG_BACKWARDS_WRITE=0) — ops/diag does this.
+  feel-measurement session must clear them explicitly (FG_BIND_CONTRACT=0 FG_BACKWARDS_WRITE=0) - ops/diag does this.
   See ops/diag/README.md.
 #>
 [CmdletBinding()]
@@ -27,12 +27,15 @@ param(
     if ("$a" -match 'ARM64') { 'arm64' } else { 'x64' }),
   [string]$Configuration = 'Release',
   [switch]$Symbols,
-  [switch]$Diag
+  [switch]$Diag,
+  # Build the public-only variant (no PlayPlay sources), the same switch pack-wavee-msix.ps1 takes.
+  [switch]$PublicOnly
 )
 $ErrorActionPreference = 'Stop'
 
-# Script lives at ops/build/ — repo root is two levels up.
+# Script lives at ops/build/ - repo root is two levels up.
 $root   = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+Import-Module (Join-Path $PSScriptRoot 'Wavee.Build.psm1') -Force -DisableNameChecking
 $csproj = Join-Path $root 'src\apps\Wavee\Wavee.csproj'
 $rid    = "win-$Arch"
 $outDir = if ($Symbols) {
@@ -59,10 +62,24 @@ New-Item -ItemType Directory -Force -Path $tmp | Out-Null
 $env:TEMP = $tmp
 $env:TMP  = $tmp
 
-Step "Publishing Wavee NativeAOT ($rid, $Configuration, OptimizationPreference=Speed$(if ($Symbols) { ', NativeDebugSymbols' })$(if ($Diag) { ', FLUENTGPU_DIAG' }))"
+# Version identity from src/apps/Wavee/Wavee.Version.props. This is a LOOSE publish, never a release: the channel is
+# pinned to 'dev' and InformationalVersion keeps the '-dev' suffix, so About / the crash header / the update checker
+# all report a development build and AppVersion.IsDev suppresses any update comparison. Only the commit and the build
+# date are stamped for real, so a hand-shared exe can still be traced back to a tree.
+$props = Get-WaveeVersionProps (Join-Path $root 'src\apps\Wavee\Wavee.Version.props')
+$commit = ''
+$g = Invoke-Native 'git' @('-C', $root, 'rev-parse', '--short=7', 'HEAD') -AllowFailure
+if ($g.ExitCode -eq 0 -and $g.Output.Count -gt 0) { $commit = "$($g.Output[0])".Trim() }
+$buildDate = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
+
+Step "Publishing Wavee NativeAOT ($rid, $Configuration, OptimizationPreference=Speed$(if ($Symbols) { ', NativeDebugSymbols' })$(if ($Diag) { ', FLUENTGPU_DIAG' })$(if ($PublicOnly) { ', public-only' }))"
 $pubArgs = @(
   $csproj, '-c', $Configuration, '-r', $rid,
   '/p:NuGetAudit=false', '/p:OptimizationPreference=Speed',
+  "/p:InformationalVersion=$($props.Version)-dev",
+  '/p:WaveeChannel=dev',
+  "/p:WaveeCommit=$commit",
+  "/p:WaveeBuildDate=$buildDate",
   '-o', $outDir, '--nologo'
 )
 if ($Symbols) {
@@ -70,6 +87,9 @@ if ($Symbols) {
 }
 if ($Diag) {
   $pubArgs += '/p:FluentGpuDiag=true'
+}
+if ($PublicOnly) {
+  $pubArgs += '-p:WaveeSkipPrivateSources=true'
 }
 & dotnet publish @pubArgs
 if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed ($LASTEXITCODE)." }
@@ -88,22 +108,18 @@ if (-not (Test-Path $exe)) { throw "Expected output not found: $exe" }
 
 $info = Get-Item $exe
 Write-Host ""
-# Read the version the binary actually carries (InformationalVersion → ProductVersion). Parsing the csproj for a
-# bare <InformationalVersion>…</InformationalVersion> tag broke when that element grew a Condition (local builds
-# stamp "$(Version)-dev"; CI passes /p:InformationalVersion). Empty ProductVersion falls back to <Version>.
+# Read the version the binary actually carries (InformationalVersion -> ProductVersion). The csproj no longer holds a
+# literal version at all - Wavee.Version.props does - so the fallback reads that instead of grepping the csproj.
 $ver = $info.VersionInfo.ProductVersion
-if ([string]::IsNullOrWhiteSpace($ver)) {
-  $verMatch = Select-String -Path $csproj -Pattern '<Version>([^<]+)</Version>' | Select-Object -First 1
-  $ver = if ($verMatch -and $verMatch.Matches.Count -gt 0) { $verMatch.Matches[0].Groups[1].Value } else { '?' }
-}
+if ([string]::IsNullOrWhiteSpace($ver)) { $ver = "$($props.Version)-dev" }
 $plus = $ver.IndexOf('+')
 if ($plus -gt 0) { $ver = $ver.Substring(0, $plus) }
 Write-Host "Done: $($info.FullName)" -ForegroundColor Green
 Write-Host "      v$ver  $([math]::Round($info.Length / 1MB, 2)) MB"
 if ($Diag) {
-  # ASCII only inside string literals here: this file has no BOM, so Windows PowerShell 5.1 decodes it as ANSI and a
-  # non-ASCII character in a QUOTED STRING is a parse error that kills the whole script. (Comments survive it, which
-  # is why the em-dash on line 27 has always been fine and this one was not.)
+  # ASCII only, everywhere in this file: it has no BOM, so Windows PowerShell 5.1 decodes it as ANSI and a non-ASCII
+  # character inside a QUOTED STRING is a parse error that kills the whole script. Comments survive it, but they are
+  # kept ASCII too so a copy/paste out of one can never reintroduce the break.
   Write-Host "      FLUENTGPU_DIAG build - NOT the shipping binary. Clear FG_BIND_CONTRACT/FG_BACKWARDS_WRITE when measuring." -ForegroundColor Yellow
 }
 if ($Symbols) {

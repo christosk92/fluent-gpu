@@ -21,7 +21,8 @@ public class NotificationAggregationTests
     [Fact]
     public void Build_SortsNewestFirst_WithUpdatePinnedTop()
     {
-        var update = new AppUpdateNotification(long.MaxValue, true, AppUpdateState.Available, "1.2.3", null, null);
+        var update = new AppUpdateNotification(long.MaxValue, true,
+            AppUpdateSnapshot.Idle with { State = AppUpdateState.Available, TargetQuad = "1.2.3" });
         var (items, _) = NotificationMerge.Build(
             update,
             new[] { Social("s", 100, true) }, 0,
@@ -86,7 +87,11 @@ public class NotificationAggregationTests
     public void Categories_AreTaggedCorrectly()
     {
         var (items, _) = NotificationMerge.Build(
-            new AppUpdateNotification(long.MaxValue, true, AppUpdateState.Failed, null, null, "boom"),
+            new AppUpdateNotification(long.MaxValue, true, AppUpdateSnapshot.Idle with
+            {
+                State = AppUpdateState.Failed,
+                Failure = new AppUpdateFailure(AppUpdateFailureKind.Network, 0, "boom"),
+            }),
             new[] { Social("s", 100, true) }, 0,
             new[] { Release("r", 90, true) }, 0,
             new[] { Activity(1, 80, false) });

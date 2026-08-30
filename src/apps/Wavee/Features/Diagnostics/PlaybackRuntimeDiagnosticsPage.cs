@@ -52,6 +52,7 @@ sealed class PlaybackRuntimeDiagnosticsPage : Component
             body.Add(VerifySection(d));
         }
         body.Add(ModulesSection(svc?.Modules, () => _refresh.Value = _refresh.Peek() + 1));
+        body.Add(UpdatesSection(svc));
         body.Add(Actions(hooks, diag, status));
         body.Add(Caption("This report is what the provisioner already computed while resolving a runtime — reading it "
                        + "changes nothing. Attach it (or the log folder) to a bug report."));
@@ -231,6 +232,74 @@ sealed class PlaybackRuntimeDiagnosticsPage : Component
         }
 
         return Card("Playback modules", rows.ToArray());
+    }
+
+    /// <summary>The update pillar's own receipts. It lives on THIS page (rather than a second diagnostics surface)
+    /// because the questions are the same shape — "which feed, which build, what did the OS actually do" — and a user
+    /// who is told to send a report should have to copy one thing.
+    ///
+    /// <para>"Repair auto-update" hands the feed URL to the browser, which DOWNLOADS the <c>.appinstaller</c> file;
+    /// the user then has to open it, and Windows App Installer takes over from there. That two-step is what the hint
+    /// under the link says, because the link on its own looks like it did nothing — a small file lands in Downloads
+    /// and no UI appears. It is a real repair rather than a diagnostic: installing from the feed is what writes the
+    /// association that <c>AutoUpdateAssociated</c> reports, and it is the only supported way to (re-)establish it
+    /// from outside a package deployment.</para></summary>
+    static Element UpdatesSection(Services? svc)
+    {
+        var me = AppVersion.Info;
+        var upd = svc?.AppUpdate;
+        var snap = upd?.Current ?? Wavee.Core.AppUpdateSnapshot.Idle;
+        string feed = upd?.FeedUrl is { Length: > 0 } f ? f : "—";
+
+        var rows = new List<Element>(9)
+        {
+            Row(Loc.Get(Strings.Diagnostics.Updates.Feed), feed),
+            Row(Loc.Get(Strings.Diagnostics.Updates.Channel), me.Channel),
+            Row(Loc.Get(Strings.Diagnostics.Updates.Version), me.Quad is { Length: > 0 } q ? q : me.SemVer),
+            Row(Loc.Get(Strings.Diagnostics.Updates.State), snap.State.ToString()),
+            Row(Loc.Get(Strings.Diagnostics.Updates.Associated), Loc.Get(snap.AutoUpdateAssociated
+                ? Strings.Diagnostics.Updates.AssociatedYes
+                : Strings.Diagnostics.Updates.AssociatedNo)),
+            Row(Loc.Get(Strings.Diagnostics.Updates.LastChecked), snap.LastCheckedMs > 0
+                ? DateTimeOffset.FromUnixTimeMilliseconds(snap.LastCheckedMs).ToLocalTime()
+                    .ToString("yyyy-MM-dd HH:mm:ss zzz", CultureInfo.InvariantCulture)
+                : null),
+            Row(Loc.Get(Strings.Diagnostics.Updates.LastFailure), snap.Failure is { } fail
+                ? fail.Kind + "  ·  0x" + fail.HResult.ToString("X8", CultureInfo.InvariantCulture)
+                  + (fail.Message is { Length: > 0 } fm ? "  ·  " + fm : "")
+                : null),
+        };
+
+        // The notes pipeline's own receipts: which rung of embedded -> cache -> release asset answered, what the last
+        // network attempt did, and how much of the unauthenticated GitHub budget this process has spent.
+        if (svc?.ReleaseNotes is { } notes)
+        {
+            var nd = notes.DiagnosticsSnapshot();
+            rows.Add(Row(Loc.Get(Strings.Diagnostics.Updates.NotesSource), nd.LastSource));
+            rows.Add(Row(Loc.Get(Strings.Diagnostics.Updates.NotesCache), nd.CacheRoot));
+            rows.Add(Row(Loc.Get(Strings.Diagnostics.Updates.NotesEmbedded), nd.EmbeddedRoot));
+            rows.Add(Row(Loc.Get(Strings.Diagnostics.Updates.NotesFeed), nd.FeedRelease));
+            rows.Add(Row(Loc.Get(Strings.Diagnostics.Updates.NotesLastFetch), nd.LastFetchUtc is { } at
+                ? at.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss zzz", CultureInfo.InvariantCulture)
+                  + (nd.LastFetchUrl.Length > 0 ? "  ·  " + nd.LastFetchUrl : "")
+                  + (nd.LastFetchStatus.Length > 0 ? "  ·  " + nd.LastFetchStatus : "")
+                : null));
+            rows.Add(Row(Loc.Get(Strings.Diagnostics.Updates.NotesBudget),
+                Strings.Diagnostics.Updates.NotesBudgetValue(nd.IssueRequestsThisSession, nd.RateLimitRemaining)));
+        }
+
+        if (upd is not null)
+            rows.Add(new BoxEl
+            {
+                Direction = 1, Gap = 2f, Margin = new Edges4(0f, 6f, 0f, 0f),
+                Children =
+                [
+                    HyperlinkButton.Create(Loc.Get(Strings.Diagnostics.Updates.Repair), () => LoginView.OpenUrl(feed)),
+                    Caption(Loc.Get(Strings.Diagnostics.Updates.RepairHint)),
+                ],
+            });
+
+        return Card(Loc.Get(Strings.Diagnostics.Updates.Title), rows.ToArray());
     }
 
     Element Actions(InputHooks hooks, PlaybackRuntimeDiagnostics? diag, PlaybackRuntimeStatus? status) => HStack(8f,

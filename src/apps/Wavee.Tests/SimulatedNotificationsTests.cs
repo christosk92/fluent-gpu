@@ -130,8 +130,8 @@ public class SimulatedNotificationsTests
         // ToastEscalator.Present yields an empty title for Failed, which never banners — that would read as a broken test.
         var u = SimulatedNotifications.AppUpdate("1.2.3", 1);
 
-        Assert.Equal(AppUpdateState.Available, u.State);
-        Assert.Equal("1.2.3", u.Version);
+        Assert.Equal(AppUpdateState.Available, u.Snapshot.State);
+        Assert.Equal("1.2.3", u.Snapshot.TargetQuad);
         Assert.True(u.IsUnread);
         Assert.Equal(NotificationCategory.AppUpdate, u.Category);
     }
@@ -139,7 +139,7 @@ public class SimulatedNotificationsTests
     [Fact]
     public void AMissingVersion_StillProducesATitleableUpdate()
     {
-        Assert.False(string.IsNullOrEmpty(SimulatedNotifications.AppUpdate(null, 1).Version));
+        Assert.False(string.IsNullOrEmpty(SimulatedNotifications.AppUpdate(null, 1).Snapshot.TargetQuad));
     }
 
     // ── seeds and safety ───────────────────────────────────────────────────────────────────────────────────────────

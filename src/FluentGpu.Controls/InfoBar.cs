@@ -69,6 +69,25 @@ public static class InfoBar
     private const float CloseButtonSize  = 38f;          // InfoBarCloseButtonSize
     private const float CloseGlyphSize   = 16f;          // InfoBarCloseButtonGlyphSize
 
+    /// <summary>WinUI's InfoBarPanel.MeasureOverride flips to the vertical layout when the horizontal row would not fit
+    /// the width it is offered. The engine has no measure-time callback at element-construction time, so a caller that
+    /// KNOWS its width (the toast strip: a 380 px card) passes it as <c>availableWidth</c> and this estimates the row —
+    /// content padding + icon column + close column + panel margin + the title/message glyph run + the action button
+    /// (WinUI: 16 leading + the label + Button padding). Average Segoe UI Variable advance at 14 px ≈ 7.2 px; erring
+    /// wide is the safe direction (a vertical bar is never clipped, a horizontal one can be).</summary>
+    private static float EstimateHorizontalWidth(string title, string message, bool iconVisible, bool closable)
+    {
+        const float avgAdvance = 7.2f;
+        const float actionButtonEstimate = 90f;        // "Retry"/"Update now" + Button padding; a longer label only pushes toward vertical
+        float w = ContentRootPadding.Left + PanelMargin.Right;
+        if (iconVisible) w += 16f + IconMargin.Right;
+        if (closable) w += 38f + CloseButtonMargin.Left + CloseButtonMargin.Right;
+        if (!string.IsNullOrEmpty(title)) w += title.Length * avgAdvance + MessageHMargin.Left;
+        if (!string.IsNullOrEmpty(message)) w += message.Length * avgAdvance;
+        w += ActionHMargin.Left + actionButtonEstimate;
+        return w;
+    }
+
     private static readonly Edges4 ContentRootPadding = new(16f, 0f, 0f, 0f);   // InfoBarContentRootPadding 16,0,0,0
     private static readonly Edges4 IconMargin         = new(0f, 16f, 14f, 16f); // InfoBarIconMargin 0,16,14,16
     private static readonly Edges4 PanelMargin        = new(0f, 0f, 16f, 0f);   // InfoBarPanelMargin 0,0,16,0
@@ -79,8 +98,11 @@ public static class InfoBar
     private static readonly Edges4 PanelHorizontalPadding = new(0f, 0f, 0f, 0f);  // InfoBarPanelHorizontalOrientationPadding
     private static readonly Edges4 PanelVerticalPadding   = new(0f, 14f, 0f, 18f); // InfoBarPanelVerticalOrientationPadding
     // Horizontal-orientation per-child margins.
-    private static readonly Edges4 TitleHMargin   = new(0f, 14f, 0f, 0f);         // InfoBarTitleHorizontalOrientationMargin
-    private static readonly Edges4 MessageHMargin = new(12f, 14f, 0f, 0f);        // InfoBarMessageHorizontalOrientationMargin
+    // WinUI: 0,14,0,0 and 12,14,0,0 — no bottom, because WinUI's panel never lets a horizontal row wrap (it flips to
+    // vertical by MEASURED width). Ours decides from an estimate, so the bottom 14 is the safety net: a one-line row is
+    // unchanged (20 px text + 28 = 48 = InfoBarMinHeight), a row that still wraps no longer sits on the plate's edge.
+    private static readonly Edges4 TitleHMargin   = new(0f, 14f, 0f, 14f);        // InfoBarTitleHorizontalOrientationMargin (+bottom)
+    private static readonly Edges4 MessageHMargin = new(12f, 14f, 0f, 14f);       // InfoBarMessageHorizontalOrientationMargin (+bottom)
     private static readonly Edges4 ActionHMargin  = new(16f, 8f, 0f, 0f);         // InfoBarActionHorizontalOrientationMargin
     // Vertical-orientation per-child margins.
     private static readonly Edges4 TitleVMargin   = new(0f, 14f, 0f, 0f);         // InfoBarTitleVerticalOrientationMargin
@@ -147,7 +169,8 @@ public static class InfoBar
         Action<InfoBarClosedEventArgs>? onClosed = null,
         Element? content = null,
         string? iconGlyph = null,
-        TemplateParts? parts = null)
+        TemplateParts? parts = null,
+        float availableWidth = float.NaN)
     {
         if (!isOpen)
             return new BoxEl { };
@@ -213,7 +236,9 @@ public static class InfoBar
         // sits next to a long message it will not fit inline on one row, so WinUI flips to vertical — mirror that here.
         const int LongMessageChars = 60; // heuristic for "message wraps / doesn't fit on one line" alongside an action
         bool isVertical = contentItems <= 1
-            || (hasAction && hasMessage && message.Length >= LongMessageChars);
+            || (hasAction && hasMessage && message.Length >= LongMessageChars)
+            || (!float.IsNaN(availableWidth) && hasAction
+                && EstimateHorizontalWidth(title, message, isIconVisible, isClosable) > availableWidth);
 
         // With no banner items the panel measures ZERO in WinUI (InfoBarPanel.MeasureOverride falls to the horizontal
         // branch with 0 items and 0,0,0,0 padding), so omit it outright instead of rendering dead vertical padding.
@@ -350,10 +375,30 @@ public static class InfoBar
                 Children = [actionButton],
             });
         }
+        // SHRINK IS LOAD-BEARING, not cosmetic. The panel is the "*" column of a THREE-column row (icon | panel |
+        // close button); it declares Grow so it eats the leftover, but a column that never declares Shrink also opts
+        // OUT of absorbing NEGATIVE free space: FlexLayout distributes an overflow only across children whose
+        // FlexShrink x baseMain sums above zero (FlexLayout.cs:527 — `else if (free < 0f && totalShrinkScaled > 0f)`),
+        // so with totalShrinkScaled == 0 the deficit is silently discarded and every child keeps its measured width.
+        // That is exactly how the toast close button ended up outside the painted plate: a 39-char message plus a
+        // "Retry" action measured 324 DIP inside a 286 DIP slot (a 380 DIP card minus the 16 content padding, the
+        // 30 DIP icon column and the 48 DIP close column), the row could not take the 38 DIP back from the one column
+        // that was meant to give it, and the close column was arranged past the right edge of the plate. Shrink = 1
+        // with MinWidth = 0 lets the row claw the overflow back out of this column, and the message TextEl inside
+        // (Wrap = WrapWholeWords, Shrink = 1) then re-measures at the narrower width and wraps to a second line.
+        // Deliberately NOT Basis = 0 (that collapses a standalone InfoBar to its minimum) and deliberately not a
+        // ClipToBounds on the root (clipping hides an overflow instead of resolving it).
+        // WinUI parity note: real InfoBarPanel.MeasureOverride picks its orientation from the MEASURED width — it
+        // flips to vertical the moment the inline row exceeds the available width — while we decide up front from a
+        // 60-character heuristic (see Create). The heuristic stays (an engine measure-time orientation switch is a
+        // separate seam); this fix is what makes the horizontal branch SAFE when the heuristic guesses "fits" and the
+        // row does not: the panel narrows and the message wraps instead of shoving the close button off the card.
         return new BoxEl
         {
             Direction = 0,                                          // horizontal
             Grow = 1f,
+            Shrink = 1f,                                            // absorb row overflow (see the note above)
+            MinWidth = 0f,                                          // ...all the way down; the message wraps
             Gap = 0f,
             Margin = PanelMargin,                                   // InfoBarPanelMargin 0,0,16,0
             Padding = PanelHorizontalPadding,                       // 0,0,0,0
@@ -404,6 +449,8 @@ public static class InfoBar
         {
             Direction = 1,                                          // vertical
             Grow = 1f,
+            Shrink = 1f,                                            // same row-overflow contract as the horizontal panel
+            MinWidth = 0f,                                          // (this is still the "*" column of the icon|panel|close row)
             Gap = 0f,
             Margin = PanelMargin,                                   // InfoBarPanelMargin 0,0,16,0
             Padding = PanelVerticalPadding,                         // 0,14,0,18

@@ -12,16 +12,40 @@
          suppresses CA1416. The macOS/Linux credential paths (KeyringProtector) stay guarded by OperatingSystem checks. -->
     <NoWarn>$(NoWarn);CA1416;NU1701</NoWarn>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <!-- The app version (Settings → About reads InformationalVersion via assembly metadata). -->
-    <Version>0.2.0</Version>
-    <!-- Condition: a local/dev build stamps "<Version>-dev" so a crash report or an About screen from an unofficial
-         build is never mistaken for a release; CI overrides it with /p:InformationalVersion=X.Y.Z+<run> . -->
-    <InformationalVersion Condition="'$(InformationalVersion)' == ''">$(Version)-dev</InformationalVersion>
     <!-- Embeds the Wavee W-ribbon into the PE (Explorer / taskbar / Alt-Tab fallback). The Win32 window also loads
          assets/AppIcon/appicon.ico next to the exe (Win32Platform.LoadAppIcon). Regenerate with
          assets/AppIcon/generate-appicon.ps1 from the WaveeMusic source artwork. -->
     <ApplicationIcon>assets\AppIcon\appicon.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <!-- Build identity. Wavee.Version.props is the single source of the semver, the per-minor codename and the
+       monotonic release counter (WaveeBuild); ops/build/pack-wavee-msix.ps1 stamps the rest via /p: properties and
+       ops/release/wavee-release.ps1 owns the counter. Settings → About / crash headers / the update checker read all
+       of it back through AssemblyMetadataAttribute (Wavee.Core WaveeVersionInfo.Parse). -->
+  <Import Project="Wavee.Version.props" />
+  <PropertyGroup>
+    <Version>$(WaveeVersion)</Version>
+    <WaveeChannel Condition="'$(WaveeChannel)' == ''">dev</WaveeChannel>
+    <!-- The rolling GitHub release that carries the .appinstaller feed this build polls. Build-time metadata, never a
+         runtime switch: a test package is packed with -FeedRelease wavee-stable-test and cannot touch the real feed. -->
+    <WaveeFeedRelease Condition="'$(WaveeFeedRelease)' == ''">wavee-stable</WaveeFeedRelease>
+    <!-- Where the release assets that carry the feed (and the release-notes documents) are downloaded from. Build-time
+         metadata for the same reason as WaveeFeedRelease: the local end-to-end update test packs a build that polls a
+         loopback HTTP feed (ops/release/tests/local-update-e2e.ps1) without a single runtime branch or env var.
+         Must end in "/" — WaveeVersionInfo.NormalizeUpdateBaseUrl repairs it if it does not. -->
+    <WaveeUpdateBaseUrl Condition="'$(WaveeUpdateBaseUrl)' == ''">https://github.com/christosk92/fluent-gpu/releases/download/</WaveeUpdateBaseUrl>
+    <!-- A local `dotnet run` is "0.2.0-dev"; the pack script stamps "<semver>+build.<N>.sha.<sha7>". -->
+    <InformationalVersion Condition="'$(InformationalVersion)' == ''">$(WaveeVersion)-dev</InformationalVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <AssemblyMetadata Include="Codename"       Value="$(WaveeCodename)" />
+    <AssemblyMetadata Include="Channel"        Value="$(WaveeChannel)" />
+    <AssemblyMetadata Include="PackageVersion" Value="$(WaveePackageVersion)" />
+    <AssemblyMetadata Include="Commit"         Value="$(WaveeCommit)" />
+    <AssemblyMetadata Include="BuildDate"      Value="$(WaveeBuildDate)" />
+    <AssemblyMetadata Include="FeedRelease"    Value="$(WaveeFeedRelease)" />
+    <AssemblyMetadata Include="UpdateBaseUrl"  Value="$(WaveeUpdateBaseUrl)" />
+  </ItemGroup>
 
   <!-- Memory posture (2026-07 heap audit): the engine's PixelBufferPool bounds decoded-pixel retention; these bound
        what remains. SharedArrayPool defaults to 8 arrays/bucket × ProcessorCount partitions — on a 12-core machine
@@ -100,7 +124,12 @@
   <ItemGroup>
     <ProjectReference Include="@(WaveeModule->'..\modules\Wavee.Module.%(Identity)\Wavee.Module.%(Identity).csproj')"
                       ReferenceOutputAssembly="false" Private="false" PrivateAssets="all"
-                      UndefineProperties="RuntimeIdentifier;SelfContained;PublishAot;PublishTrimmed;PublishSingleFile" />
+                      UndefineProperties="SelfContained;PublishAot;PublishTrimmed;PublishSingleFile" />
+    <!-- RuntimeIdentifier is deliberately NOT undefined above: each module carries PublishAot=true itself, and the SDK
+         infers the HOST rid for such a project when none is given - so a cross-arch `dotnet publish -r win-x64` from an
+         arm64 box restored the modules for win-x64 (the restore graph carries the global rid) but built them for
+         win-arm64 (NETSDK1047). Passing the rid through keeps restore and build on the same target; the modules'
+         real AOT layout still comes from ops/build/publish-wavee-modules.ps1. -->
   </ItemGroup>
 
   <!-- Stage each module's framework-dependent build output next to Wavee.exe so `dotnet run` finds it at

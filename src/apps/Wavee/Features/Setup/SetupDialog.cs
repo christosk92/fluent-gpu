@@ -52,7 +52,19 @@ static class SetupDialog
         //     SetupPreAuthRoot's bare titlebar over Mica — no dialog, no shell, no way back in, on a fresh install.
         //     The wizard is Wavee's only sign-in surface, so "there is nothing behind it" is literal; the honest exit
         //     is "Not now" → SetupSession.Secondary → QuitApp, which is still offered on every page.
-        handle.ClosingAction = _ => SetupGating.CanDismiss(session.IsRerun, session.IsBusy);
+        // A THIRD case rides in front of both: a page with an in-place disclosure open (Terms → full agreement)
+        // registers it as session.EscapeConsumer, and an Escape is spent closing THAT — the overlay host offers
+        // Escape to this modal before any focused node sees it, so the disclosure can never catch the key itself.
+        // The veto is for USER dismissals only (Escape, light-dismiss). A Programmatic close is the session's own
+        // RequestClose — Done's "Open Wavee", Welcome's "Not now", the diagnostics hand-off — and must always go
+        // through; vetoing it left the finished wizard sitting on screen with a button that did nothing.
+        handle.ClosingAction = cause =>
+        {
+            if (cause == OverlayCloseCause.Programmatic) return true;
+            bool nested = cause == OverlayCloseCause.Escape && session.EscapeConsumer is not null;
+            if (nested) session.EscapeConsumer!.Invoke();
+            return SetupGating.EscapeClosesPlate(nested, session.IsRerun, session.IsBusy);
+        };
 
         // Close teardown — structural, not per-button: EVERY close path (Escape, "Not now", a shutdown-time close,
         // a stray dismiss nobody anticipated) funnels through this ONE action.
