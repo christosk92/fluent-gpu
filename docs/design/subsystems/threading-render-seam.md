@@ -703,8 +703,18 @@ The gate is therefore an invariant on production, not a throttle:
 `AppHost.PhaseGateBlocks()` compares `SceneFramePublisher.PublishSeq` against `RenderThread.PresentAck`
 and declines the frame (an early-out, `Rendered: false`) when one is in flight. The render thread fires a
 `presentWake` after each ack, which is the restored phase reference: `_submitPresent` blocks in the
-swapchain's frame-latency waitable (`SetMaximumFrameLatency(1)`) **before** it presents, so acks land one
-refresh apart and production inherits the display's phase.
+swapchain's frame-latency waitable **before** it presents, so acks track presents and production inherits
+the display's phase.
+
+**The waitable is now `SetMaximumFrameLatency(2)` (AS-BUILT 2026-08; `FRAME_COUNT - 1` with 3 back
+buffers).** It therefore blocks only once **two** presents are already queued — one frame of CPU/GPU
+run-ahead — instead of blocking on every present the way latency 1 did. **The production invariant above is
+unchanged**: it is enforced on the *engine* seam by `PublishSeq` vs `PresentAck`, not by DXGI queue depth,
+so exactly one unpresented published frame is still the ceiling. While the pipeline keeps up, the present
+queue never actually reaches depth 2 and the phase reference is the same as before; the second slot fills
+only under backpressure, where it absorbs a frame that overran a refresh instead of letting the cadence
+quantize to half rate. The cost is bounded at one refresh and paid only on those frames (see
+[`budgets.md`](../budgets.md) §1, back-buffers row).
 
 Three properties make this safe rather than a latency trade:
 

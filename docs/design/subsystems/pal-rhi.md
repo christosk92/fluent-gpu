@@ -298,7 +298,7 @@ public readonly struct DeviceLostToken { public readonly uint Reason; public boo
 
 public struct SwapchainDesc {                          // NO COM; ColorSpace + format split folded
     public NativeHandle PresentTarget;                 // Kind==Hwnd → DComp-for-composition path
-    public Size2 SizePx; public uint BufferCount;      // 2 (FLIP_DISCARD)
+    public Size2 SizePx; public uint BufferCount;      // 3 (FLIP_DISCARD; == FRAME_COUNT, §5.1)
     public TextureFormat BackBufferFormat;             // B8G8R8A8_UNORM (flip-model + DComp reject _SRGB)
     public TextureFormat RtvFormat;                    // B8G8R8A8_UNORM_SRGB (blend/resolve in linear)
     public AlphaMode AlphaMode;                         // Premultiplied (DComp requirement)
@@ -345,8 +345,11 @@ fence-wait, device-lost (`fence→MaxValue` + `RegisterWaitForSingleObject`), pe
 D3D12MA wiring, command-list pool. **Add** the DIRECT queue, RTV+DSV heaps, graphics command-list
 recording, and graphics PSO path.
 
-- **Device:** `D3D12CreateDevice(adapter, FL_11_0)` via `[LibraryImport]`. Adapter chosen via
-  `IDXGIFactory6` high-performance enum, WARP fallback for VMs/RDP (and the headless test path).
+- **Device (as-built 2026-08):** `D3D12CreateDevice(adapter, FL_11_0)` via `[LibraryImport]`. Adapter chosen via
+  `IDXGIFactory6` high-performance enum — software adapters skipped, pre-1803 falls back to the null-adapter
+  default — WARP fallback for VMs/RDP (and the headless test path). The chosen adapter's identity is published
+  once per device init/recovery on the always-on `[d3d12.adapter]` line and to sibling device creators (the
+  D3D11 video-decode device pins to the same LUID).
 - **Queue:** one DIRECT `ID3D12CommandQueue`. `ID3D12Fence` + an event; per-frame `Signal(++v)`.
 - **Heaps:** RTV heap (back buffers + layer RTs), DSV heap (stencil-clip), one shader-visible
   CBV/SRV/UAV heap (atlas/image/glyph SRVs). All authored from scratch (not in the seed).
@@ -459,8 +462,10 @@ them to the pool. The codec runs on workers (§9.5); the RHI never sees `string`
 ### 5.1 Single-visual creation (the §5.1 base path)
 
 On the render thread: `IDXGIFactory2.CreateSwapChainForComposition(queue, desc)` with
-`B8G8R8A8_UNORM`, `BufferCount=2`, **`FLIP_DISCARD`** (preferred over `FLIP_SEQUENTIAL` for full-frame
-UI), `PREMULTIPLIED`, `STRETCH`, `FRAME_LATENCY_WAITABLE | ALLOW_TEARING` → QI `IDXGISwapChain3`.
+`B8G8R8A8_UNORM`, `BufferCount=3`, **`FLIP_DISCARD`** (preferred over `FLIP_SEQUENTIAL` for full-frame
+UI), `PREMULTIPLIED`, `STRETCH`, `FRAME_LATENCY_WAITABLE | ALLOW_TEARING` → QI `IDXGISwapChain3`, then
+`SetMaximumFrameLatency(BufferCount - 1)` = **2** (the one frame of CPU/GPU pipelining slack; see
+[`budgets.md`](../budgets.md) §1 back-buffers row and [`threading-render-seam.md`](./threading-render-seam.md) §11.1).
 Back-buffer **RTVs created as `B8G8R8A8_UNORM_SRGB`** (RTV format independent of buffer format — folds
 the flip-model/DComp sRGB BLOCKER; blend+resolve in linear, hardware sRGB-encodes on write, output
 premultiplied — the COLOR contract). Then DComp: `DCompositionCreateDevice(&IDCompositionDesktopDevice)`
@@ -541,8 +546,10 @@ Two detectors, render-thread-resident:
 aligned `Volatile.Read`), pauses publishing, and rendezvouses with the render thread via the off-hot-path
 `System.Threading.Lock` (the only place a real lock is used; `hardened-v1-plan.md` §7).
 
-**Recovery (render thread, since it owns every ComPtr):** dispose device → recreate (next-best adapter /
-WARP) → recreate per-window swapchains + DComp trees + video children → **re-realize all GPU resources
+**Recovery (render thread, since it owns every ComPtr):** dispose device → recreate (the §3 selection loop
+re-runs from scratch — an adapter that is truly gone fails its `D3D12CreateDevice` and falls out of the walk, so
+recovery lands on the next-best one; there is **no blacklist** and no memory of the previous pick — WARP still the
+terminal fallback) → recreate per-window swapchains + DComp trees + video children → **re-realize all GPU resources
 from retained CPU state** (SceneStore SoA untouched; BrushTable/ClipTable re-upload; GlyphAtlas
 re-rasterize from GlyphRunTable; the per-bucket image textures re-decode/re-upload from the
 `ImageCache`'s retained source or re-request; PSOs recompile from the cached DXIL blobs) → mark whole

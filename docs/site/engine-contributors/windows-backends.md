@@ -93,22 +93,50 @@ hardware device. The COM is hand-vtable through **TerraFX.Interop.Windows** (`ID
 ### Device + queue + fences + heaps
 
 `InitDevice()` creates the device via the flat `[LibraryImport]` export `D3D12CreateDevice` (feature level 11_0). The
-as-built adapter pick is the **default adapter with a WARP fallback** — on a VM / RDP / GPU-less box,
-`_factory->EnumWarpAdapter` provides the software device and `BackendName` becomes `D3D12 (WARP)`. (The
-`IDXGIFactory6` high-performance enumeration that [`pal-rhi.md`](../../../design/subsystems/pal-rhi.md) §3 describes is
-the design target; the current leaf does not yet pick by power preference.)
+as-built adapter pick is the **`IDXGIFactory6` high-performance enumeration** that
+[`pal-rhi.md`](../../../design/subsystems/pal-rhi.md) §3 specifies: QI the factory for `IDXGIFactory6` (a cold path, so
+a raw `__uuidof` QI per [the COM policy](#the-tiered-com-policy)), walk
+`EnumAdapterByGpuPreference(i, HIGH_PERFORMANCE, …)` in order, and attempt the real `D3D12CreateDevice` on each
+candidate — the first one that takes a device wins. **Software adapters are skipped** during that walk: WARP is the
+explicit terminal fallback, never a "winner". A pre-1803 box (where the `IDXGIFactory6` QI fails) keeps the historical
+null-adapter default, and only if *that* fails — VM / RDP / GPU-less — does `_factory->EnumWarpAdapter` provide the
+software device and `BackendName` become `D3D12 (WARP)`. Because a candidate whose device create fails simply falls out
+of the loop, `RecoverDevice`'s re-run of `InitDevice` lands on the next-best adapter when the previous one is genuinely
+gone; there is no adapter blacklist, and nothing is remembered between runs.
 
-It then builds the rest of the steady-state machinery, all keyed off a single `const uint FRAME_COUNT = 2` (the
-`FLIP_DISCARD` canon from [`budgets.md`](../../../design/budgets.md), configurable 2–3 by one constant): one DIRECT
+Two **always-on** lines fall out of this (deliberately not `[Conditional]` — they are the Release-build evidence trail,
+the same posture as the always-on plain counters in [`budgets.md`](../../../design/budgets.md)):
+
+- `[d3d12.adapter]` — once per device init **and** per recovery: selection mode (`high-performance` / `default` /
+  `warp`), adapter description, vendor + device id, VRAM, LUID, the UMA and software flags, and the resulting
+  `GpuProfile.Tier`. It is the answer to "which GPU actually ran?", which was previously unanswerable from a field log.
+- `[d3d12.present]` — emitted on a *change* of present topology (does the render adapter own a DXGI output containing
+  the window's monitor, or do presents cross adapters through the DWM?), plus a once-a-minute DWM glitch line when the
+  dropped/missed/late counters are nonzero. Cross-adapter present is the designed-in shape of a hybrid laptop — a
+  condition worth naming, not an error.
+
+`BackendNameSuffix` is now assigned on **every** path. It used to be only ever *set*, so a WARP boot left `(WARP)`
+stuck on the backend name even after a recovery that landed back on hardware.
+
+It then builds the rest of the steady-state machinery off `const uint FRAME_COUNT = 3` (the `FLIP_DISCARD` back-buffer
+count in [`budgets.md`](../../../design/budgets.md)) and its two derived constants — `FrameBankDepth` (`= FRAME_COUNT`,
+the CPU-written per-frame bank depth) and `MAX_FRAME_LATENCY` (`= FRAME_COUNT - 1`, i.e. **2**): one DIRECT
 `ID3D12CommandQueue`, per-frame `ID3D12CommandAllocator`s, one `ID3D12GraphicsCommandList` (created closed, `Reset` each
 frame), an `ID3D12Fence` + event for CPU/GPU sync, and an RTV descriptor heap sized to `FRAME_COUNT`. The debug layer is
 opt-in behind `FG_D3D12_DEBUG` in `DEBUG` builds.
+
+**Changing that depth is not a one-line change**, whatever an older revision of this page claimed. The eight draw
+pipelines do alias `D3D12Device.FrameBankDepth` and their ring math is depth-agnostic — but the three compositors
+(`AcrylicCompositor`, `OpacityLayerCompositor`, `BakedBlurCompositor`) used to bank on a hidden `& 1` frame *parity*,
+which silently corrupts at depth 3. They now index `frameIndex % FRAME_COUNT` and size their SRV heaps, timestamp
+query banks and scratch pairs from `FrameBankDepth`, and `FrameBankingTests` (`FluentGpu.Windows.Tests`) asserts those
+derived depths against `FRAME_COUNT` so the banks cannot drift apart again.
 
 ### The DXGI flip-model swapchain + DComp present
 
 `InitSwapChain()` is the [`pal-rhi.md`](../../../design/subsystems/pal-rhi.md) §5.1 base path made concrete. The color
 contract is exactly the one pinned in [`SPEC-INDEX.md`](../../../design/SPEC-INDEX.md): the swapchain buffer is
-`DXGI_FORMAT_B8G8R8A8_UNORM`, `BufferCount = 2`, `SwapEffect = FLIP_DISCARD`, created
+`DXGI_FORMAT_B8G8R8A8_UNORM`, `BufferCount = FRAME_COUNT` (**3**), `SwapEffect = FLIP_DISCARD`, created
 `FRAME_LATENCY_WAITABLE_OBJECT` (and `ALLOW_TEARING` on the non-composited, tearing-capable path). The composited path
 takes `DXGI_ALPHA_MODE_PREMULTIPLIED` (mandatory for DWM show-through); the opaque path takes `ALPHA_MODE_IGNORE`.
 
@@ -120,9 +148,13 @@ Two creation paths, selected by the `composited` ctor flag:
   the engine presents transparent pixels.
 - **Opaque path** — `CreateSwapChainForHwnd(queue, hwnd, …)`, no DComp tree.
 
-After creation it QIs `IDXGISwapChain3`, calls `SetMaximumFrameLatency(FRAME_COUNT - 1)`, and grabs the
-`GetFrameLatencyWaitableObject()` — the handle `WaitForLatency()` blocks on at the top of each frame to bound queued-frame
-latency.
+After creation it QIs `IDXGISwapChain3`, calls `SetMaximumFrameLatency(MAX_FRAME_LATENCY)` (= `FRAME_COUNT - 1` = **2**),
+and grabs the `GetFrameLatencyWaitableObject()` — the handle `WaitForLatency()` blocks on at the top of each frame to
+bound queued-frame latency. At latency 2 the waitable blocks only once **two** presents are already queued, which buys
+one frame of CPU/GPU run-ahead: a frame that costs slightly more than one refresh no longer quantizes to half rate at
+144/165 Hz. The cost is bounded and conditional — while the pipeline keeps up the queue never reaches depth 2 and the
+added latency is zero; under real backpressure it is at most one refresh, on exactly the frames that previously paid a
+full extra refresh anyway.
 
 > **Single-visual today.** The leaf composes exactly **one** swapchain visual. The multi-visual present-tree (a video
 > child visual z-below the UI swapchain, with the transparent premultiplied-0 hole-punch for `DrawVideoCmd.Dst`) in

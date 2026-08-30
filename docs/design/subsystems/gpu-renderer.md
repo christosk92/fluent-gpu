@@ -729,7 +729,8 @@ tessellator makes no front-face winding guarantee), premultiplied SrcOver blend.
 64-byte `PathInstance` per-draw uniform record so one PSO serves both `FillPath` and `StrokePath` (fills
 pass `TrimStart=0/TrimEnd=1/DashOn=0`, the full-cover window). Per frame it (a) copies each DISTINCT
 realization actually drawn this frame from `PathRealizationCache.Shared`'s retained slab into its own
-fixed-capacity, double-buffered upload VB/IB exactly once — deduped by a fixed-capacity open-addressed map
+fixed-capacity upload VB/IB, banked per frame-in-flight (depth = `D3D12Device.FrameBankDepth`), exactly once —
+deduped by a fixed-capacity open-addressed map
 reset every `BeginFrame`, zero managed allocation — and (b) issues one `DrawIndexedInstanced` per path.
 `DrawsThisFrame`/`UploadBytesThisFrame`/`DroppedInstances` feed `Diag.Set("path", …)` counters that make
 the GPU-resident-slab + per-vertex-PathIdx follow-up (one `DrawIndexed` per RUN instead of per path)
@@ -1333,8 +1334,9 @@ public sealed class TextureStagingRing { /* MB-sized, fence-gated; backs CopyBuf
   the instance ring — corrected).
 - **Root constants** (viewport size, sRGB flag, global alpha, current clip params) via `BindConstants` —
   no CB churn.
-- **Frames-in-flight = 2 (configurable 2–3)** (`OQ-8`); tables (RTV/PSO/textures) are retained slabs
-  (handles stay valid); rings reset on fence completion.
+- **Frames-in-flight = 3** (`OQ-8`, settled AS-BUILT 2026-08: `D3D12Device.FRAME_COUNT` = back buffers = per-frame
+  command allocators = CPU-written GPU bank depth, with `SetMaximumFrameLatency(2)`); tables (RTV/PSO/textures) are
+  retained slabs (handles stay valid); rings reset on fence completion.
 - **Allocator:** all GPU resources from **D3D12MA** placed resources/pools → low fragmentation, AOT-proven.
 - **Managed side:** recorder/batcher/sort scratch are arena; `InstanceBatch[]` is a pooled
   `SlabAllocator<InstanceBatch>` reset each frame. **No `new` on the paint path.** Per-frame managed
