@@ -89,6 +89,12 @@ public interface IGpuDevice : IDisposable
     bool SupportsSecondarySwapchains => false;
     ISwapchain CreateSwapchain(in SwapchainDesc desc);
 
+    /// <summary>How many completed presents the swapchain may queue before frame production blocks (DXGI
+    /// SetMaximumFrameLatency). Pacing predicts the presented vblank as FrameQpc + (1 + MaxFrameLatency)·refresh
+    /// (RefreshLattice.Build). Default 1 — the classic latency-1 contract; HeadlessGpuDevice keeps it so the
+    /// deterministic gates keep PresentQpc = FrameQpc + 2·refresh. D3D12 overrides with FRAME_COUNT − 1 (= 2).</summary>
+    int MaxFrameLatency => 1;
+
     /// <summary>The composited-video presenter (DirectComposition child visuals for externally-produced video / protected
     /// DRM surfaces), or <see langword="null"/> when this backend/target cannot composite video — the headless seam, or
     /// an opaque non-composited window. Default <see langword="null"/> keeps every non-D3D12 backend AND the headless

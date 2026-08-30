@@ -37,6 +37,15 @@ public static class GpuProfile
     /// that want "guaranteed cheap on the worst hardware" gate on this; the balanced default covers Unknown.</summary>
     public static bool IsWeak => Tier == GpuPowerTier.Weak;
 
+    /// <summary>Marketing description of the adapter the device was created on (DXGI adapter description), published
+    /// once at device init (and re-published on device recovery) by the backend — app-read. Empty until set.
+    /// TerraFX-free: a plain string crosses the seam.</summary>
+    public static string AdapterName { get; set; } = "";
+
+    /// <summary>True when the device landed on a software rasterizer (WARP / the DXGI software-adapter flag).
+    /// Complements <see cref="IsWeak"/>: software implies Weak, but Weak (an iGPU) does not imply software.</summary>
+    public static bool IsSoftwareAdapter { get; set; }
+
     /// <summary>Path-rendering AA strategy (gpu-renderer.md §5 step 4). Default <see cref="PathAaMode.Fringe"/>;
     /// <see cref="PathAaMode.Msaa4"/> is selectable but falls back to <see cref="PathAaMode.Fringe"/> (MSAA is
     /// descoped — canon's open <c>OQ-1</c>). <b>Deviation from canon:</b> gpu-renderer.md §5 prints

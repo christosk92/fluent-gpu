@@ -29,6 +29,17 @@ public static class Diag
     /// <summary>Where <see cref="Event"/>/<see cref="Dump"/> output goes (e.g. Console.WriteLine, the devtools panel, a log).</summary>
     public static Action<string>? Sink;
 
+    /// <summary>ALWAYS-ON operational line writer — the small set of load-bearing evidence lines
+    /// (<c>[device-lost]</c>, <c>[d3d12.adapter]</c>, <c>[d3d12.present]</c>, <c>[video.d3d11]</c>). Deliberately
+    /// NOT <c>[Conditional]</c>: these lines are the Release-build proof trail (budgets.md "always-on plain counter"
+    /// posture). Routes to <see cref="Sink"/> when a harness installed one, else stderr — never stdout, so app
+    /// output stays clean. Callers own the cadence contract: never per-present / per-frame.</summary>
+    public static void Line(string line)
+    {
+        if (Sink is { } sink) sink(line);
+        else Console.Error.WriteLine(line);
+    }
+
     private static readonly object Gate = new();
     private static readonly Dictionary<string, long> Counters = new(StringComparer.Ordinal);
     private static readonly Dictionary<string, string> Values = new(StringComparer.Ordinal);

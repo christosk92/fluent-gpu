@@ -250,6 +250,11 @@ public sealed class AppHost : IDisposable
     private readonly IPlatformApp _app;
     private readonly IPlatformWindow _window;
     private readonly IGpuDevice _device;
+    // The backend's DXGI SetMaximumFrameLatency depth, cached ONCE at construction (it is fixed for the device's life —
+    // a recovery rebuilds the same swapchain shape). Feeds the frame clock's present prediction: RefreshLattice.Build
+    // stamps PresentQpc = FrameQpc + (1 + this)·refresh, so ScrollClock.PresentSec predicts the vblank the frame is
+    // actually composited at instead of assuming the latency-1 "+2 refresh". Headless keeps the default 1.
+    private readonly int _maxFrameLatency;
     private readonly ISwapchain _swapchain;
     private readonly Component _root;
     private readonly StringTable _strings;
@@ -848,11 +853,7 @@ public sealed class AppHost : IDisposable
         }
     }
 
-    private static void WriteDeviceLostLine(string line)
-    {
-        if (Diag.Sink is { } sink) sink(line);
-        else Console.Error.WriteLine(line);
-    }
+    private static void WriteDeviceLostLine(string line) => Diag.Line(line);
 
     private bool _frameNeeded = true;        // a frame is required (reactive work pending, input, resize, …)
     private bool _frameAfterPaint;           // a wake arrived during paint → run another frame
@@ -1120,7 +1121,7 @@ public sealed class AppHost : IDisposable
     internal const double GpuGovernorEngageMs = 10.0;
     internal const double GpuGovernorReleaseMs = 8.0;   // hysteresis: don't chatter around the engage threshold
     private const double GpuGovernorAlpha = 0.15;
-    internal const ulong GpuGovernorMaxSubmitAge = 6;   // includes the normal FRAME_COUNT=2 resolve lag + bounded slack
+    internal const ulong GpuGovernorMaxSubmitAge = 7;   // includes the normal FRAME_COUNT=3 resolve lag + bounded slack
     internal const int GpuGovernorSampleTtlMs = 250;
     private static readonly long GpuGovernorSampleTtlTicks = (long)(GpuGovernorSampleTtlMs * (Stopwatch.Frequency / 1000.0));
     // The governor NEVER paces these: genuine interactions (would add input/scroll latency) + an explicit UI frame-clock
@@ -2102,6 +2103,7 @@ public sealed class AppHost : IDisposable
         // making the Step 0 assert unconditionally valid. Default + force-sync keep windowed popups (no async overlap).
         PopupWindowsEnabled = (window.Handle.Kind == NativeHandleKind.Headless || device.SupportsSecondarySwapchains) && !_asyncActive;
         _device = device;
+        _maxFrameLatency = device.MaxFrameLatency;
         _root = root;
         _strings = strings;
         // The overlay scrollbar's arrows = the SAME caret glyphs the ScrollBar control template draws (the shared
@@ -2582,7 +2584,7 @@ public sealed class AppHost : IDisposable
             var display = _window.DisplayClock;
             _frameTickSeq = display.Available ? display.TickSeq : 0;
             _palFrameClock = RefreshLattice.Build(display.Available, display.TickQpc, RefreshPeriodQpcOrDefault(),
-                Stopwatch.GetTimestamp(), _frameClockFloorQpc, _frameClockSeq);
+                Stopwatch.GetTimestamp(), _frameClockFloorQpc, _frameClockSeq, _maxFrameLatency);
             _frameClockFloorQpc = _palFrameClock.FrameQpc;
         }
 
@@ -3313,7 +3315,7 @@ public sealed class AppHost : IDisposable
             bool holdSelfBlurForScroll = scrollHoldNow < _selfBlurHoldUntil;
             bool scrollActive = holdSelfBlurForScroll || _scrollSummary.AnyMoved;
             _images.SuppressReveals = scrollActive;
-            _images.ScrollThrottled = scrollActive;   // upload-burst → fence-stall guard (the safe lever; triple-buffer hung the Adreno)
+            _images.ScrollThrottled = scrollActive;   // upload-burst → fence-stall guard (bounds the burst at any buffer depth; retained with FRAME_COUNT=3)
             _scrollChrome.Tick(dtMs);                          // 7 conscious scrollbar fade/expand (motion never touches chrome; chrome never touches motion)
             ScrollBindEval.ApplyPinAndFlagPass(_scene);       // 7 generic scroll-bind pins + the predicate-flag channel (sticky etc.)
             ScrollBindEval.RunObservers(_scene);              // 7 change-only scroll-geometry observers (pull-to-refresh / analytics)

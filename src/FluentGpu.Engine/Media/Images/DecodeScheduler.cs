@@ -67,14 +67,15 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     private const int ControlDrainPerFrame = 256;
 
     /// <summary>Scroll-scoped upload throttle: while a scroll gesture is live the per-frame apply cap drops to 1 —
-    /// each apply stages a GPU CopyTextureRegion into the SAME command list the double-buffered present then fences on
-    /// (max-latency-1 couples the UI thread to GPU completion), so an upload burst mid-scroll reads as a fence-wait
-    /// hitch (traced as the dominant GPU hitch class). ONE completion still lands per frame regardless of its size —
-    /// the same "head always makes progress" rule the at-rest budget uses — because the alternative (deferring every
-    /// oversized completion to rest) left every 512x512 cover as a BlurHash smear for the whole gesture and popped them
-    /// all in at the end. One ~1 MiB upload per frame is amortizable; a permanent LQIP smear is not.
-    /// (Triple-buffering was the alternative and is OFF-LIMITS: it correlated with a DXGI_ERROR_DEVICE_HUNG on the
-    /// Adreno — see D3D12Device.FRAME_COUNT.)</summary>
+    /// each apply stages a GPU CopyTextureRegion into the SAME command list the present then fences on (the
+    /// frame-latency waitable couples production to present retirement), so an upload burst mid-scroll reads as a
+    /// fence-wait hitch (traced as the dominant GPU hitch class). ONE completion still lands per frame regardless of
+    /// its size — the same "head always makes progress" rule the at-rest budget uses — because the alternative
+    /// (deferring every oversized completion to rest) left every 512x512 cover as a BlurHash smear for the whole
+    /// gesture and popped them all in at the end. One ~1 MiB upload per frame is amortizable; a permanent LQIP smear
+    /// is not. This throttle is ALSO the retained mitigation for the historical Adreno DXGI_ERROR_DEVICE_HUNG suspect
+    /// (an unthrottled upload burst under deeper buffering): it bounds that burst class at ANY buffer depth, which is
+    /// why it stays on now that FRAME_COUNT is 3 — see D3D12Device.FRAME_COUNT.</summary>
     public bool ScrollThrottled { get; set; }
     /// <summary>Number of completions applied by the most recent UI-thread <see cref="Pump"/>.</summary>
     public int LastPumpAppliedCount { get; private set; }

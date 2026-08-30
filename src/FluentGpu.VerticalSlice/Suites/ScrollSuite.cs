@@ -2931,10 +2931,11 @@ static class ScrollSuite
         }
 
         // gate.pace.frame-clock-from-tick: production is paced on the compositor tick (scroll-v3-plan §13.2) and the
-        // frame is stamped with THAT tick's vblank instant — exact, monotone, one per vblank — with PresentQpc two
-        // refreshes later (SetMaximumFrameLatency(1) + DWM composition). A stale tick (the clock was parked while the
-        // loop idled: older than two refreshes) stamps the frame with `now` instead; no clock at all ⇒ Unpaced + `now`.
-        // FrameQpc never rewinds past the previous frame.
+        // frame is stamped with THAT tick's vblank instant — exact, monotone, one per vblank — with PresentQpc
+        // (1 + MaxFrameLatency) refreshes later (SetMaximumFrameLatency + DWM composition); the headless seam keeps
+        // latency 1, so every assert below stays at the historical +2·refresh. A stale tick (the clock was parked
+        // while the loop idled: older than two refreshes) stamps the frame with `now` instead; no clock at all ⇒
+        // Unpaced + `now`. FrameQpc never rewinds past the previous frame.
         {
             long f = System.Diagnostics.Stopwatch.Frequency;
             long refresh = f / 120;
@@ -2950,9 +2951,16 @@ static class ScrollSuite
                 && noClock.PresentQpc == noClock.FrameQpc + 2 * refresh;
             var rewind = FluentGpu.Hosting.RefreshLattice.Build(true, tick, refresh, nowQpc: tick + refresh / 2, lastFrameQpc: tick + refresh, seq: 4);
             bool neverRewinds = rewind.FrameQpc == tick + refresh;
-            Check("gate.pace.frame-clock-from-tick a produced frame is stamped with its compositor tick's vblank instant (PresentQpc = +2 refresh, LatticeValid); a stale tick (>2R old) or no clock stamps `now` (no clock ⇒ Unpaced); FrameQpc never rewinds",
-                stampsTick && staleUsesNow && unpaced && neverRewinds,
-                $"tick={stampsTick} stale={staleUsesNow} unpaced={unpaced} monotone={neverRewinds}");
+            // The present prediction SCALES with the backend's SetMaximumFrameLatency: a deeper present queue moves the
+            // composited vblank out by exactly that many refreshes, while FrameQpc (the tick the frame belongs to) is
+            // untouched. L=1 must still reproduce the historical +2·refresh — that equivalence is what keeps every
+            // assert above, and the headless gates generally, latency-agnostic.
+            var lat2 = FluentGpu.Hosting.RefreshLattice.Build(true, tick, refresh, tick + refresh / 4, 0, 9, maxFrameLatency: 2);
+            bool latScales = lat2.PresentQpc == tick + 3 * refresh && lat2.FrameQpc == tick
+                && FluentGpu.Hosting.RefreshLattice.Build(true, tick, refresh, tick + refresh / 4, 0, 10, maxFrameLatency: 1).PresentQpc == tick + 2 * refresh;
+            Check("gate.pace.frame-clock-from-tick a produced frame is stamped with its compositor tick's vblank instant (PresentQpc = +2 refresh at the default latency 1, LatticeValid); a stale tick (>2R old) or no clock stamps `now` (no clock ⇒ Unpaced); FrameQpc never rewinds; PresentQpc scales as +(1+MaxFrameLatency) refresh (L=2 ⇒ +3R) while FrameQpc does not",
+                stampsTick && staleUsesNow && unpaced && neverRewinds && latScales,
+                $"tick={stampsTick} stale={staleUsesNow} unpaced={unpaced} monotone={neverRewinds} latScales={latScales}");
         }
 
         // gate.pace.software-pace: without a display clock the loop wall-clock paces at just under the refresh period
