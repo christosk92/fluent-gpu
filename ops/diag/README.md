@@ -62,7 +62,7 @@ both. Never average a pillar-A number with a pillar-B number.
 
 `dotnet publish /p:FluentGpuDiag=true`, or `ops\build\publish-wavee-aot.ps1 -Diag`.
 
-Defined by a `PropertyGroup` in **both** `src/Directory.Build.props` **and** `src/apps/Directory.Build.props` —
+Defined by a `PropertyGroup` in **both** `src/Directory.Build.props` **and** WaveeMusic's root `Directory.Build.props` —
 `src/apps/` deliberately does not inherit the engine props, and `[Conditional]` erasure is decided by the
 **calling** assembly, so the app's own trace call sites stay erased if only the engine gets the symbol.
 

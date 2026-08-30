@@ -4,8 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Out-of-scope paths — do NOT read, search, edit, or summarize
 
-Scope is the **FluentGpu engine** (`src/`, `docs/design/`, `docs/`) and app UI. The paths below are out of
-scope and belong to a separate workspace. Unless the user names a specific file below **and** confirms
+Scope is the **FluentGpu engine** (`src/`, `docs/design/`, `docs/`) and the gallery. The Wavee app itself lives in
+the sibling repo `christosk92/WaveeMusic` (`C:\wavee\WaveeMusic`, references this repo by relative path — see
+`docs/plans/wavee/wavee-repo-split-plan.md` there); the paths below are out of scope and belong to a separate
+workspace. Unless the user names a specific file below **and** confirms
 it for this session, do not read, grep, edit, or summarize:
 
 - `src/apps/.native/**`, `src/apps/Wavee.PlayPlay/**`, `private-runtimes/**`
@@ -50,45 +52,6 @@ is on, so a Release-only warning is a Release-only *build break*. `.github/workf
 
 The VerticalSlice harness (`src/FluentGpu.VerticalSlice/` — `Program.cs` + `Harness/` + `Suites/` + `Probes/`) runs headless golden checks (no GPU/window) and enforces the alloc tripwire (`GC.GetAllocatedBytesForCurrentThread()` delta == 0 per hot phase) on the headless `Rhi.Headless`/`Pal.Headless` seams; local subset via `--suite` / `FG_SUITE` (CI must run the full suite). GPU pixels are the separate `--screenshot` check.
 
-### Claude scratchpads and PlayPlay-inclusive Wavee publishes
-
-Claude scratchpad/worktree checkouts contain tracked files only. The local `link-playplay.ps1` helper and the
-gitignored `src\apps\Wavee.PlayPlay` junction are therefore **not inherited** by a scratchpad. Publishing Wavee from such a
-checkout without recreating the junction produces a valid public NativeAOT build, but it does **not** include PlayPlay.
-
-When the user explicitly requests a PlayPlay-inclusive build from a Claude scratchpad, have the **user run** the
-following in that scratchpad's root. The agent must still not read, search, or summarize the private target:
-
-```powershell
-$target = 'C:\WAVEE\wavee-playplay-private\app\Wavee.PlayPlay'
-$link = Join-Path $PWD 'src\apps\Wavee.PlayPlay'
-
-if (-not (Test-Path $target)) { throw "Private package not found: $target" }
-if (-not (Test-Path $link)) { New-Item -ItemType Junction -Path $link -Target $target }
-if (-not (Test-Path "$link\Client\InProcessPlayPlayKeyDeriver.cs")) {
-  throw 'PlayPlay junction is incomplete; refusing to publish the public-only variant.'
-}
-
-.\ops\build\publish-wavee-aot.ps1 -Arch arm64
-```
-
-Do not tell the user to run `./link-playplay.ps1` inside a scratchpad unless that untracked helper was copied there;
-normally it is absent. Running the helper by absolute path from the main checkout also does not fix a scratchpad,
-because the helper intentionally creates its junction relative to its own `$PSScriptRoot`.
-
-The provisioned runtime itself needs no such treatment: `%LOCALAPPDATA%\Wavee\playplay\runtimes\<appVersion>\<arch>\`
-is a **per-machine store outside every checkout**, so every worktree/scratchpad on the box already shares it
-(`<appVersion>` is the pack's Spotify app version — `129300667` = 1.2.93.667 — **not** Wavee's
-`<InformationalVersion>`, so a Wavee version bump does not invalidate it). The junction above is the only
-per-checkout gap — there is no in-repo runtime/pack directory to provision, and no re-download to trigger. Run
-`./link-playplay.ps1 -Mode status` from a checkout's own root to see junction state, symbol state and
-canonical-store state together; when the app itself is what's complaining, its `playback-diagnostics` page (setup
-dialog → **View diagnostics**) reports every path that was searched and why.
-
-The canon gate fails if a known-stale/superseded token reappears anywhere in the **live** `docs/design/` tree (`docs/design/archive/` is excluded). To intentionally mention a superseded form in live prose, put `<!-- canon-allow: reason -->` on that line. The canonical values it protects are in `docs/design/SPEC-INDEX.md`; superseding a value means adding a rule to `check-canon.ps1` **and** moving the old doc to `docs/design/archive/`.
-
-The build/GC baseline lives in `src/Directory.Build.props` (per `docs/design/dotnet10-csharp14-zero-alloc.md` §1: target `net10.0`, `LangVersion 14`, `PublishAot`, `TrimMode full`, Workstation+Concurrent GC, `GCSettings.SustainedLowLatency`). The full gate regime — alloc tripwire, golden-image diff, headless seams, COM-leak gate, the seam race gate — is specified in `docs/design/subsystems/validation.md`.
-
 ## Canon & ownership discipline (the most important working rule)
 
 The corpus is large and heavily cross-referenced; consistency is enforced by a strict single-owner model. Honor it — the #1 review finding is the same artifact (an opcode shape, a column, a seam) defined two ways in two docs.
@@ -110,9 +73,8 @@ The big picture lives across several docs (it can't be inferred from one):
 - `docs/design/foundations.md` — the shared vocabulary (handles, the four allocators, scene columns, the PAL/RHI/Text seams, frame lifecycle).
 - `docs/design/subsystems/` — the standalone subsystem designs; start at `subsystems/README.md` (index + ownership map). Core engine: `pal-rhi`, `scene-memory`, `layout`, `gpu-renderer`, `text`, `reconciler-hooks`, `dsl-aot`, `input-a11y`. Features: `media-pipeline`, `theming`, `virtualization`, `backdrop-effects-animation`, `window-backdrop-mica`, `controls`, `devtools`. Hardening: `threading-render-seam` (the canonical threading model), `com-interop`, `validation`.
 - `docs/design/hardened-v1-plan.md` — how the parallel render-thread seam + generated/confined COM + the validation spine fold into v1 safe-by-construction.
-- `docs/design/app-requirements-waveemusic.md` — the driving app (a Spotify desktop client, `C:\WAVEE\WaveeMusic`) the engine must run: the concrete workload (10k+ virtualized lists, album-art residency, video, synced lyrics, Mica, dynamic accent color) that every subsystem is sized against.
+- `docs/design/app-requirements-waveemusic.md` — the driving app (Wavee, a Spotify desktop client; source in the sibling repo `christosk92/WaveeMusic` at `C:\wavee\WaveeMusic`) the engine must run: the concrete workload (10k+ virtualized lists, album-art residency, video, synced lyrics, Mica, dynamic accent color) that every subsystem is sized against.
 - `docs/design/budgets.md` (resource/eviction budgets) and `docs/design/macos-debt-ledger.md` (the Metal/CoreText/Cocoa cross-platform plan).
-- `docs/guide/sidebar-extension-platform.md` — the Wavee **sidebar extension platform** (app-level, not engine): three designs as three *documents* over ONE `SidebarPane` renderer, the versioned local `sidebar-layout.json` v2 wire + preserve-don't-destroy carry, and the trusted-first-party contribution registries (`WaveeExtensionRegistry` / `WaveeActionDescriptor` / `ISidebarDataSource`). Agent skill: `.claude/skills/wavee-sidebar/`. Sandboxed hosting / a public SDK are **not** built.
 - `docs/plans/animation-engine-rework-design.md` — the **decided animation-engine rework** (signals-first `AnimValue` slab + one `AnimScheduler` + analytical spring + a declarative orchestration layer; one composition point; reduced-motion-as-value), with `docs/plans/animation-engine-research-dossier.md` the multi-pass research behind it. Landing in phases (§11); supersedes the `AnimEngine`/`AnimTrack` model in `backdrop-effects-animation.md §5` section-by-section as each phase lands. The `docs/plans/generic-hookable-scroll-engine-design.md` `ScrollBind` slab is its sibling/precedent.
 
 **The core bet** (`README.md`): keep Reactor's host-agnostic programming model; replace WinUI 3's heavy C++ XAML/Composition core with our own GPU renderer + retained SoA tree behind a swappable seam. Studied/reused reference repos sit alongside this one under `C:\WAVEE\`: **`microsoft-ui-reactor`** (the Element/Component/hooks model + the pure-C# Yoga port we keep), **`ComputeSharp`** (DX12/DXGI COM bindings, `ComPtr<T>`, the C#→HLSL transpiler, NativeAOT patterns — reused/vendored), and **`microsoft-ui-xaml`** (studied for the rendering/text/layout architecture and what to avoid).

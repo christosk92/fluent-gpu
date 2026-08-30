@@ -140,7 +140,7 @@ it the lines exist only in the in-app Diagnostics ring:
 
 ```powershell
 $env:FG_DIAG = "1"; $env:WAVEE_LOG_LEVEL = "Debug"; $env:WAVEE_LOG_FILE_LEVEL = "Debug"
-dotnet run --project src/apps/Wavee     # → %LOCALAPPDATA%\Wavee\logs\wavee-<yyyyMMdd>.log
+dotnet run --project src/apps/Wavee     # (in the WaveeMusic repo) → %LOCALAPPDATA%\Wavee\logs\wavee-<yyyyMMdd>.log
 ```
 
 ## See also
