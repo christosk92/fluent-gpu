@@ -39,6 +39,8 @@ public enum WakeReasons
     BudgetDeferredVirtuals = 1 << 25, // E4 overscan halo only partially realized this paint — catch-up owed next frame
     ScrollProducer = 1 << 26,  // IPlatformWindow.ScrollProducerLive (scroll-v3-plan §5.2): a frame-aligned producer (DM
                                // engaged/pending, or a hi-res wheel-fallback gesture live) needs one PumpScroll per refresh
+    TextRepaintPending = 1 << 27, // IGpuDevice.TextRepaintPending: a glyph-atlas overflow deferred its flush and drew
+                                   // text blank last frame — one more un-skippable frame is owed to re-record it clean
 }
 
 /// <summary>

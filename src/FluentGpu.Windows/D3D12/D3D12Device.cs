@@ -307,6 +307,11 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // The canvas ledger — ONE state keyed to the canvas (R11), never a per-back-buffer pair (that shape belongs to
     // FLIP_SEQUENTIAL and would repaint every change twice). Reset wholesale by InitSwapChain / Resize / RecoverDevice.
     private bool _canvasValid;             // the persistent canvas holds a COMPLETE, coherent scene
+    // Set when a submit's glyph atlas overflowed (GlyphRenderer.AtlasResetPending) — the frame just recorded drew
+    // some text BLANK and the atlas flushes at the next BeginFrame. Cleared at the top of the next PRIMARY submit
+    // (once the flush has happened and the frame is faithfully re-recorded). The host must not skip-submit and must
+    // not treat this frame as valid for a partial repaint while it is true — see IGpuDevice.TextRepaintPending.
+    private volatile bool _textRepaintPending;
     // Did the submit that just ran actually PAINT the canvas? SubmitIntoCanvas has one bail (the layered route
     // receiving >1 replay rect) that abandons the canvas mid-decision and finishes the frame straight on the back
     // buffer. It sets _canvasValid = false, but its caller then overwrites that unconditionally from the dropped-
@@ -1463,6 +1468,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // present → the canvas path (acrylic must snapshot the backdrop offscreen to blur it): clear the canvas, render the
         // scene into it, run the layer passes, blit back.
         bool isPrimary = ReferenceEquals(sc, _primarySwapchain);
+        // The deferred atlas flush (if any) already ran inside _glyphs.BeginFrame above, so THIS frame's text is
+        // faithful again — clear the debt before this submit can re-arm it (see the AtlasResetPending check below).
+        if (isPrimary) _textRepaintPending = false;
         int layerKind = isPrimary ? StreamLayerKind(drawList) : 0;
 
         // ── §13.1 route select. Popups keep today's path UNCONDITIONALLY (they must never touch the shared canvas — the
@@ -1596,6 +1604,16 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             // I1: the canvas now represents THIS stream (a 0-rect blit-only frame just re-affirmed it). An incoherent
             // canvas represents nothing, so drop the fingerprint with it.
             _canvasDrawListHash = _canvasValid ? ctx.DrawListHash : 0;
+        }
+        if (_glyphs!.AtlasResetPending)
+        {
+            // The glyph atlas overflowed while THIS frame recorded: some glyphs were emitted BLANK, and the next
+            // BeginFrame flushes every text cache. The pixels just submitted (and the canvas, if this was a canvas
+            // route) are not a faithful rendering of the scene — never build a partial repaint on top of them, and
+            // tell the host it owes one more full, un-skippable frame so the fresh atlas generation actually paints.
+            if (isPrimary) { _canvasValid = false; _canvasDrawListHash = 0; }
+            _textRepaintPending = true;
+            Diag.Count("d3d12", "textAtlasRepaint");
         }
         if (isPrimary)
         {
@@ -4562,6 +4580,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
 
     /// <inheritdoc/>
     public bool HasPendingUploads => _imageTextures?.HasPendingUploads ?? false;
+
+    /// <inheritdoc/>
+    public bool TextRepaintPending => _textRepaintPending;
 
     public void SuppressLatencyWaitOnce() => _skipLatencyOnce = true;
 

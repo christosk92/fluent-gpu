@@ -2816,7 +2816,10 @@ public sealed class InputDispatcher
     /// <summary>Same-axis scroller whose laid-out bounds contain <paramref name="p"/>, even when it is not an ancestor of
     /// the hit leaf (a later-sibling chrome plate covering a list). Prefers a candidate with overflow; otherwise the
     /// deepest containing same-axis <see cref="NodeFlags.Scrollable"/> so a loading/at-edge list can still latch.
-    /// Last-wins DFS matches <see cref="HitAny"/> (deeper / later sibling overwrites). No heap traffic.</summary>
+    /// Last-wins DFS matches <see cref="HitAny"/> (deeper / later sibling overwrites) — including a later sibling that
+    /// is OPAQUE but not itself scrollable (<see cref="Element.BlocksBackgroundScroll"/>, e.g. a modal dialog card):
+    /// such a node discards whatever an earlier sibling found, so a background list under it does not wheel-scroll.
+    /// No heap traffic.</summary>
     private NodeHandle ContainingScrollerForAxis(Point2 p, bool wantHorizontal)
     {
         if (_scene.Root.IsNull) return NodeHandle.Null;
@@ -2843,6 +2846,12 @@ public sealed class InputDispatcher
         if ((flags & NodeFlags.ClipsToBounds) != 0
             && (!inside || !ClipPathAdmits(node, flags, local, hitW, hitH))) return;
         if (!ClipRectAdmits(in np, local)) return;
+
+        // An opaque covering surface (a modal card, a light-dismiss plate) is a Z-STACK SIBLING of whatever page
+        // content it visually sits on top of, not an ancestor — this walk otherwise cannot tell it apart from a
+        // harmless later sibling. Discard whatever this walk found in EARLIER siblings at this point (it is occluded);
+        // still recurse into this node's own children below, so a dialog with genuine scrollable Content is found.
+        if (inside && _scene.GetBlocksBackgroundScroll(node)) { overflow = NodeHandle.Null; any = NodeHandle.Null; }
 
         if (inside && (flags & NodeFlags.Scrollable) != 0 && _scene.HasScroll(node))
         {

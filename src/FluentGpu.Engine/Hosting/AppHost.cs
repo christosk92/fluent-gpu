@@ -1991,6 +1991,7 @@ public sealed class AppHost : IDisposable
         if (_scene.HasBrushAnims) r |= WakeReasons.BrushAnims;
         if (_images.HasReadyCompletions) r |= WakeReasons.ImageReady;
         if (_device.HasPendingUploads) r |= WakeReasons.ImagesPending;
+        if (_device.TextRepaintPending) r |= WakeReasons.TextRepaintPending;
         if (_bakedBlurQueue.HasJobs) r |= WakeReasons.BakedBlurPending;
         if (_images.HasActiveCrossfades) r |= WakeReasons.ImageCrossfades;
         if (_scene.OrphanCount > 0) r |= WakeReasons.Orphans;
@@ -3547,6 +3548,7 @@ public sealed class AppHost : IDisposable
                 && !reconciled && !layoutNeeded && !transformWrote
                 && !imageContentChanged
                 && !_device.HasPendingUploads
+                && !_device.TextRepaintPending
                 && !_bakedBlurQueue.HasRunnableJob
                 && !_images.HasActiveCrossfades;
             ulong dlHash = 0UL;

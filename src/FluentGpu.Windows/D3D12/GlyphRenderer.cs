@@ -600,24 +600,40 @@ float4 PSMain(VSOutG i) : SV_Target
         return true;
     }
 
-    /// <summary>Pack with overflow recovery: a full atlas flushes the GENERATION (pixels + glyph entries + every cached
-    /// run — their quads embed atlas UVs) and packs into the fresh one. Quads already emitted THIS frame briefly sample
-    /// repacked texels (one-frame artifact on the overflow frame); next frame re-shapes from the empty run cache and is
-    /// clean. The epoch counter lets an in-flight <see cref="ShapeInto"/> detect the flush and re-shape its own run so a
-    /// single cached run never mixes generations.</summary>
+    /// <summary>Pack with overflow recovery. A full atlas DEFERS the generational flush to the next <see cref="BeginFrame"/>
+    /// (text.md §5.3: eviction only at frame START) — resetting mid-record would re-assign cells underneath UVs already
+    /// baked/emitted this frame, so quads (and cached runs, and the retained canvas) would sample the WRONG glyph. Instead
+    /// the failed glyph renders as NOTHING for this one frame (no quad); the boundary reset in BeginFrame clears
+    /// _cache/_iconCache/_runCache so everything re-rasterizes into the fresh generation next frame, and
+    /// <see cref="AtlasResetPending"/> tells the device to force that next frame to actually happen (not be skip-submitted
+    /// or baked as a faithful partial repaint).</summary>
     private void PackOrReset(ref GlyphEntry e, byte[] src, int w, int h)
     {
-        if (TryPack(ref e, src, w, h)) return;
-        ResetAtlas();
-        if (!TryPack(ref e, src, w, h))
+        // A single glyph larger than the whole atlas can never pack — blank it without arming a reset, or an
+        // oversized glyph would trigger a full cache flush every single frame it is on screen.
+        if (w + 2 > ATLAS || h + 2 > ATLAS)
         {
-            // A single glyph larger than the whole atlas — render nothing rather than garbage.
-            e.W = 0; e.H = 0;
+            e.X = 0; e.Y = 0; e.W = 0; e.H = 0;
             Diag.Set("text.atlas", "oversized-glyph", $"{w}x{h} > {ATLAS}");
+            return;
         }
+        if (TryPack(ref e, src, w, h)) return;
+        if (!_resetPending)
+        {
+            _resetPending = true;
+            Diag.Count("text.atlas", "overflow-deferred");
+            Diag.Event("text.atlas", $"atlas full at {ATLAS}x{ATLAS} — generation reset deferred to next frame");
+        }
+        e.X = 0; e.Y = 0; e.W = 0; e.H = 0;   // render nothing this frame rather than a stale/wrong glyph
     }
 
     private int _atlasEpoch;
+    /// <summary>Overflow happened while the frame currently being recorded was shaped; the flush runs at the next
+    /// <see cref="BeginFrame"/>. While true, some newly-requested glyphs render blank, so the frame just submitted
+    /// is not a faithful rendering of the scene — the device must not skip-submit and must not treat it as a valid
+    /// partial-repaint base for the retained canvas.</summary>
+    internal bool AtlasResetPending => _resetPending;
+    private bool _resetPending;
 
     /// <summary>Look up a packed icon mask's atlas UVs. Returns true on a HIT (a present entry, even an empty 0×0 mask —
     /// so the caller doesn't re-rasterize nothing); <paramref name="u1"/>&gt;<paramref name="u0"/> means it has pixels.</summary>
@@ -700,7 +716,7 @@ float4 PSMain(VSOutG i) : SV_Target
         var spanRun = spanRunId != 0 ? SpanRunTable.Shared.Resolve(spanRunId) : null;
         _scratch.Clear();
         _colorScratch.Clear();
-        ShapeInto(text, family, size, weight, originX, topY, maxWidth, wrap, trim, maxLines, charSpacing, lineHeight, lineStacking, lineBounds, dpiScale, _scratch,
+        bool consistent = ShapeInto(text, family, size, weight, originX, topY, maxWidth, wrap, trim, maxLines, charSpacing, lineHeight, lineStacking, lineBounds, dpiScale, _scratch,
             spanRun is not null ? spanRun.Spans : default, spanRun is not null ? _colorScratch : null,
             spanRun?.OverflowSuffixStart ?? -1);
         int n = _scratch.Count;
@@ -714,11 +730,22 @@ float4 PSMain(VSOutG i) : SV_Target
             if (colors is not null)
                 for (int i = 0; i < n; i++) colors[i] = _colorScratch[i];
         }
-        _runCache[key] = new ShapedRun { Glyphs = arr, Colors = colors, Count = n, LastUsedFrame = _frame };
-        _runsShaped++;
+        // A mixed-generation shape (some quads hold stale atlas UVs) must NEVER be cached — it would replay wrong
+        // forever instead of just this one frame. Unreachable in the frame-boundary-only reset model; kept as the
+        // correctness backstop (Diag canary — should read 0 in production).
+        if (consistent)
+        {
+            _runCache[key] = new ShapedRun { Glyphs = arr, Colors = colors, Count = n, LastUsedFrame = _frame };
+            _runsShaped++;
+        }
+        else
+        {
+            Diag.Count("text.run", "uncachedMixedEpoch");
+        }
         var baked = arr.AsSpan(0, n);
         float bsnap = SnapDy(baked, world, dpiScale, motionSoft, out int bph);
         Replay(baked, colors, forceColor, color, world, opacity, bsnap, bph, outList);
+        if (!consistent) ReturnQuads(arr);   // Replay already copied into outList; the rented array is not retained
     }
 
     private float[] _gradDy = Array.Empty<float>();
@@ -762,12 +789,20 @@ float4 PSMain(VSOutG i) : SV_Target
         else
         {
             _scratch.Clear();
-            ShapeInto(text, family, size, weight, originX, topY, maxWidth, wrap, trim, maxLines, charSpacing, lineHeight, lineStacking, lineBounds, dpiScale, _scratch);
+            bool consistent = ShapeInto(text, family, size, weight, originX, topY, maxWidth, wrap, trim, maxLines, charSpacing, lineHeight, lineStacking, lineBounds, dpiScale, _scratch);
             count = _scratch.Count;
             var arr = RentQuads(count);
             for (int i = 0; i < count; i++) arr[i] = _scratch[i];
-            _runCache[key] = new ShapedRun { Glyphs = arr, Colors = null, Count = count, LastUsedFrame = _frame };
-            _runsShaped++;
+            // See LayoutRun: a mixed-generation shape must never be cached.
+            if (consistent)
+            {
+                _runCache[key] = new ShapedRun { Glyphs = arr, Colors = null, Count = count, LastUsedFrame = _frame };
+                _runsShaped++;
+            }
+            else
+            {
+                Diag.Count("text.run", "uncachedMixedEpoch");
+            }
             quadsArr = arr;
         }
 
@@ -1010,7 +1045,11 @@ float4 PSMain(VSOutG i) : SV_Target
     /// <paramref name="spans"/> (rtb-01 inline runs): the same one-flow layout with per-range face/weight/size; each
     /// glyph rasterizes at ITS shaped size (LaidGlyph.Size) and <paramref name="colorsOut"/> (non-null for span runs)
     /// receives the per-quad span color (A==0 = inherit), parallel to <paramref name="outList"/>.</summary>
-    private void ShapeInto(string text, string family, float size, int weight, float originX, float topY, float maxWidth, int wrap, int trim, int maxLines,
+    /// <summary>Returns whether the shape stayed within ONE atlas generation throughout — false means the atlas
+    /// overflowed mid-shape (now impossible in the frame-boundary-only reset model — see PackOrReset/BeginFrame —
+    /// but kept as an unconditional correctness invariant against any future mid-frame flush path): a caller MUST
+    /// NOT cache a run for which this returns false, since some of its quads may hold stale-generation UVs.</summary>
+    private bool ShapeInto(string text, string family, float size, int weight, float originX, float topY, float maxWidth, int wrap, int trim, int maxLines,
         float charSpacing, float lineHeight, int lineStacking, int lineBounds, float dpiScale, List<ShapedGlyph> outList,
         ReadOnlySpan<SpanStyle> spans = default, List<ColorF>? colorsOut = null, int overflowSuffixStart = -1)
     {
@@ -1019,7 +1058,7 @@ float4 PSMain(VSOutG i) : SV_Target
         float inv = 1f / dpiScale;
         // If the atlas generation resets mid-run (PackOrReset), quads already baked this pass hold stale UVs —
         // re-shape the whole run into the fresh generation so a cached run is always generation-consistent.
-        // Bounded: a restarted pass packs into an empty 2048² atlas; one run can't fill it (guard at 3 just in case).
+        // Bounded: a restarted pass packs into an empty ATLAS² atlas; one run can't fill it (guard at 3 just in case).
         int epoch, restarts = 0;
         do
         {
@@ -1043,6 +1082,7 @@ float4 PSMain(VSOutG i) : SV_Target
                 }
             }
         } while (epoch != _atlasEpoch && ++restarts < 3);
+        return epoch == _atlasEpoch;
     }
 
     private int FaceId(nint face) { if (_faceIds.TryGetValue(face, out int id)) return id; id = _faceIds.Count + 1; _faceIds[face] = id; return id; }
@@ -1195,6 +1235,13 @@ float4 PSMain(VSOutG i) : SV_Target
         _srvGpu = _srvHeap->GetGPUDescriptorHandleForHeapStart();
     }
 
+    // Multiple UploadIfDirty calls within ONE frame (one per dirty segment) all Map the SAME per-frame staging bank
+    // in sequence, but each recorded CopyTextureRegion reads it at EXECUTION time — one Close+ExecuteCommandLists
+    // per submit — so every copy this frame ends up uploading the FINAL _cpu snapshot, not the snapshot at the
+    // moment it was recorded. That is correct because the atlas is strictly APPEND-ONLY within a frame (generational
+    // resets are deferred to the next BeginFrame — see PackOrReset): the final snapshot is a superset of every
+    // earlier one, so a UV emitted earlier in the frame still points at texels that are byte-identical in it. If a
+    // mid-frame repack is ever reintroduced, this stops being true and needs a distinct staging region per flush.
     public void UploadIfDirty(ID3D12GraphicsCommandList* cmd)
     {
         if (!_atlasDirty && _texInitialized) return;
@@ -1339,6 +1386,10 @@ float4 PSMain(VSOutG i) : SV_Target
         _dropped = 0;
         _gradDropped = 0;
         _frame++;
+        // Deferred generational flush (text.md §5.3): the atlas overflowed while the PREVIOUS frame recorded.
+        // Nothing is mid-shape here and no quads reference the atlas yet this frame, so the repack can never
+        // strand a stale UV. ResetAtlas clears _cache/_iconCache/_runCache and bumps the epoch.
+        if (_resetPending) { _resetPending = false; ResetAtlas(); }
         _runsCached = 0;
         _runsShaped = 0;
         // Sweep stale shaped runs: every 64 frames at rest, every 8 under churn (a scroll storm fills the cache with

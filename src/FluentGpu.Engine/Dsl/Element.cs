@@ -262,6 +262,16 @@ public sealed record BoxEl : Element
     /// interactive child (a command bar) while clicks in its empty area fall through to the page beneath. (Unlike
     /// <see cref="HitTestVisible"/>=false, which excludes the whole subtree and would make the child unclickable.)</summary>
     public bool HitTestPassThrough { get; init; }
+    /// <summary>An opaque, input-blocking surface (a modal dialog card, a light-dismiss popup plate) sits geometrically
+    /// ON TOP of whatever page content is laid out beneath it, but it is a Z-STACK SIBLING of that content, not an
+    /// ancestor. The scroll dispatcher's containing-scroller fallback (<c>InputDispatcher.ContainingScrollerForAxis</c>)
+    /// walks the WHOLE tree by geometry alone when no scrollable ANCESTOR of the hit point exists — it has no notion of
+    /// paint order, so it can find and wheel-scroll a background list whose LAID-OUT bounds happen to sit under a
+    /// covering-but-non-scrollable overlay (a dialog's plain message text, say). Set true on a covering surface to make
+    /// that fallback treat it as opaque: any scrollable candidate found in an EARLIER sibling is discarded once this
+    /// node is reached, though the fallback still recurses into ITS OWN children (a dialog with genuine scrollable
+    /// Content is still found normally, since that inner scroller is a DESCENDANT, not blocked by this reset).</summary>
+    public bool BlocksBackgroundScroll { get; init; }
     /// <summary>Input-enabled (the default). When false the engine gates this node's interaction: it does not hit-test,
     /// focus, take keyboard activation, repeat, drag, or click — so control factories no longer null their handlers by
     /// hand. Disabled <em>visuals</em> stay control-chosen (pick the disabled token via <c>StateBrush.Resting(enabled)</c>).</summary>

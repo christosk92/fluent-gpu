@@ -649,6 +649,14 @@ struct SkylinePacker { Span<SkyNode> nodes; int count; int W, H;
 
 This is the **authoritative glyph-atlas epoch/eviction discipline**:
 
+**As-built note (Windows backend, 2026-08-31):** the shipped `GlyphRenderer` (`src/FluentGpu.Windows/D3D12`) is a
+simpler single-page generational-reset model, not the page-pool/refcounted-slot design below — but it now honors
+the frame-START-only rule this section mandates: an atlas overflow mid-record defers its flush
+(`PackOrReset`/`AtlasResetPending`) to the next `BeginFrame` instead of repacking underneath already-emitted UVs,
+and the device raises `IGpuDevice.TextRepaintPending` so the host is guaranteed to produce (never skip-submit) the
+healing frame. A shape that cannot stay within one atlas generation is never cached (`ShapeInto`'s consistency
+return), closing the "poisoned run replays wrong forever" failure mode a mid-record reset used to allow.
+
 - **Eviction runs only at frame START** (`IGlyphAtlas.BeginFrame`, phase 1 on the render thread). **Any glyph
   referenced by a live command — dirty OR clean — this frame is ineligible.** The liveness/pin set is
   computed from the snapshot's command stream (`hardened-v1-plan.md` §4.1 render-frame ordering: DRAIN

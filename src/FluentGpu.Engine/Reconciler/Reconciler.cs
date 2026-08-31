@@ -4041,6 +4041,7 @@ public sealed class TreeReconciler
                 if (b.Acrylic is { } ac) _scene.SetAcrylic(node, ac); else _scene.ClearAcrylic(node);
                 if (b.EdgeFade is { } bef) _scene.SetEdgeFade(node, bef); else _scene.ClearEdgeFade(node);
                 _scene.SetHitTestPassThrough(node, b.HitTestPassThrough ? node : NodeHandle.Null);   // self = yield to behind, except own children
+                _scene.SetBlocksBackgroundScroll(node, b.BlocksBackgroundScroll);
 
                 // Transform origin (used by static + animated scale/rotate; default centre). Set unconditionally so an
                 // AnimEngine ScaleX/Y track or a TransformBind pivots about the requested origin (e.g. a menu's top edge).

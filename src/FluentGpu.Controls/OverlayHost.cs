@@ -1522,6 +1522,12 @@ internal sealed class FlyoutSurface : Component
                 // over the popup rect, so a hit-test-invisible tooltip bubble still swallowed wheel under it.
                 // Menu/Flyout chrome (below) keeps its opaque plate as a real hit surface — WinUI parity.
                 HitTestPassThrough = true,
+                // Modal only (a ContentDialog card): this surface is a Z-STACK SIBLING of the page it visually
+                // covers, not an ancestor, so the page's own scroller is invisible to it — without this, wheeling
+                // over the dialog's plain (non-scrollable) message text fell through to InputDispatcher's blind
+                // containing-scroller scan and scrolled the page underneath. See Element.BlocksBackgroundScroll.
+                // A dialog WITH scrollable Content is unaffected — that inner scroller is a descendant, found first.
+                BlocksBackgroundScroll = modal,
                 Children = [Body()],
             };
         }

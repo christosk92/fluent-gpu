@@ -1384,6 +1384,22 @@ public sealed class SceneStore : ISceneBackend
     public bool TryGetHitTestPassThrough(NodeHandle node, out NodeHandle target)
         => _hitPassThrough.TryGet((int)node.Raw.Index, out target);
 
+    // ── background-scroll occlusion (Element.BlocksBackgroundScroll) ──────────────────────────────
+    // A covering modal/popup surface's geometric bounds sit over background content it is not an ancestor of; this
+    // marks it opaque for InputDispatcher.ContainingScrollerForAxis's paint-order-blind geometric fallback. Sparse —
+    // O(open blocking overlays), same shape as _hitPassThrough.
+    private readonly ColdSlab<bool> _wheelOccludes = new();   // GEN-17-shaped (see _hitPassThrough)
+
+    public void SetBlocksBackgroundScroll(NodeHandle node, bool value)
+    {
+        if (!IsLive(node)) return;
+        if (!value) _wheelOccludes.Remove((int)node.Raw.Index);
+        else _wheelOccludes.GetOrAdd((int)node.Raw.Index) = true;
+    }
+
+    public bool GetBlocksBackgroundScroll(NodeHandle node)
+        => _wheelOccludes.TryGet((int)node.Raw.Index, out bool v) && v;
+
     // The CSS position:sticky registry was removed — sticky is now a generic ScrollBind pin op
     // (FluentGpu.Animation.ScrollBindTable + ScrollBindEval.ApplyPinAndFlagPass / NodeFlags.StickyPinned).
 

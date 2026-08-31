@@ -238,6 +238,13 @@ public interface IGpuDevice : IDisposable
     /// headless/synchronous backend has nothing pending).</summary>
     bool HasPendingUploads => false;
 
+    /// <summary>True when the last submitted frame rendered text unfaithfully — a glyph-atlas overflow deferred its
+    /// cache flush to the next frame, so some glyphs drew BLANK this frame. The host must NOT skip-submit and must
+    /// NOT treat this frame as a valid partial-repaint base while it is true: it owes exactly one more full frame so
+    /// the backend can re-record with the fresh atlas generation. Default false (headless/synchronous backends never
+    /// defer a reset).</summary>
+    bool TextRepaintPending => false;
+
     /// <summary>Record + batch + submit to a specific swapchain target (windowed popup HWNDs). Backends without
     /// secondary-swapchain support fall back to the primary target via the legacy overload.</summary>
     void SubmitDrawList(ReadOnlySpan<byte> drawList, ReadOnlySpan<ulong> sortKeys, in FrameInfo ctx, ISwapchain target)
