@@ -222,13 +222,13 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
                 if (++controlDrained >= ControlDrainPerFrame) break;
                 continue;
             }
-            // The byte budget is a burst budget, not an absolute size ceiling — at rest AND during scroll: one oversized
-            // head item may use the whole frame so it can never wedge, and the budget then refuses only the applies
-            // BEHIND it. (During scroll the apply cap is 1 anyway, so this bounds the at-rest burst.)
-            // On Weak the head exemption is dropped: an oversize cover respects the byte cap too, deferring it to a
-            // later frame instead of force-landing one uncapped ~1 MiB upload that feeds the UBWC hang. Discrete GPUs
-            // keep the "head always makes progress" exemption unchanged.
-            if (next.ByteLen > byteCap - appliedBytes && (weak || applied > 0)) break;
+            // The byte budget is a burst budget, not an absolute size ceiling: one oversized HEAD item may use the whole
+            // frame so it can never wedge, and the budget then refuses only the applies BEHIND it. This "head always makes
+            // progress" exemption is mandatory on EVERY tier — including Weak — because byteCap does not grow: a cover whose
+            // decoded size exceeds byteCap (e.g. a 512px editorial cover ≈ 1 MiB > 512 KiB) would otherwise be deferred on
+            // EVERY frame and never load. On Weak the cadence is already bounded to ONE apply per frame by cap=1 above, so
+            // the head still lands at most once per frame — that is the throttle, not this byte gate.
+            if (next.ByteLen > byteCap - appliedBytes && applied > 0) break;
             if (!TryDequeuePixels(large, out var d)) continue;
             // UI-thread callers normally serialize Cancel and Pump, but retain the final check for another-thread
             // cancellation between TryPeek and TryDequeue.
