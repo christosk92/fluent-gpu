@@ -79,6 +79,13 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     }
 
     private ID3D12Device* _device;
+    // UMA (integrated/APU/Adreno) upload path — the TRUE D3D12_FEATURE_DATA_ARCHITECTURE.UMA bit (NOT GpuProfile.IsWeak,
+    // which also flags WARP). On UMA, decoded pixels are written straight into a CPU-visible CUSTOM-heap (L0/WRITE_BACK)
+    // texture via WriteToSubresource — no UPLOAD staging buffer, no CopyTextureRegion, and NO COPY_DEST→PIXEL_SHADER_RESOURCE
+    // barrier (the transition the Qualcomm Adreno UMD mishandles → DEVICE_HUNG; adreno-hang-fixes.md M1). The atlas is disabled
+    // on UMA so every WriteToSubresource targets a PRIVATE texture that is either brand-new or fence-reacquired from the pool
+    // (never a resource an in-flight frame is still sampling); the discrete/non-UMA staging path is untouched.
+    private bool _uma;
     private ID3D12DescriptorHeap* _srvHeap;
     private D3D12_CPU_DESCRIPTOR_HANDLE _srvCpu0;
     private D3D12_GPU_DESCRIPTOR_HANDLE _srvGpu0;
@@ -143,9 +150,10 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     /// <summary>Resources awaiting the deferred fence-gated reclaim (the retire list) — O(1) census.</summary>
     internal int RetiredCount => _retired.Count;
 
-    public void Init(ID3D12Device* device)
+    public void Init(ID3D12Device* device, bool unifiedMemory = false)
     {
         _device = device;
+        _uma = unifiedMemory;
         D3D12_DESCRIPTOR_HEAP_DESC hd = default;
         hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE.D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         hd.NumDescriptors = MaxSrv;
@@ -223,7 +231,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
             t.Resource = CreateTexture(w, h);
             if (t.Resource == null) { _freeSlots.Push(slot); return false; }   // device-removed window: soft-fail, never throw
             t.Slot = slot; t.Bucket = 0;
-            t.TexSize = Math.Max(w, h); t.State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST;
+            t.TexSize = Math.Max(w, h); t.State = InitialTexState;   // COMMON on UMA (honest state for the adopt transition)
             CreateSrv(t.Resource, slot, out t.Srv);
         }
 
@@ -270,22 +278,30 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     }
 
     /// <summary>Heap/upload-only (NO command list): runs during the host's <c>ImageCache.Pump</c>, before the frame list
-    /// opens. Routes the image to the atlas (≤128) or the per-bucket pool, (re)acquiring on a routing/size change, and
-    /// copies pixels into a staging buffer with a 256-aligned row pitch. The GPU copy is deferred to <see cref="FlushUploads"/>.</summary>
+    /// opens. Routes the image to the atlas (≤128) or the per-bucket pool, (re)acquiring on a routing/size change.
+    /// Discrete GPUs copy pixels into a staging buffer with a 256-aligned row pitch; the GPU copy is deferred to
+    /// <see cref="FlushUploads"/>. On UMA (adreno-hang-fixes.md M1) the pixels are written straight into a CPU-visible
+    /// CUSTOM-heap texture via <c>WriteToSubresource</c> here — no staging buffer, no deferred copy, no barrier.</summary>
     public ImageUploadResult Stage(int id, ReadOnlySpan<byte> pbgra8, int w, int h)
     {
         AssertRenderThread();   // seam Step 1: render-confined under async (drained inside SubmitDrawList); UI-staged otherwise
         if (_device == null || w <= 0 || h <= 0 || pbgra8.Length < (long)w * h * 4)
             return ImageUploadResult.Invalid;
         int bucket = BucketFor(Math.Max(w, h));
-        bool wantAtlas = bucket <= 128;
+        // On UMA the atlas is disabled: every image gets a PRIVATE pool/standalone texture so each WriteToSubresource
+        // targets a resource that is brand-new or fence-reacquired (never a shared page the GPU is mid-sample of). ≤128
+        // buckets fall through to the pooled branch (a 64²/128² texture each). Discrete keeps the shared-atlas packing.
+        bool wantAtlas = !_uma && bucket <= 128;
         int rowBytes = w * 4;
-        int rowPitch = (rowBytes + 255) & ~255;          // D3D12_TEXTURE_DATA_PITCH_ALIGNMENT
+        int rowPitch = (rowBytes + 255) & ~255;          // D3D12_TEXTURE_DATA_PITCH_ALIGNMENT (discrete staging only)
         long uploadBytes = (long)rowPitch * h;
 
         bool had = _byId.TryGetValue(id, out var t);
         // Re-route if this id's prior placement (atlas vs pool, or a different bucket) no longer fits the new pixels.
-        bool reroute = had && (t.Atlas != wantAtlas || t.Bucket != (wantAtlas ? bucket : (bucket <= 512 ? bucket : 0)));
+        // On UMA, ALSO force a reroute for any re-stage of a resident id: an in-place WriteToSubresource would race an
+        // in-flight frame still sampling that exact texture, so instead acquire a FRESH (fenced) texture and retire the
+        // old placement through the normal 2-frame fence path — the same guarantee that makes a pooled reuse safe.
+        bool reroute = had && (_uma || t.Atlas != wantAtlas || t.Bucket != (wantAtlas ? bucket : (bucket <= 512 ? bucket : 0)));
         // Acquire the replacement before retiring the old placement. A rejected full-res upload must not destroy an
         // already-resident blur-hash texture.
         Tex prior = reroute ? t : default;
@@ -314,7 +330,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
                 if (res == null) { _freeSlots.Push(slot); return RejectDeviceFault(); }
                 t.Atlas = false; t.Resource = res; t.Slot = slot; t.Bucket = 0;
                 t.TexSize = Math.Max(w, h); t.Ox = 0; t.Oy = 0;
-                t.State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST; t.Live = false;
+                t.State = InitialTexState; t.Live = false;   // COMMON on UMA (WriteToSubresource path); COPY_DEST discrete
                 CreateSrv(t.Resource, slot, out t.Srv);
             }
         }
@@ -323,6 +339,36 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         {
             RetirePlacement(ref prior);
             if (prior.Atlas) _atlasCount--; else if (prior.Bucket > 0) _poolCount--;
+        }
+
+        if (_uma)
+        {
+            // UMA fast path (adreno-hang-fixes.md M1): write the decoded pixels STRAIGHT into the CPU-visible texture.
+            // No UPLOAD staging buffer, no CopyTextureRegion, and no COPY_DEST→PIXEL_SHADER_RESOURCE barrier — the texture
+            // is sampled directly out of COMMON by implicit state promotion. SrcRowPitch is the UNPADDED source stride
+            // (w*4, tightly packed BGRA8 — the same stride the discrete row-copy reads); the 256-aligned rowPitch above is
+            // a discrete-staging concern only. This is synchronous CPU work on the same thread as the discrete Stage
+            // (render-confined under async / UI-side with no GPU overlap under force-sync), always BEFORE the texture's
+            // first GPU use (cold texture) or after it was fence-reacquired (every re-stage reroutes) — never mid-sample.
+            ID3D12Resource* umaTex = t.Resource;   // atlas is disabled on UMA ⇒ always a private pool/standalone texture
+            if (umaTex == null) return ReleaseAfterDeviceFault(id, ref t);
+            t.W = w; t.H = h; t.RowPitch = rowBytes; t.Upload = null;
+            D3D12_BOX box = new() { left = (uint)t.Ox, top = (uint)t.Oy, front = 0, right = (uint)(t.Ox + w), bottom = (uint)(t.Oy + h), back = 1 };
+            int hr;
+            fixed (byte* src = pbgra8)
+                hr = (int)umaTex->WriteToSubresource(0, &box, src, (uint)rowBytes, (uint)((long)rowBytes * h));
+            if (hr < 0)
+            {
+                // Device-removed window: WriteToSubresource fails like the CreateCommittedResource/Map calls do on the
+                // discrete path. Soft-fail identically (publish + retire this id's placement, reject) — never throw past
+                // the render-thread seam.
+                NoteResourceFault("Image.WriteToSubresource");
+                return ReleaseAfterDeviceFault(id, ref t);
+            }
+            t.State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COMMON;   // sampled via implicit promotion; never barriered
+            t.NeedsCopy = false; t.Live = true;
+            _byId[id] = t;
+            return ImageUploadResult.Accepted;   // NOT queued into _pendingCopies — FlushUploads has no copy/barrier to do
         }
 
         // (Re)allocate the staging upload buffer if it must grow.
@@ -504,7 +550,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         pt = new Pooled
         {
             Resource = res, Srv = srv, Slot = slot,
-            State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST
+            State = InitialTexState   // COMMON on UMA (WriteToSubresource, no copy/barrier); COPY_DEST discrete
         };
         return true;
     }
@@ -553,7 +599,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         pg.Bucket = bucket;
         pg.Used = 0;
         pg.Live = false;
-        pg.State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST;
+        pg.State = InitialTexState;   // COMMON on UMA; COPY_DEST discrete (atlas is unused by Stage on UMA — bake-only)
         CreateSrv(pg.Tex, slot, out pg.Srv);
         int per = PageSize / bucket;
         for (int y = per - 1; y >= 0; y--)
@@ -601,15 +647,44 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     }
 
     // ── resource helpers ──────────────────────────────────────────────────────
+    // The state a freshly-created image texture is tracked in. Discrete: COPY_DEST (the CopyTextureRegion dest). UMA:
+    // COMMON — the CPU-writable texture is populated by WriteToSubresource (not a GPU copy) and promotes to
+    // PIXEL_SHADER_RESOURCE implicitly on first sample, so it is never barriered on the upload path. Keeping the tracked
+    // state honest also means the (default-off) baked-blur adopt path emits the correct COMMON→COPY_DEST transition on UMA.
+    private D3D12_RESOURCE_STATES InitialTexState =>
+        _uma ? D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COMMON
+             : D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST;
+
     private ID3D12Resource* CreateTexture(int w, int h)
     {
-        D3D12_HEAP_PROPERTIES dp = default; dp.Type = D3D12_HEAP_TYPE.D3D12_HEAP_TYPE_DEFAULT;
         D3D12_RESOURCE_DESC td = default;
         td.Dimension = D3D12_RESOURCE_DIMENSION.D3D12_RESOURCE_DIMENSION_TEXTURE2D;
         td.Width = (ulong)w; td.Height = (uint)h; td.DepthOrArraySize = 1; td.MipLevels = 1;
         td.Format = DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM; td.SampleDesc.Count = 1;
         td.Layout = D3D12_TEXTURE_LAYOUT.D3D12_TEXTURE_LAYOUT_UNKNOWN;
         ID3D12Resource* tex = null;
+
+        if (_uma)
+        {
+            // UMA (adreno-hang-fixes.md M1): a CPU-writable texture on a HEAP_TYPE_CUSTOM heap (L0 memory pool +
+            // WRITE_BACK CPU page property — the only heap on which a TEXTURE2D is CPU-mappable / WriteToSubresource-able;
+            // a plain UPLOAD heap CANNOT hold a TEXTURE2D). Created in COMMON: it is only ever GPU-READ (as a shader
+            // resource), so it promotes COMMON→PIXEL_SHADER_RESOURCE implicitly on first sample and needs NO barrier — the
+            // per-frame COPY_DEST→PSR transition (which the Adreno UMD mishandles) is gone. On a true-UMA adapter these
+            // heap props match GetCustomHeapProperties(0, DEFAULT); we set them by hand (no COM round-trip, no ABI quirk).
+            D3D12_HEAP_PROPERTIES up = default;
+            up.Type = D3D12_HEAP_TYPE.D3D12_HEAP_TYPE_CUSTOM;
+            up.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY.D3D12_CPU_PAGE_PROPERTY_WRITE_BACK;
+            up.MemoryPoolPreference = D3D12_MEMORY_POOL.D3D12_MEMORY_POOL_L0;
+            up.CreationNodeMask = 0; up.VisibleNodeMask = 0;   // 0 ≡ single-adapter node 1
+            if ((int)_device->CreateCommittedResource(&up, D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_NONE, &td,
+                D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COMMON, null, __uuidof<ID3D12Resource>(), (void**)&tex) < 0)
+            { NoteResourceFault("Image.CreateTexture.Uma"); return null; }
+            D3D12MemoryDiagnostics.Track(tex, $"Image.Texture.Uma {w}x{h} BGRA8", (ulong)w * (uint)h * 4);
+            return tex;
+        }
+
+        D3D12_HEAP_PROPERTIES dp = default; dp.Type = D3D12_HEAP_TYPE.D3D12_HEAP_TYPE_DEFAULT;
         // NULL on failure, never a throw: on a removed device (DXGI_ERROR_DEVICE_REMOVED, 0x887A0005) every create here
         // fails, and this runs on the fgpu-render thread INSIDE the image drain — a throw past that seam is unobserved
         // and kills the process. Every caller treats null as "could not admit" (media-pipeline.md §4.1).

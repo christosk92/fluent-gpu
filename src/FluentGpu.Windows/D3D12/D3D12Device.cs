@@ -216,6 +216,11 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     public int LastFullTargetGroups => _opacity?.FullTargetGroupsThisFrame ?? 0;
     private GlyphRenderer? _glyphs;
     private ImageTextureStore? _imageTextures;
+    // True on a unified-memory (integrated/APU/Adreno) adapter — the TRUE D3D12_FEATURE_DATA_ARCHITECTURE.UMA bit, set at
+    // InitDevice. Distinct from GpuProfile.IsWeak (which also flags WARP): this gates the CPU-writable image-texture path
+    // (WriteToSubresource, no staging buffer / copy / barrier — adreno-hang-fixes.md M1). Re-set on every device recovery.
+    private bool _isUnifiedMemory;
+    internal bool IsUnifiedMemory => _isUnifiedMemory;
     private ImagePipeline? _imagePipe;
     private BakedBlurCompositor? _bakedBlur;
     private FluentGpu.Hosting.Threading.BakedBlurQueue? _bakedBlurQueue;
@@ -566,7 +571,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             p.Init(_device);
             glyphs = p;
         });
-        tasks[9] = Stage(9, () => { var p = new ImageTextureStore(); p.Init(_device); imageTextures = p; });
+        tasks[9] = Stage(9, () => { var p = new ImageTextureStore(); p.Init(_device, _isUnifiedMemory); imageTextures = p; });
         tasks[10] = Stage(10, () => { var p = new ImagePipeline(); p.Init(_device); imagePipe = p; });
         tasks[11] = Stage(11, () => { var p = new BakedBlurCompositor(); p.Init(_device, _queue); bakedBlur = p; });
 
@@ -1024,6 +1029,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             if ((int)_device->CheckFeatureSupport(D3D12_FEATURE.D3D12_FEATURE_ARCHITECTURE, &arch, (uint)sizeof(D3D12_FEATURE_DATA_ARCHITECTURE)) >= 0)
             {
                 uma = arch.UMA != 0;
+                _isUnifiedMemory = uma;   // M1: gate the CPU-writable image-texture upload path (no staging/copy/barrier)
                 FluentGpu.Foundation.GpuProfile.Tier = uma
                     ? FluentGpu.Foundation.GpuPowerTier.Weak
                     : FluentGpu.Foundation.GpuPowerTier.Strong;
