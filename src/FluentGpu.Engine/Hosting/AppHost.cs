@@ -1963,6 +1963,13 @@ public sealed class AppHost : IDisposable
     {
         WakeReasons r = WakeReasons.None;
         if (_frameNeeded) r |= WakeReasons.FrameNeeded;
+        // A pending window geometry/scale change IS active work: EnsureSize only runs inside Paint, so a resize,
+        // WM_DPICHANGED hop or app-zoom step landing on an otherwise idle host must wake the frame that will run it
+        // (Win32 also raises PaintRequested; headless drives the seam directly and relies on this term). Three field
+        // reads + float compares - zero-alloc, and False every frame the window is quiet.
+        var wsz = _window.ClientSizePx;
+        if (_window.Scale != _lastScale || wsz.Width != _lastSize.Width || wsz.Height != _lastSize.Height)
+            r |= WakeReasons.FrameNeeded;
         // Own bits (not folded into FrameNeeded) so FG_WAKE_DIAG can name the treadmill: warming vs budget vs latch.
         if (_reconciler.HasWarmingVirtuals) r |= WakeReasons.WarmingVirtuals;
         if (_reconciler.HasBudgetDeferredVirtuals) r |= WakeReasons.BudgetDeferredVirtuals;
@@ -3359,7 +3366,7 @@ public sealed class AppHost : IDisposable
             // upload-burst → fence-stall guard: throttle uploads while a scroll is live OR a nav-transition window is
             // open (P1b). Both drop DecodeScheduler to its tight 1-apply/512 KiB cap; bounds the burst at any buffer
             // depth (retained with FRAME_COUNT=3). scrollActive itself is left untouched for its many downstream reads.
-            _images.ScrollThrottled = scrollActive || _navThrottleFrames > 0;
+            _images.ScrollThrottled = scrollActive || _navThrottleFrames > 0 || (FluentGpu.Foundation.GpuProfile.IsWeak && _device.HasPendingUploads);
             _scrollChrome.Tick(dtMs);                          // 7 conscious scrollbar fade/expand (motion never touches chrome; chrome never touches motion)
             ScrollBindEval.ApplyPinAndFlagPass(_scene);       // 7 generic scroll-bind pins + the predicate-flag channel (sticky etc.)
             ScrollBindEval.RunObservers(_scene);              // 7 change-only scroll-geometry observers (pull-to-refresh / analytics)
@@ -3409,6 +3416,12 @@ public sealed class AppHost : IDisposable
                 }
             }
             _images.Tick(dtMs);
+            // M5 (adreno-hang-fixes.md): VRAM-pressure eviction, Weak/UMA only. Once per frame, after the apply/tick
+            // maintenance, read the device LOCAL-segment usage and evict unpinned LRU when over 90% of budget so the
+            // tracked live set stays under the 128 MB UMA budget the UBWC hang is amplified by. Discrete GPUs never
+            // read VRAM here (short-circuits on IsWeak); TryGetVramUsage default-returns false so no per-frame alloc.
+            if (FluentGpu.Foundation.GpuProfile.IsWeak && _device.TryGetVramUsage(out long __vu, out long __vb) && __vb > 0 && __vu > __vb * 0.90)
+                _images.EvictToVramPressure(__vb, __vu);
             long tImagePump = Stopwatch.GetTimestamp();
             if (s_allocDiag) { db = Probe(SegImages, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 

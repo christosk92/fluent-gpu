@@ -45,7 +45,13 @@ internal sealed unsafe class OpacityLayerCompositor : IDisposable
 {
     private const int MaxPool = 32;              // CANVAS-sized transient group slots + small REGION-sized blur-cache PINS (one pool)
     private const int PinBudget = 24;            // max retained region pins; guarantees ≥ MaxPool-PinBudget = 8 slots for transient scratch
-    private const int TrimIdleFrames = 600;      // transient (canvas) free entries idle this long (~10 s) are retired (fence-gated)
+    // Weak (UMA/iGPU) tier trims transient canvas RTs after ~2 s (120 frames) instead of ~10 s (600) so the 22MB
+    // canvas scratch retires fast off the tiny LOCAL segment (adreno-hang-fixes.md M5). Discrete GPUs keep the 600.
+    private static readonly int TrimIdleFrames = GpuProfile.IsWeak ? 120 : 600;   // transient (canvas) free entries idle this long are retired (fence-gated)
+    // Weak tier caps the number of LIVE transient canvas RTs at 8. The pool array + descriptor heaps stay MaxPool(32)-
+    // sized so FrameBanking descriptor math is untouched; only the count of slots holding a resource is bounded (see
+    // TickPool). Discrete GPUs are uncapped (MaxPool). In-frame nesting can still transiently allocate up to MaxPool.
+    private static readonly int WeakTransientCap = GpuProfile.IsWeak ? 8 : MaxPool;
     private const int PinTrimIdleFrames = 120;   // pins idle this long (~2 s of SUBMITTED frames) are retired — a stationary pin is FindPin-hit every submit, so only ORPHANS (a rect/σ a row left) climb to this
 
     private ID3D12Device* _device;
@@ -790,6 +796,30 @@ float4 BlurPS(V i) : SV_Target
             if (++e.IdleFrames <= trimAt) continue;
             _retired.Add(new Retired { Res = e.Res, Fence = e.LastUseFence });
             e = default;
+        }
+        // Weak (UMA) hard cap on live canvas RTs: retire the LRU idle unpinned transient slots beyond WeakTransientCap
+        // so idle 22MB scratch cannot pile onto the tiny LOCAL segment even before the idle timer elapses. Only idle,
+        // unpinned (PinHash==0) transient slots are touched — in-use (this frame's nesting) and region-cache pins are
+        // left intact, so the frame's actual nesting depth is always honored. Allocation-free. (adreno-hang-fixes.md M5.)
+        if (GpuProfile.IsWeak)
+        {
+            int live = 0;
+            for (int i = 0; i < MaxPool; i++)
+                if (_pool[i].Res != null && _pool[i].PinHash == 0) live++;
+            while (live > WeakTransientCap)
+            {
+                int victim = -1;
+                for (int i = 0; i < MaxPool; i++)
+                {
+                    ref var e = ref _pool[i];
+                    if (e.Res == null || e.InUse || e.PinHash != 0) continue;
+                    if (victim < 0 || e.LastUseFence < _pool[victim].LastUseFence) victim = i;
+                }
+                if (victim < 0) break;   // all remaining transient slots are in-use this frame — honor the nesting
+                _retired.Add(new Retired { Res = _pool[victim].Res, Fence = _pool[victim].LastUseFence });
+                _pool[victim] = default;
+                live--;
+            }
         }
         DrainRetired(completedFence);
     }

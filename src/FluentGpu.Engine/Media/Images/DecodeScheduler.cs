@@ -200,8 +200,14 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
         }
 
         int applied = 0;
-        int cap = ScrollThrottled ? Math.Min(1, s_maxAppliesPerFrame) : s_maxAppliesPerFrame;
-        int byteCap = ScrollThrottled ? Math.Min(ScrollApplyBytesPerFrame, s_maxApplyBytesPerFrame) : s_maxApplyBytesPerFrame;
+        // Weak/UMA GPUs (Adreno UBWC DEVICE_HUNG mitigation, adreno-hang-fixes.md M0): force the tight
+        // 1-apply / 512 KiB cap EVERY frame — throttled or not — so a passive Home-feed load can't stream
+        // uploads at the full at-rest rate. Discrete GPUs keep the exact scroll-gated behavior.
+        bool weak = FluentGpu.Foundation.GpuProfile.IsWeak;
+        int cap = (weak || ScrollThrottled) ? Math.Min(1, s_maxAppliesPerFrame) : s_maxAppliesPerFrame;
+        int byteCap = weak
+            ? ScrollApplyBytesPerFrame
+            : ScrollThrottled ? Math.Min(ScrollApplyBytesPerFrame, s_maxApplyBytesPerFrame) : s_maxApplyBytesPerFrame;
         int appliedBytes = 0;
         while (applied < cap && (!bounded || Stopwatch.GetTimestamp() < deadlineTicks) && TryPeekPixels(out var next, out bool large))
         {
@@ -219,7 +225,10 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
             // The byte budget is a burst budget, not an absolute size ceiling — at rest AND during scroll: one oversized
             // head item may use the whole frame so it can never wedge, and the budget then refuses only the applies
             // BEHIND it. (During scroll the apply cap is 1 anyway, so this bounds the at-rest burst.)
-            if (next.ByteLen > byteCap - appliedBytes && applied > 0) break;
+            // On Weak the head exemption is dropped: an oversize cover respects the byte cap too, deferring it to a
+            // later frame instead of force-landing one uncapped ~1 MiB upload that feeds the UBWC hang. Discrete GPUs
+            // keep the "head always makes progress" exemption unchanged.
+            if (next.ByteLen > byteCap - appliedBytes && (weak || applied > 0)) break;
             if (!TryDequeuePixels(large, out var d)) continue;
             // UI-thread callers normally serialize Cancel and Pump, but retain the final check for another-thread
             // cancellation between TryPeek and TryDequeue.

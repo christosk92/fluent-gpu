@@ -725,7 +725,12 @@ public static class FluentApp
 
     private static long ImageCacheBudgetBytes()
     {
+        // Weak (UMA/iGPU) tier: 24MB steady-state cap (from 64MB) — shrinks the at-rest residency AND the
+        // post-device-recovery re-realize burst on Adreno-class parts that page hard when over their tiny LOCAL
+        // budget. Tier-gated: discrete GPUs are unaffected. (adreno-hang-fixes.md M5.)
         const long DefaultBytes = 64L * 1024 * 1024;
+        const long WeakBytes = 24L * 1024 * 1024;
+        if (GpuProfile.IsWeak) return WeakBytes;
         string? raw = Environment.GetEnvironmentVariable("FG_IMAGE_CACHE_MB");
         if (int.TryParse(raw, out int mb) && mb is >= 16 and <= 1024) return (long)mb * 1024 * 1024;
         return DefaultBytes;

@@ -151,6 +151,16 @@ public static class MotionRecipes
     public static void SkeletonPulse(this AnimEngine anim, NodeHandle node, float min = 0.5f, float durationMs = 1000f)
     {
         if (Motion.ReducedMotion) return;
+        if (GpuProfile.IsWeak)
+        {
+            // Weak/UMA GPUs (the Adreno DEVICE_HUNG amplifier): a looping opacity breathe keeps the render loop hot
+            // EVERY frame, so every decoded album-art texture uploads on the very next frame at max cadence. Seed a
+            // FLAT, non-looping opacity that settles to Done on the next tick — the placeholder holds full opacity and
+            // the frame loop can idle between decodes so uploads coalesce. Discrete GPUs keep the full shimmer below.
+            anim.Keyframes(node, AnimChannel.Opacity,
+                [new Keyframe(0f, 1f), new Keyframe(1f, 1f)], 1f, loop: false);
+            return;
+        }
         anim.Keyframes(node, AnimChannel.Opacity,
             [new Keyframe(0f, 1f), new Keyframe(0.5f, min, Easing.EaseInOut), new Keyframe(1f, 1f, Easing.EaseInOut)],
             durationMs, loop: true);

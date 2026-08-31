@@ -3991,19 +3991,39 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     }
 
     // The receipts UI reads this on a 5 s timer, so producing it every Present would spend two DXGI calls per frame to
-    // refresh a value nobody looks at 299 times out of 300. Sample on a cold cadence instead: ~1 Hz at 60 fps.
+    // refresh a value nobody looks at 299 times out of 300. Sample on a cold cadence instead: ~1 Hz at 60 fps. On the
+    // Weak (UMA/iGPU) tier we sample ~6× faster (every 10 presents) so the host's VRAM-pressure eviction reacts within
+    // ~160ms instead of ~1s — the Adreno pages hard when over its tiny LOCAL budget (adreno-hang-fixes.md M5).
     const int VideoMemorySampleEveryNPresents = 60;
+    const int VideoMemorySampleEveryNPresentsWeak = 10;
     int _videoMemorySampleCountdown;
+
+    // Last sampled LOCAL (device-dedicated) segment usage/budget, cached for IGpuDevice.TryGetVramUsage. _vramSampled
+    // stays false until the first successful QueryVideoMemoryInfo so callers can distinguish "unknown" from "0 used".
+    long _vramUsedBytes, _vramBudgetBytes;
+    bool _vramSampled;
+
+    /// <inheritdoc/>
+    public bool TryGetVramUsage(out long usedBytes, out long budgetBytes)
+    {
+        usedBytes = _vramUsedBytes;
+        budgetBytes = _vramBudgetBytes;
+        return _vramSampled;
+    }
 
     void PublishVideoMemorySnapshot()
     {
         if (--_videoMemorySampleCountdown > 0) return;
-        _videoMemorySampleCountdown = VideoMemorySampleEveryNPresents;
+        _videoMemorySampleCountdown = GpuProfile.IsWeak ? VideoMemorySampleEveryNPresentsWeak : VideoMemorySampleEveryNPresents;
         EnsureAdapter3();
         if (_adapter3 == null) return;
         DXGI_QUERY_VIDEO_MEMORY_INFO local = default, nonLocal = default;
         if ((int)_adapter3->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP.DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &local) < 0) return;
         _ = _adapter3->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP.DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL, &nonLocal);
+        // Cache the LOCAL segment for the VRAM-pressure seam (long is ample — budgets are < 2^63).
+        _vramUsedBytes = (long)local.CurrentUsage;
+        _vramBudgetBytes = (long)local.Budget;
+        _vramSampled = true;
         D3D12MemoryDiagnostics.PublishVideoMemory(
             local.CurrentUsage, local.Budget,
             nonLocal.CurrentUsage, nonLocal.Budget,

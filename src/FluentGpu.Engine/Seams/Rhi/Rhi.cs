@@ -95,6 +95,13 @@ public interface IGpuDevice : IDisposable
     /// deterministic gates keep PresentQpc = FrameQpc + 2·refresh. D3D12 overrides with FRAME_COUNT − 1 (= 2).</summary>
     int MaxFrameLatency => 1;
 
+    /// <summary>Best-effort local (device-dedicated) VRAM usage vs the OS-reported budget for this adapter, in bytes.
+    /// Returns <see langword="false"/> when the backend cannot report it (the headless seam, and any real backend before
+    /// its first sample) — callers must treat a false return as "unknown" and skip pressure-relief. The D3D12 backend
+    /// fills these from the LOCAL memory segment it already polls (QueryVideoMemoryInfo). Used by the host's Weak-tier
+    /// VRAM-pressure eviction (adreno-hang-fixes.md M5); default keeps every other backend unaffected.</summary>
+    bool TryGetVramUsage(out long usedBytes, out long budgetBytes) { usedBytes = 0; budgetBytes = 0; return false; }
+
     /// <summary>The composited-video presenter (DirectComposition child visuals for externally-produced video / protected
     /// DRM surfaces), or <see langword="null"/> when this backend/target cannot composite video — the headless seam, or
     /// an opaque non-composited window. Default <see langword="null"/> keeps every non-D3D12 backend AND the headless

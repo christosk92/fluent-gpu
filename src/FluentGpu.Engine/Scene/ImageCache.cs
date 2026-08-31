@@ -171,7 +171,10 @@ public sealed class ImageCache
     private readonly Dictionary<int, List<int>> _derivedBySource = new();
     private readonly IImageDecoder _decoder;
     private readonly long _budgetBytes;
-    private const long DerivedSoftBudgetBytes = 16L * 1024 * 1024;
+    // Soft cap on derived/blur bytes. Weak (UMA/iGPU) tier halves it to 8MB (from 16MB) so blur-hash previews retire
+    // faster and don't pad the tiny LOCAL segment (adreno-hang-fixes.md M5). Set once in the ctor — the backend has
+    // published GpuProfile.Tier by the time the cache is constructed. Discrete GPUs are unaffected.
+    private readonly long DerivedSoftBudgetBytes = GpuProfile.IsWeak ? 8L * 1024 * 1024 : 16L * 1024 * 1024;
     private readonly ImageCompleteHandler _onComplete;   // cached → Pump allocates nothing
     private readonly ImageReadyHandler _onPixels;         // cached admission bridge → Pump allocates nothing
     private static readonly ImageReadyHandler _noPixels = static (int id, System.ReadOnlySpan<byte> p, int w, int h) => { };
@@ -992,13 +995,26 @@ public sealed class ImageCache
     {
         while (UsedBytes > _budgetBytes || DerivedUsedBytes > DerivedSoftBudgetBytes)
         {
-            int victim = 0; long oldest = long.MaxValue;
             bool preferDerived = DerivedUsedBytes > DerivedSoftBudgetBytes;
+            if (EvictOneLru(preferDerived) == 0) break;   // everything left is pinned (on screen) — never evict it
+        }
+    }
+
+    /// <summary>
+    /// Evicts the single oldest UNPINNED (<c>Refs == 0</c>) Ready entry — optionally restricted to derived/blur entries
+    /// (<paramref name="preferDerived"/>) which are the cheapest to lose — and returns the bytes it freed, or 0 when
+    /// nothing is evictable (everything left is pinned/visible). Allocation-free (a struct dictionary-enumerator scan,
+    /// no closures). Shared by <see cref="EvictToBudget"/> and <see cref="EvictToVramPressure"/>.
+    /// </summary>
+    private long EvictOneLru(bool preferDerived)
+    {
+        int victim = 0; long oldest = long.MaxValue;
             foreach (var (id, e) in _byId)
                 if (e.Refs == 0 && e.State == ImageState.Ready && (!preferDerived || e.Derived) && e.LastUsed < oldest)
                 { oldest = e.LastUsed; victim = id; }
-            if (victim == 0) break;   // everything left is pinned (on screen) — never evict it
+            if (victim == 0) return 0;   // everything left is pinned (on screen) — never evict it
             var e2 = _byId[victim];
+            long freed = e2.Bytes;
             UsedBytes -= e2.Bytes;
             if (e2.Derived) DerivedUsedBytes -= e2.Bytes;
             bool activeDeadline = e2.Transition.Enabled && !float.IsNaN(e2.TextureMs)
@@ -1031,6 +1047,39 @@ public sealed class ImageCache
                     $"usedMB={UsedBytes / (1024.0 * 1024.0):0.0} budgetMB={_budgetBytes / (1024.0 * 1024.0):0.0}");
             NotifyStatus(e2);
             _evictSink(victim);   // free the GPU texture (the device defers the release behind the frame fence)
+            return freed;
+    }
+
+    /// <summary>
+    /// Weak-GPU VRAM-pressure relief (adreno-hang-fixes.md M5). The host samples the device's LOCAL-segment budget
+    /// (<see cref="FluentGpu.Rhi.IGpuDevice.TryGetVramUsage"/>) and, when total VRAM crosses ~0.90 of budget, calls this
+    /// every frame; it sheds unpinned image-cache LRU down toward the 0.85 soft line.
+    ///
+    /// <para><b>Approximation.</b> The device figure (<paramref name="usedBytes"/> / <paramref name="budgetBytes"/>) is
+    /// TOTAL VRAM — swapchain + every OpacityLayer RT + all textures — but this cache only tracks its OWN image bytes
+    /// (<see cref="UsedBytes"/>). We cannot know how much of the overage is ours, so we shed our share: compute the
+    /// overage above <c>budget*0.85</c> and evict image-cache LRU bytes to cover it, bounded by what the cache actually
+    /// holds. Freeing our portion relieves proportional device pressure without ever evicting pinned/visible entries;
+    /// the remaining overage (swapchain / RTs) is bounded by the other M5 levers (RT pool cap, depth-3 swapchain).</para>
+    ///
+    /// <para>Hysteresis lives on the caller: the host arms this hard path only above 0.90 and stops once back under, so
+    /// this method just executes when called. It is allocation-free (the shared <see cref="EvictOneLru"/> scan) and safe
+    /// to call every frame.</para>
+    /// </summary>
+    public void EvictToVramPressure(long budgetBytes, long usedBytes)
+    {
+        if (budgetBytes <= 0) return;
+        long softLine = (long)(budgetBytes * 0.85);
+        long overage = usedBytes - softLine;
+        if (overage <= 0) return;                       // already under the soft line — nothing to shed
+        long target = UsedBytes - overage;              // shed at most our share of the overage…
+        if (target < 0) target = 0;                     // …bounded by what the cache holds (never negative)
+        while (UsedBytes > target)
+        {
+            bool preferDerived = DerivedUsedBytes > 0;  // blur/derived first — cheapest to lose, re-baked on demand
+            long freed = EvictOneLru(preferDerived);
+            if (freed == 0 && preferDerived) freed = EvictOneLru(false);   // derived all pinned → try full images
+            if (freed == 0) break;                      // everything left is pinned/visible — never evict it
         }
     }
 }
