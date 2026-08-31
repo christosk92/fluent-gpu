@@ -53,6 +53,37 @@ public static class FluentApp
             Win32Theme.ApplyWindowMaterial(WindowHandle, Theme.Dark, s_mica, s_customFrame, micaAlt);
     }
 
+    // The LIVE app-zoom state, seeded from AppOptions at Run and re-writable through SetZoom. Held here rather than
+    // read off the captured options record because SetZoom is re-callable at runtime (Ctrl+= / Ctrl+- / Ctrl+wheel):
+    // every step must see the CURRENT factor, and the window seam (IPlatformWindow.SetZoom) needs a live target.
+    private static float s_zoom = 1f;
+    private static IPlatformWindow? s_zoomWindow;
+
+    /// <summary>The current app-zoom factor (browser-style Ctrl+= zoom; 1.0 = none). Seeded from
+    /// <see cref="AppOptions.Zoom"/>; changed by <see cref="SetZoom"/>. UI-thread only (set on the thread that pumps
+    /// the window, like <see cref="WindowHandle"/>).</summary>
+    public static float Zoom => s_zoom;
+
+    /// <summary>Raised after <see cref="SetZoom"/> commits a new factor (already <see cref="ZoomLadder"/>-clamped and
+    /// de-duplicated) — the persistence hook: subscribe to write the level into settings so the next launch seeds
+    /// <see cref="AppOptions.Zoom"/> with it. Invoked on the UI thread.</summary>
+    public static event Action<float>? ZoomChanged;
+
+    /// <summary>Set the LIVE app-zoom factor — the re-callable half of the startup <see cref="AppOptions.Zoom"/> seed,
+    /// for the app's zoom chords (Ctrl+= / Ctrl+- / Ctrl+0 / Ctrl+wheel) and any settings UI. Clamped to the
+    /// <see cref="ZoomLadder"/> range; a no-change write is dropped (no window poke, no event). Pushes the factor into
+    /// the live window (<c>IPlatformWindow.SetZoom</c> re-derives the effective Scale and relays out), then raises
+    /// <see cref="ZoomChanged"/>. UI-thread only; before the window exists this just records the value (the next
+    /// <see cref="Run(Func{Component}, AppOptions?)"/> seeds from <see cref="AppOptions.Zoom"/>).</summary>
+    public static void SetZoom(float zoom)
+    {
+        zoom = ZoomLadder.Clamp(zoom);
+        if (zoom == s_zoom) return;
+        s_zoom = zoom;
+        s_zoomWindow?.SetZoom(zoom);
+        ZoomChanged?.Invoke(zoom);
+    }
+
     /// <summary>
     /// Relay of the host's single-instance activation-redirect event (a second app launch's deep-link payload forwarded
     /// to this running instance). Forwarded from <c>AppHost.ActivationRedirected</c> while a run is active and delivered
@@ -219,13 +250,18 @@ public static class FluentApp
             1f,
             o.Mica,
             CustomFrame: o.CustomFrame,
-            MinClientSizeDip: new Size2(o.MinWidth, o.MinHeight)));
+            MinClientSizeDip: new Size2(o.MinWidth, o.MinHeight),
+            Zoom: ZoomLadder.Clamp(o.Zoom)));
         BootStamp("create-window");
         // Publish the real top-level HWND so app-layer callers (the Windows-APIs page: SMTC / pickers / taskbar) can pass
         // it as their explicit nint hwnd — the host accessor, not an Engine-seam invention. Cleared when the run ends.
         WindowHandle = window.Handle.Value;
         // Seed the live material state (see SetWindowMaterialAlt) — every later apply reads these, not the options record.
         s_mica = o.Mica; s_customFrame = o.CustomFrame; s_micaAlt = o.MicaAlt;
+        // Seed the live app-zoom state (see SetZoom): the window was CREATED at the clamped factor above, so the first
+        // frame already lays out at the user's persisted level — keep the statics in agreement with it.
+        s_zoom = ZoomLadder.Clamp(o.Zoom);
+        s_zoomWindow = window;
 
         // Prefer the exact OS ramp (theme-aware accent fills); fall back to the base accent (Tok.SetAccent derives a ramp).
         if (Win32Theme.ReadAccentRamp() is { } ramp) Tok.SetAccent(in ramp);
@@ -309,7 +345,7 @@ public static class FluentApp
         // gated on FG_SOAK / FG_STRESS_* / FG_WAKE_AUDIT). Installed via FluentApp.DiagnosticRun; when it handles the
         // run it returns true and we skip the interactive loop, returning to the clean shutdown below. Null for normal
         // apps. Pair with FG_D3D_MEM=1 for the per-resource [d3d-mem] create/release trace.
-        if (DiagnosticRun is { } diag && diag(host, window, device)) { WindowHandle = 0; return; }
+        if (DiagnosticRun is { } diag && diag(host, window, device)) { WindowHandle = 0; s_zoomWindow = null; s_zoom = 1f; return; }
 
         bool fpsLog = Diag.EnvFlag("FG_FPS_LOG");   // periodic [fps] readout to stderr (frame-rate / frame-ms diagnosis)
         bool scrollPerf = Diag.EnvFlag("FG_SCROLL_PERF");
@@ -626,6 +662,7 @@ public static class FluentApp
         }
 
         WindowHandle = 0;   // the window is gone; don't leave a stale handle for a late SMTC/picker call.
+        s_zoomWindow = null; s_zoom = 1f;   // same for the zoom seam: a later SetZoom must not poke a dead window.
     }
 
     /// <summary>ops/diag capture protocol: read the launcher's phase marker and stamp it into every subsequent scroll-trace
@@ -735,6 +772,11 @@ public sealed record AppOptions
     /// <c>%LOCALAPPDATA%\Wavee\cache\images</c>). When set, the engine deletes the legacy TEMP directory once,
     /// best-effort, so an upgrading install does not leave the old cache stranded.</summary>
     public string? ImageCacheDirectory { get; init; }
+    /// <summary>Initial app-zoom factor (browser-style Ctrl+= zoom; 1.0 = none). Seed it from persisted settings so the
+    /// FIRST frame lays out at the user's level — no visible re-zoom after startup. Clamped to the
+    /// <see cref="ZoomLadder"/> range before reaching the window; live changes go through
+    /// <see cref="FluentApp.SetZoom"/>.</summary>
+    public float Zoom { get; init; } = 1f;
 }
 
 /// <summary>

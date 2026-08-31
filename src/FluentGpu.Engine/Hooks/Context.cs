@@ -24,6 +24,11 @@ public static class Viewport
     /// A component that must size a device-pixel resource (e.g. <c>MediaPlayerElement</c> sizing the MF video stream to
     /// its laid-out rect) reads <c>UseContext(Viewport.Scale)</c>. Default 1.0 (headless / pre-publish).</summary>
     public static readonly Context<float> Scale = new(1f);
+    /// <summary>The app-zoom factor (browser-style Ctrl+= zoom; steps on the <see cref="FluentGpu.Foundation.ZoomLadder"/>).
+    /// <see cref="Scale"/> already CONTAINS it (Scale = OS DPI scale × Zoom), so every DIP↔device-px conversion keeps
+    /// using Scale — read this channel only to DISPLAY the level (a settings row, a diagnostics receipt), never to
+    /// convert coordinates. Default 1.0 (headless / pre-publish).</summary>
+    public static readonly Context<float> Zoom = new(1f);
 }
 
 /// <summary>
@@ -129,6 +134,14 @@ public sealed class InputHooks
     /// <summary>Return true to consume the key. Set by an open overlay; cleared when it closes.</summary>
     public Func<int, bool>? KeyPreview;
     public bool Preview(int key) => KeyPreview?.Invoke(key) ?? false;
+
+    /// <summary>App-zoom wheel hook (browser Ctrl+wheel): invoked by the dispatcher for a Ctrl+wheel AFTER element-level
+    /// <c>OnPointerWheel</c> handlers declined it and BEFORE the viewport scrolls. The argument is the signed device
+    /// notch count (&gt;0 = wheel rotated away from the user = zoom in). Return true to consume — the viewport never
+    /// scrolls that notch. Null (the default) leaves Ctrl+wheel scrolling exactly as before. Note: the Win32 backend
+    /// synthesizes pinch-zoom from Ctrl + hi-res/touchpad wheel BEFORE events reach the dispatcher, so this hook only
+    /// ever sees detented mouse wheels.</summary>
+    public Func<float, bool>? ZoomWheel;
 
     /// <summary>The active contact's sampled flick velocity (px/s, window space) — host-wired to the dispatcher's
     /// <c>PointerVelocity</c>. A cross-axis swipe control (SwipeControl/FlipView, <c>BoxEl.DragYieldsToPan</c>) reads it

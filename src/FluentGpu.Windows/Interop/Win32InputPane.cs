@@ -147,21 +147,39 @@ public sealed unsafe partial class Win32TextInput
 
     private void RaiseOccluded(in RectF dip) => OccludedRectChanged?.Invoke(dip);
 
-    // InputPane.OccludedRect is in screen DIPs (the app's coordinate space). Convert to CLIENT DIP: the engine's window
-    // space starts at the client (0,0). The pane is screen-physical-pixel docked; the WinRT rect is already DIP, so only
-    // the client-origin shift remains (origin is physical px → DIP via the window scale, the same bridge the wheel uses).
+    // InputPane.OccludedRect is in screen DIPs at the OS DPI scale (the app's coordinate space — NO app zoom). Convert
+    // to CLIENT ENGINE DIP: the engine's window space starts at the client (0,0) and its DIP unit is px / (DPI × zoom).
+    // So: WinRT DIP → physical px (× raw DPI scale) → engine DIP (÷ effective scale), and the client-origin shift is
+    // physical px ÷ effective scale (the same bridge the wheel uses). With zoom = 1 this folds to the old identity
+    // (k = 1, eff = raw), so the unzoomed path is bit-for-bit what it was.
     private RectF ToClientDip(in WinRtRect r)
     {
         if (r.Width <= 0f && r.Height <= 0f) return default;   // hidden / zero-height (HoloLens) → the no-op empty rect
         POINT origin = default;
         ClientToScreen((HWND)_hwnd, &origin);
-        float s = ScaleHint <= 0f ? 1f : ScaleHint;
-        return new RectF(r.X - origin.x / s, r.Y - origin.y / s, r.Width, r.Height);
+        float eff = ScaleHint <= 0f ? 1f : ScaleHint;
+        float k = RawDpiScale / eff;   // OS-DIP → engine-DIP ratio (= 1/zoom)
+        return new RectF(r.X * k - origin.x / eff, r.Y * k - origin.y / eff, r.Width * k, r.Height * k);
     }
 
-    /// <summary>The window DPI scale (px per DIP). The SIP rect arithmetic needs it for the client-origin shift; queried
-    /// live from the HWND so a per-monitor DPI move is reflected without re-plumbing.</summary>
+    /// <summary>The owning platform's EFFECTIVE scale provider (OS DPI × app zoom, px per engine DIP) — wired by
+    /// <c>Win32Window</c> right after construction. The SIP reflow rect must land in ENGINE DIP, and under app zoom
+    /// the raw window DPI this class can query itself is the wrong divisor.</summary>
+    internal Func<float>? EffectiveScale { get; set; }
+
+    /// <summary>The effective window scale (px per engine DIP): the platform-supplied DPI × zoom product when wired,
+    /// else the raw window DPI queried live from the HWND (so a per-monitor DPI move still tracks without re-plumbing).</summary>
     private float ScaleHint
+    {
+        get
+        {
+            if (EffectiveScale is { } f) { float s = f(); if (s > 0f) return s; }
+            return RawDpiScale;
+        }
+    }
+
+    /// <summary>The raw OS DPI scale (dpi/96, NO app zoom) — the unit the WinRT InputPane rect is expressed in.</summary>
+    private float RawDpiScale
     {
         get { uint dpi = GetDpiForWindow((HWND)_hwnd); return dpi == 0 ? 1f : dpi / 96f; }
     }

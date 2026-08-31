@@ -161,9 +161,18 @@ public interface IGpuDevice : IDisposable
     /// Default no-op for headless and non-D3D backends.</summary>
     void DumpDeviceLostDiagnostics(Action<string> write) { }
 
-    /// <summary>Test hook (FG_FORCE_DEVICE_LOST): force a controlled device removal to exercise the async recovery
-    /// rendezvous on real hardware, without TDR-ing the whole desktop. No-op default (headless / no injection support).</summary>
+    /// <summary>Force a controlled device removal without TDR-ing the whole desktop. Used by the
+    /// FG_FORCE_DEVICE_LOST test hook to exercise the async recovery rendezvous, and by a runtime adapter switch
+    /// (set the backend's preferred adapter, then call this — recovery re-creates the device, honoring the
+    /// preference). No-op default (headless / no injection support).</summary>
     void InjectDeviceLost() { }
+
+    /// <summary>UI recover gate: has the app requested a live GPU-adapter switch since the last poll? Test-and-clears
+    /// the request. When true the host drives the SAME rendezvous a device loss takes — call
+    /// <see cref="InjectDeviceLost"/> and enter recovery, which re-creates the device on the newly-preferred adapter.
+    /// Keeps the engine seam TerraFX-free: the D3D12 backend overrides this to consume its GpuAdapterInfo flag; every
+    /// other backend keeps the false default (no live-switch support).</summary>
+    bool ConsumeAdapterSwitchRequest() => false;
 
     /// <summary>Diagnostic: wall-time (ms) spent blocked on the frame-retirement fence plus the present-latency waitable
     /// inside the most recent <see cref="SubmitDrawList(ReadOnlySpan{byte}, ReadOnlySpan{ulong}, in FrameInfo)"/>. This is

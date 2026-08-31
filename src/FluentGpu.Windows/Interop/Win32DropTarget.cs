@@ -50,15 +50,20 @@ internal static unsafe partial class Win32DropTarget
     [LibraryImport("user32.dll")] private static partial uint GetDpiForWindow(nint hWnd);
 
     /// <summary>OLE-init this STA thread + register a fresh CCW on <paramref name="hwnd"/>. Returns a token to pass to
-    /// <see cref="Revoke"/>, or null when drag-drop is unavailable (non-STA thread, or RegisterDragDrop failed).</summary>
-    internal static DropRegistration? Register(nint hwnd)
+    /// <see cref="Revoke"/>, or null when drag-drop is unavailable (non-STA thread, or RegisterDragDrop failed).
+    /// <paramref name="effectiveScale"/> supplies the window's EFFECTIVE scale (OS DPI × app zoom) for the drop-point
+    /// px→DIP conversion — drop coordinates enter the engine as layout DIP, and under app zoom the raw window DPI is
+    /// the wrong divisor. Null falls back to the raw DPI (no zoom).</summary>
+    internal static DropRegistration? Register(nint hwnd, Func<float>? effectiveScale = null)
     {
         if (hwnd == 0) return null;
         int oi = OleInitialize(0);
         if (oi == RPC_E_CHANGED_MODE) return null;   // thread is MTA → OLE drag-drop can't run here
         bool oleInited = oi == S_OK || oi == S_FALSE;
 
-        Win32DropTargetCcw* ccw = Win32DropTargetCcw.Create(hwnd);
+        // The CCW is unmanaged memory, so the managed provider rides as a GCHandle; freed in Destroy (via Revoke).
+        nint scaleProvider = effectiveScale is null ? 0 : GCHandle.ToIntPtr(GCHandle.Alloc(effectiveScale));
+        Win32DropTargetCcw* ccw = Win32DropTargetCcw.Create(hwnd, scaleProvider);
         int hr = RegisterDragDrop(hwnd, (nint)ccw);
         if (hr < 0)
         {
@@ -174,12 +179,20 @@ internal static unsafe partial class Win32DropTarget
         finally { ReleaseStgMedium(&medium); }
     }
 
-    /// <summary>OLE screen POINTL (by-value) → window-DIP point, via ScreenToClient + the window DPI scale.</summary>
-    internal static Point2 ToDip(nint hwnd, PointL pt)
+    /// <summary>OLE screen POINTL (by-value) → window-DIP point, via ScreenToClient + the window's EFFECTIVE scale
+    /// (OS DPI × app zoom, supplied by the owning platform through the CCW's scale-provider GCHandle). Drop points
+    /// enter the engine as layout DIP — under app zoom the raw <c>GetDpiForWindow</c> read would land drops at the
+    /// wrong place — so the raw DPI is only the no-provider fallback (SelfTest, a provider-less registration).</summary>
+    internal static Point2 ToDip(nint hwnd, PointL pt, nint scaleProvider)
     {
         ScreenToClient(hwnd, &pt);
-        uint dpi = GetDpiForWindow(hwnd);
-        float s = dpi == 0 ? 1f : dpi / 96f;
+        float s = 0f;
+        if (scaleProvider != 0 && GCHandle.FromIntPtr(scaleProvider).Target is Func<float> f) s = f();
+        if (s <= 0f)
+        {
+            uint dpi = GetDpiForWindow(hwnd);
+            s = dpi == 0 ? 1f : dpi / 96f;
+        }
         return new Point2(pt.x / s, pt.y / s);
     }
 
@@ -216,6 +229,7 @@ internal unsafe struct Win32DropTargetCcw
     public void** Vtbl;     // MUST be first (COM "this" vptr)
     public int Rc;
     public nint Hwnd;       // owner window — for ScreenToClient + the DPI scale
+    public nint ScaleProvider;   // GCHandle→Func<float>: the EFFECTIVE scale (DPI × zoom); 0 = raw-DPI fallback
 
     private static readonly void** _vtbl = Build();
 
@@ -232,14 +246,18 @@ internal unsafe struct Win32DropTargetCcw
         return v;
     }
 
-    public static Win32DropTargetCcw* Create(nint hwnd)
+    public static Win32DropTargetCcw* Create(nint hwnd, nint scaleProvider = 0)
     {
         var p = (Win32DropTargetCcw*)NativeMemory.Alloc((nuint)sizeof(Win32DropTargetCcw));
-        p->Vtbl = _vtbl; p->Rc = 1; p->Hwnd = hwnd;
+        p->Vtbl = _vtbl; p->Rc = 1; p->Hwnd = hwnd; p->ScaleProvider = scaleProvider;
         return p;
     }
 
-    public static void Destroy(Win32DropTargetCcw* p) => NativeMemory.Free(p);
+    public static void Destroy(Win32DropTargetCcw* p)
+    {
+        if (p->ScaleProvider != 0) GCHandle.FromIntPtr(p->ScaleProvider).Free();
+        NativeMemory.Free(p);
+    }
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvMemberFunction) })]
     private static int QueryInterface(Win32DropTargetCcw* self, Guid* riid, void** ppv)
@@ -263,7 +281,7 @@ internal unsafe struct Win32DropTargetCcw
         {
             if (!Win32DropTarget.OffersFiles(pDataObj)) { if (pdwEffect != null) *pdwEffect = 0; return ComCcw.S_OK; }
             var fn = InputHooks.Current.Default.ExternalDragEnter;   // hover: NO data read — empty paths
-            DropEffect want = fn?.Invoke(Win32DropTarget.ToDip(self->Hwnd, pt), Array.Empty<string>(), Win32DropTarget.Mods(grfKeyState)) ?? DropEffect.None;
+            DropEffect want = fn?.Invoke(Win32DropTarget.ToDip(self->Hwnd, pt, self->ScaleProvider), Array.Empty<string>(), Win32DropTarget.Mods(grfKeyState)) ?? DropEffect.None;
             if (pdwEffect != null) *pdwEffect = Win32DropTarget.MapEffect(want, *pdwEffect);
         }
         catch { if (pdwEffect != null) *pdwEffect = 0; }
@@ -276,7 +294,7 @@ internal unsafe struct Win32DropTargetCcw
         try
         {
             var fn = InputHooks.Current.Default.ExternalDragOver;
-            DropEffect want = fn?.Invoke(Win32DropTarget.ToDip(self->Hwnd, pt), Win32DropTarget.Mods(grfKeyState)) ?? DropEffect.None;
+            DropEffect want = fn?.Invoke(Win32DropTarget.ToDip(self->Hwnd, pt, self->ScaleProvider), Win32DropTarget.Mods(grfKeyState)) ?? DropEffect.None;
             if (pdwEffect != null) *pdwEffect = Win32DropTarget.MapEffect(want, *pdwEffect);
         }
         catch { if (pdwEffect != null) *pdwEffect = 0; }
@@ -297,7 +315,7 @@ internal unsafe struct Win32DropTargetCcw
         try
         {
             string[] paths = Win32DropTarget.ReadDroppedPaths(pDataObj);   // the once-per-drop file read
-            var dip = Win32DropTarget.ToDip(self->Hwnd, pt);
+            var dip = Win32DropTarget.ToDip(self->Hwnd, pt, self->ScaleProvider);
             var mods = Win32DropTarget.Mods(grfKeyState);
             bool accepted = paths.Length > 0 && (InputHooks.Current.Default.ExternalDropFiles?.Invoke(dip, paths, mods) ?? false);
             if (pdwEffect != null) *pdwEffect = accepted ? Win32DropTarget.MapEffect(DropEffect.Copy, *pdwEffect) : 0;

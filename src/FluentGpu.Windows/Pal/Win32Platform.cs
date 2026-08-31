@@ -592,7 +592,13 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     private Win32TextInput _textInput = null!;   // created right after the HWND exists (WndProc IME cases route to it)
     private UiaProviderCcw* _uiaProvider;        // the window's minimal UIA root provider (the live-region announcer)
     private int _w, _h;
+    // The EFFECTIVE scale (px per engine DIP) = _rawDpiScale × _zoom — every engine DIP↔px conversion in this file
+    // reads it (hit-testing, pointer/wheel px→DIP, touchpad calibration, popup placement). OS-chrome metrics (frame
+    // outsets, resize bands, min-track sizing) deliberately do NOT: they query GetDpiForWindow raw, because app zoom
+    // must never resize the OS frame.
     private float _scale = 1f;
+    private float _rawDpiScale = 1f;   // the OS per-monitor DPI scale alone (dpi/96) — updated on WM_DPICHANGED
+    private float _zoom = 1f;          // the browser-style app zoom (ZoomLadder-clamped); survives monitor hops
     private bool _closed;
     // Detached-window minimum CLIENT size (physical px); (0,0) = no clamp (the primary window is untouched). Converted to
     // a window (outer) minimum in the WM_GETMINMAXINFO handler via AdjustWindowRectExForDpi (client → window rect).
@@ -705,6 +711,9 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
         }
         s_constructing = null;
         _textInput = new Win32TextInput(_hwnd);
+        // The SIP occluded-rect arithmetic converts screen px → engine DIP, so it needs the EFFECTIVE scale
+        // (DPI × zoom) — not the raw window DPI it could query itself.
+        _textInput.EffectiveScale = () => _scale <= 0f ? 1f : _scale;
         // UIPI otherwise drops the registered TaskbarButtonCreated broadcast (explorer → this HWND). Best-effort.
         if (s_taskbarButtonCreatedMsg != 0)
             ChangeWindowMessageFilterEx(_hwnd, s_taskbarButtonCreatedMsg, MsgfltAllow, null);
@@ -722,8 +731,13 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
         }
 
         uint dpi = GetDpiForWindow(_hwnd);
-        _scale = dpi == 0 ? 1f : dpi / 96f;
-        ResizeClientPhysical((int)MathF.Round(requestedW * _scale), (int)MathF.Round(requestedH * _scale));
+        _rawDpiScale = dpi == 0 ? 1f : dpi / 96f;
+        _zoom = ZoomLadder.Clamp(desc.Zoom);
+        _scale = _rawDpiScale * _zoom;
+        // The physical window size is seeded from the RAW DPI scale only — deliberately NOT the effective scale: a
+        // persisted zoom must not grow (or shrink) the physical window at startup. Browser behavior: the window stays
+        // put and the DIP viewport shrinks/grows instead (ClientSizePx / _scale — the host's EnsureSize re-lays-out).
+        ResizeClientPhysical((int)MathF.Round(requestedW * _rawDpiScale), (int)MathF.Round(requestedH * _rawDpiScale));
 
         RefreshClientSize();
 
@@ -731,7 +745,8 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
         // (Win32DropTarget) — restoring drag-over HOVER feedback (DragEnter/Over/Leave → the engine external-drop seam)
         // and the OS drop-effect cursor, which WM_DROPFILES cannot. Best-effort: null on a non-STA thread / if it fails
         // (the window then receives no OS drops). Revoked in Dispose. (RegisterDragDrop SUPPRESSES WM_DROPFILES.)
-        _dropReg = Win32DropTarget.Register(_hwnd);
+        // Drop points enter the engine as layout DIP, so the px→DIP divide must use the EFFECTIVE scale (DPI × zoom).
+        _dropReg = Win32DropTarget.Register(_hwnd, () => _scale <= 0f ? 1f : _scale);
 
         // The DirectManipulation touchpad producer (scroll-v3-plan §5.2): emits the ScrollBegin/ScrollDelta/ScrollEnd
         // phase contract the kernel consumes, from real PT_TOUCHPAD contacts — PTP inertia is engine-owned (no
@@ -772,7 +787,24 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
 
     public NativeHandle Handle => new(_hwnd, NativeHandleKind.Hwnd);
     public Size2 ClientSizePx => new(_w, _h);
+    /// <summary>The EFFECTIVE scale (px per engine DIP): OS per-monitor DPI scale × app <see cref="Zoom"/>.</summary>
     public float Scale => _scale;
+
+    /// <summary>The browser-style app zoom factor folded into <see cref="Scale"/> (1f = 100%; ZoomLadder-clamped).</summary>
+    public float Zoom => _zoom;
+
+    /// <summary>Set the app zoom: clamp via <see cref="ZoomLadder"/>, fold into the effective <see cref="Scale"/>, and
+    /// request a paint — the host's per-frame EnsureSize sees the Scale change and runs the full relayout/re-raster
+    /// path (the same one a WM_DPICHANGED monitor hop takes). The physical window is untouched: the DIP viewport
+    /// changes instead (browser behavior).</summary>
+    public void SetZoom(float zoom)
+    {
+        float z = ZoomLadder.Clamp(zoom);
+        if (z == _zoom) return;
+        _zoom = z;
+        _scale = _rawDpiScale * _zoom;
+        PaintRequested?.Invoke();
+    }
     public bool IsClosed => _closed;
     public bool InModalLoop => _inMoveSizeLoop;   // WM_ENTERSIZEMOVE..WM_EXITSIZEMOVE — host suppresses redundant keep-alive paints
     public bool Composited => _composited;
@@ -1320,7 +1352,9 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
             }
 
             // contactDip = raw · 0.11 · (dpi/96) · UserTouchpadSpeed (scroll-feel-rework-v2 §3.2) — the frozen
-            // one-machine 0.11 is DPI-scaled (_scale = dpi/96) and multiplied by one user/settings speed.
+            // one-machine 0.11 is scaled by the EFFECTIVE scale (_scale = dpi/96 × app zoom — a zoomed viewport has
+            // fewer DIPs per physical swipe, so the divisor-consistent product keeps the on-screen pan 1:1) and
+            // multiplied by one user/settings speed.
             float scale = _scale <= 0f ? 1f : _scale;
             float dip = notch * HiResUnitDip * scale * UserTouchpadSpeed;
             // Vertical: −delta = scroll toward content end (offset increases). Horizontal: +delta = right (offset increases).
@@ -1716,7 +1750,8 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                 // on the target monitor and expects us to adopt both. Update the scale FIRST (the SetWindowPos below
                 // raises WM_SIZE → the host's resize path re-lays-out in DIPs / re-rasterizes glyphs at the new
                 // scale), then take the suggested rect so the window keeps its apparent (DIP) size across monitors.
-                _scale = ((uint)wParam & 0xFFFF) / 96f;   // LOWORD = X DPI (X and Y are always equal)
+                _rawDpiScale = ((uint)wParam & 0xFFFF) / 96f;   // LOWORD = X DPI (X and Y are always equal)
+                _scale = _rawDpiScale * _zoom;                  // app zoom survives the monitor hop
                 RECT* suggested = (RECT*)(nint)lParam;
                 SetWindowPos(_hwnd, HWND.NULL, suggested->left, suggested->top,
                     suggested->right - suggested->left, suggested->bottom - suggested->top,

@@ -49,7 +49,8 @@ public sealed class HeadlessWindow : IPlatformWindow
     public HeadlessWindow(in WindowDesc desc)
     {
         ClientSizePx = desc.SizePx;
-        Scale = desc.Scale <= 0 ? 1f : desc.Scale;
+        _dpiScale = desc.Scale <= 0 ? 1f : desc.Scale;
+        _zoom = ZoomLadder.Clamp(desc.Zoom);
         CustomFrame = desc.CustomFrame;
         Composited = desc.Composited;
         MinClientSizeDip = desc.MinClientSizeDip;
@@ -65,8 +66,22 @@ public sealed class HeadlessWindow : IPlatformWindow
     /// the host's EnsureSize watches BOTH px size and scale every frame, so the next RunFrame re-lays-out in the new
     /// DIP viewport (the multi-monitor DPI-hop regression).</summary>
     public Size2 ClientSizePx { get; set; }
-    /// <inheritdoc cref="ClientSizePx"/>
-    public float Scale { get; set; }
+
+    private float _dpiScale;   // the simulated OS DPI scale (the Scale SETTER's meaning — the WM_DPICHANGED seam)
+    private float _zoom;       // the app zoom (SetZoom), folded into the effective getter below
+
+    /// <summary>The DPI/zoom test seam, mirroring the Win32 split: the GETTER reports the EFFECTIVE scale (simulated
+    /// OS DPI × app zoom — what the host's EnsureSize watches every frame); the SETTER keeps its documented meaning of
+    /// the RAW OS DPI scale (simulate a per-monitor DPI change / WM_DPICHANGED mid-session — the DPI-hop seam the
+    /// existing suites drive); app zoom is driven separately via <see cref="SetZoom"/>. Either road changes the getter
+    /// and triggers the same full-relayout path.</summary>
+    public float Scale { get => _dpiScale * _zoom; set => _dpiScale = value; }
+
+    /// <inheritdoc cref="FluentGpu.Pal.IPlatformWindow.Zoom"/>
+    public float Zoom => _zoom;
+
+    /// <inheritdoc cref="FluentGpu.Pal.IPlatformWindow.SetZoom"/>
+    public void SetZoom(float zoom) => _zoom = ZoomLadder.Clamp(zoom);
     public Action? PaintRequested { get; set; }   // unused headless (no modal resize loop)
     /// <inheritdoc cref="FluentGpu.Pal.IPlatformWindow.InModalLoop"/>
     public bool InModalLoop { get; set; }

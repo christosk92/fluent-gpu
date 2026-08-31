@@ -541,14 +541,18 @@ public interface IPlatformPopupWindow : IDisposable
 /// (WM_NCCALCSIZE) but keeps the resize frame/shadow, answers WM_NCHITTEST from the engine-reported
 /// <see cref="TitleBarRegion"/>s, and synthesizes pointer input for the engine-drawn caption buttons.
 /// <paramref name="MinClientSizeDip"/> is an opt-in minimum tracking size in logical DIP; an empty axis leaves that
-/// axis at the platform default.</summary>
+/// axis at the platform default. <paramref name="Zoom"/> is the initial browser-style app zoom (typically a persisted
+/// user preference — see <see cref="IPlatformWindow.SetZoom"/>): it folds into the effective
+/// <see cref="IPlatformWindow.Scale"/> and shrinks/grows the DIP viewport WITHOUT changing the physical window size.
+/// Sanitized through <see cref="ZoomLadder.Clamp"/> by the backend.</summary>
 public readonly record struct WindowDesc(
     string Title,
     Size2 SizePx,
     float Scale,
     bool Composited = false,
     bool CustomFrame = false,
-    Size2 MinClientSizeDip = default);
+    Size2 MinClientSizeDip = default,
+    float Zoom = 1f);
 
 /// <summary>How native input should affect a bounded platform wait.</summary>
 public enum PlatformInputWakePolicy : byte
@@ -582,7 +586,22 @@ public interface IPlatformWindow : IDisposable
 {
     NativeHandle Handle { get; }
     Size2 ClientSizePx { get; }
+
+    /// <summary>The EFFECTIVE scale (px per engine DIP): the OS per-monitor DPI scale × the app <see cref="Zoom"/>.
+    /// Everything downstream — the layout DIP viewport, <c>FrameInfo.Scale</c>, glyph raster, damage, popup placement,
+    /// IME and input px↔DIP conversion — consumes this one product; the host's per-frame <c>EnsureSize</c> treats any
+    /// change (a monitor hop OR a zoom step) as a full-relayout event.</summary>
     float Scale { get; }
+
+    /// <summary>The browser-style app zoom factor folded into <see cref="Scale"/> (1f = 100%). Discrete — the ladder
+    /// and its rationale live in <see cref="ZoomLadder"/>. Default: no zoom (backends without zoom support report 1f).</summary>
+    float Zoom => 1f;
+
+    /// <summary>Set the app zoom: the backend clamps via <see cref="ZoomLadder.Clamp"/>, folds it into the effective
+    /// <see cref="Scale"/>, and requests a paint — the host's per-frame <c>EnsureSize</c> then sees the Scale change
+    /// and re-lays-out in the new DIP viewport (the same path as a per-monitor DPI hop). The physical window size is
+    /// untouched (browser behavior: content scales, the window stays). Default: a no-op (no zoom support).</summary>
+    void SetZoom(float zoom) { }
 
     /// <summary>The screen position of the client area's (0,0), in physical virtual-screen px — the window-DIP →
     /// screen-px bridge for popup-window placement and per-monitor work-area queries (Win32 <c>ClientToScreen</c>;

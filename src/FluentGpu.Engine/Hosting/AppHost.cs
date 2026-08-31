@@ -407,6 +407,7 @@ public sealed class AppHost : IDisposable
     // Ambient context signals (read via UseContext): published by the host, consumers subscribe granularly.
     private readonly Signal<object?> _viewportSig = new(default(Size2));
     private readonly Signal<object?> _viewportScaleSig = new(1f);   // Viewport.Scale ambient (DIP→device px)
+    private readonly Signal<object?> _viewportZoomSig = new(1f);    // Viewport.Zoom ambient (app-zoom factor; display-only — Scale already contains it)
     private readonly Signal<object?> _frameStatsSig = new(default(FrameStats));
     private readonly InputHooks _inputHooks = new();
     private readonly Signal<object?> _inputHooksSig;
@@ -800,6 +801,7 @@ public sealed class AppHost : IDisposable
         _repaintTargetValid = false;   // the rebuilt target holds nothing — the next frame repaints in full (§13.1)
         _needFullLayout = true;
         _lastPresentedDrawListHash = 0;
+        _navThrottleFrames = PostRecoveryThrottleFrames;   // drip the re-realize upload burst so the fresh (weak) device doesn't re-hang (foreground path)
         _images.ReRealizeAllResident();
         _frameAfterPaint = true;
         LastStats = new FrameStats(0, clicks, 0, Rendered: false) { Fps = _fps, FrameMs = _frameMs };
@@ -858,11 +860,24 @@ public sealed class AppHost : IDisposable
     private bool _frameNeeded = true;        // a frame is required (reactive work pending, input, resize, …)
     private bool _frameAfterPaint;           // a wake arrived during paint → run another frame
     private bool _needFullLayout = true;     // first frame / resize / DPI / root structural change
+    // Nav-burst upload bound (P1b): a full-tree-dirty + full-layout frame (a route/page change) opens a short decaying
+    // window during which image uploads are throttled EXACTLY like a live scroll — the tight DecodeScheduler cap
+    // (1 apply / 512 KiB per frame). A nav's album-art burst otherwise hits the GPU unthrottled right as it is also
+    // doing transition work; this bounds that burst at any buffer depth (same rationale as the scroll throttle).
+    private int _navThrottleFrames;          // >0 = window open; decays one per produced frame
+    private const int NavThrottleWindowFrames = 10;
+    // Post-recovery cooldown: recovery re-records the full frame AND ReRealizeAllResident restarts EVERY resident
+    // image's decode → upload. Slamming all of that onto a just-recovered weak GPU in one frame is what re-hangs it
+    // (the observed DEVICE_HUNG recovery loop: recover → full re-realize burst → hang again). A longer throttle
+    // window than a normal nav makes those re-uploads drip through the DecodeScheduler cap (1 apply/frame) so the
+    // fresh device warms up instead of re-hanging. Longer than nav because re-realize touches the whole resident set.
+    private const int PostRecoveryThrottleFrames = 45;
     private bool _everLaidOut;               // suppress FLIP capture until the first layout (freshly-mounted nodes have no "before")
     private bool _wasMinimized;              // previous frame's minimize state — the restore EDGE forces a repaint
     private bool _inPaint;
     private Size2 _lastSize;
     private float _lastScale;
+    private float _lastZoom = 1f;            // last-published Viewport.Zoom (value-gate — EnsureSize compares it every frame, zero-alloc)
     private readonly long[] _presentTimes = new long[240];
     private int _presentTimeNext;
     private int _presentTimeCount;
@@ -2158,6 +2173,7 @@ public sealed class AppHost : IDisposable
         _caretBlinker = new CaretBlinker(_scene);
         _lastSize = window.ClientSizePx;
         _lastScale = window.Scale;
+        _lastZoom = window.Zoom;
 
         // A reactive write (anywhere) requests a frame.
         _runtime.FrameRequested = WakeFrame;
@@ -2171,6 +2187,10 @@ public sealed class AppHost : IDisposable
         _dispatcher.OnRepeatPaused = _repeat.Pause;     // held pointer left the repeat node → stop ticking
         _dispatcher.OnRepeatResumed = _repeat.Resume;   // re-entered → fresh initial delay, no immediate re-fire
         _dispatcher.OnKeyPreview = _inputHooks.Preview;   // an open overlay/flyout can intercept Escape (registered via the InputHooks ambient)
+        // Ctrl+wheel app zoom: bridge the dispatcher's post-element / pre-viewport wheel hook to the tree-registered
+        // InputHooks.ZoomWheel (null until an app opts in, so Ctrl+wheel scrolls exactly as before). One lambda, wired
+        // once at construction; per-notch invocation allocates nothing.
+        _dispatcher.OnZoomWheel = d => _inputHooks.ZoomWheel?.Invoke(d) ?? false;
         _inputHooks.PointerVelocity = () => _dispatcher.PointerVelocity;        // cross-axis swipe controls snap on real flick speed
         _inputHooks.GetPointerPosition = () => _dispatcher.PointerPosition;     // ToolTip safe-zone poll (bubble stays hit-test-invisible)
         _inputHooks.SetCursorOverride = _dispatcher.SetCursorOverride;          // media idle chrome: hide until activity
@@ -2402,8 +2422,10 @@ public sealed class AppHost : IDisposable
         _viewportSig.Value = _lastViewportDip;
         _inputHooksSig = new Signal<object?>(_inputHooks);
         _viewportScaleSig.Value = _window.Scale <= 0f ? 1f : _window.Scale;
+        _viewportZoomSig.Value = _window.Zoom;   // display-only channel (Scale above already contains the zoom)
         _reconciler.SetAmbient(Viewport.Size, _viewportSig);
         _reconciler.SetAmbient(Viewport.Scale, _viewportScaleSig);
+        _reconciler.SetAmbient(Viewport.Zoom, _viewportZoomSig);
         _reconciler.SetAmbient(FrameDiagnostics.Current, _frameStatsSig);
         _reconciler.SetAmbient(InputHooks.Current, _inputHooksSig);
         // Fully qualified: FluentGpu.Pal.FrameClock (the scroll-v3 seam clock, §5.1) is now ALSO in scope via
@@ -2636,6 +2658,22 @@ public sealed class AppHost : IDisposable
         // — then re-realize resident images and fall through to a full re-recorded frame against the rebuilt device.
         if (_deviceLost is { } dl && _asyncActive)
         {
+            // Live GPU-adapter switch (Settings > About picker → GpuAdapterInfo.RequestAdapterSwitch): when no recovery
+            // is already in flight, drive the SAME rendezvous a device loss takes. InjectDeviceLost() (as the
+            // FG_FORCE_DEVICE_LOST hook above does — on the UI thread) tears the device down cleanly; setting
+            // RecoverRequest + waking reaches the render loop's recover gate, which re-runs InitDevice honoring the new
+            // PreferredAdapterLuid (re-logs [d3d12.adapter]). Consuming the flag here (render-owned device seam) keeps
+            // the switch on the device-owning thread and avoids a UI-thread RemoveDevice race.
+            if (dl.RecoverRequest == 0 && _device.ConsumeAdapterSwitchRequest())
+            {
+                if (s_dlTrace) System.Console.Error.WriteLine($"[dl] UI: adapter-switch requested at frame {_frameOrdinal} → injecting device loss + requesting recover");
+                _device.InjectDeviceLost();
+                _scene.MarkAllPaintDirty();
+                _repaintTargetValid = false;   // the rebuilt target holds nothing — the next frame repaints in full (§13.1)
+                _needFullLayout = true;
+                dl.RecoverRequest = 1;
+                _renderThread!.WakeAsync();   // CRITICAL: wake the parked render loop so it reaches the recover gate
+            }
             if (dl.RecoverRequest == 0 && _device.PollDeviceLost() != 0)
             {
                 if (s_dlTrace) System.Console.Error.WriteLine($"[dl] UI: detected reason=0x{_device.PollDeviceLost():X} at frame {_frameOrdinal} → requesting recover");
@@ -2652,6 +2690,7 @@ public sealed class AppHost : IDisposable
                     if (s_dlTrace) System.Console.Error.WriteLine($"[dl] UI: observed RecoverDone at frame {_frameOrdinal} → re-realizing images + resuming");
                     dl.RecoverDone = 0;
                     dl.RecoverRequest = 0;
+                    _navThrottleFrames = PostRecoveryThrottleFrames;   // drip the re-realize upload burst so the fresh (weak) device doesn't re-hang
                     _images.ReRealizeAllResident();   // re-decode resident art → re-upload to the fresh store (Step-1 handoff)
                     // fall through: the whole-tree-dirty + full-layout frame re-records everything against the rebuilt device
                 }
@@ -3198,6 +3237,7 @@ public sealed class AppHost : IDisposable
                     _layout.Run(_scene.Root, layoutSize);      // 6 full layout: first frame / resize / DPI / root change
                     _needFullLayout = false;
                     _everLaidOut = true;
+                    _navThrottleFrames = NavThrottleWindowFrames;   // P1b: a full layout is the nav shape → open the upload-throttle window
                 }
                 else
                 {
@@ -3315,7 +3355,11 @@ public sealed class AppHost : IDisposable
             bool holdSelfBlurForScroll = scrollHoldNow < _selfBlurHoldUntil;
             bool scrollActive = holdSelfBlurForScroll || _scrollSummary.AnyMoved;
             _images.SuppressReveals = scrollActive;
-            _images.ScrollThrottled = scrollActive;   // upload-burst → fence-stall guard (bounds the burst at any buffer depth; retained with FRAME_COUNT=3)
+            if (_navThrottleFrames > 0) _navThrottleFrames--;   // decay the P1b nav-burst window one frame at a time
+            // upload-burst → fence-stall guard: throttle uploads while a scroll is live OR a nav-transition window is
+            // open (P1b). Both drop DecodeScheduler to its tight 1-apply/512 KiB cap; bounds the burst at any buffer
+            // depth (retained with FRAME_COUNT=3). scrollActive itself is left untouched for its many downstream reads.
+            _images.ScrollThrottled = scrollActive || _navThrottleFrames > 0;
             _scrollChrome.Tick(dtMs);                          // 7 conscious scrollbar fade/expand (motion never touches chrome; chrome never touches motion)
             ScrollBindEval.ApplyPinAndFlagPass(_scene);       // 7 generic scroll-bind pins + the predicate-flag channel (sticky etc.)
             ScrollBindEval.RunObservers(_scene);              // 7 change-only scroll-geometry observers (pull-to-refresh / analytics)
@@ -4664,6 +4708,11 @@ public sealed class AppHost : IDisposable
         _lastSize = s;
         if (scale != _lastScale) _viewportScaleSig.Value = scale <= 0f ? 1f : scale;
         _lastScale = scale;
+        // Viewport.Zoom ambient (display-only — the effective Scale above already contains the zoom). Value-gated
+        // float compare so this per-frame path stays zero-alloc; the boxing publish happens only on an actual zoom
+        // change (a keystroke / wheel notch), which also changed Scale and therefore got us past the early-out.
+        float zoom = _window.Zoom;
+        if (zoom != _lastZoom) { _viewportZoomSig.Value = zoom; _lastZoom = zoom; }
         // Step 2 (async resize rendezvous): D3D12Swapchain.Resize does a fenced WaitForGpu + releases the back buffers +
         // ResizeBuffers + recreates RTVs — all mutating ComPtrs the render thread reads in submit/present. Under async,
         // PARK the render loop (mutual exclusion) around the unchanged Resize. Default + force-sync take the else branch

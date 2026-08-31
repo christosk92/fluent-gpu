@@ -232,8 +232,17 @@ public static class Keys
     public const int LeftWin = 91, RightWin = 92;
     /// <summary>The dedicated context-menu key (VK_APPS) — opens the focused element's context flyout.</summary>
     public const int Apps = 93;
+    /// <summary>Numeric-keypad 0 (VK_NUMPAD0) — with Ctrl it is the app-zoom RESET chord (browser Ctrl+0 parity,
+    /// which accepts the keypad zero as well as <see cref="D0"/>).</summary>
+    public const int NumPad0 = 96;
+    /// <summary>Numeric-keypad '+' / '-' (VK_ADD / VK_SUBTRACT) — with Ctrl they step the app zoom in/out
+    /// (browser parity: the keypad variants of <see cref="OemPlus"/> / <see cref="OemMinus"/>).</summary>
+    public const int Add = 107, Subtract = 109;
     public const int F1 = 112, F2 = 113, F3 = 114, F4 = 115, F5 = 116, F6 = 117, F7 = 118, F8 = 119,
                      F9 = 120, F10 = 121, F11 = 122, F12 = 123;
+    /// <summary>The main-row '=' / '+' and '-' / '_' keys (VK_OEM_PLUS / VK_OEM_MINUS) — the browser app-zoom chords:
+    /// Ctrl+OemPlus zooms in, Ctrl+OemMinus zooms out (keypad variants: <see cref="Add"/> / <see cref="Subtract"/>).</summary>
+    public const int OemPlus = 187, OemMinus = 189;
     // Gamepad (VK_GAMEPAD_*) — translated by the dispatcher to activation/cancel/XY-focus.
     public const int GamepadA = 195, GamepadB = 196, GamepadX = 197, GamepadY = 198;
     public const int GamepadDPadUp = 203, GamepadDPadDown = 204, GamepadDPadLeft = 205, GamepadDPadRight = 206;

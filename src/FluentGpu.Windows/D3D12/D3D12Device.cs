@@ -38,6 +38,18 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     internal const uint MAX_FRAME_LATENCY = FRAME_COUNT - 1;    // DXGI SetMaximumFrameLatency argument (= 2)
     private const uint INFINITE = 0xFFFFFFFF;
 
+    // Fence-stall watchdog (WaitFenceEventBounded, always-on — no env gate). Keyed on NO FENCE PROGRESS (completed
+    // value unchanged across the 1000 ms polls), NOT raw elapsed, so legitimately long-but-progressing GPU work never
+    // trips it. SOFT: emit ONE sink-routable [d3d12.stall] breadcrumb (lands in the Info log — the only evidence a
+    // stall that never crosses into a formal removal would otherwise leave). HARD (frame-fence path only): force the
+    // controlled InjectDeviceLost() so the open-ended hang (or a never-arriving TDR) converts into the existing fast,
+    // logged device-loss recovery — the next poll sees reason!=0, records it, returns false → the async rendezvous runs.
+    private const long FenceStallSoftMs = 1500;
+    // 2500ms: below the ~2.7s at which a real Adreno DEVICE_HUNG was observed to self-declare (captured 0x887A0006),
+    // so WE force the clean controlled RemoveDevice FIRST — recovering from our own injected loss is more reliable
+    // than from a driver HUNG that has already wedged the device (DRED came back ACCESS_DENIED = too far gone).
+    private const long FenceStallHardMs = 2500;
+
     private ID3D12Device* _device;
     private ID3D12CommandQueue* _queue;
     private IDXGIFactory4* _factory;
@@ -789,8 +801,14 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // Async fence wait that never blocks forever on a lost device: poll GetDeviceRemovedReason on a bounded cadence and
     // bail (recording the reason) if the device died. A signaled event is verified against GetCompletedValue: device
     // removal reports UINT64_MAX there and must never masquerade as retirement of a timestamp/readback bank.
-    private bool WaitFenceEventBounded(ulong targetValue)
+    // forceResetOnStall: the frame-fence path (gates presentation) passes true — a hard no-progress stall there is
+    // forced into a clean recovery. The readback/flush path (WaitForGpu) passes false — same soft [d3d12.stall]
+    // breadcrumb, but it never gates a present, so it only warns and rides the wait out.
+    private bool WaitFenceEventBounded(ulong targetValue, bool forceResetOnStall)
     {
+        long stallStart = System.Diagnostics.Stopwatch.GetTimestamp();
+        ulong lastCompleted = ulong.MaxValue;   // sentinel: the first poll always (re)stamps the stall clock
+        bool softWarned = false;
         while (true)
         {
             uint wait = WaitForSingleObject(_fenceEvent, 1000);
@@ -803,12 +821,36 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 else NoteRemovedFenceValue();
                 return false;
             }
+            // No-progress watchdog: reset the stall clock the moment the fence advances (progressing work never trips
+            // the thresholds); only a truly stuck fence accumulates toward SOFT/HARD.
+            if (completed != lastCompleted)
+            {
+                lastCompleted = completed;
+                stallStart = System.Diagnostics.Stopwatch.GetTimestamp();
+                softWarned = false;
+            }
+            else
+            {
+                long stalledMs = (long)System.Diagnostics.Stopwatch.GetElapsedTime(stallStart).TotalMilliseconds;
+                if (!softWarned && stalledMs >= FenceStallSoftMs)
+                {
+                    softWarned = true;   // ONE line per stall episode (the string is the only allocation, built once)
+                    Diag.Line($"[d3d12.stall] fence stalled {stalledMs}ms target={targetValue} completed={completed} reason=0x{reason:X8}");
+                }
+                if (forceResetOnStall && stalledMs >= FenceStallHardMs)
+                {
+                    forceResetOnStall = false;   // once only — the next poll observes the removal and returns false
+                    InjectDeviceLost();
+                }
+            }
             if (wait == 0xFFFFFFFFu) throw new InvalidOperationException("WaitForSingleObject(fence) failed.");
         }
     }
 
-    // Test hook (FG_FORCE_DEVICE_LOST=<frameN>): force a clean DEVICE_REMOVED via ID3D12Device5::RemoveDevice — a
-    // controlled removal that does NOT TDR the whole desktop — to exercise the async recovery rendezvous on real hardware.
+    // Controlled DEVICE_REMOVED via ID3D12Device5::RemoveDevice — does NOT TDR the whole desktop. Two callers:
+    // the FG_FORCE_DEVICE_LOST=<frameN> test hook (exercises the async recovery rendezvous on real hardware), and a
+    // runtime adapter switch (the app sets GpuAdapterInfo.PreferredAdapterLuid then calls this; recovery re-runs
+    // InitDevice, which honors the preference first — see the selection block there).
     public void InjectDeviceLost()
     {
         ID3D12Device5* dev5;
@@ -818,6 +860,11 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             dev5->Release();
         }
     }
+
+    // The AppHost UI recover gate polls this: consume a pending live adapter switch (Settings > About picker →
+    // GpuAdapterInfo.RequestAdapterSwitch). Test-and-clear so the host can drive the device-loss rendezvous once,
+    // re-running InitDevice on the newly-preferred adapter. Keeps the Engine seam TerraFX-free (the flag lives here).
+    public bool ConsumeAdapterSwitchRequest() => GpuAdapterInfo.ConsumeSwitchRequest();
 
     private void InitDevice()
     {
@@ -855,8 +902,31 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         bool haveDesc = false;
         string selectionMode = "default";
 
+        // User-selected adapter first (Settings picker → GpuAdapterInfo.PreferredAdapterLuid, set by the app before
+        // device init; a runtime switch sets it and calls InjectDeviceLost so THIS re-run applies it via recovery).
+        // 0 = auto. A stale/failed preference (adapter gone, driver refused) falls through to the auto walk below.
+        long preferredLuid = GpuAdapterInfo.PreferredAdapterLuid;
+        if (preferredLuid != 0)
+        {
+            LUID pl = default;
+            pl.LowPart = unchecked((uint)preferredLuid);
+            pl.HighPart = (int)(preferredLuid >> 32);
+            IDXGIAdapter1* pa = null;
+            if ((int)_factory->EnumAdapterByLuid(pl, __uuidof<IDXGIAdapter1>(), (void**)&pa) >= 0 && pa != null)
+            {
+                DXGI_ADAPTER_DESC1 pd = default;
+                if ((int)pa->GetDesc1(&pd) >= 0
+                    && (int)D3D12CreateDevice((IUnknown*)pa, D3D_FEATURE_LEVEL.D3D_FEATURE_LEVEL_11_0,
+                        __uuidof<ID3D12Device>(), (void**)&device) >= 0 && device != null)
+                {
+                    chosenDesc = pd; haveDesc = true; selectionMode = "preferred";
+                }
+                pa->Release();
+            }
+        }
+
         IDXGIFactory6* f6 = null;
-        if ((int)_factory->QueryInterface(__uuidof<IDXGIFactory6>(), (void**)&f6) >= 0 && f6 != null)
+        if (device == null && (int)_factory->QueryInterface(__uuidof<IDXGIFactory6>(), (void**)&f6) >= 0 && f6 != null)
         {
             for (uint i = 0; ; i++)
             {
@@ -4156,7 +4226,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         }
         if (completed >= v) return true;
         Check((HRESULT)global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.SetEventOnCompletion(_fence, v, (void*)_fenceEvent), "SetEventOnCompletion");   // GEN-COM (wired)
-        if (_signalDeviceLostInsteadOfThrow) return WaitFenceEventBounded(v);   // Step 4: no INFINITE hang on a lost device (async)
+        if (_signalDeviceLostInsteadOfThrow) return WaitFenceEventBounded(v, forceResetOnStall: true);   // Step 4: no INFINITE hang on a lost device (async); frame fence gates presentation → force a clean reset on a hard stall
         uint wait = WaitForSingleObject(_fenceEvent, INFINITE);
         if (wait == 0xFFFFFFFFu) throw new InvalidOperationException("WaitForSingleObject(frame fence) failed.");
         completed = global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.GetCompletedValue(_fence);
@@ -4503,7 +4573,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         {
             Check((HRESULT)global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.SetEventOnCompletion(_fence, v, (void*)_fenceEvent), "SetEventOnCompletion");   // GEN-COM (wired)
             bool retired;
-            if (_signalDeviceLostInsteadOfThrow) retired = WaitFenceEventBounded(v);   // Step 4: no INFINITE hang on a lost device (async)
+            if (_signalDeviceLostInsteadOfThrow) retired = WaitFenceEventBounded(v, forceResetOnStall: false);   // Step 4: no INFINITE hang on a lost device (async); readback/flush never gates a present → soft-warn only, no forced reset
             else
             {
                 uint wait = WaitForSingleObject(_fenceEvent, INFINITE);

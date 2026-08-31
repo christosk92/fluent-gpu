@@ -714,6 +714,12 @@ public sealed class InputDispatcher
     /// concern (an open overlay/flyout) intercept Escape regardless of where focus is, without stealing focus.</summary>
     public Func<int, bool>? OnKeyPreview;
 
+    /// <summary>Set by the host: the app-zoom wheel hook (browser Ctrl+wheel), run for a Ctrl-modified wheel AFTER
+    /// element-level wheel handlers declined it and BEFORE the viewport scrolls (returns true = consumed — the notch
+    /// never reaches the scroll router). The argument is the signed device notch count (&gt;0 = wheel rotated away
+    /// from the user = zoom in). Null = Ctrl+wheel scrolls exactly as before.</summary>
+    public Func<float, bool>? OnZoomWheel;
+
     /// <summary>Raised when the window loses activation: pressed/hover/drag state has been cleared; the host closes
     /// light-dismiss overlays here (WinUI window-deactivation dismiss).</summary>
     public Action? OnWindowBlur;
@@ -1097,6 +1103,13 @@ public sealed class InputDispatcher
                     // Element-level wheel handlers (WinUI PointerWheelChanged) see the wheel BEFORE the viewport:
                     // a Handled NumberBox consumes the step instead of scrolling the form (NumberBox.cpp:578-597).
                     if (DispatchWheel(in e)) { handled++; break; }
+                    // App zoom (browser Ctrl+wheel): after element first-refusal (a lightbox's own Ctrl+wheel handler
+                    // still wins under the pointer), before the viewport — a registered hook consumes the notch so
+                    // Ctrl+wheel never scrolls; with no hook the case is byte-identical to before. WheelNotch is the
+                    // signed DEVICE notch (rawAmount/120, >0 = rotated away = zoom in), NOT ScrollDelta (re-oriented
+                    // so positive = toward content end — inverted for this purpose).
+                    if ((e.Mods & KeyModifiers.Ctrl) != 0 && OnZoomWheel is { } zoomWheel
+                        && zoomWheel(e.WheelNotch != 0f ? e.WheelNotch : e.WheelNotchX)) { handled++; break; }
                     // Scroll v3 (plan §3.4): ScrollInputRouter.Wheel does the device-crossover cancel (a live
                     // phase-driven gesture yields to a physical wheel), the same-axis resolution for both axes, and
                     // posts WheelNotch — no more CancelGesture()/ScrollAt() here.
