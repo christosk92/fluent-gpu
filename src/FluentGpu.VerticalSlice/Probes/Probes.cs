@@ -4504,6 +4504,41 @@ sealed class ContentDialogProbe : Component
     });
 }
 
+// gate.dialog.scrolled-body-text — repro for the "Report a problem" ContentDialog: a tall Content body (900 DIP,
+// forcing the ScrollEl to clip/scroll inside ContentDialog's MaxHeight-200) ending in a CheckBox, with real
+// PrimaryText/CloseText command-row buttons. Command-row buttons sit OUTSIDE the ScrollEl entirely (siblings after
+// the separator); the CheckBox label sits at the very end of the scrolled content.
+sealed class ContentDialogScrolledBodyProbe : Component
+{
+    public const string PrimaryLabel = "Report on GitHub";
+    public const string CloseLabel = "Not now";
+    public const string CheckLabel = "Don't ask again";
+
+    public override Element Render() => Embed.Comp(() => new OverlayHost
+    {
+        Child = Embed.Comp(() => new ContentDialog
+        {
+            TriggerLabel = "Show dialog",
+            Title = "Report a problem",
+            DialogWidth = 548f,
+            PrimaryText = PrimaryLabel,
+            CloseText = CloseLabel,
+            DefaultButton = ContentDialog.DefaultBtn.Primary,
+            OpenOnMount = true,
+            Content = new BoxEl
+            {
+                Direction = 1,
+                Gap = 12f,
+                Children =
+                [
+                    new BoxEl { Height = 900f, Fill = ColorF.FromRgba(0x20, 0x20, 0x20) },
+                    CheckBox.Create(CheckLabel),
+                ],
+            },
+        }),
+    });
+}
+
 sealed class TeachingTipProbe : Component
 {
     public override Element Render() => Embed.Comp(() => new OverlayHost
@@ -5537,4 +5572,68 @@ sealed class EmptyInsertionProbe : Component
                     OnDeposit = (_, slot) => { Deposits++; DepositSlot = slot; return Task.FromResult(false); },
                 },
             });
+}
+
+// A CLICKABLE card (OnClick = open/play — the Wavee SearchHero / MediaCard.Row shape) whose subtitle is an inline-link
+// SpanTextEl (artist links). The question: does a click on the link fire ONLY the link, or the link AND the card? A
+// hyperlink span is not a ClickBit owner, so NearestClickOwner resolves to the card — the dispatcher must treat a hit
+// link as the click and leave the ancestor silent (WinUI: the Hyperlink handles the pointer event before the Button).
+sealed class CardLinkHitProbe : Component
+{
+    public int CardClick, LinkClick;
+    public override Element Render() => new BoxEl
+    {
+        Width = 400f, Height = 120f,
+        Children =
+        [
+            new BoxEl
+            {
+                Key = "card", Width = 360f, Height = 100f, Direction = 1, Padding = Edges4.All(12f),
+                OnClick = () => CardClick++,
+                Children =
+                [
+                    new TextEl("Angel of Darkness") { Size = 20f },
+                    new SpanTextEl([new TextSpan("Alex C.", OnClick: () => LinkClick++), new TextSpan(" · Song")]) { Size = 13f },
+                ],
+            },
+        ],
+    };
+}
+
+// gate.overlay.modal-covers-text / gate.overlay.unmounted-text-leaves-no-glyphs — a centred "Welcome to" / intro page
+// (the pre-dialog splash shape) with an overlay host; a gate opens a Modal over it, then retracts the text through
+// ShowText while the modal stays up. Modal + ScrimVisual = the setup wizard's own bare pre-auth mount.
+sealed class TextUnderModalProbe : Component
+{
+    public const string Welcome = "Welcome to";
+    public const string Intro = "We're glad you're here. A few short steps and you'll be listening.";
+    public IOverlayService? Service;
+    public NodeHandle Anchor;
+    public readonly Signal<bool> ShowText = new(true);
+    public override Element Render() => Embed.Comp(() => new OverlayHost { Child = Embed.Comp(() => new TextUnderModalProbeInner(this)) });
+}
+
+sealed class TextUnderModalProbeInner : Component
+{
+    readonly TextUnderModalProbe _p;
+    public TextUnderModalProbeInner(TextUnderModalProbe p) => _p = p;
+    public override Element Render()
+    {
+        _p.Service = UseContext(Overlay.Service);
+        bool show = _p.ShowText.Value;   // subscribes → retraction re-renders this subtree
+        var anchor = new BoxEl
+        {
+            Width = 150f, Height = 32f, Role = AutomationRole.Button, OnClick = () => { },
+            OnRealized = h => _p.Anchor = h,
+            Children = [Text("Start setup")],
+        };
+        Element[] kids = show
+            ? [Title(TextUnderModalProbe.Welcome), new TextEl(TextUnderModalProbe.Intro) { Size = 14f, Wrap = TextWrap.Wrap, MinWidth = 0f }, anchor]
+            : [anchor];
+        return new BoxEl
+        {
+            Grow = 1f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+            Children = [new BoxEl { Width = 400f, Direction = 1, Gap = 24f, AlignItems = FlexAlign.Center, Children = kids }],
+        };
+    }
 }

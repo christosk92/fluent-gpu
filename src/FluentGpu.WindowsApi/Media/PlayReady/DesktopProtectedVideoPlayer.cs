@@ -107,6 +107,34 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
         }
     }
 
+    private static int s_warmupStarted;
+
+    /// <summary>
+    /// Idempotent, non-blocking DRM-native preload (fixes E2: the first protected open otherwise implicitly
+    /// <c>LoadLibrary</c>s <see cref="NativeLibraryName"/> + its whole MF/PlayReady dependency chain on the caller's
+    /// thread — see <see cref="RunNative"/>). Queues a one-shot pool work item that eagerly loads the native DLL so
+    /// the OS loader/link-resolution cost is already paid before the first real DRM <see cref="Start"/>. Safe to call
+    /// any number of times, from any thread, before or after PlayReady is used — only the first call schedules work.
+    /// A missing or unloadable native component is swallowed here (best-effort warmup); <see cref="Start"/> still
+    /// re-checks <see cref="IsAvailable"/> and surfaces the typed DRM error on the real open if the DLL truly is
+    /// absent, so a failed warmup never hides or changes user-visible behavior.
+    /// </summary>
+    public static void Warmup()
+    {
+        if (Interlocked.Exchange(ref s_warmupStarted, 1) != 0) return;
+        ThreadPool.UnsafeQueueUserWorkItem(static _ =>
+        {
+            try
+            {
+                // The handle is DELIBERATELY kept loaded: freeing it drops the loader refcount back to zero and the
+                // DLL (plus its MF/PlayReady import chain) can unload, forfeiting the warmup the first open relies on.
+                NativeLibrary.TryLoad(NativeLibraryName, typeof(DesktopProtectedVideoPlayer).Assembly,
+                    DllImportSearchPath.ApplicationDirectory | DllImportSearchPath.AssemblyDirectory, out nint _);
+            }
+            catch { /* best-effort: absence is handled at Start() */ }
+        }, null);
+    }
+
     public IReadSignal<ProtectedVideoState> State => _state;
     public IReadSignal<long> PositionMs => _positionMs;
     public IReadSignal<long> DurationMs => _durationMs;
@@ -150,8 +178,6 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
         _watchdogFired = false;
         _lastLoggedState = -1;
         _loggedSize = _loggedHandle = false;
-        try { Native.FgPlayReadyResetAdaptive(); }
-        catch (EntryPointNotFoundException) { _adaptiveAbiAvailable = false; }
 
         {
             string host = "";
@@ -162,21 +188,10 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
                      $"mode={request.Mode ?? "-"} startPaused={request.StartPaused} startTimeoutMs={StartTimeoutMs}");
         }
 
-        // Seed the process-global native transport level BEFORE the worker enters FgPlayReadyRunEx. MediaPlayer opens
-        // sessions paused and immediately calls PlayAsync; that Play can otherwise arrive before RunEx initializes and
-        // be overwritten by its startup reset. RunEx intentionally preserves this pre-seeded atomic level.
-        // This is also the FIRST P/Invoke into FluentGpu.PlayReady.Native.dll, so on the timed path it implicitly pays
-        // for LoadLibrary of that DLL plus its whole MF/PlayReady dependency chain. Runs on whatever thread called
-        // Start() (i.e. NOT the "fgpu-playready-desktop" worker below, which does not exist yet) — logged so a slow
-        // load can distinguish "first-call DLL load" from the worker's own FgPlayReadyRunEx cost.
-        {
-            long t0 = Stopwatch.GetTimestamp();
-            if (_playRequested) Native.FgPlayReadyPlay(); else Native.FgPlayReadyPause();
-            LogVideo($"first native call ({(_playRequested ? "FgPlayReadyPlay" : "FgPlayReadyPause")}) on thread " +
-                     $"'{Thread.CurrentThread.Name ?? "(unnamed)"}' (managed id={Environment.CurrentManagedThreadId}) " +
-                     $"took {Stopwatch.GetElapsedTime(t0).TotalMilliseconds:F1}ms " +
-                     "(implicit LoadLibrary of FluentGpu.PlayReady.Native.dll + its MF/PlayReady dependency chain)");
-        }
+        // FgPlayReadyResetAdaptive + the transport-seed first P/Invokes (which implicitly LoadLibrary the native DLL +
+        // its whole MF/PlayReady dependency chain) have MOVED to the top of RunNative — they now run on the
+        // "fgpu-playready-desktop" MTA worker instead of blocking whatever thread called Start() (the UI thread on the
+        // first protected open of a session; see RunNative for the seed-before-RunEx ordering this preserves).
 
         var system = request.Drm?.System ?? DrmSystem.PlayReady;
         _bridge = new DrmLicenseBridge(request.LicenseRelay, system, request.LicenseTimeout,
@@ -189,6 +204,30 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
 
     private void RunNative(ProtectedVideoRequest request)
     {
+        // MOVED from Start() (E2 fix, video-smooth-switching plan §4): FgPlayReadyResetAdaptive + the transport-seed
+        // first P/Invokes now run HERE, at the top of the "fgpu-playready-desktop" MTA worker, instead of on whatever
+        // thread called Start() — on the first protected open of a process that is the UI thread, and these calls pay
+        // for the implicit LoadLibrary of FluentGpu.PlayReady.Native.dll + its whole MF/PlayReady dependency chain.
+        try { Native.FgPlayReadyResetAdaptive(); }
+        catch (EntryPointNotFoundException) { _adaptiveAbiAvailable = false; }
+
+        // Seed the process-global native transport level BEFORE this worker enters FgPlayReadyRunEx below.
+        // MediaPlayer opens sessions paused and immediately calls PlayAsync; that Play can otherwise arrive before
+        // RunEx initializes and be overwritten by its startup reset. RunEx intentionally preserves this pre-seeded
+        // atomic level — the ordering (seed, THEN RunEx, both on this same worker thread) is unchanged from before
+        // the move; only the calling thread changed.
+        // This is also the FIRST P/Invoke into FluentGpu.PlayReady.Native.dll, so it implicitly pays for LoadLibrary
+        // of that DLL plus its whole MF/PlayReady dependency chain — logged so a slow load can distinguish
+        // "first-call DLL load" from FgPlayReadyRunEx's own cost below.
+        {
+            long tSeed0 = Stopwatch.GetTimestamp();
+            if (_playRequested) Native.FgPlayReadyPlay(); else Native.FgPlayReadyPause();
+            LogVideo($"first native call ({(_playRequested ? "FgPlayReadyPlay" : "FgPlayReadyPause")}) on thread " +
+                     $"'{Thread.CurrentThread.Name ?? "(unnamed)"}' (managed id={Environment.CurrentManagedThreadId}) " +
+                     $"took {Stopwatch.GetElapsedTime(tSeed0).TotalMilliseconds:F1}ms " +
+                     "(implicit LoadLibrary of FluentGpu.PlayReady.Native.dll + its MF/PlayReady dependency chain)");
+        }
+
         // Pin this instance so the static license thunk can recover the bridge across the P/Invoke boundary.
         GCHandle self = GCHandle.Alloc(this);
         IntPtr initUrl = Marshal.StringToHGlobalUni(request.InitUrl);

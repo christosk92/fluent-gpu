@@ -237,7 +237,10 @@ public static class InfoBar
         const int LongMessageChars = 60; // heuristic for "message wraps / doesn't fit on one line" alongside an action
         bool isVertical = contentItems <= 1
             || (hasAction && hasMessage && message.Length >= LongMessageChars)
-            || (!float.IsNaN(availableWidth) && hasAction
+            // The width estimate is not gated on an action: a title beside a message that cannot fit the row is the
+            // InfoBarPanel's own vertical case (title over message) with or without a button — gating it on hasAction
+            // left a 25-char title and a 95-char message wrapping side by side in a 500-DIP dialog.
+            || (!float.IsNaN(availableWidth)
                 && EstimateHorizontalWidth(title, message, isIconVisible, isClosable) > availableWidth);
 
         // With no banner items the panel measures ZERO in WinUI (InfoBarPanel.MeasureOverride falls to the horizontal

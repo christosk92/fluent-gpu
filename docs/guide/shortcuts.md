@@ -19,6 +19,18 @@ Mouse back/forward buttons (XButton1/2) **are** wired. The OS delivers them as `
 so they arrive through the PAL seam: `WaveeShell` subscribes `FluentApp.AppNavigationCommand` and routes it to the same
 `Back()` / `Forward()` that Alt+Left / Alt+Right use. The same path covers keyboards with dedicated Back/Forward keys.
 
+## Zoom (the recommended app-zoom set)
+
+Browser-style app zoom, wired through the engine's zoom seam (`FluentApp.SetZoom` + `ZoomLadder`; recipe:
+[app-zoom.md](./app-zoom.md)). **Ctrl+= / Ctrl+- / Ctrl+0 are now claimed by zoom in Wavee** — do not reuse them.
+
+| Shortcut | Action |
+|---|---|
+| **Ctrl+=** (`Ctrl+OemPlus`), **Ctrl+Shift+=**, **Ctrl+NumPad+** (`Ctrl+Add`) | Zoom in (next ladder step) |
+| **Ctrl+-** (`Ctrl+OemMinus`), **Ctrl+Shift+-**, **Ctrl+NumPad-** (`Ctrl+Subtract`) | Zoom out (previous ladder step) |
+| **Ctrl+0** (`Ctrl+D0`), **Ctrl+NumPad0** | Reset zoom to 100% |
+| **Ctrl+mouse wheel** | Zoom in / out (`InputHooks.ZoomWheel`; detented mouse wheels only) |
+
 ## Planned in the next batch
 
 Not wired yet — listed so the chords are not claimed twice.

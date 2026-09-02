@@ -2,30 +2,52 @@ using System;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
-using FluentGpu.Foundation;
 using FluentGpu.Media;
 using FluentGpu.Media.Adaptive;
-using FluentGpu.Pal;
 
 namespace FluentGpu.Media.Windows;
 
 /// <summary>
 /// The Windows Media-Foundation video backend (spec §9.1) — the <see cref="IMediaBackend"/> registered for
-/// <see cref="MediaKind.MfVideoOrFile"/>. <see cref="OpenAsync"/> stands up a <see cref="VideoMediaEngine"/>
-/// (<c>IMFMediaEngineEx</c> windowless swapchain, the PROVEN clear-video path) over a source URL/path and wraps it in an
-/// <see cref="MfMediaSession"/>. Clear (unprotected) video only in M1; DRM (a protected surface handle + a
-/// <see cref="MediaOpenOptions.LicenseRelay"/>) attaches at the same <c>BindSurfaceHandle</c> point in a later milestone.
-/// <para>The blocking engine startup (its MTA thread creation + <c>SetSource</c>) runs on a threadpool thread so
-/// <see cref="OpenAsync"/> never blocks the UI thread; every ComPtr stays confined to the engine's own MTA thread.</para>
+/// <see cref="MediaKind.MfVideoOrFile"/>. <see cref="OpenAsync"/> LEASES a warm <see cref="IVideoEngine"/>
+/// (<c>IMFMediaEngineEx</c> windowless swapchain, the PROVEN clear-video path) and posts a source switch onto it,
+/// wrapping the result in an <see cref="MfMediaSession"/>. Clear (unprotected) video only; DRM (a protected surface
+/// handle + a <see cref="MediaOpenOptions.LicenseRelay"/>) attaches at the same <c>BindSurfaceHandle</c> point via the
+/// injected <see cref="_drmBackend"/>.
+///
+/// <para><b>Warm-engine lease/return</b> (<c>docs/plans/video-smooth-switching-implementation.md</c> §1.5 — fixes E3).
+/// The old shape tore the ENTIRE engine down (<c>MFShutdown</c>, a 2 s join) and rebuilt it (<c>MFStartup</c> +
+/// <c>D3D11CreateDevice</c> + <c>CoCreateInstance</c>) on every track switch — a teardown that raced the successor's
+/// startup and paid the full bring-up cost every time. This backend now keeps ONE <see cref="IVideoEngine"/> warm
+/// across many opens: <see cref="OpenAsync"/> leases it (<see cref="LeaseEngine"/>), posts <c>SetSource</c> for the new
+/// track (a live source switch — no teardown, no rebuild), and hands the resulting <see cref="MfMediaSession"/> a
+/// <see cref="ReturnEngine"/> callback as its release action. When that session is disposed (a track switch, or the
+/// player itself closing), the engine is paused + detached and returned to the pool instead of destroyed — the next
+/// <see cref="OpenAsync"/> reuses it. Sequencing: <c>MediaPlayer.OpenAsync</c> already awaits the OLD session's
+/// <c>DisposeAsync</c> before calling <see cref="OpenAsync"/> on this backend, so <see cref="ReturnEngine"/>
+/// happens-before the next <see cref="LeaseEngine"/> — there is never a race between a return and the next lease.
+/// A <see cref="VideoEngineFlags.Faulted"/> engine (an unrecoverable bring-up failure) is discarded and rebuilt at the
+/// NEXT lease, never reused. Two <see cref="FluentGpu.Media.MediaPlayer"/>s sharing one <see cref="MfMediaPlayer"/>
+/// concurrently is an edge case, not the steady state: the second concurrent lease gets a throwaway engine instead of
+/// fighting the warm one's single-writer ownership (documented decision — plan §8 risks).</para>
+/// <para><see cref="OpenAsync"/> never throws for an MF-side open failure: <see cref="IVideoEngine.PostSetSource"/> is
+/// fire-and-forget (no blocking bring-up left to await, no synchronous HRESULT to check) — a failure surfaces later as
+/// a typed <see cref="MediaError"/> on the session's signal sink, exactly like every other in-flight media error.
+/// Cancellation before the source is posted still throws (manifest load only — nothing else here is awaited).</para>
 /// </summary>
-public sealed class MfMediaPlayer : IMediaBackend
+public sealed class MfMediaPlayer : IMediaBackend, IAsyncDisposable
 {
     private static readonly HttpClient s_http = new();
     private readonly Func<IVideoEngine> _engineFactory;
     private readonly IMediaBackend? _drmBackend;
     private readonly HttpClient _http;
 
-    /// <summary>Create the production MF backend (each open builds a real <see cref="VideoMediaEngine"/>); no DRM support.</summary>
+    private readonly object _engineLock = new();
+    private IVideoEngine? _warm;
+    private bool _leased;
+
+    /// <summary>Create the production MF backend (a warm <see cref="VideoMediaEngine"/> is built on first open); no DRM
+    /// support.</summary>
     public MfMediaPlayer() : this(static () => new VideoMediaEngine(), null) { }
 
     /// <summary>Create the MF backend with a protected (DRM) backend attached — a <see cref="MediaSource"/> carrying a
@@ -50,6 +72,46 @@ public sealed class MfMediaPlayer : IMediaBackend
     /// <inheritdoc/>
     public MediaCapabilities Capabilities { get; }
 
+    /// <summary>Return the warm engine (building/replacing it first if absent or <see cref="VideoEngineFlags.Faulted"/>),
+    /// and mark it leased. A second CONCURRENT lease (a second <see cref="OpenAsync"/> in flight before the first's
+    /// session is disposed) gets its own throwaway engine rather than contend for the warm one's single-writer
+    /// ownership — the warm slot always belongs to at most one live session.</summary>
+    private IVideoEngine LeaseEngine()
+    {
+        lock (_engineLock)
+        {
+            bool faulted = _warm is { } w && (w.Snapshot.Flags & VideoEngineFlags.Faulted) != 0;
+            if (_warm is null || faulted)
+            {
+                _warm?.Dispose();
+                _warm = _engineFactory();
+                _warm.Start();
+            }
+            if (_leased)
+            {
+                var extra = _engineFactory();
+                extra.Start();
+                return extra;
+            }
+            _leased = true;
+            return _warm!;
+        }
+    }
+
+    /// <summary>Called from <see cref="MfMediaSession.DisposeAsync"/> (any thread; non-blocking — pause + detach are
+    /// both posts). The warm engine goes back to the pool for the NEXT open; a throwaway (a second concurrent lease, or
+    /// one leased while a rebuild already replaced <see cref="_warm"/>) is disposed outright instead.</summary>
+    private void ReturnEngine(IVideoEngine engine)
+    {
+        lock (_engineLock)
+        {
+            if (!ReferenceEquals(engine, _warm)) { engine.Dispose(); return; }
+            _leased = false;
+            engine.Commands.Post(VideoCommandKind.Transport, a: 0);   // pause — a warm-parked engine does not play
+            engine.PostDetach();
+        }
+    }
+
     /// <inheritdoc/>
     public async ValueTask<IMediaSession> OpenAsync(MediaSource source, MediaOpenOptions opts, CancellationToken ct)
     {
@@ -71,38 +133,18 @@ public sealed class MfMediaPlayer : IMediaBackend
         string url = ResolveUrl(source) ?? throw new NotSupportedException(
             "MfMediaPlayer supports a file path or a URL source (FromFile/FromUri).");
 
-        var engine = _engineFactory();
-        int hr;
-        try
-        {
-            // Blocking engine bring-up (MTA thread + SetSource) off the UI thread; honor cancellation before/after.
-            hr = await Task.Run(() => engine.Initialize(url), ct).ConfigureAwait(false);
-        }
-        catch
-        {
-            engine.Dispose();
-            throw;
-        }
-        if (hr < 0)
-        {
-            engine.Dispose();
-            throw new InvalidOperationException($"Media Foundation failed to open the source (hr=0x{(uint)hr:X8}).");
-        }
-        if (ct.IsCancellationRequested)
-        {
-            engine.Dispose();
-            ct.ThrowIfCancellationRequested();
-        }
+        ct.ThrowIfCancellationRequested();   // the manifest load above is the only awaited step; nothing below blocks
+
+        IVideoEngine engine = LeaseEngine();
+        int epoch = engine.PostSetSource(url);   // fire-and-forget: no Task.Run, no block, no synchronous MF throw
 
         // A media element does not loop by default (the M3 harness kept a live frame via loop), but a source the caller
         // explicitly wrapped in .Loop() must. Only an INFINITE loop maps onto the MF media engine, whose loop flag is a
         // bool with no repeat count — a finite count would silently become infinite, so it stays unlooped instead.
-        // Previously this was hardcoded false and LoopSource was unwrapped only to reach the URL, making .Loop() a
-        // no-op: a "looping" canvas clip played once and froze.
-        engine.SetLoop(IsInfiniteLoop(source));
-        if (opts.StartPaused) engine.Pause();
+        engine.Commands.Post(VideoCommandKind.Loop, i: IsInfiniteLoop(source) ? 1 : 0);
+        if (opts.StartPaused) engine.Commands.Post(VideoCommandKind.Transport, a: 0);
 
-        return new MfMediaSession(engine, opts, manifest);
+        return new MfMediaSession(engine, epoch, opts, manifest, ReturnEngine);
     }
 
     /// <summary>True when the source asks to repeat forever (<c>.Loop()</c> with the default count of -1). Mirrors
@@ -127,4 +169,13 @@ public sealed class MfMediaPlayer : IMediaBackend
         LoopSource l => ResolveUrl(l.Inner),
         _ => null,
     };
+
+    /// <summary>Tear down the warm engine (app shutdown / backend replacement). Off-thread: <see cref="IVideoEngine.Dispose"/>
+    /// joins its MTA thread (bounded at 2 s) and this must never block the caller.</summary>
+    public async ValueTask DisposeAsync()
+    {
+        IVideoEngine? warm;
+        lock (_engineLock) { warm = _warm; _warm = null; _leased = false; }
+        if (warm is not null) await Task.Run(warm.Dispose).ConfigureAwait(false);
+    }
 }

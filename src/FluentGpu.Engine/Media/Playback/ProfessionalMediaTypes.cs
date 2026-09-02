@@ -119,6 +119,11 @@ public readonly record struct VideoGeometry(
 /// </list></summary>
 public readonly record struct VideoSurfaceGeometry(SizeI Natural, SizeI Content, RectF Place, float Scale)
 {
+    /// <summary>The registry token of the <c>VideoBinding</c> that pumped this placement (0 = unknown/none). Names
+    /// the WRITER in a host log — with several mounted elements on one player, the geometry line is last-writer-wins
+    /// and this field is what tells them apart.</summary>
+    public int Token { get; init; }
+
     /// <summary>Nothing placed yet.</summary>
     public static VideoSurfaceGeometry Empty => new(SizeI.Zero, SizeI.Zero, default, 1f);
 
@@ -128,7 +133,7 @@ public readonly record struct VideoSurfaceGeometry(SizeI Natural, SizeI Content,
     /// <summary>A stable one-line rendering for a host log — the exact shape a geometry defect is read from.</summary>
     public override string ToString()
         => $"natural={Natural.Width}x{Natural.Height} content={Content.Width}x{Content.Height} " +
-           $"place={Place.X:0.#},{Place.Y:0.#},{Place.W:0.#},{Place.H:0.#} scale={Scale:0.##}";
+           $"place={Place.X:0.#},{Place.Y:0.#},{Place.W:0.#},{Place.H:0.#} scale={Scale:0.##} tok={Token}";
 }
 
 public enum VideoColorPrimaries : byte { Unknown, Bt601, Bt709, Bt2020, DisplayP3 }

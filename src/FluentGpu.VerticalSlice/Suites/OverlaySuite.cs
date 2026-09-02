@@ -24,6 +24,7 @@ using FluentGpu.Render;
 using FluentGpu.Rhi;
 using FluentGpu.Rhi.Headless;
 using FluentGpu.Scene;
+using FluentGpu.Scroll;
 using FluentGpu.Signals;
 using FluentGpu.Text;
 using FluentGpu.Text.Headless;
@@ -58,6 +59,7 @@ static class OverlaySuite
         TextConsumerControlChecks(strings);
         PlacementChecks();
         OverlayFocusRestoreChecks(strings);
+        TextUnderModalChecks(strings);
         TextInputChecks(strings);
         OverlayChecks(strings);
         OverlayAnimationChecks(strings);
@@ -67,6 +69,7 @@ static class OverlaySuite
         VideoHoleBackdropChecks(strings);
         AcrylicBackdropMathChecks();
         ContentDialogChromeChecks(strings);
+        ContentDialogScrolledBodyTextChecks(strings);
         ScrimVisualChecks(strings);
         TeachingTipPlacementChecks(strings);
         MenuFlyoutStyleChecks(strings);
@@ -3361,6 +3364,68 @@ static class OverlaySuite
             $"outer={realOuterBorder} top={topOverlay} sep={separator} cmd={commandRow}");
     }
 
+    // gate.dialog.scrolled-body-text — ContentDialog's ScrollEl-wrapped Content sits above a fixed command row
+    // (PrimaryText/CloseText buttons) that lives OUTSIDE the scroller entirely (a sibling after the separator), plus
+    // a CheckBox at the tail of the scrolled content. Scrolling the body must not blank either: the command-row
+    // labels are not scroll content at all (their world position never changes), and the CheckBox label is ordinary
+    // in-viewport text once scrolled into view. Repro for the reported "Report a problem" dialog defect (glyph runs
+    // recorded with zero alpha once the body scroller leaves offset 0 — the button/checkbox FILLS still paint).
+    // Drives BOTH a full touchpad pan gesture (ScrollBegin/Delta×30/End — engages UserScrollActive + the
+    // translated-copy span-reuse path for the scrolled content) and checks every intermediate frame, not just rest.
+    static void ContentDialogScrolledBodyTextChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("dialogscrolltext", new Size2(760, 900), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        using var host = new AppHost(app, window, device, fonts, strings, new ContentDialogScrolledBodyProbe());
+
+        for (int i = 0; i < 24; i++) host.RunFrame();   // open + settle the modal scale/fade
+
+        bool VisibleNow(string text) => HasGlyph(device, strings, text) && GlyphColor(device, strings, text).A > 0.01f;
+
+        bool primaryAtTop = VisibleNow(ContentDialogScrolledBodyProbe.PrimaryLabel);
+        bool closeAtTop = VisibleNow(ContentDialogScrolledBodyProbe.CloseLabel);
+
+        var vp = FindScrollable(host.Scene, host.Scene.Root);
+        bool foundViewport = !vp.IsNull && host.Scene.HasScroll(vp);
+        var vpRect = vp.IsNull ? default : host.Scene.AbsoluteRect(vp);
+
+        bool primaryOkThroughout = true, closeOkThroughout = true;
+        if (foundViewport)
+        {
+            float cx = vpRect.X + vpRect.W * 0.5f;
+            float y = vpRect.Y + vpRect.H * 0.8f;
+            uint t = 5000;
+            void Packet(InputKind k, float dy)
+            {
+                t += 16; y -= dy;
+                window.QueueInput(new InputEvent(k, new Point2(cx, y), 0, 0, ScrollDelta: dy,
+                    Pointer: PointerKind.Touchpad, TimestampMs: t, PointerId: 7, DeviceClassRaw: (byte)ScrollDeviceClass.Touchpad));
+                host.RunFrame();
+                // The command row never moves — its labels must stay recorded+visible on EVERY frame of the gesture,
+                // not just once it settles (a transient mid-motion blank would be just as visible to the user).
+                primaryOkThroughout &= VisibleNow(ContentDialogScrolledBodyProbe.PrimaryLabel);
+                closeOkThroughout &= VisibleNow(ContentDialogScrolledBodyProbe.CloseLabel);
+            }
+            Packet(InputKind.ScrollBegin, 0f);
+            for (int i = 0; i < 30; i++) Packet(InputKind.ScrollDelta, 20f);
+            Packet(InputKind.ScrollEnd, 0f);
+            for (int i = 0; i < 20; i++) host.RunFrame();   // settle after the gesture
+        }
+
+        bool primaryAfterScroll = VisibleNow(ContentDialogScrolledBodyProbe.PrimaryLabel);
+        bool closeAfterScroll = VisibleNow(ContentDialogScrolledBodyProbe.CloseLabel);
+        bool checkAfterScroll = VisibleNow(ContentDialogScrolledBodyProbe.CheckLabel);
+
+        Check("gate.dialog.scrolled-body-text ContentDialog command-row button labels and the last CheckBox's label stay recorded with visible alpha throughout and after the Content ScrollEl is scrolled to its end",
+            foundViewport && primaryAtTop && closeAtTop && primaryOkThroughout && closeOkThroughout
+                && primaryAfterScroll && closeAfterScroll && checkAfterScroll,
+            $"viewport={foundViewport} atTop(primary={primaryAtTop},close={closeAtTop}) duringGesture(primary={primaryOkThroughout},close={closeOkThroughout}) " +
+            $"afterScroll(primary={primaryAfterScroll},close={closeAfterScroll},check={checkAfterScroll})");
+    }
+
     // gate.overlay.scrim-visual — PopupOptions.ScrimVisual (Modal only): false keeps input-blocking/focus-trapping
     // intact (AnyInputBlocking, AnyModal) but hides the shared scrim's fill (AnyModalVisual), so the app can own the
     // dimming or leave the content behind as a live preview. Default true still dims via the shared scrim.
@@ -3785,4 +3850,137 @@ static class OverlaySuite
             padOk && regionOk, $"padOk={padOk} regionOk={regionOk} pad@4={AcrylicKawaseMath.PadPx(4, 2f)}");
     }
 
+
+    // gate.overlay.modal-covers-text + gate.overlay.unmounted-text-leaves-no-glyphs — repro for the "We" / "We're glad
+    // you're here. A" fragments that stayed painted over the setup dialog after the splash under it went away:
+    // (1) while the splash text is still mounted under an opaque Modal plate, EVERY frame of the open animation and
+    // after it records the text's glyph runs BEFORE the plate's fill in DrawList order (the D3D12 backend paints in byte
+    // order — no sort-key reorder), so the plate covers them; (2) the frame that unmounts the text records no glyph run
+    // for it at all, and that frame's RepaintDamage either forces a full repaint or covers the text's last rect, so a
+    // partial-present backend cannot leave the old glyph pixels behind; (3) nothing re-emits them afterwards.
+    static void TextUnderModalChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("textundermodal", new Size2(900, 640), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        var root = new TextUnderModalProbe();
+        using var host = new AppHost(app, window, device, fonts, strings, root);
+        host.RunFrame(); host.RunFrame();
+        var svc = (OverlayServiceImpl)root.Service!;
+
+        var introNode = FindTextNode(host.Scene, strings, host.Scene.Root, TextUnderModalProbe.Intro);
+        var welcomeNode = FindTextNode(host.Scene, strings, host.Scene.Root, TextUnderModalProbe.Welcome);
+        bool textMounted = !introNode.IsNull && !welcomeNode.IsNull && HasGlyph(device, strings, TextUnderModalProbe.Intro);
+        var introRect = introNode.IsNull ? default : host.Scene.AbsoluteRect(introNode);
+        var welcomeRect = welcomeNode.IsNull ? default : host.Scene.AbsoluteRect(welcomeNode);
+
+        var plateFill = ColorF.FromRgba(32, 32, 32);
+        Func<Element> body = () => new BoxEl
+        {
+            Width = 762f, Height = 490f, Fill = plateFill, ClipToBounds = true, Padding = Edges4.All(24f),
+            Children = [new TextEl("Sign in to Spotify") { Size = 28f }],
+        };
+        var modal = svc.Open(() => root.Anchor, body, FlyoutPlacement.BottomCenter,
+            new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.Modal, Chrome: PopupChrome.Modal) { ScrimVisual = true });
+
+        // (1) Order every frame of the open motion + rest: intro glyph op index < plate fill op index.
+        StringId introId = strings.Intern(TextUnderModalProbe.Intro);
+        bool orderOkThroughout = true; int framesWithBoth = 0;
+        string orderDetail = "";
+        var dl = new DrawList();
+        for (int i = 0; i < 30; i++)
+        {
+            host.RunFrame();
+            dl.Reset();
+            SceneRecorder.Record(host.Scene, dl);   // the same walk the host just submitted, re-recorded for the op order
+            (int glyphAt, int plateAt) = FirstOps(dl.Bytes, introId, plateFill);
+            if (glyphAt >= 0 && plateAt >= 0)
+            {
+                framesWithBoth++;
+                if (glyphAt > plateAt) { orderOkThroughout = false; orderDetail = $"frame {i}: glyph@{glyphAt} plate@{plateAt}"; }
+            }
+        }
+        var plateRect = default(RectF);
+        {
+            var plateNode = FindFillNode(host.Scene, host.Scene.Root, plateFill);
+            if (!plateNode.IsNull) plateRect = host.Scene.AbsoluteRect(plateNode);
+        }
+        bool plateCoversText = plateRect.W > 0f && Contains(plateRect, introRect) && Contains(plateRect, welcomeRect);
+        Check("gate.overlay.modal-covers-text splash text mounted UNDER an opaque Modal plate is recorded before the plate's fill on every frame of the open motion and at rest (the plate covers it), and the plate's rect contains the text",
+            textMounted && framesWithBoth > 0 && orderOkThroughout && plateCoversText,
+            $"mounted={textMounted} framesWithBoth={framesWithBoth} order={orderOkThroughout} {orderDetail} plate={plateRect.X:0.#},{plateRect.Y:0.#},{plateRect.W:0.#}x{plateRect.H:0.#} intro={introRect.X:0.#},{introRect.Y:0.#},{introRect.W:0.#}x{introRect.H:0.#}");
+
+        // (2) Unmount the text under the modal.
+        root.ShowText.Value = false;
+        host.RunFrame();
+        bool noIntroGlyph = !HasGlyph(device, strings, TextUnderModalProbe.Intro);
+        bool noWelcomeGlyph = !HasGlyph(device, strings, TextUnderModalProbe.Welcome);
+        var dmg = device.LastFrameInfo.RepaintDamage;
+        bool damageCovers = dmg.IsFull || (Covered(in dmg, introRect) && Covered(in dmg, welcomeRect));
+        string dmgDetail = dmg.IsFull ? $"full({dmg.FullReason})" : $"{dmg.Count} rects";
+        for (int i = 0; i < dmg.Count; i++) dmgDetail += $" [{dmg[i].X:0.#},{dmg[i].Y:0.#},{dmg[i].W:0.#}x{dmg[i].H:0.#}]";
+
+        // (3) Nothing re-emits them afterwards (the modal is still up, the overlay animates nothing any more).
+        bool stayGone = true;
+        for (int i = 0; i < 12; i++)
+        {
+            host.RunFrame();
+            stayGone &= !HasGlyph(device, strings, TextUnderModalProbe.Intro) && !HasGlyph(device, strings, TextUnderModalProbe.Welcome);
+        }
+        Check("gate.overlay.unmounted-text-leaves-no-glyphs unmounting the text under a live Modal records no glyph run for it that frame or after, and that frame's RepaintDamage covers the text's last rect (or forces a full repaint)",
+            noIntroGlyph && noWelcomeGlyph && damageCovers && stayGone,
+            $"introGone={noIntroGlyph} welcomeGone={noWelcomeGlyph} stayGone={stayGone} damage={dmgDetail} intro={introRect.X:0.#},{introRect.Y:0.#},{introRect.W:0.#}x{introRect.H:0.#} welcome={welcomeRect.X:0.#},{welcomeRect.Y:0.#},{welcomeRect.W:0.#}x{welcomeRect.H:0.#}");
+
+        modal.Close();
+        for (int i = 0; i < 20; i++) host.RunFrame();
+
+        static bool Contains(in RectF outer, in RectF inner) =>
+            inner.W > 0f && inner.X >= outer.X - 0.5f && inner.Y >= outer.Y - 0.5f
+            && inner.X + inner.W <= outer.X + outer.W + 0.5f && inner.Y + inner.H <= outer.Y + outer.H + 0.5f;
+
+        // Sample-based coverage: the region's rects are pairwise disjoint, so a rect may be covered by several members —
+        // test a 5×5 lattice of points over the old rect against the union.
+        static bool Covered(in RepaintDamageRegion r, in RectF old)
+        {
+            if (old.W <= 0f || old.H <= 0f) return false;
+            for (int iy = 0; iy <= 4; iy++)
+                for (int ix = 0; ix <= 4; ix++)
+                {
+                    float px = old.X + old.W * ix / 4f, py = old.Y + old.H * iy / 4f;
+                    bool hit = false;
+                    for (int k = 0; k < r.Count && !hit; k++)
+                    {
+                        var d = r[k];
+                        hit = px >= d.X - 0.5f && px <= d.X + d.W + 0.5f && py >= d.Y - 0.5f && py <= d.Y + d.H + 0.5f;
+                    }
+                    if (!hit) return false;
+                }
+            return true;
+        }
+
+        static (int glyphAt, int plateAt) FirstOps(ReadOnlySpan<byte> bytes, StringId textId, ColorF fill)
+        {
+            int pos = 0, glyphAt = -1, plateAt = -1;
+            while (pos + sizeof(int) <= bytes.Length)
+            {
+                DrawOp op = (DrawOp)MemoryMarshal.Read<int>(bytes.Slice(pos, sizeof(int)));
+                int at = pos;
+                pos += sizeof(int);
+                if (op == DrawOp.DrawGlyphRun && glyphAt < 0)
+                {
+                    var g = MemoryMarshal.Read<DrawGlyphRunCmd>(bytes.Slice(pos));
+                    if (g.Text == textId) glyphAt = at;
+                }
+                else if (op == DrawOp.FillRoundRect && plateAt < 0)
+                {
+                    var f = MemoryMarshal.Read<FillRoundRectCmd>(bytes.Slice(pos));
+                    if (ColorClose(f.Fill, fill, 0.01f)) plateAt = at;
+                }
+                pos += DrawPayloadSize(op);
+            }
+            return (glyphAt, plateAt);
+        }
+    }
 }

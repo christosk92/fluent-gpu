@@ -65,12 +65,9 @@ static class VideoReal
 
         Console.Error.WriteLine($"VideoReal: playing {url}");
         using var engine = new VideoMediaEngine();
-        int initHr = engine.Initialize(url);
-        if (initHr < 0)
-        {
-            Console.Error.WriteLine($"VideoReal: engine init failed hr=0x{(uint)initHr:X8} — aborting.");
-            return 3;
-        }
+        engine.Start();
+        engine.PostSetSource(url);
+        engine.Commands.Post(VideoCommandKind.Transport, a: 1);   // bring-up failure surfaces as Faulted in the snapshot below
 
         float scale = VideoM0.GetDpiForWindow(window.Handle.Value) / 96f;
         if (scale <= 0f) scale = 1f;
@@ -89,22 +86,22 @@ static class VideoReal
             host.RunFrame();
             window.WaitForWork(16);
 
+            var s = engine.Snapshot;
             if (DateTime.UtcNow >= nextTrace)
             {
-                Console.Error.WriteLine($"VideoReal: [t] readyState={engine.ReadyState} events=[{engine.EventTrace}]");
+                Console.Error.WriteLine($"VideoReal: [t] readyState={s.ReadyState} flags={s.Flags} pos={s.PositionSeconds:0.00}");
                 nextTrace = DateTime.UtcNow + TimeSpan.FromSeconds(2);
             }
 
-            if (engine.HasError)
+            if ((s.Flags & (VideoEngineFlags.Error | VideoEngineFlags.Faulted)) != 0)
             {
-                Console.Error.WriteLine($"VideoReal: MediaEngine ERROR code={engine.ErrorCode} hr=0x{(uint)engine.ErrorHr:X8} (last event {engine.LastEventName}).");
+                Console.Error.WriteLine($"VideoReal: MediaEngine ERROR code={s.ErrorCode} hr=0x{(uint)s.ErrorHr:X8} flags={s.Flags}.");
                 break;
             }
-            if (bound || !engine.MetadataLoaded) continue;
+            if (bound || (s.Flags & VideoEngineFlags.MetadataLoaded) == 0) continue;
 
             // Geometry: fit the native video into the window (below the top bar), preserving aspect, device px.
-            uint vw = 1280, vh = 720;
-            engine.QueryNativeVideoSize(out vw, out vh);   // NoAnswer zeroes the out-params → the 1280x720 fallback below
+            uint vw = s.NaturalW, vh = s.NaturalH;   // 0×0 until NaturalSizeKnown → the 1280x720 fallback below
             if (vw == 0 || vh == 0) { vw = 1280; vh = 720; }
             var px = device.SizePx;
             int wpx = (int)px.Width, hpx = (int)px.Height;
@@ -117,7 +114,7 @@ static class VideoReal
             cx = (wpx - childW) / 2;
             cy = barPx + (hpx - barPx - childH) / 2;
 
-            nuint handle = engine.GetSwapchainHandle();
+            nuint handle = s.SwapchainHandle;
             if (handle == 0) { Console.Error.WriteLine("VideoReal: swapchain handle not ready yet — retrying."); continue; }
 
             // The video spine end-to-end: MediaEngine windowless swapchain handle → BindSurfaceHandle → Place under the hole.
@@ -126,14 +123,15 @@ static class VideoReal
             presenter.Place(id, new RectF(cx, cy, childW, childH), 1f, 0);
             presenter.SetVisible(id, true);
             presenter.Commit();
-            engine.SetVideoStreamRect(childW, childH);   // UpdateVideoStream(null, {0,0,w,h}, border)
+            engine.Commands.Post(VideoCommandKind.StreamRect, i: childW, j: childH);   // UpdateVideoStream(null, {0,0,w,h}, border)
             bound = true;
             Console.Error.WriteLine($"VideoReal: BOUND video {vw}x{vh} -> child rect ({cx},{cy},{childW},{childH}); scale={scale:0.##}");
         }
 
         if (!bound)
         {
-            Console.Error.WriteLine($"VideoReal: never bound a swapchain (metadata={engine.MetadataLoaded}, error={engine.HasError}, last={engine.LastEventName}). No real frame — FAIL.");
+            var sf = engine.Snapshot;
+            Console.Error.WriteLine($"VideoReal: never bound a swapchain (flags={sf.Flags}, hr=0x{(uint)sf.ErrorHr:X8}). No real frame — FAIL.");
         }
         else
         {
@@ -144,26 +142,28 @@ static class VideoReal
             {
                 host.RunFrame();
                 window.WaitForWork(16);
-                if (engine.OnVideoStreamTick(out _)) sawTick = true;
-                engine.RepaintCurrentFrame();
+                var sp = engine.Snapshot;
+                if (sp.PositionSeconds > 0.05) sawTick = true;   // clock advancing = frames decoding/presenting
+                engine.Commands.Post(VideoCommandKind.Repaint);
                 presenter.Commit();
-                // Stop once we're genuinely playing, have seen a decoded frame, and given it ~1.5s to render.
-                if (engine.Playing && sawTick && (DateTime.UtcNow - bindTime) > TimeSpan.FromSeconds(1.5) && i > 30)
+                // Stop once we're genuinely playing, have seen the clock advance, and given it ~1.5s to render.
+                if ((sp.Flags & VideoEngineFlags.Playing) != 0 && sawTick && (DateTime.UtcNow - bindTime) > TimeSpan.FromSeconds(1.5) && i > 30)
                     break;
             }
-            Console.Error.WriteLine($"VideoReal: state playing={engine.Playing} canplay={engine.CanPlay} readyState={engine.ReadyState} newFrameTick={sawTick} last={engine.LastEventName}");
+            var se = engine.Snapshot;
+            Console.Error.WriteLine($"VideoReal: state flags={se.Flags} readyState={se.ReadyState} clockAdvanced={sawTick} pos={se.PositionSeconds:0.00}");
         }
-        Console.Error.WriteLine($"VideoReal: full event trace = [{engine.EventTrace}]");
 
         // Bring our window to the foreground + topmost so the screen BitBlt captures IT (the DComp video child is
         // DWM-composited on screen; a screen capture of the window rect grabs whatever is on top, so the window must be
         // frontmost). Then capture the DWM composite (includes the DComp video child).
         BringToFront(window.Handle.Value);
-        for (int i = 0; i < 8; i++) { host.RunFrame(); window.WaitForWork(16); engine.RepaintCurrentFrame(); presenter.Commit(); }
+        for (int i = 0; i < 8; i++) { host.RunFrame(); window.WaitForWork(16); engine.Commands.Post(VideoCommandKind.Repaint); presenter.Commit(); }
         bool ok = VideoM0.CaptureWindowToPng(window.Handle.Value, pngPath);
         Console.Error.WriteLine(ok ? $"VideoReal: wrote screen capture -> {pngPath}" : "VideoReal: screen capture FAILED.");
 
-        bool realFrame = bound && sawTick && engine.Playing && !engine.HasError;
+        var sr = engine.Snapshot;
+        bool realFrame = bound && sawTick && (sr.Flags & VideoEngineFlags.Playing) != 0 && (sr.Flags & VideoEngineFlags.Error) == 0;
         Console.Error.WriteLine(realFrame
             ? "VideoReal: RESULT = a decoded frame presented (playing + video-stream-tick). Inspect the PNG for a recognizable frame."
             : "VideoReal: RESULT = NO confirmed decoded frame (see state above) — treat the PNG as SUSPECT/BLACK, not success.");

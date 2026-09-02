@@ -293,6 +293,7 @@ sealed class FrameDiagnosticsHud : Component
         Children =
         [
             Metric("fps", "000", DynamicTextKind.FrameFps, Tok.AccentDefault),
+            Metric("pfps", "000", DynamicTextKind.FramePresentFps, Tok.AccentDefault),
             Metric("cmd", "0000", DynamicTextKind.FrameCommandCount, Tok.TextPrimary),
             Metric("draw", "0000", DynamicTextKind.FrameDrawCount, Tok.TextPrimary),
             Metric("cull", "0000", DynamicTextKind.FrameCullCount, Tok.TextPrimary),

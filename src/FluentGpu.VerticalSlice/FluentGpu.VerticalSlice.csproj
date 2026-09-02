@@ -9,6 +9,13 @@
          enforces warnings-as-errors — clear the backlog before removing this opt-out. -->
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
   </PropertyGroup>
+  <!-- The three real Lottie assets the lottie suite compiles/mounts (gate.lottie.*) — copied verbatim from
+       WaveeMusic's docs/plans/wavee/onboarding-v2-assets/{Eula,Connect,Patch}Lottie.json (lower-cased names). -->
+  <ItemGroup>
+    <Content Include="Assets\lottie\*.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
   <!-- The validation harness runs the PORTABLE path only (Engine's headless backends + the portable control kit).
        Regression guard: this project's transitive closure must contain NO TerraFX / Windows-backend reference. -->
   <ItemGroup>

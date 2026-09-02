@@ -203,6 +203,37 @@ PrefetchImage(string src, int decodePx)                                         
 `UseImage` subscribes the component to image-status changes (so a spinner→ready transition re-renders just it). To
 actually paint, also use `Ui.Image(src, …)`. Album-art decode is off-thread, cached, residency-pinned while on screen.
 
+### Lottie (`FluentGpu.Lottie` + `LottieView`)
+```csharp
+var source = LottieSource.FromFile(path);           // or FromString/FromUtf8 — parse+compile is lazy, cached, thread-safe
+await LottieView.Preload(source);                    // optional: warm off the UI thread (~1-2ms/50KB asset)
+LottieView.Create(source, size: 192f, new LottieOptions
+{
+    Loop = false, From = 0f, To = 0.5f,               // "play the first half once, then hold" (LottieOptions.RiseSetup)
+    Recolor = c => c == brandBlue ? accent : c,        // applied ONCE at mount to every fill/stroke/mid-stop (RGB; alpha kept)
+});
+```
+A Bodymovin/Lottie JSON document is parsed (`LottieParser`, a `Utf8JsonReader` forward walk — no DOM/reflection) and
+compiled ONCE per `LottieSource` (`LottiePlan`, cached) into the SAME element/channel vocabulary every other Element
+uses: a flat pre-order `BoxEl` group tree with `PathEl` fill/stroke leaves, driven by `AnimEngine.Keyframes` tracks —
+no renderer/scene change, no per-frame geometry (every `PathData` is minted once at compile). `LottieOptions` (`Loop`,
+`AutoPlay`, `From`/`To` window remap, `ReducedMotion` policy, `Recolor`) is frozen at mount like any component prop —
+change it by remounting through a `Key`, not a live signal.
+
+**Supported:** layer transform (position/anchor/scale/rotation/opacity, animated or static), shape/rect/ellipse
+paths, fill/stroke paints (color, width, cap/join), trim paths (start/end/mode), precomp nesting + clipping, layer
+visibility windows (`ip`/`op`), parenting, and 0-4 morphing bezier shapes per asset (compiled to a discrete "switch"
+group of pre-baked samples with a step/Hold opacity track — never a per-frame morph, which would defeat geometry
+caching). **Approximated** (each bumps `LottiePlan.Approximations`, reported per asset): gradient fills/strokes
+(a solid mid-stop, not a real gradient — WinUI parity would need a new `FillPathGradient` opcode); animated stroke
+width (an `Opacity = w(t)/w(last)` proxy — no engine stroke-width channel); animated color (frozen to its first key);
+spatial position tangents (`to`/`ti` — falls back to a plain per-axis eased track, not an arc-length-sampled curve);
+merge paths / repeaters (each child renders once, unmerged/unrepeated); an animated shape-group transform (baked to
+its first-key value). **Dropped entirely** (`LottiePlan.DroppedLayers`): hidden layers, track-matte source/user
+layers, layers with a Gaussian-blur/fill effect, and layers whose name matches `_emb|_shdw|shdw|emb_msk|Emboss|Shadow`
+(ordinal, case-insensitive) — the decorative emboss/shadow convention Bodymovin exporters use. Not supported at all:
+images, text layers, masks, expressions.
+
 ## Controls (`src/FluentGpu.Controls/`)
 
 Most controls are **element-returning factories** (call them in render); `NavigationView`/`PageHost` are `Component`s.

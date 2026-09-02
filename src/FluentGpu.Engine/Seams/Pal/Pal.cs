@@ -673,6 +673,14 @@ public interface IPlatformWindow : IDisposable
     /// never lost to a wake that landed mid-frame.</summary>
     DisplayClockSample DisplayClock => default;
 
+    /// <summary>The refresh period of the display THIS window is currently on, in Stopwatch ticks; 0 when unknown
+    /// (headless, or a backend with no per-monitor query). Higher priority than the device's swapchain
+    /// <see cref="FluentGpu.Rhi.PresentStats.RefreshPeriodQpc"/> in <c>AppHost</c>'s refresh-period funnel: a
+    /// per-WINDOW source follows that window's own monitor (a drag to a different-rate display, or simply being on a
+    /// secondary monitor) with no app involvement, where the device-wide PresentStats reflects only the swapchain's
+    /// present history and can go stale across a monitor change. Default 0 defers to the device/60 Hz fallback.</summary>
+    long DisplayRefreshPeriodQpc => 0;
+
     /// <summary>
     /// Invoked by the platform when the OS demands an immediate repaint *outside* the app's frame loop —
     /// notably during the modal move/size loop (WM_SIZE/WM_PAINT), which otherwise blocks rendering until mouse-up.

@@ -21,6 +21,40 @@ public readonly struct GpuVideoMemorySnapshot
     public int AtlasPages { get; init; }
     public int CachedGlyphs { get; init; }
     public bool Valid { get; init; }
+
+    // ── Per-window display mode (mixed-refresh-rate audit) ──────────────────────────────────────────────────────
+    // Published from D3D12Device.SamplePresentTopology's 1 Hz DWM branch (the same edge that already resolves the
+    // present-adapter topology below) via DisplayInfo.ForWindow/ForPrimary — never on the read path, so this stays a
+    // plain POD an app settings/diagnostics timer can poll with zero DXGI/user32 calls of its own.
+    /// <summary>The active swapchain's monitor device name (e.g. <c>\\.\DISPLAY1</c>), or null until first resolved
+    /// (<c>default(GpuVideoMemorySnapshot)</c> — mirrors <see cref="DisplayModeValid"/> being false).</summary>
+    public string? MonitorDeviceName { get; init; }
+    /// <summary>Active monitor's refresh rate as the raw rational (numerator/denominator) — never collapse to a
+    /// nominal integer Hz before storing; see <see cref="MonitorRefreshHz"/> for the derived value.</summary>
+    public int MonitorRefreshNumerator { get; init; }
+    public int MonitorRefreshDenominator { get; init; }
+    /// <summary>QPC-tick period matching <see cref="FluentGpu.Rhi.PresentStats.RefreshPeriodQpc"/> — what the frame
+    /// pacer actually consumes. Sourced from this window's monitor when known; DWM-global otherwise.</summary>
+    public long MonitorRefreshPeriodQpc { get; init; }
+    /// <summary>The PRIMARY monitor's rational refresh rate, recorded beside the active one so a mismatch (the whole
+    /// point of this audit — engine pacing used to always follow the primary monitor regardless of which one the
+    /// window was actually on) is self-evident to a reader without cross-referencing anything else.</summary>
+    public int PrimaryRefreshNumerator { get; init; }
+    public int PrimaryRefreshDenominator { get; init; }
+    /// <summary>False until <c>DisplayInfo.ForWindow</c> has successfully resolved at least once.</summary>
+    public bool DisplayModeValid { get; init; }
+    /// <summary>Derived Hz for the active monitor (0 when <see cref="DisplayModeValid"/> is false or the rational is degenerate).</summary>
+    public double MonitorRefreshHz => MonitorRefreshDenominator > 0 ? (double)MonitorRefreshNumerator / MonitorRefreshDenominator : 0.0;
+    /// <summary>Derived Hz for the primary monitor (0 when the rational is degenerate).</summary>
+    public double PrimaryRefreshHz => PrimaryRefreshDenominator > 0 ? (double)PrimaryRefreshNumerator / PrimaryRefreshDenominator : 0.0;
+
+    /// <summary>The swapchain buffer count in flight (constant across swapchains today — <c>D3D12Device.FRAME_COUNT</c>).</summary>
+    public uint SwapchainBufferCount { get; init; }
+    /// <summary>The <c>IDXGISwapChain2.SetMaximumFrameLatency</c> value applied at creation (<c>D3D12Device.MAX_FRAME_LATENCY</c>).</summary>
+    public uint MaxFrameLatency { get; init; }
+    /// <summary>Present-adapter topology for the primary swapchain — one of <c>D3D12Device.TopologyOwned</c> /
+    /// <c>TopologyCross</c> / <c>TopologyNoOutputs</c> / <c>TopologyUnknown</c> (0, before the first resolve).</summary>
+    public int PresentTopologyState { get; init; }
 }
 
 internal static unsafe class D3D12MemoryDiagnostics
@@ -120,7 +154,9 @@ internal static unsafe class D3D12MemoryDiagnostics
         int atlasImages, int atlasPages, int cachedGlyphs)
     {
         var (bytes, count) = LiveTotals();
-        _videoMemory = new GpuVideoMemorySnapshot
+        // `with`, not `new`: this runs on its own ~1/60-presents cadence, independent of PublishDisplayMode's 1 Hz
+        // DWM-branch cadence below — a `new` here would zero the display fields on every video-memory refresh.
+        _videoMemory = _videoMemory with
         {
             LocalCurrentUsage = localUsage,
             LocalBudget = localBudget,
@@ -132,6 +168,30 @@ internal static unsafe class D3D12MemoryDiagnostics
             AtlasPages = atlasPages,
             CachedGlyphs = cachedGlyphs,
             Valid = true,
+        };
+    }
+
+    /// <summary>Publish the per-window display-mode + present-topology fields of <see cref="GpuVideoMemorySnapshot"/>.
+    /// Called from the render thread's 1 Hz DWM branch (D3D12Device.SamplePresentTopology) on the monitor-change edge
+    /// only — never per present. Merges via `with` so it never clobbers the video-memory fields <see
+    /// cref="PublishVideoMemory"/> publishes on its own cadence.</summary>
+    internal static void PublishDisplayMode(
+        string? monitorDeviceName, int refreshNumerator, int refreshDenominator, long refreshPeriodQpc,
+        int primaryRefreshNumerator, int primaryRefreshDenominator,
+        uint swapchainBufferCount, uint maxFrameLatency, int presentTopologyState, bool displayModeValid)
+    {
+        _videoMemory = _videoMemory with
+        {
+            MonitorDeviceName = monitorDeviceName,
+            MonitorRefreshNumerator = refreshNumerator,
+            MonitorRefreshDenominator = refreshDenominator,
+            MonitorRefreshPeriodQpc = refreshPeriodQpc,
+            PrimaryRefreshNumerator = primaryRefreshNumerator,
+            PrimaryRefreshDenominator = primaryRefreshDenominator,
+            SwapchainBufferCount = swapchainBufferCount,
+            MaxFrameLatency = maxFrameLatency,
+            PresentTopologyState = presentTopologyState,
+            DisplayModeValid = displayModeValid,
         };
     }
 

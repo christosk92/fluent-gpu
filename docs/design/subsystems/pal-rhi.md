@@ -97,7 +97,9 @@ public interface IPlatformWindow : IDisposable
 {
     NativeHandle Handle { get; }                 // HWND on Win; NSView* on mac. Opaque to engine.
     Size2 ClientSizePx { get; }
-    Scale Scale { get; }                         // effective post-WM_DPICHANGED DPI
+    Scale Scale { get; }                         // EFFECTIVE scale = OS DPI (dpi/96) × app zoom (§1.2 DPI / app zoom)
+    float Zoom => 1f;                            // the app-zoom factor folded into Scale (ZoomLadder steps; default none)
+    void SetZoom(float zoom) { }                 // ZoomLadder.Clamp → re-derive Scale → request paint (host relayouts)
     bool IsOccluded { get; }
     bool IsMinimized { get; }                     // window-visibility source for the component activation lifecycle:
                                                   //   AppHost derives the Activation.IsActive ambient from the minimized
@@ -188,11 +190,28 @@ never fires.
 
 - **Window class:** `RegisterClassExW` once. Own redraw via DXGI/DComp, so `CS_HREDRAW|CS_VREDRAW`
   are **off** (no `WM_PAINT` storm on resize). `CreateWindowExW`.
-- **DPI:** `SetProcessDpiAwarenessContext(PER_MONITOR_AWARE_V2)` programmatically (manifest-free, AOT-
-  friendly). `Scale` = current effective DPI; `WM_DPICHANGED` updates it and emits a `DpiChanged`
-  `WindowEvent`. PerMonitorV2 snaps a straddling window to a single value, so `Scale` is one scalar
-  (kept a `struct` so a future `DpiX/DpiY` extension is non-breaking). **DIP→px happens once** at the
-  pump boundary using the window's current effective DPI.
+- **DPI / app zoom:** `SetProcessDpiAwarenessContext(PER_MONITOR_AWARE_V2)` programmatically (manifest-free, AOT-
+  friendly). **`Scale` is the current EFFECTIVE scale = the OS per-monitor DPI scale (dpi/96) × the browser-style
+  app zoom.** `WindowDesc.Zoom` (trailing positional, default 1f) seeds the zoom; `IPlatformWindow.Zoom` /
+  `SetZoom(float)` (default interface members — a zoom-less backend reports 1f / no-ops) change it live, sanitized
+  via `ZoomLadder.Clamp` (the discrete step ladder and its cache rationale live on `FluentGpu.Foundation.ZoomLadder`).
+  `WM_DPICHANGED` updates the raw DPI factor and RE-DERIVES the product (raw × zoom — zoom survives a monitor hop)
+  and emits a `DpiChanged` `WindowEvent`; `SetZoom` re-derives it and requests a paint, and the host's per-frame
+  `EnsureSize` treats ANY `Scale` change — DPI hop or zoom step — as a full-relayout event (the one existing
+  scale route). A zoom step never changes the physical window size (browser behavior: the DIP viewport shrinks or
+  grows instead; the min-track size stays physical). PerMonitorV2 snaps a straddling window to a single value, so
+  `Scale` is one scalar (kept a `struct` so a future `DpiX/DpiY` extension is non-breaking). **DIP→px happens
+  once** at the pump boundary using the window's current effective scale.
+
+  **Raw vs effective — which factor a Win32 site uses.** OS-drawn/OS-measured chrome is sized by the monitor's
+  DPI and must ignore zoom; anything expressed in engine DIPs converts with the effective product:
+
+  | Raw DPI only (OS chrome) | Effective scale (engine-DIP-facing) |
+  |---|---|
+  | client↔outer frame conversion (`ClientToWindowPx`) | custom-frame titlebar hit-test regions (`TitleBarRegion` → `WM_NCHITTEST`) |
+  | `WM_GETMINMAXINFO` min-track size (`MinClientSizeDip` × raw DPI) | DirectManipulation contact/delta → DIP conversion |
+  | `WM_NCCALCSIZE` / frame metrics (`AdjustForFrame`) | `ScreenPtToDip` (popup placement / work-area queries) |
+  | initial window sizing (`WindowDesc.SizePx` is physical) | OLE drop-target + input-pane (SIP) DIP conversion — both take the effective-scale provider instead of reading `GetDpiForWindow` raw |
 - **WndProc:** a single `static [UnmanagedCallersOnly(CallConvs=[typeof(CallConvStdcall)])]` thunk in
   `WNDCLASSEXW.lpfnWndProc`. Per-window dispatch via a **`GCHandle` (Normal, lifetime = window) stored
   in `GWLP_USERDATA`** — set in `WM_NCCREATE` from the `CREATESTRUCT.lpCreateParams`, freed
@@ -520,7 +539,8 @@ buffers** (NOT device-wide `WaitIdle` — other windows on the shared device kee
 gen-bump back-buffer handles → `IDXGISwapChain3.ResizeBuffers` → re-`GetBuffer`/re-create RTVs →
 DComp `Commit` reasserts size + re-`Place`s the video child. During live drag, present-stretch for
 smoothness; snap on exit. DPI change without a client-size change does **not** resize the swapchain
-(back buffer is physical px); it bumps `ConfigVersion` to force relayout.
+(back buffer is physical px); it bumps `ConfigVersion` to force relayout. An app-zoom step (`SetZoom`, §1.2) is
+that scale-only case by construction — the physical client never changes — so it rides the same route.
 
 ### 5.5 Multi-window
 
@@ -737,7 +757,8 @@ device-lost rebuild). The only permitted per-frame GC is freshly-captured user c
 - **DComp `Commit` storm:** `Commit` only when a visual prop changed (`compositionDirty`) — a pure
   scrubber redraw within the same swapchain visual does NOT `Commit`.
 - **PerMonitorV2 straddle / monitor-DPI change:** `WM_DPICHANGED` snaps to one `Scale`, bumps
-  `ConfigVersion`, forces relayout; back buffer resizes only on a client-size change.
+  `ConfigVersion`, forces relayout; back buffer resizes only on a client-size change. The app-zoom factor is
+  re-folded into the new effective `Scale` (§1.2) — a monitor hop never resets zoom.
 - **Occlusion / RDP / WARP:** test-present throttle; WARP adapter is the fallback and the headless test
   path. AA goldens use a perceptual tolerance vs hardware (WARP is not bit-identical).
 - **Video surface lost (external decoder dies):** `IVideoPresenter.SetVisible(false)`, fall back to the

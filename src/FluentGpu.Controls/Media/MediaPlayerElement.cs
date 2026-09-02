@@ -57,6 +57,11 @@ public enum MediaStretch : byte
 ///   and a re-reveal never rebuilds the seek bar at width 0.</item>
 /// <item><b>Controlled inputs + tokens.</b> Aspect/fullscreen are concrete signals (auto-materialized when absent); all
 ///   on-media ink/scrim/stage reads a <c>Tok.*</c> media token — no hardcoded colors.</item>
+/// <item><b>No remount on a source switch.</b> The video stage's child shape ("media-stage"/"media-hole"/"media-poster")
+///   is FIXED for the element's whole life — never conditionally mounted/unmounted on readiness. The hole's
+///   <c>VideoHole</c> flag and the poster's opacity are PROPS that toggle on the same nodes; a latch keeps the hole
+///   active across a switch (Playing → Opening on the same element) so the next source's first frame arrives by
+///   crossfade under the poster instead of a subtree rebuild — see <see cref="Render"/>'s video-stage comment.</item>
 /// </list>
 /// The default transport is pure FluentGpu (our own GPU text + a scrub <c>Slider</c>) — there is NO OS control to crash
 /// on. TerraFX-free: references only Engine/Controls types + the <see cref="IMediaPlayer"/>/<see cref="VideoBinding"/> seam.
@@ -69,9 +74,18 @@ public sealed class MediaPlayerElement : Component
         Enter: new EnterExit(Dy: 12f, Opacity: 0f, Active: true),
         Exit: new EnterExit(Dy: 12f, Opacity: 0f, Active: true),
         ExitDynamics: TransitionDynamics.Tween(140f, Easing.EaseInOut));
-    /// <summary>The poster cross-fades OUT as the first frame lands — 150 ms, the shortest fade that still reads as a
+    /// <summary>The poster cross-fades in/out as readiness flips — 150 ms, the shortest fade that still reads as a
     /// hand-off rather than a cut.</summary>
     private const float PosterCrossFadeMs = 150f;
+    /// <summary>The poster's hand-off token: a straight opacity cross-fade, no scale, no slide — anything more is a
+    /// transition ON TOP of a transition when the picture is already changing. <see cref="ReducedMotionPolicy.KeepFade"/>:
+    /// this fade AIDS orientation (it is what tells the user whether they are looking at the poster or the live frame),
+    /// so — like <see cref="MotionTok"/>'s own docs for the policy — it keeps running under reduced motion rather than
+    /// snapping; only structural transforms snap. Seeded via <see cref="AnimEngine.SeedEased"/> (the same idiom the
+    /// chrome fade below uses), so <see cref="MotionTokenDef.EffectiveDurationMs"/> resolves reduced-motion as a VALUE
+    /// at the seed, never a branch in this authoring code.</summary>
+    private static readonly MotionTokenDef PosterCrossFade =
+        MotionTokenDef.Eased(PosterCrossFadeMs, Easing.FluentStandard, ReducedMotionPolicy.KeepFade);
     /// <summary>Nothing at all is drawn over the poster for this long. A spinner that flashes for 200 ms is worse than
     /// no spinner: it reports trouble that did not happen.</summary>
     private const float StartupSpinnerDelayMs = 500f;
@@ -89,14 +103,10 @@ public sealed class MediaPlayerElement : Component
     private const float VolumeStep = 0.05f;
     /// <summary>Transport compaction threshold (DIP): below it, the chips fold into the ⋯ menu.</summary>
     private const float CompactTransportWidth = 420f;
+    /// <summary>Hysteresis exit: once compact, the transport un-compacts only above this (see the compact derivation).</summary>
+    private const float CompactTransportExitWidth = 460f;
+    private bool _transportCompact;
 
-    /// <summary>The poster's hand-off to the first video frame: a straight cross-fade, no scale, no slide. Anything
-    /// more is a transition ON TOP of a transition — the picture is already changing.</summary>
-    private static readonly LayoutTransition PosterMotion = new(
-        TransitionChannels.Opacity,
-        TransitionDynamics.Tween(PosterCrossFadeMs, Easing.FluentStandard),
-        Exit: new EnterExit(Opacity: 0f, Active: true),
-        ExitDynamics: TransitionDynamics.Tween(PosterCrossFadeMs, Easing.FluentStandard));
     /// <summary>The caption lift. Transform-only (a FLIP), on the chrome's own clock: captions MOVE out of the
     /// transport's way, the controls never move out of the captions' way.</summary>
     private static readonly LayoutTransition CaptionMotion = new(
@@ -316,6 +326,9 @@ public sealed class MediaPlayerElement : Component
     private bool _menuOpen, _focusInChrome, _moveBurstActive, _focusOutPending;
     // Pointer de-duplication + the move threshold (NaN = no previous sample).
     private float _lastMoveX = float.NaN, _lastMoveY = float.NaN;
+    // The device scale the most recent PumpNow ran at (1 until the first pump). Render-time FitVideoRect uses it so
+    // the hole's layout margins agree with the pump's DComp placement in VideoAspectMode.Native (natural is px).
+    private float _lastPumpScale = 1f;
     // Which dwell applies: touch and focus reveals get the longer one (neither can re-arm by hovering).
     private bool _revealedByTouchOrFocus;
     private bool _cursorHidden;
@@ -580,6 +593,11 @@ public sealed class MediaPlayerElement : Component
         _hooks = hooks;
         var areaRef = UseRef<NodeHandle>(default);
         var holeRef = UseRef<NodeHandle>(default);
+        var posterRef = UseRef<NodeHandle>(default);
+        // Latched once a frame has ever been ready: across a source switch (Playing -> Opening on the SAME element)
+        // the hole stays active and the poster (opacity 1) covers it, so the next source's first frame arrives by
+        // crossfade instead of a subtree rebuild. Never cleared for the life of the mount — see holeActive below.
+        var hadVideo = UseRef<bool>(false);
         var playerRoot = UseRef<NodeHandle>(default);
         var chromeRef = UseRef<NodeHandle>(default);
         var ccAnchor = UseRef<NodeHandle>(default);
@@ -623,6 +641,18 @@ public sealed class MediaPlayerElement : Component
         double customAspect = customAspectSig.Value;
         bool audioOnly = IsAudioOnly(natural);
         bool videoReady = !audioOnly && state is not (PlaybackState.Idle or PlaybackState.Opening);
+        if (videoReady) hadVideo.Value = true;
+        // The hole stays active across a switch (Playing -> Opening on the same element) so the compositor keeps
+        // presenting the outgoing frame while the poster crossfades over it — no erase-to-transparent flash and no
+        // subtree rebuild. EXCEPTION: IsDecorative never latches — a decorative clip must never erase the caller's
+        // own still before its own first frame ever arrives.
+        bool holeActive = IsDecorative ? videoReady : !audioOnly && (videoReady || hadVideo.Value);
+        // The poster is up whenever the element is not presenting a ready frame; IsDecorative never shows one (its
+        // "no poster" contract — the caller's own still shows through the transparent hole instead).
+        bool posterUp = !IsDecorative && !videoReady;
+        // "media-stage" is mounted iff !IsDecorative && ShowLetterboxBars — both frozen at mount (init props), so this
+        // is a CONSTANT for the element's whole life: the fixed child shape below never gains or loses this slot.
+        bool showStage = !IsDecorative && ShowLetterboxBars;
 
         // ── the video pump lives OUTSIDE Render (fix: pure Render). Publish the inputs it reads, register it once. ──
         _binding = binding;
@@ -667,7 +697,7 @@ public sealed class MediaPlayerElement : Component
         });
 
         RectF area = areaBounds.Value;
-        RectF videoRect = (audioOnly || area.W <= 0f) ? area : FitVideoRect(area, natural, aspect, customAspect);
+        RectF videoRect = (audioOnly || area.W <= 0f) ? area : FitVideoRect(area, natural, aspect, customAspect, _lastPumpScale);
 
         // ── S2/S9: bounded buffering suppression ─────────────────────────────────────────────────────────────────────
         // A rebuffer must suppress hiding, but it must NOT LATCH it. The protected session maps both Licensed and
@@ -856,67 +886,78 @@ public sealed class MediaPlayerElement : Component
                     : null;
 
         // ── the video stage (a ZStack: children paint in author order) ───────────────────────────────────────────────
-        // Painter order once the frame is live:
-        //   [0] the OPAQUE LetterboxColor stage fill across the WHOLE video area. This fill IS the letterbox — there
-        //       are no separate bar elements any more.
-        //   [1] the VIDEO HOLE PUNCH (DrawOp.DrawVideo, gpu-renderer.md §7.3), laid out at EXACTLY the fitted video
-        //       rect. It paints nothing — it ERASES everything already recorded beneath it toward premultiplied zero,
-        //       so the DComp video visual composited z-BELOW the premultiplied UI swapchain shows through at full
-        //       strength instead of blending with what stayed in the back buffer.
-        //   [2…] status / caption / transport overlays — LATER siblings, so they repaint over the video.
-        // ONE SOURCE OF TRUTH: PumpNow places the DComp visual from scene.AbsoluteRect of the HOLE node, so the erased
-        // region and the presented video are the same rect BY CONSTRUCTION.
-        var videoChildren = new System.Collections.Generic.List<Element>(8);
-        if (videoReady)
+        // A FIXED keyed shape that NEVER changes across a source switch — the reconciler patches PROPS on the same
+        // nodes instead of unmounting/remounting the subtree (E4):
+        //   [0] "media-stage" — the OPAQUE LetterboxColor stage fill across the WHOLE video area (mounted iff
+        //       !IsDecorative && ShowLetterboxBars — both frozen at mount, so this slot is a CONSTANT for the
+        //       element's whole life, never toggled by state). This fill IS the letterbox — there are no separate bar
+        //       elements.
+        //   [1] "media-hole" — ALWAYS mounted. The VIDEO HOLE PUNCH (DrawOp.DrawVideo, gpu-renderer.md §7.3), laid
+        //       out at EXACTLY the fitted video rect. VideoHole is a PROP (holeActive) that TOGGLES — never a
+        //       presence change — so the node and its DComp registration survive a source switch. Active, it erases
+        //       everything already recorded beneath it toward premultiplied zero, so the DComp video visual
+        //       composited z-BELOW the premultiplied UI swapchain shows through at full strength instead of blending
+        //       with what stayed in the back buffer. Inactive, it is an ordinary (non-erasing) transparent box.
+        //   [2] "media-poster" — ALWAYS mounted, a LATER sibling of the hole. Visibility rides OPACITY (posterUp),
+        //       never presence: at opacity 1 it fully covers the hole beneath it, so the crossfade seeded below IS
+        //       the hand-off between whatever was showing (an outgoing frame across a switch, or nothing yet on the
+        //       very first open) and the next ready frame — never a subtree rebuild.
+        //   [3…] status / caption overlays — LATER siblings still, so they repaint over the video. Presence-gated
+        //       (they are genuinely transient), keys preserved.
+        // ONE SOURCE OF TRUTH: PumpNow places the DComp visual from scene.AbsoluteRect of the "media-hole" node, so
+        // the erased region and the presented video are the same rect BY CONSTRUCTION.
+        TimedCue? captionCue = videoReady ? activeCue : null;
+        bool showStatusOverlay = statusOverlay is not null;
+        bool showCaption = captionCue.HasValue;
+        var videoChildren = new Element[(showStage ? 1 : 0) + 2 + (showStatusOverlay ? 1 : 0) + (showCaption ? 1 : 0)];
+        int vc = 0;
+        if (showStage)
+            videoChildren[vc++] = new BoxEl { Key = "media-stage", Grow = 1f, Fill = LetterboxColor, HitTestVisible = false };
+        videoChildren[vc++] = new BoxEl
         {
-            if (ShowLetterboxBars)
-                videoChildren.Add(new BoxEl { Grow = 1f, Fill = LetterboxColor, HitTestVisible = false });
-            videoChildren.Add(new BoxEl
-            {
-                Grow = 1f,
-                AlignSelf = FlexAlign.Start,
-                Margin = LetterboxInsets(area, videoRect),   // area MINUS these insets == the fitted video rect
-                VideoHole = true,
-                VideoSurfaceId = binding.Token,
-                OnRealized = h => { holeRef.Value = h; binding.RequestPump(); },
-            });
-        }
-        else if (IsDecorative)
-            // Transparent until the first frame lands, so the caller's own still stays visible underneath.
-            videoChildren.Add(new BoxEl { Grow = 1f, HitTestVisible = false });
-        else
-            // The poster stays up for the WHOLE start — including the quiet first 500 ms and the spinner phase. It is
-            // never replaced by a black rect: in a music app the poster IS the album art already on screen, and
-            // swapping it for darkness to host a spinner is a visible regression, not a loading state. It cross-fades
-            // out over PosterCrossFadeMs when the first frame lands (its Exit terminal).
-            videoChildren.Add(new BoxEl
-            {
-                Key = "media-poster",
-                Grow = 1f, ZStack = true, Direction = 1,
-                HitTestVisible = false,
-                Animate = PosterMotion,
-                Children = [PosterContent ?? DefaultPoster()],
-            });
-
-        if (statusOverlay is not null)
-            videoChildren.Add(new BoxEl
+            Key = "media-hole",
+            Grow = 1f,
+            AlignSelf = FlexAlign.Start,
+            Margin = LetterboxInsets(area, videoRect),   // area MINUS these insets == the fitted video rect
+            VideoHole = holeActive,
+            VideoSurfaceId = binding.Token,
+            OnRealized = h => { holeRef.Value = h; binding.RequestPump(); },
+        };
+        // The poster stays up for the WHOLE start — including the quiet first 500 ms and the spinner phase, AND for
+        // the Opening leg of a source switch (the hole latches active underneath it — see holeActive above). It is
+        // never replaced by a black rect: in a music app the poster IS the album art already on screen, and swapping
+        // it for darkness to host a spinner is a visible regression, not a loading state. The static Opacity below is
+        // the crossfade's TERMINAL value; the UseLayoutEffect further down seeds the eased approach to it (honors
+        // reduced-motion, the same idiom the chrome fade uses).
+        videoChildren[vc++] = new BoxEl
+        {
+            Key = "media-poster",
+            Grow = 1f, ZStack = true, Direction = 1,
+            HitTestVisible = false,
+            Opacity = posterUp ? 1f : 0f,
+            OnRealized = h => posterRef.Value = h,
+            Children = [PosterContent ?? DefaultPoster()],
+        };
+        if (showStatusOverlay)
+            videoChildren[vc++] = new BoxEl
             {
                 Key = videoReady ? "media-buffering" : "media-opening",
                 Grow = 1f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
                 HitTestVisible = false,
                 Animate = LoadingMotion,
-                Children = [statusOverlay],
-            });
+                Children = [statusOverlay!],
+            };
         // Captions MOVE, controls do not: the caption baseline lifts by the chrome's measured height while the chrome
         // is up and settles back when it hides, animated on the same clock (a transform-only FLIP — no relayout churn).
-        if (videoReady && activeCue is { } cue)
-            videoChildren.Add(CaptionOverlay(cue, CaptionBottomMargin + (showChrome ? chromeHeight.Value : 0f)));
+        if (showCaption)
+            videoChildren[vc++] = CaptionOverlay(captionCue!.Value, CaptionBottomMargin + (showChrome ? chromeHeight.Value : 0f));
 
         var videoArea = new BoxEl
         {
             ZStack = true,
             Direction = 1,
             Grow = 1f,
+            Shrink = 1f, MinWidth = 0f,
             MinHeight = IsFullscreenPresentation || IsDecorative ? 0f : 160f,
             ClipToBounds = true,
             Corners = FrameCorners,
@@ -927,10 +968,12 @@ public sealed class MediaPlayerElement : Component
                 if (b != areaBounds.Peek()) areaBounds.Value = b;
                 binding.RequestPump();
             },   // resize → recompute letterbox + one settled video placement
-            Children = videoChildren.ToArray(),
+            Children = videoChildren,
         };
 
-        var layers = new System.Collections.Generic.List<Element>(4) { videoArea };
+        var layers = new Element[1 + (AreTransportControlsEnabled && !SuppressTransport ? 1 : 0) + (shortcutsOpen.Value ? 1 : 0)];
+        int lc = 0;
+        layers[lc++] = videoArea;
         if (AreTransportControlsEnabled && !SuppressTransport)
         {
             // The chrome stays MOUNTED across the whole hide cycle, with a STABLE Key. Toggling it in and out of the
@@ -939,10 +982,11 @@ public sealed class MediaPlayerElement : Component
             // frame on EVERY auto-hide cycle. Visibility now rides the opacity + hit-test + focusability channel, which
             // is also what keeps hidden chrome out of the hit-test, focus and accessibility trees rather than merely
             // transparent (an invisible-but-hittable control panel eats clicks meant for the video).
-            layers.Add(new BoxEl
+            layers[lc++] = new BoxEl
             {
                 Key = "media-chrome",
                 Grow = 1f,
+                Shrink = 1f, MinWidth = 0f, MinHeight = 0f,
                 Direction = 1,
                 Justify = FlexJustify.End,
                 HitTestPassThrough = true,
@@ -951,9 +995,9 @@ public sealed class MediaPlayerElement : Component
                 OnRealized = h => chromeRef.Value = h,
                 Children = [BuildTransport(area.W, showChrome, seekBar, chromeHeight, volumeExpanded,
                     ToggleFullscreen, ccAnchor, qualityAnchor, rateAnchor, audioAnchor, overlayService)],
-            });
+            };
         }
-        if (shortcutsOpen.Value) layers.Add(ShortcutOverlay(() => shortcutsOpen.Value = false));
+        if (shortcutsOpen.Value) layers[lc++] = ShortcutOverlay(() => shortcutsOpen.Value = false);
 
         // The fade itself: asymmetric by token (reveal 100 ms, conceal 200 ms), reduced-motion resolved as a VALUE by
         // MotionTokenDef.EffectiveDurationMs — never as a branch here. Seeding FROM the live composited opacity means a
@@ -968,6 +1012,18 @@ public sealed class MediaPlayerElement : Component
             if (ms <= 0f) return;    // reduced motion: the static Opacity above already IS the terminal value
             anim.SeedEased(node, AnimChannel.Opacity, scene.Paint(node).Opacity, showChrome ? 1f : 0f, ms, tok.Easing);
         }, showChrome ? 1 : 0);
+
+        // The poster's hand-off: seeded FROM the live composited opacity (so a switch that re-arms the crossfade mid
+        // fade starts where the pixels actually are), same idiom as the chrome fade above.
+        UseLayoutEffect(() =>
+        {
+            var node = posterRef.Value;
+            var scene = Context.Scene;
+            if (Context.Anim is not { } anim || scene is null || node.IsNull || !scene.IsLive(node)) return;
+            float ms = PosterCrossFade.EffectiveDurationMs(AnimChannel.Opacity);
+            if (ms <= 0f) return;    // reduced motion: the static Opacity above already IS the terminal value
+            anim.SeedEased(node, AnimChannel.Opacity, scene.Paint(node).Opacity, posterUp ? 1f : 0f, ms, PosterCrossFade.Easing);
+        }, posterUp ? 1 : 0);
 
         void HandleKey(KeyEventArgs e) => HandleKeyCore(e, seekBar, ToggleFullscreen, ExitFullscreenOnly, shortcutsOpen);
 
@@ -1020,6 +1076,11 @@ public sealed class MediaPlayerElement : Component
         {
             ZStack = true,
             Grow = 1f,
+            // Shrinkable + zero min: the element must YIELD to its host card, never widen it. FlexShrink defaults
+            // to 0, so without this the transport row's intrinsic width (~500 DIP expanded) became the element's
+            // floor — the card overflowed sideways, the video composited at the overflowed rect, and the compact
+            // decision (fed the element's own width) latched non-compact forever.
+            Shrink = 1f, MinWidth = 0f, MinHeight = 0f,
             Corners = FrameCorners,
             ClipToBounds = true,
             BorderColor = IsFullscreenPresentation || IsDecorative ? ColorF.Transparent : Tok.StrokeFlyoutDefault,
@@ -1033,7 +1094,7 @@ public sealed class MediaPlayerElement : Component
             OnPointerExit = HandleExit,
             OnPointerWheel = HandleWheel,
             OnFocusChanged = focused => { if (focused) RevealChrome(); },
-            Children = layers.ToArray(),
+            Children = layers,
         };
         // One menu, every gesture. The context-request event supplies the LIVE source/owner node, so the More button
         // never depends on an OnRealized handle that can go stale across a transport re-render (the origin-flyout bug).
@@ -1071,6 +1132,7 @@ public sealed class MediaPlayerElement : Component
             if (IsDecorative) return;
         }
         float s = scale <= 0f ? 1f : scale;
+        _lastPumpScale = s;
         var scene = _scene;
         NodeHandle h = _areaRef?.Value ?? default;
         // Non-decorative player surfaces must keep calling PumpVideo even before the area is laid out (remount /
@@ -1105,7 +1167,7 @@ public sealed class MediaPlayerElement : Component
             videoRect = live ? scene.AbsoluteRect(hole) : default;
             if (live) geom = hole;
             if (!live || videoRect.W <= 0f || videoRect.H <= 0f)
-                videoRect = FitVideoRect(area, natural, mode, customAspect);
+                videoRect = FitVideoRect(area, natural, mode, customAspect, s);
             else if (mode == VideoAspectMode.UniformToFill)
             {
                 // CENTER-CROP is the one mode whose fitted rect deliberately OVERFLOWS the stage: the frame is scaled
@@ -1115,7 +1177,7 @@ public sealed class MediaPlayerElement : Component
                 // stage rect scales the frame DOWN to fit instead of cropping it, which is the crop mode silently
                 // behaving like Fill. Recomputing the fit here is right either way: when the margins do survive
                 // layout this is the same rect the hole already has.
-                videoRect = FitVideoRect(area, natural, mode, customAspect);
+                videoRect = FitVideoRect(area, natural, mode, customAspect, s);
                 geom = h;   // the rect now derives from the AREA, so follow the area's geometry
             }
         }
@@ -1133,6 +1195,15 @@ public sealed class MediaPlayerElement : Component
         // radii that overlap and degenerate. CornerRadius freezes at mount, so this is a constant per element.
         if (CornerRadius > 0f)
             b.SetCornerRadius(MathF.Min(CornerRadius, MathF.Min(videoRect.W, videoRect.H) * 0.5f));
+        // Overflow safety net: a layout defect that widens the element past its host must degrade to a SMALLER
+        // video, never to a video composited at a rect that is not on screen (plus an oversized ABR request).
+        if (videoRect.W > viewport.W + 0.5f || videoRect.H > viewport.H + 0.5f)
+        {
+            float rx = MathF.Max(videoRect.X, viewport.X), ry = MathF.Max(videoRect.Y, viewport.Y);
+            float rr = MathF.Min(videoRect.X + videoRect.W, viewport.X + viewport.W);
+            float rb = MathF.Min(videoRect.Y + videoRect.H, viewport.Y + viewport.H);
+            videoRect = new RectF(rx, ry, MathF.Max(0f, rr - rx), MathF.Max(0f, rb - ry));
+        }
         Player.SetAdaptiveViewportHeight((int)MathF.Ceiling(videoRect.H * MathF.Max(1f, s)));
         Player.PumpVideo(b, videoRect, s);
         if (audioOnly) b.SetVisible(false);
@@ -1209,7 +1280,12 @@ public sealed class MediaPlayerElement : Component
         // as "wide" rendered all three chips and then deleted them one frame later — the flash the compaction rule was
         // supposed to prevent. Unknown now means "not yet", for the time label and the chips alike.
         bool measured = areaWidth > 0f;
-        bool compact = IsCompactTransport(areaWidth);
+        // Hysteresis, not a single threshold: the row's own width feeds this decision, so a knife-edge threshold can
+        // self-latch (un-compacting widens the row, which keeps it un-compact). Compact below the threshold;
+        // un-compact only once comfortably past it.
+        bool compact = measured && (areaWidth < CompactTransportWidth
+            || (_transportCompact && areaWidth < CompactTransportExitWidth));
+        _transportCompact = compact;
         bool presentingFullscreen = PresentingFullscreen;
 
         var playPause = IconButton(playIntent ? Icons.Pause : Icons.Play, () =>
@@ -1298,13 +1374,16 @@ public sealed class MediaPlayerElement : Component
         rows.Add(new BoxEl
         {
             Key = "media-control-row",
-            Direction = 0, AlignItems = FlexAlign.Center, Gap = 6f, Children = controls.ToArray(),
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = 6f,
+            Shrink = 1f, MinWidth = 0f, ClipToBounds = true,   // yields to the card; never widens the element
+            Children = controls.ToArray(),
         });
 
         return new BoxEl
         {
             Direction = 1,
             Gap = 2f,
+            Shrink = 1f, MinWidth = 0f,
             Padding = new Edges4(14, 34, 14, 8),
             // The canonical media footer scrim (Tok.ScrimBottom): controls sit on darkness that dissolves into the
             // video, the YouTube/Netflix-style overlay read.
@@ -2034,7 +2113,8 @@ public sealed class MediaPlayerElement : Component
     internal static RectF FitVideoRect(RectF area, SizeI natural, MediaStretch stretch)
         => FitVideoRect(area, natural, ToAspectMode(stretch), 16.0 / 9.0);
 
-    internal static RectF FitVideoRect(RectF area, SizeI natural, VideoAspectMode aspectMode, double customAspect)
+    internal static RectF FitVideoRect(RectF area, SizeI natural, VideoAspectMode aspectMode, double customAspect,
+        float scale = 1f)
     {
         if (area.W <= 0f || area.H <= 0f || natural.IsEmpty) return area;
         float aw = area.W, ah = area.H;
@@ -2047,7 +2127,10 @@ public sealed class MediaPlayerElement : Component
                 return area;
             case VideoAspectMode.Native:
             {
-                float w = MathF.Min(vw, aw), h = MathF.Min(vh, ah);
+                // natural is PIXELS, area is DIP — "native size" means 1 video px per DEVICE px, so convert first.
+                // Without this the Native fit rendered scale× too large on any high-DPI display (px used as DIP).
+                float inv = scale > 0f ? 1f / scale : 1f;
+                float w = MathF.Min(vw * inv, aw), h = MathF.Min(vh * inv, ah);
                 return Center(area, w, h);
             }
             case VideoAspectMode.UniformToFill:

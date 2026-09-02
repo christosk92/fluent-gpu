@@ -1,112 +1,72 @@
 using System;
+using FluentGpu.Media;
 
 namespace FluentGpu.Media.Windows;
-
-/// <summary>
-/// What the engine ANSWERED when asked for the decoded video size. Tri-state on purpose: <see cref="VideoMediaEngine"/>
-/// marshals every COM read onto its own MTA thread with a BOUNDED wait, so a zero size cannot mean both "this source has
-/// no video" and "the engine thread was busy resolving the source and has not answered yet". Conflating the two is what
-/// latched an audio-only verdict onto a playing video and left it under an eternal "Starting playback…" spinner:
-/// <see cref="MfMediaSession"/> published the natural size exactly once, at first <c>LOADEDMETADATA</c> — the instant the
-/// engine thread is at its busiest — and never asked again. <see cref="NoAnswer"/> means ASK AGAIN on the next pump.
-/// </summary>
-public enum NativeSizeAnswer : byte
-{
-    /// <summary>The engine did not answer in time (the bounded <c>Invoke</c> expired). Nothing was learned; retry.
-    /// MUST be the default(0) value — a timed-out <c>Invoke&lt;T&gt;</c> returns <c>default</c>.</summary>
-    NoAnswer = 0,
-    /// <summary>The engine answered and this source has no decoded video size (audio-only). Stop asking.</summary>
-    NoVideo,
-    /// <summary>The engine answered with a real size (both dimensions &gt; 0).</summary>
-    Ok,
-}
 
 /// <summary>
 /// The minimal boundary <see cref="MfMediaSession"/> drives, extracted from the PROVEN <see cref="VideoMediaEngine"/> so
 /// the session's state-mapping / transport / surface-handoff logic is unit-testable WITHOUT standing up a real D3D11 + MF +
 /// DirectComposition device (a fake implements this in <c>FluentGpu.Windows.Tests</c>). <see cref="VideoMediaEngine"/> is
 /// the production implementation — this seam does not change its behavior, it only makes it injectable.
-/// <para>Threading: every member is safe to call from the UI/pump thread. The real engine marshals each COM call onto its
-/// dedicated MTA thread internally (its <c>Invoke</c> pattern) and surfaces event state as volatile flags; a caller never
-/// touches a ComPtr off that thread.</para>
+///
+/// <para><b>v2 — snapshot out, commands in</b> (<c>docs/plans/video-smooth-switching-implementation.md</c> §1). The
+/// engine's dedicated MTA thread is the ONLY thread that ever touches a <c>ComPtr</c>, and it is the SOLE writer of a POD
+/// <see cref="VideoEngineSnapshot"/> published through a single-writer seqlock (<see cref="VideoSnapshotBuffer"/>). Every
+/// caller — the UI/pump thread included — only ever READS the snapshot (alloc-free, torn-read-safe, never blocks) and
+/// POSTS fire-and-forget, coalesced commands through <see cref="VideoEngineCommandQueue"/>. There is no blocking member
+/// left on this seam: the old <c>Invoke&lt;T&gt;</c> marshal-and-wait pattern (a UI-thread round-trip onto the engine
+/// thread, bounded at tens of ms, paid up to 7× per pump while a video opened) is gone outright, and with it every
+/// property that used to require one. <see cref="Start"/> itself is non-blocking — bring-up failure is reported as the
+/// sticky <see cref="VideoEngineFlags.Faulted"/> bit in the snapshot, never a synchronous HRESULT.</para>
+/// <para>Threading: every member here is safe to call from any thread, including the UI/pump thread — that is the whole
+/// point of the seam. The real engine still marshals every actual COM call onto its own dedicated MTA thread internally
+/// (now driven by <see cref="VideoEngineCommandQueue"/> instead of a blocking work queue); a caller never touches a
+/// ComPtr off that thread, and never waits for one either.</para>
 /// </summary>
 internal interface IVideoEngine : IDisposable
 {
-    /// <summary>Raised when a native media-engine event changes transport or surface state. High-frequency progress and
-    /// frame notifications are intentionally excluded: windowless DirectComposition presents decoded frames without a
-    /// UI-thread repaint. May run on an MF worker thread; consumers must marshal UI work.</summary>
+    /// <summary>Raised BY THE ENGINE THREAD after a snapshot publish whose significant fields changed (state, ready
+    /// state, natural size, duration, swap-chain handle, error, seekable window — position-only changes are coalesced to
+    /// at most ~1 Hz so a playing video does not wake a pump every refresh tick). Publish-then-raise ordering: a pump
+    /// woken by this event is guaranteed to read AT LEAST the state that raised it (never an older snapshot). May run on
+    /// the engine's own thread or an MF worker thread; consumers must marshal UI work, never touch COM here.</summary>
     event Action? StateChanged;
 
-    /// <summary>Stand up the engine and set the source (blocking until the engine thread has created it). S_OK (&gt;=0) on
-    /// success; a negative HRESULT on failure.</summary>
-    int Initialize(string url);
+    /// <summary>Spin up the dedicated MTA engine thread and stand up the D3D11 video device + DXGI manager + Media
+    /// Engine (windowless swap-chain mode). NON-BLOCKING: returns immediately, before bring-up completes. Bring-up
+    /// failure is reported as the sticky <see cref="VideoEngineFlags.Faulted"/> bit in <see cref="Snapshot"/> — never a
+    /// synchronous HRESULT and never a thrown exception. A caller (<c>MfMediaPlayer.LeaseEngine</c>) that observes
+    /// <see cref="VideoEngineFlags.Faulted"/> discards this instance and builds a fresh one; it is not recoverable via
+    /// <see cref="PostSetSource"/>.</summary>
+    void Start();
 
-    // ── event state (set on worker threads; read anywhere) ─────────────────────────────────────────────────────────
-    bool MetadataLoaded { get; }
-    bool CanPlay { get; }
-    bool Playing { get; }
-    bool Ended { get; }
-    /// <summary>True while a seek is in flight (MF SEEKING fired, SEEKED not yet) — drives the "Seeking…" buffering UX.</summary>
-    bool Seeking { get; }
-    bool HasError { get; }
-    uint ErrorCode { get; }
-    int ErrorHr { get; }
-    string LastEventName { get; }
-    /// <summary>HTML/MF ready state (0 HAVE_NOTHING through 4 HAVE_ENOUGH_DATA).</summary>
-    uint ReadyState { get; }
+    /// <summary>Post a source switch (<c>SetSource</c> on the live engine — no teardown/rebuild, the warm-engine reuse
+    /// this seam exists for). Returns the new source epoch immediately (a monotonically increasing generation counter
+    /// allocated on the calling thread); the actual COM call happens later, on the engine thread, the next time it
+    /// drains its command queue. A caller compares <see cref="VideoEngineSnapshot.SourceEpoch"/> against the returned
+    /// epoch to tell whether a given snapshot describes THIS source switch or a stale/earlier one. Fire-and-forget: never
+    /// blocks, never throws for an MF-side failure (that surfaces as the <see cref="VideoEngineFlags.Error"/> bit once
+    /// the engine thread has processed it).</summary>
+    int PostSetSource(string url);
 
-    /// <summary>How many times the engine has reported that the PRESENTATION itself changed underneath it —
-    /// <c>MF_MEDIA_ENGINE_EVENT_FORMATCHANGE</c> (an ABR variant switch: a new decoded frame size) or
-    /// <c>MF_MEDIA_ENGINE_EVENT_RESOURCELOST</c> (the swap chain went away and is being rebuilt). Monotonic, so a
-    /// consumer that stores the last value it acted on can never miss or double-count one.
-    /// <para>Why a COUNTER and not a flag: the natural size is queried once, at first metadata, and is the input to
-    /// both the composited-surface content size and the aspect fit. When MF switches renditions mid-stream the frame
-    /// size changes and nothing re-asks — the video keeps compositing at the FIRST variant's size and the fit is
-    /// silently wrong for the rest of the session. The consumer compares this against what it last saw and re-runs
-    /// <see cref="QueryNativeVideoSize"/>.</para></summary>
-    int PresentationEpoch { get; }
+    /// <summary>Post a source unload (<c>SetSource(null)</c>) — used when the engine returns warm to the backend's pool
+    /// (<c>MfMediaPlayer.ReturnEngine</c>) instead of being disposed, so it holds no source between checkouts. Some MF
+    /// builds fail a null <c>SetSource</c>; that failure is tolerated (logged, not surfaced as a session error — there is
+    /// no session listening to a detached engine).</summary>
+    void PostDetach();
 
-    // ── metadata / geometry ────────────────────────────────────────────────────────────────────────────────────────
-    /// <summary>Native decoded video size (px), valid once metadata has loaded. Returns
-    /// <see cref="NativeSizeAnswer.NoAnswer"/> when the engine has not answered yet — the caller must ask again on a
-    /// later pump instead of treating the zeroed out-params as "audio-only".</summary>
-    NativeSizeAnswer QueryNativeVideoSize(out uint cx, out uint cy);
-    /// <summary>Media duration in seconds (0 until known; may be +Inf for a live/looping source — the caller clamps).</summary>
-    double DurationSeconds { get; }
-    /// <summary>Current presentation time in seconds (the authoritative clock).</summary>
-    double CurrentTimeSeconds { get; }
+    /// <summary>One seqlock read of the engine's current state — alloc-free, wait-free, safe from any thread, and never
+    /// stale by more than one publish cycle. See <see cref="VideoEngineSnapshot"/> for field semantics.</summary>
+    VideoEngineSnapshot Snapshot { get; }
 
-    /// <summary>True when the source is UNBOUNDED (live) — no end, so no duration and no fixed timeline. Answering
-    /// <see langword="false"/> is NOT proof of VOD: like every read here it is bounded and a busy engine answers
-    /// <c>default</c>. Callers LATCH a true and keep asking until they get one; they never latch a false.</summary>
-    bool IsLiveSource { get; }
+    /// <summary>The command queue this engine drains on its own thread. Callers post transport/seek/rate/volume/mute/
+    /// loop/stream-rect/repaint/detach through it (<see cref="PostSetSource"/>/<see cref="PostDetach"/> are the two
+    /// commands with a dedicated convenience method because they also need to hand back/consume a source epoch).</summary>
+    VideoEngineCommandQueue Commands { get; }
 
-    /// <summary>The seekable window in seconds (for a live source: the DVR window, whose END is the live edge).
-    /// <c>(0, 0)</c> means "no window / not answered yet".</summary>
-    (double Start, double End) SeekableRange { get; }
-
-    /// <summary>Whether the platform can play an HLS master playlist at all (a static machine capability probed once at
-    /// engine creation) — so a live URL that cannot open reports the real reason, not a generic source failure.</summary>
+    /// <summary>Whether this machine's Media Foundation can play an HLS master playlist at all
+    /// (<c>CanPlayType("application/vnd.apple.mpegurl")</c> != NOT_SUPPORTED), probed once at bring-up; false until
+    /// <see cref="Start"/> has stood up the engine. Lets a caller report the real reason a live URL will not open instead
+    /// of a generic source failure.</summary>
     bool CanPlayHls { get; }
-
-    // ── composited-surface handoff ─────────────────────────────────────────────────────────────────────────────────
-    /// <summary>The windowless swap-chain HANDLE (valid after metadata); 0 until ready. Bind via <c>IVideoPresenter.BindSurfaceHandle</c>.</summary>
-    nuint GetSwapchainHandle();
-    /// <summary>Set the video's destination rect within its own swap chain (swap-chain-local {0,0,w,h}, device px).</summary>
-    int SetVideoStreamRect(int w, int h);
-    /// <summary>Repaint the most-recently-decoded frame into the swap chain.</summary>
-    void RepaintCurrentFrame();
-
-    // ── transport ──────────────────────────────────────────────────────────────────────────────────────────────────
-    void Play();
-    void Pause();
-    /// <summary>Seek: set the current presentation time (seconds). <paramref name="approximate"/> requests MF's
-    /// approximate/keyframe seek (fast — snaps to the nearest keyframe, skips the exact-PTS decode) instead of the
-    /// default normal/exact seek (decodes to the requested PTS). See <see cref="FluentGpu.Media.SeekMode"/>.</summary>
-    void SeekTo(double seconds, bool approximate = false);
-    void SetPlaybackRate(double rate);
-    void SetVolume(double volume);
-    void SetMuted(bool muted);
-    /// <summary>Toggle native looping (a media element defaults OFF; the M3 harness kept a live frame ON).</summary>
-    void SetLoop(bool loop);
 }

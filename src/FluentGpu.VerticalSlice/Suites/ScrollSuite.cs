@@ -1945,6 +1945,34 @@ static class ScrollSuite
             hitProbe.LinkClick == 1 && hitProbe.RowPress == 0,
             $"linkClick={hitProbe.LinkClick} rowPress={hitProbe.RowPress}");
 
+        // 6b. A hyperlink span INSIDE a clickable card: the link is the click. Before the fix both fired — clicking the
+        //     artist link on Wavee's search top-result card navigated AND played the song.
+        using var appL = new HeadlessPlatformApp();
+        var windowL = new HeadlessWindow(new WindowDesc("card-link-hit", new Size2(640, 480), 1f));
+        windowL.Show();
+        var cardProbe = new CardLinkHitProbe();
+        using var hostL = new AppHost(appL, windowL, new HeadlessGpuDevice(), fonts, strings, cardProbe);
+        hostL.RunFrame();
+        var sL = hostL.Scene;
+        var cardNode = sL.FirstChild(sL.Root);
+        var cardSpan = sL.NextSibling(sL.FirstChild(cardNode));    // card child 1 = the SpanTextEl (after the title)
+        var spanRect = sL.AbsoluteRect(cardSpan);
+        // The link is the FIRST span ("Alex C.") — aim at the left edge of the laid run, over its glyphs (the IV-bound 6 shape).
+        var cardLinkPt = new Point2(spanRect.X + 4f, spanRect.Y + spanRect.H / 2f);
+        var cardLinkHit = hostL.Input.HitTest(cardLinkPt);
+        windowL.QueueInput(new InputEvent(InputKind.PointerDown, cardLinkPt, 0, 0));
+        windowL.QueueInput(new InputEvent(InputKind.PointerUp, cardLinkPt, 0, 0));
+        hostL.RunFrame();
+        int linkOnly = cardProbe.LinkClick, cardAfterLink = cardProbe.CardClick;
+        var cardRect = sL.AbsoluteRect(cardNode);
+        var cardBodyPt = new Point2(cardRect.X + cardRect.W - 20f, cardRect.Y + cardRect.H - 12f);   // bottom-right padding: no text there
+        windowL.QueueInput(new InputEvent(InputKind.PointerDown, cardBodyPt, 0, 0));
+        windowL.QueueInput(new InputEvent(InputKind.PointerUp, cardBodyPt, 0, 0));
+        hostL.RunFrame();
+        Check("IV-bound 6b. a hyperlink span inside a clickable card fires only the link; the card body still clicks",
+            linkOnly == 1 && cardAfterLink == 0 && cardProbe.CardClick == 1 && cardProbe.LinkClick == 1,
+            $"linkAfterLinkClick={linkOnly} cardAfterLinkClick={cardAfterLink} cardAfterBodyClick={cardProbe.CardClick} linkAfterBodyClick={cardProbe.LinkClick} hitIsSpan={cardLinkHit == cardSpan}");
+
         // 7. The VIRTUALIZED bound path: a clickable child on a realized CreateBound SLOT row must get the tap (not the row).
         using var app3 = new HeadlessPlatformApp();
         var window3 = new HeadlessWindow(new WindowDesc("bound-iv-vhit", new Size2(640, 480), 1f));

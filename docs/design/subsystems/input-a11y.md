@@ -560,6 +560,18 @@ Recognized gestures emit their bubble events **only after the arena declares thi
 > distinction is load-bearing: Windows can provide high-fidelity contact/lift/momentum **intent**, while the deterministic
 > engine remains the only offset/virtualization owner and the only portable fallback physics implementation.
 
+> **Settled (as-built): the app-zoom wheel hook — `InputHooks.ZoomWheel` (owned here).** In
+> `InputDispatcher.Dispatch`'s `InputKind.Wheel` case the ordering is: (1) element-level `OnPointerWheel` handlers
+> (WinUI first-refusal — a NumberBox or lightbox under the pointer still wins, Ctrl or not); then (2) on Ctrl,
+> `InputHooks.ZoomWheel: Func<float, bool>?` invoked with the signed device `WheelNotch` (>0 = wheel rotated away
+> = zoom in — NOT `ScrollDelta`, which is re-oriented so positive means toward content end); returning true
+> consumes the notch so the viewport never scrolls it; then (3) the viewport scroll (`ScrollInputRouter.Wheel`).
+> Unregistered (null, the default) the case is byte-identical to pre-zoom behavior. The Win32 backend consumes
+> Ctrl + hi-res/touchpad wheel as pinch synthesis BEFORE events reach the dispatcher, so the hook only ever sees
+> detented physical mouse wheels. The zoom VALUE itself is a window-scale concern owned by `pal-rhi.md` §1.2
+> (effective `Scale` = OS DPI × zoom); this hook is only the wheel-gesture entry point (recipe:
+> `docs/guide/app-zoom.md`).
+
 > **Shipped Phase-1 subset (the arena lands later, §7A unchanged).** Phase 1 ships the **synchronous
 > single-recognizer** path only: one pan/tap recognizer in `Dispatch` (touch-down on a `Scrollable` anchors;
 > crossing the `SM_CXDRAG` slop claims the pan — kills the click candidate, routes `Pressed → PointerCancel` to
@@ -661,6 +673,12 @@ internal struct AcceleratorEntry {        // SlabAllocator<AcceleratorEntry>
 ```
 
 `AcceleratorRegistry` (`SlabAllocator<AcceleratorEntry>`) is matched against the `(Vk, Mods)` with scope filtering (an accelerator scoped to a panel fires only when focus is within it). **Access keys (Alt)** push a transient **KeyTips overlay** (badges drawn via `DrawAccessKeyBadgeCmd`, the sibling opcode to `DrawFocusRingCmd`; architecture-spec §4.5). Commands are matched by `CommandSlot` → invoke `Command.Execute` (the GC edge), guarded by `CanExecute`. `UseCommand` (hook) registers/unregisters an entry on mount/unmount with a try/finally cleanup (Reactor philosophy: do not hide user bugs).
+
+**App-zoom chord constants (as-built).** `Keys` (`Foundation/Events.cs`) gained the browser-zoom virtual keys —
+`NumPad0` = 96, `Add` = 107, `Subtract` = 109, `OemPlus` = 187, `OemMinus` = 189. Accelerator matching is EXACT on
+`(Vk, Mods)`, so the recommended zoom set registers each chord separately (Ctrl+`OemPlus` and Ctrl+Shift+`OemPlus`
+are two entries). The recommended chord table + the invisible-`BoxEl` recipe is usage (`docs/guide/app-zoom.md`);
+Ctrl+wheel zoom is not an accelerator — it is the `InputHooks.ZoomWheel` dispatch hook (§7B).
 
 ---
 

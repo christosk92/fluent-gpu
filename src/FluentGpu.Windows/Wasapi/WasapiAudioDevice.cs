@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.Threading;
 using FluentGpu.Media;
 using TerraFX.Interop.Windows;
 using static TerraFX.Interop.Windows.Windows;
@@ -43,14 +44,40 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IAudioSink, IAudi
     private bool _started;
     private bool _disposed;
 
-    // TEMP audio diagnostic: the app wires this to its logger. Emits the negotiated device format at open and, once per
-    // ~second, the feed-vs-play throughput so we can see whether the device is UNDER-fed (production side) or UNDER-playing
-    // (device/timing side), and whether the render rate matches the device rate.
+    // Audio diagnostics (spec §7.x) split into two channels, because ONE of them (the 1 Hz feed-vs-play throughput) used
+    // to run INSIDE Write — i.e. on the RT feed thread, inside AudioTripwire's alloc/lock/syscall-free contract:
+    //  - FormatSink: invoked ONCE at Open (never from Write), plus the rare one-shot unsupported-device-format warning.
+    //    Both call sites are off the RT path, so building an interpolated string there is fine. This is the ONLY channel
+    //    that reports the negotiated device sample rate — the one line production hiccup triage actually needs — so it
+    //    must be always-on (house rule: never gate diagnostics behind an env var).
+    //  - DiagSink: kept for source compatibility, but is NEVER invoked from the RT Write path any more. The 1 Hz
+    //    feed-vs-play counters below are bare-field accumulation only; TryTakeStats() hands a drained snapshot to a
+    //    non-RT caller (AudioFeedThread.ControlTickOnce), which does the formatting/invoke — and can use DiagSink for it.
+    public static Action<string>? FormatSink;
     public static Action<string>? DiagSink;
-    private long _diagReqFrames, _diagWrittenFrames, _diagIntervalStartTicks, _diagIntervalStartPlayed;
+
+    /// <summary>Point-in-time snapshot of one drained ~1 s RT-thread diagnostic interval — see <see cref="TryTakeStats"/>.
+    /// POD (no managed refs), safe to build and hand across threads without allocation.</summary>
+    public readonly record struct AudioDeviceStats(long ReqFrames, long WrittenFrames, int Calls,
+        int Sleeps, long PlayedDelta, double ElapsedSec, float Peak, int Clip, int NonFinite);
+
+    private long _diagReqFrames, _diagWrittenFrames, _diagIntervalStartTicks;
     private int _diagCalls, _diagSleeps;
     private long _diagClip, _diagNonFinite;   // samples that hit the ±1 clamp / were NaN|Inf (noise sources)
     private float _diagPeak;                   // max |sample| this interval (>1 ⇒ the limiter let a transient through)
+
+    // 1 Hz stats handoff, RT producer → non-RT consumer (spec §7.x). Write() copies the counters above into the
+    // _pending* fields and flips _statsPending true with a release Volatile.Write once ~1 s has elapsed; TryTakeStats()
+    // acquires the flag with Volatile.Read, copies the snapshot out, and flips it back false. If the non-RT side never
+    // drains, Write just keeps accumulating and republishes on the next check — a diagnostic sample coalescing into a
+    // longer interval is fine; it must never block or grow unbounded state on the RT thread.
+    private long _pendingReqFrames, _pendingWrittenFrames;
+    private int _pendingCalls, _pendingSleeps, _pendingClip, _pendingNonFinite;
+    private float _pendingPeak;
+    private double _pendingElapsedSec;
+    private bool _statsPending;
+    private long _diagPlayedBaseline;   // last played-frames sample TryTakeStats took — the IAudioClock COM call lives
+    private bool _diagPlayedBaselineSet;   // only on this (off-RT) side now; see TryTakeStats.
 
     /// <summary>Open the default render endpoint at (or near) <paramref name="requested"/>. On failure the device is inert
     /// (silent) but never throws — the session stays alive and surfaces silence, not a crash.</summary>
@@ -178,26 +205,62 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IAudioSink, IAudi
             written += toWrite;
         }
 
-        // TEMP diagnostic: once per ~second, report feed rate (frames we handed the device) vs play rate (frames the
-        // hardware clock actually advanced) as multiples of the render sample rate. feedXrate<1 ⇒ producer under-supplies;
-        // playXrate<1 with feedXrate≈1 ⇒ device under-plays/underruns; renderRate≠deviceRate would be a resample mismatch.
-        if (DiagSink is { } diag)
+        // 1 Hz feed-vs-play counters (spec §7.x) — bare int/float accumulation ONLY. This runs inside RenderBlock's
+        // AudioTripwire (alloc/lock/syscall-free), so no string formatting, delegate invoke, or COM call may happen
+        // here — that used to be the bug (a DiagSink invoke with an interpolated string + two TryGetPlayed COM calls,
+        // right here, on the RT thread). Once ~1 s has elapsed, hand the interval off via TryTakeStats() instead; the
+        // non-RT drain does the formatting, the DiagSink invoke, and the TryGetPlayed COM call this used to do inline.
+        _diagReqFrames += frames; _diagWrittenFrames += written; _diagCalls++;
+        long nowTicks = Stopwatch.GetTimestamp();
+        if (_diagIntervalStartTicks == 0) _diagIntervalStartTicks = nowTicks;
+        double elapsedSec = (nowTicks - _diagIntervalStartTicks) / (double)Stopwatch.Frequency;
+        if (elapsedSec >= 1.0 && !Volatile.Read(ref _statsPending))
         {
-            _diagReqFrames += frames; _diagWrittenFrames += written; _diagCalls++;
-            long nowTicks = Stopwatch.GetTimestamp();
-            if (_diagIntervalStartTicks == 0) { _diagIntervalStartTicks = nowTicks; TryGetPlayed(out _diagIntervalStartPlayed, out _); }
-            double elapsedSec = (nowTicks - _diagIntervalStartTicks) / (double)Stopwatch.Frequency;
-            if (elapsedSec >= 1.0)
-            {
-                TryGetPlayed(out long playedNow, out _);
-                long playedDelta = playedNow - _diagIntervalStartPlayed;
-                diag($"1s req={_diagReqFrames} written={_diagWrittenFrames} calls={_diagCalls} sleeps={_diagSleeps} playedDelta={playedDelta} elapsedMs={elapsedSec * 1000:0} feedXrate={_diagWrittenFrames / elapsedSec / rate:0.000} playXrate={playedDelta / elapsedSec / rate:0.000} peak={_diagPeak:0.000} clip={_diagClip} nonFinite={_diagNonFinite}");
-                _diagReqFrames = _diagWrittenFrames = 0; _diagCalls = _diagSleeps = 0;
-                _diagIntervalStartTicks = nowTicks; _diagIntervalStartPlayed = playedNow;
-                _diagPeak = 0f; _diagClip = 0; _diagNonFinite = 0;
-            }
+            _pendingReqFrames = _diagReqFrames;
+            _pendingWrittenFrames = _diagWrittenFrames;
+            _pendingCalls = _diagCalls;
+            _pendingSleeps = _diagSleeps;
+            _pendingPeak = _diagPeak;
+            _pendingClip = (int)_diagClip;
+            _pendingNonFinite = (int)_diagNonFinite;
+            _pendingElapsedSec = elapsedSec;
+            _diagReqFrames = _diagWrittenFrames = 0; _diagCalls = _diagSleeps = 0;
+            _diagPeak = 0f; _diagClip = 0; _diagNonFinite = 0;
+            _diagIntervalStartTicks = nowTicks;
+            Volatile.Write(ref _statsPending, true);   // release: publishes every _pending* write above
         }
         return written;
+    }
+
+    /// <summary>Drains the latest ~1 s RT-thread feed-vs-play interval, if one has closed since the last drain (spec
+    /// §7.x). MUST be called off the RT feed thread (e.g. <c>AudioFeedThread.ControlTickOnce</c>) — this is where the
+    /// <see cref="TryGetPlayed"/> COM call (<c>IAudioClock.GetPosition</c>) for <see cref="AudioDeviceStats.PlayedDelta"/>
+    /// now lives, moved off the RT thread for the same reason the formatting was. Returns false (default
+    /// <paramref name="stats"/>) when no interval is ready yet — the caller should skip that tick rather than log a
+    /// zeroed line.</summary>
+    public bool TryTakeStats(out AudioDeviceStats stats)
+    {
+        stats = default;
+        if (!Volatile.Read(ref _statsPending)) return false;
+
+        long reqFrames = _pendingReqFrames, writtenFrames = _pendingWrittenFrames;
+        int calls = _pendingCalls, sleeps = _pendingSleeps, clip = _pendingClip, nonFinite = _pendingNonFinite;
+        float peak = _pendingPeak;
+        double elapsedSec = _pendingElapsedSec;
+        Volatile.Write(ref _statsPending, false);   // pairs with Write's release; frees the slot for the next interval
+
+        // PlayedDelta is computed HERE, not on the RT side (see the class-level diagnostics note): TryGetPlayed makes an
+        // IAudioClock COM call. The first drain only establishes the baseline (delta 0) — there is no prior sample yet.
+        long playedDelta = 0;
+        if (TryGetPlayed(out long playedNow, out _))
+        {
+            if (_diagPlayedBaselineSet) playedDelta = playedNow - _diagPlayedBaseline;
+            _diagPlayedBaseline = playedNow;
+            _diagPlayedBaselineSet = true;
+        }
+
+        stats = new AudioDeviceStats(reqFrames, writtenFrames, calls, sleeps, playedDelta, elapsedSec, peak, clip, nonFinite);
+        return true;
     }
 
     // Output safety net: a NaN/Inf sample slips through the brickwall limiter UNTOUCHED — abs(NaN) compares false against
@@ -227,7 +290,11 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IAudioSink, IAudi
         if (!WasapiFormatNegotiation.ConvertBlock(dst, src, written, toWrite, devCh, _devBits, _devBytesPerFrame) && !_devFmtWarned)
         {
             _devFmtWarned = true;
-            DiagSink?.Invoke($"UNSUPPORTED device format bits={_devBits} bytesPerFrame={_devBytesPerFrame} - writing silence");
+            // This runs on the RT thread (called from Write), but _devFmtWarned makes it fire at most ONCE ever per
+            // device — a single allocation on a format the device never recovers from is an acceptable one-time cost,
+            // unlike the per-block diag line this task removes. FormatSink is the always-on channel that survives into
+            // a shipping build.
+            FormatSink?.Invoke($"UNSUPPORTED device format bits={_devBits} bytesPerFrame={_devBytesPerFrame} - writing silence");
         }
     }
 
@@ -300,7 +367,10 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IAudioSink, IAudi
         if (client->GetBufferSize(&bufferFrames) < 0) return;
         _bufferFrames = bufferFrames;
 
-        DiagSink?.Invoke($"open deviceRate={deviceRate} renderRate={Format.SampleRate} devCh={_deviceChannels} renderCh={Format.Channels} devBits={devBits} devFloat={devFloat} floatDirect={_devFloat} bytesPerFrame={_devBytesPerFrame} tag=0x{devTag:X} bufFrames={_bufferFrames}");
+        // Open runs once, off the RT path — the ONLY line that answers "what is the user's device sample rate?" for
+        // production hiccup triage, so it goes through FormatSink (always-on), not DiagSink (RT-path-only now, and only
+        // invoked from the non-RT stats drain elsewhere).
+        FormatSink?.Invoke($"open deviceRate={deviceRate} renderRate={Format.SampleRate} devCh={_deviceChannels} renderCh={Format.Channels} devBits={devBits} devFloat={devFloat} floatDirect={_devFloat} bytesPerFrame={_devBytesPerFrame} tag=0x{devTag:X} bufFrames={_bufferFrames}");
 
         long hnsLatency;
         if (client->GetStreamLatency(&hnsLatency) >= 0)

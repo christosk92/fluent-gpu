@@ -12,6 +12,12 @@ namespace FluentGpu.WindowsApi.Media.PlayReady;
 /// (<see cref="MediaOpenOptions.LicenseRelay"/>, from <c>WithDrm</c>) down to the native callback. Also
 /// <see cref="IPreparableBackend"/>: a queued protected item can be spun up + first-frame-readied ahead of a mixed-queue
 /// join (the two engines never co-mix — a cross-backend transition is a declicked hard cut).
+/// <para><b>Per-source descriptor (cross-plan contract, video-smooth-switching plan):</b> the parsed manifest descriptor
+/// travels ON THE SOURCE via <see cref="DrmConfig.SourceDescriptor"/> (an <c>object?</c> holding a
+/// <see cref="DashSourceDescriptor"/>), not baked into this backend. Every open/prepare resolves
+/// <c>drm.SourceDescriptor as DashSourceDescriptor ?? </c> the ctor-baked fallback, so ONE long-lived backend built
+/// with <c>descriptor: null</c> can play ANY per-source descriptor across repeated switches — the ctor-baked
+/// descriptor remains only as a fallback for the gallery/test-vector path (a backend pinned to one fixed track).</para>
 /// <para>Testable: inject a fake <see cref="IProtectedVideoPlayer"/> factory to exercise routing / snapshot mapping /
 /// prepare without a real CDM or native call.</para>
 /// </summary>
@@ -23,15 +29,19 @@ public sealed class ProtectedMediaBackend : IMediaBackend, IPreparableBackend
     private readonly DashSourceDescriptor? _descriptor;
 
     /// <summary>Create the production backend (each open builds a real in-process native CDM player). An optional
-    /// <paramref name="defaultRelay"/> is used for the prepare hook (which has no per-open options). Pass a
-    /// <paramref name="descriptor"/> (from <see cref="DashManifestParser"/>) to play an ARBITRARY parsed DASH/PlayReady
-    /// source; omit it to fall back to the baked Axinom test vector for a recognized URI.</summary>
+    /// <paramref name="defaultRelay"/> is used for the prepare hook (which has no per-open options). The
+    /// <paramref name="descriptor"/> (from <see cref="DashManifestParser"/>) is only a FALLBACK used when a given
+    /// source's own <see cref="DrmConfig.SourceDescriptor"/> is absent — pass <c>null</c> (the norm for a long-lived
+    /// player) to play any per-source descriptor arriving on <c>DrmConfig.SourceDescriptor</c>, or a fixed descriptor
+    /// to pin this backend to one ARBITRARY parsed DASH/PlayReady source regardless of what the source itself carries.
+    /// With neither present, a recognized Axinom URI falls back to the baked test vector.</summary>
     public ProtectedMediaBackend(Func<LicenseRequest, ValueTask<LicenseResponse>>? defaultRelay = null,
                                  DashSourceDescriptor? descriptor = null)
         : this(static () => new DesktopProtectedVideoPlayer(), defaultRelay, null, descriptor) { }
 
-    /// <summary>Test/DI seam: supply the protected-player factory + optional prepare timeout + optional parsed source
-    /// descriptor.</summary>
+    /// <summary>Test/DI seam: supply the protected-player factory + optional prepare timeout + optional fallback
+    /// source descriptor (see the ctor-baked-fallback note above; <c>drm.SourceDescriptor</c> on the source being
+    /// opened always takes priority when present).</summary>
     public ProtectedMediaBackend(Func<IProtectedVideoPlayer> playerFactory,
                                  Func<LicenseRequest, ValueTask<LicenseResponse>>? defaultRelay = null,
                                  TimeSpan? prepareTimeout = null,
@@ -42,6 +52,15 @@ public sealed class ProtectedMediaBackend : IMediaBackend, IPreparableBackend
         _prepareTimeout = prepareTimeout ?? TimeSpan.FromSeconds(10);
         _descriptor = descriptor;
     }
+
+    /// <summary>
+    /// Eagerly preload the native PlayReady component (fixes E2) so the FIRST real protected open does not pay for an
+    /// implicit <c>LoadLibrary</c> of <c>FluentGpu.PlayReady.Native.dll</c> + its MF/PlayReady dependency chain. The
+    /// app should call this once, at startup idle (e.g. after the first frame is up), well before the user is likely
+    /// to open a DRM-protected source. Idempotent and non-blocking — see
+    /// <see cref="DesktopProtectedVideoPlayer.Warmup"/> for the mechanics.
+    /// </summary>
+    public static void WarmupNative() => DesktopProtectedVideoPlayer.Warmup();
 
     /// <inheritdoc/>
     public MediaCapabilities Capabilities { get; } = new(SupportsVideo: true, SupportsAudioGraph: false, SupportsDrm: true)
@@ -92,12 +111,15 @@ public sealed class ProtectedMediaBackend : IMediaBackend, IPreparableBackend
         return new ProtectedPreparedItem(session, ready, duration);
     }
 
-    /// <summary>Map a <see cref="MediaSource"/> + <see cref="DrmConfig"/> + relay into a native open request. When a parsed
-    /// <paramref name="descriptor"/> is supplied (from <see cref="DashManifestParser"/>) it carries the source verbatim —
-    /// ANY DASH/PlayReady MPD, not just the test vector. Otherwise a recognized Axinom URI is expanded to its known
-    /// init+segment template, and an unrecognized URI leaves the template empty (native falls back to its baked vector).</summary>
+    /// <summary>Map a <see cref="MediaSource"/> + <see cref="DrmConfig"/> + relay into a native open request. The
+    /// per-source descriptor travels ON <paramref name="drm"/> (<see cref="DrmConfig.SourceDescriptor"/>) — a
+    /// long-lived backend built with a null ctor-baked descriptor plays ANY source this way; <paramref name="fallbackDescriptor"/>
+    /// (the ctor-baked <c>_descriptor</c>, if any) is used only when the source itself carries none. When a parsed
+    /// descriptor is resolved (from <see cref="DashManifestParser"/>) it carries the source verbatim — ANY DASH/PlayReady
+    /// MPD, not just the test vector. Otherwise a recognized Axinom URI is expanded to its known init+segment template,
+    /// and an unrecognized URI leaves the template empty (native falls back to its baked vector).</summary>
     internal static ProtectedVideoRequest BuildRequest(MediaSource source, DrmConfig drm,
-        Func<LicenseRequest, ValueTask<LicenseResponse>>? relay, bool startPaused, DashSourceDescriptor? descriptor = null)
+        Func<LicenseRequest, ValueTask<LicenseResponse>>? relay, bool startPaused, DashSourceDescriptor? fallbackDescriptor = null)
     {
         var req = new ProtectedVideoRequest
         {
@@ -107,6 +129,11 @@ public sealed class ProtectedMediaBackend : IMediaBackend, IPreparableBackend
             StartPaused = startPaused,
             Mode = "protected-custom",
         };
+
+        // Per-source descriptor first (cross-plan contract: DrmConfig.SourceDescriptor travels on the source so one
+        // long-lived backend/player can switch between protected sources in place); the ctor-baked descriptor is only
+        // a fallback for the gallery/test-vector path.
+        DashSourceDescriptor? descriptor = drm.SourceDescriptor as DashSourceDescriptor ?? fallbackDescriptor;
 
         // Preferred generic path: a parsed manifest descriptor drives the native open ABI directly.
         if (descriptor is not null)

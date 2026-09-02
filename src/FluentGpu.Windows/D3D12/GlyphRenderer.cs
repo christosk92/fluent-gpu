@@ -226,7 +226,19 @@ internal sealed unsafe class GlyphRenderer : IDisposable
     private const int FrameCount = D3D12Device.FrameBankDepth;   // banked per frame-in-flight (depth = D3D12Device.FrameBankDepth) so frame N's CPU writes never race the GPU reads of the frames still in flight
     private readonly ID3D12Resource*[] _instances = new ID3D12Resource*[FrameCount];
     private readonly GlyphInstance*[] _mapped = new GlyphInstance*[FrameCount];
-    private const int MaxGlyphs = 8192;
+    // The per-frame glyph instance bank STARTS at 8192 quads and GROWS on demand: a frame that overflows it records
+    // the tail as dropped (Record), remembers the size it needed (_wantCapacity), and each bank re-allocates itself the
+    // next time BeginFrame lands on it — that bank is fenced at BeginFrame, so no in-flight reader can see the swap.
+    // The device turns a dropped frame into an un-skippable full repaint (TextRepaintPending), so an overflow costs one
+    // frame with a blank tail and then heals. It used to be a hard cap: a 600-line log preview scrolled into a dialog
+    // silently blanked every glyph recorded after it (the checkbox + command-row labels) for as long as the stream
+    // stayed byte-identical. Capped at MaxGlyphCapacity (80 B × 262144 = 20 MB per bank).
+    private const int InitialGlyphCapacity = 8192;
+    private const int MaxGlyphCapacity = 262144;
+    private readonly int[] _capacity = new int[FrameCount];
+    private int _wantCapacity = InitialGlyphCapacity;
+    /// <summary>Quads the active bank can hold this frame (grows across frames after an overflow).</summary>
+    public int GlyphCapacity => _capacity[_active];
     private int _cursor;
     private int _active;
     private ulong _activeGva;
@@ -1369,7 +1381,8 @@ float4 PSMain(VSOutG i) : SV_Target
 
         for (int f = 0; f < FrameCount; f++)
         {
-            _instances[f] = CreateUpload(device, (uint)(sizeof(GlyphInstance) * MaxGlyphs), "Glyph.InstanceUpload");
+            _capacity[f] = InitialGlyphCapacity;
+            _instances[f] = CreateUpload(device, (uint)(sizeof(GlyphInstance) * InitialGlyphCapacity), "Glyph.InstanceUpload");
             void* ip; _instances[f]->Map(0, null, &ip); _mapped[f] = (GlyphInstance*)ip;   // persistently mapped
             _gradInstances[f] = CreateUpload(device, (uint)(sizeof(GradGlyphInstance) * MaxGradGlyphs), "Glyph.GradInstanceUpload");
             void* gp; _gradInstances[f]->Map(0, null, &gp); _mappedGrad[f] = (GradGlyphInstance*)gp;
@@ -1379,6 +1392,7 @@ float4 PSMain(VSOutG i) : SV_Target
     public void BeginFrame(int frameIndex)
     {
         _active = ((frameIndex % FrameCount) + FrameCount) % FrameCount;   // this frame's instance buffer — already fenced, so no CPU↔GPU race
+        if (_capacity[_active] < _wantCapacity) GrowBank(_active);          // fenced here ⇒ the only safe moment to swap it
         _activeGva = _instances[_active]->GetGPUVirtualAddress();
         _activeGradGva = _gradInstances[_active]->GetGPUVirtualAddress();
         _cursor = 0;
@@ -1404,7 +1418,8 @@ float4 PSMain(VSOutG i) : SV_Target
     public bool Record(ID3D12GraphicsCommandList* cmd, List<GlyphInstance> instances, float vpW, float vpH, bool rebind = true, bool stencilTest = false)
     {
         int start = _cursor;
-        int count = Math.Min(instances.Count, MaxGlyphs - start);
+        int count = Math.Min(instances.Count, _capacity[_active] - start);
+        if (count < instances.Count) NoteOverflow(start + instances.Count);
         if (count <= 0) { _dropped += instances.Count; return false; }
         _dropped += instances.Count - count;
         for (int i = 0; i < count; i++) _mapped[_active][start + i] = instances[i];
@@ -1480,6 +1495,26 @@ float4 PSMain(VSOutG i) : SV_Target
         _gradDropped += dropped;
         Diag.Count("text.grad", "dropped", dropped);
         Diag.Event("text.grad", $"gradient-glyph budget exhausted: dropped {dropped} instance(s) (budget {MaxGradGlyphs}) — the karaoke wipe is TRUNCATED this frame");
+    }
+
+    // An overflow this frame: remember the capacity the frame needed (next power of two, capped), so every bank grows
+    // to it as BeginFrame reaches it. Beyond the cap the tail stays dropped and counted — visible, never silent.
+    private void NoteOverflow(int needed)
+    {
+        int want = _capacity[_active];
+        while (want < needed && want < MaxGlyphCapacity) want <<= 1;
+        if (want > _wantCapacity) { _wantCapacity = want; Diag.Count("text.glyphs", "bankOverflow"); }
+    }
+
+    private void GrowBank(int f)
+    {
+        _instances[f]->Unmap(0, null);
+        D3D12MemoryDiagnostics.Release(_instances[f], "Glyph.InstanceUpload");
+        _instances[f]->Release();
+        _instances[f] = CreateUpload(_device, (uint)(sizeof(GlyphInstance) * _wantCapacity), "Glyph.InstanceUpload");
+        void* ip; _instances[f]->Map(0, null, &ip); _mapped[f] = (GlyphInstance*)ip;   // persistently mapped, like the ctor
+        _capacity[f] = _wantCapacity;
+        Diag.Count("text.glyphs", "bankGrow");
     }
 
     private static ID3D12Resource* CreateUpload(ID3D12Device* device, uint bytes, string name)

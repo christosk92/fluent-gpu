@@ -110,5 +110,10 @@
   "Delete": "E74D",
   "Undo": "E7A7",
   "Redo": "E7A6",
-  "UnPin": "E77A"
+  "UnPin": "E77A",
+  "Zoom": "E8A3",
+  "Design": "EB3C",
+  "DockLeft": "E90C",
+  "Audio": "E8D6",
+  "LocaleLanguage": "F2B7"
 }

@@ -269,6 +269,14 @@ public static partial class Button
             HoverColor = s.HoverForeground,
             PressedColor = s.PressedForeground,
             DisabledColor = s.DisabledForeground,
+            // A WinUI button's ContentPresenter never wraps (TextWrapping=NoWrap) and clips an over-long label to its
+            // own bounds. The engine's text leaf has NO clip of its own and a row child never shrinks below its
+            // measured width, so a label longer than the button's arranged width (a `Grow=1, Basis=0` command-row
+            // button carrying a sentence) used to paint straight across the neighbouring button. One line, trimmed
+            // with an ellipsis at the button's content width, and free to shrink (MinWidth 0): the label always stays
+            // inside its chrome. Natural-width buttons are unaffected — trimming only engages when the arranged width
+            // is narrower than the text (gate.layout.button.label-ellipsis).
+            MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
         });
         // Optional leading icon: an icon-font glyph riding the SAME foreground ramp as the label (the most-requested
         // composition). Present only when a glyph was passed — without it the child list is label-only (structure

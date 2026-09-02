@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Threading.Tasks;
 using FluentGpu.Foundation;
 using FluentGpu.Media;
@@ -11,11 +11,11 @@ namespace FluentGpu.Windows.Tests;
 
 /// <summary>
 /// The ENGINE-reported live path: a live URL (an HLS master playlist) handed straight to Media Foundation, with no
-/// parsed manifest — so live-ness, the DVR window and the live edge come from the engine rather than from a manifest.
-/// Two layers are pinned here: <see cref="LiveSessionRules"/> (the pure thresholds/arithmetic) and
-/// <see cref="MfMediaSession"/> driven through a <see cref="FakeVideoEngine"/> (no D3D/MF/DComp device), which is the
-/// only way to observe the latch/publish behavior. The manifest-driven live path is covered by
-/// <see cref="MfMediaSessionTests"/> and must stay unchanged by any of this.
+/// parsed manifest — so live-ness, the DVR window and the live edge come from the engine's snapshot rather than from a
+/// manifest. Two layers are pinned here: <see cref="LiveSessionRules"/> (the pure thresholds/arithmetic) and
+/// <see cref="MfMediaSession"/> driven through a <see cref="FakeVideoEngine"/> (no D3D/MF/DComp device) — the only way
+/// to observe the latch/publish behavior. The manifest-driven live path is covered by <see cref="MfMediaSessionTests"/>
+/// and must stay unchanged by any of this.
 /// </summary>
 public sealed class LiveSessionTests
 {
@@ -26,7 +26,7 @@ public sealed class LiveSessionTests
     {
         var core = new MediaPlayerCore();
         var engine = new FakeVideoEngine();
-        var session = new MfMediaSession(engine, new MediaOpenOptions { StartPaused = startPaused, Liveness = liveness });
+        var session = new MfMediaSession(engine, 0, new MediaOpenOptions { StartPaused = startPaused, Liveness = liveness });
         session.ConnectSignals(new MediaSignalSink(core));
         return (session, core, engine);
     }
@@ -41,8 +41,8 @@ public sealed class LiveSessionTests
     }
 
     /// <summary>Bring a session to "metadata loaded, engine says live, this is the window" deterministically:
-    /// RaiseStateChanged is the same off-thread refresh the real engine's event callback performs, so the caches the
-    /// pump reads are primed without waiting on the 100 ms poll timer.</summary>
+    /// RaiseStateChanged is the same coalesced-refresh wake the real engine's own worker-thread event uses, so the
+    /// fresh snapshot the pump reads is primed without waiting on anything.</summary>
     private static void GoLiveState(MfMediaSession s, FakeVideoEngine e, double start, double end, double position = 0)
     {
         e.MetadataLoaded = true;
@@ -164,24 +164,6 @@ public sealed class LiveSessionTests
     }
 
     [Fact]
-    public void EngineLiveness_IsLatched_NeverRegressedByAnUnansweredRead()
-    {
-        var (s, core, e) = NewSession();
-        GoLiveState(s, e, 0, 120);
-        Assert.True(core.Timeline.Peek().IsLive);
-
-        // A bounded read that expired answers false/(0,0). That is "not answered", never "this became VOD".
-        e.IsLiveSource = false;
-        e.SeekableRange = (0, 0);
-        e.RaiseStateChanged();
-        Pump(s);
-
-        TimelineInfo t = core.Timeline.Peek();
-        Assert.True(t.IsLive);
-        Assert.Equal(TimeSpan.FromSeconds(120), t.LiveEdge);   // the last answered window is kept, not zeroed
-    }
-
-    [Fact]
     public void NonLiveSource_PublishesNoLiveTimeline()
     {
         var (s, core, e) = NewSession();
@@ -203,8 +185,9 @@ public sealed class LiveSessionTests
 
         await s.GoLiveAsync();
 
-        Assert.Equal(117, e.LastSeek);
-        Assert.False(e.LastSeekApproximate);   // landing behind the edge is the failure being fixed
+        Assert.True(e.Commands.TryTakeSeek(out double secs, out bool approx));
+        Assert.Equal(117, secs);
+        Assert.False(approx);   // landing behind the edge is the failure being fixed
     }
 
     [Fact]
@@ -218,7 +201,7 @@ public sealed class LiveSessionTests
 
         await s.GoLiveAsync();
 
-        Assert.True(double.IsNaN(e.LastSeek));
+        Assert.False(e.Commands.TryTakeSeek(out _, out _));
     }
 
     [Fact]
@@ -229,15 +212,22 @@ public sealed class LiveSessionTests
 
         // The FIRST play is not a resume: it must honor the open options, not jump.
         await s.PlayAsync();
-        Assert.True(double.IsNaN(e.LastSeek));
+        Assert.False(e.Commands.TryTakeSeek(out _, out _));
+        Assert.True(e.Commands.TryTakeTransport(out bool firstPlay));
+        Assert.True(firstPlay);
 
         await s.PauseAsync();
+        Assert.True(e.Commands.TryTakeTransport(out bool paused));
+        Assert.False(paused);
+
         e.SeekableRange = (0, 300);        // the window slid on while paused
         e.RaiseStateChanged();
         await s.PlayAsync();
 
-        Assert.Equal(297, e.LastSeek);
-        Assert.Equal(2, e.PlayCalls);
+        Assert.True(e.Commands.TryTakeSeek(out double secs, out _));
+        Assert.Equal(297, secs);
+        Assert.True(e.Commands.TryTakeTransport(out bool resumedPlay));
+        Assert.True(resumedPlay);
     }
 
     [Fact]
@@ -253,7 +243,7 @@ public sealed class LiveSessionTests
         await s.PauseAsync();
         await s.PlayAsync();
 
-        Assert.True(double.IsNaN(e.LastSeek));
+        Assert.False(e.Commands.TryTakeSeek(out _, out _));
     }
 
     // ── error surfacing ──────────────────────────────────────────────────────────────────────────────────────────────
@@ -293,7 +283,7 @@ public sealed class LiveSessionTests
         Assert.Equal(PlaybackState.Failed, core.State.Peek());
     }
 
-    // ── SourceLiveness: the CALLER's declaration outranks MF's inference ─────────────────────────────────────────────
+    // ── SourceLiveness: the CALLER's declaration outranks the engine's inference ────────────────────────────────────
 
     [Fact]
     public void ForcedLive_NeverPublishesAFiniteDuration_EvenWhenTheEngineReportsOne()
@@ -305,7 +295,7 @@ public sealed class LiveSessionTests
         var (s, core, e) = NewSession(liveness: SourceLiveness.Live);
         e.MetadataLoaded = true;
         e.DurationSeconds = 202;
-        e.IsLiveSource = false;              // MF has not answered its own live probe yet — irrelevant, we were TOLD
+        e.IsLiveSource = false;              // the engine has not answered its own live probe yet — irrelevant, we were TOLD
         e.SeekableRange = (0, 202);
         e.RaiseStateChanged();
         Pump(s);
@@ -354,7 +344,8 @@ public sealed class LiveSessionTests
 
         await s.GoLiveAsync();
 
-        Assert.Equal(117, e.LastSeek);
+        Assert.True(e.Commands.TryTakeSeek(out double secs, out _));
+        Assert.Equal(117, secs);
     }
 
     [Fact]
@@ -387,7 +378,7 @@ public sealed class LiveSessionTests
 
         await s.GoLiveAsync();
 
-        Assert.True(double.IsNaN(e.LastSeek));
+        Assert.False(e.Commands.TryTakeSeek(out _, out _));
     }
 
     [Fact]
@@ -414,8 +405,9 @@ public sealed class LiveSessionTests
         // A 16:9 frame placed into a 4:3 rect (what Fill/UniformToFill produce): the destination is NOT the frame.
         s.PumpVideo(binding, new RectF(0, 0, 800, 600), 1f);
 
-        Assert.Equal(640, e.StreamW);
-        Assert.Equal(360, e.StreamH);
+        Assert.True(e.Commands.TryTakeStreamRect(out int w, out int h));
+        Assert.Equal(640, w);
+        Assert.Equal(360, h);
 
         var presenter = new FakeVideoPresenter();
         registry.Drain(presenter, scale: 1f);
@@ -498,20 +490,19 @@ public sealed class LiveSessionTests
         e.MetadataLoaded = true; e.NativeW = 640; e.NativeH = 360; e.Handle = 0xF00D;
         s.PumpVideo(binding, new RectF(0, 0, 1280, 720), 1f);
         Assert.Equal(new SizeI(640, 360), core.NaturalSize.Peek());
-        int queriesBefore = e.NativeSizeQueries;
 
-        // A pump with nothing changed must NOT re-ask (the query is a marshaled round-trip onto the engine thread).
+        // A pump with nothing changed must NOT republish (value-gated on the last published size).
         s.PumpVideo(binding, new RectF(0, 0, 1280, 720), 1f);
-        Assert.Equal(queriesBefore, e.NativeSizeQueries);
+        Assert.Equal(new SizeI(640, 360), core.NaturalSize.Peek());
 
         e.NativeW = 1920; e.NativeH = 1080;
         e.RaiseFormatChange();
         s.PumpVideo(binding, new RectF(0, 0, 1280, 720), 1f);
 
-        Assert.True(e.NativeSizeQueries > queriesBefore);
         Assert.Equal(new SizeI(1920, 1080), core.NaturalSize.Peek());
-        Assert.Equal(1280, e.StreamW);      // re-sized from the NEW natural size, capped at the 1280×720 destination
-        Assert.Equal(720, e.StreamH);
+        Assert.True(e.Commands.TryTakeStreamRect(out int w, out int h));
+        Assert.Equal(1280, w);      // re-sized from the NEW natural size, capped at the 1280×720 destination
+        Assert.Equal(720, h);
     }
 
     [Fact]
@@ -523,15 +514,16 @@ public sealed class LiveSessionTests
         var binding = NewBinding(out _);
         e.MetadataLoaded = true; e.NativeW = 1280; e.NativeH = 720; e.Handle = 0xF00D;
         s.PumpVideo(binding, new RectF(0, 0, 1280, 720), 1f);
-        int repaints = e.RepaintCalls;
+        Assert.True(e.Commands.TryTakeStreamRect(out _, out _));   // drain the initial hand-off's post
+        Assert.True(e.Commands.TryTakeRepaint());
 
         e.RaiseFormatChange();
         s.PumpVideo(binding, new RectF(0, 0, 1280, 720), 1f);
 
         Assert.Equal(new SizeI(1280, 720), core.NaturalSize.Peek());
-        // One repaint IS expected (the resource may have been rebuilt — that is what RESOURCELOST means), but the
-        // size never changed, so the stream size did not move either.
-        Assert.Equal(1280, e.StreamW);
-        Assert.True(e.RepaintCalls >= repaints);
+        // A repaint IS expected (the resource may have been rebuilt — that is what RESOURCELOST means), but the size
+        // never changed, so the stream size is never re-posted.
+        Assert.True(e.Commands.TryTakeRepaint());
+        Assert.False(e.Commands.TryTakeStreamRect(out _, out _));
     }
 }

@@ -554,6 +554,24 @@ on its side), and the Windows impl wraps it via `IDCompositionDevice::CreateSurf
 the child visual's content. FluentGpu never sees a decoded video frame. The **DRM path passes a PROTECTED
 handle here — nothing else in this seam or the renderer changes** (§8.4).
 
+> **As built (2026-09, video-smooth-switching — presenter fault semantics).** The Windows `IVideoPresenter`
+> (`DCompVideoPresenter`) never throws a failing HRESULT into the render thread's `Commit`/present path — a
+> device-lost or transient DComp/DXGI failure here degrades the video surface in place instead of taking down
+> the frame. Every native call is guarded by a non-throwing `Ok(hr, what)` check that logs the FIRST occurrence
+> of each distinct failing HRESULT (always-on, never behind an opt-in env var) and stays silent on repeats, then
+> returns `false` so the call site decides its own degrade: **`CreateSurface`** returns a none `VideoSurfaceId`
+> on a `CreateVisual` failure — `VideoSurfaceRegistry.Drain` (§8.3) sees the slot's `SurfaceId` still `IsNone`,
+> leaves the entry dirty, and retries `CreateSurface` on the next drain rather than dropping the surface
+> silently. **`BindSurfaceHandle`** leaves the slot's previously-bound content untouched on a
+> `CreateSurfaceFromHandle` failure (log-and-mark, never throw) — this **self-heals via handle-rebind**: the
+> registry only advances its `BoundHandle` bookkeeping past a call that actually returns, so a stale bind is
+> retried automatically the next time the engine publishes a *new* handle on a presentation-epoch bump
+> (FORMATCHANGE/RESOURCELOST), not by blindly re-trying the same failing handle. **`ApplyPlacement`** marks the
+> slot faulted and bails out at the first failing call (offset/transform/clip), leaving the visual at its
+> previous placement until the next `Place`/`SetVisible`/etc. call marks the slot dirty again. `Commit` itself
+> is likewise non-throwing: a failed `IDCompositionDevice::Commit` just leaves DWM showing the prior
+> composition for one turn. As-built: `src/FluentGpu.Windows/Pal/DCompVideoPresenter.cs`.
+
 ### 8.2 Present-tree amendment to `architecture-spec` §5.1 (one visual → multi-visual)
 
 §5.1 builds ONE opaque swapchain visual. Video needs a **root DComp visual with N children**: the **UI
@@ -623,6 +641,50 @@ public sealed class VideoSurfaceRegistry    // UI-thread arbitration; portable p
 > incremental relayout, *before* the phase-11.5 `Drain`. This is the ownership-transfer contract WS-MediaUI fix #2/#3
 > asked for; `Render` becomes pure.
 
+> **As built (2026-09, video-smooth-switching — the snapshot/command seam + warm-engine reuse).** The pump seam
+> above only pays off if the per-frame `PumpVideo` it drives at phase 7.2 never blocks the UI thread. It used to:
+> `MfMediaSession.PumpVideo` made up to 7 blocking `IVideoEngine.Invoke<T>` calls per pump, each marshaling onto
+> the engine's own MTA thread and stalling up to ~50 ms (worse while MF holds its engine lock resolving a
+> source), re-driven at 10 Hz by a poll timer while natural size was pending. This is now a **snapshot-out,
+> command-in** seam, portable and engine-free (`FluentGpu.Media`, `src/FluentGpu.Engine/Media/Playback/VideoEngineSeam.cs`
+> — `VideoEngineSnapshot`/`VideoEngineFlags`/`VideoSnapshotBuffer`/`VideoEngineCommandQueue`/`VideoCommandKind`;
+> TerraFX-free, gated headlessly by the VerticalSlice, reused unchanged on macOS):
+> - **The engine MTA thread is the SOLE writer** of a POD `VideoEngineSnapshot`, published through
+>   `VideoSnapshotBuffer`'s single-writer **seqlock** (`Publish`/`Read` — alloc-free, retried on a torn/odd
+>   sequence). `MfMediaSession.PumpVideo` reads **exactly one snapshot per pump** (`IVideoEngine.Snapshot`) and
+>   extrapolates position (`pos + elapsed·rate` while playing) — zero blocking calls, zero COM touches, on the
+>   UI thread. `IVideoEngine.Invoke<T>`/`InvokeSlot<T>`/`InvokeSlotPool<T>`/`NativeSizeAnswer` and every other
+>   blocking member are **deleted outright, no fallback**; the 10 Hz poll timer is deleted with them — the
+>   engine's own self-refresh cadence replaces retries and live-window slides.
+> - **Commands flow UI → engine through `VideoEngineCommandQueue`**: one per-`VideoCommandKind` slot
+>   (Transport/Seek/Rate/Volume/Muted/Loop/StreamRect/Repaint/SetSource/Detach), **LAST-WINS coalesced**, `Post`
+>   alloc-free. Transport verbs (`PlayAsync`, `Seek`, `Rate`, `Volume`, `Muted`, `GoLive`, `ConnectSignals`
+>   re-assertion) become pure posts — a burst of UI-thread calls between two engine drains collapses to the
+>   latest value per kind, never a queued backlog.
+> - **Publish-then-raise ordering:** the engine thread publishes the snapshot BEFORE raising
+>   `IVideoEngine.StateChanged`, so a listener woken by the event is guaranteed to observe at least the state
+>   that raised it — closing the wake-before-readable race the old always-re-poll model never had to reason
+>   about. `OnEngineEvent` (the MF worker callbacks) only sets bits and coalesces ONE refresh; it no longer
+>   raises `StateChanged` itself.
+> - **Warm-engine lease/return** (owned by `MfMediaPlayer`, `src/FluentGpu.Windows/Media/MfMediaPlayer.cs`):
+>   one `IVideoEngine` is leased per player and **returned, not disposed**, when its session ends
+>   (`LeaseEngine`/`ReturnEngine` under a lock) — `SetSource` on the warm engine is a fire-and-forget
+>   `PostSetSource` that bumps a `SourceEpoch`, replacing the old full `MFShutdown`(2 s join)+`MFStartup`+
+>   `D3D11CreateDevice`+`CoCreateInstance` teardown/rebuild **per track change**. A returned engine is paused +
+>   detached (`Commands.Post(Transport, i:0)` + `PostDetach()`), never torn down while healthy. If the warm
+>   engine's snapshot carries `VideoEngineFlags.Faulted` (an unrecoverable bring-up failure), the NEXT lease
+>   disposes it and builds a fresh one — the sticky-`Faulted` rebuild path. Every snapshot carries the
+>   `SourceEpoch` it describes; a session drops any snapshot whose epoch does not match the one it opened with
+>   (the stale-state guard), so a late read from a superseded `SetSource` is inert rather than a source mix-up.
+>   A second concurrent player over the same backend gets a throwaway (non-warm) engine — a documented, not
+>   silent, decision.
+> - **Residual, stated plainly:** this warm-reuse path is the clear↔clear (and same-DRM-family) case; DRM stays
+>   create-per-open on the native side regardless (§8.4) — bounded, off the UI thread, and pre-warmed, but not
+>   instant. The deep `IMediaPlayer`/`MfMediaPlayer` API surface remains owned by
+>   `docs/plans/media-playback-api-spec.md` (SPEC-INDEX §2); this note exists here because the seam is what
+>   makes the phase-7.2 pump above actually non-blocking. Full rationale:
+>   `docs/plans/video-smooth-switching-implementation.md` §1.
+
 - **Atomic handoff (UNBUILT — the same original design as the code block above):** "on a higher-priority `Acquire`, <!-- canon-allow: labelled UNBUILT design, see the As-built G5g note above -->
   the registry first `Place`s+`SetVisible(true)` the new owner's rect, then `SetVisible(false)` the old" describes
   the priority-arbitration registry automatically resolving a cross-slot hand-off — that registry-driven arbitration
@@ -682,6 +744,26 @@ content key.**
   embeddable self-provisioned native Widevine CDM), not the v1 path.
 - **A DRM shortfall is `MediaError{Category.Drm, Recovery.NeedsLicense/PickLowerQuality}` — never a silent drop
   to black** (`gpu-renderer.md` treats the protected surface identically to any composited surface).
+
+**As built (2026-09, video-smooth-switching — DRM warmup + per-source descriptor).** Two amendments to the
+native path above, neither changing the spine:
+- **Worker-thread first P/Invoke (warmup).** The FIRST call into `FluentGpu.PlayReady.Native.dll` implicitly
+  `LoadLibrary`s it plus the MF chain it pulls in; that used to happen inline in
+  `DesktopProtectedVideoPlayer.Start()` **on the UI thread**. The seed calls (`FgPlayReadyResetAdaptive` + the
+  transport-seed first-P/Invokes) move to the top of `RunNative` — the `fgpu-playready-desktop` native worker
+  thread — preserving the original seed-before-`RunEx` ordering, just off the UI thread. An idempotent
+  `static Warmup()` (`NativeLibrary.TryLoad` on a pool thread) is exposed as `ProtectedMediaBackend.WarmupNative()`;
+  the app calls it once at startup idle so a user's first protected-content open no longer pays the
+  LoadLibrary + MF-chain bring-up cost inline on the UI thread.
+- **Per-source descriptor (`DrmConfig.SourceDescriptor`).** `DrmConfig` (SEEDED in `MediaSeams.cs`) carries an
+  `object? SourceDescriptor`; `ProtectedMediaBackend.BuildRequest` resolves
+  `drm.SourceDescriptor as DashSourceDescriptor ?? _descriptor` — the per-open descriptor wins when the caller
+  supplies one, the backend's construction-time descriptor is the fallback. This lets **one**
+  `MfMediaPlayer(new ProtectedMediaBackend(defaultRelay: null, descriptor: null))` play every DASH source
+  family, instead of a descriptor fixed at construction.
+- **Residual, stated plainly:** the native CDM/CENC session itself stays create-per-open — only the DLL
+  LoadLibrary + first-P/Invoke cost is amortized by warmup, not the per-open session bring-up. A DRM→DRM switch
+  therefore still pays that bounded, off-UI-thread native cost; clear↔clear is the truly instant path (§8.3).
 
 Canon: `IVideoPresenter`/`VideoSurfaceId` seam shape is owned by `pal-rhi.md`; this doc owns the present-tree
 placement + the DRM attach behavior above; the unified `IMediaPlayer`/`MediaPlayer`/`MediaRouter` + `MfMediaPlayer`

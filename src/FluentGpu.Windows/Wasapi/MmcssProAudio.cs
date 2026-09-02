@@ -21,9 +21,17 @@ public sealed partial class MmcssProAudio : IRtThreadCharacteristics
         nint handle = AvSetMmThreadCharacteristicsW("Pro Audio", ref taskIndex);
         if (handle == 0)
         {
-            Debug.WriteLine($"MmcssProAudio: AvSetMmThreadCharacteristics failed (win32 {Marshal.GetLastWin32Error()}).");
+            int win32Err = Marshal.GetLastWin32Error();
+            // Always-on trace (house rule: diagnostics are never env-gated). Debug.WriteLine below is
+            // [Conditional("DEBUG")]-erased from a shipping build, so on its own it makes a failed MMCSS registration
+            // INVISIBLE in a user's production log — the RT thread silently runs without glitch-sensitive scheduling
+            // protection and the only symptom is the scattered hiccup we're trying to diagnose. FormatSink is invoked
+            // once here at thread start (not on the RT path itself), so building the string is fine.
+            WasapiAudioDevice.FormatSink?.Invoke($"mmcss Pro Audio registration failed (win32 {win32Err})");
+            Debug.WriteLine($"MmcssProAudio: AvSetMmThreadCharacteristics failed (win32 {win32Err}).");
             return null;   // fall back to normal priority — never crash the RT thread over a scheduling hint
         }
+        WasapiAudioDevice.FormatSink?.Invoke($"mmcss Pro Audio registration ok taskIndex={taskIndex}");
         return new Token(handle);
     }
 

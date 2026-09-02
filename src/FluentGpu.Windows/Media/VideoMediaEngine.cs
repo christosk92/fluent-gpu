@@ -1,8 +1,11 @@
-﻿using System.Collections.Concurrent;
+using System;
+using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
 using FluentGpu.Foundation;
+using FluentGpu.Media;
 using TerraFX.Interop.DirectX;
 using TerraFX.Interop.Windows;
 using static TerraFX.Interop.DirectX.DirectX;
@@ -12,38 +15,63 @@ namespace FluentGpu.Media.Windows;
 
 /// <summary>
 /// The "real unprotected video" milestone (M3) of the DRM-free video compositing spine
-/// (<c>docs/plans/video-compositing-spine-design.md</c>). Drives <c>IMFMediaEngineEx</c> in <b>windowless
-/// swap-chain mode</b> to decode a CLEAR (non-DRM) progressive MP4 and hand its DirectComposition swap-chain HANDLE
-/// to the engine's <see cref="FluentGpu.Pal.IVideoPresenter"/> (via <c>CreateSurfaceFromHandle</c> → <c>SetContent</c>),
-/// so decoded frames composite as the sibling video visual z-BELOW the UI — the SAME path DRM will reuse later by
-/// attaching a CDM. No PlayReady / no protected content here.
+/// (<c>docs/plans/video-compositing-spine-design.md</c>), rewritten to the snapshot/command seam
+/// (<c>docs/plans/video-smooth-switching-implementation.md</c> §1). Drives <c>IMFMediaEngineEx</c> in <b>windowless
+/// swap-chain mode</b> to decode CLEAR (non-DRM) media and hand its DirectComposition swap-chain HANDLE to the engine's
+/// <see cref="FluentGpu.Pal.IVideoPresenter"/> (via <c>CreateSurfaceFromHandle</c> → <c>SetContent</c>), so decoded
+/// frames composite as the sibling video visual z-BELOW the UI — the SAME path DRM reuses by attaching a CDM.
 ///
 /// <para>Sequence (MS Learn <c>EnableWindowlessSwapchainMode</c> + the microsoft/media-foundation
 /// <c>MediaEngineDCompWin32Sample</c>): create a D3D11 video device + <c>IMFDXGIDeviceManager</c> → create
 /// <c>IMFMediaEngine</c> with an <c>IMFMediaEngineNotify</c> callback + the DXGI manager → QI <c>IMFMediaEngineEx</c> →
-/// <c>EnableWindowlessSwapchainMode(TRUE)</c> → <c>SetSource(url)</c> → <c>Play()</c>. On <c>LOADEDMETADATA</c>:
-/// <c>GetVideoSwapchainHandle(&amp;h)</c> → bind <c>h</c> to the DComp video visual → <c>UpdateVideoStream(NULL, &amp;dst,
-/// &amp;border)</c> (dst = swap-chain-local {0,0,w,h}). Thereafter the Media Engine auto-presents each decoded frame into
-/// its windowless swap chain; <see cref="OnVideoStreamTick"/> + <see cref="RepaintCurrentFrame"/> force a repaint.</para>
+/// <c>EnableWindowlessSwapchainMode(TRUE)</c>. <see cref="Start"/> does ONLY this bring-up — <c>SetSource</c>/<c>Play</c>
+/// happen later, driven by posted commands, which is what makes warm-engine reuse across a track switch possible: the
+/// SAME engine instance lives across many <see cref="PostSetSource"/> calls instead of being torn down and rebuilt per
+/// track (the E3 fix). On <c>LOADEDMETADATA</c>: <c>GetVideoSwapchainHandle(&amp;h)</c> is queried by the self-refresh
+/// below and cached in the published snapshot; a bound consumer places it via <c>UpdateVideoStream</c>. Thereafter the
+/// Media Engine auto-presents each decoded frame into its windowless swap chain.</para>
 ///
-/// <para>Threading (matches the sample's dedicated <c>COMThread</c>): the app UI thread is an OleInitialize'd STA — with a
-/// hardware <c>IMFDXGIDeviceManager</c> attached, the Media Engine's video-device setup on MF worker threads DEADLOCKS
-/// source resolution against that blocked STA (empirically it never leaves HAVE_NOTHING/WAITING). So EVERY engine COM call
-/// (device + DXGI manager + engine creation + <c>UpdateVideoStream</c>/tick + teardown) runs on a dedicated <b>MTA</b>
-/// thread here; public methods marshal onto it. MF fires <c>EventNotify</c> on its own workers → the callback only sets
-/// volatile flags. TerraFX (MF/D3D11) stays inside FluentGpu.Windows.</para>
+/// <para><b>Threading — snapshot out, commands in.</b> The app UI thread is an OleInitialize'd STA — with a hardware
+/// <c>IMFDXGIDeviceManager</c> attached, the Media Engine's video-device setup on MF worker threads DEADLOCKS source
+/// resolution against a blocked STA (empirically it never leaves HAVE_NOTHING/WAITING). So EVERY engine COM call
+/// (device + DXGI manager + engine creation + <c>SetSource</c>/transport/<c>UpdateVideoStream</c>/teardown) runs on a
+/// dedicated <b>MTA</b> thread here, and — this is the v2 change — NOTHING outside that thread ever waits for one of
+/// those calls to complete. The old <c>Invoke&lt;T&gt;</c> pattern marshaled a UI-thread closure onto this thread and
+/// blocked (bounded at <c>InvokeTimeoutMs</c>) for the answer; <see cref="MfMediaSession.PumpVideo"/> paid that cost up
+/// to 7× per pump while a video was opening — the UI-thread freeze this rewrite exists to fix. Now the engine thread is
+/// the SOLE writer of a POD <see cref="VideoEngineSnapshot"/>, published through a single-writer seqlock
+/// (<see cref="VideoSnapshotBuffer"/>) every time its loop turns; every reader (any thread, including the UI/pump
+/// thread) only ever reads that snapshot — alloc-free, wait-free, and never blocks. Callers post fire-and-forget,
+/// coalesced commands through <see cref="VideoEngineCommandQueue"/> (LAST-WINS per kind — a burst of seek-drag or
+/// transport calls collapses to the one the engine thread actually sees); <see cref="VideoEngineCommandQueue.Wake"/> (set
+/// once, below) is the SAME coalesced-wake mechanism a native MF event uses to ask for an out-of-cadence refresh
+/// (<see cref="OnEngineEvent"/>), so there is exactly one wake path regardless of whether a command or a native event
+/// caused it. MF fires <c>EventNotify</c> on its own worker threads → the callback only sets volatile bits and requests
+/// that one coalesced wake; it never raises <see cref="StateChanged"/> directly (a subscriber that acted on the STALE
+/// state the raise raced against is exactly the ordering hole this design removes — publish always happens-before the
+/// event that announces it). TerraFX (MF/D3D11) stays inside FluentGpu.Windows.</para>
 /// </summary>
 public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
 {
     private const uint MFSTARTUP_FULL_ = 0;
     private const int S_OK = 0;
-    // Cap on how long a UI-thread Invoke<T> will wait for the engine thread to answer before giving up and
-    // returning default(T) (see the Invoke<T> doc comment). Tens of ms is never worth freezing a frame for.
-    private const int InvokeTimeoutMs = 50;
+    // MF_MEDIA_ENGINE_ERR_SRC_NOT_SUPPORTED — what a failed SetSource is reported as.
+    private const uint MfMediaEngineErrSrcNotSupported = 4;
     // The MIME type MF names an HLS master playlist by (Apple's registered type).
     private const string HlsMimeType = "application/vnd.apple.mpegurl";
     // MFMEDIASOURCE_CHARACTERISTICS.MFMEDIASOURCE_IS_LIVE.
     private const uint MediaSourceIsLive = 0x1;
+    // Self-refresh cadence: while resolving/playing/live (time-sensitive telemetry — position, the live DVR window
+    // sliding with wall-clock time) vs. parked (paused/ready/ended/faulted — nothing time-sensitive to refresh; posted
+    // commands still wake the loop immediately regardless of this timeout via VideoEngineCommandQueue.Wake).
+    private const int ActiveRefreshMs = 250;
+    private const int ParkedRefreshMs = 1000;
+    // Position-only snapshot changes coalesce StateChanged to at most this often (~1 Hz) — MediaSeekBar already treats a
+    // native position report as a low-cadence anchor and interpolates on its own FrameClock ticker.
+    private static readonly long s_positionRaiseTicks = Stopwatch.Frequency;
+
+    // A cached no-op used purely to unblock _work.TryTake early (the wake signal); never allocated per-call.
+    private static readonly Action s_wakeSignal = static () => { };
 
     // ── Owned only on the engine (MTA) thread ──────────────────────────────────────────────────────────────────────
     private ID3D11Device* _d3d;
@@ -54,17 +82,25 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
     private GCHandle _selfHandle;
     private bool _mfStarted;
     // Probed ONCE on the engine thread right after the engine exists (a static capability of this machine's Media
-    // Foundation install — it cannot change per source), so callers never pay an Invoke round-trip to ask.
+    // Foundation install — it cannot change per source), so callers never pay a round-trip to ask.
     private volatile bool _canPlayHls;
+    // Set when bring-up (Start's CreateEngine) failed. Sticky for this instance's lifetime — MfMediaPlayer.LeaseEngine
+    // discards a Faulted engine and builds a fresh one; DrainCommands/RefreshAndPublishSnapshot keep running against
+    // null COM pointers (every call below is null-checked), so the loop stays alive and Dispose() still joins cleanly.
+    private volatile bool _faulted;
 
-    // ── Engine-thread marshaling ───────────────────────────────────────────────────────────────────────────────────
+    // ── Engine-thread scheduling ────────────────────────────────────────────────────────────────────────────────────
     private Thread? _thread;
+    // Purely the blocking/wake primitive for the loop's TryTake below (see class doc): nothing else marshals arbitrary
+    // closures onto this thread any more (that was Invoke<T>, deleted outright) — a post through Commands, or a native
+    // MF event, wakes the loop by adding the cached no-op, which unblocks TryTake before ParkedRefreshMs/ActiveRefreshMs
+    // elapse.
     private readonly BlockingCollection<Action> _work = new();
-    private readonly ManualResetEventSlim _initDone = new(false);
-    private int _initHr = unchecked((int)0x80004005);
+    private readonly VideoSnapshotBuffer _snapshot = new();
+    private readonly VideoEngineCommandQueue _commands = new();
 
-    // ── Event state (set on MF worker threads, read anywhere) ──────────────────────────────────────────────────────
-    private volatile int _lastEventRaw = -1;
+    // ── Per-source event state (set on MF worker threads via OnEngineEvent; read only on the engine thread inside
+    // RefreshAndPublishSnapshot) — reset by DrainCommands' SetSource handling at the start of each new source. ─────────
     private volatile bool _metadataLoaded;
     private volatile bool _canPlay;
     private volatile bool _playing;
@@ -73,67 +109,102 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
     private volatile bool _error;
     private volatile uint _errorCode;
     private volatile int _errorHr;
-    // Bumped on every PRESENTATION-affecting engine event (FORMATCHANGE / RESOURCELOST). See IVideoEngine.PresentationEpoch.
-    // Interlocked (not volatile): MF raises events from a pool of worker threads, so two format changes landing at
-    // once on a plain ++ would collapse into one and the session would never re-query.
+    // Latched true once MF reports this source as live (non-finite duration, or MFMEDIASOURCE_IS_LIVE) — NEVER cleared
+    // within a source (only DrainCommands' SetSource reset clears it, for the NEXT source).
+    private volatile bool _liveLatched;
+    // Bumped on every PRESENTATION-affecting event: a native FORMATCHANGE/RESOURCELOST, AND a SetSource (a new source
+    // invalidates whatever swap-chain handle the old one produced just as surely as a resource loss does). Interlocked
+    // (not volatile): MF raises events from a pool of worker threads, so two format changes landing at once on a plain
+    // ++ would collapse into one and a consumer would never re-query.
     private int _presentationEpoch;
-    private readonly ConcurrentQueue<string> _trace = new();
+    // The source-switch generation DrainCommands last committed (i.e. actually called SetSource for) — published
+    // verbatim as VideoEngineSnapshot.SourceEpoch so a session can tell "this snapshot describes MY source" from stale.
+    private int _committedSourceEpoch;
+    // Allocated on whatever thread calls PostSetSource (Interlocked, so two callers can never hand out the same epoch).
+    private int _nextSourceEpoch;
 
-    public bool MetadataLoaded => _metadataLoaded;
-    public bool CanPlay => _canPlay;
-    public bool Playing => _playing;
-    public bool Seeking => _seeking;
-    public bool Ended => _ended;
-    public bool HasError => _error;
-    public uint ErrorCode => _errorCode;
-    public int ErrorHr => _errorHr;
-    public string EventTrace => string.Join(",", _trace);
-    public string LastEventName => _lastEventRaw < 0 ? "<none>" : ((MF_MEDIA_ENGINE_EVENT)_lastEventRaw).ToString().Replace("MF_MEDIA_ENGINE_EVENT_", "");
-    /// <inheritdoc/>
-    public int PresentationEpoch => Volatile.Read(ref _presentationEpoch);
+    // ── Engine-thread-only caches (no cross-thread visibility needed — only RefreshAndPublishSnapshot touches these) ──
+    // Both "queried for epoch" trackers use the SAME presentation epoch, so a FORMATCHANGE/RESOURCELOST or a SetSource
+    // (which also bumps it — see DrainCommands) re-asks natural size AND the swap-chain handle together, exactly once,
+    // no matter how many refresh ticks pass before the next epoch change. -1 = never queried for any epoch.
+    private uint _naturalW, _naturalH;
+    private int _naturalQueriedForEpoch = -1;
+    private nuint _cachedHandle;
+    private int _handleQueriedForEpoch = -1;   // presentation epoch the cached handle was last queried at; -1 = never
+    private double _cachedDuration;
+    private double _lastRate = 1.0;            // tracked from the last applied Rate command (no COM read-back)
+    private VideoEngineSnapshot _lastPublished;
+    private long _lastRaiseTicks;
+
     /// <inheritdoc/>
     public event Action? StateChanged;
+    /// <inheritdoc/>
+    public VideoEngineSnapshot Snapshot => _snapshot.Read();
+    /// <inheritdoc/>
+    public VideoEngineCommandQueue Commands => _commands;
+    /// <inheritdoc/>
+    public bool CanPlayHls => _canPlayHls;
 
-    /// <summary>The current media-engine readyState (0 HAVE_NOTHING … 4 HAVE_ENOUGH_DATA).</summary>
-    public uint ReadyState => Invoke(() => _engine != null ? _engine->GetReadyState() : (ushort)0);
-
-    /// <summary>
-    /// Spin up the dedicated MTA engine thread, stand up the D3D11 video device + DXGI manager, create the Media Engine,
-    /// enable windowless swap-chain mode, set the source and start playback. Returns the last HRESULT (S_OK on success).
-    /// </summary>
-    public int Initialize(string url)
+    public VideoMediaEngine()
     {
-        _thread = new Thread(() => ThreadMain(url)) { IsBackground = true, Name = "VideoMediaEngine" };
-        _thread.SetApartmentState(ApartmentState.MTA);
-        _thread.Start();
-        _initDone.Wait();
-        return _initHr;
+        // Wired up here (not in ThreadMain) so a Post/PostSetSource that races the thread's own startup is never lost:
+        // the item just sits queued in _work until the loop starts consuming.
+        _commands.Wake = WakeEngine;
     }
 
-    private void ThreadMain(string url)
+    /// <inheritdoc/>
+    public void Start()
     {
-        _initHr = CreateEngine(url);
-        _initDone.Set();
-        if (_initHr < 0) { DisposeCom(); return; }
-        // Service marshaled engine calls until Dispose completes the queue, then tear down COM on THIS thread.
-        foreach (var w in _work.GetConsumingEnumerable())
+        _thread = new Thread(ThreadMain) { IsBackground = true, Name = "VideoMediaEngine" };
+        _thread.SetApartmentState(ApartmentState.MTA);
+        _thread.Start();
+    }
+
+    private void WakeEngine()
+    {
+        // TryAdd never blocks (unbounded collection) and is safe even before the thread exists or after CompleteAdding
+        // (a queue-completed race here just means Dispose already began; there is nothing left to wake for).
+        try { _work.TryAdd(s_wakeSignal); } catch (InvalidOperationException) { }
+    }
+
+    private void ThreadMain()
+    {
+        int hr = CreateEngine();
+        if (hr < 0)
         {
-            try { w(); } catch (Exception ex) { Console.Error.WriteLine($"VideoMediaEngine: work item threw: {ex.Message}"); }
+            _faulted = true;
+            // Release whatever partial bring-up succeeded (e.g. the D3D11 device / DXGI manager if engine creation
+            // itself failed) so a Faulted, never-leased-again engine does not leak GPU resources for the process
+            // lifetime; DisposeCom() is idempotent, so the loop's own eventual DisposeCom() call below is a no-op.
+            DisposeCom();
+        }
+
+        while (true)
+        {
+            _work.TryTake(out Action? w, RefreshIntervalMs());
+            _commands.BeginDrain();
+            try { DrainCommands(); }
+            catch (Exception ex) { Console.Error.WriteLine($"VideoMediaEngine: DrainCommands threw: {ex.Message}"); }
+            if (w is not null)
+            {
+                try { w(); } catch (Exception ex) { Console.Error.WriteLine($"VideoMediaEngine: work item threw: {ex.Message}"); }
+            }
+            try { RefreshAndPublishSnapshot(); }
+            catch (Exception ex) { Console.Error.WriteLine($"VideoMediaEngine: RefreshAndPublishSnapshot threw: {ex.Message}"); }
+            if (_work.IsCompleted) break;
         }
         DisposeCom();
     }
 
-    private int CreateEngine(string url)
-    {
-        // Diagnostic toggles (real runs proved the defaults): FG_VIDEO_NODXGI=1 → no DXGI manager/windowless (frame-server,
-        // no swap-chain handle); FG_VIDEO_NOVIDSUP=1 → drop D3D11_CREATE_DEVICE_VIDEO_SUPPORT.
-        bool noDxgi = Environment.GetEnvironmentVariable("FG_VIDEO_NODXGI") == "1";
+    private int RefreshIntervalMs() => !_metadataLoaded || _playing || _liveLatched ? ActiveRefreshMs : ParkedRefreshMs;
 
+    private int CreateEngine()
+    {
         int hr;
         if ((hr = MFStartup(MF_VERSION_(), MFSTARTUP_FULL_)) < 0) return Log("MFStartup", hr);
         _mfStarted = true;
 
-        if (!noDxgi && (hr = CreateD3D11AndManager()) < 0) return hr;
+        if ((hr = CreateD3D11AndManager()) < 0) return hr;
 
         _selfHandle = GCHandle.Alloc(this);
         _notify = MediaEngineNotifyCcw.Create(GCHandle.ToIntPtr(_selfHandle));
@@ -169,8 +240,7 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
         IMFMediaEngineEx* ex;
         if ((hr = _engine->QueryInterface(&iidEx, (void**)&ex)) < 0 || ex == null) return Log("QI IMFMediaEngineEx", hr);
         _engineEx = ex;
-        bool windowless = !noDxgi && Environment.GetEnvironmentVariable("FG_VIDEO_NOWINDOWLESS") != "1";
-        if (windowless && (hr = _engineEx->EnableWindowlessSwapchainMode(true)) < 0)
+        if ((hr = _engineEx->EnableWindowlessSwapchainMode(true)) < 0)
             return Log("EnableWindowlessSwapchainMode(TRUE)", hr);
 
         // Capability probe (once): can this machine's MF play an HLS master playlist at all? An MF install without the
@@ -183,19 +253,17 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
                           && answer != MF_MEDIA_ENGINE_CANPLAY.MF_MEDIA_ENGINE_CANPLAY_NOT_SUPPORTED;
         }
 
-        fixed (char* pUrl = url)
-            if ((hr = _engineEx->SetSource(pUrl)) < 0) return Log("SetSource", hr);
-        _engine->SetLoop(true);   // keep a live frame available (so a capture never lands on ENDED)
-        _engine->Play();
+        // NOTE: no SetSource/Play/SetLoop here any more — bring-up only stands up the device+engine. The first source
+        // (and every subsequent one) arrives as a posted SetSource command, which is what lets this ONE engine instance
+        // survive many track switches (warm-engine reuse — the E3 fix) instead of being torn down and rebuilt per track.
         return S_OK;
     }
 
     private int CreateD3D11AndManager()
     {
         ID3D11DeviceContext* ctx = null;
-        bool noVidSup = Environment.GetEnvironmentVariable("FG_VIDEO_NOVIDSUP") == "1";
-        uint flags = (uint)D3D11_CREATE_DEVICE_FLAG.D3D11_CREATE_DEVICE_BGRA_SUPPORT;
-        if (!noVidSup) flags |= (uint)D3D11_CREATE_DEVICE_FLAG.D3D11_CREATE_DEVICE_VIDEO_SUPPORT;
+        uint flags = (uint)D3D11_CREATE_DEVICE_FLAG.D3D11_CREATE_DEVICE_BGRA_SUPPORT
+                   | (uint)D3D11_CREATE_DEVICE_FLAG.D3D11_CREATE_DEVICE_VIDEO_SUPPORT;
 
         // Land decode on the SAME adapter the D3D12 renderer chose (GpuAdapterInfo, published at device init). On a
         // hybrid machine the D3D11 default adapter can be the OTHER GPU. No texture sharing (DComp surface handle
@@ -258,201 +326,278 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
         return S_OK;
     }
 
-    /// <summary>
-    /// Fetch the windowless swap-chain HANDLE the Media Engine created (valid after <c>LOADEDMETADATA</c>). Bind this to a
-    /// DComp visual via <c>IVideoPresenter.BindSurfaceHandle</c>. Returns 0 on failure. Runs on the engine thread.
-    /// </summary>
-    public nuint GetSwapchainHandle() => Invoke(() =>
-    {
-        if (_engineEx == null) return (nuint)0;
-        HANDLE h;
-        int hr = _engineEx->GetVideoSwapchainHandle(&h);
-        if (hr < 0) { Log("GetVideoSwapchainHandle", hr); return (nuint)0; }
-        return (nuint)(nint)h;
-    });
+    // ── Commands (engine thread only) ──────────────────────────────────────────────────────────────────────────────
 
-    /// <summary>Native decoded video size (px). Valid after <c>LOADEDMETADATA</c>.
-    /// <para>Tri-state (see <see cref="NativeSizeAnswer"/>) because <see cref="Invoke{T}"/> is BOUNDED: a busy engine
-    /// thread returns <c>default</c>, which here is <see cref="NativeSizeAnswer.NoAnswer"/> — "nothing learned, ask
-    /// again", NOT "this source is audio-only". Only an answer that actually came back from the engine thread reports
-    /// <see cref="NativeSizeAnswer.Ok"/>/<see cref="NativeSizeAnswer.NoVideo"/>.</para></summary>
-    public NativeSizeAnswer QueryNativeVideoSize(out uint cx, out uint cy)
+    /// <summary>Drain every pending command slot and apply it as the raw COM call it used to be issued from inside an
+    /// <c>Invoke</c> closure — same bodies, now run directly on this (already-the-right) thread instead of being
+    /// marshaled to it and waited on.
+    /// <para>Processes Detach BEFORE SetSource. <c>MediaPlayer.OpenAsync</c> awaits the OLD session's
+    /// <c>DisposeAsync</c> (which posts Detach via <c>MfMediaPlayer.ReturnEngine</c>) before opening the NEW one (which
+    /// posts SetSource), so the posts always land in that program order — but nothing stops BOTH from still being
+    /// pending together at the next drain if the engine thread hasn't woken in between. Draining SetSource first would
+    /// let a same-cycle Detach immediately null out the fresh source it just established; Detach first means it only
+    /// ever unloads whatever the PREVIOUS source left behind, exactly as intended.</para></summary>
+    private void DrainCommands()
     {
-        (NativeSizeAnswer answer, uint w, uint h) = Invoke(() =>
+        VideoEngineCommandQueue c = _commands;
+
+        if (c.TryTake(VideoCommandKind.Detach, out _, out _, out _, out _))
         {
-            // No engine yet (or already torn down): that is not an answer about the CONTENT, so keep it retryable.
-            if (_engineEx == null) return (NativeSizeAnswer.NoAnswer, 0u, 0u);
-            uint a, b;
-            if (_engineEx->GetNativeVideoSize(&a, &b) < 0) return (NativeSizeAnswer.NoVideo, 0u, 0u);
-            return (a > 0 && b > 0 ? NativeSizeAnswer.Ok : NativeSizeAnswer.NoVideo, a, b);
-        });
-        cx = w; cy = h; return answer;
+            // Release-time source unload (the engine returning warm to MfMediaPlayer's pool). Some MF builds fail a
+            // null SetSource; tolerated — there is no session left listening to a detached engine.
+            if (_engineEx != null)
+            {
+                int hr = _engineEx->SetSource(null);
+                if (hr < 0) Log("SetSource(null) [detach]", hr);
+            }
+            if (_engine != null) _engine->Pause();
+        }
+
+        if (c.TryTake(VideoCommandKind.SetSource, out _, out int epoch, out _, out object? urlObj))
+        {
+            string url = (string)urlObj!;
+            _committedSourceEpoch = epoch;
+            // Reset every per-source bit: a warm engine reused across a switch must not let the PREVIOUS source's
+            // event state (Ended, an old error, a stale live latch) leak into the new one.
+            _metadataLoaded = false; _canPlay = false; _playing = false; _seeking = false; _ended = false;
+            _error = false; _errorCode = 0; _errorHr = 0;
+            _liveLatched = false;
+            _naturalW = 0; _naturalH = 0; _naturalQueriedForEpoch = -1;
+            _cachedHandle = 0; _handleQueriedForEpoch = -1;
+            _cachedDuration = 0;
+            // A new source invalidates whatever swap-chain handle the old one produced, exactly like a native
+            // FORMATCHANGE/RESOURCELOST — bump the same epoch so a consumer re-queries it.
+            Interlocked.Increment(ref _presentationEpoch);
+
+            if (_engineEx != null)
+            {
+                int hr;
+                fixed (char* pUrl = url) hr = _engineEx->SetSource(pUrl);
+                if (hr < 0)
+                {
+                    Log("SetSource", hr);
+                    _error = true; _errorCode = MfMediaEngineErrSrcNotSupported; _errorHr = hr;
+                }
+            }
+            else
+            {
+                // No engine (Faulted bring-up) — there is nothing to set the source on; report it the same way an MF
+                // SetSource failure would, so a session sees Failed instead of hanging in Opening forever.
+                _error = true; _errorCode = MfMediaEngineErrSrcNotSupported; _errorHr = unchecked((int)0x80004005);
+            }
+        }
+
+        if (c.TryTake(VideoCommandKind.Transport, out double play, out _, out _, out _))
+        {
+            if (_engine != null) { if (play != 0) _engine->Play(); else _engine->Pause(); }
+        }
+
+        if (c.TryTake(VideoCommandKind.Seek, out double seconds, out int approxFlag, out _, out _))
+        {
+            double t = seconds < 0 ? 0 : seconds;
+            bool tookApprox = false;
+            if (approxFlag != 0 && _engineEx != null)
+            {
+                int hr = _engineEx->SetCurrentTimeEx(t, MF_MEDIA_ENGINE_SEEK_MODE.MF_MEDIA_ENGINE_SEEK_MODE_APPROXIMATE);
+                if (hr < 0) Log("SetCurrentTimeEx(APPROXIMATE)", hr);
+                else tookApprox = true;
+            }
+            if (!tookApprox && _engine != null) _engine->SetCurrentTime(t);
+            if (Diag.Enabled)
+                Diag.Event("media.seek", $"engine seconds={t:0.000} requestedApprox={approxFlag != 0} engineExAvailable={_engineEx != null} tookApprox={tookApprox}");
+        }
+
+        if (c.TryTake(VideoCommandKind.Rate, out double rate, out _, out _, out _))
+        {
+            _lastRate = rate;
+            if (_engine != null) _engine->SetPlaybackRate(rate);
+        }
+
+        if (c.TryTake(VideoCommandKind.Volume, out double volume, out _, out _, out _))
+        {
+            if (_engine != null) _engine->SetVolume(volume < 0 ? 0 : (volume > 1 ? 1 : volume));
+        }
+
+        if (c.TryTake(VideoCommandKind.Muted, out _, out int muted, out _, out _))
+        {
+            if (_engine != null) _engine->SetMuted(muted != 0);
+        }
+
+        if (c.TryTake(VideoCommandKind.Loop, out _, out int loop, out _, out _))
+        {
+            if (_engine != null) _engine->SetLoop(loop != 0);
+        }
+
+        if (c.TryTake(VideoCommandKind.StreamRect, out _, out int w, out int h, out _))
+        {
+            if (_engineEx != null)
+            {
+                RECT dst = new() { left = 0, top = 0, right = w, bottom = h };
+                MFARGB border = new() { rgbBlue = 0, rgbGreen = 0, rgbRed = 0, rgbAlpha = 255 };
+                int hr = _engineEx->UpdateVideoStream(null, &dst, &border);
+                if (hr < 0) Log("UpdateVideoStream(dst)", hr);
+            }
+        }
+
+        if (c.TryTake(VideoCommandKind.Repaint, out _, out _, out _, out _))
+        {
+            if (_engineEx != null) _engineEx->UpdateVideoStream(null, null, null);
+        }
     }
 
-    /// <summary>
-    /// Set the destination rectangle for the video within its windowless swap chain (swap-chain-local coords, {0,0,w,h})
-    /// with an opaque black border — <c>UpdateVideoStream(NULL, &amp;dst, &amp;border)</c>. Called once after binding.
-    /// </summary>
-    public int SetVideoStreamRect(int w, int h) => Invoke(() =>
-    {
-        if (_engineEx == null) return -1;
-        RECT dst = new() { left = 0, top = 0, right = w, bottom = h };
-        MFARGB border = new() { rgbBlue = 0, rgbGreen = 0, rgbRed = 0, rgbAlpha = 255 };
-        int hr = _engineEx->UpdateVideoStream(null, &dst, &border);
-        if (hr < 0) Log("UpdateVideoStream(dst)", hr);
-        return hr;
-    });
+    // ── Snapshot (engine thread only) ──────────────────────────────────────────────────────────────────────────────
 
-    /// <summary>Repaint the most-recently-decoded frame into the swap chain (all-NULL UpdateVideoStream).</summary>
-    public void RepaintCurrentFrame() => Invoke(() =>
+    /// <summary>Direct COM reads — this IS the engine thread, so nothing here waits for anything. Builds the POD
+    /// snapshot, publishes it unconditionally, and raises <see cref="StateChanged"/> only when something significant
+    /// changed since the last raise (position-only changes are coalesced to ~1 Hz — see the class doc comment).</summary>
+    private void RefreshAndPublishSnapshot()
     {
-        if (_engineEx != null) _engineEx->UpdateVideoStream(null, null, null);
-        return 0;
-    });
+        VideoEngineFlags flags = VideoEngineFlags.None;
+        if (_faulted) flags |= VideoEngineFlags.Faulted;
+        if (_metadataLoaded) flags |= VideoEngineFlags.MetadataLoaded;
+        if (_canPlay) flags |= VideoEngineFlags.CanPlay;
+        if (_playing) flags |= VideoEngineFlags.Playing;
+        if (_seeking) flags |= VideoEngineFlags.Seeking;
+        if (_ended) flags |= VideoEngineFlags.Ended;
+        if (_error) flags |= VideoEngineFlags.Error;
 
-    /// <summary>Poll for a freshly-decoded frame (windowless "video-stream-tick"); true (+ pts) when a new frame is ready.</summary>
-    public bool OnVideoStreamTick(out long pts)
-    {
-        (bool ok, long p) = Invoke(() =>
+        uint readyState = 0;
+        double duration = 0, position = 0;
+        double seekStart = 0, seekEnd = 0;
+
+        if (_engine != null)
         {
-            if (_engine == null) return (false, 0L);
-            long t;
-            int hr = _engine->OnVideoStreamTick(&t);
-            return (hr == S_OK, t);   // S_FALSE ⇒ no new frame
-        });
-        pts = p; return ok;
+            readyState = _engine->GetReadyState();
+
+            double d = _engine->GetDuration();
+            if (double.IsFinite(d))
+            {
+                if (d > 0 && _cachedDuration <= 0) _cachedDuration = d;   // never regress a known duration back to 0
+            }
+            else
+            {
+                _liveLatched = true;   // a non-finite duration IS live — latch it, never clear within this source
+            }
+            duration = _cachedDuration;
+
+            double t = _engine->GetCurrentTime();
+            position = double.IsFinite(t) && t > 0 ? t : 0.0;
+
+            if (_engineEx != null)
+            {
+                uint characteristics;
+                if (_engineEx->GetResourceCharacteristics(&characteristics) >= 0 && (characteristics & MediaSourceIsLive) != 0)
+                    _liveLatched = true;
+
+                if (_metadataLoaded)
+                {
+                    // Seekable range (the DVR window for a live source; its END is the live edge). Re-read every tick —
+                    // for a live source it slides forward continuously. The IMFMediaTimeRange this call creates never
+                    // leaves this thread and is released before returning.
+                    IMFMediaTimeRange* range = null;
+                    if (_engineEx->GetSeekable(&range) >= 0 && range != null)
+                    {
+                        try
+                        {
+                            uint count = range->GetLength();
+                            if (count > 0)
+                            {
+                                double s, e;
+                                if (range->GetStart(count - 1, &s) >= 0 && range->GetEnd(count - 1, &e) >= 0)
+                                {
+                                    if (!double.IsFinite(s) || s < 0) s = 0;
+                                    if (double.IsFinite(e) && e >= s) { seekStart = s; seekEnd = e; }
+                                }
+                            }
+                        }
+                        finally { range->Release(); }
+                    }
+
+                    int epoch = Volatile.Read(ref _presentationEpoch);
+
+                    // Native decoded video size — re-query once per presentation epoch (0×0 IS a valid answer:
+                    // audio-only). An ABR variant switch (FORMATCHANGE) changes the decoded frame size with no
+                    // transport transition to ride in on, so this is what keeps the composited fit correct after one.
+                    if (_naturalQueriedForEpoch != epoch)
+                    {
+                        uint cx, cy;
+                        if (_engineEx->GetNativeVideoSize(&cx, &cy) >= 0)
+                        {
+                            _naturalQueriedForEpoch = epoch;
+                            _naturalW = cx; _naturalH = cy;
+                        }
+                    }
+
+                    // Swap-chain handle — same one-query-per-epoch discipline (a steady-state playing video costs zero
+                    // extra marshaled reads here once both are answered for the current epoch).
+                    if (_handleQueriedForEpoch != epoch)
+                    {
+                        HANDLE h;
+                        _cachedHandle = _engineEx->GetVideoSwapchainHandle(&h) >= 0 ? (nuint)(nint)h : 0;
+                        _handleQueriedForEpoch = epoch;
+                    }
+                }
+            }
+        }
+
+        if (_naturalQueriedForEpoch == Volatile.Read(ref _presentationEpoch)) flags |= VideoEngineFlags.NaturalSizeKnown;
+        if (_liveLatched) flags |= VideoEngineFlags.LiveSource;
+
+        var snap = new VideoEngineSnapshot
+        {
+            SourceEpoch = _committedSourceEpoch,
+            PresentationEpoch = Volatile.Read(ref _presentationEpoch),
+            Flags = flags,
+            ReadyState = readyState,
+            NaturalW = _naturalW,
+            NaturalH = _naturalH,
+            DurationSeconds = duration,
+            PositionSeconds = position,
+            PositionTimestamp = Stopwatch.GetTimestamp(),
+            PlaybackRate = _lastRate,
+            SeekableStart = seekStart,
+            SeekableEnd = seekEnd,
+            SwapchainHandle = _cachedHandle,
+            ErrorCode = _errorCode,
+            ErrorHr = _errorHr,
+        };
+        _snapshot.Publish(snap);
+
+        bool significant =
+            snap.SourceEpoch != _lastPublished.SourceEpoch ||
+            snap.PresentationEpoch != _lastPublished.PresentationEpoch ||
+            snap.Flags != _lastPublished.Flags ||
+            snap.ReadyState != _lastPublished.ReadyState ||
+            snap.NaturalW != _lastPublished.NaturalW || snap.NaturalH != _lastPublished.NaturalH ||
+            snap.DurationSeconds != _lastPublished.DurationSeconds ||
+            snap.SeekableStart != _lastPublished.SeekableStart || snap.SeekableEnd != _lastPublished.SeekableEnd ||
+            snap.SwapchainHandle != _lastPublished.SwapchainHandle ||
+            snap.ErrorCode != _lastPublished.ErrorCode;
+
+        long now = snap.PositionTimestamp;
+        bool positionDue = now - _lastRaiseTicks >= s_positionRaiseTicks;
+        if (!significant && !positionDue) return;
+
+        _lastPublished = snap;
+        _lastRaiseTicks = now;
+        try { StateChanged?.Invoke(); } catch { }
     }
 
-    // ── Transport + clock (marshaled onto the engine thread; IMFMediaEngine is single-thread-affine) ───────────────
-
-    /// <summary>Media duration in seconds (0 until known; a non-finite duration — live/looping — surfaces as 0 so the
-    /// caller treats it as unknown rather than +Inf).</summary>
-    public double DurationSeconds => Invoke(() =>
+    /// <inheritdoc/>
+    public int PostSetSource(string url)
     {
-        if (_engine == null) return 0.0;
-        double d = _engine->GetDuration();
-        return double.IsFinite(d) && d > 0 ? d : 0.0;
-    });
+        int epoch = Interlocked.Increment(ref _nextSourceEpoch);
+        _commands.Post(VideoCommandKind.SetSource, i: epoch, obj: url);
+        return epoch;
+    }
 
-    /// <summary>
-    /// True when the source has NO end: an unbounded (live) stream. Two independent signals, either of which is
-    /// conclusive — MF reports live-ness through whichever one its source implements:
-    /// <list type="bullet">
-    /// <item><c>GetDuration()</c> is non-finite (+∞/NaN) — what an HLS live playlist (no <c>EXT-X-ENDLIST</c>)
-    ///   reports. Note <see cref="DurationSeconds"/> deliberately folds that to 0 ("unknown") for its own callers, so
-    ///   the raw value has to be re-read here.</item>
-    /// <item><c>IMFMediaEngineEx::GetResourceCharacteristics</c> carries <c>MFMEDIASOURCE_IS_LIVE</c>.</item>
-    /// </list>
-    /// <para>Like every read on this class the answer is BOUNDED: a busy engine thread returns <c>default</c> =
-    /// <see langword="false"/>, which means "not answered yet", NOT "this is VOD". A caller must LATCH a true and keep
-    /// asking until it gets one (<see cref="MfMediaSession"/> does exactly that) and must never latch a false.</para>
-    /// </summary>
-    public bool IsLiveSource => Invoke(() =>
-    {
-        if (_engine == null) return false;
-        double d = _engine->GetDuration();
-        if (!double.IsFinite(d)) return true;
-        if (_engineEx != null)
-        {
-            uint characteristics;
-            if (_engineEx->GetResourceCharacteristics(&characteristics) >= 0 && (characteristics & MediaSourceIsLive) != 0)
-                return true;
-        }
-        return false;
-    });
-
-    /// <summary>
-    /// The seekable window in seconds. For a live stream this is the DVR window that slides forward as the source
-    /// publishes segments, and its END is the live edge. Reads <c>IMFMediaEngineEx::GetSeekable</c> and takes the LAST
-    /// range (MF reports ranges in time order; a live source normally publishes exactly one). <c>(0, 0)</c> when there
-    /// is no range, no engine, or the bounded wait expired — i.e. "not answered", ask again.
-    /// <para>The <c>IMFMediaTimeRange</c> that call creates is released on the engine thread before returning: per the
-    /// threading model in the class doc comment, no ComPtr may cross off that thread or outlive the call.</para>
-    /// </summary>
-    public (double Start, double End) SeekableRange => Invoke(() =>
-    {
-        if (_engineEx == null) return (0.0, 0.0);
-        IMFMediaTimeRange* range = null;
-        if (_engineEx->GetSeekable(&range) < 0 || range == null) return (0.0, 0.0);
-        try
-        {
-            uint count = range->GetLength();
-            if (count == 0) return (0.0, 0.0);
-            double start, end;
-            if (range->GetStart(count - 1, &start) < 0 || range->GetEnd(count - 1, &end) < 0) return (0.0, 0.0);
-            if (!double.IsFinite(start) || start < 0) start = 0;
-            if (!double.IsFinite(end) || end < start) return (0.0, 0.0);
-            return (start, end);
-        }
-        finally { range->Release(); }
-    });
-
-    /// <summary>Whether this machine's Media Foundation can play an HLS master playlist at all
-    /// (<c>CanPlayType("application/vnd.apple.mpegurl")</c> != NOT_SUPPORTED), probed once at engine creation; false
-    /// until <see cref="Initialize"/> has created the engine. Lets a caller report the real reason a live URL will not
-    /// open instead of a generic source failure.</summary>
-    public bool CanPlayHls => _canPlayHls;
-
-    /// <summary>Current presentation time in seconds (the authoritative clock).</summary>
-    public double CurrentTimeSeconds => Invoke(() =>
-    {
-        if (_engine == null) return 0.0;
-        double t = _engine->GetCurrentTime();
-        return double.IsFinite(t) && t > 0 ? t : 0.0;
-    });
-
-    /// <summary>Resume playback.</summary>
-    public void Play() => Invoke(() => { if (_engine != null) _engine->Play(); return 0; });
-
-    /// <summary>Pause playback (the frame stays live for compositing).</summary>
-    public void Pause() => Invoke(() => { if (_engine != null) _engine->Pause(); return 0; });
-
-    /// <summary>
-    /// Seek: set the current presentation time. When <paramref name="approximate"/> is requested AND the
-    /// <c>IMFMediaEngineEx</c> QI succeeded, drives <c>SetCurrentTimeEx(t, MF_MEDIA_ENGINE_SEEK_MODE_APPROXIMATE)</c> —
-    /// MF's fast keyframe-snap seek that skips decoding forward to the exact requested PTS. This is what makes a
-    /// scrub cheap on a DRM/CENC network source; the plain <c>SetCurrentTime</c> path below is MF's "normal" seek and
-    /// always re-buffers from the preceding IDR to land exactly on the target, which is correct for a final commit but
-    /// far too costly per throttled drag step. Falls back to the exact path when <c>_engineEx</c> is unavailable
-    /// (QI failed) so a requested seek never silently no-ops.
-    /// </summary>
-    public void SeekTo(double seconds, bool approximate = false) => Invoke(() =>
-    {
-        double t = seconds < 0 ? 0 : seconds;
-        bool tookApproximate = false;
-        if (approximate && _engineEx != null)
-        {
-            int hr = _engineEx->SetCurrentTimeEx(t, MF_MEDIA_ENGINE_SEEK_MODE.MF_MEDIA_ENGINE_SEEK_MODE_APPROXIMATE);
-            if (hr < 0) Log("SetCurrentTimeEx(APPROXIMATE)", hr);
-            else tookApproximate = true;
-        }
-        if (!tookApproximate && _engine != null) _engine->SetCurrentTime(t);
-        if (Diag.Enabled)
-            Diag.Event("media.seek", $"engine seconds={t:0.000} requestedApprox={approximate} engineExAvailable={_engineEx != null} tookApprox={tookApproximate}");
-        return 0;
-    });
-
-    /// <summary>Set the playback rate (1.0 = normal).</summary>
-    public void SetPlaybackRate(double rate) => Invoke(() => { if (_engine != null) _engine->SetPlaybackRate(rate); return 0; });
-
-    /// <summary>Set the output volume (0..1).</summary>
-    public void SetVolume(double volume) => Invoke(() => { if (_engine != null) _engine->SetVolume(volume < 0 ? 0 : (volume > 1 ? 1 : volume)); return 0; });
-
-    /// <summary>Mute/unmute.</summary>
-    public void SetMuted(bool muted) => Invoke(() => { if (_engine != null) _engine->SetMuted(muted); return 0; });
-
-    /// <summary>Toggle native looping.</summary>
-    public void SetLoop(bool loop) => Invoke(() => { if (_engine != null) _engine->SetLoop(loop); return 0; });
+    /// <inheritdoc/>
+    public void PostDetach() => _commands.Post(VideoCommandKind.Detach);
 
     // ── Notify sink (MF worker threads) ────────────────────────────────────────────────────────────────────────────
     internal void OnEngineEvent(uint ev, nuint p1, uint p2)
     {
-        _lastEventRaw = (int)ev;
-        _trace.Enqueue(((MF_MEDIA_ENGINE_EVENT)ev).ToString().Replace("MF_MEDIA_ENGINE_EVENT_", ""));
-        // Windowless Media Foundation owns presentation of decoded frames through its DComp swap chain.  Do not
-        // turn its high-frequency progress/frame notifications into UI-thread RepaintCurrentFrame calls.  The
-        // session only needs a pump when the transport or video surface state itself changes.
-        bool affectsPresentation = true;
+        bool relevant = true;
         switch ((MF_MEDIA_ENGINE_EVENT)ev)
         {
             case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_LOADEDMETADATA: _metadataLoaded = true; break;
@@ -465,87 +610,21 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
             case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_ENDED: _ended = true; _playing = false; break;
             case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_ERROR: _error = true; _errorCode = (uint)p1; _errorHr = (int)p2; break;
             // The PRESENTATION itself changed underneath the engine, with no transport transition to ride in on:
-            // FORMATCHANGE is an ABR variant switch (a NEW decoded frame size — the natural size read at first
-            // metadata is now stale, and with it the composited content size and every aspect fit), RESOURCELOST is
-            // the swap chain going away and being rebuilt (the bound handle and the stream rect must be re-asserted).
-            // Both bump a monotonic epoch the session compares against, and both wake a pump (this is exactly the
-            // "surface state changed" case the repaint flag exists for).
+            // FORMATCHANGE is an ABR variant switch (a NEW decoded frame size), RESOURCELOST is the swap chain going
+            // away and being rebuilt. Both bump the monotonic epoch RefreshAndPublishSnapshot compares against to
+            // decide whether to re-query the natural size / swap-chain handle.
             case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_FORMATCHANGE:
             case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_RESOURCELOST:
                 Interlocked.Increment(ref _presentationEpoch);
                 break;
-            default: affectsPresentation = false; break;
+            default: relevant = false; break;
         }
-        if (affectsPresentation)
-        {
-            // EventNotify runs on an MF worker. Consumers only post/coalesce a UI-thread pump; never let a
-            // subscriber exception cross the COM boundary or interfere with the native engine callback.
-            try { StateChanged?.Invoke(); } catch { }
-        }
-    }
-
-    // Marshal a func onto the engine thread and wait, BOUNDED, for the answer (the engine's COM is
-    // single-thread-affine to that MTA thread). The UI thread reaches this 1-5x per frame while a video is
-    // opening, queued behind Media Foundation's internal engine lock (held for the whole of async source
-    // resolution) — an unbounded wait here is the documented STA/MF deadlock in the class doc comment above,
-    // and even short of that, a multi-second UI freeze. So the wait is capped at InvokeTimeoutMs: on expiry we
-    // return default(T), and EVERY caller (VideoMediaEngine's own properties and MfMediaSession, which polls
-    // them every pump) must treat a returned default as "no answer yet, ask again next pump" rather than as a
-    // real value. The Func<T> signature is unchanged; only the wait became bounded.
-    //
-    // Event lifetime (the subtlety a naive timeout introduces): the queued closure below still runs later on
-    // the engine thread and writes into the captured slot's Result field, then calls Done.Set() — regardless of
-    // whether the caller gave up waiting. The original code's `using var done = new ManualResetEventSlim(false)`
-    // would DISPOSE that event on timeout while the engine thread could still call Set() on it: a latent
-    // ObjectDisposedException/crash. Fix: the queued closure closes over a heap-allocated InvokeSlot<T> whose
-    // lifetime is NOT tied to this stack frame — it lives exactly as long as something (the closure, or the
-    // pool) still refs it, and is never disposed early. When the wait completes normally, the slot has already
-    // been signaled and cannot be touched again by the engine thread, so it is safe to reset and return to a
-    // per-T pool for the next call (this is what keeps the invoke path allocation-free after warmup — no more
-    // per-call ManualResetEventSlim). When the wait TIMES OUT, the slot is simply abandoned (not pooled, not
-    // disposed) — the late-arriving Set()/write lands on an object nobody but the orphaned closure references,
-    // and it becomes eligible for GC once that closure returns. A slot is only ever reused after we have
-    // observed its own Done.Wait() return true, which is the only point at which we know the engine thread is
-    // finished with it.
-    private T Invoke<T>(Func<T> f)
-    {
-        // Closing the apartment-violation landmine: _thread is only null before Initialize has published it
-        // (unreachable in practice — the session isn't published until after _thread is set), but running the
-        // lambda here would touch raw IMFMediaEngine* COM pointers on the CALLING thread, potentially the UI
-        // STA. Never run it off the engine thread; report "unknown" instead.
-        if (_thread == null) return default!;
-        if (Thread.CurrentThread == _thread) return f();   // re-entrant call from the engine thread itself: fine
-        if (_work.IsAddingCompleted) return default!;
-
-        InvokeSlot<T> slot = InvokeSlotPool<T>.Bag.TryTake(out var pooled) ? pooled : new InvokeSlot<T>();
-        slot.Done.Reset();
-        try { _work.Add(() => { try { slot.Result = f(); } finally { slot.Done.Set(); } }); }
-        catch (InvalidOperationException) { return default!; }   // queue completed during teardown
-
-        if (slot.Done.Wait(InvokeTimeoutMs))
-        {
-            T result = slot.Result;
-            slot.Result = default!;
-            InvokeSlotPool<T>.Bag.Add(slot);   // safe: we just observed the one and only Set() for this slot
-            return result;
-        }
-        // Timed out — abandon the slot (see lifetime note above); do NOT pool or dispose it.
-        return default!;
-    }
-
-    // A slot's ManualResetEventSlim + result box, reused across calls once we have observed it signal. Pooled
-    // per T (a handful of concrete T's are used: uint, nuint, double, bool, and small value tuples), shared
-    // across all VideoMediaEngine instances/threads via a lock-free bag — cheap and simple, and this class only
-    // ever has one live instance in practice.
-    private sealed class InvokeSlot<T>
-    {
-        public readonly ManualResetEventSlim Done = new(false);
-        public T Result = default!;
-    }
-
-    private static class InvokeSlotPool<T>
-    {
-        public static readonly ConcurrentBag<InvokeSlot<T>> Bag = new();
+        // EventNotify runs on an MF worker. Set the bits, then ask for exactly one coalesced out-of-cadence refresh —
+        // the SAME wake path a posted command uses (VideoEngineCommandQueue's own interlocked coalescing), so a burst
+        // of native events between two engine-thread turns produces at most one extra wake, not one per event. Never
+        // raise StateChanged here: only RefreshAndPublishSnapshot does, AFTER the corresponding Publish, so a consumer
+        // woken by the event is guaranteed to read at least the state that caused it.
+        if (relevant) WakeEngine();
     }
 
     private static uint MF_VERSION_() => (uint)MF.MF_VERSION;
@@ -556,7 +635,9 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
         return hr;
     }
 
-    // Runs on the engine thread (via ThreadMain) — never touch the COM ptrs off it.
+    // Runs on the engine thread — never touch the COM ptrs off it. Idempotent: every field is nulled/cleared after
+    // release, so a second call (Faulted bring-up releases partial state, then the loop's own exit calls this again) is
+    // a safe no-op.
     private void DisposeCom()
     {
         if (_engine != null) _engine->Shutdown();
@@ -569,11 +650,11 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
         if (_mfStarted) { MFShutdown(); _mfStarted = false; }
     }
 
+    /// <inheritdoc/>
     public void Dispose()
     {
-        _work.CompleteAdding();     // ThreadMain drains, then DisposeCom() on the engine thread
+        _work.CompleteAdding();     // the loop drains, then DisposeCom() on the engine thread, then exits
         _thread?.Join(2000);
-        _initDone.Dispose();
     }
 }
 

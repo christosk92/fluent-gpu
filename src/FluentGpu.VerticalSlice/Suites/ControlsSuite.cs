@@ -8863,11 +8863,13 @@ static partial class ControlsSuite
         }
 
         // gate.media.el.video-knockout: ONE SOURCE OF TRUTH for the video rect. A PLAYING video player paints an OPAQUE
-        // LetterboxColor stage fill across the WHOLE video area FIRST, then punches EXACTLY ONE hole at the FITTED video
-        // rect — and PumpNow places the DComp visual from THAT node's rect, so the erased region and the composited
-        // video can never disagree. (The old shape — a full-area hole plus letterbox bars painted after it, presenter
-        // placed at an independently recomputed fit — left sub-pixel slivers at fractional device scale where the hole
-        // was punched but neither the video visual nor a bar covered the pixel: erased-to-zero ⇒ grey Mica showed.)
+        // LetterboxColor stage fill ("media-stage") across the WHOLE video area FIRST, then punches EXACTLY ONE hole
+        // ("media-hole") at the FITTED video rect — and PumpNow places the DComp visual from THAT node's rect, so the
+        // erased region and the composited video can never disagree. (The old shape — a full-area hole plus letterbox
+        // bars painted after it, presenter placed at an independently recomputed fit — left sub-pixel slivers at
+        // fractional device scale where the hole was punched but neither the video visual nor a bar covered the pixel:
+        // erased-to-zero ⇒ grey Mica showed.) The hole node is now ALWAYS mounted (E4: VideoHole toggles as a PROP,
+        // never a presence change — see Render's video-stage comment); at steady Playing it is simply active.
         // Asserted: one hole, the live registry slot token, full erase strength, the hole's recorded device rect ==
         // the expected fit for this area+natural size, the opaque fill FIRST in painter order (first child of the stage)
         // covering the WHOLE area, and the NO-PIXEL-GAP invariant hole ⊆ fill (every erased pixel lands on opaque
@@ -8934,9 +8936,13 @@ static partial class ControlsSuite
                 + $"insideFill={holeInsideFill} notTruncated={notTruncated} clipBalance={device.ClipBalance}");
         }
 
-        // gate.media.el.video-knockout-poster: the hole is gated EXACTLY on the existing videoReady branch. Audio-only
-        // playback (no video stream) and a video source still held pre-ready (Opening, poster/spinner up) both record
-        // ZERO holes — punching one early would knock a transparent rectangle through to the desktop/Mica.
+        // gate.media.el.video-knockout-poster: the "media-hole" node is ALWAYS mounted (E4), but its VideoHole PROP
+        // (holeActive) stays false — recording ZERO VisualKind.Video holes — for audio-only playback (no video stream,
+        // never latched) and for a video source still held pre-ready on its VERY FIRST open (Opening, poster/spinner
+        // up, hadVideo never yet latched true): punching an erase early would knock a transparent rectangle through to
+        // the desktop/Mica. (A SWITCH after a frame was already ready is the opposite case — see
+        // gate.media.el.no-remount-on-source-switch / gate.media.el.poster-overlay below, where the hole LATCHES active
+        // through Opening instead.)
         {
             using var app = new HeadlessPlatformApp();
             var window = new HeadlessWindow(new WindowDesc("g5g-mpe-hole-audio", new Size2(520, 340), 1f));
@@ -8976,6 +8982,115 @@ static partial class ControlsSuite
                     && audioFrameRecorded && openingFrameRecorded,
                 $"audioOnlyHoles={audioHoles} (playing={audioPlaying}) openingHoles={openingHoles} (state={pending.State.Peek()}) "
                 + $"framesRecorded={audioFrameRecorded}/{openingFrameRecorded}");
+        }
+
+        // gate.media.el.no-remount-on-source-switch — E4: the video stage's "media-hole"/"media-poster" nodes are a
+        // FIXED keyed shape (Render's video-stage comment) that survives a source switch (Playing -> Opening ->
+        // Playing on the SAME element): VideoHole/opacity are PROPS that toggle on the SAME nodes rather than an
+        // unmount/remount. Driven through the harshest real shape — the switch transiently zeroes NaturalSize (the gap
+        // before the new source's metadata answers, mirroring MfMediaSession.SetSource resetting per-source bits,
+        // plan §1.3) before the state flips to Opening — and the node identity still survives that excursion.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("g5g-mpe-switch", new Size2(520, 340), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var player = new HeadlessScriptedPlayer { OpenTicks = 0, BufferTicks = 0, DefaultDuration = TimeSpan.FromSeconds(120) };
+            player.OpenAsync(MediaSource.FromSamples(new ScriptedSampleSource(
+                TimeSpan.FromSeconds(120), TimeSpan.FromMilliseconds(20), new SizeI(100, 100)))).GetAwaiter().GetResult();
+            player.PlayAsync().GetAwaiter().GetResult();
+            var root = new FluentGpu.Controls.Media.MediaPlayerElement { Player = player };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            player.Pump(TimeSpan.FromMilliseconds(1)); host.RunFrame();     // Opening → Buffering
+            player.Pump(TimeSpan.FromMilliseconds(1)); host.RunFrame();     // Buffering → Playing
+            for (int i = 0; i < 5; i++) host.Paint(0);                      // settle layout + the initial crossfade-out
+
+            var holeNode0 = FindVisual(host.Scene, host.Scene.Root, VisualKind.Video);
+            var posterNode0 = holeNode0.IsNull ? NodeHandle.Null : host.Scene.NextSibling(holeNode0);
+            bool foundInitially = !holeNode0.IsNull && host.Scene.IsLive(holeNode0)
+                && !posterNode0.IsNull && host.Scene.IsLive(posterNode0);
+
+            // The switch: NaturalSize resets to zero (the transient metadata gap) + state flips to Opening — the exact
+            // shape E4 remounted the subtree on.
+            player.Core.SetNaturalSize(SizeI.Zero);
+            player.OpenAsync(MediaSource.FromSamples(new ScriptedSampleSource(
+                TimeSpan.FromSeconds(90), TimeSpan.FromMilliseconds(20), new SizeI(200, 100)))).GetAwaiter().GetResult();
+            host.RunFrame();
+            bool liveDuringOpening = host.Scene.IsLive(holeNode0) && host.Scene.IsLive(posterNode0);
+            bool stillOpening = player.State.Peek() == PlaybackState.Opening;
+
+            player.Pump(TimeSpan.FromMilliseconds(1)); host.RunFrame();     // Opening → Buffering (republishes NaturalSize)
+            player.Pump(TimeSpan.FromMilliseconds(1)); host.RunFrame();     // Buffering → Playing
+            for (int i = 0; i < 5; i++) host.Paint(0);                      // settle layout + the crossfade-out again
+
+            var holeAtEnd = FindVisual(host.Scene, host.Scene.Root, VisualKind.Video);
+            var posterAtEnd = holeAtEnd.IsNull ? NodeHandle.Null : host.Scene.NextSibling(holeAtEnd);
+            bool identical = holeAtEnd == holeNode0 && posterAtEnd == posterNode0
+                && host.Scene.IsLive(holeAtEnd) && host.Scene.IsLive(posterAtEnd);
+            bool playingAgain = player.State.Peek() == PlaybackState.Playing;
+
+            Check("gate.media.el.no-remount-on-source-switch",
+                foundInitially && liveDuringOpening && stillOpening && identical && playingAgain,
+                $"foundInitially={foundInitially} liveDuringOpening={liveDuringOpening} stillOpening={stillOpening} "
+                + $"identical={identical} playingAgain={playingAgain}");
+        }
+
+        // gate.media.el.poster-overlay: the poster's PRESENCE never changes (ALWAYS mounted) — only its OPACITY does —
+        // and the hole's VideoHole prop stays TRUE across a switch once a frame was ever ready (the hadVideo latch, the
+        // lingering-NaturalSize leg of a switch — see gate.media.el.no-remount-on-source-switch above for the harsher
+        // zeroed-NaturalSize leg), so the poster crossfade is the only visible thing that happens across
+        // Playing -> Opening -> Playing.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("g5g-mpe-poster", new Size2(520, 340), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var player = new HeadlessScriptedPlayer { OpenTicks = 0, BufferTicks = 0, DefaultDuration = TimeSpan.FromSeconds(120) };
+            player.OpenAsync(MediaSource.FromSamples(new ScriptedSampleSource(
+                TimeSpan.FromSeconds(120), TimeSpan.FromMilliseconds(20), new SizeI(100, 100)))).GetAwaiter().GetResult();
+            player.PlayAsync().GetAwaiter().GetResult();
+            var root = new FluentGpu.Controls.Media.MediaPlayerElement { Player = player };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            player.Pump(TimeSpan.FromMilliseconds(1)); host.RunFrame();
+            player.Pump(TimeSpan.FromMilliseconds(1)); host.RunFrame();
+            for (int i = 0; i < 12; i++) host.Paint(0);                     // settle the crossfade-out (150ms)
+
+            var hole = FindVisual(host.Scene, host.Scene.Root, VisualKind.Video);
+            var poster = hole.IsNull ? NodeHandle.Null : host.Scene.NextSibling(hole);
+            bool posterHiddenWhilePlaying = !poster.IsNull && Near(host.Scene.Paint(poster).Opacity, 0f, 0.02f);
+            bool holeActiveWhilePlaying = !hole.IsNull && host.Scene.IsLive(hole) && host.Scene.Paint(hole).VisualKind == VisualKind.Video;
+
+            // The switch — state -> Opening. NaturalSize is left as-is (the lingering value a live MF hand-off carries
+            // until the new source's metadata republishes it): the hole must NOT drop out underneath the poster.
+            player.OpenAsync(MediaSource.FromSamples(new ScriptedSampleSource(
+                TimeSpan.FromSeconds(80), TimeSpan.FromMilliseconds(20), new SizeI(200, 120)))).GetAwaiter().GetResult();
+            host.RunFrame();
+            for (int i = 0; i < 12; i++) host.Paint(0);                     // settle the crossfade-in (150ms)
+
+            bool posterShownWhileOpening = !poster.IsNull && host.Scene.IsLive(poster)
+                && Near(host.Scene.Paint(poster).Opacity, 1f, 0.02f);
+            bool holeStillActiveWhileOpening = !hole.IsNull && host.Scene.IsLive(hole)
+                && host.Scene.Paint(hole).VisualKind == VisualKind.Video;
+            bool stillOpening = player.State.Peek() == PlaybackState.Opening;
+
+            player.Pump(TimeSpan.FromMilliseconds(1)); host.RunFrame();     // Opening → Buffering
+            player.Pump(TimeSpan.FromMilliseconds(1)); host.RunFrame();     // Buffering → Playing
+            for (int i = 0; i < 12; i++) host.Paint(0);                     // settle the crossfade-out again
+
+            bool posterHiddenAgain = !poster.IsNull && Near(host.Scene.Paint(poster).Opacity, 0f, 0.02f);
+            bool holeStillActiveAtEnd = !hole.IsNull && host.Scene.IsLive(hole) && host.Scene.Paint(hole).VisualKind == VisualKind.Video;
+            bool playingAgain = player.State.Peek() == PlaybackState.Playing;
+
+            Check("gate.media.el.poster-overlay",
+                posterHiddenWhilePlaying && holeActiveWhilePlaying && posterShownWhileOpening && holeStillActiveWhileOpening
+                    && stillOpening && posterHiddenAgain && holeStillActiveAtEnd && playingAgain,
+                $"hiddenPlaying={posterHiddenWhilePlaying} holeActive={holeActiveWhilePlaying} shownOpening={posterShownWhileOpening} "
+                + $"holeOpening={holeStillActiveWhileOpening} stillOpening={stillOpening} hiddenAgain={posterHiddenAgain} "
+                + $"holeEnd={holeStillActiveAtEnd} playingAgain={playingAgain}");
         }
 
         // gate.media.el.docked-corners — E2: an OPERABLE (IsDecorative = false) player honors CornerRadius for its UI

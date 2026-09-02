@@ -234,6 +234,17 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // the exact inverse of an erase. Its own class keeps the opaque segmentation of real rects byte-identical too.
     private enum PrimKind : byte { Rect, Shadow, Gradient, Image, Arc, Polyline, VideoHole, Path }
     private readonly List<(PrimKind Kind, int Count)> _runs = new();
+    // Painter's-order guard for the glyph batch. RecordAll replays every glyph of a segment AFTER the segment's
+    // non-glyph primitives ("text on top within a z-context"), which is only correct while nothing opaque is recorded
+    // OVER text inside one segment. A modal plate over a page of text, a card fill over a list row's label after a
+    // partial-replay rect merged their segments — those painted the UNDERLYING text over the covering fill (the
+    // "We're glad you're here. A" fragments over the setup dialog). So: the DIP AABB of every glyph run appended
+    // since the last flush is tracked here, and a later non-glyph primitive that overlaps it flushes the segment
+    // first (CoverPendingText) — the batch is cut exactly where painter's order needs it and nowhere else.
+    private float _pendTextL, _pendTextT, _pendTextR, _pendTextB;
+    private bool _pendTextAny;
+    private float _streamLw, _streamLh;   // the logical viewport of the stream being decoded (FlushSegment needs it)
+    private int _frameTextCoverFlushes;   // segments cut by CoverPendingText this frame
     private int _frameImageCount;
     private int _frameImageSkipped;
     private readonly List<GlyphInstance> _glyphInsts = new();
@@ -353,6 +364,14 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     /// coherent scene and the next partial must not build on it). Public so the <c>--repaint-identity</c> harness can
     /// turn "the banks are big enough by argument" into "by measurement" while it drives multi-rect replays.</summary>
     public int LastDroppedInstanceCount => DroppedInstanceCount();
+    /// <summary>Glyph quads the last submit decoded (the per-frame glyph instance bank holds <c>GlyphRenderer.MaxGlyphs</c>;
+    /// past that <see cref="LastDroppedInstanceCount"/> climbs and the TAIL of the stream's text goes unpainted).</summary>
+    public int LastGlyphInstanceCount => _frameGlyphInstanceCount;
+    /// <summary>Non-empty <c>FlushSegment</c> calls on the last submit — the batches the painter-order replay was cut into.</summary>
+    public int LastSegmentCount => _frameSegments;
+    /// <summary>Segments the last submit cut because a non-glyph primitive was recorded over text pending in the same
+    /// segment (the painter's-order guard) — 0 on a stream where every fill precedes the text it sits under.</summary>
+    public int LastTextCoverFlushCount => _frameTextCoverFlushes;
 
     // Forget everything we believe about the canvas. Any path that destroys/recreates the canvas, the swapchain, or the
     // device must call this: a stale canvasValid would blit garbage, and a stale publish sequence would hide a real gap.
@@ -1428,7 +1447,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _frameImageSkipped = 0;
         _framePipeBinds = 0; _framePipeBindsSkipped = 0;
         _frameScissorSets = 0; _frameScissorSkipped = 0;
-        _frameSegments = 0; _frameRuns = 0; _frameClipOps = 0; _frameLayerOps = 0;
+        _frameSegments = 0; _frameRuns = 0; _frameClipOps = 0; _frameLayerOps = 0; _frameTextCoverFlushes = 0;
         _frameStencilClips = 0; _frameStencilFallback = 0;
         _sceneCurCat = CatNone; _sceneMarkCount = 0; _sceneCatCount[_frameIndex] = 0;   // reset the per-category scene-split timeline (FG_GPU_TIMING)
         _blurCacheHit = 0; _blurCacheMiss = 0; _blurHoldHit = 0; _blurHoldFallback = 0; _blurHoldStale = 0;
@@ -1605,6 +1624,18 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             // canvas represents nothing, so drop the fingerprint with it.
             _canvasDrawListHash = _canvasValid ? ctx.DrawListHash : 0;
         }
+        if (_glyphs!.DroppedInstances > 0)
+        {
+            // The per-frame glyph instance bank overflowed: every glyph recorded after it filled — the TAIL of the
+            // stream, i.e. whatever sits below/after the text that overflowed it (a dialog's checkbox + command-row
+            // labels behind a 600-line log preview) — was not painted. GlyphRenderer grows the bank at its next
+            // BeginFrame; this frame's pixels are not a faithful rendering, so never build a partial on them and tell
+            // the host it owes one more full, un-skippable frame (the byte-identical-stream elision is what used to
+            // make the blank tail PERMANENT).
+            if (isPrimary) { _canvasValid = false; _canvasDrawListHash = 0; }
+            _textRepaintPending = true;
+            Diag.Count("d3d12", "glyphBankOverflowRepaint");
+        }
         if (_glyphs!.AtlasResetPending)
         {
             // The glyph atlas overflowed while THIS frame recorded: some glyphs were emitted BLANK, and the next
@@ -1653,7 +1684,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         Diag.Set("d3d12", "blurHoldHit", _blurHoldHit);
         Diag.Set("d3d12", "blurHoldFallback", _blurHoldFallback);
         Diag.Set("d3d12", "blurHoldStale", _blurHoldStale);
-        Diag.Set("d3d12", "segments", _frameSegments);                        // non-empty FlushSegment calls (clips flush only when pending draws need the old scissor)
+        Diag.Set("d3d12", "segments", _frameSegments);
+        Diag.Set("d3d12", "textCoverFlushes", _frameTextCoverFlushes);   // segments cut so a later fill does not paint under earlier text                        // non-empty FlushSegment calls (clips flush only when pending draws need the old scissor)
         Diag.Set("d3d12", "runs", _frameRuns);                                // painter-order runs replayed across all segments
         Diag.Set("d3d12", "clipOps", _frameClipOps);                          // Push/PopClip ops decoded this frame
         // Tier-3 stencil path clips (gpu-renderer.md §6). ALWAYS ON — `stencilFallback` is the honesty counter: draws
@@ -1760,7 +1792,30 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // Residency evicted the image → free its GPU texture (deferred behind the frame fence in the store).
     public void EvictImage(int imageId) => _imageTextures?.Free(imageId);
 
-    private void ClearInsts() { _rectInsts.Clear(); _glyphInsts.Clear(); _gradGlyphInsts.Clear(); _shadowInsts.Clear(); _arcInsts.Clear(); _polylineInsts.Clear(); _gradInsts.Clear(); _imageDraws.Clear(); _pathDraws.Clear(); _runs.Clear(); }
+    private void ClearInsts() { _rectInsts.Clear(); _glyphInsts.Clear(); _gradGlyphInsts.Clear(); _shadowInsts.Clear(); _arcInsts.Clear(); _polylineInsts.Clear(); _gradInsts.Clear(); _imageDraws.Clear(); _pathDraws.Clear(); _runs.Clear(); _pendTextAny = false; }
+
+    // Union a just-appended glyph run's transformed DIP box (plus its cull halo) into the pending-text box.
+    private void NotePendingText(float x, float y, float w, float h, float m11, float m12, float m21, float m22, float dx, float dy, float halo)
+    {
+        RepaintCull.Aabb(x, y, w, h, m11, m12, m21, m22, dx, dy, out float l, out float t, out float r, out float b);
+        l -= halo; t -= halo; r += halo; b += halo;
+        if (!_pendTextAny) { _pendTextL = l; _pendTextT = t; _pendTextR = r; _pendTextB = b; _pendTextAny = true; return; }
+        if (l < _pendTextL) _pendTextL = l;
+        if (t < _pendTextT) _pendTextT = t;
+        if (r > _pendTextR) _pendTextR = r;
+        if (b > _pendTextB) _pendTextB = b;
+    }
+
+    // A non-glyph primitive is about to be appended: if it overlaps text already pending in this segment it would be
+    // painted UNDER that text by RecordAll's glyph-last order — flush the segment first so stream order is honoured.
+    private void CoverPendingText(float x, float y, float w, float h, float m11, float m12, float m21, float m22, float dx, float dy, float halo)
+    {
+        if (!_pendTextAny) return;
+        RepaintCull.Aabb(x, y, w, h, m11, m12, m21, m22, dx, dy, out float l, out float t, out float r, out float b);
+        if (r + halo <= _pendTextL || l - halo >= _pendTextR || b + halo <= _pendTextT || t - halo >= _pendTextB) return;
+        _frameTextCoverFlushes++;
+        FlushSegment(_streamLw, _streamLh);
+    }
 
     // Record (or extend) a painter-order run for the just-appended primitive, so RecordAll can replay in stream order.
     private void PushRun(PrimKind kind)
@@ -1789,6 +1844,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                     pos += Unsafe.SizeOf<FillRoundRectCmd>();
                     if (Cull(c.Rect.X, c.Rect.Y, c.Rect.W, c.Rect.H, c.Transform.M11, c.Transform.M12,
                              c.Transform.M21, c.Transform.M22, c.Transform.Dx, c.Transform.Dy, RepaintCull.AaHaloDip)) break;
+                    CoverPendingText(c.Rect.X, c.Rect.Y, c.Rect.W, c.Rect.H, c.Transform.M11, c.Transform.M12,
+                             c.Transform.M21, c.Transform.M22, c.Transform.Dx, c.Transform.Dy, RepaintCull.AaHaloDip);
                     var inst = new RectInstance
                     {
                         PosX = c.Rect.X, PosY = c.Rect.Y, W = c.Rect.W, H = c.Rect.H,
@@ -1813,6 +1870,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                              g.Transform.M21, g.Transform.M22, g.Transform.Dx, g.Transform.Dy,
                              RepaintCull.GlyphHalo(g.FontSize))) break;
                     string s = _strings.Resolve(g.Text);
+                    // A non-empty id resolving to "" is a run whose interned text was reclaimed while its command bytes
+                    // still reference it (a reused span outliving StringTable's quarantine) — silently skipped otherwise.
+                    if (s.Length == 0 && !g.Text.IsEmpty) Diag.Count("d3d12", "glyphRunEmptyResolve");
                     if (s.Length > 0)
                     {
                         int before = _glyphInsts.Count;
@@ -1821,6 +1881,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                             g.SpanRunId, g.ForceColor != 0, g.InMotion * (1f / 255f));
                         _frameGlyphInstanceCount += _glyphInsts.Count - before;
                         NoteGlyphHaloCoverage(before, g.Bounds, RepaintCull.GlyphHalo(g.FontSize));
+                        if (_glyphInsts.Count > before)
+                            NotePendingText(g.Bounds.X, g.Bounds.Y, g.Bounds.W, g.Bounds.H, g.Transform.M11, g.Transform.M12,
+                                g.Transform.M21, g.Transform.M22, g.Transform.Dx, g.Transform.Dy, RepaintCull.GlyphHalo(g.FontSize));
                     }
                     break;
                 }
@@ -1845,6 +1908,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                             g.SpanRunId, g.InMotion * (1f / 255f));
                         _frameGlyphInstanceCount += (_gradGlyphInsts.Count - beforeGrad) + (_glyphInsts.Count - beforePlain);
                         NoteGlyphHaloCoverage(beforePlain, g.Bounds, RepaintCull.GlyphHalo(g.FontSize, g.Lift));
+                        if (_gradGlyphInsts.Count > beforeGrad || _glyphInsts.Count > beforePlain)
+                            NotePendingText(g.Bounds.X, g.Bounds.Y, g.Bounds.W, g.Bounds.H, g.Transform.M11, g.Transform.M12,
+                                g.Transform.M21, g.Transform.M22, g.Transform.Dx, g.Transform.Dy, RepaintCull.GlyphHalo(g.FontSize, g.Lift));
                     }
                     break;
                 }
@@ -1872,6 +1938,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                     pos += Unsafe.SizeOf<DrawImageCmd>();
                     if (Cull(im.Rect.X, im.Rect.Y, im.Rect.W, im.Rect.H, im.Transform.M11, im.Transform.M12,
                              im.Transform.M21, im.Transform.M22, im.Transform.Dx, im.Transform.Dy, RepaintCull.AaHaloDip)) break;
+                    CoverPendingText(im.Rect.X, im.Rect.Y, im.Rect.W, im.Rect.H, im.Transform.M11, im.Transform.M12,
+                             im.Transform.M21, im.Transform.M22, im.Transform.Dx, im.Transform.Dy, RepaintCull.AaHaloDip);
                     // Draw whatever texture is resident under this id — the BlurHash LQIP preview (uploaded at request)
                     // OR the full-res art (which replaces it on decode). Flat tint only when no texture exists yet.
                     if (_imageTextures!.Has(im.ImageId)) AddReadyImage(in im);
@@ -1885,6 +1953,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                     if (Cull(c.Rect.X, c.Rect.Y, c.Rect.W, c.Rect.H, c.Transform.M11, c.Transform.M12,
                              c.Transform.M21, c.Transform.M22, c.Transform.Dx, c.Transform.Dy,
                              RepaintCull.StrokeHalo(c.StrokeWidth))) break;
+                    CoverPendingText(c.Rect.X, c.Rect.Y, c.Rect.W, c.Rect.H, c.Transform.M11, c.Transform.M12,
+                             c.Transform.M21, c.Transform.M22, c.Transform.Dx, c.Transform.Dy,
+                             RepaintCull.StrokeHalo(c.StrokeWidth));
                     var inst = new RectInstance
                     {
                         PosX = c.Rect.X, PosY = c.Rect.Y, W = c.Rect.W, H = c.Rect.H,
@@ -1908,6 +1979,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                     pos += Unsafe.SizeOf<DrawTabShapeCmd>();
                     if (Cull(c.Rect.X, c.Rect.Y, c.Rect.W, c.Rect.H, c.Transform.M11, c.Transform.M12,
                              c.Transform.M21, c.Transform.M22, c.Transform.Dx, c.Transform.Dy, RepaintCull.AaHaloDip)) break;
+                    CoverPendingText(c.Rect.X, c.Rect.Y, c.Rect.W, c.Rect.H, c.Transform.M11, c.Transform.M12,
+                             c.Transform.M21, c.Transform.M22, c.Transform.Dx, c.Transform.Dy, RepaintCull.AaHaloDip);
                     var inst = new RectInstance
                     {
                         PosX = c.Rect.X, PosY = c.Rect.Y, W = c.Rect.W, H = c.Rect.H,
@@ -1932,6 +2005,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                     if (Cull(c.Rect.X + c.OffsetX, c.Rect.Y + c.OffsetY, c.Rect.W, c.Rect.H,
                              c.Transform.M11, c.Transform.M12, c.Transform.M21, c.Transform.M22, c.Transform.Dx, c.Transform.Dy,
                              RepaintCull.ShadowHalo(c.Spread, c.Blur))) break;
+                    CoverPendingText(c.Rect.X + c.OffsetX, c.Rect.Y + c.OffsetY, c.Rect.W, c.Rect.H,
+                             c.Transform.M11, c.Transform.M12, c.Transform.M21, c.Transform.M22, c.Transform.Dx, c.Transform.Dy,
+                             RepaintCull.ShadowHalo(c.Spread, c.Blur));
                     _shadowInsts.Add(new ShadowInstance
                     {
                         PosX = c.Rect.X, PosY = c.Rect.Y, W = c.Rect.W, H = c.Rect.H,
@@ -1950,6 +2026,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                     if (Cull(c.Rect.X, c.Rect.Y, c.Rect.W, c.Rect.H, c.Transform.M11, c.Transform.M12,
                              c.Transform.M21, c.Transform.M22, c.Transform.Dx, c.Transform.Dy,
                              RepaintCull.StrokeHalo(c.Thickness))) break;
+                    CoverPendingText(c.Rect.X, c.Rect.Y, c.Rect.W, c.Rect.H, c.Transform.M11, c.Transform.M12,
+                             c.Transform.M21, c.Transform.M22, c.Transform.Dx, c.Transform.Dy,
+                             RepaintCull.StrokeHalo(c.Thickness));
                     const float Deg2Rad = MathF.PI / 180f;
                     _arcInsts.Add(new ArcInstance
                     {
@@ -1970,6 +2049,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                     if (Cull(c.Rect.X, c.Rect.Y, c.Rect.W, c.Rect.H, c.Transform.M11, c.Transform.M12,
                              c.Transform.M21, c.Transform.M22, c.Transform.Dx, c.Transform.Dy,
                              RepaintCull.StrokeHalo(c.Thickness))) break;
+                    CoverPendingText(c.Rect.X, c.Rect.Y, c.Rect.W, c.Rect.H, c.Transform.M11, c.Transform.M12,
+                             c.Transform.M21, c.Transform.M22, c.Transform.Dx, c.Transform.Dy,
+                             RepaintCull.StrokeHalo(c.Thickness));
                     _polylineInsts.Add(new PolylineStrokeInstance
                     {
                         PosX = c.Rect.X, PosY = c.Rect.Y, W = c.Rect.W, H = c.Rect.H,
@@ -1989,6 +2071,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                     pos += Unsafe.SizeOf<DrawGradientRectCmd>();
                     if (Cull(c.Rect.X, c.Rect.Y, c.Rect.W, c.Rect.H, c.Transform.M11, c.Transform.M12,
                              c.Transform.M21, c.Transform.M22, c.Transform.Dx, c.Transform.Dy, RepaintCull.AaHaloDip)) break;
+                    CoverPendingText(c.Rect.X, c.Rect.Y, c.Rect.W, c.Rect.H, c.Transform.M11, c.Transform.M12,
+                             c.Transform.M21, c.Transform.M22, c.Transform.Dx, c.Transform.Dy, RepaintCull.AaHaloDip);
                     var inst = new GradientInstance
                     {
                         PosX = c.Rect.X, PosY = c.Rect.Y, W = c.Rect.W, H = c.Rect.H,
@@ -2014,6 +2098,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                     if (Cull(c.Rect.X, c.Rect.Y, c.Rect.W, c.Rect.H, c.Transform.M11, c.Transform.M12,
                              c.Transform.M21, c.Transform.M22, c.Transform.Dx, c.Transform.Dy,
                              RepaintCull.StrokeHalo(c.StrokeWidth))) break;
+                    CoverPendingText(c.Rect.X, c.Rect.Y, c.Rect.W, c.Rect.H, c.Transform.M11, c.Transform.M12,
+                             c.Transform.M21, c.Transform.M22, c.Transform.Dx, c.Transform.Dy,
+                             RepaintCull.StrokeHalo(c.StrokeWidth));
                     var inst = new GradientInstance
                     {
                         PosX = c.Rect.X, PosY = c.Rect.Y, W = c.Rect.W, H = c.Rect.H,
@@ -2038,6 +2125,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                     pos += Unsafe.SizeOf<DrawIconMaskCmd>();
                     if (Cull(ic.Rect.X, ic.Rect.Y, ic.Rect.W, ic.Rect.H, ic.Transform.M11, ic.Transform.M12,
                              ic.Transform.M21, ic.Transform.M22, ic.Transform.Dx, ic.Transform.Dy, RepaintCull.AaHaloDip)) break;
+                    CoverPendingText(ic.Rect.X, ic.Rect.Y, ic.Rect.W, ic.Rect.H, ic.Transform.M11, ic.Transform.M12,
+                             ic.Transform.M21, ic.Transform.M22, ic.Transform.Dx, ic.Transform.Dy, RepaintCull.AaHaloDip);
                     if (ic.PathId != 0 && ic.Tint.A > 0f && ic.Rect.W > 0f && ic.Rect.H > 0f)
                     {
                         // Device px like glyphs (size × dpi). Miss ⇒ rasterize now (colorless R8) + shelf-pack into the
@@ -2083,6 +2172,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                     // at all is repainted completely.
                     if (Cull(c.Dst.X, c.Dst.Y, c.Dst.W, c.Dst.H, c.Transform.M11, c.Transform.M12,
                              c.Transform.M21, c.Transform.M22, c.Transform.Dx, c.Transform.Dy, RepaintCull.AaHaloDip)) break;
+                    CoverPendingText(c.Dst.X, c.Dst.Y, c.Dst.W, c.Dst.H, c.Transform.M11, c.Transform.M12,
+                             c.Transform.M21, c.Transform.M22, c.Transform.Dx, c.Transform.Dy, RepaintCull.AaHaloDip);
                     var inst = new RectInstance
                     {
                         PosX = c.Dst.X, PosY = c.Dst.Y, W = c.Dst.W, H = c.Dst.H,
@@ -2109,6 +2200,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                     if (e.Strength <= 0f || e.Opacity <= 0f) break;   // nothing to erase
                     if (Cull(e.Rect.X, e.Rect.Y, e.Rect.W, e.Rect.H, e.Transform.M11, e.Transform.M12,
                              e.Transform.M21, e.Transform.M22, e.Transform.Dx, e.Transform.Dy, RepaintCull.AaHaloDip)) break;
+                    CoverPendingText(e.Rect.X, e.Rect.Y, e.Rect.W, e.Rect.H, e.Transform.M11, e.Transform.M12,
+                             e.Transform.M21, e.Transform.M22, e.Transform.Dx, e.Transform.Dy, RepaintCull.AaHaloDip);
                     var einst = new RectInstance
                     {
                         PosX = e.Rect.X, PosY = e.Rect.Y, W = e.Rect.W, H = e.Rect.H,
@@ -2135,6 +2228,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                     pos += Unsafe.SizeOf<FillPathCmd>();
                     if (Cull(c.Rect.X, c.Rect.Y, c.Rect.W, c.Rect.H, c.Transform.M11, c.Transform.M12,
                              c.Transform.M21, c.Transform.M22, c.Transform.Dx, c.Transform.Dy, RepaintCull.AaHaloDip)) break;
+                    CoverPendingText(c.Rect.X, c.Rect.Y, c.Rect.W, c.Rect.H, c.Transform.M11, c.Transform.M12,
+                             c.Transform.M21, c.Transform.M22, c.Transform.Dx, c.Transform.Dy, RepaintCull.AaHaloDip);
                     if (c.VtxCount > 0 && c.IdxCount > 0)
                     {
                         _pathDraws.Add(new PathDrawItem
@@ -2160,6 +2255,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                     pos += Unsafe.SizeOf<StrokePathCmd>();
                     if (Cull(c.Rect.X, c.Rect.Y, c.Rect.W, c.Rect.H, c.Transform.M11, c.Transform.M12,
                              c.Transform.M21, c.Transform.M22, c.Transform.Dx, c.Transform.Dy, RepaintCull.AaHaloDip)) break;
+                    CoverPendingText(c.Rect.X, c.Rect.Y, c.Rect.W, c.Rect.H, c.Transform.M11, c.Transform.M12,
+                             c.Transform.M21, c.Transform.M22, c.Transform.Dx, c.Transform.Dy, RepaintCull.AaHaloDip);
                     if (c.VtxCount > 0 && c.IdxCount > 0)
                     {
                         _pathDraws.Add(new PathDrawItem
@@ -2786,8 +2883,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // Replay non-glyph primitives in painter (stream) order so a shadow sits OVER the background drawn before it and
         // UNDER its own element. Consecutive same-kind ops are still one batched draw. A run whose pipeline is ALREADY
         // bound on the command list (tracked in _boundPipe across segment flushes) skips the static rebind and records
-        // only its SRV offset + draw — see the state-cache comment on _boundPipe. Glyphs always render last — text on
-        // top within a z-context.
+        // only its SRV offset + draw — see the state-cache comment on _boundPipe. Glyphs render last WITHIN A SEGMENT —
+        // text on top of the fills recorded before it; a fill recorded OVER pending text has already cut the segment
+        // (CoverPendingText), so stream order survives the batching.
         if (_runs.Count > 0)
         {
             var rectSpan = CollectionsMarshal.AsSpan(_rectInsts);
@@ -2981,6 +3079,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // depth-stencil view — the only reason a streaming walk needs to know its own target at all.
     private void SubmitStreaming(ReadOnlySpan<byte> drawList, float lw, float lh, D3D12_CPU_DESCRIPTOR_HANDLE targetRtv)
     {
+        _streamLw = lw; _streamLh = lh;
         ClearInsts();
         _clipStack.Clear();
         _roundedClipStack.Clear();
@@ -3143,6 +3242,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     private void SubmitWithLayers(ReadOnlySpan<byte> drawList, in FrameInfo ctx, float lw, float lh, D3D12_CPU_DESCRIPTOR_HANDLE backRtv, bool directToBackBuffer,
         ReadOnlySpan<RECT> canvasClearRects = default)
     {
+        _streamLw = lw; _streamLh = lh;
         // completed fence gates pool retire/drain; (frameIndex % FRAME_COUNT) selects this frame's banked SRV slots.
         ulong completed = global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.GetCompletedValue(_fence);
         if (directToBackBuffer)
@@ -4158,7 +4258,14 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 _dwmFramesMissed = ti.cFramesMissed;
                 _dwmFramesLate = ti.cFramesLate;
                 _dwmBaselined = true;
-                if (_primarySwapchain is { } psc) SamplePresentTopology(psc);
+                if (_primarySwapchain is { } psc)
+                {
+                    SamplePresentTopology(psc);
+                    // Per-window refresh period wins over the DWM-global sample above when known: the DWM counters
+                    // are main-monitor-GLOBAL (comment at the top of this branch), but the frame pacer / present-time
+                    // prediction / DirectManipulation lead / ambient FPS cap must all pace on THIS window's monitor.
+                    if (psc.CachedRefreshPeriodQpc > 0) refreshPeriod = psc.CachedRefreshPeriodQpc;
+                }
                 MaybeReportGlitches(now);
             }
         }
@@ -4199,7 +4306,16 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         if (_device == null || _factory == null || target.Hwnd == HWND.NULL) return;
         HMONITOR mon = MonitorFromWindow(target.Hwnd, MonitorDefaultToNearest);
         if (mon == HMONITOR.NULL) return;
-        if (mon == target.TopologyMonitor && target.PresentTopologyState != TopologyUnknown) return;   // steady state
+        bool firstResolve = target.PresentTopologyState == TopologyUnknown;
+        if (mon == target.TopologyMonitor && !firstResolve) return;   // steady state
+
+        // Per-window refresh period (mixed-refresh-rate audit): the DWM global counters this is called from
+        // (SamplePresentStats) are main-monitor-GLOBAL — resolve THIS window's monitor mode on the SAME edge as the
+        // topology check below (cold path only: DisplayInfo.ForWindow does the QueryDisplayConfig walk, never a
+        // per-present/per-frame call). Compared against the primary monitor's rate so a mismatch is self-evident.
+        var mode = FluentGpu.Pal.Windows.DisplayInfo.ForWindow((nint)target.Hwnd);
+        var primaryMode = FluentGpu.Pal.Windows.DisplayInfo.ForPrimary();
+        if (mode.Valid) target.CachedRefreshPeriodQpc = mode.RefreshPeriodQpc;
 
         LUID luid = _device->GetAdapterLuid();
         IDXGIAdapter1* adapter = null;
@@ -4223,8 +4339,30 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
 
         int state = owns ? TopologyOwned : sawOutput ? TopologyCross : TopologyNoOutputs;
         target.TopologyMonitor = mon;
-        if (state == target.PresentTopologyState) return;
+        bool topologyChanged = state != target.PresentTopologyState;
         target.PresentTopologyState = state;
+
+        // Diagnostics-card snapshot (GpuVideoMemorySnapshot): merges the display-mode + topology fields without
+        // touching the video-memory fields, which PublishVideoMemory refreshes on its own (~1/60-presents) cadence.
+        // Refreshed on every edge reached here, independent of the "changed" filtering on the two Diag.Line calls
+        // below — a settings page polling this struct must not see a stale monitor after a move-with-same-topology.
+        D3D12MemoryDiagnostics.PublishDisplayMode(
+            mode.Valid ? mode.DeviceName : null,
+            mode.RefreshNumerator, mode.RefreshDenominator, mode.RefreshPeriodQpc,
+            primaryMode.RefreshNumerator, primaryMode.RefreshDenominator,
+            FRAME_COUNT, MAX_FRAME_LATENCY, state, mode.Valid);
+
+        if (mode.Valid)
+        {
+            double hz = mode.RefreshDenominator > 0 ? (double)mode.RefreshNumerator / mode.RefreshDenominator : 0.0;
+            double primaryHz = primaryMode.Valid && primaryMode.RefreshDenominator > 0
+                ? (double)primaryMode.RefreshNumerator / primaryMode.RefreshDenominator : 0.0;
+            bool mismatch = primaryMode.Valid && Math.Abs(hz - primaryHz) > 0.01;
+            Diag.Line($"[d3d12.display] monitor={mode.DeviceName} hz={hz:0.000} periodQpc={mode.RefreshPeriodQpc}" +
+                      $" primaryHz={primaryHz:0.000} changed={(mismatch ? "true" : "false")}");
+        }
+
+        if (!topologyChanged) return;
         Diag.Line($"[d3d12.present] topology={(state == TopologyOwned ? "render-adapter-owns-output"
                 : state == TopologyCross ? "cross-adapter" : "render-adapter-has-no-outputs")}" +
             $" hwnd=0x{(nint)target.Hwnd:X}" +
@@ -4944,6 +5082,10 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
     // ── Present-topology attribution (WS-B) ── cached per swapchain so [d3d12.present] emits on CHANGE only.
     internal HMONITOR TopologyMonitor;     // monitor at last check (NULL = never checked)
     internal int PresentTopologyState;     // D3D12Device.Topology* — 0 unknown / 1 owned / 2 cross-adapter / 3 no-outputs
+    // Per-window refresh period (mixed-refresh-rate audit): resolved on the SAME edge as TopologyMonitor above
+    // (D3D12Device.SamplePresentTopology), via DisplayInfo.ForWindow — 0 until first resolved, meaning "use the
+    // DWM-global fallback" (SamplePresentStats only overrides its local `refreshPeriod` when this is > 0).
+    internal long CachedRefreshPeriodQpc;
     // Whole-frame execution samples are TARGET state, not device state. Main + popup/child hosts share one command queue;
     // publishing here prevents a heavy popup submit from steering the main host's adaptive governor (or vice versa).
     private long _gpuSampleVersion;        // seqlock: odd while any field below changes

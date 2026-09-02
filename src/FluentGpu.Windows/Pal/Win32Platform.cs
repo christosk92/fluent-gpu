@@ -633,6 +633,11 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     private bool _preciseWaitUnavailable;   // sticky creation failure => plain timeout forever
     private HANDLE _presentAckEvent;        // auto-reset: general cross-thread Wake signal waited with messages (not message-only)
     private Win32CompositorClock? _compositorClock;
+    // The window's TRUE per-monitor refresh period (Stopwatch/QPC domain; 0 = unknown), re-derived by
+    // OnDisplayChanged on WM_DISPLAYCHANGE and WM_EXITSIZEMOVE. NOT read from DwmGetCompositionTimingInfo(HWND.NULL),
+    // which is primary-monitor-global by API contract and so never notices a window dragged onto a secondary
+    // display running a different rate. Cached — QueryDisplayConfig is a cold, multi-syscall query, never run per frame.
+    private long _displayRefreshPeriodQpc;
     private bool _wasZoomed;      // WM_SIZE edge-detect → InputKind.WindowStateChanged
     private bool _inMoveSizeLoop; // WM_ENTERSIZEMOVE..WM_EXITSIZEMOVE modal loop
     private bool _sizedInMoveSizeLoop; // true once this modal loop has delivered WM_SIZE (edge resize, not pure titlebar move)
@@ -740,6 +745,10 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
         ResizeClientPhysical((int)MathF.Round(requestedW * _rawDpiScale), (int)MathF.Round(requestedH * _rawDpiScale));
 
         RefreshClientSize();
+        // Seed the true per-monitor refresh so a caller reading DisplayRefreshPeriodQpc before the first
+        // WM_DISPLAYCHANGE/WM_EXITSIZEMOVE still gets a real value instead of the "unknown" 0. _compositorClock is
+        // still null here, so OnDisplayChanged's Reprobe call is a harmless no-op at this point.
+        OnDisplayChanged();
 
         // Register this top-level window as an OS file/folder drop target via the SAFE hand-rolled OLE IDropTarget
         // (Win32DropTarget) — restoring drag-over HOVER feedback (DragEnter/Over/Leave → the engine external-drop seam)
@@ -1622,6 +1631,25 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
         }
     }
 
+    /// <summary>The window's TRUE per-monitor refresh period (Stopwatch/QPC domain; 0 = unknown), re-derived on
+    /// WM_DISPLAYCHANGE and WM_EXITSIZEMOVE by <see cref="OnDisplayChanged"/> — see that method's doc for why
+    /// DwmGetCompositionTimingInfo(HWND.NULL) cannot answer this. Cheap to read (a cached field); the engine seam's
+    /// counterpart defaults to 0, so a host that never wires this up degrades exactly like it did before this existed.</summary>
+    public long DisplayRefreshPeriodQpc => _displayRefreshPeriodQpc;
+
+    /// <summary>Re-derive <see cref="DisplayRefreshPeriodQpc"/> after a display topology change: a monitor
+    /// added/removed/reconfigured (WM_DISPLAYCHANGE) or a drag that may have crossed monitors (WM_EXITSIZEMOVE — the
+    /// one reliable settle point for a pure titlebar move, since neither WM_DISPLAYCHANGE nor WM_DPICHANGED fires for
+    /// a same-DPI, different-refresh monitor hop). Also re-probes the compositor clock: a display topology change is
+    /// exactly the moment <c>DCompositionWaitForCompositorClock</c> can fail once (Win32CompositorClock's own doc),
+    /// and its old behavior — <c>MarkUnavailable</c> latching off for the whole process on a single transient
+    /// failure — is precisely the bug this reprobe exists to recover from.</summary>
+    private void OnDisplayChanged()
+    {
+        _displayRefreshPeriodQpc = DisplayInfo.ForWindow((nint)_hwnd).RefreshPeriodQpc;
+        _compositorClock?.Reprobe();
+    }
+
     /// <summary>Raise a screen-reader announcement (UIA live region) on this window's provider — wired onto
     /// <see cref="FluentGpu.Hooks.InputHooks"/>.Announce. Best-effort; a no-op when no assistive tech is listening.</summary>
     internal void AnnounceUia(string text, bool assertive) => Win32Uia.Announce(_uiaProvider, text, assertive);
@@ -1760,6 +1788,13 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                 PaintRequested?.Invoke();
                 return true;
             }
+            case 0x007E:   // WM_DISPLAYCHANGE (WinUser.h — not surfaced by the TerraFX static-import set)
+                // A monitor was added/removed/reconfigured (resolution, refresh rate, or arrangement). Re-derive the
+                // TRUE per-monitor refresh this window is now on — the fix for the bug where the pacer's rate came
+                // from DwmGetCompositionTimingInfo(HWND.NULL), primary-monitor-global, and so never noticed the
+                // change. Don't consume: DefWindowProcW still runs (same posture as WM_SETTINGCHANGE above).
+                OnDisplayChanged();
+                return false;
             case WM_PAINT:
                 PaintRequested?.Invoke();
                 ValidateRect(hWnd, null);
@@ -1790,6 +1825,10 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                 KillTimer(hWnd, MoveLoopTimerId);
                 _inMoveSizeLoop = false;
                 _sizedInMoveSizeLoop = false;
+                // A pure titlebar drag between two monitors fires no WM_DISPLAYCHANGE (the desktop topology didn't
+                // change) and no WM_DPICHANGED either when the two monitors share a DPI but differ in refresh rate —
+                // so this settle point is the one reliable place a cross-monitor drag ends. Re-derive here too.
+                OnDisplayChanged();
                 PaintRequested?.Invoke();   // one settle frame at the final position
                 return true;
             case WM_TIMER:

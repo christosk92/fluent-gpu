@@ -238,16 +238,21 @@ static class Program
             string purl = Environment.GetEnvironmentVariable("FG_VIDEO_URL")
                 ?? (vprobe + 1 < args.Length && !args[vprobe + 1].StartsWith("--") ? args[vprobe + 1] : "https://media.w3.org/2010/05/sintel/trailer.mp4");
             using var eng = new FluentGpu.Media.Windows.VideoMediaEngine();
-            int ihr = eng.Initialize(purl);
-            Console.Error.WriteLine($"video-probe: init hr=0x{(uint)ihr:X8} url={purl}");
+            eng.Start();
+            eng.PostSetSource(purl);
+            eng.Commands.Post(FluentGpu.Media.VideoCommandKind.Transport, a: 1);
+            Console.Error.WriteLine($"video-probe: started url={purl}");
             var dl = DateTime.UtcNow + TimeSpan.FromSeconds(20);
-            while (DateTime.UtcNow < dl && !eng.HasError && !eng.Playing)
+            var ps = eng.Snapshot;
+            while (DateTime.UtcNow < dl
+                && (ps.Flags & (FluentGpu.Media.VideoEngineFlags.Error | FluentGpu.Media.VideoEngineFlags.Faulted | FluentGpu.Media.VideoEngineFlags.Playing)) == 0)
             {
                 System.Threading.Thread.Sleep(500);
-                Console.Error.WriteLine($"video-probe: readyState={eng.ReadyState} meta={eng.MetadataLoaded} play={eng.Playing} trace=[{eng.EventTrace}]");
+                ps = eng.Snapshot;
+                Console.Error.WriteLine($"video-probe: readyState={ps.ReadyState} flags={ps.Flags} pos={ps.PositionSeconds:0.00}");
             }
-            nuint h = eng.GetSwapchainHandle();
-            Console.Error.WriteLine($"video-probe: FINAL playing={eng.Playing} meta={eng.MetadataLoaded} err={eng.HasError}(0x{(uint)eng.ErrorHr:X8}) swapchainHandle=0x{(ulong)h:X} trace=[{eng.EventTrace}]");
+            ps = eng.Snapshot;
+            Console.Error.WriteLine($"video-probe: FINAL flags={ps.Flags} readyState={ps.ReadyState} err=0x{(uint)ps.ErrorHr:X8} swapchainHandle=0x{(ulong)ps.SwapchainHandle:X}");
             return;
         }
 
@@ -273,6 +278,17 @@ static class Program
         // repaint — and requires the two back buffers to be byte-identical. Nonzero exit on any mismatch (or on a
         // scenario that never reached the partial route, which has stopped testing what it claims). GPU required.
         // `--repaint-identity [outDir]`; mismatches write partial/full/diff PNGs there.
+        // Dialog-scroll probe: the real-path repro for "ContentDialog labels vanish after the body scrolls" — drives the
+        // dialog's own scroller through the scroll kernel and captures the presented back buffer at top/mid/end with the
+        // D3D12 route/dropped/glyph-instance/segment counters. `--dialog-scroll-probe [outDir]`. GPU required.
+        int dsp = Array.IndexOf(args, "--dialog-scroll-probe");
+        if (dsp >= 0)
+        {
+            string? dspOut = dsp + 1 < args.Length && !args[dsp + 1].StartsWith("--") ? args[dsp + 1] : null;
+            Environment.Exit(DialogScrollProbe.Run(dspOut));
+            return;
+        }
+
         int ident = Array.IndexOf(args, "--repaint-identity");
         if (ident >= 0)
         {

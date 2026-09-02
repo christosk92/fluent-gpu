@@ -904,6 +904,41 @@ static class NavSuite
                 labels1 && Near(w1, 1200f) && !labels2 && Near(w2, 800f) && labels3 && Near(w3, 1200f),
                 $"w {w1:0}@1x → {w2:0}@1.5x (labels={labels2}) → {w3:0}@1.5x/1800px (labels={labels3})");
         }
+
+        // 54d — browser-style APP ZOOM (pal-rhi.md §1.2): SetZoom folds into the effective Scale (= raw DPI × zoom),
+        // so a zoom step re-lays-out the DIP viewport through the same EnsureSize route as 54c's DPI hop — and a real
+        // DPI hop RE-DERIVES the product, so the zoom survives the monitor change. The HeadlessWindow contract: the
+        // Scale SETTER writes the raw DPI factor, the getter returns raw × zoom, SetZoom is ZoomLadder-clamped.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("appzoom", new Size2(1200, 700), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            using var host = new AppHost(app, window, device, fonts, strings, new NavProbe());
+            host.RunFrame();
+            float w1 = host.Scene.AbsoluteRect(host.Scene.Root).W;          // 1200 DIP @1x, zoom 1
+
+            window.SetZoom(1.25f);                                          // zoom in → effective scale 1.25
+            host.RunFrame();
+            float w2 = host.Scene.AbsoluteRect(host.Scene.Root).W;          // 960 DIP (1200/1.25)
+
+            window.Scale = 1.5f;                                            // monitor hop (raw DPI); zoom KEPT
+            host.RunFrame();
+            float w3 = host.Scene.AbsoluteRect(host.Scene.Root).W;          // 640 DIP (1200/1.875)
+
+            window.SetZoom(1f);                                             // zoom reset → raw DPI alone
+            host.RunFrame();
+            float w4 = host.Scene.AbsoluteRect(host.Scene.Root).W;          // 800 DIP (1200/1.5)
+
+            // The ladder the chords step on: In/Out walk discrete steps and saturate at both ends; Snap re-enters
+            // the ladder (persisted-value hygiene); Clamp sanitizes garbage (NaN from a corrupt setting) to Default.
+            bool ladder = ZoomLadder.In(1f) == 1.1f && ZoomLadder.Out(0.5f) == 0.5f && ZoomLadder.In(2.5f) == 2.5f
+                       && ZoomLadder.Snap(1.24f) == 1.25f && ZoomLadder.Clamp(float.NaN) == 1f;
+            Check("54d. app zoom re-lays-out the DIP viewport and survives a DPI hop (Scale = DPI × Zoom)",
+                Near(w1, 1200f) && Near(w2, 960f) && Near(w3, 640f) && Near(w4, 800f) && ladder,
+                $"w {w1:0}@1x·z1 → {w2:0}@1x·z1.25 → {w3:0}@1.5x·z1.25 → {w4:0}@1.5x·z1 ladder={ladder}");
+        }
     }
 
     static void NavigationViewAnimationChecks(StringTable strings)

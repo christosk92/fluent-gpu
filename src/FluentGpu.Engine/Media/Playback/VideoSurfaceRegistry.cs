@@ -61,7 +61,6 @@ public sealed class VideoSurfaceRegistry
     private bool _anyDirty;
     private int _presentingCount;   // diagnostic census of slots a media player is actively presenting into
     private int _pendingPumpCount;  // slots with one coalesced pump awaiting the next host frame
-    private static readonly bool s_diag = Environment.GetEnvironmentVariable("FG_DRM_DIAG") == "1";
 
     // ── per-binding pump callbacks (engine-invoked each frame; replaces the control's side-effecting Render) ──────────
     private struct PumpReg { public bool InUse; public int Token; public object? Owner; public VideoPump? Pump; }
@@ -363,7 +362,7 @@ public sealed class VideoSurfaceRegistry
             if (alternates != 0)
             {
                 _suppressedNonOwnerPumps += alternates;
-                if (s_diag) Console.Error.WriteLine($"[drm-reg] {alternates} non-owner pump(s) suppressed for token {ti + 1}");
+                if (Diag.CompiledIn && Diag.Enabled) Diag.Event("drm-reg", $"{alternates} non-owner pump(s) suppressed for token {ti + 1}");
             }
             if (ownerIndex < 0) continue;    // registration vanished; a later mount will request again
             _pumps[ownerIndex].Pump!(scale);
@@ -405,16 +404,22 @@ public sealed class VideoSurfaceRegistry
                 continue;
             }
 
-          try
-          {
             // Create the child visual on first use, once a handle exists to bind.
             if (e.SurfaceId.IsNone)
             {
                 if (e.DesiredHandle == 0) { e.Dirty = false; continue; }   // nothing to show yet; wait for a handle
                 e.SurfaceId = presenter.CreateSurface();
+                if (e.SurfaceId.IsNone)
+                {
+                    // The presenter's own native call failed (device-lost/removed, out of DComp resources, ...); it
+                    // is non-throwing (DCompVideoPresenter.Ok) and already logged once for this HRESULT. Leave the
+                    // entry Dirty so THIS slot retries CreateSurface on the next Drain instead of the surface silently
+                    // never appearing.
+                    continue;
+                }
                 _surfaceSignals[i].Value = e.SurfaceId;
                 changed = true;
-                if (s_diag) Console.Error.WriteLine($"[drm-reg] CreateSurface -> id={e.SurfaceId.Value}");
+                if (Diag.CompiledIn && Diag.Enabled) Diag.Event("drm-reg", $"CreateSurface -> id={e.SurfaceId.Value}");
             }
 
             if (e.DesiredHandle != 0 && e.DesiredHandle != e.BoundHandle)
@@ -422,7 +427,7 @@ public sealed class VideoSurfaceRegistry
                 presenter.BindSurfaceHandle(e.SurfaceId, e.DesiredHandle);
                 e.BoundHandle = e.DesiredHandle;
                 changed = true;
-                if (s_diag) Console.Error.WriteLine($"[drm-reg] BindSurfaceHandle id={e.SurfaceId.Value} handle=0x{e.DesiredHandle:X}");
+                if (Diag.CompiledIn && Diag.Enabled) Diag.Event("drm-reg", $"BindSurfaceHandle id={e.SurfaceId.Value} handle=0x{e.DesiredHandle:X}");
             }
 
             var dev = new RectF(e.RectDip.X * scale, e.RectDip.Y * scale, e.RectDip.W * scale, e.RectDip.H * scale);
@@ -435,13 +440,7 @@ public sealed class VideoSurfaceRegistry
             presenter.SetVisible(e.SurfaceId, e.Visible);
             changed = true;
             e.Dirty = false;
-            if (s_diag) Console.Error.WriteLine($"[drm-reg] Place id={e.SurfaceId.Value} dev=({dev.X:0},{dev.Y:0},{dev.W:0},{dev.H:0}) visible={e.Visible} scale={scale:0.##}");
-          }
-          catch (Exception ex) when (s_diag)
-          {
-            Console.Error.WriteLine($"[drm-reg] EXCEPTION at slot {i}: {ex.GetType().Name}: {ex.Message}");
-            e.Dirty = false;
-          }
+            if (Diag.CompiledIn && Diag.Enabled) Diag.Event("drm-reg", $"Place id={e.SurfaceId.Value} dev=({dev.X:0},{dev.Y:0},{dev.W:0},{dev.H:0}) visible={e.Visible} scale={scale:0.##}");
         }
 
         // Recompute the dirty flag (an entry with no handle yet stays dirty and retries next frame).

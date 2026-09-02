@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Threading.Tasks;
 using FluentGpu.Foundation;
 using FluentGpu.Media;
@@ -10,8 +10,9 @@ using Xunit;
 namespace FluentGpu.Windows.Tests;
 
 /// <summary>
-/// M1 tests for <see cref="MfMediaSession"/>: the MF-state → <see cref="MediaSignalSink"/> mapping, the composited-surface
-/// handoff, typed error mapping, idempotent transport and clean disposal — all driven through a <see cref="FakeVideoEngine"/>
+/// Tests for <see cref="MfMediaSession"/> v2 (snapshot out, commands in — <c>docs/plans/video-smooth-switching-implementation.md</c>
+/// §1.4): the engine-snapshot → <see cref="MediaSignalSink"/> mapping, the composited-surface handoff, typed error
+/// mapping, idempotent posted transport and clean (non-blocking) disposal — all driven through a <see cref="FakeVideoEngine"/>
 /// so no D3D/MF/DComp device is created. Deterministic (no timers/sleeps); every async assert has a hard 5s timeout.
 /// </summary>
 public sealed class MfMediaSessionTests
@@ -23,7 +24,9 @@ public sealed class MfMediaSessionTests
         var core = new MediaPlayerCore();
         var sink = new MediaSignalSink(core);
         var engine = new FakeVideoEngine();
-        var session = new MfMediaSession(engine, new MediaOpenOptions { StartPaused = startPaused });
+        // Epoch 0 matches the fake's default (never-set) Snapshot.SourceEpoch, so PumpVideo's stale-epoch guard passes
+        // trivially for every test that is not specifically exercising it (see StaleEpochSnapshot_IsIgnoredByPumpVideo).
+        var session = new MfMediaSession(engine, 0, new MediaOpenOptions { StartPaused = startPaused });
         session.ConnectSignals(sink);
         return (session, core, engine);
     }
@@ -63,7 +66,7 @@ public sealed class MfMediaSessionTests
                     [new AdaptiveRepresentation(audio, null, [seg])], true),
             ]);
         var core = new MediaPlayerCore();
-        var session = new MfMediaSession(new FakeVideoEngine(), new MediaOpenOptions(), manifest);
+        var session = new MfMediaSession(new FakeVideoEngine(), 0, new MediaOpenOptions(), manifest);
 
         session.ConnectSignals(new MediaSignalSink(core));
 
@@ -89,7 +92,7 @@ public sealed class MfMediaSessionTests
                     IsDefault: true),
             ]);
         var core = new MediaPlayerCore();
-        var session = new MfMediaSession(new FakeVideoEngine(), new MediaOpenOptions(), manifest);
+        var session = new MfMediaSession(new FakeVideoEngine(), 0, new MediaOpenOptions(), manifest);
 
         session.ConnectSignals(new MediaSignalSink(core));
 
@@ -134,23 +137,24 @@ public sealed class MfMediaSessionTests
     }
 
     [Fact]
-    public void NaturalSize_NoAnswerAtMetadata_IsRetriedUntilTheEngineAnswers()
+    public void NaturalSize_NotYetKnownAtMetadata_IsRetriedUntilTheEngineAnswers()
     {
-        // The regression: VideoMediaEngine.Invoke is bounded, so the size read issued the instant LOADEDMETADATA lands
-        // can come back with NO ANSWER (the engine thread is still resolving the source). Latching that as audio-only
-        // left a playing video under an eternal "Starting playback…" — MediaPlayerElement treats an empty NaturalSize as
-        // audio-only and never punches a video hole.
+        // v1's bounded-Invoke "NoAnswer" tri-state is gone (the engine thread now answers directly, synchronously),
+        // but the same shape of race still exists for one refresh cycle: GetNativeVideoSize can be asked before it has
+        // an answer. NaturalSizeKnown=false models that; latching it as audio-only left a playing video under an
+        // eternal "Starting playback…" — MediaPlayerElement treats an empty NaturalSize as audio-only and never
+        // punches a video hole.
         var (s, core, eng) = NewSession(startPaused: true);
         var binding = NewBinding(out _);
         eng.MetadataLoaded = true; eng.DurationSeconds = 10.0;
         eng.NativeW = 1920; eng.NativeH = 1080;
-        eng.NativeSizeResult = NativeSizeAnswer.NoAnswer;   // the bounded read expires
+        eng.NaturalSizeKnown = false;   // the engine has not answered yet
 
         s.PumpVideo(binding, Rect, 1f);
         Assert.True(core.NaturalSize.Peek().IsEmpty);                                    // nothing learned yet…
         Assert.Equal(0, (int)(core.Commands.Available.Value & MediaCommandFlags.StepFrame));
 
-        eng.NativeSizeResult = NativeSizeAnswer.Ok;         // …the engine frees up and answers
+        eng.NaturalSizeKnown = true;    // …the engine answers
         s.PumpVideo(binding, Rect, 1f);
 
         Assert.Equal(new SizeI(1920, 1080), core.NaturalSize.Peek());
@@ -160,20 +164,17 @@ public sealed class MfMediaSessionTests
     [Fact]
     public void NaturalSize_AnsweredAudioOnly_IsNotRetried()
     {
-        // The other half of the tri-state: an ANSWERED "no video" is authoritative, so the pump must stop asking (one
-        // marshaled read per pump forever would be a real UI-thread cost for an audio-only source).
+        // The other half: an ANSWERED "no video" (0×0, NaturalSizeKnown=true) is authoritative and must never be
+        // mistaken for "not known yet".
         var (s, core, eng) = NewSession(startPaused: true);
         var binding = NewBinding(out _);
         eng.MetadataLoaded = true; eng.DurationSeconds = 10.0;
-        eng.NativeSizeResult = NativeSizeAnswer.NoVideo;
+        eng.NativeW = 0; eng.NativeH = 0; eng.NaturalSizeKnown = true;
 
         s.PumpVideo(binding, Rect, 1f);
-        int afterFirst = eng.NativeSizeQueries;
         s.PumpVideo(binding, Rect, 1f);
         s.PumpVideo(binding, Rect, 1f);
 
-        Assert.Equal(1, afterFirst);
-        Assert.Equal(1, eng.NativeSizeQueries);
         Assert.True(core.NaturalSize.Peek().IsEmpty);
     }
 
@@ -225,9 +226,7 @@ public sealed class MfMediaSessionTests
         var (s, core, eng) = NewSession();
         eng.MetadataLoaded = true; eng.DurationSeconds = 30; Pump(s);
         eng.CurrentTimeSeconds = 12.5;
-        // The pump reads the OFF-THREAD cache, never the engine directly (the blocking round-trip is what the cache
-        // exists to keep off the UI thread). Priming it via the engine's own state-changed callback is what the real
-        // engine does on every discrete transition; without it this test was racing the 100 ms poll timer and lost.
+        // Not playing (paused by default here), so PumpVideo does not extrapolate — the read is exact.
         eng.RaiseStateChanged();
         Pump(s);
         Assert.Equal(12.5, core.Position.Peek().TotalSeconds, 3);
@@ -283,9 +282,10 @@ public sealed class MfMediaSessionTests
 
         // Pump with device scale 2 ⇒ stream size = rect(640×360) × 2 = 1280×720 (the presenter clips, does not scale).
         s.PumpVideo(binding, new RectF(10, 20, 640, 360), 2f);
-        Assert.Equal(1280, eng.StreamW);
-        Assert.Equal(720, eng.StreamH);
-        Assert.True(eng.RepaintCalls > 0);
+        Assert.True(eng.Commands.TryTakeStreamRect(out int w, out int h));
+        Assert.Equal(1280, w);
+        Assert.Equal(720, h);
+        Assert.True(eng.Commands.TryTakeRepaint());
 
         // Drain the registry into a fake presenter (the render-thread step) and assert the handle actually bound.
         var presenter = new FakeVideoPresenter();
@@ -306,21 +306,44 @@ public sealed class MfMediaSessionTests
         s.PumpRequested += () => requested++;
 
         s.PumpVideo(binding, Rect, 1f);       // initial metadata/handle/geometry hand-off
-        Assert.Equal(1, eng.RepaintCalls);
+        Assert.True(eng.Commands.TryTakeRepaint());
 
         s.PumpVideo(binding, Rect, 1f);       // identical host work is not a repaint
-        Assert.Equal(1, eng.RepaintCalls);
+        Assert.False(eng.Commands.TryTakeRepaint());
 
         eng.RaiseStateChanged();               // MF worker event -> one coalesced caller request
         Assert.Equal(1, requested);
         s.PumpVideo(binding, Rect, 1f);
-        Assert.Equal(2, eng.RepaintCalls);
+        Assert.True(eng.Commands.TryTakeRepaint());
 
         s.PumpVideo(binding, new RectF(0, 0, 640, 360), 1f); // geometry invalidates once
-        Assert.Equal(3, eng.RepaintCalls);
+        Assert.True(eng.Commands.TryTakeRepaint());
     }
 
-    // ── idempotent transport ─────────────────────────────────────────────────────────────────────────────────────────
+    [Fact]
+    public void PresentationEpochBump_DropsTheHandle_AndRebindsOnTheNextPump()
+    {
+        // Required new coverage (plan §7/§1.4 (b)): a FORMATCHANGE/RESOURCELOST — modeled by RaiseFormatChange, the
+        // same epoch bump a fresh SetSource also drives — must drop the cached handle so a NEW one gets bound, not
+        // left stuck at the first variant's.
+        var (s, _, eng) = NewSession();
+        var binding = NewBinding(out var registry);
+        eng.MetadataLoaded = true; eng.NativeW = 1280; eng.NativeH = 720; eng.Handle = 0xAAAA;
+        s.PumpVideo(binding, Rect, 1f);
+
+        var presenter = new FakeVideoPresenter();
+        registry.Drain(presenter, 1f);
+        Assert.Equal((nuint)0xAAAA, presenter.LastBoundHandle);
+
+        eng.Handle = 0xBBBB;
+        eng.RaiseFormatChange();
+        s.PumpVideo(binding, Rect, 1f);
+        registry.Drain(presenter, 1f);
+
+        Assert.Equal((nuint)0xBBBB, presenter.LastBoundHandle);
+    }
+
+    // ── idempotent, posted transport ─────────────────────────────────────────────────────────────────────────────────
 
     [Fact]
     public void Transport_AcceptedSynchronously_NeverThrows_InAnyState()
@@ -333,9 +356,27 @@ public sealed class MfMediaSessionTests
         var ex = Record.Exception(() => { s.SetRate(2.0); s.SetVolume(2.0); s.SetMuted(true); });
         Assert.Null(ex);
 
-        Assert.Equal(2.0, eng.LastRate, 6);
-        Assert.Equal(1.0, eng.LastVolume, 6);   // clamped into 0..1
-        Assert.True(eng.LastMuted);
+        Assert.True(eng.Commands.TryTakeRate(out double rate));
+        Assert.Equal(2.0, rate, 6);
+        Assert.True(eng.Commands.TryTakeVolume(out double volume));
+        Assert.Equal(1.0, volume, 6);   // clamped into 0..1
+        Assert.True(eng.Commands.TryTakeMuted(out bool muted));
+        Assert.True(muted);
+    }
+
+    [Fact]
+    public void TransportPosts_AreLastWins_ObservedByAScriptedDrain()
+    {
+        // Required new coverage (plan §7/§1.4 (d)): VideoEngineCommandQueue is one coalescing slot PER KIND — a burst
+        // of Play/Pause/Play collapses to the LAST post, which is what the (real or fake) engine thread ever sees.
+        var (s, _, eng) = NewSession();
+        _ = s.PlayAsync();
+        _ = s.PauseAsync();
+        _ = s.PlayAsync();
+
+        Assert.True(eng.Commands.TryTakeTransport(out bool play));
+        Assert.True(play);
+        Assert.False(eng.Commands.TryTakeTransport(out _));   // drained — nothing else pending
     }
 
     [Fact]
@@ -345,10 +386,32 @@ public sealed class MfMediaSessionTests
         eng.MetadataLoaded = true; eng.DurationSeconds = 5; Pump(s);   // publishes _duration = 5s
 
         _ = s.SeekAsync(TimeSpan.FromSeconds(100), SeekMode.Accurate);
-        Assert.Equal(5.0, eng.LastSeek, 6);
+        Assert.True(eng.Commands.TryTakeSeek(out double secsHigh, out _));
+        Assert.Equal(5.0, secsHigh, 6);
 
         _ = s.SeekAsync(TimeSpan.FromSeconds(-10), SeekMode.Accurate);
-        Assert.Equal(0.0, eng.LastSeek, 6);
+        Assert.True(eng.Commands.TryTakeSeek(out double secsLow, out _));
+        Assert.Equal(0.0, secsLow, 6);
+    }
+
+    // ── stale-epoch guard + disposal ─────────────────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void StaleEpochSnapshot_IsIgnoredByPumpVideo()
+    {
+        // Required new coverage (plan §7/§1.4 (a)): a snapshot whose SourceEpoch does not match this session's own is
+        // either not-yet-caught-up (the engine hasn't drained the SetSource command yet) or belongs to a LATER
+        // session sharing a warm-reused engine. Either way PumpVideo must not act on it.
+        var core = new MediaPlayerCore();
+        var sink = new MediaSignalSink(core);
+        var engine = new FakeVideoEngine();   // Snapshot.SourceEpoch stays at its default (0)
+        var session = new MfMediaSession(engine, sourceEpoch: 1, new MediaOpenOptions { StartPaused = true });
+        session.ConnectSignals(sink);
+        engine.MetadataLoaded = true; engine.DurationSeconds = 10;
+
+        session.PumpVideo(default, Rect, 1f);
+
+        Assert.Equal(PlaybackState.Opening, core.State.Peek());   // never advanced past ConnectSignals' own publish
     }
 
     [Fact]
@@ -361,5 +424,23 @@ public sealed class MfMediaSessionTests
         // Idempotent + inert after dispose.
         Assert.True(s.PlayAsync().IsCompletedSuccessfully);
         s.PumpVideo(default, Rect, 1f);   // no throw
+    }
+
+    [Fact]
+    public async Task DisposeAsync_InvokesTheReleaseCallback_AndDoesNotDisposeTheEngine()
+    {
+        // Required new coverage (plan §7/§1.4 (e)): a warm-pooled session (MfMediaPlayer.OpenAsync always supplies a
+        // release) returns the engine via the callback instead of disposing it.
+        var core = new MediaPlayerCore();
+        var sink = new MediaSignalSink(core);
+        var engine = new FakeVideoEngine();
+        IVideoEngine? released = null;
+        var session = new MfMediaSession(engine, 0, new MediaOpenOptions(), release: e => released = e);
+        session.ConnectSignals(sink);
+
+        await session.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Same(engine, released);
+        Assert.Equal(0, engine.DisposeCalls);
     }
 }

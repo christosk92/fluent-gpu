@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentGpu.Foundation;
@@ -11,72 +12,152 @@ using FluentGpu.WindowsApi.Media.PlayReady;
 
 namespace FluentGpu.Windows.Tests;
 
-/// <summary>A fully in-memory <see cref="IVideoEngine"/> — no D3D11/MF device. Tests set its flags to script exactly the
-/// engine state the session must map. <see cref="Play"/>/<see cref="Pause"/> only COUNT (they do not flip
-/// <see cref="Playing"/>) so a test can model the "intent accepted but engine not yet advancing" (buffering) gap.</summary>
+/// <summary>
+/// A fully in-memory <see cref="IVideoEngine"/> v2 — no D3D11/MF device. Built around a REAL
+/// <see cref="VideoSnapshotBuffer"/> (tests script it through the property setters below, which each build a fresh
+/// <see cref="VideoEngineSnapshot"/> from the fake's current field values and <see cref="VideoSnapshotBuffer.Publish"/>
+/// it — exercising the exact seqlock a production consumer reads) and a REAL <see cref="VideoEngineCommandQueue"/>
+/// (nothing drains it automatically — there is no simulated engine thread — so a test asserts what
+/// <see cref="MfMediaSession"/> posted by draining the queue itself, e.g. via the <see cref="FakeEngineCommandExtensions"/>
+/// helpers below).
+/// <para><see cref="Play"/>/<see cref="Playing"/> intentionally do not auto-couple — posting a Transport(play) command
+/// does NOT flip <see cref="Playing"/> by itself (nothing is draining the queue) — so a test can model the "intent
+/// accepted but engine not yet advancing" (buffering) gap exactly as the real engine's own worker-thread event lag
+/// does.</para>
+/// </summary>
 internal sealed class FakeVideoEngine : IVideoEngine
 {
     public event Action? StateChanged;
 
-    public int InitializeResult;
-    public int InitializeCalls, PlayCalls, PauseCalls, DisposeCalls, RepaintCalls;
-    public double LastSeek = double.NaN, LastRate = 1, LastVolume = 1;
-    public bool LastSeekApproximate;
-    public bool LastMuted, LastLoop = true;
-    public int StreamW, StreamH;
+    private readonly VideoSnapshotBuffer _buffer = new();
+    // Defaults mirror the v1 fake's ergonomics (1920x1080, answered) — the v2 engine always answers the natural size
+    // synchronously in practice (see the class doc comment), so "already known" is the realistic default; a test
+    // modeling the rare unanswered case sets NaturalSizeKnown = false explicitly.
+    private VideoEngineSnapshot _s = new()
+    { PlaybackRate = 1.0, NaturalW = 1920, NaturalH = 1080, Flags = VideoEngineFlags.NaturalSizeKnown };
 
-    public bool MetadataLoaded { get; set; }
-    public bool CanPlay { get; set; }
-    public bool Playing { get; set; }
-    public bool Seeking { get; set; }
-    public bool Ended { get; set; }
-    public bool HasError { get; set; }
-    public uint ErrorCode { get; set; }
-    public int ErrorHr { get; set; }
-    public string LastEventName { get; set; } = "<fake>";
-    public uint ReadyState { get; set; }
-    /// <summary>The monotonic presentation epoch (IVideoEngine.PresentationEpoch). <see cref="RaiseFormatChange"/>
-    /// models MF's FORMATCHANGE/RESOURCELOST: bump it, then wake the session exactly as the real notify sink does.</summary>
-    public int PresentationEpoch { get; set; }
-    public double DurationSeconds { get; set; }
-    public double CurrentTimeSeconds { get; set; }
-    // Live state the session latches/polls (IVideoEngine.IsLiveSource / SeekableRange / CanPlayHls). Settable so a
-    // test can script "the engine has not answered yet" (false / (0,0)) and then a real answer.
-    public bool IsLiveSource { get; set; }
-    public (double Start, double End) SeekableRange { get; set; }
+    public VideoEngineCommandQueue Commands { get; } = new();
+    /// <inheritdoc/>
+    public VideoEngineSnapshot Snapshot => _buffer.Read();
+    /// <inheritdoc/>
     public bool CanPlayHls { get; set; } = true;
 
-    public uint NativeW = 1920, NativeH = 1080;
-    // What the fake engine "answers" when asked for the native size. NoAnswer models the bounded-Invoke expiry the real
-    // engine hits while it is still resolving the source (see NativeSizeAnswer).
-    public NativeSizeAnswer NativeSizeResult = NativeSizeAnswer.Ok;
-    public nuint Handle;
+    public int StartCalls, DisposeCalls;
+    public int PostSetSourceCalls, PostDetachCalls;
+    public string? LastSetSourceUrl;
+    /// <summary>The next epoch <see cref="PostSetSource"/> hands out — mirrors the real engine's monotonic counter so a
+    /// test can predict what a scripted <c>SourceEpoch</c> must match.</summary>
+    public int NextEpoch = 1;
 
-    public int Initialize(string url) { InitializeCalls++; return InitializeResult; }
-    public NativeSizeAnswer QueryNativeVideoSize(out uint cx, out uint cy)
+    public void Start() => StartCalls++;
+
+    /// <inheritdoc/>
+    public int PostSetSource(string url)
     {
-        NativeSizeQueries++;
-        bool answered = NativeSizeResult == NativeSizeAnswer.Ok;
-        cx = answered ? NativeW : 0; cy = answered ? NativeH : 0;
-        return NativeSizeResult;
+        PostSetSourceCalls++;
+        LastSetSourceUrl = url;
+        int epoch = NextEpoch++;
+        _s.SourceEpoch = epoch;
+        Publish();
+        return epoch;
     }
-    public int NativeSizeQueries;
-    public nuint GetSwapchainHandle() => Handle;
-    public int SetVideoStreamRect(int w, int h) { StreamW = w; StreamH = h; return 0; }
-    public void RepaintCurrentFrame() => RepaintCalls++;
-    public void Play() => PlayCalls++;
-    public void Pause() => PauseCalls++;
-    public void SeekTo(double seconds, bool approximate = false) { LastSeek = seconds; LastSeekApproximate = approximate; }
-    public void SetPlaybackRate(double rate) => LastRate = rate;
-    public void SetVolume(double volume) => LastVolume = volume;
-    public void SetMuted(bool muted) => LastMuted = muted;
-    public void SetLoop(bool loop) => LastLoop = loop;
+
+    /// <inheritdoc/>
+    public void PostDetach() => PostDetachCalls++;
+
     public void Dispose() => DisposeCalls++;
+
+    /// <summary>Republish the fake's current field values as a fresh snapshot (a real timestamp, so position
+    /// extrapolation in a test behaves like the real engine's).</summary>
+    private void Publish() { _s.PositionTimestamp = Stopwatch.GetTimestamp(); _buffer.Publish(_s); }
+
+    /// <summary>Wake any subscriber exactly as the real engine's coalesced refresh does — a test calls this after
+    /// scripting new field values to model the engine's own out-of-cadence publish-then-raise.</summary>
     public void RaiseStateChanged() => StateChanged?.Invoke();
 
-    /// <summary>Model a mid-stream variant switch: the engine's presentation epoch advances and it wakes its consumer.
-    /// Set <see cref="NativeW"/>/<see cref="NativeH"/> first to script the NEW decoded frame size.</summary>
-    public void RaiseFormatChange() { PresentationEpoch++; StateChanged?.Invoke(); }
+    private void SetFlag(VideoEngineFlags flag, bool on) { _s.Flags = on ? _s.Flags | flag : _s.Flags & ~flag; Publish(); }
+
+    public bool MetadataLoaded { get => (_s.Flags & VideoEngineFlags.MetadataLoaded) != 0; set => SetFlag(VideoEngineFlags.MetadataLoaded, value); }
+    public bool CanPlay { get => (_s.Flags & VideoEngineFlags.CanPlay) != 0; set => SetFlag(VideoEngineFlags.CanPlay, value); }
+    public bool Playing { get => (_s.Flags & VideoEngineFlags.Playing) != 0; set => SetFlag(VideoEngineFlags.Playing, value); }
+    public bool Seeking { get => (_s.Flags & VideoEngineFlags.Seeking) != 0; set => SetFlag(VideoEngineFlags.Seeking, value); }
+    public bool Ended { get => (_s.Flags & VideoEngineFlags.Ended) != 0; set => SetFlag(VideoEngineFlags.Ended, value); }
+    public bool HasError { get => (_s.Flags & VideoEngineFlags.Error) != 0; set => SetFlag(VideoEngineFlags.Error, value); }
+    /// <summary>Mirrors <see cref="VideoEngineFlags.LiveSource"/> directly — the fake does NOT latch it (unlike the
+    /// real engine): that monotonic-within-a-source guarantee is now an ENGINE contract (<c>VideoMediaEngine</c>), not
+    /// something <see cref="MfMediaSession"/> defends against, so there is nothing session-level left to test by
+    /// un-setting it after setting it.</summary>
+    public bool IsLiveSource { get => (_s.Flags & VideoEngineFlags.LiveSource) != 0; set => SetFlag(VideoEngineFlags.LiveSource, value); }
+    public bool NaturalSizeKnown { get => (_s.Flags & VideoEngineFlags.NaturalSizeKnown) != 0; set => SetFlag(VideoEngineFlags.NaturalSizeKnown, value); }
+    public bool Faulted { get => (_s.Flags & VideoEngineFlags.Faulted) != 0; set => SetFlag(VideoEngineFlags.Faulted, value); }
+
+    public uint ErrorCode { get => _s.ErrorCode; set { _s.ErrorCode = value; Publish(); } }
+    public int ErrorHr { get => _s.ErrorHr; set { _s.ErrorHr = value; Publish(); } }
+    public uint ReadyState { get => _s.ReadyState; set { _s.ReadyState = value; Publish(); } }
+    /// <summary>The monotonic presentation epoch. <see cref="RaiseFormatChange"/> models MF's FORMATCHANGE/RESOURCELOST
+    /// (bump it, then wake the session exactly as the real notify sink does).</summary>
+    public int PresentationEpoch { get => _s.PresentationEpoch; set { _s.PresentationEpoch = value; Publish(); } }
+    public double DurationSeconds { get => _s.DurationSeconds; set { _s.DurationSeconds = value; Publish(); } }
+    public double CurrentTimeSeconds { get => _s.PositionSeconds; set { _s.PositionSeconds = value; Publish(); } }
+    public double PlaybackRate { get => _s.PlaybackRate; set { _s.PlaybackRate = value; Publish(); } }
+    // Live state the session reads (SeekableRange / CanPlayHls). Settable so a test can script "not answered yet"
+    // ((0,0)) and then a real window.
+    public (double Start, double End) SeekableRange
+    {
+        get => (_s.SeekableStart, _s.SeekableEnd);
+        set { _s.SeekableStart = value.Start; _s.SeekableEnd = value.End; Publish(); }
+    }
+
+    public uint NativeW { get => _s.NaturalW; set { _s.NaturalW = value; Publish(); } }
+    public uint NativeH { get => _s.NaturalH; set { _s.NaturalH = value; Publish(); } }
+    public nuint Handle { get => _s.SwapchainHandle; set { _s.SwapchainHandle = value; Publish(); } }
+
+    /// <summary>Model a mid-stream variant switch: bump the presentation epoch and wake the session exactly as a real
+    /// FORMATCHANGE/RESOURCELOST would. Does NOT auto-clear <see cref="NaturalSizeKnown"/> — a test modeling "the new
+    /// variant's size is not known yet" clears it explicitly (and sets it again once it scripts the new answer), the
+    /// same two-step a real FORMATCHANGE drives through <c>VideoMediaEngine</c>'s per-epoch re-query.</summary>
+    public void RaiseFormatChange() { PresentationEpoch++; RaiseStateChanged(); }
+}
+
+/// <summary>Ergonomic drain helpers over a REAL <see cref="VideoEngineCommandQueue"/> so a test can assert exactly what
+/// <see cref="MfMediaSession"/> (or <see cref="MfMediaPlayer"/>) posted without hand-unpacking the queue's generic
+/// <c>(a, i, j, obj)</c> payload at every call site. Mirrors the field mapping <c>VideoMediaEngine.DrainCommands</c>
+/// uses in production — the pinned comments on <c>VideoCommandKind</c>.</summary>
+internal static class FakeEngineCommandExtensions
+{
+    public static bool TryTakeTransport(this VideoEngineCommandQueue q, out bool play)
+    { bool ok = q.TryTake(VideoCommandKind.Transport, out double a, out _, out _, out _); play = a != 0; return ok; }
+
+    public static bool TryTakeSeek(this VideoEngineCommandQueue q, out double seconds, out bool approximate)
+    { bool ok = q.TryTake(VideoCommandKind.Seek, out double a, out int i, out _, out _); seconds = a; approximate = i != 0; return ok; }
+
+    public static bool TryTakeRate(this VideoEngineCommandQueue q, out double rate)
+    { bool ok = q.TryTake(VideoCommandKind.Rate, out double a, out _, out _, out _); rate = a; return ok; }
+
+    public static bool TryTakeVolume(this VideoEngineCommandQueue q, out double volume)
+    { bool ok = q.TryTake(VideoCommandKind.Volume, out double a, out _, out _, out _); volume = a; return ok; }
+
+    public static bool TryTakeMuted(this VideoEngineCommandQueue q, out bool muted)
+    { bool ok = q.TryTake(VideoCommandKind.Muted, out _, out int i, out _, out _); muted = i != 0; return ok; }
+
+    public static bool TryTakeLoop(this VideoEngineCommandQueue q, out bool loop)
+    { bool ok = q.TryTake(VideoCommandKind.Loop, out _, out int i, out _, out _); loop = i != 0; return ok; }
+
+    public static bool TryTakeStreamRect(this VideoEngineCommandQueue q, out int w, out int h)
+    { bool ok = q.TryTake(VideoCommandKind.StreamRect, out _, out int i, out int j, out _); w = i; h = j; return ok; }
+
+    public static bool TryTakeRepaint(this VideoEngineCommandQueue q)
+        => q.TryTake(VideoCommandKind.Repaint, out _, out _, out _, out _);
+
+    public static bool TryTakeSetSource(this VideoEngineCommandQueue q, out int epoch, out string? url)
+    {
+        bool ok = q.TryTake(VideoCommandKind.SetSource, out _, out int i, out _, out object? obj);
+        epoch = i; url = obj as string;
+        return ok;
+    }
+
+    public static bool TryTakeDetach(this VideoEngineCommandQueue q)
+        => q.TryTake(VideoCommandKind.Detach, out _, out _, out _, out _);
 }
 
 /// <summary>A recording <see cref="IVideoPresenter"/> — no DComp. Captures the calls the registry drain makes so a test

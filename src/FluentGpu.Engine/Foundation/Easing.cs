@@ -319,6 +319,25 @@ public enum Easing : byte
     /// └────────────────────────────
     /// </code></summary>
     Pop,
+    /// <summary><b>Hold</b> — step-end: the output stays at the SEGMENT'S START value for the entire span, then jumps
+    /// to the end value only at t=1.
+    /// <para>Not an interpolation at all — a discrete hold, for a keyframe segment authored with no in-between (a
+    /// Lottie/After Effects "hold keyframe", <c>h:1</c>): the value must NOT animate toward the next key, it must
+    /// SNAP the instant the segment ends. Applying this to a continuous property (opacity/scale) looks like a jump
+    /// cut by design — that is the point (visibility toggles, discrete state changes). y = t &lt; 1 ? 0 : 1.</para>
+    /// <code>
+    /// │···························#
+    /// │····························
+    /// │····························
+    /// │····························
+    /// │····························
+    /// │····························
+    /// │····························
+    /// │····························
+    /// │############################
+    /// └────────────────────────────
+    /// </code></summary>
+    Hold,
 }
 
 public readonly record struct EasingSpec
@@ -393,6 +412,7 @@ public static class Easings
         Easing.Overshoot => CubicBezier(t, 0.34f, 1.36f, 0.64f, 1.0f),
         Easing.OvershootStrong => CubicBezier(t, 0.34f, 3.85f, 0.64f, 1.0f),
         Easing.Pop => CubicBezier(t, 0.34f, 1.45f, 0.64f, 1.0f),
+        Easing.Hold => t >= 1f ? 1f : 0f,   // step-end: snap only at the segment's end
         _ => t,   // Linear
     };
 

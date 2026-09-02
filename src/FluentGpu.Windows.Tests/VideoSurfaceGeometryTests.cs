@@ -28,7 +28,7 @@ public sealed class VideoSurfaceGeometryTests
     {
         var core = new MediaPlayerCore();
         var engine = new FakeVideoEngine();
-        var session = new MfMediaSession(engine, new MediaOpenOptions { StartPaused = true });
+        var session = new MfMediaSession(engine, 0, new MediaOpenOptions { StartPaused = true });
         session.ConnectSignals(new MediaSignalSink(core));
         return (session, core, engine);
     }

@@ -72,7 +72,8 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable, IVideoPumpSour
     public async ValueTask Play(MediaSource source)
     {
         await OpenAsync(source).ConfigureAwait(false);
-        if (_core.Error.Peek() is null) await PlayAsync().ConfigureAwait(false);
+        // OpenAsync's final continuation lands on a pool thread; PlayAsync writes _core synchronously, so marshal it.
+        await OnUiAsync(() => { if (_core.Error.Peek() is null) _ = PlayAsync(); }).ConfigureAwait(false);
     }
 
     private static bool LooksLikeUri(string s) => s.Contains("://", StringComparison.Ordinal);
@@ -250,21 +251,25 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable, IVideoPumpSour
     {
         if (_disposed || _session is null) return;
         await _session.SelectTrackAsync(track).ConfigureAwait(false);
-        if (track is null)
+        // Resumes on a pool thread — marshal the core writes to the sole writer.
+        await OnUiAsync(() =>
         {
-            _core.Tracks.DisableText();
-            _activeCaptions = null;
-            _core.SetActiveCue(null);
-        }
-        else
-        {
-            _core.Tracks.Select(track);
-            if (track.Kind == TrackKind.Text)
+            if (track is null)
             {
-                _captionTracks.TryGetValue(track.Id, out _activeCaptions);
+                _core.Tracks.DisableText();
+                _activeCaptions = null;
                 _core.SetActiveCue(null);
             }
-        }
+            else
+            {
+                _core.Tracks.Select(track);
+                if (track.Kind == TrackKind.Text)
+                {
+                    _captionTracks.TryGetValue(track.Id, out _activeCaptions);
+                    _core.SetActiveCue(null);
+                }
+            }
+        }).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
@@ -272,7 +277,8 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable, IVideoPumpSour
     {
         if (_disposed || _session is null) return;
         await _session.SelectQualityAsync(selection).ConfigureAwait(false);
-        _core.Qualities.PublishSelection(selection);
+        // Resumes on a pool thread — marshal the publish to the sole writer.
+        await OnUiAsync(() => _core.Qualities.PublishSelection(selection)).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
@@ -327,12 +333,18 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable, IVideoPumpSour
         if (_session is not null)
         {
             DetachVideoPumpSource();
-            await _session.DisposeAsync().ConfigureAwait(false);
+            var old = _session;
             _session = null;
+            await old.DisposeAsync().ConfigureAwait(false);
         }
 
-        _core.SetError(null);
-        _core.SetState(PlaybackState.Opening);
+        // On a warm-reuse switch (second+ open) the await above resumed on a pool thread — marshal the Opening
+        // publish back to the sole writer like every other core write in this method.
+        await OnUiAsync(() =>
+        {
+            _core.SetError(null);
+            _core.SetState(PlaybackState.Opening);
+        }).ConfigureAwait(false);
         var opts = new MediaOpenOptions
         {
             StartPaused = true,
@@ -348,11 +360,19 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable, IVideoPumpSour
         try
         {
             var session = await backend.OpenAsync(source, opts, ct).ConfigureAwait(false);
-            _session = session;
-            _currentKind = kind;
-            AttachVideoPumpSource(session);
-            session.ConnectSignals(_sink);
-            RequestVideoPump();
+            // backend.OpenAsync resumes on whatever thread completed the open — a pool/native worker thread, once
+            // ConfigureAwait(false) has dropped the original sync context. Session assignment, pump-source wiring,
+            // and ConnectSignals's handful of signal writes into MediaPlayerCore all mutate state whose sole writer
+            // must be the UI thread (MediaPlayerCore's threading doc / spec §12), so the whole mutation is marshaled
+            // through OnUiAsync rather than applied here in place.
+            await OnUiAsync(() =>
+            {
+                _session = session;
+                _currentKind = kind;
+                AttachVideoPumpSource(session);
+                session.ConnectSignals(_sink);
+                RequestVideoPump();
+            }).ConfigureAwait(false);
             await LoadExternalSubtitlesAsync(source, opts.Network, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
@@ -361,16 +381,51 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable, IVideoPumpSour
         }
         catch (Exception ex)
         {
-            _core.SetError(new MediaError(MediaErrorCategory.Source, ex.Message, null, new MediaLocus(null, source, null, null, null), MediaRecovery.Retryable));
-            _core.SetState(PlaybackState.Failed);
+            // Same off-UI-thread hazard as above: this catch arm can run on a pool thread (an exception from
+            // backend.OpenAsync, or rethrown from the OnUiAsync-marshaled block above), so the error/state publish
+            // is marshaled too rather than written from here directly.
+            var error = new MediaError(MediaErrorCategory.Source, ex.Message, null, new MediaLocus(null, source, null, null, null), MediaRecovery.Retryable);
+            await OnUiAsync(() =>
+            {
+                _core.SetError(error);
+                _core.SetState(PlaybackState.Failed);
+            }).ConfigureAwait(false);
         }
     }
 
+    /// <summary>Marshal a <see cref="MediaPlayerCore"/> mutation onto the UI thread — its sole writer (spec §12
+    /// thread-ownership table; see <see cref="MediaPlayerCore"/>'s own threading doc). <see cref="OpenAsync"/>'s
+    /// post-open continuation and <see cref="LoadExternalSubtitlesAsync"/>'s post-fetch track registration both
+    /// resume off the UI thread once a backend/network await drops the calling sync context, so both route their
+    /// core writes through here instead of writing in place. Posts through the process-static
+    /// <see cref="FluentGpu.Hooks.HostDispatch.Current"/> poster and awaits the posted action's completion (not just
+    /// its enqueue), so callers observe the mutation as applied once this returns. No host poster registered
+    /// (headless/test — no cross-thread hop to make) ⇒ <paramref name="action"/> runs inline on the calling thread.</summary>
+    private static ValueTask OnUiAsync(Action action)
+    {
+        var post = FluentGpu.Hooks.HostDispatch.Current;
+        if (post is null) { action(); return ValueTask.CompletedTask; }
+        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        post(() =>
+        {
+            try { action(); tcs.SetResult(); }
+            catch (Exception ex) { tcs.SetException(ex); }
+        });
+        return new ValueTask(tcs.Task);
+    }
+
+    // Called from OpenAsync's try block, i.e. already resumed off the UI thread (see the OnUiAsync note above) — every
+    // write here (the _captionTracks/_activeCaptions bookkeeping and the _core.Tracks/_core.SetActiveCue publishes,
+    // both the up-front reset and the per-subtitle post-fetch registration) is marshaled through OnUiAsync. Only the
+    // network fetch (SubtitleLoader.LoadAsync) runs off-thread, as intended.
     private async ValueTask LoadExternalSubtitlesAsync(MediaSource source, NetworkOptions? network, CancellationToken ct)
     {
-        _captionTracks.Clear();
-        _activeCaptions = null;
-        _core.SetActiveCue(null);
+        await OnUiAsync(() =>
+        {
+            _captionTracks.Clear();
+            _activeCaptions = null;
+            _core.SetActiveCue(null);
+        }).ConfigureAwait(false);
         for (int i = 0; i < source.ExternalSubtitles.Count; i++)
         {
             SubtitleSource subtitle = source.ExternalSubtitles[i];
@@ -379,13 +434,16 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable, IVideoPumpSour
                 CueTrack cues = await SubtitleLoader.LoadAsync(s_subtitleHttp, subtitle, network, ct).ConfigureAwait(false);
                 string label = Path.GetFileNameWithoutExtension(subtitle.Uri);
                 if (string.IsNullOrWhiteSpace(label)) label = $"Subtitle {i + 1}";
-                MediaTrack track = _core.Tracks.AddExternalSubtitle(subtitle, "und", label);
-                _captionTracks[track.Id] = cues;
-                if (_activeCaptions is null)
+                await OnUiAsync(() =>
                 {
-                    _core.Tracks.Select(track);
-                    _activeCaptions = cues;
-                }
+                    MediaTrack track = _core.Tracks.AddExternalSubtitle(subtitle, "und", label);
+                    _captionTracks[track.Id] = cues;
+                    if (_activeCaptions is null)
+                    {
+                        _core.Tracks.Select(track);
+                        _activeCaptions = cues;
+                    }
+                }).ConfigureAwait(false);
             }
             catch (OperationCanceledException) { throw; }
             catch { /* A sidecar subtitle failure never takes down the primary audio/video session. */ }

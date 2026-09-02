@@ -47,7 +47,11 @@ public static class WasapiPcm
             onSessionCreated: session =>
             {
                 // Attach the RT feed (MMCSS Pro-Audio) BEFORE SetVoice so the voice is decode↔RT ring-wrapped (spec §7.9).
-                var feed = new AudioFeedThread(session, blockFrames: 480, rt: new MmcssProAudio());
+                // Sized in TIME, not frames, against the PROBED device rate: a fixed frame count silently shrinks the
+                // decode-ahead cushion at higher rates (4096 frames is 85 ms at 48 kHz but only 21 ms at 192 kHz — well
+                // under the ~100 ms WASAPI device buffer a stall relies on). Named `sampleRate:` to pick the ms-sized
+                // ctor unambiguously (both overloads accept a bare (session, int) call).
+                var feed = new AudioFeedThread(session, sampleRate: format.SampleRate, rt: new MmcssProAudio());
                 var watcher = new MmDeviceWatcher();
                 var controller = new AudioDeviceController(session, () => new WasapiAudioDevice(format), watcher, feed);
                 session.RegisterDisposable(controller);

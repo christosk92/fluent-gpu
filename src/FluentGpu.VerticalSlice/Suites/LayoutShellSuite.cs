@@ -134,6 +134,8 @@ static class LayoutShellSuite
         SidebarCollapseFlipChecks(strings);
         DeviceLostRecoveryChecks(strings);
         FlexChecks(strings);
+        FooterBandChecks(strings);
+        ButtonLabelEllipsisChecks(strings);
         GridSqueezeChecks(strings);
         ShellDockChecks(strings);
         ShellResizeChecks(strings);
@@ -1647,5 +1649,152 @@ static class LayoutShellSuite
                 authorBefore >= 1 && probe.AuthorFires > authorBefore && probe.LastSeenW == 140f,
                 $"authorBefore={authorBefore} authorAfter={probe.AuthorFires} measuredW={probe.LastSeenW}(want 140)");
         }
+    }
+
+    // gate.layout.footer-band — the wizard-footer shape (a WinUI ContentDialog command space with a progress column):
+    // an 80-tall, 24-padded ROW (`AlignItems=Center`, Gap 6) holding [a fixed 210-wide column with an explicit
+    // Height=32/AlignSelf=Center carrying a one-line label over a 162-wide ProgressBar] then TWO stretch buttons
+    // (`Grow=1, Basis=0, MinWidth=0, Height=32`) — inside a fixed 762×490 ZStack plate whose chrome column is
+    // [content Grow/Shrink | 1px separator | this footer]. Field defect: the progress label painted ~30 DIP BELOW the
+    // 32-DIP button lane (clipped by the plate's bottom edge) and one button collapsed to a sliver at the far right.
+    // Pins: every footer child's arranged rect lies inside the footer's content lane, the label and bar sit inside the
+    // progress column, both buttons share the remaining width equally in source order, every child is vertically
+    // centred in the lane, and each button's LABEL stays inside its own button. Checked in the ≥770 (progress column
+    // present) and compact (no column) shapes, for the un-pinned column (no explicit Height — the row's
+    // AlignItems=Center must still keep it inside the band), and with an over-long primary label (the "Checking what's
+    // available for your device…" phase) that must ellipsize inside its half rather than paint across the secondary.
+    // The field defect itself was app-side — the column's 48-DIP RIGHT pad passed as a TOP pad (Edges4 is L,T,R,B),
+    // which this gate reproduced exactly (label +48 DIP, bar past the plate bottom) before the app fix.
+    static void FooterBandChecks(StringTable strings)
+    {
+        const float PlateW = 762f, PlateH = 490f, FooterH = 80f, Pad = 24f, Gap = 6f, ColW = 210f, ColPadR = 48f, BarW = 162f, BtnH = 32f;
+
+        static BoxEl Btn(bool accent, string label) => (accent ? Button.Accent(label, static () => { }) : Button.Standard(label, static () => { }))
+            with { Grow = 1f, Basis = 0f, MinWidth = 0f, Shrink = 1f, Height = BtnH, MinHeight = BtnH, Justify = FlexJustify.Center };
+
+        static BoxEl ProgressColumn(bool pinned) => new BoxEl
+        {
+            Width = ColW, Height = pinned ? BtnH : float.NaN, Shrink = 0f, Direction = 1,
+            Padding = new Edges4(0f, 0f, ColPadR, 0f), Gap = 6f,   // Rise `Padding="0,0,48,0"` — a RIGHT pad (Edges4 is L,T,R,B)
+            Justify = FlexJustify.Center, AlignItems = FlexAlign.Start, AlignSelf = pinned ? FlexAlign.Center : FlexAlign.Auto,
+            Children =
+            [
+                new TextEl("Step 1 of 2") { Size = 14f, Weight = 600, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                ProgressBar.Determinate(0.5f, width: BarW),
+            ],
+        };
+
+        static BoxEl Plate(bool large, bool pinned, string primaryLabel)
+        {
+            var kids = new List<Element>(3);
+            if (large) kids.Add(ProgressColumn(pinned));
+            kids.Add(Btn(true, primaryLabel));
+            kids.Add(Btn(false, "Quit"));
+            var footer = new BoxEl
+            {
+                Height = FooterH, Shrink = 0f, Padding = Edges4.All(Pad),
+                Direction = 0, Gap = Gap, AlignItems = FlexAlign.Center,
+                Children = kids.ToArray(),
+            };
+            var chrome = new BoxEl
+            {
+                Direction = 1, Grow = 1f, Shrink = 1f, MinHeight = 0f,
+                Children =
+                [
+                    new BoxEl
+                    {
+                        Grow = 1f, Shrink = 1f, MinHeight = 0f, Padding = Edges4.All(Pad),
+                        Children = [new BoxEl { Direction = 1, Grow = 1f, Shrink = 1f, MinHeight = 0f,
+                            Children = [new TextEl("Sign in to Spotify") { Size = 28f }, new BoxEl { Height = 900f }] }],
+                    },
+                    new BoxEl { Height = 1f, AlignSelf = FlexAlign.Stretch },
+                    footer,
+                ],
+            };
+            return new BoxEl { ZStack = true, Width = PlateW, Height = PlateH, ClipToBounds = true, Children = [chrome] };
+        }
+
+        static bool Inside(RectF inner, RectF outer, float tol = 0.5f)
+            => inner.X >= outer.X - tol && inner.Y >= outer.Y - tol
+            && inner.X + inner.W <= outer.X + outer.W + tol && inner.Y + inner.H <= outer.Y + outer.H + tol;
+        static bool CentredIn(RectF inner, RectF lane, float tol = 0.75f)
+            => MathF.Abs((inner.Y + inner.H / 2f) - (lane.Y + lane.H / 2f)) <= tol;
+
+        const string LongLabel = "Checking what's available for your device and downloading the runtime…";
+        foreach (var (large, pinned, label0, tag) in new[]
+                 { (true, true, "Log in", "large"), (true, false, "Log in", "large-unpinned"), (false, true, "Log in", "compact"), (true, true, LongLabel, "long-label") })
+        {
+            var s = LayoutTree(strings, Plate(large, pinned, label0));
+            var chrome = Child(s, s.Root, 0);
+            var footer = Child(s, chrome, 2);
+            var fr = s.AbsoluteRect(footer);
+            var lane = new RectF(fr.X + Pad, fr.Y + Pad, fr.W - 2 * Pad, fr.H - 2 * Pad);
+            int idx = 0;
+            RectF col = default, label = default, bar = default;
+            if (large)
+            {
+                var c = Child(s, footer, idx++);
+                col = s.AbsoluteRect(c);
+                label = s.AbsoluteRect(Child(s, c, 0));
+                bar = s.AbsoluteRect(Child(s, c, 1));
+            }
+            var p = s.AbsoluteRect(Child(s, footer, idx));
+            var q = s.AbsoluteRect(Child(s, footer, idx + 1));
+            var pl = s.AbsoluteRect(Child(s, Child(s, footer, idx), 0));
+            var ql = s.AbsoluteRect(Child(s, Child(s, footer, idx + 1), 0));
+            float expectBtnW = (lane.W - (large ? ColW + Gap : 0f) - Gap) / 2f;
+
+            bool footerPlaced = Near(fr.Y, PlateH - FooterH) && Near(fr.H, FooterH) && Near(fr.W, PlateW);
+            bool colOk = !large || (Inside(col, lane) && Near(col.W, ColW) && CentredIn(col, lane)
+                && Inside(label, col) && Inside(bar, col) && label.Y + label.H <= bar.Y + 0.5f && Near(bar.W, BarW));
+            bool btnOk = Inside(p, lane) && Inside(q, lane) && Near(p.H, BtnH) && Near(q.H, BtnH)
+                && Near(p.W, expectBtnW, 1f) && Near(q.W, expectBtnW, 1f)
+                && Near(p.X, lane.X + (large ? ColW + Gap : 0f), 1f) && Near(q.X, p.X + p.W + Gap, 1f)
+                && CentredIn(p, lane) && CentredIn(q, lane);
+            bool labelsOk = Inside(pl, p) && Inside(ql, q) && pl.W > 0f && ql.W > 0f;
+            Check($"gate.layout.footer-band[{tag}] every footer child (progress column + label/bar, two Basis=0 grow buttons) is arranged inside the 32-DIP lane, centred, buttons split the remainder in source order, labels inside their buttons",
+                footerPlaced && colOk && btnOk && labelsOk,
+                $"footer={fr.X:0.#},{fr.Y:0.#},{fr.W:0.#}x{fr.H:0.#} lane={lane.Y:0.#}+{lane.H:0.#} col={col.X:0.#},{col.Y:0.#},{col.W:0.#}x{col.H:0.#} label={label.X:0.#},{label.Y:0.#},{label.W:0.#}x{label.H:0.#} bar={bar.X:0.#},{bar.Y:0.#},{bar.W:0.#}x{bar.H:0.#} primary={p.X:0.#},{p.Y:0.#},{p.W:0.#}x{p.H:0.#} (label {pl.X:0.#},{pl.W:0.#}) secondary={q.X:0.#},{q.Y:0.#},{q.W:0.#}x{q.H:0.#} (label {ql.X:0.#},{ql.W:0.#}) expectBtnW={expectBtnW:0.#}");
+        }
+    }
+
+    // gate.layout.button.label-ellipsis — a Button's label never paints outside the button's chrome: squeezed into a
+    // 120-wide box (a `Grow=1, Basis=0` command-row slot), a sentence-long label ellipsizes at the content width
+    // (WinUI ContentPresenter NoWrap + clip) instead of running across the neighbouring button; a natural-width button
+    // (unconstrained row) still measures to its whole label — trimming engages only under an arranged squeeze.
+    static void ButtonLabelEllipsisChecks(StringTable strings)
+    {
+        const string Long = "Checking what's available for your device\u2026";
+        var squeezed = LayoutTree(strings, new BoxEl
+        {
+            Direction = 0, Width = 240f, Height = 40f, Gap = 6f, AlignItems = FlexAlign.Center,
+            Children =
+            [
+                Button.Accent(Long, static () => { }) with { Grow = 1f, Basis = 0f, MinWidth = 0f, Shrink = 1f, Height = 32f },
+                Button.Standard("Cancel", static () => { }) with { Grow = 1f, Basis = 0f, MinWidth = 0f, Shrink = 1f, Height = 32f },
+            ],
+        });
+        var b0 = Child(squeezed, squeezed.Root, 0);
+        var b1 = Child(squeezed, squeezed.Root, 1);
+        var r0 = squeezed.AbsoluteRect(b0); var r1 = squeezed.AbsoluteRect(b1);
+        var l0 = squeezed.AbsoluteRect(Child(squeezed, b0, 0)); var l1 = squeezed.AbsoluteRect(Child(squeezed, b1, 0));
+        bool squeezedOk = Near(r0.W, 117f, 0.6f) && Near(r1.W, 117f, 0.6f) && Near(r1.X, 123f, 0.6f)
+            && l0.X >= r0.X && l0.X + l0.W <= r0.X + r0.W + 0.5f && l0.W > 0f
+            && l1.X >= r1.X && l1.X + l1.W <= r1.X + r1.W + 0.5f && l1.W > 0f;
+
+        var natural = LayoutTree(strings, new BoxEl
+        {
+            Direction = 0, Height = 40f, AlignItems = FlexAlign.Start,
+            Children = [Button.Accent(Long, static () => { })],
+        });
+        var nb = Child(natural, natural.Root, 0);
+        var nr = natural.AbsoluteRect(nb); var nl = natural.AbsoluteRect(Child(natural, nb, 0));
+        var fonts = new HeadlessFontSystem(strings);
+        float naturalTextW = fonts.Measure(strings.Intern(Long), natural.Layout(Child(natural, nb, 0)).TextStyle).Size.Width;
+        bool naturalOk = Near(nl.W, naturalTextW, 0.6f) && Near(nr.W, naturalTextW + 22f, 0.6f);
+
+        Check("gate.layout.button.label-ellipsis a sentence-long Button label ellipsizes inside a squeezed 117-wide button (never across its sibling) while a natural-width button still hugs its whole label",
+            squeezedOk && naturalOk,
+            $"squeezed: b0={r0.X:0.#}+{r0.W:0.#} label={l0.X:0.#}+{l0.W:0.#} b1={r1.X:0.#}+{r1.W:0.#} label={l1.X:0.#}+{l1.W:0.#} | natural: btn={nr.W:0.#} label={nl.W:0.#} text={naturalTextW:0.#}");
     }
 }

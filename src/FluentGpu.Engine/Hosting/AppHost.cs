@@ -804,7 +804,7 @@ public sealed class AppHost : IDisposable
         _navThrottleFrames = PostRecoveryThrottleFrames;   // drip the re-realize upload burst so the fresh (weak) device doesn't re-hang (foreground path)
         _images.ReRealizeAllResident();
         _frameAfterPaint = true;
-        LastStats = new FrameStats(0, clicks, 0, Rendered: false) { Fps = _fps, FrameMs = _frameMs };
+        LastStats = new FrameStats(0, clicks, 0, Rendered: false) { Fps = _fps, PresentFps = _presentFps, PresentedSequence = this.PresentedSequence, FrameMs = _frameMs };
         PublishFrameStats(LastStats);
         return true;
     }
@@ -1204,8 +1204,8 @@ public sealed class AppHost : IDisposable
     // the same number produces zero string churn and burns no new ids; when ALL five are unchanged the per-node scan
     // is skipped entirely. Sentinel _dynTextQuant=long.MinValue ⇒ "not computed yet" (first frame always interns).
     private readonly long[] _dynTextQuant = InitDynTextQuant();
-    private readonly StringId[] _dynTextId = new StringId[6];
-    private static long[] InitDynTextQuant() { var a = new long[6]; Array.Fill(a, long.MinValue); return a; }
+    private readonly StringId[] _dynTextId = new StringId[7];
+    private static long[] InitDynTextQuant() { var a = new long[7]; Array.Fill(a, long.MinValue); return a; }
     private static ColorF Clear => Theme.WindowBackground;
 
     public SceneStore Scene => _scene;
@@ -1230,14 +1230,16 @@ public sealed class AppHost : IDisposable
         if (_isDetachedChild || _isHeadless || !_device.SupportsSecondarySwapchains || request.Content is null)
             return null;
         float scale = _window.Scale;
-        var desc = new WindowDesc(request.Title, request.InitialSizeDip, scale, Composited: true);
+        // WindowDesc takes PIXELS: the request is DIP, so scale it here or a 150% display opens the window at 2/3 size.
+        var desc = new WindowDesc(request.Title,
+            new Size2(request.InitialSizeDip.Width * scale, request.InitialSizeDip.Height * scale), scale, Composited: true);
         var win = _app.CreateWindow(desc);
 
         // A 16:9-ish client floor so the mini-player can never be dragged down to an unusable sliver (caller-overridable).
         var minDip = request.MinClientSizeDip;
         win.SetMinClientSizePx(minDip.Width > 0f && minDip.Height > 0f
             ? new Size2(minDip.Width * scale, minDip.Height * scale)
-            : new Size2(320f, 180f));
+            : new Size2(320f * scale, 180f * scale));
 
         // A RESTORED placement wins (the user put it there last time), clamped into the work area of the monitor nearest
         // to it — so a window remembered on a display that has since been unplugged still opens somewhere visible instead
@@ -1273,6 +1275,20 @@ public sealed class AppHost : IDisposable
         }
 
         win.Show();
+        // SetBoundsPx above sized the OUTER rect to the requested CLIENT size, so the caption + borders ate into the
+        // content (a 480×270 request produced a ~470×230 client). Now that the window exists its chrome is measurable:
+        // grow the outer rect by that difference, anchored at the bottom-right corner it was placed on. A restored
+        // placement is already an outer rect the user chose, so it is left alone.
+        if (!haveRestored)
+        {
+            var outer = win.OuterBoundsPx;
+            var client = win.ClientSizePx;
+            float dw = outer.W - client.Width, dh = outer.H - client.Height;
+            if (outer.W > 0f && client.Width > 0f && (dw > 0f || dh > 0f))
+                win.SetBoundsPx(new RectF(MathF.Max(work.IsInfinite ? outer.X - dw : work.X, outer.X - dw),
+                                          MathF.Max(work.IsInfinite ? outer.Y - dh : work.Y, outer.Y - dh),
+                                          outer.W + dw, outer.H + dh));
+        }
         if (request.AlwaysOnTop) win.SetTopmost(true);
 
         // Create the host ONLY AFTER the window is sized + shown, so its swapchain, first layout, and published
@@ -1541,9 +1557,10 @@ public sealed class AppHost : IDisposable
 
     private int SoftwarePaceMs()
     {
-        var stats = _device.LastPresentStats;
+        // RefreshPeriodTrusted (not stats.Valid directly) so a per-window refresh source counts as trusted too —
+        // reading _device.LastPresentStats here would silently drop back to device-only and miss the window override.
         double refreshMs = RefreshPeriodQpcOrDefault() * 1000.0 / Stopwatch.Frequency;
-        return SoftwarePaceMs(refreshMs, stats.Valid && stats.RefreshPeriodQpc > 0);
+        return SoftwarePaceMs(refreshMs, RefreshPeriodTrusted());
     }
 
     // -- Production pacing: one frame per compositor tick -----------------------------------------------------------
@@ -1844,9 +1861,14 @@ public sealed class AppHost : IDisposable
     /// clamped to ≥0. Returns the full budget on the first frame.</summary>
     private int AmbientFrameWaitMs()
     {
-        // The panel's refresh, MEASURED (DWM qpcRefreshPeriod) and re-read every wait — so HalfRefresh follows a display
-        // change / a drag to a different-rate monitor with no app involvement, and no cached rate can go stale.
-        long refreshTicks = _device.LastPresentStats.RefreshPeriodQpc;
+        // The panel's refresh, MEASURED (the window's own per-monitor source when available, else DWM qpcRefreshPeriod
+        // via the device's PresentStats — RefreshPeriodQpcSource, the same funnel RefreshPeriodQpcOrDefault uses) and
+        // re-read every wait — so HalfRefresh follows a display change / a drag to a different-rate monitor with no
+        // app involvement, and no cached rate can go stale. Deliberately the UN-defaulted source (0 = genuinely
+        // unknown), not RefreshPeriodQpcOrDefault: this method's own "refreshTicks > 0" branch below already means
+        // "known" vs. "fall back to elapsed-based pacing", and substituting the 60 Hz default here would make the
+        // vblank-anchored branch run against a guessed period instead of falling through honestly.
+        long refreshTicks = RefreshPeriodQpcSource(out _);
         double refreshHz = refreshTicks > 0 ? Stopwatch.Frequency / (double)refreshTicks : 0.0;
         int ambientFps = DeriveAmbientFps(AmbientRate, AmbientAnimationFps, refreshHz);
         if (ambientFps <= 0) return 0;   // uncapped: display rate (AmbientCapEngaged already gates the branch; defensive)
@@ -2636,7 +2658,7 @@ public sealed class AppHost : IDisposable
         if (_window.IsClosed)
         {
             ShutdownRenderThreadOnClose();
-            LastStats = new FrameStats(0, 0, 0, Rendered: false) { Fps = _fps, FrameMs = _frameMs };
+            LastStats = new FrameStats(0, 0, 0, Rendered: false) { Fps = _fps, PresentFps = _presentFps, PresentedSequence = this.PresentedSequence, FrameMs = _frameMs };
             return LastStats;
         }
 
@@ -2704,7 +2726,7 @@ public sealed class AppHost : IDisposable
                 }
                 else
                 {
-                    LastStats = new FrameStats(0, clicks, 0, Rendered: false) { Fps = _fps, FrameMs = _frameMs };
+                    LastStats = new FrameStats(0, clicks, 0, Rendered: false) { Fps = _fps, PresentFps = _presentFps, PresentedSequence = this.PresentedSequence, FrameMs = _frameMs };
                     return LastStats;   // block cleanly; the render thread's windowWake nudges us when RecoverDone flips
                 }
             }
@@ -2787,7 +2809,7 @@ public sealed class AppHost : IDisposable
             // the scene) instead of piling up until the restore frame. Same intent as the minimize-EDGE flush above, now
             // per drained minimized frame; a frame with nothing drained costs nothing.
             if (drainedPosts) _runtime.Flush();
-            LastStats = new FrameStats(0, clicks, 0, Rendered: false) { Fps = _fps, FrameMs = _frameMs };
+            LastStats = new FrameStats(0, clicks, 0, Rendered: false) { Fps = _fps, PresentFps = _presentFps, PresentedSequence = this.PresentedSequence, FrameMs = _frameMs };
             // Awake-but-skipped: counts toward _framesRun + _framesMinimized (rendered:false), the wake-diag's
             // "frames spent minimized" signal. wake is recomputed here since the s_wakeDiag snapshot is below.
             if (_wakeDiag is not null) { _wakeDiag.Record(ComputeWakeReasons(), awake: true, rendered: false, reconciled: false, laidOut: false, minimized: true); _wakeDiag.MaybeReport(); }
@@ -2814,7 +2836,7 @@ public sealed class AppHost : IDisposable
             if (s_allocDiag) db = Probe(SegImages, db, dt);
             if (completed == 0)
             {
-                LastStats = new FrameStats(0, clicks, 0, Rendered: false) { Fps = _fps, FrameMs = _frameMs };
+                LastStats = new FrameStats(0, clicks, 0, Rendered: false) { Fps = _fps, PresentFps = _presentFps, PresentedSequence = this.PresentedSequence, FrameMs = _frameMs };
                 if (_wakeDiag is not null) { _wakeDiag.Record(WakeReasons.None, awake: false, rendered: false, reconciled: false, laidOut: false, minimized: IsMinimized); _wakeDiag.MaybeReport(); }
                 if (_memCensus is not null) _memCensus.MaybeReport();
                 if (s_allocTypes) AllocTypeProfiler.MaybeReport();
@@ -2835,7 +2857,7 @@ public sealed class AppHost : IDisposable
         // shown. Reported Rendered:false, which is already the shape of the five other early-outs in this method.
         if (ProductionGateBlocks())
         {
-            LastStats = new FrameStats(0, clicks, 0, Rendered: false) { Fps = _fps, FrameMs = _frameMs };
+            LastStats = new FrameStats(0, clicks, 0, Rendered: false) { Fps = _fps, PresentFps = _presentFps, PresentedSequence = this.PresentedSequence, FrameMs = _frameMs };
             if (_wakeDiag is not null) { _wakeDiag.Record(wake, awake: true, rendered: false, reconciled: false, laidOut: false, minimized: false); _wakeDiag.MaybeReport(); }
             if (s_allocDiag) _diagUiBytes += GC.GetAllocatedBytesForCurrentThread() - diagUiStart;
             return LastStats;
@@ -4367,12 +4389,44 @@ public sealed class AppHost : IDisposable
     private long _prevLatencyPresentQpc;   // the present stamp this row's predecessor saw (for the present interval)
     private uint _prevPresentRefreshCount;  // DXGI vblank ordinal of the previous attested present (0 = none yet)
 
-    /// <summary>Refresh period in QPC ticks, MEASURED (DWM qpcRefreshPeriod) rather than nominal. Falls back to 60 Hz
-    /// only when the backend reports nothing; a consumer distinguishes the two via the stats' Valid bit.</summary>
+    /// <summary>Refresh period in QPC ticks, sourced with priority: THIS window's own per-monitor value
+    /// (<see cref="IPlatformWindow.DisplayRefreshPeriodQpc"/> — so a drag to a different-rate display, or simply
+    /// being on a secondary monitor, re-paces with no app involvement) → the device's swapchain
+    /// <see cref="FluentGpu.Rhi.PresentStats.RefreshPeriodQpc"/> (whole-app fallback: the only source before the
+    /// first per-window sample, or on a backend with no per-monitor query) → 0 when neither reports anything.
+    /// <paramref name="trusted"/> is the bit a caller needs to tell "genuinely measured" from "nothing known yet":
+    /// true for any nonzero window value (a per-window API report is never speculative) or for a Valid device
+    /// sample; false otherwise. The ONE place that orders window-over-device — <see cref="RefreshPeriodQpcOrDefault"/>
+    /// and <see cref="RefreshPeriodTrusted"/> both funnel through this rather than re-deriving it.</summary>
+    private long RefreshPeriodQpcSource(out bool trusted)
+    {
+        long fromWindow = _window.DisplayRefreshPeriodQpc;
+        if (fromWindow > 0) { trusted = true; return fromWindow; }
+        var stats = _device.LastPresentStats;
+        trusted = stats.Valid && stats.RefreshPeriodQpc > 0;
+        return stats.RefreshPeriodQpc;
+    }
+
+    /// <summary>Refresh period in QPC ticks, MEASURED (<see cref="RefreshPeriodQpcSource"/> — the window's own
+    /// per-monitor source when available, else DWM qpcRefreshPeriod via the device's PresentStats) rather than
+    /// nominal. Falls back to 60 Hz only when neither source reports anything; a consumer distinguishes "measured"
+    /// from "defaulted" via <see cref="RefreshPeriodTrusted"/> rather than the stats' Valid bit directly — this is
+    /// the single funnel every pacing/prediction consumer (including <c>RefreshLattice.Build</c>'s staleness gate
+    /// and present prediction) must read.</summary>
     private long RefreshPeriodQpcOrDefault()
     {
-        long p = _device.LastPresentStats.RefreshPeriodQpc;
+        long p = RefreshPeriodQpcSource(out _);
         return p > 0 ? p : Stopwatch.Frequency / 60;
+    }
+
+    /// <summary>True iff <see cref="RefreshPeriodQpcOrDefault"/>'s value is attested (the window's own period, or a
+    /// Valid device PresentStats sample) rather than the 60 Hz default it silently substitutes. Companion helper so
+    /// a caller that needs the trust bit (<c>SoftwarePaceMs</c>) reads the one funnel instead of re-deriving it from
+    /// <c>_device.LastPresentStats</c> directly and bypassing the window source.</summary>
+    private bool RefreshPeriodTrusted()
+    {
+        RefreshPeriodQpcSource(out bool trusted);
+        return trusted;
     }
 
     // QuantizedFrameSec (the ad-hoc lattice snap this method used to do inline) is now RefreshLattice.Snap, called
@@ -4589,6 +4643,7 @@ public sealed class AppHost : IDisposable
         // _fps / _frameMs at the SAME point the prior code's resolve lambda did (the previous frame's stats — this runs
         // before LastStats is reassigned), so the displayed values are unchanged frame-for-frame.
         anyChanged |= RefreshDynText(DynamicTextKind.FrameFps);
+        anyChanged |= RefreshDynText(DynamicTextKind.FramePresentFps);
         anyChanged |= RefreshDynText(DynamicTextKind.FrameCommandCount);
         anyChanged |= RefreshDynText(DynamicTextKind.FrameDrawCount);
         anyChanged |= RefreshDynText(DynamicTextKind.FrameCullCount);
@@ -4606,6 +4661,7 @@ public sealed class AppHost : IDisposable
         long quant = kind switch
         {
             DynamicTextKind.FrameFps => _fps <= 0.0 ? DynTextNoData : (long)Math.Round(_fps, MidpointRounding.AwayFromZero),
+            DynamicTextKind.FramePresentFps => _presentFps <= 0.0 ? DynTextNoData : (long)Math.Round(_presentFps, MidpointRounding.AwayFromZero),
             DynamicTextKind.FrameCommandCount => LastStats.DrawCommandCount,
             DynamicTextKind.FrameDrawCount => LastStats.DrawNodeCount,
             DynamicTextKind.FrameCullCount => LastStats.CulledNodeCount,
@@ -4617,6 +4673,7 @@ public sealed class AppHost : IDisposable
         string s = kind switch
         {
             DynamicTextKind.FrameFps => quant == DynTextNoData ? "--" : _fps.ToString("0", CultureInfo.InvariantCulture),
+            DynamicTextKind.FramePresentFps => quant == DynTextNoData ? "--" : _presentFps.ToString("0", CultureInfo.InvariantCulture),
             DynamicTextKind.FrameMs => quant == DynTextNoData ? "--" : _frameMs.ToString("0.0", CultureInfo.InvariantCulture),
             _ => quant.ToString(CultureInfo.InvariantCulture),
         };

@@ -54,8 +54,10 @@ public static class SuiteRegistry
         new("overlay", "overlay", OverlaySuite.Run),
         new("damage", "damage", DamageSuite.Run),
         new("path", "path", PathSuite.Run),
+        new("lottie", "lottie", LottieSuite.Run),
         new("text", "text", TextSuite.Run),
         new("diagnostics", "diagnostics", DiagnosticsSuite.Run),
+        new("media-seam", "media-seam", MediaSeamSuite.Run),
     ];
 
     public static IEnumerable<SuiteEntry> Filter(string? suiteSpec)

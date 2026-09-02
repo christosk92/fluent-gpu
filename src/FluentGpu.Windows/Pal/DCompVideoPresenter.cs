@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using FluentGpu.Foundation;
 using FluentGpu.Pal;
 using FluentGpu.Rhi.D3D12;
@@ -35,12 +36,21 @@ public sealed unsafe class DCompVideoPresenter : IVideoPresenter, IDisposable
         public bool Visible;
         public bool InTree;                  // AddVisual'd under the current root
         public bool Dirty;                   // Place/SetVisible pending for the next Commit
+        public bool PlacementFaulted;        // last ApplyPlacement hit a failing native call and bailed early (diagnostic;
+                                              // cleared at the top of the next ApplyPlacement attempt)
     }
 
     private readonly D3D12Device _device;
     private readonly Slot[] _slots = new Slot[MaxSurfaces];
     private int _dirtyCount;
     private bool _graphDirty;   // AddVisual/RemoveVisual must Commit even when no live slot needs placement
+
+    // Fault-logging dedup for Ok(): PER-PRESENTER (not per-slot) — a shared native call (Commit, AttachChild's
+    // AddVisual, CreateSurface's CreateVisual) has no slot to key on, and coalescing failures across slots by hr alone
+    // is the conservative (quieter) choice for what would otherwise be a per-Commit-retry log storm. Keyed on the raw
+    // HRESULT only (not the "what" string), so a first occurrence of a given hr logs once and any later occurrence —
+    // same call site or a different one — stays silent until the presenter is recreated (device-lost rebuild).
+    private readonly HashSet<uint> _loggedHrs = new();
 
     // Diagnostic opt-in only: place the video child z-ABOVE the UI (the M3 spike shortcut that skipped the hole-punch).
     // The PRODUCTION path is z-BELOW the UI, revealed through the premultiplied-0 hole (IVideoPresenter contract).
@@ -70,7 +80,9 @@ public sealed unsafe class DCompVideoPresenter : IVideoPresenter, IDisposable
         if (idx < 0) throw new InvalidOperationException($"DCompVideoPresenter: out of surface slots (max {MaxSurfaces}).");
 
         IDCompositionVisual* child;
-        Check(Dcomp->CreateVisual(&child), "CreateVisual(video child)");
+        if (!Ok(Dcomp->CreateVisual(&child), "CreateVisual(video child)"))
+            return default;   // none id (Value 0) — VideoSurfaceRegistry.Drain sees SurfaceId still IsNone, keeps the
+                               // slot dirty, and retries CreateSurface on the next drain (VideoSurfaceRegistry.cs)
         _slots[idx] = new Slot { InUse = true, Child = child, Opacity = 1f, Visible = true };
         AttachChild(ref _slots[idx]);   // insert z-BELOW the UI visual under the current root
         return new VideoSurfaceId((uint)(idx + 1));   // id 0 == none
@@ -82,10 +94,18 @@ public sealed unsafe class DCompVideoPresenter : IVideoPresenter, IDisposable
         ref Slot s = ref Get(id);
         IUnknown* surface;
         // The single DRM attach point (DRM-free here): wrap the external shareable surface handle and bind it as content.
-        Check(Dcomp->CreateSurfaceFromHandle((HANDLE)(nint)dcompSurfaceHandle, &surface), "CreateSurfaceFromHandle");
+        // Non-throwing: on failure the slot's previous content (if any) is left bound as-is — the visual keeps showing
+        // whatever it already had (or nothing, on the very first bind). This self-heals without any retry logic here:
+        // VideoSurfaceRegistry only clears its BoundHandle bookkeeping once this call actually returns to the caller
+        // normally, so the next presentation-epoch bump (a new handle published by the engine, e.g. FORMATCHANGE) makes
+        // DesiredHandle != BoundHandle again and Drain calls BindSurfaceHandle again on its own.
+        if (!Ok(Dcomp->CreateSurfaceFromHandle((HANDLE)(nint)dcompSurfaceHandle, &surface), "CreateSurfaceFromHandle"))
+            return;
         if (s.Content != null) s.Content->Release();
         s.Content = surface;
-        Check(s.Child->SetContent(surface), "video child SetContent");
+        if (!Ok(s.Child->SetContent(surface), "video child SetContent"))
+            return;   // surface object swapped into s.Content but not attached to the visual; the next handle change
+                      // (or a rebind forced by OnSwapchainRebound) retries SetContent with the same surface pointer
         s.Dirty = true; _dirtyCount++;
     }
 
@@ -160,7 +180,8 @@ public sealed unsafe class DCompVideoPresenter : IVideoPresenter, IDisposable
             s.Dirty = false;
         }
         _dirtyCount = 0;
-        Check(Dcomp->Commit(), "video presenter Commit");
+        Ok(Dcomp->Commit(), "video presenter Commit");   // non-throwing; a failure here just leaves DWM showing the
+                                                          // prior frame's composition — the next dirty placement retries
         _graphDirty = false;
     }
 
@@ -179,7 +200,7 @@ public sealed unsafe class DCompVideoPresenter : IVideoPresenter, IDisposable
             if (s.Content != null) s.Child->SetContent(s.Content);
             ApplyPlacement(ref s);
         }
-        Check(Dcomp->Commit(), "video presenter Commit(rebound)");
+        Ok(Dcomp->Commit(), "video presenter Commit(rebound)");   // non-throwing; see Commit()
     }
 
     private void AttachChild(ref Slot s)
@@ -194,8 +215,10 @@ public sealed unsafe class DCompVideoPresenter : IVideoPresenter, IDisposable
         // UI at its clipped rect, so it shows over an OPAQUE page background without a hole-punch — useful for isolating
         // a hole-punch problem from a compositing problem, never the shipping path.
         BOOL above = s_zAbove ? BOOL.TRUE : BOOL.FALSE;
-        Check(sc.DcompRoot->AddVisual(s.Child, above, sc.DcompVisual),
-            s_zAbove ? "Root.AddVisual(video child, above UI [diagnostic])" : "Root.AddVisual(video child, below UI)");
+        if (!Ok(sc.DcompRoot->AddVisual(s.Child, above, sc.DcompVisual),
+            s_zAbove ? "Root.AddVisual(video child, above UI [diagnostic])" : "Root.AddVisual(video child, below UI)"))
+            return;   // s.InTree stays false; the next AttachChild call (a later Drain/CreateSurface, or the next
+                      // OnSwapchainRebound) retries — nothing else in this class depends on InTree becoming true here
         s.InTree = true;
     }
 
@@ -209,8 +232,14 @@ public sealed unsafe class DCompVideoPresenter : IVideoPresenter, IDisposable
     private void ApplyPlacement(ref Slot s)
     {
         if (s.Child == null) return;
-        Check(s.Child->SetOffsetX(s.Rect.X), "video child SetOffsetX");
-        Check(s.Child->SetOffsetY(s.Rect.Y), "video child SetOffsetY");
+        s.PlacementFaulted = false;
+        // Every native call below is Ok()-guarded and bails out (marking PlacementFaulted + returning) at the first
+        // failure — no throw into the render thread's Commit path. A bailed-out placement leaves the visual at its
+        // PREVIOUS offset/transform/clip; the slot stays Dirty==false (Commit already cleared it before calling this),
+        // so the stale placement persists until the NEXT Place()/SetVisible()/etc. call marks the slot dirty again —
+        // exactly the same self-heal shape as BindSurfaceHandle's failure path.
+        if (!Ok(s.Child->SetOffsetX(s.Rect.X), "video child SetOffsetX")) { s.PlacementFaulted = true; return; }
+        if (!Ok(s.Child->SetOffsetY(s.Rect.Y), "video child SetOffsetY")) { s.PlacementFaulted = true; return; }
 
         // Scale the native-resolution content (e.g. a 1920×1080 decoder swapchain) to exactly fill the placed device
         // rect. The rect is already aspect-fit by the caller (MediaPlayerElement.FitVideoRect), so this letterboxes
@@ -222,7 +251,7 @@ public sealed unsafe class DCompVideoPresenter : IVideoPresenter, IDisposable
         float sy = scaled ? s.Rect.H / s.ContentH : 1f;
         D2D_MATRIX_3X2_F m = default;
         m.m11 = sx; m.m22 = sy;
-        Check(s.Child->SetTransform(&m), "video child SetTransform(scale)");
+        if (!Ok(s.Child->SetTransform(&m), "video child SetTransform(scale)")) { s.PlacementFaulted = true; return; }
 
         // Belt-and-suspenders clip in the visual's LOCAL (pre-transform) space: the full content when scaling (a no-op
         // guard that maps to the rect), else the device rect. Hidden ⇒ empty rect (the M0 SetVisible semantics).
@@ -240,7 +269,7 @@ public sealed unsafe class DCompVideoPresenter : IVideoPresenter, IDisposable
         if (s.Radius <= 0f)
         {
             if (s.RoundClip != null) { s.Child->SetClip((IDCompositionClip*)null); s.RoundClip->Release(); s.RoundClip = null; }
-            Check(s.Child->SetClip(&clip), "video child SetClip");
+            if (!Ok(s.Child->SetClip(&clip), "video child SetClip")) s.PlacementFaulted = true;
             return;
         }
 
@@ -250,21 +279,25 @@ public sealed unsafe class DCompVideoPresenter : IVideoPresenter, IDisposable
         if (s.RoundClip == null)
         {
             IDCompositionRectangleClip* created;   // via a local: s is a ref into the slot array, so &s.RoundClip is unfixed
-            Check(Dcomp->CreateRectangleClip(&created), "CreateRectangleClip(video child)");
+            if (!Ok(Dcomp->CreateRectangleClip(&created), "CreateRectangleClip(video child)")) { s.PlacementFaulted = true; return; }
             s.RoundClip = created;
         }
         float rx = MathF.Min(s.Radius / sx, (clip.right - clip.left) * 0.5f);
         float ry = MathF.Min(s.Radius / sy, (clip.bottom - clip.top) * 0.5f);
         var rc = s.RoundClip;
-        Check(rc->SetLeft(clip.left), "round clip SetLeft");
-        Check(rc->SetTop(clip.top), "round clip SetTop");
-        Check(rc->SetRight(clip.right), "round clip SetRight");
-        Check(rc->SetBottom(clip.bottom), "round clip SetBottom");
-        Check(rc->SetTopLeftRadiusX(rx), "round clip TL x");       Check(rc->SetTopLeftRadiusY(ry), "round clip TL y");
-        Check(rc->SetTopRightRadiusX(rx), "round clip TR x");      Check(rc->SetTopRightRadiusY(ry), "round clip TR y");
-        Check(rc->SetBottomLeftRadiusX(rx), "round clip BL x");    Check(rc->SetBottomLeftRadiusY(ry), "round clip BL y");
-        Check(rc->SetBottomRightRadiusX(rx), "round clip BR x");   Check(rc->SetBottomRightRadiusY(ry), "round clip BR y");
-        Check(s.Child->SetClip((IDCompositionClip*)rc), "video child SetClip(rounded)");
+        if (!Ok(rc->SetLeft(clip.left), "round clip SetLeft")) { s.PlacementFaulted = true; return; }
+        if (!Ok(rc->SetTop(clip.top), "round clip SetTop")) { s.PlacementFaulted = true; return; }
+        if (!Ok(rc->SetRight(clip.right), "round clip SetRight")) { s.PlacementFaulted = true; return; }
+        if (!Ok(rc->SetBottom(clip.bottom), "round clip SetBottom")) { s.PlacementFaulted = true; return; }
+        if (!Ok(rc->SetTopLeftRadiusX(rx), "round clip TL x")) { s.PlacementFaulted = true; return; }
+        if (!Ok(rc->SetTopLeftRadiusY(ry), "round clip TL y")) { s.PlacementFaulted = true; return; }
+        if (!Ok(rc->SetTopRightRadiusX(rx), "round clip TR x")) { s.PlacementFaulted = true; return; }
+        if (!Ok(rc->SetTopRightRadiusY(ry), "round clip TR y")) { s.PlacementFaulted = true; return; }
+        if (!Ok(rc->SetBottomLeftRadiusX(rx), "round clip BL x")) { s.PlacementFaulted = true; return; }
+        if (!Ok(rc->SetBottomLeftRadiusY(ry), "round clip BL y")) { s.PlacementFaulted = true; return; }
+        if (!Ok(rc->SetBottomRightRadiusX(rx), "round clip BR x")) { s.PlacementFaulted = true; return; }
+        if (!Ok(rc->SetBottomRightRadiusY(ry), "round clip BR y")) { s.PlacementFaulted = true; return; }
+        if (!Ok(s.Child->SetClip((IDCompositionClip*)rc), "video child SetClip(rounded)")) s.PlacementFaulted = true;
     }
 
     private ref Slot Get(VideoSurfaceId id)
@@ -290,8 +323,22 @@ public sealed unsafe class DCompVideoPresenter : IVideoPresenter, IDisposable
         _dirtyCount = 0;
     }
 
-    private static void Check(HRESULT hr, string what)
+    /// <summary>
+    /// Non-throwing replacement for the presenter's former throwing <c>Check</c>: nothing in this class may throw a
+    /// failing HRESULT into the render thread's Commit/present path (a device-lost or transient DComp/DXGI failure here
+    /// must degrade the video surface, never crash the frame). Returns <c>true</c> on a succeeding HRESULT; on failure,
+    /// logs the FIRST occurrence of each distinct <paramref name="hr"/> via <see cref="Diag.Line"/> (always-on —
+    /// routes to <see cref="Diag.Sink"/> or stderr, never gated behind an opt-in env var) and stays silent for any
+    /// later repeat of the same hr (see <see cref="_loggedHrs"/>), then returns <c>false</c> so the caller can degrade
+    /// in place — mark a slot faulted and bail out of placement, return a none <see cref="VideoSurfaceId"/>, or leave
+    /// previously-bound content untouched. Every call site decides its own degrade; this helper only decides whether
+    /// to throw (never) and whether to log (once per hr).
+    /// </summary>
+    private bool Ok(HRESULT hr, string what)
     {
-        if ((int)hr < 0) throw new InvalidOperationException($"{what} failed: 0x{(uint)hr:X8}");
+        if ((int)hr >= 0) return true;
+        if (_loggedHrs.Add((uint)hr))
+            Diag.Line($"[video.presenter] {what} failed: 0x{(uint)hr:X8}");
+        return false;
     }
 }

@@ -88,7 +88,10 @@ logic — not yet written; its layout-participant half is owned here), `threadin
 ### 1.3 The single seam call
 
 `ITextLayoutEngine.Measure(in TextLayoutRequest, in MeasureConstraints) → TextMeasure` (text.md §3.x) is the **only**
-call out of `FluentGpu.Layout` on the hot path. DPI arrives as a plain `float scale` (no PAL/RHI). Everything else
+call out of `FluentGpu.Layout` on the hot path. DPI arrives as a plain `float scale` (no PAL/RHI) — and app zoom
+is invisible here too: the browser-style zoom (`pal-rhi.md` §1.2) reaches layout already folded into that one
+scalar (effective scale = OS DPI × zoom), so the DIP viewport is simply px ÷ effective scale and a zoom step is an
+ordinary `ConfigVersion` scale change (§5). Everything else
 is column reads/writes and arena scratch. This keeps the macOS port (CoreText) a Text-leaf swap with **zero layout
 changes** (§11).
 

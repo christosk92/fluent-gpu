@@ -183,6 +183,10 @@ Run it (host wiring): see **[getting-started.md](./getting-started.md)**.
     edits, the one local command (`ops/release/wavee-release.ps1` — there is no CI release job), the `-DryRun`
     rehearsal, the phase + preflight-gate tables, failure recovery (`-Resume` / `-Abort`), rollback
     (`-RepointFeed … -AllowDowngrade`), and the scratch-feed end-to-end test of the tooling itself.
+16. **[app-zoom.md](./app-zoom.md)** — browser-style **app zoom** (Ctrl+= / Ctrl+- / Ctrl+0 / Ctrl+wheel): seeding
+    a persisted level via `AppOptions.Zoom`, live control via `FluentApp.SetZoom` + the discrete `ZoomLadder`, the
+    invisible-`BoxEl` accelerator recipe with the recommended chord set, the `InputHooks.ZoomWheel` Ctrl+wheel hook,
+    `Viewport.Zoom` for display, and the v1 limitations (primary window only; no touchpad pinch).
 
 ---
 

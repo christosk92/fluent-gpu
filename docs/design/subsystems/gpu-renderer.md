@@ -1601,6 +1601,12 @@ list** (D2D is a Windows-only crutch).
   D2D golden fallback; open subpaths implicitly closed for fill, left open for stroke.
 - **DPI change:** invalidate `PathRealizationCache` (scale in key), re-bake gradients if needed, full
   redraw; back buffer is physical px (DPI change without client-size change does not resize the swapchain).
+- **App-zoom step:** rides the SAME scale-change route as a DPI change — the effective scale (`pal-rhi.md` §1.2:
+  OS DPI × zoom) changed, so the target is invalidated for a named full repaint (§13.1a's `canvasValid` clears on
+  any canvas scale change) and every scale-keyed cache re-realizes at the new bucket. This is WHY zoom is discrete
+  (`FluentGpu.Foundation.ZoomLadder`): the glyph-atlas run/glyph keys quantize the device scale ×100 and the path
+  realization key quantizes `DeviceScaleQ` (§5.1), so a fixed ladder of well-spaced steps bounds churn to one
+  re-raster per step — a continuous zoom drag would rebuild both caches on nearly every frame of the drag.
 - **Damage overflow / occluded:** full redraw; occluded window → 1Hz test-present.
 - **Selection spanning many visual fragments (huge BiDi range):** `text.md`'s `GetSelectionRects` is
   caller-sized + bounded (`E_NOT_SUFFICIENT_BUFFER` → arena-grow-retry on its side); the recorder emits one

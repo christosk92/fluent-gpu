@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Immutable;
 using System.Diagnostics;
+using System.Runtime;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -266,6 +267,22 @@ public sealed class PcmAudioSession : IMediaSession
     private bool _disposed;
     private int _prefillPumps = 1;
 
+    // ── hiccup-hardening fixes (adjacent to the M4 decode-ahead-ring fix; see the class remarks) ─────────────────────────
+    // Fix 2: true while a control-requested seek/flush is expected to empty the ring (suppress xrun accounting for it).
+    // RT-readable (a single volatile bool read — see SuppressXrunAccounting); only the control thread writes it.
+    private volatile bool _seekRebufferActive;
+    private long _seekRebufferDeadlineMs;   // control-thread only — bounds fix 2 so a stuck ring can't suppress xruns forever
+    private const long RingRefillTimeoutMs = 1500;   // shared safety net for fixes 1 and 2 — "never hang" / "never suppress forever"
+    // Fix 3: captured off RegisterDisposable (spec §7.9 on-box wiring registers the controller there) so a sustained
+    // sink-write failure can ask for a rebuild without a new cross-file hook.
+    private AudioDeviceController? _deviceController;
+    private int _consecutiveSinkFailures;
+    private const int SinkFailureRebuildThreshold = 8;   // ~8 blocks (~80 ms at a 10 ms block) of total silence-write failure
+    // Fix 4a: the previous process-wide GC latency mode, restored on dispose; set for the lifetime of a live session so a
+    // Gen2 collection can't suspend the RT thread mid-callback.
+    private GCLatencyMode? _prevGcLatencyMode;
+    private bool _warmedUp;   // fix 4b — the one-time pre-Start() warm-up pass (see WarmUp())
+
     private IAudioSource? _voice;
     private long _voiceTotalFrames;
     private TimeSpan _duration;
@@ -316,6 +333,53 @@ public sealed class PcmAudioSession : IMediaSession
     /// <summary>RT-feed ring underruns (silence written) since this session opened. 0 on the single-thread pull path.</summary>
     public long XrunCount => _feed?.XrunCount ?? 0;
 
+    /// <summary>Total frames of silence written on starve since this session opened — the SEVERITY companion to
+    /// <see cref="XrunCount"/> (which counts incidents). 0 on the single-thread pull path.</summary>
+    public long XrunFramesLost => _feed?.XrunFramesLost ?? 0;
+
+    /// <summary>Drain per-underrun incident records into <paramref name="dst"/>, returning how many were written. The feed
+    /// is a private implementation detail of the session, so this forwarder is how a host surfaces dropouts without
+    /// reaching into the RT plumbing. NON-RT callers only; returns 0 on the single-thread pull path (no feed, no rings).</summary>
+    public int DrainXrunEvents(Span<AudioFeedThread.XrunEvent> dst) => _feed?.DrainXrunEvents(dst) ?? 0;
+
+    /// <summary>Fix 2 (spec): true while a control-requested seek/flush is EXPECTED to empty the primary ring — a seek
+    /// intentionally discards buffered PCM (<see cref="WorkerApplySeek"/>/<see cref="RtConsumeFlush"/> on the ring below),
+    /// so the RT loop's very next reads finding it empty are a planned rebuffer, not a real underrun, and must not pollute
+    /// <see cref="XrunCount"/>. A single volatile read — safe to poll from the RT thread. Cleared by
+    /// <see cref="UpdateSeekRebufferSuppression"/> once the ring has refilled (or a bounded timeout elapses so a
+    /// stuck/dead ring can never suppress real xruns forever).
+    /// <para><b>Hook required in <c>AudioFeedThread.FeedOnce</c> (owned by the M4 feed-thread agent; NOT applied here per
+    /// the file-ownership split for this task):</b> gate the existing xrun increment on this flag —
+    /// <c>if (starved &amp;&amp; !_session.SuppressXrunAccounting) Interlocked.Increment(ref _xrunCount);</c> (currently
+    /// <c>if (starved) Interlocked.Increment(ref _xrunCount);</c>). That one-line change is the only remaining piece; this
+    /// property + its arm/clear lifecycle are fully implemented on the session side.</para></summary>
+    public bool SuppressXrunAccounting => _seekRebufferActive;
+
+    // CONTROL: a seek/flush was just requested — start suppressing xrun accounting for the rebuffer it causes.
+    private void ArmSeekRebufferSuppression()
+    {
+        _seekRebufferActive = true;
+        _seekRebufferDeadlineMs = Environment.TickCount64 + RingRefillTimeoutMs;
+    }
+
+    // CONTROL (called once per Advance tick): clear the fix-2 suppression once the ring has genuinely refilled past its
+    // decode-ahead target (the rebuffer is over) or the bounded deadline elapses (never suppress real xruns forever).
+    private void UpdateSeekRebufferSuppression()
+    {
+        if (!_seekRebufferActive) return;
+        if (_feed is null || Environment.TickCount64 >= _seekRebufferDeadlineMs) { _seekRebufferActive = false; return; }
+
+        var rings = _feed.RingsSnapshot;
+        long active = ActiveVoiceIdValue;
+        for (int i = 0; i < rings.Length; i++)
+        {
+            if (rings[i].VoiceId != active) continue;
+            var ring = rings[i].Ring;
+            if (ring.BufferedFrames >= ring.TargetFrames || ring.Exhausted) _seekRebufferActive = false;
+            return;
+        }
+    }
+
     /// <summary>Publish an audio graph (spec §7.4 atomic swap). Control-thread only.</summary>
     public void Configure(AudioGraphSpec spec) => _graph.Publish(spec);
 
@@ -323,8 +387,15 @@ public sealed class PcmAudioSession : IMediaSession
     /// around the voice (the worker decodes ahead, the RT thread mixes copy-only). Control-thread only; call before opening.</summary>
     public void AttachFeed(AudioFeedThread feed) => _feed = feed;
 
-    /// <summary>Register an owned resource (the device watcher/controller wired on-box) disposed with the session.</summary>
-    public void RegisterDisposable(IDisposable resource) => (_owned ??= new()).Add(resource);
+    /// <summary>Register an owned resource (the device watcher/controller wired on-box) disposed with the session. Also
+    /// captures an <see cref="AudioDeviceController"/> (fix 3) so a sustained sink-write failure in
+    /// <see cref="RenderBlock"/> can request a follow-default rebuild — the on-box wiring (<c>WasapiPcm.CreateBackend</c>)
+    /// already registers the controller here, so no new cross-file hook is needed for this.</summary>
+    public void RegisterDisposable(IDisposable resource)
+    {
+        (_owned ??= new()).Add(resource);
+        if (_deviceController is null && resource is AudioDeviceController adc) _deviceController = adc;
+    }
     private System.Collections.Generic.List<IDisposable>? _owned;
 
     /// <summary>True once an RT feed is attached (the render is driven by <see cref="RtRenderOnce"/>, not the inline pump).</summary>
@@ -603,9 +674,25 @@ public sealed class PcmAudioSession : IMediaSession
     {
         _sink = sink;
         _position.Reset();
+        EnterSustainedLowLatency();   // fix 4a — for the lifetime of this live session (restored in DisposeAsync)
         sink.PlayRequested(_playRequested);
         Publish(PlaybackState.Opening);
         if (_driveWithOwnThread) StartFeeder();
+    }
+
+    /// <summary>Fix 4a (spec): a blocking Gen2 collection on the managed RT feed thread suspends it mid-callback — a direct
+    /// hiccup cause. <see cref="GCSettings.LatencyMode"/> is process-wide, so this captures whatever was in effect and
+    /// restores it on <see cref="DisposeAsync"/>; idempotent (a second <see cref="ConnectSignals"/> on the same session
+    /// never re-captures over its own already-applied mode).</summary>
+    private void EnterSustainedLowLatency()
+    {
+        if (_prevGcLatencyMode is not null) return;
+        try
+        {
+            _prevGcLatencyMode = GCSettings.LatencyMode;
+            GCSettings.LatencyMode = GCLatencyMode.SustainedLowLatency;
+        }
+        catch { _prevGcLatencyMode = null; /* best-effort — an unsupported host must never block session open */ }
     }
 
     /// <inheritdoc/>
@@ -637,7 +724,7 @@ public sealed class PcmAudioSession : IMediaSession
 
         // RT path: route the inner-decoder seek to the WORKER (the sole toucher of the inner decoder — spec §7.9/§12); a
         // control-thread seek mid-decode is the LinearResampler torn-Reset crash. Single-thread path: seek inline.
-        if (_feed is not null) _feed.RequestSeek(frame);
+        if (_feed is not null) { _feed.RequestSeek(frame); ArmSeekRebufferSuppression(); }
         else if (_voice is DecoderAudioSource das) das.SeekFrame(frame);
         else if (_voice is TrimmingSource ts) ts.SeekFrame(frame);
         else if (_voice is MemoryAudioSource mas) mas.SeekFrame(frame);
@@ -684,6 +771,29 @@ public sealed class PcmAudioSession : IMediaSession
         return RenderBlock(frames);
     }
 
+    /// <summary>Fix 1 (spec): whether Buffering may release into Ready/Playing. The OLD rule (`--_prefillPumps &lt;= 0`) let
+    /// Buffering last exactly one ~15 ms control tick regardless of how much audio the worker actually got into the ring —
+    /// so the instant the state flips to Playing, the RT loop free-runs to fill the empty ~100 ms device buffer, demanding
+    /// far more than a ring given ~15 ms had time to hold (the audible startup burst on every fresh open). On the RT path
+    /// this instead polls the PRIMARY ring's <see cref="RingAudioSource.BufferedFrames"/> against its
+    /// <see cref="RingAudioSource.TargetFrames"/> (the worker's decode-ahead goal — sized well past the device buffer by
+    /// the sibling M4 ring-depth fix), gated by a bounded wall-clock deadline so a dead/exhausted/very-short source can
+    /// never hang Buffering forever. The single-thread pull path (no ring — <see cref="_feed"/> is null) is UNCHANGED: the
+    /// exact old tick-count decrement, so its golden-PCM/deterministic-test semantics are byte-identical.</summary>
+    /// <summary>
+    /// Buffering → Ready. Deliberately a PUMP COUNT, not a ring-depth gate.
+    /// <para>A ring-depth prefill gate was tried here (hold until the ring covers the device buffer) to remove the
+    /// starve burst at the start of every track. It was reverted: playback must be able to start on a ring that is
+    /// EMPTY and may stay empty for a while — a live/ICY stream, a slow CDN, or any producer that fills lazily — and
+    /// <c>AudioFeedRaceTests.FeedThread_Underrun_BumpsXrunCounter</c> pins exactly that ("the worker never ran → the
+    /// voice ring is starved", still Playing). A depth gate turns those into a multi-second stall before the first
+    /// sample, which is a worse defect than the burst it removes.</para>
+    /// <para>The burst itself is handled where it actually belongs — <c>AudioFeedThread</c>'s per-wake block cap. The
+    /// RT loop can no longer rapid-fire an unbounded number of blocks to fill the device buffer, so it cannot drain the
+    /// ring faster than real time whether or not playback started with a full one.</para>
+    /// </summary>
+    private bool BufferingReady() => --_prefillPumps <= 0;
+
     private PlaybackState Advance(int frames, bool renderInline)
     {
         if (_disposed || _sink is null) return _state;
@@ -691,16 +801,18 @@ public sealed class PcmAudioSession : IMediaSession
         frames = Math.Clamp(frames, 1, _maxBlock);
 
         ReconcileEffects();   // control-thread: fold live effect-signal changes into the graph/plane (spec §7.10)
+        UpdateSeekRebufferSuppression();   // fix 2: clear the seek/flush xrun-suppression window once the ring refills
 
         switch (_state)
         {
             case PlaybackState.Opening:
                 PublishMetadata(sink);
+                _prefillPumps = 1;   // re-arm the Buffering pump budget for this open
                 Publish(PlaybackState.Buffering);
                 break;
 
             case PlaybackState.Buffering:
-                if (--_prefillPumps <= 0)
+                if (BufferingReady())
                 {
                     sink.Buffer(new BufferHealth(Array.Empty<TimeRange>(),
                         _duration < TimeSpan.FromSeconds(30) ? _duration : TimeSpan.FromSeconds(30), false, StallPolicy.Rebuffer));
@@ -743,7 +855,20 @@ public sealed class PcmAudioSession : IMediaSession
 
     /// <summary>Pull ONE block through the full graph (mixer → master volume → master chain incl. limiter → sink), advance
     /// the clock, and mark one graph-consume step. Pure DSP: zero managed allocation (the §7.9 RT tripwire scope). This is
-    /// what the golden-PCM + zero-alloc gates drive directly.</summary>
+    /// what the golden-PCM + zero-alloc gates drive directly.
+    /// <para><b>Fix 3 (spec):</b> <c>IAudioSink.Write</c> returns the frames the device actually ACCEPTED — this used to be
+    /// discarded, unconditionally returning <paramref name="frames"/>. If the client is invalidated withOUT a device-change
+    /// notification (driver reset, exclusive-mode grab, some sleep/resume paths), <c>GetCurrentPadding</c> fails inside the
+    /// sink and <c>Write</c> returns ~0 INSTANTLY (no more blocking-as-pacing); with the old unconditional return,
+    /// <see cref="RtRenderOnce"/> kept reporting a full render, so <c>AudioFeedThread.RtLoop</c>'s
+    /// <c>if (rendered &lt;= 0) Thread.Sleep(...)</c> never fired and the RT loop spun flat-out, decoding the rest of the
+    /// track at CPU speed into silence. Now an under-delivered write is reported as NOT rendered (0), which re-arms that
+    /// sleep and throttles the loop back to one wasted block per period instead of an unbounded burst; a run of
+    /// <see cref="SinkFailureRebuildThreshold"/> consecutive under-deliveries asks the on-box
+    /// <see cref="AudioDeviceController"/> (captured via <see cref="RegisterDisposable"/>) for a follow-default rebuild —
+    /// the same recovery path a real device-loss notification drives. <see cref="AudioDeviceController.RequestRebuild"/> is
+    /// alloc-free (an <c>Interlocked</c> write + an <c>AutoResetEvent.Set</c>) and only fires on this already-degraded,
+    /// far-from-hot path, so it stays inside the §7.9 alloc/duration tripwire without adding a steady-state cost.</para></summary>
     public int RenderBlock(int frames)
     {
         frames = Math.Clamp(frames, 1, _maxBlock);
@@ -770,7 +895,16 @@ public sealed class PcmAudioSession : IMediaSession
         _masterGain.Process(buf, buf, frames, ctx);
         _masterChannel.Process(buf, buf, frames, ctx);
         graph.RenderMaster(buf, frames, ctx);
-        _out.Write(buf, frames);
+
+        // Fix 3: honor the sink's accepted-frame count instead of assuming the whole block landed (see the class remarks).
+        int written = _out.Write(buf, frames);
+        bool sinkAcceptedFull = written >= frames;
+        if (sinkAcceptedFull) _consecutiveSinkFailures = 0;
+        else if (++_consecutiveSinkFailures >= SinkFailureRebuildThreshold)
+        {
+            _consecutiveSinkFailures = 0;   // reset so a still-broken sink can trip the threshold again later
+            _deviceController?.RequestRebuild();
+        }
 
         TapBlock(buf, frames);   // post-master level/peak for the visualizer (spec §7.3 Tap node) — alloc-free
 
@@ -780,7 +914,10 @@ public sealed class PcmAudioSession : IMediaSession
         AudioTripwire.EndBlock();
 
         _position.ExtraLatencySamples = graph.TotalLatencySamples;
-        return frames;
+        // Not-rendered (0) on an under-delivered write re-arms AudioFeedThread.RtLoop's `rendered <= 0` sleep branch
+        // instead of spinning (see the class remarks) — the RT-callback caller (RtRenderOnce) is the one this matters for;
+        // the single-thread pull path (PumpAudio → Advance) discards this return value, so it is unaffected.
+        return sinkAcceptedFull ? frames : 0;
     }
 
     private void TapBlock(ReadOnlySpan<float> buf, int frames)
@@ -824,7 +961,34 @@ public sealed class PcmAudioSession : IMediaSession
     {
         if (_started) return;
         _started = true;
+        WarmUp();   // fix 4b — pre-page the render path ONCE before the very first _out.Start()
         _out.Start();
+    }
+
+    /// <summary>Fix 4b (spec): run the render path once, silently, before the FIRST <see cref="_out"/>.Start(). NativeAOT has
+    /// no JIT, but static-constructor initialization and binary page-in still happen on first touch — leaving that to the
+    /// first real RT callback is a guaranteed first-seconds glitch. This deliberately does NOT reuse the session's live
+    /// <see cref="_masterGain"/>/<see cref="_masterChannel"/>/<see cref="_graph"/>/<see cref="_mixer"/> or the real sink:
+    /// those carry state a stray pass could perturb (a gain ramp mid-flight, a limiter envelope) or — via
+    /// <see cref="IAudioSink.Write"/> — actually present a leading silent block ahead of the track's first real frame
+    /// (which would corrupt a golden-PCM capture). Instead it exercises fresh, throwaway instances of the exact same
+    /// stage types over a private scratch buffer, so the method bodies/static state get paged in with zero observable
+    /// effect on this (or any) session. The DECODE side of the pipeline needs no separate warm-up: fix 1 already holds
+    /// Buffering until the worker has genuinely decoded ahead into the ring, so the decoder/resampler code is already hot
+    /// by the time this runs. Best-effort — any failure here must never block <see cref="EnsureStarted"/>.</summary>
+    private void WarmUp()
+    {
+        if (_warmedUp) return;
+        _warmedUp = true;
+        try
+        {
+            var scratch = new float[_maxBlock * _format.Channels];
+            var warmCtx = new BlockCtx(0, _format.SampleRate, _format.Channels, new ParamPlane());
+            new GainStage(1f).Process(scratch, scratch, _maxBlock, warmCtx);
+            new ChannelStage(0f, false).Process(scratch, scratch, _maxBlock, warmCtx);
+            new AudioGraphHost(_format.Channels, _format.SampleRate).Live.RenderMaster(scratch, _maxBlock, warmCtx);
+        }
+        catch { /* best-effort — a warm-up fault must never block Start() */ }
     }
 
     /// <summary>Raised when a device rebuild adopts an endpoint that clocks at a DIFFERENT sample rate than the session's
@@ -884,7 +1048,7 @@ public sealed class PcmAudioSession : IMediaSession
     private void SeekToStart()
     {
         // RT path: worker-routed (sole inner-decoder toucher — spec §7.9/§12); single-thread path: inline.
-        if (_feed is not null) _feed.RequestSeek(0);
+        if (_feed is not null) { _feed.RequestSeek(0); ArmSeekRebufferSuppression(); }
         else if (_voice is DecoderAudioSource das) das.SeekFrame(0);
         else if (_voice is TrimmingSource ts) ts.SeekFrame(0);
         else if (_voice is MemoryAudioSource mas) mas.SeekFrame(0);
@@ -940,6 +1104,12 @@ public sealed class PcmAudioSession : IMediaSession
         _pumpThread = null;
         try { _out.Stop(); } catch { /* teardown never throws */ }
         try { _endpoint?.Dispose(); } catch { /* teardown never throws */ }
+        // Fix 4a: restore whatever process-wide GC latency mode was in effect before this session went live.
+        if (_prevGcLatencyMode is GCLatencyMode prevMode)
+        {
+            try { GCSettings.LatencyMode = prevMode; } catch { /* teardown never throws */ }
+            _prevGcLatencyMode = null;
+        }
         // Publish the terminal state BEFORE severing the sink — without this, a torn-down session leaves
         // MediaPlayerCore.State pinned at whatever it last was (often Playing) forever, because nothing else ever
         // writes to it again once _sink goes null.

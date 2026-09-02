@@ -83,7 +83,13 @@ public enum DrmSystem : byte { None, Widevine, PlayReady, FairPlay, ClearKey }
 
 /// <summary>Per-source DRM configuration (spec §5 <c>With(DrmConfig)</c>). The engine never sees a content key or a
 /// decrypted pixel — DRM attaches at the single protected-handle bind point (spec §9.2).</summary>
-public sealed record DrmConfig(DrmSystem System, string? LicenseServerUri = null, MediaContentType? ContentType = null);
+public sealed record DrmConfig(DrmSystem System, string? LicenseServerUri = null, MediaContentType? ContentType = null)
+{
+    /// <summary>Opaque per-source descriptor consumed by the platform DRM backend (on Windows a parsed
+    /// <c>DashSourceDescriptor</c>). Carried on the SOURCE so one long-lived backend/player can switch between
+    /// protected sources in place — a descriptor baked into the backend constructor pins it to one track.</summary>
+    public object? SourceDescriptor { get; init; }
+}
 
 /// <summary>An EME-shaped license request (spec §9.2): the CDM emitted a challenge; the app relays it to a license
 /// server and returns the <see cref="LicenseResponse"/>. Headlessly testable — no CDM required to exercise the relay.</summary>

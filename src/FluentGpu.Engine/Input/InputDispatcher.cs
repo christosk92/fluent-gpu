@@ -1055,17 +1055,20 @@ public sealed class InputDispatcher
                         // Click on release-over-same (ClickMode.Release). Pointer FOCUS already moved on the press
                         // edge (WinUI ButtonBase_Partial.cpp:700-709) — the release only fires the click.
                         // Commits on the OWNER, never on the inert hit node (which has no handler to fire).
-                        if (!wasRepeat) InvokeActivation(upOwner.IsNull ? up : upOwner, ContextRequestTrigger.Invoke);   // repeat nodes already fired via the ticker
+                        //
                         // Hyperlink span click: release over the span's laid rect fires ITS action (WinUI inline
                         // Hyperlink commits on the release over the pressed hyperlink, RichTextBlock.cpp:2996-3001).
                         // Still strictly release-over-the-SAME-node: a span action is the leaf's, not the owner's, so
                         // the widened owner-equality above must not let a press elsewhere on the plate fire a link.
-                        if (sameNode && (_scene.Interaction(up).HandlerMask & InteractionInfo.SpanLinksBit) != 0)
-                        {
-                            int si = HitLinkSpan(up, PointToLocal(up, e.PositionPx));
-                            if (si >= 0 && _scene.TryGetSpanText(up, out var linkSpans) && (uint)si < (uint)linkSpans.Length)
-                                linkSpans[si].OnClick?.Invoke();
-                        }
+                        // A hit link IS the click: the nearest clickable ancestor does NOT also activate. SpanLinksBit
+                        // is not ClickBit, so NearestClickOwner walks past the text leaf to the plate - firing both
+                        // made "click the artist link on a track card" navigate AND play/open the card (WinUI: the
+                        // Hyperlink handles the pointer event, so the ancestor Button never sees the click).
+                        int linkSpan = sameNode && (_scene.Interaction(up).HandlerMask & InteractionInfo.SpanLinksBit) != 0
+                            ? HitLinkSpan(up, PointToLocal(up, e.PositionPx)) : -1;
+                        if (linkSpan >= 0 && _scene.TryGetSpanText(up, out var linkSpans) && (uint)linkSpan < (uint)linkSpans.Length)
+                            linkSpans[linkSpan].OnClick?.Invoke();
+                        else if (!wasRepeat) InvokeActivation(upOwner.IsNull ? up : upOwner, ContextRequestTrigger.Invoke);   // repeat nodes already fired via the ticker
                         handled++;
                     }
                     else if (!_dragTarget.IsNull && _scene.IsLive(_dragTarget) &&
@@ -2519,14 +2522,15 @@ public sealed class InputDispatcher
                 // commits on the nearest clickable ancestor. Touch keeps the STRICT same-node gate — the pan/slop
                 // machinery above already owns "did this contact stay put", and widening it here would let a contact
                 // that wandered to a sibling still tap the plate.
+                // A tapped hyperlink span IS the tap (same rule as the mouse release): the link fires and the clickable
+                // ancestor stays silent, instead of both running.
                 var tapOwner = NearestClickOwner(up);
-                InvokeActivation(tapOwner.IsNull ? up : tapOwner, ContextRequestTrigger.Invoke);   // tap = release-over-same click (or context-invoke on a ClickRequestsContext node)
-                if ((_scene.Interaction(up).HandlerMask & InteractionInfo.SpanLinksBit) != 0)
-                {
-                    int si = HitLinkSpan(up, PointToLocal(up, e.PositionPx));
-                    if (si >= 0 && _scene.TryGetSpanText(up, out var linkSpans) && (uint)si < (uint)linkSpans.Length)
-                        linkSpans[si].OnClick?.Invoke();
-                }
+                int linkSpan = (_scene.Interaction(up).HandlerMask & InteractionInfo.SpanLinksBit) != 0
+                    ? HitLinkSpan(up, PointToLocal(up, e.PositionPx)) : -1;
+                if (linkSpan >= 0 && _scene.TryGetSpanText(up, out var linkSpans) && (uint)linkSpan < (uint)linkSpans.Length)
+                    linkSpans[linkSpan].OnClick?.Invoke();
+                else
+                    InvokeActivation(tapOwner.IsNull ? up : tapOwner, ContextRequestTrigger.Invoke);   // tap = release-over-same click (or context-invoke on a ClickRequestsContext node)
                 handled = true;
             }
             _panTarget = NodeHandle.Null;   // the pan candidate ends with the tap / completed late-pan

@@ -1,5 +1,6 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
@@ -12,14 +13,24 @@ namespace FluentGpu.Media.Windows;
 
 /// <summary>
 /// A live Media-Foundation video session (spec §9.1): drives an <see cref="IVideoEngine"/> (the PROVEN
-/// <see cref="VideoMediaEngine"/> in production) and maps its worker-thread event state onto the player's
+/// <see cref="VideoMediaEngine"/> in production) and maps its POD <see cref="VideoEngineSnapshot"/> onto the player's
 /// <see cref="MediaSignalSink"/>. State translation, transport, position projection and the composited-surface handoff all
-/// run on the UI/pump thread (<see cref="PumpVideo"/>) so the sink's sole-writer contract holds; every ComPtr stays behind
-/// the engine's MTA thread.
+/// run on the UI/pump thread (<see cref="PumpVideo"/>) so the sink's sole-writer contract holds.
+///
+/// <para><b>Snapshot out, commands in</b> (<c>docs/plans/video-smooth-switching-implementation.md</c> §1.4). This session
+/// never blocks and never touches a ComPtr: <see cref="PumpVideo"/> reads exactly ONE <see cref="IVideoEngine.Snapshot"/>
+/// per turn (a wait-free seqlock read) and every transport verb (<see cref="PlayAsync"/>/<see cref="PauseAsync"/>/
+/// <see cref="SeekAsync"/>/rate/volume/mute/stream-rect/repaint) is a fire-and-forget POST through
+/// <see cref="IVideoEngine.Commands"/> — accepted synchronously, realized by the engine thread on its own schedule, and
+/// observed by the NEXT pump. There is no 10 Hz poll timer any more: the engine is the sole source of the position clock
+/// (<see cref="VideoEngineSnapshot.PositionSeconds"/> sampled at <see cref="VideoEngineSnapshot.PositionTimestamp"/>,
+/// extrapolated forward here by elapsed·rate while playing) and of the live DVR window (latched
+/// <see cref="VideoEngineFlags.LiveSource"/>, re-published by the engine's own self-refresh) — nothing needs a
+/// background nudge to stay fresh.</para>
 /// <list type="bullet">
-/// <item>Transport (<see cref="PlayAsync"/>/<see cref="PauseAsync"/>/<see cref="SeekAsync"/>/rate/volume/mute) is
-///   idempotent and accepted SYNCHRONOUSLY — it records intent + forwards to the engine and returns a completed task; it
-///   never throws or blocks. The next <see cref="PumpVideo"/> realizes the resulting state transition.</item>
+/// <item>Transport is idempotent and accepted SYNCHRONOUSLY — it records intent + posts to the engine and returns a
+///   completed task; it never throws or blocks. The next <see cref="PumpVideo"/> realizes the resulting state
+///   transition.</item>
 /// <item>Position is projected from the engine's presentation clock (authoritative), pushed each pump.</item>
 /// <item><see cref="Video"/> is <see cref="VideoDelivery.None"/> until the swap-chain handle + natural size exist, then a
 ///   <see cref="VideoDelivery.CompositedSurface"/> — the shipping Path A (spec §9.1).</item>
@@ -28,8 +39,15 @@ namespace FluentGpu.Media.Windows;
 public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideoPumpSource
 {
     private readonly IVideoEngine _engine;
+    // The source-switch generation THIS session owns (IVideoEngine.PostSetSource's return value). A snapshot whose
+    // SourceEpoch does not match is either not-yet-caught-up (the engine hasn't drained the SetSource command yet) or
+    // belongs to a LATER session sharing a warm-reused engine — either way, nothing here is safe to act on.
+    private readonly int _sourceEpoch;
     private readonly MediaOpenOptions _opts;
     private readonly AdaptiveManifest? _manifest;
+    // Returns the engine warm to MfMediaPlayer's pool (pause + detach — no teardown) instead of disposing it. Null only
+    // in tests that construct a session directly; every production session (MfMediaPlayer.OpenAsync) supplies one.
+    private readonly Action<IVideoEngine>? _release;
 
     private MediaSignalSink? _sink;
     private bool _disposed;
@@ -44,67 +62,33 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
     // Realized/published state (UI thread, via the pump).
     private bool _metaReady;
     private SizeI _naturalSize = SizeI.Zero;
-    // True while the engine has still not ANSWERED what the decoded video size is (its bounded Invoke expired), as
-    // opposed to having answered "audio-only". Keeps the pump asking — and keeps the poll timer requesting pumps to ask
-    // with — until a real answer arrives. See the LATE NATURAL SIZE block in Pump.
-    private bool _naturalSizePending;
-    // The last IVideoEngine.PresentationEpoch this session acted on. A mismatch means MF switched renditions
-    // (FORMATCHANGE — a NEW decoded frame size) or rebuilt its swap chain (RESOURCELOST): re-ask for the natural size
-    // and re-assert the stream rect, or the surface composites forever at the FIRST variant's geometry.
+    // The last IVideoEngine.Snapshot.PresentationEpoch this session acted on. A mismatch means MF switched renditions
+    // (FORMATCHANGE — a NEW decoded frame size), rebuilt its swap chain (RESOURCELOST), or the engine just accepted a
+    // fresh SetSource (which bumps the same epoch) — re-ask for the natural size and re-assert the stream rect, or the
+    // surface composites forever at the previous generation's geometry.
     private int _presentationEpoch;
     private TimeSpan _duration = TimeSpan.Zero;
     private nuint _handle;
-    // The size (px) the video stream was last sized to inside MF's own swap chain. This is now the (capped) NATURAL
-    // frame size, NOT the destination rect: MF renders the full frame 1:1 into its swap chain and DirectComposition
-    // performs the fit — see the §3 comment in PumpVideo.
+    // The size (px) the video stream was last sized to inside MF's own swap chain — the (capped) NATURAL frame size,
+    // NOT the destination rect: MF renders the full frame 1:1 into its swap chain and DirectComposition performs the
+    // fit — see the §3 comment in PumpVideo.
     private int _streamW, _streamH;
     private PlaybackState _publishedState = PlaybackState.Opening;
-    // The last command bitset actually pushed to the sink. Commands are no longer a one-shot publish at first metadata:
-    // an engine-live source only reveals its DVR window a pump or two later (and that window keeps sliding), which is
-    // what decides GoLive/Seek. Value-gated here so re-computing every pump costs a comparison and publishes nothing.
+    // The last command bitset actually pushed to the sink. Value-gated here so re-computing every pump costs a
+    // comparison and publishes nothing when nothing changed.
     private MediaCommandFlags _publishedCommands;
     private bool _errorPublished;
     private bool _seeking;
-    // Native DComp auto-presents decoded frames. This flag asks RepaintCurrentFrame only for an initial/reconfigured
+    // Native DComp auto-presents decoded frames. This flag asks for a Repaint command only for an initial/reconfigured
     // hand-off or a real media-engine event, never once per host frame.
     private int _repaintPending = 1;
-
-    // ── Off-thread cache for the engine polls PumpVideo used to make blocking round-trips for every frame
-    // (ReadyState/DurationSeconds/CurrentTimeSeconds all marshal to VideoMediaEngine's dedicated MTA thread and
-    // block the caller — see the plan). Refreshed by RefreshEngineStateCache from two places: (a) OnEngineStateChanged,
-    // which already runs off an MF worker thread on every discrete transition, and (b) a lightweight background
-    // timer, needed because MF's continuous TIMEUPDATE notifications are deliberately NOT wired to StateChanged
-    // (VideoMediaEngine.OnEngineEvent — avoids a pump storm), so position would otherwise only refresh on discrete
-    // transport events and go stale mid-playback. PumpVideo (the UI thread) only ever READS these.
-    //
-    // VideoMediaEngine.Invoke is now bounded (Agent A): a call that doesn't answer within its timeout returns
-    // default(T), i.e. 0. DurationSeconds/CurrentTimeSeconds already treat 0.0 as "unknown" by their own contract
-    // (see their doc comments in VideoMediaEngine.cs), so a timed-out refresh is indistinguishable from — and
-    // handled identically to — a genuine "not known yet" read: we simply never regress an already-known value back
-    // down to 0/unknown; the next successful refresh (soon — the timeout is tens of ms, the poll period is 100ms)
-    // corrects it. ReadyState has no such "0 = unknown" convention (0 is also HAVE_NOTHING), but it only feeds a
-    // cosmetic buffering percentage, so a transient 0 from a timeout just self-corrects on the next tick.
-    private uint _cachedReadyState;
-    private double _cachedDurationSeconds;
-    private double _cachedPositionSeconds;
-    // ── engine-reported live state (only consulted when there is no manifest — see the LIVE WITHOUT A MANIFEST note on
-    // PublishEngineLiveTimeline). Written by RefreshEngineStateCache off the UI thread, read by the pump; latched, never
-    // regressed, because IVideoEngine.IsLiveSource answering false can mean "the bounded read expired", not "VOD".
-    private volatile bool _engineLive;
-    private double _cachedSeekableStart;
-    private double _cachedSeekableEnd;
-    private Timer? _pollTimer;
-    // 10 Hz. MediaSeekBar already treats a native position report as a low-cadence anchor and interpolates between
-    // reports on its own FrameClock ticker (see MediaSeekBar.cs) — the playhead needs nowhere near per-frame (60Hz+)
-    // freshness, and 100ms is comfortably inside what that interpolation smooths over.
-    private const int PositionPollMs = 100;
 
     /// <inheritdoc/>
     public event Action? PumpRequested;
 
     // In-band (manifest-declared) subtitle rendering: track-id → its adaptation, the loaded cue timeline, and the
     // last published cue. The cue timeline is built OFF-thread and swapped in as a whole (reference write); the pump
-    // (UI thread) only ever reads a fully-built CueTrack.
+    // (UI thread) only ever reads a fully-built CueTrack. Unrelated to the engine seam — unchanged.
     private static readonly HttpClient s_subtitleHttp = new();
     private readonly Dictionary<int, AdaptiveTrackGroup> _textGroups = new();
     private volatile CueTrack? _inbandCues;
@@ -117,91 +101,43 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
     private const int CueSegmentsAhead = 3;    // prefetch a few segments ahead of the playhead
     private const int CueWindowPollMs = 500;   // re-evaluate the window this often as playback advances
 
-    internal MfMediaSession(IVideoEngine engine, MediaOpenOptions opts, AdaptiveManifest? manifest = null)
+    internal MfMediaSession(IVideoEngine engine, int sourceEpoch, MediaOpenOptions opts,
+        AdaptiveManifest? manifest = null, Action<IVideoEngine>? release = null)
     {
         _engine = engine;
+        _sourceEpoch = sourceEpoch;
         _opts = opts;
         _manifest = manifest;
-        // A DECLARED live source is live from construction — before the first byte, let alone before MF's own bounded
-        // live probe answers. That is the whole point of SourceLiveness.Live: the host already resolved the locator and
-        // KNOWS. Everything downstream (duration suppression, the live timeline, the live command bitset) keys off this
-        // flag, so setting it here is what makes those correct on the very first metadata pump instead of a second or
-        // two later — the window in which a finite "duration" would otherwise have already been published.
-        _engineLive = opts.Liveness == SourceLiveness.Live;
+        _release = release;
         _playRequested = !opts.StartPaused;
         if (_playRequested) _everPlayed = true;
         _engine.StateChanged += OnEngineStateChanged;
-        _pollTimer = new Timer(static state =>
-        {
-            var self = (MfMediaSession)state!;
-            self.RefreshEngineStateCache();
-            // Pumps are EVENT-driven (VideoSurfaceRegistry never pumps per host frame), so a session still waiting on an
-            // answer from the engine has to ask for the pump that will re-ask the question — otherwise a read that lost
-            // its bounded-Invoke race is never retried. Self-terminating: the engine always answers eventually.
-            //
-            // A live source needs the same nudge for a different reason, and permanently: its DVR window SLIDES, so the
-            // live edge and the distance to it change with wall-clock time and not with any engine event — without a
-            // pump at this cadence the "how far behind live am I" readout freezes at whatever the last discrete
-            // transport event left it. The pump it asks for here carries NO repaint (the repaint flag is for surface
-            // state, and windowless DComp presents decoded frames on its own): a 10 Hz RepaintCurrentFrame would be
-            // 10 marshaled round-trips per second onto the engine thread for nothing.
-            if (self._disposed) return;
-            if (self._naturalSizePending) self.RequestPump();
-            else if (self._engineLive) self.RequestPump(repaint: false);
-        }, this, PositionPollMs, PositionPollMs);
     }
 
-    private void OnEngineStateChanged()
-    {
-        RefreshEngineStateCache();   // already off the UI thread (MF worker) — prime the cache before waking the pump
-        RequestPump();
-    }
+    // The engine's own self-refresh keeps the snapshot fresh (no poll timer here any more): a discrete transition
+    // wakes this via StateChanged, and a live/resolving/playing source keeps refreshing itself on the engine thread's
+    // own cadence — both paths converge on requesting one settled UI-thread pump.
+    private void OnEngineStateChanged() => RequestPump();
 
-    // Off the UI thread by construction (called from an MF worker via OnEngineStateChanged, or from the background
-    // poll timer's threadpool thread) — the blocking VideoMediaEngine round-trips are fine here.
-    private void RefreshEngineStateCache()
-    {
-        if (_disposed) return;
-        _cachedReadyState = _engine.ReadyState;
-        // A DECLARED live source has no length, so nothing may ever latch one. MF answers GetDuration() for a live
-        // HLS master playlist with the width of its sliding DVR window (a YouTube live stream reports ~3:22) — a
-        // finite, plausible, WRONG number that the transport would render as "0:03 / -3:19" and a seek bar would map
-        // a rail onto. Not consulting the latch at all is stronger than filtering it at the publish site: there is
-        // then no cached value for a later code path to pick up.
-        if (_cachedDurationSeconds <= 0 && !ForcedLive)
-        {
-            double d = _engine.DurationSeconds;   // 0.0 == "unknown" by this property's own contract
-            if (d > 0) _cachedDurationSeconds = d;   // never regress a known duration back to unknown
-        }
-        if (_engine.MetadataLoaded)
-        {
-            double p = _engine.CurrentTimeSeconds;   // ditto: 0.0 == "unknown/not yet answered", not "reset to 0"
-            if (p > 0 || _cachedPositionSeconds == 0) _cachedPositionSeconds = p;
-            // LIVE WITHOUT A MANIFEST. A manifest-driven source already carries its own live window (PublishLiveTimeline
-            // reads the segment list), so only ask the engine when there is no manifest: an HLS/live URL handed straight
-            // to MF (a YouTube/Twitch master playlist) has no parsed manifest here and MF is the only thing that knows.
-            // IsLiveSource false is inconclusive (bounded read) so it is LATCHED true and never cleared; the seekable
-            // window is re-read every tick because for a live source it slides forward continuously.
-            // SourceLiveness.Vod turns the inference OFF entirely (a bounded probe can never latch a false positive
-            // onto a source the host has declared finite); SourceLiveness.Live latched at construction and needs no
-            // probe at all — it only needs the WINDOW, which is read below. Auto is the unchanged path.
-            if (_manifest is null && _opts.Liveness != SourceLiveness.Vod)
-            {
-                if (!_engineLive && _opts.Liveness == SourceLiveness.Auto && _engine.IsLiveSource) _engineLive = true;
-                if (_engineLive)
-                {
-                    (double start, double end) = _engine.SeekableRange;
-                    if (end > 0) { _cachedSeekableStart = start; _cachedSeekableEnd = end; }
-                }
-            }
-        }
-    }
-
-    /// <summary>The caller DECLARED this source live (<see cref="SourceLiveness.Live"/>). Distinct from
-    /// <c>_engineLive</c>, which is also set by MF's own probe on the Auto path: only a DECLARED live source suppresses
-    /// the duration outright, because on the Auto path the finite duration MF reports is all we have until the probe
+    /// <summary>The caller DECLARED this source live (<see cref="SourceLiveness.Live"/>). Distinct from the engine's own
+    /// latched <see cref="VideoEngineFlags.LiveSource"/> bit: only a DECLARED live source suppresses the duration
+    /// outright, because on the Auto path the finite duration MF reports is all we have until the engine's own probe
     /// answers, and dropping it would regress every VOD URL.</summary>
     private bool ForcedLive => _opts.Liveness == SourceLiveness.Live;
+
+    /// <summary>Whether THIS pump should treat the source as live via the no-manifest (engine-inferred) path — see the
+    /// LIVE WITHOUT A MANIFEST note on <see cref="PublishEngineLiveTimeline"/>. A manifest-driven source computes its
+    /// own live window and never consults this.</summary>
+    private bool EngineLiveFor(in VideoEngineSnapshot snap)
+    {
+        if (_manifest is not null) return false;
+        return _opts.Liveness switch
+        {
+            SourceLiveness.Vod => false,
+            SourceLiveness.Live => true,
+            _ => (snap.Flags & VideoEngineFlags.LiveSource) != 0,
+        };
+    }
 
     private void RequestPump(bool repaint = true)
     {
@@ -214,16 +150,17 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
     public void ConnectSignals(MediaSignalSink sink)
     {
         _sink = sink;
-        // Re-apply cold state the engine already accepted, then announce we are opening (metadata pending).
-        _engine.SetPlaybackRate(_rate);
-        _engine.SetVolume(_volume);
-        _engine.SetMuted(_muted);
+        // Re-apply cold state the engine will accept once it catches up to THIS source, then announce we are opening
+        // (metadata pending). Posts, not calls — accepted synchronously, realized on the engine's own schedule.
+        _engine.Commands.Post(VideoCommandKind.Rate, a: _rate);
+        _engine.Commands.Post(VideoCommandKind.Volume, a: _volume);
+        _engine.Commands.Post(VideoCommandKind.Muted, i: _muted ? 1 : 0);
         sink.PlayRequested(_playRequested);
         sink.State(PlaybackState.Opening);
         _publishedState = PlaybackState.Opening;
         PublishManifestCatalog(sink);
         // If StartPosition was requested, seek before the first frame (applied once the source resolves too).
-        if (_opts.StartPosition > TimeSpan.Zero) _engine.SeekTo(_opts.StartPosition.TotalSeconds);
+        if (_opts.StartPosition > TimeSpan.Zero) _engine.Commands.Post(VideoCommandKind.Seek, a: _opts.StartPosition.TotalSeconds);
         RequestPump();
     }
 
@@ -233,7 +170,7 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
             ? new VideoDelivery.CompositedSurface(new VideoSurfaceId(1), _naturalSize, IsHdr: false)
             : VideoDelivery.None;
 
-    // ── transport (idempotent; accepted synchronously; the pump realizes state) ──────────────────────────────────────
+    // ── transport (idempotent; accepted synchronously; posted; the pump realizes state) ────────────────────────────
 
     /// <inheritdoc/>
     public ValueTask PlayAsync()
@@ -248,7 +185,7 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
         _playRequested = true;
         _everPlayed = true;
         if (resuming) SeekToLiveEdge();
-        _engine.Play();
+        _engine.Commands.Post(VideoCommandKind.Transport, a: 1);
         _sink?.PlayRequested(true);
         RequestPump();
         return ValueTask.CompletedTask;
@@ -259,7 +196,7 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
     {
         if (_disposed) return ValueTask.CompletedTask;
         _playRequested = false;
-        _engine.Pause();
+        _engine.Commands.Post(VideoCommandKind.Transport, a: 0);
         _sink?.PlayRequested(false);
         RequestPump();
         return ValueTask.CompletedTask;
@@ -275,10 +212,9 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
         _sink?.Buffering(new BufferingInfo(BufferingReason.Seeking, -1, TimeSpan.Zero,
             (_opts.Buffering ?? BufferPolicy.Vod).ResumePlayback, false));
         // Keyframe = fast scrub-preview (approximate MF seek: snaps to the nearest keyframe, no exact-PTS decode);
-        // Accurate = the final commit (normal/exact MF seek). Threading this through is the fix for the DRM scrub
-        // slowdown — SeekMode used to be discarded here and every throttled drag step paid for an exact re-buffer.
+        // Accurate = the final commit (normal/exact MF seek). SeekMode maps onto the Seek command's approximate flag.
         bool approximate = mode == SeekMode.Keyframe;
-        _engine.SeekTo(t, approximate);
+        _engine.Commands.Post(VideoCommandKind.Seek, a: t, i: approximate ? 1 : 0);
         if (Diag.Enabled)
             Diag.Event("media.seek", $"requested={to.TotalMilliseconds:0}ms clamped={t:0.000}s mode={mode} approx={approximate}");
         // Reflect the seek target immediately so a bound seekbar doesn't snap back for a frame.
@@ -301,25 +237,43 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
 
     private void SeekToLiveEdge()
     {
-        if (!_engineLive) return;
-        double target = LiveSessionRules.GoLiveTarget(_cachedSeekableStart, _cachedSeekableEnd);
+        VideoEngineSnapshot snap = _engine.Snapshot;
+        if (snap.SourceEpoch != _sourceEpoch || !EngineLiveFor(snap)) return;
+        double target = LiveSessionRules.GoLiveTarget(snap.SeekableStart, snap.SeekableEnd);
         if (target <= 0) return;
-        _engine.SeekTo(target);   // exact (not approximate): landing behind the edge is the whole failure being fixed
+        _engine.Commands.Post(VideoCommandKind.Seek, a: target, i: 0);   // exact — landing behind the edge is the fix
         if (Diag.Enabled)
-            Diag.Event("media.golive", $"target={target:0.000}s window=[{_cachedSeekableStart:0.000},{_cachedSeekableEnd:0.000}]");
+            Diag.Event("media.golive", $"target={target:0.000}s window=[{snap.SeekableStart:0.000},{snap.SeekableEnd:0.000}]");
     }
 
     /// <inheritdoc/>
-    public void SetRate(double rate) { if (_disposed) return; _rate = rate; _engine.SetPlaybackRate(rate); RequestPump(); }
+    public void SetRate(double rate)
+    {
+        if (_disposed) return;
+        _rate = rate;
+        _engine.Commands.Post(VideoCommandKind.Rate, a: rate);
+        RequestPump();
+    }
     /// <inheritdoc/>
-    public void SetVolume(double volume) { if (_disposed) return; _volume = Math.Clamp(volume, 0, 1); _engine.SetVolume(_volume); }
+    public void SetVolume(double volume)
+    {
+        if (_disposed) return;
+        _volume = Math.Clamp(volume, 0, 1);
+        _engine.Commands.Post(VideoCommandKind.Volume, a: _volume);
+    }
     /// <inheritdoc/>
-    public void SetMuted(bool muted) { if (_disposed) return; _muted = muted; _engine.SetMuted(muted); _sink?.Muted(muted); }
+    public void SetMuted(bool muted)
+    {
+        if (_disposed) return;
+        _muted = muted;
+        _engine.Commands.Post(VideoCommandKind.Muted, i: muted ? 1 : 0);
+        _sink?.Muted(muted);
+    }
 
     /// <summary>Realize a TEXT selection by loading the manifest-declared rendition's WebVTT into a cue timeline the
     /// pump renders (in-band captions). Returns immediately; the fetch runs in the background and is superseded by the
     /// next selection (epoch). Audio/video selection is MF-engine-internal for natively-played adaptive URLs — a no-op
-    /// here so the catalog selection still updates.</summary>
+    /// here so the catalog selection still updates. Unrelated to the engine seam — unchanged.</summary>
     public ValueTask SelectTrackAsync(MediaTrack? track)
     {
         if (_disposed) return ValueTask.CompletedTask;
@@ -421,121 +375,98 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
         if (_disposed || _sink is null) return;
         var sink = _sink;
 
+        // ONE seqlock read for this whole turn — wait-free, alloc-free, never torn.
+        VideoEngineSnapshot snap = _engine.Snapshot;
+        // Stale (the engine hasn't drained our SetSource yet) or superseded (a LATER session reused this warm engine):
+        // either way nothing below is safe to act on. The next pump — requested by the engine's own StateChanged once
+        // it catches up — retries.
+        if (snap.SourceEpoch != _sourceEpoch) return;
+
         // 1. Terminal error — map the MF media-engine error code to a typed MediaError (published once). Never a silent drop.
-        if (_engine.HasError)
+        if ((snap.Flags & VideoEngineFlags.Error) != 0)
         {
             if (!_errorPublished)
             {
                 _errorPublished = true;
-                sink.Error(MapError(_engine.ErrorCode, _engine.ErrorHr));
+                sink.Error(MapError(snap.ErrorCode, snap.ErrorHr));
                 Publish(sink, PlaybackState.Failed);
             }
             return;
         }
 
-        // 1b. Still opening — no LOADEDMETADATA yet. Every recurring engine read below (ReadyState/DurationSeconds/
-        // CurrentTimeSeconds) marshals to the engine's MTA thread and blocks — exactly the per-frame freeze during
-        // load. There is nothing useful to ask the engine in this window anyway: the transition itself lands via
-        // OnEngineStateChanged (which primes the cache above off the UI thread), so skip the engine entirely and
-        // publish from the cheap volatile fields + the cache instead, so buffering/state/live-timeline don't go
-        // dark during the load.
-        if (!_engine.MetadataLoaded)
+        bool metadataLoaded = (snap.Flags & VideoEngineFlags.MetadataLoaded) != 0;
+        bool engineLive = EngineLiveFor(snap);
+
+        // 1b. Still opening — no LOADEDMETADATA yet. Publish from the snapshot's cheap fields so buffering/state/
+        // live-timeline don't go dark during the load; there is nothing else to ask (the engine self-refreshes).
+        if (!metadataLoaded)
         {
-            PlaybackState opening = DeriveState();
+            PlaybackState opening = DeriveState(snap);
             Publish(sink, opening);
-            PublishBuffering(sink, opening);
-            if (_manifest is { IsLive: true }) PublishLiveTimeline(sink, TimeSpan.FromSeconds(_cachedPositionSeconds));
+            PublishBuffering(sink, opening, snap);
+            if (_manifest is { IsLive: true }) PublishLiveTimeline(sink, TimeSpan.FromSeconds(snap.PositionSeconds));
             return;
         }
 
         // 1c. PRESENTATION EPOCH — MF told us the presentation changed underneath it: FORMATCHANGE (an ABR variant
-        // switch, i.e. a NEW decoded frame size) or RESOURCELOST (the swap chain went away and is being rebuilt).
-        // Neither carries a transport transition, so without this the natural size stays frozen at whatever the FIRST
-        // variant reported: the composited content size (and therefore the DirectComposition fit, and the element's
-        // aspect-fit rect) is silently wrong for the rest of the session, and after a resource loss the swap-chain
-        // handle and stream rect are never re-asserted. Re-open the natural-size question and drop the cached handle /
-        // stream size so §3 re-establishes all three (every write there is value-gated, so an unchanged variant costs
-        // one query and nothing else).
-        int epoch = _engine.PresentationEpoch;
-        if (epoch != _presentationEpoch)
+        // switch, i.e. a NEW decoded frame size), RESOURCELOST (the swap chain went away and is being rebuilt), or the
+        // engine just accepted a fresh SetSource (a new source invalidates the old handle just as surely). Drop the
+        // cached handle so §3 re-binds, and repaint. The stream size is deliberately NOT reset here: UpdateVideoStream
+        // state lives on the media engine (it survives a swapchain rebuild), and §2c re-asserts it whenever the
+        // natural size actually changed — so a same-size variant switch never churns the stream rect.
+        if (snap.PresentationEpoch != _presentationEpoch)
         {
-            _presentationEpoch = epoch;
-            _naturalSizePending = true;
+            _presentationEpoch = snap.PresentationEpoch;
             _handle = 0;
-            _streamW = 0; _streamH = 0;
             Volatile.Write(ref _repaintPending, 1);
         }
+
+        bool naturalKnown = (snap.Flags & VideoEngineFlags.NaturalSizeKnown) != 0;
 
         // 2. First metadata → publish natural size / duration / commands and become Ready (or Playing on intent).
         if (!_metaReady)
         {
             _metaReady = true;
-            NativeSizeAnswer answer = _engine.QueryNativeVideoSize(out uint cx, out uint cy);
-            if (answer == NativeSizeAnswer.Ok) _naturalSize = new SizeI((int)cx, (int)cy);
-            // NoAnswer is NOT "audio-only" — this is the busiest instant on the engine thread (it is still finishing
-            // source resolution), so the bounded read routinely expires here on a large local file. Publish what we
-            // know (an empty size resets any stale value) and keep the question open; the LATE NATURAL SIZE block below
-            // re-asks until the engine answers.
-            _naturalSizePending = answer == NativeSizeAnswer.NoAnswer;
+            _naturalSize = naturalKnown ? new SizeI((int)snap.NaturalW, (int)snap.NaturalH) : SizeI.Zero;
             sink.NaturalSize(_naturalSize);
 
-            // Cache-first: RefreshEngineStateCache already ran off-thread (OnEngineStateChanged fires for
-            // LOADEDMETADATA before this pump observes MetadataLoaded==true), so this is normally free; the direct
-            // read is only a fallback for the rare race where the pump beats that refresh.
             // A DECLARED live source publishes TimeSpan.Zero and never asks the engine: see ForcedLive / the duration
-            // note in RefreshEngineStateCache. Publishing zero (rather than skipping the publish) is deliberate — it
-            // RESETS whatever a previous source left on the signal.
-            double dur = ForcedLive ? 0.0 : (_cachedDurationSeconds > 0 ? _cachedDurationSeconds : _engine.DurationSeconds);
+            // note on EngineLiveFor. Publishing zero (rather than skipping the publish) is deliberate — it RESETS
+            // whatever a previous source left on the signal.
+            double dur = ForcedLive ? 0.0 : snap.DurationSeconds;
             _duration = dur > 0 ? TimeSpan.FromSeconds(dur) : TimeSpan.Zero;
             sink.Duration(_duration);
 
-            PublishCommands(sink);
+            PublishCommands(sink, snap, engineLive);
 
             // Honor the accepted play/pause intent now that the source has resolved.
-            if (_playRequested) _engine.Play(); else _engine.Pause();
+            _engine.Commands.Post(VideoCommandKind.Transport, a: _playRequested ? 1 : 0);
             Volatile.Write(ref _repaintPending, 1);
         }
-        else if (_metaReady && _duration <= TimeSpan.Zero && !ForcedLive)
+        else if (_duration <= TimeSpan.Zero && !ForcedLive && snap.DurationSeconds > 0)
         {
             // 2b. LATE DURATION. The publish above happens once, at first LOADEDMETADATA — and for an adaptive/DASH
             // source GetDuration() is commonly still 0 or non-finite at that instant, so a one-shot publish freezes the
-            // length at "unknown" for the whole track. (App-side that showed up as a music video reporting the SONG's
-            // catalog length.) Re-read until it turns positive, then publish once more. Value-gated on _duration, so a
-            // finite duration publishes at most twice and a genuinely live/infinite stream never publishes again and
-            // never allocates. Reads the cache (kept fresh off-thread) instead of round-tripping the engine here.
-            if (_cachedDurationSeconds > 0)
-            {
-                _duration = TimeSpan.FromSeconds(_cachedDurationSeconds);
-                sink.Duration(_duration);
-            }
+            // length at "unknown" for the whole track. Re-read until it turns positive, then publish once more.
+            // Value-gated on _duration, so a finite duration publishes at most twice and a genuinely live/infinite
+            // stream never publishes again.
+            _duration = TimeSpan.FromSeconds(snap.DurationSeconds);
+            sink.Duration(_duration);
         }
 
-        // 2c. LATE NATURAL SIZE — the sibling of 2b, and the reason a playing video could sit under an eternal
-        // "Starting playback…". The size read in 2 is issued at the exact instant the engine thread is busiest (it is
-        // still resolving the source when LOADEDMETADATA lands), and VideoMediaEngine.Invoke gives up after a bounded
-        // wait — so on a large local file it routinely comes back with NO ANSWER, not with a size. Latching that as
-        // "audio-only" is fatal downstream and never self-corrects: MediaPlayerElement reads an empty NaturalSize as
-        // audio-only (so it never punches a video hole and keeps the opening spinner up), MediaPlayer.PumpVideo then
-        // reports the surface as not presenting, and Video below stays VideoDelivery.None. So re-ask until the engine
-        // ANSWERS — the same value-gated re-read the protected path has always done (ProtectedMediaSession §2).
-        // An answered "no video" clears the flag, so a genuinely audio-only source pays for exactly one extra read.
-        if (_metaReady && _naturalSizePending)
+        // 2c. LATE / CHANGED NATURAL SIZE — the sibling of 2b, and also the FORMATCHANGE re-publish: re-checked every
+        // pump once metadata is ready, but value-gated on the published size, so an unanswered or unchanged size costs
+        // one comparison and nothing else.
+        if (_metaReady && naturalKnown)
         {
-            NativeSizeAnswer late = _engine.QueryNativeVideoSize(out uint lw, out uint lh);
-            if (late != NativeSizeAnswer.NoAnswer)
+            var answered = new SizeI((int)snap.NaturalW, (int)snap.NaturalH);
+            if (answered != _naturalSize)
             {
-                _naturalSizePending = false;
-                // Value-gated: this block is also the FORMATCHANGE re-query (1c), which runs on a variant switch that
-                // very often keeps the same frame size. Re-publishing an unchanged size would churn the element's fit.
-                var answered = late == NativeSizeAnswer.Ok ? new SizeI((int)lw, (int)lh) : SizeI.Zero;
-                if (late == NativeSizeAnswer.Ok && answered != _naturalSize)
-                {
-                    _naturalSize = answered;
-                    sink.NaturalSize(_naturalSize);
-                    PublishCommands(sink);
-                    _streamW = 0; _streamH = 0;               // the stream is sized FROM the natural size — re-assert it
-                    Volatile.Write(ref _repaintPending, 1);   // the hand-off below can now report a real surface
-                }
+                _naturalSize = answered;
+                sink.NaturalSize(_naturalSize);
+                PublishCommands(sink, snap, engineLive);
+                _streamW = 0; _streamH = 0;               // the stream is sized FROM the natural size — re-assert it
+                Volatile.Write(ref _repaintPending, 1);   // the hand-off below can now report a real surface
             }
         }
 
@@ -544,7 +475,7 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
         {
             if (_handle == 0)
             {
-                _handle = _engine.GetSwapchainHandle();
+                _handle = snap.SwapchainHandle;
                 if (_handle != 0) Volatile.Write(ref _repaintPending, 1);
             }
             if (_handle != 0)
@@ -552,23 +483,14 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
                 binding.Bind(_handle);
 
                 // MF renders the FULL decoded frame 1:1 into its own swap chain, and DirectComposition performs the
-                // fit — the same contract the protected/PlayReady path has always used (ProtectedMediaSession §3:
-                // SetContentSize(physical surface size) + Place(videoRect), DCompVideoPresenter.ApplyPlacement scales
-                // per axis and clips).
-                //
-                // The previous shape handed the DESTINATION size to both SetVideoStreamRect and SetContentSize. That
-                // made DComp an identity map and moved the whole fit inside Media Foundation, whose
-                // UpdateVideoStream(NULL, &dst, &black) does its OWN aspect-preserving fit with a black border inside
-                // that rect. The visible consequence: every aspect mode looked identical, because Fill / UniformToFill /
-                // a custom ratio only changed the size of the black box MF letterboxed into.
-                //
-                // The stream is sized to the natural frame size, capped at what the destination can actually show
-                // (below), so a 4K frame in a 640-px card does not allocate 4K buffers. Both numbers move together, so
-                // the ratio — the thing the fit depends on — is preserved exactly.
+                // fit — the same contract the protected/PlayReady path has always used. The stream is sized to the
+                // natural frame size, capped at what the destination can actually show (below), so a 4K frame in a
+                // 640-px card does not allocate 4K buffers. Both numbers move together, so the ratio — the thing the
+                // fit depends on — is preserved exactly.
                 SizeI content = ContentSizeFor(_naturalSize, videoRect, scale);
                 if (content.Width != _streamW || content.Height != _streamH)
                 {
-                    _engine.SetVideoStreamRect(content.Width, content.Height);   // swap-chain-local dst = the frame itself
+                    _engine.Commands.Post(VideoCommandKind.StreamRect, i: content.Width, j: content.Height);
                     _streamW = content.Width; _streamH = content.Height;
                     Volatile.Write(ref _repaintPending, 1);
                 }
@@ -579,19 +501,26 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
                 // the media signal so the host log shows the realized geometry instead of leaving it to be inferred
                 // from pixels. Value-gated by the signal — an unchanged placement publishes nothing.
                 sink.SurfaceGeometry(new VideoSurfaceGeometry(_naturalSize, content,
-                    new RectF(videoRect.X, videoRect.Y, videoRect.W, videoRect.H), scale <= 0f ? 1f : scale));
+                    new RectF(videoRect.X, videoRect.Y, videoRect.W, videoRect.H), scale <= 0f ? 1f : scale)
+                    { Token = binding.Token });
                 if (Interlocked.Exchange(ref _repaintPending, 0) != 0)
-                    _engine.RepaintCurrentFrame();
+                    _engine.Commands.Post(VideoCommandKind.Repaint);
             }
         }
 
-        // 4. State + position from the engine (the presentation clock is authoritative for position).
-        PlaybackState state = DeriveState();
+        // 4. State + position from the engine (the presentation clock is authoritative for position; extrapolated
+        // forward by elapsed·rate while playing so a pump between two engine self-refreshes still reports a moving
+        // playhead instead of a stair-stepped one).
+        PlaybackState state = DeriveState(snap);
         Publish(sink, state);
-        PublishBuffering(sink, state);
+        PublishBuffering(sink, state, snap);
         if (_metaReady)
         {
-            TimeSpan pos = TimeSpan.FromSeconds(_cachedPositionSeconds);
+            double posSeconds = snap.PositionSeconds;
+            if ((snap.Flags & VideoEngineFlags.Playing) != 0)
+                posSeconds += Stopwatch.GetElapsedTime(snap.PositionTimestamp).TotalSeconds * snap.PlaybackRate;
+            if (posSeconds < 0) posSeconds = 0;
+            TimeSpan pos = TimeSpan.FromSeconds(posSeconds);
             sink.Position(pos);
             _cuePlayheadMs = (int)Math.Clamp(pos.TotalMilliseconds, 0.0, int.MaxValue);   // feed the windowed cue loader
             TimedCue? cue = null;
@@ -602,8 +531,8 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
                 sink.ActiveCue(cue);
             }
         }
-        if (_manifest is { IsLive: true }) PublishLiveTimeline(sink, TimeSpan.FromSeconds(_cachedPositionSeconds));
-        else if (_engineLive && _metaReady) PublishEngineLiveTimeline(sink, TimeSpan.FromSeconds(_cachedPositionSeconds));
+        if (_manifest is { IsLive: true }) PublishLiveTimeline(sink, TimeSpan.FromSeconds(snap.PositionSeconds));
+        else if (engineLive && _metaReady) PublishEngineLiveTimeline(sink, snap, TimeSpan.FromSeconds(snap.PositionSeconds));
     }
 
     /// <summary>The manifest-derived command bits (quality/track selection, GoLive), or <c>None</c> for a plain
@@ -711,26 +640,26 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
 
     /// <summary>Publish the command bitset — core transport + the manifest's selection bits + (for an engine-reported
     /// live source) GoLive and the seekability verdict for its DVR window. Value-gated on the last published set, so
-    /// the pump can call this every frame: an unchanged bitset publishes nothing and allocates nothing.</summary>
-    private void PublishCommands(MediaSignalSink sink)
+    /// the pump can call this every frame: an unchanged bitset publishes nothing.</summary>
+    private void PublishCommands(MediaSignalSink sink, in VideoEngineSnapshot snap, bool engineLive)
     {
         MediaCommandFlags flags = sinkCoreCommands(_naturalSize) | AdaptiveCommands();
-        if (_engineLive) flags = LiveSessionRules.LiveCommands(flags, _cachedSeekableStart, _cachedSeekableEnd);
+        if (engineLive) flags = LiveSessionRules.LiveCommands(flags, snap.SeekableStart, snap.SeekableEnd);
         if (flags == _publishedCommands) return;
         _publishedCommands = flags;
         sink.Commands(flags);
     }
 
     /// <summary>LIVE WITHOUT A MANIFEST: the timeline for a live URL handed straight to Media Foundation (an HLS master
-    /// playlist), where the only thing that knows the window is MF itself — <see cref="PublishLiveTimeline"/>'s
+    /// playlist), where the only thing that knows the window is the engine itself — <see cref="PublishLiveTimeline"/>'s
     /// manifest-driven twin. Duration stays <see cref="TimeSpan.Zero"/> (an unbounded source HAS no length, so the seek
-    /// bar correctly stays hidden) and the DVR window comes from the engine's seekable range, whose end is the live
-    /// edge. Also refreshes the commands, because the window's WIDTH is what decides whether seeking is offered and it
-    /// only becomes known — and then keeps sliding — after the one-shot first-metadata publish.</summary>
-    private void PublishEngineLiveTimeline(MediaSignalSink sink, TimeSpan position)
+    /// bar correctly stays hidden) and the DVR window comes straight off the snapshot, whose end is the live edge. Also
+    /// refreshes the commands, because the window's WIDTH is what decides whether seeking is offered and it only
+    /// becomes known — and then keeps sliding — after the one-shot first-metadata publish.</summary>
+    private void PublishEngineLiveTimeline(MediaSignalSink sink, in VideoEngineSnapshot snap, TimeSpan position)
     {
-        PublishCommands(sink);
-        sink.Timeline(LiveSessionRules.Timeline(_cachedSeekableStart, _cachedSeekableEnd, position.TotalSeconds));
+        PublishCommands(sink, snap, engineLive: true);
+        sink.Timeline(LiveSessionRules.Timeline(snap.SeekableStart, snap.SeekableEnd, position.TotalSeconds));
     }
 
     private void PublishLiveTimeline(MediaSignalSink sink, TimeSpan position)
@@ -757,7 +686,7 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
             manifest.IsLive && liveOffset <= tolerance, Array.Empty<MediaChapter>()));
     }
 
-    private void PublishBuffering(MediaSignalSink sink, PlaybackState state)
+    private void PublishBuffering(MediaSignalSink sink, PlaybackState state, in VideoEngineSnapshot snap)
     {
         bool buffering = state is PlaybackState.Opening or PlaybackState.Buffering or PlaybackState.Stalled;
         if (!buffering)
@@ -767,24 +696,25 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
             return;
         }
         BufferPolicy policy = _opts.Buffering ?? BufferPolicy.Vod;
-        BufferingReason reason = _seeking || _engine.Seeking ? BufferingReason.Seeking
+        bool engineSeeking = (snap.Flags & VideoEngineFlags.Seeking) != 0;
+        BufferingReason reason = _seeking || engineSeeking ? BufferingReason.Seeking
             : _metaReady ? BufferingReason.Rebuffering : BufferingReason.Initial;
-        uint ready = Math.Min(_cachedReadyState, 4u);
+        uint ready = Math.Min(snap.ReadyState, 4u);
         double percent = ready / 4.0;
         TimeSpan target = reason == BufferingReason.Initial ? policy.InitialPlayback : policy.ResumePlayback;
         sink.Buffering(new BufferingInfo(reason, percent, TimeSpan.FromTicks((long)(target.Ticks * percent)), target,
             ready >= 3));
     }
 
-    private PlaybackState DeriveState()
+    private PlaybackState DeriveState(in VideoEngineSnapshot snap)
     {
-        if (_engine.HasError) return PlaybackState.Failed;
+        if ((snap.Flags & VideoEngineFlags.Error) != 0) return PlaybackState.Failed;
         if (!_metaReady) return PlaybackState.Opening;
-        if (_engine.Ended) return PlaybackState.Ended;
+        if ((snap.Flags & VideoEngineFlags.Ended) != 0) return PlaybackState.Ended;
         // A seek in flight is surfaced as Buffering(Seeking) — MF keeps `Playing` true across a seek, so without this
         // the transport halts with zero feedback until SEEKED lands.
-        if (_engine.Seeking) return PlaybackState.Buffering;
-        if (_engine.Playing) return PlaybackState.Playing;
+        if ((snap.Flags & VideoEngineFlags.Seeking) != 0) return PlaybackState.Buffering;
+        if ((snap.Flags & VideoEngineFlags.Playing) != 0) return PlaybackState.Playing;
         if (_playRequested) return PlaybackState.Buffering;   // intent to play, engine not yet advancing (re-buffering)
         return _everPlayed ? PlaybackState.Paused : PlaybackState.Ready;
     }
@@ -816,18 +746,20 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideo
     };
 
     /// <inheritdoc/>
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        if (_disposed) return;
+        if (_disposed) return ValueTask.CompletedTask;
         _disposed = true;
         _sink = null;
-        var engine = _engine;
-        engine.StateChanged -= OnEngineStateChanged;
+        _engine.StateChanged -= OnEngineStateChanged;
         PumpRequested = null;
-        _pollTimer?.Dispose();
-        _pollTimer = null;
-        // The engine tears down its MTA thread + COM on ITS thread (a blocking join); do it off the UI thread.
-        await Task.Run(engine.Dispose).ConfigureAwait(false);
+        // Non-blocking, no Task.Run: a warm-pooled engine (the production path — MfMediaPlayer.OpenAsync always
+        // supplies a release) is returned via a couple of posts (pause + detach), never joined. Only a session built
+        // WITHOUT a release callback (tests only — no production caller constructs one this way) falls back to
+        // disposing the engine directly.
+        if (_release is not null) _release(_engine);
+        else _engine.Dispose();
+        return ValueTask.CompletedTask;
     }
 }
 
@@ -856,9 +788,8 @@ internal static class LiveSessionRules
     internal const double GoLiveBackoffSeconds = 3.0;
 
     /// <summary>The timeline for an engine-live source: the seekable window, its end as the live edge, and how far the
-    /// playhead sits behind it. A window that has not been answered yet ((0,0) — see
-    /// <see cref="IVideoEngine.SeekableRange"/>) still publishes IsLive with a zero window rather than dropping the
-    /// live-ness the engine already confirmed.</summary>
+    /// playhead sits behind it. A window that has not been answered yet ((0,0)) still publishes IsLive with a zero
+    /// window rather than dropping the live-ness the engine already confirmed.</summary>
     internal static TimelineInfo Timeline(double seekableStart, double seekableEnd, double positionSeconds)
     {
         double start = double.IsFinite(seekableStart) && seekableStart > 0 ? seekableStart : 0;

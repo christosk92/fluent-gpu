@@ -378,18 +378,19 @@ public sealed class FlexLayout
                 // full width, so this only matters for the row's main axis.) NoWrap content ignores the bound, so this
                 // is a no-op except where it's needed.
                 float growAvail = childAvail;
+                float totalGrow = 0f;
                 if (row && !float.IsInfinity(childAvail))
                 {
-                    float fixedMain = 0f; int cc = 0; bool anyGrow = false;
+                    float fixedMain = 0f; int cc = 0;
                     for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
                     {
                         ref LayoutInput cli2 = ref _scene.Layout(c);
                         cc++;
-                        if (cli2.FlexGrow > 0f) { anyGrow = true; continue; }
+                        if (cli2.FlexGrow > 0f) { totalGrow += cli2.FlexGrow; continue; }
                         float cm = !float.IsNaN(cli2.FlexBasis) ? cli2.FlexBasis : Measure(c, childAvail).Width;
                         fixedMain += cm + MarginMain(cli2, row);
                     }
-                    if (anyGrow) growAvail = MathF.Max(0f, childAvail - fixedMain - (cc > 1 ? li.Gap * (cc - 1) : 0f));
+                    if (totalGrow > 0f) growAvail = MathF.Max(0f, childAvail - fixedMain - (cc > 1 ? li.Gap * (cc - 1) : 0f));
                 }
 
                 float main = 0f, cross = 0f;
@@ -397,7 +398,16 @@ public sealed class FlexLayout
                 for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
                 {
                     ref LayoutInput cli = ref _scene.Layout(c);
-                    var cs = Measure(c, row && cli.FlexGrow > 0f ? growAvail : childAvail);
+                    // A grow child measures at its SHARE of the leftover, not the whole of it: with several grow
+                    // children (three flex:1 1 0 cards), measuring each against the full remainder wraps its text at
+                    // ~N× the width it will actually get — fewer measured lines, a shorter row cross, and the arrange
+                    // pass (which re-measures at the true flexed width) then gets Stretch-clipped to this under-count:
+                    // every card cut mid-line. Weight-dividing makes measure equal arrange for the standard
+                    // equal-grow/basis-0 row; a grow child with a real basis still errs high (an upper bound), never low.
+                    float cAvail = row && cli.FlexGrow > 0f && totalGrow > 0f && !float.IsInfinity(growAvail)
+                        ? growAvail * (cli.FlexGrow / totalGrow) + (float.IsNaN(cli.FlexBasis) ? 0f : cli.FlexBasis)
+                        : (row && cli.FlexGrow > 0f ? growAvail : childAvail);
+                    var cs = Measure(c, cAvail);
                     float cMain = row ? cs.Width : cs.Height;
                     float cCross = row ? cs.Height : cs.Width;
                     // In an INDEFINITE column, a growable Basis=0 child must still contribute its content height while

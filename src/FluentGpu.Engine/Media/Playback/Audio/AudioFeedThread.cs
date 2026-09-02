@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Threading;
 using FluentGpu.Signals;
 
@@ -52,12 +53,35 @@ public sealed class AudioFeedThread : IDisposable
     /// <summary>One published ring-table entry: the mixer voice id and its decode↔RT firewall ring.</summary>
     public readonly record struct RingEntry(long VoiceId, RingAudioSource Ring);
 
+    /// <summary>
+    /// One underrun incident, recorded on the RT thread and drained off it (spec §7.9). A bare cumulative counter — all
+    /// this engine published before — cannot answer the only questions that matter when a user reports a dropout: WHEN,
+    /// HOW MUCH audio was lost, and WHY. These fields separate the causes: a starve with a healthy
+    /// <paramref name="RingFrames"/> is a device/scheduling problem, a starve with an empty ring is producer starvation,
+    /// and a non-zero <paramref name="GcPauseTicksDelta"/> in the same window implicates the GC.
+    /// </summary>
+    /// <param name="Timestamp"><c>Stopwatch.GetTimestamp()</c> at the miss.</param>
+    /// <param name="GapFrames">Frames of silence written — the severity, NOT a callback count.</param>
+    /// <param name="RingFrames">The ring's fill at the miss (0 ⇒ fully drained).</param>
+    /// <param name="VoiceId">The mixer voice whose ring starved.</param>
+    /// <param name="GcPauseTicksDelta">GC pause ticks accrued since the previous drain (see <see cref="DrainXrunEvents"/>).</param>
+    public readonly record struct XrunEvent(long Timestamp, int GapFrames, int RingFrames, long VoiceId,
+        long GcPauseTicksDelta);
+
     private readonly PcmAudioSession _session;
     private readonly IRtThreadCharacteristics _rt;
     private readonly int _blockFrames;
     private readonly int _ringFrames;
     private readonly int _targetAheadFrames;
     private readonly int _blockPeriodMs;
+    private readonly int _maxBlocksPerWake;
+
+    // The worker's low-water wake (spec §7.9): FeedOnce Sets this the instant any ring's fill crosses below half its
+    // target-ahead depth (RingAudioSource.CheckLowWaterEdge is the edge latch that keeps this to ONE Set per drop). The
+    // wait side (WorkerLoop) is always BOUNDED (WorkerWaitTimeoutMs) — never infinite — so a missed/coalesced Set, or a
+    // headless gate driving WorkerPumpOnce with no live RT thread at all, still makes forward progress.
+    private readonly AutoResetEvent _workerWake = new(false);
+    private const int WorkerWaitTimeoutMs = 20;
 
     // The published ring table (spec §7.9/§12): an immutable snapshot the RT thread + worker Volatile-read; rebuilt under
     // _tableLock by the control thread (install) and the worker (retire-removal) — NEVER touched by the RT thread.
@@ -79,6 +103,16 @@ public sealed class AudioFeedThread : IDisposable
 
     private readonly Signal<int> _xruns = new(0);
     private long _xrunCount;
+    private long _xrunFramesLost;   // total frames of silence written on starve (severity; the counter above is incidents)
+
+    // Per-xrun incident queue (spec §7.9): a PRE-ALLOCATED power-of-two SPSC ring — the RT thread is the sole producer
+    // (record-on-starve, never logs/allocates), any non-RT caller is the sole consumer via DrainXrunEvents. A full queue
+    // DROPS the newest event rather than block or grow: losing one diagnostic beats stalling the RT thread. 64 slots is
+    // ~13 s of continuous per-block starving at a 10 ms block — far past the point the drain would have run.
+    private readonly XrunEvent[] _xrunQ = new XrunEvent[64];
+    private int _xrunHead;   // consumer cursor
+    private int _xrunTail;   // producer (RT) cursor
+    private long _lastGcPauseTicks;   // drain-side baseline for GcPauseTicksDelta (non-RT; see DrainXrunEvents)
 
     private long _workerFaults, _rtFaults, _clockFaults;   // containment counters (diagnostics)
     private Exception? _lastFault;                          // latched; published by ControlTickOnce off the RT thread
@@ -89,9 +123,37 @@ public sealed class AudioFeedThread : IDisposable
     private volatile bool _disposed;
 
     /// <summary>Create a feed over <paramref name="session"/>. <paramref name="blockFrames"/> is the per-callback block
-    /// (≈ the device period); <paramref name="rt"/> supplies the MMCSS registration (null ⇒ headless no-op).</summary>
+    /// (≈ the device period); <paramref name="rt"/> supplies the MMCSS registration (null ⇒ headless no-op). FRAME-sized
+    /// overload retained only so pre-existing call sites keep compiling — prefer the TIME-sized ctor below: a fixed frame
+    /// count silently shrinks the decode-ahead cushion at higher device rates (spec §7.9: 4096 frames is 85 ms of cushion
+    /// at 48 kHz but only 21 ms at a 192 kHz Realtek default), which is exactly the bug that ctor exists to close.</summary>
     public AudioFeedThread(PcmAudioSession session, int blockFrames = 480, IRtThreadCharacteristics? rt = null,
         int ringFrames = 8192, int targetAheadFrames = 4096)
+        : this(session, rt, blockFrames, ringFrames, targetAheadFrames, maxBlocksPerWake: 3)
+    {
+    }
+
+    /// <summary>Create a feed sized in TIME, not frames (spec §7.9). The WASAPI device buffer is ~100 ms: if the RT thread
+    /// stalls for <c>T</c> ms (e.g. a Gen2 GC), the device drains silently for the whole stall — that is what the device
+    /// buffer is FOR — but on resume the catch-up burst must not then drain more of the decode-ahead ring than the device
+    /// buffer just hid. <paramref name="aheadMs"/> defaults to 500 ms (well over the ~100 ms device buffer, unlike the old
+    /// ~85 ms frame-sized default) and every size here converts against <paramref name="sampleRate"/> so the cushion holds
+    /// at any device rate (44.1/48/96/192 kHz) instead of collapsing at high rates the way a fixed frame count does.
+    /// <paramref name="maxBlocksPerWake"/> bounds the RT catch-up burst (<see cref="RenderBurst"/>) so a long stall drains
+    /// the ring gradually across wakes — leaving time for the worker's low-water wake to refill it — instead of instantly.</summary>
+    public AudioFeedThread(PcmAudioSession session, int sampleRate, IRtThreadCharacteristics? rt = null,
+        double blockMs = 10.0, double aheadMs = 500.0, double ringMs = 1000.0, int maxBlocksPerWake = 3)
+        : this(session, rt,
+              blockFrames: FramesFromMs(blockMs, sampleRate),
+              ringFrames: FramesFromMs(ringMs, sampleRate),
+              targetAheadFrames: FramesFromMs(aheadMs, sampleRate),
+              maxBlocksPerWake: maxBlocksPerWake)
+    {
+    }
+
+    // Shared init (both public ctors funnel here): both are just different unit systems for the same four sizes.
+    private AudioFeedThread(PcmAudioSession session, IRtThreadCharacteristics? rt, int blockFrames, int ringFrames,
+        int targetAheadFrames, int maxBlocksPerWake)
     {
         _session = session;
         _rt = rt ?? NullRtThreadCharacteristics.Instance;
@@ -99,8 +161,13 @@ public sealed class AudioFeedThread : IDisposable
         _blockPeriodMs = Math.Max(1, (int)Math.Round(_blockFrames * 1000.0 / session.Format.SampleRate));
         _ringFrames = Math.Max(ringFrames, targetAheadFrames + blockFrames);
         _targetAheadFrames = targetAheadFrames;
+        _maxBlocksPerWake = Math.Max(1, maxBlocksPerWake);
         session.AttachFeed(this);
     }
+
+    // ms → frames against a caller-supplied sample rate (not session.Format.SampleRate) so the composition root's probed
+    // device rate is the single source of truth, matching whatever it passes as sampleRate.
+    private static int FramesFromMs(double ms, int sampleRate) => Math.Max(1, (int)Math.Round(ms * sampleRate / 1000.0));
 
     /// <summary>The per-callback block size (frames).</summary>
     public int BlockFrames => _blockFrames;
@@ -189,11 +256,97 @@ public sealed class AudioFeedThread : IDisposable
 
         // Underrun detection is a cheap read-and-clear of each ring's latch — no alloc, no lock (Interlocked only).
         bool starved = false;
+        bool lowWater = false;
+        bool suppress = _session.SuppressXrunAccounting;
         for (int i = 0; i < rings.Length; i++)
+        {
             if (rings[i].Ring.ConsumeStarve()) starved = true;
-        if (starved) Interlocked.Increment(ref _xrunCount);
+            // Severity + incident record. ConsumeStarveFrames must be read-and-cleared EVERY block whether or not we are
+            // recording, otherwise a suppressed seek rebuffer would leak its shortfall into the next real incident.
+            int gapFrames = rings[i].Ring.ConsumeStarveFrames();
+            if (gapFrames > 0 && !suppress)
+            {
+                Interlocked.Add(ref _xrunFramesLost, gapFrames);
+                RecordXrun(gapFrames, rings[i].Ring.BufferedFrames, rings[i].VoiceId);
+            }
+            // Low-water worker wake (spec §7.9): edge-triggered (Volatile read only) so this fires the worker's event
+            // ONCE per drop below half target-ahead, not on every block while it stays low — the AudioTripwire alloc/
+            // lock/syscall-free contract's one carved-out exception is exactly this: a Volatile read + Set on a
+            // pre-allocated event, nothing else.
+            if (rings[i].Ring.CheckLowWaterEdge()) lowWater = true;
+        }
+        // Fix 2 hook (spec, PcmAudioSession.SuppressXrunAccounting remarks): a control-requested seek/flush intentionally
+        // empties the ring, so the RT loop's very next reads finding it empty are a PLANNED rebuffer, not a real underrun —
+        // gate the xrun increment on the session's suppression flag (a single volatile bool read; safe on the RT thread).
+        if (starved && !_session.SuppressXrunAccounting) Interlocked.Increment(ref _xrunCount);
+        if (lowWater) _workerWake.Set();
 
         return rendered;
+    }
+
+    /// <summary>ONE RT wake (spec §7.9): render up to <see cref="_maxBlocksPerWake"/> blocks via <see cref="FeedOnce"/>,
+    /// then stop even if the sink would still accept more. This is the catch-up BURST CAP: after a stall the device
+    /// buffer can accept many blocks back-to-back without <see cref="FeedOnce"/> ever blocking (a live WASAPI <c>Write</c>
+    /// returns instantly while the buffer's padding is low), so an uncapped wake would drain the whole decode-ahead ring
+    /// in under a millisecond — turning a stall the DEVICE BUFFER should have hidden into audible silence. Stops early
+    /// (before the cap) the moment a block renders nothing (paused / inert / device-loss — the sink is not the pacing
+    /// clock right now). Individually drivable (deterministic tests); <see cref="RtLoop"/> calls it once per wake and
+    /// yields the timeslice afterward — it never sleeps here (see the no-double-pacing reasoning on <see cref="RtLoop"/>).
+    /// Returns the number of blocks actually rendered (<c>&lt; MaxBlocksPerWake</c> ⇒ the RT thread went idle this wake).</summary>
+    public int RenderBurst()
+    {
+        int blocks = 0;
+        for (; blocks < _maxBlocksPerWake; blocks++)
+        {
+            int rendered;
+            try { rendered = FeedOnce(); }
+            catch (Exception e) { RecordFault(ref _rtFaults, e); rendered = 0; }
+            if (rendered <= 0) break;
+        }
+        return blocks;
+    }
+
+    /// <summary>Total frames of SILENCE written on starve since start (spec §7.9) — the severity companion to
+    /// <see cref="XrunCount"/>, which counts INCIDENTS (callbacks in which some ring starved), not audio lost. A report
+    /// carrying only the incident count cannot say whether the user heard a tick or a half-second gap.</summary>
+    public long XrunFramesLost => Interlocked.Read(ref _xrunFramesLost);
+
+    // RT: push one incident into the pre-allocated SPSC queue. No allocation, no lock, no logging — a struct store plus
+    // a Volatile cursor write. Stopwatch.GetTimestamp is a QPC read (the AudioTripwire itself uses it, so it is in
+    // contract). Full queue ⇒ DROP: the RT thread never blocks or grows a buffer to keep a diagnostic.
+    private void RecordXrun(int gapFrames, int ringFrames, long voiceId)
+    {
+        int tail = _xrunTail;
+        int next = (tail + 1) & (_xrunQ.Length - 1);
+        if (next == Volatile.Read(ref _xrunHead)) return;
+        _xrunQ[tail] = new XrunEvent(Stopwatch.GetTimestamp(), gapFrames, ringFrames, voiceId, 0);
+        Volatile.Write(ref _xrunTail, next);
+    }
+
+    /// <summary>Drain recorded underrun incidents into <paramref name="dst"/>, returning how many were written (never more
+    /// than <c>dst.Length</c>; call again while it returns a full span). NON-RT ONLY — the sole consumer, typically the
+    /// host's control tick or the app's UI-rate timer.
+    /// <para><see cref="XrunEvent.GcPauseTicksDelta"/> is stamped HERE, not on the RT thread: it is the GC pause time
+    /// accrued across the whole interval since the previous drain, attributed to every event in that interval. That is
+    /// deliberately an interval attribution, not a per-event measurement — a non-zero value means "the GC was pausing
+    /// threads in the window these misses occurred in", which is the correlation a dropout report needs; it does not
+    /// claim this specific miss was inside a pause.</para></summary>
+    public int DrainXrunEvents(Span<XrunEvent> dst)
+    {
+        if (dst.IsEmpty) return 0;
+        long pauseNow = GC.GetTotalPauseDuration().Ticks;
+        long pauseDelta = pauseNow - _lastGcPauseTicks;
+        _lastGcPauseTicks = pauseNow;
+
+        int n = 0, head = _xrunHead;
+        while (n < dst.Length && head != Volatile.Read(ref _xrunTail))
+        {
+            var e = _xrunQ[head];
+            dst[n++] = e with { GcPauseTicksDelta = pauseDelta };
+            head = (head + 1) & (_xrunQ.Length - 1);
+        }
+        Volatile.Write(ref _xrunHead, head);
+        return n;
     }
 
     // ── worker — decode AHEAD + the SOLE ring disposer ───────────────────────────────────────────────────────────────
@@ -303,7 +456,10 @@ public sealed class AudioFeedThread : IDisposable
         if (_run || _disposed) return;
         _run = true;
 
-        _workerThread = new Thread(WorkerLoop) { IsBackground = true, Name = "FluentGpu.AudioWorker" };
+        // AboveNormal (below the RT thread's Highest — spec §7.9): the worker must win scheduling against ordinary app
+        // work (UI/GC/other Normal threads) so its low-water refill actually lands promptly after a stall-triggered
+        // catch-up burst, without contending with the RT thread itself.
+        _workerThread = new Thread(WorkerLoop) { IsBackground = true, Name = "FluentGpu.AudioWorker", Priority = ThreadPriority.AboveNormal };
         _clockThread = new Thread(ClockLoop) { IsBackground = true, Name = "FluentGpu.AudioClock" };
         _rtThread = new Thread(RtLoop) { IsBackground = true, Name = "FluentGpu.AudioRT", Priority = ThreadPriority.Highest };
         _workerThread.Start();
@@ -331,16 +487,20 @@ public sealed class AudioFeedThread : IDisposable
         using var _ = _rt.Enter();   // MMCSS Pro-Audio for the lifetime of the RT thread
         while (_run)
         {
-            int rendered = 0;
-            try { rendered = FeedOnce(); }
-            catch (Exception e) { RecordFault(ref _rtFaults, e); }
+            int blocks = RenderBurst();   // up to _maxBlocksPerWake blocks — the catch-up burst cap (spec §7.9)
 
             // A live blocking endpoint (WASAPI) is the clock: its buffer-full wait INSIDE FeedOnce paces this thread to the
             // device and avoids a busy spin. Adding a wall-clock period sleep on TOP of that double-paces it — the timer
             // granularity overshoots every period, so the loop settles below real time and the device buffer never fills
             // (chronic near-empty → stutter + slow). Sleep ONLY when nothing was rendered (paused / inert / headless /
             // device-loss sinks return instantly) so the MMCSS thread doesn't spin a core; on the live path the sink paces.
-            if (rendered <= 0) Thread.Sleep(_blockPeriodMs);
+            // `_blockPeriodMs` is a coarse (rounded-to-int) idle backoff, not a scheduling clock — fine here because this
+            // branch only runs when the sink isn't pacing us at all, never during live playback.
+            if (blocks < _maxBlocksPerWake) Thread.Sleep(_blockPeriodMs);
+            // Burst cap reached (there may be more to drain): yield the timeslice, NOT a sleep — a sleep here would
+            // double-pace the live path exactly like the reasoning above, just for the catch-up case. Yielding still
+            // gives the AboveNormal worker thread a scheduling window to act on the low-water wake before the next burst.
+            else Thread.Yield();
         }
     }
 
@@ -350,9 +510,13 @@ public sealed class AudioFeedThread : IDisposable
         {
             try { WorkerPumpOnce(); }
             catch (Exception e) { RecordFault(ref _workerFaults, e); }
-            // PumpAhead fills every ring to a multi-period target in one pass. Polling once per half-period is enough to
-            // replenish it while avoiding the full-ring busy spin measured on FluentGpu.AudioWorker.
-            Thread.Sleep(Math.Max(1, _blockPeriodMs / 2));
+            // Low-water wake (spec §7.9): FeedOnce Sets _workerWake the instant any ring's fill drops below half its
+            // target-ahead depth, so refill happens promptly after a stall-triggered catch-up burst instead of waiting
+            // out a fixed poll — replaces the old `Thread.Sleep(_blockPeriodMs / 2)` poll, whose rounded-to-int period
+            // (2.5 ms rounds to 2 at 192 kHz) drifted from real time over a long run. The wait is BOUNDED — never
+            // infinite — so a missed/coalesced Set still makes forward progress (e.g. more than one ring going low in
+            // the same block only needs one Set, or the ring recovers between the Set and the wait).
+            _workerWake.WaitOne(WorkerWaitTimeoutMs);
         }
         if (_disposed) FinalCleanup();   // sole safe disposer: frees rings even when Dispose's join timed out
     }
@@ -389,5 +553,9 @@ public sealed class AudioFeedThread : IDisposable
         Stop();   // joins are best-effort; NEVER followed by an unconditional ring dispose
         // Clean inline ONLY when there is no live worker left to run the sweep (headless/manual-drive path, or a clean join).
         if (!hadThreads || _workerThread is null) FinalCleanup();
+        // Only dispose the wake event once the worker loop has actually exited (Stop nulls _workerThread ONLY on a
+        // successful join) — a still-live worker calling WaitOne on a disposed handle would throw unhandled on its own
+        // thread. If the join timed out, the handle is left for process teardown, same trade-off as the ring sweep above.
+        if (_workerThread is null) try { _workerWake.Dispose(); } catch { /* teardown never throws */ }
     }
 }
