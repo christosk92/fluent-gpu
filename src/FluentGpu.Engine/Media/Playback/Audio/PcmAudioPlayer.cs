@@ -45,7 +45,10 @@ public sealed class PcmAudioPlayer : IMediaBackend, IPreparableBackend
 
         var loudness = info.Loudness;
         var voice = BuildTrimmedVoice(decoder, loudness, ctx.Format, info.Duration, out long totalFrames);
-        return new AudioPreparedItem(voice, decoder.Gapless, loudness, totalFrames, info.Duration);
+        // Stamp the rate this voice was resampled for: a device/format change between prepare and splice moves the
+        // ACTIVE session onto a different rate, and the splice site needs to tell a stale-rate preroll apart from a
+        // live-rate one (mixing a wrong-rate voice into the session plays it off-pitch instead of gapless).
+        return new AudioPreparedItem(voice, decoder.Gapless, loudness, totalFrames, info.Duration, ctx.Format.SampleRate);
     }
 
     private readonly Func<MixFormat, IAudioEndpoint> _endpointFactory;
@@ -220,7 +223,12 @@ public sealed class PcmAudioSession : IMediaSession
 {
     private static readonly double s_qpcTo100ns = 1e7 / Stopwatch.Frequency;
 
-    private readonly MixFormat _format;
+    // Not readonly (spec §7.9 Fix 2): RebuildSink stamps the new endpoint's negotiated rate here BEFORE raising
+    // DeviceFormatChanged, so `Format` — read by the host's soft reload via PrepareContext.For(session.Format) — already
+    // reports the live rate instead of the one this session was constructed with. The internal graph (mixer/EQ/rings)
+    // stays frozen at the old rate until the reload swaps in a brand-new session; only the externally-observable
+    // negotiated rate changes here, on the cold device thread, ahead of the fire-and-forget reload signal.
+    private MixFormat _format;
     private IAudioSink _out;                    // swapped on a device rebuild (spec §7.9) — sources/voices/position survive
     private IAudioClockSource _clock;           // swapped with the sink (same endpoint); latency is re-measured off it
     private readonly int _maxBlock;
@@ -1036,7 +1044,16 @@ public sealed class PcmAudioSession : IMediaSession
         // thread so a throwing subscriber can neither stall nor fault the switch.
         var onFormatChanged = DeviceFormatChanged;
         var newFormat = newEndpoint.Sink.Format;
-        if (onFormatChanged is not null && newFormat.SampleRate != _format.SampleRate)
+        bool rateChanged = newFormat.SampleRate != _format.SampleRate;
+        if (rateChanged)
+        {
+            // Stamp BEFORE raising: the soft-reload subscriber (and anything racing it, e.g. a queue preroll reading
+            // `session.Format` for PrepareContext.For) must see the new rate the moment the switch is signaled, not
+            // after the fire-and-forget reload eventually lands (Fix 2 — was the stale-`Format` root cause of a
+            // gapless join priming the next voice at the OLD rate and playing it off-pitch after a reopen).
+            _format = newFormat;
+        }
+        if (onFormatChanged is not null && rateChanged)
             ThreadPool.QueueUserWorkItem(
                 static s => { try { s.h(s.f); } catch { /* a soft-reload subscriber never faults the device switch */ } },
                 (h: onFormatChanged, f: newFormat), preferLocal: false);

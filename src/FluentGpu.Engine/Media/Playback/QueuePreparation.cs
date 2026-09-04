@@ -63,20 +63,26 @@ public interface IPreparedItem : IAsyncDisposable
     TimeSpan Duration { get; }
     /// <summary>An opaque backend session/handle for a cross-backend hard-cut hand-off (e.g. the spun-up MF session), or null.</summary>
     object? BackendHandle { get; }
+    /// <summary>The mixer sample rate <see cref="AudioVoice"/> was resampled for at prepare time (0 when there is no audio
+    /// voice — a non-audio backend's handle is never spliced into the PCM mixer). A device/format change between prepare
+    /// and splice can move the ACTIVE session onto a different rate; the splice site compares this against the live
+    /// session's rate before mixing the voice in, so a stale-rate preroll is re-prepared instead of playing off-pitch.</summary>
+    int MixRate { get; }
 }
 
 /// <summary>The audio-backend prepared item (spec §8.4): a ready voice already decoded/resampled/trimmed into the active mix
 /// format, with its loudness for the per-voice ReplayGain scalar. Produced by <see cref="PcmAudioPlayer.PrepareAsync"/>.</summary>
 public sealed class AudioPreparedItem : IPreparedItem
 {
-    /// <summary>Create a ready audio preroll over <paramref name="voice"/>.</summary>
-    public AudioPreparedItem(IAudioSource voice, GaplessInfo gapless, ReplayGainInfo loudness, long totalFrames, TimeSpan duration)
+    /// <summary>Create a ready audio preroll over <paramref name="voice"/>, resampled for <paramref name="mixRate"/>.</summary>
+    public AudioPreparedItem(IAudioSource voice, GaplessInfo gapless, ReplayGainInfo loudness, long totalFrames, TimeSpan duration, int mixRate)
     {
         AudioVoice = voice;
         Gapless = gapless;
         Loudness = loudness;
         TotalFrames = totalFrames;
         Duration = duration;
+        MixRate = mixRate;
         IsReady = true;
     }
 
@@ -96,6 +102,8 @@ public sealed class AudioPreparedItem : IPreparedItem
     public TimeSpan Duration { get; }
     /// <inheritdoc/>
     public object? BackendHandle => null;
+    /// <inheritdoc/>
+    public int MixRate { get; }
 
     /// <inheritdoc/>
     public ValueTask DisposeAsync()

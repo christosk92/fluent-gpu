@@ -92,6 +92,68 @@ public sealed class AudioDeviceStateMachineTests
         ctrl.Dispose();
     }
 
+    /// <summary>Device-reopen gapless bug (spec §7.9 Fix 2, root cause A4): a rebuild that adopts an endpoint clocking at a
+    /// DIFFERENT rate must both raise <see cref="PcmAudioSession.DeviceFormatChanged"/> (driving the host's soft reload)
+    /// AND already report the new rate off <see cref="PcmAudioSession.Format"/> the instant it's raised — a racing
+    /// `PrepareContext.For(session.Format)` (e.g. a queue preroll) must never see the stale rate.</summary>
+    [Fact]
+    public void DefaultDeviceChange_DifferentRate_RaisesDeviceFormatChanged_AndUpdatesFormat()
+    {
+        var session = PlayingSession(out _);
+        var watcher = new FakeDeviceWatcher();
+        Assert.Equal(48000, session.Format.SampleRate);
+
+        MixFormat? raised = null;
+        session.DeviceFormatChanged += fmt => raised = fmt;
+
+        using var ctrl = new AudioDeviceController(session,
+            () => new HeadlessAudioEndpoint(new MixFormat(44100, 2), warmupFrames: 0), watcher);
+        ctrl.MarkRunning();
+
+        ctrl.OnDefaultDeviceChanged();   // the deterministic cold-thread body
+
+        Assert.Equal(AudioDeviceState.Running, ctrl.State.Peek());
+
+        // Format is stamped SYNCHRONOUSLY inside RebuildSink, before the event fires (Fix 2) — no wait needed for it.
+        Assert.Equal(44100, session.Format.SampleRate);
+
+        // DeviceFormatChanged itself is raised fire-and-forget on the thread pool — bounded wait for it to land.
+        Assert.True(SpinWaitFor(() => raised is not null, TimeSpan.FromSeconds(5)), "DeviceFormatChanged was not raised");
+        Assert.Equal(44100, raised!.Value.SampleRate);
+
+        ctrl.Dispose();
+    }
+
+    /// <summary>Device-reopen gapless bug (spec §7.9 Fix 4, root cause A4): the OS raises the default-device-changed
+    /// notification before the new endpoint's mix format is settled, so one physical device switch fires TWO
+    /// notifications a close moments apart (observed: 48000 then 44100 within ~800 ms). Two notifications inside the
+    /// 250 ms debounce window must fold into exactly ONE rebuild, not two.</summary>
+    [Fact]
+    public void Debounce_TwoNotificationsWithin250ms_RebuildOnce()
+    {
+        var session = PlayingSession(out _);
+        var watcher = new FakeDeviceWatcher();
+        int rebuilds = 0;
+        using var firstRebuild = new ManualResetEventSlim(false);
+
+        using var ctrl = new AudioDeviceController(session, () =>
+        {
+            if (Interlocked.Increment(ref rebuilds) == 1) firstRebuild.Set();
+            return new HeadlessAudioEndpoint(Fmt, warmupFrames: 0);
+        }, watcher);
+        ctrl.MarkRunning();
+        ctrl.Start();
+
+        watcher.Raise();       // notification #1
+        Thread.Sleep(50);      // well inside the 250 ms debounce window
+        watcher.Raise();       // notification #2 — re-arms the window instead of queuing a second rebuild
+
+        Assert.True(firstRebuild.Wait(TimeSpan.FromSeconds(5)), "the debounced rebuild never landed");
+        // Bounded settle past the debounce window: a second (wrongly un-coalesced) rebuild would show up here.
+        Thread.Sleep(600);
+        Assert.Equal(1, Volatile.Read(ref rebuilds));
+    }
+
     [Fact]
     public void FatalRebuild_NoEndpoint_TransitionsToFaulted()
     {

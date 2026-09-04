@@ -84,4 +84,24 @@ public sealed class CrossBackendQueueTests
 
         await coord.DisposeAsync();
     }
+
+    /// <summary>Device-reopen gapless bug (spec §7.9 Fix 1): a prepared voice must say which mixer rate it was resampled
+    /// for, so a splice site can tell a stale-rate preroll (built before a device/format change) apart from a live-rate
+    /// one instead of mixing a wrong-rate voice into the session (the ~8.8% "sounds slowed" symptom, 48000 vs 44100).</summary>
+    [Fact]
+    public async Task PrepareAsync_StampsMixRate()
+    {
+        var player = new PcmAudioPlayer(Fmt, maxBlock: 512);
+        var source = MediaSource.FromBytes(Wav(0.30)).WithKind(MediaKind.PcmAudio);
+
+        var item44k = await player.PrepareAsync(source, PrepareContext.For(new MixFormat(44100, 2), NormMode.Off, -14f), default)
+            .AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(44100, item44k.MixRate);
+        await item44k.DisposeAsync();
+
+        var item48k = await player.PrepareAsync(source, PrepareContext.For(Fmt, NormMode.Off, -14f), default)
+            .AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(48000, item48k.MixRate);
+        await item48k.DisposeAsync();
+    }
 }

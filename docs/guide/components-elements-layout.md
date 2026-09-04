@@ -99,6 +99,11 @@ don't put a transform-owning `ScrollBinds` entry (a `PinTop` sticky / `StretchFr
 on a transform-owned part (e.g. the Expander clip mid-reflow). **New per-control
 styling knobs are banned**: if a prop's only job is to restyle one template part, it must be a Parts modifier instead.
 
+`Expander.Options.AnimateContentResize` (default `true`) controls a distinct BEHAVIOUR, not a Parts style: `false`
+scopes the 333/167ms disclosure tween to the open/close toggle itself, so a steady-open Expander whose content
+resizes for an unrelated reason (e.g. a nested inline drawer expanding) re-lays out in one instant frame instead of
+replaying the disclosure motion.
+
 For a retained shared-element collapse, `MorphLeftTo` / `MorphTopTo` move the node's laid-out leading edges toward
 viewport-space coordinates over the authored `ScrollRange`. The engine resolves the live source coordinate after
 layout, including scroll and sticky-ancestor translation, so responsive heroes can morph their actual artwork, title,
@@ -436,6 +441,11 @@ Only the visible window (+overscan) is realized; scrolling recycles row nodes th
 stable `keyOf` so row state/identity survives recycling. In-window scroll is transform-only (no realize, no relayout).
 `Repeater` is the advanced no-selection substrate; most apps want `ItemsView`. (`Virtual.*` are thin low-level
 constructors used internally by `Repeater`/`ItemsView`; prefer the `RepeatLayout` presets.)
+
+`LazyGrid` (`src/FluentGpu.Controls/LazyGrid.cs`) is the separate IN-PAGE substrate for a responsive grid with an
+optional inline expanding drawer (rides the page's own `ScrollView`, not its own scroller); its `reveal:
+ExpandedReveal` ctor option picks `Minimal` (default — move only as much as needed, do nothing if already visible) or
+`AlignTop` (always land the clicked row's top under the sticky band, e.g. an artist page's album drawer).
 
 ### Collections — `ItemsView` and its presets
 `ItemsView` is the premiere collection control: any `RepeatLayout` × any `SelectionModel` mode × any `SelectorVisual`

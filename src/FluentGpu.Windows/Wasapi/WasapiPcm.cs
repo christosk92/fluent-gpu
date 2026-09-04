@@ -53,7 +53,11 @@ public static class WasapiPcm
                 // ctor unambiguously (both overloads accept a bare (session, int) call).
                 var feed = new AudioFeedThread(session, sampleRate: format.SampleRate, rt: new MmcssProAudio());
                 var watcher = new MmDeviceWatcher();
-                var controller = new AudioDeviceController(session, () => new WasapiAudioDevice(format), watcher, feed);
+                // The endpoint factory reads session.Format at EACH rebuild, not the probe format captured once above
+                // (spec §7.9 Fix 3): after a soft reload/RebuildSink the session's live rate can differ from the format
+                // this backend was originally probed at, and a follow-default rebuild opening the fresh default device
+                // should hand it the CURRENT rate, not a stale one from process start.
+                var controller = new AudioDeviceController(session, () => new WasapiAudioDevice(session.Format), watcher, feed);
                 session.RegisterDisposable(controller);
                 session.RegisterDisposable(watcher);
                 controller.MarkRunning();

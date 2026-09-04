@@ -216,6 +216,8 @@ public sealed class ProtectedPreparedItem : IPreparedItem
     public TimeSpan Duration { get; }
     /// <inheritdoc/>
     public object? BackendHandle => _session;
+    /// <inheritdoc/>
+    public int MixRate => 0;
 
     /// <inheritdoc/>
     public ValueTask DisposeAsync() => _session.DisposeAsync();

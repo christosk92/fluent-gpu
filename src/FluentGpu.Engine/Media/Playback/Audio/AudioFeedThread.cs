@@ -70,11 +70,17 @@ public sealed class AudioFeedThread : IDisposable
 
     private readonly PcmAudioSession _session;
     private readonly IRtThreadCharacteristics _rt;
-    private readonly int _blockFrames;
-    private readonly int _ringFrames;
-    private readonly int _targetAheadFrames;
-    private readonly int _blockPeriodMs;
+    // Not readonly (spec §7.9 Fix 3): Resize(MixFormat) re-derives all four from the ms-domain sizing below when a device
+    // rebuild also changes rate, so the decode-ahead cushion stays correct in TIME (not frames) at the new rate too.
+    private int _blockFrames;
+    private int _ringFrames;
+    private int _targetAheadFrames;
+    private int _blockPeriodMs;
     private readonly int _maxBlocksPerWake;
+    // The ms-domain sizing this feed was configured with (back-derived from the frame counts at construction time for
+    // BOTH ctors — they are just different unit systems for the same four sizes). Resize re-applies these against a new
+    // sample rate instead of leaving the frame counts pinned to the rate the feed happened to be built at.
+    private double _blockMs, _ringMs, _aheadMs;
 
     // The worker's low-water wake (spec §7.9): FeedOnce Sets this the instant any ring's fill crosses below half its
     // target-ahead depth (RingAudioSource.CheckLowWaterEdge is the edge latch that keeps this to ONE Set per drop). The
@@ -157,17 +163,40 @@ public sealed class AudioFeedThread : IDisposable
     {
         _session = session;
         _rt = rt ?? NullRtThreadCharacteristics.Instance;
-        _blockFrames = Math.Clamp(blockFrames, 1, session.Format.SampleRate);
-        _blockPeriodMs = Math.Max(1, (int)Math.Round(_blockFrames * 1000.0 / session.Format.SampleRate));
+        int rate = session.Format.SampleRate;
+        _blockFrames = Math.Clamp(blockFrames, 1, rate);
+        _blockPeriodMs = Math.Max(1, (int)Math.Round(_blockFrames * 1000.0 / rate));
         _ringFrames = Math.Max(ringFrames, targetAheadFrames + blockFrames);
         _targetAheadFrames = targetAheadFrames;
         _maxBlocksPerWake = Math.Max(1, maxBlocksPerWake);
+        // Back-derive the ms-domain sizing from the frame counts at the CONSTRUCTION rate (spec §7.9 Fix 3) — the
+        // frame-sized ctor's counts are, by construction, sized against `session.Format.SampleRate` right here (see the
+        // Clamp above), so this recovers the same time-domain intent the ms-sized ctor expresses directly.
+        _blockMs = _blockFrames * 1000.0 / rate;
+        _ringMs = _ringFrames * 1000.0 / rate;
+        _aheadMs = _targetAheadFrames * 1000.0 / rate;
         session.AttachFeed(this);
     }
 
     // ms → frames against a caller-supplied sample rate (not session.Format.SampleRate) so the composition root's probed
     // device rate is the single source of truth, matching whatever it passes as sampleRate.
     private static int FramesFromMs(double ms, int sampleRate) => Math.Max(1, (int)Math.Round(ms * sampleRate / 1000.0));
+
+    /// <summary>Re-derive the ms→frames sizing against <paramref name="newFormat"/>'s rate (spec §7.9 Fix 3): a device
+    /// rebuild that also changes sample rate (e.g. 48000 → 44100) would otherwise leave the block/ring/decode-ahead
+    /// sizing pinned to the OLD rate — the exact ms-vs-frames collapse the time-sized ctor exists to prevent, just
+    /// re-introduced on a LATER rebuild instead of at construction. Call this from the rate-change site (the cold device
+    /// thread, around the same park/swap/resume the RT feed already gets) — it plain-writes four fields with no
+    /// Volatile/Interlocked, so it is NOT RT-safe while the feed's threads are live; callers must have the feed
+    /// stopped first (the on-box cold loop already parks it around every rebuild).</summary>
+    public void Resize(MixFormat newFormat)
+    {
+        int rate = Math.Max(1, newFormat.SampleRate);
+        _blockFrames = Math.Clamp(FramesFromMs(_blockMs, rate), 1, rate);
+        _blockPeriodMs = Math.Max(1, (int)Math.Round(_blockFrames * 1000.0 / rate));
+        _targetAheadFrames = FramesFromMs(_aheadMs, rate);
+        _ringFrames = Math.Max(FramesFromMs(_ringMs, rate), _targetAheadFrames + _blockFrames);
+    }
 
     /// <summary>The per-callback block size (frames).</summary>
     public int BlockFrames => _blockFrames;

@@ -18,7 +18,7 @@ public sealed class VoiceSchedulerTests
     private static ScheduledTransition Xfade(int overlapFrames, Easing curve)
         => new(TransitionKind.Crossfade, TimeSpan.FromSeconds((double)overlapFrames / Rate), null, null, curve);
     private static AudioPreparedItem Item(IAudioSource src, long total)
-        => new(src, GaplessInfo.None, default, total, TimeSpan.FromSeconds((double)total / Rate));
+        => new(src, GaplessInfo.None, default, total, TimeSpan.FromSeconds((double)total / Rate), Rate);
 
     private static float[] RenderWithScheduler(CrossfadeMixer mixer, VoiceScheduler sched, int totalFrames, int block)
     {

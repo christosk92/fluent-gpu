@@ -72,6 +72,7 @@ static partial class ControlsSuite
         ProgressIndeterminateLifecycleChecks(strings);
         D3ExpanderChecks(strings);
         D3ExpanderWrapReflowChecks(strings);
+        D3ExpanderAnimateContentResizeChecks(strings);
         D5EditableComboBoxChecks(strings);
         D67SplitButtonFlyoutChecks(strings);
         ExpanderSettingsChecks(strings);
@@ -7845,6 +7846,98 @@ static partial class ControlsSuite
         Check("cp3.f — Expander: auto-height wrapping body keeps its reserved height across a collapse->re-expand reflow (no overlap)",
             wrapped0 && below0 && heightStable && below1 && markerStable,
             $"wrapped0={wrapped0} textW {textW0:0.0}->{textW1:0.0} textH {textH0:0.0}->{textH1:0.0} (1line~{lineH:0.0}) markerY {markerY0:0.0}->{markerY1:0.0} below {below0}/{below1}");
+    }
+
+    // ExpanderOptions.AnimateContentResize=false: the 333ms/167ms disclosure Reflow tween is scoped to the open/close
+    // TOGGLE itself. A STEADY-open Expander whose content resizes for an unrelated reason (an inline drawer growing
+    // inside it) must re-lay out in ONE frame instead of replaying the disclosure motion; the toggle itself must still
+    // get the full motion. Default (AnimateContentResize=true, i.e. Options omitted) is unchanged — cp3.a/cp3.b above
+    // already pin that the toggle animates; this adds the steady-resize case it never distinguished from a toggle.
+    static void D3ExpanderAnimateContentResizeChecks(StringTable strings)
+    {
+        (HeadlessPlatformApp app, AppHost host, HeadlessWindow window, NodeHandle clip, Signal<float> hSig) Mount(
+            bool animateResize, bool initiallyExpanded, string tag)
+        {
+            var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("expander-acr-" + tag, new Size2(360, 320), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var hSig = new Signal<float>(60f);
+            var root = new W0fStaticProbe
+            {
+                Build = () => new BoxEl
+                {
+                    Direction = 1,
+                    Children =
+                    [
+                        Embed.Comp(() => new Expander
+                        {
+                            Header = "Section",
+                            Content = new BoxEl { Height = Prop.Of(() => hSig.Value) },
+                            InitiallyExpanded = initiallyExpanded,
+                            Options = new ExpanderOptions { AnimateContentResize = animateResize },
+                        }),
+                    ],
+                },
+            };
+            var host = new AppHost(app, window, device, fonts, strings, root);
+            for (int i = 0; i < 5; i++) host.RunFrame();
+            var card = host.Scene.FirstChild(Child(host.Scene, host.Scene.Root, 0));
+            var clip = Child(host.Scene, card, 1);
+            return (app, host, window, clip, hSig);
+        }
+
+        // (a) steady-open resize, AnimateContentResize=false: a resting mount never FLIP-captures (cp3.c), so the
+        // ExpanderResizeWatcher clears `transitioning` within the first few frames; past that, flipping the content
+        // height must land the clip at the new height in the very next frame — no tween.
+        {
+            var (app, host, _, clip, hSig) = Mount(animateResize: false, initiallyExpanded: true, tag: "steady-off");
+            for (int i = 0; i < 5; i++) host.RunFrame();           // clear the resting-mount `transitioning` window
+            float before = host.Scene.AbsoluteRect(clip).H;        // 60 + 2×16 padding − 1 margin = 91
+            hSig.Value = 160f;
+            host.RunFrame();                                       // ONE frame after the resize
+            float after1 = host.Scene.AbsoluteRect(clip).H;
+            Check("cp3.acr1 — Expander AnimateContentResize=false: a steady-open resize relays out in one instant frame (no tween)",
+                Near(before, 91f, 2f) && Near(after1, 191f, 2f),
+                $"before={before:0.0} after1frame={after1:0.0} (target 191)");
+            host.Dispose(); app.Dispose();
+        }
+
+        // (b) same scenario with the DEFAULT (Options omitted / AnimateContentResize=true): the resize still replays
+        // the disclosure tween — one frame in, the clip is nowhere near the new target; it settles there later.
+        {
+            var (app, host, _, clip, hSig) = Mount(animateResize: true, initiallyExpanded: true, tag: "steady-on");
+            for (int i = 0; i < 5; i++) host.RunFrame();
+            float before = host.Scene.AbsoluteRect(clip).H;
+            hSig.Value = 160f;
+            host.RunFrame();
+            float after1 = host.Scene.AbsoluteRect(clip).H;
+            for (int i = 0; i < 25; i++) host.RunFrame();
+            float settled = host.Scene.AbsoluteRect(clip).H;
+            Check("cp3.acr2 — Expander AnimateContentResize=true (default): a steady-open resize still replays the disclosure tween",
+                Near(before, 91f, 2f) && after1 < 150f && Near(settled, 191f, 2f),
+                $"before={before:0.0} after1frame={after1:0.0} settled={settled:0.0} (target 191)");
+            host.Dispose(); app.Dispose();
+        }
+
+        // (c) AnimateContentResize=false does NOT defeat the TOGGLE's own disclosure motion: opening from collapsed
+        // still eases over the full ~333ms (ExpanderResizeWatcher keeps `transitioning` up the whole time), one frame
+        // in it is nowhere near the open height, and it settles there.
+        {
+            var (app, host, window, clip, _) = Mount(animateResize: false, initiallyExpanded: false, tag: "toggle-off");
+            var card = host.Scene.FirstChild(Child(host.Scene, host.Scene.Root, 0));
+            var header = Child(host.Scene, card, 0);
+            ClickNode(host, window, header);
+            host.RunFrame();
+            float after1 = host.Scene.AbsoluteRect(clip).H;
+            for (int i = 0; i < 25; i++) host.RunFrame();
+            float open = host.Scene.AbsoluteRect(clip).H;
+            Check("cp3.acr3 — Expander AnimateContentResize=false: the open/close TOGGLE itself still eases (not instant)",
+                after1 < open - 10f && Near(open, 91f, 2f),
+                $"after1frame={after1:0.0} open={open:0.0}");
+            host.Dispose(); app.Dispose();
+        }
     }
 
     static void D3ExpanderChecks(StringTable strings)

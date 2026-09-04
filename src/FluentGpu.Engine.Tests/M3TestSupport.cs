@@ -166,6 +166,7 @@ internal static class M3TestSupport
         public long TotalFrames => -1;
         public TimeSpan Duration => TimeSpan.FromSeconds(5);
         public object? BackendHandle => this;
+        public int MixRate => 0;
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 

@@ -14,6 +14,20 @@ public readonly record struct ExpanderTemplateSettings(float ChevronRotationDeg,
     public static ExpanderTemplateSettings For(bool open) => new(open ? 180f : 0f, open);
 }
 
+/// <summary>Per-instance opt-outs for <see cref="Expander"/>'s built-in mechanics (the <see cref="TemplateParts"/>
+/// door is for restyling; this is for behaviour). See <see cref="AnimateContentResize"/>.</summary>
+public sealed record ExpanderOptions
+{
+    /// <summary>Default <c>true</c> — today's behaviour, unchanged: EVERY height change of the content clip host
+    /// replays the disclosure tween (333ms FluentPopOpen expand / 167ms collapse, <c>SizeMode.Reflow</c>), including
+    /// one caused by the SETTLED content resizing for a reason that has nothing to do with opening or closing (e.g.
+    /// an inline drawer expanding inside an already-open Expander) — the clip's <c>Animate</c> spec can't otherwise
+    /// tell "I am opening/closing" from "my content just got taller." Set <c>false</c> to scope the tween to the
+    /// open/close TOGGLE itself: a steady-open Expander whose content resizes re-lays out in one instant frame
+    /// instead of replaying the disclosure motion.</summary>
+    public bool AnimateContentResize { get; init; } = true;
+}
+
 /// <summary>
 /// A WinUI-flavoured Expander: a clickable header row with a trailing chevron over a collapsible content panel. The
 /// header toggles local <see cref="Component"/> state (or a controlled <see cref="IsExpanded"/> signal); the single
@@ -71,6 +85,8 @@ public sealed class Expander : Component
     /// <summary>Lightweight per-part styling (CSS ::part): modifiers keyed by the <c>PartXxx</c> consts; see the
     /// class remarks and <see cref="TemplateParts"/> for the contract.</summary>
     public TemplateParts? Parts;
+    /// <summary>Behavioural opt-outs — see <see cref="ExpanderOptions.AnimateContentResize"/>.</summary>
+    public ExpanderOptions Options = new();
 
     /// <summary><paramref name="isExpanded"/> = optional CONTROLLED open-state <see cref="Signal{T}"/> (null ⇒ the
     /// expander owns its state via <paramref name="initiallyExpanded"/> — today's behavior); <paramref name="onChange"/>
@@ -104,6 +120,10 @@ public sealed class Expander : Component
         Size: SizeMode.Reflow,
         ExitDynamics: TransitionDynamics.Tween(167f, EasingSpec.CubicBezier(1f, 1f, 0f, 1f)),
         Anchor: SizeAnchor.Trailing);
+    // ExpanderOptions.AnimateContentResize=false's STEADY-state spec: no Size channel at all, so a settled-open clip
+    // host's height prop simply relays out through real layout on the frame its content changes — no clip-reveal, no
+    // tween. Only used while NOT mid-toggle (see `transitioning` in Render); the toggle itself always gets `Reflow`.
+    static readonly LayoutTransition ReflowNoResize = Reflow with { Channels = TransitionChannels.None };
 
     public override Element Render()
     {
@@ -156,6 +176,19 @@ public sealed class Expander : Component
             anim.Animate(chevronRef.Value, AnimChannel.Rotation, from, to, ChevronMs,
                 EasingSpec.CubicBezier(0.167f, 0.167f, 0f, 1f));
         }, open);
+
+        // ExpanderOptions.AnimateContentResize=false: gate the disclosure Reflow spec (Size channel) to the toggle
+        // ITSELF, tracked via `open` (the same controlled-signal-or-local-state bool everything else here reads).
+        // `transitioning` flips true the instant `open` changes; an ExpanderResizeWatcher (below, the
+        // ExpanderCollapseWatcher idiom) clears it once the clip's Reflow track actually SETTLES
+        // (anim.HasTracks(clip) goes false) — tied to the REAL disclosure motion, not a guessed duration, so it can
+        // never race a slow frame or an interrupted toggle. Always tracked (cheap, and Options is a frozen field so
+        // the branch below is stable for the component's whole lifetime either way) — only its result is consulted
+        // when the option is off.
+        var transitioning = UseSignal(false);
+        UseEffect(() => transitioning.Value = true, open);
+        bool isTransitioning = transitioning.Value;      // subscribe: the resize watcher's write re-renders this component
+        bool animateResize = Options.AnimateContentResize || isTransitioning;
 
         Action<NodeHandle> chevronCapture = h => chevronRef.Value = h;
         Action<NodeHandle> clipCapture = h => clipRef.Value = h;
@@ -250,7 +283,7 @@ public sealed class Expander : Component
             Direction = 1,
             ClipToBounds = true,
             Height = open ? float.NaN : 0f,
-            Animate = Reflow,
+            Animate = animateResize ? Reflow : ReflowNoResize,
             OnRealized = clipCapture,              // the collapse watcher polls this node's reflow track
             Children = clipKids,
         };
@@ -261,17 +294,21 @@ public sealed class Expander : Component
             {
                 ClipToBounds = true,
                 Height = open ? float.NaN : 0f,
-                Animate = Reflow,
+                Animate = animateResize ? Reflow : ReflowNoResize,
                 Children = clipKids,
                 OnRealized = TemplateParts.Chain(clipCapture, m.OnRealized),
             };
         }
 
         // The card root mirrors the template's root Grid: pure layout, NO fill/border/clip. The collapse watcher is
-        // mounted only while the closing reflow runs (the WinUI Visibility=Collapsed-at-167ms keyframe).
+        // mounted only while the closing reflow runs (the WinUI Visibility=Collapsed-at-167ms keyframe); the resize
+        // watcher only while OPEN and still `transitioning` (it clears the flag once the expand leg settles — see
+        // ExpanderOptions.AnimateContentResize above). Never both: closing already implies !open.
         Element[] children = closing
             ? [header, contentClip, Embed.Comp(() => new ExpanderCollapseWatcher { Clip = () => clipRef.Value, Shown = shown })]
-            : [header, contentClip];
+            : open && isTransitioning
+                ? [header, contentClip, Embed.Comp(() => new ExpanderResizeWatcher { Clip = () => clipRef.Value, Transitioning = transitioning })]
+                : [header, contentClip];
 
         var root = new BoxEl
         {
@@ -303,6 +340,34 @@ internal sealed class ExpanderCollapseWatcher : Component
             // Settled (the reflow track completed and was reclaimed) — or the node vanished: unmount now.
             if (anim is null || scene is null || node.IsNull || !scene.IsLive(node) || !anim.HasTracks(node))
                 Shown.Value = false;
+        }, tick);
+        return new BoxEl { HitTestVisible = false };
+    }
+}
+
+/// <summary>Per-frame poller (the ExpanderCollapseWatcher idiom, mirrored for the OPEN leg), mounted only while
+/// <see cref="ExpanderOptions.AnimateContentResize"/>=false's `transitioning` flag is up during an open toggle: the
+/// moment the clip's SizeMode.Reflow track settles (the AnimEngine reclaims it — <c>anim.HasTracks</c> goes false),
+/// flips <see cref="Transitioning"/> off. From then on a content-height change with no toggle in flight gets
+/// <c>ReflowNoResize</c>'s instant relayout instead of replaying the disclosure tween. Tied to the REAL animation
+/// state rather than a guessed duration, so it can't race a slow frame, an interrupted toggle, or (on a fresh mount,
+/// where no FLIP ever seeds a track — see cp3.c) a toggle that never actually animated at all.</summary>
+internal sealed class ExpanderResizeWatcher : Component
+{
+    public required Func<NodeHandle> Clip;
+    public required Signal<bool> Transitioning;
+
+    public override Element Render()
+    {
+        var tick = UseContext(FrameClock.Tick);   // re-render every frame while mounted (only during the expand reflow)
+        UseEffect(() =>
+        {
+            if (!Transitioning.Peek()) return;
+            var anim = Context.Anim;
+            var scene = Context.Scene;
+            var node = Clip();
+            if (anim is null || scene is null || node.IsNull || !scene.IsLive(node) || !anim.HasTracks(node))
+                Transitioning.Value = false;
         }, tick);
         return new BoxEl { HitTestVisible = false };
     }

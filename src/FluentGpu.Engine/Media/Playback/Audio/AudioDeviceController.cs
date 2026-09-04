@@ -30,7 +30,14 @@ public sealed class AudioDeviceController : IDisposable
     private readonly AutoResetEvent _wake = new(false);
     private volatile bool _run;
     private int _pending;      // coalesced default-change requests
+    private long _pendingSince;   // Environment.TickCount64 of the MOST RECENT request — the debounce clock (Fix 4)
     private bool _disposed;
+
+    // Debounce window (spec §7.9 Fix 4 / root cause A4): the OS raises the default-device-changed notification before
+    // the new endpoint's mix format is settled, so ONE physical device switch routinely fires two notifications a few
+    // hundred ms apart (observed on the dev box: 48000 then 44100 within ~800 ms) — each would otherwise drive its own
+    // full rebuild. 250 ms comfortably covers the observed gap without making a genuine follow-default switch feel slow.
+    private const int DebounceMs = 250;
 
     /// <summary>Create a controller over <paramref name="session"/>. <paramref name="endpointFactory"/> opens a fresh
     /// default endpoint on a rebuild; <paramref name="watcher"/> (optional) fires the follow-default event;
@@ -65,10 +72,14 @@ public sealed class AudioDeviceController : IDisposable
         _coldThread.Start();
     }
 
-    /// <summary>Marshal a follow-default rebuild onto the cold device thread (the watcher event handler). If the cold thread
-    /// is not running (deterministic tests), the caller drives <see cref="OnDefaultDeviceChanged"/> directly.</summary>
+    /// <summary>Marshal a follow-default rebuild onto the cold device thread (the watcher event handler), debounced 250 ms
+    /// (Fix 4): the cold loop waits out a quiet window after the LATEST request, so two notifications from one physical
+    /// device switch fold into a single rebuild instead of two. If the cold thread is not running (deterministic tests),
+    /// the caller drives <see cref="OnDefaultDeviceChanged"/> directly (no debounce — that entry point always rebuilds
+    /// immediately, by design, so a test can assert one call = one rebuild).</summary>
     public void RequestRebuild()
     {
+        Interlocked.Exchange(ref _pendingSince, Environment.TickCount64);
         Interlocked.Exchange(ref _pending, 1);
         _wake.Set();
     }
@@ -86,6 +97,10 @@ public sealed class AudioDeviceController : IDisposable
         {
             var next = _endpointFactory() ?? throw new InvalidOperationException("No audio endpoint available.");
             bool ok = _session.RebuildSink(next);
+            // Fix 3: re-derive the feed's ms→frames sizing against the (possibly new) live rate. Safe here specifically
+            // because the cold loop parks the feed (Stop()) around every rebuild before calling in — Resize plain-writes
+            // its fields with no synchronization and is not safe while the RT/worker threads are live.
+            if (ok) _feed?.Resize(_session.Format);
             _state.Value = ok ? AudioDeviceState.Running : AudioDeviceState.Faulted;
         }
         catch (Exception)
@@ -105,6 +120,15 @@ public sealed class AudioDeviceController : IDisposable
             _wake.WaitOne();
             if (!_run) break;
             if (Interlocked.Exchange(ref _pending, 0) == 0) continue;
+
+            // Debounce (Fix 4): wait out a quiet window after the LATEST request before rebuilding. A request landing
+            // inside the window re-stamps `_pendingSince` (RequestRebuild, off this thread) and pushes the wait back out
+            // instead of queuing a second rebuild — see RequestRebuild's doc for why this matters (the 48000-then-44100
+            // double notification).
+            long since;
+            while (_run && (since = Environment.TickCount64 - Interlocked.Read(ref _pendingSince)) < DebounceMs)
+                _wake.WaitOne((int)(DebounceMs - since));
+            if (!_run) break;
 
             // Park the RT feed around the swap so no callback reads a half-swapped endpoint (on-box).
             bool wasRunning = _feed is not null;

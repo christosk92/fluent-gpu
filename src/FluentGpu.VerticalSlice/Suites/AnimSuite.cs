@@ -2425,9 +2425,19 @@ static class AnimSuite
                          && exactMid == new LazyGridVisibleRange(10, 14, 2)
                          && exactDrawer == new LazyGridVisibleRange(4, 8, 2);
 
-            Check("lazy-grid: window covers the viewport, spacers reserve the exact extent, and expand reveals card+drawer-peek (never pin-to-top)",
-                atTop && mid && largerOverscan && drawerIn && drawerAbove && atEnd && bring && exact,
-                $"top=({v0.FirstRow},{v0.LastRow},pad{v0.TopPad:0}) mid=({v1.FirstRow},{v1.LastRow}) ahead=({vAhead.FirstRow},{vAhead.LastRow}) drawerAboveTopPad={v3.TopPad:0} endLast={vEnd.LastRow} bring placed={placed:0} sticky={underSticky:0} bottom={pastBottom:0} same={sameShort:0}/{sameTall:0} tiny={tinyDrawer:0} noSlack={noSlack:0} noGeom={noGeom:0} exact={exactTop}/{exactMid}/{exactDrawer}");
+            // AlignRowTarget — ExpandedReveal.AlignTop: always the SAME landing spot (cardTop - inset), unlike
+            // MinRevealTarget's stay-put minimalism above; a 0/unresolved viewport never jumps; a card above the
+            // inset still clamps to the 0 floor rather than going negative.
+            float aligned = LazyGridMath.AlignRowTarget(off, viewH, 900f, 96f);
+            float alignedNoGeom = LazyGridMath.AlignRowTarget(off, 0f, 900f, 96f);
+            float alignedFloor = LazyGridMath.AlignRowTarget(off, viewH, 50f, 96f);
+            bool align = Near(aligned, 804f, 0.5f)            // cardTop − inset
+                         && Near(alignedNoGeom, off, 0.5f)     // viewportH unknown → never jump
+                         && Near(alignedFloor, 0f, 0.5f);      // cardTop − inset < 0 → clamp to 0
+
+            Check("lazy-grid: window covers the viewport, spacers reserve the exact extent, expand reveals card+drawer-peek (never pin-to-top), and AlignTop always lands the row at cardTop-inset",
+                atTop && mid && largerOverscan && drawerIn && drawerAbove && atEnd && bring && exact && align,
+                $"top=({v0.FirstRow},{v0.LastRow},pad{v0.TopPad:0}) mid=({v1.FirstRow},{v1.LastRow}) ahead=({vAhead.FirstRow},{vAhead.LastRow}) drawerAboveTopPad={v3.TopPad:0} endLast={vEnd.LastRow} bring placed={placed:0} sticky={underSticky:0} bottom={pastBottom:0} same={sameShort:0}/{sameTall:0} tiny={tinyDrawer:0} noSlack={noSlack:0} noGeom={noGeom:0} exact={exactTop}/{exactMid}/{exactDrawer} align aligned={aligned:0} noGeom={alignedNoGeom:0} floor={alignedFloor:0}");
         }
 
         // A flat grid uses the same exact extent at every window boundary. This is the regression for stacked artist

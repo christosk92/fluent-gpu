@@ -1868,6 +1868,25 @@ public sealed class SceneStore : ISceneBackend
         return new RectF(x, y, _bounds[h.Raw.Index].W, _bounds[h.Raw.Index].H);
     }
 
+    /// <summary>Same origin walk as <see cref="AbsoluteRect"/> (window-space = summed origin up the parent chain) but
+    /// LAYOUT bounds only — no compositor <c>LocalTransform</c>/<c>ChildShiftX/Y</c> folded in. A content-space caller
+    /// computing a SCROLL target (offsets live in content space == layout space) needs this: <see cref="AbsoluteRect"/>
+    /// is exactly what got PAINTED, and an ancestor mid-FLIP (an Expander host's Reflow, an inline drawer's own
+    /// <c>SizeMode.Reflow</c>) skews its LocalTransform/ChildShift on precisely the frame a bring-into-view effect
+    /// samples it — so a target derived from painted pixels lands off by whatever delta is in flight that frame. Use
+    /// <see cref="AbsoluteRect"/> for anything that must reflect what's actually on screen (hit-testing, a connector
+    /// drawn against a sibling); use this for anything feeding a scroll offset. Zero-alloc, same walk shape.</summary>
+    public RectF AbsoluteLayoutRect(NodeHandle h)
+    {
+        float x = 0f, y = 0f;
+        for (var n = h; !n.IsNull; n = Parent(n))
+        {
+            x += _bounds[n.Raw.Index].X;
+            y += _bounds[n.Raw.Index].Y;
+        }
+        return new RectF(x, y, _bounds[h.Raw.Index].W, _bounds[h.Raw.Index].H);
+    }
+
     private NodeHandle Wrap(int idx) => idx == 0 ? NodeHandle.Null : new NodeHandle(new Handle((uint)idx, _gen[idx]));
 
     /// <summary>Public index → handle wrap (scroll-v3-plan §3.1): <c>FluentGpu.Scroll.IScrollSink.Apply</c> and

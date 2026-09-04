@@ -113,7 +113,30 @@ public static class LazyGridMath
         return MathF.Max(0f, Math.Clamp(currentOffset, minOff, maxOff));
     }
 
+    /// <summary>ALIGN-TOP scroll target for a just-expanded row: pin its top under the sticky band at
+    /// <paramref name="topInset"/> — unlike <see cref="MinRevealTarget"/>'s minimal-motion rule (stay put whenever
+    /// already visible), this always lands the row in the SAME place on every open, which is exactly what a caller
+    /// opting into <see cref="ExpandedReveal.AlignTop"/> wants.
+    ///
+    /// No extent clamp here beyond the 0 floor, same reasoning as <see cref="MinRevealTarget"/>: the scroll KERNEL
+    /// owns the <c>[0, content − viewport]</c> clamp and re-derives it as the drawer's own reflow grows the content
+    /// each tick — <see cref="FluentGpu.Scroll.ScrollIntoView.ScrollTo"/> posts this RAW target as
+    /// <c>ScrollBody.TargetRaw</c>, re-clamped on every <c>SetFrame</c>, so clamping against a stale contentH here
+    /// would fight the kernel instead of letting the drawer's real extent land later.
+    ///
+    /// A <paramref name="viewportH"/> of ≤1 means geometry is not resolved yet — returns
+    /// <paramref name="currentOffset"/> unchanged, never 0 (which would read as a jump to the top).</summary>
+    public static float AlignRowTarget(float currentOffset, float viewportH, float cardTop, float topInset)
+        => viewportH <= 1f ? currentOffset : MathF.Max(0f, cardTop - MathF.Max(0f, topInset));
+
 }
+
+/// <summary>How <see cref="LazyGrid"/> scrolls the page when a row expands its inline drawer. <see cref="Minimal"/>
+/// (the default) moves only as much as needed to keep the card + a peek of its drawer visible, and does nothing at
+/// all when both already hold (<see cref="LazyGridMath.MinRevealTarget"/>) — unchanged for every existing caller.
+/// <see cref="AlignTop"/> instead always lands the clicked row's top at the SAME place under the sticky band on
+/// every open (<see cref="LazyGridMath.AlignRowTarget"/>) — the artist page's album drawer.</summary>
+public enum ExpandedReveal { Minimal, AlignTop }
 
 /// <summary>
 /// An IN-PAGE, data-virtualized responsive grid: it lives as a normal section inside a page <c>ScrollView</c> (NOT its own
@@ -133,6 +156,7 @@ public sealed class LazyGrid : Component
     readonly Action<LazyGridVisibleRange>? _visibleRangeChanged;
     readonly float _expandedTopInset;
     readonly float _expandedRevealPeek;
+    readonly ExpandedReveal _reveal;
     readonly Func<int> _count;                      // total item count (reads the collection's version/count → reactive)
     readonly Func<int, float, Element> _cell;        // (index, cellWidth) → card or placeholder
     readonly Action<int, int> _ensureRange;          // (firstIndex, lastIndexExclusive) → page the data in
@@ -174,7 +198,8 @@ public sealed class LazyGrid : Component
                     float minColWidth = 180f, float gap = 12f, float rowExtra = 56f, int overscanRows = 2,
                     Signal<int>? expanded = null, Func<int, GridDrawerInfo, Element>? drawer = null, Func<int, float>? drawerHeight = null,
                     int initialIndex = 0, Action<LazyGridVisibleRange>? onVisibleRangeChanged = null,
-                    float expandedTopInset = 28f, float expandedRevealPeek = 144f)
+                    float expandedTopInset = 28f, float expandedRevealPeek = 144f,
+                    ExpandedReveal reveal = ExpandedReveal.Minimal)
     {
         _count = count; _cell = cell; _ensureRange = ensureRange;
         _minColW = minColWidth; _gap = gap; _rowExtra = rowExtra; _overscanRows = Math.Max(0, overscanRows);
@@ -183,6 +208,7 @@ public sealed class LazyGrid : Component
         _visibleRangeChanged = onVisibleRangeChanged;
         _expandedTopInset = MathF.Max(0f, expandedTopInset);
         _expandedRevealPeek = MathF.Max(0f, expandedRevealPeek);
+        _reveal = reveal;
     }
 
     public override Element Render()
@@ -256,11 +282,15 @@ public sealed class LazyGrid : Component
             _lastSectionTop = newTop;
         }, DepKey.From(BitConverter.SingleToInt32Bits(rowH), cols));
 
+        // Keyed on expandedIndex ALONE, not drawerH: the host now reserves the drawer's final height on the click
+        // frame (a pure verdict derived from the card's advertised track count), so re-firing this on every height
+        // change chased the shimmer -> real-rows transition with a second scroll glide. The effect still reads the
+        // CURRENT drawerH/rowH when it runs, it just doesn't re-fire because they changed.
         UseLayoutEffect(() =>
         {
             if (expandedIndex >= 0)
                 BringExpandedIntoView(expandedRow, rowH, drawerH);
-        }, DepKey.From(drawerH, expandedIndex));
+        }, DepKey.From(expandedIndex));
 
         if (_initialIndex > 0 && !_didInitialScroll && count > _initialIndex && widthKnown && hasViewport)
             MaybeInitialScroll(sectionTop, rowH, cols);
@@ -384,7 +414,10 @@ public sealed class LazyGrid : Component
         ref ScrollState sc = ref scene.ScrollRef(vp);
         var content = sc.ContentNode;
         if (content.IsNull || !scene.IsLive(content)) return (0f, 1e9f, fallbackOffset);
-        float top = scene.AbsoluteRect(_node).Y - scene.AbsoluteRect(content).Y;
+        // Layout-only geometry: sectionTop/content feed a scroll TARGET (content space == layout space), and
+        // AbsoluteRect would fold in an ancestor's mid-FLIP paint transform (an Expander host's Reflow, this grid's own
+        // inline-drawer reflow) on exactly the frame this runs — see SceneStore.AbsoluteLayoutRect.
+        float top = scene.AbsoluteLayoutRect(_node).Y - scene.AbsoluteLayoutRect(content).Y;
         float vh = sc.ViewportH > 1f ? sc.ViewportH : scene.AbsoluteRect(vp).H;
         // Scroll observers publish after layout/animation. During route restoration the scene therefore holds the
         // authoritative offset (or pending target) one frame before the throttled context signal catches up. Window
@@ -431,8 +464,9 @@ public sealed class LazyGrid : Component
         // closed over with the post-layout sc.OffsetY is a drift source.
         float rowStart = Geometry().sectionTop + expandedRow * rowH;
         ref ScrollState sc = ref scene.ScrollRef(vp);
-        float target = LazyGridMath.MinRevealTarget(
-            sc.OffsetY, sc.ViewportH, rowStart, rowH, drawerH, _expandedTopInset, _expandedRevealPeek);
+        float target = _reveal == ExpandedReveal.AlignTop
+            ? LazyGridMath.AlignRowTarget(sc.OffsetY, sc.ViewportH, rowStart, _expandedTopInset)
+            : LazyGridMath.MinRevealTarget(sc.OffsetY, sc.ViewportH, rowStart, rowH, drawerH, _expandedTopInset, _expandedRevealPeek);
         // Posts a Driven glide through the kernel (ScrollIntoView already no-ops within 0.5 DIP and wakes the frame).
         ScrollIntoView.ScrollTo(Context, vp, target, animate: true);
     }
