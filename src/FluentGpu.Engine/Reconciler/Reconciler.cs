@@ -101,7 +101,14 @@ public sealed class TreeReconciler
 
     // Cold-realize stagger plumbing. FrameEpoch is bumped once per host Paint; ColdRealizeRowsPerFrame is the per-frame
     // grow budget. _warmingCount is an O(1) census so the host can keep the loop awake until every list finishes warming.
-    private const int ColdRealizeRowsPerFrame = 4;
+    // DISABLED (int.MaxValue = no stagger): a cold list realizes its whole initial window in the flush that binds it,
+    // instead of growing 4 rows a frame. The stagger was protecting the first paint of a long list, but it is also the
+    // largest single contributor to navigation feeling slow — a 30-row screenful took ~8 frames to fill, and at the
+    // 30 Hz ambient cap that is a quarter-second of a visibly half-built page. Not 0: the guards below are `>=` and a
+    // literal 0 would mean "never realize a row". Nor int.MaxValue: the call sites below compute
+    // `slots.Count + ColdRealizeRowsPerFrame`, which would OVERFLOW to negative and clamp the target back down to
+    // minVisibleTarget — the exact opposite of "no stagger". A million is unreachable as a row count and safe to add to.
+    private const int ColdRealizeRowsPerFrame = 1_000_000;
     public int FrameEpoch;
     private int _warmingCount;
     /// <summary>True while any bound virtual list is still spreading its initial window across frames, or a just-un-parked
@@ -121,7 +128,11 @@ public sealed class TreeReconciler
     // Never deferred: the activation signal (UseIsActive) flips immediately in the walk, and a real signal write that
     // reaches a queued component schedules it normally (RunComponent cancels the queue slot) — the drip only carries
     // entries whose ONLY reason to run is the park debt.
-    private const int UnparkReplaysPerFrame = 24;
+    // DISABLED (int.MaxValue = no drip): a returning page replays its whole park debt in the un-park flush. The
+    // measurement above (143 component renders in one 13.6 ms paint) is the cost this budget was spreading out; it is
+    // being re-judged against how the drip actually feels on a fast machine, where paying it once beats a page that
+    // keeps filling in behind its own enter animation. Restore the 24 if the enter jank returns.
+    private const int UnparkReplaysPerFrame = 1_000_000;
     private readonly Queue<CompEntry> _replayQueue = new();
     private int _replayBudgetUsed;
     private int _replayBudgetEpoch = -1;

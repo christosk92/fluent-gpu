@@ -601,8 +601,16 @@ static class NavSuite
         var seen = new HashSet<int>(log);
         int totalRenders = log.Count;
         bool everyDebtorRendered = seen.Count == N;
-        bool renderedOnce = totalRenders == N;            // no double-render: the probe's live run CANCELLED its queue slot
-        bool spread = firstFlush <= K && frames >= 2;     // budgeted, and it really did take multiple frames
+        // N replays in the activation flush, plus ONE extra for the imperative probe below. With the drip disabled the
+        // probe's debtor has already rendered by the time it is poked, so its re-render is a genuine second render
+        // rather than the cancellation of a pending queue slot -- which is what this counted when the budget existed.
+        bool renderedOnce = totalRenders == N + 1;
+        // The budget is DISABLED (UnparkReplaysPerFrame is effectively unbounded), so the contract this gate pins is
+        // now the opposite one: the whole debt lands in the activation flush and nothing is left to drip. The drip was
+        // removed deliberately — it was the largest contributor to a returning page filling in behind its own enter
+        // animation. If the budget is ever restored, restore `firstFlush <= K && frames >= 2` with it; K is still read
+        // above so the two cannot silently disagree about which regime is in force.
+        bool spread = firstFlush == N && frames == 0;
         bool drained = !recon.HasDeferredReplays;
 
         // (4) The replayed page is fully live again: the replay re-tracked every debtor's sources, so one shared write
@@ -612,9 +620,12 @@ static class NavSuite
         recon.Runtime.Flush();
         bool liveAgain = log.Count == N;
 
-        Check("gate.reconciler.unpark-replay-budget un-parking a KeepAlive page with N=70 banked render debts replays ≤24 in the activation flush and drips the rest one batch per frame until all 70 have rendered exactly once; an imperative re-render of a still-queued debtor runs immediately (cancelling its queue slot), and the replayed page is signal-live again",
+        // probeWasQueued is no longer reachable: with no budget there is never a still-queued debtor to catch, so the
+        // "an imperative re-render cancels its queue slot" half of the old contract has nothing to observe. probeRanNow
+        // still asserts the imperative render itself works.
+        Check("gate.reconciler.unpark-replay-budget un-parking a KeepAlive page with N=70 banked render debts replays ALL of them in the activation flush (the per-frame drip is disabled), leaves nothing queued, and the replayed page is signal-live again",
             mounted == N && whileParked == 0 && spread && everyDebtorRendered && renderedOnce && drained
-                && probeWasQueued && probeRanNow && liveAgain,
+                && probeRanNow && liveAgain,
             $"mounted={mounted} whileParked={whileParked} firstFlush={firstFlush} (K={K}) dripFrames={frames} " +
             $"totalRenders={totalRenders} distinct={seen.Count}/{N} drained={drained} probeQueued={probeWasQueued} probeRanNow={probeRanNow} liveAgain={liveAgain}");
     }
