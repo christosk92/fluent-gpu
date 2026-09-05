@@ -1288,13 +1288,21 @@ public sealed class MediaPlayerElement : Component
         _transportCompact = compact;
         bool presentingFullscreen = PresentingFullscreen;
 
+        // Every control below carries a stable Key: the list is unkeyed-shape-changing across the "measured"/"compact"
+        // transitions (chips appear/disappear once the row's first real measurement lands), and the reconciler matches
+        // UNKEYED children POSITIONALLY by index + element type (Reconciler.ReconcileChildren) — IconButton and
+        // TextButton are both BoxEl{TextEl}, so a shape change silently patches one logical button's node into another's
+        // slot instead of mounting/unmounting. That starves whichever button loses its slot of an OnRealized call, so
+        // its captured anchor handle (rateAnchor/qualityAnchor/ccAnchor/audioAnchor) stays default/stale and every click
+        // on it is a silent no-op — the "speed/quality flyout doesn't open" bug. A Key makes every button's identity
+        // explicit regardless of what else in the row appears or disappears that frame.
         var playPause = IconButton(playIntent ? Icons.Pause : Icons.Play, () =>
         {
             if (playIntent) RequestPause(); else RequestPlay();
-        }, interactive);
+        }, interactive) with { Key = "ctl:play" };
 
-        var back10 = IconButton(Icons.Back, () => seekBar.SeekBy(-10f), interactive);
-        var fwd10 = IconButton(Icons.Forward, () => seekBar.SeekBy(10f), interactive);
+        var back10 = IconButton(Icons.Back, () => seekBar.SeekBy(-10f), interactive) with { Key = "ctl:back10" };
+        var fwd10 = IconButton(Icons.Forward, () => seekBar.SeekBy(10f), interactive) with { Key = "ctl:fwd10" };
 
         // Volume: an icon that is a real mute toggle, plus a slider that expands on hover/focus. A bare mute toggle with
         // no slider is the one control users cannot substitute with anything else on the surface.
@@ -1311,6 +1319,7 @@ public sealed class MediaPlayerElement : Component
             });
         var volume = new BoxEl
         {
+            Key = "ctl:volume",
             Direction = 0, AlignItems = FlexAlign.Center, Gap = 2f,
             OnPointerMoveWithin = _ => { volumeExpanded.Value = true; OnChromePointerMove(default); },
             OnPointerExit = () => volumeExpanded.Value = false,
@@ -1319,44 +1328,44 @@ public sealed class MediaPlayerElement : Component
 
         var controls = new System.Collections.Generic.List<Element>(14) { playPause, back10, fwd10, volume };
         if (measured && areaWidth >= CompactTransportWidth)
-            controls.Add(Embed.Comp(() => new MediaTransportTime { Player = Player, ScrubTargetSeconds = seekBar.ScrubTargetSeconds }));
-        controls.Add(new BoxEl { Grow = 1f, MinWidth = 0f });
+            controls.Add(Embed.Comp(() => new MediaTransportTime { Player = Player, ScrubTargetSeconds = seekBar.ScrubTargetSeconds }) with { Key = "ctl:time" });
+        controls.Add(new BoxEl { Key = "ctl:spacer", Grow = 1f, MinWidth = 0f });
         // A live source says so on the surface, next to the control that acts on it. The chip is a STATUS READOUT, not a
         // button: it is what answers "is this stream live or a recording" while the transport is showing no duration and
         // no seek bar at all — the state the user would otherwise have to infer from an absence. The Go-Live button
         // beside it stays the only interactive element (and reads "● LIVE" once the playhead is at the edge, so the two
         // never claim different things: the chip states the SOURCE is live, the button states where the PLAYHEAD is).
         if (timeline.IsLive)
-            controls.Add(LiveChip());
+            controls.Add(LiveChip() with { Key = "ctl:live-chip" });
         if ((commands & MediaCommandFlags.GoLive) != 0)
             controls.Add(TextButton(timeline.IsAtLiveEdge ? MediaStrings.LiveEdge : MediaStrings.GoLive,
-                () => _ = Player.GoLiveAsync(), interactive, timeline.IsAtLiveEdge));
+                () => _ = Player.GoLiveAsync(), interactive, timeline.IsAtLiveEdge) with { Key = "ctl:go-live" });
         // Each chip renders its CURRENT VALUE, never a category label: "1×" not "Speed", "1080p" not "Quality",
         // "CC EN" not "Subtitles". A chip that names its category makes the user open it to find out what it is set to.
         // Each opens a PICKER flyout at its own anchor (never blind-cycles through the options).
         if (measured && !compact && (commands & MediaCommandFlags.Rate) != 0)
             controls.Add(TextButton(MediaStrings.RateLabel(rate), () => OpenPicker(rateAnchor, SpeedItems()), interactive)
-                with { OnRealized = h => rateAnchor.Value = h });
+                with { Key = "ctl:rate", OnRealized = h => rateAnchor.Value = h });
         // The quality chip SURVIVES compaction. It is the readout for the "why am I watching 240p" question, and the
         // one chip whose value the user cannot infer from anything else on screen.
         if (measured && (commands & MediaCommandFlags.SelectVideoQuality) != 0 && Player.Qualities.Variants.Count > 0)
             controls.Add(TextButton(QualityLabel(quality, activeQuality), () => OpenPicker(qualityAnchor, QualityItems()), interactive)
-                with { OnRealized = h => qualityAnchor.Value = h });
+                with { Key = "ctl:quality", OnRealized = h => qualityAnchor.Value = h });
         if (measured && !compact && (commands & MediaCommandFlags.SelectTextTrack) != 0 && Player.Tracks.Text.Count > 0)
             controls.Add(TextButton(text is null ? MediaStrings.CaptionsShort : MediaStrings.CaptionsFor(text.Language ?? text.Label),
                 () => OpenPicker(ccAnchor, CaptionItems()), interactive, text is not null)
-                with { OnRealized = h => ccAnchor.Value = h });
+                with { Key = "ctl:cc", OnRealized = h => ccAnchor.Value = h });
         if (measured && !compact && (commands & MediaCommandFlags.SelectAudioTrack) != 0 && Player.Tracks.Audio.Count > 1)
             controls.Add(TextButton(audio?.Language ?? audio?.Label ?? MediaStrings.AudioTrack,
                 () => OpenPicker(audioAnchor, AudioItems()), interactive)
-                with { OnRealized = h => audioAnchor.Value = h });
+                with { Key = "ctl:audio", OnRealized = h => audioAnchor.Value = h });
         if (PictureInPictureRequested is { } pip && (commands & MediaCommandFlags.PictureInPicture) != 0)
-            controls.Add(IconButton(Icons.OpenInNewWindow, pip, interactive));
+            controls.Add(IconButton(Icons.OpenInNewWindow, pip, interactive) with { Key = "ctl:pip" });
         // The button raises the SAME context request as right-click / long-press / Menu-key. ContextMenu.Attach reads
         // args.Source at invoke time, so placement follows this live button without a captured realization handle.
-        controls.Add(IconButton(Icons.More, static () => { }, interactive) with { OnClick = null, ClickRequestsContext = interactive });
+        controls.Add(IconButton(Icons.More, static () => { }, interactive) with { Key = "ctl:more", OnClick = null, ClickRequestsContext = interactive });
         // LAST, at the extreme corner. See the cluster note above.
-        controls.Add(IconButton(presentingFullscreen ? Icons.BackToWindow : Icons.FullScreen, toggleFullscreen, interactive));
+        controls.Add(IconButton(presentingFullscreen ? Icons.BackToWindow : Icons.FullScreen, toggleFullscreen, interactive) with { Key = "ctl:fullscreen" });
 
         var rows = new System.Collections.Generic.List<Element>(2);
         // Never render a seek bar without a SCALE: a rail with nothing to map onto is a control that lies about what it

@@ -843,10 +843,16 @@ public sealed class OverlayHost : Component
     /// public because the in-repo headless probes + shells compose the host via <c>new OverlayHost { Child = … }</c>.</summary>
     [MountOnceContent] public Element Child = new BoxEl();
 
+    /// <summary>Whether this host's auto-mounted <see cref="ToastHost"/> claims <see cref="Toast.Default"/>. False for
+    /// a secondary top-level window (e.g. a detached pop-out) so its toast lane never steals the process-default from
+    /// the primary window — <see cref="Toast.Show"/> would otherwise render into whichever window's host last rendered.</summary>
+    public bool IsPrimaryToastHost = true;
+
     /// <summary>The one canonical factory: wrap <paramref name="child"/> (the app root) in an overlay host that hosts
     /// anchored flyouts / menus / dialogs / toasts in a top-level ZStack. Resolve the service inside via
     /// <c>UseContext(Overlay.Service)</c>.</summary>
-    public static Element Create([MountOnceContent] Element child) => Embed.Comp(() => new OverlayHost { Child = child });
+    public static Element Create([MountOnceContent] Element child, bool isPrimaryToastHost = true)
+        => Embed.Comp(() => new OverlayHost { Child = child, IsPrimaryToastHost = isPrimaryToastHost });
 
     // WinUI MenuPopupThemeTransition timings: s_OpenDuration=250 / s_OpacityChangeDuration=83
     // (MenuPopupThemeTransition_Partial.h:23-24); ClosedRatio=0.5 for root menus (MenuFlyout_Partial.cpp:253
@@ -1384,8 +1390,9 @@ public sealed class OverlayHost : Component
         // present (index-stable, so opening/closing a popup never remounts it) and registering itself as the
         // process-default for the static Toast API. Dormant (an inert full-bleed pass-through) when no toasts are live.
         var inner = Ui.ZStack(layers.ToArray()) with { Grow = 1 };
+        bool isPrimary = IsPrimaryToastHost;
         return Ctx.Provide(Overlay.Service, (IOverlayService)svc,
-            Ui.ZStack(inner, Embed.Comp(() => new ToastHost())) with { Grow = 1 });
+            Ui.ZStack(inner, Embed.Comp(() => new ToastHost { Options = new ToastHostOptions { RegisterAsDefault = isPrimary } })) with { Grow = 1 });
     }
 
     /// <summary>Cascading-menu overlap (CascadingMenuHelper.cpp:678 — sub-menu lands at owner edge − 4): nudge the

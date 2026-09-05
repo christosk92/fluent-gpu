@@ -423,7 +423,15 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
     }
 
     public void SetVolume(float volume) { if (_available) _ = Native.FgPlayReadySetVolume(volume); }
-    public void SetRate(float rate) { if (_available) _ = Native.FgPlayReadySetRate(rate); }
+    public void SetRate(float rate)
+    {
+        if (!_available) return;
+        // The return code used to be discarded (`_ = ...`), so a refusal deep in the native PlayReady session (e.g. the
+        // CDM rejecting a rate change mid-license-renewal) was invisible: the managed side optimistically kept showing
+        // whatever rate the user picked in the "Playback speed" submenu even though the video kept playing at 1x.
+        ulong rc = Native.FgPlayReadySetRate(rate);
+        if (rc != 0) LogVideo($"FgPlayReadySetRate({rate}) returned 0x{rc:X16} (rate change likely NOT applied)");
+    }
     public void Stop()
     {
         _shutdown.Set();

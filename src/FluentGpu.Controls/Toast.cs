@@ -58,6 +58,10 @@ public sealed record ToastHostOptions
     /// clears a persistent chrome bar (e.g. a now-playing / player bar or a safe-area inset). Applied to the bottom
     /// edge for <c>Bottom*</c> placements and the top edge for <c>Top*</c> placements. Default 0.</summary>
     public float EdgeInset { get; init; }
+    /// <summary>Whether this host claims <see cref="Toast.Default"/> (last-registered-wins). Set false for a lane
+    /// mounted inside a secondary top-level window (e.g. a detached/pop-out child) so <see cref="Toast.Show"/> keeps
+    /// landing on the primary window's lane instead of being stolen by whichever window rendered last. Default true.</summary>
+    public bool RegisterAsDefault { get; init; } = true;
 }
 
 /// <summary>A live toast; <see cref="Close"/> dismisses it (idempotent).</summary>
@@ -384,9 +388,10 @@ internal sealed class ToastController
 }
 
 /// <summary>The auto-mounted (or explicit) toast lane. Every <see cref="OverlayHost"/> mounts one at the top of its
-/// Z-stack and registers its controller as the process-default for the static <see cref="Toast"/> API. Mount an
-/// explicit one via <see cref="Create"/> to override the placement / multi-window (last-registered wins; the previous
-/// default is restored when the explicit host unmounts).</summary>
+/// Z-stack and, unless <see cref="ToastHostOptions.RegisterAsDefault"/> is false, registers its controller as the
+/// process-default for the static <see cref="Toast"/> API (last-registered-wins). A secondary top-level window
+/// (e.g. a detached pop-out) should pass <c>RegisterAsDefault = false</c> so it never steals <see cref="Toast.Default"/>
+/// from the primary window's lane.</summary>
 public sealed class ToastHost : Component
 {
     /// <summary>Explicit options; <c>null</c> (the OverlayHost auto-mount) reads the static <see cref="Toast"/> config.</summary>
@@ -410,8 +415,9 @@ public sealed class ToastHost : Component
         // Register as the process-default for the static Toast API — an idempotent render-body write (NOT a mount
         // UseEffect): the auto-mounted lane lives for the app's lifetime, and last-registered-wins is the accepted
         // process-static contract (the ContextMenu._currentHandle precedent). Doing it in the body keeps the mount
-        // allocation-free (no effect closure / pending-effect enqueue).
-        if (!ReferenceEquals(Toast.Default, ctl)) Toast.Default = ctl;
+        // allocation-free (no effect closure / pending-effect enqueue). A secondary window's lane opts out
+        // (RegisterAsDefault = false) so it never steals Toast.Default from the primary window's lane.
+        if ((Options?.RegisterAsDefault ?? true) && !ReferenceEquals(Toast.Default, ctl)) Toast.Default = ctl;
 
         _ = ctl.Version.Value;   // subscribe → re-render the lane on show/close
         return ctl.BuildLane();

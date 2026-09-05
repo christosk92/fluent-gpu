@@ -1231,8 +1231,11 @@ public sealed class AppHost : IDisposable
             return null;
         float scale = _window.Scale;
         // WindowDesc takes PIXELS: the request is DIP, so scale it here or a 150% display opens the window at 2/3 size.
+        // CustomFrame: true — a detached video pop-out is borderless like every other Wavee window; without it Win32
+        // always creates WS_OVERLAPPEDWINDOW and the OS caption (icon/title/min/max/close) shows on top of the video.
         var desc = new WindowDesc(request.Title,
-            new Size2(request.InitialSizeDip.Width * scale, request.InitialSizeDip.Height * scale), scale, Composited: true);
+            new Size2(request.InitialSizeDip.Width * scale, request.InitialSizeDip.Height * scale), scale,
+            Composited: true, CustomFrame: true);
         var win = _app.CreateWindow(desc);
 
         // A 16:9-ish client floor so the mini-player can never be dragged down to an unusable sliver (caller-overridable).
