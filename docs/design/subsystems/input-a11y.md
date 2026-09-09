@@ -387,6 +387,29 @@ Tunnel = forward span, bubble = reversed span, enter/leave = common-ancestor dif
 
 **`ClickRequestsContext` (context-request routing — the declarative "this button opens the ancestor's context menu").** `BoxEl.ClickRequestsContext = true` declares a node a **context-invoker**: an ACTIVATION on it — left-click release-over-same, touch tap, or Space/Enter while focused — re-enters the context-request funnel **starting at that node** (`InputDispatcher.RequestContextFrom`) instead of firing a click. The ordinary §6.5.1 ancestor walk then finds the nearest enabled `ContextBit` handler (self-inclusive — a node that is itself the `ContextBit` owner self-handles), so a track row's "…" button opens the SAME menu, selection semantics, and light-dismiss as a right-click on the row, by construction. Pointer/touch activations dispatch `Trigger = Invoke`; a Space/Enter key-activation dispatches `Trigger = Keyboard` (so a keyboard invocation still focuses the first item). The args gain **`Source`** — the node the request ORIGINATED at (the button); for `Pointer`/`Keyboard`/`Hold` the dispatcher sets `Source == Node` (the `ContextBit` owner the walk stopped at), so rect-anchored opens anchor uniformly on `Source` (same reused-instance/value-copy contract as `Node`). Storage: the prop IMPLIES `ClickBit` (hit-test/press/hover/focusable exactly like `OnClick`; declare `Cursor = Hand` yourself) with a NULL click-handler column, plus the commit-time discriminator **`InteractionInfo.ClickRequestsContextBit = 1u << 16`** — deliberately NOT in `AnyInteractiveMask` or the hit-test self-hit mask (the implied `ClickBit` covers both). Bit 16 is why **`HandlerMask` widened `ushort` → `uint`**: every clear-site must mask with the uint complement `~(uint)Bit` — a ushort-truncated complement stomps bit 16 (the R1 regression, gated by VerticalSlice E2.h). Mutually exclusive with `OnClick` (the prop wins; DEBUG assert on both). This mechanism **supersedes the app-side `RedispatchContextAt` + `OnRealized` node-capture pattern** for "button opens the row menu" — that pattern re-hit-tests a synthetic point through the hooks seam and goes stale on re-render (realization callbacks fire at mount, not per diff); `RedispatchContextAt` itself remains for its one legitimate client, the overlay scrim's dismiss-and-reopen.
 
+#### 6.5.2 Hyperlink span click resolution (rtb-01; P2 "bound spans with index-resolved clicks")
+
+A `SpanTextEl` hit whose node carries `InteractionInfo.SpanLinksBit` runs `HitLinkSpan` first — a rect hit-test
+over the seam-published `SpanRunRects` (`text.md` §8, the LINK-kind fragments) narrowed to spans that are
+`TextSpan.IsHyperlink` (own `OnClick` set, **or** `TextSpan.IsLink` for the bound/index-resolved case, `text.md`
+§8.4). A hit link **IS the click** — same rule as §6.5's activation walk, but the link is the LEAF's action, not
+the nearest `ClickBit` ancestor's: `SpanLinksBit` is deliberately not `ClickBit`, so the ordinary
+activation-owner walk does not also fire (clicking an artist link inside a playable track row must navigate,
+never ALSO play the row). All three dispatcher readers (mouse release, touch tap, and the cursor-resolution
+probe `UpdateSpanCursor`) resolve a hit span in the same order:
+
+1. **`spans[i].OnClick`** — the span's own closure, when set (the static-paragraph case, `WC-SPAN.b`).
+2. **else `SpanTextEl.OnSpanClick(i)`** — the node's index-resolved handler (mount-static, a sparse `SceneStore`
+   table), handed the CLICKED SPAN'S INDEX. This is the bound-row case: a template mints its spans from a reused
+   `SpanBuffer` (`text.md` §8.4) and marks a link span `IsLink = true` instead of allocating a fresh `Action` per
+   link per row per recycle; the ONE `OnSpanClick` closure (built once at template-mount time, like every other
+   bound-row handler) resolves `Item.Peek()` at invocation time — the CURRENT item, not whatever occupied the
+   slot when the template was built.
+
+Both steps are hyperlink-only; a span with neither `OnClick` nor `IsLink` never sets the LINK rect kind in the
+first place (`WriteSpanText`, `text.md` §8.4), so it is never hit-testable as a link and the ordinary
+activation-owner walk (§6.5) reaches its enclosing `ClickBit` ancestor normally.
+
 ### 6.6 DSL framing (corrected — shape-compatible PORT, not "verbatim")
 
 Reactor's `ElementModifiers.OnPointerPressed` is `Action<object, WinRT.PointerRoutedEventArgs>` — it leaks WinRT and violates the no-WinRT constraint, so **handler signatures are redefined portably** (the by-ref delegates above). The `OnX` / `.X()` **naming** is preserved (`.OnPointerPressed(handler)`, `.OnTapped(handler)`, `.OnKeyDown(handler)`). The DSL modifier accumulates the delegate into the per-render arena `ModifierOp` stream (architecture-spec §8 generator 2); the scene-writer (generator 4) installs it into the right `HandlerTable` column and sets the `Wants*` flag.

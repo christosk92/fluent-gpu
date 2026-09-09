@@ -848,6 +848,67 @@ suffix uses ordinary `TextSpan.OnClick` dispatch. The headless and DirectWrite s
   range provider and the highlight emitter share; **UAX #29 grapheme/word navigation, mutation, IME, and
   undo/redo are CORE** via the `ITextDocument` editable seam (§16) — no longer deferred.
 
+### 8.4 Bound spans — `SpanTextEl.Spans : Prop<TextSpans>` (rtb-01, "Operation ultra-fast GPU engine" P2)
+
+A virtualized row's span paragraph (a track title's linked artist/album credits, a lyrics line, a notice with
+an inline "Learn more") must rebind on every recycle **without allocating a fresh `TextSpan[]` per row per
+frame** — the P2 phase adds a first-class bound-span path alongside the pre-existing static
+`SpanTextEl(TextSpan[])` construction (still the right choice for a paragraph that never changes after mount).
+
+- **`TextSpans`** (`Foundation/SpanText.cs`) is a `readonly struct(TextSpan[] Array, int Count)`: a fixed-identity
+  view over a caller-owned array plus a LIVE count. Implicit from a plain `TextSpan[]` (`Count = Array.Length` —
+  every existing static call site keeps compiling unchanged) or read from a `SpanBuffer.Current`.
+- **`SpanBuffer`** (same file) is the engine-owned per-slot scratch a bound row template fills each recycle:
+  `Clear()` resets the live count without touching capacity; `Add(span)` grows the backing array at the
+  HIGH-WATER mark only (doubling, floor 4, never shrinks) — a buffer settles at its widest-ever fill and every
+  later fill of equal-or-smaller width allocates nothing. `Current` is the `TextSpans` view handed to
+  `SpanTextEl.Spans`.
+- **`SpanTextEl(Prop<TextSpans> Spans)`** — the primary record parameter is now a bindable `Prop<TextSpans>`
+  channel (the same `Prop<T>` machinery as every other bound channel: static value / thunk / signal). A
+  `SpanTextEl(TextSpan[] spans)` ctor overload keeps every pre-P2 construction compiling as an UNBOUND paragraph.
+  A bound row authors `Spans = Prop.Of(() => { buf.Clear(); buf.Add(...); ...; return buf.Current; })` over a
+  `SpanBuffer` the template closure captured once (mount time, per `component-props-contract.md`'s "plain
+  factory fields freeze at mount" rule — the buffer instance itself is stable across recycles; only its
+  CONTENTS are refilled per fire).
+- **`SpanTextEl.OnSpanClick : Action<int>?`** — index-resolved hyperlink handler, mount-static (a sparse
+  `SceneStore` table, not a `Prop<T>` channel — same category as an ordinary `OnClick`). A bound row with many
+  link spans per row would otherwise need a fresh `Action` closure PER LINK PER ROW PER RECYCLE just to know
+  which link fired; instead a span can be marked `TextSpan.IsLink = true` (no closure) and the dispatcher
+  resolves the click by INDEX through the node's single `OnSpanClick`, handed the clicked span's index — read
+  `input-a11y.md` §"Hyperlink span click resolution" for the exact reader order.
+- **Scene-owned copy, alias safety.** `SceneStore.SetSpanText` COPIES into a scene-owned, grow-only-capacity
+  per-node array — never retains the caller's array/`SpanBuffer` backing array by reference. A `SpanBuffer` is
+  refilled and reused across recycles; if the scene aliased it, mutating the buffer on the NEXT recycle would
+  retroactively corrupt the text the scene already committed and is currently painting. `TryGetSpanText` returns
+  the live `[0, Count)` prefix as a `ReadOnlySpan<TextSpan>` (never the backing array's full length, which may
+  hold stale high-water capacity).
+- **Shaping gate — one `WriteSpanText`, two callers.** `TreeReconciler.WriteSpanText(node, bodySpans,
+  suffixSpans, inRenderScope)` is the ONE place that mints/reuses the POD `SpanRunTable` overlay: it re-mints
+  (a fresh `SpanRunId`, a fresh `StringTable`-interned concat string) only when the span content/style actually
+  changed (`SameSpanShaping`, ignoring `OnClick`/`OnSpanClick` identity — a re-rendered closure must never churn
+  the run). Both the static `WriteColumns` path (mount/update) and `Reconciler.Spans.cs`'s bound effect call it —
+  an IDENTICAL rebind (the common steady-scroll case: a slot's content happens not to change, or a re-render
+  reproduces value-equal spans) re-shapes NOTHING. The concat string is built into a REUSED `char[]` scratch
+  (`TreeReconciler._spanConcatScratch`, grow-only) and interned via `StringTable.Intern(ReadOnlySpan<char>)` —
+  a NEW `Intern` overload that probes the SAME map by content (the .NET alternate-lookup span probe, no
+  allocation) and pays `new string(span)` only when the content is genuinely new to the table.
+- **`inRenderScope`** distinguishes the two callers for `MarkLayoutShape`'s own documented rule ("Deliberately
+  NOT used by the bound … effects" — those fire outside a render scope and must mark only their own node): the
+  static WriteColumns path passes `true` (safe to set `_layoutShapeMutated`, like every other WriteColumns shape
+  change); the bound effect passes `false` (a bare `NodeFlags.LayoutDirty` on its own node, mirroring the bound
+  `TextEl.Text` effect's own convention).
+- **`CaptureSpanDecorations`** (the recorder's underline/strikethrough/link-rect emission from the seam-published
+  `SpanRunRects`) is UNCHANGED by P2 — it already reads the `SpanRunId`-keyed artifact, which is agnostic to
+  whether the id came from a static or bound rebind.
+
+Gates (`FluentGpu.VerticalSlice/Suites/TextSuite.cs`, `BoundSpansChecks`): `gate.spans.bound-rebind-zero-alloc`
+(a 1000-row `ItemsView.CreateBound` list, 3 spans/2 links per row via a per-slot `SpanBuffer`; a far scroll then
+settle ⇒ `HotPhaseAllocBytes == 0`, the recycle flush stays within a 256 B/row budget, no template rebuilds, and
+a post-recycle link click resolves the CURRENT bound item by index), `gate.spans.shaping-gate-keeps-run` (an
+identical rebind keeps the `SpanRunId` and shapes nothing), `gate.spans.scene-owns-copy` (mutating the caller's
+`SpanBuffer` after the fire leaves the scene's copy/drawn text unchanged; a genuinely changed rebind mints a new
+run). The pre-existing rtb-01/rtb-02 checks (`WC-SPAN.*` in the same suite) stay green unchanged.
+
 ---
 
 ## 9. Color & the text gamma exception (cross-ref §4.5, `architecture-spec.md` §5.2)

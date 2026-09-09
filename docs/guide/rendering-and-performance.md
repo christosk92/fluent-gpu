@@ -166,6 +166,16 @@ Read `FrameStats` from `RunFrame()`:
 - `Rendered == false` on a steady or compositor-only frame → good (no wasted render/layout).
 - `ComponentsRendered` should be small (ideally 1) after a localized interaction.
 - `HotPhaseAllocBytes == 0` on steady frames → the zero-alloc contract holds.
+- `MeasureCount`/`ArrangeCount`/`TextShapeMisses` (FlexLayout diag) are **always-on** (no `FG_LAYOUT_DIAG` needed —
+  that env var only gates the harness's own `Console.Error.WriteLine` printout, not these counters):
+  `MeasureCount` counts real measures (memo hits excluded); should be ~0 on a steady frame with an unchanged tree.
+- `TextShapes` — real `IFontSystem` glyph-shape calls this frame (always-on). 0 on a frame with no text change; a
+  nonzero value on an otherwise-quiet frame usually means a measure-cache miss (font/size/text/wrap-width changed).
+- `CapturedNodes` — nodes copied by this frame's scene-recording snapshot; 0 on a skip-submit frame.
+- `BindingFires`/`BindingWrites` — every bound-channel effect's prologue vs. the subset that actually wrote a scene
+  column (an equal republish fires without writing). `BindingWrites / BindingFires` is the equality-gating hit rate.
+- `RebindFlushAllocBytes` — GC-delta across the frame's rebind-only flush, isolated from layout/record/submit (valid
+  only under the same process allocation-tracking probe as `HotPhaseAllocBytes`).
 - Set `FG_DUMP=1` to dump the post-layout scene tree to stderr; `FG_DIAG=1` enables engine diagnostics;
   `FG_SCROLLLOG=1` traces the scrollbar.
 

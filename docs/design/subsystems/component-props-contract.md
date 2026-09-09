@@ -55,6 +55,19 @@ render/reconcile/layout (the "slider tank" win); a bound `Width`/`Height`/`Text`
 is **mount-only** — change the signal's *value*, never swap the signal (swap ⇒ re-key). Exemplar: `Slider.Create(
 FloatSignal value)` (the one slider API), any `Signal<int> SelectedIndex`, `ItemsView` displacement.
 
+**`Visible : Prop<bool>` — the presence channel (P1, layout.md §4.7).** Bound the same way (`Prop.Of(() =>
+sig.Value)` or a signal-direct bind), but it does not write a paint/layout SCALAR — it flips the node between
+mounted-and-flowing and collapsed (out of layout, paint and hit-test; CSS `display:none`, not `visibility:hidden`).
+The bind is still mount-only and still equality-gated on the RESOLVED value, so it composes with the rest of this
+list unchanged: re-pushed props (1) can still change WHAT a component renders while its own `Visible` bind (2)
+independently governs WHETHER the resulting subtree is in flow. One consequence worth calling out here because it is
+a props-contract concern, not just a layout one: collapsing a component's ancestor does **not** stop the component's
+own render-effect (props keep landing, bindings keep settling) — it only pauses `UseInterval` (`entry.Hidden` folds
+into the same `UseIsActive()` signal `Flow.KeepAlive` parking already writes). A component that wants to skip real
+work while hidden should still gate on `UseIsActive()`/`UseActivation()` itself, exactly as it would for a
+backgrounded KeepAlive tab — presence and KeepAlive parking are two edges into the ONE activation signal, not two
+things to special-case separately.
+
 ### 3. Context (`Ctx.Provide` + `UseContext`/`UseRequiredContext`) — ambient / coordination
 
 Broadcast state for a *subtree of many/unknown* consumers: theme `Epoch`, flow-direction, a `NavigationView`
@@ -65,10 +78,10 @@ known to the writer." (reconciler-hooks §8bis draws the line.)
 
 ### 4. A `Key` remount — the item *identity* changed
 
-When the item *set* changes (a different entity, a refiltered list), give the list/wrapper a changed `Key` and let it
-mount fresh; `scrollKey` preserves scroll offset across the remount. Use for identity changes only — a re-key drops
-transient state (open popup, focus, in-flight edit), so never re-key for a value that merely changed. Exemplar:
-`DetailTracks.cs` (`Key = "list:...t{tier}:d{density}:q{query}:f{flags}"`).
+Use a changed `Key` when the component represents a different identity and its transient state should reset
+(for example a different detail entity). A remount drops focus, popup, editing and pager state. Changing collection
+contents, order, filters, or metadata does not itself require a new component identity: a stable `BoundItemsSource`
+reports its content/order revision and occurrence keys to the retained list. Use the list's documented update API.
 
 Genuinely-static config (an initial open state, a fixed dimension, a one-time mount seed) may stay a plain field.
 
@@ -79,7 +92,7 @@ Genuinely-static config (an initial open state, a fixed dimension, a one-time mo
 | a per-instance value/flag/slots a parent hands its child | **re-pushed props (1)** — `Embed.Comp(props, …)` / `[Props]` | a hand-rolled `Ctx.Provide` channel (that's what G4d deleted) |
 | a hot scalar (slider/scroll/progress/bound transform) | **a bind (2)** | `setState` per move (render churn) |
 | ambient state broadcast to many/unknown consumers | **context (3)** | re-pushed props (there's no single child) |
-| a change of item **identity** (the set changed) | **a `Key` remount (4)** | a bind/props (they update in place; identity needs a fresh mount) |
+| a different component identity whose local state should reset | **a `Key` remount (4)** | metadata/content revisions used as remount keys |
 | genuinely static (mount seed) | a plain field | — |
 
 ## The ReuseGuard tripwire (`Hooks/ReuseGuard.cs`) — the legacy safety net
@@ -103,8 +116,87 @@ call `ReuseGuard.Violation(...)`.
   scalar — **not** a plain field through `Embed.Comp`, and **not** a hand-rolled context channel.
 - Any plain field you *do* keep (a genuine mount seed) → list it; if it is scalar caller-data, add a
   `DebugCheckReuse` compare so misuse trips `ReuseGuard`.
-- A list control whose *set* can change → its callers re-key (4); the `ItemsView` guard reports a missing re-key.
+- A changing collection uses stable `BoundItems` / `ItemsView.CreateBound`; publish source revisions and preserve occurrence keys. A count-only mount seed is not a live data contract.
 - Ambient state for many consumers → **context (3)**, and prefer `UseRequiredContext` when a missing provider is a bug.
+
+## Retained shelf authoring (2026-09)
+
+`PagedShelf.Create<T>` takes one immutable `IReadOnlyList<T>` snapshot and a `Func<T, int, float, Element>` card
+builder. The control re-pushes items, title/header, custom pager, keys, maximum item count and visible-range callback
+to the retained `IPropsHost` core. It projects those items into one stable `BoundItemsSource<T>` and renders through
+`ItemsView.CreateBound`; the application does not maintain a second mutable shelf collection.
+
+```csharp
+PagedShelf.Create(cards,
+    (card, index, width) => BuildCard(card, width),
+    cardHeight: width => width + 48,
+    title: title,
+    keyOf: (card, index) => card.OccurrenceKey,
+    onVisibleRange: (first, lastExclusive) => ReportVisible(first, lastExclusive));
+```
+
+Use the passed **current item** for labels and actions. Do not have retained callbacks index a list captured when
+the shelf first mounted. Immutable snapshot replacement updates same-count contents in the same flush while keeping
+the viewport, pager, fractional scroll position, open popup and occurrence focus. Source content revisions invalidate
+measurement when content size changes; they do not remount the shelf. Growth/shrink clamps the retained pager to the
+new range. `Responsive.Of` likewise re-pushes its builder instead of retaining an old parent closure.
+
+### What a props record may compare — delegates, Elements, and the data gate
+
+A props record's **equality is the re-render gate**: the reconciler delivers the new record through the child's props
+signal, and a value-equal write is coalesced (`Signal<T>.SetIfChanged`), so the child is re-rendered exactly when its
+props record says it changed. The default record `Equals` compares *every* member, which quietly makes the gate
+unreachable for two member shapes:
+
+- **A delegate member.** A lambda allocates a **fresh closure on every parent render** — equal `Method`, new `Target` —
+  so `Delegate.Equals` is false forever. A record holding a `Func`/`Action` therefore never compares equal and the gate
+  never holds: every parent render re-renders the child and everything it builds.
+- **An `Element` member.** `Element` is a record whose `Children` is an **array**, compared by reference. A
+  rebuilt-but-identical subtree is never equal, and a deep compare would be both costly and wrong (it would have to
+  compare the handlers hanging off the tree).
+
+So a props record that gates on data **defines `Equals`/`GetHashCode` explicitly** (records permit this) and splits its
+members three ways:
+
+| Member | Compared | Rule |
+|---|---|---|
+| the item snapshot (`Items`) | reference first, else the **clamped prefix** (`min(Count, MaxItems)`) element-by-element through `EqualityComparer<T>.Default` | immutable domain **records** therefore compare by VALUE — a parent that re-projects its array on every publication still gates, with no memoization at the call site. A non-record `T` degrades to per-element reference equality: safe (never falsely equal), just less effective |
+| scalars that change what is rendered (`MaxItems`, `Fallback`, `Grow`, `Title`) | by value | — |
+| delegates (`CardAt`, `KeyOf`, `CustomPager`, `OnVisibleRange`, `Build`) | **IGNORED** | see the contract below |
+
+**The delegate contract.** A component captures its delegates as *behaviour*, not data: **what a card renders must be a
+function of its item**, plus stable behaviour the closure captures (a navigate/play callback). State the card PAINTS —
+"saved", "playing", a live accent — belongs **in the item**, on a signal the card itself reads, or behind its own
+component; it must never be reached through the ignored closure, because a closure change alone schedules nothing. The
+shelf still invokes the **newest** delegates the parent pushed (`PagedShelfCore._latest` is a plain field, deliberately
+not a signal), so behaviour never goes stale — only the *scheduling* is gated. A re-push whose delegate **`Method`**
+differs (a genuinely different lambda, not a fresh closure of the same one) trips the DEBUG-only report-only
+`ReuseGuard.IgnoredDelegateChanged` once per component; changing behaviour that must repaint means changing the data or
+re-keying the component.
+
+**Chrome is not data.** `PagedShelf`'s `title`/`header` ride a **second** signal (`ShelfChrome`: title by value, header
+by **reference**, pager presence as a bool), so a caller that rebuilds its `header:` Element on every render re-renders
+the shelf's own header row and **not one card**. A shelf whose caller passes `title:` (or a stable header instance)
+gates end to end. This is the honest split: an Element cannot be value-compared, but it also must not be allowed to drag
+the card set with it.
+
+**`Responsive.Of` has two overloads, and only one can gate.** `Of(build, …)` is **ungated by design** — its closure IS
+its data channel (freezing it at mount is the stale-content bug class the box used to have), so it rebuilds whenever its
+parent does. `Of(state, (state, width) => …, …)` gates on `state` by value and ignores the builder; hand it every value
+the subtree paints as one immutable record or a tuple of scalars/records. `ResponsiveBox.Props.Gate` carries that state;
+a null gate selects the ungated comparison.
+
+Gates: `gate.shelf.props.*` (a new list instance of equal items rebuilds no cards; chrome refreshes without rebuilding
+cards; a changed item and a changed `MaxItems` both pass the gate; the gate is hot-phase-allocation-free) and
+`gate.responsive.props.*` (state-gated skip, ungated rebuild, state change rebuilds), in `ShelfBindingChecks`.
+
+Sizing/layout/snap options that the factory still passes to the core constructor remain mount configuration. The
+live data contract does not make every constructor argument dynamic. See the concrete `PagedShelf.Create` signature
+and `ShelfProps<T>` for the live set, and `virtualization.md` for source revision and recycling semantics.
+
+Mounted shelf binding gates cover current item/action delivery, live chrome, retained viewport/pager/focus,
+park/resume, grow/shrink, content measurement and the existing hot-phase allocation gates. Pure app DTO tests cannot
+establish those engine behaviors.
 
 ## Status (2026-07)
 

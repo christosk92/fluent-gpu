@@ -41,7 +41,7 @@ call), then for exactly that flush:
 | A plain `Component`'s render (`Fill = Tok.X`) | ✅ component re-renders (RethemeAll) | ✅ cross-fade |
 | A `Flow.For` / `Flow.Show` row factory | ✅ boundary effect re-fires (RethemeAll → `_nodeBindings`) | ✅ cross-fade |
 | A bound channel `Fill = Prop.Of(() => Tok.X)` | ✅ bind re-fires (RethemeAll → `_nodeBindings`) | ⚠️ snaps |
-| A **frozen literal** passed as a constructor arg (`OverlayHost.Child`, a control's `ColorF` prop) | ❌ **stays stale** | — |
+| A **frozen literal** passed as a constructor arg (a plain propless factory field) | ❌ **stays stale** | — |
 | A run-once component's direct `Tok.X` read in `Render()` | ✅ render-effect re-scheduled → re-runs in place | ✅ cross-fade |
 | DWM Mica / caption | ✅ re-applied (instant) | ❌ OS-owned |
 
@@ -62,16 +62,14 @@ UseContext(ThemeControl.Request)?.Invoke(250f);        // host: in-place re-rend
 
 ## Gotchas (each = a real "doesn't change theme" bug)
 
-1. **Frozen literals behind a constructor-arg boundary.** Anything built as a literal `Element` and passed as a child
-   *constructor arg* freezes at mount — the canonical case is `OverlayHost { Child = column }` (Wavee's whole shell
-   frame). A parent re-render rebuilds the column but the autonomous child **drops** it (engine rule: parent→child via
-   signals/context, never constructor args). **Fix:** make the theme-dependent fills **bound** —
-   `Fill = Prop.Of(() => WaveeColors.FileArea)` — so they live in `_nodeBindings` and `RethemeAll` re-fires them. (Or
-   wrap the surface in its own tiny `Component` so it's autonomous and re-renders.)
-2. **Control color props typed `ColorF` freeze.** A control field like `TabStrip.SelectedFill` is a constructor arg —
-   frozen at mount; the control re-rendering re-reads the *frozen field*, not the token. **Fix:** type the prop
-   `Prop<ColorF>` (implicit from `ColorF`, so defaults still work) and pass `Prop.Of(() => Tok.X)` for theme-dependent
-   values.
+1. **Frozen literals behind a propless factory boundary.** A plain field initialized only by
+   `Embed.Comp(() => new Child { Value = literal })` remains the mount value. Check the control's actual API:
+   `Embed.Comp(props, factory)` / `[Props]` re-pushes live values and does not have this limitation. Prefer live props
+   for point-to-point parent data, or a stable bound `Prop.Of(() => Tok.X)` for a theme-dependent node property.
+   The mechanism is defined in `docs/design/subsystems/component-props-contract.md`.
+2. **A `ColorF` type alone does not tell you whether a control prop freezes.** A constructor-only color field is a
+   mount seed; an explicitly re-pushed color is live. For hot bound colors use `Prop<ColorF>` and
+   `Prop.Of(() => Tok.X)`. Inspect the actual props channel before adding a context broker or remount workaround.
 3. **App-local color helpers that hardcode one theme.** Wavee's `WaveeColors` once hardcoded the *dark* layer value →
    near-black sidebar in light theme. **Fix:** don't scatter per-property `Tok.Theme == Light ? … : …` ternaries — that
    re-implements the engine's own TokenSet swap, and an `else =` one theme reads as "defaults to that theme." Instead
@@ -105,8 +103,8 @@ UseContext(ThemeControl.Request)?.Invoke(250f);        // host: in-place re-rend
 
 1. Is X built inside a plain `Component`'s render? → it should already work (RethemeAll). If not, X is probably frozen
    or bound — continue.
-2. Is X a **literal** passed as a constructor arg (into `OverlayHost.Child`, a control prop)? → **frozen**; bind it
-   (#1/#2).
+2. Is X a literal in a **propless factory field**? It is a mount seed; use re-pushed props or a stable bind.
+   If the control already takes live props, inspect the current supplied props instead of adding a remount.
 3. Is X inside a `Flow.For`/`Flow.Show`/virtual row? → covered by `RethemeAll` `_nodeBindings` re-fire; if still stale,
    the boundary effect isn't registered (#4).
 4. Is X a run-once component reading `Tok` directly in `Render()`? → covered by RethemeAll re-scheduling its

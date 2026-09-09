@@ -92,4 +92,8 @@ engine-bound component cannot be instantiated headlessly, extract the decision i
 unit-test that (`LiveEdgeState`, `LiveRail`, `TimeFormat`, `PlayableLinks` are the pattern); otherwise the
 VerticalSlice/golden gates or a live run cover it.
 
-**Component props freeze at mount.** Components are autonomous: `Embed.Comp(() => new T { Field = value })` runs the factory once and freezes `Field` — a parent re-render does NOT re-run it. Changing data must reach a child via a `Signal`/`Func` it reads, `Ctx.Provide`+`UseContext`, or a remount forced by a changed `Key` (never a plain field/ctor arg). See `docs/design/subsystems/component-props-contract.md` before passing data into `Embed.Comp`; the `ReuseGuard` DEBUG tripwire (`FG_REUSE_GUARD=1`) and `gate.reuse.*` catch the mistake.
+**Plain propless factory fields freeze at mount; explicit props are live.** `Embed.Comp(() => new T { Field = value })`
+initializes `Field` once. Changing parent data uses `Embed.Comp(props, factory)` / `[Props]`, a stable signal/bind,
+or ambient context. Changing collection contents uses stable bound sources and occurrence keys. Remount only when
+component identity or documented mount configuration should reset its interaction state. Read
+`docs/design/subsystems/component-props-contract.md`; `ReuseGuard` targets the remaining propless-field hazard.

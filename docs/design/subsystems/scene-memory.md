@@ -453,6 +453,36 @@ split. `FlowState` is the **one exception** — it is a 4-byte *hot-spine* colum
 RTL resolution is per-node and read by *both* layout and the record-time overlay-placement path; 4 bytes on the
 spine costs less than the indirection, and it packs into the same cache-line group as `NodeFlags`.
 
+#### 2.6a Node-indexed dense arrays are for the SPINE only — the slot-pool rule (AS-BUILT 2026-09)
+
+The hot/cold split above is a rule about the **store**. The same rule binds every subsystem that keeps per-node
+state of its **own** outside `SceneStore`, and it is the one that gets broken by accident: an `int node` index is
+such a convenient key that a subsystem reaches for `T[node]` and silently buys an array sized to the scene's node
+high-water. This doc owns that storage discipline (the cited docs still own each payload's meaning):
+
+> **A per-node side table whose live population is a small fraction of the scene MUST be a bounded SLOT POOL plus a
+> 4-byte-per-node `int` lookup (`slot + 1`, `0` = absent) — never a dense array of the payload indexed by node.**
+> The pool is sized by how many nodes actually carry the state; only the 4-byte lookup is sized by node index. Slots
+> are recycled through a LIFO free list, so mount/unmount churn returns to its high-water instead of growing. The
+> pool may be grown ONLY on the publisher/UI side (the mount/capture event that admits a new occupant), never from a
+> per-frame integration or compositor tick — the growth-free path is what the alloc-zero gates measure.
+
+Two instances are as-built, both converted from the dense form after `mem.sample`/`dotnet-gcdump` caught them on
+the 32 768-node scene the native ARM64 tour reaches:
+
+| Side table | Owner of the payload | Dense cost at 32 768 nodes | Slot-pool cost | Gates |
+|---|---|---|---|---|
+| Compositor overlay rows (`SceneRecordingSnapshot`, per publisher slot) | `backdrop-effects-animation.md` / `../../plans/animation-engine-rework-design.md` | 508 B/node ⇒ 15.9 MiB per snapshot (47.6 MiB across the three slots) | 256 reserved rows ⇒ 381 KiB per snapshot (1.12 MiB across the three slots) | `gate.compositor-row-sparse`, `gate.compositor-row-alloc`, `gate.compositor-row-overflow` |
+| `ScrollKernel`'s scroll-body pool (`FluentGpu.Scroll`) | `input-a11y.md` §7B (integrator + one-offset-writer boundary) / `../../plans/scroll-v3-plan-2026-08-17.md` (the body's field semantics) | 376 B/node for the bodies plus four more node-indexed side columns (active list, in-active flag, touched list, touched stamp) ⇒ **12 746 752 B** | one slot per bound viewport plus the 4-byte lookup ⇒ **143 776 B** at 32 viewports (the tour's ~27 live viewports rounded up) | `gate.kernel.body-sparse`, `gate.kernel.slot-reuse`, `gate.kernel.alloc-zero-tick` |
+
+The scroll case additionally shows the ordering constraint a pool has that a dense array does not: a slot released
+by an unbind is **still named by the current pass's active/touched lists**, so release is deferred to the end of
+that pass (after the sink emission and the active-list compaction) rather than taken at the unbind. Without that,
+a mount arriving later in the same pass could be handed a slot the pass is about to emit for, and the "exactly one
+sink write per body per pass" invariant would break. The scroll kernel's node→slot lookup is the ONLY per-node
+array left in `FluentGpu.Scroll`; the scene-side `ScrollState` it feeds is already a `ColdSlab` side-table, and the
+render thread reads that projected column — never a scroll body — so the seam copy (§6.1) is unaffected.
+
 ### 2.7 New feature-column structs (storage shapes; SEMANTICS owned by the feature docs)
 
 These are the SoA column-storage shapes the gap analysis folds into core. **This doc owns only the byte layout

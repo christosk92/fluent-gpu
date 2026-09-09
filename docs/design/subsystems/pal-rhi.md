@@ -186,6 +186,20 @@ on this event. Calling `SetThumbButtons` after window show is the common-case fi
 without a subscriber leaves the toolbar empty until the next explicit set. Default-interface-method; headless
 never fires.
 
+### 1.1.1 Independent render display clock (as-built)
+
+`IPlatformWindow.CreateRenderDisplayClock()` is an optional UI-thread factory (default `null`) returning one
+render-consumer subscription. Its `IRenderDisplayClock` contract is `WaitHandle Tick`, `bool IsAvailable`,
+`SetActive(bool)`, and `IDisposable`. The renderer owns arming and waiting; the host disposes only after the
+render thread joins. No UI pacing wait may consume this subscription's tick or disarm it.
+
+Win32 shares the existing `Win32CompositorClock` waiter and publishes to separate auto-reset events. The waiter
+stays active while either UI or render asks, and parks when neither asks. A short signal/dispose lock prevents
+handle recycling under a publisher; no frame, compositor wait, or managed callback runs while that lock is held.
+Capability failure wakes the render subscription once so it can select its bounded software-paced fallback;
+display reprobe also resumes an active render subscription. This creates no additional timer or waiter thread.
+The production-pacing policy remains owned by [threading-render-seam.md §11.1](./threading-render-seam.md).
+
 ### 1.2 Win32 reference impl (`FluentGpu.Windows` Pal/) — UI thread
 
 - **Window class:** `RegisterClassExW` once. Own redraw via DXGI/DComp, so `CS_HREDRAW|CS_VREDRAW`
@@ -415,6 +429,48 @@ composites over the hole; ordering is **painter/tree order, not a pass bucket** 
 erase contract are owned by `gpu-renderer.md` §7.3). The batcher's UV-resolve has glyph + **`ImageRef`**
 branches (atlas UVs resolved at batch time, never baked into the command — keeps eviction transparent;
 `app-requirements-waveemusic.md` §3.1).
+
+### 3.2 The instance `UploadRing` is ONE arena per frame-in-flight (as-built 2026-09)
+
+Owner of this contract: this section. The instance/vertex/index upload store called `UploadRing` in §0/§2.2/§9
+is **one** `UPLOAD`-heap `ID3D12Resource` per frame-in-flight (`FrameBankDepth` = `FRAME_COUNT` = 3),
+persistently mapped, **bump-allocated by every draw pipeline that shares it** (round-rect, shadow, arc,
+polyline, gradient, image, and the path lane's vertex + index + instance blocks). It is deliberately not N
+private rings: nine per-pipeline rings each sized for that pipeline's own worst case cost the SUM of nine
+worst cases (≈1.48 MiB per bank, ≈4.4 MiB resident) while a real frame records a small fraction of one or two
+of them — and on a **UMA adapter every CPU-visible heap is pinned host memory**, so those bytes are working
+set, not "GPU memory somewhere else". The glyph renderer keeps its own instance bank + atlas staging (they
+grow on a different axis: cached glyph quads and dirty atlas rows).
+
+Rules (implementation `FluentGpu.Windows/D3D12/UploadArena.cs`; the sizing/growth DECISION is the engine-free
+`FluentGpu.Rhi.UploadArenaPolicy`, gated headlessly by the VerticalSlice `arena.*` checks):
+
+- **Bank = `frameIndex % FrameBankDepth`,** selected once per submit in `SubmitDrawList` immediately after the
+  frame fence proved that bank's last submit retired. Banks are created at `DefaultInitialBytes` (384 KiB —
+  ≈1.7× a measured busy frame, so 1.125 MiB resident at launch instead of 4.45 MiB).
+- **Growth happens ONLY at that point** — never mid-frame. A GPU virtual address handed out during a frame must
+  stay valid until the frame's LAST flush executes (this backend flushes several command-list segments per
+  submit), so a bank's buffer may be replaced only while nothing in flight can read it.
+- **A frame that outgrows its bank refuses** the reservation (the pipeline records nothing and counts a drop —
+  exactly what an over-its-own-cap run always did), folds the demand into the growth target, and each bank
+  adopts the larger size at ITS next `BeginFrame`, so an episode heals within `FrameBankDepth` frames. The
+  device turns any refusal into one more full, un-skippable repaint (the `TextRepaintPending` contract the
+  glyph-bank overflow already uses), so the dropped content comes back.
+- **Reservations are 16-byte aligned** (`D3D12_RAW_UAV_SRV_BYTE_ALIGNMENT` — what a root `StructuredBuffer` SRV
+  address requires); every instance stride here is a multiple of 16, so sharing packs exactly as densely as the
+  private rings did.
+- **The ceiling stays ≥ the full-frame worst case** — the sum of every sharing pipeline's own per-frame cap
+  (`UploadArenaPolicy.PipelineWorstCaseBytes` = 1,556,480 B). The per-pipeline `MaxInstances` constants survive
+  as per-frame POLICY caps, not as standing memory. Replayed §13.1 partial frames cannot exceed that sum: a
+  pipeline's cursor accumulates across every replay inside one frame.
+- **The census counts it:** each bank is `D3D12MemoryDiagnostics.Track`ed (so it is inside `gpu bytes`), and
+  `DiagGpuDetail` reports `upload: arena=… bank=…/… peak=… refused=…` — capacity *and* the largest real
+  single-frame demand, which is what "right-sized" is measured against. Alongside it, the **first successful
+  Present emits one always-on `[d3d12.mem] first-present total=… | <class>=…MiB×n …` line** (top classes by
+  name prefix, `D3D12MemoryDiagnostics.BreakdownLine`): `gpu bytes` is a single total and cannot say WHICH
+  class holds resident memory, and on UMA every class in it is pinned host memory — so the split is the only
+  way to attribute a working-set regression (arena vs glyph atlas vs layer RTs vs back buffers) without a live
+  capture. One line, one string, once per process.
 
 ---
 

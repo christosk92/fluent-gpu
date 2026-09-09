@@ -768,35 +768,89 @@ BEFORE the mix**, not globally after — you are mixing two tracks at *different
 - **Visualizer** — the `Tap` node's lock-free ring; a non-RT tick runs the FFT and publishes
   `IReadSignal<VisualizerFrame>`, bound like any other signal.
 
-### 7.9 The RT feed thread + headless parity (must-haves)
+### 7.9 Output ownership, buffering and transport (2026-09 playback-quality revision)
 
-- **Copy+mix ONLY:** zero managed alloc, zero managed locks, zero syscalls, no logging, no
-  reconciler/scene/signal-write, no decode/decrypt. It drains a lock-free SPSC ring a worker filled ahead.
-  MMCSS "Pro Audio", bounded per-callback work (MMCSS *demotes* overruns). **Underrun writes silence + bumps an
-  xrun signal — never blocks or crashes.**
-- **A dedicated `[Conditional("FG_AUDIO_TRIPWIRE")]` RT tripwire**, separate from the phases-6–13 one: per
-  callback it asserts 0 managed allocations (`GC.GetAllocatedBytesForCurrentThread()` delta == 0), 0 managed
-  lock acquisitions, 0 blocking calls, and bounded duration. Compiled out of the shipping AOT binary
-  (production safety == CI coverage).
-- **Headless parity:** a null sink + synthetic clock pulls deterministic frames — "pull N frames
-  deterministically" is a first-class harness op for golden-PCM diffs + the RT tripwire, exactly like the
-  headless `Rhi`/`Pal` seams.
-- **Device-loss / follow-default** is a first-class state machine `{Building,Running,Reinitializing,Faulted}`
-  via `IDeviceWatcher` (`IMMNotificationClient`, cold `[GeneratedComInterface]`): a default-device change /
-  unplug rebuilds **ONLY the sink** under a live graph — sources, queue, `PreparedSlot`, and position survive —
-  off the RT thread, with a short fade-in on resume and a latency re-measure.
-- **Primary-voice lifetime is publish-don't-mutate (as-built).** The per-voice decode rings live in an immutable
-  `RingEntry[]` published via `Volatile` and read by the RT feed + worker as a snapshot; installs (`SetVoice`
-  `Wrap`) and crossfade adds (`WrapAdditional`) rebuild it under a control/worker-only table lock the RT thread
-  never takes — the **same model as the crossfade retire path**. A `SetVoice` retires the previous primary by
-  **reference** through a control→worker SPSC (ids would collide — the old and new primary share the primary
-  voice id, which the ring table is tagged with so the RT natural-end retire resolves). **The worker is the sole
-  ring disposer**; the RT thread only reports a finished voice id. **Seek is worker-applied**: control posts the
-  frame to a one-slot mailbox, the worker applies the inner-decoder `Seek` between pumps (the sole toucher of the
-  inner decoder) and hands the RT a consumer-side ring flush — a control-thread seek mid-decode is the resampler
-  torn-`Reset` crash, so it is routed away. The RT/worker/clock loops are **fault-contained** per iteration: a
-  fault latches and surfaces as a `MediaError` off the RT thread (Lifecycle/Decode + Retryable) — never
-  process-fatal — and a failing decoder marks its ring exhausted → natural retire → clean off-RT disposal.
+The portable render graph is allocation-free after warmup. The output thread performs capacity checks, device
+submission and Start/Stop/Reset **outside** the `AudioTripwire` DSP scope. Waiting uses the device event plus an
+application control event, so a full or paused endpoint does not prevent command consumption.
+
+```csharp
+public interface IBufferedAudioSink : IAudioSink
+{
+    int CapacityFrames { get; }
+    int WritableFrames { get; } // negative: endpoint failure; zero: ordinary backpressure
+    void Reset();               // stopped endpoint only; failure is surfaced
+    void WaitForWritable(System.Threading.WaitHandle controlWake, int timeoutMs);
+}
+
+public interface ICancellableAudioSource
+{
+    void CancelPendingRead();   // nonblocking abort; invoked off the output thread
+}
+```
+
+`IAudioSink.Write` reports accepted frames. The session retains a partial block and submits its remainder before
+rendering more PCM. It increments submitted counters only for accepted frames. WASAPI checks `ReleaseBuffer`,
+Start, Stop and Reset results. The output format used to size rings is the opened endpoint's format, not an earlier
+probe. `AudioClockPosition` bounds extrapolation to submitted content and disables extrapolation while stopped.
+
+The normal per-voice ring capacity is 1,000 ms, refill target 500 ms and low watermark half the target. Startup and
+seek readiness use `min(configured ring target, max(100 ms, endpoint capacity + two render blocks))`, with all terms
+converted to mix frames. The normal 500 ms target bounds readiness even for an unusually large device buffer; a
+threshold above the refill target could never be reached. A short, nonempty confirmed-EOF source may start earlier.
+There is no pump-count or elapsed-time path which declares an empty ring ready. Confirmed empty EOF ends the session
+without starting the endpoint; a producer failure also publishes its typed error.
+
+`PcmAudioPlayer.PrepareAsync` returns a transferable **filled ring**, normally holding 500 ms of PCM.
+`PrepareAtAsync` opens an independent supplied byte cursor, seeks on a background worker and waits for 100 ms;
+`AudioPreparedItem.StartPositionFrames` is the decoder's achieved trimmed-domain position. Before installation,
+`ReplacePreparedAsync` also waits for the live endpoint's readiness threshold above before installation. Normal refill
+continues toward 500 ms. The app must attach fast-start body bytes concurrently with preparation, because preparation can need
+bytes beyond the head. A backend owns three decoder leases shared between open and prepare. Cancellation aborts the
+byte source; a decoder that has not actually exited retains its lease, bounding uncooperative work.
+
+Each live ring has one dedicated producer. A low-water edge wakes that specific producer, with a 20 ms fallback
+poll so missed/coalesced wakes cannot stall refill. A blocked prepared voice cannot block the active voice's producer.
+Headless fixtures can instead drive `WorkerPumpOnce` deterministically; that remains the sole decoder toucher.
+The output consumer completes a ring flush **before** releasing the producer to refill it. Exact EOF position is
+published from the producer and becomes available through `PcmAudioSession.ExactVoiceEndFrame`.
+
+Mixer structural commands use a 64-entry queue with four entries reserved for removal, reset and fade-out. Capacity
+is checked before publishing a source. `ReplacePreparedAsync` waits for capacity off RT; synchronous installers
+explicitly reject admission instead of silently dropping a command. Once a replacement reset is admitted, its
+installation acknowledgement is noncancellable: source ownership cannot be taken back while output owns it.
+`PromoteScheduledVoiceAsync` adopts an already-installed incoming ring into the primary voice through the same
+acknowledged transaction, retaining that ring and retiring only other voices. The caller keeps the scheduled gate
+alive until adoption completes. Its returned source-frame position includes any incoming PCM consumed while the
+outgoing fade completed, so a manual Next crossing the scheduled boundary never replays that audio.
+Retirement uses an intrusive stack of the existing ring objects, so retire records cannot overflow or allocate on RT.
+The worker cancels the retired producer, and the producer releases its decoder/source lease only after leaving its
+read. A device swap requires acknowledged output/management/clock thread stop; a failed stop cannot be followed by
+endpoint disposal and restart.
+
+`TransportRamp` applies final attenuation after master DSP. Pause fades down over 20 ms, stops consuming source PCM,
+drains the submitted tail, then stops the existing endpoint. Resume uses 20 ms and does not reset that endpoint.
+`FadeOutAsync`/`FadeIn` let app transport use a 50 ms skip envelope; an outgoing fade can remain silently held while
+its replacement buffers. Seeking uses 5 ms fade-out, stopped-device reset, decoder/flush/PCM acknowledgement and
+5 ms fade-in, respecting the current play intention. Newer transport intent supersedes a pending fade completion.
+No operation modifies the saved master volume to implement a transport fade. Pause completion acknowledges the
+held, drained device, or completes as superseded when a newer transport request changes intent.
+
+Before consuming PCM, the mixer preflights every active ring. A depleted ring freezes source and envelope progression.
+If the queued output cushion drains before PCM is ready, the endpoint stops and resets; a device-frame origin maps the
+new hardware epoch back to unchanged content frames. Recovery waits for a real PCM cushion and fades in over 5 ms.
+An unexpected stopped-output interval is recorded as starvation, rather than consuming the missing time from the song.
+
+`VoiceScheduler.ScheduleReady` installs future-frame crossfade/gapless envelopes on the control side. Outgoing
+envelope installation routes through the same output command stream as incoming voice installation. Late crossfade
+readiness degrades to a natural-end gapless join. Both voices share an `AudioTransitionGate`: cancellation before
+render commit preserves the outgoing envelope and prevents incoming source consumption. A successful render commit
+wins the race with cancellation; the app observes played-frame markers before announcing audible transitions.
+
+`NullAudioSink`/`SyntheticAudioClock` remain useful for pure graph tests. `BufferedAudioEndpoint` additionally models
+finite capacity, partial writes, separately advanced hardware time, pause/reset and captured played PCM, without
+opening a real device. Engine tests exercise these seams; acoustic latency and driver recovery still need the app's
+manual listening pass.
 
 ### 7.10 The `player.Effects` surface
 
@@ -1162,7 +1216,8 @@ and clears when buffer refills.
 
 As-built refinement (M4): the `MixVoice` list is mutated on the **render thread** only — control-side voice changes
 (`SetVoice`/`AddCrossfadeVoice`/`SetVoiceEnvelope`) go through a mixer-command SPSC drained at the top of the render
-block. Ring **dispose** is the **worker**'s alone (both retire queues); the "all voices drained" signal the control
+block. Ring retirement is acknowledged on output and passed off-thread through the intrusive retire stack;
+the dedicated producer disposes the source after leaving its read. The "all voices drained" signal the control
 state machine reads is an **RT-published flag**, never a read of the render-thread-owned voice list.
 
 ---

@@ -986,17 +986,87 @@ contract, not an optimization detail:
   Excluded (they fall back to the legacy lease): an enclosing **plain `Opacity`** group (cleared only over its patched
   extent) or **`EdgeFade`** group (only over its box) — a strip could snapshot uncleared pool texels; and a
   **region-local self-blur** group (`LocalBlur.UsedW > 0`), which runs a shifted viewport into a bucketed scratch and so
-  breaks the restore's 1:1 canvas-space assumption.
+  breaks the restore's 1:1 canvas-space assumption. Note that a patched plain `Opacity` group is now itself a BOUNDED
+  target (§7.1 "BOUNDED targets"), i.e. it reports `LocalBlur.UsedW > 0` — so the exclusion holds for two independent
+  reasons and `GroupAllowsStrip`'s decision is unchanged either way. Reaching a strip fade INSIDE a bounded group is
+  impossible from the other side too: a strip fade is a nested `PushLayer`, which `LayerSubtreeProbe` refuses.
 
 ```
 PushLayer → BeginRenderPass(layerRT, Clear transparent) → [children draw into layerRT]
 PopLayer  → EndRenderPass → (optional IEffectRunner on layerRT) →
             BeginRenderPass(parentRT) → draw a quad sampling layerRT, alpha = Opacity, blend = Blend
 ```
-- **`LayerPool`**: pooled RT textures keyed by quantized power-of-two-ish size buckets, reused across
-  frames (no per-frame texture alloc), from **D3D12MA placed resources** via the **deferred-release queue**
-  (keyed by in-flight fence). Layers are the ONLY offscreen RTs — the analytic shadow path deliberately
-  avoids them, so the common case has **zero offscreen passes**.
+- **`LayerPool`**: pooled RT textures keyed by quantized size buckets, reused across frames (no per-frame texture
+  alloc), released through the **deferred-release queue** (keyed by in-flight fence). Layers are the ONLY offscreen
+  RTs — the analytic shadow path deliberately avoids them, so the common case has **zero offscreen passes**.
+
+  **Target SIZE (what a lease is worth).** Two ladders, deliberately different, both portable and headless-gated:
+  - `AcrylicBackdropMath.BucketDim` — **next power of two, floor 64**. The acrylic pool keeps it because its
+    dual-Kawase pyramid *halves each level*, so halving-friendly dimensions are the point.
+  - `FluentGpu.Render.LayerTargetBucket.Dim` — **64-px steps up to `LinearCeiling` = 2048, powers of two above**
+    (`gate.layerpool.bucket-ladder`). The opacity/blur pool's targets are sized to a *damage box*, which clusters in
+    the few-hundred-pixel range where next-power-of-two wastes up to 4x the area (a 364x144 guarded blur strip becomes
+    512x256). The ceiling sits past a typical window dimension deliberately: the po2 step that mattered most is the one
+    straddling a window WIDTH (1195 → 2048, a 1.7x waste on that axis alone), which was enough to cancel a full-width
+    bounded band's whole saving (`gate.layerpool.bucket-window-width`). Reuse survives the finer ladder because every
+    lease is **best-fit >= the bucket** (the smallest free slot that fits) and the shader clamps to the used sub-rect
+    (`AcrylicBackdropMath.SampleWindow`), so a finer ladder shrinks what a COLD lease creates without fragmenting the
+    WARM free list (`gate.layerpool.bucketed-reuse-without-growth`). A bucketed pair CAN coincide with the canvas size
+    (a 1280x768 window buckets to itself); harmless, because the pool classifies a slot by its SIZE, not its
+    provenance.
+
+  **BOUNDED targets (a group need not be canvas-sized).** A group RT is canvas-sized only when the backend cannot
+  bound what the subtree paints. Three cases are bounded instead — each a small bucketed surface entered under a
+  viewport shifted by `-Origin` (still `canvasW x canvasH` wide, so recorded clip-space positions need no rewrite),
+  with the scissor chokepoint translating every absolute clip into that space:
+  - the **region-local self blur** (`LayerKind.Blur`, `SelfBlurRegion.ComputeWork` + a tap-radius guard);
+  - the **exact (`down == 1`) blur's ping-pong scratch**, which used to lease a whole second canvas purely to hold a
+    region-scissored pass. It is now the region + a full tap guard, cleared transparent, with the H pass scissored to
+    the region's image inside it — which makes it **pixel-identical** to the canvas scratch, because every texel the V
+    pass can reach beyond the region was transparent there too (`gate.layerpool.guard-covers-taps`);
+  - a **recorder-patched plain `Opacity` group** whose subtree is FLAT and STENCIL-FREE
+    (`FluentGpu.Render.LayerSubtreeProbe`, `gate.layerpool.probe-*`), sized to `BoundedGroupRegion.Compute` over
+    `PushLayerCmd.CompositeClip`. Nothing is lost: the composite has been scissored to that same box since the
+    patched-extent change, so pixels outside it were already discarded — the box is byte-identical to the one the
+    full-canvas path clears (`gate.layerpool.bounded-group-extent-equals-clear`).
+
+  The bounded composite's uv sub-rect is `LayerTargetMap.For` and a pass's source sweep is `LayerTargetMap.Sweep`
+  (both against the SURFACE dims, never the used extent — leases are best-fit). Composing the two sweeps must return
+  every region pixel to its own centre, which is what makes a non-canvas-sized target legal at all
+  (`gate.layerpool.sweep-roundtrip-nested`). A group the recorder left UNPATCHED means "extent unknown" and stays
+  full-canvas; so does one that would save too little to be worth the shifted-viewport restrictions
+  (`BoundedGroupRegion.MinAreaSavingRatio`).
+
+  **IDLE TRIM (`FluentGpu.Render.LayerTargetTrim`, shared by both pools).** A slot is created lazily on lease and
+  aged once per submitted frame it is not leased; `Classify` then returns Keep/Retire on the fenced frame boundary:
+  | class | window | on expiry |
+  |---|---|---|
+  | in use | — | never retired, at any age |
+  | retained region pin | `PinIdleFrames` = 120, both tiers | retired (a live pin is `FindPin`-hit every submit, so only an ORPHAN ages) |
+  | bucketed scratch | `IdleFramesWeak` = 120 / `IdleFramesStrong` = 600 | retired |
+  | canvas-sized | the same window | retired EXCEPT the `WarmCanvasReserve` = 2 most-recently-used |
+  | canvas-sized | `ColdIdleFrames` = 900 | retired, warm reserve included |
+  | canvas-sized, weak tier | immediate | idle slots beyond `WeakCanvasHardCap` = 4 retired at age 0 (adreno M5) |
+
+  The warm reserve is the trade: the common frame opens 1–2 groups and a cold canvas lease is a multi-MiB
+  `CreateCommittedResource` *inside the submit*. The cold window is the other half — ~15 s with no layer at all means
+  the surface that used them is closed, and holding two canvas targets against a possible return is a leak with a
+  nice name. `ColdIdleFrames` must stay strictly greater than both ordinary windows or a discrete adapter gets no
+  reserve stage at all (`gate.layerpool.warm-reserve`).
+
+  **"Retire" is not "release".** Retiring moves the resource to the fence-gated queue; the release itself is gated on
+  `LayerTargetTrim.CanRelease(lastUseFence, completedFence)` — the deferred-reclaim convention of
+  `threading-render-seam.md`. So no trim can free a surface a submit in flight still references, whatever the idle
+  policy decided (`gate.layerpool.no-trim-while-fenced`). Same-queue REUSE needs no fence (DIRECT-queue execution is
+  ordered and barriers carry the state); shader-visible SRV descriptors are banked per frame-in-flight so a slot
+  recreation never rewrites a descriptor an in-flight frame references.
+
+  **CENSUS.** `gpu bytes` is one tracked-resource total and cannot say whether the biggest class is doing work or
+  merely resident — and on a UMA adapter all of it is pinned host memory, i.e. working set. Each compositor therefore
+  publishes a `FluentGpu.Render.LayerTargetCensus` (in-use / free / pin / retired bytes + counts), summed into the
+  `gpu` census line as `rt: inuse=… free=… pin=… retire=…` (`gate.layerpool.census-bytes`). The `BakedBlur` scratch
+  banks are created lazily on the first bake for the same reason: an app that has not baked an image blur should
+  report zero, not 6 MiB.
 - **Shimmer/skeleton is explicitly NOT a layer** (WaveeMusic fold-in): it's a per-row animated gradient
   FILL (gradient-atlas row + animated UV in phase 7), preserving the zero-offscreen-pass budget.
 - Nesting: a stack of active layer RTs in the `FrameGraph`; `RecordSeq`/`PassClass` keep each layer's

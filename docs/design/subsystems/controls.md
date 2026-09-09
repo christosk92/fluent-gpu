@@ -396,6 +396,12 @@ Non-value props ride the re-pushed-props / `[Props]` channel (reconciler-hooks �
 Long tails collapse into an **options record** per control (`SliderOptions`/`TextBoxOptions`/`NumberBoxOptions`/…).
 Gates: `gate.ctl.bind.{toggle,check,tristate,radio,naming}`.
 
+Collection controls retain a stable source: `PagedShelf` maps its re-pushed immutable item snapshot into one
+`BoundItemsSource<T>` and uses `ItemsView.CreateBound`. Its current-item callbacks and live chrome update without
+remounting the pager/viewport. Sizing/snap constructor configuration remains mount-only. Authoring details and the
+live-versus-mount distinction are in [component-props-contract.md](component-props-contract.md); bound-source
+revisions and occurrence reuse follow [virtualization.md](virtualization.md).
+
 ---
 
 ## 5. Primitive interactive controls
@@ -673,6 +679,29 @@ popup itself. Opening/closing reveals via a phase-7 `AnimTrack` (flyout fade/sca
   the ToolTip. Its one contract is that the delegate must be **mount-stable** (a method group, a cached field, a
   `UseMemo`/`UseRef` value) — a per-render lambda is a new instance every time, which is still correct but reintroduces
   exactly the churn the overload removes. Gate: `gate.tooltip.stableWrap` (ControlsSuite).
+- **Bound form (Operation ultra-fast GPU engine, P3; virtualization.md §3.4).** `ToolTip.Wrap(Element target,
+  Prop<string?> text, float grow = 0f, float showDelayMs = float.NaN)` re-pushes `ToolTipBoundSlots`; the bound
+  text is read every render (`bound.Text.Current()`), and a null/empty resolution renders `target` alone that
+  render — every hover/focus/press/safe-zone hook stays unwired, but every `Use*` hook still runs in the SAME
+  order every render (the emptiness check gates only the final wrap/handler wiring, never a hook call itself). A
+  later render whose text is non-empty wires up with no remount — the `ToolTip` component instance is still one
+  per wrapped target (unlike the non-bound overloads' aspiration of "no component per target, a service reads
+  text at hover time" — not implemented this phase). Meant for a per-row bound template (`item.Text(...)`
+  feeding straight in) rather than a one-shot caller.
+
+### PersonPicture.Bound (Operation ultra-fast GPU engine, P3; virtualization.md §3.4)
+
+`PersonPicture.Bound(Prop<string> displayName, Prop<string> imageUrl, float size = 96f, ColorF? fill = null)`
+(`FluentGpu.Controls/PersonPicture.cs`) is the SHAPE-STABLE sibling of `PersonPicture.Create`, for a virtualized
+row: it always mounts an `ImageEl` (bound `Source`; an empty source already paints nothing) **over** an
+initials `TextEl` layer whose `Element.Visible` is bound to "image empty" — never a photo/initials/glyph
+element-shape branch per recycle, unlike `Create`'s precedence-resolved single element. Initials are derived
+from `displayName` on every bound recompute via the same `InitialsFromDisplayName` `Create` uses (cheap — a
+handful of char scans, no caching needed). No group/badge support (not needed by any current bound row
+template); use `Create` for a one-shot avatar with the full WinUI precedence chain. Gate:
+`gate.bound.personpicture-tooltip-shape-stable` (`BoundTemplateSuite`, VerticalSlice `bound` suite) — flipping
+the bound image URL and tooltip text (via `ToolTip.Wrap`'s bound overload, above) leaves `SceneStore.LiveCount`
+unchanged.
 
 ### 6.5 As built (2026-07, G5f) — the controlled Popup primitive, Flyout sugar, and the Toast host
 
