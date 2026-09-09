@@ -26,7 +26,7 @@ public enum WakeReasons
     DragDropWork = 1 << 12,     // _dispatcher.Drag.HasActiveWork || _dispatcher.DragDrop.HasActiveWork (E5 easing/edge-scroll)
     DragActive = 1 << 13,       // _dispatcher.Drag.IsActive (E5 reorder dwell keep-alive)
     GestureHold = 1 << 14,      // _dispatcher.HasArmedHold (§7A touch long-press timer keep-alive on a stationary held finger)
-    PopupAnim = 1 << 15,        // a windowed-popup desktop-acrylic open reveal (CompositionBackdrop) is mid-animation — keep presenting so its per-frame clip inset advances to settle
+    PopupAnim = 1 << 15,        // a windowed popup is mid-open-reveal (CompositionBackdrop) OR still owes its FIRST content present (ISwapchain.HasPresentedContent false — its window is hidden waiting for that paint) — keep presenting until both settle
     TouchPress = 1 << 16,       // delayed 100ms pressed visual for touch inside a scrollable viewport
     VideoPresenting = 1 << 17,  // retained diagnostic bit; native video presentation no longer drives the host cadence
     Timer = 1 << 18,            // a HostTimerQueue timer is DUE this frame (UseTimeout/UseInterval/UseDebouncedValue/UseThrottledValue) — a pending-but-future timer sets NO bit (it only shapes RecommendedWaitMs, so the loop still idles)

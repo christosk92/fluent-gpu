@@ -49,6 +49,12 @@ public static class TextSeam
 /// </summary>
 public interface IFontSystem
 {
+    /// <summary>P0 always-on counter: total real glyph-shape calls since process start (DirectWrite: the existing
+    /// internal shape counter, now exposed; headless: counts each <see cref="Measure"/> call as one shape, its
+    /// deterministic stand-in for "did real shaping work happen"). Never resets — callers read the delta across a
+    /// frame boundary (<c>FrameStats.TextShapes</c>). Default 0 for a backend that has not wired a counter.</summary>
+    long ShapeCount => 0;
+
     /// <summary>Measure a string under a style (intrinsic content size). Feeds the layout engine. When
     /// <paramref name="maxWidth"/> is finite and the style wraps, the result is the word-wrapped multi-line box.</summary>
     TextMetrics Measure(StringId text, in TextStyle style, float maxWidth = float.PositiveInfinity);

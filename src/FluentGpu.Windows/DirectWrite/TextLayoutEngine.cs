@@ -140,7 +140,12 @@ public sealed unsafe class TextLayoutEngine : IDisposable
     }
     private readonly Dictionary<long, ShapeEntry> _shapeCache = new();
     private long _shapeTick;
-    private const int ShapeCacheCap = 256;
+    // 2048, not 256: a 1.5k-row track list keeps ~40 rows x ~8 strings on screen, so a 256-entry cache could not even
+    // hold the visible page — every scroll-back, every width re-wrap and every recycle onto a string seen a moment
+    // ago re-ran DirectWrite itemize+shape. Eviction is batched (EvictLru) so a full cache costs one pass per ~cap/4
+    // misses instead of one full scan per miss.
+    private const int ShapeCacheCap = 2048;
+    private static readonly List<long> s_evictScratch = new(ShapeCacheCap / 4);
 
     /// <summary>Diagnostics/regression counter: the number of ACTUAL itemize+shape passes. A width-only re-wrap of
     /// already-shaped text does NOT bump it, so a resize that re-wraps cached text leaves this flat.</summary>
@@ -209,8 +214,24 @@ public sealed unsafe class TextLayoutEngine : IDisposable
 
     private ShapeEntry EvictLru()
     {
+        // Batched LRU: drop every entry not touched within the last 3/4 of the cache's worth of stores (one O(n) pass
+        // buys ~cap/4 misses), handing the caller one of the evicted entries to reuse. When every entry is recent
+        // (a burst larger than the cache), fall back to evicting the single oldest.
+        long threshold = _shapeTick - ShapeCacheCap * 3 / 4;
+        s_evictScratch.Clear();
         long oldestKey = 0, oldestTick = long.MaxValue; ShapeEntry? oldest = null;
-        foreach (var kv in _shapeCache) if (kv.Value.Tick < oldestTick) { oldestTick = kv.Value.Tick; oldestKey = kv.Key; oldest = kv.Value; }
+        foreach (var kv in _shapeCache)
+        {
+            if (kv.Value.Tick < threshold) s_evictScratch.Add(kv.Key);
+            if (kv.Value.Tick < oldestTick) { oldestTick = kv.Value.Tick; oldestKey = kv.Key; oldest = kv.Value; }
+        }
+        if (s_evictScratch.Count > 1)
+        {
+            ShapeEntry? reuse = null;
+            foreach (long key in s_evictScratch)
+                if (_shapeCache.Remove(key, out var evicted)) reuse ??= evicted;
+            return reuse ?? new ShapeEntry();
+        }
         if (oldest != null) _shapeCache.Remove(oldestKey);
         return oldest ?? new ShapeEntry();
     }

@@ -320,6 +320,26 @@ public interface IAudioSink
     void Stop();
 }
 
+/// <summary>Cancellation of a source-owned blocking decoder read, invoked off the render thread before retirement.</summary>
+public interface ICancellableAudioSource
+{
+    /// <summary>Wake an outstanding byte-source wait without disposing memory still owned by the decoder.</summary>
+    void CancelPendingRead();
+}
+
+/// <summary>Capacity-aware nonblocking output. Device waits and controls run outside the pure DSP callback.</summary>
+public interface IBufferedAudioSink : IAudioSink
+{
+    /// <summary>Total endpoint capacity in frames.</summary>
+    int CapacityFrames { get; }
+    /// <summary>Currently writable frames; a negative value indicates device failure.</summary>
+    int WritableFrames { get; }
+    /// <summary>Flush queued PCM while stopped. Throws on a failed device operation.</summary>
+    void Reset();
+    /// <summary>Wait for either device capacity or an application control wake.</summary>
+    void WaitForWritable(System.Threading.WaitHandle controlWake, int timeoutMs);
+}
+
 /// <summary>The played-frames master clock (spec §7.6) — WASAPI <c>IAudioClock</c> / CoreAudio timestamp. Position is
 /// derived + QPC-extrapolated off this, never wall-clock, never read on the RT feed thread.</summary>
 public interface IAudioClockSource

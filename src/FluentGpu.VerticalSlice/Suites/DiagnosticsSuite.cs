@@ -40,6 +40,160 @@ static class DiagnosticsSuite
         DiagnosticsLeakGateChecks(strings);
         PaletteContrastChecks();
         LocalizationKitChecks(strings);
+        CountersAlwaysOnChecks(strings);
+        UploadArenaChecks();
+    }
+
+    // ── The shared per-frame UPLOAD ARENA's sizing/growth rule (Seams/Rhi/UploadArenaPolicy) ───────────────────────
+    // The D3D12 backend's nine private, static-worst-case, bank-deep instance rings (≈4.4 MiB permanently resident, of
+    // which a real frame touched tens of KiB — and on a UMA adapter every CPU-visible heap is PINNED host memory, so
+    // that was working set) were replaced by ONE bump arena per frame-in-flight, sized to measured demand. The RULE
+    // lives in an engine-free class precisely so it is gateable here, with no GPU: bank rotation, 16-byte packing,
+    // "growth only at BeginFrame — never mid-frame, because a GVA handed out this frame must survive every one of the
+    // frame's flushes", bounded self-healing growth, and the cap-vs-full-frame-worst-case drift guard.
+    static void UploadArenaChecks()
+    {
+        const int Banks = 3;
+
+        // 1. Bank rotation is frameIndex % Banks, negative-safe (the device passes a back-buffer index; a wrapped or
+        //    negative value must never index outside the banks or alias two frames onto one bank).
+        var rot = new UploadArenaPolicy(Banks, 4096, 65536);
+        bool rotOk = true;
+        var rotDetail = new System.Text.StringBuilder();
+        for (int f = -4; f < 8; f++)
+        {
+            rot.BeginFrame(f, out int bank, out _);
+            int want = ((f % Banks) + Banks) % Banks;
+            if (bank != want) { rotOk = false; rotDetail.Append($" f={f}→{bank} want {want}"); }
+        }
+        Check("arena.bank-rotation BeginFrame maps frameIndex → frameIndex % banks for negative and wrapped indices",
+            rotOk, rotDetail.ToString());
+
+        // 2. A bank reports "grow me" exactly once per size step: on first visit (nothing allocated) and after a
+        //    demand — never on a visit where it already holds the wanted size.
+        var p = new UploadArenaPolicy(Banks, 4096, 65536);
+        bool grow0 = p.BeginFrame(0, out int b0, out uint to0);
+        p.NoteGrown(b0, to0);
+        bool grow0Again = p.BeginFrame(0, out _, out _);
+        Check("arena.first-visit-allocates a bank asks to be created at InitialBytes, then stops asking",
+            grow0 && to0 == 4096 && !grow0Again && p.BytesOf(0) == 4096 && p.BytesOf(1) == 0 && p.LiveBytes == 4096,
+            $"grow0={grow0} to0={to0} again={grow0Again} live={p.LiveBytes}");
+
+        // 3. Reservations pack contiguously at 16-byte alignment (what a root StructuredBuffer SRV address requires);
+        //    a non-multiple size is padded, never overlapped — the guarantee that makes "share one buffer" safe at all.
+        p.BeginFrame(0, out _, out _);
+        bool r1 = p.TryReserve(144, out uint o1);
+        bool r2 = p.TryReserve(144, out uint o2);
+        bool r3 = p.TryReserve(20, out uint o3);
+        bool r4 = p.TryReserve(64, out uint o4);
+        Check("arena.packing consecutive reservations are contiguous, 16-byte aligned, and a ragged size is padded not overlapped",
+            r1 && r2 && r3 && r4 && o1 == 0 && o2 == 144 && o3 == 288 && o4 == 320
+            && o1 % 16 == 0 && o2 % 16 == 0 && o3 % 16 == 0 && o4 % 16 == 0 && p.Cursor == 384,
+            $"{o1},{o2},{o3},{o4} cursor={p.Cursor}");
+
+        // 4. The cursor resets per FRAME, not per flush: the backend flushes several command-list segments inside one
+        //    submit, and every GVA handed out earlier in the frame must still be live at the last one.
+        uint cursorMidFrame = p.Cursor;
+        p.TryReserve(16, out _);
+        bool accumulated = p.Cursor > cursorMidFrame;
+        p.BeginFrame(0, out _, out _);
+        bool reset = p.Cursor == 0 && p.TryReserve(16, out uint oAfter) && oAfter == 0;
+        Check("arena.cursor-per-frame reservations accumulate across every flush in a frame and reset only at BeginFrame",
+            accumulated && reset, $"mid={cursorMidFrame} after-reset-cursor={p.Cursor}");
+
+        // 5. A refusal changes NOTHING about the live bank (no mid-frame reallocation, no partial write) — it only
+        //    records the demand and the fact that this frame dropped content (the device turns that into one more
+        //    full, un-skippable repaint).
+        p.BeginFrame(1, out int b1, out uint to1);
+        p.NoteGrown(b1, to1);
+        p.TryReserve(4000, out _);
+        uint cursorBefore = p.Cursor, bytesBefore = p.BytesOf(1), wantBefore = p.WantBytes;
+        long refusalsBefore = p.Refusals;
+        bool refused = !p.TryReserve(4096, out uint oRef);
+        Check("arena.no-mid-frame-growth a refused reservation consumes nothing, reallocates nothing, and records the demand",
+            refused && oRef == 0 && p.Cursor == cursorBefore && p.BytesOf(1) == bytesBefore
+            && p.RefusedThisFrame && p.Refusals == refusalsBefore + 1 && p.WantBytes > wantBefore,
+            $"cursor={p.Cursor}/{cursorBefore} bytes={p.BytesOf(1)} want={p.WantBytes} (was {wantBefore})");
+
+        // 6. …and the growth heals within one bank-depth: each bank adopts the new size at ITS next BeginFrame, after
+        //    which the frame that refused fits. RefusedThisFrame is per-frame state, so it clears on the next frame.
+        uint want2 = p.WantBytes;
+        bool allGrew = true;
+        for (int f = 0; f < Banks; f++)
+        {
+            bool g = p.BeginFrame(f, out int bank, out uint to);
+            if (!g || to != want2) allGrew = false;
+            p.NoteGrown(bank, to);
+        }
+        p.BeginFrame(1, out _, out _);
+        bool fitsNow = p.TryReserve(4000, out _) && p.TryReserve(4096, out _) && !p.RefusedThisFrame;
+        Check("arena.growth-heals every bank adopts the demanded size at its own next BeginFrame and the refused frame then fits",
+            allGrew && fitsNow && p.LiveBytes == (long)want2 * Banks,
+            $"want={want2} live={p.LiveBytes} refused={p.RefusedThisFrame}");
+
+        // 7. The ceiling is hard: demand past it clamps, and a single reservation larger than the ceiling can never be
+        //    served (which is exactly why the ceiling is derived from the pipelines' caps, not picked freehand).
+        var capped = new UploadArenaPolicy(Banks, 4096, 65536);
+        capped.BeginFrame(0, out int cb, out uint cto);
+        capped.NoteGrown(cb, cto);
+        capped.TryReserve(200_000, out _);
+        bool clamped = capped.WantBytes == 65536;
+        for (int i = 0; i < 8; i++) { if (capped.BeginFrame(0, out int bk, out uint to)) capped.NoteGrown(bk, to); }
+        bool neverServed = !capped.TryReserve(200_000, out _);
+        Check("arena.cap growth clamps at MaxBytes and an over-cap single reservation refuses forever (never a silent partial)",
+            clamped && neverServed && capped.BytesOf(0) == 65536, $"want={capped.WantBytes} bytes={capped.BytesOf(0)}");
+
+        // 8. Drift guard on the shipped numbers: the backend must still be able to serve a FULL-FRAME worst case (the
+        //    sum of every sharing pipeline's own per-frame cap) by growth, while NOT reserving it up front — that pair
+        //    is the whole point of the change, and a future edit that lowers the cap or raises a pipeline cap past it
+        //    fails here instead of dropping primitives on a real device.
+        var real = new UploadArenaPolicy(Banks, UploadArenaPolicy.DefaultInitialBytes, UploadArenaPolicy.DefaultMaxBytes);
+        int episodes = 0;
+        bool served = false;
+        for (int i = 0; i < 6 && !served; i++)
+        {
+            if (real.BeginFrame(0, out int bank, out uint to)) { real.NoteGrown(bank, to); episodes++; }
+            served = real.TryReserve(UploadArenaPolicy.PipelineWorstCaseBytes, out _);
+        }
+        Check("arena.worst-case the shipped cap still covers a full frame of every sharing pipeline, reached by growth in ≤2 episodes and never reserved up front",
+            UploadArenaPolicy.DefaultMaxBytes >= UploadArenaPolicy.PipelineWorstCaseBytes
+            && UploadArenaPolicy.DefaultInitialBytes < UploadArenaPolicy.PipelineWorstCaseBytes
+            && served && episodes <= 2,
+            $"worstCase={UploadArenaPolicy.PipelineWorstCaseBytes} initial={UploadArenaPolicy.DefaultInitialBytes} max={UploadArenaPolicy.DefaultMaxBytes} episodes={episodes} served={served}");
+    }
+
+    // P0 (Operation ultra-fast GPU engine) leftover: the FlexLayout diag counters (MeasureCount/ArrangeCount/
+    // TextShapeMisses/DiagMeasureMemoHits) and IFontSystem.ShapeCount → FrameStats.TextShapes are ALWAYS-ON now
+    // (FG_LAYOUT_DIAG gates only FlexLayout.Run's Console.Error.WriteLine printout, nothing that feeds FrameStats).
+    // Proven WITHOUT setting FG_LAYOUT_DIAG — the whole point of "always-on" is that a plain run sees real numbers.
+    static void CountersAlwaysOnChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("gate-counters-always-on", new Size2(320, 240), 1f));
+        window.Show();
+        using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings,
+            new W0fStaticProbe
+            {
+                Build = () => new BoxEl
+                {
+                    Direction = 1, Width = 300, Height = 200, Gap = 4, Padding = Edges4.All(8),
+                    Children =
+                    [
+                        new TextEl("first frame text — real shaping work") { Size = 14f },
+                        new BoxEl { Width = 40, Height = 20 },
+                        new BoxEl { Width = 40, Height = 20 },
+                    ],
+                },
+            });
+        var f1 = host.RunFrame();   // first frame: a full layout solve + real text shaping, no FG_LAYOUT_DIAG set
+        var f2 = host.RunFrame();   // identical second frame: nothing changed, nothing to (re)measure or (re)shape
+
+        Check("gate.diag.counters-always-on: FlexLayout's diag counters are live with NO env flag — first frame MeasureCount > 0 and TextShapes equals the real IFontSystem.ShapeCount delta (> 0, a real shape happened)",
+            f1.MeasureCount > 0 && f1.TextShapes > 0,
+            $"measure={f1.MeasureCount} arrange={f1.ArrangeCount} textShapes={f1.TextShapes} textMisses={f1.TextShapeMisses}");
+        Check("gate.diag.counters-always-on: an identical second frame shapes NOTHING (TextShapes == 0 — the measure-cache hit, not a miss FG_LAYOUT_DIAG would have hidden anyway)",
+            f2.TextShapes == 0,
+            $"textShapes={f2.TextShapes} measure={f2.MeasureCount}");
     }
 
     static void LocalizationKitChecks(StringTable strings)

@@ -154,7 +154,15 @@ public sealed class HeadlessGpuDevice : IGpuDevice
     /// <summary>Currently-resident image ids → their uploaded dims (last upload wins; for residency assertions).</summary>
     public IReadOnlyDictionary<int, (int w, int h)> ResidentImages => _resident;
 
-    public ISwapchain CreateSwapchain(in SwapchainDesc desc) => new HeadlessSwapchain(desc.SizePx);
+    /// <summary>Create every WINDOWED-POPUP swapchain (the desktop-acrylic targets a flyout/menu leases) with
+    /// <see cref="HeadlessSwapchain.PresentStandDown"/> set — the recorder's stand-in for a backend that cannot present
+    /// into that target yet (the real one stands down while the popup HWND is still hidden). The popup's own swapchain
+    /// is created inside the host frame that leases it, so the switch has to live here to be in place for its first
+    /// present. The main window's target is unaffected.</summary>
+    public bool StandDownPopupPresents { get; set; }
+
+    public ISwapchain CreateSwapchain(in SwapchainDesc desc)
+        => new HeadlessSwapchain(desc.SizePx) { PresentStandDown = desc.DesktopAcrylic && StandDownPopupPresents };
 
     public void UploadImage(int imageId, ReadOnlySpan<byte> pbgra8, int w, int h)
     {
@@ -345,7 +353,22 @@ public sealed class HeadlessSwapchain : ISwapchain
     public Size2 SizePx { get; private set; }
     public int PresentCount { get; private set; }
     public void Resize(Size2 px) => SizePx = px;
-    public void Present() => PresentCount++;
+
+    /// <summary>Model the real backend's PRESENT STAND-DOWN: <c>D3D12Device.Present</c> paints nothing when its target
+    /// is covered / cloaked / hidden, so a requested present is not a painted one. While this is set
+    /// <see cref="Present"/> is a no-op and the target keeps NO presented content — which is what lets a headless check
+    /// exercise the popup reveal handshake (a popup window must stay hidden until its swapchain has actually
+    /// presented, or it appears as its frosted composition chrome with nothing inside it).</summary>
+    public bool PresentStandDown { get; set; }
+
+    public void Present()
+    {
+        if (PresentStandDown) return;
+        PresentCount++;
+    }
+
+    /// <inheritdoc/>
+    public bool HasPresentedContent => PresentCount > 0;
     public void Dispose() { }
 
     // Windowed desktop-acrylic popup chrome (the real D3D12 backend drives Windows.UI.Composition; headless captures the

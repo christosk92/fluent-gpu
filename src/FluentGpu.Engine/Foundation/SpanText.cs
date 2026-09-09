@@ -14,6 +14,13 @@ namespace FluentGpu.Foundation;
 /// <para>No italic axis: the shaper resolves faces by (family, weight) only — DWRITE_FONT_STYLE_NORMAL is fixed
 /// (TextLayoutEngine face resolution); FontStyle arrives with the italics workstream (plan §Text display).</para>
 /// </summary>
+/// <para><see cref="IsLink"/> marks this span as a hyperlink WITHOUT itself carrying a per-span closure: a bound
+/// row template mints its <see cref="TextSpan"/>s once per recycle from a reused <see cref="SpanBuffer"/> (P2, "bound
+/// spans with index-resolved clicks") and cannot afford a fresh <c>Action</c> allocation per link per row — the node
+/// resolves a click on this span by index through <c>SpanTextEl.OnSpanClick</c> instead
+/// (<c>InputDispatcher</c>'s three hyperlink readers try <see cref="OnClick"/> first, else <c>OnSpanClick(i)</c>).
+/// A span is a hit-testable, Hand-cursor hyperlink when EITHER <see cref="OnClick"/> is non-null OR
+/// <see cref="IsLink"/> is true.</para>
 public readonly record struct TextSpan(
     string Text,
     ushort Weight = 0,
@@ -22,7 +29,72 @@ public readonly record struct TextSpan(
     bool Strikethrough = false,
     float? Size = null,
     string? FontFamily = null,
-    Action? OnClick = null);
+    Action? OnClick = null,
+    bool IsLink = false)
+{
+    /// <summary>True when this span is hit-testable as a hyperlink (Hand cursor, click resolution) — either it
+    /// carries its own <see cref="OnClick"/> or it is marked <see cref="TextSpan.IsLink"/> for index-resolved
+    /// resolution through the owning <c>SpanTextEl.OnSpanClick</c>.</summary>
+    public bool IsHyperlink => OnClick is not null || IsLink;
+}
+
+/// <summary>
+/// A fixed-identity view over a caller-owned <see cref="TextSpan"/> array plus a live count — the channel type of
+/// <c>SpanTextEl.Spans</c> (P2). Implicitly constructed from a plain array (<c>Count = Array.Length</c>, every
+/// existing <c>new TextSpan[] {...}</c> call site keeps compiling) or read from a <see cref="SpanBuffer"/>'s
+/// <see cref="SpanBuffer.Current"/> (a reused, engine-owned backing array whose live prefix is <see cref="Count"/>
+/// elements — the trailing capacity is stale data from a previous fill and must never be read).
+/// </summary>
+public readonly struct TextSpans(TextSpan[] Array, int Count)
+{
+    /// <summary>The backing array. May be longer than <see cref="Count"/> (a <see cref="SpanBuffer"/>'s
+    /// high-water capacity) — always read through <see cref="AsSpan"/>, never <c>Array.Length</c>.</summary>
+    public readonly TextSpan[] Array = Array;
+    public readonly int Count = Count;
+
+    public static readonly TextSpans Empty = new(System.Array.Empty<TextSpan>(), 0);
+
+    public ReadOnlySpan<TextSpan> AsSpan() => Array is null ? default : Array.AsSpan(0, Count);
+
+    public static implicit operator TextSpans(TextSpan[]? array) => array is null ? Empty : new TextSpans(array, array.Length);
+}
+
+/// <summary>
+/// Engine-owned per-slot span scratch buffer (P2): a bound row template fills one of these each recycle
+/// (<c>item.Spans((t, b) =&gt; { b.Clear(); b.Add(...); ... })</c>-style authoring, P3) instead of allocating a fresh
+/// <c>TextSpan[]</c> every rebind. <see cref="Clear"/> resets the live count to 0 without touching capacity;
+/// <see cref="Add"/> grows the backing array at the HIGH-WATER mark only (doubling capacity, never shrinking) so a
+/// buffer settles at its widest-ever fill and every later fill of equal-or-smaller width allocates nothing.
+/// <see cref="Current"/> is the live view handed to <c>SpanTextEl.Spans</c>; the reconciler's <c>SceneStore</c> COPIES
+/// it into a scene-owned array on write (rtb-01/P2 "scene owns a copy"), so mutating this buffer again after the fire
+/// (the very next recycle) never retroactively changes text the scene already committed.
+/// </summary>
+public sealed class SpanBuffer
+{
+    private TextSpan[] _array = System.Array.Empty<TextSpan>();
+    private int _count;
+
+    /// <summary>Reset the live count to 0. Capacity (and its contents past the new count) is left untouched —
+    /// callers must not read past what they re-<see cref="Add"/> this fill.</summary>
+    public void Clear() => _count = 0;
+
+    /// <summary>Append one span, growing the backing array at the high-water mark (doubling, floor 4) when the
+    /// current capacity is exhausted. Never shrinks.</summary>
+    public void Add(TextSpan span)
+    {
+        if (_count == _array.Length)
+        {
+            int newCap = _array.Length == 0 ? 4 : _array.Length * 2;
+            var grown = new TextSpan[newCap];
+            System.Array.Copy(_array, grown, _count);
+            _array = grown;
+        }
+        _array[_count++] = span;
+    }
+
+    /// <summary>The live [0, Count) view, ready to hand to <c>SpanTextEl.Spans</c>.</summary>
+    public TextSpans Current => new(_array, _count);
+}
 
 /// <summary>
 /// The POD shaping overlay for one span of a span run: the UTF-16 char range [<see cref="Start"/>, <see cref="End"/>)

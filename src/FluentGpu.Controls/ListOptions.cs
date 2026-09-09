@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using FluentGpu.Animation;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
@@ -429,4 +430,10 @@ public sealed record ListOptions<T> : ListOptions
     public Func<int, T, string>? ItemTextTyped { get; init; }
     /// <summary>Typed per-item enabled gate: <c>(index, item) → bool</c>.</summary>
     public Func<int, T, bool>? IsItemEnabledTyped { get; init; }
+    /// <summary>Equality comparer for the per-slot bound item (<see cref="ItemsView.CreateBound{T}"/> always resolves
+    /// <see cref="BoundItemScope{T}.Item"/> through <see cref="BoundItemsSource{T}.BindItem"/>'s equality-gated overload):
+    /// an equal republish of the source snapshot then recomputes the slot's item once but fires ZERO downstream channel
+    /// effects. Defaults to <see cref="EqualityComparer{T}.Default"/> — supply one for a reference/record type whose
+    /// default equality is too coarse or too fine for your row shape.</summary>
+    public IEqualityComparer<T>? ItemComparer { get; init; }
 }

@@ -25,6 +25,10 @@ public sealed class AudioClockPosition
     public long StreamLatencyFrames { get; private set; }
     /// <summary>Extra pipeline latency to subtract (summed graph stage latency, samples).</summary>
     public int ExtraLatencySamples { get; set; }
+    /// <summary>Clamp interpolation to submitted content, including while paused or buffering.</summary>
+    public long SubmittedFrameLimit { get; set; } = long.MaxValue;
+    /// <summary>Whether extrapolation is allowed between authoritative device samples.</summary>
+    public bool IsAdvancing { get; set; } = true;
 
     /// <summary>True once the clock has produced a non-zero played count — until then <see cref="Project"/> holds at zero.</summary>
     public bool IsValid => _valid;
@@ -71,9 +75,10 @@ public sealed class AudioClockPosition
 
         // Extrapolate frames since the last poll from the QPC delta (100-ns → seconds → frames), anchored to the
         // position domain (defeats a seek: the device clock keeps counting; the origin re-maps it).
-        double elapsedSec = (nowTicks100ns - _sampleTicks) / 1e7;
+        double elapsedSec = IsAdvancing ? (nowTicks100ns - _sampleTicks) / 1e7 : 0;
         if (elapsedSec < 0) elapsedSec = 0;
-        double frames = _originPosition + (_sampleFrames - _originDevice) + elapsedSec * MixRate
+        double deviceFrames = Math.Min(SubmittedFrameLimit, _sampleFrames + elapsedSec * MixRate);
+        double frames = _originPosition + (deviceFrames - _originDevice)
                         - StreamLatencyFrames - ExtraLatencySamples;
         if (frames < 0) frames = 0;
 
@@ -135,6 +140,9 @@ public sealed class SyntheticAudioClock : IAudioClockSource
         _nowTicks += (long)Math.Round(frames * 1e7 / MixRate);
     }
 
+    /// <summary>Reset the simulated endpoint epoch while preserving monotonic wall-clock time.</summary>
+    public void Reset() { _written = _played = 0; }
+
     /// <inheritdoc/>
     public bool TryGetPlayed(out long playedFrames, out long qpc)
     {
@@ -182,7 +190,7 @@ public sealed class HeadlessAudioEndpoint : IAudioEndpoint
 /// A null <see cref="IAudioSink"/> (spec §7.9) — accepts every frame and counts it, for headless golden-PCM pulls with
 /// no device. Optionally copies the presented frames into a capture buffer so a test can diff the exact PCM the sink saw.
 /// </summary>
-public sealed class NullAudioSink : IAudioSink
+public sealed class NullAudioSink : IBufferedAudioSink
 {
     private readonly float[]? _capture;
     private int _captured;   // frames captured
@@ -221,4 +229,12 @@ public sealed class NullAudioSink : IAudioSink
     public void Start() { }
     /// <inheritdoc/>
     public void Stop() { }
+    /// <inheritdoc/>
+    public int CapacityFrames => 0;
+    /// <inheritdoc/>
+    public int WritableFrames => int.MaxValue;
+    /// <inheritdoc/>
+    public void Reset() { _frames = 0; }
+    /// <inheritdoc/>
+    public void WaitForWritable(System.Threading.WaitHandle controlWake, int timeoutMs) => controlWake.WaitOne(timeoutMs);
 }

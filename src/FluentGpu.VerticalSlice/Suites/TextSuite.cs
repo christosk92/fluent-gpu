@@ -39,6 +39,8 @@ static class TextSuite
     {
         WaveCTextPipelineChecks(strings);
         WaveCSpanTextChecks(strings);
+        BoundSpansChecks(strings);
+        GlyphAtlasUploadChecks();
     }
 
     static void WaveCTextPipelineChecks(StringTable strings)
@@ -291,5 +293,419 @@ static class TextSuite
         SceneRecorder.Record(scene, dl, textEdit: te);
         long recBytes = GC.GetAllocatedBytesForCurrentThread() - a0;
         Check("WC-SPAN.e record with span paragraphs + live selection allocates 0 bytes", recBytes == 0, $"{recBytes} bytes");
+    }
+
+    // ── P2 "bound spans with index-resolved clicks" (Foundation/SpanText.cs TextSpans/SpanBuffer, SpanTextEl.Spans :
+    //    Prop<TextSpans>, SpanTextEl.OnSpanClick, Reconciler.Spans.cs). ──────────────────────────────────────────────
+    static void BoundSpansChecks(StringTable strings)
+    {
+        var fonts = new HeadlessFontSystem(strings);
+
+        // ── gate.spans.bound-rebind-zero-alloc: a 1000-row CreateBound list, each row a SpanTextEl whose Spans is
+        //    Prop.Of(() => a per-slot SpanBuffer refilled from the row's live index) — 3 spans, 2 links (Artist,
+        //    Album). Far scroll (many slots recycle) then settle: a steady frame allocates 0 hot-phase bytes, the
+        //    recycle FLUSH stays within a 256-B/row budget, no template rebuilds happen on the steady frame, and a
+        //    click on the SECOND link of a realized row after a recycle reaches OnSpanClick with the CURRENT item
+        //    (not whatever item occupied that slot before the recycle).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("spans-bound-zero-alloc", new Size2(360, 240), 1f));
+            window.Show();
+            var probe = new BoundSpanRowsProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            var vp = ViewportWithItemCount(host.Scene, host.Scene.Root, probe.Count);
+            int buildsAtMount = probe.Builds;
+
+            host.ScrollKernel.Port.Post(FluentGpu.Scroll.ScrollInput.ScrollTo((int)vp.Raw.Index, 20000f, immediate: true));
+            var reboundFrame = host.RunFrame();   // the frame that actually rebinds the recycled slots
+            host.Scene.TryGetScroll(vp, out var sc);
+            int reboundRows = sc.LastRealized - sc.FirstRealized;
+            for (int k = 0; k < 4; k++) host.RunFrame();
+            var steady = host.RunFrame();
+
+            bool noRebuilds = probe.Builds == buildsAtMount;   // recycle = signal rebind, never a fresh template build
+            bool zero = steady.HotPhaseAllocBytes == 0;
+            bool flushBudgetOk = reboundRows <= 0 || reboundFrame.RebindFlushAllocBytes <= 256L * reboundRows;
+
+            // Click the SECOND link (span index 2 — "Album") of WHICHEVER realized row is actually inside the
+            // viewport's visible clip band (overscan realizes rows above/below it too — a click there would miss the
+            // clip and prove nothing). Scan every child of the content node rather than assume DOM order == visual
+            // order (recycled slots keep their pooled position; only their bound index/content moves).
+            host.Scene.TryGetScroll(vp, out sc);
+            NodeHandle rowNode = NodeHandle.Null;
+            RectF rowRect = default;
+            for (var slot = host.Scene.FirstChild(sc.ContentNode); !slot.IsNull; slot = host.Scene.NextSibling(slot))
+            {
+                var r = host.Scene.AbsoluteRect(slot);
+                if (r.Y >= 0f && r.Y + r.H <= 240f) { rowNode = slot; rowRect = r; break; }
+            }
+            probe.LastClick = null;
+            int parsedRowIndex = -1;
+            if (!rowNode.IsNull)
+            {
+                // The row's own bound index (ground truth for "the CURRENT item"), read back from its live text
+                // ("row {i}ArtistAlbum") rather than trusted from any position arithmetic.
+                string text = strings.Resolve(host.Scene.Paint(rowNode).Text);
+                if (text.StartsWith("row ", StringComparison.Ordinal))
+                {
+                    int j = 4;
+                    while (j < text.Length && char.IsDigit(text[j])) j++;
+                    int.TryParse(text.AsSpan(4, j - 4), out parsedRowIndex);
+                }
+
+                // Resolve the SECOND link's ("Album", span index 2) seam-published rect directly — the row's own
+                // Width is stretched by the Stack cross-axis, so a fixed fraction of it is not reliable; the
+                // artifact rects are the ground truth the dispatcher itself hit-tests against.
+                int runId = host.Scene.Layout(rowNode).TextStyle.SpanRunId;
+                if (SpanRunTable.Shared.Resolve(runId)?.Rects is { } rr)
+                {
+                    for (int i = 0; i < rr.Rects.Length; i++)
+                    {
+                        if (rr.Rects[i].Span != 2 || rr.Rects[i].Kind != SpanStyle.LinkBit) continue;
+                        var linkRect = rr.Rects[i].Rect;
+                        var p = new Point2(rowRect.X + linkRect.X + linkRect.W * 0.5f, rowRect.Y + linkRect.Y + linkRect.H * 0.5f);
+                        ClickAt(host, window, p);
+                        break;
+                    }
+                }
+            }
+            bool clickResolvedCurrentItem = parsedRowIndex >= 0 && probe.LastClick is { } lc && lc.RowIndex == parsedRowIndex && lc.SpanIndex == 2;
+
+            Check("gate.spans.bound-rebind-zero-alloc a 1000-row bound span list recycled by a far scroll settles to 0 hot-phase alloc, stays within a 256B/row rebind-flush budget, never rebuilds templates, and a post-recycle link click resolves the CURRENT item by index",
+                noRebuilds && zero && flushBudgetOk && clickResolvedCurrentItem,
+                $"builds={buildsAtMount}->{probe.Builds} hotAlloc={steady.HotPhaseAllocBytes}B reboundFlush={reboundFrame.RebindFlushAllocBytes}B/{reboundRows}rows " +
+                $"click={(probe.LastClick is { } c ? $"(row={c.RowIndex} span={c.SpanIndex})" : "none")} parsedRow={parsedRowIndex}");
+        }
+
+        // ── gate.spans.shaping-gate-keeps-run / gate.spans.scene-owns-copy: one node, a SpanBuffer the test owns
+        //    directly (not hidden behind the row template) so it can force a rebind with UNCHANGED content (proves
+        //    the shaping gate) and then mutate the buffer OUTSIDE any bind fire (proves the scene holds its own copy,
+        //    not an alias onto the reused buffer). ────────────────────────────────────────────────────────────────
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("spans-bound-shaping-gate", new Size2(240, 80), 1f));
+            window.Show();
+            var buf = new SpanBuffer();
+            var epoch = new Signal<int>(0);
+            var fillWord = "World";
+            void Fill()
+            {
+                buf.Clear();
+                buf.Add(new TextSpan("Hello "));
+                buf.Add(new TextSpan(fillWord, IsLink: true));
+            }
+            Fill();
+            var probe = new OneSpanProbe(epoch, () => { Fill(); return buf.Current; });
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            var mountFrame = host.RunFrame();   // real shaping happens on the first bind fire
+            var node = FindTextNode(host.Scene, strings, host.Scene.Root, "Hello World");
+            int runId0 = node.IsNull ? 0 : host.Scene.Layout(node).TextStyle.SpanRunId;
+
+            // (shaping-gate) re-fire with IDENTICAL content (epoch bump only) ⇒ same run id, no re-shape this frame.
+            epoch.Value++;
+            var sameFrame = host.RunFrame();
+            int runId1 = node.IsNull ? 0 : host.Scene.Layout(node).TextStyle.SpanRunId;
+            Check("gate.spans.shaping-gate-keeps-run an identical rebind (same span content/style) keeps the SpanRunId and shapes nothing",
+                !node.IsNull && runId0 != 0 && runId1 == runId0 && sameFrame.TextShapes == 0,
+                $"node={!node.IsNull} run={runId0}->{runId1} textShapes={sameFrame.TextShapes}");
+
+            // (scene-owns-copy) mutate the CALLER'S buffer directly, with no bind fire in between: the scene's own
+            // copy (and therefore the drawn text) must be unaffected — SetSpanText copied, it didn't alias.
+            bool sceneSpansUnaffectedBeforeRebind = host.Scene.TryGetSpanText(node, out var spansNow)
+                && spansNow.Length == 2 && spansNow[1].Text == fillWord;
+            buf.Clear();
+            buf.Add(new TextSpan("Hello "));
+            buf.Add(new TextSpan("MUTATED", IsLink: true));   // caller-side mutation, scene must not see it yet
+            bool sceneStillUnaffectedAfterMutation = host.Scene.TryGetSpanText(node, out var spansAfterMutate)
+                && spansAfterMutate.Length == 2 && spansAfterMutate[1].Text == fillWord
+                && FindTextNode(host.Scene, strings, host.Scene.Root, "Hello MUTATED").IsNull;
+
+            // Now drive a REAL rebind (Fill() overwrites buf back to a truthful refill on the next fire) with genuinely
+            // different content ⇒ the run id MUST change (a changed span mints a new run).
+            fillWord = "Changed";
+            epoch.Value++;
+            host.RunFrame();
+            var changedNode = FindTextNode(host.Scene, strings, host.Scene.Root, "Hello Changed");
+            int runId2 = changedNode.IsNull ? 0 : host.Scene.Layout(changedNode).TextStyle.SpanRunId;
+            Check("gate.spans.scene-owns-copy mutating the caller's SpanBuffer after the fire leaves the scene's copy (and drawn text) unchanged; a genuinely changed rebind mints a new run",
+                sceneSpansUnaffectedBeforeRebind && sceneStillUnaffectedAfterMutation && !changedNode.IsNull && runId2 != 0 && runId2 != runId0,
+                $"beforeMutate={sceneSpansUnaffectedBeforeRebind} afterMutate={sceneStillUnaffectedAfterMutation} changedNode={!changedNode.IsNull} run0={runId0} run2={runId2}");
+        }
+    }
+
+    // ── Glyph-atlas DIRTY-ROW upload staging (GlyphAtlasStore) ────────────────────────────────────────────────────
+    // The backend's atlas upload used to memcpy + CopyTextureRegion the WHOLE atlas on every dirty flush, out of one
+    // full-atlas staging bank per frame-in-flight. It now stages only the dirty ROW band. These checks drive the real
+    // store (mirror + append-only shelf packer + region tracker) against a MODEL of the D3D12 semantics that make it
+    // correct: a flush maps the frame's staging bank and records a copy, and every recorded copy reads that bank at
+    // EXECUTION time — i.e. after every CPU write of the frame, at the one Close+ExecuteCommandLists.
+    static void GlyphAtlasUploadChecks()
+    {
+        // 512² (a multiple of the D3D12 placement alignment, like the real 4096) — small enough to compare every texel.
+        const int Size = 512;
+        const int StagingRows = Size;
+        var store = new GlyphAtlasStore(Size);
+        var gpu = new byte[Size * Size];                 // the atlas texture: a committed D3D12 resource starts ZEROED
+        var arena = new byte[StagingRows * Size];        // this frame's mapped staging bank
+        var recorded = new List<(int Row, int Rows, int Offset)>();
+        var cells = new List<(int X, int Y, int W, int H, int Seed)>();
+        var touched = new bool[Size];                    // rows this FRAME dirtied (the expected copy footprint)
+        long copied = 0, staged = 0;
+        int flushes = 0, copyCmds = 0, refreshOnly = 0;
+        int seed = 0;
+
+        // One glyph = one SubPixelPhases-tall coverage stack, sized off the character so the sequence is deterministic.
+        void Append(string text)
+        {
+            foreach (char ch in text)
+            {
+                int w = 6 + ch % 7, h = 4 * (9 + ch % 5);
+                var bmp = new byte[w * h];
+                int s = ++seed;
+                for (int i = 0; i < bmp.Length; i++) bmp[i] = Px(s, i);
+                if (!store.TryPack(bmp, w, h, out int x, out int y)) { seed--; return; }   // atlas full (its own scenario below)
+                cells.Add((x, y, w, h, s));
+                for (int r = Math.Max(0, y - 1); r < Math.Min(Size, y + h + 1); r++) touched[r] = true;
+            }
+        }
+
+        // = D3D12Device.FlushSegment → GlyphRenderer.UploadIfDirty.
+        void Flush()
+        {
+            if (!store.IsDirty) return;
+            if (!store.TryTakeUpload(StagingRows, out var f)) return;
+            flushes++;
+            store.StageInto(in f, arena);
+            staged += f.StageBytes;
+            if (f.HasCopy) { recorded.Add((f.CopyRowStart, f.CopyRowCount, f.CopyOffset)); copied += f.CopyBytes; copyCmds++; }
+            else refreshOnly++;
+        }
+
+        // = the ONE Close+ExecuteCommandLists: the recorded copies run in order, reading the bank's FINAL bytes.
+        void Submit()
+        {
+            foreach (var c in recorded) Array.Copy(arena, c.Offset, gpu, c.Row * Size, c.Rows * Size);
+            recorded.Clear();
+        }
+
+        // ── frame 1: three segment flushes, glyphs appended between them ──
+        store.BeginFrame();
+        Append("Hello"); Flush();
+        Append("Wavee, the"); Flush();
+        Append("glyph atlas"); Flush();
+        Submit();
+
+        int expectRows = 0; for (int r = 0; r < Size; r++) if (touched[r]) expectRows++;
+        Check("gate.atlas.upload.rows-only three flushes copy EXACTLY the dirty rows, once each — not the atlas",
+            copied == (long)expectRows * Size && flushes == 3 && copied < (long)Size * Size,
+            $"copied={copied}B rows={copied / Size}/{expectRows} flushes={flushes} fullAtlas={(long)Size * Size}B oldCost={(long)flushes * Size * Size}B");
+        Check("gate.atlas.upload.staging-bounded the per-flush re-stage stays under ONE atlas across the whole frame",
+            staged < (long)Size * Size, $"staged={staged}B vs {(long)flushes * Size * Size}B for the old full-atlas re-copy");
+        Check("gate.atlas.upload.pixels every glyph's texels reach the GPU byte-for-byte across the flush boundaries",
+            AllCellsIntact(gpu, cells, Size), $"cells={cells.Count}");
+        Check("gate.atlas.upload.apron the 1-texel gutter around every cell is uploaded as ZERO (a linear sampler reads half a texel past a cell edge)",
+            AllGuttersZero(gpu, cells, Size), $"cells={cells.Count}");
+        Check("gate.atlas.upload.mirror-agrees the GPU texture equals the mirror over every row a live cell occupies",
+            RowsMatch(gpu, store.Texels, Size, cells), "full-width rows ⇒ no column tracking needed");
+
+        // ── frame 2: a steady frame costs nothing; then appends copy only the newly dirty rows ──
+        long copiedAfter1 = copied, stagedAfter1 = staged;
+        Array.Clear(touched);
+        store.BeginFrame();
+        Flush(); Flush();
+        Check("gate.atlas.upload.steady-zero a frame that appends no glyph stages and copies zero bytes",
+            !store.IsDirty && copied == copiedAfter1 && staged == stagedAfter1 && flushes == 3,
+            $"copied={copied} staged={staged} flushes={flushes}");
+
+        Append("more text"); Flush();
+        int expectRows2 = 0; for (int r = 0; r < Size; r++) if (touched[r]) expectRows2++;
+        Check("gate.atlas.upload.incremental frame 2 copies only ITS dirty rows (the rest of the atlas is never re-sent)",
+            copied - copiedAfter1 == (long)expectRows2 * Size && expectRows2 < Size,
+            $"copied={copied - copiedAfter1}B rows={expectRows2}/{Size}");
+
+        // A REFRESH-ONLY flush — the subtlest clause: a glyph that lands entirely inside rows an EARLIER flush of this
+        // frame already recorded a copy for gets no new copy at all, and still arrives, because that copy reads the
+        // staging bank at execution time. 'i' stacks to 4×(9+105%5) = 36 rows, well inside the 54-row band already copied.
+        int cellsBefore = cells.Count, copyCmdsBefore = copyCmds;
+        Append("i"); Flush();
+        Submit();
+        Check("gate.atlas.upload.refresh-only a glyph inside already-copied rows records NO new copy and still lands (the copy reads the bank at execute time)",
+            cells.Count > cellsBefore && AllCellsIntact(gpu, cells, Size) && AllGuttersZero(gpu, cells, Size),
+            $"newCopyCmds={copyCmds - copyCmdsBefore} refreshOnlyFlushes={refreshOnly}");
+
+        // ── zero allocation in the steady path (pack + plan + stage) ──
+        var probe = new byte[8 * 40];
+        for (int i = 0; i < probe.Length; i++) probe[i] = 7;
+        store.BeginFrame();
+        long a0 = GC.GetAllocatedBytesForCurrentThread();
+        store.TryPack(probe, 8, 40, out _, out _);
+        bool planned = store.TryTakeUpload(StagingRows, out var zf);
+        store.StageInto(in zf, arena);
+        long alloc = GC.GetAllocatedBytesForCurrentThread() - a0;
+        Check("gate.atlas.upload.alloc-zero pack + plan + stage allocate nothing in the steady state", planned && alloc == 0, $"alloc={alloc}B");
+        Submit();
+
+        // ── staging shorter than the band: the tail stays dirty, the bank is told to grow, and the frame is unfaithful ──
+        var small = new GlyphAtlasStore(Size);
+        var smallArena = new byte[64 * Size];
+        var smallGpu = new byte[Size * Size];
+        var tall = new byte[10 * 100];
+        for (int i = 0; i < tall.Length; i++) tall[i] = Px(1, i);
+        small.BeginFrame();
+        small.TryPack(tall, 10, 100, out int tx, out int ty);          // 102 dirty rows into a 64-row bank
+        bool tookClamped = small.TryTakeUpload(64, out var cf);
+        small.StageInto(in cf, smallArena);
+        Array.Copy(smallArena, cf.CopyOffset, smallGpu, cf.CopyRowStart * Size, cf.CopyBytes);
+        bool clamped = tookClamped && cf.CopyRowCount == 64 && small.IsDirty && small.ShortfallRows > 0 && small.WantedStagingRows > 64;
+        Check("gate.atlas.upload.clamp a band longer than the bank copies what fits, keeps the tail dirty and asks to grow",
+            clamped, $"copied={cf.CopyRowCount} dirtyLeft={small.DirtyRowCount} short={small.ShortfallRows} want={small.WantedStagingRows}");
+        // Next frame with the grown bank drains the tail — and the whole glyph is then intact.
+        var grownArena = new byte[small.WantedStagingRows * Size];
+        small.BeginFrame();
+        bool drained = small.TryTakeUpload(small.WantedStagingRows, out var df);
+        small.StageInto(in df, grownArena);
+        Array.Copy(grownArena, df.CopyOffset, smallGpu, df.CopyRowStart * Size, df.CopyBytes);
+        var oneCell = new List<(int X, int Y, int W, int H, int Seed)> { (tx, ty, 10, 100, 1) };
+        Check("gate.atlas.upload.drain the deferred tail lands on the next frame and the glyph is whole",
+            drained && !small.IsDirty && small.ShortfallRows == 0 && AllCellsIntact(smallGpu, oneCell, Size),
+            $"drainedRows={df.CopyRowCount} dirtyLeft={small.DirtyRowCount}");
+
+        // ── generational reset: a full atlas rewinds, and the fresh generation's rows are re-uploaded IN FULL, so the
+        //    previous generation's ink can never be sampled by a live cell (why the reset needs no full-atlas clear).
+        var gen = new GlyphAtlasStore(Size);
+        var genGpu = new byte[Size * Size];
+        var genArena = new byte[StagingRows * Size];
+        var genRecorded = new List<(int Row, int Rows, int Offset)>();
+        var big = new byte[120 * 120];
+        for (int i = 0; i < big.Length; i++) big[i] = 0xFF;                  // dense ink: the OLD generation
+        gen.BeginFrame();
+        int packedGen1 = 0;
+        while (gen.TryPack(big, 120, 120, out _, out _)) packedGen1++;
+        bool full = !gen.TryPack(big, 120, 120, out _, out _);
+        while (gen.TryTakeUpload(StagingRows, out var gf))
+        {
+            gen.StageInto(in gf, genArena);
+            if (gf.HasCopy) genRecorded.Add((gf.CopyRowStart, gf.CopyRowCount, gf.CopyOffset));
+        }
+        foreach (var c in genRecorded) Array.Copy(genArena, c.Offset, genGpu, c.Row * Size, c.Rows * Size);
+        genRecorded.Clear();
+        long inkedBefore = gen.NonZeroTexels;
+        int epochBefore = gen.Epoch;
+        gen.Reset();                                                          // = ResetAtlas at the next frame boundary
+        gen.BeginFrame();
+        var fresh = new byte[9 * 44];
+        for (int i = 0; i < fresh.Length; i++) fresh[i] = Px(99, i);
+        gen.TryPack(fresh, 9, 44, out int fx, out int fy);
+        if (gen.TryTakeUpload(StagingRows, out var ff))
+        {
+            gen.StageInto(in ff, genArena);
+            if (ff.HasCopy) Array.Copy(genArena, ff.CopyOffset, genGpu, ff.CopyRowStart * Size, ff.CopyBytes);
+        }
+        var freshCell = new List<(int X, int Y, int W, int H, int Seed)> { (fx, fy, 9, 44, 99) };
+        Check("gate.atlas.upload.reset-no-clear after a generational reset the fresh generation's rows are re-uploaded in full — no stale ink is reachable, no full-atlas clear needed",
+            full && packedGen1 > 0 && gen.Epoch == epochBefore + 1 && gen.NonZeroTexels == 44L * 9
+                && AllCellsIntact(genGpu, freshCell, Size) && AllGuttersZero(genGpu, freshCell, Size)
+                && RowsMatch(genGpu, gen.Texels, Size, freshCell),
+            $"gen1Cells={packedGen1} inkBefore={inkedBefore} epoch={gen.Epoch} rebases={gen.BandRebases}");
+        Check("gate.atlas.upload.no-rebase the band mapping never re-bases mid-frame (the append-only clause holds)",
+            store.BandRebases == 0 && gen.BandRebases == 0 && small.BandRebases == 0,
+            $"store={store.BandRebases} gen={gen.BandRebases} small={small.BandRebases}");
+    }
+
+    /// <summary>A deterministic, never-zero coverage value: lets a check tell "this texel arrived" from "this texel is
+    /// still whatever was there before" (a zero would alias the gutter).</summary>
+    static byte Px(int seed, int i) => (byte)(1 + ((seed * 31 + i * 17) & 0x7E));
+
+    static bool AllCellsIntact(byte[] gpu, List<(int X, int Y, int W, int H, int Seed)> cells, int size)
+    {
+        foreach (var c in cells)
+            for (int r = 0; r < c.H; r++)
+                for (int x = 0; x < c.W; x++)
+                    if (gpu[(c.Y + r) * size + c.X + x] != Px(c.Seed, r * c.W + x)) return false;
+        return true;
+    }
+
+    static bool AllGuttersZero(byte[] gpu, List<(int X, int Y, int W, int H, int Seed)> cells, int size)
+    {
+        foreach (var c in cells)
+        {
+            for (int x = c.X - 1; x <= c.X + c.W; x++)
+                if (gpu[(c.Y - 1) * size + x] != 0 || gpu[(c.Y + c.H) * size + x] != 0) return false;
+            for (int r = c.Y - 1; r <= c.Y + c.H; r++)
+                if (gpu[r * size + c.X - 1] != 0 || gpu[r * size + c.X + c.W] != 0) return false;
+        }
+        return true;
+    }
+
+    static bool RowsMatch(byte[] gpu, ReadOnlySpan<byte> mirror, int size, List<(int X, int Y, int W, int H, int Seed)> cells)
+    {
+        foreach (var c in cells)
+            for (int r = Math.Max(0, c.Y - 1); r < Math.Min(size, c.Y + c.H + 1); r++)
+                if (!mirror.Slice(r * size, size).SequenceEqual(gpu.AsSpan(r * size, size))) return false;
+        return true;
+    }
+
+    static void ClickAt(AppHost host, HeadlessWindow window, Point2 p)
+    {
+        window.QueueInput(new InputEvent(InputKind.PointerDown, p, 0, 0));
+        window.QueueInput(new InputEvent(InputKind.PointerUp, p, 0, 0));
+        host.RunFrame();
+    }
+
+
+    sealed class BoundSpanRowsProbe : Component
+    {
+        public int Count = 1000;
+        public int Builds;
+        public (int RowIndex, int SpanIndex)? LastClick;
+
+        // P3: the real FormatCache<int> now exists — a bound row author caches "row {i}" through it instead of paying
+        // a fresh string concat PER REBIND (this used to be an ad hoc pre-interned string[1000], built by hand before
+        // P3 landed; the cache is the same idea, just the real primitive). Warmed for every row up front, same as the
+        // old array literal — this gate measures STEADY-STATE recycle cost, not a cold cache miss.
+        static readonly FormatCache<int> s_labels = WarmLabels();
+        static FormatCache<int> WarmLabels()
+        {
+            var c = FormatCache.Create<int>();
+            for (int i = 0; i < 1000; i++) c.Get(i, static ii => "row " + ii);
+            return c;
+        }
+
+        public override Element Render()
+        {
+            var list = ItemsView.CreateBound(Count, scope =>
+            {
+                Builds++;
+                var buf = new SpanBuffer();
+                var idx = scope.Index;
+                return new SpanTextEl(Prop.Of(() =>
+                {
+                    int i = idx.Value;
+                    buf.Clear();
+                    buf.Add(new TextSpan(s_labels.Get(i, static ii => "row " + ii)));
+                    buf.Add(new TextSpan("Artist", IsLink: true));
+                    buf.Add(new TextSpan("Album", IsLink: true));
+                    return buf.Current;
+                }))
+                {
+                    Size = 12f,
+                    OnSpanClick = spanIndex => LastClick = (idx.Peek(), spanIndex),
+                };
+            }, RepeatLayout.Stack(40f), new ListOptions { Overscan = 3, Grow = 1f });
+            return new BoxEl { Width = 360f, Height = 240f, Children = [list] };
+        }
+    }
+
+    sealed class OneSpanProbe(IReadSignal<int> epoch, Func<TextSpans> fill) : Component
+    {
+        public override Element Render() => new BoxEl
+        {
+            Width = 240f, Height = 80f,
+            Children =
+            [
+                new SpanTextEl(Prop.Of(() => { _ = epoch.Value; return fill(); })) { Size = 14f },
+            ],
+        };
     }
 }

@@ -3,20 +3,16 @@ using FluentGpu.Rhi;
 namespace FluentGpu.Hosting.Threading;
 
 /// <summary>
-/// The render-thread seam's per-frame carrier — <b>Cut A (submit-only)</b> variant.
-///
-/// Canon (design/subsystems/threading-render-seam.md §2.1) specifies a Cut-B <c>SceneFrame</c> that carries a
-/// <c>SnapshotColumns</c> of the scene so <i>record</i> runs on the render thread. Cut A keeps record on the UI thread
-/// (it is already sub-ms + zero-alloc; the measured stall is in submit/present, not record) and instead carries the
-/// <b>finished DrawList</b> across the seam: the UI records into the publisher's per-slot render-readable arena and
-/// publishes this POD header naming that slot; the render thread submits + presents from it. This is the documented Cut-A
-/// deviation from canon Cut B (see docs/plans/render-thread-seam-landing-plan.md §2).
-///
-/// Pure blittable POD — no GC references cross the seam. The DrawList bytes/sortkeys live in the render-readable arena
-/// named by <see cref="ArenaIndex"/>; the render thread reads them by <c>(ArenaIndex, ByteLen/SortLen)</c>.
+/// POD header naming one generation-claimed publisher slot. Hosted rendering carries detached scene recording inputs
+/// (<see cref="HasScene"/>); transport tests and inline consumers may carry finished command bytes instead.
+/// Payload arrays and retained resource references belong to the slot, not this copied header. The consumer must claim
+/// that exact generation before reading either header or payload and retains the claim across independent animation turns.
 /// </summary>
 public struct RenderFrame
 {
+    /// <summary>True when the slot carries scene recording inputs instead of a completed command stream.</summary>
+    public bool HasScene;
+    public long TargetEpoch;
     /// <summary>Monotonic publish sequence — the happens-before token (§2) and the quarantine key (§5).</summary>
     public ulong PublishSeq;
 

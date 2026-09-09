@@ -55,7 +55,7 @@ public sealed class ItemsViewController
 
     internal delegate bool TryGetItemIndexDelegate(float horizontalViewportRatio, float verticalViewportRatio,
                                                    out int index);
-    internal delegate bool CorrectMeasuredExtentDelegate(IMeasuredVirtualLayout layout, int index, float mainExtent);
+    internal delegate bool CorrectMeasuredExtentDelegate(IMeasuredVirtualLayout? layout, int index, float mainExtent);
 
     /// <summary>The REALIZED virtualized viewport node (<c>Null</c> before mount and for a non-virtual host). The seam a
     /// composing control needs to write per-viewport <c>ScrollState</c> knobs that a frozen-at-mount options record cannot
@@ -118,6 +118,12 @@ public sealed class ItemsViewController
         ArgumentNullException.ThrowIfNull(layout);
         return CorrectMeasuredExtentImpl?.Invoke(layout, index, mainExtent) ?? false;
     }
+
+    /// <summary>Correct the mounted viewport's own measured layout at <paramref name="index"/>. Same contract as
+    /// <see cref="CorrectMeasuredExtent(IMeasuredVirtualLayout, int, float)"/> when the caller does not hold the
+    /// layout instance (a closing expander that only knows the flat index).</summary>
+    public bool CorrectMeasuredExtent(int index, float mainExtent)
+        => CorrectMeasuredExtentImpl?.Invoke(null, index, mainExtent) ?? false;
 
     /// <summary>True when <paramref name="index"/> currently has a realized slot in this view's window.
     /// Off-screen (or unmounted) indices return false — an expanded drawer at such an index has no live node to
@@ -735,7 +741,7 @@ public sealed class ItemsView : Component
 
         return CreateBound(
             items.Count.Peek(),
-            scope => rowTemplate(new BoundItemScope<T>(scope, items.BindItem(scope.Index))),
+            scope => rowTemplate(new BoundItemScope<T>(scope, items.BindItem(scope.Index, scope.Runtime!, comparer: o.ItemComparer))),
             layout,
             baseOptions);
     }
@@ -1112,13 +1118,16 @@ public sealed class ItemsView : Component
         // An off-screen variable row cannot feed its collapsed size through ArrangeVirtualMeasured. Apply that one
         // explicit correction atomically with the SAME anchor-intent rebase as FlexLayout.RecordAnchorShift, so a live
         // wheel/programmatic/touch phase continues in the corrected coordinate space instead of undoing the pin.
-        bool CorrectMeasuredExtent(IMeasuredVirtualLayout expectedLayout, int index, float mainExtent)
+        bool CorrectMeasuredExtent(IMeasuredVirtualLayout? expectedLayout, int index, float mainExtent)
         {
             if (sceneRef is null || !float.IsFinite(mainExtent) || mainExtent < 0f) return false;
             var vp = viewportNode.Value;
             if (vp.IsNull || !sceneRef.IsLive(vp) || !sceneRef.HasScroll(vp)) return false;
             ref ScrollState sc = ref sceneRef.ScrollRef(vp);
-            if (!ReferenceEquals(sc.Layout, expectedLayout) || (uint)index >= (uint)sc.ItemCount) return false;
+            if (sc.Layout is not IMeasuredVirtualLayout mounted) return false;
+            if (expectedLayout is not null && !ReferenceEquals(sc.Layout, expectedLayout)) return false;
+            expectedLayout = mounted;
+            if ((uint)index >= (uint)sc.ItemCount) return false;
 
             bool horizontal = sc.Orientation == 1;
             float viewport = horizontal ? sc.ViewportW : sc.ViewportH;
@@ -1773,7 +1782,7 @@ public sealed class ItemsView : Component
                 Func<bool> isEnabled = IsItemEnabled is null ? static () => true : () => IsItemEnabled(index.Value);
                 Action<ItemContainerTrigger, KeyModifiers> interact = (t, m) => OnItemInteraction(index.Value, t, m);
                 Action<bool> focusChanged = got => { if (got && current.Peek() != index.Value) current.Value = index.Value; };
-                return rowTpl(new RowScope(index, isSelected, isCurrent, isEnabled, interact, focusChanged));
+                return rowTpl(new RowScope(index, isSelected, isCurrent, isEnabled, interact, focusChanged) { Runtime = Context.Runtime });
             };
         }
 

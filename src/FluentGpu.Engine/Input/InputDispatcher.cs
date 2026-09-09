@@ -1067,7 +1067,13 @@ public sealed class InputDispatcher
                         int linkSpan = sameNode && (_scene.Interaction(up).HandlerMask & InteractionInfo.SpanLinksBit) != 0
                             ? HitLinkSpan(up, PointToLocal(up, e.PositionPx)) : -1;
                         if (linkSpan >= 0 && _scene.TryGetSpanText(up, out var linkSpans) && (uint)linkSpan < (uint)linkSpans.Length)
-                            linkSpans[linkSpan].OnClick?.Invoke();
+                        {
+                            // Index-resolved click (P2): the span's OWN action wins; else the node's OnSpanClick(i) —
+                            // the bound-row case, where the span carries IsLink but no per-span closure.
+                            var onClick = linkSpans[linkSpan].OnClick;
+                            if (onClick is not null) onClick();
+                            else if (_scene.TryGetSpanClickHandler(up, out var onSpanClick)) onSpanClick(linkSpan);
+                        }
                         else if (!wasRepeat) InvokeActivation(upOwner.IsNull ? up : upOwner, ContextRequestTrigger.Invoke);   // repeat nodes already fired via the ticker
                         handled++;
                     }
@@ -2528,7 +2534,12 @@ public sealed class InputDispatcher
                 int linkSpan = (_scene.Interaction(up).HandlerMask & InteractionInfo.SpanLinksBit) != 0
                     ? HitLinkSpan(up, PointToLocal(up, e.PositionPx)) : -1;
                 if (linkSpan >= 0 && _scene.TryGetSpanText(up, out var linkSpans) && (uint)linkSpan < (uint)linkSpans.Length)
-                    linkSpans[linkSpan].OnClick?.Invoke();
+                {
+                    // Index-resolved click (P2): the span's OWN action wins; else the node's OnSpanClick(i).
+                    var onClick = linkSpans[linkSpan].OnClick;
+                    if (onClick is not null) onClick();
+                    else if (_scene.TryGetSpanClickHandler(up, out var onSpanClick)) onSpanClick(linkSpan);
+                }
                 else
                     InvokeActivation(tapOwner.IsNull ? up : tapOwner, ContextRequestTrigger.Invoke);   // tap = release-over-same click (or context-invoke on a ClickRequestsContext node)
                 handled = true;
@@ -2968,7 +2979,7 @@ public sealed class InputDispatcher
         // no-op when the flag survived (normal in-window scroll). Only the exact _hovered handle needs it — a changed hit
         // goes through SetState's full enter transition, which sets the flag itself.
         if (next == _hovered && !next.IsNull && _scene.IsLive(next))
-            _scene.Flags(next) |= NodeFlags.Hovered;
+            _scene.SetFlagBits(next, NodeFlags.Hovered);
         // The hover resolve + enter/leave + HoverWithin diff + cursor publish all ride through this single SetState (it
         // early-outs when the node under the point is unchanged — no redundant OnHoverChanged / cursor churn, §3-gate).
         SetState(ref _hovered, next, NodeFlags.Hovered);
@@ -3181,9 +3192,9 @@ public sealed class InputDispatcher
     {
         if (slot == next) return;
         NodeHandle prev = slot;
-        if (!prev.IsNull && _scene.IsLive(prev)) _scene.Flags(prev) &= ~flag;
+        if (!prev.IsNull && _scene.IsLive(prev)) _scene.ClearFlagBits(prev, flag);
         slot = next;
-        if (!next.IsNull) _scene.Flags(next) |= flag;
+        if (!next.IsNull) _scene.SetFlagBits(next, flag);
         if (flag == NodeFlags.Hovered) UpdateHoverWithin(prev, next);
         Notify(flag, prev, on: false);
         Notify(flag, next, on: true);
@@ -3208,7 +3219,7 @@ public sealed class InputDispatcher
             if (n != next && IsSelfOrAncestorOf(n, next)) break;   // still a strict-ancestor of the new leaf → stays set
             if ((_scene.Flags(n) & NodeFlags.HoverWithin) != 0)
             {
-                _scene.Flags(n) &= ~NodeFlags.HoverWithin; _scene.Mark(n, NodeFlags.PaintDirty);
+                _scene.ClearFlagBits(n, NodeFlags.HoverWithin); _scene.Mark(n, NodeFlags.PaintDirty);
                 // The container left the hover scope (pointer exited its subtree) → let its reveal-on-hover descendants
                 // decay (it is no longer Hovered nor HoverWithin, so SetHover resolves to off).
                 OnHoverChanged?.Invoke(n, false);
@@ -3222,7 +3233,7 @@ public sealed class InputDispatcher
             if (n != prev && IsSelfOrAncestorOf(n, prev)) break;   // already set from prev's chain → stop
             if ((_scene.Interaction(n).HandlerMask & interactive) != 0 && (_scene.Flags(n) & NodeFlags.HoverWithin) == 0)
             {
-                _scene.Flags(n) |= NodeFlags.HoverWithin; _scene.Mark(n, NodeFlags.PaintDirty);
+                _scene.SetFlagBits(n, NodeFlags.HoverWithin); _scene.Mark(n, NodeFlags.PaintDirty);
                 // The pointer entered this container's subtree (possibly straight onto an interactive child) → keep its
                 // reveal-on-hover descendants driven, so the affordance does not require the leaf to be the row itself.
                 OnHoverChanged?.Invoke(n, true);
@@ -3416,7 +3427,10 @@ public sealed class InputDispatcher
             if (local.X >= rr.X && local.X < rr.X + rr.W && local.Y >= rr.Y && local.Y < rr.Y + rr.H)
             {
                 int si = arts[i].Span;
-                if ((uint)si < (uint)spans.Length && spans[si].OnClick is not null) return si;
+                // A hit rect is clickable when the span carries its own action OR resolves through the node's
+                // OnSpanClick(i) (P2, index-resolved bound-row links) — the SAME criterion WriteSpanText used to
+                // set the LinkBit (TextSpan.IsHyperlink) in the first place.
+                if ((uint)si < (uint)spans.Length && spans[si].IsHyperlink) return si;
             }
         }
         return -1;
@@ -3526,7 +3540,7 @@ public sealed class InputDispatcher
                 if (e.IsRepeat || !_keyArmed.IsNull) return;   // held key / second activation key: one press only
                 _keyArmed = _focused;
                 _keyArmedKey = key;
-                _scene.Flags(_focused) |= NodeFlags.Pressed;
+                _scene.SetFlagBits(_focused, NodeFlags.Pressed);
                 OnPressChanged?.Invoke(_focused, true);
                 if ((_scene.Interaction(_focused).HandlerMask & InteractionInfo.RepeatBit) != 0)
                 {
@@ -3607,7 +3621,7 @@ public sealed class InputDispatcher
         if (node.IsNull || !_scene.IsLive(node)) return;
         if (key == Keys.Space && (_scene.Interaction(node).HandlerMask & InteractionInfo.RepeatBit) != 0)
             OnRepeatReleased?.Invoke(node);
-        _scene.Flags(node) &= ~NodeFlags.Pressed;
+        _scene.ClearFlagBits(node, NodeFlags.Pressed);
         OnPressChanged?.Invoke(node, false);
         if (fire && node == _focused && (_scene.Flags(node) & NodeFlags.Disabled) == 0)
             InvokeActivation(node, ContextRequestTrigger.Keyboard);   // Space/Enter key-up activation: a ClickRequestsContext node opens keyboard-anchored (first item focused)
@@ -3755,19 +3769,19 @@ public sealed class InputDispatcher
                 _scene.Mark(_focused, NodeFlags.PaintDirty);   // the old ring must disappear
                 repaint = true;
             }
-            _scene.Flags(_focused) &= ~(NodeFlags.Focused | NodeFlags.FocusVisual);
+            _scene.ClearFlagBits(_focused, NodeFlags.Focused | NodeFlags.FocusVisual);
         }
         _focused = node;
         if (!node.IsNull)
         {
-            _scene.Flags(node) |= NodeFlags.Focused;
+            _scene.SetFlagBits(node, NodeFlags.Focused);
             if (visual)
             {
-                _scene.Flags(node) |= NodeFlags.FocusVisual;
+                _scene.SetFlagBits(node, NodeFlags.FocusVisual);
                 _scene.Mark(node, NodeFlags.PaintDirty);
                 repaint = true;
             }
-            else _scene.Flags(node) &= ~NodeFlags.FocusVisual;
+            else _scene.ClearFlagBits(node, NodeFlags.FocusVisual);
         }
         if (prev != node)
         {

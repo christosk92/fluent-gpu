@@ -947,7 +947,7 @@ public sealed class OverlayHost : Component
         // the popup's lifetime, so the first affirmative is the right one for the whole life of the entry. The latch
         // dies with the entry — a re-open re-asks.
         if (!osBacked && !e.VideoHoleLatched
-            && FluentGpu.Render.SceneRecorder.RectOverVideoHole(scene.AbsoluteRect(target), VideoHoleCoverage))
+            && FluentGpu.Render.SceneRecorder.RectOverVideoHole(scene, scene.AbsoluteRect(target), VideoHoleCoverage))
             e.VideoHoleLatched = true;
         // OpaqueSurface is the caller's DECLARED form of the same fact (a media transport knows its pickers are over
         // the video), so it wins from frame one without waiting for a geometry answer.
@@ -1392,7 +1392,7 @@ public sealed class OverlayHost : Component
         var inner = Ui.ZStack(layers.ToArray()) with { Grow = 1 };
         bool isPrimary = IsPrimaryToastHost;
         return Ctx.Provide(Overlay.Service, (IOverlayService)svc,
-            Ui.ZStack(inner, Embed.Comp(() => new ToastHost { Options = new ToastHostOptions { RegisterAsDefault = isPrimary } })) with { Grow = 1 });
+            Ui.ZStack(inner, Embed.Comp(() => new ToastHost { RegisterAsDefault = isPrimary })) with { Grow = 1 });
     }
 
     /// <summary>Cascading-menu overlap (CascadingMenuHelper.cpp:678 — sub-menu lands at owner edge − 4): nudge the

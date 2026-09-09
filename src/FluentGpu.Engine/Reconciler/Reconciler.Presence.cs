@@ -1,0 +1,81 @@
+using FluentGpu.Dsl;
+using FluentGpu.Foundation;
+using FluentGpu.Scene;
+using FluentGpu.Signals;
+
+namespace FluentGpu.Reconciler;
+
+// P1 (Operation ultra-fast GPU engine, layout.md §4.7): Element.Visible : Prop<bool> — the presence channel. Two
+// writers feed the SAME scene-level state (SceneStore._aux.Collapsed, mirrored onto NodeFlags.Visible|HitTestVisible):
+//   • WriteColumns' generic (every-element-type) section calls ApplyPresenceStatic for an UNBOUND Visible — equality-
+//     gated via SceneStore.SetCollapsedIfChanged so an identical re-render marks nothing (gate.hooks.layout-dirty-
+//     identical-tree stays green).
+//   • BindNode calls BindPresence for a BOUND Visible — one effect, mount-only wiring, equality-gated the same way,
+//     counted by NodeBindingFireCount/WriteCount (the P0 counters).
+// Both funnel through SetSubtreeHidden, which is the ONLY place that touches CompEntry.Hidden — the "renders not
+// suppressed" contract: Hidden feeds solely into the ActiveSig formula (UseIsActive/UseActivation/UseInterval), never
+// entry.Parked/DeferredRender/Effect, so a collapsed component keeps rendering (its bindings settle even though the
+// node paints nothing) while ONLY its timers pause. See docs/design/subsystems/layout.md §4.7.
+public sealed partial class TreeReconciler
+{
+    /// <summary>Static (unbound) Visible write — called from WriteColumns' generic section for EVERY element type.
+    /// Equality-gated: a re-render with the same resolved visibility marks nothing.</summary>
+    private void ApplyPresenceStatic(NodeHandle node, bool visible)
+    {
+        bool collapsed = !visible;
+        if (_scene.SetCollapsedIfChanged(node, collapsed)) SetSubtreeHidden(node, collapsed);
+    }
+
+    /// <summary>Bound Visible wiring — called once at mount from <c>BindNode</c> for every element type (the channel
+    /// lives on the base <see cref="Element"/>, not a concrete subtype, so this runs unconditionally, unlike the
+    /// BoxEl-only channels above it). DEBUG-asserts (BindContract) that a MorphId (shared-element) node never binds
+    /// Visible — collapsing a hero participant mid-flight would break ConnectedAnimation capture.</summary>
+    private void BindPresence(NodeHandle node, Element el)
+    {
+        if (!el.Visible.IsBound) return;
+        if (BindContract.CompiledIn && BindContract.Enabled && el.MorphId is not null)
+            BindContract.MorphVisibleBind(el.GetType().Name);
+
+        var vb = el.Visible.Thunk; var vs = el.Visible.Signal;
+        AddBinding(node, new Effect(Runtime, () =>
+        {
+            NodeBindingFireCount++;
+            if (!_scene.IsLive(node)) return;
+            bool next = vb is not null ? vb() : vs!.Value;
+            bool wasCollapsed = _scene.IsCollapsed(node);
+            bool nowCollapsed = !next;
+            if (wasCollapsed == nowCollapsed) return;
+            NodeBindingWriteCount++;
+            _scene.SetCollapsed(node, nowCollapsed);
+            SetSubtreeHidden(node, nowCollapsed);
+            // false→true edge: treat like a mount — seed the node's declared Enter (the true→false edge just snaps,
+            // matching a static collapse; there is no exit-animation hook here because a collapsed node is already
+            // out of layout/paint the instant this effect runs, so there is nothing left to animate OUT of).
+            if (wasCollapsed && !nowCollapsed && SuppressBoundTransitions == 0 && Anim is { } anim && !Motion.ReducedMotion
+                && SynthesizeDeclarative(node, el) is { } dt && dt.Enter.Active)
+            {
+                anim.SeedEnter(node, dt.Enter, dt);
+                if (dt.Size == SizeMode.Reflow) anim.PendingEnterReflow.Add(node);
+            }
+        }, owner: null, runNow: true));
+    }
+
+    /// <summary>Walk NODE and every live descendant's mounted <c>CompEntry</c>, setting <c>Hidden</c> and refreshing
+    /// its ActiveSig (folds <c>!Parked &amp;&amp; !Hidden</c> — the same formula <c>SetSubtreeParked</c> writes on a
+    /// Park edge). Does NOT touch <c>NodeFlags.Parked</c>, <c>DeferredRender</c>, or the render <c>Effect</c> — a
+    /// presence collapse pauses timers (<c>UseInterval</c>, which already gates on <c>UseIsActive()</c>) WITHOUT
+    /// suspending the component's own re-renders, unlike KeepAlive parking. <c>UseTimeout</c>/<c>UseKeyframes</c>
+    /// have no active-gating at all today (neither for Parked nor Hidden) — see the P1 progress notes for that
+    /// follow-up.</summary>
+    private void SetSubtreeHidden(NodeHandle node, bool hidden)
+    {
+        if (!_scene.IsLive(node)) return;
+        if (_comps.TryGetValue(node, out var entry))
+        {
+            entry.Hidden = hidden;
+            if (entry.ActiveSig is { } sig) sig.Value = !entry.Parked && !entry.Hidden;
+        }
+        for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
+            SetSubtreeHidden(c, hidden);
+    }
+}

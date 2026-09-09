@@ -1,12 +1,49 @@
 using System;
+using System.Runtime.CompilerServices;
 
 namespace FluentGpu.Scroll;
 
-/// <summary>The scroll v3 kernel — a POD slab of <see cref="ScrollBody"/> (indexed by scene node index) driven by
-/// ONE <see cref="ScrollCommandPort"/> intake and ONE <see cref="IScrollSink"/> outlet (plan §2). Nothing here
+/// <summary>The scroll v3 kernel — a compact POOL of <see cref="ScrollBody"/> slots driven by ONE
+/// <see cref="ScrollCommandPort"/> intake and ONE <see cref="IScrollSink"/> outlet (plan §2). Nothing here
 /// references <c>SceneStore</c>/<c>NodeHandle</c>/<c>RenderContext</c> — that is what makes it tickable from a
-/// non-UI thread (the render-thread fling lease, §6). Body slab growth happens ONLY on <see cref="ScrollInputKind.Bind"/>
-/// (never inside <see cref="Tick"/>/<see cref="Reclamp"/>) so both stay zero-alloc after warm-up.</summary>
+/// non-UI thread (the render-thread fling lease, §6).
+///
+/// <para><b>Sparse by value, dense only by lookup.</b> The body storage used to be ONE <c>ScrollBody[]</c> indexed
+/// directly by scene node index, grown to the highest node index that ever carried a viewport. <see cref="ScrollBody"/>
+/// is 376 B, so on the 32 768-node scene the native ARM64 tour reached that slab alone was 12 320 792 B — plus four
+/// more node-indexed side columns (<c>_activeList</c>, <c>_inActive</c>, <c>_touchedNodes</c>, <c>_touchedStamp</c>:
+/// 12 746 752 B = 12.2 MiB in total) for a workload that has ~27 live scroll viewports. It is now a bounded SLOT
+/// POOL plus a 4-byte node→slot lookup (<see cref="_slotByNode"/>): every other array in this class is sized to the
+/// slot pool, i.e. to the number of viewports that have ever been simultaneously bound, never to the scene's node
+/// high-water. Same arithmetic at 32 768 nodes and 32 viewports: 143 776 B (0.14 MiB) — a 98.9% cut.
+/// <c>gate.kernel.body-sparse</c> asserts the backing is O(viewports) and <c>gate.kernel.slot-reuse</c> asserts an
+/// unbound slot comes back instead of growing the pool.</para>
+///
+/// <para><b>Who may size it, and when.</b> Both the pool and the node column grow by doubling, and ONLY on
+/// <see cref="ScrollInputKind.Bind"/> — the publisher-side event of a viewport mounting. Nothing in the integration
+/// path (<see cref="Tick"/>'s active-body loop, <see cref="Reclamp"/>'s edge resolution, <see cref="MarkActive"/>,
+/// <see cref="MarkTouched"/>, <see cref="EmitTouched"/>) can allocate: <c>_activeList</c>/<c>_touchedSlots</c> are
+/// sized to the pool and each slot can enter either list at most once per pass (<c>_inActive</c> / the touched stamp
+/// are what make that true), so both stay in bounds by construction — <c>gate.kernel.alloc-zero-tick</c>.</para>
+///
+/// <para><b>Slot release is deferred to the end of the pass.</b> <see cref="ScrollInputKind.Unbind"/> clears the
+/// node's lookup entry immediately (so the body reads as gone at once, exactly as before) but parks the slot on
+/// <see cref="_pendingFree"/> instead of returning it to the free list. The slot only becomes reusable after
+/// <see cref="EmitTouched"/> has skipped it and <see cref="CompactActiveList"/> has dropped it, so a Bind arriving
+/// LATER IN THE SAME PASS can never be handed a slot that this pass's touched list or active list still names. That
+/// is what keeps "one sink write per body per pass" true across a mount/unmount in one frame.</para>
+///
+/// <para>Node indices remain the kernel's external vocabulary: the port, <see cref="IScrollSink.Apply"/>,
+/// <see cref="TryGetBody"/>/<see cref="TryLease"/>/<see cref="Return"/>, and <see cref="ScrollBody.ChainParent"/>/
+/// <see cref="ScrollBody.LastAbsorbed"/> are all node-keyed. Slots are strictly internal, and
+/// <see cref="ScrollBody.Node"/> is the back-reference emission reads.</para>
+///
+/// <para><b>No body ever reaches the render thread.</b> A body's result is projected into the scene by
+/// <c>SceneScrollSink.Apply</c> — <c>ScrollState</c> (a <c>ColdSlab</c> side-table on <c>SceneStore</c>) plus the
+/// content child's <c>LocalTransform</c> — and the seam copies THAT (a sparse <c>SnapshotColumn&lt;ScrollState&gt;</c>,
+/// itself a dictionary + slot pool). So this pool needs no snapshot mirror, and making it sparse changes nothing on
+/// the render side. The reserved <see cref="TryLease"/>/<see cref="Return"/> fling-lease hands out a BY-VALUE copy of
+/// one body, never the pool.</para></summary>
 public sealed class ScrollKernel
 {
     /// <summary>A contact sample farther than this from the frame clock is stamped in a foreign clock domain (a
@@ -18,14 +55,31 @@ public sealed class ScrollKernel
     private readonly IScrollSink _sink;
     private readonly ScrollFeel _feel;
 
+    // ── Sparse body storage: a slot pool + one 4-byte-per-node lookup ─────────────────────────────────────────
+    /// <summary>node index → slot + 1 (0 = this node has no body). The ONE array in this class sized by node index,
+    /// at 4 B/node; every other array below is sized to the slot pool.</summary>
+    private int[] _slotByNode = [];
+    /// <summary>The pool. Packed by slot, NOT by node — <c>_bodies[slot].Node</c> is the back-reference.</summary>
     private ScrollBody[] _bodies;
-    private int[] _activeList;
-    private bool[] _inActive;
+    /// <summary>Reclaimed slots, LIFO (so a mount/unmount cycle reuses the slot it just released).</summary>
+    private int[] _freeSlots;
+    private int _freeCount;
+    /// <summary>Slots unbound during the CURRENT pass, released into <see cref="_freeSlots"/> at the end of it —
+    /// see the type doc's "Slot release is deferred" paragraph.</summary>
+    private int[] _pendingFree;
+    private int _pendingFreeCount;
+    /// <summary>High-water of slots ever handed out (live + free) — the used prefix of the pool, and the bound of
+    /// every whole-pool scan (<see cref="ResolveRestores"/>).</summary>
+    private int _slotHi;
+    private int _boundCount;
+
+    private int[] _activeList;   // slots
+    private bool[] _inActive;    // by slot
     private int _activeCount;
 
-    // Per-call (Tick or Reclamp) "touched" tracking, stamp-based so it never needs an O(capacity) clear.
-    private int[] _touchedNodes;
-    private int[] _touchedStamp;
+    // Per-call (Tick or Reclamp) "touched" tracking, stamp-based so it never needs an O(pool) clear.
+    private int[] _touchedSlots;
+    private int[] _touchedStamp;   // by slot
     private int _touchedCount;
     private int _stamp;
 
@@ -41,15 +95,19 @@ public sealed class ScrollKernel
     public int ActiveCount => _activeCount;
     public ScrollKernelDiag Diag;
 
-    public ScrollKernel(IScrollSink sink, in ScrollFeel feel, int initialCapacity = 64)
+    /// <param name="initialCapacity">Initial size of the VIEWPORT SLOT POOL — not a node capacity (the node lookup
+    /// grows on demand from the first Bind). 16 covers a Wavee page's ~27 live viewports after one doubling.</param>
+    public ScrollKernel(IScrollSink sink, in ScrollFeel feel, int initialCapacity = 16)
     {
         _sink = sink ?? throw new ArgumentNullException(nameof(sink));
         _feel = feel;
         int cap = Math.Max(4, initialCapacity);
         _bodies = new ScrollBody[cap];
+        _freeSlots = new int[cap];
+        _pendingFree = new int[cap];
         _activeList = new int[cap];
         _inActive = new bool[cap];
-        _touchedNodes = new int[cap];
+        _touchedSlots = new int[cap];
         _touchedStamp = new int[cap];
         Port = new ScrollCommandPort();
         _drainScratch = new ScrollInput[ScrollCommandPort.Capacity];
@@ -58,11 +116,51 @@ public sealed class ScrollKernel
         _histX = new float[5];
     }
 
+    // ── Storage census (diagnostics + gates; always on, no switch) ────────────────────────────────────────────
+
+    /// <summary>Bodies currently bound — the live viewport count.</summary>
+    internal int BoundCount => _boundCount;
+
+    /// <summary>Slots the pool can hold. O(viewports ever simultaneously bound), never O(scene capacity) —
+    /// <c>gate.kernel.body-sparse</c>.</summary>
+    internal int BodySlotCapacity => _bodies.Length;
+
+    /// <summary>The used prefix of the pool: slots ever handed out minus slots reclaimed. Equals
+    /// <see cref="BoundCount"/> plus the slots unbound in the current pass but not yet released.</summary>
+    internal int BodySlotsInUse => _slotHi - _freeCount;
+
+    /// <summary>Length of the node→slot lookup — the highest bound node index, rounded up by doubling.</summary>
+    internal int NodeColumnLength => _slotByNode.Length;
+
+    /// <summary>Bytes this kernel's body storage holds: the slot pool, the pool-sized side arrays, and the one
+    /// 4-byte-per-node lookup. The gate compares it against <see cref="DenseBodyStorageBytes"/>.</summary>
+    internal long BodyStorageBytes
+        => (long)_bodies.Length * Unsafe.SizeOf<ScrollBody>()
+           + (long)_slotByNode.Length * sizeof(int)
+           + (long)_freeSlots.Length * sizeof(int)
+           + (long)_pendingFree.Length * sizeof(int)
+           + (long)_activeList.Length * sizeof(int)
+           + _inActive.Length
+           + (long)_touchedSlots.Length * sizeof(int)
+           + (long)_touchedStamp.Length * sizeof(int);
+
+    /// <summary>Bytes one pooled body costs (diagnostics/gates).</summary>
+    internal static int BodyBytes => Unsafe.SizeOf<ScrollBody>();
+
+    /// <summary>Bytes the DELETED node-indexed storage would cost for <paramref name="nodeCapacity"/> slots: the
+    /// body slab plus the four node-indexed side columns it dragged along.</summary>
+    internal static long DenseBodyStorageBytes(int nodeCapacity)
+        => (long)nodeCapacity * Unsafe.SizeOf<ScrollBody>()   // _bodies, indexed by node
+           + (long)nodeCapacity * sizeof(int)                  // _activeList
+           + nodeCapacity                                      // _inActive
+           + (long)nodeCapacity * sizeof(int)                  // _touchedNodes
+           + (long)nodeCapacity * sizeof(int);                 // _touchedStamp
+
     // ── Public reads ──────────────────────────────────────────────────────────────────────────────────────────
 
     public bool TryGetBody(int node, out ScrollBody snapshot)
     {
-        if (node >= 0 && node < _bodies.Length && _bodies[node].Bound) { snapshot = _bodies[node]; return true; }
+        if (TryGetSlot(node, out int slot)) { snapshot = _bodies[slot]; return true; }
         snapshot = default;
         return false;
     }
@@ -72,10 +170,10 @@ public sealed class ScrollKernel
     /// <see cref="Return"/> can be detected and ignored.</summary>
     public bool TryLease(int node, out ScrollBody body, out uint seq)
     {
-        if (node >= 0 && node < _bodies.Length && _bodies[node].Bound &&
-            (_bodies[node].Activity == ScrollActivity.Ballistic || _bodies[node].Activity == ScrollActivity.Driven))
+        if (TryGetSlot(node, out int slot) &&
+            (_bodies[slot].Activity == ScrollActivity.Ballistic || _bodies[slot].Activity == ScrollActivity.Driven))
         {
-            ref var b = ref _bodies[node];
+            ref var b = ref _bodies[slot];
             b.LeaseSeq++;
             body = b;
             seq = b.LeaseSeq;
@@ -90,10 +188,14 @@ public sealed class ScrollKernel
     /// lease or a UI-side revoke) is ignored.</summary>
     public void Return(int node, in ScrollBody body, uint seq)
     {
-        if (node < 0 || node >= _bodies.Length || !_bodies[node].Bound) return;
-        if (_bodies[node].LeaseSeq != seq) return;
-        _bodies[node] = body;
-        _bodies[node].LeaseSeq = seq;
+        if (!TryGetSlot(node, out int slot)) return;
+        if (_bodies[slot].LeaseSeq != seq) return;
+        _bodies[slot] = body;
+        _bodies[slot].LeaseSeq = seq;
+        // The pool's own bookkeeping is not the lessee's to overwrite: a leased copy carries whatever Node/Bound the
+        // body had when it was handed out, and a Return must not be able to re-point this slot at another node.
+        _bodies[slot].Node = node;
+        _bodies[slot].Bound = true;
     }
 
     // ── Tick / Reclamp ────────────────────────────────────────────────────────────────────────────────────────
@@ -110,8 +212,8 @@ public sealed class ScrollKernel
 
         for (int k = 0; k < _activeCount; k++)
         {
-            int node = _activeList[k];
-            ref ScrollBody b = ref _bodies[node];
+            int slot = _activeList[k];
+            ref ScrollBody b = ref _bodies[slot];
             if (!b.Bound || b.Parked) continue;
 
             if (b.Activity == ScrollActivity.Drag)
@@ -132,24 +234,25 @@ public sealed class ScrollKernel
                         float resampled = ScrollPhysics.ResampleContact(_histT.AsSpan(0, count), _histX.AsSpan(0, count), count, tStar);
                         float delta = resampled - b.LastResampleX;
                         b.LastResampleX = resampled;
-                        if (delta != 0f) ApplyDragDelta(node, node, delta);
+                        if (delta != 0f) ApplyDragDelta(slot, slot, delta);
                     }
                 }
                 // Live drag speed (signed, main axis) from this tick's raw advance — the result column the realize-ahead
                 // skew and text-motion softness read; it is NOT the fling seed (the impulse estimator owns that).
-                b = ref _bodies[node];
+                b = ref _bodies[slot];
                 float dtV = clock.DtSec > 0f ? Math.Min(clock.DtSec, 0.034f) : clock.RefreshSec;
                 b.Velocity = dtV > 0f ? (b.DragRaw - rawBefore) / dtV : 0f;
-                MarkTouched(node);
+                MarkTouched(slot);
                 continue;
             }
 
             ScrollBody.Advance(ref b, in clock, in _feel);
-            MarkTouched(node);
+            MarkTouched(slot);
         }
 
         EmitTouched(ScrollWriteSource.Tick);
         CompactActiveList();
+        FlushPendingFree();
         UpdateSummary();
         UpdateDiag();
     }
@@ -170,13 +273,14 @@ public sealed class ScrollKernel
 
         for (int k = 0; k < _activeCount; k++)
         {
-            int node = _activeList[k];
-            ref ScrollBody b = ref _bodies[node];
-            if (b.Bound && b.EdgeHitPending) ResolveEdge(node);
+            int slot = _activeList[k];
+            ref ScrollBody b = ref _bodies[slot];
+            if (b.Bound && b.EdgeHitPending) ResolveEdge(slot);
         }
 
         EmitTouched(ScrollWriteSource.Reclamp);
         CompactActiveList();
+        FlushPendingFree();
         UpdateSummary();
     }
 
@@ -189,7 +293,7 @@ public sealed class ScrollKernel
             case ScrollInputKind.Bind: BindNode(cmd.Node); break;
             case ScrollInputKind.Unbind: UnbindNode(cmd.Node); break;
             case ScrollInputKind.Park:
-                if (TryGetBoundRef(cmd.Node, out int pidx))
+                if (TryGetSlot(cmd.Node, out int pidx))
                 {
                     _bodies[pidx].Parked = (cmd.Flags & (byte)ScrollInputFlags.Immediate) != 0;
                     MarkTouched(pidx);
@@ -198,7 +302,8 @@ public sealed class ScrollKernel
             case ScrollInputKind.SetFrame: ApplySetFrame(in cmd); break;
             case ScrollInputKind.SetZoom: ApplySetZoom(in cmd); break;
             case ScrollInputKind.Chain:
-                if (TryGetBoundRef(cmd.Node, out int cidx)) _bodies[cidx].ChainParent = cmd.I;
+                // cmd.I is the ancestor's NODE index — ChainParent stays node-keyed (the router speaks nodes).
+                if (TryGetSlot(cmd.Node, out int cidx)) _bodies[cidx].ChainParent = cmd.I;
                 break;
             case ScrollInputKind.Cancel: ApplyCancel(cmd.Node); break;
             case ScrollInputKind.ContactBegin: ApplyContactBegin(in cmd); break;
@@ -218,47 +323,104 @@ public sealed class ScrollKernel
     private void BindNode(int node)
     {
         if (node < 0) return;
-        EnsureCapacity(node);
-        ref ScrollBody b = ref _bodies[node];
-        if (b.Bound) return; // idempotent
+        EnsureNodeColumn(node);
+        if (_slotByNode[node] != 0) return; // idempotent
+        int slot = AllocSlot();
+        _slotByNode[node] = slot + 1;
+        ref ScrollBody b = ref _bodies[slot];
         b = default;
         b.Node = node;
         b.Bound = true;
         b.ChainParent = -1;
         b.LastAbsorbed = -1;
         b.Zoom = 1f;
+        // A REUSED slot must not inherit the previous tenant's list membership. (_inActive is already false whenever
+        // a slot reaches the free list — FlushPendingFree clears it — but a fresh slot is cleared here too so the
+        // invariant holds at one place; the touched stamp is reset because 0 is never a live stamp.)
+        _inActive[slot] = false;
+        _touchedStamp[slot] = 0;
+        _boundCount++;
     }
 
     private void UnbindNode(int node)
     {
-        if (node < 0 || node >= _bodies.Length) return;
-        _bodies[node].Bound = false;
-        if (node < _inActive.Length) _inActive[node] = false; // lazily dropped from _activeList by CompactActiveList
+        if (!TryGetSlot(node, out int slot)) return;
+        _slotByNode[node] = 0;
+        ref ScrollBody b = ref _bodies[slot];
+        b.Bound = false;
+        // An unbound body can never satisfy its restore, so stop counting it: otherwise _restorePendingCount stays
+        // positive forever and every later Reclamp re-scans the pool for a body that no longer exists.
+        if (b.RestorePending) { b.RestorePending = false; b.RestoreRetries = 0; _restorePendingCount--; }
+        _boundCount--;
+        // Deferred release (see the type doc): the slot is still named by this pass's active/touched lists. It is
+        // NOT dropped from _activeList here — CompactActiveList does that off !Bound, which also clears _inActive.
+        _pendingFree[_pendingFreeCount++] = slot;
     }
 
-    private void EnsureCapacity(int node)
+    private int AllocSlot()
     {
-        if (node < _bodies.Length) return;
+        int slot = _freeCount > 0 ? _freeSlots[--_freeCount] : _slotHi++;
+        EnsureSlotCapacity(slot);
+        return slot;
+    }
+
+    /// <summary>Return this pass's unbound slots to the free list. Runs AFTER <see cref="EmitTouched"/> (which
+    /// skipped them) and <see cref="CompactActiveList"/> (which dropped them and cleared <c>_inActive</c>), so a
+    /// slot handed out on the next pass cannot collide with a list entry from this one.</summary>
+    private void FlushPendingFree()
+    {
+        for (int i = 0; i < _pendingFreeCount; i++)
+        {
+            int slot = _pendingFree[i];
+            _inActive[slot] = false;
+            _freeSlots[_freeCount++] = slot;
+        }
+        _pendingFreeCount = 0;
+    }
+
+    /// <summary>Grow the node→slot lookup to cover <paramref name="node"/>. Bind-only (publisher side).</summary>
+    private void EnsureNodeColumn(int node)
+    {
+        if (node < _slotByNode.Length) return;
+        int n = _slotByNode.Length == 0 ? 64 : _slotByNode.Length;
+        while (n <= node) n *= 2;
+        Array.Resize(ref _slotByNode, n);
+    }
+
+    /// <summary>Grow the slot pool AND every pool-sized side array together, so <see cref="MarkActive"/>/
+    /// <see cref="MarkTouched"/> are in-bounds by construction and never have to grow anything themselves.
+    /// Bind-only (publisher side) — nothing in the integration path calls this.</summary>
+    private void EnsureSlotCapacity(int slot)
+    {
+        if (slot < _bodies.Length) return;
         int cap = _bodies.Length;
-        while (cap <= node) cap *= 2;
+        while (cap <= slot) cap *= 2;
         Array.Resize(ref _bodies, cap);
+        Array.Resize(ref _freeSlots, cap);
+        Array.Resize(ref _pendingFree, cap);
         Array.Resize(ref _activeList, cap);
         Array.Resize(ref _inActive, cap);
-        Array.Resize(ref _touchedNodes, cap);
+        Array.Resize(ref _touchedSlots, cap);
         Array.Resize(ref _touchedStamp, cap);
     }
 
-    private bool TryGetBoundRef(int node, out int idx)
+    /// <summary>node → pool slot. False ⇔ the node has no bound body (the old <c>_bodies[node].Bound</c> test).</summary>
+    private bool TryGetSlot(int node, out int slot)
     {
-        idx = node;
-        return node >= 0 && node < _bodies.Length && _bodies[node].Bound;
+        if ((uint)node < (uint)_slotByNode.Length)
+        {
+            int s = _slotByNode[node];
+            if (s != 0) { slot = s - 1; return true; }
+        }
+        slot = -1;
+        return false;
     }
 
     // ── Structural handlers ───────────────────────────────────────────────────────────────────────────────────
 
     private void ApplySetFrame(in ScrollInput cmd)
     {
-        if (!TryGetBoundRef(cmd.Node, out int idx)) return;
+        if (!TryGetSlot(cmd.Node, out int idx)) return;
         ref ScrollBody b = ref _bodies[idx];
         var spec = ScrollInput.UnpackFrame(in cmd);
         b.Frame = spec;
@@ -307,7 +469,7 @@ public sealed class ScrollKernel
 
     private void ApplySetZoom(in ScrollInput cmd)
     {
-        if (!TryGetBoundRef(cmd.Node, out int idx)) return;
+        if (!TryGetSlot(cmd.Node, out int idx)) return;
         ref ScrollBody b = ref _bodies[idx];
         float oldZoom = b.Zoom > 0f ? b.Zoom : 1f;
         float newZoom = cmd.A > 0f ? cmd.A : 1f;
@@ -326,7 +488,7 @@ public sealed class ScrollKernel
 
     private void ApplyCancel(int node)
     {
-        if (!TryGetBoundRef(node, out int idx)) return;
+        if (!TryGetSlot(node, out int idx)) return;
         ref ScrollBody b = ref _bodies[idx];
         b.Activity = ScrollActivity.Idle;
         b.Velocity = 0f;
@@ -342,7 +504,7 @@ public sealed class ScrollKernel
 
     private void ApplyThumbSet(in ScrollInput cmd)
     {
-        if (!TryGetBoundRef(cmd.Node, out int idx)) return;
+        if (!TryGetSlot(cmd.Node, out int idx)) return;
         ref ScrollBody b = ref _bodies[idx];
         float zoom = b.Zoom > 0f ? b.Zoom : 1f;
         float maxOff = MathF.Max(0f, b.Frame.ExtentMain * zoom - b.Frame.ViewportMain);
@@ -358,7 +520,7 @@ public sealed class ScrollKernel
 
     private void ApplyRestore(in ScrollInput cmd)
     {
-        if (!TryGetBoundRef(cmd.Node, out int idx)) return;
+        if (!TryGetSlot(cmd.Node, out int idx)) return;
         ref ScrollBody b = ref _bodies[idx];
         bool wasPending = b.RestorePending;
         b.RestoreX = cmd.A; b.RestoreY = cmd.B;
@@ -369,16 +531,20 @@ public sealed class ScrollKernel
         MarkTouched(idx);
     }
 
+    /// <summary>Retry every latched restore. Scans the pool's used prefix (O(viewports ever bound), not O(scene
+    /// capacity) as the node-indexed slab forced) — so the iteration order is SLOT order (bind order) rather than
+    /// node order. Each restore resolves against its own body only, and the sink write is per node, so nothing here
+    /// depends on the order; it is deterministic for a given command stream because slot allocation is.</summary>
     private void ResolveRestores()
     {
-        for (int node = 0; node < _bodies.Length && _restorePendingCount > 0; node++)
+        for (int slot = 0; slot < _slotHi && _restorePendingCount > 0; slot++)
         {
-            ref ScrollBody b = ref _bodies[node];
+            ref ScrollBody b = ref _bodies[slot];
             if (!b.Bound || !b.RestorePending) continue;
             if (TryApplyRestore(ref b))
             {
                 _restorePendingCount--;
-                MarkTouched(node);
+                MarkTouched(slot);
             }
         }
     }
@@ -414,7 +580,7 @@ public sealed class ScrollKernel
 
     private void ApplyAnchorShift(in ScrollInput cmd)
     {
-        if (!TryGetBoundRef(cmd.Node, out int idx)) return;
+        if (!TryGetSlot(cmd.Node, out int idx)) return;
         ref ScrollBody b = ref _bodies[idx];
         float delta = cmd.A;
         SetOffsetMain(ref b, b.PositionMain + delta);
@@ -443,7 +609,7 @@ public sealed class ScrollKernel
 
     private void ApplyContactBegin(in ScrollInput cmd)
     {
-        if (!TryGetBoundRef(cmd.Node, out int idx)) return;
+        if (!TryGetSlot(cmd.Node, out int idx)) return;
         ref ScrollBody b = ref _bodies[idx];
         b.Activity = ScrollActivity.Drag;
         b.DragMode = 1;
@@ -468,7 +634,7 @@ public sealed class ScrollKernel
 
     private void ApplyContactMove(in ScrollInput cmd)
     {
-        if (!TryGetBoundRef(cmd.Node, out int idx)) return;
+        if (!TryGetSlot(cmd.Node, out int idx)) return;
         ref ScrollBody b = ref _bodies[idx];
         if (b.Activity != ScrollActivity.Drag || b.DragMode != 1) { ApplyContactBegin(in cmd); b = ref _bodies[idx]; }
         PushHistory(ref b, cmd.T, cmd.A);
@@ -478,7 +644,7 @@ public sealed class ScrollKernel
 
     private void ApplyContactEnd(in ScrollInput cmd)
     {
-        if (!TryGetBoundRef(cmd.Node, out int idx)) return;
+        if (!TryGetSlot(cmd.Node, out int idx)) return;
         ref ScrollBody b = ref _bodies[idx];
         if (b.Activity != ScrollActivity.Drag) return; // a stray End with no live drag — nothing to seed
 
@@ -507,8 +673,11 @@ public sealed class ScrollKernel
         float v = b.Impulse.Velocity;
         b.LastReleaseVelocity = v;
 
-        int seedNode = _bodies[idx].LastAbsorbed >= 0 ? _bodies[idx].LastAbsorbed : idx;
-        ref ScrollBody seed = ref _bodies[seedNode];
+        // LastAbsorbed is a NODE index (the chain hand-off speaks nodes). Resolve it back to a slot; a chained
+        // ancestor that unbound between the hand-off and the lift falls back to seeding this body.
+        int absorbed = _bodies[idx].LastAbsorbed;
+        int seedSlot = absorbed >= 0 && TryGetSlot(absorbed, out int aslot) ? aslot : idx;
+        ref ScrollBody seed = ref _bodies[seedSlot];
         seed.LastReleaseVelocity = v;
         float band = seed.BandMain;
 
@@ -519,7 +688,7 @@ public sealed class ScrollKernel
             seed.Awake = false;
             seed.Flags &= ~(ScrollActivityFlags.Wheel | ScrollActivityFlags.Programmatic | ScrollActivityFlags.Autoscroll | ScrollActivityFlags.Chained);
             SnapRetargetOnEntry(ref seed);
-            MarkActive(seedNode);
+            MarkActive(seedSlot);
         }
         else if (MathF.Abs(band) > 0.0001f)
         {
@@ -533,7 +702,7 @@ public sealed class ScrollKernel
             seed.Flags |= ScrollActivityFlags.Bouncing;
             seed.Velocity = 0f;
             seed.Awake = false;
-            MarkActive(seedNode);
+            MarkActive(seedSlot);
         }
         else
         {
@@ -541,7 +710,7 @@ public sealed class ScrollKernel
             seed.Velocity = 0f;
         }
 
-        if (idx != seedNode)
+        if (idx != seedSlot)
         {
             ref ScrollBody finger = ref _bodies[idx];
             finger.Activity = ScrollActivity.Idle;
@@ -549,7 +718,7 @@ public sealed class ScrollKernel
             MarkTouched(idx);
         }
         _bodies[idx].LastAbsorbed = -1;
-        MarkTouched(seedNode);
+        MarkTouched(seedSlot);
     }
 
     /// <summary>Fling-entry snap retarget (once): pick the snap value the natural decay would settle nearest, then
@@ -578,7 +747,7 @@ public sealed class ScrollKernel
 
     private void ApplyFrameDelta(in ScrollInput cmd)
     {
-        if (!TryGetBoundRef(cmd.Node, out int idx)) return;
+        if (!TryGetSlot(cmd.Node, out int idx)) return;
         ref ScrollBody b = ref _bodies[idx];
         bool starting = b.Activity != ScrollActivity.Drag || b.DragMode != 2;
         if (starting)
@@ -605,15 +774,15 @@ public sealed class ScrollKernel
         MarkTouched(idx);
     }
 
-    /// <summary>Apply a main-axis drag delta at <paramref name="node"/>, chaining any leftover excess to
-    /// <see cref="ScrollBody.ChainParent"/> in the SAME tick (plan §2.2). <paramref name="gestureNode"/> is the
-    /// node the whole gesture addresses (where ContactBegin/first FrameDelta landed) — <see cref="ScrollBody.LastAbsorbed"/>
-    /// is tracked THERE so a lift knows which body (self or a chained ancestor) to seed the fling on.</summary>
-    private void ApplyDragDelta(int gestureNode, int node, float delta)
+    /// <summary>Apply a main-axis drag delta at pool slot <paramref name="slot"/>, chaining any leftover excess to
+    /// <see cref="ScrollBody.ChainParent"/> in the SAME tick (plan §2.2). <paramref name="gestureSlot"/> is the
+    /// body the whole gesture addresses (where ContactBegin/first FrameDelta landed) — <see cref="ScrollBody.LastAbsorbed"/>
+    /// is tracked THERE (as a NODE index) so a lift knows which body (self or a chained ancestor) to seed the fling on.</summary>
+    private void ApplyDragDelta(int gestureSlot, int slot, float delta)
     {
-        if (node < 0 || node >= _bodies.Length || !_bodies[node].Bound) return;
-        MarkActive(node);
-        ref ScrollBody body = ref _bodies[node];
+        if (slot < 0 || !_bodies[slot].Bound) return;
+        MarkActive(slot);
+        ref ScrollBody body = ref _bodies[slot];
         float zoom = body.Zoom > 0f ? body.Zoom : 1f;
         float maxOff = MathF.Max(0f, body.Frame.ExtentMain * zoom - body.Frame.ViewportMain);
         float raw = body.DragRaw + delta;
@@ -624,16 +793,15 @@ public sealed class ScrollKernel
         float excess = raw - clamped;
         bool handedOff = false;
 
-        if (excess != 0f && body.ChainParent >= 0 && CanChainAbsorb(body.ChainParent, excess))
+        if (excess != 0f && body.ChainParent >= 0 && TryGetSlot(body.ChainParent, out int parentSlot) && CanChainAbsorb(parentSlot, excess))
         {
             SetBandMain(ref body, 0f);
             // The parent now OWNS the surplus: the child's raw rests at its clamp so the next packet hands off only its
             // own increment (never the cumulative overshoot again), and a reversal moves the child back immediately
             // (CSS overscroll-behavior:auto — the inner scrolls whenever it can).
             body.DragRaw = clamped;
-            int parentNode = body.ChainParent;
-            ApplyDragDelta(gestureNode, parentNode, excess);
-            _bodies[parentNode].Flags |= ScrollActivityFlags.Chained;
+            ApplyDragDelta(gestureSlot, parentSlot, excess);
+            _bodies[parentSlot].Flags |= ScrollActivityFlags.Chained;
             handedOff = true;
         }
         else
@@ -642,7 +810,7 @@ public sealed class ScrollKernel
             SetBandMain(ref body, band);
         }
 
-        body = ref _bodies[node];
+        body = ref _bodies[slot];
         body.Activity = ScrollActivity.Drag;
         // Only the TERMINAL absorber in a hand-off chain claims LastAbsorbed this call — when this body handed its
         // excess up to a parent (the recursive ApplyDragDelta above already ran and set LastAbsorbed on whichever
@@ -650,15 +818,15 @@ public sealed class ScrollKernel
         // overwrite that with itself, or a lift always seeds on the outermost child instead of the true absorber.
         if (!handedOff && (clamped != cur || excess != 0f))
         {
-            if (gestureNode >= 0 && gestureNode < _bodies.Length) _bodies[gestureNode].LastAbsorbed = node;
+            if (gestureSlot >= 0 && gestureSlot < _bodies.Length) _bodies[gestureSlot].LastAbsorbed = body.Node;
         }
-        MarkTouched(node);
+        MarkTouched(slot);
     }
 
-    private bool CanChainAbsorb(int parentNode, float excessSign)
+    private bool CanChainAbsorb(int parentSlot, float excessSign)
     {
-        if (parentNode < 0 || parentNode >= _bodies.Length || !_bodies[parentNode].Bound) return false;
-        ref ScrollBody parent = ref _bodies[parentNode];
+        if (parentSlot < 0 || !_bodies[parentSlot].Bound) return false;
+        ref ScrollBody parent = ref _bodies[parentSlot];
         if (parent.Parked) return false;
         float zoom = parent.Zoom > 0f ? parent.Zoom : 1f;
         float maxOff = MathF.Max(0f, parent.Frame.ExtentMain * zoom - parent.Frame.ViewportMain);
@@ -672,7 +840,7 @@ public sealed class ScrollKernel
 
     private void ApplyWheelNotch(in ScrollInput cmd)
     {
-        if (!TryGetBoundRef(cmd.Node, out int idx)) return;
+        if (!TryGetSlot(cmd.Node, out int idx)) return;
         ref ScrollBody b = ref _bodies[idx];
         bool sameFlavourLive = b.Activity == ScrollActivity.Driven && (b.Flags & ScrollActivityFlags.Wheel) != 0;
         float zoom = b.Zoom > 0f ? b.Zoom : 1f;
@@ -692,13 +860,13 @@ public sealed class ScrollKernel
 
     private void ApplyScrollTo(in ScrollInput cmd)
     {
-        if (!TryGetBoundRef(cmd.Node, out int idx)) return;
+        if (!TryGetSlot(cmd.Node, out int idx)) return;
         SetDrivenTarget(idx, cmd.A, in cmd);
     }
 
     private void ApplyScrollBy(in ScrollInput cmd)
     {
-        if (!TryGetBoundRef(cmd.Node, out int idx)) return;
+        if (!TryGetSlot(cmd.Node, out int idx)) return;
         SetDrivenTarget(idx, _bodies[idx].PositionMain + cmd.A, in cmd);
     }
 
@@ -744,7 +912,7 @@ public sealed class ScrollKernel
 
     private void ApplySetVelocity(in ScrollInput cmd)
     {
-        if (!TryGetBoundRef(cmd.Node, out int idx)) return;
+        if (!TryGetSlot(cmd.Node, out int idx)) return;
         ref ScrollBody b = ref _bodies[idx];
         float v = cmd.A;
         if (v == 0f)
@@ -767,9 +935,9 @@ public sealed class ScrollKernel
 
     // ── Edge resolution (Reclamp) ─────────────────────────────────────────────────────────────────────────────
 
-    private void ResolveEdge(int node)
+    private void ResolveEdge(int slot)
     {
-        ref ScrollBody b = ref _bodies[node];
+        ref ScrollBody b = ref _bodies[slot];
         if (!b.EdgeHitPending) return;
         float zoom = b.Zoom > 0f ? b.Zoom : 1f;
         float maxOff = MathF.Max(0f, b.Frame.ExtentMain * zoom - b.Frame.ViewportMain);
@@ -779,19 +947,18 @@ public sealed class ScrollKernel
 
         if (!stillAtEdge)
         {
-            MarkTouched(node); // fresh geometry gave it room — Ballistic simply continues next Tick
+            MarkTouched(slot); // fresh geometry gave it room — Ballistic simply continues next Tick
             return;
         }
 
         float v = b.Velocity;
         float excessSign = pos <= 0.0001f ? -1f : 1f;
-        if (b.ChainParent >= 0 && CanChainAbsorb(b.ChainParent, excessSign))
+        if (b.ChainParent >= 0 && TryGetSlot(b.ChainParent, out int parentSlot) && CanChainAbsorb(parentSlot, excessSign))
         {
-            int parentNode = b.ChainParent;
             b.Activity = ScrollActivity.Idle;
             b.Velocity = 0f;
             b.Awake = false;
-            ref ScrollBody parent = ref _bodies[parentNode];
+            ref ScrollBody parent = ref _bodies[parentSlot];
             parent.Activity = ScrollActivity.Ballistic;
             parent.Velocity = v;
             // No per-viewport snap retarget for a chain hand-off (the child's edge, not the parent's, is what fired)
@@ -800,8 +967,8 @@ public sealed class ScrollKernel
             parent.SnapArmed = false;
             parent.Awake = false;
             parent.Flags &= ~(ScrollActivityFlags.Wheel | ScrollActivityFlags.Programmatic | ScrollActivityFlags.Autoscroll | ScrollActivityFlags.Bouncing);
-            MarkActive(parentNode);
-            MarkTouched(parentNode);
+            MarkActive(parentSlot);
+            MarkTouched(parentSlot);
         }
         else if (MathF.Abs(v) >= _feel.FlingSettleVel)
         {
@@ -819,7 +986,7 @@ public sealed class ScrollKernel
             b.Velocity = 0f;
             b.Awake = false;
         }
-        MarkTouched(node);
+        MarkTouched(slot);
     }
 
     // ── Contact history (fixed 5-slot, chronological T0/X0=oldest .. T4/X4=newest within ContactCount) ─────────
@@ -869,31 +1036,34 @@ public sealed class ScrollKernel
     private static void SetOffsetMain(ref ScrollBody b, float v) { if (b.Horizontal) b.OffsetX = v; else b.OffsetY = v; }
     private static void SetBandMain(ref ScrollBody b, float v) { if (b.Horizontal) b.BandX = v; else b.BandY = v; }
 
-    private void MarkActive(int node)
+    /// <summary>Enrol a pool slot in the active list. Allocation-free by construction: <c>_activeList</c> is sized to
+    /// the pool (<see cref="EnsureSlotCapacity"/>) and <c>_inActive</c> admits each slot at most once, so
+    /// <c>_activeCount</c> can never reach <c>_activeList.Length</c> — no growth on this per-frame path.</summary>
+    private void MarkActive(int slot)
     {
-        if (node < 0 || node >= _inActive.Length || _inActive[node]) return;
-        _inActive[node] = true;
-        if (_activeCount >= _activeList.Length) Array.Resize(ref _activeList, _activeList.Length * 2);
-        _activeList[_activeCount++] = node;
+        if (slot < 0 || _inActive[slot]) return;
+        _inActive[slot] = true;
+        _activeList[_activeCount++] = slot;
     }
 
-    private void MarkTouched(int node)
+    /// <summary>Stamp a pool slot as written this pass. Same bound as <see cref="MarkActive"/>: the stamp admits each
+    /// slot once, and <c>_touchedSlots</c> is pool-sized — allocation-free on this per-frame path.</summary>
+    private void MarkTouched(int slot)
     {
-        if (node < 0 || node >= _touchedStamp.Length || _touchedStamp[node] == _stamp) return;
-        _touchedStamp[node] = _stamp;
-        if (_touchedCount >= _touchedNodes.Length) Array.Resize(ref _touchedNodes, _touchedNodes.Length * 2);
-        _touchedNodes[_touchedCount++] = node;
+        if (slot < 0 || _touchedStamp[slot] == _stamp) return;
+        _touchedStamp[slot] = _stamp;
+        _touchedSlots[_touchedCount++] = slot;
     }
 
     private void EmitTouched(ScrollWriteSource writer)
     {
         for (int i = 0; i < _touchedCount; i++)
         {
-            int node = _touchedNodes[i];
-            ref ScrollBody b = ref _bodies[node];
+            int slot = _touchedSlots[i];
+            ref ScrollBody b = ref _bodies[slot];
             if (!b.Bound) continue;
             ScrollWrite write = BuildWrite(in b, writer);
-            _sink.Apply(node, in write);
+            _sink.Apply(b.Node, in write);
         }
     }
 
@@ -913,11 +1083,11 @@ public sealed class ScrollKernel
         int w = 0;
         for (int r = 0; r < _activeCount; r++)
         {
-            int node = _activeList[r];
-            ref ScrollBody b = ref _bodies[node];
+            int slot = _activeList[r];
+            ref ScrollBody b = ref _bodies[slot];
             bool keep = b.Bound && (!b.IsSettled || b.Parked || b.RestorePending || b.EdgeHitPending);
-            if (keep) _activeList[w++] = node;
-            else _inActive[node] = false;
+            if (keep) _activeList[w++] = slot;
+            else _inActive[slot] = false;
         }
         _activeCount = w;
     }

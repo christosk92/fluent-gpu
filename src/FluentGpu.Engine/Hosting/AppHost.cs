@@ -52,14 +52,35 @@ public readonly record struct FrameStats(int DrawCommandCount, int ClicksHandled
     public int RepaintRectCount { get; init; }
     /// <summary><see cref="RepaintFullReason.None"/> unless the frame forced a full repaint.</summary>
     public RepaintFullReason RepaintFullReason { get; init; }
-    // Per-frame layout-cost counters (FlexLayout diag; valid only when FG_LAYOUT_DIAG=1, else 0). MeasureCount/ArrangeCount
-    // are total node visits across the frame's full + scoped + phase-7 reflow layout passes — MeasureCount counts REAL
-    // measures (within-pass memo hits are excluded; FlexLayout.DiagMeasureMemoHits has those); TextShapeMisses is DirectWrite
+    // Per-frame layout-cost counters (FlexLayout diag). P0 made the underlying FlexLayout fields (_dMeasure/_dArrange/
+    // _dTextMiss/etc.) ALWAYS-ON — FG_LAYOUT_DIAG now gates only the Console.Error.WriteLine printout in
+    // FlexLayout.Run(), not the counting itself (`gate.diag.counters-always-on`). MeasureCount/ArrangeCount are total
+    // node visits across the frame's full + scoped + phase-7 reflow layout passes — MeasureCount counts REAL measures
+    // (within-pass memo hits are excluded; FlexLayout.DiagMeasureMemoHits has those); TextShapeMisses is DirectWrite
     // re-shapes (measure-cache misses). A projected (Reveal/FLIP) size animation must keep these ~0 on every anim tick —
     // only the commit frame is large. The reflow-per-tick defect (backdrop-effects-animation §5.8) is exactly a nonzero here.
     public int MeasureCount { get; init; }
     public int ArrangeCount { get; init; }
     public int TextShapeMisses { get; init; }
+    /// <summary>P0 always-on counter: true glyph-shape calls this frame (<c>IFontSystem.ShapeCount</c> delta), i.e. real
+    /// DirectWrite/headless shaping work — as opposed to <see cref="TextShapeMisses"/> which is the layout measure-cache
+    /// miss count (a measure miss does not always re-shape, and a shape can happen outside layout, e.g. span rebind).
+    /// An identical second frame must read 0 here (`gate.diag.counters-always-on`).</summary>
+    public int TextShapes { get; init; }
+    /// <summary>P0 always-on counter: nodes copied by this frame's <c>SceneRecordingSnapshot.Capture</c> (0 on a frame
+    /// that did not record, e.g. skip-submit). P8's incremental capture is expected to shrink this on coast frames.</summary>
+    public int CapturedNodes { get; init; }
+    /// <summary>P0 always-on counter: sum of <c>Reconciler.NodeBindingFireCount</c> this frame — every bound-channel
+    /// effect PROLOGUE (whether or not it wrote a column). Compare against <see cref="BindingWrites"/> to see the
+    /// equality-gating hit rate.</summary>
+    public int BindingFires { get; init; }
+    /// <summary>P0 always-on counter: sum of <c>Reconciler.NodeBindingWriteCount</c> this frame — bound-channel effects
+    /// that actually wrote a scene column (an equal republish fires without writing).</summary>
+    public int BindingWrites { get; init; }
+    /// <summary>P0 counter, valid only when process allocation tracking is on (same probe gate as <see cref="HotPhaseAllocBytes"/>,
+    /// <c>-p:EventSourceSupport=true</c>): GC-delta bytes across this frame's <c>FlushRebindsToQuiescence</c> call(s) — the
+    /// rebind-only allocation cost, isolated from layout/record/submit.</summary>
+    public long RebindFlushAllocBytes { get; init; }
     /// <summary>LayoutDirty marks this frame's scoped relayout consumed (ALWAYS-ON, unlike Measure/ArrangeCount). 0 means
     /// no layout ran at all — the oracle for "a re-render whose tree is unchanged must not dirty layout". Stays 0 on a
     /// full-layout frame (that path does not go through the invalidator).</summary>
@@ -103,6 +124,10 @@ public readonly record struct FrameStats(int DrawCommandCount, int ClicksHandled
     public int LocalRelayoutResolves { get; init; }
     public double AnimMs { get; init; }
     public double RecordMs { get; init; }
+    /// <summary>Renderer-owned recording duration from the latest imported successful presentation (not current UI work).</summary>
+    public double RenderRecordMs { get; init; }
+    /// <summary>Scene publication associated with renderer recording counters; zero before the first feedback sample.</summary>
+    public ulong RecordedSceneSequence { get; init; }
     public double SubmitMs { get; init; }
     // RecordMs sub-split (hitch attribution): the phase-7.5 image pump/tick and the phase-7.6 scroll re-realize
     // catch-up both run between tAnim and tRecord, so their cost was invisibly charged to "record" — a realize spike
@@ -161,11 +186,29 @@ public readonly record struct FrameStats(int DrawCommandCount, int ClicksHandled
     public bool LyricsContentDirtyAtRecord { get; init; }
     public int MainScrollMode { get; init; }
     public bool MainContentDirtyAtRecord { get; init; }
-    // Hitch attribution (populated when FG_FPS_LOG / FG_SCROLL_PERF): GC collection deltas since the previous painted
-    // frame, plus the opt-in scroll-bind dirty census from ScrollBindEval (0 when FG_SCROLL_PERF is off).
+    // Hitch attribution: GC collection deltas since the previous painted frame (ALWAYS-ON — a slow-frame log line
+    // needs "a gen-2 landed here" without a flag), plus the opt-in scroll-bind dirty census from ScrollBindEval
+    // (0 when FG_SCROLL_PERF is off).
     public int Gc0Delta { get; init; }
     public int Gc1Delta { get; init; }
     public int Gc2Delta { get; init; }
+    /// <summary>The per-component census line for this frame when <see cref="AppHost.RenderCensus"/> is on AND the
+    /// flush exceeded <see cref="RefreshIntervalMs"/> (or rendered ≥ the census min-comps): "[render-census] flush=…
+    /// top=Type×n(r=ms c=ms a=K),… bytes=Type×n=K,…" — WHICH components made the frame slow and WHO allocated. Null
+    /// on every in-budget frame and when the census is off.</summary>
+    public string? Census { get; init; }
+    /// <summary>The panel's refresh interval (ms) as the host paced this frame — 8.33 at 120 Hz, 16.67 at 60 Hz. The
+    /// frame budget every "slow frame" judgement is made against; a consumer never hard-codes 16.</summary>
+    public double RefreshIntervalMs { get; init; }
+    /// <summary>Monotonic count of scene publications the render thread never adopted (a newer publication superseded
+    /// them before it woke). Ordinary and cheap — record-dirty bits and the pending-removal ledger accumulate until a
+    /// publication is CONSUMED, so a skipped one loses nothing. A sustained climb means the render thread is behind.</summary>
+    public long PublicationGaps { get; init; }
+    /// <summary>Cumulative presents and OS-refresh slots those presents missed (an interval of two vblanks counts one
+    /// missed slot). Cumulative so a window can difference them: the displayed cadence is the smoothness number, and
+    /// it is invisible to the UI-side phase times when the renderer runs on its own thread.</summary>
+    public long PresentedFrames { get; init; }
+    public long MissedVsyncs { get; init; }
     public int StickyClipEvals { get; init; }
     public int StickyClipDirties { get; init; }
     public int StickyClipFullyHidden { get; init; }
@@ -209,6 +252,8 @@ public sealed class PopupWindowSlot
     public ISwapchain? Swapchain { get; internal set; }
     /// <summary>The popup's own command stream, re-recorded each frame via <c>SceneRecorder.RecordSubtree</c>.</summary>
     public DrawList DrawList { get; } = new();
+    internal SceneRecordingContext Recording { get; } = new();
+    internal ulong FirstSceneSequence;
 }
 
 /// <summary>Which branch of <see cref="AppHost.RecommendedWaitMs"/> produced the last wait — the diagnostic that
@@ -312,6 +357,81 @@ public sealed class AppHost : IDisposable
     // submit, no behaviour/perf change. This only establishes the seam SHAPE so the later (soak-gated) render-thread
     // spawn — which moves submit/present/the GPU fence-wait stall off the UI thread — is an additive change, not a rewrite.
     private readonly Threading.SceneFramePublisher _renderSeam = new();
+    private readonly Threading.SceneFramePublisher _recordFeedback = new(
+        cmdCap: System.Runtime.CompilerServices.Unsafe.SizeOf<Threading.RecordingFeedback>(), sortCap: 1, reverse: true);
+    private readonly DrawList _renderCommands = new();
+    private readonly SpanTable _renderSpans = new();
+    private ulong _lastRecordedScene;
+    // UI-thread: the scene publish seq handed to the seam on the PREVIOUS painted frame. The consume gate for clearing
+    // record-dirty bits + the pending-removal ledger (see the publish site) — bits are dropped only once the renderer
+    // has adopted the publication that carried them, so a skipped publication is a plain no-op.
+    private ulong _lastPublishedSceneSeq;
+    // Render-thread: publications the consumer never adopted (superseded before it woke). DIAGNOSTIC ONLY — it no longer
+    // disables span reuse or forces root-bounds damage; the accumulate-until-consumed rule above makes a gap ordinary.
+    private long _publicationGaps;
+    // Render-thread private: FNV-1a of the last stream this thread actually submitted+presented, and the target epoch it
+    // presented under. A byte-identical stream with an EMPTY repaint region and no clock-driven work is already on screen.
+    // Needs no external invalidation reset: every event that would poison it (resize, DPI, device recovery, clear-color
+    // change, image content, crossfades) reaches this thread as a non-empty repaint region or a new target epoch.
+    private ulong _lastRenderPresentedHash;
+    private long _lastRenderedTargetEpoch = -1;
+    // UI→render mirror of _popupWindows.Count. The render thread must never present a skip candidate while a popup
+    // window rides the same turn (RecordPopups submits its own swapchain from the same publication).
+    private int _popupWindowCount;
+    private SceneRecordStats _lastRecordStats;
+    private int _lastRecordedCommandCount;
+    private double _lastRenderRecordMs;
+    private ulong _lastRecordedFeedbackScene;
+    private readonly RenderCompositorAnimations _renderAnimations = new();
+    private Threading.RenderFrame _activeRenderFrame;
+    private bool _hasActiveRenderFrame;
+    private byte[] _feedbackBytes = [];
+    private int _lastSettledPoseCount;
+    private int _renderVisible = 1;
+    private long _renderPeriodTicks = Stopwatch.Frequency / 60;
+    private bool _renderWasPaused;
+    private double _imagePausedAtMs, _imagePauseDurationMs;
+
+    private bool HasOwnRenderMotion()
+    {
+        bool paused = Volatile.Read(ref _renderVisible) == 0;
+        if (paused != _renderWasPaused)
+        {
+            double now = Stopwatch.GetTimestamp() * 1000.0 / Stopwatch.Frequency;
+            if (paused)
+            {
+                _renderAnimations.Pause(now);
+                _imagePausedAtMs = now;
+            }
+            else
+            {
+                _renderAnimations.Resume(now);
+                _imagePauseDurationMs += now - _imagePausedAtMs;
+            }
+            _renderWasPaused = paused;
+        }
+        if (paused || !_hasActiveRenderFrame || !_renderSeam.IsCurrentTarget(_activeRenderFrame)) return false;
+        var frame = _renderSeam.Scene(_activeRenderFrame);
+        return _renderAnimations.HasActive || frame.Images.HasCrossfades(RenderImageClock(_activeRenderFrame, frame));
+    }
+
+    private float RenderImageClock(in Threading.RenderFrame frame, Threading.SceneRenderFrame scene)
+        => frame.Submit.ImageClockMs + (float)Math.Max(0,
+            Stopwatch.GetTimestamp() * 1000.0 / Stopwatch.Frequency - scene.Animations.CapturedAtMs - _imagePauseDurationMs);
+
+    private bool HasRenderMotion()
+    {
+        if (HasOwnRenderMotion()) return true;
+        foreach (var child in _childRenderSources) if (child.HasOwnRenderMotion()) return true;
+        return false;
+    }
+
+    private void RenderMotion()
+    {
+        if (HasOwnRenderMotion()) SubmitPresentOnRenderThread(_activeRenderFrame);
+    }
+
+    private long RenderPeriodTicks() => Volatile.Read(ref _renderPeriodTicks);
     // The dedicated render thread, constructed for a real windowed host (mode Async — the default — or ForceSync). null ⇒
     // the SingleThread inline pass-through (headless, and the internal SingleThread override). It runs submit/present off
     // the UI thread; under ForceSync the UI still blocks on it (no async overlap), under Async it presents on its own timeline.
@@ -473,6 +593,15 @@ public sealed class AppHost : IDisposable
     /// the hold entirely (each idle frame quiesces immediately). Only takes effect on a real window (headless gates flip
     /// <c>_warmCadenceEnabled</c> per-test).</summary>
     public float WarmCadenceHoldMs { get; set; } = 1000f;
+
+    /// <summary>Per-component render census for every frame (see <see cref="TreeReconciler.RenderCensusEnabled"/>): when
+    /// on, a frame whose flush exceeds the panel's refresh interval carries the top offenders on <see cref="FrameStats.Census"/>.
+    /// App-settable via <c>AppOptions.RenderCensus</c>; an app that logs every slow frame turns it on for the session.</summary>
+    public bool RenderCensus
+    {
+        get => _reconciler.RenderCensusEnabled;
+        set => _reconciler.RenderCensusEnabled = value;
+    }
     private bool _warmCadenceEnabled;
     private double _warmCadenceUntilMs;
 
@@ -569,6 +698,10 @@ public sealed class AppHost : IDisposable
     /// delivered at the top of the next frame so handlers may freely mutate the theme / write signals. App code reacts by
     /// re-reading the OS state and calling <see cref="RequestThemeTransition"/> (typically only while it follows the OS).
     /// Wired from <see cref="FluentGpu.Pal.IPlatformApp.SystemColorsChanged"/>; never fires under the headless PAL.</summary>
+    /// <summary>Raised on the UI thread at the end of every RENDERED frame with that frame's <see cref="FrameStats"/>
+    /// (phase times included). A struct argument, so the invoke allocates nothing; handlers must be cheap — they run
+    /// inside the frame, after present has been handed off.</summary>
+    public event Action<FrameStats>? FrameCompleted;
     public event Action? SystemColorsChanged;
 
     /// <summary>
@@ -742,11 +875,94 @@ public sealed class AppHost : IDisposable
         else uiGpuWork();
     }
 
+    /// <summary>Arm this frame's one-shot present pacing (render thread, immediately before the submit that consumes it).
+    /// Deliberately NOT armed for a frame the byte-identical skip elides — a suppress-once flag left standing would be
+    /// spent by an unrelated later present.</summary>
+    private void ApplyPresentPacing(in Threading.RenderFrame rf)
+    {
+        if (rf.SuppressVsync) { _device.SuppressVsyncOnce(); _device.SuppressLatencyWaitOnce(); }
+        else if (rf.InteractivePresent) _device.SuppressVsyncOnce();
+    }
+
+    /// <summary>The render thread's byte-identical-frame elision, as a pure decision (unit-tested; see
+    /// <c>RenderLifecycleTests</c>). True ⇒ the already-presented front buffer is still correct: the recorded stream
+    /// hashes to the last SUBMITTED one, the frame's repaint set is empty (no rects and no forced-full cause), no
+    /// clock-driven pixels are live (compositor poses, image crossfades), and no popup window rides this turn.
+    /// <paramref name="lastPresentedHash"/> 0 means "no baseline yet" and never skips.</summary>
+    internal static bool ShouldSkipRenderSubmit(ulong drawListHash, ulong lastPresentedHash, bool repaintPending,
+                                                bool clockActive, bool hasPopupWindows)
+        => lastPresentedHash != 0UL && drawListHash == lastPresentedHash
+           && !repaintPending && !clockActive && !hasPopupWindows;
+
+    // ── popup swapchain work, posted UI → render thread ──────────────────────────────────────────────────────────────
+    // The render thread is the sole ComPtr owner, so a popup Resize/ConfigurePopupChrome/AnimatePopupClose used to park
+    // it (Quiesce) from the UI. Those calls fire on EVERY pointer move over an open flyout, so the park was a per-frame
+    // UI stall of up to one submit+present. They ride this single-producer/single-consumer mailbox instead, drained at
+    // the top of SubmitPresentOnRenderThread — i.e. on the same turn that records + presents the popup. Two lists that
+    // swap (never re-new) keep it allocation-free after the first flyout; the lock is uncontended and off the hot path.
+    private enum PopupRenderOp : byte { ResizeAndChrome, AnimateClose }
+
+    private readonly record struct PopupRenderAction(PopupRenderOp Op, ISwapchain Swapchain, Size2 Size, PopupChromeMetrics Chrome);
+
+    private readonly object _popupActionLock = new();
+    private List<PopupRenderAction> _popupActionsIn = new(4);
+    private List<PopupRenderAction> _popupActionsOut = new(4);
+
+    private void PostPopupRenderAction(in PopupRenderAction action)
+    {
+        lock (_popupActionLock) _popupActionsIn.Add(action);
+    }
+
+    /// <summary>Render thread: apply every popup swapchain mutation the UI posted since the last turn, in order.</summary>
+    private void DrainPopupRenderActions()
+    {
+        lock (_popupActionLock)
+        {
+            if (_popupActionsIn.Count == 0) return;
+            (_popupActionsIn, _popupActionsOut) = (_popupActionsOut, _popupActionsIn);
+        }
+        for (int i = 0; i < _popupActionsOut.Count; i++)
+        {
+            ref readonly var a = ref CollectionsMarshal.AsSpan(_popupActionsOut)[i];
+            switch (a.Op)
+            {
+                case PopupRenderOp.ResizeAndChrome:
+                    a.Swapchain.Resize(a.Size);
+                    a.Swapchain.ConfigurePopupChrome(a.Chrome);
+                    break;
+                case PopupRenderOp.AnimateClose:
+                    a.Swapchain.AnimatePopupClose();
+                    break;
+            }
+        }
+        _popupActionsOut.Clear();   // retains capacity
+    }
+
+    /// <summary>UI thread, with the render loop PARKED (or absent): drop every queued action naming
+    /// <paramref name="swapchain"/>, so a popup disposed this turn can never be touched by a stale posted action.</summary>
+    private void PurgePopupRenderActions(ISwapchain? swapchain)
+    {
+        lock (_popupActionLock)
+        {
+            if (swapchain is null) { _popupActionsIn.Clear(); return; }
+            for (int i = _popupActionsIn.Count - 1; i >= 0; i--)
+                if (ReferenceEquals(_popupActionsIn[i].Swapchain, swapchain)) _popupActionsIn.RemoveAt(i);
+        }
+    }
+
     private void SubmitPresentOnRenderThread(Threading.RenderFrame rf)
     {
         Threading.ThreadGuard.AssertRender();
+        // Popup swapchain create/resize/chrome work the UI posted for this thread. FIRST — before the early-out and
+        // before RecordPopups reads those swapchains — so a flyout's per-frame re-place lands on the same turn that
+        // presents it, without the UI ever parking this loop for it (the old Quiesce per pointer move).
+        DrainPopupRenderActions();
+        if (!_renderSeam.IsCurrentTarget(rf)) return;
         try
         {
+            int feedbackSize = 0;
+            int settledPoses = 0;
+            bool presented = true;
             // Step 1 (async): stage uploads / free evictions on the render thread, BEFORE the submit opens its command list —
             // so a texture is resident before the draw that references it, and the store stays single-toucher (no lock).
             // INSIDE the try (deliberately): the staging path touches the device exactly like submit/present does, so a
@@ -754,12 +970,113 @@ public sealed class AppHost : IDisposable
             // which is how "Image.CreateUpload failed: 0x887A0005" left the fgpu-render thread as an unobserved
             // background exception and killed the process. The backend also soft-fails staging now (it rejects instead
             // of throwing) — this is the belt to that suspenders.
-            if (_imageQueue is { } q) _device.DrainImageJobs(q);
-            if (rf.SuppressVsync) { _device.SuppressVsyncOnce(); _device.SuppressLatencyWaitOnce(); }
-            else if (rf.InteractivePresent) _device.SuppressVsyncOnce();
-            _device.SubmitDrawList(_renderSeam.Bytes(rf), _renderSeam.SortKeys(rf), in rf.Submit, _swapchain);
-            _swapchain.Present();
-            NotePresented(rf.PublishSeq);
+            if (_imageQueue is { } q)
+            {
+                if (rf.HasScene) q.SetSceneReader(this, _renderSeam.Scene(rf).Images);
+                _device.DrainImageJobs(q);
+            }
+            if (rf.HasScene)
+            {
+                var sceneFrame = _renderSeam.Scene(rf);
+                double nowMs = Stopwatch.GetTimestamp() * 1000.0 / Stopwatch.Frequency;
+                bool fresh = rf.PublishSeq != _lastRecordedScene;
+                if (fresh)
+                {
+                    _imagePauseDurationMs = 0;
+                    _renderAnimations.Adopt(sceneFrame.Animations, sceneFrame.Scene, nowMs);
+                    _lastSettledPoseCount = 0;
+                }
+                else _renderAnimations.Tick(sceneFrame.Scene, nowMs);
+                _activeRenderFrame = rf;
+                _hasActiveRenderFrame = true;
+                // Publications the consumer never adopted. A DIAGNOSTIC now, on both sides: the store keeps its
+                // record-dirty bits and its pending-removal ledger until a publication is CONSUMED, so this capture
+                // already carries the union of everything that changed since the last adopted one — a gap neither
+                // kills span reuse nor seeds root damage. It is still REPORTED (the FrameStats.PublicationGaps
+                // census a frame-stats consumer reads) because a sustained climb means the render thread is behind.
+                bool publicationGap = fresh && rf.PublishSeq > _lastRecordedScene + 1;
+                if (publicationGap)
+                    Interlocked.Add(ref _publicationGaps, (long)(rf.PublishSeq - _lastRecordedScene - 1));
+                long recordStart = Stopwatch.GetTimestamp();
+                var stats = sceneFrame.Record(_renderCommands, _renderSpans, publicationGap);
+                double recordMs = ToMs(Stopwatch.GetTimestamp() - recordStart);
+                _lastRecordedScene = rf.PublishSeq;
+                // §13.1 repaint set for THIS submit: what the recorder actually dirtied, unioned with what only the UI
+                // could see (first frame / resize / DPI / clear-color / image content / live crossfades) — which the
+                // publisher also carries forward across skipped publications. Full only for the named causes below.
+                var repaint = stats.RepaintDamage;
+                repaint.Union(rf.Submit.RepaintDamage);
+                if (rf.TargetEpoch != _lastRenderedTargetEpoch)
+                {
+                    // First frame on this target, or the UI re-created/resized it: nothing on the target is trustworthy.
+                    // The publisher forces the same thing off its own LastConsumedTargetEpoch; ForceFull keeps the FIRST
+                    // reason, so agreeing twice is idempotent — and this arm also covers the very first frame.
+                    repaint.ForceFull(RepaintFullReason.TargetInvalidated);
+                    _lastRenderedTargetEpoch = rf.TargetEpoch;
+                }
+                else if (!fresh) repaint.ForceFull(RepaintFullReason.DetachedContent);   // clock-driven re-record: no scene bit describes it
+                float imageClockMs = RenderImageClock(rf, sceneFrame);
+                ulong dlHash = DrawListHash(_renderCommands.Bytes, _renderCommands.SortKeys);
+                // Skip-submit (idle/slow-change power): a byte-identical stream with an EMPTY repaint region and no
+                // clock-driven work is ALREADY on screen — the presented front buffer is still correct, so elide the
+                // GPU submit + Present. The feedback publish still rides (compositor poses / video rects / popup
+                // reveal gating are UI lifecycle, not pixels).
+                bool clockActive = _renderAnimations.HasActive || sceneFrame.Images.HasCrossfades(imageClockMs);
+                bool skip = ShouldSkipRenderSubmit(dlHash, _lastRenderPresentedHash, repaintPending: !repaint.IsEmpty,
+                    clockActive: clockActive, hasPopupWindows: Volatile.Read(ref _popupWindowCount) != 0);
+                var submit = rf.Submit with
+                {
+                    Damage = stats.Damage,
+                    ImageClockMs = imageClockMs,
+                    RepaintDamage = repaint,
+                    DrawListHash = dlHash,
+                };
+                if (skip)
+                {
+                    presented = false;
+                    Interlocked.Increment(ref _framesSkippedSubmit);
+                }
+                else
+                {
+                    ApplyPresentPacing(in rf);
+                    _device.SubmitDrawList(_renderCommands.Bytes, _renderCommands.SortKeys, in submit, _swapchain);
+                    sceneFrame.RecordPopups(_device, submit.Scale, submit.ImageClockMs);
+                    _lastRenderPresentedHash = dlHash;   // §5.2 Fix A: every SUBMITTED stream becomes the elision baseline
+                }
+                var poses = _renderAnimations.Feedback;
+                Threading.RecordingFeedback feedback = new()
+                {
+                    SceneSequence = rf.PublishSeq, Stats = stats, PoseCount = poses.Length,
+                    CommandCount = _renderCommands.CommandCount,
+                    RecordMs = recordMs,
+                };
+                feedback.VideoCount = sceneFrame.Scene.Recording.CopyVideoRects(feedback.VideoRects);
+                int headerSize = System.Runtime.CompilerServices.Unsafe.SizeOf<Threading.RecordingFeedback>();
+                int size = headerSize + poses.Length * System.Runtime.CompilerServices.Unsafe.SizeOf<CompositorAnimationPose>();
+                if (_feedbackBytes.Length < size) Array.Resize(ref _feedbackBytes, Math.Max(size, _feedbackBytes.Length * 2));
+                Span<byte> bytes = _feedbackBytes.AsSpan(0, size);
+                MemoryMarshal.Write(bytes, in feedback);
+                MemoryMarshal.AsBytes(poses).CopyTo(bytes[headerSize..]);
+                feedbackSize = size;
+                foreach (ref readonly var pose in poses) if (pose.Done) settledPoses++;
+            }
+            else
+            {
+                ApplyPresentPacing(in rf);
+                _device.SubmitDrawList(_renderSeam.Bytes(rf), _renderSeam.SortKeys(rf), in rf.Submit, _swapchain);
+            }
+            if (presented)
+            {
+                _swapchain.Present();
+                NotePresented(rf.PublishSeq);
+            }
+            if (feedbackSize != 0)
+            {
+                // Import only successfully presented poses; failed presents must not complete UI lifecycles.
+                _recordFeedback.Publish(_feedbackBytes.AsSpan(0, feedbackSize), default, default);
+                if (settledPoses > _lastSettledPoseCount) _window.Wake();
+                _lastSettledPoseCount = settledPoses;
+            }
             // 11.5 (threaded) — the video hole-punch drain rides THIS present turn on the presenting thread, mirroring
             // the sync path's after-present ordering (AppHost.Paint phase 11.5). Both GetVideoPresenter and every
             // presenter call assert the render/submit thread when render-confined, so the drain MUST run here, not
@@ -782,11 +1099,40 @@ public sealed class AppHost : IDisposable
 
     private void RecoverDeviceAfterDump()
     {
+        _renderSeam.InvalidateTarget();
         _deviceLostRecoveryCount++;
         DumpDeviceLostFrames(null, "async-render");
         _device.DumpDeviceLostDiagnostics(WriteDeviceLostLine);
         _device.RecoverDevice();
         ResetAdaptiveGpuGovernor();
+    }
+
+    private void ImportRecordingFeedback()
+    {
+        if (!_recordFeedback.TryAcquire(out var frame)) return;
+        var feedback = MemoryMarshal.Read<Threading.RecordingFeedback>(_recordFeedback.Bytes(frame));
+        _lastRecordStats = feedback.Stats;
+        _lastRecordedCommandCount = feedback.CommandCount;
+        _lastRenderRecordMs = feedback.RecordMs;
+        _lastRecordedFeedbackScene = feedback.SceneSequence;
+        var poseBytes = _recordFeedback.Bytes(frame)[System.Runtime.CompilerServices.Unsafe.SizeOf<Threading.RecordingFeedback>()..];
+        var poses = MemoryMarshal.Cast<byte, CompositorAnimationPose>(poseBytes)[..feedback.PoseCount];
+        _anim.ApplyCompositorFeedback(poses);
+        foreach (ref readonly var pose in poses) if (pose.Done) { _frameNeeded = true; break; }
+        _scene.Recording.ImportVideoRects(((ReadOnlySpan<RectF>)feedback.VideoRects)[..feedback.VideoCount]);
+        // A popup stays hidden until the render thread recorded its first coherent scene publication AND that
+        // publication's popup pass actually PRESENTED content into the popup's composition surface
+        // (ISwapchain.HasPresentedContent). The sequence alone is not evidence of painted pixels: the feedback is
+        // published whether or not the popup's own present landed, so revealing on the sequence could show the popup
+        // as its frosted composition chrome with an empty content surface — the "empty flyout". The reveal is now
+        // driven by the paint, and WakeReasons.PopupAnim keeps a frame owed until that paint happens.
+        for (int i = 0; i < _popupWindows.Count; i++)
+        {
+            var popup = _popupWindows[i];
+            if (!popup.Window.IsShown && popup.Swapchain is { HasPresentedContent: true }
+                && popup.FirstSceneSequence != 0 && popup.FirstSceneSequence <= feedback.SceneSequence)
+                popup.Window.Show();
+        }
     }
 
     private bool TryRecoverForegroundDeviceLost(Exception ex, int clicks)
@@ -1421,6 +1767,7 @@ public sealed class AppHost : IDisposable
             var child = list[i];
             if (child._renderSeam.TryAcquire(out var rf))
                 child.SubmitPresentOnRenderThread(rf);
+            else child.RenderMotion();
         }
     }
 
@@ -1855,7 +2202,7 @@ public sealed class AppHost : IDisposable
     // spring track is seeded yet, and only the skeleton's LOOP shimmer runs) reads as all-loop → throttles to the 30 Hz
     // ambient cap, so the detail page mounts at 30 Hz and the transition stalls before the spring starts — the residual
     // "connected animation is sometimes laggy." Keeping the whole transition at display rate mounts the dest ~4× faster.
-    private bool AnimIsAmbient() => !_connected.HasActive && (!_anim.HasActive || (_anim.LoopTrackCount == _anim.TrackCount && !_anim.DisplayRateActive));
+    private bool AnimIsAmbient() => !_connected.HasActive && (!_anim.HasUiWork || (_anim.LoopTrackCount == _anim.TrackCount && !_anim.DisplayRateActive));
 
     /// <summary>Milliseconds to wait before the next AMBIENT-animation frame so the loop holds the rate
     /// <see cref="DeriveAmbientFps"/> resolves from <see cref="AmbientRate"/> (an explicit
@@ -2002,7 +2349,7 @@ public sealed class AppHost : IDisposable
         if (_scene.HasDynamicText) r |= WakeReasons.DynamicText;
         // Anim wake: Cadence/NextDueMs — Driven-only rows are event-woken (signal write), not timer-due. HasActive alone
         // used to pin the host at panel rate for a paused Driven playhead; NextDueMs returns +∞ for that case.
-        if (_connected.HasActive || (_anim.HasActive && _anim.NextDueMs(_timers.NowMs) <= 0f))
+        if (_connected.HasActive || (_anim.HasUiWork && _anim.NextDueMs(_timers.NowMs) <= 0f))
             r |= WakeReasons.Anim;   // connected fly / snapshot awaiting dest; hover/press fades are now _anim tracks too
         // A posted-but-undrained kernel command (a wheel notch, a ScrollTo, a producer delta) IS pending scroll work: the
         // kernel ticks inside Paint, so the port's backlog must wake a frame exactly like an armed body does.
@@ -2013,13 +2360,13 @@ public sealed class AppHost : IDisposable
         if (_window.ScrollProducerLive) r |= WakeReasons.ScrollProducer;
         if (_repeat.HasActive) r |= WakeReasons.Repeat;
         if (_caretBlinker.HasActive) r |= WakeReasons.Caret;
-        if (_scene.HasBrushAnims) r |= WakeReasons.BrushAnims;
+        if (!_anim.RenderOwnsCompositor && _scene.HasBrushAnims) r |= WakeReasons.BrushAnims;
         if (_images.HasReadyCompletions) r |= WakeReasons.ImageReady;
         if (_device.HasPendingUploads) r |= WakeReasons.ImagesPending;
         if (_device.TextRepaintPending) r |= WakeReasons.TextRepaintPending;
         if (_bakedBlurQueue.HasJobs) r |= WakeReasons.BakedBlurPending;
-        if (_images.HasActiveCrossfades) r |= WakeReasons.ImageCrossfades;
-        if (_scene.OrphanCount > 0) r |= WakeReasons.Orphans;
+        if (!_anim.RenderOwnsCompositor && _images.HasActiveCrossfades) r |= WakeReasons.ImageCrossfades;
+        if (!_anim.RenderOwnsCompositor && _scene.OrphanCount > 0) r |= WakeReasons.Orphans;
         if (_dispatcher.Drag.HasActiveWork || _dispatcher.DragDrop.HasActiveWork
             || _dragSettlePhase != DragSettlePhase.None) r |= WakeReasons.DragDropWork;   // E5: ghost spring easing / edge auto-scroll / chip settle
         if (_dispatcher.Drag.IsActive) r |= WakeReasons.DragActive;   // E5 reorder dwell keep-alive: a live drag keeps frames coming so the 200/300ms FrameClock dwell tickers advance even on a motionless pointer (DragController.cs:118)
@@ -2034,8 +2381,17 @@ public sealed class AppHost : IDisposable
         // A windowed popup's desktop-acrylic open reveal is driven per-frame on Present (CompositionBackdrop.TickAnimation),
         // so it needs the loop to keep presenting until it settles — otherwise (no engine animation active for windowed
         // menus) the loop idle-skips and the reveal freezes at its seed. O(popups) ≈ O(1) (typically 0–1 menus open).
+        //
+        // A popup that has not yet PRESENTED content owes a frame for the same reason, and it is the stronger claim: its
+        // window is still hidden waiting for that paint (see the reveal gate in ImportRecordingFeedback /
+        // RecordPopupWindows), so if the loop idled here the popup would never appear at all — and if it were revealed
+        // anyway it would be a frosted plate with nothing in it. Clears with the first present, which is the frame after
+        // the lease in the normal case.
         for (int i = 0; i < _popupWindows.Count; i++)
-            if (_popupWindows[i].Swapchain?.PopupAnimating == true) { r |= WakeReasons.PopupAnim; break; }
+        {
+            if (_popupWindows[i].Swapchain is not { } psc) continue;
+            if (psc.PopupAnimating || !psc.HasPresentedContent) { r |= WakeReasons.PopupAnim; break; }
+        }
         if (_inputHooks.HasAfterAnimationWork?.Invoke() == true) r |= WakeReasons.PopupAnim;
         // Frame-clock timers: a DUE timer forces exactly the frame that fires it; a pending-but-future timer sets NO bit
         // (the loop still idles — RecommendedWaitMs shapes the wait to reach it). Warm-cadence keeps the loop rendering
@@ -2057,7 +2413,7 @@ public sealed class AppHost : IDisposable
     // already expose are reused; these surface the rest. All passive O(1) reads.
     internal StringTable Strings => _strings;
     internal TreeReconciler Reconciler => _reconciler;
-    /// <summary>Last <c>FG_RENDER_CENSUS</c> spike dump (empty when census off or no spike this frame).</summary>
+    /// <summary>Last <see cref="RenderCensus"/> spike dump (empty when census off or no spike this frame).</summary>
     public string LastRenderCensusDump => _reconciler.LastRenderCensusDump;
     internal int InteractionAnimatorCensus => _anim.HoverPressTrackCount;   // hover/press are now engine HoverFade/PressFade tracks (InteractionAnimator deleted)
     // Combined census: the kernel's own ActiveCount (drag/ballistic/snap bodies still advancing) PLUS the chrome
@@ -2144,12 +2500,9 @@ public sealed class AppHost : IDisposable
             ? RenderLoopMode.SingleThread
             : (loopModeOverride ?? RenderLoopMode.Async);
         _asyncActive = _loopMode == RenderLoopMode.Async && window.Handle.Kind != NativeHandleKind.Headless;   // headless never goes async (see field)
-        // Step 3 (async): windowed out-of-bounds popups submit + present on the UI thread (RecordPopupWindows), sharing
-        // the one device/queue/fence/command-list with the render thread — a concurrent submit source that would race the
-        // async loop and defeat the device-level submit/present confinement assert. Gate them OFF under async: flyouts/menus
-        // fall back to in-window clamped placement (the overlay's existing fallback). Removes the last UI-thread GPU submit,
-        // making the Step 0 assert unconditionally valid. Default + force-sync keep windowed popups (no async overlap).
-        PopupWindowsEnabled = (window.Handle.Kind == NativeHandleKind.Headless || device.SupportsSecondarySwapchains) && !_asyncActive;
+        // Popup targets are captured into the same scene publication and recorded/presented by the owning render
+        // thread. UI target creation/resize/destruction is parked, so async no longer needs an in-window fallback.
+        PopupWindowsEnabled = window.Handle.Kind == NativeHandleKind.Headless || device.SupportsSecondarySwapchains;
         _device = device;
         _maxFrameLatency = device.MaxFrameLatency;
         _root = root;
@@ -2163,7 +2516,7 @@ public sealed class AppHost : IDisposable
                  sbLeft = strings.Intern(IconGlyphs.CaretLeftSolid8), sbRight = strings.Intern(IconGlyphs.CaretRightSolid8),
                  sbFam = strings.Intern(Theme.IconFont);
         strings.AddRef(sbUp); strings.AddRef(sbDown); strings.AddRef(sbLeft); strings.AddRef(sbRight); strings.AddRef(sbFam);
-        SceneRecorder.ConfigureScrollbarArrowGlyphs(sbUp, sbDown, sbLeft, sbRight, sbFam);
+        SceneRecorder.ConfigureScrollbarArrowGlyphs(_scene, sbUp, sbDown, sbLeft, sbRight, sbFam);
         _images = images ?? new ImageCache(new FakeImageDecoder());
         _isHeadless = window.Handle.Kind == NativeHandleKind.Headless;
         _frameTime = frameTime ?? (_isHeadless ? new FixedFrameTimeSource() : new StopwatchFrameTimeSource());
@@ -2420,7 +2773,7 @@ public sealed class AppHost : IDisposable
             _images.SetCompletionWake(_window.Wake);
             _bakedBlurQueue.SetCompletionWake(_window.Wake);
             _device.SetBakedBlurQueue(_bakedBlurQueue);
-            if (_asyncActive)
+            if (_loopMode is (RenderLoopMode.ForceSync or RenderLoopMode.Async))
             {
                 // ASYNC (Step 1): the UI thread must not touch the device. The pixel sink COPIES the transient decode pixels
                 // into a rented ArrayPool buffer and enqueues it (optimistically admitting Ready); the render thread stages it
@@ -2449,6 +2802,8 @@ public sealed class AppHost : IDisposable
                 WakeFrame();
             };
         }
+
+        if (_isDetachedChild) _imageQueue = _images.RecordingUploadQueue;
 
         // Publish ambient contexts before the first render so UseContext(Viewport.Size)/FrameDiagnostics resolve.
         _lastViewportDip = ClientSizeDip();
@@ -2500,7 +2855,8 @@ public sealed class AppHost : IDisposable
             if (_asyncActive) { _deviceLost = new Threading.DeviceLostCoordinator(); _device.EnableAsyncDeviceLostSignaling(); }
             _renderThread = new Threading.RenderThread(_renderSeam, SubmitPresentOnRenderThread, async: _asyncActive,
                 deviceLost: _deviceLost, recover: _deviceLost is null ? null : RecoverDeviceAfterDump, windowWake: _deviceLost is null ? null : _window.Wake,
-                extraDrain: DrainChildRenderSources);
+                extraDrain: DrainChildRenderSources, needsTick: HasRenderMotion, tick: RenderMotion,
+                tickPeriod: RenderPeriodTicks, displayClock: _window.CreateRenderDisplayClock());
             _device.MarkRenderConfined();
         }
 
@@ -2616,6 +2972,7 @@ public sealed class AppHost : IDisposable
     /// <summary>Run one full frame: pump + input, then paint (the reactive flush + layout + record happen in Paint).</summary>
     public FrameStats RunFrame()
     {
+        ImportRecordingFeedback();
         // Seam confinement backstop: the frame pump IS the UI thread. Bind it (idempotent) + assert. Both are
         // [Conditional("FGGUARD")] — live in Debug/CI (proves single-UI-thread ownership), erased from Release/Ship.
         Threading.ThreadGuard.BindCurrent(Threading.ThreadGuard.ThreadRole.Ui);
@@ -2794,6 +3151,7 @@ public sealed class AppHost : IDisposable
             if (_warmCadenceEnabled && WarmCadenceHoldMs > 0f)
                 _warmCadenceUntilMs = _timers.NowMs + WarmCadenceHoldMs;
         }
+        long minimizedReactiveDeadline = 0;
         if (_wasMinimized != minimized)
         {
             // Window-visibility EDGE → update the Activation.IsActive signal so every component's UseIsActive flips and
@@ -2801,7 +3159,9 @@ public sealed class AppHost : IDisposable
             // so flush ONCE here (one-shot, on the edge only — not per idle frame) so onDeactivated runs while invisible.
             // The restore edge forced _frameNeeded above, so its onActivated rides Paint's normal flush.
             UpdateWindowVisible();
-            if (minimized) _runtime.Flush();
+            Volatile.Write(ref _renderVisible, minimized ? 0 : 1);
+            OwningRenderThread?.WakeAsync();
+            if (minimized) FlushHosted(ref minimizedReactiveDeadline);
         }
         _wasMinimized = minimized;
         if (minimized)
@@ -2811,7 +3171,7 @@ public sealed class AppHost : IDisposable
             // accumulator: the posted signal writes are applied (memos recompute, effects run, components re-render into
             // the scene) instead of piling up until the restore frame. Same intent as the minimize-EDGE flush above, now
             // per drained minimized frame; a frame with nothing drained costs nothing.
-            if (drainedPosts) _runtime.Flush();
+            if (drainedPosts || _runtime.HasPending) FlushHosted(ref minimizedReactiveDeadline);
             LastStats = new FrameStats(0, clicks, 0, Rendered: false) { Fps = _fps, PresentFps = _presentFps, PresentedSequence = this.PresentedSequence, FrameMs = _frameMs };
             // Awake-but-skipped: counts toward _framesRun + _framesMinimized (rendered:false), the wake-diag's
             // "frames spent minimized" signal. wake is recomputed here since the s_wakeDiag snapshot is below.
@@ -2918,6 +3278,9 @@ public sealed class AppHost : IDisposable
         Threading.ThreadGuard.BindCurrent(Threading.ThreadGuard.ThreadRole.Ui);
         if (_inPaint) { _frameAfterPaint = true; return LastStats; }
         _inPaint = true;
+        _anim.RenderOwnsCompositor = OwningRenderThread is not null;
+        Volatile.Write(ref _renderPeriodTicks, RefreshPeriodQpcOrDefault());
+        long reactiveDeadline = 0;
         // Publish the effective device scale for scroll content-transform device-pixel rounding (before reconcile/layout).
         _scene.DeviceScale = _window.Scale <= 0f ? 1f : _window.Scale;
         _reconciler.FrameEpoch++;   // one tick per paint — caps a warming virtual list's cold-realize grow to 1 batch/frame
@@ -2956,6 +3319,7 @@ public sealed class AppHost : IDisposable
             }
 
             long frameStart = Stopwatch.GetTimestamp();
+            long shapeCountAtFrameStart = _fonts.ShapeCount;   // P0: FrameStats.TextShapes reads the delta across this Paint
             if (ScrollBindEval.PerfEnabled) ScrollBindEval.BeginPerfFrame(_scene);
             _reconciler.BeginRenderCensus();
             Motion.SetLayoutTransitionsSuppressed(MotionSuppressionSource.WindowResize, _window.InModalLoop);
@@ -3018,7 +3382,7 @@ public sealed class AppHost : IDisposable
             {
                 WakeReasons stepUp = ComputeWakeReasons();
                 if ((stepUp & EffectiveLatencySensitiveWake(frameStart)) != 0
-                    || (_anim.HasActive && !AnimIsAmbient()) || _connected.HasActive
+                    || (_anim.HasUiWork && !AnimIsAmbient()) || _connected.HasActive
                     || (_runtime.HasPending && !_lastWaitWasDisplayRate))
                     _frameTime.Resync();
             }
@@ -3133,6 +3497,7 @@ public sealed class AppHost : IDisposable
                     $"[motion-diag] frame={_frameOrdinal} keepAlive={keepAlive} resized={resized} hasPending={_runtime.HasPending} needFullLayout={_needFullLayout} capture={_projectBefore.Count} suppressed={Motion.LayoutTransitionsSuppressed}");
 
             long before = GC.GetAllocatedBytesForCurrentThread();
+            _rebindFlushAllocBytesThisFrame = 0;   // P0: FrameStats.RebindFlushAllocBytes accumulates across this Paint's FlushRebindsToQuiescence call(s)
 
             // Drain cross-thread UI posts so their signal writes land in THIS flush. RunFrame already drained them above
             // its minimize/idle gates, so on the normal frame path this is a no-op on an empty queue; it earns its keep on
@@ -3230,28 +3595,36 @@ public sealed class AppHost : IDisposable
             try
             {
                 long tRx0 = Stopwatch.GetTimestamp();
-                _runtime.Flush();                              // 3–5 apply scheduled re-renders (render-effects reconcile) + bindings
+                // E4d: what a freshly realized row COSTS lands in this section, not in the realize walk — a component
+                // row's walk mounts one node and the render happens in the flush below. The cold-realize ramp is sized
+                // from that cost, so the window it is measured over is the section, opened here and closed after the
+                // rebind quiescence (TreeReconciler.BeginGrowMeasurement).
+                _reconciler.BeginGrowMeasurement();
+                FlushHosted(ref reactiveDeadline);                              // 3–5 apply scheduled re-renders (render-effects reconcile) + bindings
                 _scrollKernel.Reclamp();                       // 5.5: mount-time Restore/Bind/SetFrame land before ReRealizeVirtuals sees them (§3.3 item 2)
                 long tRx1 = Stopwatch.GetTimestamp();
                 virtualsChanged = _reconciler.ReRealizeVirtuals(_frameBudget.DeadlineTicks);   // virtual boundary re-realize (granular); budget-bounded while Drag/Ballistic (§4)
                 long tVr1 = Stopwatch.GetTimestamp();
-                if (virtualsChanged && _runtime.HasPending) _runtime.Flush();   // bound-row rebinds (slot signal writes) land THIS frame
+                if (virtualsChanged && _runtime.HasPending) FlushRebindsToQuiescence();   // bound-row rebinds (slot signal writes) land THIS frame — unbudgeted
                 long tRx2 = Stopwatch.GetTimestamp();
+                _reconciler.SettleGrowMeasurement();
                 reactiveFlushMs = ToMs(tRx1 - tRx0) + ToMs(tRx2 - tVr1);
                 virtualRealizeMs = ToMs(tVr1 - tRx1);
                 // Fix C (§5.2): absorb pre-flush mid-paint wakes. Timer drain / UI-post Batch close inside Paint fires
                 // FrameRequested → WakeFrame → _frameAfterPaint while _inPaint, but THIS flush already applied those
                 // writes. Clearing here leaves post-flush WakeFrame sites (passive effects, popups, theme, …) intact.
-                _frameAfterPaint = false;
+                _frameAfterPaint = _runtime.HasPending;
             }
             finally { if (themeChanged) _reconciler.SetThemeTransition(float.NaN); }
             bool reconciled = _reconciler.ConsumeReconciled() || virtualsChanged;
             long tFlush = Stopwatch.GetTimestamp();   // always-on segment timing (FrameStats.*Ms) — see below
-            // Spike-gated type roster (FG_RENDER_CENSUS): one line when FlushMs ≥ 12 or comps are high. Peek render
-            // count WITHOUT consuming it (ConsumeRenderCount runs later when assembling LastStats).
+            // Spike-gated type roster (RenderCensus): one line when the flush alone exceeded the panel's refresh interval
+            // or comps are high; carried on FrameStats.Census. Peek render count WITHOUT consuming it (ConsumeRenderCount
+            // runs later when assembling LastStats).
             int censusComps = _reconciler.PeekRenderCount();
-            _reconciler.MaybeDumpRenderCensus(ToMs(tFlush - frameStart), reactiveFlushMs, virtualRealizeMs, censusComps,
-                _scrollSummary.AnyMoved || Stopwatch.GetTimestamp() < _mainScrollHoldUntil);
+            double refreshIntervalMs = RefreshPeriodQpcOrDefault() * 1000.0 / Stopwatch.Frequency;
+            string? censusLine = _reconciler.MaybeDumpRenderCensus(refreshIntervalMs, ToMs(tFlush - frameStart), reactiveFlushMs,
+                virtualRealizeMs, censusComps, _scrollSummary.AnyMoved || Stopwatch.GetTimestamp() < _mainScrollHoldUntil);
             // Page-fill grace: this flush rendered a page's worth of components (a nav / structural mount), so the image
             // reveal it just kicked off is an ENTRANCE, not background churn — hold display-rate pacing across it. Reuses
             // the census count already peeked above (no new state read) and the frame's own timestamp.
@@ -3288,7 +3661,7 @@ public sealed class AppHost : IDisposable
                 // pre-layout ReRealizeVirtuals). Cold realize edge only — steady frames never enter the loop.
                 for (int realizePass = 0; realizePass < 2 && _reconciler.ReRealizeVirtuals(); realizePass++)
                 {
-                    if (_runtime.HasPending) _runtime.Flush(); // bound-slot rebinds (RowBind) land THIS frame
+                    if (_runtime.HasPending) FlushRebindsToQuiescence(); // bound-slot rebinds (RowBind) land THIS frame — unbudgeted
                     _reconciler.ConsumeReconciled();           // realize mounts are folded into this frame's layout
                     reconciled = true;
                     _invalidator.RunDirty(layoutSize);
@@ -3335,7 +3708,17 @@ public sealed class AppHost : IDisposable
                     var row = _scene.Parent(pn);
                     bool horiz = !row.IsNull && _scene.Layout(row).Direction == 0;
                     var nb = _scene.Bounds(pn);
-                    _anim.SeedReflowResize(pn, horiz, horiz ? fromW : fromH, horiz ? nb.W : nb.H, spec);
+                    float from = horiz ? fromW : fromH, to = horiz ? nb.W : nb.H;
+                    // ItemsView's ItemContainer is a default-Direction row wrapping a column slot. The grandparent
+                    // axis then picks WIDTH (unchanged) and this seed no-ops — the measured row snaps closed. If the
+                    // chosen axis didn't move, the other one is the disclosure axis.
+                    if (MathF.Abs(from - to) < 0.5f)
+                    {
+                        horiz = !horiz;
+                        from = horiz ? fromW : fromH;
+                        to = horiz ? nb.W : nb.H;
+                    }
+                    _anim.SeedReflowResize(pn, horiz, from, to, spec);
                 }
                 pex.Clear();
             }
@@ -3511,7 +3894,11 @@ public sealed class AppHost : IDisposable
             bool imageFadeActive = _images.HasActiveCrossfades;
             _imageCrossfadeWasActive = imageFadeActive;
             if (++_damageEpoch == 0) _damageEpoch = 1;   // nonzero (0 = "no carve-out info" sentinel for the compositor)
-            var recordStats = SceneRecorder.Record(_scene, _drawList, _images, in focus, Tok.ScrollThumb, Tok.AcrylicFlyout.Fallback, in textEdit,
+            bool recordOnRender = OwningRenderThread is not null;
+            var recordStats = _lastRecordStats;
+            if (!recordOnRender)
+            {
+            recordStats = SceneRecorder.Record(_scene, _drawList, _images, in focus, Tok.ScrollThumb, Tok.AcrylicFlyout.Fallback, in textEdit,
                 CollectionsMarshal.AsSpan(_popupSkipRoots), holdSelfBlurForAnyUserScroll: holdSelfBlurForScroll,
                 spans: _spanTable, spanReuseDisabled: spanDisable,
                 // Damage the band any structural-track cancel (drag-suppression snap @ ApplyProjections, resize snap @
@@ -3523,6 +3910,8 @@ public sealed class AppHost : IDisposable
             _anim.PendingStructuralDamage.Clear();   // retains capacity → no steady-state alloc
             SceneRecorder.RecordDetached(_scene, _drawList, _images, _connected.Detached, _scene.OverlayClip);   // 8 detached fly snapshots (flag-gated rebuild; no-op when none)
             RecordPopupWindows(in focus, in textEdit);         // 8b record each popup window's subtree DrawList
+            }
+            else RecordPopupWindows(in focus, in textEdit, prepareOnly: true);
             bool imageContentChanged = _recordedImageContentEpoch != _images.ContentEpoch;
             _recordedImageContentEpoch = _images.ContentEpoch;
             // 8b′ probe capture (WAVEE_LYRICS_ADVANCE_PROBE): snapshot the designated viewports' scroll state HERE — before
@@ -3551,9 +3940,9 @@ public sealed class AppHost : IDisposable
             if (transformWrote)
             {
                 if (recordStats.UnsnappedGlyphSpans > 0) _frameAfterPaint = true;
-                _scene.ClearTransformDirty();
+                if (!recordOnRender) _scene.ClearTransformDirty();
             }
-            _scene.ClearRecordDirty();
+            if (!recordOnRender) _scene.ClearRecordDirty();
             long tRecord = Stopwatch.GetTimestamp();
             if (s_allocDiag) { db = Probe(SegRecord, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
             // Modal-loop repaint (WM_EXITSIZEMOVE settle): present at SyncInterval 0 + skip the latency waitable so the
@@ -3569,7 +3958,7 @@ public sealed class AppHost : IDisposable
             // keep-alive, no interleaving popup windows). A playback playhead quantized to whole pixels (SeekBar) lands
             // on the same stream most frames, so this fires during play. Active image reveals resolve at replay time —
             // defeat skip-submit while fades are live.
-            bool maybeUnchanged = _everLaidOut && !resized && !keepAlive && _popupWindows.Count == 0
+            bool maybeUnchanged = !recordOnRender && _everLaidOut && !resized && !keepAlive && _popupWindows.Count == 0
                 && !reconciled && !layoutNeeded && !transformWrote
                 && !imageContentChanged
                 && !_device.HasPendingUploads
@@ -3618,15 +4007,23 @@ public sealed class AppHost : IDisposable
                 // the invalidations only it can see — an untrustworthy target (first frame / resize / DPI / device
                 // recovery), a clear-color change under a byte-identical stream (theme switch), and the two classes whose
                 // PIXELS move with no dirty bit at all (an image whose content epoch advanced under identical commands,
-                // and live crossfades driven by ImageClockMs). Nothing consumes the region yet — this is Phase A.
-                var repaint = recordStats.RepaintDamage;
+                // and live crossfades driven by ImageClockMs). The region is CONSUMED: it is the submitted
+                // FrameInfo.RepaintDamage, and an empty one is what lets a byte-identical frame elide its present.
+                // recordOnRender: the recorder runs on the render thread, so `recordStats` here is the PREVIOUS frame's
+                // imported feedback — its repaint region describes a frame that already presented and must NOT seed this
+                // one (it would pin every frame "dirty" and defeat the render-side elision). Seed only what the HOST can
+                // see; the render side unions in the region its own record produces.
+                RepaintDamageRegion repaint = recordOnRender ? default : recordStats.RepaintDamage;
                 if (!_repaintTargetValid || resized || Clear != _lastPublishedClear)
                     repaint.ForceFull(RepaintFullReason.TargetInvalidated);
                 if (imageContentChanged) repaint.ForceFull(RepaintFullReason.ImageContent);
                 if (_images.HasActiveCrossfades) repaint.ForceFull(RepaintFullReason.DetachedContent);
                 _repaintTargetValid = true;
                 _lastPublishedClear = Clear;
-                publishedRepaint = repaint;
+                // The STAT (not the submitted region). Under recordOnRender the frame's real repaint set is only known
+                // on the render thread, so report the renderer-owned region from the latest imported feedback — the
+                // same source as RenderRecordMs / RecordedSceneSequence, and consistent with them.
+                publishedRepaint = recordOnRender ? recordStats.RepaintDamage : repaint;
                 // §13.1 I1: the content fingerprint rides the seam so the backend's retained canvas can CHECK a
                 // "nothing changed" frame instead of trusting it. Hoisted above the publish from the skip-submit
                 // baseline update below — the same single hash, computed once, just earlier in the frame.
@@ -3642,7 +4039,42 @@ public sealed class AppHost : IDisposable
                     && gpuRenderMs > 0.0 && gpuRenderMs <= ScrollPresentGpuBudgetMs;
                 // Keep the returned seq: it is this frame's identity across the seam, and the ONLY thing that lets a
                 // present stamp be attributed back to the offsets this frame baked in (it was previously discarded).
-                _framePublishSeq = _renderSeam.Publish(_drawList.Bytes, _drawList.SortKeys, in submitInfo,
+                if (recordOnRender)
+                {
+                    var recordOptions = new Threading.SceneRecordOptions(focus, textEdit, Tok.ScrollThumb,
+                        Tok.AcrylicFlyout.Fallback, holdSelfBlurForScroll, spanDisable, _damageEpoch,
+                        RenderBudget.CompiledIn && RenderBudget.Enabled);
+                    _framePublishSeq = _renderSeam.PublishScene(_scene, _images, _strings, recordOptions,
+                        CollectionsMarshal.AsSpan(_popupSkipRoots), CollectionsMarshal.AsSpan(_reuseBlockRoots),
+                        CollectionsMarshal.AsSpan(_anim.PendingStructuralDamage), _connected.Detached, _popupWindows, _anim,
+                        submitInfo, suppressVsync: keepAlive, interactivePresent: interactivePresent);
+                    _lastPublishedSceneSeq = _framePublishSeq;
+                    _anim.PendingStructuralDamage.Clear();
+                    // NotePublished FIRST (P8): every store write from here on belongs to the NEXT publication, and the
+                    // capture ledger stamps by _publishSeq + 1 - including the ledger entries ClearTransformDirty and
+                    // ClearRecordDirty below produce for the flag/dirty-bit columns they zero.
+                    _scene.NotePublished(_framePublishSeq);
+                    _scene.ClearTransformDirty();   // per-frame: a motion HINT for the compositor, not a delta ledger
+                    // Record-dirty bits + the pending-removal ledger describe deltas since the last CONSUMED publication,
+                    // not since the last published one: a publication the render thread never adopted delivered nothing,
+                    // so its deltas must union into the next capture (that union is what keeps clean-span reuse valid
+                    // across a publication gap — the gap itself is then just a counter). Each entry is stamped with the
+                    // publication it belongs to, so only entries the renderer has adopted are dropped; the ones this
+                    // publication just carried stay until it is consumed, and union into the next capture if it is not.
+                    // Target invalidation needs no special case: the dropped publication is never consumed, so its
+                    // entries stay and the next capture is a full record against the fresh target anyway.
+                    // P8 adds a SECOND retention floor: the three publisher slots hold snapshots of three different
+                    // publications, and an incremental refresh of the OLDEST one needs every delta since ITS baseline.
+                    // So the ledgers are held to min(last CONSUMED publication, oldest SLOT baseline) - the older of
+                    // "what the renderer has adopted" and "what the staler snapshots still have to catch up on".
+                    ulong consumedSeq = _renderSeam.LastConsumedSeq;
+                    ulong oldestSlotSeq = _renderSeam.OldestSlotCaptureSeq;
+                    ulong retainSeq = Math.Min(consumedSeq, oldestSlotSeq);
+                    _scene.ClearPendingRemovals(retainSeq);
+                    _scene.ClearRecordDirty(retainSeq);
+                    _scene.ClearCaptureLedger(oldestSlotSeq);
+                }
+                else _framePublishSeq = _renderSeam.Publish(_drawList.Bytes, _drawList.SortKeys, in submitInfo,
                     suppressVsync: keepAlive, interactivePresent: interactivePresent);
                 if (_renderThread is not null)
                 {
@@ -3728,8 +4160,9 @@ public sealed class AppHost : IDisposable
 
             UpdateFrameTiming(frameStart);
             int componentsRendered = _reconciler.ConsumeRenderCount();
+            // Always-on: a frame-over-budget log needs "did a GC land inside this frame" without a flag (three
+            // CollectionCount reads — no allocation, sub-microsecond).
             int gc0 = 0, gc1 = 0, gc2 = 0;
-            if (s_fpsLog)
             {
                 int c0 = GC.CollectionCount(0), c1 = GC.CollectionCount(1), c2 = GC.CollectionCount(2);
                 if (_gcSnapInitialized) { gc0 = c0 - _prevGc0; gc1 = c1 - _prevGc1; gc2 = c2 - _prevGc2; }
@@ -3742,7 +4175,7 @@ public sealed class AppHost : IDisposable
             bool hasGpuProfile = _swapchain.TryGetGpuProfileSample(out GpuProfileSample gpuProfile);
             bool gpuProfileFresh = hasGpuProfile && gpuProfile.Sequence != _lastGpuProfileStatsSequence;
             if (gpuProfileFresh) _lastGpuProfileStatsSequence = gpuProfile.Sequence;
-            LastStats = new FrameStats(_drawList.CommandCount, clicks, hotAlloc, reconciled || layoutNeeded)
+            LastStats = new FrameStats(recordOnRender ? _lastRecordedCommandCount : _drawList.CommandCount, clicks, hotAlloc, reconciled || layoutNeeded)
             {
                 NodesVisited = recordStats.NodesVisited,
                 NodesCulled = recordStats.NodesCulled,
@@ -3767,6 +4200,11 @@ public sealed class AppHost : IDisposable
                 MeasureCount = _layout.DiagMeasure,
                 ArrangeCount = _layout.DiagArrange,
                 TextShapeMisses = _layout.DiagTextMiss,
+                TextShapes = (int)(_fonts.ShapeCount - shapeCountAtFrameStart),
+                CapturedNodes = recordOnRender ? _renderSeam.LastCapturedNodeCount : 0,
+                BindingFires = _reconciler.NodeBindingFireCount,
+                BindingWrites = _reconciler.NodeBindingWriteCount,
+                RebindFlushAllocBytes = _rebindFlushAllocBytesThisFrame,
                 ScopedRelayoutMarks = _invalidator.DirtyMarksThisFrame,
                 RootRelayoutEscapes = _invalidator.EscapesThisFrame,
                 Fps = _fps,
@@ -3785,6 +4223,8 @@ public sealed class AppHost : IDisposable
                 LocalRelayoutResolves = _invalidator.LocalResolvesThisFrame,
                 AnimMs = ToMs(tAnim - tLayout),         // phase-7 ticks + projections
                 RecordMs = ToMs(tRecord - tAnim),       // image pump + SceneRecorder (+ text shaping) + dyntext
+                RenderRecordMs = recordOnRender ? _lastRenderRecordMs : 0,
+                RecordedSceneSequence = recordOnRender ? _lastRecordedFeedbackScene : 0,
                 ImagePumpMs = ToMs(tImagePump - tAnim),            // of which: phase-7.5 decode apply/evict
                 ImageApplyCount = _images.LastPumpAppliedCount,
                 ImageApplyBytes = _images.LastPumpAppliedBytes,
@@ -3804,6 +4244,9 @@ public sealed class AppHost : IDisposable
                 GpuCompositeMs = hasGpuProfile ? gpuProfile.CompositeMs : 0.0,
                 Presented = !skipSubmit,
                 ScrollActive = scrollActive,
+                PublicationGaps = Interlocked.Read(ref _publicationGaps),
+                PresentedFrames = Interlocked.Read(ref _presentedFramesTotal),
+                MissedVsyncs = Interlocked.Read(ref _missedVsyncsTotal),
                 PublishSeq = _framePublishSeq,
                 LyricsScrollMode = probeLyMode,
                 LyricsUserScrollActive = probeLyUser,
@@ -3813,6 +4256,8 @@ public sealed class AppHost : IDisposable
                 Gc0Delta = gc0,
                 Gc1Delta = gc1,
                 Gc2Delta = gc2,
+                Census = censusLine,
+                RefreshIntervalMs = refreshIntervalMs,
                 StickyClipEvals = ScrollBindEval.PerfEnabled ? ScrollBindEval.StickyClipEvals : 0,
                 StickyClipDirties = ScrollBindEval.PerfEnabled ? ScrollBindEval.StickyClipDirties : 0,
                 StickyClipFullyHidden = ScrollBindEval.PerfEnabled ? ScrollBindEval.StickyClipFullyHidden : 0,
@@ -3820,6 +4265,7 @@ public sealed class AppHost : IDisposable
                 ContinuousDirties = ScrollBindEval.PerfEnabled ? ScrollBindEval.ContinuousDirties : 0,
                 ScrollBindCount = ScrollBindEval.PerfEnabled ? ScrollBindEval.ScrollBindCount : 0,
             };
+            FrameCompleted?.Invoke(LastStats);
             PublishFrameStats(LastStats);
             // Hitch attribution into the scroll trace (>12ms frames only): the per-phase split lands in the SAME CSV as
             // the offset writes, so a lurch is directly attributable (GPU fence stall vs realize vs record vs shaping).
@@ -3851,7 +4297,7 @@ public sealed class AppHost : IDisposable
         }
         finally
         {
-            _frameNeeded = false;
+            _frameNeeded = _runtime.HasPending;
             if (_frameAfterPaint) { _frameNeeded = true; _frameAfterPaint = false; }
             _inPaint = false;
             if (s_allocDiag)
@@ -3861,6 +4307,58 @@ public sealed class AppHost : IDisposable
                 DiagMaybeReport();
             }
         }
+    }
+
+    /// <summary>The turn's ONE budgeted flush (phase 3): opens the slice on first use and yields at it. Leftover work
+    /// keeps its queue and its dedup flags and continues on the next frame — <see cref="WakeFrame"/> only sets the
+    /// frame-needed flag, and the follow-up frame's own byte-identical elision keeps it from costing a present when it
+    /// changes nothing visible. Structural rebind flushes do NOT come here: see <see cref="FlushRebindsToQuiescence"/>.</summary>
+    private void FlushHosted(ref long deadline)
+    {
+        if (deadline == 0)
+            deadline = Stopwatch.GetTimestamp() + ReactiveSliceTicks(RefreshPeriodQpcOrDefault());
+        if (_runtime.Flush(deadline).HasPending) WakeFrame();
+    }
+
+    /// <summary>The post-realize rebind flush: UNBUDGETED, runs to quiescence. A realize pass writes the slot signals
+    /// that bind the rows it just created, and the documented invariant is that those rebinds land THIS frame — a
+    /// realized row rendered against a stale binding is a visible defect, and leaving the work queued forces another
+    /// full frame anyway (<c>HasPending</c> ⇒ <c>_frameNeeded</c>). Sharing the turn's absolute deadline gave this
+    /// flush ZERO units whenever the first flush was slow, which is exactly when a realize pass is largest. This work
+    /// is structural completion of the frame already being built, not new work competing for the slice.</summary>
+    private void FlushRebindsToQuiescence()
+    {
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        // P3 (virtualization.md §5.5): this flush is where a recycled slot's rebound channels fire — a bound-channel
+        // transition seed or the P1 Visible false→true Enter seed must SNAP here, not animate, or a recycle replays a
+        // cross-fade/pop for what the app sees as the same persistent row. RealizeBoundWindow's own slot-creation
+        // mounts push the same suppression (see its call sites) so a genuine cold mount inside THIS flush still snaps
+        // too — correct, since a cold-realized row has no prior displayed state to transition from anyway.
+        using (_reconciler.PushSuppressBoundTransitions())
+            _runtime.Flush();
+        _rebindFlushAllocBytesThisFrame += GC.GetAllocatedBytesForCurrentThread() - before;
+        if (_runtime.HasPending) WakeFrame();   // only a runaway-guard bail can leave work here
+    }
+
+    /// <summary>P0 always-on counter accumulator: GC-delta bytes across this frame's <see cref="FlushRebindsToQuiescence"/>
+    /// call(s), reset at the top of each Paint and read into <c>FrameStats.RebindFlushAllocBytes</c>.</summary>
+    private long _rebindFlushAllocBytesThisFrame;
+
+    // Reactive slice policy, in ONE place (scheduler policy, not animation timing): a flush yields after at most
+    // ReactiveSliceMaxMs, or a quarter of the display period when the panel is faster than ~60 Hz. The 4 ms ceiling is
+    // the largest slice that still leaves a 60 Hz frame (16.7 ms) room for layout + record + submit after it; the
+    // quarter-period rule keeps that same proportion on a 120/144/240 Hz panel instead of eating most of the frame.
+    /// <summary>Upper bound on one reactive slice, in milliseconds.</summary>
+    public const int ReactiveSliceMaxMs = 4;
+    /// <summary>Fraction of a (faster-than-4ms-quarter) display period one reactive slice may take.</summary>
+    public const int ReactiveSliceRefreshDivisor = 4;
+
+    /// <summary>At most <see cref="ReactiveSliceMaxMs"/>, or one quarter of a faster display period.</summary>
+    public static long ReactiveSliceTicks(long refreshPeriodTicks)
+    {
+        long cap = Math.Max(1, Stopwatch.Frequency * ReactiveSliceMaxMs / 1000);
+        long slice = refreshPeriodTicks > 0 ? refreshPeriodTicks / ReactiveSliceRefreshDivisor : cap;
+        return Math.Max(1, Math.Min(cap, slice));
     }
 
     // ── E4 windowed out-of-bounds popups ─────────────────────────────────────────────────────────────────────────────
@@ -3881,6 +4379,10 @@ public sealed class AppHost : IDisposable
     private int OpenPopupWindow(NodeHandle subtreeRoot, PopupWindowMaterial material)
     {
         if (!PopupWindowsEnabled || subtreeRoot.IsNull) return -1;
+        var renderOwner = OwningRenderThread;
+        renderOwner?.Quiesce();
+        try
+        {
         var palWindow = _app.CreatePopupWindow(new PopupWindowDesc(_window.Handle, default, material, Tok.Theme == ThemeKind.Dark));
         if (palWindow is null) return -1;
         bool acrylic = material == PopupWindowMaterial.TransientAcrylic;
@@ -3896,8 +4398,11 @@ public sealed class AppHost : IDisposable
                 Composited: true, DesktopAcrylic: acrylic, AcrylicTint: tint, CornerRadiusPx: cornerPx)),
         };
         _popupWindows.Add(slot);
+        Volatile.Write(ref _popupWindowCount, _popupWindows.Count);   // render-thread mirror: never elide a popup turn
         WakeFrame();
         return slot.Token;
+        }
+        finally { renderOwner?.Resume(); }
     }
 
     /// <summary>Place a leased popup window: bounds arrive in main-window DIP (the overlay's placement space); the
@@ -3905,6 +4410,12 @@ public sealed class AppHost : IDisposable
     /// chrome while the window remains hidden. The first successful popup present reveals it without activation.</summary>
     private void SetPopupWindowBounds(int token, RectF dipBounds, bool opensUp, float closedRatio)
     {
+        // NO render-thread park here. This fires on every pointer move over an open flyout (and every frame of its open
+        // reveal), so parking the loop meant a UI stall of up to one submit+present PER INTERACTION. The only ComPtr
+        // touches — Resize + ConfigurePopupChrome — are posted to the render thread and applied at the top of its next
+        // turn, before the same turn's RecordPopups reads the swapchain. Everything below is UI-owned state (slot
+        // fields, the PAL window rect). The stale-publication drop the park needed is gone with it: the resize is now
+        // ORDERED behind this frame's publication instead of racing it.
         for (int i = 0; i < _popupWindows.Count; i++)
         {
             var slot = _popupWindows[i];
@@ -3922,12 +4433,16 @@ public sealed class AppHost : IDisposable
             var px = new RectF(origin.X + wb.X * s, origin.Y + wb.Y * s, wb.W * s, wb.H * s);
             slot.Window.SetBoundsPx(in px);
             float wpx = MathF.Max(1f, px.W), hpx = MathF.Max(1f, px.H);
-            slot.Swapchain?.Resize(new Size2(wpx, hpx));
             // Content rect = the menu plate inset by the shadow margins (window px): the acrylic rounds to it + the shadow
             // is masked to it; the engine draws the plate/border/items there too (recorded at the inset origin).
             var contentPx = new RectF(insL * s, insT * s, dipBounds.W * s, dipBounds.H * s);
-            slot.Swapchain?.ConfigurePopupChrome(new PopupChromeMetrics(
-                contentPx, opensUp, MathF.Max(0f, closedRatio), 8f * s, 1f * s));
+            var chrome = new PopupChromeMetrics(contentPx, opensUp, MathF.Max(0f, closedRatio), 8f * s, 1f * s);
+            if (slot.Swapchain is { } sc)
+            {
+                var action = new PopupRenderAction(PopupRenderOp.ResizeAndChrome, sc, new Size2(wpx, hpx), chrome);
+                if (OwningRenderThread is null) { sc.Resize(action.Size); sc.ConfigurePopupChrome(chrome); }
+                else PostPopupRenderAction(in action);
+            }
             WakeFrame();
             return;
         }
@@ -3938,28 +4453,50 @@ public sealed class AppHost : IDisposable
     /// by which time the fade has settled — so the acrylic fades out instead of vanishing.</summary>
     private void AnimatePopupCloseWindow(int token)
     {
-        for (int i = 0; i < _popupWindows.Count; i++)
-            if (_popupWindows[i].Token == token) { _popupWindows[i].Swapchain?.AnimatePopupClose(); WakeFrame(); return; }
-    }
-
-    private void ClosePopupWindow(int token)
-    {
+        // Same reasoning as SetPopupWindowBounds: one ComPtr call, posted rather than parked. The window itself is
+        // disposed later at ClosePopupWindow, by which time the posted fade has been applied on the render thread.
         for (int i = 0; i < _popupWindows.Count; i++)
         {
-            var slot = _popupWindows[i];
-            if (slot.Token != token) continue;
-            slot.Window.Hide();
-            slot.Swapchain?.Dispose();
-            slot.Window.Dispose();
-            _popupWindows.RemoveAt(i);
+            if (_popupWindows[i].Token != token) continue;
+            if (_popupWindows[i].Swapchain is { } sc)
+            {
+                if (OwningRenderThread is null) sc.AnimatePopupClose();
+                else PostPopupRenderAction(new PopupRenderAction(PopupRenderOp.AnimateClose, sc, default, default));
+            }
             WakeFrame();
             return;
         }
     }
 
+    private void ClosePopupWindow(int token)
+    {
+        var renderOwner = OwningRenderThread;
+        renderOwner?.Quiesce();
+        try
+        {
+        _renderSeam.InvalidateTarget();
+        for (int i = 0; i < _popupWindows.Count; i++)
+        {
+            var slot = _popupWindows[i];
+            if (slot.Token != token) continue;
+            slot.Window.Hide();
+            // The loop is PARKED at its top-of-turn gate, so no drain is in flight: dropping the queued actions that
+            // name this swapchain is what makes disposing it here safe.
+            PurgePopupRenderActions(slot.Swapchain);
+            slot.Swapchain?.Dispose();
+            slot.Window.Dispose();
+            _popupWindows.RemoveAt(i);
+            Volatile.Write(ref _popupWindowCount, _popupWindows.Count);
+            WakeFrame();
+            return;
+        }
+        }
+        finally { renderOwner?.Resume(); }
+    }
+
     /// <summary>Phase 8b: re-record each popup window's subtree into its own DrawList (recorder root-override,
     /// re-origined to the popup's placed top-left) and present its swapchain.</summary>
-    private void RecordPopupWindows(in FocusVisualStyle focus, in TextEditStyle textEdit)
+    private void RecordPopupWindows(in FocusVisualStyle focus, in TextEditStyle textEdit, bool prepareOnly = false)
     {
         for (int i = 0; i < _popupWindows.Count; i++)
         {
@@ -3980,6 +4517,11 @@ public sealed class AppHost : IDisposable
                 if (MathF.Abs(wx - cur.X) > 0.5f || MathF.Abs(wy - cur.Y) > 0.5f)
                     slot.Window.SetBoundsPx(new RectF(wx, wy, cur.W, cur.H));
             }
+            if (prepareOnly) continue;
+            // An UNPLACED popup (the overlay has not given it a rect yet) has nothing to paint, and presenting it
+            // anyway would latch its reveal evidence on the 1×1 creation-size surface — a revealed popup window with
+            // nothing in it. It is placed on the very next layout effect.
+            if (origin.IsEmpty) continue;
             SceneRecorder.RecordSubtree(_scene, slot.DrawList, _images, in focus, Tok.ScrollThumb, Tok.AcrylicFlyout.Fallback, in textEdit,
                 slot.Root, new Point2(origin.X, origin.Y));
             if (slot.Swapchain is { } sc)
@@ -3991,8 +4533,12 @@ public sealed class AppHost : IDisposable
                     sc.Present();
                     // Atomic creation: the popup HWND stays hidden until its swapchain contains the seeded first frame.
                     // This prevents an uninitialized/full-opacity plate from flashing before the engine/compositor
-                    // entrance state exists.
-                    if (!slot.Window.IsShown)
+                    // entrance state exists. The gate is the swapchain's OWN report that it presented content — NOT
+                    // the fact that Present() was called and did not throw: a backend stands down for a covered /
+                    // hidden / cloaked target and presents NOTHING, which (since the popup HWND is hidden precisely
+                    // until this frame) is exactly the case here. Revealing on the call rather than on the paint is
+                    // what showed a popup as its frosted chrome with no menu inside it.
+                    if (!slot.Window.IsShown && sc.HasPresentedContent)
                     {
                         slot.Window.Show();
                         sc.AnimatePopupOpen();
@@ -4544,10 +5090,22 @@ public sealed class AppHost : IDisposable
     ///
     /// A present with <paramref name="publishSeq"/> == 0 (nothing newly acquired — the previous frame is still on
     /// screen) does NOT move the ack, so the ack stays monotone and a joiner never sees it go backwards.</summary>
+    // Present cadence census (present-thread-owned writers, UI-side volatile readers via FrameStats).
+    private long _presentedFramesTotal, _missedVsyncsTotal, _prevPresentedQpc;
+
     private void NotePresented(ulong publishSeq)
     {
         long qpc = Stopwatch.GetTimestamp();   // first statement: everything downstream of Present is attribution error
         Volatile.Write(ref _lastPresentQpc, qpc);
+        long prev = _prevPresentedQpc;
+        _prevPresentedQpc = qpc;
+        Interlocked.Increment(ref _presentedFramesTotal);
+        if (prev != 0 && qpc > prev)
+        {
+            long vsync = RefreshPeriodQpcOrDefault();
+            long missed = (qpc - prev + vsync / 2) / vsync - 1;   // the standard half-interval-biased slot count
+            if (missed > 0) Interlocked.Add(ref _missedVsyncsTotal, missed);
+        }
         if (publishSeq != 0) Volatile.Write(ref _lastPresentPublishSeq, (long)publishSeq);
         Interlocked.Increment(ref _presentedSequence);
         // The one place the 60 Hz phase-lock is observable (§11.1.4): the interval between consecutive presents. The
@@ -4788,13 +5346,8 @@ public sealed class AppHost : IDisposable
         // change (a keystroke / wheel notch), which also changed Scale and therefore got us past the early-out.
         float zoom = _window.Zoom;
         if (zoom != _lastZoom) { _viewportZoomSig.Value = zoom; _lastZoom = zoom; }
-        // Step 2 (async resize rendezvous): D3D12Swapchain.Resize does a fenced WaitForGpu + releases the back buffers +
-        // ResizeBuffers + recreates RTVs — all mutating ComPtrs the render thread reads in submit/present. Under async,
-        // PARK the render loop (mutual exclusion) around the unchanged Resize. Default + force-sync take the else branch
-        // (no render thread running concurrently — force-sync's UI is the only toucher between publishes), byte-identical.
-        // A detached child's swapchain is presented by the PARENT's render thread, so its resize must park THAT thread too —
-        // OwningRenderThread resolves to _renderThread (primary) or _parentRenderThread (child). Force-sync + single-thread
-        // take the else (the render thread is idle-parked between publishes, never mid-present concurrently with a resize).
+        // Resize mutates the same GPU targets the renderer reads. Every threaded mode parks, including force-sync:
+        // its retained compositor scene can tick between explicit UI drains. Children park their parent's sole owner.
         //
         // Resize runs out of the WndProc, and every step of D3D12Swapchain.Resize (the fenced WaitForGpu signal,
         // ResizeBuffers, the GetBuffer per RTV) Checks its HRESULT and throws on a removed device — an unhandled throw
@@ -4802,10 +5355,10 @@ public sealed class AppHost : IDisposable
         // rebuilds the swapchain wholesale, and one stale-size frame until the recovery frame lands is invisible next to
         // a crash); anything else is a genuine bug and rethrows. The exception FILTER runs before the finally, so the
         // render loop is still Resumed on both outcomes.
-        if (OwningRenderThread is { } rt && _asyncActive)
+        if (OwningRenderThread is { } rt)
         {
             rt.Quiesce();
-            try { _swapchain.Resize(s); }
+            try { _renderSeam.InvalidateTarget(); _swapchain.Resize(s); }
             catch (Exception) when (_device.NoteIfDeviceLost()) { }
             finally { rt.Resume(); }
         }
@@ -4828,6 +5381,17 @@ public sealed class AppHost : IDisposable
     public void Dispose()
     {
         _renderThread?.Dispose();   // Step 4: stop + join the fgpu-render thread before tearing down the device it submits to
+        var owner = OwningRenderThread;
+        owner?.Quiesce();
+        try
+        {
+            _renderSeam.InvalidateTarget();
+            PurgePopupRenderActions(null);   // the loop is parked (or gone): no drain can be in flight
+            _imageQueue?.RemoveSceneReader(this);
+            _renderSeam.ReleaseSceneResources();
+            _scene.Recording.ReleaseInlineResources();
+        }
+        finally { owner?.Resume(); }
         if (ReferenceEquals(HostDispatch.Current, _uiPoster))
             HostDispatch.Current = null;   // drop the process-static poster so a disposed host leaks no callback
 

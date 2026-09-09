@@ -113,7 +113,7 @@ public sealed partial class AnimEngine
     }
 
     // sample a multi-keyframe track at progress u (0..1), per-segment easing (ported from AnimEngine.Sample)
-    private static float Sample(Keyframe[] keys, float u)
+    internal static float Sample(ReadOnlySpan<Keyframe> keys, float u)
     {
         if (keys.Length == 0) return 0f;
         if (keys.Length == 1 || u <= keys[0].Offset) return keys[0].Value;

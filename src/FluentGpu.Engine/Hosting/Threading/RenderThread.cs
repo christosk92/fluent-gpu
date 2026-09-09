@@ -1,22 +1,20 @@
 using System;
 using System.Threading;
+using System.Diagnostics;
+using FluentGpu.Pal;
 
 namespace FluentGpu.Hosting.Threading;
 
 /// <summary>
-/// The dedicated render thread (design/subsystems/threading-render-seam.md §1; landing plan §5 Step 4), Cut A.
-///
-/// Runs the consume→submit→present loop OFF the UI thread. <b>Step 4 is FORCE-SYNC:</b> after the UI publishes a frame
-/// it wakes this thread and BLOCKS in <see cref="DrainSync"/> until the frame is presented — so there is no actual
-/// overlap yet (zero perf win), but submit + present + the blocking GPU fence-waits now EXECUTE here rather than on the
-/// UI thread. That proves the seam + the ComPtr-on-render path deterministically before <b>Step 5</b> removes the UI
-/// wait (the async flip that lands the smoothness win) — and Step 5 flips ONLY behind a green <c>seam.race</c> soak.
-///
-/// This type is OPT-IN (AppHost constructs it only when the render-thread gate is set); the engine ships single-thread
-/// (the proven inline pass-through) by default until the soak is green. Single-consumer: exactly one render thread.
+/// Single-consumer scene-adopt → record → submit → present loop, independent of UI reactive/layout work.
+/// Active compositor motion uses its own optional display-clock subscription with a refresh-derived fallback;
+/// clean idle blocks without releasing the retained scene. Resize/recovery/shutdown take priority over render ticks.
+/// <see cref="DrainSync"/> is an explicit request/ack rendezvous for deterministic hosts, not the production async path.
 /// </summary>
 public sealed class RenderThread : IDisposable
 {
+    /// <summary>The recursive recorder needs the same stack reserve as the UI recording path.</summary>
+    public const int RecordingStackBytes = 32 * 1024 * 1024;
     private readonly Thread _thread;
     private readonly SceneFramePublisher _publisher;
     private readonly Action<RenderFrame> _submitPresent;   // runs ON this thread: (suppress vsync?) → SubmitDrawList(arena) → Present
@@ -40,23 +38,34 @@ public sealed class RenderThread : IDisposable
     // Null on a host with no children (or a child host, which has no render thread of its own). Runs regardless of whether
     // the parent published this turn — a child wake carries no parent publish, so the parent-seam TryAcquire may no-op.
     private readonly Action? _extraDrain;
-    private readonly bool _async;                          // Step 5: false = force-sync (UI blocks in DrainSync); true = async (WakeAsync, UI proceeds)
+    private readonly Func<bool>? _needsTick;
+    private readonly Action? _tick;
+    private readonly Func<long>? _tickPeriod;
+    private long _nextTick;
+    private long _requestedDrains, _completedDrains;
+    private readonly IRenderDisplayClock? _displayClock;
+    private readonly WaitHandle[]? _displayWaits;
     private volatile bool _running = true;
     private ulong _presentAck;
     private static readonly bool s_trace = FluentGpu.Foundation.Diag.EnvFlag("FG_DL_TRACE");   // device-lost recovery trace
 
     public RenderThread(SceneFramePublisher publisher, Action<RenderFrame> submitPresent, bool async = false,
                         DeviceLostCoordinator? deviceLost = null, Action? recover = null, Action? windowWake = null,
-                        Action? extraDrain = null)
+                        Action? extraDrain = null, Func<bool>? needsTick = null, Action? tick = null,
+                        Func<long>? tickPeriod = null, IRenderDisplayClock? displayClock = null)
     {
         _publisher = publisher;
         _submitPresent = submitPresent;
-        _async = async;
         _deviceLost = deviceLost;
         _recover = recover;
         _windowWake = windowWake;
         _extraDrain = extraDrain;
-        _thread = new Thread(Loop) { Name = "fgpu-render", IsBackground = true };
+        _needsTick = needsTick;
+        _tick = tick;
+        _tickPeriod = tickPeriod;
+        _displayClock = displayClock;
+        if (displayClock is not null) _displayWaits = [_wake, displayClock.Tick];
+        _thread = new Thread(Loop, RecordingStackBytes) { Name = "fgpu-render", IsBackground = true };
         _thread.Start();
     }
 
@@ -69,7 +78,21 @@ public sealed class RenderThread : IDisposable
         ThreadGuard.BindCurrent(ThreadGuard.ThreadRole.Render);   // this thread is the SOLE ComPtr owner for submit/present
         while (true)
         {
-            _wake.WaitOne();
+            bool motionDue = _needsTick?.Invoke() == true;
+            _displayClock?.SetActive(motionDue);
+            int waitMs = motionDue ? Math.Max(0, (int)Math.Ceiling(
+                (_nextTick - Stopwatch.GetTimestamp()) * 1000.0 / Stopwatch.Frequency)) : Timeout.Infinite;
+            if (motionDue && _displayClock?.IsAvailable == true)
+            {
+                // A clock capability loss signals its tick handle once. The bounded timeout is a
+                // backstop; ordinary compositor turns are driven by the independent display event.
+                int backstop = Math.Clamp((int)Math.Ceiling(
+                    (_tickPeriod?.Invoke() ?? Stopwatch.Frequency / 60) * 2000.0 / Stopwatch.Frequency), 8, 100);
+                WaitHandle.WaitAny(_displayWaits!, backstop);
+            }
+            else _wake.WaitOne(waitMs);
+            long turnStart = Stopwatch.GetTimestamp();
+            long requestedDrain = Volatile.Read(ref _requestedDrains);
             if (!_running) break;
             // Step 4: device-lost recovery takes priority. The UI observed a lost device and is BLOCKING (not publishing)
             // until RecoverDone. Rebuild the device here (render-confined — this thread is the sole ComPtr owner), mark
@@ -89,9 +112,12 @@ public sealed class RenderThread : IDisposable
             // wait for the next real wake (the post-resize full-relayout republish).
             if (Volatile.Read(ref _resizeQuiesce) != 0)
             {
+                _displayClock?.SetActive(false);
+                // Consume this request before acknowledging it. The UI may Resume then immediately
+                // request another park; clearing after the resume wait would erase that newer request.
+                Volatile.Write(ref _resizeQuiesce, 0);
                 _resizeIdle.Set();
                 _resumeResize.WaitOne();
-                Volatile.Write(ref _resizeQuiesce, 0);
                 continue;
             }
             // Acquire the LATEST published frame (DropOldest coalesce — intermediate publishes since the last wake are
@@ -104,12 +130,19 @@ public sealed class RenderThread : IDisposable
                 // (how far behind render is); production pacing is on the compositor tick, not on this ack.
                 Volatile.Write(ref _presentAck, rf.PublishSeq);
             }
+            else if (_needsTick?.Invoke() == true) _tick?.Invoke();
             // Detached child hosts: present any freshly-published child frame on ITS own swapchain, on this same render
             // thread. Runs every turn (a child's wake may carry no parent publish, so it must not hang off the parent
             // TryAcquire above). Cheap no-op when no child has published since its last present (dedup in TryAcquire).
             _extraDrain?.Invoke();
-            if (!_async) _done.Set();   // force-sync only: unblock the UI's DrainSync
+            _nextTick = turnStart + Math.Max(1, _tickPeriod?.Invoke() ?? Stopwatch.Frequency / 60);
+            if (requestedDrain > Volatile.Read(ref _completedDrains))
+            {
+                Volatile.Write(ref _completedDrains, requestedDrain);
+                _done.Set();
+            }
         }
+        _displayClock?.SetActive(false);
     }
 
     /// <summary>UI thread, FORCE-SYNC (Step 4): wake the render thread and block until it has submitted+presented the
@@ -118,8 +151,9 @@ public sealed class RenderThread : IDisposable
     {
         ThreadGuard.AssertUi();
         if (_disposed) return;   // teardown race (window closed / thread joined): nothing to present, don't touch a disposed event
+        long requested = Interlocked.Increment(ref _requestedDrains);
         _wake.Set();
-        _done.WaitOne();
+        while (Volatile.Read(ref _completedDrains) < requested) _done.WaitOne();
     }
 
     /// <summary>UI thread, ASYNC (Step 5): wake the render thread and RETURN immediately — the UI proceeds while the
@@ -166,7 +200,10 @@ public sealed class RenderThread : IDisposable
         _running = false;
         _wake.Set();               // unblock the loop so it can observe !_running and exit
         _resumeResize.Set();       // Step 2: also release a loop parked mid-quiesce, so teardown can't hit the Join timeout
-        _thread.Join(1000);
+        // A timeout is not proof of termination: disposing events or GPU state while a blocked
+        // submit is still running causes use-after-dispose. Ownership returns only after the join.
+        _thread.Join();
+        _displayClock?.Dispose();
         _wake.Dispose();
         _done.Dispose();
         _resizeIdle.Dispose();

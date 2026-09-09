@@ -119,8 +119,12 @@ public sealed class HeadlessFontSystem : IFontSystem
         return LineHeightOf(in style) * (NaturalBaseline(in style, effSize) / NaturalLineHeight(in style, effSize));
     }
 
+    /// <inheritdoc/>
+    public long ShapeCount { get; private set; }
+
     public TextMetrics Measure(StringId text, in TextStyle style, float maxWidth = float.PositiveInfinity)
     {
+        ShapeCount++;   // headless has no real shaper: one deterministic "shape" per Measure call (P0 counter parity)
         string s = _strings.Resolve(text);
         ResolveSpans(s.AsSpan(), in style);
         float lineH = LineHeightOf(in style);

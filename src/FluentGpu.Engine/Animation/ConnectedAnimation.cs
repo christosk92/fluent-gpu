@@ -217,7 +217,7 @@ public sealed class ConnectedAnimation
     private void ReleaseCull(NodeHandle node)
     {
         if (!_scene.IsLive(node) || (_scene.Flags(node) & NodeFlags.Visible) != 0) return;
-        _scene.Flags(node) |= NodeFlags.Visible;
+        _scene.SetFlagBits(node, NodeFlags.Visible);
         _scene.Paint(node).Opacity = 1f;
         _scene.Mark(node, NodeFlags.PaintDirty);
     }
@@ -614,7 +614,7 @@ public sealed class ConnectedAnimation
         p.Corners = snap.Corners;
         ref RectF b = ref _scene.Bounds(ov);
         b = dest;   // the overlay's model box IS the dest rect; the seed transform places it at the source initially
-        _scene.Flags(ov) = (_scene.Flags(ov) & ~NodeFlags.HitTestVisible) | NodeFlags.Visible;   // never intercept input
+        _scene.SetFlagsRaw(ov, (_scene.Flags(ov) & ~NodeFlags.HitTestVisible) | NodeFlags.Visible);   // never intercept input
 
         // FLIP seed: translate the centre from dest→source and scale by the size ratio, so frame 0 already draws at the
         // source rect (no flash); springs drive both back to identity (== exactly covering the dest rect). Scale is about
@@ -987,8 +987,8 @@ public sealed class ConnectedAnimation
             if (kv.Value.Key != key || !_scene.IsLive(kv.Key)) continue;
             bool current = (_scene.Flags(kv.Key) & NodeFlags.Visible) != 0;
             if (current == visible) continue;
-            if (visible) _scene.Flags(kv.Key) |= NodeFlags.Visible;
-            else _scene.Flags(kv.Key) &= ~NodeFlags.Visible;
+            if (visible) _scene.SetFlagBits(kv.Key, NodeFlags.Visible);
+            else _scene.ClearFlagBits(kv.Key, NodeFlags.Visible);
             _scene.Mark(kv.Key, NodeFlags.PaintDirty);
             flipped++;
         }

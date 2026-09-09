@@ -67,7 +67,11 @@ internal sealed unsafe class Win32CompositorClock : IDisposable
     private readonly HANDLE _tickEvent;                 // auto-reset: one signal per compositor tick
     private readonly AutoResetEvent _armGate = new(false);   // parks the waiter thread while disarmed
     private readonly Thread _thread;
+    private readonly Func<uint>? _waitForClock; // injected blocking clock primitive for deterministic backend tests
     private int _armed;
+    private readonly object _renderGate = new();
+    private RenderSubscription? _renderSubscription;
+    private int _renderArmed;
     private int _fastStreak;                    // waiter-thread only: consecutive sub-millisecond successes
     private int _waitFailedStreak;               // waiter-thread only: consecutive WAIT_FAILED returns
     private long _tickSeq;                      // bumped once per delivered tick (waiter thread writes, host reads)
@@ -80,9 +84,10 @@ internal sealed unsafe class Win32CompositorClock : IDisposable
     private volatile bool _unavailable;
     private volatile bool _disposed;
 
-    internal Win32CompositorClock()
+    internal Win32CompositorClock(Func<uint>? waitForClock = null)
     {
-        _tickEvent = CreateEventW(null, BOOL.FALSE, BOOL.FALSE, null);
+        _waitForClock = waitForClock;
+        _tickEvent = waitForClock is null ? CreateEventW(null, BOOL.FALSE, BOOL.FALSE, null) : HANDLE.NULL;
         _thread = new Thread(Loop) { IsBackground = true, Name = "fgpu-vblank" };
         // Above normal: the tick is a phase signal with a hard deadline (it is worthless one refresh late), and the
         // thread does nothing but sleep between ticks. Not time-critical — this must never outrank the UI loop it serves.
@@ -96,7 +101,7 @@ internal sealed unsafe class Win32CompositorClock : IDisposable
 
     /// <summary>False once a compositor wait has failed (or the export is missing): permanently, for this process. The
     /// caller then leaves the tick out of its handle set and its wall-clock timeout paces the loop as before.</summary>
-    internal bool IsAvailable => !_unavailable && _tickEvent != HANDLE.NULL;
+    internal bool IsAvailable => !_unavailable && (_tickEvent != HANDLE.NULL || _waitForClock is not null);
 
     /// <summary>Delivered-tick count (monotone) and the Stopwatch instant of the latest one. Read on the UI thread; the
     /// seq is written AFTER the stamp on the waiter thread, so a reader that observes a new seq also observes its stamp.</summary>
@@ -122,11 +127,51 @@ internal sealed unsafe class Win32CompositorClock : IDisposable
     /// <summary>Stop delivering ticks (the waiter parks after its current wait returns). Idempotent, allocation-free.</summary>
     internal void Disarm() => Interlocked.Exchange(ref _armed, 0);
 
+    internal IRenderDisplayClock CreateRenderSubscription()
+    {
+        lock (_renderGate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_renderSubscription is not null)
+                throw new InvalidOperationException("A window supports one render display-clock subscriber.");
+            return _renderSubscription = new RenderSubscription(this);
+        }
+    }
+
+    private sealed class RenderSubscription(Win32CompositorClock owner) : IRenderDisplayClock
+    {
+        internal readonly AutoResetEvent Event = new(false);
+        private bool _disposed;
+        public WaitHandle Tick => Event;
+        public bool IsAvailable => !_disposed && !owner._disposed && owner.IsAvailable;
+        public void SetActive(bool active)
+        {
+            lock (owner._renderGate)
+            {
+                if (_disposed || owner._disposed) return;
+                if (Interlocked.Exchange(ref owner._renderArmed, active ? 1 : 0) == (active ? 1 : 0)) return;
+                if (active) owner._armGate.Set();
+                else Event.Reset();
+            }
+        }
+        public void Dispose()
+        {
+            lock (owner._renderGate)
+            {
+                if (_disposed) return;
+                _disposed = true;
+                Volatile.Write(ref owner._renderArmed, 0);
+                owner._renderSubscription = null;
+                Event.Dispose();
+            }
+        }
+    }
+
     private void Loop()
     {
         while (!_disposed)
         {
-            if (Volatile.Read(ref _armed) == 0)
+            if (_unavailable || (Volatile.Read(ref _armed) == 0 && Volatile.Read(ref _renderArmed) == 0))
             {
                 _fastStreak = 0;
                 _armGate.WaitOne();   // 0% CPU while the app is idle, minimized, or not display-paced
@@ -138,7 +183,7 @@ internal sealed unsafe class Win32CompositorClock : IDisposable
             try
             {
                 // count=0/handles=null: wait on the compositor clock alone. The timeout is liveness only.
-                r = DCompositionWaitForCompositorClock(0, null, WaitTimeoutMs);
+                r = _waitForClock is null ? DCompositionWaitForCompositorClock(0, null, WaitTimeoutMs) : _waitForClock();
             }
             catch
             {
@@ -178,6 +223,10 @@ internal sealed unsafe class Win32CompositorClock : IDisposable
             Volatile.Write(ref _tickQpc, tickQpc);
             Volatile.Write(ref _tickSeq, _tickSeq + 1);
             if (Volatile.Read(ref _armed) != 0 && _tickEvent != HANDLE.NULL) SetEvent(_tickEvent);
+            // Each consumer owns its event: the UI cannot steal a render tick, or stop the shared waiter at idle.
+            // Serialize only signal/dispose, never a wait or a frame; no handle can be recycled under Set().
+            lock (_renderGate)
+                if (_renderArmed != 0) _renderSubscription?.Event.Set();
         }
     }
 
@@ -219,6 +268,7 @@ internal sealed unsafe class Win32CompositorClock : IDisposable
     {
         _unavailable = true;
         Volatile.Write(ref _armed, 0);
+        lock (_renderGate) _renderSubscription?.Event.Set(); // wake render waiter to select its fallback
         Diag.Line($"[compositor-clock] unavailable reason={reason} streak={streak}");
     }
 
@@ -239,6 +289,7 @@ internal sealed unsafe class Win32CompositorClock : IDisposable
         // Volatile.Write only to guarantee this reset is visible to the waiter once Arm() unparks it.
         Volatile.Write(ref _fastStreak, 0);
         Volatile.Write(ref _waitFailedStreak, 0);
+        if (Volatile.Read(ref _renderArmed) != 0) _armGate.Set();
         Diag.Line("[compositor-clock] reprobe");
     }
 
@@ -247,6 +298,11 @@ internal sealed unsafe class Win32CompositorClock : IDisposable
         if (_disposed) return;
         _disposed = true;
         Volatile.Write(ref _armed, 0);
+        lock (_renderGate)
+        {
+            Volatile.Write(ref _renderArmed, 0);
+            _renderSubscription?.Event.Set(); // owner teardown must not leave a consumer asleep
+        }
         _armGate.Set();               // unpark so the loop can observe _disposed
         // Bounded: an in-flight compositor wait returns within WaitTimeoutMs. If the join still fails the thread is
         // background, so it cannot hold the process — but the event handle is then deliberately LEAKED rather than

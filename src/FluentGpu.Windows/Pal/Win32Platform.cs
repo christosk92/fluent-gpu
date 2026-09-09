@@ -1457,6 +1457,13 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
         return _compositorClock.IsAvailable ? _compositorClock : null;
     }
 
+    public IRenderDisplayClock? CreateRenderDisplayClock()
+    {
+        if (_closed) return null;
+        _compositorClock ??= new Win32CompositorClock();
+        return _compositorClock.CreateRenderSubscription();
+    }
+
     /// <summary>The always-present half of the wait handle set: the general cross-thread wake, the phase-critical
     /// present-ack wake, and (when the caller asked and the probe holds) the compositor tick. Returns the count written.
     /// Writes at most 3 of the caller's 4 slots — the 4th is reserved for the precise timer.</summary>

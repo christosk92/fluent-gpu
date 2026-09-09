@@ -119,6 +119,9 @@ public static class FluentApp
     /// typically re-reading <see cref="SystemIsDark"/> while it follows the OS — without holding the <c>AppHost</c>.
     /// </summary>
     public static event Action? SystemColorsChanged;
+    /// <summary>The host's per-rendered-frame stats (phase times, fps), relayed on the UI thread. See
+    /// <see cref="AppHost.FrameCompleted"/>. Handlers must be cheap: they run inside the frame.</summary>
+    public static event Action<FrameStats>? FrameCompleted;
 
     /// <summary>True when the OS "app" theme is Light (Settings ▸ Colors). The app-layer facade over the Win32 reader so
     /// composition-root code (e.g. seeding the initial theme from a "System" preference) stays free of PAL imports.
@@ -283,7 +286,9 @@ public static class FluentApp
         using var imageFetcher = new DefaultImageFetcher(diskCache: new DiskImageCache(o.ImageCacheDirectory));
         // ONE bounded CPU pixel pool for the whole pipeline: decode BGRA buffers (workers) + async-upload copies (UI)
         // share the DefaultRetainedCapBytes budget (media-pipeline.md §3 staging blocks, as built).
-        var pixelPool = new PixelBufferPool();
+        var pixelPool = new PixelBufferPool(GpuProfile.IsWeak
+            ? 16L * 1024 * 1024
+            : PixelBufferPool.DefaultRetainedCapBytes);
         using var imageDecoder = new DecodeScheduler(new WicImageCodec(), imageFetcher,
             new DecodeOptions { PixelPool = pixelPool });
         var images = new ImageCache(imageDecoder, ImageCacheBudgetBytes());
@@ -301,6 +306,8 @@ public static class FluentApp
         // Post-input warm-cadence hold (G1b): keep rendering ~WarmCadenceMs after the last input so a follow-up
         // interaction pays no cold-start ramp. 0 disables the hold (see AppHost.WarmCadenceHoldMs).
         host.WarmCadenceHoldMs = o.WarmCadenceMs;
+        host.RenderCensus = o.RenderCensus;
+        s_host = host;
 
         // Relay the host's UI-thread single-instance redirect to the app-layer static event (the Windows-APIs page
         // subscribes there). Forwarding the payload, not the handler chain — handlers attach to FluentApp.ActivationRedirected.
@@ -322,6 +329,8 @@ public static class FluentApp
         // the OS dark-mode/accent live while its theme mode is "System").
         Action forwardSystemColors = () => SystemColorsChanged?.Invoke();
         host.SystemColorsChanged += forwardSystemColors;
+        Action<FrameStats> forwardFrame = stats => FrameCompleted?.Invoke(stats);
+        host.FrameCompleted += forwardFrame;
 
         // FG_ALLOC_TYPES=1: bring up the per-type allocation profiler (process-global EventListener; the host drives
         // its once-per-second report on the frame cadence). Stopped in the finally so headless/short runs don't leak it.
@@ -336,6 +345,7 @@ public static class FluentApp
         {
             host.GpuResources = () => gpu.DiagResourceTotals;
             host.GpuDetail = () => gpu.DiagGpuDetail;
+            s_gpuDevice = gpu;
         }
 
         window.Show();
@@ -663,7 +673,28 @@ public static class FluentApp
 
         WindowHandle = 0;   // the window is gone; don't leave a stale handle for a late SMTC/picker call.
         s_zoomWindow = null; s_zoom = 1f;   // same for the zoom seam: a later SetZoom must not poke a dead window.
+        s_host = null;
+        s_gpuDevice = null;
     }
+
+    private static AppHost? s_host;
+    private static D3D12Device? s_gpuDevice;
+
+    /// <summary>The engine's live-object census (scene nodes, strings, decoded-image bytes, components, bindings,
+    /// animation tracks, pixel pool) captured NOW — passive O(1) reads, UI thread only. Null before the window is up
+    /// or after it closed. An app's memory sampler pairs it with the process working set and its own owners to
+    /// attribute a heap.</summary>
+    public static CensusSnapshot? EngineCensus() => s_host is { } h ? CensusSnapshot.Capture(h) : null;
+
+    /// <summary>Tracked D3D12 resource residency (bytes, resource count) — the GPU half the engine census excludes.
+    /// Null headless or before the window is up.</summary>
+    public static (long Bytes, int Count)? GpuResidency() => s_host?.GpuResources is { } f ? f() : null;
+
+    /// <summary>Compact per-class GPU residency fragment (top tracked-resource classes, render-target pool
+    /// occupancy, upload-arena counters) — see <see cref="D3D12Device.DiagGpuCensusLine"/>. Pairs with <see
+    /// cref="GpuResidency"/> in an app's memory sampler: `gpu bytes=… resources=…` plus this fragment appended
+    /// verbatim. Null headless or before the window is up.</summary>
+    public static string? GpuCensusLine() => s_gpuDevice?.DiagGpuCensusLine;
 
     /// <summary>ops/diag capture protocol: read the launcher's phase marker and stamp it into every subsequent scroll-trace
     /// record, so a capture can be sliced by phase / repetition / A-B arm offline without any per-frame filesystem work
@@ -770,6 +801,11 @@ public sealed record AppOptions
     /// quiesce so a follow-up interaction pays no cold-start ramp (G1b / research #10). 0 disables the hold. Maps to
     /// <see cref="AppHost.WarmCadenceHoldMs"/>.</summary>
     public float WarmCadenceMs { get; init; } = 1000f;
+    /// <summary>Keep the engine's per-component render census on for the whole session so every frame whose flush
+    /// exceeds the panel's refresh interval arrives at <see cref="FluentApp.FrameCompleted"/> with
+    /// <c>FrameStats.Census</c> populated (top components by time and by bytes). One dictionary op per component
+    /// render while on. Maps to <see cref="AppHost.RenderCensus"/>.</summary>
+    public bool RenderCensus { get; init; }
     /// <summary>Where the disk image cache (decoded-once album art / remote images) lives. Null keeps the engine
     /// default, <c>%TEMP%\fluent-gpu\imgcache</c>, which is fine for a sample but wrong for a shipping app: it is
     /// outside the app's own data root, so it survives an uninstall, escapes the app's storage accounting, and can be

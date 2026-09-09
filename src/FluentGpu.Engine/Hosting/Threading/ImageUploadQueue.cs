@@ -4,9 +4,8 @@ using FluentGpu.Scene;
 namespace FluentGpu.Hosting.Threading;
 
 /// <summary>Producer→consumer handoff for image GPU work under the ASYNC render thread (render-thread-seam landing plan
-/// §9, Step 1). Default and force-sync never construct it — there the direct <c>IGpuDevice.TryUploadImage</c>/<c>EvictImage</c>
-/// sinks stay wired and run with no cross-thread overlap (force-sync's UI blocks in <c>DrainSync</c> while the render
-/// thread flushes). Under async the UI thread (<see cref="ImageCache.Pump"/>) PRODUCES upload/evict jobs — an upload
+/// §9, Step 1). Every threaded host uses it, including force-sync because independent compositor turns can run between
+/// UI drains. Single-thread hosts retain direct device sinks. The UI thread (<see cref="ImageCache.Pump"/>) PRODUCES upload/evict jobs — an upload
 /// transfers an owned <c>ArrayPool&lt;byte&gt;</c> buffer (the pump copies the transient decode pixels into it) — and the
 /// render thread CONSUMES them inside its submit, immediately before <c>FlushUploads</c> opens the frame's command list.
 /// The transferred buffer is rented from the host's bounded <see cref="BufferPool"/> (a <c>PixelBufferPool</c>); the
@@ -31,6 +30,43 @@ public sealed class ImageUploadQueue
     public struct Job { public int Id; public byte[]? Buffer; public int W, H, ByteLen; public bool Evict; }
 
     private readonly ConcurrentQueue<Job> _jobs = new();                                    // UI → render
+    // Render-owned. Each registered consumer retains its last adopted image snapshot until replacement.
+    // A queued eviction cannot invalidate a texture still referenced by that consumer's scene.
+    private readonly Dictionary<object, ImageRecordingSnapshot> _sceneReaders = new();
+    private readonly HashSet<int> _deferredEvictions = new();
+    private readonly List<int> _evictionScratch = new();
+    private readonly Queue<Job> _releasedEvictions = new();
+
+    internal void SetSceneReader(object owner, ImageRecordingSnapshot snapshot)
+    {
+        _sceneReaders[owner] = snapshot;
+        ReleaseUnreferencedEvictions();
+    }
+
+    internal void RemoveSceneReader(object owner)
+    {
+        _sceneReaders.Remove(owner);
+        ReleaseUnreferencedEvictions();
+    }
+
+    private bool RetainedByScene(int id)
+    {
+        foreach (var reader in _sceneReaders.Values)
+            if (reader.Retains(id)) return true;
+        return false;
+    }
+
+    private void ReleaseUnreferencedEvictions()
+    {
+        _evictionScratch.Clear();
+        foreach (int id in _deferredEvictions)
+            if (!RetainedByScene(id)) _evictionScratch.Add(id);
+        foreach (int id in _evictionScratch)
+        {
+            _deferredEvictions.Remove(id);
+            _releasedEvictions.Enqueue(new Job { Id = id, Evict = true });
+        }
+    }
     private readonly ConcurrentQueue<(int Id, ImageUploadResult Result)> _rejects = new();  // render → UI (rejections only)
 
     /// <summary>The host's bounded CPU pixel pool that upload buffers are rented from (by the UI sink) and returned to
@@ -57,7 +93,26 @@ public sealed class ImageUploadQueue
     public void EnqueueEvict(int id) => _jobs.Enqueue(new Job { Id = id, Evict = true });
 
     /// <summary>Render thread: drain one queued job (returns false when empty).</summary>
-    public bool TryDequeueJob(out Job job) => _jobs.TryDequeue(out job);
+    public bool TryDequeueJob(out Job job)
+    {
+        while (_releasedEvictions.TryDequeue(out job))
+        {
+            // Another target may have adopted the image after its prior reader released it.
+            if (!RetainedByScene(job.Id)) return true;
+            _deferredEvictions.Add(job.Id);
+        }
+        while (_jobs.TryDequeue(out job))
+        {
+            if (job.Evict && RetainedByScene(job.Id))
+            {
+                _deferredEvictions.Add(job.Id);
+                continue;
+            }
+            if (!job.Evict) _deferredEvictions.Remove(job.Id); // a newer upload supersedes an older queued eviction
+            return true;
+        }
+        return false;
+    }
 
     /// <summary>Render thread: report an upload REJECTION back to the UI (accepted uploads post nothing).</summary>
     public void PostReject(int id, ImageUploadResult result) => _rejects.Enqueue((id, result));

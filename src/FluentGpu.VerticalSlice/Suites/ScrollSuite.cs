@@ -133,6 +133,86 @@ sealed class TargetSampleGpuDevice : IGpuDevice
         }
     }
 
+    // gate.scroll.measured-tail-extent-*: a Grow=1 measured bound list the size of Wavee's two-column playlist
+    // (N×56 in a 700 viewport, Overscan=8). The published ContentExtent must be exactly Σ row heights — overscan
+    // past ItemCount must not add a phantom tail, and a SizeMode.Reflow drawer that opens then exits must retract
+    // its ExtentTable entry once the orphan is gone (otherwise the last row can sit at the TOP of the viewport).
+    sealed class MeasuredTailExtentProbe : Component
+    {
+        public const int N = 40;
+        public const float RowH = 56f;
+        public const float DrawerH = 160f;
+        public const float ExpandedH = RowH + DrawerH;
+        public const int ExpandIndex = 5;
+        public const int Overscan = 8;
+        public const float ViewportH = 700f;
+
+        public readonly ItemsViewController Controller = new();
+        public readonly MeasuredStackVirtualLayout Layout = new(RowH);
+        public readonly Signal<int> Expanded = new(-1);
+
+        static readonly LayoutTransition DrawerReveal = new(
+            TransitionChannels.Size,
+            TransitionDynamics.Tween(200f, Easing.Linear),
+            Enter: new EnterExit(Active: true),
+            Exit: new EnterExit(Active: true),
+            ExitDynamics: TransitionDynamics.Tween(200f, Easing.Linear),
+            Size: SizeMode.Reflow,
+            Anchor: SizeAnchor.Leading,
+            SuppressDescendantTransitions: true);
+
+        public override Element Render()
+        {
+            var host = this;
+            return new BoxEl
+            {
+                Width = 300f,
+                Height = ViewportH,
+                Children =
+                [
+                    ItemsView.CreateBound(N,
+                        scope => Embed.Comp(() => new Slot(host, scope.Index)),
+                        RepeatLayout.Measured(Layout),
+                        new ListOptions
+                        {
+                            Controller = Controller,
+                            SelectionMode = ItemsSelectionMode.None,
+                            Overscan = Overscan,
+                            Grow = 1f,
+                        }),
+                ],
+            };
+        }
+
+        sealed class Slot : Component
+        {
+            readonly MeasuredTailExtentProbe _host;
+            readonly IReadSignal<int> _index;
+            public Slot(MeasuredTailExtentProbe host, IReadSignal<int> index) { _host = host; _index = index; }
+
+            public override Element Render()
+            {
+                bool open = _host.Expanded.Value == _index.Value;
+                var skin = new BoxEl { Key = "row", Width = 280f, Height = RowH, Fill = ColorF.FromRgba(30, 30, 30) };
+                if (!open)
+                    return new BoxEl { Direction = 1, MinWidth = 0f, Children = [skin] };
+                return new BoxEl
+                {
+                    Direction = 1, MinWidth = 0f,
+                    Children =
+                    [
+                        skin,
+                        new BoxEl
+                        {
+                            Key = "drawer", Direction = 1, MinWidth = 0f, ClipToBounds = true, Animate = DrawerReveal,
+                            Children = [new BoxEl { Width = 280f, Height = DrawerH }],
+                        },
+                    ],
+                };
+            }
+        }
+    }
+
 static class ScrollSuite
 {
     public static void Run(StringTable strings)
@@ -140,6 +220,7 @@ static class ScrollSuite
         ScrollHoverChecks(strings);
         HoverSubtreeChecks(strings);
         ScrollChecks(strings);
+        ColdRealizeRampChecks();
         BringIntoViewChecks(strings);
         TwoAxisScrollChecks(strings);
         ScrollCrossAxisChecks(strings);
@@ -147,6 +228,7 @@ static class ScrollSuite
         VirtualChecks(strings);
         VirtualBudgetChecks(strings);
         BoundItemsViewChecks(strings);
+        ShelfBindingChecks.Run(strings);
         ExtentTableChecks();
         VariableChecks(strings);
         ZeroAllocScrollChecks(strings);
@@ -169,6 +251,39 @@ static class ScrollSuite
         ScrollControllerFoundationChecks(strings);
         ScrollV3HostLevelChecks(strings);
         DrivenTargetRegrowChecks();
+        MeasuredTailExtentChecks(strings);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+    // gate.ramp.* — the PURE cold-mount realization budget (ColdRealizeRamp). A 30-row screenful of ~90-node track
+    // rows is a 2 700-node flush if realized in one frame; the ramp sizes each grow from a node budget on the first
+    // (unmeasured) pass and a time share afterwards, never shrinks, and a moving viewport's visible floor overrides.
+    // ══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+    static void ColdRealizeRampChecks()
+    {
+        Check("gate.ramp.first-row-always", ColdRealizeRamp.CanCreateAnother(0, 0));
+        Check("gate.ramp.under-node-budget", ColdRealizeRamp.CanCreateAnother(5, ColdRealizeRamp.NodeBudget - 1));
+        Check("gate.ramp.node-budget-stops", !ColdRealizeRamp.CanCreateAnother(7, ColdRealizeRamp.NodeBudget));
+        Check("gate.ramp.rows-per-frame-unmeasured-is-ceiling",
+            ColdRealizeRamp.RowsPerFrame(0, 0f) == ColdRealizeRamp.MaxRowsPerFrame);
+        Check("gate.ramp.rows-per-frame-by-nodes",
+            ColdRealizeRamp.RowsPerFrame(90, 0f) == 6, $"got {ColdRealizeRamp.RowsPerFrame(90, 0f)}");
+        Check("gate.ramp.rows-per-frame-time-wins",
+            ColdRealizeRamp.RowsPerFrame(90, 2.4f) == 1, $"got {ColdRealizeRamp.RowsPerFrame(90, 2.4f)}"); // 3.32ms share / 2.4ms/row → 1 row
+        Check("gate.ramp.target-never-shrinks",
+            ColdRealizeRamp.Target(12, 30, 90, 0.2f, grewThisFrame: false, visibleFloor: 0) >= 12);
+        Check("gate.ramp.one-grow-per-frame",
+            ColdRealizeRamp.Target(6, 30, 90, 0.2f, grewThisFrame: true, visibleFloor: 0) == 6);
+        Check("gate.ramp.visible-floor-overrides",
+            ColdRealizeRamp.Target(0, 30, 90, 2.4f, grewThisFrame: false, visibleFloor: 20) == 20);
+        Check("gate.ramp.min-progress-when-short",
+            ColdRealizeRamp.Target(0, 30, 90, 99f, grewThisFrame: false, visibleFloor: 0) == 1);
+        Check("gate.ramp.warming", ColdRealizeRamp.Warming(6, 30) && !ColdRealizeRamp.Warming(30, 30));
+        Check("gate.ramp.measure-nodes-pessimistic",
+            ColdRealizeRamp.MeasureNodesPerRow(180, 2, 50) == 90);
+        Check("gate.ramp.measure-ms-pessimistic",
+            ColdRealizeRamp.MeasureMsPerRow(4.8f, 2, 1.0f) >= 2.4f);
     }
 
     // ══════════════════════════════════════════════════════════════════════════════════════════════════════════════
@@ -1516,7 +1631,7 @@ static class ScrollSuite
                 $"activity={held.Activity} (want {FluentGpu.Scroll.ScrollActivity.Drag}) off={held.OffsetX:0.##} (want ~{MidPan:0.##})");
         }
 
-        // (h) gate.snap.shelf-directional-commit — WP-ε3, the commit RULE as pure math (PagedShelfCore.CommitPage). Driving a
+        // (h) gate.snap.shelf-directional-commit — WP-ε3, the commit RULE as pure math (PagedShelfCore<int>.CommitPage). Driving a
         // real release velocity through the dispatcher headlessly would pin the sampler, not the rule; the rule is what has to
         // hold. Four properties: a lift past CommitFraction advances; a short slow lift springs BACK (this is the case the
         // old nearest-boundary rule got wrong — 50% of a ~612 DIP page is unreachable by panning, so every pan was yanked
@@ -1526,20 +1641,20 @@ static class ScrollSuite
             const float PageW = 612f;      // the artist-chart page stride the defect was measured on
             const int PageCount = 4;
             // 30% of a page with a forward lift → the NEXT page.
-            int fwd30 = PagedShelfCore.CommitPage(0.30f * PageW, 0f, 400f, PageW, PageCount, 0);
+            int fwd30 = PagedShelfCore<int>.CommitPage(0.30f * PageW, 0f, 400f, PageW, PageCount, 0);
             // 10% with ZERO velocity → back to the page it started on (a slow, short drag is not a navigation).
-            int slow10 = PagedShelfCore.CommitPage(0.10f * PageW, 0f, 0f, PageW, PageCount, 0);
+            int slow10 = PagedShelfCore<int>.CommitPage(0.10f * PageW, 0f, 0f, PageW, PageCount, 0);
             // 10% but FLICKED: the projected resting offset (v / ScrollTuning.FlickProjectK ≈ v/5.7) carries it past 25%.
-            int flick10 = PagedShelfCore.CommitPage(0.10f * PageW, 0f, 1500f, PageW, PageCount, 0);
+            int flick10 = PagedShelfCore<int>.CommitPage(0.10f * PageW, 0f, 1500f, PageW, PageCount, 0);
             // Backward: anchored on page 2, dragged 30% toward page 1 with a backward lift → page 1.
-            int back = PagedShelfCore.CommitPage(2f * PageW - 0.30f * PageW, 2f * PageW, -300f, PageW, PageCount, 2);
+            int back = PagedShelfCore<int>.CommitPage(2f * PageW - 0.30f * PageW, 2f * PageW, -300f, PageW, PageCount, 2);
             // RAIL: three pages of travel in one gesture still advances exactly one.
-            int railed = PagedShelfCore.CommitPage(3f * PageW, 0f, 0f, PageW, PageCount, 3);
+            int railed = PagedShelfCore<int>.CommitPage(3f * PageW, 0f, 0f, PageW, PageCount, 3);
             // No anchor (a wheel notch / keyboard / chevron re-arm / a glide's own settle) ⇒ the nearest page, untouched.
-            int noAnchor = PagedShelfCore.CommitPage(0.90f * PageW, float.NaN, 9999f, PageW, PageCount, 1);
+            int noAnchor = PagedShelfCore<int>.CommitPage(0.90f * PageW, float.NaN, 9999f, PageW, PageCount, 1);
             // A tiny nudge that ENDS just past a page midpoint (so the anchor rounds UP to that page) must not read as
             // "0.4 pages backwards" and commit backward: the step has to agree with the gesture's net travel.
-            int nudge = PagedShelfCore.CommitPage(0.62f * PageW, 0.60f * PageW, 0f, PageW, PageCount, 1);
+            int nudge = PagedShelfCore<int>.CommitPage(0.62f * PageW, 0.60f * PageW, 0f, PageW, PageCount, 1);
             Check("gate.snap.shelf-directional-commit the page a settled gesture commits to is anchor-relative, velocity-projected, travel-signed and railed to ±1 (a 30% lift advances, a 10% slow lift springs back, a 10% FLICK still advances, three pages of travel advances one, a nudge past a midpoint never commits backward) — and with no gesture anchor it degenerates to the nearest page verbatim, so every wheel/keyboard/chevron settle keeps its pre-existing behaviour",
                 fwd30 == 1 && slow10 == 0 && flick10 == 1 && back == 1 && railed == 1 && noAnchor == 1 && nudge == 1,
                 $"fwd30={fwd30}(1) slow10={slow10}(0) flick10={flick10}(1) back={back}(1) railed={railed}(1) noAnchor={noAnchor}(1) nudge={nudge}(1)");
@@ -2490,6 +2605,118 @@ static class ScrollSuite
             bool spread = flingFrames >= 2 && dirtyFrames >= 2 && growthFrames >= 2 && everAwakeWhileDirty && finalClean && finalWidth >= 16 && invariantHeld;
             Check("gate.virt.budgetSpreadsOverscan a budget<overscan REAL fling fills the overscan halo across ≥2 frames (VirtualRangeDirty persists, host awake via HasBudgetDeferredVirtuals) then clears at rest; the visible band stays covered throughout",
                 spread, $"flingFrames={flingFrames} dirtyFrames={dirtyFrames} growthFrames={growthFrames} awake={everAwakeWhileDirty} finalClean={finalClean} finalWidth={finalWidth} invariant={invariantHeld}");
+        }
+
+        // ── gate.virt.heavyRowHaloDrips — E4c: the steady realize pool is counted in ROWS, and a row is not a unit of
+        // work. Twelve 40 px probe rows is a comfortable frame; twelve Wavee track rows (~90 scene nodes each) is nine
+        // frame budgets. Worse, the at-rest catch-up skipped the pool ENTIRELY, so the whole overscan halo landed in one
+        // paint — and "at rest" was a velocity sample under FlingGuardThreshold, which a wheel/touchpad gesture dips
+        // below in every gap between notches. The two together are the sluggish-scroll hitch: a burst of cold heavy
+        // rows mounted inside a live gesture. So the pool is now denominated in the viewport's OWN measured per-row node
+        // cost (ColdRealizeRamp.NodeBudget, the same budget the cold ramp is sized from), the eager catch-up is refused
+        // to a viewport heavier than the pool, and rest means the KERNEL is Idle rather than momentarily slow.
+        //
+        // Measured here as the property that actually matters to a user: across a scripted wheel gesture (notch, gap,
+        // notch — the real cadence, not one notch per frame) NO single frame may mount a burst of rows. The halo must
+        // still CONVERGE — a budget that never catches up is a different bug — so the gate also requires the viewport
+        // to end clean with its full desired window realized.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("virt-heavy-halo", new Size2(640, 480), 1f)); window.Show();
+            var probe = new HeavyHaloProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe);
+            // One row of the probe, and the budget the production path derives from it — read through the SAME helpers
+            // the reconciler uses so the gate's allowance cannot drift from the constant it is guarding.
+            int rowNodes = HeavyHaloProbe.LeavesPerRow + 2;
+            int perFrameRows = ColdRealizeRamp.RowsPerFrame(rowNodes, 0f);
+            int visibleRows = (int)(400f / HeavyHaloProbe.RowH);                  // the probe's viewport, in rows
+            // What ONE paint may legitimately mount: the mandatory band (visible + a guard row per side, exempt from the
+            // pool by the anti-flicker invariant) plus one frame's pool plus the single row Target always grants. Every
+            // frame in this run is measured against it, INCLUDING the mount — the mount frame realizes the mandatory
+            // band and is supposed to DEFER the halo, so wherever the halo lands in one go it lands as an excess here.
+            int allowNodes = (visibleRows + 2) * rowNodes + ColdRealizeRamp.NodeBudget + rowNodes;
+
+            int worstMounts = 0, worstAt = -1, burstFrames = 0, frame = 0;
+            bool blanked = false;
+            NodeHandle vp = NodeHandle.Null;
+            HeadlessScrollProducer? prod = null;
+            for (int notch = 0; notch < 16; notch++)
+            {
+                // Pass 0 is the mount plus the settle after it (no notch): the mount defers the halo, and the paint
+                // right after it is "at rest" under any velocity test — the frame that used to hand back all 40 halo
+                // rows at once. Passes 1+ are a real wheel cadence: a notch of several rows, then a human-length gap,
+                // not one notch per frame (a notch per frame never lets the velocity dip that made rest a lie).
+                if (notch > 0) prod!.WheelNotch(-3f);
+                for (int f = 0; f < 7; f++, frame++)
+                {
+                    int nodes0 = host.Reconciler.MountedNodes;
+                    if (prod is null)
+                    {
+                        host.RunFrame();
+                        vp = FindScrollNode(host.Scene, host.Scene.Root);
+                        prod = new HeadlessScrollProducer(window, host, new Point2(150, 200));
+                    }
+                    else prod.Step(16f);
+                    int mounted = host.Reconciler.MountedNodes - nodes0;
+                    if (mounted > worstMounts) { worstMounts = mounted; worstAt = frame; }
+                    if (mounted > allowNodes) burstFrames++;
+
+                    // The anti-flicker invariant is not traded away for the drip: the visible band stays realized.
+                    host.Scene.TryGetScroll(vp, out var sc);
+                    int vFirst = (int)MathF.Floor(sc.OffsetY / HeavyHaloProbe.RowH);
+                    int vLast = Math.Min(HeavyHaloProbe.N, (int)MathF.Ceiling((sc.OffsetY + sc.ViewportH) / HeavyHaloProbe.RowH));
+                    if (!(sc.FirstRealized <= vFirst && sc.LastRealized >= vLast)) blanked = true;
+                }
+            }
+
+            // The halo converges once the gesture is over — a drip that never catches up would be a starved window.
+            for (int f = 0; f < 400 && host.HasActiveWork; f++) prod!.Step(16f);
+            bool clean = (host.Scene.Flags(vp) & NodeFlags.VirtualRangeDirty) == 0 && !host.Reconciler.HasBudgetDeferredVirtuals;
+            host.Scene.TryGetScroll(vp, out var scEnd);
+            int endWidth = scEnd.LastRealized - scEnd.FirstRealized;
+            bool converged = clean && endWidth >= visibleRows + HeavyHaloProbe.Overscan;   // visible band + the full halo
+
+            Check("gate.virt.heavyRowHaloDrips a wheel gesture over ~90-node rows never mounts more than the mandatory band plus one frame's node budget in a single paint (the at-rest eager catch-up no longer fires for a viewport heavier than the steady pool, and a velocity dip between notches is not rest) — and the halo still converges to its full window at rest",
+                burstFrames == 0 && !blanked && converged,
+                $"worstMounts={worstMounts} nodes (allow {allowNodes}, {perFrameRows} rows/frame of {rowNodes}) at frame {worstAt}; burstFrames={burstFrames}/{frame} blanked={blanked} clean={clean} endWidth={endWidth}");
+        }
+
+        // ── gate.virt.extendedPathRamps — StaggerColdRealize must MEAN something on the extended realize path. Declaring
+        // ContentType (a list with more than one pooled row shape — the Wavee sidebar) routes a list to
+        // RealizeBoundWindowExtended, which was added later for the keep-alive/content-type pools and never grew a cold
+        // ramp. The opt-in was accepted and silently ignored, so the sidebar's cold window landed as ONE paint of ~50
+        // heavy slots and was the worst frame of a launch, while the identical list without ContentType ramped.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("virt-extended-ramp", new Size2(640, 480), 1f)); window.Show();
+            var probe = new ExtendedRampProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe);
+
+            int rowNodes = ExtendedRampProbe.LeavesPerRow + 2;
+            int allowNodes = ColdRealizeRamp.NodeBudget + rowNodes;   // one frame's pool, plus the row Target always grants
+            int worst = 0, growFrames = 0, frames = 0;
+            for (int f = 0; f < 200; f++)
+            {
+                int nodes0 = host.Reconciler.MountedNodes;
+                host.RunFrame();
+                frames++;
+                int mounted = host.Reconciler.MountedNodes - nodes0;
+                if (mounted > worst) worst = mounted;
+                if (mounted > 0) growFrames++;
+                // No early break before the ramp can even start: the mount frame runs BEFORE layout publishes a
+                // viewport height, so the window is briefly nothing and the host briefly idle.
+                if (f > 4 && !host.HasActiveWork) break;
+            }
+            var vp = FindScrollNode(host.Scene, host.Scene.Root);
+            host.Scene.TryGetScroll(vp, out var sc);
+            int width = sc.LastRealized - sc.FirstRealized;
+            int visibleRows = (int)(400f / ExtendedRampProbe.RowH);
+            bool clean = (host.Scene.Flags(vp) & NodeFlags.VirtualRangeDirty) == 0;
+            // Spread across frames, each within one pool, and finished: a ramp that never converges is the other bug.
+            bool spread = growFrames >= 2 && worst <= allowNodes && clean && width >= visibleRows;
+
+            Check("gate.virt.extendedPathRamps a ContentType (extended-realize) list that opts into StaggerColdRealize actually ramps — its cold window is built over several frames, each within one frame's node budget, and still converges to the full visible window",
+                spread, $"worst={worst} nodes (allow {allowNodes}) growFrames={growFrames}/{frames} width={width} (visible {visibleRows}) clean={clean}");
         }
 
         // ── gate.virt.budgetScalesWithVelocity — E4b: the per-frame realize pool is a FLOOR lifted toward a ceiling in
@@ -4055,7 +4282,7 @@ static class ScrollSuite
             var restRed = FindFillCommand(dlRest, red); var restBlue = FindFillCommand(dlRest, blue);
             bool restOrder = restRed.Order >= 0 && restBlue.Order >= 0 && restRed.Order < restBlue.Order;   // document order at rest
 
-            scene.Flags(elev) |= NodeFlags.Hovered;   // pointer on the flagged (earlier) child
+            scene.SetFlagBits(elev, NodeFlags.Hovered);   // pointer on the flagged (earlier) child
             var dlHov = new DrawList();
             SceneRecorder.Record(scene, dlHov);
             var hovRed = FindFillCommand(dlHov, red); var hovBlue = FindFillCommand(dlHov, blue);
@@ -6897,6 +7124,154 @@ static class ScrollSuite
                 $"sticky={sticky} indexAt={at} jumped={jumped:0.#} hdr16={gl.OffsetOf(16, cross):0.#}");
         }
     }
+    static void MeasuredTailExtentChecks(StringTable strings)
+    {
+        const float Cross = 300f;
+        const float Expected = MeasuredTailExtentProbe.N * MeasuredTailExtentProbe.RowH;
+        var fonts = new HeadlessFontSystem(strings);
+
+        static float SumExtents(MeasuredStackVirtualLayout layout)
+        {
+            _ = layout.ContentExtent(MeasuredTailExtentProbe.N, Cross);
+            float sum = 0f;
+            for (int i = 0; i < MeasuredTailExtentProbe.N; i++)
+                sum += layout.ItemRect(i, Cross).H;
+            return sum;
+        }
+
+        static string ExtentTail(MeasuredStackVirtualLayout layout, int around)
+        {
+            _ = layout.ContentExtent(MeasuredTailExtentProbe.N, Cross);
+            var parts = new List<string>(8);
+            int lo = Math.Max(0, around - 2), hi = Math.Min(MeasuredTailExtentProbe.N - 1, around + 2);
+            for (int i = lo; i <= hi; i++)
+                parts.Add($"[{i}]={layout.ItemRect(i, Cross).H:0.##}");
+            parts.Add($"last={layout.ItemRect(MeasuredTailExtentProbe.N - 1, Cross).H:0.##}");
+            return string.Join(' ', parts);
+        }
+
+        static bool ScrollToEnd(AppHost host, MeasuredTailExtentProbe probe)
+        {
+            var vp = probe.Controller.Viewport;
+            if (vp.IsNull) return false;
+            // Walk the list so every row is realized at least once (estimate tail must be replaced, not just the
+            // end window). Then snap the last row to the viewport end.
+            for (int i = 0; i < MeasuredTailExtentProbe.N; i += 4)
+            {
+                probe.Controller.StartBringItemIntoView(i, alignmentRatio: 0f, animate: false);
+                host.RunFrame();
+            }
+            probe.Controller.StartBringItemIntoView(MeasuredTailExtentProbe.N - 1, alignmentRatio: 1f, animate: false);
+            for (int i = 0; i < 8; i++) host.RunFrame();
+            return host.Scene.TryGetScroll(vp, out _);
+        }
+
+        static bool LastRowFlushAtBottom(in ScrollState sc, MeasuredStackVirtualLayout layout)
+        {
+            float lastTop = layout.OffsetOf(MeasuredTailExtentProbe.N - 1, Cross);
+            float lastExtent = layout.ItemRect(MeasuredTailExtentProbe.N - 1, Cross).H;
+            float maxOff = MathF.Max(0f, sc.ContentH - sc.ViewportH);
+            return Near(sc.OffsetY, maxOff, 1.5f)
+                && Near(lastTop + lastExtent, sc.ContentH, 1.5f)
+                && Near(sc.OffsetY + sc.ViewportH, lastTop + lastExtent, 1.5f);
+        }
+
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("measured-tail-no-expand", new Size2(360, 760), 1f));
+            window.Show();
+            var probe = new MeasuredTailExtentProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame(); host.RunFrame();
+            bool scrolled = ScrollToEnd(host, probe);
+            var vp = probe.Controller.Viewport;
+            host.Scene.TryGetScroll(vp, out var sc);
+            float content = probe.Layout.ContentExtent(MeasuredTailExtentProbe.N, Cross);
+            float sum = SumExtents(probe.Layout);
+            bool extentExact = Near(content, Expected, 0.5f) && Near(sc.ContentH, Expected, 0.5f) && Near(sum, Expected, 0.5f);
+            bool noOverscanTail = sc.LastRealized == MeasuredTailExtentProbe.N && sc.ItemCount == MeasuredTailExtentProbe.N;
+            bool lastFlush = LastRowFlushAtBottom(in sc, probe.Layout);
+            Check("gate.scroll.measured-tail-extent-no-expand a measured bound list scrolled to the end publishes ContentExtent == Σ row heights (every realized row replaced its estimate; overscan past ItemCount adds nothing) and the last row sits flush at the viewport bottom",
+                scrolled && extentExact && noOverscanTail && lastFlush,
+                $"scrolled={scrolled} content={sc.ContentH:0.##}/{content:0.##} sum={sum:0.##} want={Expected:0} vp={sc.ViewportH:0.##} off={sc.OffsetY:0.##} max={sc.ContentH - sc.ViewportH:0.##} lastRealized={sc.LastRealized}/{sc.ItemCount} {ExtentTail(probe.Layout, MeasuredTailExtentProbe.N - 1)}");
+        }
+
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("measured-tail-after-collapse", new Size2(360, 760), 1f));
+            window.Show();
+            var probe = new MeasuredTailExtentProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame(); host.RunFrame();
+
+            probe.Expanded.Value = MeasuredTailExtentProbe.ExpandIndex;
+            for (int i = 0; i < 20; i++) host.RunFrame();   // settle the 200ms enter
+            float openExtent = probe.Layout.ItemRect(MeasuredTailExtentProbe.ExpandIndex, Cross).H;
+            bool opened = openExtent > MeasuredTailExtentProbe.RowH + 8f;
+
+            probe.Expanded.Value = -1;
+            host.RunFrame();   // remove → exit orphan
+            for (int i = 0; i < 40; i++)
+            {
+                host.RunFrame();
+                if (host.Scene.OrphanCount == 0) break;
+            }
+            for (int i = 0; i < 4; i++) host.RunFrame();   // one last measure after reclaim
+            float closedExtent = probe.Layout.ItemRect(MeasuredTailExtentProbe.ExpandIndex, Cross).H;
+            bool orphansGone = host.Scene.OrphanCount == 0;
+            bool rowRetracted = Near(closedExtent, MeasuredTailExtentProbe.RowH, 0.5f);
+
+            bool scrolled = ScrollToEnd(host, probe);
+            var vp = probe.Controller.Viewport;
+            host.Scene.TryGetScroll(vp, out var sc);
+            float content = probe.Layout.ContentExtent(MeasuredTailExtentProbe.N, Cross);
+            float sum = SumExtents(probe.Layout);
+            bool extentExact = Near(content, Expected, 0.5f) && Near(sc.ContentH, Expected, 0.5f) && Near(sum, Expected, 0.5f);
+            bool lastFlush = LastRowFlushAtBottom(in sc, probe.Layout);
+            Check("gate.scroll.measured-tail-extent-after-collapse expanding then collapsing a measured row (SizeMode.Reflow exit orphan finishes) retracts that row's ExtentTable entry to the closed height, ContentExtent == Σ row heights, and the last row sits flush at the viewport bottom",
+                opened && orphansGone && rowRetracted && scrolled && extentExact && lastFlush,
+                $"opened={opened} openH={openExtent:0.##} orphansGone={orphansGone} rowH={closedExtent:0.##} content={sc.ContentH:0.##}/{content:0.##} sum={sum:0.##} want={Expected:0} vp={sc.ViewportH:0.##} off={sc.OffsetY:0.##} max={sc.ContentH - sc.ViewportH:0.##} lastRealized={sc.LastRealized} {ExtentTail(probe.Layout, MeasuredTailExtentProbe.ExpandIndex)}");
+        }
+
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("measured-tail-offscreen-collapse", new Size2(360, 760), 1f));
+            window.Show();
+            var probe = new MeasuredTailExtentProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame(); host.RunFrame();
+
+            probe.Expanded.Value = MeasuredTailExtentProbe.ExpandIndex;
+            for (int i = 0; i < 20; i++) host.RunFrame();
+            float openExtent = probe.Layout.ItemRect(MeasuredTailExtentProbe.ExpandIndex, Cross).H;
+            bool opened = openExtent > MeasuredTailExtentProbe.RowH + 8f;
+
+            probe.Controller.StartBringItemIntoView(MeasuredTailExtentProbe.N - 1, alignmentRatio: 1f, animate: false);
+            for (int i = 0; i < 8; i++) host.RunFrame();
+            bool offscreen = !probe.Controller.IsItemRealized(MeasuredTailExtentProbe.ExpandIndex);
+
+            probe.Expanded.Value = -1;
+            for (int i = 0; i < 8; i++) host.RunFrame();
+            float leftover = probe.Layout.ItemRect(MeasuredTailExtentProbe.ExpandIndex, Cross).H;
+            bool cachedTall = leftover > MeasuredTailExtentProbe.RowH + 8f;
+
+            bool corrected = probe.Controller.CorrectMeasuredExtent(probe.Layout,
+                MeasuredTailExtentProbe.ExpandIndex, MeasuredTailExtentProbe.RowH);
+            host.RunFrame(); host.RunFrame();
+            float closedExtent = probe.Layout.ItemRect(MeasuredTailExtentProbe.ExpandIndex, Cross).H;
+            bool retracted = Near(closedExtent, MeasuredTailExtentProbe.RowH, 0.5f);
+
+            bool scrolled = ScrollToEnd(host, probe);
+            host.Scene.TryGetScroll(probe.Controller.Viewport, out var sc);
+            float content = probe.Layout.ContentExtent(MeasuredTailExtentProbe.N, Cross);
+            bool extentExact = Near(content, Expected, 0.5f) && Near(sc.ContentH, Expected, 0.5f);
+            bool lastFlush = LastRowFlushAtBottom(in sc, probe.Layout);
+            Check("gate.scroll.measured-tail-extent-offscreen-collapse an UNREALIZED measured row keeps its drawer extent until CorrectMeasuredExtent retracts it; after that ContentExtent == Σ row heights and the last row sits flush at the viewport bottom",
+                opened && offscreen && cachedTall && corrected && retracted && scrolled && extentExact && lastFlush,
+                $"opened={opened} offscreen={offscreen} leftover={leftover:0.##} corrected={corrected} rowH={closedExtent:0.##} content={sc.ContentH:0.##}/{content:0.##} want={Expected:0} lastFlush={lastFlush} {ExtentTail(probe.Layout, MeasuredTailExtentProbe.ExpandIndex)}");
+        }
+    }
+
     static void ScrollHoverVirtualCheck(StringTable strings)
     {
         using var app = new HeadlessPlatformApp();

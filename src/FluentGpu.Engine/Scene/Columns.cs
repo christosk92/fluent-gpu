@@ -9,15 +9,10 @@ public enum VisualKind : byte { None = 0, Box = 1, Text = 2, Image = 3, Polyline
 /// <see cref="NodePaint.ImageId"/>; <see cref="DerivedImageId"/> is selected only after its bake reaches Ready.</summary>
 public readonly record struct ImageVisualEffects(int DerivedImageId, ColorF Overlay, ImageMaskSpec Mask, float Saturation = 1f);
 
-/// <summary>Per-text-node measure cache (layout.md §2.3): a pure-function cache of (text, style, availWidth) → size, so a
-/// scoped relayout skips re-shaping a text leaf whose inputs are unchanged. Self-invalidating — any input change makes
-/// the stored key not match. Helps the real DirectWrite shaping path; neutral for the headless fake font.
-/// Besides the size, the cache retains the face's DECORATION metrics from the same <c>TextMetrics</c> (top-down DIP,
-/// the line frame of <c>Baseline</c> — see FluentGpu.Text.TextMetrics): the recorder reads them at record time to
-/// place underline/strikethrough bars (NodePaint.TextDecorations) without re-touching the font seam. Filled by the
-/// layout engine's measure-miss path; 0 ⇒ the backend reported no face metrics (the recorder falls back to a
-/// size-derived approximation).</summary>
-public struct TextMeasureCache
+/// <summary>One measured (text, style, availWidth) → size result, plus the face decoration metrics from the same
+/// <c>TextMetrics</c> (top-down DIP, the line frame of <c>Baseline</c> — see FluentGpu.Text.TextMetrics). Two of these
+/// form the per-node ring in <see cref="TextMeasureCache"/>.</summary>
+public struct TextMeasureEntry
 {
     public bool Valid;
     public StringId Text;
@@ -36,6 +31,59 @@ public struct TextMeasureCache
     /// <summary>Strikethrough bar top, measured DOWN from the line top (DWrite strikethroughPosition flipped;
     /// headless model: SizeDip × 0.8).</summary>
     public float StrikeY;
+
+    public readonly bool Matches(StringId text, in TextStyle style, float maxW)
+        => Valid && Text == text && MaxW == maxW && Style == style;
+}
+
+/// <summary>Per-text-node measure cache (layout.md §2.3): a pure-function cache of (text, style, availWidth) → size, so a
+/// scoped relayout skips re-shaping a text leaf whose inputs are unchanged. Self-invalidating — any input change makes
+/// the stored key not match. Helps the real DirectWrite shaping path; neutral for the headless fake font.
+/// <para>Operation ultra-fast GPU engine, P4: a <b>2-entry ring</b>, not a single slot. A stretched text leaf is measured
+/// TWICE per layout pass at two different widths — once at the parent's available width during Measure, once at the final
+/// arranged width during Arrange — and a single slot thrashed between them, so EVERY frame re-shaped the run even though
+/// nothing changed. Two entries hold both widths, so the second frame is a pure hit
+/// (<c>gate.layout.text-cache-ring</c>).</para>
+/// <para>The recorder reads the entry whose <see cref="TextMeasureEntry.MaxW"/> matches the width it is drawing at
+/// (<see cref="ResolveForWidth"/>), falling back to the most recently used entry — which is what a single slot's
+/// "whichever was written last" read resolved to before the ring.</para></summary>
+public struct TextMeasureCache
+{
+    public TextMeasureEntry E0, E1;
+    /// <summary>The slot the next miss overwrites (alternates, so both measure widths survive a pass).</summary>
+    private byte _next;
+    /// <summary>The slot most recently stored OR hit — the recorder's fallback when no entry matches its draw width.</summary>
+    private byte _last;
+
+    public readonly bool Valid => E0.Valid || E1.Valid;
+
+    /// <summary>Probe both entries. A hit also becomes the ring's "last used" entry, so the recorder's fallback follows
+    /// the width the layout pass most recently resolved at (the arranged width).</summary>
+    public bool TryGet(StringId text, in TextStyle style, float maxW, out TextMeasureEntry hit)
+    {
+        if (E0.Matches(text, in style, maxW)) { _last = 0; hit = E0; return true; }
+        if (E1.Matches(text, in style, maxW)) { _last = 1; hit = E1; return true; }
+        hit = default; return false;
+    }
+
+    /// <summary>Store a fresh measure into the ring, alternating slots.</summary>
+    public void Store(in TextMeasureEntry entry)
+    {
+        if (_next == 0) E0 = entry; else E1 = entry;
+        _last = _next;
+        _next = (byte)(_next ^ 1);
+    }
+
+    /// <summary>The entry the recorder should read for a run drawn at <paramref name="width"/>: an exact MaxW match wins,
+    /// else the most recently used entry, else any valid one. <c>Valid == false</c> ⇒ no measure has run for this node.</summary>
+    public readonly TextMeasureEntry ResolveForWidth(float width)
+    {
+        if (E0.Valid && E0.MaxW == width) return E0;
+        if (E1.Valid && E1.MaxW == width) return E1;
+        ref readonly TextMeasureEntry last = ref _last == 0 ? ref E0 : ref E1;
+        if (last.Valid) return last;
+        return E0.Valid ? E0 : E1;
+    }
 }
 
 /// <summary>Layout-input column (flexbox: direction + gap + padding + margin + flex grow/shrink/basis + justify/align + min/max + explicit size + text style).</summary>

@@ -922,8 +922,8 @@ sealed class PagedShelfSnapProbe : Component
         AlignItems = FlexAlign.Stretch,
         Children =
         [
-            PagedShelf.Create(10,
-                static (i, w) => new BoxEl { Width = w, Height = 44f, Fill = ColorF.FromRgba(40, 90, 220), OnClick = static () => { } },
+            PagedShelf.Create(new int[10],
+                static (item, i, w) => new BoxEl { Width = w, Height = 44f, Fill = ColorF.FromRgba(40, 90, 220), OnClick = static () => { } },
                 pager: ShelfPager.None,
                 customPager: ctx => { Pager = ctx; return new BoxEl { Width = 0f, Height = 0f }; },
                 minCardW: CardW, maxCardW: CardW, gap: Gap, fixedCardW: CardW,
@@ -963,14 +963,14 @@ sealed class PagedShelfChartProbe : Component
         AlignItems = FlexAlign.Stretch,
         Children =
         [
-            PagedShelf.Create(Count,
-                static (i, w) => new BoxEl { Width = w, Height = RowH, Fill = ColorF.FromRgba(40, 90, 220), OnClick = static () => { } },
+            PagedShelf.Create(new int[Count],
+                static (item, i, w) => new BoxEl { Width = w, Height = RowH, Fill = ColorF.FromRgba(40, 90, 220), OnClick = static () => { } },
                 cardHeight: static _ => RowH,
                 pager: ShelfPager.None,
                 customPager: ctx => { Pager = ctx; return new BoxEl { Width = 0f, Height = 0f }; },
                 minCardW: CardW, maxCardW: CardW, gap: Gap, rows: Rows, fixedCardW: CardW,
                 headerGap: 0f, edgeFade: 0f,
-                keyOf: static i => "chart-probe-" + i,
+                keyOf: static (item, i) => "chart-probe-" + i,
                 snap: ShelfSnap.Page),
         ],
     };
@@ -992,8 +992,8 @@ sealed class PagedShelfMeasuredProbe : Component
         AlignItems = FlexAlign.Stretch,
         Children =
         [
-            PagedShelf.Create(10,
-                (i, w) =>
+            PagedShelf.Create(new int[10],
+                (item, i, w) =>
                 {
                     ColorF fill = i == 0 ? FirstFill : OtherFill;
                     return new BoxEl
@@ -1011,7 +1011,7 @@ sealed class PagedShelfMeasuredProbe : Component
                 fixedCardW: 100f,
                 headerGap: 0f,
                 edgeFade: 24f,
-                keyOf: i => "shelf-probe-" + i,
+                keyOf: (item, i) => "shelf-probe-" + i,
                 measured: true),
         ],
     };
@@ -1463,6 +1463,85 @@ sealed class ColdStaggerRemountProbe : Component
             ],
         };
     }
+}
+
+/// <summary>ONE heavy row, as a COMPONENT — which is what makes it heavy. A bound list's rows are prototype-cached
+/// when they are plain element trees: the first row mounts its shape and every sibling reuses it, so a "heavy" probe
+/// built from 288 identical boxes measures ~20 nodes a row and proves nothing. Wavee's track row and sidebar row are
+/// components (ExpandableRowSlot, RowOrRecContent, SidebarPaneSlot) that RUN per row, and a component is mounted, not
+/// cloned. This is the smallest thing with that property.</summary>
+sealed class HeavyRowComponent : Component
+{
+    public const int Leaves = 88;
+
+    public override Element Render()
+    {
+        var kids = new Element[Leaves + 1];
+        kids[0] = new TextEl("row") { Size = 12f };
+        for (int k = 0; k < Leaves; k++)
+            kids[k + 1] = new BoxEl { Width = 1f + k * 0.01f, Height = 1f, Fill = ColorF.FromRgba((byte)(20 + k % 200), 20, 20) };
+        return new BoxEl { MinHeight = HeavyHaloProbe.RowH, Height = HeavyHaloProbe.RowH, Children = kids };
+    }
+}
+
+// E4c — the HEAVY-row halo shape. Wavee's track row is ~90 scene nodes; the engine's steady realize pool is counted in
+// ROWS (12/frame), so a viewport of rows like these can be handed nine frame budgets of mounting in a single paint —
+// and the at-rest eager catch-up handed it the whole overscan halo at once.
+//
+// StaggerColdRealize is deliberately OFF, which is what makes the shape reachable at all. The cold ramp caps
+// MATERIALIZATION inside the desired window, so a ramping viewport is protected from the burst as a side effect; the
+// lists that actually take it are the ones with no ramp — Wavee's track list consumes a ONE-SHOT cold stagger and
+// scrolls with it false ever after, and the album arm never sets it. Those are exactly the lists whose per-row node
+// cost the steady pool has to be denominated in, which is why the reconciler now folds the node measurement on every
+// grow rather than only on a ramping one.
+sealed class HeavyHaloProbe : Component
+{
+    public const int N = 2_000;
+    public const float RowH = 40f;
+    public const int Overscan = 40;
+    public const int LeavesPerRow = HeavyRowComponent.Leaves;
+
+    public override Element Render()
+    {
+        return new BoxEl
+        {
+            Width = 400, Height = 400,
+            Children =
+            [
+                ItemsView.CreateBound(N, scope => Embed.Comp(() => new HeavyRowComponent()),
+                RepeatLayout.Stack(RowH),
+                new ListOptions { Overscan = Overscan }),
+            ],
+        };
+    }
+}
+
+// E4c, second half — the same heavy-row shape routed down the EXTENDED realize path. Declaring ContentType (which the
+// Wavee sidebar does, to pool its several row shapes) sends a list to RealizeBoundWindowExtended, which had no cold
+// ramp at all: StaggerColdRealize was accepted and then ignored, so the sidebar's whole cold window — ~50 slots, ~1 100
+// nodes — landed in one paint and was the single worst frame of a launch.
+sealed class ExtendedRampProbe : Component
+{
+    public const int N = 400;
+    public const float RowH = 40f;
+    public const int LeavesPerRow = HeavyRowComponent.Leaves;
+
+    public override Element Render() => new BoxEl
+    {
+        Width = 400, Height = 400,
+        Children =
+        [
+            ItemsView.CreateBound(N, scope => Embed.Comp(() => new HeavyRowComponent()),
+            RepeatLayout.Stack(RowH),
+            new ListOptions
+            {
+                Overscan = 4,
+                // What routes this list to the extended realizer at all — two pooled row shapes, the sidebar's shape.
+                ContentType = i => i % 2,
+                Entrance = new EntranceOptions { StaggerColdRealize = true },
+            }),
+        ],
+    };
 }
 
 // Detail-resize-flicker Fix-2 gate: a warming staggered list must keep refilling during modal-loop keep-alive paints
@@ -5636,4 +5715,97 @@ sealed class TextUnderModalProbeInner : Component
             Children = [new BoxEl { Width = 400f, Direction = 1, Gap = 24f, AlignItems = FlexAlign.Center, Children = kids }],
         };
     }
+}
+
+// ── gate.reconciler.park-mount-inherits-parked ───────────────────────────────────────────────────────────────────────
+// The service a KeepAlive-parked page's late-settling skeleton region must still resolve from the ROOT provider. The
+// sentinel matters: the plain-UseContext half of the gate asserts the consumer NEVER observed Context.Default (the
+// silent variant of the same defect — UseRequiredContext throws, UseContext quietly returns the default and, having
+// subscribed to nothing, stays wrong forever).
+sealed class ParkMountService
+{
+    public readonly string Name;
+    public ParkMountService(string name) => Name = name;
+}
+
+static class ParkMountCtx
+{
+    public static readonly ParkMountService Missing = new("MISSING-DEFAULT");
+    public static readonly Context<ParkMountService> Slot = new(Missing);
+}
+
+// One shared execution log for the two consumers below.
+sealed class ParkMountLog
+{
+    public readonly List<string> Renders = new();          // "<who>@<resolved service name>", in run order
+    public readonly List<string> PlainObserved = new();     // every value the tolerant consumer ever saw
+    public string? Thrown;                                  // the UseRequiredContext failure, if the defect is live
+}
+
+// Mounted by the skeleton region's REAL branch — i.e. first mounted while the page is parked and detached.
+sealed class ParkMountRequiredConsumer : Component
+{
+    readonly ParkMountLog _log;
+    public ParkMountRequiredConsumer(ParkMountLog log) => _log = log;
+
+    public override Element Render()
+    {
+        var svc = UseRequiredContext(ParkMountCtx.Slot);   // throws when this renders detached (the crash under test)
+        _log.Renders.Add("required@" + svc.Name);
+        return new BoxEl { Width = 40f, Height = 12f, Children = [Text("req")] };
+    }
+}
+
+sealed class ParkMountPlainConsumer : Component
+{
+    readonly ParkMountLog _log;
+    public ParkMountPlainConsumer(ParkMountLog log) => _log = log;
+
+    public override Element Render()
+    {
+        var svc = UseContext(ParkMountCtx.Slot);            // silently returns Default when this renders detached
+        _log.PlainObserved.Add(svc.Name);
+        _log.Renders.Add("plain@" + svc.Name);
+        return new BoxEl { Width = 40f, Height = 12f, Children = [Text("plain")] };
+    }
+}
+
+// Page "a": a SkelRegion whose Pending branch is a plain shimmer source and whose REAL branch is a plain BoxEl wrapper
+// (the unmarked node the old Mount created) carrying the two context consumers one level below it.
+sealed class ParkMountPage : Component
+{
+    readonly Signal<bool> _pending;
+    readonly ParkMountLog _log;
+    readonly Action<NodeHandle> _onRealBranch;
+    public ParkMountPage(Signal<bool> pending, ParkMountLog log, Action<NodeHandle> onRealBranch)
+    {
+        _pending = pending; _log = log; _onRealBranch = onRealBranch;
+    }
+
+    public override Element Render() => new BoxEl
+    {
+        Direction = 1,
+        Children =
+        [
+            new SkelRegionEl(
+                Pending: () => _pending.Value,
+                Failed: static () => false,
+                Content: () => new BoxEl
+                {
+                    Direction = 1,
+                    OnRealized = _onRealBranch,   // the wrapper node whose Parked flag this gate reads directly
+                    Children =
+                    [
+                        Embed.Comp(() => new ParkMountRequiredConsumer(_log)),
+                        Embed.Comp(() => new ParkMountPlainConsumer(_log)),
+                    ],
+                },
+                ShimmerSource: static () => new BoxEl { Width = 40f, Height = 12f },
+                OnFailed: null,
+                Reveal: SkelReveal.FadeOnly,
+                Style: SkeletonStyle.Default,
+                Group: null,
+                SmoothResize: false),
+        ],
+    };
 }

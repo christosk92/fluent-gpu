@@ -136,10 +136,12 @@ internal readonly struct RunKey : IEquatable<RunKey>
 /// </summary>
 internal sealed unsafe class GlyphRenderer : IDisposable
 {
-    // 2048² R8 (4 MB CPU mirror + 4 MB GPU): sized so even the Iconography page's full Segoe Fluent catalog
-    // (~1,500 distinct glyphs at two sizes) plus the app's text fits one generation. Overflow is still HANDLED
-    // (generational reset below) — before that, a full atlas silently cached entries at X=Y=0, so every later
-    // glyph sampled the atlas origin and corrupted all text for the rest of the session.
+    // 4096² R8 (16 MiB CPU mirror + 16 MiB GPU texture): sized so even the Iconography page's full Segoe Fluent
+    // catalog (~1,500 distinct glyphs at two sizes, each SubPixelPhases× tall) plus the app's text fits one
+    // generation. Overflow is still HANDLED (generational reset below) — before that, a full atlas silently cached
+    // entries at X=Y=0, so every later glyph sampled the atlas origin and corrupted all text for the rest of the
+    // session. The UPLOAD side is not sized off this: staging is a bounded dirty-row band, not a third+fourth+fifth
+    // full-size copy of the atlas (see UploadIfDirty and InitialStagingRows).
     private const int ATLAS = 4096;
 
     /// <summary>Vertical sub-pixel positions each glyph is rasterized at. Text can then be placed on a 1/N device-row
@@ -165,19 +167,29 @@ internal sealed unsafe class GlyphRenderer : IDisposable
     private readonly Dictionary<(string fam, int weight), FaceMetrics> _faceMetrics = new();
     private readonly Dictionary<string, int> _famIds = new();
 
-    private readonly byte[] _cpu = new byte[ATLAS * ATLAS];
+    // The R8 mirror + the append-only shelf packer + the DIRTY-ROW REGION that bounds every upload, all in one
+    // backend-agnostic, COM-free class (FluentGpu.Text.GlyphAtlasStore). Its class doc carries the three-clause
+    // region-tracking invariant this renderer's UploadIfDirty depends on; read it before touching the upload path.
+    private readonly GlyphAtlasStore _atlas = new(ATLAS);
     private ID3D12Resource* _tex;
     // Atlas staging, BANKED per frame-in-flight (FrameCount deep). WaitForFrame only proves frame
     // N−FrameCount retired, never N−1, so consecutive dirty-atlas frames raced a single shared staging buffer —
-    // latent at frame latency 1, live at 2. The copy is a FULL-atlas re-record on every dirty frame, so the other
-    // banks' staleness is irrelevant and _atlasDirty semantics are unchanged.
+    // latent at frame latency 1, live at 2. Each bank holds a CONTIGUOUS full-width row band of the atlas (never the
+    // whole atlas), so a bank of R rows costs R·ATLAS bytes and grows only when a frame actually needs more.
     private readonly ID3D12Resource*[] _texUpload = new ID3D12Resource*[FrameCount];
+    // Rows each bank can stage. 1024 rows = 4 MiB: a COLD first frame of an app shell rasterizes ~400–700 rows of
+    // shelves (one shelf per (size, weight) ≈ SubPixelPhases × the ink height), so this lands a first paint whole
+    // without a growth round-trip. The cap is 2048 rows = 8 MiB per bank: a frame that dirties more than that (a
+    // generational reset re-rasterizing a huge working set) drains across two frames, arming a repaint — bounded
+    // memory beats a bank permanently ratcheted to the full 16 MiB atlas.
+    private const int InitialStagingRows = 1024;
+    private const int MaxStagingRows = 2048;
+    private readonly int[] _stagingRows = new int[FrameCount];
+    private int _wantStagingRows = InitialStagingRows;
+    private bool _uploadBacklog;              // a flush left rows dirty (staging short) — this frame's text is not faithful
     private ID3D12DescriptorHeap* _srvHeap;
     private D3D12_GPU_DESCRIPTOR_HANDLE _srvGpu;
-    private bool _atlasDirty = true;
-    private long _atlasNonZero;
     private bool _texInitialized;
-    private int _shelfX = 1, _shelfY = 1, _shelfH;
 
     private readonly Dictionary<GlyphKey, GlyphEntry> _cache = new();
     // ThemedIcon coverage masks packed into the SAME R8 atlas as glyphs, keyed by (interned PathId, device px). A
@@ -337,7 +349,7 @@ float4 PSMain(VSOutG i) : SV_Target
     public int RunsCached => _runsCached;
     public int RunsShaped => _runsShaped;
     public int DroppedInstances => _dropped;
-    public long AtlasNonZero => _atlasNonZero;
+    public long AtlasNonZero => _atlas.NonZeroTexels;
     /// <summary>Sub-glyph WIPE instances dropped this frame because the <c>MaxGradGlyphs</c> budget was exhausted.
     /// Non-zero = a karaoke line rendered TRUNCATED; the budget (or the settled-split fast path) needs attention.</summary>
     public int GradInstancesDropped => _gradDropped;
@@ -353,7 +365,13 @@ float4 PSMain(VSOutG i) : SV_Target
     /// <summary>Cached shaped text runs (the run cache) — O(1) census.</summary>
     internal int CachedRunCount => _runCache.Count;
     /// <summary>Atlas generation-reset count (the epoch counter; bumped when the atlas fills and flushes) — O(1).</summary>
-    internal int AtlasResetCount => _atlasEpoch;
+    internal int AtlasResetCount => _atlas.Epoch;
+    /// <summary>Bytes each per-frame atlas staging bank currently holds (a dirty-row band, NOT the whole atlas) —
+    /// the census figure that used to read a flat 3 × ATLAS².</summary>
+    internal long AtlasStagingBytes
+    {
+        get { long n = 0; for (int i = 0; i < _stagingRows.Length; i++) n += (long)_stagingRows[i] * ATLAS; return n; }
+    }
     /// <summary>Total retained quad arrays across the pow2 free-list buckets — a fixed 14-bucket sum (census cadence,
     /// never per-frame): how many shaped-run arrays the renderer is holding for reuse.</summary>
     internal int QuadPoolRetained
@@ -503,11 +521,7 @@ float4 PSMain(VSOutG i) : SV_Target
 
         e = new GlyphEntry { Advance = advance, BearingX = bounds.left, BearingY = bounds.top, W = w, H = h };
         Diag.Set("text.glyph", "last", $"ch='{ch}' gi={gi} {w}x{h}x{SubPixelPhases} adv={advance:0.0}");
-        if (w > 0 && h > 0)
-        {
-            PackOrReset(ref e, stack, w, h * SubPixelPhases);
-            _atlasDirty = true;
-        }
+        if (w > 0 && h > 0) PackOrReset(ref e, stack, w, h * SubPixelPhases);   // a successful pack marks its rows dirty
         Diag.Count("text.glyph", "rasterized");
         _cache[key] = e;
         return e;
@@ -587,28 +601,13 @@ float4 PSMain(VSOutG i) : SV_Target
         return true;
     }
 
-    /// <summary>Shelf-pack one rasterized glyph. False = atlas full — the caller must NOT cache the entry as-is
-    /// (an unpacked entry keeps X=Y=0 and would sample the atlas origin); it resets the atlas generation and retries.</summary>
-    private bool TryPack(ref GlyphEntry e, byte[] src, int w, int h)
+    /// <summary>Shelf-pack one rasterized glyph into the atlas mirror (and mark its rows dirty for the next upload
+    /// flush). False = atlas full — the caller must NOT cache the entry as-is (an unpacked entry keeps X=Y=0 and would
+    /// sample the atlas origin); it resets the atlas generation and retries.</summary>
+    private bool TryPack(ref GlyphEntry e, ReadOnlySpan<byte> src, int w, int h)
     {
-        if (_shelfX + w + 1 > ATLAS) { _shelfX = 1; _shelfY += _shelfH + 1; _shelfH = 0; }
-        if (_shelfY + h + 1 > ATLAS) return false;   // atlas full → generational reset (ResetAtlas)
-        e.X = _shelfX; e.Y = _shelfY;
-        long nonZero = _atlasNonZero;
-        for (int row = 0; row < h; row++)
-        {
-            int srcOff = row * w;
-            int dstOff = (e.Y + row) * ATLAS + e.X;
-            for (int x = 0; x < w; x++)
-            {
-                byte v = src[srcOff + x];
-                _cpu[dstOff + x] = v;
-                if (v != 0) nonZero++;
-            }
-        }
-        _atlasNonZero = nonZero;
-        _shelfX += w + 1;
-        if (h > _shelfH) _shelfH = h;
+        if (!_atlas.TryPack(src, w, h, out int x, out int y)) return false;   // atlas full → generational reset (ResetAtlas)
+        e.X = x; e.Y = y;
         return true;
     }
 
@@ -619,7 +618,7 @@ float4 PSMain(VSOutG i) : SV_Target
     /// _cache/_iconCache/_runCache so everything re-rasterizes into the fresh generation next frame, and
     /// <see cref="AtlasResetPending"/> tells the device to force that next frame to actually happen (not be skip-submitted
     /// or baked as a faithful partial repaint).</summary>
-    private void PackOrReset(ref GlyphEntry e, byte[] src, int w, int h)
+    private void PackOrReset(ref GlyphEntry e, ReadOnlySpan<byte> src, int w, int h)
     {
         // A single glyph larger than the whole atlas can never pack — blank it without arming a reset, or an
         // oversized glyph would trigger a full cache flush every single frame it is on screen.
@@ -639,12 +638,17 @@ float4 PSMain(VSOutG i) : SV_Target
         e.X = 0; e.Y = 0; e.W = 0; e.H = 0;   // render nothing this frame rather than a stale/wrong glyph
     }
 
-    private int _atlasEpoch;
-    /// <summary>Overflow happened while the frame currently being recorded was shaped; the flush runs at the next
-    /// <see cref="BeginFrame"/>. While true, some newly-requested glyphs render blank, so the frame just submitted
-    /// is not a faithful rendering of the scene — the device must not skip-submit and must not treat it as a valid
-    /// partial-repaint base for the retained canvas.</summary>
-    internal bool AtlasResetPending => _resetPending;
+    /// <summary>The frame currently being recorded does NOT faithfully render its text, for one of two reasons, and
+    /// either way the device must not skip-submit it and must not treat it as a valid partial-repaint base for the
+    /// retained canvas:
+    /// <list type="bullet">
+    /// <item>the atlas OVERFLOWED while this frame was shaped — some newly-requested glyphs were emitted blank and the
+    /// generational flush runs at the next <see cref="BeginFrame"/> (the original meaning of the name); or</item>
+    /// <item>an upload flush was STAGING-SHORT — the tail of this frame's dirty row band did not fit the staging bank,
+    /// so glyphs packed into those rows sample not-yet-uploaded texels. The bank grows at the next
+    /// <see cref="BeginFrame"/> and the band drains; the forced repaint is what makes it invisible.</item>
+    /// </list></summary>
+    internal bool AtlasResetPending => _resetPending || _uploadBacklog;
     private bool _resetPending;
 
     /// <summary>Look up a packed icon mask's atlas UVs. Returns true on a HIT (a present entry, even an empty 0×0 mask —
@@ -662,11 +666,8 @@ float4 PSMain(VSOutG i) : SV_Target
     internal void PackIconMask(int pathId, int w, int h, byte[] src, out float u0, out float v0, out float u1, out float v1)
     {
         var e = new GlyphEntry { W = w, H = h };
-        if (w > 0 && h > 0)
-        {
-            PackOrReset(ref e, src, w, h);   // may trigger a generational reset (which clears _iconCache) — we add AFTER
-            _atlasDirty = true;
-        }
+        // A successful pack marks its rows dirty; may trigger a generational reset (which clears _iconCache) — we add AFTER.
+        if (w > 0 && h > 0) PackOrReset(ref e, src, w, h);
         _iconCache[(pathId, w, h)] = e;
         IconUv(in e, out u0, out v0, out u1, out v1);
     }
@@ -677,19 +678,18 @@ float4 PSMain(VSOutG i) : SV_Target
         u1 = (e.X + e.W) / (float)ATLAS; v1 = (e.Y + e.H) / (float)ATLAS;
     }
 
+    /// <summary>Generational flush. The GPU texture is deliberately NOT cleared: the reset drops every cached UV, and
+    /// the fresh generation re-uploads (full width) every row it lands on, so the previous generation's ink is
+    /// unreachable — see the GlyphAtlasStore region invariant, clause 1.</summary>
     private void ResetAtlas()
     {
-        Array.Clear(_cpu);
-        _shelfX = 1; _shelfY = 1; _shelfH = 0;
-        _atlasNonZero = 0;
+        _atlas.Reset();
         _cache.Clear();
         _iconCache.Clear();
         foreach (var kv in _runCache) ReturnQuads(kv.Value.Glyphs);
         _runCache.Clear();
-        _atlasEpoch++;
-        _atlasDirty = true;
         Diag.Count("text.atlas", "generation-reset");
-        Diag.Event("text.atlas", $"generation reset #{_atlasEpoch} (atlas full at {ATLAS}x{ATLAS})");
+        Diag.Event("text.atlas", $"generation reset #{_atlas.Epoch} (atlas full at {ATLAS}x{ATLAS})");
     }
 
     /// <summary>Lay out one run (LTR, design advances) into glyph quads in DIP space, then emit them tinted/transformed into
@@ -1074,7 +1074,7 @@ float4 PSMain(VSOutG i) : SV_Target
         int epoch, restarts = 0;
         do
         {
-            epoch = _atlasEpoch;
+            epoch = _atlas.Epoch;
             outList.Clear();
             colorsOut?.Clear();
             foreach (var lg in _engine.Glyphs)
@@ -1093,8 +1093,8 @@ float4 PSMain(VSOutG i) : SV_Target
                     colorsOut?.Add(lg.Span >= 0 && lg.Span < spans.Length ? spans[lg.Span].Color : default);
                 }
             }
-        } while (epoch != _atlasEpoch && ++restarts < 3);
-        return epoch == _atlasEpoch;
+        } while (epoch != _atlas.Epoch && ++restarts < 3);
+        return epoch == _atlas.Epoch;
     }
 
     private int FaceId(nint face) { if (_faceIds.TryGetValue(face, out int id)) return id; id = _faceIds.Count + 1; _faceIds[face] = id; return id; }
@@ -1122,11 +1122,7 @@ float4 PSMain(VSOutG i) : SV_Target
         bool hasInk = TryRasterizePhaseStack(&run, out RECT bounds, out int w, out int h, out byte[] stack);
         if (!hasInk) { bounds = default; w = 0; h = 0; }
         e = new GlyphEntry { Advance = 0f, BearingX = bounds.left, BearingY = bounds.top, W = w, H = h };
-        if (w > 0 && h > 0)
-        {
-            PackOrReset(ref e, stack, w, h * SubPixelPhases);
-            _atlasDirty = true;
-        }
+        if (w > 0 && h > 0) PackOrReset(ref e, stack, w, h * SubPixelPhases);   // a successful pack marks its rows dirty
         Diag.Count("text.glyph", "rasterized");
         _cache[key] = e;
         return e;
@@ -1225,8 +1221,14 @@ float4 PSMain(VSOutG i) : SV_Target
         _tex = tex;
         D3D12MemoryDiagnostics.Track(_tex, $"Glyph.AtlasTexture {ATLAS}x{ATLAS} R8", (ulong)ATLAS * ATLAS);
 
+        // A staging bank is a dirty-ROW BAND, not a mirror of the atlas: InitialStagingRows × ATLAS bytes, grown at a
+        // frame boundary if a frame ever needs more. (Was ATLAS × ATLAS per bank — 3 × 16 MiB that a full-atlas
+        // memcpy + full-atlas CopyTextureRegion re-uploaded on EVERY dirty frame.)
         for (int f = 0; f < FrameCount; f++)
-            _texUpload[f] = CreateUpload(device, ATLAS * ATLAS, $"Glyph.AtlasUpload[{f}]");
+        {
+            _stagingRows[f] = InitialStagingRows;
+            _texUpload[f] = CreateUpload(device, (uint)(ATLAS * InitialStagingRows), $"Glyph.AtlasUpload[{f}]");
+        }
 
         D3D12_DESCRIPTOR_HEAP_DESC hd = default;
         hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE.D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
@@ -1247,39 +1249,103 @@ float4 PSMain(VSOutG i) : SV_Target
         _srvGpu = _srvHeap->GetGPUDescriptorHandleForHeapStart();
     }
 
-    // Multiple UploadIfDirty calls within ONE frame (one per dirty segment) all Map the SAME per-frame staging bank
-    // in sequence, but each recorded CopyTextureRegion reads it at EXECUTION time — one Close+ExecuteCommandLists
-    // per submit — so every copy this frame ends up uploading the FINAL _cpu snapshot, not the snapshot at the
-    // moment it was recorded. That is correct because the atlas is strictly APPEND-ONLY within a frame (generational
-    // resets are deferred to the next BeginFrame — see PackOrReset): the final snapshot is a superset of every
-    // earlier one, so a UV emitted earlier in the frame still points at texels that are byte-identical in it. If a
-    // mid-frame repack is ever reintroduced, this stops being true and needs a distinct staging region per flush.
+    // ── Atlas upload: DIRTY-ROW STAGING ───────────────────────────────────────────────────────────────────────────
+    // The region-tracking invariant lives on FluentGpu.Text.GlyphAtlasStore (three clauses: rows-plus-one-row-apron /
+    // one fixed band mapping per frame / append-only within a frame). What it means HERE, and why this is not the old
+    // full-atlas re-copy:
+    //
+    //   • A flush stages and copies only the atlas ROWS written since the previous flush, ± one apron row. Rows go up
+    //     FULL WIDTH (RowPitch = ATLAS, which is 256-aligned for the pitch rule and makes every band offset a whole
+    //     number of rows, hence 512-aligned for the placed-footprint rule) — so the packer's 1-texel gutter, which a
+    //     LINEAR sampler reads half a texel into at a cell edge, is uploaded with the cell instead of being left as
+    //     whatever the previous generation wrote there.
+    //   • Multiple UploadIfDirty calls within ONE frame (one per dirty segment) still Map the SAME per-frame staging
+    //     bank, and each recorded CopyTextureRegion still reads it at EXECUTION time (one Close+ExecuteCommandLists
+    //     per submit). That stays correct because the band mapping is FIXED for the frame — arena byte
+    //     (r − BandBase)·ATLAS is always atlas row r — so a copy recorded at flush 1 reads the FINAL bytes of ITS
+    //     rows, and the atlas is strictly APPEND-ONLY within a frame (generational resets are deferred to the next
+    //     BeginFrame — see PackOrReset), so those final bytes are a superset of what it was recorded for. Hence every
+    //     flush RE-STAGES the rows written since the last flush but records a copy only for rows no earlier copy of
+    //     this frame covers: within a frame each dirty row is copied exactly once, and the ranges are disjoint.
+    //   • A band longer than the staging bank is CLAMPED: the tail stays dirty, drains next frame, grows the bank at
+    //     the next BeginFrame, and arms AtlasResetPending so the device repaints instead of keeping the unfaithful
+    //     frame as a partial-repaint base. Never silent (Diag "text.atlas"/"stagingShort").
     public void UploadIfDirty(ID3D12GraphicsCommandList* cmd)
     {
-        if (!_atlasDirty && _texInitialized) return;
+        if (!_atlas.IsDirty && _texInitialized) return;
+
+        int rows = _stagingRows[_active];
+        if (!_atlas.TryTakeUpload(rows, out var flush))
+        {
+            // Nothing to land. The texture is created in COPY_DEST and a committed D3D12 resource starts ZEROED, which
+            // is exactly the empty mirror — so a first frame with no glyphs owes only the barrier that makes it
+            // samplable (the full-atlas upload of zeros this used to do was pure cost).
+            if (!_texInitialized)
+            {
+                Transition(cmd, _tex, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+                _texInitialized = true;
+            }
+            NoteStagingNeed();
+            return;
+        }
 
         ID3D12Resource* up = _texUpload[_active];   // THIS frame's staging bank (BeginFrame set _active)
-        void* p; up->Map(0, null, &p);
-        fixed (byte* src = _cpu) Buffer.MemoryCopy(src, p, ATLAS * ATLAS, ATLAS * ATLAS);
-        up->Unmap(0, null);
+        if (flush.HasStage)
+        {
+            void* p; up->Map(0, null, &p);
+            _atlas.StageInto(in flush, new Span<byte>(p, rows * ATLAS));
+            up->Unmap(0, null);
+        }
 
-        if (_texInitialized) Transition(cmd, _tex, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST);
+        if (flush.HasCopy)
+        {
+            if (_texInitialized) Transition(cmd, _tex, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST);
 
-        D3D12_TEXTURE_COPY_LOCATION dst = default;
-        dst.pResource = _tex; dst.Type = D3D12_TEXTURE_COPY_TYPE.D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX; dst.Anonymous.SubresourceIndex = 0;
-        D3D12_TEXTURE_COPY_LOCATION srcLoc = default;
-        srcLoc.pResource = up; srcLoc.Type = D3D12_TEXTURE_COPY_TYPE.D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-        srcLoc.Anonymous.PlacedFootprint.Offset = 0;
-        srcLoc.Anonymous.PlacedFootprint.Footprint.Format = DXGI_FORMAT.DXGI_FORMAT_R8_UNORM;
-        srcLoc.Anonymous.PlacedFootprint.Footprint.Width = ATLAS;
-        srcLoc.Anonymous.PlacedFootprint.Footprint.Height = ATLAS;
-        srcLoc.Anonymous.PlacedFootprint.Footprint.Depth = 1;
-        srcLoc.Anonymous.PlacedFootprint.Footprint.RowPitch = ATLAS;   // R8, 1024 — already 256-aligned
-        cmd->CopyTextureRegion(&dst, 0, 0, 0, &srcLoc, null);
+            D3D12_TEXTURE_COPY_LOCATION dst = default;
+            dst.pResource = _tex; dst.Type = D3D12_TEXTURE_COPY_TYPE.D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX; dst.Anonymous.SubresourceIndex = 0;
+            D3D12_TEXTURE_COPY_LOCATION srcLoc = default;
+            srcLoc.pResource = up; srcLoc.Type = D3D12_TEXTURE_COPY_TYPE.D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+            srcLoc.Anonymous.PlacedFootprint.Offset = (ulong)flush.CopyOffset;   // a whole number of ATLAS-byte rows ⇒ 512-aligned
+            srcLoc.Anonymous.PlacedFootprint.Footprint.Format = DXGI_FORMAT.DXGI_FORMAT_R8_UNORM;
+            srcLoc.Anonymous.PlacedFootprint.Footprint.Width = ATLAS;
+            srcLoc.Anonymous.PlacedFootprint.Footprint.Height = (uint)flush.CopyRowCount;
+            srcLoc.Anonymous.PlacedFootprint.Footprint.Depth = 1;
+            srcLoc.Anonymous.PlacedFootprint.Footprint.RowPitch = ATLAS;   // R8, 4096 — already 256-aligned
+            cmd->CopyTextureRegion(&dst, 0, (uint)flush.CopyRowStart, 0, &srcLoc, null);
 
-        Transition(cmd, _tex, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            Transition(cmd, _tex, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            Diag.Count("text.atlas", "uploadRows", flush.CopyRowCount);
+        }
+        else if (!_texInitialized)
+        {
+            // Refresh-only flush (every dirty row is already covered by an earlier copy this frame) on the very first
+            // frame: the barrier is still owed.
+            Transition(cmd, _tex, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        }
         _texInitialized = true;
-        _atlasDirty = false;
+        Diag.Count("text.atlas", "uploadFlush");
+        NoteStagingNeed();
+    }
+
+    /// <summary>Fold the store's post-flush verdict back into the bank sizing: grow target (next power of two of the
+    /// widest band any flush has needed, capped) and the staging-short backlog that arms
+    /// <see cref="AtlasResetPending"/>. Cheap enough to run per flush — two int compares in the healthy case.</summary>
+    private void NoteStagingNeed()
+    {
+        int need = _atlas.WantedStagingRows;
+        if (need > _wantStagingRows && _wantStagingRows < MaxStagingRows)
+        {
+            int want = _wantStagingRows;
+            while (want < need && want < MaxStagingRows) want <<= 1;
+            _wantStagingRows = want > MaxStagingRows ? MaxStagingRows : want;
+            Diag.Count("text.atlas", "stagingGrowArmed");
+        }
+        if (_atlas.ShortfallRows > 0 && !_uploadBacklog)
+        {
+            _uploadBacklog = true;
+            Diag.Count("text.atlas", "stagingShort");
+            Diag.Event("text.atlas", $"atlas staging short by {_atlas.ShortfallRows} row(s) of {_stagingRows[_active]} — the tail lands next frame (bank grows to {_wantStagingRows} rows)");
+        }
     }
 
     private static void Transition(ID3D12GraphicsCommandList* cmd, ID3D12Resource* res, D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after)
@@ -1393,6 +1459,7 @@ float4 PSMain(VSOutG i) : SV_Target
     {
         _active = ((frameIndex % FrameCount) + FrameCount) % FrameCount;   // this frame's instance buffer — already fenced, so no CPU↔GPU race
         if (_capacity[_active] < _wantCapacity) GrowBank(_active);          // fenced here ⇒ the only safe moment to swap it
+        if (_stagingRows[_active] < _wantStagingRows) GrowStagingBank(_active);   // ditto: a fenced bank is the ONLY safe swap point
         _activeGva = _instances[_active]->GetGPUVirtualAddress();
         _activeGradGva = _gradInstances[_active]->GetGPUVirtualAddress();
         _cursor = 0;
@@ -1404,6 +1471,10 @@ float4 PSMain(VSOutG i) : SV_Target
         // Nothing is mid-shape here and no quads reference the atlas yet this frame, so the repack can never
         // strand a stale UV. ResetAtlas clears _cache/_iconCache/_runCache and bumps the epoch.
         if (_resetPending) { _resetPending = false; ResetAtlas(); }
+        // Open the atlas upload frame AFTER the deferred reset: the band mapping (arena offset 0 ↔ one atlas row) is
+        // per-frame, and the reset it may follow rewinds the packer to the top of a now-empty mirror.
+        _uploadBacklog = false;
+        _atlas.BeginFrame();
         _runsCached = 0;
         _runsShaped = 0;
         // Sweep stale shaped runs: every 64 frames at rest, every 8 under churn (a scroll storm fills the cache with
@@ -1504,6 +1575,20 @@ float4 PSMain(VSOutG i) : SV_Target
         int want = _capacity[_active];
         while (want < needed && want < MaxGlyphCapacity) want <<= 1;
         if (want > _wantCapacity) { _wantCapacity = want; Diag.Count("text.glyphs", "bankOverflow"); }
+    }
+
+    /// <summary>Re-allocate one atlas staging bank at the new row target. Called ONLY from <see cref="BeginFrame"/>,
+    /// on the bank that frame is about to use: that bank's fence has retired there, so no in-flight copy can still be
+    /// reading the buffer being released. (The banks are Map/Unmap-per-flush, never persistently mapped, so there is
+    /// nothing to unmap first.)</summary>
+    private void GrowStagingBank(int f)
+    {
+        D3D12MemoryDiagnostics.Release(_texUpload[f], $"Glyph.AtlasUpload[{f}]");
+        _texUpload[f]->Release();
+        _texUpload[f] = CreateUpload(_device, (uint)(ATLAS * _wantStagingRows), $"Glyph.AtlasUpload[{f}]");
+        _stagingRows[f] = _wantStagingRows;
+        Diag.Count("text.atlas", "stagingGrow");
+        Diag.Set("text.atlas", "stagingBytes", AtlasStagingBytes);   // all banks together — the memory story, not a per-frame value
     }
 
     private void GrowBank(int f)

@@ -29,8 +29,11 @@ public interface ISceneBackend
 
 /// <summary>Struct-of-arrays retained RenderNode tree. One spine (gen + free-list) indexes all parallel columns.</summary>
 [FluentGpu.CodeGen.EnableColdSlab] // GEN-17 (wired): generates the ColdSlab<T> the cold paint side-tables below use
-public sealed class SceneStore : ISceneBackend
+public sealed partial class SceneStore : ISceneBackend
 {
+    internal FluentGpu.Render.SceneRecordingContext Recording { get; } = new();
+    /// <summary>The slot high-water mark: the snapshot sizes its columns to it, but copies only reachable slots.</summary>
+    internal int RecordingNodeCount => _high;
     // spine
     private uint[] _gen;
     private int[] _nextFree;
@@ -103,6 +106,11 @@ public sealed class SceneStore : ISceneBackend
     private byte[] _recordDirtyDescendant;
     private int[] _recordDirtyWrote;
     private int _recordDirtyWroteCount;
+    // The publication each dirty entry belongs to (newest contribution wins): a mark made after publication K is
+    // stamped K+1, and ClearRecordDirty(consumedSeq) drops only entries whose stamp the render thread has already
+    // adopted. A skipped publication therefore keeps its deltas until a consumed one carries them.
+    private ulong[] _recordDirtyStamp;
+    private ulong _publishSeq;
     private Action?[] _click;         // managed edge payload (GC ref at the edge only)
     private Action<RectF>?[] _boundsChanged;   // post-layout arranged-bounds callback — the ELEMENT AUTHOR's Element.OnBoundsChanged
     private Action<RectF>?[] _boundsChangedHook;   // post-layout arranged-bounds callback — HOOK-owned (UseMeasuredBounds/Width). SEPARATE
@@ -172,7 +180,15 @@ public sealed class SceneStore : ISceneBackend
     // Span-text side-tables (sparse, O(span paragraphs) — rtb-01/rtb-02/api-04):
     // the element's TextSpan array (hyperlink actions; the POD shaping overlay lives in SpanRunTable.Shared keyed by
     // TextStyle.SpanRunId); the dispatcher-owned read-only selection range; the per-control selection highlight color.
-    private readonly Dictionary<int, TextSpan[]> _spanText = new();
+    // (Arr, Count) grow-only pooled slot — same discipline as _textEditSelRects above: SetSpanText COPIES the
+    // caller's spans (element-static array OR a SpanBuffer.Current view over a REUSED backing array, P2) into a
+    // scene-owned array so a template that refills its SpanBuffer on the next recycle can never retroactively
+    // mutate text the scene already committed this frame (rtb-01/P2 "scene owns the copy").
+    private readonly Dictionary<int, (TextSpan[]? Arr, int Count)> _spanText = new();
+    // Sparse index-resolved hyperlink handler (P2 "bound spans with index-resolved clicks", SpanTextEl.OnSpanClick):
+    // mount-static, written unconditionally each WriteColumns pass (a plain reference set on an existing dictionary
+    // key allocates nothing) — most nodes never populate this table.
+    private readonly Dictionary<int, Action<int>> _spanClickHandlers = new();
     private readonly Dictionary<int, (int Start, int End)> _textSelection = new();
     private readonly ColdSlab<ColorF> _selectionHighlight = new();   // GEN-17 (wired)
     private readonly ColdSlab<GlyphWipe> _glyphWipes = new();        // sparse per-node glyph wipe (general text-reveal; lyrics karaoke)
@@ -275,10 +291,16 @@ public sealed class SceneStore : ISceneBackend
         _dynamicText = new DynamicTextKind[capacity];
         _interaction = new InteractionInfo[capacity];
         _flags = new NodeFlags[capacity];
+        _aux = new byte[capacity];
         _recordDirty = new byte[capacity];
         _recordDirtySelf = new byte[capacity];
         _recordDirtyDescendant = new byte[capacity];
         _recordDirtyWrote = new int[capacity];
+        _recordDirtyStamp = new ulong[capacity];
+        _captureStamp = new ulong[capacity];
+        _createdStamp = new ulong[capacity];
+        _captureWrote = new int[capacity];
+        _inCaptureList = new bool[capacity];
         _click = new Action?[capacity];
         _boundsChanged = new Action<RectF>?[capacity];
         _boundsChangedHook = new Action<RectF>?[capacity];
@@ -329,6 +351,8 @@ public sealed class SceneStore : ISceneBackend
         ClearDynamicText(idx);
         _interaction[idx] = default;
         _flags[idx] = NodeFlags.Visible | NodeFlags.HitTestVisible | NodeFlags.NewThisFrame;
+        NoteCaptureCreated(idx);   // P8: a (re)allocated slot must be copied wholesale, never merged onto its predecessor
+        _aux[idx] = 0;
         _recordDirty[idx] = 0;
         _recordDirtySelf[idx] = 0;
         _recordDirtyDescendant[idx] = 0;
@@ -458,6 +482,7 @@ public sealed class SceneStore : ISceneBackend
             if (_textEditSelRects.Count != 0) _textEditSelRects.Remove(idx);
             if (_textEditUnderlineRects.Count != 0) _textEditUnderlineRects.Remove(idx);
             if (_spanText.Count != 0) _spanText.Remove(idx);
+            if (_spanClickHandlers.Count != 0) _spanClickHandlers.Remove(idx);
             if (_textSelection.Count != 0) _textSelection.Remove(idx);
             _selectionHighlight.Remove(idx);
             _glyphWipes.Remove(idx);
@@ -495,8 +520,10 @@ public sealed class SceneStore : ISceneBackend
     public readonly record struct RemovedNodeExtent(int NodeIndex, uint Gen, RectF ModelRect);
 
     private readonly RemovedNodeExtent[] _removedExtents = new RemovedNodeExtent[RemovalLedgerCap];
+    private readonly ulong[] _removedStamp = new ulong[RemovalLedgerCap];
     private int _removedCount;
     private bool _removedOverflow;
+    private ulong _removedOverflowStamp;
 
     /// <summary>Nodes unmounted since the last record, with the extent they last occupied.</summary>
     public ReadOnlySpan<RemovedNodeExtent> PendingRemovalExtents => _removedExtents.AsSpan(0, _removedCount);
@@ -512,16 +539,31 @@ public sealed class SceneStore : ISceneBackend
         _removedOverflow = false;
     }
 
+    /// <summary>Drop only the removals a consumed publication carried (stamp ≤ <paramref name="consumedSeq"/>);
+    /// the rest stay for the next capture. The overflow flag is stamped like an entry.</summary>
+    public void ClearPendingRemovals(ulong consumedSeq)
+    {
+        int kept = 0;
+        for (int i = 0; i < _removedCount; i++)
+        {
+            if (_removedStamp[i] <= consumedSeq) continue;
+            _removedExtents[kept] = _removedExtents[i];
+            _removedStamp[kept++] = _removedStamp[i];
+        }
+        _removedCount = kept;
+        if (_removedOverflow && _removedOverflowStamp <= consumedSeq) _removedOverflow = false;
+    }
+
     private void CaptureRemovalExtent(NodeHandle node)
     {
-        if (_removedCount >= RemovalLedgerCap) { _removedOverflow = true; return; }
+        if (_removedCount >= RemovalLedgerCap) { _removedOverflow = true; _removedOverflowStamp = _publishSeq + 1; return; }
         RectF abs = AbsoluteRect(node);
         ref NodePaint p = ref _paint[(int)node.Raw.Index];
         float pw = float.IsNaN(p.PresentedW) ? abs.W : p.PresentedW;   // presented (Reveal) extent may exceed the model box
         float ph = float.IsNaN(p.PresentedH) ? abs.H : p.PresentedH;
         // A degenerate rect is recorded too (not skipped): the recorder needs to see the entry so it can tell "this node
         // never presented anything" from "it presented and we lost the extent" (⇒ MissingRemovalExtent).
-        _removedExtents[_removedCount++] = new RemovedNodeExtent((int)node.Raw.Index, node.Raw.Gen, new RectF(abs.X, abs.Y, pw, ph));
+        _removedStamp[_removedCount] = _publishSeq + 1; _removedExtents[_removedCount++] = new RemovedNodeExtent((int)node.Raw.Index, node.Raw.Gen, new RectF(abs.X, abs.Y, pw, ph));
     }
 
     public void AppendChild(NodeHandle parent, NodeHandle child)
@@ -531,6 +573,7 @@ public sealed class SceneStore : ISceneBackend
         _parent[c] = p;
         _prevSib[c] = _lastChild[p];
         _nextSib[c] = 0;
+        if (_lastChild[p] != 0) NoteCaptureChanged(_lastChild[p]);   // P8: its captured NextSibling changes below
         if (_lastChild[p] != 0) _nextSib[_lastChild[p]] = c;
         else _firstChild[p] = c;
         _lastChild[p] = c;
@@ -565,6 +608,7 @@ public sealed class SceneStore : ISceneBackend
         int p = _parent[c];
         if (p == 0) return;
         MarkRecordDirty(c);
+        if (_prevSib[c] != 0) NoteCaptureChanged(_prevSib[c]);   // P8: its captured NextSibling changes below
         if (_prevSib[c] != 0) _nextSib[_prevSib[c]] = _nextSib[c]; else _firstChild[p] = _nextSib[c];
         if (_nextSib[c] != 0) _prevSib[_nextSib[c]] = _prevSib[c]; else _lastChild[p] = _prevSib[c];
         _childCount[p]--;
@@ -573,9 +617,12 @@ public sealed class SceneStore : ISceneBackend
 
     // ── exit-animation orphans ────────────────────────────────────────────────────────────────────
     /// <summary>Remove a node from the logical tree but keep it LIVE and drawing: detach from its parent (so reconcile +
-    /// layout no longer see it), retain its former visual parent, and flag it Exiting. The recorder replays it inside that
-    /// parent's active transform/clip/layer/popup context; <see cref="ReclaimOrphan"/> frees it on settle. The frozen origin
-    /// remains only as a defensive fallback for an already-rootless orphan.
+    /// layout no longer walk it as a child), retain its former visual parent, and flag it Exiting. The recorder replays it
+    /// inside that parent's active transform/clip/layer/popup context; <see cref="ReclaimOrphan"/> frees it on settle. The
+    /// frozen origin remains only as a defensive fallback for an already-rootless orphan.
+    /// <para>A SizeMode.Reflow exit still contributes its animating main-axis size to the visual parent's Measure so a
+    /// measured virtual row eases closed instead of snapping, and the reflow compose writes the orphan's own Bounds so
+    /// ClipsToBounds follows the Size track.</para>
     /// <paramref name="maxAgeMs"/> is this orphan's OWN hard deadline on the <see cref="AnimClockMs"/> timebase (see
     /// <see cref="OrphanMaxAgeMs"/>): the host force-reclaims it past that age even while tracks remain. 0 ⇒ only the
     /// host's global settle-timeout applies.</summary>
@@ -603,18 +650,25 @@ public sealed class SceneStore : ISceneBackend
         }
     }
 
-    /// <summary>Free a settled exit orphan (the deferred <see cref="FreeSubtree"/> — gen bump → handle dead).</summary>
+    /// <summary>Free a settled exit orphan (the deferred <see cref="FreeSubtree"/> — gen bump → handle dead).
+    /// Marks the former visual parent LayoutDirty so a measured virtual row re-solves WITHOUT the orphan and writes
+    /// the closed height back through SetMeasured — otherwise the last orphan-inclusive extent can stick in the
+    /// ExtentTable after the Size track has already been torn down.</summary>
     public void ReclaimOrphan(NodeHandle node)
     {
+        NodeHandle visualParent = default;
         for (int i = _orphans.Count - 1; i >= 0; i--)
             if (_orphans[i].Node == node)
             {
                 var entry = _orphans[i];
+                visualParent = entry.VisualParent;
                 UnindexOrphan(in entry);
                 _orphans.RemoveAt(i);
                 break;
             }
         FreeSubtree(node);
+        if (!visualParent.IsNull && IsLive(visualParent))
+            Mark(visualParent, NodeFlags.LayoutDirty);
     }
 
     /// <summary>Exiting children formerly owned by <paramref name="visualParent"/>, in removal order. Internal recorder
@@ -635,6 +689,8 @@ public sealed class SceneStore : ISceneBackend
         UnindexOrphan(in entry);
         _orphans.RemoveAt(index);
         FreeSubtree(entry.Node);
+        if (!entry.VisualParent.IsNull && IsLive(entry.VisualParent))
+            Mark(entry.VisualParent, NodeFlags.LayoutDirty);
     }
 
     private void ReclaimOrphanChildren(NodeHandle visualParent)
@@ -654,6 +710,19 @@ public sealed class SceneStore : ISceneBackend
     public bool IsOrphan(NodeHandle node)
     {
         for (int i = 0; i < _orphans.Count; i++) if (_orphans[i].Node == node) return true;
+        return false;
+    }
+
+    /// <summary>The former visual parent an exit orphan still paints under, or false when <paramref name="node"/> is
+    /// not an orphan. Used by the reflow compose to dirty that parent (the topological <c>Parent</c> is null after
+    /// <see cref="Orphan"/>) so a measured virtual row re-solves against the orphan's animating height.</summary>
+    public bool TryGetOrphanVisualParent(NodeHandle node, out NodeHandle parent)
+    {
+        for (int i = 0; i < _orphans.Count; i++)
+        {
+            if (_orphans[i].Node == node) { parent = _orphans[i].VisualParent; return true; }
+        }
+        parent = default;
         return false;
     }
 
@@ -723,7 +792,10 @@ public sealed class SceneStore : ISceneBackend
     public ref RectF Bounds(NodeHandle h) => ref _bounds[h.Raw.Index];
     public ref NodePaint Paint(NodeHandle h) => ref _paint[h.Raw.Index];
     public ref InteractionInfo Interaction(NodeHandle h) => ref _interaction[h.Raw.Index];
-    public ref NodeFlags Flags(NodeHandle h) => ref _flags[h.Raw.Index];
+    /// <summary>Read a node's flag word. By VALUE, deliberately: a mutable <c>ref</c> here would let any of ~300 call
+    /// sites write a captured column invisibly, which the P8 capture ledger cannot survive. Writers use
+    /// <see cref="SetFlagBits"/>/<see cref="ClearFlagBits"/>/<see cref="Mark"/>/<see cref="Unmark"/>.</summary>
+    public NodeFlags Flags(NodeHandle h) => _flags[h.Raw.Index];
     public ushort ElementTypeId(NodeHandle h) => _elementTypeId[h.Raw.Index];
 
     private int LiveIndex(NodeHandle h)
@@ -861,7 +933,10 @@ public sealed class SceneStore : ISceneBackend
     // ── text-edit decoration side-table (sparse; only editor TEXT nodes have an entry) ───────────────
     /// <summary>Get-or-create the text-edit row for an editor's text node (caret/IME/focus PODs).</summary>
     public ref TextEditState TextEditRef(NodeHandle h)
-        => ref CollectionsMarshal.GetValueRefOrAddDefault(_textEdits, (int)h.Raw.Index, out _);
+    {
+        NoteCaptureChanged((int)h.Raw.Index);   // P8: write-intent accessor for a captured side table
+        return ref CollectionsMarshal.GetValueRefOrAddDefault(_textEdits, (int)h.Raw.Index, out _);
+    }
 
     public bool HasTextEdit(NodeHandle h) => _textEdits.ContainsKey((int)h.Raw.Index);
 
@@ -916,16 +991,45 @@ public sealed class SceneStore : ISceneBackend
     // ── span-text side-tables (rtb-01 inline runs / rtb-02 read-only selection / api-04 highlight color) ────────────
 
     /// <summary>Attach a span paragraph's element spans (hyperlink OnClick lookup; written by the reconciler from
-    /// <c>SpanTextEl.Spans</c> — the POD shaping overlay rides <c>TextStyle.SpanRunId</c> instead). Null clears.</summary>
-    public void SetSpanText(NodeHandle node, TextSpan[]? spans)
+    /// <c>SpanTextEl.Spans</c> — the POD shaping overlay rides <c>TextStyle.SpanRunId</c> instead). COPIES into a
+    /// scene-owned, grow-only-capacity array (never shrinks; alias-safe against a reused <see cref="SpanBuffer"/> the
+    /// caller refills next recycle) rather than retaining the caller's array by reference. Empty span clears.</summary>
+    public void SetSpanText(NodeHandle node, ReadOnlySpan<TextSpan> spans)
     {
         int idx = (int)node.Raw.Index;
-        if (spans is null) _spanText.Remove(idx);
-        else _spanText[idx] = spans;
+        if (spans.Length == 0) { _spanText.Remove(idx); return; }
+        _spanText.TryGetValue(idx, out var slot);
+        if (slot.Arr is null || slot.Arr.Length < spans.Length) slot.Arr = new TextSpan[spans.Length];
+        spans.CopyTo(slot.Arr);
+        slot.Count = spans.Length;
+        _spanText[idx] = slot;
     }
 
-    public bool TryGetSpanText(NodeHandle h, out TextSpan[] spans)
-        => _spanText.TryGetValue((int)h.Raw.Index, out spans!);
+    /// <summary>The node's scene-owned span-text copy (the live [0, Count) prefix — never the backing array's full
+    /// length, which may hold stale high-water capacity past the live count).</summary>
+    public bool TryGetSpanText(NodeHandle h, out ReadOnlySpan<TextSpan> spans)
+    {
+        if (_spanText.TryGetValue((int)h.Raw.Index, out var slot) && slot.Arr is not null)
+        {
+            spans = slot.Arr.AsSpan(0, slot.Count);
+            return true;
+        }
+        spans = default;
+        return false;
+    }
+
+    /// <summary>Index-resolved hyperlink handler for a <c>SpanTextEl</c> node (P2): the dispatcher tries the clicked
+    /// span's own <c>TextSpan.OnClick</c> first, else this. Mount-static — the reconciler writes it unconditionally
+    /// each <c>WriteColumns</c> pass (a plain reference set, no bind-effect machinery). Null clears.</summary>
+    public void SetSpanClickHandler(NodeHandle node, Action<int>? handler)
+    {
+        int idx = (int)node.Raw.Index;
+        if (handler is null) _spanClickHandlers.Remove(idx);
+        else _spanClickHandlers[idx] = handler;
+    }
+
+    public bool TryGetSpanClickHandler(NodeHandle h, out Action<int> handler)
+        => _spanClickHandlers.TryGetValue((int)h.Raw.Index, out handler!);
 
     /// <summary>Attach (or clear, when null) a node's <see cref="GlyphWipe"/> — the sparse carrier for a glyph-run wipe
     /// (the lyrics karaoke). Read by the recorder's Text case → emits <c>DrawGlyphRunGradient</c>. Only wiped nodes pay.</summary>
@@ -1123,10 +1227,35 @@ public sealed class SceneStore : ISceneBackend
                 _recordDirty[idx] = 0;
                 _recordDirtySelf[idx] = 0;
                 _recordDirtyDescendant[idx] = 0;
+                NoteCaptureChanged(idx);   // P8: zeroing the bits is itself a captured-column change
             }
             _recordDirtyWrote[i] = 0;
         }
         _recordDirtyWroteCount = 0;
+    }
+
+    /// <summary>The publication the host just captured this scene into. Every later mark belongs to the NEXT one.</summary>
+    public ulong PublishSeq => _publishSeq;
+    public void NotePublished(ulong seq) => _publishSeq = seq;
+
+    /// <summary>Drop the record-dirty entries the render thread has adopted (stamp ≤ <paramref name="consumedSeq"/>)
+    /// and keep the rest, so a snapshot always carries the union of deltas since the last CONSUMED publication and
+    /// clean-span reuse stays valid across a skipped one. O(entries), compacts in place.</summary>
+    public void ClearRecordDirty(ulong consumedSeq)
+    {
+        int kept = 0;
+        for (int i = 0; i < _recordDirtyWroteCount; i++)
+        {
+            int idx = _recordDirtyWrote[i];
+            if ((uint)idx >= (uint)_recordDirty.Length) continue;
+            if (_recordDirtyStamp[idx] > consumedSeq) { _recordDirtyWrote[kept++] = idx; continue; }
+            _recordDirty[idx] = 0;
+            _recordDirtySelf[idx] = 0;
+            _recordDirtyDescendant[idx] = 0;
+            NoteCaptureChanged(idx);   // P8: zeroing the bits is itself a captured-column change
+        }
+        for (int i = kept; i < _recordDirtyWroteCount; i++) _recordDirtyWrote[i] = 0;
+        _recordDirtyWroteCount = kept;
     }
 
     private void MarkRecordDirty(int idx) => MarkRecordDirty(idx, RecordDirtyContent);
@@ -1142,8 +1271,12 @@ public sealed class SceneStore : ISceneBackend
             byte nextAggregate = (byte)(oldAggregate | bits);
             byte nextSelf = n == idx ? (byte)(oldSelf | bits) : oldSelf;
             byte nextDescendant = n == idx ? oldDescendant : (byte)(oldDescendant | bits);
+            // The whole chain is re-stamped even when its bits already cover this mark: an ancestor's aggregate bit
+            // stands in for the dirty descendant, so it must outlive the descendant's publication, not its own.
+            _recordDirtyStamp[n] = _publishSeq + 1;
             if (nextAggregate == oldAggregate && nextSelf == oldSelf && nextDescendant == oldDescendant)
                 continue;
+            NoteCaptureChanged(n);   // P8: the record-dirty BYTES are captured columns - a changed bit is a changed row
 
             _recordDirty[n] = nextAggregate;
             _recordDirtySelf[n] = nextSelf;
@@ -1168,7 +1301,16 @@ public sealed class SceneStore : ISceneBackend
     /// <summary>Cleared by the host after it runs (scoped) layout — clears the worklist and the per-node LayoutDirty bits.</summary>
     public void ClearLayoutDirty()
     {
-        for (int i = 0; i < _layoutDirty.Count; i++) { var h = _layoutDirty[i]; if (IsLive(h)) _flags[h.Raw.Index] &= ~NodeFlags.LayoutDirty; }
+        for (int i = 0; i < _layoutDirty.Count; i++)
+        {
+            var h = _layoutDirty[i];
+            if (!IsLive(h)) continue;
+            _flags[h.Raw.Index] &= ~NodeFlags.LayoutDirty;
+            NoteCaptureChanged((int)h.Raw.Index);   // P8: _flags is a captured column
+            // P4: mirror the SET-side chain walk in Mark() so AuxFlags.SubtreeLayoutDirty tracks exactly "some node
+            // in this subtree is layout-dirty THIS frame" — see SceneStore.Aux.cs for the full invariant.
+            ClearSubtreeLayoutDirtyChain((int)h.Raw.Index);
+        }
         _layoutDirty.Clear();
     }
 
@@ -1182,7 +1324,13 @@ public sealed class SceneStore : ISceneBackend
     /// <summary>Cleared by the host right after record — clears the per-node TransformDirty bits marked this frame.</summary>
     public void ClearTransformDirty()
     {
-        for (int i = 0; i < _transformWrote.Count; i++) { var h = _transformWrote[i]; if (IsLive(h)) _flags[h.Raw.Index] &= ~NodeFlags.TransformDirty; }
+        for (int i = 0; i < _transformWrote.Count; i++)
+        {
+            var h = _transformWrote[i];
+            if (!IsLive(h)) continue;
+            _flags[h.Raw.Index] &= ~NodeFlags.TransformDirty;
+            NoteCaptureChanged((int)h.Raw.Index);   // P8: _flags is a captured column
+        }
         _transformWrote.Clear();
     }
 
@@ -1205,7 +1353,13 @@ public sealed class SceneStore : ISceneBackend
     {
         int idx = (int)h.Raw.Index;
         NodeFlags old = _flags[idx];
-        if ((flags & NodeFlags.LayoutDirty) != 0 && (old & NodeFlags.LayoutDirty) == 0) _layoutDirty.Add(h);
+        if ((flags & NodeFlags.LayoutDirty) != 0 && (old & NodeFlags.LayoutDirty) == 0)
+        {
+            _layoutDirty.Add(h);
+            // P4 (Operation ultra-fast GPU engine): propagate a subtree-dirty bit up to the layout boundary so
+            // Measure/Arrange can skip a whole clean subtree without walking it — see SceneStore.Aux.cs.
+            MarkSubtreeLayoutDirtyChain(idx);
+        }
         if ((flags & NodeFlags.TransformDirty) != 0 && (old & NodeFlags.TransformDirty) == 0) _transformWrote.Add(h);
         if ((flags & NodeFlags.BoundsAnimated) != 0 && (old & NodeFlags.BoundsAnimated) == 0) _boundsAnimated.Add(h);
         if ((flags & NodeFlags.VirtualRangeDirty) != 0 && (old & NodeFlags.VirtualRangeDirty) == 0) _virtualRangeDirty.Add(h);
@@ -1215,19 +1369,59 @@ public sealed class SceneStore : ISceneBackend
         if (recordBits != 0) MarkRecordDirty(idx, recordBits);
         _flags[idx] = old | flags;
     }
-    public void Unmark(NodeHandle h, NodeFlags flags) => _flags[h.Raw.Index] &= ~flags;
+    public void Unmark(NodeHandle h, NodeFlags flags)
+    {
+        _flags[h.Raw.Index] &= ~flags;
+        NoteCaptureChanged((int)h.Raw.Index);   // P8: _flags is a captured column and Unmark marks nothing else
+    }
+
+    /// <summary>Set flag bits on a node - the WRITE half of the <see cref="Flags(NodeHandle)"/> pair (which is a
+    /// by-value read). Writers must come through here (or <see cref="ClearFlagBits"/>) so the P8 capture ledger sees
+    /// the change: hover/press/focus flips a captured column without any record-dirty mark of its own.</summary>
+    public void SetFlagBits(NodeHandle h, NodeFlags flags)
+    {
+        int idx = (int)h.Raw.Index;
+        NodeFlags next = _flags[idx] | flags;
+        if (next == _flags[idx]) return;
+        _flags[idx] = next;
+        NoteCaptureChanged(idx);
+    }
+
+    /// <summary>Clear flag bits on a node - see <see cref="SetFlagBits"/>. (<see cref="Unmark"/> is the same operation
+    /// spelled for the dirty-bit vocabulary; both ledger the write.)</summary>
+    public void ClearFlagBits(NodeHandle h, NodeFlags flags)
+    {
+        int idx = (int)h.Raw.Index;
+        NodeFlags next = _flags[idx] & ~flags;
+        if (next == _flags[idx]) return;
+        _flags[idx] = next;
+        NoteCaptureChanged(idx);
+    }
+
+    /// <summary>Replace a node's whole flag word (rare - a caller composing several bits at once).</summary>
+    public void SetFlagsRaw(NodeHandle h, NodeFlags flags)
+    {
+        int idx = (int)h.Raw.Index;
+        if (_flags[idx] == flags) return;
+        _flags[idx] = flags;
+        NoteCaptureChanged(idx);
+    }
 
     // ── scroll/virtual side-table (sparse; only viewport nodes have an entry) ──
     /// <summary>Get-or-create the scroll row for a viewport node; marks it <see cref="NodeFlags.Scrollable"/>.</summary>
     public ref ScrollState ScrollRef(NodeHandle h)
     {
         int idx = (int)h.Raw.Index;
+        NoteCaptureChanged(idx);   // P8: ScrollState is a captured column and every writer comes through this ref
         ref ScrollState s = ref _scroll.GetOrAdd(idx, out bool existed);
         if (!existed)
         {
             s = ScrollState.Default;
             _flags[idx] |= NodeFlags.Scrollable;
             MarkRecordDirty(idx);
+            // P4: a viewport's ArrangeViewport has continuous per-frame obligations that are NOT LayoutDirty-gated
+            // (scrolling is layout-free) — mark every ancestor so the Arrange early-out never strands it unreached.
+            MarkScrollDescendantChain(idx);
             // scroll-v3-plan §3.1: a viewport's FIRST creation is the kernel's Bind — structural, drained by
             // Reclamp() (no time advance), so it's safe to post before this frame's clock exists. T=0 is inert for a
             // structural command. Null port = headless/no-scroll callers that never wired one.
@@ -1251,7 +1445,10 @@ public sealed class SceneStore : ISceneBackend
     public ref ScrollState ScrollRefByIndex(int node)
     {
         if ((uint)node < (uint)_high && _gen[node] != 0 && (_flags[node] & NodeFlags.Scrollable) != 0)
-            return ref _scroll.GetOrAdd(node, out _);   // guaranteed to already exist (Scrollable is only ever set alongside the row)
+        {
+            NoteCaptureChanged(node);   // P8: see ScrollRef
+            return ref _scroll.GetOrAdd(node, out _);
+        }   // guaranteed to already exist (Scrollable is only ever set alongside the row)
         _scrollRefByIndexFallback = default;
         return ref _scrollRefByIndexFallback;
     }
@@ -1453,6 +1650,7 @@ public sealed class SceneStore : ISceneBackend
     public ref InteractionAnim InteractRef(NodeHandle h)
     {
         int idx = (int)h.Raw.Index;
+        NoteCaptureChanged(idx);   // P8: write-intent accessor for a captured side table
         _flags[idx] |= NodeFlags.InteractionAnim;
         ref InteractionAnim s = ref _interact.GetOrAdd(idx, out bool existed);
         if (!existed) { s = InteractionAnim.Default; MarkRecordDirty(idx); }
@@ -1842,7 +2040,13 @@ public sealed class SceneStore : ISceneBackend
 
     /// <summary>Get-or-create the per-node text measure cache row (layout.md §2.3).</summary>
     public ref TextMeasureCache MeasureCacheRef(NodeHandle h)
-        => ref _measureCache.GetOrAdd((int)h.Raw.Index);
+    {
+        NoteCaptureChanged((int)h.Raw.Index);   // P8: write-intent accessor (the measure pass fills it)
+        return ref _measureCache.GetOrAdd((int)h.Raw.Index);
+    }
+
+    internal bool TryGetMeasureCache(NodeHandle h, out TextMeasureCache cache)
+        => _measureCache.TryGet((int)h.Raw.Index, out cache);
 
     public NodeHandle FirstChild(NodeHandle h) => Wrap(_firstChild[h.Raw.Index]);
     public NodeHandle NextSibling(NodeHandle h) => Wrap(_nextSib[h.Raw.Index]);
@@ -1909,15 +2113,23 @@ public sealed class SceneStore : ISceneBackend
         Array.Resize(ref _prevSib, n); Array.Resize(ref _nextSib, n); Array.Resize(ref _childCount, n);
         Array.Resize(ref _elementTypeId, n); Array.Resize(ref _layout, n); Array.Resize(ref _bounds, n);
         Array.Resize(ref _paint, n); Array.Resize(ref _dynamicText, n); Array.Resize(ref _interaction, n); Array.Resize(ref _flags, n);
+        Array.Resize(ref _aux, n);
         Array.Resize(ref _recordDirty, n); Array.Resize(ref _recordDirtySelf, n); Array.Resize(ref _recordDirtyDescendant, n);
-        Array.Resize(ref _recordDirtyWrote, n);
+        Array.Resize(ref _recordDirtyWrote, n); Array.Resize(ref _recordDirtyStamp, n);
         if (_recordDirtyWroteCount > n) _recordDirtyWroteCount = n;
+        // P8 capture ledger: sized WITH the columns (like _recordDirtyWrote/_recordDirtyStamp) so a steady frame never
+        // grows it - the ledger can hold at most one entry per node, and a lazy doubling mid-frame is a managed
+        // allocation in a phase that is required to make none.
+        Array.Resize(ref _captureStamp, n); Array.Resize(ref _createdStamp, n);
+        Array.Resize(ref _captureWrote, n); Array.Resize(ref _inCaptureList, n);
+        if (_captureWroteCount > n) _captureWroteCount = n;
         Array.Resize(ref _click, n); Array.Resize(ref _boundsChanged, n); Array.Resize(ref _boundsChangedHook, n); Array.Resize(ref _boundsDelivered, n); Array.Resize(ref _keyHandler, n); Array.Resize(ref _charHandler, n);
         Array.Resize(ref _pointerDown, n); Array.Resize(ref _drag, n); Array.Resize(ref _hoverMove, n); Array.Resize(ref _pointerMoveWithin, n); Array.Resize(ref _pointerExit, n);
         Array.Resize(ref _pointerPressed, n); Array.Resize(ref _pointerReleased, n); Array.Resize(ref _pointerWheel, n); Array.Resize(ref _contextRequested, n);
         Array.Resize(ref _focusChanged, n);
         Array.Resize(ref _dragStarted, n); Array.Resize(ref _dragDelta, n);
         Array.Resize(ref _dragCompleted, n); Array.Resize(ref _dragCanceled, n);
+        NoteCaptureColumnsResized(n);   // P8: a column realloc is not a delta the ledger can describe
     }
 
     /// <summary>Conservative slab tail-trim (mem-02): the SoA columns only ever GROW (Gen0 churn at the reconcile edge

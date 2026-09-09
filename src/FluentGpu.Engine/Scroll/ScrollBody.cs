@@ -4,7 +4,9 @@ namespace FluentGpu.Scroll;
 
 /// <summary>The POD per-viewport body. Blittable — no managed references except the shared immutable
 /// <c>Frame.SnapPoints</c> array (never mutated here, only ever replaced wholesale by a fresh <c>SetFrame</c>).
-/// <see cref="ScrollKernel"/> keeps a growable slab of these indexed by scene node index; <see cref="Advance"/> is
+/// <see cref="ScrollKernel"/> keeps a bounded POOL of these — one slot per BOUND VIEWPORT, reached through its
+/// 4-byte-per-node lookup, never an array indexed by node index (<c>scene-memory.md §2.6a</c> owns that storage
+/// rule; <see cref="Node"/> is this body's back-reference to the scene node it serves); <see cref="Advance"/> is
 /// the pure per-body time step (Ballistic/Driven/Bounce only — Drag is command-driven, not time-stepped) reused by
 /// both <see cref="ScrollKernel.Tick"/> and, later, the render-thread fling lease (plan §6.1 pins exactly this
 /// method + <see cref="IsSettled"/> for that hand-off).</summary>

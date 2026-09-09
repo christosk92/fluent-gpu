@@ -139,8 +139,14 @@ public sealed class SignalGeneratorSource : IAudioSource
 /// known, else <c>innerTotal − LeadIn − TrailPad</c>. <see cref="PositionFrames"/> is the post-trim (mixer-domain) cursor.
 /// Alloc-free.
 /// </summary>
-public sealed class TrimmingSource : IAudioSource
+public sealed class TrimmingSource : IAudioSource, ICancellableAudioSource, IDisposable
 {
+    /// <summary>True when trimming is based on an exact decoded length.</summary>
+    public bool LengthIsExact => Gapless.ExactFrames >= 0 || _inner is DecoderAudioSource { ExactLengthFrames: >= 0 };
+    /// <inheritdoc/>
+    public void CancelPendingRead() => (_inner as ICancellableAudioSource)?.CancelPendingRead();
+    /// <inheritdoc/>
+    public void Dispose() => (_inner as IDisposable)?.Dispose();
     private readonly IAudioSource _inner;
     private readonly int _channels;
     private readonly int _leadIn;
@@ -183,8 +189,9 @@ public sealed class TrimmingSource : IAudioSource
         {
             case DecoderAudioSource das: das.SeekFrame(frame + _leadIn); break;
             case MemoryAudioSource mas: mas.SeekFrame(frame + _leadIn); break;
+            default: throw new NotSupportedException("The trimmed source cannot seek.");
         }
-        _emitted = frame;
+        _emitted = Math.Max(0, _inner.PositionFrames - _leadIn);
         _leadSkipped = true;   // the seek target already accounts for the lead-in — never skip it a second time
     }
 

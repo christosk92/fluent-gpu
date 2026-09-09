@@ -17,7 +17,7 @@ namespace FluentGpu.Windows.Wasapi;
 /// <see cref="WasapiFormatNegotiation"/>/<see cref="WasapiPositionMath"/> helpers; only the COM plumbing lives here.
 /// <para>On-box only — no automated gate creates a real device (the tests drive the fake endpoint + the pure helpers).</para>
 /// </summary>
-public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IAudioSink, IAudioClockSource
+public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IBufferedAudioSink, IAudioClockSource
 {
     private const uint ClsctxAll = 0x17;   // CLSCTX_ALL = INPROC_SERVER|INPROC_HANDLER|LOCAL_SERVER|REMOTE_SERVER
     private const uint StreamFlagsEventCallback = 0x00040000;   // AUDCLNT_STREAMFLAGS_EVENTCALLBACK (TerraFX doesn't name it)
@@ -122,14 +122,49 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IAudioSink, IAudi
     /// <inheritdoc/>
     public void Start()
     {
-        if (!_ready || _started || _client is null) return;
-        if (_client->Start() >= 0) _started = true;
+        if (_started) return;
+        if (!_ready || _client is null) throw new InvalidOperationException("Audio endpoint is unavailable.");
+        System.Runtime.InteropServices.Marshal.ThrowExceptionForHR(_client->Start());
+        _started = true;
     }
 
     /// <inheritdoc/>
     public void Stop()
     {
-        if (_started && _client is not null) { _client->Stop(); _started = false; }
+        if (_started && _client is not null)
+        {
+            System.Runtime.InteropServices.Marshal.ThrowExceptionForHR(_client->Stop());
+            _started = false;
+        }
+    }
+
+    /// <inheritdoc/>
+    public int CapacityFrames => (int)_bufferFrames;
+    /// <inheritdoc/>
+    public int WritableFrames
+    {
+        get
+        {
+            if (!_ready || _client is null) return -1;
+            uint padding;
+            if (_client->GetCurrentPadding(&padding) < 0) return -1;
+            return Math.Max(0, (int)_bufferFrames - (int)padding);
+        }
+    }
+    /// <inheritdoc/>
+    public void Reset()
+    {
+        if (_client is null || !_ready) throw new InvalidOperationException("Audio endpoint is unavailable.");
+        System.Runtime.InteropServices.Marshal.ThrowExceptionForHR(_client->Reset());
+        Interlocked.Exchange(ref _written, 0);
+    }
+    /// <inheritdoc/>
+    public void WaitForWritable(WaitHandle controlWake, int timeoutMs)
+    {
+        HANDLE* handles = stackalloc HANDLE[2];
+        handles[0] = _event;
+        handles[1] = (HANDLE)controlWake.SafeWaitHandle.DangerousGetHandle();
+        WaitForMultipleObjects(2, handles, false, (uint)Math.Max(0, timeoutMs));
     }
 
     /// <inheritdoc/>
@@ -139,15 +174,8 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IAudioSink, IAudi
 
         int devCh = _deviceChannels;
         int written = 0;
-        // Bounded event wait ≈ 2× this block's duration: normally the device signals _event every period (~10 ms) and we
-        // wake promptly; if an event is ever lost this just falls back to polling at that cadence, so it can never hang.
-        int rate = Format.SampleRate <= 0 ? 48000 : Format.SampleRate;
-        uint timeoutMs = (uint)Math.Max(4, (int)(2000L * frames / rate));
-        // BLOCK until the whole block is accepted — this IS the RT-loop's pacing (spec §7.9; the feed loop's "sink-write
-        // backpressure paces us" contract). The device drains at the hardware clock, so writing the full block gates the
-        // caller to realtime. A best-effort partial write here instead lets the caller (RenderBlock) over-pull the mixer/
-        // decoder while the overflow is dropped — the fast, scrambled, self-skipping playback. Event-driven shared mode
-        // (AUDCLNT_STREAMFLAGS_EVENTCALLBACK): wait on _event for the device to free a period instead of spin-polling.
+        // Submit only immediately writable capacity. The caller retains a partial remainder and performs
+        // interruptible device/control waiting outside the DSP scope.
         while (written < frames && _ready && !_disposed)
         {
             uint padding;
@@ -155,18 +183,8 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IAudioSink, IAudi
             int available = (int)(_bufferFrames - padding);
             if (available <= 0)
             {
-                // Buffer full → block until the device frees a period (or timeoutMs elapses — the wait is always bounded).
                 _diagSleeps++;
-                WaitForSingleObject(_event, timeoutMs);
-                // TOCTOU hardening (handle recycle): the wait can also return because Dispose is tearing the device down
-                // and about to CloseHandle(_event). Dispose sets _disposed/_ready BEFORE that CloseHandle, and by contract
-                // the feed thread is Stop()-joined before the endpoint's handle is closed on BOTH teardown paths (session
-                // DisposeAsync disposes the AudioFeedThread — joining the RT thread — before disposing this endpoint; the
-                // device-change cold loop parks _feed.Stop() before RebuildSink disposes the old endpoint). WaitForSingleObject
-                // is a full barrier, so re-checking here observes those writes and exits cleanly on a spurious/closing wake
-                // instead of calling GetCurrentPadding/GetBuffer on a torn-down client.
-                if (_disposed || !_ready) break;
-                continue;
+                break;
             }
 
             int toWrite = Math.Min(frames - written, available);
@@ -200,7 +218,7 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IAudioSink, IAudi
                 WriteConverted(pData, src, written, toWrite, devCh);
             }
 
-            _render->ReleaseBuffer((uint)toWrite, 0);
+            if (_render->ReleaseBuffer((uint)toWrite, 0) < 0) break;
             _written += toWrite;
             written += toWrite;
         }

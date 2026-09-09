@@ -1,5 +1,6 @@
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
+using FluentGpu.Signals;
 
 namespace FluentGpu.Controls;
 
@@ -154,6 +155,79 @@ public static class PersonPicture
             // surface (no special control role, not in the control tree). Map to None (raw) + the default non-focusable BoxEl.
             Role = AutomationRole.None,
             Children = children,
+        };
+    }
+
+    /// <summary>SHAPE-STABLE bound form for a virtualized row (Operation ultra-fast GPU engine, P3 — always an
+    /// <see cref="ImageEl"/> over an initials <see cref="TextEl"/>, never a photo/initials branch): unlike
+    /// <see cref="Create"/> (which resolves the photo-vs-initials-vs-glyph precedence into a DIFFERENT element per
+    /// call — correct for a one-shot render, wrong for a recycled slot), this mounts BOTH layers once and lets binds
+    /// do the rest. The image layer's <see cref="ImageEl.Source"/> is bound directly (an empty source already paints
+    /// nothing — <see cref="ImageEl"/>'s existing "no image" convention); the initials layer's
+    /// <see cref="Element.Visible"/> is bound to "image empty" so it only shows through when there is no photo. No
+    /// group/badge support (not needed by any current row template) — use <see cref="Create"/> for a one-shot
+    /// avatar with the full precedence chain.</summary>
+    /// <param name="displayName">Bound contact display name; initials are derived from it every time the bound value
+    /// changes (via <see cref="InitialsFromDisplayName"/>) — recompute is cheap (a handful of char scans), so no
+    /// cache is needed here unlike <see cref="FormatCache"/>'s string-formatting callers.</param>
+    /// <param name="imageUrl">Bound image source; empty/null shows the initials layer instead.</param>
+    /// <param name="size">Diameter — STATIC (a density/shape change is a template remount by the P3 image-decode-target
+    /// rule; see <see cref="ItemsView.CreateBound{T}"/>'s docs), default 96.</param>
+    /// <param name="fill">Override the ellipse fill (default <c>ControlAltFillColorQuarternary</c>); also the photo
+    /// placeholder tint.</param>
+    public static BoxEl Bound(Prop<string> displayName, Prop<string> imageUrl, float size = 96f, ColorF? fill = null)
+    {
+        var circle = Radii.Circle(size);
+        float initialsFontSize = MathF.Max(1f, size * InitialsFontFraction);
+        ColorF resolvedFill = fill ?? Tok.FillControlAltQuaternary;
+
+        Prop<string> initialsText = Prop.Of(() => InitialsFromDisplayName(displayName.Current() ?? ""));
+        Prop<bool> initialsVisible = Prop.Of(() => string.IsNullOrEmpty(imageUrl.Current()));
+
+        return new BoxEl
+        {
+            Width = size,
+            Height = size,
+            Corners = circle,
+            Fill = resolvedFill,                                   // PersonPictureEllipseFillThemeBrush = ControlAltFillColorQuarternary
+            BorderWidth = 1f,
+            BorderColor = Tok.StrokeCardDefault,
+            ZStack = true,
+            AlignItems = FlexAlign.Center,
+            Justify = FlexJustify.Center,
+            Role = AutomationRole.None,
+            Children =
+            [
+                // Initials layer FIRST (under the image), always mounted; Visible bound to "no image".
+                new BoxEl
+                {
+                    Width = size,
+                    Height = size,
+                    Visible = initialsVisible,
+                    AlignItems = FlexAlign.Center,
+                    Justify = FlexJustify.Center,
+                    Children =
+                    [
+                        new TextEl(initialsText)
+                        {
+                            Size = initialsFontSize,
+                            Weight = 600,
+                            LineBounds = TextLineBounds.Tight,
+                            Color = Tok.TextPrimary,
+                            FontFamily = Theme.BodyFont,
+                        },
+                    ],
+                },
+                // Image layer ALWAYS present; an empty bound Source paints nothing (ImageEl's existing convention).
+                new ImageEl
+                {
+                    Source = imageUrl,
+                    Width = size,
+                    Height = size,
+                    Corners = circle,
+                    Placeholder = resolvedFill,
+                },
+            ],
         };
     }
 

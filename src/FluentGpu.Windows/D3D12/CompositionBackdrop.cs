@@ -295,8 +295,13 @@ internal sealed unsafe class CompositionBackdrop : IDisposable
     /// cubic-bezier(0,0,0,1), no opacity fade. The window clips the overflow. Runs once.</summary>
     public void AnimateOpen()
     {
-        if (_opened || _contentHPx <= 0f) return;
+        if (_opened) return;
+        // The reveal has happened — latch it BEFORE the "nothing to slide" early-outs. AnimateOpen runs once per
+        // popup (the host latches it), so leaving _opened false here left the popup permanently seeded at
+        // ConfigureChrome's CLOSED offset: every later placement re-seeded it (the `!_opened` branch below) and
+        // nothing was ever going to animate it back to 0.
         _opened = true;
+        if (_contentHPx <= 0f) return;    // never configured with a real content rect: nothing to slide
         if (_closedRatio <= 0f) return;   // no-slide chrome (CommandBar): appear in place, the body fades itself
         _motionStartTick = Environment.TickCount64;
 

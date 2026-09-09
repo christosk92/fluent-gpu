@@ -82,6 +82,7 @@ static class AnimSuite
         ReflowChecks(strings);
         SkelReflowClipChecks(strings);
         ReflowRetargetChecks(strings);
+        VirtualReflowExitChecks(strings);
         AnimRegressionChecks(strings);
         StyleChecks();
         ButtonAxesChecks();
@@ -111,7 +112,7 @@ static class AnimSuite
         var engine = new AnimEngine(scene);
 
         scene.Paint(node).Opacity = 0f;
-        scene.Flags(node) &= ~(NodeFlags.PaintDirty | NodeFlags.LayoutDirty | NodeFlags.TransformDirty);
+        scene.ClearFlagBits(node, NodeFlags.PaintDirty | NodeFlags.LayoutDirty | NodeFlags.TransformDirty);
         engine.Animate(node, AnimChannel.Opacity, 0f, 1f, 100f, Easing.Linear);
         engine.Tick(0f);
         bool startOk = MathF.Abs(scene.Paint(node).Opacity) < 0.001f;
@@ -123,7 +124,7 @@ static class AnimSuite
         bool doneOk = MathF.Abs(scene.Paint(node).Opacity - 1f) < 0.001f && !engine.HasActive;
         Check("22. opacity timeline samples t0, eases & completes (no relayout)", startOk && midOk && doneOk, $"@50ms={op:0.00}");
 
-        scene.Flags(node) &= ~(NodeFlags.TransformDirty | NodeFlags.LayoutDirty);
+        scene.ClearFlagBits(node, NodeFlags.TransformDirty | NodeFlags.LayoutDirty);
         engine.Animate(node, AnimChannel.TranslateX, 0f, 100f, 100f, Easing.Linear);
         engine.Tick(0f);
         engine.Tick(25f);
@@ -401,7 +402,7 @@ static class AnimSuite
         scene.Root = viewport;
         scene.AppendChild(viewport, content);
         scene.AppendChild(content, lyric);
-        scene.Flags(viewport) |= NodeFlags.ClipsToBounds;
+        scene.SetFlagBits(viewport, NodeFlags.ClipsToBounds);
         ref ScrollState scroll = ref scene.ScrollRef(viewport);
         scroll.ContentNode = content;
         scene.Bounds(viewport) = new RectF(0f, 0f, 240f, 160f);
@@ -500,7 +501,7 @@ static class AnimSuite
             scene.Root = node;
             var engine = new AnimEngine(scene);
             scene.Paint(node).BlurSigma = 8f;
-            scene.Flags(node) &= ~(NodeFlags.PaintDirty | NodeFlags.LayoutDirty | NodeFlags.TransformDirty);
+            scene.ClearFlagBits(node, NodeFlags.PaintDirty | NodeFlags.LayoutDirty | NodeFlags.TransformDirty);
             engine.Animate(node, AnimChannel.BlurSigma, 8f, 0f, 100f, Easing.Linear);
             bool intentSeeded = scene.Paint(node).BlurAnimationActive != 0;
             engine.Tick(0f);
@@ -1338,7 +1339,7 @@ static class AnimSuite
             var n = scene.CreateNode(1); scene.Root = n;
             ref RectF nb = ref scene.Bounds(n); nb = new RectF(0, 200, 50, 20);   // final laid-out position
             var engine = new AnimEngine(scene);
-            scene.Flags(n) &= ~(NodeFlags.TransformDirty | NodeFlags.LayoutDirty);
+            scene.ClearFlagBits(n, NodeFlags.TransformDirty | NodeFlags.LayoutDirty);
             var crit = new LayoutTransition(TransitionChannels.Position, TransitionDynamics.Spring(0.18f, 1.0f));  // critically damped → no overshoot
             engine.AnimateBounds(n, new RectF(0, 100, 50, 20), new RectF(0, 200, 50, 20), crit);  // was at y=100, now laid out at y=200
 
@@ -1388,7 +1389,7 @@ static class AnimSuite
             var scene = new SceneStore();
             var n = scene.CreateNode(1); scene.Root = n;
             ref RectF nb = ref scene.Bounds(n); nb = new RectF(0, 0, 48, 600);   // final (collapsed) model width
-            scene.Flags(n) &= ~NodeFlags.LayoutDirty;
+            scene.ClearFlagBits(n, NodeFlags.LayoutDirty);
             var engine = new AnimEngine(scene);
             var reveal = LayoutTransition.BoundsT(SizeMode.Reveal) with { Dynamics = TransitionDynamics.Spring(0.18f, 1.0f) };
             engine.AnimateBounds(n, new RectF(0, 0, 320, 600), new RectF(0, 0, 48, 600), reveal);  // collapsing 320 → 48
@@ -1489,13 +1490,13 @@ static class AnimSuite
             scene.AppendChild(scene.Root, dest);
             scene.Bounds(clip) = new RectF(20f, 20f, 200f, 200f);
             scene.Paint(clip).PresentedH = 80f;
-            scene.Flags(clip) |= NodeFlags.Visible | NodeFlags.ClipsToBounds;
+            scene.SetFlagBits(clip, NodeFlags.Visible | NodeFlags.ClipsToBounds);
             scene.Bounds(source) = new RectF(0f, 20f, 100f, 100f);
-            scene.Flags(source) |= NodeFlags.Visible;
+            scene.SetFlagBits(source, NodeFlags.Visible);
             scene.Paint(source).VisualKind = VisualKind.Image;
             scene.Paint(source).ImageId = image.Id;
             scene.Bounds(dest) = new RectF(300f, 30f, 36f, 36f);
-            scene.Flags(dest) |= NodeFlags.Visible;
+            scene.SetFlagBits(dest, NodeFlags.Visible);
             scene.Paint(dest).VisualKind = VisualKind.Image;
             scene.Paint(dest).ImageId = image.Id;
 
@@ -1738,7 +1739,7 @@ static class AnimSuite
             var scene = new SceneStore();
             var n = scene.CreateNode(1); scene.Root = n;
             ref RectF nb = ref scene.Bounds(n); nb = new RectF(0, 0, 200, 100);
-            scene.Flags(n) &= ~NodeFlags.LayoutDirty;
+            scene.ClearFlagBits(n, NodeFlags.LayoutDirty);
             var engine = new AnimEngine(scene);
             var sc = LayoutTransition.BoundsT(SizeMode.ScaleCorrect) with { Dynamics = TransitionDynamics.Spring(0.2f, 1f) };
             engine.AnimateBounds(n, new RectF(0, 0, 100, 100), new RectF(0, 0, 200, 100), sc);  // width 100→200 ⇒ scaleX 0.5→1
@@ -2990,6 +2991,105 @@ static class AnimSuite
         }
     }
 
+    // 23r.h — Wavee's playlist drawer: a keyed SizeMode.Reflow child inside a measured virtual row, wrapped in a
+    // default-Direction (row) ItemContainer-shaped box. Removing the child used to (a) SetMeasured the closed height
+    // on the same frame (rows below snapped up) while (b) the exit orphan kept its last full Bounds, so ClipToBounds
+    // was a no-op and the facts line painted over the already-moved rows for 1–3 frames.
+    static void VirtualReflowExitChecks(StringTable strings)
+    {
+        const float StepMs = 16f;
+        VirtualDrawerExitProbe.Open.Value = false;
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("virt-drawer-exit", new Size2(280, 400), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        var probe = new VirtualDrawerExitProbe();
+        using var host = new AppHost(app, window, device, fonts, strings, probe);
+        var s = host.Scene;
+
+        host.RunFrame();
+        VirtualDrawerExitProbe.Open.Value = true;
+        host.RunFrame();
+        for (int i = 0; i < 30; i++) host.RunFrame();   // settle the enter (200ms Linear + pad)
+
+        NodeHandle vp = FindScrollViewport(s, s.Root);
+        if (vp.IsNull || !s.TryGetScroll(vp, out var sc0) || sc0.ContentNode.IsNull)
+        {
+            Check("23r.h Reflow exit orphan under a measured virtual row: height eases monotonically and the orphan clip stays inside the row",
+                false, "no measured viewport after open");
+            return;
+        }
+        var content = sc0.ContentNode;
+        var row0 = Child(s, content, 0);
+        var row1 = Child(s, content, 1);
+        float openH = s.Bounds(row0).H;
+        float row1OpenY = s.AbsoluteRect(row1).Y;
+        bool opened = openH > VirtualDrawerExitProbe.RowH + VirtualDrawerExitProbe.DrawerH - 2f
+                      && s.OrphanCount == 0;
+
+        VirtualDrawerExitProbe.Open.Value = false;
+        host.RunFrame();   // remove → orphan + SeedExit LayoutH→0; JustSeeded holds the open size this frame
+
+        var o = s.OrphanCount > 0 ? s.OrphanAt(0, out _, out _) : default;
+        float h0 = s.Bounds(row0).H;
+        bool orphaned = !o.IsNull && s.IsOrphan(o) && s.IsLive(o);
+        bool noSnapOnRemove = orphaned && h0 > VirtualDrawerExitProbe.RowH + 8f;
+        bool clipped = orphaned && (s.Flags(o) & NodeFlags.ClipsToBounds) != 0;
+        var slot = Child(s, row0, 0);
+        bool insideOnRemove = orphaned && !slot.IsNull
+            && s.Bounds(o).Y + s.Bounds(o).H <= s.Bounds(slot).H + 0.75f;
+
+        bool monotone = true, clipHeld = clipped && insideOnRemove, snapped = !noSnapOnRemove;
+        float prevH = h0, maxDrop = 0f;
+        float stepBound = VirtualDrawerExitProbe.DrawerH * (StepMs / 200f) * 4f + 2f;
+        int aliveFrames = 0;
+        for (int i = 0; i < 24; i++)
+        {
+            host.RunFrame();
+            float h = s.Bounds(row0).H;
+            if (h > prevH + 0.25f) monotone = false;
+            float drop = prevH - h;
+            if (drop > maxDrop) maxDrop = drop;
+            if (drop > stepBound) snapped = true;
+            prevH = h;
+            if (s.OrphanCount > 0)
+            {
+                aliveFrames++;
+                var live = s.OrphanAt(0, out _, out _);
+                var liveSlot = Child(s, row0, 0);
+                if ((s.Flags(live) & NodeFlags.ClipsToBounds) == 0) clipHeld = false;
+                if (!liveSlot.IsNull && s.Bounds(live).Y + s.Bounds(live).H > s.Bounds(liveSlot).H + 0.75f)
+                    clipHeld = false;
+                if (h <= VirtualDrawerExitProbe.RowH + 0.5f) snapped = true;   // closed while orphan still alive
+            }
+            if (s.OrphanCount == 0 && Near(h, VirtualDrawerExitProbe.RowH, 1f)) break;
+        }
+
+        float closedH = s.Bounds(row0).H;
+        float row1ClosedY = s.AbsoluteRect(row1).Y;
+        bool settled = s.OrphanCount == 0 && Near(closedH, VirtualDrawerExitProbe.RowH, 1f);
+        bool siblingFollowed = row1ClosedY < row1OpenY - 8f && Near(row1ClosedY, s.AbsoluteRect(row0).Y + closedH, 1.5f);
+
+        Check("23r.h Reflow exit orphan under a measured virtual row: height eases monotonically (never snaps while the orphan is alive) and the orphan's clip/draw bounds stay inside the row",
+            opened && orphaned && noSnapOnRemove && monotone && !snapped && clipHeld && settled && siblingFollowed && aliveFrames >= 3,
+            $"openH={openH:0.0} removeH={h0:0.0} closedH={closedH:0.0} alive={aliveFrames} maxDrop={maxDrop:0.0} "
+            + $"monotone={monotone} snapped={snapped} clip={clipHeld} settled={settled} siblingFollowed={siblingFollowed} "
+            + $"row1Y {row1OpenY:0.0}→{row1ClosedY:0.0}");
+    }
+
+    static NodeHandle FindScrollViewport(SceneStore s, NodeHandle n)
+    {
+        if (n.IsNull) return default;
+        if (s.HasScroll(n) && s.TryGetScroll(n, out var sc) && sc.ItemCount > 0) return n;
+        for (var c = s.FirstChild(n); !c.IsNull; c = s.NextSibling(c))
+        {
+            var r = FindScrollViewport(s, c);
+            if (!r.IsNull) return r;
+        }
+        return default;
+    }
+
     static void StyleChecks()
     {
         var s = new Button.Style
@@ -3769,7 +3869,7 @@ static class AnimSuite
         var lazyBefore = new BoxEl { OnClick = static () => { }, Children = [] };
         lazyRecon.ReconcileRoot(lazyBefore, null);
         var lazyRoot = lazyScene.Root;
-        lazyScene.Flags(lazyRoot) |= NodeFlags.HoverWithin;
+        lazyScene.SetFlagBits(lazyRoot, NodeFlags.HoverWithin);
         lazyAnim.SetHover(lazyRoot, true);
         lazyRecon.ReconcileRoot(new BoxEl
         {
@@ -3860,7 +3960,7 @@ static class AnimSuite
         var mountBefore = new BoxEl { OnClick = static () => { }, Children = [] };
         mountRecon.ReconcileRoot(mountBefore, null);
         var mountRoot = mountScene.Root;
-        mountScene.Flags(mountRoot) |= NodeFlags.HoverWithin;
+        mountScene.SetFlagBits(mountRoot, NodeFlags.HoverWithin);
         mountAnim.SetHover(mountRoot, true);
         mountRecon.ReconcileRoot(new BoxEl
         {
@@ -4363,10 +4463,12 @@ static class AnimSuite
         Check("P6.clean-span first record populates spans under the normal recorder path",
             (first.SpanReuseDisabledReasons & SpanReuseDisabledReason.FirstRecord) != 0
             && first.SpansReRecorded >= 3
-            && first.SpanReuseMisses.GlobalDisabled >= first.SpansReRecorded,
+            && (Diag.CompiledIn ? first.SpanReuseMisses.GlobalDisabled >= first.SpansReRecorded : first.SpanReuseMisses == default),
             $"firstReason={first.SpanReuseDisabledReasons} recorded={first.SpansReRecorded} missDisabled={first.SpanReuseMisses.GlobalDisabled}");
         Check("P6.clean-span dirty child re-records ancestors while reusing a clean sibling",
-            dirtyBranch && dirty.SpanReuseMisses.ExactDirty > 0 && dirty.SpanReuseMisses.MoveGuard > 0,
+            dirtyBranch && (Diag.CompiledIn
+                ? dirty.SpanReuseMisses.ExactDirty > 0 && dirty.SpanReuseMisses.MoveGuard > 0
+                : dirty.SpanReuseMisses == default),
             $"reused={dirty.SpansReused} recorded={dirty.SpansReRecorded} copied={dirty.SpanBytesCopied} exactDirty={dirty.SpanReuseMisses.ExactDirty} moveGuard={dirty.SpanReuseMisses.MoveGuard}");
         Check("P6.clean-span steady frame copies the root span byte-identically",
             steadyCopy && steady.SpanReuseMisses == default,
@@ -4406,7 +4508,7 @@ static class AnimSuite
         scrollScene.AppendChild(viewport, content);
         scrollScene.AppendChild(content, rowA);
         scrollScene.AppendChild(content, rowB);
-        scrollScene.Flags(viewport) |= NodeFlags.ClipsToBounds;
+        scrollScene.SetFlagBits(viewport, NodeFlags.ClipsToBounds);
         ref var scroll = ref scrollScene.ScrollRef(viewport);
         scroll.ContentNode = content;
         scrollScene.Bounds(viewport) = new RectF(0, 0, 100, 100);
@@ -4490,7 +4592,7 @@ static class AnimSuite
             var s = new SceneStore();
             var root = s.CreateNode(1); s.Root = root;
             s.Bounds(root) = new RectF(0, 0, 200, 200);
-            s.Flags(root) |= NodeFlags.ClipsToBounds;
+            s.SetFlagBits(root, NodeFlags.ClipsToBounds);
             _ = SB(s, root, new RectF(0, 0, 100, 40), ColorF.FromRgba(0x20, 0x80, 0xE0));   // visible sibling → reuses
             _ = SB(s, root, new RectF(0, 600, 100, 40), ColorF.FromRgba(0xE0, 0x80, 0x20)); // off-screen sibling → culls
             var popup = SB(s, root, new RectF(0, 0, 60, 60), ColorF.FromRgba(0x40, 0xC0, 0x70));
@@ -4588,7 +4690,7 @@ static class AnimSuite
             s.Root = viewport;
             s.AppendChild(viewport, content);
             s.AppendChild(content, blurRow);
-            s.Flags(viewport) |= NodeFlags.ClipsToBounds;
+            s.SetFlagBits(viewport, NodeFlags.ClipsToBounds);
             s.ScrollRef(viewport).ContentNode = content;
             s.Bounds(viewport) = new RectF(0, 0, 100, 100);
             s.Bounds(content) = new RectF(0, 0, 100, 180);
@@ -4659,7 +4761,7 @@ static class AnimSuite
             var steady = SceneRecorder.Record(s, dl, spans: spans);   // baseline: reuse is live before the ghost
 
             // The ghost frame: reuse dies canvas-wide (GlobalReuseKill), but every unblocked node still stores.
-            s.Flags(row) |= NodeFlags.DragGhost;
+            s.SetFlagBits(row, NodeFlags.DragGhost);
             s.DragGhost = row;
             var ghostFrame = SceneRecorder.Record(s, dl, spans: spans);
             uint gf = spans.CurrentFrameId;
@@ -4669,7 +4771,7 @@ static class AnimSuite
 
             // Drop the ghost. The bystander subtree stored on the ghost frame, so it is still recent enough to reuse;
             // only the ghost's own chain (which withheld its store) has to re-record.
-            s.Flags(row) &= ~NodeFlags.DragGhost;
+            s.ClearFlagBits(row, NodeFlags.DragGhost);
             s.DragGhost = NodeHandle.Null;
             var afterGhost = SceneRecorder.Record(s, dl, spans: spans);
 
@@ -4945,7 +5047,7 @@ static class AnimSuite
             s.AppendChild(viewport, pinned);
             s.AppendChild(viewport, content);
             s.AppendChild(content, row);
-            s.Flags(viewport) |= NodeFlags.ClipsToBounds;
+            s.SetFlagBits(viewport, NodeFlags.ClipsToBounds);
             s.ScrollRef(viewport).ContentNode = content;
             s.Bounds(viewport) = new RectF(0, 0, 200, 400);
             s.Bounds(pinned) = new RectF(0, 0, 200, 30);
@@ -4994,7 +5096,7 @@ static class AnimSuite
             content = s.CreateNode(1);
             s.Root = viewport;
             s.AppendChild(viewport, content);
-            s.Flags(viewport) |= NodeFlags.ClipsToBounds;
+            s.SetFlagBits(viewport, NodeFlags.ClipsToBounds);
             s.ScrollRef(viewport).ContentNode = content;
             s.Bounds(viewport) = new RectF(0, 0, 200, 400);
             s.Bounds(content) = new RectF(0, 0, 200, 800);
@@ -5009,7 +5111,7 @@ static class AnimSuite
                 var clipChild = s.CreateNode(1);
                 s.AppendChild(row, clipChild);
                 s.Bounds(clipChild) = new RectF(10, 5, InteriorClipW, 40);
-                s.Flags(clipChild) |= NodeFlags.ClipsToBounds;
+                s.SetFlagBits(clipChild, NodeFlags.ClipsToBounds);
                 s.Paint(clipChild) = NodePaint.Default;
                 AddText(s, strings, clipChild, new RectF(0, 0, 140, 20), "row text");
                 if (i == 0) firstRow = row;
@@ -5280,4 +5382,51 @@ sealed class ReframeRetargetProbe : Component
             new BoxEl { Key = "mover", Width = 100f, Height = MoverH, Animate = Slide },
         ],
     };
+}
+
+// 23r.h probe — Wavee's playlist expander: a measured virtual list whose row 0 wraps the slot in a default-Direction
+// (row) box, the ItemContainer shape that made PendingExitReflow pick WIDTH and no-op. The keyed drawer is a
+// SizeMode.Reflow + ClipToBounds + Enter/Exit Active node (DrawerReveal). Open mounts it; close orphans it.
+sealed class VirtualDrawerExitProbe : Component
+{
+    public const float RowH = 40f;
+    public const float DrawerH = 80f;
+    public static readonly Signal<bool> Open = new(false);
+
+    static readonly LayoutTransition DrawerReveal = new(
+        TransitionChannels.Size,
+        TransitionDynamics.Tween(200f, Easing.Linear),
+        Enter: new EnterExit(Active: true),
+        Exit: new EnterExit(Active: true),
+        ExitDynamics: TransitionDynamics.Tween(200f, Easing.Linear),
+        Size: SizeMode.Reflow,
+        Anchor: SizeAnchor.Leading,
+        SuppressDescendantTransitions: true);
+
+    public override Element Render()
+    {
+        _ = Open.Value;
+        var layout = UseMemo(static () => new MeasuredStackVirtualLayout(RowH), DepKey.Empty);
+        return Virtual.Measured(4, layout, i =>
+        {
+            var skin = new BoxEl { Key = "row", Width = 200f, Height = RowH };
+            Element slot = i == 0 && Open.Value
+                ? new BoxEl
+                {
+                    Direction = 1, MinWidth = 0f,
+                    Children =
+                    [
+                        skin,
+                        new BoxEl
+                        {
+                            Key = "drawer", Direction = 1, MinWidth = 0f, ClipToBounds = true, Animate = DrawerReveal,
+                            Children = [new BoxEl { Width = 200f, Height = DrawerH }],
+                        },
+                    ],
+                }
+                : new BoxEl { Direction = 1, MinWidth = 0f, Children = [skin] };
+            // Default Direction=0 wrapper — the ItemContainer shape that made parent-exit-reflow pick the wrong axis.
+            return new BoxEl { Width = 200f, Children = [slot] };
+        }, keyOf: i => "r" + i) with { Width = 240f, Height = 360f };
+    }
 }

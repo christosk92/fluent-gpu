@@ -32,6 +32,7 @@ public sealed class AudioDeviceController : IDisposable
     private int _pending;      // coalesced default-change requests
     private long _pendingSince;   // Environment.TickCount64 of the MOST RECENT request — the debounce clock (Fix 4)
     private bool _disposed;
+    private int _wakeDisposed;
 
     // Debounce window (spec §7.9 Fix 4 / root cause A4): the OS raises the default-device-changed notification before
     // the new endpoint's mix format is settled, so ONE physical device switch routinely fires two notifications a few
@@ -79,9 +80,10 @@ public sealed class AudioDeviceController : IDisposable
     /// immediately, by design, so a test can assert one call = one rebuild).</summary>
     public void RequestRebuild()
     {
+        if (_disposed) return;
         Interlocked.Exchange(ref _pendingSince, Environment.TickCount64);
         Interlocked.Exchange(ref _pending, 1);
-        _wake.Set();
+        try { _wake.Set(); } catch (ObjectDisposedException) { }
     }
 
     /// <summary>Perform the follow-default rebuild synchronously (spec §7.9) — the cold-thread body, also the deterministic
@@ -90,13 +92,15 @@ public sealed class AudioDeviceController : IDisposable
     {
         if (_disposed) return;
         var prev = _state.Peek();
-        if (prev is not (AudioDeviceState.Running or AudioDeviceState.Building)) return;
+        if (prev is not (AudioDeviceState.Running or AudioDeviceState.Building or AudioDeviceState.Faulted)) return;
 
         _state.Value = AudioDeviceState.Reinitializing;
         try
         {
             var next = _endpointFactory() ?? throw new InvalidOperationException("No audio endpoint available.");
+            if (_disposed) { next.Dispose(); return; }
             bool ok = _session.RebuildSink(next);
+            if (!ok) next.Dispose();
             // Fix 3: re-derive the feed's ms→frames sizing against the (possibly new) live rate. Safe here specifically
             // because the cold loop parks the feed (Stop()) around every rebuild before calling in — Resize plain-writes
             // its fields with no synchronization and is not safe while the RT/worker threads are live.
@@ -115,27 +119,40 @@ public sealed class AudioDeviceController : IDisposable
 
     private void ColdLoop()
     {
-        while (_run)
+        try
         {
-            _wake.WaitOne();
-            if (!_run) break;
-            if (Interlocked.Exchange(ref _pending, 0) == 0) continue;
+            while (_run)
+            {
+                _wake.WaitOne();
+                if (!_run) break;
+                if (Interlocked.Exchange(ref _pending, 0) == 0) continue;
 
-            // Debounce (Fix 4): wait out a quiet window after the LATEST request before rebuilding. A request landing
-            // inside the window re-stamps `_pendingSince` (RequestRebuild, off this thread) and pushes the wait back out
-            // instead of queuing a second rebuild — see RequestRebuild's doc for why this matters (the 48000-then-44100
-            // double notification).
-            long since;
-            while (_run && (since = Environment.TickCount64 - Interlocked.Read(ref _pendingSince)) < DebounceMs)
-                _wake.WaitOne((int)(DebounceMs - since));
-            if (!_run) break;
+                // Debounce (Fix 4): wait out a quiet window after the LATEST request before rebuilding. A request landing
+                // inside the window re-stamps `_pendingSince` (RequestRebuild, off this thread) and pushes the wait back out
+                // instead of queuing a second rebuild — see RequestRebuild's doc for why this matters (the 48000-then-44100
+                // double notification).
+                long since;
+                while (_run && (since = Environment.TickCount64 - Interlocked.Read(ref _pendingSince)) < DebounceMs)
+                    _wake.WaitOne((int)(DebounceMs - since));
+                if (!_run) break;
 
-            // Park the RT feed around the swap so no callback reads a half-swapped endpoint (on-box).
-            bool wasRunning = _feed is not null;
-            if (wasRunning) _feed!.Stop();
-            OnDefaultDeviceChanged();
-            if (wasRunning && _state.Peek() == AudioDeviceState.Running) _feed!.Start();
+                // Park the RT feed around the swap so no callback reads a half-swapped endpoint (on-box).
+                bool wasRunning = _feed is not null;
+                if (wasRunning)
+                {
+                    _feed!.Stop();
+                    if (!_feed.IsStopped) { _state.Value = AudioDeviceState.Faulted; continue; }
+                }
+                OnDefaultDeviceChanged();
+                if (_run && !_disposed && wasRunning && _state.Peek() == AudioDeviceState.Running) _feed!.Start();
+            }
         }
+        finally { if (_disposed) DisposeWake(); }
+    }
+
+    private void DisposeWake()
+    {
+        if (Interlocked.Exchange(ref _wakeDisposed, 1) == 0) _wake.Dispose();
     }
 
     /// <inheritdoc/>
@@ -145,9 +162,14 @@ public sealed class AudioDeviceController : IDisposable
         _disposed = true;
         if (_watcher is not null) _watcher.DefaultDeviceChanged -= _watcherHandler;
         _run = false;
-        _wake.Set();
-        try { _coldThread?.Join(500); } catch { }
-        _coldThread = null;
-        _wake.Dispose();
+        try { _wake.Set(); } catch (ObjectDisposedException) { }
+        bool joined = _coldThread is null;
+        try { joined = _coldThread?.Join(2000) ?? true; } catch { }
+        if (joined)
+        {
+            _coldThread = null;
+            DisposeWake();
+        }
+        // An uncooperative endpoint factory retains its wake handle until its cold worker has exited.
     }
 }

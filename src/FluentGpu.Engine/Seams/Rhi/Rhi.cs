@@ -334,6 +334,15 @@ public interface ISwapchain : IDisposable
         return false;
     }
 
+    /// <summary>True once this target has PRESENTED at least one content frame — i.e. its front buffer / composition
+    /// surface actually holds pixels this engine drew. A present is not guaranteed to happen just because one was
+    /// requested: the Windows backend stands down for a covered/cloaked/hidden present target
+    /// (<c>D3D12Device.Present</c>), so "we called Present" is not evidence of painted content.
+    /// <para>Load-bearing for the ATOMIC POPUP REVEAL: a windowed popup's HWND is created hidden and revealed only
+    /// once its swapchain reports true here, so a popup can never become visible as its frosted composition chrome
+    /// with an empty content surface. Backends that do not track it report true (today's unconditional reveal).</para></summary>
+    bool HasPresentedContent => true;
+
     /// <summary>Configure the windowed popup's composition chrome (rounded acrylic content rect + outer shadow) for the
     /// current placement. Called on each placement before show. Default no-op: only a backdrop-backed backend honors it.</summary>
     void ConfigurePopupChrome(in PopupChromeMetrics m) { }

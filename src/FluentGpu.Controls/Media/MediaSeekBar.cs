@@ -52,7 +52,7 @@ public sealed class MediaSeekBar : Component
     /// value it guards is <see cref="Environment.TickCount64"/>, NOT two media positions — comparing media positions
     /// (the previous shape) meant a 3-hour video issued a seek on every single pointer move while a 30-second clip
     /// issued almost none, because the same pixel of travel is worth a different number of milliseconds.</summary>
-    public const long SeekThrottleMs = 100;
+    public const long SeekThrottleMs = SeekPreviewScheduler.IntervalMs;
     /// <summary>How long a seek may run before the inline spinner appears. Below this a seek reads as instant and a
     /// spinner would only flash.</summary>
     public const float SeekSpinnerDelayMs = 500f;
@@ -92,9 +92,8 @@ public sealed class MediaSeekBar : Component
     private readonly Signal<bool> _liveRail = new(false);
 
     private NodeHandle _self;
-    private long _lastSeekWallMs = long.MinValue;   // WALL-CLOCK throttle anchor for live keyframe previews
+    private SeekPreviewScheduler _previews;
     private bool _seekPostQueued;                   // one live seek per posted turn (≈ one per frame)
-    private float _queuedFrac;
     private Action<Action>? _post;
     private readonly Action _drainSeek;
     // Commit confirmation: the gate stays closed until the reported position reaches this, or the timeout expires.
@@ -377,7 +376,9 @@ public sealed class MediaSeekBar : Component
         // Pixel-due ticker (UseInterval — not FrameClock.Tick, which pins the host at panel rate via FrameClockPoller).
         // Unmounted when paused/stopped so the frame loop can idle. NEVER re-renders this component.
         bool canAdvance = enabled && playing && !buffering;
-        Element? ticker = canAdvance ? Embed.Comp(() => new MediaSeekTicker { Owner = this }) : null;
+        Element? ticker = canAdvance ? Embed.Comp(() => new MediaSeekTicker { Owner = this }) with { Key = "position-ticker" } : null;
+        Element? previewTicker = _scrubbing.Value
+            ? Embed.Comp(() => new MediaSeekPreviewTicker { Owner = this }) with { Key = "preview-ticker" } : null;
 
         return new BoxEl
         {
@@ -393,7 +394,9 @@ public sealed class MediaSeekBar : Component
             OnClick = enabled ? OnCommit : null,             // drag-end → accurate commit (one seek)
             OnDragCanceled = enabled ? OnCanceled : null,
             OnPointerWheel = enabled ? OnWheel : null,       // wheel over the seek bar = ±5 s
-            Children = ticker is null ? [stack] : [stack, ticker],
+            Children = ticker is null
+                ? previewTicker is null ? [stack] : [stack, previewTicker]
+                : previewTicker is null ? [stack, ticker] : [stack, ticker, previewTicker],
         };
     }
 
@@ -480,7 +483,7 @@ public sealed class MediaSeekBar : Component
         _confirmSinceWallMs = Environment.TickCount64;
         _spinnerTimer.Restart();
         _confirmTimer.Restart();
-        _lastSeekWallMs = Environment.TickCount64;
+        _previews.DiscardPending();
         RequestSeek(target, SeekMode.Accurate);
     }
 
@@ -524,7 +527,7 @@ public sealed class MediaSeekBar : Component
         _confirmSinceWallMs = Environment.TickCount64;
         _spinnerTimer.Restart();
         _confirmTimer.Restart();
-        _lastSeekWallMs = Environment.TickCount64;
+        _previews.DiscardPending();
         RequestSeek(target, SeekMode.Accurate);
     }
 
@@ -543,6 +546,7 @@ public sealed class MediaSeekBar : Component
 
     private void ReleaseGate()
     {
+        _previews.Reset();
         _awaitingConfirm = false;
         _spinnerTimer.Cancel();
         _confirmTimer.Cancel();
@@ -558,24 +562,24 @@ public sealed class MediaSeekBar : Component
     private void QueueLiveSeek(bool force)
     {
         if (_railSpanSec <= 0.0) return;
-        _queuedFrac = _scrubFrac.Peek();
+        if (force) _previews.Reset();
+        _previews.Queue((long)(TimeAt(_scrubFrac.Peek()) * 1000.0));
         if (_seekPostQueued) return;
-        long now = Environment.TickCount64;
-        if (!force && _lastSeekWallMs != long.MinValue && now - _lastSeekWallMs < SeekThrottleMs) return;
         _seekPostQueued = true;
         if (_post is { } post) post(_drainSeek); else DrainSeek();
     }
 
-    private void DrainSeek()
+    internal void DrainSeek()
     {
         _seekPostQueued = false;
-        if (_railSpanSec <= 0.0 || !_scrubbing.Peek()) return;
-        _lastSeekWallMs = Environment.TickCount64;
+        if (_railSpanSec <= 0.0 || !_scrubbing.Peek() || _awaitingConfirm) return;
+        if (!_previews.TryTake(Environment.TickCount64, out long targetMs)) return;
         // Keyframe previews go to the HOST path too. Suppressing them whenever SeekRequested was set (the previous
         // shape) is what left the picture frozen on the last decoded frame for the whole drag: the host is exactly the
         // path that can serve a cheap keyframe. The mode is carried, so a host that distinguishes fast previews from
         // accurate commits can act on it.
-        RequestSeek(TimeSpan.FromSeconds(TimeAt(_queuedFrac)), SeekMode.Keyframe);
+        double target = Math.Clamp(targetMs * 0.001, _railStartSec, _railStartSec + _railSpanSec);
+        RequestSeek(TimeSpan.FromSeconds(target), SeekMode.Keyframe);
     }
 
     private void RequestSeek(TimeSpan target, SeekMode mode)
@@ -611,6 +615,18 @@ public sealed class MediaSeekTicker : Component
     public override Element Render()
     {
         UseInterval(() => Owner.Recompute(), Owner.TickIntervalMs());
+        return new BoxEl { HitTestVisible = false, Width = 0f, Height = 0f };
+    }
+}
+
+/// <summary>Only mounted during scrubbing; flushes the final pending pointer position even if the pointer stops moving.</summary>
+internal sealed class MediaSeekPreviewTicker : Component
+{
+    public required MediaSeekBar Owner;
+
+    public override Element Render()
+    {
+        UseInterval(Owner.DrainSeek, SeekPreviewScheduler.IntervalMs);
         return new BoxEl { HitTestVisible = false, Width = 0f, Height = 0f };
     }
 }

@@ -34,8 +34,13 @@ public sealed class StringTable
     private const int QuarantineTicks = 16;
 
     private readonly Dictionary<string, int> _map = new(StringComparer.Ordinal);   // writer-only (UI thread); reader never touches it
+    // Span-keyed probe into the SAME map (no second table, no wrapper allocation) — .NET 9+ alternate-lookup support
+    // on the ordinal string comparer. Used by the ReadOnlySpan<char> Intern overload (P2 span-text concat) to find an
+    // existing id WITHOUT allocating a probe string; only a genuinely new string pays the `new string(span)` cost.
+    private readonly Dictionary<string, int>.AlternateLookup<ReadOnlySpan<char>> _mapAlt;
     private string[]?[] _chunks;                     // outer array swapped (grown) under release ordering; chunks themselves immutable
     private int[]?[] _refs;                          // per-id refcounts (writer-only, parallel to _chunks)
+    private int[]?[] _pins;                          // UI-owned reader leases, separate from authored ownership
     private int[] _chunkDead;                        // per-chunk cleared-slot count (chunk freed at ChunkSize)
     private int _count;                              // published via Volatile (release on write / acquire on read)
     private long _tick;
@@ -48,8 +53,11 @@ public sealed class StringTable
         _chunks[0]![0] = "";   // id 0 = empty
         _refs = new int[4][];
         _refs[0] = new int[ChunkSize];
+        _pins = new int[4][];
+        _pins[0] = new int[ChunkSize];
         _chunkDead = new int[4];
         Volatile.Write(ref _count, 1);
+        _mapAlt = _map.GetAlternateLookup<ReadOnlySpan<char>>();
     }
 
     /// <summary>Live map entries (interned strings currently resolvable by content) — diagnostics/leak checks.</summary>
@@ -75,6 +83,7 @@ public sealed class StringTable
         {
             Volatile.Write(ref _chunks[ci], new string[ChunkSize]);   // publish a fully-allocated chunk
             _refs[ci] = new int[ChunkSize];
+            _pins[ci] = new int[ChunkSize];
         }
         _chunks[ci]![off] = s;          // write the slot...
         _refs[ci]![off] = 0;
@@ -83,12 +92,40 @@ public sealed class StringTable
         return new StringId(id);
     }
 
+    /// <summary>Intern a UTF-16 span (P2 span-text concat build): probes the SAME map by content with no allocation
+    /// (the .NET alternate-lookup span probe); only a genuinely new string pays <c>new string(span)</c>, then the
+    /// ordinary <see cref="Intern(string)"/> path registers it. UI-thread only, same discipline as the string overload.</summary>
+    public StringId Intern(ReadOnlySpan<char> s)
+    {
+        if (s.IsEmpty) return StringId.Empty;
+        return _mapAlt.TryGetValue(s, out int id) ? new StringId(id) : Intern(new string(s));
+    }
+
     /// <summary>Take an ownership reference on an id (UI thread). Owners are the scene's text columns; pair with <see cref="Release"/>.</summary>
     public void AddRef(StringId id)
     {
         int v = id.Value;
         if (v <= 0 || v >= _count) return;
         _refs[v >> ChunkBits]![v & ChunkMask]++;
+    }
+
+    /// <summary>
+    /// UI-only frame-reader lease. Unlike authored AddRef, a pin does not turn a never-owned permanent id into a
+    /// reclaimable one. Pins also protect already-released ids until the last referencing frame/fence retires.
+    /// </summary>
+    public void Pin(StringId id)
+    {
+        int value = id.Value;
+        if (value <= 0 || value >= _count) return;
+        if (_pins[value >> ChunkBits] is { } pins) pins[value & ChunkMask]++;
+    }
+
+    /// <summary>UI-only release of a frame-reader lease; authored lifetime and its quarantine remain independent.</summary>
+    public void Unpin(StringId id)
+    {
+        int value = id.Value;
+        if (value <= 0 || value >= _count) return;
+        if (_pins[value >> ChunkBits] is { } pins && pins[value & ChunkMask] > 0) pins[value & ChunkMask]--;
     }
 
     /// <summary>Drop an ownership reference (UI thread). The LAST release removes the map entry and schedules the slot
@@ -122,11 +159,20 @@ public sealed class StringTable
             var chunk = _chunks[ci];
             if (chunk is null) continue;
             if (_refs[ci]![off] != 0) { Debug.Fail("StringTable: id resurrected after release"); continue; }
+            if (_pins[ci]![off] != 0)
+            {
+                // A render frame can outlive arbitrarily many UI paints. Keep its id, but move this item behind
+                // other retirement work so one long reader cannot block unrelated string reclamation. Restamping
+                // also bounds this pass: an item deferred here cannot be re-processed in the same Tick.
+                _pendingClear.Enqueue((id, _tick));
+                continue;
+            }
             chunk[off] = null!;   // atomic ref store — a concurrent Resolve sees null → ""
             if (++_chunkDead[ci] == ChunkSize)
             {
                 Volatile.Write(ref _chunks[ci], null);   // whole chunk dead (and fully written) → free the backing array
                 _refs[ci] = null;
+                _pins[ci] = null;
             }
         }
     }
@@ -149,9 +195,12 @@ public sealed class StringTable
         Array.Copy(_chunks, bigger, _chunks.Length);
         var biggerRefs = new int[newLen][];
         Array.Copy(_refs, biggerRefs, _refs.Length);
+        var biggerPins = new int[newLen][];
+        Array.Copy(_pins, biggerPins, _pins.Length);
         var biggerDead = new int[newLen];
         Array.Copy(_chunkDead, biggerDead, _chunkDead.Length);
         _refs = biggerRefs;
+        _pins = biggerPins;
         _chunkDead = biggerDead;
         Volatile.Write(ref _chunks, bigger);
     }

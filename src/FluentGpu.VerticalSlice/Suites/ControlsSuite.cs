@@ -4155,7 +4155,7 @@ static partial class ControlsSuite
             new FlexLayout(scene, fonts).Run(scene.Root);
             var ghostNode = Child(scene, scene.Root, 1);
             var chipNode = Child(scene, scene.Root, 2);
-            scene.Flags(ghostNode) |= NodeFlags.DragGhost;
+            scene.SetFlagBits(ghostNode, NodeFlags.DragGhost);
             scene.DragGhost = ghostNode;
             scene.DragOverlay = chipNode;
 
@@ -4963,7 +4963,7 @@ static partial class ControlsSuite
             new FlexLayout(scene, fonts).Run(scene.Root);
             var ghostNode = Child(scene, scene.Root, 2);
             var chipNode = Child(scene, scene.Root, 3);
-            scene.Flags(ghostNode) |= NodeFlags.DragGhost;
+            scene.SetFlagBits(ghostNode, NodeFlags.DragGhost);
             scene.DragGhost = ghostNode;
             scene.DragOverlay = chipNode;
             var disp = new InputDispatcher(scene);
@@ -7689,19 +7689,24 @@ static partial class ControlsSuite
             {
                 OnRealized = h => { if (!fills.Contains(h)) fills.Add(h); },
             };
-            using var host = new AppHost(app, window, device, fonts, strings, new W0fStaticProbe
+            var probe = new W0fStaticProbe
             {
                 Build = () => new BoxEl
                 {
                     Width = 360, Height = 80, Padding = Edges4.All(16),
                     Children = [ProgressBar.Indeterminate(width.Value, state.Value, parts)],
                 },
-            });
+            };
+            using var host = new AppHost(app, window, device, fonts, strings, probe);
             host.RunFrame();
             bool normalTracks = fills.Count == 2 && host.Animation.HasTracks(fills[0]) && host.Animation.HasTracks(fills[1]);
             var barRoot = fills.Count == 2 ? host.Scene.Parent(fills[0]) : NodeHandle.Null;
 
             state.Value = ProgressBarState.Paused;
+            // This gate checks component-props semantics. Drain the queued parent/child renders deterministically;
+            // a hosted frame may legitimately yield between them at its wall-clock deadline (tested separately by
+            // gate.signals.deadline-*). RunFrame still performs layout and the animation-seeding passive effects.
+            probe.Context.Runtime!.Flush();
             host.RunFrame(); host.RunFrame();
             bool paused = fills.Count == 2
                 && Near(host.Scene.Paint(fills[0]).Opacity, 0f, 0.001f)
@@ -7709,18 +7714,23 @@ static partial class ControlsSuite
                 && ColorClose(host.Scene.Paint(fills[1]).Fill, Tok.SystemFillCaution, 0.004f);
 
             state.Value = ProgressBarState.Normal;
+            probe.Context.Runtime!.Flush();
             host.RunFrame();
+            bool resumedColor = fills.Count == 2 && ColorClose(host.Scene.Paint(fills[1]).Fill, Tok.AccentDefault, 0.004f);
+            bool resumedFirstTrack = fills.Count == 2 && host.Animation.HasTracks(fills[0]);
+            bool resumedSecondTrack = fills.Count == 2 && host.Animation.HasTracks(fills[1]);
             bool resumed = fills.Count == 2
-                && ColorClose(host.Scene.Paint(fills[1]).Fill, Tok.AccentDefault, 0.004f)
-                && host.Animation.HasTracks(fills[0]) && host.Animation.HasTracks(fills[1]);
+                && resumedColor && resumedFirstTrack && resumedSecondTrack;
 
             width.Value = 300f;
+            probe.Context.Runtime!.Flush();
             host.RunFrame(); host.RunFrame();
             bool resized = !barRoot.IsNull && Near(host.Scene.AbsoluteRect(barRoot).W, 300f, 0.5f);
 
             Check("progress.3 ProgressBar indeterminate state and width props update the preserved component",
                 normalTracks && paused && resumed && resized,
-                $"normal={normalTracks} paused={paused} resumed={resumed} resized={resized} width={(!barRoot.IsNull ? host.Scene.AbsoluteRect(barRoot).W : 0):0.#}");
+                $"normal={normalTracks} paused={paused} resumed={resumed} resized={resized} width={(!barRoot.IsNull ? host.Scene.AbsoluteRect(barRoot).W : 0):0.#}"
+                + $" resumedColor={resumedColor} resumedTracks={resumedFirstTrack}/{resumedSecondTrack} fills={fills.Count}");
         }
 
         // CheckBox: checked mark color/pressability must update through re-pushed props without remounting or replaying draw-on.
@@ -9387,7 +9397,7 @@ static partial class ControlsSuite
             var clipAncestor = scene.CreateNode(2);
             scene.AppendChild(root, clipAncestor);
             scene.Bounds(clipAncestor) = new RectF(0f, 0f, 400f, 300f);   // the FINAL, fully-revealed size
-            scene.Flags(clipAncestor) |= NodeFlags.ClipsToBounds;
+            scene.SetFlagBits(clipAncestor, NodeFlags.ClipsToBounds);
             scene.Paint(clipAncestor).PresentedW = 200f;                  // mid-animation: only half revealed…
             scene.Paint(clipAncestor).PresentedH = 150f;
 

@@ -277,6 +277,7 @@ public sealed class ImageCache
     /// optimistically admitted <c>Ready</c> and the render thread posts a REJECTION back here, drained each <see cref="Pump"/>
     /// by <see cref="DrainAsyncRejections"/>. Null in default/force-sync (the direct sinks run with no cross-thread overlap).</summary>
     public void SetAsyncUploadQueue(ImageUploadQueue queue) => _asyncUploads = queue;
+    internal ImageUploadQueue? RecordingUploadQueue => _asyncUploads;
 
     /// <summary>Install the render-thread handoff used by <see cref="RequestBakedBlur"/>. Set once by the host.</summary>
     public void SetBakedBlurQueue(BakedBlurQueue queue) => _bakedBlurs = queue;
@@ -419,6 +420,29 @@ public sealed class ImageCache
     }
 
     public ImageState StateOf(ImageHandle h) => _byId.TryGetValue(h.Id, out var e) ? e.State : ImageState.None;
+
+    internal void CopyRecordingInputs(ImageRecordingSnapshot target)
+    {
+        foreach (var pair in _byId)
+        {
+            var entry = pair.Value;
+            target.Add(pair.Key, entry.State, entry.W, entry.H, entry.TextureMs,
+                entry.RevealMs, (int)entry.Transition.Easing);
+        }
+    }
+
+    /// <summary>Narrowed variant (perf plan item 1): copies only the requested ids instead of every entry — O(referenced)
+    /// instead of O(total images ever seen this session), so evicted/off-screen tombstones (kept for re-pin recovery,
+    /// see <see cref="Entry"/>'s remarks) never cost a snapshot slot. An id in <paramref name="ids"/> the cache no
+    /// longer knows (or never knew) is simply skipped.</summary>
+    internal void CopyRecordingInputs(ImageRecordingSnapshot target, System.ReadOnlySpan<int> ids)
+    {
+        foreach (int id in ids)
+        {
+            if (_byId.TryGetValue(id, out var entry))
+                target.Add(id, entry.State, entry.W, entry.H, entry.TextureMs, entry.RevealMs, (int)entry.Transition.Easing);
+        }
+    }
     /// <summary>Per-handle status epoch used by <c>UseImage</c>. Lazily allocated on first observation; null for an
     /// unknown handle. Unlike the legacy host-wide epoch, a completion wakes only consumers of this cache entry.</summary>
     public IReadSignal<int>? StatusSignalOf(ImageHandle h)

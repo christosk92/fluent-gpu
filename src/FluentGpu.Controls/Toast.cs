@@ -396,6 +396,8 @@ public sealed class ToastHost : Component
 {
     /// <summary>Explicit options; <c>null</c> (the OverlayHost auto-mount) reads the static <see cref="Toast"/> config.</summary>
     public ToastHostOptions? Options;
+    // Automatic window hosts inherit Toast's placement defaults while independently choosing the default lane.
+    internal bool RegisterAsDefault = true;
 
     /// <summary>Mount an explicit toast host (multi-window / non-default placement). Most apps rely on the one
     /// auto-mounted by <see cref="OverlayHost"/> and never call this.</summary>
@@ -417,7 +419,7 @@ public sealed class ToastHost : Component
         // process-static contract (the ContextMenu._currentHandle precedent). Doing it in the body keeps the mount
         // allocation-free (no effect closure / pending-effect enqueue). A secondary window's lane opts out
         // (RegisterAsDefault = false) so it never steals Toast.Default from the primary window's lane.
-        if ((Options?.RegisterAsDefault ?? true) && !ReferenceEquals(Toast.Default, ctl)) Toast.Default = ctl;
+        if ((Options?.RegisterAsDefault ?? RegisterAsDefault) && !ReferenceEquals(Toast.Default, ctl)) Toast.Default = ctl;
 
         _ = ctl.Version.Value;   // subscribe → re-render the lane on show/close
         return ctl.BuildLane();

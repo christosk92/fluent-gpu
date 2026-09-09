@@ -37,6 +37,7 @@ static class HooksSuite
 {
     public static void Run(StringTable strings)
     {
+        ChildReconcilePlanChecks.Run();
         HookChecks();
         HookSurfaceChecks();
         HookSubstrateChecks(strings);
@@ -62,6 +63,7 @@ static class HooksSuite
         PropUnionChecks(strings);
         G4dMigrationChecks(strings);
         MemoCutoffChecks();
+        ReactiveDeadlineChecks.Run();
     }
 
     // ── Memo push-pull equality cut-off (Check/Dirty) ────────────────────────────────────────────────────────────────
@@ -435,14 +437,16 @@ static class HooksSuite
                 var e1 = new BoxEl { Width = 10, Height = 10, Fill = FluentGpu.Foundation.ColorF.Transparent };   // static
                 var e2 = new BoxEl { Width = 10, Height = 10, Fill = sig };                                       // bound
                 r1.ReconcileRoot(e1, null); r1.ReconcileRoot(e2, e1);
-                bool staticToBound = BindContract.Violations == 1 && BindContract.LastViolation!.Contains("Fill");
+                bool staticToBound = BindContract.CompiledIn
+                    ? BindContract.Violations == 1 && BindContract.LastViolation!.Contains("Fill")
+                    : BindContract.Violations == 0 && BindContract.LastViolation is null;
 
                 BindContract.Reset();
                 var s2 = new SceneStore(); var r2 = new TreeReconciler(s2, strings);
                 var f1 = new BoxEl { Width = 10, Height = 10, Fill = sig };                                       // bound
                 var f2 = new BoxEl { Width = 10, Height = 10, Fill = FluentGpu.Foundation.ColorF.Transparent };   // static
                 r2.ReconcileRoot(f1, null); r2.ReconcileRoot(f2, f1);
-                bool boundToStatic = BindContract.Violations == 1;
+                bool boundToStatic = BindContract.Violations == (BindContract.CompiledIn ? 1 : 0);
 
                 BindContract.Reset();
                 var s3 = new SceneStore(); var r3 = new TreeReconciler(s3, strings);
@@ -468,7 +472,9 @@ static class HooksSuite
                 BackwardsWriteGuard.Reset();
                 var sig = new Signal<int>(5);
                 _ = new Effect(rt, () => { int v = sig.Value; sig.Value = v; });   // read (subscribe) then write the SAME signal
-                bool tripped = BackwardsWriteGuard.Violations >= 1 && BackwardsWriteGuard.LastViolation!.Contains("Signal");
+                bool tripped = BackwardsWriteGuard.CompiledIn
+                    ? BackwardsWriteGuard.Violations >= 1 && BackwardsWriteGuard.LastViolation!.Contains("Signal")
+                    : BackwardsWriteGuard.Violations == 0 && BackwardsWriteGuard.LastViolation is null;
 
                 BackwardsWriteGuard.Reset();
                 var a = new Signal<int>(1); var b = new Signal<int>(2);
@@ -713,7 +719,8 @@ static class HooksSuite
             var a1 = Probe(1); recon1.ReconcileRoot(a1, null);
             var a2 = Probe(5); recon1.ReconcileRoot(a2, a1);
             Check("gate.reuse.frozen-prop-tripwire fires when a reused component's frozen field carries a changed value",
-                ReuseGuard.Violations == 1, $"violations={ReuseGuard.Violations} last={ReuseGuard.LastViolation}");
+                ReuseGuard.Violations == (ReuseGuard.CompiledIn ? 1 : 0),
+                $"compiled={ReuseGuard.CompiledIn} violations={ReuseGuard.Violations} last={ReuseGuard.LastViolation}");
 
             // (2) Quiet when the value is unchanged, AND quiet when a changed Key REMOUNTS the child (the re-key fix idiom).
             ReuseGuard.Reset();
@@ -737,7 +744,8 @@ static class HooksSuite
             var d1 = Probe(1); recon3.ReconcileRoot(d1, null);
             try { var d2 = Probe(9); recon3.ReconcileRoot(d2, d1); }
             catch (FrozenPropException) { threw = true; }
-            Check("gate.reuse.strict-throws raises FrozenPropException when ThrowOnViolation is set", threw);
+            Check("gate.reuse.strict-throws raises FrozenPropException only when diagnostics are compiled and ThrowOnViolation is set",
+                threw == ReuseGuard.CompiledIn, $"compiled={ReuseGuard.CompiledIn} threw={threw}");
 
             // (4) Const-gated identically to RenderBudget so the whole facility erases in release.
             Check("gate.reuse.guard-erased ReuseGuard.CompiledIn tracks the DEBUG/FLUENTGPU_DIAG erasure switch (== RenderBudget.CompiledIn)",

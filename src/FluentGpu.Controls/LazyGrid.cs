@@ -167,7 +167,8 @@ public sealed class LazyGrid : Component
     readonly Func<int, float>? _drawerHeight;        // (index) → the drawer's exact height (so the extent is exact)
 
     readonly Signal<float> _w = new(0f);             // own measured width → column count
-    readonly Signal<long> _win = new(long.MinValue); // coarse row-window key — re-render only when (first,last) changes
+    // Realized overscan can stay unchanged while actual visibility changes (including offscreen/return).
+    readonly Signal<(long Realized, LazyGridVisibleRange Visible)> _win = new((long.MinValue, default));
     NodeHandle _node;                                // captured at realize; for content-space position via the scene
     readonly int _initialIndex;                      // >0 ⇒ on first valid layout, scroll the page so this item is at the top
     bool _didInitialScroll;
@@ -247,16 +248,19 @@ public sealed class LazyGrid : Component
         // One structural shape at every scroll position. Compute clamps an offscreen grid to its first/last realization
         // window while the exact spacers keep its total extent invariant; there is no alternate "empty spacer" subtree
         // at the section boundary for the page scrollbar to remeasure.
+        // Unknown geometry keeps a one-row probe window (RealizeWindowH) and ZERO overscan. DiscoGrid's
+        // overscanRows: 4 on top of that probe used to realize 5 rows × 3 facets on the artist mount frame.
+        int realizeOverscan = hasViewport ? _overscanRows : 0;
         var view = widthKnown
             ? LazyGridMath.Compute(scrollInSection, RealizeWindowH(viewportH, rowH), rowH, totalRows,
-                                   _overscanRows, expandedRow, drawerH)
+                                   realizeOverscan, expandedRow, drawerH)
             : new LazyGridMath.View(0, -1, 0f, 0f, false);
         var visible = hasViewport && intersects
             ? LazyGridMath.VisibleRange(scrollInSection, viewportH, rowH, count, cols, expandedRow, drawerH)
             : new LazyGridVisibleRange(0, 0, cols);
         UseEffect(() =>
         {
-            if (hasViewport && intersects) _visibleRangeChanged?.Invoke(visible);
+            _visibleRangeChanged?.Invoke(visible);
         }, DepKey.From(hasViewport && intersects ? 1 : 0,
                        visible.FirstIndex, visible.LastIndexExclusive, visible.Columns));
 
@@ -306,7 +310,7 @@ public sealed class LazyGrid : Component
     {
         int count = _count();
         float w = _w.Peek();
-        if (w <= 1f) { _win.Value = long.MinValue + 1; return; }
+        if (w <= 1f) { _win.Value = (long.MinValue + 1, default); return; }
 
         int cols = Math.Max(1, (int)((w + _gap) / (_minColW + _gap)));
         float cellW = MathF.Max(_minColW * 0.5f, (w - (cols - 1) * _gap) / cols);
@@ -318,9 +322,15 @@ public sealed class LazyGrid : Component
         offset = sceneOffset;
         float scrollInSection = offset - sectionTop;
         int expandedRow = expanded >= 0 ? expanded / cols : -1;
+        int realizeOverscan = viewportH > 1e8f ? 0 : _overscanRows;
         var view = LazyGridMath.Compute(scrollInSection, RealizeWindowH(viewportH, rowH), rowH, totalRows,
-                                        _overscanRows, expandedRow, drawerH);
-        _win.Value = PackKey(view);
+                                        realizeOverscan, expandedRow, drawerH);
+        bool intersects = viewportH < 1e8f && scrollInSection + viewportH > 0f
+            && scrollInSection < totalRows * rowH + MathF.Max(0f, drawerH);
+        var visible = intersects
+            ? LazyGridMath.VisibleRange(scrollInSection, viewportH, rowH, count, cols, expandedRow, drawerH)
+            : new LazyGridVisibleRange(0, 0, cols);
+        _win.Value = (PackKey(view), visible);
     }
 
     List<Element> FlatChildren(in LazyGridMath.View view, int cols, float cellW, float rowH, int count,

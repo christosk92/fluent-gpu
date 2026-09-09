@@ -152,6 +152,21 @@ public sealed partial class AnimEngine
         if (e.Sx != 1f) SeedTerminal(node, AnimChannel.ScaleX, e.Sx, dyn, delayMs: delay);
         if (e.Sy != 1f) SeedTerminal(node, AnimChannel.ScaleY, e.Sy, dyn, delayMs: delay);
         if (e.Blur != 0f) SeedTerminal(node, AnimChannel.BlurSigma, e.Blur, dyn, delayMs: delay);
+        // SizeMode.Reflow exit: ease THIS node's layout size to 0. SeedExit used to seed only opacity/transform, so a
+        // DrawerReveal-style orphan kept its last full Bounds (and therefore its ClipToBounds window) while its
+        // measured virtual row snapped closed — one unclipped flash over the rows that had already slid up. The Size
+        // track is the settle signal for a size-only Exit (Active with default Opacity=1 would otherwise be a 1→1
+        // no-op that reclaims in a couple of frames).
+        if ((spec.Channels & TransitionChannels.Size) != 0 && spec.Size == SizeMode.Reflow)
+        {
+            bool horiz = _scene.Layout(node).Direction == 0;
+            if ((spec.Axes & (horiz ? SizeAxes.Width : SizeAxes.Height)) == 0) horiz = !horiz;
+            if ((spec.Axes & (horiz ? SizeAxes.Width : SizeAxes.Height)) != 0)
+            {
+                float from = horiz ? _scene.Bounds(node).W : _scene.Bounds(node).H;
+                if (from > 0.5f) SeedReflowResize(node, horiz, from, 0f, spec);
+            }
+        }
     }
 
     private void SeedTerminal(NodeHandle node, AnimChannel ch, float to, in TransitionDynamics dyn, float? initial = null, float delayMs = 0f)
@@ -232,6 +247,7 @@ public sealed partial class AnimEngine
                 r.To = 0f;
                 r.Gen = Generators.BakeSpring(in sp, x0: r.Position, v0: r.Velocity);   // keep velocity (handoff)
                 r.ElapsedMs = 0f; r.Flags &= ~AnimFlags.Done;
+                StampCompositorSeed(ex, newInstance: false, explicitFrom: true);
             }
             else Spring(node, ch, 0f, sp, initial: delta, delayMs: delayMs);
         }

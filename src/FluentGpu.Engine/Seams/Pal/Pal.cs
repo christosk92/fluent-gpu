@@ -582,8 +582,23 @@ public readonly record struct PlatformWaitRequest(
     PlatformInputWakePolicy InputWakePolicy = PlatformInputWakePolicy.Immediate,
     bool WakeOnDisplayClock = false);
 
+/// <summary>
+/// Independent render-consumer subscription to the platform display clock. Create on the UI thread, then arm/wait
+/// on the render thread. UI idling cannot consume or disarm its ticks. Disposal follows render-thread join.
+/// A capability failure wakes the subscriber once; the renderer then uses its bounded software-paced fallback.
+/// </summary>
+public interface IRenderDisplayClock : IDisposable
+{
+    System.Threading.WaitHandle Tick { get; }
+    bool IsAvailable { get; }
+    void SetActive(bool active);
+}
+
 public interface IPlatformWindow : IDisposable
 {
+    /// <summary>Optional independent render clock subscription; no clock thread is required of headless backends.</summary>
+    IRenderDisplayClock? CreateRenderDisplayClock() => null;
+
     NativeHandle Handle { get; }
     Size2 ClientSizePx { get; }
 

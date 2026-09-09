@@ -31,6 +31,8 @@ static class ScrollKernelSuite
         UndersampledFlickCheck();
         SnapFlingLandsCheck();
         AllocZeroTickCheck();
+        BodySparseCheck();
+        SlotReuseCheck();
         ThreadAgnosticCheck();
         OneWritePerTickCheck();
         PortOverflowPolicyCheck();
@@ -654,6 +656,110 @@ static class ScrollKernelSuite
         long after = GC.GetAllocatedBytesForCurrentThread();
 
         Check("gate.kernel.alloc-zero-tick", after - before == 0, $"delta={after - before} bytes over 200 ticks");
+    }
+
+    // ── gate.kernel.body-sparse ───────────────────────────────────────────────────────────────────────────────
+    // The kernel's body storage must scale with the number of LIVE VIEWPORTS, never with the scene's node
+    // high-water. It used to be one ScrollBody[] indexed by node index (376 B/node) plus four more node-indexed
+    // side columns: 12 746 752 B (12.2 MiB) at the 32 768-node scene the native ARM64 tour reached, for ~27 live
+    // viewports. It is now a slot pool plus ONE 4-byte-per-node lookup, and this gate pins that arithmetic.
+
+    private static void BodySparseCheck()
+    {
+        const int Nodes = 32_768;   // the measured scene high-water of the native ARM64 tour
+        const int Viewports = 32;   // the tour's ~27 live scroll viewports, rounded up to a power of two
+
+        var sink = new RecordingSink();
+        var k = new ScrollKernel(sink, ScrollFeel.Shipping);
+
+        // Node indices spread across the WHOLE scene, the last one at the very top slot: the node→slot lookup is
+        // sized by the highest bound node index — exactly what the deleted body slab was sized by — so this is the
+        // worst case for the one column that is still per-node.
+        var nodes = new int[Viewports];
+        for (int i = 0; i < Viewports; i++) nodes[i] = (i + 1) * (Nodes / Viewports) - 1;
+        for (int i = 0; i < Viewports; i++) SetupViewport(k, nodes[i], 4000f, 400f);
+
+        // Each viewport must still own its own state through the indirection (a cross-wired lookup would show up
+        // as one body carrying another's offset).
+        for (int i = 0; i < Viewports; i++) k.Port.Post(ScrollInput.ThumbSet(nodes[i], (i + 1) * 10f));
+        k.Reclamp();
+        bool perBodyState = true;
+        for (int i = 0; i < Viewports; i++)
+            if (!k.TryGetBody(nodes[i], out var b) || MathF.Abs(b.PositionMain - (i + 1) * 10f) > 0.001f || b.Node != nodes[i])
+                perBodyState = false;
+
+        int cap = k.BodySlotCapacity;
+        long sparse = k.BodyStorageBytes;
+        long dense = ScrollKernel.DenseBodyStorageBytes(Nodes);
+        bool bound = k.NodeColumnLength >= Nodes
+            && k.BoundCount == Viewports
+            && cap == Viewports              // O(viewports): the 16-slot pool doubled exactly once
+            && k.BodySlotsInUse == Viewports
+            && sparse < 256L * 1024
+            && sparse * 60 < dense
+            && perBodyState;
+        Check("gate.kernel.body-sparse", bound,
+            $"At {k.NodeColumnLength} node lookup slots with {Viewports} live viewports the kernel holds {sparse} B "
+            + $"in a {cap}-slot pool of {ScrollKernel.BodyBytes} B bodies (the deleted node-indexed storage: "
+            + $"{dense} B) — the backing must scale with viewports, not scene capacity. bound={k.BoundCount} "
+            + $"inUse={k.BodySlotsInUse} perBodyState={perBodyState}");
+    }
+
+    // ── gate.kernel.slot-reuse ────────────────────────────────────────────────────────────────────────────────
+    // Mount/unmount churn must RECYCLE slots, not grow the pool: an unbound slot returns to the free list at the
+    // end of the pass that unbound it (deferred so this pass's touched/active lists can never name a slot that has
+    // already been handed to a new viewport), and the next Bind takes it back. 200 waves of 24 viewports therefore
+    // leave the pool at its first-wave high-water and allocate nothing.
+
+    private static void SlotReuseCheck()
+    {
+        const int Wave = 24;
+        const int Waves = 200;
+        const int FirstNode = 100;
+
+        static void Mount(ScrollKernel k, int first, int n)
+        {
+            for (int i = 0; i < n; i++)
+            {
+                k.Port.Post(ScrollInput.Bind(first + i));
+                k.Port.Post(ScrollInput.SetFrame(first + i, Frame(2000f, 400f)));
+            }
+            k.Reclamp();
+        }
+        static void Unmount(ScrollKernel k, int first, int n)
+        {
+            for (int i = 0; i < n; i++) k.Port.Post(ScrollInput.Unbind(first + i));
+            k.Reclamp();
+        }
+
+        var sink = new RecordingSink();
+        var k = new ScrollKernel(sink, ScrollFeel.Shipping);
+
+        Mount(k, FirstNode, Wave);            // warm-up wave: establishes the pool high-water + JITs both paths
+        int mountedInUse = k.BodySlotsInUse;
+        int mountedBound = k.BoundCount;
+        Unmount(k, FirstNode, Wave);
+        int cap = k.BodySlotCapacity;
+        sink.Clear();
+
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        for (int w = 0; w < Waves; w++)
+        {
+            Mount(k, FirstNode, Wave);
+            Unmount(k, FirstNode, Wave);
+            sink.Clear();                     // the recording double, not the kernel, would otherwise grow
+        }
+        long after = GC.GetAllocatedBytesForCurrentThread();
+
+        // _slotHi never passing the first wave's 24 is what "reuse" means: had every wave taken fresh slots, the
+        // pool would have doubled its way to 4096+ and BodySlotsInUse would track the total ever mounted.
+        bool ok = mountedInUse == Wave && mountedBound == Wave
+            && k.BodySlotCapacity == cap && cap == 32
+            && k.BoundCount == 0 && k.BodySlotsInUse == 0
+            && after - before == 0;
+        Check("gate.kernel.slot-reuse", ok,
+            $"{Waves} mount/unmount waves of {Wave} viewports: pool stayed at {k.BodySlotCapacity} slots "
+            + $"(first wave {cap}), bound={k.BoundCount} inUse={k.BodySlotsInUse}, alloc delta={after - before} B");
     }
 
     // ── gate.kernel.thread-agnostic ───────────────────────────────────────────────────────────────────────────

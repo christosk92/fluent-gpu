@@ -56,6 +56,7 @@ public sealed class PathGeometryTable
         PathData data = PathDataParser.Parse(pathData, epoch, rule, viewBoxW, viewBoxH);
 
         int id = _count;
+        data.GeometryId = id;                            // part of the immutable entry, before its release publication
         lock (_gate)
         {
             if (id >= _entries.Length)
@@ -67,7 +68,6 @@ public sealed class PathGeometryTable
             _entries[id] = data;                          // write the (immutable) slot...
             Volatile.Write(ref _count, id + 1);           // ...then release the count (reader acquire-load sees the slot)
         }
-        data.GeometryId = id;
         _map[key] = id;
         Interlocked.Increment(ref _version);
         return id;

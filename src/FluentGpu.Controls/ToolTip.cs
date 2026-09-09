@@ -4,6 +4,7 @@ using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Scene;
+using FluentGpu.Signals;
 
 namespace FluentGpu.Controls;
 
@@ -201,6 +202,29 @@ public sealed class ToolTip : Component
     public static Element Wrap(Element target, string text, float grow = 0f, float showDelayMs = float.NaN)
         => Embed.Comp(new ToolTipSlots(target, text, grow, showDelayMs), () => new ToolTip());
 
+    /// <summary>BOUND text form (Operation ultra-fast GPU engine, P3 — for a virtualized row: one <see cref="Prop{T}"/>
+    /// read per render instead of a rebuilt call-site string). Null/empty resolves to NO TOOLTIP: <see cref="Render"/>
+    /// returns <paramref name="target"/> alone that render — no hover/focus/press/safe-zone wiring mounted — and the
+    /// SAME reused <c>ToolTip</c> component (re-pushed props via <c>Embed.Comp</c>, unchanged from every other
+    /// <see cref="Wrap"/> overload) re-evaluates every render, so a later non-empty value lights the tooltip up with no
+    /// remount either way. This does not eliminate the one <c>ToolTip</c> component instance per wrapped target (the
+    /// plan's "no component per target" is aspirational for a future hover-time-lookup service — not implemented this
+    /// phase); what it removes is the PER-ROW STRING rebuild and the empty-tooltip wiring cost.</summary>
+    public static Element Wrap(Element target, Prop<string?> text, float grow = 0f, float showDelayMs = float.NaN)
+        => Embed.Comp(new ToolTipBoundSlots(target, text, grow, showDelayMs), () => new ToolTip());
+
+    /// <summary>Live target + BOUND text slot for <see cref="Wrap(Element, Prop{string}, float, float)"/>. Compared by
+    /// target reference (see <see cref="ToolTipSlots"/>'s comment) plus the <see cref="Prop{T}"/> payload's own value
+    /// equality (bind identity for a bound Text, plain value equality for a static one).</summary>
+    public sealed record ToolTipBoundSlots(Element Target, Prop<string?> Text, float Grow = 0f, float ShowDelayMs = float.NaN)
+    {
+        public bool Equals(ToolTipBoundSlots? other)
+            => other is not null && ReferenceEquals(Target, other.Target) && Text.Equals(other.Text) && Grow == other.Grow
+               && ShowDelayMs.Equals(other.ShowDelayMs);
+
+        public override int GetHashCode() => HashCode.Combine(RuntimeHelpers.GetHashCode(Target), Text, Grow, ShowDelayMs);
+    }
+
     /// <summary>Wrap a target that is built LAZILY, inside the ToolTip's render — the churn-free form of
     /// <see cref="Wrap"/> (see <see cref="ToolTipStableSlots"/>).
     ///
@@ -217,11 +241,19 @@ public sealed class ToolTip : Component
         // factory's signal reads inside THIS component's render (the whole point of the overload).
         var stable = UsePropsOrDefault<ToolTipStableSlots>();
         var slots = stable is null ? UsePropsOrDefault<ToolTipSlots>() : null;
-        Element target = stable is not null ? stable.Target() : (slots?.Target ?? Target);
-        string text = stable?.Text ?? slots?.Text ?? Text;
-        float grow = stable?.Grow ?? slots?.Grow ?? Grow;
-        float showDelayOverride = stable?.ShowDelayMs ?? slots?.ShowDelayMs ?? ShowDelayMs;
+        var bound = stable is null && slots is null ? UsePropsOrDefault<ToolTipBoundSlots>() : null;
+        Element target = stable is not null ? stable.Target() : (bound?.Target ?? slots?.Target ?? Target);
+        // P3: the BOUND overload reads its Prop<string?> HERE, inside this render — a bound Text subscribes this
+        // component exactly like the stable factory above subscribes to whatever signals it reads.
+        string? boundText = bound?.Text.Current();
+        string text = boundText ?? slots?.Text ?? Text;
+        float grow = stable?.Grow ?? bound?.Grow ?? slots?.Grow ?? Grow;
+        float showDelayOverride = stable?.ShowDelayMs ?? bound?.ShowDelayMs ?? slots?.ShowDelayMs ?? ShowDelayMs;
         if (grow > 0f) target = Fill(target, grow);
+        // Null/empty bound text ⇒ NO TOOLTIP: read below (after every Use* hook below has run, in the SAME order every
+        // render — hooks must never be skipped conditionally) to short-circuit the actual wiring/wrap. The component
+        // stays mounted; re-pushed props re-render it, so a later non-empty value wires up with no remount.
+        bool hasTooltip = !(bound is not null && string.IsNullOrEmpty(boundText));
         var svc = UseContext(Overlay.Service);
         var hooks = UseContext(InputHooks.Current);
         var anchor = UseRef<NodeHandle>(default);
@@ -493,11 +525,15 @@ public sealed class ToolTip : Component
             // thing here as everywhere else in the kit: fill the PARENT, whichever axis the parent runs on.
             Grow = grow,
             OnRealized = x => anchor.Value = x,
-            OnHoverMove = OnEnter,         // mouse-enter trigger (makes the target hit-testable for hover)
-            OnPointerExit = OnLeave,       // mouse-leave → cancel pending / close open
-            OnPointerPressed = OnPressed,  // press over the target → dismiss (never survives an interaction)
-            OnFocusChanged = OnFocus,      // keyboard focus in/out of the target subtree (a11y trigger)
-            Children = clock is null ? [target] : [target, clock],
+            // P3 bound-text form: hasTooltip is false exactly when a bound Prop<string?> resolved null/empty THIS
+            // render — no new open/dismiss/focus trigger is wired (the clock above is likewise forced absent via `ph`
+            // reading `dismissedUntilLeave`/pending state that a !hasTooltip render never arms), so the wrapper is
+            // functionally inert until a later render's text is non-empty again.
+            OnHoverMove = hasTooltip ? OnEnter : null,         // mouse-enter trigger (makes the target hit-testable for hover)
+            OnPointerExit = hasTooltip ? OnLeave : null,       // mouse-leave → cancel pending / close open
+            OnPointerPressed = hasTooltip ? OnPressed : null,  // press over the target → dismiss (never survives an interaction)
+            OnFocusChanged = hasTooltip ? OnFocus : null,      // keyboard focus in/out of the target subtree (a11y trigger)
+            Children = clock is null || !hasTooltip ? [target] : [target, clock],
         };
     }
 

@@ -73,6 +73,7 @@ public sealed partial class AnimEngine
                 ref AnimValue r = ref _slab.At(s);
                 if (!_scene.IsLive(r.Node)) { _doneScratch.Add(s); continue; }   // node unmounted → reclaim
                 if (r.Has(AnimFlags.Parked)) continue;
+                if (RenderOwnsCompositor && IsCompositorRow(in r)) continue;
 
                 float stepMs = step;
                 bool justSeeded = r.Has(AnimFlags.JustSeeded);
@@ -128,13 +129,15 @@ public sealed partial class AnimEngine
             for (int s = head; s >= 0; s = _slab.At(s).NextOnNode)
             {
                 ref AnimValue r = ref _slab.At(s);
-                if (r.Has(AnimFlags.Parked) || r.Has(AnimFlags.Additive) || IsSideTableChannel(r.Channel)) continue;
+                if (r.Has(AnimFlags.Parked) || r.Has(AnimFlags.Additive) || IsSideTableChannel(r.Channel)
+                    || (RenderOwnsCompositor && IsCompositorRow(in r))) continue;
                 acc.Fold(r.Channel, r.Position, replace: true); any = true;
             }
             for (int s = head; s >= 0; s = _slab.At(s).NextOnNode)
             {
                 ref AnimValue r = ref _slab.At(s);
-                if (r.Has(AnimFlags.Parked) || !r.Has(AnimFlags.Additive) || IsSideTableChannel(r.Channel)) continue;
+                if (r.Has(AnimFlags.Parked) || !r.Has(AnimFlags.Additive) || IsSideTableChannel(r.Channel)
+                    || (RenderOwnsCompositor && IsCompositorRow(in r))) continue;
                 acc.Fold(r.Channel, r.Position, replace: false); any = true;
             }
             if (any) Compose(node, in acc);
@@ -220,8 +223,15 @@ public sealed partial class AnimEngine
             ref LayoutInput li = ref _scene.Layout(node);
             if (!float.IsNaN(acc.Lw)) li.Width = acc.Lw;
             if (!float.IsNaN(acc.Lh)) li.Height = acc.Lh;
-            var rp = _scene.Parent(node);
-            _scene.Mark(rp.IsNull ? node : rp, NodeFlags.LayoutDirty);
+            // Exit orphans are detached: their last live Bounds stay at the open size unless we write the Size track
+            // into them. ClipsToBounds scissors to Bounds, so a frozen full-height box paints over the rows below.
+            if ((_scene.Flags(node) & NodeFlags.Exiting) != 0)
+            {
+                ref RectF b = ref _scene.Bounds(node);
+                if (!float.IsNaN(acc.Lw)) b = new RectF(b.X, b.Y, acc.Lw, b.H);
+                if (!float.IsNaN(acc.Lh)) b = new RectF(b.X, b.Y, b.W, acc.Lh);
+            }
+            MarkReflowLayoutDirty(node);
             _reflowWrote = true;
             ReflowRoots.Add(node);
         }
@@ -320,6 +330,7 @@ public sealed partial class AnimEngine
             e.Gen = Generators.BakeSpring(in spring, x0: curV - to, v0: curVel);
             e.ElapsedMs = 0f; e.DelayRemainingMs = 0f;        // retarget keeps moving (no first-frame hold)
             e.Flags &= ~(AnimFlags.Done | AnimFlags.JustSeeded);
+            StampCompositorSeed(existing, newInstance: false, explicitFrom: false);
             _slab.BumpVersion();   // in-place flag rewrite — keep the census memo honest
             if (channel == AnimChannel.BlurSigma) RefreshBlurAnimationActive(node);
             return;
@@ -431,11 +442,18 @@ public sealed partial class AnimEngine
         int idx = (int)node.Raw.Index;
         if (!additive)
             for (int s = _slab.HeadOnNode(idx); s >= 0; s = _slab.At(s).NextOnNode)
-                if (_slab.At(s).Channel == ch && !_slab.At(s).Has(AnimFlags.Additive)) { ClearKeys(s); return s; }   // retarget the base
+                if (_slab.At(s).Channel == ch && !_slab.At(s).Has(AnimFlags.Additive))
+                {
+                    ClearKeys(s);
+                    StampCompositorSeed(s, newInstance: false, explicitFrom: true);
+                    return s;
+                }
         var seed = new AnimValue { Node = node, Channel = ch };
         if (additive) seed.Flags |= AnimFlags.Additive;
         if ((_scene.Flags(node) & NodeFlags.Parked) != 0) { seed.Flags |= AnimFlags.Parked; _parked++; }
-        return _slab.Add(idx, in seed);
+        int added = _slab.Add(idx, in seed);
+        StampCompositorSeed(added, newInstance: true, explicitFrom: true);
+        return added;
     }
 
     private static float RestDeltaFor(AnimChannel ch)
@@ -475,7 +493,7 @@ public sealed partial class AnimEngine
     }
 
     // ── fold accumulator (ported from AnimEngine.Accum) ──────────────────────────────────────────────
-    private struct Accum
+    internal struct Accum
     {
         public float Tx, Ty, Sx, Sy, Rot, Op, Sw, Sh, TrimStart, TrimEnd;
         public float ClipL, ClipT, ClipR, ClipB;
