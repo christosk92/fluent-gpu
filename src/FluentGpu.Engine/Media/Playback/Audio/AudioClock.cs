@@ -164,6 +164,27 @@ public interface IAudioEndpoint : IDisposable
     IAudioSink Sink { get; }
     /// <summary>The played-frames master clock for the same device.</summary>
     IAudioClockSource Clock { get; }
+    /// <summary>True while the device is open and can render. False when the open failed (the OS default endpoint was
+    /// not yet <c>Initialize</c>-able mid jack-switch, no device at all) or the running device was invalidated
+    /// (<c>AUDCLNT_E_DEVICE_INVALIDATED</c> on a write). A not-ready endpoint is INERT — <c>WritableFrames</c> reads -1,
+    /// <see cref="IAudioSink.Write"/> returns 0 — and must never be adopted by <see cref="PcmAudioSession.RebuildSink"/>:
+    /// the <see cref="AudioDeviceController"/> keeps the previous sink and retries on its ladder instead (Wavee #112 —
+    /// adopting a dead sink is what silenced playback until the next track).</summary>
+    bool IsReady { get; }
+}
+
+/// <summary>Thrown by an <see cref="IAudioSink"/> when the OUTPUT DEVICE is gone — <c>Start</c>/<c>Reset</c> on an
+/// invalidated or never-opened endpoint. Typed so the render path can treat it as a SINK failure (ask the cold device
+/// thread for a rebuild) instead of letting it surface as a user-visible <see cref="MediaError"/> (Wavee #112). Portable:
+/// the deterministic fakes throw it too, so the recovery path is unit-tested without WASAPI.</summary>
+public sealed class AudioDeviceLostException : Exception
+{
+    /// <summary>Create with the raw device HRESULT (<c>0x88890004</c> AUDCLNT_E_DEVICE_INVALIDATED, <c>0x88890026</c>
+    /// AUDCLNT_E_RESOURCES_INVALIDATED, or whatever the failing call returned).</summary>
+    public AudioDeviceLostException(int hr) : base($"Audio output device lost (hr=0x{hr:X8}).") => Hr = hr;
+
+    /// <summary>The raw HRESULT of the failing device call.</summary>
+    public int Hr { get; }
 }
 
 /// <summary>The headless endpoint (spec §7.9): a <see cref="NullAudioSink"/> + a deterministic
@@ -171,17 +192,22 @@ public interface IAudioEndpoint : IDisposable
 public sealed class HeadlessAudioEndpoint : IAudioEndpoint
 {
     /// <summary>Create a headless endpoint at <paramref name="format"/>. <paramref name="captureFrames"/> records the first
-    /// N presented frames; <paramref name="warmupFrames"/>/<paramref name="latencyFrames"/> model the synthetic clock.</summary>
-    public HeadlessAudioEndpoint(MixFormat format, int captureFrames = 0, long warmupFrames = 0, long latencyFrames = 0)
+    /// N presented frames; <paramref name="warmupFrames"/>/<paramref name="latencyFrames"/> model the synthetic clock.
+    /// <paramref name="ready"/> false models a device whose open failed: the sink is inert (<c>WritableFrames</c> -1,
+    /// <c>Write</c> 0) and <see cref="IsReady"/> is false, so a rebuild must refuse to adopt it.</summary>
+    public HeadlessAudioEndpoint(MixFormat format, int captureFrames = 0, long warmupFrames = 0, long latencyFrames = 0, bool ready = true)
     {
-        Sink = new NullAudioSink(format, captureFrames);
+        Sink = new NullAudioSink(format, captureFrames, ready);
         Clock = new SyntheticAudioClock(format.SampleRate, latencyFrames, warmupFrames);
+        IsReady = ready;
     }
 
     /// <inheritdoc/>
     public IAudioSink Sink { get; }
     /// <inheritdoc/>
     public IAudioClockSource Clock { get; }
+    /// <inheritdoc/>
+    public bool IsReady { get; }
     /// <inheritdoc/>
     public void Dispose() { }
 }
@@ -193,14 +219,17 @@ public sealed class HeadlessAudioEndpoint : IAudioEndpoint
 public sealed class NullAudioSink : IBufferedAudioSink
 {
     private readonly float[]? _capture;
+    private readonly bool _ready;
     private int _captured;   // frames captured
     private long _frames;
 
     /// <summary>Create a null sink at <paramref name="format"/>. If <paramref name="captureFrames"/> &gt; 0 it records the
-    /// first N frames presented (for golden diffs).</summary>
-    public NullAudioSink(MixFormat format, int captureFrames = 0)
+    /// first N frames presented (for golden diffs). <paramref name="ready"/> false models a device whose open failed: the
+    /// sink accepts nothing (<see cref="Write"/> 0, <see cref="WritableFrames"/> -1) exactly like an unopened WASAPI leaf.</summary>
+    public NullAudioSink(MixFormat format, int captureFrames = 0, bool ready = true)
     {
         Format = format;
+        _ready = ready;
         if (captureFrames > 0) _capture = new float[captureFrames * Math.Max(1, format.Channels)];
     }
 
@@ -214,6 +243,7 @@ public sealed class NullAudioSink : IBufferedAudioSink
     /// <inheritdoc/>
     public int Write(ReadOnlySpan<float> src, int frames)
     {
+        if (!_ready) return 0;
         if (_capture is not null && _captured < _capture.Length / Format.Channels)
         {
             int room = _capture.Length / Format.Channels - _captured;
@@ -232,7 +262,7 @@ public sealed class NullAudioSink : IBufferedAudioSink
     /// <inheritdoc/>
     public int CapacityFrames => 0;
     /// <inheritdoc/>
-    public int WritableFrames => int.MaxValue;
+    public int WritableFrames => _ready ? int.MaxValue : -1;
     /// <inheritdoc/>
     public void Reset() { _frames = 0; }
     /// <inheritdoc/>

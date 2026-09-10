@@ -5,15 +5,21 @@ using FluentGpu.Signals;
 namespace FluentGpu.Media;
 
 /// <summary>
-/// The device-loss / follow-default state machine (spec §7.9) — <c>{Building, Running, Reinitializing, Faulted}</c> driven
-/// by an <see cref="IDeviceWatcher"/> (Windows <c>IMMNotificationClient</c>, cold). A default-render-device change / unplug
-/// transitions <c>Running → Reinitializing</c>, rebuilds ONLY the sink under a LIVE graph via
-/// <see cref="PcmAudioSession.RebuildSink"/> (sources, queue, <c>PreparedSlot</c>, and position SURVIVE), re-measures
-/// latency, applies a short fade-in, and returns to <c>Running</c> — all OFF the RT thread, on a dedicated COLD device
-/// thread. A fatal fault (no fallback endpoint) transitions to <c>Faulted</c>. The RT feed thread and the signal/queue
-/// model never touch this path.
-/// <para>Individually drivable for deterministic tests (<see cref="OnDefaultDeviceChanged"/>/<see cref="Fault"/>);
-/// on-box the watcher event is marshaled onto the cold thread.</para>
+/// The device-loss / follow-default state machine (spec §7.9) — <c>{Building, Running, Reinitializing, Retrying, Faulted}</c>
+/// driven by an <see cref="IDeviceWatcher"/> (Windows <c>IMMNotificationClient</c>, cold) and by the render path's
+/// sink-failure reports. A default-render-device change / unplug transitions <c>Running → Reinitializing</c>, rebuilds ONLY
+/// the sink under a LIVE graph via <see cref="PcmAudioSession.RebuildSink"/> (sources, queue, <c>PreparedSlot</c>, and
+/// position SURVIVE), re-measures latency, applies a short fade-in, and returns to <c>Running</c> — all OFF the RT thread,
+/// on a dedicated COLD device thread. The RT feed thread and the signal/queue model never touch this path.
+/// <para><b>Recovery (Wavee #112).</b> The timing lives in the pure, unit-tested <see cref="AudioDeviceRecoveryPolicy"/>:
+/// watcher events are trailing-debounced (250 ms, capped at 1 s from the first event of a burst); a render-path
+/// <see cref="ReportSinkFailure"/> may start a rebuild but can never postpone one (the 0.2.8 livelock: a dead sink
+/// re-stamped the debounce every ~80 ms forever). An attempt whose endpoint is not <see cref="IAudioEndpoint.IsReady"/>
+/// keeps the OLD sink playing and enters <c>Retrying</c> on the 250 ms / 1 s / 3 s ladder; exhaustion is <c>Faulted</c>,
+/// which the next device event re-arms. The RT feed is parked around every attempt and restarted in a <c>finally</c>
+/// whether or not the rebuild succeeded, so a failed attempt never leaves the feed stopped.</para>
+/// <para>Individually drivable for deterministic tests (<see cref="OnDefaultDeviceChanged"/>/<see cref="TryRunDueRetry"/>/
+/// <see cref="Fault"/>); on-box the watcher event is marshaled onto the cold thread.</para>
 /// </summary>
 public sealed class AudioDeviceController : IDisposable
 {
@@ -25,20 +31,16 @@ public sealed class AudioDeviceController : IDisposable
     private readonly Action _watcherHandler;
 
     // The cold device thread: a single-consumer request pump (never the RT thread, never the control thread).
+    // _gate serializes the policy + retry clock between the watcher thread, the RT reporter and the cold thread — an
+    // uncontended monitor on a FAILURE path only (RecordSinkFailure fires after 8 dead blocks), outside the DSP tripwire.
     private readonly object _gate = new();
+    private readonly AudioDeviceRecoveryPolicy _policy = new();
+    private long _nextRetryAt = long.MinValue;   // TickCount64 of the scheduled ladder retry; MinValue = none
     private Thread? _coldThread;
     private readonly AutoResetEvent _wake = new(false);
     private volatile bool _run;
-    private int _pending;      // coalesced default-change requests
-    private long _pendingSince;   // Environment.TickCount64 of the MOST RECENT request — the debounce clock (Fix 4)
     private bool _disposed;
     private int _wakeDisposed;
-
-    // Debounce window (spec §7.9 Fix 4 / root cause A4): the OS raises the default-device-changed notification before
-    // the new endpoint's mix format is settled, so ONE physical device switch routinely fires two notifications a few
-    // hundred ms apart (observed on the dev box: 48000 then 44100 within ~800 ms) — each would otherwise drive its own
-    // full rebuild. 250 ms comfortably covers the observed gap without making a genuine follow-default switch feel slow.
-    private const int DebounceMs = 250;
 
     /// <summary>Create a controller over <paramref name="session"/>. <paramref name="endpointFactory"/> opens a fresh
     /// default endpoint on a rebuild; <paramref name="watcher"/> (optional) fires the follow-default event;
@@ -64,7 +66,7 @@ public sealed class AudioDeviceController : IDisposable
             _state.Value = AudioDeviceState.Running;
     }
 
-    /// <summary>Start the cold device thread that services follow-default rebuild requests (on-box). Idempotent.</summary>
+    /// <summary>Start the cold device thread that services rebuild requests and ladder retries (on-box). Idempotent.</summary>
     public void Start()
     {
         if (_run || _disposed) return;
@@ -73,49 +75,173 @@ public sealed class AudioDeviceController : IDisposable
         _coldThread.Start();
     }
 
-    /// <summary>Marshal a follow-default rebuild onto the cold device thread (the watcher event handler), debounced 250 ms
-    /// (Fix 4): the cold loop waits out a quiet window after the LATEST request, so two notifications from one physical
-    /// device switch fold into a single rebuild instead of two. If the cold thread is not running (deterministic tests),
-    /// the caller drives <see cref="OnDefaultDeviceChanged"/> directly (no debounce — that entry point always rebuilds
-    /// immediately, by design, so a test can assert one call = one rebuild).</summary>
+    /// <summary>Marshal a follow-default rebuild onto the cold device thread (the watcher event handler), trailing-debounced
+    /// 250 ms (Fix 4): the cold loop waits out a quiet window after the LATEST event, so two notifications from one physical
+    /// device switch fold into a single rebuild — bounded at 1 s from the first event so a flapping device cannot defer it
+    /// forever. A device event also cancels any scheduled ladder retry and resets the ladder (new information). If the cold
+    /// thread is not running (deterministic tests), the caller drives <see cref="OnDefaultDeviceChanged"/> directly (no
+    /// debounce — that entry point always rebuilds immediately, by design, so a test can assert one call = one rebuild).</summary>
     public void RequestRebuild()
     {
         if (_disposed) return;
-        Interlocked.Exchange(ref _pendingSince, Environment.TickCount64);
-        Interlocked.Exchange(ref _pending, 1);
-        try { _wake.Set(); } catch (ObjectDisposedException) { }
+        lock (_gate)
+        {
+            _policy.NoteDeviceEvent(Environment.TickCount64);
+            _nextRetryAt = long.MinValue;
+        }
+        Wake();
     }
 
+    /// <summary>The render path's report that the live sink has stopped accepting frames (<see cref="PcmAudioSession"/>
+    /// after a sustained run of dead writes, or a typed <see cref="AudioDeviceLostException"/>). Alloc-free. Starts a
+    /// rebuild request if none is pending; NEVER re-stamps a pending one (a dead sink reports every ~80 ms — re-stamping was
+    /// the 0.2.8 livelock), and is ignored while a ladder retry is scheduled or the ladder is exhausted (<c>Faulted</c>
+    /// waits for the next device event — otherwise a dead sink would drive an attempt every 250 ms forever).</summary>
+    public void ReportSinkFailure()
+    {
+        if (_disposed || _state.Peek() == AudioDeviceState.Faulted) return;
+        bool started;
+        lock (_gate)
+        {
+            started = _policy.NoteSinkFailure(Environment.TickCount64, retryScheduled: _nextRetryAt != long.MinValue);
+            if (started) _sinkFailureRequests++;
+        }
+        if (started) Wake();
+    }
+
+    private int _sinkFailureRequests;
+
+    /// <summary>Deterministic test hook: true while a rebuild request (watcher or sink-failure) is pending and not yet taken.</summary>
+    internal bool HasPendingRebuild { get { lock (_gate) return _policy.HasPending; } }
+
+    /// <summary>Deterministic test hook: how many sink-failure reports actually STARTED a request (re-stamps are not requests).</summary>
+    internal int SinkFailureRequests { get { lock (_gate) return _sinkFailureRequests; } }
+
     /// <summary>Perform the follow-default rebuild synchronously (spec §7.9) — the cold-thread body, also the deterministic
-    /// test entry point. Rebuilds ONLY the sink; sources/queue/<c>PreparedSlot</c>/position survive. Never throws.</summary>
+    /// test entry point. Rebuilds ONLY the sink; sources/queue/<c>PreparedSlot</c>/position survive. An endpoint that is
+    /// null or not <see cref="IAudioEndpoint.IsReady"/> is disposed and the OLD sink kept (<c>Retrying</c> on the ladder,
+    /// <c>Faulted</c> once exhausted); so is a refused <see cref="PcmAudioSession.RebuildSink"/> or a throwing factory.
+    /// Never throws. Callers that own an RT feed must have parked it (<see cref="Attempt"/> does).</summary>
     public void OnDefaultDeviceChanged()
     {
         if (_disposed) return;
         var prev = _state.Peek();
-        if (prev is not (AudioDeviceState.Running or AudioDeviceState.Building or AudioDeviceState.Faulted)) return;
+        if (prev is not (AudioDeviceState.Running or AudioDeviceState.Building or AudioDeviceState.Faulted or AudioDeviceState.Retrying)) return;
 
         _state.Value = AudioDeviceState.Reinitializing;
         try
         {
-            var next = _endpointFactory() ?? throw new InvalidOperationException("No audio endpoint available.");
-            if (_disposed) { next.Dispose(); return; }
-            bool ok = _session.RebuildSink(next);
-            if (!ok) next.Dispose();
+            var next = _endpointFactory();
+            if (_disposed) { next?.Dispose(); return; }
+            if (next is null || !next.IsReady)
+            {
+                // The new default device exists but is not Initialize-able yet (a jack switch settles over hundreds of
+                // ms) or there is no device: keep the previous sink — it may still be audible — and retry on the ladder.
+                next?.Dispose();
+                ScheduleRetry();
+                return;
+            }
+            if (!_session.RebuildSink(next))
+            {
+                next.Dispose();
+                ScheduleRetry();
+                return;
+            }
             // Fix 3: re-derive the feed's ms→frames sizing against the (possibly new) live rate. Safe here specifically
-            // because the cold loop parks the feed (Stop()) around every rebuild before calling in — Resize plain-writes
-            // its fields with no synchronization and is not safe while the RT/worker threads are live.
-            if (ok) _feed?.Resize(_session.Format);
-            _state.Value = ok ? AudioDeviceState.Running : AudioDeviceState.Faulted;
+            // because Attempt parks the feed (Stop()) around every rebuild before calling in — Resize plain-writes its
+            // fields with no synchronization and is not safe while the RT/worker threads are live.
+            _feed?.Resize(_session.Format);
+            lock (_gate) _policy.ResetLadder();
+            _state.Value = AudioDeviceState.Running;
         }
         catch (Exception)
         {
-            // No fallback endpoint (all devices gone) — terminal until a device returns (a later change re-enters here).
-            _state.Value = AudioDeviceState.Faulted;
+            // No endpoint could be opened (all devices gone, factory threw) — back off on the ladder; the next device
+            // event re-arms it even after exhaustion.
+            ScheduleRetry();
         }
     }
 
-    /// <summary>Force the terminal <c>Faulted</c> state (an unrecoverable device error). Idempotent.</summary>
+    /// <summary>Force the <c>Faulted</c> state (an unrecoverable device error). Idempotent. The next device event re-arms.</summary>
     public void Fault() { if (!_disposed) _state.Value = AudioDeviceState.Faulted; }
+
+    /// <summary>Deterministic test hook: run the scheduled ladder retry if it is due at <paramref name="nowMs"/>
+    /// (<see cref="Environment.TickCount64"/> domain). Returns false when no retry is scheduled or it is not yet due.</summary>
+    internal bool TryRunDueRetry(long nowMs)
+    {
+        if (_disposed) return false;
+        lock (_gate)
+        {
+            if (_nextRetryAt == long.MinValue || nowMs < _nextRetryAt) return false;
+        }
+        Attempt();
+        return true;
+    }
+
+    // One rebuild attempt on the cold thread: take the pending request, park the RT feed, run the rebuild, and ALWAYS
+    // restart the feed if it was parked — a failed rebuild must never leave the feed stopped (the old sink may still be
+    // audible, and the RT loop is what reports a dead one).
+    private void Attempt()
+    {
+        var feed = _feed;
+        bool parked = false;
+        try
+        {
+            lock (_gate)
+            {
+                _policy.ClearPending();
+                _nextRetryAt = long.MinValue;
+            }
+            if (feed is not null)
+            {
+                feed.Stop();
+                if (!feed.IsStopped)
+                {
+                    // A thread missed its join bound; the swap is unsafe now. The ladder retry Stop()s again — by then the
+                    // late thread has exited (its run flag is already false) — instead of parking the feed forever.
+                    ScheduleRetry();
+                    return;
+                }
+                parked = true;
+            }
+            OnDefaultDeviceChanged();
+        }
+        catch (Exception) { ScheduleRetry(); }   // OnDefaultDeviceChanged never throws; this guards the parking itself
+        finally
+        {
+            if (parked && feed is not null && _run && !_disposed && feed.IsStopped)
+            {
+                try { feed.Start(); } catch (Exception) { /* a torn-down feed (disposing) must not fault the cold thread */ }
+            }
+        }
+    }
+
+    // Schedule the next ladder step (→ Retrying) or declare exhaustion (→ Faulted; the next device event resets the ladder
+    // and re-enters the machine). Wakes the cold loop so it recomputes its wait.
+    private void ScheduleRetry()
+    {
+        int? delay;
+        lock (_gate)
+        {
+            delay = _policy.NextRetryDelayMs();
+            _nextRetryAt = delay is int d ? Environment.TickCount64 + d : long.MinValue;
+        }
+        _state.Value = delay is null ? AudioDeviceState.Faulted : AudioDeviceState.Retrying;
+        if (delay is not null) Wake();
+    }
+
+    private void Wake()
+    {
+        try { _wake.Set(); } catch (ObjectDisposedException) { }
+    }
+
+    // Milliseconds until the next thing to do (pending request due, or ladder retry due); Timeout.Infinite when idle.
+    private int WaitMsLocked(long nowMs)
+    {
+        int due = _policy.DueInMs(nowMs);
+        if (_nextRetryAt != long.MinValue) due = Math.Min(due, (int)Math.Clamp(_nextRetryAt - nowMs, 0, int.MaxValue));
+        return due == int.MaxValue ? Timeout.Infinite : due;
+    }
 
     private void ColdLoop()
     {
@@ -123,28 +249,15 @@ public sealed class AudioDeviceController : IDisposable
         {
             while (_run)
             {
-                _wake.WaitOne();
-                if (!_run) break;
-                if (Interlocked.Exchange(ref _pending, 0) == 0) continue;
-
-                // Debounce (Fix 4): wait out a quiet window after the LATEST request before rebuilding. A request landing
-                // inside the window re-stamps `_pendingSince` (RequestRebuild, off this thread) and pushes the wait back out
-                // instead of queuing a second rebuild — see RequestRebuild's doc for why this matters (the 48000-then-44100
-                // double notification).
-                long since;
-                while (_run && (since = Environment.TickCount64 - Interlocked.Read(ref _pendingSince)) < DebounceMs)
-                    _wake.WaitOne((int)(DebounceMs - since));
+                int wait;
+                lock (_gate) wait = WaitMsLocked(Environment.TickCount64);
+                if (wait != 0) _wake.WaitOne(wait);
                 if (!_run) break;
 
-                // Park the RT feed around the swap so no callback reads a half-swapped endpoint (on-box).
-                bool wasRunning = _feed is not null;
-                if (wasRunning)
-                {
-                    _feed!.Stop();
-                    if (!_feed.IsStopped) { _state.Value = AudioDeviceState.Faulted; continue; }
-                }
-                OnDefaultDeviceChanged();
-                if (_run && !_disposed && wasRunning && _state.Peek() == AudioDeviceState.Running) _feed!.Start();
+                bool due;
+                lock (_gate) due = WaitMsLocked(Environment.TickCount64) == 0;
+                if (!due) continue;   // woken early (a new request re-stamped the window, or a spurious Set) — recompute
+                Attempt();
             }
         }
         finally { if (_disposed) DisposeWake(); }
@@ -162,7 +275,7 @@ public sealed class AudioDeviceController : IDisposable
         _disposed = true;
         if (_watcher is not null) _watcher.DefaultDeviceChanged -= _watcherHandler;
         _run = false;
-        try { _wake.Set(); } catch (ObjectDisposedException) { }
+        Wake();
         bool joined = _coldThread is null;
         try { joined = _coldThread?.Join(2000) ?? true; } catch { }
         if (joined)

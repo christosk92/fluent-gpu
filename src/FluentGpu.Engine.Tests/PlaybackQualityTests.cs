@@ -161,13 +161,96 @@ public sealed class PlaybackQualityTests
         });
         controller.MarkRunning();
         controller.OnDefaultDeviceChanged();
-        Assert.Equal(AudioDeviceState.Faulted, controller.State.Peek());
-        controller.OnDefaultDeviceChanged();
+        // A throwing factory schedules the first ladder retry (250 ms) instead of faulting (Wavee #112).
+        Assert.Equal(AudioDeviceState.Retrying, controller.State.Peek());
+        Assert.True(controller.TryRunDueRetry(long.MaxValue));
         Assert.Equal(AudioDeviceState.Running, controller.State.Peek());
         Assert.Equal(2, attempts);
         controller.Dispose();
         controller.RequestRebuild();
+        Assert.False(controller.TryRunDueRetry(long.MaxValue));
         Assert.Equal(2, attempts);
+        _ = session.DisposeAsync();
+    }
+
+    /// <summary>A sink whose writes succeed but whose <c>Start()</c> reports the device lost — the WASAPI shape after a jack
+    /// switch invalidates a client that was opened fine.</summary>
+    private sealed class StartLostSink : IAudioSink
+    {
+        public MixFormat Format { get; }
+        public int StartCalls;
+        public StartLostSink(MixFormat format) => Format = format;
+        public int Write(ReadOnlySpan<float> src, int frames) => frames;
+        public void Start() { StartCalls++; throw new AudioDeviceLostException(unchecked((int)0x88890004)); }
+        public void Stop() { }
+    }
+
+    /// <summary>Wavee #112: <c>Start()</c> throwing on the RT thread used to surface as a Decode/Retryable
+    /// <see cref="MediaError"/> (a user-visible "playback error" toast). It is a SINK failure: no error, the session stays
+    /// Playing, and the controller is asked for a rebuild.</summary>
+    [Fact]
+    public void StartFailure_IsASinkFailure_NotAMediaError()
+    {
+        var format = new MixFormat(48000, 2);
+        using var clock = new HeadlessAudioEndpoint(format);
+        var sink = new StartLostSink(format);
+        var session = new PcmAudioSession(format, sink, clock.Clock, 480, false);
+        session.Configure(AudioGraphSpec.Passthrough);
+        using var controller = new AudioDeviceController(session, () => new HeadlessAudioEndpoint(format));
+        session.RegisterDisposable(controller);   // no cold thread: the request just becomes visible as pending
+        controller.MarkRunning();
+        var core = new MediaPlayerCore();
+        session.SetVoice(new MemoryAudioSource(new float[96000], 2), TimeSpan.FromSeconds(1), 48000, NormMode.Off, -14, 1);
+        session.ConnectSignals(new MediaSignalSink(core));
+        _ = session.PlayAsync();
+
+        session.PumpAudio(480);   // Opening → Buffering
+        session.PumpAudio(480);   // Buffering → Ready → Playing; the first submit reaches Start() → device lost
+        for (int i = 0; i < 4; i++) session.PumpAudio(480);
+
+        Assert.True(sink.StartCalls >= 1);
+        Assert.Null(core.Error.Peek());
+        Assert.Equal(PlaybackState.Playing, session.CurrentState);
+        Assert.True(controller.HasPendingRebuild, "a device-lost Start() did not ask the controller for a rebuild");
+        Assert.Equal(1, controller.SinkFailureRequests);
+        _ = session.DisposeAsync();
+    }
+
+    /// <summary>Wavee #112 case B: the running endpoint is invalidated with NO default-device notification. The rendered
+    /// block must be retained (no content skipped — the mixer's consume clock holds), the controller asked exactly ONCE
+    /// (further dead blocks never re-stamp the request), and a later rebuild resumes consumption.</summary>
+    [Fact]
+    public void InvalidatedEndpoint_RetainsPendingBlock_AndRequestsRebuildOnce()
+    {
+        var format = new MixFormat(48000, 2);
+        var endpoint = new BufferedAudioEndpoint(format, 960, 48000);
+        var session = new PcmAudioSession(format, endpoint, endpoint, 480, false, endpoint);
+        session.Configure(AudioGraphSpec.Passthrough);
+        using var controller = new AudioDeviceController(session, () => new BufferedAudioEndpoint(format, 960, 48000));
+        session.RegisterDisposable(controller);
+        controller.MarkRunning();
+        session.SetVoice(new MemoryAudioSource(new float[96000 * 4], 2), TimeSpan.FromSeconds(4), 192000, NormMode.Off, -14, 1);
+        session.ConnectSignals(new MediaSignalSink(new MediaPlayerCore()));
+        _ = session.PlayAsync();
+        for (int i = 0; i < 8; i++) { session.PumpAudio(480); endpoint.AdvanceHardware(480); }
+        Assert.Equal(PlaybackState.Playing, session.CurrentState);
+        long consumedBefore = session.SampleClock;
+        Assert.True(consumedBefore > 0);
+
+        endpoint.Invalidate();   // the jack switch: WritableFrames -1, Write 0, no watcher event
+
+        for (int i = 0; i < 40; i++) session.RenderBlock(480);   // 5× the 8-block threshold worth of dead writes
+        Assert.Equal(consumedBefore, session.SampleClock);       // nothing consumed into a dead sink
+        Assert.True(controller.HasPendingRebuild);
+        Assert.Equal(1, controller.SinkFailureRequests);         // reported once, never re-stamped
+        Assert.Equal(AudioDeviceState.Running, controller.State.Peek());
+
+        controller.OnDefaultDeviceChanged();                     // the cold thread would run this once the request is due
+        Assert.Equal(AudioDeviceState.Running, controller.State.Peek());
+        Assert.NotSame(endpoint, session.Sink);
+        var fresh = (BufferedAudioEndpoint)session.Sink;
+        for (int i = 0; i < 4; i++) { session.PumpAudio(480); fresh.AdvanceHardware(480); }
+        Assert.True(session.SampleClock > consumedBefore, "consumption did not resume on the rebuilt sink");
         _ = session.DisposeAsync();
     }
 

@@ -29,6 +29,8 @@ public sealed class BufferedAudioEndpoint : IAudioEndpoint, IBufferedAudioSink, 
     /// <inheritdoc/>
     public IAudioClockSource Clock => this;
     /// <inheritdoc/>
+    public bool IsReady => !_invalidated;
+    /// <inheritdoc/>
     public int CapacityFrames { get; }
     /// <inheritdoc/>
     public int WritableFrames => _invalidated ? -1 : CapacityFrames - _padding;
@@ -93,7 +95,8 @@ public sealed class BufferedAudioEndpoint : IAudioEndpoint, IBufferedAudioSink, 
     /// <inheritdoc/>
     public void Start()
     {
-        if (_invalidated) throw new InvalidOperationException("Simulated device invalidated.");
+        // The same typed failure the WASAPI leaf raises for a lost device, so the session's device-lost handling is testable.
+        if (_invalidated) throw new AudioDeviceLostException(unchecked((int)0x88890004));
         if (_started) return;
         _started = true;
         StartCount++;

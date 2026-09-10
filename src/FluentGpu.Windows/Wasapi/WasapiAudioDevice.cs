@@ -43,6 +43,12 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IBufferedAudioSin
     private bool _ready;
     private bool _started;
     private bool _disposed;
+    private int _lostHr;   // the HRESULT that invalidated a once-ready device (0 = never lost); read by Start/Reset's exception
+
+    // AUDCLNT_E_DEVICE_INVALIDATED / AUDCLNT_E_RESOURCES_INVALIDATED — the two "this IAudioClient is dead" HRESULTs a jack
+    // switch or endpoint removal produces on a RUNNING client (there is no default-device notification for them).
+    private const int AudclntEDeviceInvalidated = unchecked((int)0x88890004);
+    private const int AudclntEResourcesInvalidated = unchecked((int)0x88890026);
 
     // Audio diagnostics (spec §7.x) split into two channels, because ONE of them (the 1 Hz feed-vs-play throughput) used
     // to run INSIDE Write — i.e. on the RT feed thread, inside AudioTripwire's alloc/lock/syscall-free contract:
@@ -85,13 +91,38 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IBufferedAudioSin
     {
         Format = requested;
         try { Open(requested); }
-        catch (Exception ex) { Debug.WriteLine($"WasapiAudioDevice open failed: {ex.Message}"); _ready = false; }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"WasapiAudioDevice open failed: {ex.Message}");
+            Volatile.Write(ref _ready, false);
+            FormatSink?.Invoke(FormatOpenFailure("exception", ex.HResult) + " msg=" + ex.Message);
+        }
     }
 
     /// <inheritdoc cref="IAudioSink.Format"/>
     public MixFormat Format { get; private set; }
-    /// <summary>True when the device opened and can render.</summary>
-    public bool IsReady => _ready;
+    /// <summary>True when the device opened and can render; false after the open failed at any step (logged through
+    /// <see cref="FormatSink"/> as <c>open FAILED step=… hr=…</c>) or once a running client was invalidated
+    /// (<see cref="MarkLost"/>). A false device is inert: <see cref="WritableFrames"/> -1, <see cref="Write"/> 0.</summary>
+    public bool IsReady => Volatile.Read(ref _ready);
+
+    /// <summary>Pure: is <paramref name="hr"/> one of the two "the device is gone" WASAPI HRESULTs
+    /// (<c>AUDCLNT_E_DEVICE_INVALIDATED</c> 0x88890004, <c>AUDCLNT_E_RESOURCES_INVALIDATED</c> 0x88890026)?</summary>
+    public static bool IsDeviceLostHr(int hr) => hr == AudclntEDeviceInvalidated || hr == AudclntEResourcesInvalidated;
+
+    /// <summary>Pure: the always-on <see cref="FormatSink"/> line for an open that failed at <paramref name="step"/>
+    /// with <paramref name="hr"/> — the line production triage reads to tell "device not ready yet" (0x88890004 /
+    /// E_NOTFOUND during a jack switch) from a real driver fault.</summary>
+    public static string FormatOpenFailure(string step, int hr) => $"open FAILED step={step} hr=0x{hr:X8} default-endpoint";
+
+    // The running client was invalidated (a Write/WritableFrames/Start hit a device-lost HRESULT): flip inert so every later
+    // Write returns 0 / WritableFrames -1 — the session's sink-failure path then asks the cold thread for a rebuild. Volatile
+    // write: the cold thread reads IsReady across threads. RT-safe (no alloc, no syscall).
+    private void MarkLost(int hr)
+    {
+        _lostHr = hr;
+        Volatile.Write(ref _ready, false);
+    }
 
     /// <inheritdoc/>
     public IAudioSink Sink => this;
@@ -120,21 +151,30 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IBufferedAudioSin
 
     // ── IAudioSink ───────────────────────────────────────────────────────────────────────────────────────────────────
     /// <inheritdoc/>
+    /// <summary>Start rendering. Throws <see cref="AudioDeviceLostException"/> — never anything else — when the device
+    /// is not ready or <c>IAudioClient::Start</c> fails (the client is marked lost first): the session treats it as a sink
+    /// failure and asks for a rebuild instead of surfacing a playback error (Wavee #112). <c>_started</c> flips only on success.</summary>
     public void Start()
     {
         if (_started) return;
-        if (!_ready || _client is null) throw new InvalidOperationException("Audio endpoint is unavailable.");
-        System.Runtime.InteropServices.Marshal.ThrowExceptionForHR(_client->Start());
+        if (!IsReady || _client is null) throw new AudioDeviceLostException(_lostHr != 0 ? _lostHr : AudclntEDeviceInvalidated);
+        int hr = _client->Start();
+        if (hr < 0)
+        {
+            MarkLost(hr);
+            throw new AudioDeviceLostException(hr);
+        }
         _started = true;
     }
 
-    /// <inheritdoc/>
+    /// <summary>Stop rendering. Never throws — a Stop on an invalidated client just marks it lost.</summary>
     public void Stop()
     {
         if (_started && _client is not null)
         {
-            System.Runtime.InteropServices.Marshal.ThrowExceptionForHR(_client->Stop());
+            int hr = _client->Stop();
             _started = false;
+            if (hr < 0 && IsDeviceLostHr(hr)) MarkLost(hr);
         }
     }
 
@@ -147,20 +187,43 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IBufferedAudioSin
         {
             if (!_ready || _client is null) return -1;
             uint padding;
-            if (_client->GetCurrentPadding(&padding) < 0) return -1;
+            int hr = _client->GetCurrentPadding(&padding);
+            if (hr < 0)
+            {
+                if (IsDeviceLostHr(hr)) MarkLost(hr);
+                return -1;
+            }
             return Math.Max(0, (int)_bufferFrames - (int)padding);
         }
     }
-    /// <inheritdoc/>
+    /// <summary>Discard queued device PCM. Throws <see cref="AudioDeviceLostException"/> when the device is not ready or
+    /// <c>Reset</c> reports it lost; any other failure (e.g. <c>AUDCLNT_E_NOT_STOPPED</c>, a caller bug) still throws the HRESULT.</summary>
     public void Reset()
     {
-        if (_client is null || !_ready) throw new InvalidOperationException("Audio endpoint is unavailable.");
-        System.Runtime.InteropServices.Marshal.ThrowExceptionForHR(_client->Reset());
+        if (_client is null || !IsReady) throw new AudioDeviceLostException(_lostHr != 0 ? _lostHr : AudclntEDeviceInvalidated);
+        int hr = _client->Reset();
+        if (hr < 0)
+        {
+            if (IsDeviceLostHr(hr))
+            {
+                MarkLost(hr);
+                throw new AudioDeviceLostException(hr);
+            }
+            System.Runtime.InteropServices.Marshal.ThrowExceptionForHR(hr);
+        }
         Interlocked.Exchange(ref _written, 0);
     }
     /// <inheritdoc/>
     public void WaitForWritable(WaitHandle controlWake, int timeoutMs)
     {
+        // A never-opened (Open failed before CreateEventW) or invalidated device has no period event to wait on:
+        // WaitForMultipleObjects on a NULL handle returns WAIT_FAILED immediately and the Highest/MMCSS RT thread would spin
+        // at 100 % re-reporting the dead sink (Wavee #112). Wait on the control wake for the period instead.
+        if (!IsReady || _event == HANDLE.NULL)
+        {
+            controlWake.WaitOne(Math.Max(1, timeoutMs));
+            return;
+        }
         HANDLE* handles = stackalloc HANDLE[2];
         handles[0] = _event;
         handles[1] = (HANDLE)controlWake.SafeWaitHandle.DangerousGetHandle();
@@ -179,7 +242,12 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IBufferedAudioSin
         while (written < frames && _ready && !_disposed)
         {
             uint padding;
-            if (_client->GetCurrentPadding(&padding) < 0) break;   // device lost → return the partial; RebuildSink recovers
+            int hr = _client->GetCurrentPadding(&padding);
+            if (hr < 0)   // device lost → mark inert, return the partial; the session's sink-failure path drives the rebuild
+            {
+                if (IsDeviceLostHr(hr)) MarkLost(hr);
+                break;
+            }
             int available = (int)(_bufferFrames - padding);
             if (available <= 0)
             {
@@ -189,7 +257,12 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IBufferedAudioSin
 
             int toWrite = Math.Min(frames - written, available);
             byte* pData;
-            if (_render->GetBuffer((uint)toWrite, &pData) < 0) break;
+            hr = _render->GetBuffer((uint)toWrite, &pData);
+            if (hr < 0)
+            {
+                if (IsDeviceLostHr(hr)) MarkLost(hr);
+                break;
+            }
 
             // Our internal layout is stereo f32; conform into the device channel count (write L/R, zero extras / downmix
             // mono) AND into the device sample TYPE. The f32 fast path (device is 32-bit IEEE float, the normal shared-mode
@@ -218,7 +291,12 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IBufferedAudioSin
                 WriteConverted(pData, src, written, toWrite, devCh);
             }
 
-            if (_render->ReleaseBuffer((uint)toWrite, 0) < 0) break;
+            hr = _render->ReleaseBuffer((uint)toWrite, 0);
+            if (hr < 0)
+            {
+                if (IsDeviceLostHr(hr)) MarkLost(hr);
+                break;
+            }
             _written += toWrite;
             written += toWrite;
         }
@@ -317,28 +395,37 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IBufferedAudioSin
     }
 
     // ── COM bring-up ─────────────────────────────────────────────────────────────────────────────────────────────────
+    // Every early exit of Open goes through here so a failed open is never silent (Wavee #112: the 0.2.8 leaf returned
+    // quietly from nine places, and a dead default endpoint was adopted with nothing in the log). Off the RT path.
+    private static void Fail(string step, int hr) => FormatSink?.Invoke(FormatOpenFailure(step, hr));
+
     private void Open(MixFormat requested)
     {
         // COM must be initialized on this thread; MTA is fine for WASAPI. Ignore "already initialized" results.
         _ = CoInitializeEx(null, (uint)(COINIT.COINIT_MULTITHREADED | COINIT.COINIT_DISABLE_OLE1DDE));
+        int hr;
 
         Guid clsidEnum = CLSID.CLSID_MMDeviceEnumerator;
         Guid iidEnum = IID.IID_IMMDeviceEnumerator;
         IMMDeviceEnumerator* enumerator;
-        if (CoCreateInstance(&clsidEnum, null, ClsctxAll, &iidEnum, (void**)&enumerator) < 0) return;
+        hr = CoCreateInstance(&clsidEnum, null, ClsctxAll, &iidEnum, (void**)&enumerator);
+        if (hr < 0) { Fail("CoCreateInstance", hr); return; }
         _enumerator = enumerator;
 
         IMMDevice* device;
-        if (enumerator->GetDefaultAudioEndpoint(EDataFlow.eRender, ERole.eConsole, &device) < 0) return;
+        hr = enumerator->GetDefaultAudioEndpoint(EDataFlow.eRender, ERole.eConsole, &device);
+        if (hr < 0) { Fail("GetDefaultAudioEndpoint", hr); return; }
         _device = device;
 
         Guid iidClient = IID.IID_IAudioClient;
         IAudioClient* client;
-        if (device->Activate(&iidClient, ClsctxAll, null, (void**)&client) < 0) return;
+        hr = device->Activate(&iidClient, ClsctxAll, null, (void**)&client);
+        if (hr < 0) { Fail("Activate", hr); return; }
         _client = client;
 
         WAVEFORMATEX* mix;
-        if (client->GetMixFormat(&mix) < 0) return;
+        hr = client->GetMixFormat(&mix);
+        if (hr < 0) { Fail("GetMixFormat", hr); return; }
 
         int deviceRate = (int)mix->nSamplesPerSec;
         _deviceChannels = mix->nChannels;
@@ -372,17 +459,24 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IBufferedAudioSin
         // 100-ms shared buffer; shared mode ignores periodicity. EVENTCALLBACK makes the device signal _event each period so
         // Write blocks on the event instead of polling (periodicity stays 0 — correct for shared-mode event-driven).
         const long hnsBuffer = 100 * 10_000;
-        int hr = client->Initialize(AUDCLNT_SHAREMODE.AUDCLNT_SHAREMODE_SHARED, StreamFlagsEventCallback, hnsBuffer, 0, mix, null);
+        hr = client->Initialize(AUDCLNT_SHAREMODE.AUDCLNT_SHAREMODE_SHARED, StreamFlagsEventCallback, hnsBuffer, 0, mix, null);
         CoTaskMemFree(mix);
-        if (hr < 0) return;
+        if (hr < 0) { Fail("Initialize", hr); return; }
 
         // Auto-reset, initially non-signaled; the device sets it whenever a buffer period is ready to be filled.
         _event = CreateEventW(null, BOOL.FALSE, BOOL.FALSE, null);
-        if (_event == HANDLE.NULL) return;
-        if (client->SetEventHandle(_event) < 0) return;
+        if (_event == HANDLE.NULL)
+        {
+            int win32 = System.Runtime.InteropServices.Marshal.GetLastWin32Error();
+            Fail("CreateEventW", win32 <= 0 ? win32 : unchecked((int)0x80070000) | (win32 & 0xFFFF));   // HRESULT_FROM_WIN32
+            return;
+        }
+        hr = client->SetEventHandle(_event);
+        if (hr < 0) { Fail("SetEventHandle", hr); return; }
 
         uint bufferFrames;
-        if (client->GetBufferSize(&bufferFrames) < 0) return;
+        hr = client->GetBufferSize(&bufferFrames);
+        if (hr < 0) { Fail("GetBufferSize", hr); return; }
         _bufferFrames = bufferFrames;
 
         // Open runs once, off the RT path — the ONLY line that answers "what is the user's device sample rate?" for
@@ -396,7 +490,8 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IBufferedAudioSin
 
         Guid iidRender = IID.IID_IAudioRenderClient;
         IAudioRenderClient* render;
-        if (client->GetService(&iidRender, (void**)&render) < 0) return;
+        hr = client->GetService(&iidRender, (void**)&render);
+        if (hr < 0) { Fail("GetService(IAudioRenderClient)", hr); return; }
         _render = render;
 
         Guid iidClock = IID.IID_IAudioClock;
@@ -408,26 +503,41 @@ public sealed unsafe class WasapiAudioDevice : IAudioEndpoint, IBufferedAudioSin
             if (clock->GetFrequency(&freq) >= 0) _clockFreq = freq;
         }
 
-        _ready = true;
+        Volatile.Write(ref _ready, true);
     }
 
-    /// <inheritdoc/>
+    /// <summary>Release the COM objects and the period event. Never throws; every <c>Release()</c> and the
+    /// <c>CloseHandle</c> run even when the device was invalidated mid-stream (the 0.2.9 leaf threw out of <c>Stop()</c>
+    /// first and leaked all four pointers plus the event on every jack switch).</summary>
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
-        _ready = false;
-        Stop();
-        if (_clock is not null) { _clock->Release(); _clock = null; }
-        if (_render is not null) { _render->Release(); _render = null; }
-        if (_client is not null) { _client->Release(); _client = null; }
-        if (_device is not null) { _device->Release(); _device = null; }
-        if (_enumerator is not null) { _enumerator->Release(); _enumerator = null; }
-        // Handle-close safety (spec §7.9): _disposed/_ready were set above BEFORE this CloseHandle, and by contract the RT
-        // feed thread has already been Stop()-joined before we reach here — PcmAudioSession.DisposeAsync disposes the
-        // AudioFeedThread (joining the RT thread) before disposing this endpoint, and AudioDeviceController parks the feed
-        // via _feed.Stop() before RebuildSink disposes the old endpoint. So no Write should be mid-WaitForSingleObject on
-        // _event; the bounded wait + post-wait _disposed re-check in Write contain the residual best-effort-join window.
-        if (_event != HANDLE.NULL) { CloseHandle(_event); _event = HANDLE.NULL; }
+        Volatile.Write(ref _ready, false);
+        try
+        {
+            Stop();   // never throws (see Stop); the try/finally is belt-and-braces for the Release chain below
+        }
+        finally
+        {
+            try
+            {
+                if (_clock is not null) { _clock->Release(); _clock = null; }
+                if (_render is not null) { _render->Release(); _render = null; }
+                if (_client is not null) { _client->Release(); _client = null; }
+                if (_device is not null) { _device->Release(); _device = null; }
+                if (_enumerator is not null) { _enumerator->Release(); _enumerator = null; }
+            }
+            finally
+            {
+                // Handle-close safety (spec §7.9): _disposed/_ready were set above BEFORE this CloseHandle, and by contract
+                // the RT feed thread has already been Stop()-joined before we reach here — PcmAudioSession.DisposeAsync
+                // disposes the AudioFeedThread (joining the RT thread) before disposing this endpoint, and
+                // AudioDeviceController parks the feed via _feed.Stop() before RebuildSink disposes the old endpoint. So no
+                // Write should be mid-WaitForSingleObject on _event; the bounded wait + post-wait _disposed re-check in
+                // Write contain the residual best-effort-join window.
+                if (_event != HANDLE.NULL) { CloseHandle(_event); _event = HANDLE.NULL; }
+            }
+        }
     }
 }

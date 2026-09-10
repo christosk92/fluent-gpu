@@ -354,8 +354,11 @@ public interface IAudioClockSource
     int MixRate { get; }
 }
 
-/// <summary>The device state a <see cref="IDeviceWatcher"/> reports (spec §7.9).</summary>
-public enum AudioDeviceState : byte { Building, Running, Reinitializing, Faulted }
+/// <summary>The device state a <see cref="IDeviceWatcher"/> / <see cref="AudioDeviceController"/> reports (spec §7.9).
+/// <c>Retrying</c>: the last rebuild attempt found no usable endpoint (not yet <c>Initialize</c>-able mid jack-switch,
+/// or the feed could not be parked) and a ladder retry (250 ms / 1 s / 3 s) is scheduled while the previous sink keeps
+/// playing; <c>Faulted</c> is the ladder exhausted — recoverable by the next default-device event.</summary>
+public enum AudioDeviceState : byte { Building, Running, Reinitializing, Faulted, Retrying }
 
 /// <summary>Follow-default / device-loss watcher (spec §7.9) — Windows <c>IMMNotificationClient</c>; macOS default-output
 /// listener. A default-device change rebuilds ONLY the sink under a live graph.</summary>

@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Runtime;
 using System.Threading;
 using System.Threading.Tasks;
+using FluentGpu.Signals;
 
 namespace FluentGpu.Media;
 
@@ -342,6 +343,7 @@ public sealed class PcmAudioSession : IMediaSession
     private long _seekRevision;
     private readonly SemaphoreSlim _replacementGate = new(1, 1);
     private bool _formatRequiresReload;
+    private bool _reloadSuppressionLogged;   // one line per rate change when RenderBlock is parked on _formatRequiresReload
     private long _activeMixerStart;
     private readonly System.Collections.Generic.Dictionary<long, long> _voiceStarts = new();
     /// <summary>Output format changed; the graph must be recreated before new-rate PCM may be submitted.</summary>
@@ -544,6 +546,15 @@ public sealed class PcmAudioSession : IMediaSession
         if (_deviceController is null && resource is AudioDeviceController adc) _deviceController = adc;
     }
     private System.Collections.Generic.List<IDisposable>? _owned;
+
+    /// <summary>The device-recovery state of the registered <see cref="AudioDeviceController"/> (spec §7.9), or null on a
+    /// session with no controller (headless/tests). A host logs its edges (<c>Running → Reinitializing → Retrying → …</c>)
+    /// so a silent device switch is diagnosable from the log alone.</summary>
+    public IReadSignal<AudioDeviceState>? DeviceState => _deviceController?.State;
+
+    /// <summary>The live render sink — swapped by <see cref="RebuildSink"/>; the same instance survives a refused rebuild
+    /// (a not-ready endpoint keeps the previous sink playing). For diagnostics/tests.</summary>
+    public IAudioSink Sink => _out;
 
     /// <summary>True once an RT feed is attached (the render is driven by <see cref="RtRenderOnce"/>, not the inline pump).</summary>
     public bool IsRtDriven => _feed is not null;
@@ -887,9 +898,15 @@ public sealed class PcmAudioSession : IMediaSession
                     }
                     break;
                 case CmdReset:
-                    _out.Stop();
-                    _started = false;
-                    if (_out is IBufferedAudioSink buffered) buffered.Reset();
+                    // Device-lost only: a Stop/Reset on an invalidated endpoint is a sink failure (→ rebuild), never a
+                    // render fault — any other exception still propagates as before.
+                    try
+                    {
+                        _out.Stop();
+                        _started = false;
+                        if (_out is IBufferedAudioSink buffered) buffered.Reset();
+                    }
+                    catch (AudioDeviceLostException) { _started = false; RecordDeviceLost(); }
                     if (_clock is SyntheticAudioClock synthetic) synthetic.Reset();
                     _pendingFrames = _pendingOffset = 0;
                     _submittedFrames = _playedFrames = _deviceFrameOrigin = 0;
@@ -1191,7 +1208,7 @@ public sealed class PcmAudioSession : IMediaSession
                 : PlayedFrames >= _fadeTailSubmitted;
             if (drained)
             {
-                _out.Stop();
+                try { _out.Stop(); } catch (AudioDeviceLostException) { RecordDeviceLost(); }
                 _started = false;
                 Volatile.Write(ref _transportPhase, 3);
             }
@@ -1211,9 +1228,13 @@ public sealed class PcmAudioSession : IMediaSession
             bool drained = _out is IBufferedAudioSink buffered
                 ? buffered.WritableFrames >= buffered.CapacityFrames : PlayedFrames >= SubmittedFrames;
             if (!drained) return false;
-            _out.Stop();
-            _started = false;
-            if (_out is IBufferedAudioSink resettable) resettable.Reset();
+            try
+            {
+                _out.Stop();
+                _started = false;
+                if (_out is IBufferedAudioSink resettable) resettable.Reset();
+            }
+            catch (AudioDeviceLostException) { _started = false; RecordDeviceLost(); }   // device-lost only → rebuild, not a fault
             if (_clock is SyntheticAudioClock synthetic) synthetic.Reset();
             Interlocked.Exchange(ref _deviceFrameOrigin, SubmittedFrames);
             Interlocked.Increment(ref _renderEpoch);
@@ -1356,7 +1377,18 @@ public sealed class PcmAudioSession : IMediaSession
     /// allocation-free DSP tripwire. Sustained endpoint failures request recovery on the cold device thread.</summary>
     public int RenderBlock(int frames)
     {
-        if (_formatRequiresReload) return 0;
+        if (_formatRequiresReload)
+        {
+            // Log ONCE per rate change (Wavee #112): a session parked here is silent until the host's graph reload lands,
+            // and without this line a stalled reload looks exactly like a dead device. Before the tripwire; one allocation
+            // per rate change is the same trade the WASAPI leaf makes for its one-shot format warning.
+            if (!_reloadSuppressionLogged)
+            {
+                _reloadSuppressionLogged = true;
+                FluentGpu.Foundation.Diag.Line($"[audio] render suppressed: output format changed to {_format.SampleRate} Hz/{_format.Channels}ch — awaiting the host's graph reload");
+            }
+            return 0;
+        }
         DrainMixerCmds();
         if (_pendingFrames > 0) return SubmitPending();
         frames = Math.Clamp(frames, 1, _maxBlock);
@@ -1433,17 +1465,30 @@ public sealed class PcmAudioSession : IMediaSession
         if (_clock is SyntheticAudioClock synthetic) synthetic.Advance(written);
         if (Interlocked.Exchange(ref _startRequested, 0) != 0 && !_started)
         {
-            _out.Start();
-            _started = true;
+            // A Start() on a device invalidated by a jack switch is a SINK failure (Wavee #112): ask the cold device
+            // thread for a rebuild instead of letting the exception reach RenderBurst → RecordFault → a user-visible
+            // MediaError. The accepted frames stay accepted; the rebuilt sink restarts via RebuildSink → EnsureStarted.
+            try { _out.Start(); _started = true; }
+            catch (AudioDeviceLostException) { RecordDeviceLost(); return written; }
         }
         return written;
     }
 
+    // A sustained run of dead writes (a torn/invalidated device with no follow-default notification): REPORT — never
+    // re-stamp — a rebuild request. RequestRebuild is the watcher's debounced entry; a report every ~80 ms through it
+    // postponed the 250 ms debounce forever (the 0.2.8 livelock, Wavee #112). Alloc-free; outside the DSP tripwire.
     private void RecordSinkFailure()
     {
         if (++_consecutiveSinkFailures < SinkFailureRebuildThreshold) return;
         _consecutiveSinkFailures = 0;
-        _deviceController?.RequestRebuild();
+        _deviceController?.ReportSinkFailure();
+    }
+
+    // A typed device-lost failure is unambiguous — no need to wait out the threshold.
+    private void RecordDeviceLost()
+    {
+        _consecutiveSinkFailures = 0;
+        _deviceController?.ReportSinkFailure();
     }
 
     private void TapBlock(ReadOnlySpan<float> buf, int frames)
@@ -1531,11 +1576,12 @@ public sealed class PcmAudioSession : IMediaSession
     /// <summary>Device-loss / follow-default rebuild (spec §7.9): swap ONLY the sink+clock endpoint under a LIVE graph. The
     /// sources, mixer voices, queue/<c>PreparedSlot</c>, published graph, and the derived timeline position ALL survive — the
     /// position domain is re-anchored to the new device's zero, the stream latency is re-measured on the next poll, and a
-    /// short fade-in avoids a resume click. Runs OFF the RT thread (the cold device thread). Never throws. Returns false if
-    /// the session was disposed.</summary>
+    /// short fade-in avoids a resume click. Runs OFF the RT thread (the cold device thread). Never throws. Returns false —
+    /// keeping the CURRENT sink untouched — if the session was disposed or <paramref name="newEndpoint"/> is not
+    /// <see cref="IAudioEndpoint.IsReady"/> (its open failed; adopting it would silence playback — Wavee #112).</summary>
     public bool RebuildSink(IAudioEndpoint newEndpoint)
     {
-        if (_disposed || newEndpoint is null) return false;
+        if (_disposed || newEndpoint is null || !newEndpoint.IsReady) return false;
 
         // Capture the current timeline position (frames) so it continues seamlessly across the swap.
         long posFrames = Math.Max(0, _position.PlayedFramesCompensated);
@@ -1570,6 +1616,7 @@ public sealed class PcmAudioSession : IMediaSession
         var newFormat = newEndpoint.Sink.Format;
         bool rateChanged = newFormat != _format;
         _formatRequiresReload = rateChanged;
+        _reloadSuppressionLogged = false;
         Interlocked.Increment(ref _renderEpoch);
         _submittedFrames = _playedFrames = _deviceFrameOrigin = 0;
         _starvationPhase = 0;

@@ -43,7 +43,9 @@ public sealed class RingAudioSource : IAudioSource, IDisposable
     {
         try { _producerWake.Set(); } catch (ObjectDisposedException) { }
     }
-    private Task? _producer;
+    /// <summary>The name every dedicated decode-ahead producer thread carries (diagnostics + tests).</summary>
+    public const string ProducerThreadName = "FluentGpu.AudioProducer";
+    private Thread? _producer;
     private int _disposed;
     internal RingAudioSource? RetirementNext;
     private int _retirementRequested;
@@ -60,16 +62,30 @@ public sealed class RingAudioSource : IAudioSource, IDisposable
     /// <summary>Decode failure, observed off the render thread.</summary>
     public Exception? ProducerFault => Volatile.Read(ref _producerFault);
 
-    /// <summary>Start an isolated producer. A blocked next voice cannot stall the active source.</summary>
+    /// <summary>Start an isolated producer. A blocked next voice cannot stall the active source.
+    /// <para>A real <see cref="Thread"/> at <see cref="ThreadPriority.AboveNormal"/> (#113): decode-ahead must win scheduling
+    /// against Normal app/ThreadPool work the same way <c>FluentGpu.AudioWorker</c> does — the LongRunning Task this replaced
+    /// ran at Normal and starved under a busy machine (the reporter compiles while listening). Stays below the RT feed
+    /// thread's Highest.</para></summary>
     public void StartProducer()
     {
         lock (_producerGate)
         {
             if (_producer is not null || _disposed != 0) return;
-            _producer = Task.Factory.StartNew(Produce, CancellationToken.None,
-                TaskCreationOptions.LongRunning, TaskScheduler.Default);
+            var t = new Thread(Produce)
+            {
+                IsBackground = true,
+                Name = ProducerThreadName,
+                Priority = ThreadPriority.AboveNormal,
+            };
+            _producer = t;
+            t.Start();
         }
     }
+
+    /// <summary>Tests only: wait up to <paramref name="timeoutMs"/> for the producer thread to exit (true when it has, or
+    /// when none was started). Production never joins — see the no-join contract in <see cref="Dispose"/>.</summary>
+    internal bool JoinProducer(int timeoutMs) => Volatile.Read(ref _producer)?.Join(timeoutMs) ?? true;
 
     private void Produce()
     {
@@ -349,7 +365,7 @@ public sealed class RingAudioSource : IAudioSource, IDisposable
             _ready.TrySetCanceled();
             WakeProducer();
             try { (_inner as ICancellableAudioSource)?.CancelPendingRead(); } catch (ObjectDisposedException) { }
-            if (_producer is null || _producer.IsCompleted) DisposeInner();
+            if (_producer is null || !_producer.IsAlive) DisposeInner();
             if (_producer is null) _producerWake.Dispose();
             // A running decoder owns its source until its finally block. Never free it under a blocked read.
         }
