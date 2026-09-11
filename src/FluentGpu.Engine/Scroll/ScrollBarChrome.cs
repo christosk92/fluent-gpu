@@ -83,7 +83,6 @@ public sealed class ScrollBarChrome
     private readonly SceneStore _scene;
     private readonly List<int> _active = new();
     private readonly HashSet<int> _member = new();
-    private readonly HashSet<int> _parked = new();   // KeepAlive-parked: excluded from Tick
     private int _needsFrameCount;                    // see NeedsFrame — snapshot taken at the end of the last Tick()
     private float _nextDeadlineMs = float.PositiveInfinity;  // see NextDeadlineMs
     /// <summary>Set the instant a row transitions into needing a tick (a REAL PointerOver/PointerOverScrollbar
@@ -189,12 +188,31 @@ public sealed class ScrollBarChrome
         _armedSinceTick = true;
     }
 
-    /// <summary>KeepAlive-parked exclusion: a parked subtree's bar is frozen mid-cycle, not ticked or settled
-    /// (ScrollIntegrator._parkedActive parity).</summary>
+    /// <summary>KeepAlive park edge (<c>TreeReconciler.OnNodeParkedChanged</c>). Parking lands the bar AT REST — hidden,
+    /// contracted, hover forgotten — and retires its row: a parked page is off screen and its pointer state is gone (the
+    /// reconciler lands authored hover poses the same way on both edges, <c>SetSubtreeParked</c>). The row used to be
+    /// frozen mid-cycle instead, left in <see cref="_active"/> where <see cref="NeedsFrame"/> counted it: a page left
+    /// within the 2 s idle-hide of a scroll held the render loop at panel rate for as long as it stayed parked, and for
+    /// the rest of the session once KeepAlive evicted it — the frozen row was skipped before <see cref="Tick"/>'s
+    /// liveness check, so it was never dropped (the <c>[wake]</c> census read <c>kept: scrollAnim</c> on every run with
+    /// <c>idleAgo</c> never resetting). Un-parking restores nothing: the next hover or scroll starts a fresh cycle, and
+    /// "is this viewport parked" is read off the scene's own <see cref="NodeFlags.Parked"/>, never a mirror here that a
+    /// freed-and-reused node index could inherit.</summary>
     public void SetNodeParked(int node, bool parked)
     {
-        if (parked) _parked.Add(node);
-        else _parked.Remove(node);
+        if (!parked) return;
+        if (_scene.ScrollChrome.TryGet(node, out var row))
+        {
+            // A visible or expanded bar changes pixels as it lands, so dirty the node: the un-park must re-record it
+            // rather than replay a retained span that still shows the bar.
+            if (row.FadeT != 0f || row.ExpandT != 0f)
+            {
+                NodeHandle h = _scene.HandleAt(node);
+                if (!h.IsNull && _scene.IsLive(h)) _scene.Mark(h, NodeFlags.PaintDirty);
+            }
+            _scene.ScrollChrome.Clear(node);
+        }
+        if (_member.Remove(node)) _active.Remove(node);   // park edges are navigation-rate; _active holds a handful
     }
 
     private void Arm(int node)
@@ -219,14 +237,20 @@ public sealed class ScrollBarChrome
         for (int i = _active.Count - 1; i >= 0; i--)
         {
             int node = _active[i];
-            if (_parked.Contains(node)) continue;
-
             NodeHandle h = _scene.HandleAt(node);
             if (h.IsNull || !_scene.IsLive(h) || !_scene.TryGetScroll(h, out var sc))
             {
                 // The scroll row is gone (freed underneath us — SceneStore.FreeSubtree already cleared the chrome
                 // row too) — drop the tracking entry without touching the (already-cleared) table row.
                 Drop(i, node, forget: false);
+                continue;
+            }
+            // Re-armed after its park edge (a hover leave, or a kernel touch reaching the parked body): an off-screen
+            // bar has nothing to animate and SetNodeParked already landed it at rest. Retire it — every row still in
+            // _active after this loop is counted by NeedsFrame.
+            if ((_scene.Flags(h) & NodeFlags.Parked) != 0)
+            {
+                Drop(i, node, forget: true);
                 continue;
             }
 
@@ -312,9 +336,9 @@ public sealed class ScrollBarChrome
                 Drop(i, node, forget: fullyHidden);
         }
 
-        // NeedsFrame snapshot: every row still in _active at this point satisfies the negation of the Drop
-        // condition above (movingNow || !expandSettled || !fadeSettled || dwellPending) — i.e. it genuinely has
-        // work pending for the next frame. A row that was merely re-Arm()ed this frame (unchanged PointerOver from
+        // NeedsFrame snapshot: every row still in _active at this point is live, NOT parked, and satisfies the negation
+        // of the Drop condition above (movingNow || !expandSettled || !fadeSettled || dwellPending) — i.e. it genuinely
+        // has work pending for the next frame. A row that was merely re-Arm()ed this frame (unchanged PointerOver from
         // a hover poll, or a NotifyMoved with nothing left to animate) already settled back out of _active in the
         // loop above, so it is correctly excluded here — see NeedsFrame's remarks.
         _needsFrameCount = _active.Count;

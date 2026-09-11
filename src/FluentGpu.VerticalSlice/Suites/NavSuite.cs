@@ -40,6 +40,7 @@ static class NavSuite
         NavigationChecks();
         PageHostChecks(strings);
         KeepAliveChecks(strings);
+        KeepAliveParkedScrollbarChecks(strings);
         KeepAliveWedgedExitBackstopChecks(strings);
         SemanticZoomNavigationChecks(strings);
         ParkBeforeRenderChecks(strings);
@@ -260,6 +261,78 @@ static class NavSuite
                || anim.TryGetTrackValue(node, AnimChannel.SizeH, out _)
                || anim.TryGetTrackValue(node, AnimChannel.LayoutW, out _)
                || anim.TryGetTrackValue(node, AnimChannel.LayoutH, out _);
+    }
+
+    // gate.keepalive.parked-scrollbar-idles — a page left while its scrollbar is still mid-cycle (inside the 2 s
+    // idle-hide after a wheel scroll) must not hold the render loop awake. ScrollBarChrome used to freeze that row and
+    // keep it in its active list, where NeedsFrame counted it: the ScrollAnim wake term held every frame while the page
+    // stayed parked, and for the rest of the session once KeepAlive evicted it (the frozen row was skipped before the
+    // liveness check, so it was never dropped). Parking now lands the bar at rest, and a returning page — un-parked or
+    // cold-remounted into a possibly reused node index — still reveals its bar on the next scroll.
+    static void KeepAliveParkedScrollbarChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("keepalive-bar", new Size2(260, 220), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        var probe = new KeepAliveProbe { MaxEntries = 2 };
+        using var host = new AppHost(app, window, device, fonts, strings, probe);
+        host.RunFrame();
+
+        // Wheel the active page's viewport, move the pointer off the page, and let the wheel glide settle: what remains
+        // is the bar's own idle-hide countdown — the mid-cycle row a navigation parks.
+        bool ScrollLeavingBarMidCycle(out int viewport)
+        {
+            var vp = FindScrollable(host.Scene, host.Scene.Root);
+            viewport = vp.IsNull ? -1 : (int)vp.Raw.Index;
+            if (vp.IsNull) return false;
+            var r = host.Scene.AbsoluteRect(vp);
+            window.QueueInput(new InputEvent(InputKind.Wheel, new Point2(r.X + 20f, r.Y + 20f), 0, 0, 120f));
+            host.RunFrame();
+            window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(250f, 215f), 0, 0));
+            for (int i = 0; i < 60 && host.ScrollKernel.WakeActiveCount > 0; i++) host.RunFrame();
+            host.RunFrame();
+            return host.ScrollKernel.WakeActiveCount == 0 && host.ScrollChrome.NeedsFrame
+                   && host.Scene.ScrollChrome.Get(viewport).FadeT > 0f;
+        }
+
+        // Frames until the ScrollAnim wake term clears, or -1 if it is still held after `max` frames.
+        int FramesUntilScrollIdle(int max)
+        {
+            for (int i = 0; i <= max; i++)
+            {
+                if ((host.CurrentWakeReasons & WakeReasons.ScrollAnim) == 0) return i;
+                host.RunFrame();
+            }
+            return -1;
+        }
+
+        bool midCycle = ScrollLeavingBarMidCycle(out int vpA);
+        probe.Route!.Value = "b";
+        host.RunFrame();
+        int parkIdle = FramesUntilScrollIdle(10);
+        bool landedAtRest = host.Scene.ScrollChrome.Get(vpA).FadeT == 0f && host.ScrollChrome.Count == 0;
+
+        probe.Route.Value = "a";
+        host.RunFrame();
+        bool hiddenOnReturn = host.Scene.ScrollChrome.Get(vpA).FadeT == 0f;
+        bool revealsAfterUnpark = ScrollLeavingBarMidCycle(out _);
+
+        // A is mid-cycle again; b then c makes the inactive A the LRU victim, freeing it while parked.
+        probe.Route.Value = "b";
+        host.RunFrame();
+        probe.Route.Value = "c";
+        host.RunFrame();
+        int evictIdle = FramesUntilScrollIdle(10);
+
+        probe.Route.Value = "a";   // cold remount; the viewport may land on a freed, reused node index
+        host.RunFrame();
+        bool revealsAfterEvict = ScrollLeavingBarMidCycle(out _);
+
+        Check("gate.keepalive.parked-scrollbar-idles a page parked with its scrollbar mid-cycle releases the ScrollAnim wake at once and lands the bar hidden; it stays released after KeepAlive evicts the page; an un-parked or cold-remounted page still reveals its bar on the next scroll",
+            midCycle && parkIdle >= 0 && landedAtRest && hiddenOnReturn && revealsAfterUnpark && evictIdle >= 0 && revealsAfterEvict,
+            $"midCycle={midCycle} parkIdle={parkIdle} landedAtRest={landedAtRest} hiddenOnReturn={hiddenOnReturn} revealsAfterUnpark={revealsAfterUnpark} evictIdle={evictIdle} revealsAfterEvict={revealsAfterEvict} wake={host.CurrentWakeReasons}");
     }
 
     // gate.reconciler.keepalive-exit-backstop — FinalizeKeepAliveTransitions' deadline mirrors the orphan path's own
