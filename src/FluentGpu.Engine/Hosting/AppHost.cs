@@ -872,7 +872,8 @@ public sealed class AppHost : IDisposable
     /// <summary>The render thread's byte-identical-frame elision, as a pure decision (unit-tested; see
     /// <c>RenderLifecycleTests</c>). True ⇒ the already-presented front buffer is still correct: the recorded stream
     /// hashes to the last SUBMITTED one, the frame's repaint set is empty (no rects and no forced-full cause), no
-    /// clock-driven pixels are live (compositor poses, image crossfades), and no popup window rides this turn.
+    /// clock-driven pixels are live (image crossfades — compositor poses no longer count, because a pose that moved
+    /// fails the hash compare and one that did not is not a change), and no popup window rides this turn.
     /// <paramref name="lastPresentedHash"/> 0 means "no baseline yet" and never skips.</summary>
     internal static bool ShouldSkipRenderSubmit(ulong drawListHash, ulong lastPresentedHash, bool repaintPending,
                                                 bool clockActive, bool hasPopupWindows)
@@ -974,6 +975,20 @@ public sealed class AppHost : IDisposable
                 else _renderAnimations.Tick(sceneFrame.Scene, nowMs);
                 _activeRenderFrame = rf;
                 _hasActiveRenderFrame = true;
+                // §13.1: a clock-driven turn whose poses did not move records a byte-identical stream and an empty
+                // repaint region, so there is nothing for the rest of this block to do. Elide the RECORD, not just the
+                // submit — HasOwnRenderMotion keeps re-entering here for as long as any row is live, so a Cadence.At(60)
+                // row on a 120 Hz panel was paying a full scene record on every other turn to produce the same bytes.
+                // Safe on the !fresh branch only: _lastRecordedScene already equals rf.PublishSeq there, so skipping
+                // leaves no bookkeeping behind, and ChangedThisTick folds in Done transitions precisely because the
+                // feedback publish below is what completes UI lifecycles.
+                if (!fresh && !_renderAnimations.ChangedThisTick
+                    && !sceneFrame.Images.HasCrossfades(RenderImageClock(rf, sceneFrame)))
+                {
+                    Interlocked.Increment(ref _framesSkippedSubmit);
+                    DrainVideoForPresentTurn(in rf);   // owed regardless — see its remarks
+                    return;
+                }
                 // Publications the consumer never adopted. A DIAGNOSTIC now, on both sides: the store keeps its
                 // record-dirty bits and its pending-removal ledger until a publication is CONSUMED, so this capture
                 // already carries the union of everything that changed since the last adopted one — a gap neither
@@ -991,6 +1006,8 @@ public sealed class AppHost : IDisposable
                 // publisher also carries forward across skipped publications. Full only for the named causes below.
                 var repaint = stats.RepaintDamage;
                 repaint.Union(rf.Submit.RepaintDamage);
+                // Above the damage decision, because the crossfade arm below needs it.
+                float imageClockMs = RenderImageClock(rf, sceneFrame);
                 if (rf.TargetEpoch != _lastRenderedTargetEpoch)
                 {
                     // First frame on this target, or the UI re-created/resized it: nothing on the target is trustworthy.
@@ -999,14 +1016,24 @@ public sealed class AppHost : IDisposable
                     repaint.ForceFull(RepaintFullReason.TargetInvalidated);
                     _lastRenderedTargetEpoch = rf.TargetEpoch;
                 }
-                else if (!fresh) repaint.ForceFull(RepaintFullReason.DetachedContent);   // clock-driven re-record: no scene bit describes it
-                float imageClockMs = RenderImageClock(rf, sceneFrame);
+                // A clock-driven re-record USED to force full here, on the grounds that no scene bit described it.
+                // Since §13.1's pose split that is no longer true: a pose stamps the posed node's own overlay-self
+                // epoch, so the recorder's damage block describes exactly the nodes whose pixels moved, and forcing
+                // full here threw that description away on every animation turn. What is still undescribed is an image
+                // CROSSFADE: its pixels advance with ImageClockMs under byte-identical commands and no dirty bit
+                // anywhere, so that one case keeps its full frame.
+                else if (!fresh && sceneFrame.Images.HasCrossfades(imageClockMs))
+                    repaint.ForceFull(RepaintFullReason.DetachedContent);
                 ulong dlHash = DrawListHash(_renderCommands.Bytes, _renderCommands.SortKeys);
                 // Skip-submit (idle/slow-change power): a byte-identical stream with an EMPTY repaint region and no
                 // clock-driven work is ALREADY on screen — the presented front buffer is still correct, so elide the
                 // GPU submit + Present. The feedback publish still rides (compositor poses / video rects / popup
                 // reveal gating are UI lifecycle, not pixels).
-                bool clockActive = _renderAnimations.HasActive || sceneFrame.Images.HasCrossfades(imageClockMs);
+                // NOT _renderAnimations.HasActive any more: a live row whose value did not move records a byte-identical
+                // stream AND an empty repaint region, which is exactly the question ShouldSkipRenderSubmit asks. A row
+                // that DID move fails the hash compare on its own. Only image crossfades advance pixels with no bit
+                // anywhere to show for it, so they alone keep a frame owed.
+                bool clockActive = sceneFrame.Images.HasCrossfades(imageClockMs);
                 bool skip = ShouldSkipRenderSubmit(dlHash, _lastRenderPresentedHash, repaintPending: !repaint.IsEmpty,
                     clockActive: clockActive, hasPopupWindows: Volatile.Read(ref _popupWindowCount) != 0);
                 var submit = rf.Submit with
@@ -1062,16 +1089,7 @@ public sealed class AppHost : IDisposable
                 if (settledPoses > _lastSettledPoseCount) _window.Wake();
                 _lastSettledPoseCount = settledPoses;
             }
-            // 11.5 (threaded) — the video hole-punch drain rides THIS present turn on the presenting thread, mirroring
-            // the sync path's after-present ordering (AppHost.Paint phase 11.5). Both GetVideoPresenter and every
-            // presenter call assert the render/submit thread when render-confined, so the drain MUST run here, not
-            // UI-side; the UI-side call at phase 11.5 is skipped whenever a render thread exists. Uses the FRAME's scale
-            // (rf.Submit.Scale) rather than the live _window.Scale — the drain must place video for the frame it presents.
-            if (_device.GetVideoPresenter(_swapchain) is { } vp) _videoSurfaces.Drain(vp, rf.Submit.Scale);
-            // Advisory, one way engine → PAL: a composited window defers ALL painting during an OS modal
-            // edge-resize, which would leave this video child at its pre-resize geometry while the frame moves
-            // under it. Telling the window it carries live video lets it keep a throttled keep-alive instead.
-            _window.SetHasLiveVideo(_videoSurfaces.HasLiveSurface);
+            DrainVideoForPresentTurn(in rf);
         }
         catch (System.Exception) when (_asyncActive)
         {
@@ -1080,6 +1098,23 @@ public sealed class AppHost : IDisposable
             // non-device-loss throw is a genuine bug: rethrow so it isn't masked.
             if (!_device.NoteIfDeviceLost()) throw;
         }
+    }
+
+    /// <summary>11.5 (threaded) — the video hole-punch drain rides THIS present turn on the presenting thread,
+    /// mirroring the sync path's after-present ordering (AppHost.Paint phase 11.5). Both GetVideoPresenter and every
+    /// presenter call assert the render/submit thread when render-confined, so the drain MUST run here, not UI-side;
+    /// the UI-side call at phase 11.5 is skipped whenever a render thread exists. Uses the FRAME's scale
+    /// (rf.Submit.Scale) rather than the live _window.Scale — the drain must place video for the frame it presents.
+    /// <para>Its own method because a turn that elides the record still owes it: video placement is not a function of
+    /// whether the UI scene changed, and a skipped turn that also skipped the drain would leave a moving video at a
+    /// stale rect.</para></summary>
+    private void DrainVideoForPresentTurn(in Threading.RenderFrame rf)
+    {
+        if (_device.GetVideoPresenter(_swapchain) is { } vp) _videoSurfaces.Drain(vp, rf.Submit.Scale);
+        // Advisory, one way engine → PAL: a composited window defers ALL painting during an OS modal edge-resize,
+        // which would leave this video child at its pre-resize geometry while the frame moves under it. Telling the
+        // window it carries live video lets it keep a throttled keep-alive instead.
+        _window.SetHasLiveVideo(_videoSurfaces.HasLiveSurface);
     }
 
     private void RecoverDeviceAfterDump()

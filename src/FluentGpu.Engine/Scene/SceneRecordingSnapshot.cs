@@ -1,4 +1,4 @@
-using FluentGpu.Foundation;
+﻿using FluentGpu.Foundation;
 using FluentGpu.Scroll;
 
 namespace FluentGpu.Scene;
@@ -499,12 +499,22 @@ public sealed partial class SceneRecordingSnapshot
             : ref _paint[node.Raw.Index]);
     }
     public ref readonly InteractionInfo Interaction(NodeHandle node) => ref _interaction[node.Raw.Index];
+    // §13.1: the SELF epoch, not the trail. SceneRecorder reads TransformDirty here to emit a repaint band over the
+    // node's SubtreeBounds; the trail marks every ancestor up to the root, whose SubtreeBounds is the window, so
+    // reading the trail here is precisely what made one animated leaf repaint everything. The trail readers below are
+    // unchanged — span reuse must still be denied along it.
     public NodeFlags Flags(NodeHandle node) => _flags[node.Raw.Index]
-        | (_overlayDirtyEpoch[node.Raw.Index] == _overlayEpoch ? NodeFlags.TransformDirty | NodeFlags.PaintDirty : 0);
+        | (_overlaySelfEpoch[node.Raw.Index] == _overlayEpoch ? NodeFlags.TransformDirty | NodeFlags.PaintDirty : 0);
     public byte RecordDirtyBits(NodeHandle node) => (byte)(_dirty[node.Raw.Index]
         | (_overlayDirtyEpoch[node.Raw.Index] == _overlayEpoch ? SceneStore.RecordDirtyContent : 0));
+    // Also the SELF epoch, and for the same reason as Flags above: this is the recorder's OTHER route to a repaint
+    // band (`contentDirtyNode`). It used to read "does this node have a paint row this epoch", which is true for a
+    // HELD pose too — the row is still written, it just carries the same number — so a cadence-held marquee kept
+    // damaging its band on every tick even after Flags stopped reporting it moved. The self epoch is stamped only by
+    // a pose that actually changed, and only when a row was really acquired, so an overflowed node (whose pose is
+    // discarded and which presents its authored paint) still reports 0 — gate.compositor-row-overflow.
     public byte RecordDirtySelfBits(NodeHandle node) => (byte)(_dirtySelf[node.Raw.Index]
-        | (HasOverlayPaint(node.Raw.Index) ? SceneStore.RecordDirtyContent : 0));
+        | (_overlaySelfEpoch[node.Raw.Index] == _overlayEpoch ? SceneStore.RecordDirtyContent : 0));
     public byte RecordDirtyDescendantBits(NodeHandle node) => (byte)(_dirtyDescendant[node.Raw.Index]
         | (_overlayDirtyEpoch[node.Raw.Index] == _overlayEpoch ? SceneStore.RecordDirtyContent : 0));
 

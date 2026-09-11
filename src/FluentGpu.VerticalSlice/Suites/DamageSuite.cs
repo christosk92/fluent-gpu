@@ -1,5 +1,6 @@
-using System;
+﻿using System;
 using System.Runtime.InteropServices;
+using FluentGpu.Animation;
 using FluentGpu.Foundation;
 using FluentGpu.Hosting;
 using FluentGpu.Render;
@@ -26,6 +27,7 @@ static class DamageSuite
     {
         RegionMathChecks();
         RecordDamageChecks();
+        CompositorDamageChecks();
         PublishGapChecks();
         HeadlessPayloadChecks(strings);
         PolicyChecks();
@@ -635,6 +637,174 @@ static class DamageSuite
             if (probe.X >= m.X && probe.Y >= m.Y && probe.Right <= m.Right && probe.Bottom <= m.Bottom) return true;
         }
         return false;
+    }
+
+    // ── gate.damage.compositor-* — a render-thread POSE damages the posed node, not the window ──────────────────────
+    // §13.1 promises "animated transforms dirty only old∪new bounds → a spinner repaints a tiny region". It did not:
+    // a pose marked the ancestor TRAIL, Flags() reported TransformDirty from that trail, and the recorder damages a
+    // TransformDirty node's SubtreeBounds — which at the ROOT is the whole window. One looping marquee therefore
+    // repainted every pixel, at panel rate, forever. These five gates pin the fix from both ends: the posed node is
+    // damaged and its ancestors are not; a row that re-poses the same value damages nothing at all; and a row that
+    // disappears or parks damages exactly once, because the node falls back to its authored pose and no surviving row
+    // would otherwise report that.
+    static void CompositorDamageChecks()
+    {
+        const float W = 800f, H = 600f;
+
+        // A small leaf three container levels deep, so "the leaf's band" and "an ancestor's SubtreeBounds" are
+        // unmistakably different rectangles — the whole point of the split.
+        static (SceneStore Scene, NodeHandle Root, NodeHandle Mid, NodeHandle Leaf, AnimEngine Anim) Build()
+        {
+            var scene = new SceneStore();
+            var root = scene.CreateNode(1); scene.Root = root;
+            scene.Bounds(root) = new RectF(0f, 0f, W, H);
+            scene.Paint(root).VisualKind = VisualKind.Box;
+
+            var outer = scene.CreateNode(1); scene.AppendChild(root, outer);
+            scene.Bounds(outer) = new RectF(0f, 0f, W, H);
+            scene.Paint(outer).VisualKind = VisualKind.Box;
+
+            var mid = scene.CreateNode(1); scene.AppendChild(outer, mid);
+            scene.Bounds(mid) = new RectF(40f, 40f, 600f, 400f);
+            scene.Paint(mid).VisualKind = VisualKind.Box;
+
+            var leaf = scene.CreateNode(1); scene.AppendChild(mid, leaf);
+            scene.Bounds(leaf) = new RectF(100f, 100f, 40f, 20f);
+            ref NodePaint lp = ref scene.Paint(leaf);
+            lp.VisualKind = VisualKind.Box; lp.Fill = new ColorF(0.9f, 0.3f, 0.2f, 1f);
+            return (scene, root, mid, leaf, new AnimEngine(scene) { RenderOwnsCompositor = true });
+        }
+
+        // Capture a snapshot of a SETTLED store. A snapshot copies the store's authored dirty bits at capture and keeps
+        // them for the slot's life, so a snapshot taken straight off a freshly built scene re-damages every authored
+        // node on every record — swamping the compositor band these gates exist to measure. The host never sees it
+        // because it clears after each record; here the clear has to happen BEFORE the capture.
+        static SceneRecordingSnapshot Settled(SceneStore scene, DrawList dl, SpanTable spans)
+        {
+            SceneRecorder.Record(scene, dl, spans: spans);
+            scene.ClearRecordDirty();
+            scene.ClearTransformDirty();
+            var snap = new SceneRecordingSnapshot();
+            snap.Capture(scene);
+            dl.Reset();
+            return snap;
+        }
+
+        // One posed render turn: tick the compositor onto the snapshot, then record THAT snapshot (not a fresh capture
+        // — the overlay lives on the instance the renderer just wrote).
+        static SceneRecordStats PosedFrame(SceneRecordingSnapshot snap, RenderCompositorAnimations renderer,
+                                           DrawList dl, SpanTable spans, double nowMs)
+        {
+            renderer.Tick(snap, nowMs);
+            dl.Reset();
+            return snap.Recording.Record(snap, dl, spans: spans);
+        }
+
+        // ── 1. the posed leaf's band is scoped, and contains the leaf ───────────────────────────────────────────────
+        {
+            var (scene, root, mid, leaf, anim) = Build();
+            var dl = new DrawList(); var spans = new SpanTable();
+            var snap = Settled(scene, dl, spans);
+            var renderer = new RenderCompositorAnimations();
+
+            anim.Keyframes(leaf, AnimChannel.TranslateX,
+                [new Keyframe(0f, 0f, Easing.Linear), new Keyframe(1f, 120f, Easing.Linear)], 1000f, loop: true);
+            var desired = new CompositorAnimationSnapshot();
+            anim.CaptureCompositorAnimations(desired, 0);
+            renderer.Adopt(desired, snap, 0);
+
+            var st = PosedFrame(snap, renderer, dl, spans, 120);
+            float coverage = st.RepaintDamage.Coverage(W, H);
+            // The leaf is 40x20 in an 800x600 window = 0.17 %. Its old∪new band plus AA padding is still tiny; a
+            // generous 5 % ceiling fails hard on the old behaviour (which was exactly 1.0) without pinning the
+            // recorder's padding constants.
+            Check("gate.damage.compositor-pose-scoped a looping TranslateX on a small leaf three containers deep damages a BAND, not the window — the posed node's own SubtreeBounds, never the root's",
+                !st.RepaintDamage.IsFull && coverage > 0f && coverage < 0.05f,
+                $"full={st.RepaintDamage.IsFull} coverage={coverage:0.0000} rects={st.RepaintDamage.Count}");
+
+            // ── 2. ancestors are on the walk trail but do not claim to have moved ───────────────────────────────────
+            bool leafMoved = (snap.Flags(leaf) & NodeFlags.TransformDirty) != 0;
+            bool midMoved = (snap.Flags(mid) & NodeFlags.TransformDirty) != 0;
+            bool rootMoved = (snap.Flags(root) & NodeFlags.TransformDirty) != 0;
+            bool trailKept = (snap.RecordDirtyDescendantBits(root) & SceneStore.RecordDirtyContent) != 0
+                          && (snap.RecordDirtyDescendantBits(mid) & SceneStore.RecordDirtyContent) != 0;
+            Check("gate.damage.compositor-ancestors-clean a posed leaf leaves its PARENT and the ROOT reporting no TransformDirty, while the re-walk trail still reaches both — the two jobs one epoch array used to do, now separated",
+                leafMoved && !midMoved && !rootMoved && trailKept,
+                $"leaf={leafMoved} mid={midMoved} root={rootMoved} trail={trailKept}");
+        }
+
+        // ── 3. a cadence-held row damages nothing between its steps ─────────────────────────────────────────────────
+        {
+            var (scene, _, _, leaf, anim) = Build();
+            var dl = new DrawList(); var spans = new SpanTable();
+            var snap = Settled(scene, dl, spans);
+            var renderer = new RenderCompositorAnimations();
+
+            // 30 Hz cadence ticked at 120 Hz: three of every four ticks re-pose the identical value.
+            anim.Keyframes(leaf, AnimChannel.TranslateX,
+                [new Keyframe(0f, 0f, Easing.Linear), new Keyframe(1f, 120f, Easing.Linear)], 1000f, loop: true,
+                cadence: Cadence.At(30f));
+            var desired = new CompositorAnimationSnapshot();
+            anim.CaptureCompositorAnimations(desired, 0);
+            renderer.Adopt(desired, snap, 0);
+
+            PosedFrame(snap, renderer, dl, spans, 100);              // a step lands here
+            var held = PosedFrame(snap, renderer, dl, spans, 100 + 1000.0 / 120.0);   // 8.3 ms later: still held
+            Check("gate.damage.compositor-held-empty a Cadence.At(30) row ticked at 120 Hz damages NOTHING between its steps — a held row re-poses an identical float, and posing that as a change is what made a 60 Hz marquee repaint at panel rate",
+                held.RepaintDamage.IsEmpty && !held.RepaintDamage.IsFull && !renderer.ChangedThisTick,
+                $"empty={held.RepaintDamage.IsEmpty} full={held.RepaintDamage.IsFull} changed={renderer.ChangedThisTick}");
+        }
+
+        // ── 4. a finished row goes quiet, and stays quiet across re-adoption ────────────────────────────────────────
+        {
+            var (scene, _, _, leaf, anim) = Build();
+            var dl = new DrawList(); var spans = new SpanTable();
+            var snap = Settled(scene, dl, spans);
+            var renderer = new RenderCompositorAnimations();
+
+            anim.Animate(leaf, AnimChannel.Opacity, 0f, 1f, 100f, Easing.Linear);
+            var desired = new CompositorAnimationSnapshot();
+            anim.CaptureCompositorAnimations(desired, 0);
+            renderer.Adopt(desired, snap, 0);
+            PosedFrame(snap, renderer, dl, spans, 200);              // well past the 100 ms duration: Done
+
+            var again = new CompositorAnimationSnapshot();
+            anim.CaptureCompositorAnimations(again, 200);
+            renderer.Adopt(again, snap, 260);                        // Adopt ends in Tick
+            dl.Reset();
+            var quiet = snap.Recording.Record(snap, dl, spans: spans);
+            Check("gate.damage.compositor-done-quiet a finished row left in the desired set damages nothing on re-adoption — it re-poses its landed value every tick forever, and that is not a change",
+                quiet.RepaintDamage.IsEmpty && !quiet.RepaintDamage.IsFull,
+                $"empty={quiet.RepaintDamage.IsEmpty} full={quiet.RepaintDamage.IsFull} rects={quiet.RepaintDamage.Count}");
+        }
+
+        // ── 5. a dropped row reverts the node, damaging it exactly once ─────────────────────────────────────────────
+        {
+            var (scene, _, _, leaf, anim) = Build();
+            var dl = new DrawList(); var spans = new SpanTable();
+            var snap = Settled(scene, dl, spans);
+            var renderer = new RenderCompositorAnimations();
+
+            anim.Keyframes(leaf, AnimChannel.TranslateX,
+                [new Keyframe(0f, 0f, Easing.Linear), new Keyframe(1f, 120f, Easing.Linear)], 1000f, loop: true);
+            var desired = new CompositorAnimationSnapshot();
+            anim.CaptureCompositorAnimations(desired, 0);
+            renderer.Adopt(desired, snap, 0);
+            PosedFrame(snap, renderer, dl, spans, 120);
+
+            // Drop the instance: the node snaps back to its AUTHORED pose, which no row reports.
+            var empty = new CompositorAnimationSnapshot();
+            renderer.Adopt(empty, snap, 140);
+            dl.Reset();
+            var reverted = snap.Recording.Record(snap, dl, spans: spans);
+            // The NEXT turn ticks first, exactly as the host does — that is what advances the overlay epoch and retires
+            // the revert stamp. Recording twice with no tick between re-reads the same epoch and is not a state the
+            // host can reach.
+            var after = PosedFrame(snap, renderer, dl, spans, 160);
+            Check("gate.damage.compositor-revert dropping a posed instance damages that node ONCE — it presents its authored pose again, a real pixel change no surviving row would report — and the frame after it is quiet",
+                !reverted.RepaintDamage.IsEmpty && !reverted.RepaintDamage.IsFull && after.RepaintDamage.IsEmpty,
+                $"reverted={!reverted.RepaintDamage.IsEmpty} full={reverted.RepaintDamage.IsFull} thenQuiet={after.RepaintDamage.IsEmpty}");
+        }
     }
 
     // ── recorder-emitted damage (headless, straight through SceneRecorder.Record) ───────────────────────────────────

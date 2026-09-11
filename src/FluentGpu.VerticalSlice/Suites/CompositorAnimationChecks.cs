@@ -293,7 +293,12 @@ static class CompositorAnimationChecks
             && snapshot.CompositorRowCapacity == SceneRecordingSnapshot.MinCompositorRows   // O(rows), not O(capacity)
             && snapshot.CompositorRowsInUse == 3
             && snapshot.CompositorRowOverflows == 0
-            && sparse < 512L * 1024
+            // 640 KiB, re-derived for the THIRD 4-B/node side array §13.1 added (the self epoch, beside the row map and
+            // the dirty trail): at this fixture's 32 770 slots that array alone is 131 KB, which took the old 512 KiB
+            // literal from ~25 % headroom to under 1 % — passing, but one column away from a false failure. The bound
+            // still says the same thing it always did: 256 rows plus three per-node int columns, never the dense
+            // overlay's 508 B/node.
+            && sparse < 640L * 1024
             && sparse * 30 < dense
             && MathF.Abs(snapshot.Paint(nodes[0]).Opacity - .5f) < .0001f
             && snapshot.Paint(nodes[3]).Opacity == 1;
@@ -330,8 +335,12 @@ static class CompositorAnimationChecks
         for (int i = 0; i < Animated; i++)
         {
             float opacity = snapshot.Paint(nodes[i]).Opacity;
-            // A posed node carries an overlay PAINT row, so its own self-content bit is set.
-            if (MathF.Abs(opacity - .5f) < .0001f && snapshot.RecordDirtySelfBits(nodes[i]) != 0) posed++;
+            // A posed node reads its POSED opacity; a deferred one still reads its authored 1. The self-content bit is
+            // no longer the proxy for "got a row": since §13.1 it means "this pose CHANGED", and this fixture ticks
+            // twice at the same instant (Adopt ends in Tick, then the measured Tick re-runs at t=500), so the second
+            // tick legitimately re-poses identical values and stamps nothing. The pose itself is the evidence here;
+            // the bound assertions below still pin the row pool directly.
+            if (MathF.Abs(opacity - .5f) < .0001f) posed++;
             else if (opacity == 1 && snapshot.RecordDirtySelfBits(nodes[i]) == 0)
             {
                 deferred++;

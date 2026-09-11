@@ -26,18 +26,37 @@ public sealed class RenderCompositorAnimations
         public bool StartPending;
         public double HoldNowMs;
         public float HoldRefMs;
+        /// <summary>The value this row last POSED onto a scene snapshot, and whether it ever posed one. A row held by
+        /// its cadence (<c>PeriodMs</c> not yet elapsed) and a <c>Done</c> row re-pose the IDENTICAL float every tick;
+        /// posing that as a CHANGE is what made a 60 Hz marquee damage the window at 120 Hz. Cleared when the row
+        /// parks, so an un-park always re-poses as a change.</summary>
+        public float PosedValue;
+        public bool HasPosed;
     }
+    /// <summary>One node's folded pose for this tick, plus whether ANY of its channels actually moved. Folded per node
+    /// rather than per row because a node with a TranslateX and an Opacity row must damage once, not twice.</summary>
+    private struct NodeAcc { public AnimEngine.Accum Acc; public bool Changed; }
     private State[] _states = [], _nextStates = [];
     // Render tick bookkeeping for the pending-start hold: the previous tick's instant and the interval before it.
     private double _lastTickMs;
     private float _tickIntervalMs;
     private Dictionary<ulong, int> _indices = new(), _nextIndices = new();
     private CompositorAnimationPose[] _feedback = [];
-    private readonly Dictionary<NodeHandle, AnimEngine.Accum> _accumulators = new(64);
+    private readonly Dictionary<NodeHandle, NodeAcc> _accumulators = new(64);
+    /// <summary>Nodes whose row DISAPPEARED or parked since the last tick. They present their AUTHORED pose again —
+    /// a real pixel change that no surviving row will report — so the next tick damages each one exactly once.
+    /// Collected on the publisher-driven Adopt path, where an allocation is allowed; the steady tick only drains it.</summary>
+    private NodeHandle[] _reverted = [];
+    private int _revertedCount;
     private int _count;
     private bool _paused;
     private double _pausedAtMs;
     public bool HasActive { get; private set; }
+    /// <summary>Did this tick change ANY pixels — a posed value that moved, a row that finished, or a row that
+    /// disappeared or parked? False means the compositor produced a byte-identical scene, which is what lets the host
+    /// elide the whole record+submit rather than only the present. <c>Done</c> is part of it because the feedback
+    /// publish is what completes UI lifecycles, and a skipped record skips that publish too.</summary>
+    public bool ChangedThisTick { get; private set; }
     public ReadOnlySpan<CompositorAnimationPose> Feedback => _feedback.AsSpan(0, _count);
 
     public void Pause(double nowMs)
@@ -119,6 +138,13 @@ public sealed class RenderCompositorAnimations
                         state.AnchorElapsedMs = state.ElapsedMs;
                         state.AnchorNowMs = capturedAtMs;
                         state.Parked = parked;
+                        // A row that PARKS stops posing, so the node falls back to its authored pose — a pixel change
+                        // nothing else reports. Caught here rather than in the post-loop walk below because _states
+                        // still holds the OLD Parked value there; the flip is only visible at this line. Clearing
+                        // HasPosed makes the eventual un-park re-pose as a change rather than compare against a value
+                        // the node has not shown for however long it was parked.
+                        if (parked && state.HasPosed) NoteReverted(entry.Row.Node);
+                        state.HasPosed = false;
                     }
                 }
             }
@@ -131,12 +157,29 @@ public sealed class RenderCompositorAnimations
             _nextStates[count] = state;
             _nextIndices.Add(entry.Instance, count++);
         }
+        // Rows that VANISHED from the desired set: their node presents its authored pose again, and no surviving row
+        // will report that. Walked BEFORE the Array.Clear below — that clear wipes _states, so a walk placed after it
+        // (or after the swap) reads zeroed entries and silently reverts nothing.
+        for (int i = 0; i < _count; i++)
+        {
+            ref readonly var old = ref _states[i];
+            if (old.HasPosed && !old.Parked && !_nextIndices.ContainsKey(old.Desired.Instance))
+                NoteReverted(old.Desired.Row.Node);
+        }
         // Release references into omitted desired snapshots; retained states have copied the new snapshot's keys.
         Array.Clear(_states, 0, _count);
         (_states, _nextStates) = (_nextStates, _states);
         (_indices, _nextIndices) = (_nextIndices, _indices);
         _count = count;
         Tick(scene, nowMs);
+    }
+
+    /// <summary>Queue a node whose pose reverted to its authored value. Grows on the Adopt path only (like
+    /// <c>_nextStates</c>/<c>_feedback</c>), so the steady tick stays allocation-free — gate.compositor-alloc.</summary>
+    private void NoteReverted(NodeHandle node)
+    {
+        SceneRecordingSnapshot.Grow(ref _reverted, _revertedCount + 1);
+        _reverted[_revertedCount++] = node;
     }
 
     public void Tick(SceneRecordingSnapshot scene, double nowMs)
@@ -153,28 +196,46 @@ public sealed class RenderCompositorAnimations
         scene.BeginCompositorOverlay();
         _accumulators.Clear();
         HasActive = false;
+        // A revert queued by Adopt is a real change even if no row moves this tick.
+        ChangedThisTick = _revertedCount > 0;
         for (int i = 0; i < _count; i++)
         {
             ref var state = ref _states[i];
+            bool wasDone = state.Done;
             Evaluate(ref state, nowMs, _tickIntervalMs);
             ref readonly var row = ref state.Desired.Row;
             if (!state.Parked && scene.IsLive(row.Node))
             {
+                // Bitwise compare, deliberately no tolerance: a held or Done row re-poses the IDENTICAL float, and a
+                // live row's next analytic sample differs in at least one ulp. (WebRender's approx_eq guards a property
+                // binding that can be re-sent unchanged; our Value is recomputed, not re-sent.)
+                bool changed = !state.HasPosed || state.Value != state.PosedValue;
+                state.PosedValue = state.Value;
+                state.HasPosed = true;
+                // A row reaching Done changes no pixels, but it does complete a UI lifecycle through the feedback
+                // publish — so it counts as "this tick did something" even when the value held.
+                ChangedThisTick |= changed || (state.Done && !wasDone);
                 if (row.Channel is AnimChannel.HoverFade or AnimChannel.PressFade)
-                    scene.SetCompositorInteraction(row.Node, row.Channel == AnimChannel.PressFade, state.Value);
-                else if (row.Channel == AnimChannel.BrushFade) scene.SetCompositorBrush(row.Node, state.Value);
+                    scene.SetCompositorInteraction(row.Node, row.Channel == AnimChannel.PressFade, state.Value, changed);
+                else if (row.Channel == AnimChannel.BrushFade) scene.SetCompositorBrush(row.Node, state.Value, changed);
                 else
                 {
                     ref var accumulator = ref CollectionsMarshal.GetValueRefOrAddDefault(_accumulators, row.Node, out bool exists);
-                    if (!exists) accumulator = AnimEngine.Accum.FromPaint(in scene.Paint(row.Node));
-                    accumulator.Fold(row.Channel, state.Value, replace: true);
+                    if (!exists) accumulator.Acc = AnimEngine.Accum.FromPaint(in scene.Paint(row.Node));
+                    accumulator.Acc.Fold(row.Channel, state.Value, replace: true);
+                    accumulator.Changed |= changed;   // any channel of this node moving damages the node once
                 }
                 HasActive |= !_paused && !state.Done;
             }
             _feedback[i] = new(row.Node, row.Channel, state.Desired.Instance, state.Desired.Revision,
                 state.Value, state.Velocity, MathF.Max(0, state.ElapsedMs), MathF.Max(0, -state.ElapsedMs), state.Done);
         }
-        foreach (var entry in _accumulators) Compose(scene, entry.Key, entry.Value);
+        foreach (var entry in _accumulators) Compose(scene, entry.Key, entry.Value.Acc, entry.Value.Changed);
+        // Drain the reverts LAST, so a node that both lost a row and kept another is damaged by whichever ran first
+        // and not twice — MarkCompositorSelfChanged is idempotent within an epoch.
+        for (int i = 0; i < _revertedCount; i++)
+            if (scene.IsLive(_reverted[i])) scene.MarkCompositorSelfChanged(_reverted[i]);
+        _revertedCount = 0;
     }
 
     private static State Seed(in CompositorAnimationSnapshot.Entry entry, double capturedAtMs) => new()
@@ -242,9 +303,9 @@ public sealed class RenderCompositorAnimations
         state.Velocity = 0; // The existing eased/keyframe engine carries velocity only for analytical springs.
     }
 
-    private static void Compose(SceneRecordingSnapshot scene, NodeHandle node, in AnimEngine.Accum accumulator)
+    private static void Compose(SceneRecordingSnapshot scene, NodeHandle node, in AnimEngine.Accum accumulator, bool changed)
     {
-        ref var paint = ref scene.CompositorPaint(node);
+        ref var paint = ref scene.CompositorPaint(node, changed);
         var transform = Affine2D.Translation(accumulator.Tx, accumulator.Ty);
         if (accumulator.Rot != 0) transform = transform.Multiply(Affine2D.Rotation(accumulator.Rot * (MathF.PI / 180)));
         if (accumulator.Sx != 1 || accumulator.Sy != 1) transform = transform.Multiply(Affine2D.Scale(accumulator.Sx, accumulator.Sy));

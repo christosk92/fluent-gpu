@@ -14,7 +14,8 @@ namespace FluentGpu.Scene;
 /// native ARM64 tour reached that is 47.6 MiB of overlay for a workload where a few dozen nodes animate at once
 /// (`mem.sample` reported 28–61 live animation tracks). It is now a bounded ROW POOL plus a 4-byte node→row lookup:
 /// one row per node that actually animates this tick, carrying all three payloads behind presence bits. Same
-/// arithmetic at 32 768 nodes and the default 256-row reserve: 381 KiB per snapshot, 1.12 MiB across the three slots.
+/// arithmetic at 32 768 nodes and the default 256-row reserve: 509 KiB per snapshot, 1.49 MiB across the three slots
+/// (three 4-byte node columns since §13.1 split the pose's own-change stamp out of the ancestor dirty trail).
 /// The row pool's size is a function of how many nodes ANIMATE, never of <see cref="Capacity"/> — that is the whole
 /// point, and <c>gate.compositor-row-sparse</c> asserts it.</para>
 ///
@@ -73,6 +74,15 @@ public sealed partial class SceneRecordingSnapshot
     private OverlayRow[] _overlayRows = [];
     private int[] _overlayRow = [];             // node index → row + 1 (0 = this node has no row this epoch)
     private uint[] _overlayDirtyEpoch = [];
+    /// <summary>Per node: the epoch in which this node's OWN composited pose last CHANGED.
+    /// <para>Distinct from <see cref="_overlayDirtyEpoch"/>, which is the ancestor TRAIL — "something under here moved,
+    /// re-walk me, do not replay a stale span containing the child's old pixels". The trail runs to the ROOT by
+    /// construction, so feeding it to <see cref="Flags"/> made every ancestor report TransformDirty, and the recorder
+    /// damages a TransformDirty node's SubtreeBounds — whose value at the root IS the window. That is why one animated
+    /// leaf repainted the whole window, against gpu-renderer.md §13.1's promise that "a spinner repaints a tiny
+    /// region". Span reuse still needs the trail and keeps reading it; only the two readers that may PRODUCE repaint
+    /// damage read this one.</para></summary>
+    private uint[] _overlaySelfEpoch = [];
     private uint _overlayEpoch = 1;
     private int _overlayRowCount;               // rows handed out during the current overlay epoch
     private int _overlayOverflowCount;          // row requests this epoch that found the pool full
@@ -96,12 +106,13 @@ public sealed partial class SceneRecordingSnapshot
     /// <see cref="ReserveCompositorRows"/> once honoured.</summary>
     internal int CompositorRowDemand => _overlayRowDemand;
 
-    /// <summary>Bytes this snapshot's compositor overlay holds: the row pool plus the two 4-byte-per-node side
+    /// <summary>Bytes this snapshot's compositor overlay holds: the row pool plus the three 4-byte-per-node side
     /// arrays plus the spill row. The gate compares it against the dense overlay's 508 B/node.</summary>
     internal long CompositorOverlayBytes
         => (long)_overlayRows.Length * Unsafe.SizeOf<OverlayRow>()
            + (long)_overlayRow.Length * sizeof(int)
            + (long)_overlayDirtyEpoch.Length * sizeof(uint)
+           + (long)_overlaySelfEpoch.Length * sizeof(uint)
            + Unsafe.SizeOf<NodePaint>();
 
     /// <summary>Bytes one pooled row costs (diagnostics/gates) — the sum of the three payloads plus the row header.</summary>
@@ -118,6 +129,7 @@ public sealed partial class SceneRecordingSnapshot
     {
         Grow(ref _overlayRow, count);
         Grow(ref _overlayDirtyEpoch, count);
+        Grow(ref _overlaySelfEpoch, count);
         BeginCompositorOverlay();
         // The floor, plus anything a previous tick overflowed on. The publisher raises this again from the captured
         // animation descriptions (SceneRenderFrame.Capture → ReserveCompositorRows) once they exist for this frame.
@@ -148,14 +160,22 @@ public sealed partial class SceneRecordingSnapshot
         _overlayOverflowCount = 0;
         if (++_overlayEpoch != 0) return;
         Array.Clear(_overlayDirtyEpoch);
+        Array.Clear(_overlaySelfEpoch);
         _overlayEpoch = 1;
     }
 
-    internal ref NodePaint CompositorPaint(NodeHandle node)
+    /// <param name="changed">False when the pose being written is the SAME value this row posed last tick — a row held
+    /// by its cadence, or one that is already Done. Such a tick must still write the pose (the node reads its posed
+    /// paint, and its span still re-records if something else dirtied it) but must contribute NO repaint band: posing
+    /// an unchanged value as a change is what made a 60 Hz marquee damage the window at panel rate.</param>
+    internal ref NodePaint CompositorPaint(NodeHandle node, bool changed = true)
     {
         uint index = node.Raw.Index;
-        MarkCompositorDirty(node);
         int slot = AcquireOverlayRow(index);
+        // Stamp the self epoch only on a row we actually GOT. An overflowing node discards its pose and presents its
+        // authored one, which gate.compositor-row-overflow pins as "not self-dirty"; the ancestor trail is still
+        // marked, because the subtree must re-record either way.
+        if (changed && slot >= 0) MarkCompositorSelfChanged(node); else MarkCompositorDirty(node);
         if (slot < 0)
         {
             _overlaySpill = _paint[index];   // discarded; the node presents its authored pose for this tick
@@ -170,11 +190,12 @@ public sealed partial class SceneRecordingSnapshot
         return ref row.Paint;
     }
 
-    internal void SetCompositorInteraction(NodeHandle node, bool press, float value)
+    /// <param name="changed">See <see cref="CompositorPaint"/> — false re-poses an identical value and damages nothing.</param>
+    internal void SetCompositorInteraction(NodeHandle node, bool press, float value, bool changed = true)
     {
         uint index = node.Raw.Index;
-        MarkCompositorDirty(node);
         int slot = AcquireOverlayRow(index);
+        if (changed && slot >= 0) MarkCompositorSelfChanged(node); else MarkCompositorDirty(node);
         if (slot < 0) return;
         ref OverlayRow row = ref _overlayRows[slot];
         if ((row.Have & HaveInteraction) == 0)
@@ -185,11 +206,12 @@ public sealed partial class SceneRecordingSnapshot
         if (press) row.Interaction.PressT = value; else row.Interaction.HoverT = value;
     }
 
-    internal void SetCompositorBrush(NodeHandle node, float value)
+    /// <param name="changed">See <see cref="CompositorPaint"/> — false re-poses an identical value and damages nothing.</param>
+    internal void SetCompositorBrush(NodeHandle node, float value, bool changed = true)
     {
         uint index = node.Raw.Index;
-        MarkCompositorDirty(node);
         int slot = AcquireOverlayRow(index);
+        if (changed && slot >= 0) MarkCompositorSelfChanged(node); else MarkCompositorDirty(node);
         if (slot < 0) return;
         ref OverlayRow row = ref _overlayRows[slot];
         if ((row.Have & HaveBrush) == 0)
@@ -229,14 +251,6 @@ public sealed partial class SceneRecordingSnapshot
         if (demand > _overlayRowDemand) _overlayRowDemand = demand;
     }
 
-    /// <summary>Whether this slot carries an overlay PAINT value this epoch. Interaction/brush writes deliberately do
-    /// NOT set it: they are content-dirty through <see cref="MarkCompositorDirty"/>, not self-paint-dirty.</summary>
-    private bool HasOverlayPaint(uint index)
-    {
-        int slot = _overlayRow[index] - 1;
-        return slot >= 0 && (_overlayRows[slot].Have & HavePaint) != 0;
-    }
-
     private void MarkCompositorDirty(NodeHandle node)
     {
         for (var current = node; !current.IsNull; current = Parent(current))
@@ -245,5 +259,15 @@ public sealed partial class SceneRecordingSnapshot
             if (_overlayDirtyEpoch[index] == _overlayEpoch) break;
             _overlayDirtyEpoch[index] = _overlayEpoch;
         }
+    }
+
+    /// <summary>Mark this node's OWN pose as changed this epoch — the only claim that may produce a repaint band —
+    /// plus the ancestor trail, which every re-record still needs. The pair is the whole of §13.1's fix: the trail
+    /// reaches the root by construction, so a node that is merely ON the trail must not be reported as having moved.
+    /// A pose that re-poses the same value calls <see cref="MarkCompositorDirty"/> alone.</summary>
+    internal void MarkCompositorSelfChanged(NodeHandle node)
+    {
+        _overlaySelfEpoch[node.Raw.Index] = _overlayEpoch;
+        MarkCompositorDirty(node);
     }
 }
