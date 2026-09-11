@@ -125,6 +125,22 @@ public static class RepaintPolicy
     /// to the point where a simultaneous playhead + equalizer + caret + hover fade still stays separate.</summary>
     public const int MaxReplayRects = 4;
 
+    /// <summary>How many rects the LAYERED route may clear + replay. It used to be exactly 1, on the stated grounds
+    /// that "a group RT is pool-leased, so the stream cannot be walked twice" — which does not survive inspection:
+    /// <see cref="RepaintStreamSafety.Scan"/> admits only plain <c>Opacity</c> groups onto this route, every lease is
+    /// re-cleared by Acquire and released at its own PopLayer, and the clamp is value-level, so a second walk cannot
+    /// observe the first. The real constraint was structural — the backend's layered submit interleaved per-frame work
+    /// (pool aging, the timestamp query pair, the single full-surface blit) with the decode loop — and that is now
+    /// split into Begin/Walk/End.
+    /// <para>Why 2 and not <see cref="MaxReplayRects"/>: the layered route pays an extra group-RT clear per walk that
+    /// the streaming route does not, and two rects already cover the shape that matters — a UI whose animators sit in
+    /// two distant clusters. Raising it further is a measurement, not a guess.</para>
+    /// <para>Why it matters at all: <c>layerKind</c> flips to Groups for the WHOLE frame as soon as any node anywhere
+    /// is a fractional-opacity group — a hover fade, a flyout entering, an auto-hiding transport. At a cap of 1 that
+    /// collapsed two distant damage bands into their bounding union, which then failed the coverage re-check and sent
+    /// the frame to FullDirect. One mid-fade element cost the entire frame its multi-rect budget.</para></summary>
+    public const int MaxLayeredReplayRects = 2;
+
     /// <summary>Stream contains no layer ops at all — the streaming route, which may replay up to
     /// <see cref="MaxReplayRects"/> times.</summary>
     public const int LayerKindNone = 0;
@@ -169,10 +185,10 @@ public static class RepaintPolicy
         if (damage.IsFull) return RepaintRoute.FullDirect;
         if (damage.Coverage(wDip, hDip) >= CoverageCutoff) return RepaintRoute.FullDirect;
 
-        // ── (4) Small damage. Coalesce to the route's rect budget (the layered route gets ONE union rect: its group RTs
-        // are pool-leased, so the stream cannot be replayed twice), then RE-CHECK coverage — the merge adds dead area
-        // and a post-merge union can cross the cutoff that the raw rects passed.
-        int cap = layerKind == LayerKindGroups ? 1 : MaxReplayRects;
+        // ── (4) Small damage. Coalesce to the route's rect budget (the layered route gets a smaller one — it pays an
+        // extra group-RT clear per walk), then RE-CHECK coverage — the merge adds dead area and a post-merge union can
+        // cross the cutoff that the raw rects passed.
+        int cap = layerKind == LayerKindGroups ? MaxLayeredReplayRects : MaxReplayRects;
         Coalesce(in damage, wDip, hDip, cap, ref rects);
         if (rects.Count == 0) return canvasValid ? RepaintRoute.Partial : RepaintRoute.FullDirect;   // every rect fell outside the target
         if (rects.SummedArea() / (wDip * hDip) >= CoverageCutoff) { rects = default; return RepaintRoute.FullDirect; }

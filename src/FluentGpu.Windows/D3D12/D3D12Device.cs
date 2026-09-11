@@ -337,12 +337,6 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // (once the flush has happened and the frame is faithfully re-recorded). The host must not skip-submit and must
     // not treat this frame as valid for a partial repaint while it is true — see IGpuDevice.TextRepaintPending.
     private volatile bool _textRepaintPending;
-    // Did the submit that just ran actually PAINT the canvas? SubmitIntoCanvas has one bail (the layered route
-    // receiving >1 replay rect) that abandons the canvas mid-decision and finishes the frame straight on the back
-    // buffer. It sets _canvasValid = false, but its caller then overwrites that unconditionally from the dropped-
-    // instance count — resurrecting a canvas nothing painted, which the NEXT frame would replay a partial into.
-    // This carries the bail's answer past that assignment.
-    private bool _canvasPainted;
     private uint _canvasW, _canvasH;       // the size the canvas was last ensured at (a change invalidates it)
     private ulong _lastConsumedSequence;   // the last publish seq this device painted from (0 = none)
     private ColorF _lastClearColor;
@@ -1807,12 +1801,14 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         }
         else
         {
-            _canvasPainted = true;
             SubmitIntoCanvas(drawList, ctx, lw, lh, rtv, layerKind, route, replay);
             // Self-heal (R2): a frame that DROPPED primitives (an instance bank overflowed) did not paint what the
-            // stream said, so the canvas is not a coherent scene — never build the next partial on top of it. A submit
-            // that BAILED to the back buffer never painted the canvas at all, which is the same conclusion.
-            _canvasValid = _canvasPainted && DroppedInstanceCount() == 0;
+            // stream said, so the canvas is not a coherent scene — never build the next partial on top of it.
+            // (There used to be a second clause here, _canvasPainted, carrying the answer of the one bail that
+            // abandoned the canvas mid-decision — the layered route refusing >1 replay rect. That route now replays N
+            // rects instead of bailing, so every path through SubmitIntoCanvas paints the canvas and the flag had one
+            // writer and one reader, both saying "true".)
+            _canvasValid = DroppedInstanceCount() == 0;
             // I1: the canvas now represents THIS stream (a 0-rect blit-only frame just re-affirmed it). An incoherent
             // canvas represents nothing, so drop the fingerprint with it.
             _canvasDrawListHash = _canvasValid ? ctx.DrawListHash : 0;
@@ -3388,27 +3384,36 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
 
         if (layerKind != 0)
         {
-            // Layered canvas route: ONE replay only. A group RT is pool-leased (acquire → composite → release), so the
-            // stream cannot be walked twice — RepaintPolicy already collapsed the damage to a single union rect
-            // (Decide's cap == 1 for LayerKindGroups), and the pixel-space merge can only ever REDUCE that count.
-            // M1: if the cap is ever relaxed this arm would clear N rects and then replay UNCLAMPED over a canvas that
-            // is only partly cleared — double-blending everywhere outside them. Make the coupling loud, not silent.
-            if (n > 1)
-            {
-                Diag.Count("d3d12", "dmgLayeredMultiRect");
-                System.Diagnostics.Debug.Assert(false, "layered partial route received >1 replay rect — it can only replay the stream ONCE");
-                _canvasValid = false;
-                _canvasPainted = false;   // the frame finishes on the BACK BUFFER — the canvas is untouched, not rebuilt
-                _lastRepaintFullReason = RepaintFullReason.BackendUnsupported;
-                _opacity!.EnsureSize(_w, _h);
-                ClearRootDamage();
-                SubmitWithLayers(drawList, ctx, lw, lh, backRtv, directToBackBuffer: true);
-                return;
-            }
+            // Layered canvas route, N replays. Begin once with ALL the rects (one ClearRenderTargetView over the set —
+            // R1: the DrawList assumes a cleared base), walk the stream once PER rect under its own clamp, then end
+            // once, because the blit is full-surface and must not repeat.
+            //
+            // The comment that stood here claimed the stream "cannot be walked twice" because a group RT is
+            // pool-leased. It can: Acquire re-clears its lease on every take, Release needs no fence on the same queue,
+            // and the clamp is value-level (CurrentScissorRect = innermost clip ∩ root damage) and already honoured by
+            // every layer composite — the same mechanism the streaming arm below has always used for N walks. What
+            // could not be repeated was the PER-FRAME half (pool aging, the timestamp query pair, the blit), and that
+            // is now split out into BeginLayeredFrame/EndLayeredFrame.
+            //
+            // The precondition licensing all of it is RepaintStreamSafety admitting ONLY plain Opacity groups here.
+            // That is what makes the one genuinely cross-walk piece of state unreachable: the blur pin cache is
+            // position/content-keyed and knows nothing about the replay rect, so minting one from a CULLED walk would
+            // be a permanently corrupt entry rather than a one-frame artefact. The assert pins that precondition,
+            // which is the direction that is actually dangerous — not the rect count.
+            System.Diagnostics.Debug.Assert(n <= 1 || RepaintStreamSafety.Scan(drawList),
+                "multi-rect layered replay requires an Opacity-only stream; a Blur group would mint a pin from a culled walk");
+            if (n > 1) Diag.Count("d3d12", "dmgLayeredMultiRect");   // census of how often it engages, not a failure
             _opacity!.EnsureSize(_w, _h);
-            if (n == 1) BeginReplayRect(in phys[0]);
-            SubmitWithLayers(drawList, ctx, lw, lh, backRtv, directToBackBuffer: false, canvasClearRects: phys.Slice(0, n));
-            return;   // SubmitWithLayers drops the clamp and does the CatComposite-stamped blit itself
+            BeginLayeredFrame(in ctx, lw, lh, backRtv, directToBackBuffer: false, canvasClearRects: phys.Slice(0, n));
+            if (n == 0) WalkLayered(drawList, in ctx, lw, lh, backRtv, directToBackBuffer: false);   // FullIntoCanvas
+            else
+                for (int i = 0; i < n; i++)
+                {
+                    BeginReplayRect(in phys[i]);
+                    WalkLayered(drawList, in ctx, lw, lh, backRtv, directToBackBuffer: false);
+                }
+            EndLayeredFrame(backRtv, directToBackBuffer: false);   // drops the clamp, then the CatComposite-stamped blit
+            return;
         }
 
         _opacity?.TickIdle(completed);   // no groups this frame; the acrylic pool is ticked by BeginCanvas* below
@@ -3444,8 +3449,23 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // once over the underlying target at GroupAlpha (flat group — no double-blend). Kinds nest via _layerKinds.
     // <paramref name="canvasClearRects"/> (canvas path only) = a §13.1 PARTIAL frame's replay rects: clear only those
     // instead of the whole canvas. Empty ⇒ the whole-canvas clear (a rebuild, or the acrylic path's legacy behaviour).
+    /// <summary>One whole layered frame: begin, ONE walk, end. The three halves are separate methods because a
+    /// damage-clamped frame replays the stream once PER RECT, and only the middle half may run more than once — the
+    /// begin/end halves age the RT pools, pair the timestamp queries and emit the single full-surface blit.</summary>
     private void SubmitWithLayers(ReadOnlySpan<byte> drawList, in FrameInfo ctx, float lw, float lh, D3D12_CPU_DESCRIPTOR_HANDLE backRtv, bool directToBackBuffer,
         ReadOnlySpan<RECT> canvasClearRects = default)
+    {
+        BeginLayeredFrame(in ctx, lw, lh, backRtv, directToBackBuffer, canvasClearRects);
+        WalkLayered(drawList, in ctx, lw, lh, backRtv, directToBackBuffer);
+        EndLayeredFrame(backRtv, directToBackBuffer);
+    }
+
+    /// <summary>PER-FRAME half: bind and clear the target, and open the compositors' frame. Everything here is
+    /// once-per-submit — TickPool ages idle RTs against frame-counted trim windows, BeginFrame opens a timestamp query
+    /// EndFrame must close exactly once, and the per-frame group counters reset here. Running it twice in one submit
+    /// would skew the pool's trim clock and resolve the same query pair twice, both silently.</summary>
+    private void BeginLayeredFrame(in FrameInfo ctx, float lw, float lh, D3D12_CPU_DESCRIPTOR_HANDLE backRtv,
+        bool directToBackBuffer, ReadOnlySpan<RECT> canvasClearRects)
     {
         _streamLw = lw; _streamLh = lh;
         // completed fence gates pool retire/drain; (frameIndex % FRAME_COUNT) selects this frame's banked SRV slots.
@@ -3482,6 +3502,17 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             SetFullViewport();    // ── ditto: _targetOrigin/_targetWidth must describe the CANVAS, not a stale local-blur surface
         }
         _opacity!.BeginFrame(completed, (int)(_frameIndex % FRAME_COUNT));
+    }
+
+    /// <summary>PER-WALK half: decode the stream once under whatever clamp is currently armed. Re-entrant by
+    /// construction — every piece of state it depends on is reset in its first six lines, each group RT lease is
+    /// re-cleared by Acquire and released at its PopLayer, and the clamp is value-level (CurrentScissorRect), so a
+    /// second walk under a different replay rect cannot see the first one. That is what makes an N-rect layered
+    /// partial legal; it is licensed by RepaintStreamSafety admitting only plain Opacity groups onto this route, so
+    /// the one genuinely cross-walk thing — the blur pin cache — is unreachable here.</summary>
+    private void WalkLayered(ReadOnlySpan<byte> drawList, in FrameInfo ctx, float lw, float lh,
+        D3D12_CPU_DESCRIPTOR_HANDLE backRtv, bool directToBackBuffer)
+    {
         InvalidateCmdState();   // canvas/back-buffer setup may have touched viewport/scissor outside the cache
         ClearInsts();
         _clipStack.Clear();
@@ -3561,12 +3592,12 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                         && BlurPinKey.TryCompute(drawList, pos, in L, out ulong bhash, out int afterPop))
                     {
                         if (_curBlurHashCount < _curBlurHashes.Length) _curBlurHashes[_curBlurHashCount++] = bhash;
-                        int pin = _opacity.FindPin(bhash, _fenceValue + 1, in L, _frameScale);   // G1: a hit refreshes recency (MRU); size-exact match
+                        int pin = _opacity!.FindPin(bhash, _fenceValue + 1, in L, _frameScale);   // G1: a hit refreshes recency (MRU); size-exact match
                         // An edge-clamped region caches too: FindPin is SIZE-exact, so a clamped pin is distinct from the
                         // full on-canvas pin (no squish — a size mismatch is a miss, never a stretch). We only use this to
                         // gate MINTING while in motion (a per-frame-changing clamp size would churn RTs); a STATIONARY
                         // clamped row hits its own clamped pin below.
-                        bool regionClamped = _opacity.RegionIsClamped(in L, _frameScale);
+                        bool regionClamped = _opacity!.RegionIsClamped(in L, _frameScale);
                         // Position-independent key ⇒ a scrolled (translated) strip HITS its pin. On the SETTLE frame
                         // (InMotion==0) where the pin was captured at a different integer origin, fall through to one exact
                         // re-blur at rest (settle exactness) instead of compositing the mid-motion pin.
@@ -3575,12 +3606,12 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                         // in motion that guard is skipped, so a clamped strip in motion re-blurs (design (b): it changes its
                         // clamp size ~1px/frame and re-blurs anyway) rather than risk a same-size cross-clamp hit.
                         if (pin >= 0 && !(regionClamped && L.InMotion != 0)
-                            && !(L.InMotion == 0 && _opacity.PinOriginDiffers(pin, in L, _frameScale)))
+                            && !(L.InMotion == 0 && _opacity!.PinOriginDiffers(pin, in L, _frameScale)))
                         {
                             // HIT: composite the cached blur over the enclosing target; skip the subtree + its PopLayer.
                             if (_opacityGroups.Count > 0) BindOpacityGroupTarget(_opacityGroups[^1]);
                             else BindLayerTopTarget(directToBackBuffer, backRtv);
-                            _opacity.CompositePinnedBlur(_cmdList, pin, L.GroupAlpha, in L, _frameScale, CurrentScissorRect());
+                            _opacity!.CompositePinnedBlur(_cmdList, pin, L.GroupAlpha, in L, _frameScale, CurrentScissorRect());
                             InvalidateCmdState();   // the composite bound its own PSO/heap + viewport/scissor
                             ApplyCurrentScissor();
                             _blurCacheHit++;
@@ -3626,7 +3657,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                         if (seenLastFrame)
                         {
                             SceneCat(CatComposite);   // the lease's RT clear is layer cost — attribute it to comp, not to whatever ran before
-                            int pslot = _opacity.Acquire(_cmdList, _fenceValue + 1);
+                            int pslot = _opacity!.Acquire(_cmdList, _fenceValue + 1);
                             _opacityGroups.Add(new LayerGroup(pslot, L, pinTag, default));
                             _layerKinds.Add(L.Kind);
                             _blurCacheMiss++;
@@ -3644,12 +3675,12 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                             // published the whole subtree CRISP and at FULL brightness. That is the lyrics panel's
                             // "everything goes white" flash: a line advance shifts the σ/emphasis ladder across the whole
                             // visible window at once, so every row misses in the same frame.
-                            int stale = _opacity.FindLastPinForLayer(L.LayerId, _fenceValue + 1);
+                            int stale = _opacity!.FindLastPinForLayer(L.LayerId, _fenceValue + 1);
                             if (stale >= 0)
                             {
                                 if (_opacityGroups.Count > 0) BindOpacityGroupTarget(_opacityGroups[^1]);
                                 else BindLayerTopTarget(directToBackBuffer, backRtv);
-                                _opacity.CompositeStalePin(_cmdList, stale, L.GroupAlpha, in L, _frameScale, CurrentScissorRect());
+                                _opacity!.CompositeStalePin(_cmdList, stale, L.GroupAlpha, in L, _frameScale, CurrentScissorRect());
                                 InvalidateCmdState();   // the composite bound its own PSO/heap + viewport/scissor
                                 ApplyCurrentScissor();
                                 _blurHoldStale++;
@@ -3748,7 +3779,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                     // saving — and then falls through to the canvas lease below, unchanged.
                     if (L.Kind == (int)LayerKind.Opacity && TryBeginBoundedOpacityGroup(drawList, pos, in L))
                         continue;
-                    int slot = _opacity.Acquire(_cmdList, _fenceValue + 1, clearRect);
+                    int slot = _opacity!.Acquire(_cmdList, _fenceValue + 1, clearRect);
                     _opacityGroups.Add(new LayerGroup(slot, L, 0UL, default));
                     _layerKinds.Add(L.Kind);
                 }
@@ -3770,8 +3801,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                     if (_opacityGroups.Count > 0)
                     {
                         var enclosing = _opacityGroups[^1];
-                        acrylicTarget = _opacity.TargetResource(enclosing.Slot);
-                        acrylicRtv = _opacity.TargetRtv(enclosing.Slot);
+                        acrylicTarget = _opacity!.TargetResource(enclosing.Slot);
+                        acrylicRtv = _opacity!.TargetRtv(enclosing.Slot);
                         backdropSourceId = enclosing.L.LayerId != 0
                             ? enclosing.L.LayerId
                             : 0x8000000000000000UL | (uint)(enclosing.Slot + 1);
@@ -3792,7 +3823,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                     // §2.3/E10: ctx.ScrollHold lets a layer that already HAS a retained snapshot of this exact geometry
                     // stretch it across the scroll (refreshing on the cadence) instead of re-blurring on the every-frame
                     // damage a scrolling backdrop emits. A first-frame / post-resize / uncached layer still blurs now.
-                    _acrylic.BlurAndComposite(_cmdList, L, lw, lh, _frameScale, _fenceValue + 1,
+                    _acrylic!.BlurAndComposite(_cmdList, L, lw, lh, _frameScale, _fenceValue + 1,
                         dmgX * _frameScale, dmgY * _frameScale, dmgW * _frameScale, dmgH * _frameScale,
                         acrylicClip, backdropSourceId, acrylicTarget, acrylicRtv, ctx.ScrollHold);
                     InvalidateCmdState();   // the acrylic passes bound their own PSOs/heap + viewport/scissor
@@ -3831,10 +3862,10 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                     // A BOUNDED target with no sigma is a bounded PLAIN-OPACITY group (TryBeginBoundedOpacityGroup) —
                     // nothing to filter, so it takes the BeginRead tail like any other zero-sigma group.
                     if (localBlur && gl.BlurSigma > 0f)
-                        _opacity.BlurLocalInPlace(_cmdList, in localSurface, gl.BlurSigma, _fenceValue + 1);
+                        _opacity!.BlurLocalInPlace(_cmdList, in localSurface, gl.BlurSigma, _fenceValue + 1);
                     else if ((kind == (int)LayerKind.Blur || kind == (int)LayerKind.EdgeFade) && gl.BlurSigma > 0f)
-                        _opacity.BlurInPlace(_cmdList, slot, gl.BlurSigma, _fenceValue + 1, in gl, _frameScale);
-                    else _opacity.BeginRead(_cmdList, slot);
+                        _opacity!.BlurInPlace(_cmdList, slot, gl.BlurSigma, _fenceValue + 1, in gl, _frameScale);
+                    else _opacity!.BeginRead(_cmdList, slot);
                     InvalidateCmdState();   // BlurInPlace set its own scissor/PSO — MUST invalidate before BindLayerTopTarget's SetFullViewport dedup
                     // Composite over the UNDERLYING target: the enclosing group's RT, or the top-level target (canvas, or
                     // the back buffer directly on the FG_BACKBUFFER_LAYERS path).
@@ -3842,18 +3873,18 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                     else BindLayerTopTarget(directToBackBuffer, backRtv);
                     ApplyCurrentScissor();
                     if (localBlur && kind == (int)LayerKind.Opacity)
-                        _opacity.CompositeBoundedOpacity(_cmdList, in localSurface, gl.GroupAlpha, CurrentScissorRect());
-                    else if (localBlur) _opacity.CompositeLocalBlur(_cmdList, in localSurface, gl.GroupAlpha, CurrentScissorRect());
-                    else if (kind == (int)LayerKind.EdgeFade) _opacity.EdgeFadeComposite(_cmdList, slot, in gl, _frameScale, CurrentScissorRect());
-                    else if (kind == (int)LayerKind.Blur) _opacity.CompositeBlur(_cmdList, slot, gl.GroupAlpha, in gl, _frameScale, CurrentScissorRect());
+                        _opacity!.CompositeBoundedOpacity(_cmdList, in localSurface, gl.GroupAlpha, CurrentScissorRect());
+                    else if (localBlur) _opacity!.CompositeLocalBlur(_cmdList, in localSurface, gl.GroupAlpha, CurrentScissorRect());
+                    else if (kind == (int)LayerKind.EdgeFade) _opacity!.EdgeFadeComposite(_cmdList, slot, in gl, _frameScale, CurrentScissorRect());
+                    else if (kind == (int)LayerKind.Blur) _opacity!.CompositeBlur(_cmdList, slot, gl.GroupAlpha, in gl, _frameScale, CurrentScissorRect());
                     // Patched plain opacity group: composite only the drawn extent (⊆ the box cleared at Acquire).
                     else if (kind == (int)LayerKind.Opacity && !gl.CompositeClip.IsEmpty)
-                        _opacity.CompositeOpacity(_cmdList, slot, gl.GroupAlpha, in gl, _frameScale, CurrentScissorRect());
-                    else _opacity.Composite(_cmdList, slot, gl.GroupAlpha);
+                        _opacity!.CompositeOpacity(_cmdList, slot, gl.GroupAlpha, in gl, _frameScale, CurrentScissorRect());
+                    else _opacity!.Composite(_cmdList, slot, gl.GroupAlpha);
                     // Blur-cache MISS (pinHash != 0): COPY the just-composited blurred region out of the scratch into a small
                     // retained pin for next frame's FindPin. The scratch is ALWAYS released (the pin is a separate small RT).
-                    if (pinHash != 0) _opacity.RetainPinFromScratch(_cmdList, slot, pinHash, in gl, _frameScale, _fenceValue + 1);
-                    _opacity.Release(slot);
+                    if (pinHash != 0) _opacity!.RetainPinFromScratch(_cmdList, slot, pinHash, in gl, _frameScale, _fenceValue + 1);
+                    _opacity!.Release(slot);
                     InvalidateCmdState();   // BlurInPlace/Composite/EdgeFadeComposite bound their own PSOs/heap + scissor
                     ApplyCurrentScissor();
                 }
@@ -3881,35 +3912,41 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             OpacityLayerCompositor.LocalBlurSurface localSurface = closed.LocalBlur;
             bool localBlur = localSurface.UsedW > 0;
             _opacityGroups.RemoveAt(_opacityGroups.Count - 1);
-            if (localBlur && gl.BlurSigma > 0f) _opacity.BlurLocalInPlace(_cmdList, in localSurface, gl.BlurSigma, _fenceValue + 1);
-            else if (gl.BlurSigma > 0f) _opacity.BlurInPlace(_cmdList, slot, gl.BlurSigma, _fenceValue + 1, in gl, _frameScale);
-            else _opacity.BeginRead(_cmdList, slot);
+            if (localBlur && gl.BlurSigma > 0f) _opacity!.BlurLocalInPlace(_cmdList, in localSurface, gl.BlurSigma, _fenceValue + 1);
+            else if (gl.BlurSigma > 0f) _opacity!.BlurInPlace(_cmdList, slot, gl.BlurSigma, _fenceValue + 1, in gl, _frameScale);
+            else _opacity!.BeginRead(_cmdList, slot);
             InvalidateCmdState();   // as in the main PopLayer branch: BlurInPlace bypassed the scissor cache
             if (_opacityGroups.Count > 0) BindOpacityGroupTarget(_opacityGroups[^1]);
             else BindLayerTopTarget(directToBackBuffer, backRtv);
             ApplyCurrentScissor();
             if (localBlur && gl.Kind == (int)LayerKind.Opacity)
-                _opacity.CompositeBoundedOpacity(_cmdList, in localSurface, gl.GroupAlpha, CurrentScissorRect());
-            else if (localBlur) _opacity.CompositeLocalBlur(_cmdList, in localSurface, gl.GroupAlpha, CurrentScissorRect());
-            else if (gl.Kind == (int)LayerKind.EdgeFade) _opacity.EdgeFadeComposite(_cmdList, slot, in gl, _frameScale, CurrentScissorRect());
-            else if (gl.Kind == (int)LayerKind.Blur) _opacity.CompositeBlur(_cmdList, slot, gl.GroupAlpha, in gl, _frameScale, CurrentScissorRect());
+                _opacity!.CompositeBoundedOpacity(_cmdList, in localSurface, gl.GroupAlpha, CurrentScissorRect());
+            else if (localBlur) _opacity!.CompositeLocalBlur(_cmdList, in localSurface, gl.GroupAlpha, CurrentScissorRect());
+            else if (gl.Kind == (int)LayerKind.EdgeFade) _opacity!.EdgeFadeComposite(_cmdList, slot, in gl, _frameScale, CurrentScissorRect());
+            else if (gl.Kind == (int)LayerKind.Blur) _opacity!.CompositeBlur(_cmdList, slot, gl.GroupAlpha, in gl, _frameScale, CurrentScissorRect());
             else if (gl.Kind == (int)LayerKind.Opacity && !gl.CompositeClip.IsEmpty)
-                _opacity.CompositeOpacity(_cmdList, slot, gl.GroupAlpha, in gl, _frameScale, CurrentScissorRect());
-            else _opacity.Composite(_cmdList, slot, gl.GroupAlpha);
-            if (pinHash != 0) _opacity.RetainPinFromScratch(_cmdList, slot, pinHash, in gl, _frameScale, _fenceValue + 1);
-            _opacity.Release(slot);
+                _opacity!.CompositeOpacity(_cmdList, slot, gl.GroupAlpha, in gl, _frameScale, CurrentScissorRect());
+            else _opacity!.Composite(_cmdList, slot, gl.GroupAlpha);
+            if (pinHash != 0) _opacity!.RetainPinFromScratch(_cmdList, slot, pinHash, in gl, _frameScale, _fenceValue + 1);
+            _opacity!.Release(slot);
         }
         _layerKinds.Clear();
         _clipStack.Clear();
         _roundedClipStack.Clear();
-        _opacity.EndFrame(_cmdList);
+    }
+
+    /// <summary>PER-FRAME half: close the compositor frame and carry the canvas to the back buffer. The blit is
+    /// FULL-SURFACE and must happen exactly once however many rects were replayed.</summary>
+    private void EndLayeredFrame(D3D12_CPU_DESCRIPTOR_HANDLE backRtv, bool directToBackBuffer)
+    {
+        _opacity!.EndFrame(_cmdList);
         // §13.1: the blit is FULL-SURFACE — drop the root damage clamp first so nothing narrows it (the compositor sets
         // its own raw scissor anyway, but leaving the clamp armed past the scene would be a trap for the next reader).
         ClearRootDamage();
         if (!directToBackBuffer)
         {
             SceneCat(CatComposite);   // R10: bill the blit to COMPOSITE so CatFill/CatGlyph stay honest
-            _acrylic.BlitToBackBuffer(_cmdList, backRtv);   // back-buffer-direct path already drew there
+            _acrylic!.BlitToBackBuffer(_cmdList, backRtv);   // back-buffer-direct path already drew there
             InvalidateCmdState();
         }
     }

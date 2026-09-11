@@ -136,20 +136,48 @@ static class DamageSuite
                 $"route={route} count={rects.Count} disjoint={disjoint} covers={covers} area={rects.SummedArea():0}");
         }
 
-        // The layered route collapses to ONE union rect (a group RT is pool-leased ⇒ the stream cannot replay twice).
+        // The layered route gets its OWN, smaller rect budget — not a cap of one. The old gate asserted exactly one
+        // union rect on the grounds that a pool-leased group RT made a second walk impossible; it does not (Acquire
+        // re-clears every lease, and the clamp is value-level), and at a cap of one a single fractional-opacity node
+        // anywhere in the tree collapsed two distant damage bands into a near-full-window union that then failed the
+        // coverage re-check. What stays true is that the layered route pays an extra group-RT clear per walk, so its
+        // budget is smaller than the streaming route's.
         {
             var many = default(RepaintDamageRegion);
             many.Add(new RectF(10f, 10f, 20f, 20f));
             many.Add(new RectF(300f, 300f, 20f, 20f));
             many.Add(new RectF(600f, 100f, 20f, 20f));
             var route = Decide(many, RepaintPolicy.LayerKindGroups, true, true, true, out var rects);
-            bool one = rects.Count == 1;
-            bool spans = one && rects[0].X <= 10f && rects[0].Y <= 10f && rects[0].Right >= 620f && rects[0].Bottom >= 320f;
-            // …and the same damage on the STREAMING route keeps its three rects.
+            bool capped = rects.Count > 0 && rects.Count <= RepaintPolicy.MaxLayeredReplayRects;
+            bool disjoint = ReplayDisjoint(in rects);
+            bool covers = true;
+            for (int i = 0; i < many.Count; i++) covers &= CoveredBy(many[i], in rects);
+            bool smaller = RepaintPolicy.MaxLayeredReplayRects < RepaintPolicy.MaxReplayRects;
+            // …and the same damage on the STREAMING route still keeps all three rects separate.
             Decide(many, RepaintPolicy.LayerKindNone, true, true, true, out var streamRects);
-            Check("gate.repaint.policy-layered-single-rect the LAYERED route (opacity groups) collapses to ONE union rect — a group RT is pool-leased (acquire -> composite -> release) so the stream cannot be replayed twice — while the same damage on the STREAMING route keeps its separate rects",
-                route == RepaintRoute.Partial && one && spans && streamRects.Count == 3,
-                $"route={route} layered={rects.Count} spans={spans} streaming={streamRects.Count}");
+            Check("gate.repaint.policy-layered-rect-budget the LAYERED route (opacity groups) coalesces to its own budget — more than one rect, fewer than the streaming route's, still disjoint and still covering every input band — while the same damage on the STREAMING route keeps all three",
+                route == RepaintRoute.Partial && capped && disjoint && covers && smaller && streamRects.Count == 3,
+                $"route={route} layered={rects.Count}/{RepaintPolicy.MaxLayeredReplayRects} disjoint={disjoint} covers={covers} streaming={streamRects.Count}");
+        }
+
+        // Two distant bands — the shape the cap of one used to destroy. A marquee mid-window and a playhead in the
+        // bottom bar each damage a small strip; their bounding UNION spans most of the window and crosses the coverage
+        // cutoff, so collapsing them to one rect sent the whole frame to FullDirect. Kept separate, both survive.
+        {
+            var a = new RectF(120f, 40f, 260f, 24f);     // the scrolling title, near the top
+            var b = new RectF(40f, 760f, 920f, 40f);     // the player bar, at the bottom
+            var twoClusters = default(RepaintDamageRegion);
+            twoClusters.Add(a);
+            twoClusters.Add(b);
+            var route = Decide(twoClusters, RepaintPolicy.LayerKindGroups, true, true, true, out var rects);
+            // Derived, not hand-computed: the bounding union of the two bands, as a fraction of the target.
+            float unionCoverage = (MathF.Max(a.Right, b.Right) - MathF.Min(a.X, b.X))
+                                * (MathF.Max(a.Bottom, b.Bottom) - MathF.Min(a.Y, b.Y)) / (W * H);
+            float summed = twoClusters.Coverage(W, H);
+            Check("gate.repaint.policy-layered-two-distant-bands two far-apart damage bands under an opacity group stay SEPARATE and take the partial route — together they cover ~4 % of the target, but their bounding UNION crosses the 60 % cutoff, which is exactly how a cap of one turned a marquee plus a playhead into a full-window repaint",
+                route == RepaintRoute.Partial && rects.Count == 2
+                && summed < RepaintPolicy.CoverageCutoff && unionCoverage >= RepaintPolicy.CoverageCutoff,
+                $"route={route} rects={rects.Count} summed={summed:0.000} union={unionCoverage:0.00}");
         }
 
         // Empty damage: blit-only over a live canvas, full redraw without one (FLIP_DISCARD leaves it undefined).
@@ -1479,7 +1507,7 @@ static class DamageSuite
         var whole = new PixelRect(0, 0, TW, TH);
         string worst = "";
         long worstCells = 0;
-        int layeredFrames = 0, partialFrames = 0;
+        int layeredFrames = 0, partialFrames = 0, worstReplayRects = 0;
         bool sawGroup = false;
 
         static void Blend(float[] c, int i, float r, float g, float b, float a)
@@ -1665,6 +1693,7 @@ static class DamageSuite
                 partialFrames++;
                 Span<PixelRect> pix = stackalloc PixelRect[RepaintPolicy.MaxReplayRects];
                 int n = RepaintPolicy.ToPixelRects(replay.AsSpan(), 1f, TW, TH, pix);
+                if (n > worstReplayRects) worstReplayRects = n;
                 for (int i = 0; i < n; i++) ClearBox(canvas, pix[i].Left, pix[i].Top, pix[i].Right, pix[i].Bottom, clear.R, clear.G, clear.B, clear.A);
                 for (int i = 0; i < n; i++)
                 {
@@ -1723,6 +1752,16 @@ static class DamageSuite
             scene.Paint(rows[5]).Fill = new ColorF(0.26f, 0.30f, 0.38f, 1f);
             scene.Mark(rows[5], NodeFlags.PaintDirty);
         });
+        // Two mutations FAR APART, which is what actually drives the layered route to replay more than once. Until the
+        // rect cap was lifted this pair coalesced into one near-full-window union and the frame fell to FullDirect, so
+        // the multi-walk arithmetic below was never exercised by anything.
+        Frame("L8b two distant bands", () =>
+        {
+            scene.Paint(leftCard).Fill = new ColorF(0.62f, 0.71f, 0.83f, 1f);
+            scene.Mark(leftCard, NodeFlags.PaintDirty);
+            scene.Paint(rows[5]).Fill = new ColorF(0.40f, 0.22f, 0.24f, 1f);
+            scene.Mark(rows[5], NodeFlags.PaintDirty);
+        });
         for (int step = 1; step <= 4; step++)
         {
             int k = step;
@@ -1742,11 +1781,12 @@ static class DamageSuite
             Frame($"L11.{k} settled", () => { });
         }
 
-        Check("gate.repaint.video-hole-layered-partial-equals-full a PARTIAL repaint on the LAYERED route (a plain PushLayer Opacity group in the stream => RepaintPolicy.LayerKindGroups => ONE replay rect through SubmitWithLayers) paints EXACTLY what a full layered redraw of the same stream would have. The fixture is the shape the app took when MediaPlayerElement stopped UNMOUNTING its auto-hiding transport chrome and started fading it on the Opacity channel instead: a video hole punch, a fractional-opacity chrome group over it, a clipping page container, and full-width rows whose damage unions with RepaintBand(Dst) into one full-width band at the hole's vertical extent. Each group lease is pre-filled with GARBAGE so any composite that reads past its Acquire clear shows up as pixel error, and the retained canvas is compared cell-for-cell against the full replay every frame",
-            worstCells == 0 && sawGroup && layeredFrames > 0 && partialFrames > 0,
+        Check("gate.repaint.video-hole-layered-partial-equals-full a PARTIAL repaint on the LAYERED route (a plain PushLayer Opacity group in the stream => RepaintPolicy.LayerKindGroups => up to MaxLayeredReplayRects walks through BeginLayeredFrame/WalkLayered/EndLayeredFrame) paints EXACTLY what a full layered redraw of the same stream would have, INCLUDING when the stream is walked more than once (maxReplayRects below must exceed 1, or this proves nothing about multi-walk). The fixture is the shape the app took when MediaPlayerElement stopped UNMOUNTING its auto-hiding transport chrome and started fading it on the Opacity channel instead: a video hole punch, a fractional-opacity chrome group over it, a clipping page container, and full-width rows whose damage unions with RepaintBand(Dst) into one full-width band at the hole's vertical extent. Each group lease is pre-filled with GARBAGE so any composite that reads past its Acquire clear shows up as pixel error, and the retained canvas is compared cell-for-cell against the full replay every frame",
+            worstCells == 0 && sawGroup && layeredFrames > 0 && partialFrames > 0 && worstReplayRects > 1,
             worstCells != 0 ? $"worst {worst}"
-                            : (sawGroup && layeredFrames > 0 && partialFrames > 0 ? ""
-                               : $"fixture never exercised the route: group={sawGroup} layered={layeredFrames} partial={partialFrames}"));
+                            : (sawGroup && layeredFrames > 0 && partialFrames > 0 && worstReplayRects > 1
+                               ? $"maxReplayRects={worstReplayRects}"
+                               : $"fixture never exercised the route: group={sawGroup} layered={layeredFrames} partial={partialFrames} maxRects={worstReplayRects}"));
 
         Check("gate.repaint.opacity-group-composite-inside-clear a plain opacity group's COMPOSITE box (CompositeClip intersect CurrentScissorRect) is always a subset of the box its Acquire cleared. The pooled lease is canvas-sized and holds a previous group's pixels everywhere the clear did not reach, so a composite that reaches past the clear samples another layer's content — the property every \"scissor is a subset of cleared\" claim in OpacityLayerCompositor rests on, asserted on the partial route as well as the full one",
             !uncleared, unclearedDetail);
