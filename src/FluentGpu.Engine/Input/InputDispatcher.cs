@@ -728,6 +728,11 @@ public sealed class InputDispatcher
     /// bumps the titlebar-chrome epoch signal here so a custom TitleBar re-renders (dimming / max↔restore glyph).</summary>
     public Action? OnWindowActivationChanged;
 
+    /// <summary>Raised when an OS move/size modal loop of this window ended (<see cref="InputKind.WindowMoveSizeEnded"/>)
+    /// — the host forwards it to <c>InputHooks.WindowMoveSizeEndedObserved</c>, where the pop-out video's drag-the-picture
+    /// gesture learns its OS move loop is over.</summary>
+    public Action? OnWindowMoveSizeEnded;
+
     /// <summary>Raised when the resolved hover cursor changes — the host wires this to <c>IPlatformWindow.SetCursor</c>.</summary>
     public Action<CursorId>? OnCursorChanged;
 
@@ -1164,6 +1169,10 @@ public sealed class InputDispatcher
 
                 case InputKind.WindowStateChanged:
                     OnWindowActivationChanged?.Invoke();   // custom titlebar re-glyphs max↔restore
+                    break;
+
+                case InputKind.WindowMoveSizeEnded:
+                    OnWindowMoveSizeEnded?.Invoke();       // an OS move/size loop ended (edge resizes too — consumers filter)
                     break;
             }
 

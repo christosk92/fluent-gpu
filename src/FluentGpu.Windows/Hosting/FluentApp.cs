@@ -297,12 +297,14 @@ public static class FluentApp
         using var host = new AppHost(app, window, device, fonts, strings, root(), images);
         BootStamp("apphost-ctor");
         host.PixelPool = pixelPool;   // before the first RunFrame
-        // App-set ambient power throttle (>0): pace perpetual loop animation (spinner/shimmer/equalizer/media-playhead) to
-        // this rate so a never-idling app (one with always-on ambient motion) doesn't free-run the whole render+present
-        // pipeline at the panel refresh. A live FG_ANIM_FPS env var still wins (the host seeded its default from it), so
-        // the diagnostic override (incl. =0 to A/B uncapped) is preserved; 0 here = leave the host default untouched.
-        if (o.AmbientFps > 0 && Environment.GetEnvironmentVariable("FG_ANIM_FPS") is null)
-            host.AmbientAnimationFps = o.AmbientFps;
+        // App-set default cadence for a PLAIN looping animation (>0): a loop that names no cadence of its own runs at
+        // this rate instead of the panel refresh, so a never-idling app (one with always-on autonomous motion) doesn't
+        // free-run the whole render+present pipeline. Per-row cadence always wins over it. 0 = leave the engine
+        // default (30 Hz) untouched.
+        if (o.DefaultLoopHz > 0) host.Animation.DefaultLoopHz = o.DefaultLoopHz;
+        // Adaptive GPU pacing (default on): pace continuous motion to a sustainable rate when MEASURED on-GPU
+        // execution proves the panel rate is out of reach at this size. Independent of cadence — it is evidence, not policy.
+        host.AdaptiveGpuPacing = o.AdaptiveGpuPacing;
         // Post-input warm-cadence hold (G1b): keep rendering ~WarmCadenceMs after the last input so a follow-up
         // interaction pays no cold-start ramp. 0 disables the hold (see AppHost.WarmCadenceHoldMs).
         host.WarmCadenceHoldMs = o.WarmCadenceMs;
@@ -394,7 +396,7 @@ public static class FluentApp
             FluentGpu.Hosting.HostWaitKind.Idle => "idle",
             FluentGpu.Hosting.HostWaitKind.Hud => "hud",
             FluentGpu.Hosting.HostWaitKind.Baked => "baked",
-            FluentGpu.Hosting.HostWaitKind.Ambient => "ambient",
+            FluentGpu.Hosting.HostWaitKind.Cadence => "cadence",
             FluentGpu.Hosting.HostWaitKind.AdaptiveGpu => "adaptive-gpu",
             FluentGpu.Hosting.HostWaitKind.DisplayTick => "tick",
             FluentGpu.Hosting.HostWaitKind.SoftwarePace => "swpace",
@@ -791,12 +793,20 @@ public sealed record AppOptions
     public bool MicaAlt { get; init; }
     /// <summary>The app draws its own title bar (OS caption stripped; engine caption buttons + snap layouts).</summary>
     public bool CustomFrame { get; init; }
-    /// <summary>Power throttle for PERPETUAL ambient motion (looping spinner/shimmer/equalizer, smooth playhead): the
-    /// frame loop paces autonomous-animation frames to this rate instead of free-running at the panel refresh. 0 (the
-    /// default) keeps the engine default (uncapped / display-rate). Latency-sensitive motion the user drives (scroll,
-    /// hover, press, drag) is exempt and always runs at the display rate. Maps to <see cref="AppHost.AmbientAnimationFps"/>
-    /// (a live <c>FG_ANIM_FPS</c> env var still wins).</summary>
-    public int AmbientFps { get; init; }
+    /// <summary>The cadence (Hz) a PLAIN looping animation runs at when it names none of its own — a spinner, a
+    /// skeleton shimmer, an equalizer, a smooth playhead. The frame loop then waits for that row's next edge instead of
+    /// free-running at the panel refresh. 0 (the default) keeps the engine default of 30 Hz. Maps to
+    /// <c>AnimEngine.DefaultLoopHz</c>.
+    /// <para>This is a DEFAULT, not a cap. A source that needs the panel rate says so per row —
+    /// <c>Keyframes(…, cadence: Cadence.Display)</c>, or <c>Cadence.At(hz)</c> for a specific one — and latency-sensitive
+    /// work the user drives (scroll, hover, press, drag, input, image reveals, timers) is not affected at all: it never
+    /// reaches the cadence wait, so this can never add input latency.</para></summary>
+    public float DefaultLoopHz { get; init; }
+    /// <summary>Adaptive GPU pacing (default <c>true</c>): when MEASURED whole-frame on-GPU execution proves the panel
+    /// rate is unsustainable at the current window size, pace continuous motion to a steady sustainable cadence rather
+    /// than thrashing into vblank misses. Self-releasing, and it never paces a genuine interaction. Set <c>false</c> to
+    /// remove the governor (a capture that must see the raw cadence). Maps to <see cref="AppHost.AdaptiveGpuPacing"/>.</summary>
+    public bool AdaptiveGpuPacing { get; init; } = true;
     /// <summary>Post-input warm-cadence hold (ms): after the last input, keep rendering this long before allowing full
     /// quiesce so a follow-up interaction pays no cold-start ramp (G1b / research #10). 0 disables the hold. Maps to
     /// <see cref="AppHost.WarmCadenceHoldMs"/>.</summary>

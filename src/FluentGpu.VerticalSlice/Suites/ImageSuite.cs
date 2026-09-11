@@ -1137,23 +1137,28 @@ static class ImageSuite
         Check("46f. ImageTransition: default fade eases 0→1; None disables (instant)", fades && disabled,
             $"cf0={cf0:0.00} cf1={cf1:0.00}");
 
-        // 45e: ImageCache.WasReady — a re-decode of a key that has already been Ready once, landing fast, reveals
-        // instantly EVEN AT REST (not just mid-scroll); a first-ever decode still gets its authored fade (the
-        // synchronous test decoder must not flip a fresh reveal to instant just because it lands fast too).
+        // 45e: ImageCache.WasReady — a re-decode of a key that has already been Ready once, landing fast, gets the SHORT
+        // reveal (ImageCache.ShortRevealMs) EVEN AT REST — never an instant pop over the placeholder frame the +1-frame
+        // contract always presents; a first-ever decode still gets its full authored fade (the synchronous test decoder
+        // must not shorten a fresh reveal just because it lands fast too).
         var wr = new FakeImageDecoder();
         var wcache = new ImageCache(wr);
         var wHandle = wcache.Request("warm", 16, 16);
         wcache.Pump();                                    // first-ever decode — WasReady was false when this landed
         float firstCf = wcache.CrossFadeOf(wHandle);
-        bool firstFades = firstCf < 0.999f;
+        wcache.Tick(ImageCache.ShortRevealMs);
+        bool firstFades = firstCf < 0.999f && wcache.CrossFadeOf(wHandle) < 0.999f;   // authored 220ms > ShortRevealMs
+        wcache.Tick(1000f);
 
         wcache.ReRealizeAllResident();                    // forces a re-decode of the now-Ready entry (WasReady==true)
         wcache.Pump();                                    // lands immediately — well under InstantRevealWindowMs
         float warmCf = wcache.CrossFadeOf(wHandle);
-        bool warmInstant = warmCf >= 0.999f;
+        wcache.Tick(ImageCache.ShortRevealMs);
+        float warmDone = wcache.CrossFadeOf(wHandle);
+        bool warmShort = warmCf < 0.999f && warmDone >= 0.999f;
 
-        Check("45e. ImageCache WasReady: a re-decode of a previously-Ready entry landing fast reveals instantly at rest; a first decode keeps its authored fade",
-            firstFades && warmInstant, $"firstCf={firstCf:0.00} warmCf={warmCf:0.00}");
+        Check("45e. ImageCache WasReady: a fast re-decode of a previously-Ready entry gets the short reveal (no pop); a first decode keeps its authored fade",
+            firstFades && warmShort, $"firstCf={firstCf:0.00} warmCf={warmCf:0.00} warmDone={warmDone:0.00}");
     }
 
     static void ImageEvictChecks()
@@ -1528,15 +1533,26 @@ static class ImageSuite
                 && device.LastImages[0].Ready == 1
                 && cache.StateOf(new ImageHandle(idB)) == ImageState.Pending;
 
+            // B is a DIFFERENT picture: the settle is a short dissolve FROM the held texture, not a one-frame cut — A is
+            // drawn first, opaque for the swap window (SwapOutgoingEasing), and B fades in over it with a transparent
+            // placeholder; the entry's own reveal stays settled (nothing fades in over a placeholder).
             dec.Release(idB);
             host.RunFrame();
+            bool dissolving = device.LastImages.Count == 2
+                && device.LastImages[0].ImageId == idA && device.LastImages[0].Ready == 1
+                && device.LastImages[0].FadeEasing == ImageCache.SwapOutgoingEasing
+                && device.LastImages[1].ImageId == idB && device.LastImages[1].Ready == 1
+                && device.LastImages[1].Placeholder.A == 0f
+                && Near(device.LastImages[1].FadeDurationMs, ImageCache.SwapCrossfadeMs, 0.01f)
+                && cache.CrossFadeOf(new ImageHandle(idB)) >= 0.999f;
+            for (int i = 0; i < 24; i++) host.RunFrame();   // ≥ window + release slack of fixed frames
             bool committed = device.LastImages.Count == 1 && device.LastImages[0].ImageId == idB
                 && device.LastImages[0].Ready == 1
-                && cache.CrossFadeOf(new ImageHandle(idB)) >= 0.999f;
+                && cache.RefsOf(new ImageHandle(idA)) == 0 && cache.RefsOf(new ImageHandle(idB)) == 1;
 
-            Check("46n3. hold-last-good: the BOUND-source binding-effect swap site takes the same hold path",
-                aReady && held && committed,
-                $"idA={idA} idB={idB} aReady={aReady} held={held} committed={committed}");
+            Check("46n3. hold-last-good: the BOUND-source binding-effect swap site holds, then DISSOLVES from the held texture onto a different picture and releases it",
+                aReady && held && dissolving && committed,
+                $"idA={idA} idB={idB} aReady={aReady} held={held} dissolving={dissolving} committed={committed} draws={device.LastImages.Count}");
         }
 
         // 46n4: the steady-frame alloc gate (gate.icon.alloc's idiom) extended through a hold + commit sequence — the

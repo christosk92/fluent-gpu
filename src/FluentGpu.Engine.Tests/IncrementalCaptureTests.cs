@@ -101,6 +101,33 @@ public sealed class IncrementalCaptureTests
             $"a coast publication copied {publisher.LastCapturedNodeCount} nodes; expected the changed chain only");
     }
 
+    // A node written on CONSECUTIVE publications while the consumer has not caught up keeps its record-dirty bits set
+    // the whole time (each write re-stamps them one publication ahead of consumption, so the retained ledger never
+    // clears them). Every write must still reach the snapshot: the ledger used to note a capture change only when the
+    // dirty bits CHANGED, so from the second write on the node looked unchanged to the incremental capture and a
+    // rotating slot kept serving an earlier value — the lyrics karaoke wipe stepping at the full-capture cadence.
+    [Fact]
+    public void ConsecutiveWritesToAStillDirtyNode_EachReachTheSnapshot()
+    {
+        ThreadGuard.BindCurrent(ThreadGuard.ThreadRole.Ui);
+        var (scene, content) = BuildPage(24);
+        var anim = new AnimEngine(scene);
+        var publisher = new SceneFramePublisher();
+        for (int i = 0; i < 4; i++) Publish(publisher, scene, anim);   // every slot holds a baseline; incremental from here
+
+        // No consumer adopts anything below, so LastConsumedSeq stays put and the retained ledger keeps the bits set.
+        for (int step = 1; step <= 6; step++)
+        {
+            scene.Paint(content).BlurSigma = step;
+            scene.Mark(content, NodeFlags.PaintDirty);
+            Publish(publisher, scene, anim);
+            Assert.True(publisher.LastCaptureWasIncremental, "the steady writes must stay on the incremental path");
+        }
+
+        Assert.True(publisher.TryAcquire(out var frame));
+        Assert.Equal(6f, publisher.Scene(frame).Scene.Paint(content).BlurSigma);
+    }
+
     // "When incremental validity is in doubt, fall back" — a bulk mutation (what a reconciler commit or a layout pass
     // declares) must force the next capture of EVERY slot back to a full copy.
     [Fact]

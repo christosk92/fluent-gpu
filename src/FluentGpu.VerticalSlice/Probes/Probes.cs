@@ -4021,6 +4021,8 @@ sealed class MediaPlayerHostProbe : Component
     public IOverlayService? Service;
     public required IMediaPlayer Player;
     public float HideMs = 200f;
+    /// <summary>Forwarded to <c>MediaPlayerElement.DragMovesWindow</c> (the pop-out's drag-the-picture gesture gates).</summary>
+    public bool DragMovesWindow;
     public override Element Render()
         => Embed.Comp(() => new OverlayHost { Child = Embed.Comp(() => new MediaPlayerHostInner(this)) });
 }
@@ -4038,6 +4040,7 @@ sealed class MediaPlayerHostInner : Component
             Children = [Embed.Comp(() => new FluentGpu.Controls.Media.MediaPlayerElement
             {
                 Player = _p.Player, TransportControlsHideDelayMs = _p.HideMs, AutoHideTransportControls = true,
+                DragMovesWindow = _p.DragMovesWindow,
             })],
         };
     }

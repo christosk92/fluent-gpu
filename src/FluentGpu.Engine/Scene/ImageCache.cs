@@ -155,17 +155,48 @@ public sealed class ImageCache
         // Allocated lazily only when a UseImage consumer observes this handle. Terminal state changes bump this signal,
         // so one image completion invalidates only its own observers instead of every unsettled image component.
         public Signal<int>? StatusEpoch;
+        // The previous entry (older decode size) of the SAME source — a per-source chain threaded through _sourceHead,
+        // linked once on the miss path. ResidentRenditionOf walks it; 0 ends the chain. Entries are never removed from
+        // _byId (evicted ones stay as tombstones), so the chain never dangles.
+        public int PrevSameSource;
+        // Image-swap crossfade (BeginSwap): this entry is some node's OUTGOING texture, drawn opaque under the incoming
+        // image until this reveal-clock deadline. Folded into the crossfade deadline so both the UI wake and the render
+        // thread's clock-driven presents keep going for the whole swap window.
+        public float SwapHoldUntilMs = float.NegativeInfinity;
     }
 
     const float RestartBackoffMs = 2000f;   // min gap between visible retries on the same handle (avoids hammering a dead URL)
     // Mid-scroll reveals (see SuppressReveals): the fade runs at HALF its authored duration — short enough not to trail
     // behind moving content, long enough that a cover landing under the cursor doesn't hard-pop. A texture that lands
-    // within InstantRevealWindowMs of its request is cache-adjacent (disk/memory hit, no visible placeholder period):
-    // fading THAT reads as lag, so it keeps the original instant reveal.
+    // within InstantRevealWindowMs of its request is cache-adjacent (a disk/OS-cache hit): it gets ShortRevealMs — a
+    // quick fade over the one placeholder frame it still had, never an instant pop.
     const float ScrollRevealScale = 0.5f;
     const float InstantRevealWindowMs = 100f;
+    /// <summary>The reveal a cache-adjacent landing gets (a warm re-decode, a disk/OS-cache hit inside
+    /// <see cref="InstantRevealWindowMs"/>): short, never instant. Such a landing still had a PRESENTED placeholder frame
+    /// — the +1-frame latency contract guarantees at least one — so snapping the texture in reads as a pop. Coil and
+    /// Glide draw the same line: every result that did not come synchronously out of the MEMORY cache crossfades
+    /// (Coil's CrossfadeTransition / Glide's DrawableCrossFadeFactory both skip only DataSource.MEMORY_CACHE). The
+    /// engine's memory hit is <see cref="Request"/> returning an already-Ready entry, which never re-runs a reveal.</summary>
+    public const float ShortRevealMs = 120f;
+    /// <summary>The crossfade a node gets when its displayed texture is replaced by a DIFFERENT image (a new track's
+    /// cover, a different CDN rendition) — the reconciler's hold-last-good keeps the old texture until the new one is
+    /// decoded, then this dissolve replaces the old hard cut. Short on purpose: it bridges two real pictures, it is not
+    /// a reveal. The same image at a new decode size still hard-cuts (nothing visibly changes).</summary>
+    public const float SwapCrossfadeMs = 150f;
+    /// <summary>Curve of the INCOMING half of a swap crossfade (the outgoing half is <see cref="SwapOutgoingEasing"/>).</summary>
+    public const Easing SwapCrossfadeEasing = Easing.EaseInOut;
+    /// <summary>Fade-easing sentinel for the OUTGOING texture of a swap crossfade, resolved by <see cref="ResolveFade"/>:
+    /// fully opaque for the whole window, then gone — the incoming image fades in OVER it. Glide's
+    /// DrawableCrossFadeFactory default (setCrossFadeEnabled(false)) for the same reason: fading the outgoing picture
+    /// out while the new one fades in lets whatever sits behind the image (a placeholder tile, the page) show through
+    /// mid-dissolve — a dip for exactly the opaque artwork this exists for. Not an <see cref="Easing"/> value.</summary>
+    public const int SwapOutgoingEasing = -1;
 
     private readonly Dictionary<SourceKey, int> _byKey = new();
+    // Source → the newest entry of that source (any decode size); older sizes chain through Entry.PrevSameSource.
+    // Written only on the miss path (which already allocates the entry), so hits and frames stay allocation-free.
+    private readonly Dictionary<string, int> _sourceHead = new(StringComparer.Ordinal);
     private readonly Dictionary<DerivedKey, int> _byDerivedKey = new();
     private readonly Dictionary<int, Entry> _byId = new();
     private readonly Dictionary<int, List<int>> _derivedBySource = new();
@@ -331,6 +362,9 @@ public sealed class ImageCache
         _byKey[key] = id;
         var entry = new Entry { Key = key, State = ImageState.Pending, LastUsed = _clock++, RequestedMs = _clockMs, Transition = transition ?? ImageTransition.Default };
         _byId[id] = entry;
+        // Thread the new decode size onto its source's chain (ResidentRenditionOf) — once per key, on this miss path.
+        entry.PrevSameSource = _sourceHead.TryGetValue(source, out int sameSourceHead) ? sameSourceHead : 0;
+        _sourceHead[source] = id;
         _pendingCount++;   // a miss always creates a Pending entry; OnDecodeComplete decrements when it resolves
         _totalRequested++;
         Diag.Set("media", "requested", _totalRequested);
@@ -427,7 +461,7 @@ public sealed class ImageCache
         {
             var entry = pair.Value;
             target.Add(pair.Key, entry.State, entry.W, entry.H, entry.TextureMs,
-                entry.RevealMs, (int)entry.Transition.Easing);
+                entry.RevealMs, (int)entry.Transition.Easing, entry.SwapHoldUntilMs);
         }
     }
 
@@ -440,7 +474,8 @@ public sealed class ImageCache
         foreach (int id in ids)
         {
             if (_byId.TryGetValue(id, out var entry))
-                target.Add(id, entry.State, entry.W, entry.H, entry.TextureMs, entry.RevealMs, (int)entry.Transition.Easing);
+                target.Add(id, entry.State, entry.W, entry.H, entry.TextureMs, entry.RevealMs, (int)entry.Transition.Easing,
+                    entry.SwapHoldUntilMs);
         }
     }
     /// <summary>Per-handle status epoch used by <c>UseImage</c>. Lazily allocated on first observation; null for an
@@ -490,10 +525,9 @@ public sealed class ImageCache
     public float ClockMs => _clockMs;
 
     /// <summary>While true (scroll), a newly arriving texture reveals at HALF its authored duration instead of the full
-    /// fade — and skips the animation entirely (instant CrossFade=1) only when it landed within
-    /// <see cref="InstantRevealWindowMs"/> of its request, i.e. a cache-adjacent hit with no visible placeholder period.
-    /// See <see cref="BeginReveal"/>: this used to finish EVERY mid-scroll reveal instantly, which reads as a pop now
-    /// that full-size covers actually land during the gesture.</summary>
+    /// fade — or with <see cref="ShortRevealMs"/> when it landed within <see cref="InstantRevealWindowMs"/> of its
+    /// request (a cache-adjacent hit). See <see cref="BeginReveal"/>: this used to finish EVERY mid-scroll reveal
+    /// instantly, which reads as a pop now that full-size covers actually land during the gesture.</summary>
     public bool SuppressReveals { get; set; }
 
     /// <summary>While true, per-frame GPU texture uploads are throttled (see <see cref="DecodeScheduler.ScrollThrottled"/>)
@@ -521,6 +555,10 @@ public sealed class ImageCache
     /// <summary>Resolve a baked fade to 0..1 at replay time (shared by D3D12 + headless).</summary>
     public static float ResolveFade(float imageClockMs, float fadeStartMs, float fadeDurationMs, int fadeEasing)
     {
+        // The OUTGOING half of a swap crossfade: opaque until the window ends, then gone (see SwapOutgoingEasing). A
+        // missing/zero window resolves to gone, never to a stuck opaque copy under the incoming image.
+        if (fadeEasing == SwapOutgoingEasing)
+            return fadeDurationMs > 0f && !float.IsNaN(fadeStartMs) && imageClockMs - fadeStartMs < fadeDurationMs ? 1f : 0f;
         if (fadeDurationMs <= 0f || float.IsNaN(fadeStartMs)) return 1f;
         float elapsed = imageClockMs - fadeStartMs;
         if (elapsed <= 0f) return 0f;
@@ -547,23 +585,24 @@ public sealed class ImageCache
         }
         e.RevealMs = e.Transition.DurationMs;
         e.TextureMs = _clockMs;
-        if (e.WasReady && _clockMs - e.RequestedMs <= InstantRevealWindowMs)
+        if (_clockMs - e.RequestedMs <= InstantRevealWindowMs && (e.WasReady || SuppressReveals))
         {
-            // A re-decode of a key that has been Ready BEFORE (RestartDecode after eviction/failure, a device-lost
-            // ReRealizeAllResident, a disk/OS-cache hit) landing within the instant-reveal window is a WARM hit, not
-            // a first-ever placeholder period — fading it reads as lag even AT REST, not just mid-scroll (the
-            // SuppressReveals arm below already covers the scroll case). WasReady is false on a true first decode, so
-            // that one still gets its authored fade regardless of how fast the (possibly synchronous test) decoder lands.
-            e.TextureMs = _clockMs - e.RevealMs;
+            // A WARM landing — a re-decode of a key that has been Ready before (RestartDecode after eviction/failure, a
+            // device-lost ReRealizeAllResident, a disk/OS-cache hit), or a cache-adjacent landing mid-scroll — gets a
+            // SHORT fade, no longer an instant one. The instant arm assumed "no visible placeholder period", but the
+            // +1-frame latency contract means the placeholder WAS presented for at least one frame, so snapping the
+            // picture in over it read as a pop (the thumbnail pops of the 2026-09 visual-continuity audit). Only a
+            // synchronous memory hit (Request returning a Ready entry — no reveal at all) skips the fade; see
+            // ShortRevealMs for the Coil/Glide rule. A first-ever decode at rest keeps its authored fade however fast
+            // the (possibly synchronous test) decoder lands — WasReady is false there.
+            e.RevealMs = MathF.Min(e.RevealMs, ShortRevealMs);
         }
         else if (SuppressReveals)
         {
             // Scroll. Textures now LAND mid-gesture (DecodeScheduler admits one completion per frame whatever its
             // size), so the old "already finished" reveal would hard-pop a full-size cover in under a moving finger —
-            // more visible than the fade it was avoiding. Give it a half-length fade instead, except for a
-            // cache-adjacent landing, which stays instant (a fade there reads as lag, not as a reveal).
-            if (_clockMs - e.RequestedMs <= InstantRevealWindowMs) e.TextureMs = _clockMs - e.RevealMs;
-            else e.RevealMs *= ScrollRevealScale;
+            // more visible than the fade it was avoiding. Give it a half-length fade instead.
+            e.RevealMs *= ScrollRevealScale;
         }
         NoteCrossfadeDeadline(e);
     }
@@ -593,8 +632,9 @@ public sealed class ImageCache
 
     /// <summary>Force an entry's placeholder→image reveal to its settled (<see cref="CrossFadeOf"/>==1) state — used by
     /// the reconciler's hold-last-good commit (Reconciler.cs §hold-last-good: a re-keyed Image node held its OLD Ready
-    /// texture while the new key decoded). The sharper texture should hard-cut in, not restart the fade it already
-    /// finished long ago under the old key. Exactly the disabled-transition arm of <see cref="BeginReveal"/>.
+    /// texture while the new key decoded). The node owns that transition — a hard cut for the same picture at a sharper
+    /// size, a <see cref="BeginSwap"/> dissolve for a different one — so the entry must not also restart a fade from the
+    /// placeholder. Exactly the disabled-transition arm of <see cref="BeginReveal"/>.
     /// <para>Entries are shared by (source, decodeW, decodeH): settling one also instantly finishes any OTHER node's
     /// still-fading reveal of the same key. Rare (two nodes landing on the identical key at once) and benign (a fade
     /// cut a few ms early for the other node).</para></summary>
@@ -613,12 +653,65 @@ public sealed class ImageCache
     {
         float max = float.NegativeInfinity;
         foreach (var e in _byId.Values)
+        {
             if (e.Transition.Enabled && !float.IsNaN(e.TextureMs))
             {
                 float d = e.TextureMs + e.RevealMs;
                 if (d > max) max = d;
             }
+            if (e.SwapHoldUntilMs > max) max = e.SwapHoldUntilMs;   // a live swap window keeps the fade clock running too
+        }
         _maxCrossfadeDeadlineMs = max;
+    }
+
+    /// <summary>Start an image-swap crossfade window of <paramref name="durationMs"/> on this cache's reveal clock and
+    /// return its start. <paramref name="outgoing"/> is the texture a node keeps drawing OPAQUE under the incoming image
+    /// for the window (<see cref="SwapOutgoingEasing"/>); its deadline is folded into the crossfade high-water so the UI
+    /// wake (<see cref="HasActiveCrossfades"/>) and the render thread's clock-driven presents
+    /// (<see cref="ImageRecordingSnapshot"/>) both run the dissolve to completion. The caller keeps the outgoing
+    /// PINNED for the window — pinning is the reconciler's bookkeeping, not the cache's.</summary>
+    public float BeginSwap(ImageHandle outgoing, float durationMs)
+    {
+        float start = _clockMs;
+        float until = start + MathF.Max(0f, durationMs);
+        if (_byId.TryGetValue(outgoing.Id, out var e) && until > e.SwapHoldUntilMs) e.SwapHoldUntilMs = until;
+        if (until > _maxCrossfadeDeadlineMs) _maxCrossfadeDeadlineMs = until;
+        return start;
+    }
+
+    /// <summary>True when two handles draw the SAME image — the same source (a derivative counts as its source), only
+    /// possibly at another decode size. Swapping between such renditions is a hard cut (nothing visibly changes but
+    /// sharpness); a different source is a new picture and crossfades (<see cref="SwapCrossfadeMs"/>).</summary>
+    public bool SameSource(ImageHandle a, ImageHandle b)
+    {
+        string? sa = SourceOf(a), sb = SourceOf(b);
+        return sa is not null && string.Equals(sa, sb, StringComparison.Ordinal);
+    }
+
+    /// <summary>The best RESIDENT rendition of <paramref name="h"/>'s source at another decode size — the largest
+    /// Ready, non-derived entry on its source chain — or <see cref="ImageHandle.Null"/>. What a node shows instead of a
+    /// placeholder while <paramref name="h"/> itself decodes: the same picture, resampled, is always a better stand-in
+    /// than a grey tile. The reconciler holds it exactly like hold-last-good (it covers the MOUNT case hold-last-good
+    /// cannot — a remounted cover whose new decode size is not resident yet). Browsers keep showing the current
+    /// rendition until a new srcset candidate has loaded; Coil's placeholderMemoryCacheKey hands a list thumbnail to
+    /// the detail image the same way. O(decode sizes of one source), allocation-free.</summary>
+    public ImageHandle ResidentRenditionOf(ImageHandle h)
+    {
+        if (!_byId.TryGetValue(h.Id, out var e) || e.Derived || !_sourceHead.TryGetValue(e.Key.Source, out int id))
+            return ImageHandle.Null;
+        int best = 0;
+        long bestArea = 0;
+        for (int guard = 0; id != 0 && guard < 64; guard++)
+        {
+            if (!_byId.TryGetValue(id, out var r)) break;
+            if (id != h.Id && !r.Derived && r.State == ImageState.Ready && (long)r.W * r.H > bestArea)
+            {
+                best = id;
+                bestArea = (long)r.W * r.H;
+            }
+            id = r.PrevSameSource;
+        }
+        return new ImageHandle(best);
     }
 
     /// <summary>Pin = "on screen" (a realized node holds it); never evicted while pinned. Unpin on recycle/unmount.</summary>

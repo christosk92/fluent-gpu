@@ -197,7 +197,10 @@ internal sealed class MarqueeScroller : Component
         else
         {
             (Keyframe[] keys, float durMs, bool looping) = BuildTrack(loop, canScroll, loopDist, tailDist);
-            UseKeyframes(AnimChannel.TranslateX, keys, durMs, looping, DepKey.From(HashCode.Combine(canScroll, loop, loopDist, tailDist)));
+            // A scrolling title is perpetual (it would default to DefaultLoopHz) but text motion at 30 Hz reads as
+            // stepping; 60 Hz halves the frames on a 120 Hz panel and is one refresh at 60/50 Hz.
+            UseKeyframes(AnimChannel.TranslateX, keys, durMs, looping, DepKey.From(HashCode.Combine(canScroll, loop, loopDist, tailDist)),
+                         cadence: Cadence.At(60f));
         }
 
         var copies = new List<Element>(seamless ? 2 : 1) { Measured() };

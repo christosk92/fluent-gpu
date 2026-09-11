@@ -132,7 +132,8 @@ public sealed partial class SceneRecordingSnapshot
     private int _referencedImageIdCount;
 
     /// <summary>The ImageCache ids this capture's nodes reference — every entry is either a <c>VisualKind.Image</c>
-    /// node's <c>NodePaint.ImageId</c> or its <c>ImageVisualEffects.DerivedImageId</c>. Deduped; order is capture
+    /// node's <c>NodePaint.ImageId</c>, its <c>ImageVisualEffects.DerivedImageId</c> or a live swap's
+    /// <c>ImageVisualEffects.SwapOutgoingId</c>. Deduped; order is capture
     /// order, not id order. <see cref="ImageRecordingSnapshot.Capture(ImageCache?, ReadOnlySpan{int})"/> copies exactly
     /// this set instead of every entry the cache has ever seen.</summary>
     public ReadOnlySpan<int> ReferencedImageIds => _referencedImageIds.AsSpan(0, _referencedImageIdCount);
@@ -276,8 +277,13 @@ public sealed partial class SceneRecordingSnapshot
             if (paint.VisualKind == VisualKind.Image)
             {
                 if (paint.ImageId != 0) NoteReferencedImage(paint.ImageId);
-                if (_imageEffects.TryGet(index, out var effects) && effects.DerivedImageId != 0)
-                    NoteReferencedImage(effects.DerivedImageId);
+                if (_imageEffects.TryGet(index, out var effects))
+                {
+                    if (effects.DerivedImageId != 0) NoteReferencedImage(effects.DerivedImageId);
+                    // A swap crossfade also draws the OUTGOING texture under the image (SceneRecorder) — capture its
+                    // readiness and its swap-hold deadline with the rest.
+                    if (effects.SwapOutgoingId != 0) NoteReferencedImage(effects.SwapOutgoingId);
+                }
             }
             int spanRunId = _layout[index].TextStyle.SpanRunId;
             if (spanRunId != 0) NoteSpanRunSeen(spanRunId);

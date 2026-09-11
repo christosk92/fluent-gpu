@@ -1,7 +1,8 @@
 namespace FluentGpu.Animation;
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
-//  ANIMATION REWORK — the wake-authority data model (additive; Phase 2 wires it into AppHost's wait math).
+//  ANIMATION REWORK — the wake-authority data model (LIVE: AnimEngine carries a Cadence per row and the host
+//  waits on AnimEngine.NextDueMs; the AnimIsAmbient/AmbientAnimationFps inference it replaced is deleted).
 //
 //  NOTE ON THE NAME: the rework plan (§6.3) calls this `FrameClock`, but `FluentGpu.Hooks.FrameClock` already
 //  exists (the hooks ambient-signal key behind `UseContext(FrameClock.Tick)`). To avoid the namespace collision
@@ -12,10 +13,12 @@ namespace FluentGpu.Animation;
 //  every Generator samples absolute time, a generator's trajectory is bit-identical under the dt∈{8.33,16.67,33.3}
 //  replay gate by construction (inject wallNowMs = lastNow + dtFixture, wasIdle=false ⇒ delta == dtFixture exactly).
 //
-//  `Cadence` is the per-source classification whose `min(next-due)` scan replaces the entire ComputeWakeReasons()
+//  `Cadence` is the per-source classification whose `min(next-due)` scan REPLACES the entire ComputeWakeReasons()
 //  16-bool OR + the ambient/grace/HUD branch tree: a lone 30Hz shimmer ⇒ ~33ms; add a live spring ⇒ present-now;
 //  a paused playhead is `Driven` ⇒ skipped (+∞), event-woken by its signal write ⇒ ZERO frames, no exemption list.
-//  Design: docs/plans/animation-engine-rework-design.md §6.2–§6.3.
+//  The engine stores it per row (AnimEngine's `_cadencePeriodMs` side array, seeded by `Keyframes(..., cadence:)`)
+//  and answers `AnimEngine.NextDueMs(nowMs)`; the host waits for that instead of inferring an ambient frame class.
+//  Design: docs/plans/animation-engine-rework-design.md §3.4/§6.2–§6.3.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /// <summary>The one per-frame clock (the plan's "FrameClock"). The scheduler owns a mutable instance, calls
@@ -55,10 +58,11 @@ public struct AnimClock
     }
 }
 
-/// <summary>How often a registered animation source needs a frame. The scheduler's wake is
-/// <c>min(next-due)</c> over the live, non-quiesced sources — each kind answers "does this source need a frame
-/// right now?" as DATA, replacing the heuristics (<c>AmbientAnimationFps</c>/<c>AnimIsAmbient()</c>/scroll-grace/
-/// <c>LatencySensitiveWake</c>) that approximated it.</summary>
+/// <summary>How often a registered animation source needs a frame. The scheduler's wake IS <c>min(next-due)</c> over
+/// the live, non-quiesced rows (<see cref="FluentGpu.Animation.AnimEngine.NextDueMs(double)"/>) — each kind answers
+/// "does this source need a frame right now?" as DATA. This REPLACED the heuristics
+/// (<c>AmbientAnimationFps</c>/<c>AnimIsAmbient()</c>/scroll-grace/<c>LatencySensitiveWake</c>) that approximated it:
+/// cadence is now carried per row, so nothing has to guess whether the frame class is "ambient".</summary>
 public enum CadenceKind : byte
 {
     DisplayRate,   // present every frame while alive (a live spring/eased transform)
@@ -81,8 +85,19 @@ public struct Cadence
     public static Cadence Once => new() { Kind = CadenceKind.OneShot };
     public static Cadence Parked => new() { Kind = CadenceKind.Paused };
 
+    /// <summary>The perpetual-loop default: <see cref="CadenceKind.Hz"/> with <see cref="Hz"/> = 0, which the engine
+    /// resolves to <see cref="FluentGpu.Animation.AnimEngine.DefaultLoopHz"/> at wake/advance time — LATE, not at the
+    /// seed. So the app's power policy can retune every idle shimmer live (battery ⇒ 15Hz, AC ⇒ 30Hz) without
+    /// re-seeding a single row. <c>AnimEngine.Keyframes(..., loop: true)</c> with no explicit cadence means this.</summary>
+    public static Cadence Default => new() { Kind = CadenceKind.Hz, Hz = 0f };
+
+    /// <summary>True for <see cref="Default"/> — a rate the ENGINE resolves (<see cref="PeriodMs"/> cannot: it has no
+    /// fixed period of its own and reports +∞, so resolve through the engine before reading it).</summary>
+    public readonly bool IsDefault => Kind == CadenceKind.Hz && Hz <= 0f;
+
     /// <summary>Milliseconds between frames this source needs. <c>0</c> = present every frame (DisplayRate);
-    /// <c>+∞</c> = never timer-due (Driven is event-woken; OneShot/Paused never wake). The scheduler's
+    /// <c>+∞</c> = never timer-due (Driven is event-woken; OneShot/Paused never wake — and so does
+    /// <see cref="Default"/>, whose rate only the engine knows: check <see cref="IsDefault"/> first). The scheduler's
     /// <c>NextDueMs</c> scan takes the soonest <c>due − now</c> over live sources, skipping the +∞ ones.</summary>
     public readonly float PeriodMs => Kind switch
     {

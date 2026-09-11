@@ -161,7 +161,9 @@ public abstract class Component
     /// <summary>A <see cref="FluentGpu.Media.MediaPlayer"/> pointed at a source that re-loads when the <paramref name="source"/>
     /// thunk yields a different value (auto SMTC/buffering/default tracks; auto-disposed on unmount).</summary>
     protected FluentGpu.Media.MediaPlayer UseVideo(Func<FluentGpu.Media.MediaSource> source) => Context.UseVideo(source);
-    protected void UseKeyframes(AnimChannel channel, Keyframe[] keys, float durationMs, bool loop, DepKey deps) => Context.UseKeyframes(channel, keys, durationMs, loop, deps);
+    /// <summary>Seed a keyframe track on this component's node. <paramref name="cadence"/> is the row's own frame
+    /// rate (<c>AnimEngine.Keyframes</c>): <c>null</c> = display rate for a one-shot, <c>DefaultLoopHz</c> for a loop.</summary>
+    protected void UseKeyframes(AnimChannel channel, Keyframe[] keys, float durationMs, bool loop, DepKey deps, Cadence? cadence = null) => Context.UseKeyframes(channel, keys, durationMs, loop, deps, cadence);
     protected void UseDrivenAnimation(AnimChannel channel, Keyframe[] keys, Func<float> source, float min, float max, DepKey deps) => Context.UseDrivenAnimation(channel, keys, source, min, max, deps);
     /// <summary>Declare a gesture handler on this component's node (input-a11y.md §13): config-only, enrolls a
     /// gesture-arena member and routes the winner's Tap/Hold/Pan event to <paramref name="handler"/>. No re-render.</summary>

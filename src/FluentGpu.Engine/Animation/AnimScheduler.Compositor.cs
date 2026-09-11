@@ -110,7 +110,11 @@ public sealed partial class AnimEngine
             if (!_scene.IsLive(row.Node) || !IsCompositorRow(in row)) continue;
             var identity = _compositorSeeds[slot];
             _keysBySlot.TryGetValue(slot, out var keys);
-            target.Add(in row, identity.Instance, identity.Revision, identity.ExplicitFrom, keys);
+            // Cadence travels WITH the row: the render thread owns these rows' advance, so it must apply the same
+            // due-check the UI-thread PASS1 does or a 30Hz shimmer would silently run at panel rate once the
+            // compositor adopts it. Cadence.Default is resolved HERE (every capture re-reads DefaultLoopHz, so a live
+            // power-policy change reaches render-owned rows at the next publication).
+            target.Add(in row, identity.Instance, identity.Revision, identity.ExplicitFrom, keys, (ushort)ResolvedPeriodMs(slot));
         }
         target.EndCapture();
     }
@@ -136,7 +140,8 @@ public sealed partial class AnimEngine
                 row.Velocity = pose.Velocity;
                 row.ElapsedMs = pose.ElapsedMs;
                 row.DelayRemainingMs = pose.DelayRemainingMs;
-                row.Flags &= ~AnimFlags.JustSeeded;
+                // The render thread resolved the pending start (RenderCompositorAnimations) — never re-pend on re-capture.
+                row.Flags &= ~(AnimFlags.JustSeeded | AnimFlags.StartPending);
                 if (IsSideTableChannel(row.Channel)) WriteSideTable(row.Channel, row.Node, row.Position);
                 else
                 {
@@ -168,6 +173,8 @@ public sealed class CompositorAnimationSnapshot
         public ulong Instance, Revision;
         public bool ExplicitFrom;
         public Keyframe[] Keys;
+        /// <summary>The row's resolved cadence period in ms (0 = display rate) — see the note at the Add call site.</summary>
+        public ushort PeriodMs;
     }
     private Entry[] _entries = [];
     private int _count, _oldCount, _distinctNodes;
@@ -186,7 +193,7 @@ public sealed class CompositorAnimationSnapshot
         CapturedAtMs = now; _oldCount = _count; _count = 0;
         _distinctNodes = 0; _lastAddedNode = NodeHandle.Null;
     }
-    internal void Add(in AnimValue row, ulong instance, ulong revision, bool explicitFrom, Keyframe[]? keys)
+    internal void Add(in AnimValue row, ulong instance, ulong revision, bool explicitFrom, Keyframe[]? keys, ushort periodMs)
     {
         SceneRecordingSnapshot.Grow(ref _entries, _count + 1);
         if (row.Node != _lastAddedNode) { _distinctNodes++; _lastAddedNode = row.Node; }
@@ -198,6 +205,7 @@ public sealed class CompositorAnimationSnapshot
         target.Row.NextOnNode = target.Row.NextActive = -1;
         target.Row.DrivenSrc = AnimValue.WallClock;
         target.Instance = instance; target.Revision = revision; target.ExplicitFrom = explicitFrom;
+        target.PeriodMs = periodMs;
     }
     internal void EndCapture()
     {

@@ -120,8 +120,8 @@ public sealed partial class TreeReconciler
     // the 30 Hz ambient cap, a quarter-second of visibly half-built page. Both extremes were wrong for the same reason:
     // the rate was a CONSTANT. It is now measured and paid per frame — a light row's whole window still lands in the
     // mount frame (the node budget covers it, so those paths are byte-identical to the disabled state), a heavy row's
-    // window fills over a few frames at the display rate (a first content mount arms AppHost's 0.5 s _mountGraceUntil,
-    // which holds the loop off the ambient cap for exactly this window), and the ramp accelerates as the page warms.
+    // window fills over a few frames at the display rate (the warming-virtuals wake bit is due-now work, so the loop
+    // runs at the display rate for exactly this window), and the ramp accelerates as the page warms.
     public int FrameEpoch;
     /// <summary>Open the window the per-row cost is measured over: the host's whole flush section, which is where a
     /// freshly realized row's REAL work happens (the component render its mount schedules). Called once per paint,
@@ -459,11 +459,13 @@ public sealed partial class TreeReconciler
     }
 
     /// <summary>The per-paint reconciler tick. Drips the budgeted un-park replay queue (BEFORE the frame's reactive
-    /// flush, so the drained batch renders in this same frame) and clears the per-frame render-type histogram (the
-    /// histogram half is a no-op unless <see cref="RenderCensusEnabled"/>). Call at Paint start.</summary>
+    /// flush, so the drained batch renders in this same frame), releases image-swap crossfades whose window has landed,
+    /// and clears the per-frame render-type histogram (the histogram half is a no-op unless
+    /// <see cref="RenderCensusEnabled"/>). Call at Paint start.</summary>
     public void BeginRenderCensus()
     {
         DrainDeferredReplays();
+        if (_imageSwaps.Count > 0) SweepImageSwaps();   // release image-swap crossfades whose window has landed
         NodeBindingFireCount = 0;
         NodeBindingWriteCount = 0;
         if (!RenderCensusEnabled) { _renderCensus = null; return; }
@@ -1606,6 +1608,18 @@ public sealed partial class TreeReconciler
                 if (!oldActive.Cacheable) state.Entries.Remove(oldKey);
             }
         }
+        else if (state.ActiveKey is null && FrameEpoch > 1)
+        {
+            // FIRST activation of a boundary that appears into an already-presented UI (a freshly opened tab whose first
+            // route IS the destination — the player-bar artist link). There is no outgoing entry, so the switch branch
+            // above never ran and no Enter was seeded: a one-frame hard cut. TransitionFor owns this edge too, with
+            // KeepAliveOptions.FirstActivation as the old token (the recipe is the app's; null ⇒ no entrance). The
+            // gate is the engine's first-frame notion: the host bumps FrameEpoch at the top of every paint, so ≤ 1
+            // means this reconcile runs before or inside the very first paint — the launch page, which nothing was on
+            // screen to transition from, mounts without one (Flutter's Navigator likewise never animates its initial
+            // route; host-less reconcilers never tick FrameEpoch and keep the plain mount).
+            transition = options.TransitionFor?.Invoke(KeepAliveOptions.FirstActivation, token);
+        }
 
         if (!state.Entries.TryGetValue(key, out var entry))
         {
@@ -1839,6 +1853,8 @@ public sealed partial class TreeReconciler
                 if (active) PinImageNode(node, pendingId);
                 else UnpinImageNode(node, pendingId);
             }
+            // A parked page has nothing on screen to dissolve: finish any swap crossfade instead of parking its pin.
+            if (!active) FinishImageSwap(node);
         }
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
             SetSubtreeResourcesActive(c, active);
@@ -1988,10 +2004,12 @@ public sealed partial class TreeReconciler
     // Sole write path for paint.ImageId (media-pipeline.md §hold-last-good). A bare re-key would swap straight onto
     // the new (Pending) entry, dropping the OLD Ready texture the same frame — the placeholder flashes back in.
     // Instead, when the old texture is Ready and the new one is still decoding, HOLD: keep drawing the old id, pin
-    // the new one (so its completion is tracked) under _pendingImageId, and let MarkImageDirty commit the hard cut
-    // once the new entry settles (Ready or Failed) — no fade restart (see ImageCache.SettleReveal). Mount (oldId==0),
-    // a synchronous cache hit, and an instant failure (the new entry is already terminal) all fall straight through
-    // to the immediate commit below — today's behavior, unchanged.
+    // the new one (so its completion is tracked) under _pendingImageId, and let MarkImageDirty commit once the new
+    // entry settles (Ready or Failed) — no fade restart (see ImageCache.SettleReveal): a hard cut for the SAME picture
+    // at another decode size, a short dissolve (BeginImageSwap) for a DIFFERENT one. With nothing drawable on the node
+    // (a mount), a resident rendition of the same source stands in the same way. A synchronous cache hit and an instant
+    // failure commit at once. Never a placeholder frame over decoded content: Flutter's Image.gaplessPlayback, plus the
+    // dissolve.
     private void SwapImageId(NodeHandle node, ref NodePaint paint, int newId)
     {
         int idx = (int)node.Raw.Index;
@@ -2008,9 +2026,9 @@ public sealed partial class TreeReconciler
         _pendingImageId.TryGetValue(idx, out int pending);
         if (pending != 0 && pending == newId) return;   // already holding on exactly this id — nothing changed
 
-        bool holdable = Images is not null && oldId != 0 && newId != 0
-            && Images.StateOf(new ImageHandle(oldId)) == ImageState.Ready
-            && Images.StateOf(new ImageHandle(newId)) == ImageState.Pending;
+        ImageState newState = Images is not null && newId != 0 ? Images.StateOf(new ImageHandle(newId)) : ImageState.None;
+        bool oldDrawable = Images is not null && oldId != 0 && Images.StateOf(new ImageHandle(oldId)) == ImageState.Ready;
+        bool holdable = oldDrawable && newState == ImageState.Pending;
 
         if (holdable)
         {
@@ -2024,11 +2042,38 @@ public sealed partial class TreeReconciler
             return;
         }
 
+        // Resident-rendition stand-in: nothing drawable on this node (a MOUNT, or a re-key off a still-decoding id)
+        // but the SAME source is already resident at another decode size — hold THAT exactly like hold-last-good
+        // instead of painting a placeholder for the whole decode. This is the case hold-last-good cannot reach: a cover
+        // remounted by a structural page change (preview → loaded page, a layout-tier switch) asking for a new decode
+        // bucket. The settle is a hard cut (same picture, sharper). See ImageCache.ResidentRenditionOf.
+        if (newState == ImageState.Pending && !oldDrawable
+            && Images!.ResidentRenditionOf(new ImageHandle(newId)) is { IsNull: false } standIn)
+        {
+            if (pending != 0) UnpinImageNode(node, pending);
+            FinishImageSwap(node);
+            if (oldId != standIn.Id) UnpinImageNode(node, oldId);
+            paint.ImageId = standIn.Id;
+            PinImageNode(node, standIn.Id);
+            _pendingImageId[idx] = newId;
+            PinImageNode(node, newId);
+            _scene.Mark(node, NodeFlags.PaintDirty);
+            if (Diag.CompiledIn && Diag.Enabled && Images is not null && ImageCache.DiagTraced(Images.SourceOf(new ImageHandle(newId))))
+                Diag.Event("img", $"standin node={node.Raw.Index} old={oldId} drawn={standIn.Id} new={newId} " +
+                    $"src={ImageCache.DiagSourceTail(Images.SourceOf(new ImageHandle(newId)))}");
+            return;
+        }
+
         if (pending != 0)
         {
             _pendingImageId.Remove(idx);
             if (pending != newId) UnpinImageNode(node, pending);
         }
+        // A synchronous hit (the new picture already resident) still cuts at once. Deliberately NOT a dissolve: this is
+        // also the path every recycled virtual row rebinds through while scrolling, and dissolving a slot from the
+        // PREVIOUS item's cover would ghost the wrong art across the list. The dissolve belongs to the hold settle
+        // (MarkImageDirty), where the old texture was on screen for the whole decode anyway.
+        FinishImageSwap(node);
         UnpinImageNode(node, oldId);
         paint.ImageId = newId;
         if (newId != 0) PinImageNode(node, newId);
@@ -2037,6 +2082,91 @@ public sealed partial class TreeReconciler
             && ImageCache.DiagTraced(Images.SourceOf(new ImageHandle(newId))))
             Diag.Event("img", $"commit node={node.Raw.Index} old={oldId} new={newId} " +
                 $"src={ImageCache.DiagSourceTail(Images.SourceOf(new ImageHandle(newId)))}");
+    }
+
+    // ── image-swap crossfade (a node's drawn picture replaced by a DIFFERENT one) ───────────────────────────────────
+    // node index → the swap in flight: the OUTGOING texture stays pinned and is drawn opaque under the incoming image
+    // for ImageCache.SwapCrossfadeMs (SceneRecorder, ImageVisualEffects.SwapOutgoingId). Lives here, not only on
+    // ImageVisualEffects, because that struct is rewritten wholesale from the element every reconcile.
+    private readonly record struct ImageSwap(NodeHandle Node, int OutgoingId, int IncomingId, float StartMs, float DurationMs);
+    private readonly Dictionary<int, ImageSwap> _imageSwaps = new();
+    private readonly List<int> _imageSwapSweep = new(4);
+    // The outgoing pin is released a little AFTER the window: the render thread replays against its own image clock,
+    // which may trail the UI's by a frame; the outgoing draw already resolves to nothing past the window, so the slack
+    // only delays an unpin, never a pixel. The fade clock is held open past the release point (see BeginImageSwap) so
+    // the UI is guaranteed a frame that performs it.
+    private const float ImageSwapReleaseSlackMs = 34f;
+    private const float ImageSwapWakeSlackMs = 100f;
+
+    /// <summary>Start (or supersede) this node's swap crossfade from <paramref name="outgoingId"/> — the texture on
+    /// screen — to <paramref name="incomingId"/>. The outgoing is already pinned as the node's drawn id; it simply stays
+    /// pinned until <see cref="SweepImageSwaps"/> releases it. Callers commit <c>paint.ImageId = incomingId</c>.</summary>
+    private void BeginImageSwap(NodeHandle node, int outgoingId, int incomingId)
+    {
+        var images = Images!;
+        int idx = (int)node.Raw.Index;
+        // A newer swap supersedes an older one: its outgoing is the older swap's INCOMING, so only the older outgoing
+        // is released — unless it is the NEW incoming (re-keyed back mid-dissolve), whose pin the caller keeps.
+        if (_imageSwaps.Remove(idx, out var prev) && prev.OutgoingId != outgoingId && prev.OutgoingId != incomingId)
+            UnpinImageNode(node, prev.OutgoingId);
+        // Keep the fade clock (UI wake + the render thread's clock-driven presents) open until the release can run: the
+        // swap window, or the incoming entry's own still-running reveal if that ends later, plus the release slack.
+        float holdMs = ImageCache.SwapCrossfadeMs;
+        if (images.FadeParamsOf(new ImageHandle(incomingId), out float revealStart, out float revealMs, out _))
+            holdMs = MathF.Max(holdMs, revealStart + revealMs - images.ClockMs);
+        float start = images.BeginSwap(new ImageHandle(outgoingId), holdMs + ImageSwapWakeSlackMs);
+        _imageSwaps[idx] = new ImageSwap(node, outgoingId, incomingId, start, ImageCache.SwapCrossfadeMs);
+        ApplyImageSwapEffects(node, outgoingId, start, ImageCache.SwapCrossfadeMs);
+        _scene.Mark(node, NodeFlags.PaintDirty);
+        if (Diag.CompiledIn && Diag.Enabled && ImageCache.DiagTraced(images.SourceOf(new ImageHandle(incomingId))))
+            Diag.Event("img", $"swap node={node.Raw.Index} out={outgoingId} in={incomingId} " +
+                $"src={ImageCache.DiagSourceTail(images.SourceOf(new ImageHandle(incomingId)))}");
+    }
+
+    /// <summary>End this node's swap crossfade (if any): release the outgoing pin and re-record without it. Safe to
+    /// call on any node — the no-swap case is one dictionary probe.</summary>
+    private void FinishImageSwap(NodeHandle node)
+    {
+        int idx = (int)node.Raw.Index;
+        if (!_imageSwaps.Remove(idx, out var swap)) return;
+        if (!_scene.IsLive(node)) return;
+        // Role guard: the pin set is keyed (node, id), so never drop the pin of an id this node still draws or holds.
+        bool stillUsed = _scene.Paint(node).ImageId == swap.OutgoingId
+                         || (_pendingImageId.TryGetValue(idx, out int held) && held == swap.OutgoingId);
+        if (!stillUsed) UnpinImageNode(node, swap.OutgoingId);
+        ApplyImageSwapEffects(node, 0, float.NaN, 0f);
+        _scene.Mark(node, NodeFlags.PaintDirty);
+    }
+
+    /// <summary>Write the swap fields onto the node's sparse <see cref="ImageVisualEffects"/> row, keeping the rest of
+    /// the row; drops the row when nothing is left on it (the plain-image case).</summary>
+    private void ApplyImageSwapEffects(NodeHandle node, int outgoingId, float startMs, float durationMs)
+    {
+        ImageVisualEffects fx = _scene.TryGetImageEffects(node, out var cur) ? cur : new ImageVisualEffects(0, default, default);
+        fx = fx with { SwapOutgoingId = outgoingId, SwapStartMs = startMs, SwapMs = durationMs };
+        if (fx.SwapOutgoingId == 0 && fx.DerivedImageId == 0 && fx.Overlay.A <= 0f && fx.Mask.IsNone && fx.Saturation == 1f)
+            _scene.ClearImageEffects(node);
+        else _scene.SetImageEffects(node, fx);
+    }
+
+    /// <summary>Release every swap whose window (and the incoming image's own reveal) has landed. Run once per paint
+    /// from <see cref="BeginRenderCensus"/>; the common no-swap case costs one count read.</summary>
+    private void SweepImageSwaps()
+    {
+        _imageSwapSweep.Clear();
+        float now = Images?.ClockMs ?? float.PositiveInfinity;
+        foreach (var (idx, swap) in _imageSwaps)
+        {
+            bool landed = now >= swap.StartMs + swap.DurationMs + ImageSwapReleaseSlackMs
+                          && (Images is null || Images.CrossFadeOf(new ImageHandle(swap.IncomingId)) >= 1f);
+            if (landed || !_scene.IsLive(swap.Node)) _imageSwapSweep.Add(idx);
+        }
+        foreach (int idx in _imageSwapSweep)
+        {
+            if (!_imageSwaps.TryGetValue(idx, out var swap)) continue;
+            if (_scene.IsLive(swap.Node)) FinishImageSwap(swap.Node);
+            else _imageSwaps.Remove(idx);
+        }
     }
 
     void TrackImageNode(int imageId, NodeHandle node)
@@ -2081,19 +2211,32 @@ public sealed partial class TreeReconciler
             if (!owns) { list.RemoveAt(i); continue; }
 
             // Hold-last-good settle (media-pipeline.md §hold-last-good): the held (new) texture just reached a
-            // terminal state — commit the hard cut. It's already pinned + tracked (SwapImageId's hold path did
-            // that), so this is a plain field write, never a re-pin.
+            // terminal state — commit. It's already pinned + tracked (SwapImageId's hold path did that), so this is a
+            // plain field write, never a re-pin. The SAME picture at a new decode size (or a resident stand-in's
+            // exact size) hard-cuts: only sharpness changes. A DIFFERENT picture (a new track's cover, another CDN
+            // rendition of other art) dissolves from the held texture over ImageCache.SwapCrossfadeMs instead of the
+            // old one-frame cut. Either way the node owns the transition, so the entry's own placeholder reveal is
+            // settled — nothing ever fades in over a placeholder here.
             if (isPending && Images is not null)
             {
                 var state = Images.StateOf(new ImageHandle(imageId));
                 if (state is ImageState.Ready or ImageState.Failed)
                 {
-                    UnpinImageNode(node, paint.ImageId);   // release the OLD (held) id — reads paint.ImageId BEFORE overwrite
+                    int heldId = paint.ImageId;   // read BEFORE overwrite
+                    bool dissolve = state == ImageState.Ready && heldId != 0
+                        && Images.StateOf(new ImageHandle(heldId)) == ImageState.Ready
+                        && !Images.SameSource(new ImageHandle(heldId), new ImageHandle(imageId));
+                    if (state == ImageState.Ready) Images.SettleReveal(new ImageHandle(imageId));   // no fade restart
+                    if (dissolve) BeginImageSwap(node, heldId, imageId);   // the held texture stays pinned for the window
+                    else
+                    {
+                        FinishImageSwap(node);
+                        UnpinImageNode(node, heldId);   // release the OLD (held) id
+                    }
                     paint.ImageId = imageId;
                     _pendingImageId.Remove(idx);
-                    if (state == ImageState.Ready) Images.SettleReveal(new ImageHandle(imageId));   // hard cut, no fade restart
                     if (Diag.CompiledIn && Diag.Enabled && ImageCache.DiagTraced(Images.SourceOf(new ImageHandle(imageId))))
-                        Diag.Event("img", $"commit node={node.Raw.Index} new={imageId} state={state} via=settle");
+                        Diag.Event("img", $"commit node={node.Raw.Index} new={imageId} state={state} via=settle{(dissolve ? " dissolve" : "")}");
                 }
             }
 
@@ -2433,8 +2576,14 @@ public sealed partial class TreeReconciler
     private void WriteImageEffects(NodeHandle node, in ImageEl im, int derivedId)
     {
         ImageMaskSpec mask = im.Mask is { } m && !m.IsNone ? m : default;
-        if (derivedId != 0 || im.ColorOverlay.A > 0f || !mask.IsNone || im.Saturation != 1f)
-            _scene.SetImageEffects(node, new ImageVisualEffects(derivedId, im.ColorOverlay, mask, im.Saturation));
+        // The row is rewritten wholesale from the element, so a swap crossfade in flight is re-applied from _imageSwaps.
+        bool swapping = _imageSwaps.TryGetValue((int)node.Raw.Index, out var swap);
+        if (derivedId != 0 || im.ColorOverlay.A > 0f || !mask.IsNone || im.Saturation != 1f || swapping)
+        {
+            var fx = new ImageVisualEffects(derivedId, im.ColorOverlay, mask, im.Saturation);
+            if (swapping) fx = fx with { SwapOutgoingId = swap.OutgoingId, SwapStartMs = swap.StartMs, SwapMs = swap.DurationMs };
+            _scene.SetImageEffects(node, fx);
+        }
         else
             _scene.ClearImageEffects(node);
     }
@@ -3685,9 +3834,10 @@ public sealed partial class TreeReconciler
     // The recycle-shape contract guard (production safety == CI coverage): per-item VALUE variation (a PartDelta) or
     // invisible-part flips are legal in a recycled scroll path, but per-item STRUCTURE variation that the keyed child
     // reconcile (below) CANNOT absorb is not — it rebinds onto a recycled node the diff can't realign. This catches
-    // that in DEBUG/CI. The comparison mirrors ReconcileChildren EXACTLY (keyed children match by Key — so a keyed
+    // that in DEBUG/CI. The comparison mirrors ReconcileChildren's model (keyed children match by Key — so a keyed
     // child legally appears/disappears, e.g. ItemContainer's selection-state ring/common/checkbox; UNKEYED children
-    // match POSITIONALLY — so their type sequence must be stable, and each key present in BOTH must stay shape-compat).
+    // match by ORDINAL AMONG UNKEYED SIBLINGS — the pairing ReconcileChildren applies whenever the unkeyed population
+    // is unchanged — so their type sequence must be stable, and each key present in BOTH must stay shape-compat).
     [System.Diagnostics.Conditional("DEBUG")]
     private static void AssertRecycleShapeStable(Element prev, Element next)
     {
@@ -3703,8 +3853,10 @@ public sealed partial class TreeReconciler
     // legal STATE-driven chrome (the selection ring/inner-stroke/checkbox coming & going, the checkmark glyph appearing
     // when checked) passes, while a genuinely corrupting recycle (a different-typed UNKEYED child landing at an aligned
     // positional slot, or a keyed child whose own subtree shape changes) is flagged:
-    //   • UNKEYED children match POSITIONALLY by index — overlapping positions must agree on type + recurse-compat;
-    //     a surplus on either side is a legal TAIL insert/remove (exactly the unchecked↔checked glyph child).
+    //   • UNKEYED children match by ORDINAL AMONG UNKEYED SIBLINGS (keyed siblings skipped — the cursor
+    //     ReconcileChildrenCore / ChildReconcilePlan.Step pair by when the unkeyed count is unchanged; an unkeyed
+    //     add/remove there falls back to same-index pairing, UnkeyedPairing) — overlapping ordinals must agree on type +
+    //     recurse-compat; a surplus on either side is a legal TAIL insert/remove (exactly the unchecked↔checked glyph child).
     //   • KEYED children match by Key — a key in only one side is a free insert/remove (the selected↔unselected ring);
     //     a key in BOTH must recurse-compat.
     // Values (Fill/Color/Opacity/…) are ignored — only structure is checked. Leaves (Text/Image/Polyline) compare by type.
@@ -3723,8 +3875,9 @@ public sealed partial class TreeReconciler
         Element[]? bc = b switch { BoxEl x => x.Children, GridEl x => x.Children, _ => null };
         if (ac is null || bc is null) return true;   // leaf type matched (no child structure to compare)
 
-        // Positional pass over UNKEYED children (Key == null): walk both in order, comparing overlapping slots only.
-        // A trailing surplus on either side is a legal tail insert/remove (ReconcileChildren removes/mounts it).
+        // Ordinal pass over UNKEYED children (Key == null): walk both in order skipping keyed siblings, comparing
+        // overlapping ordinals only. A trailing surplus on either side is a legal tail insert/remove (ReconcileChildren
+        // removes/mounts it).
         int ai = 0, bi = 0;
         while (true)
         {
@@ -3816,6 +3969,27 @@ public sealed partial class TreeReconciler
         // re-appended child order still needs a relayout to move the rows. Non-monotonic match order detects it.
         bool moved = false;
         int lastMatch = -1;
+        // UNKEYED identity (keyed children match by Key exactly as before, and only ever consume KEYED old slots, so the
+        // two rules never compete for a slot). The mode is decided once, at the first unkeyed new child (a pure-keyed
+        // list — every Flow.For — never pays for it), by UnkeyedPairing.Ordinal:
+        //   • ORDINAL — the unkeyed population is unchanged (same count in old and new): the k-th unkeyed new child pairs
+        //     with the k-th unkeyed old child; keyed siblings are skipped by the cursor, never counted (the model
+        //     ShapeCompatible / the recycle-shape guard encode). A keyed insert / remove / move therefore never shifts
+        //     unkeyed identity — the bug class this fixes: [title, artists] → [keyedLine, title, artists] used to hand
+        //     the new title the old ARTISTS node + component instance (whose factory froze at mount) and remount artists.
+        //   • POSITIONAL — an unkeyed child was added or removed: the former same-index rule (same slot, both unkeyed).
+        //     Pure ordinal pairing would be WRONG here: a keyed⇄unkeyed flip at one slot (`cond ? keyedX : unkeyedY`
+        //     ahead of [title, artists]; NavigationView's top bar, whose unkeyed "More" button takes an overflowed keyed
+        //     item's slot) would shift every unkeyed sibling after it — the very swap above — while same-index pairing
+        //     keeps them put.
+        // Either way reuse needs the element type to match; a mismatch consumes that ordinal/slot (no reuse, no slide:
+        // the new child mounts, the old one is removed). Pure-unkeyed lists are EXACTLY the former rule in both modes
+        // (ordinal == index when nothing was added/removed), and so is every render that adds/removes an unkeyed child;
+        // only a render that shifts keyed children around an unchanged unkeyed population pairs differently. Zero-alloc:
+        // one forward cursor (amortized O(oldN)) + one counting pass. The ordinal matches are monotone among themselves,
+        // so `moved` below still flags exactly a real reorder of surviving nodes.
+        int unkeyedMode = 0;        // 0 = undecided, 1 = ordinal, 2 = positional
+        int unkeyedCursor = 0;
 
         for (int i = 0; i < newN; i++)
         {
@@ -3836,9 +4010,21 @@ public sealed partial class TreeReconciler
                     }
                 }
             }
-            else if (nk.Key is null && i < oldN && !used[i] && oldKids[i].Key is null
-                && oldKids[i].ElementTypeId == nk.ElementTypeId)
-                match = i;
+            else
+            {
+                if (unkeyedMode == 0) unkeyedMode = UnkeyedPairing.Ordinal(oldKids, newKids) ? 1 : 2;
+                if (unkeyedMode == 1)
+                {
+                    while (unkeyedCursor < oldN && oldKids[unkeyedCursor].Key is not null) unkeyedCursor++;
+                    if (unkeyedCursor < oldN)
+                    {
+                        int ordinal = unkeyedCursor++;   // consumed whether or not the type matches
+                        if (!used[ordinal] && oldKids[ordinal].ElementTypeId == nk.ElementTypeId) match = ordinal;
+                    }
+                }
+                else if (i < oldN && !used[i] && oldKids[i].Key is null && oldKids[i].ElementTypeId == nk.ElementTypeId)
+                    match = i;
+            }
 
             if (match >= 0)
             {
@@ -3985,6 +4171,8 @@ public sealed partial class TreeReconciler
             // A hold-last-good in progress (media-pipeline.md §hold-last-good): unpin the pending (new, still-decoding)
             // id too — otherwise an unmount mid-hold would leak its pin (UnpinImageNode's refs==0 check cancels it).
             if (_pendingImageId.Remove(idx, out int pendingId)) UnpinImageNode(node, pendingId);
+            // A swap crossfade in flight holds its OUTGOING texture pinned — release it with the node.
+            if (_imageSwaps.Remove(idx, out var swap)) UnpinImageNode(node, swap.OutgoingId);
         }
         if (_nodeBindings.Remove(idx, out var binds)) for (int i = 0; i < binds.Count; i++) binds[i].Dispose();
         _providerSig.Remove(idx);
@@ -4408,6 +4596,15 @@ public sealed partial class TreeReconciler
         if (_keyNode.TryGetValue(key, out NodeHandle current) && current.Equals(node)) _keyNode.Remove(key);
     }
 
+    /// <summary>True while this node's implicit BrushTransition is still fading its FILL away from a visible colour —
+    /// the displayed colour is <c>LerpLinear(FillFrom, Fill, T)</c>, which is on screen even when the target is
+    /// transparent (see the BoxEl VisualKind hold in <see cref="WriteColumns"/>). SparsePaint gates the sparse lookup:
+    /// <c>SetBrushAnim</c> sets it, so a node that never faded pays one flag read.</summary>
+    private bool FillFadeInFlight(NodeHandle node)
+        => (_scene.Flags(node) & NodeFlags.SparsePaint) != 0
+           && _scene.TryGetBrushAnim(node, out var ba)
+           && (ba.Channels & BrushAnim.FillBit) != 0 && ba.FillFrom.A > 0f && ba.T < 1f;
+
     private void WriteColumns(NodeHandle node, Element el, bool isMount, Element? old = null)
     {
         // P8 (Operation ultra-fast GPU engine): a reconciler column write rewrites LayoutInput / NodePaint /
@@ -4512,6 +4709,14 @@ public sealed partial class TreeReconciler
                 // Guarded like Opacity/Width/Height/Text: a bound fill is owned by its effect — the static must never
                 // clobber it on an update between signal fires (mount was safe only because the bind fires after this).
                 if (fillOwned) paint.Fill = b.Fill.Value;
+                // A fade TO transparent must be DRAWN until it lands. With no other surface a transparent fill made the
+                // node VisualKind.None above, so the recorder never emitted it: colour→colour eased over the whole
+                // BrushTransition while colour→"no tint" snapped off in one frame, and the NEXT fade then started from a
+                // colour that was never on screen (a same-colour hop A→none→A blinked). Flutter's AnimatedContainer /
+                // ColorTween and a CSS background-color transition both keep painting the interpolated colour all the way
+                // down to alpha 0. The row retires at T≥1 (SceneStore.SetBrushAnimT); the first reconcile after that drops
+                // the node back to None, and until then the recorder draws nothing for the settled transparent box.
+                if (paint.VisualKind == VisualKind.None && FillFadeInFlight(node)) paint.VisualKind = VisualKind.Box;
                 if (!b.HoverFill.IsBound) paint.HoverFill = b.HoverFill.Value;
                 if (!b.PressedFill.IsBound) paint.PressedFill = b.PressedFill.Value;
                 if (borderOwned) paint.BorderColor = b.BorderColor.Value;

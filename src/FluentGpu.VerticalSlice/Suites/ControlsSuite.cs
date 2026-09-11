@@ -8832,6 +8832,266 @@ static partial class ControlsSuite
                 $"shown={chromeShownAtPlaying} heldPinned={heldWhilePinned} collapsedAfterClose={collapsedAfterClose}");
         }
 
+        // ── the chrome machine end to end (the policy itself is PlayerChromeVisibilityTests; these pin the wiring: the
+        //    fade seed, the drag-to-move gesture, leave/buffering/slow-move, the seek bar's hide edge). Shared rig: a VIDEO
+        //    player (audio-only media never auto-hides — it has no picture to reveal) under a real OverlayHost, the
+        //    headless 16 ms frame step, driven to steady Playing. The transport's Button-role nodes lose their Role at
+        //    the hide EDGE (hidden chrome leaves the accessibility tree), so ChromeButtons reads the edge, not the fade.
+        static (HeadlessPlatformApp App, HeadlessWindow Window, AppHost Host, HeadlessScriptedPlayer Player) ChromeRig(
+            StringTable strings, string name, float hideMs = 200f, bool dragMovesWindow = false)
+        {
+            var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc(name, new Size2(560, 360), 1f));
+            window.Show();
+            var player = PlayingPlayer(new SizeI(640, 360));
+            var probe = new MediaPlayerHostProbe { Player = player, HideMs = hideMs, DragMovesWindow = dragMovesWindow };
+            var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe);
+            host.RunFrame();
+            player.Pump(TimeSpan.FromMilliseconds(1)); host.RunFrame();
+            player.Pump(TimeSpan.FromMilliseconds(1)); host.RunFrame();
+            host.Paint(0);
+            return (app, window, host, player);
+        }
+        // The chrome root: the player frame's second child (the video area — the hole's parent — is the first).
+        static NodeHandle ChromeRootOf(SceneStore s)
+        {
+            var hole = FindVisual(s, s.Root, VisualKind.Video);
+            var area = hole.IsNull ? NodeHandle.Null : s.Parent(hole);
+            return area.IsNull ? NodeHandle.Null : s.NextSibling(area);
+        }
+        // A whole-DIP point on the PICTURE (the upper quarter of the frame) — never on the transport at the bottom.
+        static Point2 OnPicture(SceneStore s, NodeHandle chrome)
+        {
+            var r = chrome.IsNull ? default : s.AbsoluteRect(s.Parent(chrome));
+            return new Point2(MathF.Round(r.X + r.W * 0.5f), MathF.Round(r.Y + r.H * 0.25f));
+        }
+        static int ChromeButtons(AppHost host) => Roles(host.Scene, AutomationRole.Button).Count;
+
+        // gate.media.el.chrome-fade-interpolates — D1: the chrome FADES, it does not cut. The reconciler re-asserts the
+        // static terminal Opacity before layout effects run, so a fade seeded from the node's paint opacity degenerated
+        // into from == to — and every earlier gate sampled only settled terminals, so none of them saw it. Sampled one and
+        // three frames past each edge, in BOTH directions: strictly between the terminals, and moving the right way.
+        {
+            var (app, window, host, _) = ChromeRig(strings, "g5g-mpe-fade");
+            using (app) using (host)
+            {
+                var s = host.Scene;
+                var chrome = ChromeRootOf(s);
+                bool shownAtStart = !chrome.IsNull && ChromeButtons(host) > 0 && Near(s.Paint(chrome).Opacity, 1f, 0.01f);
+                for (int i = 0; i < 60 && ChromeButtons(host) > 0; i++) host.Paint(0);   // run to the hide edge (200 ms dwell)
+                host.Paint(0); float hide1 = s.Paint(chrome).Opacity;
+                host.Paint(0); host.Paint(0); float hide3 = s.Paint(chrome).Opacity;
+                for (int i = 0; i < 40; i++) host.Paint(0);                               // settle the 400 ms conceal
+                float hidden = s.Paint(chrome).Opacity;
+                // Reveal by a press on the picture (the hidden chrome is out of the hit-test, so the frame takes it).
+                var p = OnPicture(s, chrome);
+                window.QueueInput(new InputEvent(InputKind.PointerDown, p, 0, 0, TimestampMs: 10_000));
+                window.QueueInput(new InputEvent(InputKind.PointerUp, p, 0, 0, TimestampMs: 10_010));
+                host.RunFrame();
+                host.Paint(0); float show1 = s.Paint(chrome).Opacity;
+                host.Paint(0); host.Paint(0); float show3 = s.Paint(chrome).Opacity;
+                bool concealFades = hide1 > 0.01f && hide1 < 0.99f && hide3 > 0.01f && hide3 < hide1;
+                bool revealFades = show1 > 0.01f && show1 < 0.99f && show3 > show1;
+                Check("gate.media.el.chrome-fade-interpolates",
+                    shownAtStart && concealFades && Near(hidden, 0f, 0.01f) && revealFades,
+                    $"shown={shownAtStart} hide+1={hide1:0.000} hide+3={hide3:0.000} hidden={hidden:0.000} "
+                    + $"show+1={show1:0.000} show+3={show3:0.000}");
+            }
+        }
+
+        // gate.media.el.fade-retargets-live — an interrupted fade departs from WHERE THE PIXELS ARE: a pointer entering the
+        // player mid-conceal reverses from the live value — never jumping back to 1 (the old read-the-terminal seed), never
+        // snapping to 0.
+        {
+            var (app, window, host, _) = ChromeRig(strings, "g5g-mpe-retarget");
+            using (app) using (host)
+            {
+                var s = host.Scene;
+                var chrome = ChromeRootOf(s);
+                for (int i = 0; i < 60 && ChromeButtons(host) > 0; i++) host.Paint(0);   // the hide edge
+                for (int i = 0; i < 4; i++) host.Paint(0);                                // ~64 ms into the 400 ms conceal
+                float mid = s.Paint(chrome).Opacity;
+                window.QueueInput(new InputEvent(InputKind.PointerMove, OnPicture(s, chrome), 0, 0, TimestampMs: 20_000));
+                host.RunFrame();                                                          // entering → reveal, seeded from the live value
+                float after = s.Paint(chrome).Opacity;
+                host.Paint(0);
+                float next = s.Paint(chrome).Opacity;
+                Check("gate.media.el.fade-retargets-live",
+                    mid > 0.05f && mid < 0.95f && after >= mid - 0.02f && after < 0.99f && next >= after,
+                    $"mid={mid:0.000} after={after:0.000} next={next:0.000}");
+            }
+        }
+
+        // gate.media.el.drag-moves-window — the pop-out's chromeless window moves by dragging the PICTURE: a press that
+        // travels past the 4 px drag box asks the PAL for the OS move loop exactly once; within the box it is still a
+        // click. The chrome is held for the whole loop and is NOT pinned afterwards (D7) — the loop ends the way Win32
+        // reports it: the capture cancel for the contact, then WindowMoveSizeEnded.
+        {
+            var (app, window, host, _) = ChromeRig(strings, "g5g-mpe-drag", dragMovesWindow: true);
+            using (app) using (host)
+            {
+                var p0 = OnPicture(host.Scene, ChromeRootOf(host.Scene));
+                window.QueueInput(new InputEvent(InputKind.PointerDown, p0, 0, 0, TimestampMs: 60_000)); host.RunFrame();
+                window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(p0.X + 2f, p0.Y), 0, 0, TimestampMs: 60_016)); host.RunFrame();
+                int afterSlop = window.BeginSystemMoveCount;
+                window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(p0.X + 12f, p0.Y), 0, 0, TimestampMs: 60_032)); host.RunFrame();
+                int afterTravel = window.BeginSystemMoveCount;
+                window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(p0.X + 30f, p0.Y), 0, 0, TimestampMs: 60_048)); host.RunFrame();
+                int afterMore = window.BeginSystemMoveCount;
+                for (int i = 0; i < 30; i++) host.Paint(0);                               // the loop runs well past the 200 ms dwell
+                bool heldDuringMove = ChromeButtons(host) > 0;
+                window.QueueInput(new InputEvent(InputKind.PointerCancel, default, 0, 0, TimestampMs: 60_600));
+                window.QueueInput(new InputEvent(InputKind.WindowMoveSizeEnded, default, 0, 0, TimestampMs: 60_600));
+                host.RunFrame();
+                bool shownAtEnd = ChromeButtons(host) > 0;
+                for (int i = 0; i < 40; i++) host.Paint(0);                               // the dwell restarts at the loop's end
+                bool notPinned = ChromeButtons(host) == 0;
+                Check("gate.media.el.drag-moves-window",
+                    afterSlop == 0 && afterTravel == 1 && afterMore == 1 && heldDuringMove && shownAtEnd && notPinned,
+                    $"slop={afterSlop} travel={afterTravel} more={afterMore} held={heldDuringMove} shownAtEnd={shownAtEnd} notPinned={notPinned}");
+            }
+        }
+
+        // gate.media.el.drag-click-still-a-click — the gesture never steals a click or a control: a press with no travel
+        // is the reveal-only click it always was (no move); a press on the seek rail that travels SCRUBS (the rail is its
+        // own press target, so it never arms the move); and a surface without DragMovesWindow never asks for a move.
+        {
+            int clickMoves, railMoves, offMoves;
+            bool clickRevealed, railSeeked;
+            {
+                var (app, window, host, player) = ChromeRig(strings, "g5g-mpe-dragclick", dragMovesWindow: true);
+                using (app) using (host)
+                {
+                    var s = host.Scene;
+                    var pic = OnPicture(s, ChromeRootOf(s));
+                    for (int i = 0; i < 60 && ChromeButtons(host) > 0; i++) host.Paint(0);   // idle away first
+                    window.QueueInput(new InputEvent(InputKind.PointerDown, pic, 0, 0, TimestampMs: 30_000)); host.RunFrame();
+                    window.QueueInput(new InputEvent(InputKind.PointerUp, pic, 0, 0, TimestampMs: 30_050)); host.RunFrame();
+                    clickRevealed = ChromeButtons(host) > 0;
+                    clickMoves = window.BeginSystemMoveCount;
+                    // The seek rail — the only Slider-role node while the volume flyout is closed: press a quarter in, drag.
+                    var sliders = Roles(s, AutomationRole.Slider);
+                    var rail = sliders.Count > 0 ? s.AbsoluteRect(sliders[0]) : default;
+                    var r0 = new Point2(MathF.Round(rail.X + rail.W * 0.25f), MathF.Round(rail.Y + rail.H * 0.5f));
+                    window.QueueInput(new InputEvent(InputKind.PointerDown, r0, 0, 0, TimestampMs: 31_000)); host.RunFrame();
+                    window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(r0.X + 30f, r0.Y), 0, 0, TimestampMs: 31_016)); host.RunFrame();
+                    window.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(r0.X + 30f, r0.Y), 0, 0, TimestampMs: 31_032)); host.RunFrame();
+                    for (int i = 0; i < 2; i++) { player.Pump(TimeSpan.FromMilliseconds(1)); host.RunFrame(); }   // the scripted player applies the seek
+                    railSeeked = sliders.Count > 0 && player.PositionSeconds.Peek() > 5f;
+                    railMoves = window.BeginSystemMoveCount;
+                }
+            }
+            {
+                var (app, window, host, _) = ChromeRig(strings, "g5g-mpe-dragoff", dragMovesWindow: false);
+                using (app) using (host)
+                {
+                    var pic = OnPicture(host.Scene, ChromeRootOf(host.Scene));
+                    window.QueueInput(new InputEvent(InputKind.PointerDown, pic, 0, 0, TimestampMs: 32_000)); host.RunFrame();
+                    window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(pic.X + 30f, pic.Y), 0, 0, TimestampMs: 32_016)); host.RunFrame();
+                    window.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(pic.X + 30f, pic.Y), 0, 0, TimestampMs: 32_032)); host.RunFrame();
+                    offMoves = window.BeginSystemMoveCount;
+                }
+            }
+            Check("gate.media.el.drag-click-still-a-click",
+                clickRevealed && clickMoves == 0 && railSeeked && railMoves == 0 && offMoves == 0,
+                $"clickRevealed={clickRevealed} clickMoves={clickMoves} railSeeked={railSeeked} railMoves={railMoves} offMoves={offMoves}");
+        }
+
+        // gate.media.el.leave-hides — D4: the pointer LEAVING the player hides the chrome after the short leave debounce,
+        // not after the dwell (mpv, Chromium, Chrome PiP and Firefox all hide on leave). Shaped exactly like the Win32
+        // leave: WM_POINTERLEAVE parks the engine pointer off-screen. A 3 s dwell makes the two paths unmistakable.
+        {
+            var (app, window, host, _) = ChromeRig(strings, "g5g-mpe-leave", hideMs: 3000f);
+            using (app) using (host)
+            {
+                window.QueueInput(new InputEvent(InputKind.PointerMove, OnPicture(host.Scene, ChromeRootOf(host.Scene)), 0, 0,
+                    TimestampMs: 40_000));
+                host.RunFrame();
+                for (int i = 0; i < 5; i++) host.Paint(0);
+                bool shownInside = ChromeButtons(host) > 0;
+                window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(-10_000f, -10_000f), 0, 0, TimestampMs: 40_100));
+                host.RunFrame();
+                bool stillUpAtLeave = ChromeButtons(host) > 0;                     // the debounce: not a same-frame cut
+                for (int i = 0; i < 12; i++) host.Paint(0);                        // 192 ms: past the 150 ms debounce, far short of the dwell
+                bool hiddenSoonAfter = ChromeButtons(host) == 0;
+                Check("gate.media.el.leave-hides", shownInside && stillUpAtLeave && hiddenSoonAfter,
+                    $"shownInside={shownInside} upAtLeave={stillUpAtLeave} hiddenAfterLeave={hiddenSoonAfter}");
+            }
+        }
+
+        // gate.media.el.buffering-no-reveal — D2: a rebuffer / ABR quality switch never pops the controls up (the old
+        // machine let every suppressor REVEAL). Hidden chrome stays hidden through a second of QualitySwitch buffering and
+        // after playback resumes; the status overlay is what speaks for it.
+        {
+            var (app, _, host, player) = ChromeRig(strings, "g5g-mpe-buffer");
+            using (app) using (host)
+            {
+                for (int i = 0; i < 60 && ChromeButtons(host) > 0; i++) host.Paint(0);   // idle away (200 ms dwell)
+                bool hiddenBefore = ChromeButtons(host) == 0;
+                player.Core.SetBuffering(new BufferingInfo(BufferingReason.QualitySwitch, -1, TimeSpan.Zero, TimeSpan.Zero, false));
+                player.Core.SetState(PlaybackState.Buffering);
+                bool everShown = false;
+                for (int i = 0; i < 62; i++) { host.Paint(0); everShown |= ChromeButtons(host) > 0; }   // ~1 s of buffering
+                player.Core.SetState(PlaybackState.Playing);
+                for (int i = 0; i < 10; i++) { host.Paint(0); everShown |= ChromeButtons(host) > 0; }
+                Check("gate.media.el.buffering-no-reveal", hiddenBefore && !everShown,
+                    $"hiddenBefore={hiddenBefore} everShown={everShown}");
+            }
+        }
+
+        // gate.media.el.slow-move-reveals — D3: a SLOW deliberate move brings the controls back. The deadzone is measured
+        // from where the pointer RESTED when the chrome hid — the per-sample test it replaces ignored every 1 DIP step at
+        // 60 Hz forever. +1 DIP per frame: hidden through +2, revealed at +3 (the 3 DIP deadzone).
+        {
+            var (app, window, host, _) = ChromeRig(strings, "g5g-mpe-slowmove");
+            using (app) using (host)
+            {
+                var p0 = OnPicture(host.Scene, ChromeRootOf(host.Scene));
+                window.QueueInput(new InputEvent(InputKind.PointerMove, p0, 0, 0, TimestampMs: 50_000)); host.RunFrame();
+                for (int i = 0; i < 60 && ChromeButtons(host) > 0; i++) host.Paint(0);   // rest there until it idles away
+                bool hiddenAtRest = ChromeButtons(host) == 0;
+                int revealedAt = -1;
+                for (int k = 1; k <= 10 && revealedAt < 0; k++)
+                {
+                    window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(p0.X + k, p0.Y), 0, 0,
+                        TimestampMs: (uint)(50_500 + k * 16)));
+                    host.RunFrame();
+                    if (ChromeButtons(host) > 0) revealedAt = k;
+                }
+                Check("gate.media.el.slow-move-reveals", hiddenAtRest && revealedAt == 3,
+                    $"hiddenAtRest={hiddenAtRest} revealedAt=+{revealedAt} DIP (want +3)");
+            }
+        }
+
+        // gate.media.el.seek-palette-stable — D5: the seek bar does not change its LOOK at the hide edge. Its palette
+        // follows the MODEL (is there a scale to seek on); the chrome's visibility gates only input and accessibility.
+        // The old bar switched to the disabled rail/fill and shrank its thumb at the START of every conceal, so the bar
+        // jumped as it began to fade.
+        {
+            var (app, _, host, _) = ChromeRig(strings, "g5g-mpe-seekpalette");
+            using (app) using (host)
+            {
+                var s = host.Scene;
+                var sliders = Roles(s, AutomationRole.Slider);
+                NodeHandle seekRoot = sliders.Count > 0 ? sliders[0] : NodeHandle.Null;
+                // seek root → the hit stack → the rail (its first child) → the value fill (the rail's last child).
+                NodeHandle stack = seekRoot.IsNull ? NodeHandle.Null : s.FirstChild(seekRoot);
+                NodeHandle rail = stack.IsNull ? NodeHandle.Null : s.FirstChild(stack);
+                NodeHandle fill = NodeHandle.Null;
+                for (var c = rail.IsNull ? NodeHandle.Null : s.FirstChild(rail); !c.IsNull; c = s.NextSibling(c)) fill = c;
+                ColorF fillBefore = fill.IsNull ? default : s.Paint(fill).Fill;
+                ColorF railBefore = rail.IsNull ? default : s.Paint(rail).Fill;
+                for (int i = 0; i < 60 && ChromeButtons(host) > 0; i++) host.Paint(0);   // the hide edge
+                host.Paint(0);
+                ColorF fillAfter = fill.IsNull ? default : s.Paint(fill).Fill;
+                ColorF railAfter = rail.IsNull ? default : s.Paint(rail).Fill;
+                bool leftA11y = Roles(s, AutomationRole.Slider).Count == 0;          // input/a11y still leave with the chrome
+                bool stable = !fill.IsNull && ColorApprox(fillBefore, fillAfter) && ColorApprox(railBefore, railAfter);
+                Check("gate.media.el.seek-palette-stable", stable && leftA11y,
+                    $"fill {fillBefore}→{fillAfter} rail {railBefore}→{railAfter} leftA11y={leftA11y}");
+            }
+        }
+
         // gate.media.el.controlled-aspect: an external Signal<VideoAspectMode> drives the fitted video rect — and since
         // the restructure that rect IS the hole node's laid-out rect (one source of truth), so the aspect policy is
         // asserted on the hole itself: pillarboxed under Uniform (narrower than the stage, full height), covering the

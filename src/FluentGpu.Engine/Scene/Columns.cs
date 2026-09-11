@@ -7,7 +7,19 @@ public enum VisualKind : byte { None = 0, Box = 1, Text = 2, Image = 3, Polyline
 
 /// <summary>Sparse image-only payload kept out of the dense paint column. The source id stays in
 /// <see cref="NodePaint.ImageId"/>; <see cref="DerivedImageId"/> is selected only after its bake reaches Ready.</summary>
-public readonly record struct ImageVisualEffects(int DerivedImageId, ColorF Overlay, ImageMaskSpec Mask, float Saturation = 1f);
+public readonly record struct ImageVisualEffects(int DerivedImageId, ColorF Overlay, ImageMaskSpec Mask, float Saturation = 1f)
+{
+    /// <summary>Image-swap crossfade (the reconciler's hold-last-good commit onto a DIFFERENT picture): the texture that
+    /// was on screen, drawn OPAQUE under this node's image while the new one fades in over it
+    /// (<c>ImageCache.SwapOutgoingEasing</c>), so a swap is a dissolve between two real pictures — never a placeholder
+    /// frame. 0 = no swap. The reconciler keeps the id pinned for the window and clears it (unpin + re-record) once
+    /// the window and the incoming image's own reveal have both landed.</summary>
+    public int SwapOutgoingId { get; init; }
+    /// <summary>Swap window start on the image reveal clock (<c>ImageCache.ClockMs</c>) — baked into both draws.</summary>
+    public float SwapStartMs { get; init; } = float.NaN;
+    /// <summary>Swap window length (<c>ImageCache.SwapCrossfadeMs</c>); 0 = no swap.</summary>
+    public float SwapMs { get; init; }
+}
 
 /// <summary>One measured (text, style, availWidth) → size result, plus the face decoration metrics from the same
 /// <c>TextMetrics</c> (top-down DIP, the line frame of <c>Baseline</c> — see FluentGpu.Text.TextMetrics). Two of these

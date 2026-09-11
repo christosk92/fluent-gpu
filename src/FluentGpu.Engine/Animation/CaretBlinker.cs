@@ -26,6 +26,18 @@ public sealed class CaretBlinker
     /// <summary>An editor is focused → the frame loop must keep ticking (at blink granularity).</summary>
     public bool HasActive => !_node.IsNull;
 
+    /// <summary>Milliseconds until the caret's next toggle — the blinker's own <c>Cadence</c> answer, the same shape
+    /// as <see cref="AnimEngine.NextDueMs(double)"/>. <c>+∞</c> when no editor is focused (nothing to wake for);
+    /// otherwise the remainder of the current half-period, <c>0</c> once it is owed. The host takes the min of this
+    /// and the animation wake instead of pinning the loop to panel rate for a blinking caret — a 500ms half-period is
+    /// two frames a second, not sixty.</summary>
+    public float NextDueMs()
+    {
+        if (_node.IsNull || _intervalMs <= 0f) return float.PositiveInfinity;
+        float remaining = _intervalMs - _elapsed;
+        return remaining > 0f ? remaining : 0f;
+    }
+
     /// <summary>Begin blinking for the (newly focused) editor's text node: caret shown, blink phase reset.
     /// <paramref name="blinkMs"/> is the half-period (<c>GetCaretBlinkTime</c>); ≤ 0 falls back to the default.</summary>
     public void Focus(NodeHandle textNode, float blinkMs = DefaultBlinkMs)

@@ -125,32 +125,38 @@ public readonly record struct MotionTarget
 public static class MotionTok
 {
     // ── Media transport chrome: the auto-hide timing table ───────────────────────────────────────────────────────────
-    // Every value here is a SHIPPED-PLAYER value, not a taste call. The previous 1800 ms sat below every player that
-    // ships: WinUI MediaTransportControls' ControlPanelDisplayTimeoutInSecs is 3 s, Chromium's media controls 2.5 s,
-    // video.js / Plyr 2 s, Android Media3 5 s. A dwell shorter than the shortest shipped one reads as the chrome
-    // "running away" from a user who is still deciding.
+    // Every value here is a SHIPPED-PLAYER value, not a taste call (research digest: docs/plans/wavee/
+    // popout-player-drag-autohide-plan.md §2 in the Wavee repo). A dwell shorter than the shortest shipped one reads as
+    // the chrome "running away" from a user who is still deciding. Consumed as one table by
+    // FluentGpu.Controls.Media.PlayerChromeTiming.Default.
 
-    /// <summary>Idle dwell before an actively-playing media surface hides its transport chrome — MOUSE input.
-    /// WinUI <c>ControlPanelDisplayTimeoutInSecs</c> parity (3 s).</summary>
+    /// <summary>Idle dwell before an actively-playing media surface hides its transport chrome — MOUSE input. Firefox
+    /// PiP <c>CONTROLS_FADE_TIMEOUT_MS</c> is 3000; Chromium's media controls and Chrome PiP 2500; Firefox inline 2000;
+    /// mpv's OSC 500. (The WinUI <c>ControlPanelDisplayTimeoutInSecs = 3 s</c> citation this used to carry could not be
+    /// verified.)</summary>
     public const float MediaChromeIdleDelayMs = 3000f;
     /// <summary>Idle dwell after a TOUCH reveal. Longer than the mouse dwell because a touch user has no hover to keep
-    /// the chrome alive and must re-tap to get it back — the same split Media3/YouTube make.</summary>
+    /// the chrome alive and must re-tap to get it back — Media3's <c>show_timeout</c> (5000) is the touch reference.</summary>
     public const float MediaChromeIdleDelayTouchMs = 4000f;
-    /// <summary>Idle dwell after the chrome was revealed by FOCUS entering it (keyboard/AT reveal). Longer for the same
-    /// reason as touch: there is no pointer motion to keep re-arming it while the user reads the controls.</summary>
+    /// <summary>Idle dwell after a KEYBOARD reveal (a handled key, Tab focus entering the controls, an AT client). Longer
+    /// for the same reason as touch: there is no pointer motion to keep re-arming it while the user reads the controls.</summary>
     public const float MediaChromeIdleDelayAfterFocusMs = 4000f;
-    /// <summary>The cursor hides this long AFTER the chrome does, so it does not blink out in the middle of the chrome's
-    /// fade (two simultaneous disappearances read as a glitch, not as one idle transition).</summary>
-    public const float MediaChromeCursorExtraDelayMs = 400f;
-    /// <summary>Squared-distance gate (DIP) a pointer move must cross to count as ACTIVITY while the chrome is HIDDEN.
-    /// Zero while the chrome is VISIBLE: once it is up, every move should re-arm the dwell. (Identical coordinates are
-    /// de-duplicated and dropped BEFORE this test — the video.js phantom-mousemove fix.)</summary>
+    /// <summary>The pointer left the player → hide after this, not after the dwell. Every reference player hides on leave
+    /// immediately (mpv's OSC, Chromium pointerout, Chrome PiP <c>kMouseExited</c>, Firefox PiP); the 150 ms only absorbs
+    /// a client↔resize-band crossing and an overlay scrim taking hover before its hold registers.</summary>
+    public const float MediaChromeLeaveHideMs = 150f;
+    /// <summary>Hidden-chrome jitter deadzone (DIP), measured from where the pointer RESTED when the chrome hid — never
+    /// from the previous sample: slow, deliberate motion is many sub-threshold samples, and a per-sample test ignored every
+    /// one of them (at 60 Hz anything under ~180 DIP/s never revealed). VLC <c>qt-fs-sensitivity</c> 3 px; mpv's
+    /// <c>dragging_deadzone</c> 3. Identical re-delivered coordinates are dropped before this test.</summary>
     public const float MediaChromeMoveThresholdDip = 3f;
-    /// <summary>Chrome conceal duration (ms) — see <see cref="MotionTokenId.MediaChromeConceal"/>.</summary>
-    public const float MediaChromeFadeOutMs = 200f;
-    /// <summary>Chrome reveal duration (ms) — HALF the conceal, deliberately: a reveal answers a user action and must
-    /// feel instant, a conceal happens unattended and must not flicker. See <see cref="MotionTokenId.MediaChromeReveal"/>.</summary>
-    public const float MediaChromeFadeInMs = 100f;
+    /// <summary>Chrome conceal duration (ms): 400 ms ease-out — between mpv (<c>fadeduration</c> 200) and Chromium (1 s,
+    /// <c>cubic-bezier(.25,.1,.25,1)</c>); an unattended disappearance must read as a fade, not a pop. The idle cursor
+    /// hides when it ends. See <see cref="MotionTokenId.MediaChromeConceal"/>.</summary>
+    public const float MediaChromeFadeOutMs = 400f;
+    /// <summary>Chrome reveal duration (ms): 150 ms Fluent decelerate (Fluent "fast" 167; Chromium 250; mpv instant) — a
+    /// reveal answers a user action and must feel immediate. See <see cref="MotionTokenId.MediaChromeReveal"/>.</summary>
+    public const float MediaChromeFadeInMs = 150f;
 
     public static MotionTokenDef Get(MotionTokenId id) => id switch
     {
@@ -175,9 +181,11 @@ public static class MotionTok
         MotionTokenId.DisclosureCollapse => MotionTokenDef.Eased(167f, Easing.FluentDisclosureCollapse),
         MotionTokenId.DisclosureChevron => MotionTokenDef.Eased(167f, Easing.FluentDisclosureChevron),
         // Media chrome — SnapEnd (not KeepFade): under reduced motion the transport must appear/disappear instantly.
-        // "Chrome that fades" IS the motion here; there is no orientation cue in it worth keeping.
+        // "Chrome that fades" IS the motion here; there is no orientation cue in it worth keeping. The conceal is an
+        // EASE-OUT, not FluentAccelerate: cubic-bezier(1,0,1,1) stays near 1 for most of its duration and then drops, so
+        // even a running conceal read as a pop — a value fade wants steady, perceptible change (Easing.cs's own warning).
         MotionTokenId.MediaChromeReveal => MotionTokenDef.Eased(MediaChromeFadeInMs, Easing.FluentDecelerate),
-        MotionTokenId.MediaChromeConceal => MotionTokenDef.Eased(MediaChromeFadeOutMs, Easing.FluentAccelerate),
+        MotionTokenId.MediaChromeConceal => MotionTokenDef.Eased(MediaChromeFadeOutMs, Easing.EaseOut),
         _ => MotionTokenDef.SpringOf(SpringParams.Default),
     };
 

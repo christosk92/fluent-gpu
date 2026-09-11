@@ -875,22 +875,41 @@ Even cadence, uneven motion: the operator scored STEADY 1–3 while GLUED scored
 
 The gate is therefore an invariant on production, not a throttle:
 
-> **Never produce a frame while a published one is still unpresented.**
+> **Never produce more than one frame per compositor tick.**
 
-`AppHost.PhaseGateBlocks()` compares `SceneFramePublisher.PublishSeq` against `RenderThread.PresentAck`
-and declines the frame (an early-out, `Rendered: false`) when one is in flight. The render thread fires a
-`presentWake` after each ack, which is the restored phase reference: `_submitPresent` blocks in the
-swapchain's frame-latency waitable **before** it presents, so acks track presents and production inherits
-the display's phase.
+`AppHost.ProductionGateBlocks()` compares the current `_frameTickSeq` against `_lastProducedTickSeq` and
+declines the frame (an early-out, `Rendered: false`, counted as `ProductionDeclines`) when this tick already
+produced one — each decline is a frame `DropOldest` would have discarded anyway. It is open when async is off
+(the sync path present-throttles), when the platform has no display clock (the software pace wait is the
+pacer), and on the first frame after an idle/cadence-paced wait (ticks were not counted, so that frame must
+not wait a vblank). Production therefore inherits the display's phase from the tick, not from the present ack.
+*(HISTORY: this was once keyed on `PublishSeq` vs `RenderThread.PresentAck` — "never produce while a published
+frame is unpresented". Keying on the tick is the same ceiling in steady state and does not couple production
+to present latency, which matters now that the render loop reserves its present slot before acquiring.)*
 
-**The waitable is now `SetMaximumFrameLatency(2)` (AS-BUILT 2026-08; `FRAME_COUNT - 1` with 3 back
-buffers).** It therefore blocks only once **two** presents are already queued — one frame of CPU/GPU
-run-ahead — instead of blocking on every present the way latency 1 did. **The production invariant above is
-unchanged**: it is enforced on the *engine* seam by `PublishSeq` vs `PresentAck`, not by DXGI queue depth,
-so exactly one unpresented published frame is still the ceiling. While the pipeline keeps up, the present
-queue never actually reaches depth 2 and the phase reference is the same as before; the second slot fills
-only under backpressure, where it absorbs a frame that overran a refresh instead of letting the cadence
-quantize to half rate. The cost is bounded at one refresh and paid only on those frames (see
+**The waitable is `SetMaximumFrameLatency(1)` and the render loop waits for its slot BEFORE it chooses a
+frame (AS-BUILT 2026-09; supersedes the depth-2 experiment below).** `RenderThread` calls
+`IGpuDevice.WaitForPresentSlot()` ahead of `SceneFramePublisher.TryAcquire`, so the frame that reaches the
+glass is the freshest one that existed when the slot opened. The waitable is a **semaphore**, so one wait is
+a credit exactly one `Present` spends: the backend tracks it (`D3D12Swapchain.LatencyCreditHeld`) and skips
+its own submit-time wait while it is held; a turn that presents nothing (a bare wake, a tick-only turn) is
+gated on `SceneFramePublisher.HasPendingFrame` and never reserves a slot at all. This is the order Windows
+Terminal's `AtlasEngine` and makepad both use.
+
+**Why depth 2 was withdrawn.** `FRAME_COUNT - 1` = 2 (AS-BUILT 2026-08) was chosen to buy one frame of
+CPU/GPU run-ahead so a frame costing slightly over one refresh would not quantize to half rate at 144/165
+Hz, on the assumption that "the present queue never actually reaches depth 2 while the pipeline keeps up".
+**Measurement killed that assumption** (`docs/plans/wavee/scroll-feel-investigation-2026-09-10.md`): on a
+120 Hz panel with a weak Adreno the GPU costs ~5 ms of the 8.33 ms refresh on *every* scroll frame, so
+backpressure is permanent — the render thread sat 5-8.6 ms per frame inside the waitable and the frame on
+the glass had been produced two vblanks earlier (DWM composes one later ⇒ ~25 ms finger-to-photon while the
+frame counter read a healthy 120 fps). Depth 2 therefore pre-paid a frame of input lag on every frame rather
+than absorbing a rare overrun. At depth 1 an over-budget frame shows as ONE missed vblank instead. Note the
+present-queue depth is now a **latency** decision, deliberately decoupled from `FRAME_COUNT` (still 3 — the
+CPU-written bank depth, a memory decision); `FrameBankingTests` asserts the two as independent literals.
+
+**The production invariant above is unchanged**: it is enforced on the *engine* seam by `PublishSeq` vs
+`PresentAck`, not by DXGI queue depth, so exactly one unpresented published frame is still the ceiling (see
 [`budgets.md`](../budgets.md) §1, back-buffers row).
 
 Three properties make this safe rather than a latency trade:
@@ -988,10 +1007,16 @@ callers**, hence exactly one owned waiter thread and no public wait entry point.
 
 Three properties keep it honest:
 
-- **Capability probe, not a flag.** The first wait failure (or a missing export) marks the clock permanently
-  unavailable and parks the thread; the host keeps its wall-clock timeout, which is the pre-existing behavior.
-  Remote sessions are the known case. There is no environment switch — new behavior is the unconditional
-  default.
+- **Capability probe, not a flag.** The clock is always available wherever the dcomp export exists — a single
+  transient `WAIT_FAILED` no longer marks it permanently unavailable. Instead, a wait failure degrades to one
+  synthesized tick at the lattice period (Gecko's software-vsync / GPUI's `Sleep(interval)` fallback), an
+  instant return within half a period of the previous tick is ignored (Chromium's double-tick filter), and
+  published stamps snap to a constant lattice `prev + period`, resyncing on more than 2 ms of drift (Gecko).
+  Only a **missing export** is permanent — `Reprobe()` on a display change still clears even that. A tick is
+  one vblank of the *window's* display: when the window's monitor is slower than the DWM-global compositor
+  clock, the PAL decimates the published ticks to the window's refresh period (slots), stamping each slot on
+  the window's lattice — the phase is still DWM's, only the rate is the window's. Remote sessions remain the
+  known missing-export case. There is no environment switch — new behavior is the unconditional default.
 - **Power.** The clock is armed only for the *duration* of a display-paced wait and parks on an event
   otherwise, so idle, minimized (`Idle(-1)`) and non-paced loops spawn no compositor wait at all.
 - **Who asks.** `PaceSkipSubmit` (no present ⇒ no ack) and **unarmed** async pace waits set
@@ -1020,11 +1045,8 @@ display-rate stop matching, every animating async frame would resync the frame c
 return 0, and one-shot enter transitions would freeze at their initial state. That is a known breakage class,
 not a style point.
 
-The same fix applies to the other hardcoded 7, `DmManualUpdatePacer.IntervalMs`. Its absolute deadline
-**clamps every host wait** while a touchpad gesture is live, so a fixed interval silently re-paces the whole UI
-loop at the wrong rate on any display that is not 120 Hz. It now carries a per-instance interval fed
-`1000 / CurrentRefreshHz()` at DirectManipulation enable and on `WM_DISPLAYCHANGE` / `WM_DPICHANGED`, clamped
-to [3, 17] ms; an unknown rate leaves the default in force.
+`DmManualUpdatePacer` no longer exists (`Win32Platform.cs` notes its removal) — the DirectManipulation pump is
+per-produced-frame now, so there is no separate pacer interval left to derive from the refresh rate.
 
 **A fallback is not a pace — the skip-submit floor returns the CEILING, not `DeriveAsyncPaceMs` (LANDED).**
 The floor's contract (§11.1.2, "Who asks") is that the *compositor tick* paces an elided frame and the
@@ -1096,9 +1118,9 @@ the tick came from, and DropOldest makes the over-production safe.
 
 Three guards keep it from ping-ponging:
 
-- **Kind must be `PaceAsync`.** The ambient and adaptive-governor branches precede the armed branch in
-  `RecommendedWaitMsCore` and produce `HostWaitKind.Ambient`. A deliberately-capped loop presents at ~2R *by
-  construction*; without this guard its own throttle's signature would drag it back to panel rate.
+- **Kind must be `PaceAsync`.** The cadence and adaptive-governor branches precede the armed branch in
+  `RecommendedWaitMsCore` and produce `HostWaitKind.Cadence` / `HostWaitKind.AdaptiveGpu`. A deliberately-paced loop
+  presents at ~2R *by construction*; without this guard its own cadence's signature would drag it back to panel rate.
 - **A per-episode budget (8).** A scene that truly cannot sustain the rate keeps producing the 2R cadence no
   matter how often the chain is re-anchored. The budget makes that cost bounded (~65 ms of re-phasing at
   120 Hz) instead of permanent; a new `Episode` resets it, so the bound is per lock, not per process.

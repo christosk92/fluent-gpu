@@ -155,15 +155,17 @@ public sealed class AudioDeviceStateMachineTests
         Assert.Equal(1, Volatile.Read(ref rebuilds));
     }
 
+    /// <summary>Wavee #112: a rebuild with no endpoint (a throwing factory) no longer faults on the spot — it keeps the old
+    /// sink and enters the 250 ms / 1 s / 3 s retry ladder; only an exhausted ladder is <c>Faulted</c>.</summary>
     [Fact]
-    public void FatalRebuild_NoEndpoint_TransitionsToFaulted()
+    public void FatalRebuild_NoEndpoint_EntersTheRetryLadder()
     {
         var session = PlayingSession(out _);
         var watcher = new FakeDeviceWatcher();
         using var ctrl = new AudioDeviceController(session, () => throw new InvalidOperationException("all devices gone"), watcher);
         ctrl.MarkRunning();
         ctrl.OnDefaultDeviceChanged();
-        Assert.Equal(AudioDeviceState.Faulted, ctrl.State.Peek());
+        Assert.Equal(AudioDeviceState.Retrying, ctrl.State.Peek());
     }
 
     /// <summary>Wavee #112: <c>Faulted</c> is no longer terminal — the next default-device event re-enters the machine

@@ -42,10 +42,20 @@ public readonly struct TimerHandle
 
     /// <summary>Re-arm from now for the hook's duration (restart the one-shot).</summary>
     public void Restart() => _ctl?.Restart();
+
+    /// <summary>Re-arm from now for <paramref name="ms"/> instead of the hook's declared duration — for a caller whose
+    /// deadline is COMPUTED (a pure policy's next wake, e.g. the media chrome's <c>PlayerChromeVisibility.NextWakeMs</c>).
+    /// Generation-guarded exactly like <see cref="Restart"/>: the previously armed fire becomes a no-op.</summary>
+    public void RestartIn(float ms) => _ctl?.RestartIn(ms);
+
+    /// <summary>The host timer clock this handle schedules on (ms; 0 without a host). Feed it to pure time-based policies
+    /// so their deadlines and this timer agree — the headless harness runs a virtual frame clock that
+    /// <see cref="Environment.TickCount64"/> never sees, and a real window runs the monotonic wall clock.</summary>
+    public double NowMs => _ctl?.NowMs ?? 0;
 }
 
 internal interface IDebounceControl { void Flush(); void Cancel(); }
-internal interface ITimerControl { void Cancel(); void Restart(); }
+internal interface ITimerControl { void Cancel(); void Restart(); void RestartIn(float ms); double NowMs { get; } }
 
 internal sealed class TimeoutCell : HookCell, IDisposableCell, ITimerControl
 {
@@ -63,6 +73,8 @@ internal sealed class TimeoutCell : HookCell, IDisposableCell, ITimerControl
     public void Arm(float ms) { if (Queue is null) return; Gen++; Queue.Schedule(Queue.NowMs + MathF.Max(ms, 0f), Gen, Fire); }
     public void Cancel() => Gen++;
     public void Restart() { Cancel(); Arm(Ms); }
+    public void RestartIn(float ms) { Cancel(); Arm(ms); }
+    public double NowMs => Queue?.NowMs ?? 0;
     public void DisposeCell() => Gen++;   // unmount → a due-after-unmount fire is a no-op
 }
 

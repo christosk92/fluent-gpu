@@ -1274,9 +1274,17 @@ public sealed partial class SceneStore : ISceneBackend
             // The whole chain is re-stamped even when its bits already cover this mark: an ancestor's aggregate bit
             // stands in for the dirty descendant, so it must outlive the descendant's publication, not its own.
             _recordDirtyStamp[n] = _publishSeq + 1;
+            // P8: the MARKED node's own captured columns changed — that is why it is being marked (a paint ref write, a
+            // glyph wipe, a text/layout change) — so its capture row must be re-copied even when its dirty bits were
+            // already set. A node written on consecutive frames keeps its bits set (each mark re-stamps them one
+            // publication ahead of the render thread's consumption), and noting the ledger only on a bit CHANGE froze
+            // its snapshot row at the first write until a full capture: the lyrics karaoke wipe advanced at the
+            // full-capture cadence (~5 Hz) while every frame wrote a new split. Ancestors are unchanged except for
+            // their dirty bytes, so they stay gated on a bit change below.
+            if (n == idx) NoteCaptureChanged(n);
             if (nextAggregate == oldAggregate && nextSelf == oldSelf && nextDescendant == oldDescendant)
                 continue;
-            NoteCaptureChanged(n);   // P8: the record-dirty BYTES are captured columns - a changed bit is a changed row
+            if (n != idx) NoteCaptureChanged(n);   // P8: the record-dirty BYTES are captured columns - a changed bit is a changed row
 
             _recordDirty[n] = nextAggregate;
             _recordDirtySelf[n] = nextSelf;

@@ -1231,7 +1231,7 @@ static class LayoutShellSuite
                 $"first={staggeredFirst}/{firstWindowRows} settled={staggeredSettled} remount={remountSlots} window={windowRows} first={sc.FirstRealized} last={sc.LastRealized}");
         }
 
-        // Fix 2 — modal-loop keep-alive must not swallow warming virtual refill when ambient animation is live.
+        // Fix 2 — modal-loop keep-alive must not swallow warming virtual refill when autonomous animation is live.
         {
             using var app = new HeadlessPlatformApp();
             var window = new HeadlessWindow(new WindowDesc("modal-warm", new Size2(400, 320), 1f, Composited: true));
@@ -1249,14 +1249,17 @@ static class LayoutShellSuite
             int windowRows0 = sc0.LastRealized - sc0.FirstRealized;
             host.Animation.Keyframes(host.Scene.Root, AnimChannel.Opacity,
                 [new Keyframe(0f, 0.5f, Easing.Linear), new Keyframe(1f, 1f, Easing.Linear)], 1000f, loop: true);
-            bool ambient = host.CurrentWakeReasons.HasFlag(WakeReasons.Anim);
+            // The loop row IS the autonomous wake this gate is about. Pinned on the row's existence, not on the Anim
+            // wake BIT: that bit is now due-gated (set only on the frames the row's cadence actually falls on), so
+            // sampling it here would make the gate depend on which side of a 30 Hz edge the seed landed.
+            bool animLive = host.Animation.HasTracks(host.Scene.Root);
             window.InModalLoop = true;
-            window.SizedInModalLoop = false;   // titlebar move (not edge resize) — ambient ticks must still paint
+            window.SizedInModalLoop = false;   // titlebar move (not edge resize) — autonomous ticks must still paint
             host.Paint(0, keepAlive: true);
             int slots1 = BoundSlotCount(host.Scene, host.Scene.Root);
-            Check("RZ-MODAL. modal-loop keep-alive preserves/refills the visible virtual window under ambient-only animation wake",
-                ambient && slots0 >= windowRows0 && slots0 >= 8 && (warming ? slots1 > slots0 : slots1 >= slots0),
-                $"warming={warming} ambient={ambient} slots {slots0}→{slots1} window={windowRows0} wake={host.CurrentWakeReasons}");
+            Check("RZ-MODAL. modal-loop keep-alive preserves/refills the visible virtual window under autonomous-animation-only wake",
+                animLive && slots0 >= windowRows0 && slots0 >= 8 && (warming ? slots1 > slots0 : slots1 >= slots0),
+                $"warming={warming} animLive={animLive} slots {slots0}→{slots1} window={windowRows0} wake={host.CurrentWakeReasons}");
         }
     }
 
@@ -1351,7 +1354,8 @@ static class LayoutShellSuite
                 paints <= 4 && gapPaint, $"paints={paints} gapPaint={gapPaint} last={gapLast}");
         }
 
-        // RZ-MOVE — composited titlebar move: ambient animation ticks still submit; span reuse stays enabled.
+        // RZ-MOVE — composited titlebar move: autonomous animation ticks still submit; span reuse stays enabled.
+        // A titlebar move is not SizedInModalLoop, so the nothing-due bail never applies — every tick paints.
         {
             using var app = new HeadlessPlatformApp();
             var window = new HeadlessWindow(new WindowDesc("rz-move", new Size2(400, 320), 1f, Composited: true));
@@ -1368,13 +1372,17 @@ static class LayoutShellSuite
             window.SizedInModalLoop = false;
             var stats = host.Paint(0, keepAlive: true);
 
-            Check("RZ-MOVE. composited move keeps ambient modal ticks + span reuse",
+            Check("RZ-MOVE. composited move keeps autonomous-animation modal ticks + span reuse",
                 device.FrameCount > framesBefore && stats.Presented
                 && (stats.SpanReuseDisabledReasons & SpanReuseDisabledReason.ModalPaint) == 0,
                 $"frames {framesBefore}→{device.FrameCount} presented={stats.Presented} spanDisable={stats.SpanReuseDisabledReasons}");
         }
 
-        // RZ-MOVE2 — composited edge resize: ambient-only ticks bail; span reuse disabled for modal paint.
+        // RZ-MOVE2 — composited edge resize: a tick with nothing DUE bails; span reuse disabled for modal paint.
+        // The bail predicate is the row's own answer now (AnimEngine.NextDueMs > 0), not a host-side "is this ambient?"
+        // guess — so seed the loop and run ONE frame first, which puts the 30 Hz row between edges exactly as it would
+        // be on most WM_TIMER ticks of a real drag. A row that IS due (a one-shot layout transition mid-resize) keeps
+        // painting, which is the half of this behaviour RZ-MOVE covers.
         {
             using var app = new HeadlessPlatformApp();
             var window = new HeadlessWindow(new WindowDesc("rz-move2", new Size2(400, 320), 1f, Composited: true));
@@ -1386,12 +1394,15 @@ static class LayoutShellSuite
             host.RunFrame();
             host.Animation.Keyframes(host.Scene.Root, AnimChannel.Opacity,
                 [new Keyframe(0f, 0.5f, Easing.Linear), new Keyframe(1f, 1f, Easing.Linear)], 1000f, loop: true);
+            // Land BETWEEN the row's cadence edges: a freshly seeded row is owed its first frame (due now), so tick
+            // until it has one behind it and its next edge is in the future.
+            for (int i = 0; i < 4 && host.Animation.NextDueMs(host.FrameClockMsForTest) <= 0f; i++) host.RunFrame();
             int framesBefore = device.FrameCount;
             window.InModalLoop = true;
             window.SizedInModalLoop = true;
             var stats = host.Paint(0, keepAlive: true);
 
-            Check("RZ-MOVE2. composited edge resize bails ambient-only ticks + disables span reuse",
+            Check("RZ-MOVE2. composited edge resize bails a modal tick with no animation row DUE + disables span reuse",
                 device.FrameCount == framesBefore,
                 $"frames {framesBefore}→{device.FrameCount} (idle-skip expected)");
         }

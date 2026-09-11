@@ -73,6 +73,19 @@ public sealed class SceneFramePublisher
     /// <summary>UI-private latest publication counter.</summary>
     public ulong PublishSeq => _publishSeq;
 
+    /// <summary>True when <see cref="TryAcquire"/> would adopt a frame — the SAME gate it uses (published token vs
+    /// last-consumed seq), so the two can never disagree. Consumer-side peek: the render loop asks this BEFORE paying
+    /// the present-slot wait, so a bare wake (no publish) never blocks on a present slot it will not spend.
+    /// Not a claim — a newer frame may land during the wait, which is precisely the point of waiting first.</summary>
+    public bool HasPendingFrame
+    {
+        get
+        {
+            ulong seq = (ulong)Volatile.Read(ref _publishedToken) >> 2;
+            return seq != 0 && seq != Volatile.Read(ref _lastConsumedSeq);
+        }
+    }
+
     /// <summary>Copy a completed frame into a claimed write slot and publish. Zero steady allocation.</summary>
     public ulong Publish(ReadOnlySpan<byte> cmds, ReadOnlySpan<ulong> sort, in FrameInfo submit,
                          bool suppressVsync = false, bool interactivePresent = false)

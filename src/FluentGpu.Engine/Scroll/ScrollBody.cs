@@ -62,6 +62,10 @@ public struct ScrollBody
     /// <summary>0 = not dragging; 1 = touch/pen (<see cref="ScrollInputKind.ContactMove"/>, resampled every Tick);
     /// 2 = FrameDelta (DM RUNNING / hi-res fallback, applied 1:1 as each command arrives, no resampling).</summary>
     public byte DragMode;
+    /// <summary>The live gesture is a MOUSE wheel (<see cref="ScrollInputFlags.NoOverscroll"/> on its FrameDelta): the
+    /// drag clamps at the extents with no band, and the fling it seeds stops dead at an edge instead of bouncing.
+    /// Latched when the FrameDelta drag starts, cleared by a touch/pen ContactBegin; carried onto the fling's seed body.</summary>
+    public bool NoOverscroll;
     /// <summary>The last RAW resampled contact position (DragMode 1 only) — decoupled from <see cref="DragRaw"/> on
     /// purpose: <see cref="DragRaw"/> is rebased by <see cref="ScrollInputKind.AnchorShift"/> and reshaped by chain
     /// hand-off/clamping, but the per-tick resample-to-delta comparison (<c>delta = resample(t) − LastResampleX</c>)

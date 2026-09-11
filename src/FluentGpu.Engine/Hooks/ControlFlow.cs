@@ -114,6 +114,11 @@ internal sealed record IndexForEl(Func<int> Count, Func<int, Element> ItemAt, Fu
 /// Retained-page cache policy for <see cref="Flow.KeepAlive{TKey}"/>. Inactive entries stay mounted but detached from
 /// the live scene tree; resource-heavy residency (currently image pins) is released unless
 /// <see cref="ReleaseInactiveResources"/> is disabled.
+/// <para><see cref="TransitionFor"/>(oldToken, newToken) owns every activation edge: a switch between entries, a
+/// same-key token change, and a boundary's FIRST activation once the window has presented a frame (a boundary mounted
+/// into a live UI — a freshly opened tab whose first route is the destination). The first activation passes
+/// <see cref="FirstActivation"/> as the old token; return null there to mount without an entrance. The very first
+/// frame's mount (the app's launch page) never asks.</para>
 /// </summary>
 public sealed record KeepAliveOptions(
     int MaxEntries = 5,
@@ -123,6 +128,10 @@ public sealed record KeepAliveOptions(
     bool SuppressLayoutTransitionsOnActivation = false)
 {
     public static KeepAliveOptions Default { get; } = new();
+
+    /// <summary>The old token <see cref="TransitionFor"/> receives on a boundary's first activation (nothing was
+    /// active before). A sentinel, compared by reference.</summary>
+    public static object FirstActivation { get; } = new();
 }
 
 /// <summary>

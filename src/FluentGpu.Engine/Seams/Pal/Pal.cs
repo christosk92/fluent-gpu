@@ -80,6 +80,12 @@ public enum InputKind : byte
     /// inertia is engine-owned, so a lift here is always the kernel's cue to seed its own Ballistic fling from the
     /// trailing frame-delta history). Never coalesces.</summary>
     ScrollEnd = 14,
+
+    /// <summary>An OS move/size modal loop of this window ended (Win32 <c>WM_EXITSIZEMOVE</c>) — EVERY loop, edge resizes
+    /// included — and also the end of a <see cref="IPlatformWindow.BeginSystemMove"/> request that resolved without a
+    /// loop (the button was already up when the OS got to it), so an accepted request always ends exactly once.
+    /// Consumers that started one use it as the gesture's end; others ignore it. Never coalesces.</summary>
+    WindowMoveSizeEnded = 15,
 }
 
 /// <summary>Producer tag on scroll-phase events (<see cref="InputEvent.DeviceClassRaw"/>) — the kernel picks its
@@ -747,6 +753,20 @@ public interface IPlatformWindow : IDisposable
     /// <summary>Enter/leave borderless monitor fullscreen, restoring the exact prior window placement on exit.</summary>
     void SetFullscreen(bool fullscreen) { }
     void CloseWindow() { }
+
+    /// <summary>Start the OS interactive MOVE loop for this window from the current pointer, exactly as if the user had
+    /// pressed a caption the window does not draw — so Aero Snap, the Windows 11 snap bar, title-bar shake, monitor hops
+    /// and drag-to-restore all work, because it IS the system loop. For chromeless windows whose CONTENT decides what is
+    /// draggable (the pop-out video: a press on the picture that travelled past the drag box) — mpv's window-dragging.
+    /// <para>Call only while the primary mouse/pen button is held, from a press the engine is tracking. ASYNCHRONOUS: the
+    /// loop starts when the window next pumps messages, never re-entrantly inside the current frame; the backend also
+    /// cancels the engine contact the loop is about to capture (a <see cref="InputKind.PointerCancel"/> for it), so the
+    /// dispatcher never keeps a press the OS took over.</para>
+    /// <para>Returns true when the loop was REQUESTED — exactly one <see cref="InputKind.WindowMoveSizeEnded"/> then
+    /// follows, when the loop ends or at once if the OS never entered it. False when there is nothing to start:
+    /// fullscreen, no primary mouse/pen button held, a closed window, or a backend without a move loop (the default;
+    /// macOS maps to <c>-[NSWindow performWindowDragWithEvent:]</c>).</para></summary>
+    bool BeginSystemMove() => false;
 
     /// <summary>True once the window has been closed (its HWND destroyed). The host loop reaps a closed detached window.
     /// Default false (headless / never-closing seams).</summary>

@@ -25,6 +25,13 @@ public enum ScrollInputFlags : byte
     /// well as <see cref="ScrollKernel.Tick"/> (plan §3.3 point 3's "an Immediate ScrollTo from a layout effect
     /// lands this frame" case). Park: bit0 doubles as the "parked" boolean (Park has no other flag use).</summary>
     Immediate = 1,
+    /// <summary>FrameDelta: the gesture's producer is a MOUSE wheel (a sub-notch / free-spin wheel on the hi-res
+    /// fallback path — see <c>ScrollInputRouter.IsWheelProducer</c>), so the drag clamps at the extents with no
+    /// overscroll band, and its fling stops dead at an edge instead of bouncing. Rubber-banding is a direct-
+    /// manipulation affordance (touch, precision touchpad); a wheel clamps — Flutter's <c>pointerScroll</c> clamps the
+    /// wheel's target to [min, max] even under BouncingScrollPhysics, and the engine's own detented
+    /// <see cref="ScrollInputKind.WheelNotch"/> chase already hard-stops. Latched per gesture by the kernel.</summary>
+    NoOverscroll = 2,
 }
 
 /// <summary>A viewport's geometry + snap/zoom configuration, copied verbatim into the owning <see cref="ScrollBody"/>
@@ -48,7 +55,8 @@ public readonly record struct ScrollInput(ScrollInputKind Kind, int Node, double
     public static ScrollInput ContactMove(int node, double tSec, float axisPos) => new(ScrollInputKind.ContactMove, node, tSec, A: axisPos);
     public static ScrollInput ContactEnd(int node, double tSec, float axisPos) => new(ScrollInputKind.ContactEnd, node, tSec, A: axisPos);
 
-    public static ScrollInput FrameDelta(int node, double tSec, float delta) => new(ScrollInputKind.FrameDelta, node, tSec, A: delta);
+    public static ScrollInput FrameDelta(int node, double tSec, float delta, bool noOverscroll = false)
+        => new(ScrollInputKind.FrameDelta, node, tSec, A: delta, Flags: noOverscroll ? (byte)ScrollInputFlags.NoOverscroll : (byte)0);
 
     public static ScrollInput WheelNotch(int node, double tSec, float dipDelta) => new(ScrollInputKind.WheelNotch, node, tSec, A: dipDelta);
 

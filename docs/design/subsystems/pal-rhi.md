@@ -252,6 +252,22 @@ The production-pacing policy remains owned by [threading-render-seam.md §11.1](
 
   `IPlatformWindow` exposes `InModalLoop`, `SizedInModalLoop`, and `Composited` so `AppHost.DeferModalResize`
   and span-reuse policy can key off the same PAL state Win32 derives from `WM_ENTERSIZEMOVE`/`WM_SIZE`.
+
+  **Content-driven MOVE — `bool IPlatformWindow.BeginSystemMove()`** (default `false`). A chromeless window whose
+  CONTENT decides what is draggable (the pop-out video: a press on the picture that travelled past the drag box)
+  starts the SAME system move loop a caption press would — Aero Snap, the snap bar, shake, monitor hops and
+  drag-to-restore come for free — while the content stays `HTCLIENT`, so hover, the cursor override, click,
+  double-click and right-click keep their content meaning (reporting `TitleBarHit.Caption` over the content would
+  lose every one of them to the NC path). mpv's `window-dragging` model. Win32: only while the primary mouse/pen
+  button is held in the client (tracked from `WM_POINTERDOWN`/`UP`/`CAPTURECHANGED`) and not fullscreen; it enqueues
+  a `PointerCancel` for that contact (so the dispatcher never keeps a press the loop captured), `ReleaseCapture`s, and
+  POSTS `WM_NCLBUTTONDOWN`+`HTCAPTION` at the cursor — never `SendMessage` (the caller is mid-frame; the modal loop
+  must not run re-entrantly under it) and never the undocumented `SC_MOVE`+`HTCAPTION` syscommand. That posted press
+  reaches `DefWindowProc`, which runs the loop inside the call. Returns `true` ⇒ exactly ONE
+  `InputKind.WindowMoveSizeEnded` follows: every `WM_EXITSIZEMOVE` enqueues it (edge resizes too — consumers filter),
+  and when `DefWindowProc` returns without having entered a loop (the button was released before the post was
+  handled) the backend enqueues it itself. Always-on `[window.move] begin/end` lines, one per gesture. Headless
+  counts calls (`BeginSystemMoveCount`) and accepts every windowed request; gates end it by queueing the Win32 pair.
 - **Flat C exports:** `[LibraryImport]` for `D3D12CreateDevice`, `CreateDXGIFactory2`,
   `DCompositionCreateDevice`, `DWriteCreateFactory`, `RegisterClassExW`, `CreateWindowExW`,
   `SetProcessDpiAwarenessContext`, `GetDpiForWindow` (blittable `nint`/`Guid*`/`void**` no-marshal
@@ -362,7 +378,7 @@ Per `architecture-spec.md` §4.8 re-cut by `hardened-v1-plan.md` §2.2:
 | 1 pump | `IPlatformWindow.PumpInto(ring)`; **read device-lost word + present-ack seq** (single Volatile reads) | UI |
 | 2 input dispatch | drain ring; `WindowEvent.Resized/DpiChanged/ThemeChanged/DeviceLost` consumed | UI |
 | 10 submit | leaf walks POD opcodes (devirtualized) → `ID3D12GraphicsCommandList` → `ExecuteCommandLists` → `Signal(fence)` | RENDER |
-| 11 present | wait latency waitable → `Present(SyncInterval, Flags)` → DComp `Commit` (only if composition dirty) → `Volatile.Write(present-ack)` | RENDER |
+| 11 present | wait latency waitable (normally already paid before the frame was chosen — `WaitForPresentSlot`; skipped here while that credit is held) → `Present(SyncInterval, Flags)` → DComp `Commit` (only if composition dirty) → `Volatile.Write(present-ack)` | RENDER |
 | 13 arena swap | drain deferred-delete ring behind retired fence; `StagingRing`/`UploadRing` reset behind fence | RENDER |
 
 In single-thread v1 every row is the UI thread (one thread). Submit/present become the render thread at
@@ -539,7 +555,10 @@ them to the pool. The codec runs on workers (§9.5); the RHI never sees `string`
 On the render thread: `IDXGIFactory2.CreateSwapChainForComposition(queue, desc)` with
 `B8G8R8A8_UNORM`, `BufferCount=3`, **`FLIP_DISCARD`** (preferred over `FLIP_SEQUENTIAL` for full-frame
 UI), `PREMULTIPLIED`, `STRETCH`, `FRAME_LATENCY_WAITABLE | ALLOW_TEARING` → QI `IDXGISwapChain3`, then
-`SetMaximumFrameLatency(BufferCount - 1)` = **2** (the one frame of CPU/GPU pipelining slack; see
+`SetMaximumFrameLatency(1)` — **not** `BufferCount - 1` (AS-BUILT 2026-09: the present-queue depth is a
+LATENCY decision, decoupled from the 3 CPU-side frame banks; depth 2 pre-paid a frame of input lag on every
+frame because backpressure is permanent on a weak GPU, and the render loop now waits for the slot before it
+picks a frame — `IGpuDevice.WaitForPresentSlot`; see
 [`budgets.md`](../budgets.md) §1 back-buffers row and [`threading-render-seam.md`](./threading-render-seam.md) §11.1).
 Back-buffer **RTVs created as `B8G8R8A8_UNORM_SRGB`** (RTV format independent of buffer format — folds
 the flip-model/DComp sRGB BLOCKER; blend+resolve in linear, hardware sRGB-encodes on write, output

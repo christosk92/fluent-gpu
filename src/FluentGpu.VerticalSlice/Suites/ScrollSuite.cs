@@ -2864,91 +2864,41 @@ static class ScrollSuite
     {
         var fonts = new HeadlessFontSystem(strings);
 
-        // gate.wake.scrollHoldSuppressesAmbientCap (W2-P2.1): the RecommendedWaitMs ambient-FPS cap must defer through
-        // the 0.45s post-scroll hold, not just the display-rate grace — otherwise slow wheel-notch scrolling over an
-        // ambient loop (skeleton shimmer) oscillates 30Hz↔display-rate per notch (the step-up Resync cadence lurch).
-        // AmbientAnimationFps=1 makes the branches unambiguous: ambient wait ≈ 1000ms, display-rate pacing is 0 or the
-        // refresh-derived pace floor (15ms off the headless 60Hz fallback).
+        // gate.anim.hzRowIndependentOfLoopRate: a row's CADENCE belongs to the ROW, not to the frame loop. The host runs
+        // at the display rate whenever due-NOW work exists (here: a live scroll body), and an Hz(30) row seeded
+        // alongside it must still advance on its OWN edges — about every 4th frame at 120 Hz — instead of being dragged
+        // up to the panel rate. That property is what replaced the deleted ambient classifier's scroll-grace/hold
+        // deferral: the old model had ONE global fps for "ambient" motion and one binary escape, so a slow row inside a
+        // fast frame could not be expressed, and every fix was another time window bolted onto the host.
         {
             using var app = new HeadlessPlatformApp();
-            var window = new HeadlessWindow(new WindowDesc("scrollhold-cap", new Size2(360, 460), 1f)); window.Show();
-            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new TouchFlingSettleProbe());
-            host.AmbientAnimationFps = 1;
+            var window = new HeadlessWindow(new WindowDesc("hz-row", new Size2(480, 320), 1f)); window.Show();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new ScrollProbe(),
+                frameTime: new FixedFrameTimeSource(1000f / 120f));   // 8.33 ms steps ⇒ a 30 Hz row is due every 4th frame
             host.RunFrame();
-            var vp = host.Scene.Root;
-            host.Animation.Keyframes(vp, AnimChannel.Opacity,
-                new[] { new Keyframe(0f, 0.4f, Easing.Linear), new Keyframe(1f, 1f, Easing.Linear) }, 800f, loop: true);
-            host.RunFrame();
-            int wIdle = host.RecommendedWaitMs();                 // loop-only motion, no scroll ever → the ambient cap paces
-            bool ambientBaseline = wIdle > 300;
-
-            long now = System.Diagnostics.Stopwatch.GetTimestamp();
-            host.MainScrollHoldUntilForTest = now + System.Diagnostics.Stopwatch.Frequency;   // hold LIVE (~1s)
-            host.SetScrollGraceForTest(0);                                                    // grace EXPIRED — isolates the hold term
-            int wHold = host.RecommendedWaitMs();
-            // Display-rate pacing (0 sync / the derived pace floor), NOT AmbientFrameWaitMs. The floor is refresh-
-            // derived now, and the headless device reports no refresh period ⇒ the 60 Hz fallback ⇒ 15 ms.
-            int paceFloor = AppHost.DeriveAsyncPaceMs(1000.0 / 60);
-            bool holdSuppresses = wHold <= paceFloor;
-
-            host.MainScrollHoldUntilForTest = 0;                  // hold EXPIRED
-            host.SetScrollGraceForTest(0);
-            int wAfter = host.RecommendedWaitMs();
-            bool capReturns = wAfter > 300;
-
-            // And the production arming path: a REAL wheel notch through the dispatcher re-arms the hold at the
-            // phase-7 scroll tick (the sync wheel write pulses ScrollMoved → UserScrollActive on the next ticked frame).
-            window.QueueInput(new InputEvent(InputKind.Wheel, new Point2(150, 200), 0, 0, WheelNotch: 1f));
-            host.RunFrame(); host.RunFrame(); host.RunFrame();
-            bool holdArmed = host.MainScrollHoldUntilForTest > System.Diagnostics.Stopwatch.GetTimestamp();
-            Check("gate.wake.scrollHoldSuppressesAmbientCap the ambient FPS cap defers through the post-scroll hold: loop-only motion paces at the cap; hold live (grace expired) ⇒ display-rate pacing, NOT AmbientFrameWaitMs; hold expired ⇒ the cap returns; a real wheel notch arms the hold",
-                ambientBaseline && holdSuppresses && capReturns && holdArmed,
-                $"wIdle={wIdle} (want >300) wHold={wHold} (want <={paceFloor}) wAfter={wAfter} (want >300) holdArmed={holdArmed}");
-        }
-
-        // gate.wake.scrollGraceNeedsMotion (W2.75-C1): the post-scroll display-rate grace must be armed by REAL MOTION,
-        // not by the ScrollAnim wake bit. That bit is also set by merely-ARMED viewports (a scrollbar fade/away timer,
-        // zero offset motion — ScrollIntegrator.HasActive counts armed, not moving), and re-arming off it made the loop
-        // free-run at the display rate for ~2s after every scroll with nothing to render, defeating the ambient cap.
-        {
-            using var app = new HeadlessPlatformApp();
-            var window = new HeadlessWindow(new WindowDesc("scroll-grace", new Size2(480, 320), 1f)); window.Show();
-            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new ScrollProbe());
-            host.RunFrame();
-            // Reveal the bar over the lane, then leave the VIEWPORT: armed for its away/fade dwell with ZERO motion.
-            window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(198f, 100f), 0, 0));
-            for (int i = 0; i < 6; i++) host.RunFrame();
-            window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(400f, 260f), 0, 0));
-            // host.ScrollIntegratorForTest.AnyOffsetWroteThisFrame is gone — replaced by an explicit before/after
-            // offset comparison on the viewport (ScrollProbe's root), per the WP-F migration guidance.
-            host.Scene.TryGetScroll(host.Scene.Root, out var beforeArmedFrame);
-            host.RunFrame();
-            host.Scene.TryGetScroll(host.Scene.Root, out var afterArmedFrame);
-            bool armedNoMotion = host.ScrollActiveCensus > 0
-                && MathF.Abs(afterArmedFrame.OffsetY - beforeArmedFrame.OffsetY) < 0.001f;
-
-            host.SetScrollGraceForTest(0);
-            host.RecommendedWaitMs();
-            bool notExtended = host.ScrollGraceUntilForTest == 0;
-
-            // The grace still exists for the motion it was written for: a real wheel notch re-arms it.
+            host.Animation.DefaultLoopHz = 30;
+            var root = host.Scene.Root;
+            host.Animation.Keyframes(root, AnimChannel.Opacity,
+                new[] { new Keyframe(0f, 0f, Easing.Linear), new Keyframe(1f, 1f, Easing.Linear) }, 800f, loop: true);
+            // A real wheel notch: the scroll body is due-now work, so every frame below is a display-rate frame.
             window.QueueInput(new InputEvent(InputKind.Wheel, new Point2(100f, 100f), 0, 0, WheelNotch: 1f));
-            bool moved = false;
-            host.Scene.TryGetScroll(host.Scene.Root, out var beforeMoveFrame);
-            for (int i = 0; i < 6 && !moved; i++)
+            host.RunFrame();
+
+            float prev = host.Scene.Paint(root).Opacity;
+            int changed = 0, scrollFrames = 0;
+            for (int i = 0; i < 10; i++)
             {
                 host.RunFrame();
-                host.Scene.TryGetScroll(host.Scene.Root, out var afterMoveFrame);
-                moved = MathF.Abs(afterMoveFrame.OffsetY - beforeMoveFrame.OffsetY) > 0.001f;
-                beforeMoveFrame = afterMoveFrame;
+                if ((host.CurrentWakeReasons & WakeReasons.ScrollAnim) != 0) scrollFrames++;
+                float value = host.Scene.Paint(root).Opacity;
+                if (MathF.Abs(value - prev) > 0.0005f) changed++;
+                prev = value;
             }
-            host.SetScrollGraceForTest(0);
-            host.RecommendedWaitMs();
-            bool extended = host.ScrollGraceUntilForTest > 0;
-
-            Check("gate.wake.scrollGraceNeedsMotion the post-scroll display-rate grace is armed by a real offset write, NOT by the ScrollAnim wake bit: an armed-but-motionless viewport (scrollbar fade timer) does not extend it; a wheel notch does",
-                armedNoMotion && notExtended && moved && extended,
-                $"armedNoMotion={armedNoMotion} notExtended={notExtended} moved={moved} extended={extended} armed={host.ScrollActiveCensus}");
+            // 10 frames × 8.33 ms = 83 ms ⇒ 2–3 edges of a 30 Hz row depending on where the shared loop epoch put its
+            // phase. What must NEVER happen is 10 (dragged to the loop's rate) or 0 (never advanced at all).
+            Check("gate.anim.hzRowIndependentOfLoopRate an Hz(30) loop advances on its OWN edges (~every 4th frame) while the frame loop runs at the display rate for a live scroll body — never dragged up to the panel rate, never stalled",
+                changed >= 2 && changed <= 3 && scrollFrames >= 1,
+                $"changed={changed}/10 (want 2..3) scrollFrames={scrollFrames} (want >=1)");
         }
 
         // gate.scroll.nonScrollableBarRetires (W2.75-C2): a viewport whose content settles to FIT while its bar is up and
@@ -2987,47 +2937,58 @@ static class ScrollSuite
                 $"revealedArmed={revealedArmed} dropped={dropped} fadeAfter={fadeAfter:0.###} frames={frames}");
         }
 
-        // gate.host.ambientRateMode: the ambient cap's RATE selection. HalfRefresh must be panel-DERIVED (a whole-vblank
-        // divisor at every rate — 120⇒60, 90⇒45, 60⇒30 — which is the whole point: a fixed 60 beats against the vsync-
-        // locked present on a 120Hz panel and is simply the wrong number on a 90Hz one), while ExplicitFps stays
-        // refresh-INDEPENDENT and Uncapped stays 0. Plus the engagement half: the mode-aware gate that replaced the old
-        // `AmbientAnimationFps > 0` test must still throttle loop-only motion under HalfRefresh and must NOT throttle it
-        // under Uncapped (a false engagement there is invisible in a unit test but caps an app that asked for display rate).
+        // gate.host.cadence: the host's wait is a function of the SOURCES' declared cadences — there is no app-wide fps
+        // knob and no frame-class inference left. Four laws:
+        //   (1) a plain loop (no cadence named ⇒ Cadence.Default ⇒ Hz(DefaultLoopHz)) paces the loop at that rate: a
+        //       wait in (pace, 34] — the headless device reports no refresh period, so the 60 Hz fallback applies and
+        //       30 Hz quantizes to every 2nd refresh ≈ 33 ms, exactly the old HalfRefresh answer;
+        //   (2) ONE Cadence.Display row is enough to pull the whole wait to the display-rate pace (0 sync / the derived
+        //       floor, 15 ms off that same 60 Hz fallback) — the earliest due wins, and it need not be the only row;
+        //   (3) DefaultLoopHz retunes LIVE: 1 Hz with nothing re-seeded ⇒ a wait > 300 ms;
+        //   (4) a Driven row is event-woken, never timer-due ⇒ nothing shapes a wait and the loop blocks (-1).
         {
-            // Rate derivation (pure) — the arithmetic, at the three panel rates that ship.
-            bool half = AppHost.DeriveAmbientFps(AmbientRateMode.HalfRefresh, 60, 120.0) == 60
-                     && AppHost.DeriveAmbientFps(AmbientRateMode.HalfRefresh, 60, 90.0) == 45
-                     && AppHost.DeriveAmbientFps(AmbientRateMode.HalfRefresh, 60, 60.0) == 30
-                     && AppHost.DeriveAmbientFps(AmbientRateMode.HalfRefresh, 60, 0.0) == 30;    // refresh unknown ⇒ the 60Hz answer
-            bool explicitFps = AppHost.DeriveAmbientFps(AmbientRateMode.ExplicitFps, 60, 120.0) == 60
-                            && AppHost.DeriveAmbientFps(AmbientRateMode.ExplicitFps, 60, 60.0) == 60
-                            && AppHost.DeriveAmbientFps(AmbientRateMode.ExplicitFps, 0, 120.0) == 0;
-            bool uncapped = AppHost.DeriveAmbientFps(AmbientRateMode.Uncapped, 60, 120.0) == 0
-                         && AppHost.DeriveAmbientFps(AmbientRateMode.Uncapped, 0, 0.0) == 0;
-
-            // Engagement (live host) — the headless device reports no refresh period, so HalfRefresh resolves to the
-            // 30 fps fallback: an ambient wait in (pace, 34]. Uncapped must fall through to display-rate pacing
-            // (0 sync / the derived floor), which off the same 60 Hz fallback is 15 ms.
             using var app = new HeadlessPlatformApp();
-            var window = new HeadlessWindow(new WindowDesc("ambient-mode", new Size2(360, 460), 1f)); window.Show();
+            var window = new HeadlessWindow(new WindowDesc("host-cadence", new Size2(360, 460), 1f)); window.Show();
             using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new TouchFlingSettleProbe());
             host.RunFrame();
-            host.Animation.Keyframes(host.Scene.Root, AnimChannel.Opacity,
-                new[] { new Keyframe(0f, 0.4f, Easing.Linear), new Keyframe(1f, 1f, Easing.Linear) }, 800f, loop: true);
-            host.RunFrame();
-            host.AmbientRate = AmbientRateMode.HalfRefresh;
-            int wHalf = host.RecommendedWaitMs();
-            host.AmbientRate = AmbientRateMode.Uncapped;
-            int wUncapped = host.RecommendedWaitMs();
-            host.AmbientAnimationFps = 1;                       // the legacy int setter must still mean ExplicitFps
-            int wExplicit = host.RecommendedWaitMs();
+            var root = host.Scene.Root;
+            var keys = new[] { new Keyframe(0f, 0.4f, Easing.Linear), new Keyframe(1f, 1f, Easing.Linear) };
             int paceFloor = AppHost.DeriveAsyncPaceMs(1000.0 / 60);
-            bool engagement = wHalf > paceFloor && wHalf <= 34 && wUncapped <= paceFloor && wExplicit > 300
-                           && host.AmbientRate == AmbientRateMode.ExplicitFps;
 
-            Check("gate.host.ambientRateMode HalfRefresh derives 60@120Hz / 45@90Hz / 30@60Hz (30 when the refresh is unknown); ExplicitFps + Uncapped are refresh-independent; the ambient branch engages under HalfRefresh, falls through under Uncapped, and the int setter still means ExplicitFps",
-                half && explicitFps && uncapped && engagement,
-                $"half={half} explicit={explicitFps} uncapped={uncapped} wHalf={wHalf} (want {paceFloor + 1}..34) wUncapped={wUncapped} (want <={paceFloor}) wExplicit={wExplicit} (want >300)");
+            // (1) a plain loop at the engine default (30 Hz)
+            host.Animation.Keyframes(root, AnimChannel.Opacity, keys, 800f, loop: true);
+            host.RunFrame();
+            int wLoop = host.RecommendedWaitMs();
+            bool loopPaced = wLoop > paceFloor && wLoop <= 34 && host.LastWaitKind == HostWaitKind.Cadence;
+
+            // (2) a second row that asks for the panel rate — the wait collapses to display-rate pacing
+            host.Animation.Keyframes(root, AnimChannel.TranslateX,
+                new[] { new Keyframe(0f, 0f, Easing.Linear), new Keyframe(1f, 4f, Easing.Linear) }, 400f,
+                loop: true, cadence: Cadence.Display);
+            host.RunFrame();
+            int wDisplay = host.RecommendedWaitMs();
+            bool displayWins = wDisplay <= paceFloor && host.LastWaitKind != HostWaitKind.Cadence;
+
+            // (3) live retune of the default, with NOTHING re-seeded
+            host.Animation.CancelToRest(root, AnimChannel.TranslateX);
+            host.RunFrame();
+            host.Animation.DefaultLoopHz = 1;
+            int wSlow = host.RecommendedWaitMs();
+            bool retunesLive = wSlow > 300 && host.LastWaitKind == HostWaitKind.Cadence;
+
+            // (4) only a Driven row left: event-woken, never timer-due
+            host.Animation.CancelToRest(root, AnimChannel.Opacity);
+            for (int i = 0; i < 8 && host.HasActiveWork; i++) host.RunFrame();
+            float source = 0f;
+            int clock = host.Animation.Clocks.Register(() => source);
+            host.Animation.Drive(root, AnimChannel.Opacity, keys, clock, 0f, 100f);
+            host.RunFrame();
+            int wDriven = host.RecommendedWaitMs();
+            bool drivenIdles = wDriven == -1 && host.LastWaitKind == HostWaitKind.Idle;
+
+            Check("gate.host.cadence the host wait comes from the rows' own cadences: a plain loop paces at DefaultLoopHz, one Cadence.Display row pulls the wait to display rate, DefaultLoopHz retunes live with nothing re-seeded, and a Driven-only slab is never timer-due (the loop blocks)",
+                loopPaced && displayWins && retunesLive && drivenIdles,
+                $"wLoop={wLoop} (want {paceFloor + 1}..34, kind Cadence) wDisplay={wDisplay} (want <={paceFloor}) wSlow={wSlow} (want >300) wDriven={wDriven} (want -1, kind Idle) lastKind={host.LastWaitKind}");
         }
 
         // gate.host.adaptiveGpuSamples: pacing policy consumes only coherent, completed on-GPU execution samples. The

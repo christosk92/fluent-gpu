@@ -1405,7 +1405,8 @@ public sealed class TextureStagingRing { /* MB-sized, fence-gated; backs CopyBuf
 - **Root constants** (viewport size, sRGB flag, global alpha, current clip params) via `BindConstants` —
   no CB churn.
 - **Frames-in-flight = 3** (`OQ-8`, settled AS-BUILT 2026-08: `D3D12Device.FRAME_COUNT` = back buffers = per-frame
-  command allocators = CPU-written GPU bank depth, with `SetMaximumFrameLatency(2)`); tables (RTV/PSO/textures) are
+  command allocators = CPU-written GPU bank depth; the DXGI present-queue depth is a SEPARATE latency decision,
+  `SetMaximumFrameLatency(1)` AS-BUILT 2026-09); tables (RTV/PSO/textures) are
   retained slabs (handles stay valid); rings reset on fence completion.
 - **Allocator:** all GPU resources from **D3D12MA** placed resources/pools → low fragmentation, AOT-proven.
 - **Managed side:** recorder/batcher/sort scratch are arena; `InstanceBatch[]` is a pooled

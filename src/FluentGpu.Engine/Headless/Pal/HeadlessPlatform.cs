@@ -213,6 +213,17 @@ public sealed class HeadlessWindow : IPlatformWindow
 
     public void CloseWindow() => CloseCount++;
 
+    /// <summary>Recorded <see cref="IPlatformWindow.BeginSystemMove"/> calls (the pop-out's drag-the-picture gate).
+    /// Headless has no modal loop: a windowed request is ACCEPTED (so the caller holds its gesture exactly as on Win32)
+    /// and the gate ends it by queueing the pair the Win32 backend emits — <see cref="InputKind.PointerCancel"/> for the
+    /// captured contact, then <see cref="InputKind.WindowMoveSizeEnded"/>. Fullscreen declines, like Win32.</summary>
+    public int BeginSystemMoveCount { get; private set; }
+    public bool BeginSystemMove()
+    {
+        BeginSystemMoveCount++;
+        return !IsFullscreen;
+    }
+
     /// <summary>The most recent region push (copied), for drag-band/island/button-rect assertions.</summary>
     public TitleBarRegion[] LastTitleBarRegions { get; private set; } = [];
     public void SetTitleBarRegions(ReadOnlySpan<TitleBarRegion> regions) => LastTitleBarRegions = regions.ToArray();

@@ -40,8 +40,12 @@ public enum AnimFlags : ushort
     RmExempt      = 1 << 7,   // exempt from the reduced-motion snap (essential motion, e.g. a spinner)
     Additive      = 1 << 8,   // CompositeOp != Replace
     Accumulate    = 1 << 9,   // distinguishes Add vs Accumulate when Additive is set
-    DisplayRate   = 1 << 10,  // a TRANSIENT loop (e.g. an indeterminate progress bar) that opts OUT of the ambient
-                              // frame-rate cap and runs at the panel refresh — it's short-lived, not a perpetual idle loop
+    // 1 << 10 (was DisplayRate — the "transient loop opts out of the ambient cap" bit) is now StartPending. Frame class
+    // is no longer inferred from flags: every row carries its own Cadence in the engine's `_cadencePeriodMs` side array
+    // (0 = display rate, ushort.MaxValue = AnimEngine.DefaultLoopHz), and AnimEngine.NextDueMs answers the wake.
+    StartPending  = 1 << 10,  // structural enter/exit: the start time resolves at the first PRESENTED frame (Web Animations'
+                              // pending play task) — the first advance after the seed-frame hold is capped to one steady
+                              // frame, so a long commit frame cannot eat the start (AnimEngine.PendingStartStep)
     ClipAdded     = 1 << 11,  // SizeMode.Reflow: THIS row put NodeFlags.ClipsToBounds on the node (the node did not
                               // declare it), so the row's teardown must take it off again — and only then. While a
                               // reflow writes an EASED LayoutInput.Height the content is still arranged at its natural
@@ -161,15 +165,16 @@ public sealed class AnimValueSlab
     private int _firstActiveNode = -1;
 
     // Slab-mutation version (perf plan W6/E12): bumped on every Add/Free/ClearNode (and by BumpVersion at the engine's
-    // flag-retarget seeds, which rewrite Loop/DisplayRate through At() refs without a slab call). The engine memoizes
-    // its LoopTrackCount/DisplayRateActive census against this — ComputeWakeReasons runs several times per frame and
-    // was re-scanning every row each call.
+    // flag-retarget seeds, which rewrite Loop through At() refs without a slab call). The engine memoizes
+    // its next-due / loop census against this — the host's wake math runs several times per frame and was re-scanning
+    // every row each call.
     private int _version;
 
     /// <summary>Monotonic slab-mutation version — see the field remarks. Never reset.</summary>
     public int Version => _version;
     /// <summary>Bump <see cref="Version"/> for a census-visible row mutation done through an <see cref="At"/> ref
-    /// (the engine's seed/retarget paths rewrite AnimFlags.Loop/DisplayRate in place, which no slab call sees).</summary>
+    /// (the engine's seed/retarget paths rewrite AnimFlags.Loop — and the row's cadence period — in place, which no
+    /// slab call sees).</summary>
     public void BumpVersion() => _version++;
 
     /// <summary>Head of the active-node chain (a node index that currently owns rows); -1 = slab empty.

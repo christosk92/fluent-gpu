@@ -16,8 +16,21 @@ public sealed class RenderCompositorAnimations
         public double AnchorNowMs;
         public float AnchorElapsedMs, Value, Velocity, ElapsedMs;
         public bool Parked, Done;
+        /// <summary>The render-side twin of the engine's <c>_lastAdvanceMs</c>: when this row was last re-sampled.
+        /// 0 = never. Only consulted when the row carries a cadence period (<c>Desired.PeriodMs &gt; 0</c>).</summary>
+        public double LastAdvanceMs;
+        /// <summary>Pending start (<see cref="AnimFlags.StartPending"/>, a structural enter/exit): the first render frame
+        /// that poses the row HOLDS it at t=0 (<see cref="HoldNowMs"/>, with that frame's steady interval in
+        /// <see cref="HoldRefMs"/>); the next one resolves the start from that presentation
+        /// (<see cref="AnimEngine.PendingStartStep"/>), so a long first frame cannot eat the entrance.</summary>
+        public bool StartPending;
+        public double HoldNowMs;
+        public float HoldRefMs;
     }
     private State[] _states = [], _nextStates = [];
+    // Render tick bookkeeping for the pending-start hold: the previous tick's instant and the interval before it.
+    private double _lastTickMs;
+    private float _tickIntervalMs;
     private Dictionary<ulong, int> _indices = new(), _nextIndices = new();
     private CompositorAnimationPose[] _feedback = [];
     private readonly Dictionary<NodeHandle, AnimEngine.Accum> _accumulators = new(64);
@@ -30,7 +43,7 @@ public sealed class RenderCompositorAnimations
     public void Pause(double nowMs)
     {
         if (_paused) return;
-        for (int i = 0; i < _count; i++) Evaluate(ref _states[i], nowMs);
+        for (int i = 0; i < _count; i++) Evaluate(ref _states[i], nowMs, _tickIntervalMs);
         _pausedAtMs = nowMs;
         _paused = true;
         HasActive = false;
@@ -44,8 +57,10 @@ public sealed class RenderCompositorAnimations
         for (int i = 0; i < _count; i++)
         {
             _states[i].AnchorNowMs += parkedMs;
+            if (_states[i].StartPending && !double.IsNaN(_states[i].HoldNowMs)) _states[i].HoldNowMs += parkedMs;
             HasActive |= !_states[i].Done && !_states[i].Parked;
         }
+        _lastTickMs = 0;   // the pause is not a frame interval
         _paused = false;
     }
 
@@ -74,13 +89,15 @@ public sealed class RenderCompositorAnimations
                 if (parking && state.Desired.Revision == entry.Revision)
                 {
                     state.Done = state.Desired.Row.Has(AnimFlags.Done);
-                    Evaluate(ref state, capturedAtMs);
+                    Evaluate(ref state, capturedAtMs, _tickIntervalMs);
                 }
-                else Evaluate(ref state, nowMs);
+                else Evaluate(ref state, nowMs, _tickIntervalMs);
                 if (state.Desired.Revision != entry.Revision)
                 {
                     float current = state.Value, velocity = state.Velocity;
                     state = Seed(in entry, capturedAtMs);
+                    // A retained instance has already been posed on screen: a retarget continues it, it never re-pends.
+                    state.StartPending = false;
                     if (entry.Row.Kind == GenKind.Spring && !entry.ExplicitFrom)
                     {
                         state.Desired.Row.Gen = Generators.BakeSpring(entry.Row.Gen.Omega, entry.Row.Gen.Zeta,
@@ -125,13 +142,21 @@ public sealed class RenderCompositorAnimations
     public void Tick(SceneRecordingSnapshot scene, double nowMs)
     {
         if (_paused) nowMs = _pausedAtMs;
+        // The steady render interval going INTO this tick — the reference a pending-start row held on this tick caps its
+        // first advance against. 0 = unknown (the first tick, or a gap longer than any frame — an idle render thread).
+        if (!_paused && nowMs > _lastTickMs)
+        {
+            double interval = _lastTickMs > 0 ? nowMs - _lastTickMs : 0;
+            _tickIntervalMs = interval > 0 && interval <= AnimClock.MaxDeltaMs ? (float)interval : 0f;
+            _lastTickMs = nowMs;
+        }
         scene.BeginCompositorOverlay();
         _accumulators.Clear();
         HasActive = false;
         for (int i = 0; i < _count; i++)
         {
             ref var state = ref _states[i];
-            Evaluate(ref state, nowMs);
+            Evaluate(ref state, nowMs, _tickIntervalMs);
             ref readonly var row = ref state.Desired.Row;
             if (!state.Parked && scene.IsLive(row.Node))
             {
@@ -162,11 +187,40 @@ public sealed class RenderCompositorAnimations
         Velocity = entry.Row.Velocity,
         Parked = entry.Row.Has(AnimFlags.Parked),
         Done = entry.Row.Has(AnimFlags.Done),
+        StartPending = entry.Row.Has(AnimFlags.StartPending) && entry.PeriodMs == 0,
+        HoldNowMs = double.NaN,
     };
 
-    private static void Evaluate(ref State state, double nowMs)
+    private static void Evaluate(ref State state, double nowMs, float refIntervalMs)
     {
         if (state.Parked || state.Done) return;
+        // PENDING START (AnimFlags.StartPending — a structural enter/exit the UI just seeded): the first render frame to
+        // pose it holds t=0, and that presentation is where its start time resolves (the UI's seed-frame hold, render
+        // side). The next frame then advances by the time since it — capped to one steady interval when the held frame
+        // itself ran long (a first frame of a new page recording/uploading for 40-60 ms), exactly AnimEngine's PASS1 rule.
+        if (state.StartPending)
+        {
+            if (double.IsNaN(state.HoldNowMs))
+            {
+                state.HoldNowMs = nowMs;
+                state.HoldRefMs = refIntervalMs > 0f ? refIntervalMs : AnimClock.DefaultDeltaMs;
+                return;
+            }
+            if (nowMs <= state.HoldNowMs) return;
+            float first = AnimEngine.PendingStartStep((float)(nowMs - state.HoldNowMs), state.HoldRefMs);
+            state.AnchorNowMs = nowMs - first;
+            state.StartPending = false;
+        }
+        // CADENCE (the render-thread half of AnimEngine's PASS1 due-check): a row that states its own frame rate is
+        // re-sampled only when its period has elapsed; in between its Value/ElapsedMs are HELD, so a 30Hz shimmer
+        // steps at 30Hz even though the compositor is posing at panel rate for something else. Sampling stays
+        // analytical/absolute, so holding costs nothing and skipping never accumulates drift.
+        ushort periodMs = state.Desired.PeriodMs;
+        if (periodMs > 0)
+        {
+            if (state.LastAdvanceMs > 0d && nowMs - state.LastAdvanceMs < periodMs - AnimEngine.CadenceSlackMs) return;
+            state.LastAdvanceMs = nowMs;
+        }
         state.ElapsedMs = state.AnchorElapsedMs + (float)Math.Max(0, nowMs - state.AnchorNowMs);
         if (state.ElapsedMs < 0) return;
         ref readonly var row = ref state.Desired.Row;

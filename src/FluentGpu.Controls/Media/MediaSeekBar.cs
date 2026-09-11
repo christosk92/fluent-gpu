@@ -43,7 +43,8 @@ public sealed class MediaSeekBar : Component
     /// <summary>The owning chrome's visibility. A SIGNAL, not a bool: init props freeze at mount and this bar outlives
     /// every hide/reveal cycle by design (unmounting it is what made a fresh bar flash an empty rail at fraction 0 on
     /// every reveal). While the chrome is down the bar leaves the hit-test, focus and accessibility surfaces — hidden
-    /// chrome that still answers a click is worse than no chrome. Null = always interactive.</summary>
+    /// chrome that still answers a click is worse than no chrome — but its PIXELS never change with it: the palette
+    /// follows the model, so the conceal fade shows the same bar fading, not a greyed one. Null = always interactive.</summary>
     public IReadSignal<bool>? ChromeVisible { get; init; }
 
     /// <summary>The scrub row's hit height (DIP). ≥ 20 px is the pointer-target floor for a 4 px rail.</summary>
@@ -196,7 +197,12 @@ public sealed class MediaSeekBar : Component
         bool liveRail = _liveRail.Value;
         bool slowSeek = _slowSeek.Value;
         bool chromeUp = ChromeVisible?.Value ?? true;
-        bool enabled = chromeUp && (durSec > 0.0 || liveRail) && st is not (PlaybackState.Idle or PlaybackState.Failed);
+        // TWO facts, not one. `enabled` is the MODEL (is there a scale to seek on) and drives every PIXEL; `interactive`
+        // adds the chrome's visibility and gates only INPUT and accessibility. Folding chromeUp into the palette greyed the
+        // rail and shrank the thumb at the START of every conceal — the bar visibly jumped as it began to fade, then faded
+        // out in the disabled look.
+        bool enabled = (durSec > 0.0 || liveRail) && st is not (PlaybackState.Idle or PlaybackState.Failed);
+        bool interactive = enabled && chromeUp;
 
         _post = UsePost();
 
@@ -260,9 +266,11 @@ public sealed class MediaSeekBar : Component
         _confirmTimer = UseTimeout(ReleaseGate, ConfirmTimeoutMs, DepKey.Empty);
         UseEffect(DisarmSpinnerOnMount, DepKey.Empty);   // both UseTimeouts arm at mount; nothing is seeking yet
 
-        // Re-seed the resting display when the enabling inputs change (duration arrives, play/pause edge). Deliberately
-        // NOT keyed on the reported position — that quantised-to-milliseconds key re-ran this effect on every publish.
-        int modelKey = HashCode.Combine(enabled, playing, buffering, (int)_railSpanSec, liveRail);
+        // Re-seed the resting display when the enabling inputs change (duration arrives, play/pause edge, a reveal — the
+        // ticker below does not run while the chrome is hidden, so a reveal must land the fill on the live position).
+        // Deliberately NOT keyed on the reported position — that quantised-to-milliseconds key re-ran this effect on every
+        // publish.
+        int modelKey = HashCode.Combine(interactive, playing, buffering, (int)_railSpanSec, liveRail);
         UseEffect(() => Recompute(), modelKey);
 
         var s = Slider.DefaultStyle;
@@ -345,8 +353,9 @@ public sealed class MediaSeekBar : Component
             Corners = CornerRadius4.All(s.ThumbCornerRadius),
             Fill = s.ThumbRing, HoverFill = s.ThumbRing, PressedFill = s.ThumbRing,
             BorderBrush = s.ThumbBorder, BorderWidth = s.ThumbBorderWidth,
-            // Thumb ring fades in on hover/press (the resting bar reads as a clean level line).
-            Opacity = 0f, HoverOpacity = enabled ? 1f : 0f, PressedOpacity = enabled ? 1f : 0f,
+            // Thumb ring fades in on hover/press (the resting bar reads as a clean level line) — input-driven, so it follows
+            // `interactive`: hidden chrome takes no hover.
+            Opacity = 0f, HoverOpacity = interactive ? 1f : 0f, PressedOpacity = interactive ? 1f : 0f,
             HitTestVisible = false,
             Transform = thumbBind,
             Children = [inner],
@@ -374,26 +383,29 @@ public sealed class MediaSeekBar : Component
         };
 
         // Pixel-due ticker (UseInterval — not FrameClock.Tick, which pins the host at panel rate via FrameClockPoller).
-        // Unmounted when paused/stopped so the frame loop can idle. NEVER re-renders this component.
-        bool canAdvance = enabled && playing && !buffering;
+        // Unmounted when paused/stopped — and while the chrome is hidden, where nobody sees the playhead — so the frame
+        // loop can idle. A reveal re-seeds the fill (modelKey above). NEVER re-renders this component.
+        bool canAdvance = interactive && playing && !buffering;
         Element? ticker = canAdvance ? Embed.Comp(() => new MediaSeekTicker { Owner = this }) with { Key = "position-ticker" } : null;
         Element? previewTicker = _scrubbing.Value
             ? Embed.Comp(() => new MediaSeekPreviewTicker { Owner = this }) with { Key = "preview-ticker" } : null;
 
+        // Input and accessibility follow `interactive` (the model AND the chrome being up): hidden chrome leaves the
+        // hit-test, focus and accessibility surfaces. None of these props changes a pixel, so the hide edge is invisible.
         return new BoxEl
         {
             Grow = 1f, Height = HitHeight, Direction = 0, AlignItems = FlexAlign.Center,
-            Role = enabled ? AutomationRole.Slider : default,
-            TabStop = enabled ? null : false,
-            Cursor = enabled ? CursorId.Hand : (CursorId?)null,
-            IsEnabled = enabled,
+            Role = interactive ? AutomationRole.Slider : default,
+            TabStop = interactive ? null : false,
+            Cursor = interactive ? CursorId.Hand : (CursorId?)null,
+            IsEnabled = interactive,
             OnRealized = OnRealizedCb,           // mount-only; captures the node for width refresh
             OnBoundsChanged = OnBoundsChangedCb,
-            OnPointerDown = enabled ? OnDown : null,     // click-to-seek anywhere on the rail: the press IS the seek
-            OnDrag = enabled ? OnDragMove : null,
-            OnClick = enabled ? OnCommit : null,             // drag-end → accurate commit (one seek)
-            OnDragCanceled = enabled ? OnCanceled : null,
-            OnPointerWheel = enabled ? OnWheel : null,       // wheel over the seek bar = ±5 s
+            OnPointerDown = interactive ? OnDown : null,     // click-to-seek anywhere on the rail: the press IS the seek
+            OnDrag = interactive ? OnDragMove : null,
+            OnClick = interactive ? OnCommit : null,         // drag-end → accurate commit (one seek)
+            OnDragCanceled = interactive ? OnCanceled : null,
+            OnPointerWheel = interactive ? OnWheel : null,   // wheel over the seek bar = ±5 s
             Children = ticker is null
                 ? previewTicker is null ? [stack] : [stack, previewTicker]
                 : previewTicker is null ? [stack, ticker] : [stack, ticker, previewTicker],

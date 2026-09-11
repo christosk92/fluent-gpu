@@ -525,6 +525,13 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     // gap, so a stray 120-multiple mid-stream can't flip the physics path (a true mouse is always 120-multiples).
     private uint _lastWheelMs;
     private bool _wheelHiRes;
+    // A hi-res stream the OS POSITIVELY identified as a physical mouse (a free-spin wheel) — latched per gesture like
+    // _wheelHiRes, and any touchpad evidence in the gesture wins. Its fallback phase events are tagged Mouse so the
+    // scroll kernel clamps at the edge instead of rubber-banding (a wheel has no contact to stretch against; Flutter's
+    // pointerScroll clamps wheel input under bouncing physics too). An UNRESOLVED source stays Touchpad: this hardware
+    // often cannot resolve a precision touchpad's PT_MOUSE-promoted packets (above), and a touchpad pan keeps its band.
+    private bool _wheelMouseSeen, _wheelTouchpadSeen;
+    private PointerKind _fbPointer = PointerKind.Touchpad;   // the tag of the live fallback gesture (its lift reuses it)
     private const uint WheelGestureGapMs = 200;   // gap that ends a wheel gesture and re-evaluates the hi-res latch
     // Detented signed per-axis carryover (§3.2, the SumatraPDF #3032 fix): accumulate raw ×120 units, emit whole notches
     // per 120 crossed, keep the signed remainder, reset on a direction change. Reset (with the gesture) on an idle gap.
@@ -625,6 +632,13 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     private bool _ncTracking;     // TME_NONCLIENT leave-tracking armed (legacy WM_NCMOUSE* fallback only)
     private bool _ncPointerSeen;  // a WM_NCPOINTER* arrived → the legacy WM_NCMOUSE* fallback stands down (no double-fire)
     private bool _active = true;  // WM_(NC)ACTIVATE — IsActive pull side
+    // ── the content-driven window MOVE (BeginSystemMove — the chromeless pop-out video) ──────────────────────────────
+    // The primary mouse/pen contact currently down in the client (set/cleared in PointerDownUp, cleared on its
+    // WM_POINTERCAPTURECHANGED) — the contact an OS move loop started from it will capture.
+    private uint _primaryDownId;
+    private bool _primaryDown;
+    private bool _engineMovePending;   // our WM_NCLBUTTONDOWN is posted and has not reached the WndProc yet
+    private bool _engineMoveLoop;      // the move we requested has not ended yet (pairs the [window.move] lines + the no-loop end)
     private bool _fullscreen;
     private bool _windowedWasZoomed;
     private nint _windowedStyle;
@@ -638,6 +652,10 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     // which is primary-monitor-global by API contract and so never notices a window dragged onto a secondary
     // display running a different rate. Cached — QueryDisplayConfig is a cold, multi-syscall query, never run per frame.
     private long _displayRefreshPeriodQpc;
+    // The monitor DisplayRefreshPeriodQpc was last derived for — set alongside it in OnDisplayChanged. WM_MOVE
+    // compares against this (cheap: one MonitorFromWindow call, no allocation) to catch a monitor hop that fires
+    // neither WM_DISPLAYCHANGE nor WM_EXITSIZEMOVE (a keyboard snap / Win+Shift+Arrow move).
+    private HMONITOR _monitor;
     private bool _wasZoomed;      // WM_SIZE edge-detect → InputKind.WindowStateChanged
     private bool _inMoveSizeLoop; // WM_ENTERSIZEMOVE..WM_EXITSIZEMOVE modal loop
     private bool _sizedInMoveSizeLoop; // true once this modal loop has delivered WM_SIZE (edge resize, not pure titlebar move)
@@ -934,6 +952,34 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
         => PostMessageW(_hwnd, WM_SYSCOMMAND, IsZoomed(_hwnd) ? SC_RESTORE : SC_MAXIMIZE, 0);
 
     public void CloseWindow() => PostMessageW(_hwnd, WM_CLOSE, 0, 0);
+
+    /// <summary>The OS move loop from the current pointer — mpv's <c>begin_dragging</c> (<c>ReleaseCapture</c> + a caption
+    /// press). The video stays <c>HTCLIENT</c> (hover, the cursor override, click, double-click and right-click keep their
+    /// player meaning); only a press that travelled past the drag box on the picture reaches here.</summary>
+    public bool BeginSystemMove()
+    {
+        if (_fullscreen || _closed || !_primaryDown || _engineMovePending) return false;
+        POINT pt;
+        if (GetCursorPos(&pt) == 0) return false;
+        // POSTED, never sent: the caller is the dispatcher, mid-frame; SendMessage would run the modal loop re-entrantly
+        // under the frame. It reaches DefWindowProc through the WM_NCLBUTTONDOWN case below — the documented caption
+        // press, not the undocumented SC_MOVE|HTCAPTION (0xF012) syscommand. lParam = MAKELPARAM(screen x, screen y).
+        // Nothing below runs before the next pump, so the order of the post and the bookkeeping cannot race.
+        nint lp = (nint)(((uint)(ushort)(short)pt.y << 16) | (ushort)(short)pt.x);
+        if (PostMessageW(_hwnd, WM_NCLBUTTONDOWN, (WPARAM)(nuint)HTCAPTION, (LPARAM)lp) == 0) return false;
+        // Release the ENGINE contact deterministically instead of trusting WM_POINTERCAPTURECHANGED to arrive once the loop
+        // captures: a press the dispatcher never sees end keeps its capture targets set, which suppresses every routed
+        // hover move for the rest of the session — the player's auto-show would die after the first drag. A second cancel
+        // from the real capture change is a no-op on an idle slot.
+        _queue.Enqueue(new InputEvent(InputKind.PointerCancel, default, 0, 0,
+            Pointer: PointerKindOf(_primaryDownId), TimestampMs: Now(), PointerId: _primaryDownId));
+        _primaryDown = false;
+        _engineMovePending = true;
+        _engineMoveLoop = true;
+        ReleaseCapture();   // mpv's pair (w32_common.c begin_dragging); a no-op under mouse-in-pointer, kept for parity
+        Diag.Line($"[window.move] begin at=({pt.x},{pt.y})");   // always-on, one line per gesture (never per frame)
+        return true;
+    }
 
     // ── detached-window seam (the pop-out video mini-player) ──────────────────────────────────────────────────────────
 
@@ -1245,7 +1291,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
             FluentGpu.Foundation.ScrollTrace.FbLift(Environment.TickCount64 - _fbLastTick, _fbLastQpc);
         if (FluentGpu.Foundation.ScrollLog.On) FluentGpu.Foundation.ScrollLog.Line($"FB END   silence>{_hiResLiftMs}ms (lift={_fbLastMs})");
         _queue.Enqueue(new InputEvent(InputKind.ScrollEnd, _fbLastPos, 0, 0, 0f, Mods(),
-            Pointer: PointerKind.Touchpad, TimestampMs: _fbLastMs, QpcTicks: _fbLastQpc,
+            Pointer: _fbPointer, TimestampMs: _fbLastMs, QpcTicks: _fbLastQpc,
             DeviceClassRaw: (byte)ScrollDeviceClass.WheelHiResFallback));
     }
 
@@ -1321,12 +1367,14 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
         uint wheelGapMs = nowMs - _lastWheelMs;   // packet spacing (huge on the first-ever packet — fine)
         bool streamIdle = wheelGapMs > WheelGestureGapMs;
         _lastWheelMs = nowMs;
-        if (streamIdle) { _wheelHiRes = false; _wheelAccumX = 0; _wheelAccumY = 0; }
+        if (streamIdle) { _wheelHiRes = false; _wheelAccumX = 0; _wheelAccumY = 0; _wheelMouseSeen = false; _wheelTouchpadSeen = false; }
 
         DmWheelSourceEvidence sourceEvidence = WheelSourceEvidenceOf(pid);
         bool ptTouchpad = sourceEvidence == DmWheelSourceEvidence.Touchpad
                           || PointerKindOf(pid) == PointerKind.Touchpad;   // rule 1
         if (ptTouchpad) sourceEvidence = DmWheelSourceEvidence.Touchpad;
+        if (ptTouchpad) _wheelTouchpadSeen = true;
+        else if (sourceEvidence == DmWheelSourceEvidence.PhysicalMouse) _wheelMouseSeen = true;
 
         bool subNotch = notch != 0 && (notch % 120) != 0;   // rule 2 (also the trace's "thisHiRes")
         bool dmRunning = _dm is { Enabled: true, Live: true };
@@ -1382,6 +1430,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                     WheelTraceFlags(horizontal, subNotch, streamIdle, ptTouchpad, ctrl: false, phasePath: true, fbActiveBefore: _fbActive),
                     unchecked((byte)(_fbSeq + 1)), horizontal ? tpDipX : tpDipY, wheelGapMs, qpc);
             _fbActive = true;
+            _fbPointer = _wheelMouseSeen && !_wheelTouchpadSeen ? PointerKind.Mouse : PointerKind.Touchpad;
             _fbLastMs = nowMs; _fbLastQpc = qpc; _fbLastPos = pt;
             _fbLastTick = Environment.TickCount64;   // the monotonic silence-check base (see field remarks)
             // Arm/re-arm the lift timer so the silence check fires even when the frame loop is idle (no PumpInto);
@@ -1391,7 +1440,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
             if (FluentGpu.Foundation.ScrollLog.On)
                 FluentGpu.Foundation.ScrollLog.Line($"FB {(kind == InputKind.ScrollBegin ? "BEGIN " : "UPDATE")} {(horizontal ? "H" : "V")} notch={notch} dip={(horizontal ? tpDipX : tpDipY):0.0} seq={_fbSeq}{(fromPopup ? " popup" : "")}");
             _queue.Enqueue(new InputEvent(kind, pt, 0, 0, tpDipY, Mods(),
-                Pointer: PointerKind.Touchpad, TimestampMs: nowMs, PointerId: pid,
+                Pointer: _fbPointer, TimestampMs: nowMs, PointerId: pid,
                 ScrollDeltaX: tpDipX, QpcTicks: qpc, ScrollPhaseSeq: _fbSeq,
                 DeviceClassRaw: (byte)ScrollDeviceClass.WheelHiResFallback));
             return;
@@ -1453,14 +1502,14 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     private Win32CompositorClock? DisplayClockOrNull(bool wanted)
     {
         if (!wanted || _closed) return null;
-        _compositorClock ??= new Win32CompositorClock();
+        _compositorClock ??= new Win32CompositorClock(refreshPeriodHintQpc: _displayRefreshPeriodQpc);
         return _compositorClock.IsAvailable ? _compositorClock : null;
     }
 
     public IRenderDisplayClock? CreateRenderDisplayClock()
     {
         if (_closed) return null;
-        _compositorClock ??= new Win32CompositorClock();
+        _compositorClock ??= new Win32CompositorClock(refreshPeriodHintQpc: _displayRefreshPeriodQpc);
         return _compositorClock.CreateRenderSubscription();
     }
 
@@ -1639,22 +1688,32 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     }
 
     /// <summary>The window's TRUE per-monitor refresh period (Stopwatch/QPC domain; 0 = unknown), re-derived on
-    /// WM_DISPLAYCHANGE and WM_EXITSIZEMOVE by <see cref="OnDisplayChanged"/> — see that method's doc for why
-    /// DwmGetCompositionTimingInfo(HWND.NULL) cannot answer this. Cheap to read (a cached field); the engine seam's
-    /// counterpart defaults to 0, so a host that never wires this up degrades exactly like it did before this existed.</summary>
+    /// WM_DISPLAYCHANGE, WM_EXITSIZEMOVE and a monitor-changing WM_MOVE by <see cref="OnDisplayChanged"/> — see that
+    /// method's doc for why DwmGetCompositionTimingInfo(HWND.NULL) cannot answer this. Cheap to read (a cached
+    /// field); the engine seam's counterpart defaults to 0, so a host that never wires this up degrades exactly like
+    /// it did before this existed. Also paces <see cref="Win32CompositorClock"/>'s published tick lattice
+    /// (<c>SetWindowPeriodQpc</c>): when the window's monitor is slower than the DWM-global compositor clock, the
+    /// clock decimates its ticks down to this period instead of publishing every DWM tick.</summary>
     public long DisplayRefreshPeriodQpc => _displayRefreshPeriodQpc;
 
     /// <summary>Re-derive <see cref="DisplayRefreshPeriodQpc"/> after a display topology change: a monitor
-    /// added/removed/reconfigured (WM_DISPLAYCHANGE) or a drag that may have crossed monitors (WM_EXITSIZEMOVE — the
+    /// added/removed/reconfigured (WM_DISPLAYCHANGE), a drag that may have crossed monitors (WM_EXITSIZEMOVE — the
     /// one reliable settle point for a pure titlebar move, since neither WM_DISPLAYCHANGE nor WM_DPICHANGED fires for
-    /// a same-DPI, different-refresh monitor hop). Also re-probes the compositor clock: a display topology change is
-    /// exactly the moment <c>DCompositionWaitForCompositorClock</c> can fail once (Win32CompositorClock's own doc),
-    /// and its old behavior — <c>MarkUnavailable</c> latching off for the whole process on a single transient
-    /// failure — is precisely the bug this reprobe exists to recover from.</summary>
+    /// a same-DPI, different-refresh monitor hop), or a WM_MOVE whose cheap <c>MonitorFromWindow</c> recheck found
+    /// <see cref="_monitor"/> stale (a keyboard snap / Win+Shift+Arrow hop fires neither of the other two messages —
+    /// Gecko re-probes its monitor every vsync loop iteration; this is the per-window equivalent). Re-caches
+    /// <see cref="_monitor"/> too, so the WM_MOVE recheck has a fresh baseline. Also re-probes the compositor clock
+    /// and pushes it the new period: a display topology change is exactly the moment
+    /// <c>DCompositionWaitForCompositorClock</c> can fail once (Win32CompositorClock's own doc), and its old
+    /// behavior — <c>MarkUnavailable</c> latching off for the whole process on a single transient failure — is
+    /// precisely the bug this reprobe exists to recover from; <c>SetWindowPeriodQpc</c> keeps the clock's slot
+    /// lattice paced to whichever monitor the window is on right now.</summary>
     private void OnDisplayChanged()
     {
+        _monitor = MonitorFromWindow(_hwnd, MONITOR_DEFAULTTONEAREST);
         _displayRefreshPeriodQpc = DisplayInfo.ForWindow((nint)_hwnd).RefreshPeriodQpc;
         _compositorClock?.Reprobe();
+        _compositorClock?.SetWindowPeriodQpc(_displayRefreshPeriodQpc);
     }
 
     /// <summary>Raise a screen-reader announcement (UIA live region) on this window's provider — wired onto
@@ -1788,6 +1847,10 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                 _rawDpiScale = ((uint)wParam & 0xFFFF) / 96f;   // LOWORD = X DPI (X and Y are always equal)
                 _scale = _rawDpiScale * _zoom;                  // app zoom survives the monitor hop
                 RECT* suggested = (RECT*)(nint)lParam;
+                // No explicit OnDisplayChanged() call here: this SetWindowPos moves the window (no SWP_NOMOVE), and
+                // USER32 dispatches WM_MOVE synchronously (SendMessage, not PostMessage) before SetWindowPos returns
+                // — so the WM_MOVE case's MonitorFromWindow recheck below already runs inline, on this same thread,
+                // before RefreshClientSize/PaintRequested fire.
                 SetWindowPos(_hwnd, HWND.NULL, suggested->left, suggested->top,
                     suggested->right - suggested->left, suggested->bottom - suggested->top,
                     SWP_NOZORDER | SWP_NOACTIVATE);
@@ -1832,6 +1895,10 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                 KillTimer(hWnd, MoveLoopTimerId);
                 _inMoveSizeLoop = false;
                 _sizedInMoveSizeLoop = false;
+                // EVERY loop's end reaches the engine (edge resizes included — consumers filter): a video drag started by
+                // BeginSystemMove holds its chrome for the loop's duration and releases it here.
+                _queue.Enqueue(new InputEvent(InputKind.WindowMoveSizeEnded, default, 0, 0, TimestampMs: Now()));
+                if (_engineMoveLoop) { _engineMoveLoop = false; Diag.Line("[window.move] end"); }
                 // A pure titlebar drag between two monitors fires no WM_DISPLAYCHANGE (the desktop topology didn't
                 // change) and no WM_DPICHANGED either when the two monitors share a DPI but differ in refresh rate —
                 // so this settle point is the one reliable place a cross-monitor drag ends. Re-derive here too.
@@ -1865,6 +1932,11 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                 // WM_ENTERSIZEMOVE 8 ms timer keeps animations/caret live mid-drag and WM_EXITSIZEMOVE paints one settle
                 // frame at the final position — both unchanged. Non-composited / redirection-bitmap windows still repaint
                 // per step so their content doesn't trail the cursor.
+                // Cheap monitor recheck (one syscall, no allocation): a keyboard snap / Win+Shift+Arrow hop moves the
+                // window to a different-refresh monitor without ever firing WM_DISPLAYCHANGE or WM_EXITSIZEMOVE (no
+                // modal move/size loop runs), so this is the one place left that can catch it — Gecko's per-vsync
+                // monitor re-probe, applied per-window instead of per-frame.
+                if (MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST) != _monitor) OnDisplayChanged();
                 if (!_composited) PaintRequested?.Invoke();
                 return true;
             // ── pointer input (mouse-in-pointer: PT_MOUSE/PT_TOUCH/PT_PEN all arrive here) ──────────────────────────────
@@ -1903,6 +1975,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                 // Per-pointer capture loss (gesture stolen, contact aborted): cancel just THAT contact's interaction —
                 // the dispatcher releases that PointerId's capture/press without firing a click.
                 uint capId = GET_POINTERID_WPARAM(wParam);
+                if (capId == _primaryDownId) _primaryDown = false;   // the held button is no longer ours to hand to a move loop
                 _queue.Enqueue(new InputEvent(InputKind.PointerCancel, default, 0, 0,
                     Pointer: PointerKindOf(capId), TimestampMs: Now(), PointerId: capId));
                 return true;
@@ -2119,6 +2192,23 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
             // client messages) — unhandled it reaches DefWindowProc with HTMAX/HTMIN/HTCLOSE and posts a SECOND
             // SYSCOMMAND on top of the engine click. Treated as a press, a double-click decomposes into two clean
             // engine clicks; HTCAPTION still falls through so double-click-to-maximize on the drag band keeps working.
+            //
+            // FIRST, the caption press BeginSystemMove posted (any frame kind — no engine caption button can sit under a
+            // press that started on the client). DefWindowProc runs the modal move loop INSIDE this call ("the operation is
+            // complete when DefWindowProc returns"), bracketed by WM_ENTERSIZEMOVE/WM_EXITSIZEMOVE, whose exit enqueues the
+            // gesture's end. If the button was released between the post and now, DefWindowProc returns WITHOUT a loop and
+            // no WM_EXITSIZEMOVE comes — so that end is enqueued here instead: an accepted request ends exactly once, or the
+            // player would hold its chrome up (the WindowMove hold) until some unrelated resize.
+            case WM_NCLBUTTONDOWN when _engineMovePending:
+                _engineMovePending = false;
+                result = DefWindowProcW(hWnd, msg, wParam, lParam);
+                if (_engineMoveLoop)
+                {
+                    _engineMoveLoop = false;
+                    _queue.Enqueue(new InputEvent(InputKind.WindowMoveSizeEnded, default, 0, 0, TimestampMs: Now()));
+                    Diag.Line("[window.move] end no-loop");
+                }
+                return true;
             case WM_NCLBUTTONDOWN when _customFrame:
             case WM_NCLBUTTONDBLCLK when _customFrame:
                 if (_ncPointerSeen) { result = 0; return false; }
@@ -2217,6 +2307,13 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
         var dipPos = ScreenPtToDip(pi.ptPixelLocation);
         if (FluentGpu.Foundation.ScrollLog.On && kind != PointerKind.Mouse)
             FluentGpu.Foundation.ScrollLog.Line($"{(down ? "DOWN" : "UP  ")} {kind} id={pointerId} pos=({dipPos.X:0},{dipPos.Y:0})");
+        // The primary mouse/pen contact a BeginSystemMove would hand to the OS move loop — mpv begins a window drag only
+        // with the button held. A finger has no system move loop to hand to, so touch never qualifies.
+        if (kind is PointerKind.Mouse or PointerKind.Pen && button == 0)
+        {
+            if (down) { _primaryDownId = pointerId; _primaryDown = true; }
+            else if (pointerId == _primaryDownId) _primaryDown = false;
+        }
         _queue.Enqueue(new InputEvent(down ? InputKind.PointerDown : InputKind.PointerUp, dipPos,
             button, 0, Mods: Mods(), Pointer: kind, TimestampMs: time, PointerId: pointerId, Pressure: pressure, QpcTicks: qpc));
     }

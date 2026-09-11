@@ -41,6 +41,9 @@ public sealed class RenderThread : IDisposable
     private readonly Func<bool>? _needsTick;
     private readonly Action? _tick;
     private readonly Func<long>? _tickPeriod;
+    // Present-slot pacing (IGpuDevice.WaitForPresentSlot): block until the swapchain's present queue has room BEFORE
+    // choosing which published frame to present. Null ⇒ backend without a latency waitable (headless) or not wired.
+    private readonly Action? _presentSlotWait;
     private long _nextTick;
     private long _requestedDrains, _completedDrains;
     private readonly IRenderDisplayClock? _displayClock;
@@ -52,7 +55,8 @@ public sealed class RenderThread : IDisposable
     public RenderThread(SceneFramePublisher publisher, Action<RenderFrame> submitPresent, bool async = false,
                         DeviceLostCoordinator? deviceLost = null, Action? recover = null, Action? windowWake = null,
                         Action? extraDrain = null, Func<bool>? needsTick = null, Action? tick = null,
-                        Func<long>? tickPeriod = null, IRenderDisplayClock? displayClock = null)
+                        Func<long>? tickPeriod = null, IRenderDisplayClock? displayClock = null,
+                        Action? presentSlotWait = null)
     {
         _publisher = publisher;
         _submitPresent = submitPresent;
@@ -63,6 +67,7 @@ public sealed class RenderThread : IDisposable
         _needsTick = needsTick;
         _tick = tick;
         _tickPeriod = tickPeriod;
+        _presentSlotWait = presentSlotWait;
         _displayClock = displayClock;
         if (displayClock is not null) _displayWaits = [_wake, displayClock.Tick];
         _thread = new Thread(Loop, RecordingStackBytes) { Name = "fgpu-render", IsBackground = true };
@@ -120,6 +125,13 @@ public sealed class RenderThread : IDisposable
                 _resumeResize.WaitOne();
                 continue;
             }
+            // Pacing wait BEFORE the acquire (Windows Terminal AtlasEngine / makepad order). The present queue is what
+            // limits how fast frames can reach the glass; blocking for its slot first and choosing the frame second means
+            // the presented state is the freshest one that existed when the slot opened. Acquiring first and blocking
+            // inside submit (the historical order) aged the acquired frame by the whole wait — on a GPU that costs most
+            // of a refresh that is 5-8 ms of every scroll frame: pure input lag, no effect on throughput.
+            // Gated on HasPendingFrame: a bare wake or a tick-only turn presents nothing and must not reserve a slot.
+            if (_presentSlotWait is not null && _publisher.HasPendingFrame) _presentSlotWait();
             // Acquire the LATEST published frame (DropOldest coalesce — intermediate publishes since the last wake are
             // dropped, §11). One AutoResetEvent wake ⇒ one latest-frame present; the arena the UI is now writing is a
             // DIFFERENT ring slot than the published one this reads, so there is no torn read.

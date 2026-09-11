@@ -41,13 +41,17 @@ public sealed class ImageRecordingSnapshot
         source.CopyRecordingInputs(this, ids);
     }
 
-    internal void Add(int id, ImageState state, int width, int height, float start, float duration, int easing)
+    internal void Add(int id, ImageState state, int width, int height, float start, float duration, int easing,
+                      float swapHoldUntilMs = float.NegativeInfinity)
     {
         // Idempotent by design: a re-add (AddReferenced folding in an id the main capture already carried, or a
         // caller re-adding the same id) simply refreshes the entry rather than throwing on a duplicate key.
         _entries[id] = new(state, width, height, start, duration, easing);
         if (state == ImageState.Ready && !float.IsNaN(start) && duration > 0)
             _fadeDeadline = MathF.Max(_fadeDeadline, start + duration);
+        // A node's swap crossfade (ImageCache.BeginSwap) draws this entry as the OUTGOING texture until the deadline:
+        // clock-driven work the render thread must keep presenting even though no reveal is running.
+        if (state == ImageState.Ready && swapHoldUntilMs > _fadeDeadline) _fadeDeadline = swapHoldUntilMs;
     }
 
     internal bool HasCrossfades(float clockMs) => clockMs < _fadeDeadline;

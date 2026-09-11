@@ -920,10 +920,10 @@ static class AnimSuite
             var row0 = Child(scene, shimmer, 0);
             bool widths = Near(scene.Bounds(Child(scene, row0, 0)).W, 24f, 0.5f) && Near(scene.Bounds(Child(scene, row0, 2)).W, 48f, 0.5f);
             bool noTextPending = CountText(scene, region) == 0;
-            bool pulsing = engine.LoopTrackCount >= 1;
+            bool pulsing = engine.LoopCount >= 1;
             Check("SK.a skeleton derives N shimmer rows from the ONE row template (declared bar widths 24/48; no real text; pulsing)",
                 shimmerRows == 5 && widths && noTextPending && pulsing,
-                $"rows={shimmerRows} bar0={scene.Bounds(Child(scene, row0, 0)).W:0} bar2={scene.Bounds(Child(scene, row0, 2)).W:0} text={CountText(scene, region)} loops={engine.LoopTrackCount}");
+                $"rows={shimmerRows} bar0={scene.Bounds(Child(scene, row0, 0)).W:0} bar2={scene.Bounds(Child(scene, row0, 2)).W:0} text={CountText(scene, region)} loops={engine.LoopCount}");
 
             tracks.SetReady(new[] { new SkTrack(1, "One", "1:01"), new SkTrack(2, "Two", "2:02"), new SkTrack(3, "Three", "3:03") });
             recon.Runtime.Flush();
@@ -958,8 +958,8 @@ static class AnimSuite
                 if (scene.OrphanCount == 0 && !engine.HasActive) settledAt = i;
             }
             Check("SK.c the looping skeleton pulse is cancelled on swap and the shimmer orphan reclaims (nothing pins the wake loop)",
-                engine.LoopTrackCount == 0 && scene.OrphanCount == 0 && !scene.IsLive(shimmer) && settledAt >= 0,
-                $"loops={engine.LoopTrackCount} active={engine.HasActive} orphans={scene.OrphanCount} shimmerLive={scene.IsLive(shimmer)} settled@{settledAt}");
+                engine.LoopCount == 0 && scene.OrphanCount == 0 && !scene.IsLive(shimmer) && settledAt >= 0,
+                $"loops={engine.LoopCount} active={engine.HasActive} orphans={scene.OrphanCount} shimmerLive={scene.IsLive(shimmer)} settled@{settledAt}");
         }
 
         // SK.b3 — per-orphan hard deadline (the wedge guard that makes the cross-dissolve safe): an exit orphan whose
@@ -1058,7 +1058,7 @@ static class AnimSuite
                     Skel.Region(tracks, SkRow, count: 3, content: ts => Flow.For<SkTrack>(() => ts, t => t.Number.ToString(), (t, i) => SkRow(t))),
                     null);
                 new FlexLayout(scene, fonts).Run(scene.Root);
-                bool noPulse = engine.LoopTrackCount == 0;
+                bool noPulse = engine.LoopCount == 0;
                 tracks.SetReady(new[] { new SkTrack(1, "R", "0:01") });
                 recon.Runtime.Flush();
                 new FlexLayout(scene, fonts).Run(scene.Root);

@@ -86,6 +86,7 @@ public enum InputKind : byte {
     PointerMove, PointerDown, PointerUp, Wheel, PointerCancel,   // PointerCancel = capture-lost / touch-cancel
     Key, KeyUp, Char,                     // Char = committed text (WM_CHAR after TranslateMessage)
     WindowBlur, WindowFocus, WindowStateChanged,
+    WindowMoveSizeEnded,                  // an OS move/size modal loop ended (every loop; see below)
     // ImeStart/Update/EndComposition + Drag* enrol here as the IME/OLE seams land (§9, §12)
 }
 
@@ -128,6 +129,16 @@ public readonly record struct InputEvent(
 - **`GetPointerFrameInfoHistory`** is the ratified OS-coalesced drain: each `WM_POINTERUPDATE` carries a frame of back-buffered samples which the pump reads in one call (the OS-side analogue of the slab's per-id coalescing), then **DIP-converts once** with the window's current effective DPI → ring. `GetPointerInfo`/`GetPointerType` classify the contact; `WM_POINTERCAPTURECHANGED` → a per-`PointerId` `PointerCancel` (§4).
 - Leave tracking via `WM_POINTERLEAVE` + `TrackMouseEvent(TME_LEAVE|TME_HOVER)` — **not** `RegisterTouchHitTestingWindow`.
 - Committed text is `WM_CHAR` after `TranslateMessage` (`WM_UNICHAR` optional for >BMP keyboards).
+
+**The content-driven window move (`WindowMoveSizeEnded` + the `InputHooks` pair).** A control whose surface moves its
+chromeless window (the pop-out video, `MediaPlayerElement.DragMovesWindow`) calls `InputHooks.WindowBeginMove:
+Func<bool>?` — host-wired to `IPlatformWindow.BeginSystemMove` (seam + Win32 guarantee: `pal-rhi.md` §1.2 "Modal
+loops") — from a press that travelled past `ClickSlopPx` on that surface; its buttons and sliders are their own
+interaction-gated press targets, so a press on a control never arms it. `true` means the OS loop was requested and the
+backend's `PointerCancel` ends the engine contact (the captured `OnDrag` owner sees `OnPointerExit`, never a click);
+the loop's end arrives as `InputKind.WindowMoveSizeEnded` → `InputDispatcher.OnWindowMoveSizeEnded` →
+`InputHooks.WindowMoveSizeEndedObserved` (raised for EVERY move/size loop of the window, edge resizes included —
+a subscriber that did not start one ignores it). Never coalesced; not a pointer event (no per-contact slot).
 
 **DPI (foundations / architecture-spec §7):** DIP↔px conversion happens **once** at the pump boundary using the window's post-`WM_DPICHANGED` `Scale`. Everything above the seam is in DIP. The shared transform helper (§5) never re-applies DPI — it composes node-local DIP transforms only.
 

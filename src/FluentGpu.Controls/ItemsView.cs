@@ -96,12 +96,28 @@ public sealed class ItemsViewController
 
     /// <summary>Shift the virtualized viewport's offset by <paramref name="delta"/> DIP along its scroll axis — an
     /// INSTANT coordinate-frame rebase (the kernel's <c>AnchorShift</c>: it moves with every other live intent, never
-    /// starts a chase/coast), for a caller correcting the visible anchor after a structural change (e.g. a live
-    /// reorder/insert shifting an index — <c>DetailTracks.Choreograph</c>). No-op for non-virtual hosts. For the
+    /// starts a chase/coast). Unconditional; an ANCHOR correction after a structural change above the first visible
+    /// row (a live reorder/insert shifting an index) goes through <see cref="PreserveAnchor"/>, which applies the
+    /// scroll-anchoring suppression rules on top of this. No-op for non-virtual hosts. For the
     /// drag-reorder EDGE AUTO-SCROLL seam (a held nudge for as long as the pointer sits near the viewport edge), use
     /// <see cref="SetAutoScrollVelocity"/> instead — a one-shot instant shift is the wrong primitive for a continuous
     /// drag hold (see ItemsViewPresets' E5-L3 wiring).</summary>
     public void ScrollBy(float delta) => ScrollByImpl?.Invoke(delta);
+
+    /// <summary>Scroll ANCHORING (CSS <c>overflow-anchor</c>): after a structural change ABOVE the first visible row —
+    /// rows inserted or removed ahead of it — shift the offset by <paramref name="delta"/> so that row keeps its screen
+    /// position. The same instant coordinate-frame rebase as <see cref="ScrollBy"/>, but SUPPRESSED while the viewport
+    /// rests at its start edge (<see cref="FluentGpu.Scroll.ScrollAnchoring"/>): at offset 0 the user is looking at the
+    /// top — a header, the first rows — and growth above the first row must push the rows down under it, never scroll
+    /// the list to chase a row (Gecko skips anchor adjustments at a zero scroll position and while a restoration is
+    /// still pending, i.e. the initial load). Returns true when the shift was applied. Use this — not
+    /// <see cref="ScrollBy"/>, which stays a plain programmatic nudge — for every anchor correction.</summary>
+    public bool PreserveAnchor(float delta)
+    {
+        if (ScrollByImpl is null || !FluentGpu.Scroll.ScrollAnchoring.ShouldAdjust(ScrollOffset, delta)) return false;
+        ScrollByImpl(delta);
+        return true;
+    }
 
     /// <summary>The drag-reorder EDGE AUTO-SCROLL seam: set (or replace) a continuous scroll velocity (DIP/s, signed
     /// along the view's scroll axis) for as long as the pointer holds near a viewport edge; 0 stops it. Posts the

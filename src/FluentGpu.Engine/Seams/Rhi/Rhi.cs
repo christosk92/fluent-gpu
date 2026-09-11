@@ -92,8 +92,18 @@ public interface IGpuDevice : IDisposable
     /// <summary>How many completed presents the swapchain may queue before frame production blocks (DXGI
     /// SetMaximumFrameLatency). Pacing predicts the presented vblank as FrameQpc + (1 + MaxFrameLatency)·refresh
     /// (RefreshLattice.Build). Default 1 — the classic latency-1 contract; HeadlessGpuDevice keeps it so the
-    /// deterministic gates keep PresentQpc = FrameQpc + 2·refresh. D3D12 overrides with FRAME_COUNT − 1 (= 2).</summary>
+    /// deterministic gates keep PresentQpc = FrameQpc + 2·refresh. D3D12 also reports 1: its present-queue depth is a
+    /// LATENCY decision (D3D12Device.MAX_FRAME_LATENCY), deliberately decoupled from its 3 CPU-side frame banks.</summary>
     int MaxFrameLatency => 1;
+
+    /// <summary>Block until the primary swapchain's present queue has room for one more frame, and RESERVE that room.
+    /// Called by the render loop BEFORE it picks which published frame to present, so the frame that reaches the glass is
+    /// the freshest one that existed when the slot opened; a backend that waits inside submit instead ages the frame it
+    /// already chose by the whole wait. The reservation is a credit exactly one Present spends, so a backend that
+    /// implements this MUST skip its internal pacing wait while a credit is held (see D3D12Device.WaitForPresentSlot).
+    /// Default no-op: the headless seam has no present queue, and a backend without a latency waitable keeps waiting
+    /// inside submit. Render-thread only (the submit/present owner).</summary>
+    void WaitForPresentSlot() { }
 
     /// <summary>Best-effort local (device-dedicated) VRAM usage vs the OS-reported budget for this adapter, in bytes.
     /// Returns <see langword="false"/> when the backend cannot report it (the headless seam, and any real backend before

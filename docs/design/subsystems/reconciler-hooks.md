@@ -94,7 +94,9 @@ contracts owned elsewhere:
 >   slower older fetch never
 >   commits over a fresher one; deps change re-keys to `Pending(seed)`.
 > - **Timing / measured hooks (G1b/G1c) — over the host timer queue, not `System.Threading.Timer`.** `UseDebouncedValue`
->   / `UseThrottledValue` / `UseTimeout` (→ `TimerHandle{Cancel,Restart}`) / `UseInterval` (auto-pauses when
+>   / `UseThrottledValue` / `UseTimeout` (→ `TimerHandle{Cancel,Restart,RestartIn,NowMs}` — `RestartIn(ms)` re-arms for
+>   a COMPUTED delay and `NowMs` is the host timer clock it schedules on, so a pure time-based policy such as the media
+>   chrome's `PlayerChromeVisibility` keeps ONE timer at its own next deadline) / `UseInterval` (auto-pauses when
 >   KeepAlive-parked/minimized) ride the AppHost-owned **`HostTimerQueue`** (§4 / SPEC-INDEX; min-heap on the host frame
 >   clock, drained after the UI-post drain and *before* the reactive flush so writes coalesce into this frame — idle
 >   quiesce preserved). `Signal<T>.SetIfChanged(v): bool` (single compare, reports the write). `UseMeasuredBounds()` /

@@ -76,6 +76,7 @@ public sealed class ScrollKernel
     private int[] _activeList;   // slots
     private bool[] _inActive;    // by slot
     private int _activeCount;
+    private int _wakeActiveCount;   // ActiveCount minus Parked slots — see WakeActiveCount
 
     // Per-call (Tick or Reclamp) "touched" tracking, stamp-based so it never needs an O(pool) clear.
     private int[] _touchedSlots;
@@ -93,6 +94,17 @@ public sealed class ScrollKernel
     public ScrollCommandPort Port { get; }
     public ScrollFrameSummary Summary { get; private set; }
     public int ActiveCount => _activeCount;
+
+    /// <summary>Wake-purposed subset of <see cref="ActiveCount"/>: active slots minus <see cref="ScrollBody.Parked"/>
+    /// ones. A parked body stays in <c>_activeList</c> by design (<see cref="CompactActiveList"/>'s <c>keep</c>
+    /// clause: <c>b.Parked</c> alone keeps it resident so it resumes cleanly when unparked) but the per-frame tick
+    /// loop skips parked bodies outright (<see cref="Tick"/>'s <c>if (!b.Bound || b.Parked) continue;</c>), so a
+    /// parked body never does real work and must not, by itself, justify waking the render loop. Computed once per
+    /// <see cref="CompactActiveList"/> pass (already an O(_activeCount) scan) — no extra allocation, no extra scan.
+    /// <see cref="ActiveCount"/> itself is left untouched: other callers (diagnostics, capacity gates) still want
+    /// the raw resident count including parked bodies.</summary>
+    public int WakeActiveCount => _wakeActiveCount;
+
     public ScrollKernelDiag Diag;
 
     /// <param name="initialCapacity">Initial size of the VIEWPORT SLOT POOL — not a node capacity (the node lookup
@@ -627,6 +639,7 @@ public sealed class ScrollKernel
         b.BandVelMain = 0f;
         b.LastAbsorbed = -1;
         b.EdgeHitPending = false;
+        b.NoOverscroll = false;   // a direct contact (touch/pen) always rubber-bands
         CancelRestore(ref b);
         MarkActive(idx);
         MarkTouched(idx);
@@ -679,6 +692,7 @@ public sealed class ScrollKernel
         int seedSlot = absorbed >= 0 && TryGetSlot(absorbed, out int aslot) ? aslot : idx;
         ref ScrollBody seed = ref _bodies[seedSlot];
         seed.LastReleaseVelocity = v;
+        seed.NoOverscroll = _bodies[idx].NoOverscroll;   // the fling inherits the gesture's producer (ResolveEdge reads it)
         float band = seed.BandMain;
 
         if (band == 0f && MathF.Abs(v) >= _feel.FlingSeedGate)
@@ -761,6 +775,8 @@ public sealed class ScrollKernel
             b.BandVelMain = 0f;
             b.LastAbsorbed = -1;
             b.EdgeHitPending = false;
+            // Latched for the whole gesture: a mouse-wheel producer clamps at the extents (no band, no edge bounce).
+            b.NoOverscroll = (cmd.Flags & (byte)ScrollInputFlags.NoOverscroll) != 0;
             MarkActive(idx);
         }
         ApplyDragDelta(idx, idx, cmd.A);
@@ -803,6 +819,13 @@ public sealed class ScrollKernel
             ApplyDragDelta(gestureSlot, parentSlot, excess);
             _bodies[parentSlot].Flags |= ScrollActivityFlags.Chained;
             handedOff = true;
+        }
+        else if (gestureSlot >= 0 && gestureSlot < _bodies.Length && _bodies[gestureSlot].NoOverscroll)
+        {
+            // A mouse-wheel producer: clamp, no rubber band. The raw rests at the clamp (exactly like the chain hand-off
+            // above) so a reversal scrolls back immediately instead of first unwinding an invisible overshoot.
+            SetBandMain(ref body, 0f);
+            body.DragRaw = clamped;
         }
         else
         {
@@ -970,8 +993,9 @@ public sealed class ScrollKernel
             MarkActive(parentSlot);
             MarkTouched(parentSlot);
         }
-        else if (MathF.Abs(v) >= _feel.FlingSettleVel)
+        else if (MathF.Abs(v) >= _feel.FlingSettleVel && !b.NoOverscroll)
         {
+            // (A mouse-wheel fling — NoOverscroll — falls through to the dead stop below: a wheel never bounces.)
             float bandv = b.BandVelMain;
             ScrollPhysics.SeedFromEdgeMomentum(ref bandv, v, b.Frame.ViewportMain);
             b.BandVelMain = bandv;
@@ -1081,15 +1105,21 @@ public sealed class ScrollKernel
     private void CompactActiveList()
     {
         int w = 0;
+        int wake = 0;
         for (int r = 0; r < _activeCount; r++)
         {
             int slot = _activeList[r];
             ref ScrollBody b = ref _bodies[slot];
             bool keep = b.Bound && (!b.IsSettled || b.Parked || b.RestorePending || b.EdgeHitPending);
-            if (keep) _activeList[w++] = slot;
+            if (keep)
+            {
+                _activeList[w++] = slot;
+                if (!b.Parked) wake++;
+            }
             else _inActive[slot] = false;
         }
         _activeCount = w;
+        _wakeActiveCount = wake;
     }
 
     private void UpdateSummary()

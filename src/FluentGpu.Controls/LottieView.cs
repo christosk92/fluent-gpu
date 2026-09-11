@@ -139,6 +139,11 @@ internal sealed class LottieViewComponent : Component
                 {
                     LottieTrack track = tracks[t];
                     if (ReducedSnapsChannel(track.Channel)) continue;   // stays at the ctor's rest-pose baseline
+                    // CADENCE: a Bodymovin composition HAS a native frame rate (the document's "fr"), and that is
+                    // exactly what Cadence.At(fps) is for — but the compiler folds "fr" into LottiePlan.DurationMs
+                    // and does not carry it onto the plan, so there is nothing to read here. Left at the default
+                    // (one-shot ⇒ display rate, loop ⇒ AnimEngine.DefaultLoopHz). Surface LottiePlan.FrameRate in
+                    // LottieCompiler/LottiePlan and this becomes `cadence: Cadence.At(_plan.FrameRate)`.
                     anim.Keyframes(h, track.Channel, RemapKeys(track.Keys, span), durationMs, loop: loop);
                 }
             }

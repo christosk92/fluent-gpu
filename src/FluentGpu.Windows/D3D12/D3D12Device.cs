@@ -22,9 +22,18 @@ namespace FluentGpu.Rhi.D3D12;
 public sealed unsafe partial class D3D12Device : IGpuDevice
 {
     // Back buffers == per-frame command allocators == CPU-written GPU banks (pipelines' instance uploads, compositor
-    // SRV banks, query banks). 3 buffers + SetMaximumFrameLatency(2) buy ONE frame of CPU/GPU pipelining slack so a
-    // frame that costs slightly over one refresh stops quantizing to half rate at 144/165 Hz; the extra latency is
-    // bounded at one refresh and only materializes under backpressure (see threading-render-seam.md §latency).
+    // SRV banks, query banks). 3 buffers stay — they are the CPU-side bank depth (FrameBankDepth), a memory/pipelining
+    // decision. The PRESENT queue depth is a separate, LATENCY decision and is now 1.
+    // WHY 1 (supersedes the old depth-2 rationale): SetMaximumFrameLatency(2) was chosen to buy one frame of slack so a
+    // frame costing slightly over one refresh would not quantize to half rate at 144/165 Hz, on the assumption that the
+    // second queued frame "only materializes under backpressure". MEASUREMENT killed that assumption: on a 120 Hz panel
+    // with a weak Adreno the GPU costs ~5 ms of the 8.33 ms refresh on every scroll frame, so backpressure is PERMANENT
+    // — the render thread sat 5-8.6 ms per frame inside the latency waitable and the frame reaching the glass had been
+    // produced two vblanks earlier (DWM composes one later ⇒ ~25 ms finger-to-photon while the counter read 120 fps).
+    // With depth 1 that slack is not pre-paid as latency: a frame that does go over budget now shows as ONE missed
+    // vblank instead of a permanent extra frame of input lag. Terminal (AtlasEngine.r.cpp) and makepad both ship 1.
+    // The waitable is a SEMAPHORE, so depth 1 makes the wait/present pairing load-bearing: see WaitForPresentSlot and
+    // D3D12Swapchain.LatencyCreditHeld — every wait is a credit that exactly one Present spends.
     // HISTORY: a working-tree triple-buffering EXPERIMENT (never landed — the const was never 3 in any commit)
     // correlated with a DXGI_ERROR_DEVICE_HUNG on the Adreno after ~6.5 min of then-UNTHROTTLED image-upload bursts;
     // verdict circumstantial (docs/plans/gpu-robustness-implementation.md §Adreno). The DecodeScheduler scroll-time
@@ -35,7 +44,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // FrameBankingTests (FluentGpu.Windows.Tests) asserts the derived values so the depths cannot drift apart.
     internal const uint FRAME_COUNT = 3;
     internal const int FrameBankDepth = (int)FRAME_COUNT;       // CPU-written per-frame bank depth
-    internal const uint MAX_FRAME_LATENCY = FRAME_COUNT - 1;    // DXGI SetMaximumFrameLatency argument (= 2)
+    internal const uint MAX_FRAME_LATENCY = 1;                  // DXGI SetMaximumFrameLatency argument — a LATENCY choice, deliberately NOT derived from FRAME_COUNT
     private const uint INFINITE = 0xFFFFFFFF;
 
     // Fence-stall watchdog (WaitFenceEventBounded, always-on — no env gate). Keyed on NO FENCE PROGRESS (completed
@@ -1260,6 +1269,20 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         Check(target.SwapChain->SetMaximumFrameLatency(MAX_FRAME_LATENCY), "SetMaximumFrameLatency");
         target.FrameLatencyWaitable = target.SwapChain->GetFrameLatencyWaitableObject();
         target.HasLatencyWaitable = target.FrameLatencyWaitable != HANDLE.NULL;
+        // A brand-new waitable (fresh swapchain, or a device-loss rebuild): any credit taken against the OLD handle is
+        // void. The new semaphore starts signaled, so the next WaitForPresentSlot returns immediately — reserving the
+        // slot rather than skipping it is also the only safe direction (skipping would present into a full queue).
+        target.LatencyCreditHeld = false;
+        // Always-on, once per swapchain: the present-queue depth is a LATENCY decision that is invisible from the
+        // outside (a queue two frames deep still reports a healthy frame rate — that is exactly how depth 2 hid ~1
+        // frame of input lag until it was measured). Logged so any later session can tell from the log alone which
+        // pacing contract the binary shipped with, the way [compositor-clock] now names the clock's state.
+        if (!s_loggedPresentContract)
+        {
+            s_loggedPresentContract = true;
+            Diag.Line($"[d3d12.present] maxFrameLatency={MAX_FRAME_LATENCY} buffers={FRAME_COUNT}"
+                      + $" waitable={(target.HasLatencyWaitable ? "yes" : "no")} slotWait=pre-acquire");
+        }
 
         D3D12_DESCRIPTOR_HEAP_DESC hd = default;
         hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE.D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
@@ -1499,13 +1522,20 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // Time the two BLOCKING pacing/retirement waits (latency waitable + frame fence) separately. Under async this is
         // render-thread wall time; under force-sync it is UI-thread wall time. Neither duration measures GPU execution.
         long fenceWaitStart = System.Diagnostics.Stopwatch.GetTimestamp();
+        // The render thread normally already paid this wait in WaitForPresentSlot, BEFORE it chose which published
+        // frame to present (Terminal/makepad order — the presented state is then never older than the wait). The
+        // waitable is a semaphore, so waiting twice for one Present would block for a whole extra present cycle: a
+        // held credit means "the slot is already ours", so skip. _lastLatencyWaitMs is NOT overwritten in that case —
+        // the [fps] line's latW token keeps naming the wall time actually blocked in the waitable.
+        bool creditHeld = ReferenceEquals(sc, _primarySwapchain) && sc.LatencyCreditHeld;
         if (_skipLatencyOnce) _skipLatencyOnce = false;
-        else WaitForLatency();   // bound queued-frame latency before starting this frame's production
+        else if (!creditHeld) WaitForLatency();   // bound queued-frame latency before starting this frame's production
         // Split the two waits: the LATENCY waitable is compositor/present-queue backpressure ("a ready frame is being
         // held"), while the frame FENCE is prior back-buffer/queue RETIREMENT. Neither is a raster/busy measurement.
         // Summed together they remain indistinguishable; LastFenceWaitMs keeps its historical meaning (both, summed).
         long latencyDone = System.Diagnostics.Stopwatch.GetTimestamp();
-        _lastLatencyWaitMs = System.Diagnostics.Stopwatch.GetElapsedTime(fenceWaitStart, latencyDone).TotalMilliseconds;
+        if (!creditHeld)
+            _lastLatencyWaitMs = System.Diagnostics.Stopwatch.GetElapsedTime(fenceWaitStart, latencyDone).TotalMilliseconds;
         _frameIndex = _swapChain->GetCurrentBackBufferIndex();
         if (!WaitForFrame(_frameIndex))
             throw new InvalidOperationException("Frame fence did not reach the awaited value; submit cannot reuse its bank.");
@@ -4248,6 +4278,12 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         uint interval = (_vsync && !noVsync) ? 1u : 0u;
         uint flags = (interval == 0 && _tearingSupported) ? DXGI.DXGI_PRESENT_ALLOW_TEARING : 0u;
         HRESULT pr = (HRESULT)global::FluentGpu.Interop.Generated.IDXGISwapChainVtbl.Present(_swapChain, interval, flags);   // GEN-COM (wired)
+        // The Present is what SPENDS the latency credit WaitForPresentSlot took (the waitable is a semaphore: it is
+        // re-signaled when this present retires from the queue). Cleared on every path where Present actually ran —
+        // success AND DXGI_STATUS_OCCLUDED, which is a success code that still consumed the slot. The stand-down /
+        // PRESENT_TEST / covered-HWND paths above returned WITHOUT presenting, so they deliberately leave the credit
+        // held: the slot they reserved is still free and the next turn must not wait for it twice.
+        if (target.LatencyCreditHeld && ReferenceEquals(target, _primarySwapchain)) target.LatencyCreditHeld = false;
         // DXGI_STATUS_OCCLUDED (0x087A0001) is a SUCCESS code — previously dropped by the `< 0` check. Composition
         // swapchains often never return it; when they do, latch and stand down (next frame probes with PRESENT_TEST).
         if ((int)pr == DxgiStatusOccluded)
@@ -4615,6 +4651,32 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     {
         if (_hasLatencyWaitable) WaitForSingleObject(_frameLatencyWaitable, 1000);
     }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// The PRIMARY swapchain's present slot, waited for BEFORE the host picks which published frame to present, so the
+    /// frame that reaches the glass is the freshest one that existed when the slot opened (this is the ordering
+    /// Windows Terminal's AtlasEngine and makepad both use; acquiring first and waiting inside submit ages the acquired
+    /// frame by the whole wait). The waitable is a SEMAPHORE: one successful wait == one credit that exactly one
+    /// Present spends, so a second wait before that Present would block for a full extra present cycle. The credit is
+    /// therefore tracked on the swapchain (<c>LatencyCreditHeld</c>): SubmitDrawList skips its own wait while it is
+    /// held, Present clears it, and a turn that ends up presenting nothing simply keeps it (the slot really is still
+    /// free). Reads the primary swapchain's handle directly rather than the Activate-mirrored device fields — the
+    /// active target may be a popup.
+    /// </remarks>
+    public void WaitForPresentSlot()
+    {
+        AssertSubmitThread();   // seam Step 0: this is the render thread's pacing wait, never the UI's
+        if (_primarySwapchain is not { } sc || sc.Disposed || !sc.HasLatencyWaitable || sc.LatencyCreditHeld) return;
+        long start = System.Diagnostics.Stopwatch.GetTimestamp();
+        WaitForSingleObject(sc.FrameLatencyWaitable, 1000);   // bounded: a lost device must not wedge the loop
+        _lastLatencyWaitMs = System.Diagnostics.Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+        sc.LatencyCreditHeld = true;
+    }
+
+    // One [d3d12.present] contract line per PROCESS (not per swapchain — every popup target takes the same const,
+    // so a per-target line would be pure chatter in a session with many flyouts).
+    private static bool s_loggedPresentContract;
 
     private bool _skipLatencyOnce;   // set by SuppressLatencyWaitOnce, consumed by the next SubmitDrawList
 
@@ -5259,6 +5321,12 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
     internal readonly ID3D12Resource*[] BackBuffers = new ID3D12Resource*[(int)D3D12Device.FRAME_COUNT];
     internal HANDLE FrameLatencyWaitable;
     internal bool HasLatencyWaitable;
+    // The frame-latency waitable is a SEMAPHORE, not a level — one successful wait reserves ONE present slot and only a
+    // Present gives it back. True ⇒ D3D12Device.WaitForPresentSlot has already taken this swapchain's slot for the frame
+    // now in production, so SubmitDrawList must NOT wait again (that would block a whole extra present cycle) and the
+    // next Present that actually runs clears it. Render-thread-only (submit/present are render-confined), so a plain
+    // field is the whole synchronization story. Reset to false wherever the waitable handle is (re)created or released.
+    internal bool LatencyCreditHeld;
     internal uint SwapChainFlags;
     internal bool TearingSupported;
     internal uint W, H, FrameIndex;

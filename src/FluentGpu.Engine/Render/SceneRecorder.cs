@@ -538,7 +538,12 @@ internal sealed class SceneRecordingContext
             NodesCulled = this.NodesCulled,
             BlurCandidateCount = this.BlurCandidateCount,
             BlurGroupCount = this.BlurGroupCount,
-            BlurSuppressedByScrollCount = 0,
+            // Was a hard 0 — the app's `blurHeld=` log field always read 0 regardless of real hold activity. The
+            // live "held during scroll" signal is BlurHoldCandidateCount (incremented just above at the `holdBlur`
+            // site: globalBlurHold || userScrollActive, gated by BlurCachePolicy != Normal). Alias it rather than
+            // keep two counters that mean the same thing — BlurSuppressedByScrollCount is the field's public name,
+            // BlurHoldCandidateCount is what actually gets counted; no behavior change beyond the value now flowing.
+            BlurSuppressedByScrollCount = this.BlurHoldCandidateCount,
             BlurHoldCandidateCount = this.BlurHoldCandidateCount,
             EdgeFadeGroupCount = this.EdgeFadeGroupCount,
             SpansReused = this.SpansReused,
@@ -1220,6 +1225,10 @@ internal sealed class SceneRecordingContext
             ref readonly NodePaint cp = ref scene.Paint(c);
             if (cp.VisualKind != VisualKind.Box) continue;
             if (cp.Fill.A < 1f || cp.Opacity < 1f) continue;     // must paint FULLY opaque to overwrite
+            // Fill is the BrushTransition TARGET: mid-fade the child draws LerpLinear(FillFrom, Fill, T), which is not the
+            // opaque cover its target claims — culling the parent then would show a hole for the whole fade.
+            if ((cf & NodeFlags.SparsePaint) != 0 && scene.TryGetBrushAnim(c, out var cba)
+                && (cba.Channels & BrushAnim.FillBit) != 0 && cba.T < 1f) continue;
             if (cp.BlurSigma > 0.01f || cp.OpacityGroup) continue;
             if (!float.IsNaN(cp.PresentedW) || !float.IsNaN(cp.PresentedH)) continue;   // a reveal draws non-layout extents
             var cn = cp.Corners;
@@ -1938,7 +1947,10 @@ internal sealed class SceneRecordingContext
         {
             case VisualKind.Box when p.Fill.A > 0f || p.HoverFill.A > 0f || p.PressedFill.A > 0f || p.BorderWidth > 0f
                                      || p.ValidationBorder.A > 0f
-                                     || hasNodeGradient:
+                                     || hasNodeGradient
+                                     // A fill fading TO transparent still shows LerpLinear(FillFrom, Fill, T): draw it
+                                     // until the BrushTransition lands (the reconciler holds VisualKind.Box for it).
+                                     || (maybeSparsePaint && FillFadeVisible(scene, node)):
             {
                 ResolveSurface(scene, node, flags, in p, in inherited, nodeInteractive, hasLocalProgress, localHoverT, localPressT, out ColorF fill, out ColorF border);
                 bool hasGradFill = hasNodeGradient;
@@ -2176,7 +2188,28 @@ internal sealed class SceneRecordingContext
                 }
 
                 ImageMaskSpec mask = effects.Mask;
-                dl.DrawImage(drawRect, p.Corners, imageId, ready, p.Fill, world, opacity, uv, fadeStart, fadeDur,
+                ColorF placeholder = p.Fill;
+                // Image swap crossfade (Reconciler hold-last-good commit onto a DIFFERENT picture): the texture that was
+                // on screen is drawn first, OPAQUE for the whole window and gone after it (SwapOutgoingEasing), and this
+                // node's image fades in over it on the SAME window with a transparent placeholder — a dissolve between
+                // two real pictures, never a placeholder frame. Both draws bake the window, so a reused span keeps
+                // animating against the replay clock and the outgoing resolves to nothing once the window has passed.
+                if (ready && images is not null && effects.SwapOutgoingId != 0 && effects.SwapMs > 0f
+                    && images.StateOf(new ImageHandle(effects.SwapOutgoingId)) == ImageState.Ready)
+                {
+                    var oh = new ImageHandle(effects.SwapOutgoingId);
+                    var (outW, outH) = images.SizeOf(oh);
+                    var (outRect, outUv) = ImageContentFit((ImageFit)p.ImageFit, in local, outW, outH, p.ImageFocusX, p.ImageFocusY);
+                    dl.DrawImage(outRect, p.Corners, oh.Id, true, default, world, opacity, outUv, effects.SwapStartMs,
+                        effects.SwapMs, ImageCache.SwapOutgoingEasing, key | 0x1, effects.Overlay, (int)mask.Edges,
+                        mask.BandLeft, mask.BandTop, mask.BandRight, mask.BandBottom, (int)mask.Falloff, mask.Intensity,
+                        saturation);
+                    fadeStart = effects.SwapStartMs;
+                    fadeDur = effects.SwapMs;
+                    fadeEase = (int)ImageCache.SwapCrossfadeEasing;
+                    placeholder = default;
+                }
+                dl.DrawImage(drawRect, p.Corners, imageId, ready, placeholder, world, opacity, uv, fadeStart, fadeDur,
                     fadeEase, key, effects.Overlay, (int)mask.Edges, mask.BandLeft, mask.BandTop, mask.BandRight,
                     mask.BandBottom, (int)mask.Falloff, mask.Intensity, saturation);
                 break;
@@ -3026,6 +3059,13 @@ internal sealed class SceneRecordingContext
         if (hasHover && (flags & NodeFlags.Hovered) != 0) return p.HoverOpacity;
         return opacity;
     }
+
+    /// <summary>A live BrushTransition is fading this node's FILL away from a visible colour: the displayed
+    /// <c>LerpLinear(FillFrom, Fill, T)</c> is still on screen even when the target Fill is transparent (the "no tint"
+    /// fade-out). Only reached when the box has no other surface; callers gate it on SparsePaint.</summary>
+    private static bool FillFadeVisible(SceneRecordingSnapshot scene, NodeHandle node)
+        => scene.TryGetBrushAnim(node, out var ba)
+           && (ba.Channels & BrushAnim.FillBit) != 0 && ba.FillFrom.A > 0f && ba.T < 1f;
 
     private void ResolveSurface(SceneRecordingSnapshot scene, NodeHandle node, NodeFlags flags, in NodePaint p, in InheritedState inherited,
                                        bool nodeInteractive, bool hasLocalProgress, float localHoverT, float localPressT,

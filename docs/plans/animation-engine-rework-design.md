@@ -411,14 +411,16 @@ return w == int.Max ? -1 : w;                   // -1 = block on a message
 
 The linear scan over ~tens of sources is cheaper than a min-heap's pointer-chasing and trivially zero-alloc; start linear, promote to a `NextDueMs`-keyed heap only if a profile demands it.
 
-> **DEFERRAL (scroll-perf remediation, 2026-07):** this Cadence/`NextDueMs` model stays **deferred** — the as-built wake
-> is still `ComputeWakeReasons` + the ambient-cap branch. The scroll-perf pass shipped two bounded interim fixes instead:
-> (1) the ambient-FPS cap now also defers through the 0.45s post-scroll hold (`_mainScrollHoldUntil`) so slow wheel-notch
-> scrolling over an ambient loop no longer oscillates 30Hz↔display-rate per notch (the step-up `Resync` lurch), and
-> (2) the slab gained an intrusive active-node chain + a `Version`-memoized `LoopTrackCount`/`DisplayRateActive` census,
-> so the repeated per-frame `ComputeWakeReasons` calls stop re-scanning every row. Both are strictly smaller than — and
-> compatible with — this section: if ambient CPU still matters after them, the per-source cadence lands here as designed.
-> As-built notes: `design/subsystems/backdrop-effects-animation.md` §5 (the two as-built paragraphs under the rework banner).
+> **LANDED (2026-09-10):** this Cadence/`NextDueMs` model is now **as-built** — the host wait is the scan described
+> above, `ComputeWakeReasons`'s ambient-cap branch is deleted, and so are the two interim fixes the 2026-07
+> scroll-perf pass shipped in its place: the 0.45s post-scroll hold (`_mainScrollHoldUntil`) that deferred the
+> ambient-FPS cap through slow wheel-notch scrolling, and the display-rate grace (`_scrollGraceUntil`) it paired
+> with. Both existed only to patch around a host-wide ambient cap that no longer exists — every slab row now carries
+> its own `Cadence`, so a scroll running the loop at display rate cannot itself speed up an unrelated 30Hz shimmer,
+> and there is nothing left for a hold to defer. The external precedent is Zed GPUI's `Animation::with_max_fps`: a
+> per-animation cap the host also applies while the window is inactive (this engine's `InactiveFrameIntervalMs`),
+> rather than one process-wide "ambient" rate inferred by a frame-loop heuristic.
+> As-built notes: `design/subsystems/backdrop-effects-animation.md` §5.
 
 ### 6.3 The FrameClock â€” determinism is a property of the clock, not of every animator
 

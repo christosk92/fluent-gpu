@@ -148,9 +148,19 @@ public static class PagedShelf
                                                minCardW, maxCardW, gap, rows, perPageOverride, fixedCardW,
                                                headerGap, edgeFade, prevGlyph, nextGlyph, parts, overscan, measured,
                                                cardWidthAgnostic, maxColumns, snap))
-           // SkeletonProxy: the deriver can't see into this component, so hand it the header + a few real cards (at a
-           // representative width) to derive — the shelf shimmers as real cards instead of one default bar.
-           with { SkeletonProxy = () => ShelfProxy(items, cardAt, header, title, maxCardW, gap, headerGap, maxItems) };
+           // SkeletonProxy: the deriver can't see into this component, so hand it the header + a few real cards to derive
+           // — the shelf shimmers as real cards instead of one default bar. The cards are fitted to the MEASURED slot
+           // exactly as the live strip fits them (the same Fit, through Responsive's rendered-output proxy idiom): handing
+           // them maxCardW made a shelf with an uncapped max ("let maxColumns decide") shimmer one sentinel-wide card,
+           // which reflowed into the real columns the moment the data landed.
+           with
+           {
+               SkeletonProxy = () => Embed.Comp(new ResponsiveBox.Props(
+                       w => ShelfProxy(items, cardAt, header, title,
+                           FillRowVirtualLayout.Fit(w, minCardW, maxCardW, gap, perPageOverride, fixedCardW, maxColumns).CardW,
+                           gap, headerGap, maxItems), 0f, 0f),
+                   static () => new ResponsiveBox()) with { DeriveRenderedOutput = true },
+           };
 
     static Element ShelfProxy<T>(IReadOnlyList<T> items, Func<T, int, float, Element> cardAt, Element? header, string? title, float cardW, float gap, float headerGap, int maxItems)
     {

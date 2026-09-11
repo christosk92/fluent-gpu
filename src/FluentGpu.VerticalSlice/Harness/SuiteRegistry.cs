@@ -61,6 +61,7 @@ public static class SuiteRegistry
         new("bound", "bound", BoundTemplateSuite.Run),
         new("diagnostics", "diagnostics", DiagnosticsSuite.Run),
         new("media-seam", "media-seam", MediaSeamSuite.Run),
+        new("continuity", "continuity", VisualContinuityChecks.Run),
     ];
 
     public static IEnumerable<SuiteEntry> Filter(string? suiteSpec)
