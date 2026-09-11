@@ -91,11 +91,16 @@ internal static class RepaintIdentityProbe
                 // The ancestor rebase happens BEFORE the measured mutation and is allowed to settle, so the row's own
                 // move later reads a prior extent that a translated-span copy shifted out from under it.
                 Arrange: () => RepaintIdentityScene.ScrollY.Value = 600f),
-            new(3, "opacity-group-straddle", "the LAYERED partial route (single union rect)",
+            new(3, "opacity-group-straddle", "the LAYERED partial route, now multi-rect",
                 () => { RepaintIdentityScene.Tick.Value++; RepaintIdentityScene.TickB.Value++; }),
             new(4, "video-hole-overlap", "E — the DrawVideo hole's damage inflation",
                 () => RepaintIdentityScene.Tick.Value++),
             new(5, "three-animators", "union blow-up + instance-bank pressure (3 rects)",
+                () => { RepaintIdentityScene.Tick.Value++; RepaintIdentityScene.TickB.Value++; RepaintIdentityScene.TickC.Value++; }),
+            // The sigma=0 strip fade under a clamp: its restore reads the target it is about to write, and on a partial
+            // frame the strips reach past the replay rect. Headless cannot settle this — the CPU reference models every
+            // PushLayer as flat alpha and has no feather at all — so it is a real-pixel scenario or it is unproven.
+            new(6, "edge-fade-strip-straddle", "the plain sigma=0 EdgeFade admitted to clamped replay",
                 () => { RepaintIdentityScene.Tick.Value++; RepaintIdentityScene.TickB.Value++; RepaintIdentityScene.TickC.Value++; }),
         ];
 

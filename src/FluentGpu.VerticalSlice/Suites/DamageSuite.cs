@@ -370,16 +370,44 @@ static class DamageSuite
             blur.PopLayer(new RectF(0f, 0f, 10f, 10f));
             bool blurUnsafe = !RepaintStreamSafety.Scan(blur.Bytes);
 
-            // sigma == 0 ⇒ the PLAIN strip-fade class specifically (R12), not the blurred one already covered above.
+            // A BLURRED edge fade is the same defect as a self-blur: its taps read outside the clamp.
+            var blurredFade = new DrawList();
+            blurredFade.PushEdgeFadeLayer(new RectF(0f, 0f, 10f, 10f), new RectF(0f, 0f, 10f, 10f), default, 1f,
+                edges: 1, bandL: 4f, bandT: 0f, bandR: 0f, bandB: 0f, falloff: 0, intensity: 1f, blurSigma: 6f);
+            blurredFade.PopLayer(new RectF(0f, 0f, 10f, 10f));
+            bool blurredFadeUnsafe = !RepaintStreamSafety.Scan(blurredFade.Bytes);
+
+            var stencil = new DrawList();
+            stencil.PushStencilClip(new RectF(0f, 0f, 10f, 10f), default, 0, Affine2D.Identity);
+            stencil.PopStencilClip(new RectF(0f, 0f, 10f, 10f), default, Affine2D.Identity);
+            bool stencilUnsafe = !RepaintStreamSafety.Scan(stencil.Bytes);
+
+            Check("gate.repaint.stream-unsafe-layers acrylic (its snapshot writes INTO the canvas), self-blur and a BLURRED edge fade (gaussian taps read outside the clamp), and a tier-3 stencil scope (its mask-clear rect would be narrowed by the clamp) all mark the stream unsafe",
+                acrylicUnsafe && blurUnsafe && blurredFadeUnsafe && stencilUnsafe,
+                $"acrylic={acrylicUnsafe} blur={blurUnsafe} blurredFade={blurredFadeUnsafe} stencil={stencilUnsafe}");
+        }
+
+        // …but the PLAIN (sigma = 0) strip fade is SAFE, and admitting it is what unlocks the common case: a scrolling
+        // app has an AutoEdgeFade on essentially every list, so vetoing it meant almost every frame took FullDirect no
+        // matter how small its damage was. It displaces nothing (a per-pixel lerp over premultiplied alpha, no spatial
+        // tap) and its restore intersects every strip with the clip before writing, so no write leaves the replay rect.
+        {
             var fade = new DrawList();
             fade.PushEdgeFadeLayer(new RectF(0f, 0f, 10f, 10f), new RectF(0f, 0f, 10f, 10f), default, 1f,
                 edges: 1, bandL: 4f, bandT: 0f, bandR: 0f, bandB: 0f, falloff: 0, intensity: 1f, blurSigma: 0f);
             fade.PopLayer(new RectF(0f, 0f, 10f, 10f));
-            bool fadeUnsafe = !RepaintStreamSafety.Scan(fade.Bytes);
+            bool plainFadeSafe = RepaintStreamSafety.Scan(fade.Bytes);
 
-            Check("gate.repaint.stream-unsafe-layers acrylic (snapshot writes INTO the canvas), self-blur (gaussian taps read OUTSIDE the clamp) and edge fade — INCLUDING the plain sigma=0 strip-fade class, unverified under a clamped replay in v1 (R12) — all mark the stream unsafe",
-                acrylicUnsafe && blurUnsafe && fadeUnsafe,
-                $"acrylic={acrylicUnsafe} blur={blurUnsafe} edgeFade={fadeUnsafe}");
+            // The two classes share a LayerKind, so the admission must test sigma and not the kind.
+            var justAbove = new DrawList();
+            justAbove.PushEdgeFadeLayer(new RectF(0f, 0f, 10f, 10f), new RectF(0f, 0f, 10f, 10f), default, 1f,
+                edges: 1, bandL: 4f, bandT: 0f, bandR: 0f, bandB: 0f, falloff: 0, intensity: 1f, blurSigma: 0.5f);
+            justAbove.PopLayer(new RectF(0f, 0f, 10f, 10f));
+            bool justAboveUnsafe = !RepaintStreamSafety.Scan(justAbove.Bytes);
+
+            Check("gate.repaint.stream-safe-plain-edge-fade the sigma=0 strip fade is admitted to clamped replay — it displaces nothing and its restore is clip-intersected — while the SAME LayerKind at sigma>0 stays vetoed, so the admission tests sigma rather than the kind",
+                plainFadeSafe && justAboveUnsafe,
+                $"plainFade={plainFadeSafe} sigma0.5Unsafe={justAboveUnsafe}");
         }
 
         // An unknown opcode and a truncated payload are unsafe — never guessed past.

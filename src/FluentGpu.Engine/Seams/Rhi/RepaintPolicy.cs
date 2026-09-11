@@ -358,9 +358,13 @@ public static class RepaintPolicy
 /// retained scene (AcrylicCompositor.SnapshotTargetRegion).</item>
 /// <item><b>Blur</b> (self-blur groups) — a Gaussian's taps read OUTSIDE the clamp, so a clamped replay samples pixels
 /// the clamp never redrew; the region-local and pin-cache paths also lease their own shifted-viewport surfaces.</item>
-/// <item><b>EdgeFade</b> — both classes. The blurred one for the same reason as Blur; the PLAIN (σ = 0) strip-fade
-/// because its snapshot/restore reads and writes the top-level target OUTSIDE the clamped scissor and its precondition
-/// on that target is unverified under a partial frame (marked follow-up — see StripTargetResource).</item>
+/// <item><b>EdgeFade with σ &gt; 0</b> — the blurred class only, for the same reason as Blur. The PLAIN (σ = 0)
+/// strip fade IS admitted: its restore intersects every strip with the clip before writing
+/// (<c>OpacityLayerCompositor.EdgeFadeStripRestore</c>), so no write leaves R; its shader is a per-pixel
+/// <c>lerp(D, F, feather)</c> over premultiplied alpha with no spatial tap, so it displaces nothing and needs no
+/// damage inflation; and inside R the snapshot D is this frame's freshly replayed backdrop. The snapshot COPY still
+/// reads whole strips, which on a clamped frame is wasted bandwidth rather than a correctness problem — the texels it
+/// reads outside R are only consumed by a write the scissor discards.</item>
 /// <item><b>Any unrecognized op / any truncated payload</b> — an op this scanner cannot size could be anything.</item>
 /// </list>
 /// A plain <see cref="LayerKind.Opacity"/> group IS safe: it leases a canvas-sized RT, clears it (fully, or over the
@@ -383,9 +387,16 @@ public static class RepaintStreamSafety
             pos += sizeof(int);
             if (!TryBodySize(op, out int body)) return false;   // an op this scanner cannot size — never guess
             if (pos + body > cmds.Length) return false;         // truncated payload: a malformed run
-            // Only a plain Opacity group survives a clamped replay; Acrylic / Blur / EdgeFade do not (see the remarks).
-            if (op == DrawOp.PushLayer
-                && MemoryMarshal.Read<PushLayerCmd>(cmds.Slice(pos)).Kind != (int)LayerKind.Opacity) return false;
+            // Plain Opacity, and the PLAIN (σ = 0) EdgeFade, survive a clamped replay; Acrylic, Blur and a BLURRED
+            // edge fade do not (see the remarks). Reading the whole command is already what this line did, so the
+            // sigma test is free — and it is a test, not a kind check: LayerKind.EdgeFade covers two different
+            // classes and only the σ = 0 one displaces nothing.
+            if (op == DrawOp.PushLayer)
+            {
+                var layer = MemoryMarshal.Read<PushLayerCmd>(cmds.Slice(pos));
+                if (layer.Kind != (int)LayerKind.Opacity
+                    && !(layer.Kind == (int)LayerKind.EdgeFade && layer.BlurSigma <= 0f)) return false;
+            }
             // Tier-3 stencil scopes are stream-UNSAFE in v1: the clamped-replay x mask-clear-rect interaction (the
             // outermost push clears the stencil over its own AABB, which a damage-clamped scissor would narrow) is
             // untested and therefore EXCLUDED, not relied on — the EdgeFade precedent above. Admitting stencil frames

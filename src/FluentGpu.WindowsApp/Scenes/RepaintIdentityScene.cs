@@ -64,7 +64,8 @@ sealed class RepaintIdentityScene : Component
             2 => StalePriorExtent(),
             3 => OpacityGroup(),
             4 => VideoHole(),
-            _ => ThreeAnimators(),
+            5 => ThreeAnimators(),
+            _ => EdgeFadeStrip(),
         };
         return new BoxEl
         {
@@ -273,6 +274,58 @@ sealed class RepaintIdentityScene : Component
                 AlignSelf = FlexAlign.Start, JustifySelf = FlexAlign.Start,
                 Margin = new Edges4(430f, 250.5f, 0f, 0f), Width = 3f, Height = 28f,
                 Fill = Prop.Of(() => Pulse(TickC.Value, 0xE0, 0xE0, 0xE0, 0xFF)),
+            },
+        ],
+    };
+
+    // ── 6 — the PLAIN (σ = 0) EDGE FADE under a clamped replay. This is the class every scrolling list puts on screen
+    //    (AutoEdgeFade), and vetoing it meant almost every frame in a real app took FullDirect no matter how small its
+    //    damage was. Admitting it rests on a claim that only real pixels can settle: the strip restore reads the target
+    //    it is about to write (snapshot D, then lerp(D, F, feather) back), and on a partial frame the strips extend
+    //    past the replay rect. The claim is that writes are clip-intersected so nothing outside R is touched, and that
+    //    inside R the snapshot is this frame's own freshly replayed backdrop.
+    //
+    //    So the mutated bars are placed to STRADDLE the faded edges: one inside the fade band on the left, one in the
+    //    clear middle, and one crossing the right band. A fade that sampled a stale backdrop, or wrote outside its
+    //    clip, shows up as a feathered column that differs from the full redraw.
+    static Element EdgeFadeStrip() => new BoxEl
+    {
+        Grow = 1f, ZStack = true,
+        Children =
+        [
+            Coat(30f, 30f, 560f, 320f, 0x28, 0x30, 0x40, 0x90),
+            new BoxEl
+            {
+                AlignSelf = FlexAlign.Start, JustifySelf = FlexAlign.Start,
+                Margin = new Edges4(60f, 70f, 0f, 0f), Width = 460f, Height = 150f,
+                ClipToBounds = true,
+                Fill = ColorF.FromRgba(0x3A, 0x42, 0x58, 0xB0), Corners = CornerRadius4.All(8f),
+                // Both horizontal edges feathered, sigma 0 — the strip-fade class, not the blurred one.
+                EdgeFade = new EdgeFadeSpec(EdgeMask.Horizontal, 36f, FadeFalloff.Smoothstep, 1f),
+                Children =
+                [
+                    // Inside the LEFT fade band: its pixels are a lerp against the backdrop, so a stale D shows here.
+                    new BoxEl
+                    {
+                        AlignSelf = FlexAlign.Start, JustifySelf = FlexAlign.Start,
+                        Margin = new Edges4(6f, 18f, 0f, 0f), Width = 54f, Height = 34f,
+                        Fill = Prop.Of(() => Pulse(Tick.Value, 0x90, 0x60, 0x40, 0xE0)),
+                    },
+                    // Fully inside the clear middle: unfeathered, so it isolates the fade as the cause if it differs.
+                    new BoxEl
+                    {
+                        AlignSelf = FlexAlign.Start, JustifySelf = FlexAlign.Start,
+                        Margin = new Edges4(180f, 62.4f, 0f, 0f), Width = 120f, Height = 30f,
+                        Fill = Prop.Of(() => Pulse(TickB.Value, 0x40, 0x90, 0x70, 0xD0)),
+                    },
+                    // CROSSING the right band, so one bar spans feathered and unfeathered pixels at once.
+                    new BoxEl
+                    {
+                        AlignSelf = FlexAlign.Start, JustifySelf = FlexAlign.Start,
+                        Margin = new Edges4(396f, 104.5f, 0f, 0f), Width = 80f, Height = 26f,
+                        Fill = Prop.Of(() => Pulse(TickC.Value, 0xE0, 0xC0, 0x50, 0xFF)),
+                    },
+                ],
             },
         ],
     };

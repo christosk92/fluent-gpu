@@ -3976,9 +3976,14 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // group's pooled RT, which Acquire creates canvas-sized and clears in FULL — same three properties. The snapshot
     // MUST read whichever one the subtree is actually drawing into; reading the back buffer while a group is open (or
     // while the canvas path is in use) would snapshot a stale/blank surface and restore garbage.
-    // NB in v1 the two facts never meet: an EdgeFade anywhere in the stream is stream-UNSAFE (RepaintStreamSafety), so a
-    // strip fade only ever runs on a FullDirect frame — the clamped-replay interaction is untested and excluded, not
-    // relied upon (R12; admitting the plain σ = 0 strip fade to the partial path is a marked follow-up).
+    // NB the two facts DO meet now: the plain σ = 0 strip fade is admitted to clamped replay (RepaintStreamSafety), so
+    // this path runs on partial frames. It is safe there, and the reason is worth stating because it is not obvious
+    // from the snapshot/restore shape: the RESTORE intersects every strip with the clip before writing
+    // (OpacityLayerCompositor.EdgeFadeStripRestore), so no write leaves the replay rect R; the shader is a per-pixel
+    // lerp(D, F, feather) over premultiplied alpha with no spatial tap, so nothing is displaced and no damage
+    // inflation is owed; and inside R the snapshot D is this frame's freshly replayed backdrop. The COPY still reads
+    // whole strips — wasted bandwidth on a clamped frame, never a correctness problem, because the texels it reads
+    // outside R can only be consumed by a write the scissor discards. A σ > 0 (blurred) edge fade stays vetoed.
     private ID3D12Resource* StripTargetResource(int targetSlot, bool directToBackBuffer)
     {
         if (targetSlot >= 0) return _opacity is null ? null : _opacity.TargetResource(targetSlot);
