@@ -38,6 +38,7 @@ public sealed partial class AnimEngine
         if (e.Sx != 1f) SeedChannel(node, AnimChannel.ScaleX, 1f, in m, e.Sx, delayMs);
         if (e.Sy != 1f) SeedChannel(node, AnimChannel.ScaleY, 1f, in m, e.Sy, delayMs);
         if (e.Blur != 0f) SeedChannel(node, AnimChannel.BlurSigma, 0f, in m, e.Blur, delayMs);
+        MarkStartPending(node);
     }
 
     /// <summary>Current state → exit terminal, driven by a <see cref="MotionTokenDef"/> (the declarative Element.Exit path).</summary>
@@ -49,6 +50,24 @@ public sealed partial class AnimEngine
         if (e.Sx != 1f) SeedChannel(node, AnimChannel.ScaleX, e.Sx, in m, null, delayMs);
         if (e.Sy != 1f) SeedChannel(node, AnimChannel.ScaleY, e.Sy, in m, null, delayMs);
         if (e.Blur != 0f) SeedChannel(node, AnimChannel.BlurSigma, e.Blur, in m, null, delayMs);
+        MarkStartPending(node);
+    }
+
+    /// <summary>Enter/exit transitions are seeded during a COMMIT, and the frame that commits them is often the slowest
+    /// one of the navigation (a whole page mounting). Their start time must resolve at the first frame that PRESENTS them,
+    /// not at the commit — Web Animations' pending play task (Gecko <c>dom/animation/Animation.cpp</c>
+    /// <c>Animation::Tick</c>/<c>TryTriggerNow</c>: "trigger on the next tick, with this tick's timestamp") and Flutter's
+    /// Ticker (<c>_startTime ??= timeStamp</c> — the first vsync after <c>start()</c> is elapsed 0). The seed-frame hold
+    /// (<see cref="AnimFlags.JustSeeded"/>) already shows t=0 on that frame; this marks the rows so the NEXT advance
+    /// measures from its presentation (<see cref="PendingStartStep"/>, and RenderCompositorAnimations for render-owned
+    /// rows). O(rows on the node), allocation-free; only this call's fresh rows carry JustSeeded.</summary>
+    private void MarkStartPending(NodeHandle node)
+    {
+        for (int s = _slab.HeadOnNode((int)node.Raw.Index); s >= 0; s = _slab.At(s).NextOnNode)
+        {
+            ref AnimValue r = ref _slab.At(s);
+            if (r.Has(AnimFlags.JustSeeded) && !r.Has(AnimFlags.Driven)) r.Flags |= AnimFlags.StartPending;
+        }
     }
 
     /// <summary>Spring/ease the gesture channels toward a <see cref="MotionTarget"/> (WhileHover/WhilePressed/WhileFocus
@@ -138,6 +157,7 @@ public sealed partial class AnimEngine
         if (e.Sx != 1f) SeedTerminal(node, AnimChannel.ScaleX, 1f, dyn, initial: e.Sx, delayMs: spec.DelayMs);
         if (e.Sy != 1f) SeedTerminal(node, AnimChannel.ScaleY, 1f, dyn, initial: e.Sy, delayMs: spec.DelayMs);
         if (e.Blur != 0f) SeedTerminal(node, AnimChannel.BlurSigma, 0f, dyn, initial: e.Blur, delayMs: spec.DelayMs);
+        MarkStartPending(node);
     }
 
     /// <summary>A removed (now-Exiting) node animates FROM its current state TO the exit terminal; the host reclaims it
@@ -152,6 +172,22 @@ public sealed partial class AnimEngine
         if (e.Sx != 1f) SeedTerminal(node, AnimChannel.ScaleX, e.Sx, dyn, delayMs: delay);
         if (e.Sy != 1f) SeedTerminal(node, AnimChannel.ScaleY, e.Sy, dyn, delayMs: delay);
         if (e.Blur != 0f) SeedTerminal(node, AnimChannel.BlurSigma, e.Blur, dyn, delayMs: delay);
+        MarkStartPending(node);
+        // SizeMode.Reflow exit: ease THIS node's layout size to 0. SeedExit used to seed only opacity/transform, so a
+        // DrawerReveal-style orphan kept its last full Bounds (and therefore its ClipToBounds window) while its
+        // measured virtual row snapped closed — one unclipped flash over the rows that had already slid up. The Size
+        // track is the settle signal for a size-only Exit (Active with default Opacity=1 would otherwise be a 1→1
+        // no-op that reclaims in a couple of frames).
+        if ((spec.Channels & TransitionChannels.Size) != 0 && spec.Size == SizeMode.Reflow)
+        {
+            bool horiz = _scene.Layout(node).Direction == 0;
+            if ((spec.Axes & (horiz ? SizeAxes.Width : SizeAxes.Height)) == 0) horiz = !horiz;
+            if ((spec.Axes & (horiz ? SizeAxes.Width : SizeAxes.Height)) != 0)
+            {
+                float from = horiz ? _scene.Bounds(node).W : _scene.Bounds(node).H;
+                if (from > 0.5f) SeedReflowResize(node, horiz, from, 0f, spec);
+            }
+        }
     }
 
     private void SeedTerminal(NodeHandle node, AnimChannel ch, float to, in TransitionDynamics dyn, float? initial = null, float delayMs = 0f)
@@ -232,6 +268,7 @@ public sealed partial class AnimEngine
                 r.To = 0f;
                 r.Gen = Generators.BakeSpring(in sp, x0: r.Position, v0: r.Velocity);   // keep velocity (handoff)
                 r.ElapsedMs = 0f; r.Flags &= ~AnimFlags.Done;
+                StampCompositorSeed(ex, newInstance: false, explicitFrom: true);
             }
             else Spring(node, ch, 0f, sp, initial: delta, delayMs: delayMs);
         }

@@ -290,6 +290,7 @@ static class ImageSuite
 {
     public static void Run(StringTable strings)
     {
+        AtlasPackerChecks();
         IconChecks(strings);
         ImageCacheChecks();
         ImageElChecks(strings);
@@ -303,6 +304,177 @@ static class ImageSuite
         ImageLifecycleChecks(strings);
         UseImageChecks(strings);
         HoldLastGoodChecks(strings);
+    }
+
+    // ── gate.imgatlas.* — the small-image atlas packer (ImageAtlasPacker) ─────────────────────────────────────────
+    // The GPU-side store (FluentGpu.Windows/D3D12/ImageTextureStore) is TerraFX-bound and cannot run here, so the
+    // POLICY it drives lives in the portable packer and is gated headlessly: cell geometry (no overlap, real gutters,
+    // a bilinear footprint that cannot leave its cell), page growth, eviction reuse without growth, the O(pages)
+    // census, and the barrier-free invariant that keeps a CPU-written (UMA/Adreno) page off the COPY_DEST path.
+    static void AtlasPackerChecks()
+    {
+        const int Side = 1024;
+        long pageBytes = (long)Side * Side * 4;   // 4 MiB — the store passes the device's real committed size
+
+        // gate.imgatlas.grid — geometry. Every cell of every packed bucket is inside the page, no two cells overlap,
+        // every pair is separated by at least the gutter on one axis, and the sampler footprint the store hands the GPU
+        // ([origin … origin+size], the half-texel-inset UV's bilinear reach) never leaves the cell it belongs to.
+        {
+            var p = new ImageAtlasPacker(Side, pageBytes, ImageAtlasUpload.CpuWrite);
+            bool ok = true;
+            var detail = "";
+            foreach (int bucket in new[] { 64, 128 })
+            {
+                int n = p.CellsPerAxis(bucket);
+                int cap = p.CellCapacity(bucket);
+                if (n <= 0 || cap != n * n) { ok = false; detail += $" cap({bucket})={cap}/n={n};"; continue; }
+                var xs = new int[cap];
+                var ys = new int[cap];
+                for (int i = 0; i < cap; i++)
+                {
+                    if (!p.TryCellOrigin(bucket, i, out xs[i], out ys[i])) { ok = false; detail += $" origin({bucket},{i});"; break; }
+                    // inside the page, gutter included on all four sides
+                    if (xs[i] < p.Gutter || ys[i] < p.Gutter ||
+                        xs[i] + bucket + p.Gutter > Side || ys[i] + bucket + p.Gutter > Side)
+                    { ok = false; detail += $" bounds({bucket},{i})=({xs[i]},{ys[i]});"; }
+                }
+                // an out-of-range slot is refused rather than aliased onto cell 0
+                if (p.TryCellOrigin(bucket, cap, out _, out _)) { ok = false; detail += $" oob({bucket});"; }
+                for (int a = 0; a < cap && ok; a++)
+                    for (int b = a + 1; b < cap; b++)
+                    {
+                        bool sepX = xs[a] + bucket + p.Gutter <= xs[b] || xs[b] + bucket + p.Gutter <= xs[a];
+                        bool sepY = ys[a] + bucket + p.Gutter <= ys[b] || ys[b] + bucket + p.Gutter <= ys[a];
+                        if (!sepX && !sepY) { ok = false; detail += $" overlap({bucket},{a},{b});"; break; }
+                    }
+            }
+            Check("gate.imgatlas.grid cells fit the page, never overlap, keep a full gutter apart, and an out-of-range slot is refused",
+                ok, $"gutter={p.Gutter} cells64={p.CellCapacity(64)} cells128={p.CellCapacity(128)}{detail}");
+        }
+
+        // gate.imgatlas.barrier-free — THE Adreno invariant, as a value rather than a comment: a CPU-written page is
+        // never a CopyTextureRegion destination, so the store never emits the COPY_DEST→PIXEL_SHADER_RESOURCE pair the
+        // Qualcomm UMD mishandles (adreno-hang-fixes.md M1). The discrete staging page still needs it.
+        {
+            var uma = new ImageAtlasPacker(Side, pageBytes, ImageAtlasUpload.CpuWrite);
+            var discrete = new ImageAtlasPacker(Side, pageBytes, ImageAtlasUpload.GpuCopy);
+            Check("gate.imgatlas.barrier-free a CPU-written page requires NO COPY_DEST transition; a GPU-copied one does",
+                !uma.RequiresCopyDestTransition && discrete.RequiresCopyDestTransition,
+                $"uma={uma.RequiresCopyDestTransition} discrete={discrete.RequiresCopyDestTransition}");
+        }
+
+        // gate.imgatlas.growth — one page fills completely before a second is created, and the census counts PAGES.
+        {
+            var p = new ImageAtlasPacker(Side, pageBytes, ImageAtlasUpload.CpuWrite);
+            int cap = p.CellCapacity(64);
+            var cells = new ImageAtlasCell[cap + 1];
+            bool ok = true;
+            for (int i = 0; i < cap; i++)
+            {
+                if (!p.TryAcquire(64, out cells[i]))
+                {
+                    int slot = p.TryReservePage(64);
+                    cells[i] = slot >= 0 ? p.CommitPage(slot) : default;
+                }
+                if (!cells[i].IsValid) ok = false;
+            }
+            bool onePage = p.LivePageCount == 1 && p.CellsInUse == cap && p.TotalPageBytes == pageBytes;
+            bool fullNeedsGrowth = !p.TryAcquire(64, out _);
+            int second = p.TryReservePage(64);
+            cells[cap] = second >= 0 ? p.CommitPage(second) : default;
+            bool grew = p.LivePageCount == 2 && p.TotalPageBytes == 2 * pageBytes && cells[cap].Page == 1;
+            Check("gate.imgatlas.growth a page fills to capacity before the atlas grows; bytes/count are per PAGE",
+                ok && onePage && fullNeedsGrowth && grew,
+                $"cap={cap} pages={p.LivePageCount} cells={p.CellsInUse} bytes={p.TotalPageBytes} full={fullNeedsGrowth}");
+        }
+
+        // gate.imgatlas.reuse — eviction reuses cells instead of growing: fill a page, release every cell, refill it,
+        // and the atlas must still be ONE page (peak included). Then the last release retires the page and the census
+        // drops to zero — bytes are freed, not merely unreferenced.
+        {
+            var p = new ImageAtlasPacker(Side, pageBytes, ImageAtlasUpload.CpuWrite);
+            int cap = p.CellCapacity(128);
+            var cells = new ImageAtlasCell[cap];
+            for (int round = 0; round < 3; round++)
+            {
+                for (int i = 0; i < cap; i++)
+                {
+                    if (!p.TryAcquire(128, out cells[i]))
+                    {
+                        int slot = p.TryReservePage(128);
+                        cells[i] = slot >= 0 ? p.CommitPage(slot) : default;
+                    }
+                }
+                if (round == 2) break;
+                for (int i = 0; i < cap; i++) p.Release(cells[i], out _);
+            }
+            bool noGrowth = p.LivePageCount == 1 && p.PeakLivePageCount == 1 && p.CellsInUse == cap;
+            bool emptyOnLast = true;
+            for (int i = 0; i < cap; i++)
+            {
+                p.Release(cells[i], out bool empty);
+                if (empty != (i == cap - 1)) emptyOnLast = false;
+            }
+            p.RetirePage(cells[0].Page);
+            bool freed = p.LivePageCount == 0 && p.TotalPageBytes == 0 && p.CellsInUse == 0;
+            // A placement from the retired page must not corrupt the next page that reuses the slot (generations).
+            int reused = p.TryReservePage(64);
+            var fresh = reused >= 0 ? p.CommitPage(reused) : default;
+            int freeBefore = p.PageFreeCells(fresh.Page);
+            p.Release(cells[0], out bool staleEmptied);
+            bool staleRejected = !staleEmptied && p.PageFreeCells(fresh.Page) == freeBefore && p.CellsInUse == 1;
+            Check("gate.imgatlas.reuse evict+refill never grows the atlas; the last cell retires the page (bytes freed); a stale placement is rejected by generation",
+                noGrowth && emptyOnLast && freed && reused == cells[0].Page && staleRejected,
+                $"pages={p.LivePageCount} peak={p.PeakLivePageCount} reusedSlot={reused} stale={staleRejected} bytes={p.TotalPageBytes}");
+        }
+
+        // gate.imgatlas.census — 1000 thumbnails: the atlas byte line is O(pages) and strictly cheaper than one
+        // committed texture per image, which is rounded up to the 64 KiB placement granularity (a 64² BGRA8 thumb is
+        // 16 KiB of pixels in a 64 KiB commit — the 4× waste this packing exists to remove).
+        {
+            const int Thumbs = 1000;
+            const long Placement = 65536;
+            var p = new ImageAtlasPacker(Side, pageBytes, ImageAtlasUpload.CpuWrite);
+            for (int i = 0; i < Thumbs; i++)
+                if (!p.TryAcquire(64, out _))
+                {
+                    int slot = p.TryReservePage(64);
+                    if (slot >= 0) p.CommitPage(slot);
+                }
+            int cap = p.CellCapacity(64);
+            int expectPages = (Thumbs + cap - 1) / cap;
+            long perImage = Thumbs * Placement;                 // today: one committed 64 KiB resource per thumbnail
+            bool ok = p.LivePageCount == expectPages
+                   && p.CellsInUse == Thumbs
+                   && p.TotalPageBytes == (long)expectPages * pageBytes
+                   && p.TotalPageBytes < perImage;
+            Check("gate.imgatlas.census 1000 packed thumbs cost O(pages) bytes and O(pages) resources, strictly under one 64 KiB-granular texture each",
+                ok, $"pages={p.LivePageCount}/{expectPages} cells={p.CellsInUse} packed={p.TotalPageBytes}B perImage={perImage}B eff={p.FullPageEfficiency(64):0.000}");
+        }
+
+        // gate.imgatlas.alloc — acquire/release is zero-allocation once the pages exist (the store runs it inside the
+        // render-thread image drain; a per-thumbnail allocation there is a Gen0 tax on every scroll).
+        {
+            var p = new ImageAtlasPacker(Side, pageBytes, ImageAtlasUpload.CpuWrite);
+            int cap = p.CellCapacity(64);
+            var cells = new ImageAtlasCell[cap];
+            for (int i = 0; i < cap; i++)
+                if (!p.TryAcquire(64, out cells[i]))
+                {
+                    int slot = p.TryReservePage(64);
+                    cells[i] = slot >= 0 ? p.CommitPage(slot) : default;
+                }
+            for (int i = 0; i < cap; i++) p.Release(cells[i], out _);
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            for (int round = 0; round < 8; round++)
+            {
+                for (int i = 0; i < cap; i++) p.TryAcquire(64, out cells[i]);
+                for (int i = 0; i < cap; i++) p.Release(cells[i], out _);
+            }
+            long delta = GC.GetAllocatedBytesForCurrentThread() - before;
+            Check("gate.imgatlas.alloc warm acquire/release of a full page ×8 allocates nothing",
+                delta == 0, $"delta={delta}B cap={cap}");
+        }
     }
 
     static void IconChecks(StringTable strings)
@@ -965,23 +1137,28 @@ static class ImageSuite
         Check("46f. ImageTransition: default fade eases 0→1; None disables (instant)", fades && disabled,
             $"cf0={cf0:0.00} cf1={cf1:0.00}");
 
-        // 45e: ImageCache.WasReady — a re-decode of a key that has already been Ready once, landing fast, reveals
-        // instantly EVEN AT REST (not just mid-scroll); a first-ever decode still gets its authored fade (the
-        // synchronous test decoder must not flip a fresh reveal to instant just because it lands fast too).
+        // 45e: ImageCache.WasReady — a re-decode of a key that has already been Ready once, landing fast, gets the SHORT
+        // reveal (ImageCache.ShortRevealMs) EVEN AT REST — never an instant pop over the placeholder frame the +1-frame
+        // contract always presents; a first-ever decode still gets its full authored fade (the synchronous test decoder
+        // must not shorten a fresh reveal just because it lands fast too).
         var wr = new FakeImageDecoder();
         var wcache = new ImageCache(wr);
         var wHandle = wcache.Request("warm", 16, 16);
         wcache.Pump();                                    // first-ever decode — WasReady was false when this landed
         float firstCf = wcache.CrossFadeOf(wHandle);
-        bool firstFades = firstCf < 0.999f;
+        wcache.Tick(ImageCache.ShortRevealMs);
+        bool firstFades = firstCf < 0.999f && wcache.CrossFadeOf(wHandle) < 0.999f;   // authored 220ms > ShortRevealMs
+        wcache.Tick(1000f);
 
         wcache.ReRealizeAllResident();                    // forces a re-decode of the now-Ready entry (WasReady==true)
         wcache.Pump();                                    // lands immediately — well under InstantRevealWindowMs
         float warmCf = wcache.CrossFadeOf(wHandle);
-        bool warmInstant = warmCf >= 0.999f;
+        wcache.Tick(ImageCache.ShortRevealMs);
+        float warmDone = wcache.CrossFadeOf(wHandle);
+        bool warmShort = warmCf < 0.999f && warmDone >= 0.999f;
 
-        Check("45e. ImageCache WasReady: a re-decode of a previously-Ready entry landing fast reveals instantly at rest; a first decode keeps its authored fade",
-            firstFades && warmInstant, $"firstCf={firstCf:0.00} warmCf={warmCf:0.00}");
+        Check("45e. ImageCache WasReady: a fast re-decode of a previously-Ready entry gets the short reveal (no pop); a first decode keeps its authored fade",
+            firstFades && warmShort, $"firstCf={firstCf:0.00} warmCf={warmCf:0.00} warmDone={warmDone:0.00}");
     }
 
     static void ImageEvictChecks()
@@ -1356,15 +1533,26 @@ static class ImageSuite
                 && device.LastImages[0].Ready == 1
                 && cache.StateOf(new ImageHandle(idB)) == ImageState.Pending;
 
+            // B is a DIFFERENT picture: the settle is a short dissolve FROM the held texture, not a one-frame cut — A is
+            // drawn first, opaque for the swap window (SwapOutgoingEasing), and B fades in over it with a transparent
+            // placeholder; the entry's own reveal stays settled (nothing fades in over a placeholder).
             dec.Release(idB);
             host.RunFrame();
+            bool dissolving = device.LastImages.Count == 2
+                && device.LastImages[0].ImageId == idA && device.LastImages[0].Ready == 1
+                && device.LastImages[0].FadeEasing == ImageCache.SwapOutgoingEasing
+                && device.LastImages[1].ImageId == idB && device.LastImages[1].Ready == 1
+                && device.LastImages[1].Placeholder.A == 0f
+                && Near(device.LastImages[1].FadeDurationMs, ImageCache.SwapCrossfadeMs, 0.01f)
+                && cache.CrossFadeOf(new ImageHandle(idB)) >= 0.999f;
+            for (int i = 0; i < 24; i++) host.RunFrame();   // ≥ window + release slack of fixed frames
             bool committed = device.LastImages.Count == 1 && device.LastImages[0].ImageId == idB
                 && device.LastImages[0].Ready == 1
-                && cache.CrossFadeOf(new ImageHandle(idB)) >= 0.999f;
+                && cache.RefsOf(new ImageHandle(idA)) == 0 && cache.RefsOf(new ImageHandle(idB)) == 1;
 
-            Check("46n3. hold-last-good: the BOUND-source binding-effect swap site takes the same hold path",
-                aReady && held && committed,
-                $"idA={idA} idB={idB} aReady={aReady} held={held} committed={committed}");
+            Check("46n3. hold-last-good: the BOUND-source binding-effect swap site holds, then DISSOLVES from the held texture onto a different picture and releases it",
+                aReady && held && dissolving && committed,
+                $"idA={idA} idB={idB} aReady={aReady} held={held} dissolving={dissolving} committed={committed} draws={device.LastImages.Count}");
         }
 
         // 46n4: the steady-frame alloc gate (gate.icon.alloc's idiom) extended through a hold + commit sequence — the

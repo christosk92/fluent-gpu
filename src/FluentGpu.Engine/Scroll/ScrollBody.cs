@@ -4,7 +4,9 @@ namespace FluentGpu.Scroll;
 
 /// <summary>The POD per-viewport body. Blittable — no managed references except the shared immutable
 /// <c>Frame.SnapPoints</c> array (never mutated here, only ever replaced wholesale by a fresh <c>SetFrame</c>).
-/// <see cref="ScrollKernel"/> keeps a growable slab of these indexed by scene node index; <see cref="Advance"/> is
+/// <see cref="ScrollKernel"/> keeps a bounded POOL of these — one slot per BOUND VIEWPORT, reached through its
+/// 4-byte-per-node lookup, never an array indexed by node index (<c>scene-memory.md §2.6a</c> owns that storage
+/// rule; <see cref="Node"/> is this body's back-reference to the scene node it serves); <see cref="Advance"/> is
 /// the pure per-body time step (Ballistic/Driven/Bounce only — Drag is command-driven, not time-stepped) reused by
 /// both <see cref="ScrollKernel.Tick"/> and, later, the render-thread fling lease (plan §6.1 pins exactly this
 /// method + <see cref="IsSettled"/> for that hand-off).</summary>
@@ -60,6 +62,10 @@ public struct ScrollBody
     /// <summary>0 = not dragging; 1 = touch/pen (<see cref="ScrollInputKind.ContactMove"/>, resampled every Tick);
     /// 2 = FrameDelta (DM RUNNING / hi-res fallback, applied 1:1 as each command arrives, no resampling).</summary>
     public byte DragMode;
+    /// <summary>The live gesture is a MOUSE wheel (<see cref="ScrollInputFlags.NoOverscroll"/> on its FrameDelta): the
+    /// drag clamps at the extents with no band, and the fling it seeds stops dead at an edge instead of bouncing.
+    /// Latched when the FrameDelta drag starts, cleared by a touch/pen ContactBegin; carried onto the fling's seed body.</summary>
+    public bool NoOverscroll;
     /// <summary>The last RAW resampled contact position (DragMode 1 only) — decoupled from <see cref="DragRaw"/> on
     /// purpose: <see cref="DragRaw"/> is rebased by <see cref="ScrollInputKind.AnchorShift"/> and reshaped by chain
     /// hand-off/clamping, but the per-tick resample-to-delta comparison (<c>delta = resample(t) − LastResampleX</c>)

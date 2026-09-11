@@ -231,4 +231,26 @@ public sealed class WasapiLogicTests
 
     [Fact]
     public void QpcTo100ns_IsIdentity() => Assert.Equal(1_234_567L, WasapiPositionMath.QpcTo100ns(1_234_567UL));
+
+    // ── device-loss classification + the failed-open evidence line (Wavee #112) ─────────────────────────────────────────
+    // The COM Open/Write paths are on-box-only; these are the two pure decisions they ride on: which HRESULTs mean "the
+    // device is gone" (→ MarkLost → the session asks for a rebuild) and the always-on line a failed open must leave behind.
+
+    [Theory]
+    [InlineData(unchecked((int)0x88890004), true)]    // AUDCLNT_E_DEVICE_INVALIDATED
+    [InlineData(unchecked((int)0x88890026), true)]    // AUDCLNT_E_RESOURCES_INVALIDATED
+    [InlineData(unchecked((int)0x88890001), false)]   // AUDCLNT_E_NOT_INITIALIZED — a caller bug, not a lost device
+    [InlineData(unchecked((int)0x80070490), false)]   // E_NOTFOUND (no default endpoint) — an OPEN failure, handled by IsReady
+    [InlineData(0, false)]                            // S_OK
+    public void IsDeviceLostHr_OnlyTheTwoInvalidatedCodes(int hr, bool lost)
+        => Assert.Equal(lost, WasapiAudioDevice.IsDeviceLostHr(hr));
+
+    [Fact]
+    public void OpenFailureLine_NamesStepAndHr()
+    {
+        string line = WasapiAudioDevice.FormatOpenFailure("Initialize", unchecked((int)0x88890004));
+        Assert.Equal("open FAILED step=Initialize hr=0x88890004 default-endpoint", line);
+        Assert.Contains("step=GetDefaultAudioEndpoint", WasapiAudioDevice.FormatOpenFailure("GetDefaultAudioEndpoint", unchecked((int)0x80070490)));
+        Assert.Contains("hr=0x80070490", WasapiAudioDevice.FormatOpenFailure("GetDefaultAudioEndpoint", unchecked((int)0x80070490)));
+    }
 }

@@ -91,6 +91,27 @@ public static class ReuseGuard
         else Console.Error.WriteLine(msg);
     }
 
+    /// <summary>Report a re-pushed DELEGATE prop whose <c>Method</c> changed on a mounted component. A props record that
+    /// gates re-renders on data (<c>ShelfProps</c>, <c>ResponsiveBox.Props</c>) IGNORES its delegate members, because a
+    /// lambda allocates a fresh closure — equal <c>Method</c>, new <c>Target</c> — on every parent render, and gating on
+    /// one means never gating at all. A different <c>Method</c> is the case that is NOT routine: the caller swapped in a
+    /// genuinely different builder/handler, which therefore schedules no render of its own (it takes effect at the next
+    /// data change). Fix by making what the delegate renders a function of the data, or by re-keying the component.
+    /// <para>Report-only by design — it does NOT honour <see cref="ThrowOnViolation"/>: the newest delegate is still the
+    /// one invoked, so nothing is corrupt; this only names a request that scheduled nothing.</para></summary>
+    public static void IgnoredDelegateChanged(Component owner, string field)
+    {
+        Violations++;
+        string msg = $"[reuseguard] {owner.GetType().Name}.{field} was re-pushed with a DIFFERENT delegate Method. "
+                   + "Delegate props are excluded from the data gate (a fresh closure every render can never compare "
+                   + "equal), so this change scheduled no re-render — it takes effect at the next data change. Make what "
+                   + "the delegate renders a function of the data, or re-key the component "
+                   + "— see design/subsystems/component-props-contract.md";
+        LastViolation = msg;
+        if (Diag.Sink is { } sink) sink(msg);
+        else Console.Error.WriteLine(msg);
+    }
+
     /// <summary>Shorthand for the common scalar-field case (a label / glyph / flag that froze at mount and changed on
     /// reuse). Names the standard fix idioms.</summary>
     public static void ScalarChanged(Component owner, string field) =>

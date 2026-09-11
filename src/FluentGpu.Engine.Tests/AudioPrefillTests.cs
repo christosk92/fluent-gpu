@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.Threading;
+using System.Threading.Tasks;
 using FluentGpu.Media;
 using Xunit;
 
@@ -52,78 +53,51 @@ public sealed class AudioPrefillTests
         _ = session.PlayAsync();
     }
 
-    // NOTE: two tests here used to pin a ring-DEPTH Buffering gate ("hold until the ring refills", "time out if it
-    // never fills"). That gate was reverted — see PcmAudioPlayer.BufferingReady. Playback has to be able to start on an
-    // empty ring (a live/ICY stream, a slow CDN, a lazily-filling producer), which
-    // AudioFeedRaceTests.FeedThread_Underrun_BumpsXrunCounter pins directly; a depth gate turned that into a
-    // multi-second stall before the first sample. The start-of-track burst it was meant to remove is handled by
-    // AudioFeedThread's per-wake block cap instead, so these two tests were removed rather than rewritten.
-
-    // ── fix 2: a seek/flush rebuffer must not be counted as an xrun ─────────────────────────────────────────────────────
-
     [Fact]
-    public void Seek_ArmsXrunSuppression_AndClearsOnceTheRingRefills()
+    public async Task Seek_ArmsSuppression_UntilFlushDecoderAndPcmAreAcknowledged()
     {
         var session = NewRtSession(out var feed);
         OpenVoiceAndArm(session);
-
-        for (int i = 0; i < 10; i++) feed.WorkerPumpOnce();
-        // Two ticks to reach Playing: Opening -> Buffering, then Buffering -> Ready -> Playing (the same two-step
-        // AudioFeedRaceTests.FeedThread_Underrun_BumpsXrunCounter drives explicitly).
-        Assert.Equal(PlaybackState.Buffering, session.TickControl(256));
-        Assert.Equal(PlaybackState.Playing, session.TickControl(256));
-        Assert.False(session.SuppressXrunAccounting, "suppression must be off during steady playback");
-
-        _ = session.SeekAsync(TimeSpan.FromSeconds(2), SeekMode.Accurate);
-        Assert.True(session.SuppressXrunAccounting, "a seek/flush must arm xrun suppression for the rebuffer it causes");
-
-        // RtConsumeFlush (inside FeedOnce) must discard the pre-seek PCM before the worker's PumpAhead will write past-seek
-        // PCM (RingAudioSource early-returns from PumpAhead while the flush is pending) — then the worker refills, and a
-        // subsequent control tick must clear the suppression once the ring has genuinely caught back up (never suppress
-        // real xruns forever).
-        // Order matters, and it mirrors what the two live threads do: the WORKER applies the seek first (that is what
-        // sets the flush request), THEN the RT thread consumes the flush, and only then can the worker refill. Pumping
-        // before the flush is consumed is a no-op — PumpAhead early-returns while a flush is pending — so driving
-        // FeedOnce first would leave the ring empty forever and the suppression permanently armed.
-        feed.WorkerPumpOnce();                                        // applies the seek → arms the flush
-        feed.FeedOnce();                                              // RtConsumeFlush → discards the pre-seek PCM
-        for (int i = 0; i < 10; i++) feed.WorkerPumpOnce();           // refill past the decode-ahead target
+        feed.WorkerPumpOnce();
         session.TickControl(256);
-        Assert.False(session.SuppressXrunAccounting, "suppression must clear once the ring has refilled past its target");
+        session.TickControl(256);
+        var seek = session.SeekAsync(TimeSpan.FromSeconds(2), SeekMode.Accurate).AsTask();
+        Assert.True(session.SuppressXrunAccounting);
+        await DriveOperationAsync(session, feed, seek);
+        Assert.False(session.SuppressXrunAccounting);
+        Assert.Equal(0, feed.XrunCount);
+        await session.DisposeAsync();
     }
 
     [Fact]
-    public void SeekRebuffer_DoesNotIncrementXrunCount()
+    public async Task SeekRebuffer_DoesNotIncrementXrunCount()
     {
-        // NOTE: end-to-end this also needs AudioFeedThread.FeedOnce to gate its existing xrun increment on
-        // PcmAudioSession.SuppressXrunAccounting (see that property's remarks for the exact one-line change) — that hook
-        // belongs to the M4 feed-thread agent and is not applied in this file. This proves the session-side contract that
-        // hook consumes: the ring-empty FeedOnce triggers immediately after a seek must not be treated as a real underrun.
         var session = NewRtSession(out var feed);
         OpenVoiceAndArm(session);
-
-        for (int i = 0; i < 10; i++) feed.WorkerPumpOnce();
-        // Two ticks to reach Playing: Opening -> Buffering, then Buffering -> Ready -> Playing (the same two-step
-        // AudioFeedRaceTests.FeedThread_Underrun_BumpsXrunCounter drives explicitly).
-        Assert.Equal(PlaybackState.Buffering, session.TickControl(256));
-        Assert.Equal(PlaybackState.Playing, session.TickControl(256));
-        for (int i = 0; i < 5; i++) feed.FeedOnce();   // steady playback — no xruns expected
-        long before = session.XrunCount;
-
-        _ = session.SeekAsync(TimeSpan.FromSeconds(2), SeekMode.Accurate);   // flushes the ring (RingAudioSource.WorkerApplySeek/RtConsumeFlush)
-        Assert.True(session.SuppressXrunAccounting);
-
-        feed.FeedOnce();   // the very next RT read sees the flushed (empty) ring — an EXPECTED rebuffer
-
-        long after = session.XrunCount;
-        Assert.True(after == before || !session.SuppressXrunAccounting,
-            $"a suppressed seek rebuffer must not increment XrunCount (before={before} after={after})");
+        feed.WorkerPumpOnce();
+        session.TickControl(256);
+        session.TickControl(256);
+        feed.FeedOnce();
+        long before = feed.XrunCount;
+        await DriveOperationAsync(session, feed, session.SeekAsync(TimeSpan.FromSeconds(2), SeekMode.Accurate).AsTask());
+        Assert.Equal(before, feed.XrunCount);
+        await session.DisposeAsync();
     }
 
-    // ── fix 3: honor the sink's accepted-frame count ────────────────────────────────────────────────────────────────────
+    private static async Task DriveOperationAsync(PcmAudioSession session, AudioFeedThread feed, Task operation)
+    {
+        for (int i = 0; i < 2000 && !operation.IsCompleted; i++)
+        {
+            feed.WorkerPumpOnce();
+            feed.FeedOnce();
+            session.TickControl(256);
+            await Task.Delay(1);
+        }
+        await operation.WaitAsync(TimeSpan.FromSeconds(2));
+    }
 
     [Fact]
-    public void PartialSinkWrite_ReportsNotRendered()
+    public void PartialSinkWrite_ReportsAcceptedFramesAndRetainsTheRemainder()
     {
         var clockEndpoint = new HeadlessAudioEndpoint(Fmt);
         var sink = new PartialWriteSink(Fmt);
@@ -144,8 +118,13 @@ public sealed class AudioPrefillTests
         sink.FramesToAccept = 0;
         Assert.Equal(0, session.RenderBlock(256));
 
-        sink.FramesToAccept = 100;   // a genuine short write (< frames) is ALSO not-rendered, not "partially rendered"
-        Assert.Equal(0, session.RenderBlock(256));
+        sink.FramesToAccept = 100;
+        long sourcePosition = session.SampleClock;
+        Assert.Equal(100, session.RenderBlock(256));
+        Assert.Equal(sourcePosition, session.SampleClock);
+        Assert.Equal(100, session.RenderBlock(256));
+        Assert.Equal(56, session.RenderBlock(256));
+        Assert.Equal(sourcePosition, session.SampleClock);
     }
 
     [Fact]

@@ -86,6 +86,7 @@ public enum InputKind : byte {
     PointerMove, PointerDown, PointerUp, Wheel, PointerCancel,   // PointerCancel = capture-lost / touch-cancel
     Key, KeyUp, Char,                     // Char = committed text (WM_CHAR after TranslateMessage)
     WindowBlur, WindowFocus, WindowStateChanged,
+    WindowMoveSizeEnded,                  // an OS move/size modal loop ended (every loop; see below)
     // ImeStart/Update/EndComposition + Drag* enrol here as the IME/OLE seams land (§9, §12)
 }
 
@@ -128,6 +129,16 @@ public readonly record struct InputEvent(
 - **`GetPointerFrameInfoHistory`** is the ratified OS-coalesced drain: each `WM_POINTERUPDATE` carries a frame of back-buffered samples which the pump reads in one call (the OS-side analogue of the slab's per-id coalescing), then **DIP-converts once** with the window's current effective DPI → ring. `GetPointerInfo`/`GetPointerType` classify the contact; `WM_POINTERCAPTURECHANGED` → a per-`PointerId` `PointerCancel` (§4).
 - Leave tracking via `WM_POINTERLEAVE` + `TrackMouseEvent(TME_LEAVE|TME_HOVER)` — **not** `RegisterTouchHitTestingWindow`.
 - Committed text is `WM_CHAR` after `TranslateMessage` (`WM_UNICHAR` optional for >BMP keyboards).
+
+**The content-driven window move (`WindowMoveSizeEnded` + the `InputHooks` pair).** A control whose surface moves its
+chromeless window (the pop-out video, `MediaPlayerElement.DragMovesWindow`) calls `InputHooks.WindowBeginMove:
+Func<bool>?` — host-wired to `IPlatformWindow.BeginSystemMove` (seam + Win32 guarantee: `pal-rhi.md` §1.2 "Modal
+loops") — from a press that travelled past `ClickSlopPx` on that surface; its buttons and sliders are their own
+interaction-gated press targets, so a press on a control never arms it. `true` means the OS loop was requested and the
+backend's `PointerCancel` ends the engine contact (the captured `OnDrag` owner sees `OnPointerExit`, never a click);
+the loop's end arrives as `InputKind.WindowMoveSizeEnded` → `InputDispatcher.OnWindowMoveSizeEnded` →
+`InputHooks.WindowMoveSizeEndedObserved` (raised for EVERY move/size loop of the window, edge resizes included —
+a subscriber that did not start one ignores it). Never coalesced; not a pointer event (no per-contact slot).
 
 **DPI (foundations / architecture-spec §7):** DIP↔px conversion happens **once** at the pump boundary using the window's post-`WM_DPICHANGED` `Scale`. Everything above the seam is in DIP. The shared transform helper (§5) never re-applies DPI — it composes node-local DIP transforms only.
 
@@ -386,6 +397,29 @@ Tunnel = forward span, bubble = reversed span, enter/leave = common-ancestor dif
 `OnContextRequested` (the `ContextBit` handler column) resolves to **right-button release over the node** ∪ **Menu key (`VK_APPS`) / `Shift`+`F10` while focused** ∪ **touch long-press** (the §7A gesture-arena `Hold` win on a `ContextBit` chain — touch has no right button, so the hold is the only touch path) ∪ **activation of a descendant `ClickRequestsContext` node** (below). The dispatcher walks the hit/focus chain for the nearest enabled `ContextBit` handler (first one wins) and invokes it with a **reused** `ContextRequestEventArgs` (KeyEventArgs-style single instance; a handler copies what it keeps, never holds the reference) carrying the **node-LOCAL `Position`** and a `Trigger` ∈ `{Pointer, Keyboard, Hold, Invoke}`. `Trigger` is the WinUI `ContextRequestedEventArgs.TryGetPosition` distinction made explicit: `Pointer`/`Hold` carry a real point (open a context menu AT it), `Keyboard` carries the node CENTRE and means *no point* (anchor the menu to the element rect + focus its first item), `Invoke` is the Keyboard rule generalized to a pointer origin (*no point*; anchor to the **`Source`** rect; do **NOT** focus the first item — the hand is already on the pointer). The right-button press only records `ContextDown = HitTest(pos)` (never presses/activates/focuses); the release fires only when it lands on the same node. Context hit-testing is the **interaction-gated** walk (`HitTest`, the same one clicks use — `ContextBit` is in its self-hit mask, so a context-only node is a right-click target in its own right), NOT the any-node walk: a handler-less full-bleed layer stacked above the target (the overlay's anchored-popup positioning wrapper) must fall through for right-clicks exactly as it does for left-clicks. The overlay light-dismiss scrim is itself a `ContextBit` node: a right-click on it closes the top overlay and re-fires the request at the same point through the host seam `InputHooks.RedispatchContextAt` → `InputDispatcher.RequestContextAt(Point2)` (hit-testing through the synchronously-unmarked scrim), so an outside right-click both dismisses the open menu and opens the one under the point in a single gesture.
 
 **`ClickRequestsContext` (context-request routing — the declarative "this button opens the ancestor's context menu").** `BoxEl.ClickRequestsContext = true` declares a node a **context-invoker**: an ACTIVATION on it — left-click release-over-same, touch tap, or Space/Enter while focused — re-enters the context-request funnel **starting at that node** (`InputDispatcher.RequestContextFrom`) instead of firing a click. The ordinary §6.5.1 ancestor walk then finds the nearest enabled `ContextBit` handler (self-inclusive — a node that is itself the `ContextBit` owner self-handles), so a track row's "…" button opens the SAME menu, selection semantics, and light-dismiss as a right-click on the row, by construction. Pointer/touch activations dispatch `Trigger = Invoke`; a Space/Enter key-activation dispatches `Trigger = Keyboard` (so a keyboard invocation still focuses the first item). The args gain **`Source`** — the node the request ORIGINATED at (the button); for `Pointer`/`Keyboard`/`Hold` the dispatcher sets `Source == Node` (the `ContextBit` owner the walk stopped at), so rect-anchored opens anchor uniformly on `Source` (same reused-instance/value-copy contract as `Node`). Storage: the prop IMPLIES `ClickBit` (hit-test/press/hover/focusable exactly like `OnClick`; declare `Cursor = Hand` yourself) with a NULL click-handler column, plus the commit-time discriminator **`InteractionInfo.ClickRequestsContextBit = 1u << 16`** — deliberately NOT in `AnyInteractiveMask` or the hit-test self-hit mask (the implied `ClickBit` covers both). Bit 16 is why **`HandlerMask` widened `ushort` → `uint`**: every clear-site must mask with the uint complement `~(uint)Bit` — a ushort-truncated complement stomps bit 16 (the R1 regression, gated by VerticalSlice E2.h). Mutually exclusive with `OnClick` (the prop wins; DEBUG assert on both). This mechanism **supersedes the app-side `RedispatchContextAt` + `OnRealized` node-capture pattern** for "button opens the row menu" — that pattern re-hit-tests a synthetic point through the hooks seam and goes stale on re-render (realization callbacks fire at mount, not per diff); `RedispatchContextAt` itself remains for its one legitimate client, the overlay scrim's dismiss-and-reopen.
+
+#### 6.5.2 Hyperlink span click resolution (rtb-01; P2 "bound spans with index-resolved clicks")
+
+A `SpanTextEl` hit whose node carries `InteractionInfo.SpanLinksBit` runs `HitLinkSpan` first — a rect hit-test
+over the seam-published `SpanRunRects` (`text.md` §8, the LINK-kind fragments) narrowed to spans that are
+`TextSpan.IsHyperlink` (own `OnClick` set, **or** `TextSpan.IsLink` for the bound/index-resolved case, `text.md`
+§8.4). A hit link **IS the click** — same rule as §6.5's activation walk, but the link is the LEAF's action, not
+the nearest `ClickBit` ancestor's: `SpanLinksBit` is deliberately not `ClickBit`, so the ordinary
+activation-owner walk does not also fire (clicking an artist link inside a playable track row must navigate,
+never ALSO play the row). All three dispatcher readers (mouse release, touch tap, and the cursor-resolution
+probe `UpdateSpanCursor`) resolve a hit span in the same order:
+
+1. **`spans[i].OnClick`** — the span's own closure, when set (the static-paragraph case, `WC-SPAN.b`).
+2. **else `SpanTextEl.OnSpanClick(i)`** — the node's index-resolved handler (mount-static, a sparse `SceneStore`
+   table), handed the CLICKED SPAN'S INDEX. This is the bound-row case: a template mints its spans from a reused
+   `SpanBuffer` (`text.md` §8.4) and marks a link span `IsLink = true` instead of allocating a fresh `Action` per
+   link per row per recycle; the ONE `OnSpanClick` closure (built once at template-mount time, like every other
+   bound-row handler) resolves `Item.Peek()` at invocation time — the CURRENT item, not whatever occupied the
+   slot when the template was built.
+
+Both steps are hyperlink-only; a span with neither `OnClick` nor `IsLink` never sets the LINK rect kind in the
+first place (`WriteSpanText`, `text.md` §8.4), so it is never hit-testable as a link and the ordinary
+activation-owner walk (§6.5) reaches its enclosing `ClickBit` ancestor normally.
 
 ### 6.6 DSL framing (corrected — shape-compatible PORT, not "verbatim")
 

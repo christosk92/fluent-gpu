@@ -14,11 +14,11 @@ public enum WakeReasons
     FrameNeeded = 1 << 0,       // _frameNeeded (input/resize/explicit wake pending)
     RuntimePending = 1 << 1,    // _runtime.HasPending (scheduled render-effects)
     DynamicText = 1 << 2,       // _scene.HasDynamicText (FPS/draw-count HUD strings)
-    Anim = 1 << 3,              // _anim.HasActive (transform/opacity/bounds tracks)
+    Anim = 1 << 3,              // an AnimEngine row is DUE now (NextDueMs <= 0) — a row paced at a slower cadence sets no bit until its next edge; the host shapes the wait from NextDueMs instead
     Interact = 1 << 4,          // _interact.HasActive (eased hover/press)
     ScrollAnim = 1 << 5,        // _scrollAnim.HasActive (smooth scroll + scrollbar fade)
     Repeat = 1 << 6,            // _repeat.HasActive (RepeatButton auto-repeat)
-    Caret = 1 << 7,             // _caretBlinker.HasActive (focused-editor caret blink)
+    Caret = 1 << 7,             // the focused-editor caret blink is DUE now (CaretBlinker.NextDueMs <= 0); between edges it shapes the wait, not the mask
     BrushAnims = 1 << 8,        // _scene.HasBrushAnims (implicit BrushTransition)
     ImagesPending = 1 << 9,     // device-side texture uploads/copies still need a submit
     ImageCrossfades = 1 << 10,  // _images.HasActiveCrossfades (reveal fades in flight)
@@ -26,7 +26,7 @@ public enum WakeReasons
     DragDropWork = 1 << 12,     // _dispatcher.Drag.HasActiveWork || _dispatcher.DragDrop.HasActiveWork (E5 easing/edge-scroll)
     DragActive = 1 << 13,       // _dispatcher.Drag.IsActive (E5 reorder dwell keep-alive)
     GestureHold = 1 << 14,      // _dispatcher.HasArmedHold (§7A touch long-press timer keep-alive on a stationary held finger)
-    PopupAnim = 1 << 15,        // a windowed-popup desktop-acrylic open reveal (CompositionBackdrop) is mid-animation — keep presenting so its per-frame clip inset advances to settle
+    PopupAnim = 1 << 15,        // a windowed popup is mid-open-reveal (CompositionBackdrop) OR still owes its FIRST content present (ISwapchain.HasPresentedContent false — its window is hidden waiting for that paint) — keep presenting until both settle
     TouchPress = 1 << 16,       // delayed 100ms pressed visual for touch inside a scrollable viewport
     VideoPresenting = 1 << 17,  // retained diagnostic bit; native video presentation no longer drives the host cadence
     Timer = 1 << 18,            // a HostTimerQueue timer is DUE this frame (UseTimeout/UseInterval/UseDebouncedValue/UseThrottledValue) — a pending-but-future timer sets NO bit (it only shapes RecommendedWaitMs, so the loop still idles)
@@ -44,23 +44,39 @@ public enum WakeReasons
 }
 
 /// <summary>
-/// FG_WAKE_DIAG=1: once-per-second stderr attribution of WHY the frame loop stays awake — the smoking gun behind a
-/// process that never idles. Records the <see cref="WakeReasons"/> mask of every awake frame; reports per-reason
-/// kept-awake counts, SOLE-reason counts (frames where exactly one bit was set — the cleanest attribution), the
-/// current consecutive-awake streak, seconds since the loop last went fully idle, frames spent minimized, and a
-/// reconcile/layout/record-only work split. Zero overhead when the flag is off (the host gates every call on the
-/// cached <c>s_wakeDiag</c> bool). Reused buffers; the once-per-second report allocates one StringBuilder line.
+/// ALWAYS-ON attribution of WHY the frame loop stays awake — the smoking gun behind a process that never idles.
+/// Records the <see cref="WakeReasons"/> mask of every awake frame and emits one <c>[wake]</c> line per
+/// <see cref="ReportSeconds"/> through <see cref="FluentGpu.Foundation.Diag.Line"/>: the observed frame rate,
+/// per-reason kept-awake counts, SOLE-reason counts (frames where exactly one bit was set — the cleanest
+/// attribution), the consecutive-awake streak, seconds since the loop last went fully idle, frames spent minimized,
+/// and a reconcile/layout/record-only work split.
+///
+/// <para>This used to be <c>FG_WAKE_DIAG=1</c> to stderr once a second. That is exactly the shape this codebase has
+/// learned not to ship: "the loop is pinned at panel rate and nothing in the log says which term holds it" is
+/// unanswerable after the fact, and a switch the operator never knew to set is no better than no instrument at all —
+/// the same lesson as the compositor-clock latch, which logged at Debug and was dropped
+/// (<c>docs/plans/wavee/scroll-feel-investigation-2026-09-10.md</c> §3.4). The cost is one
+/// <c>ComputeWakeReasons()</c> per frame (a few dozen field reads and bitwise ORs, no allocation) plus one reused
+/// StringBuilder line every 30 s, which respects the "never per-frame" cadence contract on <c>Diag.Line</c>.</para>
 /// </summary>
 internal sealed class WakeDiagnostics
 {
+    /// <summary>Census window. 30 s rather than 1 s: two lines a minute is a log an operator can send after an
+    /// intermittent "it went bad", and a term that holds the loop awake holds it for far longer than one window.</summary>
+    private const double ReportSeconds = 30.0;
+
     // Per-reason awake-frame counts this window, indexed by bit position (0..ReasonCount-1).
-    private const int ReasonCount = 26;
+    // MUST cover every bit in WakeReasons. This was 26 while the enum already had 28, so scrollProducer and
+    // textRepaintPending — a frame-aligned scroll producer and a deferred glyph-atlas flush, EITHER of which can hold
+    // the loop at panel rate — were silently absent from every report this instrument ever printed.
+    private const int ReasonCount = 28;
     private static readonly string[] s_reasonNames =
     [
         "frameNeeded", "runtimePending", "dynamicText", "anim", "interact", "scrollAnim", "repeat", "caret",
         "brushAnims", "imagesPending", "imageCrossfades", "orphans", "dragDropWork", "dragActive", "gestureHold",
         "popupAnim", "touchPress", "videoPresenting", "timer", "warmCadence", "imageReady", "bakedBlurPending",
         "frameClockPoller", "videoPumpPending", "warmingVirtuals", "budgetDeferredVirtuals",
+        "scrollProducer", "textRepaintPending",
     ];
 
     private readonly long[] _reasonFrames = new long[ReasonCount];   // frames where reason i kept the loop awake
@@ -72,9 +88,16 @@ internal sealed class WakeDiagnostics
     private long _layoutFrames;       // awake frames that ran layout
     private long _recordOnlyFrames;   // awake frames that neither reconciled nor laid out (compositor-only)
 
+    private long _skipMisses;         // maybe-unchanged frames whose draw-list hash missed the elision baseline
+    private readonly System.Text.StringBuilder _sb = new(512);   // reused: no per-window buffer allocation
+
     private int _awakeStreak;         // consecutive awake frames (reset when the loop last saw None)
     private long _lastIdleTicks;      // timestamp of the last fully-idle observation (seconds-since-idle base)
     private long _windowStartTicks;
+
+    /// <summary>A maybe-unchanged frame failed the draw-list-hash elision check and submitted after all. Folded into
+    /// the census instead of a per-occurrence stderr line: it is a rate, not an event.</summary>
+    public void NoteSkipMiss() => _skipMisses++;
 
     /// <summary>Record one frame's wake mask + classification. <paramref name="reasons"/> is the mask the loop
     /// computed; <paramref name="awake"/> is whether the frame actually did work (a frame can run for a completed
@@ -114,20 +137,25 @@ internal sealed class WakeDiagnostics
         }
     }
 
-    /// <summary>Emit the once-per-second line if a second has elapsed, then reset the window. Cheap timestamp check
-    /// otherwise. Call once per frame from the host (only when the flag is on).</summary>
+    /// <summary>Emit the census line if the window has elapsed, then reset it. Cheap timestamp check otherwise.
+    /// Call once per frame from the host.</summary>
     public void MaybeReport()
     {
         long now = Stopwatch.GetTimestamp();
         if (_windowStartTicks == 0) { _windowStartTicks = now; _lastIdleTicks = now; return; }
         double sec = (now - _windowStartTicks) / (double)Stopwatch.Frequency;
-        if (sec < 1.0) return;
+        if (sec < ReportSeconds) return;
 
         double idleSec = (now - _lastIdleTicks) / (double)Stopwatch.Frequency;
-        var sb = new System.Text.StringBuilder(256);
+        var sb = _sb;
+        sb.Clear();
+        // fps is the headline — "the loop ran at panel rate for 30 s" is the symptom; the kept/sole lists below are
+        // the answer to "which term did that", which is the whole reason this instrument exists.
         sb.Append(CultureInfo.InvariantCulture,
-            $"[wakediag] run {_framesRun} rendered {_framesRendered} | reconciled {_reconciledFrames} layout {_layoutFrames} recordOnly {_recordOnlyFrames}");
-        sb.Append(CultureInfo.InvariantCulture, $" | streak {_awakeStreak} idleAgo {idleSec:0.0}s minimized {_framesMinimized}");
+            $"[wake] {sec:0.0}s fps={(sec > 0 ? _framesRun / sec : 0):0.0} run={_framesRun} rendered={_framesRendered}");
+        sb.Append(CultureInfo.InvariantCulture,
+            $" | reconciled={_reconciledFrames} layout={_layoutFrames} recordOnly={_recordOnlyFrames} skipMiss={_skipMisses}");
+        sb.Append(CultureInfo.InvariantCulture, $" | streak={_awakeStreak} idleAgo={idleSec:0.0}s minimized={_framesMinimized}");
 
         sb.Append(" | kept:");
         for (int i = 0; i < ReasonCount; i++)
@@ -139,10 +167,11 @@ internal sealed class WakeDiagnostics
             if (_soleFrames[i] > 0) { sb.Append(CultureInfo.InvariantCulture, $" {s_reasonNames[i]}={_soleFrames[i]}"); anySole = true; }
         if (!anySole) sb.Append(" none");
 
-        Console.Error.WriteLine(sb.ToString());
+        FluentGpu.Foundation.Diag.Line(sb.ToString());
 
         Array.Clear(_reasonFrames);
         Array.Clear(_soleFrames);
+        _skipMisses = 0;
         _framesRun = 0;
         _framesRendered = 0;
         _framesMinimized = 0;

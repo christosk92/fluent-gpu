@@ -1,4 +1,5 @@
-﻿using System.Buffers;
+﻿using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -21,7 +22,7 @@ namespace FluentGpu.Reconciler;
 /// <see cref="ForEl"/>) are effects too. The keyed positional+type diff is retained as the STRUCTURAL engine (used on
 /// re-render and behind For/Show); a reused component on a parent re-render is a no-op (it is autonomous).
 /// </summary>
-public sealed class TreeReconciler
+public sealed partial class TreeReconciler
 {
     private readonly SceneStore _scene;
     private readonly StringTable _strings;
@@ -33,7 +34,7 @@ public sealed class TreeReconciler
     // bindings deliberately stay NODE-owned (_nodeBindings, disposed at node unmount) — a bind created during a render
     // outlives that render and can die with its node WITHOUT the component unmounting (Show/For swaps, KeepAlive
     // eviction), so it must not hang off the component scope. G4c's per-component props signal will hang off Scope too.
-    private sealed class CompEntry { public Component Comp = null!; public Element? Rendered; public Type Type = null!; public Effect? Effect; public ReactiveScope? Scope; public bool Parked; public bool ExitFrozen; public bool DeferredRender; public bool QueuedReplay; public Signal<bool>? ActiveSig; public Signal<object?>? PropsSig; public SkeletonStyle? DerivedSkeletonStyle; }
+    private sealed class CompEntry { public Component Comp = null!; public Element? Rendered; public Type Type = null!; public Effect? Effect; public ReactiveScope? Scope; public bool Parked; public bool ExitFrozen; public bool DeferredRender; public bool QueuedReplay; public Signal<bool>? ActiveSig; public Signal<object?>? PropsSig; public SkeletonStyle? DerivedSkeletonStyle; public bool Hidden; }
     private readonly Dictionary<NodeHandle, CompEntry> _comps = new();
     private readonly Dictionary<Component, NodeHandle> _anchorOf = new();
     private readonly List<Component> _live = new();
@@ -73,6 +74,15 @@ public sealed class TreeReconciler
         // ONE batch per frame (the host calls realize up to ~5x/frame: pre-layout + the 2-pass post-layout loop + the
         // 2-pass scroll catch-up) so the spread is per-FRAME, not per-call.
         public bool Warming; public int LastGrowEpoch = -1;
+        // What ONE row of THIS viewport actually costs to materialize, measured on its own grows and folded through
+        // ColdRealizeRamp.Measure* (pessimistic blend). Both start unmeasured: the first grow charges the node budget
+        // row-by-row (ColdRealizeRamp.CanCreateAnother) precisely because there is nothing to estimate from yet, and
+        // every grow after it is sized from these two. Per-viewport, not global: a track row and a sidebar row are not
+        // the same row, and the same track row is ~10x cheaper once the page's code paths are warm.
+        public int NodesPerRow; public float GrowMsPerRow;
+        // Rows this viewport created in the frame currently being measured — see BeginGrowMeasurement/SettleGrowMeasurement.
+        // Non-zero only between a grow and the end of that frame's flush section.
+        public int PendingGrowRows;
         // E4 steady-scroll realize budget: true while this viewport's overscan is only PARTIALLY realized because the
         // per-frame row budget was exhausted (or a nested-rail mount deferred its overscan). The window's VISIBLE band is
         // always fully realized; only the overscan halo is spread across frames. Tracked so the host stays awake until caught up.
@@ -99,18 +109,104 @@ public sealed class TreeReconciler
     }
     private readonly Dictionary<NodeHandle, VirtualEntry> _virtuals = new();
 
-    // Cold-realize stagger plumbing. FrameEpoch is bumped once per host Paint; ColdRealizeRowsPerFrame is the per-frame
-    // grow budget. _warmingCount is an O(1) census so the host can keep the loop awake until every list finishes warming.
-    // DISABLED (int.MaxValue = no stagger): a cold list realizes its whole initial window in the flush that binds it,
-    // instead of growing 4 rows a frame. The stagger was protecting the first paint of a long list, but it is also the
-    // largest single contributor to navigation feeling slow — a 30-row screenful took ~8 frames to fill, and at the
-    // 30 Hz ambient cap that is a quarter-second of a visibly half-built page. Not 0: the guards below are `>=` and a
-    // literal 0 would mean "never realize a row". Nor int.MaxValue: the call sites below compute
-    // `slots.Count + ColdRealizeRowsPerFrame`, which would OVERFLOW to negative and clamp the target back down to
-    // minVisibleTarget — the exact opposite of "no stagger". A million is unreachable as a row count and safe to add to.
-    private const int ColdRealizeRowsPerFrame = 1_000_000;
+    // Cold-realize ramp plumbing. FrameEpoch is bumped once per host Paint (so a grow is capped to one batch per FRAME
+    // even though the realize walk runs several times per paint); the per-frame grow SIZE is decided by the pure
+    // ColdRealizeRamp from each viewport's own measured per-row cost. _warmingCount is an O(1) census so the host can
+    // keep the loop awake (WakeReasons.WarmingVirtuals, which is also in ModalLoopEssentialWake) until every list
+    // finishes warming — the ramp's continuation is the engine's own dirty-flag + wake path, never a timer.
+    //
+    // HISTORY, so it is not re-litigated a third time. This was originally a flat 4 rows/frame, then disabled outright
+    // (a 1,000,000 sentinel) because a fixed rate made a 30-row screenful take ~8 frames and, whenever the loop fell to
+    // the 30 Hz ambient cap, a quarter-second of visibly half-built page. Both extremes were wrong for the same reason:
+    // the rate was a CONSTANT. It is now measured and paid per frame — a light row's whole window still lands in the
+    // mount frame (the node budget covers it, so those paths are byte-identical to the disabled state), a heavy row's
+    // window fills over a few frames at the display rate (the warming-virtuals wake bit is due-now work, so the loop
+    // runs at the display rate for exactly this window), and the ramp accelerates as the page warms.
     public int FrameEpoch;
+    /// <summary>Open the window the per-row cost is measured over: the host's whole flush section, which is where a
+    /// freshly realized row's REAL work happens (the component render its mount schedules). Called once per paint,
+    /// before the hosted flush; <see cref="SettleGrowMeasurement"/> closes it. Cheap and unconditional — one QPC read
+    /// and one field, on a path that is about to run the frame's reconcile.</summary>
+    public void BeginGrowMeasurement()
+    {
+        if (_growMeasuring) SettleGrowMeasurement();   // defensive: never let an unclosed window leak into the next frame
+        _growMeasured.Clear();
+        _growMeasureRows = 0;
+        _growMeasureNodes0 = MountedNodes;
+        _growMeasureTicks0 = Stopwatch.GetTimestamp();
+        _growMeasuring = true;
+    }
+
+    /// <summary>Close the measurement window and fold what the frame actually cost into the per-row estimate of every
+    /// viewport that grew in it. See the <c>_growMeasured</c> field comment for why attribution is per frame.</summary>
+    public void SettleGrowMeasurement()
+    {
+        if (!_growMeasuring) return;
+        _growMeasuring = false;
+        int rows = _growMeasureRows;
+        if (rows <= 0 || _growMeasured.Count == 0) { _growMeasured.Clear(); return; }
+
+        int nodes = MountedNodes - _growMeasureNodes0;
+        float ms = (float)((Stopwatch.GetTimestamp() - _growMeasureTicks0) * 1000.0 / Stopwatch.Frequency);
+        foreach (var entry in _growMeasured)
+        {
+            // Every grown row in the frame is charged the same average — the frame's cost over the frame's rows —
+            // then scaled back to THIS viewport's row count, which is just the average again. Written out because the
+            // per-viewport blend below is what differs: a sidebar row and a track row keep separate estimates.
+            entry.NodesPerRow = ColdRealizeRamp.MeasureNodesPerRow(nodes * entry.PendingGrowRows / rows, entry.PendingGrowRows, entry.NodesPerRow);
+            entry.GrowMsPerRow = ColdRealizeRamp.MeasureMsPerRow(ms * entry.PendingGrowRows / rows, entry.PendingGrowRows, entry.GrowMsPerRow);
+            _priorNodesPerRow = ColdRealizeRamp.MeasureNodesPerRow(nodes, rows, _priorNodesPerRow);
+            _priorMsPerRow = ColdRealizeRamp.MeasureMsPerRow(ms, rows, _priorMsPerRow);
+            entry.PendingGrowRows = 0;
+        }
+        _growMeasured.Clear();
+    }
+
+    /// <summary>Give a viewport that has never measured a row an opening estimate, so its FIRST grow — the one there
+    /// is often no second grow to correct — is bounded by something rather than by nothing. The prior is this
+    /// process's own running per-row cost once any viewport has measured one (a track row, a sidebar row and a shelf
+    /// card are the same order of magnitude, and the same machine builds all three), and
+    /// <see cref="ColdRealizeRamp.UnmeasuredNodesPerRow"/> before that. Applied only to a viewport that opted into the
+    /// ramp: a list that never asked to be staggered is not slowed by a guess.</summary>
+    private void SeedRowCostPrior(VirtualEntry entry)
+    {
+        if (entry.NodesPerRow > 0) return;
+        entry.NodesPerRow = _priorNodesPerRow > 0 ? _priorNodesPerRow : ColdRealizeRamp.UnmeasuredNodesPerRow;
+        if (entry.GrowMsPerRow <= 0f && _priorMsPerRow > 0f) entry.GrowMsPerRow = _priorMsPerRow;
+    }
+
+    /// <summary>Record that <paramref name="rows"/> rows were freshly created for this viewport in the frame being
+    /// measured, so the flush section's cost can be attributed back to them when it closes.</summary>
+    private void NoteGrow(VirtualEntry entry, int rows)
+    {
+        if (rows <= 0 || !_growMeasuring) return;
+        if (entry.PendingGrowRows == 0) _growMeasured.Add(entry);
+        entry.PendingGrowRows += rows;
+        _growMeasureRows += rows;
+    }
+
     private int _warmingCount;
+    // ── deferred grow measurement (E4d) ─────────────────────────────────────────────────────────────────────────────
+    // What a row COSTS is not what the realize walk spends. A Wavee track row's realize walk mounts one component node
+    // and returns; the ~90 nodes and the render work land in the reactive flush that mount schedules, right after. So a
+    // budget charged against the WALK reads a component row as free, and the ramp lets a whole 30-row viewport through
+    // in one paint — which is exactly the cold-nav spike (census: vr=1.1ms, rx=15.0ms, mounts=1885, BoundRowContent×30).
+    //
+    // The measurement is therefore taken across the host's whole flush SECTION (hosted flush → re-realize → rebind
+    // quiescence), which is where a row's real cost lands, and folded when that section ends. Attribution is per FRAME,
+    // not per subtree: the delta is split across every row grown anywhere in the frame. That over-charges a cold nav,
+    // where page chrome mounts in the same section — deliberately. The bias is the ramp's stated one (an over-estimate
+    // costs one extra ramp frame; an under-estimate spends a frame it does not have), it decays geometrically through
+    // ColdRealizeRamp's blend as later frames measure rows alone, and MinRowsPerFrame keeps progress guaranteed.
+    private readonly List<VirtualEntry> _growMeasured = new();
+    private int _growMeasureRows;
+    private int _growMeasureNodes0;
+    private long _growMeasureTicks0;
+    private bool _growMeasuring;
+    // This process's running per-row cost across every viewport that has measured one — the opening estimate handed to
+    // a viewport that has not (SeedRowCostPrior). Same pessimistic blend as the per-viewport terms.
+    private int _priorNodesPerRow;
+    private float _priorMsPerRow;
     /// <summary>True while any bound virtual list is still spreading its initial window across frames, or a just-un-parked
     /// keep-alive subtree is still dripping its deferred renders — the host ORs this into its wake mask so the loop keeps
     /// running until both finish (neither is a re-render or an anim).</summary>
@@ -163,6 +259,33 @@ public sealed class TreeReconciler
     // Resolves through the SAME override as the floor: a gate that pins the budget gets ceiling == floor ⇒ zero
     // velocity room ⇒ byte-identical pre-E4b behavior, with no change needed on the test side.
     private int SteadyRealizeCeiling => SteadyRealizeBudgetForTest ?? SteadyRealizeRowsCeiling;
+    /// <summary>The steady pool counted in ROWS is a proxy exactly the way the cold ramp's was: 12 rows is a
+    /// comfortable frame of 40 px probe rows and nine frame budgets of Wavee track rows (~90 scene nodes and ~50 bound
+    /// channels each). So the flat pool is capped by what THIS viewport measured one of its own rows to cost, through
+    /// the same <see cref="ColdRealizeRamp.NodeBudget"/> the ramp is sized from.
+    /// <para>NODES only, never the ramp's measured milliseconds: <c>GrowMsPerRow</c> is a warm-up-state reading that
+    /// stays fresh only while a viewport is ramping, and a one-shot <c>StaggerColdRealize</c> stops refreshing it after
+    /// the cold mount. Feeding that stale ~2.4 ms/row cold figure into a warm list's steady budget would pin it at one
+    /// row per frame forever. Node count per row is structural — it is the same number cold and warm.</para>
+    /// <para>Unmeasured (a viewport that has never grown, every headless probe) leaves the pool untouched, so the
+    /// constants above still describe the default path exactly; and a gate that pins
+    /// <see cref="SteadyRealizeBudgetForTest"/> is never narrowed — the pin IS the budget under test.</para></summary>
+    private int SteadyRealizeRowsFor(VirtualEntry entry, bool bound)
+    {
+        int flat = SteadyRealizeBudget;
+        if (SteadyRealizeBudgetForTest.HasValue) return flat;
+        int nodesPerRow = entry.NodesPerRow;
+        // An UNMEASURED bound viewport is not a free one. Its per-row cost arrives a frame late by construction (the
+        // measurement spans the flush the row's mount schedules — BeginGrowMeasurement), and the frame that matters
+        // most is the one before that: the paint right after a mount, where the at-rest catch-up wants to finish the
+        // whole halo. Treating "not yet known" as "no constraint" is what let that frame land 39 heavy rows at once.
+        // Bound only: the non-bound RenderItem path builds its elements IN the walk, so there is no deferred cost to
+        // account for and its existing budget is already charged against the work it actually does.
+        if (nodesPerRow <= 0 && bound)
+            nodesPerRow = _priorNodesPerRow > 0 ? _priorNodesPerRow : ColdRealizeRamp.UnmeasuredNodesPerRow;
+        if (nodesPerRow <= 0) return flat;
+        return Math.Min(flat, ColdRealizeRamp.RowsPerFrame(nodesPerRow, msPerRow: 0f));
+    }
     private int _frameRealizeBudgetUsed;
     private int _budgetFrameEpoch = -1;
     private int _budgetDeferredCount;   // O(1) census of viewports whose overscan is mid-spread (mirrors _warmingCount)
@@ -290,11 +413,29 @@ public sealed class TreeReconciler
     private float _themeTransitionMs = float.NaN;        // live-re-theme cross-fade duration; armed only during a RethemeAll flush
     private readonly List<CompEntry> _rethemeScratch = new();   // snapshot of _comps.Values for RethemeAll (defensive vs reentrancy)
 
-    // FG_RENDER_CENSUS=1: per-frame type histogram of RunComponent/RunRoot, dumped once when FlushMs spikes. Off = null
-    // dict + one branch; never allocates on the hot path when the env flag is unset.
-    private static readonly bool s_renderCensus = Diag.EnvFlag("FG_RENDER_CENSUS");
-    private Dictionary<string, int>? _renderCensus;
-    private readonly List<KeyValuePair<string, int>> _censusScratch = new(32);
+    /// <summary>Per-frame component census (type → renders, render/reconcile ticks, UI-thread bytes), the answer to
+    /// "WHICH components made this frame slow and WHO allocated". Host-set (an app that wants every slow frame
+    /// attributed in its own log turns it on for the whole session — there is no env switch). Cost while on: one
+    /// dictionary op per component render on the cached <c>GetType().Name</c>; off = a null dict and one branch.</summary>
+    public bool RenderCensusEnabled { get; set; }
+    /// <summary>Dump the census for any frame that rendered at least this many components (default 25) even when the
+    /// flush itself stayed under budget, so a probe can see WHICH components a single recycled row re-renders.</summary>
+    public int RenderCensusMinComps { get; set; } = 25;
+    private long _lastChurnDumpTicks;
+    // Per component TYPE this frame: renders, ticks inside Render (element construction + hooks), ticks inside the
+    // synchronous child reconcile that follows, and UI-thread bytes across both — so a census line says not only WHO
+    // re-rendered but whether the cost is building the element tree or diffing it into the scene.
+    private struct CensusEntry { public int Count; public long RenderTicks, ReconcileTicks, Bytes; }
+    // Element-level counters for the same frame (census on only): Update calls, column rewrites (RecordChanged true),
+    // child plans begun, and node mounts — "how many scene nodes did this frame's renders actually touch".
+    private int _censusUpdates, _censusWrites, _censusPlans, _censusMounts;
+    /// <summary>ALWAYS-ON monotonic count of scene nodes this reconciler has mounted (one int increment in
+    /// <see cref="Mount"/>, no allocation, no gate — unlike <c>_censusMounts</c>, which only counts while the render
+    /// census is on). The cold-realize ramp charges its node budget against the DELTA across one grow, so it cannot
+    /// depend on a diagnostic being enabled. Wraps harmlessly: the ramp only ever reads a difference.</summary>
+    internal int MountedNodes;
+    private Dictionary<string, CensusEntry>? _renderCensus;
+    private readonly List<KeyValuePair<string, CensusEntry>> _censusScratch = new(32);
     private readonly StringBuilder _censusSb = new(256);
     /// <summary>Last spike dump line (empty when none this process). Probes / stderr consumers can peek it.</summary>
     public string LastRenderCensusDump { get; private set; } = "";
@@ -318,35 +459,72 @@ public sealed class TreeReconciler
     }
 
     /// <summary>The per-paint reconciler tick. Drips the budgeted un-park replay queue (BEFORE the frame's reactive
-    /// flush, so the drained batch renders in this same frame) and clears the per-frame render-type histogram (the
-    /// histogram half is a no-op unless <c>FG_RENDER_CENSUS=1</c>). Call at Paint start.</summary>
+    /// flush, so the drained batch renders in this same frame), releases image-swap crossfades whose window has landed,
+    /// and clears the per-frame render-type histogram (the histogram half is a no-op unless
+    /// <see cref="RenderCensusEnabled"/>). Call at Paint start.</summary>
     public void BeginRenderCensus()
     {
         DrainDeferredReplays();
-        if (!s_renderCensus) return;
-        _renderCensus ??= new Dictionary<string, int>(64, StringComparer.Ordinal);
+        if (_imageSwaps.Count > 0) SweepImageSwaps();   // release image-swap crossfades whose window has landed
+        NodeBindingFireCount = 0;
+        NodeBindingWriteCount = 0;
+        if (!RenderCensusEnabled) { _renderCensus = null; return; }
+        _renderCensus ??= new Dictionary<string, CensusEntry>(64, StringComparer.Ordinal);
         _renderCensus.Clear();
+        _censusUpdates = _censusWrites = _censusPlans = _censusMounts = 0;
     }
 
-    private void NoteRenderCensus(Component comp)
+    /// <summary>P0 always-on counter: every bound-channel effect PROLOGUE this frame (mount runNow + every re-fire from
+    /// the reactive flush), incremented as the first statement of each binding body in <see cref="BindNode"/> — fires
+    /// even when the effect's own equality gate refuses to write. Reset at <see cref="BeginRenderCensus"/> (Paint start).
+    /// Surfaced into <c>FrameStats.BindingFires</c>.</summary>
+    public int NodeBindingFireCount { get; private set; }
+
+    /// <summary>P0 always-on counter: binding effects this frame that actually wrote a scene column (past every
+    /// equality gate) — a subset of <see cref="NodeBindingFireCount"/>. An UNGATED channel (HoverFill/PressedFill/
+    /// BorderColor/Corners/TextEl.Color/ImageEl.Placeholder/IconLayerEl.Tint today — see BindNode) writes on every
+    /// fire, so fire==write there until a later phase gates it. Reset at <see cref="BeginRenderCensus"/>. Surfaced
+    /// into <c>FrameStats.BindingWrites</c>.</summary>
+    public int NodeBindingWriteCount { get; private set; }
+
+    private void NoteRenderCensus(Component comp, long renderTicks, long reconcileTicks, long bytes)
     {
         if (_renderCensus is null) return;   // census off (the steady/shipping case) — no GetType().Name work below
         string typeName = comp.GetType().Name;
-        _renderCensus.TryGetValue(typeName, out int n);
-        _renderCensus[typeName] = n + 1;
+        _renderCensus.TryGetValue(typeName, out var e);
+        e.Count++; e.RenderTicks += renderTicks; e.ReconcileTicks += reconcileTicks; e.Bytes += bytes;
+        _renderCensus[typeName] = e;
     }
 
-    /// <summary>If this frame's flush is a hitch (FlushMs ≥ 12 or comps ≥ 25), emit one census line to <see cref="Diag.Sink"/>
-    /// / stderr and stash it in <see cref="LastRenderCensusDump"/>. Returns the line (or null when not a spike / census off).</summary>
-    public string? MaybeDumpRenderCensus(double flushMs, double reactiveFlushMs, double virtualRealizeMs, int comps, bool scrollActive)
+    /// <summary>If this frame's flush is over <paramref name="budgetMs"/> (the host passes the panel's refresh interval)
+    /// or rendered ≥ <see cref="RenderCensusMinComps"/> components, build one census line — the top-12 types by
+    /// render+reconcile time, then the top-4 by UI-thread bytes — stash it in <see cref="LastRenderCensusDump"/> and
+    /// forward it to <see cref="Diag.Sink"/>. Returns the line (null when not a spike / census off). The host carries it
+    /// in <c>FrameStats.Census</c>; the app's own frame log is where it lands.</summary>
+    public string? MaybeDumpRenderCensus(double budgetMs, double flushMs, double reactiveFlushMs, double virtualRealizeMs, int comps, bool scrollActive)
     {
         if (_renderCensus is null) return null;
-        if (flushMs < 12.0 && comps < 25) { LastRenderCensusDump = ""; return null; }
+        // Spike-gated as before, PLUS a once-a-second sample of any frame that rendered anything at all. A settled page
+        // is supposed to render nothing: the frames that quietly re-render a handful of components at 120 Hz never trip
+        // the spike gate, and they are where a session's managed allocation actually goes (tens of KB per frame, every
+        // frame, is what turns into a gen1 pause twice a second). Without this line that churn is invisible — the only
+        // evidence is an allocation total with nothing to attribute it to.
+        bool spike = flushMs >= budgetMs || comps >= RenderCensusMinComps;
+        if (!spike)
+        {
+            long nowTicks = Stopwatch.GetTimestamp();
+            if (comps <= 0 || nowTicks - _lastChurnDumpTicks < Stopwatch.Frequency) { LastRenderCensusDump = ""; return null; }
+            _lastChurnDumpTicks = nowTicks;
+        }
         _censusScratch.Clear();
         foreach (var kv in _renderCensus) _censusScratch.Add(kv);
-        _censusScratch.Sort(static (a, b) => b.Value.CompareTo(a.Value));
+        _censusScratch.Sort(static (a, b) => (b.Value.RenderTicks + b.Value.ReconcileTicks).CompareTo(a.Value.RenderTicks + a.Value.ReconcileTicks));
         _censusSb.Clear();
         _censusSb.Append("[render-census] flush=").Append(flushMs.ToString("0.0", CultureInfo.InvariantCulture))
+            .Append("ms nodes(upd=").Append(_censusUpdates.ToString(CultureInfo.InvariantCulture))
+            .Append(" wr=").Append(_censusWrites.ToString(CultureInfo.InvariantCulture))
+            .Append(" plans=").Append(_censusPlans.ToString(CultureInfo.InvariantCulture))
+            .Append(" mounts=").Append(_censusMounts.ToString(CultureInfo.InvariantCulture)).Append(')')
             .Append("ms rx=").Append(reactiveFlushMs.ToString("0.0", CultureInfo.InvariantCulture))
             .Append(" vr=").Append(virtualRealizeMs.ToString("0.0", CultureInfo.InvariantCulture))
             .Append(" comps=").Append(comps.ToString(CultureInfo.InvariantCulture))
@@ -357,12 +535,28 @@ public sealed class TreeReconciler
         for (int i = 0; i < n; i++)
         {
             if (i > 0) _censusSb.Append(',');
-            _censusSb.Append(_censusScratch[i].Key).Append('×').Append(_censusScratch[i].Value.ToString(CultureInfo.InvariantCulture));
+            var e = _censusScratch[i].Value;
+            double toMs = 1000.0 / Stopwatch.Frequency;
+            _censusSb.Append(_censusScratch[i].Key).Append('×').Append(e.Count.ToString(CultureInfo.InvariantCulture))
+                .Append("(r=").Append((e.RenderTicks * toMs).ToString("0.00", CultureInfo.InvariantCulture))
+                .Append(" c=").Append((e.ReconcileTicks * toMs).ToString("0.00", CultureInfo.InvariantCulture))
+                .Append(" a=").Append((e.Bytes / 1024).ToString(CultureInfo.InvariantCulture)).Append("K)");
+        }
+        // The same frame's allocators, ordered by bytes: a cheap-to-render component that allocates 6 MB is the memory
+        // story even when it is not the time story.
+        _censusScratch.Sort(static (a, b) => b.Value.Bytes.CompareTo(a.Value.Bytes));
+        int m = Math.Min(4, _censusScratch.Count);
+        _censusSb.Append(" bytes=");
+        if (m == 0 || _censusScratch[0].Value.Bytes <= 0) _censusSb.Append("(none)");
+        for (int i = 0; i < m && _censusScratch[i].Value.Bytes > 0; i++)
+        {
+            if (i > 0) _censusSb.Append(',');
+            var e = _censusScratch[i].Value;
+            _censusSb.Append(_censusScratch[i].Key).Append('×').Append(e.Count.ToString(CultureInfo.InvariantCulture))
+                .Append('=').Append((e.Bytes / 1024).ToString(CultureInfo.InvariantCulture)).Append('K');
         }
         string line = _censusSb.ToString();
         LastRenderCensusDump = line;
-        // Always mirror to stderr so FG_FPS_LOG redirects capture spikes even when Diag.Sink is Debug-only (Wavee file default = Info).
-        Console.Error.WriteLine(line);
         if (Diag.Sink is { } sink) sink(line);
         return line;
     }
@@ -385,6 +579,26 @@ public sealed class TreeReconciler
 
     /// <summary>Set by the host; injected into each component so animation hooks can seed tracks on their node.</summary>
     public AnimEngine? Anim { get; set; }
+
+    /// <summary>P3 (Operation ultra-fast GPU engine, virtualization.md §5.5 "Recycle snaps transitions"): a depth
+    /// counter (re-entrancy-safe — always paired via <see cref="PushSuppressBoundTransitions"/> in a <c>using</c>) the
+    /// host sets around <c>FlushRebindsToQuiescence</c> and around slot-creation mounts inside <c>RealizeBoundWindow</c>
+    /// (and its Extended/PersistentPrefix siblings). While &gt; 0, a bound-channel transition seed (BrushFade/spring on
+    /// a bound write) and the P1 <see cref="Element.Visible"/> false→true Enter seed both SNAP instead of animating —
+    /// a recycled slot's freshly-rebound row must not replay a cross-fade/pop for what is, from the app's point of
+    /// view, the SAME persistent row simply pointing at new data. No app code decides "this is a recycle"; the engine
+    /// derives it from where the write physically happens.</summary>
+    public int SuppressBoundTransitions { get; private set; }
+
+    /// <summary>RAII helper for <see cref="SuppressBoundTransitions"/> — <c>using (reconciler.PushSuppressBoundTransitions())</c>.</summary>
+    public SuppressBoundTransitionsScope PushSuppressBoundTransitions() { SuppressBoundTransitions++; return new SuppressBoundTransitionsScope(this); }
+
+    public readonly struct SuppressBoundTransitionsScope : IDisposable
+    {
+        private readonly TreeReconciler _r;
+        internal SuppressBoundTransitionsScope(TreeReconciler r) => _r = r;
+        public void Dispose() => _r.SuppressBoundTransitions--;
+    }
     /// <summary>Set by the host; shared-element (connected-animation) registry. A node carrying <c>Element.MorphId</c> is
     /// registered as a participant here so its art flies between routes (backdrop-effects-animation.md §5.4/§5.6).</summary>
     public ConnectedAnimation? Connected { get; set; }
@@ -490,11 +704,15 @@ public sealed class TreeReconciler
     private void RunRoot(Component root)
     {
         _renderCount++;
-        NoteRenderCensus(root);
+        bool census = _renderCensus is not null;
+        long t0 = 0, b0 = 0;
+        if (census) { t0 = Stopwatch.GetTimestamp(); b0 = GC.GetAllocatedBytesForCurrentThread(); }
         bool prevShape = _layoutShapeMutated;
         _layoutShapeMutated = false;
         Element newRoot = root.RenderWithHooks();
+        long t1 = census ? Stopwatch.GetTimestamp() : 0;
         RenderRootDiff(newRoot);
+        if (census) NoteRenderCensus(root, t1 - t0, Stopwatch.GetTimestamp() - t1, GC.GetAllocatedBytesForCurrentThread() - b0);
         // Same gate as RunComponent: mark the root only when reconcile mutated layout shape.
         if (_layoutShapeMutated && !_scene.Root.IsNull)
             _scene.Mark(_scene.Root, NodeFlags.LayoutDirty);
@@ -620,7 +838,25 @@ public sealed class TreeReconciler
 
     private void Mount(NodeHandle node, Element el)
     {
+        if (_renderCensus is not null) _censusMounts++;
+        MountedNodes++;   // always-on: the cold-realize ramp's node budget is a delta across one grow (see MountedNodes)
         _reconciled = true;
+        // Mount-under-parked-ancestor, for EVERY node kind (not only components). A reactive boundary inside a parked
+        // KeepAlive page still settles while the page is detached — a SkelRegion swapping shimmer→real, a Show/For
+        // flipping, a virtual row realizing — and mounts a fresh subtree. SceneStore.CreateNode zeroes a new node's
+        // flags, so without this the plain wrapper node mounted here would lose the Parked marker and a ComponentEl one
+        // level below would read parked=false from its parent, skip RunComponent's defer, and render its first frame
+        // inside a subtree with no path to the scene root: ResolveContext walks up to the detached page root, finds no
+        // provider, and UseRequiredContext throws (plain UseContext silently returns the default and never subscribes —
+        // the same bug, silent). Marking here is what makes MountComponent's read — and AnimScheduler's per-row parked
+        // seed (it reads this same flag when a track is created) — see the truth. Every mount path parents the node
+        // BEFORE calling Mount (the single-child slots, the keyed diff, the bound/virtual realizers, MountProvider/
+        // MountScroll); only the scene root has no parent, and the null guard covers it. Un-parking clears it: the
+        // SetSubtreeParked(parked:false) walk descends the whole retained subtree, so nodes marked here are unmarked
+        // and their components' deferred renders replayed with the rest of the page.
+        var mountParent = _scene.Parent(node);
+        if (!mountParent.IsNull && (_scene.Flags(mountParent) & NodeFlags.Parked) != 0)
+            _scene.Mark(node, NodeFlags.Parked);
         if (el is ComponentEl ce) { MountComponent(node, ce); return; }
         if (el is ContextProviderEl cp) { MountProvider(node, cp); return; }
         if (el is ScrollEl se) { MountScroll(node, se); return; }
@@ -664,6 +900,7 @@ public sealed class TreeReconciler
     private void Update(NodeHandle node, Element newEl, Element oldEl)
     {
         if (ReferenceEquals(newEl, oldEl)) return;
+        if (_renderCensus is not null) _censusUpdates++;
 
         if (newEl is ComponentEl nce)
         {
@@ -809,7 +1046,7 @@ public sealed class TreeReconciler
         if (BindContract.CompiledIn && BindContract.Enabled && BindFlip(newEl, oldEl) is { } flipped)
             BindContract.Flip(newEl.GetType().Name, flipped);
 
-        if (RecordChanged(newEl, oldEl)) WriteColumns(node, newEl, isMount: false, oldEl);
+        if (RecordChanged(newEl, oldEl)) { if (_renderCensus is not null) _censusWrites++; WriteColumns(node, newEl, isMount: false, oldEl); }
         ReconcileChildren(node, ChildrenOf(newEl), ChildrenOf(oldEl));
     }
 
@@ -926,14 +1163,28 @@ public sealed class TreeReconciler
         InjectContext(comp.Context, node);
         // Mount-under-parked-ancestor: a component can be mounted into an already-parked subtree (a reactive Show/For
         // boundary inside a parked page still fires its effect). It must initialize INACTIVE — seed Parked from the
-        // parent's marker and mark this node too, so the deferred-render gate holds and descendants inherit it.
+        // marker and mark this node too, so the deferred-render gate holds and descendants inherit it. Read THIS node's
+        // flag first (Mount marked it on the way in — the every-kind inheritance above) and fall back to the parent's,
+        // which is what the ReplaceComponent path (a shimmer↔real remount, which calls straight in here without going
+        // through Mount) has to rely on.
         var parent = _scene.Parent(node);
-        bool parked = !parent.IsNull && (_scene.Flags(parent) & NodeFlags.Parked) != 0;
+        bool parked = (_scene.Flags(node) & NodeFlags.Parked) != 0
+                      || (!parent.IsNull && (_scene.Flags(parent) & NodeFlags.Parked) != 0);
+        // P1 presence: unlike Parked, a collapsed ancestor's NodeFlags.Visible is NOT propagated down to fresh
+        // children at mount (the recorder/hit-test walks already early-return the instant THEY hit the collapsed
+        // node — see SceneRecorder.Walk / InputDispatcher.ConsiderContainingScrollers — so descendant bits are
+        // never consulted for paint/hit-test). But a component's render-effect is reconciled independently of that
+        // walk, so a fresh mount under an already-collapsed ancestor (a realized row inside a collapsed section)
+        // must still seed Hidden — walk up (mount-only cost, O(depth)) rather than trust one parent's bit.
+        bool hidden = false;
+        for (var a = node; !a.IsNull; a = _scene.Parent(a))
+            if ((_scene.Flags(a) & NodeFlags.Visible) == 0) { hidden = true; break; }
         var entry = new CompEntry
         {
             Comp = comp,
             Type = ce.ComponentType,
             Parked = parked,
+            Hidden = hidden,
             DerivedSkeletonStyle = ce.DerivedSkeletonStyle,
         };
         if (parked) _scene.Mark(node, NodeFlags.Parked);
@@ -942,8 +1193,9 @@ public sealed class TreeReconciler
         _live.Add(comp);
 
         // The component's per-instance activation signal (UseIsActive), created lazily on first read so a component that
-        // never uses the lifecycle allocates nothing. Initial value = its current attached state (inactive if parked).
-        comp.Context.GetActiveSig = () => entry.ActiveSig ??= new Signal<bool>(!entry.Parked);
+        // never uses the lifecycle allocates nothing. Initial value = its current attached state (inactive if
+        // parked OR presence-hidden — SetSubtreeHidden/Reconciler.Presence.cs folds the same formula on a live flip).
+        comp.Context.GetActiveSig = () => entry.ActiveSig ??= new Signal<bool>(!entry.Parked && !entry.Hidden);
 
         // Re-pushed props channel — seeded BEFORE the first render-effect run so the very first Render sees the props.
         // An IPropsHost ([Props]-generated) component receives them through its typed sink; otherwise we back them with a
@@ -983,15 +1235,21 @@ public sealed class TreeReconciler
         // the debt, so cancel the queue slot (the drain skips a cancelled entry without spending its budget).
         entry.QueuedReplay = false;
         _renderCount++;
-        NoteRenderCensus(entry.Comp);
+        bool census = _renderCensus is not null;
+        long t0 = 0, b0 = 0;
+        if (census) { t0 = Stopwatch.GetTimestamp(); b0 = GC.GetAllocatedBytesForCurrentThread(); }
         if (Diag.Enabled) Diag.Event("render", entry.Comp.GetType().Name);   // who re-rendered (granularity diagnosis)
         var comp = entry.Comp;
         Element newRendered = comp.RenderWithHooks();
         if (entry.DerivedSkeletonStyle is { } skeletonStyle)
             newRendered = SkeletonDeriver.Derive(newRendered, skeletonStyle);
+        long t1 = census ? Stopwatch.GetTimestamp() : 0;
         bool prevShape = _layoutShapeMutated;
         _layoutShapeMutated = false;
         ReconcileSingleChild(node, newRendered, entry.Rendered);
+        // Nested component renders (children mounted/re-rendered inside this reconcile) report their own rows; this
+        // row's reconcile time therefore INCLUDES them — read the per-type numbers as inclusive of the subtree.
+        if (census) NoteRenderCensus(comp, t1 - t0, Stopwatch.GetTimestamp() - t1, GC.GetAllocatedBytesForCurrentThread() - b0);
         MirrorParticipation(node, _scene.FirstChild(node));
         comp.Context.HostNode = _scene.FirstChild(node);
         entry.Rendered = newRendered;
@@ -1350,6 +1608,18 @@ public sealed class TreeReconciler
                 if (!oldActive.Cacheable) state.Entries.Remove(oldKey);
             }
         }
+        else if (state.ActiveKey is null && FrameEpoch > 1)
+        {
+            // FIRST activation of a boundary that appears into an already-presented UI (a freshly opened tab whose first
+            // route IS the destination — the player-bar artist link). There is no outgoing entry, so the switch branch
+            // above never ran and no Enter was seeded: a one-frame hard cut. TransitionFor owns this edge too, with
+            // KeepAliveOptions.FirstActivation as the old token (the recipe is the app's; null ⇒ no entrance). The
+            // gate is the engine's first-frame notion: the host bumps FrameEpoch at the top of every paint, so ≤ 1
+            // means this reconcile runs before or inside the very first paint — the launch page, which nothing was on
+            // screen to transition from, mounts without one (Flutter's Navigator likewise never animates its initial
+            // route; host-less reconcilers never tick FrameEpoch and keep the plain mount).
+            transition = options.TransitionFor?.Invoke(KeepAliveOptions.FirstActivation, token);
+        }
 
         if (!state.Entries.TryGetValue(key, out var entry))
         {
@@ -1583,6 +1853,8 @@ public sealed class TreeReconciler
                 if (active) PinImageNode(node, pendingId);
                 else UnpinImageNode(node, pendingId);
             }
+            // A parked page has nothing on screen to dissolve: finish any swap crossfade instead of parking its pin.
+            if (!active) FinishImageSwap(node);
         }
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
             SetSubtreeResourcesActive(c, active);
@@ -1613,7 +1885,9 @@ public sealed class TreeReconciler
         {
             entry.Parked = parked;
             if (parked) entry.ExitFrozen = false;   // park subsumes freeze; DeferredRender debt carries
-            if (entry.ActiveSig is { } sig) sig.Value = !parked;   // value-gated; flips the UseIsActive memo → UseActivation
+            // P1 presence folds in too: Active is Parked-AND-Hidden-free (SetSubtreeHidden, Reconciler.Presence.cs)
+            // so UseIsActive()/UseInterval auto-pause across EITHER edge without duplicating this formula.
+            if (entry.ActiveSig is { } sig) sig.Value = !parked && !entry.Hidden;   // value-gated; flips the UseIsActive memo → UseActivation
             // Re-parked before its queued replay ran: cancel the queue slot and hand the debt back to DeferredRender, so
             // the NEXT un-park owns it (a parked component must never be scheduled by the drip).
             if (parked && entry.QueuedReplay) { entry.QueuedReplay = false; entry.DeferredRender = true; }
@@ -1730,10 +2004,12 @@ public sealed class TreeReconciler
     // Sole write path for paint.ImageId (media-pipeline.md §hold-last-good). A bare re-key would swap straight onto
     // the new (Pending) entry, dropping the OLD Ready texture the same frame — the placeholder flashes back in.
     // Instead, when the old texture is Ready and the new one is still decoding, HOLD: keep drawing the old id, pin
-    // the new one (so its completion is tracked) under _pendingImageId, and let MarkImageDirty commit the hard cut
-    // once the new entry settles (Ready or Failed) — no fade restart (see ImageCache.SettleReveal). Mount (oldId==0),
-    // a synchronous cache hit, and an instant failure (the new entry is already terminal) all fall straight through
-    // to the immediate commit below — today's behavior, unchanged.
+    // the new one (so its completion is tracked) under _pendingImageId, and let MarkImageDirty commit once the new
+    // entry settles (Ready or Failed) — no fade restart (see ImageCache.SettleReveal): a hard cut for the SAME picture
+    // at another decode size, a short dissolve (BeginImageSwap) for a DIFFERENT one. With nothing drawable on the node
+    // (a mount), a resident rendition of the same source stands in the same way. A synchronous cache hit and an instant
+    // failure commit at once. Never a placeholder frame over decoded content: Flutter's Image.gaplessPlayback, plus the
+    // dissolve.
     private void SwapImageId(NodeHandle node, ref NodePaint paint, int newId)
     {
         int idx = (int)node.Raw.Index;
@@ -1750,9 +2026,9 @@ public sealed class TreeReconciler
         _pendingImageId.TryGetValue(idx, out int pending);
         if (pending != 0 && pending == newId) return;   // already holding on exactly this id — nothing changed
 
-        bool holdable = Images is not null && oldId != 0 && newId != 0
-            && Images.StateOf(new ImageHandle(oldId)) == ImageState.Ready
-            && Images.StateOf(new ImageHandle(newId)) == ImageState.Pending;
+        ImageState newState = Images is not null && newId != 0 ? Images.StateOf(new ImageHandle(newId)) : ImageState.None;
+        bool oldDrawable = Images is not null && oldId != 0 && Images.StateOf(new ImageHandle(oldId)) == ImageState.Ready;
+        bool holdable = oldDrawable && newState == ImageState.Pending;
 
         if (holdable)
         {
@@ -1766,11 +2042,38 @@ public sealed class TreeReconciler
             return;
         }
 
+        // Resident-rendition stand-in: nothing drawable on this node (a MOUNT, or a re-key off a still-decoding id)
+        // but the SAME source is already resident at another decode size — hold THAT exactly like hold-last-good
+        // instead of painting a placeholder for the whole decode. This is the case hold-last-good cannot reach: a cover
+        // remounted by a structural page change (preview → loaded page, a layout-tier switch) asking for a new decode
+        // bucket. The settle is a hard cut (same picture, sharper). See ImageCache.ResidentRenditionOf.
+        if (newState == ImageState.Pending && !oldDrawable
+            && Images!.ResidentRenditionOf(new ImageHandle(newId)) is { IsNull: false } standIn)
+        {
+            if (pending != 0) UnpinImageNode(node, pending);
+            FinishImageSwap(node);
+            if (oldId != standIn.Id) UnpinImageNode(node, oldId);
+            paint.ImageId = standIn.Id;
+            PinImageNode(node, standIn.Id);
+            _pendingImageId[idx] = newId;
+            PinImageNode(node, newId);
+            _scene.Mark(node, NodeFlags.PaintDirty);
+            if (Diag.CompiledIn && Diag.Enabled && Images is not null && ImageCache.DiagTraced(Images.SourceOf(new ImageHandle(newId))))
+                Diag.Event("img", $"standin node={node.Raw.Index} old={oldId} drawn={standIn.Id} new={newId} " +
+                    $"src={ImageCache.DiagSourceTail(Images.SourceOf(new ImageHandle(newId)))}");
+            return;
+        }
+
         if (pending != 0)
         {
             _pendingImageId.Remove(idx);
             if (pending != newId) UnpinImageNode(node, pending);
         }
+        // A synchronous hit (the new picture already resident) still cuts at once. Deliberately NOT a dissolve: this is
+        // also the path every recycled virtual row rebinds through while scrolling, and dissolving a slot from the
+        // PREVIOUS item's cover would ghost the wrong art across the list. The dissolve belongs to the hold settle
+        // (MarkImageDirty), where the old texture was on screen for the whole decode anyway.
+        FinishImageSwap(node);
         UnpinImageNode(node, oldId);
         paint.ImageId = newId;
         if (newId != 0) PinImageNode(node, newId);
@@ -1779,6 +2082,91 @@ public sealed class TreeReconciler
             && ImageCache.DiagTraced(Images.SourceOf(new ImageHandle(newId))))
             Diag.Event("img", $"commit node={node.Raw.Index} old={oldId} new={newId} " +
                 $"src={ImageCache.DiagSourceTail(Images.SourceOf(new ImageHandle(newId)))}");
+    }
+
+    // ── image-swap crossfade (a node's drawn picture replaced by a DIFFERENT one) ───────────────────────────────────
+    // node index → the swap in flight: the OUTGOING texture stays pinned and is drawn opaque under the incoming image
+    // for ImageCache.SwapCrossfadeMs (SceneRecorder, ImageVisualEffects.SwapOutgoingId). Lives here, not only on
+    // ImageVisualEffects, because that struct is rewritten wholesale from the element every reconcile.
+    private readonly record struct ImageSwap(NodeHandle Node, int OutgoingId, int IncomingId, float StartMs, float DurationMs);
+    private readonly Dictionary<int, ImageSwap> _imageSwaps = new();
+    private readonly List<int> _imageSwapSweep = new(4);
+    // The outgoing pin is released a little AFTER the window: the render thread replays against its own image clock,
+    // which may trail the UI's by a frame; the outgoing draw already resolves to nothing past the window, so the slack
+    // only delays an unpin, never a pixel. The fade clock is held open past the release point (see BeginImageSwap) so
+    // the UI is guaranteed a frame that performs it.
+    private const float ImageSwapReleaseSlackMs = 34f;
+    private const float ImageSwapWakeSlackMs = 100f;
+
+    /// <summary>Start (or supersede) this node's swap crossfade from <paramref name="outgoingId"/> — the texture on
+    /// screen — to <paramref name="incomingId"/>. The outgoing is already pinned as the node's drawn id; it simply stays
+    /// pinned until <see cref="SweepImageSwaps"/> releases it. Callers commit <c>paint.ImageId = incomingId</c>.</summary>
+    private void BeginImageSwap(NodeHandle node, int outgoingId, int incomingId)
+    {
+        var images = Images!;
+        int idx = (int)node.Raw.Index;
+        // A newer swap supersedes an older one: its outgoing is the older swap's INCOMING, so only the older outgoing
+        // is released — unless it is the NEW incoming (re-keyed back mid-dissolve), whose pin the caller keeps.
+        if (_imageSwaps.Remove(idx, out var prev) && prev.OutgoingId != outgoingId && prev.OutgoingId != incomingId)
+            UnpinImageNode(node, prev.OutgoingId);
+        // Keep the fade clock (UI wake + the render thread's clock-driven presents) open until the release can run: the
+        // swap window, or the incoming entry's own still-running reveal if that ends later, plus the release slack.
+        float holdMs = ImageCache.SwapCrossfadeMs;
+        if (images.FadeParamsOf(new ImageHandle(incomingId), out float revealStart, out float revealMs, out _))
+            holdMs = MathF.Max(holdMs, revealStart + revealMs - images.ClockMs);
+        float start = images.BeginSwap(new ImageHandle(outgoingId), holdMs + ImageSwapWakeSlackMs);
+        _imageSwaps[idx] = new ImageSwap(node, outgoingId, incomingId, start, ImageCache.SwapCrossfadeMs);
+        ApplyImageSwapEffects(node, outgoingId, start, ImageCache.SwapCrossfadeMs);
+        _scene.Mark(node, NodeFlags.PaintDirty);
+        if (Diag.CompiledIn && Diag.Enabled && ImageCache.DiagTraced(images.SourceOf(new ImageHandle(incomingId))))
+            Diag.Event("img", $"swap node={node.Raw.Index} out={outgoingId} in={incomingId} " +
+                $"src={ImageCache.DiagSourceTail(images.SourceOf(new ImageHandle(incomingId)))}");
+    }
+
+    /// <summary>End this node's swap crossfade (if any): release the outgoing pin and re-record without it. Safe to
+    /// call on any node — the no-swap case is one dictionary probe.</summary>
+    private void FinishImageSwap(NodeHandle node)
+    {
+        int idx = (int)node.Raw.Index;
+        if (!_imageSwaps.Remove(idx, out var swap)) return;
+        if (!_scene.IsLive(node)) return;
+        // Role guard: the pin set is keyed (node, id), so never drop the pin of an id this node still draws or holds.
+        bool stillUsed = _scene.Paint(node).ImageId == swap.OutgoingId
+                         || (_pendingImageId.TryGetValue(idx, out int held) && held == swap.OutgoingId);
+        if (!stillUsed) UnpinImageNode(node, swap.OutgoingId);
+        ApplyImageSwapEffects(node, 0, float.NaN, 0f);
+        _scene.Mark(node, NodeFlags.PaintDirty);
+    }
+
+    /// <summary>Write the swap fields onto the node's sparse <see cref="ImageVisualEffects"/> row, keeping the rest of
+    /// the row; drops the row when nothing is left on it (the plain-image case).</summary>
+    private void ApplyImageSwapEffects(NodeHandle node, int outgoingId, float startMs, float durationMs)
+    {
+        ImageVisualEffects fx = _scene.TryGetImageEffects(node, out var cur) ? cur : new ImageVisualEffects(0, default, default);
+        fx = fx with { SwapOutgoingId = outgoingId, SwapStartMs = startMs, SwapMs = durationMs };
+        if (fx.SwapOutgoingId == 0 && fx.DerivedImageId == 0 && fx.Overlay.A <= 0f && fx.Mask.IsNone && fx.Saturation == 1f)
+            _scene.ClearImageEffects(node);
+        else _scene.SetImageEffects(node, fx);
+    }
+
+    /// <summary>Release every swap whose window (and the incoming image's own reveal) has landed. Run once per paint
+    /// from <see cref="BeginRenderCensus"/>; the common no-swap case costs one count read.</summary>
+    private void SweepImageSwaps()
+    {
+        _imageSwapSweep.Clear();
+        float now = Images?.ClockMs ?? float.PositiveInfinity;
+        foreach (var (idx, swap) in _imageSwaps)
+        {
+            bool landed = now >= swap.StartMs + swap.DurationMs + ImageSwapReleaseSlackMs
+                          && (Images is null || Images.CrossFadeOf(new ImageHandle(swap.IncomingId)) >= 1f);
+            if (landed || !_scene.IsLive(swap.Node)) _imageSwapSweep.Add(idx);
+        }
+        foreach (int idx in _imageSwapSweep)
+        {
+            if (!_imageSwaps.TryGetValue(idx, out var swap)) continue;
+            if (_scene.IsLive(swap.Node)) FinishImageSwap(swap.Node);
+            else _imageSwaps.Remove(idx);
+        }
     }
 
     void TrackImageNode(int imageId, NodeHandle node)
@@ -1823,19 +2211,32 @@ public sealed class TreeReconciler
             if (!owns) { list.RemoveAt(i); continue; }
 
             // Hold-last-good settle (media-pipeline.md §hold-last-good): the held (new) texture just reached a
-            // terminal state — commit the hard cut. It's already pinned + tracked (SwapImageId's hold path did
-            // that), so this is a plain field write, never a re-pin.
+            // terminal state — commit. It's already pinned + tracked (SwapImageId's hold path did that), so this is a
+            // plain field write, never a re-pin. The SAME picture at a new decode size (or a resident stand-in's
+            // exact size) hard-cuts: only sharpness changes. A DIFFERENT picture (a new track's cover, another CDN
+            // rendition of other art) dissolves from the held texture over ImageCache.SwapCrossfadeMs instead of the
+            // old one-frame cut. Either way the node owns the transition, so the entry's own placeholder reveal is
+            // settled — nothing ever fades in over a placeholder here.
             if (isPending && Images is not null)
             {
                 var state = Images.StateOf(new ImageHandle(imageId));
                 if (state is ImageState.Ready or ImageState.Failed)
                 {
-                    UnpinImageNode(node, paint.ImageId);   // release the OLD (held) id — reads paint.ImageId BEFORE overwrite
+                    int heldId = paint.ImageId;   // read BEFORE overwrite
+                    bool dissolve = state == ImageState.Ready && heldId != 0
+                        && Images.StateOf(new ImageHandle(heldId)) == ImageState.Ready
+                        && !Images.SameSource(new ImageHandle(heldId), new ImageHandle(imageId));
+                    if (state == ImageState.Ready) Images.SettleReveal(new ImageHandle(imageId));   // no fade restart
+                    if (dissolve) BeginImageSwap(node, heldId, imageId);   // the held texture stays pinned for the window
+                    else
+                    {
+                        FinishImageSwap(node);
+                        UnpinImageNode(node, heldId);   // release the OLD (held) id
+                    }
                     paint.ImageId = imageId;
                     _pendingImageId.Remove(idx);
-                    if (state == ImageState.Ready) Images.SettleReveal(new ImageHandle(imageId));   // hard cut, no fade restart
                     if (Diag.CompiledIn && Diag.Enabled && ImageCache.DiagTraced(Images.SourceOf(new ImageHandle(imageId))))
-                        Diag.Event("img", $"commit node={node.Raw.Index} new={imageId} state={state} via=settle");
+                        Diag.Event("img", $"commit node={node.Raw.Index} new={imageId} state={state} via=settle{(dissolve ? " dissolve" : "")}");
                 }
             }
 
@@ -1853,6 +2254,7 @@ public sealed class TreeReconciler
 
     private void BindNode(NodeHandle node, Element el)
     {
+        BindPresence(node, el);   // P1: Element.Visible lives on the base type — wire it for EVERY element kind
         if (el is BoxEl b)
         {
             if (b.Transform.IsBound)
@@ -1862,11 +2264,13 @@ public sealed class TreeReconciler
                 // (AppHost maybeUnchanged requires !transformWrote). Quantized EQ/seek land here often with equal values.
                 AddBinding(node, new Effect(Runtime, () =>
                 {
+                    NodeBindingFireCount++;
                     if (!_scene.IsLive(node)) return;
                     Affine2D next = tb is not null ? tb() : ts!.Value;
                     ref NodePaint paint = ref _scene.Paint(node);
                     if (paint.LocalTransform == next) return;
                     paint.LocalTransform = next;
+                    NodeBindingWriteCount++;
                     _scene.Mark(node, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
                 }, owner: null, runNow: true));
             }
@@ -1875,11 +2279,13 @@ public sealed class TreeReconciler
                 var ob = b.Opacity.Thunk; var os = b.Opacity.Signal;
                 AddBinding(node, new Effect(Runtime, () =>
                 {
+                    NodeBindingFireCount++;
                     if (!_scene.IsLive(node)) return;
                     float next = ob is not null ? ob() : os!.Value;
                     ref NodePaint paint = ref _scene.Paint(node);
                     if (paint.Opacity == next) return;
                     paint.Opacity = next;
+                    NodeBindingWriteCount++;
                     _scene.Mark(node, NodeFlags.PaintDirty);
                 }, owner: null, runNow: true));
             }
@@ -1888,42 +2294,92 @@ public sealed class TreeReconciler
                 var fb = b.Fill.Thunk; var fs = b.Fill.Signal;
                 AddBinding(node, new Effect(Runtime, () =>
                 {
+                    NodeBindingFireCount++;
                     if (!_scene.IsLive(node)) return;
                     ColorF next = fb is not null ? fb() : fs!.Value;
                     ref NodePaint paint = ref _scene.Paint(node);
                     if (paint.Fill == next) return;
                     paint.Fill = next;
+                    NodeBindingWriteCount++;
                     _scene.Mark(node, NodeFlags.PaintDirty);
                 }, owner: null, runNow: true));
             }
             if (b.HoverFill.IsBound)
             {
+                // Equality-gated (P3, same shape as Fill above): a re-fire whose resolved color did not move must not
+                // mark PaintDirty, or NodeBindingWriteCount over-counts and an equal republish repaints for nothing.
                 var hfb = b.HoverFill.Thunk; var hfs = b.HoverFill.Signal;
-                AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Paint(node).HoverFill = hfb is not null ? hfb() : hfs!.Value; _scene.Mark(node, NodeFlags.PaintDirty); } }, owner: null, runNow: true));
+                AddBinding(node, new Effect(Runtime, () =>
+                {
+                    NodeBindingFireCount++;
+                    if (!_scene.IsLive(node)) return;
+                    ColorF next = hfb is not null ? hfb() : hfs!.Value;
+                    ref NodePaint paint = ref _scene.Paint(node);
+                    if (paint.HoverFill == next) return;
+                    paint.HoverFill = next;
+                    NodeBindingWriteCount++;
+                    _scene.Mark(node, NodeFlags.PaintDirty);
+                }, owner: null, runNow: true));
             }
             if (b.PressedFill.IsBound)
             {
                 var pfb = b.PressedFill.Thunk; var pfs = b.PressedFill.Signal;
-                AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Paint(node).PressedFill = pfb is not null ? pfb() : pfs!.Value; _scene.Mark(node, NodeFlags.PaintDirty); } }, owner: null, runNow: true));
+                AddBinding(node, new Effect(Runtime, () =>
+                {
+                    NodeBindingFireCount++;
+                    if (!_scene.IsLive(node)) return;
+                    ColorF next = pfb is not null ? pfb() : pfs!.Value;
+                    ref NodePaint paint = ref _scene.Paint(node);
+                    if (paint.PressedFill == next) return;
+                    paint.PressedFill = next;
+                    NodeBindingWriteCount++;
+                    _scene.Mark(node, NodeFlags.PaintDirty);
+                }, owner: null, runNow: true));
             }
             if (b.BorderColor.IsBound)
             {
                 var bcb = b.BorderColor.Thunk; var bcs = b.BorderColor.Signal;
-                AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Paint(node).BorderColor = bcb is not null ? bcb() : bcs!.Value; _scene.Mark(node, NodeFlags.PaintDirty); } }, owner: null, runNow: true));
+                AddBinding(node, new Effect(Runtime, () =>
+                {
+                    NodeBindingFireCount++;
+                    if (!_scene.IsLive(node)) return;
+                    ColorF next = bcb is not null ? bcb() : bcs!.Value;
+                    ref NodePaint paint = ref _scene.Paint(node);
+                    if (paint.BorderColor == next) return;
+                    paint.BorderColor = next;
+                    NodeBindingWriteCount++;
+                    _scene.Mark(node, NodeFlags.PaintDirty);
+                }, owner: null, runNow: true));
             }
             if (b.Corners.IsBound)
             {
                 var crb = b.Corners.Thunk; var crs = b.Corners.Signal;
-                AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Paint(node).Corners = crb is not null ? crb() : crs!.Value; _scene.Mark(node, NodeFlags.PaintDirty); } }, owner: null, runNow: true));
+                AddBinding(node, new Effect(Runtime, () =>
+                {
+                    NodeBindingFireCount++;
+                    if (!_scene.IsLive(node)) return;
+                    var next = crb is not null ? crb() : crs!.Value;
+                    ref NodePaint paint = ref _scene.Paint(node);
+                    if (paint.Corners.Equals(next)) return;
+                    paint.Corners = next;
+                    NodeBindingWriteCount++;
+                    _scene.Mark(node, NodeFlags.PaintDirty);
+                }, owner: null, runNow: true));
             }
             if (b.RadialGradientCenter.IsBound)
             {
                 var rcb = b.RadialGradientCenter.Thunk; var rcs = b.RadialGradientCenter.Signal;
                 AddBinding(node, new Effect(Runtime, () =>
                 {
+                    NodeBindingFireCount++;
                     if (!_scene.IsLive(node)) return;
                     Point2 center = rcb is not null ? rcb() : rcs!.Value;
-                    if (float.IsFinite(center.X) && float.IsFinite(center.Y)) _scene.SetRadialGradientCenter(node, center);
+                    bool hadCenter = _scene.TryGetRadialGradientCenter(node, out Point2 prevCenter);
+                    bool nextValid = float.IsFinite(center.X) && float.IsFinite(center.Y);
+                    if (nextValid && hadCenter && prevCenter.X == center.X && prevCenter.Y == center.Y) return;
+                    if (!nextValid && !hadCenter) return;
+                    NodeBindingWriteCount++;
+                    if (nextValid) _scene.SetRadialGradientCenter(node, center);
                     else _scene.ClearRadialGradientCenter(node);
                 }, owner: null, runNow: true));
             }
@@ -1935,12 +2391,14 @@ public sealed class TreeReconciler
                 var vb = b.Validation.Thunk; var vs = b.Validation.Signal;
                 AddBinding(node, new Effect(Runtime, () =>
                 {
+                    NodeBindingFireCount++;
                     if (!_scene.IsLive(node)) return;
                     ValidationState st = vb is not null ? vb() : vs!.Value;
                     ColorF col = st == ValidationState.Error ? Tok.SystemFillCritical : default;
                     ref var paint = ref _scene.Paint(node);
                     if (paint.ValidationBorder == col) return;
                     paint.ValidationBorder = col;
+                    NodeBindingWriteCount++;
                     _scene.Mark(node, NodeFlags.PaintDirty);
                 }, owner: null, runNow: true));
             }
@@ -1956,12 +2414,14 @@ public sealed class TreeReconciler
                 bool wPrimed = false;
                 AddBinding(node, new Effect(Runtime, () =>
                 {
+                    NodeBindingFireCount++;
                     if (!_scene.IsLive(node)) return;
                     float next = wb is not null ? wb() : ws!.Value;
                     ref var li = ref _scene.Layout(node);
                     if (wPrimed && li.Width.Equals(next)) return;
                     wPrimed = true;
                     li.Width = next;
+                    NodeBindingWriteCount++;
                     _scene.Mark(node, NodeFlags.LayoutDirty);
                 }, owner: null, runNow: true));
             }
@@ -1971,12 +2431,14 @@ public sealed class TreeReconciler
                 bool hPrimed = false;
                 AddBinding(node, new Effect(Runtime, () =>
                 {
+                    NodeBindingFireCount++;
                     if (!_scene.IsLive(node)) return;
                     float next = hb is not null ? hb() : hs!.Value;
                     ref var li = ref _scene.Layout(node);
                     if (hPrimed && li.Height.Equals(next)) return;
                     hPrimed = true;
                     li.Height = next;
+                    NodeBindingWriteCount++;
                     _scene.Mark(node, NodeFlags.LayoutDirty);
                 }, owner: null, runNow: true));
             }
@@ -1989,20 +2451,36 @@ public sealed class TreeReconciler
                 var txb = t.Text.Thunk; var txs = t.Text.Signal;
                 AddBinding(node, new Effect(Runtime, () =>
                 {
+                    NodeBindingFireCount++;
                     if (!_scene.IsLive(node)) return;
                     var next = _strings.Intern(txb is not null ? txb() : txs!.Value);
                     ref var paint = ref _scene.Paint(node);
                     if (paint.Text == next) return;
                     SetPaintText(ref paint, next);
+                    NodeBindingWriteCount++;
                     _scene.Mark(node, NodeFlags.LayoutDirty);
                 }, owner: null, runNow: true));
             }
             if (t.Color.IsBound)
             {
                 var cb = t.Color.Thunk; var cs = t.Color.Signal;
-                AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Paint(node).TextColor = cb is not null ? cb() : cs!.Value; _scene.Mark(node, NodeFlags.PaintDirty); } }, owner: null, runNow: true));
+                AddBinding(node, new Effect(Runtime, () =>
+                {
+                    NodeBindingFireCount++;
+                    if (!_scene.IsLive(node)) return;
+                    ColorF next = cb is not null ? cb() : cs!.Value;
+                    ref var paint = ref _scene.Paint(node);
+                    if (paint.TextColor == next) return;
+                    paint.TextColor = next;
+                    NodeBindingWriteCount++;
+                    _scene.Mark(node, NodeFlags.PaintDirty);
+                }, owner: null, runNow: true));
             }
             t.OnRealized?.Invoke(node);
+        }
+        else if (el is SpanTextEl st)
+        {
+            BindSpanText(node, st);   // Reconciler.Spans.cs — bound Spans : Prop<TextSpans> only (P2)
         }
         else if (el is ImageEl ime)
         {
@@ -2012,10 +2490,12 @@ public sealed class TreeReconciler
                 (int dW, int dH) = ImageDecodeTarget(in ime);   // extent props don't bind, so the target is stable
                 AddBinding(node, new Effect(Runtime, () =>
                 {
+                    NodeBindingFireCount++;
                     if (!_scene.IsLive(node)) return;
                     string src = sbind is not null ? sbind() : ssig!.Value;
                     int newId = Images is not null && src.Length > 0
                         ? Images.Request(src, dW, dH, ImagePriority.Visible, ime.BlurHash, ime.RevealTransition).Id : 0;
+                    NodeBindingWriteCount++;
                     ref var paint = ref _scene.Paint(node);
                     int oldDerived = _scene.TryGetImageEffects(node, out var oldEffects) ? oldEffects.DerivedImageId : 0;
                     int newDerived = RequestBakedImage(in ime, newId, dW, dH);
@@ -2032,7 +2512,17 @@ public sealed class TreeReconciler
             if (ime.Placeholder.IsBound)
             {
                 var pbind = ime.Placeholder.Thunk; var psig = ime.Placeholder.Signal;
-                AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Paint(node).Fill = pbind is not null ? pbind() : psig!.Value; _scene.Mark(node, NodeFlags.PaintDirty); } }, owner: null, runNow: true));
+                AddBinding(node, new Effect(Runtime, () =>
+                {
+                    NodeBindingFireCount++;
+                    if (!_scene.IsLive(node)) return;
+                    ColorF next = pbind is not null ? pbind() : psig!.Value;
+                    ref var paint = ref _scene.Paint(node);
+                    if (paint.Fill == next) return;
+                    paint.Fill = next;
+                    NodeBindingWriteCount++;
+                    _scene.Mark(node, NodeFlags.PaintDirty);
+                }, owner: null, runNow: true));
             }
         }
         else if (el is IconLayerEl ile)
@@ -2042,7 +2532,17 @@ public sealed class TreeReconciler
             if (ile.Tint.IsBound)
             {
                 var tbind = ile.Tint.Thunk; var tsig = ile.Tint.Signal;
-                AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Paint(node).Fill = tbind is not null ? tbind() : tsig!.Value; _scene.Mark(node, NodeFlags.PaintDirty); } }, owner: null, runNow: true));
+                AddBinding(node, new Effect(Runtime, () =>
+                {
+                    NodeBindingFireCount++;
+                    if (!_scene.IsLive(node)) return;
+                    ColorF next = tbind is not null ? tbind() : tsig!.Value;
+                    ref var paint = ref _scene.Paint(node);
+                    if (paint.Fill == next) return;
+                    paint.Fill = next;
+                    NodeBindingWriteCount++;
+                    _scene.Mark(node, NodeFlags.PaintDirty);
+                }, owner: null, runNow: true));
             }
         }
         else if (el is PathEl pe)
@@ -2076,8 +2576,14 @@ public sealed class TreeReconciler
     private void WriteImageEffects(NodeHandle node, in ImageEl im, int derivedId)
     {
         ImageMaskSpec mask = im.Mask is { } m && !m.IsNone ? m : default;
-        if (derivedId != 0 || im.ColorOverlay.A > 0f || !mask.IsNone || im.Saturation != 1f)
-            _scene.SetImageEffects(node, new ImageVisualEffects(derivedId, im.ColorOverlay, mask, im.Saturation));
+        // The row is rewritten wholesale from the element, so a swap crossfade in flight is re-applied from _imageSwaps.
+        bool swapping = _imageSwaps.TryGetValue((int)node.Raw.Index, out var swap);
+        if (derivedId != 0 || im.ColorOverlay.A > 0f || !mask.IsNone || im.Saturation != 1f || swapping)
+        {
+            var fx = new ImageVisualEffects(derivedId, im.ColorOverlay, mask, im.Saturation);
+            if (swapping) fx = fx with { SwapOutgoingId = swap.OutgoingId, SwapStartMs = swap.StartMs, SwapMs = swap.DurationMs };
+            _scene.SetImageEffects(node, fx);
+        }
         else
             _scene.ClearImageEffects(node);
     }
@@ -2304,12 +2810,28 @@ public sealed class TreeReconciler
         // for one frame unless prop-eager (visible band first; next FrameEpoch at rest fills overscan without E4 drip).
         bool propEager = ve.RealizeOverscanImmediately;
         bool atRest = MathF.Abs(sc.Velocity) <= VirtualWindowing.FlingGuardThreshold;
+        // ── REST, for the eager catch-up, is the KERNEL's rest — not a velocity sample under the fling guard ──────────
+        // A wheel notch / touchpad pulse is ScrollActivity.Driven with a WheelHalflifeMs chase: the sampled velocity
+        // collapses toward zero between notches while the viewport is unmistakably still being scrolled, and the moment
+        // the chase lands the body goes Idle for the gap before the next notch arrives. Treating either as "at rest"
+        // skipped ClipRealizeBudget mid-gesture and filled the WHOLE overscan halo in one paint — a burst of cold heavy
+        // rows landing inside a live scroll, which is exactly the hitch that reads as sluggish scrolling. `atRest` stays
+        // the RAMP's licence (may a stationary viewport present a short visible band?); the BUDGET's is stricter.
+        bool kernelIdle = atRest
+            && sc.Activity == FluentGpu.Scroll.ScrollActivity.Idle
+            && !sc.UserScrollActive;
         bool mountDefer = mount && !propEager;
         if (mountDefer) entry.MountDeferEpoch = FrameEpoch;
         int effOverscan = mountDefer ? 0 : rowOverscan;
         // Same-epoch as mount-defer: keep ClipRealizeBudget (MountVirtual + ReRealizeVirtuals share one Paint).
         bool sameEpochAsMountDefer = entry.MountDeferEpoch == FrameEpoch;
-        bool eagerOverscan = propEager || (atRest && !mountDefer && !sameEpochAsMountDefer);
+        // ...and even at true rest a ONE-PAINT halo catch-up is only free for a CHEAP row. A Wavee track row is ~90
+        // nodes: finishing a 16-row halo in the paint after the user lifts their fingers is itself a dropped frame.
+        // A viewport that has measured itself heavier than the steady pool keeps the budget at rest too and drips the
+        // halo over the next few frames (VirtualRangeDirty + HasBudgetDeferredVirtuals keep the host awake until clean),
+        // which is invisible — the halo is off-screen by construction — where the burst was not.
+        bool cheapRows = SteadyRealizeRowsFor(entry, ve.RowBind is not null) >= SteadyRealizeBudget;
+        bool eagerOverscan = propEager || (kernelIdle && !mountDefer && !sameEpochAsMountDefer && cheapRows);
         VirtualWindowing.DirectionalOverscan(effOverscan, sc.Velocity, avgExtent, out int lowOv, out int highOv);
 
         int first, last, visibleFirst, visibleLast, mandFirst, mandLast;
@@ -2363,22 +2885,42 @@ public sealed class TreeReconciler
 
         // E4 budget: the mandatory band is realized unconditionally; the overscan halo is clipped to the per-frame row
         // pool while scrolling/flinging. At rest (and prop-eager) ClipRealizeBudget is skipped — full desired window.
-        bool budgetDeficit = !eagerOverscan && ClipRealizeBudget(in sc, mandFirst, mandLast, avgExtent, ref first, ref last);
+        bool budgetDeficit = !eagerOverscan && ClipRealizeBudget(in sc, entry, ve.RowBind is not null, mandFirst, mandLast, avgExtent, ref first, ref last);
         bool stayDirty = budgetDeficit || mountDefer;
+        // ── the cold-realize ramp, half one: the WINDOW must not start below the visible band while ramping ──────────
+        // A partially-realized bound window is published as the contiguous PREFIX [first, first+mat) — that is what
+        // makes layout, hit-testing and SlotRootForIndex agree about a short window. So while the ramp is growing that
+        // prefix, `first` decides which rows the early frames spend their budget on. On the mount frame the mount defer
+        // already zeroes the halo, but from the SECOND frame the at-rest catch-up hands back the full desired window
+        // including the LOW halo — and filling that first would spend a frame on rows above the viewport while the top
+        // of the visible band is still empty. Drop the low halo for the duration of the ramp (the same shape as the
+        // mount defer) and keep the fill strictly visible-first, top-down; `stayDirty` then schedules the frame that
+        // fills the halo once the ramp has settled.
+        if (entry.Warming && first < mandFirst) { first = mandFirst; stayDirty = true; }
         if (last < first) last = first;
         int w = last - first;
         int visibleSlots = Math.Clamp(visibleLast - first, 0, w);
 
         if (ve.RowBind is not null)
         {
+            // P3 (virtualization.md §5.5): every bound realize pass — a recycled slot's RebindBoundSlot rewrite AND a
+            // genuinely NEW slot's cold mount alike — runs under SuppressBoundTransitions so a bound-channel transition
+            // seed or the P1 Visible Enter seed snaps instead of animating. A growing window's brand-new slot has no
+            // prior displayed state to fade from anyway; only a truly first-ever mount of the WHOLE virtual list (never
+            // reached through this per-window realize path — that is MountVirtual → RealizeWindow(mount:true) → here on
+            // the SAME call, so it is covered too, correctly: a cold list has nothing to snap FROM either) is affected.
+            using var _suppressBoundTx = PushSuppressBoundTransitions();
             // Research adjustments #5/#16: the keep-alive bucket + content-type pools ride an EXTENDED realize; when
             // neither is opted into (the default) the original zero-alloc positional recycler runs unchanged.
+            // `atRest` is the ramp's licence to present a SHORT visible band: rows arriving top-down under a stationary
+            // viewport read as content filling in, while the same short window under a live scroll is a blank strip
+            // travelling with the content. Under motion RealizeBoundWindow re-arms the visible floor instead.
             if (prefix > 0 || entry.PrefixSlots is { Count: > 0 })
-                RealizeBoundWindowWithPersistentPrefix(node, content, entry, ve, prefix, first, last, w, visibleSlots, stayDirty);
+                RealizeBoundWindowWithPersistentPrefix(node, content, entry, ve, prefix, first, last, w, visibleSlots, stayDirty, atRest);
             else if (ve.KeepAlive is not null || ve.ContentType is not null)
-                RealizeBoundWindowExtended(node, content, entry, ve, first, last, w, visibleSlots, stayDirty);
+                RealizeBoundWindowExtended(node, content, entry, ve, first, last, w, visibleSlots, stayDirty, atRest);
             else
-                RealizeBoundWindow(node, content, entry, ve, first, last, w, visibleSlots, stayDirty);
+                RealizeBoundWindow(node, content, entry, ve, first, last, w, visibleSlots, stayDirty, atRest);
         }
         else
         {
@@ -2430,7 +2972,7 @@ public sealed class TreeReconciler
     /// it the halo drains under a sustained fling (the mandatory band grows with velocity, a flat refill does not) and
     /// every row entering the band becomes a cold realize. This scales the refill RATE only: the desired window
     /// <c>[first,last)</c> handed in is E5's velocity-INDEPENDENT fixed-sum window and is never widened here.</para></summary>
-    private bool ClipRealizeBudget(in ScrollState sc, int mandFirst, int mandLast, float avgExtent, ref int first, ref int last)
+    private bool ClipRealizeBudget(in ScrollState sc, VirtualEntry entry, bool bound, int mandFirst, int mandLast, float avgExtent, ref int first, ref int last)
     {
         int df = first, dl = last;   // desired directional-overscan window (already ⊇ mandatory)
         // "Have" = rows already realized this scroll episode, clamped into [desired, mandatory] — so the mandatory band
@@ -2442,8 +2984,12 @@ public sealed class TreeReconciler
             haveLast = Math.Clamp(sc.LastRealized, mandLast, dl);
         }
         // E4b: floor + velocity-scaled extra, clamped to the ceiling's headroom (scalar math only — no alloc).
-        int floor = SteadyRealizeBudget;
-        int room = Math.Max(0, SteadyRealizeCeiling - floor);
+        // Both terms are in ROWS, so both are capped by what one row of THIS viewport costs (SteadyRealizeRowsFor):
+        // twelve 90-node track rows is nine frame budgets, and letting the velocity term lift that to thirty-six is
+        // how a fast fling turned into a stall. The velocity scaling is preserved in shape — a fast fling still gets a
+        // wider pool than a slow one — it is just denominated in rows this machine can actually build in a frame.
+        int floor = SteadyRealizeRowsFor(entry, bound);
+        int room = Math.Max(0, Math.Min(SteadyRealizeCeiling, floor * 3) - floor);
         int extra = avgExtent > 0f
             ? Math.Clamp((int)MathF.Ceiling(MathF.Abs(sc.Velocity) * SteadyRealizeVelocityFactor / avgExtent), 0, room)
             : 0;
@@ -2489,7 +3035,7 @@ public sealed class TreeReconciler
     /// Prefix nodes are detached only for the duration of realization so the existing positional/extended recyclers can
     /// remain unchanged; they are restored as the leading direct content children before layout/paint.</summary>
     private void RealizeBoundWindowWithPersistentPrefix(NodeHandle node, NodeHandle content, VirtualEntry entry,
-        VirtualListEl ve, int prefixCount, int first, int last, int w, int visibleSlots, bool stayDirty)
+        VirtualListEl ve, int prefixCount, int first, int last, int w, int visibleSlots, bool stayDirty, bool atRest)
     {
         var prefix = entry.PrefixSlots ??= new List<BoundSlot>(prefixCount);
         bool prefixChanged = prefix.Count != prefixCount;
@@ -2522,9 +3068,9 @@ public sealed class TreeReconciler
 
         // With the prefix detached, the existing paths see exactly their original child/slot invariant.
         if (ve.KeepAlive is not null || ve.ContentType is not null)
-            RealizeBoundWindowExtended(node, content, entry, ve, first, last, w, visibleSlots, stayDirty);
+            RealizeBoundWindowExtended(node, content, entry, ve, first, last, w, visibleSlots, stayDirty, atRest);
         else
-            RealizeBoundWindow(node, content, entry, ve, first, last, w, visibleSlots, stayDirty);
+            RealizeBoundWindow(node, content, entry, ve, first, last, w, visibleSlots, stayDirty, atRest);
 
         // Existing normal roots currently occupy the content chain. Append the prefix, then rotate the normal band
         // behind it using only linked-list operations (no per-realize buffer/allocation).
@@ -2557,7 +3103,8 @@ public sealed class TreeReconciler
     /// the host flushes recycled-slot bindings in the same frame.
     /// </summary>
     private void RealizeBoundWindow(NodeHandle node, NodeHandle content, VirtualEntry entry,
-                                    VirtualListEl ve, int first, int last, int w, int visibleSlots, bool stayDirty)
+                                    VirtualListEl ve, int first, int last, int w, int visibleSlots, bool stayDirty,
+                                    bool atRest)
     {
         var rowBind = ve.RowBind!;
         var slots = entry.Slots ??= new List<BoundSlot>(Math.Max(4, w));
@@ -2565,22 +3112,40 @@ public sealed class TreeReconciler
         bool orderChanged = false;
         int oldFirst = entry.PrevFirst, oldLast = entry.PrevFirst + entry.PrevLen;   // E11 lifecycle window delta
 
-        // Cold-mount stagger can spread overscan slot creation, but it must never present a partial visible window.
-        // A shimmer-to-ready swap has no cover once the real branch mounts, so all visible rows must exist this frame.
-        int minVisibleTarget = Math.Clamp(visibleSlots, 0, w);
-        if (!entry.Warming && ve.StaggerColdRealize && Math.Max(slots.Count + ColdRealizeRowsPerFrame, minVisibleTarget) < w) { entry.Warming = true; _warmingCount++; }
+        // ── the cold-realize ramp, half two: how many rows this FRAME may materialize ─────────────────────────────────
+        // See ColdRealizeRamp for why this exists and what the two budgets are. Three things are decided here:
+        //
+        //  • THE VISIBLE FLOOR. A ramp may only present a short visible band while the viewport is STATIONARY (rows
+        //    appearing top-down against extents the measured layout already reserved). The moment it is moving, the
+        //    mandatory visible band is restored as a hard floor that overrides the budget — so a scroll landing in the
+        //    middle of a ramp gets whole rows immediately and the ramp is left with nothing but the halo to finish.
+        //    That is the "visible rows first, scrolling never stalls" half of the contract.
+        //  • ELIGIBILITY. Opt-in (StaggerColdRealize) and never on a viewport that explicitly demanded its complete
+        //    window at mount (RealizeOverscanImmediately — the synced-lyrics contract, gate.virt.eagerOverscan).
+        //  • ONE BATCH PER FRAME. LastGrowEpoch, because the realize walk runs several times per paint (pre-layout, the
+        //    2-pass post-layout loop, the scroll catch-up) and the spread has to be per FRAME.
+        //
+        // A list whose slots already cover the window (every steady-scroll frame) resolves target == w and takes the
+        // zero-alloc fast-contiguous path below exactly as before.
+        bool ramp = ve.StaggerColdRealize && !ve.RealizeOverscanImmediately;
+        int visibleFloor = atRest ? 0 : Math.Clamp(visibleSlots, 0, w);
         int target = w;
-        if (entry.Warming)
+        if (ramp)
         {
-            if (entry.LastGrowEpoch == FrameEpoch && slots.Count >= minVisibleTarget) target = slots.Count;   // already grew this frame → roll to next frame
-            else
-            {
-                target = Math.Min(w, Math.Max(minVisibleTarget, slots.Count + ColdRealizeRowsPerFrame));
-                if (target > slots.Count) entry.LastGrowEpoch = FrameEpoch;
-            }
+            SeedRowCostPrior(entry);
+            target = ColdRealizeRamp.Target(slots.Count, w, entry.NodesPerRow, entry.GrowMsPerRow,
+                                            entry.LastGrowEpoch == FrameEpoch, visibleFloor);
+            if (target > slots.Count) entry.LastGrowEpoch = FrameEpoch;
+            if (!entry.Warming && target < w) { entry.Warming = true; _warmingCount++; }
         }
 
         int desiredCount = Math.Min(target, w);
+        // The first grow of a viewport has no per-row estimate to size itself from, so it charges the NODE budget
+        // row-by-row instead (ColdRealizeRamp.CanCreateAnother) and truncates the window when the budget runs out.
+        // Safe only where truncation cannot orphan a live slot — the cold case, slots.Count == 0, where no existing
+        // slot can be mapped past the truncation point. Every later grow is sized up-front from the measurement below.
+        bool chargePerRow = ramp && entry.NodesPerRow <= 0 && slots.Count == 0 && desiredCount > 1;
+        int growNodes0 = MountedNodes, growRows = 0;
         bool fastContiguous = desiredCount == slots.Count
             && slots.Count == entry.PrevLen
             && BoundSlotsAreContiguous(content, slots, entry.PrevFirst);
@@ -2674,6 +3239,16 @@ public sealed class TreeReconciler
                 }
                 else
                 {
+                    // The first grow's row-by-row node charge (see chargePerRow above): stop EXTENDING the window once
+                    // this frame's node budget is spent, and truncate the scratch to what was actually built. Reachable
+                    // only with slots.Count == 0, so no existing slot can be mapped past the truncation point and the
+                    // "unused ⇒ Remove" sweep below still sees a consistent set.
+                    if (chargePerRow && !ColdRealizeRamp.CanCreateAnother(growRows, MountedNodes - growNodes0))
+                    {
+                        scratch.RemoveRange(ord, desiredCount - ord);
+                        desiredCount = ord;
+                        break;
+                    }
                     var sig = new Signal<int>(idx);
                     Element el = rowBind(sig);
                     var child = _scene.CreateNode(el.ElementTypeId);
@@ -2681,8 +3256,10 @@ public sealed class TreeReconciler
                     Mount(child, el);
                     scratch[ord] = new BoundSlot(sig, el, child);
                     structural = true;
+                    growRows++;
                 }
             }
+            if (chargePerRow && desiredCount < w && !entry.Warming) { entry.Warming = true; _warmingCount++; }
 
             for (int j = 0; j < slots.Count; j++)
                 if (!used[j] && _scene.IsLive(slots[j].Root))
@@ -2704,6 +3281,17 @@ public sealed class TreeReconciler
             orderChanged = true;
             _realizeProgress = true;
         }
+
+        // Fold what this grow actually cost into the viewport's own per-row estimate, so the NEXT frame's batch is
+        // sized from this row template on this machine in this thermal/warm-up state rather than from a constant.
+        // Only the walk is measurable from here — the freshly-mounted binds are flushed by the host afterwards — which
+        // is exactly why ColdRealizeRamp spends only a SHARE of the frame budget on the walk.
+        // Measured on EVERY grow, ramping or not: the per-row cost is no longer the cold ramp's private input — the
+        // steady-scroll halo pool is denominated in it too (SteadyRealizeRowsFor) — and the lists that need it most are
+        // exactly the ones whose one-shot StaggerColdRealize has already been consumed. What is NOT measured here is
+        // the cost itself: see BeginGrowMeasurement. The walk this method just performed is not what a row costs when
+        // the row is a component, so the frame's flush section is measured instead and folded when it closes.
+        NoteGrow(entry, growRows);
 
         // `mat` = rows actually materialized so far (== w once warmed). All downstream state keys off the MATERIALIZED
         // count, never the uncapped target `w`, so a partially-realized window is internally consistent (rebind walk,
@@ -2784,7 +3372,8 @@ public sealed class TreeReconciler
     /// roots in place; cold grow/shrink and keep-alive repair use the retained slow-path scratch.
     /// </summary>
     private void RealizeBoundWindowExtended(NodeHandle node, NodeHandle content, VirtualEntry entry,
-                                            VirtualListEl ve, int first, int last, int w, int visibleSlots, bool stayDirty)
+                                            VirtualListEl ve, int first, int last, int w, int visibleSlots, bool stayDirty,
+                                            bool atRest)
     {
         var rowBind = ve.RowBind!;
         var keepAlive = ve.KeepAlive;
@@ -2814,6 +3403,37 @@ public sealed class TreeReconciler
         var kept = entry.Kept ??= new Dictionary<int, KeptSlot>();
 
         int n0 = slots.Count;
+        // ── the cold-realize ramp on the EXTENDED path ────────────────────────────────────────────────────────────────
+        // Identical contract to RealizeBoundWindow's (see ColdRealizeRamp): a cold window is realized as a growing
+        // contiguous PREFIX, one measured batch per frame, with the mandatory visible band as a hard floor whenever the
+        // viewport is moving. It was missing here purely because this path was added later for the keep-alive and
+        // content-type pools — and the sidebar takes it, because declaring ContentType routes a list here. So the one
+        // list whose cold mount was the single worst frame of a Wavee launch (52 SidebarPaneSlots, ~1 100 nodes, one
+        // paint) opted into StaggerColdRealize and got nothing for it.
+        //
+        // Restricted to the content-type-only shape. A keep-alive bucket parks and restores slots out of `kept` on its
+        // own schedule, so `slots.Count` is not the realized-prefix count this ramp's arithmetic assumes; the pool that
+        // needs the ramp does not use keep-alive, and conflating the two would trade a real fix for a subtle one.
+        bool ramp = ve.StaggerColdRealize && !ve.RealizeOverscanImmediately && keepAlive is null;
+        int wCap = w;
+        int growNodes0 = MountedNodes, growRows = 0;
+        if (ramp)
+        {
+            SeedRowCostPrior(entry);
+            int visibleFloor = atRest ? 0 : Math.Clamp(visibleSlots, 0, w);
+            wCap = Math.Clamp(ColdRealizeRamp.Target(n0, w, entry.NodesPerRow, entry.GrowMsPerRow,
+                                                     entry.LastGrowEpoch == FrameEpoch, visibleFloor), 0, w);
+            if (wCap > n0) entry.LastGrowEpoch = FrameEpoch;
+            if (!entry.Warming && wCap < w) { entry.Warming = true; _warmingCount++; }
+        }
+        // The FIRST grow has no per-row estimate to size itself from — RowsPerFrame(0, 0) is the ceiling, so Target
+        // hands back the whole window and the one frame the ramp exists to protect is the one it does not. The default
+        // recycler answers this by charging the NODE budget row by row as rows are built (ColdRealizeRamp.CanCreateAnother)
+        // and truncating when it runs out; the extended path needs the same, and needs it MORE — the sidebar's cold
+        // mount is a first grow with no second one to fall back on. Safe only where truncation cannot orphan a live
+        // slot: the cold case, n0 == 0, where no existing slot can map past the truncation point.
+        bool chargePerRow = ramp && entry.NodesPerRow <= 0 && n0 == 0 && wCap > 1;
+
         bool[] consumed = entry.SlotUsed ?? Array.Empty<bool>();
         if (consumed.Length < n0)
             entry.SlotUsed = consumed = new bool[Math.Max(4, n0)];
@@ -2848,10 +3468,14 @@ public sealed class TreeReconciler
 
         // PHASE 2 — reserve exact active overlaps first. A one-row shift must not let the entering gap consume a slot
         // that already represents a later survivor.
+        // Everything below builds and publishes the REALIZED prefix [first, first+wCap), never the desired window `w`.
+        // Same rule the default recycler's `mat` follows: layout, hit-testing, SlotRootForIndex and the arrange
+        // contract all key off what was actually built, so a short window stays internally consistent and the untouched
+        // tail keeps the extent the measured layout already reserved.
         var newSlots = entry.SlotScratch ??= new List<BoundSlot>(Math.Max(4, w));
         newSlots.Clear();
-        for (int ord = 0; ord < w; ord++) newSlots.Add(default);
-        for (int ord = 0; ord < w; ord++)
+        for (int ord = 0; ord < wCap; ord++) newSlots.Add(default);
+        for (int ord = 0; ord < wCap; ord++)
         {
             int item = first + ord;
             int dtype = TypeOf(item);
@@ -2887,7 +3511,7 @@ public sealed class TreeReconciler
 
         // PHASE 3 — fill entering gaps from leaving slots of the same content type. Cross-type leftovers rebuild exactly
         // that entering row; overlapping logical items above never rebuild merely because their screen ordinal changed.
-        for (int ord = 0; ord < w; ord++)
+        for (int ord = 0; ord < wCap; ord++)
         {
             if (newSlots[ord].Index is not null) continue;
             int item = first + ord;
@@ -2915,6 +3539,12 @@ public sealed class TreeReconciler
                     break;
                 }
 
+            if (chargePerRow && !ColdRealizeRamp.CanCreateAnother(growRows, MountedNodes - growNodes0))
+            {
+                newSlots.RemoveRange(ord, wCap - ord);
+                wCap = ord;
+                break;
+            }
             var nsig = new Signal<int>(item);
             Element nel = rowBind(nsig);
             var child = _scene.CreateNode(nel.ElementTypeId);
@@ -2922,8 +3552,11 @@ public sealed class TreeReconciler
             Mount(child, nel);
             newSlots[ord] = new BoundSlot(nsig, nel, child, dtype);
             structural = true;
+            growRows++;
             _realizeProgress = true;
         }
+
+        if (chargePerRow && wCap < w && !entry.Warming) { entry.Warming = true; _warmingCount++; }
 
         // Shrink any unused plain leaving roots.
         for (int i = 0; i < n0; i++)
@@ -2959,16 +3592,26 @@ public sealed class TreeReconciler
             structural = true;
         }
 
+        // Same deferred measurement the default recycler takes, for the same two consumers: the next ramp batch and
+        // the steady halo pool (SteadyRealizeRowsFor). See BeginGrowMeasurement for why it is not taken here.
+        NoteGrow(entry, growRows);
+
         if (structural) _reconciled = true;
         MarkLayoutShape(content);   // window/order changed → re-arrange the realized band
 
         ref ScrollState scw = ref _scene.ScrollRef(node);
-        scw.FirstRealized = first; scw.LastRealized = first + w;
-        if (stayDirty) _scene.Mark(node, NodeFlags.VirtualRangeDirty);
-        else _scene.Unmark(node, NodeFlags.VirtualRangeDirty);
-        entry.PrevFirst = first; entry.PrevLen = w;
+        scw.FirstRealized = first; scw.LastRealized = first + wCap;
+        bool warmingIncomplete = entry.Warming && wCap < w;
+        if (warmingIncomplete || stayDirty)
+            _scene.Mark(node, NodeFlags.VirtualRangeDirty);   // next frame realizes the next batch (warm) / owed overscan
+        else
+        {
+            if (entry.Warming) { entry.Warming = false; _warmingCount--; }
+            _scene.Unmark(node, NodeFlags.VirtualRangeDirty);
+        }
+        entry.PrevFirst = first; entry.PrevLen = wCap;
 
-        FireWindowLifecycle(ve, oldFirst, oldLast, first, first + w);
+        FireWindowLifecycle(ve, oldFirst, oldLast, first, first + wCap);
     }
 
     private bool TryRealizeBoundWindowExtendedFast(NodeHandle content, List<BoundSlot> slots, VirtualListEl ve,
@@ -3191,9 +3834,10 @@ public sealed class TreeReconciler
     // The recycle-shape contract guard (production safety == CI coverage): per-item VALUE variation (a PartDelta) or
     // invisible-part flips are legal in a recycled scroll path, but per-item STRUCTURE variation that the keyed child
     // reconcile (below) CANNOT absorb is not — it rebinds onto a recycled node the diff can't realign. This catches
-    // that in DEBUG/CI. The comparison mirrors ReconcileChildren EXACTLY (keyed children match by Key — so a keyed
+    // that in DEBUG/CI. The comparison mirrors ReconcileChildren's model (keyed children match by Key — so a keyed
     // child legally appears/disappears, e.g. ItemContainer's selection-state ring/common/checkbox; UNKEYED children
-    // match POSITIONALLY — so their type sequence must be stable, and each key present in BOTH must stay shape-compat).
+    // match by ORDINAL AMONG UNKEYED SIBLINGS — the pairing ReconcileChildren applies whenever the unkeyed population
+    // is unchanged — so their type sequence must be stable, and each key present in BOTH must stay shape-compat).
     [System.Diagnostics.Conditional("DEBUG")]
     private static void AssertRecycleShapeStable(Element prev, Element next)
     {
@@ -3209,8 +3853,10 @@ public sealed class TreeReconciler
     // legal STATE-driven chrome (the selection ring/inner-stroke/checkbox coming & going, the checkmark glyph appearing
     // when checked) passes, while a genuinely corrupting recycle (a different-typed UNKEYED child landing at an aligned
     // positional slot, or a keyed child whose own subtree shape changes) is flagged:
-    //   • UNKEYED children match POSITIONALLY by index — overlapping positions must agree on type + recurse-compat;
-    //     a surplus on either side is a legal TAIL insert/remove (exactly the unchecked↔checked glyph child).
+    //   • UNKEYED children match by ORDINAL AMONG UNKEYED SIBLINGS (keyed siblings skipped — the cursor
+    //     ReconcileChildrenCore / ChildReconcilePlan.Step pair by when the unkeyed count is unchanged; an unkeyed
+    //     add/remove there falls back to same-index pairing, UnkeyedPairing) — overlapping ordinals must agree on type +
+    //     recurse-compat; a surplus on either side is a legal TAIL insert/remove (exactly the unchecked↔checked glyph child).
     //   • KEYED children match by Key — a key in only one side is a free insert/remove (the selected↔unselected ring);
     //     a key in BOTH must recurse-compat.
     // Values (Fill/Color/Opacity/…) are ignored — only structure is checked. Leaves (Text/Image/Polyline) compare by type.
@@ -3229,8 +3875,9 @@ public sealed class TreeReconciler
         Element[]? bc = b switch { BoxEl x => x.Children, GridEl x => x.Children, _ => null };
         if (ac is null || bc is null) return true;   // leaf type matched (no child structure to compare)
 
-        // Positional pass over UNKEYED children (Key == null): walk both in order, comparing overlapping slots only.
-        // A trailing surplus on either side is a legal tail insert/remove (ReconcileChildren removes/mounts it).
+        // Ordinal pass over UNKEYED children (Key == null): walk both in order skipping keyed siblings, comparing
+        // overlapping ordinals only. A trailing surplus on either side is a legal tail insert/remove (ReconcileChildren
+        // removes/mounts it).
         int ai = 0, bi = 0;
         while (true)
         {
@@ -3252,21 +3899,12 @@ public sealed class TreeReconciler
 
     // ── Keyed child reconcile (the structural engine, retained) ──────────────────────────────────
 
-    /// <summary>Largest child count whose keyed-diff scratch still fits on the stack. Above it the three scratch
-    /// buffers come from <see cref="ArrayPool{T}"/> instead of the managed heap — a 500-child container used to
-    /// allocate two <c>NodeHandle[]</c> + one <c>bool[]</c> (~8.5KB) on EVERY reconcile of that container, which was
-    /// the entire measured cost of a large-subtree swap. The threshold stays where it was so small containers (the
-    /// overwhelming majority, and every nesting level of a deep tree) keep the zero-ceremony stack path.</summary>
+    /// <summary>Small containers retain stack scratch; larger ones lease reusable isolated child-identity plans.
+    /// Commit remains one indivisible UI operation until mounts/updates gain their own staging representation.</summary>
     private const int StackScratchMax = 128;
 
-    /// <summary>
-    /// The three keyed-diff scratch buffers for a container too large to stackalloc, rented from the shared pool.
-    /// Pool arrays are NOT zeroed and all three slices are read at indices the diff does not necessarily write
-    /// (<see cref="Old"/> when the scene holds fewer children than <c>oldKids</c>; <see cref="Used"/> and
-    /// <see cref="New"/> by definition), so every slice is cleared on rent — matching the stackalloc semantics the
-    /// diff was written against exactly. Rent/Return is per invocation, so it survives the re-entrant
-    /// <c>Update → ReconcileChildren</c> recursion: each nested frame owns its own arrays.
-    /// </summary>
+    /// <summary>Array-pool scratch for the shifted virtual-window recycler, whose identity law differs from keyed
+    /// child planning. Each recursive invocation rents independently; all slices start cleared.</summary>
     private ref struct ChildScratch
     {
         public Span<NodeHandle> Old, New;
@@ -3283,14 +3921,9 @@ public sealed class TreeReconciler
             s.Old = s._oldRent.AsSpan(0, oldN);
             s.Used = s._usedRent.AsSpan(0, oldN);
             s.New = s._newRent.AsSpan(0, newN);
-            s.Old.Clear();
-            s.Used.Clear();
-            s.New.Clear();
+            s.Old.Clear(); s.Used.Clear(); s.New.Clear();
             return s;
         }
-
-        // NodeHandle is a POD struct and bool a primitive, so the pool holds no references alive — returning without
-        // clearing is safe (and the next Rent clears anyway).
         public void Return()
         {
             ArrayPool<NodeHandle>.Shared.Return(_oldRent);
@@ -3301,6 +3934,7 @@ public sealed class TreeReconciler
 
     internal void ReconcileChildren(NodeHandle node, ReadOnlySpan<Element> newKids, ReadOnlySpan<Element> oldKids)
     {
+        _childReconcileRevision++;
         int oldN = oldKids.Length, newN = newKids.Length;
         if (oldN == 0 && newN == 0) return;
 
@@ -3311,9 +3945,8 @@ public sealed class TreeReconciler
             return;
         }
 
-        var scratch = ChildScratch.Rent(oldN, newN);
-        try { ReconcileChildrenCore(node, newKids, oldKids, scratch.Old, scratch.Used, scratch.New); }
-        finally { scratch.Return(); }
+        if (_renderCensus is not null) _censusPlans++;
+        ReconcilePlannedChildren(node, newKids, oldKids);
     }
 
     private void ReconcileChildrenCore(NodeHandle node, ReadOnlySpan<Element> newKids, ReadOnlySpan<Element> oldKids,
@@ -3336,6 +3969,27 @@ public sealed class TreeReconciler
         // re-appended child order still needs a relayout to move the rows. Non-monotonic match order detects it.
         bool moved = false;
         int lastMatch = -1;
+        // UNKEYED identity (keyed children match by Key exactly as before, and only ever consume KEYED old slots, so the
+        // two rules never compete for a slot). The mode is decided once, at the first unkeyed new child (a pure-keyed
+        // list — every Flow.For — never pays for it), by UnkeyedPairing.Ordinal:
+        //   • ORDINAL — the unkeyed population is unchanged (same count in old and new): the k-th unkeyed new child pairs
+        //     with the k-th unkeyed old child; keyed siblings are skipped by the cursor, never counted (the model
+        //     ShapeCompatible / the recycle-shape guard encode). A keyed insert / remove / move therefore never shifts
+        //     unkeyed identity — the bug class this fixes: [title, artists] → [keyedLine, title, artists] used to hand
+        //     the new title the old ARTISTS node + component instance (whose factory froze at mount) and remount artists.
+        //   • POSITIONAL — an unkeyed child was added or removed: the former same-index rule (same slot, both unkeyed).
+        //     Pure ordinal pairing would be WRONG here: a keyed⇄unkeyed flip at one slot (`cond ? keyedX : unkeyedY`
+        //     ahead of [title, artists]; NavigationView's top bar, whose unkeyed "More" button takes an overflowed keyed
+        //     item's slot) would shift every unkeyed sibling after it — the very swap above — while same-index pairing
+        //     keeps them put.
+        // Either way reuse needs the element type to match; a mismatch consumes that ordinal/slot (no reuse, no slide:
+        // the new child mounts, the old one is removed). Pure-unkeyed lists are EXACTLY the former rule in both modes
+        // (ordinal == index when nothing was added/removed), and so is every render that adds/removes an unkeyed child;
+        // only a render that shifts keyed children around an unchanged unkeyed population pairs differently. Zero-alloc:
+        // one forward cursor (amortized O(oldN)) + one counting pass. The ordinal matches are monotone among themselves,
+        // so `moved` below still flags exactly a real reorder of surviving nodes.
+        int unkeyedMode = 0;        // 0 = undecided, 1 = ordinal, 2 = positional
+        int unkeyedCursor = 0;
 
         for (int i = 0; i < newN; i++)
         {
@@ -3356,9 +4010,21 @@ public sealed class TreeReconciler
                     }
                 }
             }
-            else if (nk.Key is null && i < oldN && !used[i] && oldKids[i].Key is null
-                && oldKids[i].ElementTypeId == nk.ElementTypeId)
-                match = i;
+            else
+            {
+                if (unkeyedMode == 0) unkeyedMode = UnkeyedPairing.Ordinal(oldKids, newKids) ? 1 : 2;
+                if (unkeyedMode == 1)
+                {
+                    while (unkeyedCursor < oldN && oldKids[unkeyedCursor].Key is not null) unkeyedCursor++;
+                    if (unkeyedCursor < oldN)
+                    {
+                        int ordinal = unkeyedCursor++;   // consumed whether or not the type matches
+                        if (!used[ordinal] && oldKids[ordinal].ElementTypeId == nk.ElementTypeId) match = ordinal;
+                    }
+                }
+                else if (i < oldN && !used[i] && oldKids[i].Key is null && oldKids[i].ElementTypeId == nk.ElementTypeId)
+                    match = i;
+            }
 
             if (match >= 0)
             {
@@ -3505,6 +4171,8 @@ public sealed class TreeReconciler
             // A hold-last-good in progress (media-pipeline.md §hold-last-good): unpin the pending (new, still-decoding)
             // id too — otherwise an unmount mid-hold would leak its pin (UnpinImageNode's refs==0 check cancels it).
             if (_pendingImageId.Remove(idx, out int pendingId)) UnpinImageNode(node, pendingId);
+            // A swap crossfade in flight holds its OUTGOING texture pinned — release it with the node.
+            if (_imageSwaps.Remove(idx, out var swap)) UnpinImageNode(node, swap.OutgoingId);
         }
         if (_nodeBindings.Remove(idx, out var binds)) for (int i = 0; i < binds.Count; i++) binds[i].Dispose();
         _providerSig.Remove(idx);
@@ -3928,8 +4596,24 @@ public sealed class TreeReconciler
         if (_keyNode.TryGetValue(key, out NodeHandle current) && current.Equals(node)) _keyNode.Remove(key);
     }
 
+    /// <summary>True while this node's implicit BrushTransition is still fading its FILL away from a visible colour —
+    /// the displayed colour is <c>LerpLinear(FillFrom, Fill, T)</c>, which is on screen even when the target is
+    /// transparent (see the BoxEl VisualKind hold in <see cref="WriteColumns"/>). SparsePaint gates the sparse lookup:
+    /// <c>SetBrushAnim</c> sets it, so a node that never faded pays one flag read.</summary>
+    private bool FillFadeInFlight(NodeHandle node)
+        => (_scene.Flags(node) & NodeFlags.SparsePaint) != 0
+           && _scene.TryGetBrushAnim(node, out var ba)
+           && (ba.Channels & BrushAnim.FillBit) != 0 && ba.FillFrom.A > 0f && ba.T < 1f;
+
     private void WriteColumns(NodeHandle node, Element el, bool isMount, Element? old = null)
     {
+        // P8 (Operation ultra-fast GPU engine): a reconciler column write rewrites LayoutInput / NodePaint /
+        // InteractionInfo / NodeFlags / the sparse visual tables for this node in one go, and only SOME of those
+        // writes end in a Mark(). Enumerating the rest precisely would mean auditing every field of this method and
+        // every element kind it handles, and one miss is a stale published row. So a reconcile declares itself a bulk
+        // mutation: the next capture of every publisher slot is a FULL copy. Coast frames - the case incremental
+        // capture exists for - do not reconcile at all.
+        _scene.NoteBulkMutation();
         // Snapshot layout shape before column writes so an update that only touches paint can skip LayoutDirty
         // (RunComponent no longer force-marks). float.Equals so NaN auto-sizes compare equal.
         LayoutInput layoutBefore = default;
@@ -3970,6 +4654,11 @@ public sealed class TreeReconciler
         // it + the child's sibling index to delay that child's Enter (a staggered list/shelf reveal). Reconciler-local;
         // cleared when Stagger drops to 0. Set for every element type (any container can stagger its children).
         if (el.Stagger > 0f) _childStagger[(int)node.Raw.Index] = el.Stagger; else _childStagger.Remove((int)node.Raw.Index);
+
+        // P1 presence (layout.md §4.7): static (unbound) Visible write, every element type. A bound channel is owned
+        // by its BindPresence effect (Reconciler.Presence.cs) — the static write must not clobber it, same guard
+        // shape as Fill/Opacity/Width/Height/Text above.
+        if (!el.Visible.IsBound) ApplyPresenceStatic(node, el.Visible.Value);
 
         switch (el)
         {
@@ -4020,6 +4709,14 @@ public sealed class TreeReconciler
                 // Guarded like Opacity/Width/Height/Text: a bound fill is owned by its effect — the static must never
                 // clobber it on an update between signal fires (mount was safe only because the bind fires after this).
                 if (fillOwned) paint.Fill = b.Fill.Value;
+                // A fade TO transparent must be DRAWN until it lands. With no other surface a transparent fill made the
+                // node VisualKind.None above, so the recorder never emitted it: colour→colour eased over the whole
+                // BrushTransition while colour→"no tint" snapped off in one frame, and the NEXT fade then started from a
+                // colour that was never on screen (a same-colour hop A→none→A blinked). Flutter's AnimatedContainer /
+                // ColorTween and a CSS background-color transition both keep painting the interpolated colour all the way
+                // down to alpha 0. The row retires at T≥1 (SceneStore.SetBrushAnimT); the first reconcile after that drops
+                // the node back to None, and until then the recorder draws nothing for the settled transparent box.
+                if (paint.VisualKind == VisualKind.None && FillFadeInFlight(node)) paint.VisualKind = VisualKind.Box;
                 if (!b.HoverFill.IsBound) paint.HoverFill = b.HoverFill.Value;
                 if (!b.PressedFill.IsBound) paint.PressedFill = b.PressedFill.Value;
                 if (borderOwned) paint.BorderColor = b.BorderColor.Value;
@@ -4406,7 +5103,7 @@ public sealed class TreeReconciler
                 // Keep the NodeFlags mirror in sync on REUSE too: a roving tab stop (RadioButtons, RadioButtons.xaml:5-6)
                 // moves IsTabStop between reused items frame-to-frame — a set-only mark would leave stale flags behind.
                 if (ii.Focusable) _scene.Mark(node, NodeFlags.Focusable);
-                else _scene.Flags(node) &= ~NodeFlags.Focusable;
+                else _scene.ClearFlagBits(node, NodeFlags.Focusable);
 
                 // A lazy hover affordance can mount AFTER its card/row received the pointer-enter edge (media-card play
                 // FABs are the canonical case). Seed it from the NEAREST interactive ancestor's live scope; stopping at
@@ -4749,76 +5446,21 @@ public sealed class TreeReconciler
                 paint.TextColor = st.Color;
                 paint.TextDecorations = 0;   // span decorations ride the span-run artifact path, not the single-run bits
 
-                ref LayoutInput li = ref _scene.Layout(node);
-                var bodySpans = st.Spans;
-                var suffixSpans = st.OverflowSuffix;
-                int bodySpanCount = bodySpans.Length;
-                int suffixSpanCount = suffixSpans?.Length ?? 0;
-                TextSpan[] spans;
-                if (suffixSpanCount == 0) spans = bodySpans;
+                _scene.SetSpanClickHandler(node, st.OnSpanClick);   // mount-static; rewritten unconditionally, cheap
+
+                int runId;
+                if (!st.Spans.IsBound)
+                    runId = WriteSpanText(node, st.Spans.Value.AsSpan(), st.OverflowSuffix, inRenderScope: true);
                 else
                 {
-                    spans = new TextSpan[bodySpanCount + suffixSpanCount];
-                    Array.Copy(bodySpans, spans, bodySpanCount);
-                    Array.Copy(suffixSpans!, 0, spans, bodySpanCount, suffixSpanCount);
+                    // Bound path: Reconciler.Spans.cs's mount-time effect owns the first (and every rebind) fire; keep
+                    // whatever run id the scene already carries (0 on a fresh mount before the effect runs, matching
+                    // TextEl.Text's bound convention — the static write here never races the bind, effects run in the
+                    // same BindNode pass immediately after WriteColumns at mount, :691-692).
+                    runId = _scene.Layout(node).TextStyle.SpanRunId;
                 }
-                int overflowSuffixStart = -1;
-                if (suffixSpanCount > 0)
-                {
-                    overflowSuffixStart = 0;
-                    for (int i = 0; i < bodySpanCount; i++) overflowSuffixStart += bodySpans[i].Text?.Length ?? 0;
-                }
-                // Re-register the POD shaping overlay ONLY when a shaping input changed: the run id is the key of the
-                // measure cache AND the renderer's shaped-run cache, so minting a fresh id IS the invalidation; an
-                // identical re-render keeps the id (steady reconciles never churn the caches).
-                int runId = li.TextStyle.SpanRunId;
-                bool same = runId != 0
-                    && SpanRunTable.Shared.Resolve(runId)?.OverflowSuffixStart == overflowSuffixStart
-                    && _scene.TryGetSpanText(node, out var oldSpans)
-                    && SameSpanShaping(oldSpans, spans);
-                if (!same)
-                {
-                    int total = 0;
-                    for (int i = 0; i < spans.Length; i++)
-                    {
-                        total += spans[i].Text?.Length ?? 0;
-                    }
-                    var concat = string.Create(total, spans, static (dst, src) =>
-                    {
-                        int at = 0;
-                        for (int i = 0; i < src.Length; i++)
-                        {
-                            var s = src[i].Text;
-                            if (string.IsNullOrEmpty(s)) continue;
-                            s.AsSpan().CopyTo(dst[at..]);
-                            at += s.Length;
-                        }
-                    });
-                    var styles = new SpanStyle[spans.Length];
-                    int pos = 0;
-                    for (int i = 0; i < spans.Length; i++)
-                    {
-                        ref readonly var sp = ref spans[i];
-                        int len = sp.Text?.Length ?? 0;
-                        byte flags = (byte)((sp.Underline ? SpanStyle.UnderlineBit : 0)
-                                          | (sp.Strikethrough ? SpanStyle.StrikethroughBit : 0)
-                                          | (sp.OnClick is not null ? SpanStyle.LinkBit : 0));
-                        var spanFam = _strings.Intern(sp.FontFamily);
-                        _strings.AddRef(spanFam);   // released by SceneStore.ReleaseSpanRun with the run
-                        styles[i] = new SpanStyle(pos, pos + len, sp.Weight, sp.Size ?? 0f, spanFam, sp.Color, flags);
-                        pos += len;
-                    }
-                    int newRunId = SpanRunTable.Shared.Create(styles, overflowSuffixStart);
-                    SpanRunTable.Shared.AddRef(newRunId);
-                    _scene.ReleaseSpanRun(runId);
-                    runId = newRunId;
 
-                    var newText = _strings.Intern(concat);
-                    if (paint.Text != newText) SetPaintText(ref paint, newText);
-                    MarkLayoutShape(node);
-                }
-                _scene.SetSpanText(node, spans);   // always — hyperlink actions may change without a shaping change
-
+                ref LayoutInput li = ref _scene.Layout(node);
                 var famId = _strings.Intern(st.FontFamily);
                 if (li.TextStyle.FontFamily != famId) { _strings.AddRef(famId); _strings.Release(li.TextStyle.FontFamily); }
                 li.TextStyle = new TextStyle(famId, st.Size, st.Weight != 0 ? st.Weight : (ushort)400,
@@ -4828,18 +5470,6 @@ public sealed class TreeReconciler
                 li.MinW = st.MinWidth; li.MinH = st.MinHeight; li.MaxW = st.MaxWidth; li.MaxH = st.MaxHeight;
                 li.FlexGrow = st.Grow; li.FlexShrink = st.Shrink; li.FlexBasis = st.Basis;
                 li.AlignSelf = st.AlignSelf; li.JustifySelf = st.JustifySelf;
-
-                // Hyperlink spans: hit-testable so the dispatcher can resolve Hand over the span rects and fire the
-                // span's OnClick (WinUI inline Hyperlink — RichTextBlock.cpp:2995 SetCursor(MouseCursorHand)).
-                ref InteractionInfo ii = ref _scene.Interaction(node);
-                bool hasLinks = false;
-                for (int i = 0; i < spans.Length && !hasLinks; i++) hasLinks = spans[i].OnClick is not null;
-                if (hasLinks)
-                {
-                    ii.HandlerMask |= InteractionInfo.SpanLinksBit;
-                    _scene.Mark(node, NodeFlags.WantsPointer);
-                }
-                else ii.HandlerMask &= ~(uint)InteractionInfo.SpanLinksBit;
 
                 WriteTextSelection(node, st.IsTextSelectionEnabled, st.SelectionHighlightColor);
                 break;
@@ -4932,7 +5562,7 @@ public sealed class TreeReconciler
             ii.HandlerMask &= ~(uint)(InteractionInfo.SelectableTextBit | InteractionInfo.CursorBit);
             ii.Cursor = CursorId.Arrow;
             ii.Focusable = false;
-            _scene.Flags(node) &= ~NodeFlags.Focusable;
+            _scene.ClearFlagBits(node, NodeFlags.Focusable);
             _scene.ClearTextSelection(node);
         }
         _scene.SetSelectionHighlight(node, highlight);
@@ -4941,9 +5571,8 @@ public sealed class TreeReconciler
     /// <summary>True when two span arrays are SHAPING-identical (text, weight, size, family, color, decorations,
     /// link-ness) — everything the span-run id keys downstream caches on. OnClick identity is deliberately excluded:
     /// re-rendered lambdas must not churn run ids (the scene's TextSpan[] side-table carries the fresh actions).</summary>
-    private static bool SameSpanShaping(TextSpan[] a, TextSpan[] b)
+    private static bool SameSpanShaping(ReadOnlySpan<TextSpan> a, ReadOnlySpan<TextSpan> b)
     {
-        if (ReferenceEquals(a, b)) return true;
         if (a.Length != b.Length) return false;
         for (int i = 0; i < a.Length; i++)
         {
@@ -4952,8 +5581,112 @@ public sealed class TreeReconciler
             if (!string.Equals(x.Text, y.Text, StringComparison.Ordinal) || x.Weight != y.Weight
                 || x.Color != y.Color || x.Underline != y.Underline || x.Strikethrough != y.Strikethrough
                 || !Nullable.Equals(x.Size, y.Size) || !string.Equals(x.FontFamily, y.FontFamily, StringComparison.Ordinal)
-                || (x.OnClick is null) != (y.OnClick is null)) return false;
+                || x.IsHyperlink != y.IsHyperlink) return false;
         }
         return true;
+    }
+
+    // Scene-owned, grow-only-capacity scratch for the span-paragraph concat build (P2): reused across every
+    // WriteSpanText call on the UI thread (single writer, never reentrant) so a shaping MISS never allocates a throwaway
+    // char[] — only StringTable.Intern's OWN `new string(...)` pays when the concatenated text is genuinely new.
+    private char[] _spanConcatScratch = Array.Empty<char>();
+
+    /// <summary>Mint/reuse the POD shaping overlay (<see cref="SpanRunTable"/> run) for one span paragraph and copy the
+    /// resolved spans into the scene's alias-safe per-node table (P2, "bound spans with index-resolved clicks").
+    /// Shared by the static WriteColumns path and <c>Reconciler.Spans.cs</c>'s bound effect — same shaping-gate
+    /// discipline either way: an identical span content/style set never re-shapes and never re-mints a run id
+    /// (<c>gate.spans.shaping-gate-keeps-run</c>). Returns the resolved <c>TextStyle.SpanRunId</c> for the caller to
+    /// fold into its own <see cref="LayoutInput.TextStyle"/> rebuild (every other TextStyle axis — size/weight/wrap/…
+    /// — rides <c>SpanTextEl</c>'s STATIC properties and is unaffected by a <c>Spans</c> rebind, so this method never
+    /// touches <see cref="LayoutInput"/> itself).
+    /// <para><paramref name="inRenderScope"/>: true from the static WriteColumns path (a re-shape may safely set
+    /// <c>_layoutShapeMutated</c> via <see cref="MarkLayoutShape"/>, like every other WriteColumns shape change);
+    /// false from <c>Reconciler.Spans.cs</c>'s bound effect, which — like the bound Text/Width/Height effects above
+    /// it — fires OUTSIDE a render scope and must mark only its OWN node (<see cref="NodeFlags.LayoutDirty"/>), per
+    /// <see cref="MarkLayoutShape"/>'s own doc comment ("Deliberately NOT used by the bound … effects").</para></summary>
+    private int WriteSpanText(NodeHandle node, ReadOnlySpan<TextSpan> bodySpans, TextSpan[]? suffixSpans, bool inRenderScope)
+    {
+        int bodyCount = bodySpans.Length;
+        int suffixCount = suffixSpans?.Length ?? 0;
+        TextSpan[]? merged = null;
+        ReadOnlySpan<TextSpan> spans;
+        int overflowSuffixStart = -1;
+        if (suffixCount == 0) spans = bodySpans;
+        else
+        {
+            merged = new TextSpan[bodyCount + suffixCount];
+            bodySpans.CopyTo(merged);
+            Array.Copy(suffixSpans!, 0, merged, bodyCount, suffixCount);
+            spans = merged;
+            overflowSuffixStart = 0;
+            for (int i = 0; i < bodyCount; i++) overflowSuffixStart += bodySpans[i].Text?.Length ?? 0;
+        }
+
+        ref NodePaint paint = ref _scene.Paint(node);
+        ref LayoutInput li = ref _scene.Layout(node);
+
+        // Re-register the POD shaping overlay ONLY when a shaping input changed: the run id is the key of the
+        // measure cache AND the renderer's shaped-run cache, so minting a fresh id IS the invalidation; an
+        // identical re-render (or an identical rebind — the whole point of the bound-spans gate) keeps the id.
+        int runId = li.TextStyle.SpanRunId;
+        bool same = runId != 0
+            && SpanRunTable.Shared.Resolve(runId)?.OverflowSuffixStart == overflowSuffixStart
+            && _scene.TryGetSpanText(node, out var oldSpans)
+            && SameSpanShaping(oldSpans, spans);
+        if (!same)
+        {
+            int total = 0;
+            for (int i = 0; i < spans.Length; i++) total += spans[i].Text?.Length ?? 0;
+            if (_spanConcatScratch.Length < total)
+                _spanConcatScratch = new char[Math.Max(total, Math.Max(64, _spanConcatScratch.Length * 2))];
+            var scratch = _spanConcatScratch.AsSpan(0, total);
+            int at = 0;
+            for (int i = 0; i < spans.Length; i++)
+            {
+                var s = spans[i].Text;
+                if (string.IsNullOrEmpty(s)) continue;
+                s.AsSpan().CopyTo(scratch[at..]);
+                at += s.Length;
+            }
+
+            var styles = new SpanStyle[spans.Length];
+            int pos = 0;
+            for (int i = 0; i < spans.Length; i++)
+            {
+                ref readonly var sp = ref spans[i];
+                int len = sp.Text?.Length ?? 0;
+                byte flags = (byte)((sp.Underline ? SpanStyle.UnderlineBit : 0)
+                                  | (sp.Strikethrough ? SpanStyle.StrikethroughBit : 0)
+                                  | (sp.IsHyperlink ? SpanStyle.LinkBit : 0));
+                var spanFam = _strings.Intern(sp.FontFamily);
+                _strings.AddRef(spanFam);   // released by SceneStore.ReleaseSpanRun with the run
+                styles[i] = new SpanStyle(pos, pos + len, sp.Weight, sp.Size ?? 0f, spanFam, sp.Color, flags);
+                pos += len;
+            }
+            int newRunId = SpanRunTable.Shared.Create(styles, overflowSuffixStart);
+            SpanRunTable.Shared.AddRef(newRunId);
+            _scene.ReleaseSpanRun(runId);
+            runId = newRunId;
+
+            var newText = _strings.Intern(scratch);   // probes by content first — allocates only a genuinely new string
+            if (paint.Text != newText) SetPaintText(ref paint, newText);
+            if (inRenderScope) MarkLayoutShape(node); else _scene.Mark(node, NodeFlags.LayoutDirty);
+        }
+        _scene.SetSpanText(node, spans);   // always — hyperlink actions may change without a shaping change
+
+        // Hyperlink spans: hit-testable so the dispatcher can resolve Hand over the span rects and fire the
+        // span's action (own OnClick, else the node's OnSpanClick by index — WinUI inline Hyperlink,
+        // RichTextBlock.cpp:2995 SetCursor(MouseCursorHand)).
+        ref InteractionInfo ii = ref _scene.Interaction(node);
+        bool hasLinks = false;
+        for (int i = 0; i < spans.Length && !hasLinks; i++) hasLinks = spans[i].IsHyperlink;
+        if (hasLinks)
+        {
+            ii.HandlerMask |= InteractionInfo.SpanLinksBit;
+            _scene.Mark(node, NodeFlags.WantsPointer);
+        }
+        else ii.HandlerMask &= ~(uint)InteractionInfo.SpanLinksBit;
+
+        return runId;
     }
 }

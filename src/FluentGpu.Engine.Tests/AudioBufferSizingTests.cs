@@ -77,6 +77,7 @@ public sealed class AudioBufferSizingTests
         session.SetVoice(voice, TimeSpan.FromSeconds(10), frames, NormMode.Off, -14f, initialVolume: 1f);
         session.ConnectSignals(new MediaSignalSink(new MediaPlayerCore()));
         _ = session.PlayAsync();
+        feed.WorkerPumpOnce();
         feed.ControlTickOnce();   // Opening → Buffering
         feed.ControlTickOnce();   // Buffering → Ready → Playing
         Assert.Equal(PlaybackState.Playing, session.CurrentState);

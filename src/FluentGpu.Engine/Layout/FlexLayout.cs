@@ -11,7 +11,7 @@ namespace FluentGpu.Layout;
 /// position by justify-content, align the cross axis by align-items/align-self incl. stretch, applying margins).
 /// Direction 0 = row (main = X), 1 = column (main = Y). Wrap / grid / absolute positioning are the remaining layout work.
 /// </summary>
-public sealed class FlexLayout
+public sealed partial class FlexLayout
 {
     private readonly SceneStore _scene;
     private readonly IFontSystem _fonts;
@@ -32,7 +32,8 @@ public sealed class FlexLayout
     // These are per-FRAME accumulators now (not per-Run): the standalone Run() print below snapshots deltas so its
     // per-call semantics are unchanged, while the host resets them once per frame (ResetFrameDiagCounters) and reads
     // them into FrameStats — so a probe sees the whole frame's measure/arrange/text-reshape cost across the full layout
-    // + scoped relayout + phase-7 reflow re-solves. Gated on s_layoutDiag ⇒ zero work/alloc when the flag is off.
+    // + scoped relayout + phase-7 reflow re-solves. The counters themselves are always-on (cheap int increments);
+    // s_layoutDiag gates only the per-Run() Console.Error.WriteLine printout below.
     private int _dMeasure, _dTextHit, _dTextMiss, _dArrange, _dMeasureMemoHit;
 
     /// <summary>Per-frame layout-cost counters (valid only when FG_LAYOUT_DIAG=1; else 0). Surfaced into FrameStats.</summary>
@@ -46,7 +47,7 @@ public sealed class FlexLayout
 
     /// <summary>Host-driven per-frame reset: zero the diag counters at the top of a frame so DiagMeasure/Arrange/TextMiss
     /// read that frame's total after all layout (full + scoped + phase-7 reflow) has run. Cheap; no-op meaning when off.</summary>
-    public void ResetFrameDiagCounters() { _dMeasure = _dTextHit = _dTextMiss = _dArrange = _dMeasureMemoHit = _dOverflow = 0; }
+    public void ResetFrameDiagCounters() { _dMeasure = _dTextHit = _dTextMiss = _dArrange = _dMeasureMemoHit = _dOverflow = _dUnmarkedLayoutWrites = 0; }
 
     // Within-pass Measure memo. Measure(node, availW) is a PURE function of the node's subtree content + availW within
     // ONE layout solve (it has no external mutable input; its only side effect is writing the node's Bounds W/H). But the
@@ -66,17 +67,76 @@ public sealed class FlexLayout
         public uint NodeGen;                                             // handle generation — ABA guard on a recycled node index
         public float PAvailW, PW, PH;                                    // that pass's offered width → measured border-box size
         public ulong PInputSig;                                          // LayoutSig at that moment (see LayoutSig)
+        // P4 (Operation ultra-fast GPU engine): a CROSS-PASS 2-entry ring — typically one slot per (measure-width,
+        // arrange-width) pair a stretched child is asked for every pass (layout.md §2.3). Valid ONLY while
+        // SceneStore.IsLayoutClean(node) holds (no dirty node anywhere in the subtree this frame) AND NodeGen matches
+        // (an ABA guard against a recycled node index) AND, defensively, LayoutSig matches (the same conservative
+        // superset TryResolveSizeStable already trusts) — a hit returns the stored size WITHOUT descending at all.
+        public uint Ring0NodeGen, Ring1NodeGen;
+        public float Ring0AvailW, Ring0W, Ring0H; public ulong Ring0Sig;
+        public float Ring1AvailW, Ring1W, Ring1H; public ulong Ring1Sig;
     }
     private MeasureMemo[] _memo = System.Array.Empty<MeasureMemo>();
     private uint _measureGen;
 
     private void BeginMeasurePass()
     {
+        // P8 (Operation ultra-fast GPU engine): a layout pass rewrites Bounds across whole subtrees off a single dirty
+        // ancestor - none of those descendant writes carry a per-node mark, and Bounds is a captured column. So a
+        // layout solve declares itself a bulk mutation and the next capture of every publisher slot is a FULL copy.
+        // Scrolling is deliberately layout-free (layout.md 6), which is exactly why a coast frame stays incremental.
+        if (!Verifying) _scene.NoteBulkMutation();
         _measureGen++;
         int cap = _scene.Capacity;
         // Resize (copy), never re-allocate blank: growth must not drop the persistent per-node measure records that
-        // TryResolveSizeStable needs. The within-pass half stays correct either way (it is keyed by generation).
+        // TryResolveSizeStable needs (nor the P4 cross-pass ring below). The within-pass half stays correct either
+        // way (it is keyed by generation).
         if (_memo.Length < cap) System.Array.Resize(ref _memo, cap);
+        if (_arranged.Length < cap) System.Array.Resize(ref _arranged, cap);
+        if (_measuredPass.Length < cap) System.Array.Resize(ref _measuredPass, cap);
+        _pass++;
+    }
+
+    /// <summary>P4 cross-pass measure ring lookup — see the <c>Ring0*</c>/<c>Ring1*</c> fields on <see cref="MeasureMemo"/>.
+    /// Excluded for viewport/grid/z-stack roots (same conservative scope as <see cref="TryResolveSizeStable"/> and the
+    /// within-pass memo — those measure paths keep no per-node record to validate against).</summary>
+    private bool TryRingHit(NodeHandle node, float availW, out Size2 size)
+    {
+        size = default;
+        if (Verifying) return false;   // FG_LAYOUT_VERIFY: the oracle's re-solve descends for real, it never rides the ring
+        uint i = node.Raw.Index;
+        if (i >= (uint)_memo.Length) return false;
+        if (!_scene.IsLayoutClean(node)) return false;
+        uint gen = node.Raw.Gen;
+        ref MeasureMemo m = ref _memo[i];
+        ulong sig = 0; bool sigComputed = false;
+        if (m.Ring0NodeGen == gen && m.Ring0AvailW == availW)
+        {
+            sig = LayoutSig(node); sigComputed = true;
+            if (sig == m.Ring0Sig) { size = new Size2(m.Ring0W, m.Ring0H); return true; }
+        }
+        if (m.Ring1NodeGen == gen && m.Ring1AvailW == availW)
+        {
+            if (!sigComputed) sig = LayoutSig(node);
+            if (sig == m.Ring1Sig) { size = new Size2(m.Ring1W, m.Ring1H); return true; }
+        }
+        return false;
+    }
+
+    /// <summary>P4 cross-pass measure ring store — updates the matching slot if this (node, availW) already has one,
+    /// else pushes into slot 0 (slot 0 → slot 1, the simplest 2-entry recency ring; measure-width and arrange-width
+    /// naturally settle into the two slots since they're the only two distinct widths a stretched child sees per pass).</summary>
+    private void StoreRing(NodeHandle node, float availW, Size2 size)
+    {
+        uint i = node.Raw.Index;
+        if (i >= (uint)_memo.Length) return;
+        uint gen = node.Raw.Gen;
+        ulong sig = LayoutSig(node);
+        ref MeasureMemo m = ref _memo[i];
+        if (m.Ring0NodeGen == gen && m.Ring0AvailW == availW) { m.Ring0W = size.Width; m.Ring0H = size.Height; m.Ring0Sig = sig; return; }
+        if (m.Ring1NodeGen == gen && m.Ring1AvailW == availW) { m.Ring1W = size.Width; m.Ring1H = size.Height; m.Ring1Sig = sig; return; }
+        m.Ring1NodeGen = m.Ring0NodeGen; m.Ring1AvailW = m.Ring0AvailW; m.Ring1W = m.Ring0W; m.Ring1H = m.Ring0H; m.Ring1Sig = m.Ring0Sig;
+        m.Ring0NodeGen = gen; m.Ring0AvailW = availW; m.Ring0W = size.Width; m.Ring0H = size.Height; m.Ring0Sig = sig;
     }
 
     private Size2 StoreMemo(NodeHandle node, float availW, Size2 size)
@@ -166,6 +226,7 @@ public sealed class FlexLayout
         BeginMeasurePass();
         var size = Measure(root);
         Arrange(root, 0f, 0f, size.Width, size.Height);
+        VerifyParity(root, float.PositiveInfinity, 0f, 0f, size.Width, size.Height, "Run");
     }
 
     /// <summary>Lay out the root to FILL the window (the conventional top-level behavior) — an auto-sized root takes
@@ -182,6 +243,7 @@ public sealed class FlexLayout
         float w = float.IsNaN(li.Width) ? window.Width : li.Width;
         float h = float.IsNaN(li.Height) ? window.Height : li.Height;
         Arrange(root, 0f, 0f, w, h);
+        VerifyParity(root, window.Width, 0f, 0f, w, h, "Run(window)");
         if (s_layoutDiag) Console.Error.WriteLine($"[FG_LAYOUT_DIAG] measure={_dMeasure - m0} memoHit={_dMeasureMemoHit - mh0} arrange={_dArrange - a0} textHit={_dTextHit - th0} textMiss={_dTextMiss - tm0}");
     }
 
@@ -213,7 +275,38 @@ public sealed class FlexLayout
             if (float.IsNaN(li.Height)) h = MathF.Min(h, MathF.Max(0f, pb.H - pli.Padding.Vertical   - li.Margin.Vertical));
         }
         Measure(node, w);
-        Arrange(node, b.X, b.Y, w, h);
+        float ox = b.X, oy = b.Y;
+        Arrange(node, ox, oy, w, h);
+        VerifyParity(node, w, ox, oy, w, h, "RunSubtree");
+    }
+
+    // P1 presence (layout.md §4.7): a collapsed node (Element.Visible resolved false) is out of layout flow. This
+    // reads the DEDICATED SceneStore.AuxFlags.Collapsed bit, not NodeFlags.Visible: NodeFlags.Visible is also
+    // toggled directly by callers that only want to cull PAINT/record reachability without leaving layout flow
+    // (e.g. PagedShelf's permanently-mounted measurement probe layer — see PagedShelf.cs's "RECORD-cull" comment,
+    // whose contract is "layout still runs, it ignores the flag"). Collapsing layout on every NodeFlags.Visible
+    // clear broke that contract (gate.shelf.binding.measurement regressed to heights=68->68->68 — the probe never
+    // measured because its cells were laid out at 0x0 while record-culled). SetCollapsed still mirrors the aux bit
+    // onto NodeFlags.Visible/HitTestVisible for the recorder/hit-test/LayoutSig readers, so a presence flip is still
+    // seen there for free — only the LAYOUT collapse decision itself must key off the dedicated bit.
+    private bool Collapsed(NodeHandle h) => _scene.IsCollapsed(h);
+
+    // FirstVisibleChild/NextVisibleSibling: the ONE substitution point that makes every Flex/Wrap/ZStack child loop
+    // skip a collapsed child ENTIRELY (no box, no margin, no gap slot — true CSS display:none, not visibility:hidden)
+    // by construction, with no per-loop idx/array bookkeeping. Grid deliberately does NOT use these (its row-assign
+    // loop keeps raw NextSibling) — a collapsed grid cell keeps its track (gate.presence.grid-cell-keeps-track); it
+    // relies instead on the Measure/Arrange top-level short-circuit below to size 0×0.
+    private NodeHandle FirstVisibleChild(NodeHandle node)
+    {
+        var c = _scene.FirstChild(node);
+        while (!c.IsNull && Collapsed(c)) c = _scene.NextSibling(c);
+        return c;
+    }
+    private NodeHandle NextVisibleSibling(NodeHandle c)
+    {
+        c = _scene.NextSibling(c);
+        while (!c.IsNull && Collapsed(c)) c = _scene.NextSibling(c);
+        return c;
     }
 
     private static bool Row(in LayoutInput li) => li.Direction == 0;
@@ -255,11 +348,29 @@ public sealed class FlexLayout
             $"content={inner:0.##} (box={parentW:0.##}, pad={padH:0.##}) by {next.W - inner:0.##}");
     }
 
+    // P4: the LAST rect an Arrange call actually placed each node at — written ONLY here, unlike scene.Bounds()
+    // (which Measure also scribbles hypothetical W/H into for a not-yet-arranged pass). AuxFlags.ArrangedValid says
+    // whether the slot holds a real value yet (false for a fresh/recycled node index — cleared on CreateNode).
+    private RectF[] _arranged = System.Array.Empty<RectF>();
+    // Per-pass stamp grown with `_arranged`: every Measure Bounds W/H scribble records `_pass` so an Arrange early-out
+    // can restore descendants this pass actually touched. A ring-hit parent never visits children — their stamp stays
+    // stale and their Bounds still hold the last arranged rect (do not "restore" those).
+    private int[] _measuredPass = System.Array.Empty<int>();
+    private int _pass;
+
     private void SetArrangedBounds(NodeHandle node, in RectF next)
     {
-        if (s_layoutOverflow) ReportOverflow(node, in next);
         ref RectF b = ref _scene.Bounds(node);
         b = next;
+        // FG_LAYOUT_VERIFY's from-scratch re-solve writes Bounds (that IS what it compares) but must leave every other
+        // trace of a layout pass alone: the arranged-rect column, the ArrangedValid bit, the overflow report and the
+        // OnBoundsChanged edge are all real per-frame effects that a second solve would duplicate.
+        if (Verifying) return;
+        if (s_layoutOverflow) ReportOverflow(node, in next);
+        uint ai = node.Raw.Index;
+        if (ai < (uint)_arranged.Length) _arranged[ai] = next;
+        _scene.SetArrangedValid(node);
+        NoteVerifySig(node);   // DEBUG tripwire baseline: the layout inputs this placement was computed from
         var handler = _scene.GetBoundsChangedHandler(node);   // element author's Element.OnBoundsChanged
         var hook = _scene.GetBoundsChangedHook(node);          // hook-owned observers (UseMeasuredBounds/Width) — separate slot
         if (handler is null && hook is null) return;
@@ -281,9 +392,59 @@ public sealed class FlexLayout
         }
     }
 
+    /// <summary>P4 Arrange early-out companion: the skip path never calls <see cref="SetArrangedBounds"/> (geometry
+    /// provably didn't change, so there is nothing to deliver on a REAL change), but a handler/hook installed since
+    /// the last real arrange still owes its one-shot initial delivery — <see cref="NodeFlags.BoundsChangedPending"/>
+    /// is exactly that signal, independent of whether the rect moved.</summary>
+    private void DeliverPendingBoundsChangedIfAny(NodeHandle node, in RectF current)
+    {
+        if ((_scene.Flags(node) & NodeFlags.BoundsChangedPending) == 0) return;
+        var handler = _scene.GetBoundsChangedHandler(node);
+        var hook = _scene.GetBoundsChangedHook(node);
+        _scene.Unmark(node, NodeFlags.BoundsChangedPending);
+        ref RectF delivered = ref _scene.BoundsDeliveredRef(node);
+        delivered = current;
+        handler?.Invoke(current);
+        hook?.Invoke(current);
+    }
+
+    /// <summary>Measure's live-column scribble: hypothetical W/H into <c>scene.Bounds</c>, stamped so a later Arrange
+    /// early-out can restore every descendant this pass touched (a skip must not strand Grow=1 Width=NaN leaves at the
+    /// hypothetical size — typically W=0 inside a clean ZStack).</summary>
+    private void WriteMeasuredBounds(NodeHandle node, float w, float h)
+    {
+        uint i = node.Raw.Index;
+        ref RectF b = ref _scene.Bounds(node);
+        b = new RectF(b.X, b.Y, w, h);
+        if (i < (uint)_measuredPass.Length) _measuredPass[i] = _pass;
+    }
+
+    /// <summary>Walk children Measure scribbled this pass and put their last arranged rect back. The skip already
+    /// re-asserted <paramref name="n"/> itself; without this walk a clean ZStack (ring-excluded) leaves Grow=1
+    /// Width=NaN descendants at the hypothetical W=0 Measure wrote.</summary>
+    private void RestoreArrangedDescendants(NodeHandle n)
+    {
+        for (var c = _scene.FirstChild(n); !c.IsNull; c = _scene.NextSibling(c))
+        {
+            uint ci = c.Raw.Index;
+            if (ci >= (uint)_measuredPass.Length || _measuredPass[ci] != _pass) continue; // Measure never descended here (ring hit) → Bounds still hold the arranged rect
+            if (_scene.IsArrangedValid(c)) { ref RectF cb = ref _scene.Bounds(c); cb = _arranged[ci]; }
+            RestoreArrangedDescendants(c);
+        }
+    }
+
     // ── Measure: fill Bounds.W/H with each node's base (hypothetical) border-box size ──
     private Size2 Measure(NodeHandle node, float availW = float.PositiveInfinity)
     {
+        // P1 presence: a collapsed node (incl. a collapsed scroll/grid/zstack root — "a collapsed virtual slot root
+        // measures 0 at its rect") measures 0×0 unconditionally, before the viewport/grid/zstack dispatch and before
+        // the memo lookup (no memo entry recorded — cheap enough to redo, and TryResolveSizeStable's LayoutSig
+        // already re-escalates on the Visible flip so this never desyncs a scoped relayout).
+        if (Collapsed(node))
+        {
+            WriteMeasuredBounds(node, 0f, 0f);
+            return default;
+        }
         // Within-pass memo: same (node, availW) already solved this pass ⇒ reuse it, re-asserting the Bounds W/H so the
         // Arrange pass (which reads Bounds for base main/cross sizes) sees exactly what an unmemoized recompute would.
         uint mi = node.Raw.Index;
@@ -292,23 +453,37 @@ public sealed class FlexLayout
             ref MeasureMemo hit = ref _memo[mi];
             if (hit.Gen == _measureGen && hit.AvailW == availW)
             {
-                if (s_layoutDiag) _dMeasureMemoHit++;
-                ref RectF hb = ref _scene.Bounds(node);
-                hb = new RectF(hb.X, hb.Y, hit.W, hit.H);
+                _dMeasureMemoHit++;
+                WriteMeasuredBounds(node, hit.W, hit.H);
                 return new Size2(hit.W, hit.H);
             }
         }
-        // Counted AFTER the memo check: _dMeasure is REAL measure work (a memo hit is a few loads, not a solve), so a
-        // measure≫arrange reading now means genuine recompute redundancy rather than call-site churn the memo absorbs.
-        if (s_layoutDiag) _dMeasure++;
-        ref LayoutInput li = ref _scene.Layout(node);
-        ref NodePaint paint = ref _scene.Paint(node);
-
         // A scroll/virtual viewport is a layout boundary: its size is its own box (explicit/flex), independent of
         // content — content overflow is what scrolls. (layout.md §4.3/§6.)
         // NOTE: the viewport/grid/zstack measure paths are NOT memoized (only the pure general flex path below is) — they
         // recompute every call. Their SUBTREES still benefit (the general-path nodes inside them memoize). Conservative:
         // the flex-row pre-pass/main-loop redundancy that compounds is entirely in the general path.
+        bool special = _scene.HasScroll(node) || _scene.HasGrid(node) || (_scene.Flags(node) & NodeFlags.ZStack) != 0;
+
+        // P4 cross-pass ring: a hit means this exact (node, availW) was measured before, NOTHING in the subtree has
+        // moved since (SceneStore.IsLayoutClean), the node index hasn't been recycled, and this node's own
+        // participation fields still hash the same — so the stored size is provably still correct and Measure can
+        // return WITHOUT DESCENDING at all (no children visited, no text re-shaped). Re-assert Bounds W/H exactly
+        // like the within-pass hit above so Arrange (which reads Bounds for base sizes) sees the identical value.
+        if (!special && TryRingHit(node, availW, out var ringSize))
+        {
+            _dMeasureMemoHit++;
+            WriteMeasuredBounds(node, ringSize.Width, ringSize.Height);
+            return StoreMemo(node, availW, ringSize);
+        }
+
+        // Counted AFTER the memo checks: _dMeasure is REAL measure work (a memo/ring hit is a few loads, not a
+        // solve), so a measure≫arrange reading now means genuine recompute redundancy rather than call-site churn
+        // the memo absorbs.
+        _dMeasure++;
+        ref LayoutInput li = ref _scene.Layout(node);
+        ref NodePaint paint = ref _scene.Paint(node);
+
         if (_scene.HasScroll(node)) return MeasureViewport(node, in li, availW);
         if (_scene.HasGrid(node)) return MeasureGrid(node, in li, availW);
         if ((_scene.Flags(node) & NodeFlags.ZStack) != 0) return MeasureZStack(node, in li, availW);
@@ -327,15 +502,17 @@ public sealed class FlexLayout
                 : float.PositiveInfinity;
             // Measure cache: skip re-shaping when (text, style, availWidth) are unchanged (the §2.3 down-rule win on a
             // scoped relayout). Pure-function key ⇒ self-invalidating; helps the real shaping path, neutral headless.
+            // P4: a 2-ENTRY RING — a stretched leaf is measured at the parent's available width AND again at the final
+            // arranged width, which thrashed a single slot into a miss on every single pass (Scene/Columns.cs).
             ref TextMeasureCache mc = ref _scene.MeasureCacheRef(node);
-            if (mc.Valid && mc.Text == paint.Text && mc.MaxW == maxW && mc.Style == li.TextStyle)
+            if (mc.TryGet(paint.Text, in li.TextStyle, maxW, out var cached))
             {
-                if (s_layoutDiag) _dTextHit++;
-                w = mc.Size.Width; h = mc.Size.Height;
+                _dTextHit++;
+                w = cached.Size.Width; h = cached.Size.Height;
             }
             else
             {
-                if (s_layoutDiag) _dTextMiss++;
+                _dTextMiss++;
                 // Auto-fit (TextEl.MinSize / TextStyle.MinSizeDip): shrink the font so the run fits MaxLines at maxW.
                 // Opt-in (MinSizeDip>0), so normal text skips this entirely. The chosen size feeds BOTH the measured box
                 // and the recorder (stored as FitSize); 0 ⇒ no shrink (the recorder shapes at the authored SizeDip).
@@ -351,12 +528,12 @@ public sealed class FlexLayout
                 w = m.Size.Width; h = m.Size.Height;
                 // Retain the face's decoration metrics alongside the size: the recorder places underline/strikethrough
                 // bars (NodePaint.TextDecorations) from this row at record time without re-touching the font seam.
-                mc = new TextMeasureCache
+                mc.Store(new TextMeasureEntry
                 {
                     Valid = true, Text = paint.Text, Style = li.TextStyle, MaxW = maxW, Size = new Size2(w, h),
                     FitSize = fit,
                     UnderlineY = m.UnderlineY, UnderlineThickness = m.UnderlineThickness, StrikeY = m.StrikeY,
-                };
+                });
             }
         }
         else
@@ -382,7 +559,7 @@ public sealed class FlexLayout
                 if (row && !float.IsInfinity(childAvail))
                 {
                     float fixedMain = 0f; int cc = 0;
-                    for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
+                    for (var c = FirstVisibleChild(node); !c.IsNull; c = NextVisibleSibling(c))
                     {
                         ref LayoutInput cli2 = ref _scene.Layout(c);
                         cc++;
@@ -395,7 +572,7 @@ public sealed class FlexLayout
 
                 float main = 0f, cross = 0f;
                 int n = 0;
-                for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
+                for (var c = FirstVisibleChild(node); !c.IsNull; c = NextVisibleSibling(c))
                 {
                     ref LayoutInput cli = ref _scene.Layout(c);
                     // A grow child measures at its SHARE of the leftover, not the whole of it: with several grow
@@ -431,6 +608,11 @@ public sealed class FlexLayout
                     cross = MathF.Max(cross, cCross);
                     n++;
                 }
+                // A SizeMode.Reflow exit orphan is detached (FirstVisibleChild skips it) but still owns the closing
+                // height: without this add, a measured virtual row snaps to the without-child extent on the remove
+                // frame while the orphan paints at its last full Bounds. Read the live LayoutInput / Bounds — no
+                // recursive Measure (content is frozen; the Size track writes the animating extent).
+                AddOrphanMain(node, row, ref main, ref cross, ref n);
                 if (n > 1) main += li.Gap * (n - 1);
                 main += row ? li.Padding.Horizontal : li.Padding.Vertical;
                 cross += row ? li.Padding.Vertical : li.Padding.Horizontal;
@@ -462,15 +644,77 @@ public sealed class FlexLayout
         w = Clamp(w, li.MinW, li.MaxW);
         h = Clamp(h, li.MinH, li.MaxH);
 
-        ref RectF b = ref _scene.Bounds(node);
-        b = new RectF(b.X, b.Y, w, h);
-        return StoreMemo(node, availW, new Size2(w, h));
+        WriteMeasuredBounds(node, w, h);
+        var result = new Size2(w, h);
+        StoreRing(node, availW, result);   // P4: always refresh the cross-pass ring — its later read validity is the clean-subtree gate above, not the write.
+        return StoreMemo(node, availW, result);
+    }
+
+    /// <summary>Fold exit-orphan main/cross sizes into a parent's Measure. Allocation-free: walks the scene's existing
+    /// per-parent orphan list (empty in the steady state — OrphanCount short-circuits). Does not recurse into the
+    /// orphan; the Size track already wrote LayoutInput / Bounds.</summary>
+    private void AddOrphanMain(NodeHandle node, bool row, ref float main, ref float cross, ref int n)
+    {
+        if (_scene.OrphanCount == 0) return;
+        var orphans = _scene.OrphanChildrenOf(node);
+        if (orphans is null) return;
+        for (int i = 0; i < orphans.Count; i++)
+        {
+            var o = orphans[i];
+            if (!_scene.IsLive(o)) continue;
+            ref LayoutInput oli = ref _scene.Layout(o);
+            float oW = !float.IsNaN(oli.Width) ? oli.Width : _scene.Bounds(o).W;
+            float oH = !float.IsNaN(oli.Height) ? oli.Height : _scene.Bounds(o).H;
+            main += (row ? oW : oH) + MarginMain(oli, row);
+            float oCross = (row ? oH : oW) + MarginCross(oli, row);
+            if (oCross > cross) cross = oCross;
+            n++;
+        }
     }
 
     // ── Arrange: position + size children within the node's final box ──
     private void Arrange(NodeHandle node, float x, float y, float finalW, float finalH)
     {
-        if (s_layoutDiag) _dArrange++;
+        // P1 presence: snap to 0×0 at the offered position and stop — no recursion into a collapsed subtree (its
+        // children are never visited during layout; the recorder/hit-test walks independently early-return on the
+        // node's own cleared NodeFlags.Visible, so their staleness doesn't matter while collapsed).
+        if (Collapsed(node)) { SetArrangedBounds(node, new RectF(x, y, 0f, 0f)); return; }
+
+        // P4 early-out (layout.md §4.2/§4.6): nothing in this subtree (self or any descendant) was marked
+        // layout-dirty this frame, a previous Arrange already recorded a real rect for this node, and the box the
+        // caller is placing it into is BYTE-IDENTICAL to that rect. Every input this algorithm reads — this node's
+        // own LayoutInput and every descendant's — is therefore provably unchanged (that IS what "clean" means, see
+        // SceneStore.IsLayoutClean), so re-running it can only reproduce the same placement it already has.
+        // EXCLUDES any node that IS or CONTAINS a scroll viewport (HasScrollInSubtree): ArrangeViewport has
+        // continuous per-frame obligations — posting SetFrame, checking VirtualWindowing.NeedsRealize, re-realizing
+        // rows — that are NOT gated by LayoutDirty at all (scrolling is deliberately layout-free/transform-only,
+        // layout.md §6), so a CLEAN, geometrically-unchanged ANCESTOR must still be walked into whenever a viewport
+        // lives anywhere below it, or that viewport silently stops being serviced every frame layout runs at all
+        // (found via gate.semantic-zoom.reduced-motion: a KeepAlive overview's ItemsView viewport, several levels
+        // below an unchanging full-bleed wrapper, stopped receiving Arrange calls entirely once the wrapper settled).
+        uint ei = node.Raw.Index;
+        // FG_LAYOUT_VERIFY: the oracle's re-solve is a FROM-SCRATCH solve by definition — every incremental
+        // short-circuit is off inside it, or it would just reproduce the incremental answer it exists to check.
+        if (!Verifying
+            && ei < (uint)_arranged.Length && _scene.IsArrangedValid(node) && !_scene.HasScrollInSubtree(node) && _scene.IsLayoutClean(node))
+        {
+            ref RectF prev = ref _arranged[ei];
+            if (prev.X == x && prev.Y == y && prev.W == finalW && prev.H == finalH)
+            {
+                // DEBUG tripwire: this early-out is a claim about the WHOLE subtree ("nothing under here changed").
+                // Re-hash it against the last real arrange and count any node that moved without a dirty mark.
+                VerifyEarlyOutSubtree(node);
+                ref RectF pb = ref _scene.Bounds(node);
+                pb = prev;   // defensive re-assert — Measure only ever touches W/H, never X/Y, but this keeps the invariant local and cheap
+                // Measure scribbled hypothetical W/H into every descendant it visited (a clean ZStack is a ring miss,
+                // so the skip must not strand those children at the measure size — typically W=0 for Grow=1 Width=NaN).
+                if (ei < (uint)_measuredPass.Length && _measuredPass[ei] == _pass) RestoreArrangedDescendants(node);
+                DeliverPendingBoundsChangedIfAny(node, in prev);
+                return;
+            }
+        }
+
+        _dArrange++;
         SetArrangedBounds(node, new RectF(x, y, finalW, finalH));
 
         ref LayoutInput li = ref _scene.Layout(node);
@@ -493,7 +737,7 @@ public sealed class FlexLayout
         // page wider than the actual frame.
         if (!row && !float.IsInfinity(availCross))
         {
-            for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
+            for (var c = FirstVisibleChild(node); !c.IsNull; c = NextVisibleSibling(c))
             {
                 ref LayoutInput cli = ref _scene.Layout(c);
                 FlexAlign align = cli.AlignSelf == FlexAlign.Auto ? li.AlignItems : cli.AlignSelf;
@@ -508,7 +752,7 @@ public sealed class FlexLayout
 
         // First pass: base main sizes + counts.
         int n = 0; float usedMain = 0f, totalGrow = 0f, totalShrinkScaled = 0f;
-        for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
+        for (var c = FirstVisibleChild(node); !c.IsNull; c = NextVisibleSibling(c))
         {
             ref LayoutInput cli = ref _scene.Layout(c);
             ref RectF cb = ref _scene.Bounds(c);
@@ -526,7 +770,7 @@ public sealed class FlexLayout
         Span<float> finalMain = n <= 64 ? stackalloc float[n] : new float[n];
         {
             int i = 0;
-            for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c), i++)
+            for (var c = FirstVisibleChild(node); !c.IsNull; c = NextVisibleSibling(c))
             {
                 ref LayoutInput cli = ref _scene.Layout(c);
                 ref RectF cb = ref _scene.Bounds(c);
@@ -536,20 +780,22 @@ public sealed class FlexLayout
                 if (free > 0f && totalGrow > 0f) fm = baseMain + free * (cli.FlexGrow / totalGrow);
                 else if (free < 0f && totalShrinkScaled > 0f) fm = baseMain + free * (cli.FlexShrink * baseMain / totalShrinkScaled);
                 finalMain[i] = MathF.Max(0f, ClampMain(cli, row, fm));
+                i++;
             }
         }
 
         // Leftover after sizing → justify-content spacing.
         float consumed = 0f; for (int i = 0; i < n; i++) consumed += finalMain[i];
-        { int i = 0; for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c), i++) consumed += MarginMain(_scene.Layout(c), row); }
+        { for (var c = FirstVisibleChild(node); !c.IsNull; c = NextVisibleSibling(c)) consumed += MarginMain(_scene.Layout(c), row); }
         if (n > 1) consumed += li.Gap * (n - 1);
         float leftover = MathF.Max(0f, availMain - consumed);
         (float lead, float between) = Distribute(li.Justify, leftover, n);
 
-        // Place children.
+        // Place children. idx increments ONLY for a visited (non-collapsed) child — keeps finalMain[idx] in lockstep
+        // with the n/finalMain built above (both walk the same FirstVisibleChild/NextVisibleSibling sequence).
         float cursor = padMainStart + lead;
         int idx = 0;
-        for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c), idx++)
+        for (var c = FirstVisibleChild(node); !c.IsNull; c = NextVisibleSibling(c))
         {
             ref LayoutInput cli = ref _scene.Layout(c);
             ref RectF cb = ref _scene.Bounds(c);
@@ -584,6 +830,7 @@ public sealed class FlexLayout
 
             Arrange(c, cx, cy, cw, ch);
             cursor += MarginMain(cli, row) + fMain + li.Gap + between;
+            idx++;
         }
     }
 
@@ -662,8 +909,7 @@ public sealed class FlexLayout
             if (float.IsNaN(h)) h = 0f;
             w = Clamp(w, li.MinW, li.MaxW);
             h = Clamp(h, li.MinH, li.MaxH);
-            ref RectF vb = ref _scene.Bounds(node);
-            vb = new RectF(vb.X, vb.Y, w, h);
+            WriteMeasuredBounds(node, w, h);
             return new Size2(w, h);
         }
 
@@ -686,8 +932,7 @@ public sealed class FlexLayout
         }
         w = Clamp(w, li.MinW, li.MaxW);
         h = Clamp(h, li.MinH, li.MaxH);
-        ref RectF b = ref _scene.Bounds(node);
-        b = new RectF(b.X, b.Y, w, h);
+        WriteMeasuredBounds(node, w, h);
         return new Size2(w, h);
     }
 
@@ -738,7 +983,7 @@ public sealed class FlexLayout
         // Scrollbar geometry and auto edge masks are emitted by the viewport span itself. A scoped layout can update
         // these ScrollState fields after normal reconciliation, so explicitly invalidate the viewport/ancestor span
         // instead of relying on an unrelated child dirty bit to defeat retained-subtree reuse.
-        if (viewportPaintChanged) _scene.Mark(node, NodeFlags.PaintDirty);
+        if (viewportPaintChanged && !Verifying) _scene.Mark(node, NodeFlags.PaintDirty);
 
         // scroll-v3 §3.2: layout no longer writes Offset/Target, no longer owns the restore latch, and no longer
         // writes the content -offset transform — those are the kernel's single write, applied through
@@ -746,10 +991,11 @@ public sealed class FlexLayout
         // AppHost's Reclamp() (after this layout solve — scroll-v3 §3.3 item 3) re-clamps against it, resolves any
         // EdgeHitPending, and re-applies through the sink — including the transform — for every viewport that
         // received SetFrame this frame (a mount-time Restore/Bind/AnchorShift lands the same way).
-        _scene.ScrollPort?.Post(FluentGpu.Scroll.ScrollInput.SetFrame((int)node.Raw.Index, BuildFrameSpec(in sc, contentW, contentH, innerW, innerH)));
+        if (!Verifying)
+            _scene.ScrollPort?.Post(FluentGpu.Scroll.ScrollInput.SetFrame((int)node.Raw.Index, BuildFrameSpec(in sc, contentW, contentH, innerW, innerH)));
         // (Re)bake geometry-dependent ranges (Content*/Bounds now known), then apply the generic scroll-driven bindings
         // in the SAME ArrangeViewport invocation — a resize frame must not paint a one-frame-stale bound transform.
-        if (!content.IsNull && _scene.IsLive(content))
+        if (!content.IsNull && _scene.IsLive(content) && !Verifying)
         {
             ScrollBindEval.BakeGeometry(_scene, node, in sc);
             ScrollBindEval.ApplyContinuous(_scene, node, ref sc);
@@ -760,7 +1006,7 @@ public sealed class FlexLayout
         // no longer covers the now-known viewport, flag the node — the host (AppHost.Paint) re-realizes + re-runs
         // scoped layout inside the SAME frame (bounded), so the first presented frame shows the real rows. Same
         // windowing idiom as the scroll paths (ScrollKernel.Tick / ScrollInputRouter).
-        if (sc.ItemCount > 0)
+        if (sc.ItemCount > 0 && !Verifying)
         {
             float vpExtent = horizontal ? sc.ViewportW : sc.ViewportH;
             float off = horizontal ? sc.OffsetX : sc.OffsetY;
@@ -917,7 +1163,7 @@ public sealed class FlexLayout
         PostAnchorShiftAndFrame(node, in scw, pinned - offset, contentW, contentH, innerW, innerH, anchorIndex, offset);
         scw.PrevArrangedFirst = first;
         scw.PrevArrangedLast = first + Math.Max(0, ord - sc.PersistentPrefixCount) - 1;
-        if (deferred) _scene.Mark(node, NodeFlags.LayoutDirty);   // a deferred fresh-row correction needs one follow-up arrange
+        if (deferred && !Verifying) _scene.Mark(node, NodeFlags.LayoutDirty);   // a deferred fresh-row correction needs one follow-up arrange
         return (contentW, contentH);
     }
 
@@ -934,10 +1180,11 @@ public sealed class FlexLayout
         int idx = (int)node.Raw.Index;
         if (delta != 0f)
         {
-            _scene.ScrollPort?.Post(FluentGpu.Scroll.ScrollInput.AnchorShift(idx, delta));
+            if (!Verifying) _scene.ScrollPort?.Post(FluentGpu.Scroll.ScrollInput.AnchorShift(idx, delta));
             if (ScrollTrace.CompiledIn && ScrollTrace.Enabled) ScrollTrace.Note(100, delta, idx, anchorIndex, offset);
         }
-        _scene.ScrollPort?.Post(FluentGpu.Scroll.ScrollInput.SetFrame(idx, BuildFrameSpec(in scw, contentW, contentH, viewportW, viewportH)));
+        if (!Verifying)
+            _scene.ScrollPort?.Post(FluentGpu.Scroll.ScrollInput.SetFrame(idx, BuildFrameSpec(in scw, contentW, contentH, viewportW, viewportH)));
     }
 
     /// <summary>True when the layout participates in estimate-then-correct (not a fixed-geometry grid posing as measured).</summary>
@@ -1060,7 +1307,7 @@ public sealed class FlexLayout
         PostAnchorShiftAndFrame(node, in scw, pinned - offset, contentW, contentH, innerW, innerH, anchorIndex, offset);
         scw.PrevArrangedFirst = first;
         scw.PrevArrangedLast = first + Math.Max(0, ord - sc.PersistentPrefixCount) - 1;
-        if (deferred) _scene.Mark(node, NodeFlags.LayoutDirty);   // a deferred fresh-row correction needs one follow-up arrange
+        if (deferred && !Verifying) _scene.Mark(node, NodeFlags.LayoutDirty);   // a deferred fresh-row correction needs one follow-up arrange
         return (contentW, contentH);
     }
 
@@ -1077,7 +1324,7 @@ public sealed class FlexLayout
         float childAvail = DefiniteWidth(in li, availW);
         if (!float.IsInfinity(childAvail)) childAvail = MathF.Max(0f, childAvail - li.Padding.Horizontal);
         float maxW = 0f, maxH = 0f;
-        for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
+        for (var c = FirstVisibleChild(node); !c.IsNull; c = NextVisibleSibling(c))
         {
             // A3: a MeasureUnboundedWidth child (e.g. a rail tooltip) opts out of the stack's own constrained
             // width and reports its natural content width instead of being squeezed to childAvail.
@@ -1088,8 +1335,7 @@ public sealed class FlexLayout
         float w = float.IsNaN(li.Width) ? maxW + li.Padding.Horizontal : li.Width;
         float h = float.IsNaN(li.Height) ? maxH + li.Padding.Vertical : li.Height;
         w = Clamp(w, li.MinW, li.MaxW); h = Clamp(h, li.MinH, li.MaxH);
-        ref RectF b = ref _scene.Bounds(node);
-        b = new RectF(b.X, b.Y, w, h);
+        WriteMeasuredBounds(node, w, h);
         return new Size2(w, h);
     }
 
@@ -1106,7 +1352,7 @@ public sealed class FlexLayout
     {
         float innerW = finalW - li.Padding.Horizontal, innerH = finalH - li.Padding.Vertical;
         float padL = li.Padding.Left, padT = li.Padding.Top;
-        for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
+        for (var c = FirstVisibleChild(node); !c.IsNull; c = NextVisibleSibling(c))
         {
             // Snapshot the child's layout inputs BEFORE any re-measure below: a ref into the SoA column must not be
             // held across a call that can touch the store.
@@ -1224,8 +1470,7 @@ public sealed class FlexLayout
         else h = float.IsNaN(li.Height) ? 0f : li.Height;
         w = Clamp(w, li.MinW, li.MaxW);
         h = Clamp(h, li.MinH, li.MaxH);
-        ref RectF b = ref _scene.Bounds(node);
-        b = new RectF(b.X, b.Y, w, h);
+        WriteMeasuredBounds(node, w, h);
         return new Size2(w, h);
     }
 
@@ -1371,11 +1616,14 @@ public sealed class FlexLayout
     private (float w, float h) MeasureWrap(NodeHandle node, in LayoutInput li, bool row, float mainLimit)
     {
         float availMain = MathF.Max(0f, mainLimit - (row ? li.Padding.Horizontal : li.Padding.Vertical));
+        // Text (MaxLines=1 + Trim) must measure against the LINE width so a lone over-long item ellipsizes
+        // instead of overflowing. Never the leftover: leftover would crush a shrinkable run instead of wrapping.
+        float childAvailW = row ? availMain : float.PositiveInfinity;
         float cursor = 0f, lineCross = 0f, totalCross = 0f;
         bool first = true, any = false;
-        for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
+        for (var c = FirstVisibleChild(node); !c.IsNull; c = NextVisibleSibling(c))
         {
-            var cs = Measure(c);
+            var cs = Measure(c, childAvailW);
             ref LayoutInput cli = ref _scene.Layout(c);
             float oMain = (row ? cs.Width : cs.Height) + MarginMain(cli, row);
             float oCross = (row ? cs.Height : cs.Width) + MarginCross(cli, row);
@@ -1409,13 +1657,13 @@ public sealed class FlexLayout
         float availMain = (row ? finalW : finalH) - (row ? li.Padding.Horizontal : li.Padding.Vertical);
         float lineTop = padCrossStart;
 
-        for (var lineStart = _scene.FirstChild(node); !lineStart.IsNull;)
+        for (var lineStart = FirstVisibleChild(node); !lineStart.IsNull;)
         {
             // Pass 1 — gather one line: the children that fit, their base-main extent (bases + margins + gaps), total grow.
             // The break condition mirrors MeasureWrap exactly, so arrange's line count matches the measured cross height.
             float usedMain = 0f, totalGrow = 0f;
             int count = 0;
-            for (var c = lineStart; !c.IsNull; c = _scene.NextSibling(c))
+            for (var c = lineStart; !c.IsNull; c = NextVisibleSibling(c))
             {
                 ref LayoutInput cli = ref _scene.Layout(c);
                 ref RectF cb = ref _scene.Bounds(c);
@@ -1429,7 +1677,7 @@ public sealed class FlexLayout
             float growUnit = totalGrow > 0f ? MathF.Max(0f, availMain - usedMain) / totalGrow : 0f;
             float cursor = padMainStart, lineCross = 0f;
             var cc = lineStart;
-            for (int i = 0; i < count; i++, cc = _scene.NextSibling(cc))
+            for (int i = 0; i < count; i++, cc = NextVisibleSibling(cc))
             {
                 ref LayoutInput cli = ref _scene.Layout(cc);
                 ref RectF cb = ref _scene.Bounds(cc);

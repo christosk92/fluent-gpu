@@ -360,6 +360,75 @@ TextureHandle AcquireAtlasPage();                  // BGRA8 small-image atlas pa
 
 **PAL delta for images: none** — the codec leaf produces CPU bytes; the upload is pure RHI.
 
+### 4.1a Atlas page flavours: staged-and-copied (discrete) vs CPU-written (UMA)
+
+This doc owns atlas packing (§4.1 above). The packing **policy** — cell geometry, page growth/retirement, the per-page
+LIFO free list, page generations, the census — is one portable class, `FluentGpu.Rhi.ImageAtlasPacker`; the backend
+(`FluentGpu.Windows/D3D12/ImageTextureStore`) owns only the D3D12 resource for each page index the packer hands out.
+That split is what makes the policy gateable headlessly (`gate.imgatlas.*`) on a seam that is otherwise TerraFX-bound.
+
+**Why small images MUST pack (the UMA arithmetic).** Every `CreateCommittedResource` texture is rounded up to
+`D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT` = 64 KiB, and on a UMA adapter it lands in the driver's resident
+write-combine segments — pinned host memory. A 64² BGRA8 thumbnail is 16 KiB of pixels in a 64 KiB commit: **4× byte
+overhead, plus one resident driver resource and one SRV per thumbnail.** ~1000 cover thumbnails therefore cost ~62 MiB
+and ~1000 resources for ~16 MiB of pixels. Packed, the same 1000 are a handful of resources and a handful of SRV slots,
+and the census byte line becomes O(pages).
+
+**Two flavours, decided by `ImageAtlasUpload`:**
+
+| | Discrete (`GpuCopy`) | UMA (`CpuWrite`) |
+|---|---|---|
+| Heap / layout | `DEFAULT`, `LAYOUT_UNKNOWN` | `CUSTOM` (L0 + `WRITE_BACK`), `LAYOUT_ROW_MAJOR` |
+| Created in | `COPY_DEST` | `COMMON`, and it stays `COMMON` for life |
+| Write | staging buffer → `CopyTextureRegion` at flush | row-by-row memcpy through a **persistent map** taken at page create |
+| Barriers | `… → COPY_DEST → PIXEL_SHADER_RESOURCE` per flush | **none, ever** |
+| Sampled via | explicit transition | implicit `COMMON → PIXEL_SHADER_RESOURCE` promotion |
+
+The `CpuWrite` flavour exists because the Qualcomm Adreno UMD mishandles exactly the `COPY_DEST → PSR` transition
+(`docs/plans/adreno-hang-fixes.md` M1 → `DEVICE_HUNG`). A page that is only ever GPU-**read** never needs that
+transition, so the hang path is removed **by construction** rather than avoided by policy.
+
+**The four invariants that make a SHARED CPU-written page safe** (a private per-image texture got this for free by
+never being shared; a page has to earn it):
+
+1. **No barrier.** The page is created in `COMMON`, is never a copy destination, and its tracked state never changes.
+   The store's upload-transition queue additionally refuses a CPU-written page outright, so the property is structural.
+2. **Write-after-fence, per cell.** A cell's texels are written only while the cell is **unpublished**: on a page whose
+   resource was just created (never submitted, never sampled), or on a cell handed back through the existing
+   fence-deferred return — i.e. only after the GPU fenced past every frame that could still have recorded it. Cell
+   returns already ride the deferred-free ring keyed on the real GPU fence (§4 / `gpu-renderer` §12).
+3. **Texel-disjoint == byte-disjoint.** `ROW_MAJOR` is load-bearing, not incidental: the layout is linear and
+   uncompressed, so a write to one cell cannot touch a byte of another. No driver swizzle (hence no
+   `WriteToSubresource` on this path at all) and no compression metadata shared across the surface — which is what
+   licenses invariant 2 at **cell** scope instead of demanding a whole-page fence (a page-wide fence would stall every
+   thumbnail behind the frames still displaying its neighbours). It is the same disjoint CPU-write/GPU-read posture the
+   shared instance `UploadArena` already relies on for buffers, applied to a texture.
+4. **Published cells are immutable.** A re-stage of an already-resident id acquires a **fresh** placement and retires
+   the old one, so the CPU never rewrites live texels. (This is the pre-existing UMA re-stage rule, unchanged.)
+
+**Capability probe, not a switch.** A `ROW_MAJOR` CPU-writable `TEXTURE2D` is driver-optional. The first page create
+answers the question: on failure the store disables UMA page packing for the session (logging once, always-on) and every
+thumbnail falls back to the private-texture path. There is no environment flag — the driver decides.
+
+**Baked derivatives never target a CPU-written page.** Adopting a render-produced image is a `CopyTextureRegion`, which
+would put its destination into `COPY_DEST`. On UMA a baked thumbnail therefore takes the private pool/standalone path;
+that private texture's `COMMON → COPY_DEST → PSR` pair is confined to a resource nothing else shares.
+
+**Bleed / the sampling contract.** Cells sit on a gutter-separated grid: cell *i* starts at `Gutter + i*(bucket+Gutter)`
+with `Gutter = 1`, so every cell is ringed by a one-texel moat, and a `CpuWrite` page is zero-filled once at creation so
+those texels are transparent black rather than heap residue. The gutter is belt-and-suspenders: the store's UV already
+hands the sampler `[origin+0.5 … origin+size−0.5]` in texels, and with `MIN_MAG_MIP_LINEAR` + `ADDRESS_CLAMP` +
+`MipLevels = 1` a bilinear footprint reaches at most ±0.5 texel around the sample point, so it provably stays inside
+`[origin … origin+size]` at any magnification. The gutter is what keeps that true if mips or anisotropic filtering are
+ever added to the image pipeline. Cost, at `PageSize = 1024`: 15×15 = 225 cells at bucket 64 (vs 16×16 = 256 ungutted)
+and 7×7 = 49 at bucket 128 (vs 8×8 = 64). Both flavours use the same grid — the packing policy does not fork per adapter.
+
+**Census honesty.** Resource byte tracking reports the **committed** size (the device's linear subresource footprint
+rounded up to the 64 KiB placement granularity), not the nominal `w*h*4`; tracking the latter under-reported a 64²
+thumbnail by 4× and is why `gpu bytes` and the image cache's `imageBytes` diverged by tens of MB on UMA. A packed cell
+is **not** a resource: it has no byte line of its own, so the atlas byte line is `livePages × pageBytes` — O(pages),
+never O(images).
+
 ### 4.6 Palette feed (handshake with `FluentGpu.Theme`) — NO GPU readback
 
 `UseDynamicColor` / `UseImage(wantPalette:true)` need a `Palette`. The decode worker already holds the CPU

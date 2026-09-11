@@ -320,6 +320,26 @@ public interface IAudioSink
     void Stop();
 }
 
+/// <summary>Cancellation of a source-owned blocking decoder read, invoked off the render thread before retirement.</summary>
+public interface ICancellableAudioSource
+{
+    /// <summary>Wake an outstanding byte-source wait without disposing memory still owned by the decoder.</summary>
+    void CancelPendingRead();
+}
+
+/// <summary>Capacity-aware nonblocking output. Device waits and controls run outside the pure DSP callback.</summary>
+public interface IBufferedAudioSink : IAudioSink
+{
+    /// <summary>Total endpoint capacity in frames.</summary>
+    int CapacityFrames { get; }
+    /// <summary>Currently writable frames; a negative value indicates device failure.</summary>
+    int WritableFrames { get; }
+    /// <summary>Flush queued PCM while stopped. Throws on a failed device operation.</summary>
+    void Reset();
+    /// <summary>Wait for either device capacity or an application control wake.</summary>
+    void WaitForWritable(System.Threading.WaitHandle controlWake, int timeoutMs);
+}
+
 /// <summary>The played-frames master clock (spec §7.6) — WASAPI <c>IAudioClock</c> / CoreAudio timestamp. Position is
 /// derived + QPC-extrapolated off this, never wall-clock, never read on the RT feed thread.</summary>
 public interface IAudioClockSource
@@ -334,8 +354,11 @@ public interface IAudioClockSource
     int MixRate { get; }
 }
 
-/// <summary>The device state a <see cref="IDeviceWatcher"/> reports (spec §7.9).</summary>
-public enum AudioDeviceState : byte { Building, Running, Reinitializing, Faulted }
+/// <summary>The device state a <see cref="IDeviceWatcher"/> / <see cref="AudioDeviceController"/> reports (spec §7.9).
+/// <c>Retrying</c>: the last rebuild attempt found no usable endpoint (not yet <c>Initialize</c>-able mid jack-switch,
+/// or the feed could not be parked) and a ladder retry (250 ms / 1 s / 3 s) is scheduled while the previous sink keeps
+/// playing; <c>Faulted</c> is the ladder exhausted — recoverable by the next default-device event.</summary>
+public enum AudioDeviceState : byte { Building, Running, Reinitializing, Faulted, Retrying }
 
 /// <summary>Follow-default / device-loss watcher (spec §7.9) — Windows <c>IMMNotificationClient</c>; macOS default-output
 /// listener. A default-device change rebuilds ONLY the sink under a live graph.</summary>

@@ -39,6 +39,38 @@ public static class Viewport
 public static class FrameClock
 {
     public static readonly Context<long> Tick = new(0L);
+
+    /// <summary>This frame's lattice-snapped "now" in QPC ticks (<see cref="System.Diagnostics.Stopwatch.Frequency"/>
+    /// units — the <c>Stopwatch.GetTimestamp()</c> domain): the host's <see cref="FluentGpu.Pal.FrameClock.FrameQpc"/>,
+    /// the same target time the scroll kernel and DirectManipulation consume. Monotone frame to frame within one host
+    /// (never rewinds; see the multi-window note below for the cross-host caveat).
+    /// <para>Set by the host at the very top of <c>AppHost.RunFrame</c> — before the input pump, cross-thread posts,
+    /// timers, the <see cref="Tick"/> publish and the reactive flush — so every handler, effect, render and bind thunk
+    /// that runs inside a frame reads THIS frame's value. <c>0</c> before the first frame. Headless
+    /// (<c>RefreshLattice.Headless</c>) it is the deterministic accumulated frame time instead of a QPC read, so it
+    /// starts at 0 on the first frame and advances by the fixed step.</para>
+    /// <para>UI-thread value (a plain static, not a signal: reading it subscribes nothing — pair it with a
+    /// <see cref="Tick"/> subscription or an animation-driven re-render to be re-evaluated each frame).</para>
+    /// <para>Multi-window: every host on the UI thread (the main window and each detached child window, ticked one
+    /// after another on the same thread) writes it at the top of its OWN <c>RunFrame</c>, so it is last-writer: inside
+    /// a host's frame it is that host's clock (each host snaps to its own display lattice and frame latency, so from
+    /// one host's frame to the next host's the value may differ, even step back; code outside any frame sees whichever
+    /// host ran last). A repaint that bypasses <c>RunFrame</c> (the OS modal move/size keep-alive <c>Paint</c>) does
+    /// not rebuild the clock and keeps the last frame's value.</para></summary>
+    public static long FrameQpc { get; internal set; }
+
+    /// <summary>The PREDICTED vblank this frame's pixels land on, in QPC ticks (<see cref="System.Diagnostics.Stopwatch.Frequency"/>
+    /// units): the host's <see cref="FluentGpu.Pal.FrameClock.PresentQpc"/> (lattice-snapped frame time + the
+    /// swap-chain's frame-latency lead). <b>This is the time app motion should sample</b> — a karaoke wipe, a progress
+    /// sweep, any position-from-time value — so what is drawn is where the motion will be when the frame is actually
+    /// seen, on a vsync-regular lattice. (Flutter hands every Ticker the frame's vsync timestamp,
+    /// <c>SchedulerBinding.currentFrameTimeStamp</c>; Chromium animates on <c>BeginFrameArgs.frame_time</c>.) Never
+    /// sample <c>Environment.TickCount64</c> for motion — its ~15.6 ms quanta step visibly at display rate.
+    /// <para>Seconds: <c>FrameClock.PresentQpc / (double)Stopwatch.Frequency</c>. Same lifecycle as
+    /// <see cref="FrameQpc"/>: set at the top of <c>AppHost.RunFrame</c> on every path (headless included —
+    /// deterministic there: frame time + one refresh period), <c>0</c> before the first frame, UI-thread,
+    /// last-writer across multiple hosts.</para></summary>
+    public static long PresentQpc { get; internal set; }
 }
 
 /// <summary>
@@ -214,6 +246,18 @@ public sealed class InputHooks
     /// <summary>Borderless monitor-fullscreen state + command. Media surfaces use this instead of maximizing.</summary>
     public Func<bool>? IsWindowFullscreen;
     public Action<bool>? WindowSetFullscreen;
+    /// <summary>Start the OS move loop for THIS window (host-wired to <c>IPlatformWindow.BeginSystemMove</c>). A control
+    /// calls it from a press that travelled past the drag box on its draggable surface — the pop-out video, whose
+    /// chromeless window has no caption to grab. True = the loop was requested and exactly one
+    /// <see cref="WindowMoveSizeEndedObserved"/> follows; false (or a null hook) = nothing started (fullscreen, no held
+    /// primary mouse/pen button, headless-less trees, a backend without a move loop) and the press stays an ordinary
+    /// press.</summary>
+    public Func<bool>? WindowBeginMove;
+    /// <summary>Raised when any OS move/size loop of THIS window ends (<see cref="FluentGpu.Pal.InputKind.WindowMoveSizeEnded"/>)
+    /// — edge resizes included, so a subscriber that did not start one ignores it. Subscribe with a cached delegate;
+    /// unsubscribe on unmount.</summary>
+    public event Action? WindowMoveSizeEndedObserved;
+    public void NotifyWindowMoveSizeEnded() => WindowMoveSizeEndedObserved?.Invoke();
     /// <summary>Open a movable/resizable, always-on-top DETACHED video window hosting the request's content in its OWN
     /// window + scene + swapchain (the pop-out mini-player). Returns a handle, or null when unavailable (headless, the
     /// async render path, or a backend without secondary swapchains). Host-wired to <c>AppHost.OpenDetachedWindow</c>.</summary>

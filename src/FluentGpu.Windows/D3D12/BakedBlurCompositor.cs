@@ -79,6 +79,19 @@ float4 BlurPS(V i) : SV_Target {
         BuildRoot();
         _copyPso = BuildPso(CopyHlsl, "CopyPS", "BakedBlur.Copy");
         _blurPso = BuildPso(BlurHlsl, "BlurPS", "BakedBlur.Gaussian");
+        // The scratch PAIR per frame-in-flight is created LAZILY, on the first job (EnsureBanks) — not here. It is a
+        // fixed 6 x 512x512x4 = 6 MiB, every byte of it resident from device init onward on a UMA adapter, and an app
+        // that never bakes an image blur (no mosaic/hero backdrop on screen yet — which includes every launch until the
+        // first such surface mounts) never needed a texel of it. Creating it on demand costs one allocation on the
+        // first bake, on the render thread, ahead of a job that is already a multi-pass GPU operation.
+    }
+
+    /// <summary>Create the per-bank scratch pair + its views on first use. Idempotent and cheap after the first call
+    /// (one null check). Called from <see cref="DrainOne"/> once a runnable job exists — never from a frame that has
+    /// nothing to bake, which is what keeps the 6 MiB off the launch working set.</summary>
+    private void EnsureBanks()
+    {
+        if (_scratchA[0] != null) return;
         for (int b = 0; b < Banks; b++)
         {
             _scratchA[b] = CreateTarget(ScratchSize, ScratchSize, $"BakedBlur.ScratchA{b}");
@@ -91,10 +104,28 @@ float4 BlurPS(V i) : SV_Target {
         }
     }
 
+    /// <summary>Bytes this compositor holds, reported as IN-USE: the scratch pair is banked per frame-in-flight and
+    /// permanently live once created, so there is no free/pooled half to report. Zero before the first bake — which is
+    /// the point of <see cref="EnsureBanks"/>, and the honest way for the census to show it.</summary>
+    public LayerTargetCensus TargetCensus
+    {
+        get
+        {
+            LayerTargetCensus c = default;
+            for (int b = 0; b < Banks; b++)
+            {
+                if (_scratchA[b] != null) c = c.WithSlot(LayerTargetBucket.Bytes(ScratchSize, ScratchSize), inUse: true, isPin: false);
+                if (_scratchB[b] != null) c = c.WithSlot(LayerTargetBucket.Bytes(ScratchSize, ScratchSize), inUse: true, isPin: false);
+            }
+            return c;
+        }
+    }
+
     public bool DrainOne(ID3D12GraphicsCommandList* cmd, ImageTextureStore images, BakedBlurQueue queue, int frameIndex)
     {
         CollectGpuTime(queue, frameIndex);
         if (!queue.TryDequeueRunnableJob(out var job)) return false;
+        EnsureBanks();
         long recordStart = System.Diagnostics.Stopwatch.GetTimestamp();
         if (!images.TryGetBakeSource(job.SourceId, out var source, out var sourceUv))
         {

@@ -74,11 +74,35 @@ public sealed class BoundItemsSource<T>
     public IReadSignal<int> Count => _count;
 
     /// <summary>Returns a derived signal for one persistent slot. <paramref name="itemStartIndex"/> is the number of
-    /// non-item prefix slots (for example a virtualized hero + header); the logical item index is slot minus start.</summary>
+    /// non-item prefix slots (for example a virtualized hero + header); the logical item index is slot minus start.
+    /// UNGATED: every read subscribes directly to the slot index AND the underlying snapshot signal, so any change to
+    /// either re-fires every bind that reads <c>.Value</c> even when the resolved item compares equal. Kept for
+    /// existing non-hosted callers (a plain reactive item source with no <see cref="ReactiveRuntime"/> at hand); prefer
+    /// the equality-gated overload below for anything mounted through <see cref="ItemsView.CreateBound{T}"/>-style
+    /// persistent slots.</summary>
     public IReadSignal<T> BindItem(IReadSignal<int> slotIndex, int itemStartIndex = 0)
     {
         ArgumentNullException.ThrowIfNull(slotIndex);
         return new ItemSignal(this, slotIndex, itemStartIndex);
+    }
+
+    /// <summary>Equality-gated slot item: builds a <see cref="Memo{T}"/> that recomputes on every slot-index or
+    /// snapshot change but notifies its own subscribers ONLY when the resolved item actually differs under
+    /// <paramref name="comparer"/> (default <see cref="EqualityComparer{T}.Default"/>). So an equal republish of the
+    /// source snapshot (e.g. an activity-only transition upstream) resolves this slot's item once but fires ZERO
+    /// downstream channel effects — the mechanism <see cref="ItemsView.CreateBound{T}"/> always uses (via
+    /// <see cref="RowScope.Runtime"/>, attached by the bound realize path). <paramref name="runtime"/> is the
+    /// reconciling <see cref="ReactiveRuntime"/> the memo is owned by; construction primes the cached value
+    /// immediately (one recompute), matching every other <c>Memo&lt;T&gt;</c> in the engine.</summary>
+    public IReadSignal<T> BindItem(IReadSignal<int> slotIndex, ReactiveRuntime runtime, int itemStartIndex = 0, IEqualityComparer<T>? comparer = null)
+    {
+        ArgumentNullException.ThrowIfNull(slotIndex);
+        ArgumentNullException.ThrowIfNull(runtime);
+        return new Memo<T>(runtime, () =>
+        {
+            int i = slotIndex.Value - itemStartIndex;
+            return _readItem(i, tracked: true, out var item) ? item : _fallback;
+        }, comparer);
     }
 
     /// <summary>Resolve the current item without subscribing. Event handlers should use this instead of capturing the

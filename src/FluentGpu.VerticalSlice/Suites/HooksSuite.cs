@@ -37,12 +37,15 @@ static class HooksSuite
 {
     public static void Run(StringTable strings)
     {
+        ChildReconcilePlanChecks.Run();
         HookChecks();
         HookSurfaceChecks();
         HookSubstrateChecks(strings);
         UnifyChecks(strings);
         ValidationChecks();
         KeyedChecks(strings);
+        UnkeyedOrdinalChecks.Run(strings);
+        FrameClockPublishChecks.Run(strings);
         ReuseGuardChecks(strings);
         PropsChannelChecks(strings);
         PropsGenChecks(strings);
@@ -62,6 +65,7 @@ static class HooksSuite
         PropUnionChecks(strings);
         G4dMigrationChecks(strings);
         MemoCutoffChecks();
+        ReactiveDeadlineChecks.Run();
     }
 
     // ── Memo push-pull equality cut-off (Check/Dirty) ────────────────────────────────────────────────────────────────
@@ -435,14 +439,16 @@ static class HooksSuite
                 var e1 = new BoxEl { Width = 10, Height = 10, Fill = FluentGpu.Foundation.ColorF.Transparent };   // static
                 var e2 = new BoxEl { Width = 10, Height = 10, Fill = sig };                                       // bound
                 r1.ReconcileRoot(e1, null); r1.ReconcileRoot(e2, e1);
-                bool staticToBound = BindContract.Violations == 1 && BindContract.LastViolation!.Contains("Fill");
+                bool staticToBound = BindContract.CompiledIn
+                    ? BindContract.Violations == 1 && BindContract.LastViolation!.Contains("Fill")
+                    : BindContract.Violations == 0 && BindContract.LastViolation is null;
 
                 BindContract.Reset();
                 var s2 = new SceneStore(); var r2 = new TreeReconciler(s2, strings);
                 var f1 = new BoxEl { Width = 10, Height = 10, Fill = sig };                                       // bound
                 var f2 = new BoxEl { Width = 10, Height = 10, Fill = FluentGpu.Foundation.ColorF.Transparent };   // static
                 r2.ReconcileRoot(f1, null); r2.ReconcileRoot(f2, f1);
-                bool boundToStatic = BindContract.Violations == 1;
+                bool boundToStatic = BindContract.Violations == (BindContract.CompiledIn ? 1 : 0);
 
                 BindContract.Reset();
                 var s3 = new SceneStore(); var r3 = new TreeReconciler(s3, strings);
@@ -468,7 +474,9 @@ static class HooksSuite
                 BackwardsWriteGuard.Reset();
                 var sig = new Signal<int>(5);
                 _ = new Effect(rt, () => { int v = sig.Value; sig.Value = v; });   // read (subscribe) then write the SAME signal
-                bool tripped = BackwardsWriteGuard.Violations >= 1 && BackwardsWriteGuard.LastViolation!.Contains("Signal");
+                bool tripped = BackwardsWriteGuard.CompiledIn
+                    ? BackwardsWriteGuard.Violations >= 1 && BackwardsWriteGuard.LastViolation!.Contains("Signal")
+                    : BackwardsWriteGuard.Violations == 0 && BackwardsWriteGuard.LastViolation is null;
 
                 BackwardsWriteGuard.Reset();
                 var a = new Signal<int>(1); var b = new Signal<int>(2);
@@ -713,7 +721,8 @@ static class HooksSuite
             var a1 = Probe(1); recon1.ReconcileRoot(a1, null);
             var a2 = Probe(5); recon1.ReconcileRoot(a2, a1);
             Check("gate.reuse.frozen-prop-tripwire fires when a reused component's frozen field carries a changed value",
-                ReuseGuard.Violations == 1, $"violations={ReuseGuard.Violations} last={ReuseGuard.LastViolation}");
+                ReuseGuard.Violations == (ReuseGuard.CompiledIn ? 1 : 0),
+                $"compiled={ReuseGuard.CompiledIn} violations={ReuseGuard.Violations} last={ReuseGuard.LastViolation}");
 
             // (2) Quiet when the value is unchanged, AND quiet when a changed Key REMOUNTS the child (the re-key fix idiom).
             ReuseGuard.Reset();
@@ -737,7 +746,8 @@ static class HooksSuite
             var d1 = Probe(1); recon3.ReconcileRoot(d1, null);
             try { var d2 = Probe(9); recon3.ReconcileRoot(d2, d1); }
             catch (FrozenPropException) { threw = true; }
-            Check("gate.reuse.strict-throws raises FrozenPropException when ThrowOnViolation is set", threw);
+            Check("gate.reuse.strict-throws raises FrozenPropException only when diagnostics are compiled and ThrowOnViolation is set",
+                threw == ReuseGuard.CompiledIn, $"compiled={ReuseGuard.CompiledIn} threw={threw}");
 
             // (4) Const-gated identically to RenderBudget so the whole facility erases in release.
             Check("gate.reuse.guard-erased ReuseGuard.CompiledIn tracks the DEBUG/FLUENTGPU_DIAG erasure switch (== RenderBudget.CompiledIn)",
@@ -1275,8 +1285,10 @@ static class HooksSuite
         // gate, a display-phase-gate decline). A due timer + a skipped Paint = the clamp re-returns 0 every iteration
         // and the loop free-runs at CPU speed forever (measured on-device against the always-mounted 2 s power poll:
         // ~175k it/s minimized, ~60k it/s bursts while gate-blocked). Two invariants, and the drain must still work:
-        //   (a) an overdue timer floors the wait at 1 ms and the frame is still classified by BRANCH — an Ambient wait
-        //       rewritten to 0 ALSO read as display-rate (IsDisplayRateWait's w==0 clause), suppressing the step-up Resync;
+        //   (a) a THROTTLED/idle branch never returns 0, and the frame is classified by BRANCH — a Cadence wait
+        //       rewritten to 0 ALSO read as display-rate (IsDisplayRateWait's w==0 clause), suppressing the step-up
+        //       Resync. An OVERDUE timer is due-NOW work, so it takes the display-rate branch instead: that iteration's
+        //       own RunFrame paints and drains, which is a frame, not a poll;
         //   (b) a MINIMIZED host keeps its blocking -1 whatever is armed: no wait length can fire a timer whose only
         //       drain site is gated off, so shortening the block would trade a 0%-CPU sleep for a spin. A message
         //       (restore / activate / power broadcast) is what wakes it, and the restore edge forces the draining frame.
@@ -1286,16 +1298,27 @@ static class HooksSuite
             var probe = new TimeoutProbe(5000f);
             using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
             for (int i = 0; i < 6 && host.HasActiveWork; i++) host.RunFrame();   // settle the mount (leaves the pending 5 s timer)
-            host.AmbientAnimationFps = 30;                    // ExplicitFps ⇒ the ambient cap owns a timer-only wake
-            int wPending = host.RecommendedWaitMs();          // future timer: the clamp still shapes the wait to reach it
+            host.Animation.DefaultLoopHz = 30;                // the cadence a plain loop runs at (the branch that owns a throttled wait)
+            int wPending = host.RecommendedWaitMs();          // idle + future timer: the clamp still shapes the wait to reach it
             bool pendingReachesDue = wPending >= 4000 && wPending <= 5100;
 
+            // A plain 30 Hz loop makes the wait CADENCE-classified: the pending 5 s timer must neither shorten it below
+            // the row's own period nor rewrite it to 0.
+            host.Animation.Keyframes(host.Scene.Root, AnimChannel.Opacity,
+                new[] { new Keyframe(0f, 0.4f, Easing.Linear), new Keyframe(1f, 1f, Easing.Linear) }, 800f, loop: true);
+            host.RunFrame();
+            int wLoop = host.RecommendedWaitMs();
+            bool cadenceOwnsWait = host.LastWaitKind == HostWaitKind.Cadence && wLoop >= 1 && wLoop <= 34;
+
             // Arm one already PAST due on the headless frame clock, and ask for the wait WITHOUT running a frame (a
-            // RunFrame would Paint and drain it). Overdue ⇒ WakeReasons.Timer ⇒ the ambient branch ⇒ the clamp.
+            // RunFrame would Paint and drain it). Overdue ⇒ WakeReasons.Timer ⇒ due-now ⇒ the display-rate branch.
             int fires = 0;
             host.TimersForTest.Schedule(host.FrameClockMsForTest - 1000.0, 0, _ => fires++);
             int wDue = host.RecommendedWaitMs();
-            bool dueNeverZero = wDue >= 1 && host.LastWaitKind == HostWaitKind.Ambient;
+            var dueKind = host.LastWaitKind;
+            bool dueNeverSpins = dueKind is HostWaitKind.DisplayRate or HostWaitKind.DisplayTick or HostWaitKind.SoftwarePace
+                ? wDue >= 0        // display-rate: THIS iteration's frame paints and drains — one frame, not a poll
+                : wDue >= 1;       // any throttled/idle branch must floor at 1 ms
 
             window.State = WindowState.Minimized;
             int wMin = host.RecommendedWaitMs();
@@ -1303,13 +1326,13 @@ static class HooksSuite
 
             window.State = WindowState.Normal;
             int wRestored = host.RecommendedWaitMs();
-            bool restoredStillFloors = wRestored >= 1;
+            bool restoredUnblocks = wRestored >= 0;           // restored: back to a producing wait, never the -1 block
             host.RunFrame();                                  // and the timer is not stranded: Paint drains it
             bool drained = fires == 1;
 
-            Check("gate.timer.clamp-never-spins an overdue timer never clamps the host wait to 0 (the drain is a frame away and may be skipped): a pending timer still shapes the wait, an overdue one floors at 1ms and stays Ambient-classified, a minimized host keeps its blocking -1, and the timer still drains on the next painted frame",
-                pendingReachesDue && dueNeverZero && minimizedBlocks && restoredStillFloors && drained,
-                $"wPending={wPending} (want 4000..5100) wDue={wDue} (want >=1, kind Ambient) wMin={wMin} (want -1, kind Idle) wRestored={wRestored} (want >=1) fires={fires} lastKind={host.LastWaitKind}");
+            Check("gate.timer.clamp-never-spins a throttled wait never clamps to 0 (the drain is a frame away and may be skipped): a pending timer shapes an idle wait to reach it, a plain 30 Hz loop keeps the wait Cadence-classified at its own period, an overdue timer takes the due-now display-rate branch instead of a poll, a minimized host keeps its blocking -1, and the timer still drains on the next painted frame",
+                pendingReachesDue && cadenceOwnsWait && dueNeverSpins && minimizedBlocks && restoredUnblocks && drained,
+                $"wPending={wPending} (want 4000..5100) wLoop={wLoop} (want 1..34, kind Cadence) wDue={wDue} (kind {dueKind}) wMin={wMin} (want -1, kind Idle) wRestored={wRestored} (want >=0) fires={fires} lastKind={host.LastWaitKind}");
         }
 
         // ── gate.timer.zero-steady-alloc: an armed timer adds 0 bytes to the hot phase on quiet frames ──

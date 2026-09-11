@@ -41,7 +41,7 @@ internal static class DialogScrollProbe
             return true;
         };
         FluentAppHarness.Run(() => new DialogScrollProbeScene(),
-            new AppOptions { Title = "FluentGpu — dialog scroll probe", Width = Width, Height = Height, Mica = false, AmbientFps = 0, WarmCadenceMs = 0f });
+            new AppOptions { Title = "FluentGpu — dialog scroll probe", Width = Width, Height = Height, Mica = false, WarmCadenceMs = 0f });
         return exit;
     }
 

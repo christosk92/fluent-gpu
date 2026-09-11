@@ -594,18 +594,23 @@ downsample-then-separable-Gaussian schedule of §2.3 rather than a full-res 32 p
 
 > **🔄 DECIDED REWORK (landing in phases) — read before editing §5.** This section is the **canon owner** of the animation engine and describes the **current as-built model** (`AnimTrack`/`AnimEngine`, `IntegrationMode` Eased/Spring sub-stepped Euler, `DrivenClockTable`, `InteractionAnimator`, `ConnectedAnimation`, the `BrushTransition`/`BrushAnim` ticker, the N phase-7 tickers). The engine is being reworked to a **signals-first** model — one POD **`AnimValue`** slab keyed `(node, channel)` `{value, velocity, target, generator}` (interpolates-from-current + auto-retargets on signal change); one **`AnimScheduler`** (per-source `CadenceClass`, `min(next-due)` wake); the **analytical closed-form spring** sampled at absolute `t` (replaces the sub-stepped Euler); **owner-column → single fold-and-write-once compose pass** (one write per node×channel); a declarative orchestration layer (`Transition`/`While*`/`Enter`/`Exit`/`Stagger`/`Layout` + `UseSpringValue`/`UseAnimatedValue`); one **`MotionTok`** registry; **reduced-motion as a value**. Full design + the §5-section-by-section migration map: [`../../docs/plans/animation-engine-rework-design.md`](../../docs/plans/animation-engine-rework-design.md) (research: [`…research-dossier.md`](../../docs/plans/animation-engine-research-dossier.md)). **§5 below stays canon until each rework phase lands and reconciles its subsection** (the per-phase `check-canon.ps1` supersession rules retire the named tokens only at that point — the current model is still in force). Registered as a §2 row in [`SPEC-INDEX.md`](../SPEC-INDEX.md).
 
-**As-built (scroll-perf W2/E11): the ambient-FPS cap defers through the post-scroll hold.** `AppHost.RecommendedWaitMsCore`
-paces loop-only motion (`AnimIsAmbient`: no connected fly, and every active slab row is a `Loop` with no `DisplayRate`
-opt-out) at `AmbientAnimationFps` — but only once BOTH post-scroll windows have expired: the display-rate grace
-(`_scrollGraceUntil`, 0.25 s re-armed on every ScrollAnim-awake pace query) AND the 0.45 s any-viewport hold
-(`_mainScrollHoldUntil`, refreshed at the phase-7 scroll tick while a user scroll is actually active). Without the hold
-term, slow wheel-notch scrolling over a perpetual loop (skeleton shimmer) fell back to the ambient cadence between
-notches and stepped back up on the next one; each step-up ran the frame-clock `Resync`, so the interaction lurched once
-per notch. Relatedly, `MotionSuppressionSource.Scroll` (set in `AppHost.Paint` before FLIP capture) suppresses layout
-transitions on a frame where a scroll offset REALLY advanced last frame while the hold is live — scroll-coincident
-reconciles snap instead of seeding structural FLIP tracks; because it gates on actual motion (a one-bit latch off
-`ScrollIntegrator.AnyOffsetWroteThisFrame`), a click-triggered expand right after scrolling still FLIPs. Gates:
-`wake.scrollHoldSuppressesAmbientCap`, `motion.scrollSuppressionSnapsFlip`.
+**As-built: pacing is per animation source, not a host-wide ambient cap.** The interim host-wide ambient-FPS cap and
+its two post-scroll defer windows (`AnimIsAmbient`, `AppHost.AmbientAnimationFps`, the 0.25 s display-rate grace
+`_scrollGraceUntil` and the 0.45 s any-viewport hold `_mainScrollHoldUntil`) are deleted, along with
+`AppHost.AmbientRate`/`AmbientRateMode`, `LatencySensitiveWake` and the `FG_ANIM_FPS` escape hatch — that whole
+heuristic existed only to approximate "is this frame ambient" from the outside. Every slab animation row now carries
+an explicit `Cadence` (`AnimEngine.Keyframes`/`UseKeyframes` take an optional `Cadence`; `null` resolves to
+`Cadence.Display` for a one-shot and to `AnimScheduler.DefaultLoopHz` for `loop: true`), so a row's rate is a property
+of the row, not inferred from what else is running. The host wakes at `min(AnimEngine.NextDueMs)`, quantized to a
+whole number of the window's own refreshes and phased on the last present (`CadencePacing.QuantizedWaitMs` — 30 Hz on
+a 120 Hz panel is every 4th refresh, on 50 Hz every 2nd); the wait token is `HostWaitKind.Cadence` (`cadence` in
+`[fps] wait` lines). Because a row only advances when its own cadence says it is due, a scroll running the frame loop
+at display rate no longer speeds up an unrelated 30 Hz shimmer — which is what made the scroll/mount grace windows
+unnecessary rather than requiring a replacement hold. `AppHost.InactiveFrameIntervalMs` (default 33 ms) is the one
+remaining window-state throttle: it floors the gap between animation-only frames while the window is not the
+foreground/active one, independent of any row's own cadence. `AppOptions.AmbientFps` is renamed
+`AppOptions.DefaultLoopHz`; `FG_ADAPTIVE_FPS` is `AppOptions.AdaptiveGpuPacing` (bool, default on). Diag tripwire:
+`[anim.cadence] displayRate-loops=<n>` fires every 30 s while a `loop: true` row is still running at display rate.
 
 **As-built (scroll-perf W6/E12): the slab's active-node chain + census memo.** `AnimValueSlab` threads the node indices
 that currently own rows on an intrusive doubly-linked chain (parallel `_nextActiveNode`/`_prevActiveNode` `int[]` keyed

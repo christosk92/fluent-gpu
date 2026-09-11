@@ -461,6 +461,241 @@ Layout's skip decision is the Yoga cache + the two-rule graph + the boundary fir
 reconciler keystone: a `SubtreeDirty`-only skip would wrongly skip a non-dirty-path consumer.) Layout consumes the
 `LayoutDirty`/`LayoutSelfDirty`/`LayoutParticipationDirty` per-node bits + the worklist, not `SubtreeDirty`.
 
+**Not to be confused with §4.8's `AuxFlags.SubtreeLayoutDirty`** (P4, a `SceneStore`-owned column, unrelated to the
+reconciler's `SubtreeDirty` this section is about): that bit legitimately IS an `Arrange`-skip-decision input — it is
+Layout's own incremental cache invalidation signal, not a substitute for the boundary firewall (both still apply).
+
+### 4.7 Presence — `Element.Visible : Prop<bool>` (out-of-flow collapse)
+
+**Operation ultra-fast GPU engine, P1.** A first-class presence channel on the base `Element` (`Dsl/Element.cs`),
+default `true`, bindable exactly like `Fill`/`Opacity`/`Width`. `false` COLLAPSES the node — out of layout flow AND
+paint AND hit-test — the CSS `display:none` contract, distinct from `visibility:hidden` (an `Opacity`/`HoverOpacity`
+bind still fills the box; `Visible=false` removes it).
+
+**Storage — `SceneStore.Aux.cs`.** One new SoA byte column, `_aux`, keyed by node index like every other column
+(ctor-allocated, `ResizeColumns`-tracked, zeroed in `CreateNode`). `AuxFlags` (`[Flags] byte`): `Collapsed` (P1,
+live), `SubtreeLayoutDirty`/`ArrangedValid` (reserved for P4's incremental-layout machinery — no second column
+needed when that phase lands). `SceneStore.SetCollapsed(node, bool)` is the ONE writer: it flips `Collapsed` and, in
+the SAME call, mirrors it onto the EXISTING `NodeFlags.Visible`/`NodeFlags.HitTestVisible` bits (clear on collapse,
+set on reveal) — deliberately reusing those bits rather than adding new ones, so every pre-existing Visible-gated
+reader sees the flip for free: the recorder's paint-reachability early-return (`SceneRecorder.Walk`, `(flags &
+Visible) == 0 → return default`, no descent into the subtree — a collapsed node's stale descendant state is provably
+unreachable), the hit-test walk (`InputDispatcher.ConsiderContainingScrollers` et al., same early-return shape), AND
+`FlexLayout.LayoutSig` (§4.2's per-node signature already hashes `Flags(node)`, so a scoped-relayout `TryResolveSizeStable`
+correctly re-escalates on a Visible flip with no new read). On collapse, `SetCollapsed` ALSO zeroes the node's own
+`Bounds` immediately (not left for the next layout pass to reach) — a Flex/Wrap/ZStack parent's child walk (below)
+skips a collapsed child ENTIRELY going forward, so nothing will ever call `Measure`/`Arrange` on it again to correct
+a stale size left over from before a runtime true→false flip. `SetCollapsedIfChanged` is the equality-gated caller
+surface (no-ops, marks nothing, when the state is already correct) — the one every writer below actually calls.
+
+**Writers.** Two, funneling through the same `SceneStore` call:
+- **Static (unbound) `Visible`**: `Reconciler.cs`'s `WriteColumns` generic section (the every-element-type block
+  that already writes `MorphId`/`RelativeTo`/`ScrollBinds`/`Stagger` ahead of the per-type `switch`) calls
+  `ApplyPresenceStatic` (`Reconciler.Presence.cs`) when `!el.Visible.IsBound`. Equality-gated via
+  `SetCollapsedIfChanged` — an identical re-render marks nothing (`gate.hooks.layout-dirty-identical-tree` stays
+  green).
+- **Bound `Visible`**: `BindNode` calls `BindPresence` (`Reconciler.Presence.cs`) UNCONDITIONALLY for every element
+  kind — unlike the `BoxEl`-only channels beside it (`Transform`/`Opacity`/`Fill`/…), `Visible` lives on the base
+  `Element`, so this is the one bind wired regardless of concrete type. One mount-time `Effect`
+  (`AddBinding(..., runNow: true)`), equality-gated on the RESOLVED collapse state (not merely re-firing), counted by
+  the P0 `NodeBindingFireCount`/`NodeBindingWriteCount`. The **false→true edge seeds the node's declared `Enter`
+  like a fresh mount** (`SynthesizeDeclarative` + `AnimEngine.SeedEnter`, mirroring the ordinary mount-Enter path);
+  the true→false edge just snaps (nothing left to animate once the node is already out of layout/paint).
+
+**Component-level presence — `entry.Hidden` (`CompEntry`, `Reconciler.cs`).** Whenever collapse state actually
+flips, `SetSubtreeHidden` (`Reconciler.Presence.cs`) walks the node's live subtree and, for every mounted
+`CompEntry`, sets `Hidden` and refreshes its `ActiveSig` to `!Parked && !Hidden` — the SAME formula
+`SetSubtreeParked` writes on a KeepAlive park edge, so `RenderContext.UseIsActive()`/`UseActivation` (and therefore
+`UseInterval`, which already gates its own ticking on `UseIsActive()`) auto-pause across a presence collapse with
+**zero new host-side wiring**. Critically, `Hidden` touches ONLY the `ActiveSig` — never `NodeFlags.Parked`,
+`entry.DeferredRender`, or the render `Effect` — so a collapsed component's OWN re-renders are never suspended (its
+bindings keep settling even though the node paints nothing); only its timers park. `MountComponent` seeds `Hidden`
+by walking the node's ancestor chain at mount (`NodeFlags.Visible` is NOT propagated down to fresh children the way
+`NodeFlags.Parked` is — the recorder/hit-test early-returns already make that unnecessary for paint/hit-test — so a
+component mounting fresh under an already-collapsed ancestor needs this explicit walk to seed correctly).
+`UseTimeout`/`UseKeyframes` do **not** yet consult `UseIsActive()` (neither for `Hidden` nor the pre-existing
+`Parked`) — an open follow-up, not a P1 regression.
+
+**Layout — `FlexLayout.cs`.** `Collapsed(NodeHandle)` reads the mirrored `NodeFlags.Visible` bit (no new column
+read in the hot path). Two mechanisms, deliberately different per container kind:
+- **Flex row/column, Wrap, ZStack** — TRUE flow removal. Every child-loop header
+  (`_scene.FirstChild(node)`/`_scene.NextSibling(c)`) is substituted with `FirstVisibleChild(node)`/
+  `NextVisibleSibling(c)`, which skip a collapsed node entirely — no box, no margin, no gap slot (CSS `display:none`,
+  not merely a zero-sized `visibility:hidden` box). Because the substitution happens at the loop-header level, every
+  downstream index (`finalMain[idx]` in `Arrange`'s free-space distribution, `n`/`count` line-fitting in
+  `ArrangeWrap`) stays naturally in lockstep — no per-loop continue/idx bookkeeping needed.
+- **Grid** — the cell keeps its track. `ArrangeGrid`'s row-assignment walk deliberately keeps the RAW
+  `_scene.NextSibling` (does NOT use `FirstVisibleChild`/`NextVisibleSibling`), so a collapsed cell still occupies
+  its row-major slot and later cells are not shifted into it (`gate.presence.grid-cell-keeps-track`). It measures/
+  arranges to 0×0 for free, via the third mechanism below.
+- **Every node, universally** — `Measure`/`Arrange` both short-circuit to 0×0 at their very first line when the
+  node ITSELF is collapsed (before the scroll/grid/zstack dispatch, before the measure memo). This is what makes a
+  collapsed grid cell size to 0×0 with no grid-specific code, and what covers "a collapsed virtual slot root measures
+  0 at its rect" (a realized virtual-list row, or a collapsed `ScrollEl`/`VirtualListEl` root itself) with no
+  virtualization-specific code either — the parent's `Measure(child, …)`/`Arrange(child, …)` call still happens (grid
+  and virtualization do not remove the child from their index/slot bookkeeping), it just resolves to zero.
+
+**Timer parking, skeletons, bind contract.** See §4.7's siblings: `component-props-contract.md` §2 (the
+`entry.Hidden` contract in prose), `reconciler-hooks.md`'s bound-channel table (the `Visible` row), and the
+`SkeletonDeriver` (`Hooks/SkeletonDeriver.cs`): a STATICALLY collapsed real node (`Visible` unbound and `false`)
+derives to `new BoxEl { Visible = false, IsEnabled = false, HitTestVisible = false }` — nothing to shimmer, so no
+shimmer bar or same-size spacer either, unlike `SkeletonMode.Off`'s `Spacer`. A bound `Visible` is left alone at
+derive time (construction-time pass, resolved value unknown) — the mounted shimmer node's own `BindPresence` effect
+governs its collapse the same as the real subtree's would. `BindContract` (`Reconciler/BindContract.cs`)
+DEBUG-asserts (`gate.presence.bindcontract-flip`) that a `MorphId` (shared-element/Hero) node never binds `Visible`
+— collapsing a fly participant mid-transition would remove it from layout before `ConnectedAnimation` can capture
+its rect/art.
+
+**Gates** (VerticalSlice, `LayoutShellSuite`'s presence region, `Suites/LayoutShellSuite.cs`):
+`gate.presence.static-collapse-removes-from-flow`, `gate.presence.bound-flip-scoped`,
+`gate.presence.true-edge-seeds-enter`, `gate.presence.hidden-parks-timers`, `gate.presence.grid-cell-keeps-track`,
+`gate.presence.bindcontract-flip`.
+
+### 4.8 Incremental layout by default — as built (Operation ultra-fast GPU engine, P4)
+
+Landed on top of §4.1–§4.6's existing boundary-firewall + `TryResolveSizeStable` machinery (unchanged); this section
+records what was actually built, distinct from `AuxFlags.SubtreeLayoutDirty` (a NEW, layout-owned bit — §4.6's
+binding rule is about the RECONCILER's own `SubtreeDirty` propagation bit, `reconciler-hooks.md` §6.3, which stays
+traversal-scope-only exactly as documented; the two are unrelated columns with unrelated owners).
+
+**Subtree-dirty propagation (`SceneStore.Aux.cs`).** `AuxFlags.SubtreeLayoutDirty` (bit reserved since P1) is now
+live: `SceneStore.Mark(h, NodeFlags.LayoutDirty)`'s 0→1 edge calls `MarkSubtreeLayoutDirtyChain(idx)`, which walks
+from `h`'s PARENT upward setting the bit, stopping at the first already-set ancestor (mirrors the pre-existing
+`_recordDirty` aggregate walk in the same method). `ClearLayoutDirty()` (called once per frame after layout runs)
+walks the mirror `ClearSubtreeLayoutDirtyChain` for every worklist entry, stopping at the first already-clear
+ancestor — safe because the worklist IS the complete set of nodes marked `LayoutDirty` this frame (every 0→1 edge is
+recorded there; nothing sets the flag outside `Mark`), so by the time every entry's chain is walked, no ancestor can
+still have a live reason to stay set. The node's OWN dirtiness is deliberately NOT folded into its own bit (only its
+ancestors'): `SceneStore.IsLayoutClean(h)` is the combined test (`!LayoutDirty(h) && !SubtreeLayoutDirty(h)`) —
+"nothing at or below this node needs layout this frame." Structural edits (`AppendChild`/`PrependChild`/`Detach` +
+the reconciler's `MarkLayoutShape`) need no special-case code: they already route through `Mark(…, LayoutDirty)`.
+
+**Arranged-rect validity.** `FlexLayout._arranged` (a new `RectF[]`, grown alongside the pre-existing `_memo` array
+in `BeginMeasurePass`) holds the LAST rect an `Arrange` call actually placed each node at — written ONLY by
+`SetArrangedBounds`, unlike `scene.Bounds(node)` (which `Measure` also scribbles hypothetical W/H into ahead of the
+arrange that owns X/Y). `AuxFlags.ArrangedValid` (bit reserved since P1) says whether the slot holds a real value yet
+(cleared on `CreateNode` — the whole `_aux` byte is zeroed there); `SceneStore.SetArrangedValid`/`IsArrangedValid`
+are the accessors.
+
+**Arrange early-out.** At the top of `FlexLayout.Arrange` (after the P1 collapsed short-circuit, before
+`SetArrangedBounds`/`_dArrange++`): if the node is `IsArrangedValid`, `IsLayoutClean`, does NOT `HasScrollInSubtree`
+(see below), and the incoming `(x, y, finalW, finalH)` is byte-identical to the recorded `_arranged` rect, the call
+returns immediately (after re-asserting `scene.Bounds(node)` to the recorded rect and delivering any pending
+`OnBoundsChanged` via `DeliverPendingBoundsChangedIfAny` — the one-shot a freshly-installed handler still owes).
+Every input the algorithm reads (this node's own `LayoutInput` and every descendant's) is unchanged by construction
+of "clean," so re-running it can only reproduce the identical placement — the call and everything below it are
+skipped, not merely made cheap.
+
+**The early-out restores every descendant Measure touched this pass to its last arranged rect.** Measure writes
+hypothetical W/H into the live `Bounds` column (a `Grow=1`, `Width=NaN` leaf inside a clean ZStack — ZStack/grid
+roots are excluded from the cross-pass ring, so Measure still descends — measures to W=0). The skip used to
+re-assert only the early-out node and return, stranding those children at the hypothetical size (the invisible
+seek-rail bug). A per-pass `_measuredPass` stamp on every Measure Bounds scribble lets the skip walk
+`FirstChild`/`NextSibling` and copy `_arranged` back onto each stamped, `ArrangedValid` descendant. A ring-hit
+parent never visits children, so their stamp is stale and their `Bounds` still hold the arranged rect.
+
+**`HasScrollInSubtree` — the correctness fix a live regression surfaced.** A scroll/virtual viewport's
+`ArrangeViewport` has continuous PER-FRAME obligations — posting `ScrollInput.SetFrame`, checking
+`VirtualWindowing.NeedsRealize`, flagging `NodeFlags.VirtualRangeDirty` for the reconciler's realize catch-up — that
+are NOT `LayoutDirty`-gated at all (scrolling is deliberately layout-free/transform-only, §6). The early-out already
+excluded the viewport NODE ITSELF (`!HasScroll(node)`), but an ANCESTOR whose own rect is clean-and-unchanged (a
+crossfading KeepAlive overlay wrapper, say — both branches occupy the identical full-bleed rect, differentiated only
+by an animated Transform/Opacity channel that never touches `LayoutInput`) would take the early-out and never
+recurse down to the viewport AT ALL, silently starving it every frame layout runs at all — found via
+`gate.semantic-zoom.reduced-motion` (a KeepAlive overview's `ItemsView` viewport, several BoxEl levels below an
+unchanging wrapper, stopped receiving `Arrange` calls entirely once the wrapper settled — glyphs went from a healthy
+crossfade count to a permanent 0 the frame the wrapper became clean). Fix: `AuxFlags.HasScrollDescendant` — a
+PERMANENT (never cleared — a viewport being removed later is not worth tracking precisely; the cost is a few
+foregone early-outs, never a correctness gap), monotonic bit set the first time `SceneStore.ScrollRef` creates a
+viewport row under a node, walking ancestors the same shape as `MarkSubtreeLayoutDirtyChain`.
+`SceneStore.HasScrollInSubtree(h) = HasScroll(h) || HasScrollDescendant bit` is the Arrange early-out's second
+exclusion (`!_scene.HasScrollInSubtree(node)`), alongside `IsLayoutClean`.
+
+**Measure cross-pass ring.** `MeasureMemo` (the existing within-pass memo + persistent `TryResolveSizeStable` record
+struct) gained a 2-entry ring (`Ring0*`/`Ring1*`: `NodeGen`, `AvailW`, `W`, `H`, a `LayoutSig` hash) — typically one
+slot for a stretched child's measure-width call and one for its arrange-width re-measure (the two distinct widths a
+column-stretch child sees every pass, §3's "re-measure stretch children before computing main sizes"). `TryRingHit`
+(checked between the within-pass-memo miss and the viewport/grid/zstack dispatch, excluded from those three kinds
+like the within-pass memo already is) requires `IsLayoutClean(node)` AND a matching `(NodeGen, AvailW)` slot AND a
+matching `LayoutSig` (the same conservative superset `TryResolveSizeStable` trusts — defense in depth beyond the
+dirty-marking discipline). A hit returns the stored size WITHOUT DESCENDING; `StoreRing` (called unconditionally at
+the end of every general-path `Measure`) keeps both slots current regardless of read validity, since validity is
+gated entirely at read time.
+
+**Virtual rows — no bespoke code needed.** `ArrangeVirtualLayout`/`ArrangeVirtualVariable`/`ArrangeVirtualMeasured`/
+`RefreshNaturalMeasuredStack` all call the GENERIC `Measure`/`Arrange` entry points per realized row (verified by
+inspection — none of them have a separate placement algorithm bypassing those two methods), so a clean, unchanged-
+rect row benefits from the ring + early-out automatically, with no virtualization-specific code. Realize marks
+(`RealizeBoundWindow` and neighbors) were found ALREADY conditional on structural/order/window change
+(`if (moved) MarkLayoutShape(content)`, `if (first != entry.PrevFirst) MarkLayoutShape(content)`, etc.) from prior
+sessions' work — nothing to change there.
+
+**Deviations from the plan's literal wording.** (1) The plan's phrase "the measured seam feeds `SetMeasured` from
+`_arranged[rc].H`" is satisfied INDIRECTLY: `Measure(rc)` itself now returns the ring-cached value without
+descending when clean, so the existing `layout.SetMeasured(index, measured.Height, cross)` call sites need no
+change — reading through `Measure`'s cache is equivalent to reading `_arranged[rc].H` directly and keeps one fewer
+code path. (2) `gate.layout.parity-from-scratch` is a VerticalSlice harness gate (20 random scoped edits vs. an
+independent from-scratch build of the same final state, compared node-by-node) as well as, not instead of, the live
+`FG_LAYOUT_VERIFY` oracle described in §4.9 — the harness gate is better isolated (the oracle cannot perturb the
+thing it checks), the oracle is more general (any live scene, any frame).
+
+### 4.8.1 The text measure cache is a 2-entry ring too
+
+`TextMeasureCache` (`Scene/Columns.cs`) holds **two** `TextMeasureEntry` slots, not one. The same two-widths
+problem the Measure ring solves applies one level down: a stretched text leaf is measured once during Measure at
+the width its parent has available and again during Arrange at the final width (§3's column re-measure), so a
+single slot thrashed between them and EVERY pass re-shaped the run — a real DirectWrite shaping cost on every
+frame that laid out at all, for content that had not changed.
+
+- `TryGet(text, style, maxW, out entry)` probes both slots; the key is unchanged (a pure function of text, style
+  and wrap width, so it is still self-invalidating). A HIT also becomes the ring's "last used" slot.
+- `Store(entry)` alternates slots, so both of a pass's widths survive into the next pass.
+- The RECORDER resolves which entry to read by the width it is drawing at:
+  `MeasureCacheRef(node).ResolveForWidth(b.W)` returns the entry whose `MaxW` matches exactly, else the last-used
+  entry — which is what the pre-ring single slot's implicit "whichever was written last" read always resolved to,
+  so auto-fit (`FitSize`) and the underline/strikethrough face metrics keep their previous behaviour when no entry
+  matches. The snapshot copies the whole struct, both entries included.
+- Gate: `gate.layout.text-cache-ring` — a stretched text leaf laid out twice; the first pass records 2 distinct
+  measure misses (proving the two widths are real), the second pass records `TextShapeMisses == 0` and
+  `TextShapes == 0`.
+
+### 4.9 `FG_LAYOUT_VERIFY` — the DEBUG parity oracle and the unmarked-write tripwire
+
+Both live in `Layout/FlexLayout.Verify.cs` and are compiled out of Release entirely. **Diagnostics only**: this is
+the one deliberate exception to "no environment variable ever changes behaviour", and it earns it by changing
+none — the oracle restores every rect it touched and every counter it moved, so a run with the variable set
+produces byte-identical frames to one without it, only slower.
+
+- **The oracle** (`FG_LAYOUT_VERIFY=1`): after a real solve, re-solve the same root from scratch with every
+  incremental short-circuit off (the cross-pass Measure ring, the Arrange early-out, `TryResolveSizeStable`),
+  compare every node's `Bounds`, report divergences to stderr, then RESTORE the original rects. It runs under a
+  `Verifying` latch that suppresses everything a second solve would otherwise repeat: `OnBoundsChanged` delivery,
+  the `_arranged`/`ArrangedValid` columns, the overflow report, viewport `SetFrame`/`AnchorShift` posts,
+  scroll-bind baking and the realize/paint marks. The text measure cache is deliberately left LIVE across the
+  re-solve (a pure function of its key, so it cannot manufacture a divergence, and re-shaping every run twice per
+  frame would make the oracle unusable on a real page). `VerifyLayoutParityNow(root, window)` forces one check
+  regardless of the variable — that is `gate.layout.parity-oracle`, which also proves the restore.
+- **The tripwire** (always counted in DEBUG, logged per-node only under `FG_LAYOUT_VERIFY=1`): every node the
+  Arrange early-out SKIPS is re-hashed, whole subtree, against the signature recorded at its last real arrange
+  (`LayoutSig` plus the text inputs `LayoutSig` omits). A mismatch means a `LayoutInput` writer skipped
+  `Mark(LayoutDirty)` — the bug class where the screen keeps last frame's geometry and nothing throws. Surfaced as
+  `FlexLayout.DiagUnmarkedLayoutWrites`; `gate.layout.dirty-mark-tripwire` proves it catches an unmarked write AND
+  stays silent on a correctly marked one.
+
+**Gates** (`Suites/LayoutIncrementalSuite.cs`, registered as `layout-inc`): `gate.layout.arrange-early-out` (a
+bound-width leaf 6 `BoxEl` levels inside a fixed-size `ClipToBounds` boundary; a leaf-only dirty ⇒ `ArrangeCount`/
+`MeasureCount` bounded to the ancestor chain, not the whole tree), `gate.layout.early-out-restores-measured-
+descendants` (a sibling-width edit on a row whose clean ZStack host keeps a byte-identical rect; the skip must
+leave the `Grow=1` rail at host W, not 0), `gate.layout.subtree-bits-clear` (after a dirty leaf settles, no node
+anywhere in the tree still has `SubtreeLayoutDirty` set), `gate.layout.resize-relayouts-all-
+changed` (a window resize genuinely re-arranges every stretched row — the early-out never mistakes a resize for
+"unchanged"), `gate.layout.virtual-clean-rows-skipped` (48 sibling ~12-node rows; one row's bound title changes ⇒
+`MeasureCount`/`ArrangeCount` stay near that one row's subtree, not `O(48 rows)`, and every other row's `Bounds` is
+byte-identical), `gate.layout.parity-from-scratch` (20 random scoped width edits through the incremental path land
+on the exact `Bounds` a from-scratch full solve of the same final state produces), plus §4.8.1's
+`gate.layout.text-cache-ring` and §4.9's `gate.layout.parity-oracle` / `gate.layout.dirty-mark-tripwire`. Every
+pre-existing layout/scroll/virt/presence gate stays green (see the progress file for the exact counts).
+
 ---
 
 ## 5. INCREMENTAL PIXEL-SNAP (folds the MAJOR)

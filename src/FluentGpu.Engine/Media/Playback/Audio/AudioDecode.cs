@@ -356,19 +356,28 @@ public sealed class WavAudioDecoder : IAudioDecoder
 /// decorator stack. Carries the decoder's <see cref="GaplessInfo"/> and the resolved <see cref="ReplayGainInfo"/> so the
 /// voice bakes ReplayGain pre-mix. Alloc-free reads.
 /// </summary>
-public sealed class DecoderAudioSource : IAudioSource
+public sealed class DecoderAudioSource : IAudioSource, ICancellableAudioSource, IDisposable
 {
     private readonly IAudioDecoder _decoder;
+    private readonly IMediaByteSource? _byteSource;
+    private IDisposable? _lifetime;
+    private int _disposed;
     private long _pos;
     private bool _eof;
 
     /// <summary>Wrap <paramref name="decoder"/>; <paramref name="loudness"/> is the resolved ReplayGain (from tags/metadata).</summary>
-    public DecoderAudioSource(IAudioDecoder decoder, ReplayGainInfo loudness = default)
+    public DecoderAudioSource(IAudioDecoder decoder, ReplayGainInfo loudness = default,
+        IMediaByteSource? byteSource = null, IDisposable? lifetime = null)
     {
         _decoder = decoder;
+        _byteSource = byteSource;
+        _lifetime = lifetime;
         Loudness = loudness;
         Gapless = decoder.Gapless;
     }
+
+    /// <summary>Exact decoded length when known independently of rounded duration metadata.</summary>
+    public long ExactLengthFrames => _decoder is WavAudioDecoder wav ? wav.MixFramesTotal : Gapless.ExactFrames;
 
     /// <inheritdoc/>
     public long PositionFrames => _pos;
@@ -380,7 +389,13 @@ public sealed class DecoderAudioSource : IAudioSource
     public ReplayGainInfo Loudness { get; }
 
     /// <summary>Seek the underlying decoder to a mix-domain frame.</summary>
-    public void SeekFrame(long frame) { _decoder.Seek(frame); _pos = frame; _eof = false; }
+    public void SeekFrame(long frame)
+    {
+        long achieved = _decoder.Seek(frame);
+        if (achieved < 0) throw new InvalidOperationException("Decoder could not seek to the requested frame.");
+        _pos = achieved;
+        _eof = false;
+    }
 
     /// <inheritdoc/>
     public int Read(Span<float> dst, int channels)
@@ -390,5 +405,19 @@ public sealed class DecoderAudioSource : IAudioSource
         if (got <= 0) { _eof = true; return 0; }
         _pos += got;
         return got;
+    }
+
+    /// <inheritdoc/>
+    public void CancelPendingRead() => _byteSource?.Cancel();
+    /// <inheritdoc/>
+    public void Dispose()
+    {
+        if (System.Threading.Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        try { (_decoder as IDisposable)?.Dispose(); }
+        finally
+        {
+            try { _byteSource?.Close(); }
+            finally { System.Threading.Interlocked.Exchange(ref _lifetime, null)?.Dispose(); }
+        }
     }
 }

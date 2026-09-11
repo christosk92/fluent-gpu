@@ -114,6 +114,130 @@ public struct ScrollLeaseCapture
 /// </summary>
 public static class SceneRecorder
 {
+    public const float MotionSoftFullDip = SceneRecordingContext.MotionSoftFullDip;
+    public static void ConfigureScrollbarArrowGlyphs(SceneStore scene, StringId up, StringId down, StringId left, StringId right, StringId iconFamily)
+        => scene.Recording.ConfigureScrollbarArrowGlyphs(up, down, left, right, iconFamily);
+
+    public static bool RectOverVideoHole(SceneStore scene, in RectF worldRect, float minCoveredFraction = 0.5f)
+        => scene.Recording.RectOverVideoHole(in worldRect, minCoveredFraction);
+
+    public static ReadOnlySpan<ScrollLeaseCapture> LeaseCaptures(SceneStore scene) => scene.Recording.LeaseCaptures;
+
+    public static float TextMotionSoftness(float speedDip) => SceneRecordingContext.TextMotionSoftness(speedDip);
+
+    public static (RectF DrawRect, RectF Uv) ImageContentFit(ImageFit fit, in RectF box, int srcW, int srcH, float focusX = 0.5f, float focusY = 0.5f)
+        => SceneRecordingContext.ImageContentFit(fit, in box, srcW, srcH, focusX, focusY);
+
+    public static SceneRecordStats Record(SceneStore scene, DrawList dl, ImageCache? images = null, in FocusVisualStyle focus = default,
+                                          ColorF scrollThumb = default, ColorF scrollTrack = default, in TextEditStyle textEdit = default,
+                                          ReadOnlySpan<NodeHandle> skipRoots = default, bool holdSelfBlurForAnyUserScroll = false,
+                                          SpanTable? spans = null,
+                                          SpanReuseDisabledReason spanReuseDisabled = SpanReuseDisabledReason.None,
+                                          ReadOnlySpan<RectF> pendingStructuralDamage = default, ulong damageEpoch = 0,
+                                          ReadOnlySpan<NodeHandle> reuseBlockRoots = default, bool collectSpanReuseMisses = false)
+    {
+        var context = scene.Recording;
+        var snapshot = context.CaptureInline(scene, images);
+        var result = context.Record(snapshot, dl, context.InlineImages, in focus, scrollThumb, scrollTrack, in textEdit, skipRoots,
+            holdSelfBlurForAnyUserScroll, spans, spanReuseDisabled, pendingStructuralDamage, damageEpoch, reuseBlockRoots, collectSpanReuseMisses);
+        scene.ClearPendingRemovals();
+        return result;
+    }
+
+    public static void RecordDetached(SceneStore scene, DrawList dl, ImageCache? images, FluentGpu.Animation.DetachedAnimSlab detached, RectF clip)
+    {
+        var context = scene.Recording;
+        // perf plan item 5/item 1: reuse THIS frame's Record() capture instead of re-walking the whole scene + image
+        // cache again (Record always runs first, synchronously, with no scene mutation in between — see
+        // CaptureInlineForFrame). A detached fly's ImageId lives in the DetachedAnimSlab, not on any scene node, so it
+        // was never in the scene walk's referenced-image set (item 1); fold those few (typically 0-3) ids in too.
+        int detachedCount = detached.NodeCount;
+        Span<int> detachedImageIds = stackalloc int[detachedCount];
+        int detachedImageIdCount = 0;
+        for (int s = 0; s < detachedCount; s++)
+        {
+            ref readonly var node = ref detached.At(s);
+            if (node.InUse && (VisualKind)node.Kind == VisualKind.Image && node.ImageId != 0)
+                detachedImageIds[detachedImageIdCount++] = node.ImageId;
+        }
+        var snapshot = context.CaptureInlineForFrame(scene, images, detachedImageIds[..detachedImageIdCount]);
+        context.RecordDetached(snapshot, dl, context.InlineImages, detached, clip);
+    }
+
+    public static SceneRecordStats RecordSubtree(SceneStore scene, DrawList dl, ImageCache? images, in FocusVisualStyle focus,
+                                                 ColorF scrollThumb, ColorF scrollTrack, in TextEditStyle textEdit,
+                                                 NodeHandle root, Point2 originDip)
+    {
+        var context = scene.Recording;
+        // perf plan item 5: reuse THIS frame's Record() capture (see CaptureInlineForFrame) — a popup subtree's nodes
+        // are already part of the main scene walk (popups stay children of Root; only Walk's emission, not Capture,
+        // respects skipRoots), so no extra referenced-image ids are needed here.
+        var snapshot = context.CaptureInlineForFrame(scene, images);
+        return context.RecordSubtree(snapshot, dl, context.InlineImages, in focus, scrollThumb, scrollTrack, in textEdit, root, originDip);
+    }
+}
+
+/// <summary>One recording target's mutable scratch. Never shared with another target or recording thread.</summary>
+internal sealed class SceneRecordingContext
+{
+    internal bool PopupPresented;
+    internal void CopyConfigurationFrom(SceneRecordingContext source)
+    {
+        ConfigureScrollbarArrowGlyphs(source._sbUpGlyph, source._sbDownGlyph, source._sbLeftGlyph, source._sbRightGlyph, source._sbIconFamily);
+        _sbArrowGlyphsSet = source._sbArrowGlyphsSet;
+    }
+
+    internal void RetainConfigurationStrings(SceneRecordingSnapshot scene, StringTable strings)
+        => scene.RetainStrings(strings, [_sbUpGlyph, _sbDownGlyph, _sbLeftGlyph, _sbRightGlyph, _sbIconFamily]);
+
+    internal int CopyVideoRects(Span<RectF> destination)
+    {
+        int count = Math.Min(destination.Length, _publishedVideoRectCount);
+        _publishedVideoRects.AsSpan(0, count).CopyTo(destination);
+        return count;
+    }
+
+    internal void ImportVideoRects(ReadOnlySpan<RectF> source)
+    {
+        _publishedVideoRectCount = Math.Min(source.Length, _publishedVideoRects.Length);
+        source[.._publishedVideoRectCount].CopyTo(_publishedVideoRects);
+    }
+    private SceneRecordingSnapshot? _inlineScene;
+    private SceneStore? _inlineCapturedScene;
+    private ImageCache? _inlineCapturedImages;
+    internal ImageRecordingSnapshot InlineImages { get; } = new();
+    internal void ReleaseInlineResources() => _inlineScene?.ReleaseResources();
+
+    /// <summary>The frame's authoritative capture — always re-walks the scene (perf plan item 1: image inputs are
+    /// narrowed to <see cref="SceneRecordingSnapshot.ReferencedImageIds"/>, the set the recorder can actually draw).
+    /// Called by <see cref="Record"/>, which is always the first of the (Record, RecordDetached, N×RecordSubtree)
+    /// group in a real inline/headless frame (Hosting/AppHost.cs's `!recordOnRender` branch) — see
+    /// <see cref="CaptureInlineForFrame"/> for the sibling calls that reuse this result instead of re-capturing.</summary>
+    internal SceneRecordingSnapshot CaptureInline(SceneStore scene, ImageCache? images)
+    {
+        var snapshot = _inlineScene ??= new SceneRecordingSnapshot();
+        snapshot.Capture(scene);
+        InlineImages.Capture(images, snapshot.ReferencedImageIds);
+        _inlineCapturedScene = scene;
+        _inlineCapturedImages = images;
+        return snapshot;
+    }
+
+    /// <summary>perf plan item 5: <see cref="RecordDetached"/>/<see cref="RecordSubtree"/> call this instead of
+    /// <see cref="CaptureInline"/> — a headless/inline frame captures (scene, images) with
+    /// <see cref="CaptureInline"/> exactly once (from <see cref="Record"/>) and this reuses that same snapshot for the
+    /// rest of the frame's passes (RecordDetached, each popup's RecordSubtree) when nothing has mutated the (scene,
+    /// images) pair since — a plain reference-equality check against the pair last captured, so a fresh/different
+    /// scene (a test calling RecordDetached on its own SceneStore with no preceding Record) always falls back to a
+    /// real capture. <paramref name="extraImageIds"/> (small — the detached-fly slab's own image ids) are merged into
+    /// the already-captured/reused <see cref="InlineImages"/> without re-capturing the scene.</summary>
+    internal SceneRecordingSnapshot CaptureInlineForFrame(SceneStore scene, ImageCache? images, ReadOnlySpan<int> extraImageIds = default)
+    {
+        bool reuse = _inlineScene is not null && ReferenceEquals(_inlineCapturedScene, scene) && ReferenceEquals(_inlineCapturedImages, images);
+        var snapshot = reuse ? _inlineScene! : CaptureInline(scene, images);
+        if (!extraImageIds.IsEmpty) InlineImages.AddReferenced(images, extraImageIds);
+        return snapshot;
+    }
     private const bool EnableSubtreeCull = true;
     private const bool SpanMissDiagnosticsCompiledIn =
 #if DEBUG || FLUENTGPU_DIAG
@@ -133,19 +257,19 @@ public static class SceneRecorder
     // non-identity linear transform, so that case is handled correctly. Regression-gated by gate.record.occlusion-*.
 
     // Opt-in scroll diagnostics: set FG_SCROLLLOG=1, run, scroll, copy the [scroll] lines.
-    private static readonly bool ScrollLog = Environment.GetEnvironmentVariable("FG_SCROLLLOG") == "1";
-    private static int _scrollLogFrame;
-    private static bool ScrollLogNow => ScrollLog && (_scrollLogFrame % 45) == 0;
+    private readonly bool ScrollLog = Environment.GetEnvironmentVariable("FG_SCROLLLOG") == "1";
+    private int _scrollLogFrame;
+    private bool ScrollLogNow => ScrollLog && (_scrollLogFrame % 45) == 0;
 
 
     // Overlay-scrollbar arrow glyphs: the host pre-interns the four Segoe Fluent arrow chars + the icon family once
     // at startup (AppHost ctor) so EmitScrollbar draws the SAME solid-triangle glyphs as the standalone ScrollBar
     // control (ScrollBar_themeresources.xaml :387/:344/:301/:258) — one scrollbar visual language, not two. A host
     // that never configures them (bare recorder tests) falls back to the stroked-chevron primitive.
-    private static StringId _sbUpGlyph, _sbDownGlyph, _sbLeftGlyph, _sbRightGlyph, _sbIconFamily;
-    private static bool _sbArrowGlyphsSet;
+    private StringId _sbUpGlyph, _sbDownGlyph, _sbLeftGlyph, _sbRightGlyph, _sbIconFamily;
+    private bool _sbArrowGlyphsSet;
 
-    public static void ConfigureScrollbarArrowGlyphs(StringId up, StringId down, StringId left, StringId right, StringId iconFamily)
+    public void ConfigureScrollbarArrowGlyphs(StringId up, StringId down, StringId left, StringId right, StringId iconFamily)
     {
         _sbUpGlyph = up; _sbDownGlyph = down; _sbLeftGlyph = left; _sbRightGlyph = right; _sbIconFamily = iconFamily;
         _sbArrowGlyphsSet = true;
@@ -159,14 +283,14 @@ public static class SceneRecorder
     // ⇒ the compositor falls back to the whole-frame union (no carve-out, the prior safe behavior). UI-thread-only static
     // scratch (record is single-threaded); reset at the top of Record, consumed by PatchDamageRanges before Record returns.
     private const int DamageEntryCap = 32;
-    private static readonly RectF[] _dmgEntries = new RectF[DamageEntryCap];
-    private static int _dmgEntryCount;
-    private static bool _dmgOverflow;
+    private readonly RectF[] _dmgEntries = new RectF[DamageEntryCap];
+    private int _dmgEntryCount;
+    private bool _dmgOverflow;
 
     private struct AcrylicDamageRange { public int PushByteOffset; public int Start; public int End; }
     private const int AcrylicRangeCap = 32;
-    private static readonly AcrylicDamageRange[] _acrylicRanges = new AcrylicDamageRange[AcrylicRangeCap];
-    private static int _acrylicRangeCount;
+    private readonly AcrylicDamageRange[] _acrylicRanges = new AcrylicDamageRange[AcrylicRangeCap];
+    private int _acrylicRangeCount;
 
     // ── Repaint-damage scratch (gpu-renderer.md §13.1) ──────────────────────────────────────────────────────────────
     // The AA floor every emitted repaint rect is padded by. Per-kind effect extent (shadow offset+spread+3σ, self-blur
@@ -178,10 +302,10 @@ public static class SceneRecorder
     // partial repaint that touches ANY part of it must redraw the whole punch or the hole's edges tear. Same UI-thread
     // static-scratch discipline as the damage entries; capacity is tiny because a frame has at most a handful.
     private const int VideoRectCap = 8;
-    private static readonly RectF[] _videoRects = new RectF[VideoRectCap];
-    private static int _videoRectCount;
+    private readonly RectF[] _videoRects = new RectF[VideoRectCap];
+    private int _videoRectCount;
 
-    private static void NoteVideoRect(in RectF deviceRect)
+    private void NoteVideoRect(in RectF deviceRect)
     {
         if (_videoRectCount >= VideoRectCap || deviceRect.W <= 0f || deviceRect.H <= 0f) return;
         _videoRects[_videoRectCount++] = deviceRect;
@@ -192,8 +316,8 @@ public static class SceneRecorder
     // Snapshotted at the end of Record rather than aliasing _videoRects, because RecordSubtree (a windowed popup's own
     // pass) appends into _videoRects without resetting it and would otherwise pollute the answer. Fixed capacity, no
     // allocation, UI-thread-only - identical discipline to the scratch it copies.
-    private static readonly RectF[] _publishedVideoRects = new RectF[VideoRectCap];
-    private static int _publishedVideoRectCount;
+    private readonly RectF[] _publishedVideoRects = new RectF[VideoRectCap];
+    private int _publishedVideoRectCount;
 
     /// <summary>
     /// Does <paramref name="worldRect"/> sit on top of a video hole punch? True when a single <c>DrawVideo</c> Dst from
@@ -227,7 +351,7 @@ public static class SceneRecorder
     /// frame has at most a handful of holes and a popup plate normally straddles one), but a caller placing a plate
     /// across a multi-video wall must not read a <c>false</c> as "no video underneath".</para>
     /// </summary>
-    public static bool RectOverVideoHole(in RectF worldRect, float minCoveredFraction = 0.5f)
+    public bool RectOverVideoHole(in RectF worldRect, float minCoveredFraction = 0.5f)
     {
         if (_publishedVideoRectCount == 0 || worldRect.W <= 0f || worldRect.H <= 0f) return false;
         float area = worldRect.W * worldRect.H;
@@ -249,11 +373,11 @@ public static class SceneRecorder
     // reset once per Record(), zero per-frame allocation, fixed capacity (overflow silently drops the capture — Phase 6
     // simply finds no entry for that viewport this frame and does not grant/continue a lease, self-correcting next frame).
     private const int LeaseCaptureCap = 32;
-    private static readonly ScrollLeaseCapture[] _leaseCaptures = new ScrollLeaseCapture[LeaseCaptureCap];
-    private static int _leaseCaptureCount;
+    private readonly ScrollLeaseCapture[] _leaseCaptures = new ScrollLeaseCapture[LeaseCaptureCap];
+    private int _leaseCaptureCount;
 
     /// <summary>This frame's render-lease captures (§6.1) — read-only, valid until the next <see cref="Record"/> call.</summary>
-    public static ReadOnlySpan<ScrollLeaseCapture> LeaseCaptures => _leaseCaptures.AsSpan(0, _leaseCaptureCount);
+    public ReadOnlySpan<ScrollLeaseCapture> LeaseCaptures => _leaseCaptures.AsSpan(0, _leaseCaptureCount);
 
     // Effect-halo allowance for an extent captured OUTSIDE the recorder — a freed node's model rect, a structural-cancel
     // seed. Those carry no shadow/blur information, whereas every extent the recorder itself produces already does:
@@ -273,7 +397,7 @@ public static class SceneRecorder
     /// <summary>§13.1 I3: did any ancestor re-base its span with a TRANSLATED copy since this node was last recorded? If
     /// so the node's stored extent describes a position its pixels no longer occupy, by an amount nothing bounds (a
     /// scroll is hundreds of DIP per frame). Only reached for a MOVED node whose prior extent is stale.</summary>
-    private static bool AncestorTranslatedSince(SceneStore scene, SpanTable spans, NodeHandle node)
+    private bool AncestorTranslatedSince(SceneRecordingSnapshot scene, SpanTable spans, NodeHandle node)
     {
         uint nodeFrame = spans.StoredFrameOf((int)node.Raw.Index, node.Raw.Gen);
         NodeHandle p = scene.Parent(node);
@@ -285,7 +409,7 @@ public static class SceneRecorder
     /// <summary>§13.1 I3: the nearest ancestor whose span WAS refreshed on the previous frame. Its stored
     /// <c>SubtreeBounds</c> covers everything it drew — including this descendant, wherever the translated copy put it —
     /// so it is a sound (over-inclusive) stand-in for the vacated band. False ⇒ nothing on the chain can place it.</summary>
-    private static bool TryFreshAncestorExtent(SceneStore scene, SpanTable spans, NodeHandle node, uint spanFrame, out RectF extent)
+    private bool TryFreshAncestorExtent(SceneRecordingSnapshot scene, SpanTable spans, NodeHandle node, uint spanFrame, out RectF extent)
     {
         NodeHandle p = scene.Parent(node);
         for (int i = 0; i < PriorExtentAncestorWalkCap && !p.IsNull; i++, p = scene.Parent(p))
@@ -303,21 +427,21 @@ public static class SceneRecorder
 
     /// <summary>The repaint band for an extent: the AA/ink floor, plus <paramref name="extraHalo"/> for extents whose
     /// per-kind effect halo is NOT already folded in. The ONE place repaint rects are padded.</summary>
-    private static RectF RepaintBand(in RectF extent, float extraHalo = 0f)
+    private RectF RepaintBand(in RectF extent, float extraHalo = 0f)
     {
         if (extent.W <= 0f || extent.H <= 0f) return default;
         float pad = RepaintAaPadDip + extraHalo;
         return new RectF(extent.X - pad, extent.Y - pad, extent.W + 2f * pad, extent.H + 2f * pad);
     }
 
-    private static void ResetDamageEntries()
+    private void ResetDamageEntries()
     {
         _dmgEntryCount = 0; _dmgOverflow = false; _acrylicRangeCount = 0; _videoRectCount = 0; _leaseCaptureCount = 0;
     }
 
     // Register a freshly-walked cached-acrylic layer's PushLayer byte offset + its own-subtree entry-range start.
     // Returns the range slot index (or -1 on range-pool overflow ⇒ this layer is left unpatched ⇒ union fallback).
-    private static int OpenAcrylicRange(int pushByteOffset, int start)
+    private int OpenAcrylicRange(int pushByteOffset, int start)
     {
         if (_acrylicRangeCount >= AcrylicRangeCap) return -1;
         int idx = _acrylicRangeCount++;
@@ -327,7 +451,7 @@ public static class SceneRecorder
 
     // Post-walk: bake each tracked cached-acrylic layer's EXTERNAL damage rect (union of entries OUTSIDE its own subtree)
     // + the frame epoch into its PushLayerCmd, so the compositor tests only genuine behind-the-layer damage (§2.3/E9).
-    private static void PatchDamageRanges(DrawList dl, in RectF fullUnion, ulong damageEpoch)
+    private void PatchDamageRanges(DrawList dl, in RectF fullUnion, ulong damageEpoch)
     {
         for (int i = 0; i < _acrylicRangeCount; i++)
         {
@@ -339,6 +463,7 @@ public static class SceneRecorder
 
     private struct RecordAccumulator
     {
+        public SceneRecordingContext Owner;
         public int NodesVisited;
         public int DrawnNodeCount;
         public int CulledNodeCount;
@@ -396,8 +521,8 @@ public static class SceneRecorder
         {
             if (r.W <= 0f || r.H <= 0f) return;
             // Record the individual entry (own-subtree carve-out, §2.3/E9) as well as unioning it into the frame damage.
-            if (_dmgEntryCount < DamageEntryCap) _dmgEntries[_dmgEntryCount++] = r;
-            else _dmgOverflow = true;
+            if (Owner._dmgEntryCount < DamageEntryCap) Owner._dmgEntries[Owner._dmgEntryCount++] = r;
+            else Owner._dmgOverflow = true;
             if (!HasDamage) { Damage = r; HasDamage = true; return; }
             float x0 = MathF.Min(Damage.X, r.X), y0 = MathF.Min(Damage.Y, r.Y);
             float x1 = MathF.Max(Damage.X + Damage.W, r.X + r.W), y1 = MathF.Max(Damage.Y + Damage.H, r.Y + r.H);
@@ -413,7 +538,12 @@ public static class SceneRecorder
             NodesCulled = this.NodesCulled,
             BlurCandidateCount = this.BlurCandidateCount,
             BlurGroupCount = this.BlurGroupCount,
-            BlurSuppressedByScrollCount = 0,
+            // Was a hard 0 — the app's `blurHeld=` log field always read 0 regardless of real hold activity. The
+            // live "held during scroll" signal is BlurHoldCandidateCount (incremented just above at the `holdBlur`
+            // site: globalBlurHold || userScrollActive, gated by BlurCachePolicy != Normal). Alias it rather than
+            // keep two counters that mean the same thing — BlurSuppressedByScrollCount is the field's public name,
+            // BlurHoldCandidateCount is what actually gets counted; no behavior change beyond the value now flowing.
+            BlurSuppressedByScrollCount = this.BlurHoldCandidateCount,
             BlurHoldCandidateCount = this.BlurHoldCandidateCount,
             EdgeFadeGroupCount = this.EdgeFadeGroupCount,
             SpansReused = this.SpansReused,
@@ -555,7 +685,7 @@ public static class SceneRecorder
     /// <param name="skipRoots">Subtree roots EXCLUDED from this record pass — out-of-bounds popup wrappers that render
     /// into their own popup window instead (E4 windowed popups; see <see cref="RecordSubtree"/>). The subtrees stay in
     /// the one SceneStore (layout/hit-test unchanged) — only their pixels move to the popup window's DrawList.</param>
-    public static SceneRecordStats Record(SceneStore scene, DrawList dl, ImageCache? images = null, in FocusVisualStyle focus = default,
+    public SceneRecordStats Record(SceneRecordingSnapshot scene, DrawList dl, ImageRecordingSnapshot? images = null, in FocusVisualStyle focus = default,
                                           ColorF scrollThumb = default, ColorF scrollTrack = default, in TextEditStyle textEdit = default,
                                           ReadOnlySpan<NodeHandle> skipRoots = default, bool holdSelfBlurForAnyUserScroll = false,
                                           SpanTable? spans = null,
@@ -573,6 +703,7 @@ public static class SceneRecorder
         ResetDamageEntries();
         var stats = new RecordAccumulator
         {
+            Owner = this,
             HasActiveVirtualDisclosures = scene.HasActiveVirtualDisclosures,
             CollectSpanMisses = collectSpanReuseMisses,
         };
@@ -606,7 +737,6 @@ public static class SceneRecorder
             else if (!removals[i].ModelRect.IsEmpty) stats.AddRepaint(RepaintBand(removals[i].ModelRect, RepaintUnknownHaloDip));
             else stats.Repaint.ForceFull(RepaintFullReason.MissingRemovalExtent);   // never presented AND no model rect
         }
-        scene.ClearPendingRemovals();
         SpanReuseDisabledReason disabledReasons = spanReuseDisabled;
         if (spans is not null && !spans.HasPrior) disabledReasons |= SpanReuseDisabledReason.FirstRecord;
         // PopupWindows/Overlays/Orphans/Detached are now SPATIALLY SCOPED (scene-memory.md): rather than killing span reuse
@@ -748,8 +878,8 @@ public static class SceneRecorder
         if (hasGhost)
         {
             var abs = scene.AbsoluteRect(ghost);
-            ref RectF gb = ref scene.Bounds(ghost);
-            ref NodePaint gp = ref scene.Paint(ghost);
+            ref readonly RectF gb = ref scene.Bounds(ghost);
+            ref readonly NodePaint gp = ref scene.Paint(ghost);
             // E11: the popup skipRoots must be threaded through — a windowed popup that happens to live INSIDE the
             // dragged subtree renders in its own popup window, and passing `default` here drew it a second time,
             // unclipped, in the main window's ghost band.
@@ -770,8 +900,8 @@ public static class SceneRecorder
             var ov = scene.OverlayAt(i);
             if (!scene.IsLive(ov)) continue;
             var abs = scene.AbsoluteRect(ov);
-            ref RectF ob = ref scene.Bounds(ov);
-            ref NodePaint op = ref scene.Paint(ov);
+            ref readonly RectF ob = ref scene.Bounds(ov);
+            ref readonly NodePaint op = ref scene.Paint(ov);
             Walk(scene, dl, images, ov,
                  Affine2D.Translation(abs.X - ob.X - op.LocalTransform.Dx, abs.Y - ob.Y - op.LocalTransform.Dy),
                  1f, (1 << 16) | 1, overlayClip, in focus, in textEdit, scrollThumb, scrollTrack,
@@ -783,8 +913,8 @@ public static class SceneRecorder
         if (hasDragOverlay)
         {
             var abs = scene.AbsoluteRect(dragOverlay);
-            ref RectF ob = ref scene.Bounds(dragOverlay);
-            ref NodePaint op = ref scene.Paint(dragOverlay);
+            ref readonly RectF ob = ref scene.Bounds(dragOverlay);
+            ref readonly NodePaint op = ref scene.Paint(dragOverlay);
             Walk(scene, dl, images, dragOverlay,
                  Affine2D.Translation(abs.X - ob.X - op.LocalTransform.Dx, abs.Y - ob.Y - op.LocalTransform.Dy),
                  1f, (1 << 16) | 2, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack,
@@ -858,16 +988,24 @@ public static class SceneRecorder
     /// <c>ConnectedAnimation.SyncDetached</c>; fit + image readiness resolve here exactly like the main-pass image case.
     /// Emitted LAST (after <see cref="Record"/>) so it paints above all content; clipped to <paramref name="clip"/>
     /// (a content-region rect; <c>RectF.Infinite</c> ⇒ unbounded).</summary>
-    public static void RecordDetached(SceneStore scene, DrawList dl, ImageCache? images, FluentGpu.Animation.DetachedAnimSlab detached, RectF clip)
+    public void RecordDetached(SceneRecordingSnapshot scene, DrawList dl, ImageRecordingSnapshot? images, FluentGpu.Animation.DetachedAnimSlab detached, RectF clip)
     {
         if (detached.Count == 0) return;
+        for (int s = 0; s < detached.NodeCount; s++)
+            RecordDetachedNode(dl, images, in detached.At(s), clip);
+    }
+
+    internal void RecordDetachedNodes(DrawList dl, ImageRecordingSnapshot? images, ReadOnlySpan<FluentGpu.Animation.DetachedNode> detached, RectF clip)
+    {
+        foreach (ref readonly var node in detached) RecordDetachedNode(dl, images, in node, clip);
+    }
+
+    private void RecordDetachedNode(DrawList dl, ImageRecordingSnapshot? images, in FluentGpu.Animation.DetachedNode d, RectF clip)
+    {
+        if (!d.InUse || (VisualKind)d.Kind != VisualKind.Image || d.ImageId == 0) return;
         bool clipped = clip.W < 1e7f && clip.H < 1e7f;   // a finite content-region clip (RectF.Infinite ⇒ unbounded fly)
         if (clipped) dl.PushClip(clip);
-        int n = detached.NodeCount;
-        for (int s = 0; s < n; s++)
         {
-            ref FluentGpu.Animation.DetachedNode d = ref detached.At(s);
-            if (!d.InUse || (VisualKind)d.Kind != VisualKind.Image || d.ImageId == 0) continue;
             var ih = new ImageHandle(d.ImageId);
             bool ready = images is not null && images.StateOf(ih) == ImageState.Ready;
             float fadeStart = float.NaN, fadeDur = 0f;
@@ -899,7 +1037,7 @@ public static class SceneRecorder
     /// as in the main pass, shifted into popup-window space. Parent-scoped exit orphans are replayed by this same Walk,
     /// so an exiting popup row stays in the popup swapchain rather than leaking into the main window.
     /// </summary>
-    public static SceneRecordStats RecordSubtree(SceneStore scene, DrawList dl, ImageCache? images, in FocusVisualStyle focus,
+    public SceneRecordStats RecordSubtree(SceneRecordingSnapshot scene, DrawList dl, ImageRecordingSnapshot? images, in FocusVisualStyle focus,
                                                  ColorF scrollThumb, ColorF scrollTrack, in TextEditStyle textEdit,
                                                  NodeHandle root, Point2 originDip)
     {
@@ -914,13 +1052,13 @@ public static class SceneRecorder
             pax = pr.X;
             pay = pr.Y;
         }
-        var stats = new RecordAccumulator { HasActiveVirtualDisclosures = scene.HasActiveVirtualDisclosures };
+        var stats = new RecordAccumulator { Owner = this, HasActiveVirtualDisclosures = scene.HasActiveVirtualDisclosures };
         Walk(scene, dl, images, root, Affine2D.Translation(pax - originDip.X, pay - originDip.Y), 1f, 0, RectF.Infinite,
              in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, false, false, false, false, default, default, null, 0, true, false, ref stats);
         return stats.ToStats();
     }
 
-    private static bool ContainsNode(ReadOnlySpan<NodeHandle> roots, NodeHandle node)
+    private bool ContainsNode(ReadOnlySpan<NodeHandle> roots, NodeHandle node)
     {
         for (int i = 0; i < roots.Length; i++)
             if (roots[i] == node) return true;
@@ -929,7 +1067,7 @@ public static class SceneRecorder
 
     /// <summary>True when <paramref name="node"/> is inside any skip-root subtree (a windowed-popup wrapper) — its
     /// pixels belong to that popup's own pass, never the main window.</summary>
-    private static bool UnderAnySkipRoot(SceneStore scene, ReadOnlySpan<NodeHandle> roots, NodeHandle node)
+    private bool UnderAnySkipRoot(SceneRecordingSnapshot scene, ReadOnlySpan<NodeHandle> roots, NodeHandle node)
     {
         if (roots.IsEmpty) return false;
         for (var n = node; !n.IsNull; n = scene.Parent(n))
@@ -942,7 +1080,7 @@ public static class SceneRecorder
     /// The set: popup skipRoots + live overlays (both excluded from the main pass via <c>skips</c>, and the skip set can
     /// change without a record-dirty mark) + each exit orphan's visual parent (orphans replay INSIDE that parent's Walk)
     /// + each connected-anim fly anchor (source/dest nodes pinned/hidden by <see cref="FluentGpu.Animation.ConnectedAnimation"/>).</summary>
-    private static void BlockSpecials(SceneStore scene, SpanTable spans, uint frame,
+    private void BlockSpecials(SceneRecordingSnapshot scene, SpanTable spans, uint frame,
         ReadOnlySpan<NodeHandle> skipRoots, int overlayCount, ReadOnlySpan<NodeHandle> reuseBlockRoots,
         NodeHandle ghost, NodeHandle dragOverlay, ref RecordAccumulator stats)
     {
@@ -962,7 +1100,7 @@ public static class SceneRecorder
 
     // Walk start→root stamping each node blocked; early-out at the first already-stamped node (chains share prefixes, so
     // if a node is stamped every ancestor above it already is). A null start (a rootless orphan's visual parent) is a no-op.
-    private static void BlockChain(SceneStore scene, SpanTable spans, uint frame, NodeHandle start, ref RecordAccumulator stats)
+    private void BlockChain(SceneRecordingSnapshot scene, SpanTable spans, uint frame, NodeHandle start, ref RecordAccumulator stats)
     {
         for (var n = start; !n.IsNull; n = scene.Parent(n))
         {
@@ -993,10 +1131,10 @@ public static class SceneRecorder
     // worth doing, but it is a measured optimization, not this guard.
     //
     // NOTE: `depth` still carries a z-band in the high bits for painter order; that is unrelated to these guards.
-    [ThreadStatic] static uint[]? t_walkPath;
-    [ThreadStatic] static int t_walkPathLen;
-    private static int s_cycleAbortLogged;
-    private static int s_depthAbortLogged;
+    private uint[]? t_walkPath;
+    private int t_walkPathLen;
+    private int s_cycleAbortLogged;
+    private int s_depthAbortLogged;
 
     /// <summary>True while there is stack headroom for another <see cref="WalkCore"/> frame. On the false edge the
     /// caller must stop descending: the deepest subtree goes unpainted, which is visible but survivable — a stack
@@ -1009,7 +1147,7 @@ public static class SceneRecorder
     /// FrameStats / wakediag), the first one is written to <c>Console.Error</c> as well, and Diag counts each one. The
     /// depth budget itself is owned by the host: <c>FluentApp.RunCore</c> runs the UI/frame loop on a dedicated 32 MB
     /// thread precisely so this guard is a last-resort net, not a page-blanking cliff.</para></summary>
-    private static bool HasWalkStackHeadroom(ref RecordAccumulator stats)
+    private bool HasWalkStackHeadroom(ref RecordAccumulator stats)
     {
         if (System.Runtime.CompilerServices.RuntimeHelpers.TryEnsureSufficientExecutionStack()) return true;
         stats.DepthAborts++;
@@ -1037,7 +1175,7 @@ public static class SceneRecorder
     /// <summary>Push <paramref name="node"/> onto the current Walk path. False if it is already on the path (a
     /// reconciler cycle). O(depth) int compares — noise next to Walk's per-node work. Thread-static: Record is
     /// single-threaded per scene, and a second thread gets its own path.</summary>
-    private static bool PushWalkPath(NodeHandle node)
+    private bool PushWalkPath(NodeHandle node)
     {
         uint idx = node.Raw.Index;
         uint[] path = t_walkPath ??= new uint[64];
@@ -1061,7 +1199,7 @@ public static class SceneRecorder
         return true;
     }
 
-    private static void PopWalkPath() => t_walkPathLen--;
+    private void PopWalkPath() => t_walkPathLen--;
 
     // True when a direct child provably, fully, opaquely covers this node's VISIBLE rect — so the node's own fill/border
     // are dead pixels the child overwrites (all children paint AFTER the node's own visual, in painter order). ALWAYS ON;
@@ -1069,7 +1207,7 @@ public static class SceneRecorder
     // rect: its LAYOUT bounds (+ its own translation + the parent's ChildShift) transformed through the PARENT's `world`,
     // exactly as the child's own Walk will place it. No AbsoluteRect (that was translation-only, a different space than
     // the full-world nodeDevice — the 2026-07-23 seek-bar regression). Regression-gated by gate.record.occlusion-*.
-    private static bool IsOccludedByOpaqueChild(SceneStore scene, NodeHandle node, in Affine2D world,
+    private bool IsOccludedByOpaqueChild(SceneRecordingSnapshot scene, NodeHandle node, in Affine2D world,
         float childShiftX, float childShiftY, in RectF nodeDevice, in RectF clip, bool inMotion)
     {
         if (inMotion) return false;   // a transform in flight ⇒ the child's persisted LocalTransform may not equal its drawn rect — don't risk it
@@ -1087,6 +1225,10 @@ public static class SceneRecorder
             ref readonly NodePaint cp = ref scene.Paint(c);
             if (cp.VisualKind != VisualKind.Box) continue;
             if (cp.Fill.A < 1f || cp.Opacity < 1f) continue;     // must paint FULLY opaque to overwrite
+            // Fill is the BrushTransition TARGET: mid-fade the child draws LerpLinear(FillFrom, Fill, T), which is not the
+            // opaque cover its target claims — culling the parent then would show a hole for the whole fade.
+            if ((cf & NodeFlags.SparsePaint) != 0 && scene.TryGetBrushAnim(c, out var cba)
+                && (cba.Channels & BrushAnim.FillBit) != 0 && cba.T < 1f) continue;
             if (cp.BlurSigma > 0.01f || cp.OpacityGroup) continue;
             if (!float.IsNaN(cp.PresentedW) || !float.IsNaN(cp.PresentedH)) continue;   // a reveal draws non-layout extents
             var cn = cp.Corners;
@@ -1119,7 +1261,7 @@ public static class SceneRecorder
         return false;
     }
 
-    private static SpanRecordResult Walk(SceneStore scene, DrawList dl, ImageCache? images, NodeHandle node, Affine2D parentWorld, float parentOpacity,
+    private SpanRecordResult Walk(SceneRecordingSnapshot scene, DrawList dl, ImageRecordingSnapshot? images, NodeHandle node, Affine2D parentWorld, float parentOpacity,
                                          int depth, RectF clip, in FocusVisualStyle focus, in TextEditStyle textEdit, ColorF scrollThumb, ColorF scrollTrack,
                                          float parentScaleX, float parentScaleY, bool parentInMotion, bool globalBlurHold,
                                          bool parentScrollInMotion, bool parentUserScrollActive, InheritedState inherited,
@@ -1143,7 +1285,7 @@ public static class SceneRecorder
         }
     }
 
-    private static SpanRecordResult WalkCore(SceneStore scene, DrawList dl, ImageCache? images, NodeHandle node, Affine2D parentWorld, float parentOpacity,
+    private SpanRecordResult WalkCore(SceneRecordingSnapshot scene, DrawList dl, ImageRecordingSnapshot? images, NodeHandle node, Affine2D parentWorld, float parentOpacity,
                                          int depth, RectF clip, in FocusVisualStyle focus, in TextEditStyle textEdit, ColorF scrollThumb, ColorF scrollTrack,
                                          float parentScaleX, float parentScaleY, bool parentInMotion, bool globalBlurHold,
                                          bool parentScrollInMotion, bool parentUserScrollActive, InheritedState inherited,
@@ -1154,7 +1296,7 @@ public static class SceneRecorder
         NodeFlags flags = scene.Flags(node);
         bool maybeSparsePaint = (flags & NodeFlags.SparsePaint) != 0;
         bool hasInteractionAnim = (flags & NodeFlags.InteractionAnim) != 0;
-        ref InteractionInfo interaction = ref scene.Interaction(node);
+        ref readonly InteractionInfo interaction = ref scene.Interaction(node);
         // Same mask as the cascade's IsNestedHoverBoundary (AnimScheduler.Hover.cs) — "does this node own its own
         // interaction scope". PressedBit belongs in it: a selection row that handles only OnPointerPressed/Released is a
         // control in its own right, and leaving the bit out made it a cascade boundary that nonetheless INHERITED its
@@ -1212,7 +1354,7 @@ public static class SceneRecorder
         bool leaseHasAcrylicOrVideo = false;
         if ((flags & NodeFlags.Scrollable) != 0 && scene.HasScroll(node))
         {
-            ref var scrollState = ref scene.ScrollRef(node);
+            ref readonly var scrollState = ref scene.ScrollRef(node);
             userScrollActive |= scrollState.UserScrollActive;
             // Soften text under THIS viewport in proportion to its own live speed. Nested scrollers: the innermost
             // moving one wins (max), because a row sliding fast inside a still page is what the eye is tracking.
@@ -1243,8 +1385,8 @@ public static class SceneRecorder
             }
         }
 
-        ref RectF b = ref scene.Bounds(node);
-        ref NodePaint p = ref scene.Paint(node);
+        ref readonly RectF b = ref scene.Bounds(node);
+        ref readonly NodePaint p = ref scene.Paint(node);
 
         // node-local → device: parent ∘ translate(node pos) ∘ (local transform about the node's transform-origin)
         Affine2D world = parentWorld.Translate(b.X, b.Y);
@@ -1805,7 +1947,10 @@ public static class SceneRecorder
         {
             case VisualKind.Box when p.Fill.A > 0f || p.HoverFill.A > 0f || p.PressedFill.A > 0f || p.BorderWidth > 0f
                                      || p.ValidationBorder.A > 0f
-                                     || hasNodeGradient:
+                                     || hasNodeGradient
+                                     // A fill fading TO transparent still shows LerpLinear(FillFrom, Fill, T): draw it
+                                     // until the BrushTransition lands (the reconciler holds VisualKind.Box for it).
+                                     || (maybeSparsePaint && FillFadeVisible(scene, node)):
             {
                 ResolveSurface(scene, node, flags, in p, in inherited, nodeInteractive, hasLocalProgress, localHoverT, localPressT, out ColorF fill, out ColorF border);
                 bool hasGradFill = hasNodeGradient;
@@ -1889,11 +2034,14 @@ public static class SceneRecorder
             }
             case VisualKind.Text:
             {
-                ref var li = ref scene.Layout(node);
+                ref readonly var li = ref scene.Layout(node);
                 ColorF textColor = ResolveTextColor(scene, node, flags, in p, in inherited, nodeInteractive, hasLocalProgress, localHoverT, localPressT);
                 // Auto-fit: the measure pass may have shrunk the font (TextEl.MinSize) and recorded the chosen size on
                 // the cache. Shape at it so the glyphs match the box the layout sized. 0 ⇒ no fit (authored size).
-                ref TextMeasureCache mc = ref scene.MeasureCacheRef(node);
+                // P4: the measure cache is a 2-ENTRY RING (Scene/Columns.cs) — resolve the entry whose measure width
+                // matches the box this run is being drawn in, falling back to the most recently used entry (which is
+                // what the pre-ring single slot's "whichever was written last" read always resolved to).
+                TextMeasureEntry mc = scene.MeasureCacheRef(node).ResolveForWidth(b.W);
                 float effSize = mc.Valid && mc.FitSize > 0f ? mc.FitSize : li.TextStyle.SizeDip;
 
                 // Text-edit decorations (editor TEXT nodes only — sparse side-table, recorder READS only).
@@ -1914,7 +2062,11 @@ public static class SceneRecorder
                 // (b) the base glyph run. A span run (TextStyle.SpanRunId, rtb-01) rides the SAME op — the renderer
                 // overlays the per-range styles from SpanRunTable.Shared and tints per-span colors over textColor.
                 int spanRunId = li.TextStyle.SpanRunId;
-                if (!p.Text.IsEmpty)
+                // A run is only painted into a box that HAS area. A glyph run does not clip to its own bounds, so a
+                // text node layout has sized to 0×0 (a collapsed slot, a zero-width column) would otherwise still draw
+                // its glyphs past the empty box. Text has no visible extent without a box: nothing to paint.
+                bool paintsText = !p.Text.IsEmpty && b.W > 0f && b.H > 0f;
+                if (paintsText)
                 {
                     // No longer counted on motion: with the glyph renderer's sub-pixel phase atlas a moving run is drawn
                     // CRISP at its 1/N device row rather than unsnapped, so there is nothing for the host's settle frame
@@ -1936,13 +2088,12 @@ public static class SceneRecorder
                 // Underline/Strikethrough entries are ready-positioned bars), so record stays 0-touch on the font
                 // seam. Bar color = the span's color when set, else the node's resolved foreground — the same
                 // same-brush-as-glyphs rule WinUI's TextDecorations follow.
-                if (spanRunId != 0 && SpanRunTable.Shared.Resolve(spanRunId) is { } spanRun && spanRun.Rects is { } spanRects)
+                if (spanRunId != 0 && scene.TryGetSpanDecorations(node, out var spanStyles, out var arts))
                 {
-                    var arts = spanRects.Rects;
                     for (int i = 0; i < arts.Length; i++)
                     {
                         if (arts[i].Kind == SpanStyle.LinkBit) continue;   // hit-test bands, not painted
-                        ColorF spanColor = spanRun.Spans[arts[i].Span].Color;
+                        ColorF spanColor = spanStyles[arts[i].Span].Color;
                         dl.FillRoundRect(arts[i].Rect, default, spanColor.A > 0f ? spanColor : textColor, world, opacity, key | 0x8);
                     }
                 }
@@ -1955,7 +2106,7 @@ public static class SceneRecorder
                 // BrushTransition), like WinUI's TextDecorations underline. No new opcode — plain radius-0 fills.
                 // Scope (honest): single-line frame — a wrapped multi-line run gets the first line's bar only; per-line
                 // decoration belongs to the SpanTextEl/RichTextBlock rich-text pass (Wave 5).
-                if (p.TextDecorations != 0 && !p.Text.IsEmpty)
+                if (p.TextDecorations != 0 && paintsText)
                 {
                     // The measure pass get-or-created this row for every text leaf (mc captured above), so 0-alloc here.
                     float barW = mc.Valid ? MathF.Min(mc.Size.Width, pw) : pw;
@@ -2037,7 +2188,28 @@ public static class SceneRecorder
                 }
 
                 ImageMaskSpec mask = effects.Mask;
-                dl.DrawImage(drawRect, p.Corners, imageId, ready, p.Fill, world, opacity, uv, fadeStart, fadeDur,
+                ColorF placeholder = p.Fill;
+                // Image swap crossfade (Reconciler hold-last-good commit onto a DIFFERENT picture): the texture that was
+                // on screen is drawn first, OPAQUE for the whole window and gone after it (SwapOutgoingEasing), and this
+                // node's image fades in over it on the SAME window with a transparent placeholder — a dissolve between
+                // two real pictures, never a placeholder frame. Both draws bake the window, so a reused span keeps
+                // animating against the replay clock and the outgoing resolves to nothing once the window has passed.
+                if (ready && images is not null && effects.SwapOutgoingId != 0 && effects.SwapMs > 0f
+                    && images.StateOf(new ImageHandle(effects.SwapOutgoingId)) == ImageState.Ready)
+                {
+                    var oh = new ImageHandle(effects.SwapOutgoingId);
+                    var (outW, outH) = images.SizeOf(oh);
+                    var (outRect, outUv) = ImageContentFit((ImageFit)p.ImageFit, in local, outW, outH, p.ImageFocusX, p.ImageFocusY);
+                    dl.DrawImage(outRect, p.Corners, oh.Id, true, default, world, opacity, outUv, effects.SwapStartMs,
+                        effects.SwapMs, ImageCache.SwapOutgoingEasing, key | 0x1, effects.Overlay, (int)mask.Edges,
+                        mask.BandLeft, mask.BandTop, mask.BandRight, mask.BandBottom, (int)mask.Falloff, mask.Intensity,
+                        saturation);
+                    fadeStart = effects.SwapStartMs;
+                    fadeDur = effects.SwapMs;
+                    fadeEase = (int)ImageCache.SwapCrossfadeEasing;
+                    placeholder = default;
+                }
+                dl.DrawImage(drawRect, p.Corners, imageId, ready, placeholder, world, opacity, uv, fadeStart, fadeDur,
                     fadeEase, key, effects.Overlay, (int)mask.Edges, mask.BandLeft, mask.BandTop, mask.BandRight,
                     mask.BandBottom, (int)mask.Falloff, mask.Intensity, saturation);
                 break;
@@ -2590,7 +2762,7 @@ public static class SceneRecorder
         return result;
     }
 
-    private static ulong ComputeSpanInputSig(SceneStore scene, NodeHandle node, NodeFlags flags, int depth, in RectF clip, in Affine2D world,
+    private ulong ComputeSpanInputSig(SceneRecordingSnapshot scene, NodeHandle node, NodeFlags flags, int depth, in RectF clip, in Affine2D world,
                                              float opacity, float parentScaleX, float parentScaleY, float childScaleX, float childScaleY,
                                              float pw, float ph, bool inMotion, bool userScrollActive, in InheritedState inherited,
                                              in FocusVisualStyle focus, in TextEditStyle textEdit, ColorF scrollThumb, ColorF scrollTrack)
@@ -2639,7 +2811,7 @@ public static class SceneRecorder
         return h;
     }
 
-    private static ulong ComputeSpanMoveSig(SceneStore scene, NodeHandle node, NodeFlags flags, int depth, in RectF clip, in Affine2D world,
+    private ulong ComputeSpanMoveSig(SceneRecordingSnapshot scene, NodeHandle node, NodeFlags flags, int depth, in RectF clip, in Affine2D world,
                                             float opacity, float parentScaleX, float parentScaleY, float childScaleX, float childScaleY,
                                             float pw, float ph, bool userScrollActive, in InheritedState inherited,
                                             in FocusVisualStyle focus, in TextEditStyle textEdit, ColorF scrollThumb, ColorF scrollTrack)
@@ -2680,18 +2852,18 @@ public static class SceneRecorder
     /// <summary>Fold presented-size / child-shift / authored clip into the span key so a collapsing hero (PresentedHTrailing)
     /// cannot byte-copy a subtree recorded under a different reveal clip — the focus-regain / re-theme steady frame after
     /// <see cref="FluentGpu.Animation.ScrollBindEval.ApplyContinuousPass"/> was the regression path.</summary>
-    private static void MixPaintReveal(SceneStore scene, NodeHandle node, ref ulong h)
+    private void MixPaintReveal(SceneRecordingSnapshot scene, NodeHandle node, ref ulong h)
     {
-        ref NodePaint p = ref scene.Paint(node);
+        ref readonly NodePaint p = ref scene.Paint(node);
         MixFloat(ref h, p.ChildShiftX);
         MixFloat(ref h, p.ChildShiftY);
         if (!p.ClipRect.IsInfinite) MixRect(ref h, in p.ClipRect);
     }
 
-    private static void MixScrollViewport(SceneStore scene, NodeHandle node, NodeFlags flags, ref ulong h)
+    private void MixScrollViewport(SceneRecordingSnapshot scene, NodeHandle node, NodeFlags flags, ref ulong h)
     {
         if ((flags & NodeFlags.Scrollable) == 0 || !scene.HasScroll(node)) return;
-        ref var sc = ref scene.ScrollRef(node);
+        ref readonly var sc = ref scene.ScrollRef(node);
         // ScrollState is partly layout-/animation-owned rather than reconciler-owned. These values can therefore change
         // without changing the element or node bounds. They all affect commands emitted by this viewport (edge mask,
         // edge cues, thumb geometry/alpha, or whether the thumb exists), so they must participate in both exact-copy and
@@ -2715,7 +2887,7 @@ public static class SceneRecorder
         Mix(ref h, (uint)sc.LoadingBarSuppressors);
     }
 
-    private static void MixVirtualItemBand(SceneStore scene, NodeHandle node, ref ulong h)
+    private void MixVirtualItemBand(SceneRecordingSnapshot scene, NodeHandle node, ref ulong h)
     {
         if (!scene.TryGetVirtualItemBand(node, out int prefix, out float inset, out float fadeBand)) return;
         Mix(ref h, (uint)prefix);
@@ -2741,7 +2913,7 @@ public static class SceneRecorder
     /// <para>For everything else — the common ItemsView row list, no binds — this returns false and the per-row
     /// translated-copy path a few lines below does the job in O(edge rows) instead of an O(subtree) full re-record on
     /// every scroll frame.</para></summary>
-    private static bool IsDirectMovingScrollContent(SceneStore scene, NodeHandle node, NodeFlags flags)
+    private bool IsDirectMovingScrollContent(SceneRecordingSnapshot scene, NodeHandle node, NodeFlags flags)
     {
         if ((flags & NodeFlags.TransformDirty) == 0) return false;
         var parent = scene.Parent(node);
@@ -2754,7 +2926,7 @@ public static class SceneRecorder
     /// descendants. <see cref="FluentGpu.Animation.ScrollBindTable"/> rows are nav-rate (a handful per bind-owning
     /// scroller — see <see cref="FluentGpu.Animation.ScrollBindEval.BeginPerfFrame"/>'s census), so this is an
     /// O(binds × ancestor-depth-to-scroller) walk, alloc-free, bounded by the viewport's own subtree depth.</summary>
-    private static bool HasContinuousScrollBindInside(SceneStore scene, NodeHandle scroller, NodeHandle content)
+    private bool HasContinuousScrollBindInside(SceneRecordingSnapshot scene, NodeHandle scroller, NodeHandle content)
     {
         var table = scene.ScrollBinds;
         for (int s = table.Head((int)scroller.Raw.Index); s >= 0; s = table.At(s).Next)
@@ -2774,10 +2946,10 @@ public static class SceneRecorder
         return false;
     }
 
-    private static RectF TranslateBounds(in RectF bounds, float dx, float dy)
+    private RectF TranslateBounds(in RectF bounds, float dx, float dy)
         => bounds.IsEmpty ? bounds : new RectF(bounds.X + dx, bounds.Y + dy, bounds.W, bounds.H);
 
-    private static bool IsClipComplete(in RectF bounds, in RectF clip)
+    private bool IsClipComplete(in RectF bounds, in RectF clip)
     {
         if (bounds.IsEmpty || clip.IsInfinite) return true;
         const float epsilon = 0.01f;
@@ -2787,7 +2959,7 @@ public static class SceneRecorder
             && bounds.Bottom <= clip.Bottom + epsilon;
     }
 
-    private static bool TryTranslationDelta(in Affine2D from, in Affine2D to, out float dx, out float dy)
+    private bool TryTranslationDelta(in Affine2D from, in Affine2D to, out float dx, out float dy)
     {
         dx = dy = 0f;
         if (!Nearly(from.M11, to.M11) || !Nearly(from.M12, to.M12)
@@ -2798,9 +2970,9 @@ public static class SceneRecorder
         return true;
     }
 
-    private static bool Nearly(float a, float b) => MathF.Abs(a - b) <= 0.0001f;
+    private bool Nearly(float a, float b) => MathF.Abs(a - b) <= 0.0001f;
 
-    private static void MixRect(ref ulong h, in RectF r)
+    private void MixRect(ref ulong h, in RectF r)
     {
         MixFloat(ref h, r.X);
         MixFloat(ref h, r.Y);
@@ -2808,7 +2980,7 @@ public static class SceneRecorder
         MixFloat(ref h, r.H);
     }
 
-    private static void MixAffine(ref ulong h, in Affine2D a)
+    private void MixAffine(ref ulong h, in Affine2D a)
     {
         MixFloat(ref h, a.M11);
         MixFloat(ref h, a.M12);
@@ -2818,7 +2990,7 @@ public static class SceneRecorder
         MixFloat(ref h, a.Dy);
     }
 
-    private static void MixAffineLinear(ref ulong h, in Affine2D a)
+    private void MixAffineLinear(ref ulong h, in Affine2D a)
     {
         MixFloat(ref h, a.M11);
         MixFloat(ref h, a.M12);
@@ -2826,7 +2998,7 @@ public static class SceneRecorder
         MixFloat(ref h, a.M22);
     }
 
-    private static void MixColor(ref ulong h, ColorF c)
+    private void MixColor(ref ulong h, ColorF c)
     {
         MixFloat(ref h, c.R);
         MixFloat(ref h, c.G);
@@ -2834,9 +3006,9 @@ public static class SceneRecorder
         MixFloat(ref h, c.A);
     }
 
-    private static void MixFloat(ref ulong h, float v) => Mix(ref h, BitConverter.SingleToUInt32Bits(v));
+    private void MixFloat(ref ulong h, float v) => Mix(ref h, BitConverter.SingleToUInt32Bits(v));
 
-    private static void Mix(ref ulong h, uint v)
+    private void Mix(ref ulong h, uint v)
     {
         h ^= v;
         h *= 1099511628211UL;
@@ -2844,7 +3016,7 @@ public static class SceneRecorder
 
     /// <summary>Resolve the surface fill/border for this frame: eased hover/press if an interaction row exists,
     /// else the instantaneous flag behaviour (first frame / no animator).</summary>
-    private static bool TryResolveInteractionProgress(in InheritedState inherited, bool nodeInteractive, bool hasLocalProgress,
+    private bool TryResolveInteractionProgress(in InheritedState inherited, bool nodeInteractive, bool hasLocalProgress,
                                                       float localHoverT, float localPressT, out float hoverT, out float pressT)
     {
         if (hasLocalProgress)
@@ -2866,7 +3038,7 @@ public static class SceneRecorder
         return false;
     }
 
-    private static float ResolveOpacity(NodeFlags flags, in NodePaint p, in InheritedState inherited, bool nodeInteractive,
+    private float ResolveOpacity(NodeFlags flags, in NodePaint p, in InheritedState inherited, bool nodeInteractive,
                                         bool hasLocalProgress, float localHoverT, float localPressT)
     {
         bool hasHover = !float.IsNaN(p.HoverOpacity);
@@ -2888,7 +3060,14 @@ public static class SceneRecorder
         return opacity;
     }
 
-    private static void ResolveSurface(SceneStore scene, NodeHandle node, NodeFlags flags, in NodePaint p, in InheritedState inherited,
+    /// <summary>A live BrushTransition is fading this node's FILL away from a visible colour: the displayed
+    /// <c>LerpLinear(FillFrom, Fill, T)</c> is still on screen even when the target Fill is transparent (the "no tint"
+    /// fade-out). Only reached when the box has no other surface; callers gate it on SparsePaint.</summary>
+    private static bool FillFadeVisible(SceneRecordingSnapshot scene, NodeHandle node)
+        => scene.TryGetBrushAnim(node, out var ba)
+           && (ba.Channels & BrushAnim.FillBit) != 0 && ba.FillFrom.A > 0f && ba.T < 1f;
+
+    private void ResolveSurface(SceneRecordingSnapshot scene, NodeHandle node, NodeFlags flags, in NodePaint p, in InheritedState inherited,
                                        bool nodeInteractive, bool hasLocalProgress, float localHoverT, float localPressT,
                                        out ColorF fill, out ColorF border)
     {
@@ -2953,7 +3132,7 @@ public static class SceneRecorder
     /// Otherwise: Disabled wins as a step (self-or-ancestor input-disabled), then Hover/Pressed ease with the nearest
     /// interactive ancestor's progress (falling back to an instant flag-step when that ancestor has no anim row, exactly
     /// like <see cref="ResolveSurface"/> does for the box fill), then Focused as a step, else the resting color.</summary>
-    private static ColorF ResolveTextColor(SceneStore scene, NodeHandle node, NodeFlags flags, in NodePaint p, in InheritedState inherited,
+    private ColorF ResolveTextColor(SceneRecordingSnapshot scene, NodeHandle node, NodeFlags flags, in NodePaint p, in InheritedState inherited,
                                            bool nodeInteractive, bool hasLocalProgress, float localHoverT, float localPressT)
     {
         ColorF resolved = ResolveTextColorCore(flags, in p, in inherited, nodeInteractive, hasLocalProgress, localHoverT, localPressT);
@@ -2963,7 +3142,7 @@ public static class SceneRecorder
         return resolved;
     }
 
-    private static ColorF ResolveTextColorCore(NodeFlags flags, in NodePaint p, in InheritedState inherited, bool nodeInteractive,
+    private ColorF ResolveTextColorCore(NodeFlags flags, in NodePaint p, in InheritedState inherited, bool nodeInteractive,
                                                bool hasLocalProgress, float localHoverT, float localPressT)
     {
         // Fast path: the overwhelming majority of text has no state ramps (A==0 on every axis).
@@ -3042,10 +3221,10 @@ public static class SceneRecorder
     // A centerline-based SDF stroke insets the rect by bw/2; to keep the band CONCENTRIC with the box's rounded corner
     // (so the stroke's outer edge lands exactly on the bounds outline) the corner radius must shrink by the SAME bw/2 —
     // else the corner arc re-centres and the 1px ring reads as a rough/uneven corner instead of a smooth WinUI one.
-    private static CornerRadius4 InsetCorners(in CornerRadius4 c, float d)
+    private CornerRadius4 InsetCorners(in CornerRadius4 c, float d)
         => new(MathF.Max(0f, c.TopLeft - d), MathF.Max(0f, c.TopRight - d), MathF.Max(0f, c.BottomRight - d), MathF.Max(0f, c.BottomLeft - d));
 
-    private static void EmitBorderRing(DrawList dl, in RectF local, in RectF b, in CornerRadius4 corners, float bw, in ColorF border, float dashOn, float dashOff, in Affine2D world, float opacity, ulong key)
+    private void EmitBorderRing(DrawList dl, in RectF local, in RectF b, in CornerRadius4 corners, float bw, in ColorF border, float dashOn, float dashOff, in Affine2D world, float opacity, ulong key)
     {
         var rect = new RectF(bw * 0.5f, bw * 0.5f, MathF.Max(0f, b.W - bw), MathF.Max(0f, b.H - bw));
         var ins = InsetCorners(corners, bw * 0.5f);
@@ -3055,7 +3234,7 @@ public static class SceneRecorder
             dl.StrokeRoundRect(rect, ins, border, bw, world, opacity, key);
     }
 
-    private static void EmitGradient(DrawList dl, in RectF local, in CornerRadius4 corners, in GradientSpec g,
+    private void EmitGradient(DrawList dl, in RectF local, in CornerRadius4 corners, in GradientSpec g,
         in GradientSpec hover, bool hasHover, in GradientSpec pressed, bool hasPressed, float hoverT, float pressT,
         bool hasRadialCenter, Point2 radialCenter, in Affine2D world, float opacity, ulong key)
     {
@@ -3093,7 +3272,7 @@ public static class SceneRecorder
     /// the boundary stop across the rest (the ControlElevationBorder 3px band, Common_themeresources_any.xaml:186).
     /// <see cref="GradientSpec.AnchorEnd"/> measures the band from the END of the axis (the ScaleY=-1 elevation
     /// mirror), which reverses the stop order so offsets stay ascending. Stack-only, zero alloc.</summary>
-    private static void RemapAbsoluteAxis(in GradientSpec g, float extent, int n,
+    private void RemapAbsoluteAxis(in GradientSpec g, float extent, int n,
         ref ColorF c0, ref ColorF c1, ref ColorF c2, ref ColorF c3,
         ref float o0, ref float o1, ref float o2, ref float o3)
     {
@@ -3123,7 +3302,7 @@ public static class SceneRecorder
 
     // Blend the four stack-local gradient stops toward another spec's stops by t (linear-light color, linear offset).
     // Zero-alloc: reads the (stable, mount-allocated) stop array; blends only the prefix shared with the resting count.
-    private static void LerpStops(ref ColorF c0, ref ColorF c1, ref ColorF c2, ref ColorF c3,
+    private void LerpStops(ref ColorF c0, ref ColorF c1, ref ColorF c2, ref ColorF c3,
         ref float o0, ref float o1, ref float o2, ref float o3, int n, in GradientSpec to, float t)
     {
         var s = to.Stops;
@@ -3138,7 +3317,7 @@ public static class SceneRecorder
     /// width <paramref name="bw"/> centered on a rect inset by bw/2 (so the stroke sits inside the bounds, WinUI-style).
     /// Relative specs span the whole control; <see cref="GradientSpec.AxisLengthPx"/> specs confine the blend to the
     /// WinUI absolute band (ControlElevationBorderBrush's 3px edge) via the record-time stop remap.</summary>
-    private static void EmitGradientBorderRing(DrawList dl, in RectF b, in CornerRadius4 corners, float bw, in GradientSpec g,
+    private void EmitGradientBorderRing(DrawList dl, in RectF b, in CornerRadius4 corners, float bw, in GradientSpec g,
         in GradientSpec hover, bool hasHover, in GradientSpec pressed, bool hasPressed, float hoverT, float pressT,
         in Affine2D world, float opacity, ulong key)
     {
@@ -3163,7 +3342,7 @@ public static class SceneRecorder
     /// rect's edge; the 1px SECONDARY (inner) stroke sits immediately inside it — with the default margin the pair
     /// lands exactly on the control edge (edge → 1px inner → 2px outer). Centerline SDF strokes, so each rect insets
     /// by half its thickness; corner radii grow with the expansion to stay concentric.</summary>
-    private static void EmitFocusRing(DrawList dl, in RectF b, in CornerRadius4 corners, in Edges4 margin, in Affine2D world, float opacity, in FocusVisualStyle f, ulong key)
+    private void EmitFocusRing(DrawList dl, in RectF b, in CornerRadius4 corners, in Edges4 margin, in Affine2D world, float opacity, in FocusVisualStyle f, ulong key)
     {
         // Per-side expansion (negative WinUI margin = grow outward). Clamp ≥ 0 — a positive margin never shrinks inside.
         float eL = MathF.Max(0f, -margin.Left), eT = MathF.Max(0f, -margin.Top);
@@ -3191,7 +3370,7 @@ public static class SceneRecorder
     }
 
     /// <summary>An auto-hiding scrollbar thumb sized from the viewport's content/offset, faded by <c>FadeT</c>, expanded on lane hover.</summary>
-    private static void EmitScrollbar(DrawList dl, in RectF b, in ScrollState sc, in FluentGpu.Scroll.ScrollBarChromeRow chrome, in Affine2D world, float opacity, ulong key, ColorF thumb, ColorF track)
+    private void EmitScrollbar(DrawList dl, in RectF b, in ScrollState sc, in FluentGpu.Scroll.ScrollBarChromeRow chrome, in Affine2D world, float opacity, ulong key, ColorF thumb, ColorF track)
     {
         if (sc.SuppressBar || sc.LoadingBarSuppressors > 0) return;   // pager-driven shelf, or a descendant skeleton is loading — no rail
         bool horizontal = sc.Orientation == 1;
@@ -3309,7 +3488,7 @@ public static class SceneRecorder
     /// <summary>Resolve a node's edge fade: an explicit <c>BoxEl/ScrollEl.EdgeFade</c> spec, or a scroller's
     /// <c>AutoEdgeFade</c> synthesized from its live overflow (feather only the edges with more content past them, the
     /// per-edge band ramped to 0 over the last <c>runway</c> px so it appears/disappears smoothly with the offset).</summary>
-    private static bool TryResolveEdgeFade(SceneStore scene, NodeHandle node, NodeFlags flags, bool maybeSparsePaint, out EdgeFadeSpec ef)
+    private bool TryResolveEdgeFade(SceneRecordingSnapshot scene, NodeHandle node, NodeFlags flags, bool maybeSparsePaint, out EdgeFadeSpec ef)
     {
         if (maybeSparsePaint && scene.TryGetEdgeFade(node, out ef) && !ef.IsNone) return true;          // explicit, any element
         if ((flags & NodeFlags.Scrollable) != 0 && scene.TryGetScroll(node, out var sc)
@@ -3342,7 +3521,7 @@ public static class SceneRecorder
     /// MenuFlyout / AutoSuggest dropdown fades into the MENU colour, not the page — the popup acrylic is translucent so
     /// its Fill is not opaque). A translucent card composites ≈ the page base, so the first opaque plate is a good
     /// approximation. No opaque plate found ⇒ skip the cue rather than draw a wrong-colour fade.</summary>
-    private static bool TryResolveCueSurface(SceneStore scene, NodeHandle node, NodeFlags flags, in NodePaint p, out ColorF surface)
+    private bool TryResolveCueSurface(SceneRecordingSnapshot scene, NodeHandle node, NodeFlags flags, in NodePaint p, out ColorF surface)
     {
         const float opaqueA = 0.985f;
         if (p.Fill.A >= opaqueA) { surface = p.Fill; return true; }
@@ -3362,7 +3541,7 @@ public static class SceneRecorder
     /// clip pops), read straight off <see cref="ScrollState"/> — zero new scene nodes, zero managed allocation. The band
     /// alpha ramps with how far past the edge the content runs (<see cref="EdgeCueRunwayPx"/>) so it fades in/out
     /// smoothly with the already-eased offset. controls.md §8.3.</summary>
-    private static void EmitScrollEdgeCues(DrawList dl, in RectF b, in ScrollState sc, CornerRadius4 corners,
+    private void EmitScrollEdgeCues(DrawList dl, in RectF b, in ScrollState sc, CornerRadius4 corners,
         in Affine2D world, float opacity, ulong key, ColorF surface, ColorF chevron)
     {
         bool horizontal = sc.Orientation == 1;
@@ -3419,7 +3598,7 @@ public static class SceneRecorder
         }
     }
 
-    private static void EmitChevron(DrawList dl, Point2 c, bool horizontal, bool positive, ColorF color, in Affine2D world, float opacity, ulong key, float size = 3.0f)
+    private void EmitChevron(DrawList dl, Point2 c, bool horizontal, bool positive, ColorF color, in Affine2D world, float opacity, ulong key, float size = 3.0f)
     {
         float s = size;
         Point2 tip, a, b;
@@ -3440,7 +3619,7 @@ public static class SceneRecorder
         EmitSegment(dl, tip, b, color, world, opacity, key);
     }
 
-    private static void EmitSegment(DrawList dl, Point2 a, Point2 b, ColorF color, in Affine2D world, float opacity, ulong key)
+    private void EmitSegment(DrawList dl, Point2 a, Point2 b, ColorF color, in Affine2D world, float opacity, ulong key)
     {
         float dx = b.X - a.X, dy = b.Y - a.Y;
         float len = MathF.Sqrt(dx * dx + dy * dy);
@@ -3454,6 +3633,6 @@ public static class SceneRecorder
         dl.FillRoundRect(line, CornerRadius4.All(thickness * 0.5f), color, transform, opacity, key);
     }
 
-    private static ColorF Lighten(ColorF c, float t) => new(c.R + (1f - c.R) * t, c.G + (1f - c.G) * t, c.B + (1f - c.B) * t, c.A);
-    private static ColorF Darken(ColorF c, float t) => new(c.R * (1f - t), c.G * (1f - t), c.B * (1f - t), c.A);
+    private ColorF Lighten(ColorF c, float t) => new(c.R + (1f - c.R) * t, c.G + (1f - c.G) * t, c.B + (1f - c.B) * t, c.A);
+    private ColorF Darken(ColorF c, float t) => new(c.R * (1f - t), c.G * (1f - t), c.B * (1f - t), c.A);
 }

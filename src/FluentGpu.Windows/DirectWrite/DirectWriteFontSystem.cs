@@ -26,6 +26,9 @@ public sealed class DirectWriteFontSystem : IFontSystem, IDisposable
         TextSeam.Default = this;   // last-constructed wins (the InputHooks.Current.Default convention) — see TextSeam
     }
 
+    /// <inheritdoc/>
+    public long ShapeCount => _engine.ShapeCount;
+
     public TextMetrics Measure(StringId text, in TextStyle style, float maxWidth = float.PositiveInfinity)
     {
         string s = _strings.Resolve(text);

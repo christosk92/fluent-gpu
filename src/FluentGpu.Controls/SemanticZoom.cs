@@ -235,8 +235,11 @@ internal sealed class SemanticZoomCore : Component
             post(() => CompleteIfLatest(change));
         }, pendingOperation);
 
-        LayoutTransition? Transition(object _, object to)
-            => to is true ? MotionRecipes.SemanticZoomOut : MotionRecipes.SemanticZoomIn;
+        // The zoom answers a zoom GESTURE: the view a SemanticZoom first mounts into just appears (its page's own
+        // entrance carries it), never a zoom-in nobody asked for.
+        LayoutTransition? Transition(object from, object to)
+            => ReferenceEquals(from, KeepAliveOptions.FirstActivation) ? null
+             : to is true ? MotionRecipes.SemanticZoomOut : MotionRecipes.SemanticZoomIn;
 
         Element View(bool zoomedOut)
         {

@@ -63,6 +63,23 @@ public static class BindContract
         else Console.Error.WriteLine(msg);
         if (ThrowOnViolation) throw new BindContractException(msg);
     }
+
+    /// <summary>P1 presence (<c>gate.presence.bindcontract-flip</c>): report a node that bound
+    /// <see cref="FluentGpu.Dsl.Element.Visible"/> while also carrying a <see cref="FluentGpu.Dsl.Element.MorphId"/> —
+    /// a shared-element (Hero) participant must stay mounted to fly; collapsing it out of layout mid-transition breaks
+    /// <c>ConnectedAnimation</c> capture (its measured rect/art vanish). Same report/throw discipline as
+    /// <see cref="Flip"/>.</summary>
+    public static void MorphVisibleBind(string elementType)
+    {
+        Violations++;
+        string msg = $"[bindcontract] {elementType} bound Visible while carrying a MorphId — a shared-element "
+                   + "participant must stay mounted to fly; collapsing it mid-transition breaks ConnectedAnimation "
+                   + "capture. Keep Visible static on a MorphId node, or drop MorphId.";
+        LastViolation = msg;
+        if (Diag.Sink is { } sink) sink(msg);
+        else Console.Error.WriteLine(msg);
+        if (ThrowOnViolation) throw new BindContractException(msg);
+    }
 }
 
 /// <summary>Thrown by <see cref="BindContract"/> in strict mode (<c>FG_BIND_CONTRACT_THROW</c>) when a reused node's

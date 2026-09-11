@@ -1,5 +1,64 @@
 # fluent-gpu — Subsystem Design: Threading & the Render-Thread Seam
 
+## 0. Scene-recording implementation amendment (2026-09-08)
+
+This section supersedes historical command-only publication and header-copy/reverify descriptions below.
+Windowed hosted rendering publishes a full `SceneRecordingSnapshot`, not UI-recorded draw commands.
+Headless inline recording uses the same `SceneRecordingContext` implementation and snapshot read surface;
+the byte-publisher overload remains a transport primitive for seam tests and inline command consumers.
+
+UI owns reactive work, reconciliation, layout, input and authored scene state. Once layout is complete,
+`SceneRenderFrame.Capture` copies live handles and recording columns, detached sparse payloads, image metadata,
+span styles/rectangles, animation descriptions, popup-target descriptors and recording options into a reusable
+publisher slot. A snapshot never retains the live `SceneStore`; scroll payloads omit UI layout participants.
+The renderer owns walk stacks, damage/span-reuse scratch, measurement caches, command arenas and animation
+overlays. Mutable recorder scratch is per recording target, never process-static or shared with UI recording.
+
+`SceneFramePublisher` uses three generation-stamped slots with `Free`, `Writing`, `Published`, `Reading`
+phases. The consumer atomically claims the exact published generation **before** reading either its header
+or payload; it releases its previous claim only after successfully claiming a replacement. Producer writes
+only a claimed non-reader slot. Latest-wins replacement is bounded and nonblocking. A wake without a newer
+publication does not release the current claim or advance `LastConsumedSeq`. A skipped scene publication
+invalidates structural span reuse and backdrop damage; current scene adoptions conservatively repaint the
+target in full. **Differential (incremental) snapshot publication IS implemented** — see §3.4; tighter
+adoption damage is still not.
+
+`RenderCompositorAnimations` adopts stable instance/revision-stamped descriptions and independently evaluates
+supported replace-mode spring/eased/keyframe tracks against the render display clock. Transform, opacity,
+blur, clips, stroke trims, brush and interaction fades use renderer-local overlays — a **bounded row pool per
+snapshot, sized by the publication's own animating-node count and never grown on the render thread**; see §3.5.
+Keyframe storage is renderer-owned across slot replacement. Driven/additive, layout-restoring, trailing-anchor and reflow tracks
+remain UI-owned; input, scroll simulation and arbitrary binding callbacks also remain UI work. Per-window
+visibility parks the renderer's timeline; resume excludes parked elapsed time. `IRenderDisplayClock` is
+owned by `pal-rhi.md` §1.1.1. A refresh-derived bounded fallback is used when that capability is unavailable.
+No animation-only render turn advances the scene-consumption sequence.
+
+After a successful present, a reverse claimed-slot mailbox publishes recording statistics, video-hole
+rectangles and animation poses/completions. UI imports feedback before input/FLIP and rejects stale animation
+instance/revision completions. A newly settled track wakes UI for cleanup. Child hosts share the parent's
+render thread but retain independent scene claims and timelines. Resize, popup-target destruction and
+device recovery invalidate target epochs while the render thread is parked; old epochs cannot submit.
+Shutdown joins the renderer before releasing scene-resource pins or disposing the display-clock subscription.
+
+CPU and GPU lifetime are separate obligations. Snapshot-owned string reader pins (`Pin`/`Unpin`, independent
+of authored ownership and never turning permanent interned ids reclaimable) and span references survive arbitrarily
+many UI ticks until their slot is writable again; the consumer does not read a global mutable span-layout
+cache. Immutable path geometry is retained by snapshots, and realized path data is copied into fence-banked
+GPU buffers during submit. `ImageUploadQueue` holds evictions while **any adopted host snapshot** can record
+the image again. Once the last reader releases it, `ImageTextureStore` stamps retirements with the last
+actual GPU submit fence; textures, descriptor slots, atlas cells and uploads are recycled only after that
+fence completes. Neither a scene sequence nor a count of popup/main submissions substitutes for a GPU fence.
+
+Gates: `SceneFrameOwnershipTests` covers pinned-slot overwrite and concurrent header/arena consistency;
+`IndependentCompositorTests` runs twenty render ticks while UI is blocked for approximately 200 ms;
+`SceneImageLifetimeTests` covers indefinitely retained scenes, shared-device readers and eviction/readoption;
+VerticalSlice `SceneSnapshotChecks` and `CompositorAnimationChecks` cover detached values, generation and
+span lifetime, warmed allocation, independent sampling, retarget, cancellation, visibility parking and the
+compositor overlay's row-pool bound (sparsity at the scene high-water, the capacity fallback, tick allocation).
+These headless gates do not establish GPU pixel parity or eliminate GPU/GC stalls. Scheduler deadlines
+yield between complete callbacks, not inside live-mutating reconciliation; staged transactional reconciliation
+is a separate outstanding requirement, not implied by this snapshot migration.
+
 Assemblies: **`FluentGpu.Hosting`** (owns the threads, the publisher, the quarantine ledger, the
 device-lost rendezvous, the worker pool) · **`FluentGpu.Render`** (the render-thread frame body:
 record → batch → submit-call; owns the DrawList arenas) · **`FluentGpu.Windows` (D3D12/ folder)** (leaf; owns every
@@ -356,6 +415,124 @@ high-water node count (geometric ×2, never shrunk, old buffer deferred-freed be
 The per-frame copy is `Buffer.MemoryCopy` / `Span.CopyTo` over those arenas. **Zero managed allocation at
 PUBLISH** in steady state.
 
+### 3.4 Differential (incremental) capture — IMPLEMENTED
+
+`SceneRecordingSnapshot.CaptureIncremental(source, extraRoots, lastCapturedSeq)` refreshes a slot's snapshot
+**in place**, copying only what changed since the publication that slot last captured; `Capture` (the full
+copy) remains the fallback and the first capture. `SceneFramePublisher.PublishScene` chooses between them per
+slot; `FrameStats.CapturedNodes` reports the nodes actually COPIED, so a coast frame reads a handful instead
+of the tree.
+
+**What incremental still does every time.** The reachability WALK — three topology-column reads per node —
+runs on both paths. It is what keeps "a parked page's slots read as dead" and "an unparked page's slots come
+back live" exact rather than approximately right, and it costs a fraction of what it saves (~17 dense column
+copies plus ~25 sparse-table probes per node). Derived state that follows the reachable set rather than the
+copied set — the referenced-image set and the live span-run set — is likewise re-derived every capture, from
+the snapshot's OWN columns. The tiny lists (orphans, overlays, drag/spotlight roots, the removal ledger, the
+scrollbar chrome and scroll-bind topology) are rebuilt in full every capture: all are budget-capped, and
+rebuilding is cheaper than tracking deltas through them.
+
+**The capture ledger (`SceneStore.Capture.cs`).** `_recordDirtyStamp` answers a RENDERER question ("what must
+be re-recorded") and is deliberately incomplete for a COPY question: layout writes `Bounds` across a whole
+subtree off one dirty ancestor, `ClearTransformDirty`/`ClearRecordDirty` mutate the flag and dirty-bit columns
+with no mark at all, and hover/press/focus flip `NodeFlags` without a record mark. So the store keeps a second,
+copy-shaped ledger: `NoteCaptureChanged(idx)` stamps one node (no ancestor walk — a copy is per-node), and
+every mutation of a captured column must either call it or be covered by `NoteBulkMutation()`, the escape
+hatch that forces the next capture of every slot to be full. Layout passes (`FlexLayout.BeginMeasurePass`) and
+reconciler commits (`Reconciler.WriteColumns`) take the escape hatch wholesale — they write half the columns
+across arbitrary subtrees and enumerating the rest precisely would be an audit whose single miss is a
+stale-pixel bug. Coast frames do neither, which is exactly why they stay incremental. `NodeFlags` is read
+through a by-VALUE `Flags(h)`; writers go through `SetFlagBits`/`ClearFlagBits`/`Mark`/`Unmark`, so the
+compiler — not a reviewer — enforces that no flag write escapes the ledger.
+
+**Validity is conservative and self-declared.** `CanCaptureIncremental` refuses on: a different store instance;
+a baseline that is not the one the snapshot holds; a publication counter that has not advanced; a store whose
+node high-water shrank (`TrimExcessCapacity`); a ledger floor risen past the baseline; or any bulk mutation
+since the baseline. It returns false rather than guessing, and the caller falls back to a full copy — the
+fallback is the normal answer on any frame that reconciled or laid out, not an error path.
+
+**The three-slot ledger retention rule.** The publisher's slots hold snapshots of three different publications,
+so the store's ledgers cannot be trimmed by the consumed sequence alone: the OLDEST slot's next incremental
+refresh needs every delta since ITS baseline. `SceneFramePublisher.OldestSlotCaptureSeq` is the minimum
+capture sequence across the slots **that have actually captured** (a never-written slot is excluded, not
+counted as publication 0 — in the steady state only two of the three rotate, and counting the third as 0
+would pin every ledger open forever). The host then trims to
+`min(LastConsumedSeq, OldestSlotCaptureSeq)` for the record-dirty and pending-removal ledgers, and to
+`OldestSlotCaptureSeq` for the capture ledger, immediately after `NotePublished` — which is now called
+*before* `ClearTransformDirty`/`ClearRecordDirty` so the ledger entries those clears produce are stamped
+against the NEXT publication rather than the one just captured.
+
+**Parity is the definition of correct.** An incremental refresh is right iff the snapshot it produces is
+column-for-column indistinguishable from a from-scratch capture of the same store at the same instant
+(`SceneRecordingSnapshot.EqualsForParity`). In a DEBUG/`FLUENTGPU_DIAG` build every incremental capture is
+re-derived in full into a scratch snapshot and compared; on a divergence it reports the offending column and
+REDOES the publication as a full capture, so the frame stays correct while the audit stays loud. Release
+compiles the check out. Gates: `gate.capture.incremental-coast` (a scroll-only frame copies ≤ 8 nodes where a
+full capture copies 204, with column parity), `gate.capture.gap-union` (a slot that skipped two publications
+still reaches full parity against its own older baseline), `gate.capture.add-remove-parity` (adds, removes and
+a recycled slot index, interleaved with incremental captures), `gate.capture.string-refcount-no-churn`
+(a stable retained set and zero Pin/Unpin churn across four incremental coast captures),
+`gate.capture.capacity-trim-falls-back` (a column trim is detected as invalid and the fallback is exact), plus
+`IncrementalCaptureTests` for the publisher-side slot baselines.
+
+### 3.5 The compositor overlay — a bounded row pool, not a per-node column (2026-09-09)
+
+`RenderCompositorAnimations` poses nodes on the render thread by writing an **overlay** over the snapshot's authored
+columns, never into them (`gate.compositor-authored-isolation`). Three payloads can be overlaid: `NodePaint` (transform,
+opacity, blur, clips, stroke trims, presented extent), `InteractionAnim` (the hover/press fades) and `BrushAnim`
+(the implicit brush transition).
+
+**What this used to cost.** The overlay was three DENSE columns plus four per-node epoch stamps, all sized at the
+snapshot's node high-water: `344 + 88 + 60 + 4×4 = 508 B` **per node per snapshot**, and there are three publisher
+slots. At the 32 768-node high-water the native ARM64 tour reached, that is `508 × 32 768 = 15.875 MiB` per snapshot
+and **47.625 MiB across the three slots** — for a workload where `mem.sample` reports **28–61** live animation tracks.
+The overlay was sized by how big the scene *is*, when the only thing that matters is how many nodes *animate*.
+
+**What it costs now.** Per snapshot: a bounded pool of `OverlayRow` (all three payloads plus a node index and three
+presence bits — 500 B/row), a 4-byte-per-node `int` node→row lookup, the existing 4-byte-per-node dirty-epoch stamp,
+and one spill row. At 32 768 slots and the 256-row default reserve that is **381 KiB per snapshot, 1.117 MiB across the
+three slots** — a **46.5 MiB** reduction, and the `MaxCompositorRows = 4096` ceiling caps it at 1.95 MiB of rows per
+snapshot however pathological the scene. A row is bound to a node on its first touch in an overlay epoch and carries
+all three payloads, so multiple channels on one node share one row; the presence bits are what make a *reused* row read
+as empty, so pooled payloads are never cleared.
+
+**Who may size it — the load-bearing rule.** The pool is reserved **on the publisher side, at exclusive capture time,
+and never grown during a compositor tick**: the render thread allocates nothing (`gate.compositor-alloc`,
+`gate.compositor-row-alloc`). `SceneRenderFrame.Capture` calls `SceneRecordingSnapshot.ReserveCompositorRows` **after**
+`AnimEngine.CaptureCompositorAnimations` has filled that slot's `CompositorAnimationSnapshot`, passing its
+`DistinctNodeCount`; the reserve is that demand plus `CompositorRowHeadroom = 32`, floored at
+`MinCompositorRows = 256`, capped at `MaxCompositorRows`, and monotone like every other snapshot buffer. Because the
+renderer adopts the animation snapshot and the scene snapshot **from the same slot** (`AppHost`:
+`Adopt(sceneFrame.Animations, sceneFrame.Scene, …)`, and an animation-only turn re-ticks that same retained slot), the
+rows a tick can ask for are exactly the distinct nodes that publication described: **on the host path the pool cannot
+overflow.**
+
+**Epoch reset is O(rows), not O(nodes).** `BeginCompositorOverlay` releases the previous epoch's rows by walking the
+rows in use and zeroing their lookup entries — each row remembers its own node index, so the reset needs no topology
+walk and survives a capture that changed the tree. Only the ancestor **dirty** propagation still uses a per-node epoch
+stamp (`_overlayDirtyEpoch`), because an ancestor is marked without owning a row and epoch stamping keeps that O(1) to
+reset. Ancestor dirty propagation, multiple channels per node, epoch rollover, recapture, parked/cancelled tracks and
+generations, retargeting, cancellation, visibility parking and multi-axis composition are all unchanged — the existing
+`CompositorAnimationChecks` gates are the definition of that.
+
+**The documented overflow fallback.** A caller that drives a tick against a snapshot whose capture never described
+those animations (the public API used directly, and `gate.compositor-row-overflow`) can exhaust the pool. The pool then
+does not grow, does not allocate and does not throw. Deterministically: the surplus write lands in a discard sink
+seeded from the node's authored row (so a caller's `ref` write stays well-defined and is simply not published), the
+node's **ancestor dirty chain is still marked** so it re-records, and the peak demand is remembered in
+`CompositorRowDemand`. The **next capture reserves that demand** and from that publication on every value lands. No
+animation state is ever lost: trajectories, velocities and the feedback poses live in `RenderCompositorAnimations`, not
+in the overlay, so an overflow costs at most one tick of one node presented at its authored pose, and it self-heals at
+the next publication rather than persisting.
+
+Gates: `gate.compositor-row-sparse` (at the 32 768-node high-water with three animating nodes the overlay backing is
+O(reserved rows) — 256 rows, under 512 KiB, >30× under the deleted dense figure computed from the real struct sizes),
+`gate.compositor-row-overflow` (320 animating nodes against a 256-row pool: the pool is not grown, nothing is
+allocated, 256 nodes are posed, the other 64 present their authored pose while still record-dirty, the demand is
+recorded, and the next capture reserves it and poses all 320), `gate.compositor-row-alloc` (200 nodes × 2 channels over
+the sparse path allocate 0 bytes across 64 render ticks), plus the pre-existing
+`gate.compositor-{ui-stall,authored-isolation,alloc,spring-retarget,park-cancel,ui-partition,key-storage-owned,visibility-pause,multi-axis-compose,parked-rows-free}`.
+
 ---
 
 ## 4. The render-frame ordering invariant (phase 8 internal order)
@@ -698,22 +875,41 @@ Even cadence, uneven motion: the operator scored STEADY 1–3 while GLUED scored
 
 The gate is therefore an invariant on production, not a throttle:
 
-> **Never produce a frame while a published one is still unpresented.**
+> **Never produce more than one frame per compositor tick.**
 
-`AppHost.PhaseGateBlocks()` compares `SceneFramePublisher.PublishSeq` against `RenderThread.PresentAck`
-and declines the frame (an early-out, `Rendered: false`) when one is in flight. The render thread fires a
-`presentWake` after each ack, which is the restored phase reference: `_submitPresent` blocks in the
-swapchain's frame-latency waitable **before** it presents, so acks track presents and production inherits
-the display's phase.
+`AppHost.ProductionGateBlocks()` compares the current `_frameTickSeq` against `_lastProducedTickSeq` and
+declines the frame (an early-out, `Rendered: false`, counted as `ProductionDeclines`) when this tick already
+produced one — each decline is a frame `DropOldest` would have discarded anyway. It is open when async is off
+(the sync path present-throttles), when the platform has no display clock (the software pace wait is the
+pacer), and on the first frame after an idle/cadence-paced wait (ticks were not counted, so that frame must
+not wait a vblank). Production therefore inherits the display's phase from the tick, not from the present ack.
+*(HISTORY: this was once keyed on `PublishSeq` vs `RenderThread.PresentAck` — "never produce while a published
+frame is unpresented". Keying on the tick is the same ceiling in steady state and does not couple production
+to present latency, which matters now that the render loop reserves its present slot before acquiring.)*
 
-**The waitable is now `SetMaximumFrameLatency(2)` (AS-BUILT 2026-08; `FRAME_COUNT - 1` with 3 back
-buffers).** It therefore blocks only once **two** presents are already queued — one frame of CPU/GPU
-run-ahead — instead of blocking on every present the way latency 1 did. **The production invariant above is
-unchanged**: it is enforced on the *engine* seam by `PublishSeq` vs `PresentAck`, not by DXGI queue depth,
-so exactly one unpresented published frame is still the ceiling. While the pipeline keeps up, the present
-queue never actually reaches depth 2 and the phase reference is the same as before; the second slot fills
-only under backpressure, where it absorbs a frame that overran a refresh instead of letting the cadence
-quantize to half rate. The cost is bounded at one refresh and paid only on those frames (see
+**The waitable is `SetMaximumFrameLatency(1)` and the render loop waits for its slot BEFORE it chooses a
+frame (AS-BUILT 2026-09; supersedes the depth-2 experiment below).** `RenderThread` calls
+`IGpuDevice.WaitForPresentSlot()` ahead of `SceneFramePublisher.TryAcquire`, so the frame that reaches the
+glass is the freshest one that existed when the slot opened. The waitable is a **semaphore**, so one wait is
+a credit exactly one `Present` spends: the backend tracks it (`D3D12Swapchain.LatencyCreditHeld`) and skips
+its own submit-time wait while it is held; a turn that presents nothing (a bare wake, a tick-only turn) is
+gated on `SceneFramePublisher.HasPendingFrame` and never reserves a slot at all. This is the order Windows
+Terminal's `AtlasEngine` and makepad both use.
+
+**Why depth 2 was withdrawn.** `FRAME_COUNT - 1` = 2 (AS-BUILT 2026-08) was chosen to buy one frame of
+CPU/GPU run-ahead so a frame costing slightly over one refresh would not quantize to half rate at 144/165
+Hz, on the assumption that "the present queue never actually reaches depth 2 while the pipeline keeps up".
+**Measurement killed that assumption** (`docs/plans/wavee/scroll-feel-investigation-2026-09-10.md`): on a
+120 Hz panel with a weak Adreno the GPU costs ~5 ms of the 8.33 ms refresh on *every* scroll frame, so
+backpressure is permanent — the render thread sat 5-8.6 ms per frame inside the waitable and the frame on
+the glass had been produced two vblanks earlier (DWM composes one later ⇒ ~25 ms finger-to-photon while the
+frame counter read a healthy 120 fps). Depth 2 therefore pre-paid a frame of input lag on every frame rather
+than absorbing a rare overrun. At depth 1 an over-budget frame shows as ONE missed vblank instead. Note the
+present-queue depth is now a **latency** decision, deliberately decoupled from `FRAME_COUNT` (still 3 — the
+CPU-written bank depth, a memory decision); `FrameBankingTests` asserts the two as independent literals.
+
+**The production invariant above is unchanged**: it is enforced on the *engine* seam by `PublishSeq` vs
+`PresentAck`, not by DXGI queue depth, so exactly one unpresented published frame is still the ceiling (see
 [`budgets.md`](../budgets.md) §1, back-buffers row).
 
 Three properties make this safe rather than a latency trade:
@@ -811,10 +1007,16 @@ callers**, hence exactly one owned waiter thread and no public wait entry point.
 
 Three properties keep it honest:
 
-- **Capability probe, not a flag.** The first wait failure (or a missing export) marks the clock permanently
-  unavailable and parks the thread; the host keeps its wall-clock timeout, which is the pre-existing behavior.
-  Remote sessions are the known case. There is no environment switch — new behavior is the unconditional
-  default.
+- **Capability probe, not a flag.** The clock is always available wherever the dcomp export exists — a single
+  transient `WAIT_FAILED` no longer marks it permanently unavailable. Instead, a wait failure degrades to one
+  synthesized tick at the lattice period (Gecko's software-vsync / GPUI's `Sleep(interval)` fallback), an
+  instant return within half a period of the previous tick is ignored (Chromium's double-tick filter), and
+  published stamps snap to a constant lattice `prev + period`, resyncing on more than 2 ms of drift (Gecko).
+  Only a **missing export** is permanent — `Reprobe()` on a display change still clears even that. A tick is
+  one vblank of the *window's* display: when the window's monitor is slower than the DWM-global compositor
+  clock, the PAL decimates the published ticks to the window's refresh period (slots), stamping each slot on
+  the window's lattice — the phase is still DWM's, only the rate is the window's. Remote sessions remain the
+  known missing-export case. There is no environment switch — new behavior is the unconditional default.
 - **Power.** The clock is armed only for the *duration* of a display-paced wait and parks on an event
   otherwise, so idle, minimized (`Idle(-1)`) and non-paced loops spawn no compositor wait at all.
 - **Who asks.** `PaceSkipSubmit` (no present ⇒ no ack) and **unarmed** async pace waits set
@@ -843,11 +1045,8 @@ display-rate stop matching, every animating async frame would resync the frame c
 return 0, and one-shot enter transitions would freeze at their initial state. That is a known breakage class,
 not a style point.
 
-The same fix applies to the other hardcoded 7, `DmManualUpdatePacer.IntervalMs`. Its absolute deadline
-**clamps every host wait** while a touchpad gesture is live, so a fixed interval silently re-paces the whole UI
-loop at the wrong rate on any display that is not 120 Hz. It now carries a per-instance interval fed
-`1000 / CurrentRefreshHz()` at DirectManipulation enable and on `WM_DISPLAYCHANGE` / `WM_DPICHANGED`, clamped
-to [3, 17] ms; an unknown rate leaves the default in force.
+`DmManualUpdatePacer` no longer exists (`Win32Platform.cs` notes its removal) — the DirectManipulation pump is
+per-produced-frame now, so there is no separate pacer interval left to derive from the refresh rate.
 
 **A fallback is not a pace — the skip-submit floor returns the CEILING, not `DeriveAsyncPaceMs` (LANDED).**
 The floor's contract (§11.1.2, "Who asks") is that the *compositor tick* paces an elided frame and the
@@ -919,9 +1118,9 @@ the tick came from, and DropOldest makes the over-production safe.
 
 Three guards keep it from ping-ponging:
 
-- **Kind must be `PaceAsync`.** The ambient and adaptive-governor branches precede the armed branch in
-  `RecommendedWaitMsCore` and produce `HostWaitKind.Ambient`. A deliberately-capped loop presents at ~2R *by
-  construction*; without this guard its own throttle's signature would drag it back to panel rate.
+- **Kind must be `PaceAsync`.** The cadence and adaptive-governor branches precede the armed branch in
+  `RecommendedWaitMsCore` and produce `HostWaitKind.Cadence` / `HostWaitKind.AdaptiveGpu`. A deliberately-paced loop
+  presents at ~2R *by construction*; without this guard its own cadence's signature would drag it back to panel rate.
 - **A per-episode budget (8).** A scene that truly cannot sustain the rate keeps producing the 2R cadence no
   matter how often the chain is re-anchored. The budget makes that cost bounded (~65 ms of re-phasing at
   120 Hz) instead of permanent; a new `Episode` resets it, so the bound is per lock, not per process.

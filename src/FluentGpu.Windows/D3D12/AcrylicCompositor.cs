@@ -45,7 +45,12 @@ internal sealed unsafe class AcrylicCompositor : IDisposable
 {
     private const int MaxPool = 12;           // pooled RT slots. A dual-Kawase chain leases iterations+1 (≤5) pyramid
                                               // levels at once; plus retained per-layer cache RTs → 12 gives headroom.
-    private const int TrimIdleFrames = 600;   // free entries idle this long (~10 s) are retired (fence-gated release)
+    // The idle-trim windows come from the portable FluentGpu.Render.LayerTargetTrim, shared with OpacityLayerCompositor
+    // and headless-gated as gate.layerpool.* — this pool used a flat 600-frame (~10 s) window on every tier, which on a
+    // UMA adapter is ten seconds of resident host memory holding a dismissed flyout's blur pyramid. The policy trims a
+    // WEAK adapter at 120 frames and keeps the 600 for discrete VRAM. NO pool slot here is ever canvas-sized (the
+    // full-window canvas is the separate `_canvas` field), so the canvas warm-reserve clause never applies; the
+    // retained per-layer backdrop caches are classified as PINS, which is what they are.
 
     private ID3D12Device* _device;
     private uint _w, _h;   // canvas size (physical px)
@@ -77,8 +82,18 @@ internal sealed unsafe class AcrylicCompositor : IDisposable
     }
     private readonly PoolEntry[] _pool = new PoolEntry[MaxPool];
 
-    private struct Retired { public ID3D12Resource* Res; public ulong Fence; }
+    private struct Retired { public ID3D12Resource* Res; public ulong Fence; public long Bytes; }
     private readonly List<Retired> _retired = new();   // fence-gated deferred release (eviction/trim/resize)
+
+    /// <summary>The ONE retire chokepoint: move a slot's resource to the fence-gated release queue (with its byte
+    /// tally, for the census) and clear the slot. Never Releases — <see cref="DrainRetired"/> does, once the fence has
+    /// passed the entry's last recorded use.</summary>
+    private void Retire(ref PoolEntry e)
+    {
+        if (e.Res == null) { e = default; return; }
+        _retired.Add(new Retired { Res = e.Res, Fence = e.LastUseFence, Bytes = LayerTargetBucket.Bytes(e.W, e.H) });
+        e = default;
+    }
 
     private ID3D12DescriptorHeap* _rtvHeap;   // 1 + MaxPool RTVs: slot 0 = canvas, 1+i = pool entry i
     private ID3D12DescriptorHeap* _srvHeap;   // SrvHeapDescriptorCount shader-visible SRVs: slot 0 = canvas; pool SRVs
@@ -455,26 +470,60 @@ float4 PSMain(V i) : SV_Target
     {
         for (int i = _retired.Count - 1; i >= 0; i--)
         {
-            if (_retired[i].Fence > completedFence) continue;
+            // THE fence rule (LayerTargetTrim.CanRelease): never free a surface a submit in flight may still reference,
+            // whatever the idle policy decided.
+            if (!LayerTargetTrim.CanRelease(_retired[i].Fence, completedFence)) continue;
             D3D12MemoryDiagnostics.Release(_retired[i].Res, "Acrylic.Pool");
             _retired[i].Res->Release();
             _retired.RemoveAt(i);
         }
     }
 
-    /// <summary>Age free entries; retire (fence-gated) any idle past the trim window so a closed flyout's RTs are
-    /// eventually returned to the OS instead of pinning VRAM forever.</summary>
+    /// <summary>Age free entries; retire (fence-gated) any idle past its <see cref="LayerTargetTrim"/> window so a
+    /// closed flyout's RTs are returned to the OS instead of pinning memory. Allocation-free.</summary>
     private void TickPool(ulong completedFence)
     {
+        // Read per tick, never captured in a static readonly: GpuProfile.Tier is published during device init, and a
+        // static-readonly capture is evaluated at TYPE init — which can be either side of that write.
+        bool weak = FluentGpu.Foundation.GpuProfile.IsWeak;
         for (int i = 0; i < MaxPool; i++)
         {
             ref var e = ref _pool[i];
             if (e.Res == null || e.InUse) continue;
-            if (++e.IdleFrames <= TrimIdleFrames) continue;
-            _retired.Add(new Retired { Res = e.Res, Fence = e.LastUseFence });
-            e = default;
+            e.IdleFrames++;
+        }
+        for (int i = 0; i < MaxPool; i++)
+        {
+            ref var e = ref _pool[i];
+            if (e.Res == null) continue;
+            // isCanvasSized: false by construction — no slot in THIS pool is the full-window canvas (see MaxPool's
+            // comment), so the warm-reserve clause is not reachable here and the rank argument is unused.
+            if (LayerTargetTrim.Classify(e.InUse, e.PinLayer != 0, isCanvasSized: false, e.IdleFrames, weak, 0)
+                != LayerTrimVerdict.Retire)
+                continue;
+            Retire(ref e);
         }
         DrainRetired(completedFence);
+    }
+
+    /// <summary>POOLED-vs-IN-USE byte split for the <c>gpu bytes</c> census (<see cref="LayerTargetCensus"/>). The
+    /// full-window CANVAS is included as an IN-USE surface: it is unconditionally live for the whole device lifetime,
+    /// so reporting it as free would understate what this compositor actually holds.</summary>
+    public LayerTargetCensus TargetCensus
+    {
+        get
+        {
+            LayerTargetCensus c = default;
+            if (_canvas != null) c = c.WithSlot(LayerTargetBucket.Bytes((int)_w, (int)_h), inUse: true, isPin: false);
+            for (int i = 0; i < MaxPool; i++)
+            {
+                ref var e = ref _pool[i];
+                if (e.Res == null) continue;
+                c = c.WithSlot(LayerTargetBucket.Bytes(e.W, e.H), e.InUse, e.PinLayer != 0);
+            }
+            for (int i = 0; i < _retired.Count; i++) c = c.WithRetired(_retired[i].Bytes);
+            return c;
+        }
     }
 
     /// <summary>Idle upkeep for frames with no acrylic layers (the canvas path isn't taken): age + trim the pool.</summary>
@@ -523,8 +572,7 @@ float4 PSMain(V i) : SV_Target
                     if (slot < 0 || _pool[i].LastUseFence < _pool[slot].LastUseFence) slot = i;
                 }
                 if (slot < 0) throw new InvalidOperationException("acrylic LayerPool exhausted (more concurrent leases than slots)");
-                _retired.Add(new Retired { Res = _pool[slot].Res, Fence = _pool[slot].LastUseFence });
-                _pool[slot] = default;
+                Retire(ref _pool[slot]);
             }
             _pool[slot].Res = CreateTarget((uint)bw, (uint)bh, $"Acrylic.Pool[{slot}]", optimizedClear: false);
             _pool[slot].State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
@@ -562,8 +610,7 @@ float4 PSMain(V i) : SV_Target
         int slot = FindPinned(layerId);
         if (slot >= 0 && (_pool[slot].W < bw || _pool[slot].H < bh))   // existing cache RT too small → retire + reallocate
         {
-            _retired.Add(new Retired { Res = _pool[slot].Res, Fence = _pool[slot].LastUseFence });
-            _pool[slot] = default;
+            Retire(ref _pool[slot]);
             slot = -1;
         }
         if (slot < 0)
@@ -582,8 +629,7 @@ float4 PSMain(V i) : SV_Target
                     if (_pool[i].LastUseFence < _pool[slot].LastUseFence) slot = i;
                 }
                 if (slot < 0) throw new InvalidOperationException("acrylic LayerPool exhausted (more concurrent leases than slots)");
-                _retired.Add(new Retired { Res = _pool[slot].Res, Fence = _pool[slot].LastUseFence });
-                _pool[slot] = default;
+                Retire(ref _pool[slot]);
             }
             _pool[slot].Res = CreateTarget((uint)bw, (uint)bh, $"Acrylic.Cache[{slot}]", optimizedClear: false);
             _pool[slot].State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;

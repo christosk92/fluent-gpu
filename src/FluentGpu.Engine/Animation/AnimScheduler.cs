@@ -16,7 +16,8 @@ namespace FluentGpu.Animation;
 //
 //  Core model implemented: spring (rebase/velocity-handoff retarget) + two-point eased, over the transform / opacity /
 //  blur / presented-size / stroke-trim / clip channels, with the proven FromPaint-fold (preserves un-animated channels)
-//  + compose ported verbatim from AnimEngine. Wake is DisplayRate-while-active (Cadence-classed sources are a follow-up).
+//  + compose ported verbatim from AnimEngine. Wake is per-row CADENCE (AnimClock.cs `Cadence` → `_cadencePeriodMs` +
+//  `NextDueMs`, AnimScheduler.Parity.cs): a row states its own frame rate and the host waits for the earliest due one.
 //  DONE since: structural enter/exit seeding, SizeMode.Relayout/Reflow (host worklists), ScaleCorrect, the Color channel
 //  (brush subsumption), driven sources (Drive + Clocks). Residual PERF follow-ups (within the design's near-zero edge-alloc
 //  bound — steady frames are already 0-alloc): the index-based SignalSource table (retires the DrivenClockTable closures)
@@ -32,19 +33,21 @@ public sealed partial class AnimEngine
     private readonly List<int> _settledScratch = new(64);   // live rows that reached Done THIS tick, collected during PASS1 so CollectAndFreeDone needn't re-walk all nodes (finding #14)
     private AnimClock _clock;
     private int _parked;                                // live rows on KeepAlive-parked nodes (excluded from HasActive)
+    // The previous tick's step — for a StartPending row, the step of the frame that HELD it at t=0 (its seed frame):
+    // the reference its first real advance is capped against (PendingStartStep).
+    private float _prevTickStepMs;
 
     public AnimEngine(SceneStore scene) => _scene = scene;
+
+    /// <summary>Due-check slack (ms): a row whose period rounds to 17 ms must still be due on a 16.67 ms frame, and a
+    /// 33 ms row on the fourth 8.33 ms tick. Chromium's begin-frame judder margin plays the same role.</summary>
+    internal const double CadenceSlackMs = 0.5;
 
     // FG_MOTION_DIAG=1: projected-motion discrimination trace (structural seed/snap/tick). Gated — nothing when off.
     private static readonly bool s_motionDiag = Diag.EnvFlag("FG_MOTION_DIAG");
 
     /// <summary>Live, non-parked rows drive the loop — a parked subtree's looping animation can't defeat the idle stop.</summary>
     public bool HasActive => _slab.Count - _parked > 0;
-
-    /// <summary>ms until the next animation frame is due. <c>0</c> = present-now; <c>+∞</c> = nothing timer-due
-    /// (idle, or only <see cref="AnimFlags.Driven"/> rows). Memoized with the Loop/DisplayRate census — see
-    /// <see cref="NextDueMs()"/> in the parity partial.</summary>
-    public float NextDueMs(double now) => NextDueMs();
 
     // ── frame entry ───────────────────────────────────────────────────────────────────────────────
     /// <summary>Advance the clock by the clamped wall delta (or the resume quantum) and run one tick. The headless
@@ -60,6 +63,7 @@ public sealed partial class AnimEngine
     {
         if (_slab.Count == 0) return;                  // steady frame: zero work
         float step = clock.DeltaMs;
+        double nowMs = clock.NowMs;                    // the cadence domain (same clock _lastAdvanceMs/_minDueAtMs use)
         _doneScratch.Clear();
         _settledScratch.Clear();
 
@@ -73,9 +77,41 @@ public sealed partial class AnimEngine
                 ref AnimValue r = ref _slab.At(s);
                 if (!_scene.IsLive(r.Node)) { _doneScratch.Add(s); continue; }   // node unmounted → reclaim
                 if (r.Has(AnimFlags.Parked)) continue;
+                if (RenderOwnsCompositor && IsCompositorRow(in r)) continue;
 
+                // CADENCE gate. A row with its own period (a 30Hz shimmer, a 10Hz HUD) only advances when it is due;
+                // in between, Position is HELD and ElapsedMs is untouched, so the row simply isn't redrawn — the loop
+                // itself may still be running at panel rate for something else. When it IS due, it steps by the REAL
+                // elapsed since its own last advance (never the frame dt): rows sample at absolute ElapsedMs, so the
+                // shimmer traverses its keyframes at 30Hz whether the host runs at 30 or 120 fps.
                 float stepMs = step;
                 bool justSeeded = r.Has(AnimFlags.JustSeeded);
+                int periodMs = ResolvedPeriodMs(s);
+                // The SEED frame counts as the row's advance #0 (it shows the initial value): it is never held, and it
+                // stamps the cadence so the first real step lands one period later and the host's wait is already the
+                // row's own period on the very next RecommendedWaitMs.
+                if (periodMs > 0)
+                {
+                    double lastAdvance = _lastAdvanceMs[s];
+                    if (lastAdvance > 0d)
+                    {
+                        double sinceMs = nowMs - lastAdvance;
+                        if (sinceMs < periodMs - CadenceSlackMs) continue;   // not due — hold this row entirely
+                        stepMs = (float)sinceMs;
+                    }
+                    _lastAdvanceMs[s] = nowMs;
+                }
+                // PENDING START (structural enter/exit — AnimFlags.StartPending): the seed frame held this row at t=0, and
+                // that frame is the one that first PRESENTED it. Its start time resolves THERE, so the first real advance
+                // is the time from that presentation, not this frame's wall step — which also spans the seed frame's own
+                // commit work (a page mount making the frame 40-60 ms long). Web Animations resolves a pending play at the
+                // first frame after the commit (Gecko Animation::Tick/TryTriggerNow: "trigger on the next tick, with this
+                // tick's timestamp"); Flutter's Ticker takes the first vsync after start() as elapsed 0.
+                if (!justSeeded && r.Has(AnimFlags.StartPending))
+                {
+                    r.Flags &= ~AnimFlags.StartPending;
+                    if (periodMs == 0) stepMs = PendingStartStep(stepMs, _prevTickStepMs);
+                }
                 if (r.DelayRemainingMs > 0f && stepMs > 0f && !justSeeded)
                 {
                     float consume = MathF.Min(r.DelayRemainingMs, stepMs);
@@ -128,13 +164,15 @@ public sealed partial class AnimEngine
             for (int s = head; s >= 0; s = _slab.At(s).NextOnNode)
             {
                 ref AnimValue r = ref _slab.At(s);
-                if (r.Has(AnimFlags.Parked) || r.Has(AnimFlags.Additive) || IsSideTableChannel(r.Channel)) continue;
+                if (r.Has(AnimFlags.Parked) || r.Has(AnimFlags.Additive) || IsSideTableChannel(r.Channel)
+                    || (RenderOwnsCompositor && IsCompositorRow(in r))) continue;
                 acc.Fold(r.Channel, r.Position, replace: true); any = true;
             }
             for (int s = head; s >= 0; s = _slab.At(s).NextOnNode)
             {
                 ref AnimValue r = ref _slab.At(s);
-                if (r.Has(AnimFlags.Parked) || !r.Has(AnimFlags.Additive) || IsSideTableChannel(r.Channel)) continue;
+                if (r.Has(AnimFlags.Parked) || !r.Has(AnimFlags.Additive) || IsSideTableChannel(r.Channel)
+                    || (RenderOwnsCompositor && IsCompositorRow(in r))) continue;
                 acc.Fold(r.Channel, r.Position, replace: false); any = true;
             }
             if (any) Compose(node, in acc);
@@ -144,7 +182,23 @@ public sealed partial class AnimEngine
         foreach (int s in _doneScratch) FreeSlot(s);
         // settled (Done) rows discovered in PASS1's spring/eased branches:
         CollectAndFreeDone();
+
+        // The wake census (min next-due + the display-rate-loop tripwire) is a pure function of the rows we just
+        // walked, and every row's due time moved — so recompute it HERE rather than letting the Version memo answer
+        // from a pre-tick scan. The host asks NextDueMs several times before the next tick; all of them are O(1).
+        RecomputeCensus();
+        _prevTickStepMs = step;   // the hold-frame step the next tick's StartPending rows are capped against
     }
+
+    /// <summary>The first real advance of a <see cref="AnimFlags.StartPending"/> row: <paramref name="stepMs"/> is the
+    /// wall step since the frame that held it at t=0, <paramref name="heldStepMs"/> that hold frame's OWN step (the steady
+    /// frame interval going in). A step more than two steady frames long spans the seed frame's commit work rather than
+    /// presented time, so the start resolves at the held frame's presentation and this advance is one steady frame —
+    /// the first presented frame after a long page mount starts the entrance at its beginning instead of mid-slide. No
+    /// reference (a 0 or &gt; <see cref="AnimClock.MaxDeltaMs"/> hold step — a fast-forward or a resumed clock) leaves
+    /// the step alone, so injected-dt replays and fixed-dt frames are unchanged. Pure.</summary>
+    internal static float PendingStartStep(float stepMs, float heldStepMs)
+        => heldStepMs > 0f && heldStepMs <= AnimClock.MaxDeltaMs && stepMs > 2f * heldStepMs ? heldStepMs : stepMs;
 
     private void CollectAndFreeDone()
     {
@@ -220,8 +274,15 @@ public sealed partial class AnimEngine
             ref LayoutInput li = ref _scene.Layout(node);
             if (!float.IsNaN(acc.Lw)) li.Width = acc.Lw;
             if (!float.IsNaN(acc.Lh)) li.Height = acc.Lh;
-            var rp = _scene.Parent(node);
-            _scene.Mark(rp.IsNull ? node : rp, NodeFlags.LayoutDirty);
+            // Exit orphans are detached: their last live Bounds stay at the open size unless we write the Size track
+            // into them. ClipsToBounds scissors to Bounds, so a frozen full-height box paints over the rows below.
+            if ((_scene.Flags(node) & NodeFlags.Exiting) != 0)
+            {
+                ref RectF b = ref _scene.Bounds(node);
+                if (!float.IsNaN(acc.Lw)) b = new RectF(b.X, b.Y, acc.Lw, b.H);
+                if (!float.IsNaN(acc.Lh)) b = new RectF(b.X, b.Y, b.W, acc.Lh);
+            }
+            MarkReflowLayoutDirty(node);
             _reflowWrote = true;
             ReflowRoots.Add(node);
         }
@@ -320,6 +381,7 @@ public sealed partial class AnimEngine
             e.Gen = Generators.BakeSpring(in spring, x0: curV - to, v0: curVel);
             e.ElapsedMs = 0f; e.DelayRemainingMs = 0f;        // retarget keeps moving (no first-frame hold)
             e.Flags &= ~(AnimFlags.Done | AnimFlags.JustSeeded);
+            StampCompositorSeed(existing, newInstance: false, explicitFrom: false);
             _slab.BumpVersion();   // in-place flag rewrite — keep the census memo honest
             if (channel == AnimChannel.BlurSigma) RefreshBlurAnimationActive(node);
             return;
@@ -431,11 +493,22 @@ public sealed partial class AnimEngine
         int idx = (int)node.Raw.Index;
         if (!additive)
             for (int s = _slab.HeadOnNode(idx); s >= 0; s = _slab.At(s).NextOnNode)
-                if (_slab.At(s).Channel == ch && !_slab.At(s).Has(AnimFlags.Additive)) { ClearKeys(s); return s; }   // retarget the base
+                if (_slab.At(s).Channel == ch && !_slab.At(s).Has(AnimFlags.Additive))
+                {
+                    ClearKeys(s);
+                    ResetCadence(s);   // a re-seed inherits nothing: display rate unless this seed asks for a cadence
+                    StampCompositorSeed(s, newInstance: false, explicitFrom: true);
+                    return s;
+                }
         var seed = new AnimValue { Node = node, Channel = ch };
         if (additive) seed.Flags |= AnimFlags.Additive;
         if ((_scene.Flags(node) & NodeFlags.Parked) != 0) { seed.Flags |= AnimFlags.Parked; _parked++; }
-        return _slab.Add(idx, in seed);
+        int added = _slab.Add(idx, in seed);
+        // The ONLY place the cadence side arrays grow — the same seed-time path that grows the slab's own _rows
+        // (never a frame phase), and the write that stops a recycled slot inheriting its predecessor's cadence.
+        ResetCadence(added);
+        StampCompositorSeed(added, newInstance: true, explicitFrom: true);
+        return added;
     }
 
     private static float RestDeltaFor(AnimChannel ch)
@@ -475,7 +548,7 @@ public sealed partial class AnimEngine
     }
 
     // ── fold accumulator (ported from AnimEngine.Accum) ──────────────────────────────────────────────
-    private struct Accum
+    internal struct Accum
     {
         public float Tx, Ty, Sx, Sy, Rot, Op, Sw, Sh, TrimStart, TrimEnd;
         public float ClipL, ClipT, ClipR, ClipB;

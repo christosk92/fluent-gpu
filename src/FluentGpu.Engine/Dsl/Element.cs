@@ -21,6 +21,17 @@ public abstract record Element
     /// loop. Empty = none. This is the one generic surface that subsumes the old StickyTop/OnPinned/ScrollStretchHeader.</summary>
     public ScrollBindDsl[] ScrollBinds { get; init; } = [];
 
+    /// <summary>Presence channel (P1, layout.md §4.7): <c>false</c> removes this node from layout flow AND paint AND
+    /// hit-test — a COLLAPSED box (CSS <c>display:none</c>), not merely a hidden one (there is no separate
+    /// visibility-only channel; use <see cref="FluentGpu.Animation.MotionTargetsExtensions"/>-style Opacity binds for
+    /// that). Default true. Bindable like <see cref="FluentGpu.Dsl.BoxEl.Fill"/>/<c>Opacity</c>: a bound value flips
+    /// scoped-relayout without a component re-render (the true→false edge snaps; false→true seeds the node's declared
+    /// <see cref="Enter"/> like a fresh mount); a static value is re-asserted on every reconcile, equality-gated so an
+    /// identical re-render marks nothing. NOT compatible with <see cref="MorphId"/> on a bound channel (DEBUG-asserted,
+    /// <c>BindContract</c>) — a shared-element participant must stay mounted (and thus measurable) to fly; collapsing it
+    /// mid-transition would break <c>ConnectedAnimation</c> capture.</summary>
+    public Prop<bool> Visible { get; init; } = true;
+
     /// <summary>Stable per-record-type id for integer type-dispatch in the reconciler (the source-gen'd ElementTypeId).</summary>
     public abstract ushort ElementTypeId { get; }
 
@@ -738,9 +749,22 @@ public sealed record TextEl(Prop<string> Text) : Element
 /// accent foreground + underline are the CALLER's styling (HyperlinkForeground, generic.xaml:1120-1122).
 /// No per-span italic: the shaper has no style axis yet (faces resolve by family+weight only).
 /// </summary>
-public sealed record SpanTextEl(TextSpan[] Spans) : Element
+public sealed record SpanTextEl(Prop<TextSpans> Spans) : Element
 {
     public override ushort ElementTypeId => 12;
+
+    /// <summary>Ctor sugar for a plain array (every pre-P2 <c>new SpanTextEl(spans)</c> call site keeps compiling
+    /// unbound — the common case for a static paragraph). Bind a reactive <see cref="Foundation.SpanBuffer"/> fill
+    /// via <c>Spans = Prop.Of(() =&gt; buffer.Current)</c> or the P3 <c>item.Spans(...)</c> authoring sugar instead.</summary>
+    public SpanTextEl(TextSpan[] spans) : this((TextSpans)spans) { }
+
+    /// <summary>Index-resolved hyperlink handler (P2, "bound spans with index-resolved clicks"): fires when the
+    /// clicked span carries no <see cref="TextSpan.OnClick"/> of its own but is marked <see cref="TextSpan.IsLink"/>
+    /// — the bound-row case, where minting a fresh <c>Action</c> closure per link per row per recycle would defeat
+    /// the zero-alloc rebind story. The dispatcher resolves <c>spans[i].OnClick</c> first, else this, with the
+    /// CURRENT clicked index. Mount-static (a sparse <c>SceneStore</c> table, not a bound <see cref="Prop{T}"/>
+    /// channel) — same category as an ordinary <c>OnClick</c> handler.</summary>
+    public Action<int>? OnSpanClick { get; init; }
 
     /// <summary>
     /// Optional atomic tail shown only when a finite wrapping <see cref="MaxLines"/> clips <see cref="Spans"/>.

@@ -138,7 +138,7 @@ public sealed class ImageSchedulingTests
     }
 
     [Fact]
-    public void ScrollReveal_IsHalfLength_ExceptForACacheAdjacentLanding()
+    public void ScrollReveal_IsHalfLength_AndACacheAdjacentLandingGetsTheShortFade()
     {
         var cache = new ImageCache(new FakeImageDecoder());
         float dur = ImageTransition.Default.DurationMs;
@@ -162,11 +162,68 @@ public sealed class ImageSchedulingTests
         cache.Tick(dur * 0.5f);
         Assert.Equal(1f, cache.CrossFadeOf(slow));
 
-        // Mid-scroll, cache-adjacent (landed within 100ms of the request): still instant — fading a hit reads as lag.
+        // Mid-scroll, cache-adjacent (landed within 100ms of the request): the SHORT fade, never an instant pop — the
+        // placeholder was presented for at least one frame (the +1-frame contract), so snapping in over it flashes.
         var fast = cache.Request("fast", 64, 64);
         cache.Tick(16f);
         cache.Pump();
+        Assert.Equal(0f, cache.CrossFadeOf(fast));
+        cache.Tick(ImageCache.ShortRevealMs * 0.5f);
+        float mid = cache.CrossFadeOf(fast);
+        Assert.True(mid > 0f && mid < 1f, $"mid={mid}");
+        cache.Tick(ImageCache.ShortRevealMs * 0.5f);
         Assert.Equal(1f, cache.CrossFadeOf(fast));
+    }
+
+    [Fact]
+    public void MemoryHit_NeverReplaysAReveal()
+    {
+        // The one landing that skips the fade: a synchronous memory-cache hit. Request returns the already-Ready entry,
+        // whose reveal finished long ago — no reveal restarts (Coil/Glide's MEMORY_CACHE exemption).
+        var cache = new ImageCache(new FakeImageDecoder());
+        var first = cache.Request("hit", 64, 64);
+        cache.Pump();
+        cache.Tick(1000f);
+        var again = cache.Request("hit", 64, 64);
+        Assert.Equal(first, again);
+        Assert.Equal(1f, cache.CrossFadeOf(again));
+    }
+
+    [Fact]
+    public void ResidentRendition_IsTheLargestReadyDecodeOfTheSameSource()
+    {
+        var cache = new ImageCache(new FakeImageDecoder());
+        var small = cache.Request("art", 64, 64);
+        var large = cache.Request("art", 256, 256);
+        var other = cache.Request("other-art", 512, 512);
+        cache.Pump();                                        // all three land Ready
+        var pending = cache.Request("art", 512, 512);        // a new decode bucket of the same source — Pending
+        Assert.Equal(ImageState.Pending, cache.StateOf(pending));
+        Assert.Equal(large, cache.ResidentRenditionOf(pending));   // same source, biggest resident — never other-art
+        Assert.True(cache.SameSource(small, pending));
+        Assert.False(cache.SameSource(other, pending));
+        Assert.True(cache.ResidentRenditionOf(cache.Request("never-seen", 64, 64)).IsNull);
+    }
+
+    [Fact]
+    public void SwapOutgoing_IsOpaqueForTheWindowThenGone()
+    {
+        const float start = 100f, window = ImageCache.SwapCrossfadeMs;
+        Assert.Equal(1f, ImageCache.ResolveFade(start, start, window, ImageCache.SwapOutgoingEasing));
+        Assert.Equal(1f, ImageCache.ResolveFade(start + window * 0.9f, start, window, ImageCache.SwapOutgoingEasing));
+        Assert.Equal(0f, ImageCache.ResolveFade(start + window, start, window, ImageCache.SwapOutgoingEasing));
+        Assert.Equal(0f, ImageCache.ResolveFade(start, float.NaN, window, ImageCache.SwapOutgoingEasing));   // no window ⇒ gone
+
+        // The swap window keeps the fade clock open (UI wake) even though no reveal is running.
+        var cache = new ImageCache(new FakeImageDecoder());
+        var outgoing = cache.Request("out", 64, 64);
+        cache.Pump();
+        cache.Tick(1000f);
+        Assert.False(cache.HasActiveCrossfades);
+        cache.BeginSwap(outgoing, window);
+        Assert.True(cache.HasActiveCrossfades);
+        cache.Tick(window + 1f);
+        Assert.False(cache.HasActiveCrossfades);
     }
 
     [Fact]

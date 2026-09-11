@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Globalization;
 
 namespace FluentGpu.Hosting;
@@ -36,7 +36,10 @@ public readonly struct CensusSnapshot
     public readonly int Providers;
     // anim
     public readonly int AnimTracks;
-    public readonly int AnimLoopTracks;
+    /// <summary>Live LOOPING rows whose declared cadence is the DISPLAY rate — the one cadence that pins the
+    /// whole frame loop at the panel rate for as long as it runs (AppHost's always-on [anim.cadence] tripwire reports
+    /// the same number). A steady non-zero value here on an idle page is the leak to chase.</summary>
+    public readonly int AnimDisplayRateLoops;
     public readonly int AnimTransitions;
     public readonly int InteractActive;
     public readonly int ScrollAnimActive;
@@ -78,7 +81,7 @@ public readonly struct CensusSnapshot
 
         var anim = host.Animation;
         AnimTracks = anim.TrackCount;
-        AnimLoopTracks = anim.LoopTrackCount;
+        AnimDisplayRateLoops = anim.DisplayRateLoopCount;
         AnimTransitions = anim.TransitionCount;
         InteractActive = host.InteractionAnimatorCensus;
         ScrollAnimActive = host.ScrollActiveCensus;
@@ -177,7 +180,7 @@ internal sealed class MemCensus
         _cur[k++] = s.VirtualBoundaries;
         _cur[k++] = s.Providers;
         _cur[k++] = s.AnimTracks;
-        _cur[k++] = s.AnimLoopTracks;
+        _cur[k++] = s.AnimDisplayRateLoops;
         _cur[k++] = s.AnimTransitions;
         _cur[k++] = s.InteractActive;
         _cur[k++] = s.ScrollAnimActive;
@@ -205,7 +208,7 @@ internal sealed class MemCensus
         Line(sb, "  images  ", $"count={s.ImageCount} ready={s.ImageReady} pending={s.ImagePending} used={Mb(s.ImageUsedBytes)}", 9, 4);
         Line(sb, "  decode  ", $"inflight={s.DecodeInflight} canceledPending={s.DecodeCanceledPending}", 13, 2);
         Line(sb, "  recon   ", $"components={s.Components} nodeBindings={s.NodeBindings} virtuals={s.VirtualBoundaries} providers={s.Providers}", 15, 4);
-        Line(sb, "  anim    ", $"tracks={s.AnimTracks} loops={s.AnimLoopTracks} transitions={s.AnimTransitions} interact={s.InteractActive} scroll={s.ScrollAnimActive}", 19, 5);
+        Line(sb, "  anim    ", $"tracks={s.AnimTracks} displayRateLoops={s.AnimDisplayRateLoops} transitions={s.AnimTransitions} interact={s.InteractActive} scroll={s.ScrollAnimActive}", 19, 5);
         Line(sb, "  host    ", $"popupWindows={s.PopupWindows}", 24, 1);
         Line(sb, "  pixpool ", $"retained={Mb(s.PixelPoolRetainedBytes)} peak={Mb(s.PixelPoolPeakBytes)} cap={Mb(s.PixelPoolCapBytes)}", 26, 2);
 

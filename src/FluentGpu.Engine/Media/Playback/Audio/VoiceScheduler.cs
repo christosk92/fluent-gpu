@@ -99,6 +99,10 @@ public sealed class VoiceScheduler
     private bool _degrade;                 // decided to degrade (not Ready by the crossfade start)
     private TransitionOutcome _outcome;
     private long _incomingVoiceId;
+    private Action<long, GainEnvelope>? _envelopeInstaller;
+    private AudioTransitionGate? _transitionGate;
+    /// <summary>Atomic cancellation/commit state of a future scheduled join, if one exists.</summary>
+    public AudioTransitionGate? TransitionGate => _transitionGate;
     private VoiceInstaller? _installer;    // optional RT-safe voice installer (ring-wraps on the feed path); null = bare mixer
 
     /// <summary>Create a scheduler in the fixed mix format. <paramref name="declickMs"/> is the ramp applied at any
@@ -135,6 +139,28 @@ public sealed class VoiceScheduler
     /// <see cref="PcmAudioSession.AddCrossfadeVoice"/> so a crossfade committed on an RT-fed session ring-wraps the incoming
     /// voice (RT-safe — spec §7.9/§8). When null the incoming voice is added directly (the single-thread pull path).</summary>
     public void SetVoiceInstaller(VoiceInstaller installer) => _installer = installer;
+    /// <summary>Route outgoing envelope changes through the session's render-owned command stream.</summary>
+    public void SetEnvelopeInstaller(Action<long, GainEnvelope> installer) => _envelopeInstaller = installer;
+
+    /// <summary>Publish a ready transition before its exact frame deadline. Late crossfades degrade to gapless.</summary>
+    public TransitionOutcome ScheduleReady(long clock, CrossfadeMixer mixer)
+    {
+        if (_committed) return _outcome;
+        if (_slot.State != PrepState.Ready) return TransitionOutcome.None;
+        if (_slot.Source is null) return Commit(clock, mixer);
+        if (_overlapFrames > 0 && clock > CrossfadeStartFrame)
+        { _crossDecided = true; _degrade = true; }
+        long start = _overlapFrames > 0 && !_degrade ? CrossfadeStartFrame : Math.Max(clock, JoinEndFrame);
+        _transitionGate = new AudioTransitionGate(start);
+        return Commit(_overlapFrames > 0 && !_degrade ? CrossfadeStartFrame : clock, mixer);
+    }
+
+    private void SetOutgoingEnvelope(CrossfadeMixer mixer, GainEnvelope envelope)
+    {
+        if (_transitionGate is { } gate) envelope = envelope.WithTransition(gate);
+        if (_envelopeInstaller is { } install) install(_activeVoiceId, envelope);
+        else mixer.TrySetVoiceEnvelope(_activeVoiceId, envelope);
+    }
 
     /// <summary>The outgoing track's natural end (mixer frame).</summary>
     public long JoinEndFrame => _activeStart >= 0 && _activeTrimmedLen != long.MaxValue ? _activeStart + _activeTrimmedLen : long.MaxValue;
@@ -162,6 +188,7 @@ public sealed class VoiceScheduler
             TransitionKind.HardCut => _declickFrames,   // a same-engine hard cut is a declick-length cross
             _ => 0
         };
+        _overlapFrames = (int)Math.Min(_overlapFrames, _activeTrimmedLen);
         _committed = false;
         _crossDecided = false;
         _degrade = false;
@@ -198,6 +225,7 @@ public sealed class VoiceScheduler
             _slot.Item = item;
             return false;
         }
+        if (item.TotalFrames >= 0) _overlapFrames = (int)Math.Min(_overlapFrames, item.TotalFrames);
         _slot.State = PrepState.Ready;
         _slot.Source = item.AudioVoice;
         _slot.Gapless = item.Gapless;
@@ -212,8 +240,13 @@ public sealed class VoiceScheduler
     /// in-flight prepare) and drop the slot. Returns the NEW epoch. Re-arm the join via <see cref="BeginActive"/> afterwards.</summary>
     public uint Invalidate()
     {
-        if (_slot.Item is not null) _ = _slot.Item.DisposeAsync();
-        else (_slot.Source as IDisposable)?.Dispose();
+        _transitionGate?.TryCancel();
+        _transitionGate = null;
+        if (_slot.State != PrepState.Active)
+        {
+            if (_slot.Item is not null) _ = _slot.Item.DisposeAsync();
+            else (_slot.Source as IDisposable)?.Dispose();
+        }
         _slot = default;
         _committed = false;
         _crossDecided = false;
@@ -238,7 +271,7 @@ public sealed class VoiceScheduler
         {
             if (clock < joinEnd - _declickFrames) return TransitionOutcome.None;
             long fadeStart = Math.Max(_activeStart, clock);
-            mixer.TrySetVoiceEnvelope(_activeVoiceId, GainEnvelope.Fade(FadeKind.Out, fadeStart, _declickFrames, CrossCurve.Linear));
+            SetOutgoingEnvelope(mixer, GainEnvelope.Fade(FadeKind.Out, fadeStart, _declickFrames, CrossCurve.Linear));
             _committed = true;
             _slot.State = PrepState.Active;
             _outcome = TransitionOutcome.HardCut;
@@ -285,13 +318,14 @@ public sealed class VoiceScheduler
     {
         var curve = MapCurve(_transition.Curve);
         // Outgoing A: fade out over the overlap starting at the crossfade start.
-        mixer.TrySetVoiceEnvelope(_activeVoiceId, GainEnvelope.Fade(FadeKind.Out, crossStart, _overlapFrames, curve));
+        SetOutgoingEnvelope(mixer, GainEnvelope.Fade(FadeKind.Out, crossStart, _overlapFrames, curve));
         // Incoming B: fade in over the same window (equal-power keeps constant power for uncorrelated material).
         AddIncoming(mixer, crossStart, GainEnvelope.Fade(FadeKind.In, crossStart, _overlapFrames, curve));
     }
 
     private void AddIncoming(CrossfadeMixer mixer, long startFrame, GainEnvelope env)
     {
+        if (_transitionGate is { } gate) env = env.WithTransition(gate);
         _incomingVoiceId = _nextVoiceId++;
         _slot.TargetStartFrame = startFrame;
         float rg = ReplayGain.ScalarLinear(_slot.Loudness, _norm, _refLufs);
@@ -313,6 +347,7 @@ public sealed class VoiceScheduler
                 Chain = chain,
             });
         }
+        if (_slot.Item is AudioPreparedItem audio) audio.TransferOwnership();
     }
 
     private static CrossCurve MapCurve(Easing easing) => easing == Easing.Linear ? CrossCurve.Linear : CrossCurve.EqualPower;

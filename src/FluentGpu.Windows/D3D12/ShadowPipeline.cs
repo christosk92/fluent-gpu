@@ -25,16 +25,15 @@ internal struct ShadowInstance
 /// </summary>
 internal sealed unsafe class ShadowPipeline : IDisposable
 {
-    private const int MaxInstances = 1024;
-    private const int FrameCount = D3D12Device.FrameBankDepth;   // banked per frame-in-flight (depth = D3D12Device.FrameBankDepth) so frame N's CPU writes never race the GPU reads of the frames still in flight
+    private const int MaxInstances = 1024;   // per-FRAME policy cap (not a memory reservation — see _arena)
 
     private SdfSharedResources _shared = null!;
     private ID3D12PipelineState* _pso;
-    private readonly ID3D12Resource*[] _instances = new ID3D12Resource*[FrameCount];
-    private readonly ShadowInstance*[] _mapped = new ShadowInstance*[FrameCount];
+    // Instance storage is the device's SHARED per-frame UploadArena (one persistently-mapped UPLOAD buffer per
+    // frame-in-flight, bump-allocated by every pipeline) — not a private worst-case ring. MaxInstances survives as
+    // this pipeline's per-frame POLICY cap (unchanged drop semantics), no longer as unconditionally resident memory.
+    private UploadArena _arena = null!;
     private int _cursor;
-    private int _active;
-    private ulong _activeGva;
     private int _dropped;
 
     public int DroppedInstances => _dropped;
@@ -145,11 +144,11 @@ float4 PSMain(VSOut i) : SV_Target
 }
 """;
 
-    public void Init(ID3D12Device* device, SdfSharedResources shared)
+    public void Init(ID3D12Device* device, SdfSharedResources shared, UploadArena arena)
     {
         _shared = shared;
+        _arena = arena;
         BuildPipeline(device);
-        BuildBuffers(device);
     }
 
     private static void Check(HRESULT hr, string what)
@@ -204,50 +203,25 @@ float4 PSMain(VSOut i) : SV_Target
         ps->Release();
     }
 
-    private void BuildBuffers(ID3D12Device* device)
-    {
-        for (int f = 0; f < FrameCount; f++)
-        {
-            _instances[f] = CreateUpload(device, (uint)(sizeof(ShadowInstance) * MaxInstances), "Shadow.InstanceUpload");
-            void* ip; _instances[f]->Map(0, null, &ip);
-            _mapped[f] = (ShadowInstance*)ip;   // persistently mapped
-        }
-    }
-
-    private static ID3D12Resource* CreateUpload(ID3D12Device* device, uint bytes, string name)
-    {
-        D3D12_HEAP_PROPERTIES hp = default;
-        hp.Type = D3D12_HEAP_TYPE.D3D12_HEAP_TYPE_UPLOAD;
-        D3D12_RESOURCE_DESC rd = default;
-        rd.Dimension = D3D12_RESOURCE_DIMENSION.D3D12_RESOURCE_DIMENSION_BUFFER;
-        rd.Width = bytes;
-        rd.Height = 1;
-        rd.DepthOrArraySize = 1;
-        rd.MipLevels = 1;
-        rd.Format = DXGI_FORMAT.DXGI_FORMAT_UNKNOWN;
-        rd.SampleDesc.Count = 1;
-        rd.Layout = D3D12_TEXTURE_LAYOUT.D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        ID3D12Resource* res;
-        Check(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_NONE, &rd,
-            D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_GENERIC_READ, null, __uuidof<ID3D12Resource>(), (void**)&res), "Shadow.CreateCommittedResource");
-        D3D12MemoryDiagnostics.Track(res, name, bytes);
-        return res;
-    }
-
-    /// <summary>Select this frame's instance buffer (by back-buffer index) and reset the cursor. The chosen buffer was
-    /// last written FrameCount frames ago, whose GPU work the device has already fenced — so no CPU↔GPU race.</summary>
-    public void BeginFrame(int frameIndex) { _active = ((frameIndex % FrameCount) + FrameCount) % FrameCount; _activeGva = _instances[_active]->GetGPUVirtualAddress(); _cursor = 0; _dropped = 0; }
+    /// <summary>Reset this frame's policy cap + drop counter. Bank selection — and the fence discipline that makes
+    /// writing that bank safe — belongs to the shared <see cref="UploadArena"/>, begun once per frame by the device.</summary>
+    public void BeginFrame(int frameIndex) { _ = frameIndex; _cursor = 0; _dropped = 0; }
 
     /// <summary>Record one run; shared SDF state and this pipeline's PSO can be rebound independently. Returns false
     /// when full (state untouched).</summary>
     public bool Record(ID3D12GraphicsCommandList* cmd, ReadOnlySpan<ShadowInstance> instances, float vpW, float vpH,
                        bool bindSharedState = true, bool bindPipelineState = true)
     {
-        int start = _cursor;
-        int count = Math.Min(instances.Length, MaxInstances - start);
+        int count = Math.Min(instances.Length, MaxInstances - _cursor);
         if (count <= 0) { _dropped += instances.Length; return false; }
+        // Arena full: record NOTHING (command-list state untouched, exactly like the over-cap path above). The
+        // arena folded the demand into its growth target and the device arms one more full repaint, so the
+        // dropped run returns within a bank-depth of frames.
+        if (!_arena.TryReserve(count * sizeof(ShadowInstance), out byte* dst, out ulong gva))
+        { _dropped += instances.Length; return false; }
         _dropped += instances.Length - count;
-        for (int i = 0; i < count; i++) _mapped[_active][start + i] = instances[i];
+        ShadowInstance* slot = (ShadowInstance*)dst;
+        for (int i = 0; i < count; i++) slot[i] = instances[i];
         _cursor += count;
 
         if (bindSharedState)
@@ -260,15 +234,14 @@ float4 PSMain(VSOut i) : SV_Target
         }
         if (bindPipelineState)
             cmd->SetPipelineState(_pso);
-        cmd->SetGraphicsRootShaderResourceView(1, _activeGva + (ulong)(start * sizeof(ShadowInstance)));
+        cmd->SetGraphicsRootShaderResourceView(1, gva);
         cmd->DrawInstanced(4, (uint)count, 0, 0);
         return true;
     }
 
     public void Dispose()
     {
-        for (int f = 0; f < FrameCount; f++)
-            if (_instances[f] != null) { _instances[f]->Unmap(0, null); D3D12MemoryDiagnostics.Release(_instances[f], "Shadow.InstanceUpload"); _instances[f]->Release(); _instances[f] = null; }
+        // No instance buffers to release: the shared UploadArena owns them (disposed by the device).
         if (_pso != null) _pso->Release();
     }
 }

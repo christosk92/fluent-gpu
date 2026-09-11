@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using FluentGpu.Animation;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
@@ -65,6 +66,9 @@ public readonly struct RepeatLayout
         => new(RepeatKind.Custom, 0, 0, 0, true, new HorizontalGridVirtualLayout(rows, itemWidth, gap));
     /// <summary>Variable-extent uniform-list: every row seeds at <paramref name="estimatedExtent"/> and corrects to its
     /// measured extent on realize (Fenwick estimate-then-correct + scroll anchoring — the <c>MeasuredStackVirtualLayout</c>).
+    /// Anchoring follows CSS <c>overflow-anchor</c>: a list resting at offset 0 has no anchor to keep, so growth above
+    /// its first row pushes the rows down; a page's own anchor correction goes through
+    /// <see cref="ItemsViewController.PreserveAnchor"/>, which applies the same rule.
     /// Stateful — hoist when the owner re-renders (see the struct remarks).</summary>
     public static RepeatLayout VariableList(float estimatedExtent, bool horizontal = false)
         => new(RepeatKind.Custom, 0, 0, 0, horizontal, new MeasuredStackVirtualLayout(estimatedExtent, horizontal));
@@ -429,4 +433,10 @@ public sealed record ListOptions<T> : ListOptions
     public Func<int, T, string>? ItemTextTyped { get; init; }
     /// <summary>Typed per-item enabled gate: <c>(index, item) → bool</c>.</summary>
     public Func<int, T, bool>? IsItemEnabledTyped { get; init; }
+    /// <summary>Equality comparer for the per-slot bound item (<see cref="ItemsView.CreateBound{T}"/> always resolves
+    /// <see cref="BoundItemScope{T}.Item"/> through <see cref="BoundItemsSource{T}.BindItem"/>'s equality-gated overload):
+    /// an equal republish of the source snapshot then recomputes the slot's item once but fires ZERO downstream channel
+    /// effects. Defaults to <see cref="EqualityComparer{T}.Default"/> — supply one for a reference/record type whose
+    /// default equality is too coarse or too fine for your row shape.</summary>
+    public IEqualityComparer<T>? ItemComparer { get; init; }
 }

@@ -34,8 +34,7 @@ internal struct ImageInstance
 /// </summary>
 internal sealed unsafe class ImagePipeline : IDisposable
 {
-    private const int MaxDraws = 1024;
-    private const int FrameCount = D3D12Device.FrameBankDepth;   // banked per frame-in-flight (depth = D3D12Device.FrameBankDepth) so frame N's CPU writes never race the GPU reads of the frames still in flight
+    private const int MaxDraws = 1024;   // per-FRAME policy cap (not a memory reservation — see _arena)
 
     private ID3D12RootSignature* _rootSig;
     private readonly float[] _vpConstants = new float[2];
@@ -46,12 +45,12 @@ internal sealed unsafe class ImagePipeline : IDisposable
     private bool _stencilTried;
     private ID3D12Device* _device;   // non-owning; the device outlives every pipeline
     private ID3D12Resource* _quad;
-    private readonly ID3D12Resource*[] _instances = new ID3D12Resource*[FrameCount];
-    private readonly ImageInstance*[] _mapped = new ImageInstance*[FrameCount];
+    // Instance storage is the device's SHARED per-frame UploadArena (one persistently-mapped UPLOAD buffer per
+    // frame-in-flight, bump-allocated by every pipeline) — not a private worst-case ring. MaxDraws survives as this
+    // pipeline's per-frame POLICY cap (unchanged drop semantics), no longer as unconditionally resident memory.
+    private UploadArena _arena = null!;
     private D3D12_VERTEX_BUFFER_VIEW _quadView;
     private int _cursor;
-    private int _active;
-    private ulong _activeGva;
     private int _dropped;
 
     public int DroppedInstances => _dropped;
@@ -138,9 +137,10 @@ float4 PSMain(VSOut i) : SV_Target
 }
 """;
 
-    public void Init(ID3D12Device* device)
+    public void Init(ID3D12Device* device, UploadArena arena)
     {
         _device = device;
+        _arena = arena;
         BuildRootSignature(device);
         BuildPipeline(device);
         BuildBuffers(device);
@@ -231,12 +231,6 @@ float4 PSMain(VSOut i) : SV_Target
         _quad = CreateUpload(device, sizeof(float) * 8, "Image.QuadUpload");
         void* qp; _quad->Map(0, null, &qp); Buffer.MemoryCopy(quad, qp, 32, 32); _quad->Unmap(0, null);
         _quadView = new D3D12_VERTEX_BUFFER_VIEW { BufferLocation = _quad->GetGPUVirtualAddress(), SizeInBytes = 32, StrideInBytes = 8 };
-
-        for (int f = 0; f < FrameCount; f++)
-        {
-            _instances[f] = CreateUpload(device, (uint)(sizeof(ImageInstance) * MaxDraws), "Image.InstanceUpload");
-            void* ip; _instances[f]->Map(0, null, &ip); _mapped[f] = (ImageInstance*)ip;
-        }
     }
 
     private static ID3D12Resource* CreateUpload(ID3D12Device* device, uint bytes, string name)
@@ -254,9 +248,9 @@ float4 PSMain(VSOut i) : SV_Target
         return res;
     }
 
-    /// <summary>Select this frame's instance buffer (by back-buffer index) and reset the cursor. The chosen buffer was
-    /// last written FrameCount frames ago, whose GPU work the device has already fenced — so no CPU↔GPU race.</summary>
-    public void BeginFrame(int frameIndex) { _active = ((frameIndex % FrameCount) + FrameCount) % FrameCount; _activeGva = _instances[_active]->GetGPUVirtualAddress(); _cursor = 0; _dropped = 0; }
+    /// <summary>Reset this frame's policy cap + drop counter. Bank selection — and the fence discipline that makes
+    /// writing that bank safe — belongs to the shared <see cref="UploadArena"/>, begun once per frame by the device.</summary>
+    public void BeginFrame(int frameIndex) { _ = frameIndex; _cursor = 0; _dropped = 0; }
 
     /// <summary>Bind the shared image-pass state ONCE (descriptor heap, root sig, PSO, viewport, topology, quad VB) — so
     /// the per-image draws don't re-bind the descriptor heap N times (the per-image churn that the acrylic scroll path
@@ -281,10 +275,13 @@ float4 PSMain(VSOut i) : SV_Target
     public void Draw(ID3D12GraphicsCommandList* cmd, D3D12_GPU_DESCRIPTOR_HANDLE srv, in ImageInstance inst)
     {
         if (_cursor >= MaxDraws) { _dropped++; return; }
-        int slot = _cursor++;
-        _mapped[_active][slot] = inst;
+        // Arena full: draw NOTHING (see DrawRange / RoundRectPipeline.Record — the demand is folded into the arena's
+        // growth target and the device arms one more full repaint).
+        if (!_arena.TryReserve(sizeof(ImageInstance), out byte* dst, out ulong gva)) { _dropped++; return; }
+        _cursor++;
+        *(ImageInstance*)dst = inst;
         cmd->SetGraphicsRootDescriptorTable(1, srv);
-        cmd->SetGraphicsRootShaderResourceView(2, _activeGva + (ulong)(slot * sizeof(ImageInstance)));
+        cmd->SetGraphicsRootShaderResourceView(2, gva);
         cmd->DrawInstanced(4, 1, 0, 0);
     }
 
@@ -293,12 +290,15 @@ float4 PSMain(VSOut i) : SV_Target
     {
         int count = Math.Min(instances.Length, MaxDraws - _cursor);
         if (count <= 0) { _dropped += instances.Length; return 0; }
+        // Arena full: record NOTHING (command-list state untouched, exactly like the over-cap path above).
+        if (!_arena.TryReserve(count * sizeof(ImageInstance), out byte* dst, out ulong gva))
+        { _dropped += instances.Length; return 0; }
         _dropped += instances.Length - count;
-        int start = _cursor;
-        for (int i = 0; i < count; i++) _mapped[_active][start + i] = instances[i];
+        ImageInstance* slot = (ImageInstance*)dst;
+        for (int i = 0; i < count; i++) slot[i] = instances[i];
         _cursor += count;
         cmd->SetGraphicsRootDescriptorTable(1, srv);
-        cmd->SetGraphicsRootShaderResourceView(2, _activeGva + (ulong)(start * sizeof(ImageInstance)));
+        cmd->SetGraphicsRootShaderResourceView(2, gva);
         cmd->DrawInstanced(4, (uint)count, 0, 0);
         return count;
     }
@@ -315,8 +315,7 @@ float4 PSMain(VSOut i) : SV_Target
 
     public void Dispose()
     {
-        for (int f = 0; f < FrameCount; f++)
-            if (_instances[f] != null) { _instances[f]->Unmap(0, null); D3D12MemoryDiagnostics.Release(_instances[f], "Image.InstanceUpload"); _instances[f]->Release(); _instances[f] = null; }
+        // No instance buffers to release: the shared UploadArena owns them (disposed by the device).
         if (_quad != null) { D3D12MemoryDiagnostics.Release(_quad, "Image.QuadUpload"); _quad->Release(); _quad = null; }
         if (_pso != null) _pso->Release();
         if (_psoStencilTest != null) { _psoStencilTest->Release(); _psoStencilTest = null; }

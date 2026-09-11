@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
@@ -45,6 +45,7 @@ static class NavSuite
         ParkBeforeRenderChecks(strings);
         FreezeOnExitChecks(strings);
         UnparkReplayBudgetChecks(strings);
+        ParkMountInheritsParkedChecks(strings);
         NavRouterChecks(strings);
         GalleryChecks(strings);
         ActivationLifecycleChecks(strings);
@@ -628,6 +629,79 @@ static class NavSuite
                 && probeRanNow && liveAgain,
             $"mounted={mounted} whileParked={whileParked} firstFlush={firstFlush} (K={K}) dripFrames={frames} " +
             $"totalRenders={totalRenders} distinct={seen.Count}/{N} drained={drained} probeQueued={probeWasQueued} probeRanNow={probeRanNow} liveAgain={liveAgain}");
+    }
+
+    // gate.reconciler.park-mount-inherits-parked — NodeFlags.Parked must be inherited at Mount by EVERY node kind.
+    //
+    // The defect (a real Wavee crash: "UseRequiredContext<Services>: no provider for this context is in scope", ~6s
+    // after launch): a KeepAlive-parked page is DETACHED from the scene but its nodes stay IsLive, so a reactive
+    // boundary inside it still settles while parked — here a SkelRegion whose loadable goes Pending→Ready after the
+    // page parked. ReconcileSkeletonRegion → ReplaceSingleChild mounts the real branch's plain BoxEl wrapper as a
+    // FRESH node, and SceneStore.CreateNode zeroes a new node's flags. Parked used to be inherited only by
+    // MountComponent and only from the IMMEDIATE parent, so the wrapper lost the marker and the component one level
+    // below read parked=false: it skipped RunComponent's defer and rendered its first frame inside a subtree with no
+    // path to the scene root. ResolveContext walked up to the detached page root, found no provider, and
+    // UseRequiredContext threw. A plain UseContext in the same slot is the SILENT variant — it returns the context
+    // Default and, having subscribed to nothing, never corrects itself.
+    //
+    // Mount now inherits the marker for every element kind, so the contract this gate pins is the documented one
+    // (SetSubtreeParked's header): while parked the component defers, and the un-park walk — which descends the whole
+    // retained subtree, including nodes mounted while it was parked — unmarks it and replays exactly the owed render,
+    // once, now attached, so context resolves.
+    static void ParkMountInheritsParkedChecks(StringTable strings)
+    {
+        var scene = new SceneStore();
+        var recon = new TreeReconciler(scene, strings);
+        var route = new Signal<string>("a");
+        var pending = new Signal<bool>(true);      // the page's loadable: Pending at mount, flipped Ready while parked
+        var log = new ParkMountLog();
+        var svc = new ParkMountService("root-service");
+        var realBranch = NodeHandle.Null;
+
+        // The provider sits at the ROOT, above the KeepAlive boundary — exactly the app's shape.
+        recon.ReconcileRoot(
+            Ctx.Provide(ParkMountCtx.Slot, svc,
+                Flow.KeepAlive(() => route.Value, k => k,
+                    k => k == "a"
+                        ? Embed.Comp(() => new ParkMountPage(pending, log, n => realBranch = n))
+                        : (Element)new BoxEl { Width = 10f, Height = 10f },
+                    new KeepAliveOptions(MaxEntries: 2))),
+            null);
+        recon.Runtime.Flush();
+        bool shimmerFirst = log.Renders.Count == 0;   // Pending ⇒ the real branch (and its consumers) is not mounted yet
+
+        route.Value = "b";                            // park page "a" (cached, mounted, DETACHED)
+        recon.Runtime.Flush();
+
+        // THE EDGE: the parked page's skeleton region swaps shimmer→real. The consumers mount for the first time,
+        // detached, with no provider reachable from their anchor.
+        try { pending.Value = false; recon.Runtime.Flush(); }
+        catch (Exception ex) { log.Thrown = ex.GetType().Name + ": " + ex.Message; }
+
+        bool noThrow = log.Thrown is null;
+        int rendersWhileParked = log.Renders.Count;
+        bool deferredWhileParked = rendersWhileParked == 0;
+        bool wrapperMarked = !realBranch.IsNull && scene.IsLive(realBranch)
+                             && (scene.Flags(realBranch) & NodeFlags.Parked) != 0;
+
+        route.Value = "a";                            // un-park: the walk unmarks the whole subtree and replays the debt
+        recon.Runtime.Flush();
+
+        bool wrapperUnmarked = !realBranch.IsNull && scene.IsLive(realBranch)
+                               && (scene.Flags(realBranch) & NodeFlags.Parked) == 0;
+        int required = log.Renders.Count(e => e == "required@" + svc.Name);
+        int plain = log.Renders.Count(e => e == "plain@" + svc.Name);
+        bool renderedOnceEach = required == 1 && plain == 1 && log.Renders.Count == 2;
+        // The silent half: the tolerant consumer must never have observed the context DEFAULT, on any render.
+        bool plainNeverDefault = log.PlainObserved.Count == 1
+                                 && !log.PlainObserved.Contains(ParkMountCtx.Missing.Name);
+
+        Check("gate.reconciler.park-mount-inherits-parked a KeepAlive-parked page whose skeleton region swaps to real content WHILE PARKED mounts that content parked for every node kind: the context-reading components defer instead of rendering detached (no UseRequiredContext throw, no UseContext default), and un-park replays each exactly once with the root provider resolved",
+            shimmerFirst && noThrow && deferredWhileParked && wrapperMarked && wrapperUnmarked
+                && renderedOnceEach && plainNeverDefault,
+            $"shimmerFirst={shimmerFirst} thrown={log.Thrown ?? "<none>"} rendersWhileParked={rendersWhileParked} " +
+            $"wrapperMarked={wrapperMarked} wrapperUnmarked={wrapperUnmarked} required={required} plain={plain} " +
+            $"renders=[{string.Join(",", log.Renders)}] plainObserved=[{string.Join(",", log.PlainObserved)}]");
     }
 
     static void GalleryChecks(StringTable strings)

@@ -14,6 +14,7 @@ namespace FluentGpu.Engine.Tests;
 /// PcmAudioPlayer as a routed backend driving the MediaSignalSink. All deterministic — synthetic clock + null sink, ticked
 /// by hand; no device, no wall clock.
 /// </summary>
+[Collection(SerialTestCollection.Name)]   // the routed-backend case waits (bounded) on a real producer thread
 public sealed class AudioGraphTests
 {
     private static readonly ParamPlane Plane = new();

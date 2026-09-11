@@ -26,6 +26,13 @@ internal static class SkeletonDeriver
     {
         if (real.SkeletonOverride is { } custom) return custom;            // bespoke shimmer for this subtree
         if (real.SkeletonMode == SkeletonMode.Off) return Spacer(real, s); // keep the slot, no shimmer
+        // P1 presence (layout.md §4.7): a STATICALLY collapsed real node (Visible unbound and false) has nothing to
+        // shimmer — derive it to nothing (out of flow, like the real node), not a shimmer bar or even a same-size
+        // spacer. A BOUND Visible is left alone here: its resolved value isn't known at derive time (a construction-
+        // time, reconcile-edge pass — see the class doc), and the mounted node's own BindPresence effect governs
+        // collapse for the shimmer the same as it would for the real subtree.
+        if (!real.Visible.IsBound && !real.Visible.Value)
+            return new BoxEl { Visible = false, IsEnabled = false, HitTestVisible = false };
 
         switch (real)
         {

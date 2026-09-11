@@ -45,14 +45,11 @@ internal sealed unsafe class OpacityLayerCompositor : IDisposable
 {
     private const int MaxPool = 32;              // CANVAS-sized transient group slots + small REGION-sized blur-cache PINS (one pool)
     private const int PinBudget = 24;            // max retained region pins; guarantees ≥ MaxPool-PinBudget = 8 slots for transient scratch
-    // Weak (UMA/iGPU) tier trims transient canvas RTs after ~2 s (120 frames) instead of ~10 s (600) so the 22MB
-    // canvas scratch retires fast off the tiny LOCAL segment (adreno-hang-fixes.md M5). Discrete GPUs keep the 600.
-    private static readonly int TrimIdleFrames = GpuProfile.IsWeak ? 120 : 600;   // transient (canvas) free entries idle this long are retired (fence-gated)
-    // Weak tier caps the number of LIVE transient canvas RTs at 8. The pool array + descriptor heaps stay MaxPool(32)-
-    // sized so FrameBanking descriptor math is untouched; only the count of slots holding a resource is bounded (see
-    // TickPool). Discrete GPUs are uncapped (MaxPool). In-frame nesting can still transiently allocate up to MaxPool.
-    private static readonly int WeakTransientCap = GpuProfile.IsWeak ? 8 : MaxPool;
-    private const int PinTrimIdleFrames = 120;   // pins idle this long (~2 s of SUBMITTED frames) are retired — a stationary pin is FindPin-hit every submit, so only ORPHANS (a rect/σ a row left) climb to this
+    // The idle-trim / warm-reserve / weak-cap policy lives in the portable FluentGpu.Render.LayerTargetTrim (one source
+    // of truth with AcrylicCompositor + the headless gate.layerpool.* gates); TickPool below just walks the slots and
+    // applies its verdict. It is read PER TICK, never captured into a `static readonly`: GpuProfile.Tier is published
+    // during device init, and a static-readonly capture is evaluated at TYPE init — which for a compositor constructed
+    // by the device-init task graph can be either side of that write (and is always the Unknown default headless).
 
     private ID3D12Device* _device;
     private uint _w, _h;                      // canvas size (physical px) — transient slots match it; PINS are region-sized
@@ -91,8 +88,19 @@ internal sealed unsafe class OpacityLayerCompositor : IDisposable
         int Slot, int OriginX, int OriginY, int UsedW, int UsedH,
         SelfBlurPixelBox VisibleOutput);
 
-    private struct Retired { public ID3D12Resource* Res; public ulong Fence; }
+    private struct Retired { public ID3D12Resource* Res; public ulong Fence; public long Bytes; }
     private readonly List<Retired> _retired = new();
+
+    /// <summary>Move a slot's resource to the fence-gated release queue and clear the slot. The ONE retire chokepoint:
+    /// every eviction/trim/resize path goes through it, so the entry's `= default` (which zeroes the whole
+    /// <see cref="PoolEntry.SrvResByBank"/> tracking buffer — see its comment) and the retired entry's byte tally for
+    /// the census can never drift apart. Never Releases: <see cref="DrainRetired"/> does, once the fence has passed.</summary>
+    private void Retire(ref PoolEntry e)
+    {
+        if (e.Res == null) { e = default; return; }
+        _retired.Add(new Retired { Res = e.Res, Fence = e.LastUseFence, Bytes = LayerTargetBucket.Bytes((int)e.W, (int)e.H) });
+        e = default;
+    }
 
     private ID3D12DescriptorHeap* _rtvHeap;   // MaxPool RTVs (slot i)
     private ID3D12DescriptorHeap* _srvHeap;   // FrameBankDepth·MaxPool shader-visible SRVs, banked (bank·MaxPool + i)
@@ -118,9 +126,10 @@ internal sealed unsafe class OpacityLayerCompositor : IDisposable
     private ID3D12PipelineState* _edgeStripPso;   // write-through lerp(D, F, feather) over the fade strips — blend DISABLED
     private ID3D12RootSignature* _copyRoot;   // down/up sample: 8 root consts (src uv off+scale + clamp bounds) + SRV table + LINEAR sampler
     private ID3D12PipelineState* _copyPso;    // bilinear stretch copy (the downsample prefilter + the upsample; no blend — full overwrite)
-    private ID3D12RootSignature* _dsBlurRoot; // downsampled separable blur: 24 root consts (texel size, axis, usedFrac/maxUv, BuildKernel taps) + SRV + LINEAR
+    private ID3D12RootSignature* _dsBlurRoot; // separable blur: DsBlurConstCount root consts (texel size, axis, source sweep offset/scale, maxUv, BuildKernel taps) + SRV + LINEAR
     private ID3D12PipelineState* _dsBlurPso;  // separable gaussian at texelSigma over the DOWNSAMPLED scratch, unrolled 7 folded bilinear taps
-    private readonly float[] _blurTaps = new float[24];   // ds-blur consts: p0(texel.xy,dir.xy) + p1(usedFrac.xy,maxUv.xy) + o0/o1(offsets) + w0/w1(weights)
+    private const int DsBlurConstCount = 28;              // p0 + p1 + o0 + o1 + w0 + w1 + q0 (the source-sweep offset)
+    private readonly float[] _blurTaps = new float[DsBlurConstCount];   // ds-blur consts: see DsBlurHlsl's cbuffer
 
     /// <summary>Opacity groups composited this frame (diagnostics). The SUM of the four per-kind counters below.</summary>
     public int GroupsThisFrame { get; private set; }
@@ -198,6 +207,26 @@ internal sealed unsafe class OpacityLayerCompositor : IDisposable
     public int PooledRtCount
     {
         get { int n = 0; for (int i = 0; i < MaxPool; i++) if (_pool[i].Res != null) n++; return n; }
+    }
+
+    /// <summary>POOLED-vs-IN-USE byte split for the <c>gpu bytes</c> census (<see cref="LayerTargetCensus"/>): a pool
+    /// holding four idle canvas targets and one actively compositing four groups are the same single number in
+    /// <c>gpu bytes</c>, and on a UMA adapter that is the difference between a working-set bug and a working-set cost.
+    /// Fixed-bucket sums over MaxPool slots + the retire queue; called on the census sampler's cadence, not per frame.</summary>
+    public LayerTargetCensus TargetCensus
+    {
+        get
+        {
+            LayerTargetCensus c = default;
+            for (int i = 0; i < MaxPool; i++)
+            {
+                ref var e = ref _pool[i];
+                if (e.Res == null) continue;
+                c = c.WithSlot(LayerTargetBucket.Bytes((int)e.W, (int)e.H), e.InUse, e.PinHash != 0);
+            }
+            for (int i = 0; i < _retired.Count; i++) c = c.WithRetired(_retired[i].Bytes);
+            return c;
+        }
     }
 
     // Fullscreen-triangle composite: sample the group RT and scale ALL channels by the group alpha (premultiplied).
@@ -340,8 +369,13 @@ float4 CopyPS(V i) : SV_Target { float2 uv = clamp(os.xy + i.uv * os.zw, cl.xy, 
     // fetch at a fractional-texel offset (the fold); the weights already sum to 1, so no renormalize. Every sample is
     // clamped to the used sub-rect of the (bucket-quantized, possibly larger) pooled RT, like the acrylic Kawase passes.
     private const string DsBlurHlsl = """
-cbuffer C : register(b0) { float4 p0; float4 p1; float4 o0; float4 o1; float4 w0; float4 w1; };
-// p0.xy = 1/bucketSize, p0.zw = axis dir (1,0)|(0,1); p1.xy = usedFrac (used/bucket), p1.zw = maxUv (usedFrac - half texel);
+cbuffer C : register(b0) { float4 p0; float4 p1; float4 o0; float4 o1; float4 w0; float4 w1; float4 q0; };
+// p0.xy = 1/srcTexSize, p0.zw = axis dir (1,0)|(0,1); p1.xy = the SOURCE uv SCALE the target viewport's [0,1] sweep maps
+// onto, p1.zw = maxUv (the source's used sub-rect minus a half texel); q0.xy = the SOURCE uv OFFSET that sweep starts at.
+// (offset, scale) generalize the old "sweep == the source's usedFrac from 0": that identity only holds when the pass's
+// TARGET covers exactly the source's used region, which stopped being true once a canvas-sized group RT could be blurred
+// into a small bounded region scratch. Both are still derived from ONE AcrylicBackdropMath.SampleWindow of the SAMPLED
+// slot (gate.acrylic.sampleWindowPairing) — the offset/scale only say WHERE in that window this pass reads.
 // o0 = offsets[0..3] (o0.x = 0 center), o1 = offsets[4..6],pad; w0 = weights[0..3], w1 = weights[4..6],pad.
 Texture2D gSrc : register(t0);
 SamplerState gSamp : register(s0);
@@ -352,7 +386,7 @@ float4 BlurPS(V i) : SV_Target
 {
     float2 lo = p0.xy * 0.5;                  // half-texel clamp floor
     float2 mx = p1.zw;                        // usedFrac - half texel clamp ceil
-    float2 base = i.uv * p1.xy;               // viewport [0,1] → the used sub-rect
+    float2 base = q0.xy + i.uv * p1.xy;       // viewport [0,1] → the source sub-rect this pass reads
     float2 stp = p0.zw * p0.xy;               // one texel along the blur axis
     float4 acc = T(base, lo, mx) * w0.x;                                       // center (o0.x == 0)
     acc += (T(base + stp * o0.y, lo, mx) + T(base - stp * o0.y, lo, mx)) * w0.y;
@@ -459,7 +493,7 @@ float4 BlurPS(V i) : SV_Target
     {
         _copyRoot = BuildSampleRootSig(8, D3D12_FILTER.D3D12_FILTER_MIN_MAG_MIP_LINEAR, "OpacityLayer.CopyDsRootSig");
         _copyPso = BuildOverwritePso(_copyRoot, CopyDsHlsl, "CopyPS", "OpacityLayer.CopyDsPso");
-        _dsBlurRoot = BuildSampleRootSig(24, D3D12_FILTER.D3D12_FILTER_MIN_MAG_MIP_LINEAR, "OpacityLayer.DsBlurRootSig");
+        _dsBlurRoot = BuildSampleRootSig(DsBlurConstCount, D3D12_FILTER.D3D12_FILTER_MIN_MAG_MIP_LINEAR, "OpacityLayer.DsBlurRootSig");
         _dsBlurPso = BuildOverwritePso(_dsBlurRoot, DsBlurHlsl, "BlurPS", "OpacityLayer.DsBlurPso");
     }
 
@@ -754,8 +788,7 @@ float4 BlurPS(V i) : SV_Target
         {
             ref var e = ref _pool[i];
             if (e.Res == null || (e.W == w && e.H == h)) continue;
-            _retired.Add(new Retired { Res = e.Res, Fence = e.LastUseFence });
-            e = default;
+            Retire(ref e);
         }
     }
 
@@ -779,47 +812,59 @@ float4 BlurPS(V i) : SV_Target
     {
         for (int i = _retired.Count - 1; i >= 0; i--)
         {
-            if (_retired[i].Fence > completedFence) continue;
+            // THE fence rule (LayerTargetTrim.CanRelease): a retired resource is Released only once the frame fence has
+            // passed the value covering its last recorded use — so a trim can never free a surface a submit in flight
+            // still references, whatever the idle policy above decided.
+            if (!LayerTargetTrim.CanRelease(_retired[i].Fence, completedFence)) continue;
             D3D12MemoryDiagnostics.Release(_retired[i].Res, "OpacityLayer.Pool");
             _retired[i].Res->Release();
             _retired.RemoveAt(i);
         }
     }
 
+    /// <summary>True iff slot <paramref name="i"/> holds a CANVAS-sized transient surface — the expensive class
+    /// (window w·h·4) that <see cref="LayerTargetTrim.WarmCanvasReserve"/> protects and
+    /// <see cref="LayerTargetTrim.WeakCanvasHardCap"/> bounds. Bucketed region scratch and retained pins are not it.</summary>
+    private bool IsCanvasSlot(int i) => _pool[i].PinHash == 0 && _pool[i].W == _w && _pool[i].H == _h;
+
+    /// <summary>Recency rank of slot <paramref name="i"/> among the IDLE canvas-sized slots — 0 = most recently used.
+    /// Allocation-free O(MaxPool) scan; ties break on slot index so the rank is a TOTAL order (two slots can carry the
+    /// same fence when both were leased by the same frame, and a partial order would let two slots both believe they
+    /// are inside the warm reserve).</summary>
+    private int IdleCanvasRank(int i)
+    {
+        int rank = 0;
+        ulong f = _pool[i].LastUseFence;
+        for (int k = 0; k < MaxPool; k++)
+        {
+            if (k == i) continue;
+            ref var o = ref _pool[k];
+            if (o.Res == null || o.InUse || !IsCanvasSlot(k)) continue;
+            if (o.LastUseFence > f || (o.LastUseFence == f && k < i)) rank++;
+        }
+        return rank;
+    }
+
+    /// <summary>Per-frame idle upkeep on the fenced frame boundary: age every free slot, then apply
+    /// <see cref="LayerTargetTrim.Classify"/> and drain what the fence allows. Allocation-free.</summary>
     private void TickPool(ulong completedFence)
     {
+        bool weak = GpuProfile.IsWeak;
         for (int i = 0; i < MaxPool; i++)
         {
             ref var e = ref _pool[i];
             if (e.Res == null || e.InUse) continue;
-            int trimAt = e.PinHash != 0 ? PinTrimIdleFrames : TrimIdleFrames;   // pins reclaim fast (orphans), transient keeps the 10 s window
-            if (++e.IdleFrames <= trimAt) continue;
-            _retired.Add(new Retired { Res = e.Res, Fence = e.LastUseFence });
-            e = default;
+            e.IdleFrames++;
         }
-        // Weak (UMA) hard cap on live canvas RTs: retire the LRU idle unpinned transient slots beyond WeakTransientCap
-        // so idle 22MB scratch cannot pile onto the tiny LOCAL segment even before the idle timer elapses. Only idle,
-        // unpinned (PinHash==0) transient slots are touched — in-use (this frame's nesting) and region-cache pins are
-        // left intact, so the frame's actual nesting depth is always honored. Allocation-free. (adreno-hang-fixes.md M5.)
-        if (GpuProfile.IsWeak)
+        for (int i = 0; i < MaxPool; i++)
         {
-            int live = 0;
-            for (int i = 0; i < MaxPool; i++)
-                if (_pool[i].Res != null && _pool[i].PinHash == 0) live++;
-            while (live > WeakTransientCap)
-            {
-                int victim = -1;
-                for (int i = 0; i < MaxPool; i++)
-                {
-                    ref var e = ref _pool[i];
-                    if (e.Res == null || e.InUse || e.PinHash != 0) continue;
-                    if (victim < 0 || e.LastUseFence < _pool[victim].LastUseFence) victim = i;
-                }
-                if (victim < 0) break;   // all remaining transient slots are in-use this frame — honor the nesting
-                _retired.Add(new Retired { Res = _pool[victim].Res, Fence = _pool[victim].LastUseFence });
-                _pool[victim] = default;
-                live--;
-            }
+            ref var e = ref _pool[i];
+            if (e.Res == null) continue;
+            bool canvas = IsCanvasSlot(i);
+            int rank = canvas && !e.InUse ? IdleCanvasRank(i) : 0;
+            if (LayerTargetTrim.Classify(e.InUse, e.PinHash != 0, canvas, e.IdleFrames, weak, rank) != LayerTrimVerdict.Retire)
+                continue;
+            Retire(ref e);
         }
         DrainRetired(completedFence);
     }
@@ -898,8 +943,7 @@ float4 BlurPS(V i) : SV_Target
                     if (_pool[i].LastUseFence < _pool[slot].LastUseFence) slot = i;
                 }
                 if (slot < 0) throw new InvalidOperationException("opacity-layer pool exhausted (group nesting deeper than MaxPool)");
-                _retired.Add(new Retired { Res = _pool[slot].Res, Fence = _pool[slot].LastUseFence });
-                _pool[slot] = default;
+                Retire(ref _pool[slot]);
             }
             _pool[slot].Res = CreateTarget(_w, _h, $"OpacityLayer.Pool[{slot}]");
             RtCreatesThisFrame++;
@@ -1245,6 +1289,46 @@ float4 BlurPS(V i) : SV_Target
         return true;
     }
 
+    /// <summary>
+    /// Lease a BOUNDED target for a PLAIN OPACITY group — the same bucketed, shifted-viewport surface the region-local
+    /// self blur uses, but sized to the recorder's accumulated subtree DRAW extent
+    /// (<see cref="BoundedGroupRegion.Compute"/> over <see cref="PushLayerCmd.CompositeClip"/>) with no blur halo.
+    /// Returns false (leasing nothing) when the group must stay full-canvas: an UNPATCHED extent (the recorder could
+    /// not bound the subtree, so the extent is unknown), a degenerate box, or too little saving to be worth the
+    /// bucketed lease.
+    ///
+    /// <para><b>Nothing is lost by bounding the target.</b> <see cref="CompositeOpacity"/> has scissored the composite
+    /// to exactly this box since the patched-extent change, and <c>Acquire</c>'s partial clear has cleared exactly this
+    /// box — so subtree pixels outside it (a shadow halo that escaped the accumulated bounds) were already discarded by
+    /// the full-canvas path. What changes is only where those pixels live while they wait.</para>
+    ///
+    /// <para><b>PRECONDITIONS the caller must establish</b> (identical to the region-local blur's, plus one): no pooled
+    /// group open, and the subtree FLAT — and additionally STENCIL-FREE (<see cref="LayerSubtreeProbe"/>). A shifted
+    /// viewport has no valid mapping to the swapchain-sized stencil DSV, so a tier-3 path clip inside a bounded target
+    /// degrades to its plain scissor. The self-blur path accepts that degradation (documented, counted); a plain
+    /// opacity group is far more common than a self blur, so this path refuses the subtree instead.</para>
+    /// </summary>
+    public bool TryAcquireBoundedGroup(ID3D12GraphicsCommandList* cmd, ulong frameFence, in PushLayerCmd layer,
+        float scale, out LocalBlurSurface surface)
+    {
+        surface = default;
+        SelfBlurPixelBox box = BoundedGroupRegion.Compute(layer.CompositeClip, scale, (int)_w, (int)_h);
+        if (box.IsEmpty) return false;
+
+        int slot = AcquireScratch(cmd, box.Width, box.Height, frameFence);
+        Bind(cmd, slot);
+        var rtv = Rtv(slot);
+        // Clear the WHOLE leased surface: a best-fit lease can exceed the box and hold a previous lease's texels, and
+        // the composite's bilinear-free POINT sample still only reads [0,box), so this is belt-and-braces at the cost
+        // of a few hundred KiB of clear — orders of magnitude below the ~0.9 Mpx canvas clear it replaces.
+        _scratch4[0] = _scratch4[1] = _scratch4[2] = _scratch4[3] = 0f;
+        fixed (float* clear = _scratch4)
+            cmd->ClearRenderTargetView(rtv, clear, 0, null);
+
+        surface = new LocalBlurSurface(slot, box.MinX, box.MinY, box.Width, box.Height, box);
+        return true;
+    }
+
     /// <summary>Run the exact CPU-kernel separable Gaussian over a region-local animated-blur target.</summary>
     public void BlurLocalInPlace(ID3D12GraphicsCommandList* cmd, in LocalBlurSurface surface, float sigma, ulong frameFence)
     {
@@ -1273,9 +1357,24 @@ float4 BlurPS(V i) : SV_Target
         BlurWorkPixelsThisFrame += pixels * 2L;
     }
 
-    /// <summary>Composite the visible portion of a region-local blur at its screen position, sampling the matching
-    /// sub-rectangle of the bucketed source without stretching.</summary>
+    /// <summary>Composite the visible portion of a BOUNDED (region-local) group target at its screen position, sampling
+    /// the matching sub-rectangle of the bucketed source without stretching. Shared by the region-local self-blur and
+    /// the bounded plain-opacity group (<see cref="TryAcquireBoundedGroup"/>) — the two differ only in the census kind,
+    /// because the coordinate mapping is a property of the BOUNDED TARGET, not of what was drawn into it.
+    /// <para>The uv sub-rect comes from <see cref="LayerTargetMap.For"/> (portable, headless-gated as
+    /// <c>gate.layerpool.uv*</c>) rather than being spelled inline: it is against the SURFACE dims, never the used
+    /// extent — pool leases are best-fit, so the two differ — and getting it wrong does not fail loudly, it draws the
+    /// right pixels in the wrong place.</para></summary>
     public void CompositeLocalBlur(ID3D12GraphicsCommandList* cmd, in LocalBlurSurface surface, float alpha, RECT clip)
+        => CompositeBounded(cmd, in surface, alpha, clip, GroupKind.Blur);
+
+    /// <summary>The bounded plain-opacity group's composite: same mapping as <see cref="CompositeLocalBlur"/>, counted
+    /// as BOUNDED OPACITY so the `opgrp` split still separates it from the blur classes.</summary>
+    public void CompositeBoundedOpacity(ID3D12GraphicsCommandList* cmd, in LocalBlurSurface surface, float alpha, RECT clip)
+        => CompositeBounded(cmd, in surface, alpha, clip, GroupKind.BoundedOpacity);
+
+    private void CompositeBounded(ID3D12GraphicsCommandList* cmd, in LocalBlurSurface surface, float alpha, RECT clip,
+        GroupKind kind)
     {
         SelfBlurPixelBox output = surface.VisibleOutput;
         RECT box = new()
@@ -1298,14 +1397,12 @@ float4 BlurPS(V i) : SV_Target
         };
         cmd->RSSetViewports(1, &vp);
         cmd->RSSetScissorRects(1, &box);
-        float bw = _pool[surface.Slot].W, bh = _pool[surface.Slot].H;
-        CompositeUv(cmd, surface.Slot, alpha,
-            (output.MinX - surface.OriginX) / bw,
-            (output.MinY - surface.OriginY) / bh,
-            outW / bw,
-            outH / bh,
-            GroupKind.Blur, bounded: true);   // viewport + scissor are the visible output box — never a full-canvas blend
-        BlurCompositePixelsThisFrame += (long)(box.right - box.left) * (box.bottom - box.top);
+        LayerTargetUv uv = LayerTargetMap.For(surface.OriginX, surface.OriginY,
+            (int)_pool[surface.Slot].W, (int)_pool[surface.Slot].H, in output);
+        // viewport + scissor are the visible output box — never a full-canvas blend
+        CompositeUv(cmd, surface.Slot, alpha, uv.U0, uv.V0, uv.DU, uv.DV, kind, bounded: true);
+        if (kind == GroupKind.Blur)
+            BlurCompositePixelsThisFrame += (long)(box.right - box.left) * (box.bottom - box.top);
         SetViewport(cmd, _w, _h);
     }
 
@@ -1370,7 +1467,7 @@ float4 BlurPS(V i) : SV_Target
             if (e.Res == null || e.InUse || e.PinHash == 0) continue;
             if (v < 0 || e.LastUseFence < _pool[v].LastUseFence) v = i;
         }
-        if (v >= 0) { _retired.Add(new Retired { Res = _pool[v].Res, Fence = _pool[v].LastUseFence }); _pool[v] = default; }
+        if (v >= 0) Retire(ref _pool[v]);
     }
 
     /// <summary>True iff this self-blur's halo-inflated region is clamped by a CANVAS edge this frame — i.e. the
@@ -1414,8 +1511,7 @@ float4 BlurPS(V i) : SV_Target
         {
             ref var st = ref _pool[i];
             if (st.Res == null || st.InUse || st.PinHash != hash || (st.W == rw && st.H == rh)) continue;
-            _retired.Add(new Retired { Res = st.Res, Fence = st.LastUseFence });
-            st = default;
+            Retire(ref st);
         }
 
         int slot = -1;
@@ -1440,10 +1536,7 @@ float4 BlurPS(V i) : SV_Target
         }
         ref var e = ref _pool[slot];
         if (e.Res != null && (e.W != rw || e.H != rh))   // wrong-size RT (different region) → retire (fence-gated) + reallocate
-        {
-            _retired.Add(new Retired { Res = e.Res, Fence = e.LastUseFence });
-            e = default;
-        }
+            Retire(ref e);
         if (e.Res == null)
         {
             // NO CreateRenderTargetView here (unlike Acquire/AcquireScratch), by design: a pin is only ever a COPY DEST
@@ -1595,10 +1688,18 @@ float4 BlurPS(V i) : SV_Target
         BlurRegionPixelsThisFrame += regionPixels;
         if (down <= 1)
         {
-            int scratch = Acquire(cmd, frameFence);   // leased + cleared (WHOLE RT → transparent outside the scissor) + bound
             Span<float> exactOffsets = stackalloc float[AcrylicBackdropMath.MaxTapCount];
             Span<float> exactWeights = stackalloc float[AcrylicBackdropMath.MaxTapCount];
             int exactCount = AcrylicBackdropMath.BuildKernel(sigma, exactOffsets, exactWeights);
+            // Prefer a BOUNDED region scratch over a second CANVAS-sized lease. Pixel-identical (see the helper), and it
+            // is the difference between 2 canvas targets resident per small self-blur and 1 + a few hundred KiB.
+            if (TryBoundedExactBlur(cmd, groupSlot, frameFence, minX, minY, regionW, regionH, box, sigma,
+                    exactOffsets, exactWeights, exactCount))
+            {
+                BlurWorkPixelsThisFrame += regionPixels * 2L;
+                return;
+            }
+            int scratch = Acquire(cmd, frameFence);   // leased + cleared (WHOLE RT → transparent outside the scissor) + bound
             // pass H: group (SRV) → scratch (RT), clipped to the halo-inflated device rect
             BeginRead(cmd, groupSlot);
             Bind(cmd, scratch);
@@ -1619,6 +1720,7 @@ float4 BlurPS(V i) : SV_Target
         }
 
         // ── down > 1: downsample-then-separable-Gaussian-then-upsample ───────────────────────────────────────────────
+        // (the bounded-scratch helper for the down == 1 arm lives after this method — see TryBoundedExactBlur)
         int dw = Math.Max(1, (regionW + down - 1) / down);          // ceil(region / down) — the intermediate resolution
         int dh = Math.Max(1, (regionH + down - 1) / down);
         float texelSigma = AcrylicBackdropMath.EffectiveTexelSigma(sigma, 1f, down);   // = σ/down ≤ 4 (exact when < 4)
@@ -1675,7 +1777,87 @@ float4 BlurPS(V i) : SV_Target
         Release(a); Release(b);
     }
 
-    /// <summary>Lease a SMALL bucket-quantized (<see cref="AcrylicBackdropMath.BucketDim"/>) transient RT ≥ (w,h) for the
+    /// <summary>
+    /// The <c>down == 1</c> (σ ≤ 4) EXACT separable self-blur, run through a BOUNDED region scratch instead of the
+    /// second CANVAS-sized lease the arm used to take. Returns false (leasing nothing) when the bounded surface would
+    /// not be materially smaller than the canvas, and the caller falls through to the legacy canvas path unchanged.
+    ///
+    /// <para><b>Why it was worth changing.</b> The exact arm already confines both Gaussian passes to the halo-inflated
+    /// <c>RegionBox</c> scissor — a one-line lyric's ~340×120 strip — yet it leased a full canvas RT (3.5 MiB at
+    /// 1195×767) purely as the ping-pong target for it, cleared all ~0.9 Mpx of it, and left it in the pool afterwards.
+    /// On a UMA adapter that surface is resident host memory for as long as the pool holds it. A bounded lease is a few
+    /// hundred KiB and buckets so tightly that a scrolling row reuses one slot frame after frame.</para>
+    ///
+    /// <para><b>Why it is PIXEL-IDENTICAL, not merely close.</b> Three properties, all load-bearing:</para>
+    /// <list type="number">
+    /// <item>Both surfaces are unscaled and 1:1 with the canvas, so a texel step is a pixel step and the kernel's tap
+    /// offsets (which are in texels) reach exactly as far as they did over the canvas scratch.</item>
+    /// <item>The scratch is the region inflated by a FULL guard band (<see cref="SelfBlurRegion.TapRadius"/> + 1 px for
+    /// the bilinear ceil), the WHOLE leased surface is cleared transparent, and the H pass is scissored to the region's
+    /// image inside it — so every texel the V pass can reach beyond the region is transparent, which is precisely what
+    /// the canvas scratch's whole-RT clear provided outside its scissor.</item>
+    /// <item>Beyond the guard band the sampler clamps to the guard band's own (transparent) edge texel, so even the
+    /// clamp returns the same value the canvas path's clamp did.</item>
+    /// </list>
+    /// It is still a GPU change with no headless framebuffer behind it, so the pixel claim is a <c>--screenshot</c> /
+    /// live-run check; the coordinate mapping it rests on is headless-gated through
+    /// <see cref="LayerTargetMap.Sweep"/> (<c>gate.layerpool.sweep*</c>).
+    /// </summary>
+    private bool TryBoundedExactBlur(ID3D12GraphicsCommandList* cmd, int groupSlot, ulong frameFence,
+        int minX, int minY, int regionW, int regionH, RECT box, float sigma,
+        ReadOnlySpan<float> off, ReadOnlySpan<float> wgt, int nt)
+    {
+        int guard = SelfBlurRegion.TapRadius(sigma) + 1;
+        int gx = minX - guard, gy = minY - guard;
+        int gw = regionW + guard * 2, gh = regionH + guard * 2;
+        if (gw <= 0 || gh <= 0) return false;
+        // No material saving ⇒ the legacy canvas lease is the better trade (it needs no extra clear and keeps the
+        // canvas slot warm for the next group). Same ratio the bounded plain-opacity group uses.
+        if ((long)LayerTargetBucket.Dim(gw) * LayerTargetBucket.Dim(gh) * BoundedGroupRegion.MinAreaSavingRatio
+            > (long)_w * _h)
+            return false;
+
+        int groupW = (int)_pool[groupSlot].W, groupH = (int)_pool[groupSlot].H;
+        BeginRead(cmd, groupSlot);                       // barrier BEFORE rebinding, like the canvas path
+        int scratch = AcquireScratch(cmd, gw, gh, frameFence);
+        int texW = (int)_pool[scratch].W, texH = (int)_pool[scratch].H;
+
+        // Clear the WHOLE leased surface (not just the guarded box): a best-fit lease can be larger than (gw,gh) and
+        // still hold a previous lease's texels, and the V pass's clamp reads the surface edge.
+        Bind(cmd, scratch);
+        var srtv = Rtv(scratch);
+        _scratch4[0] = _scratch4[1] = _scratch4[2] = _scratch4[3] = 0f;
+        fixed (float* clear = _scratch4)
+            cmd->ClearRenderTargetView(srtv, clear, 0, null);
+        BlurClearPixelsThisFrame += (long)texW * texH;
+
+        // pass H: group (canvas SRV) → scratch. The viewport spans the GUARDED box, so [0,1] maps onto it; the scissor
+        // is the REGION's image in scratch-local coordinates, so only the strip the canvas path wrote is written here.
+        var groupWin = AcrylicBackdropMath.SampleWindow.For(groupW, groupH, groupW, groupH);
+        SetViewport(cmd, (uint)gw, (uint)gh);
+        RECT local = new() { left = guard, top = guard, right = guard + regionW, bottom = guard + regionH };
+        cmd->RSSetScissorRects(1, &local);
+        DsBlurPass(cmd, groupSlot, in groupWin, LayerTargetMap.Sweep(gx, gy, groupW, groupH, gw, gh),
+            1f, 0f, off, wgt, nt);
+
+        // pass V: scratch (SRV) → group (RT). Full-canvas viewport + the canvas-space region scissor (both unchanged
+        // from the legacy arm, so the caller's tail state is identical); the sweep maps canvas pixel p → scratch texel
+        // p − (gx,gy), i.e. exactly the texel the H pass wrote for p.
+        var scratchWin = AcrylicBackdropMath.SampleWindow.For(texW, texH, gw, gh);
+        BeginRead(cmd, scratch);
+        Bind(cmd, groupSlot);
+        SetViewport(cmd, _w, _h);
+        RECT region = box;
+        cmd->RSSetScissorRects(1, &region);
+        DsBlurPass(cmd, scratch, in scratchWin, LayerTargetMap.Sweep(-gx, -gy, texW, texH, (int)_w, (int)_h),
+            0f, 1f, off, wgt, nt);
+
+        BeginRead(cmd, groupSlot);                       // leave the group readable for the caller's composite
+        Release(scratch);
+        return true;
+    }
+
+    /// <summary>Lease a SMALL bucket-quantized (<see cref="LayerTargetBucket"/>) transient RT ≥ (w,h) for the
     /// downsample-blur scratch — distinct from the canvas-sized <see cref="Acquire"/> (which the down==1 blur binds) and
     /// from region PINS. Kept in the shared pool as a transient entry (PinHash 0) with a NON-canvas size, so the canvas
     /// <see cref="Acquire"/>'s <c>W==_w &amp;&amp; H==_h</c> reuse guard never grabs it and this never grabs a canvas slot; a
@@ -1688,7 +1870,11 @@ float4 BlurPS(V i) : SV_Target
     /// (<see cref="AcrylicBackdropMath.SampleWindow"/>) — never from a sibling lease.</para></summary>
     private int AcquireScratch(ID3D12GraphicsCommandList* cmd, int w, int h, ulong frameFence)
     {
-        int bw = AcrylicBackdropMath.BucketDim(w), bh = AcrylicBackdropMath.BucketDim(h);
+        // LayerTargetBucket, not AcrylicBackdropMath.BucketDim: these boxes are DAMAGE extents in the few-hundred-px
+        // range, where next-power-of-two wastes up to 4× the area (a 364×144 guarded strip → 512×256). The acrylic pool
+        // keeps the power-of-two ladder because its dual-Kawase pyramid halves each level. Reuse survives the finer
+        // ladder because the lease below is BEST-FIT ≥ the bucket, so a larger free slot still serves a smaller request.
+        int bw = LayerTargetBucket.Dim(w), bh = LayerTargetBucket.Dim(h);
         int best = -1;
         for (int i = 0; i < MaxPool; i++)
         {
@@ -1713,8 +1899,7 @@ float4 BlurPS(V i) : SV_Target
                     if (_pool[i].LastUseFence < _pool[slot].LastUseFence) slot = i;
                 }
                 if (slot < 0) throw new InvalidOperationException("opacity-layer scratch pool exhausted");
-                _retired.Add(new Retired { Res = _pool[slot].Res, Fence = _pool[slot].LastUseFence });
-                _pool[slot] = default;
+                Retire(ref _pool[slot]);
             }
             _pool[slot].Res = CreateTarget((uint)bw, (uint)bh, $"OpacityLayer.Scratch[{slot}]");
             RtCreatesThisFrame++;
@@ -1762,19 +1947,34 @@ float4 BlurPS(V i) : SV_Target
     private void DsBlurPass(ID3D12GraphicsCommandList* cmd, int srcSlot, int usedW, int usedH,
         float dirX, float dirY, ReadOnlySpan<float> off, ReadOnlySpan<float> wgt, int nt)
     {
+        var win = AcrylicBackdropMath.SampleWindow.For((int)_pool[srcSlot].W, (int)_pool[srcSlot].H, usedW, usedH);
+        // The IDENTITY sweep: this pass's target covers exactly the source's used region, so the viewport's [0,1]
+        // maps onto [0, usedFrac] — the historical, byte-identical constant block.
+        DsBlurPass(cmd, srcSlot, in win, new LayerTargetUv(0f, 0f, win.UsedFracX, win.UsedFracY), dirX, dirY, off, wgt, nt);
+    }
+
+    /// <summary>The sweep-aware core. <paramref name="sweep"/> says which sub-rect of the SAMPLED slot's window the
+    /// target viewport's [0,1] maps onto (<see cref="LayerTargetMap.Sweep"/>) — the identity wrapper above keeps every
+    /// same-size pass byte-identical, and the bounded region-scratch blur uses a real offset/scale so a canvas-sized
+    /// group RT can be blurred through a small bounded scratch. <paramref name="win"/> must come from the SAMPLED
+    /// slot's own dims (the sampleWindowPairing contract) — it is passed in, not re-derived, so the caller cannot pair
+    /// one lease's window with another's sweep.</summary>
+    private void DsBlurPass(ID3D12GraphicsCommandList* cmd, int srcSlot, in AcrylicBackdropMath.SampleWindow win,
+        in LayerTargetUv sweep, float dirX, float dirY, ReadOnlySpan<float> off, ReadOnlySpan<float> wgt, int nt)
+    {
         ID3D12DescriptorHeap* h = _srvHeap;
         cmd->SetDescriptorHeaps(1, &h);
         cmd->SetGraphicsRootSignature(_dsBlurRoot);
         cmd->SetPipelineState(_dsBlurPso);
-        var win = AcrylicBackdropMath.SampleWindow.For((int)_pool[srcSlot].W, (int)_pool[srcSlot].H, usedW, usedH);
         var s = _blurTaps;
         s[0] = win.TexelW; s[1] = win.TexelH; s[2] = dirX; s[3] = dirY;             // p0
-        s[4] = win.UsedFracX; s[5] = win.UsedFracY; s[6] = win.MaxU; s[7] = win.MaxV;   // p1 (usedFrac, maxUv)
+        s[4] = sweep.DU; s[5] = sweep.DV; s[6] = win.MaxU; s[7] = win.MaxV;         // p1 (sweep scale, maxUv)
         for (int k = 0; k < 8; k++) { s[8 + k] = 0f; s[16 + k] = 0f; }        // o0/o1 + w0/w1 (unused taps → 0)
         for (int k = 0; k < nt; k++) { s[8 + k] = off[k]; s[16 + k] = wgt[k]; }
+        s[24] = sweep.U0; s[25] = sweep.V0; s[26] = 0f; s[27] = 0f;                 // q0 (sweep offset)
         fixed (float* c = s)
         {
-            cmd->SetGraphicsRoot32BitConstants(0, 24, c, 0);
+            cmd->SetGraphicsRoot32BitConstants(0, DsBlurConstCount, c, 0);
             cmd->SetGraphicsRootDescriptorTable(1, SrvGpu(PoolSrvSlot(srcSlot)));
             cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY.D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             cmd->DrawInstanced(3, 1, 0, 0);

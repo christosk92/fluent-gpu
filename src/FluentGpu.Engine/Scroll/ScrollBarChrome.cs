@@ -84,6 +84,14 @@ public sealed class ScrollBarChrome
     private readonly List<int> _active = new();
     private readonly HashSet<int> _member = new();
     private readonly HashSet<int> _parked = new();   // KeepAlive-parked: excluded from Tick
+    private int _needsFrameCount;                    // see NeedsFrame — snapshot taken at the end of the last Tick()
+    private float _nextDeadlineMs = float.PositiveInfinity;  // see NextDeadlineMs
+    /// <summary>Set the instant a row transitions into needing a tick (a REAL PointerOver/PointerOverScrollbar
+    /// flip, or any <see cref="NotifyMoved"/>(true)), cleared at the top of the next <see cref="Tick"/>. See
+    /// <see cref="NeedsFrame"/>'s remarks — this is what makes a fresh reveal wake the loop on the SAME frame it
+    /// happens, instead of one frame late (which would mean it never wakes at all, since nothing else asks for a
+    /// frame in between).</summary>
+    private bool _armedSinceTick;
 
     public ScrollBarChrome(SceneStore scene) => _scene = scene;
 
@@ -93,24 +101,68 @@ public sealed class ScrollBarChrome
     /// motion itself.</summary>
     public uint FrameIndex { get; set; }
 
-    /// <summary>True while any viewport has a pending timer/track (a live conscious cycle) — the host's wake-reason
-    /// gate ORs this in alongside the kernel's own ActiveCount.</summary>
+    /// <summary>True while any viewport has a pending timer/track (a live conscious cycle) — membership only, i.e.
+    /// a row can be <see cref="Active"/> for one frame purely because something re-<see cref="Arm"/>ed it (a hover
+    /// poll re-affirming an UNCHANGED PointerOver, or <see cref="NotifyMoved"/>) even though, once <see cref="Tick"/>
+    /// actually runs, it settles straight back out with nothing left to animate. NOT a wake signal by itself — use
+    /// <see cref="NeedsFrame"/> for that (scroll-v3 idle-power finding: a parked cursor over a hovered, fully
+    /// faded-in, idle bar must not hold the render loop awake forever). Kept for existing non-wake callers
+    /// (diagnostics/census) that want raw membership.</summary>
     public bool Active => _active.Count > 0;
 
     /// <summary>Count of viewports with a live conscious cycle — the chrome half of the combined scroll-animator
     /// census (<c>AppHost.ScrollActiveCensus</c> = kernel <c>ActiveCount</c> + this), since a revealed-but-
     /// motionless bar (armed purely by hover, or by <see cref="NotifyMoved"/> after the kernel body itself already
-    /// settled) is invisible to the kernel's own count.</summary>
+    /// settled) is invisible to the kernel's own count. Raw membership — see <see cref="Active"/>'s remarks on why
+    /// this is not the wake signal.</summary>
     public int Count => _active.Count;
+
+    /// <summary>Wake-purposed signal, a strict subset of <see cref="Active"/>: true iff there is real chrome work
+    /// pending RIGHT NOW — either (a) <see cref="_armedSinceTick"/>: a genuine state transition happened since the
+    /// last <see cref="Tick"/> (a REAL PointerOver/PointerOverScrollbar flip via <see cref="SetPointerOver"/>, or
+    /// any <see cref="NotifyMoved"/>(true)) that <see cref="Tick"/> has not yet had a chance to process, or (b) as of
+    /// the end of the last <see cref="Tick"/>, at least one row still has work pending — moving this frame, an
+    /// in-flight fade or expand/contract track, or an unsettled dwell timer counting toward the expand or hide
+    /// thresholds (exactly <see cref="Tick"/>'s own "keep it armed" predicate, the negation of its <c>Drop</c>
+    /// condition: <c>!movingNow &amp;&amp; expandSettled &amp;&amp; fadeSettled &amp;&amp; !dwellPending</c>).
+    /// <para>Term (a) exists because term (b) alone is a snapshot from the END of the PREVIOUS <see cref="Tick"/> —
+    /// without it, a fresh reveal (pointer just entered a scrollable viewport, or a wheel notch just landed) would
+    /// report false until AFTER a <see cref="Tick"/> ran, but the whole point of this property is to tell the host
+    /// WHETHER to run one: nothing would ever wake the loop for the very first frame of a reveal. Term (a) is
+    /// change-gated, not membership-gated (see <see cref="SetPointerOver"/>'s <c>changed</c> check) — a hover
+    /// hit-test that re-reports an UNCHANGED PointerOver every frame does NOT set it, so a parked cursor resting
+    /// over an already-revealed, fully faded-in, idle bar still reports false (the scroll-v3 idle-power finding this
+    /// type exists to fix) even though such polling keeps re-<see cref="Arm"/>ing (and hence keeps <see cref="Active"/>
+    /// true).</para>
+    /// <see cref="AppHost.ComputeWakeReasons"/> should OR this in (not <see cref="Active"/>) for the scrollAnim
+    /// chrome term.</summary>
+    public bool NeedsFrame => _armedSinceTick || _needsFrameCount > 0;
+
+    /// <summary>Milliseconds until the earliest pending hide/away deadline among rows NOT counted in
+    /// <see cref="NeedsFrame"/> would fire (<see cref="float.PositiveInfinity"/> if none is pending) — snapshotted
+    /// at the end of the last <see cref="Tick"/>. A hovered idle bar has none (its IdleMs/AwayMs is held at 0 by
+    /// <c>over</c>, so nothing is counting down — see <see cref="NeedsFrame"/>'s remarks); the case this exists for
+    /// is a bar that just left hover/lane while still visible (fading out is already dwellPending ⇒ counted in
+    /// <see cref="NeedsFrame"/> and ticked every frame like today) — this is reserved for a future refinement where
+    /// that count-only-waiting state is ALSO pulled out of per-frame ticking in favor of one timer wake at the
+    /// deadline; today it is always <see cref="float.PositiveInfinity"/> because that state is still folded into
+    /// <see cref="NeedsFrame"/> (see the TODO on <see cref="Tick"/>). Exposed now so <c>AppHost</c>'s timer-wake
+    /// scheduling (<c>HostTimerQueue</c> or equivalent) has a seam to consume once that refinement lands, without a
+    /// second API change to this type.</summary>
+    public float NextDeadlineMs => _nextDeadlineMs;
 
     /// <summary>Hover state changed for this viewport (dispatcher's <c>UpdateScrollHover</c>): arms/keeps the node
     /// ticking until its conscious cycle fully settles.</summary>
     public void SetPointerOver(int node, bool over, bool overLane)
     {
         ref var row = ref _scene.ScrollChrome.GetOrAddRow(node);
+        bool changed = row.PointerOver != over || row.PointerOverScrollbar != overLane;
         row.PointerOver = over;
         row.PointerOverScrollbar = overLane;
         Arm(node);
+        // Only a REAL flip needs a frame — a hover-hit-test re-reporting the SAME over/overLane every frame must not
+        // perpetually re-dirty an already-settled, fully faded-in bar (see NeedsFrame's remarks).
+        if (changed) _armedSinceTick = true;
     }
 
     /// <summary>Called by <see cref="SceneScrollSink.Apply"/> for every kernel-touched node (see
@@ -132,6 +184,9 @@ public sealed class ScrollBarChrome
         ref var row = ref _scene.ScrollChrome.GetOrAddRow(node);
         row.MotionStamp = FrameIndex;
         Arm(node);
+        // moved is already gated to true-only by the early return above — every call reaching here is a genuine new
+        // event (a real scroll/wheel/touch delta), so it always needs a frame (see NeedsFrame's remarks).
+        _armedSinceTick = true;
     }
 
     /// <summary>KeepAlive-parked exclusion: a parked subtree's bar is frozen mid-cycle, not ticked or settled
@@ -156,6 +211,11 @@ public sealed class ScrollBarChrome
 
     public void Tick(float dtMs)
     {
+        // Consume the "armed since last Tick" latch — everything it was set for is about to be processed by this
+        // very call (the rows it named are, by construction, already members of _active via Arm). See NeedsFrame's
+        // remarks on why this must be a latch cleared here, not a live re-derivation.
+        _armedSinceTick = false;
+
         for (int i = _active.Count - 1; i >= 0; i--)
         {
             int node = _active[i];
@@ -251,6 +311,18 @@ public sealed class ScrollBarChrome
             if (!movingNow && expandSettled && fadeSettled && !dwellPending)
                 Drop(i, node, forget: fullyHidden);
         }
+
+        // NeedsFrame snapshot: every row still in _active at this point satisfies the negation of the Drop
+        // condition above (movingNow || !expandSettled || !fadeSettled || dwellPending) — i.e. it genuinely has
+        // work pending for the next frame. A row that was merely re-Arm()ed this frame (unchanged PointerOver from
+        // a hover poll, or a NotifyMoved with nothing left to animate) already settled back out of _active in the
+        // loop above, so it is correctly excluded here — see NeedsFrame's remarks.
+        _needsFrameCount = _active.Count;
+        // NextDeadlineMs: the "tick every frame just to notice a hide countdown" case is still folded into
+        // dwellPending/NeedsFrame above (no correctness regression — the countdown is still observed every frame,
+        // same as before this change), so there is nothing to schedule a one-shot timer wake FOR yet. Reserved for
+        // the refinement described on NextDeadlineMs.
+        _nextDeadlineMs = float.PositiveInfinity;
     }
 
     /// <summary>Retarget an eased track from the live value (mid-flight retargets stay continuous).</summary>

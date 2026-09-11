@@ -426,7 +426,12 @@ static class PathSuite
         in RectF bounds, string seedTag, out string detail)
     {
         if (bounds.W <= 0f || bounds.H <= 0f) { detail = "degenerate bounds — skipped"; return true; }
-        uint seed = (uint)(seedTag.GetHashCode() ^ 0x9E3779B9);
+        // string.GetHashCode is randomized per process, which made this gate sample different points on every run
+        // (2026-09-09: one run failed ring-nonzero with 1/1000, the previous seven passed). A stable FNV-1a seed
+        // makes a mismatch reproducible instead of a coin flip.
+        uint seed = 0x811C9DC5;
+        foreach (char c in seedTag) { seed ^= c; seed *= 0x01000193; }
+        seed ^= 0x9E3779B9;
         uint x = seed == 0 ? 1u : seed;
         float pad = 0.15f;
         float lo = -pad, hi = 1f + pad;

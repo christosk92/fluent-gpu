@@ -120,12 +120,30 @@ using static FluentGpu.VerticalSlice.Harness.Asserts;
         public Size2 SizePx => inner.SizePx;
         public void Resize(Size2 px) => inner.Resize(px);
         public void Present() => owner.Present(inner);
+        public bool HasPresentedContent => inner.HasPresentedContent;
         public void ConfigurePopupChrome(in PopupChromeMetrics m) => inner.ConfigurePopupChrome(in m);
         public void AnimatePopupOpen() => inner.AnimatePopupOpen();
         public void AnimatePopupClose() => inner.AnimatePopupClose();
         public bool PopupAnimating => inner.PopupAnimating;
         public void Dispose() => inner.Dispose();
     }
+
+// P1 presence (gate.presence.*): a UseInterval-driven counter under a node whose ancestor may collapse. Static Ticks
+// so the gate can read it from outside — reset at the top of each block that uses it (the suite runs this file once).
+sealed class PresenceIntervalProbe : Component
+{
+    public static int Ticks;
+    // UseActivation is edge-triggered (fires once per transition, independent of the HostTimerQueue's frame-clock
+    // cadence) — the deterministic half of the gate; Ticks corroborates that UseInterval itself (a UseIsActive
+    // consumer) actually stops advancing while hidden, not just that the activation edge fired.
+    public static int Activations, Deactivations;
+    public override Element Render()
+    {
+        UseInterval(() => Ticks++, 16f);
+        UseActivation(onActivated: () => Activations++, onDeactivated: () => Deactivations++);
+        return new BoxEl { Width = 10, Height = 10 };
+    }
+}
 
 static class LayoutShellSuite
 {
@@ -152,6 +170,7 @@ static class LayoutShellSuite
         WrapChecks(strings);
         WrapGrowChecks(strings);
         ConstrainedWrapChecks(strings);
+        WrapLineWidthChecks(strings);
         GridChecks(strings);
         GridOverflowChecks(strings);
         GridStretchChecks(strings);
@@ -164,6 +183,216 @@ static class LayoutShellSuite
         G3TokenChecks();
         G3AspectChecks(strings);
         G3PrimitiveChecks(strings);
+        PresenceChecks(strings);
+    }
+
+    // P1 (Operation ultra-fast GPU engine, layout.md §4.7): Element.Visible : Prop<bool> — the presence channel.
+    static void PresenceChecks(StringTable strings)
+    {
+        // ── gate.presence.static-collapse-removes-from-flow ──
+        {
+            var sb = LayoutTree(strings, new BoxEl
+            {
+                Direction = 0, Width = 300, Height = 40, Gap = 10,
+                Children =
+                [
+                    new BoxEl { Width = 40, Height = 20 },
+                    new BoxEl { Width = 40, Height = 20, Visible = false },
+                    new BoxEl { Width = 40, Height = 20 },
+                ],
+            });
+            var c0 = Child(sb, sb.Root, 0);
+            var c1 = Child(sb, sb.Root, 1);
+            var c2 = Child(sb, sb.Root, 2);
+            var r0 = sb.AbsoluteRect(c0);
+            var r1 = sb.AbsoluteRect(c1);
+            var r2 = sb.AbsoluteRect(c2);
+            Check("gate.presence.static-collapse-removes-from-flow: a statically Visible=false child is zero-sized and its siblings close the gap (no reserved margin/gap slot — true CSS display:none, not visibility:hidden)",
+                Near(r0.X, 0) && Near(r0.W, 40) && Near(r1.W, 0) && Near(r1.H, 0) && Near(r2.X, 50) && sb.IsCollapsed(c1) && !sb.IsCollapsed(c0),
+                $"r0=({r0.X:0.#},{r0.W:0.#}) r1=({r1.X:0.#},{r1.W:0.#},{r1.H:0.#}) r2=({r2.X:0.#},{r2.W:0.#}) collapsed(c1)={sb.IsCollapsed(c1)}");
+        }
+
+        // ── gate.presence.bound-flip-scoped ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("presence-bound", new Size2(300, 60), 1f)); window.Show();
+            var vis = new Signal<bool>(true);
+            NodeHandle mid = default, last = default;
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings,
+                new W0fStaticProbe
+                {
+                    Build = () => new BoxEl
+                    {
+                        Direction = 0, Width = 300, Height = 40, Gap = 10,
+                        Children =
+                        [
+                            new BoxEl { Width = 40, Height = 20 },
+                            new BoxEl { Width = 40, Height = 20, Visible = Prop.Of(() => vis.Value), OnRealized = h => mid = h },
+                            new BoxEl { Width = 40, Height = 20, OnRealized = h => last = h },
+                        ],
+                    },
+                });
+            host.RunFrame();
+            bool midCollapsedBefore = host.Scene.IsCollapsed(mid);
+            float lastXBefore = host.Scene.AbsoluteRect(last).X;
+            bool beforeVisible = !midCollapsedBefore && Near(lastXBefore, 100);
+            vis.Value = false;
+            var f = host.RunFrame();
+            bool midCollapsedAfter = host.Scene.IsCollapsed(mid);
+            float midWAfter = host.Scene.Bounds(mid).W;
+            float lastXAfter = host.Scene.AbsoluteRect(last).X;
+            bool afterCollapsed = midCollapsedAfter && Near(midWAfter, 0) && Near(lastXAfter, 50);
+            bool scoped = f.ComponentsRendered == 0;   // a bound Visible flip is a bind effect, not a component re-render
+            Check("gate.presence.bound-flip-scoped: flipping a bound Visible collapses the node and closes the flow gap with NO component re-render (bind-scoped, like Fill/Opacity)",
+                beforeVisible && afterCollapsed && scoped,
+                $"before(midCollapsed={midCollapsedBefore} lastX={lastXBefore:0.#}) after(midCollapsed={midCollapsedAfter} midW={midWAfter:0.#} lastX={lastXAfter:0.#}) componentsRendered={f.ComponentsRendered}");
+        }
+
+        // ── gate.presence.true-edge-seeds-enter ──
+        // Mounts VISIBLE (so the pre-existing mount-time Enter seed — WriteColumns' declarative-transition section,
+        // unconditional on isMount && Enter.Active — is the ordinary mount case, not what this gate is about) and lets
+        // it settle. Then a collapse + reveal cycle: the false→true edge must seed a FRESH Enter track (P1's job),
+        // proven by the track count going 0 (settled) → nonzero again right after the reveal frame.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("presence-enter", new Size2(200, 100), 1f)); window.Show();
+            var vis = new Signal<bool>(true);
+            NodeHandle target = default;
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings,
+                new W0fStaticProbe
+                {
+                    Build = () => new BoxEl
+                    {
+                        Width = 200, Height = 100,
+                        Children =
+                        [
+                            new BoxEl
+                            {
+                                Width = 40, Height = 40, Visible = Prop.Of(() => vis.Value),
+                                Enter = new EnterExit(Opacity: 0f, Active: true),
+                                OnRealized = h => target = h,
+                            },
+                        ],
+                    },
+                });
+            for (int i = 0; i < 40 && (i == 0 || host.Animation.HasActive); i++) host.RunFrame();   // mount Enter plays out + settles
+            bool settledAfterMount = !target.IsNull && !host.Animation.HasTracks(target);
+
+            vis.Value = false;
+            host.RunFrame();   // collapse — snaps, no exit track
+            bool collapsedNoTrack = host.Scene.IsCollapsed(target) && !host.Animation.HasTracks(target);
+
+            vis.Value = true;
+            host.RunFrame();   // the false→true edge — must seed a fresh Enter, like a mount
+            bool seeded = !host.Scene.IsCollapsed(target) && host.Animation.HasTracks(target);
+
+            Check("gate.presence.true-edge-seeds-enter: a bound Visible's false→true edge seeds the node's declared Enter, like a fresh mount",
+                settledAfterMount && collapsedNoTrack && seeded,
+                $"settledAfterMount={settledAfterMount} collapsedNoTrack={collapsedNoTrack} seededAfterEdge={seeded}");
+        }
+
+        // ── gate.presence.hidden-parks-timers ──
+        // UseActivation is edge-triggered (independent of the timer clock's real firing cadence, which the earlier
+        // ticks-only version of this gate found too imprecise to bound reliably) — a collapse must fire EXACTLY one
+        // onDeactivated, and the reveal exactly one onActivated, proving entry.Hidden folds into the SAME UseIsActive
+        // signal UseInterval already gates on (Ticks corroborates the interval itself stops advancing while hidden).
+        {
+            PresenceIntervalProbe.Ticks = 0;
+            PresenceIntervalProbe.Activations = 0;
+            PresenceIntervalProbe.Deactivations = 0;
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("presence-timer", new Size2(200, 100), 1f)); window.Show();
+            var vis = new Signal<bool>(true);
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings,
+                new W0fStaticProbe
+                {
+                    Build = () => new BoxEl
+                    {
+                        Width = 200, Height = 100,
+                        Children =
+                        [
+                            new BoxEl
+                            {
+                                Width = 40, Height = 40, Visible = Prop.Of(() => vis.Value),
+                                Children = [Embed.Comp(() => new PresenceIntervalProbe())],
+                            },
+                        ],
+                    },
+                });
+            for (int i = 0; i < 8; i++) host.RunFrame();
+            int ticksWhileVisible = PresenceIntervalProbe.Ticks;
+            bool tickedWhileVisible = ticksWhileVisible > 0;
+            bool noEdgeYet = PresenceIntervalProbe.Activations == 0 && PresenceIntervalProbe.Deactivations == 0;
+
+            vis.Value = false;
+            for (int i = 0; i < 4; i++) host.RunFrame();
+            bool deactivatedOnce = PresenceIntervalProbe.Deactivations == 1 && PresenceIntervalProbe.Activations == 0;
+            int ticksAtCollapse = PresenceIntervalProbe.Ticks;
+            for (int i = 0; i < 8; i++) host.RunFrame();
+            bool frozeWhileHidden = PresenceIntervalProbe.Ticks == ticksAtCollapse;
+
+            vis.Value = true;
+            for (int i = 0; i < 4; i++) host.RunFrame();
+            bool reactivatedOnce = PresenceIntervalProbe.Activations == 1 && PresenceIntervalProbe.Deactivations == 1;
+            // Ticks (informational only, not gated): the headless FixedFrameTimeSource's dt is throttle/resync-clamped
+            // when nothing else is animating (AppHost.cs ~3349-3357), so a UseInterval firing rate is NOT a reliable
+            // deterministic signal in this harness even outside presence — the edge-triggered UseActivation counts
+            // above are the gate's real proof that entry.Hidden reaches UseIsActive (and therefore UseInterval, which
+            // already guards its own tick on that same signal — RenderContext.Timers.cs's IntervalCell.Reconcile).
+            for (int i = 0; i < 40; i++) host.RunFrame();
+
+            Check("gate.presence.hidden-parks-timers: a presence collapse fires exactly one UseActivation onDeactivated; a reveal fires exactly one onActivated — entry.Hidden folds into the same UseIsActive signal UseInterval already gates its ticking on, without suspending the component's own render",
+                tickedWhileVisible && noEdgeYet && deactivatedOnce && frozeWhileHidden && reactivatedOnce,
+                $"ticksVisible={ticksWhileVisible} noEdgeYet={noEdgeYet} deactivatedOnce={deactivatedOnce} frozeWhileHidden={frozeWhileHidden} reactivatedOnce={reactivatedOnce} "
+                + $"(A={PresenceIntervalProbe.Activations} D={PresenceIntervalProbe.Deactivations} ticksAtCollapse={ticksAtCollapse} ticksNow={PresenceIntervalProbe.Ticks})");
+        }
+
+        // ── gate.presence.grid-cell-keeps-track — reuses gate 51's UniformGrid numbers (3 cols, gap 10, row 50, W=320):
+        // col0=x0 col1=x110 col2=x220, row2 y=60. A collapsed cell must NOT shift later cells into its track. ──
+        {
+            var g = LayoutTree(strings, Ui.UniformGrid(3, 10f, 50f,
+                new BoxEl { Fill = ColorF.FromRgba(10, 10, 10) },
+                new BoxEl { Fill = ColorF.FromRgba(20, 20, 20), Visible = false },
+                new BoxEl { Fill = ColorF.FromRgba(30, 30, 30) },
+                new BoxEl { Fill = ColorF.FromRgba(40, 40, 40) },
+                new BoxEl { Fill = ColorF.FromRgba(50, 50, 50) }) with { Width = 320, Height = 400 });
+            var grid = g.Root;
+            var b1 = g.AbsoluteRect(Child(g, grid, 1));   // the collapsed cell — col1, row0
+            var b2 = g.AbsoluteRect(Child(g, grid, 2));   // col2, row0 — must stay at col2's x, not slide into col1's
+            var b3 = g.AbsoluteRect(Child(g, grid, 3));   // col0, row1
+            var b4 = g.AbsoluteRect(Child(g, grid, 4));   // col1, row1
+            bool cellZeroed = Near(b1.W, 0) && Near(b1.H, 0);
+            bool trackKept = Near(b2.X, 220) && Near(b3.X, 0) && Near(b3.Y, 60) && Near(b4.X, 110) && Near(b4.Y, 60);
+            Check("gate.presence.grid-cell-keeps-track: a collapsed grid cell measures/arranges 0×0 but its track is NOT removed — later cells keep their row-major column/row (unlike Flex/Wrap/ZStack, which remove the child from flow entirely)",
+                cellZeroed && trackKept,
+                $"cell1(collapsed)=({b1.X:0.#},{b1.W:0.#},{b1.H:0.#}) cell2.X={b2.X:0.#} cell3=({b3.X:0.#},{b3.Y:0.#}) cell4=({b4.X:0.#},{b4.Y:0.#})");
+        }
+
+        // ── gate.presence.bindcontract-flip (DEBUG-only assertion; vacuous — reports "diag-off" — in a Release slice) ──
+        {
+            bool ok; string detail;
+            if (BindContract.CompiledIn)
+            {
+                bool wasEnabled = BindContract.Enabled, oldThrow = BindContract.ThrowOnViolation;
+                BindContract.Reset();
+                BindContract.Enabled = true;
+                BindContract.ThrowOnViolation = false;
+                var sig = new Signal<bool>(true);
+                var scene = new SceneStore();
+                new TreeReconciler(scene, strings).ReconcileRoot(new BoxEl
+                {
+                    Width = 10, Height = 10, MorphId = "gate-presence-hero", Visible = Prop.Of(() => sig.Value),
+                }, null);
+                ok = BindContract.Violations == 1 && BindContract.LastViolation is { } msg && msg.Contains("MorphId");
+                detail = $"violations={BindContract.Violations} last={BindContract.LastViolation}";
+                BindContract.Reset();
+                BindContract.Enabled = wasEnabled;
+                BindContract.ThrowOnViolation = oldThrow;
+            }
+            else { ok = true; detail = "diag-off"; }
+            Check("gate.presence.bindcontract-flip: a MorphId (shared-element) node that binds Visible is flagged by BindContract — a hero participant must stay mounted to fly",
+                ok, detail);
+        }
     }
 
     static AppHost DeviceLostHost(StringTable strings, DeviceLossProbeDevice device, out HeadlessPlatformApp app, out HeadlessWindow window,
@@ -935,6 +1164,40 @@ static class LayoutShellSuite
             $"caption={cap.W:0}x{cap.H:0} list=({list.X:0},{list.W:0},right={list.Right:0})");
     }
 
+    // Wrap children measure against the LINE width, never the leftover: a lone over-long MaxLines=1 + ellipsis
+    // run trims to the line instead of overflowing, and a break's measured height equals the arranged line count.
+    static void WrapLineWidthChecks(StringTable strings)
+    {
+        const string longRun = "MMMMMMMMMMMMMMMMMMMM";   // 20 × 10×0.55 = 110 > 80
+        var ell = LayoutTree(strings, new BoxEl
+        {
+            Direction = 0, Width = 80, Wrap = true, AlignItems = FlexAlign.Center, MinWidth = 0f,
+            Children =
+            [
+                new TextEl(longRun)
+                {
+                    Size = 10f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
+                },
+            ],
+        });
+        var et = ell.AbsoluteRect(Child(ell, ell.Root, 0));
+        Check("29e. wrap: a single MaxLines=1 + ellipsis part wider than the line measures at line width (no overflow)",
+            et.W <= 80.5f && et.W > 0f, $"textW={et.W:0.#}");
+
+        // 40+4+40 = 84 ≤ 100; 84+4+40 = 128 > 100 → two lines of 16 with a 4 gap = 36.
+        var brk = LayoutTree(strings, new BoxEl
+        {
+            Direction = 0, Width = 100, Wrap = true, Gap = 4f, AlignItems = FlexAlign.Center,
+            Children =
+            [
+                new BoxEl { Width = 40, Height = 16 }, new BoxEl { Width = 40, Height = 16 }, new BoxEl { Width = 40, Height = 16 },
+            ],
+        });
+        var b2 = brk.AbsoluteRect(Child(brk, brk.Root, 2));
+        var root = brk.AbsoluteRect(brk.Root);
+        Check("29f. wrap: measured height equals arranged line count × line height + gaps",
+            Near(root.H, 36) && Near(b2.Y, 20) && b2.X < 1f, $"rootH={root.H:0.#} b2=({b2.X:0.#},{b2.Y:0.#})");
+    }
     static void DetailResizeFlickerChecks(StringTable strings)
     {
         // Fix 1 — tier remount without cold stagger fills the viewport window in the remount frame.
@@ -968,7 +1231,7 @@ static class LayoutShellSuite
                 $"first={staggeredFirst}/{firstWindowRows} settled={staggeredSettled} remount={remountSlots} window={windowRows} first={sc.FirstRealized} last={sc.LastRealized}");
         }
 
-        // Fix 2 — modal-loop keep-alive must not swallow warming virtual refill when ambient animation is live.
+        // Fix 2 — modal-loop keep-alive must not swallow warming virtual refill when autonomous animation is live.
         {
             using var app = new HeadlessPlatformApp();
             var window = new HeadlessWindow(new WindowDesc("modal-warm", new Size2(400, 320), 1f, Composited: true));
@@ -986,14 +1249,17 @@ static class LayoutShellSuite
             int windowRows0 = sc0.LastRealized - sc0.FirstRealized;
             host.Animation.Keyframes(host.Scene.Root, AnimChannel.Opacity,
                 [new Keyframe(0f, 0.5f, Easing.Linear), new Keyframe(1f, 1f, Easing.Linear)], 1000f, loop: true);
-            bool ambient = host.CurrentWakeReasons.HasFlag(WakeReasons.Anim);
+            // The loop row IS the autonomous wake this gate is about. Pinned on the row's existence, not on the Anim
+            // wake BIT: that bit is now due-gated (set only on the frames the row's cadence actually falls on), so
+            // sampling it here would make the gate depend on which side of a 30 Hz edge the seed landed.
+            bool animLive = host.Animation.HasTracks(host.Scene.Root);
             window.InModalLoop = true;
-            window.SizedInModalLoop = false;   // titlebar move (not edge resize) — ambient ticks must still paint
+            window.SizedInModalLoop = false;   // titlebar move (not edge resize) — autonomous ticks must still paint
             host.Paint(0, keepAlive: true);
             int slots1 = BoundSlotCount(host.Scene, host.Scene.Root);
-            Check("RZ-MODAL. modal-loop keep-alive preserves/refills the visible virtual window under ambient-only animation wake",
-                ambient && slots0 >= windowRows0 && slots0 >= 8 && (warming ? slots1 > slots0 : slots1 >= slots0),
-                $"warming={warming} ambient={ambient} slots {slots0}→{slots1} window={windowRows0} wake={host.CurrentWakeReasons}");
+            Check("RZ-MODAL. modal-loop keep-alive preserves/refills the visible virtual window under autonomous-animation-only wake",
+                animLive && slots0 >= windowRows0 && slots0 >= 8 && (warming ? slots1 > slots0 : slots1 >= slots0),
+                $"warming={warming} animLive={animLive} slots {slots0}→{slots1} window={windowRows0} wake={host.CurrentWakeReasons}");
         }
     }
 
@@ -1088,7 +1354,8 @@ static class LayoutShellSuite
                 paints <= 4 && gapPaint, $"paints={paints} gapPaint={gapPaint} last={gapLast}");
         }
 
-        // RZ-MOVE — composited titlebar move: ambient animation ticks still submit; span reuse stays enabled.
+        // RZ-MOVE — composited titlebar move: autonomous animation ticks still submit; span reuse stays enabled.
+        // A titlebar move is not SizedInModalLoop, so the nothing-due bail never applies — every tick paints.
         {
             using var app = new HeadlessPlatformApp();
             var window = new HeadlessWindow(new WindowDesc("rz-move", new Size2(400, 320), 1f, Composited: true));
@@ -1105,13 +1372,17 @@ static class LayoutShellSuite
             window.SizedInModalLoop = false;
             var stats = host.Paint(0, keepAlive: true);
 
-            Check("RZ-MOVE. composited move keeps ambient modal ticks + span reuse",
+            Check("RZ-MOVE. composited move keeps autonomous-animation modal ticks + span reuse",
                 device.FrameCount > framesBefore && stats.Presented
                 && (stats.SpanReuseDisabledReasons & SpanReuseDisabledReason.ModalPaint) == 0,
                 $"frames {framesBefore}→{device.FrameCount} presented={stats.Presented} spanDisable={stats.SpanReuseDisabledReasons}");
         }
 
-        // RZ-MOVE2 — composited edge resize: ambient-only ticks bail; span reuse disabled for modal paint.
+        // RZ-MOVE2 — composited edge resize: a tick with nothing DUE bails; span reuse disabled for modal paint.
+        // The bail predicate is the row's own answer now (AnimEngine.NextDueMs > 0), not a host-side "is this ambient?"
+        // guess — so seed the loop and run ONE frame first, which puts the 30 Hz row between edges exactly as it would
+        // be on most WM_TIMER ticks of a real drag. A row that IS due (a one-shot layout transition mid-resize) keeps
+        // painting, which is the half of this behaviour RZ-MOVE covers.
         {
             using var app = new HeadlessPlatformApp();
             var window = new HeadlessWindow(new WindowDesc("rz-move2", new Size2(400, 320), 1f, Composited: true));
@@ -1123,12 +1394,15 @@ static class LayoutShellSuite
             host.RunFrame();
             host.Animation.Keyframes(host.Scene.Root, AnimChannel.Opacity,
                 [new Keyframe(0f, 0.5f, Easing.Linear), new Keyframe(1f, 1f, Easing.Linear)], 1000f, loop: true);
+            // Land BETWEEN the row's cadence edges: a freshly seeded row is owed its first frame (due now), so tick
+            // until it has one behind it and its next edge is in the future.
+            for (int i = 0; i < 4 && host.Animation.NextDueMs(host.FrameClockMsForTest) <= 0f; i++) host.RunFrame();
             int framesBefore = device.FrameCount;
             window.InModalLoop = true;
             window.SizedInModalLoop = true;
             var stats = host.Paint(0, keepAlive: true);
 
-            Check("RZ-MOVE2. composited edge resize bails ambient-only ticks + disables span reuse",
+            Check("RZ-MOVE2. composited edge resize bails a modal tick with no animation row DUE + disables span reuse",
                 device.FrameCount == framesBefore,
                 $"frames {framesBefore}→{device.FrameCount} (idle-skip expected)");
         }

@@ -2290,6 +2290,61 @@ static class OverlaySuite
                 $"kept={keptWhileFading} released={released} unconstrained={ordinaryInWindow} fallback={fallback}");
         }
 
+        // e4popup.3b — the windowed-popup REVEAL HANDSHAKE. A popup's pixels live in its OWN swapchain, composited
+        // under the frosted chrome (CompositionBackdrop: host-backdrop + tint sprites + the content sprite = this
+        // swapchain). The HWND is created HIDDEN and revealed only once that swapchain holds a content frame — and the
+        // evidence for that must be the swapchain's own HasPresentedContent, never "we called Present() and it did not
+        // throw": a backend STANDS DOWN for a covered / cloaked / hidden present target and paints nothing, which is
+        // exactly the state a not-yet-revealed popup is in. Revealing on the call (or, on the async path, on the
+        // publication SEQUENCE) showed the popup as its frosted plate with NO menu inside it — the reported
+        // "sometimes the account flyout is an empty panel" — and left the content to whatever later frame happened to
+        // arrive before the loop idled. HeadlessSwapchain.PresentStandDown models the backend stand-down; the host must
+        // (a) keep the window hidden and its open motion unplayed while nothing has been presented, (b) keep OWING a
+        // frame for it (WakeReasons.PopupAnim) so the paint lands even with the app otherwise idle, and (c) reveal +
+        // play the open motion on the frame the content actually presents.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("e4reveal", new Size2(480, 360), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice { StandDownPopupPresents = true };
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new OverlayProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var svc = root.Service!;
+
+            var hReveal = svc.Open(() => root.Anchor,
+                () => new BoxEl { Width = 200, Height = 120, Children = [new TextEl("reveal-body") { Size = 12f }] },
+                FlyoutPlacement.BottomLeft);
+            for (int i = 0; i < 5; i++) host.RunFrame();
+
+            var slot = host.PopupWindows.Count > 0 ? host.PopupWindows[0] : null;
+            var pal = app.PopupWindows.Count > 0 ? app.PopupWindows[0] : null;
+            var sc = slot?.Swapchain as HeadlessSwapchain;
+            bool leasedR = slot is not null && sc is not null && pal is not null;
+            // Nothing has reached the popup's composition surface: it stays hidden and its open motion is unplayed.
+            bool hiddenWhileUnpainted = sc is { PresentCount: 0, HasPresentedContent: false, PopupOpenPlayed: false }
+                && pal is { IsShown: false, ShowCount: 0 };
+            // …and the host still owes it a frame, so the content lands as soon as the target can present.
+            bool owesFrame = (host.CurrentWakeReasons & WakeReasons.PopupAnim) != 0;
+            // The subtree was recorded all along — the DrawList is complete; only the present was missing.
+            bool recordedAnyway = slot is not null && slot.DrawList.CommandCount > 0;
+
+            if (sc is not null) sc.PresentStandDown = false;
+            host.RunFrame();
+            bool revealedOnPaint = sc is { HasPresentedContent: true, PopupOpenPlayed: true } && sc.PresentCount >= 1
+                && pal is { IsShown: true, ShowCount: 1 };
+
+            hReveal.Close();
+            for (int i = 0; i < 20; i++) host.RunFrame();
+            bool releasedR = host.PopupWindows.Count == 0 && pal is { Disposed: true };
+
+            Check("e4popup.3b reveal handshake: a popup window stays hidden (and keeps a frame owed) until its OWN swapchain presents content — never a frosted plate with nothing in it",
+                leasedR && hiddenWhileUnpainted && owesFrame && recordedAnyway && revealedOnPaint && releasedR,
+                $"leased={leasedR} hidden={hiddenWhileUnpainted} owed={owesFrame} recorded={recordedAnyway} " +
+                $"revealed={revealedOnPaint} released={releasedR} presents={sc?.PresentCount ?? -1} shows={pal?.ShowCount ?? -1}");
+        }
+
         // e4popup.4 — the GetWorkArea seam through the host: the work-area query lands at the anchor's centre in
         // physical virtual-screen px (client origin + scale, IPlatformWindow.ClientOriginPx), the windowed popup
         // flips ABOVE because the MONITOR (not the viewport) has no room below, may take negative window-DIP Y
@@ -2608,7 +2663,7 @@ static class OverlaySuite
             // ToolTip registers its service wrapper as the overlay owner; root.Target is the wrapped content child.
             // KeepAlive parks the whole subtree, so model that real edge on the actual registered owner.
             var parkedOwner = host.Scene.Parent(root.Target);
-            host.Scene.Flags(parkedOwner) |= NodeFlags.Parked;
+            host.Scene.SetFlagBits(parkedOwner, NodeFlags.Parked);
             // The real KeepAlive path invokes this lifecycle phase from its already-awake transition frame. This probe
             // mutates the retained flag directly, so drive the same phase explicitly instead of relying on a leftover
             // tooltip fade to keep the otherwise-idle host awake.
@@ -2978,7 +3033,7 @@ static class OverlaySuite
             var plate = opened ? svc.Entries[0].PlateNode : default;
             // The hole must actually be in the record, or this gate proves nothing about video at all.
             RectF plateRect = opened ? host.Scene.AbsoluteRect(plate) : default;
-            bool holeSeen = opened && SceneRecorder.RectOverVideoHole(plateRect, 0.5f);
+            bool holeSeen = opened && SceneRecorder.RectOverVideoHole(host.Scene, plateRect, 0.5f);
 
             host.RunFrame();
             ColorF f1 = opened ? host.Scene.Paint(plate).Fill : default;
@@ -3061,12 +3116,12 @@ static class OverlaySuite
             // The published hole is the full 480x400 stage. Coverage is measured PER HOLE against the QUERY rect, so a
             // rect hanging 3/4 of the way off the bottom edge answers false while one inside answers true — the exact
             // sensitivity that makes a Dst-vs-SubtreeBounds swap flip the answer for an edge-straddling plate.
-            bool insideTrue = SceneRecorder.RectOverVideoHole(new RectF(100f, 100f, 100f, 40f), 0.5f);
-            bool straddleFalse = !SceneRecorder.RectOverVideoHole(new RectF(100f, 380f, 100f, 80f), 0.5f);
+            bool insideTrue = SceneRecorder.RectOverVideoHole(host.Scene, new RectF(100f, 100f, 100f, 40f), 0.5f);
+            bool straddleFalse = !SceneRecorder.RectOverVideoHole(host.Scene, new RectF(100f, 380f, 100f, 80f), 0.5f);
 
             root.ShowVideo.Value = false;   // the recorder's answer for this plate is now unambiguously FALSE
             for (int i = 0; i < 4; i++) host.RunFrame();
-            bool recorderFlipped = opened && !SceneRecorder.RectOverVideoHole(host.Scene.AbsoluteRect(plate), 0.5f);
+            bool recorderFlipped = opened && !SceneRecorder.RectOverVideoHole(host.Scene, host.Scene.AbsoluteRect(plate), 0.5f);
             bool stillLatched = opened && svc.Entries[0].VideoHoleLatched;
             bool stillFlat = opened && !host.Scene.TryGetAcrylic(plate, out _);
             ColorF afterFill = opened ? host.Scene.Paint(plate).Fill : default;
@@ -3719,7 +3774,7 @@ static class OverlaySuite
                 var scene = new SceneStore();
                 new TreeReconciler(scene, strings).ReconcileRoot(Tree(), null);
                 new FlexLayout(scene, fonts).Run(scene.Root);
-                scene.Flags(scene.Root) |= NodeFlags.HoverWithin;   // pointer anywhere in the strip
+                scene.SetFlagBits(scene.Root, NodeFlags.HoverWithin);   // pointer anywhere in the strip
                 var dl = new DrawList();
                 SceneRecorder.Record(scene, dl);
                 bool resting = FindFillCommand(dl, tint).Order >= 0;

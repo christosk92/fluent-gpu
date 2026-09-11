@@ -60,6 +60,46 @@ public sealed class RenderThreadLifecycleTests
         }
     }
 
+    // The present-slot wait (IGpuDevice.WaitForPresentSlot) must be paid BEFORE the frame is chosen — the whole point
+    // of the latency fix: the presented state is then the freshest one that existed when the slot opened, instead of one
+    // aged by the wait (the historical order waited inside submit, AFTER the acquire, which on a GPU costing most of a
+    // refresh meant every frame carried 5-8 ms of stale input). It must also NOT be paid on a turn that presents nothing:
+    // the waitable is a SEMAPHORE, so an unspent reservation would stall the next present by a whole present cycle.
+    [Fact]
+    public void PresentSlotWait_IsPaidBeforeTheFrameIsChosen_AndOnlyWhenOneIsPending()
+    {
+        ThreadGuard.BindCurrent(ThreadGuard.ThreadRole.Ui);
+        var seam = new SceneFramePublisher();
+        int waits = 0, submits = 0;
+        // Observed INSIDE the wait: the seam's last-consumed seq. This is the ordering proof, without racing a publish
+        // onto the render thread (Publish is UI-asserted, and force-sync has the UI blocked in DrainSync anyway). If the
+        // wait precedes TryAcquire this still reads the PREVIOUS seq; had it run after, it would already read this frame's.
+        ulong consumedSeenInWait = ulong.MaxValue;
+        var rt = new RenderThread(seam, _ => submits++, async: false,
+                                  presentSlotWait: () => { waits++; consumedSeenInWait = seam.LastConsumedSeq; });
+        try
+        {
+            Span<byte> one = stackalloc byte[] { 1 };
+            seam.Publish(one, default, default);            // seq 1 pending
+            rt.DrainSync();
+            Assert.Equal(1, submits);
+            Assert.Equal(1, waits);
+            Assert.Equal(0UL, consumedSeenInWait);          // nothing consumed yet ⇒ the wait preceded the acquire
+
+            // A bare wake with no publish presents nothing, so no slot may be reserved.
+            rt.DrainSync();
+            Assert.Equal(1, submits);
+            Assert.Equal(1, waits);
+
+            seam.Publish(one, default, default);            // seq 2
+            rt.DrainSync();
+            Assert.Equal(2, submits);
+            Assert.Equal(2, waits);
+            Assert.Equal(1UL, consumedSeenInWait);          // seq 1 consumed, seq 2 not yet ⇒ again before the acquire
+        }
+        finally { rt.Dispose(); }
+    }
+
     // The dedup contract in isolation: the consumer is idempotent across bare acquires (no intervening publish).
     [Fact]
     public void SceneFramePublisher_TryAcquire_DedupsAnAlreadyConsumedFrame()

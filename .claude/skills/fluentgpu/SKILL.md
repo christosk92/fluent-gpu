@@ -34,13 +34,16 @@ property *binding* is a finer one. **No full-app re-render, no global dirty flag
 ## Rules (these prevent ~90% of bugs)
 
 1. To make something update, a signal it **reads** must change. `.Value` subscribes; `.Peek()` does not.
-2. `Component.Render()` re-runs on its **own** state/context only — never because a parent re-rendered.
-   **Parent→child data flows via signals or context, never constructor args** (those freeze at mount).
+2. `Component.Render()` tracks its own signals/context and explicit re-pushed props. A parent re-render alone
+   does not rebuild an autonomous child. Deliver changing parent data through `Embed.Comp(props, factory)` /
+   `[Props]`, a stable signal/bind, or ambient context. Plain fields set only in a propless factory freeze at mount.
 3. There is ONE `Component` base (no `ReactiveComponent`). Every `Render()` is tracked; a render that reads no signals renders **once** — run-once is inferred, not a mode. In a run-once render, show dynamic values via a **bound prop** (`Text = sig` signal-direct, or `Text = Prop.Of(() => …)` for derived text),
    never `Ui.Text(sig.Value)`. (#1 mistake.)
 4. A bind thunk must read `.Value` (subscribes), not `.Peek()`.
 5. Every bindable channel is ONE `Prop<T>` prop taking a value, a `Func<T>` (`Prop.Of` for inline lambdas), or a concrete signal. Bound `Transform`/`Opacity`/`Fill` = compositor-only; bound `Width`/`Height`/`Text` = scoped relayout.
-   Prefer a transform bind for hot values.
+   Prefer a transform bind for hot values. `Visible : Prop<bool>` (on the base `Element`, every kind) is presence, not
+   paint — `false` COLLAPSES the node (out of layout flow, paint, hit-test; CSS `display:none`), it does not merely
+   fade it — for a visually-hidden-but-still-flowing box, bind `Opacity`/`HoverOpacity` instead.
 6. Never write a signal during render (loops). Use an event handler or `UseEffect`.
 7. Hooks run in stable call order (no hooks in `if`/loops).
 8. Scoped relayout needs a **boundary**: give big containers explicit `Width`+`Height`+`ClipToBounds=true` so a deep
@@ -55,6 +58,21 @@ property *binding* is a finer one. **No full-app re-render, no global dirty flag
     `Direction = 1` on it (`Controls/Responsive.cs:47`) or give the child `Grow = 1f, Shrink = 1f, MinWidth = 0f`
     (`Sidebar/Curated/SidebarOutlineView.cs:313-322`). Consuming a SHARED one — `Reorderable.Item`, `ToolTip.Wrap` — fix it
     at YOUR call site (`ToolTip.Wrap` carries an opt-in `grow:`); never flip a shared wrapper's axis for one caller.
+12. **A collapsed (`Visible = false`) node still renders — only its timers pause.** Presence and `Flow.KeepAlive`
+    parking are two edges into the SAME activation signal (`UseIsActive()`/`UseActivation()`): a component under a
+    collapsed ancestor keeps re-rendering (its props/binds keep settling) and `UseInterval` auto-pauses/resumes on
+    the edge (it already gates on `UseIsActive()`); `UseTimeout`/`UseKeyframes` do not consult it yet — don't rely on
+    them pausing under a collapsed subtree. Never put `MorphId` on a node whose `Visible` is bound — a shared-element
+    (Hero) participant must stay mounted to fly; `BindContract` DEBUG-asserts this (`layout.md` §4.7).
+13. **A virtualized row goes through `ItemsView.CreateBound<T>` + `BoundItemScope<T>`, not hand-rolled binds.** The
+    template runs ONCE per slot; every per-item value is `item.Text(...)`/`.Number(...)`/`.Color(...)`/`.Show(...)`/
+    `.Image(...)`/`.Spans(...)`/`.Duration(...)`/`.Value(...)`/`.Signal(...)` (each one closure, zero further
+    allocation on a rebind); handlers are `item.Invoke(...)`/`.InvokeSpan(...)` (resolve the CURRENT item at
+    invocation, never captured at build time). Frequent presence flip → `item.Show(sel)` (→ `Visible`); RARE/expensive
+    branch (spinner, marquee, drawer) → `item.ShowWhen(pred, build)` (`Flow.Show`, a real mount/unmount) — see the
+    snippet below and `virtualization.md` §3.4. Never format a number/duration/date inline in a bind thunk — route it
+    through `FormatCache.Int`/`.DurationMmSs` or a hoisted `FormatCache<TKey>` (one instance per call site, a static
+    field, never per-row).
 
 ## Author UI (cheat sheet)
 
@@ -96,6 +114,22 @@ signals it reads — no deps list; pass a `DepKey` only to over-scope); `UseRequ
 wrapping `BoxEl`; give the leaf child just `Color`/`HoverColor`. Cursor and hover-color resolution walk **up** the
 ancestor chain to the nearest explicit `Cursor`, so an unannotated `TextEl` inside a `Cursor=Hand` Box already works —
 see `docs/guide/pitfalls.md` and e.g. `ContextBand.Link`/`StageChrome.PivotLink`.
+
+**Typed bound virtualized row (Operation ultra-fast GPU engine, P3 — `virtualization.md` §3.4):**
+
+```csharp
+ItemsView.CreateBound(source, item => new BoxEl { Children = [
+    new TextEl(item.Number(t => t.Index)),
+    new TextEl(item.Text(t => t.Title)) { Color = item.Color(t => t.IsNow ? Tok.AccentTextPrimary : Tok.TextPrimary) },
+    new SpanTextEl(item.Spans((t, b) => b.Artists(t.Artists))) { OnSpanClick = item.InvokeSpan((t, i) => Go(t.Artists[i])) },
+    Icon(Icons.Movie) with { Visible = item.Show(t => t.HasVideo) },              // FREQUENT flip → Visible
+    item.ShowWhen(t => t.IsNow, () => Equalizer.Of(item.Signal(t => t.IsPlaying))),  // RARE/expensive → Flow.Show
+]}, layout, options);
+```
+
+`source` is a `BoundItemsSource<T>` (`BoundItems.From`/`.Project`); `options` an optional `ListOptions<T>` (its
+`ItemComparer` tunes the item-equality gate). The template runs ONCE per slot — every `item.*` call allocates
+one closure at that moment and nothing further on any later rebind/recycle.
 
 **Controls (one `X.Create` idiom; controlled-input contract — pass a signal + `onChange`, or none to auto-materialize):**
 `Button.Accent(label, onClick)` / `Button.Create(label, onClick, ButtonAppearance.Subtle, ControlSize.Small)`;

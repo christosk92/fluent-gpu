@@ -35,6 +35,9 @@ static class DamageSuite
         LayeredVideoRepaintChecks();
         TwoHoleRepaintChecks();
         SpanReuseEquivalenceChecks(strings);
+        SceneSnapshotChecks.Run();
+        PublicationGapChecks.Run();
+        CompositorAnimationChecks.Run();
     }
 
     // ── §5.1-B: the pure decision layer (RepaintPolicy / RepaintStreamSafety / RepaintCull) ──────────────────────────

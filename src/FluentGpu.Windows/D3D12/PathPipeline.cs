@@ -44,10 +44,11 @@ internal struct PathDrawItem
 /// SRV (t0) to that draw's <see cref="PathInstance"/> record (the same GVA-offset mechanism every SDF pipeline uses
 /// for its instance bank).
 ///
-/// <para><b>Deliberately v1-simple:</b> two <see cref="FrameCount"/>-deep, persistently-mapped UPLOAD buffers (VB +
-/// IB) sized for a fixed worst case, plus the SRV instance bank, all following
-/// <see cref="PolylineStrokePipeline.BuildBuffers"/>'s bank-by-frame-index + <c>_dropped</c>-on-overflow
-/// discipline verbatim — never a resize mid-frame. The GPU-resident-slab + per-vertex-PathIdx follow-up (one
+/// <para><b>Deliberately v1-simple:</b> the VB, the IB and the SRV instance records are all carved out of the
+/// device's shared per-frame <see cref="UploadArena"/> (one persistently-mapped UPLOAD buffer per frame-in-flight,
+/// begun under the frame fence) — so a frame that draws no path costs nothing, and the blocks are sized to measured
+/// demand instead of a static worst case, growing between frames only (never a resize mid-frame) with
+/// <c>_dropped</c>-on-overflow exactly as before. The GPU-resident-slab + per-vertex-PathIdx follow-up (one
 /// <c>DrawIndexed</c> per RUN instead of per path) is intentionally descoped; <see cref="DrawsThisFrame"/> /
 /// <see cref="UploadBytesThisFrame"/> exist so that decision is data-driven.</para>
 ///
@@ -63,9 +64,8 @@ internal struct PathDrawItem
 /// </summary>
 internal sealed unsafe class PathPipeline : IDisposable
 {
-    private const int FrameCount = D3D12Device.FrameBankDepth;      // banked per frame-in-flight (depth = D3D12Device.FrameBankDepth), same rationale as every sibling pipe
-    private const int MaxVertices = 16384; // 16 B/vtx ⇒ 256 KiB/frame worst case (a "few thousand vertices" per hero × headroom)
-    private const int MaxIndices = 32768;  // 4 B/idx ⇒ 128 KiB/frame worst case
+    private const int MaxVertices = 16384; // 16 B/vtx ⇒ 256 KiB/frame worst case (a "few thousand vertices" per hero × headroom) — the GROWTH CAP, not a standing reservation
+    private const int MaxIndices = 32768;  // 4 B/idx ⇒ 128 KiB/frame worst case — likewise the growth cap
     private const int MaxDraws = 512;      // instance records per frame (~40 draws/dialog per the design brief × headroom)
     private const int MapCapacity = 1024;  // power-of-two > MaxDraws so the fixed open-addressed dedupe map never fills at max distinct draws
 
@@ -84,19 +84,25 @@ internal sealed unsafe class PathPipeline : IDisposable
     private ID3D12PipelineState* _psoStencilIncr, _psoStencilDecr, _psoStencilTest;
     private bool _stencilPsosTried;
 
-    private readonly ID3D12Resource*[] _vb = new ID3D12Resource*[FrameCount];
-    private readonly PathVertex*[] _vbMapped = new PathVertex*[FrameCount];
-    private readonly D3D12_VERTEX_BUFFER_VIEW[] _vbView = new D3D12_VERTEX_BUFFER_VIEW[FrameCount];
-
-    private readonly ID3D12Resource*[] _ib = new ID3D12Resource*[FrameCount];
-    private readonly uint*[] _ibMapped = new uint*[FrameCount];
-    private readonly D3D12_INDEX_BUFFER_VIEW[] _ibView = new D3D12_INDEX_BUFFER_VIEW[FrameCount];
-
-    private readonly ID3D12Resource*[] _inst = new ID3D12Resource*[FrameCount];
-    private readonly PathInstance*[] _instMapped = new PathInstance*[FrameCount];
-
-    private int _active;
-    private ulong _instGva;
+    // Vertex + index + instance storage all come from the device's SHARED per-frame UploadArena (one persistently-
+    // mapped UPLOAD buffer per frame-in-flight) instead of three private FrameCount-deep buffers sized for a static
+    // worst case. A frame that draws NO path therefore costs nothing at all — which is most frames.
+    private UploadArena _arena = null!;
+    // The vertex/index blocks are ONE reservation each, taken at the first Begin of a frame (the VB/IB views must name
+    // a fixed base+size for the whole frame, so they cannot grow mid-frame — see UploadArena's lifetime rule). Their
+    // size tracks MEASURED demand: start small, grow toward MaxVertices/MaxIndices when a frame overflows, exactly the
+    // bounded-growth discipline the arena uses for its banks (and healed the same way — the device arms one more full
+    // repaint whenever anything was dropped).
+    private const int InitialVertices = 4096;   // 16 B/vtx ⇒ 64 KiB
+    private const int InitialIndices = 8192;    // 4 B/idx ⇒ 32 KiB
+    private int _geomVerts = InitialVertices, _geomIdx = InitialIndices;
+    private int _wantVerts = InitialVertices, _wantIdx = InitialIndices;
+    private PathVertex* _vtxBase;
+    private uint* _idxBase;
+    private D3D12_VERTEX_BUFFER_VIEW _vbView;
+    private D3D12_INDEX_BUFFER_VIEW _ibView;
+    private bool _geomReady;    // this frame's VB/IB blocks are reserved and bound
+    private bool _geomTried;    // …and we only attempt the reservation once per frame
     private int _vtxCursor, _idxCursor, _drawCursor;
     private int _dropped;
     private long _uploadBytes;
@@ -181,12 +187,12 @@ float4 PSStencilMask(VSOut i) : SV_Target
 }
 """;
 
-    public void Init(ID3D12Device* device, SdfSharedResources shared)
+    public void Init(ID3D12Device* device, SdfSharedResources shared, UploadArena arena)
     {
         _shared = shared;
         _device = device;
+        _arena = arena;
         BuildPipeline(device);
-        BuildBuffers(device);
     }
 
     private static void Check(HRESULT hr, string what)
@@ -361,91 +367,84 @@ float4 PSStencilMask(VSOut i) : SV_Target
         if (item.VtxCount <= 0 || item.IdxCount <= 0) return false;
         if (!EnsureStencilReady()) return false;
         if (_drawCursor >= MaxDraws) { _dropped++; return false; }
+        EnsureGeometry();                                    // this frame's VB/IB blocks (idempotent per frame)
+        if (!_geomReady) { _dropped++; return false; }
         if (!TryResolveOrUpload(item.VtxStart, item.VtxCount, item.IdxStart, item.IdxCount, out int vtxBase, out int idxBase))
         {
             _dropped++;
             return false;
         }
+        // Reserved BEFORE any command-list write so a full arena leaves the bound state untouched.
+        if (!_arena.TryReserve(sizeof(PathInstance), out byte* dst, out ulong gva)) { _dropped++; return false; }
 
         cmd->SetGraphicsRootSignature(_shared.RootSignature);
         _shared.SetViewportConstants(cmd, vpW, vpH);
         cmd->SetPipelineState(decr ? _psoStencilDecr : _psoStencilIncr);
         cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY.D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        var vbv = _vbView[_active];
+        var vbv = _vbView;
         cmd->IASetVertexBuffers(0, 1, &vbv);
-        var ibv = _ibView[_active];
+        var ibv = _ibView;
         cmd->IASetIndexBuffer(&ibv);
 
-        int slot = _drawCursor++;
-        _instMapped[_active][slot] = item.Inst;
-        cmd->SetGraphicsRootShaderResourceView(1, _instGva + (ulong)(slot * sizeof(PathInstance)));
+        _drawCursor++;
+        *(PathInstance*)dst = item.Inst;
+        cmd->SetGraphicsRootShaderResourceView(1, gva);
         cmd->DrawIndexedInstanced((uint)item.IdxCount, 1, (uint)idxBase, vtxBase, 0);
         return true;
     }
 
-    private void BuildBuffers(ID3D12Device* device)
-    {
-        for (int f = 0; f < FrameCount; f++)
-        {
-            uint vbBytes = (uint)(sizeof(PathVertex) * MaxVertices);
-            _vb[f] = CreateUpload(device, vbBytes, "Path.VertexUpload");
-            void* vp; _vb[f]->Map(0, null, &vp);
-            _vbMapped[f] = (PathVertex*)vp;   // persistently mapped
-            _vbView[f] = new D3D12_VERTEX_BUFFER_VIEW
-            {
-                BufferLocation = _vb[f]->GetGPUVirtualAddress(),
-                SizeInBytes = vbBytes,
-                StrideInBytes = (uint)sizeof(PathVertex),
-            };
-
-            uint ibBytes = (uint)(sizeof(uint) * MaxIndices);
-            _ib[f] = CreateUpload(device, ibBytes, "Path.IndexUpload");
-            void* ip; _ib[f]->Map(0, null, &ip);
-            _ibMapped[f] = (uint*)ip;
-            _ibView[f] = new D3D12_INDEX_BUFFER_VIEW
-            {
-                BufferLocation = _ib[f]->GetGPUVirtualAddress(),
-                SizeInBytes = ibBytes,
-                Format = DXGI_FORMAT.DXGI_FORMAT_R32_UINT,
-            };
-
-            uint instBytes = (uint)(sizeof(PathInstance) * MaxDraws);
-            _inst[f] = CreateUpload(device, instBytes, "Path.InstanceUpload");
-            void* instp; _inst[f]->Map(0, null, &instp);
-            _instMapped[f] = (PathInstance*)instp;
-        }
-    }
-
-    private static ID3D12Resource* CreateUpload(ID3D12Device* device, uint bytes, string name)
-    {
-        D3D12_HEAP_PROPERTIES hp = default;
-        hp.Type = D3D12_HEAP_TYPE.D3D12_HEAP_TYPE_UPLOAD;
-        D3D12_RESOURCE_DESC rd = default;
-        rd.Dimension = D3D12_RESOURCE_DIMENSION.D3D12_RESOURCE_DIMENSION_BUFFER;
-        rd.Width = bytes;
-        rd.Height = 1;
-        rd.DepthOrArraySize = 1;
-        rd.MipLevels = 1;
-        rd.Format = DXGI_FORMAT.DXGI_FORMAT_UNKNOWN;
-        rd.SampleDesc.Count = 1;
-        rd.Layout = D3D12_TEXTURE_LAYOUT.D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        ID3D12Resource* res;
-        Check(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_NONE, &rd,
-            D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_GENERIC_READ, null, __uuidof<ID3D12Resource>(), (void**)&res), "Path.CreateCommittedResource");
-        D3D12MemoryDiagnostics.Track(res, name, bytes);
-        return res;
-    }
-
-    /// <summary>Select this frame's VB/IB/instance bank (by back-buffer index — the same FrameCount-deep rotation
-    /// every sibling pipe uses, so writing this bank can never race a still-in-flight GPU read of frame N-1) and
-    /// reset every per-frame cursor, INCLUDING the dedupe map (cleared in place — no reallocation, no growth).</summary>
+    /// <summary>Reset every per-frame cursor, INCLUDING the dedupe map (cleared in place — no reallocation, no
+    /// growth), and adopt any vertex/index block growth a previous frame's overflow asked for. The arena banks
+    /// themselves are begun (and grown) by the device once per frame, under the frame fence.</summary>
     public void BeginFrame(int frameIndex)
     {
-        _active = ((frameIndex % FrameCount) + FrameCount) % FrameCount;
-        _instGva = _inst[_active]->GetGPUVirtualAddress();
+        _ = frameIndex;
+        _geomVerts = _wantVerts; _geomIdx = _wantIdx;   // growth lands between frames, never mid-frame
+        _geomReady = false; _geomTried = false;
+        _vtxBase = null; _idxBase = null;
         _vtxCursor = 0; _idxCursor = 0; _drawCursor = 0; _dropped = 0; _uploadBytes = 0;
         Array.Clear(_map, 0, MapCapacity);
         _mapCount = 0;
+    }
+
+    // Reserve THIS frame's vertex + index blocks from the shared arena — once, on the first Begin of the frame (the
+    // bound VB/IB views must stay valid until the frame's last flush executes). A refusal (the frame's whole upload
+    // budget is spent) leaves _geomReady false, so every Record this frame drops instead of drawing through an
+    // unbound/stale buffer; the arena has already folded the demand into its growth target.
+    private void EnsureGeometry()
+    {
+        if (_geomTried) return;
+        _geomTried = true;
+        int vbBytes = _geomVerts * sizeof(PathVertex);
+        int ibBytes = _geomIdx * sizeof(uint);
+        if (!_arena.TryReserve(vbBytes, out byte* vtx, out ulong vtxGva)) return;
+        if (!_arena.TryReserve(ibBytes, out byte* idx, out ulong idxGva)) return;
+        _vtxBase = (PathVertex*)vtx;
+        _idxBase = (uint*)idx;
+        _vbView = new D3D12_VERTEX_BUFFER_VIEW
+        {
+            BufferLocation = vtxGva,
+            SizeInBytes = (uint)vbBytes,
+            StrideInBytes = (uint)sizeof(PathVertex),
+        };
+        _ibView = new D3D12_INDEX_BUFFER_VIEW
+        {
+            BufferLocation = idxGva,
+            SizeInBytes = (uint)ibBytes,
+            Format = DXGI_FORMAT.DXGI_FORMAT_R32_UINT,
+        };
+        _geomReady = true;
+    }
+
+    // A frame overflowed its vertex/index block: remember a bigger one (at least double, capped at the static
+    // MaxVertices/MaxIndices worst case) for the NEXT frame. Bounded and monotonic — it never shrinks mid-session, so
+    // a page that once needed the full block keeps it.
+    private void DemandGeometry(int verts, int indices)
+    {
+        int wantV = Math.Min(MaxVertices, Math.Max(verts, _geomVerts * 2));
+        int wantI = Math.Min(MaxIndices, Math.Max(indices, _geomIdx * 2));
+        if (wantV > _wantVerts) _wantVerts = wantV;
+        if (wantI > _wantIdx) _wantIdx = wantI;
     }
 
     /// <summary>Enter the Path lane: bind the shared root signature (verbatim — same b0/t0 layout every SDF pipe
@@ -455,6 +454,7 @@ float4 PSStencilMask(VSOut i) : SV_Target
     /// why <c>NoteSdfPipeBind</c> would be wrong here).</summary>
     public void Begin(ID3D12GraphicsCommandList* cmd, float vpW, float vpH, bool stencilTest = false)
     {
+        EnsureGeometry();
         cmd->SetGraphicsRootSignature(_shared.RootSignature);
         _shared.SetViewportConstants(cmd, vpW, vpH);
         // Inside a tier-3 stencil scope the path lane draws through the EQUAL-tested clone (the device has already set
@@ -462,9 +462,12 @@ float4 PSStencilMask(VSOut i) : SV_Target
         // which case the normal PSO is exactly the right thing to bind.
         cmd->SetPipelineState(stencilTest && _psoStencilTest != null ? _psoStencilTest : _pso);
         cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY.D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        var vbv = _vbView[_active];
+        // No geometry this frame ⇒ bind no VB/IB (they would be stale/absent). Record drops every draw in that state,
+        // so nothing is ever issued against an unbound buffer.
+        if (!_geomReady) return;
+        var vbv = _vbView;
         cmd->IASetVertexBuffers(0, 1, &vbv);
-        var ibv = _ibView[_active];
+        var ibv = _ibView;
         cmd->IASetIndexBuffer(&ibv);
     }
 
@@ -478,16 +481,19 @@ float4 PSStencilMask(VSOut i) : SV_Target
     {
         if (item.VtxCount <= 0 || item.IdxCount <= 0) return true;
 
-        if (_drawCursor >= MaxDraws) { _dropped++; return false; }
+        if (_drawCursor >= MaxDraws || !_geomReady) { _dropped++; return false; }
         if (!TryResolveOrUpload(item.VtxStart, item.VtxCount, item.IdxStart, item.IdxCount, out int vtxBase, out int idxBase))
         {
             _dropped++;
             return false;
         }
+        // The uniform record is its own small arena reservation (16-byte aligned; PathInstance is a 64 B multiple of
+        // that, so consecutive draws pack exactly as densely as the old private bank did).
+        if (!_arena.TryReserve(sizeof(PathInstance), out byte* dst, out ulong gva)) { _dropped++; return false; }
 
-        int slot = _drawCursor++;
-        _instMapped[_active][slot] = item.Inst;
-        cmd->SetGraphicsRootShaderResourceView(1, _instGva + (ulong)(slot * sizeof(PathInstance)));
+        _drawCursor++;
+        *(PathInstance*)dst = item.Inst;
+        cmd->SetGraphicsRootShaderResourceView(1, gva);
         // BaseVertexLocation (vtxBase) is added by the GPU to every index it fetches from the IB — the tessellator's
         // index values are LOCAL/0-based into their own vertex range (see PathSweep/PathStroker), so the SAME index
         // bytes copied verbatim from PathRealizationCache.Shared.Indices resolve correctly once offset by vtxBase.
@@ -516,18 +522,24 @@ float4 PSStencilMask(VSOut i) : SV_Target
         }
 
         // MISS. Keep the map's load factor <= ~75% (mirrors PathRealizationCache.Insert's own rule) and require both
-        // the vertex and index banks to have room — never a partial upload.
-        if ((_mapCount + 1) * 4 >= MapCapacity * 3 ||
-            vtxCount > MaxVertices - _vtxCursor || idxCount > MaxIndices - _idxCursor)
+        // this frame's vertex and index BLOCKS to have room — never a partial upload. Block exhaustion also records a
+        // bigger block for the next frame (bounded by the static MaxVertices/MaxIndices worst case).
+        if ((_mapCount + 1) * 4 >= MapCapacity * 3)
         {
+            vtxBase = 0; idxBase = 0;
+            return false;
+        }
+        if (vtxCount > _geomVerts - _vtxCursor || idxCount > _geomIdx - _idxCursor)
+        {
+            DemandGeometry(_vtxCursor + vtxCount, _idxCursor + idxCount);
             vtxBase = 0; idxBase = 0;
             return false;
         }
 
         var srcVtx = PathRealizationCache.Shared.Vertices.Slice(vtxStart, vtxCount);
         var srcIdx = PathRealizationCache.Shared.Indices.Slice(idxStart, idxCount);
-        srcVtx.CopyTo(new Span<PathVertex>(_vbMapped[_active] + _vtxCursor, vtxCount));
-        srcIdx.CopyTo(new Span<uint>(_ibMapped[_active] + _idxCursor, idxCount));
+        srcVtx.CopyTo(new Span<PathVertex>(_vtxBase + _vtxCursor, vtxCount));
+        srcIdx.CopyTo(new Span<uint>(_idxBase + _idxCursor, idxCount));
 
         vtxBase = _vtxCursor; idxBase = _idxCursor;
         _uploadBytes += (long)vtxCount * sizeof(PathVertex) + (long)idxCount * sizeof(uint);
@@ -553,12 +565,7 @@ float4 PSStencilMask(VSOut i) : SV_Target
 
     public void Dispose()
     {
-        for (int f = 0; f < FrameCount; f++)
-        {
-            if (_vb[f] != null) { _vb[f]->Unmap(0, null); D3D12MemoryDiagnostics.Release(_vb[f], "Path.VertexUpload"); _vb[f]->Release(); _vb[f] = null; }
-            if (_ib[f] != null) { _ib[f]->Unmap(0, null); D3D12MemoryDiagnostics.Release(_ib[f], "Path.IndexUpload"); _ib[f]->Release(); _ib[f] = null; }
-            if (_inst[f] != null) { _inst[f]->Unmap(0, null); D3D12MemoryDiagnostics.Release(_inst[f], "Path.InstanceUpload"); _inst[f]->Release(); _inst[f] = null; }
-        }
+        // No vertex/index/instance buffers to release: the shared UploadArena owns them (disposed by the device).
         if (_pso != null) _pso->Release();
         if (_psoStencilIncr != null) { _psoStencilIncr->Release(); _psoStencilIncr = null; }
         if (_psoStencilDecr != null) { _psoStencilDecr->Release(); _psoStencilDecr = null; }

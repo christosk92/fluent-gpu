@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Threading;
 
@@ -24,18 +25,46 @@ public sealed class ScrollCommandPort
     private int _head;
     private int _tail;
 
+    /// <summary>Last <see cref="ScrollInputKind.SetFrame"/> command actually enqueued per node — UI-thread-only
+    /// (mirrors <see cref="Post"/>'s single-producer contract), keyed by <c>ScrollInput.Node</c>. Lets <see cref="Post"/>
+    /// turn a byte-identical SetFrame repost (layout's per-arranged-viewport unconditional post — scroll-v3 §3.3
+    /// note ii: "multiple SetFrame posts for the same node in one frame are expected and idempotent") into a true
+    /// no-op: nothing enqueued, <see cref="Pending"/> unmoved, so a stable-geometry frame that merely re-touches an
+    /// already-known viewport frame does not, by itself, look like scroll work to a wake-reason gate reading
+    /// <see cref="Pending"/>. <see cref="ScrollInput"/> is a <c>record struct</c> so <c>==</c> is a plain field-wise
+    /// compare (the shared <c>SnapPoints</c> array compares by reference — a fresh array with identical contents is
+    /// conservatively treated as changed, which only costs an extra post, never an incorrectly-dropped one). Chosen
+    /// over comparing against the kernel's already-applied body frame at each of the four layout/reconciler call
+    /// sites (FlexLayout.cs, Reconciler.cs) because it is the allocation-free, single-owner fix: one dictionary here
+    /// covers every producer uniformly instead of four call sites each needing kernel read access they don't have
+    /// today, and it can't drift out of sync with a fifth call site added later.</summary>
+    private readonly Dictionary<int, ScrollInput> _lastSetFrame = new();
+
     /// <summary>Items currently queued (not yet drained). Safe to read from either thread.</summary>
     public int Pending => Volatile.Read(ref _head) - Volatile.Read(ref _tail);
 
-    /// <summary>Post one command. Overflow policy (ring full, <see cref="Capacity"/> items already queued): for
-    /// <see cref="ScrollInputKind.ContactMove"/>/<see cref="ScrollInputKind.FrameDelta"/> the OLDEST queued command
-    /// for the SAME node and the SAME kind is overwritten in place with this one (coalesced — a stale mid-gesture
-    /// sample is worthless once a fresher one exists); Begin/End/structural commands are NEVER dropped that way.
-    /// If no coalescable slot exists (the ring is saturated with structural/Begin/End traffic — should never happen
-    /// at 1024 capacity against one frame's input, since <see cref="ScrollKernel.Tick"/> fully drains every frame),
-    /// this asserts in DEBUG and drops the INCOMING command rather than corrupt an existing one.</summary>
+    /// <summary>Post one command. SetFrame dedup (see <see cref="_lastSetFrame"/>): a SetFrame identical to the last
+    /// one actually enqueued for that node is dropped before it ever reaches the ring — Unbind clears the node's
+    /// cached frame (a Bind/SetFrame after unbind must always land, the kernel body is gone) so a park/unpark or
+    /// rebind cycle can never skip a needed repost. Overflow policy (ring full, <see cref="Capacity"/> items already
+    /// queued): for <see cref="ScrollInputKind.ContactMove"/>/<see cref="ScrollInputKind.FrameDelta"/> the OLDEST
+    /// queued command for the SAME node and the SAME kind is overwritten in place with this one (coalesced — a stale
+    /// mid-gesture sample is worthless once a fresher one exists); Begin/End/structural commands are NEVER dropped
+    /// that way. If no coalescable slot exists (the ring is saturated with structural/Begin/End traffic — should
+    /// never happen at 1024 capacity against one frame's input, since <see cref="ScrollKernel.Tick"/> fully drains
+    /// every frame), this asserts in DEBUG and drops the INCOMING command rather than corrupt an existing one.</summary>
     public void Post(in ScrollInput input)
     {
+        if (input.Kind == ScrollInputKind.SetFrame)
+        {
+            if (_lastSetFrame.TryGetValue(input.Node, out var last) && last == input) return;
+            _lastSetFrame[input.Node] = input;
+        }
+        else if (input.Kind == ScrollInputKind.Unbind)
+        {
+            _lastSetFrame.Remove(input.Node);
+        }
+
         int head = _head;
         int tail = Volatile.Read(ref _tail);
         int used = head - tail;

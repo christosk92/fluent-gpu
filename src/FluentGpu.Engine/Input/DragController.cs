@@ -388,7 +388,7 @@ public sealed class DragController
             // dragged block, this node included); re-asserting the style dim over it would strobe the press-source row
             // back to 0.4 on every reconcile frame while its siblings stay hidden.
             p.Opacity = _scene.DragSourceOpacityOverride ?? _dragStyle.Opacity;
-            _scene.Flags(_node) &= ~NodeFlags.HitTestVisible;   // drop-target hit-tests see THROUGH the dimmed source
+            _scene.ClearFlagBits(_node, NodeFlags.HitTestVisible);   // drop-target hit-tests see THROUGH the dimmed source
             _scene.Mark(_node, NodeFlags.PaintDirty);
             return;
         }
@@ -399,8 +399,8 @@ public sealed class DragController
         // recorder's existing isOpacityGroup path emits PushLayer{Opacity}/PopLayer around exactly this subtree.
         p.OpacityGroup = true;
         _scene.SetShadow(_node, _dragStyle.Shadow ?? DragShadow);
-        _scene.Flags(_node) &= ~NodeFlags.HitTestVisible;
-        _scene.Flags(_node) |= NodeFlags.DragGhost;
+        _scene.ClearFlagBits(_node, NodeFlags.HitTestVisible);
+        _scene.SetFlagBits(_node, NodeFlags.DragGhost);
         _scene.DragGhost = _node;
         _scene.DragGhostBackplate = _dragStyle.Backplate;   // E3: the opaque plate the recorder fills under the subtree
         _scene.Mark(_node, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
@@ -561,7 +561,7 @@ public sealed class DragController
     {
         ref NodePaint p = ref _scene.Paint(node);
         p.Opacity = _restingOpacity;
-        if (_wasHitTestVisible) _scene.Flags(node) |= NodeFlags.HitTestVisible;
+        if (_wasHitTestVisible) _scene.SetFlagBits(node, NodeFlags.HitTestVisible);
         if (_dragStyle.Lift == DragLift.Stationary)
         {
             // Stationary touched nothing but opacity + hit-test — restoring more (transform/shadow/ghost flag) would
@@ -573,7 +573,7 @@ public sealed class DragController
         p.OpacityGroup = _wasOpacityGroup;
         if (_hadShadow) _scene.SetShadow(node, _restingShadow);
         else _scene.ClearShadow(node);
-        _scene.Flags(node) &= ~NodeFlags.DragGhost;           // back into the clipped main pass
+        _scene.ClearFlagBits(node, NodeFlags.DragGhost);           // back into the clipped main pass
         if (_scene.DragGhost == node) { _scene.DragGhost = NodeHandle.Null; _scene.DragGhostBackplate = null; }
         _scene.Mark(node, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
     }

@@ -32,7 +32,14 @@ public readonly record struct RowScope(
     Func<bool> IsCurrent,
     Func<bool> IsEnabled,
     Action<ItemContainerTrigger, KeyModifiers> OnInteraction,
-    Action<bool> OnFocusChanged);
+    Action<bool> OnFocusChanged)
+{
+    /// <summary>The reconciling <see cref="ReactiveRuntime"/>, attached by <see cref="ItemsView"/>'s bound realize path
+    /// (null for any other <c>RowScope</c> construction). <see cref="ItemsView.CreateBound{T}"/> uses this to build the
+    /// equality-gated <see cref="BoundItemsSource{T}.BindItem(IReadSignal{int}, ReactiveRuntime, int, IEqualityComparer{T}?)"/>
+    /// memo — app code should not need to read this directly.</summary>
+    public ReactiveRuntime? Runtime { get; init; }
+}
 
 /// <summary>
 /// The <see cref="SelectorVisual"/> presets as BOUND, shape-stable row chrome for <see cref="ItemsView.CreateBound"/> —

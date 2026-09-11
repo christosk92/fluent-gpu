@@ -51,6 +51,11 @@ public enum FadeKind : byte
 public sealed class GainEnvelope
 {
     private readonly float[] _lut;   // gain per fade-frame offset (empty for None)
+    /// <summary>Optional atomic commit/cancel decision shared by scheduled incoming/outgoing voices.</summary>
+    public AudioTransitionGate? TransitionGate { get; private init; }
+    /// <summary>Attach a shared transition decision without recomputing its off-thread lookup table.</summary>
+    public GainEnvelope WithTransition(AudioTransitionGate gate)
+        => new(Kind, FadeStartFrame, FadeFrames, _lut) { TransitionGate = gate };
 
     private GainEnvelope(FadeKind kind, long fadeStartFrame, int fadeFrames, float[] lut)
     {
@@ -87,6 +92,8 @@ public sealed class GainEnvelope
     /// <summary>The envelope gain at mixer-domain frame <paramref name="mixerFrame"/> — branch-free LUT lookup.</summary>
     public float GainAt(long mixerFrame)
     {
+        if (TransitionGate is { } gate && mixerFrame >= gate.StartFrame && !gate.TryCommit())
+            return Kind == FadeKind.Out ? 1f : 0f;
         if (Kind == FadeKind.None) return 1f;
         long offset = mixerFrame - FadeStartFrame;
         if (offset < 0) return Kind == FadeKind.In ? 0f : 1f;
@@ -127,10 +134,18 @@ public struct MixVoice
 
         int firstActive = (int)Math.Max(0L, StartFrame - blockStart);
         if (firstActive >= frames) return false;   // this voice hasn't started yet in this block
+        if (Env.TransitionGate is { } gate && Env.Kind != FadeKind.Out && !gate.TryCommit()) return false;
 
         int want = frames - firstActive;
         var work = scratch[..(want * ch)];
-        int got = Src.Read(work, ch);
+        int got = 0;
+        while (got < want)
+        {
+            int count = Src.Read(work[(got * ch)..], ch);
+            if (count <= 0) break;
+            got += count;
+            if (Src.Exhausted) break;
+        }
         if (got <= 0) return false;
 
         // Per-voice DSP chain (EQ + gain) in place, pre-mix.
@@ -155,7 +170,10 @@ public struct MixVoice
 
     /// <summary>True when the source is exhausted AND the envelope has faded out — the voice can be retired.</summary>
     public readonly bool IsFinished(long mixerFrameAtBlockEnd)
-        => Src.Exhausted && (Env.Kind != FadeKind.Out || mixerFrameAtBlockEnd >= Env.FadeStartFrame + Env.FadeFrames);
+        => Env.TransitionGate is { IsCancelled: true } && Env.Kind != FadeKind.Out
+            || Src.Exhausted && (Env.Kind != FadeKind.Out || mixerFrameAtBlockEnd >= Env.FadeStartFrame + Env.FadeFrames)
+            || Env.Kind == FadeKind.Out && Env.TransitionGate is not { IsCancelled: true }
+                && mixerFrameAtBlockEnd >= Env.FadeStartFrame + Env.FadeFrames;
 }
 
 /// <summary>
@@ -178,6 +196,7 @@ public sealed class CrossfadeMixer
     // Voices retired during the LAST Render() call (RT thread writes; same-thread read by RenderBlock right after). The
     // ids are handed to the worker for off-RT ring disposal — the RT thread never frees the ring itself (spec §7.9).
     private readonly long[] _retired = new long[8];
+    private readonly IAudioSource?[] _retiredSources = new IAudioSource?[8];
     private int _retiredCount;
 
     /// <summary>Frames consumed out of the mixer (the device-clock domain; drives quarantine + position).</summary>
@@ -196,6 +215,42 @@ public sealed class CrossfadeMixer
     public int VoiceCount => _voices.Count;
     /// <summary>The max pull block (frames).</summary>
     public int MaxBlock => _maxBlock;
+
+    /// <summary>PCM preflight: stop at the first unfilled active ring without advancing either voice or envelope.</summary>
+    public int ReadableFrames(int requested, out RingAudioSource? waitingFor)
+    {
+        waitingFor = null;
+        int readable = requested;
+        foreach (var voice in CollectionsMarshal.AsSpan(_voices))
+        {
+            if (voice.Env.TransitionGate is { IsCancelled: true } && voice.Env.Kind != FadeKind.Out) continue;
+            // A confirmed tail may finish inside this block while another voice continues across the join.
+            // Only an unfinished producer can make the content timeline wait for unavailable PCM.
+            if (voice.Src is not RingAudioSource ring || ring.ProducerDone || voice.IsFinished(ConsumeSeq)) continue;
+            long offset = Math.Max(0, voice.StartFrame - ConsumeSeq);
+            if (offset >= readable) continue;
+            int available = ring.BufferedFrames;
+            long safe = offset + available;
+            if (safe < readable)
+            {
+                readable = (int)safe;
+                if (!ring.ProducerDone) waitingFor = ring;
+            }
+        }
+        return readable;
+    }
+
+    /// <summary>All currently audible rings have a recovery cushion or confirmed complete short content.</summary>
+    public bool PcmReady(int thresholdFrames)
+    {
+        foreach (var voice in CollectionsMarshal.AsSpan(_voices))
+        {
+            if (voice.StartFrame > ConsumeSeq || voice.Env.TransitionGate is { IsCancelled: true } && voice.Env.Kind != FadeKind.Out) continue;
+            if (voice.Src is RingAudioSource ring &&
+                (ring.HasPendingFlush || !ring.ProducerDone && ring.BufferedFrames < Math.Min(thresholdFrames, ring.TargetFrames))) return false;
+        }
+        return true;
+    }
 
     /// <summary>A mutable view over the live voices (RENDER thread only — control mutations arrive via the session's
     /// mixer-command SPSC; on the single-thread pull path control IS the render thread). The <see cref="VoiceScheduler"/>
@@ -228,11 +283,20 @@ public sealed class CrossfadeMixer
     /// <summary>Remove all voices (a hard stop / source change — RENDER thread, via the session command SPSC or inline).</summary>
     public void Clear() => _voices.Clear();
 
+    /// <summary>Render-thread removal; the session acknowledges source retirement.</summary>
+    public bool RemoveVoice(long id)
+    {
+        for (int i = 0; i < _voices.Count; i++)
+            if (_voices[i].Id == id) { _voices.RemoveAt(i); return true; }
+        return false;
+    }
+
     /// <summary>Sum every live voice into <paramref name="dst"/> for <paramref name="frames"/> frames (≤ MaxBlock),
     /// retire finished voices, and advance <see cref="ConsumeSeq"/>. Zero-alloc.</summary>
     public int Render(Span<float> dst, int frames, in BlockCtx ctx)
     {
         if (frames > _maxBlock) frames = _maxBlock;
+        Array.Clear(_retiredSources, 0, _retiredCount);
         _retiredCount = 0;
         int n = frames * ctx.Channels;
         dst[..n].Clear();
@@ -252,7 +316,11 @@ public sealed class CrossfadeMixer
         for (int i = _voices.Count - 1; i >= 0; i--)
             if (_voices[i].IsFinished(blockEnd))
             {
-                if (_voices[i].Id != 0 && _retiredCount < _retired.Length) _retired[_retiredCount++] = _voices[i].Id;
+                if (_retiredCount < _retired.Length)
+                {
+                    _retired[_retiredCount] = _voices[i].Id;
+                    _retiredSources[_retiredCount++] = _voices[i].Src;
+                }
                 _voices.RemoveAt(i);
             }
 
@@ -263,6 +331,8 @@ public sealed class CrossfadeMixer
     /// consumed by <c>RenderBlock</c> immediately after <see cref="Render"/> to hand each retired voice's ring to the
     /// worker for off-RT disposal). Empty until the next <see cref="Render"/> resets it.</summary>
     public ReadOnlySpan<long> RetiredThisBlock => _retired.AsSpan(0, _retiredCount);
+    /// <summary>Exact source identities retired by the last render, released off the DSP path.</summary>
+    public ReadOnlySpan<IAudioSource?> RetiredSourcesThisBlock => _retiredSources.AsSpan(0, _retiredCount);
 
     /// <summary>True when every voice is finished (source exhausted + faded) — the mixer has no more audio.</summary>
     public bool IsDrained(long mixerFrame)

@@ -88,12 +88,17 @@ public sealed class QueuePlaybackCoordinator : IAsyncDisposable
             if (_effects is not null) audio.BindEffects(_effects);
             var norm = audio.NormalizationMode;
             float refl = audio.ReferenceLufsValue;
-            _scheduler = new VoiceScheduler(_format.SampleRate, _format.Channels,
+            _scheduler = new VoiceScheduler(audio.Format.SampleRate, audio.Format.Channels,
                 voiceChainFactory: audio.BuildVoiceChain);
             // Install the incoming crossfade voice through the session so it is ring-wrapped on the RT feed path (the worker
             // decodes ahead, the RT thread mixes copy-only) — RT-safe crossfade THROUGH the feed (spec §7.9/§8). On the
             // single-thread pull path AddCrossfadeVoice adds the source directly (identical to the bare mixer.AddVoice).
             _scheduler.SetVoiceInstaller(audio.AddCrossfadeVoice);
+            _scheduler.SetEnvelopeInstaller((id, envelope) =>
+            {
+                if (!audio.SetVoiceEnvelope(id, envelope))
+                    throw new InvalidOperationException("Outgoing transition envelope was not accepted.");
+            });
             ArmScheduler(index, primaryVoiceId: audio.PrimaryVoiceIdValue, startFrame: 0, lenFrames: audio.VoiceTotalFrames, norm, refl);
         }
         else
@@ -148,14 +153,14 @@ public sealed class QueuePlaybackCoordinator : IAsyncDisposable
             if (next is not null && _router.Resolve(MediaKindSniffer.Sniff(next.Source)) is IPreparableBackend prep)
             {
                 _prepareEpoch = _scheduler.MarkPreparing();
-                var ctx = PrepareContext.For(_format, _audio.NormalizationMode, _audio.ReferenceLufsValue);
+                var ctx = PrepareContext.For(_audio.Format, _audio.NormalizationMode, _audio.ReferenceLufsValue);
                 _prepareTask = prep.PrepareAsync(next.Source, ctx, _cts.Token);
                 PreparesInvoked++;
             }
         }
 
         // Commit at the join.
-        var outcome = _scheduler.Commit(clock, _audio.MixerRef);
+        var outcome = _scheduler.ScheduleReady(clock, _audio.MixerRef);
         if (outcome != TransitionOutcome.None && outcome != LastOutcome) LastOutcome = outcome;
         if (outcome == TransitionOutcome.HardCut) _pendingHardCut = true;
     }

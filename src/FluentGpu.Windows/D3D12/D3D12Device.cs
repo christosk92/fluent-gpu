@@ -22,9 +22,18 @@ namespace FluentGpu.Rhi.D3D12;
 public sealed unsafe partial class D3D12Device : IGpuDevice
 {
     // Back buffers == per-frame command allocators == CPU-written GPU banks (pipelines' instance uploads, compositor
-    // SRV banks, query banks). 3 buffers + SetMaximumFrameLatency(2) buy ONE frame of CPU/GPU pipelining slack so a
-    // frame that costs slightly over one refresh stops quantizing to half rate at 144/165 Hz; the extra latency is
-    // bounded at one refresh and only materializes under backpressure (see threading-render-seam.md §latency).
+    // SRV banks, query banks). 3 buffers stay — they are the CPU-side bank depth (FrameBankDepth), a memory/pipelining
+    // decision. The PRESENT queue depth is a separate, LATENCY decision and is now 1.
+    // WHY 1 (supersedes the old depth-2 rationale): SetMaximumFrameLatency(2) was chosen to buy one frame of slack so a
+    // frame costing slightly over one refresh would not quantize to half rate at 144/165 Hz, on the assumption that the
+    // second queued frame "only materializes under backpressure". MEASUREMENT killed that assumption: on a 120 Hz panel
+    // with a weak Adreno the GPU costs ~5 ms of the 8.33 ms refresh on every scroll frame, so backpressure is PERMANENT
+    // — the render thread sat 5-8.6 ms per frame inside the latency waitable and the frame reaching the glass had been
+    // produced two vblanks earlier (DWM composes one later ⇒ ~25 ms finger-to-photon while the counter read 120 fps).
+    // With depth 1 that slack is not pre-paid as latency: a frame that does go over budget now shows as ONE missed
+    // vblank instead of a permanent extra frame of input lag. Terminal (AtlasEngine.r.cpp) and makepad both ship 1.
+    // The waitable is a SEMAPHORE, so depth 1 makes the wait/present pairing load-bearing: see WaitForPresentSlot and
+    // D3D12Swapchain.LatencyCreditHeld — every wait is a credit that exactly one Present spends.
     // HISTORY: a working-tree triple-buffering EXPERIMENT (never landed — the const was never 3 in any commit)
     // correlated with a DXGI_ERROR_DEVICE_HUNG on the Adreno after ~6.5 min of then-UNTHROTTLED image-upload bursts;
     // verdict circumstantial (docs/plans/gpu-robustness-implementation.md §Adreno). The DecodeScheduler scroll-time
@@ -35,7 +44,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // FrameBankingTests (FluentGpu.Windows.Tests) asserts the derived values so the depths cannot drift apart.
     internal const uint FRAME_COUNT = 3;
     internal const int FrameBankDepth = (int)FRAME_COUNT;       // CPU-written per-frame bank depth
-    internal const uint MAX_FRAME_LATENCY = FRAME_COUNT - 1;    // DXGI SetMaximumFrameLatency argument (= 2)
+    internal const uint MAX_FRAME_LATENCY = 1;                  // DXGI SetMaximumFrameLatency argument — a LATENCY choice, deliberately NOT derived from FRAME_COUNT
     private const uint INFINITE = 0xFFFFFFFF;
 
     // Fence-stall watchdog (WaitFenceEventBounded, always-on — no env gate). Keyed on NO FENCE PROGRESS (completed
@@ -79,6 +88,11 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     private D3D12Swapchain? _activeSwapchain;
     private readonly List<D3D12Swapchain> _swapchains = new(2);
     private SdfSharedResources? _sdf;
+    // ONE CPU-write upload arena per frame-in-flight, shared by every geometry/image pipeline (they used to own nine
+    // private FrameCount-deep rings sized for nine independent worst cases: ≈4.4 MiB permanently resident, of which a
+    // real frame touched a few tens of KiB — and on UMA every CPU-visible heap is pinned host memory, so those bytes
+    // were working set). Begun once per frame right after WaitForFrame, which is also the only point it may grow.
+    private UploadArena? _uploadArena;
     private RoundRectPipeline? _rectPipe;
     private readonly List<RectInstance> _rectInsts = new();
     private ShadowPipeline? _shadowPipe;
@@ -491,15 +505,91 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     /// <summary>QPC timestamp of the first successful Present (0 = none yet). Startup probes subtract process start.</summary>
     public static long FirstPresentQpc => s_firstPresentQpc;
 
-    /// <summary>One-line GPU residency summary (glyph atlas + image texture store) for the MemCensus
-    /// <c>GpuDetail</c> hook. Reads the stores' census accessors; null until the device is initialized. Tiny
-    /// fixed-bucket sums (never per-frame).</summary>
+    /// <summary>One-line GPU residency summary (glyph atlas + image texture store + the shared upload arena) for the
+    /// MemCensus <c>GpuDetail</c> hook. Reads the stores' census accessors; empty until the device is initialized.
+    /// Tiny fixed-bucket sums (never per-frame).</summary>
     public string DiagGpuDetail =>
         _glyphs is null || _imageTextures is null
             ? ""
             : $"glyphs={_glyphs.CachedGlyphCount} runs={_glyphs.CachedRunCount} atlasGen={_glyphs.AtlasResetCount} quadPool={_glyphs.QuadPoolRetained}" +
               $" | tex: atlas={_imageTextures.AtlasImageCount} pages={_imageTextures.AtlasPageCount} pooledFree={_imageTextures.PooledTextureCount} retired={_imageTextures.RetiredCount}" +
-              $" srv={_imageTextures.DescriptorSlotsUsed}/{_imageTextures.DescriptorCapacity} high={_imageTextures.DescriptorHighWater} rejected={_imageTextures.DroppedThisRun}";
+              $" srv={_imageTextures.DescriptorSlotsUsed}/{_imageTextures.DescriptorCapacity} high={_imageTextures.DescriptorHighWater} rejected={_imageTextures.DroppedThisRun}" +
+              // The shared per-frame upload arena: bytes it holds across every bank (already inside `gpu bytes`, since
+              // each bank is Tracked), the per-bank capacity, the largest single-frame DEMAND seen (what "right-sized"
+              // is measured against) and the refusal count (>0 ⇒ it grew and the device repainted).
+              UploadArenaCensus +
+              // The compositor render-target pools, split POOLED vs IN-USE. `gpu bytes` is one total and cannot say
+              // whether the biggest resource class is doing work or merely resident — and on a UMA adapter all of it
+              // is pinned host memory, i.e. working set. See FluentGpu.Render.LayerTargetCensus.
+              LayerTargetCensusLine;
+
+    /// <summary>The three compositors' pooled render-target census as one census-line fragment. Fixed-bucket sums over
+    /// the pools (no per-frame cost — this is read on the MemCensus sampler's cadence, like the rest of GpuDetail).</summary>
+    private string LayerTargetCensusLine
+    {
+        get
+        {
+            if (_opacity is null && _acrylic is null) return "";
+            FluentGpu.Render.LayerTargetCensus c = default;
+            if (_opacity is { } op) c += op.TargetCensus;
+            if (_acrylic is { } ac) c += ac.TargetCensus;
+            if (_bakedBlur is { } bb) c += bb.TargetCensus;
+            return " | rt: " + c.ToDetail();
+        }
+    }
+
+    private string UploadArenaCensus
+    {
+        get
+        {
+            if (_uploadArena is null) return "";
+            var p = _uploadArena.Policy;
+            return $" | upload: arena={p.LiveBytes / 1024}KiB bank={p.BytesOf(p.ActiveBank) / 1024}KiB/{UploadArena.MaxBytes / 1024}KiB" +
+                   $" peak={p.PeakBytes / 1024}KiB refused={p.Refusals}";
+        }
+    }
+
+    /// <summary>Compact per-class + pool-state GPU residency fragment for the app's always-on <c>mem.sample</c> log
+    /// line — top tracked-resource classes by bytes (<see cref="D3D12MemoryDiagnostics.TopClassesLine"/>), the
+    /// compositors' render-target pool occupancy (counts, not bytes — the classes above already carry the bytes),
+    /// and the shared upload arena's live/peak/refused counters. One space-separated, space-free-token string
+    /// beginning with a leading space (so callers Append it directly after `gpu bytes=… resources=…`), e.g.
+    /// <c> top=Image.Texture:61.2/812,Glyph.AtlasTexture:16.0/1 rt=inuse:2/free:2/pin:4 upload=arena:1.1/peak:0.4/refused:0</c>.
+    /// Distinct from <see cref="DiagGpuDetail"/> (the verbose glyph/texture-store operator dump SoakProbe reads):
+    /// this is sized for a periodic host log line, not manual reading. Each section is independently omitted when
+    /// its store is null/empty — never throws before the device is initialized.</summary>
+    public string DiagGpuCensusLine
+    {
+        get
+        {
+            var sb = new System.Text.StringBuilder(160);
+
+            string top = D3D12MemoryDiagnostics.TopClassesLine(4);
+            if (top.Length > 0) sb.Append(" top=").Append(top);
+
+            if (_opacity is not null || _acrylic is not null || _bakedBlur is not null)
+            {
+                FluentGpu.Render.LayerTargetCensus c = default;
+                if (_opacity is { } op) c += op.TargetCensus;
+                if (_acrylic is { } ac) c += ac.TargetCensus;
+                if (_bakedBlur is { } bb) c += bb.TargetCensus;
+                sb.Append(" rt=inuse:").Append(c.InUseCount).Append("/free:").Append(c.FreeCount).Append("/pin:").Append(c.PinCount);
+            }
+
+            if (_uploadArena is not null)
+            {
+                var p = _uploadArena.Policy;
+                sb.Append(" upload=arena:").Append(MibOneDecimalCensus(p.LiveBytes))
+                  .Append("/peak:").Append(MibOneDecimalCensus(p.PeakBytes))
+                  .Append("/refused:").Append(p.Refusals);
+            }
+
+            return sb.ToString();
+        }
+    }
+
+    private static string MibOneDecimalCensus(long bytes)
+        => (bytes / (1024.0 * 1024.0)).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);
 
     /// <summary>Operator dump: live D3D12 resources aggregated by name prefix, largest first (to stderr). The empirical
     /// "which resource class holds the climbing RAM" probe for native/UMA leak hunts. Routes to <see cref="D3D12MemoryDiagnostics"/>.</summary>
@@ -511,14 +601,21 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     public ISwapchain CreateSwapchain(in SwapchainDesc desc)
     {
         long bootT0 = System.Diagnostics.Stopwatch.GetTimestamp();
-        if (_device == null) InitDevice();
+        bool coldBringUp = _device == null;
+        if (coldBringUp) InitDevice();
         long bootT1 = System.Diagnostics.Stopwatch.GetTimestamp();
+        bool builtPipelines = _rectPipe is null;
         EnsurePipelines();
-        if (s_bootDiag)
+        long bootT2 = System.Diagnostics.Stopwatch.GetTimestamp();
+        // ALWAYS-ON (one line, only on the swapchain call that actually brought the device/pipelines up): the two
+        // costs on the critical path to first pixel. EnsurePipelines is where ~20 CreateGraphicsPipelineState calls
+        // run — i.e. where the vendor's shader compiler (on the Adreno, the 49 MB qcgpuarm64xcompilercore.DLL) turns
+        // cached DXBC into ISA. Without this in the shipping log, "is the pre-first-frame gap driver PSO compilation
+        // or window/DComp bring-up?" is unanswerable from a release run, and the shader-cache decision stays a guess.
+        if (coldBringUp || builtPipelines)
         {
-            long bootT2 = System.Diagnostics.Stopwatch.GetTimestamp();
             double f = 1000.0 / System.Diagnostics.Stopwatch.Frequency;
-            Console.Error.WriteLine($"[boot.d3d12] InitDevice={(bootT1 - bootT0) * f:F1}ms EnsurePipelines={(bootT2 - bootT1) * f:F1}ms");
+            FluentGpu.Foundation.Diag.Line($"[d3d12.boot] initDevice={(bootT1 - bootT0) * f:F1}ms pipelines={(bootT2 - bootT1) * f:F1}ms" + _pipeStageMs);
         }
 
         bool composited = desc.Composited || (_primarySwapchain is null && _composited);
@@ -556,6 +653,11 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _sdf = new SdfSharedResources();
         _sdf.Init(_device);
         var sdf = _sdf;
+        // The shared upload arena is SERIAL and FIRST, like the SDF shared state: seven of the pipelines below take it
+        // as an Init argument and only read it afterwards (it is single-toucher on the submit thread from then on).
+        var arena = new UploadArena();
+        arena.Init(_device);
+        _uploadArena = arena;
         double sdfMs = (System.Diagnostics.Stopwatch.GetTimestamp() - sdfT0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
 
         RoundRectPipeline? rectPipe = null;
@@ -580,12 +682,12 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             ms[slot] = (System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
         });
 
-        tasks[0] = Stage(0, () => { var p = new RoundRectPipeline(); p.Init(_device, sdf); rectPipe = p; });
-        tasks[1] = Stage(1, () => { var p = new ShadowPipeline(); p.Init(_device, sdf); shadowPipe = p; });
-        tasks[2] = Stage(2, () => { var p = new ArcPipeline(); p.Init(_device, sdf); arcPipe = p; });
-        tasks[3] = Stage(3, () => { var p = new PolylineStrokePipeline(); p.Init(_device, sdf); polylinePipe = p; });
-        tasks[4] = Stage(4, () => { var p = new GradientPipeline(); p.Init(_device, sdf); gradPipe = p; });
-        tasks[5] = Stage(5, () => { var p = new PathPipeline(); p.Init(_device, sdf); pathPipe = p; });
+        tasks[0] = Stage(0, () => { var p = new RoundRectPipeline(); p.Init(_device, sdf, arena); rectPipe = p; });
+        tasks[1] = Stage(1, () => { var p = new ShadowPipeline(); p.Init(_device, sdf, arena); shadowPipe = p; });
+        tasks[2] = Stage(2, () => { var p = new ArcPipeline(); p.Init(_device, sdf, arena); arcPipe = p; });
+        tasks[3] = Stage(3, () => { var p = new PolylineStrokePipeline(); p.Init(_device, sdf, arena); polylinePipe = p; });
+        tasks[4] = Stage(4, () => { var p = new GradientPipeline(); p.Init(_device, sdf, arena); gradPipe = p; });
+        tasks[5] = Stage(5, () => { var p = new PathPipeline(); p.Init(_device, sdf, arena); pathPipe = p; });
         tasks[6] = Stage(6, () => { var p = new AcrylicCompositor(); p.Init(_device); acrylic = p; });
         tasks[7] = Stage(7, () => { var p = new OpacityLayerCompositor(); p.Init(_device, _queue); opacity = p; });
         tasks[8] = Stage(8, () =>
@@ -596,7 +698,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             glyphs = p;
         });
         tasks[9] = Stage(9, () => { var p = new ImageTextureStore(); p.Init(_device, _isUnifiedMemory); imageTextures = p; });
-        tasks[10] = Stage(10, () => { var p = new ImagePipeline(); p.Init(_device); imagePipe = p; });
+        tasks[10] = Stage(10, () => { var p = new ImagePipeline(); p.Init(_device, arena); imagePipe = p; });
         tasks[11] = Stage(11, () => { var p = new BakedBlurCompositor(); p.Init(_device, _queue); bakedBlur = p; });
 
         try
@@ -623,6 +725,17 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _imagePipe = imagePipe;
         _bakedBlur = bakedBlur;
 
+        // Per-stage bring-up cost, folded into ONE always-on suffix the caller appends to its [d3d12.boot] line (the
+        // stages run concurrently, so these do NOT sum to the pipelines total — the MAX is the critical path, and the
+        // whole point is to see WHICH stage is it). Built once, at bring-up, into one string.
+        {
+            var sb = new System.Text.StringBuilder(160);
+            sb.Append(" sdf=").Append(sdfMs.ToString("F1", System.Globalization.CultureInfo.InvariantCulture));
+            for (int i = 0; i < s_pipeStageNames.Length; i++)
+                sb.Append(' ').Append(s_pipeStageNames[i]).Append('=')
+                  .Append(ms[i].ToString("F1", System.Globalization.CultureInfo.InvariantCulture));
+            _pipeStageMs = sb.ToString();
+        }
         if (s_bootDiag)
         {
             Console.Error.WriteLine($"[boot.pipe] sdf-shared: {sdfMs:F1}ms (serial)");
@@ -630,6 +743,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 Console.Error.WriteLine($"[boot.pipe] {s_pipeStageNames[i]}: {ms[i]:F1}ms (parallel)");
         }
     }
+
+    // Per-stage pipeline bring-up ms, formatted once by EnsurePipelines for the always-on [d3d12.boot] line.
+    private string _pipeStageMs = "";
 
     private static void Check(HRESULT hr, string what)
     {
@@ -1153,6 +1269,20 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         Check(target.SwapChain->SetMaximumFrameLatency(MAX_FRAME_LATENCY), "SetMaximumFrameLatency");
         target.FrameLatencyWaitable = target.SwapChain->GetFrameLatencyWaitableObject();
         target.HasLatencyWaitable = target.FrameLatencyWaitable != HANDLE.NULL;
+        // A brand-new waitable (fresh swapchain, or a device-loss rebuild): any credit taken against the OLD handle is
+        // void. The new semaphore starts signaled, so the next WaitForPresentSlot returns immediately — reserving the
+        // slot rather than skipping it is also the only safe direction (skipping would present into a full queue).
+        target.LatencyCreditHeld = false;
+        // Always-on, once per swapchain: the present-queue depth is a LATENCY decision that is invisible from the
+        // outside (a queue two frames deep still reports a healthy frame rate — that is exactly how depth 2 hid ~1
+        // frame of input lag until it was measured). Logged so any later session can tell from the log alone which
+        // pacing contract the binary shipped with, the way [compositor-clock] now names the clock's state.
+        if (!s_loggedPresentContract)
+        {
+            s_loggedPresentContract = true;
+            Diag.Line($"[d3d12.present] maxFrameLatency={MAX_FRAME_LATENCY} buffers={FRAME_COUNT}"
+                      + $" waitable={(target.HasLatencyWaitable ? "yes" : "no")} slotWait=pre-acquire");
+        }
 
         D3D12_DESCRIPTOR_HEAP_DESC hd = default;
         hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE.D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
@@ -1392,13 +1522,20 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // Time the two BLOCKING pacing/retirement waits (latency waitable + frame fence) separately. Under async this is
         // render-thread wall time; under force-sync it is UI-thread wall time. Neither duration measures GPU execution.
         long fenceWaitStart = System.Diagnostics.Stopwatch.GetTimestamp();
+        // The render thread normally already paid this wait in WaitForPresentSlot, BEFORE it chose which published
+        // frame to present (Terminal/makepad order — the presented state is then never older than the wait). The
+        // waitable is a semaphore, so waiting twice for one Present would block for a whole extra present cycle: a
+        // held credit means "the slot is already ours", so skip. _lastLatencyWaitMs is NOT overwritten in that case —
+        // the [fps] line's latW token keeps naming the wall time actually blocked in the waitable.
+        bool creditHeld = ReferenceEquals(sc, _primarySwapchain) && sc.LatencyCreditHeld;
         if (_skipLatencyOnce) _skipLatencyOnce = false;
-        else WaitForLatency();   // bound queued-frame latency before starting this frame's production
+        else if (!creditHeld) WaitForLatency();   // bound queued-frame latency before starting this frame's production
         // Split the two waits: the LATENCY waitable is compositor/present-queue backpressure ("a ready frame is being
         // held"), while the frame FENCE is prior back-buffer/queue RETIREMENT. Neither is a raster/busy measurement.
         // Summed together they remain indistinguishable; LastFenceWaitMs keeps its historical meaning (both, summed).
         long latencyDone = System.Diagnostics.Stopwatch.GetTimestamp();
-        _lastLatencyWaitMs = System.Diagnostics.Stopwatch.GetElapsedTime(fenceWaitStart, latencyDone).TotalMilliseconds;
+        if (!creditHeld)
+            _lastLatencyWaitMs = System.Diagnostics.Stopwatch.GetElapsedTime(fenceWaitStart, latencyDone).TotalMilliseconds;
         _frameIndex = _swapChain->GetCurrentBackBufferIndex();
         if (!WaitForFrame(_frameIndex))
             throw new InvalidOperationException("Frame fence did not reach the awaited value; submit cannot reuse its bank.");
@@ -1418,7 +1555,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // Detailed GPU profiler: begin (query 259i) brackets the same work and supplies its optional category timeline.
         if (s_gpuTiming && _gpuQueryHeap != null)
             _cmdList->EndQuery(_gpuQueryHeap, D3D12_QUERY_TYPE.D3D12_QUERY_TYPE_TIMESTAMP, GpuTsPerFrame * _frameIndex);
-        _imageTextures?.FlushUploads(_cmdList);
+        _imageTextures?.FlushUploads(_cmdList, _fenceValue + 1, _fence->GetCompletedValue());
         if (ReferenceEquals(sc, _primarySwapchain) &&
             _bakedBlurQueue is { } bakedQueue && _bakedBlur is { } baker && _imageTextures is { } textures)
         {
@@ -1459,9 +1596,12 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         ClearRootDamage();   // §13.1: the clamp is per-REPLAY state — never let a previous frame's leak into this one
         (_lastBlurHashes, _curBlurHashes) = (_curBlurHashes, _lastBlurHashes);   // rotate the blur-cache recurrence ring
         _lastBlurHashCount = _curBlurHashCount; _curBlurHashCount = 0;
-        // Every pipe banks its instance upload buffer by back-buffer index: WaitForFrame above fenced the submit that
+        // Every pipe banks its instance upload storage by back-buffer index: WaitForFrame above fenced the submit that
         // last USED this index (frame N-2), so writing this bank can never race frame N-1's still-in-flight GPU reads —
         // the CPU↔GPU tear that flickered on scroll/hover (the image pipe had this; the six geometry pipes were missed).
+        // The geometry/image pipes now share ONE arena bank per frame-in-flight, so that banking (and the only point at
+        // which a bank may be re-allocated to a larger size — right here, fenced, never mid-frame) lives in one place.
+        _uploadArena!.BeginFrame((int)_frameIndex);
         _rectPipe!.BeginFrame((int)_frameIndex);
         _shadowPipe!.BeginFrame((int)_frameIndex);
         _arcPipe!.BeginFrame((int)_frameIndex);
@@ -1635,6 +1775,18 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             if (isPrimary) { _canvasValid = false; _canvasDrawListHash = 0; }
             _textRepaintPending = true;
             Diag.Count("d3d12", "glyphBankOverflowRepaint");
+        }
+        if (_uploadArena!.RefusedThisFrame)
+        {
+            // The SHARED upload arena ran out mid-record: every run that asked for space after that point was dropped
+            // (its pipeline left the command list untouched), so these pixels are not a faithful rendering. Each bank
+            // adopts the larger size at ITS next BeginFrame, so the episode heals within FRAME_COUNT frames — and it
+            // heals through the same contract a glyph-bank overflow uses: no partial repaint on this frame, plus one
+            // more full, un-skippable frame owed to the host. (The flag the host reads is named for text because text
+            // was the first drop class to need it; it means "this frame was not faithful — repaint fully".)
+            if (isPrimary) { _canvasValid = false; _canvasDrawListHash = 0; }
+            _textRepaintPending = true;
+            Diag.Count("d3d12", "uploadArenaGrowthRepaint");
         }
         if (_glyphs!.AtlasResetPending)
         {
@@ -3536,6 +3688,13 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                         }
                     }
                     SceneCat(CatComposite);   // the lease's RT clear is layer cost — attribute it to comp, not to whatever ran before
+                    // A recorder-patched PLAIN OPACITY group whose subtree is flat + stencil-free can live in a small
+                    // BOUNDED target instead of a canvas-sized one: the composite has been scissored to that same
+                    // extent since the patched-extent change, so the canvas texels outside it were already discarded.
+                    // Declines (leasing nothing) for an unpatched extent, a nested/stencil subtree, or too little
+                    // saving — and then falls through to the canvas lease below, unchanged.
+                    if (L.Kind == (int)LayerKind.Opacity && TryBeginBoundedOpacityGroup(drawList, pos, in L))
+                        continue;
                     int slot = _opacity.Acquire(_cmdList, _fenceValue + 1, clearRect);
                     _opacityGroups.Add(new LayerGroup(slot, L, 0UL, default));
                     _layerKinds.Add(L.Kind);
@@ -3616,7 +3775,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                     _opacityGroups.RemoveAt(_opacityGroups.Count - 1);
                     SceneCat(CatComposite);
                     // Self-blur (or edge-fade-with-blur): gaussian-blur the group RT in place (leaves it readable); else BeginRead.
-                    if (localBlur)
+                    // A BOUNDED target with no sigma is a bounded PLAIN-OPACITY group (TryBeginBoundedOpacityGroup) —
+                    // nothing to filter, so it takes the BeginRead tail like any other zero-sigma group.
+                    if (localBlur && gl.BlurSigma > 0f)
                         _opacity.BlurLocalInPlace(_cmdList, in localSurface, gl.BlurSigma, _fenceValue + 1);
                     else if ((kind == (int)LayerKind.Blur || kind == (int)LayerKind.EdgeFade) && gl.BlurSigma > 0f)
                         _opacity.BlurInPlace(_cmdList, slot, gl.BlurSigma, _fenceValue + 1, in gl, _frameScale);
@@ -3627,7 +3788,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                     if (_opacityGroups.Count > 0) BindOpacityGroupTarget(_opacityGroups[^1]);
                     else BindLayerTopTarget(directToBackBuffer, backRtv);
                     ApplyCurrentScissor();
-                    if (localBlur) _opacity.CompositeLocalBlur(_cmdList, in localSurface, gl.GroupAlpha, CurrentScissorRect());
+                    if (localBlur && kind == (int)LayerKind.Opacity)
+                        _opacity.CompositeBoundedOpacity(_cmdList, in localSurface, gl.GroupAlpha, CurrentScissorRect());
+                    else if (localBlur) _opacity.CompositeLocalBlur(_cmdList, in localSurface, gl.GroupAlpha, CurrentScissorRect());
                     else if (kind == (int)LayerKind.EdgeFade) _opacity.EdgeFadeComposite(_cmdList, slot, in gl, _frameScale, CurrentScissorRect());
                     else if (kind == (int)LayerKind.Blur) _opacity.CompositeBlur(_cmdList, slot, gl.GroupAlpha, in gl, _frameScale, CurrentScissorRect());
                     // Patched plain opacity group: composite only the drawn extent (⊆ the box cleared at Acquire).
@@ -3665,14 +3828,16 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             OpacityLayerCompositor.LocalBlurSurface localSurface = closed.LocalBlur;
             bool localBlur = localSurface.UsedW > 0;
             _opacityGroups.RemoveAt(_opacityGroups.Count - 1);
-            if (localBlur) _opacity.BlurLocalInPlace(_cmdList, in localSurface, gl.BlurSigma, _fenceValue + 1);
+            if (localBlur && gl.BlurSigma > 0f) _opacity.BlurLocalInPlace(_cmdList, in localSurface, gl.BlurSigma, _fenceValue + 1);
             else if (gl.BlurSigma > 0f) _opacity.BlurInPlace(_cmdList, slot, gl.BlurSigma, _fenceValue + 1, in gl, _frameScale);
             else _opacity.BeginRead(_cmdList, slot);
             InvalidateCmdState();   // as in the main PopLayer branch: BlurInPlace bypassed the scissor cache
             if (_opacityGroups.Count > 0) BindOpacityGroupTarget(_opacityGroups[^1]);
             else BindLayerTopTarget(directToBackBuffer, backRtv);
             ApplyCurrentScissor();
-            if (localBlur) _opacity.CompositeLocalBlur(_cmdList, in localSurface, gl.GroupAlpha, CurrentScissorRect());
+            if (localBlur && gl.Kind == (int)LayerKind.Opacity)
+                _opacity.CompositeBoundedOpacity(_cmdList, in localSurface, gl.GroupAlpha, CurrentScissorRect());
+            else if (localBlur) _opacity.CompositeLocalBlur(_cmdList, in localSurface, gl.GroupAlpha, CurrentScissorRect());
             else if (gl.Kind == (int)LayerKind.EdgeFade) _opacity.EdgeFadeComposite(_cmdList, slot, in gl, _frameScale, CurrentScissorRect());
             else if (gl.Kind == (int)LayerKind.Blur) _opacity.CompositeBlur(_cmdList, slot, gl.GroupAlpha, in gl, _frameScale, CurrentScissorRect());
             else if (gl.Kind == (int)LayerKind.Opacity && !gl.CompositeClip.IsEmpty)
@@ -3908,6 +4073,39 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         return true;
     }
 
+    // Open a PLAIN OPACITY group on a BOUNDED target — the same bucketed, shifted-viewport surface the region-local
+    // self blur uses, sized to the recorder's accumulated subtree draw extent instead of the whole canvas. Sibling of
+    // TryBeginRegionLocalBlur; the PopLayer tail is shared (a bounded target with sigma 0 takes the BeginRead arm and
+    // OpacityLayerCompositor.CompositeBoundedOpacity).
+    //
+    // The two preconditions the blur path establishes at its call site are established HERE instead, because a plain
+    // opacity group has no pin-key walk to piggyback on:
+    //   • no pooled group open — a nested bounded target's composite would land in the enclosing bounded space;
+    //   • the subtree is FLAT and STENCIL-FREE (FluentGpu.Render.LayerSubtreeProbe). Flatness is the same reason the
+    //     blur path needs it. Stencil-freedom is STRICTER than the blur path: a shifted viewport has no mapping to the
+    //     swapchain-sized stencil DSV, and where a self blur accepts that degradation (counted on stencilFallback), a
+    //     plain opacity group is common enough that broadening a lossy case to it is not an acceptable trade.
+    // The SIZE predicate is the attempt itself (OpacityLayerCompositor.TryAcquireBoundedGroup declines an unpatched
+    // extent or too small a saving), so the caller simply falls through to the canvas lease when this returns false.
+    private bool TryBeginBoundedOpacityGroup(ReadOnlySpan<byte> drawList, int subtreeStart, in PushLayerCmd L)
+    {
+        if (_opacity is not { } opacity) return false;
+        if (_opacityGroups.Count > 0) return false;
+        // An ENCLOSING tier-3 scope is the same hazard as an inner one, from the other side: the group's draws must
+        // stay masked by it, and a shifted viewport cannot address the swapchain-sized DSV. The probe below only sees
+        // the subtree, so the open-scope depth is checked here.
+        if (_stencilDepth > 0) return false;
+        if (L.CompositeClip.IsEmpty) return false;                        // unpatched extent ⇒ unknown ⇒ canvas
+        if (!LayerSubtreeProbe.IsBoundable(drawList, subtreeStart, out _)) return false;
+        if (!opacity.TryAcquireBoundedGroup(_cmdList, _fenceValue + 1, in L, _frameScale, out var bounded)) return false;
+        _opacityGroups.Add(new LayerGroup(bounded.Slot, L, 0UL, bounded));
+        _layerKinds.Add(L.Kind);
+        InvalidateCmdState();
+        SetLocalBlurViewport(in bounded);
+        ApplyCurrentScissor();
+        return true;
+    }
+
     // The self-blur pin cache's position-independent content key is computed by FluentGpu.Render.BlurPinKey.TryCompute
     // (portable, so the headless VerticalSlice can gate it) — it folds σ + integer device size + the subtree op bytes with
     // each op's position REBASED to the layer origin, so a pure scroll/translation reuses the pin (see backdrop-effects-
@@ -4039,16 +4237,25 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         if (target.Composited && target.DcompBindPending) BindDComp(target);
         _lastPresentStoodDown = false;
         HWND hwnd = target.Hwnd;
+        // The ATOMIC REVEAL frame is exempt from every stand-down below. A COMPOSITION swapchain
+        // (CreateSwapChainForComposition — every windowed popup, see InitSwapChain) reaches the screen through its
+        // composition visual, NOT through the HWND: its host window's visibility says nothing about whether this
+        // present is legal or useful. And a windowed popup's HWND is deliberately created hidden and revealed only
+        // once this first frame has landed (Win32PopupWindow ctor + AppHost's HasPresentedContent reveal gate) — so
+        // standing down here DROPPED the popup's only content frame while the reveal went ahead anyway, leaving the
+        // popup as its frosted composition chrome with nothing painted inside it (the "empty flyout").
+        bool revealFrame = target.Composited && !target.HasPresentedContent;
         // Cloak / hidden / iconic: skip Present (no GPU). AppHost reads LastPresentStoodDown and applies the same pacing
         // floor as skip-submit so the sync path does not free-spin without a Present pacer.
-        if (IsHwndCovered(hwnd))
+        if (!revealFrame && IsHwndCovered(hwnd))
         {
             StandDownPresent();
             return;
         }
         // OCCLUDED latch: MUST probe with DXGI_PRESENT_TEST while latched — a full stand-down before Present would make
-        // the clear-on-S_OK path unreachable and freeze the window forever after the first OCCLUDED.
-        if (_occludedLatched)
+        // the clear-on-S_OK path unreachable and freeze the window forever after the first OCCLUDED. (The latch is
+        // device-wide, so it must not swallow a different target's reveal frame either.)
+        if (_occludedLatched && !revealFrame)
         {
             HRESULT test = (HRESULT)global::FluentGpu.Interop.Generated.IDXGISwapChainVtbl.Present(
                 _swapChain, 0, DxgiPresentTest);
@@ -4071,6 +4278,12 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         uint interval = (_vsync && !noVsync) ? 1u : 0u;
         uint flags = (interval == 0 && _tearingSupported) ? DXGI.DXGI_PRESENT_ALLOW_TEARING : 0u;
         HRESULT pr = (HRESULT)global::FluentGpu.Interop.Generated.IDXGISwapChainVtbl.Present(_swapChain, interval, flags);   // GEN-COM (wired)
+        // The Present is what SPENDS the latency credit WaitForPresentSlot took (the waitable is a semaphore: it is
+        // re-signaled when this present retires from the queue). Cleared on every path where Present actually ran —
+        // success AND DXGI_STATUS_OCCLUDED, which is a success code that still consumed the slot. The stand-down /
+        // PRESENT_TEST / covered-HWND paths above returned WITHOUT presenting, so they deliberately leave the credit
+        // held: the slot they reserved is still free and the next turn must not wait for it twice.
+        if (target.LatencyCreditHeld && ReferenceEquals(target, _primarySwapchain)) target.LatencyCreditHeld = false;
         // DXGI_STATUS_OCCLUDED (0x087A0001) is a SUCCESS code — previously dropped by the `< 0` check. Composition
         // swapchains often never return it; when they do, latch and stand down (next frame probes with PRESENT_TEST).
         if ((int)pr == DxgiStatusOccluded)
@@ -4091,8 +4304,20 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             throw new InvalidOperationException($"Present failed: 0x{(uint)pr:X8}" + (reason != 0u ? $" (device removed reason 0x{reason:X8})" : ""));
         }
         if (_hintSettlePresent) { _hintSettlePresent = false; _ = DwmFlush(); }
+        // This target's front buffer / composition surface now holds engine-drawn pixels. One-way latch, read by the
+        // host's popup reveal gate (never reveal a popup window whose swapchain has painted nothing) and by its
+        // "owes a first paint" wake reason. Set only on the fall-through success path — a stood-down or OCCLUDED
+        // present returned above and presented nothing.
+        target.NotePresentedContent();
         if (s_firstPresentQpc == 0 && ReferenceEquals(target, _primarySwapchain))
+        {
             s_firstPresentQpc = System.Diagnostics.Stopwatch.GetTimestamp();
+            // ALWAYS-ON, exactly once: what the GPU-memory census is actually MADE OF at first pixel, by resource
+            // class. `gpu bytes` alone (one total) cannot answer "which class holds it", and on a UMA adapter every
+            // one of these classes is pinned host memory — i.e. working set — so the split is the only way to attribute
+            // a resident-memory regression without a live capture. One line, one string, at one instant.
+            FluentGpu.Foundation.Diag.Line("[d3d12.mem] first-present " + D3D12MemoryDiagnostics.BreakdownLine(10));
+        }
         PublishVideoMemorySnapshot();
         if (ReferenceEquals(target, _primarySwapchain)) SamplePresentStats();
         StoreActive();
@@ -4426,6 +4651,32 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     {
         if (_hasLatencyWaitable) WaitForSingleObject(_frameLatencyWaitable, 1000);
     }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// The PRIMARY swapchain's present slot, waited for BEFORE the host picks which published frame to present, so the
+    /// frame that reaches the glass is the freshest one that existed when the slot opened (this is the ordering
+    /// Windows Terminal's AtlasEngine and makepad both use; acquiring first and waiting inside submit ages the acquired
+    /// frame by the whole wait). The waitable is a SEMAPHORE: one successful wait == one credit that exactly one
+    /// Present spends, so a second wait before that Present would block for a full extra present cycle. The credit is
+    /// therefore tracked on the swapchain (<c>LatencyCreditHeld</c>): SubmitDrawList skips its own wait while it is
+    /// held, Present clears it, and a turn that ends up presenting nothing simply keeps it (the slot really is still
+    /// free). Reads the primary swapchain's handle directly rather than the Activate-mirrored device fields — the
+    /// active target may be a popup.
+    /// </remarks>
+    public void WaitForPresentSlot()
+    {
+        AssertSubmitThread();   // seam Step 0: this is the render thread's pacing wait, never the UI's
+        if (_primarySwapchain is not { } sc || sc.Disposed || !sc.HasLatencyWaitable || sc.LatencyCreditHeld) return;
+        long start = System.Diagnostics.Stopwatch.GetTimestamp();
+        WaitForSingleObject(sc.FrameLatencyWaitable, 1000);   // bounded: a lost device must not wedge the loop
+        _lastLatencyWaitMs = System.Diagnostics.Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+        sc.LatencyCreditHeld = true;
+    }
+
+    // One [d3d12.present] contract line per PROCESS (not per swapchain — every popup target takes the same const,
+    // so a per-target line would be pure chatter in a session with many flyouts).
+    private static bool s_loggedPresentContract;
 
     private bool _skipLatencyOnce;   // set by SuppressLatencyWaitOnce, consumed by the next SubmitDrawList
 
@@ -4972,6 +5223,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _acrylic?.Dispose(); _acrylic = null;
         _opacity?.Dispose(); _opacity = null;
         _rectPipe?.Dispose(); _rectPipe = null;
+        // AFTER every pipeline that borrows it (they hold no COM of their own for instance data any more, but the
+        // ordering keeps "release the borrower, then the owner" true by construction).
+        _uploadArena?.Dispose(); _uploadArena = null;
         _sdf?.Dispose(); _sdf = null;
         if (_cmdList != null) { global::FluentGpu.Interop.Generated.IUnknownVtbl.Release(_cmdList); _cmdList = null; }
         for (uint i = 0; i < FRAME_COUNT; i++)
@@ -5035,6 +5289,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _acrylic?.Dispose();
         _opacity?.Dispose();
         _rectPipe?.Dispose();
+        _uploadArena?.Dispose();   // after every borrower (see the device-lost teardown's note)
         _sdf?.Dispose();
         for (uint i = 0; i < FRAME_COUNT; i++) _backBuffers[i] = null;
         ReleaseGpuTimingResources();
@@ -5066,6 +5321,12 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
     internal readonly ID3D12Resource*[] BackBuffers = new ID3D12Resource*[(int)D3D12Device.FRAME_COUNT];
     internal HANDLE FrameLatencyWaitable;
     internal bool HasLatencyWaitable;
+    // The frame-latency waitable is a SEMAPHORE, not a level — one successful wait reserves ONE present slot and only a
+    // Present gives it back. True ⇒ D3D12Device.WaitForPresentSlot has already taken this swapchain's slot for the frame
+    // now in production, so SubmitDrawList must NOT wait again (that would block a whole extra present cycle) and the
+    // next Present that actually runs clears it. Render-thread-only (submit/present are render-confined), so a plain
+    // field is the whole synchronization story. Reset to false wherever the waitable handle is (re)created or released.
+    internal bool LatencyCreditHeld;
     internal uint SwapChainFlags;
     internal bool TearingSupported;
     internal uint W, H, FrameIndex;
@@ -5119,6 +5380,19 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
 
     public Size2 SizePx => new(W, H);
     public bool SupportsCompositedIntervalZero => Composited;
+
+    private int _presentedContent;
+    /// <inheritdoc/>
+    /// <remarks>Written by the render thread (the sole presenter) at the end of a successful
+    /// <see cref="D3D12Device.Present"/>; read by the UI thread's popup reveal gate + wake computation. A one-way
+    /// latch, so the volatile int needs no further ordering.</remarks>
+    public bool HasPresentedContent => System.Threading.Volatile.Read(ref _presentedContent) != 0;
+    internal void NotePresentedContent()
+    {
+        if (System.Threading.Volatile.Read(ref _presentedContent) == 0)
+            System.Threading.Volatile.Write(ref _presentedContent, 1);
+    }
+
     internal ulong NoteGpuSubmit()
     {
         System.Threading.Interlocked.Increment(ref _gpuSampleVersion);

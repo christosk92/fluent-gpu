@@ -94,7 +94,9 @@ contracts owned elsewhere:
 >   slower older fetch never
 >   commits over a fresher one; deps change re-keys to `Pending(seed)`.
 > - **Timing / measured hooks (G1b/G1c) — over the host timer queue, not `System.Threading.Timer`.** `UseDebouncedValue`
->   / `UseThrottledValue` / `UseTimeout` (→ `TimerHandle{Cancel,Restart}`) / `UseInterval` (auto-pauses when
+>   / `UseThrottledValue` / `UseTimeout` (→ `TimerHandle{Cancel,Restart,RestartIn,NowMs}` — `RestartIn(ms)` re-arms for
+>   a COMPUTED delay and `NowMs` is the host timer clock it schedules on, so a pure time-based policy such as the media
+>   chrome's `PlayerChromeVisibility` keeps ONE timer at its own next deadline) / `UseInterval` (auto-pauses when
 >   KeepAlive-parked/minimized) ride the AppHost-owned **`HostTimerQueue`** (§4 / SPEC-INDEX; min-heap on the host frame
 >   clock, drained after the UI-post drain and *before* the reactive flush so writes coalesce into this frame — idle
 >   quiesce preserved). `Signal<T>.SetIfChanged(v): bool` (single compare, reports the write). `UseMeasuredBounds()` /
@@ -134,6 +136,35 @@ contracts owned elsewhere:
   their outgoing branch rather than park it, and a removed computation is already skipped by the drain's disposed check;
   prioritizing them would only re-reconcile regions whose element a later parent render re-points. Gate:
   `gate.reconciler.park-before-render` (both subscription orders).
+- **Deadline flush (2026-09).** `ReactiveRuntime.Flush(long deadlineTicks)` uses an absolute `Stopwatch` deadline and
+  returns `ReactiveFlushResult(bool HasPending, int UnitsRun, long LongestUnitTicks)`. A hosted UI turn supplies one
+  deadline to all its reflushes; re-entering flush must not replenish the slice. Expiration yields before the next
+  computation, retaining unread normal/structural queue cursors and their queued flags. Structural work preempts
+  carried normal work just as it preempts a fresh batch. A unit includes synchronous memo pulls and the whole
+  reconciliation callback: it may exceed the deadline and its measured duration makes that visible. A throwing unit
+  is consumed before invocation so remaining siblings are retained; scheduler state and frame requests recover in
+  `finally`. The 1000-batch runaway guard counts from the last quiescent point, not the current call, so a cycle cannot
+  evade it by yielding once per frame. `Flush()` remains an explicit unbounded drain for deterministic harness and
+  non-frame callers. Steady slice processing allocates no managed objects. Gates: `gate.signals.deadline-*`.
+  **This is computation-boundary scheduling, not the staged per-node reconciliation described in §5.** The existing
+  reconciler still completes a tree mutation synchronously; no partially executed mutation is yielded or published.
+- **Isolated keyed identity planning (2026-09).** `ChildReconcilePlan` copies immutable element references and
+  committed handles, then indexes/matches against an absolute deadline without writing scene topology, props,
+  hooks, resource tables or cleanup. Cancellation discards only scratch. `IChildReconcileCommitter` validates the
+  captured parent/child generations, order and reconciliation revision before applying the whole plan. Lifecycle
+  order remains matched updates → departing scroll save → incoming mounts → departing cleanup → final child order;
+  preserving that order is required by popup and scroll-memory behavior. Large child diffs (>128) lease reusable
+  plans independently at each recursion level; the shifted virtual-window recycler retains its separate identity
+  law and pooled scratch. Gates: `gate.child-plan-*`.
+
+  **Remaining transaction acceptance:** the production caller currently drains planning before an indivisible
+  commit; it does not yet yield a mounted subtree across UI turns. Mount/update callbacks still mutate live engine
+  state and may throw; no rollback of arbitrary C# effects is claimed. Safe staged mounting additionally requires
+  logical ancestry separate from the published sibling chain, isolated dirty/overlay/orphan registration, deferred
+  resource/scroll/controller intents, and hook startup deferral covering eager signal effects, resource launches,
+  timer watchers, activation and validation effects—not just passive effect lists. Existing-component updates also
+  require staged hook/prop state. Until these are implemented together, yielding inside `Mount`/`Update` would expose
+  speculative effects or an incomplete interactive tree and is deliberately prohibited.
 - **A component is a reactive computation.** `UseState`/`UseReducer` return a `Signal<T>` value; reading it in
   `Render()` subscribes the component's **render-effect**. A setState writes the signal → schedules ONLY that
   component's render-effect → on the next `ReactiveRuntime.Flush` (phase 3) it re-renders and reconciles **just its
@@ -142,7 +173,9 @@ contracts owned elsewhere:
   is inferred run-once and never re-renders; dynamic values flow through binds/`For`/`Show`/context, as before.)*
 - **Fine-grained bindings — one `Prop<T>` per bindable channel.** Each channel is ONE property (BoxEl
   `Transform : Prop<Affine2D>` / `Opacity` / `Fill` / `Width` / `Height`; TextEl `Text` / `Color`; ImageEl
-  `Source` / `Placeholder`) accepting a static `T`, a `Func<T>` thunk, or a concrete signal (signal-direct — the
+  `Source` / `Placeholder`; the base `Element`'s `Visible : Prop<bool>` — P1's presence channel, wired for EVERY
+  element kind since it lives above the per-type `switch`, see `layout.md` §4.7) accepting a static `T`, a `Func<T>`
+  thunk, or a concrete signal (signal-direct — the
   engine effect reads `sig.Value`, the caller allocates no closure; inline lambdas wrap in `Prop.Of(...)`). The
   reconciler wires a BOUND channel into an effect **once at mount** (a fresh thunk on a re-render is ignored —
   the signals-first contract: change the signal's value, not the bind; check `bind.mount-only.stale`); the STATIC

@@ -25,6 +25,7 @@ namespace FluentGpu.Engine.Tests;
 /// contract, and only <c>RunFrame</c> expresses it. The headless window's settable <see cref="WindowState"/> is the
 /// only test seam used — everything else is the production loop.
 /// </summary>
+[Collection(SerialTestCollection.Name)]   // counts its host's pending posts; HostDispatch.Current is process-static
 public sealed class UiPostDrainTests
 {
     private sealed class EmptyRoot : Component

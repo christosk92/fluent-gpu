@@ -25,12 +25,20 @@ public sealed partial class AnimEngine
 
     internal void ClearKeys(int slot) => _keysBySlot.Remove(slot);
 
-    /// <summary>Multi-keyframe eased track (@keyframes). Offsets ascending in 0..1; per-segment easing.</summary>
+    /// <summary>Multi-keyframe eased track (@keyframes). Offsets ascending in 0..1; per-segment easing.
+    /// <paramref name="cadence"/> is the row's own frame rate (<see cref="Cadence"/>, AnimClock.cs) — the DATA that
+    /// replaced the host's ambient-frame-class guess. <c>null</c> (the default) means: <see cref="Cadence.Display"/>
+    /// for a one-shot — it is short and must look smooth — and <see cref="Cadence.Default"/> for <c>loop: true</c>,
+    /// i.e. <see cref="DefaultLoopHz"/>, resolved live so a power policy can retune every idle loop. Pass
+    /// <c>cadence: Cadence.Display</c> for a TRANSIENT loop that must run at the panel refresh (an indeterminate
+    /// ProgressBar), or <c>Cadence.At(hz)</c> for a source with a native rate (a Lottie composition's frame rate).</summary>
     public void Keyframes(NodeHandle node, AnimChannel channel, Keyframe[] keys, float durationMs,
                           bool loop = false, CompositeOp composite = CompositeOp.Replace, float delayMs = 0f,
-                          bool displayRate = false)
+                          Cadence? cadence = null)
     {
         int s = Get(node, channel, composite != CompositeOp.Replace);
+        Cadence resolved = cadence ?? (loop ? Cadence.Default : Cadence.Display);
+        SetCadence(s, resolved);
         ref AnimValue r = ref _slab.At(s);
         r.Kind = GenKind.Keyframes;
         r.Gen = default;
@@ -41,11 +49,10 @@ public sealed partial class AnimEngine
         r.DelayRemainingMs = MathF.Max(0f, delayMs);
         r.Flags &= ~(AnimFlags.Done | AnimFlags.Driven);
         if (loop) r.Flags |= AnimFlags.Loop; else r.Flags &= ~AnimFlags.Loop;
-        if (displayRate) r.Flags |= AnimFlags.DisplayRate; else r.Flags &= ~AnimFlags.DisplayRate;   // transient loop → display rate
         r.Flags |= AnimFlags.JustSeeded;   // seed frame holds the initial value (advance begins next frame)
         r.DrivenSrc = AnimValue.WallClock;
         _keysBySlot[s] = keys;
-        _slab.BumpVersion();   // Loop/DisplayRate rewritten in place on a retarget — keep the census memo honest
+        _slab.BumpVersion();   // Loop + the row's cadence rewritten in place on a retarget — keep the census memo honest
         if (channel == AnimChannel.BlurSigma) RefreshBlurAnimationActive(node);
     }
 
@@ -113,7 +120,7 @@ public sealed partial class AnimEngine
     }
 
     // sample a multi-keyframe track at progress u (0..1), per-segment easing (ported from AnimEngine.Sample)
-    private static float Sample(Keyframe[] keys, float u)
+    internal static float Sample(ReadOnlySpan<Keyframe> keys, float u)
     {
         if (keys.Length == 0) return 0f;
         if (keys.Length == 1 || u <= keys[0].Offset) return keys[0].Value;

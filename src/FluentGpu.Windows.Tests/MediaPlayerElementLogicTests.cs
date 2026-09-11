@@ -108,19 +108,23 @@ public sealed class MediaPlayerElementLogicTests
         Assert.Equal(0, MediaPlayerElement.CalculateLetterboxBars(area, crop, bars));
     }
 
-    // ShouldForceChrome is now the NARROW clause: a real, user-visible stop, or a terminal failure. It is no longer
-    // "anything that is not Playing". Buffering became a time-bounded suppressor (S2) and Opening a bounded grace,
-    // because the protected session maps both Licensed and Buffering onto PlaybackState.Buffering and samples native
-    // state only every 250 ms — so a stale sample used as a permanent force-show pinned the chrome open forever on
-    // any slow or hung start, which is exactly the reported "auto-collapse doesn't work".
+    // Only USER-VISIBLE stops reveal and hold the chrome. The protected session maps Licensed+Buffering onto
+    // PlaybackState.Buffering (sampled every 250 ms) and an ABR quality switch reports buffering too — treating either as
+    // a stop is what made the controls pop up mid-playback with no user input. A zero NaturalSize while Opening is a
+    // video whose size is not known yet, not an audio-only source.
     [Theory]
-    [InlineData(true, PlaybackState.Opening, false)]
-    [InlineData(true, PlaybackState.Buffering, false)]
-    [InlineData(true, PlaybackState.Playing, false)]
-    [InlineData(true, PlaybackState.Failed, true)]
-    [InlineData(false, PlaybackState.Playing, true)]
-    public void ChromePolicy_ForcesOnlyOnStopOrFailure(bool playIntent, PlaybackState state, bool forced)
-        => Assert.Equal(forced, MediaPlayerElement.ShouldForceChrome(playIntent, state));
+    [InlineData(true,  PlaybackState.Playing,   false, ChromePlayback.Playing)]
+    [InlineData(true,  PlaybackState.Buffering, false, ChromePlayback.Playing)]    // a rebuffer / ABR switch is not a stop
+    [InlineData(true,  PlaybackState.Stalled,   false, ChromePlayback.Playing)]
+    [InlineData(true,  PlaybackState.Opening,   true,  ChromePlayback.Playing)]    // size unknown while opening ≠ audio-only
+    [InlineData(true,  PlaybackState.Ready,     false, ChromePlayback.Playing)]    // opened, about to play
+    [InlineData(true,  PlaybackState.Playing,   true,  ChromePlayback.AudioOnly)]
+    [InlineData(false, PlaybackState.Playing,   false, ChromePlayback.Paused)]     // intent wins
+    [InlineData(true,  PlaybackState.Paused,    false, ChromePlayback.Paused)]
+    [InlineData(true,  PlaybackState.Ended,     false, ChromePlayback.Ended)]
+    [InlineData(true,  PlaybackState.Failed,    false, ChromePlayback.Failed)]
+    public void ChromePlaybackOf_MapsOnlyUserVisibleStops(bool intent, PlaybackState state, bool audioOnly, ChromePlayback expected)
+        => Assert.Equal(expected, MediaPlayerElement.ChromePlaybackOf(intent, state, audioOnly));
 
     // The compaction threshold dropped 760 -> 420 DIP. At 760 the transport had room for the full right cluster and
     // was collapsing chips into the ellipsis for no reason; 420 is where the left cluster and the time actually stop

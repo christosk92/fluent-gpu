@@ -219,19 +219,74 @@ internal static unsafe class D3D12MemoryDiagnostics
     {
         lock (Gate)
         {
-            var agg = new Dictionary<string, long[]>();   // key -> [bytes, count]
-            foreach (var e in Live.Values)
-            {
-                string key = NameKey(e.Name);
-                if (!agg.TryGetValue(key, out var v)) { v = new long[2]; agg[key] = v; }
-                v[0] += (long)e.Bytes; v[1]++;
-            }
-            var rows = new List<KeyValuePair<string, long[]>>(agg);
-            rows.Sort((a, b) => b.Value[0].CompareTo(a.Value[0]));
+            var rows = AggregateLiveLocked();
             Console.Error.WriteLine($"[d3d-mem] === live {label}: total={Format(_liveBytes)} resources={Live.Count} created={Format(_createdBytes)} released={Format(_releasedBytes)} creates={_createCount} releases={_releaseCount} resizes={_resizeCount} ===");
             foreach (var r in rows)
                 Console.Error.WriteLine($"[d3d-mem]   {r.Key,-32} {Format((ulong)r.Value[0]),12}  x{r.Value[1]}");
         }
+    }
+
+    /// <summary>One-line live breakdown by name prefix, largest first — <c>total=87.1MiB n=64 | Glyph.AtlasTexture=16.0MiB×1
+    /// | OpacityLayer.Pool=14.7MiB×4 | …</c>, capped at <paramref name="maxRows"/> classes plus an `other=` remainder.
+    /// Same aggregation as <see cref="DumpLive"/>, formatted for a log SINK rather than stderr, so an always-on
+    /// one-shot attribution line can be emitted at first present (the whole point: <c>gpu bytes</c> is one number and
+    /// cannot say WHICH class holds it — and on UMA every class here is pinned host memory).</summary>
+    internal static string BreakdownLine(int maxRows)
+    {
+        lock (Gate)
+        {
+            var rows = AggregateLiveLocked();
+            var sb = new System.Text.StringBuilder(256);
+            sb.Append("total=").Append(Mib(_liveBytes)).Append("MiB n=").Append(Live.Count);
+            long other = 0;
+            for (int i = 0; i < rows.Count; i++)
+            {
+                if (i < maxRows) sb.Append(" | ").Append(rows[i].Key).Append('=').Append(Mib((ulong)rows[i].Value[0])).Append("MiB×").Append(rows[i].Value[1]);
+                else other += rows[i].Value[0];
+            }
+            if (other > 0) sb.Append(" | other=").Append(Mib((ulong)other)).Append("MiB");
+            return sb.ToString();
+        }
+    }
+
+    /// <summary>Compact <c>Class:MiB/count,Class:MiB/count,…</c> token — same per-class aggregation as <see
+    /// cref="BreakdownLine"/> (largest first) but comma-separated, one-decimal MiB, and no total/other rows, so it
+    /// drops into a host log line as a single space-free token (the app's always-on <c>mem.sample</c> gpu section:
+    /// `gpu bytes=… resources=… top=…`). Capped at <paramref name="maxRows"/> classes; empty when nothing is tracked
+    /// yet. Same O(live-resource-count) cost as <see cref="BreakdownLine"/> — fine at the census sampler's ~5s cadence,
+    /// not per frame.</summary>
+    internal static string TopClassesLine(int maxRows)
+    {
+        lock (Gate)
+        {
+            if (Live.Count == 0) return "";
+            var rows = AggregateLiveLocked();
+            var sb = new System.Text.StringBuilder(128);
+            int n = Math.Min(maxRows, rows.Count);
+            for (int i = 0; i < n; i++)
+            {
+                if (i > 0) sb.Append(',');
+                sb.Append(rows[i].Key).Append(':').Append(MibOneDecimal((ulong)rows[i].Value[0])).Append('/').Append(rows[i].Value[1]);
+            }
+            return sb.ToString();
+        }
+    }
+
+    /// <summary>Live resources aggregated by <see cref="NameKey"/> (bytes, count), largest-bytes first. Caller must
+    /// hold <see cref="Gate"/>. Shared by <see cref="BreakdownLine"/>, <see cref="TopClassesLine"/> and <see
+    /// cref="DumpLive"/> so the three census views never drift apart.</summary>
+    private static List<KeyValuePair<string, long[]>> AggregateLiveLocked()
+    {
+        var agg = new Dictionary<string, long[]>();
+        foreach (var e in Live.Values)
+        {
+            string key = NameKey(e.Name);
+            if (!agg.TryGetValue(key, out var v)) { v = new long[2]; agg[key] = v; }
+            v[0] += (long)e.Bytes; v[1]++;
+        }
+        var rows = new List<KeyValuePair<string, long[]>>(agg);
+        rows.Sort((a, b) => b.Value[0].CompareTo(a.Value[0]));
+        return rows;
     }
 
     private static string NameKey(string name)
@@ -242,6 +297,16 @@ internal static unsafe class D3D12MemoryDiagnostics
     }
 
     private static ulong SubtractSaturating(ulong value, ulong delta) => value > delta ? value - delta : 0;
+
+    /// <summary>MiB with two decimals and NO unit/space — <see cref="BreakdownLine"/> appends the unit itself so every
+    /// token in that log line stays a single space-free key=value.</summary>
+    private static string Mib(ulong bytes)
+        => (bytes / (1024.0 * 1024.0)).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture);
+
+    /// <summary>MiB with ONE decimal and no unit — <see cref="TopClassesLine"/>'s compact form (matches the app's own
+    /// <c>Mb()</c> formatter so the whole mem.sample line reads at consistent precision).</summary>
+    private static string MibOneDecimal(ulong bytes)
+        => (bytes / (1024.0 * 1024.0)).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);
 
     private static string Format(ulong bytes)
     {

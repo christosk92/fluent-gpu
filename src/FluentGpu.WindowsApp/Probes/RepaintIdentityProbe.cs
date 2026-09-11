@@ -66,8 +66,8 @@ internal static class RepaintIdentityProbe
                 // Mica OFF: a desktop-sampling acrylic backdrop makes every frame FullDirect by policy (the backdrop
                 // snapshot copies target regions INTO the canvas), so the partial route would never be reached at all.
                 Mica = false,
-                // No ambient throttle and no post-input warm hold: both only matter for a loop we are not running.
-                AmbientFps = 0, WarmCadenceMs = 0f,
+                // No post-input warm hold: it only matters for a loop we are not running.
+                WarmCadenceMs = 0f,
             });
         return exit;
     }

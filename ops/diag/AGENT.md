@@ -97,13 +97,17 @@ with a cadence number, stop.
   of "the scene is not changing"; cross-check it against `skipD=` rather than instead of it.
 - **An empty `[render-census]` is not a refutation.** It is suppressed unless flush ≥ 12 ms or components ≥ 25,
   so a shell-wide-but-cheap re-render every frame prints nothing at all.
-- **A software ambient cap below the panel refresh stacks onto vblank quantisation.** Wavee's current policy is
-  dynamic (30 fps focused on AC without energy saver, otherwise 24), not a fixed 60 fps. Read the structured
-  `effectiveKnobs.ambientFps` values against `display.panelNominalHz` before blaming the present path.
+- **There is no host-wide ambient cap any more — pacing is per animation source.** Every slab row carries a
+  `Cadence`; a bare `loop: true` row with none resolves to `host.Animation.DefaultLoopHz`, which Wavee's power policy
+  sets dynamically (30 Hz plugged, 24 Hz on battery/energy-saver), not a fixed 60. The wait token is
+  `HostWaitKind.Cadence` (`cadence` in `[fps] wait` lines, replacing the old `ambient` token). Read
+  `effectiveKnobs.defaultLoopHz` against `display.panelNominalHz` before blaming the present path, and watch for
+  `[anim.cadence] displayRate-loops=<n>` (fires every 30 s while a `loop: true` row is still running at display rate
+  instead of its bounded Hz — a real cadence regression, not a diag artifact).
 - **The adaptive-fps governor is default ON**, but it consumes a per-swapchain, sequence-numbered whole-command-list
   GPU execution timestamp (`gexec`), never the CPU's frame-fence wait. `wait adaptive-gpu` means its hysteresis is
   engaged; a cached sample may hold that decision briefly between async retirements, then expires open to display-rate
-  pacing. Check `effectiveKnobs.adaptiveFps`, `gexec`, and the wait token before attributing a cadence change to it.
+  pacing. Check `effectiveKnobs.adaptiveGpuPacing`, `gexec`, and the wait token before attributing a cadence change to it.
 - **A `PresentMode` change is not a regression.** Windows promotes and demotes composed ↔ independent flip on
   maximize, occlusion and MPO availability, and the two differ by about one refresh of latency. Bucket by mode.
 - **`spans=R/B/RR` describes what the engine did, not what the user saw.** Until a content-approximation metric

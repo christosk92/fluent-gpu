@@ -21,8 +21,8 @@ namespace FluentGpu.Windows.Tests;
 /// <para>Headless and device-free: none of the three compositors declares a constructor — they are
 /// field-initializer-only, so <c>new</c> allocates the managed arrays whose lengths are under test and touches no
 /// D3D12 device, heap or queue. <see cref="HeadlessGpuDevice"/> is asserted alongside because the deterministic
-/// pacing gates depend on it keeping the historical latency-1 contract (present predicted at
-/// <c>FrameQpc + 2 · refresh</c>) while the real backend moves to 2.</para>
+/// pacing gates depend on it keeping the latency-1 contract (present predicted at <c>FrameQpc + 2 · refresh</c>) —
+/// which the D3D12 backend now also reports, its present-queue depth having been decoupled from its 3 frame banks.</para>
 /// </summary>
 public sealed class FrameBankingTests
 {
@@ -30,7 +30,10 @@ public sealed class FrameBankingTests
     public void FrameBanksMatchFrameCount()
     {
         Assert.Equal(3u, D3D12Device.FRAME_COUNT);
-        Assert.Equal(D3D12Device.FRAME_COUNT - 1, D3D12Device.MAX_FRAME_LATENCY);
+        // NOT FRAME_COUNT - 1. The bank depth (3) is a memory/pipelining decision; the present-queue depth is a
+        // LATENCY decision and is 1 (see the D3D12Device header: depth 2 pre-paid a frame of input lag on EVERY frame
+        // because backpressure is permanent on a weak GPU). A literal, so the two cannot be re-coupled by accident.
+        Assert.Equal(1u, D3D12Device.MAX_FRAME_LATENCY);
         Assert.Equal((int)D3D12Device.FRAME_COUNT, D3D12Device.FrameBankDepth);
         Assert.Equal(D3D12Device.FrameBankDepth, new OpacityLayerCompositor().TimestampBankCount);
         // AcrylicCompositor: slot 0 = canvas, then one bank of MaxPool (= 12) pool SRVs per frame-in-flight.

@@ -102,6 +102,7 @@ public sealed class ScrollInputRouter
     private float _phaseTotalX, _phaseTotalY;     // whole-gesture accumulation, pre-latch axis pick
     private float _phaseFrameX, _phaseFrameY;     // this-frame accumulation, post-latch (flushed by EndFrame)
     private double _phaseLastT;
+    private bool _phaseWheel;                    // this gesture's producer is a MOUSE wheel (IsWheelProducer) — no overscroll
 
     // §A′ (class remarks / plan §12 "Wave-6 Fix C"): the slop-crossing packet found NO scroller but an ELEMENT under
     // it consumed the wheel — that ownership decision is locked for the WHOLE gesture (never re-latch a viewport even
@@ -211,6 +212,7 @@ public sealed class ScrollInputRouter
                 EndPhaseGesture(cancel: true);   // a producer restart ends any prior gesture cleanly (legacy OnScrollPhase)
                 _phaseTotalX = 0f; _phaseTotalY = 0f;
                 _phaseOpen = true;
+                _phaseWheel = IsWheelProducer(e.DeviceClassRaw, e.Pointer);   // latched: one physics path per gesture
                 // A Begin may carry the first displacement (a hi-res fallback's slop packet) — count it.
                 if (e.ScrollDelta != 0f || e.ScrollDeltaX != 0f) AccumulatePhaseDelta(in e);
                 break;
@@ -280,8 +282,20 @@ public sealed class ScrollInputRouter
         float delta = _phaseHoriz ? _phaseFrameX : _phaseFrameY;
         _phaseFrameX = 0f; _phaseFrameY = 0f;
         if (delta == 0f || !_phaseLatched || !_scene.IsLive(_phaseNode)) return;
-        _port.Post(ScrollInput.FrameDelta((int)_phaseNode.Raw.Index, _phaseLastT, delta));
+        _port.Post(ScrollInput.FrameDelta((int)_phaseNode.Raw.Index, _phaseLastT, delta, noOverscroll: _phaseWheel));
     }
+
+    /// <summary>Is a scroll-phase gesture's producer a MOUSE wheel rather than a direct-manipulation device? Only the
+    /// hi-res wheel FALLBACK producer can be one — a sub-notch / free-spin wheel that the platform streams as a phase
+    /// gesture so it tracks 1:1 — and the platform marks it by tagging its packets <see cref="PointerKind.Mouse"/>
+    /// (a precision-touchpad packet on the same fallback path is tagged <see cref="PointerKind.Touchpad"/>).
+    /// A mouse wheel never rubber-bands: overscroll/bounce is the affordance of DIRECT manipulation (touch, precision
+    /// touchpad — the DirectManipulation overpan Windows shows for both), while a wheel clamps at the extents (Flutter's
+    /// <c>ScrollPositionWithSingleContext.pointerScroll</c> clamps the wheel target to [minScrollExtent,
+    /// maxScrollExtent] even under BouncingScrollPhysics; the engine's detented WheelNotch chase hard-stops the same
+    /// way). DirectManipulation (Touchpad) and touch (Touch) producers keep their band. Pure.</summary>
+    public static bool IsWheelProducer(byte deviceClassRaw, PointerKind pointer)
+        => deviceClassRaw == (byte)ScrollDeviceClass.WheelHiResFallback && pointer == PointerKind.Mouse;
 
     private void EndPhaseGesture(bool cancel)
     {
@@ -297,6 +311,7 @@ public sealed class ScrollInputRouter
         _phaseLatched = false; _phaseOpen = false; _phaseNode = NodeHandle.Null;
         _phaseTotalX = 0f; _phaseTotalY = 0f; _phaseFrameX = 0f; _phaseFrameY = 0f; _phaseDirty = false;
         _phaseElementOwnsWheel = false;
+        _phaseWheel = false;
     }
 
     /// <summary>True when this frame's dispatch accumulated producer delta that <see cref="EndFrame"/> has not yet

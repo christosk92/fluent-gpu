@@ -61,8 +61,9 @@ computation; a property *binding* is a finer one. Three update paths, cheapest f
 ## Rules that prevent most bugs
 
 1. To make something update, a signal it **reads** must change. `.Value` subscribes; `.Peek()` does not.
-2. `Component.Render()` re-runs on its **own** state/context only. **Parent→child data flows via signals or context,
-   never constructor args** — constructor values freeze at mount (the factory is not re-invoked on re-render).
+2. `Component.Render()` tracks its own signals/context and explicit re-pushed props. Changing parent data uses
+   `Embed.Comp(props, factory)` / `[Props]`, stable binds/signals, or ambient context. Plain fields initialized only
+   by a propless factory freeze at mount. Bound collection revisions preserve item/component identity.
 3. A `Component.Render()` that reads no signals is inferred **run-once** (there is ONE `Component` base — no `ReactiveComponent`); show dynamic values via a bound prop (`Text = sig` signal-direct, or `Text = Prop.Of(() => …)` for derived text), not
    `Ui.Text(sig.Value)`.
 4. Bind thunks must read `.Value`, not `.Peek()`.
@@ -93,11 +94,10 @@ computation; a property *binding* is a finer one. Three update paths, cheapest f
   `MinWidth=0f + MaxLines=1 + Trim=CharacterEllipsis`; fixed cells get `Shrink=0f`. Respect existing `Shrink=0f`
   as a deliberate "this never gives" contract. Exemplar: `src/apps/Wavee/Components/TrackRow.cs`.
 - **Responsive = tier maps with hysteresis, never inline `if (width > N)` or hardcoded widths.** Measure with
-  `Responsive.Of` (`src/FluentGpu.Controls/Responsive.cs`) or `UseMeasuredWidth(quantum)`; derive ordered
-  pressure tiers (drop tertiary info → abbreviate → stack — never wrap); fold every width-derived prop into the
-  child's `Key` so a tier crossing remounts instead of leaving stale frozen props. Exemplars:
-  `src/apps/Wavee/Features/Detail/ArtistPopular.cs` (tier string in the row `Key`),
-  `src/apps/Wavee/Features/Detail/DetailLayoutBreakpoints.cs` (widen immediately, narrow past a 24-DIP dip).
+  `Responsive.Of` (`src/FluentGpu.Controls/Responsive.cs`) or `UseMeasuredWidth(quantum)`; derive ordered pressure
+  tiers and deliver width-dependent presentation through live props. Change the child's `Key` only when a tier
+  changes documented mount-only layout configuration and its local interaction state should reset. Breakpoint
+  hysteresis still prevents oscillation; it does not require metadata/content remounts.
 - **Long lists virtualize**: `Virtual.List`/`Virtual.Grid` (`src/FluentGpu.Controls/Virtual.cs`) — `Flow.For`
   over thousands of rows is a guaranteed hitch.
 

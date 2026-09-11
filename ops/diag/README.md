@@ -95,7 +95,7 @@ a probe, which then reports an empty bucket that looks like a clean result.
 | --- | --- | --- | --- |
 | `FG_FPS_LOG` | `EnvFlag` (`1`/`true`/`on`) | yes | the `[fps]` line: loop + present cadence, per-phase ms, wait kind, seam deltas |
 | `FG_SCROLL_PERF` | `EnvFlag` | yes | `[scrollperf]` 1 Hz roll-up — the scroll-bind thrash evidence |
-| `FG_WAKE_DIAG` | `EnvFlag` | yes | `[wakediag]` reconciled / layout-only / record-only split + wake-reason roster |
+| _(retired)_ `FG_WAKE_DIAG` | — | — | Now **always on**: one `[wake]` line per 30 s carries fps, the reconciled / layout-only / record-only split, `skipMiss`, and the kept/sole wake-reason roster. Nothing to enable. |
 | `FG_RENDER_CENSUS` | `EnvFlag` | yes | `[render-census]` — **suppressed unless flush ≥ 12 ms or comps ≥ 25** |
 | `FG_OFFSET_JUMP` | **`== "1"` exactly** | yes | `[OFFSET-JUMP]` large single-write jumps. `true`/`on` silently **disable** it |
 | `FG_LAYOUT_DIAG` | `EnvFlag` | yes | measure/arrange/text-shape counts; without it the `FrameTiming` i1 column is structurally 0 |

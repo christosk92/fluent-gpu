@@ -255,6 +255,78 @@ two consumers:
 **arranged** window of *this* frame so warming starts a frame earlier than a passive effect would
 (media-pipeline §6.5 row). It is the same phase `ScrollToIndex` uses.
 
+### 3.4 Typed bound authoring (Operation ultra-fast GPU engine, P3)
+
+`ItemsView.CreateBound<T>(BoundItemsSource<T> items, Func<BoundItemScope<T>, Element> rowTemplate, RepeatLayout,
+ListOptions<T>?)` (`FluentGpu.Controls/ItemsView.cs`) is the signals-first bound path's **typed** entry point: the
+row template runs **once per persistent slot** and every value that varies by index is expressed as a `Prop<T>`
+(or a plain delegate) read from `BoundItemScope<T>.Item` — never re-derived by rebuilding the element tree.
+
+**The item signal is equality-gated by construction.** `BoundItemsSource<T>.BindItem(IReadSignal<int> slotIndex,
+ReactiveRuntime runtime, int itemStartIndex = 0, IEqualityComparer<T>? comparer = null)`
+(`FluentGpu.Controls/BoundItemsSource.cs`) wraps the slot's resolved item in a `Memo<T>`: it recomputes on every
+slot-index or source-snapshot change, but — per `Memo<T>`'s push/pull equality cut-off (Foundation/Signals) —
+notifies its own subscribers **only when the resolved item actually differs** under `comparer` (default
+`EqualityComparer<T>.Default`). `CreateBound<T>` always uses this overload (never the older ungated
+`BindItem(IReadSignal<int>, int)`, kept only for non-hosted callers that have no `ReactiveRuntime` at hand); the
+runtime comes from `RowScope.Runtime`, an `init`-only property the bound realize path in `ItemsView.Render()`
+stamps onto every `RowScope` it constructs (`Runtime = Context.Runtime`) — `ListOptions<T>.ItemComparer` threads
+through to the `BindItem` call. The practical effect: an "activity-only" republish of the upstream source (a new
+list instance whose per-index *values* are unchanged) resolves every realized slot's item once, but fires **zero**
+downstream channel effects — see `gate.bound.equal-republish-fires-nothing`.
+
+**`FluentGpu.Controls/BoundItemScope.cs`** (`BoundItemScopeExtensions`) is the authoring surface: one extension
+method per channel shape, each allocating **exactly one closure** (plus, for `Spans`, one `SpanBuffer`) at
+template-build time and nothing further on any later rebind —
+
+| Helper | Returns | Notes |
+|---|---|---|
+| `Text(sel)` | `Prop<string>` | |
+| `Text<TKey>(keySel, FormatCache<TKey>, formatter)` | `Prop<string>` | routes through a caller-hoisted `FormatCache<TKey>` (Foundation) |
+| `Color(sel)` | `Prop<ColorF>` | |
+| `Opacity(sel)` | `Prop<float>` | |
+| `Show(sel)` | `Prop<bool>` | binds `Element.Visible` (P1 presence channel) — **frequent** presence flips |
+| `Image(sel)` | `Prop<string>` | null/empty → `""`, `ImageEl`'s existing "no image" convention |
+| `Spans(fill)` | `Prop<TextSpans>` | one `SpanBuffer` per call site per slot (P2 bound spans) |
+| `Number(sel)` | `Prop<string>` | via `FormatCache.Int` (dense, never cleared) |
+| `Duration(selMs)` | `Prop<string>` | via `FormatCache.DurationMmSs` ("m:ss", cached by whole second) |
+| `Value<TVal>(sel)` | `Prop<TVal>` | generic escape hatch for a non-string channel |
+| `Signal<TVal>(sel, comparer?)` | `IReadSignal<TVal>` | an equality-gated `Memo<TVal>` for a sub-component's own reactive input |
+| `Invoke(Action<T>)` | `Action` | resolves `Item.Peek()` — never `.Value` — at invocation |
+| `Invoke(Action<T, PointerEventArgs>)` | `Action<PointerEventArgs>` | same, for `OnPointerPressed`/`OnPointerReleased` |
+| `InvokeSpan(Action<T, int>)` | `Action<int>` | for `SpanTextEl.OnSpanClick` |
+| `ShowWhen(pred, build)` | `ShowEl` | `Flow.Show` — a real mount/unmount for a **rare/expensive** branch |
+
+**The one rule that matters** (stated on the extension class, repeated here because it is the thing to get
+wrong): a cell that is present/hidden **frequently** (a chart glyph, a "now playing" cue, a badge that flips per
+row) is `Show` → `Element.Visible` — shape-stable, the P1 presence channel does the layout-flow work, no
+remount. A state that is **rare or expensive** to keep mounted (a spinner, a marquee, a retry line, a drawer) is
+`ShowWhen` — `Flow.Show`, an actual mount/unmount. Reaching for `ShowWhen` on a frequent flip defeats shape
+stability (the branch element gets rebuilt on every toggle); reaching for `Show` on a genuinely rare, heavy
+branch keeps dead weight mounted for nothing.
+
+`FluentGpu.Engine/Foundation/FormatCache.cs`: `FormatCache<TKey>` is a bounded `Dictionary<TKey,string>` (cap
+`FormatCache<TKey>.Capacity` = 4096; a miss past the cap **clears the whole table** rather than evicting
+piecemeal — no per-entry LRU bookkeeping on the hot path). `FormatCache.Int` is a separate, dense, **never
+cleared** `string[]` grown to the highest index seen (a UI's visible-integer range is bounded and stable, unlike
+an arbitrary keyed domain). `FormatCache.MmSs`/`HhMmSs` are the two shared keyed caches behind
+`FormatCache.DurationMmSs`/`DurationHhMmSs`. UI-thread affine throughout, like `StringTable`. Gate:
+`gate.bound.format-cache-bounded`.
+
+Shape-stable bound controls built on this surface: `PersonPicture.Bound(Prop<string> displayName,
+Prop<string> imageUrl, float size, ColorF? fill)` (`FluentGpu.Controls/PersonPicture.cs`) always mounts an
+`ImageEl` (bound `Source`, empty ⇒ paints nothing) **over** an initials `TextEl` layer whose `Visible` is bound
+to "image empty" — never a photo-vs-initials element-shape branch, unlike the eager `PersonPicture.Create`.
+`ToolTip.Wrap(Element target, Prop<string?> text, float grow, float showDelayMs)` (`FluentGpu.Controls/ToolTip.cs`)
+resolves its bound text every render; null/empty renders `target` alone that render (no hover/focus/press/
+safe-zone wiring), while every hook still runs in the same order every render (hook-order safety — the emptiness
+check happens **after** every `Use*` call, gating only the final wrap/wiring, never a hook call itself). The
+`ToolTip` component instance is still one per wrapped target (re-pushed props, reused across re-renders per the
+existing `Embed.Comp(props, factory)` idiom) — a true "no component per target, service reads text at hover
+time" design is **not** implemented this phase; see the P3 progress notes. Gate:
+`gate.bound.personpicture-tooltip-shape-stable` (`SceneStore.LiveCount` constant across image/tooltip-text
+flips).
+
 ---
 
 ## 4. The `VirtualState` column — semantics + per-range cancellation
@@ -392,6 +464,44 @@ threading-render-seam §5.5/reconciler-hooks §5.5). The virtualizer does **not*
 past `p`, so a recycled slot can never be observed by the render thread reading an in-flight snapshot. In
 single-thread build-order step 1, quarantine=0 and the case degenerates (UI produces+consumes). The keyed-LIS
 diff is correct either way: it never reuses a slot within the same frame it freed it.
+
+### 5.5 Recycle snaps transitions (Operation ultra-fast GPU engine, P3)
+
+A recycle is a **content** change on an already-mounted, already-*displayed* slot — the node itself never
+un-mounts. Without a special rule, a bound-channel write that happens to also be a transition trigger (the P1
+`Element.Visible` false→true edge seeding its declared `Enter`; a future bound `Fill`/`BorderColor` seeding a
+`BrushFade`/spring the way the static write path already does at `WriteColumns`) would read as "this thing just
+appeared" and animate — visibly wrong for what the app sees as the *same persistent row*, now pointing at
+different data.
+
+`TreeReconciler.SuppressBoundTransitions` (`FluentGpu.Engine/Reconciler/Reconciler.cs`) is a re-entrancy-safe
+depth counter (`PushSuppressBoundTransitions()` returns an `IDisposable` scope) the **host** pushes around every
+place a recycle's bound writes can land:
+
+- `AppHost.FlushRebindsToQuiescence` — the unbudgeted post-realize `_runtime.Flush()` call that actually **runs**
+  a recycled slot's rebound channel effects (a signal write just marks a computation dirty; the effect body runs
+  later, at the next `Flush`). This is the call that matters for `RebindBoundSlot`-driven recycles, since the
+  index-signal write itself (`Reconciler.cs`, `RebindBoundSlot`) is just `slot.Index.Value = index` — the actual
+  channel effect fire (and any transition seed inside it) happens here.
+- `TreeReconciler.RealizeWindow`'s single bound-realize dispatch site (the one call that fans out to
+  `RealizeBoundWindow`/`RealizeBoundWindowExtended`/`RealizeBoundWindowWithPersistentPrefix`) — covers both a
+  genuinely NEW slot's cold mount (`Mount(root, el)`, whose `runNow: true` bound-effect first fire could
+  otherwise seed a spurious transition) and every `RebindBoundSlot` call inside that same realize pass.
+
+Every place that seeds a bound-channel transition checks the counter and **snaps instead of animating** when
+it is non-zero — today that is exactly the P1 presence false→true Enter seed in
+`Reconciler.Presence.cs`:`BindPresence` (`&& SuppressBoundTransitions == 0 &&` guards the `anim.SeedEnter(...)`
+call); a future bound `Fill`/`BorderColor`/`Corners` transition seed (§3.4's equality-gated static channels —
+`HoverFill`/`PressedFill`/`BorderColor`/`Corners`/`RadialGradientCenter`/`TextEl.Color`/`ImageEl.Placeholder` —
+are gated on WRITE today, not yet wired to seed a `BrushFade`; the static write path already does at
+`WriteColumns`, §3.4's table) would check the same counter the same way. No app code ever decides "this is a
+recycle" — the engine derives it purely from *where the write physically happens*.
+
+Gate: `gate.bound.transition-snaps-on-recycle` (`BoundTemplateSuite`, VerticalSlice `bound` suite) — a live
+(non-recycle) `Visible` false→true edge on an already-realized row seeds a real `AnimEngine` track (verified via
+`AnimEngine.TryGetTrackValue(node, AnimChannel.Opacity, out _)` on the specific node, not the global
+`HasActive`, since a scroll jump can perturb unrelated tracks like a scrollbar fade); the SAME persistent slot
+node, reached through a bound-window recycle instead, seeds nothing on that node — it snaps.
 
 ---
 
@@ -636,6 +746,18 @@ would **overflow precisely during list realization** (a 40+-row window exceeds c
 `ArrayPool` reuses backing arrays across realizes (no churn) and clears refs on return so realized `Element`s
 are collectable. This is the single most-cited critique catch (painpoints §99); getting it wrong reintroduces
 GC pressure exactly where virtualization was supposed to remove it.
+
+**The typed bound path's addendum (Operation ultra-fast GPU engine, P3).** `ItemsView.CreateBound<T>` (§3.4)
+adds no NEW allocation category — a recycle is still "write the slot's index signal, let the equality-gated
+binds settle" — but tightens two things the untyped bound path left to the app author: (1) `BoundItemScope<T>`'s
+helpers each close over exactly one delegate (plus, for `Spans`, one reused `SpanBuffer`) at template-build
+time, so a 1000-row template with ~15 bound channels per row realizes with **zero** additional per-channel
+allocation on a steady recycle frame; (2) `FormatCache`/`FormatCache<TKey>` (§3.4) turn "format this int/duration
+into a label" from a per-rebind `string` allocation into a dictionary/array probe against a string the process
+already owns. Gate `gate.bound.typed-template-zero-alloc` (`BoundTemplateSuite`, VerticalSlice `bound` suite)
+holds a 1000-row typed template to `HotPhaseAllocBytes == 0` on a settled steady frame and
+`RebindFlushAllocBytes ≤ 2 KB` on the frame that actually shifts/recycles slots, with the template's own
+`Builds` counter unchanged across the shift (a recycle is a signal rebind, never a template rebuild).
 
 ---
 

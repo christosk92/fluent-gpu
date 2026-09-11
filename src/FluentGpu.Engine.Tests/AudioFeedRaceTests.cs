@@ -176,8 +176,8 @@ public sealed class AudioFeedRaceTests
         using var stop = new ManualResetEventSlim(false);
         long frames = (long)(5.0 * Fmt.SampleRate);
 
-        var a = Task.Run(() => { try { while (!stop.IsSet) feed!.FeedOnce(); } catch (Exception e) { err = e; } });
-        var b = Task.Run(() => { try { while (!stop.IsSet) feed!.WorkerPumpOnce(); } catch (Exception e) { err = e; } });
+        var a = Task.Run(() => { try { while (!stop.IsSet) { feed!.FeedOnce(); Thread.Sleep(1); } } catch (Exception e) { err = e; } });
+        var b = Task.Run(() => { try { while (!stop.IsSet) { feed!.WorkerPumpOnce(); Thread.Sleep(1); } } catch (Exception e) { err = e; } });
         var c = Task.Run(() =>
         {
             try
@@ -185,7 +185,8 @@ public sealed class AudioFeedRaceTests
                 for (int i = 0; i < 200; i++)
                 {
                     var voice = new SignalGeneratorSource(2, Fmt.SampleRate, 220, 0.5f, frames);
-                    session.SetVoice(voice, TimeSpan.FromSeconds(5.0), frames, NormMode.Off, -14f, initialVolume: 1f);
+                    while (!session.TrySetVoice(voice, TimeSpan.FromSeconds(5.0), frames, NormMode.Off, -14f, initialVolume: 1f))
+                        Thread.Yield();
                 }
             }
             catch (Exception e) { err = e; }
@@ -209,15 +210,16 @@ public sealed class AudioFeedRaceTests
         Assert.NotNull(feed);
         session.ConnectSignals(new MediaSignalSink(new MediaPlayerCore()));
         _ = session.PlayAsync();
-        feed!.ControlTickOnce();   // Opening → Buffering
+        feed!.WorkerPumpOnce();
+        feed.ControlTickOnce();   // Opening → Buffering
         feed.ControlTickOnce();    // Buffering → Ready → Playing
         Assert.Equal(PlaybackState.Playing, session.CurrentState);
 
         Exception? err = null;
         using var stop = new ManualResetEventSlim(false);
 
-        var a = Task.Run(() => { try { while (!stop.IsSet) feed.FeedOnce(); } catch (Exception e) { err = e; } });
-        var b = Task.Run(() => { try { while (!stop.IsSet) feed.WorkerPumpOnce(); } catch (Exception e) { err = e; } });
+        var a = Task.Run(() => { try { while (!stop.IsSet) { feed.FeedOnce(); Thread.Sleep(1); } } catch (Exception e) { err = e; } });
+        var b = Task.Run(() => { try { while (!stop.IsSet) { feed.WorkerPumpOnce(); Thread.Sleep(1); } } catch (Exception e) { err = e; } });
         var c = Task.Run(() =>
         {
             long id = 1;
@@ -227,7 +229,9 @@ public sealed class AudioFeedRaceTests
                 {
                     var incoming = new MemoryAudioSource(new float[400 * 2], 2);   // short + finite → sounds, exhausts, retires
                     long startNow = session.ConsumeSeqFrames;
-                    session.AddCrossfadeVoice(incoming, GainEnvelope.Constant, startNow, 1f, null, ++id);
+                    long nextId = ++id;
+                    while (!session.TryAddCrossfadeVoice(incoming, GainEnvelope.Constant, startNow, 1f, null, nextId))
+                        Thread.Yield();
                     session.SetVoiceEnvelope(session.PrimaryVoiceIdValue, GainEnvelope.Constant);
                 }
             }
@@ -260,18 +264,21 @@ public sealed class AudioFeedRaceTests
         int pumpThreadId = 0;
         using var stop = new ManualResetEventSlim(false);
 
-        var a = Task.Run(() => { try { while (!stop.IsSet) feed.FeedOnce(); } catch (Exception e) { err = e; } });   // consumes seek flushes
-        var b = Task.Run(() =>
+        var a = Task.Factory.StartNew(() => { try { while (!stop.IsSet) { feed.FeedOnce(); Thread.Sleep(1); } } catch (Exception e) { err = e; } },
+            CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+        var b = Task.Factory.StartNew(() =>
         {
             pumpThreadId = Environment.CurrentManagedThreadId;
-            try { while (!stop.IsSet) feed.WorkerPumpOnce(); } catch (Exception e) { err = e; }
-        });
+            try { while (!stop.IsSet) { feed.WorkerPumpOnce(); Thread.Sleep(1); } } catch (Exception e) { err = e; }
+        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
         var c = Task.Run(async () =>
         {
             try
             {
                 var rnd = new Random(7);
-                for (int i = 0; i < 400; i++)
+                // Each operation now waits for four real ownership/PCM acknowledgements. Exercise many collisions
+                // without turning timer granularity across hundreds of sequential seeks into the assertion.
+                for (int i = 0; i < 64; i++)
                 {
                     await session.SeekAsync(TimeSpan.FromSeconds(rnd.NextDouble() * 20), SeekMode.Accurate);
                 }
@@ -280,7 +287,8 @@ public sealed class AudioFeedRaceTests
             finally { stop.Set(); }
         });
 
-        await Task.WhenAll(a, b, c).WaitAsync(TimeSpan.FromSeconds(10));
+        try { await Task.WhenAll(a, b, c).WaitAsync(TimeSpan.FromSeconds(15)); }
+        finally { stop.Set(); }
         Assert.Null(err);   // a control-thread inner seek mid-decode is the LinearResampler torn-Reset crash — routed away
 
         // The inner decoder was touched ONLY by the worker pump thread (never the control seek task or the RT feed).
@@ -393,31 +401,31 @@ public sealed class AudioFeedRaceTests
     }
 
     [Fact]
-    public void FeedThread_Underrun_BumpsXrunCounter_ThenPublishesSignalOffRt()
+    public void FeedThread_StartupWaitsForPcm_ThenReportsRealPostStartStarvation()
     {
         var session = NewSession(out var endpoint, out var feed, seconds: 5.0, attachFeed: true);
         Assert.NotNull(feed);
         session.ConnectSignals(new MediaSignalSink(new MediaPlayerCore()));
         _ = session.PlayAsync();
-        feed!.ControlTickOnce();   // Opening → Buffering
-        feed.ControlTickOnce();    // Buffering → Ready → Playing
-        Assert.Equal(PlaybackState.Playing, session.CurrentState);
-
-        // The worker never ran → the voice ring is starved → the RT feed writes silence + bumps the xrun counter.
-        long x0 = feed.XrunCount;
+        feed!.ControlTickOnce();
+        feed.ControlTickOnce();
+        Assert.Equal(PlaybackState.Buffering, session.CurrentState);
         feed.FeedOnce();
-        Assert.True(feed.XrunCount > x0, "underrun did not bump the xrun counter");
-
-        feed.ControlTickOnce();                                  // publishes the xrun signal OFF the RT thread
-        Assert.Equal((int)feed.XrunCount, feed.Xruns.Peek());
-
-        // Once the worker fills the ring ahead, the RT feed stops under-running.
+        Assert.Equal(0, feed.XrunCount);
         feed.WorkerPumpOnce();
-        long x1 = feed.XrunCount;
+        feed.ControlTickOnce();
+        Assert.Equal(PlaybackState.Playing, session.CurrentState);
+        for (int i = 0; i < 128; i++) feed.FeedOnce();
+        long stalled = session.SampleClock;
+        for (int i = 0; i < 10; i++) feed.FeedOnce();
+        Assert.Equal(stalled, session.SampleClock);
+        feed.WorkerPumpOnce();
         feed.FeedOnce();
-        Assert.Equal(x1, feed.XrunCount);
-
-        _ = endpoint;   // keep alive
+        Assert.True(feed.XrunCount > 0);
+        feed.ControlTickOnce();
+        Assert.Equal((int)feed.XrunCount, feed.Xruns.Peek());
+        _ = session.DisposeAsync();
+        _ = endpoint;
     }
 
     // ── golden-PCM UNCHANGED on the single-thread pull path (the flip did not alter output) ───────────────────────────

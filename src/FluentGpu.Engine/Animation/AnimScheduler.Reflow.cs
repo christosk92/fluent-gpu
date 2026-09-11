@@ -217,7 +217,19 @@ public sealed partial class AnimEngine
     /// frame before layout re-solved. (2) A declared value is GROUND TRUTH, so it also re-aims the row: the author
     /// saying "this is 240 tall now" mid-flight must bend the animation, not queue a snap at settle. And because a
     /// declared value is by definition not the natural one, it clears <see cref="AnimFlags.NaturalTarget"/> — the host
-    /// must stop overwriting the target from the solved child extent from here on.</para></summary>
+    /// must stop overwriting the target from the solved child extent from here on.</para>
+    /// <para>A declared <c>NaN</c> ("auto") therefore only ever PRESERVES <see cref="AnimFlags.NaturalTarget"/>; it may
+    /// never GRANT it. Whether the host is allowed to re-aim a row from the solved child extent is a property of how the
+    /// row was SEEDED, not of the author's declared value: <see cref="SeedEnterReflow"/> targets the node's natural size
+    /// and sets the bit itself, while <see cref="SeedReflowResize"/> deliberately does NOT — a container's EXIT reflow
+    /// targets its solved WITHOUT-child size, and its child extent still includes the STILL-PAINTED exit orphan (see
+    /// <c>SceneStore.Orphan</c>: a Reflow exit keeps contributing its animating main-axis size to the visual parent's
+    /// Measure). Granting the bit here handed exactly that row permission to chase the orphan, i.e. the "flies back
+    /// OPEN" failure <see cref="SeedEnterReflow"/>'s own note forbids — and every author node re-renders during a close,
+    /// so the grant fired on essentially every one. In a MEASURED virtual list the consequence is visible: the closing
+    /// slot's pinned height climbs back toward the with-drawer extent while the drawer's content is already faded out,
+    /// so the row reserves a band nothing paints in (and, mid-flight, paints content past a band that stopped
+    /// growing).</para></summary>
     public bool RecordDeclaredSize(NodeHandle node, AnimChannel ch, float declared)
     {
         if (!_slab.NodeHasRows((int)node.Raw.Index)) return false;   // O(1) — the common case, per reconciled node
@@ -225,11 +237,8 @@ public sealed partial class AnimEngine
         if (s < 0) return false;
 
         _slab.At(s).RestoreTo = declared;
-        if (float.IsNaN(declared))
-        {
-            _slab.At(s).Flags |= AnimFlags.NaturalTarget;   // "auto" IS the natural size — let the host track content
-        }
-        else if (MathF.Abs(declared - _slab.At(s).To) >= 0.5f)
+        // NaN ("auto"): nothing to re-aim and nothing to clear — the seed owns NaturalTarget (see the note above).
+        if (!float.IsNaN(declared) && MathF.Abs(declared - _slab.At(s).To) >= 0.5f)
         {
             RetargetReflow(node, ch, declared);
             int ns = Find(node, ch);                        // the reseed may have landed on a different slot
@@ -363,6 +372,18 @@ public sealed partial class AnimEngine
         _scene.Mark(node, NodeFlags.PaintDirty);
     }
 
+    /// <summary>Dirty the node whose Measure must see this reflow write. A live node's topological parent is that
+    /// scope; an exit orphan's Parent is null (detached), so the former visual parent is the one that still measures
+    /// it — marking the orphan itself would RunSubtree a rootless node and never update the virtual row's extent.</summary>
+    private void MarkReflowLayoutDirty(NodeHandle node)
+    {
+        var rp = _scene.Parent(node);
+        if (rp.IsNull && (_scene.Flags(node) & NodeFlags.Exiting) != 0
+            && _scene.TryGetOrphanVisualParent(node, out var vp) && !vp.IsNull)
+            rp = vp;
+        _scene.Mark(rp.IsNull ? node : rp, NodeFlags.LayoutDirty);
+    }
+
     /// <summary>The DECLARED (author-written) LayoutInput value a live SizeMode.Reflow row on
     /// <paramref name="node"/>/<paramref name="ch"/> will restore at settle — normally NaN (auto). False when no reflow
     /// row is in flight. The reconciler's transparent-boundary mirror consults this so a component anchor never
@@ -406,8 +427,7 @@ public sealed partial class AnimEngine
             if (ch == AnimChannel.LayoutW) rli.Width = r.RestoreTo; else rli.Height = r.RestoreTo;
             ref NodePaint rp = ref _scene.Paint(node);
             rp.ChildShiftX = 0f; rp.ChildShiftY = 0f;
-            var rpar = _scene.Parent(node);
-            _scene.Mark(rpar.IsNull ? node : rpar, NodeFlags.LayoutDirty);
+            MarkReflowLayoutDirty(node);
             _scene.Mark(node, NodeFlags.PaintDirty);
             _reflowWrote = true;
             return;

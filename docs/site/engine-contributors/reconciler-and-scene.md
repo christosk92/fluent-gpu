@@ -72,14 +72,32 @@ itself is in `FluentGpu.Engine` (`Foundation/`).
 ## Keyed child diff (identity and state preservation by key)
 
 The keyed child diff is the **structural engine** retained underneath everything else — it runs on a component
-re-render and behind `Flow.For`/`Flow.Show`. It lives in `TreeReconciler.ReconcileChildren`. It is a positional+type
-diff with key matching, not the full LIS the design doc targets, but it preserves the two properties that matter:
+re-render and behind `Flow.For`/`Flow.Show`. It lives in `TreeReconciler.ReconcileChildren`. It is a key + type diff
+(unkeyed children pair by ordinal or index, below), not the full LIS the design doc targets, but it preserves the two
+properties that matter:
 
 - **Keyed children match by `Key`** (the `Element.Key` string), so a reorder reuses the existing node — identity and
   all attached state survive the move. For large child sets (`oldN > 32`) it builds a `Dictionary<string,int>` key map;
   below that it scans. A matched node is `Update`d in place; an unmatched new child is `CreateNode` + `Mount`ed; an
   old node whose key disappeared is `Remove`d.
-- **Unkeyed children match positionally** by index (same slot, same `ElementTypeId`).
+- **Unkeyed children match by their ordinal among UNKEYED siblings while the unkeyed population is unchanged**, and
+  by index otherwise (`UnkeyedPairing.Ordinal` decides, once per diff, at the first unkeyed child):
+  - *Same unkeyed count in old and new* → the k-th unkeyed new child pairs with the k-th unkeyed old child (keyed
+    siblings are skipped, not counted). Keyed inserts/removes/moves therefore never shift unkeyed identity. The old
+    same-index rule got this wrong: `[title, artists]` → `[keyedLine, title, artists]` handed the new title the old
+    artists' node and component instance, whose factory had frozen at mount, and remounted artists.
+  - *An unkeyed child was added or removed* → same index (the former rule). That is what an unkeyed insert/remove
+    means positionally. It also keeps a keyed⇄unkeyed flip at one slot (`cond ? keyedX : unkeyedY` ahead of
+    `[title, artists]`, or NavigationView's top-bar "More" button taking an overflowed keyed item's slot) from
+    shifting every unkeyed sibling behind it, which a pure ordinal rule would do.
+  - Either way reuse needs the `ElementTypeId` to match; a mismatch is no reuse (the new child mounts, the old one is
+    removed) and the pairing never slides to a later sibling. A purely unkeyed list behaves exactly as "same index"
+    in both modes. Both the stack path (`ReconcileChildrenCore`, ≤128 children) and the planned path
+    (`ChildReconcilePlan`, >128) apply it: one forward cursor and one counting pass, no allocation, and pure-keyed
+    lists never run the count. The recycle-shape guard (`ShapeCompatible`) checks the ordinal model.
+  - Gates: `gate.reconcile.unkeyed-ordinal.*`, `gate.child-plan-unkeyed-ordinal-yield` (`UnkeyedOrdinalChecks`).
+  - Unkeyed identity is still positional *in kind*. If sibling identity matters across structural changes, key the
+    children. That is the only rule that survives every mix of inserts, removes and moves.
 
 After matching, every surviving child is `Detach`ed and re-`AppendChild`ed in the new order, so document order in the
 scene matches the element order. The diff marks the container `LayoutDirty` when the child set changed **or** when a
@@ -91,7 +109,8 @@ if (structural || moved || newN != oldN) _scene.Mark(node, NodeFlags.LayoutDirty
 ```
 
 That `moved` branch is load-bearing: a list reverse creates and removes nothing, but the rows still have to move, so a
-pure reorder must still relayout. (The harness pins this — see `FlowReorderChecks` below.)
+pure reorder must still relayout. (The harness pins this — see `FlowReorderChecks` below, and
+`gate.reconcile.moved-flag` for a keyed reorder and a mixed keyed/unkeyed swap at the reconciler level.)
 
 **Where to change:** `TreeReconciler.ReconcileChildren` for the structural diff; `ReconcileSingleChild` for the
 single-optional-child case (component output, provider child, `Show` branch).

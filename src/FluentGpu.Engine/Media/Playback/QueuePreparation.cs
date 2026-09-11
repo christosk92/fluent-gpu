@@ -74,8 +74,11 @@ public interface IPreparedItem : IAsyncDisposable
 /// format, with its loudness for the per-voice ReplayGain scalar. Produced by <see cref="PcmAudioPlayer.PrepareAsync"/>.</summary>
 public sealed class AudioPreparedItem : IPreparedItem
 {
+    private int _ownsVoice = 1;
+    /// <summary>Transfer source lifetime to a live session without dropping the prepared PCM.</summary>
+    public void TransferOwnership() => Interlocked.Exchange(ref _ownsVoice, 0);
     /// <summary>Create a ready audio preroll over <paramref name="voice"/>, resampled for <paramref name="mixRate"/>.</summary>
-    public AudioPreparedItem(IAudioSource voice, GaplessInfo gapless, ReplayGainInfo loudness, long totalFrames, TimeSpan duration, int mixRate)
+    public AudioPreparedItem(IAudioSource voice, GaplessInfo gapless, ReplayGainInfo loudness, long totalFrames, TimeSpan duration, int mixRate, long startPositionFrames = 0, int readinessFrames = 0)
     {
         AudioVoice = voice;
         Gapless = gapless;
@@ -83,13 +86,21 @@ public sealed class AudioPreparedItem : IPreparedItem
         TotalFrames = totalFrames;
         Duration = duration;
         MixRate = mixRate;
-        IsReady = true;
+        StartPositionFrames = startPositionFrames;
+        ReadinessFrames = readinessFrames;
     }
+
+    /// <summary>The achieved position after decoder seek, in the trimmed mix domain.</summary>
+    public long StartPositionFrames { get; }
+    /// <summary>Required prepared PCM depth; zero uses the ring's normal target.</summary>
+    public int ReadinessFrames { get; }
 
     /// <inheritdoc/>
     public MediaKind Kind => MediaKind.PcmAudio;
     /// <inheritdoc/>
-    public bool IsReady { get; }
+    public bool IsReady => AudioVoice is RingAudioSource ring
+        ? ring.ProducerFault is null && (ring.BufferedFrames >= (ReadinessFrames > 0 ? ReadinessFrames : ring.TargetFrames) || ring.ProducerDone && ring.BufferedFrames > 0)
+        : AudioVoice is not null && !AudioVoice.Exhausted;
     /// <inheritdoc/>
     public IAudioSource? AudioVoice { get; }
     /// <inheritdoc/>
@@ -108,7 +119,7 @@ public sealed class AudioPreparedItem : IPreparedItem
     /// <inheritdoc/>
     public ValueTask DisposeAsync()
     {
-        (AudioVoice as IDisposable)?.Dispose();
+        if (Interlocked.Exchange(ref _ownsVoice, 0) != 0) (AudioVoice as IDisposable)?.Dispose();
         return ValueTask.CompletedTask;
     }
 }

@@ -42,6 +42,7 @@ public static class SuiteRegistry
     [
         new("geolocation", "geolocation", GeolocationSuite.Run),
         new("layout", "layout", LayoutShellSuite.Run),
+        new("layout-inc", "layout-inc", FluentGpu.VerticalSlice.Suites.LayoutIncrementalSuite.Run),
         new("hooks", "hooks", HooksSuite.Run),
         new("anim", "anim", AnimSuite.Run),
         new("scroll", "scroll", ScrollSuite.Run),
@@ -52,12 +53,15 @@ public static class SuiteRegistry
         new("titlebar", "titlebar", TitleBarSuite.Run),
         new("nav", "nav", NavSuite.Run),
         new("overlay", "overlay", OverlaySuite.Run),
+        new("layerpool", "layerpool", LayerPoolSuite.Run),
         new("damage", "damage", DamageSuite.Run),
         new("path", "path", PathSuite.Run),
         new("lottie", "lottie", LottieSuite.Run),
         new("text", "text", TextSuite.Run),
+        new("bound", "bound", BoundTemplateSuite.Run),
         new("diagnostics", "diagnostics", DiagnosticsSuite.Run),
         new("media-seam", "media-seam", MediaSeamSuite.Run),
+        new("continuity", "continuity", VisualContinuityChecks.Run),
     ];
 
     public static IEnumerable<SuiteEntry> Filter(string? suiteSpec)

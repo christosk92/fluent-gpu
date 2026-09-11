@@ -92,8 +92,18 @@ public interface IGpuDevice : IDisposable
     /// <summary>How many completed presents the swapchain may queue before frame production blocks (DXGI
     /// SetMaximumFrameLatency). Pacing predicts the presented vblank as FrameQpc + (1 + MaxFrameLatency)·refresh
     /// (RefreshLattice.Build). Default 1 — the classic latency-1 contract; HeadlessGpuDevice keeps it so the
-    /// deterministic gates keep PresentQpc = FrameQpc + 2·refresh. D3D12 overrides with FRAME_COUNT − 1 (= 2).</summary>
+    /// deterministic gates keep PresentQpc = FrameQpc + 2·refresh. D3D12 also reports 1: its present-queue depth is a
+    /// LATENCY decision (D3D12Device.MAX_FRAME_LATENCY), deliberately decoupled from its 3 CPU-side frame banks.</summary>
     int MaxFrameLatency => 1;
+
+    /// <summary>Block until the primary swapchain's present queue has room for one more frame, and RESERVE that room.
+    /// Called by the render loop BEFORE it picks which published frame to present, so the frame that reaches the glass is
+    /// the freshest one that existed when the slot opened; a backend that waits inside submit instead ages the frame it
+    /// already chose by the whole wait. The reservation is a credit exactly one Present spends, so a backend that
+    /// implements this MUST skip its internal pacing wait while a credit is held (see D3D12Device.WaitForPresentSlot).
+    /// Default no-op: the headless seam has no present queue, and a backend without a latency waitable keeps waiting
+    /// inside submit. Render-thread only (the submit/present owner).</summary>
+    void WaitForPresentSlot() { }
 
     /// <summary>Best-effort local (device-dedicated) VRAM usage vs the OS-reported budget for this adapter, in bytes.
     /// Returns <see langword="false"/> when the backend cannot report it (the headless seam, and any real backend before
@@ -333,6 +343,15 @@ public interface ISwapchain : IDisposable
         sample = default;
         return false;
     }
+
+    /// <summary>True once this target has PRESENTED at least one content frame — i.e. its front buffer / composition
+    /// surface actually holds pixels this engine drew. A present is not guaranteed to happen just because one was
+    /// requested: the Windows backend stands down for a covered/cloaked/hidden present target
+    /// (<c>D3D12Device.Present</c>), so "we called Present" is not evidence of painted content.
+    /// <para>Load-bearing for the ATOMIC POPUP REVEAL: a windowed popup's HWND is created hidden and revealed only
+    /// once its swapchain reports true here, so a popup can never become visible as its frosted composition chrome
+    /// with an empty content surface. Backends that do not track it report true (today's unconditional reveal).</para></summary>
+    bool HasPresentedContent => true;
 
     /// <summary>Configure the windowed popup's composition chrome (rounded acrylic content rect + outer shadow) for the
     /// current placement. Called on each placement before show. Default no-op: only a backdrop-backed backend honors it.</summary>
