@@ -1,4 +1,4 @@
-using FluentGpu.Foundation;
+﻿using FluentGpu.Foundation;
 using FluentGpu.Hosting.Threading;
 using FluentGpu.Media;
 using FluentGpu.Signals;
@@ -529,6 +529,26 @@ public sealed class ImageCache
     /// <summary>Round a display size up to a decode bucket (64/128/256/512) — the texture-pool / atlas granularity.</summary>
     public static int BucketFor(int px) => px <= 64 ? 64 : px <= 128 ? 128 : px <= 256 ? 256 : 512;
 
+    /// <summary>What a decoded image actually COSTS on the GPU, which is not <c>w × h × 4</c>.
+    /// <para>The texture store rounds every image up to a square bucket (<see cref="BucketFor"/>) and commits a
+    /// resource of that size, then the driver rounds that up again to the 64 KiB placement granularity. So a 150 px
+    /// cover charged 90 000 B of decoded pixels and committed 262 144 B — 2.9× — and a 140 px one 3.3×. Budgeting
+    /// against the decoded figure meant the cache believed it was holding its 24 MB cap while the GPU held ~84 MB,
+    /// which is the whole of the "88 MB of album art" this was measured at. The two numbers diverging is exactly what
+    /// <c>ImageTextureStore</c>'s own comment warns about; this is the cache's side of that agreement.</para>
+    /// <para>Approximate in one direction only: the row pitch is 256-aligned by D3D12, which for every bucket width
+    /// (64/128/256/512 × 4 B = 256/512/1024/2048) is already exact, so the only images this can under-state are the
+    /// oversize ones the store commits at their true size — and those are few and already large.</para></summary>
+    public static long CommittedBytesFor(int w, int h)
+    {
+        int edge = Math.Max(w, h);
+        long pixels = edge <= 512
+            ? (long)BucketFor(edge) * BucketFor(edge) * 4        // the square bucket the store actually creates
+            : (long)Math.Max(1, w) * Math.Max(1, h) * 4;         // oversize: committed at its own size
+        const long Placement = 64L * 1024;
+        return (pixels + Placement - 1) / Placement * Placement;
+    }
+
     /// <summary>Advance the cross-fade clock by <paramref name="dtMs"/> (call once per painted frame, before record).</summary>
     public void Tick(float dtMs) => _clockMs += dtMs;
 
@@ -974,7 +994,7 @@ public sealed class ImageCache
                 long priorBytes = e.Bytes;
                 e.W = result.W;
                 e.H = result.H;
-                e.Bytes = (long)result.W * result.H * 4;
+                e.Bytes = CommittedBytesFor(result.W, result.H);
                 e.BakeQuality = result.Quality;
                 e.BakeUpgradeAttempts = 0;
                 UsedBytes += e.Bytes - priorBytes;
@@ -1000,7 +1020,7 @@ public sealed class ImageCache
             {
                 e.W = result.W;
                 e.H = result.H;
-                e.Bytes = (long)result.W * result.H * 4;
+                e.Bytes = CommittedBytesFor(result.W, result.H);
                 e.BakeQuality = result.Quality;
                 UsedBytes += e.Bytes;
                 DerivedUsedBytes += e.Bytes;
@@ -1095,7 +1115,9 @@ public sealed class ImageCache
         if (ok && float.IsNaN(e.TextureMs)) BeginReveal(e, id, "decode");
         if (ok) e.WasReady = true;   // AFTER BeginReveal: a first-ever decode must still see WasReady==false there
         e.W = w; e.H = h;
-        e.Bytes = ok ? (long)w * h * 4 : 0;
+        // COMMITTED bytes, not decoded pixels — see CommittedBytesFor. Budgeting against the decoded figure let the
+        // cache believe it was holding its cap while the GPU held roughly 3.5x that.
+        e.Bytes = ok ? CommittedBytesFor(w, h) : 0;
         UsedBytes += e.Bytes;
         _pumpCompleted++;
         ContentEpoch++;
@@ -1118,6 +1140,14 @@ public sealed class ImageCache
         }
         QueueSourceDependents(id, ok);
     }
+
+    /// <summary>Shed down to budget NOW, rather than waiting for the next completed decode.
+    /// <para>The only thing that used to call this was <see cref="Pump"/>, and only when a decode had just finished —
+    /// so an app that navigated away from an image-heavy page and then decoded nothing stayed over budget
+    /// indefinitely, holding a parked page's covers until something unrelated happened to complete. Parking a subtree
+    /// unpins everything in it, which is exactly the moment the LRU has new candidates and none of them are on
+    /// screen. Cheap when there is nothing to do: the loop's first predicate is two long compares.</para></summary>
+    public void TrimToBudget() => EvictToBudget();
 
     private void EvictToBudget()
     {

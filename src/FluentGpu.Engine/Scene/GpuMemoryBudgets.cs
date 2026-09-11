@@ -21,11 +21,17 @@ public static class GpuMemoryBudgets
     public const long PixelPoolDefault = 32L * 1024 * 1024;
     public const long PixelPoolWeak = 16L * 1024 * 1024;
 
-    /// <summary>Image-cache steady-state cap. Weak drops to 24 MB (from 64) to shrink both the at-rest residency and
-    /// the post-device-recovery re-realize burst on Adreno-class parts that page hard over their small LOCAL budget
-    /// (adreno-hang-fixes.md M5).</summary>
+    /// <summary>Image-cache steady-state cap. Weak stays well below the discrete default to shrink both the at-rest
+    /// residency and the post-device-recovery re-realize burst on Adreno-class parts that page hard over their small
+    /// LOCAL budget (adreno-hang-fixes.md M5).
+    /// <para>Raised from 24 MB when the cache started charging COMMITTED bytes instead of decoded pixels
+    /// (<see cref="ImageCache.CommittedBytesFor"/>). The old 24 was an honest number against a dishonest measure: at a
+    /// ~3.5× average over-commit it described roughly 84 MB of real GPU memory. Holding 24 against the true figure
+    /// would have cut the resident set to under a third of what shipped and shrunk the prefetch ring with it, so the
+    /// cap moves to 40 — still a large net reduction (~45 MB), with a BIGGER usable ring than before because every
+    /// byte of it is now a byte the GPU actually holds.</para></summary>
     public const long ImageCacheDefault = 64L * 1024 * 1024;
-    public const long ImageCacheWeak = 24L * 1024 * 1024;
+    public const long ImageCacheWeak = 40L * 1024 * 1024;
 
     /// <summary>Derived/blur (blur-hash preview) soft cap. Weak halves it so previews retire faster instead of
     /// padding the small LOCAL segment.</summary>

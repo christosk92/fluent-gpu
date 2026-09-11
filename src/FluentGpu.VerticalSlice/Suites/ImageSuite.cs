@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
@@ -318,8 +318,8 @@ static class ImageSuite
         var weak = GpuMemoryBudgets.For(weak: true);
         var strong = GpuMemoryBudgets.For(weak: false);
 
-        Check("gate.budgets.weak-tier-halves-every-image-budget a weak (UMA/iGPU) adapter gets 16/24/8 MB where a discrete one gets 32/64/16 — the pixel pool, the image-cache cap and the derived/blur cap, all three, because all three are captured once at construction and a tier read that lands late is indistinguishable from a discrete adapter",
-            weak.PixelPool == 16L * 1024 * 1024 && weak.ImageCache == 24L * 1024 * 1024 && weak.Derived == 8L * 1024 * 1024,
+        Check("gate.budgets.weak-tier-shrinks-every-image-budget a weak (UMA/iGPU) adapter gets 16/40/8 MB where a discrete one gets 32/64/16 — the pixel pool, the image-cache cap and the derived/blur cap, all three, because all three are captured once at construction and a tier read that lands late is indistinguishable from a discrete adapter",
+            weak.PixelPool == 16L * 1024 * 1024 && weak.ImageCache == 40L * 1024 * 1024 && weak.Derived == 8L * 1024 * 1024,
             $"pool={weak.PixelPool / (1024 * 1024)}MB image={weak.ImageCache / (1024 * 1024)}MB derived={weak.Derived / (1024 * 1024)}MB");
 
         Check("gate.budgets.strong-tier-unchanged the discrete budgets are exactly what shipped (32/64/16 MB), so the ordering fix cannot have quietly re-sized a desktop GPU",
@@ -329,6 +329,17 @@ static class ImageSuite
         Check("gate.budgets.weak-is-strictly-smaller every weak cap is strictly below its discrete twin — the property that actually matters, stated independently of the numbers so a future re-tune cannot invert one of the three by accident",
             weak.PixelPool < strong.PixelPool && weak.ImageCache < strong.ImageCache && weak.Derived < strong.Derived,
             $"pool={weak.PixelPool}<{strong.PixelPool} image={weak.ImageCache}<{strong.ImageCache} derived={weak.Derived}<{strong.Derived}");
+
+        // The cache charges what the GPU COMMITS, not what the decoder produced. 150px is the case that motivated it:
+        // a 256 bucket, so 262 144 B committed against 90 000 B of pixels — the 2.9x that made a 24 MB cap describe
+        // ~84 MB of real memory.
+        long c150 = ImageCache.CommittedBytesFor(150, 150);
+        long c64 = ImageCache.CommittedBytesFor(64, 64);
+        long c513 = ImageCache.CommittedBytesFor(513, 200);
+        Check("gate.budgets.image-charge-is-committed-not-decoded the cache charges the square bucket the texture store actually commits (64 KiB-aligned), not width x height x 4 — a 150px cover costs a 256 bucket, and charging the decoded figure is what let a 24 MB budget hold ~84 MB of GPU memory",
+            c150 == 256L * 256 * 4 && c64 == 64L * 1024 && c150 > 150L * 150 * 4
+            && c513 >= 513L * 200 * 4 && c513 % (64L * 1024) == 0,
+            $"150px={c150} (decoded {150 * 150 * 4}) 64px={c64} oversize513={c513}");
 
         // The cache must honour a supplied derived budget rather than re-deriving one from the process-global tier,
         // which is the specific mistake this whole change removes. 0 means "not supplied" and falls back to discrete.
@@ -663,8 +674,11 @@ static class ImageSuite
 
     static void ImageCacheChecks()
     {
-        var cache = new ImageCache(new FakeImageDecoder(), budgetBytes: 1000);   // tiny budget to force eviction
-        var a = cache.Request("a", 10, 10);                                      // 10×10×4 = 400 bytes when ready
+        // Budget sized in the currency the cache CHARGES (committed bucket bytes, not decoded pixels): room for two
+        // images, so admitting a third must evict. A 10x10 image costs one 64-bucket = 64 KiB committed, not 400 B.
+        long oneImage = ImageCache.CommittedBytesFor(10, 10);
+        var cache = new ImageCache(new FakeImageDecoder(), budgetBytes: oneImage * 2 + oneImage / 2);
+        var a = cache.Request("a", 10, 10);
         bool pending = cache.StateOf(a) == ImageState.Pending;
         cache.Pump();
         bool ready = cache.StateOf(a) == ImageState.Ready && cache.SizeOf(a) == (10, 10);
@@ -673,9 +687,9 @@ static class ImageSuite
         cache.Pin(a);                                                            // a is "on screen"
         var b = cache.Request("b", 10, 10);
         var c = cache.Request("c", 10, 10);
-        cache.Pump();                                                           // a+b+c = 1200 > 1000 → evict LRU unpinned (b)
+        cache.Pump();                                                           // a+b+c over budget → evict LRU unpinned (b)
         bool keptPinned = cache.StateOf(a) == ImageState.Ready;                  // pinned survived eviction
-        bool withinBudget = cache.UsedBytes <= 1000;
+        bool withinBudget = cache.UsedBytes <= oneImage * 2 + oneImage / 2;
         bool evictedTombstone = cache.StateOf(b) == ImageState.None;
         cache.Pin(b);                                                            // retained ImageEl re-enters with the old handle
         bool rehydratePending = cache.StateOf(b) == ImageState.Pending;
@@ -704,7 +718,7 @@ static class ImageSuite
         var retried = admission.Request("capacity", 32, 32);                    // later remount: retry same handle
         bool retryPending = retried == rejected && admission.StateOf(retried) == ImageState.Pending;
         admission.Pump();
-        bool retryReady = admission.StateOf(retried) == ImageState.Ready && admission.UsedBytes == 32 * 32 * 4;
+        bool retryReady = admission.StateOf(retried) == ImageState.Ready && admission.UsedBytes == ImageCache.CommittedBytesFor(32, 32);
         Check("45b. ImageCache: GPU rejection never becomes Ready; unpinned remount retries",
             rejectedClean && noPinnedRetry && retryPending && retryReady,
             $"state={admission.StateOf(retried)} fail={admission.FailureOf(retried)} used={admission.UsedBytes} pending={admission.PendingCount}");
@@ -740,7 +754,7 @@ static class ImageSuite
         bakeQueue.Post(new FluentGpu.Hosting.Threading.BakedBlurQueue.Result(j0.Id, j0.Generation, true, j0.OutputW, j0.OutputH));
         baked.Pump();
         bool derivedReady = baked.StateOf(d0) == ImageState.Ready && baked.SizeOf(d0) == (256, 128)
-            && baked.DerivedUsedBytes == 256 * 128 * 4;
+            && baked.DerivedUsedBytes == ImageCache.CommittedBytesFor(256, 128);
         Check("45d. ImageCache baked blur: position/style-independent dedup, parameter fork, queued completion, derived byte accounting",
             keying && derivedReady,
             $"dedup={d0==d0Again} fork={d0!=d1} job={jobs} size={baked.SizeOf(d0)} bytes={baked.DerivedUsedBytes}");

@@ -2787,6 +2787,10 @@ public sealed class AppHost : IDisposable
     {
         _dispatcher.DeactivateSubtree(root);
         _inputHooks.RunSubtreeDeactivated(root);
+        // A parked page has just unpinned every cover it was holding, which is the one moment the image LRU gains
+        // candidates that are provably off screen. Eviction otherwise runs only after a completed decode, so
+        // navigating away from an image-heavy page and then decoding nothing left it resident indefinitely.
+        _images.TrimToBudget();
     }
 
     /// <summary>Snapshot the live typed drag for <c>UseDragState</c> — both the in-app <c>DragSource</c> session and the
