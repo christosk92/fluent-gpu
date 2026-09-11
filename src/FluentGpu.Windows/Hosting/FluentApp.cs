@@ -280,18 +280,25 @@ public static class FluentApp
         BootStamp("directwrite-fonts");
         IGpuDevice device = new D3D12Device(strings, composited: o.Mica);
         BootStamp("d3d12device-ctor");
+        // Bring the ADAPTER up here, not at the first CreateSwapchain inside the AppHost constructor below. The three
+        // budgets on the next few lines are captured once and read GpuProfile.Tier, which only InitDevice publishes —
+        // so until this call existed they all ran while Tier == Unknown, which the contract defines as NOT weak, and
+        // every one of them took the discrete branch on a UMA machine. The ctor above allocates nothing and proves
+        // nothing about the adapter; this is the line that makes "the device exists" true. Idempotent — CreateSwapchain
+        // skips it, and device-loss recovery still re-runs InitDevice.
+        (device as D3D12Device)?.EnsureDeviceCreated();
+        BootStamp("d3d12device-init");
+        var budgets = GpuMemoryBudgets.For(GpuProfile.IsWeak);
 
         // Real image pipeline: WIC constrained decode on a worker pool, behind a disk-cached HTTP/2 fetcher.
         if (o.ImageCacheDirectory is { Length: > 0 }) SweepLegacyImageCache();
         using var imageFetcher = new DefaultImageFetcher(diskCache: new DiskImageCache(o.ImageCacheDirectory));
         // ONE bounded CPU pixel pool for the whole pipeline: decode BGRA buffers (workers) + async-upload copies (UI)
-        // share the DefaultRetainedCapBytes budget (media-pipeline.md §3 staging blocks, as built).
-        var pixelPool = new PixelBufferPool(GpuProfile.IsWeak
-            ? 16L * 1024 * 1024
-            : PixelBufferPool.DefaultRetainedCapBytes);
+        // share one budget (media-pipeline.md §3 staging blocks, as built).
+        var pixelPool = new PixelBufferPool(budgets.PixelPool);
         using var imageDecoder = new DecodeScheduler(new WicImageCodec(), imageFetcher,
             new DecodeOptions { PixelPool = pixelPool });
-        var images = new ImageCache(imageDecoder, ImageCacheBudgetBytes());
+        var images = new ImageCache(imageDecoder, ImageCacheBudgetBytes(budgets.ImageCache), budgets.Derived);
         BootStamp("image-pipeline");
 
         using var host = new AppHost(app, window, device, fonts, strings, root(), images);
@@ -756,17 +763,16 @@ public static class FluentApp
         catch { /* locked / partially removed / read-only — the stale cache is harmless, a throw here is not */ }
     }
 
-    private static long ImageCacheBudgetBytes()
+    /// <summary>The tier's image-cache cap (<see cref="GpuMemoryBudgets"/> owns the tier decision), with the
+    /// discrete-only developer override applied on top. The override is deliberately NOT part of the pure budget
+    /// function: it is an environment read, and it must never be able to raise a weak adapter back over the cap the
+    /// Adreno hang work put there.</summary>
+    private static long ImageCacheBudgetBytes(long tierBudget)
     {
-        // Weak (UMA/iGPU) tier: 24MB steady-state cap (from 64MB) — shrinks the at-rest residency AND the
-        // post-device-recovery re-realize burst on Adreno-class parts that page hard when over their tiny LOCAL
-        // budget. Tier-gated: discrete GPUs are unaffected. (adreno-hang-fixes.md M5.)
-        const long DefaultBytes = 64L * 1024 * 1024;
-        const long WeakBytes = 24L * 1024 * 1024;
-        if (GpuProfile.IsWeak) return WeakBytes;
+        if (tierBudget == GpuMemoryBudgets.ImageCacheWeak) return tierBudget;
         string? raw = Environment.GetEnvironmentVariable("FG_IMAGE_CACHE_MB");
         if (int.TryParse(raw, out int mb) && mb is >= 16 and <= 1024) return (long)mb * 1024 * 1024;
-        return DefaultBytes;
+        return tierBudget;
     }
 }
 

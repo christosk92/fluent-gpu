@@ -126,6 +126,12 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     // behaviour). The discrete/non-UMA staging path is untouched throughout.
     private bool _uma;
     private bool _umaPagesDisabled;
+    /// <summary>The HRESULT and the stage ("create" / "map") of the probe that retired UMA page packing. Recorded
+    /// rather than discarded because the two stages have DIFFERENT fixes — a create refusal means the layout is
+    /// unsupported, a map refusal means only the persistent mapping is, and that one can still be written with
+    /// WriteToSubresource — and because a probe that logs no reason is a probe nobody can act on.</summary>
+    private int _umaPageFaultHr;
+    private string? _umaPageFaultStage;
     private ID3D12DescriptorHeap* _srvHeap;
     private D3D12_CPU_DESCRIPTOR_HANDLE _srvCpu0;
     private D3D12_GPU_DESCRIPTOR_HANDLE _srvGpu0;
@@ -686,10 +692,13 @@ internal sealed unsafe class ImageTextureStore : IDisposable
             if (cpuWritten && !_umaPagesDisabled)
             {
                 _umaPagesDisabled = true;
-                // Always-on, once per session: a GPU run must be able to say WHICH path it took without a flag or a
-                // debugger. (No env switch anywhere — the driver answered, and this records the answer.)
-                Diag.Count("d3d12", "imageAtlasUmaUnsupported");
-                Console.Error.WriteLine("[d3d12] UMA atlas pages unavailable (ROW_MAJOR CPU-writable TEXTURE2D create failed) — thumbnails fall back to private textures");
+                // Always-on, once per session, through Diag.Line — NOT Console.Error, which never reaches the host log
+                // sink and is lost entirely in a packaged NativeAOT run with no console, and NOT Diag.Count, whose
+                // recording methods are [Conditional("DEBUG"),Conditional("FLUENTGPU_DIAG")] and vanish in exactly the
+                // Release build where this answer matters. The stage and the HRESULT ride along: they are what says
+                // whether the layout or only the persistent mapping was refused.
+                Diag.Line($"[d3d12] UMA atlas pages unavailable stage={_umaPageFaultStage ?? "create"} hr=0x{_umaPageFaultHr:X8}" +
+                          " (ROW_MAJOR CPU-writable TEXTURE2D) — thumbnails fall back to private textures");
             }
             return false;
         }
@@ -829,7 +838,10 @@ internal sealed unsafe class ImageTextureStore : IDisposable
             if ((int)_device->CreateCommittedResource(&up, D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_NONE, &td,
                 D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COMMON, null, __uuidof<ID3D12Resource>(), (void**)&tex) < 0)
             { NoteResourceFault("Image.CreateTexture.Uma"); return null; }
-            D3D12MemoryDiagnostics.Track(tex, $"Image.Texture.Uma {w}x{h} BGRA8", CommittedBytes(&td));
+            // The size joins the CLASS KEY (a dot, not a space): NameKey cuts at the first space, so the old name
+            // collapsed every bucket into one `Image.Texture.Uma` row and the census could not say whether 88 MB was
+            // 600 thumbnails or 90 heroes. Per-bucket rows are what make the commit-vs-decode over-charge legible.
+            D3D12MemoryDiagnostics.Track(tex, $"Image.Texture.Uma.{w}x{h} BGRA8", CommittedBytes(&td));
             return tex;
         }
 
@@ -840,7 +852,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         if ((int)_device->CreateCommittedResource(&dp, D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_NONE, &td,
             D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST, null, __uuidof<ID3D12Resource>(), (void**)&tex) < 0)
         { NoteResourceFault("Image.CreateTexture"); return null; }
-        D3D12MemoryDiagnostics.Track(tex, $"Image.Texture {w}x{h} BGRA8", CommittedBytes(&td));
+        D3D12MemoryDiagnostics.Track(tex, $"Image.Texture.{w}x{h} BGRA8", CommittedBytes(&td));   // per-bucket class key, see the UMA arm
         return tex;
     }
 
@@ -879,14 +891,22 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         up.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY.D3D12_CPU_PAGE_PROPERTY_WRITE_BACK;
         up.MemoryPoolPreference = D3D12_MEMORY_POOL.D3D12_MEMORY_POOL_L0;
         up.CreationNodeMask = 0; up.VisibleNodeMask = 0;   // 0 ≡ single-adapter node 1
-        if ((int)_device->CreateCommittedResource(&up, D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_NONE, &td,
-            D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COMMON, null, __uuidof<ID3D12Resource>(), (void**)&tex) < 0)
-        { NoteResourceFault("Image.CreateAtlasPage.Uma"); return null; }
+        // NOT NoteResourceFault: this is a CAPABILITY PROBE, and a ROW_MAJOR CPU-writable TEXTURE2D is driver-optional
+        // with no cap bit to ask first. Counting a refused probe as a resource fault made it indistinguishable from
+        // device removal at DrainImageJobs, whose fault DELTA calls NoteIfDeviceLost. The HRESULT and the stage are
+        // recorded instead, and AcquireCell logs them once.
+        int hr = (int)_device->CreateCommittedResource(&up, D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_NONE, &td,
+            D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COMMON, null, __uuidof<ID3D12Resource>(), (void**)&tex);
+        if (hr < 0) { _umaPageFaultHr = hr; _umaPageFaultStage = "create"; return null; }
 
         void* p = null;
-        if ((int)tex->Map(0, null, &p) < 0 || p == null)
+        hr = (int)tex->Map(0, null, &p);
+        if (hr < 0 || p == null)
         {
-            NoteResourceFault("Image.AtlasPage.Map");
+            // Distinct from a create refusal, and the distinction decides the fix: a texture that EXISTS but cannot be
+            // persistently mapped can still be written with WriteToSubresource on the same ROW_MAJOR layout.
+            _umaPageFaultHr = p == null && hr >= 0 ? 0 : hr;
+            _umaPageFaultStage = "map";
             tex->Release();
             return null;
         }

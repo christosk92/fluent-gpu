@@ -290,6 +290,7 @@ static class ImageSuite
 {
     public static void Run(StringTable strings)
     {
+        BudgetChecks();
         AtlasPackerChecks();
         IconChecks(strings);
         ImageCacheChecks();
@@ -304,6 +305,38 @@ static class ImageSuite
         ImageLifecycleChecks(strings);
         UseImageChecks(strings);
         HoldLastGoodChecks(strings);
+    }
+
+    // ── gate.budgets.* — the three ctor-captured image budgets, driven at BOTH tiers ───────────────────────────────
+    // This gate exists because its absence is what let a 2x over-sizing ship on every UMA machine for a whole release
+    // cycle. The three budgets read GpuProfile.IsWeak at construction, the tier is published during device init, and
+    // device init happens AFTER the host builds the image pipeline — so the weak branch was unreachable in production
+    // and, because GpuProfile.IsWeak is ALWAYS false headlessly, unreachable here too. Taking `weak` as an argument is
+    // the fix on both counts (the LayerTargetTrim.Classify precedent, LayerPoolSuite's header says the same thing).
+    static void BudgetChecks()
+    {
+        var weak = GpuMemoryBudgets.For(weak: true);
+        var strong = GpuMemoryBudgets.For(weak: false);
+
+        Check("gate.budgets.weak-tier-halves-every-image-budget a weak (UMA/iGPU) adapter gets 16/24/8 MB where a discrete one gets 32/64/16 — the pixel pool, the image-cache cap and the derived/blur cap, all three, because all three are captured once at construction and a tier read that lands late is indistinguishable from a discrete adapter",
+            weak.PixelPool == 16L * 1024 * 1024 && weak.ImageCache == 24L * 1024 * 1024 && weak.Derived == 8L * 1024 * 1024,
+            $"pool={weak.PixelPool / (1024 * 1024)}MB image={weak.ImageCache / (1024 * 1024)}MB derived={weak.Derived / (1024 * 1024)}MB");
+
+        Check("gate.budgets.strong-tier-unchanged the discrete budgets are exactly what shipped (32/64/16 MB), so the ordering fix cannot have quietly re-sized a desktop GPU",
+            strong.PixelPool == 32L * 1024 * 1024 && strong.ImageCache == 64L * 1024 * 1024 && strong.Derived == 16L * 1024 * 1024,
+            $"pool={strong.PixelPool / (1024 * 1024)}MB image={strong.ImageCache / (1024 * 1024)}MB derived={strong.Derived / (1024 * 1024)}MB");
+
+        Check("gate.budgets.weak-is-strictly-smaller every weak cap is strictly below its discrete twin — the property that actually matters, stated independently of the numbers so a future re-tune cannot invert one of the three by accident",
+            weak.PixelPool < strong.PixelPool && weak.ImageCache < strong.ImageCache && weak.Derived < strong.Derived,
+            $"pool={weak.PixelPool}<{strong.PixelPool} image={weak.ImageCache}<{strong.ImageCache} derived={weak.Derived}<{strong.Derived}");
+
+        // The cache must honour a supplied derived budget rather than re-deriving one from the process-global tier,
+        // which is the specific mistake this whole change removes. 0 means "not supplied" and falls back to discrete.
+        var suppliedWeak = new ImageCache(new FakeImageDecoder(), weak.ImageCache, weak.Derived);
+        var suppliedNone = new ImageCache(new FakeImageDecoder(), strong.ImageCache);
+        Check("gate.budgets.cache-takes-the-derived-budget-it-is-given ImageCache uses the derived/blur cap passed by the host and falls back to the discrete default only when none is supplied — it never reads GpuProfile itself, because that read is a field initializer and would run before the tier is published",
+            suppliedWeak.DerivedBudgetBytes == weak.Derived && suppliedNone.DerivedBudgetBytes == GpuMemoryBudgets.DerivedDefault,
+            $"supplied={suppliedWeak.DerivedBudgetBytes} default={suppliedNone.DerivedBudgetBytes}");
     }
 
     // ── gate.imgatlas.* — the small-image atlas packer (ImageAtlasPacker) ─────────────────────────────────────────

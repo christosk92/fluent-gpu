@@ -562,10 +562,32 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     {
         get
         {
-            var sb = new System.Text.StringBuilder(160);
+            var sb = new System.Text.StringBuilder(224);
 
-            string top = D3D12MemoryDiagnostics.TopClassesLine(4);
+            // 8, not 4: the per-bucket image classes (Image.Texture.Uma.256x256 …) plus the glyph atlas, its upload
+            // banks and the layer pool already fill four rows, and the atlas PAGES — the rows that answer "is
+            // thumbnail packing working at all" — fell off the end of a 4-row list every time.
+            string top = D3D12MemoryDiagnostics.TopClassesLine(8);
             if (top.Length > 0) sb.Append(" top=").Append(top);
+
+            // vram — the closing entry of the GPU book, and on UMA the only honest one. QueryVideoMemoryInfo has been
+            // sampled every ~10 presents since the VRAM-pressure work; nothing ever printed it. LocalCurrentUsage is
+            // the PROCESS total the OS charges us: our tracked resources PLUS everything we never see — Media
+            // Foundation's decode surfaces and its own D3D11 device, the driver's arenas, PSO/shader ISA, command
+            // allocators. So `untracked` is exactly the residual a working-set hunt would otherwise need VMMap to
+            // find, and it is now in every field log for free. Omitted entirely until the first sample lands.
+            var vm = D3D12MemoryDiagnostics.LastVideoMemory;
+            if (vm.Valid)
+            {
+                sb.Append(" vram=used:").Append(MibOneDecimalCensus((long)vm.LocalCurrentUsage))
+                  .Append("/budget:").Append(MibOneDecimalCensus((long)vm.LocalBudget))
+                  .Append("/tracked:").Append(MibOneDecimalCensus(vm.TrackedResourceBytes))
+                  .Append("/untracked:").Append(MibOneDecimalCensus(
+                      (long)vm.LocalCurrentUsage > vm.TrackedResourceBytes
+                          ? (long)vm.LocalCurrentUsage - vm.TrackedResourceBytes
+                          : 0L));
+                if (vm.NonLocalCurrentUsage != 0) sb.Append("/nonlocal:").Append(MibOneDecimalCensus((long)vm.NonLocalCurrentUsage));
+            }
 
             if (_opacity is not null || _acrylic is not null || _bakedBlur is not null)
             {
@@ -584,6 +606,16 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                   .Append("/refused:").Append(p.Refusals);
             }
 
+            // imgatlas — whether thumbnail page-packing is actually happening, which until now was only reachable
+            // through the verbose operator dump nothing in the field calls. `pages:0` beside a large
+            // Image.Texture.Uma.64x64 row is the signature of the ROW_MAJOR probe having failed; `cpuWrite:0` says
+            // the discrete staging path is live. AtlasPageBytes/AtlasPagesUseGpuCopy had no callers at all before this.
+            if (_imageTextures is { } imgTex)
+                sb.Append(" imgatlas=pages:").Append(imgTex.AtlasPageCount)
+                  .Append("/cells:").Append(imgTex.AtlasImageCount)
+                  .Append("/bytes:").Append(MibOneDecimalCensus(imgTex.AtlasPageBytes))
+                  .Append("/cpuWrite:").Append(imgTex.AtlasPagesUseGpuCopy ? 0 : 1);
+
             return sb.ToString();
         }
     }
@@ -597,6 +629,27 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
 
     internal ID3D12Device* Device => _device;
     internal ID3D12GraphicsCommandList* CommandList => _cmdList;
+
+    /// <summary>Bring the adapter up NOW, before anything reads <see cref="FluentGpu.Foundation.GpuProfile"/>.
+    /// <para>The constructor is inert and <see cref="InitDevice"/> runs lazily from <see cref="CreateSwapchain"/>,
+    /// which the AppHost constructor calls — so a host that builds its image pipeline "after the device object exists"
+    /// is still reading <c>GpuProfile.Tier == Unknown</c>, and <c>Unknown is NOT weak</c> by contract. Every budget
+    /// captured at construction (the CPU pixel pool, the image-cache budget, the derived/blur budget) therefore took
+    /// the DISCRETE branch on a UMA laptop and sized itself 2x too large, silently and for the process lifetime. The
+    /// per-frame readers were always fine; only the ctor-captured ones were wrong, which is why this went unseen.</para>
+    /// <para>Idempotent by the same <c>_device == null</c> guard <see cref="CreateSwapchain"/> uses, so the later
+    /// swapchain call simply skips it, and device-loss recovery re-runs <see cref="InitDevice"/> as before. Callers
+    /// that never touch a real adapter (headless, the ~40 test hosts) never reach this method at all.</para></summary>
+    public void EnsureDeviceCreated()
+    {
+        if (_device != null) return;
+        long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+        InitDevice();
+        // The boot line reports initDevice from wherever the device was ACTUALLY brought up. Left in CreateSwapchain
+        // alone it would now measure a no-op and report ~0 ms, which is worse than not reporting it.
+        FluentGpu.Foundation.Diag.Line(
+            $"[d3d12.boot] initDevice={(System.Diagnostics.Stopwatch.GetTimestamp() - t0) * (1000.0 / System.Diagnostics.Stopwatch.Frequency):F1}ms (early, pre-budget)");
+    }
 
     public ISwapchain CreateSwapchain(in SwapchainDesc desc)
     {

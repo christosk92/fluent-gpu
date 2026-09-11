@@ -202,10 +202,14 @@ public sealed class ImageCache
     private readonly Dictionary<int, List<int>> _derivedBySource = new();
     private readonly IImageDecoder _decoder;
     private readonly long _budgetBytes;
-    // Soft cap on derived/blur bytes. Weak (UMA/iGPU) tier halves it to 8MB (from 16MB) so blur-hash previews retire
-    // faster and don't pad the tiny LOCAL segment (adreno-hang-fixes.md M5). Set once in the ctor — the backend has
-    // published GpuProfile.Tier by the time the cache is constructed. Discrete GPUs are unaffected.
-    private readonly long DerivedSoftBudgetBytes = GpuProfile.IsWeak ? 8L * 1024 * 1024 : 16L * 1024 * 1024;
+    // Soft cap on derived/blur bytes, so blur-hash previews retire faster on a weak tier instead of padding the small
+    // LOCAL segment (adreno-hang-fixes.md M5). PASSED IN, never read from GpuProfile here: this is a field initializer,
+    // so it ran at construction — and the claim that used to sit on this line, that "the backend has published
+    // GpuProfile.Tier by the time the cache is constructed", was simply false. The device is brought up lazily by the
+    // first CreateSwapchain, which the AppHost constructor makes AFTER the host has built this cache, so Tier was still
+    // Unknown (= not weak) and every UMA machine silently got the 16MB discrete cap. The host now decides the tier
+    // once, through GpuMemoryBudgets.For, and hands the answer down.
+    private readonly long DerivedSoftBudgetBytes;
     private readonly ImageCompleteHandler _onComplete;   // cached → Pump allocates nothing
     private readonly ImageReadyHandler _onPixels;         // cached admission bridge → Pump allocates nothing
     private static readonly ImageReadyHandler _noPixels = static (int id, System.ReadOnlySpan<byte> p, int w, int h) => { };
@@ -272,10 +276,13 @@ public sealed class ImageCache
     /// Apps subscribe for a broken-art fallback, a retry/offline toast, or telemetry. See also <see cref="FailureOf"/>.</summary>
     public event ImageStatusHandler? ImageStatusChanged;
 
-    public ImageCache(IImageDecoder decoder, long budgetBytes = 96L * 1024 * 1024)
+    /// <param name="derivedSoftBudgetBytes">Soft cap on derived/blur bytes; 0 ⇒ the discrete default. Supplied by the
+    /// host from <see cref="GpuMemoryBudgets"/> rather than read from <c>GpuProfile</c> here — see the field.</param>
+    public ImageCache(IImageDecoder decoder, long budgetBytes = 96L * 1024 * 1024, long derivedSoftBudgetBytes = 0)
     {
         _decoder = decoder;
         _budgetBytes = budgetBytes;
+        DerivedSoftBudgetBytes = derivedSoftBudgetBytes > 0 ? derivedSoftBudgetBytes : GpuMemoryBudgets.DerivedDefault;
         _onComplete = OnDecodeComplete;
         _onPixels = OnPixels;
         _pixelSink = _noPixels;
@@ -315,6 +322,10 @@ public sealed class ImageCache
 
     public long UsedBytes { get; private set; }
     public long DerivedUsedBytes { get; private set; }
+    /// <summary>The derived/blur soft cap this cache was built with — the budget the host chose for the tier, exposed
+    /// so a headless gate can prove the cache honoured what it was handed instead of re-deriving one from a global
+    /// that is always false outside a real device.</summary>
+    public long DerivedBudgetBytes => DerivedSoftBudgetBytes;
     public int Count => _byId.Count;
     public int ReadyCount { get { int n = 0; foreach (var e in _byId.Values) if (e.State == ImageState.Ready) n++; return n; } }
     public int ContentEpoch { get; private set; }
