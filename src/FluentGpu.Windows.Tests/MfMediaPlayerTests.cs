@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -107,6 +107,47 @@ public sealed class MfMediaPlayerTests
         Assert.Equal(1, engines[0].PostDetachCalls);       // session1's dispose returned it warm
 
         await session2.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task WarmEngine_IsTornDown_AfterItHasBeenIdleLongEnough()
+    {
+        // "Warm across many opens" used to mean warm FOREVER: once one video had played, the engine — and with it a
+        // second D3D11 device, an MF engine and whatever decode surfaces MF kept — stayed resident for the rest of the
+        // session, invisible to every memory instrument the app has. A returned engine is now torn down once it has
+        // been idle long enough that nothing is plausibly about to re-lease it.
+        var engines = new List<FakeVideoEngine>();
+        var backend = new MfMediaPlayer(() => { var e = new FakeVideoEngine(); engines.Add(e); return e; }, warmIdleMs: 30);
+
+        var session = await backend
+            .OpenAsync(MediaSource.FromUri("http://host/a.mp4"), new MediaOpenOptions(), CancellationToken.None)
+            .AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        await session.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(0, engines[0].DisposeCalls);   // returned warm, not destroyed
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (engines[0].DisposeCalls == 0 && sw.Elapsed < TimeSpan.FromSeconds(5)) await Task.Delay(10);
+        Assert.Equal(1, engines[0].DisposeCalls);
+    }
+
+    [Fact]
+    public async Task WarmEngine_SurvivesATrackSkip_BecauseTheNextLeaseCancelsTheTeardown()
+    {
+        // The whole point of the warmth: a skip re-leases within seconds and must never pay a rebuild. The idle timer
+        // is armed on return, so the guard is that a lease CANCELS it rather than racing it.
+        int factoryCalls = 0;
+        var engines = new List<FakeVideoEngine>();
+        var backend = new MfMediaPlayer(() => { var e = new FakeVideoEngine(); factoryCalls++; engines.Add(e); return e; }, warmIdleMs: 5_000);
+
+        var s1 = await backend.OpenAsync(MediaSource.FromUri("http://host/a.mp4"), new MediaOpenOptions(), CancellationToken.None)
+            .AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        await s1.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        var s2 = await backend.OpenAsync(MediaSource.FromUri("http://host/b.mp4"), new MediaOpenOptions(), CancellationToken.None)
+            .AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(1, factoryCalls);              // still the same engine — the skip paid no rebuild
+        Assert.Equal(0, engines[0].DisposeCalls);
+        await s2.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
     }
 
     [Fact]

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Buffers;
 using System.Threading;
 using System.Threading.Tasks;
@@ -285,7 +285,9 @@ public sealed class ImageSchedulingTests
 
         Assert.Equal(ImageState.Ready, cache.StateOf(derived));
         Assert.Equal((128, 64), cache.SizeOf(derived));
-        Assert.Equal(128 * 64 * 4, cache.DerivedUsedBytes);
+        // Committed bucket bytes, not decoded pixels — the cache budgets what the GPU actually holds
+        // (ImageCache.CommittedBytesFor). Derived through the same function so this cannot drift again.
+        Assert.Equal(ImageCache.CommittedBytesFor(128, 64), cache.DerivedUsedBytes);
         Assert.True(queue.TryDequeueJob(out var upgrade));
         Assert.True(upgrade.IsUpgrade);
         Assert.Equal(BakedBlurQueue.Quality.High, upgrade.Quality);
@@ -297,8 +299,8 @@ public sealed class ImageSchedulingTests
 
         Assert.Equal(ImageState.Ready, cache.StateOf(derived));
         Assert.Equal((256, 128), cache.SizeOf(derived));
-        Assert.Equal(256 * 128 * 4, cache.DerivedUsedBytes);
-        Assert.Equal(256 * 128 * 4 + 512 * 256 * 4, cache.UsedBytes);
+        Assert.Equal(ImageCache.CommittedBytesFor(256, 128), cache.DerivedUsedBytes);
+        Assert.Equal(ImageCache.CommittedBytesFor(256, 128) + ImageCache.CommittedBytesFor(512, 256), cache.UsedBytes);
     }
 
     private static async Task WaitForAsync(Func<bool> predicate)

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
@@ -45,6 +45,22 @@ public sealed class MfMediaPlayer : IMediaBackend, IAsyncDisposable
     private readonly object _engineLock = new();
     private IVideoEngine? _warm;
     private bool _leased;
+    /// <summary>Fires once, <see cref="WarmIdleDisposeMs"/> after the warm engine was returned, and disposes it if it
+    /// is still idle. Re-armed on every return and cancelled by the next lease.</summary>
+    private Timer? _warmIdle;
+    private readonly int _warmIdleMs;
+
+    /// <summary>How long a returned engine stays warm before it is torn down.
+    /// <para>Keeping it forever — which is what "warm across many opens" meant until now — is not free, and the cost
+    /// is invisible to every memory instrument the app has. A live <c>VideoMediaEngine</c> owns a SECOND D3D11 device
+    /// (created with VIDEO_SUPPORT), an <c>IMFDXGIDeviceManager</c>, an <c>IMFMediaEngineEx</c> in windowless-swapchain
+    /// mode, and whatever surfaces Media Foundation decided to keep — the decoder's NV12 reference frames and MF's own
+    /// BGRA8 swapchain. None of it can be counted by the GPU resource tracker, which needs a caller-supplied byte
+    /// count and only ever receives a swapchain HANDLE. So once a single video had played, tens to well over a hundred
+    /// megabytes stayed resident for the rest of the session, with nothing in the census able to name it.</para>
+    /// <para>30 s is chosen against what the warmth is FOR: skipping between tracks, which happens in seconds and must
+    /// never pay a rebuild. Closing a video and going back to audio is not that, and should give the memory back.</para></summary>
+    private const int WarmIdleDisposeMs = 30_000;
 
     /// <summary>Create the production MF backend (a warm <see cref="VideoMediaEngine"/> is built on first open); no DRM
     /// support.</summary>
@@ -56,12 +72,15 @@ public sealed class MfMediaPlayer : IMediaBackend, IAsyncDisposable
     /// (WindowsApi) implementation — the app composition root injects it.</summary>
     public MfMediaPlayer(IMediaBackend drmBackend) : this(static () => new VideoMediaEngine(), drmBackend) { }
 
-    /// <summary>Test/DI seam: supply a video-engine factory (a fake in unit tests) and an optional DRM backend.</summary>
-    internal MfMediaPlayer(Func<IVideoEngine> engineFactory, IMediaBackend? drmBackend = null, HttpClient? http = null)
+    /// <summary>Test/DI seam: supply a video-engine factory (a fake in unit tests), an optional DRM backend, and an
+    /// idle window short enough that a test does not have to wait <see cref="WarmIdleDisposeMs"/> for the teardown.</summary>
+    internal MfMediaPlayer(Func<IVideoEngine> engineFactory, IMediaBackend? drmBackend = null, HttpClient? http = null,
+        int warmIdleMs = WarmIdleDisposeMs)
     {
         _engineFactory = engineFactory;
         _drmBackend = drmBackend;
         _http = http ?? s_http;
+        _warmIdleMs = warmIdleMs;
         Capabilities = new(SupportsVideo: true, SupportsAudioGraph: false, SupportsDrm: drmBackend is not null)
         {
             // MF resolves the container/codec on open; report the common clear-video families as query-time supported.
@@ -80,6 +99,7 @@ public sealed class MfMediaPlayer : IMediaBackend, IAsyncDisposable
     {
         lock (_engineLock)
         {
+            _warmIdle?.Change(Timeout.Infinite, Timeout.Infinite);   // a lease cancels the pending idle teardown
             bool faulted = _warm is { } w && (w.Snapshot.Flags & VideoEngineFlags.Faulted) != 0;
             if (_warm is null || faulted)
             {
@@ -109,7 +129,28 @@ public sealed class MfMediaPlayer : IMediaBackend, IAsyncDisposable
             _leased = false;
             engine.Commands.Post(VideoCommandKind.Transport, a: 0);   // pause — a warm-parked engine does not play
             engine.PostDetach();
+            // Detaching releases the SOURCE, not the engine: the D3D11 device, the DXGI manager, the MF engine and
+            // its surfaces all stay resident. Arm the idle teardown so an app that stops watching video gets that
+            // memory back, while a track skip (which re-leases within seconds) still never pays a rebuild.
+            _warmIdle ??= new Timer(static s => ((MfMediaPlayer)s!).DisposeWarmIfIdle(), this, Timeout.Infinite, Timeout.Infinite);
+            _warmIdle.Change(_warmIdleMs, Timeout.Infinite);
         }
+    }
+
+    /// <summary>Timer callback: tear the warm engine down if nothing leased it in the meantime. Disposing off the
+    /// timer thread is the same shape <see cref="LeaseEngine"/> already uses for a faulted engine — the engine owns
+    /// its own MTA thread and joins it in Dispose — but it must happen OUTSIDE the lock, because that join can block
+    /// and a concurrent lease would otherwise wait behind it.</summary>
+    private void DisposeWarmIfIdle()
+    {
+        IVideoEngine? idle;
+        lock (_engineLock)
+        {
+            if (_leased || _warm is null) return;   // re-leased between the timer firing and this lock: leave it warm
+            idle = _warm;
+            _warm = null;
+        }
+        idle.Dispose();
     }
 
     /// <inheritdoc/>
@@ -175,7 +216,9 @@ public sealed class MfMediaPlayer : IMediaBackend, IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         IVideoEngine? warm;
-        lock (_engineLock) { warm = _warm; _warm = null; _leased = false; }
+        Timer? idle;
+        lock (_engineLock) { warm = _warm; _warm = null; _leased = false; idle = _warmIdle; _warmIdle = null; }
+        idle?.Dispose();
         if (warm is not null) await Task.Run(warm.Dispose).ConfigureAwait(false);
     }
 }
