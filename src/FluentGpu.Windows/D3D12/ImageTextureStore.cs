@@ -34,10 +34,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
 {
     private const int MaxSrv = 4096;    // SRV heap depth (pool textures + atlas pages share it)
     private const int PageSize = 1024;  // atlas page side
-    // D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT. Every CreateCommittedResource texture is rounded up to this, which is
-    // the whole reason small thumbnails must pack: a 64² BGRA8 thumb is 16 KiB of pixels in a 64 KiB commit (4× waste,
-    // and one resident driver resource per thumbnail). Used to report the HONEST committed size to the census.
-    private const ulong PlacementAlignment = 65536;
+    private bool _atlasAllocationKnown;
 
     private struct Tex
     {
@@ -54,6 +51,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         public int Cell, PageGen;                // atlas grid slot + the page generation it was acquired at
         public D3D12_RESOURCE_STATES State;       // actual state of Resource (atlas state lives on AtlasPage)
         public bool NeedsCopy, Live;
+        public SmallImageHeapPool.Lease Placed;
     }
 
     private sealed class AtlasPage
@@ -77,6 +75,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
 
     private struct Pooled
     {
+        public SmallImageHeapPool.Lease Placed;
         public ID3D12Resource* Resource;
         public D3D12_GPU_DESCRIPTOR_HANDLE Srv;
         public int Slot;
@@ -86,6 +85,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     // A deferred resource return (released/recycled once the GPU has fenced past any in-flight frame still using it).
     private struct Retire
     {
+        public SmallImageHeapPool.Lease Placed; // kind 4: heap-owned placed texture, descriptor returned after fence
         public ulong Fence;
         public int Kind;                        // 0 standalone-release | 1 pool-return | 2 atlas-cell-return | 3 upload-release
         public ID3D12Resource* Upload, Resource; // Upload always released; Resource released for kind 0
@@ -147,6 +147,8 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     // Index-aligned with _pages: the packer hands out the page index, this class creates the resource for it.
     private ImageAtlasPacker _packer = null!;
     private readonly Dictionary<int, Stack<Pooled>> _pool = new();   // bucket → free textures
+    private SmallImageHeapPool? _smallImages;
+    private bool _refuseNextPlacedWriteForProbe;
     // Per-bucket FREE-pool cap (audit mem-02): without it the free stacks ratchet to the session-peak in-flight count
     // for each bucket and never release GPU memory. Only two buckets are ever pooled (256/512 art; ≤128 thumbs atlas).
     // The free stack only has to bridge the transient gap between a tile evicting and the NEXT tile re-residencing at
@@ -187,7 +189,18 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     /// <see cref="FlushUploads"/> at the top of the next submit). The host must NOT skip that submit, or the texture
     /// stays empty and the image renders white — uploads are throttled, so a deferred one can land on an otherwise
     /// idle frame whose DrawList is unchanged.</summary>
-    public bool HasPendingUploads => _pendingCopies.Count > 0 || _retired.Count > 0;
+    public bool HasPendingUploads => _pendingCopies.Count > 0 || _retired.Count > 0 || (_smallImages?.HasUnsubmittedActivation ?? false);
+    internal ulong PlacedHeapBytes => _smallImages?.HeapBytes ?? 0;
+    internal ulong PlacedOccupiedBytes => _smallImages?.OccupiedBytes ?? 0;
+    internal int PlacedResourceCreates => _smallImages?.ResourceCreateCount ?? 0;
+    // Native fault-injection gate: refuses one CPU write after a successful map, without damaging the real device.
+    internal void RefuseNextPlacedWriteForProbe() => _refuseNextPlacedWriteForProbe = true;
+    internal bool TryGetPlacedIdentity(int id, out nint resource, out int generation)
+    {
+        resource = 0; generation = 0;
+        if (!_byId.TryGetValue(id, out var t) || !t.Placed.IsValid) return false;
+        resource = (nint)t.Resource; generation = t.Placed.Generation; return true;
+    }
 
     // ── MemCensus accessors (O(1), or a tiny fixed-bucket sum at census cadence — never per-frame) ──
     /// <summary>Images currently packed into atlas pages — O(1) census (alias of <see cref="AtlasImages"/>).</summary>
@@ -225,11 +238,13 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         _srvInc = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE.D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
         D3D12MemoryDiagnostics.Track(_srvHeap, "Image.SrvHeap", (ulong)MaxSrv * _srvInc);
 
-        // One packer for both flavours: the geometry, growth and census policy is identical, only the upload posture
-        // differs. PageBytes is the page's REAL commit (aligned row pitch × height, rounded to the 64 KiB placement
-        // granularity) so the census reports what the driver actually reserved, not the nominal pixel count.
+        // Query the texture allocation, not its upload footprint. Optional ROW_MAJOR descriptors may be rejected
+        // here before CreateCommittedResource. In that case no pages are admitted; the packer's positive placeholder
+        // is unreachable bookkeeping, never a measured allocation or a live census contribution.
         var pageDesc = DescribeTexture(PageSize, PageSize, _uma);
-        _packer = new ImageAtlasPacker(PageSize, (long)CommittedBytes(&pageDesc),
+        ulong pageBytes = AllocationBytes(&pageDesc);
+        _atlasAllocationKnown = pageBytes != 0;
+        _packer = new ImageAtlasPacker(PageSize, _atlasAllocationKnown ? (long)pageBytes : 1,
             _uma ? ImageAtlasUpload.CpuWrite : ImageAtlasUpload.GpuCopy);
     }
 
@@ -238,7 +253,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     /// <summary>True when a ≤128px thumbnail should be packed into a shared page rather than owning a texture. On UMA
     /// this also requires the ROW_MAJOR CPU-writable page probe to have succeeded (<see cref="_umaPagesDisabled"/>).</summary>
     private bool WantAtlas(int bucket)
-        => bucket <= ImageAtlasPacker.MaxPackedBucket && _packer.CanPack(bucket) && !(_uma && _umaPagesDisabled);
+        => _atlasAllocationKnown && bucket <= ImageAtlasPacker.MaxPackedBucket && _packer.CanPack(bucket) && !(_uma && _umaPagesDisabled);
 
     public bool Has(int id) => _byId.TryGetValue(id, out var t) && (t.Live || t.NeedsCopy);
 
@@ -397,8 +412,9 @@ internal sealed unsafe class ImageTextureStore : IDisposable
             }
             else if (bucket <= 512)
             {
-                if (!AcquirePooled(bucket, out var pt)) return RejectCapacity();
+                if (!AcquirePooled(bucket, out var pt, allowPlaced: true)) return RejectCapacity();
                 t.Atlas = false; t.Resource = pt.Resource; t.Srv = pt.Srv; t.Slot = pt.Slot; t.Bucket = bucket;
+                t.Placed = pt.Placed;
                 t.TexSize = bucket; t.Ox = 0; t.Oy = 0; t.State = pt.State; t.Live = false;
                 _poolCount++;
             }
@@ -412,12 +428,6 @@ internal sealed unsafe class ImageTextureStore : IDisposable
                 t.State = InitialTexState; t.Live = false;   // COMMON on UMA (WriteToSubresource path); COPY_DEST discrete
                 CreateSrv(t.Resource, slot, out t.Srv);
             }
-        }
-
-        if (reroute)
-        {
-            RetirePlacement(ref prior);
-            if (prior.Atlas) _atlasCount--; else if (prior.Bucket > 0) _poolCount--;
         }
 
         if (_uma)
@@ -437,34 +447,59 @@ internal sealed unsafe class ImageTextureStore : IDisposable
                 // few lines ago, or the cell came back through the fence-gated Kind-2 return (I2), and a re-stage of a
                 // resident id always rerouted to a fresh cell above (I4).
                 var page = _pages[t.Page];
-                if (page.Mapped == null) return ReleaseAfterDeviceFault(id, ref t);
+                if (page.Mapped == null) return RejectReplacement(id, ref t, prior, reroute);
                 t.W = w; t.H = h; t.RowPitch = rowBytes; t.Upload = null;
                 WriteCell(page, new ImageAtlasCell(t.Page, t.Cell, t.Ox, t.Oy, t.Bucket, t.PageGen), pbgra8, w, h);
                 page.Live = true;
                 t.State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COMMON;   // page state is COMMON for life (I1)
                 t.NeedsCopy = false; t.Live = true;
-                _byId[id] = t;
+                PublishReplacement(id, t, prior, reroute);
                 return ImageUploadResult.Accepted;
             }
 
             ID3D12Resource* umaTex = t.Resource;   // not packed ⇒ a private pool/standalone texture
-            if (umaTex == null) return ReleaseAfterDeviceFault(id, ref t);
+            if (umaTex == null) return RejectReplacement(id, ref t, prior, reroute);
             t.W = w; t.H = h; t.RowPitch = rowBytes; t.Upload = null;
             D3D12_BOX box = new() { left = (uint)t.Ox, top = (uint)t.Oy, front = 0, right = (uint)(t.Ox + w), bottom = (uint)(t.Oy + h), back = 1 };
             int hr;
-            fixed (byte* src = pbgra8)
-                hr = (int)umaTex->WriteToSubresource(0, &box, src, (uint)rowBytes, (uint)((long)rowBytes * h));
+            // Opaque UNKNOWN layout supports Map with a null ppData. Each placed resource was activated and fenced
+            // before leasing, and is independently byte-disjoint from neighboring resources on its heap.
+            if (t.Placed.IsValid)
+            {
+                D3D12_RANGE noRead = default;
+                hr = (int)umaTex->Map(0, &noRead, null);
+                if (hr < 0)
+                {
+                    _smallImages!.WriteFailed(t.Placed, "Map", hr);
+                    NoteResourceFault("Image.Placed.Map");
+                    return RetryCommittedOrReject(id, ref t, prior, reroute, pbgra8, w, h);
+                }
+            }
+            if (t.Placed.IsValid && _refuseNextPlacedWriteForProbe)
+            {
+                _refuseNextPlacedWriteForProbe = false;
+                hr = unchecked((int)0x80070057); // E_INVALIDARG: deterministic capability refusal, no device removal
+            }
+            else
+                fixed (byte* src = pbgra8)
+                    hr = (int)umaTex->WriteToSubresource(0, &box, src, (uint)rowBytes, (uint)((long)rowBytes * h));
+            if (t.Placed.IsValid) umaTex->Unmap(0, null);
             if (hr < 0)
             {
                 // Device-removed window: WriteToSubresource fails like the CreateCommittedResource/Map calls do on the
                 // discrete path. Soft-fail identically (publish + retire this id's placement, reject) — never throw past
                 // the render-thread seam.
                 NoteResourceFault("Image.WriteToSubresource");
-                return ReleaseAfterDeviceFault(id, ref t);
+                if (t.Placed.IsValid)
+                {
+                    _smallImages!.WriteFailed(t.Placed, "WriteToSubresource", hr);
+                    return RetryCommittedOrReject(id, ref t, prior, reroute, pbgra8, w, h);
+                }
+                return RejectReplacement(id, ref t, prior, reroute);
             }
             t.State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COMMON;   // sampled via implicit promotion; never barriered
             t.NeedsCopy = false; t.Live = true;
-            _byId[id] = t;
+            PublishReplacement(id, t, prior, reroute);
             return ImageUploadResult.Accepted;   // NOT queued into _pendingCopies — FlushUploads has no copy/barrier to do
         }
 
@@ -476,10 +511,8 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         }
         t.W = w; t.H = h; t.RowPitch = rowPitch;
 
-        // Device-removed window (threading-render-seam.md §9): CreateCommittedResource returns DXGI_ERROR_DEVICE_REMOVED
-        // rather than a buffer. Soft-fail — publish the current placement so ReleaseAfterDeviceFault retires exactly what
-        // this id owns, then reject. Throwing here would escape the render-thread seam and kill the process.
-        if (t.Upload == null) return ReleaseAfterDeviceFault(id, ref t);
+        // Device-removed window: retire the failed fresh placement but preserve an existing published replacement.
+        if (t.Upload == null) return RejectReplacement(id, ref t, prior, reroute);
 
         void* p = null;
         // Map is the second device touch that fails on a removed device; an unchecked HRESULT left `p` null and the
@@ -487,7 +520,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         if ((int)t.Upload->Map(0, null, &p) < 0 || p == null)
         {
             NoteResourceFault("Image.Upload.Map");
-            return ReleaseAfterDeviceFault(id, ref t);
+            return RejectReplacement(id, ref t, prior, reroute);
         }
         byte* dst = (byte*)p;
         fixed (byte* src = pbgra8)
@@ -496,7 +529,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         t.Upload->Unmap(0, null);
 
         t.NeedsCopy = true;
-        _byId[id] = t;
+        PublishReplacement(id, t, prior, reroute);
         if (!_pendingCopies.Contains(id)) _pendingCopies.Add(id);
         return ImageUploadResult.Accepted;
     }
@@ -532,14 +565,34 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         if (Diag.Enabled) Diag.Event("d3d12", $"image resource fault: {what} (device removed?)");
     }
 
-    /// <summary>Roll back a half-built placement after a device-fault reject: publish the in-progress <paramref name="t"/>
-    /// under <paramref name="id"/> so <see cref="Free"/> retires exactly the resources this id now owns (a rerouted
-    /// entry's PRIOR placement was already retired above), then reject. Fence-deferred like every other retire.</summary>
-    private ImageUploadResult ReleaseAfterDeviceFault(int id, ref Tex t)
+    /// <summary>Retire only the failed placement; a rerouted id keeps its prior pixels and descriptor published.</summary>
+    private ImageUploadResult RejectReplacement(int id, ref Tex t, Tex prior, bool reroute)
     {
         _byId[id] = t;
         Free(id);
+        if (reroute) _byId[id] = prior; // old pixels/SRV remain published until a replacement succeeds
         return RejectDeviceFault();
+    }
+
+    private ImageUploadResult RetryCommittedOrReject(int id, ref Tex t, Tex prior, bool reroute,
+        ReadOnlySpan<byte> pixels, int w, int h)
+    {
+        if ((int)_device->GetDeviceRemovedReason() < 0) return RejectReplacement(id, ref t, prior, reroute);
+        // The old id was never unpublished. Retire only the failed, unpublished placed lease, then retry once through
+        // the now-disabled bucket's committed path. A capability refusal must not trigger ImageCache's terminal reject.
+        RetirePlacement(ref t);
+        _poolCount--;
+        return Stage(id, pixels, w, h);
+    }
+
+    private void PublishReplacement(int id, Tex t, Tex prior, bool reroute)
+    {
+        if (reroute)
+        {
+            RetirePlacement(ref prior);
+            if (prior.Atlas) _atlasCount--; else if (prior.Bucket > 0) _poolCount--;
+        }
+        _byId[id] = t;
     }
 
     /// <summary>Evict an image (residency dropped it): return its atlas cell / pool texture for reuse and release its
@@ -559,7 +612,8 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     private void RetirePlacement(ref Tex t)
     {
         var r = new Retire { Fence = _retireFence, Upload = t.Upload, State = t.State };
-        if (t.Atlas) { r.Kind = 2; r.Cell = new ImageAtlasCell(t.Page, t.Cell, t.Ox, t.Oy, t.Bucket, t.PageGen); }
+        if (t.Placed.IsValid) { r.Kind = 4; r.Placed = t.Placed; r.Slot = t.Slot; }
+        else if (t.Atlas) { r.Kind = 2; r.Cell = new ImageAtlasCell(t.Page, t.Cell, t.Ox, t.Oy, t.Bucket, t.PageGen); }
         else if (t.Bucket > 0) { r.Kind = 1; r.Bucket = t.Bucket; r.Resource = t.Resource; r.Srv = t.Srv; r.Slot = t.Slot; }
         else { r.Kind = 0; r.Resource = t.Resource; r.Slot = t.Slot; }
         _retired.Add(r);
@@ -572,6 +626,17 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     {
         AssertRenderThread();   // seam Step 1: render-confined under async (always render-side; assert makes it explicit)
         _retireFence = submitFence;
+        ReclaimCompleted(completedFence);
+        _smallImages?.RecordActivations(cmd, submitFence);
+
+        FlushCopies(cmd);
+    }
+
+    /// <summary>Fence-only maintenance, safe without opening a command list or requesting another presentation.</summary>
+    internal void ReclaimCompleted(ulong completedFence)
+    {
+        AssertRenderThread();
+        if (completedFence == ulong.MaxValue) return; // removal sentinel is not a completed GPU submission
         for (int i = _retired.Count - 1; i >= 0; i--)
         {
             if (_retired[i].Fence > completedFence) continue;
@@ -583,10 +648,19 @@ internal sealed unsafe class ImageTextureStore : IDisposable
                 case 1: ReleasePooled(r.Bucket, new Pooled { Resource = r.Resource, Srv = r.Srv, Slot = r.Slot, State = r.State }); break;
                 case 2: ReleaseAtlasCell(r.Cell); break;
                 case 3: break;
+                case 4:
+                    if (!_smallImages!.Release(r.Placed, r.Fence, completedFence))
+                        throw new InvalidOperationException("Invalid or stale placed-image return.");
+                    _freeSlots.Push(r.Slot);
+                    break;
             }
             _retired.RemoveAt(i);
         }
+        _smallImages?.Reclaim(completedFence);
+    }
 
+    private void FlushCopies(ID3D12GraphicsCommandList* cmd)
+    {
         _uploadTransitions.Clear();
         for (int i = 0; i < _pendingCopies.Count; i++)
         {
@@ -637,8 +711,25 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     }
 
     // ── pool ──────────────────────────────────────────────────────────────────
-    private bool AcquirePooled(int bucket, out Pooled pt)
+    private bool AcquirePooled(int bucket, out Pooled pt, bool allowPlaced = false)
     {
+        // GPU-produced derivatives deliberately do not opt in: these resources are CPU-written COMMON for life.
+        if (allowPlaced && _uma && (_umaPagesDisabled || !_atlasAllocationKnown) && bucket <= 128)
+        {
+            _smallImages ??= new SmallImageHeapPool(_device);
+            if (_smallImages.TryAcquire(bucket, out var lease))
+            {
+                if (!TryAcquireSlot(out int placedSlot))
+                {
+                    _smallImages.Release(lease, 0, 0); // unpublished lease has no GPU use
+                    pt = default; return false;
+                }
+                CreateSrv(lease.Resource, placedSlot, out var placedSrv);
+                pt = new Pooled { Resource = lease.Resource, Srv = placedSrv, Slot = placedSlot,
+                    State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COMMON, Placed = lease };
+                return true;
+            }
+        }
         if (_pool.TryGetValue(bucket, out var stk) && stk.Count > 0) { pt = stk.Pop(); System.Threading.Interlocked.Decrement(ref _pooledFreeMirror); return true; }
         if (!TryAcquireSlot(out int slot)) { pt = default; return false; }
         var res = CreateTexture(bucket, bucket);            // cold pool growth (the only CreateTexture in steady state)
@@ -803,18 +894,23 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         return td;
     }
 
-    /// <summary>What a committed resource for <paramref name="td"/> actually costs: the linear subresource footprint
-    /// (256-aligned row pitch × height, from the device rather than an assumed <c>w*4</c>) rounded up to the 64 KiB
-    /// placement granularity every <c>CreateCommittedResource</c> is subject to. Tracking <c>w*h*4</c> instead —
-    /// what the census used to do — under-reports a 64² thumbnail by 4× and is exactly why `gpu bytes` and
-    /// `imageBytes` disagreed by tens of MB on UMA.</summary>
-    private ulong CommittedBytes(D3D12_RESOURCE_DESC* td)
+    /// <summary>Device-reported allocation requirement, not physical residency or upload-buffer size. Zero means
+    /// unknown/unsupported, never an inferred pixel or copy-footprint estimate. Thin wrapper over the shared
+    /// <see cref="D3D12MemoryDiagnostics.AllocationBytes"/> query (every RT/DSV/texture owner shares it) that keeps
+    /// this store's atlas-admission-specific logging.</summary>
+    private ulong AllocationBytes(D3D12_RESOURCE_DESC* td)
     {
-        D3D12_PLACED_SUBRESOURCE_FOOTPRINT fp = default;
-        uint rows = 0; ulong rowBytes = 0, total = 0;
-        _device->GetCopyableFootprints(td, 0, 1, 0, &fp, &rows, &rowBytes, &total);
-        if (total == 0) total = td->Width * td->Height * 4;
-        return (total + PlacementAlignment - 1) & ~(PlacementAlignment - 1);
+        ulong bytes = D3D12MemoryDiagnostics.AllocationBytes(_device, td);
+        if (bytes == 0)
+            Diag.Line($"[d3d12] image allocation requirement unknown width={td->Width} height={td->Height} layout={td->Layout}; excluded from byte totals, atlas admission disabled for unknown page sizes");
+        return bytes;
+    }
+
+    private ulong TrackTexture(ID3D12Resource* texture, string name, D3D12_RESOURCE_DESC* descriptor)
+    {
+        ulong bytes = AllocationBytes(descriptor);
+        D3D12MemoryDiagnostics.Track(texture, D3D12MemoryDiagnostics.NameOrUnknown(name, bytes), bytes);
+        return bytes;
     }
 
     private ID3D12Resource* CreateTexture(int w, int h)
@@ -841,7 +937,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
             // The size joins the CLASS KEY (a dot, not a space): NameKey cuts at the first space, so the old name
             // collapsed every bucket into one `Image.Texture.Uma` row and the census could not say whether 88 MB was
             // 600 thumbnails or 90 heroes. Per-bucket rows are what make the commit-vs-decode over-charge legible.
-            D3D12MemoryDiagnostics.Track(tex, $"Image.Texture.Uma.{w}x{h} BGRA8", CommittedBytes(&td));
+            TrackTexture(tex, $"Image.Texture.Uma.{w}x{h} BGRA8", &td);
             return tex;
         }
 
@@ -852,7 +948,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         if ((int)_device->CreateCommittedResource(&dp, D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_NONE, &td,
             D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST, null, __uuidof<ID3D12Resource>(), (void**)&tex) < 0)
         { NoteResourceFault("Image.CreateTexture"); return null; }
-        D3D12MemoryDiagnostics.Track(tex, $"Image.Texture.{w}x{h} BGRA8", CommittedBytes(&td));   // per-bucket class key, see the UMA arm
+        TrackTexture(tex, $"Image.Texture.{w}x{h} BGRA8", &td);   // per-bucket class key, see the UMA arm
         return tex;
     }
 
@@ -877,8 +973,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
             if ((int)_device->CreateCommittedResource(&dp, D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_NONE, &td,
                 D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST, null, __uuidof<ID3D12Resource>(), (void**)&tex) < 0)
             { NoteResourceFault("Image.CreateAtlasPage"); return null; }
-            bytes = CommittedBytes(&td);
-            D3D12MemoryDiagnostics.Track(tex, $"Image.AtlasPage {PageSize}x{PageSize} BGRA8", bytes);
+            bytes = TrackTexture(tex, $"Image.AtlasPage {PageSize}x{PageSize} BGRA8", &td);
             return tex;
         }
 
@@ -913,10 +1008,9 @@ internal sealed unsafe class ImageTextureStore : IDisposable
 
         rowPitch = (int)fp.Footprint.RowPitch;
         if (rowPitch <= 0) rowPitch = PageSize * 4;
-        bytes = CommittedBytes(&td);
         mapped = (byte*)p;
         new Span<byte>(mapped, (int)Math.Min((ulong)int.MaxValue, (ulong)rowPitch * PageSize)).Clear();
-        D3D12MemoryDiagnostics.Track(tex, $"Image.AtlasPage.Uma {PageSize}x{PageSize} BGRA8", bytes);
+        bytes = TrackTexture(tex, $"Image.AtlasPage.Uma {PageSize}x{PageSize} BGRA8", &td);
         return tex;
     }
 
@@ -1010,7 +1104,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         foreach (var t in _byId.Values)
         {
             if (t.Upload != null) { D3D12MemoryDiagnostics.Release(t.Upload, "Image.Upload"); t.Upload->Release(); }
-            if (t.Resource != null) { D3D12MemoryDiagnostics.Release(t.Resource, "Image.Texture"); t.Resource->Release(); }
+            if (t.Resource != null && !t.Placed.IsValid) { D3D12MemoryDiagnostics.Release(t.Resource, "Image.Texture"); t.Resource->Release(); }
         }
         foreach (var r in _retired)
         {
@@ -1029,6 +1123,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
                 pg.Tex = null;
             }
         _byId.Clear(); _retired.Clear(); _pool.Clear(); _pages.Clear();
+        _smallImages?.Dispose(); _smallImages = null;
         _packer?.Clear();
         System.Threading.Volatile.Write(ref _atlasPageMirror, 0);
         System.Threading.Volatile.Write(ref _atlasPageBytesMirror, 0);

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
@@ -78,6 +78,8 @@ static class AnimSuite
         SkeletonChecks(strings);
         ProjectionChecks(strings);
         EnterExitChecks(strings);
+        FlipCellIdleChecks(strings);
+        OrphanWakeChecks.Run(strings);
         SizeModeChecks(strings);
         ReflowChecks(strings);
         SkelReflowClipChecks(strings);
@@ -880,6 +882,43 @@ static class AnimSuite
     // AppHost.ReclaimSettledOrphans is private; this mirrors it exactly (settled arm + the per-orphan animation-clock
     // deadline arm) so SK.b3 can drive the wedge guard headlessly. The global WALL backstop arm is not reachable here —
     // it is the outer guard for a host that stops painting, not the per-orphan deadline under test.
+    // A once-per-second digit flip must not pin the host at PANEL rate. Measured on the real app: a daylist countdown
+    // (FlipCountdown — a clipped cell whose single keyed child remounts each second, the old numeral exiting upward as an
+    // orphan while the new one rises) left `animTracks=4 orphans=1` on EVERY memory sample for minutes, GPU flat at 10.0%
+    // with 0.4% CPU on a page where one digit changes per second. 4 = Enter(Dy,Opacity) + Exit(Dy,Opacity) for one cell.
+    // A live track means HasRenderMotion, which arms the render thread's display clock, which presents every vblank
+    // FOREVER — 119 of every 120 presents redundant. The flip itself is 150 ms (MotionTok.ControlFast), so the tracks and
+    // the orphan must be gone ~150 ms after the remount and the loop must go quiet until the next tick.
+    static void FlipCellIdleChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("flipcell", new Size2(200, 120), 1f));
+        window.Show();
+        var root = new FlipCellProbe();
+        using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, root);
+        for (int i = 0; i < 4; i++) host.RunFrame();
+
+        // Baseline: a settled cell owes nothing.
+        int settle0 = 0;
+        for (; settle0 < 400 && host.HasActiveWork; settle0++) host.RunFrame();
+        bool quietBefore = !host.HasActiveWork && host.Animation.TrackCount == 0 && host.Scene.OrphanCount == 0;
+
+        root.Value.Value = 1;          // the tick: key mismatch ⇒ remount ⇒ exit orphan + enter/exit tracks
+        host.RunFrame();
+        bool armed = host.Animation.TrackCount > 0 || host.Scene.OrphanCount > 0;
+
+        // 150 ms at the headless refresh period, plus generous slack. If the flip retires as it should the loop is quiet
+        // long before this; if it wedges, HasActiveWork is still true at the end and the real app never idles.
+        int settle = 0;
+        for (; settle < 400 && host.HasActiveWork; settle++) host.RunFrame();
+        bool quietAfter = !host.HasActiveWork;
+        int tracks = host.Animation.TrackCount, orphans = host.Scene.OrphanCount;
+
+        Check("gate.anim.flip-cell-idles a keyed remount with Enter/Exit (the countdown digit shape) retires its tracks AND its exit orphan when the 150ms flip ends, so the host goes fully idle between ticks instead of holding the compositor clock at panel rate forever",
+            quietBefore && armed && quietAfter && tracks == 0 && orphans == 0,
+            $"quietBefore={quietBefore} armed={armed} quietAfter={quietAfter} tracks={tracks} orphans={orphans} settleFrames={settle} (cap 400)");
+    }
+
     static void RunHostOrphanReclaim(SceneStore scene, AnimEngine engine)
     {
         for (int i = scene.OrphanCount - 1; i >= 0;)
@@ -5428,5 +5467,33 @@ sealed class VirtualDrawerExitProbe : Component
             // Default Direction=0 wrapper — the ItemContainer shape that made parent-exit-reflow pick the wrong axis.
             return new BoxEl { Width = 200f, Children = [slot] };
         }, keyOf: i => "r" + i) with { Width = 240f, Height = 360f };
+    }
+}
+
+/// <summary>The FlipCountdown digit cell, reduced: a clipped fixed cell over ONE keyed child with a declarative
+/// Enter/Exit slide. Bumping <see cref="Value"/> is a "tick" — the key changes, the old numeral exit-orphans and the new
+/// one enters, which is the exact shape that pinned the real app's compositor clock at 120 Hz.</summary>
+sealed class FlipCellProbe : Component
+{
+    public readonly Signal<int> Value = new(0);
+    public override Element Render()
+    {
+        int v = Value.Value;
+        float rise = 14f;
+        return new BoxEl
+        {
+            Width = 40f, Height = 40f, ClipToBounds = true,
+            Children =
+            [
+                new BoxEl
+                {
+                    Key = "d" + v,
+                    Width = 40f, Height = 40f,
+                    Enter = new EnterExit(Dy: rise, Opacity: 0f, Active: true),
+                    Exit = new EnterExit(Dy: -rise, Opacity: 0f, Active: true),
+                    Transition = MotionTok.ControlFast,
+                },
+            ],
+        };
     }
 }

@@ -72,6 +72,7 @@ public sealed class AudioEffectsLiveTests
     public void VisualizerTap_PublishesFrames_OffTheBlockPath()
     {
         var (session, fx, _) = Build(eq: false);
+        using var demand = fx.AcquireVisualizer();
         Assert.Equal(0f, fx.Visualizer.Peek().Peak);   // silence before playback
 
         _ = session.PlayAsync();

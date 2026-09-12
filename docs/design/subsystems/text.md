@@ -83,6 +83,12 @@ This subsystem owns, end to end:
    and the recorder shapes the glyph run at it (0 ⇒ the authored size). Off by default (`MinSizeDip == 0`), so all
    other text is byte-identical; runs only on a cache miss of an opt-in node. As-built: `FlexLayout.FitTextSize`,
    `SceneRecorder` Text case, `TextMeasureCache.FitSize`.
+   The as-built per-node cache is a **two-entry width ring**. `SceneRecordingSnapshot` copies it into its existing
+   sparse projection storage (placement: `scene-memory.md` §2.6a); the recorder's read-only
+   `ResolveMeasureForWidth` selects the exact draw-width entry, otherwise the most recently stored or hit entry,
+   otherwise any valid entry. Auto-fit size and underline/strike metrics travel with the same selected entry.
+   A missing or stale-generation row returns the default invalid entry; it neither allocates a cache nor remeasures
+   on the render thread. UI relayout and local copies of a resolved entry cannot mutate an already-published cache.
 5. **Rasterization** — glyph → bitmap (R8 grayscale; BGRA color/emoji), subpixel positioning, gamma policy.
 6. **Glyph atlas** — packing, multi-page, frame-start LRU eviction, the realization-cache key, the
    `GlyphRunRealization` content-epoch, and the by-handle `DrawGlyphRunCmd` reference.
@@ -613,7 +619,7 @@ Cache `(faceId, scriptTag, cp-block) → substituteFaceId`. **Run boundaries ali
   dissolve the choice: worst-case placement error is 1/8 device px, text stays crisp *in motion*, and the scene is
   free to translate sub-pixel. Cost is glyph atlas **area**, not entry count — the phase stack is packed contiguously
   in one slot so the shaped-run cache stays phase-agnostic and a replay selects a phase with one V offset; the atlas
-  went 2048² → 4096² (R8, 16 MB) to absorb it exactly.
+  can grow from 2048² to 4096² (R8, 16 MiB maximum) under the as-built preflight contract in §5.3.
 - **Hinting/grid-fit:** `NATURAL_SYMMETRIC` + `GRID_FIT_DEFAULT` (smooth, position-accurate, animation- and
   transform-friendly — favors GPU composability over maximal small-size sharpness); GDI-classic only behind an
   explicit "crisp small UI text" opt-in (forces integer positioning + grid-fit + disables subpixel X).
@@ -657,6 +663,15 @@ and the device raises `IGpuDevice.TextRepaintPending` so the host is guaranteed 
 healing frame. A shape that cannot stay within one atlas generation is never cached (`ShapeInto`'s consistency
 return), closing the "poisoned run replays wrong forever" failure mode a mid-record reset used to allow.
 
+**As-built capacity amendment (2026-09-12):** Windows starts with a 2048-square R8 CPU mirror and GPU texture,
+growing once to 4096 during render-owned glyph/icon preflight, before any instances or upload commands are emitted.
+Growth prepares a detached CPU mirror, texture, SRV and staging banks before publishing any replacement; admission
+failure retains the previous realization. A single device-wide last-use fence drain precedes old-resource release.
+Texel coordinates and coverage survive; the atlas epoch advances and every normalized shaped-run UV is invalidated.
+This does not shrink the atlas or change the four subpixel phases, fonts or gamma. Existing full-atlas overflow
+recovery remains. Free shaped-quad arrays additionally have a 1 MiB aggregate payload cap (and eight arrays per
+bucket); the live shaped-run cache retains its existing eviction policy.
+
 - **Eviction runs only at frame START** (`IGlyphAtlas.BeginFrame`, phase 1 on the render thread). **Any glyph
   referenced by a live command — dirty OR clean — this frame is ineligible.** The liveness/pin set is
   computed from the snapshot's command stream (`hardened-v1-plan.md` §4.1 render-frame ordering: DRAIN
@@ -677,6 +692,19 @@ return), closing the "poisoned run replays wrong forever" failure mode a mid-rec
   `hardened-v1-plan.md` §2.3).
 
 ### 5.4 Upload to GPU — deferred, batched, via the texture-staging path
+
+**As-built Windows staging reserve (2026-09-12):** `GlyphStagingPolicy` keeps the cold first-paint reserve,
+then returns idle upload banks to a smaller warm floor at the existing fenced `BeginFrame` edge. The native
+Wavee load census showed `Glyph.AtlasUpload:12.0/3` throughout playback: three 1024-row banks at the
+4096-byte atlas row pitch. The warm 256-row floor retains 3 MiB instead, returning **9 MiB of tracked upload
+resources**, not claiming an equivalent process-working-set decrease. The existing 120/600 submitted-clean-frame
+windows and 2048-row growth ceiling remain. Demand is frame-local: retaining the largest historical upload would
+immediately undo a shrink on the next tiny glyph. Clamped tails remain dirty, grow the next fenced bank and force
+a healing repaint; `GlyphStagingPolicyTests` covers staged-pixel identity and cold-large/warm-small uploads.
+The new preflight sizes the active fenced staging bank for the complete current dirty band before first drawing,
+including growth to a 4096-square atlas; row pitch follows the current atlas edge. The paragraph's measured
+12-to-3 MiB comparison describes the earlier fixed-4096 baseline, not the new 2048 starting configuration.
+No swap occurs while a bank is in flight, and no GC or process-working-set trim is used.
 
 - CPU rasterization writes into a **render-thread staging slab** (`SlabAllocator<StagingBlock>`); the atlas
   accumulates a per-page dirty-rect list. `EndFrame(enc)` issues **batched** copies — one

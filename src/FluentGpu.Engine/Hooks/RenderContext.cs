@@ -460,6 +460,18 @@ public sealed partial class RenderContext
     /// Null for a propless mount or an <see cref="IPropsHost"/> component (which owns its own field signals).</summary>
     public Signal<object?>? PropsSig;
 
+    /// <summary>Reconciler-injected at mount: the component this context belongs to. The ONE back-reference from the
+    /// hook substrate to its owner, and it exists for exactly one reason — to stamp
+    /// <see cref="Computation.DiagOwner"/> on the effects/memos the hooks create
+    /// (<see cref="UseSignalEffect"/>, the auto-tracked <c>UseEffect</c>, <see cref="UseComputed{T}"/>), which are
+    /// created <c>owner: null</c> by design and would otherwise be anonymous in a subscriber census — the shape that
+    /// made a leaked <c>FrameClock.Tick</c> poller unnameable. NOT a service locator: nothing in render may read it.</summary>
+    internal Component? Owner;
+
+    /// <summary>Stamp a freshly built hook computation with this component as its diagnostic owner. A single field
+    /// write — no allocation and no name resolution (that happens at report cadence, if ever).</summary>
+    private T Own<T>(T c) where T : Computation { c.DiagOwner = Owner; return c; }
+
     internal void BeginRender() => _ordinals.Clear();   // reset the per-render loop ordinals; cells persist by key
     internal void EndRender()
     {
@@ -584,7 +596,7 @@ public sealed partial class RenderContext
     {
         int idx = LookupCell(__hf, __hl, out var __k);
         MemoHookCell<T> cell;
-        if (idx < 0) { cell = new MemoHookCell<T>(new Memo<T>(Rt, compute)); RegisterCell(__k, cell, cleanupCapable: true); }
+        if (idx < 0) { cell = new MemoHookCell<T>(Own(new Memo<T>(Rt, compute))); RegisterCell(__k, cell, cleanupCapable: true); }
         else cell = (MemoHookCell<T>)_cells[idx];
         return cell.Memo;
     }
@@ -632,7 +644,7 @@ public sealed partial class RenderContext
     public void UseSignalEffect(Action effect, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
     {
         int idx = LookupCell(__hf, __hl, out var __k);
-        if (idx < 0) { var cell = new SignalEffectCell(new Effect(Rt, effect)); RegisterCell(__k, cell, cleanupCapable: true); }
+        if (idx < 0) { var cell = new SignalEffectCell(Own(new Effect(Rt, effect))); RegisterCell(__k, cell, cleanupCapable: true); }
     }
 
     private AutoEffect GetAutoEffect(bool layout, out bool mount, string? file, int line)
@@ -640,7 +652,7 @@ public sealed partial class RenderContext
         int idx = LookupCell(file, line, out var __k);
         mount = idx < 0;
         AutoEffectCell cell;
-        if (mount) { cell = new AutoEffectCell { Effect = new AutoEffect(Rt, this, layout) }; RegisterCell(__k, cell, cleanupCapable: true); }
+        if (mount) { cell = new AutoEffectCell { Effect = Own(new AutoEffect(Rt, this, layout)) }; RegisterCell(__k, cell, cleanupCapable: true); }
         else cell = (AutoEffectCell)_cells[idx];
         return cell.Effect;
     }

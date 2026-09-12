@@ -33,6 +33,7 @@ public sealed class SceneFramePublisher
     // capture, and the MINIMUM across all three is how long the store must retain its ledgers - a slot that has not
     // published for two frames still needs every delta since ITS baseline, not since the last consumed publication.
     private readonly ulong[] _sceneCaptureSeq = new ulong[3];
+    private readonly SceneCapacityReclaimPolicy[] _capacityPolicy = new SceneCapacityReclaimPolicy[3];
     private readonly bool _reverse;
     private long _publishedToken; // generation << 2 | slot; zero means no publication
     private int _consumeIdx = -1; // consumer-private retained claim
@@ -180,6 +181,7 @@ public sealed class SceneFramePublisher
             _carriedSceneDamage.AsSpan(0, _carriedSceneDamageCount), detached, popups, animation, seq,
             _sceneCaptureSeq[slot]);
         _sceneCaptureSeq[slot] = seq;
+        _capacityPolicy[slot].Observe(frame.Scene.Capacity, frame.Scene.RequiredNodeCapacity, Environment.TickCount64);
         LastCapturedNodeCount = frame.Scene.CopiedNodeCount;
         LastCaptureWasIncremental = frame.Scene.LastCaptureWasIncremental;
         var repaint = submit.RepaintDamage;
@@ -221,12 +223,99 @@ public sealed class SceneFramePublisher
     /// <summary>Whether the most recent <see cref="PublishScene"/> took the P8 incremental path (diagnostics).</summary>
     internal bool LastCaptureWasIncremental { get; private set; }
 
+    internal int CapacityReclaims { get; private set; }
+    // Cumulative released indexed-array payload, not GC committed/working-set reduction. Other replaced frame
+    // capacities are intentionally excluded: dictionaries, sparse payloads and object graphs need separate accounting.
+    internal long ReclaimedIndexedCapacityBytes { get; private set; }
+
+    /// <summary>UI-only next eligible FREE-slot deadline. A reader is never a reason to poll or a trim candidate.</summary>
+    internal long NextCapacityMaintenanceMs
+    {
+        get
+        {
+            ThreadGuard.AssertUi();
+            long due = long.MaxValue;
+            long announced = Volatile.Read(ref _publishedToken);
+            for (int slot = 0; slot < _scenes.Length; slot++)
+            {
+                if (_scenes[slot] is not { } frame || Volatile.Read(ref _slotStates[slot]) != Free
+                    || (announced != 0 && (int)(announced & 3) == slot)) continue;
+                due = Math.Min(due, _capacityPolicy[slot].NextDeadlineMs(frame.Scene.Capacity));
+            }
+            return due;
+        }
+    }
+
+    /// <summary>UI-only owner capacities. No renderer-owned scratch, dictionary enumeration, or process-memory estimate.</summary>
+    internal (int initializedSlots, long indexedBytes, long textStyleBytes, long totalCapacity, long highestRequired) SceneCapacityCensus
+    {
+        get
+        {
+            ThreadGuard.AssertUi();
+            int slots = 0;
+            long indexed = 0, styles = 0, capacity = 0, required = 0;
+            foreach (var frame in _scenes)
+            {
+                if (frame is null) continue;
+                slots++;
+                indexed += frame.Scene.IndexedCapacityBytes;
+                styles += frame.Scene.TextStyleValueCapacityBytes;
+                capacity += frame.Scene.Capacity;
+                required += frame.Scene.RequiredNodeCapacity;
+            }
+            return (slots, indexed, styles, capacity, required);
+        }
+    }
+
+    /// <summary>
+    /// Cold UI preflight BEFORE protected frame phases, against the last committed scene. Reclaims at most one
+    /// FREE slot per call. GPU idleness is neither checked nor accepted as a substitute for its CPU Writing claim.
+    /// No publication/token/consumption sequence changes; unchanged next capture is fully prewarmed.
+    /// The optional timestamp uses Environment.TickCount64's monotonic millisecond domain (deterministic tests).
+    /// </summary>
+    internal bool TryReclaimSceneCapacity(SceneStore source, ImageCache images, StringTable strings,
+        DetachedAnimSlab detached, IReadOnlyList<PopupWindowSlot> popups, AnimEngine animation, long? nowMs = null)
+    {
+        ThreadGuard.AssertUi();
+        long now = nowMs ?? Environment.TickCount64;
+        for (int slot = 0; slot < _scenes.Length; slot++)
+        {
+            var previous = _scenes[slot];
+            if (previous is null || !_capacityPolicy[slot].TryTarget(previous.Scene.Capacity, now, out int target)) continue;
+            long announced = Volatile.Read(ref _publishedToken);
+            if (announced != 0 && (int)(announced & 3) == slot) continue;
+            if (Interlocked.CompareExchange(ref _slotStates[slot], Writing, Free) != Free) continue;
+            try
+            {
+                _capacityPolicy[slot].NoteAttempt(now);
+                var replacement = previous.PrepareCapacityReplacement(source, images, strings, detached, popups, animation, target);
+                long released = previous.Scene.IndexedCapacityBytes - replacement.Scene.IndexedCapacityBytes;
+                // A scene changed after the low-water observations. Keep the old frame if current preflight demand
+                // defeats the saving; the cooldown prevents repeated allocate/discard work on every playback tick.
+                if (replacement.Scene.Capacity > previous.Scene.Capacity / 2 || released <= 0)
+                {
+                    replacement.ReleaseResources();
+                    return false;
+                }
+                previous.ReleaseResources(); // New pins are already held; no unpinned gap or premature span reuse.
+                _scenes[slot] = replacement;
+                _sceneCaptureSeq[slot] = 0; // Preflight is not a publication baseline; next capture MUST be full.
+                _slots[slot] = default;
+                CapacityReclaims++;
+                ReclaimedIndexedCapacityBytes += released;
+                return true;
+            }
+            finally { Volatile.Write(ref _slotStates[slot], Free); }
+        }
+        return false;
+    }
+
     /// <summary>The OLDEST publication any slot's snapshot still describes — the sequence the scene's record-dirty /
     /// pending-removal / capture ledgers must be retained through, because that slot's next incremental refresh needs
     /// every delta since ITS baseline.
     /// <para>Slots that have never captured are EXCLUDED, not counted as 0. In the steady state only two of the three
-    /// slots rotate (<see cref="ClaimWriteSlot"/> takes the first non-published one, and the third is claimed only
-    /// during a consumer handover), so counting a never-written slot as "describes publication 0" would pin every
+    /// slots rotate (the third is claimed only during a consumer handover). Once initialized, the oldest writable
+    /// snapshot is refreshed first. Counting a never-written slot as "describes publication 0" would pin every
     /// ledger open forever — record-dirty bits would never clear and span reuse would never fire again.</para>
     /// <para>0 (retain everything) only before the very first scene publication; after one, at least one slot has a
     /// baseline.</para></summary>
@@ -267,8 +356,24 @@ public sealed class SceneFramePublisher
         // claimed scene remains valid and renderable throughout capture; zero only means "no new publication yet".
         long token = Interlocked.Exchange(ref _publishedToken, 0);
         int published = token == 0 ? -1 : (int)(token & 3);
+        // Refresh the oldest writable SNAPSHOT first. First-fit can abandon a third slot after a handover,
+        // pinning OldestSlotCaptureSeq (and every scene dirty/removal ledger) at that old publication forever.
+        // Prefer initialized slots so the ordinary two-slot exchange does not allocate a needless third snapshot.
+        int start = 0;
+        ulong oldest = ulong.MaxValue;
         for (int i = 0; i < 3; i++)
         {
+            // A cold-prepared replacement has a zero baseline but fully warmed storage. Prefer it over allocating
+            // an unused third frame; zero remains excluded from OldestSlotCaptureSeq because its next copy is full.
+            if (i == published || _scenes[i] is null || _sceneCaptureSeq[i] >= oldest) continue;
+            long state = Volatile.Read(ref _slotStates[i]);
+            if ((state & 3) is not (Free or Published)) continue;
+            oldest = _sceneCaptureSeq[i];
+            start = i;
+        }
+        for (int offset = 0; offset < 3; offset++)
+        {
+            int i = (start + offset) % 3;
             if (i == published) continue;
             long state = Volatile.Read(ref _slotStates[i]);
             if ((state & 3) is not (Free or Published)) continue;

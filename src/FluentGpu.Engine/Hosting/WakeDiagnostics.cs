@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Globalization;
 
 namespace FluentGpu.Hosting;
@@ -49,7 +49,9 @@ public enum WakeReasons
 /// <see cref="ReportSeconds"/> through <see cref="FluentGpu.Foundation.Diag.Line"/>: the observed frame rate,
 /// per-reason kept-awake counts, SOLE-reason counts (frames where exactly one bit was set — the cleanest
 /// attribution), the consecutive-awake streak, seconds since the loop last went fully idle, frames spent minimized,
-/// and a reconcile/layout/record-only work split.
+/// a reconcile/layout/record-only work split, the live <c>FrameClock.Tick</c> subscribers at print time
+/// (<c>pollers=</c>), and every subscriber that held ANY frame awake this window even if it had already unmounted by
+/// print time (<c>pollersSeen=</c>, <see cref="AppendPollersSeen"/>).</summary>
 ///
 /// <para>This used to be <c>FG_WAKE_DIAG=1</c> to stderr once a second. That is exactly the shape this codebase has
 /// learned not to ship: "the loop is pinned at panel rate and nothing in the log says which term holds it" is
@@ -95,6 +97,69 @@ internal sealed class WakeDiagnostics
     private long _lastIdleTicks;      // timestamp of the last fully-idle observation (seconds-since-idle base)
     private long _windowStartTicks;
 
+    // The FrameClock.Tick ambient signal (AppHost._frameClockSig). Its subscriber list IS the set of live per-frame
+    // pollers — the frameClockPoller wake bit is nothing but `HasSubscribers` (AppHost.ComputeWakeReasons). Held here
+    // so the census can NAME them: the count alone (AppHost.FrameClockPollerCount) existed for a whole release and was
+    // printed nowhere, which left "frameClockPoller held the loop on 100 % of runs, subscriber unknown" as an
+    // unanswerable report — exactly the kind this instrument was built to make answerable.
+    private readonly FluentGpu.Signals.Signal<object?> _frameClockSig;
+
+    /// <summary>Most poller names printed per line; the rest fold into a <c>+k</c> tail. A leak of forty identical rows
+    /// is answered by the first eight names and the count — the census must stay ONE log line.</summary>
+    private const int MaxPollerNames = 8;
+
+    // ── pollersSeen: every FrameClock.Tick subscriber alive during ANY kept-awake frame this window, named, with a
+    // frame count — not just the survivors `pollers=` sees at print time. A poller that mounts, holds the loop awake
+    // for hundreds of frames, and unmounts before the 30 s report prints leaves `pollers=0`: the log has a hole
+    // exactly where the culprit was. Fixed-capacity, reused across windows — no per-window array allocation, no
+    // LINQ, no per-frame string concatenation.
+    private const int MaxPollersSeen = 8;
+    private readonly string?[] _pollersSeenNames = new string?[MaxPollersSeen];
+    private readonly long[] _pollersSeenFrames = new long[MaxPollersSeen];
+    private int _pollersSeenCount;
+
+    // Cached snapshot of the CURRENT subscriber set's names. Refreshed only when Signal.SubscriberSetVersion moves
+    // (an actual subscribe/unsubscribe), not on every kept-awake frame — walking SubscriberAt + DiagOwner for a
+    // steady-state set that isn't changing would be pure waste on a bit that can be set every frame for minutes.
+    private readonly string?[] _currentPollerNames = new string?[MaxPollersSeen];
+    private int _currentPollerCount;
+    private int _lastPollerSetVersion = -1;
+
+    // The animation engine + scene, for the live-track and orphan census below. A compositor-owned track is the ONE
+    // wake source this line could not see: WakeReasons.Anim is masked while RenderOwnsCompositor, so a page pinned at
+    // panel rate by four wedged rows printed `kept: frameNeeded timer` and nothing else — a report that names the
+    // cheap terms and hides the expensive one.
+    private readonly FluentGpu.Animation.AnimEngine _anim;
+    private readonly FluentGpu.Scene.SceneStore _scene;
+
+    private readonly Action<System.Text.StringBuilder> _appendRenderCensus;
+
+    public WakeDiagnostics(FluentGpu.Signals.Signal<object?> frameClockSig, FluentGpu.Animation.AnimEngine anim, FluentGpu.Scene.SceneStore scene,
+        Action<System.Text.StringBuilder> appendRenderCensus)
+    { _frameClockSig = frameClockSig; _anim = anim; _scene = scene; _appendRenderCensus = appendRenderCensus; }
+
+    /// <summary>Append <c>pollers=N</c> and, when N &gt; 0, <c>:Name,Name,…</c> — each live <c>FrameClock.Tick</c>
+    /// subscriber's owning component type (<c>Computation.DiagOwner</c>), or <c>?</c> plus the computation's own
+    /// type for one built outside a component. Report cadence ONLY: a plain loop over the live subscriber list
+    /// appending into the caller's reused builder, so there is no snapshot and no per-frame cost. Shared with
+    /// <c>AppHost.DescribeFrameClockPollers</c> so a gate asserts exactly what the log prints.</summary>
+    internal static void AppendPollers(System.Text.StringBuilder sb, FluentGpu.Signals.Signal<object?> sig)
+    {
+        int n = sig.SubscriberCount;
+        sb.Append(CultureInfo.InvariantCulture, $" | pollers={n}");
+        if (n == 0) return;
+        sb.Append(':');
+        int shown = Math.Min(n, MaxPollerNames);
+        for (int i = 0; i < shown; i++)
+        {
+            if (i > 0) sb.Append(',');
+            var c = sig.SubscriberAt(i);
+            if (c.DiagOwner is { } owner) sb.Append(owner.GetType().Name);
+            else sb.Append('?').Append(c.GetType().Name);
+        }
+        if (n > shown) sb.Append(CultureInfo.InvariantCulture, $",+{n - shown}");
+    }
+
     /// <summary>A maybe-unchanged frame failed the draw-list-hash elision check and submitted after all. Folded into
     /// the census instead of a per-occurrence stderr line: it is a rate, not an event.</summary>
     public void NoteSkipMiss() => _skipMisses++;
@@ -135,6 +200,60 @@ internal sealed class WakeDiagnostics
             _reasonFrames[i]++;
             if (set == 1) _soleFrames[i]++;
         }
+
+        if ((reasons & WakeReasons.FrameClockPoller) != 0) NotePollersSeen();
+    }
+
+    /// <summary>Attribute this kept-awake frame to every currently-live <c>FrameClock.Tick</c> subscriber, by name.
+    /// Re-walks the subscriber list only when <see cref="FluentGpu.Signals.Signal{T}.SubscriberSetVersion"/> moved
+    /// since the last call — steady state (the common case: the same 1-3 pollers ticking for seconds) is a handful of
+    /// string== compares against the reused tally, no allocation.</summary>
+    private void NotePollersSeen()
+    {
+        int ver = _frameClockSig.SubscriberSetVersion;
+        if (ver != _lastPollerSetVersion)
+        {
+            _lastPollerSetVersion = ver;
+            int n = Math.Min(_frameClockSig.SubscriberCount, MaxPollersSeen);
+            _currentPollerCount = n;
+            for (int i = 0; i < n; i++)
+            {
+                var c = _frameClockSig.SubscriberAt(i);
+                _currentPollerNames[i] = c.DiagOwner is { } owner ? owner.GetType().Name : c.GetType().Name;
+            }
+        }
+
+        for (int i = 0; i < _currentPollerCount; i++)
+        {
+            string name = _currentPollerNames[i]!;
+            int idx = -1;
+            for (int j = 0; j < _pollersSeenCount; j++)
+                if (_pollersSeenNames[j] == name) { idx = j; break; }
+            if (idx < 0)
+            {
+                if (_pollersSeenCount >= MaxPollersSeen) continue;   // rare overflow: window already names 8 distinct pollers
+                idx = _pollersSeenCount++;
+                _pollersSeenNames[idx] = name;
+                _pollersSeenFrames[idx] = 0;
+            }
+            _pollersSeenFrames[idx]++;
+        }
+    }
+
+    /// <summary>Append <c>pollersSeen=N:Name×frames,…</c> (or <c>pollersSeen=0</c>) for the window just closed — every
+    /// distinct <c>FrameClock.Tick</c> subscriber that held a frame awake, INCLUDING one that unmounted before this
+    /// report ran (see <see cref="AppendPollers"/>'s doc for why that survivorship gap matters). Exposed for tests the
+    /// same way <c>DescribeFrameClockPollers</c> exposes <see cref="AppendPollers"/>.</summary>
+    internal void AppendPollersSeen(System.Text.StringBuilder sb)
+    {
+        sb.Append(CultureInfo.InvariantCulture, $" | pollersSeen={_pollersSeenCount}");
+        if (_pollersSeenCount == 0) return;
+        sb.Append(':');
+        for (int i = 0; i < _pollersSeenCount; i++)
+        {
+            if (i > 0) sb.Append(',');
+            sb.Append(_pollersSeenNames[i]).Append(CultureInfo.InvariantCulture, $"×{_pollersSeenFrames[i]}");
+        }
     }
 
     /// <summary>Emit the census line if the window has elapsed, then reset it. Cheap timestamp check otherwise.
@@ -167,10 +286,22 @@ internal sealed class WakeDiagnostics
             if (_soleFrames[i] > 0) { sb.Append(CultureInfo.InvariantCulture, $" {s_reasonNames[i]}={_soleFrames[i]}"); anySole = true; }
         if (!anySole) sb.Append(" none");
 
+        // Live per-frame pollers, NAMED. `kept: frameClockPoller=N` above says the bit held the loop awake; this says WHO.
+        AppendPollers(sb, _frameClockSig);
+        // Every poller that held a frame awake this window, even one that already unmounted — pollers= above only
+        // sees who is STILL subscribed at print time.
+        AppendPollersSeen(sb);
+        // UI desired tracks survive until completion feedback is imported. They do not establish that the
+        // renderer is moving: report its actual motion decision and presented-frame delta alongside them.
+        _anim.AppendLiveTrackCensus(sb);
+        sb.Append(CultureInfo.InvariantCulture, $" orphans={_scene.OrphanCount}");
+        _appendRenderCensus(sb);
+
         FluentGpu.Foundation.Diag.Line(sb.ToString());
 
         Array.Clear(_reasonFrames);
         Array.Clear(_soleFrames);
+        _pollersSeenCount = 0;   // names/frames stay stale in the arrays past this index — harmless, count gates reads
         _skipMisses = 0;
         _framesRun = 0;
         _framesRendered = 0;

@@ -106,10 +106,14 @@ public sealed partial class SceneStore : ISceneBackend
     private byte[] _recordDirtyDescendant;
     private int[] _recordDirtyWrote;
     private int _recordDirtyWroteCount;
-    // The publication each dirty entry belongs to (newest contribution wins): a mark made after publication K is
-    // stamped K+1, and ClearRecordDirty(consumedSeq) drops only entries whose stamp the render thread has already
-    // adopted. A skipped publication therefore keeps its deltas until a consumed one carries them.
-    private ulong[] _recordDirtyStamp;
+    // Each contribution has its OWN lifetime: a child's fresh content cannot retain a navigation's old ancestor
+    // self-content, and a fresh transform cannot retain old content on the same node. Marks after publication K
+    // belong to K+1; skipped publications keep exactly the contributions that have not been adopted yet.
+    private struct RecordDirtyStamps
+    {
+        public ulong SelfTransform, SelfContent, DescendantTransform, DescendantContent;
+    }
+    private RecordDirtyStamps[] _recordDirtyStamp;
     private ulong _publishSeq;
     private Action?[] _click;         // managed edge payload (GC ref at the edge only)
     private Action<RectF>?[] _boundsChanged;   // post-layout arranged-bounds callback — the ELEMENT AUTHOR's Element.OnBoundsChanged
@@ -296,7 +300,7 @@ public sealed partial class SceneStore : ISceneBackend
         _recordDirtySelf = new byte[capacity];
         _recordDirtyDescendant = new byte[capacity];
         _recordDirtyWrote = new int[capacity];
-        _recordDirtyStamp = new ulong[capacity];
+        _recordDirtyStamp = new RecordDirtyStamps[capacity];
         _captureStamp = new ulong[capacity];
         _createdStamp = new ulong[capacity];
         _captureWrote = new int[capacity];
@@ -327,6 +331,8 @@ public sealed partial class SceneStore : ISceneBackend
 
     /// <summary>SoA column length (the high-water spine allocation) — O(1) census of the slab size, not the live count.</summary>
     public int Capacity => _gen.Length;
+    /// <summary>UI-owned allocation/free revision for one-shot cold tail reclamation; paint/motion do not change it.</summary>
+    internal ulong CapacityRevision { get; private set; }
     /// <summary>Live scroll/virtual-viewport rows — O(1) census of the <c>_scroll</c> side-table.</summary>
     public int ScrollStateCount => _scroll.Count;
     /// <summary>In-flight implicit brush transitions — O(1) census of the <c>_brushAnims</c> side-table.</summary>
@@ -378,6 +384,7 @@ public sealed partial class SceneStore : ISceneBackend
         _dragCompleted[idx] = null;
         _dragCanceled[idx] = null;
         LiveCount++;
+        unchecked { CapacityRevision++; }
         return new NodeHandle(new Handle((uint)idx, _gen[idx]));
     }
 
@@ -504,6 +511,7 @@ public sealed partial class SceneStore : ISceneBackend
         _nextFree[idx] = _freeHead;
         _freeHead = idx;
         LiveCount--;
+        unchecked { CapacityRevision++; }
     }
 
     // ── Repaint-damage removal ledger (gpu-renderer.md §13.1) ───────────────────────────────────────────────────────
@@ -1238,9 +1246,10 @@ public sealed partial class SceneStore : ISceneBackend
     public ulong PublishSeq => _publishSeq;
     public void NotePublished(ulong seq) => _publishSeq = seq;
 
-    /// <summary>Drop the record-dirty entries the render thread has adopted (stamp ≤ <paramref name="consumedSeq"/>)
-    /// and keep the rest, so a snapshot always carries the union of deltas since the last CONSUMED publication and
-    /// clean-span reuse stays valid across a skipped one. O(entries), compacts in place.</summary>
+    /// <summary>Retire each self/descendant transform/content contribution the render thread has adopted
+    /// (stamp ≤ <paramref name="consumedSeq"/>), keeping newer contributions. A snapshot carries the union of deltas
+    /// since the last CONSUMED publication without a fresh child retaining old ancestor self damage.
+    /// O(entries), compacts in place.</summary>
     public void ClearRecordDirty(ulong consumedSeq)
     {
         int kept = 0;
@@ -1248,17 +1257,27 @@ public sealed partial class SceneStore : ISceneBackend
         {
             int idx = _recordDirtyWrote[i];
             if ((uint)idx >= (uint)_recordDirty.Length) continue;
-            if (_recordDirtyStamp[idx] > consumedSeq) { _recordDirtyWrote[kept++] = idx; continue; }
-            _recordDirty[idx] = 0;
-            _recordDirtySelf[idx] = 0;
-            _recordDirtyDescendant[idx] = 0;
-            NoteCaptureChanged(idx);   // P8: zeroing the bits is itself a captured-column change
+            ref var stamps = ref _recordDirtyStamp[idx];
+            byte self = UnconsumedRecordBits(_recordDirtySelf[idx], stamps.SelfTransform, stamps.SelfContent, consumedSeq);
+            byte descendant = UnconsumedRecordBits(_recordDirtyDescendant[idx], stamps.DescendantTransform, stamps.DescendantContent, consumedSeq);
+            if (self != _recordDirtySelf[idx] || descendant != _recordDirtyDescendant[idx])
+            {
+                _recordDirtySelf[idx] = self;
+                _recordDirtyDescendant[idx] = descendant;
+                _recordDirty[idx] = (byte)(self | descendant);
+                NoteCaptureChanged(idx);   // P8: partial retirement changes captured columns too
+            }
+            if ((self | descendant) != 0) _recordDirtyWrote[kept++] = idx;
         }
         for (int i = kept; i < _recordDirtyWroteCount; i++) _recordDirtyWrote[i] = 0;
         _recordDirtyWroteCount = kept;
     }
 
     private void MarkRecordDirty(int idx) => MarkRecordDirty(idx, RecordDirtyContent);
+
+    private static byte UnconsumedRecordBits(byte bits, ulong transform, ulong content, ulong consumedSeq)
+        => (byte)(bits & ((transform > consumedSeq ? RecordDirtyTransform : 0)
+                       | (content > consumedSeq ? RecordDirtyContent : 0)));
 
     private void MarkRecordDirty(int idx, byte bits)
     {
@@ -1271,9 +1290,20 @@ public sealed partial class SceneStore : ISceneBackend
             byte nextAggregate = (byte)(oldAggregate | bits);
             byte nextSelf = n == idx ? (byte)(oldSelf | bits) : oldSelf;
             byte nextDescendant = n == idx ? oldDescendant : (byte)(oldDescendant | bits);
-            // The whole chain is re-stamped even when its bits already cover this mark: an ancestor's aggregate bit
-            // stands in for the dirty descendant, so it must outlive the descendant's publication, not its own.
-            _recordDirtyStamp[n] = _publishSeq + 1;
+            // Restamp only this contribution, including when its bit was already present. Ancestors' descendant
+            // bits must outlive this publication, but their independent self bits can retire as soon as consumed.
+            ref var stamps = ref _recordDirtyStamp[n];
+            ulong stamp = _publishSeq + 1;
+            if (n == idx)
+            {
+                if ((bits & RecordDirtyTransform) != 0) stamps.SelfTransform = stamp;
+                if ((bits & RecordDirtyContent) != 0) stamps.SelfContent = stamp;
+            }
+            else
+            {
+                if ((bits & RecordDirtyTransform) != 0) stamps.DescendantTransform = stamp;
+                if ((bits & RecordDirtyContent) != 0) stamps.DescendantContent = stamp;
+            }
             // P8: the MARKED node's own captured columns changed — that is why it is being marked (a paint ref write, a
             // glyph wipe, a text/layout change) — so its capture row must be re-copied even when its dirty bits were
             // already set. A node written on consecutive frames keeps its bits set (each mark re-stamps them one
@@ -2182,6 +2212,7 @@ public sealed partial class SceneStore : ISceneBackend
             if (f < target) { _nextFree[f] = newHead; newHead = f; }
         _freeHead = newHead;
 
+        unchecked { CapacityRevision++; }
         return cap - newCap;
     }
 

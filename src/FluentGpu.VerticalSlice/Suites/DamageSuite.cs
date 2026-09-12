@@ -27,6 +27,7 @@ static class DamageSuite
     {
         RegionMathChecks();
         RecordDamageChecks();
+        RecordDirtyLifetimeChecks.Run();
         CompositorDamageChecks();
         PublishGapChecks();
         HeadlessPayloadChecks(strings);
@@ -61,6 +62,17 @@ static class DamageSuite
 
     static void PolicyChecks()
     {
+        // Off-screen lyric/scroll extents must not count as pixels of this target.
+        {
+            var overhang = default(RepaintDamageRegion);
+            overhang.Add(new RectF(900f, -10000f, 100f, 10100f));
+            overhang.Add(new RectF(-5000f, 500f, 100f, 100f));
+            var route = Decide(overhang, RepaintPolicy.LayerKindGroups, true, true, true, out var rects);
+            Check("gate.repaint.offscreen-coverage only target-visible damage participates in the early full-redraw cutoff",
+                route == RepaintRoute.Partial && rects.Count == 1 && rects[0] == new RectF(900f, 0f, 100f, 100f),
+                $"coverage={overhang.Coverage(W, H):P2} route={route} rects={rects.Count}");
+        }
+
         // Every disqualifier forces a FULL redraw, one at a time off an otherwise partial-eligible frame.
         {
             var ok = Decide(Small(), RepaintPolicy.LayerKindNone, true, true, true, out var okRects);
@@ -380,11 +392,49 @@ static class DamageSuite
             var stencil = new DrawList();
             stencil.PushStencilClip(new RectF(0f, 0f, 10f, 10f), default, 0, Affine2D.Identity);
             stencil.PopStencilClip(new RectF(0f, 0f, 10f, 10f), default, Affine2D.Identity);
-            bool stencilUnsafe = !RepaintStreamSafety.Scan(stencil.Bytes);
+            bool stencilSafe = RepaintStreamSafety.Scan(stencil.Bytes);
 
-            Check("gate.repaint.stream-unsafe-layers acrylic (its snapshot writes INTO the canvas), self-blur and a BLURRED edge fade (gaussian taps read outside the clamp), and a tier-3 stencil scope (its mask-clear rect would be narrowed by the clamp) all mark the stream unsafe",
-                acrylicUnsafe && blurUnsafe && blurredFadeUnsafe && stencilUnsafe,
-                $"acrylic={acrylicUnsafe} blur={blurUnsafe} blurredFade={blurredFadeUnsafe} stencil={stencilUnsafe}");
+            Check("gate.repaint.stream-unsafe-layers acrylic remains unsafe; self-blur, blurred edge fade, and a stencil scope outside layers are admitted",
+                acrylicUnsafe && !blurUnsafe && !blurredFadeUnsafe && stencilSafe,
+                $"acrylic={acrylicUnsafe} blurAdmitted={!blurUnsafe} blurredFadeAdmitted={!blurredFadeUnsafe} stencilAdmitted={stencilSafe}");
+        }
+
+        {
+            var rect = new RectF(0f, 0f, 10f, 10f);
+            var nested = new DrawList();
+            nested.PushStencilClip(rect, default, 0, id);
+            nested.PushStencilClip(rect, default, 0, id);
+            nested.FillRoundRect(rect, default, white, id, 1f);
+            nested.PopStencilClip(rect, default, id);
+            nested.PopStencilClip(rect, default, id);
+            nested.PushBlurLayer(rect, default, 6f, 1f);
+            nested.PopLayer(rect);
+            bool siblingsSafe = RepaintStreamSafety.Scan(nested.Bytes);
+
+            var insideLayer = new DrawList();
+            insideLayer.PushOpacityLayer(rect, default, .5f);
+            insideLayer.PushStencilClip(rect, default, 0, id);
+            insideLayer.PopStencilClip(rect, default, id);
+            insideLayer.PopLayer(rect);
+            var insideMask = new DrawList();
+            insideMask.PushStencilClip(rect, default, 0, id);
+            insideMask.PushBlurLayer(rect, default, 6f, 1f);
+            insideMask.PopLayer(rect);
+            insideMask.PopStencilClip(rect, default, id);
+            Check("gate.repaint.stencil-layer-disjoint nested stencil masks and sibling blur are safe; either direction of stencil/layer nesting remains unsafe",
+                siblingsSafe && !RepaintStreamSafety.Scan(insideLayer.Bytes) && !RepaintStreamSafety.Scan(insideMask.Bytes));
+
+            var unmatchedPush = new DrawList();
+            unmatchedPush.PushStencilClip(rect, default, 0, id);
+            var unmatchedPop = new DrawList();
+            unmatchedPop.PopStencilClip(rect, default, id);
+            var layerPush = new DrawList();
+            layerPush.PushOpacityLayer(rect, default, .5f);
+            var layerPop = new DrawList();
+            layerPop.PopLayer(rect);
+            Check("gate.repaint.stream-balanced-scopes unmatched layer or stencil pushes/pops fail closed",
+                !RepaintStreamSafety.Scan(unmatchedPush.Bytes) && !RepaintStreamSafety.Scan(unmatchedPop.Bytes)
+                && !RepaintStreamSafety.Scan(layerPush.Bytes) && !RepaintStreamSafety.Scan(layerPop.Bytes));
         }
 
         // …but the PLAIN (sigma = 0) strip fade is SAFE, and admitting it is what unlocks the common case: a scrolling
@@ -398,16 +448,18 @@ static class DamageSuite
             fade.PopLayer(new RectF(0f, 0f, 10f, 10f));
             bool plainFadeSafe = RepaintStreamSafety.Scan(fade.Bytes);
 
-            // The two classes share a LayerKind, so the admission must test sigma and not the kind.
+            // The two classes share a LayerKind, and BOTH are admitted now: sigma = 0 because it displaces nothing,
+            // sigma > 0 because the backend grows the source by the tap radius. The sigma test that used to live here
+            // was the whole veto, so its removal is the behaviour worth pinning.
             var justAbove = new DrawList();
             justAbove.PushEdgeFadeLayer(new RectF(0f, 0f, 10f, 10f), new RectF(0f, 0f, 10f, 10f), default, 1f,
                 edges: 1, bandL: 4f, bandT: 0f, bandR: 0f, bandB: 0f, falloff: 0, intensity: 1f, blurSigma: 0.5f);
             justAbove.PopLayer(new RectF(0f, 0f, 10f, 10f));
-            bool justAboveUnsafe = !RepaintStreamSafety.Scan(justAbove.Bytes);
+            bool justAboveSafe = RepaintStreamSafety.Scan(justAbove.Bytes);
 
-            Check("gate.repaint.stream-safe-plain-edge-fade the sigma=0 strip fade is admitted to clamped replay — it displaces nothing and its restore is clip-intersected — while the SAME LayerKind at sigma>0 stays vetoed, so the admission tests sigma rather than the kind",
-                plainFadeSafe && justAboveUnsafe,
-                $"plainFade={plainFadeSafe} sigma0.5Unsafe={justAboveUnsafe}");
+            Check("gate.repaint.stream-safe-edge-fade the strip fade is admitted to clamped replay at sigma = 0 (it displaces nothing and its restore is clip-intersected) AND just above it, where the source-inflation halo carries the taps — one LayerKind, no sigma cliff",
+                plainFadeSafe && justAboveSafe,
+                $"plainFade={plainFadeSafe} sigma0.5Admitted={justAboveSafe}");
         }
 
         // An unknown opcode and a truncated payload are unsafe — never guessed past.

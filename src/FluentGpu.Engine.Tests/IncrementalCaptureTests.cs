@@ -75,6 +75,29 @@ public sealed class IncrementalCaptureTests
         }
     }
 
+    [Fact]
+    public void AThirdSlotUsedDuringHandoverCannotPinTheRetentionFloorForever()
+    {
+        ThreadGuard.BindCurrent(ThreadGuard.ThreadRole.Ui);
+        var (scene, _) = BuildPage(3);
+        var anim = new AnimEngine(scene);
+        var publisher = new SceneFramePublisher();
+        Publish(publisher, scene, anim);
+        Assert.True(publisher.TryAcquire(out var first));
+        Publish(publisher, scene, anim);
+        Publish(publisher, scene, anim); // first is retained and second announced: capture needs the third slot
+        Assert.True(publisher.TryAcquire(out var third));
+        Assert.NotEqual(first.ArenaIndex, third.ArenaIndex);
+
+        for (int i = 0; i < 12; i++)
+        {
+            ulong seq = Publish(publisher, scene, anim);
+            Assert.True(publisher.TryAcquire(out _));
+            Assert.True(publisher.OldestSlotCaptureSeq >= seq - 2,
+                $"publication {seq} still retains snapshot {publisher.OldestSlotCaptureSeq}");
+        }
+    }
+
     // The whole point: a publication that changed nothing but one node's paint copies that node's chain, not the tree.
     [Fact]
     public void ACoastPublicationCopiesOnlyTheChangedChain()

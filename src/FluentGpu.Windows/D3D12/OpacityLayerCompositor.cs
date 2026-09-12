@@ -1132,14 +1132,15 @@ float4 BlurPS(V i) : SV_Target
     // backend snapshots those band strips (D), lets the subtree draw direct, snapshots them again (F), and writes
     // lerp(D, F, feather) back — algebraically identical to the legacy composite for ANY backdrop alpha, and it never
     // touches the ~4.5 Mpx the full-canvas lease used to clear, re-render and blend. Both snapshots live in ONE pooled
-    // scratch lease: the strips stack vertically, D in the top half, F in the bottom half, so the restore needs a
-    // single SRV and the pooled lease is held only for the group's lifetime.
-
-    private static void StripPack(ReadOnlySpan<SelfBlurPixelBox> strips, int count, out int packW, out int packH)
-    {
-        packW = 0; packH = 0;
-        for (int i = 0; i < count; i++) { packW = Math.Max(packW, strips[i].Width); packH += strips[i].Height; }
-    }
+    // scratch lease — D in the top half, F in the bottom half — so the restore needs a single SRV and the pooled lease
+    // is held only for the group's lifetime.
+    //
+    // WHERE each strip sits inside a half is FluentGpu.Render.EdgeFadeStripPack, a portable SHELF layout: wide bands
+    // stack on one column, tall bands sit SIDE BY SIDE on one shelf below them, so the scratch is sized by the strips'
+    // actual area instead of max-width × total-height. (A plain vertical stack made a full-window four-edge fade at
+    // 1770×1140 lease 1770×4656 ≈ 56 MiB — ~7× a full-window render target — to hold ~137 kpx of strips.) Every
+    // consumer of a pack offset — the lease size, the copy destination, the restore shader's source-UV constants —
+    // goes through that one Measure/Place pair, so they cannot disagree.
 
     /// <summary>Lease the packed snapshot scratch for a pure fade (D in the top half, F in the bottom). Returns the
     /// slot — release it with <see cref="Release"/> after <see cref="EdgeFadeStripRestore"/> — or -1 when the strip set
@@ -1149,10 +1150,11 @@ float4 BlurPS(V i) : SV_Target
         ReadOnlySpan<SelfBlurPixelBox> strips, int count, ulong frameFence)
     {
         if (count <= 0) return -1;
-        StripPack(strips, count, out int packW, out int packH);
+        EdgeFadeStripPack.Measure(strips, count, out int packW, out int packH);
         if (packW <= 0 || packH <= 0) return -1;
         int slot = AcquireScratch(cmd, packW, packH * 2, frameFence);
-        if ((int)_pool[slot].H < packH * 2) { Release(slot); return -1; }   // bucket could not hold both halves
+        if ((int)_pool[slot].W < packW || (int)_pool[slot].H < packH * 2)
+        { Release(slot); return -1; }   // bucket could not hold both halves
         return slot;
     }
 
@@ -1166,18 +1168,18 @@ float4 BlurPS(V i) : SV_Target
         ReadOnlySpan<SelfBlurPixelBox> strips, int count, bool post)
     {
         if (slot < 0 || target == null || count <= 0) return;
-        StripPack(strips, count, out _, out int packH);
+        EdgeFadeStripPack.Measure(strips, count, out _, out int packH);
         ref var e = ref _pool[slot];
         Barrier(cmd, e.Res, ref e.State, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST);
         D3D12_TEXTURE_COPY_LOCATION dst = default; dst.pResource = e.Res; dst.Type = D3D12_TEXTURE_COPY_TYPE.D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX; dst.Anonymous.SubresourceIndex = 0;
         D3D12_TEXTURE_COPY_LOCATION src = default; src.pResource = target; src.Type = D3D12_TEXTURE_COPY_TYPE.D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX; src.Anonymous.SubresourceIndex = 0;
-        int y = post ? packH : 0;
+        int half = post ? packH : 0;
         for (int i = 0; i < count; i++)
         {
             SelfBlurPixelBox s = strips[i];
+            EdgeFadeStripPack.Place(strips, count, i, out int px, out int py);
             D3D12_BOX b = new() { left = (uint)s.MinX, top = (uint)s.MinY, front = 0, right = (uint)s.MaxX, bottom = (uint)s.MaxY, back = 1 };
-            cmd->CopyTextureRegion(&dst, 0, (uint)y, 0, &src, &b);
-            y += s.Height;
+            cmd->CopyTextureRegion(&dst, (uint)px, (uint)(py + half), 0, &src, &b);
             EdgeFadeStripPixelsThisFrame += s.AreaPx;
         }
     }
@@ -1193,7 +1195,7 @@ float4 BlurPS(V i) : SV_Target
         if (slot < 0 || count <= 0) return;
         ref var e = ref _pool[slot];
         Barrier(cmd, e.Res, ref e.State, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        StripPack(strips, count, out _, out int packH);
+        EdgeFadeStripPack.Measure(strips, count, out _, out int packH);
         float invW = 1f / _pool[slot].W, invH = 1f / _pool[slot].H;
 
         ID3D12DescriptorHeap* h = _srvHeap;
@@ -1222,10 +1224,10 @@ float4 BlurPS(V i) : SV_Target
         s[20] = packH * invH;                 // UV row delta from the D half to the F half
         s[21] = s[22] = s[23] = 0f;
         cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY.D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        int y = 0;
         for (int i = 0; i < count; i++)
         {
             SelfBlurPixelBox st = strips[i];
+            EdgeFadeStripPack.Place(strips, count, i, out int px, out int py);
             RECT box = new()
             {
                 left = Math.Max(st.MinX, clip.left),
@@ -1235,8 +1237,8 @@ float4 BlurPS(V i) : SV_Target
             };
             if (box.right > box.left && box.bottom > box.top)
             {
-                s[16] = -st.MinX;             // srcUv = (SV_Position.xy + (s16,s17)) * (invW,invH)
-                s[17] = y - st.MinY;
+                s[16] = px - st.MinX;         // srcUv = (SV_Position.xy + (s16,s17)) * (invW,invH)
+                s[17] = py - st.MinY;
                 cmd->RSSetScissorRects(1, &box);
                 fixed (float* c = s)
                 {
@@ -1246,7 +1248,6 @@ float4 BlurPS(V i) : SV_Target
                 }
                 EdgeFadeStripPixelsThisFrame += (long)(box.right - box.left) * (box.bottom - box.top);
             }
-            y += st.Height;
         }
     }
 
@@ -2022,12 +2023,16 @@ float4 BlurPS(V i) : SV_Target
         rd.Format = DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM; rd.SampleDesc.Count = 1;
         rd.Layout = D3D12_TEXTURE_LAYOUT.D3D12_TEXTURE_LAYOUT_UNKNOWN;
         rd.Flags = D3D12_RESOURCE_FLAGS.D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+        // Query BEFORE CreateCommittedResource, on the SAME desc (audit gpu mem-02): the device-reported allocation
+        // requirement, not an inferred w*h*4 pixel estimate — see D3D12MemoryDiagnostics.AllocationBytes.
+        ulong bytes = D3D12MemoryDiagnostics.AllocationBytes(_device, &rd);
         D3D12_CLEAR_VALUE cv = default; cv.Format = DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM;   // transparent clear
         ID3D12Resource* res;
         Check(_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_NONE, &rd,
             D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &cv,
             __uuidof<ID3D12Resource>(), (void**)&res), "OpacityLayer.CreateTarget");
-        D3D12MemoryDiagnostics.Track(res, $"{name} {w}x{h}", (ulong)w * h * 4UL);
+        string label = $"{name} {w}x{h}";
+        D3D12MemoryDiagnostics.Track(res, D3D12MemoryDiagnostics.NameOrUnknown(label, bytes), bytes != 0 ? bytes : (ulong)w * h * 4UL);
         return res;
     }
 

@@ -29,7 +29,7 @@ internal sealed class SceneRenderFrame
     internal void Capture(SceneStore source, ImageCache images, StringTable strings, in SceneRecordOptions options,
         ReadOnlySpan<NodeHandle> skip, ReadOnlySpan<NodeHandle> reuseBlock, ReadOnlySpan<RectF> damage,
         DetachedAnimSlab detached, IReadOnlyList<PopupWindowSlot> popups, AnimEngine animation, ulong sequence,
-        ulong lastCapturedSeq)
+        ulong lastCapturedSeq, bool preflightOnly = false)
     {
         _popupCount = popups.Count;
         Grow(ref _popupRoots, _popupCount);
@@ -68,7 +68,7 @@ internal sealed class SceneRenderFrame
         for (int i = 0; i < _popupCount; i++)
         {
             var target = popups[i];
-            if (target.FirstSceneSequence == 0) target.FirstSceneSequence = sequence;
+            if (!preflightOnly && target.FirstSceneSequence == 0) target.FirstSceneSequence = sequence;
             var origin = target.WindowBoundsDip.IsEmpty ? target.BoundsDip : target.WindowBoundsDip;
             // Placed = the overlay has given this popup a real rect. An UNPLACED popup has nothing to paint, and
             // presenting it anyway would latch its "content has presented" reveal evidence on a 1×1 (creation-size)
@@ -130,6 +130,31 @@ internal sealed class SceneRenderFrame
     }
 
     internal void ReleaseResources() => Scene.ReleaseResources();
+
+    /// <summary>
+    /// Cold UI preparation, only under the owning publisher's Writing claim. Two full captures warm both alternating
+    /// captured/string buffers and all current sparse/image/animation reserves. They are NOT publications and must
+    /// not activate a popup or advance any mailbox/store sequence. Old pins remain held until this succeeds.
+    /// </summary>
+    internal SceneRenderFrame PrepareCapacityReplacement(SceneStore source, ImageCache images, StringTable strings,
+        DetachedAnimSlab detached, IReadOnlyList<PopupWindowSlot> popups, AnimEngine animation, int nodeCapacity)
+    {
+        var replacement = new SceneRenderFrame();
+        try
+        {
+            replacement.Scene.ReserveNodeCapacity(nodeCapacity);
+            for (int pass = 0; pass < 2; pass++)
+                replacement.Capture(source, images, strings, Options,
+                    _skip.AsSpan(0, _skipCount), _reuseBlock.AsSpan(0, _reuseBlockCount), _damage.AsSpan(0, _damageCount),
+                    detached, popups, animation, source.PublishSeq + 1, lastCapturedSeq: 0, preflightOnly: true);
+            return replacement;
+        }
+        catch
+        {
+            replacement.ReleaseResources();
+            throw;
+        }
+    }
 
     private readonly record struct PopupRecordingTarget(NodeHandle Root, Point2 Origin, ISwapchain? Swapchain,
         IPlatformPopupWindow Window, DrawList Commands, SceneRecordingContext Recording, Size2 Size, bool Placed);

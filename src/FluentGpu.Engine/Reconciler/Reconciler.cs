@@ -695,7 +695,8 @@ public sealed partial class TreeReconciler
     {
         _root = root;
         InjectContext(root.Context, NodeHandle.Null);   // root resolves ambient contexts only
-        var effect = new Effect(Runtime, () => RunRoot(root), owner: null, runNow: false);
+        root.Context.Owner = root;   // diagnostic identity for the hook computations this context will create
+        var effect = new Effect(Runtime, () => RunRoot(root), owner: null, runNow: false) { DiagOwner = root };
         _rootEffect = effect;
         root.Context.RequestRerender = effect.Schedule;
         effect.RunNow();
@@ -1161,6 +1162,7 @@ public sealed partial class TreeReconciler
     {
         var comp = ce.Factory();
         InjectContext(comp.Context, node);
+        comp.Context.Owner = comp;   // diagnostic identity for the hook computations this context will create (Computation.DiagOwner)
         // Mount-under-parked-ancestor: a component can be mounted into an already-parked subtree (a reactive Show/For
         // boundary inside a parked page still fires its effect). It must initialize INACTIVE — seed Parked from the
         // marker and mark this node too, so the deferred-render gate holds and descendants inherit it. Read THIS node's
@@ -1217,7 +1219,9 @@ public sealed partial class TreeReconciler
         var scope = new ReactiveScope(Runtime);
         entry.Scope = scope;
         scope.AddCleanup(comp.Unmount);   // RunAllCleanups runs exactly once, when the scope disposes
-        var effect = new Effect(Runtime, () => RunComponent(node, entry), owner: scope, runNow: false);
+        // DiagOwner: a UseContext(FrameClock.Tick) poller IS this effect (the read happens while it is Tracking.Current),
+        // so stamping it here is what lets the [wake] census name the component instead of counting an anonymous one.
+        var effect = new Effect(Runtime, () => RunComponent(node, entry), owner: scope, runNow: false) { DiagOwner = comp };
         entry.Effect = effect;
         comp.Context.RequestRerender = effect.Schedule;   // imperative re-render (granular) for escape-hatch callers
         effect.RunNow();                                  // first render + child mount (deferred if mounted parked)

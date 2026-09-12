@@ -329,6 +329,57 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // ToScissor rounds OUT (floor/ceil), so the physical scissor can be up to one device pixel wider than the DIP rect
     // the cull tests against. One DIP of slack covers that on any sane DPI (the per-kind halos are ≥ 2 DIP anyway).
     private const float CullSafetyDip = 1f;
+    // ── σ>0 blur halo (§2a) ─────────────────────────────────────────────────────────────────────────────────────────
+    // Sum of SelfBlurRegion.TapRadius(σ) over every OPEN σ>0 Blur/EdgeFade group, in PHYSICAL px, additive over nesting.
+    // While it is non-zero the root-damage clamp is INFLATED by it — and ONLY the clamp half: the innermost clip and the
+    // composite still use the uninflated CurrentScissorRect(), so nothing paints outside R.
+    // <para>Why it must exist at all: a σ>0 group draws its SOURCE into the group RT under the clamped scissor, and Cull
+    // drops straddling primitives, so the RT is transparent just outside R. BlurInPlace's taps then pull that
+    // transparency inward and every pixel within a tap radius of R's edge composites too light. Rendering the source
+    // over R ⊕ halo and compositing only R is what WebRender/Chromium do (grow the dirty rect by ~3σ, write back the
+    // dirty part) and is why a blur need not veto partial replay at all.</para>
+    // DERIVED from _opacityGroups rather than pushed/popped by hand: the PushLayer arm has eight early-`continue` paths
+    // (region-local blur, pin hit, hold-on-miss skip, …) that do not all open a group, so a hand-paired counter would
+    // leak a halo on whichever path was missed. Recomputing on the four places the group list changes cannot desync.
+    private int _layerHaloPx;
+
+    private void RecomputeLayerHalo()
+    {
+        int h = 0;
+        for (int i = 0; i < _opacityGroups.Count; i++)
+        {
+            PushLayerCmd g = _opacityGroups[i].L;
+            if ((g.Kind == (int)LayerKind.Blur || g.Kind == (int)LayerKind.EdgeFade) && g.BlurSigma > 0f)
+                h += SelfBlurRegion.TapRadius(g.BlurSigma);
+        }
+        _layerHaloPx = h;
+    }
+
+    /// <summary>Does this frame's replay rect fully contain the layer's own <c>RegionBox</c> — i.e. would the group be
+    /// rendered in full? Only then may its blur be entered into the position/content-keyed pin cache: a pin minted from
+    /// a partially-covered region holds pixels that are correct only inside R, and the key cannot express that.
+    /// Compares against the INFLATED rect because that is the area the source is actually rendered over.</summary>
+    private bool ReplayCoversRegion(in PushLayerCmd L)
+    {
+        SelfBlurRegion.RegionBox(in L, _frameScale, (int)_w, (int)_h, out int minX, out int minY, out int maxX, out int maxY);
+        RECT d = InflatedRootDamage();
+        return d.left <= minX && d.top <= minY && d.right >= maxX && d.bottom >= maxY;
+    }
+
+    /// <summary>The replay rect inflated by the open σ>0 halo and clamped to the surface. Identity when no blurred group
+    /// is open, which is every frame the app spends outside a blur.</summary>
+    private RECT InflatedRootDamage()
+    {
+        if (_layerHaloPx <= 0) return _rootDamage;
+        int h = _layerHaloPx;
+        return new RECT
+        {
+            left = Math.Max(0, _rootDamage.left - h),
+            top = Math.Max(0, _rootDamage.top - h),
+            right = Math.Min((int)_w, _rootDamage.right + h),
+            bottom = Math.Min((int)_h, _rootDamage.bottom + h),
+        };
+    }
     // The canvas ledger — ONE state keyed to the canvas (R11), never a per-back-buffer pair (that shape belongs to
     // FLIP_SEQUENTIAL and would repaint every change twice). Reset wholesale by InitSwapChain / Resize / RecoverDevice.
     private bool _canvasValid;             // the persistent canvas holds a COMPLETE, coherent scene
@@ -353,6 +404,16 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     private int _lastReplayRectCount;
     private float _lastRepaintCoverage;
     private long _dmgPartialFrames, _dmgFullFrames;
+    private long _repaintCensusStart, _repaintCensusPartial, _repaintCensusFull;
+    private long _repaintCensusUnsupported, _repaintCensusMismatch;
+    private long _repaintCensusDirect, _repaintCensusRebuild, _repaintCensusRawCoverage, _repaintCensusMergedCoverage;
+    private long _repaintCensusEmptyCanvas, _repaintCensusOther, _repaintCensusReplayRects;
+    private readonly long[] _repaintCensusReasons = new long[256]; // RepaintFullReason is a byte; allocated once.
+    private double _repaintCensusPartialCoverage, _repaintCensusReplayCoverage;
+    private RepaintDamageRegion _repaintCensusRawSample;
+    private float _repaintCensusRawWidth, _repaintCensusRawHeight;
+    private ulong _repaintCensusRawSequence;
+    private double _repaintCensusCoverage;
 
     /// <summary>The route the most recent primary submit took (gpu-renderer.md §13.1). Ungated — the `[fps]` line reads
     /// it so a feel session can attribute a regression to "everything went full" without FG_DIAG.</summary>
@@ -506,6 +567,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _glyphs is null || _imageTextures is null
             ? ""
             : $"glyphs={_glyphs.CachedGlyphCount} runs={_glyphs.CachedRunCount} atlasGen={_glyphs.AtlasResetCount} quadPool={_glyphs.QuadPoolRetained}" +
+              $" atlasEdge={_glyphs.AtlasEdge} atlasRows={_glyphs.AtlasOccupiedRows} atlasCpu={_glyphs.AtlasCpuBytes} quadPoolBytes={_glyphs.QuadPoolBytes}" +
               $" | tex: atlas={_imageTextures.AtlasImageCount} pages={_imageTextures.AtlasPageCount} pooledFree={_imageTextures.PooledTextureCount} retired={_imageTextures.RetiredCount}" +
               $" srv={_imageTextures.DescriptorSlotsUsed}/{_imageTextures.DescriptorCapacity} high={_imageTextures.DescriptorHighWater} rejected={_imageTextures.DroppedThisRun}" +
               // The shared per-frame upload arena: bytes it holds across every bank (already inside `gpu bytes`, since
@@ -654,6 +716,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         bool builtPipelines = _rectPipe is null;
         EnsurePipelines();
         long bootT2 = System.Diagnostics.Stopwatch.GetTimestamp();
+        if (builtPipelines) _memoryProbeObserver?.Invoke("pipelines-created-before-swapchain");
         // ALWAYS-ON (one line, only on the swapchain call that actually brought the device/pipelines up): the two
         // costs on the critical path to first pixel. EnsurePipelines is where ~20 CreateGraphicsPipelineState calls
         // run — i.e. where the vendor's shader compiler (on the Adreno, the 49 MB qcgpuarm64xcompilercore.DLL) turns
@@ -673,6 +736,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _swapchains.Add(target);
         _primarySwapchain ??= target;
         Activate(target);
+        _memoryProbeObserver?.Invoke("swapchain-created");
         return target;
     }
 
@@ -857,6 +921,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     {
         AssertSubmitThread();
         if (_imageTextures is null) return;
+        if (_fence != null) _imageTextures.ReclaimCompleted(_fence->GetCompletedValue());
         int faultsBefore = _imageTextures.ResourceFaults;
         while (queue.TryDequeueJob(out var j))
         {
@@ -1240,6 +1305,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             $" luid=0x{adapterLuid.HighPart:X8}:{adapterLuid.LowPart:X8} uma={uma} software={software}" +
             $" tier={FluentGpu.Foundation.GpuProfile.Tier}");
 
+        _memoryProbeObserver?.Invoke("native-device-created-before-queue");
         D3D12_COMMAND_QUEUE_DESC qd = default;
         qd.Type = D3D12_COMMAND_LIST_TYPE.D3D12_COMMAND_LIST_TYPE_DIRECT;
         qd.Flags = D3D12_COMMAND_QUEUE_FLAGS.D3D12_COMMAND_QUEUE_FLAG_NONE;
@@ -1247,6 +1313,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         Check(_device->CreateCommandQueue(&qd, __uuidof<ID3D12CommandQueue>(), (void**)&queue), "CreateCommandQueue");
         _queue = queue;
         SetName(_queue, "FluentGpu.CommandQueue");
+        _memoryProbeObserver?.Invoke("queue-created-before-ring");
 
         for (uint i = 0; i < FRAME_COUNT; i++)
         {
@@ -1272,6 +1339,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _fenceEvent = CreateEventW(null, BOOL.FALSE, BOOL.FALSE, null);
 
         _rtvSize = _device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE.D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+        _memoryProbeObserver?.Invoke("allocator-ring-list-fence-created");
     }
 
     private void InitSwapChain(D3D12Swapchain target)
@@ -1557,6 +1625,80 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         SubmitDrawList(drawList, sortKeys, in ctx, _primarySwapchain);
     }
 
+    private Action? _glyphGrowthFence;
+
+    // All potentially packing text/icon work happens before command-list reset and before any subsystem stamps
+    // retirements with _fenceValue + 1. Rare atlas growth may drain the whole device and advance that fence value.
+    // Use the engine-owned opcode framing table; unknown/truncated streams cannot be partially preflighted.
+    private void PrepareGlyphs(ReadOnlySpan<byte> commands)
+    {
+        int epoch = _glyphs!.AtlasResetCount;
+        _glyphs.BeginPreparation(_glyphGrowthFence ??= WaitForGpu);
+        try
+        {
+            int offset = 0;
+            while (offset < commands.Length)
+            {
+                if (commands.Length - offset < sizeof(int)) throw new InvalidOperationException("Truncated glyph preflight opcode.");
+                DrawOp op = (DrawOp)MemoryMarshal.Read<int>(commands.Slice(offset));
+                offset += sizeof(int);
+                if (!RepaintStreamSafety.TryBodySize(op, out int bytes) || bytes > commands.Length - offset)
+                    throw new InvalidOperationException("Unknown or truncated glyph preflight payload.");
+                var payload = commands.Slice(offset, bytes);
+                offset += bytes;
+                switch (op)
+                {
+                    case DrawOp.DrawGlyphRun:
+                    {
+                        var g = MemoryMarshal.Read<DrawGlyphRunCmd>(payload);
+                        string text = _strings.Resolve(g.Text);
+                        if (text.Length == 0) break;
+                        _glyphs.LayoutRun(g.Text, g.Family, text, _strings.Resolve(g.Family), g.FontSize, g.Weight,
+                            g.Bounds.X, g.Bounds.Y, g.Bounds.W, g.Wrap, g.Trim, g.MaxLines, g.CharSpacing,
+                            g.LineHeight, g.LineStacking, g.LineBounds, g.Color, _frameScale, g.Transform,
+                            g.Opacity, _glyphInsts, g.SpanRunId, g.ForceColor != 0, g.InMotion * (1f / 255f));
+                        break;
+                    }
+                    case DrawOp.DrawGlyphRunGradient:
+                    {
+                        var g = MemoryMarshal.Read<DrawGlyphRunGradientCmd>(payload);
+                        string text = _strings.Resolve(g.Text);
+                        if (text.Length == 0) break;
+                        _glyphs.LayoutRunGradient(g.Text, g.Family, text, _strings.Resolve(g.Family), g.FontSize,
+                            g.Weight, g.Bounds.X, g.Bounds.Y, g.Bounds.W, g.Wrap, g.Trim, g.MaxLines,
+                            g.CharSpacing, g.LineHeight, g.LineStacking, g.LineBounds, g.Before, g.After,
+                            g.Split, g.Softness, g.Lift, _frameScale, g.Transform, g.Opacity,
+                            _gradGlyphInsts, _glyphInsts, g.SpanRunId, g.InMotion * (1f / 255f));
+                        break;
+                    }
+                    case DrawOp.DrawIconMask:
+                    {
+                        var icon = MemoryMarshal.Read<DrawIconMaskCmd>(payload);
+                        if (icon.PathId == 0 || icon.Tint.A <= 0f || icon.Rect.W <= 0f || icon.Rect.H <= 0f) break;
+                        int width = Math.Max(1, (int)MathF.Round(icon.Rect.W * _frameScale));
+                        int height = Math.Max(1, (int)MathF.Round(icon.Rect.H * _frameScale));
+                        if (_glyphs.TryGetIconUv(icon.PathId, width, height, out _, out _, out _, out _)) break;
+                        int count = checked(width * height);
+                        byte[] mask = ArrayPool<byte>.Shared.Rent(count);
+                        try
+                        {
+                            IconGeometryTable.Shared.Rasterize(icon.PathId, width, height, mask.AsSpan(0, count));
+                            _glyphs.PackIconMask(icon.PathId, width, height, mask, out _, out _, out _, out _);
+                        }
+                        finally { ArrayPool<byte>.Shared.Return(mask); }
+                        break;
+                    }
+                }
+            }
+        }
+        finally { _glyphs.EndPreparation(); }
+        if (_glyphs.AtlasResetCount != epoch)
+        {
+            _canvasValid = false;
+            _canvasDrawListHash = 0;
+        }
+    }
+
     public void SubmitDrawList(ReadOnlySpan<byte> drawList, ReadOnlySpan<ulong> sortKeys, in FrameInfo ctx, ISwapchain target)
     {
         if (target is not D3D12Swapchain sc || sc.Device != this || sc.Disposed)
@@ -1587,6 +1729,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         if (!WaitForFrame(_frameIndex))
             throw new InvalidOperationException("Frame fence did not reach the awaited value; submit cannot reuse its bank.");
         _lastFenceWaitMs = System.Diagnostics.Stopwatch.GetElapsedTime(fenceWaitStart).TotalMilliseconds;
+        _frameScale = ctx.Scale <= 0f ? 1f : ctx.Scale;
+        _glyphs!.BeginFrame((int)_frameIndex);
+        PrepareGlyphs(drawList);
         EnsureGpuExecutionTiming();
         CollectGpuExecutionTime(_frameIndex);   // read this index's retired always-on whole-frame timestamps
         _gpuTimingFresh = false;
@@ -1602,6 +1747,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // Detailed GPU profiler: begin (query 259i) brackets the same work and supplies its optional category timeline.
         if (s_gpuTiming && _gpuQueryHeap != null)
             _cmdList->EndQuery(_gpuQueryHeap, D3D12_QUERY_TYPE.D3D12_QUERY_TYPE_TIMESTAMP, GpuTsPerFrame * _frameIndex);
+        _glyphs.UploadIfDirty(_cmdList); // full prepared dirty band, before any glyph draw can sample it
         _imageTextures?.FlushUploads(_cmdList, _fenceValue + 1, _fence->GetCompletedValue());
         if (ReferenceEquals(sc, _primarySwapchain) &&
             _bakedBlurQueue is { } bakedQueue && _bakedBlur is { } baker && _imageTextures is { } textures)
@@ -1655,7 +1801,6 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _polylinePipe!.BeginFrame((int)_frameIndex);
         _gradPipe!.BeginFrame((int)_frameIndex);
         _pathPipe!.BeginFrame((int)_frameIndex);
-        _glyphs!.BeginFrame((int)_frameIndex);
         _imagePipe!.BeginFrame((int)_frameIndex);
         float lw = _w / _frameScale, lh = _h / _frameScale;
 
@@ -1724,11 +1869,10 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             bool scaleSame = _lastFrameScaleValid && _lastFrameScaleUsed == _frameScale;
             // M6: Scan is a FULL header walk of the byte stream, on the submit thread, every frame. Its answer can only
             // ever PERMIT a partial route — Decide treats an unsafe stream as a hard disqualifier — so a frame already
-            // committed to a full redraw by its own region, its coverage, its layer kind or a target mismatch never
-            // needs it. Scroll (~81 % coverage) is the frame this skips, and it is the frame that can least afford it.
+            // committed to a full redraw by its own region, layer kind or target mismatch never needs it. Raw
+            // coverage is not a precondition: offscreen extents must be clipped by policy before measuring area.
             bool preFull = damage.IsFull || !sizeMatches || lw <= 0f || lh <= 0f
-                           || (layerKind != RepaintPolicy.LayerKindNone && layerKind != RepaintPolicy.LayerKindGroups)
-                           || _lastRepaintCoverage >= RepaintPolicy.CoverageCutoff;
+                           || (layerKind != RepaintPolicy.LayerKindNone && layerKind != RepaintPolicy.LayerKindGroups);
             bool streamScanned = !preFull;
             bool streamSafe = streamScanned && RepaintStreamSafety.Scan(drawList);
             if (!carryCovers || !clearSame || !scaleSame) _canvasValid = false;
@@ -1762,6 +1906,45 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             _lastFrameScaleUsed = _frameScale; _lastFrameScaleValid = true;
             _lastRepaintRoute = route;
             _lastReplayRectCount = replay.Count;
+            // Route attribution is distinct from the named safety reason: coverage and rebuilding an invalid
+            // retained canvas are ordinary policy decisions and intentionally have no RepaintFullReason.
+            if (route == RepaintRoute.Partial)
+            {
+                _repaintCensusPartialCoverage += _lastRepaintCoverage;
+                _repaintCensusReplayRects += replay.Count;
+                if (lw > 0f && lh > 0f) _repaintCensusReplayCoverage += replay.SummedArea() / (lw * lh);
+            }
+            else
+            {
+                if (route == RepaintRoute.FullIntoCanvas) _repaintCensusRebuild++;
+                else _repaintCensusDirect++;
+                if (_lastRepaintFullReason != RepaintFullReason.None)
+                    _repaintCensusReasons[(byte)_lastRepaintFullReason]++;
+                else if (route == RepaintRoute.FullDirect)
+                {
+                    if (_lastRepaintCoverage >= RepaintPolicy.CoverageCutoff)
+                    {
+                        if (_repaintCensusRawCoverage == 0)
+                        {
+                            _repaintCensusRawSample = damage;
+                            _repaintCensusRawWidth = lw;
+                            _repaintCensusRawHeight = lh;
+                            _repaintCensusRawSequence = ctx.PublishSequence;
+                        }
+                        _repaintCensusRawCoverage++;
+                    }
+                    else if (streamSafe && sizeMatches && lw > 0f && lh > 0f)
+                    {
+                        // Ask the SAME policy with a coherent canvas to distinguish post-merge coverage from
+                        // an empty/off-target damage set with no canvas. No copied policy heuristics.
+                        var coherentRoute = RepaintPolicy.Decide(in damage, lw, lh, layerKind,
+                            streamSafe: true, canvasValid: true, sizeMatches: true, out _);
+                        if (coherentRoute == RepaintRoute.FullDirect) _repaintCensusMergedCoverage++;
+                        else _repaintCensusEmptyCanvas++;
+                    }
+                    else _repaintCensusOther++;
+                }
+            }
         }
 
         if (route == FluentGpu.Rhi.RepaintRoute.FullDirect)
@@ -1850,6 +2033,38 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         if (isPrimary)
         {
             if (route == FluentGpu.Rhi.RepaintRoute.Partial) _dmgPartialFrames++; else _dmgFullFrames++;
+            long repaintNow = System.Diagnostics.Stopwatch.GetTimestamp();
+            if (_repaintCensusStart == 0) _repaintCensusStart = repaintNow;
+            if (route == RepaintRoute.Partial) _repaintCensusPartial++; else _repaintCensusFull++;
+            if (_lastRepaintFullReason == RepaintFullReason.BackendUnsupported) _repaintCensusUnsupported++;
+            if (_lastRepaintFullReason == RepaintFullReason.EmptyDamageStreamMismatch) _repaintCensusMismatch++;
+            _repaintCensusCoverage += _lastRepaintCoverage;
+            double repaintSeconds = (repaintNow - _repaintCensusStart) / (double)System.Diagnostics.Stopwatch.Frequency;
+            if (repaintSeconds >= 30)
+            {
+                long samples = _repaintCensusPartial + _repaintCensusFull;
+                Diag.Line(FormattableString.Invariant($"[repaint] seconds={repaintSeconds:0.0} submits={samples} partial={_repaintCensusPartial} full={_repaintCensusFull} unsupported={_repaintCensusUnsupported} emptyMismatch={_repaintCensusMismatch} meanDamagePct={_repaintCensusCoverage * 100 / samples:0.00} lastReason={_lastRepaintFullReason}"));
+                var reasons = new System.Text.StringBuilder();
+                for (int reason = 1; reason < _repaintCensusReasons.Length; reason++)
+                    if (_repaintCensusReasons[reason] != 0)
+                        reasons.Append((RepaintFullReason)reason).Append('=').Append(_repaintCensusReasons[reason]).Append(' ');
+                long partialSamples = Math.Max(1, _repaintCensusPartial);
+                Diag.Line(FormattableString.Invariant($"[repaint-causes] direct={_repaintCensusDirect} rebuild={_repaintCensusRebuild} rawCoverageAtFull={_repaintCensusRawCoverage} mergedCoverage={_repaintCensusMergedCoverage} emptyCanvas={_repaintCensusEmptyCanvas} other={_repaintCensusOther} partialDamagePct={_repaintCensusPartialCoverage * 100 / partialSamples:0.00} partialReplayPct={_repaintCensusReplayCoverage * 100 / partialSamples:0.00} meanReplayRects={_repaintCensusReplayRects / (double)partialSamples:0.00} named=[{reasons}]"));
+                if (_repaintCensusRawCoverage > 0)
+                {
+                    var sample = new System.Text.StringBuilder();
+                    foreach (ref readonly var rect in _repaintCensusRawSample.AsSpan())
+                        sample.Append(FormattableString.Invariant($"({rect.X:0.##},{rect.Y:0.##},{rect.W:0.##},{rect.H:0.##}) "));
+                    Diag.Line(FormattableString.Invariant($"[repaint-raw-sample] seq={_repaintCensusRawSequence} targetDip={_repaintCensusRawWidth:0.##}x{_repaintCensusRawHeight:0.##} coveragePct={_repaintCensusRawSample.Coverage(_repaintCensusRawWidth, _repaintCensusRawHeight) * 100:0.00} rects=[{sample}]"));
+                }
+                _repaintCensusStart = repaintNow;
+                _repaintCensusPartial = _repaintCensusFull = _repaintCensusUnsupported = _repaintCensusMismatch = 0;
+                _repaintCensusCoverage = 0;
+                _repaintCensusDirect = _repaintCensusRebuild = _repaintCensusRawCoverage = _repaintCensusMergedCoverage = 0;
+                _repaintCensusEmptyCanvas = _repaintCensusOther = _repaintCensusReplayRects = 0;
+                _repaintCensusPartialCoverage = _repaintCensusReplayCoverage = 0;
+                Array.Clear(_repaintCensusReasons);
+            }
             Diag.Set("d3d12", "dmgRoute", (int)route);                    // 0 = FullDirect, 1 = FullIntoCanvas, 2 = Partial
             Diag.Set("d3d12", "dmgPartialFrames", _dmgPartialFrames);     // primary submits served from the canvas (incl. blit-only)
             Diag.Set("d3d12", "dmgFullFrames", _dmgFullFrames);           // ── and those that redrew the whole target
@@ -2558,7 +2773,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // replay rect (R3), which is what makes the clamp reach every consumer — the SetScissorRect chokepoint, the
     // layer composites that take CurrentScissorRect() BY VALUE, and SetFullViewport's restore after a compositor pass.
     private RECT FullScissorRect()
-        => _rootDamageActive ? _rootDamage : new RECT { left = 0, top = 0, right = (int)_w, bottom = (int)_h };
+        => _rootDamageActive ? InflatedRootDamage() : new RECT { left = 0, top = 0, right = (int)_w, bottom = (int)_h };
 
     private void SetFullScissor()
         => SetScissorRect(FullScissorRect());
@@ -2609,7 +2824,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         if (_clipStack.Count == 0) return FullScissorRect();
         RECT r = ToScissor(_clipStack[^1]);
         if (!_rootDamageActive) return r;
-        RECT d = _rootDamage;
+        RECT d = InflatedRootDamage();
         RECT x = new()
         {
             left = Math.Max(r.left, d.left),
@@ -2662,6 +2877,16 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     {
         if (!_cullActive) return false;
         RepaintCull.Aabb(x, y, w, h, m11, m12, m21, m22, dx, dy, out float l, out float t, out float r, out float b);
+        // Inside a σ>0 group the SOURCE must cover R ⊕ halo, so a primitive that straddles R's edge has to survive the
+        // decode-time cull too — culling it here would reintroduce exactly the transparency the halo exists to avoid.
+        // TapRadius is PHYSICAL px and _cullRect is DIP, so the halo divides by the frame scale on the way in.
+        if (_layerHaloPx > 0)
+        {
+            float s = _frameScale <= 0f ? 1f : _frameScale;
+            float hd = _layerHaloPx / s;
+            RectF grown = new(_cullRect.X - hd, _cullRect.Y - hd, _cullRect.W + 2f * hd, _cullRect.H + 2f * hd);
+            return !RepaintCull.Keep(l, t, r, b, halo, in grown);
+        }
         return !RepaintCull.Keep(l, t, r, b, halo, in _cullRect);
     }
 
@@ -2761,6 +2986,10 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         cv.Anonymous.DepthStencil.Depth = 1f;
         cv.Anonymous.DepthStencil.Stencil = 0;
 
+        // Query BEFORE CreateCommittedResource, on the SAME desc (audit gpu mem-02): the device-reported allocation
+        // requirement, not an inferred cw*ch*4 pixel estimate — see D3D12MemoryDiagnostics.AllocationBytes.
+        ulong dsvBytes = D3D12MemoryDiagnostics.AllocationBytes(_device, &rd);
+
         ID3D12Resource* res;
         // PERMANENT DEPTH_WRITE: nothing ever reads this as an SRV or copies it, so it needs no barrier for its whole
         // life — which is what keeps a stencil scope free of the barrier cost a transient attachment would carry.
@@ -2783,7 +3012,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             _dsvHeap = heap;
         }
         _device->CreateDepthStencilView(res, null, _dsvHeap->GetCPUDescriptorHandleForHeapStart());
-        D3D12MemoryDiagnostics.Track(res, "StencilClip.Dsv", (uint)(cw * ch * 4));
+        D3D12MemoryDiagnostics.Track(res, dsvBytes != 0 ? "StencilClip.Dsv" : "StencilClip.AllocationUnknown.Dsv",
+            dsvBytes != 0 ? dsvBytes : (uint)(cw * ch * 4));
         _stencilDsv = res;
         _stencilW = cw; _stencilH = ch;
         return true;
@@ -3520,6 +3750,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         ResetDesiredScissor();
         _layerKinds.Clear();
         _opacityGroups.Clear();
+        RecomputeLayerHalo();   // §2a: the open-group halo is derived, never hand-paired
         _stripGroups.Clear();
         // One scratch RECT for partial layer-RT clears (edge-fade + plain opacity) — MUST NOT stackalloc inside the
         // draw-list loop (cookie overrun). Consumed by the ClearRenderTargetView in the same iteration that fills it.
@@ -3629,7 +3860,14 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                         // churn for no hit (FindPin is size-exact ⇒ next frame's different size misses anyway). At
                         // rest the clamp size is stable, so a clamped row mints once then HITS — the fix for a
                         // stationary edge-clamped blur re-blurring every submit. pinHash 0 ⇒ pure transient.
-                        ulong pinTag = (regionClamped && L.InMotion != 0) ? 0UL : bhash;
+                        // A CLAMPED frame must never mint a pin either (§2a). BlurPinKey is position/content-keyed and
+                        // knows nothing about the replay rect R, so a pin minted while damage-clamped carries the
+                        // partial frame's content under a key that a later FULL frame will happily hit — poisoning it
+                        // with pixels that were only ever correct inside R. Dropping the tag makes the clamped render a
+                        // pure transient: it composites correctly now and leaves the cache untouched. Both
+                        // RetainPinFromScratch call sites are dominated by this tag, so gating it here is the whole fix.
+                        bool clampedPartial = _rootDamageActive && !ReplayCoversRegion(in L);
+                        ulong pinTag = ((regionClamped && L.InMotion != 0) || clampedPartial) ? 0UL : bhash;
                         bool willMintPin = seenLastFrame && pinTag != 0;
                         // A miss that will mint NOTHING is a pure transient render, and a transient render of a SMALL
                         // region has no business clearing + blurring two full canvases — that is the ~1.7 ms/lease the
@@ -3659,6 +3897,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                             SceneCat(CatComposite);   // the lease's RT clear is layer cost — attribute it to comp, not to whatever ran before
                             int pslot = _opacity!.Acquire(_cmdList, _fenceValue + 1);
                             _opacityGroups.Add(new LayerGroup(pslot, L, pinTag, default));
+                            RecomputeLayerHalo();   // §2a: the open-group halo is derived, never hand-paired
                             _layerKinds.Add(L.Kind);
                             _blurCacheMiss++;
                             continue;
@@ -3781,6 +4020,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                         continue;
                     int slot = _opacity!.Acquire(_cmdList, _fenceValue + 1, clearRect);
                     _opacityGroups.Add(new LayerGroup(slot, L, 0UL, default));
+                    RecomputeLayerHalo();   // §2a: the open-group halo is derived, never hand-paired
                     _layerKinds.Add(L.Kind);
                 }
                 else
@@ -3857,6 +4097,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                     OpacityLayerCompositor.LocalBlurSurface localSurface = closed.LocalBlur;
                     bool localBlur = localSurface.UsedW > 0;
                     _opacityGroups.RemoveAt(_opacityGroups.Count - 1);
+                    RecomputeLayerHalo();   // §2a: the open-group halo is derived, never hand-paired
                     SceneCat(CatComposite);
                     // Self-blur (or edge-fade-with-blur): gaussian-blur the group RT in place (leaves it readable); else BeginRead.
                     // A BOUNDED target with no sigma is a bounded PLAIN-OPACITY group (TryBeginBoundedOpacityGroup) —
@@ -3912,6 +4153,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             OpacityLayerCompositor.LocalBlurSurface localSurface = closed.LocalBlur;
             bool localBlur = localSurface.UsedW > 0;
             _opacityGroups.RemoveAt(_opacityGroups.Count - 1);
+            RecomputeLayerHalo();   // §2a: the open-group halo is derived, never hand-paired
             if (localBlur && gl.BlurSigma > 0f) _opacity!.BlurLocalInPlace(_cmdList, in localSurface, gl.BlurSigma, _fenceValue + 1);
             else if (gl.BlurSigma > 0f) _opacity!.BlurInPlace(_cmdList, slot, gl.BlurSigma, _fenceValue + 1, in gl, _frameScale);
             else _opacity!.BeginRead(_cmdList, slot);
@@ -4161,6 +4403,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         if (_opacity is not { } opacity) return false;
         if (!opacity.TryAcquireLocalBlur(_cmdList, _fenceValue + 1, in L, _frameScale, out var localBlur)) return false;
         _opacityGroups.Add(new LayerGroup(localBlur.Slot, L, 0UL, localBlur));
+        RecomputeLayerHalo();   // §2a: the open-group halo is derived, never hand-paired
         _layerKinds.Add(L.Kind);
         InvalidateCmdState();
         SetLocalBlurViewport(in localBlur);
@@ -4194,6 +4437,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         if (!LayerSubtreeProbe.IsBoundable(drawList, subtreeStart, out _)) return false;
         if (!opacity.TryAcquireBoundedGroup(_cmdList, _fenceValue + 1, in L, _frameScale, out var bounded)) return false;
         _opacityGroups.Add(new LayerGroup(bounded.Slot, L, 0UL, bounded));
+        RecomputeLayerHalo();   // §2a: the open-group halo is derived, never hand-paired
         _layerKinds.Add(L.Kind);
         InvalidateCmdState();
         SetLocalBlurViewport(in bounded);

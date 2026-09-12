@@ -33,6 +33,32 @@ using static FluentGpu.VerticalSlice.Harness.Gate;
 using static FluentGpu.VerticalSlice.Harness.Asserts;
 
 
+/// <summary>gate.cbf.close-timer host: an OverlayHost with ONE CommandBarFlyout trigger, opened ALWAYS-EXPANDED so
+/// the overflow row ("cbf-settings") is clickable the moment it opens — invoking it is the path that routes through
+/// <c>RequestClose</c>, i.e. the 83 ms closing fade whose completion is a ToolTipClock one-shot.</summary>
+sealed class CbfCloseTimerProbe : Component
+{
+    public IOverlayService? Service;
+    public override Element Render() => Embed.Comp(() => new OverlayHost { Child = Embed.Comp(() => new CbfCloseTimerProbeInner(this)) });
+}
+
+sealed class CbfCloseTimerProbeInner : Component
+{
+    readonly CbfCloseTimerProbe _p;
+    public CbfCloseTimerProbeInner(CbfCloseTimerProbe p) => _p = p;
+    static readonly AppBarCommand[] Primary = [new AppBarCommand(Icons.Accept, "cbf-accept")];
+    static readonly AppBarCommand[] Secondary = [new AppBarCommand(Icons.Settings, "cbf-settings")];
+    public override Element Render()
+    {
+        _p.Service = UseContext(Overlay.Service);
+        return new BoxEl
+        {
+            Width = 480, Height = 400, Padding = Edges4.All(20),
+            Children = [CommandBarFlyout.Create("cbf-trigger", Primary, Secondary, alwaysExpanded: true)],
+        };
+    }
+}
+
     sealed class FocusClipProbe : Component
     {
         public override Element Render() => new BoxEl
@@ -64,6 +90,7 @@ static class OverlaySuite
         OverlayChecks(strings);
         OverlayAnimationChecks(strings);
         E4PopupWindowingChecks(strings);
+        ToolTipTimerChecks(strings);
         G5fPopupToastChecks(strings);
         FlyoutAcrylicChecks(strings);
         VideoHoleBackdropChecks(strings);
@@ -2093,6 +2120,204 @@ static class OverlaySuite
         }
     }
 
+    // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
+    //  ToolTipClock is a HostTimerQueue ONE-SHOT, not a per-frame poller.
+    //
+    //  What it replaced: an invisible Opacity 1→1 tween seeded on a hidden node, polled through
+    //  UseContext(FrameClock.Tick) — so a merely PENDING tooltip (hovered, 800 ms to go) and an OPEN one (5 s of
+    //  dwell) each re-rendered a component and held a frame-clock subscription on EVERY frame. In the app a 12 s
+    //  scroll run counted ~593 useless ToolTipClock renders, and it was the sole live FrameClock.Tick subscriber
+    //  keeping the UI thread awake. These gates pin the replacement from three sides: nothing re-renders, nothing
+    //  subscribes the frame clock, and the deadlines are unchanged on the virtual clock.
+    //
+    //  Every gate PAINTS rather than RunFrame()s once a countdown is armed. That is not a shortcut, it is the shape
+    //  the engine's own gate.timer.* checks use: a pending-but-not-due HostTimerQueue entry sets NO wake bit (that is
+    //  the whole point — the loop idles to the deadline), so RunFrame takes its idle early-out BEFORE Paint, and
+    //  Paint is both the only place the headless frame clock advances and the only HostTimerQueue.Drain site.
+    // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
+    static void ToolTipTimerChecks(StringTable strings)
+    {
+        // gate.tooltip.timer-quiet — pending AND dwelling are both render-free and poller-free, and the 800 ms /
+        // 5 s deadlines still land on the virtual clock.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("tip-timer-quiet", new Size2(480, 360), 1f));
+            window.Show();
+            var root = new E4ToolTipProbe();
+            var clock = new ManualFrameTimeSource();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, root, frameTime: clock);
+            host.RunFrame();
+
+            bool TipOpen() => !FindTextNode(host.Scene, strings, host.Scene.Root, "tip-body").IsNull;
+            void Hover(float x, float y) { window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(x, y), 0, 0)); host.RunFrame(); }
+            void Settle() { for (int i = 0; i < 4; i++) host.Paint(0); }          // 0 dt: cannot move a deadline
+            void Jump(float ms) { clock.Advance(ms); host.Paint(0); Settle(); }
+            var sb = new System.Text.StringBuilder();
+            string Pollers() { sb.Clear(); host.DescribeFrameClockPollers(sb); return sb.ToString().Trim(); }
+
+            for (int i = 0; i < 6 && host.HasActiveWork; i++) host.RunFrame();    // settle the mount
+            int timersIdle = host.TimersForTest.Count;
+
+            // ── PENDING: hovered, 800 ms to go. 10 frames × 20 ms = 200 ms, nowhere near the deadline. ──
+            Hover(50f, 50f);
+            Settle();
+            int armedTimers = host.TimersForTest.Count;
+            bool oneEntryArmed = armedTimers == timersIdle + 1;                   // ONE heap entry is the whole mechanism
+            int pendingRenders = 0;
+            for (int i = 0; i < 10; i++) { clock.Advance(20f); pendingRenders += host.Paint(0).ComponentsRendered; }
+            bool pendingQuiet = pendingRenders == 0;
+            int pendingPollers = host.FrameClockPollerCount;
+            string pendingPollerLine = Pollers();
+            bool pendingNoPoller = pendingPollers == 0 && !pendingPollerLine.Contains("ToolTip", StringComparison.Ordinal);
+
+            // ── The deadline itself: 799 ms is still closed, 801 ms is open. (200 ms spent above.) ──
+            Jump(599f);
+            bool notAt799 = !TipOpen();
+            Jump(2f);
+            bool openAt800 = TipOpen();
+
+            // ── DWELLING: past the 167 ms open fade, an open bubble is just as quiet. ──
+            for (int i = 0; i < 6; i++) { clock.Advance(40f); host.Paint(0); }    // 240 ms > the fade
+            int dwellRenders = 0;
+            for (int i = 0; i < 10; i++) { clock.Advance(20f); dwellRenders += host.Paint(0).ComponentsRendered; }
+            bool dwellQuiet = dwellRenders == 0;
+            int dwellPollers = host.FrameClockPollerCount;
+
+            // ── …and the 5 s dwell still auto-dismisses (≈1441 ms of it spent; jump the rest in two hops). ──
+            Jump(4000f);
+            bool stillOpenBeforeDwell = TipOpen();
+            Jump(1000f);
+            for (int i = 0; i < 4; i++) { clock.Advance(80f); host.Paint(0); }    // the 167 ms close fade settles
+            Settle();
+            bool autoDismissed = !TipOpen();
+
+            Check("gate.tooltip.timer-quiet a pending tooltip arms ONE host one-shot and then re-renders nothing and subscribes no frame clock; an open+settled bubble is equally quiet; and the 800ms show delay and 5s dwell still land exactly on the virtual clock",
+                oneEntryArmed && pendingQuiet && pendingNoPoller && notAt799 && openAt800
+                && dwellQuiet && dwellPollers == 0 && stillOpenBeforeDwell && autoDismissed,
+                $"timers {timersIdle}→{armedTimers} pendingRenders={pendingRenders} pendingPollers={pendingPollers} "
+                + $"pollerLine=\"{pendingPollerLine}\" !799={notAt799} 800={openAt800} dwellRenders={dwellRenders} "
+                + $"dwellPollers={dwellPollers} beforeDwell={stillOpenBeforeDwell} autoDismissed={autoDismissed}");
+        }
+
+        // gate.tooltip.timer-leave-cancels — pointer leave mid-delay unmounts the clock; the hook cell's generation
+        // bump makes the already-armed heap entry a no-op when it pops, so the bubble never opens.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("tip-timer-cancel", new Size2(480, 360), 1f));
+            window.Show();
+            var root = new E4ToolTipProbe();
+            var clock = new ManualFrameTimeSource();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, root, frameTime: clock);
+            host.RunFrame();
+
+            bool TipOpen() => !FindTextNode(host.Scene, strings, host.Scene.Root, "tip-body").IsNull;
+            void Hover(float x, float y) { window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(x, y), 0, 0)); host.RunFrame(); }
+            void Settle() { for (int i = 0; i < 4; i++) host.Paint(0); }
+
+            Hover(50f, 50f);                    // enter → the 800 ms one-shot arms
+            Settle();
+            clock.Advance(400f); host.Paint(0); Settle();
+            bool notOpenMidDelay = !TipOpen();
+            Hover(10f, 10f);                    // leave BEFORE the deadline → phase 0 → the clock unmounts
+            Settle();
+            for (int i = 0; i < 8; i++) { clock.Advance(200f); host.Paint(0); }   // 1.6 s past the old deadline
+            Settle();
+            bool neverOpened = !TipOpen();
+
+            Check("gate.tooltip.timer-leave-cancels a pointer leave mid-show-delay cancels the armed one-shot (generation-guarded unmount) and the bubble never opens",
+                notOpenMidDelay && neverOpened, $"midDelayClosed={notOpenMidDelay} neverOpened={neverOpened}");
+        }
+
+        // gate.menu.cascade-timer-rearm — MenuFlyout's submenu open-delay is the SAME primitive, keyed per row: moving
+        // to a different sub-item re-keys the clock, which REMOUNTS it and therefore restarts the full 400 ms.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("menu-cascade-timer", new Size2(480, 400), 1f));
+            window.Show();
+            var root = new OverlayProbe();
+            var clock = new ManualFrameTimeSource();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, root, frameTime: clock);
+            host.PopupWindowsEnabled = false;   // keep the cascade in-window so one scene carries every level
+            host.RunFrame();
+
+            var svc = root.Service!;
+            svc.Open(() => root.Anchor, () => MenuFlyout.Create(new[]
+            {
+                MenuFlyoutItem.SubMenu("cascadeA", new[] { new MenuFlyoutItem("leaf-a") }),
+                MenuFlyoutItem.SubMenu("cascadeB", new[] { new MenuFlyoutItem("leaf-b") }),
+            }, () => svc.CloseTop()), FlyoutPlacement.BottomLeft);
+            for (int i = 0; i < 10; i++) host.RunFrame();
+
+            NodeHandle Find(string s) => FindTextNode(host.Scene, strings, host.Scene.Root, s);
+            void HoverRow(string label)
+            {
+                var r = host.Scene.AbsoluteRect(Find(label));
+                window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(r.X + r.W * 0.5f, r.Y + r.H * 0.5f), 0, 0));
+                host.RunFrame();
+                for (int i = 0; i < 2; i++) host.Paint(0);
+            }
+            void Jump(float ms) { clock.Advance(ms); host.Paint(0); for (int i = 0; i < 4; i++) host.Paint(0); }
+
+            float delay = MenuFlyout.SubMenuShowDelayMs;   // 400 ms headless (SystemParams.MenuShowDelayMs)
+            bool rowsFound = !Find("cascadeA").IsNull && !Find("cascadeB").IsNull;
+            HoverRow("cascadeA");
+            Jump(delay * 0.75f);                           // short of the deadline → nothing opened
+            bool aNotYet = Find("leaf-a").IsNull;
+            HoverRow("cascadeB");                          // re-key ⇒ A's clock unmounts, B's mounts fresh
+            Jump(delay * 0.75f);                           // 1.5× delay since A's arm, 0.75× since B's
+            bool reArmed = Find("leaf-a").IsNull && Find("leaf-b").IsNull;
+            Jump(delay * 0.5f);                            // 1.25× delay since B's arm
+            bool bOpened = !Find("leaf-b").IsNull && Find("leaf-a").IsNull;
+
+            Check("gate.menu.cascade-timer-rearm a submenu hover arms one keyed ToolTipClock; moving to another sub-item remounts it and restarts the full MenuShowDelay (the first row's countdown is cancelled, not inherited)",
+                rowsFound && aNotYet && reArmed && bOpened,
+                $"rows={rowsFound} aNotYet={aNotYet} reArmed={reArmed} bOpened={bOpened} delay={delay:0.#}");
+        }
+
+        // gate.cbf.close-timer — CommandBarFlyout's close COMPLETION is the same one-shot: invoking a command starts
+        // the 83 ms ClosingOpacityStoryboard and the entry may only enter Closing once Motion.ControlFaster has
+        // actually elapsed on the host clock (the pre-fix poll would have needed a per-frame wake to notice).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("cbf-close-timer", new Size2(480, 400), 1f));
+            window.Show();
+            var root = new CbfCloseTimerProbe();
+            var clock = new ManualFrameTimeSource();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, root, frameTime: clock);
+            host.PopupWindowsEnabled = false;
+            host.RunFrame();
+
+            var svc = (OverlayServiceImpl)root.Service!;
+            NodeHandle Find(string s) => FindTextNode(host.Scene, strings, host.Scene.Root, s);
+            void Click(string label)
+            {
+                var c = CenterOf(host.Scene, Find(label));
+                window.QueueInput(new InputEvent(InputKind.PointerDown, c, 0, 0));
+                window.QueueInput(new InputEvent(InputKind.PointerUp, c, 0, 0));
+                host.RunFrame();
+            }
+
+            Click("cbf-trigger");
+            for (int i = 0; i < 10; i++) host.RunFrame();
+            bool opened = svc.Entries.Count == 1 && svc.Entries[0].Phase != OverlayPhase.Closing && !Find("cbf-settings").IsNull;
+
+            Click("cbf-settings");                 // RunSecondary → RequestClose → closing fade + the 83 ms one-shot
+            for (int i = 0; i < 3; i++) host.Paint(0);
+            bool armedNotFired = svc.Entries.Count == 1 && svc.Entries[0].Phase != OverlayPhase.Closing;
+            clock.Advance(Motion.ControlFaster * 0.5f); host.Paint(0);
+            for (int i = 0; i < 2; i++) host.Paint(0);
+            bool notYetHalfWay = svc.Entries.Count == 1 && svc.Entries[0].Phase != OverlayPhase.Closing;
+            clock.Advance(Motion.ControlFaster); host.Paint(0);
+            for (int i = 0; i < 4; i++) host.Paint(0);
+            bool closedAfterFade = svc.Entries.Count == 0 || svc.Entries[0].Phase == OverlayPhase.Closing;
+
+            Check("gate.cbf.close-timer invoking a CommandBarFlyout command closes it only once Motion.ControlFaster has elapsed on the host timer queue — never on the frame that armed it, never before half the fade",
+                opened && armedNotFired && notYetHalfWay && closedAfterFade,
+                $"opened={opened} armed={armedNotFired} halfWay={notYetHalfWay} closed={closedAfterFade} "
+                + $"entries={svc.Entries.Count} fade={Motion.ControlFaster:0.#}ms");
+        }
+    }
+
     static void E4PopupWindowingChecks(StringTable strings)
     {
         // e4popup.1 — WindowBlur (WM_ACTIVATE WA_INACTIVE) closes every LIGHT-DISMISS overlay; Modal (ContentDialog)
@@ -2466,15 +2691,22 @@ static class OverlaySuite
 
             bool TipOpen() => !FindTextNode(host.Scene, strings, host.Scene.Root, "tip-body").IsNull;
             void Hover(float x, float y) { window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(x, y), 0, 0)); host.RunFrame(); }
-            void Step(float ms) { clock.Advance(ms); host.RunFrame(); }
-            // 0-dt frames: a just-seeded AnimEngine track consumes no dt on its FIRST tick (AnimEngine.cs JustSeeded —
-            // idle time pending before the seed must not run a track early), and a finished track frees at the END of
-            // the tick that crossed it with the clock firing one passive pass later. Polling at dt=0 drains that
-            // frame-granularity latency WITHOUT advancing the clock — the ms thresholds below stay exact.
-            void Poll() { for (int i = 0; i < 4; i++) host.RunFrame(); }
+            // Step PAINTS rather than RunFrame()s, and that is load-bearing (the shape gate.timer.* uses): a pending
+            // ToolTipClock is a HostTimerQueue entry that is not DUE, which sets no wake bit, so RunFrame takes its
+            // idle early-out BEFORE Paint — and Paint is both the only place the headless frame clock advances and the
+            // only HostTimerQueue.Drain site. Driving the loop with RunFrame alone would therefore freeze the clock at
+            // the deadline's far side forever. RunFrame first anyway so any queued input is still pumped and dispatched;
+            // it consumes 0 dt (the Advance lands after it), so the total advance per Step is exactly `ms`.
+            void Step(float ms) { host.RunFrame(); clock.Advance(ms); host.Paint(0); }
+            // 0-dt frames: ToolTipClock arms its one-shot during the render that mounts it and the queue is drained at
+            // the top of a Paint against the accumulated frame clock — so a 0-dt pass cannot move a deadline, while the
+            // open/close FADES (real AnimEngine tracks) still need a pass or two to settle after the timer fires.
+            // Polling at dt=0 drains that frame-granularity latency WITHOUT advancing the clock — the ms thresholds
+            // below stay exact.
+            void Poll() { for (int i = 0; i < 4; i++) host.Paint(0); }
 
-            Hover(50f, 50f);                  // pointer enters the target → the 800ms show-delay clock arms
-            Poll();                           // the countdown track seeds + clears JustSeeded at 0ms
+            Hover(50f, 50f);                  // pointer enters the target → the 800ms show-delay one-shot arms
+            Poll();                           // 0-dt: the armed deadline does not move
             Step(700f);
             Poll();
             bool notAt700 = !TipOpen();       // 700ms < 800 — must still be closed
@@ -2482,7 +2714,7 @@ static class OverlaySuite
             Poll();
             bool openAt800 = TipOpen();
 
-            Poll();                           // the 5s auto-dismiss clock seeds with the open bubble
+            Poll();                           // the 5s auto-dismiss one-shot armed with the open bubble
             Step(4800f);                      // dwell: 4.8s of the 5s auto-dismiss window
             Poll();
             bool stillOpenAt4800 = TipOpen();
@@ -2538,8 +2770,10 @@ static class OverlaySuite
             var vp = FindScrollable(s.Root);
 
             void Hover(float x, float y) { window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(x, y), 0, 0)); host.RunFrame(); }
-            void Step(float ms) { clock.Advance(ms); host.RunFrame(); }
-            void Poll() { for (int i = 0; i < 4; i++) host.RunFrame(); }
+            // RunFrame (pump + dispatch queued input, 0 dt) then Paint the advance — see e4popup.7's Step for why a
+            // pending one-shot cannot be driven by RunFrame alone.
+            void Step(float ms) { host.RunFrame(); clock.Advance(ms); host.Paint(0); }
+            void Poll() { for (int i = 0; i < 4; i++) host.Paint(0); }
             // scroll-v3: TargetY is gone as a scene column (wheel input is a Driven glide now, resolved kernel-side —
             // ScrollBody.Target is internal to the kernel). OffsetY is the live result column and, after 6 frames of
             // glide below, is by itself a faithful "how far did this wheel actually move the page" progress read.
@@ -2593,8 +2827,9 @@ static class OverlaySuite
 
             NodeHandle Tip(string s) => FindTextNode(host.Scene, strings, host.Scene.Root, s);
             void Hover(float x, float y) { window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(x, y), 0, 0)); host.RunFrame(); }
-            void Step(float ms) { clock.Advance(ms); host.RunFrame(); }
-            void Poll() { for (int i = 0; i < 4; i++) host.RunFrame(); }   // drain frame-granularity anim latency at dt=0
+            // RunFrame (pump + dispatch, 0 dt) then Paint the advance — see e4popup.7's Step.
+            void Step(float ms) { host.RunFrame(); clock.Advance(ms); host.Paint(0); }
+            void Poll() { for (int i = 0; i < 4; i++) host.Paint(0); }   // drain frame-granularity anim latency at dt=0
 
             Hover(50f, 50f);                  // pointer enters the target → the 800ms show-delay clock arms
             Poll();
@@ -2653,11 +2888,14 @@ static class OverlaySuite
 
             window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(50f, 50f), 0, 0));
             host.RunFrame();
-            // Drain the hover-triggered component render and its passive effect before advancing the manual clock.
-            // Otherwise the 900ms jump can occur before ToolTipClock has seeded its countdown track.
-            for (int i = 0; i < 4; i++) host.RunFrame();
+            // Drain the hover-triggered component render before advancing the manual clock. These frames are 0-dt, so
+            // they cannot move the deadline ToolTipClock armed; they only make sure the clock is MOUNTED (and therefore
+            // armed) before the 900ms jump, rather than being armed against a clock that has already jumped.
+            for (int i = 0; i < 4; i++) host.Paint(0);
             clock.Advance(900f);
-            for (int i = 0; i < 4; i++) host.RunFrame();
+            // Paint, not RunFrame: a pending (not-due) HostTimerQueue entry sets no wake bit, so RunFrame idles out
+            // BEFORE Paint — the only site that advances the headless frame clock AND the only drain site.
+            for (int i = 0; i < 4; i++) host.Paint(0);
             bool opened = !FindTextNode(host.Scene, strings, host.Scene.Root, "tip-orphan").IsNull;
 
             // ToolTip registers its service wrapper as the overlay owner; root.Target is the wrapped content child.
@@ -2671,7 +2909,7 @@ static class OverlaySuite
             host.RunFrame();
             bool closing = ((OverlayServiceImpl)root.Service!).Entries.Count == 1
                 && ((OverlayServiceImpl)root.Service!).Entries[0].Phase == OverlayPhase.Closing;
-            for (int i = 0; i < 5; i++) { clock.Advance(60f); host.RunFrame(); }
+            for (int i = 0; i < 5; i++) { clock.Advance(60f); host.Paint(0); }
             bool gone = FindTextNode(host.Scene, strings, host.Scene.Root, "tip-orphan").IsNull
                 && ((OverlayServiceImpl)root.Service!).Entries.Count == 0;
 

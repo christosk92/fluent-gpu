@@ -416,12 +416,16 @@ float4 PSMain(V i) : SV_Target
         rd.Format = DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM; rd.SampleDesc.Count = 1;
         rd.Layout = D3D12_TEXTURE_LAYOUT.D3D12_TEXTURE_LAYOUT_UNKNOWN;
         rd.Flags = D3D12_RESOURCE_FLAGS.D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+        // Query BEFORE CreateCommittedResource, on the SAME desc (audit gpu mem-02): the device-reported allocation
+        // requirement, not an inferred w*h*4 pixel estimate — see D3D12MemoryDiagnostics.AllocationBytes.
+        ulong bytes = D3D12MemoryDiagnostics.AllocationBytes(_device, &rd);
         D3D12_CLEAR_VALUE cv = default; cv.Format = DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM;
         ID3D12Resource* res;
         Check(_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_NONE, &rd,
             D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, optimizedClear ? &cv : null,
             __uuidof<ID3D12Resource>(), (void**)&res), "Acrylic.CreateTarget");
-        D3D12MemoryDiagnostics.Track(res, $"{name} {w}x{h}", (ulong)w * h * 4UL);
+        string label = $"{name} {w}x{h}";
+        D3D12MemoryDiagnostics.Track(res, D3D12MemoryDiagnostics.NameOrUnknown(label, bytes), bytes != 0 ? bytes : (ulong)w * h * 4UL);
         return res;
     }
 

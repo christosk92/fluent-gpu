@@ -102,6 +102,19 @@ internal static class RepaintIdentityProbe
             // PushLayer as flat alpha and has no feather at all — so it is a real-pixel scenario or it is unproven.
             new(6, "edge-fade-strip-straddle", "the plain sigma=0 EdgeFade admitted to clamped replay",
                 () => { RepaintIdentityScene.Tick.Value++; RepaintIdentityScene.TickB.Value++; RepaintIdentityScene.TickC.Value++; }),
+            // The sigma>0 self-blur under a clamp. Headless cannot settle this one either — the CPU reference has no
+            // Gaussian at all — and it is the case that actually costs the driving app, which keeps a blurred surface on
+            // screen for the whole of playback and so took EVERY frame full. Proves both halves at once: the source
+            // inflated by the tap radius (or the replay rect's edge composites too light), and an enclosed child's
+            // damage grown by the group's reach (or a stale ring survives around each moved bar).
+            new(7, "blur-group-straddle", "a sigma>0 self-blur admitted to clamped replay (source halo + enclosed-child damage)",
+                () => { RepaintIdentityScene.Tick.Value++; RepaintIdentityScene.TickB.Value++; RepaintIdentityScene.TickC.Value++; }),
+            new(8, "static-stencil-sibling-blur", "static heart plus unrelated changing blurred content must reach Partial",
+                () => RepaintIdentityScene.TickC.Value++),
+            new(9, "nested-stencil-fractional-damage", "two mask depths, fractional intersecting damage, sibling opacity lease",
+                () => { RepaintIdentityScene.Tick.Value++; RepaintIdentityScene.TickB.Value++; RepaintIdentityScene.TickC.Value++; }),
+            new(10, "offscreen-damage-visible-tail", "raw offscreen dirty extent must not veto a small on-target replay",
+                () => { RepaintIdentityScene.Tick.Value++; RepaintIdentityScene.TickB.Value++; }),
         ];
 
         int passed = 0, failed = 0, inconclusive = 0;

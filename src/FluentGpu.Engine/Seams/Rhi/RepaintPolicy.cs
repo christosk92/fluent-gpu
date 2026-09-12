@@ -180,14 +180,13 @@ public static class RepaintPolicy
         // frame); without one the back buffer is FLIP_DISCARD-undefined and something must be drawn.
         if (damage.IsEmpty) return canvasValid ? RepaintRoute.Partial : RepaintRoute.FullDirect;
 
-        // ── (3) A named full-repaint cause, or too much of the window changed: full-direct. This is where scroll lands
-        // (~81 % coverage), and landing there is the POINT — it keeps today's cost with no blit tax.
+        // ── (3) A named full-repaint cause requires full-direct. Geometric coverage is checked only AFTER clipping
+        // below: a scrolled lyric's off-target extent is not a pixel of this window and cannot force a full redraw.
         if (damage.IsFull) return RepaintRoute.FullDirect;
-        if (damage.Coverage(wDip, hDip) >= CoverageCutoff) return RepaintRoute.FullDirect;
 
         // ── (4) Small damage. Coalesce to the route's rect budget (the layered route gets a smaller one — it pays an
-        // extra group-RT clear per walk), then RE-CHECK coverage — the merge adds dead area and a post-merge union can
-        // cross the cutoff that the raw rects passed.
+        // extra group-RT clear per walk), then check TARGET coverage. Coalesce clips each rect before merging;
+        // large on-screen scrolling still takes FullDirect, while arbitrarily large off-screen tails cost nothing.
         int cap = layerKind == LayerKindGroups ? MaxLayeredReplayRects : MaxReplayRects;
         Coalesce(in damage, wDip, hDip, cap, ref rects);
         if (rects.Count == 0) return canvasValid ? RepaintRoute.Partial : RepaintRoute.FullDirect;   // every rect fell outside the target
@@ -356,17 +355,27 @@ public static class RepaintPolicy
 /// <list type="bullet">
 /// <item><b>Acrylic</b> — the backdrop snapshot copies target regions INTO the canvas as scratch, clobbering the
 /// retained scene (AcrylicCompositor.SnapshotTargetRegion).</item>
-/// <item><b>Blur</b> (self-blur groups) — a Gaussian's taps read OUTSIDE the clamp, so a clamped replay samples pixels
-/// the clamp never redrew; the region-local and pin-cache paths also lease their own shifted-viewport surfaces.</item>
-/// <item><b>EdgeFade with σ &gt; 0</b> — the blurred class only, for the same reason as Blur. The PLAIN (σ = 0)
-/// strip fade IS admitted: its restore intersects every strip with the clip before writing
+/// <item><b>Any unrecognized op / any truncated payload</b> — an op this scanner cannot size could be anything.</item>
+/// </list>
+/// <b>Blur and EdgeFade at σ &gt; 0 were unsafe and are now ADMITTED.</b> A Gaussian's taps do read outside the clamp,
+/// which is why the backend renders such a group's SOURCE over <c>R ⊕ SelfBlurRegion.TapRadius(σ)</c> (the derived
+/// open-group halo in <c>D3D12Device</c>, additive over nesting) and then composites only R through the uninflated
+/// <c>CurrentScissorRect()</c> — so every tap reads real subtree pixels and no write leaves R. The recorder pairs it by
+/// growing a dirty node's damage band by the reach of any BLURRED ANCESTOR, so the blurred output's outer ring repaints
+/// with it. A clamped frame additionally refuses to MINT a blur pin, because <c>BlurPinKey</c> is position/content-keyed
+/// and cannot express "correct only inside R". This is WebRender's and Chromium's rule (grow the dirty rect by ~3σ,
+/// render the source over the grown rect, write back only the dirty part) rather than a veto, and it is the one that
+/// mattered: an app with a blurred surface permanently on screen took EVERY frame full under the old contract.
+/// Verified in real pixels on an Adreno X1-85 (<c>--repaint-identity</c> scenario <c>blur-group-straddle</c>), which is
+/// the only place it CAN be verified — the headless CPU reference models every PushLayer as flat alpha and has no
+/// Gaussian at all.
+/// <para>The PLAIN (σ = 0) strip fade was admitted earlier and for a different reason: its restore intersects every
+/// strip with the clip before writing
 /// (<c>OpacityLayerCompositor.EdgeFadeStripRestore</c>), so no write leaves R; its shader is a per-pixel
 /// <c>lerp(D, F, feather)</c> over premultiplied alpha with no spatial tap, so it displaces nothing and needs no
 /// damage inflation; and inside R the snapshot D is this frame's freshly replayed backdrop. The snapshot COPY still
 /// reads whole strips, which on a clamped frame is wasted bandwidth rather than a correctness problem — the texels it
-/// reads outside R are only consumed by a write the scissor discards.</item>
-/// <item><b>Any unrecognized op / any truncated payload</b> — an op this scanner cannot size could be anything.</item>
-/// </list>
+/// reads outside R are only consumed by a write the scissor discards.</para>
 /// A plain <see cref="LayerKind.Opacity"/> group IS safe: it leases a canvas-sized RT, clears it (fully, or over the
 /// recorder-patched extent), draws the subtree under the clamped scissor, and composites back under
 /// <c>CurrentScissorRect()</c> — every read is inside a box that was cleared this frame and inside the clamp.
@@ -379,6 +388,7 @@ public static class RepaintStreamSafety
     public static bool Scan(ReadOnlySpan<byte> cmds)
     {
         int pos = 0;
+        int layerDepth = 0, stencilDepth = 0;
         // Mirrors the decoders' framing exactly (a trailing < 4-byte remainder is not an op), so this can never disagree
         // with what SubmitStreaming/SubmitWithLayers will actually walk.
         while (pos + sizeof(int) <= cmds.Length)
@@ -387,24 +397,44 @@ public static class RepaintStreamSafety
             pos += sizeof(int);
             if (!TryBodySize(op, out int body)) return false;   // an op this scanner cannot size — never guess
             if (pos + body > cmds.Length) return false;         // truncated payload: a malformed run
-            // Plain Opacity, and the PLAIN (σ = 0) EdgeFade, survive a clamped replay; Acrylic, Blur and a BLURRED
-            // edge fade do not (see the remarks). Reading the whole command is already what this line did, so the
-            // sigma test is free — and it is a test, not a kind check: LayerKind.EdgeFade covers two different
-            // classes and only the σ = 0 one displaces nothing.
+            // Opacity, EdgeFade and Blur all survive a clamped replay; only Acrylic does not (see the remarks).
+            // σ = 0 displaces nothing and never needed help. σ > 0 DOES displace — its taps reach past R and would pull
+            // in the transparency just outside the clamp — and it is admissible only because the backend now renders
+            // such a group's SOURCE over R ⊕ TapRadius(σ) (the derived open-group halo in D3D12Device) while
+            // compositing only R. That is how WebRender and Chromium keep partial repaint working through a blur
+            // rather than vetoing the frame, and it is the veto that mattered in practice: the driving app keeps a
+            // blurred lyrics surface on screen for the whole of playback, so EVERY frame went full-window while a
+            // single wiping line was all that had actually changed.
             if (op == DrawOp.PushLayer)
             {
+                if (stencilDepth != 0) return false;
                 var layer = MemoryMarshal.Read<PushLayerCmd>(cmds.Slice(pos));
                 if (layer.Kind != (int)LayerKind.Opacity
-                    && !(layer.Kind == (int)LayerKind.EdgeFade && layer.BlurSigma <= 0f)) return false;
+                    && layer.Kind != (int)LayerKind.EdgeFade
+                    && layer.Kind != (int)LayerKind.Blur) return false;
+                layerDepth++;
             }
-            // Tier-3 stencil scopes are stream-UNSAFE in v1: the clamped-replay x mask-clear-rect interaction (the
-            // outermost push clears the stencil over its own AABB, which a damage-clamped scissor would narrow) is
-            // untested and therefore EXCLUDED, not relied on — the EdgeFade precedent above. Admitting stencil frames
-            // to clamped replay is a marked follow-up, not a silent omission.
-            if (op == DrawOp.PushStencilClip) return false;
+            else if (op == DrawOp.PopLayer)
+            {
+                if (layerDepth == 0) return false;
+                layerDepth--;
+            }
+            // A stencil-only scope clears and draws its mask over the SAME damage-clamped scissor. Nested masks
+            // stay on that target and erase their own level before returning. Layer siblings are independent, but
+            // nesting layers and masks can change target coordinates or source halos midway through a mask.
+            else if (op == DrawOp.PushStencilClip)
+            {
+                if (layerDepth != 0) return false;
+                stencilDepth++;
+            }
+            else if (op == DrawOp.PopStencilClip)
+            {
+                if (stencilDepth == 0) return false;
+                stencilDepth--;
+            }
             pos += body;
         }
-        return true;
+        return layerDepth == 0 && stencilDepth == 0;
     }
 
     /// <summary>

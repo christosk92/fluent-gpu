@@ -1,6 +1,7 @@
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Render;
 using FluentGpu.Signals;
 
 namespace FluentGpu;
@@ -65,7 +66,11 @@ sealed class RepaintIdentityScene : Component
             3 => OpacityGroup(),
             4 => VideoHole(),
             5 => ThreeAnimators(),
-            _ => EdgeFadeStrip(),
+            6 => EdgeFadeStrip(),
+            7 => BlurGroupStraddle(),
+            8 => StencilWithSiblingLayer(nested: false),
+            9 => StencilWithSiblingLayer(nested: true),
+            _ => OffscreenDamage(),
         };
         return new BoxEl
         {
@@ -324,6 +329,146 @@ sealed class RepaintIdentityScene : Component
                         AlignSelf = FlexAlign.Start, JustifySelf = FlexAlign.Start,
                         Margin = new Edges4(396f, 104.5f, 0f, 0f), Width = 80f, Height = 26f,
                         Fill = Prop.Of(() => Pulse(TickC.Value, 0xE0, 0xC0, 0x50, 0xFF)),
+                    },
+                ],
+            },
+        ],
+    };
+
+    // ── 7 — a σ > 0 SELF-BLUR group under a clamped replay. The class the driving app keeps on screen for the whole of
+    //    playback (the blurred lyrics surface), and the veto that made every one of those frames repaint the window
+    //    however little had changed.
+    //
+    //    Two claims can only be settled in real pixels, because the headless CPU reference models every PushLayer as
+    //    flat alpha and has no Gaussian at all:
+    //      1. the SOURCE is rendered over R ⊕ TapRadius(σ), so the taps near R's edge read real subtree pixels instead
+    //         of the transparency that a plain clamp would leave just outside — a missing halo reads as a band along
+    //         the replay rect's edge that composites too LIGHT;
+    //      2. a dirty child inside the group damages its own band GROWN by the group's reach (§2b), so the blurred
+    //         output's outer ring is repainted too — a missing inflation leaves a stale ring around each moved bar.
+    //
+    //    So the pulsing bars sit INSIDE the blurred container (that is what makes them enclosed-by-blur rather than
+    //    self-blurred) and are placed hard against its edges: one overlapping the left edge, one in the middle, one
+    //    crossing the right. Fractional margins keep the damage rects off whole-pixel boundaries, where a halo that is
+    //    one pixel short still round-trips by luck.
+    static Element BlurGroupStraddle() => new BoxEl
+    {
+        Grow = 1f, ZStack = true,
+        Children =
+        [
+            Coat(30f, 30f, 560f, 320f, 0x28, 0x30, 0x40, 0x90),
+            new BoxEl
+            {
+                AlignSelf = FlexAlign.Start, JustifySelf = FlexAlign.Start,
+                Margin = new Edges4(60f, 70f, 0f, 0f), Width = 460f, Height = 150f,
+                Fill = ColorF.FromRgba(0x3A, 0x42, 0x58, 0xB0), Corners = CornerRadius4.All(8f),
+                // σ = 6 ⇒ TapRadius = ceil(3σ) = 18 physical px at down = 1: wide enough that a missing halo is many
+                // pixels wrong, small enough that the inflated rect stays well inside the 900×640 surface.
+                Blur = 6f,
+                Children =
+                [
+                    // Overlapping the LEFT edge: its Gaussian support runs off the container, which is precisely where
+                    // an un-inflated source would sample transparency.
+                    new BoxEl
+                    {
+                        AlignSelf = FlexAlign.Start, JustifySelf = FlexAlign.Start,
+                        Margin = new Edges4(-12.5f, 20.5f, 0f, 0f), Width = 60f, Height = 34f,
+                        Fill = Prop.Of(() => Pulse(Tick.Value, 0x90, 0x60, 0x40, 0xE0)),
+                    },
+                    // Fully interior: isolates the blur as the cause if the straddling two differ and this one does not.
+                    new BoxEl
+                    {
+                        AlignSelf = FlexAlign.Start, JustifySelf = FlexAlign.Start,
+                        Margin = new Edges4(190f, 58.5f, 0f, 0f), Width = 110f, Height = 30f,
+                        Fill = Prop.Of(() => Pulse(TickB.Value, 0x40, 0x90, 0x70, 0xD0)),
+                    },
+                    // CROSSING the right edge, so one bar spans blurred-inside and clipped-outside at once.
+                    new BoxEl
+                    {
+                        AlignSelf = FlexAlign.Start, JustifySelf = FlexAlign.Start,
+                        Margin = new Edges4(408.5f, 100.5f, 0f, 0f), Width = 78f, Height = 26f,
+                        Fill = Prop.Of(() => Pulse(TickC.Value, 0xE0, 0xC0, 0x50, 0xFF)),
+                    },
+                ],
+            },
+        ],
+    };
+
+    // A top-level static stencil must not veto unrelated lyrics-sized damage. The nested variant also changes
+    // pixels across both mask silhouettes at fractional coordinates, plus an independent sibling opacity lease.
+    // No layer encloses a stencil and no stencil encloses a layer: those target-changing cases remain excluded.
+    static readonly PathData IdentityHeart = PathDataParser.Parse(
+        "M16 29 C7 21 2 15.5 2 10 A6.5 6.5 0 0 1 16 6.5 A6.5 6.5 0 0 1 30 10 C30 15.5 25 21 16 29 Z",
+        PathContentEpoch.Mint(), FillRule.NonZero);
+
+    // The raw dirty area exceeds the window, but only a narrow 100-DIP tail is visible. Policy must clip before
+    // judging coverage; the fully offscreen second bar must contribute no replay area at all.
+    static Element OffscreenDamage() => new BoxEl
+    {
+        Grow = 1f, ZStack = true,
+        Children =
+        [
+            Coat(30f, 30f, 760f, 360f, 0x28, 0x30, 0x40, 0x90),
+            new BoxEl
+            {
+                AlignSelf = FlexAlign.Start, JustifySelf = FlexAlign.Start,
+                Margin = new Edges4(710.35f, -10000f, 0f, 0f), Width = 80f, Height = 10100f,
+                Fill = Prop.Of(() => Pulse(Tick.Value, 0x90, 0x50, 0x30, 0xD0)),
+            },
+            new BoxEl
+            {
+                AlignSelf = FlexAlign.Start, JustifySelf = FlexAlign.Start,
+                Margin = new Edges4(100f, -12000f, 0f, 0f), Width = 80f, Height = 40f,
+                Fill = Prop.Of(() => Pulse(TickB.Value, 0x30, 0x80, 0x70, 0xC0)),
+            },
+        ],
+    };
+
+    static BoxEl IdentityHeartClip(float x, float y, float size, params Element[] children) => new()
+    {
+        AlignSelf = FlexAlign.Start, JustifySelf = FlexAlign.Start,
+        Margin = new Edges4(x, y, 0f, 0f), Width = size, Height = size, ZStack = true,
+        ClipPath = IdentityHeart, ClipPathRule = FillRule.NonZero,
+        ClipPathViewBoxW = 32f, ClipPathViewBoxH = 32f,
+        Children = children,
+    };
+
+    static Element StencilWithSiblingLayer(bool nested) => new BoxEl
+    {
+        Grow = 1f, ZStack = true,
+        Children =
+        [
+            Coat(30f, 30f, 760f, 360f, 0x28, 0x30, 0x40, 0x90),
+            IdentityHeartClip(60.35f, 60.65f, 240f,
+                Coat(0f, 0f, 240f, 240f, 0x90, 0x30, 0x60, 0xB0),
+                nested
+                    ? IdentityHeartClip(22.45f, 15.35f, 210f,
+                        new BoxEl
+                        {
+                            AlignSelf = FlexAlign.Start, JustifySelf = FlexAlign.Start,
+                            Margin = new Edges4(-8.5f, 40.4f, 0f, 0f), Width = 220f, Height = 12f,
+                            Fill = Prop.Of(() => Pulse(Tick.Value, 0x30, 0x80, 0x70, 0xC0)),
+                        },
+                        new BoxEl
+                        {
+                            AlignSelf = FlexAlign.Start, JustifySelf = FlexAlign.Start,
+                            Margin = new Edges4(58.7f, 128.6f, 0f, 0f), Width = 110f, Height = 12f,
+                            Fill = Prop.Of(() => Pulse(TickB.Value, 0x90, 0x60, 0x30, 0xD0)),
+                        })
+                    : Coat(16f, 48f, 210f, 110f, 0x30, 0x80, 0x70, 0xC0)),
+            new BoxEl
+            {
+                AlignSelf = FlexAlign.Start, JustifySelf = FlexAlign.Start,
+                Margin = new Edges4(420.35f, 70.65f, 0f, 0f), Width = 250f, Height = 220f,
+                ZStack = true, Blur = nested ? 0f : 6f, Opacity = nested ? .7f : 1f,
+                Children =
+                [
+                    Coat(0f, 0f, 250f, 220f, 0x40, 0x50, 0x70, 0xB0),
+                    new BoxEl
+                    {
+                        AlignSelf = FlexAlign.Start, JustifySelf = FlexAlign.Start,
+                        Margin = new Edges4(20.5f, 42.4f, 0f, 0f), Width = 100f, Height = 14f,
+                        Fill = Prop.Of(() => Pulse(TickC.Value, 0x80, 0x50, 0x40, 0xD0)),
                     },
                 ],
             },

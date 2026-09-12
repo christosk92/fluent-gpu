@@ -626,8 +626,8 @@ popup itself. Opening/closing reveals via a phase-7 `AnimTrack` (flyout fade/sca
   sub-scope (`PushScope`); closing restores focus up the chain.
 - **Name/role:** item `Name` from its content; accelerator text and toggle/check state announced. Separators are
   `A11yRaw` (decorative, input-a11y §11.3).
-- **Motion/cursor/RTL:** submenu reveal motion-token; cursor `Arrow`; submenu-open-delay + close-delay timers run in
-  the overlay manager's `OnFrameEnd` (input-a11y §4 tooltip/hover-delay timers).
+- **Motion/cursor/RTL:** submenu reveal motion-token; cursor `Arrow`; submenu-open-delay + close-delay timers are
+  hover-delay timers (input-a11y §4), realized as keyed `ToolTipClock` mounts — see §6.4.
 - **Icons (`IconRef` + ThemedIcon):** a menu/command icon slot is a polymorphic `IconRef` value (NativeAOT-true — no
   interface/boxing/reflection): a PUA `Glyph` string (implicit conversion — existing glyph call-sites unchanged) with an
   optional icon-font `Font` override (absorbs the former per-row glyph-font field), OR a layered-vector `ThemedName`
@@ -660,8 +660,12 @@ popup itself. Opening/closing reveals via a phase-7 `AnimTrack` (flyout fade/sca
 
 ### 6.4 ToolTip
 
-- **Composition:** a small overlay anchored to its owner, opened on **hover-delay** (timer in the overlay manager's
-  `OnFrameEnd`, input-a11y §4) or on keyboard-focus (after a delay), closed on pointer-leave/press/focus-loss.
+- **Composition:** a small overlay anchored to its owner, opened on **hover-delay** (input-a11y §4), or on
+  keyboard-focus (after a delay), closed on pointer-leave/press/focus-loss. Every one of those countdowns — show
+  delay, the 5 s dwell, the 1 s safe-zone poll, and the flyout close/collapse completions — is the `ToolTipClock`
+  component: ONE `UseTimeout` entry on the host `HostTimerQueue`, armed at mount, cancelled by unmount, re-armed by a
+  keyed remount. It subscribes no frame clock and never re-renders, so a pending or dwelling tooltip costs zero frames
+  and the host loop merely shortens its wait to the deadline. Gates: `gate.tooltip.timer-*` (OverlaySuite).
 - **UIA:** `ControlType = ToolTip`; surfaced via the owner's `HelpText`/`get_HelpText` so AT reads it even without
   hover; a transient tooltip raises a UIA `ToolTipOpened` notification.
 - **Keyboard:** not focusable; a focused owner shows its tooltip after the focus-delay (keyboard-accessible tooltips).

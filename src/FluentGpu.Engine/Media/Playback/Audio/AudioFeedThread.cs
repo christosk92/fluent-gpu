@@ -67,15 +67,20 @@ public sealed class AudioFeedThread : IDisposable
     // sample rate instead of leaving the frame counts pinned to the rate the feed happened to be built at.
     private double _blockMs, _ringMs, _aheadMs;
 
-    // The worker's low-water wake (spec §7.9): FeedOnce Sets this the instant any ring's fill crosses below half its
-    // target-ahead depth (RingAudioSource.CheckLowWaterEdge is the edge latch that keeps this to ONE Set per drop). The
-    // wait side (WorkerLoop) is always BOUNDED (WorkerWaitTimeoutMs) — never infinite — so a missed/coalesced Set, or a
-    // headless gate driving WorkerPumpOnce with no live RT thread at all, still makes forward progress.
+    // Management is event-driven: publish seek/retirement work BEFORE setting this event. AutoResetEvent retains a
+    // signal delivered between drain and wait. Dedicated ring producers own their own refill wake and fallback;
+    // deterministic fixtures still call WorkerPumpOnce directly, without requiring a management timer.
     private readonly AutoResetEvent _workerWake = new(false);
     private readonly AutoResetEvent _outputWake = new(false);
     /// <summary>Wake paused/output-capacity waits for transport commands.</summary>
-    public void WakeOutput() { if (!_disposed) _outputWake.Set(); }
-    private const int WorkerWaitTimeoutMs = 20;
+    public void WakeOutput() { if (!_disposed) SignalWake(_outputWake); }
+
+    // Control/RT callers can have passed a disposed check before the final successful join closes a handle.
+    // Match RingAudioSource.WakeProducer: a late signal is harmless, never an escaping teardown exception.
+    private static void SignalWake(AutoResetEvent wake)
+    {
+        try { wake.Set(); } catch (ObjectDisposedException) { }
+    }
 
     // The published ring table (spec §7.9/§12): an immutable snapshot the RT thread + worker Volatile-read; rebuilt under
     // _tableLock by the control thread (install) and the worker (retire-removal) — NEVER touched by the RT thread.
@@ -101,10 +106,12 @@ public sealed class AudioFeedThread : IDisposable
     private long _lastGcPauseTicks;   // drain-side baseline for GcPauseTicksDelta (non-RT; see DrainXrunEvents)
 
     private long _workerFaults, _rtFaults, _clockFaults;   // containment counters (diagnostics)
+    private long _managerWakeCount, _managerSeekCount, _managerRetireCount, _managerLowWaterWakeCount, _managerPassCount;
     private Exception? _lastFault;                          // latched; published by ControlTickOnce off the RT thread
     private int _ringsFreed;                                // once-guard: worker final sweep vs Dispose inline cleanup
 
     private Thread? _rtThread, _workerThread, _clockThread;
+    private int _liveLoops;
     private volatile bool _run;
     private volatile bool _disposed;
 
@@ -189,6 +196,17 @@ public sealed class AudioFeedThread : IDisposable
     /// <summary>The published ring table snapshot (for tests/diagnostics) — immutable; never mutate the returned array.</summary>
     public RingEntry[] RingsSnapshot => Volatile.Read(ref _published);
 
+    /// <summary>Actual signalled management waits completed; excludes the initial startup pass. No timeout wakes.</summary>
+    public long ManagerWakeCount => Interlocked.Read(ref _managerWakeCount);
+    /// <summary>Management passes, including deterministic manual pumps and the initial startup pass.</summary>
+    public long ManagerPassCount => Interlocked.Read(ref _managerPassCount);
+    /// <summary>Seek mailboxes consumed by management (coalesced requests count once).</summary>
+    public long ManagerSeekCount => Interlocked.Read(ref _managerSeekCount);
+    /// <summary>Retirement records drained, including contained disposal failures.</summary>
+    public long ManagerRetireCount => Interlocked.Read(ref _managerRetireCount);
+    /// <summary>Refill signals sent to management for rings without dedicated producers.</summary>
+    public long ManagerLowWaterWakeCount => Interlocked.Read(ref _managerLowWaterWakeCount);
+
     /// <summary>Called by <see cref="PcmAudioSession.SetVoice"/> when a feed is attached: wrap a decoding voice in a
     /// decode↔RT firewall ring and PUBLISH a single-entry ring table tagged with the session's primary voice id (so the RT
     /// natural-end retire resolves it — spec §7.9). Any previous rings are handed to the worker for off-RT disposal by
@@ -243,12 +261,16 @@ public sealed class AudioFeedThread : IDisposable
             ring.RetirementNext = previous;
         }
         while (!ReferenceEquals(Interlocked.CompareExchange(ref _retireStack, ring, previous), previous));
-        if (!_disposed) _workerWake.Set();
+        if (!_disposed) SignalWake(_workerWake);
     }
 
     /// <summary>CONTROL: request a primary-voice seek; the WORKER applies it between pumps (the worker is the sole toucher
     /// of the inner decoder — spec §7.9/§12). Last write wins (seek coalescing).</summary>
-    public void RequestSeek(long frame) => Volatile.Write(ref _pendingSeekFrame, frame);
+    public void RequestSeek(long frame)
+    {
+        Volatile.Write(ref _pendingSeekFrame, frame);
+        if (!_disposed) SignalWake(_workerWake);
+    }
 
     // ── RT feed thread — copy+mix ONLY ───────────────────────────────────────────────────────────────────────────────
 
@@ -284,15 +306,19 @@ public sealed class AudioFeedThread : IDisposable
             // pre-allocated event, nothing else.
             if (rings[i].Ring.CheckLowWaterEdge())
             {
-                rings[i].Ring.WakeProducer();
-                lowWater = true;
+                if (rings[i].Ring.HasDedicatedProducer) rings[i].Ring.WakeProducer();
+                else lowWater = true;
             }
         }
         // Fix 2 hook (spec, PcmAudioSession.SuppressXrunAccounting remarks): a control-requested seek/flush intentionally
         // empties the ring, so the RT loop's very next reads finding it empty are a PLANNED rebuffer, not a real underrun —
         // gate the xrun increment on the session's suppression flag (a single volatile bool read; safe on the RT thread).
         if (starved && !_session.SuppressXrunAccounting) Interlocked.Increment(ref _xrunCount);
-        if (lowWater) _workerWake.Set();
+        if (lowWater)
+        {
+            Interlocked.Increment(ref _managerLowWaterWakeCount);
+            SignalWake(_workerWake);
+        }
 
         return rendered;
     }
@@ -368,6 +394,7 @@ public sealed class AudioFeedThread : IDisposable
     /// drain both retire queues (the worker is the sole ring disposer). Off the RT thread.</summary>
     public void WorkerPumpOnce()
     {
+        Interlocked.Increment(ref _managerPassCount);
         ApplyPendingSeek();
         var rings = Volatile.Read(ref _published);
         for (int i = 0; i < rings.Length; i++)
@@ -382,6 +409,7 @@ public sealed class AudioFeedThread : IDisposable
     {
         long frame = Interlocked.Exchange(ref _pendingSeekFrame, -1);
         if (frame < 0) return;
+        Interlocked.Increment(ref _managerSeekCount);
         var rings = Volatile.Read(ref _published);
         // Seek the ACTIVE voice's ring — after a committed crossfade/gapless hand-off that is the promoted incoming voice
         // (SetActiveVoice re-pointed it), not the retired primary; a fresh SetVoice resets it to the primary id.
@@ -413,7 +441,11 @@ public sealed class AudioFeedThread : IDisposable
                     Volatile.Write(ref _published, updated);
                 }
             }
-            ring.Dispose();
+            // A throwing source disposer must not orphan the rest of the detached stack. Each record is consumed
+            // exactly once; source failures are surfaced by the existing off-RT fault channel.
+            try { ring.Dispose(); }
+            catch (Exception e) { RecordFault(ref _workerFaults, e); }
+            Interlocked.Increment(ref _managerRetireCount);
             ring = next;
         }
     }
@@ -454,6 +486,7 @@ public sealed class AudioFeedThread : IDisposable
         _workerThread = new Thread(WorkerLoop) { IsBackground = true, Name = "FluentGpu.AudioWorker", Priority = ThreadPriority.AboveNormal };
         _clockThread = new Thread(ClockLoop) { IsBackground = true, Name = "FluentGpu.AudioClock" };
         _rtThread = new Thread(RtLoop) { IsBackground = true, Name = "FluentGpu.AudioRT", Priority = ThreadPriority.Highest };
+        Volatile.Write(ref _liveLoops, 3);
         _workerThread.Start();
         _clockThread.Start();
         _rtThread.Start();
@@ -467,59 +500,79 @@ public sealed class AudioFeedThread : IDisposable
     {
         if (IsStopped) return;
         _run = false;
-        _outputWake.Set();
-        _workerWake.Set();
-        bool rtJoined = true, workerJoined = true, clockJoined = true;
-        try { rtJoined = _rtThread?.Join(2000) ?? true; } catch { }
-        try { workerJoined = _workerThread?.Join(2000) ?? true; } catch { }
-        try { clockJoined = _clockThread?.Join(2000) ?? true; } catch { }
+        SignalWake(_outputWake);
+        SignalWake(_workerWake);
+        bool rtJoined = Join(_rtThread), workerJoined = Join(_workerThread), clockJoined = Join(_clockThread);
         if (rtJoined) _rtThread = null;
         if (workerJoined) _workerThread = null;
         if (clockJoined) _clockThread = null;
     }
 
+    private static bool Join(Thread? thread)
+    {
+        if (thread is null) return true;
+        if (ReferenceEquals(thread, Thread.CurrentThread)) return false;
+        try { return thread.Join(2000); } catch { return false; } // failed joins never relinquish ownership
+    }
+
     private void RtLoop()
     {
-        using var _ = _rt.Enter();   // MMCSS Pro-Audio for the lifetime of the RT thread
-        while (_run)
+        try
         {
-            int blocks = RenderBurst();   // up to _maxBlocksPerWake blocks — the catch-up burst cap (spec §7.9)
+            using var _ = _rt.Enter();   // MMCSS Pro-Audio for the lifetime of the RT thread
+            while (_run)
+            {
+                int blocks = RenderBurst();   // up to _maxBlocksPerWake blocks — the catch-up burst cap (spec §7.9)
 
-            // Device waits are outside pure PCM rendering and can be interrupted by controls.
-            _session.WaitForOutput(_outputWake, blocks == _maxBlocksPerWake ? 1 : _blockPeriodMs);
+                // Device waits are outside pure PCM rendering and can be interrupted by controls.
+                _session.WaitForOutput(_outputWake, blocks == _maxBlocksPerWake ? 1 : _blockPeriodMs);
+            }
         }
+        finally { LoopExited(); }
     }
 
     private void WorkerLoop()
     {
-        while (_run)
+        try
         {
-            try { WorkerPumpOnce(); }
-            catch (Exception e) { RecordFault(ref _workerFaults, e); }
-            // Low-water wake (spec §7.9): FeedOnce Sets _workerWake the instant any ring's fill drops below half its
-            // target-ahead depth, so refill happens promptly after a stall-triggered catch-up burst instead of waiting
-            // out a fixed poll — replaces the old `Thread.Sleep(_blockPeriodMs / 2)` poll, whose rounded-to-int period
-            // (2.5 ms rounds to 2 at 192 kHz) drifted from real time over a long run. The wait is BOUNDED — never
-            // infinite — so a missed/coalesced Set still makes forward progress (e.g. more than one ring going low in
-            // the same block only needs one Set, or the ring recovers between the Set and the wait).
-            _workerWake.WaitOne(WorkerWaitTimeoutMs);
+            while (_run)
+            {
+                try { WorkerPumpOnce(); }
+                catch (Exception e) { RecordFault(ref _workerFaults, e); }
+                // Drain coalesced work to a fixed point. A publisher racing this check leaves the event signalled;
+                // one racing the wait wakes it. Neither case requires an empty periodic pass to make progress.
+                if (Volatile.Read(ref _pendingSeekFrame) >= 0 || Volatile.Read(ref _retireStack) is not null) continue;
+                if (!_run) break;
+                _workerWake.WaitOne();
+                Interlocked.Increment(ref _managerWakeCount);
+            }
         }
-        if (_disposed) FinalCleanup();   // sole safe disposer: frees rings even when Dispose's join timed out
+        finally { LoopExited(); }
     }
 
     private void ClockLoop()
     {
-        while (_run)
+        try
         {
-            try { ControlTickOnce(); }
-            catch (Exception e) { RecordFault(ref _clockFaults, e); }
-            // Position/state publication is a control-rate concern, not an audio-rate spin loop.
-            Thread.Sleep(15);
+            while (_run)
+            {
+                try { ControlTickOnce(); }
+                catch (Exception e) { RecordFault(ref _clockFaults, e); }
+                // Position/state publication is a control-rate concern, not an audio-rate spin loop.
+                Thread.Sleep(15);
+            }
         }
+        finally { LoopExited(); }
     }
 
-    // The final ring sweep — the SOLE safe disposer runs it on the worker's exit (or inline from Dispose only when no
-    // worker was ever started). Guarded by a once-flag so the two paths can't double-dispose.
+    private void LoopExited()
+    {
+        if (Interlocked.Decrement(ref _liveLoops) == 0 && _disposed) FinalCleanup();
+    }
+
+    // Final shutdown sweep, AFTER all loops (including output's MMCSS scope) have exited. During playback only the
+    // manager drains retirement; shutdown has no live render/decode-manager owner left. Dedicated ring producers
+    // still own their inner sources until cancellation/read exit. The once-flag prevents concurrent double-disposal.
     private void FinalCleanup()
     {
         if (Interlocked.Exchange(ref _ringsFreed, 1) != 0) return;
@@ -527,6 +580,10 @@ public sealed class AudioFeedThread : IDisposable
         var rings = Volatile.Read(ref _published);
         for (int i = 0; i < rings.Length; i++) { try { rings[i].Ring.Dispose(); } catch { /* teardown never throws */ } }
         Volatile.Write(ref _published, Array.Empty<RingEntry>());
+        // All output/management/control loops have acknowledged exit. A late external signal uses SignalWake's
+        // disposed-event handling. Timed-out joins defer this cleanup until the LAST live loop actually exits.
+        try { _workerWake.Dispose(); } catch { /* teardown never throws */ }
+        try { _outputWake.Dispose(); } catch { /* teardown never throws */ }
     }
 
     /// <inheritdoc/>
@@ -534,13 +591,9 @@ public sealed class AudioFeedThread : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        bool hadThreads = _rtThread is not null || _workerThread is not null || _clockThread is not null;
         Stop();   // joins are best-effort; NEVER followed by an unconditional ring dispose
-        // Clean inline ONLY when there is no live worker left to run the sweep (headless/manual-drive path, or a clean join).
-        if (!hadThreads || _workerThread is null) FinalCleanup();
-        // Only dispose the wake event once the worker loop has actually exited (Stop nulls _workerThread ONLY on a
-        // successful join) — a still-live worker calling WaitOne on a disposed handle would throw unhandled on its own
-        // thread. If the join timed out, the handle is left for process teardown, same trade-off as the ring sweep above.
-        if (_workerThread is null) try { _workerWake.Dispose(); } catch { /* teardown never throws */ }
+        // The manager can exit before a final output acknowledgement enqueues a retirement. Wait for ALL loops,
+        // not merely the manager, before the once-guarded final sweep (also covers the manual/headless path).
+        if (Volatile.Read(ref _liveLoops) == 0) FinalCleanup();
     }
 }

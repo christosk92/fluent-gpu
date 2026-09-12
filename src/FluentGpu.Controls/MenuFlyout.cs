@@ -514,8 +514,9 @@ internal sealed class MenuFlyoutPresenter : Component
         var children = new List<Element>(rows.Length + 2);
         children.AddRange(rows);
 
-        // Cascade timers (mounted only while pending, keyed so a re-arm remounts a fresh countdown). ToolTipClock is
-        // the shared per-frame countdown primitive (AnimEngine-driven, wall-accurate, unmounts when idle).
+        // Cascade timers (mounted only while pending, keyed so a re-arm remounts a fresh countdown — a fresh mount is a
+        // fresh one-shot arm). ToolTipClock is the shared countdown primitive: one HostTimerQueue entry per mount,
+        // wall-accurate, no per-frame wake, cancelled by unmount.
         if (pendingOpen >= 0)
             children.Add(Embed.Comp(() => new ToolTipClock
             {

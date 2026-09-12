@@ -1,5 +1,6 @@
 ﻿using FluentGpu.Foundation;
 using FluentGpu.Scroll;
+using FluentGpu.Text;
 
 namespace FluentGpu.Scene;
 
@@ -13,13 +14,15 @@ public sealed partial class SceneRecordingSnapshot
 {
     private NodeHandle[] _handles = [];
     private NodeHandle[] _parent = [], _firstChild = [], _nextSibling = [];
-    private LayoutInput[] _layout = [];
+    // Recording consumes text styling, never flex/layout inputs. Nontext rows retain an authored font/span
+    // identity too, preserving the existing resource-lifetime contract. Reserve first incremental removals.
+    private readonly SnapshotColumn<TextStyle> _textStyle = new(reserveRemovals: true);
     private RectF[] _bounds = [];
     private NodePaint[] _paint = [];
     private InteractionInfo[] _interaction = [];
     private NodeFlags[] _flags = [];
     private byte[] _dirty = [], _dirtySelf = [], _dirtyDescendant = [];
-    private TextMeasureCache[] _measurement = [];
+    private readonly SnapshotColumn<TextMeasureCache> _measurement = new(reserveRemovals: true);
     private int _nodeCount;
     private readonly SnapshotColumn<ScrollState> _scroll = new();
     private readonly SnapshotColumn<RectBuffer> _selectionRects = new(), _underlineRects = new();
@@ -106,6 +109,12 @@ public sealed partial class SceneRecordingSnapshot
     private int _copiedNodeCount;
     private int[] _scrollNodes = [];
     private int _scrollNodeCount;
+    private bool _resourceReferencesDirty, _unresolvedSpanReference;
+
+    /// <summary>Rows scanned to rebuild image/span reference identities on the last capture. Zero when an
+    /// incremental capture preserved traversal order, generations and every copied row's resource identities.
+    /// Reachability is still walked, and image readiness/reveal metadata is still refreshed by the caller.</summary>
+    public int ResourceReferenceRowsScanned { get; private set; }
 
     /// <summary>Nodes whose columns this capture actually COPIED - every reachable node on a full capture, only the
     /// changed ones on an incremental one. This (not <see cref="CapturedNodeCount"/>) is the number
@@ -207,8 +216,11 @@ public sealed partial class SceneRecordingSnapshot
     private void CaptureCore(SceneStore source, ReadOnlySpan<NodeHandle> extraRoots, bool incremental, ulong baseline)
     {
         int count = source.RecordingNodeCount;
-        EnsureCapacity(count);
-        PrepareCompositorOverlay(count);
+        // Parked/unreachable slots in the UI store do not require dense recording rows. Growth happens only
+        // when the existing reachability walk encounters a required index, never while the renderer paints.
+        EnsureCapacity(16);
+        PrepareCompositorOverlay(Capacity);
+        _highestCapturedIndex = 0;
         _nodeCount = count;
         Root = source.Root;
         DeviceScale = source.DeviceScale;
@@ -230,6 +242,8 @@ public sealed partial class SceneRecordingSnapshot
         _capBaseline = baseline;
         _copiedNodeCount = 0;
         _scrollNodeCount = 0;
+        ResourceReferenceRowsScanned = 0;
+        _resourceReferencesDirty = !incremental || _unresolvedSpanReference;
         // A full capture rebuilds every per-node sparse table from empty; an incremental one edits them per touched
         // node (ClearSparseRows + Set), so it must NOT reset them.
         if (!incremental)
@@ -240,8 +254,6 @@ public sealed partial class SceneRecordingSnapshot
         // These three are rebuilt wholesale on EVERY capture: they are tiny (orphans are budget-capped, scroll rows
         // are a handful of viewports) and rebuilding is cheaper than tracking deltas through them.
         _orphanChildren.BeginCapture();
-        _seenSpanRuns.Clear();
-        BeginImageCapture();
 
         uint previousEpoch = _captureEpoch;
         uint epoch = NextCaptureEpoch();
@@ -257,6 +269,7 @@ public sealed partial class SceneRecordingSnapshot
         CaptureTree(source, DragGhost, epoch);
         CaptureTree(source, DragOverlay, epoch);
         for (int i = 0; i < extraRoots.Length; i++) CaptureTree(source, extraRoots[i], epoch);
+        if (_captured.Count != _previousCaptured.Count) _resourceReferencesDirty = true;
         // A slot reachable last capture but not this one reads as dead: no handle, no topology to chain through, and
         // (incremental only - a full capture already dropped every sparse row) no leftover sparse payload either.
         foreach (int index in _previousCaptured)
@@ -267,27 +280,9 @@ public sealed partial class SceneRecordingSnapshot
             if (incremental) ClearSparseRows(index);
         }
 
-        // Referenced images + live span runs are derived from the CAPTURED SET, not from the nodes copied this pass:
-        // an incremental capture leaves most rows untouched, and those rows still reference their image and their span
-        // run. Reading them back out of this snapshot's own columns (not the store's) keeps both derivations exact on
-        // either path, for 2-3 array reads per reachable node.
-        foreach (int index in _captured)
-        {
-            ref NodePaint paint = ref _paint[index];
-            if (paint.VisualKind == VisualKind.Image)
-            {
-                if (paint.ImageId != 0) NoteReferencedImage(paint.ImageId);
-                if (_imageEffects.TryGet(index, out var effects))
-                {
-                    if (effects.DerivedImageId != 0) NoteReferencedImage(effects.DerivedImageId);
-                    // A swap crossfade also draws the OUTGOING texture under the image (SceneRecorder) — capture its
-                    // readiness and its swap-hold deadline with the rest.
-                    if (effects.SwapOutgoingId != 0) NoteReferencedImage(effects.SwapOutgoingId);
-                }
-            }
-            int spanRunId = _layout[index].TextStyle.SpanRunId;
-            if (spanRunId != 0) NoteSpanRunSeen(spanRunId);
-        }
+        // Retain identities on pure paint/lyric changes. A changed identity, generation or traversal order falls
+        // back to the original captured-order derivation, preserving both de-duplication and ownership semantics.
+        if (_resourceReferencesDirty) RebuildResourceReferences();
 
         // Scrollbar chrome + the scroll-bind topology: rebuilt for the captured scrollable set (collected during the
         // walk). Both are keyed by the SCROLLER's index, both are a handful of entries, and the bind table is a shared
@@ -323,12 +318,39 @@ public sealed partial class SceneRecordingSnapshot
             _spanDecorations.EndCapture();
         }
         _orphanChildren.EndCapture();
-        ReleaseUnseenSpanRuns();
 
         _lastSource = source;
         _lastCaptureSeq = source.PublishSeq + 1;
         LastCaptureWasIncremental = incremental;
         if (incremental) VerifyIncrementalParity(source, extraRoots);
+    }
+
+    private readonly record struct ResourceReferences(int Image, int Derived, int Outgoing, int SpanRun);
+
+    private ResourceReferences ResourceReferencesAt(int index)
+    {
+        int spanRun = _textStyle.TryGet(index, out var style) ? style.SpanRunId : 0;
+        ref readonly NodePaint paint = ref _paint[index];
+        if (paint.VisualKind != VisualKind.Image) return new(0, 0, 0, spanRun);
+        _imageEffects.TryGet(index, out var effects);
+        return new(paint.ImageId, effects.DerivedImageId, effects.SwapOutgoingId, spanRun);
+    }
+
+    private void RebuildResourceReferences()
+    {
+        BeginImageCapture();
+        _seenSpanRuns.Clear();
+        _unresolvedSpanReference = false;
+        ResourceReferenceRowsScanned = _captured.Count;
+        foreach (int index in _captured)
+        {
+            var references = ResourceReferencesAt(index);
+            NoteReferencedImage(references.Image);
+            NoteReferencedImage(references.Derived);
+            NoteReferencedImage(references.Outgoing);
+            if (references.SpanRun != 0) NoteSpanRunSeen(references.SpanRun);
+        }
+        ReleaseUnseenSpanRuns();
     }
 
     private void NoteScrollNode(int index)
@@ -342,6 +364,8 @@ public sealed partial class SceneRecordingSnapshot
     /// keep its predecessor's payload.</summary>
     private void ClearSparseRows(int index)
     {
+        _textStyle.Remove(index);
+        _measurement.Remove(index);
         _scroll.Remove(index);
         _selectionRects.Remove(index);
         _underlineRects.Remove(index);
@@ -383,14 +407,19 @@ public sealed partial class SceneRecordingSnapshot
     private void CaptureTree(SceneStore source, NodeHandle root, uint epoch)
     {
         if (root.IsNull || !source.IsLive(root)) return;
-        for (var ancestor = source.Parent(root); !ancestor.IsNull && _capturedEpoch[ancestor.Raw.Index] != epoch; ancestor = source.Parent(ancestor))
+        for (var ancestor = source.Parent(root); !ancestor.IsNull; ancestor = source.Parent(ancestor))
+        {
+            EnsureReachableCapacity(ancestor.Raw.Index);
+            if (_capturedEpoch[ancestor.Raw.Index] == epoch) break;
             CaptureNode(source, ancestor, epoch);
+        }
         int depth = 0;
         _walk[depth++] = root;
         while (depth > 0)
         {
             var node = _walk[--depth];
             uint index = node.Raw.Index;
+            EnsureReachableCapacity(index);
             if (_walkedEpoch[index] == epoch) continue;
             _walkedEpoch[index] = epoch;
             if (_capturedEpoch[index] != epoch) CaptureNode(source, node, epoch);
@@ -405,8 +434,14 @@ public sealed partial class SceneRecordingSnapshot
     private void CaptureNode(SceneStore source, NodeHandle node, uint epoch)
     {
         int index = (int)node.Raw.Index;
+        _highestCapturedIndex = Math.Max(_highestCapturedIndex, index);
         bool reachedLastCapture = _capPrevEpoch != 0 && _capturedEpoch[index] == _capPrevEpoch;
         _capturedEpoch[index] = epoch;
+        // Compare while performing the existing reachability walk: no extra scan/index, and a reordered tree
+        // rebuilds the public ReferencedImageIds sequence in the same order a full capture would produce.
+        if (!_resourceReferencesDirty && (_captured.Count >= _previousCaptured.Count
+            || _previousCaptured[_captured.Count] != index || _handles[index] != node))
+            _resourceReferencesDirty = true;
         _captured.Add(index);
         NodeFlags sourceFlags = source.Flags(node);
         if ((sourceFlags & NodeFlags.Scrollable) != 0) NoteScrollNode(index);
@@ -420,12 +455,12 @@ public sealed partial class SceneRecordingSnapshot
             return;
 
         _copiedNodeCount++;
+        var previousReferences = _resourceReferencesDirty ? default : ResourceReferencesAt(index);
         if (_capIncremental) ClearSparseRows(index);   // a full capture already emptied every table
         _handles[index] = node;
         _parent[index] = source.Parent(node);
         _firstChild[index] = source.FirstChild(node);
         _nextSibling[index] = source.NextSibling(node);
-        _layout[index] = source.Layout(node);
         _bounds[index] = source.Bounds(node);
         _paint[index] = source.Paint(node);
         _interaction[index] = source.Interaction(node);
@@ -434,8 +469,13 @@ public sealed partial class SceneRecordingSnapshot
         _dirty[index] = source.RecordDirtyBits(node);
         _dirtySelf[index] = source.RecordDirtySelfBits(node);
         _dirtyDescendant[index] = source.RecordDirtyDescendantBits(node);
-        source.TryGetMeasureCache(node, out _measurement[index]);
-        CaptureSpanDecorationRects(index, _layout[index].TextStyle.SpanRunId);
+        if (source.TryGetMeasureCache(node, out var measurement)) _measurement.Set(index) = measurement;
+        TextStyle style = source.Layout(node).TextStyle;
+        if (_paint[index].VisualKind == VisualKind.Text || !style.FontFamily.IsEmpty || style.SpanRunId != 0)
+        {
+            _textStyle.Set(index) = style;
+            CaptureSpanDecorationRects(index, style.SpanRunId);
+        }
         // The side tables are probed only where the store can hold a row: the flag/kind that gates each table's
         // add path also gates its free path, so a node without the flag has no row to copy.
         if ((flags & NodeFlags.Scrollable) != 0)
@@ -480,15 +520,38 @@ public sealed partial class SceneRecordingSnapshot
             CopyRects(_selectionRects, index, source.GetTextEditSelectionRects(node));
             CopyRects(_underlineRects, index, source.GetTextEditUnderlineRects(node));
         }
+        if (!_resourceReferencesDirty && previousReferences != ResourceReferencesAt(index))
+            _resourceReferencesDirty = true;
     }
 
-    public bool IsLive(NodeHandle node) => node.Raw.Index > 0 && node.Raw.Index < (uint)_nodeCount
+    public bool IsLive(NodeHandle node) => node.Raw.Index > 0 && node.Raw.Index < (uint)_nodeCount && node.Raw.Index < (uint)Capacity
         && _handles[node.Raw.Index] == node;
-    public NodeHandle Parent(NodeHandle node) => _parent[node.Raw.Index];
-    public NodeHandle FirstChild(NodeHandle node) => _firstChild[node.Raw.Index];
-    public NodeHandle NextSibling(NodeHandle node) => _nextSibling[node.Raw.Index];
+    // Recorder skip/reuse-block chains may name a parked high-index handle. An unallocated dead tail has the
+    // same zero topology as a cleared dense row. Strict live payload refs below still require a validated handle.
+    public NodeHandle Parent(NodeHandle node) => node.Raw.Index < (uint)Capacity ? _parent[node.Raw.Index] : default;
+    public NodeHandle FirstChild(NodeHandle node) => node.Raw.Index < (uint)Capacity ? _firstChild[node.Raw.Index] : default;
+    public NodeHandle NextSibling(NodeHandle node) => node.Raw.Index < (uint)Capacity ? _nextSibling[node.Raw.Index] : default;
     public ref readonly RectF Bounds(NodeHandle node) => ref _bounds[node.Raw.Index];
-    public ref readonly LayoutInput Layout(NodeHandle node) => ref _layout[node.Raw.Index];
+    /// <summary>Value-copied style for a live text or authored font/span-bearing node. No flex/layout inputs
+    /// cross this surface; nontext resource rows preserve their authored string/span lifetime.</summary>
+    public bool TryGetTextStyle(NodeHandle node, out TextStyle style)
+    {
+        if (IsLive(node)) return _textStyle.TryGet((int)node.Raw.Index, out style);
+        style = default;
+        return false;
+    }
+    /// <summary>The recorder requires a captured style after dispatching a live text node. A missing row is
+    /// a capture-contract failure, never a request to silently draw with a default font.</summary>
+    public TextStyle RecordingTextStyle(NodeHandle node)
+        => TryGetTextStyle(node, out var style) ? style
+            : throw new InvalidOperationException("Recording text requires a live node with a captured text style.");
+    /// <summary>Captured text/resource-bearing rows, independent of the scene's addressable node high-water.</summary>
+    public int TextStyleRowCount => _textStyle.RowCount;
+    /// <summary>Reserved value-array payload bytes only; index/free capacities and object overhead are separate.</summary>
+    public long TextStyleValueCapacityBytes
+        => (long)_textStyle.ValueCapacity * System.Runtime.CompilerServices.Unsafe.SizeOf<TextStyle>();
+    internal (int Values, int Index, int Free) TextStyleCapacity
+        => (_textStyle.ValueCapacity, _textStyle.IndexCapacity, _textStyle.FreeCapacity);
     /// <summary>The node's paint as the recorder must see it: the render thread's overlay row when this tick posed
     /// this node, otherwise the authored column. See <c>SceneRecordingSnapshot.Animation.cs</c> for the row pool.</summary>
     public ref readonly NodePaint Paint(NodeHandle node)
@@ -503,8 +566,9 @@ public sealed partial class SceneRecordingSnapshot
     // node's SubtreeBounds; the trail marks every ancestor up to the root, whose SubtreeBounds is the window, so
     // reading the trail here is precisely what made one animated leaf repaint everything. The trail readers below are
     // unchanged — span reuse must still be denied along it.
-    public NodeFlags Flags(NodeHandle node) => _flags[node.Raw.Index]
-        | (_overlaySelfEpoch[node.Raw.Index] == _overlayEpoch ? NodeFlags.TransformDirty | NodeFlags.PaintDirty : 0);
+    public NodeFlags Flags(NodeHandle node) => node.Raw.Index < (uint)Capacity
+        ? _flags[node.Raw.Index] | (_overlaySelfEpoch[node.Raw.Index] == _overlayEpoch ? NodeFlags.TransformDirty | NodeFlags.PaintDirty : 0)
+        : default;
     public byte RecordDirtyBits(NodeHandle node) => (byte)(_dirty[node.Raw.Index]
         | (_overlayDirtyEpoch[node.Raw.Index] == _overlayEpoch ? SceneStore.RecordDirtyContent : 0));
     // Also the SELF epoch, and for the same reason as Flags above: this is the recorder's OTHER route to a repaint
@@ -518,8 +582,13 @@ public sealed partial class SceneRecordingSnapshot
     public byte RecordDirtyDescendantBits(NodeHandle node) => (byte)(_dirtyDescendant[node.Raw.Index]
         | (_overlayDirtyEpoch[node.Raw.Index] == _overlayEpoch ? SceneStore.RecordDirtyContent : 0));
 
-    // The measurement row is renderer-local mutable scratch. It never aliases the UI's layout cache.
-    internal ref TextMeasureCache MeasureCacheRef(NodeHandle node) => ref _measurement[node.Raw.Index];
+    // Value-copied at capture, read-only on the renderer: never aliases the UI's mutable layout cache.
+    internal TextMeasureEntry ResolveMeasureForWidth(NodeHandle node, float width)
+        => IsLive(node) && _measurement.TryGet((int)node.Raw.Index, out var measurement)
+            ? measurement.ResolveForWidth(width) : default;
+    internal int MeasurementRowCount => _measurement.RowCount;
+    internal (int Values, int Index, int Free) MeasurementCapacity
+        => (_measurement.ValueCapacity, _measurement.IndexCapacity, _measurement.FreeCapacity);
     public bool HasScroll(NodeHandle node) => _scroll.Contains((int)node.Raw.Index);
     public bool TryGetScroll(NodeHandle node, out ScrollState value) => _scroll.TryGet((int)node.Raw.Index, out value);
     public ref readonly ScrollState ScrollRef(NodeHandle node) => ref _scroll.At((int)node.Raw.Index);
@@ -595,7 +664,7 @@ public sealed partial class SceneRecordingSnapshot
         foreach (int index in _captured)
         {
             MarkStringSeen(_paint[index].Text, epoch);
-            MarkStringSeen(_layout[index].TextStyle.FontFamily, epoch);
+            if (_textStyle.TryGet(index, out var style)) MarkStringSeen(style.FontFamily, epoch);
         }
         foreach (int id in _retainedSpanRuns)
         {
@@ -671,7 +740,9 @@ public sealed partial class SceneRecordingSnapshot
     /// <summary>Mark a span run as still referenced by this snapshot, taking a table reference the first time.</summary>
     private void NoteSpanRunSeen(int id)
     {
-        if (SpanRunTable.Shared.Resolve(id) is null) return;
+        // Unknown ids cannot be retained. Keep checking on later captures rather than sealing a currently
+        // unresolvable run as permanently absent; valid retained runs cannot disappear while this slot owns them.
+        if (SpanRunTable.Shared.Resolve(id) is null) { _unresolvedSpanReference = true; return; }
         _seenSpanRuns.Add(id);
         if (_retainedSpanRuns.Add(id)) SpanRunTable.Shared.AddRef(id);
     }
@@ -689,6 +760,7 @@ public sealed partial class SceneRecordingSnapshot
     }
     public bool TryGetInteract(NodeHandle node, out InteractionAnim value)
     {
+        if (node.Raw.Index >= (uint)Capacity) { value = default; return false; }
         int slot = _overlayRow[node.Raw.Index] - 1;
         if (slot >= 0 && (_overlayRows[slot].Have & HaveInteraction) != 0)
         {
@@ -708,6 +780,7 @@ public sealed partial class SceneRecordingSnapshot
     public bool TryGetImageEffects(NodeHandle node, out ImageVisualEffects value) => _imageEffects.TryGet((int)node.Raw.Index, out value);
     public bool TryGetBrushAnim(NodeHandle node, out BrushAnim value)
     {
+        if (node.Raw.Index >= (uint)Capacity) { value = default; return false; }
         int slot = _overlayRow[node.Raw.Index] - 1;
         if (slot >= 0 && (_overlayRows[slot].Have & HaveBrush) != 0)
         {
@@ -771,9 +844,9 @@ public sealed partial class SceneRecordingSnapshot
     private void EnsureCapacity(int count)
     {
         Grow(ref _handles, count); Grow(ref _parent, count); Grow(ref _firstChild, count); Grow(ref _nextSibling, count);
-        Grow(ref _layout, count); Grow(ref _bounds, count); Grow(ref _paint, count); Grow(ref _interaction, count);
+        Grow(ref _bounds, count); Grow(ref _paint, count); Grow(ref _interaction, count);
         Grow(ref _flags, count); Grow(ref _dirty, count); Grow(ref _dirtySelf, count); Grow(ref _dirtyDescendant, count);
-        Grow(ref _measurement, count); Grow(ref _capturedEpoch, count); Grow(ref _walkedEpoch, count);
+        Grow(ref _capturedEpoch, count); Grow(ref _walkedEpoch, count);
     }
 
     internal static void Grow<T>(ref T[] values, int count)
@@ -802,6 +875,8 @@ public sealed partial class SceneRecordingSnapshot
 
     private void BeginSparseCapture()
     {
+        _textStyle.BeginCapture();
+        _measurement.BeginCapture();
         _scroll.BeginCapture(); _selectionRects.BeginCapture(); _underlineRects.BeginCapture();
         _interact.BeginCapture();
         _shadow.BeginCapture();
@@ -827,6 +902,8 @@ public sealed partial class SceneRecordingSnapshot
 
     private void EndSparseCapture()
     {
+        _textStyle.EndCapture();
+        _measurement.EndCapture();
         _scroll.EndCapture(); _selectionRects.EndCapture(); _underlineRects.EndCapture();
         _interact.EndCapture();
         _shadow.EndCapture();
@@ -867,6 +944,16 @@ internal sealed class SnapshotColumn<T>
     // EndCapture's tail clear keeps working on the full-capture path.
     private int[] _free = [];
     private int _count, _oldCount, _freeCount;
+    // Text style/measurement rows are removed/reinserted on incremental captures. Reserve their first free-list page
+    // with the value/index page, so the first new text row in a warmed non-text scene needs no capture allocation.
+    public SnapshotColumn(bool reserveRemovals = false)
+    {
+        if (reserveRemovals) _free = new int[16];
+    }
+    internal int RowCount => _indices.Count;
+    internal int ValueCapacity => _values.Length;
+    internal int IndexCapacity => _indices.EnsureCapacity(0);
+    internal int FreeCapacity => _free.Length;
     public void BeginCapture() { _oldCount = _count; _count = 0; _freeCount = 0; _indices.Clear(); }
     public void EndCapture() { if (_oldCount > _count) Array.Clear(_values, _count, _oldCount - _count); }
     public ref T Add(int index)

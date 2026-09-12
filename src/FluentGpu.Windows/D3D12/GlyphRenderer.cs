@@ -136,13 +136,12 @@ internal readonly struct RunKey : IEquatable<RunKey>
 /// </summary>
 internal sealed unsafe class GlyphRenderer : IDisposable
 {
-    // 4096² R8 (16 MiB CPU mirror + 16 MiB GPU texture): sized so even the Iconography page's full Segoe Fluent
-    // catalog (~1,500 distinct glyphs at two sizes, each SubPixelPhases× tall) plus the app's text fits one
-    // generation. Overflow is still HANDLED (generational reset below) — before that, a full atlas silently cached
-    // entries at X=Y=0, so every later glyph sampled the atlas origin and corrupted all text for the rest of the
-    // session. The UPLOAD side is not sized off this: staging is a bounded dirty-row band, not a third+fourth+fifth
-    // full-size copy of the atlas (see UploadIfDirty and InitialStagingRows).
-    private const int ATLAS = 4096;
+    // Start with 2048² R8 (4 MiB each CPU/GPU); grow once to the former 4096² capacity during preflight,
+    // before any instance or upload is recorded. Four subpixel phases are unchanged. No automatic shrink:
+    // multilingual/zoom navigation must not repeatedly discard useful coverage. Uploads remain dirty-row bands.
+    private const int InitialAtlasEdge = 2048;
+    private const int MaximumAtlasEdge = 4096;
+    private int ATLAS => _atlas.Size;
 
     /// <summary>Vertical sub-pixel positions each glyph is rasterized at. Text can then be placed on a 1/N device-row
     /// grid and stay CRISP, instead of choosing between a whole-pixel snap (which quantizes all scrolling to the device
@@ -170,7 +169,10 @@ internal sealed unsafe class GlyphRenderer : IDisposable
     // The R8 mirror + the append-only shelf packer + the DIRTY-ROW REGION that bounds every upload, all in one
     // backend-agnostic, COM-free class (FluentGpu.Text.GlyphAtlasStore). Its class doc carries the three-clause
     // region-tracking invariant this renderer's UploadIfDirty depends on; read it before touching the upload path.
-    private readonly GlyphAtlasStore _atlas = new(ATLAS);
+    private GlyphAtlasStore _atlas = new(InitialAtlasEdge);
+    private Action? _prepareGrowthFence;
+    private bool _preparing;
+    private bool _growthFailed;
     private ID3D12Resource* _tex;
     // Atlas staging, BANKED per frame-in-flight (FrameCount deep). WaitForFrame only proves frame
     // N−FrameCount retired, never N−1, so consecutive dirty-atlas frames raced a single shared staging buffer —
@@ -182,8 +184,10 @@ internal sealed unsafe class GlyphRenderer : IDisposable
     // without a growth round-trip. The cap is 2048 rows = 8 MiB per bank: a frame that dirties more than that (a
     // generational reset re-rasterizing a huge working set) drains across two frames, arming a repaint — bounded
     // memory beats a bank permanently ratcheted to the full 16 MiB atlas.
-    private const int InitialStagingRows = 1024;
-    private const int MaxStagingRows = 2048;
+    // After the existing clean-frame window, the warm floor is 256 rows (1 MiB/bank): 9 MiB less pinned upload
+    // memory across three banks. New demands grow again through the unchanged clamped-upload healing path.
+    private const int InitialStagingRows = GlyphStagingPolicy.InitialRows;
+    private const int MaxStagingRows = GlyphStagingPolicy.MaxRows;
     private readonly int[] _stagingRows = new int[FrameCount];
     private int _wantStagingRows = InitialStagingRows;
     /// <summary>Submitted frames since the atlas was last dirty. Drives the staging reserve back down — the same
@@ -229,6 +233,8 @@ internal sealed unsafe class GlyphRenderer : IDisposable
     private StringTable? _liveness;
     private int _frame;
     private int _runsCached, _runsShaped;                     // per-frame diagnostics
+    private const long MaxPooledQuadBytes = 1024 * 1024;
+    private long _pooledQuadBytes;
 #if DEBUG
     /// <summary>When set, every cache hit re-shapes and asserts the geometry matches — verifies the cache is output-identical
     /// to the uncached path. Off by default (it defeats the perf win); flip on (e.g. via the debugger) for a verification run.</summary>
@@ -372,6 +378,10 @@ float4 PSMain(VSOutG i) : SV_Target
     internal int CachedRunCount => _runCache.Count;
     /// <summary>Atlas generation-reset count (the epoch counter; bumped when the atlas fills and flushes) — O(1).</summary>
     internal int AtlasResetCount => _atlas.Epoch;
+    internal int AtlasEdge => ATLAS;
+    internal int AtlasOccupiedRows => _atlas.OccupiedRowCount;
+    internal long AtlasCpuBytes => (long)ATLAS * ATLAS;
+    internal long QuadPoolBytes => _pooledQuadBytes;
     /// <summary>Bytes each per-frame atlas staging bank currently holds (a dirty-row band, NOT the whole atlas) —
     /// the census figure that used to read a flat 3 × ATLAS².</summary>
     internal long AtlasStagingBytes
@@ -626,6 +636,9 @@ float4 PSMain(VSOutG i) : SV_Target
     /// or baked as a faithful partial repaint).</summary>
     private void PackOrReset(ref GlyphEntry e, ReadOnlySpan<byte> src, int w, int h)
     {
+        if (_preparing && !_growthFailed && ATLAS < MaximumAtlasEdge && !_atlas.CanPack(w, h)
+            && w <= MaximumAtlasEdge - 2 && h <= MaximumAtlasEdge - 2)
+            TryGrowAtlas();
         // A single glyph larger than the whole atlas can never pack — blank it without arming a reset, or an
         // oversized glyph would trigger a full cache flush every single frame it is on screen.
         if (w + 2 > ATLAS || h + 2 > ATLAS)
@@ -678,7 +691,7 @@ float4 PSMain(VSOutG i) : SV_Target
         IconUv(in e, out u0, out v0, out u1, out v1);
     }
 
-    private static void IconUv(in GlyphEntry e, out float u0, out float v0, out float u1, out float v1)
+    private void IconUv(in GlyphEntry e, out float u0, out float v0, out float u1, out float v1)
     {
         u0 = e.X / (float)ATLAS; v0 = e.Y / (float)ATLAS;
         u1 = (e.X + e.W) / (float)ATLAS; v1 = (e.Y + e.H) / (float)ATLAS;
@@ -717,6 +730,7 @@ float4 PSMain(VSOutG i) : SV_Target
         if (!Unsafe.IsNullRef(ref hit))
         {
             hit.LastUsedFrame = _frame;
+            if (_preparing) return;
             _runsCached++;
 #if DEBUG
             if (VerifyCache) VerifyAgainstReshape(in hit, text, family, size, weight, originX, topY, maxWidth, wrap, trim, maxLines, charSpacing, lineHeight, lineStacking, lineBounds, dpiScale, spanRunId);
@@ -760,6 +774,7 @@ float4 PSMain(VSOutG i) : SV_Target
         {
             Diag.Count("text.run", "uncachedMixedEpoch");
         }
+        if (_preparing) { if (!consistent) ReturnQuads(arr); return; }
         var baked = arr.AsSpan(0, n);
         float bsnap = SnapDy(baked, world, dpiScale, motionSoft, out int bph);
         Replay(baked, colors, forceColor, color, world, opacity, bsnap, bph, outList);
@@ -801,6 +816,7 @@ float4 PSMain(VSOutG i) : SV_Target
         ref var hit = ref CollectionsMarshal.GetValueRefOrNullRef(_runCache, key);
         if (!Unsafe.IsNullRef(ref hit))
         {
+            if (_preparing) { hit.LastUsedFrame = _frame; return; }
             hit.LastUsedFrame = _frame; _runsCached++;
             quadsArr = hit.Glyphs; count = hit.Count;
         }
@@ -824,6 +840,7 @@ float4 PSMain(VSOutG i) : SV_Target
             quadsArr = arr;
         }
 
+        if (_preparing) return;
         var quads = quadsArr.AsSpan(0, count);
         if (count == 0) return;
 
@@ -934,23 +951,29 @@ float4 PSMain(VSOutG i) : SV_Target
     /// <summary>Wire the interner so the run cache can drop runs whose text id was reclaimed (resolves empty).</summary>
     public void SetLivenessSource(StringTable strings) => _liveness = strings;
 
-    private ShapedGlyph[] RentQuads(int count)
+    internal ShapedGlyph[] RentQuads(int count)
     {
         if (count == 0) return Array.Empty<ShapedGlyph>();
         int bucket = 32 - System.Numerics.BitOperations.LeadingZeroCount((uint)(count - 1));
         if (bucket >= _quadPool.Length) return new ShapedGlyph[count];   // pathological run — don't pool
         var stack = _quadPool[bucket];
-        return stack is { Count: > 0 } ? stack.Pop() : new ShapedGlyph[1 << bucket];
+        if (stack is not { Count: > 0 }) return new ShapedGlyph[1 << bucket];
+        var array = stack.Pop();
+        _pooledQuadBytes -= (long)array.Length * Unsafe.SizeOf<ShapedGlyph>();
+        return array;
     }
 
-    private void ReturnQuads(ShapedGlyph[] arr)
+    internal void ReturnQuads(ShapedGlyph[] arr)
     {
         if (arr.Length == 0) return;
         int bucket = System.Numerics.BitOperations.Log2((uint)arr.Length);
         if (bucket >= _quadPool.Length || arr.Length != 1 << bucket) return;
+        long bytes = (long)arr.Length * Unsafe.SizeOf<ShapedGlyph>();
+        if (bytes > MaxPooledQuadBytes - _pooledQuadBytes) return;
         var stack = _quadPool[bucket] ??= new Stack<ShapedGlyph[]>();
         if (stack.Count >= MaxPooledQuadArraysPerBucket) return;   // cap reached → drop the reference (GC reclaims)
         stack.Push(arr);
+        _pooledQuadBytes += bytes;
     }
 
     private static RunKey MakeRunKey(StringId textId, StringId familyId, float size, int weight, float maxWidth, int wrap, int trim, int maxLines, float originX, float topY, float dpiScale,
@@ -1213,19 +1236,129 @@ float4 PSMain(VSOutG i) : SV_Target
         => LineBreaker.WrapEnd(text.AsSpan(), start, n, maxWidth, wrap, new GlyphAdvanceSource(this, face, em, famId, size, weight, dpiScale));
 
     // ── GPU resources ─────────────────────────────────────────────────────────
+    /// <summary>Cold glyph preparation is before command-list reset, image-upload fence stamps, and all instance
+    /// emission. The callback drains the whole device only for the single 2048-to-4096 growth transition.</summary>
+    internal void BeginPreparation(Action growthFence)
+    {
+        if (_preparing || _cursor != 0 || _gradCursor != 0)
+            throw new InvalidOperationException("Glyph preparation must precede instance recording.");
+        _prepareGrowthFence = growthFence;
+        _preparing = true;
+    }
+
+    internal void EndPreparation()
+    {
+        _preparing = false;
+        _prepareGrowthFence = null;
+        if (!_atlas.IsDirty) return;
+        int bandBase = Math.Min(_atlas.DirtyRowStart, Math.Max(0, _atlas.ShelfRow - 1));
+        int needed = _atlas.DirtyRowStart + _atlas.DirtyRowCount - bandBase;
+        if (_stagingRows[_active] >= needed) return;
+        // No copy has been recorded yet. Allocate BEFORE releasing the valid bank; all dirty rows must fit
+        // this first paint even if a previous idle window reduced the warm reserve.
+        int rows = Math.Min(ATLAS, (int)System.Numerics.BitOperations.RoundUpToPowerOf2((uint)needed));
+        var replacement = CreateUpload(_device, (uint)(ATLAS * rows), $"Glyph.AtlasUpload[{_active}]");
+        D3D12MemoryDiagnostics.Release(_texUpload[_active], $"Glyph.AtlasUpload[{_active}]");
+        _texUpload[_active]->Release();
+        _texUpload[_active] = replacement;
+        _stagingRows[_active] = rows;
+        _wantStagingRows = Math.Max(_wantStagingRows, Math.Min(rows, MaxStagingRows));
+    }
+
+    private void TryGrowAtlas()
+    {
+        Debug.Assert(_preparing && _prepareGrowthFence is not null);
+        ID3D12Resource* texture = null;
+        ID3D12DescriptorHeap* heap = null;
+        var uploads = new ID3D12Resource*[FrameCount];
+        GlyphAtlasStore candidate;
+        try
+        {
+            try
+            {
+                candidate = _atlas.CreateExpanded(MaximumAtlasEdge);
+                D3D12_HEAP_PROPERTIES hp = default; hp.Type = D3D12_HEAP_TYPE.D3D12_HEAP_TYPE_DEFAULT;
+                D3D12_RESOURCE_DESC td = default;
+                td.Dimension = D3D12_RESOURCE_DIMENSION.D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+                td.Width = MaximumAtlasEdge; td.Height = MaximumAtlasEdge;
+                td.DepthOrArraySize = 1; td.MipLevels = 1; td.SampleDesc.Count = 1;
+                td.Format = DXGI_FORMAT.DXGI_FORMAT_R8_UNORM;
+                // Query BEFORE CreateCommittedResource, on the SAME desc (audit gpu mem-02): the device-reported
+                // allocation requirement, not an inferred edge*edge*1 pixel estimate.
+                ulong atlasBytes = D3D12MemoryDiagnostics.AllocationBytes(_device, &td);
+                Check(_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_NONE, &td,
+                    D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST, null,
+                    __uuidof<ID3D12Resource>(), (void**)&texture), "Grow glyph atlas");
+                D3D12MemoryDiagnostics.Track(texture,
+                    D3D12MemoryDiagnostics.NameOrUnknown("Glyph.AtlasTexture 4096x4096 R8", atlasBytes),
+                    atlasBytes != 0 ? atlasBytes : (ulong)MaximumAtlasEdge * MaximumAtlasEdge);
+                D3D12_DESCRIPTOR_HEAP_DESC hd = default;
+                hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE.D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+                hd.NumDescriptors = 1; hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAGS.D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+                Check(_device->CreateDescriptorHeap(&hd, __uuidof<ID3D12DescriptorHeap>(), (void**)&heap), "Grow glyph SRV");
+                D3D12MemoryDiagnostics.Track(heap, "Glyph.SrvHeap", _device->GetDescriptorHandleIncrementSize(hd.Type));
+                D3D12_SHADER_RESOURCE_VIEW_DESC sd = default;
+                sd.Format = td.Format; sd.ViewDimension = D3D12_SRV_DIMENSION.D3D12_SRV_DIMENSION_TEXTURE2D;
+                sd.Shader4ComponentMapping = 0x1688; sd.Anonymous.Texture2D.MipLevels = 1;
+                _device->CreateShaderResourceView(texture, &sd, heap->GetCPUDescriptorHandleForHeapStart());
+                for (int f = 0; f < FrameCount; f++)
+                    uploads[f] = CreateUpload(_device, (uint)(MaximumAtlasEdge *
+                        (f == _active ? MaximumAtlasEdge : GlyphStagingPolicy.WarmRows)), $"Glyph.AtlasUpload[{f}]");
+            }
+            catch (Exception ex) when (ex is OutOfMemoryException or InvalidOperationException)
+            {
+                // Admission failure never publishes half a realization or destroys the last-good atlas.
+                _growthFailed = true;
+                Diag.Event("text.atlas", $"growth rejected; retaining {ATLAS} atlas: {ex.Message}");
+                return;
+            }
+            // Outside the admission catch: device-loss/fence failure follows the device recovery path.
+            _prepareGrowthFence!();
+            D3D12MemoryDiagnostics.Release(_tex, "Glyph.AtlasTexture"); _tex->Release();
+            D3D12MemoryDiagnostics.Release(_srvHeap, "Glyph.SrvHeap"); _srvHeap->Release();
+            _tex = texture; texture = null;
+            _srvHeap = heap; heap = null;
+            _srvGpu = _srvHeap->GetGPUDescriptorHandleForHeapStart();
+            for (int f = 0; f < FrameCount; f++)
+            {
+                D3D12MemoryDiagnostics.Release(_texUpload[f], $"Glyph.AtlasUpload[{f}]");
+                _texUpload[f]->Release();
+                _texUpload[f] = uploads[f]; uploads[f] = null;
+                _stagingRows[f] = f == _active ? MaximumAtlasEdge : GlyphStagingPolicy.WarmRows;
+            }
+            _atlas = candidate;
+            _texInitialized = false;
+            foreach (var kv in _runCache) ReturnQuads(kv.Value.Glyphs);
+            _runCache.Clear(); // coordinates survive; every normalized UV and phase stride must be rebuilt
+            Diag.Count("text.atlas", "capacityGrow");
+        }
+        finally
+        {
+            if (texture != null) { D3D12MemoryDiagnostics.Release(texture, "Glyph.AtlasTexture"); texture->Release(); }
+            if (heap != null) { D3D12MemoryDiagnostics.Release(heap, "Glyph.SrvHeap"); heap->Release(); }
+            for (int f = 0; f < FrameCount; f++)
+                if (uploads[f] != null) { D3D12MemoryDiagnostics.Release(uploads[f], $"Glyph.AtlasUpload[{f}]"); uploads[f]->Release(); }
+        }
+    }
+
     private void InitAtlasTexture(ID3D12Device* device)
     {
         D3D12_HEAP_PROPERTIES dp = default; dp.Type = D3D12_HEAP_TYPE.D3D12_HEAP_TYPE_DEFAULT;
         D3D12_RESOURCE_DESC td = default;
         td.Dimension = D3D12_RESOURCE_DIMENSION.D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        td.Width = ATLAS; td.Height = ATLAS; td.DepthOrArraySize = 1; td.MipLevels = 1;
+        td.Width = (ulong)ATLAS; td.Height = (uint)ATLAS; td.DepthOrArraySize = 1; td.MipLevels = 1;
         td.Format = DXGI_FORMAT.DXGI_FORMAT_R8_UNORM; td.SampleDesc.Count = 1;
         td.Layout = D3D12_TEXTURE_LAYOUT.D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        // Query BEFORE CreateCommittedResource, on the SAME desc (audit gpu mem-02): the device-reported allocation
+        // requirement, not an inferred ATLAS*ATLAS*1 pixel estimate.
+        ulong atlasBytes = D3D12MemoryDiagnostics.AllocationBytes(device, &td);
         ID3D12Resource* tex;
         Check(device->CreateCommittedResource(&dp, D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_NONE, &td,
             D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST, null, __uuidof<ID3D12Resource>(), (void**)&tex), "CreateTexture");
         _tex = tex;
-        D3D12MemoryDiagnostics.Track(_tex, $"Glyph.AtlasTexture {ATLAS}x{ATLAS} R8", (ulong)ATLAS * ATLAS);
+        D3D12MemoryDiagnostics.Track(_tex,
+            D3D12MemoryDiagnostics.NameOrUnknown($"Glyph.AtlasTexture {ATLAS}x{ATLAS} R8", atlasBytes),
+            atlasBytes != 0 ? atlasBytes : (ulong)(ATLAS * ATLAS));
 
         // A staging bank is a dirty-ROW BAND, not a mirror of the atlas: InitialStagingRows × ATLAS bytes, grown at a
         // frame boundary if a frame ever needs more. (Was ATLAS × ATLAS per bank — 3 × 16 MiB that a full-atlas
@@ -1279,6 +1412,9 @@ float4 PSMain(VSOutG i) : SV_Target
     public void UploadIfDirty(ID3D12GraphicsCommandList* cmd)
     {
         if (!_atlas.IsDirty && _texInitialized) return;
+        // Successful uploads clear IsDirty before the next BeginFrame. Reset here as well, or a scrolling
+        // stream of new glyphs looks "clean" at every frame boundary and shrinks/regrows every idle window.
+        if (_atlas.IsDirty) _atlasIdleFrames = 0;
 
         int rows = _stagingRows[_active];
         if (!_atlas.TryTakeUpload(rows, out var flush))
@@ -1298,7 +1434,7 @@ float4 PSMain(VSOutG i) : SV_Target
         ID3D12Resource* up = _texUpload[_active];   // THIS frame's staging bank (BeginFrame set _active)
         if (flush.HasStage)
         {
-            void* p; up->Map(0, null, &p);
+            void* p; Check(up->Map(0, null, &p), "Map glyph upload");
             _atlas.StageInto(in flush, new Span<byte>(p, rows * ATLAS));
             up->Unmap(0, null);
         }
@@ -1313,10 +1449,10 @@ float4 PSMain(VSOutG i) : SV_Target
             srcLoc.pResource = up; srcLoc.Type = D3D12_TEXTURE_COPY_TYPE.D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
             srcLoc.Anonymous.PlacedFootprint.Offset = (ulong)flush.CopyOffset;   // a whole number of ATLAS-byte rows ⇒ 512-aligned
             srcLoc.Anonymous.PlacedFootprint.Footprint.Format = DXGI_FORMAT.DXGI_FORMAT_R8_UNORM;
-            srcLoc.Anonymous.PlacedFootprint.Footprint.Width = ATLAS;
+            srcLoc.Anonymous.PlacedFootprint.Footprint.Width = (uint)ATLAS;
             srcLoc.Anonymous.PlacedFootprint.Footprint.Height = (uint)flush.CopyRowCount;
             srcLoc.Anonymous.PlacedFootprint.Footprint.Depth = 1;
-            srcLoc.Anonymous.PlacedFootprint.Footprint.RowPitch = ATLAS;   // R8, 4096 — already 256-aligned
+            srcLoc.Anonymous.PlacedFootprint.Footprint.RowPitch = (uint)ATLAS;   // R8; both supported edges are 256-aligned
             cmd->CopyTextureRegion(&dst, 0, (uint)flush.CopyRowStart, 0, &srcLoc, null);
 
             Transition(cmd, _tex, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
@@ -1341,9 +1477,7 @@ float4 PSMain(VSOutG i) : SV_Target
         int need = _atlas.WantedStagingRows;
         if (need > _wantStagingRows && _wantStagingRows < MaxStagingRows)
         {
-            int want = _wantStagingRows;
-            while (want < need && want < MaxStagingRows) want <<= 1;
-            _wantStagingRows = want > MaxStagingRows ? MaxStagingRows : want;
+            _wantStagingRows = GlyphStagingPolicy.ForDemand(_wantStagingRows, need);
             Diag.Count("text.atlas", "stagingGrowArmed");
         }
         if (_atlas.ShortfallRows > 0 && !_uploadBacklog)
@@ -1469,9 +1603,10 @@ float4 PSMain(VSOutG i) : SV_Target
         // deliberately generous: a shrink immediately followed by a big reset costs one stagingShort frame, which the
         // existing AtlasResetPending → forced-repaint machinery already handles and gate.atlas.upload.clamp/.drain
         // already pin. Never released to null — UploadIfDirty dereferences the bank unconditionally.
-        if (_atlasIdleFrames >= StagingIdleFrames && _wantStagingRows > InitialStagingRows)
+        int warmRows = GlyphStagingPolicy.AfterIdle(_wantStagingRows, _atlasIdleFrames, StagingIdleFrames);
+        if (warmRows != _wantStagingRows)
         {
-            _wantStagingRows = InitialStagingRows;
+            _wantStagingRows = warmRows;
             _atlasIdleFrames = 0;
         }
         if (_stagingRows[_active] != _wantStagingRows) ResizeStagingBank(_active);   // a fenced bank is the ONLY safe swap point
@@ -1605,9 +1740,10 @@ float4 PSMain(VSOutG i) : SV_Target
     private void ResizeStagingBank(int f)
     {
         bool shrinking = _stagingRows[f] > _wantStagingRows;
+        var replacement = CreateUpload(_device, (uint)(ATLAS * _wantStagingRows), $"Glyph.AtlasUpload[{f}]");
         D3D12MemoryDiagnostics.Release(_texUpload[f], $"Glyph.AtlasUpload[{f}]");
         _texUpload[f]->Release();
-        _texUpload[f] = CreateUpload(_device, (uint)(ATLAS * _wantStagingRows), $"Glyph.AtlasUpload[{f}]");
+        _texUpload[f] = replacement;
         _stagingRows[f] = _wantStagingRows;
         Diag.Count("text.atlas", shrinking ? "stagingShrink" : "stagingGrow");
         Diag.Set("text.atlas", "stagingBytes", AtlasStagingBytes);   // all banks together — the memory story, not a per-frame value

@@ -467,6 +467,51 @@ high-water. This doc owns that storage discipline (the cited docs still own each
 > pool may be grown ONLY on the publisher/UI side (the mount/capture event that admits a new occupant), never from a
 > per-frame integration or compositor tick — the growth-free path is what the alloc-zero gates measure.
 
+**As-built snapshot projection index (2026-09-12).** Publisher-owned sparse projection columns may reuse the
+existing `SnapshotColumn<T>` dictionary from scene index to compact value slot instead of allocating a dense
+4-byte-per-node lookup. This is the index-shape exception for that existing snapshot container, not an exception
+to keeping large payloads out of node-indexed arrays. Its value array, dictionary and LIFO free-list capacities are
+owned by the snapshot and retained at high-water; only exclusive publisher capture can mutate or grow them.
+
+Text measurements now use that existing projection: `SnapshotColumn<TextMeasureCache>` holds only measured,
+reachable nodes, replacing a dense two-entry cache per scene slot. Full capture rebuilds its membership;
+incremental capture removes a changed or unreachable node's old row before copying any current cache. Parking and
+recycled generations therefore cannot leave a prior text cache attached to a new occupant. The measurement column
+reserves 16 value slots and its initial index/free-list storage at snapshot construction, so a first measured row
+in a warmed non-text scene and its first incremental replacement do not allocate. Subsequent structural growth is
+publisher-side; steady capture and render lookup reuse the owned storage. `SnapshotMeasurementTests` checks
+value/index/free-list capacities against non-text high-water, lifetime/parity and capture allocation behavior.
+These capacities are not a process-working-set estimate. Measurement semantics remain owned by `text.md`, and
+publication isolation by `threading-render-seam.md`.
+
+Recording text styles use `SnapshotColumn<TextStyle>` rather than a dense `LayoutInput[]` projection. The UI
+`SceneStore` still owns full layout inputs. Capture keeps a value row for each reachable `VisualKind.Text` node,
+and for nontext nodes with an authored font-family or span-run identity so existing resource lifetimes remain
+intact. Full/incremental capture, removal and generation validation follow the same sparse ownership rules above.
+`SnapshotTextStyleTests` covers retained values, emitted plain/wipe text commands, resource pins, parity and
+warm capture allocation. `TextStyleValueCapacityBytes` reports only reserved value-array payload; dictionary,
+free-list and object overhead remain separate, and no counter claims process-working-set savings.
+
+**Snapshot high-water reclamation (2026-09-12).** Indexed snapshot arrays grow for the highest node index actually
+reached by capture, not the UI store's total slot high-water; a parked, unreachable tail requires no projection.
+Unallocated dead tails are valid for liveness/parity, while reachable sparse high indices still require capacity.
+The publisher may replace a free snapshot after sustained fourfold slack for 30 seconds, with a 120-second
+post-attempt cooldown. Target capacity is power-of-two, minimum 256, with 32 nodes of headroom. Replacement drops
+the old frame's dense/sparse/auxiliary reserves together rather than trimming only one array. The cold preflight
+warms both alternating capture buffers and current resource reserves before the protected allocation baseline.
+`SnapshotCapacityReclaimTests` checks parked/extra-root reachability, ownership, pins, popup activation, failure
+recovery and allocation-free unchanged publication after preparation. The census reports initialized slots,
+indexed-array payload bytes using runtime element sizes, separate text-style value bytes, capacity/required sums,
+and cumulative reclaimed indexed payload. Cumulative reclamation is not current retained size or physical release.
+CPU slot ownership and publication-baseline reset remain owned by `threading-render-seam.md` §0.
+
+UI `SceneStore.CapacityRevision` advances on actual node allocation/free and successful tail trim, not paint or
+animation-only changes. It drives one cold tail-trim attempt per observed change, acknowledging the trim's own
+revision so neither success nor failure becomes periodic polling. The publisher exposes only eligible free-slot
+deadlines from its existing slack/cooldown policies; the scheduling and no-frame drain contract is owned by
+`threading-render-seam.md` §0. Reclamation releases references/capacity; GC commitment and process residency may
+remain unchanged until the runtime/OS reclaim physical memory.
+
 Two instances are as-built, both converted from the dense form after `mem.sample`/`dotnet-gcdump` caught them on
 the 32 768-node scene the native ARM64 tour reaches:
 

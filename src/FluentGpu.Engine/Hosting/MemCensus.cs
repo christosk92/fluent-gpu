@@ -17,6 +17,11 @@ public readonly struct CensusSnapshot
     public readonly int SceneSticky;
     public readonly int SceneScrollState;
     public readonly int SceneBrushAnims;
+    // Publisher-owned array payload, not managed heap size or working set. Sparse indices/headers are excluded.
+    public readonly int SnapshotSlots;
+    public readonly long SnapshotIndexedBytes, SnapshotTextStyleBytes, SnapshotCapacity, SnapshotRequired;
+    public readonly int SnapshotReclaims;
+    public readonly long SnapshotReclaimedIndexedBytes;
     // strings
     public readonly int StringMap;
     public readonly int StringPendingReclaim;
@@ -59,6 +64,14 @@ public readonly struct CensusSnapshot
         SceneSticky = scene.ScrollBindCount;
         SceneScrollState = scene.ScrollStateCount;
         SceneBrushAnims = scene.BrushAnimCount;
+        var snapshots = host.SceneCapacityCensus;
+        SnapshotSlots = snapshots.initializedSlots;
+        SnapshotIndexedBytes = snapshots.indexedBytes;
+        SnapshotTextStyleBytes = snapshots.textStyleBytes;
+        SnapshotCapacity = snapshots.totalCapacity;
+        SnapshotRequired = snapshots.highestRequired;
+        SnapshotReclaims = host.SceneCapacityReclaims;
+        SnapshotReclaimedIndexedBytes = host.ReclaimedSceneIndexedBytes;
 
         var strings = host.Strings;
         StringMap = strings.MapCount;
@@ -205,6 +218,8 @@ internal sealed class MemCensus
         Line(sb, "  proc    ", $"workingSet={Mb(workingSet)}", 25, 1);
         Line(sb, "  scene   ", $"live={s.SceneLive} cap={s.SceneCapacity} orphans={s.SceneOrphans} sticky={s.SceneSticky} scroll={s.SceneScrollState} brush={s.SceneBrushAnims}", 0, 6);
         Line(sb, "  strings ", $"map={s.StringMap} pendReclaim={s.StringPendingReclaim} idHighWater={s.StringIdHighWater}", 6, 3);
+        sb.Append(CultureInfo.InvariantCulture,
+            $"  snapshot slots={s.SnapshotSlots} indexedBytes={s.SnapshotIndexedBytes} textStyleBytes={s.SnapshotTextStyleBytes} capacity={s.SnapshotCapacity} required={s.SnapshotRequired} reclaims={s.SnapshotReclaims} reclaimedIndexedBytes={s.SnapshotReclaimedIndexedBytes}\n");
         Line(sb, "  images  ", $"count={s.ImageCount} ready={s.ImageReady} pending={s.ImagePending} used={Mb(s.ImageUsedBytes)}", 9, 4);
         Line(sb, "  decode  ", $"inflight={s.DecodeInflight} canceledPending={s.DecodeCanceledPending}", 13, 2);
         Line(sb, "  recon   ", $"components={s.Components} nodeBindings={s.NodeBindings} virtuals={s.VirtualBoundaries} providers={s.Providers}", 15, 4);

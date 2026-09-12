@@ -30,9 +30,12 @@ namespace FluentGpu.Controls;
 /// HorizontalRoot anatomy on the X axis (:672-693).
 /// Thumb POSITION is compositor-bound (a <c>TransformBind</c> on the position signal): scrolling moves the thumb the
 /// same frame with no re-render/relayout and never enters the FLIP pipeline — WinUI's instant Thumb layout. ONLY the
-/// conscious cross-axis 2px↔6px expand (and the 83ms chrome fades) animate, after the debounced begin times; that
-/// choreography is stepped by a mounted FrameClock ticker at the engine's 16ms-per-frame convention (the
-/// <c>UseAnimatedValue</c> precedent), so it is deterministic on the headless FixedFrameTimeSource host.
+/// conscious cross-axis 2px↔6px expand (and the 83ms chrome fades) animate, after the debounced begin times. The
+/// 400/500ms begin times are a host ONE-SHOT (<c>UseTimeout</c> on the HostTimerQueue), never a per-frame countdown:
+/// a dwell is a wall-clock WAIT in which nothing on screen changes, so it holds no <c>FrameClock.Tick</c>
+/// subscription and produces no frames — the loop just shortens its wait to the deadline. ONLY the 167ms/83ms tween
+/// (and a HELD track-press page repeat) is stepped by a mounted FrameClock ticker, at the engine's 16ms-per-frame
+/// convention (the <c>UseAnimatedValue</c> precedent), so it is deterministic on the headless host.
 /// The auto-hiding OVERLAY scrollbar on scroll viewports is engine-drawn (SceneRecorder.EmitScrollbar) with its
 /// timing in <c>Scroll.ScrollBarChrome</c> — this control is the standalone (always-visible) ScrollBar element.
 /// </summary>
@@ -110,8 +113,11 @@ public static partial class ScrollBar
 
 /// <summary>Component behind <see cref="ScrollBar.Create(float, FloatSignal, Action{float}, float, bool, TemplateParts, bool, float, float)"/> — owns the WinUI "conscious" state machine:
 /// lane-hover dwell 400ms → expand / lane-leave dwell 500ms → contract (the template storyboards' BeginTimes,
-/// modeled as a debounce so geometry never rides a delayed FLIP), then the 167ms KeySpline(0,0,0,1) cross-axis
-/// width 2↔6 + the 83ms linear chrome fades, stepped per frame by a mounted <see cref="FrameClock"/> ticker
+/// modeled as a debounce so geometry never rides a delayed FLIP) — each dwell is ONE host one-shot
+/// (<c>UseTimeout</c>, re-armed on the hover edges), NOT a per-frame countdown: while a dwell runs nothing on screen
+/// changes, so the component holds no frame-clock subscription and the loop idles to the deadline. The flip then
+/// plays the 167ms KeySpline(0,0,0,1) cross-axis width 2↔6 + the 83ms linear chrome fades, and ONLY that tween (plus
+/// a HELD track-press page repeat) is stepped per frame by a mounted <see cref="FrameClock"/> ticker
 /// (16ms-per-frame engine convention — the <c>UseAnimatedValue</c> precedent; deterministic headlessly). The eased
 /// values flow through SIGNALS into a cross-axis <c>Width/HeightBind</c> (scoped relayout) and bound <c>Opacity</c>s
 /// (track/arrow fades, compositor-only) — the component itself never re-renders per frame. Thumb position is a
@@ -139,15 +145,21 @@ internal sealed class ScrollBarAnatomy : Component
     // render) and the headless FixedFrameTimeSource step. Deterministic in the VerticalSlice harness.
     private const float TickStepMs = 16f;
 
-    // Conscious-state machine (instance fields persist for the component's lifetime; the ticker steps them).
+    // Conscious-state machine (instance fields persist for the component's lifetime; the hover edges and the dwell
+    // one-shot drive them, the ticker steps only the tween/page-repeat).
     private bool _laneHovered;
     private bool _expanded;
-    private float _dwellMs;                  // continuous time in the hover≠expanded mismatch (toward 400/500ms)
     private float _animMs = 10_000f;         // time since the last expanded flip (drives the 167ms width + 83ms fade)
     private float _flipFromW = ScrollBar.CollapsedThumb;   // eased width at the flip instant (interruption continuity)
     private float _flipFromFade;             // eased chrome opacity at the flip instant
-    private bool _exitedSinceTick;           // lane exit seen since the last ticker step (sub-part crossing coalescing)
-    private float _dwellAtExit;              // dwell snapshot for a same-frame strip↔arrow crossing
+    // The dwell is a DEADLINE on the host timer clock, not a per-frame accumulator: _dwellStartMs is when the current
+    // hover≠expanded mismatch began (carry-adjusted for a strip↔arrow crossing) and the one-shot is armed to
+    // _dwellStartMs + 400/500ms. Nothing is drawn while it runs, so it must not hold the frame loop awake.
+    private TimerHandle _dwell;              // the armed dwell one-shot (generation-guarded; default = no host yet)
+    private readonly Action _dwellFire;      // cached (one instance) so re-rendering never allocates a delegate
+    private double _dwellStartMs;            // host-clock ms the current mismatch dwell began
+    private double _exitAtMs = double.NegativeInfinity;   // host-clock ms of the last lane exit (crossing coalescing)
+    private double _dwellAtExit;             // dwell already banked at that exit — restored by a same-dispatch re-enter
     private bool _ticking;
     private Action<bool>? _setTicking;
     private Signal<float>? _widthSig;        // eased thumb cross-axis size (2 ↔ 6) → thumb Width/HeightBind
@@ -166,11 +178,17 @@ internal sealed class ScrollBarAnatomy : Component
     private float _thumbLen;                 // thumb main-axis length px
     private float _page;                     // resolved page amount in 0..1 position units
 
+    public ScrollBarAnatomy() => _dwellFire = OnDwellElapsed;
+
     public override Element Render()
     {
         var (ticking, setTicking) = UseState(false);
         var widthSig = UseSignal(ScrollBar.CollapsedThumb);
         var chromeSig = UseSignal(0f);
+        // The dwell one-shot. Mount-once (DepKey.Empty ⇒ never re-armed by a render) and armed at 0 so the mount fire
+        // lands on the first drain and finds no mismatch — a no-op. Every real arm is a RestartIn from a hover edge
+        // (ArmDwell), which is generation-guarded, so a superseded deadline can never flip the bar.
+        _dwell = UseTimeout(_dwellFire, 0f);
         _ticking = ticking;
         _setTicking = setTicking;
         _widthSig = widthSig;
@@ -358,12 +376,12 @@ internal sealed class ScrollBarAnatomy : Component
     }
 
     /// <summary>Step the conscious machine one frame (called by the mounted ticker): keep any in-flight 167ms/83ms
-    /// tracks playing, advance the 400/500ms dwell toward the debounced flip, write the eased values into the
-    /// width/chrome signals (binds — no component re-render), and run the held track-press page repeat; unmount the
-    /// ticker once everything settles.</summary>
+    /// tween playing, write the eased values into the width/chrome signals (binds — no component re-render), and run
+    /// the held track-press page repeat; unmount the ticker once everything settles. The 400/500ms DWELL is NOT here
+    /// — it is the <see cref="OnDwellElapsed"/> one-shot, because a wall-clock wait in which nothing moves must not
+    /// produce frames.</summary>
     internal void OnTick()
     {
-        _exitedSinceTick = false;
         bool busy = false;
 
         if (_animMs < ScrollBar.ExpandMs)           // 167ms width (and the shorter 83ms fade) still in flight
@@ -371,22 +389,6 @@ internal sealed class ScrollBarAnatomy : Component
             _animMs += TickStepMs;
             WriteEased();
             busy = true;
-        }
-
-        bool desired = _laneHovered;
-        if (desired != _expanded)
-        {
-            _dwellMs += TickStepMs;
-            float begin = desired ? ScrollBar.ExpandBeginMs : ScrollBar.ContractBeginMs;   // 400 / 500 (:188/:189)
-            if (_dwellMs >= begin)
-            {
-                _flipFromW = _widthSig?.Peek() ?? ScrollBar.CollapsedThumb;   // retarget from the LIVE eased values
-                _flipFromFade = _chromeSig?.Peek() ?? 0f;                     // (mid-flight continuity)
-                _expanded = desired;
-                _animMs = 0f;
-                WriteEased();                       // t = 0 holds the from values; the next ticks ease toward target
-            }
-            busy = true;                            // dwell pending (or just flipped) — keep ticking
         }
 
         if (_pageHeld)
@@ -420,6 +422,34 @@ internal sealed class ScrollBarAnatomy : Component
         if (!busy && _ticking) _setTicking?.Invoke(false);   // settled — unmount the ticker, the frame loop idles
     }
 
+    /// <summary>The host timer clock this component's dwell schedules on (ms). It advances only at a frame boundary,
+    /// which is what makes the same-dispatch strip↔arrow crossing test in <see cref="LaneHover"/> exact.</summary>
+    private double Now => _dwell.NowMs;
+
+    /// <summary>(Re)arm the dwell one-shot for whatever is left of the current 400/500ms begin time, or cancel it when
+    /// hover and expansion agree (nothing pending). Called on every lane-hover edge; <c>RestartIn</c> bumps the cell's
+    /// generation, so the previously armed deadline becomes a no-op rather than a second flip.</summary>
+    private void ArmDwell()
+    {
+        if (_laneHovered == _expanded) { _dwell.Cancel(); return; }
+        float begin = _laneHovered ? ScrollBar.ExpandBeginMs : ScrollBar.ContractBeginMs;   // 400 / 500 (:188/:189)
+        _dwell.RestartIn((float)Math.Max(0.0, _dwellStartMs + begin - Now));
+    }
+
+    /// <summary>The debounced flip (the storyboard BeginTime elapsed): retarget from the LIVE eased values for
+    /// mid-flight continuity, flip, and mount the ticker for the 167ms/83ms tween — the only per-frame work the
+    /// conscious machine ever does.</summary>
+    private void OnDwellElapsed()
+    {
+        if (_laneHovered == _expanded) return;   // the mismatch resolved before the deadline — nothing to flip
+        _flipFromW = _widthSig?.Peek() ?? ScrollBar.CollapsedThumb;   // retarget from the LIVE eased values
+        _flipFromFade = _chromeSig?.Peek() ?? 0f;                     // (mid-flight continuity)
+        _expanded = _laneHovered;
+        _animMs = 0f;
+        WriteEased();                            // t = 0 holds the from values; the ticker eases toward target
+        if (!_ticking) _setTicking?.Invoke(true);
+    }
+
     /// <summary>Write the eased width/chrome values for the current <c>_animMs</c> into the bind signals
     /// (equality-gated: settled values are no-op writes).</summary>
     private void WriteEased()
@@ -442,12 +472,15 @@ internal sealed class ScrollBarAnatomy : Component
         }
         if (!_laneHovered)
         {
+            double now = Now;
             _laneHovered = true;
-            // A strip↔arrow crossing fires exit+enter inside ONE dispatch (before any ticker step): restore the
-            // dwell so moving along the lane never resets the 400ms expand begin (WinUI treats the bar as one lane).
-            _dwellMs = _exitedSinceTick ? _dwellAtExit : 0f;
+            // A strip↔arrow crossing fires exit+enter inside ONE dispatch: restore the banked dwell so moving along
+            // the lane never resets the 400ms expand begin (WinUI treats the bar as one lane). The host timer clock
+            // only advances at a frame boundary, so "same dispatch" IS "the clock has not moved since the exit" —
+            // the exact successor to the old per-tick _exitedSinceTick flag, with no ticker to clear it.
+            _dwellStartMs = now == _exitAtMs ? now - _dwellAtExit : now;
+            ArmDwell();                      // a dwell is pending → arm the one-shot (no frame-clock subscription)
         }
-        if (_laneHovered != _expanded && !_ticking) _setTicking?.Invoke(true);   // a dwell is pending → start stepping
     }
 
     private void LaneLeave()
@@ -464,11 +497,12 @@ internal sealed class ScrollBarAnatomy : Component
             _exitWhileDragging = true;
             return;
         }
+        double now = Now;
         _laneHovered = false;
-        _exitedSinceTick = true;
-        _dwellAtExit = _dwellMs;
-        _dwellMs = 0f;
-        if (_laneHovered != _expanded && !_ticking) _setTicking?.Invoke(true);   // a dwell is pending → start stepping
+        _exitAtMs = now;
+        _dwellAtExit = now - _dwellStartMs;   // bank the expand dwell in case this is a strip↔arrow crossing
+        _dwellStartMs = now;                  // the 500ms contract begin starts here
+        ArmDwell();                           // a dwell is pending → arm the one-shot (no frame-clock subscription)
     }
 
     // Width 2 ↔ 6 over ScrollBarExpandDuration/ContractDuration 167ms, KeySpline 0,0,0,1 (:173/:176/:587/:543).
@@ -555,9 +589,15 @@ internal sealed class ScrollBarAnatomy : Component
     }
 }
 
-/// <summary>Per-frame stepper for the conscious scrollbar (the DebounceTicker idiom): mounted only while a dwell or
-/// the 167ms/83ms tracks are live; subscribes to the host frame clock so <see cref="ScrollBarAnatomy.OnTick"/> runs
-/// every frame, and is unmounted by the owner when everything settles (the frame loop idles again).</summary>
+/// <summary>Per-frame stepper for the conscious scrollbar: subscribes to the host frame clock so
+/// <see cref="ScrollBarAnatomy.OnTick"/> runs every frame, and is unmounted by the owner when everything settles
+/// (the frame loop idles again).
+/// <para>It is mounted ONLY while something genuinely MOVES: the 167ms width tween / 83ms chrome fade after a flip,
+/// or a held track-press page repeat. It is explicitly NOT mounted for the 400/500ms expand/contract DWELL — a dwell
+/// is a wall-clock wait in which no pixel changes, so it rides a <c>UseTimeout</c> one-shot on the host timer queue
+/// (<c>ScrollBarAnatomy.OnDwellElapsed</c>) and costs zero frames. Before that split, every scroll that
+/// brushed the lane left this ticker as the sole live <c>FrameClock.Tick</c> subscriber for the whole dwell — the
+/// measured <c>[wake] sole: frameClockPoller=244</c>, 244 frames produced to count down a timer.</para></summary>
 internal sealed class ScrollBarConsciousTicker : Component
 {
     public required ScrollBarAnatomy Owner;

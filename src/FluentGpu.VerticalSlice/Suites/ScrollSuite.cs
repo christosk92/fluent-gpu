@@ -6494,6 +6494,14 @@ static class ScrollSuite
     static void D4ScrollBarChecks(StringTable strings)
     {
         // ── ScrollBar.Anatomy: reserved arrow cells, instant signal-bound position, debounced 167ms expand ──
+        //
+        // The 400/500ms conscious DWELLS are host ONE-SHOTS (UseTimeout on the HostTimerQueue), not a per-frame
+        // countdown, so this block drives them the way the engine's other timer gates do: clock.Advance(ms) then
+        // host.Paint(0). That is not a shortcut — a pending-but-not-due timer sets NO wake bit (the whole point: the
+        // loop idles to the deadline), so RunFrame takes its idle early-out BEFORE Paint, and Paint is both the only
+        // place the headless frame clock advances and the only HostTimerQueue.Drain site. Paint ALSO steps the
+        // conscious ticker at its fixed 16ms convention — and the ticker exists ONLY while the 167ms/83ms tween or a
+        // held page repeat is live — so "advance the clock" (Jump) and "pump the tween" (Pump) are separate moves.
         {
             using var app = new HeadlessPlatformApp();
             var window = new HeadlessWindow(new WindowDesc("cp4-sb", new Size2(320, 280), 1f));
@@ -6509,8 +6517,15 @@ static class ScrollSuite
                     Children = [ScrollBar.Create(0.25f, pos, p => pos.Value = p, 200f)],
                 },
             };
-            using var host = new AppHost(app, window, device, fonts, strings, root);
+            var clock = new ManualFrameTimeSource();
+            using var host = new AppHost(app, window, device, fonts, strings, root, frameTime: clock);
             host.RunFrame();
+            for (int i = 0; i < 6 && host.HasActiveWork; i++) host.RunFrame();   // settle the mount (incl. the 0ms arm)
+
+            void Pump(int n) { for (int i = 0; i < n; i++) host.Paint(0); }      // step the tween; the clock stays put
+            void Jump(float ms) { clock.Advance(ms); host.Paint(0); }            // move the host timer clock + drain
+            var pollerSb = new System.Text.StringBuilder();
+            string Pollers() { pollerSb.Clear(); host.DescribeFrameClockPollers(pollerSb); return pollerSb.ToString().Trim(); }
 
             var bar = FindRole(host.Scene, host.Scene.Root, AutomationRole.ScrollBar);
             var column = Child(host.Scene, bar, 2);                 // root ZStack = [track, strip, column(, ticker)]
@@ -6536,8 +6551,25 @@ static class ScrollSuite
             window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(barR.X + 6f, barR.Y + 100f), 0, 0));
             host.RunFrame();
             bool noInstantExpand = Near(host.Scene.AbsoluteRect(thumb).W, 2f);
-            // …then ~45 frames ≈ 720ms of engine time: past the 400ms begin + the 167ms KeySpline(0,0,0,1) width tween.
-            for (int i = 0; i < 45; i++) host.RunFrame();
+
+            // ── gate.scroll.sb-dwell-quiet (leg 1: the EXPAND dwell) ───────────────────────────────────────────────
+            // 10 pumped frames inside the 400ms dwell: nothing on screen changes, so nothing may re-render and NOTHING
+            // may hold a FrameClock.Tick subscription. This is the regression the one-shot exists for — the measured
+            // `[wake] frameClockPoller=500 | sole: frameClockPoller=244` was this component counting down a timer.
+            int dwellRenders = 0;
+            for (int i = 0; i < 10; i++) { clock.Advance(20f); dwellRenders += host.Paint(0).ComponentsRendered; }
+            int dwellPollers = host.FrameClockPollerCount;
+            string dwellPollerLine = Pollers();
+            bool expandDwellQuiet = dwellRenders == 0 && dwellPollers == 0
+                && !dwellPollerLine.Contains("ScrollBar", StringComparison.Ordinal)
+                && Near(host.Scene.AbsoluteRect(thumb).W, 2f);   // 200ms in: still collapsed, still waiting
+
+            // …the deadline itself: 90% of the 400ms begin is still collapsed (200ms already spent above).
+            Jump(159f);
+            bool notAt90Pct = Near(host.Scene.AbsoluteRect(thumb).W, 2f);
+            Jump(45f);                                          // 404ms — the one-shot pops, the tween mounts
+            int flipPollers = host.FrameClockPollerCount;       // the ticker is live ONLY now, for the 167ms tween
+            Pump(14);                                           // 14 × 16ms = 224ms > 167ms
             var t2 = host.Scene.AbsoluteRect(thumb);
             Check("cp4.3 — lane dwell 400ms then 167ms expand: thumb 2px→6px, right edge stays anchored (inset 3)",
                 noInstantExpand && Near(t2.W, 6f) && Near(t2.Right, barR.Right - 3f),
@@ -6549,15 +6581,109 @@ static class ScrollSuite
                 Near(host.Scene.Paint(arrowUp).Opacity, 1f, 0.02f),
                 $"opacity={host.Scene.Paint(arrowUp).Opacity:0.00}");
 
+            // The tween has settled → the ticker unmounted itself, so the REVEALED-and-settled bar is as quiet as the
+            // dwell was. (The old per-frame stepper could not distinguish the two: it polled through both.)
+            int settledRenders = 0;
+            for (int i = 0; i < 10; i++) settledRenders += host.Paint(0).ComponentsRendered;
+            bool settledQuiet = settledRenders == 0 && host.FrameClockPollerCount == 0;
+
             // Leave the bar: the contract begins after 500ms and plays 167ms; the chrome fades back out.
             window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(barR.Right + 80f, barR.Y + 100f), 0, 0));
             host.RunFrame();
-            for (int i = 0; i < 55; i++) host.RunFrame();
+
+            // ── gate.scroll.sb-dwell-quiet (leg 2: the CONTRACT dwell, after the reveal fade completed) ────────────
+            int hideRenders = 0;
+            for (int i = 0; i < 10; i++) { clock.Advance(20f); hideRenders += host.Paint(0).ComponentsRendered; }
+            int hidePollers = host.FrameClockPollerCount;
+            string hidePollerLine = Pollers();
+            bool contractDwellQuiet = hideRenders == 0 && hidePollers == 0
+                && !hidePollerLine.Contains("ScrollBar", StringComparison.Ordinal)
+                && Near(host.Scene.AbsoluteRect(thumb).W, 6f);   // 200ms in: still expanded, still waiting
+
+            Check("gate.scroll.sb-dwell-quiet the conscious 400/500ms dwells produce NO frames: across 10 pumped frames inside the expand dwell, inside the contract dwell, and on a revealed+settled bar, ComponentsRendered is 0 and FrameClockPollerCount is 0 (no ScrollBar poller is named in the [wake] census) — a wall-clock wait rides the host one-shot, never FrameClock.Tick",
+                expandDwellQuiet && settledQuiet && contractDwellQuiet,
+                $"expandDwell renders={dwellRenders} pollers={dwellPollers} line=\"{dwellPollerLine}\"; "
+                + $"settled renders={settledRenders} pollers={host.FrameClockPollerCount}; "
+                + $"contractDwell renders={hideRenders} pollers={hidePollers} line=\"{hidePollerLine}\"");
+
+            // …the 500ms contract deadline: 90% of it is still expanded (200ms already spent above).
+            Jump(249f);
+            bool hideNotAt90Pct = Near(host.Scene.AbsoluteRect(thumb).W, 6f);
+            Jump(55f);                                          // 504ms — the one-shot pops
+            Pump(14);
             var t3 = host.Scene.AbsoluteRect(thumb);
             Check("cp4.6 — leave contracts to 2px after the 500ms begin; chrome fades out",
                 Near(t3.W, 2f) && Near(host.Scene.Paint(arrowUp).Opacity, 0f, 0.02f),
                 $"w={t3.W:0.#} opacity={host.Scene.Paint(arrowUp).Opacity:0.00}");
+            Check("gate.scroll.sb-dwell-deadline the dwell fires ON the host clock and not a frame earlier: at 90% of the 400ms expand begin the thumb is still 2px and at 90% of the 500ms contract begin it is still 6px; the frame the one-shot pops is the FIRST frame a FrameClock.Tick poller exists (exactly one — the 167ms tween stepper)",
+                notAt90Pct && hideNotAt90Pct && flipPollers == 1,
+                $"expand@90%={notAt90Pct} contract@90%={hideNotAt90Pct} pollersAtFlip={flipPollers}");
             Check("cp4.7 — conscious ticker unmounts: the frame loop idles once settled", !host.HasActiveWork);
+        }
+
+        // ── The dwell one-shot's RE-ARM edges: a lane re-entry restarts the full begin time, and a re-hover mid-fade
+        //    re-reveals FROM the live eased width (interruption continuity) rather than snapping back. ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("cp4-sb-rearm", new Size2(320, 280), 1f));
+            window.Show();
+            var pos = new FloatSignal(0f);
+            var root = new W0fStaticProbe
+            {
+                Build = () => new BoxEl
+                {
+                    Direction = 0, AlignItems = FlexAlign.Start, Padding = Edges4.All(20f),
+                    Children = [ScrollBar.Create(0.25f, pos, p => pos.Value = p, 200f)],
+                },
+            };
+            var clock = new ManualFrameTimeSource();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, root, frameTime: clock);
+            host.RunFrame();
+            for (int i = 0; i < 6 && host.HasActiveWork; i++) host.RunFrame();
+
+            var bar = FindRole(host.Scene, host.Scene.Root, AutomationRole.ScrollBar);
+            var column = Child(host.Scene, bar, 2);
+            var thumb = Child(host.Scene, column, 1);
+            var barR = host.Scene.AbsoluteRect(bar);
+            float W() => host.Scene.AbsoluteRect(thumb).W;
+            void Pump(int n) { for (int i = 0; i < n; i++) host.Paint(0); }
+            void Jump(float ms) { clock.Advance(ms); host.Paint(0); }
+            void Enter() { window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(barR.X + 6f, barR.Y + 100f), 0, 0)); host.RunFrame(); }
+            void Exit() { window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(barR.Right + 80f, barR.Y + 100f), 0, 0)); host.RunFrame(); }
+
+            // (c) Re-entering the lane RESTARTS the expand dwell — the banked time is only carried across a
+            // same-dispatch strip↔arrow crossing (where the host clock has not moved), never across a real frame.
+            Enter();
+            Jump(300f);                       // 300ms of the 400ms expand dwell banked
+            Exit();                           // collapsed already ⇒ nothing pending ⇒ the one-shot is cancelled
+            Jump(10f);
+            Enter();                          // a FRESH 400ms begins here
+            Jump(300f);                       // 610ms since the first enter, 300ms since the re-enter
+            bool notFlippedOnOldClock = Near(W(), 2f);
+            Jump(110f);                       // 410ms since the re-enter → the one-shot pops
+            Pump(14);
+            bool flippedOnNewClock = Near(W(), 6f);
+            Check("gate.scroll.sb-dwell-rearm leaving and re-entering the lane restarts the FULL 400ms expand begin on the host one-shot (610ms of wall time since the first enter does not expand; 410ms since the re-entry does)",
+                notFlippedOnOldClock && flippedOnNewClock,
+                $"atOldDeadline={W():0.##} flipped={flippedOnNewClock}");
+
+            // (d) Re-hover DURING the contract fade re-reveals: the 400ms dwell re-arms, and the flip retargets from
+            // the LIVE eased width, so the bar never snaps back to 2px on its way out and back.
+            Exit();
+            Jump(505f);                       // the contract one-shot pops → the 167ms fade-out starts
+            Pump(2);                          // ~48ms into the 167ms contract tween — mid-flight, not settled
+            float midFade = W();
+            bool midFadeIsMidFlight = midFade > 2.05f && midFade < 5.95f;
+            Enter();                          // re-reveal mid-fade
+            Jump(405f);                       // the re-armed 400ms expand begin pops
+            float atReveal = W();
+            bool noSnapBack = atReveal > 2.05f;   // retargeted from the live value, not from the collapsed 2px
+            Pump(14);
+            bool backToExpanded = Near(W(), 6f);
+            Check("gate.scroll.sb-reveal-mid-fade a lane re-entry during the 167ms contract fade re-arms the expand one-shot and the flip retargets from the LIVE eased width — the bar re-reveals to 6px without ever snapping back to the collapsed 2px",
+                midFadeIsMidFlight && noSnapBack && backToExpanded,
+                $"midFade={midFade:0.##} atReveal={atReveal:0.##} final={W():0.##}");
+            Check("gate.scroll.sb-rearm-idle the re-arm sequence leaves the loop idle: no ticker, no armed dwell", !host.HasActiveWork);
         }
 
         // ── AnnotatedScrollBar: 44px right-rail template geometry + jump/step interactions ──

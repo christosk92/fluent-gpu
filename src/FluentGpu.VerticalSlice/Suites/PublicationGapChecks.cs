@@ -61,6 +61,7 @@ static class PublicationGapChecks
     public static void Run()
     {
         ThreadGuard.BindCurrent(ThreadGuard.ThreadRole.Ui);
+        ElidedSubmissionContinuity();
 
         var scene = new SceneStore();
         scene.DeviceScale = 1f;
@@ -158,5 +159,28 @@ static class PublicationGapChecks
             allocated == 0, $"{allocated} bytes over 64 skipped publications");
 
         publisher.ReleaseSceneResources();
+    }
+
+    private static void ElidedSubmissionContinuity()
+    {
+        var continuity = new RenderSubmissionContinuity();
+        continuity.Submitted(10);
+        // Adopt 11 and 12, both the exact presented pixels: the publisher advances LastConsumedSeq, while the GPU
+        // correctly stays on submission 10. Publication 13 need only carry from 13 on the producer's time line.
+        continuity.Elided(11);
+        continuity.Elided(12);
+        ulong bridged = continuity.ExtendCarry(13);
+        bool connected = bridged == 11 && bridged <= 10UL + 1;
+        bool preservesEarlier = continuity.ExtendCarry(8) == 8;
+        bool unknownRejected = continuity.ExtendCarry(0) == 0;
+        bool uncoveredRejected = continuity.ExtendCarry(15) == 15;
+        continuity.Submitted(13);
+        bool consumedProof = continuity.ExtendCarry(15) == 15;
+        continuity = default; // target invalidation/recovery
+        continuity.Elided(14);
+        bool requiresSubmittedBase = continuity.ExtendCarry(15) == 15;
+        Check("gate.repaint.elided-submission-continuity proven unchanged adopted publications bridge GPU sequence gaps without accepting an uncovered gap or unknown baseline",
+            connected && preservesEarlier && unknownRejected && uncoveredRejected && consumedProof && requiresSubmittedBase,
+            $"bridged={bridged} earlier={preservesEarlier} unknown={unknownRejected} uncovered={uncoveredRejected} reset={requiresSubmittedBase}");
     }
 }

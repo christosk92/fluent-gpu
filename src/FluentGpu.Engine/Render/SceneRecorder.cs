@@ -3,6 +3,7 @@ using System.Threading;
 using FluentGpu.Foundation;
 using FluentGpu.Rhi;
 using FluentGpu.Scene;
+using FluentGpu.Text;
 
 namespace FluentGpu.Render;
 
@@ -432,6 +433,29 @@ internal sealed class SceneRecordingContext
         if (extent.W <= 0f || extent.H <= 0f) return default;
         float pad = RepaintAaPadDip + extraHalo;
         return new RectF(extent.X - pad, extent.Y - pad, extent.W + 2f * pad, extent.H + 2f * pad);
+    }
+
+    /// <summary>Sum, in DIP, of the blur reach of every ANCESTOR of <paramref name="node"/> that carries a self-blur
+    /// (§2b). A dirty node's band covers its own pixels — and its OWN self-blur halo, which is already folded into its
+    /// span extent as <c>visualBounds</c> — but NOT what those pixels become once an ENCLOSING blur spreads them:
+    /// changing one glyph inside a blurred surface changes the blurred output over that glyph ⊕ ~3σ, so repainting only
+    /// the glyph's band leaves a stale ring around it. Harmless while a blurred frame was vetoed to a full redraw;
+    /// load-bearing now that such a frame may be replayed under a clamp.
+    /// <para>The same rule WebRender applies by mapping a dirty primitive's rect through every blur surface between it
+    /// and the tile cache. Additive over nesting; σ = 0 contributes nothing — which is every node in a UI that is not
+    /// inside a blurred surface — so this is O(depth) and returns 0 outright for almost every node. TapRadius is
+    /// PHYSICAL px and a repaint band is DIP, so the sum converts on the way out.</para></summary>
+    private static float EnclosingBlurHaloDip(SceneRecordingSnapshot scene, NodeHandle node)
+    {
+        int haloPx = 0;
+        for (NodeHandle a = scene.Parent(node); !a.IsNull; a = scene.Parent(a))
+        {
+            float sigma = scene.Paint(a).BlurSigma;
+            if (sigma > 0.01f) haloPx += SelfBlurRegion.TapRadius(sigma);
+        }
+        if (haloPx == 0) return 0f;
+        float s = scene.DeviceScale > 0f ? scene.DeviceScale : 1f;
+        return haloPx / s;
     }
 
     private void ResetDamageEntries()
@@ -2034,15 +2058,15 @@ internal sealed class SceneRecordingContext
             }
             case VisualKind.Text:
             {
-                ref readonly var li = ref scene.Layout(node);
+                TextStyle style = scene.RecordingTextStyle(node);
                 ColorF textColor = ResolveTextColor(scene, node, flags, in p, in inherited, nodeInteractive, hasLocalProgress, localHoverT, localPressT);
                 // Auto-fit: the measure pass may have shrunk the font (TextEl.MinSize) and recorded the chosen size on
                 // the cache. Shape at it so the glyphs match the box the layout sized. 0 ⇒ no fit (authored size).
                 // P4: the measure cache is a 2-ENTRY RING (Scene/Columns.cs) — resolve the entry whose measure width
                 // matches the box this run is being drawn in, falling back to the most recently used entry (which is
                 // what the pre-ring single slot's "whichever was written last" read always resolved to).
-                TextMeasureEntry mc = scene.MeasureCacheRef(node).ResolveForWidth(b.W);
-                float effSize = mc.Valid && mc.FitSize > 0f ? mc.FitSize : li.TextStyle.SizeDip;
+                TextMeasureEntry mc = scene.ResolveMeasureForWidth(node, b.W);
+                float effSize = mc.Valid && mc.FitSize > 0f ? mc.FitSize : style.SizeDip;
 
                 // Text-edit decorations (editor TEXT nodes only — sparse side-table, recorder READS only).
                 // WinUI-exact emit order: selection highlight UNDER the glyphs → base glyph run → per-rect clipped
@@ -2061,7 +2085,7 @@ internal sealed class SceneRecordingContext
 
                 // (b) the base glyph run. A span run (TextStyle.SpanRunId, rtb-01) rides the SAME op — the renderer
                 // overlays the per-range styles from SpanRunTable.Shared and tints per-span colors over textColor.
-                int spanRunId = li.TextStyle.SpanRunId;
+                int spanRunId = style.SpanRunId;
                 // A run is only painted into a box that HAS area. A glyph run does not clip to its own bounds, so a
                 // text node layout has sized to 0×0 (a collapsed slot, a zero-width column) would otherwise still draw
                 // its glyphs past the empty box. Text has no visible extent without a box: nothing to paint.
@@ -2072,14 +2096,14 @@ internal sealed class SceneRecordingContext
                     // CRISP at its 1/N device row rather than unsnapped, so there is nothing for the host's settle frame
                     // to re-snap. The counter stays (it is a public record stat) and now reports the truth: zero.
                     if (scene.TryGetGlyphWipe(node, out var wipe))   // glyph wipe (lyrics karaoke): per-glyph color + lift from the split
-                        dl.DrawGlyphRunGradient(local, p.Text, li.TextStyle.FontFamily, effSize, li.TextStyle.Weight,
-                            (int)li.TextStyle.Wrap, (int)li.TextStyle.Trim, li.TextStyle.MaxLines,
-                            li.TextStyle.CharSpacing, li.TextStyle.LineHeight, (int)li.TextStyle.Stacking, (int)li.TextStyle.LineBounds,
+                        dl.DrawGlyphRunGradient(local, p.Text, style.FontFamily, effSize, style.Weight,
+                            (int)style.Wrap, (int)style.Trim, style.MaxLines,
+                            style.CharSpacing, style.LineHeight, (int)style.Stacking, (int)style.LineBounds,
                             world, opacity, wipe.Before, wipe.After, wipe.Split, wipe.Softness, wipe.Lift, key, spanRunId, inherited.MotionSoft);
                     else
-                        dl.DrawGlyphRun(local, textColor, p.Text, li.TextStyle.FontFamily, effSize, li.TextStyle.Weight,
-                            (int)li.TextStyle.Wrap, (int)li.TextStyle.Trim, li.TextStyle.MaxLines,
-                            li.TextStyle.CharSpacing, li.TextStyle.LineHeight, (int)li.TextStyle.Stacking, (int)li.TextStyle.LineBounds,
+                        dl.DrawGlyphRun(local, textColor, p.Text, style.FontFamily, effSize, style.Weight,
+                            (int)style.Wrap, (int)style.Trim, style.MaxLines,
+                            style.CharSpacing, style.LineHeight, (int)style.Stacking, (int)style.LineBounds,
                             world, opacity, key, spanRunId, motionSoft: inherited.MotionSoft);
                 }
 
@@ -2136,9 +2160,9 @@ internal sealed class SceneRecordingContext
                         dl.PushClip(selDevice, key | 0x1);
                         // forceColor: selected glyphs repaint UNIFORMLY in the on-accent color — span colors must not
                         // bleed through the selection (WinUI's selected-text recolor).
-                        dl.DrawGlyphRun(local, textEdit.SelectedText, p.Text, li.TextStyle.FontFamily, effSize, li.TextStyle.Weight,
-                            (int)li.TextStyle.Wrap, (int)li.TextStyle.Trim, li.TextStyle.MaxLines,
-                            li.TextStyle.CharSpacing, li.TextStyle.LineHeight, (int)li.TextStyle.Stacking, (int)li.TextStyle.LineBounds,
+                        dl.DrawGlyphRun(local, textEdit.SelectedText, p.Text, style.FontFamily, effSize, style.Weight,
+                            (int)style.Wrap, (int)style.Trim, style.MaxLines,
+                            style.CharSpacing, style.LineHeight, (int)style.Stacking, (int)style.LineBounds,
                             world, opacity, key | 0x1, spanRunId, forceColor: true, motionSoft: inherited.MotionSoft);
                         dl.PopClip(key | 0x1);
                     }
@@ -2680,15 +2704,19 @@ internal sealed class SceneRecordingContext
             if (movedNode || contentDirtyNode)
             {
                 var repaintParent = scene.Parent(node);
+                // §2b: every band this node emits grows by the reach of any BLURRED ancestor, because that is how far
+                // this node's changed pixels travel once the enclosing blur spreads them. Computed once for all the
+                // arms below; 0 for any node not inside a blurred surface, which is nearly all of them.
+                float blurHalo = EnclosingBlurHaloDip(scene, node);
                 if (movedNode && !repaintParent.IsNull && (scene.Flags(repaintParent) & NodeFlags.Scrollable) != 0)
                 {
                     // A scrolled viewport's content node: the changed pixels are the VIEWPORT, not the content's (far
                     // taller) box. The acrylic Damage above deliberately skips this; the repaint set must not.
-                    stats.AddRepaint(RepaintBand(scene.AbsoluteRect(repaintParent)));
+                    stats.AddRepaint(RepaintBand(scene.AbsoluteRect(repaintParent), blurHalo));
                 }
                 else
                 {
-                    stats.AddRepaint(RepaintBand(result.SubtreeBounds));
+                    stats.AddRepaint(RepaintBand(result.SubtreeBounds, blurHalo));
                     // old ∪ new: the band the node VACATED repaints too. A brand-new node never presented, so its
                     // current extent is the whole truth; a CARRIED-OVER extent (not refreshed last frame, because an
                     // ancestor reused its span) is padded conservatively, since an ancestor's translated copy could have
@@ -2706,12 +2734,12 @@ internal sealed class SceneRecordingContext
                         // over-inclusion at best, and re-tightening the `fresh` rule regresses the very frames this
                         // campaign exists for (gate.damage.record-moved-node-old-union-new).
                         if (fresh || !movedNode || !AncestorTranslatedSince(scene, spans, node))
-                            stats.AddRepaint(RepaintBand(in priorExtent, fresh ? 0f : RepaintUnknownHaloDip));
+                            stats.AddRepaint(RepaintBand(in priorExtent, (fresh ? 0f : RepaintUnknownHaloDip) + blurHalo));
                         else if (TryFreshAncestorExtent(scene, spans, node, spanFrame, out RectF ancestorExtent))
                             // The nearest ancestor with a FRESH span is a proven superset of this node's true
                             // last-presented extent: the very translated copy that moved it also refreshed that ancestor's
                             // stored SubtreeBounds. O(depth) on a rare path, over-inclusive, never a surrendered frame.
-                            stats.AddRepaint(RepaintBand(in ancestorExtent));
+                            stats.AddRepaint(RepaintBand(in ancestorExtent, blurHalo));
                         else
                             // Nothing on the chain can place the vacated band. One named full frame beats a ghost.
                             stats.Repaint.ForceFull(RepaintFullReason.MissingPriorExtent);

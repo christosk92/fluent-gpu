@@ -95,6 +95,20 @@ static class Program
     [STAThread]
     static void Main(string[] args)
     {
+        if (Array.IndexOf(args, "--driver-memory-floor") >= 0)
+        {
+            Environment.Exit(DriverMemoryFloorProbe.Run(args));
+            return;
+        }
+        if (Array.IndexOf(args, "--flip-idle-probe") >= 0
+            || Array.IndexOf(args, "--flip-idle-probe-backstop") >= 0
+            || Array.IndexOf(args, "--flip-idle-probe-stress") >= 0)
+        {
+            Environment.Exit(FlipIdleProbe.Run(
+                backstop: Array.IndexOf(args, "--flip-idle-probe-backstop") >= 0,
+                stress: Array.IndexOf(args, "--flip-idle-probe-stress") >= 0));
+            return;
+        }
         // ── FluentGpu.WindowsApi validation harness (runs BEFORE the window/GPU stack spins up). ──────────────────────
         // The spawned single-instance child mode MUST be first: it is a second process that should never touch the
         // window path — it acquires the gate, forwards its activation payload via WM_COPYDATA, and exits with a code the
@@ -286,6 +300,33 @@ static class Program
         {
             string? dspOut = dsp + 1 < args.Length && !args[dsp + 1].StartsWith("--") ? args[dsp + 1] : null;
             Environment.Exit(DialogScrollProbe.Run(dspOut));
+            return;
+        }
+
+        int smallImagePool = Array.IndexOf(args, "--small-image-pool");
+        if (smallImagePool >= 0)
+        {
+            string? output = smallImagePool + 1 < args.Length && !args[smallImagePool + 1].StartsWith("--")
+                ? args[smallImagePool + 1] : null;
+            Environment.Exit(SmallTexturePlacementProbe.Run(output, productionPool: true));
+            return;
+        }
+
+        int smallTextures = Array.IndexOf(args, "--small-texture-placement");
+        if (smallTextures >= 0)
+        {
+            string? output = smallTextures + 1 < args.Length && !args[smallTextures + 1].StartsWith("--")
+                ? args[smallTextures + 1] : null;
+            Environment.Exit(SmallTexturePlacementProbe.Run(output));
+            return;
+        }
+
+        int glyphCapacity = Array.IndexOf(args, "--glyph-capacity");
+        if (glyphCapacity >= 0)
+        {
+            string? output = glyphCapacity + 1 < args.Length && !args[glyphCapacity + 1].StartsWith("--")
+                ? args[glyphCapacity + 1] : null;
+            Environment.Exit(GlyphCapacityProbe.Run(output));
             return;
         }
 

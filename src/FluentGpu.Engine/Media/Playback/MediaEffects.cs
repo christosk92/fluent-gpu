@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using FluentGpu.Signals;
 
 namespace FluentGpu.Media;
@@ -88,12 +89,82 @@ public interface IAudioEffects
     Signal<bool> PreservePitchOnRate { get; }
     /// <summary>The published visualizer frame.</summary>
     IReadSignal<VisualizerFrame> Visualizer { get; }
+    /// <summary>Keep level analysis active while a visible consumer needs it. Dispose when hidden or inactive.</summary>
+    IDisposable AcquireVisualizer();
 }
 
 /// <summary>The live effects surface backing the PCM audio player (spec §7.10). In M0 these are the signal-plane values
 /// (topology vs param split); the DSP graph that consumes them lands in M2/M3.</summary>
 public sealed class AudioEffects : IAudioEffects
 {
+    private readonly object _visualizerGate = new(); // never acquired on the audio render thread
+    private int _visualizerConsumers;
+    private long _nextVisualizerEpoch, _visualizerEpoch, _visualizerSource;
+    private readonly IReadSignal<VisualizerFrame> _visualizerView;
+    /// <summary>Create an effects surface with no level-analysis demand.</summary>
+    public AudioEffects() => _visualizerView = new VisualizerView(this);
+
+    /// <inheritdoc/>
+    public IDisposable AcquireVisualizer()
+    {
+        lock (_visualizerGate)
+        {
+            if (_visualizerConsumers++ == 0)
+            {
+                _visualizer.Value = VisualizerFrame.Silence;
+                Volatile.Write(ref _visualizerEpoch, ++_nextVisualizerEpoch);
+            }
+        }
+        return new VisualizerLease(this);
+    }
+
+    private void ReleaseVisualizer()
+    {
+        lock (_visualizerGate)
+        {
+            if (--_visualizerConsumers != 0) return;
+            Volatile.Write(ref _visualizerEpoch, 0);
+            _visualizer.Value = VisualizerFrame.Silence;
+        }
+    }
+
+    internal long BindVisualizerSource()
+    {
+        lock (_visualizerGate)
+        {
+            long source = ++_visualizerSource;
+            _visualizer.Value = VisualizerFrame.Silence;
+            Volatile.Write(ref _visualizerEpoch, _visualizerConsumers == 0 ? 0 : ++_nextVisualizerEpoch);
+            return source;
+        }
+    }
+
+    internal long VisualizerDemand(long source)
+        => source == Volatile.Read(ref _visualizerSource) ? Volatile.Read(ref _visualizerEpoch) : 0;
+
+    internal bool PublishVisualizerFrame(long source, long epoch, float rms, float peak)
+    {
+        lock (_visualizerGate)
+        {
+            if (epoch == 0 || epoch != _visualizerEpoch || source != _visualizerSource) return false;
+            _visualizer.Value = new VisualizerFrame(ReadOnlyMemory<float>.Empty, rms, peak);
+            return true;
+        }
+    }
+
+    private sealed class VisualizerLease(AudioEffects owner) : IDisposable
+    {
+        private AudioEffects? _owner = owner;
+        public void Dispose() => Interlocked.Exchange(ref _owner, null)?.ReleaseVisualizer();
+    }
+
+    // Signal<T> itself is UI-owned. Serialize this explicitly cross-thread tap's reads and non-RT writes,
+    // so the two floats (and reserved spectrum field) cannot tear when the UI pulls a control publication.
+    private sealed class VisualizerView(AudioEffects owner) : IReadSignal<VisualizerFrame>
+    {
+        public VisualizerFrame Value { get { lock (owner._visualizerGate) return owner._visualizer.Value; } }
+        public VisualizerFrame Peek() { lock (owner._visualizerGate) return owner._visualizer.Peek(); }
+    }
     /// <inheritdoc/>
     public Equalizer Equalizer { get; } = new();
     /// <inheritdoc/>
@@ -110,17 +181,17 @@ public sealed class AudioEffects : IAudioEffects
     public Signal<bool> PreservePitchOnRate { get; } = new(true);
     private readonly Signal<VisualizerFrame> _visualizer = new(VisualizerFrame.Silence);
     /// <inheritdoc/>
-    public IReadSignal<VisualizerFrame> Visualizer => _visualizer;
-
-    /// <summary>Publish a fresh visualizer frame (spec §7.8) — the non-RT tap tick calls this off the block path. The
-    /// backend session is the sole writer; the UI binds <see cref="Visualizer"/> read-only.</summary>
-    internal void PublishVisualizerFrame(in VisualizerFrame frame) => _visualizer.Value = frame;
+    public IReadSignal<VisualizerFrame> Visualizer => _visualizerView;
 }
 
 /// <summary>The inert effects null-object returned by the MF video backend (spec §7.10) — every knob exists but does
 /// nothing, so a control kit binds it uniformly and never null-checks.</summary>
 public sealed class NullAudioEffects : IAudioEffects
 {
+    private sealed class EmptyLease : IDisposable { public void Dispose() { } }
+    private static readonly IDisposable NoVisualizer = new EmptyLease();
+    /// <inheritdoc/>
+    public IDisposable AcquireVisualizer() => NoVisualizer;
     /// <summary>The shared inert instance.</summary>
     public static NullAudioEffects Instance { get; } = new();
 

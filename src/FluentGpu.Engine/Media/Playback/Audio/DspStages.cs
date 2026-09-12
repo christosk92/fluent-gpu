@@ -1,4 +1,6 @@
 using System;
+using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics;
 
 namespace FluentGpu.Media;
 
@@ -17,6 +19,11 @@ namespace FluentGpu.Media;
 public sealed class GainStage : IDspStage
 {
     private AudioParam _gain;
+    private long _processedSamples, _identitySamples;
+    /// <summary>Samples traversed by gain arithmetic (owner-thread work census).</summary>
+    public long ProcessedSamples => System.Threading.Volatile.Read(ref _processedSamples);
+    /// <summary>Samples whose settled unity gain needed no arithmetic.</summary>
+    public long IdentitySamples => System.Threading.Volatile.Read(ref _identitySamples);
 
     /// <summary>Create a gain stage at <paramref name="initialLinear"/> (1 = unity).</summary>
     public GainStage(float initialLinear = 1f) => _gain = AudioParam.At(initialLinear);
@@ -42,7 +49,7 @@ public sealed class GainStage : IDspStage
         int n = frames * ctx.Channels;
         if (Bypassed)
         {
-            if (!src.Overlaps(dst)) src[..n].CopyTo(dst);
+            if (!src.Overlaps(dst, out int offset) || offset != 0) src[..n].CopyTo(dst);
             _gain.Advance(frames);   // keep the param clock advancing even when bypassed
             return frames;
         }
@@ -51,9 +58,33 @@ public sealed class GainStage : IDspStage
         float end = _gain.Current;
         int ch = ctx.Channels;
 
+        if (start == 1f && end == 1f)
+        {
+            _identitySamples += n;
+            if (!src.Overlaps(dst, out int offset) || offset != 0) src[..n].CopyTo(dst);
+            return frames;
+        }
+        _processedSamples += n;
+
         if (start == end)
         {
-            for (int i = 0; i < n; i++) dst[i] = src[i] * end;
+            int i = 0;
+            // Independent interleaved samples: preserve one multiply per sample, without reassociation/FMA.
+            // Exact in-place and disjoint spans are safe; partial overlap retains the original forward scalar
+            // semantics (a vector load must not consume samples before preceding scalar writes would affect them).
+            if (n >= Vector128<float>.Count && Vector128.IsHardwareAccelerated
+                && (!src.Overlaps(dst, out int offset) || offset == 0))
+            {
+                src = src[..n]; // validate once before the unchecked vector loads/stores
+                dst = dst[..n];
+                var gain = Vector128.Create(end);
+                for (; i <= n - Vector128<float>.Count; i += Vector128<float>.Count)
+                {
+                    var samples = Vector128.LoadUnsafe(ref MemoryMarshal.GetReference(src), (nuint)i);
+                    (samples * gain).StoreUnsafe(ref MemoryMarshal.GetReference(dst), (nuint)i);
+                }
+            }
+            for (; i < n; i++) dst[i] = src[i] * end;
             return frames;
         }
 
@@ -210,6 +241,11 @@ public sealed class ChannelStage : IDspStage
 {
     private AudioParam _balance;
     private bool _mono;
+    private long _processedSamples, _identitySamples;
+    /// <summary>Samples traversed by channel processing (owner-thread work census).</summary>
+    public long ProcessedSamples => System.Threading.Volatile.Read(ref _processedSamples);
+    /// <summary>Samples passed through with settled neutral balance and no downmix.</summary>
+    public long IdentitySamples => System.Threading.Volatile.Read(ref _identitySamples);
 
     /// <summary>Create a channel stage.</summary>
     public ChannelStage(float balance = 0f, bool mono = false) { _balance = AudioParam.At(balance); _mono = mono; }
@@ -231,8 +267,16 @@ public sealed class ChannelStage : IDspStage
     {
         int ch = ctx.Channels;
         int n = frames * ch;
-        _balance.Advance(frames);
+        float start = _balance.Advance(frames);
         float bal = _balance.Current;
+
+        if (start == 0f && bal == 0f && !_mono)
+        {
+            _identitySamples += n;
+            if (!src.Overlaps(dst, out int offset) || offset != 0) src[..n].CopyTo(dst);
+            return frames;
+        }
+        _processedSamples += n;
 
         if (ch != 2)
         {

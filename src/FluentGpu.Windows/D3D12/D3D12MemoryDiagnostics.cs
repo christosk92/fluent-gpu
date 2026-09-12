@@ -76,6 +76,28 @@ internal static unsafe class D3D12MemoryDiagnostics
         TrackPtr((nuint)(void*)resource, name, bytes);
     }
 
+    /// <summary>Device-reported allocation requirement for the EXACT desc about to be handed to
+    /// <c>CreateCommittedResource</c> — query this BEFORE creation, on the same <see cref="D3D12_RESOURCE_DESC"/>. The
+    /// ONE shared query every RT/DSV/texture owner uses (image textures via <c>ImageTextureStore</c>, the opacity/
+    /// acrylic/baked-blur canvases, the glyph atlas, the stencil-clip DSV) so none of them tracks a <c>w*h*bpp</c>
+    /// guess as if it were an exact byte count — audit gpu mem-02 (16.5 MiB of DXGI local usage the old pixel formulas
+    /// couldn't account for on the two-canvas partial-opacity route). Zero means unknown/unsupported: the driver
+    /// returned 0 or <c>UINT64_MAX</c>, never an inferred estimate. Callers that get 0 back must fall back to their own
+    /// formula AND label that entry with <see cref="NameOrUnknown"/> (mirrors <c>ImageTextureStore.TrackTexture</c>'s
+    /// labeling) so the diagnostics page keeps telling known bytes from estimated ones.</summary>
+    public static ulong AllocationBytes(ID3D12Device* device, D3D12_RESOURCE_DESC* desc)
+    {
+        var info = device->GetResourceAllocationInfo(0, 1, desc);
+        return info.SizeInBytes > 0 && info.SizeInBytes <= long.MaxValue && info.Alignment > 0 ? info.SizeInBytes : 0;
+    }
+
+    /// <summary>Insert the same <c>.AllocationUnknown</c> class-key marker <c>ImageTextureStore.TrackTexture</c> uses
+    /// when <see cref="AllocationBytes"/> comes back 0, so every RT/DSV/texture owner's fallback-formula entry reads
+    /// identically on the diagnostics page. <paramref name="name"/> must contain a space (every call site's name is
+    /// <c>"{class} {dims}"</c> or similar) — the marker lands right after the class-key prefix, before that space.</summary>
+    public static string NameOrUnknown(string name, ulong bytes)
+        => bytes != 0 ? name : name.Insert(name.IndexOf(' '), ".AllocationUnknown");
+
     /// <summary>Track a descriptor heap (audit gpu mem-01: descriptor heaps were a [d3d-mem]/DiagResourceTotals blind
     /// spot). Same running tally as resources — keyed on the COM pointer, which is unique across all D3D12 objects.</summary>
     public static void Track(ID3D12DescriptorHeap* heap, string name, ulong bytes)
@@ -116,6 +138,16 @@ internal static unsafe class D3D12MemoryDiagnostics
 
     /// <summary>Release-tracking for a descriptor heap (the Track overload's mirror). Keyed on the COM pointer.</summary>
     public static void Release(ID3D12DescriptorHeap* heap, string fallbackName) => ReleasePtr((nuint)(void*)heap, fallbackName);
+
+    // Placed resources share this allocation; their individual tracking contributes zero bytes.
+    public static void Track(ID3D12Heap* heap, string name, ulong bytes)
+    {
+        if (heap == null) return;
+        fixed (char* p = name) _ = heap->SetName(p);
+        TrackPtr((nuint)(void*)heap, name, bytes);
+    }
+
+    public static void Release(ID3D12Heap* heap, string fallbackName) => ReleasePtr((nuint)(void*)heap, fallbackName);
 
     private static void ReleasePtr(nuint key, string fallbackName)
     {

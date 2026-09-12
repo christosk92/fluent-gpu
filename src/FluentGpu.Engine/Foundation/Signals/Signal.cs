@@ -77,6 +77,18 @@ public sealed class Signal<T> : ISignalSource, IReadSignal<T>
     /// assert <c>AppHost.FrameClockPollerCount</c> returns to 0 when playback/animation stops, catching that regression class.</summary>
     public int SubscriberCount => _subs.Count;
 
+    /// <summary>The <paramref name="i"/>-th subscribed computation, for a diagnostic walk that NAMES subscribers rather
+    /// than counting them (<c>WakeDiagnostics</c> appends each one's <see cref="Computation.DiagOwner"/> to the
+    /// always-on <c>[wake]</c> census). Index-based rather than an enumerator so the report-time walk is a plain loop
+    /// over the live list — no snapshot, no allocation. UI-thread only, like every other member here.</summary>
+    internal Computation SubscriberAt(int i) => _subs[i];
+
+    /// <summary>Bumped once on every subscribe and every actual unsubscribe. A cheap "has the live subscriber SET
+    /// changed" check for a diagnostic that wants to re-walk <see cref="SubscriberAt"/> only when membership actually
+    /// moves, not on every frame it merely reads <see cref="SubscriberCount"/> (<c>WakeDiagnostics</c>: naming
+    /// <c>FrameClock.Tick</c> pollers across a whole census window without a per-frame subscriber-list walk).</summary>
+    internal int SubscriberSetVersion { get; private set; }
+
     /// <summary>Functional update (read-modify-write off the latest committed value), e.g. <c>s.Update(x =&gt; x + 1)</c>.</summary>
     public void Update(Func<T, T> f) => Value = f(_value);
 
@@ -84,7 +96,7 @@ public sealed class Signal<T> : ISignalSource, IReadSignal<T>
     {
         var c = Tracking.Current;
         if (c is null) return;
-        if (!_subs.Contains(c)) { _subs.Add(c); c.AddSource(this); }
+        if (!_subs.Contains(c)) { _subs.Add(c); c.AddSource(this); SubscriberSetVersion++; }
     }
 
     private void NotifySubscribers()
@@ -96,7 +108,7 @@ public sealed class Signal<T> : ISignalSource, IReadSignal<T>
         for (int i = _subs.Count - 1; i >= 0; i--) _subs[i].MarkDirty();
     }
 
-    void ISignalSource.Unsubscribe(Computation c) => _subs.Remove(c);
+    void ISignalSource.Unsubscribe(Computation c) { if (_subs.Remove(c)) SubscriberSetVersion++; }
 
     // A signal is its own source of truth: a write IS the push, so there is never anything to pull. (The pull half of
     // the push-pull cut-off only has work to do on a Memo.)

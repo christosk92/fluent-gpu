@@ -376,8 +376,10 @@ public sealed class PcmAudioSession : IMediaSession
     private float[] _lastBandGains = Array.Empty<float>();
 
     // ── visualizer tap (spec §7.3/§7.8): a post-master level/peak snapshot published off the block path ──────────────
-    private float _tapRms, _tapPeak;
-    private bool _tapDirty;
+    private AudioLevelMailbox _tap;
+    private long _tapReadVersion, _visualizerSource, _meterSamples;
+    /// <summary>Actual samples analyzed for visible level consumers; no demand means no scans.</summary>
+    public long MeterSamples => Interlocked.Read(ref _meterSamples);
 
     private MediaSignalSink? _sink;
     private PlaybackState _state = PlaybackState.Idle;
@@ -481,6 +483,14 @@ public sealed class PcmAudioSession : IMediaSession
     public long SampleClock => _mixer.ConsumeSeq;
     /// <summary>RT-feed ring underruns (silence written) since this session opened. 0 on the single-thread pull path.</summary>
     public long XrunCount => _feed?.XrunCount ?? 0;
+
+    /// <summary>Approximate independent work totals for off-RT diagnostics; not a coherent audio-state snapshot.</summary>
+    public (long Gain, long GainSkipped, long Channel, long ChannelSkipped, long Transport, long TransportSkipped,
+        long Meter, long ManagerWakes, long ManagerPasses) ReadWorkCounters()
+        => (_masterGain.ProcessedSamples, _masterGain.IdentitySamples,
+            _masterChannel.ProcessedSamples, _masterChannel.IdentitySamples,
+            _transport.ProcessedSamples, _transport.IdentitySamples, MeterSamples,
+            _feed?.ManagerWakeCount ?? 0, _feed?.ManagerPassCount ?? 0);
 
     /// <summary>Total frames of silence written on starve since this session opened — the SEVERITY companion to
     /// <see cref="XrunCount"/> (which counts incidents). 0 on the single-thread pull path.</summary>
@@ -953,8 +963,18 @@ public sealed class PcmAudioSession : IMediaSession
     public void BindEffects(IAudioEffects effects)
     {
         _liveEffects = effects;
+        ActivateVisualizerSource();
         _eqTopologySig = EqTopologySignature(effects.Equalizer);
         SnapshotBandGains(effects.Equalizer);
+    }
+
+    /// <summary>Make this already-bound session the visualizer source again after a replacement rollback.
+    /// Rotates only the source token/visibility epoch; does not rebind effects or mutate EQ reconciliation state.
+    /// Call off the output thread after restoring session ownership.</summary>
+    public void ActivateVisualizerSource()
+    {
+        long source = _liveEffects is AudioEffects live ? live.BindVisualizerSource() : 0;
+        Volatile.Write(ref _visualizerSource, source);
     }
 
     /// <summary>Reconcile the bound effects into the graph (control thread; spec §7.10). Called every pump; only CHANGES
@@ -1046,9 +1066,11 @@ public sealed class PcmAudioSession : IMediaSession
 
     private void PublishVisualizer()
     {
-        if (!_tapDirty || _liveEffects is not AudioEffects ae) return;
-        _tapDirty = false;
-        ae.PublishVisualizerFrame(new VisualizerFrame(ReadOnlyMemory<float>.Empty, _tapRms, _tapPeak));
+        if (_liveEffects is not AudioEffects ae
+            || !_tap.TryRead(out float rms, out float peak, out long epoch, out long version)
+            || version == _tapReadVersion) return;
+        _tapReadVersion = version;
+        ae.PublishVisualizerFrame(Volatile.Read(ref _visualizerSource), epoch, rms, peak);
     }
 
     // ── IMediaSession ────────────────────────────────────────────────────────────────────────────────────────────────
@@ -1424,12 +1446,7 @@ public sealed class PcmAudioSession : IMediaSession
         _masterGain.Process(buf, buf, frames, ctx);
         _masterChannel.Process(buf, buf, frames, ctx);
         graph.RenderMaster(buf, frames, ctx);
-        for (int frame = 0; frame < frames; frame++)
-        {
-            float gain = _transport.At(ctx.StartFrame + frame);
-            for (int channel = 0; channel < _format.Channels; channel++)
-                buf[frame * _format.Channels + channel] *= gain;
-        }
+        _transport.Apply(buf, frames, _format.Channels, ctx.StartFrame);
         TapBlock(buf, frames);
         _graph.MarkConsumed();
         AudioTripwire.EndBlock();
@@ -1493,6 +1510,9 @@ public sealed class PcmAudioSession : IMediaSession
 
     private void TapBlock(ReadOnlySpan<float> buf, int frames)
     {
+        if (_liveEffects is not AudioEffects ae) return;
+        long epoch = ae.VisualizerDemand(Volatile.Read(ref _visualizerSource));
+        if (epoch == 0) return;
         int n = frames * _format.Channels;
         if (n <= 0) return;
         float peak = 0f;
@@ -1504,9 +1524,8 @@ public sealed class PcmAudioSession : IMediaSession
             if (m > peak) peak = m;
             sumSq += (double)a * a;
         }
-        _tapPeak = peak;
-        _tapRms = (float)Math.Sqrt(sumSq / n);
-        _tapDirty = true;
+        _meterSamples += n;
+        _tap.Publish((float)Math.Sqrt(sumSq / n), peak, epoch);
     }
 
     private void PublishPosition(MediaSignalSink sink)

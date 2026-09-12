@@ -315,7 +315,8 @@ static class SceneSnapshotChecks
         stops[0] = new GradientStop(0, new ColorF(0, 1, 0, 1));
         scene.SetTextEditRects(child, [new(9, 9, 9, 9)], []);
         scene.MeasureCacheRef(child).E0.FitSize = 30;
-        snapshot.MeasureCacheRef(child).E0.FitSize = 15;
+        var copiedMeasure = snapshot.ResolveMeasureForWidth(child, 0);
+        copiedMeasure.FitSize = 15;
         bool detached = snapshot.Bounds(child) == new RectF(3, 4, 20, 10)
             && snapshot.AbsoluteRect(child) == new RectF(13, 24, 20, 10)
             && snapshot.Paint(child).Opacity == .75f
@@ -323,6 +324,7 @@ static class SceneSnapshotChecks
             && snapshot.GetTextEditSelectionRects(child)[0] == new RectF(1, 2, 3, 4)
             && snapshot.GetTextEditUnderlineRects(child)[0] == new RectF(5, 6, 7, 8)
             && scene.MeasureCacheRef(child).E0.FitSize == 30
+            && snapshot.ResolveMeasureForWidth(child, 0).FitSize == 12 && copiedMeasure.FitSize == 15
             && snapshot.ScrollRef(root).SnapPoints is null && snapshot.ScrollRef(root).ScrollKey is null
             && snapshot.TryGetVirtualItemBand(child, out int prefix, out float inset, out float fade)
             && prefix == 1 && inset == 8 && fade == 4;

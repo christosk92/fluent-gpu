@@ -561,9 +561,10 @@ static class TextSuite
         Check("gate.atlas.upload.clamp a band longer than the bank copies what fits, keeps the tail dirty and asks to grow",
             clamped, $"copied={cf.CopyRowCount} dirtyLeft={small.DirtyRowCount} short={small.ShortfallRows} want={small.WantedStagingRows}");
         // Next frame with the grown bank drains the tail — and the whole glyph is then intact.
-        var grownArena = new byte[small.WantedStagingRows * Size];
+        int grownRows = small.WantedStagingRows; // backend retains requested capacity before resetting frame-local demand
+        var grownArena = new byte[grownRows * Size];
         small.BeginFrame();
-        bool drained = small.TryTakeUpload(small.WantedStagingRows, out var df);
+        bool drained = small.TryTakeUpload(grownRows, out var df);
         small.StageInto(in df, grownArena);
         Array.Copy(grownArena, df.CopyOffset, smallGpu, df.CopyRowStart * Size, df.CopyBytes);
         var oneCell = new List<(int X, int Y, int W, int H, int Seed)> { (tx, ty, 10, 100, 1) };

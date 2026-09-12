@@ -7,6 +7,7 @@ public sealed class ImageRecordingSnapshot
 {
     private readonly Dictionary<int, Entry> _entries = new();
     private float _fadeDeadline;
+    internal double ClockCapturedAtMs { get; private set; } = double.NaN;
     private readonly record struct Entry(ImageState State, int Width, int Height, float Start, float Duration, int Easing);
 
     /// <summary>UI producer only; the owning scene slot must not be leased by the renderer. Full copy of every cache
@@ -15,6 +16,7 @@ public sealed class ImageRecordingSnapshot
     /// thread should switch to <c>Capture(images, Scene.ReferencedImageIds)</c> plus any detached-slab ids.</summary>
     public void Capture(ImageCache? source)
     {
+        ClockCapturedAtMs = source?.ClockCapturedAtMs ?? double.NaN;
         _entries.Clear();
         _fadeDeadline = float.NegativeInfinity;
         source?.CopyRecordingInputs(this);
@@ -27,6 +29,7 @@ public sealed class ImageRecordingSnapshot
     /// which is correct — nothing captured this frame can draw it.</summary>
     public void Capture(ImageCache? source, ReadOnlySpan<int> referencedIds)
     {
+        ClockCapturedAtMs = source?.ClockCapturedAtMs ?? double.NaN;
         _entries.Clear();
         _fadeDeadline = float.NegativeInfinity;
         source?.CopyRecordingInputs(this, referencedIds);

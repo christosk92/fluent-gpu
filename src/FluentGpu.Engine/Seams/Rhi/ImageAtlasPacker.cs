@@ -97,9 +97,9 @@ public sealed class ImageAtlasPacker
     private int _peakLivePages;
 
     /// <param name="pageSide">Page side in texels (square).</param>
-    /// <param name="pageBytes">The page resource's REAL committed size — what the census must report. The store passes
-    /// <c>GetResourceAllocationInfo().SizeInBytes</c> (row-pitch alignment + the 64 KiB placement rounding included);
-    /// pass the nominal <c>side*side*4</c> when that is not available.</param>
+    /// <param name="pageBytes">The page resource's device-reported allocation requirement — the census unit.
+    /// The store passes <c>GetResourceAllocationInfo().SizeInBytes</c>, not a copy footprint or pixel estimate.
+    /// If unavailable, the store must disable admission; a positive placeholder may initialize an unused packer.</param>
     /// <param name="upload">Fixes the barrier posture for every page this packer hands out.</param>
     /// <param name="gutter">Texels of separation between cells and between a cell and the page edge (see the remarks).</param>
     public ImageAtlasPacker(int pageSide, long pageBytes, ImageAtlasUpload upload, int gutter = 1)

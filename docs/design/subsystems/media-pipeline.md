@@ -228,7 +228,9 @@ public sealed class DecodeScheduler
 > a thread-safe pow2-bucket (16 KB–16 MB) pool with a **retained cap of 32 MB** (`DefaultRetainedCapBytes`, hardcoded,
 > no env knob): `Rent` always succeeds (fresh alloc on a bucket miss, exact-size unpooled past 16 MB), `Return` parks
 > only while retained bytes stay under the cap and otherwise drops the array for the GC, and `Trim` releases all parked
-> arrays on the ~30 s idle cadence. ONE pool is shared by the decode workers (dst BGRA buffers) and the async-upload
+> arrays through the UI one-shot cold-maintenance scheduler (owned by `threading-render-seam.md` §0), including
+> when no paint follows. A post-insertion notification runs outside the bucket lock on the returning thread;
+> the host coalesces it and detaches on pool replacement/disposal. ONE pool is shared by decode workers and async-upload
 > copies (`AppHost.PixelPool` → `ImageUploadQueue.BufferPool` → render-side `ReturnUploadBuffer`), so both draw on one
 > budget. The interim `ArrayPool<byte>.Shared` shortcut retained ~300 MB (8 arrays/bucket × per-core partitions); only
 > the encoded **fetch** buffer (`FetchResult`, contract-bound) still rides `ArrayPool.Shared`.
@@ -407,8 +409,9 @@ never being shared; a page has to earn it):
    the old one, so the CPU never rewrites live texels. (This is the pre-existing UMA re-stage rule, unchanged.)
 
 **Capability probe, not a switch.** A `ROW_MAJOR` CPU-writable `TEXTURE2D` is driver-optional. The first page create
-answers the question: on failure the store disables UMA page packing for the session (logging once, always-on) and every
-thumbnail falls back to the private-texture path. There is no environment flag — the driver decides.
+answers the question: on failure the store disables UMA page packing for the session (logging once, always-on).
+Decoded thumbnails then try the independently placed small-texture fallback below; unsupported placement retains the
+committed private-texture path. There is no environment flag — the driver decides.
 
 **Baked derivatives never target a CPU-written page.** Adopting a render-produced image is a `CopyTextureRegion`, which
 would put its destination into `COPY_DEST`. On UMA a baked thumbnail therefore takes the private pool/standalone path;
@@ -423,11 +426,58 @@ hands the sampler `[origin+0.5 … origin+size−0.5]` in texels, and with `MIN_
 ever added to the image pipeline. Cost, at `PageSize = 1024`: 15×15 = 225 cells at bucket 64 (vs 16×16 = 256 ungutted)
 and 7×7 = 49 at bucket 128 (vs 8×8 = 64). Both flavours use the same grid — the packing policy does not fork per adapter.
 
-**Census honesty.** Resource byte tracking reports the **committed** size (the device's linear subresource footprint
-rounded up to the 64 KiB placement granularity), not the nominal `w*h*4`; tracking the latter under-reported a 64²
-thumbnail by 4× and is why `gpu bytes` and the image cache's `imageBytes` diverged by tens of MB on UMA. A packed cell
+**Census honesty.** Image texture tracking reports the device's **allocation requirement** from
+`GetResourceAllocationInfo().SizeInBytes`, not nominal `w*h*4` or `GetCopyableFootprints` (the upload layout).
+This is not physical residency or total driver overhead. An invalid/unsupported query is explicitly unknown:
+standalone textures retain their resource count under an `AllocationUnknown` class with zero contribution to
+known-byte totals and an always-on diagnostic. Unknown page requirements disable atlas admission before any
+page is allocated; thumbnails retain the existing private-texture fallback. A packed cell
 is **not** a resource: it has no byte line of its own, so the atlas byte line is `livePages × pageBytes` — O(pages),
 never O(images).
+
+The same device-reported query (`D3D12MemoryDiagnostics.AllocationBytes`, called BEFORE `CreateCommittedResource` on
+the exact desc that creation uses) is the ONE shared helper every RT/DSV/texture owner tracks through, not just
+images: the opacity-layer, acrylic and baked-blur pooled canvases, the glyph atlas texture, and the stencil-clip DSV
+all query it at creation and fall back to their old `w*h*bpp` formula — labelled `.AllocationUnknown` the same way —
+only when the driver returns 0. `Release` needs no parallel bookkeeping: `D3D12MemoryDiagnostics` keys its live table
+on the COM pointer, so releasing a tracked resource always subtracts the exact bytes it was created with, whichever
+path supplied them. (Audit gpu mem-02: on the two-full-window-opacity-canvas partial-opacity route, DXGI local usage
+ran 16.5 MiB ahead of the tracked total — entirely canvases the old formula undercounted relative to the driver's own
+alignment/padding.)
+
+**UMA small-texture heap fallback (`SmallImageHeapPool`).** When ROW_MAJOR page creation or its allocation query is
+unavailable, decoded 64/128px images may use independent `LAYOUT_UNKNOWN` textures in a shared
+`CUSTOM / WRITE_BACK / L0` heap. These are separate resources, **not cells within one opaque-layout texture**:
+their queried allocation ranges do not overlap, so opaque swizzling cannot overwrite a neighboring resource.
+GPU-produced baked derivatives do not opt into this CPU-write-only pool.
+
+- Query each bucket separately with resource `Alignment = 4096`, and query its default allocation independently.
+  Admit only a valid 4KiB-aligned allocation that actually saves bytes over the default allocation. Never assume
+  a 64px texture requires only its 16KiB pixel payload (the tested Adreno requirement is 20KiB); 128px may have
+  no saving and must retain the committed fallback. Heap alignment remains **64KiB**, not 4KiB.
+- The first heap per bucket is **128KiB**, later growth heaps **1MiB**, with a **16MiB aggregate reserve cap**.
+  The cap includes inactive, activation-pending, live and fence-retired occupancy; pending heaps are not free.
+  At most one pending activation page per bucket is created. Page capacity is `heapBytes / queriedRequiredBytes`.
+- Cold growth pre-creates independent placed resources in `COMMON`. `FlushUploads` records one initial
+  null-to-resource aliasing activation per resource and stamps the actual submission fence. **No CPU lease or write
+  before that fence completes.** The triggering upload uses committed storage immediately; later batches can lease
+  activated slots. Production admission never waits for the GPU. Warm leases create neither resources nor heaps.
+- A leased resource uses `Map(0, emptyReadRange, null ppData)`, `WriteToSubresource`, then `Unmap`. UNKNOWN layout
+  prevents obtaining a linear CPU pointer, not this null-pointer Map contract. The resource remains `COMMON` and is
+  GPU-read-only; it never transitions through `COPY_DEST`. Published pixels and SRVs are immutable. Re-staging takes
+  a fresh lease/SRV, publishes it only after a successful write, and retires the previous placement after its actual
+  last-use fence. Generation checks reject stale/double returns. Descriptor slots follow the same retirement fence.
+- A healthy device refusing a placed Map/write disables that bucket, retires the failed unpublished lease and retries
+  the upload through committed storage while retaining the previous published image. Device removal does **not** retry.
+  A subsequent committed failure retains the existing image-cache rejection contract.
+- `ReclaimCompleted` drains retirement and completed activation without recording commands or waiting. Activation
+  already submitted is not pending upload work and never manufactures further presentations. Keep at most one wholly
+  free activated warm page per bucket; release other wholly free pages only after all leases and activation retire.
+- Census charges **heap capacity once** under `Image.PlacedHeap`. `Image.PlacedSlot` counts resource objects with zero
+  additive bytes; occupied queried requirements are a **subset** of the heap, never added to it. This is allocation
+  accounting, not a claim about process working set or driver metadata. The native `--small-image-pool` probe checks
+  activation/fallback, exact committed pixel parity, neighbor/SRV safety, generation reuse, zero warm resource creation,
+  and a safely injected placed-write refusal followed by successful committed fallback.
 
 ### 4.6 Palette feed (handshake with `FluentGpu.Theme`) — NO GPU readback
 

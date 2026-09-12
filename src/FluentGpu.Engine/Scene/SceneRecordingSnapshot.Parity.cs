@@ -1,4 +1,5 @@
 using FluentGpu.Foundation;
+using FluentGpu.Text;
 
 namespace FluentGpu.Scene;
 
@@ -68,10 +69,13 @@ public sealed partial class SceneRecordingSnapshot
     {
         if (!Scalars(other, out mismatch)) return false;
 
-        int count = Math.Min(_nodeCount, other._nodeCount);
+        int count = Math.Min(_nodeCount, Math.Max(Capacity, other.Capacity));
         for (int i = 1; i < count; i++)
         {
-            NodeHandle mine = _handles[i], theirs = other._handles[i];
+            // A fresh/trimmed snapshot has no storage for an unreachable high-index slot; a high-water
+            // snapshot has a cleared handle there. Both mean dead, while every live row is still compared.
+            NodeHandle mine = i < Capacity ? _handles[i] : default;
+            NodeHandle theirs = i < other.Capacity ? other._handles[i] : default;
             if (mine != theirs) { mismatch = $"n#{i} handle {mine.Raw.Index}:{mine.Raw.Gen} vs {theirs.Raw.Index}:{theirs.Raw.Gen}"; return false; }
             if (mine.IsNull) continue;
             if (!Node(other, i, out mismatch)) return false;
@@ -124,7 +128,6 @@ public sealed partial class SceneRecordingSnapshot
         if (_parent[i] != other._parent[i]) return Fail(out mismatch, $"n#{i} Parent");
         if (_firstChild[i] != other._firstChild[i]) return Fail(out mismatch, $"n#{i} FirstChild");
         if (_nextSibling[i] != other._nextSibling[i]) return Fail(out mismatch, $"n#{i} NextSibling");
-        if (!_layout[i].Equals(other._layout[i])) return Fail(out mismatch, $"n#{i} LayoutInput");
         if (_bounds[i] != other._bounds[i]) return Fail(out mismatch, $"n#{i} Bounds {_bounds[i]} vs {other._bounds[i]}");
         if (!PaintEqual(in _paint[i], in other._paint[i])) return Fail(out mismatch, $"n#{i} NodePaint");
         if (!_interaction[i].Equals(other._interaction[i])) return Fail(out mismatch, $"n#{i} InteractionInfo");
@@ -132,9 +135,10 @@ public sealed partial class SceneRecordingSnapshot
         if (_dirty[i] != other._dirty[i]) return Fail(out mismatch, $"n#{i} recordDirty {_dirty[i]} vs {other._dirty[i]}");
         if (_dirtySelf[i] != other._dirtySelf[i]) return Fail(out mismatch, $"n#{i} recordDirtySelf");
         if (_dirtyDescendant[i] != other._dirtyDescendant[i]) return Fail(out mismatch, $"n#{i} recordDirtyDescendant");
-        if (!MeasureEqual(in _measurement[i], in other._measurement[i])) return Fail(out mismatch, $"n#{i} TextMeasureCache");
+        if (!SparseEqual(_textStyle, other._textStyle, i, (in TextStyle a, in TextStyle b) => a.Equals(b), out string which)) return Fail(out mismatch, $"n#{i} TextStyle ({which})");
+        if (!SparseEqual(_measurement, other._measurement, i, MeasureEqual, out which)) return Fail(out mismatch, $"n#{i} TextMeasureCache ({which})");
 
-        if (!SparseEqual(_scroll, other._scroll, i, ScrollEqual, out string which)) return Fail(out mismatch, $"n#{i} ScrollState ({which})");
+        if (!SparseEqual(_scroll, other._scroll, i, ScrollEqual, out which)) return Fail(out mismatch, $"n#{i} ScrollState ({which})");
         if (!SparseEqual(_interact, other._interact, i, (in InteractionAnim a, in InteractionAnim b) => a.Equals(b), out which)) return Fail(out mismatch, $"n#{i} InteractionAnim ({which})");
         if (!SparseEqual(_shadow, other._shadow, i, (in ShadowSpec a, in ShadowSpec b) => a.Equals(b), out which)) return Fail(out mismatch, $"n#{i} ShadowSpec ({which})");
         if (!SparseEqual(_arc, other._arc, i, (in ArcSpec a, in ArcSpec b) => a.Equals(b), out which)) return Fail(out mismatch, $"n#{i} ArcSpec ({which})");

@@ -815,6 +815,12 @@ Headless fixtures can instead drive `WorkerPumpOnce` deterministically; that rem
 The output consumer completes a ring flush **before** releasing the producer to refill it. Exact EOF position is
 published from the producer and becomes available through `PcmAudioSession.ExactVoiceEndFrame`.
 
+The separate `AudioFeedThread` management loop is **event-only**, not another 20 ms refill poll. It handles
+installation/control wakes, pending seeks and retired rings, draining pending seek/retirement work before sleeping
+on its event without a timeout. Publications racing the drain or wait leave the event signalled; ordinary live
+refill remains owned by each ring's dedicated producer. The producer's 20 ms fallback above is unchanged, as is the
+current 15 ms control/position loop. Removing the management poll does not claim those remaining wakes are gone.
+
 Mixer structural commands use a 64-entry queue with four entries reserved for removal, reset and fade-out. Capacity
 is checked before publishing a source. `ReplacePreparedAsync` waits for capacity off RT; synchronous installers
 explicitly reject admission instead of silently dropping a command. Once a replacement reset is admitted, its
@@ -827,6 +833,13 @@ Retirement uses an intrusive stack of the existing ring objects, so retire recor
 The worker cancels the retired producer, and the producer releases its decoder/source lease only after leaving its
 read. A device swap requires acknowledged output/management/clock thread stop; a failed stop cannot be followed by
 endpoint disposal and restart.
+
+Final shutdown cleanup waits for **all three loops** to acknowledge exit, including the output loop's MMCSS scope,
+not merely the management worker. A final output acknowledgement may enqueue retirement after the manager stops.
+The last exiting loop performs a once-guarded retirement drain, ring disposal and wake-event disposal when shutdown
+was requested; timed-out joins retain ownership and defer that sweep. Dedicated producers still retain their inner
+decoder/source leases until their reads actually exit. This is a lifetime guarantee, not permission to dispose a
+blocked decoder after a timeout.
 
 `TransportRamp` applies final attenuation after master DSP. Pause fades down over 20 ms, stops consuming source PCM,
 drains the submitted tail, then stops the existing endpoint. Resume uses 20 ms and does not reset that endpoint.
@@ -865,6 +878,7 @@ public interface IAudioEffects            // MF video backend returns an inert n
     FloatSignal        Balance     { get; }
     Signal<bool>       PreservePitchOnRate { get; }
     IReadSignal<VisualizerFrame> Visualizer { get; }
+    IDisposable AcquireVisualizer();        // explicit demand while a visible consumer needs level analysis
 }
 public sealed class Equalizer
 {
@@ -874,6 +888,35 @@ public sealed class Equalizer
 }
 public sealed class EqBand { public FloatSignal GainDb; public FloatSignal FreqHz; public FloatSignal Q; public BiquadType Type; }
 ```
+
+Reading or subscribing to `Visualizer` does **not** enable analysis. A visible meter acquires one demand lease and
+disposes it when hidden, parked, unmounted or detached from that effects source. Multiple consumers share the work;
+lease disposal is idempotent, and the last release disables analysis and publishes silence. Inert effects return a
+named no-op lease. Hosts which switch the active local audio source must release/reacquire their demand against the
+new effects owner, rather than retain an old session through a visualizer subscription.
+
+With no demand, the PCM output path skips the sample-wide RMS/peak analysis. With demand, it writes the two levels
+and the demand epoch into a bounded single-writer/control-reader mailbox: an odd/even publication version brackets
+the packed level pair and epoch. A reader validates once and declines a concurrent/torn observation; it never spins
+or waits for an audio block. The RT path does not allocate a `VisualizerFrame`, publish a reactive signal, acquire
+the visualizer gate, or invoke a UI callback. The non-RT control loop publishes only a newly observed coherent
+mailbox version.
+
+`AudioEffects` serializes non-RT publication and reads of its visualizer view. Both **source identity** and **demand
+epoch** must still match when the control publication commits. Last-consumer release, reacquisition and binding a
+new source invalidate old mailbox data and clear the visible levels, preventing a delayed old block from restoring
+meters after hiding or showing the prior track's levels on a new source. The shipped tap exposes RMS/peak with an
+empty spectrum; acquiring demand does not imply an FFT implementation.
+
+If replacement is abandoned, the host calls `PcmAudioSession.ActivateVisualizerSource()` after restoring the old
+session. This rotates publication ownership without touching EQ bindings or the live audio graph; unread frames
+from both the abandoned source and the old ownership epoch remain invalid. `ReadWorkCounters()` exposes approximate
+independent sample-work and management-wake totals for off-RT diagnostics, not a coherent transport snapshot.
+
+Settled unity gain, neutral channel processing and unity transport attenuation skip their arithmetic loops while
+preserving parameter advancement. Settled non-unity gain processes independent samples with hardware-accelerated
+`Vector128<float>` multiplication and a scalar tail; exact in-place/disjoint buffers are vectorized, partial overlap
+keeps scalar ordering. Ramps, recursive EQ/limiter state, buffering and sample order are unchanged.
 
 ---
 

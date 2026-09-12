@@ -1541,11 +1541,10 @@ static class PathSuite
             + $"outerFirst={outerFirst} innerPopsFirst={innerPopsFirst}");
     }
 
-    // gate.path.stencil.framing — the registration/veto surface every stream walker shares. TryBodySize must SIZE both
+    // gate.path.stencil.framing — the registration/safety surface every stream walker shares. TryBodySize must SIZE both
     // ops (it is the ONE opcode->payload-size table, and framing is not safety) and agree with Asserts.DrawPayloadSize;
-    // RepaintStreamSafety.Scan must return FALSE on a stream containing a stencil push (the v1 partial-repaint veto is
-    // load-bearing — the clamped-replay x mask-clear-rect interaction is excluded, not relied on); and the opcode stats
-    // must count the pair.
+    // RepaintStreamSafety.Scan admits this balanced, layer-disjoint stencil scope; cross-kind nesting remains covered
+    // by the damage suite's rejection gates. Opcode stats must count the pair.
     private static void StencilFramingGate()
     {
         bool pushSized = RepaintStreamSafety.TryBodySize(DrawOp.PushStencilClip, out int pushBody);
@@ -1565,13 +1564,13 @@ static class PathSuite
         stencil.PushStencilClip(rect, pathRef, (byte)FillRule.NonZero, Affine2D.Identity);
         stencil.FillRoundRect(rect, default, ColorF.FromRgba(10, 10, 10, 255), Affine2D.Identity, 1f);
         stencil.PopStencilClip(rect, pathRef, Affine2D.Identity);
-        bool stencilVetoed = !RepaintStreamSafety.Scan(stencil.Bytes);
+        bool stencilSafe = RepaintStreamSafety.Scan(stencil.Bytes);
         var stats = stencil.OpcodeStats;
         bool counted = stats.PushStencilClip == 1 && stats.PopStencilClip == 1;
 
-        Check("gate.path.stencil.framing", sizesAgree && plainSafe && stencilVetoed && counted,
+        Check("gate.path.stencil.framing", sizesAgree && plainSafe && stencilSafe && counted,
             $"sizesAgree={sizesAgree} (push={pushBody}B pop={popBody}B) plainStreamSafe={plainSafe} "
-            + $"stencilStreamVetoed={stencilVetoed} stats={stats.PushStencilClip}/{stats.PopStencilClip}");
+            + $"layerDisjointStencilSafe={stencilSafe} stats={stats.PushStencilClip}/{stats.PopStencilClip}");
     }
 
     // gate.path.stencil.alloc-zero — a settled frame carrying a stencil scope allocates NOTHING on the UI thread and

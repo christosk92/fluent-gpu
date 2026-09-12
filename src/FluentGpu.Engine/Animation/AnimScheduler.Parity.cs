@@ -1,8 +1,10 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Threading;
 using FluentGpu.Foundation;
 using FluentGpu.Scene;
+
+using System.Globalization;
 
 namespace FluentGpu.Animation;
 
@@ -137,6 +139,48 @@ public sealed partial class AnimEngine
     /// <summary>Walk the live rows once and recompute the wake census: the earliest due time, the "a row wants THIS
     /// frame" bit, and the display-rate-loop tripwire count. Zero alloc, no closures. Called at the end of the
     /// per-frame <c>Tick</c> and lazily from <see cref="RefreshCensus"/> on a slab-Version change.</summary>
+    /// <summary>Append the LIVE compositor track census as <c>anim=N:Channel*k,…</c> — the identities behind
+    /// <see cref="TrackCount"/>. It exists for the same reason the FrameClock poller census does: a count alone cannot
+    /// name a retained row. These are UI desired rows, not the renderer's independently advanced copies: completion
+    /// feedback retires them on UI. Measured on the driving app: a settled page held 4
+    /// tracks and 1 orphan indefinitely at a flat 10&#37; GPU with the UI loop asleep at 2.5 fps, and nothing in any log
+    /// said which 4 — <c>WakeReasons.Anim</c> is masked while the compositor is render-owned, so the wake census is
+    /// structurally blind to exactly the rows that cost the most.
+    /// <para>Report cadence only (the 30 s <c>[wake]</c> line): one walk of the active slab appending into the caller's
+    /// reused builder. Done/Parked rows are called out separately — a row that is Done but still resident is a
+    /// different bug from one that is genuinely still animating.</para></summary>
+    public void AppendLiveTrackCensus(System.Text.StringBuilder sb)
+    {
+        int n = _slab.Count;
+        sb.Append(CultureInfo.InvariantCulture, $" | anim={n}");
+        if (n == 0) return;
+        Span<int> byChannel = stackalloc int[32];
+        byChannel.Clear();
+        int done = 0, parked = 0, looping = 0;
+        for (int nodeIndex = _slab.FirstActiveNode; nodeIndex >= 0; nodeIndex = _slab.NextActiveNode(nodeIndex))
+            for (int s = _slab.HeadOnNode(nodeIndex); s >= 0; s = _slab.At(s).NextOnNode)
+            {
+                AnimFlags f = _slab.At(s).Flags;
+                if ((f & AnimFlags.Done) != 0) done++;
+                if ((f & AnimFlags.Parked) != 0) parked++;
+                if ((f & AnimFlags.Loop) != 0) looping++;
+                int ch = (int)_slab.At(s).Channel;
+                if ((uint)ch < (uint)byChannel.Length) byChannel[ch]++;
+            }
+        sb.Append(':');
+        bool first = true;
+        for (int c = 0; c < byChannel.Length; c++)
+        {
+            if (byChannel[c] == 0) continue;
+            if (!first) sb.Append(',');
+            first = false;
+            sb.Append(((AnimChannel)c).ToString()).Append('*').Append(byChannel[c]);
+        }
+        if (done > 0) sb.Append(CultureInfo.InvariantCulture, $" done={done}");
+        if (parked > 0) sb.Append(CultureInfo.InvariantCulture, $" parked={parked}");
+        if (looping > 0) sb.Append(CultureInfo.InvariantCulture, $" loop={looping}");
+    }
+
     private void RecomputeCensus()
     {
         _censusVersion = _slab.Version;
@@ -212,7 +256,15 @@ public sealed partial class AnimEngine
     /// <summary>Symmetric teardown when a scene slot is FREED (wired to SceneStore.OnFreeIndex): drop the index-keyed
     /// spec so a freed node leaves no dormant spec the next node reusing the slot inherits. In-flight rows are
     /// gen-checked and self-prune at the next tick's IsLive guard.</summary>
-    public void ClearForIndex(int index) { _transitions.Remove(index); ClearInteractTargets(index); }   // #12: also drop the index's interact-target row (was leaked — ClearInteractTargets had no caller)
+    public void ClearForIndex(int index)
+    {
+        _transitions.Remove(index);
+        ClearInteractTargets(index);
+        // A forced orphan reclaim runs after Tick. Render-owned rows cannot rely on another UI tick
+        // to notice the dead node: those rows intentionally do not request one. Retire them with the node.
+        int slot;
+        while ((slot = _slab.HeadOnNode(index)) >= 0) FreeSlot(slot);
+    }
 
     /// <summary>True while any row targets this node (the host detects a settled exit orphan when this goes false).</summary>
     public bool HasTracks(NodeHandle node) => _slab.HeadOnNode((int)node.Raw.Index) >= 0;

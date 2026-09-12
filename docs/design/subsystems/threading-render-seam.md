@@ -11,8 +11,53 @@ UI owns reactive work, reconciliation, layout, input and authored scene state. O
 `SceneRenderFrame.Capture` copies live handles and recording columns, detached sparse payloads, image metadata,
 span styles/rectangles, animation descriptions, popup-target descriptors and recording options into a reusable
 publisher slot. A snapshot never retains the live `SceneStore`; scroll payloads omit UI layout participants.
-The renderer owns walk stacks, damage/span-reuse scratch, measurement caches, command arenas and animation
+The renderer owns walk stacks, damage/span-reuse scratch, copied measurement inputs, command arenas and animation
 overlays. Mutable recorder scratch is per recording target, never process-static or shared with UI recording.
+
+Text measurement inputs are a value-copied **sparse** projection, not renderer-mutable layout caches. Only the
+publisher holding the slot's exclusive write claim may add, remove or grow those rows. Full capture rebuilds their
+membership; incremental capture clears rows for changed/unreachable nodes and copies the current UI cache when
+present. The renderer resolves a width from that captured two-entry value without writing it or consulting the live
+UI cache. Handle-generation validation rejects a recycled occupant. A UI relayout cannot change a renderer-held
+snapshot; a newly captured slot receives the new values under the ordinary claim/publication ordering. Storage and
+reserve accounting are owned by `scene-memory.md` §2.6a; width/fallback/decoration semantics by `text.md`.
+
+The recording projection carries sparse, immutable `TextStyle` values, not full `LayoutInput` records. Only an
+exclusively claimed publisher slot may mutate their membership or storage. Font/span-bearing nontext rows retain
+their existing resource pins independently of the UI. `TryGetTextStyle` validates handle generation; the text
+recorder requires a captured row and fails explicitly if absent instead of substituting a default font. Storage
+and reserve accounting are owned by `scene-memory.md` §2.6a.
+
+Cold snapshot reclamation claims only a `Free` slot with the actual `Free → Writing` CAS, excluding the announced
+slot; it never modifies a `Reading` frame, even after GPU retirement. It neither withdraws the publication token
+nor advances publication/consumption clocks. A replacement is prewarmed twice outside protected frame phases;
+these are not publications and cannot stamp popup activation sequences. New resource pins are acquired before
+old pins are released. Successful replacement clears that slot's capture baseline so its next publication takes
+a warmed full capture; failures preserve the old frame/pins and return the slot to `Free`. Policy values and
+capacity accounting are owned by `scene-memory.md` §2.6a. The UI cold-maintenance scheduler below makes eligible
+free-slot reclamation reachable even when no further paint occurs.
+
+**UI-owned cold maintenance (2026-09-12).** `ColdMaintenanceDeadline` coalesces one monotonic 30-second deadline
+per newly retained pixel-buffer episode or changed scene allocation/free revision. Arming an already pending
+deadline neither postpones it nor requests another wake. `AppHost.RecommendedWaitMs` clamps the existing PAL wait,
+including minimized waits, without changing the wake-reason mask or enabling a display-clock subscription.
+`RunFrame` consumes due work after close/recovery gates and before posts, minimized/idle early-outs and protected
+paint. It trims only UI-owned scene/pixel capacity and attempts eligible free snapshot slots against the committed
+scene when no pending reconcile, full layout or modal loop invalidates that preparation. Snapshot deadlines retain
+their own sustained-slack/cooldown policy; a `Reading` slot is not a timer candidate. The existing real-paint cold
+preflight remains available when structural work has settled. No scene publication, animation tick, present-slot
+credit, GPU submission or synchronous GPU fence wait is manufactured by maintenance.
+
+Pixel-pool notification occurs after parking, outside the bucket lock, on the returning thread. The host coalesces
+it into a bare window wake (not a UI post or frame request). It consumes the deadline before trimming so a later
+concurrent return can rearm; subscriptions are removed on pool replacement/disposal, with disposal serialized
+against an already copied worker callback. Scene trim attempts are revision-driven; animation-only changes and
+unsuccessful attempts do not rearm, and a successful trim acknowledges its own revision. After draining eligible
+work, a quiet host returns to an indefinite wait. Recovery-excluded maintenance never shortens that recovery wait.
+This is finite cold CPU work, not a claim of literally zero wake cost or immediate GC/process-memory release.
+`ColdMaintenanceTests` exercises deadline/coalescing, worker return, pool lifetime, actual idle/minimized host
+draining without submission, scene-tail success/failure and snapshot cooldown. Render-owned image retirements
+and render-target pool maintenance remain separate; this UI mechanism does not service them.
 
 `SceneFramePublisher` uses three generation-stamped slots with `Free`, `Writing`, `Published`, `Reading`
 phases. The consumer atomically claims the exact published generation **before** reading either its header
@@ -22,6 +67,12 @@ publication does not release the current claim or advance `LastConsumedSeq`. A s
 invalidates structural span reuse and backdrop damage; current scene adoptions conservatively repaint the
 target in full. **Differential (incremental) snapshot publication IS implemented** — see §3.4; tighter
 adoption damage is still not.
+
+The writer prefers the oldest initialized writable snapshot, retaining the same generation-checked claim.
+An extra slot used during a handover must not become dormant and pin `OldestSlotCaptureSeq` forever.
+Scene record-dirty contributions retire independently by publication sequence for self versus descendant
+and transform versus content. A continuously changing descendant cannot extend the lifetime of an already
+consumed ancestor self-content mark; that stale mark would repaint the entire ancestor subtree.
 
 `RenderCompositorAnimations` adopts stable instance/revision-stamped descriptions and independently evaluates
 supported replace-mode spring/eased/keyframe tracks against the render display clock. Transform, opacity,
@@ -33,9 +84,20 @@ visibility parks the renderer's timeline; resume excludes parked elapsed time. `
 owned by `pal-rhi.md` §1.1.1. A refresh-derived bounded fallback is used when that capability is unavailable.
 No animation-only render turn advances the scene-consumption sequence.
 
+Image reveals use a separate, unclamped wall clock owned by the shared `ImageCache` (including detached windows).
+Its sample timestamp travels with image recording metadata; render extrapolation uses that exact anchor, never
+the resynced animation delta. Reveals finish across hidden time without requesting hidden rendering. Per-window
+pause/resume applies to authored compositor tracks, not this shared image clock. Sample before image completion
+pumps and reconcile-time swaps so a new reveal never inherits an old idle timestamp.
+
 After a successful present, a reverse claimed-slot mailbox publishes recording statistics, video-hole
 rectangles and animation poses/completions. UI imports feedback before input/FLIP and rejects stale animation
-instance/revision completions. A newly settled track wakes UI for cleanup. Child hosts share the parent's
+instance/revision completions. A newly settled track wakes UI for cleanup. UI desired tracks remain resident
+until that import; their count is not the renderer's active-motion count. Render-owned exit orphans request
+a UI frame once trackless or past the existing reclaim deadline. An otherwise idle, visible UI bounds its wait
+by the orphan's remaining wall-clock backstop, so absent completion feedback cannot disable reclamation;
+minimized hosts still block until a message. The wake census reports render motion and presented-frame deltas
+separately from UI desired tracks. Child hosts share the parent's
 render thread but retain independent scene claims and timelines. Resize, popup-target destruction and
 device recovery invalidate target epochs while the render thread is parked; old epochs cannot submit.
 Shutdown joins the renderer before releasing scene-resource pins or disposing the display-clock subscription.

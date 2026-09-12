@@ -126,7 +126,8 @@ public sealed class GlyphAtlasStore
     public int DirtyRowStart => _dirtyLo;
     /// <summary>Dirty row count — diagnostics/gates.</summary>
     public int DirtyRowCount => _dirtyHi > _dirtyLo ? _dirtyHi - _dirtyLo : 0;
-    /// <summary>The widest band any flush has needed: the row capacity a staging bank should grow to.</summary>
+    /// <summary>The widest band any flush THIS FRAME has needed: the row capacity a staging bank should grow to.
+    /// A lifetime high-water would undo a warm-bank shrink on the next tiny upload.</summary>
     public int WantedStagingRows => _wantRows;
     /// <summary>Rows the last flush could NOT land because the staging bank was too small (0 = healthy). They stay
     /// dirty and go out next frame, so the frame just recorded is not a faithful rendering of its text.</summary>
@@ -135,6 +136,40 @@ public sealed class GlyphAtlasStore
     public int BandRebases => _rebases;
     /// <summary>The next shelf's top row — how far down the packer has walked.</summary>
     public int ShelfRow => _shelfY;
+    /// <summary>Occupied shelf extent including the bottom sampling apron, not merely ink coverage.</summary>
+    public int OccupiedRowCount => _shelfH == 0 ? 0 : _shelfY + _shelfH + Apron;
+
+    /// <summary>Probe an append without moving the shelf or changing upload state.</summary>
+    public bool CanPack(int w, int h) => TryLocate(w, h, out _, out _, out _);
+
+    private bool TryLocate(int w, int h, out int x, out int y, out int shelfHeight)
+    {
+        x = _shelfX; y = _shelfY; shelfHeight = _shelfH;
+        if (w <= 0 || h <= 0 || w > _size - 2 || h > _size - 2) return false;
+        if (x + w + Apron > _size) { x = 1; y += shelfHeight + Apron; shelfHeight = 0; }
+        return y + h + Apron <= _size;
+    }
+
+    /// <summary>Create a detached larger generation before recording any uploads. Existing cell coordinates and
+    /// coverage are preserved, but normalized UVs must be invalidated by the backend. Allocation failure leaves
+    /// this store untouched. The backend publishes the candidate only after creating its GPU realization and
+    /// must retain the old GPU texture/descriptor until their last-use fence completes.</summary>
+    public GlyphAtlasStore CreateExpanded(int size)
+    {
+        if (size <= _size) throw new ArgumentOutOfRangeException(nameof(size));
+        if (_bandBase >= 0) throw new InvalidOperationException("Atlas growth must precede upload recording.");
+        var candidate = new GlyphAtlasStore(size);
+        int rows = OccupiedRowCount;
+        for (int row = 0; row < rows; row++)
+            _cpu.AsSpan(row * _size, _size).CopyTo(candidate._cpu.AsSpan(row * size, _size));
+        candidate._shelfX = _shelfX;
+        candidate._shelfY = _shelfY;
+        candidate._shelfH = _shelfH;
+        candidate._nonZero = _nonZero;
+        candidate._epoch = checked(_epoch + 1);
+        candidate._dirtyHi = rows;
+        return candidate;
+    }
 
     /// <summary>Shelf-pack one R8 coverage bitmap (<paramref name="src"/>, row-major, at least <c>w*h</c> bytes) and
     /// mark its rows dirty. False = the atlas is full: NOTHING was written and the caller must not treat
@@ -143,10 +178,9 @@ public sealed class GlyphAtlasStore
     public bool TryPack(ReadOnlySpan<byte> src, int w, int h, out int x, out int y)
     {
         x = 0; y = 0;
-        if (w <= 0 || h <= 0) return false;
-        if (_shelfX + w + 1 > _size) { _shelfX = 1; _shelfY += _shelfH + 1; _shelfH = 0; }
-        if (_shelfY + h + 1 > _size) return false;   // atlas full → generational reset (Reset)
-        x = _shelfX; y = _shelfY;
+        if (!TryLocate(w, h, out int nextX, out int nextY, out int shelfHeight)) return false;
+        if (src.Length < (long)w * h) throw new ArgumentException("Coverage buffer is smaller than the glyph.", nameof(src));
+        x = nextX; y = nextY;
         long nonZero = _nonZero;
         for (int row = 0; row < h; row++)
         {
@@ -160,8 +194,9 @@ public sealed class GlyphAtlasStore
             }
         }
         _nonZero = nonZero;
-        _shelfX += w + 1;
-        if (h > _shelfH) _shelfH = h;
+        _shelfX = x + w + 1;
+        _shelfY = y;
+        _shelfH = Math.Max(h, shelfHeight);
         MarkRows(y, h);
         return true;
     }
@@ -198,6 +233,7 @@ public sealed class GlyphAtlasStore
         _bandBase = -1;
         _bandCopiedHi = 0;
         _shortfallRows = 0;
+        _wantRows = 0;
     }
 
     /// <summary>Plan (and consume) one upload flush against a staging bank of <paramref name="stagingRows"/> full-width

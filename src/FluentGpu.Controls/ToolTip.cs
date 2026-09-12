@@ -1,5 +1,4 @@
 using System.Runtime.CompilerServices;
-using FluentGpu.Animation;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
@@ -198,7 +197,8 @@ public sealed class ToolTip : Component
     /// <see cref="KeyboardShowDelayMs"/>: a focus-driven tooltip firing the instant Tab lands would strobe down a tab
     /// order, and WinUI keeps the keyboard leg on its own clock for the same reason
     /// (ToolTipService_Partial.cpp:1777-1779). 0 is honoured literally, and literally means "the next frame": the
-    /// countdown is <see cref="ToolTipClock"/>, which seeds its track on one frame and polls it on the next.</summary>
+    /// countdown is <see cref="ToolTipClock"/>, a host one-shot timer armed during the render that mounts it and
+    /// drained at the top of the next frame.</summary>
     public static Element Wrap(Element target, string text, float grow = 0f, float showDelayMs = float.NaN)
         => Embed.Comp(new ToolTipSlots(target, text, grow, showDelayMs), () => new ToolTip());
 
@@ -482,9 +482,8 @@ public sealed class ToolTip : Component
         // GetInitialShowDelay: Mouse ×2 normal / ×1 reshow (truncated 1.5 — see MouseReshowDelayMs); Keyboard ×2 always.
         bool isReshow = Environment.TickCount64 - lastClosedAtMs.Value < (long)BetweenShowDelayMs;
         // The per-element override (see Wrap) replaces both MOUSE legs and leaves the keyboard leg alone. Clamped at 0
-        // rather than passed raw: the value reaches the AnimEngine as a track duration, and a negative span is not a
-        // shorter delay, it is a malformed track. (0 itself is safe — the timeline reads a non-positive duration as 1ms,
-        // and the clock needs its seed frame regardless.)
+        // rather than passed raw: the value reaches the host timer queue as a deadline offset, and a negative span is
+        // not a shorter delay, it is a deadline in the past. (0 itself is safe and means "the next frame's drain".)
         float delay = keyboardMode.Value ? KeyboardShowDelayMs
                     : !float.IsNaN(showDelayOverride) ? MathF.Max(0f, showDelayOverride)
                     : (isReshow ? MouseReshowDelayMs : MouseShowDelayMs);
@@ -493,10 +492,11 @@ public sealed class ToolTip : Component
         // 2↔3 phase flips must not restart the 5s — the remount re-arms with whatever dwell is left.
         float dwellLeft = MathF.Max(1f, ShowDurationMs - (Environment.TickCount64 - openedAtMs.Value));
 
-        // Mount the per-frame countdown ONLY while a phase is live (1 = show-delay, 2 = auto-dismiss, 3 = safe-zone
-        // grace). When idle it is absent, so the tooltip costs nothing per frame (the host only ticks FrameClock while
-        // something subscribes). The clock is KEYED by phase: the reconciler reuses a same-type component without
-        // re-running its factory (constructor props are mount-time only), so a phase flip must REMOUNT a fresh clock
+        // Mount the one-shot countdown ONLY while a phase is live (1 = show-delay, 2 = auto-dismiss, 3 = safe-zone
+        // grace). When idle it is absent — and while it IS mounted it costs nothing per frame either: ToolTipClock arms
+        // one HostTimerQueue entry at mount and never re-renders, so a pending tooltip lets the host loop idle to the
+        // deadline instead of pinning it at panel rate. The clock is KEYED by phase: the reconciler reuses a same-type
+        // component without re-running its factory (constructor props are mount-time only), so a phase flip must REMOUNT a fresh clock
         // or the open bubble keeps the already-fired show-delay clock and the auto-dismiss never arms. WinUI keeps
         // these as separate DispatcherTimers — m_tpOpenTimer (show delay) vs m_tpCloseTimer (SPI_GETMESSAGEDURATION
         // dwell, ToolTipService_Partial.h:54/96-99) vs m_tpSafeZoneCheckTimer (1s poll, .h:22; cpp:384-414).
@@ -594,13 +594,22 @@ public sealed class ToolTip : Component
 }
 
 /// <summary>
-/// Invisible per-frame countdown, mounted by <see cref="ToolTip"/> only while a show-delay or auto-dismiss is pending.
-/// It is the engine analogue of ToolTipService's DispatcherTimer: on mount it seeds an invisible <see cref="DurationMs"/>
-/// track on its own hidden node (an Opacity 1→1 tween — no visible effect, the node is non-hit-testable), driven by the
-/// AnimEngine with the real per-frame delta. Each frame it polls <c>HasTracks</c>; when the track has settled (the
-/// duration elapsed) it invokes <see cref="OnElapsed"/> exactly once. Unmounts (stopping the per-frame wake) when the
-/// tooltip returns to idle. This rides the host's animation clock — the same real-time source the open/close fade uses —
-/// so the 800ms show delay and 5s auto-dismiss are wall-accurate without a Hosting-layer dependency.
+/// One-shot countdown, mounted by <see cref="ToolTip"/> (and by <see cref="CommandBarFlyout"/> / <see cref="MenuFlyout"/> /
+/// <see cref="Slider"/>) only while a show-delay, auto-dismiss, safe-zone poll or close-fade completion is pending. It is
+/// the engine analogue of ToolTipService's DispatcherTimer, and it is exactly that: <c>UseTimeout</c> on the host's
+/// <c>HostTimerQueue</c> — ONE heap entry armed at mount for <see cref="DurationMs"/>, firing <see cref="OnElapsed"/>
+/// once when the host drains the queue at the top of the frame the deadline falls in. Unmount cancels it (the hook cell
+/// is generation-guarded, so a due-after-unmount pop is a no-op) and a re-arm is a REMOUNT via the call site's
+/// <c>Key</c>.
+/// <para><b>It does not wake the UI thread and it never re-renders.</b> There is no <c>FrameClock.Tick</c>
+/// subscription and no animation track: the component renders one empty, non-hit-testable node at mount and is then
+/// inert. A pending countdown therefore costs zero frames and zero allocations — the host loop idles and merely
+/// shortens its wait to the earliest armed deadline (<c>AppHost.ClampWaitToTimers</c>). The previous mechanism seeded
+/// an invisible Opacity 1→1 tween and polled <c>HasTracks</c> from a per-frame re-render, which pinned the UI thread at
+/// panel rate for the whole 800 ms delay and the whole 5 s dwell; it is deleted.</para>
+/// <para>The queue's clock is the host frame clock (wall clock for a real window, the deterministic accumulated frame
+/// delta headless), so the 800 ms show delay and the 5 s auto-dismiss stay wall-accurate and the VerticalSlice gates
+/// stay deterministic. <see cref="DurationMs"/> 0 is honoured literally and means "the next frame's drain".</para>
 /// </summary>
 internal sealed class ToolTipClock : Component
 {
@@ -609,33 +618,9 @@ internal sealed class ToolTipClock : Component
 
     public override Element Render()
     {
-        var tick = UseContext(FrameClock.Tick);   // re-render every frame while mounted
-        var self = UseRef<NodeHandle>(default);
-        var seeded = UseRef<bool>(false);
-        var fired = UseRef<bool>(false);
-
-        UseEffect(() =>
-        {
-            var anim = Context.Anim;
-            var scene = Context.Scene;
-            if (anim is null || scene is null || self.Value.IsNull || !scene.IsLive(self.Value)) return;
-
-            if (!seeded.Value)
-            {
-                seeded.Value = true;
-                // Invisible duration track on this hidden node: Opacity 1→1 over DurationMs (linear). No paint change;
-                // its only purpose is to be ticked by the AnimEngine and settle (be removed) once DurationMs has elapsed.
-                anim.Animate(self.Value, AnimChannel.Opacity, 1f, 1f, DurationMs, Easing.Linear);
-                return;
-            }
-            // Track settled (countdown elapsed) → fire the pending action once.
-            if (!fired.Value && !anim.HasTracks(self.Value))
-            {
-                fired.Value = true;
-                OnElapsed();
-            }
-        }, tick);
-
-        return new BoxEl { HitTestVisible = false, OnRealized = x => self.Value = x };
+        // Mount-once: DepKey.Empty ⇒ armed on the first render and never re-armed (this component has no reactive
+        // read, so there IS no second render). Cancelled by the cell's own unmount cleanup.
+        UseTimeout(OnElapsed, MathF.Max(0f, DurationMs));
+        return new BoxEl { HitTestVisible = false };
     }
 }

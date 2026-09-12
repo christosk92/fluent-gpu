@@ -215,6 +215,7 @@ Localization) live where their owning doc places them — Engine folders or CI-o
 | Artifact | Authority |
 |----------|-----------|
 | 3-thread topology, SceneFramePublisher, QuarantinePolicy, retire-fence, phase→thread map, seam build order | threading-render-seam.md |
+| UI-owned cold maintenance deadlines, wait clamping and no-frame drain ordering | threading-render-seam.md §0 (pool storage: media-pipeline.md §3; scene capacity: scene-memory.md §2.6a) |
 | **SceneFrame / SnapshotColumns / CopyInto POD shape** (publisher-side) | threading-render-seam.md |
 | The COLUMN LAYOUT those snapshots capture (SceneStore SoA columns) | scene-memory.md |
 | **Quarantine constant** = `RenderInFlightDepth + 1` (belt-and-suspenders, compile-asserted; =0 single-thread step 1) | threading-render-seam.md |

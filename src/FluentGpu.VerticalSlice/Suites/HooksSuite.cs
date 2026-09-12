@@ -46,6 +46,8 @@ static class HooksSuite
         KeyedChecks(strings);
         UnkeyedOrdinalChecks.Run(strings);
         FrameClockPublishChecks.Run(strings);
+        FrameClockPollerCensusChecks.Run(strings);
+        FrameClockPollersSeenChecks.Run(strings);
         ReuseGuardChecks(strings);
         PropsChannelChecks(strings);
         PropsGenChecks(strings);
@@ -1344,7 +1346,12 @@ static class HooksSuite
             for (int i = 0; i < 4 && host.HasActiveWork; i++) host.RunFrame();
             for (int i = 0; i < 6; i++) host.Paint(0);   // warm the drain path (JIT) with the timer armed
             long worst = 0;
-            for (int i = 0; i < 10; i++) { var f = host.Paint(0); if (f.HotPhaseAllocBytes > worst) worst = f.HotPhaseAllocBytes; }
+            for (int i = 0; i < 10; i++)
+            {
+                var f = host.Paint(0);
+                if (f.HotPhaseAllocBytes > worst) worst = f.HotPhaseAllocBytes;
+                if (f.HotPhaseAllocBytes != 0) Console.Error.WriteLine($"[for-alloc] frame={i} bytes={f.HotPhaseAllocBytes} rendered={f.Rendered} components={f.ComponentsRendered}");
+            }
             Check("gate.timer.zero-steady-alloc an armed timer adds 0 bytes to the hot phase on quiet frames",
                 worst == 0, $"worst={worst} bytes (armed timers={host.TimersForTest.Count})");
         }

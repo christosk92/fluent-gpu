@@ -334,9 +334,13 @@ float4 BlurPS(V i) : SV_Target {
         D3D12_RESOURCE_DESC rd=default; rd.Dimension=D3D12_RESOURCE_DIMENSION.D3D12_RESOURCE_DIMENSION_TEXTURE2D;
         rd.Width=(uint)w; rd.Height=(uint)h; rd.DepthOrArraySize=1; rd.MipLevels=1; rd.Format=DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM;
         rd.SampleDesc.Count=1; rd.Layout=D3D12_TEXTURE_LAYOUT.D3D12_TEXTURE_LAYOUT_UNKNOWN; rd.Flags=D3D12_RESOURCE_FLAGS.D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+        // Query BEFORE CreateCommittedResource, on the SAME desc (audit gpu mem-02): the device-reported allocation
+        // requirement, not an inferred w*h*4 pixel estimate — see D3D12MemoryDiagnostics.AllocationBytes.
+        ulong bytes=D3D12MemoryDiagnostics.AllocationBytes(_device,&rd);
         D3D12_CLEAR_VALUE cv=default; cv.Format=rd.Format; ID3D12Resource* res;
         Check(_device->CreateCommittedResource(&hp,D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_NONE,&rd,D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,&cv,__uuidof<ID3D12Resource>(),(void**)&res),"BakedBlur.Target");
-        D3D12MemoryDiagnostics.Track(res,$"{name} {w}x{h}",(ulong)w*(uint)h*4UL); return res;
+        string label=$"{name} {w}x{h}";
+        D3D12MemoryDiagnostics.Track(res,D3D12MemoryDiagnostics.NameOrUnknown(label,bytes),bytes!=0?bytes:(ulong)w*(uint)h*4UL); return res;
     }
 
     private void CreateSrv(ID3D12Resource* res,D3D12_CPU_DESCRIPTOR_HANDLE cpu)

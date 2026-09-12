@@ -552,6 +552,16 @@ public sealed class ImageCache
     /// <summary>Advance the cross-fade clock by <paramref name="dtMs"/> (call once per painted frame, before record).</summary>
     public void Tick(float dtMs) => _clockMs += dtMs;
 
+    // Real-window image time is independent of the animator's clamped/resynced delta. The timestamp travels with
+    // recording inputs so a sparse publication cannot replace render-side wall-time progress with an older anchor.
+    internal double ClockCapturedAtMs { get; private set; } = double.NaN;
+    private FluentGpu.Hosting.ImagePresentationClock _presentationClock;
+    internal void AdvancePresentationClock(double sampledAtMs)
+    {
+        _clockMs = (float)_presentationClock.Sample(sampledAtMs);
+        ClockCapturedAtMs = sampledAtMs;
+    }
+
     /// <summary>Monotonic reveal clock (ms) — passed to the GPU replay path to resolve fade params baked into DrawImageCmd.</summary>
     public float ClockMs => _clockMs;
 

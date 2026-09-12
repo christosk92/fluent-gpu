@@ -915,11 +915,11 @@ early-out and reusing `PathFlatten` + `PathHitTest.Contains` with the same ViewB
 bakes, so click and pixels agree. This is a CLIP, not paint-derived hit-testing — input has always followed
 clips (see §5.1's licensed-exception note for the one opt-in that IS paint-derived).
 
-**Partial repaint (§13.1): v1 VETO.** `RepaintStreamSafety.Scan` returns false on `PushStencilClip`, so any
-frame containing a stencil clip takes the full-repaint route — the clamped-replay × mask-clear-rect
-interaction is untested and therefore EXCLUDED, not relied on (the `EdgeFade` "stream-UNSAFE" precedent).
-`RepaintPolicy.TryBodySize` still frames BOTH ops (it is the ONE opcode→payload-size table; framing is not
-safety). **Marked follow-up:** admitting stencil frames to clamped replay.
+**Partial repaint (§13.1): layer-disjoint scopes.** `RepaintStreamSafety.Scan` admits balanced stencil scopes
+outside layers, including nested stencil masks. The outer clear, mask draw and inner erase all use the same
+damage-clamped target scissor. Layer siblings are independent; layer/stencil nesting in either direction remains
+excluded because target coordinates or source-halo coverage can change within the scope. See §13.1a for the
+owning replay-safety policy and the real-pixel identity scenarios. `RepaintStreamSafety.TryBodySize` frames both ops.
 
 **Span reuse.** A stencil push/pop inside a copied span is EXACT under translation — the `ClipCmd` patch and
 the `FillPathCmd` patch combined (`DeviceRect` is device space, the mask geometry is authored-space with all
@@ -968,7 +968,14 @@ contract, not an optimization detail:
   pairwise disjoint and cover every pixel whose feather is < 1**; both invariants, and the corner-arc fold into the
   top/bottom band depth, are owned by `FluentGpu.Render.EdgeFadeStrips` (portable, headless-gated as
   `gate.edgefade.strips`). The two shaders share ONE HLSL feather body, so a strip-restored fade matches a
-  legacy-composited one. **Where it may run** is the second half of eligibility, owned by
+  legacy-composited one. Both snapshots share ONE pooled scratch lease — `D` in the top half, `F` in the bottom — and
+  **where each strip sits inside a half is owned by `FluentGpu.Render.EdgeFadeStripPack`** (portable; the lease size,
+  the copy destination and the restore's source-UV constants all call its `Measure`/`Place`, so they cannot disagree).
+  That layout is a **shelf**, not a vertical stack: wide bands stack on one column, tall bands sit side by side on one
+  shelf below them, so the lease is sized by the strips' actual area (`max(maxColumnW, ΣshelfW) × (ΣcolumnH +
+  maxShelfH)` per half) instead of max-width × total-height — a full-window four-edge fade at 1770×1140 asks for
+  1770×2280 and leases 28 MiB after the power-of-two bucket ladder above 2048 rows (15.4 MiB tight) rather than 56.
+  **Where it may run** is the second half of eligibility, owned by
   `EdgeFadeStrips.GroupAllowsStrip(openGroupCount, innermostKind, innermostLocalUsedW)` (portable, headless-gated as
   `gate.edgefade.strip-in-blur-group`) and decided by the **innermost open group alone** — the snapshot reads, and the
   restore writes, exactly the one surface the subtree draws into, and nothing enclosing it is touched until its own
@@ -1324,6 +1331,12 @@ batcher: glyph instances sort into PassClass=Glyph runs keyed by (atlas page, cl
 
 ### 11.1 Clean-span reuse rule (amended — folds the content-epoch + baked-geometry fixes)
 
+**Windows glyph-capacity preflight (2026-09-12):** glyph, gradient-glyph and icon demand is prepared before
+`cmdList.Reset` and before image-upload owners stamp `_fenceValue + 1`. This ordering is mandatory because the
+rare atlas-growth fence drain advances that value. The active bank then uploads the full prepared dirty band
+before glyph draws; atlas-epoch changes invalidate the retained canvas ledger. Capacity and lifetime semantics
+are owned by `text.md` §5.3–5.4.
+
 A memcpy'd clean DrawList span is **valid IFF**:
 1. **every handle it references `IsLive`**, AND
 2. **for `GlyphRunRef` and `ImageRef` handles, the backing realization `ContentEpoch` is unchanged**
@@ -1446,13 +1459,15 @@ now owns.
      DIP space. Two rects with a sub-pixel gap round out into a shared device column that one clear covers
      once and two replays blend twice — a permanent hairline. After the fold, the clear list, the scissor
      and the cull describe **one** pixel set by construction.
-4. **Full-redraw fallback → `FullDirect`:** >16 accumulated rects, >60 % window coverage (checked both
-   before and after the merge), layer resize, DPI/swapchain resize, first frame, or a stream the replay
+4. **Full-redraw fallback → `FullDirect`:** ≥60 % target-visible coverage after clipping and coalescing
+   to the replay budget, layer resize, DPI/swapchain resize, first frame, or a stream the replay
    cannot reproduce (§13.1a). **AS-BUILT:** the fallback is `FullDirect` — today's straight-to-back-buffer
    path, byte for byte — **not** a full redraw into the canvas. It is the permanent safe harbor and the
    cheapest full frame available (no canvas, no blit); scroll lands here by policy and therefore costs
    exactly what it did. The canvas is only rebuilt (`FullIntoCanvas`) when partial repaint is otherwise
    eligible and the canvas alone is stale — i.e. when the rebuild pays for the *next* frame.
+   The accumulator merges at its 16-rect capacity; that alone does not force full. Off-target tails never count
+   toward the cutoff. `offscreen-damage-visible-tail` checks this with real pixel identity.
 
 The canvas RT is also the natural sample source for in-app Acrylic (§7.2). Animated transforms dirty only
 old∪new bounds → a spinner repaints a tiny region.
@@ -1465,7 +1480,7 @@ old∪new bounds → a spinner repaints a tiny region.
 | `RepaintDamageRegion` | ≤16 accumulated float-DIP rects, pairwise disjoint, least-waste merge at capacity; `IsEmpty` is *count 0 **and** no forced-full reason*, so a `ForceFull` can never be mistaken for "nothing changed"; `RepaintFullReason` names the surrender. Rides `FrameInfo` (seam type: `pal-rhi.md`). |
 | `ReplayRects` | ≤4 rects, clamped to the target, disjoint **on the device pixel grid**. The layered route has its own, smaller budget (`MaxLayeredReplayRects`, currently **2**) because it pays an extra group-RT clear per walk — **not** because the stream can only be walked once. It can be: `Acquire` re-clears every lease, `Release` needs no fence on the same queue, and the clamp is value-level (`CurrentScissorRect`), so a second walk cannot observe the first — the same mechanism the streaming route has always used for N walks. What could not repeat was the backend's per-frame half (pool aging, the timestamp query pair, the single full-surface blit), now split into `BeginLayeredFrame` / `WalkLayered` / `EndLayeredFrame`. The precondition licensing it is `RepaintStreamSafety` admitting only plain `Opacity` groups here, which keeps the blur pin cache — position/content-keyed and replay-rect-unaware — out of reach of a culled walk. |
 | Decode-time culling | **A correctness requirement, not an optimization.** Every primitive-producing op is AABB-tested against the replay rect at decode time with a **per-kind halo derived from what its vertex shader actually rasterizes** — AA margin, stroke half-width, shadow offset/spread/blur, glyph overhang — plus a 1-DIP safety pad covering the scissor's round-OUT. Under-covering a halo drops a boundary primitive and leaves a chopped shape in the canvas; over-covering costs one scissored draw. |
-| Replay-unsafe streams | Acrylic layers, `LayerKind.Blur`, `LayerKind.EdgeFade` **with σ > 0**, `PushStencilClip`, any unrecognized opcode, any truncated payload → `FullDirect`. These sample or displace the target, so a scissored replay would read texels the clamp did not write. Safe, and admitted: plain `LayerKind.Opacity` (its pooled RT is written and composited entirely inside the clamp) and the **plain σ=0 `EdgeFade` strip fade** — its restore intersects every strip with the clip before writing, and its shader is a per-pixel `lerp(D, F, feather)` over premultiplied alpha with no spatial tap, so it displaces nothing and owes no damage inflation. The admission tests σ, not the kind: the two edge-fade classes share a `LayerKind`. |
+| Replay-unsafe streams | Acrylic layers, stencil/layer nesting in either direction, unbalanced layer/stencil scopes, any unrecognized opcode, any truncated payload → `FullDirect`. Stencil scopes outside layers (including nested masks) are admitted: their outer clear and mask draws use the same damage-clamped scissor; sibling layers are independent. Layers inside masks or masks inside layers remain excluded because a target change or blur-source halo can change the mask's coordinate or clear coverage. The real-pixel gates are `static-stencil-sibling-blur` and `nested-stencil-fractional-damage` in `--repaint-identity`. Safe, and admitted: plain `LayerKind.Opacity` (its pooled RT is written and composited entirely inside the clamp); the **plain σ=0 `EdgeFade` strip fade** — its restore intersects every strip with the clip before writing, and its shader is a per-pixel `lerp(D, F, feather)` over premultiplied alpha with no spatial tap, so it displaces nothing and owes no damage inflation; and **`LayerKind.Blur` / `EdgeFade` at σ > 0**. A Gaussian's taps DO read outside the clamp, so the σ > 0 admission is paid for in three places rather than assumed: the backend renders the group's SOURCE over `R ⊕ SelfBlurRegion.TapRadius(σ)` (a halo derived from the open-group stack, additive over nesting) and composites only `R` through the uninflated `CurrentScissorRect()`; the recorder grows a dirty node's damage band by the reach of any **blurred ancestor**, so the blurred output's outer ring repaints with it; and a clamped frame refuses to MINT a blur pin, since `BlurPinKey` is position/content-keyed and cannot express "correct only inside R". This is WebRender's and Chromium's rule — grow the dirty rect by ~3σ, render the source over it, write back only the dirty part — rather than a veto, and it is the admission that matters in practice: an app holding a blurred surface on screen took EVERY frame full without it. Pixel-verified on an Adreno X1-85 (`--repaint-identity` scenario `blur-group-straddle`); the headless reference cannot settle it, having no Gaussian at all. |
 | Publish-sequence carry | `SceneFramePublisher` unions a dropped frame's region forward, and `FrameInfo.CarriedFromSeq` records how far back the carry reaches. A sequence **gap is not a correctness event** — `DropOldest` makes gaps normal under exactly the load partial repaint exists for; the question is whether the gap's damage rode forward. A bare gap is a diagnostic counter. |
 | `canvasValid` ledger | ONE ledger for the ONE canvas (never a per-back-buffer pair). Cleared by: any `FullDirect` primary submit, a canvas size/scale/clear-colour change, a carry that did not cover a gap, an instance-bank overflow this frame (`DroppedInstanceCount != 0`), and device re-init / resize / recovery. Every one of these is a **one-frame** self-heal — the next frame rebuilds into the canvas. |
 | Blit-only self-check | The 0-rect route rests on *bytes differ ⇒ region non-empty*, which nothing structurally enforces. The canvas therefore remembers the `FrameInfo.DrawListHash` it was last painted from; a mismatch invalidates the canvas and takes one named full frame. This converts the whole "missed damage source" class from a **permanent** ghost into a transient one plus a diagnostic that points at the source. |

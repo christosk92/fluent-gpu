@@ -100,6 +100,18 @@ public abstract class Computation : IDisposable
     private List<Computation>? _owned;                        // nested computations created during this run
     private readonly Computation? _owner;                    // who disposes us when they re-run/dispose
 
+    /// <summary>DIAGNOSTIC identity: the object this computation exists on behalf of — the <c>Component</c> for a
+    /// render-effect, or for an effect/memo a component's hooks created. <c>null</c> for anything built outside a
+    /// component. Typed <see cref="object"/> so the reactive core stays ignorant of the hooks layer.
+    /// <para>It exists because a leaked per-frame poller — a <c>FrameClock.Tick</c> subscriber that never unmounts and
+    /// so pins the host at panel rate forever — was only ever visible as a COUNT
+    /// (<c>AppHost.FrameClockPollerCount</c>), and nothing on a subscribed computation said WHO it was:
+    /// <see cref="_owner"/> is the disposal scope (a payload-less <c>ReactiveScope</c>) and hook computations are
+    /// deliberately ownerless (see the constructor note below), so no walk from the subscriber list reaches a type
+    /// name. Read only at diagnostic-report cadence (the 30 s <c>[wake]</c> census), never per frame: one reference
+    /// per computation, written once at construction, and no string is materialised until a report names it.</para></summary>
+    internal object? DiagOwner;
+
     protected Computation(ReactiveRuntime runtime, Computation? owner, bool structural = false)
     {
         Runtime = runtime;

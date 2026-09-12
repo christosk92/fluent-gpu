@@ -8,6 +8,7 @@ static class CompositorAnimationChecks
     public static void Run()
     {
         IndependentProgress();
+        CompletedFlipRowsAwaitUiFeedback();
         SpringRetarget();
         ParkAndCancel();
         PublisherReuseAndVisibility();
@@ -67,6 +68,43 @@ static class CompositorAnimationChecks
         long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
         Check("gate.compositor-alloc", allocated == 0 && renderer.HasActive,
             $"Independent looping animation allocated {allocated} bytes during steady render ticks.");
+    }
+
+    private static void CompletedFlipRowsAwaitUiFeedback()
+    {
+        var (scene, _, nodes, animation) = Fan(2);
+        var outgoing = nodes[0];
+        var incoming = nodes[1];
+        animation.SeedExit(outgoing, new EnterExit(Dy: -14f, Opacity: 0f, Active: true), MotionTok.ControlFast);
+        scene.Orphan(outgoing);
+        animation.SeedEnter(incoming, new EnterExit(Dy: 14f, Opacity: 0f, Active: true), MotionTok.ControlFast);
+        var snapshot = new SceneRecordingSnapshot();
+        snapshot.Capture(scene);
+        var desired = new CompositorAnimationSnapshot();
+        animation.CaptureCompositorAnimations(desired, 0);
+        var renderer = new RenderCompositorAnimations();
+        renderer.Adopt(desired, snapshot, 0); // structural pending starts hold their first presented pose
+        renderer.Tick(snapshot, 16);
+        bool progressing = renderer.HasActive && desired.Count == 4;
+        renderer.Tick(snapshot, 250); // both 150ms pairs have completed, without any UI tick or feedback drain
+
+        int retainedBeforeFeedback = animation.TrackCount;
+        int completed = 0;
+        foreach (ref readonly var row in renderer.Feedback)
+            if (row.Done) completed++;
+        bool settledRender = !renderer.HasActive && completed == 4
+            && snapshot.Paint(outgoing).Opacity == 0f && snapshot.Paint(incoming).Opacity == 1f;
+        bool retainedUi = retainedBeforeFeedback == 4 && !animation.HasUiWork
+            && animation.HasTracks(outgoing) && animation.HasTracks(incoming)
+            && scene.OrphanCount == 1 && !scene.IsOrphan(incoming);
+        animation.ApplyCompositorFeedback(renderer.Feedback);
+
+        Check("gate.compositor-flip-four-rows-await-feedback the UI census retains both completed enter and exit pairs until feedback drains",
+            progressing && settledRender && retainedUi && animation.TrackCount == 0
+            && !animation.HasTracks(outgoing) && !animation.HasTracks(incoming) && scene.OrphanCount == 1,
+            $"beforeFeedback={retainedBeforeFeedback} renderDone={completed} renderActive={renderer.HasActive} "
+            + $"afterFeedback={animation.TrackCount} orphans={scene.OrphanCount}; UI track membership is not render activity.");
+        snapshot.ReleaseResources();
     }
 
     private static void SpringRetarget()

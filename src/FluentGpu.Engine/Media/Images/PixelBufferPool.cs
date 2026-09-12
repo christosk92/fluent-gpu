@@ -35,6 +35,10 @@ public sealed class PixelBufferPool
     public long RetainedBytes => Interlocked.Read(ref _retainedBytes);
     public long PeakRetainedBytes => Interlocked.Read(ref _peakRetainedBytes);
 
+    // Raised AFTER parking, outside the bucket lock, on the returning thread. Hosts coalesce this into one cold
+    // deadline and unsubscribe on pool replacement/disposal. No upload, signal write, or frame is requested here.
+    internal event Action<PixelBufferPool>? BufferRetained;
+
     /// <summary>Rent ≥ minBytes. ALWAYS succeeds: bucket hit pops the parked array (zero-alloc), miss allocates a
     /// fresh bucket-sized array, oversize allocates exact-size unpooled. Caller returns exactly once.</summary>
     public byte[] Rent(int minBytes)
@@ -77,9 +81,10 @@ public sealed class PixelBufferPool
             AssertNotDoubleReturned(stack, buffer);
             stack.Push(buffer);
         }
+        BufferRetained?.Invoke(this);
     }
 
-    /// <summary>Idle-cadence trim (AppHost.MaybeTrimOnIdle, ~30s): release every parked array to the GC.</summary>
+    /// <summary>Cold one-shot maintenance: release every parked array to the GC, never in-flight buffers.</summary>
     public void Trim()
     {
         for (int i = 0; i < BucketCount; i++)

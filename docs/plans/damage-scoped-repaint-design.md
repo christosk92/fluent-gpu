@@ -16,13 +16,25 @@
   scrolling UI has an edge fade on screen permanently, so the veto meant almost every frame was full regardless of
   its damage. Verified on device — `--repaint-identity` scenario `edge-fade-strip-straddle`, 2 replay rects,
   pixel-identical to a full redraw on an Adreno X1-85.
-- **Step 2, the σ>0 BLUR half — NOT DONE.** §2a/§2b and §2c items 1, 2, 3, 7 remain. A lyrics-open frame is still
-  `FullDirect`. Corrections to the plan below, found while implementing the rest: `TapRadius` returns PHYSICAL px
-  while `_cullRect` is DIP (the inflation must divide by `_frameScale`); `BlurLocalInPlace` has the identical
-  tap-truncation defect and the defensive-drain duplicate is a second copy of the same logic; five sub-paths in the
-  PushLayer arm `continue` without a matching pop, so the halo must be paired per-path; `RetainPinFromScratch` has
-  two call sites, both dominated by `pinTag`; and §2c item 5 is not an "extension" of the CPU reference — that
-  reference models every PushLayer as flat alpha and has no Gaussian at all, so it is a from-scratch separable blur.
+- **Step 2, the σ>0 BLUR half — LANDED.** §2a, §2b and §2c items 1, 2, 3 are done; a lyrics-open frame is no longer
+  `FullDirect`. The halo is DERIVED from the open-group stack (`_layerHaloPx`, recomputed at the four places
+  `_opacityGroups` changes) rather than pushed/popped by hand — the PushLayer arm has eight early-`continue` paths and a
+  hand-paired counter would leak a halo on whichever one was missed, which is the trap the note below predicted. It
+  inflates only the `_rootDamage` half of the scissor plus `_cullRect` (TapRadius is PHYSICAL px, `_cullRect` is DIP —
+  the divide is in `Cull`), and PopLayer's existing order drops it before `BlurInPlace` and before every composite, so
+  the composite still uses the uninflated `CurrentScissorRect()` with no extra sequencing. Item 3 (§2b) is
+  `EnclosingBlurHaloDip`, an O(depth) ancestor walk applied to all three damage arms. A clamped frame refuses to mint a
+  blur pin (`ReplayCoversRegion`). `RepaintStreamSafety.Scan` now vetoes only Acrylic and `PushStencilClip`.
+  **Verified on the real Adreno X1-85: `--repaint-identity` 8/8 pixel-identical with the new `blur-group-straddle`
+  scenario, which takes the partial route (`rects=2 partialFrames=2`) — and with the halo forced to 0 that same
+  scenario fails by 10 321 px over a 565×163 box, so it is a real test of the fix and not a decoration.** The two
+  stream-safety gates that encoded the old veto were rewritten to the new contract; §13.1a's *Replay-unsafe streams*
+  row and `RepaintStreamSafety`'s XML contract are updated and `check-canon.ps1` passes.
+- **Still not done from Step 2:** §2c item 5 (extending the headless `ReplayLayered` CPU reference with a σ-halo group)
+  and item 7 (the perf-only narrowing of the blur source to `(R ∩ output) ⊕ halo`). Item 5 is a from-scratch separable
+  blur — that reference models every PushLayer as flat alpha and has no Gaussian — so the σ>0 arithmetic is currently
+  gated on device rather than headlessly. Item 7 is explicitly risky (it breaks the pin size-exactness contract unless
+  `RegionBox` shrinks consistently) and buys fill, not correctness.
 
 Written 2026-09-11 against the `repaint=1.0` finding on WaveeMusic (Snapdragon X Elite / Adreno X1-85).
 
