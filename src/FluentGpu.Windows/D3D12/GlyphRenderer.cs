@@ -1,4 +1,4 @@
-using System.Buffers;
+﻿using System.Buffers;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -186,6 +186,12 @@ internal sealed unsafe class GlyphRenderer : IDisposable
     private const int MaxStagingRows = 2048;
     private readonly int[] _stagingRows = new int[FrameCount];
     private int _wantStagingRows = InitialStagingRows;
+    /// <summary>Submitted frames since the atlas was last dirty. Drives the staging reserve back down — the same
+    /// tier-gated idle-window shape LayerTargetPool uses for its render targets, and generous for the same reason.</summary>
+    private int _atlasIdleFrames;
+    /// <summary>Idle frames before a grown staging reserve is handed back. ~1 s at 120 Hz on a weak (UMA) adapter
+    /// where the memory matters most, five times that elsewhere — mirroring LayerTargetPool's trim windows.</summary>
+    private static int StagingIdleFrames => GpuProfile.IsWeak ? 120 : 600;
     private bool _uploadBacklog;              // a flush left rows dirty (staging short) — this frame's text is not faithful
     private ID3D12DescriptorHeap* _srvHeap;
     private D3D12_GPU_DESCRIPTOR_HANDLE _srvGpu;
@@ -1459,7 +1465,16 @@ float4 PSMain(VSOutG i) : SV_Target
     {
         _active = ((frameIndex % FrameCount) + FrameCount) % FrameCount;   // this frame's instance buffer — already fenced, so no CPU↔GPU race
         if (_capacity[_active] < _wantCapacity) GrowBank(_active);          // fenced here ⇒ the only safe moment to swap it
-        if (_stagingRows[_active] < _wantStagingRows) GrowStagingBank(_active);   // ditto: a fenced bank is the ONLY safe swap point
+        // The atlas has been clean for a long stretch ⇒ hand the grown reserve back. Counted in SUBMITTED frames and
+        // deliberately generous: a shrink immediately followed by a big reset costs one stagingShort frame, which the
+        // existing AtlasResetPending → forced-repaint machinery already handles and gate.atlas.upload.clamp/.drain
+        // already pin. Never released to null — UploadIfDirty dereferences the bank unconditionally.
+        if (_atlasIdleFrames >= StagingIdleFrames && _wantStagingRows > InitialStagingRows)
+        {
+            _wantStagingRows = InitialStagingRows;
+            _atlasIdleFrames = 0;
+        }
+        if (_stagingRows[_active] != _wantStagingRows) ResizeStagingBank(_active);   // a fenced bank is the ONLY safe swap point
         _activeGva = _instances[_active]->GetGPUVirtualAddress();
         _activeGradGva = _gradInstances[_active]->GetGPUVirtualAddress();
         _cursor = 0;
@@ -1474,6 +1489,7 @@ float4 PSMain(VSOutG i) : SV_Target
         // Open the atlas upload frame AFTER the deferred reset: the band mapping (arena offset 0 ↔ one atlas row) is
         // per-frame, and the reset it may follow rewinds the packer to the top of a now-empty mirror.
         _uploadBacklog = false;
+        _atlasIdleFrames = _atlas.IsDirty ? 0 : _atlasIdleFrames + 1;
         _atlas.BeginFrame();
         _runsCached = 0;
         _runsShaped = 0;
@@ -1581,13 +1597,19 @@ float4 PSMain(VSOutG i) : SV_Target
     /// on the bank that frame is about to use: that bank's fence has retired there, so no in-flight copy can still be
     /// reading the buffer being released. (The banks are Map/Unmap-per-flush, never persistently mapped, so there is
     /// nothing to unmap first.)</summary>
-    private void GrowStagingBank(int f)
+    /// <summary>Re-create one staging bank at <see cref="_wantStagingRows"/>. Both directions: the bank used to only
+    /// ever grow, so one generational reset with a big working set took all three to MaxStagingRows — 24 MiB of pinned
+    /// host memory — and held them there for the process lifetime, on a UMA laptop, for an atlas that is dirty on
+    /// roughly one frame in ten thousand. Called only from <see cref="BeginFrame"/>, which is the one point where this
+    /// bank is known fenced.</summary>
+    private void ResizeStagingBank(int f)
     {
+        bool shrinking = _stagingRows[f] > _wantStagingRows;
         D3D12MemoryDiagnostics.Release(_texUpload[f], $"Glyph.AtlasUpload[{f}]");
         _texUpload[f]->Release();
         _texUpload[f] = CreateUpload(_device, (uint)(ATLAS * _wantStagingRows), $"Glyph.AtlasUpload[{f}]");
         _stagingRows[f] = _wantStagingRows;
-        Diag.Count("text.atlas", "stagingGrow");
+        Diag.Count("text.atlas", shrinking ? "stagingShrink" : "stagingGrow");
         Diag.Set("text.atlas", "stagingBytes", AtlasStagingBytes);   // all banks together — the memory story, not a per-frame value
     }
 
