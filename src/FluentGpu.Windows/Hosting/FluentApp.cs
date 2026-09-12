@@ -699,6 +699,11 @@ public static class FluentApp
     /// Null headless or before the window is up.</summary>
     public static (long Bytes, int Count)? GpuResidency() => s_host?.GpuResources is { } f ? f() : null;
 
+    /// <summary>The live image cache, so an app's memory governor can register it as a sheddable arena. Trimming it
+    /// drops unpinned (off-screen) images and keeps every pinned one, which makes it the cheapest thing an app can
+    /// give back under pressure. Null before the window is up or after it closed.</summary>
+    public static ImageCache? EngineImages => s_host?.Images;
+
     /// <summary>Compact per-class GPU residency fragment (top tracked-resource classes, render-target pool
     /// occupancy, upload-arena counters) — see <see cref="D3D12Device.DiagGpuCensusLine"/>. Pairs with <see
     /// cref="GpuResidency"/> in an app's memory sampler: `gpu bytes=… resources=…` plus this fragment appended
