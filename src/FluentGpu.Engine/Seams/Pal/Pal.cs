@@ -727,6 +727,17 @@ public interface IPlatformWindow : IDisposable
     void SetTitle(StringId title);
     void Show();
 
+    /// <summary>Hide the window without destroying it (Win32 <c>SW_HIDE</c>: no taskbar button, no Alt+Tab entry, the
+    /// HWND and every engine resource stay alive). <see cref="Show"/> brings it back in the placement it had. While
+    /// hidden the host parks exactly as if minimized (<see cref="WindowStatus.Parked"/>). Default: a no-op (a backend
+    /// without window visibility).</summary>
+    void Hide() { }
+
+    /// <summary>True while the window is shown. The pull side of <see cref="Show"/>/<see cref="Hide"/>, read by the host
+    /// every frame to park a hidden window. Win32 reads the live <c>WS_VISIBLE</c> style, so a window shown or hidden
+    /// by any other code path is still seen correctly. Default true.</summary>
+    bool IsVisible => true;
+
     /// <summary>The per-window IME/text-services seam (composition events, candidate-window placement).</summary>
     IPlatformTextInput TextInput { get; }
 
@@ -753,6 +764,14 @@ public interface IPlatformWindow : IDisposable
     /// <summary>Enter/leave borderless monitor fullscreen, restoring the exact prior window placement on exit.</summary>
     void SetFullscreen(bool fullscreen) { }
     void CloseWindow() { }
+
+    /// <summary>Asked before the window closes (Win32 <c>WM_CLOSE</c>: the caption close button, Alt+F4, the system
+    /// menu, <see cref="CloseWindow"/>). Return true to keep the window — the handler has handled the request, typically
+    /// by hiding to a notification-area icon; false (or no handler) lets it close. A
+    /// <see cref="CloseReason.SessionEnding"/> request cannot be vetoed: the handler is told, then the window closes
+    /// (<see cref="WindowCloseGate"/>). Invoked on the UI thread from inside the platform's message dispatch. Default:
+    /// no handler and nothing stored (a backend whose windows close unconditionally).</summary>
+    Func<CloseReason, bool>? CloseRequested { get => null; set { } }
 
     /// <summary>Start the OS interactive MOVE loop for this window from the current pointer, exactly as if the user had
     /// pressed a caption the window does not draw — so Aero Snap, the Windows 11 snap bar, title-bar shake, monitor hops

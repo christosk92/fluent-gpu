@@ -128,6 +128,55 @@ public static class FluentApp
     /// Defaults to FALSE (dark) when unreadable, matching the engine default.</summary>
     public static bool SystemUsesLightTheme() => Win32Theme.SystemUsesLightTheme();
 
+    /// <summary>True when the TASKBAR is light — Settings ▸ Colors ▸ "Choose your default Windows mode" (registry
+    /// <c>SystemUsesLightTheme</c>), which is NOT the app mode <see cref="SystemUsesLightTheme"/> reads: the Windows 11
+    /// "Custom" combination pairs a dark taskbar with light apps. Anything drawn on the taskbar (a notification-area
+    /// glyph) must follow this one. Defaults to FALSE (dark) when unreadable — the taskbar was always dark before the
+    /// value existed. A change arrives with <see cref="SystemColorsChanged"/> (the same <c>ImmersiveColorSet</c>
+    /// broadcast) and, while the window is hidden, as <c>NotifyIconEvent.ShellChanged</c> on a notification icon.</summary>
+    public static bool TaskbarUsesLightTheme() => Win32Theme.TaskbarUsesLightTheme();
+
+    // ── window lifecycle (close veto, hide/show, state relay) ───────────────────────────────────────────────────────
+    private static Win32Window? s_window;
+
+    /// <summary>
+    /// Asked on the UI thread before the main window closes — the caption close button, Alt+F4, the system menu's Close,
+    /// <see cref="CloseWindow"/>. Return <see langword="true"/> to keep the window (you handled the request: typically
+    /// <see cref="SetWindowVisible"/>(false) to live on in the notification area); <see langword="false"/> or no handler
+    /// lets it close and the run end. A <see cref="CloseReason.SessionEnding"/> request (logoff, shutdown, the Restart
+    /// Manager) is reported but cannot be vetoed. Settable before or during <see cref="Run(Func{Component}, AppOptions?)"/>.
+    /// An explicit "Quit" verb records its intent (a latch the handler reads) BEFORE calling <see cref="CloseWindow"/>, so
+    /// the handler lets that one close through instead of hiding.
+    /// </summary>
+    public static Func<CloseReason, bool>? CloseRequested { get; set; }
+
+    /// <summary>Ask the main window to close — the same request the caption close button makes, so it goes through
+    /// <see cref="CloseRequested"/> first (posted: returns at once, the close lands on the next pump). A no-op before the
+    /// window exists or after it closed. Callable from any thread.</summary>
+    public static void CloseWindow() => s_window?.CloseWindow();
+
+    /// <summary>True while the main window is shown (false before it exists, after it closed, or while hidden by
+    /// <see cref="SetWindowVisible"/> / <see cref="AppOptions.StartHidden"/>). Live read of the window. UI-thread.</summary>
+    public static bool WindowVisible => s_window is { IsClosed: false } w && w.IsVisible;
+
+    /// <summary>Show or hide the main window without closing it. Hidden, the window leaves the screen, the taskbar and
+    /// Alt+Tab; the frame loop parks exactly as if minimized (no reconcile, layout or present; <c>UseIsActive</c> false)
+    /// while playback, timers on other threads, posts and OS events keep running. Showing brings it back in the placement
+    /// it had (a window hidden while minimized comes back minimized — restore it yourself). Idempotent; a no-op without
+    /// a window. UI-thread only.</summary>
+    public static void SetWindowVisible(bool visible)
+    {
+        if (s_window is not { IsClosed: false } w || w.IsVisible == visible) return;
+        if (visible) w.Show();
+        else w.Hide();
+    }
+
+    /// <summary>Relay of <c>AppHost.WindowStateChanged</c>: the main window was minimized, restored, maximized, hidden or
+    /// shown (the <see cref="WindowStateChange"/> flags say which; several can be true at once). Raised on the UI thread
+    /// once per frame that observed a change, parked frames included — the minimize-to-tray edge. The first frame only
+    /// seeds; read <see cref="WindowVisible"/> for the current state.</summary>
+    public static event Action<WindowStateChange>? WindowStateChanged;
+
     /// <summary>The current OS accent color (Settings ▸ Colors), preferring the <c>Light2</c> shade WinUI uses for the
     /// dark-theme accent fill, else the base accent; null when unreadable. The app-layer facade over the Win32 reader.</summary>
     public static ColorF? SystemAccent()
@@ -265,6 +314,9 @@ public static class FluentApp
         // frame already lays out at the user's persisted level — keep the statics in agreement with it.
         s_zoom = ZoomLadder.Clamp(o.Zoom);
         s_zoomWindow = window;
+        // The close veto reads the LIVE static on every request, so a handler set before Run or during it both apply.
+        s_window = window;
+        window.CloseRequested = static reason => CloseRequested is { } veto && veto(reason);
 
         // Prefer the exact OS ramp (theme-aware accent fills); fall back to the base accent (Tok.SetAccent derives a ramp).
         if (Win32Theme.ReadAccentRamp() is { } ramp) Tok.SetAccent(in ramp);
@@ -328,6 +380,8 @@ public static class FluentApp
         host.AppNavigationCommand += forwardAppNav;
         Action forwardTaskbarCreated = () => TaskbarButtonCreated?.Invoke();
         host.TaskbarButtonCreated += forwardTaskbarCreated;
+        Action<WindowStateChange> forwardWindowState = change => WindowStateChanged?.Invoke(change);
+        host.WindowStateChanged += forwardWindowState;
 
         // Live re-theme: on every theme change the host re-applies the OS window material so DWM's immersive-dark titlebar
         // and the Mica system backdrop flip to the new theme's variant (instant — the OS can't cross-fade its backdrop;
@@ -357,14 +411,16 @@ public static class FluentApp
             s_gpuDevice = gpu;
         }
 
-        window.Show();
-        BootStamp("window-show");
+        // StartHidden: the window exists (HWND, swapchain, host, the mounted tree) but is never shown, so the first frame
+        // is already parked — the loop blocks on messages until SetWindowVisible(true), and that show edge paints.
+        if (!o.StartHidden) window.Show();
+        BootStamp(o.StartHidden ? "window-start-hidden" : "window-show");
 
         // Optional diagnostic-harness takeover (the gallery's SoakProbe longevity / leak-hunt + targeted-stress modes,
         // gated on FG_SOAK / FG_STRESS_* / FG_WAKE_AUDIT). Installed via FluentApp.DiagnosticRun; when it handles the
         // run it returns true and we skip the interactive loop, returning to the clean shutdown below. Null for normal
         // apps. Pair with FG_D3D_MEM=1 for the per-resource [d3d-mem] create/release trace.
-        if (DiagnosticRun is { } diag && diag(host, window, device)) { WindowHandle = 0; s_zoomWindow = null; s_zoom = 1f; return; }
+        if (DiagnosticRun is { } diag && diag(host, window, device)) { WindowHandle = 0; s_zoomWindow = null; s_zoom = 1f; s_window = null; return; }
 
         bool fpsLog = Diag.EnvFlag("FG_FPS_LOG");   // periodic [fps] readout to stderr (frame-rate / frame-ms diagnosis)
         bool scrollPerf = Diag.EnvFlag("FG_SCROLL_PERF");
@@ -682,6 +738,7 @@ public static class FluentApp
 
         WindowHandle = 0;   // the window is gone; don't leave a stale handle for a late SMTC/picker call.
         s_zoomWindow = null; s_zoom = 1f;   // same for the zoom seam: a later SetZoom must not poke a dead window.
+        s_window = null;    // and the lifecycle seam: CloseWindow/SetWindowVisible after the run are no-ops.
         s_host = null;
         s_gpuDevice = null;
     }
@@ -839,6 +896,11 @@ public sealed record AppOptions
     /// <see cref="ZoomLadder"/> range before reaching the window; live changes go through
     /// <see cref="FluentApp.SetZoom"/>.</summary>
     public float Zoom { get; init; } = 1f;
+    /// <summary>Create the window but do not show it: the run starts parked (no frame is produced, the tree is mounted
+    /// and its effects run) until <see cref="FluentApp.SetWindowVisible"/>(true). For a launch the user did not click —
+    /// the sign-in start of an app that lives in the notification area. Deciding WHEN to start hidden is the app's
+    /// (only the startup activation, never a Start-menu click); the engine only honours it.</summary>
+    public bool StartHidden { get; init; }
 }
 
 /// <summary>

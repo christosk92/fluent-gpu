@@ -380,7 +380,8 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     private const uint MONITOR_DEFAULTTONEAREST = 2;
     private const int SW_MAXIMIZE = 3;
     private const int CW_USEDEFAULT = unchecked((int)0x80000000);
-    private const int SW_SHOW = 5;
+    private const int SW_SHOW = 5, SW_HIDE = 0;
+    private const uint WM_QUERYENDSESSION = 0x0011, WM_ENDSESSION = 0x0016;
     private const uint PM_NOREMOVE = 0x0000, PM_REMOVE = 0x0001;
     private const uint QS_ALLINPUT = 0x04FF;
     private const uint MWMO_INPUTAVAILABLE = 0x0004;
@@ -873,6 +874,20 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
         ShowWindow(_hwnd, SW_SHOW);
         UpdateWindow(_hwnd);
     }
+
+    /// <summary><c>SW_HIDE</c>: the window leaves the screen, the taskbar and Alt+Tab, and keeps its HWND, swapchain and
+    /// scene. The host parks on the next frame (<see cref="WindowStatus.Parked"/>); <see cref="Show"/> brings it back.</summary>
+    public void Hide() => ShowWindow(_hwnd, SW_HIDE);
+
+    /// <summary>The live <c>WS_VISIBLE</c> style — not a field mirrored from <see cref="Show"/>/<see cref="Hide"/>, so a
+    /// window an app shows through its own <c>ShowWindow</c> call is never left parked.</summary>
+    public bool IsVisible => IsWindowVisible(_hwnd) != 0;
+
+    /// <inheritdoc cref="IPlatformWindow.CloseRequested"/>
+    public Func<CloseReason, bool>? CloseRequested { get; set; }
+
+    // WM_QUERYENDSESSION / WM_ENDSESSION feed it; WM_CLOSE asks it (IPlatformWindow.CloseRequested).
+    private WindowCloseGate _closeGate;
 
     /// <summary>Resize the window so the client area is exactly w×h px (drives a real WM_SIZE → resize path). For tests.</summary>
     public void SetClientSize(int w, int h)
@@ -1779,7 +1794,19 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
         switch (msg)
         {
             case WM_DESTROY: _closed = true; PostQuitMessage(0); return true;
-            case WM_CLOSE: _closed = true; DestroyWindow(hWnd); return true;
+            case WM_CLOSE:
+                // Ask the app first (IPlatformWindow.CloseRequested): a close-to-tray app keeps the window and hides it.
+                // A session-end close is never kept (WindowCloseGate). Consumed either way — DefWindowProc would destroy.
+                if (!_closeGate.ShouldDestroy(CloseRequested)) return true;
+                _closed = true; DestroyWindow(hWnd); return true;
+            case WM_QUERYENDSESSION:
+                // Logoff / shutdown / the Restart Manager: every later WM_CLOSE is a session-end close. Not consumed —
+                // DefWindowProc answers TRUE (refusing only makes a real logoff hang on this window).
+                _closeGate.OnQueryEndSession();
+                return false;
+            case WM_ENDSESSION:
+                _closeGate.OnEndSession((nuint)wParam != 0);   // FALSE = someone cancelled the end; closes are user closes again
+                return false;
             case Win32Uia.WM_GETOBJECT:
                 // Hand the UIA root provider to a connecting client; non-UIA object ids fall through to DefWindowProc.
                 if (Win32Uia.HandleGetObject((nint)hWnd, (nint)wParam, (nint)lParam, _uiaProvider, out nint uiaRes)) { result = (LRESULT)uiaRes; return true; }

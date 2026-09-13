@@ -567,9 +567,10 @@ public sealed class AppHost : IDisposable
     /// slot). The layer animates within it; the host tears the preview down when it expires.</summary>
     public const float DragSettleMs = 250f;
     private Size2 _lastViewportDip;
-    // Window-visibility ambient (Activation.IsActive): false while minimized OR while the app has signalled a power
-    // suspend (SetWindowActive(false)). UseIsActive AND-folds it with each component's KeepAlive-parked state. Written
-    // on the minimize/restore EDGE in RunFrame (and by SetWindowActive); value-eq-gated, so a steady frame is a no-op.
+    // Window-visibility ambient (Activation.IsActive): false while the window is parked (minimized OR hidden) OR while the
+    // app has signalled a power suspend (SetWindowActive(false)). UseIsActive AND-folds it with each component's
+    // KeepAlive-parked state. Written on the park/un-park EDGE in RunFrame (and by SetWindowActive); value-eq-gated, so a
+    // steady frame is a no-op.
     private readonly Signal<bool> _windowVisible = new(true);
     private bool _windowActiveApp = true;                // app-side power suspend/resume gate (AND-ed into _windowVisible)
 
@@ -1274,7 +1275,8 @@ public sealed class AppHost : IDisposable
     // fresh device warms up instead of re-hanging. Longer than nav because re-realize touches the whole resident set.
     private const int PostRecoveryThrottleFrames = 45;
     private bool _everLaidOut;               // suppress FLIP capture until the first layout (freshly-mounted nodes have no "before")
-    private bool _wasMinimized;              // previous frame's minimize state — the restore EDGE forces a repaint
+    private bool _wasParked;                 // previous frame's parked state (minimized OR hidden) — the un-park EDGE forces a repaint
+    private WindowStateRelay _windowStateRelay;   // placement + visibility samples → AppHost.WindowStateChanged edges
     private bool _inPaint;
     private Size2 _lastSize;
     private float _lastScale;
@@ -1978,7 +1980,8 @@ public sealed class AppHost : IDisposable
     /// running another frame. Computes the wake mask ONCE and paces by it:
     /// <list type="bullet">
     /// <item>None ⇒ -1: fully idle, block until an input/paint message arrives (0% CPU).</item>
-    /// <item>minimized ⇒ -1 (regardless of the mask): a minimized window paints nothing; only the restore message matters.</item>
+    /// <item>parked (minimized or hidden) ⇒ -1 (regardless of the mask): a parked window paints nothing; only the
+    ///   restore/show message matters — except an unconsumed park/un-park edge, which runs its edge frame at once (0).</item>
     /// <item>DynamicText is the ONLY set bit ⇒ 100: the on-screen fps/draw-count HUD is a READOUT, not an animation —
     ///   a 10 Hz refresh is imperceptible and idles the CPU at ~0% instead of running record+present at the display rate.</item>
     /// <item>otherwise ⇒ 0: real animation/scroll/decode/drag work in flight — pace at the display rate (present-throttled).</item>
@@ -1993,7 +1996,7 @@ public sealed class AppHost : IDisposable
         w = ClampWaitToColdMaintenance(w);
         // Render-owned exits normally wake us through completion feedback. Keep their wall-clock
         // reclaim backstop reachable even when no UI timer or input will ever arrive.
-        if (!IsMinimized && _anim.RenderOwnsCompositor && _scene.OrphanCount > 0)
+        if (!IsParked && _anim.RenderOwnsCompositor && _scene.OrphanCount > 0)
         {
             long now = Stopwatch.GetTimestamp();
             for (int i = 0; i < _scene.OrphanCount; i++)
@@ -2035,10 +2038,10 @@ public sealed class AppHost : IDisposable
     private int ClampWaitToTimers(int w, HostWaitKind kind)
     {
         if (IsDisplayRateWait(kind, w)) return w;
-        // Paint — the only drain site — is gated off while minimized, so no wait length can make a timer fire;
-        // shortening the idle block converts a 0%-CPU sleep into a spin. A message (restore, WM_ACTIVATE, a power
-        // broadcast) is what wakes a minimized loop, and the restore edge forces the frame that drains.
-        if (IsMinimized) return w;
+        // Paint — the only drain site — is gated off while parked (minimized or hidden), so no wait length can make a
+        // timer fire; shortening the idle block converts a 0%-CPU sleep into a spin. A message (restore, show,
+        // WM_ACTIVATE, a power broadcast) is what wakes a parked loop, and the un-park edge forces the frame that drains.
+        if (IsParked) return w;
         if (!_timers.TryPeekEarliest(out double due)) return w;
         int dueIn = (int)Math.Ceiling(Math.Max(0.0, due - _timers.NowMs));
         // The drain is on the NEXT frame, which may be skipped — never return 0 (that is a spin, not a wait).
@@ -2071,7 +2074,16 @@ public sealed class AppHost : IDisposable
                 GpuGovernorMaxSubmitAge, GpuGovernorSampleTtlTicks, ref _gpuBoundLastSample,
                 ref _gpuBoundSampleSequence, ref _gpuBoundEma, ref _gpuGovernorEngaged);
         }
-        if (IsMinimized) { _lastWaitKind = HostWaitKind.Idle; return -1; } // Cold maintenance bounds the outer wait, never paints.
+        // Parked (minimized or hidden): block until a message — cold maintenance bounds the outer wait, never paints. But
+        // an UNCONSUMED park/un-park edge runs one frame now: a window hidden or shown by app code (Hide/Show from a
+        // handler, not from a message the pump dispatched) posts nothing that would otherwise wake the loop, and the
+        // edge frame is what flips Activation.IsActive, pauses/resumes the render thread and forces the first paint.
+        // Not during a device-lost rendezvous: RunFrame returns before the edge block until RecoverDone, so a 0 there would
+        // spin instead of letting the render thread's wake nudge the loop (the existing recovery contract).
+        bool parked = IsParked;
+        bool recovering = _deviceLost is { RecoverRequest: not 0, RecoverDone: 0 } && _asyncActive;
+        if (parked != _wasParked && !recovering) { _lastWaitKind = HostWaitKind.Idle; return 0; }
+        if (parked) { _lastWaitKind = HostWaitKind.Idle; return -1; }
         WakeReasons r = ComputeWakeReasons();
         if (r == WakeReasons.None) { _lastWaitKind = HostWaitKind.Idle; return -1; }
         if (r == WakeReasons.DynamicText) { _lastWaitKind = HostWaitKind.Hud; return 100; }   // HUD-only: 10 Hz readout, ~0% idle CPU
@@ -3151,8 +3163,17 @@ public sealed class AppHost : IDisposable
         // HasActiveWork (FrameNeeded || HasPending) is true THIS frame and we fall through to Paint, whose
         // _runtime.Flush() applies the coalesced re-render. No lost-wakeup: Post enqueues before Wake, so a post that
         // arrives after this drain but before the gate still posted its own WM_NULL that re-wakes the loop next iteration.
-        bool minimized = IsMinimized;
-        bool restoreEdge = _wasMinimized && !minimized;
+        // Window lifecycle relay (AppHost.WindowStateChanged): one placement + visibility sample per frame, parked frames
+        // included, raised BEFORE the park gate so a minimize-to-tray handler hears the minimize in the frame it happened.
+        // A handler may hide/show/restore the window, so the park decision below reads a FRESH sample after it ran.
+        WindowStatus windowStatus = new(_window.State, _window.IsVisible);
+        if (_windowStateRelay.TryAdvance(windowStatus, out WindowStateChange windowChange))
+        {
+            WindowStateChanged?.Invoke(windowChange);
+            windowStatus = new(_window.State, _window.IsVisible);
+        }
+        bool minimized = windowStatus.Parked;   // "minimized" below means PARKED: minimized OR hidden (E2 — identical cost)
+        bool restoreEdge = _wasParked && !minimized;
         int restorePosts = 0, restoreTimers = 0;
         long restoreDrainT0 = 0;
         if (restoreEdge) { restorePosts = _uiPosts.Count; restoreTimers = _timers.Count; restoreDrainT0 = Stopwatch.GetTimestamp(); }
@@ -3187,7 +3208,7 @@ public sealed class AppHost : IDisposable
                 _warmCadenceUntilMs = _timers.NowMs + WarmCadenceHoldMs;
         }
         long minimizedReactiveDeadline = 0;
-        if (_wasMinimized != minimized)
+        if (_wasParked != minimized)
         {
             // Window-visibility EDGE → update the Activation.IsActive signal so every component's UseIsActive flips and
             // UseActivation fires. On the minimize-ENTERING edge the gate below returns BEFORE Paint's reactive flush,
@@ -3198,9 +3219,15 @@ public sealed class AppHost : IDisposable
             OwningRenderThread?.WakeAsync();
             if (minimized) FlushHosted(ref minimizedReactiveDeadline);
         }
-        _wasMinimized = minimized;
+        _wasParked = minimized;
         if (minimized)
         {
+            // OS events stashed for app code (a second-launch redirect, a thumbnail-toolbar click, a Back/Forward command,
+            // explorer's taskbar-button re-creation) are normally re-raised at the top of Paint — which never runs while
+            // parked. Deliver them here, before the flush below, or a hidden tray app could never be woken by a second
+            // launch and a minimized one would sit on a thumbnail click until restored. The OS colour change stays with
+            // Paint: its handler feeds this frame's theme detection, which only Paint runs (it lands on the un-park frame).
+            DeliverPendingPlatformEvents(includeSystemColors: false);
             // The hoisted drain above ran, but Paint — the only _runtime.Flush() call site on the normal path — does not.
             // Flush here after a NON-EMPTY drain so the reactive pending queue does not simply become the new
             // accumulator: the posted signal writes are applied (memos recompute, effects run, components re-render into
@@ -3236,7 +3263,7 @@ public sealed class AppHost : IDisposable
             if (completed == 0)
             {
                 LastStats = new FrameStats(0, clicks, 0, Rendered: false) { Fps = _fps, PresentFps = _presentFps, PresentedSequence = this.PresentedSequence, FrameMs = _frameMs };
-                if (_wakeDiag is not null) { _wakeDiag.Record(WakeReasons.None, awake: false, rendered: false, reconciled: false, laidOut: false, minimized: IsMinimized); _wakeDiag.MaybeReport(); }
+                if (_wakeDiag is not null) { _wakeDiag.Record(WakeReasons.None, awake: false, rendered: false, reconciled: false, laidOut: false, minimized: IsParked); _wakeDiag.MaybeReport(); }
                 if (_memCensus is not null) _memCensus.MaybeReport();
                 if (s_allocTypes) AllocTypeProfiler.MaybeReport();
                 if (s_allocDiag)
@@ -3269,7 +3296,7 @@ public sealed class AppHost : IDisposable
         {
             // Awake frame: classify reconciled/layout-only/record-only from FrameStats (Rendered = reconciled||layoutNeeded).
             _wakeDiag.Record(wake, awake: true, rendered: painted.Rendered, reconciled: painted.ComponentsRendered > 0,
-                             laidOut: painted.Rendered, minimized: IsMinimized);
+                             laidOut: painted.Rendered, minimized: IsParked);
             _wakeDiag.MaybeReport();
         }
         if (_memCensus is not null) _memCensus.MaybeReport();
@@ -3280,13 +3307,24 @@ public sealed class AppHost : IDisposable
         return painted;
     }
 
-    /// <summary>True when the host window is minimized (PAL <see cref="Pal.WindowState.Minimized"/>) — frames run
-    /// while minimized are wasted work the wake diagnostics surface.</summary>
-    private bool IsMinimized => _window.State == FluentGpu.Pal.WindowState.Minimized;
+    /// <summary>True when nothing of the host window is on screen: minimized (PAL <see cref="Pal.WindowState.Minimized"/>)
+    /// OR hidden (<see cref="IPlatformWindow.IsVisible"/> false — a close-to-tray app). A parked host produces no frames:
+    /// no reconcile, layout, record or present, <c>UseIsActive</c> reads false, and the loop blocks on messages — the
+    /// minimized behaviour, now shared by the hidden window (<see cref="WindowStatus.Parked"/>). Live read of the window.</summary>
+    public bool IsParked => new WindowStatus(_window.State, _window.IsVisible).Parked;
+
+    /// <summary>Raised on the UI thread when the window's placement or visibility changed since the previous frame —
+    /// minimized, restored, maximized, hidden, shown (<see cref="WindowStateChange"/> carries both samples and the edge
+    /// flags). Sampled once per <see cref="RunFrame"/> after the pump, parked frames included, and raised before the
+    /// park gate, so a minimize-to-tray handler can <see cref="IPlatformWindow.Hide"/> the window in the frame it was
+    /// minimized. The first frame only seeds the relay. A handler may show, hide or restore the window; the host
+    /// re-samples before deciding whether this frame is parked.</summary>
+    public event Action<WindowStateChange>? WindowStateChanged;
 
     /// <summary>Recompute and publish the ambient window-visibility (<c>Activation.IsActive</c>): visible IFF not
-    /// minimized AND not app-suspended. Value-eq-gated by the signal, so a no-op write notifies nobody. UI-thread.</summary>
-    private void UpdateWindowVisible() => _windowVisible.Value = !IsMinimized && _windowActiveApp;
+    /// parked (minimized or hidden) AND not app-suspended. Value-eq-gated by the signal, so a no-op write notifies
+    /// nobody. UI-thread.</summary>
+    private void UpdateWindowVisible() => _windowVisible.Value = !IsParked && _windowActiveApp;
 
     /// <summary>App-side power suspend/resume hook (opt-in): the app wires <c>PowerSession.Suspending/Resumed</c> into
     /// this via <see cref="Post"/> (power callbacks arrive off-thread) to AND a suspend gate into window visibility, so
@@ -3299,6 +3337,44 @@ public sealed class AppHost : IDisposable
         _windowActiveApp = active;
         UpdateWindowVisible();
         WakeFrame();   // ensure the loop runs a frame so the UseActivation effects flush
+    }
+
+    /// <summary>Re-raise the OS events the PAL stashed for app code. Called at the top of <see cref="Paint"/> (before the
+    /// reactive flush, so a handler's signal writes render this same frame) and from <see cref="RunFrame"/>'s parked
+    /// branch (before its flush), because Paint never runs while the window is minimized or hidden. UI-thread only.</summary>
+    private void DeliverPendingPlatformEvents(bool includeSystemColors)
+    {
+        // Single-instance activation redirect: deliver a pending second-launch payload (set by the UI-thread
+        // ActivationRedirected subscription) to app code BEFORE the reactive flush, so any signal writes the handler
+        // makes are picked up by _runtime.Flush() and rendered this same frame. UI-thread only — no lock needed.
+        if (_pendingActivation is { } activation)
+        {
+            _pendingActivation = null;
+            ActivationRedirected?.Invoke(activation);
+        }
+        // OS color-settings change: deliver to app code BEFORE the flush (same rationale as activation above) so the
+        // handler's Tok.Use/SetAccent + RequestThemeTransition are picked up by THIS frame's theme detection + flush.
+        // Paint-only (includeSystemColors): theme detection is Paint's, so a parked window takes it on the un-park frame.
+        if (includeSystemColors && _pendingSystemColors)
+        {
+            _pendingSystemColors = false;
+            SystemColorsChanged?.Invoke();
+        }
+        if (_pendingThumbClick)
+        {
+            _pendingThumbClick = false;
+            ThumbButtonClicked?.Invoke(_pendingThumbButtonId);
+        }
+        if (_pendingAppNavigation)
+        {
+            _pendingAppNavigation = false;
+            AppNavigationCommand?.Invoke(_pendingAppNavigationWhich);
+        }
+        if (_pendingTaskbarButtonCreated)
+        {
+            _pendingTaskbarButtonCreated = false;
+            TaskbarButtonCreated?.Invoke();
+        }
     }
 
     /// <summary>Phases 3–12: flush reactive work, (scoped) re-layout, record, submit, present, effects. No pump — safe from WndProc.
@@ -3323,36 +3399,7 @@ public sealed class AppHost : IDisposable
         long diagUiStart = s_allocDiag ? GC.GetAllocatedBytesForCurrentThread() : 0;
         try
         {
-            // Single-instance activation redirect: deliver a pending second-launch payload (set by the UI-thread
-            // ActivationRedirected subscription) to app code BEFORE the reactive flush, so any signal writes the handler
-            // makes are picked up by _runtime.Flush() and rendered this same frame. UI-thread only — no lock needed.
-            if (_pendingActivation is { } activation)
-            {
-                _pendingActivation = null;
-                ActivationRedirected?.Invoke(activation);
-            }
-            // OS color-settings change: deliver to app code BEFORE the flush (same rationale as activation above) so the
-            // handler's Tok.Use/SetAccent + RequestThemeTransition are picked up by THIS frame's theme detection + flush.
-            if (_pendingSystemColors)
-            {
-                _pendingSystemColors = false;
-                SystemColorsChanged?.Invoke();
-            }
-            if (_pendingThumbClick)
-            {
-                _pendingThumbClick = false;
-                ThumbButtonClicked?.Invoke(_pendingThumbButtonId);
-            }
-            if (_pendingAppNavigation)
-            {
-                _pendingAppNavigation = false;
-                AppNavigationCommand?.Invoke(_pendingAppNavigationWhich);
-            }
-            if (_pendingTaskbarButtonCreated)
-            {
-                _pendingTaskbarButtonCreated = false;
-                TaskbarButtonCreated?.Invoke();
-            }
+            DeliverPendingPlatformEvents(includeSystemColors: true);
 
             long frameStart = Stopwatch.GetTimestamp();
             long shapeCountAtFrameStart = _fonts.ShapeCount;   // P0: FrameStats.TextShapes reads the delta across this Paint

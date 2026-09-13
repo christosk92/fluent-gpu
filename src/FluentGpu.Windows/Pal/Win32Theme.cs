@@ -77,14 +77,27 @@ public static partial class Win32Theme
     /// <summary>True when the OS "app" theme is Light — Settings ▸ Colors (registry <c>AppsUseLightTheme</c>, the value
     /// WinUI's <c>ElementTheme.Default</c> resolves against). Defaults to FALSE (dark) when the value is absent/unreadable,
     /// matching the engine's default theme. Re-read on <c>WM_SETTINGCHANGE("ImmersiveColorSet")</c> to follow the OS live.</summary>
-    public static bool SystemUsesLightTheme()
+    public static bool SystemUsesLightTheme() => ReadPersonalizeLight("AppsUseLightTheme");
+
+    /// <summary>True when the TASKBAR / Start / notification area is Light — Settings ▸ Colors ▸ "Choose your default
+    /// Windows mode" (registry <c>SystemUsesLightTheme</c>). Distinct from <see cref="SystemUsesLightTheme"/>, which reads
+    /// the APP mode: the "Custom" combination pairs a dark taskbar with light apps, and a tray glyph drawn from the app
+    /// value is black on black there. Defaults to FALSE (dark) when absent — Windows 10 before 1903 had no light taskbar.
+    /// Same <c>WM_SETTINGCHANGE("ImmersiveColorSet")</c> broadcast as the app value when it changes.</summary>
+    public static bool TaskbarUsesLightTheme() => ReadPersonalizeLight("SystemUsesLightTheme");
+
+    private static bool ReadPersonalizeLight(string valueName)
     {
         uint data = 0, cb = 4;
         int rc = RegGetValueW(HKEY_CURRENT_USER,
-            @"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", "AppsUseLightTheme",
+            @"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", valueName,
             RRF_RT_REG_DWORD, 0, out data, ref cb);
-        return rc == 0 && data != 0;
+        return PersonalizeValueIsLight(rc, data);
     }
+
+    /// <summary>The decision both Personalize reads share: light only when the DWORD was read (<c>ERROR_SUCCESS</c>) and
+    /// is non-zero; a missing or unreadable value is dark, matching the engine's default theme and the pre-1903 taskbar.</summary>
+    internal static bool PersonalizeValueIsLight(int status, uint data) => status == 0 && data != 0;
 
     /// <summary>
     /// The OS-derived <c>SystemAccentColorLight2</c> shade — what WinUI uses for the dark-theme accent button fill
