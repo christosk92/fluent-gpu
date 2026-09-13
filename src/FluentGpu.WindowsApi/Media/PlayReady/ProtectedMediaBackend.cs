@@ -109,12 +109,27 @@ public sealed class ProtectedMediaBackend : IMediaBackend, IPreparableBackend
     }
 
     /// <inheritdoc/>
-    public async ValueTask<IPreparedItem> PrepareAsync(MediaSource next, PrepareContext ctx, CancellationToken ct)
+    public ValueTask<IPreparedItem> PrepareAsync(MediaSource next, PrepareContext ctx, CancellationToken ct)
+        => PrepareCoreAsync(next, TimeSpan.Zero, ct);
+
+    /// <summary>
+    /// Prepare <paramref name="source"/> to open AT <paramref name="startPosition"/>: the license goes in flight, and the
+    /// init segments plus <see cref="ProtectedVideoSession.DefaultPrefetchSegments"/> segments AROUND that position are
+    /// fetched for both streams, with no engine call. This is the host's entry for the CURRENT track (a badge lit
+    /// mid-song: the switch will carry the song's position), where the queue's <see cref="PrepareAsync"/> prepares the
+    /// NEXT one from its start. The matching <see cref="OpenAsync"/> (same init URL) takes the prepared session; an open
+    /// at a slightly later position moves its start before attaching, inside the fetched window or one segment on.
+    /// </summary>
+    public ValueTask<IPreparedItem> PrepareAtAsync(MediaSource source, TimeSpan startPosition, CancellationToken ct = default)
+        => PrepareCoreAsync(source, startPosition > TimeSpan.Zero ? startPosition : TimeSpan.Zero, ct);
+
+    private async ValueTask<IPreparedItem> PrepareCoreAsync(MediaSource next, TimeSpan startPosition, CancellationToken ct)
     {
         if (next.Drm is null)
             throw new NotSupportedException("ProtectedMediaBackend.PrepareAsync requires a source carrying a DrmConfig.");
 
-        ProtectedVideoRequest request = BuildRequest(next, next.Drm, _defaultRelay, startPaused: true, _descriptor);
+        ProtectedVideoRequest request = BuildRequest(next, next.Drm, _defaultRelay, startPaused: true, _descriptor)
+            with { StartPosition = startPosition };
         _ensureLicense?.Invoke(request);                                   // the license is in flight from THIS line
         IProtectedVideoPlayer player = _playerFactory(request);
         var entry = new PreparedEntry(this, player, request);

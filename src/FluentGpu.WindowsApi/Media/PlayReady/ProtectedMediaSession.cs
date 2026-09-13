@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using FluentGpu.Foundation;
 using FluentGpu.Media;
 using FluentGpu.Media.Adaptive;
+using FluentGpu.Pal;
 using MediaTrackKind = FluentGpu.Media.TrackKind;
 
 namespace FluentGpu.WindowsApi.Media.PlayReady;
@@ -121,6 +122,27 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         TimeSpan initial = policy?.InitialPlayback ?? TimeSpan.FromSeconds(1);
         TimeSpan budget = TimeSpan.FromTicks(initial.Ticks * 10);
         return budget < TimeSpan.FromSeconds(10) ? TimeSpan.FromSeconds(10) : budget;
+    }
+
+    /// <summary>
+    /// The buffering detail for a published <paramref name="state"/> — the SAME rule the clear session applies
+    /// (<c>MfMediaSession.PublishBuffering</c>): <see cref="PlaybackState.Opening"/>, <see cref="PlaybackState.Buffering"/>
+    /// and <see cref="PlaybackState.Stalled"/> are all buffering, with the reason Seeking while a seek is in flight,
+    /// Rebuffering once a frame has been presented, Initial before. Every other state is <see cref="BufferingInfo.None"/>.
+    /// Publishing None for Stalled or Opening (what this once did) wiped the reason the player core had just derived, so
+    /// a mid-playback rebuffer read as "not buffering" on the protected path only. The progress is the forward store
+    /// against the policy's target for that reason. Pure.
+    /// </summary>
+    public static BufferingInfo BufferingFor(PlaybackState state, bool seeking, bool framePresented, long forwardBufferedMs,
+                                             BufferPolicy policy)
+    {
+        if (state is not (PlaybackState.Opening or PlaybackState.Buffering or PlaybackState.Stalled)) return BufferingInfo.None;
+        BufferingReason reason = seeking ? BufferingReason.Seeking
+            : framePresented ? BufferingReason.Rebuffering : BufferingReason.Initial;
+        TimeSpan target = reason == BufferingReason.Initial ? policy.InitialPlayback : policy.ResumePlayback;
+        TimeSpan ahead = TimeSpan.FromMilliseconds(Math.Max(0, forwardBufferedMs));
+        double percent = target > TimeSpan.Zero ? Math.Clamp(ahead.TotalMilliseconds / target.TotalMilliseconds, 0.0, 1.0) : -1;
+        return new BufferingInfo(reason, percent, ahead, target, target > TimeSpan.Zero && ahead >= target);
     }
 
     /// <summary>Which error a start that ran out of <see cref="StartBudget"/> is: a license still pending or a topology
@@ -432,17 +454,8 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
 
         PlaybackState state = seeking ? PlaybackState.Buffering : MapState(pv, _playRequested);
         Publish(sink, state);
-        if (state == PlaybackState.Buffering)
-        {
-            BufferingReason reason = seeking ? BufferingReason.Seeking
-                : _lastFirstFrameEpoch != 0 ? BufferingReason.Rebuffering : BufferingReason.Initial;
-            sink.Buffering(new BufferingInfo(reason, -1, TimeSpan.FromMilliseconds(_player.ForwardBufferedMs),
-                (_opts.Buffering ?? BufferPolicy.Vod).ResumePlayback, false));
-        }
-        else
-        {
-            sink.Buffering(BufferingInfo.None);
-        }
+        sink.Buffering(BufferingFor(state, seeking, _lastFirstFrameEpoch != 0, _player.ForwardBufferedMs,
+            _opts.Buffering ?? BufferPolicy.Vod));
 
         if (!_settledPlayIntent && ((_playRequested && pv == ProtectedVideoState.Playing)
                                     || (!_playRequested && pv == ProtectedVideoState.Paused)))
@@ -614,9 +627,12 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession,
         return track.Representations.Count > 0 ? track.Representations[0].Quality : null;
     }
 
-    /// <summary>Map the protected lifecycle onto the player's transport state. <see cref="ProtectedVideoState.Paused"/>
-    /// before a play was ever requested is <see cref="PlaybackState.Ready"/> (paused-and-ready at the start position);
-    /// a play requested while the source is still loading reads Buffering. Pure.</summary>
+    /// <summary>Map the protected lifecycle onto the player's transport state. Pure.
+    /// <para><see cref="ProtectedVideoState.Paused"/> maps to <see cref="PlaybackState.Paused"/> — including a source
+    /// opened paused, which the native runtime reports as Paused the moment its first frame is up. Paused while a play
+    /// is requested reads <see cref="PlaybackState.Buffering"/> (the intent is accepted, the engine is not advancing yet).
+    /// Loading and Licensed are <see cref="PlaybackState.Opening"/>; a mid-playback rebuffer is
+    /// <see cref="PlaybackState.Stalled"/>.</para></summary>
     public static PlaybackState MapState(ProtectedVideoState s, bool playRequested) => s switch
     {
         ProtectedVideoState.Idle => PlaybackState.Opening,

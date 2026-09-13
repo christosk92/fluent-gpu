@@ -219,3 +219,196 @@ internal static unsafe partial class PrNative
     [LibraryImport(LibraryName, StringMarshalling = StringMarshalling.Utf16)]
     internal static partial int FgPrProbeFile(string path, long* outKeyframes, int cap, ProbeResult* @out);
 }
+
+/// <summary>
+/// The managed form of <c>FgPrOpenDesc</c>: every value <see cref="ProtectedVideoSession.Create"/> DECIDED for one
+/// source (defaults applied, the KID normalised, the start position clamped). The production seam marshals it into the
+/// blittable <see cref="PrNative.OpenDesc"/> for exactly the duration of the create call; a fake reads it as it is.
+/// </summary>
+internal sealed record PrOpenDescription
+{
+    public string? InitUrl { get; init; }
+    public string? SegmentBaseUrl { get; init; }
+    public string? SegmentPrefix { get; init; }
+    public string? SegmentSuffix { get; init; }
+    public int StartNumber { get; init; }
+    public int SegmentCount { get; init; }
+    public int SegmentStrideSeconds { get; init; }
+    public int SegmentLengthMs { get; init; }
+    public string? AudioInitUrl { get; init; }
+    public string? AudioSegmentBaseUrl { get; init; }
+    public string? AudioSegmentPrefix { get; init; }
+    public string? AudioSegmentSuffix { get; init; }
+    public ReadOnlyMemory<byte> Pssh { get; init; }
+    public string? KeyIdHex { get; init; }
+    public string? HttpHeaders { get; init; }
+    public long DurationMs { get; init; }
+    public long StartPositionMs { get; init; }
+    public bool StartPaused { get; init; }
+    public long RetainBehindMs { get; init; }
+    public long BufferAheadMs { get; init; }
+    public long StoreBudgetBytes { get; init; }
+}
+
+/// <summary>
+/// The session half of the native seam: every <c>FgPrSession*</c> export <see cref="ProtectedVideoSession"/> calls, in
+/// managed shapes (spans, <c>out</c> structs, a <see cref="PrOpenDescription"/>). The real DLL in production
+/// (<see cref="PrSessionNative"/>); a recording fake in the engine's tests, so the session's create / start / pump /
+/// seek / teardown logic runs with no CDM, no GPU, no network and no window. Every method returns the export's HRESULT
+/// (or its count) unchanged.
+/// </summary>
+internal interface IPrSessionNative
+{
+    int SessionCreate(ulong runtime, PrOpenDescription desc, out ulong session);
+    int SessionPrefetch(ulong runtime, ulong session, long aroundMs, int segments);
+    int SessionAttach(ulong runtime, ulong session, ulong license);
+    int SessionDetach(ulong runtime, ulong session);
+    void SessionDestroy(ulong runtime, ulong session);
+    int SessionPlay(ulong runtime, ulong session);
+    int SessionPause(ulong runtime, ulong session);
+    int SessionSeek(ulong runtime, ulong session, long targetMs, int mode, long keyframeMs);
+    int SessionSetVolume(ulong runtime, ulong session, double volume);
+    int SessionSetRate(ulong runtime, ulong session, double rate);
+    int SessionSetStreamSize(ulong runtime, ulong session, int width, int height);
+    int SessionSelectRepresentation(ulong runtime, ulong session, int index, string initUrl, string? baseUrl,
+                                    string? prefix, string? suffix);
+    /// <summary><c>FgPrSessionSnapshot</c>; <paramref name="snapshot"/> is written only on success.</summary>
+    int SessionSnapshot(ulong runtime, ulong session, ref PrNative.Snapshot snapshot);
+    /// <summary>Fills <paramref name="into"/>; returns the TOTAL keyframe count (negative = HRESULT).</summary>
+    int SessionGetKeyframes(ulong runtime, ulong session, Span<long> into);
+    /// <summary>Fills <paramref name="pairs"/> (2 longs per pair); returns the TOTAL pair count (negative = HRESULT).</summary>
+    int SessionGetBuffered(ulong runtime, ulong session, Span<long> pairs);
+    /// <summary>Fills <paramref name="pssh"/> and the NUL-terminated KID into <paramref name="kid"/>; returns the PSSH
+    /// length (0 = not parsed yet / none; negative = HRESULT).</summary>
+    int SessionGetInitProtection(ulong runtime, ulong session, Span<byte> pssh, Span<char> kid);
+}
+
+/// <summary>The production <see cref="IPrSessionNative"/>: <c>FluentGpu.PlayReady.Native.dll</c>.</summary>
+internal sealed unsafe class PrSessionNative : IPrSessionNative
+{
+    internal static readonly PrSessionNative Instance = new();
+
+    public int SessionCreate(ulong runtime, PrOpenDescription d, out ulong session)
+    {
+        ulong handle = 0;
+        var strings = new NativeStrings();
+        try
+        {
+            var desc = new PrNative.OpenDesc
+            {
+                StructSize = (uint)sizeof(PrNative.OpenDesc),
+                InitUrl = strings.Add(d.InitUrl),
+                SegmentBaseUrl = strings.Add(d.SegmentBaseUrl),
+                SegmentPrefix = strings.Add(d.SegmentPrefix),
+                SegmentSuffix = strings.Add(d.SegmentSuffix),
+                StartNumber = d.StartNumber,
+                SegmentCount = d.SegmentCount,
+                SegmentStrideSeconds = d.SegmentStrideSeconds,
+                SegmentLengthMs = d.SegmentLengthMs,
+                AudioInitUrl = strings.Add(d.AudioInitUrl),
+                AudioSegmentBaseUrl = strings.Add(d.AudioSegmentBaseUrl),
+                AudioSegmentPrefix = strings.Add(d.AudioSegmentPrefix),
+                AudioSegmentSuffix = strings.Add(d.AudioSegmentSuffix),
+                Pssh = strings.AddBytes(d.Pssh.Span),
+                PsshLen = d.Pssh.Length,
+                KeyIdHex = strings.Add(d.KeyIdHex),
+                HttpHeaders = strings.Add(d.HttpHeaders),
+                DurationMs = d.DurationMs,
+                StartPositionMs = d.StartPositionMs,
+                StartPaused = d.StartPaused ? 1 : 0,
+                RetainBehindMs = d.RetainBehindMs,
+                BufferAheadMs = d.BufferAheadMs,
+                StoreBudgetBytes = d.StoreBudgetBytes,
+            };
+            int hr = PrNative.FgPrSessionCreate(runtime, &desc, &handle);
+            session = handle;
+            return hr;
+        }
+        finally
+        {
+            strings.Free();   // native COPIED everything it keeps during FgPrSessionCreate
+        }
+    }
+
+    public int SessionPrefetch(ulong runtime, ulong session, long aroundMs, int segments)
+        => PrNative.FgPrSessionPrefetch(runtime, session, aroundMs, segments);
+    public int SessionAttach(ulong runtime, ulong session, ulong license) => PrNative.FgPrSessionAttach(runtime, session, license);
+    public int SessionDetach(ulong runtime, ulong session) => PrNative.FgPrSessionDetach(runtime, session);
+    public void SessionDestroy(ulong runtime, ulong session) => PrNative.FgPrSessionDestroy(runtime, session);
+    public int SessionPlay(ulong runtime, ulong session) => PrNative.FgPrSessionPlay(runtime, session);
+    public int SessionPause(ulong runtime, ulong session) => PrNative.FgPrSessionPause(runtime, session);
+    public int SessionSeek(ulong runtime, ulong session, long targetMs, int mode, long keyframeMs)
+        => PrNative.FgPrSessionSeek(runtime, session, targetMs, mode, keyframeMs);
+    public int SessionSetVolume(ulong runtime, ulong session, double volume) => PrNative.FgPrSessionSetVolume(runtime, session, volume);
+    public int SessionSetRate(ulong runtime, ulong session, double rate) => PrNative.FgPrSessionSetRate(runtime, session, rate);
+    public int SessionSetStreamSize(ulong runtime, ulong session, int width, int height)
+        => PrNative.FgPrSessionSetStreamSize(runtime, session, width, height);
+    public int SessionSelectRepresentation(ulong runtime, ulong session, int index, string initUrl, string? baseUrl,
+                                           string? prefix, string? suffix)
+        => PrNative.FgPrSessionSelectRepresentation(runtime, session, index, initUrl, baseUrl!, prefix!, suffix!);
+
+    public int SessionSnapshot(ulong runtime, ulong session, ref PrNative.Snapshot snapshot)
+    {
+        PrNative.Snapshot n = default;
+        n.StructSize = (uint)sizeof(PrNative.Snapshot);
+        int hr = PrNative.FgPrSessionSnapshot(runtime, session, &n);
+        if (hr >= 0) snapshot = n;
+        return hr;
+    }
+
+    public int SessionGetKeyframes(ulong runtime, ulong session, Span<long> into)
+    {
+        fixed (long* p = into) return PrNative.FgPrSessionGetKeyframes(runtime, session, p, into.Length);
+    }
+
+    public int SessionGetBuffered(ulong runtime, ulong session, Span<long> pairs)
+    {
+        fixed (long* p = pairs) return PrNative.FgPrSessionGetBuffered(runtime, session, p, pairs.Length / 2);
+    }
+
+    public int SessionGetInitProtection(ulong runtime, ulong session, Span<byte> pssh, Span<char> kid)
+    {
+        fixed (byte* pp = pssh)
+        fixed (char* kp = kid)
+            return PrNative.FgPrSessionGetInitProtection(runtime, session, pp, pssh.Length, kp, kid.Length);
+    }
+
+    /// <summary>HGlobal copies of the descriptor's strings for the duration of ONE native call (native copies what it
+    /// keeps). Cold path: one session create.</summary>
+    private struct NativeStrings
+    {
+        private nint[]? _owned;
+        private int _count;
+
+        public nint Add(string? s)
+        {
+            if (s is null) return 0;
+            nint p = Marshal.StringToHGlobalUni(s);
+            Track(p);
+            return p;
+        }
+
+        public nint AddBytes(ReadOnlySpan<byte> bytes)
+        {
+            if (bytes.IsEmpty) return 0;
+            nint p = Marshal.AllocHGlobal(bytes.Length);
+            bytes.CopyTo(new Span<byte>((void*)p, bytes.Length));
+            Track(p);
+            return p;
+        }
+
+        private void Track(nint p)
+        {
+            _owned ??= new nint[16];
+            if (_count == _owned.Length) Array.Resize(ref _owned, _owned.Length * 2);
+            _owned[_count++] = p;
+        }
+
+        public void Free()
+        {
+            if (_owned is null) return;
+            for (int i = 0; i < _count; i++) Marshal.FreeHGlobal(_owned[i]);
+            _count = 0;
+        }
+    }
+}

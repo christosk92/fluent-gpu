@@ -16,6 +16,11 @@
 // diagnostic lines unchanged; the source and its streams shadow it with a member that stamps their session handle.
 #pragma once
 
+// windows.h's min/max macros would turn every std::min / std::max / std::numeric_limits<T>::max below into a syntax
+// error; nothing in this directory uses the macros.
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #include <d3d11.h>
 #include <d3d11_1.h>
@@ -564,6 +569,12 @@ struct Runtime
     /// The session whose source the engine is playing — or is about to play, while its init segments are still on the
     /// wire (PrSession.cpp CompleteAttach). Written on the runtime thread, read by the notify sink on MF threads.
     std::atomic<uint64_t> attached{ 0 };
+
+    /// The session whose CencMediaSource the engine currently HOLDS (the last successful SetSource), which outlives
+    /// `attached` when a successor's attach is still waiting for its init segments: the old source stays loaded (paused)
+    /// until the successor's own SetSource replaces it, so no empty SetSource ever races the successor's load. Runtime
+    /// thread only.
+    uint64_t engineSource = 0;
 
     bool Ready() const { return bringUp.load(std::memory_order_acquire) == S_OK && !shuttingDown.load(std::memory_order_acquire); }
     int64_t UptimeMs() const { return MsSinceQpc(createdQpc); }

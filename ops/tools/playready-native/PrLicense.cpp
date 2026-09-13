@@ -60,9 +60,10 @@ DeliverRegistry& Deliveries()
 //  Helpers.
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 
-static std::vector<uint8_t> Base64Decode(const std::string& b64)
+/// Base64 text straight out of the CDM's UTF-16 XML (the challenge, a WRMHEADER KID) — never narrowed first.
+static std::vector<uint8_t> Base64Decode(const std::wstring& w)
 {
-    DWORD n = 0; std::wstring w(b64.begin(), b64.end());
+    DWORD n = 0;
     CryptStringToBinaryW(w.c_str(), (DWORD)w.size(), CRYPT_STRING_BASE64, nullptr, &n, nullptr, nullptr);
     std::vector<uint8_t> out(n);
     if (n) CryptStringToBinaryW(w.c_str(), (DWORD)w.size(), CRYPT_STRING_BASE64, out.data(), &n, nullptr, nullptr);
@@ -130,7 +131,7 @@ static bool KidFromPssh(const std::vector<uint8_t>& pssh, uint8_t kidOut[16])
                                 if (e != std::wstring::npos) b64 = xml.substr(gt + 1, e - (gt + 1));
                             }
                             if (b64.empty()) continue;
-                            std::vector<uint8_t> g = Base64Decode(fgpr::Narrow(b64));
+                            std::vector<uint8_t> g = Base64Decode(b64);
                             if (g.size() != 16) continue;
                             // GUID byte order (Data1/2/3 little-endian) → the big-endian tenc form.
                             kidOut[0] = g[3]; kidOut[1] = g[2]; kidOut[2] = g[1]; kidOut[3] = g[0];
@@ -334,7 +335,7 @@ static void HandleCdmKeyMessage(fgpr::License& lic, const BYTE* msg, DWORD cb, L
         // trim whitespace
         while (!inner.empty() && iswspace(inner.front())) inner.erase(inner.begin());
         while (!inner.empty() && iswspace(inner.back())) inner.pop_back();
-        challenge = Base64Decode(std::string(inner.begin(), inner.end()));
+        challenge = Base64Decode(inner);
     }
     else challenge.assign(msg, msg + cb);
     // Parse <HttpHeader><name>..</name><value>..</value>

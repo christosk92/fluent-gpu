@@ -892,10 +892,18 @@ above it. It is now a runtime with handles, spine unchanged:
   managed POST `deliver`s later). An attach on a still-pending license is legal — the engine's key-needed path waits.
 - **`FgPrSession` (managed `ProtectedVideoSession`, one per source).** A `CencMediaSource` over a byte-capped
   (32 MiB), time-windowed (30 s behind / 60 s ahead) `SegmentStore`, opened AT `MediaOpenOptions.StartPosition`.
-  The switch is `FgPrSessionAttach` = one `SetSource` on the warm engine. Prefetch (`IPreparableBackend`) fetches
-  init + 2 segments at the start position, video ∥ audio. Seek is flush-not-recreate, applied immediately on the
-  runtime thread (or from the parallel fetch's completion); the demuxer's keyframe table and the buffered ranges are
-  exported for a host seek planner.
+  The switch is `FgPrSessionAttach` = one `SetSource` on the warm engine; a detach replaced by another session's
+  attach leaves its (paused) source for that `SetSource` to unload, so two loads never race. Prefetch
+  (`IPreparableBackend`) fetches init + 2 segments at the start position, video ∥ audio;
+  `ProtectedMediaBackend.PrepareAtAsync(source, position)` prepares the CURRENT track at a carried position. Seek is
+  flush-not-recreate, applied immediately on the runtime thread (or from the parallel fetch's completion); the
+  demuxer's keyframe table and the buffered ranges are exported for a host seek planner.
+- **The demuxer's timeline is the manifest's.** Sample and keyframe times are PRESENTATION times with the init
+  segment's edit list applied (`elst`: an encoder's B-frame delay or AAC priming), so segment `i` starts at
+  `i · segmentLengthMs` exactly as the seek planner assumes. One `trak` is one track (a muxed file's tracks are never
+  merged; each `moof` contributes the matching `traf`, every `trun`), sample defaults fall back to `trex`, and CENC
+  records are read from `senc` or `saiz`/`saio`. `FgPrProbeFile` runs that same code over a local file
+  (`CencDemuxTests`).
 - **Event-driven presentation.** `FIRSTFRAMEREADY` / CANPLAY / SEEKED / errors are native events → one coalesced
   `IVideoPumpSource.PumpRequested` → `ProtectedMediaSession.PumpVideo` reads ONE snapshot and binds the handle —
   no poll timer, no transport ack wait, no seek suppression window. The protected stream is sized with the SAME

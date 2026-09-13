@@ -13,7 +13,14 @@ build.cmd arm64
 build.cmd x64
 ```
 
-Output: `out/{arch}/FluentGpu.PlayReady.Native.dll` (e.g. `out/arm64/FluentGpu.PlayReady.Native.dll`).
+Output: `out/{arch}/FluentGpu.PlayReady.Native.dll` (e.g. `out/arm64/FluentGpu.PlayReady.Native.dll`). The sources are
+UTF-8 and built with `/utf-8`. Run it from a shell whose `vcvarsall` target is the architecture you name — on an ARM64
+box an x64-emulated shell still builds either one, because the script calls `vcvarsall` with the argument.
+
+`FluentGpu.WindowsApp` builds the DLL for its own architecture whenever any source here is newer than the output (never
+in an IDE's design-time build), and `FluentGpu.Windows.Tests` copies it beside the test assembly for the demuxer gate.
+Both pick the architecture from `PlayReadyNative.props`: the explicit `RuntimeIdentifier`, else the running SDK's RID —
+the architecture the managed process actually runs as, not `PROCESSOR_ARCHITECTURE`.
 
 ## Managed code
 
@@ -31,3 +38,4 @@ The C# integration lives in `src/FluentGpu.WindowsApi/Media/PlayReady/`. See [`d
 | `SegmentStore.h` | The per-session store: time-window retention against a byte budget, the pooled 64 KiB-granular segment buffers, the keyframe table, buffered ranges, `CanSeekTo` |
 | `CencMediaSource.h` | The fMP4/CENC demuxer and the custom `IMFMediaSource` emitting encrypted CENC samples |
 | `build.cmd` | MSVC build of the three translation units into one DLL, per architecture |
+| `PlayReadyNative.props` | The one architecture rule the projects that build or load the DLL import |

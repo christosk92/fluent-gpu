@@ -37,8 +37,10 @@ Design context: [`docs/design/subsystems/media-pipeline.md`](../design/subsystem
 
 A host that wants a fast song→video switch does three things, all non-blocking:
 
-1. At manifest time: `ProtectedMediaBackend.StartLicense(runtime, request)` (or `PrepareAsync`, which also prefetches
-   the init + two segments at the start position, video and audio in parallel).
+1. At manifest time: `ProtectedMediaBackend.StartLicense(runtime, request)`, or prepare the source, which also
+   prefetches the init + two segments, video and audio in parallel: `PrepareAtAsync(source, position)` for the CURRENT
+   track at the position the switch will carry, `PrepareAsync` (the queue's `IPreparableBackend`) for the next one from
+   its start.
 2. At the switch: `MediaPlayer.OpenAsync(source, new MediaOpenOptions { StartPosition = p, StartPaused = true })`. The
    prepared session is found by its init URL; the switch is one `SetSource` on the warm engine.
 3. Watch the events, not a timer: `IProtectedVideoPlayer.Phase` / `FirstFrameEpoch` say when the frame at `p` is
@@ -101,8 +103,24 @@ Load-bearing properties:
 * connect, TLS and time-to-first-byte are excluded — the response-body read alone is measured;
 * one `winrt::HttpClient` is shared by the whole runtime, so connections and TLS sessions are reused.
 
+## The demuxer's timeline
+
+Every sample time and every keyframe in `FgPrSessionGetKeyframes` is a **presentation** time on the manifest's timeline:
+decode time + composition offset − the init segment's edit list (`elst`). An H.264 encode with B-frames delays every
+composition time by its reorder depth and states the same amount as the first edit, so the first frame presents at 0;
+an AAC track's edit takes its priming frame out of the presentation. The demuxer reads ONE `trak` per track (a muxed
+file is never merged), the matching `traf` of every `moof` and every `trun` in it, falls back to `trex` for sample
+durations and flags, and reads CENC records from `senc` or `saiz`/`saio`. Every count and offset is bounded by the bytes
+that hold it.
+
 ## Tests
 
-`src/FluentGpu.Windows.Tests`: the license-cache policy, the session state machine over a fake player, the demuxer over
-local fixtures (`FgPrProbeFile` — no CDM, no GPU, no network), and the runtime against the real DLL where the box has
-Media Foundation.
+`src/FluentGpu.Windows.Tests`, no window, no network, no license server:
+
+| File | Covers |
+|---|---|
+| `LicenseCachePolicyTests` | reuse / join / re-acquire, expiry guard, eviction, completion and expiry acceptance, `LicenseKeyId` on hostile PSSH boxes |
+| `ProtectedRuntimeTests`, `ProtectedRuntimeEventTests` | the runtime over `IPrRuntimeNative` fakes: bring-up, the relay, buffered waits, warm-idle teardown, license events |
+| `ProtectedVideoSessionTests` | `ProtectedVideoSession` over an `IPrSessionNative` fake: the open descriptor, attach, prefetch, pump (incl. zero allocation), seek, teardown |
+| `ProtectedSessionTests`, `DrmTests` | `ProtectedMediaSession` over a fake player, and the backend's prepare → open hand-off |
+| `CencDemuxTests` | the REAL DLL's demuxer via `FgPrProbeFile` over `Fixtures/video` — skipped when the DLL beside the test assembly is missing or stale |

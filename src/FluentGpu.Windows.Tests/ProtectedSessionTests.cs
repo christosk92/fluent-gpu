@@ -799,4 +799,78 @@ public sealed class ProtectedSessionTests : IAsyncDisposable
         Assert.Same(openRelay, rig.Ensured[1].LicenseRelay);
         Assert.Same(fallbackRelay, rig.Ensured[2].LicenseRelay);
     }
+
+    [Fact]
+    public async Task PrepareAt_PrefetchesAroundThePosition_AndTheOpenThereTakesThePreparedPlayer()
+    {
+        var rig = new BackendRig();
+
+        IPreparedItem item = await rig.Backend.PrepareAtAsync(SourceFor(InitA), TimeSpan.FromSeconds(83), Ct);
+        _cleanup.Add(item);
+        Assert.True(item.IsReady);
+        Assert.Equal(TimeSpan.FromSeconds(83), Assert.Single(rig.Ensured).StartPosition);   // the prefetch is AT the song's position
+
+        IMediaSession session = await rig.Backend.OpenAsync(SourceFor(InitA),
+            new MediaOpenOptions { StartPosition = TimeSpan.FromSeconds(84) }, Ct);
+        _cleanup.Add(session);
+        session.ConnectSignals(new MediaSignalSink(new MediaPlayerCore()));
+
+        FakeProtectedVideoPlayer player = Assert.Single(rig.Created);                       // warm: no second player
+        Assert.Equal(TimeSpan.FromSeconds(84), player.StartedWith!.StartPosition);          // the open's own position wins
+    }
+
+    [Fact]
+    public async Task PrepareAt_ANegativePosition_PreparesFromTheStart()
+    {
+        var rig = new BackendRig();
+        IPreparedItem item = await rig.Backend.PrepareAtAsync(SourceFor(InitA), TimeSpan.FromSeconds(-1), Ct);
+        _cleanup.Add(item);
+        Assert.Equal(TimeSpan.Zero, Assert.Single(rig.Ensured).StartPosition);
+    }
+
+    // ── buffering detail (the clear session's rule) ──────────────────────────────────────────────────────────────────
+
+    [Theory]
+    // state, seeking, framePresented → reason
+    [InlineData(PlaybackState.Opening, false, false, BufferingReason.Initial)]
+    [InlineData(PlaybackState.Buffering, false, false, BufferingReason.Initial)]
+    [InlineData(PlaybackState.Buffering, false, true, BufferingReason.Rebuffering)]
+    [InlineData(PlaybackState.Stalled, false, true, BufferingReason.Rebuffering)]
+    [InlineData(PlaybackState.Buffering, true, true, BufferingReason.Seeking)]
+    [InlineData(PlaybackState.Opening, true, false, BufferingReason.Seeking)]
+    [InlineData(PlaybackState.Playing, false, true, BufferingReason.None)]
+    [InlineData(PlaybackState.Paused, false, true, BufferingReason.None)]
+    [InlineData(PlaybackState.Ready, false, false, BufferingReason.None)]
+    [InlineData(PlaybackState.Failed, false, false, BufferingReason.None)]
+    public void BufferingFor_OpeningBufferingAndStalledAreBuffering_WithTheReasonTheFactsGive(
+        PlaybackState state, bool seeking, bool framePresented, BufferingReason reason)
+        => Assert.Equal(reason, ProtectedMediaSession.BufferingFor(state, seeking, framePresented, 0, BufferPolicy.Vod).Reason);
+
+    [Fact]
+    public void BufferingFor_ProgressIsTheStoreAgainstTheTargetForThatReason()
+    {
+        BufferPolicy policy = new() { InitialPlayback = TimeSpan.FromSeconds(2), ResumePlayback = TimeSpan.FromSeconds(4) };
+
+        BufferingInfo initial = ProtectedMediaSession.BufferingFor(PlaybackState.Opening, false, false, 1_000, policy);
+        Assert.Equal(0.5, initial.Percent, 3);
+        Assert.Equal(TimeSpan.FromSeconds(2), initial.TargetAhead);
+        Assert.False(initial.CanResume);
+
+        BufferingInfo rebuffer = ProtectedMediaSession.BufferingFor(PlaybackState.Stalled, false, true, 6_000, policy);
+        Assert.Equal(1.0, rebuffer.Percent, 3);
+        Assert.Equal(TimeSpan.FromSeconds(6), rebuffer.BufferedAhead);
+        Assert.True(rebuffer.CanResume);
+    }
+
+    [Fact]
+    public void OpeningWithNoFrame_PublishesAnInitialReason_NotNone()
+    {
+        var (session, core, player) = NewSession(startPaused: false);
+        player.SetState(ProtectedVideoState.Loading);
+
+        session.PumpVideo(default, Rect, 1f);
+
+        Assert.Equal(PlaybackState.Opening, core.State.Peek());
+        Assert.Equal(BufferingReason.Initial, core.Buffering.Peek().Reason);
+    }
 }

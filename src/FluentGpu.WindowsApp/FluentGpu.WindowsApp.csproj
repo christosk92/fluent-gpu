@@ -25,18 +25,17 @@
   </ItemGroup>
 
   <!-- Normal desktop PlayReady backend. This builds a native DLL loaded in-process by WindowsApi; there is no UWP
-       package, install action, activation, helper process, IPC path, or bundled MSIX. The legacy source directory is
-       retained only until the desktop playback proof is complete, after which it will be renamed/trimmed. -->
-  <PropertyGroup>
-    <_PlayReadyNativeArch Condition="'$(RuntimeIdentifier)' == 'win-x64'">x64</_PlayReadyNativeArch>
-    <_PlayReadyNativeArch Condition="'$(RuntimeIdentifier)' == 'win-arm64'">arm64</_PlayReadyNativeArch>
-    <_PlayReadyNativeArch Condition="'$(_PlayReadyNativeArch)' == '' and '$(PROCESSOR_ARCHITECTURE)' == 'AMD64'">x64</_PlayReadyNativeArch>
-    <_PlayReadyNativeArch Condition="'$(_PlayReadyNativeArch)' == ''">arm64</_PlayReadyNativeArch>
-    <_PlayReadyNativeDir>$(MSBuildProjectDirectory)\..\..\ops\tools\playready-native</_PlayReadyNativeDir>
-    <_PlayReadyNativeDll>$(_PlayReadyNativeDir)\out\$(_PlayReadyNativeArch)\FluentGpu.PlayReady.Native.dll</_PlayReadyNativeDll>
-  </PropertyGroup>
+       package, install action, activation, helper process, IPC path, or bundled MSIX. -->
+  <Import Project="..\..\ops\tools\playready-native\PlayReadyNative.props" />
+  <!-- Inputs are every source file of the helper (three translation units, its headers, the script), so an edit to any
+       of them rebuilds and nothing else does. Never in a design-time build: an IDE's project-system evaluation must not
+       start an MSVC compile racing the command-line one over the same out\<arch> objects. -->
+  <ItemGroup>
+    <_PlayReadyNativeInputs Include="$(_PlayReadyNativeDir)\*.cpp;$(_PlayReadyNativeDir)\*.h;$(_PlayReadyNativeDir)\build.cmd" />
+  </ItemGroup>
   <Target Name="BuildDesktopPlayReadyNative" BeforeTargets="PrepareForBuild"
-          Inputs="$(_PlayReadyNativeDir)\PlayReadyNative.cpp;$(_PlayReadyNativeDir)\CencMediaSource.h;$(_PlayReadyNativeDir)\build.cmd"
+          Condition="'$(DesignTimeBuild)' != 'true'"
+          Inputs="@(_PlayReadyNativeInputs)"
           Outputs="$(_PlayReadyNativeDll)">
     <Exec Command="cmd /c &quot;$(_PlayReadyNativeDir)\build.cmd&quot; $(_PlayReadyNativeArch)" />
   </Target>
