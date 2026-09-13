@@ -253,6 +253,7 @@ struct MediaEngineNotify : public IMFMediaEngineNotify
 {
     std::atomic<long> rc{1};
     uint64_t m_runtime = 0;
+    std::atomic<int64_t> m_lastTimeUpdateQpc{ 0 };
 
     explicit MediaEngineNotify(uint64_t runtime) : m_runtime(runtime) {}
 
@@ -279,11 +280,20 @@ struct MediaEngineNotify : public IMFMediaEngineNotify
             case MF_MEDIA_ENGINE_EVENT_ERROR:
             case MF_MEDIA_ENGINE_EVENT_FORMATCHANGE:
             case MF_MEDIA_ENGINE_EVENT_RESOURCELOST:
+            case MF_MEDIA_ENGINE_EVENT_TIMEUPDATE:
                 break;
             default:
                 return S_OK;
         }
         const int64_t qpc = fgpr::QpcNow();   // FIRSTFRAMEREADY's timestamp is taken HERE, not when the item runs
+        if (ev == MF_MEDIA_ENGINE_EVENT_TIMEUPDATE)
+        {
+            // The engine's own clock tick drives the position sample (FgPrEvent_Position is ≤ 4 Hz). Coalesced here, so
+            // however often the engine raises it the runtime thread wakes at most every 250 ms for it.
+            const int64_t last = m_lastTimeUpdateQpc.load(std::memory_order_acquire);
+            if (last != 0 && fgpr::QpcToMs(qpc - last) < 250) return S_OK;
+            m_lastTimeUpdateQpc.store(qpc, std::memory_order_release);
+        }
         std::shared_ptr<fgpr::Runtime> rt = fgpr::RuntimeFor(m_runtime);
         if (!rt) return S_OK;
         const uint64_t session = rt->attached.load(std::memory_order_acquire);
@@ -534,8 +544,15 @@ static void OnEngineEvent(fgpr::Runtime& rt, uint64_t sessionHandle, DWORD ev, D
             s.seeking.store(1, std::memory_order_release);
             break;
         case MF_MEDIA_ENGINE_EVENT_SEEKED:
-            s.seeking.store(0, std::memory_order_release);
             fgpr::SessionSamplePosition(rt, s, false);
+            if (s.internalSeeks > 0)
+            {
+                // The start-position correction (PrSession.cpp SessionOnCanPlay) is the native side's own seek: nobody
+                // on the managed side is waiting for it, and a Seeked with no Seeking would confuse the seek planner.
+                s.internalSeeks--;
+                break;
+            }
+            s.seeking.store(0, std::memory_order_release);
             Raise(h, FgPrEvent_Seeked, s.positionMs.load(std::memory_order_acquire), fgpr::MsSinceQpc(s.seekPostedQpc));
             break;
         case MF_MEDIA_ENGINE_EVENT_PLAYING:
@@ -564,6 +581,12 @@ static void OnEngineEvent(fgpr::Runtime& rt, uint64_t sessionHandle, DWORD ev, D
             s.errorHr.store((int32_t)p2, std::memory_order_release);
             s.state.store(FgPrState_Error, std::memory_order_release);
             Raise(h, FgPrEvent_Error, (int64_t)p1, (int64_t)(int32_t)p2);
+            break;
+        case MF_MEDIA_ENGINE_EVENT_TIMEUPDATE:
+            // Playback time moved: refresh the snapshot, raise Position (rate-limited inside), and — should the swap chain
+            // not have been ready at metadata / canplay / first frame — ask for the handle again.
+            fgpr::SessionSamplePosition(rt, s, false);
+            fgpr::SessionPublishHandle(rt, s, false);
             break;
         case MF_MEDIA_ENGINE_EVENT_FORMATCHANGE:
         case MF_MEDIA_ENGINE_EVENT_RESOURCELOST:
@@ -660,11 +683,9 @@ static void RuntimeThreadMain(std::shared_ptr<fgpr::Runtime> rt)
         Raise(0, FgPrEvent_RuntimeReady, ms);
     }
 
-    // Event-driven: block until work arrives. The only timed wait is the ≤ 4 Hz sampler, and only while
-    // SessionSampleAttached says an attached session needs it (playing, or its swap-chain handle not yet published).
-    bool timed = false;
-    while (rt->queue.RunOnce(timed ? 250 : -1))
-        timed = rt->Ready() && fgpr::SessionSampleAttached(*rt);
+    // Event-driven: block until work arrives — an export's verb, a media-engine event, a license delivery, a feeder
+    // completion. Nothing on this thread ever wakes on a timer.
+    while (rt->queue.RunOnce()) {}
 }
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
@@ -687,8 +708,7 @@ __declspec(dllexport) int32_t __stdcall FgPrRuntimeCreate(const wchar_t* storePa
     }
     if (!storePath || !*storePath) return E_INVALIDARG;
 
-    fgpr::Sink().ctx.store(ctx, std::memory_order_release);
-    fgpr::Sink().cb.store(cb, std::memory_order_release);
+    fgpr::Sink().Set(cb, ctx);
 
     std::shared_ptr<fgpr::Runtime> rt;
     try
@@ -701,8 +721,7 @@ __declspec(dllexport) int32_t __stdcall FgPrRuntimeCreate(const wchar_t* storePa
     }
     catch (...)
     {
-        fgpr::Sink().cb.store(nullptr, std::memory_order_release);
-        fgpr::Sink().ctx.store(nullptr, std::memory_order_release);
+        fgpr::Sink().Set(nullptr, nullptr);
         return E_OUTOFMEMORY;
     }
     fgpr::Reg().runtime = rt;
@@ -738,7 +757,7 @@ __declspec(dllexport) void __stdcall FgPrRuntimeDestroy(FgPrRuntime handle)
             if (wait == WAIT_OBJECT_0) rt->thread.join();
             else
             {
-                fgpr::RaiseLog(0, "[runtime] destroy: runtime thread did not finish within 2000ms — detached");
+                fgpr::RaiseLog(0, "[runtime] destroy: runtime thread did not finish within 2000ms - detached");
                 rt->thread.detach();
             }
         }
@@ -752,9 +771,17 @@ __declspec(dllexport) void __stdcall FgPrRuntimeDestroy(FgPrRuntime handle)
 
     // The managed side frees its callback context the moment this returns: stop new calls, then wait (bounded) for the
     // ones that already read the pointer on an MF or CDM thread.
-    fgpr::Sink().cb.store(nullptr, std::memory_order_release);
-    for (int i = 0; i < 500 && fgpr::Sink().inflight.load(std::memory_order_acquire) != 0; i++) Sleep(1);
-    fgpr::Sink().ctx.store(nullptr, std::memory_order_release);
+    fgpr::EventSink& sink = fgpr::Sink();
+    sink.draining.store(true, std::memory_order_release);
+    sink.cb.store(0, std::memory_order_release);
+    {
+        // Bounded (500 ms) wait for callbacks that already read the pointer; Raise notifies as the last one returns.
+        std::unique_lock<std::mutex> lk(sink.drainMx);
+        sink.drainCv.wait_for(lk, std::chrono::milliseconds(500),
+                              [&] { return sink.inflight.load(std::memory_order_acquire) == 0; });
+    }
+    sink.ctx.store(nullptr, std::memory_order_release);
+    sink.draining.store(false, std::memory_order_release);
 }
 
 __declspec(dllexport) int64_t __stdcall FgPrRuntimeUptimeMs(FgPrRuntime handle)

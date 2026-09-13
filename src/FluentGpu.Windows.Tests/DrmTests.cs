@@ -9,90 +9,18 @@ using Xunit;
 
 namespace FluentGpu.Windows.Tests;
 
-/// <summary>M5 tests for the protected (PlayReady/DRM) path: the managed <see cref="DrmLicenseBridge"/> relay marshaling
-/// + timeout, <see cref="MfMediaPlayer"/> DRM-vs-clear routing, the <see cref="ProtectedMediaSession"/> snapshot→sink
-/// mapping, and <see cref="ProtectedMediaBackend"/> open + prepare. No real CDM / native call — fakes throughout.</summary>
+/// <summary>M5 tests for the protected (PlayReady/DRM) path at the backend seam: <see cref="MfMediaPlayer"/> DRM-vs-clear
+/// routing, the <see cref="ProtectedMediaSession"/> state→sink mapping, and <see cref="ProtectedMediaBackend"/> open +
+/// prepare. No real CDM / native call — fakes throughout. The license relay (formerly <c>DrmLicenseBridge</c>) is tested
+/// on the runtime in <see cref="ProtectedRuntimeTests"/>; the session state machine in depth in
+/// <see cref="ProtectedSessionTests"/>.</summary>
 public sealed class DrmTests
 {
     private const string AxinomMpd = "https://media.axprod.net/TestVectors/Dash/protected_dash_1080p_h264_singlekey/manifest.mpd";
 
     private static readonly TimeSpan Bound = TimeSpan.FromSeconds(5);
 
-    // ── DrmLicenseBridge: the relay marshaling logic ─────────────────────────────────────────────────────────────────
-
-    [Fact]
-    public async Task Bridge_InvokesRelay_WithChallenge_ReturnsLicense()
-    {
-        LicenseRequest? seen = null;
-        var relay = new Func<LicenseRequest, ValueTask<LicenseResponse>>(req =>
-        {
-            seen = req;
-            return ValueTask.FromResult(new LicenseResponse(new byte[] { 9, 8, 7 }));
-        });
-        var bridge = new DrmLicenseBridge(relay, DrmSystem.PlayReady, TimeSpan.FromSeconds(2));
-
-        var challenge = new byte[] { 1, 2, 3, 4 };
-        var outcome = await Task.Run(() => bridge.Resolve(challenge, "kid-hex")).WaitAsync(Bound);
-
-        Assert.True(outcome.Success);
-        Assert.Equal(new byte[] { 9, 8, 7 }, outcome.License);
-        Assert.Null(outcome.Error);
-        Assert.NotNull(seen);
-        Assert.Equal(DrmSystem.PlayReady, seen!.System);
-        Assert.Equal("kid-hex", seen.KeyId);
-        Assert.Equal(challenge, seen.Challenge.ToArray());
-    }
-
-    [Fact]
-    public async Task Bridge_RelayThrows_YieldsDrmError_NeverSilentSuccess()
-    {
-        var relay = new Func<LicenseRequest, ValueTask<LicenseResponse>>(_ => throw new InvalidOperationException("server 403"));
-        var bridge = new DrmLicenseBridge(relay, DrmSystem.PlayReady, TimeSpan.FromSeconds(2));
-
-        var outcome = await Task.Run(() => bridge.Resolve(new byte[] { 1 }, null)).WaitAsync(Bound);
-
-        Assert.False(outcome.Success);
-        Assert.Null(outcome.License);
-        Assert.NotNull(outcome.Error);
-        Assert.Equal(MediaErrorCategory.Drm, outcome.Error!.Category);
-        Assert.Equal(MediaRecovery.NeedsLicense, outcome.Error.Recovery);
-        Assert.Same(outcome.Error, bridge.LastError);
-    }
-
-    [Fact]
-    public async Task Bridge_RelayTimesOut_YieldsDrmError()
-    {
-        // A relay that never completes → the bounded wait must fail as a DRM error (block the CDM thread only, never forever).
-        var relay = new Func<LicenseRequest, ValueTask<LicenseResponse>>(_ =>
-            new ValueTask<LicenseResponse>(new TaskCompletionSource<LicenseResponse>().Task));
-        var bridge = new DrmLicenseBridge(relay, DrmSystem.PlayReady, TimeSpan.FromMilliseconds(150));
-
-        var outcome = await Task.Run(() => bridge.Resolve(new byte[] { 1 }, null)).WaitAsync(Bound);
-
-        Assert.False(outcome.Success);
-        Assert.Equal(MediaErrorCategory.Drm, outcome.Error!.Category);
-        Assert.Equal(MediaRecovery.NeedsLicense, outcome.Error.Recovery);
-    }
-
-    [Fact]
-    public async Task Bridge_NullRelay_YieldsDrmError()
-    {
-        var bridge = new DrmLicenseBridge(null, DrmSystem.PlayReady, TimeSpan.FromSeconds(1));
-        var outcome = await Task.Run(() => bridge.Resolve(new byte[] { 1 }, null)).WaitAsync(Bound);
-        Assert.False(outcome.Success);
-        Assert.Equal(MediaErrorCategory.Drm, outcome.Error!.Category);
-    }
-
-    [Fact]
-    public async Task Bridge_EmptyLicense_YieldsDrmError()
-    {
-        var relay = new Func<LicenseRequest, ValueTask<LicenseResponse>>(_ =>
-            ValueTask.FromResult(new LicenseResponse(Array.Empty<byte>())));
-        var bridge = new DrmLicenseBridge(relay, DrmSystem.PlayReady, TimeSpan.FromSeconds(1));
-        var outcome = await Task.Run(() => bridge.Resolve(new byte[] { 1 }, null)).WaitAsync(Bound);
-        Assert.False(outcome.Success);
-        Assert.Equal(MediaErrorCategory.Drm, outcome.Error!.Category);
-    }
+    private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     // ── MfMediaPlayer routing: DRM source → protected backend; clear → clear session ─────────────────────────────────
 
@@ -141,16 +69,16 @@ public sealed class DrmTests
             .OpenAsync(source, new MediaOpenOptions(), CancellationToken.None).AsTask().WaitAsync(Bound));
     }
 
-    // ── ProtectedMediaSession: snapshot → MediaSignalSink mapping ────────────────────────────────────────────────────
+    // ── ProtectedMediaSession: player state → MediaSignalSink mapping ────────────────────────────────────────────────
 
     [Fact]
-    public async Task ProtectedSession_MapsSnapshot_LoadingToPlaying_AndDrmErrorToDrm()
+    public async Task ProtectedSession_MapsState_LoadingToPlaying_AndDrmErrorToDrm()
     {
         var player = new FakeProtectedVideoPlayer();
-        var backend = new ProtectedMediaBackend(() => player);
+        var backend = new ProtectedMediaBackend(_ => player);
         var source = MediaSource.FromUri(AxinomMpd).With(new DrmConfig(DrmSystem.PlayReady));
-        var session = await backend.OpenAsync(source, new MediaOpenOptions { StartPaused = true }, CancellationToken.None)
-            .AsTask().WaitAsync(Bound);
+        var session = await backend.OpenAsync(source, new MediaOpenOptions { StartPaused = true }, Ct)
+            .AsTask().WaitAsync(Bound, Ct);
 
         var core = new MediaPlayerCore();
         session.ConnectSignals(new MediaSignalSink(core));
@@ -166,6 +94,7 @@ public sealed class DrmTests
         player.SetNaturalSize(1920, 1080);
         player.SetDurationMs(5000);
         player.HasSurface = true;
+        player.FirstFrameEpoch = 1;
         player.SetState(ProtectedVideoState.Playing);
         vss.PumpVideo(default, new RectF(0, 0, 640, 360), 1f);
         Assert.Equal(PlaybackState.Playing, core.State.Peek());
@@ -178,17 +107,19 @@ public sealed class DrmTests
         Assert.Equal(PlaybackState.Failed, core.State.Peek());
         Assert.NotNull(core.Error.Peek());
         Assert.Equal(MediaErrorCategory.Drm, core.Error.Peek()!.Category);
+        Assert.Equal("cdm boom", core.Error.Peek()!.Message);
+        Assert.Equal(MediaRecovery.NeedsLicense, core.Error.Peek()!.Recovery);
 
-        await session.DisposeAsync().AsTask().WaitAsync(Bound);
+        await session.DisposeAsync().AsTask().WaitAsync(Bound, Ct);
     }
 
     [Fact]
     public async Task ProtectedBackend_BuildsDescriptor_FromAxinomMpd()
     {
         var player = new FakeProtectedVideoPlayer();
-        var backend = new ProtectedMediaBackend(() => player);
+        var backend = new ProtectedMediaBackend(_ => player);
         var source = MediaSource.FromUri(AxinomMpd).With(new DrmConfig(DrmSystem.PlayReady));
-        var session = await backend.OpenAsync(source, new MediaOpenOptions(), CancellationToken.None).AsTask().WaitAsync(Bound);
+        var session = await backend.OpenAsync(source, new MediaOpenOptions(), Ct).AsTask().WaitAsync(Bound, Ct);
         session.ConnectSignals(new MediaSignalSink(new MediaPlayerCore()));
 
         Assert.NotNull(player.StartedWith);
@@ -198,7 +129,7 @@ public sealed class DrmTests
         Assert.Equal(6, player.StartedWith.SegmentCount);
         Assert.Equal(DrmSystem.PlayReady, player.StartedWith.Drm!.System);
 
-        await session.DisposeAsync().AsTask().WaitAsync(Bound);
+        await session.DisposeAsync().AsTask().WaitAsync(Bound, Ct);
     }
 
     [Theory]
@@ -207,11 +138,11 @@ public sealed class DrmTests
     public async Task ProtectedBackend_ThreadsInitialTransportIntent_IntoNativeRequest(bool startPaused)
     {
         var player = new FakeProtectedVideoPlayer();
-        var backend = new ProtectedMediaBackend(() => player);
+        var backend = new ProtectedMediaBackend(_ => player);
         var source = MediaSource.FromUri(AxinomMpd).With(new DrmConfig(DrmSystem.PlayReady));
         var session = await backend
-            .OpenAsync(source, new MediaOpenOptions { StartPaused = startPaused }, CancellationToken.None)
-            .AsTask().WaitAsync(Bound);
+            .OpenAsync(source, new MediaOpenOptions { StartPaused = startPaused }, Ct)
+            .AsTask().WaitAsync(Bound, Ct);
 
         session.ConnectSignals(new MediaSignalSink(new MediaPlayerCore()));
 
@@ -219,70 +150,43 @@ public sealed class DrmTests
         Assert.Equal(startPaused, player.StartedWith!.StartPaused);
         Assert.Equal(startPaused ? 0 : 1, player.PlayCalls);
 
-        await session.DisposeAsync().AsTask().WaitAsync(Bound);
+        await session.DisposeAsync().AsTask().WaitAsync(Bound, Ct);
     }
 
     [Fact]
     public async Task ProtectedSession_ForwardsPauseResumeAndSeek_WithoutCommandCoalescing()
     {
         var player = new FakeProtectedVideoPlayer();
-        var backend = new ProtectedMediaBackend(() => player);
+        var backend = new ProtectedMediaBackend(_ => player);
         var source = MediaSource.FromUri(AxinomMpd).With(new DrmConfig(DrmSystem.PlayReady));
         var session = await backend
-            .OpenAsync(source, new MediaOpenOptions { StartPaused = true }, CancellationToken.None)
-            .AsTask().WaitAsync(Bound);
+            .OpenAsync(source, new MediaOpenOptions { StartPaused = true }, Ct)
+            .AsTask().WaitAsync(Bound, Ct);
 
         var core = new MediaPlayerCore();
         session.ConnectSignals(new MediaSignalSink(core));
         player.SetDurationMs(5_000);
         Assert.IsAssignableFrom<IVideoSurfaceSession>(session).PumpVideo(default, default, 1f);
 
-        await session.PlayAsync().AsTask().WaitAsync(Bound);
-        await session.PauseAsync().AsTask().WaitAsync(Bound);
-        await session.PlayAsync().AsTask().WaitAsync(Bound);
-        await session.SeekAsync(TimeSpan.FromMilliseconds(3_500), SeekMode.Accurate).AsTask().WaitAsync(Bound);
+        // Every verb returns the player's completed task: the acknowledgement is the next native event, not an ack wait.
+        ValueTask play = session.PlayAsync();
+        Assert.True(play.IsCompletedSuccessfully);
+        ValueTask pause = session.PauseAsync();
+        Assert.True(pause.IsCompletedSuccessfully);
+        ValueTask play2 = session.PlayAsync();
+        Assert.True(play2.IsCompletedSuccessfully);
+        ValueTask seek = session.SeekAsync(TimeSpan.FromMilliseconds(3_500), SeekMode.Accurate);
+        Assert.True(seek.IsCompletedSuccessfully);
 
         Assert.Equal(2, player.PlayCalls);
         Assert.Equal(1, player.PauseCalls);
+        Assert.Equal(1, player.SeekCalls);
         Assert.Equal(3_500, player.LastSeekMs);
+        Assert.Equal(SeekMode.Accurate, player.LastSeekMode);
         Assert.True(core.IsPlayRequested.Peek());
         Assert.Equal(TimeSpan.FromMilliseconds(3_500), core.Position.Peek());
 
-        await session.DisposeAsync().AsTask().WaitAsync(Bound);
-    }
-
-    [Fact]
-    public async Task ProtectedSession_TransportCompletesOnlyAfterNativeAcknowledgement()
-    {
-        var player = new FakeProtectedVideoPlayer
-        {
-            PlayAck = new(TaskCreationOptions.RunContinuationsAsynchronously),
-            PauseAck = new(TaskCreationOptions.RunContinuationsAsynchronously),
-            SeekAck = new(TaskCreationOptions.RunContinuationsAsynchronously),
-        };
-        var backend = new ProtectedMediaBackend(() => player);
-        var source = MediaSource.FromUri(AxinomMpd).With(new DrmConfig(DrmSystem.PlayReady));
-        var session = await backend
-            .OpenAsync(source, new MediaOpenOptions { StartPaused = true }, CancellationToken.None)
-            .AsTask().WaitAsync(Bound);
-        session.ConnectSignals(new MediaSignalSink(new MediaPlayerCore()));
-
-        Task play = session.PlayAsync().AsTask();
-        Assert.False(play.IsCompleted);
-        player.PlayAck.SetResult(true);
-        await play.WaitAsync(Bound);
-
-        Task pause = session.PauseAsync().AsTask();
-        Assert.False(pause.IsCompleted);
-        player.PauseAck.SetResult(true);
-        await pause.WaitAsync(Bound);
-
-        Task seek = session.SeekAsync(TimeSpan.FromSeconds(2), SeekMode.Accurate).AsTask();
-        Assert.False(seek.IsCompleted);
-        player.SeekAck.SetResult(true);
-        await seek.WaitAsync(Bound);
-
-        await session.DisposeAsync().AsTask().WaitAsync(Bound);
+        await session.DisposeAsync().AsTask().WaitAsync(Bound, Ct);
     }
 
     [Fact]
@@ -318,9 +222,9 @@ public sealed class DrmTests
             },
         };
         var native = new FakeProtectedVideoPlayer { SupportsAdaptiveSelection = true };
-        var backend = new ProtectedMediaBackend(() => native, descriptor: descriptor);
+        var backend = new ProtectedMediaBackend(_ => native, descriptor: descriptor);
         var source = MediaSource.FromUri("https://media/manifest").With(new DrmConfig(DrmSystem.PlayReady));
-        var session = await backend.OpenAsync(source, new MediaOpenOptions(), CancellationToken.None);
+        var session = await backend.OpenAsync(source, new MediaOpenOptions(), Ct);
         var core = new MediaPlayerCore();
         session.ConnectSignals(new MediaSignalSink(core));
         native.SetNaturalSize(320, 180);
@@ -346,19 +250,21 @@ public sealed class DrmTests
     [Fact]
     public async Task ProtectedBackend_Prepare_ReturnsReadyHandle_ForMixedQueue()
     {
-        var player = new FakeProtectedVideoPlayer { ReadyOnStart = true };
-        var backend = new ProtectedMediaBackend(() => player, defaultRelay: null, prepareTimeout: TimeSpan.FromSeconds(1));
+        var player = new FakeProtectedVideoPlayer { ReadyOnPrefetch = true };
+        var backend = new ProtectedMediaBackend(_ => player, defaultRelay: null);
         var source = MediaSource.FromUri(AxinomMpd).With(new DrmConfig(DrmSystem.PlayReady));
 
         var item = await backend
-            .PrepareAsync(source, PrepareContext.For(new MixFormat(48000, 2), NormMode.Off, 0f), CancellationToken.None)
-            .AsTask().WaitAsync(Bound);
+            .PrepareAsync(source, PrepareContext.For(new MixFormat(48000, 2), NormMode.Off, 0f), Ct)
+            .AsTask().WaitAsync(Bound, Ct);
 
         Assert.Equal(MediaKind.MfVideoOrFile, item.Kind);
         Assert.True(item.IsReady);
         Assert.Null(item.AudioVoice);
-        Assert.IsType<ProtectedMediaSession>(item.BackendHandle);
+        Assert.Same(player, item.BackendHandle);   // the prepared IProtectedVideoPlayer the open attaches
+        Assert.Equal(1, player.PrefetchCalls);
+        Assert.Equal(0, player.StartCalls);        // a prepare never touches the engine
 
-        await item.DisposeAsync().AsTask().WaitAsync(Bound);
+        await item.DisposeAsync().AsTask().WaitAsync(Bound, Ct);
     }
 }

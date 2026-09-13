@@ -38,6 +38,11 @@ inline constexpr uint64_t kDefaultStoreBudget    = 32ull * 1024 * 1024;   // §3
 inline constexpr int64_t  kDefaultRetainBehindMs = 30000;
 inline constexpr int64_t  kDefaultBufferAheadMs  = 60000;
 inline constexpr int      kKeyframeCap           = 4096;                  // a 4-hour broadcast at a 4 s GOP
+// How far apart two samples may start before the buffered RANGE (not CanSeekTo) calls it a hole. Segment boundaries
+// rarely line up to the tick (a composition offset on the first frame, a rounding in tfdt), and in decode order a
+// reordered P frame starts past the running reach of the frame before it; neither is missing media. Half a second is
+// far below any real gap (a whole missing segment is seconds) and far above those artefacts.
+inline constexpr int64_t  kContiguityToleranceMs = 500;
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 //  SlabPool — the 64 KiB slab allocation of §3.5, in the only shape a fragmented-MP4 parser can consume.
@@ -245,13 +250,14 @@ inline bool CanSeekToIn(const std::vector<cenc::Sample>& samples, uint64_t times
 }
 
 /// The buffered ranges as ascending (startMs, endMs) PAIRS — FgPrSessionGetBuffered's answer. A sample whose start is
-/// past the running reach begins a NEW pair: that is exactly the hole a forward seek leaves, and reporting it as one
-/// continuous band is how a scrub bar ends up claiming a position it cannot actually play. Writes at most `capPairs`
-/// pairs into `out` (2 * capPairs int64s) and returns the TOTAL number of pairs.
+/// past the running reach (by more than kContiguityToleranceMs) begins a NEW pair: that is exactly the hole a forward
+/// seek leaves, and reporting it as one continuous band is how a scrub bar ends up claiming a position it cannot
+/// actually play. Writes at most `capPairs` pairs into `out` (2 * capPairs int64s) and returns the TOTAL number of pairs.
 inline int ComputeBufferedPairs(const std::vector<cenc::Sample>& samples, uint64_t timescale, int64_t* out,
                                 int capPairs)
 {
     if (timescale == 0 || samples.empty()) return 0;
+    const uint64_t tolerance = MsToTicks(kContiguityToleranceMs, timescale);
     int pairs = 0;
     uint64_t rangeStart = samples.front().timeTicks;
     uint64_t reach = samples.front().timeTicks;
@@ -267,7 +273,7 @@ inline int ComputeBufferedPairs(const std::vector<cenc::Sample>& samples, uint64
     {
         const uint64_t start = samples[i].timeTicks;
         const uint64_t end = start + samples[i].durTicks;
-        if (start > reach)
+        if (start > reach + tolerance)
         {
             emit(rangeStart, reach);
             rangeStart = start;
