@@ -28,9 +28,30 @@
     <ProjectReference Include="..\FluentGpu.Engine\FluentGpu.Engine.csproj" />
     <ProjectReference Include="..\FluentGpu.Controls\FluentGpu.Controls.csproj" />
     <ProjectReference Include="..\FluentGpu.Windows\FluentGpu.Windows.csproj" />
-    <!-- M5: the protected-video DRM types (DrmLicenseBridge / ProtectedMediaSession / ProtectedMediaBackend) live in
-         WindowsApi; the routing + relay tests reference them directly. -->
+    <!-- M5: the protected-video types (ProtectedVideoRuntime + its license relay / LicenseCachePolicy / ProtectedMediaSession /
+         ProtectedMediaBackend / DashManifestParser) live in WindowsApi, whose internals are visible to this assembly; the
+         routing, relay, cache and session tests reference them directly. -->
     <ProjectReference Include="..\FluentGpu.WindowsApi\FluentGpu.WindowsApi.csproj" />
+  </ItemGroup>
+
+  <!-- Video fixtures (Fixtures/video/README.md) land under $(OutDir)Fixtures\video\; tests resolve them from
+       AppContext.BaseDirectory. -->
+  <ItemGroup>
+    <None Update="Fixtures\video\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- CencDemuxTests call FgPrProbeFile in FluentGpu.PlayReady.Native.dll. Copied beside the test assembly ONLY when it has
+       been built (ops/tools/playready-native/build.cmd <arch>); a box without it still builds and those tests skip. The
+       arch rule mirrors FluentGpu.WindowsApp.csproj's _PlayReadyNative* properties. -->
+  <PropertyGroup>
+    <_PlayReadyNativeArch Condition="'$(RuntimeIdentifier)' == 'win-x64'">x64</_PlayReadyNativeArch>
+    <_PlayReadyNativeArch Condition="'$(RuntimeIdentifier)' == 'win-arm64'">arm64</_PlayReadyNativeArch>
+    <_PlayReadyNativeArch Condition="'$(_PlayReadyNativeArch)' == '' and '$(PROCESSOR_ARCHITECTURE)' == 'AMD64'">x64</_PlayReadyNativeArch>
+    <_PlayReadyNativeArch Condition="'$(_PlayReadyNativeArch)' == ''">arm64</_PlayReadyNativeArch>
+    <_PlayReadyNativeDll>$(MSBuildThisFileDirectory)..\..\ops\tools\playready-native\out\$(_PlayReadyNativeArch)\FluentGpu.PlayReady.Native.dll</_PlayReadyNativeDll>
+  </PropertyGroup>
+  <ItemGroup Condition="Exists('$(_PlayReadyNativeDll)')">
+    <None Include="$(_PlayReadyNativeDll)" Link="FluentGpu.PlayReady.Native.dll" CopyToOutputDirectory="PreserveNewest" Visible="false" />
   </ItemGroup>
 
 </Project>

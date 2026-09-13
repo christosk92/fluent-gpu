@@ -584,6 +584,10 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
     // sets a flag on a LEAF lock and notifies (Session::Kick) — which is what replaces the old 50 ms backpressure sleep:
     // the feeder is woken by the playhead consuming the buffer, never by a timer.
     std::function<void()> m_demand;
+    // Below how many forward ms the hook fires; 0 = the store's bufferAheadMs. The feeder LOWERS it (by one segment)
+    // when it could not fetch — over its byte budget, or backing off a failed GET — so a playhead that keeps delivering
+    // samples does not wake it for every single one of them while nothing can change.
+    std::atomic<int64_t> m_demandBelowMs{ 0 };
 
     CencMediaStream() { winrt::check_hresult(MFCreateEventQueue(m_queue.put())); }
 
@@ -682,7 +686,11 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
         hr = m_queue->QueueEventParamUnk(MEMediaSample, GUID_NULL, S_OK, sample.get());
         // Demand-driven feeding: the playhead consuming the forward window is what wakes the feeder — only while more
         // can still arrive (a complete track has nothing left to fetch) and only once below the forward target.
-        if (m_demand && !m_complete && m_store && AheadDurationMsLocked() < m_store->bufferAheadMs) m_demand();
+        if (m_demand && !m_complete && m_store)
+        {
+            const int64_t below = m_demandBelowMs.load(std::memory_order_relaxed);
+            if (AheadDurationMsLocked() < (below > 0 ? below : m_store->bufferAheadMs)) m_demand();
+        }
         return hr;
     }
 
@@ -839,6 +847,16 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
         TrimBehindLocked();
         if (!m_shutdown) ReleaseStarvedLocked();
     }
+
+    /// Trim history now (the feeder, before it weighs the byte budget): appends are not the only moment the playhead has
+    /// moved, and a session over its budget that only trimmed on append could never append again.
+    void TrimNow()
+    {
+        std::lock_guard<std::mutex> g(m_mx);
+        TrimBehindLocked();
+    }
+
+    void SetDemandBelowMs(int64_t ms) { m_demandBelowMs.store(ms > 0 ? ms : 0, std::memory_order_relaxed); }
 
     /// Move the whole buffer out, with its byte cost, for the fresh source a re-attach builds.
     std::vector<cenc::Sample> TakeSamples(uint64_t& bytes)

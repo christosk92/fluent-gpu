@@ -38,7 +38,9 @@
 #include <condition_variable>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <cwctype>
 #include <deque>
 #include <functional>
 #include <iomanip>
@@ -177,11 +179,25 @@ inline std::wstring NormalizeKidHex(const wchar_t* hex)
 // The sink is process-wide because there is one runtime per process (a second FgPrRuntimeCreate returns the existing
 // handle). `inflight` is what makes FgPrRuntimeDestroy safe against the managed side freeing its GCHandle the moment
 // Destroy returns: Destroy clears `cb` and then waits for every call that already read it to come back.
+// The callback is held as an integer: std::atomic over a FUNCTION pointer type leans on the atomic<T*> specialization
+// with a function type for T, which is not something to discover at build time on one of two architectures.
 struct EventSink
 {
-    std::atomic<FgPrEventCallback> cb{ nullptr };
+    std::atomic<uintptr_t> cb{ 0 };
     std::atomic<void*> ctx{ nullptr };
     std::atomic<int32_t> inflight{ 0 };
+    // The destroy-time drain waits on this instead of sleeping: a callback that finishes while a drain is pending
+    // notifies it. `draining` is set BEFORE the waiter checks `inflight`, so a finish that races the check is never lost.
+    std::atomic<bool> draining{ false };
+    std::mutex drainMx;
+    std::condition_variable drainCv;
+
+    void Set(FgPrEventCallback callback, void* context)
+    {
+        ctx.store(context, std::memory_order_release);
+        cb.store(reinterpret_cast<uintptr_t>(callback), std::memory_order_release);
+    }
+    FgPrEventCallback Get() const { return reinterpret_cast<FgPrEventCallback>(cb.load(std::memory_order_acquire)); }
 };
 
 inline EventSink& Sink()
@@ -194,14 +210,18 @@ inline void Raise(uint64_t handle, int32_t ev, int64_t a = 0, int64_t b = 0, con
 {
     EventSink& sink = Sink();
     sink.inflight.fetch_add(1, std::memory_order_acquire);
-    FgPrEventCallback cb = sink.cb.load(std::memory_order_acquire);
+    FgPrEventCallback cb = sink.Get();
     if (cb) cb(sink.ctx.load(std::memory_order_acquire), handle, ev, a, b, text ? text : L"");
-    sink.inflight.fetch_sub(1, std::memory_order_acquire);
+    if (sink.inflight.fetch_sub(1, std::memory_order_acquire) == 1 && sink.draining.load(std::memory_order_acquire))
+    {
+        std::lock_guard<std::mutex> g(sink.drainMx);
+        sink.drainCv.notify_all();
+    }
 }
 
 inline void RaiseLog(uint64_t handle, const std::string& line)
 {
-    if (!Sink().cb.load(std::memory_order_acquire)) return;   // FgPrProbeFile on a box with no runtime: nobody listens
+    if (!Sink().Get()) return;   // FgPrProbeFile on a box with no runtime: nobody listens
     // A stack buffer covers every line the helper writes; only a pathological line pays a heap conversion.
     wchar_t stackBuf[1024];
     int n = line.empty() ? 0 : MultiByteToWideChar(CP_UTF8, 0, line.data(), (int)line.size(), stackBuf, 1023);
@@ -245,9 +265,9 @@ inline bool IsKind(uint64_t h, HandleKind kind) { return h != 0 && (h >> 56) == 
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 //  WorkQueue — the runtime thread's event-driven queue (the shape of the managed VideoMediaEngine.WakeEngine).
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
-// A condition variable over a deque. The thread blocks INDEFINITELY when there is nothing to do; the only timed wait
-// is the ≤ 4 Hz position sampler while an attached session is actually playing (PrRuntime.cpp), which is what the ABI
-// promises for FgPrEvent_Position — not the old 80 ms keep-alive that re-asserted transport and re-presented frames.
+// A condition variable over a deque. The thread blocks INDEFINITELY when there is nothing to do — there is no timed
+// wait of any kind. Position is sampled when the media engine itself says time moved (MF_MEDIA_ENGINE_EVENT_TIMEUPDATE,
+// PrRuntime.cpp), which is what replaces the old 80 ms keep-alive that re-asserted transport and re-presented frames.
 class WorkQueue
 {
   public:
@@ -262,15 +282,13 @@ class WorkQueue
         return true;
     }
 
-    /// Wait up to `timeoutMs` (< 0 = forever) for work and run everything queued. False once stopped AND drained.
-    bool RunOnce(int timeoutMs)
+    /// Block until work arrives and run everything queued. False once stopped AND drained.
+    bool RunOnce()
     {
         std::deque<std::function<void()>> batch;
         {
             std::unique_lock<std::mutex> lk(m_mx);
-            auto ready = [this] { return m_stopped || !m_items.empty(); };
-            if (timeoutMs < 0) m_cv.wait(lk, ready);
-            else m_cv.wait_for(lk, std::chrono::milliseconds(timeoutMs), ready);
+            m_cv.wait(lk, [this] { return m_stopped || !m_items.empty(); });
             batch.swap(m_items);
             if (m_stopped && batch.empty()) return false;
         }
@@ -542,7 +560,6 @@ struct Runtime
     winrt::com_ptr<IMFMediaEngineExtension> extension;
     winrt::com_ptr<IMFMediaEngineNeedKeyNotify> needKey;
     bool itaPreflightDone = false;
-    int64_t lastSampleQpc = 0;
 
     /// The session whose source the engine is playing — or is about to play, while its init segments are still on the
     /// wire (PrSession.cpp CompleteAttach). Written on the runtime thread, read by the notify sink on MF threads.
@@ -581,6 +598,25 @@ struct License
     std::atomic<bool> closed{ false };
 };
 
+/// The feeder's wake-up. Separate from Session and held by `shared_ptr` because the CencMediaStream demand hook holds
+/// a copy: the hook runs under the stream's lock on an MF thread, and it must never own the Session (dropping the last
+/// Session ref there would destroy the source — and the very mutex being held — from inside that lock).
+struct FeederSignal
+{
+    std::mutex mx;                       // a LEAF lock: nothing is ever acquired while holding it
+    std::condition_variable cv;
+    bool kick = false;
+
+    void Kick()
+    {
+        {
+            std::lock_guard<std::mutex> g(mx);
+            kick = true;
+        }
+        cv.notify_one();
+    }
+};
+
 struct Session
 {
     uint64_t handle = 0;
@@ -590,10 +626,10 @@ struct Session
     std::wstring initUrl, segBase, segPrefix, segSuffix;
     std::wstring audioInitUrl, audioSegBase, audioSegPrefix, audioSegSuffix;
     std::wstring headers;
-    std::wstring kidHex;
-    std::vector<uint8_t> pssh;
+    std::wstring kidHex;                 // the descriptor's KID, else the init's tenc KID once parsed (diagnostics)
+    std::vector<uint8_t> pssh;           // the descriptor's PSSH (licensing takes its own through FgPrLicenseAcquire)
     int32_t startNumber = 0;
-    int32_t segmentCount = 0;            // INT_MAX when neither the count nor the duration is known (a 404 ends it)
+    int32_t segmentCount = 0;            // 0 = derive from the duration; unknown both ways = unbounded (a 4xx ends it)
     int32_t segmentStride = 1;
     std::atomic<int32_t> segmentLengthMs{ 0 };   // 0 until known (derived from the first parsed segment)
     int64_t descDurationMs = 0;
@@ -602,12 +638,10 @@ struct Session
     std::shared_ptr<SegmentStore> store;
 
     // ── feeder control ──────────────────────────────────────────────────────────────────────────────────────────────
-    // Lock order: feedMx → a CencMediaStream's m_mx. `kickMx` is a LEAF: it is taken by the stream's demand hook while
-    // that stream holds its own lock, so nothing may ever acquire another lock while holding kickMx.
+    // Lock order: feedMx → a CencMediaStream's m_mx. FeederSignal::mx is a LEAF (the stream's demand hook takes it while
+    // holding the stream lock).
     std::thread feeder;
-    std::mutex kickMx;
-    std::condition_variable kickCv;
-    bool kick = false;                   // kickMx
+    std::shared_ptr<FeederSignal> signal = std::make_shared<FeederSignal>();
     std::atomic<bool> feedStop{ false };
 
     std::mutex feedMx;
@@ -618,12 +652,12 @@ struct Session
     std::atomic<int32_t> initHr{ S_OK };          // a failed init fetch/parse: the session is in Error
     bool wantInits = false;                       // feedMx — set by Prefetch/Attach
     bool streaming = false;                       // feedMx — attached: keep bufferAheadMs in front of the playhead
-    int64_t prefetchAroundMs = -1;                // feedMx — FgPrSessionPrefetch's window
-    int64_t prefetchWantEndMs = 0;                // feedMx
+    int64_t prefetchAroundMs = -1;                // feedMx — FgPrSessionPrefetch's window: `prefetchSegments` from the
+    int32_t prefetchSegments = 0;                 // feedMx   segment containing `prefetchAroundMs` (resolved at plan time)
+    bool prefetchAnnounce = false;                // feedMx — a Prefetch is owed an FgPrEvent_Buffered even if nothing is fetched
     std::shared_ptr<HttpFetch> inflightVideo, inflightAudio;   // feedMx — what a seek cancels
     int inflightVideoIndex = -1;                  // feedMx
     int32_t videoEndIndex = INT_MAX, audioEndIndex = INT_MAX;  // feedMx — first index a track answered 4xx for
-    int32_t audioDropped = 0;                     // feedMx — the audio track was abandoned (init unusable)
     struct RepresentationRequest
     {
         bool pending = false;
@@ -646,6 +680,7 @@ struct Session
     int64_t attachPostedQpc = 0;
     bool metadataSeen = false;
     bool startCorrectionDone = false;
+    int32_t internalSeeks = 0;                    // SEEKED events owed to a native-issued seek (not raised as FgPrEvent_Seeked)
     bool wantPlay = true;                         // the transport level to apply at attach / after a paused open
     std::atomic<int64_t> volumeMicro{ 1000000 };
     std::atomic<int64_t> rateMicro{ 1000000 };
@@ -653,9 +688,6 @@ struct Session
     int32_t handleTries = 0;
     int64_t lastPositionRaiseQpc = 0;
     int64_t lastPositionRaisedMs = -1;
-    int64_t lastBytesRaiseQpc = 0;
-    uint64_t lastBytesRaised = 0;
-    int64_t lastBufferedAhead = -1, lastBufferedBehind = -1;
 
     // ── the snapshot (atomics: FgPrSessionSnapshot copies them, alloc-free, from any thread) ────────────────────────
     std::atomic<int32_t> state{ FgPrState_Idle };
@@ -680,14 +712,7 @@ struct Session
         return v > 0 ? v : (segmentStride > 1 ? segmentStride : 1) * 1000;
     }
 
-    void Kick()
-    {
-        {
-            std::lock_guard<std::mutex> g(kickMx);
-            kick = true;
-        }
-        kickCv.notify_one();
-    }
+    void Kick() { signal->Kick(); }
 };
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
@@ -750,7 +775,6 @@ winrt::com_ptr<::IUnknown> SessionSourceForUrl(const wchar_t* url);   // the sch
 void SessionPublishHandle(Runtime& rt, Session& s, bool reRaise);      // runtime thread
 void SessionSamplePosition(Runtime& rt, Session& s, bool raiseNow);    // runtime thread
 void SessionOnCanPlay(Runtime& rt, Session& s);                        // runtime thread
-bool SessionSampleAttached(Runtime& rt);                               // runtime thread: the ≤ 4 Hz sampler
 void SessionsShutdown(Runtime& rt);                                    // runtime thread, FgPrRuntimeDestroy
 
 }   // namespace fgpr
